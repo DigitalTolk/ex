@@ -20,11 +20,13 @@ import (
 	"github.com/DigitalTolk/ex/internal/handler"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/pubsub"
+	"github.com/DigitalTolk/ex/internal/redisx"
 	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/search"
 	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/storage"
 	"github.com/DigitalTolk/ex/internal/store"
+	"github.com/redis/go-redis/v9"
 )
 
 // wsOriginPatternsFromCORS converts the CORS allow-list (which holds
@@ -255,7 +257,6 @@ func main() {
 	attachmentSvc.SetAccessChecker(messageSvc)
 	messageSvc.SetAttachmentManager(attachmentSvc)
 	notificationSvc := service.NewNotificationService(redisPubSub, membershipStore, conversationStore, channelStore, userStore, messageStore)
-	defer notificationSvc.Close() // stop in-flight deferred ack-fallback pushes on shutdown
 	notificationSvc.SetPresence(presenceSvc)
 	notificationSvc.SetThreadFollowStore(threadFollowStore)
 	notificationSvc.SetUserStateService(userStateSvc)
@@ -273,9 +274,35 @@ func main() {
 	if err != nil {
 		slog.Warn("OneSignal mobile push disabled", "error", err)
 	} else if oneSignalPush != nil {
-		asyncOneSignalPush := service.NewAsyncMobilePushSender(oneSignalPush, 0, 0)
-		defer asyncOneSignalPush.Close()
-		notificationSvc.SetMobilePushSender(asyncOneSignalPush)
+		// Durable push pipeline (asynq over Redis): the scheduler enqueues
+		// immediate/deferred tasks, the worker delivers them. Both survive
+		// restarts — a deploy during the 30s ack-fallback window no longer
+		// drops the pending push; the next instance's worker delivers it.
+		// Dedicated Redis client so asynq's polling never contends with the
+		// cache/pubsub pools; closed after the worker+scheduler (defer LIFO).
+		pushRedisOpts, perr := redisx.Options(cfg.RedisURL)
+		if perr != nil {
+			slog.Error("mobile push disabled: redis options", "error", perr)
+		} else {
+			pushRedis := redis.NewClient(pushRedisOpts)
+			defer func() { _ = pushRedis.Close() }()
+			pushSched := service.NewAsynqPushScheduler(pushRedis)
+			defer func() { _ = pushSched.Close() }()
+			notificationSvc.SetMobilePushScheduler(pushSched)
+			pushWorker := service.NewAsynqPushWorker(
+				pushRedis,
+				service.NewMobilePushTaskHandler(redisCache, oneSignalPush),
+				service.AsynqPushWorkerConfig{Concurrency: cfg.PushWorkerConcurrency},
+			)
+			if werr := pushWorker.Start(); werr != nil {
+				slog.Error("mobile push worker failed to start — scheduled pushes will wait for another instance", "error", werr)
+			} else {
+				// Shutdown waits for in-flight deliveries and requeues the
+				// rest in Redis — never drops them (the old in-memory queue
+				// did exactly that).
+				defer pushWorker.Shutdown()
+			}
+		}
 	}
 	messageSvc.SetNotifier(notificationSvc)
 	settingsSvc := service.NewSettingsService(store.NewSettingsStore(db))
@@ -302,6 +329,10 @@ func main() {
 	convH := handler.NewConversationHandler(convSvc, messageSvc)
 	wsH := handler.NewWSHandler(broker, channelSvc, convSvc, presenceSvc)
 	wsH.SetNotificationAckRecorder(redisCache)
+	// One-time upgrade tickets: the browser can't send an Authorization
+	// header on a WebSocket, and the old ?token= fallback leaked the JWT
+	// into URL logs. Redis-backed so any instance can redeem a ticket.
+	wsH.SetTicketStore(redisCache)
 	wsH.SetPublisher(redisPubSub)
 	wsH.SetUserService(userSvc)
 	wsH.SetReplayer(inboxStream)
@@ -539,6 +570,16 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("server forced to shutdown", "error", err)
 		os.Exit(1)
+	}
+
+	// srv.Shutdown does not track hijacked WebSocket connections. Close the
+	// broker's clients to unblock every connection loop, then wait (bounded)
+	// for their teardown — presence entries are removed and offline
+	// transitions published instead of every deploy leaving markers to lapse
+	// by TTL with the transitions unannounced.
+	_ = broker.Close()
+	if !wsH.Drain(5 * time.Second) {
+		slog.Warn("timed out draining websocket teardown on shutdown")
 	}
 
 	// HTTP is drained; now wait (bounded) for any in-flight durable-inbox fan-out

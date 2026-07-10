@@ -290,8 +290,12 @@ func TestStream_ReplayEmptyStream(t *testing.T) {
 	if len(res.Entries) != 0 {
 		t.Errorf("entries = %d, want 0", len(res.Entries))
 	}
-	if res.Exhausted {
-		t.Error("expected exhausted=false when stream is empty (nothing to be exhausted from)")
+	// The client HAS a cursor, so it once saw a retained entry; an empty
+	// stream means everything since was trimmed/TTL-reaped/dropped and
+	// continuity is unverifiable → Exhausted forces the full-refetch path.
+	// (The old exhausted=false here silently papered over a gap.)
+	if !res.Exhausted {
+		t.Error("expected exhausted=true when a cursor-carrying client finds an empty stream")
 	}
 }
 
@@ -510,5 +514,19 @@ func TestStream_ReplayMixedLegacyAndModernEntries(t *testing.T) {
 	}
 	if res.Exhausted {
 		t.Error("cursor was found — must not report exhausted")
+	}
+}
+
+// A Drop against a dead Redis surfaces the error so the caller can log the
+// poison failure loudly (replay might then silently skip an event; the
+// reconnect refetch is the remaining safety net).
+func TestStream_DropPropagatesRedisError(t *testing.T) {
+	proxy := newRedisProxy(t)
+	client := redis.NewClient(&redis.Options{Addr: proxy.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	s := NewStream(client, 0)
+	proxy.Close() // simulate Redis loss
+	if err := s.Drop(context.Background(), []string{"u1"}); err == nil {
+		t.Error("expected error after Redis closed")
 	}
 }

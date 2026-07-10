@@ -3,12 +3,12 @@ import { act, renderHook } from '@testing-library/react';
 import { useWebSocket } from './useWebSocket';
 import { sendWS } from '@/lib/ws-sender';
 
-const refreshAccessTokenMock = vi.hoisted(() => vi.fn());
+const apiFetchMock = vi.hoisted(() => vi.fn());
 
-// Mock getAccessToken
+// Mock getAccessToken + the pre-connect ticket mint
 vi.mock('@/lib/api', () => ({
   getAccessToken: vi.fn(() => 'test-token'),
-  refreshAccessToken: refreshAccessTokenMock,
+  apiFetch: apiFetchMock,
 }));
 
 // --- WebSocket mock ---
@@ -56,9 +56,21 @@ class MockWebSocket {
   }
 }
 
+// connect() awaits the ticket mint before constructing the socket, so socket
+// creation is asynchronous — flush the microtask chain (mint → ticket →
+// new WebSocket) before asserting on MockWebSocket.instances.
+async function flushConnect() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 beforeEach(() => {
   MockWebSocket.instances = [];
-  refreshAccessTokenMock.mockResolvedValue('test-token');
+  apiFetchMock.mockReset();
+  apiFetchMock.mockResolvedValue({ ticket: 'test-ticket' });
   vi.stubGlobal('WebSocket', MockWebSocket);
   vi.useFakeTimers();
 });
@@ -69,24 +81,27 @@ afterEach(() => {
 });
 
 describe('useWebSocket', () => {
-  it('connects with the correct URL', () => {
+  it('connects with the correct URL', async () => {
     renderHook(() =>
       useWebSocket({ enabled: true }),
     );
+    await flushConnect();
 
     expect(MockWebSocket.instances).toHaveLength(1);
-    expect(MockWebSocket.instances[0].url).toContain('/api/v1/ws?token=test-token');
+    // The access JWT never rides the WS URL — only the one-time ticket does.
+    expect(MockWebSocket.instances[0].url).toContain('/api/v1/ws?ticket=test-ticket');
   });
 
-  it('does not connect when disabled', () => {
+  it('does not connect when disabled', async () => {
     renderHook(() =>
       useWebSocket({ enabled: false }),
     );
+    await flushConnect();
 
     expect(MockWebSocket.instances).toHaveLength(0);
   });
 
-  it('uses the wss scheme when the page is served over https', () => {
+  it('uses the wss scheme when the page is served over https', async () => {
     const original = window.location;
     Object.defineProperty(window, 'location', {
       configurable: true,
@@ -94,17 +109,19 @@ describe('useWebSocket', () => {
     });
     try {
       renderHook(() => useWebSocket({ enabled: true }));
+      await flushConnect();
       expect(MockWebSocket.instances[0].url.startsWith('wss://')).toBe(true);
     } finally {
       Object.defineProperty(window, 'location', { configurable: true, value: original });
     }
   });
 
-  it('installs the shared ws-sender on open so components can send frames', () => {
+  it('installs the shared ws-sender on open so components can send frames', async () => {
     // onopen exposes the live socket's send via setWSSender — typing pings
     // and notification acks route through this without prop-drilling. The
     // installed sender must write to the socket that just opened.
     renderHook(() => useWebSocket({ enabled: true }));
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -113,11 +130,12 @@ describe('useWebSocket', () => {
     expect(ws.sent).toEqual([JSON.stringify({ type: 'typing', channelID: 'ch-1' })]);
   });
 
-  it('calls onMessageNew when receiving a message.new event', () => {
+  it('calls onMessageNew when receiving a message.new event', async () => {
     const onMessageNew = vi.fn();
     renderHook(() =>
       useWebSocket({ onMessageNew, enabled: true }),
     );
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -129,11 +147,12 @@ describe('useWebSocket', () => {
     expect(onMessageNew).toHaveBeenCalledWith({ id: '1', body: 'hello' });
   });
 
-  it('calls onMessageEdited when receiving a message.edited event', () => {
+  it('calls onMessageEdited when receiving a message.edited event', async () => {
     const onMessageEdited = vi.fn();
     renderHook(() =>
       useWebSocket({ onMessageEdited, enabled: true }),
     );
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -145,11 +164,12 @@ describe('useWebSocket', () => {
     expect(onMessageEdited).toHaveBeenCalledWith({ id: '2', body: 'edited' });
   });
 
-  it('calls onMessageDeleted when receiving a message.deleted event', () => {
+  it('calls onMessageDeleted when receiving a message.deleted event', async () => {
     const onMessageDeleted = vi.fn();
     renderHook(() =>
       useWebSocket({ onMessageDeleted, enabled: true }),
     );
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -161,11 +181,12 @@ describe('useWebSocket', () => {
     expect(onMessageDeleted).toHaveBeenCalledWith({ id: '3' });
   });
 
-  it('evicts the oldest seen event id once the dedup window overflows', () => {
+  it('evicts the oldest seen event id once the dedup window overflows', async () => {
     const onMessageNew = vi.fn();
     renderHook(() =>
       useWebSocket({ onMessageNew, enabled: true }),
     );
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -189,13 +210,14 @@ describe('useWebSocket', () => {
     expect(onMessageNew).toHaveBeenCalledTimes(514);
   });
 
-  it('does not commit dedup/cursor when a handler throws, so a durable event survives for replay', () => {
+  it('does not commit dedup/cursor when a handler throws, so a durable event survives for replay', async () => {
     const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
     // First delivery throws; the second (re-delivery of the same id) succeeds.
     const onMessageNew = vi.fn().mockImplementationOnce(() => {
       throw new Error('cache patch boom');
     });
     renderHook(() => useWebSocket({ onMessageNew, enabled: true }));
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -216,11 +238,12 @@ describe('useWebSocket', () => {
     debugSpy.mockRestore();
   });
 
-  it('handles data as object (not double-encoded string)', () => {
+  it('handles data as object (not double-encoded string)', async () => {
     const onMessageNew = vi.fn();
     renderHook(() =>
       useWebSocket({ onMessageNew, enabled: true }),
     );
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -232,101 +255,132 @@ describe('useWebSocket', () => {
     expect(onMessageNew).toHaveBeenCalledWith({ type: 'message.new' });
   });
 
-  it('tries each reconnect delay three times before advancing', async () => {
+  it('keeps reconnecting after every close on the jittered backoff', async () => {
     renderHook(() =>
       useWebSocket({ enabled: true }),
     );
+    await flushConnect();
 
     expect(MockWebSocket.instances).toHaveLength(1);
 
-    const attempts = [
-      { wait: 1000, early: 999 },
-      { wait: 1000, early: 999 },
-      { wait: 1000, early: 999 },
-      { wait: 2000, early: 1999 },
-      { wait: 2000, early: 1999 },
-      { wait: 2000, early: 1999 },
-      { wait: 4000, early: 3999 },
-      { wait: 4000, early: 3999 },
-      { wait: 4000, early: 3999 },
-      { wait: 8000, early: 7999 },
-      { wait: 8000, early: 7999 },
-      { wait: 8000, early: 7999 },
-      { wait: 16000, early: 15999 },
-      { wait: 16000, early: 15999 },
-      { wait: 16000, early: 15999 },
-      { wait: 30000, early: 29999 },
-    ];
-
-    for (const [index, { wait, early }] of attempts.entries()) {
-      MockWebSocket.instances[index].simulateClose();
-      expect(MockWebSocket.instances).toHaveLength(index + 1);
+    // Delays are RANDOM inside a growing jitter envelope capped at 30s —
+    // there is no fixed ladder to step through anymore. Advancing 31s is
+    // guaranteed to fire whichever delay the curve drew, so we assert the
+    // reconnect KEEPS HAPPENING (with a fresh ticket mint each time), never
+    // an exact delay.
+    for (let attempt = 1; attempt <= 8; attempt += 1) {
+      MockWebSocket.instances[attempt - 1].simulateClose();
+      expect(MockWebSocket.instances).toHaveLength(attempt);
 
       await act(async () => {
-        vi.advanceTimersByTime(early);
+        vi.advanceTimersByTime(31_000);
         await Promise.resolve();
       });
-      expect(MockWebSocket.instances).toHaveLength(index + 1);
-
-      await act(async () => {
-        vi.advanceTimersByTime(wait - early);
-        await Promise.resolve();
-      });
-      expect(MockWebSocket.instances).toHaveLength(index + 2);
-      expect(refreshAccessTokenMock).toHaveBeenCalledTimes(index + 1);
+      await flushConnect();
+      expect(MockWebSocket.instances).toHaveLength(attempt + 1);
+      expect(apiFetchMock).toHaveBeenCalledTimes(attempt + 1);
     }
   });
 
-  it('aborts a reconnect when the token refresh comes back empty', async () => {
-    // On reconnect the hook refreshes the token first. If the refresh
-    // returns no token (session fully expired), the connect attempt must
-    // bail out and NOT open a new socket.
-    refreshAccessTokenMock.mockResolvedValue('');
+  it('aborts a reconnect when the ticket mint comes back empty', async () => {
+    // On every (re)connect the hook mints a one-time upgrade ticket first.
+    // If the mint resolves without a ticket (unexpected server response),
+    // the connect attempt must bail out silently — no new socket and no
+    // reschedule (a terminal auth rejection is handled by apiFetch's global
+    // logout, which flips `enabled` and tears the hook down).
     renderHook(() => useWebSocket({ enabled: true }));
+    await flushConnect();
 
     expect(MockWebSocket.instances).toHaveLength(1);
+    apiFetchMock.mockResolvedValue({});
     MockWebSocket.instances[0].simulateClose();
 
     await act(async () => {
-      vi.advanceTimersByTime(1000); // fire the reconnect timer
+      vi.advanceTimersByTime(31_000); // fire the pending reconnect timer
       await Promise.resolve();
     });
+    await flushConnect();
 
-    // refreshAccessToken returned '' → the connect attempt bailed at the
-    // `if (!token) return` guard, so no new socket was ever created.
-    expect(refreshAccessTokenMock).toHaveBeenCalled();
+    // apiFetch resolved without a ticket → the connect attempt bailed at the
+    // `if (!ticket) return` guard, so no new socket was ever created.
+    expect(apiFetchMock).toHaveBeenCalledTimes(2);
+    expect(MockWebSocket.instances).toHaveLength(1);
+
+    // …and nothing was rescheduled: another full backoff window passes
+    // without a further mint attempt.
+    await act(async () => {
+      vi.advanceTimersByTime(31_000);
+      await Promise.resolve();
+    });
+    await flushConnect();
+    expect(apiFetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('schedules a backoff retry when the ticket mint fails at the network level', async () => {
+    // A network-level mint failure (offline, server restarting) must book a
+    // backoff retry — the old flow silently stalled with a dead socket.
+    apiFetchMock.mockRejectedValue(new Error('network'));
+    renderHook(() => useWebSocket({ enabled: true }));
+    await flushConnect();
+
+    // The initial mint failed → no socket, but a retry is pending.
+    expect(MockWebSocket.instances).toHaveLength(0);
+    expect(apiFetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(31_000);
+      await Promise.resolve();
+    });
+    await flushConnect();
+    expect(apiFetchMock).toHaveBeenCalledTimes(2);
+    expect(MockWebSocket.instances).toHaveLength(0);
+
+    // Once the network is back, the next retry opens a socket again.
+    apiFetchMock.mockResolvedValue({ ticket: 'test-ticket' });
+    await act(async () => {
+      vi.advanceTimersByTime(31_000);
+      await Promise.resolve();
+    });
+    await flushConnect();
+    expect(apiFetchMock).toHaveBeenCalledTimes(3);
     expect(MockWebSocket.instances).toHaveLength(1);
   });
 
-  it('resets retry count after successful open', async () => {
+  it('resets the backoff curve after a successful open', async () => {
     renderHook(() =>
       useWebSocket({ enabled: true }),
     );
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateClose();
     await act(async () => {
-      vi.advanceTimersByTime(1000); // reconnect
+      vi.advanceTimersByTime(31_000); // reconnect
       await Promise.resolve();
     });
+    await flushConnect();
 
     const ws2 = MockWebSocket.instances[1];
-    ws2.simulateOpen(); // resets retry count
+    ws2.simulateOpen(); // healthy again — restarts the backoff curve
     ws2.simulateClose();
 
-    // Should use 1000ms backoff again (retry count was reset)
+    // The reset is observable only as "still reconnects": delays are
+    // jittered, so we assert the retry fires within the 30s cap rather
+    // than at an exact first-step delay.
     await act(async () => {
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(31_000);
       await Promise.resolve();
     });
+    await flushConnect();
     expect(MockWebSocket.instances).toHaveLength(3);
   });
 
-  it('calls onMembersChanged when receiving a members.changed event', () => {
+  it('calls onMembersChanged when receiving a members.changed event', async () => {
     const onMembersChanged = vi.fn();
     renderHook(() =>
       useWebSocket({ onMembersChanged, enabled: true }),
     );
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -338,11 +392,12 @@ describe('useWebSocket', () => {
     expect(onMembersChanged).toHaveBeenCalledWith({ channelID: 'ch-1' });
   });
 
-  it('calls onConversationNew when receiving a conversation.new event', () => {
+  it('calls onConversationNew when receiving a conversation.new event', async () => {
     const onConversationNew = vi.fn();
     renderHook(() =>
       useWebSocket({ onConversationNew, enabled: true }),
     );
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -354,11 +409,12 @@ describe('useWebSocket', () => {
     expect(onConversationNew).toHaveBeenCalledWith({ conversationID: 'conv-1' });
   });
 
-  it('calls onChannelArchived when receiving a channel.archived event', () => {
+  it('calls onChannelArchived when receiving a channel.archived event', async () => {
     const onChannelArchived = vi.fn();
     renderHook(() =>
       useWebSocket({ onChannelArchived, enabled: true }),
     );
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -370,10 +426,11 @@ describe('useWebSocket', () => {
     expect(onChannelArchived).toHaveBeenCalledWith({ channelID: 'ch-2' });
   });
 
-  it('cleans up on unmount', () => {
+  it('cleans up on unmount', async () => {
     const { unmount } = renderHook(() =>
       useWebSocket({ enabled: true }),
     );
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     unmount();
@@ -386,6 +443,7 @@ describe('useWebSocket', () => {
   // can replay anything missed during the disconnect.
   it('sends the last event id as ?since on reconnect', async () => {
     renderHook(() => useWebSocket({ enabled: true }));
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -397,9 +455,10 @@ describe('useWebSocket', () => {
     ws.simulateClose();
 
     await act(async () => {
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(31_000);
       await Promise.resolve();
     });
+    await flushConnect();
 
     expect(MockWebSocket.instances).toHaveLength(2);
     expect(MockWebSocket.instances[1].url).toContain('since=01ID0000000000000000000099');
@@ -410,6 +469,7 @@ describe('useWebSocket', () => {
   // or the next reconnect would replay the in-between window and re-deliver.
   it('does not regress the reconnect cursor on an out-of-order frame', async () => {
     renderHook(() => useWebSocket({ enabled: true }));
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -427,9 +487,10 @@ describe('useWebSocket', () => {
     ws.simulateClose();
 
     await act(async () => {
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(31_000);
       await Promise.resolve();
     });
+    await flushConnect();
 
     expect(MockWebSocket.instances).toHaveLength(2);
     expect(MockWebSocket.instances[1].url).toContain('since=01ID0000000000000000000099');
@@ -441,6 +502,7 @@ describe('useWebSocket', () => {
   // message — or a reconnect would skip replaying messages between them.
   it('does not advance the reconnect cursor for an ephemeral frame', async () => {
     renderHook(() => useWebSocket({ enabled: true }));
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -457,9 +519,10 @@ describe('useWebSocket', () => {
     ws.simulateClose();
 
     await act(async () => {
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(31_000);
       await Promise.resolve();
     });
+    await flushConnect();
 
     expect(MockWebSocket.instances[1].url).toContain('since=01ID0000000000000000000099');
     expect(MockWebSocket.instances[1].url).not.toContain('since=01ID0000000000000000000150');
@@ -467,8 +530,9 @@ describe('useWebSocket', () => {
 
   // First connect (no prior cursor) must not send a since param —
   // the server interprets that as "fresh, no replay needed".
-  it('omits ?since on a fresh first connect', () => {
+  it('omits ?since on a fresh first connect', async () => {
     renderHook(() => useWebSocket({ enabled: true }));
+    await flushConnect();
     expect(MockWebSocket.instances[0].url).not.toContain('since=');
   });
 
@@ -476,9 +540,10 @@ describe('useWebSocket', () => {
   // the durable replay, once from the live pubsub), the callback
   // must fire exactly once. Without dedup the cache would double-
   // apply mutations on every reconnect.
-  it('deduplicates events by id across replay + live', () => {
+  it('deduplicates events by id across replay + live', async () => {
     const onMessageNew = vi.fn();
     renderHook(() => useWebSocket({ onMessageNew, enabled: true }));
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -502,6 +567,7 @@ describe('useWebSocket', () => {
     renderHook(() =>
       useWebSocket({ onReplayExhausted, enabled: true }),
     );
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -520,9 +586,10 @@ describe('useWebSocket', () => {
     ws.simulateClose();
 
     await act(async () => {
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(31_000);
       await Promise.resolve();
     });
+    await flushConnect();
 
     expect(onReplayExhausted).toHaveBeenCalledTimes(1);
     // After exhausted the cursor is cleared — the reconnect must
@@ -534,9 +601,10 @@ describe('useWebSocket', () => {
   // and (importantly) it should NOT advance the cursor past the
   // last real event, otherwise the next reconnect would miss
   // anything published right after the marker.
-  it('ignores replay.done as a no-op marker', () => {
+  it('ignores replay.done as a no-op marker', async () => {
     const onMessageNew = vi.fn();
     renderHook(() => useWebSocket({ onMessageNew, enabled: true }));
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -552,8 +620,9 @@ describe('useWebSocket', () => {
   // A transport error routes through onerror → ws.close(), which hands off to
   // the standard onclose backoff path (the mock does not auto-fire onclose, so
   // we assert the close was requested).
-  it('closes the socket when the underlying connection errors', () => {
+  it('closes the socket when the underlying connection errors', async () => {
     renderHook(() => useWebSocket({ enabled: true }));
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -563,12 +632,14 @@ describe('useWebSocket', () => {
   });
 
   // Full lifecycle in one flow: connect → durable event advances the replay
-  // cursor → the socket drops repeatedly and the backoff ramps 1s×3 → 2s (3
-  // attempts per step) with the cursor preserved on every reconnect URL → a
-  // successful open resets the retry counter, proven by the next drop backing
-  // off at 1s again instead of continuing the ramp.
+  // cursor → the socket drops repeatedly and each drop books a jittered retry
+  // (fired with a 31s sweep — delays are random within the envelope, never
+  // exact) with the cursor preserved on every reconnect URL → a successful
+  // open resets the backoff curve, observable as the next drop still
+  // reconnecting within the 30s cap.
   it('runs a full connect → backoff → reconnect → reset lifecycle preserving the replay cursor', async () => {
     renderHook(() => useWebSocket({ enabled: true }));
+    await flushConnect();
 
     // Step 1: initial connect + a durable message.new advances lastEventId.
     const ws0 = MockWebSocket.instances[0];
@@ -579,47 +650,37 @@ describe('useWebSocket', () => {
       data: JSON.stringify({ id: 'm1' }),
     }));
 
-    // Step 2: the socket keeps dropping without ever re-opening → the retry
-    // counter climbs and the backoff steps 1s,1s,1s,2s.
-    const backoffs = [1000, 1000, 1000, 2000];
-    for (const [i, delay] of backoffs.entries()) {
+    // Step 2: the socket keeps dropping without ever re-opening → each close
+    // books the next jittered retry.
+    for (let i = 0; i < 4; i += 1) {
       MockWebSocket.instances[i].simulateClose();
-
-      // Just under the delay → the reconnect timer has NOT fired yet.
-      await act(async () => {
-        vi.advanceTimersByTime(delay - 1);
-        await Promise.resolve();
-      });
       expect(MockWebSocket.instances).toHaveLength(i + 1);
 
-      // Crossing the delay → the next socket opens.
+      // A 31s sweep fires whatever delay the jitter drew (cap is 30s).
       await act(async () => {
-        vi.advanceTimersByTime(1);
+        vi.advanceTimersByTime(31_000);
         await Promise.resolve();
       });
+      await flushConnect();
       expect(MockWebSocket.instances).toHaveLength(i + 2);
 
       // Every reconnect carries the preserved cursor so the server can replay.
       expect(MockWebSocket.instances[i + 1].url).toContain('since=01ID0000000000000000000100');
     }
 
-    // Step 3: the latest socket opens successfully → retryCount resets to 0.
+    // Step 3: the latest socket opens successfully → the backoff curve resets.
     const reconnected = MockWebSocket.instances[MockWebSocket.instances.length - 1];
     reconnected.simulateOpen();
 
-    // Step 4: it drops again → the backoff is back at the FIRST step (1s),
-    // proving the reset (a non-reset counter would still be at ≥2s).
+    // Step 4: it drops again → the reset is observable only as "still
+    // reconnects within the cap" (exact delays are unobservable under jitter).
     const beforeReset = MockWebSocket.instances.length;
     reconnected.simulateClose();
     await act(async () => {
-      vi.advanceTimersByTime(999);
+      vi.advanceTimersByTime(31_000);
       await Promise.resolve();
     });
-    expect(MockWebSocket.instances).toHaveLength(beforeReset);
-    await act(async () => {
-      vi.advanceTimersByTime(1);
-      await Promise.resolve();
-    });
+    await flushConnect();
     expect(MockWebSocket.instances).toHaveLength(beforeReset + 1);
     // The cursor is still preserved after the reset-and-reconnect.
     expect(MockWebSocket.instances[beforeReset].url).toContain('since=01ID0000000000000000000100');

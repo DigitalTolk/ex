@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/redisx"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -149,7 +150,7 @@ func casResult(reply []any) (*DraftWriteResult, error) {
 // basis = the scope must have no draft). draft.Gen must carry the freshly
 // minted generation to store.
 func (s *RedisDraftStore) Upsert(ctx context.Context, draft *model.MessageDraft, basisGen string) (*DraftWriteResult, error) {
-	reply, err := draftUpsertScript.Run(ctx, s.client,
+	reply, err := redisx.RunScript(ctx, s.client, draftUpsertScript,
 		[]string{draftHashKey(draft.UserID), draftTSKey(draft.UserID)},
 		draft.ID, basisGen, encodeDraft(draft), draftHashTTLSeconds,
 	).Slice()
@@ -189,7 +190,7 @@ func (s *RedisDraftStore) List(ctx context.Context, userID string) ([]*model.Mes
 // Delete removes the draft iff basisGen matches the stored generation. A
 // clear of an absent draft with the empty basis is an accepted no-op.
 func (s *RedisDraftStore) Delete(ctx context.Context, userID, id, basisGen string) (*DraftWriteResult, error) {
-	reply, err := draftDeleteScript.Run(ctx, s.client,
+	reply, err := redisx.RunScript(ctx, s.client, draftDeleteScript,
 		[]string{draftHashKey(userID), draftTSKey(userID)},
 		id, basisGen,
 	).Slice()

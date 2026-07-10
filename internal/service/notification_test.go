@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -61,6 +62,9 @@ type stubPresence struct {
 
 func (p *stubPresence) IsOnline(userID string) bool { return p.online[userID] }
 
+// recordingMobilePush records scheduled pushes (the MobilePushScheduler seam
+// the NotificationService uses) and doubles as a provider-side
+// MobilePushSender for the task-handler tests.
 type recordingMobilePush struct {
 	calls []mobilePushCall
 	err   error
@@ -69,10 +73,16 @@ type recordingMobilePush struct {
 type mobilePushCall struct {
 	userID string
 	notif  Notification
+	delay  time.Duration
 }
 
 func (p *recordingMobilePush) Send(_ context.Context, userID string, notif Notification) error {
 	p.calls = append(p.calls, mobilePushCall{userID: userID, notif: notif})
+	return p.err
+}
+
+func (p *recordingMobilePush) SchedulePush(_ context.Context, userID string, notif Notification, delay time.Duration) error {
+	p.calls = append(p.calls, mobilePushCall{userID: userID, notif: notif, delay: delay})
 	return p.err
 }
 
@@ -125,7 +135,7 @@ func publishedNotifications(pub *mockPublisher) map[string]Notification {
 func TestNotificationService_NotifyDirect(t *testing.T) {
 	svc, pub, _, _, _, _ := setupNotifier(t)
 	push := &recordingMobilePush{}
-	svc.SetMobilePushSender(push)
+	svc.SetMobilePushScheduler(push)
 	// Offline → mobile push fires immediately alongside the desktop publish.
 	svc.SetPresence(&stubPresence{online: map[string]bool{}})
 
@@ -184,7 +194,7 @@ func TestNotificationService_NotifyForMessage_ChannelFanout(t *testing.T) {
 func TestNotificationService_NotifyForMessage_SendsMobilePushToSameRecipients(t *testing.T) {
 	svc, pub, members, _, chans, users := setupNotifier(t)
 	push := &recordingMobilePush{}
-	svc.SetMobilePushSender(push)
+	svc.SetMobilePushScheduler(push)
 	ctx := context.Background()
 
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
@@ -223,7 +233,7 @@ func TestNotificationService_NotifyForMessage_SendsMobilePushToSameRecipients(t 
 func TestNotificationService_NotifyForMessage_SkipsMobilePushForOnlineRecipients(t *testing.T) {
 	svc, pub, members, _, chans, users := setupNotifier(t)
 	push := &recordingMobilePush{}
-	svc.SetMobilePushSender(push)
+	svc.SetMobilePushScheduler(push)
 	// u-bob is connected (has a live WebSocket) and so already gets the
 	// in-app banner; u-carol is offline and must still receive a push.
 	svc.SetPresence(&stubPresence{online: map[string]bool{"u-bob": true}})
@@ -251,27 +261,11 @@ func TestNotificationService_NotifyForMessage_SkipsMobilePushForOnlineRecipients
 	}
 }
 
-// signalPush records each push recipient on a channel so a test can wait on
-// (or confirm the absence of) the deferred ack-fallback push deterministically.
-type signalPush struct{ sent chan string }
-
-func (p *signalPush) Send(_ context.Context, recipientUserID string, _ Notification) error {
-	p.sent <- recipientUserID
-	return nil
-}
-
 // stubAckStore reports a fixed set of (userID, messageID) acks as delivered.
 type stubAckStore struct{ acked map[string]bool }
 
 func (s *stubAckStore) WasNotificationAcked(_ context.Context, userID, messageID string) bool {
 	return s.acked[userID+":"+messageID]
-}
-
-func withShortAckDelay(t *testing.T) {
-	t.Helper()
-	orig := ackFallbackDelay
-	ackFallbackDelay = 10 * time.Millisecond
-	t.Cleanup(func() { ackFallbackDelay = orig })
 }
 
 // TestAckFallbackDelayInvariants guards the timing contract that keeps the
@@ -282,23 +276,26 @@ func withShortAckDelay(t *testing.T) {
 //
 // Source constants (kept in sync by comment, since they live in sibling
 // packages): handler.wsKeepAliveInterval = 15s, handler.wsPongTimeout = 10s,
-// cache.notifAckTTL = 60s.
+// cache.notifAckTTL = 5m.
 func TestAckFallbackDelayInvariants(t *testing.T) {
 	const keepAliveCycle = 15*time.Second + 10*time.Second // wsKeepAliveInterval + wsPongTimeout
-	const ackMarkerTTL = 60 * time.Second                  // cache.notifAckTTL
+	const ackMarkerTTL = 5 * time.Minute                   // cache.notifAckTTL
 	if ackFallbackDelay < keepAliveCycle {
 		t.Errorf("ackFallbackDelay = %v, must be >= one keep-alive cycle (%v) so a healthy socket can ack before the push fires", ackFallbackDelay, keepAliveCycle)
 	}
-	if ackFallbackDelay >= ackMarkerTTL {
-		t.Errorf("ackFallbackDelay = %v, must be < notifAckTTL (%v) so a recorded ack is still visible when the deferred push reads it", ackFallbackDelay, ackMarkerTTL)
+	// The worker reads the ack at DELIVERY time, which can lag the nominal
+	// delay by the asynq delayed-task check interval (5s) plus queue wait —
+	// the marker TTL must comfortably outlive all of it.
+	if ackFallbackDelay+time.Minute >= ackMarkerTTL {
+		t.Errorf("ackFallbackDelay = %v, must be well below notifAckTTL (%v) so a recorded ack is still visible when the worker delivers", ackFallbackDelay, ackMarkerTTL)
 	}
 }
 
-func dmNotifier(t *testing.T) (*NotificationService, *signalPush) {
+func dmNotifier(t *testing.T) (*NotificationService, *recordingMobilePush) {
 	t.Helper()
 	svc, _, _, conv, _, users := setupNotifier(t)
-	push := &signalPush{sent: make(chan string, 4)}
-	svc.SetMobilePushSender(push)
+	push := &recordingMobilePush{}
+	svc.SetMobilePushScheduler(push)
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
 	users.users["u-bob"] = &model.User{ID: "u-bob", DisplayName: "Bob"}
 	conv.conversations["c1"] = &model.Conversation{
@@ -312,97 +309,86 @@ func notifyDM(svc *NotificationService) {
 		&model.Message{ID: "m1", ParentID: "c1", AuthorID: "u-author", Body: "incident!"}, ParentConversation, nil)
 }
 
-// THE core fix: an "online" recipient whose desktop NEVER acks (dead/half-open
-// socket) must still get the mobile push once the ack window lapses. This is the
-// hole the presence-only gate left open.
-func TestNotificationService_MobilePush_OnlineButNoAck_FallsBackToPush(t *testing.T) {
-	withShortAckDelay(t)
+// THE core contract: an "online" recipient's push is SCHEDULED (deferred by
+// the ack window), never skipped — presence alone can't be trusted to mean
+// "the desktop will deliver". The ack check happens in the worker at delivery
+// time (push_scheduler_test.go covers that half), so the pending task
+// survives restarts.
+func TestNotificationService_MobilePush_Online_SchedulesDeferredPush(t *testing.T) {
 	svc, push := dmNotifier(t)
 	svc.SetPresence(&stubPresence{online: map[string]bool{"u-bob": true}})
-	svc.SetAckStore(&stubAckStore{acked: map[string]bool{}}) // nobody acked
+	svc.SetAckStore(&stubAckStore{acked: map[string]bool{}})
 
 	notifyDM(svc)
 
-	select {
-	case uid := <-push.sent:
-		if uid != "u-bob" {
-			t.Fatalf("deferred push to %q, want u-bob", uid)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("online recipient never acked → mobile push must fire as fallback, but it didn't")
+	if len(push.calls) != 1 {
+		t.Fatalf("scheduled pushes = %d, want 1", len(push.calls))
+	}
+	if got := push.calls[0]; got.userID != "u-bob" || got.delay != ackFallbackDelay {
+		t.Fatalf("scheduled (user=%q, delay=%v), want (u-bob, %v)", got.userID, got.delay, ackFallbackDelay)
 	}
 }
 
-// An online recipient whose desktop DID ack must NOT get a redundant push.
-func TestNotificationService_MobilePush_OnlineAndAcked_NoPush(t *testing.T) {
-	withShortAckDelay(t)
-	svc, push := dmNotifier(t)
-	svc.SetPresence(&stubPresence{online: map[string]bool{"u-bob": true}})
-	svc.SetAckStore(&stubAckStore{acked: map[string]bool{"u-bob:m1": true}}) // desktop confirmed
-
-	notifyDM(svc)
-
-	select {
-	case uid := <-push.sent:
-		t.Fatalf("desktop ack must cancel the deferred push, but it pushed to %q", uid)
-	case <-time.After(200 * time.Millisecond): // ack delay is 10ms; 200ms proves no push fired
-	}
-}
-
-// An offline recipient (no socket to ack) is pushed immediately, no waiting.
-func TestNotificationService_MobilePush_Offline_PushesImmediately(t *testing.T) {
+// An offline recipient (no socket to ack) is scheduled for immediate delivery.
+func TestNotificationService_MobilePush_Offline_SchedulesImmediately(t *testing.T) {
 	svc, push := dmNotifier(t)
 	svc.SetPresence(&stubPresence{online: map[string]bool{}}) // u-bob offline
 	svc.SetAckStore(&stubAckStore{acked: map[string]bool{}})
 
 	notifyDM(svc)
 
-	select {
-	case uid := <-push.sent:
-		if uid != "u-bob" {
-			t.Fatalf("immediate push to %q, want u-bob", uid)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("offline recipient must be pushed immediately")
+	if len(push.calls) != 1 {
+		t.Fatalf("scheduled pushes = %d, want 1", len(push.calls))
 	}
-}
-
-// Server shutdown drops a pending deferred push rather than sleeping out the
-// full delay then pushing into a closing process.
-func TestNotificationService_MobilePush_ShutdownStopsDeferredPush(t *testing.T) {
-	svc, push := dmNotifier(t)
-	svc.SetPresence(&stubPresence{online: map[string]bool{"u-bob": true}})
-	svc.SetAckStore(&stubAckStore{acked: map[string]bool{}})
-	// A long delay so Close() reliably wins the race against the timer.
-	orig := ackFallbackDelay
-	ackFallbackDelay = 10 * time.Second
-	t.Cleanup(func() { ackFallbackDelay = orig })
-
-	notifyDM(svc) // spawns the deferred-push goroutine (waiting 10s)
-	svc.Close()   // signal shutdown → the goroutine returns without pushing
-	svc.Close()   // idempotent
-
-	select {
-	case uid := <-push.sent:
-		t.Fatalf("shutdown must cancel the deferred push, but pushed to %q", uid)
-	case <-time.After(200 * time.Millisecond):
+	if got := push.calls[0]; got.userID != "u-bob" || got.delay != 0 {
+		t.Fatalf("scheduled (user=%q, delay=%v), want (u-bob, 0)", got.userID, got.delay)
 	}
 }
 
 // Without an ack store wired, an online recipient falls back to the old
-// presence-only behaviour (push skipped) — no deferred goroutine, no panic.
+// presence-only behaviour (push skipped) — nothing scheduled, no panic.
 func TestNotificationService_MobilePush_OnlineNoAckStore_SkipsPush(t *testing.T) {
-	withShortAckDelay(t)
 	svc, push := dmNotifier(t)
 	svc.SetPresence(&stubPresence{online: map[string]bool{"u-bob": true}})
 	// No SetAckStore.
 
 	notifyDM(svc)
 
-	select {
-	case uid := <-push.sent:
-		t.Fatalf("no ack store → online push should be skipped, but pushed to %q", uid)
-	case <-time.After(150 * time.Millisecond):
+	if len(push.calls) != 0 {
+		t.Fatalf("no ack store → online push should be skipped, but scheduled %d", len(push.calls))
+	}
+}
+
+// A notification without a messageID has nothing to key the ack on — the
+// online path degrades to presence-only (skip) rather than a deferred task
+// that could never be suppressed.
+func TestNotificationService_MobilePush_OnlineNoMessageID_SkipsPush(t *testing.T) {
+	svc, _, _, _, _, users := setupNotifier(t)
+	push := &recordingMobilePush{}
+	svc.SetMobilePushScheduler(push)
+	users.users["u-1"] = &model.User{ID: "u-1", DisplayName: "One"}
+	svc.SetPresence(&stubPresence{online: map[string]bool{"u-1": true}})
+	svc.SetAckStore(&stubAckStore{acked: map[string]bool{}})
+
+	svc.NotifyDirect(context.Background(), "u-1", Notification{Kind: NotificationKindReminder, Title: "r", Body: "b"})
+
+	if len(push.calls) != 0 {
+		t.Fatalf("no messageID → online push should be skipped, but scheduled %d", len(push.calls))
+	}
+}
+
+// A scheduler failure is logged loudly but must never block the desktop
+// publish that already happened.
+func TestNotificationService_MobilePush_ScheduleErrorDoesNotBlock(t *testing.T) {
+	svc, push := dmNotifier(t)
+	push.err = errors.New("redis down")
+	svc.SetPresence(&stubPresence{online: map[string]bool{}})
+	svc.SetAckStore(&stubAckStore{acked: map[string]bool{}})
+
+	notifyDM(svc) // must not panic; error only logged
+
+	if len(push.calls) != 1 {
+		t.Fatalf("schedule attempts = %d, want 1", len(push.calls))
 	}
 }
 
@@ -425,7 +411,7 @@ func TestNotificationService_MissingMobilePushConfigDoesNotBlockMessageDelivery(
 func TestNotificationService_MobilePushFailureDoesNotBlockMessageDelivery(t *testing.T) {
 	svc, pub, members, _, chans, users := setupNotifier(t)
 	push := &recordingMobilePush{err: errors.New("provider unavailable")}
-	svc.SetMobilePushSender(push)
+	svc.SetMobilePushScheduler(push)
 	ctx := context.Background()
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
@@ -715,7 +701,59 @@ func TestNotificationService_NameCache(t *testing.T) {
 	}
 }
 
+// withFastAudienceRetry shrinks the audience-load retry so give-up-path tests
+// don't sleep out the production backoff.
+func withFastAudienceRetry(t *testing.T) {
+	t.Helper()
+	orig := audienceRetryInterval
+	audienceRetryInterval = time.Millisecond
+	t.Cleanup(func() { audienceRetryInterval = orig })
+}
+
+// flakyListMembersStore fails ListMembers n times, then delegates — the
+// transient-DynamoDB-blip shape the audience retry exists for.
+type flakyListMembersStore struct {
+	MembershipStore
+	failures int
+	calls    int
+}
+
+func (f *flakyListMembersStore) ListMembers(ctx context.Context, channelID string) ([]*model.ChannelMembership, error) {
+	f.calls++
+	if f.calls <= f.failures {
+		return nil, errors.New("dynamodb throttled")
+	}
+	return f.MembershipStore.ListMembers(ctx, channelID)
+}
+
+// C6 regression: a transient audience-read failure used to zero the ENTIRE
+// recipient set (no desktop, no mobile — a silently lost alert). The retry
+// must recover it.
+func TestNotificationService_NotifyForMessage_TransientMemberLoadError_RetriesAndNotifies(t *testing.T) {
+	withFastAudienceRetry(t)
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	ctx := context.Background()
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	seedAllLevel(users, "u-bob")
+	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
+
+	flaky := &flakyListMembersStore{MembershipStore: members, failures: 2}
+	svc.members = flaky
+
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "deploy"}, ParentChannel, nil)
+
+	if got := len(publishedKinds(pub)); got != 1 {
+		t.Fatalf("transient member-load error must be retried and notify, got %d notifications", got)
+	}
+	if flaky.calls != 3 {
+		t.Fatalf("ListMembers calls = %d, want 3 (2 failures + success)", flaky.calls)
+	}
+}
+
 func TestNotificationService_NotifyForMessage_MemberLoadError_NotifiesNobody(t *testing.T) {
+	withFastAudienceRetry(t)
 	svc, pub, members, _, chans, users := setupNotifier(t)
 	ctx := context.Background()
 
@@ -824,7 +862,7 @@ func TestNotificationService_NotifyForMessage_ThreadReply_StillNotifiesExplicitM
 func TestNotificationService_NotifyForMessage_RespectsMute(t *testing.T) {
 	svc, pub, members, _, chans, users := setupNotifier(t)
 	push := &recordingMobilePush{}
-	svc.SetMobilePushSender(push)
+	svc.SetMobilePushScheduler(push)
 	ctx := context.Background()
 
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
@@ -980,7 +1018,7 @@ func mobileLevelSetup(t *testing.T, mobile model.MobileNotificationLevel) (*Noti
 	t.Helper()
 	svc, pub, members, _, chans, users := setupNotifier(t)
 	push := &recordingMobilePush{}
-	svc.SetMobilePushSender(push)
+	svc.SetMobilePushScheduler(push)
 	svc.SetPresence(&stubPresence{online: map[string]bool{}}) // recipient offline → immediate push
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
@@ -1045,6 +1083,7 @@ func TestNotificationService_NotifyForMessage_SkipsSystemMessages(t *testing.T) 
 }
 
 func TestNotificationService_NotifyForMessage_SkipsNilAndBrokenAudience(t *testing.T) {
+	withFastAudienceRetry(t)
 	svc, pub, members, conv, _, _ := setupNotifier(t)
 	svc.NotifyForMessage(context.Background(), nil, ParentChannel, nil)
 	if len(pub.published) != 0 {
@@ -1746,7 +1785,7 @@ func TestNotifyForMessage_MentionTitle_IncludesChannelName(t *testing.T) {
 func TestNotificationService_WebhookUsernameAndFallbackBody(t *testing.T) {
 	svc, _, members, _, chans, users := setupNotifier(t)
 	push := &recordingMobilePush{}
-	svc.SetMobilePushSender(push)
+	svc.SetMobilePushScheduler(push)
 	ctx := context.Background()
 
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
@@ -1961,5 +2000,95 @@ func TestNotifyForMessage_ThreadUpdated_ConversationParticipants(t *testing.T) {
 	}
 	if summary == nil || !summary.LatestActivityAt.Equal(created) {
 		t.Fatalf("LatestActivityAt = %+v, want CreatedAt fallback %v", summary, created)
+	}
+}
+
+// batchRecordingPublisher implements the EachPublisher capability so the
+// notify fan-out's pipelined path (one round-trip for the whole batch) is
+// exercised — mockPublisher covers the sequential fallback.
+type batchRecordingPublisher struct {
+	mockPublisher
+	batches [][]events.PublishItem
+}
+
+func (p *batchRecordingPublisher) PublishEach(_ context.Context, items []events.PublishItem) error {
+	p.batches = append(p.batches, append([]events.PublishItem(nil), items...))
+	return nil
+}
+
+func TestNotificationService_DesktopFanOutUsesBatchedPublish(t *testing.T) {
+	pub := &batchRecordingPublisher{}
+	members := &mockMembershipStore{memberships: map[string]*model.ChannelMembership{}}
+	conv := &mockConversationStore{conversations: map[string]*model.Conversation{}}
+	chans := &mockChannelStore{channels: map[string]*model.Channel{}}
+	users := newMockUserStore()
+	svc := NewNotificationService(pub, members, conv, chans, users, nil)
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	seedAllLevel(users, "u-b", "u-c", "u-d")
+	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
+	for _, uid := range []string{"u-b", "u-c", "u-d"} {
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+
+	svc.NotifyForMessage(context.Background(), &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel, nil)
+
+	if len(pub.batches) != 1 {
+		t.Fatalf("batched publishes = %d, want exactly 1 pipelined batch", len(pub.batches))
+	}
+	if got := len(pub.batches[0]); got != 3 {
+		t.Fatalf("batch size = %d, want 3 recipients", got)
+	}
+	seen := map[string]bool{}
+	for _, it := range pub.batches[0] {
+		seen[it.Channel] = true
+		if it.Event.Type != events.EventNotificationNew {
+			t.Fatalf("batch item type = %q", it.Event.Type)
+		}
+	}
+	for _, uid := range []string{"u-b", "u-c", "u-d"} {
+		if !seen[pubsub.UserChannel(uid)] {
+			t.Fatalf("recipient %s missing from the batch (%v)", uid, seen)
+		}
+	}
+	// The per-recipient Publish path must NOT also fire.
+	if got := len(pub.published); got != 0 {
+		t.Fatalf("per-recipient publishes = %d, want 0 when the batch capability exists", got)
+	}
+}
+
+// A wide fan-out with parallel badge writes: every recipient still gets
+// exactly one alert with the correct per-recipient count (run with -race in
+// CI, this also guards the bounded-parallel write path).
+func TestNotificationService_WideFanOutParallelBumps(t *testing.T) {
+	svc, pub, members, _, chans, users := setupBumpNotifier(t)
+	ctx := context.Background()
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	const n = 60
+	ids := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		uid := fmt.Sprintf("u-%03d", i)
+		ids = append(ids, uid)
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+	seedAllLevel(users, ids...)
+	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
+
+	svc.NotifyForMessage(ctx, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "all hands"}, ParentChannel, nil)
+
+	notifs := publishedNotifications(pub)
+	if len(notifs) != n {
+		t.Fatalf("published notifications = %d, want %d", len(notifs), n)
+	}
+	for _, uid := range ids {
+		nf, ok := notifs[pubsub.UserChannel(uid)]
+		if !ok {
+			t.Fatalf("recipient %s missing", uid)
+		}
+		if nf.ParentUnreadNotifyCount != 1 {
+			t.Fatalf("recipient %s count = %d, want 1", uid, nf.ParentUnreadNotifyCount)
+		}
 	}
 }

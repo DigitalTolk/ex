@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/events"
 )
@@ -137,7 +138,22 @@ func TestRedisPubSub_PublishMany(t *testing.T) {
 	}
 }
 
+func (c *captureInbox) droppedBatches() [][]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([][]string(nil), c.dropped...)
+}
+
+// withFastInboxRetry shrinks the fan-out retry interval for the failure tests.
+func withFastInboxRetry(t *testing.T) {
+	t.Helper()
+	orig := inboxAppendRetryInterval
+	inboxAppendRetryInterval = time.Millisecond
+	t.Cleanup(func() { inboxAppendRetryInterval = orig })
+}
+
 func TestRedisPubSub_PublishContinuesWhenInboxFails(t *testing.T) {
+	withFastInboxRetry(t)
 	ps := setupTestPubSub(t)
 	resolver := &fakeResolver{m: map[string][]string{"chan:c1": {"u1", "u2"}}}
 	inbox := &captureInbox{err: errors.New("write failed")}
@@ -148,10 +164,57 @@ func TestRedisPubSub_PublishContinuesWhenInboxFails(t *testing.T) {
 		t.Errorf("Publish must succeed even when inbox fails, got %v", err)
 	}
 	ps.WaitForInboxFanOut()
-	// The fan-out is now a single pipelined AppendMany, so a failure is recorded
-	// once for the batch (not once per recipient).
-	if got := inbox.failed.Load(); got != 1 {
-		t.Errorf("inbox failed count = %d, want 1 (batched fan-out)", got)
+	// The batched fan-out is retried before giving up: initial + 2 retries.
+	if got := inbox.failed.Load(); got != 3 {
+		t.Errorf("inbox failed count = %d, want 3 (initial + 2 retries)", got)
+	}
+	// Persistent failure poisons the affected streams so those clients take
+	// the exhausted → full-refetch path instead of replaying past a hole.
+	dropped := inbox.droppedBatches()
+	if len(dropped) != 1 || len(dropped[0]) != 2 {
+		t.Fatalf("dropped batches = %v, want one batch of the 2 recipients", dropped)
+	}
+}
+
+// A transient blip is absorbed by the retry: appends land on the second
+// attempt, and nothing is poisoned.
+func TestRedisPubSub_InboxRetryRecoversTransientFailure(t *testing.T) {
+	withFastInboxRetry(t)
+	ps := setupTestPubSub(t)
+	resolver := &fakeResolver{m: map[string][]string{"chan:c1": {"u1", "u2"}}}
+	inbox := &captureInbox{failTimes: 1}
+	ps.SetDurability(resolver, inbox)
+
+	evt, _ := events.NewEvent(events.EventMessageNew, nil)
+	if err := ps.Publish(context.Background(), "chan:c1", evt); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	ps.WaitForInboxFanOut()
+	if got := len(inbox.seen()); got != 2 {
+		t.Fatalf("inbox appends = %d, want 2 (retry recovered the batch)", got)
+	}
+	if dropped := inbox.droppedBatches(); len(dropped) != 0 {
+		t.Fatalf("nothing may be poisoned after a recovered retry, got %v", dropped)
+	}
+}
+
+// Even the poison step failing must not panic or block — it is logged as the
+// last-resort ERROR (replay may then silently skip; the reconnect refetch
+// remains the final safety net).
+func TestRedisPubSub_InboxPoisonFailureIsContained(t *testing.T) {
+	withFastInboxRetry(t)
+	ps := setupTestPubSub(t)
+	resolver := &fakeResolver{m: map[string][]string{"chan:c1": {"u1"}}}
+	inbox := &captureInbox{err: errors.New("write failed"), dropErr: errors.New("del failed")}
+	ps.SetDurability(resolver, inbox)
+
+	evt, _ := events.NewEvent(events.EventMessageNew, nil)
+	if err := ps.Publish(context.Background(), "chan:c1", evt); err != nil {
+		t.Errorf("Publish must succeed, got %v", err)
+	}
+	ps.WaitForInboxFanOut()
+	if dropped := inbox.droppedBatches(); len(dropped) != 1 {
+		t.Fatalf("drop attempts = %d, want 1", len(dropped))
 	}
 }
 
@@ -183,5 +246,65 @@ func TestRedisPubSub_InboxAccessor(t *testing.T) {
 	ps.SetDurability(&fakeResolver{}, inbox)
 	if ps.Inbox() == nil {
 		t.Error("Inbox() should expose configured appender")
+	}
+}
+
+// PublishEach: many DISTINCT payloads in one pipelined round-trip (the
+// per-recipient notification fan-out shape).
+func TestRedisPubSub_PublishEach(t *testing.T) {
+	proxy := newRedisProxy(t)
+	ps := newTestPubSubAt(t, proxy.Addr())
+	resolver := &fakeResolver{m: map[string][]string{
+		"user:u1": {"u1"},
+		"user:u2": {"u2"},
+	}}
+	inbox := &captureInbox{}
+	ps.SetDurability(resolver, inbox)
+
+	evt1, _ := events.NewEvent(events.EventMessageNew, map[string]string{"for": "u1"})
+	evt2, _ := events.NewEvent(events.EventMessageNew, map[string]string{"for": "u2"})
+	items := []events.PublishItem{
+		{Channel: "user:u1", Event: evt1},
+		{Channel: "user:u2", Event: evt2},
+	}
+	if err := ps.PublishEach(context.Background(), items); err != nil {
+		t.Fatalf("PublishEach: %v", err)
+	}
+	ps.WaitForInboxFanOut()
+	// Each recipient's inbox got ITS OWN event — not a shared payload.
+	got := map[string]string{}
+	for _, c := range inbox.seen() {
+		var decoded events.Event
+		if err := json.Unmarshal(c.payload, &decoded); err != nil {
+			t.Fatalf("inbox payload: %v", err)
+		}
+		got[c.userID] = decoded.ID
+	}
+	if got["u1"] != evt1.ID || got["u2"] != evt2.ID {
+		t.Fatalf("per-recipient payloads mixed up: %v (want u1=%s u2=%s)", got, evt1.ID, evt2.ID)
+	}
+
+	// Empty batch: no-op.
+	if err := ps.PublishEach(context.Background(), nil); err != nil {
+		t.Fatalf("empty PublishEach: %v", err)
+	}
+
+	// A malformed payload (invalid RawMessage) surfaces the marshal error.
+	bad := &events.Event{ID: "bad", Type: events.EventMessageNew, Data: json.RawMessage("{not json")}
+	if err := ps.PublishEach(context.Background(), []events.PublishItem{{Channel: "user:u1", Event: bad}}); err == nil {
+		t.Fatal("malformed event must surface a marshal error")
+	}
+
+	// Pipeline error (server gone) surfaces — but the durable inbox fan-out
+	// must still run so persistent events stay replayable (same contract as
+	// PublishMany).
+	proxy.Close()
+	before := len(inbox.seen())
+	if err := ps.PublishEach(context.Background(), items[:1]); err == nil {
+		t.Error("PublishEach against a dead server should return the pipeline error")
+	}
+	ps.WaitForInboxFanOut()
+	if got := len(inbox.seen()); got != before+1 {
+		t.Errorf("durable fan-out must run despite the live PUBLISH error: appends=%d, want %d", got, before+1)
 	}
 }

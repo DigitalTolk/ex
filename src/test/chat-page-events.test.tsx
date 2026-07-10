@@ -77,11 +77,13 @@ vi.mock('@/context/UnreadContext', () => ({
 }));
 
 const setUserOnline = vi.fn();
+const presenceRefreshMock = vi.fn();
 vi.mock('@/context/PresenceContext', () => ({
   usePresence: () => ({
     online: new Set<string>(),
     isOnline: () => false,
     setUserOnline,
+    refreshPresence: presenceRefreshMock,
   }),
   PresenceProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
@@ -182,6 +184,7 @@ describe('ChatPage WebSocket handlers', () => {
     vi.mocked(apiFetch).mockReset();
     vi.mocked(apiFetch).mockResolvedValue(undefined);
     setUserOnline.mockReset();
+    presenceRefreshMock.mockReset();
     dispatchNotification.mockReset();
     setCurrentUserID.mockReset();
     patchUserMock.mockReset();
@@ -646,6 +649,9 @@ describe('ChatPage WebSocket handlers', () => {
     expect(calls).toContainEqual(['channelMembers']);
     // The refetched userChannels/userConversations carry authoritative server
     // unread counts — the single source — so there's nothing else to reset.
+    // presence.changed is ephemeral (never replayed): the reconnect must also
+    // refetch the authoritative online set or dots drift stale.
+    expect(presenceRefreshMock).toHaveBeenCalled();
   });
 
   it('onMessageEdited / onMessageDeleted gracefully ignore missing parentID and invalidate when present', () => {

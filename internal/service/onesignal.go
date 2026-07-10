@@ -26,6 +26,45 @@ var ErrPushUndeliverable = errors.New("push undeliverable (no device / rejected 
 
 const defaultOneSignalNotificationsURL = "https://api.onesignal.com/notifications?c=push"
 
+// oneSignalResponseLimit bounds how much of the (normally tiny) create-
+// notification response body is read for the accepted-but-undelivered check.
+const oneSignalResponseLimit = 64 << 10
+
+// oneSignalCreateResponse is the slice of OneSignal's create-notification
+// response the delivery check needs: a non-empty id means a notification was
+// created for at least one target; errors carries the reason when it wasn't
+// (shape varies — string array or object — so it stays raw).
+type oneSignalCreateResponse struct {
+	ID     string          `json:"id"`
+	Errors json.RawMessage `json:"errors"`
+}
+
+// classifyOneSignalAccepted decides whether a 2xx response actually created a
+// notification. Fail-open on unreadable/unparseable bodies (treated as
+// delivered): a retry after a body-transport hiccup would double-push, and a
+// provider format drift must not turn every success into a retry storm.
+func classifyOneSignalAccepted(body []byte, readErr error) error {
+	if readErr != nil {
+		return nil
+	}
+	var parsed oneSignalCreateResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil
+	}
+	if parsed.ID != "" {
+		// A notification exists — delivered (partial per-target errors with a
+		// created id are the provider's problem to report, not a total miss).
+		return nil
+	}
+	if len(parsed.Errors) > 0 {
+		// Accepted-but-created-nothing: for a single-recipient send this means
+		// THIS recipient is unreachable (no subscription / invalid alias).
+		// Retrying the identical request cannot fix it — permanent.
+		return backoff.Permanent(fmt.Errorf("onesignal: accepted but undelivered: %s: %w", string(parsed.Errors), ErrPushUndeliverable))
+	}
+	return nil
+}
+
 // defaultOneSignalRetries / defaultOneSignalRetryInterval bound the retry of a
 // transient OneSignal failure (network error or 5xx). A push that loses to a
 // blip would otherwise just vanish; 4xx responses are permanent and not retried.
@@ -144,7 +183,13 @@ func (s *OneSignalPushSender) Send(ctx context.Context, recipientUserID string, 
 			// from a transient failure and escalate accordingly.
 			return backoff.Permanent(fmt.Errorf("onesignal: request failed with status %d: %w", res.StatusCode, ErrPushUndeliverable))
 		}
-		return nil
+		// 2xx is NOT proof of delivery: OneSignal answers 200 with an empty
+		// "id" and an "errors" payload when the target has no push
+		// subscription (never registered / stale token) — the most common
+		// real-world miss, previously recorded as success and never logged.
+		// Parse the body and surface that as undeliverable so the worker's
+		// ERROR-loudness contract covers it.
+		return classifyOneSignalAccepted(io.ReadAll(io.LimitReader(res.Body, oneSignalResponseLimit)))
 	}
 	policy := backoff.WithContext(backoff.WithMaxRetries(backoff.NewConstantBackOff(s.retryInterval), s.maxRetries), ctx)
 	return backoff.Retry(attempt, policy)

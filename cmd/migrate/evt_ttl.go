@@ -6,6 +6,7 @@ import (
 
 	"github.com/DigitalTolk/ex/internal/config"
 	"github.com/DigitalTolk/ex/internal/eventlog"
+	"github.com/DigitalTolk/ex/internal/redisx"
 	"github.com/DigitalTolk/ex/internal/store"
 	"github.com/redis/go-redis/v9"
 )
@@ -25,7 +26,7 @@ func runEvtTTL(ctx context.Context, _ *store.DB, args []string) int {
 	if err != nil {
 		fatal("config load failed", err)
 	}
-	opts, err := redis.ParseURL(cfg.RedisURL)
+	opts, err := redisx.Options(cfg.RedisURL)
 	if err != nil {
 		fatal("parse redis url", err)
 	}

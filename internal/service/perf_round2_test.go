@@ -91,7 +91,7 @@ func (s *batchFakePresenceStore) ArePresenceOnline(_ context.Context, ids []stri
 	}
 	out := make(map[string]bool, len(ids))
 	for _, id := range ids {
-		out[id] = s.counts[id] > 0
+		out[id] = len(s.conns[id]) > 0
 	}
 	return out, nil
 }
@@ -100,7 +100,7 @@ func TestPresenceOnlineMany(t *testing.T) {
 	t.Run("local sessions answer without touching the store", func(t *testing.T) {
 		store := &batchFakePresenceStore{fakePresenceStore: newFakePresenceStore()}
 		svc := NewPresenceService(store, nil)
-		svc.OnConnect(context.Background(), "u-local")
+		svc.OnConnect(context.Background(), "u-local", "c-local")
 		got := svc.OnlineMany([]string{"u-local"})
 		if !got["u-local"] || store.batchCalls != 0 {
 			t.Fatalf("local = %v (batchCalls=%d), want true with no store read", got, store.batchCalls)
@@ -109,7 +109,7 @@ func TestPresenceOnlineMany(t *testing.T) {
 
 	t.Run("remote users resolve in one batched read", func(t *testing.T) {
 		store := &batchFakePresenceStore{fakePresenceStore: newFakePresenceStore()}
-		store.counts["u-remote-on"] = 2
+		store.conns["u-remote-on"] = map[string]bool{"c1": true, "c2": true}
 		svc := NewPresenceService(store, nil)
 		got := svc.OnlineMany([]string{"u-remote-on", "u-remote-off"})
 		if !got["u-remote-on"] || got["u-remote-off"] {
@@ -122,7 +122,7 @@ func TestPresenceOnlineMany(t *testing.T) {
 
 	t.Run("batch failure reads as offline (fail toward delivery)", func(t *testing.T) {
 		store := &batchFakePresenceStore{fakePresenceStore: newFakePresenceStore(), batchErr: errors.New("redis down")}
-		store.counts["u-remote-on"] = 1
+		store.conns["u-remote-on"] = map[string]bool{"c1": true}
 		svc := NewPresenceService(store, nil)
 		if got := svc.OnlineMany([]string{"u-remote-on"}); got["u-remote-on"] {
 			t.Fatalf("batch failure must read offline, got %v", got)
@@ -131,7 +131,7 @@ func TestPresenceOnlineMany(t *testing.T) {
 
 	t.Run("non-batch store falls back to per-user reads", func(t *testing.T) {
 		store := newFakePresenceStore()
-		store.counts["u-a"] = 1
+		store.conns["u-a"] = map[string]bool{"c1": true}
 		svc := NewPresenceService(store, nil)
 		got := svc.OnlineMany([]string{"u-a", "u-b"})
 		if !got["u-a"] || got["u-b"] {
@@ -180,7 +180,7 @@ func TestNotifyForMessage_BatchedPresence(t *testing.T) {
 	presence := &batchStubPresence{stubPresence: stubPresence{online: map[string]bool{"u-bob": true}}}
 	svc.SetPresence(presence)
 	push := &recordingMobilePush{}
-	svc.SetMobilePushSender(push)
+	svc.SetMobilePushScheduler(push)
 
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general"}
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
@@ -225,7 +225,7 @@ func TestNotifyForMessage_BatchedPresence_OfflineDMPushesImmediately(t *testing.
 	presence := &batchStubPresence{stubPresence: stubPresence{online: map[string]bool{}}}
 	svc.SetPresence(presence)
 	push := &recordingMobilePush{}
-	svc.SetMobilePushSender(push)
+	svc.SetMobilePushScheduler(push)
 
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
 	conv.conversations["dm1"] = &model.Conversation{ID: "dm1", Type: model.ConversationTypeDM, ParticipantIDs: []string{"u-author", "u-dana"}}
@@ -311,7 +311,7 @@ func TestPresenceTransitions_CallerTopicsSkipResolver(t *testing.T) {
 	})
 	ctx := context.Background()
 
-	svc.OnConnect(ctx, "u-1", "topic-a", "topic-b")
+	svc.OnConnect(ctx, "u-1", "conn-1", "topic-a", "topic-b")
 	if resolverCalls != 0 {
 		t.Fatalf("resolver calls after OnConnect = %d, want 0 (topics supplied)", resolverCalls)
 	}
@@ -324,7 +324,7 @@ func TestPresenceTransitions_CallerTopicsSkipResolver(t *testing.T) {
 	}
 
 	pub.published = nil
-	svc.OnDisconnect(ctx, "u-1")
+	svc.OnDisconnect(ctx, "u-1", "conn-1")
 	if resolverCalls != 1 {
 		t.Fatalf("resolver calls after OnDisconnect = %d, want 1 (fresh audience)", resolverCalls)
 	}

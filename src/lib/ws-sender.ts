@@ -22,6 +22,13 @@ function enqueue(frame: string): void {
   if (pending.length > MAX_PENDING) pending.shift();
 }
 
+// clearWSPending drops any buffered-but-unsent frames. Called when the WS
+// hook tears down for good (logout / user switch): a queued ack must never
+// survive into a different user's next session on the same page.
+export function clearWSPending(): void {
+  pending.length = 0;
+}
+
 export function setWSSender(s: Sender | null): void {
   current = s;
   if (!s) return;

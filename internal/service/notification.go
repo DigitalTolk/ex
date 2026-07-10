@@ -13,6 +13,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/safe"
+	"github.com/cenkalti/backoff/v4"
 )
 
 // NotificationKind tags a notification with its semantic class so the client
@@ -140,6 +141,11 @@ type NotificationAckStore interface {
 // redundant mobile push. 30s covers the keep-alive cycle plus surfacing slack.
 var ackFallbackDelay = 30 * time.Second
 
+// notifyWriteConcurrency bounds the parallel per-recipient DynamoDB writes
+// (badge bumps / thread markers) on the notify path — high enough to collapse
+// a big channel's fan-out latency, low enough to stay inside table capacity.
+const notifyWriteConcurrency = 16
+
 // NotificationService dispatches notifications to interested users while
 // honoring per-user mute preferences. It is intentionally tiny and parallel
 // to the events package: events update *every* connected client; this fans
@@ -155,15 +161,9 @@ type NotificationService struct {
 	presence  PresenceLookup
 	follows   ThreadFollowStore
 	userState *UserStateService
-	push      MobilePushSender
+	pushSched MobilePushScheduler
 	ackStore  NotificationAckStore
 	nameCache NameCache
-
-	// shutdown is closed by Close() to stop in-flight deferred ack-fallback
-	// pushes promptly on server shutdown rather than letting them sleep out the
-	// full ackFallbackDelay.
-	shutdown  chan struct{}
-	closeOnce sync.Once
 }
 
 // NewNotificationService builds a NotificationService. messages is used
@@ -171,13 +171,7 @@ type NotificationService struct {
 // participants). Pass nil and the thread path will degrade gracefully
 // to "no recipients beyond explicit @-mentions".
 func NewNotificationService(p Publisher, m MembershipStore, c ConversationStore, ch ChannelStore, u UserStore, msgs MessageStore) *NotificationService {
-	return &NotificationService{publisher: p, members: m, conv: c, channels: ch, users: u, messages: msgs, shutdown: make(chan struct{})}
-}
-
-// Close signals in-flight deferred ack-fallback pushes to stop waiting and
-// exit. Idempotent and safe to call without ever having scheduled a push.
-func (s *NotificationService) Close() {
-	s.closeOnce.Do(func() { close(s.shutdown) })
+	return &NotificationService{publisher: p, members: m, conv: c, channels: ch, users: u, messages: msgs}
 }
 
 // SetPresence wires a presence lookup so the @here mention can target only
@@ -191,8 +185,13 @@ func (s *NotificationService) SetUserStateService(userState *UserStateService) {
 	s.userState = userState
 }
 
-func (s *NotificationService) SetMobilePushSender(push MobilePushSender) {
-	s.push = push
+// SetMobilePushScheduler wires the durable (Redis-backed) push scheduler.
+// The service only ever *schedules* pushes — immediate for offline
+// recipients, deferred by ackFallbackDelay for online ones; the ack check
+// and the provider call happen in the worker at delivery time, so a pending
+// push survives restarts and any instance can deliver it.
+func (s *NotificationService) SetMobilePushScheduler(sched MobilePushScheduler) {
+	s.pushSched = sched
 }
 
 // SetAckStore wires the desktop-delivery acknowledgement store that gates the
@@ -243,6 +242,29 @@ func logAudienceLoadFailed(msg *model.Message, parentType string, err error) {
 		"parentID", msg.ParentID, "parentType", parentType, "messageID", msg.ID, "error", err)
 }
 
+// audienceRetryInterval / audienceRetryMaxRetries bound the audience-read
+// retry. Vars so tests can shrink the interval. The notify path already runs
+// detached with a 30s budget, so a couple of half-second retries are cheap
+// insurance against a DynamoDB blip zeroing a message's entire recipient set.
+var (
+	audienceRetryInterval           = 500 * time.Millisecond
+	audienceRetryMaxRetries  uint64 = 2
+)
+
+// retryAudienceLoad retries a transient audience-read failure before giving
+// up: losing this read loses the ENTIRE recipient set for the message —
+// desktop alerts AND mobile fallbacks — which the notification contract
+// treats as an incident, not a degradation.
+func retryAudienceLoad[T any](ctx context.Context, load func() (T, error)) (T, error) {
+	var out T
+	err := backoff.Retry(func() error {
+		var err error
+		out, err = load()
+		return err
+	}, backoff.WithContext(backoff.WithMaxRetries(backoff.NewConstantBackOff(audienceRetryInterval), audienceRetryMaxRetries), ctx))
+	return out, err
+}
+
 func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model.Message, parentType, parentName string) memberSnapshot {
 	// Webhook posts have no human author to exclude — the "author" is the
 	// webhook sentinel, and the creator didn't write the message, so they
@@ -253,7 +275,9 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 	}
 	switch parentType {
 	case ParentChannel:
-		members, err := s.members.ListMembers(ctx, msg.ParentID)
+		members, err := retryAudienceLoad(ctx, func() ([]*model.ChannelMembership, error) {
+			return s.members.ListMembers(ctx, msg.ParentID)
+		})
 		if err != nil {
 			// (Unlike the per-member overrides/prefs below, which degrade
 			// gracefully — a lost override is a minor over-notification — losing
@@ -286,7 +310,9 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 		prefs := s.resolvePrefs(ctx, ids, overrides)
 		return memberSnapshot{memberIDs: ids, muted: muted, prefs: prefs, deepLink: "/channel/" + parentName}
 	case ParentConversation:
-		c, err := s.conv.GetConversation(ctx, msg.ParentID)
+		c, err := retryAudienceLoad(ctx, func() (*model.Conversation, error) {
+			return s.conv.GetConversation(ctx, msg.ParentID)
+		})
 		if err != nil || c == nil {
 			logAudienceLoadFailed(msg, parentType, err)
 			return memberSnapshot{}
@@ -481,6 +507,14 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	}
 	var mobilePending []pendingPush
 
+	// Pass 1 — pure gating: decide who is alerted and how. No I/O.
+	type alertPlan struct {
+		uid       string
+		mentioned bool
+		desktop   bool
+		mobile    bool
+	}
+	var plans []alertPlan
 	for _, uid := range snap.memberIDs {
 		eff := snap.prefs[uid]
 		r := recipientReasons{
@@ -526,38 +560,70 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		if isThreadReply && threadAudience != nil {
 			threadAudience[uid] = true
 		}
+		plans = append(plans, alertPlan{uid: uid, mentioned: r.explicitMention || r.groupMention, desktop: desktop, mobile: mobile})
+	}
 
+	// Pass 2 — the per-recipient DynamoDB writes, bounded-parallel: badge
+	// bumps for top-level messages, thread markers for replies. These were
+	// SEQUENTIAL — a 500-member "all messages" post paid 500 UpdateItems one
+	// after another on the notify path. Each write stays best-effort: a
+	// failure must never block the alert itself (the badge/marker self-heals
+	// on the next list fetch).
+	//
+	// Thread replies persist a thread-notification marker so the Threads nav
+	// lights up on a cold reload — thread replies do NOT bump the parent's
+	// unread seq, so this marker is the only durable thread-unread signal.
+	// Channel/DM unread needs NO per-user marker here: the sidebar badge is
+	// driven by the durable server seq count (channel.MessageSeq −
+	// LastReadSeq), which already shows on a cold reload even when the live
+	// event was missed.
+	counts := make([]int64, len(plans))
+	haveCount := make([]bool, len(plans))
+	if len(plans) > 0 {
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, notifyWriteConcurrency)
+		for i := range plans {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(i int) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				defer safe.Recover()
+				if isThreadReply {
+					s.markThreadNotification(ctx, plans[i].uid, msg, parentType)
+					return
+				}
+				if n, ok := s.bumpNotifyCount(ctx, parentType, msg.ParentID, plans[i].uid); ok {
+					counts[i] = n
+					haveCount[i] = true
+				}
+			}(i)
+		}
+		wg.Wait()
+	}
+
+	// Pass 3 — build each recipient's payload and fan out: desktop publishes
+	// collected into ONE pipelined batch (they used to be one PUBLISH
+	// round-trip per recipient), mobile pushes deferred to the batched
+	// presence check below.
+	desktopItems := make([]events.PublishItem, 0, len(plans))
+	for i, plan := range plans {
+		uid := plan.uid
 		notif := baseNotif
-		mentioned := r.explicitMention || r.groupMention
+		mentioned := plan.mentioned
 		if mentioned {
 			notif = mentionNotif
 		}
-
-		// This recipient IS being alerted (the loop continued past the
-		// level/mute gate above), so their sidebar badge advances. Thread
-		// replies stay off parent counters — the Threads nav owns those via
-		// markThreadNotification below. Best-effort: a failed bump must
-		// never block the alert itself; the badge self-heals on the next
-		// sidebar list fetch.
-		if !isThreadReply {
-			if n, ok := s.bumpNotifyCount(ctx, parentType, msg.ParentID, uid); ok {
-				notif.ParentUnreadNotifyCount = n
-			}
+		if haveCount[i] {
+			notif.ParentUnreadNotifyCount = counts[i]
 		}
-
-		// Thread replies persist a thread-notification marker so the Threads nav
-		// lights up on a cold reload — thread replies do NOT bump the parent's
-		// unread seq, so this marker is the only durable thread-unread signal.
-		// Channel/DM unread needs NO per-user marker here: the sidebar badge is
-		// driven by the durable server seq count (channel.MessageSeq −
-		// LastReadSeq), which already shows on a cold reload even when the live
-		// event was missed — so we avoid an O(recipients) write per message.
-		if isThreadReply {
-			s.markThreadNotification(ctx, uid, msg, parentType)
-		}
+		desktop := plan.desktop
+		mobile := plan.mobile
 
 		if desktop {
-			events.Publish(ctx, s.publisher, pubsub.UserChannel(uid), events.EventNotificationNew, notif)
+			if evt, err := events.NewEvent(events.EventNotificationNew, notif); err == nil {
+				desktopItems = append(desktopItems, events.PublishItem{Channel: pubsub.UserChannel(uid), Event: evt})
+			}
 		}
 		if mobile {
 			// Defer the push decision: presence for every mobile recipient
@@ -566,6 +632,9 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			mobilePending = append(mobilePending, pendingPush{uid: uid, notif: notif})
 		}
 	}
+
+	// One pipelined round-trip for the whole desktop fan-out.
+	events.PublishEach(ctx, s.publisher, desktopItems)
 
 	if len(mobilePending) > 0 {
 		ids := make([]string, len(mobilePending))
@@ -725,64 +794,42 @@ func (s *NotificationService) bumpNotifyCount(ctx context.Context, parentType, p
 }
 
 func (s *NotificationService) sendMobilePush(ctx context.Context, recipientUserID string, notif Notification, online bool) {
-	if s.push == nil {
+	if s.pushSched == nil {
 		return
 	}
 	// Offline (no live WebSocket): nothing can ack, so the desktop can't be
-	// delivering this — push immediately. The verdict is Redis-backed so it
-	// holds across every backend instance and device.
-	if !online {
-		s.deliverPush(ctx, recipientUserID, notif)
-		return
+	// delivering this — schedule the push for immediate delivery.
+	delay := time.Duration(0)
+	if online {
+		// Online: the desktop SHOULD deliver this, so we don't want to
+		// double-notify a healthy desktop with a redundant push. But "online"
+		// only means presence SAYS so — a half-open / asleep socket reads
+		// online for up to the dead-socket detection window. Trusting presence
+		// here is exactly the hole that drops incident alerts. So instead of
+		// skipping the push outright, we DEFER it; the worker checks for the
+		// client's ACK at delivery time and pushes only if none arrived.
+		// Presence can be wrong in EITHER direction without losing an alert.
+		if s.ackStore == nil || notif.MessageID == "" {
+			// No ack tracking (or nothing to key on) — fall back to the old
+			// presence-only behaviour: skip the push for an online user.
+			return
+		}
+		delay = ackFallbackDelay
 	}
-	// Online: the desktop SHOULD deliver this, so we don't want to double-notify
-	// a healthy desktop with a redundant push. But "online" only means presence
-	// SAYS so — a half-open / asleep socket reads online for up to the
-	// dead-socket detection window. Trusting presence here is exactly the hole
-	// that drops incident alerts. So instead of skipping the push outright, we
-	// DEFER it and cancel only when the client actually ACKs the desktop
-	// notification. No ack within the window → the desktop never delivered →
-	// the push fires. Presence can now be wrong in EITHER direction without
-	// losing an alert.
-	if s.ackStore == nil || notif.MessageID == "" {
-		// No ack tracking (or nothing to key on) — fall back to the old
-		// presence-only behaviour: skip the push for an online user.
-		return
-	}
-	// Read the delay here (synchronously) rather than inside the goroutine so it
-	// is sequenced with the caller, not racing a test that swaps ackFallbackDelay.
-	safe.Go(func() { s.ackFallbackPush(context.WithoutCancel(ctx), recipientUserID, notif, ackFallbackDelay) })
-}
-
-// ackFallbackPush waits `delay` for the desktop client to acknowledge the
-// notification, then pushes only if no ack arrived (desktop didn't deliver).
-func (s *NotificationService) ackFallbackPush(ctx context.Context, recipientUserID string, notif Notification, delay time.Duration) {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-	case <-s.shutdown:
-		// Server shutting down — drop the pending push rather than sleep it out.
-		return
-	}
-	if s.ackStore.WasNotificationAcked(ctx, recipientUserID, notif.MessageID) {
-		// Desktop confirmed delivery — no push needed.
-		return
-	}
-	s.deliverPush(ctx, recipientUserID, notif)
-}
-
-// deliverPush hands the notification to the push sender, logging an enqueue
-// failure. (Provider-side delivery failures are logged by the async worker.)
-func (s *NotificationService) deliverPush(ctx context.Context, recipientUserID string, notif Notification) {
-	if err := s.push.Send(ctx, recipientUserID, notif); err != nil {
-		slog.Warn(
-			"mobile push send failed",
+	// The scheduled task is Redis-backed, so it survives restarts and any
+	// instance's worker can deliver it. WithoutCancel: scheduling is a quick
+	// Redis write that must not be aborted by the caller's teardown — a
+	// reminder fired during shutdown still gets its push scheduled.
+	if err := s.pushSched.SchedulePush(context.WithoutCancel(ctx), recipientUserID, notif, delay); err != nil {
+		// A failed schedule IS a potentially lost alert — loud, never silent.
+		slog.Error(
+			"mobile push schedule failed — alert may not reach the recipient",
 			"userID", recipientUserID,
 			"parentID", notif.ParentID,
 			"parentType", notif.ParentType,
 			"messageID", notif.MessageID,
 			"kind", notif.Kind,
+			"delay", delay,
 			"error", err,
 		)
 	}

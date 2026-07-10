@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/redis/go-redis/v9"
 )
 
 // Batch primitives added for the APM perf work: GetUsers/SetUsers (user cache
@@ -143,30 +144,28 @@ func TestArePresenceOnline_RealRedis(t *testing.T) {
 		t.Fatalf("ArePresenceOnline(nil) = %v (err=%v), want empty success", got, err)
 	}
 
-	// One online (count>0), one zero-count marker, one corrupt marker, one absent
-	// — all resolved in a single MGET.
-	if _, err := c.IncrementPresence(ctx, "u-on"); err != nil {
+	// One online (live member), one whose only connection lapsed, one absent
+	// — all resolved in a single pipelined round trip.
+	if _, err := c.IncrementPresence(ctx, "u-on", "c1"); err != nil {
 		t.Fatalf("IncrementPresence: %v", err)
 	}
-	if err := plain.Set(ctx, presenceKeyPrefix+"u-zero", "0", time.Minute).Err(); err != nil {
-		t.Fatalf("seed zero: %v", err)
+	past := float64(time.Now().Add(-time.Second).UnixMilli())
+	if err := plain.ZAdd(ctx, presenceKeyPrefix+"u-lapsed", redis.Z{Score: past, Member: "c-dead"}).Err(); err != nil {
+		t.Fatalf("seed lapsed: %v", err)
 	}
-	if err := plain.Set(ctx, presenceKeyPrefix+"u-corrupt", "not-a-number", time.Minute).Err(); err != nil {
-		t.Fatalf("seed corrupt: %v", err)
-	}
-	got, err := c.ArePresenceOnline(ctx, []string{"u-on", "u-zero", "u-corrupt", "u-missing"})
+	got, err := c.ArePresenceOnline(ctx, []string{"u-on", "u-lapsed", "u-missing"})
 	if err != nil {
 		t.Fatalf("ArePresenceOnline: %v", err)
 	}
-	want := map[string]bool{"u-on": true, "u-zero": false, "u-corrupt": false, "u-missing": false}
+	want := map[string]bool{"u-on": true, "u-lapsed": false, "u-missing": false}
 	for id, w := range want {
 		if got[id] != w {
 			t.Fatalf("online[%s] = %v, want %v (full: %v)", id, got[id], w, got)
 		}
 	}
 
-	// MGET failure surfaces so the caller can pick its fail-safe direction.
-	if _, err := cacheFailingOn(t, "mget").ArePresenceOnline(ctx, []string{"u-on"}); !errors.Is(err, errInjected) {
-		t.Fatalf("ArePresenceOnline mget failure = %v, want errInjected", err)
+	// A pipeline failure surfaces so the caller can pick its fail-safe direction.
+	if _, err := cacheFailingOn(t, "zcount").ArePresenceOnline(ctx, []string{"u-on"}); !errors.Is(err, errInjected) {
+		t.Fatalf("ArePresenceOnline pipeline failure = %v, want errInjected", err)
 	}
 }

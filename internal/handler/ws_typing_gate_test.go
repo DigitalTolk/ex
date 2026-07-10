@@ -78,6 +78,13 @@ func TestWSHandler_TypingBurst_OneMembershipRead(t *testing.T) {
 	h := &WSHandler{chanSvc: chanSvc}
 	h.SetPublisher(pub)
 
+	// This test counts MEMBERSHIP READS across a burst — disable the
+	// per-connection rate throttle so all four frames reach the gate
+	// (the throttle has its own dedicated test).
+	origInterval := typingMinInterval
+	typingMinInterval = 0
+	t.Cleanup(func() { typingMinInterval = origInterval })
+
 	gate := newTypingGate() // one gate per connection, shared across frames
 	raw, _ := json.Marshal(map[string]string{"type": "typing", "parentID": "ch-1", "parentType": "channel"})
 	for range 4 {

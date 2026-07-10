@@ -112,19 +112,26 @@ describe('NotificationProvider', () => {
 
   afterEach(() => {
     delete (window as Window & { __EX_DESKTOP__?: boolean }).__EX_DESKTOP__;
+    delete window.__EX_DND__;
     delete window.Capacitor;
     if (origNotification) {
       Object.defineProperty(window, 'Notification', { value: origNotification, configurable: true });
     }
   });
 
-  it('plays sound and creates a native browser notification on dispatch', () => {
+  it('plays the custom ping alongside an always-silent browser notification', () => {
+    // The app owns the notification sound everywhere: the custom ping plays
+    // and the OS banner is ALWAYS silent so the two never double-sound. In a
+    // plain browser (no shell DnD bridge) the ping deliberately ignores OS
+    // Focus/DnD — the 2026-07-10 trade-off in favor of the brand sound;
+    // DnD-correct gating happens only in the desktop shell via the bridge
+    // (see the shell-bridge tests below).
     renderProbe();
     act(() => {
       dispatchSpy!(samplePayload);
     });
-    expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor.mock.calls[0][0]).toBe('Alice');
     const opts = notificationCtor.mock.calls[0][1] as NotificationOptions;
     expect(opts.body).toBe('hello there');
@@ -134,7 +141,8 @@ describe('NotificationProvider', () => {
     expect(opts.tag).toBeUndefined();
     // App logo, not Chrome's default.
     expect(opts.icon).toBe('/logo.svg');
-    expect(opts.silent).toBe(false);
+    // The custom ping is the sound source — the banner never doubles it.
+    expect(opts.silent).toBe(true);
   });
 
   it('omits the web notification icon inside the desktop shell', () => {
@@ -196,8 +204,8 @@ describe('NotificationProvider', () => {
       setActiveSpy!('dm-1');
       dispatchSpy!(samplePayload);
     });
-    expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   const dmPayload: NotificationPayload = { ...samplePayload, parentType: 'conversation', parentID: 'dm-1' };
@@ -225,8 +233,8 @@ describe('NotificationProvider', () => {
       setActiveSpy!('dm-1');
       dispatchSpy!(dmPayload);
     });
-    expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('refocusing the window re-enables on-screen DM suppression', () => {
@@ -252,8 +260,8 @@ describe('NotificationProvider', () => {
     act(() => {
       dispatchSpy!(samplePayload);
     });
-    expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('reports permission=granted when Notification.permission is granted', () => {
@@ -278,8 +286,8 @@ describe('NotificationProvider', () => {
       setUserSpy!('u-me');
       dispatchSpy!({ ...samplePayload, authorID: 'u-other' });
     });
-    expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('still fires popups for mentions even when on the active parent', () => {
@@ -291,8 +299,8 @@ describe('NotificationProvider', () => {
       setActiveSpy!('ch-1');
       dispatchSpy!({ ...channelMessagePayload, kind: 'mention' });
     });
-    expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('still fires popups for thread replies even when on the active parent', () => {
@@ -304,8 +312,8 @@ describe('NotificationProvider', () => {
       setActiveSpy!('ch-1');
       dispatchSpy!({ ...channelMessagePayload, kind: 'thread_reply' });
     });
-    expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('fires a regular channel message when the backend published it (e.g. channel set to "all messages")', () => {
@@ -319,8 +327,8 @@ describe('NotificationProvider', () => {
     act(() => {
       dispatchSpy!(channelMessagePayload);
     });
-    expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('suppresses a channel message only while that channel is the active on-screen parent', () => {
@@ -341,8 +349,8 @@ describe('NotificationProvider', () => {
     act(() => {
       dispatchSpy!({ ...channelMessagePayload, kind: 'mention' });
     });
-    expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('still fires for channel thread replies (you are already a participant)', () => {
@@ -352,8 +360,8 @@ describe('NotificationProvider', () => {
     act(() => {
       dispatchSpy!({ ...channelMessagePayload, kind: 'thread_reply' });
     });
-    expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('navigates to the deep link via SPA history (no full page reload) when clicked', () => {
@@ -471,7 +479,90 @@ describe('NotificationProvider', () => {
     });
     renderProbe();
     expect(() => act(() => dispatchSpy!(samplePayload))).not.toThrow();
+    // With no OS banner surfaced, the in-page ping is the fallback alert.
     expect(playMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('shell DnD bridge, Focus off: banner is forced silent and the custom ping plays', async () => {
+    // With the desktop shell's native Focus bridge the app owns the sound
+    // (Slack/Mattermost parity): custom ping + always-silent banner, so the
+    // two never double-sound.
+    window.__EX_DND__ = () => Promise.resolve(false);
+    renderProbe();
+    await act(async () => {
+      dispatchSpy!(samplePayload);
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    const opts = notificationCtor.mock.calls[0][1] as NotificationOptions;
+    expect(opts.silent).toBe(true);
+    expect(playMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('shell DnD bridge, Focus ON: the custom ping stays quiet', async () => {
+    window.__EX_DND__ = () => Promise.resolve(true);
+    renderProbe();
+    await act(async () => {
+      dispatchSpy!(samplePayload);
+    });
+    // Banner still handed to the OS (which suppresses it under Focus) — the
+    // alert counts as delivered; only the ping is gated.
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(playMock).not.toHaveBeenCalled();
+  });
+
+  it('shell DnD bridge with popups disabled: the standalone ping obeys Focus', async () => {
+    window.__EX_DND__ = () => Promise.resolve(true);
+    localStorage.setItem(
+      'ex.notifications.prefs.v1',
+      JSON.stringify({ soundEnabled: true, browserEnabled: false }),
+    );
+    renderProbe();
+    await act(async () => {
+      dispatchSpy!(samplePayload);
+    });
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(playMock).not.toHaveBeenCalled();
+  });
+
+  it('a broken shell bridge fails toward the audible ping', async () => {
+    window.__EX_DND__ = () => Promise.reject(new Error('ipc dead'));
+    localStorage.setItem(
+      'ex.notifications.prefs.v1',
+      JSON.stringify({ soundEnabled: true, browserEnabled: false }),
+    );
+    renderProbe();
+    await act(async () => {
+      dispatchSpy!(samplePayload);
+    });
+    expect(playMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a throwing constructor with sound off surfaces nothing, so a retry still alerts', () => {
+    // The catch fallback only pings when sound is enabled; with sound off
+    // nothing surfaced, so the messageID must stay unrecorded — a later
+    // redelivery (once the popup works again) must still alert.
+    localStorage.setItem(
+      'ex.notifications.prefs.v1',
+      JSON.stringify({ soundEnabled: false, browserEnabled: true }),
+    );
+    notificationCtor.mockImplementation(function ThrowingNotification() {
+      throw new Error('Notification not allowed in this context');
+    });
+    renderProbe();
+    const payload = { ...samplePayload, messageID: 'm-throw-quiet' };
+    act(() => {
+      dispatchSpy!(payload);
+    });
+    expect(playMock).not.toHaveBeenCalled();
+    expect(sendWSMock).not.toHaveBeenCalled();
+    // Popup works again → the same messageID must not be deduped away.
+    notificationCtor.mockImplementation(function NotificationStub() {
+      return { onclick: null, close: () => {} };
+    });
+    act(() => {
+      dispatchSpy!(payload);
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(2); // first call threw, second surfaced
   });
 
   it('shows a message only once when the same notification arrives twice (multi-session fan-out)', () => {
@@ -484,8 +575,8 @@ describe('NotificationProvider', () => {
       dispatchSpy!(samplePayload);
       dispatchSpy!(samplePayload);
     });
-    expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('fires separately for distinct messages', () => {
@@ -494,8 +585,8 @@ describe('NotificationProvider', () => {
       dispatchSpy!({ ...samplePayload, messageID: 'm-1' });
       dispatchSpy!({ ...samplePayload, messageID: 'm-2' });
     });
-    expect(playMock).toHaveBeenCalledTimes(2);
     expect(notificationCtor).toHaveBeenCalledTimes(2);
+    expect(playMock).toHaveBeenCalledTimes(2);
   });
 
   it('does not dedup notifications that carry no messageID', () => {
@@ -579,8 +670,8 @@ describe('NotificationProvider', () => {
       setActiveSpy!(null); // looked away → a later copy must still alert
       dispatchSpy!(payload);
     });
-    expect(playMock).toHaveBeenCalledTimes(1);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(playMock).toHaveBeenCalledTimes(1);
   });
 
   it('a copy that surfaces nothing (sound+browser off) is not deduped, so a retry still alerts', () => {
@@ -615,5 +706,48 @@ describe('NotificationProvider', () => {
     render(<Probe />);
     expect(() => dispatchSpy!(samplePayload)).not.toThrow();
     expect(playMock).not.toHaveBeenCalled();
+  });
+});
+
+// ————— C1 multi-tab regression (real tab-leader module, inert = single-tab) —————
+describe('duplicate-copy ack gating', () => {
+  let notificationCtor: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    playMock.mockReset();
+    sendWSMock.mockReset();
+    resetNotificationDedup();
+    localStorage.clear();
+    notificationCtor = installNotification('granted');
+  });
+
+  it('a duplicate while the user is away must NOT ack — the mobile fallback stays armed', () => {
+    // Two tabs, user away: tab A surfaces (idle → no ack); tab B's copy hits
+    // the cross-tab dedup. That dedup-hit used to ack UNCONDITIONALLY,
+    // deterministically cancelling the deferred mobile push for anyone with
+    // two tabs open. Away = hidden page (and/or stale input).
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    markUserActivity(Date.now() - 25 * 60_000);
+    renderProbe();
+    const payload = { ...samplePayload, messageID: 'm-away-dup' };
+    act(() => {
+      dispatchSpy!(payload); // surfaces (hidden tabs may banner), idle → no ack
+      dispatchSpy!(payload); // duplicate → dedup-hit, still away → no ack
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendWSMock).not.toHaveBeenCalled();
+    markUserActivity();
+  });
+
+  it('a duplicate while the user IS at the device acks (desktop truly delivered)', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    markUserActivity();
+    renderProbe();
+    const payload = { ...samplePayload, messageID: 'm-present-dup' };
+    act(() => {
+      dispatchSpy!(payload);
+      dispatchSpy!(payload);
+    });
+    expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-present-dup' });
   });
 });

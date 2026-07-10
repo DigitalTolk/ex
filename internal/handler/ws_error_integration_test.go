@@ -66,8 +66,8 @@ func (e *wsConnectEnv) dial(t *testing.T, query string) (*websocket.Conn, contex
 	t.Helper()
 	srv := httptest.NewServer(middleware.Auth(e.jwtMgr)(http.HandlerFunc(e.h.Connect)))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/?token=" + e.token + query
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/" + query
+	conn, _, err := dialWS(ctx, wsURL, e.token)
 	if err != nil {
 		srv.Close()
 		cancel()

@@ -1,13 +1,18 @@
 import { useEffect, useRef } from 'react';
-import { getAccessToken, refreshAccessToken } from '@/lib/api';
+import { ExponentialBackoff } from 'cockatiel';
+import { apiFetch, getAccessToken } from '@/lib/api';
 import { EventType, EPHEMERAL_EVENT_TYPES } from '@/lib/event-types';
-import { setWSSender } from '@/lib/ws-sender';
+import { setWSSender, clearWSPending } from '@/lib/ws-sender';
 import { useLatestRef } from '@/hooks/useLatestRef';
 
 type WSCallback = (data: unknown) => void;
 
-const reconnectDelayStepsMs = [1000, 2000, 4000, 8000, 16000, 30000];
-const reconnectAttemptsPerStep = 3;
+// Reconnect backoff (cockatiel): exponential with DECORRELATED JITTER, capped
+// at 30s, unbounded attempts. The old fixed ladder (1s×3, 2s×3, …) had zero
+// jitter, so a server restart made every client reconnect in synchronized
+// waves and then poll in a synchronized 30s lockstep forever — a self-made
+// thundering herd on exactly the worst day. Jitter spreads the fleet out.
+const reconnectBackoffFactory = new ExponentialBackoff({ initialDelay: 1000, maxDelay: 30_000 });
 
 // Half-open detection window for the wake probe. The server writes an
 // app-level ping frame every 15s (internal/handler/ws.go wsKeepAliveInterval),
@@ -71,6 +76,8 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null);
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Current position on the jittered backoff curve; null = start over.
+  const backoffRef = useRef<ReturnType<typeof reconnectBackoffFactory.next> | null>(null);
   // Cursor for replay-on-reconnect. Updated on every event that
   // carries an `id` field — both live and replay use the same ULID,
   // so any frame moves the cursor forward.
@@ -106,42 +113,46 @@ export function useWebSocket(options: UseWebSocketOptions) {
       }
     }
 
-    // Books the next reconnect attempt on the shared backoff ladder. Used by
-    // both the onclose path and a network-failed pre-connect token refresh.
+    // Books the next reconnect attempt on the jittered backoff curve. Used by
+    // both the onclose path and a failed pre-connect ticket mint.
     function scheduleReconnect() {
-      const delayStep = Math.floor(retryCountRef.current / reconnectAttemptsPerStep);
-      const backoff = reconnectDelayStepsMs[Math.min(delayStep, reconnectDelayStepsMs.length - 1)];
+      backoffRef.current = backoffRef.current
+        ? backoffRef.current.next(undefined)
+        : reconnectBackoffFactory.next();
       retryCountRef.current++;
       retryTimerRef.current = setTimeout(() => {
-        void connect(true);
-      }, backoff);
+        void connect();
+      }, backoffRef.current.duration);
     }
 
-    async function connect(refreshBeforeConnect = false) {
+    async function connect() {
       if (connectInFlight) return;
       connectInFlight = true;
-      let token: string | null;
+      let ticket: string | null;
       // The finally is the ONLY release of connectInFlight — every early
-      // return and the refresh await funnel through it. A refresh that
-      // rejected (or hung until its timeout) used to leave the flag latched
-      // true, which silently disabled reconnection for the life of the page.
-      // Everything after this block is synchronous, so releasing the flag
-      // before the socket is constructed cannot race a second connect.
+      // return and the mint await funnel through it. Everything after this
+      // block is synchronous, so releasing the flag before the socket is
+      // constructed cannot race a second connect.
       try {
-        token = getAccessToken();
-        if (!token) return;
-        if (refreshBeforeConnect) {
-          try {
-            token = await refreshAccessToken();
-          } catch {
-            // Network-level refresh failure (offline, timeout, server
-            // restarting) — retry through the normal backoff instead of
-            // going dark until the next wake event.
-            if (!disposed && enabledRef.current) scheduleReconnect();
-            return;
-          }
-          if (!token || disposed || !enabledRef.current) return;
+        if (!getAccessToken()) return;
+        // Mint a one-time upgrade ticket: the access JWT itself never rides
+        // the WS URL (it used to leak into LB/proxy logs and browser
+        // history). apiFetch handles the 401→refresh→retry dance, and a
+        // TERMINAL auth rejection fires the global auth-invalid logout —
+        // the old flow silently stalled here with a dead socket and no
+        // logout until an unrelated request happened to 401.
+        try {
+          const res = await apiFetch<{ ticket: string }>('/api/v1/ws/ticket', { method: 'POST' });
+          ticket = res?.ticket ?? null;
+        } catch {
+          // Network-level failure (offline, server restarting) — retry on
+          // the backoff. If this was a terminal auth rejection, apiFetch
+          // already dispatched the logout; `enabled` flips false and tears
+          // this effect (and the pending retry) down.
+          if (!disposed && enabledRef.current) scheduleReconnect();
+          return;
         }
+        if (!ticket || disposed || !enabledRef.current) return;
       } finally {
         connectInFlight = false;
       }
@@ -149,7 +160,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const since = lastEventIdRef.current;
       const sinceParam = since ? `&since=${encodeURIComponent(since)}` : '';
-      const url = `${proto}//${window.location.host}/api/v1/ws?token=${encodeURIComponent(token)}${sinceParam}`;
+      const url = `${proto}//${window.location.host}/api/v1/ws?ticket=${encodeURIComponent(ticket)}${sinceParam}`;
       const ws = new WebSocket(url);
       wsRef.current = ws;
       lastFrameAtRef.current = Date.now();
@@ -157,6 +168,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
       ws.onopen = () => {
         const reconnected = retryCountRef.current > 0;
         retryCountRef.current = 0;
+        backoffRef.current = null; // healthy again — restart the curve fresh
         // Expose the live socket's send to other components (typing
         // indicator and similar ephemera) without prop-drilling.
         setWSSender((frame) => ws.send(frame));
@@ -320,17 +332,23 @@ export function useWebSocket(options: UseWebSocketOptions) {
       /* v8 ignore next 2 -- defensive: the wake listeners are removed at dispose and the whole effect tears down when `enabled` flips, so a live probe can only observe disposed=false && enabled=true; kept as belt-and-braces on the notification-critical reconnect path */
       /* istanbul ignore next -- see v8 note above */
       if (disposed || !enabledRef.current) return;
-      if (document.visibilityState === 'hidden') return;
       const ws = wsRef.current;
       if (ws) {
+        // The half-open force-close is deferred while hidden: background
+        // tabs' timers are throttled and the close→reconnect churn buys
+        // nothing until the user can see the tab again.
+        if (document.visibilityState === 'hidden') return;
         if (ws.readyState === WebSocket.OPEN && Date.now() - lastFrameAtRef.current > staleFrameMs) {
           ws.close();
         }
         // CONNECTING/CLOSING resolve on their own via onopen/onclose.
         return;
       }
+      // Socket GONE: reconnect even while hidden — an `online` event in a
+      // background tab used to be ignored, leaving the tab dark until
+      // foregrounded (and its notifications with it).
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
-      void connect(true);
+      void connect();
     }
 
     const wakeTargets: Array<[EventTarget, string]> = [
@@ -352,6 +370,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
         wsRef.current = null;
       }
       setWSSender(null);
+      // Drop any buffered frames (queued acks) so they can never flush onto
+      // a DIFFERENT user's session after a logout/login on the same page.
+      clearWSPending();
     };
   }, [options.enabled, callbacksRef, enabledRef]);
 }

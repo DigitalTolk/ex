@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/redisx"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -17,7 +19,17 @@ var ErrCacheMiss = errors.New("cache miss")
 
 const userKeyPrefix = "user:"
 const userCacheTTL = 15 * time.Minute
-const presenceKeyPrefix = "presence:online:"
+// presenceKeyPrefix keys a PER-USER SORTED SET of live connection IDs, each
+// scored by its own expiry (unix ms). This replaced the old plain INCR/DECR
+// counter, whose value was an opaque integer that couldn't say WHICH
+// connection contributed: a crashed instance's +1 leaked until the whole-key
+// TTL, a DECR on a lapsed key drove the count negative and flapped a live
+// user offline, and a lost marker could never self-heal. With per-connection
+// members every connection expires independently, ZREM of a missing member
+// is a no-op, and the keep-alive's ZADD recreates a lost entry within one
+// interval. (New key prefix vs. the old counter's "presence:online:" so a
+// mixed-version fleet during a rolling deploy never type-clashes.)
+const presenceKeyPrefix = "presence:conns:"
 
 // presenceIndexKey is a sorted set of every online userID, scored by the unix
 // millisecond at which that user's presence marker expires. It exists so the
@@ -32,15 +44,17 @@ const presenceIndexKey = "presence:index"
 // marker. When a client receives a `notification.new` it acks over its
 // WebSocket; the backend records the ack here so the deferred mobile-push
 // fallback can tell "the desktop actually delivered this" from "presence merely
-// claimed the user was online". The TTL only needs to outlive the deferred-push
-// window plus slack, so it MUST stay above service.ackFallbackDelay (30s) —
-// otherwise a recorded ack could expire before the deferred-push timer reads it
-// and the push would fire despite a healthy desktop. 60s clears the 30s delay
-// with margin. Cross-instance by construction (Redis), so the ack and the
-// deferred push can land on different backend instances. See CLAUDE.md
-// (Notifications).
+// claimed the user was online". The TTL must outlive the deferred-push window
+// plus every source of delivery lag — the asynq worker reads the ack at
+// DELIVERY time, which trails service.ackFallbackDelay (30s) by the delayed-
+// task promotion interval (up to 5s) plus queue/retry wait — otherwise a
+// recorded ack could expire before the worker reads it and the push would
+// fire despite a healthy desktop. 5m clears all of it with a wide margin at
+// negligible Redis cost. Cross-instance by construction (Redis), so the ack
+// and the scheduled push can land on different backend instances. See
+// CLAUDE.md (Notifications).
 const notifAckKeyPrefix = "notifack:"
-const notifAckTTL = 60 * time.Second
+const notifAckTTL = 5 * time.Minute
 
 // presenceTTL is the backstop expiry for a user's "online" marker. The WS
 // keep-alive refreshes it every wsKeepAliveInterval (15s), so it must stay
@@ -97,9 +111,9 @@ type RedisCache struct {
 // NewRedisCache parses the given Redis URL, creates a client, and verifies
 // connectivity with a PING.
 func NewRedisCache(redisURL string) (*RedisCache, error) {
-	opts, err := redis.ParseURL(redisURL)
+	opts, err := redisx.Options(redisURL)
 	if err != nil {
-		return nil, fmt.Errorf("parse redis url: %w", err)
+		return nil, err
 	}
 
 	client := redis.NewClient(opts)
@@ -195,23 +209,21 @@ func (c *RedisCache) LockHeld(ctx context.Context, key string) (bool, error) {
 // counter and, on the first hit of a window, sets the window TTL. It reports
 // whether the request is within `limit` for the current window. Used by the
 // middleware.RateLimit middleware to throttle auth and webhook endpoints.
-// allowRequestScript increments the window counter and, atomically with the
-// first hit, sets the window TTL. One round trip instead of INCR+EXPIRE, and
-// it closes the partial-failure hole where a successful INCR followed by a
-// failed EXPIRE left a ratelimit: key that never expired.
-var allowRequestScript = redis.NewScript(`
-local c = redis.call('INCR', KEYS[1])
-if c == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
-return c
-`)
-
 func (c *RedisCache) AllowRequest(ctx context.Context, key string, limit int, window time.Duration) (bool, error) {
 	fullKey := "ratelimit:" + key
-	count, err := allowRequestScript.Run(ctx, c.client, []string{fullKey}, window.Milliseconds()).Int64()
-	if err != nil {
+	// One atomic MULTI/EXEC round trip: INCR the window counter and ensure it
+	// carries the window TTL. PEXPIRE NX sets the TTL only when the key has
+	// none — the first hit of a window, plus healing any legacy TTL-less key —
+	// so this closes the partial-failure hole (a successful INCR whose EXPIRE
+	// never ran leaving an immortal counter) without a Lua script. The NX flag
+	// needs Redis >= 7.0; the deployment floor is 7.1.
+	pipe := c.client.TxPipeline()
+	incr := pipe.Incr(ctx, fullKey)
+	pipe.Do(ctx, "pexpire", fullKey, window.Milliseconds(), "NX")
+	if _, err := pipe.Exec(ctx); err != nil {
 		return false, fmt.Errorf("rate limit increment %q: %w", key, err)
 	}
-	return count <= int64(limit), nil
+	return incr.Val() <= int64(limit), nil
 }
 
 // presenceIndexScore is the online-index expiry score matching a marker
@@ -224,38 +236,66 @@ func presenceIndexScore() float64 {
 // returns true when this connection transitions the user from offline to online.
 // Marker INCR, marker TTL and index re-score ride one pipeline — this runs on
 // every WS connect, and reconnect storms multiply any extra round trip.
-func (c *RedisCache) IncrementPresence(ctx context.Context, userID string) (bool, error) {
+// presenceConnScore is a connection's expiry score: a member whose score is
+// in the future is live; at or below now it has lapsed (its keep-alive
+// stopped). Same clock/format as the presence index.
+func presenceConnScore() float64 {
+	return float64(time.Now().Add(presenceTTL).UnixMilli())
+}
+
+// presenceNowCutoff is the exclusive lower bound for "live" members.
+func presenceNowCutoff() string {
+	return "(" + strconv.FormatInt(time.Now().UnixMilli(), 10)
+}
+
+// IncrementPresence records connID as a live connection for the user and
+// reports whether this made the user online (first live connection anywhere
+// in the fleet). Lapsed members are pruned in the same pipeline so a crashed
+// instance's leftovers can't inflate the count past their TTL.
+func (c *RedisCache) IncrementPresence(ctx context.Context, userID, connID string) (bool, error) {
 	key := presenceKeyPrefix + userID
+	now := time.Now().UnixMilli()
 	pipe := c.client.Pipeline()
-	incr := pipe.Incr(ctx, key)
-	pipe.Expire(ctx, key, presenceTTL)
+	pipe.ZRemRangeByScore(ctx, key, "-inf", strconv.FormatInt(now, 10))
+	pipe.ZAdd(ctx, key, redis.Z{Score: presenceConnScore(), Member: connID})
+	card := pipe.ZCard(ctx, key)
+	// Key-level backstop so an orphaned set (instance died mid-teardown)
+	// vanishes shortly after its members lapse.
+	pipe.Expire(ctx, key, presenceTTL+time.Minute)
 	pipe.ZAdd(ctx, presenceIndexKey, redis.Z{Score: presenceIndexScore(), Member: userID})
 	if _, err := pipe.Exec(ctx); err != nil {
 		return false, fmt.Errorf("presence increment %q: %w", userID, err)
 	}
-	return incr.Val() == 1, nil
+	return card.Val() == 1, nil
 }
 
-// DecrementPresence removes one active websocket connection for a user. It
-// returns true when this disconnect transitions the user from online to offline.
-// The follow-up pair (cleanup vs. keep-alive) branches on the DECR result, so
-// this is two round trips: the DECR, then one pipelined pair.
-func (c *RedisCache) DecrementPresence(ctx context.Context, userID string) (bool, error) {
+// DecrementPresence removes connID and reports whether the user is now
+// offline (no live connections remain). ZREM of an already-expired/missing
+// member is a harmless no-op — the old counter's negative-value flap (a DECR
+// against a lapsed key knocking a still-connected user offline) is
+// structurally impossible here. Two round trips: the removal+count, then the
+// branch-dependent index update.
+func (c *RedisCache) DecrementPresence(ctx context.Context, userID, connID string) (bool, error) {
 	key := presenceKeyPrefix + userID
-	count, err := c.client.Decr(ctx, key).Result()
-	if err != nil {
+	now := time.Now().UnixMilli()
+	pipe := c.client.Pipeline()
+	pipe.ZRem(ctx, key, connID)
+	pipe.ZRemRangeByScore(ctx, key, "-inf", strconv.FormatInt(now, 10))
+	card := pipe.ZCard(ctx, key)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return false, fmt.Errorf("presence decrement %q: %w", userID, err)
 	}
-	pipe := c.client.Pipeline()
-	if count <= 0 {
-		pipe.Del(ctx, key)
+	pipe = c.client.Pipeline()
+	if card.Val() == 0 {
+		// Redis deletes an empty sorted set automatically; only the index
+		// entry needs cleanup.
 		pipe.ZRem(ctx, presenceIndexKey, userID)
 		if _, err := pipe.Exec(ctx); err != nil {
 			return false, fmt.Errorf("presence cleanup %q: %w", userID, err)
 		}
 		return true, nil
 	}
-	pipe.Expire(ctx, key, presenceTTL)
+	pipe.Expire(ctx, key, presenceTTL+time.Minute)
 	pipe.ZAdd(ctx, presenceIndexKey, redis.Z{Score: presenceIndexScore(), Member: userID})
 	if _, err := pipe.Exec(ctx); err != nil {
 		return false, fmt.Errorf("presence expire %q: %w", userID, err)
@@ -263,69 +303,110 @@ func (c *RedisCache) DecrementPresence(ctx context.Context, userID string) (bool
 	return false, nil
 }
 
-// RefreshPresence extends the online marker for a user that still has a live
-// websocket connection. This is the single most frequent Redis operation in
-// the backend (every connection, every keep-alive interval), so the marker
-// EXPIRE and the index re-score share one pipeline. The re-score is also the
-// self-heal path: a session whose index entry is missing (pre-index deploys,
-// a crashed cleanup) is re-listed within one keep-alive interval. When the
-// marker is already gone the unconditional ZADD leaves an index entry with no
-// marker — harmless, the snapshot MGET-verify filters it and the score prune
-// expires it.
-func (c *RedisCache) RefreshPresence(ctx context.Context, userID string) error {
+// RefreshPresence re-scores connID's expiry. This is the single most frequent
+// Redis operation in the backend (every connection, every keep-alive
+// interval). The plain ZADD is the SELF-HEAL path: a member lost to a Redis
+// blip (or a whole set lost to an eviction) is recreated within one
+// keep-alive interval — under the old counter design a lapsed marker stayed
+// gone until the user physically reconnected, showing a live user offline
+// indefinitely. The index re-score keeps the snapshot source fresh the same
+// way.
+func (c *RedisCache) RefreshPresence(ctx context.Context, userID, connID string) error {
 	key := presenceKeyPrefix + userID
 	pipe := c.client.Pipeline()
-	expire := pipe.Expire(ctx, key, presenceTTL)
+	pipe.ZAdd(ctx, key, redis.Z{Score: presenceConnScore(), Member: connID})
+	pipe.Expire(ctx, key, presenceTTL+time.Minute)
 	pipe.ZAdd(ctx, presenceIndexKey, redis.Z{Score: presenceIndexScore(), Member: userID})
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("presence refresh %q: %w", userID, err)
 	}
-	if !expire.Val() {
-		return ErrCacheMiss
-	}
 	return nil
 }
 
-// IsPresenceOnline reports whether any process has an active websocket
-// connection for a user.
+// IsPresenceOnline reports whether any process has a LIVE (non-lapsed)
+// websocket connection for a user. Pure read — lapsed members are ignored by
+// score, not pruned here.
 func (c *RedisCache) IsPresenceOnline(ctx context.Context, userID string) (bool, error) {
-	count, err := c.client.Get(ctx, presenceKeyPrefix+userID).Int()
-	if errors.Is(err, redis.Nil) {
-		return false, nil
-	}
+	count, err := c.client.ZCount(ctx, presenceKeyPrefix+userID, presenceNowCutoff(), "+inf").Result()
 	if err != nil {
-		return false, fmt.Errorf("presence get %q: %w", userID, err)
+		return false, fmt.Errorf("presence zcount %q: %w", userID, err)
 	}
 	return count > 0, nil
 }
 
-// ArePresenceOnline reports online status for many users in ONE MGET round
-// trip — the notification fan-out needs the whole recipient set at once, and
-// a GET per recipient made every message cost O(members) Redis calls. Missing
-// or unparsable markers read as offline (same as IsPresenceOnline's nil arm).
+// ArePresenceOnline reports online status for many users in ONE pipelined
+// round trip — the notification fan-out needs the whole recipient set at
+// once, and a read per recipient made every message cost O(members) Redis
+// calls. A missing set counts zero live members (offline), same as
+// IsPresenceOnline.
 func (c *RedisCache) ArePresenceOnline(ctx context.Context, userIDs []string) (map[string]bool, error) {
 	out := make(map[string]bool, len(userIDs))
 	if len(userIDs) == 0 {
 		return out, nil
 	}
-	keys := make([]string, len(userIDs))
+	cutoff := presenceNowCutoff()
+	pipe := c.client.Pipeline()
+	counts := make([]*redis.IntCmd, len(userIDs))
 	for i, id := range userIDs {
-		keys[i] = presenceKeyPrefix + id
+		counts[i] = pipe.ZCount(ctx, presenceKeyPrefix+id, cutoff, "+inf")
 	}
-	vals, err := c.client.MGet(ctx, keys...).Result()
-	if err != nil {
-		return nil, fmt.Errorf("presence mget: %w", err)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, fmt.Errorf("presence pipeline: %w", err)
 	}
-	for i, v := range vals {
-		s, ok := v.(string)
-		if !ok {
-			out[userIDs[i]] = false
-			continue
-		}
-		n, err := strconv.Atoi(s)
-		out[userIDs[i]] = err == nil && n > 0
+	for i, cmd := range counts {
+		out[userIDs[i]] = cmd.Val() > 0
 	}
 	return out, nil
+}
+
+// wsTicketKeyPrefix / wsTicketTTL back the one-time WebSocket upgrade
+// tickets. A browser cannot set an Authorization header on a WebSocket, so
+// the upgrade used to carry the full 15-minute access JWT in the URL query —
+// visible to LB/proxy logs, browser history, and APM URL capture. A ticket is
+// a single-use, 30-second, high-entropy opaque token minted over an authed
+// POST; the only thing that ever appears in a URL. GETDEL redemption makes
+// replay structurally impossible.
+const wsTicketKeyPrefix = "wsticket:"
+const wsTicketTTL = 30 * time.Second
+
+// MintWSTicket stores a one-time WebSocket upgrade ticket for the user. The
+// session deadline rides along so the socket inherits the access token's
+// remaining lifetime (bounding a deactivated user's exposure even if the
+// ephemeral force-logout event is lost).
+func (c *RedisCache) MintWSTicket(ctx context.Context, ticket, userID string, sessionDeadline time.Time) error {
+	if ticket == "" || userID == "" {
+		return errors.New("cache: empty ws ticket or user")
+	}
+	val := userID + "|" + strconv.FormatInt(sessionDeadline.UnixMilli(), 10)
+	if err := c.client.Set(ctx, wsTicketKeyPrefix+ticket, val, wsTicketTTL).Err(); err != nil {
+		return fmt.Errorf("cache: mint ws ticket: %w", err)
+	}
+	return nil
+}
+
+// ConsumeWSTicket atomically redeems a ticket (GETDEL — a second redemption
+// of the same ticket finds nothing). Returns ("", zero, nil) for an unknown,
+// expired, or already-used ticket; the caller answers 401.
+func (c *RedisCache) ConsumeWSTicket(ctx context.Context, ticket string) (string, time.Time, error) {
+	if ticket == "" {
+		return "", time.Time{}, nil
+	}
+	val, err := c.client.GetDel(ctx, wsTicketKeyPrefix+ticket).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", time.Time{}, nil
+	}
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("cache: consume ws ticket: %w", err)
+	}
+	sep := strings.LastIndexByte(val, '|')
+	if sep <= 0 {
+		return "", time.Time{}, nil
+	}
+	ms, perr := strconv.ParseInt(val[sep+1:], 10, 64)
+	if perr != nil {
+		return "", time.Time{}, nil
+	}
+	return val[:sep], time.UnixMilli(ms), nil
 }
 
 // MarkNotificationAcked records that the user's client confirmed receipt of the
@@ -400,25 +481,17 @@ func (c *RedisCache) OnlinePresenceUserIDs(ctx context.Context) ([]string, error
 	if len(members) == 0 {
 		return nil, nil
 	}
-	// Verify against the authoritative per-user markers in one MGET: an index
-	// entry can outlive its marker by up to presenceTTL (crash between DEL
-	// and ZREM), and only a live marker with count > 0 means online.
-	keys := make([]string, len(members))
-	for i, id := range members {
-		keys[i] = presenceKeyPrefix + id
-	}
-	vals, err := c.client.MGet(ctx, keys...).Result()
+	// Verify against the authoritative per-user connection sets in one
+	// pipeline: an index entry can outlive its set (crash between cleanup and
+	// ZREM), and only a set with a live (non-lapsed) member means online.
+	verified, err := c.ArePresenceOnline(ctx, members)
 	if err != nil {
-		return nil, fmt.Errorf("presence list mget: %w", err)
+		return nil, fmt.Errorf("presence list verify: %w", err)
 	}
 	ids := make([]string, 0, len(members))
-	for i, v := range vals {
-		s, ok := v.(string)
-		if !ok {
-			continue // marker expired/deleted since the index was written (nil)
-		}
-		if n, err := strconv.Atoi(s); err == nil && n > 0 {
-			ids = append(ids, members[i])
+	for _, id := range members {
+		if verified[id] {
+			ids = append(ids, id)
 		}
 	}
 	return ids, nil
@@ -459,9 +532,10 @@ func (c *RedisCache) SetUser(ctx context.Context, user *model.User) error {
 // composer :shortcode: typeahead — the typeahead not recording was the original
 // "shelf never updates" bug).
 func (c *RedisCache) IncrementEmojiFrequency(ctx context.Context, userID, shortcode string) error {
-	err := emojiFreqIncrScript.Run(
+	err := redisx.RunScript(
 		ctx,
 		c.client,
+		emojiFreqIncrScript,
 		[]string{emojiFreqKeyPrefix + userID},
 		shortcode,
 		emojiFreqDecay,

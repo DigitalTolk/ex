@@ -77,6 +77,10 @@ type Config struct {
 	OneSignalAppID      string
 	OneSignalRESTAPIKey string
 
+	// PushWorkerConcurrency caps how many mobile-push deliveries the asynq
+	// worker runs at once. 0 (unset) takes the service default.
+	PushWorkerConcurrency int
+
 	// OpenSearch — leave empty to disable search features. (The wire
 	// protocol is ES-compatible for the operations we use, so the
 	// underlying client is unchanged from when this was Elasticsearch.)
@@ -178,6 +182,13 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid TRUSTED_PROXY_COUNT %q: must be a non-negative integer", proxyCount)
 	}
 	c.TrustedProxyCount = n
+
+	pushConc := envOr("PUSH_WORKER_CONCURRENCY", "0")
+	pc, err := strconv.Atoi(pushConc)
+	if err != nil || pc < 0 {
+		return nil, fmt.Errorf("invalid PUSH_WORKER_CONCURRENCY %q: must be a non-negative integer", pushConc)
+	}
+	c.PushWorkerConcurrency = pc
 
 	return c, nil
 }

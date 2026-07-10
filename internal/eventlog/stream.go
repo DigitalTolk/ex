@@ -112,9 +112,11 @@ func (s *Stream) Append(ctx context.Context, userID string, eventID string, payl
 // AppendMany pipelines the same event into many users' inbox streams in a
 // SINGLE Redis round-trip, instead of one XADD (and one goroutine) per
 // recipient — the previous fan-out did O(recipients) separate round-trips on
-// every persistent event (including every reaction/edit). Best-effort: a
-// pipeline error is returned for the caller to log, but partial success is
-// possible and acceptable (replay is purely additive).
+// every persistent event (including every reaction/edit). A pipeline error is
+// returned for the caller to retry: partial success leaves MID-STREAM HOLES
+// the replay cursor cannot detect (a `replay.done` after a hole silently
+// loses the event), so a persistent failure must be followed by Drop — an
+// empty stream forces the exhausted → full-refetch path instead.
 func (s *Stream) AppendMany(ctx context.Context, userIDs []string, eventID string, payload []byte) error {
 	if s == nil || s.client == nil {
 		return nil
@@ -145,6 +147,30 @@ func (s *Stream) AppendMany(ctx context.Context, userIDs []string, eventID strin
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("eventlog: pipeline xadd: %w", err)
+	}
+	return nil
+}
+
+// Drop deletes the given users' inbox streams entirely. Called when a
+// fan-out append persistently failed: those streams may now have mid-stream
+// holes that replay cannot detect, and a poisoned-but-plausible stream is
+// WORSE than no stream — an empty stream sends the reconnecting client down
+// the exhausted → full-refetch path, which recovers everything.
+func (s *Stream) Drop(ctx context.Context, userIDs []string) error {
+	if s == nil || s.client == nil || len(userIDs) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(userIDs))
+	for _, uid := range userIDs {
+		if uid != "" {
+			keys = append(keys, streamKey(uid))
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	if err := s.client.Del(ctx, keys...).Err(); err != nil {
+		return fmt.Errorf("eventlog: drop streams: %w", err)
 	}
 	return nil
 }
@@ -257,9 +283,12 @@ func (s *Stream) Replay(ctx context.Context, userID string, since string) (Repla
 		return res, fmt.Errorf("eventlog: xrevrange: %w", err)
 	}
 	if len(entries) == 0 {
-		// No retained events at all — nothing to replay, nothing to
-		// claim is exhausted either.
-		return res, nil
+		// The client HAS a cursor (a since of "" returned above), so it saw a
+		// retained entry once — an empty stream means everything was trimmed,
+		// TTL-reaped, or dropped since. Continuity is unverifiable: report
+		// Exhausted so the client falls back to a full refetch instead of
+		// believing an empty replay means "nothing happened".
+		return ReplayResult{Exhausted: true}, nil
 	}
 	// Collect candidates strictly newer than `since`, oldest-first.
 	out := make([]Entry, 0, len(entries))

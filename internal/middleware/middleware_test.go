@@ -101,7 +101,10 @@ func TestAuthMiddlewareValidToken(t *testing.T) {
 	}
 }
 
-func TestAuthMiddlewareQueryParam(t *testing.T) {
+// The old `?token=` query fallback leaked the access JWT into URL logs — it
+// is gone for good; only the Authorization header authenticates. (The WS
+// upgrade, the one consumer that needed it, now uses single-use tickets.)
+func TestAuthMiddlewareRejectsQueryParamToken(t *testing.T) {
 	mgr := newTestJWTManager()
 	token := generateTestToken(mgr)
 
@@ -112,8 +115,8 @@ func TestAuthMiddlewareQueryParam(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d (query tokens must not authenticate)", rec.Code, http.StatusUnauthorized)
 	}
 }
 

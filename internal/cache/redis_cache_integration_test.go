@@ -4,14 +4,18 @@ package cache
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/maintnotifications"
 )
 
 // setupRealTestCache returns a RedisCache over the shared container plus a
@@ -279,19 +283,19 @@ func TestPresenceCounts(t *testing.T) {
 	c, _ := setupRealTestCache(t)
 	ctx := context.Background()
 
-	first, err := c.IncrementPresence(ctx, "u1")
+	first, err := c.IncrementPresence(ctx, "u1", "conn-1")
 	if err != nil {
 		t.Fatalf("IncrementPresence first: %v", err)
 	}
 	if !first {
-		t.Fatal("first presence increment should report online transition")
+		t.Fatal("first presence connection should report online transition")
 	}
-	first, err = c.IncrementPresence(ctx, "u1")
+	first, err = c.IncrementPresence(ctx, "u1", "conn-2")
 	if err != nil {
 		t.Fatalf("IncrementPresence second: %v", err)
 	}
 	if first {
-		t.Fatal("second presence increment should not report online transition")
+		t.Fatal("second presence connection should not report online transition")
 	}
 	online, err := c.IsPresenceOnline(ctx, "u1")
 	if err != nil {
@@ -307,33 +311,39 @@ func TestPresenceCounts(t *testing.T) {
 	if len(ids) != 1 || ids[0] != "u1" {
 		t.Fatalf("online IDs = %v, want [u1]", ids)
 	}
-	if err := c.RefreshPresence(ctx, "u1"); err != nil {
+	if err := c.RefreshPresence(ctx, "u1", "conn-1"); err != nil {
 		t.Fatalf("RefreshPresence: %v", err)
 	}
 
-	last, err := c.DecrementPresence(ctx, "u1")
+	last, err := c.DecrementPresence(ctx, "u1", "conn-2")
 	if err != nil {
 		t.Fatalf("DecrementPresence first: %v", err)
 	}
 	if last {
-		t.Fatal("first decrement should not report offline transition while one connection remains")
+		t.Fatal("first disconnect should not report offline transition while one connection remains")
 	}
-	last, err = c.DecrementPresence(ctx, "u1")
+	last, err = c.DecrementPresence(ctx, "u1", "conn-1")
 	if err != nil {
 		t.Fatalf("DecrementPresence second: %v", err)
 	}
 	if !last {
-		t.Fatal("last decrement should report offline transition")
+		t.Fatal("last disconnect should report offline transition")
 	}
 	online, err = c.IsPresenceOnline(ctx, "u1")
 	if err != nil {
 		t.Fatalf("IsPresenceOnline after disconnect: %v", err)
 	}
 	if online {
-		t.Fatal("u1 should be offline after last decrement")
+		t.Fatal("u1 should be offline after last disconnect")
 	}
-	if err := c.RefreshPresence(ctx, "u1"); err != ErrCacheMiss {
-		t.Fatalf("missing RefreshPresence error = %v, want ErrCacheMiss", err)
+	// Refresh after everything lapsed self-heals (re-creates the entry) —
+	// the old counter design returned ErrCacheMiss here and left a live
+	// user offline until they physically reconnected.
+	if err := c.RefreshPresence(ctx, "u1", "conn-1"); err != nil {
+		t.Fatalf("RefreshPresence self-heal: %v", err)
+	}
+	if on, err := c.IsPresenceOnline(ctx, "u1"); err != nil || !on {
+		t.Fatalf("refresh must self-heal the presence entry (on=%v err=%v)", on, err)
 	}
 }
 
@@ -341,7 +351,7 @@ func TestPresenceKeysExpire(t *testing.T) {
 	c, plain := setupRealTestCache(t)
 	ctx := context.Background()
 
-	if _, err := c.IncrementPresence(ctx, "u1"); err != nil {
+	if _, err := c.IncrementPresence(ctx, "u1", "conn-1"); err != nil {
 		t.Fatalf("IncrementPresence: %v", err)
 	}
 	expireNow(t, plain, presenceKeyPrefix+"u1")
@@ -352,6 +362,41 @@ func TestPresenceKeysExpire(t *testing.T) {
 	}
 	if online {
 		t.Fatal("presence key should expire when websocket keepalive stops refreshing it")
+	}
+}
+
+// A connection whose keep-alive stopped (crashed instance / dead socket)
+// lapses by its own score even while the user's OTHER connection stays live —
+// the instance-crash leak of the old per-instance counter cannot happen.
+func TestPresenceLapsedConnectionAgesOut(t *testing.T) {
+	c, plain := setupRealTestCache(t)
+	ctx := context.Background()
+
+	if _, err := c.IncrementPresence(ctx, "u1", "conn-live"); err != nil {
+		t.Fatalf("IncrementPresence live: %v", err)
+	}
+	if _, err := c.IncrementPresence(ctx, "u1", "conn-crashed"); err != nil {
+		t.Fatalf("IncrementPresence crashed: %v", err)
+	}
+	// Simulate the crashed connection's keep-alive stopping: rewind its
+	// expiry score into the past. The live conn keeps refreshing.
+	if err := plain.ZAdd(ctx, presenceKeyPrefix+"u1", redis.Z{Score: float64(time.Now().Add(-time.Second).UnixMilli()), Member: "conn-crashed"}).Err(); err != nil {
+		t.Fatalf("rewind: %v", err)
+	}
+	if err := c.RefreshPresence(ctx, "u1", "conn-live"); err != nil {
+		t.Fatalf("RefreshPresence: %v", err)
+	}
+	if on, err := c.IsPresenceOnline(ctx, "u1"); err != nil || !on {
+		t.Fatalf("user with one live conn must stay online (on=%v err=%v)", on, err)
+	}
+	// The live connection disconnecting is now the LAST one: the lapsed
+	// member must not hold the user online (prune runs in the disconnect).
+	last, err := c.DecrementPresence(ctx, "u1", "conn-live")
+	if err != nil {
+		t.Fatalf("DecrementPresence: %v", err)
+	}
+	if !last {
+		t.Fatal("disconnecting the only live conn must report offline despite the lapsed leftover")
 	}
 }
 
@@ -406,13 +451,13 @@ func TestPresenceClientErrors(t *testing.T) {
 	c := newDeadCache(t)
 	ctx := context.Background()
 
-	if _, err := c.IncrementPresence(ctx, "u1"); err == nil {
+	if _, err := c.IncrementPresence(ctx, "u1", "c1"); err == nil {
 		t.Fatal("expected IncrementPresence error from closed redis")
 	}
-	if _, err := c.DecrementPresence(ctx, "u1"); err == nil {
+	if _, err := c.DecrementPresence(ctx, "u1", "c1"); err == nil {
 		t.Fatal("expected DecrementPresence error from closed redis")
 	}
-	if err := c.RefreshPresence(ctx, "u1"); err == nil {
+	if err := c.RefreshPresence(ctx, "u1", "c1"); err == nil {
 		t.Fatal("expected RefreshPresence error from closed redis")
 	}
 	if _, err := c.IsPresenceOnline(ctx, "u1"); err == nil {
@@ -574,6 +619,67 @@ func TestSetUser(t *testing.T) {
 	// Verify the key uses the correct prefix.
 	if n, err := plain.Exists(ctx, "user:u456").Result(); err != nil || n != 1 {
 		t.Fatalf("Exists(user:u456) = %d, %v; want key to exist in Redis", n, err)
+	}
+}
+
+// stripRedisErrorHook re-creates every EVALSHA NOSCRIPT failure as a plain
+// error, mimicking an instrumentation layer that loses the redis.Error
+// interface — the production shape (2026-07-09, Datadog-instrumented build)
+// that escaped go-redis's own NOSCRIPT handling and made
+// IncrementEmojiFrequency fail persistently after a Redis restart. The
+// redisx.RunScript message-text fallback must absorb it.
+type stripRedisErrorHook struct{}
+
+func (stripRedisErrorHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+func (stripRedisErrorHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
+func (stripRedisErrorHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		err := next(ctx, cmd)
+		if cmd.Name() == "evalsha" && err != nil && strings.Contains(err.Error(), "NOSCRIPT") {
+			stripped := errors.New(err.Error())
+			cmd.SetErr(stripped)
+			return stripped
+		}
+		return err
+	}
+}
+
+func TestIncrementEmojiFrequency_SurvivesFlushedScripts(t *testing.T) {
+	c, plain := setupRealTestCache(t)
+	ctx := context.Background()
+
+	// Cache the script server-side, then simulate a restarted/failed-over
+	// server (empty script cache) behind instrumentation that strips the
+	// redis.Error interface from the NOSCRIPT reply.
+	if err := c.IncrementEmojiFrequency(ctx, "u-flush", ":tada:"); err != nil {
+		t.Fatalf("seed increment: %v", err)
+	}
+	if err := plain.ScriptFlush(ctx).Err(); err != nil {
+		t.Fatalf("script flush: %v", err)
+	}
+	c.Client().AddHook(stripRedisErrorHook{})
+
+	if err := c.IncrementEmojiFrequency(ctx, "u-flush", ":tada:"); err != nil {
+		t.Fatalf("increment must survive a flushed script cache: %v", err)
+	}
+	got, err := c.FrequentEmojis(ctx, "u-flush", 5)
+	if err != nil || len(got) != 1 || got[0] != ":tada:" {
+		t.Fatalf("FrequentEmojis after flush = %v, %v; want [:tada:]", got, err)
+	}
+}
+
+func TestNewRedisCache_DisablesMaintNotificationsHandshake(t *testing.T) {
+	// Regression (2026-07-09): go-redis's default "auto" mode sends CLIENT
+	// MAINT_NOTIFICATIONS during the handshake; a server that rejects the
+	// subcommand aborted boot via the constructor PING. The built client must
+	// carry the disabled mode so the handshake is never attempted.
+	c := newRealCache(t)
+	t.Cleanup(func() { _ = c.Client().Close() })
+	cfg := c.Client().Options().MaintNotificationsConfig
+	if cfg == nil || cfg.Mode != maintnotifications.ModeDisabled {
+		t.Fatalf("maint notifications must be disabled, got %+v", cfg)
 	}
 }
 
@@ -821,5 +927,64 @@ func TestAllowRequest_ClientError(t *testing.T) {
 	c := newDeadCache(t) // force a connection error
 	if _, err := c.AllowRequest(context.Background(), "k", 1, time.Minute); err == nil {
 		t.Fatal("expected error when Redis is unreachable")
+	}
+}
+
+func TestWSTickets(t *testing.T) {
+	c, plain := setupRealTestCache(t)
+	ctx := context.Background()
+	deadline := time.Now().Add(16 * time.Minute).Truncate(time.Millisecond)
+
+	if err := c.MintWSTicket(ctx, "tick-1", "u-9", deadline); err != nil {
+		t.Fatalf("MintWSTicket: %v", err)
+	}
+	uid, got, err := c.ConsumeWSTicket(ctx, "tick-1")
+	if err != nil || uid != "u-9" || !got.Equal(deadline) {
+		t.Fatalf("ConsumeWSTicket = (%q, %v, %v), want (u-9, %v, nil)", uid, got, err, deadline)
+	}
+	// Single-use: the second redemption finds nothing (GETDEL).
+	uid, _, err = c.ConsumeWSTicket(ctx, "tick-1")
+	if err != nil || uid != "" {
+		t.Fatalf("second redemption = (%q, %v), want empty", uid, err)
+	}
+	// Unknown ticket and empty ticket both read as not-found, not errors.
+	if uid, _, err := c.ConsumeWSTicket(ctx, "never-minted"); err != nil || uid != "" {
+		t.Fatalf("unknown ticket = (%q, %v), want empty", uid, err)
+	}
+	if uid, _, err := c.ConsumeWSTicket(ctx, ""); err != nil || uid != "" {
+		t.Fatalf("empty ticket = (%q, %v), want empty", uid, err)
+	}
+	// Expired ticket is gone.
+	if err := c.MintWSTicket(ctx, "tick-exp", "u-9", deadline); err != nil {
+		t.Fatalf("MintWSTicket: %v", err)
+	}
+	expireNow(t, plain, wsTicketKeyPrefix+"tick-exp")
+	if uid, _, err := c.ConsumeWSTicket(ctx, "tick-exp"); err != nil || uid != "" {
+		t.Fatalf("expired ticket = (%q, %v), want empty", uid, err)
+	}
+	// Corrupt stored values read as not-found (defensive, never a panic).
+	for i, raw := range []string{"no-separator", "|123", "u|not-a-number"} {
+		key := fmt.Sprintf("tick-bad-%d", i)
+		if err := plain.Set(ctx, wsTicketKeyPrefix+key, raw, time.Minute).Err(); err != nil {
+			t.Fatalf("seed corrupt: %v", err)
+		}
+		if uid, _, err := c.ConsumeWSTicket(ctx, key); err != nil || uid != "" {
+			t.Fatalf("corrupt %q = (%q, %v), want empty", raw, uid, err)
+		}
+	}
+	// Guard arms: empty inputs at mint.
+	if err := c.MintWSTicket(ctx, "", "u-9", deadline); err == nil {
+		t.Fatal("empty ticket mint must error")
+	}
+	if err := c.MintWSTicket(ctx, "tick-2", "", deadline); err == nil {
+		t.Fatal("empty user mint must error")
+	}
+	// Redis-error arms.
+	dead := newDeadCache(t)
+	if err := dead.MintWSTicket(ctx, "t", "u", deadline); err == nil {
+		t.Fatal("mint against dead redis must error")
+	}
+	if _, _, err := dead.ConsumeWSTicket(ctx, "t"); err == nil {
+		t.Fatal("consume against dead redis must error")
 	}
 }

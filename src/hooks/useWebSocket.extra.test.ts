@@ -2,11 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { useWebSocket } from './useWebSocket';
 
-const refreshAccessTokenMock = vi.hoisted(() => vi.fn());
+const apiFetchMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', () => ({
   getAccessToken: vi.fn(() => 'test-token'),
-  refreshAccessToken: refreshAccessTokenMock,
+  apiFetch: apiFetchMock,
 }));
 
 type WSHandler = ((ev: unknown) => void) | null;
@@ -47,9 +47,21 @@ class MockWebSocket {
   }
 }
 
+// connect() awaits the ticket mint before constructing the socket, so socket
+// creation is asynchronous — flush the microtask chain (mint → ticket →
+// new WebSocket) before asserting on MockWebSocket.instances.
+async function flushConnect() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 beforeEach(() => {
   MockWebSocket.instances = [];
-  refreshAccessTokenMock.mockResolvedValue('test-token');
+  apiFetchMock.mockReset();
+  apiFetchMock.mockResolvedValue({ ticket: 'test-ticket' });
   vi.stubGlobal('WebSocket', MockWebSocket);
   vi.useFakeTimers();
 });
@@ -60,9 +72,10 @@ afterEach(() => {
 });
 
 describe('useWebSocket - extra coverage', () => {
-  it('calls onChannelUpdated for channel.updated events', () => {
+  it('calls onChannelUpdated for channel.updated events', async () => {
     const onChannelUpdated = vi.fn();
     renderHook(() => useWebSocket({ onChannelUpdated, enabled: true }));
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -74,9 +87,10 @@ describe('useWebSocket - extra coverage', () => {
     expect(onChannelUpdated).toHaveBeenCalledWith({ channelID: 'ch-7' });
   });
 
-  it('calls onChannelNew for channel.new events', () => {
+  it('calls onChannelNew for channel.new events', async () => {
     const onChannelNew = vi.fn();
     renderHook(() => useWebSocket({ onChannelNew, enabled: true }));
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateMessage(JSON.stringify({
@@ -87,9 +101,10 @@ describe('useWebSocket - extra coverage', () => {
     expect(onChannelNew).toHaveBeenCalledWith({ channelID: 'ch-new' });
   });
 
-  it('calls onChannelRemoved for channel.removed events', () => {
+  it('calls onChannelRemoved for channel.removed events', async () => {
     const onChannelRemoved = vi.fn();
     renderHook(() => useWebSocket({ onChannelRemoved, enabled: true }));
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateMessage(JSON.stringify({
@@ -100,8 +115,9 @@ describe('useWebSocket - extra coverage', () => {
     expect(onChannelRemoved).toHaveBeenCalledWith({ channelID: 'ch-rm' });
   });
 
-  it('calls ws.close() on error event', () => {
+  it('calls ws.close() on error event', async () => {
     renderHook(() => useWebSocket({ enabled: true }));
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateError();
@@ -109,9 +125,10 @@ describe('useWebSocket - extra coverage', () => {
     expect(ws.closeCalled).toBe(true);
   });
 
-  it('ignores malformed JSON in messages', () => {
+  it('ignores malformed JSON in messages', async () => {
     const onMessageNew = vi.fn();
     renderHook(() => useWebSocket({ onMessageNew, enabled: true }));
+    await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     // Should not throw
@@ -119,11 +136,12 @@ describe('useWebSocket - extra coverage', () => {
     expect(onMessageNew).not.toHaveBeenCalled();
   });
 
-  it('does not reconnect on close when component disabled before close fires', () => {
+  it('does not reconnect on close when component disabled before close fires', async () => {
     const { rerender } = renderHook(
       ({ enabled }: { enabled: boolean }) => useWebSocket({ enabled }),
       { initialProps: { enabled: true } },
     );
+    await flushConnect();
 
     expect(MockWebSocket.instances).toHaveLength(1);
 
@@ -134,6 +152,7 @@ describe('useWebSocket - extra coverage', () => {
     MockWebSocket.instances[0].simulateClose();
 
     vi.advanceTimersByTime(60_000);
+    await flushConnect();
     // No reconnect should have been scheduled
     expect(MockWebSocket.instances).toHaveLength(1);
   });
@@ -144,7 +163,10 @@ describe('useWebSocket - extra coverage', () => {
     getTokenMock.mockReturnValueOnce(null as unknown as string);
 
     renderHook(() => useWebSocket({ enabled: true }));
+    await flushConnect();
 
+    // No token → connect bails before even minting a ticket.
+    expect(apiFetchMock).not.toHaveBeenCalled();
     expect(MockWebSocket.instances).toHaveLength(0);
   });
 
@@ -162,22 +184,24 @@ describe('useWebSocket - extra coverage', () => {
     ['server.version', 'onServerVersion', { version: '1.2.3' }],
     ['ping', 'onPing', { ts: 123 }],
     ['typing', 'onTyping', { userId: 'u-1' }],
-  ] as const)('routes %s events to %s', (type, cbName, payload) => {
+  ] as const)('routes %s events to %s', async (type, cbName, payload) => {
     const cb = vi.fn();
     renderHook(() => useWebSocket({ [cbName]: cb, enabled: true }));
+    await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
     ws.simulateMessage(JSON.stringify({ type, data: JSON.stringify(payload) }));
     expect(cb).toHaveBeenCalledWith(payload);
   });
 
-  it('updates the latest callbacks via ref so handlers see fresh closures', () => {
+  it('updates the latest callbacks via ref so handlers see fresh closures', async () => {
     const first = vi.fn();
     const second = vi.fn();
     const { rerender } = renderHook(
       ({ cb }: { cb: typeof first }) => useWebSocket({ onMessageNew: cb, enabled: true }),
       { initialProps: { cb: first } },
     );
+    await flushConnect();
     rerender({ cb: second });
     const ws = MockWebSocket.instances[0];
     ws.simulateMessage(JSON.stringify({ type: 'message.new', data: JSON.stringify({ id: '1' }) }));
@@ -185,17 +209,19 @@ describe('useWebSocket - extra coverage', () => {
     expect(second).toHaveBeenCalledWith({ id: '1' });
   });
 
-  it('ignores unknown event types', () => {
+  it('ignores unknown event types', async () => {
     const cb = vi.fn();
     renderHook(() => useWebSocket({ onMessageNew: cb, enabled: true }));
+    await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateMessage(JSON.stringify({ type: 'pong', data: '{}' }));
     expect(cb).not.toHaveBeenCalled();
   });
 
-  it('does NOT call onReconnect on the first successful open', () => {
+  it('does NOT call onReconnect on the first successful open', async () => {
     const onReconnect = vi.fn();
     renderHook(() => useWebSocket({ onReconnect, enabled: true }));
+    await flushConnect();
     MockWebSocket.instances[0].simulateOpen();
     expect(onReconnect).not.toHaveBeenCalled();
   });
@@ -203,18 +229,22 @@ describe('useWebSocket - extra coverage', () => {
   it('calls onReconnect when the socket re-opens after a close', async () => {
     const onReconnect = vi.fn();
     renderHook(() => useWebSocket({ onReconnect, enabled: true }));
+    await flushConnect();
     const first = MockWebSocket.instances[0];
     first.simulateOpen();
     first.simulateClose();
-    // Backoff timer fires → new WebSocket constructed
+    // Backoff timer fires → new WebSocket constructed. The delay is jittered
+    // (≤30s cap), so a 31s sweep fires it regardless of the draw.
     await act(async () => {
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(31_000);
       await Promise.resolve();
     });
+    await flushConnect();
     const second = MockWebSocket.instances[1];
     expect(second).toBeDefined();
     second.simulateOpen();
     expect(onReconnect).toHaveBeenCalledTimes(1);
-    expect(refreshAccessTokenMock).toHaveBeenCalledTimes(1);
+    // Every connect mints a fresh one-time ticket: initial + reconnect.
+    expect(apiFetchMock).toHaveBeenCalledTimes(2);
   });
 });

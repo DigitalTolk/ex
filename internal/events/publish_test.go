@@ -145,3 +145,78 @@ func TestPublishManyCapabilityErrorSwallowed(t *testing.T) {
 		t.Fatalf("PublishMany calls = %d, want 1", got)
 	}
 }
+
+// plainRecorder only has Publish — handing it to PublishEach forces the
+// sequential fallback loop.
+type plainRecorder struct {
+	published []PublishItem
+	err       error
+}
+
+func (p *plainRecorder) Publish(_ context.Context, ch string, e *Event) error {
+	if p.err != nil {
+		return p.err
+	}
+	p.published = append(p.published, PublishItem{Channel: ch, Event: e})
+	return nil
+}
+
+// recordingEachPublisher captures pipelined batches (the EachPublisher
+// capability).
+type recordingEachPublisher struct {
+	plainRecorder
+	batches [][]PublishItem
+	err     error
+}
+
+func (p *recordingEachPublisher) PublishEach(_ context.Context, items []PublishItem) error {
+	p.batches = append(p.batches, items)
+	return p.err
+}
+
+func TestPublishEach(t *testing.T) {
+	evt1, _ := NewEvent(EventNotificationNew, map[string]string{"n": "1"})
+	evt2, _ := NewEvent(EventNotificationNew, map[string]string{"n": "2"})
+	items := []PublishItem{{Channel: "user:a", Event: evt1}, {Channel: "user:b", Event: evt2}}
+
+	t.Run("nil publisher and empty batch are no-ops", func(t *testing.T) {
+		PublishEach(context.Background(), nil, items)
+		p := &recordingEachPublisher{}
+		PublishEach(context.Background(), p, nil)
+		if len(p.batches) != 0 {
+			t.Fatalf("empty batch must not publish, got %v", p.batches)
+		}
+	})
+
+	t.Run("capability path pipelines the whole batch", func(t *testing.T) {
+		p := &recordingEachPublisher{}
+		PublishEach(context.Background(), p, items)
+		if len(p.batches) != 1 || len(p.batches[0]) != 2 {
+			t.Fatalf("batches = %v, want one batch of 2", p.batches)
+		}
+		if len(p.published) != 0 {
+			t.Fatalf("capability path must not also publish per item")
+		}
+	})
+
+	t.Run("capability error is logged, not propagated", func(t *testing.T) {
+		p := &recordingEachPublisher{err: errors.New("pipeline down")}
+		PublishEach(context.Background(), p, items) // must not panic
+	})
+
+	t.Run("fallback loops per item on a plain publisher", func(t *testing.T) {
+		p := &plainRecorder{}
+		PublishEach(context.Background(), p, items)
+		if len(p.published) != 2 {
+			t.Fatalf("fallback publishes = %d, want 2", len(p.published))
+		}
+	})
+
+	t.Run("fallback per-item error is logged, not propagated", func(t *testing.T) {
+		p := &plainRecorder{err: errors.New("publish down")}
+		PublishEach(context.Background(), p, items) // must not panic
+		if len(p.published) != 0 {
+			t.Fatalf("failing publisher recorded %d publishes", len(p.published))
+		}
+	})
+}

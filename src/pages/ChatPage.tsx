@@ -98,7 +98,7 @@ export default function ChatPage() {
     unhideConversation,
   } = useUnread();
   const { user, logout, patchUser } = useAuth();
-  const { setUserOnline } = usePresence();
+  const { setUserOnline, refreshPresence } = usePresence();
   const { dispatch: dispatchNotification, setCurrentUserID } = useNotifications();
   const { recordTyping, clearTyping, setSelfUserID } = useTyping();
   const queryClient = useQueryClient();
@@ -549,6 +549,10 @@ export default function ChatPage() {
       // The refetched userChannels/userConversations carry authoritative server
       // unread counts — the single source — so there's nothing else to reset.
       void resyncMessageCache(queryClient);
+      // presence.changed is ephemeral (never replayed): every transition that
+      // happened while disconnected is gone, so refetch the authoritative
+      // online set or the dots drift stale until the next full re-auth.
+      refreshPresence();
     },
     onReplayExhausted: () => {
       // Server's durable inbox lost our cursor — same recovery as
@@ -560,6 +564,7 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
       queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
       void resyncMessageCache(queryClient);
+      refreshPresence();
     },
     enabled: !!user,
   });

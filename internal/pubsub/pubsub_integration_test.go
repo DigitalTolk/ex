@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/maintnotifications"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -73,6 +74,19 @@ func newTestPubSubAt(t *testing.T, addr string) *RedisPubSub {
 	}
 	t.Cleanup(func() { _ = ps.Client().Close() })
 	return ps
+}
+
+func TestNewRedisPubSub_DisablesMaintNotificationsHandshake(t *testing.T) {
+	// Regression (2026-07-09): go-redis's default "auto" mode sends CLIENT
+	// MAINT_NOTIFICATIONS during the handshake; a server that rejects the
+	// subcommand aborted boot via the constructor PING (main.go could not
+	// start). The built client must carry the disabled mode so the handshake
+	// is never attempted.
+	ps := setupTestPubSub(t)
+	cfg := ps.Client().Options().MaintNotificationsConfig
+	if cfg == nil || cfg.Mode != maintnotifications.ModeDisabled {
+		t.Fatalf("maint notifications must be disabled, got %+v", cfg)
+	}
 }
 
 // setupTestPubSub returns a RedisPubSub over the shared real-Redis container

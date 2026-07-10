@@ -373,3 +373,71 @@ func TestOneSignalPushSender_AbsoluteURL_UnparsableDeepLinkFallback(t *testing.T
 		t.Fatal("expected a non-empty fallback URL")
 	}
 }
+
+func respBody(code int, body string) *http.Response {
+	return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
+}
+
+// C4 regression: OneSignal answers 200 with an empty id and an errors payload
+// when the target has no push subscription — previously recorded as delivered
+// (silent miss, not even the undeliverable ERROR log). It must classify as
+// ErrPushUndeliverable, permanent (no retry).
+func TestOneSignalPushSender_200WithErrorsIsUndeliverable(t *testing.T) {
+	var calls int
+	s := newRetrySender(t, 3, func(*http.Request) (*http.Response, error) {
+		calls++
+		return respBody(http.StatusOK, `{"id":"","errors":["All included players are not subscribed"]}`), nil
+	})
+	err := s.Send(context.Background(), "u-1", Notification{MessageID: "m1"})
+	if !errors.Is(err, ErrPushUndeliverable) {
+		t.Fatalf("200-with-errors must be ErrPushUndeliverable, got %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("calls = %d, want 1 (permanent, no retry)", calls)
+	}
+}
+
+// A 200 with a created id is delivered — even when partial per-target errors
+// ride along (id proves a notification exists).
+func TestOneSignalPushSender_200WithIDIsDelivered(t *testing.T) {
+	s := newRetrySender(t, 3, func(*http.Request) (*http.Response, error) {
+		return respBody(http.StatusOK, `{"id":"abc-123","errors":{"invalid_external_user_ids":["other"]}}`), nil
+	})
+	if err := s.Send(context.Background(), "u-1", Notification{}); err != nil {
+		t.Fatalf("200 with id must be success, got %v", err)
+	}
+}
+
+// Fail-open arms: an unparseable body or a body-transport hiccup after a 2xx
+// must read as delivered — retrying could double-push, and a provider format
+// drift must not turn every success into a retry storm.
+func TestOneSignalPushSender_200BodyFailOpenArms(t *testing.T) {
+	t.Run("unparseable body", func(t *testing.T) {
+		s := newRetrySender(t, 3, func(*http.Request) (*http.Response, error) {
+			return respBody(http.StatusOK, `not-json`), nil
+		})
+		if err := s.Send(context.Background(), "u-1", Notification{}); err != nil {
+			t.Fatalf("unparseable 2xx body must be success, got %v", err)
+		}
+	})
+	t.Run("body read error", func(t *testing.T) {
+		s := newRetrySender(t, 3, func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(failingReader{}), Header: make(http.Header)}, nil
+		})
+		if err := s.Send(context.Background(), "u-1", Notification{}); err != nil {
+			t.Fatalf("2xx with unreadable body must be success, got %v", err)
+		}
+	})
+	t.Run("empty errors and empty id", func(t *testing.T) {
+		s := newRetrySender(t, 3, func(*http.Request) (*http.Response, error) {
+			return respBody(http.StatusOK, `{}`), nil
+		})
+		if err := s.Send(context.Background(), "u-1", Notification{}); err != nil {
+			t.Fatalf("bare 2xx must remain success, got %v", err)
+		}
+	})
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("connection reset") }

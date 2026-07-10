@@ -544,8 +544,8 @@ func (fakeAttachmentSignerH) GetObject(_ context.Context, _ string) (io.ReadClos
 // service's online userIDs.
 func TestPresenceHandler_List(t *testing.T) {
 	svc := service.NewPresenceService(nil, nil)
-	svc.OnConnect(context.Background(), "u1")
-	svc.OnConnect(context.Background(), "u2")
+	svc.OnConnect(context.Background(), "u1", "c1")
+	svc.OnConnect(context.Background(), "u2", "c2")
 
 	h := NewPresenceHandler(svc)
 	jwtMgr := auth.NewJWTManager("presence-test", 15*time.Minute, 720*time.Hour)

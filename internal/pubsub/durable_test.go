@@ -2,6 +2,7 @@ package pubsub
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 )
@@ -25,12 +26,24 @@ func (f *fakeResolver) Resolve(_ context.Context, topic string) ([]string, error
 }
 
 // captureInbox records each Append call so the test can assert which
-// recipients got which payload.
+// recipients got which payload. failTimes makes the first N AppendMany calls
+// fail (transient-blip shape for the retry path); err makes every call fail.
+// It also records Drop calls — the poison step after persistent failure.
 type captureInbox struct {
-	mu     sync.Mutex
-	calls  []inboxCall
-	err    error
-	failed atomic.Int32
+	mu        sync.Mutex
+	calls     []inboxCall
+	err       error
+	failTimes int32
+	failed    atomic.Int32
+	dropped   [][]string
+	dropErr   error
+}
+
+func (c *captureInbox) Drop(_ context.Context, userIDs []string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.dropped = append(c.dropped, append([]string(nil), userIDs...))
+	return c.dropErr
 }
 
 type inboxCall struct {
@@ -56,6 +69,9 @@ func (c *captureInbox) AppendMany(_ context.Context, userIDs []string, eventID s
 	if c.err != nil {
 		c.failed.Add(1)
 		return c.err
+	}
+	if c.failTimes > 0 && c.failed.Add(1) <= c.failTimes {
+		return errors.New("transient inbox failure")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()

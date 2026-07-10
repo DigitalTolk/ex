@@ -80,3 +80,39 @@ func PublishMany(ctx context.Context, p Publisher, channels []string, eventType 
 	}
 	wg.Wait()
 }
+
+// PublishItem pairs a channel with its (recipient-specific) event for a
+// batched fan-out where every recipient receives a DIFFERENT payload —
+// PublishMany covers the shared-payload case; the notification fan-out
+// carries a per-recipient unread count, so it needs this shape.
+type PublishItem struct {
+	Channel string
+	Event   *Event
+}
+
+// EachPublisher is an optional capability: publish many distinct events to
+// their channels in one pipelined round-trip.
+type EachPublisher interface {
+	PublishEach(ctx context.Context, items []PublishItem) error
+}
+
+// PublishEach fans distinct per-channel events out — ONE pipelined round
+// trip when the publisher supports it (RedisPubSub does), a sequential
+// fallback otherwise. A 500-member "all messages" post used to pay 500
+// separate PUBLISH round-trips here. Errors are logged, never propagated.
+func PublishEach(ctx context.Context, p Publisher, items []PublishItem) {
+	if p == nil || len(items) == 0 {
+		return
+	}
+	if ep, ok := p.(EachPublisher); ok {
+		if err := ep.PublishEach(ctx, items); err != nil {
+			slog.Error("events: publish each", "count", len(items), "error", err)
+		}
+		return
+	}
+	for _, it := range items {
+		if err := p.Publish(ctx, it.Channel, it.Event); err != nil {
+			slog.Error("events: publish", "channel", it.Channel, "type", it.Event.Type, "error", err)
+		}
+	}
+}

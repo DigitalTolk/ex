@@ -260,7 +260,15 @@ func NewRouter(d *Deps) http.Handler {
 	}
 
 	// ------------------------------------------------------------------ WebSocket
-	mux.Handle("GET /api/v1/ws", middleware.WrapFunc(wsH.Connect, authMW))
+	// Browsers can't set an Authorization header on a WebSocket, so the
+	// upgrade authenticates with a single-use ticket minted here (authed +
+	// per-user rate limited — which transitively caps upgrade attempts per
+	// account; the old unlimited upgrades let one account open unbounded
+	// connections). The upgrade route itself gets a per-IP limit to blunt
+	// ticket-guessing, and falls through to header auth for non-browser
+	// clients.
+	mux.Handle("POST /api/v1/ws/ticket", middleware.WrapFunc(wsH.MintTicket, authMW, middleware.RateLimitPerUser(d.RateLimiter, 30, time.Minute)))
+	mux.Handle("GET /api/v1/ws", middleware.WrapFunc(wsH.Connect, wsH.UpgradeAuth(authMW), middleware.RateLimit(d.RateLimiter, 60, time.Minute)))
 
 	// ------------------------------------------------------------------ SPA
 	if frontendFS != nil {

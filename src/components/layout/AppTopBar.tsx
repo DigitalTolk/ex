@@ -210,20 +210,26 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
         // (carve-outs cover the interactive children).
         // Equal 1fr side columns keep the search field centred in the
         // viewport regardless of how wide the left (channels) or right
-        // (account) controls are. On the COMPACT tier (narrow desktop window)
-        // the centred field would sit far from the hamburger and, on macOS,
-        // the hamburger could tuck under the window traffic lights — so there
-        // the first column collapses to `auto` (just the hamburger, cleared
-        // past the traffic lights by the .electron-mac padding) and the search
-        // shrinks and hugs its right edge, keeping the toggle reachable.
-        className="grid h-12 mobile:h-14 w-full shrink-0 grid-cols-[1fr_minmax(0,36rem)_1fr] compact:grid-cols-[auto_minmax(0,17rem)_1fr] items-center gap-2 border-b border-border bg-sidebar px-2 mobile:px-3 text-sidebar-foreground [-webkit-app-region:drag] [&_button,&_a,&_input]:[-webkit-app-region:no-drag]"
+        // (account) controls are — on EVERY tier. On the COMPACT tier
+        // (narrow desktop window) the field stays centred but its column
+        // caps at 17rem instead of 36rem, and the hamburger docks against
+        // the field's LEFT edge (justify-end on the left column) instead of
+        // sitting at the window edge — so macOS traffic lights on a
+        // frameless window can never cover it, detection or not; the
+        // top-left corner stays pure draggable titlebar. (An earlier `auto`
+        // first column glued the search to the left edge; the field must
+        // stay centred at every width.) The .electron-mac padding remains
+        // as the safety net for windows squeezed to the column's minimum,
+        // and the grid shifts the field off-centre rather than burying the
+        // toggle when side minimums no longer fit.
+        className="grid h-12 mobile:h-14 w-full shrink-0 grid-cols-[1fr_minmax(0,36rem)_1fr] compact:grid-cols-[1fr_minmax(0,17rem)_1fr] items-center gap-2 border-b border-border bg-sidebar px-2 mobile:px-3 text-sidebar-foreground [-webkit-app-region:drag] [&_button,&_a,&_input]:[-webkit-app-region:no-drag]"
         data-testid="app-shell-header"
         data-app-chrome="true"
         // The global search field lives on this sidebar-coloured strip, so the
         // mobile keyboard background must match the sidebar, not the chat.
         data-keyboard-surface="sidebar"
       >
-        <div className="flex items-center" data-topbar-left="true">
+        <div className="flex items-center compact:justify-end" data-topbar-left="true">
           {/* The hamburger shows whenever the channel sidebar isn't already
               open (mobile drawer closed, or tablet md–lg which has no
               permanent sidebar). When it should be hidden — drawer open, or
