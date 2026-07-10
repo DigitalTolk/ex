@@ -1,10 +1,10 @@
 package service
 
 import (
-	"sync"
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/DigitalTolk/ex/internal/model"

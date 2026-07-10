@@ -48,7 +48,7 @@ func TestMembershipStore_RemoveChannelMember_TransactError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewMembershipStore(withFault(db, func(f *faultClient) { f.failTransactWriteItems = true }))
-	err := s.RemoveChannelMember(ctx, "ch-me1", "u-me1")
+	err := s.RemoveMember(ctx, "ch-me1", "u-me1")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("RemoveChannelMember: want errInjected, got %v", err)
 	}
@@ -58,7 +58,7 @@ func TestMembershipStore_GetChannelMembership_GetItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewMembershipStore(withFault(db, func(f *faultClient) { f.failGetItem = true }))
-	_, err := s.GetChannelMembership(ctx, "ch-me1", "u-me1")
+	_, err := s.GetMembership(ctx, "ch-me1", "u-me1")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("GetChannelMembership: want errInjected, got %v", err)
 	}
@@ -68,7 +68,7 @@ func TestMembershipStore_ListChannelMembers_QueryError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewMembershipStore(withFault(db, func(f *faultClient) { f.failQuery = true }))
-	_, err := s.ListChannelMembers(ctx, "ch-me1")
+	_, err := s.ListMembers(ctx, "ch-me1")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("ListChannelMembers: want errInjected, got %v", err)
 	}
@@ -88,7 +88,7 @@ func TestMembershipStore_UpdateChannelRole_TransactError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewMembershipStore(withFault(db, func(f *faultClient) { f.failTransactWriteItems = true }))
-	err := s.UpdateChannelRole(ctx, "ch-me1", "u-me1", model.ChannelRoleAdmin)
+	err := s.UpdateMemberRole(ctx, "ch-me1", "u-me1", model.ChannelRoleAdmin)
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("UpdateChannelRole: want errInjected, got %v", err)
 	}
@@ -102,8 +102,8 @@ func TestMembershipStore_SetUserChannelMute_UpdateItemError(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	s := NewMembershipStore(withFault(db, func(f *faultClient) { f.failUpdateItem = true }))
-	err := s.SetUserChannelMute(ctx, "ch-mute", "u-mute", true)
+	err := s.SetMute(ctx, "ch-mute", "u-mute", true)
 	if !errors.Is(err, errInjected) {
-		t.Fatalf("SetUserChannelMute: want errInjected, got %v", err)
+		t.Fatalf("SetMute: want errInjected, got %v", err)
 	}
 }

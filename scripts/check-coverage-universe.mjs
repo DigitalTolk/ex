@@ -1,20 +1,18 @@
-// Browser-universe gate: after the browser coverage run, every runtime src
-// file that is NOT excluded in vitest.browser.config.ts must actually appear
-// in the produced lcov. This is the "no file silently ungraded" guarantee for
-// the browser suite, implemented as a post-run check instead of vitest-4's
-// coverage.include universe (which statically double-instruments modules also
-// loaded through vi.mock(importOriginal) and corrupts the merged report).
-//
-// Combined with scripts/check-coverage-partition.mjs (nothing excluded from
-// BOTH suites), the two suites always grade the whole codebase.
+// Coverage-universe gate: after the merged (jsdom + browser projects)
+// coverage run, every runtime src file that is NOT excluded in
+// vitest.config.ts must actually appear in the produced lcov. This is the
+// "no file silently ungraded" guarantee, implemented as a post-run check
+// instead of vitest-4's coverage.include universe (which statically
+// double-instruments modules also loaded through vi.mock(importOriginal)
+// and corrupts the merged report).
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 const root = new URL('..', import.meta.url).pathname;
-const lcovPath = join(root, 'coverage-browser', 'lcov.info');
+const lcovPath = join(root, 'coverage', 'lcov.info');
 
 if (!existsSync(lcovPath)) {
-  console.error('browser-universe: coverage-browser/lcov.info missing — run the browser coverage suite first');
+  console.error('coverage-universe: coverage/lcov.info missing — run the coverage suite first');
   process.exit(1);
 }
 
@@ -56,7 +54,7 @@ function walk(dir, out = []) {
   return out;
 }
 
-const excludes = parseExcludes('vitest.browser.config.ts');
+const excludes = parseExcludes('vitest.config.ts');
 const graded = new Set(
   readFileSync(lcovPath, 'utf8')
     .split('\n')
@@ -79,10 +77,10 @@ const missing = expected.filter((f) => !graded.has(f));
 if (missing.length > 0) {
   for (const f of missing) {
     console.error(
-      `browser-universe: ${f} is in the browser coverage universe but absent from lcov — no browser test loads it. Add a test that exercises it, or (if the jsdom gate grades it) add it to the browser exclude list with a pointer comment.`,
+      `coverage-universe: ${f} is in the coverage universe but absent from lcov — no test in any project loads it. Add a test that exercises it, or (with a written justification) add it to the coverage exclude list.`,
     );
   }
   process.exit(1);
 }
 
-console.log(`browser-universe: OK — all ${expected.length} non-excluded src files are present in the browser coverage report`);
+console.log(`coverage-universe: OK — all ${expected.length} non-excluded src files are present in the merged coverage report`);

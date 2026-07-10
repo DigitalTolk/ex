@@ -16,15 +16,15 @@ import (
 
 // ConversationStore defines operations on Conversation entities.
 type ConversationStore interface {
-	Create(ctx context.Context, conv *model.Conversation, members []*model.UserConversation) error
-	GetByID(ctx context.Context, id string) (*model.Conversation, error)
+	CreateConversation(ctx context.Context, conv *model.Conversation, members []*model.UserConversation) error
+	GetConversation(ctx context.Context, id string) (*model.Conversation, error)
 	ListUserConversations(ctx context.Context, userID string) ([]*model.UserConversation, error)
 	IsMember(ctx context.Context, convID, userID string) (bool, error)
-	Activate(ctx context.Context, convID string, participantIDs []string) error
-	Touch(ctx context.Context, convID string, participantIDs []string, at time.Time) error
+	ActivateConversation(ctx context.Context, convID string, participantIDs []string) error
+	TouchConversation(ctx context.Context, convID string, participantIDs []string, at time.Time) error
 	IncrementMessageSeq(ctx context.Context, convID string) (int64, error)
 	SetConversationLastRead(ctx context.Context, convID, userID string, seq int64) error
-	ListAll(ctx context.Context) ([]*model.Conversation, error)
+	ListAllConversations(ctx context.Context) ([]*model.Conversation, error)
 }
 
 // ConversationStoreImpl implements ConversationStore backed by DynamoDB.
@@ -69,7 +69,7 @@ func DeriveDMConversationID(userID1, userID2 string) string {
 	return DeriveID(ids[0] + ":" + ids[1])
 }
 
-func (s *ConversationStoreImpl) Create(ctx context.Context, conv *model.Conversation, members []*model.UserConversation) error {
+func (s *ConversationStoreImpl) CreateConversation(ctx context.Context, conv *model.Conversation, members []*model.UserConversation) error {
 	// Build transact items: conversation META + member items on CONV side + user-side items.
 	txItems := make([]types.TransactWriteItem, 0, 1+len(conv.ParticipantIDs)+len(members))
 
@@ -137,7 +137,7 @@ func (s *ConversationStoreImpl) Create(ctx context.Context, conv *model.Conversa
 	return nil
 }
 
-func (s *ConversationStoreImpl) GetByID(ctx context.Context, id string) (*model.Conversation, error) {
+func (s *ConversationStoreImpl) GetConversation(ctx context.Context, id string) (*model.Conversation, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.Table),
 		Key:       compositeKey(convPK(id), metaSK()),
@@ -183,10 +183,10 @@ func (s *ConversationStoreImpl) ListUserConversations(ctx context.Context, userI
 	return convs, nil
 }
 
-// Activate marks the conversation and each participant's UserConversation row
+// ActivateConversation marks the conversation and each participant's UserConversation row
 // as Activated=true. Used by MessageService when the first message is sent so
 // non-creator participants can see the conversation in their sidebars.
-func (s *ConversationStoreImpl) Activate(ctx context.Context, convID string, participantIDs []string) error {
+func (s *ConversationStoreImpl) ActivateConversation(ctx context.Context, convID string, participantIDs []string) error {
 	expr := mustExpr(expression.NewBuilder().
 		WithUpdate(expression.Set(expression.Name("activated"), expression.Value(true))).
 		Build())
@@ -221,9 +221,9 @@ func (s *ConversationStoreImpl) Activate(ctx context.Context, convID string, par
 	return nil
 }
 
-// Touch updates the conversation activity timestamp on both the canonical
+// TouchConversation updates the conversation activity timestamp on both the canonical
 // conversation row and each participant's user-side sidebar row.
-func (s *ConversationStoreImpl) Touch(ctx context.Context, convID string, participantIDs []string, at time.Time) error {
+func (s *ConversationStoreImpl) TouchConversation(ctx context.Context, convID string, participantIDs []string, at time.Time) error {
 	expr := mustExpr(expression.NewBuilder().
 		WithUpdate(expression.Set(expression.Name("updatedAt"), expression.Value(at))).
 		Build())
@@ -341,13 +341,13 @@ func (s *ConversationStoreImpl) IncrementNotifyCount(ctx context.Context, convID
 // SetUserConversationFavorite flips the favorite flag on the user-side
 // UserConversation row. Per-user — pinning the DM doesn't affect the
 // other participants' views.
-func (s *ConversationStoreImpl) SetUserConversationFavorite(ctx context.Context, convID, userID string, favorite bool) error {
+func (s *ConversationStoreImpl) SetFavorite(ctx context.Context, convID, userID string, favorite bool) error {
 	return s.setUserConversationAttribute(ctx, convID, userID, "favorite", favorite)
 }
 
 // SetUserConversationCategory assigns the DM/group to a sidebar category
 // (or clears it when categoryID is empty).
-func (s *ConversationStoreImpl) SetUserConversationCategory(ctx context.Context, convID, userID, categoryID string, sidebarPosition *int) error {
+func (s *ConversationStoreImpl) SetCategory(ctx context.Context, convID, userID, categoryID string, sidebarPosition *int) error {
 	upd := expression.Set(expression.Name("categoryID"), expression.Value(categoryID))
 	if sidebarPosition != nil {
 		upd = upd.Set(expression.Name("sidebarPosition"), expression.Value(*sidebarPosition))
@@ -394,10 +394,10 @@ func (s *ConversationStoreImpl) IsMember(ctx context.Context, convID, userID str
 	return out.Item != nil, nil
 }
 
-// ListAll walks every conversation in the workspace via Scan with a
+// ListAllConversations walks every conversation in the workspace via Scan with a
 // PK-prefix + SK=META filter. Used only by admin maintenance flows
 // (search reindex). Pages through Scan's LastEvaluatedKey.
-func (s *ConversationStoreImpl) ListAll(ctx context.Context) ([]*model.Conversation, error) {
+func (s *ConversationStoreImpl) ListAllConversations(ctx context.Context) ([]*model.Conversation, error) {
 	convs := make([]*model.Conversation, 0)
 	expr := mustExpr(expression.NewBuilder().WithFilter(
 		expression.Name("PK").BeginsWith("CONV#").And(

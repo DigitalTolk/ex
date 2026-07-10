@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/events"
-	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/safe"
@@ -187,7 +186,7 @@ func (s *ChannelService) Create(ctx context.Context, userID, name string, chanTy
 	// the same user-facing message.
 	slug := slugify(name)
 	if existing, err := s.channels.GetChannelBySlug(ctx, slug); err == nil && existing != nil {
-		return nil, errors.New("channel: a channel with this name already exists")
+		return nil, fmt.Errorf("channel: a channel with this name already exists: %w", ErrAlreadyExists)
 	}
 	now := time.Now()
 	ch := &model.Channel{
@@ -203,7 +202,7 @@ func (s *ChannelService) Create(ctx context.Context, userID, name string, chanTy
 
 	if err := s.channels.CreateChannel(ctx, ch); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
-			return nil, errors.New("channel: a channel with this name already exists")
+			return nil, fmt.Errorf("channel: a channel with this name already exists: %w", ErrAlreadyExists)
 		}
 		return nil, fmt.Errorf("channel: create: %w", err)
 	}
@@ -610,8 +609,7 @@ func (s *ChannelService) RemoveMember(ctx context.Context, actorID, channelID, t
 	}
 
 	if target.Role == model.ChannelRoleOwner {
-		claims := middleware.ClaimsFromContext(ctx)
-		if claims == nil || claims.SystemRole != model.SystemRoleAdmin {
+		if !s.isSystemAdmin(ctx, actorID) {
 			return errors.New("channel: only system admins can remove channel owners")
 		}
 	}
@@ -651,10 +649,10 @@ func (s *ChannelService) UpdateMemberRole(ctx context.Context, actorID, channelI
 
 	if newRole == model.ChannelRoleOwner {
 		actor, err := s.memberships.GetMembership(ctx, channelID, actorID)
-		if err != nil && !isSystemAdmin(ctx) {
+		if err != nil && !s.isSystemAdmin(ctx, actorID) {
 			return fmt.Errorf("channel: get actor membership: %w", err)
 		}
-		if actor != nil && actor.Role != model.ChannelRoleOwner && !isSystemAdmin(ctx) {
+		if actor != nil && actor.Role != model.ChannelRoleOwner && !s.isSystemAdmin(ctx, actorID) {
 			return errors.New("channel: only owners can promote to owner")
 		}
 	}
@@ -665,10 +663,10 @@ func (s *ChannelService) UpdateMemberRole(ctx context.Context, actorID, channelI
 	// the owner protection in RemoveMember.
 	if newRole != model.ChannelRoleOwner {
 		target, err := s.memberships.GetMembership(ctx, channelID, targetID)
-		if err != nil && !isSystemAdmin(ctx) {
+		if err != nil && !s.isSystemAdmin(ctx, actorID) {
 			return fmt.Errorf("channel: get target membership: %w", err)
 		}
-		if target != nil && target.Role == model.ChannelRoleOwner && !isSystemAdmin(ctx) {
+		if target != nil && target.Role == model.ChannelRoleOwner && !s.isSystemAdmin(ctx, actorID) {
 			actor, err := s.memberships.GetMembership(ctx, channelID, actorID)
 			if err != nil {
 				return fmt.Errorf("channel: get actor membership: %w", err)
@@ -972,19 +970,23 @@ func (s *ChannelService) IsMember(ctx context.Context, userID, channelID string)
 // checkPermission verifies that the actor has at least minRole in the channel,
 // or is a system admin (which bypasses channel-level checks).
 func (s *ChannelService) checkPermission(ctx context.Context, actorID, channelID string, minRole model.ChannelRole) error {
-	if isSystemAdmin(ctx) {
-		return nil
-	}
-
+	// Membership first: it's the common case and keeps the hot path at one
+	// read. The (rarer) system-admin bypass is only consulted on a shortfall.
 	mem, err := s.memberships.GetMembership(ctx, channelID, actorID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
+			if s.isSystemAdmin(ctx, actorID) {
+				return nil
+			}
 			return errors.New("channel: not a member")
 		}
 		return fmt.Errorf("channel: check permission: %w", err)
 	}
 
 	if mem.Role < minRole {
+		if s.isSystemAdmin(ctx, actorID) {
+			return nil
+		}
 		return fmt.Errorf("channel: insufficient permissions (need %s, have %s)", minRole, mem.Role)
 	}
 	return nil
@@ -1041,10 +1043,16 @@ func (s *ChannelService) grantVisibleAccess(ctx context.Context, actorID string,
 	return nil
 }
 
-// isSystemAdmin checks whether the authenticated user in context is a system admin.
-func isSystemAdmin(ctx context.Context) bool {
-	claims := middleware.ClaimsFromContext(ctx)
-	return claims != nil && claims.SystemRole == model.SystemRoleAdmin
+// isSystemAdmin reports whether userID is a system admin according to the
+// user store — the single source of RBAC truth. Deliberately NOT read from
+// request claims: a stale JWT must not confer admin after a demotion, and
+// the service layer stays free of HTTP-middleware context plumbing.
+func (s *ChannelService) isSystemAdmin(ctx context.Context, userID string) bool {
+	if s.users == nil || userID == "" {
+		return false
+	}
+	u, err := s.users.GetUser(ctx, userID)
+	return err == nil && u != nil && u.SystemRole == model.SystemRoleAdmin
 }
 
 // slugify converts a name into a URL-friendly slug.

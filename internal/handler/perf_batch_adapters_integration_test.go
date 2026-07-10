@@ -12,13 +12,13 @@ import (
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
-// Capability arms of the batch/participation adapter methods against the real
-// DynamoDB impls (the fallback arms run in perf_batch_adapters_test.go).
+// Batch/participation capability methods against the real DynamoDB impls,
+// exercised on the exact service-facing surface main.go wires.
 
-func TestChannelStoreAdapter_GetChannelsByIDs(t *testing.T) {
+func TestChannelStore_GetChannelsByIDs_ServiceSurface(t *testing.T) {
 	db := setupDynamoForAdapters(t)
 	ctx := context.Background()
-	adapter := NewChannelStoreAdapter(store.NewChannelStore(db))
+	adapter := store.NewChannelStore(db)
 
 	now := time.Now().Truncate(time.Millisecond)
 	for _, ch := range []*model.Channel{
@@ -38,10 +38,10 @@ func TestChannelStoreAdapter_GetChannelsByIDs(t *testing.T) {
 	}
 }
 
-func TestMessageStoreAdapter_GetMessagesByIDs_BatchArm(t *testing.T) {
+func TestMessageStore_GetMessagesByIDs_ServiceSurface(t *testing.T) {
 	db := setupDynamoForAdapters(t)
 	ctx := context.Background()
-	adapter := NewMessageStoreAdapter(store.NewMessageStore(db))
+	adapter := store.NewMessageStore(db)
 
 	now := time.Now().Truncate(time.Millisecond)
 	for _, m := range []*model.Message{
@@ -61,10 +61,10 @@ func TestMessageStoreAdapter_GetMessagesByIDs_BatchArm(t *testing.T) {
 	}
 }
 
-func TestThreadFollowStoreAdapter_ParticipationCapabilityArm(t *testing.T) {
+func TestThreadFollowStore_Participation_ServiceSurface(t *testing.T) {
 	db := setupDynamoForAdapters(t)
 	ctx := context.Background()
-	adapter := NewThreadFollowStoreAdapter(store.NewThreadFollowStore(db))
+	adapter := store.NewThreadFollowStore(db)
 
 	// Conditional write goes through the store's SetIfAbsent…
 	follow := &model.ThreadFollow{
@@ -93,11 +93,11 @@ func TestThreadFollowStoreAdapter_ParticipationCapabilityArm(t *testing.T) {
 	}
 }
 
-func TestMembershipStoreAdapter_IncrementNotifyCount(t *testing.T) {
+func TestMembershipStore_IncrementNotifyCount_ServiceSurface(t *testing.T) {
 	db := setupDynamoForAdapters(t)
 	ctx := context.Background()
 	storeImpl := store.NewMembershipStore(db)
-	adapter := NewMembershipStoreAdapter(storeImpl)
+	adapter := storeImpl
 
 	ch := &model.Channel{ID: "ch-nc", Name: "nc", Slug: "nc", Type: model.ChannelTypePublic, CreatedAt: time.Now()}
 	mem := &model.ChannelMembership{ChannelID: "ch-nc", UserID: "u-1", Role: model.ChannelRoleMember, JoinedAt: time.Now()}

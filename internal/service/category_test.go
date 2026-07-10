@@ -289,7 +289,6 @@ func TestCategoryService_Delete_StoreErrorPropagates(t *testing.T) {
 	}
 }
 
-
 func (s *stubCategoryStore) SetPositions(_ context.Context, userID string, positions map[string]int) error {
 	if s.setPositionsErr != nil {
 		return s.setPositionsErr

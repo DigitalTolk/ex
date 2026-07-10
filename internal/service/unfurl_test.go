@@ -52,6 +52,24 @@ func TestScrapePreview_FallsBackToTitleAndMetaDescription(t *testing.T) {
 	}
 }
 
+func TestScrapePreview_SpecGradeLexing(t *testing.T) {
+	// The x/net/html tokenizer handles markup the old regex scraper
+	// couldn't: unquoted attribute values and entity references.
+	p := scrapePreview(`<meta property=og:title content=Hello>`, "https://example.com")
+	if p.Title != "Hello" {
+		t.Errorf("unquoted attrs: title = %q, want Hello", p.Title)
+	}
+	p2 := scrapePreview(`<html><head><title>A &amp; B</title></head></html>`, "https://example.com")
+	if p2.Title != "A & B" {
+		t.Errorf("entities: title = %q, want A & B", p2.Title)
+	}
+	// A second <title> must not overwrite or extend the first.
+	p3 := scrapePreview(`<title>first</title><svg><title>second</title></svg>`, "https://example.com")
+	if p3.Title != "first" {
+		t.Errorf("first title wins: title = %q, want first", p3.Title)
+	}
+}
+
 func TestScrapePreview_TwitterCardFallback(t *testing.T) {
 	html := `<meta name="twitter:title" content="Tweet"><meta name="twitter:image" content="i.jpg">`
 	p := scrapePreview(html, "https://example.com")

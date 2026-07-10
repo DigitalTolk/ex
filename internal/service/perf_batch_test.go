@@ -761,7 +761,7 @@ func TestListPinned_BatchPath(t *testing.T) {
 	messages.messages["ch-pin#m-2"] = &model.Message{ID: "m-2", ParentID: "ch-pin", AuthorID: "u-1", Body: "unpinned meanwhile", Pinned: false}
 	now := time.Now()
 	_ = idx.SetPinIndex(ctx, "ch-pin", "m-1", "u-1", now)
-	_ = idx.SetPinIndex(ctx, "ch-pin", "m-2", "u-1", now) // stale: message no longer pinned
+	_ = idx.SetPinIndex(ctx, "ch-pin", "m-2", "u-1", now)    // stale: message no longer pinned
 	_ = idx.SetPinIndex(ctx, "ch-pin", "m-gone", "u-1", now) // stale: message deleted
 
 	got, err := svc.ListPinned(ctx, "u-1", "ch-pin", ParentChannel)

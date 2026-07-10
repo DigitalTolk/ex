@@ -1,17 +1,28 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useState, useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useState, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { monitorForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import {
-  draggable as makeDraggable,
-  dropTargetForElements,
-  monitorForElements,
-} from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
-import { combine } from '@atlaskit/pragmatic-drag-and-drop/combine';
-import {
-  attachClosestEdge,
   extractClosestEdge,
   type Edge,
 } from '@atlaskit/pragmatic-drag-and-drop-hitbox/closest-edge';
+import {
+  PragmaticCategoryDropHitbox,
+  PragmaticCategoryHeader,
+  PragmaticChannelRow,
+  PragmaticConversationRow,
+  PragmaticSection,
+} from './sidebar-dnd';
+import {
+  CATEGORY_DROP_END,
+  debugElapsedMs,
+  sidebarDndDebug,
+  type ChannelDropArea,
+  type DragPayload,
+  type DropIndicator,
+  type DropPayload,
+  type ResolvedDrop,
+} from './sidebar-dnd-core';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { slugify } from '@/lib/format';
 import {
@@ -36,7 +47,6 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { isGuest } from '@/lib/roles';
 import { useAuth } from '@/context/AuthContext';
-import { usePresence } from '@/context/PresenceContext';
 import { useUnread } from '@/context/UnreadContext';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
@@ -48,7 +58,7 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { useCategories, useCreateCategory, useDeleteCategory, useReorderCategories, useReorderSidebar, type SidebarMoveRequest } from '@/hooks/useSidebar';
 import { groupSidebarItems, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
 import { computeSidebarReorder, type SidebarSectionTarget } from '@/lib/sidebar-reorder';
-import type { SidebarCategory, UserChannel, UserConversation } from '@/types';
+import type { SidebarCategory } from '@/types';
 import { ChannelRow } from './ChannelRow';
 import { ConversationRow } from './ConversationRow';
 import { CreateChannelDialog } from '@/components/channels/CreateChannelDialog';
@@ -59,401 +69,6 @@ interface SidebarProps {
 }
 
 const CONVERSATION_SORT_STORAGE_KEY = 'sidebar.conversationSort';
-const CATEGORY_DROP_END = '__category-end__';
-const SIDEBAR_DND_DEBUG_STORAGE_KEY = 'ex.sidebarDndDebug';
-const SIDEBAR_DRAGGING_OPACITY = 0.25;
-// When a channel/DM row is picked up, collapse its ORIGINAL slot to nothing
-// (Slack-style "lift out") rather than leaving a dimmed in-place ghost — the
-// ghost is confusing because you can drop above OR below the old position. The
-// element stays MOUNTED (native HTML5 DnD needs its drag source to persist),
-// just zero-sized and invisible; the push-aside gap alone then shows where it
-// will land. Rows are direct `space-y-1` children (no wrapper div), so
-// marginTop:0 here also eats the list gap and the slot fully vanishes.
-const SIDEBAR_DRAGGING_COLLAPSE: CSSProperties = {
-  height: 0,
-  minHeight: 0,
-  marginTop: 0,
-  marginBottom: 0,
-  paddingTop: 0,
-  paddingBottom: 0,
-  overflow: 'hidden',
-  opacity: 0,
-  pointerEvents: 'none',
-};
-type ChannelDropArea = 'lead' | 'row' | 'end';
-type ResolvedDrop =
-  | { kind: 'channel'; sectionKey: string; index: number; area: ChannelDropArea }
-  | { kind: 'category'; beforeCategoryID: string; position: number };
-type DropIndicator = ResolvedDrop;
-
-type DragPayload =
-  | { type: 'channel'; channel: UserChannel }
-  | { type: 'conversation'; conversation: UserConversation }
-  | { type: 'category'; categoryID: string };
-
-type DropPayload =
-  | { type: 'channel-target'; sectionKey: string; index: number; area: ChannelDropArea }
-  | { type: 'section-header-target'; sectionKey: string; categoryID: string };
-
-function sidebarDndDebugEnabled(): boolean {
-  try {
-    return (
-      localStorage.getItem(SIDEBAR_DND_DEBUG_STORAGE_KEY) === '1' ||
-      window.location.search.includes('sidebarDndDebug=1')
-    );
-  } catch {
-    return false;
-  }
-}
-
-function sidebarDndDebug(event: string, details?: Record<string, unknown>) {
-  if (!sidebarDndDebugEnabled()) return;
-  /* v8 ignore next -- debug-only logging; every call site passes a details object, so the ?? {} fallback is defensive */
-  /* istanbul ignore next -- every call site passes a details object, so the ?? {} fallback arm is dead defensive code */
-  console.debug(`[sidebar-dnd] ${event}`, details ?? {});
-}
-
-// debugElapsedMs reports how long the current drag has been active for the
-// debug log. The startedAt ref is always set while a drag is in flight, so the
-// null arm only exists defensively.
-function debugElapsedMs(startedAt: number | null): number | null {
-  /* v8 ignore next -- the startedAt ref is always set during an active drag, so the ===null arm is dead (debug-only) */
-  /* istanbul ignore next -- the startedAt ref is always set during an active drag, so the ===null arm is dead (debug-only) */
-  return startedAt === null ? null : Math.round(performance.now() - startedAt);
-}
-
-function elementDebugRect(element: Element) {
-  const rect = element.getBoundingClientRect();
-  return {
-    top: Math.round(rect.top),
-    bottom: Math.round(rect.bottom),
-    left: Math.round(rect.left),
-    right: Math.round(rect.right),
-    width: Math.round(rect.width),
-    height: Math.round(rect.height),
-  };
-}
-
-function PragmaticCategoryHeader({
-  id,
-  draggable,
-  dropData,
-  className,
-  testID,
-  children,
-}: {
-  id: string;
-  draggable: boolean;
-  dropData?: DropPayload;
-  className: string;
-  testID: string;
-  children: ReactNode;
-}) {
-  const elementRef = useRef<HTMLDivElement | null>(null);
-  const dropDataRef = useRef(dropData);
-  const [dragging, setDragging] = useState(false);
-  const hasDropData = dropData !== undefined;
-
-  useLayoutEffect(() => {
-    dropDataRef.current = dropData;
-  }, [dropData]);
-
-  useEffect(() => {
-    const element = elementRef.current;
-    /* v8 ignore next -- elementRef is always attached after mount; defensive null guard */
-    /* istanbul ignore next -- elementRef is always attached after mount; defensive null guard */
-    if (!element) return undefined;
-    sidebarDndDebug('category-header register', {
-      id,
-      draggable,
-      dropData: dropDataRef.current,
-      rect: elementDebugRect(element),
-    });
-    const registrations = [];
-    if (draggable) {
-      registrations.push(
-        makeDraggable({
-          element,
-          canDrag: ({ input }) => input.button === 0,
-          getInitialData: () => ({ type: 'category', categoryID: id } satisfies DragPayload),
-          onDragStart: () => {
-            sidebarDndDebug('category-native dragStart', {
-              id,
-              rect: elementDebugRect(element),
-            });
-            setDragging(true);
-          },
-          onDrop: () => {
-            sidebarDndDebug('category-native drop/end', {
-              id,
-              rect: elementDebugRect(element),
-            });
-            setDragging(false);
-          },
-        }),
-      );
-    }
-    if (hasDropData) {
-      registrations.push(
-        dropTargetForElements({
-          element,
-          // Sticky so a category drag that moves onto the push-aside gap above a
-          // section keeps this header as the target (see PragmaticChannelRow).
-          getIsSticky: () => true,
-          getData: ({ input, element }) => {
-            const currentDropData = dropDataRef.current;
-            /* v8 ignore next -- this drop target only registers when hasDropData, so dropDataRef is set; defensive guard */
-            /* istanbul ignore next -- this drop target only registers when hasDropData, so dropDataRef is set; defensive guard */
-            if (!currentDropData) return {};
-            const data = attachClosestEdge(currentDropData, {
-              input,
-              element,
-              allowedEdges: ['top', 'bottom'],
-            });
-            return data;
-          },
-        }),
-      );
-    }
-    const cleanup = combine(...registrations);
-    return () => {
-      sidebarDndDebug('category-header unregister', { id });
-      cleanup();
-    };
-  }, [draggable, hasDropData, id]);
-
-  return (
-    <div
-      ref={elementRef}
-      data-testid={testID}
-      className={className}
-      style={{ opacity: dragging ? SIDEBAR_DRAGGING_OPACITY : undefined }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function PragmaticSection({
-  data,
-  disabled,
-  className,
-  testID,
-  children,
-}: {
-  data: DropPayload;
-  disabled?: boolean;
-  className?: string;
-  testID?: string;
-  children?: ReactNode;
-}) {
-  const elementRef = useRef<HTMLDivElement | null>(null);
-  const dataRef = useRef(data);
-
-  useLayoutEffect(() => {
-    dataRef.current = data;
-  }, [data]);
-
-  useEffect(() => {
-    const element = elementRef.current;
-    if (!element || disabled) return undefined;
-    return dropTargetForElements({
-      element,
-      // Sticky so the pointer entering an adjacent push-aside gap keeps a live
-      // target (see PragmaticChannelRow) — no dead zone, no native snap-back.
-      getIsSticky: () => true,
-      getData: () => dataRef.current,
-    });
-  }, [disabled]);
-
-  return (
-    <div ref={elementRef} data-testid={testID} className={className}>
-      {children}
-    </div>
-  );
-}
-
-function PragmaticCategoryDropHitbox({
-  active,
-  data,
-  testID,
-}: {
-  active: boolean;
-  data: DropPayload;
-  testID: string;
-}) {
-  const elementRef = useRef<HTMLDivElement | null>(null);
-  const dataRef = useRef(data);
-
-  useLayoutEffect(() => {
-    dataRef.current = data;
-  }, [data]);
-
-  useEffect(() => {
-    const element = elementRef.current;
-    /* v8 ignore next -- elementRef is always attached after mount; defensive null guard */
-    /* istanbul ignore next -- elementRef is always attached after mount; defensive null guard */
-    if (!element) return undefined;
-    return dropTargetForElements({
-      element,
-      // Sticky (see PragmaticChannelRow): keeps this boundary as the target when
-      // the pointer slides onto the adjacent push-aside gap.
-      getIsSticky: () => true,
-      getData: () => dataRef.current,
-    });
-  }, []);
-
-  return (
-    <div
-      ref={elementRef}
-      data-testid={testID}
-      className={`absolute -top-3 left-0 right-0 z-20 h-6 ${
-        active ? 'pointer-events-auto' : 'pointer-events-none'
-      }`}
-    />
-  );
-}
-
-function PragmaticChannelRow({
-  sectionKey,
-  index,
-  channel,
-  disabled,
-  children,
-}: {
-  sectionKey: string;
-  index: number;
-  channel: UserChannel;
-  disabled?: boolean;
-  children: (args: {
-    dragRef?: (node: HTMLElement | null) => void;
-    dragStyle?: CSSProperties;
-  }) => ReactNode;
-}) {
-  const elementRef = useRef<HTMLElement | null>(null);
-  const [dragging, setDragging] = useState(false);
-
-  useEffect(() => {
-    const element = elementRef.current;
-    if (!element || disabled) return undefined;
-    return combine(
-      makeDraggable({
-        element,
-        canDrag: ({ input }) => input.button === 0,
-        getInitialData: () => ({ type: 'channel', channel } satisfies DragPayload),
-        onDragStart: () => setDragging(true),
-        onDrop: () => setDragging(false),
-      }),
-      dropTargetForElements({
-        element,
-        // Sticky: when the pointer leaves this row onto the push-aside gap — a
-        // pointer-events-none LAYOUT box that is NOT itself a drop target —
-        // pragmatic RETAINS this row as the active target and reuses its last
-        // closest-edge (it deliberately doesn't recompute getData while sticky).
-        // Without this, hovering the gap leaves NO drop target under the cursor,
-        // so the browser never gets preventDefault → it rejects the drop with the
-        // native return-to-origin animation (the "snap-back") and the reorder
-        // never lands. Stickiness keeps a target under the cursor across the gap.
-        getIsSticky: () => true,
-        getData: ({ input, element }) =>
-          attachClosestEdge(
-            { type: 'channel-target', sectionKey, index, area: 'row' } satisfies DropPayload,
-            {
-              input,
-              element,
-              allowedEdges: ['top', 'bottom'],
-            },
-          ),
-      }),
-    );
-  }, [channel, disabled, index, sectionKey]);
-
-  const setElementRef = useCallback((node: HTMLElement | null) => {
-    elementRef.current = node;
-  }, []);
-
-  return (
-    <>
-      {/* eslint-disable-next-line react-hooks/refs -- passing ref callbacks to a child render prop; refs are only assigned by React later. */}
-      {children({
-        dragRef: setElementRef,
-        dragStyle: dragging ? SIDEBAR_DRAGGING_COLLAPSE : undefined,
-      })}
-    </>
-  );
-}
-
-function PragmaticConversationRow({
-  sectionKey,
-  index,
-  conversation,
-  disabled,
-  children,
-}: {
-  sectionKey: string;
-  index: number;
-  conversation: UserConversation;
-  disabled?: boolean;
-  children: (args: {
-    dragRef?: (node: HTMLElement | null) => void;
-    dragStyle?: CSSProperties;
-  }) => ReactNode;
-}) {
-  const elementRef = useRef<HTMLElement | null>(null);
-  const [dragging, setDragging] = useState(false);
-
-  useEffect(() => {
-    const element = elementRef.current;
-    /* v8 ignore next -- elementRef is always attached after mount; the !element arm is defensive */
-    /* istanbul ignore next -- elementRef is always attached after mount; the !element arm is defensive */
-    if (!element || disabled) return undefined;
-    return combine(
-      makeDraggable({
-        element,
-        canDrag: ({ input }) => input.button === 0,
-        getInitialData: () => ({ type: 'conversation', conversation } satisfies DragPayload),
-        onDragStart: () => setDragging(true),
-        onDrop: () => setDragging(false),
-      }),
-      dropTargetForElements({
-        element,
-        // Sticky: when the pointer leaves this row onto the push-aside gap — a
-        // pointer-events-none LAYOUT box that is NOT itself a drop target —
-        // pragmatic RETAINS this row as the active target and reuses its last
-        // closest-edge (it deliberately doesn't recompute getData while sticky).
-        // Without this, hovering the gap leaves NO drop target under the cursor,
-        // so the browser never gets preventDefault → it rejects the drop with the
-        // native return-to-origin animation (the "snap-back") and the reorder
-        // never lands. Stickiness keeps a target under the cursor across the gap.
-        getIsSticky: () => true,
-        getData: ({ input, element }) =>
-          attachClosestEdge(
-            { type: 'channel-target', sectionKey, index, area: 'row' } satisfies DropPayload,
-            {
-              input,
-              element,
-              allowedEdges: ['top', 'bottom'],
-            },
-          ),
-      }),
-    );
-  }, [conversation, disabled, index, sectionKey]);
-
-  const setElementRef = useCallback((node: HTMLElement | null) => {
-    elementRef.current = node;
-  }, []);
-
-  return (
-    <>
-      {/* eslint-disable-next-line react-hooks/refs -- passing ref callbacks to a child render prop; refs are only assigned by React later. */}
-      {children({
-        dragRef: setElementRef,
-        dragStyle: dragging ? SIDEBAR_DRAGGING_COLLAPSE : undefined,
-      })}
-    </>
-  );
-}
-
 function SidebarSectionsSkeleton() {
   return (
     <div className="mt-2 space-y-4 px-2" data-testid="sidebar-primary-loading" aria-hidden="true">
@@ -570,7 +185,6 @@ export function Sidebar({ onClose }: SidebarProps) {
     return ids;
   }, [visibleConversations, user?.id]);
   const { map: dmUserMap } = useUsersBatch(dmOtherUserIDs);
-  const { online } = usePresence();
 
   function setConversationSortPreference(sort: ConversationSidebarSort) {
     setConversationSort(sort);
@@ -728,6 +342,7 @@ export function Sidebar({ onClose }: SidebarProps) {
       .filter((category) => category.id !== (activeDragRef.current?.type === 'category' ? activeDragRef.current.categoryID : null))
       .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
     /* v8 ignore stop */
+    /* istanbul ignore next -- same dead defensive arm as the v8 ignore above */
   }
 
   function categoryOrderDebugSnapshot(): Array<{ id: string; name: string; position: number }> {
@@ -737,6 +352,7 @@ export function Sidebar({ onClose }: SidebarProps) {
       .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name))
       .map((category) => ({ id: category.id, name: category.name, position: category.position }));
     /* v8 ignore stop */
+    /* istanbul ignore next -- same dead defensive arm as the v8 ignore above */
   }
 
   function channelOrderDebugSnapshot(sectionKey?: string) {
@@ -793,6 +409,7 @@ export function Sidebar({ onClose }: SidebarProps) {
 
   function normalizeCategoryDropSlot(beforeCategoryID: string, draggedCategoryID: string): string {
     /* v8 ignore next -- the resolve path never produces beforeCategoryID === draggedCategoryID (self-targeting is filtered upstream), so the nextCategoryTarget arm is defensive */
+    /* istanbul ignore next -- the resolve path never produces beforeCategoryID === draggedCategoryID (self-targeting is filtered upstream), so the nextCategoryTarget arm is defensive */
     return beforeCategoryID === draggedCategoryID ? nextCategoryTarget(draggedCategoryID) : beforeCategoryID;
   }
 
@@ -824,6 +441,7 @@ export function Sidebar({ onClose }: SidebarProps) {
       return;
     }
     /* v8 ignore stop */
+    /* istanbul ignore next -- same dead defensive arm as the v8 ignore above */
 
     const nextOrder = orderedCategoriesAfterDrop(draggedCategoryID, normalizedBeforeCategoryID);
     // The event the server needs: which category the dragged one lands AFTER
@@ -1675,7 +1293,6 @@ export function Sidebar({ onClose }: SidebarProps) {
                       const dmUserStatus = otherID ? dmUserMap.get(otherID)?.userStatus : undefined;
                       const resolvedDMAvatarURL = conv.avatarURL ?? dmAvatarURL;
                       const resolvedDMUserStatus = conv.userStatus ?? dmUserStatus;
-                      const dmOnline = otherID ? online.has(otherID) : undefined;
                       // Favorited DMs are channel-drop targets too; open the gap
                       // above one when the live target resolves to its slot.
                       const showConvGap =
@@ -1700,7 +1317,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                                   notifyCount={Number(conv.unreadNotifyCount ?? 0)}
                                   dmAvatarURL={resolvedDMAvatarURL}
                                   dmUserStatus={resolvedDMUserStatus}
-                                  dmOnline={dmOnline}
+                                  dmUserID={otherID}
                                   onClose={onClose}
                                   onHide={hideConversation}
                                   draggable={!isMobile}
@@ -1717,7 +1334,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                               notifyCount={Number(conv.unreadNotifyCount ?? 0)}
                               dmAvatarURL={resolvedDMAvatarURL}
                               dmUserStatus={resolvedDMUserStatus}
-                              dmOnline={dmOnline}
+                              dmUserID={otherID}
                               onClose={onClose}
                               onHide={hideConversation}
                             />

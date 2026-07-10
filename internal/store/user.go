@@ -17,11 +17,11 @@ import (
 
 // UserStore defines operations on User entities.
 type UserStore interface {
-	Create(ctx context.Context, user *model.User) error
-	GetByID(ctx context.Context, id string) (*model.User, error)
-	GetByEmail(ctx context.Context, email string) (*model.User, error)
-	Update(ctx context.Context, user *model.User) error
-	List(ctx context.Context, limit int, lastKey string) ([]*model.User, string, error)
+	CreateUser(ctx context.Context, user *model.User) error
+	GetUser(ctx context.Context, id string) (*model.User, error)
+	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
+	UpdateUser(ctx context.Context, user *model.User) error
+	ListUsers(ctx context.Context, limit int, lastKey string) ([]*model.User, string, error)
 }
 
 // UserStoreImpl implements UserStore backed by DynamoDB.
@@ -56,7 +56,7 @@ func normalizeStoredEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }
 
-func (s *UserStoreImpl) Create(ctx context.Context, user *model.User) error {
+func (s *UserStoreImpl) CreateUser(ctx context.Context, user *model.User) error {
 	user.Email = normalizeStoredEmail(user.Email)
 	if existing, err := s.findByEmailScan(ctx, user.Email); err == nil {
 		_ = s.ensureEmailIndex(ctx, existing.Email, existing.ID)
@@ -111,7 +111,7 @@ func (s *UserStoreImpl) Create(ctx context.Context, user *model.User) error {
 	return nil
 }
 
-func (s *UserStoreImpl) GetByID(ctx context.Context, id string) (*model.User, error) {
+func (s *UserStoreImpl) GetUser(ctx context.Context, id string) (*model.User, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.Table),
 		Key:       compositeKey(userPK(id), profileSK()),
@@ -166,7 +166,7 @@ func (s *UserStoreImpl) GetUsersByIDs(ctx context.Context, ids []string) ([]*mod
 	return out, nil
 }
 
-func (s *UserStoreImpl) GetByEmail(ctx context.Context, email string) (*model.User, error) {
+func (s *UserStoreImpl) GetUserByEmail(ctx context.Context, email string) (*model.User, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.Table),
 		Key:       compositeKey(userEmailPK(email), profileSK()),
@@ -188,7 +188,7 @@ func (s *UserStoreImpl) GetByEmail(ctx context.Context, email string) (*model.Us
 		return nil, fmt.Errorf("store: unmarshal user email: %w", err)
 	}
 
-	return s.GetByID(ctx, emailEntry.UserID)
+	return s.GetUser(ctx, emailEntry.UserID)
 }
 
 func (s *UserStoreImpl) findByEmailScan(ctx context.Context, email string) (*model.User, error) {
@@ -224,7 +224,7 @@ func (s *UserStoreImpl) findByEmailScan(ctx context.Context, email string) (*mod
 				return nil, fmt.Errorf("store: unmarshal user by email fallback: %w", err)
 			}
 			if strings.ToLower(strings.TrimSpace(item.Email)) == normalized {
-				return s.GetByID(ctx, item.ID)
+				return s.GetUser(ctx, item.ID)
 			}
 		}
 		if len(out.LastEvaluatedKey) == 0 {
@@ -255,7 +255,7 @@ func (s *UserStoreImpl) ensureEmailIndex(ctx context.Context, email, userID stri
 	return nil
 }
 
-func (s *UserStoreImpl) Update(ctx context.Context, user *model.User) error {
+func (s *UserStoreImpl) UpdateUser(ctx context.Context, user *model.User) error {
 	user.Email = normalizeStoredEmail(user.Email)
 	item := userItem{
 		PK:     userPK(user.ID),
@@ -280,7 +280,7 @@ func (s *UserStoreImpl) Update(ctx context.Context, user *model.User) error {
 	return nil
 }
 
-func (s *UserStoreImpl) List(ctx context.Context, limit int, lastKey string) ([]*model.User, string, error) {
+func (s *UserStoreImpl) ListUsers(ctx context.Context, limit int, lastKey string) ([]*model.User, string, error) {
 	keyCond := expression.Key("GSI2PK").Equal(expression.Value(allUsersGSI2PK()))
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 

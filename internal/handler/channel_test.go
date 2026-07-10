@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -2286,11 +2287,16 @@ func TestIsDuplicateError(t *testing.T) {
 	if isDuplicateError(nil) {
 		t.Error("nil should not be a duplicate error")
 	}
-	if !isDuplicateError(errors.New("channel name already exists")) {
-		t.Error(`"already exists" should be a duplicate error`)
+	if !isDuplicateError(fmt.Errorf("create channel: %w", store.ErrAlreadyExists)) {
+		t.Error("wrapped store.ErrAlreadyExists should be a duplicate error")
 	}
-	if !isDuplicateError(errors.New("that name is already taken")) {
-		t.Error(`"already taken" should be a duplicate error`)
+	if !isDuplicateError(fmt.Errorf("channel: %w", service.ErrAlreadyExists)) {
+		t.Error("wrapped service.ErrAlreadyExists should be a duplicate error")
+	}
+	// The mapping is sentinel-based, not text-based: message wording alone
+	// must not turn an arbitrary error into a 409.
+	if isDuplicateError(errors.New("channel name already exists")) {
+		t.Error("unwrapped text mentioning 'already exists' should not be a duplicate error")
 	}
 	if isDuplicateError(errors.New("some unrelated failure")) {
 		t.Error("unrelated error should not be a duplicate error")

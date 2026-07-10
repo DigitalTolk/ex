@@ -26,7 +26,7 @@ func TestMembershipStore_List_PaginatesAllPages(t *testing.T) {
 	}
 	s := NewMembershipStore(withFault(db, func(f *faultClient) { f.pageQueryOnce = true }))
 
-	members, err := s.ListChannelMembers(ctx, "ch-pg")
+	members, err := s.ListMembers(ctx, "ch-pg")
 	if err != nil || len(members) != 1 {
 		t.Fatalf("ListChannelMembers paged = %v, %v; want 1 member", len(members), err)
 	}
@@ -40,7 +40,7 @@ func TestConversationStore_ListUserConversations_PaginatesAllPages(t *testing.T)
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	cs := NewConversationStore(db)
-	if err := cs.Create(ctx,
+	if err := cs.CreateConversation(ctx,
 		&model.Conversation{ID: "conv-pg", Type: model.ConversationTypeDM},
 		[]*model.UserConversation{{ConversationID: "conv-pg", UserID: "u-pgc"}},
 	); err != nil {
@@ -58,16 +58,16 @@ func TestThreadFollowStore_List_PaginatesAllPages(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	tf := NewThreadFollowStore(db)
-	if err := tf.Set(ctx, makeThreadFollow("u-pgt", "ch-pgt", "root-pgt")); err != nil {
+	if err := tf.SetThreadFollow(ctx, makeThreadFollow("u-pgt", "ch-pgt", "root-pgt")); err != nil {
 		t.Fatalf("seed Set: %v", err)
 	}
 	s := NewThreadFollowStore(withFault(db, func(f *faultClient) { f.pageQueryOnce = true }))
 
-	byThread, err := s.ListThread(ctx, "ch-pgt", "root-pgt")
+	byThread, err := s.ListThreadFollows(ctx, "ch-pgt", "root-pgt")
 	if err != nil || len(byThread) != 1 {
 		t.Fatalf("ListThread paged = %v, %v; want 1 follow", len(byThread), err)
 	}
-	byUser, err := s.ListUser(ctx, "u-pgt")
+	byUser, err := s.ListUserThreadFollows(ctx, "u-pgt")
 	if err != nil || len(byUser) != 1 {
 		t.Fatalf("ListUser paged = %v, %v; want 1 follow", len(byUser), err)
 	}
@@ -77,12 +77,12 @@ func TestUserStateStore_List_PaginatesAllPages(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	us := NewUserStateStore(db)
-	if err := us.Set(ctx, makeUserState("u-pgs", model.UserStateThreadNotification, "root-pgs")); err != nil {
+	if err := us.SetUserState(ctx, makeUserState("u-pgs", model.UserStateThreadNotification, "root-pgs")); err != nil {
 		t.Fatalf("seed Set: %v", err)
 	}
 	s := NewUserStateStore(withFault(db, func(f *faultClient) { f.pageQueryOnce = true }))
 
-	items, err := s.List(ctx, "u-pgs")
+	items, err := s.ListUserState(ctx, "u-pgs")
 	if err != nil || len(items) != 1 {
 		t.Fatalf("UserState.List paged = %v, %v; want 1 item", len(items), err)
 	}

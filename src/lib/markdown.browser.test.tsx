@@ -105,7 +105,9 @@ describe('renderMarkdown (legacy regex pipeline)', () => {
 
   it('renders a fenced code block with the language hint (lowlight hljs)', async () => {
     await render(wrap(<>{renderMarkdown('```go\nfunc main() {}\n```')}</>));
-    const pre = document.querySelector('pre');
+    // CodeBlock renders a line-number gutter <pre> plus the code <pre>;
+    // the language attribute lives on the latter.
+    const pre = document.querySelector('pre[data-language]');
     expect(pre?.getAttribute('data-language')).toBe('go');
     const code = pre?.querySelector('code');
     expect(code?.className).toContain('hljs');
@@ -129,11 +131,14 @@ describe('renderMarkdown (legacy regex pipeline)', () => {
     expect(document.querySelector('img.h-\\[2\\.8em\\]')).not.toBeNull();
   });
 
-  it('renders a blockquote with one <div> per line', async () => {
+  it('renders a blockquote keeping its line breaks', async () => {
+    // Unified with the server-tree path: quoted lines join into one
+    // whitespace-pre-wrap paragraph rather than per-line <div>s.
     await render(wrap(<>{renderMarkdown('> first\n> second')}</>));
     const bq = document.querySelector('blockquote');
     expect(bq).not.toBeNull();
-    expect(bq?.querySelectorAll('div').length).toBe(2);
+    const p = bq?.querySelector('p');
+    expect(p?.textContent).toBe('first\nsecond');
   });
 
   it('renders unordered lists for "- " and "* "', async () => {
@@ -227,10 +232,13 @@ describe('renderMarkdown (legacy regex pipeline)', () => {
     expect(a?.textContent).toBe('here');
   });
 
-  it('renders an unsafe-scheme markdown link as literal text, never an href', async () => {
+  it('renders an unsafe-scheme markdown link as inert text, never an href', async () => {
+    // Unified with the server-tree path: the hydrator's `a` component
+    // strips the anchor and renders only the link text.
     await render(wrap(<>{renderMarkdown('click [here](javascript:alert(1)) now')}</>));
     expect(document.querySelector('a')).toBeNull();
-    expect(document.body.textContent).toContain('[here](javascript:alert(1))');
+    expect(document.body.textContent).toContain('click here');
+    expect(document.body.textContent).not.toContain('javascript:');
   });
 
   it('renders a giphy: image markdown reference as a GiphyEmbed', async () => {

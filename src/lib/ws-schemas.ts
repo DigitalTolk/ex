@@ -29,6 +29,9 @@ const messageDeletedSchema = z.object({
   id: z.string().min(1),
   parentID: z.string().min(1),
   parentMessageID: z.string().min(1).optional(),
+  // Present on service-published deletes; narrows which cache scope
+  // (channel vs conversation) the handlers patch.
+  parentType: z.enum(['channel', 'conversation']).optional(),
 }).passthrough();
 
 const channelIDSchema = z.object({ channelID: z.string().min(1) });

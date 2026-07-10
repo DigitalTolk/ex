@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { renderMarkdown } from '@/lib/markdown';
+import { renderHastTree } from '@/lib/markdown-hast';
 import type { HastNode } from '@/types';
 
 // Server-style hast trees that the backend's RenderToHast produces.
@@ -348,5 +349,66 @@ describe('renderMarkdown via hast tree', () => {
     ));
     const { container } = render(<>{renderMarkdown('', { tree, giphyAPIKey: '' })}</>);
     expect(container.textContent).toContain('GIPHY unavailable');
+  });
+});
+
+describe('tag allowlist (defense-in-depth)', () => {
+  it('unwraps a disallowed element but keeps its children', () => {
+    const tree = {
+      type: 'root',
+      children: [
+        { type: 'element', tagName: 'p', properties: {}, children: [
+          { type: 'element', tagName: 'script', properties: {}, children: [
+            { type: 'text', value: 'alert(1)' },
+          ] },
+          { type: 'text', value: ' safe tail' },
+        ] },
+      ],
+    } as never;
+    render(<div data-testid="allow">{renderHastTree(tree)}</div>);
+    const host = screen.getByTestId('allow');
+    // The script ELEMENT is gone…
+    expect(host.querySelector('script')).toBeNull();
+    // …but its text content degrades to visible text (never lost), and
+    // siblings are untouched.
+    expect(host.textContent).toContain('alert(1)');
+    expect(host.textContent).toContain('safe tail');
+  });
+
+  it('renders every allowed structural tag normally', () => {
+    const el = (tagName: string, ...children: unknown[]) =>
+      ({ type: 'element', tagName, properties: {}, children }) as never;
+    const text = (value: string) => ({ type: 'text', value }) as never;
+    const tree = {
+      type: 'root',
+      children: [el('blockquote', el('em', text('quoted')))],
+    } as never;
+    render(<div data-testid="allow-ok">{renderHastTree(tree)}</div>);
+    const host = screen.getByTestId('allow-ok');
+    expect(host.querySelector('blockquote em')).not.toBeNull();
+  });
+
+  it('drops a disallowed element that arrives without a children field', () => {
+    // Go's omitempty elides empty children arrays — a childless hostile
+    // element must unwrap to nothing instead of crashing the flatMap.
+    const tree = {
+      type: 'root',
+      children: [
+        { type: 'element', tagName: 'p', properties: {}, children: [
+          { type: 'element', tagName: 'iframe', properties: { src: 'https://evil.example' } },
+          { type: 'text', value: 'still here' },
+        ] },
+      ],
+    } as never;
+    render(<div data-testid="allow-childless">{renderHastTree(tree)}</div>);
+    const host = screen.getByTestId('allow-childless');
+    expect(host.querySelector('iframe')).toBeNull();
+    expect(host.textContent).toContain('still here');
+  });
+
+  it('renders a bare text root (malformed server tree) as plain text', () => {
+    const tree = { type: 'text', value: 'just text' } as never;
+    render(<div data-testid="allow-text-root">{renderHastTree(tree)}</div>);
+    expect(screen.getByTestId('allow-text-root').textContent).toBe('just text');
   });
 });

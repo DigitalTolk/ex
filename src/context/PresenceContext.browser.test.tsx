@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { ConstantBackoff, handleAll, retry } from 'cockatiel';
 import { PresenceProvider, usePresence, presenceRetry } from './PresenceContext';
+import { resetPresenceStoreForTests } from '@/stores/presence';
 import { useEffect } from 'react';
 
 // Browser-coverage tests for PresenceContext. The provider hits the
@@ -33,6 +34,10 @@ function Probe({ onState }: { onState: (s: ReturnType<typeof usePresence>) => vo
 }
 
 beforeEach(() => {
+  // The presence store is module-global: without a reset, one test's set
+  // leaks into the next (and a leaked self-ID lets assertions pass before
+  // in-flight retries settle, orphaning their fetches into later tests).
+  resetPresenceStoreForTests();
   presenceRetry.policy = retry(handleAll, { maxAttempts: 3, backoff: new ConstantBackoff(0) });
   apiFetchMock.mockReset();
   mockAuth = {

@@ -168,7 +168,7 @@ describe('MessageInput toolbar buttons', () => {
 
   it('inline mark buttons (Bold/Italic/Strikethrough/Code) toggle the corresponding text format on the seeded body', async () => {
     // Lexical renders text-format spans (Bold/Italic/Strike) as
-    // <span data-lexical-text> with theme classes; the inline-code
+    // spans with theme classes; the inline-code
     // format renders as a real <code> element. Both are observable via
     // a specific theme-class marker.
     // CM6 wraps the selection in the corresponding markdown delimiters.

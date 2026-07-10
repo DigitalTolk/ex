@@ -31,7 +31,7 @@ func TestThreadFollowStore_Set_PutItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewThreadFollowStore(withFault(db, func(f *faultClient) { f.failPutItem = true }))
-	err := s.Set(ctx, makeThreadFollow("u-tf", "ch-tf", "root-1"))
+	err := s.SetThreadFollow(ctx, makeThreadFollow("u-tf", "ch-tf", "root-1"))
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Set: want errInjected, got %v", err)
 	}
@@ -41,7 +41,7 @@ func TestThreadFollowStore_SetMany_BatchWriteItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewThreadFollowStore(withFault(db, func(f *faultClient) { f.failBatchWriteItem = true }))
-	err := s.SetMany(ctx, []*model.ThreadFollow{makeThreadFollow("u-tf", "ch-tf", "root-1")})
+	err := s.SetThreadFollowMany(ctx, []*model.ThreadFollow{makeThreadFollow("u-tf", "ch-tf", "root-1")})
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("SetMany: want errInjected, got %v", err)
 	}
@@ -52,7 +52,7 @@ func TestThreadFollowStore_SetMany_Empty(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewThreadFollowStore(db)
-	if err := s.SetMany(ctx, nil); err != nil {
+	if err := s.SetThreadFollowMany(ctx, nil); err != nil {
 		t.Fatalf("SetMany empty: %v", err)
 	}
 }
@@ -61,7 +61,7 @@ func TestThreadFollowStore_Get_GetItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewThreadFollowStore(withFault(db, func(f *faultClient) { f.failGetItem = true }))
-	_, err := s.Get(ctx, "u-tf", "ch-tf", "root-1")
+	_, err := s.GetThreadFollow(ctx, "u-tf", "ch-tf", "root-1")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Get: want errInjected, got %v", err)
 	}
@@ -71,7 +71,7 @@ func TestThreadFollowStore_ListUser_QueryError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewThreadFollowStore(withFault(db, func(f *faultClient) { f.failQuery = true }))
-	_, err := s.ListUser(ctx, "u-tf")
+	_, err := s.ListUserThreadFollows(ctx, "u-tf")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("ListUser: want errInjected, got %v", err)
 	}
@@ -81,7 +81,7 @@ func TestThreadFollowStore_ListThread_QueryError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewThreadFollowStore(withFault(db, func(f *faultClient) { f.failQuery = true }))
-	_, err := s.ListThread(ctx, "ch-tf", "root-1")
+	_, err := s.ListThreadFollows(ctx, "ch-tf", "root-1")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("ListThread: want errInjected, got %v", err)
 	}
@@ -117,7 +117,7 @@ func TestThreadFollowStore_SetMany_RetriesOnUnprocessed(t *testing.T) {
 	ctx := context.Background()
 	uc := &unprocessedClient{DynamoAPI: db.Client, table: db.Table, remaining: 1}
 	s := NewThreadFollowStore(&DB{Client: uc, Table: db.Table})
-	if err := s.SetMany(ctx, []*model.ThreadFollow{makeThreadFollow("u-tf-r", "ch-tf", "root-r")}); err != nil {
+	if err := s.SetThreadFollowMany(ctx, []*model.ThreadFollow{makeThreadFollow("u-tf-r", "ch-tf", "root-r")}); err != nil {
 		t.Fatalf("SetMany retry: %v", err)
 	}
 }
@@ -129,7 +129,7 @@ func TestThreadFollowStore_SetMany_ExhaustsRetries(t *testing.T) {
 	ctx := context.Background()
 	uc := &unprocessedClient{DynamoAPI: db.Client, table: db.Table, remaining: 99}
 	s := NewThreadFollowStore(&DB{Client: uc, Table: db.Table})
-	err := s.SetMany(ctx, []*model.ThreadFollow{makeThreadFollow("u-tf-x", "ch-tf", "root-x")})
+	err := s.SetThreadFollowMany(ctx, []*model.ThreadFollow{makeThreadFollow("u-tf-x", "ch-tf", "root-x")})
 	if err == nil || !strings.Contains(err.Error(), "unprocessed after retries") {
 		t.Fatalf("SetMany exhausted: want 'unprocessed after retries' error, got %v", err)
 	}

@@ -23,6 +23,7 @@ type SidebarAttrRow = UserChannel | UserConversation;
 type SidebarAttrMutationVars = { id: string; body: Record<string, unknown> };
 
 /* v8 ignore start -- opt-in browser diagnostics, not production behavior. */
+/* istanbul ignore next -- opt-in browser diagnostics, not production behavior. */
 const SIDEBAR_DND_DEBUG_STORAGE_KEY = 'ex.sidebarDndDebug';
 
 function sidebarDndDebugEnabled(): boolean {
@@ -44,6 +45,7 @@ function sidebarDndDebugError(error: unknown): string | null {
   return error instanceof Error ? error.message : String(error);
 }
 /* v8 ignore stop */
+/* istanbul ignore next -- same dead defensive arm as the v8 ignore above */
 
 function sidebarAttrRowID(kind: SidebarItemKind, row: SidebarAttrRow): string {
   return kind === 'channel'

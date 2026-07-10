@@ -148,7 +148,7 @@ func fatal(msg string, err error) {
 // each. name is the channel name (empty for conversations) for log context. A
 // store list failure is fatal (the migration can't proceed without the full set).
 func forEachParent(ctx context.Context, channelStore *store.ChannelStoreImpl, convStore *store.ConversationStoreImpl, fn func(parentID, parentType, name string)) {
-	channels, err := channelStore.ListAll(ctx)
+	channels, err := channelStore.ListAllChannels(ctx)
 	if err != nil {
 		fatal("list channels", err)
 	}
@@ -156,7 +156,7 @@ func forEachParent(ctx context.Context, channelStore *store.ChannelStoreImpl, co
 	for _, ch := range channels {
 		fn(ch.ID, "channel", ch.Name)
 	}
-	convs, err := convStore.ListAll(ctx)
+	convs, err := convStore.ListAllConversations(ctx)
 	if err != nil {
 		fatal("list conversations", err)
 	}
@@ -172,7 +172,7 @@ func forEachParent(ctx context.Context, channelStore *store.ChannelStoreImpl, co
 func forEachMessage(ctx context.Context, messageStore *store.MessageStoreImpl, parentID string, fn func(*model.Message) error) error {
 	cursor := ""
 	for {
-		msgs, hasMore, err := messageStore.List(ctx, parentID, cursor, scanPageSize)
+		msgs, hasMore, err := messageStore.ListMessages(ctx, parentID, cursor, scanPageSize)
 		if err != nil {
 			return fmt.Errorf("scan messages: %w", err)
 		}

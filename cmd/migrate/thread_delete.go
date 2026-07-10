@@ -88,7 +88,7 @@ func tdBackfill(ctx context.Context, messageStore *store.MessageStoreImpl, paren
 			continue
 		}
 		m.Tombstone()
-		if err := messageStore.Update(ctx, parentID, m); err != nil {
+		if err := messageStore.UpdateMessage(ctx, m); err != nil {
 			slog.Warn("tombstone reply failed", "parentID", parentID, "msgID", m.ID, "error", err)
 			t.errors++
 			continue

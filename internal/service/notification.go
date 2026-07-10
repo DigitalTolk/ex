@@ -166,12 +166,65 @@ type NotificationService struct {
 	nameCache NameCache
 }
 
-// NewNotificationService builds a NotificationService. messages is used
-// only for thread-reply scoping (looking up the root author + prior
-// participants). Pass nil and the thread path will degrade gracefully
+// NotificationServiceDeps declares the notifier's full dependency surface —
+// the production constructor input. This pipeline is incident-critical
+// (see CLAUDE.md): declaring presence/acks/push here makes it obvious at the
+// wiring site when a delivery-path dependency is missing, instead of a
+// forgotten Set* silently degrading the fallback.
+type NotificationServiceDeps struct {
+	// Required core.
+	Publisher     Publisher
+	Memberships   MembershipStore
+	Conversations ConversationStore
+	Channels      ChannelStore
+	Users         UserStore
+	// Messages is used only for thread-reply scoping (root author + prior
+	// participants). Nil degrades the thread path to "no recipients beyond
+	// explicit @-mentions".
+	Messages MessageStore
+
+	// Delivery-path capabilities (each nil-tolerant, but production wires
+	// all of them; see the Set* docs for per-field semantics).
+	Presence      PresenceLookup
+	ThreadFollows ThreadFollowStore
+	UserState     *UserStateService
+	AckStore      NotificationAckStore
+	NameCache     NameCache
+}
+
+// NewNotificationServiceFromDeps constructs a fully-wired NotificationService.
+// The push scheduler still attaches via SetMobilePushScheduler — it is built
+// after the service because the asynq worker needs the service's ack store.
+func NewNotificationServiceFromDeps(d NotificationServiceDeps) *NotificationService {
+	return &NotificationService{
+		publisher: d.Publisher,
+		members:   d.Memberships,
+		conv:      d.Conversations,
+		channels:  d.Channels,
+		users:     d.Users,
+		messages:  d.Messages,
+		presence:  d.Presence,
+		follows:   d.ThreadFollows,
+		userState: d.UserState,
+		ackStore:  d.AckStore,
+		nameCache: d.NameCache,
+	}
+}
+
+// NewNotificationService builds a NotificationService from the required core —
+// the test-oriented constructor; delivery capabilities attach via Set*.
+// messages is used only for thread-reply scoping (looking up the root author
+// + prior participants). Pass nil and the thread path will degrade gracefully
 // to "no recipients beyond explicit @-mentions".
 func NewNotificationService(p Publisher, m MembershipStore, c ConversationStore, ch ChannelStore, u UserStore, msgs MessageStore) *NotificationService {
-	return &NotificationService{publisher: p, members: m, conv: c, channels: ch, users: u, messages: msgs}
+	return NewNotificationServiceFromDeps(NotificationServiceDeps{
+		Publisher:     p,
+		Memberships:   m,
+		Conversations: c,
+		Channels:      ch,
+		Users:         u,
+		Messages:      msgs,
+	})
 }
 
 // SetPresence wires a presence lookup so the @here mention can target only
@@ -247,8 +300,8 @@ func logAudienceLoadFailed(msg *model.Message, parentType string, err error) {
 // detached with a 30s budget, so a couple of half-second retries are cheap
 // insurance against a DynamoDB blip zeroing a message's entire recipient set.
 var (
-	audienceRetryInterval           = 500 * time.Millisecond
-	audienceRetryMaxRetries  uint64 = 2
+	audienceRetryInterval          = 500 * time.Millisecond
+	audienceRetryMaxRetries uint64 = 2
 )
 
 // retryAudienceLoad retries a transient audience-read failure before giving

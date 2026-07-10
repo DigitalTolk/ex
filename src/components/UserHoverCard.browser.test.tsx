@@ -23,13 +23,11 @@ beforeEach(() => {
   });
 });
 
-vi.mock('@/context/PresenceContext', () => ({
-  usePresence: () => ({
-    online: new Set<string>(['u-2']),
-    isOnline: (id: string) => id === 'u-2',
-    lastSeenByUser: new Map(),
-  }),
-}));
+import { usePresenceStore } from '@/stores/presence';
+
+// The hover card reads presence via the per-user store selector now —
+// seed the real store instead of mocking the context.
+usePresenceStore.setState({ online: new Set<string>(['u-2']) });
 
 function Wrap({ children }: { children: React.ReactNode }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });

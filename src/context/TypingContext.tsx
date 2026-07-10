@@ -1,21 +1,21 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react';
+import {
+  clearTyping,
+  recordTyping,
+  setSelfUserID,
+  stopTypingExpiryTimer,
+  threadTypingKey,
+  useTypingStore,
+} from '@/stores/typing';
 
-// EXPIRY_MS is how long an entry survives without a refresh ping. The
-// client sends "typing" every 3s while the user is actively composing;
-// 6s gives two missed pings of slack before the indicator clears so a
-// brief network hiccup doesn't blink the indicator off and back on.
-const EXPIRY_MS = 6000;
+// The typing engine (entry list, expiry timer, derived per-parent /
+// per-thread maps) lives in @/stores/typing so hot-path consumers can
+// subscribe per-bucket (useTypingFor / useThreadTypingFor) instead of
+// re-rendering on every typing event anywhere in the workspace. This
+// context remains as the compat surface for writers (ChatPage's WS
+// handlers) and whole-map readers.
 
-interface TypingEntry {
-  userID: string;
-  parentID: string;
-  // Empty string = main MessageList typing. Non-empty = typing inside a
-  // ThreadPanel rooted at that message ID. Stored together in the same
-  // entries list because expiry semantics are identical and the (parent,
-  // threadRoot) tuple is what segregates the two surfaces in the UI.
-  threadRootID: string;
-  expiresAt: number;
-}
+export { threadTypingKey };
 
 interface TypingContextValue {
   // typingByParent contains only main-list typing (threadRootID==="").
@@ -26,169 +26,27 @@ interface TypingContextValue {
   // ThreadPanel for (ch-1, m-1) only renders typing originating from
   // that thread, not unrelated thread or main-list typing.
   typingByThread: Record<string, string[]>;
-  // recordTyping accepts an optional threadRootID so a thread-scoped
-  // typing event lands in its own bucket. Existing call sites that
-  // pass two args continue to work (threadRootID defaults to "").
   recordTyping: (parentID: string, userID: string, threadRootID?: string) => void;
-  // clearTyping drops a (parentID, userID, threadRootID) entry
-  // immediately — used by the message.new WS handler so a user stops
-  // appearing as "typing" the instant their message lands. The
-  // threadRootID lookup uses the same default ("") for main-list
-  // messages and the parentMessageID for thread replies.
   clearTyping: (parentID: string, userID: string, threadRootID?: string) => void;
   setSelfUserID: (id: string | null) => void;
 }
 
 const TypingContext = createContext<TypingContextValue | null>(null);
 
-// shallowEqualByKey reports whether two `key → user-list` maps describe
-// the same set of typers per bucket. Used to bail out of setState calls
-// that would otherwise force every consumer to re-render every second
-// whether anyone is typing or not.
-function shallowEqualByKey(
-  a: Record<string, string[]>,
-  b: Record<string, string[]>,
-): boolean {
-  const ak = Object.keys(a);
-  const bk = Object.keys(b);
-  if (ak.length !== bk.length) return false;
-  for (const k of ak) {
-    const av = a[k];
-    const bv = b[k];
-    // The length pre-check above (`ak.length !== bk.length`) already
-    // rejects any case where a key in `a` is absent from `b`, so by the
-    // time we index `b[k]` for a shared-length pair the key is present;
-    // the `!bv` arm is a defensive guard that can't fire under test.
-    /* istanbul ignore next -- unreachable: equal-length key sets share keys, so bv is always defined here */
-    if (!bv || av.length !== bv.length) return false;
-    for (let i = 0; i < av.length; i++) {
-      if (av[i] !== bv[i]) return false;
-    }
-  }
-  return true;
-}
-
-// threadKey is the composition used to key typingByThread. Kept as a
-// function so future test helpers / readers don't have to remember the
-// pipe-delimited convention.
-export function threadTypingKey(parentID: string, threadRootID: string): string {
-  return `${parentID}|${threadRootID}`;
-}
-
 export function TypingProvider({ children }: { children: ReactNode }) {
-  const [typingByParent, setTypingByParent] = useState<Record<string, string[]>>({});
-  const [typingByThread, setTypingByThread] = useState<Record<string, string[]>>({});
-  const entriesRef = useRef<TypingEntry[]>([]);
-  const selfRef = useRef<string | null>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const typingByParent = useTypingStore((s) => s.typingByParent);
+  const typingByThread = useTypingStore((s) => s.typingByThread);
 
-  const rebuild = useCallback(() => {
-    const now = Date.now();
-    entriesRef.current = entriesRef.current.filter((e) => e.expiresAt > now);
-    const groupedParent: Record<string, string[]> = {};
-    const groupedThread: Record<string, string[]> = {};
-    for (const e of entriesRef.current) {
-      if (e.userID === selfRef.current) continue;
-      if (e.threadRootID === '') {
-        const list = groupedParent[e.parentID] ?? [];
-        /* istanbul ignore next -- recordTyping dedups entries by (parentID,userID,threadRootID), so a user can't already be in the parent list; the includes() short-circuit is defensive */
-        if (!list.includes(e.userID)) list.push(e.userID);
-        groupedParent[e.parentID] = list;
-      } else {
-        const k = threadTypingKey(e.parentID, e.threadRootID);
-        const list = groupedThread[k] ?? [];
-        /* istanbul ignore next -- recordTyping dedups entries by (parentID,userID,threadRootID), so a user can't already be in the thread list; the includes() short-circuit is defensive */
-        if (!list.includes(e.userID)) list.push(e.userID);
-        groupedThread[k] = list;
-      }
-    }
-    setTypingByParent((prev) => (shallowEqualByKey(prev, groupedParent) ? prev : groupedParent));
-    setTypingByThread((prev) => (shallowEqualByKey(prev, groupedThread) ? prev : groupedThread));
-  }, []);
-
-  // Run the expiry tick only while someone is actively typing — most of
-  // the time the entries list is empty and a 1Hz interval would cause a
-  // pointless wakeup forever.
-  const ensureTimer = useCallback(() => {
-    if (timerRef.current) return;
-    timerRef.current = setInterval(() => {
-      rebuild();
-      // Inside the interval callback `timerRef.current` is by definition
-      // the handle that scheduled us, so it is always truthy here; the
-      // `&& timerRef.current` guard is defensive against a torn-down ref.
-      /* istanbul ignore next -- timerRef.current is always set while its own interval is firing */
-      if (entriesRef.current.length === 0 && timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-    }, 1000);
-  }, [rebuild]);
-
-  const recordTyping = useCallback(
-    (parentID: string, userID: string, threadRootID: string = '') => {
-      if (!parentID || !userID) return;
-      const idx = entriesRef.current.findIndex(
-        (e) =>
-          e.parentID === parentID &&
-          e.userID === userID &&
-          e.threadRootID === threadRootID,
-      );
-      const entry: TypingEntry = {
-        userID,
-        parentID,
-        threadRootID,
-        expiresAt: Date.now() + EXPIRY_MS,
-      };
-      if (idx >= 0) {
-        entriesRef.current[idx] = entry;
-      } else {
-        entriesRef.current.push(entry);
-      }
-      ensureTimer();
-      rebuild();
-    },
-    [ensureTimer, rebuild],
-  );
-
-  const setSelfUserID = useCallback(
-    (id: string | null) => {
-      selfRef.current = id;
-      rebuild();
-    },
-    [rebuild],
-  );
-
-  const clearTyping = useCallback(
-    (parentID: string, userID: string, threadRootID: string = '') => {
-      if (!parentID || !userID) return;
-      const idx = entriesRef.current.findIndex(
-        (e) =>
-          e.parentID === parentID &&
-          e.userID === userID &&
-          e.threadRootID === threadRootID,
-      );
-      if (idx < 0) return;
-      entriesRef.current.splice(idx, 1);
-      rebuild();
-    },
-    [rebuild],
-  );
-
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-    };
-  }, []);
+  // The store's expiry interval must not outlive the app shell (tests
+  // unmount providers and expect no leaked timers).
+  useEffect(() => stopTypingExpiryTimer, []);
 
   // Memoise the value object so consumers only re-render when state
-  // actually changes (the rebuild() bailout above keeps both maps
+  // actually changes (the store's rebuild bailout keeps both maps
   // referentially stable across no-op ticks).
   const value = useMemo<TypingContextValue>(
     () => ({ typingByParent, typingByThread, recordTyping, clearTyping, setSelfUserID }),
-    [typingByParent, typingByThread, recordTyping, clearTyping, setSelfUserID],
+    [typingByParent, typingByThread],
   );
 
   return <TypingContext.Provider value={value}>{children}</TypingContext.Provider>;

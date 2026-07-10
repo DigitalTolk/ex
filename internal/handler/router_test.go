@@ -57,7 +57,7 @@ func TestRouterAddsAppVersionHeaderToAPIResponses(t *testing.T) {
 		Auth: &AuthHandler{}, User: &UserHandler{}, Channel: &ChannelHandler{},
 		Conversation: &ConversationHandler{}, WS: &WSHandler{},
 		Version: NewVersionHandler("server-build-2"),
-		JWT: jwtMgr, AppVersion: "server-build-2", AllowOrigins: []string{"*"},
+		JWT:     jwtMgr, AppVersion: "server-build-2", AllowOrigins: []string{"*"},
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/missing", nil)

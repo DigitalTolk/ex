@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConversationRow } from '@/components/layout/ConversationRow';
 import type { ComponentProps } from 'react';
 import type { UserConversation } from '@/types';
+import { usePresenceStore } from '@/stores/presence';
 
 const apiFetchMock = vi.fn();
 vi.mock('@/lib/api', () => ({
@@ -113,13 +114,15 @@ describe('ConversationRow', () => {
   });
 
   it('renders the online indicator on the DM avatar', () => {
+    // The row subscribes to the partner's presence via the store selector.
+    usePresenceStore.getState().setUserOnline('u-partner', true);
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
         <BrowserRouter>
           <ConversationRow
             conversation={sampleConv}
             hasUnread={false}
-            dmOnline
+            dmUserID="u-partner"
             onClose={vi.fn()}
             onHide={vi.fn()}
           />

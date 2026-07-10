@@ -19,7 +19,7 @@ func TestMembershipMemberLister_StripsToUserIDs(t *testing.T) {
 			{ChannelID: "c1", UserID: "u1"},
 			{ChannelID: "c1", UserID: "u2"},
 			{ChannelID: "c1", UserID: ""}, // empty UserID — must be skipped
-			nil,                            // nil row — must be skipped
+			nil,                           // nil row — must be skipped
 			{ChannelID: "c1", UserID: "u3"},
 		}, nil
 	}

@@ -51,23 +51,23 @@ func TestCorruptRows_GetItemArms(t *testing.T) {
 	faulted := withFault(db, func(f *faultClient) { f.transformGetItem = corruptGetItem })
 
 	t.Run("user GetByID", func(t *testing.T) {
-		_, err := NewUserStore(faulted).GetByID(ctx, "u-x")
+		_, err := NewUserStore(faulted).GetUser(ctx, "u-x")
 		assertUnmarshalErr(t, err, "user GetByID")
 	})
 	t.Run("channel GetByID", func(t *testing.T) {
-		_, err := NewChannelStore(faulted).GetByID(ctx, "ch-x")
+		_, err := NewChannelStore(faulted).GetChannel(ctx, "ch-x")
 		assertUnmarshalErr(t, err, "channel GetByID")
 	})
 	t.Run("conversation GetByID", func(t *testing.T) {
-		_, err := NewConversationStore(faulted).GetByID(ctx, "conv-x")
+		_, err := NewConversationStore(faulted).GetConversation(ctx, "conv-x")
 		assertUnmarshalErr(t, err, "conversation GetByID")
 	})
 	t.Run("message GetByID", func(t *testing.T) {
-		_, err := NewMessageStore(faulted).GetByID(ctx, "ch-x", "m-x")
+		_, err := NewMessageStore(faulted).GetMessage(ctx, "ch-x", "m-x")
 		assertUnmarshalErr(t, err, "message GetByID")
 	})
 	t.Run("membership GetChannelMembership", func(t *testing.T) {
-		_, err := NewMembershipStore(faulted).GetChannelMembership(ctx, "ch-x", "u-x")
+		_, err := NewMembershipStore(faulted).GetMembership(ctx, "ch-x", "u-x")
 		assertUnmarshalErr(t, err, "membership GetChannelMembership")
 	})
 	t.Run("attachment GetByID", func(t *testing.T) {
@@ -83,7 +83,7 @@ func TestCorruptRows_GetItemArms(t *testing.T) {
 		assertUnmarshalErr(t, err, "emoji GetByName")
 	})
 	t.Run("invite GetByToken", func(t *testing.T) {
-		_, err := NewInviteStore(faulted).GetByToken(ctx, "tok-x")
+		_, err := NewInviteStore(faulted).GetInvite(ctx, "tok-x")
 		assertUnmarshalErr(t, err, "invite GetByToken")
 	})
 	t.Run("settings GetSettings", func(t *testing.T) {
@@ -91,11 +91,11 @@ func TestCorruptRows_GetItemArms(t *testing.T) {
 		assertUnmarshalErr(t, err, "settings GetSettings")
 	})
 	t.Run("thread follow Get", func(t *testing.T) {
-		_, err := NewThreadFollowStore(faulted).Get(ctx, "u-x", "ch-x", "m-x")
+		_, err := NewThreadFollowStore(faulted).GetThreadFollow(ctx, "u-x", "ch-x", "m-x")
 		assertUnmarshalErr(t, err, "thread follow Get")
 	})
 	t.Run("token GetByHash", func(t *testing.T) {
-		_, err := NewTokenStore(faulted).GetByHash(ctx, "hash-x")
+		_, err := NewTokenStore(faulted).GetRefreshToken(ctx, "hash-x")
 		assertUnmarshalErr(t, err, "token GetByHash")
 	})
 	t.Run("webhook Get", func(t *testing.T) {
@@ -103,7 +103,7 @@ func TestCorruptRows_GetItemArms(t *testing.T) {
 		assertUnmarshalErr(t, err, "webhook Get")
 	})
 	t.Run("user GetByEmail", func(t *testing.T) {
-		_, err := NewUserStore(faulted).GetByEmail(ctx, "a@b.c")
+		_, err := NewUserStore(faulted).GetUserByEmail(ctx, "a@b.c")
 		assertUnmarshalErr(t, err, "user GetByEmail")
 	})
 	t.Run("searchstatus GetSearchStatus", func(t *testing.T) {
@@ -121,7 +121,7 @@ func TestCorruptRows_QueryArms(t *testing.T) {
 	faulted := withFault(db, func(f *faultClient) { f.transformQuery = corruptQuery })
 
 	t.Run("channel GetBySlug", func(t *testing.T) {
-		_, err := NewChannelStore(faulted).GetBySlug(ctx, "eng")
+		_, err := NewChannelStore(faulted).GetChannelBySlug(ctx, "eng")
 		assertUnmarshalErr(t, err, "channel GetBySlug")
 	})
 	t.Run("channel GetByName", func(t *testing.T) {
@@ -129,11 +129,11 @@ func TestCorruptRows_QueryArms(t *testing.T) {
 		assertUnmarshalErr(t, err, "channel GetByName")
 	})
 	t.Run("channel ListPublic", func(t *testing.T) {
-		_, _, err := NewChannelStore(faulted).ListPublic(ctx, 10, "")
+		_, _, err := NewChannelStore(faulted).ListPublicChannels(ctx, 10, "")
 		assertUnmarshalErr(t, err, "channel ListPublic")
 	})
 	t.Run("message List", func(t *testing.T) {
-		_, _, err := NewMessageStore(faulted).List(ctx, "ch-x", "", 10)
+		_, _, err := NewMessageStore(faulted).ListMessages(ctx, "ch-x", "", 10)
 		assertUnmarshalErr(t, err, "message List")
 	})
 	t.Run("message ListThreadReplies", func(t *testing.T) {
@@ -141,11 +141,11 @@ func TestCorruptRows_QueryArms(t *testing.T) {
 		assertUnmarshalErr(t, err, "message ListThreadReplies")
 	})
 	t.Run("message ListAfter", func(t *testing.T) {
-		_, _, err := NewMessageStore(faulted).ListAfter(ctx, "ch-x", "m-0", 10)
+		_, _, err := NewMessageStore(faulted).ListMessagesAfter(ctx, "ch-x", "m-0", 10)
 		assertUnmarshalErr(t, err, "message ListAfter")
 	})
 	t.Run("membership ListChannelMembers", func(t *testing.T) {
-		_, err := NewMembershipStore(faulted).ListChannelMembers(ctx, "ch-x")
+		_, err := NewMembershipStore(faulted).ListMembers(ctx, "ch-x")
 		assertUnmarshalErr(t, err, "membership ListChannelMembers")
 	})
 	t.Run("membership ListUserChannels", func(t *testing.T) {
@@ -168,11 +168,11 @@ func TestCorruptRows_QueryArms(t *testing.T) {
 		}
 	})
 	t.Run("thread follow ListThread", func(t *testing.T) {
-		_, err := NewThreadFollowStore(faulted).ListThread(ctx, "ch-x", "m-x")
+		_, err := NewThreadFollowStore(faulted).ListThreadFollows(ctx, "ch-x", "m-x")
 		assertUnmarshalErr(t, err, "thread follow ListThread")
 	})
 	t.Run("thread follow ListUser", func(t *testing.T) {
-		_, err := NewThreadFollowStore(faulted).ListUser(ctx, "u-x")
+		_, err := NewThreadFollowStore(faulted).ListUserThreadFollows(ctx, "u-x")
 		assertUnmarshalErr(t, err, "thread follow ListUser")
 	})
 	t.Run("parent index ListPinIndex", func(t *testing.T) {
@@ -184,7 +184,7 @@ func TestCorruptRows_QueryArms(t *testing.T) {
 		assertUnmarshalErr(t, err, "parent index ListFileIndex")
 	})
 	t.Run("user state List", func(t *testing.T) {
-		_, err := NewUserStateStore(faulted).List(ctx, "u-x")
+		_, err := NewUserStateStore(faulted).ListUserState(ctx, "u-x")
 		assertUnmarshalErr(t, err, "user state List")
 	})
 	t.Run("attachment GetByHash", func(t *testing.T) {
@@ -192,7 +192,7 @@ func TestCorruptRows_QueryArms(t *testing.T) {
 		assertUnmarshalErr(t, err, "attachment GetByHash")
 	})
 	t.Run("user List", func(t *testing.T) {
-		_, _, err := NewUserStore(faulted).List(ctx, 10, "")
+		_, _, err := NewUserStore(faulted).ListUsers(ctx, 10, "")
 		assertUnmarshalErr(t, err, "user List")
 	})
 	t.Run("emoji List", func(t *testing.T) {
@@ -214,7 +214,7 @@ func TestCorruptRows_QueryArms(t *testing.T) {
 				return out
 			}
 		})
-		_, err := NewUserStore(emailCorrupt).GetByEmail(ctx, "missing@x.io")
+		_, err := NewUserStore(emailCorrupt).GetUserByEmail(ctx, "missing@x.io")
 		assertUnmarshalErr(t, err, "user findByEmailScan")
 	})
 }
@@ -225,11 +225,11 @@ func TestCorruptRows_ScanArms(t *testing.T) {
 	faulted := withFault(db, func(f *faultClient) { f.transformScan = corruptScan })
 
 	t.Run("channel ListAll", func(t *testing.T) {
-		_, err := NewChannelStore(faulted).ListAll(ctx)
+		_, err := NewChannelStore(faulted).ListAllChannels(ctx)
 		assertUnmarshalErr(t, err, "channel ListAll")
 	})
 	t.Run("conversation ListAll", func(t *testing.T) {
-		_, err := NewConversationStore(faulted).ListAll(ctx)
+		_, err := NewConversationStore(faulted).ListAllConversations(ctx)
 		assertUnmarshalErr(t, err, "conversation ListAll")
 	})
 	t.Run("attachment ListAll", func(t *testing.T) {
@@ -279,13 +279,13 @@ func TestCorruptRows_ListAround(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	anchor := &model.Message{ID: "m-around", ParentID: "ch-around", AuthorID: "u-1", Body: "b", CreatedAt: time.Now()}
-	if err := NewMessageStore(db).Create(ctx, anchor); err != nil {
+	if err := NewMessageStore(db).CreateMessage(ctx, anchor); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	// The anchor GetItem stays real; the older/newer window queries return
 	// corrupt rows.
 	faulted := withFault(db, func(f *faultClient) { f.transformQuery = corruptQuery })
-	_, _, _, err := NewMessageStore(faulted).ListAround(ctx, anchor.ParentID, anchor.ID, 3, 3)
+	_, _, _, err := NewMessageStore(faulted).ListMessagesAround(ctx, anchor.ParentID, anchor.ID, 3, 3)
 	assertUnmarshalErr(t, err, "message ListAround")
 }
 
@@ -318,7 +318,7 @@ func TestBatchGetUnprocessedContinuations(t *testing.T) {
 	users := NewUserStore(db)
 
 	u := &model.User{ID: "u-unproc", Email: "unproc@x.io", DisplayName: "U", SystemRole: model.SystemRoleMember, Status: "active", CreatedAt: time.Now()}
-	if err := users.Create(ctx, u); err != nil {
+	if err := users.CreateUser(ctx, u); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -398,7 +398,7 @@ func TestCorruptRows_UpdateItemArms(t *testing.T) {
 
 	t.Run("channel IncrementMessageSeq", func(t *testing.T) {
 		ch := makeChannel("ch-seq-c", "SeqC", "seq-c", model.ChannelTypePublic)
-		if err := NewChannelStore(db).Create(ctx, ch); err != nil {
+		if err := NewChannelStore(db).CreateChannel(ctx, ch); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 		faulted := withFault(db, func(f *faultClient) { f.transformUpdateItem = corruptSeq })
@@ -408,7 +408,7 @@ func TestCorruptRows_UpdateItemArms(t *testing.T) {
 
 	t.Run("conversation IncrementMessageSeq", func(t *testing.T) {
 		conv := &model.Conversation{ID: "conv-seq", Type: model.ConversationTypeDM, ParticipantIDs: []string{"a", "b"}, CreatedAt: time.Now()}
-		if err := NewConversationStore(db).Create(ctx, conv, nil); err != nil {
+		if err := NewConversationStore(db).CreateConversation(ctx, conv, nil); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 		faulted := withFault(db, func(f *faultClient) { f.transformUpdateItem = corruptSeq })
@@ -418,7 +418,7 @@ func TestCorruptRows_UpdateItemArms(t *testing.T) {
 
 	t.Run("message IncrementReplyMetadata", func(t *testing.T) {
 		root := &model.Message{ID: "m-root-corrupt", ParentID: "ch-seq-c", AuthorID: "u-1", Body: "r", CreatedAt: time.Now()}
-		if err := NewMessageStore(db).Create(ctx, root); err != nil {
+		if err := NewMessageStore(db).CreateMessage(ctx, root); err != nil {
 			t.Fatalf("Create root: %v", err)
 		}
 		faulted := withFault(db, func(f *faultClient) {

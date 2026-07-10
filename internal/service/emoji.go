@@ -190,7 +190,7 @@ func (s *EmojiService) Create(ctx context.Context, userID, name, imageKey string
 	}
 	if err := s.emojis.Create(ctx, e); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
-			return nil, errors.New("emoji: name already taken")
+			return nil, fmt.Errorf("emoji: name already taken: %w", ErrAlreadyExists)
 		}
 		return nil, fmt.Errorf("emoji: create: %w", err)
 	}

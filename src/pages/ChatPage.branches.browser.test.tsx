@@ -345,7 +345,7 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     lastHandlers().onMessageNew?.(msg({
       parentID: 'ch-99', parentType: 'channel', parentMessageID: 'root-1', authorID: 'other-user',
     }));
-    expect(mockInvalidateThreadBothScopes).toHaveBeenCalledWith(expect.anything(), 'ch-99', 'root-1');
+    expect(mockInvalidateThreadBothScopes).toHaveBeenCalledWith(expect.anything(), 'ch-99', 'root-1', 'channel');
   });
 
   it('onThreadUpdated patches the /threads row from a valid payload', async () => {

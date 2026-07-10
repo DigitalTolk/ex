@@ -16,7 +16,7 @@ func TestChannelStore_Create_TransactError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewChannelStore(withFault(db, func(f *faultClient) { f.failTransactWriteItems = true }))
-	err := s.Create(ctx, makeChannel("ch-e1", "Eng", "eng", model.ChannelTypePublic))
+	err := s.CreateChannel(ctx, makeChannel("ch-e1", "Eng", "eng", model.ChannelTypePublic))
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Create: want errInjected, got %v", err)
 	}
@@ -26,7 +26,7 @@ func TestChannelStore_GetByID_GetItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewChannelStore(withFault(db, func(f *faultClient) { f.failGetItem = true }))
-	_, err := s.GetByID(ctx, "ch-anything")
+	_, err := s.GetChannel(ctx, "ch-anything")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("GetByID: want errInjected, got %v", err)
 	}
@@ -36,7 +36,7 @@ func TestChannelStore_GetBySlug_QueryError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewChannelStore(withFault(db, func(f *faultClient) { f.failQuery = true }))
-	_, err := s.GetBySlug(ctx, "eng")
+	_, err := s.GetChannelBySlug(ctx, "eng")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("GetBySlug: want errInjected, got %v", err)
 	}
@@ -56,12 +56,12 @@ func TestChannelStore_Update_PutItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	ch := makeChannel("ch-u", "Eng", "eng-u", model.ChannelTypePublic)
-	if err := NewChannelStore(db).Create(ctx, ch); err != nil {
+	if err := NewChannelStore(db).CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	s := NewChannelStore(withFault(db, func(f *faultClient) { f.failPutItem = true }))
 	ch.Name = "Engineering"
-	err := s.Update(ctx, ch)
+	err := s.UpdateChannel(ctx, ch)
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Update: want errInjected, got %v", err)
 	}
@@ -71,7 +71,7 @@ func TestChannelStore_ListPublic_QueryError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewChannelStore(withFault(db, func(f *faultClient) { f.failQuery = true }))
-	_, _, err := s.ListPublic(ctx, 10, "")
+	_, _, err := s.ListPublicChannels(ctx, 10, "")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("ListPublic: want errInjected, got %v", err)
 	}
@@ -81,7 +81,7 @@ func TestChannelStore_ListAll_ScanError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewChannelStore(withFault(db, func(f *faultClient) { f.failScan = true }))
-	_, err := s.ListAll(ctx)
+	_, err := s.ListAllChannels(ctx)
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("ListAll: want errInjected, got %v", err)
 	}

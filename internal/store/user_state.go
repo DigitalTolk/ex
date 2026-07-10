@@ -13,9 +13,9 @@ import (
 )
 
 type UserStateStore interface {
-	Set(ctx context.Context, item *model.UserStateItem) error
-	Delete(ctx context.Context, userID string, kind model.UserStateKind, targetID string) error
-	List(ctx context.Context, userID string) ([]*model.UserStateItem, error)
+	SetUserState(ctx context.Context, item *model.UserStateItem) error
+	DeleteUserState(ctx context.Context, userID string, kind model.UserStateKind, targetID string) error
+	ListUserState(ctx context.Context, userID string) ([]*model.UserStateItem, error)
 }
 
 type UserStateStoreImpl struct {
@@ -34,7 +34,7 @@ type userStateItem struct {
 	model.UserStateItem
 }
 
-func (s *UserStateStoreImpl) Set(ctx context.Context, item *model.UserStateItem) error {
+func (s *UserStateStoreImpl) SetUserState(ctx context.Context, item *model.UserStateItem) error {
 	row := userStateItem{
 		PK:            userPK(item.UserID),
 		SK:            userStateSK(string(item.Kind), item.TargetID),
@@ -50,7 +50,7 @@ func (s *UserStateStoreImpl) Set(ctx context.Context, item *model.UserStateItem)
 	return nil
 }
 
-func (s *UserStateStoreImpl) Delete(ctx context.Context, userID string, kind model.UserStateKind, targetID string) error {
+func (s *UserStateStoreImpl) DeleteUserState(ctx context.Context, userID string, kind model.UserStateKind, targetID string) error {
 	if _, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(s.Table),
 		Key:       compositeKey(userPK(userID), userStateSK(string(kind), targetID)),
@@ -60,7 +60,7 @@ func (s *UserStateStoreImpl) Delete(ctx context.Context, userID string, kind mod
 	return nil
 }
 
-func (s *UserStateStoreImpl) List(ctx context.Context, userID string) ([]*model.UserStateItem, error) {
+func (s *UserStateStoreImpl) ListUserState(ctx context.Context, userID string) ([]*model.UserStateItem, error) {
 	keyCond := expression.KeyAnd(
 		expression.Key("PK").Equal(expression.Value(userPK(userID))),
 		expression.Key("SK").BeginsWith("STATE#"),

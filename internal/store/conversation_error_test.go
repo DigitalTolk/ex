@@ -17,7 +17,7 @@ func TestConversationStore_Create_TransactError(t *testing.T) {
 	ctx := context.Background()
 	conv, members := makeConv("conv-e1", "u-ce-a", "u-ce-b")
 	s := NewConversationStore(withFault(db, func(f *faultClient) { f.failTransactWriteItems = true }))
-	err := s.Create(ctx, conv, members)
+	err := s.CreateConversation(ctx, conv, members)
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Create: want errInjected, got %v", err)
 	}
@@ -37,7 +37,7 @@ func TestConversationStore_Create_ExceedsTransactionLimit(t *testing.T) {
 	}
 	conv.ParticipantIDs = ids
 	s := NewConversationStore(db)
-	err := s.Create(ctx, conv, nil)
+	err := s.CreateConversation(ctx, conv, nil)
 	if err == nil {
 		t.Fatal("Create over limit: want error, got nil")
 	}
@@ -47,7 +47,7 @@ func TestConversationStore_GetByID_GetItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewConversationStore(withFault(db, func(f *faultClient) { f.failGetItem = true }))
-	_, err := s.GetByID(ctx, "conv-anything")
+	_, err := s.GetConversation(ctx, "conv-anything")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("GetByID: want errInjected, got %v", err)
 	}
@@ -77,7 +77,7 @@ func TestConversationStore_Activate_TransactError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewConversationStore(withFault(db, func(f *faultClient) { f.failTransactWriteItems = true }))
-	err := s.Activate(ctx, "conv-1", []string{"u-ce-a", "u-ce-b"})
+	err := s.ActivateConversation(ctx, "conv-1", []string{"u-ce-a", "u-ce-b"})
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Activate: want errInjected, got %v", err)
 	}
@@ -87,11 +87,11 @@ func TestConversationStore_Touch_TransactError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	conv, members := makeConv("conv-t", "u-ct-a", "u-ct-b")
-	if err := NewConversationStore(db).Create(ctx, conv, members); err != nil {
+	if err := NewConversationStore(db).CreateConversation(ctx, conv, members); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	s := NewConversationStore(withFault(db, func(f *faultClient) { f.failTransactWriteItems = true }))
-	err := s.Touch(ctx, "conv-t", []string{"u-ct-a"}, time.Now())
+	err := s.TouchConversation(ctx, "conv-t", []string{"u-ct-a"}, time.Now())
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Touch: want errInjected, got %v", err)
 	}
@@ -101,11 +101,11 @@ func TestConversationStore_SetUserConversationFavorite_UpdateItemError(t *testin
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	conv, members := makeConv("conv-f", "u-cf2-a", "u-cf2-b")
-	if err := NewConversationStore(db).Create(ctx, conv, members); err != nil {
+	if err := NewConversationStore(db).CreateConversation(ctx, conv, members); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	s := NewConversationStore(withFault(db, func(f *faultClient) { f.failUpdateItem = true }))
-	err := s.SetUserConversationFavorite(ctx, "conv-f", "u-cf2-a", true)
+	err := s.SetFavorite(ctx, "conv-f", "u-cf2-a", true)
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("SetUserConversationFavorite: want errInjected, got %v", err)
 	}
@@ -115,7 +115,7 @@ func TestConversationStore_ListAll_ScanError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewConversationStore(withFault(db, func(f *faultClient) { f.failScan = true }))
-	_, err := s.ListAll(ctx)
+	_, err := s.ListAllConversations(ctx)
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("ListAll: want errInjected, got %v", err)
 	}

@@ -13,6 +13,15 @@ import (
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
+// Test-double policy: the doubles in this file are STATEFUL FAKES — in-memory
+// maps that mimic store semantics (create/get/list round-trips, ErrNotFound,
+// conditional-write conflicts). They stay hand-written: their value is the
+// behavior, which codegen can't produce. Purely MECHANICAL stubs (programmable
+// func + call recording, no state) are generated with moq instead — see the
+// //go:generate directive on ConversationActivator and its generated
+// activator_moq_test.go. When adding a new double, pick by that line: state →
+// here, mechanics → moq.
+
 // --- Mock UserStore ---
 
 type mockUserStore struct {

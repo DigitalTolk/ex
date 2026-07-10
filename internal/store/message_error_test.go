@@ -27,7 +27,7 @@ func TestMessageStore_Create_PutItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewMessageStore(withFault(db, func(f *faultClient) { f.failPutItem = true }))
-	err := s.Create(ctx, makeMessage("ch-me", "m-e1", "u-a", "hi"))
+	err := s.CreateMessage(ctx, makeMessage("ch-me", "m-e1", "u-a", "hi"))
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Create: want errInjected, got %v", err)
 	}
@@ -37,7 +37,7 @@ func TestMessageStore_GetByID_GetItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewMessageStore(withFault(db, func(f *faultClient) { f.failGetItem = true }))
-	_, err := s.GetByID(ctx, "ch-me", "m-anything")
+	_, err := s.GetMessage(ctx, "ch-me", "m-anything")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("GetByID: want errInjected, got %v", err)
 	}
@@ -47,7 +47,7 @@ func TestMessageStore_List_QueryError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewMessageStore(withFault(db, func(f *faultClient) { f.failQuery = true }))
-	_, _, err := s.List(ctx, "ch-me", "", 10)
+	_, _, err := s.ListMessages(ctx, "ch-me", "", 10)
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("List: want errInjected, got %v", err)
 	}
@@ -58,24 +58,24 @@ func TestMessageStore_ListThreadReplies(t *testing.T) {
 	ctx := context.Background()
 	s := NewMessageStore(db)
 
-	if err := s.Create(ctx, makeMessage("ch-thr", "01-root", "u-a", "root")); err != nil {
+	if err := s.CreateMessage(ctx, makeMessage("ch-thr", "01-root", "u-a", "root")); err != nil {
 		t.Fatalf("create root: %v", err)
 	}
 	for _, id := range []string{"02-r1", "03-r2"} {
 		r := makeMessage("ch-thr", id, "u-a", "reply")
 		r.ParentMessageID = "01-root"
-		if err := s.Create(ctx, r); err != nil {
+		if err := s.CreateMessage(ctx, r); err != nil {
 			t.Fatalf("create %s: %v", id, err)
 		}
 	}
 	// A top-level message (no GSI key) and a reply to a different root must
 	// not appear in this thread's index.
-	if err := s.Create(ctx, makeMessage("ch-thr", "04-other", "u-a", "other")); err != nil {
+	if err := s.CreateMessage(ctx, makeMessage("ch-thr", "04-other", "u-a", "other")); err != nil {
 		t.Fatalf("create other: %v", err)
 	}
 	otherReply := makeMessage("ch-thr", "05-x", "u-a", "x")
 	otherReply.ParentMessageID = "99-diff"
-	if err := s.Create(ctx, otherReply); err != nil {
+	if err := s.CreateMessage(ctx, otherReply); err != nil {
 		t.Fatalf("create other reply: %v", err)
 	}
 
@@ -90,7 +90,7 @@ func TestMessageStore_ListThreadReplies(t *testing.T) {
 	// Edit/tombstone re-Puts the whole row — the GSI key must survive so the
 	// reply doesn't drop out of the thread.
 	replies[0].Body = "edited"
-	if err := s.Update(ctx, "ch-thr", replies[0]); err != nil {
+	if err := s.UpdateMessage(ctx, replies[0]); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	again, err := s.ListThreadReplies(ctx, "01-root")
@@ -120,7 +120,7 @@ func TestMessageStore_StampThreadIndex(t *testing.T) {
 	// ParentMessageID), so Create didn't stamp a GSI key. The backfill stamps
 	// it after the fact.
 	legacy := makeMessage("ch-st", "01-legacy", "u-a", "old reply")
-	if err := s.Create(ctx, legacy); err != nil {
+	if err := s.CreateMessage(ctx, legacy); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if r, err := s.ListThreadReplies(ctx, "00-root"); err != nil || len(r) != 0 {
@@ -155,7 +155,7 @@ func TestMessageStore_ListAfter_EmptyCursor(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewMessageStore(db)
-	msgs, hasMore, err := s.ListAfter(ctx, "ch-me", "", 10)
+	msgs, hasMore, err := s.ListMessagesAfter(ctx, "ch-me", "", 10)
 	if err != nil {
 		t.Fatalf("ListAfter empty: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestMessageStore_ListAfter_QueryError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewMessageStore(withFault(db, func(f *faultClient) { f.failQuery = true }))
-	_, _, err := s.ListAfter(ctx, "ch-me", "m-cursor", 10)
+	_, _, err := s.ListMessagesAfter(ctx, "ch-me", "m-cursor", 10)
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("ListAfter: want errInjected, got %v", err)
 	}
@@ -178,12 +178,12 @@ func TestMessageStore_Update_PutItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	msg := makeMessage("ch-mu", "m-u", "u-a", "hi")
-	if err := NewMessageStore(db).Create(ctx, msg); err != nil {
+	if err := NewMessageStore(db).CreateMessage(ctx, msg); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	s := NewMessageStore(withFault(db, func(f *faultClient) { f.failPutItem = true }))
 	msg.Body = "edited"
-	err := s.Update(ctx, "ch-mu", msg)
+	err := s.UpdateMessage(ctx, msg)
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Update: want errInjected, got %v", err)
 	}
@@ -193,7 +193,7 @@ func TestMessageStore_Delete_DeleteItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewMessageStore(withFault(db, func(f *faultClient) { f.failDeleteItem = true }))
-	err := s.Delete(ctx, "ch-me", "m-anything")
+	err := s.DeleteMessage(ctx, "ch-me", "m-anything")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Delete: want errInjected, got %v", err)
 	}
@@ -220,7 +220,7 @@ func TestMessageStore_IncrementReplyMetadata_VanishedRoot(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	root := makeMessage("ch-irm3", "m-root3", "u-a", "root")
-	if err := NewMessageStore(db).Create(ctx, root); err != nil {
+	if err := NewMessageStore(db).CreateMessage(ctx, root); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	doc := &deleteOnUpdateClient{
@@ -240,7 +240,7 @@ func TestMessageStore_IncrementReplyMetadata_UpdateItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	root := makeMessage("ch-irm2", "m-root", "u-a", "root")
-	if err := NewMessageStore(db).Create(ctx, root); err != nil {
+	if err := NewMessageStore(db).CreateMessage(ctx, root); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	// GetByID succeeds (real client); only UpdateItem faults → the SDK-error

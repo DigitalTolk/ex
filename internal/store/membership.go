@@ -15,12 +15,12 @@ import (
 // MembershipStore defines operations on channel memberships.
 type MembershipStore interface {
 	AddChannelMember(ctx context.Context, channel *model.Channel, member *model.ChannelMembership, userChan *model.UserChannel) error
-	RemoveChannelMember(ctx context.Context, channelID, userID string) error
-	GetChannelMembership(ctx context.Context, channelID, userID string) (*model.ChannelMembership, error)
-	ListChannelMembers(ctx context.Context, channelID string) ([]*model.ChannelMembership, error)
+	RemoveMember(ctx context.Context, channelID, userID string) error
+	GetMembership(ctx context.Context, channelID, userID string) (*model.ChannelMembership, error)
+	ListMembers(ctx context.Context, channelID string) ([]*model.ChannelMembership, error)
 	ListUserChannels(ctx context.Context, userID string) ([]*model.UserChannel, error)
-	UpdateChannelRole(ctx context.Context, channelID, userID string, role model.ChannelRole) error
-	SetUserChannelMute(ctx context.Context, channelID, userID string, muted bool) error
+	UpdateMemberRole(ctx context.Context, channelID, userID string, role model.ChannelRole) error
+	SetMute(ctx context.Context, channelID, userID string, muted bool) error
 	SetChannelLastRead(ctx context.Context, channelID, userID string, seq int64) error
 }
 
@@ -48,6 +48,13 @@ type userChannelItem struct {
 	PK string `dynamodbav:"PK"`
 	SK string `dynamodbav:"SK"`
 	model.UserChannel
+}
+
+// AddMember is the service-facing entry point: the membership row itself
+// names the channel, so no *model.Channel is needed — only its ID is used
+// for key derivation.
+func (s *MembershipStoreImpl) AddMember(ctx context.Context, member *model.ChannelMembership, userChan *model.UserChannel) error {
+	return s.AddChannelMember(ctx, &model.Channel{ID: member.ChannelID}, member, userChan)
 }
 
 func (s *MembershipStoreImpl) AddChannelMember(ctx context.Context, channel *model.Channel, member *model.ChannelMembership, userChan *model.UserChannel) error {
@@ -95,7 +102,7 @@ func (s *MembershipStoreImpl) AddChannelMember(ctx context.Context, channel *mod
 	return nil
 }
 
-func (s *MembershipStoreImpl) RemoveChannelMember(ctx context.Context, channelID, userID string) error {
+func (s *MembershipStoreImpl) RemoveMember(ctx context.Context, channelID, userID string) error {
 	_, err := s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{
@@ -118,7 +125,7 @@ func (s *MembershipStoreImpl) RemoveChannelMember(ctx context.Context, channelID
 	return nil
 }
 
-func (s *MembershipStoreImpl) GetChannelMembership(ctx context.Context, channelID, userID string) (*model.ChannelMembership, error) {
+func (s *MembershipStoreImpl) GetMembership(ctx context.Context, channelID, userID string) (*model.ChannelMembership, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.Table),
 		Key:       compositeKey(channelPK(channelID), memberSK(userID)),
@@ -137,7 +144,7 @@ func (s *MembershipStoreImpl) GetChannelMembership(ctx context.Context, channelI
 	return &item.ChannelMembership, nil
 }
 
-func (s *MembershipStoreImpl) ListChannelMembers(ctx context.Context, channelID string) ([]*model.ChannelMembership, error) {
+func (s *MembershipStoreImpl) ListMembers(ctx context.Context, channelID string) ([]*model.ChannelMembership, error) {
 	keyCond := expression.KeyAnd(
 		expression.Key("PK").Equal(expression.Value(channelPK(channelID))),
 		expression.Key("SK").BeginsWith("MEMBER#"),
@@ -256,12 +263,12 @@ func (s *MembershipStoreImpl) UserChannelNotifPrefs(ctx context.Context, channel
 	return prefs, nil
 }
 
-// SetUserChannelNotifPrefs writes the per-channel notification overrides on the
+// SetNotifPrefs writes the per-channel notification overrides on the
 // user-side UserChannel row. Each field is SET when the user chose an explicit
 // value and REMOVED when they chose "use my default" (nil) — so reverting to
 // inherit leaves no attribute behind for the resolver to pick up. Like the
 // other per-user toggles this is a single-row write (no channel-side mirror).
-func (s *MembershipStoreImpl) SetUserChannelNotifPrefs(ctx context.Context, channelID, userID string, o model.ChannelNotificationOverride) error {
+func (s *MembershipStoreImpl) SetNotifPrefs(ctx context.Context, channelID, userID string, o model.ChannelNotificationOverride) error {
 	upd := expression.UpdateBuilder{}
 	if o.DesktopLevel != nil {
 		upd = upd.Set(expression.Name("notifDesktopLevel"), expression.Value(*o.DesktopLevel))
@@ -291,7 +298,7 @@ func (s *MembershipStoreImpl) SetUserChannelNotifPrefs(ctx context.Context, chan
 	return s.updateUserChannel(ctx, channelID, userID, upd, "notif prefs")
 }
 
-func (s *MembershipStoreImpl) UpdateChannelRole(ctx context.Context, channelID, userID string, role model.ChannelRole) error {
+func (s *MembershipStoreImpl) UpdateMemberRole(ctx context.Context, channelID, userID string, role model.ChannelRole) error {
 	// Update both the channel-side membership and user-side channel items.
 	memberUpdate := expression.Set(expression.Name("role"), expression.Value(role))
 	memberExpr := mustExpr(expression.NewBuilder().WithUpdate(memberUpdate).Build())
@@ -332,10 +339,10 @@ func (s *MembershipStoreImpl) UpdateChannelRole(ctx context.Context, channelID, 
 	return nil
 }
 
-// SetUserChannelMute toggles the muted flag on the user-side UserChannel
+// SetMute toggles the muted flag on the user-side UserChannel
 // record. Mute is a per-user preference, so unlike role changes we do not
 // need to dual-write the channel-side membership.
-func (s *MembershipStoreImpl) SetUserChannelMute(ctx context.Context, channelID, userID string, muted bool) error {
+func (s *MembershipStoreImpl) SetMute(ctx context.Context, channelID, userID string, muted bool) error {
 	return s.setUserChannelAttribute(ctx, channelID, userID, "muted", muted)
 }
 
@@ -383,15 +390,15 @@ func (s *MembershipStoreImpl) IncrementNotifyCount(ctx context.Context, channelI
 	return row.UnreadNotifyCount, nil
 }
 
-// SetUserChannelFavorite flips the favorite flag on the user-side
+// SetFavorite flips the favorite flag on the user-side
 // UserChannel — used to pin a channel to the "Favorites" sidebar section.
-func (s *MembershipStoreImpl) SetUserChannelFavorite(ctx context.Context, channelID, userID string, favorite bool) error {
+func (s *MembershipStoreImpl) SetFavorite(ctx context.Context, channelID, userID string, favorite bool) error {
 	return s.setUserChannelAttribute(ctx, channelID, userID, "favorite", favorite)
 }
 
-// SetUserChannelCategory assigns the channel to a user-defined sidebar
+// SetCategory assigns the channel to a user-defined sidebar
 // category. Empty string clears the assignment.
-func (s *MembershipStoreImpl) SetUserChannelCategory(ctx context.Context, channelID, userID, categoryID string, sidebarPosition *int) error {
+func (s *MembershipStoreImpl) SetCategory(ctx context.Context, channelID, userID, categoryID string, sidebarPosition *int) error {
 	upd := expression.Set(expression.Name("categoryID"), expression.Value(categoryID))
 	if sidebarPosition != nil {
 		upd = upd.Set(expression.Name("sidebarPosition"), expression.Value(*sidebarPosition))

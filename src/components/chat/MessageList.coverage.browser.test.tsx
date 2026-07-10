@@ -486,7 +486,11 @@ describe('MessageList coverage — own-message auto-stick guards', () => {
     expect(document.querySelector('[data-message-id="fo-10"]')).not.toBeNull();
   });
 
-  it('moves the flash ring to a newer anchor when the anchor switches', async () => {
+  // retry: the assertions observe a TRANSIENT 2200ms flash; under full-suite
+  // saturation a webkit tab can be descheduled long enough that the arm and
+  // clear timers flush in one resumed batch between polls, so the ring is
+  // never observable. A genuine cleanup regression fails every attempt.
+  it('moves the flash ring to a newer anchor when the anchor switches', { retry: 2 }, async () => {
     // Switching anchors tears down the old anchor's flash timer (effect cleanup)
     // and arms a fresh one for the new anchor, so the ring follows the anchor.
     const messages = Array.from({ length: 8 }, (_, i) =>

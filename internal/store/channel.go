@@ -15,14 +15,14 @@ import (
 
 // ChannelStore defines operations on Channel entities.
 type ChannelStore interface {
-	Create(ctx context.Context, ch *model.Channel) error
-	GetByID(ctx context.Context, id string) (*model.Channel, error)
+	CreateChannel(ctx context.Context, ch *model.Channel) error
+	GetChannel(ctx context.Context, id string) (*model.Channel, error)
 	GetByName(ctx context.Context, name string) (*model.Channel, error)
-	GetBySlug(ctx context.Context, slug string) (*model.Channel, error)
-	Update(ctx context.Context, ch *model.Channel) error
+	GetChannelBySlug(ctx context.Context, slug string) (*model.Channel, error)
+	UpdateChannel(ctx context.Context, ch *model.Channel) error
 	IncrementMessageSeq(ctx context.Context, channelID string) (int64, error)
-	ListPublic(ctx context.Context, limit int, lastKey string) ([]*model.Channel, string, error)
-	ListAll(ctx context.Context) ([]*model.Channel, error)
+	ListPublicChannels(ctx context.Context, limit int, lastKey string) ([]*model.Channel, string, error)
+	ListAllChannels(ctx context.Context) ([]*model.Channel, error)
 }
 
 // ChannelStoreImpl implements ChannelStore backed by DynamoDB.
@@ -48,7 +48,7 @@ type channelItem struct {
 	model.Channel
 }
 
-func (s *ChannelStoreImpl) Create(ctx context.Context, ch *model.Channel) error {
+func (s *ChannelStoreImpl) CreateChannel(ctx context.Context, ch *model.Channel) error {
 	item := channelItem{
 		PK:      channelPK(ch.ID),
 		SK:      metaSK(),
@@ -106,7 +106,7 @@ func (s *ChannelStoreImpl) Create(ctx context.Context, ch *model.Channel) error 
 	return nil
 }
 
-func (s *ChannelStoreImpl) GetByID(ctx context.Context, id string) (*model.Channel, error) {
+func (s *ChannelStoreImpl) GetChannel(ctx context.Context, id string) (*model.Channel, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.Table),
 		Key:       compositeKey(channelPK(id), metaSK()),
@@ -125,7 +125,7 @@ func (s *ChannelStoreImpl) GetByID(ctx context.Context, id string) (*model.Chann
 	return &item.Channel, nil
 }
 
-func (s *ChannelStoreImpl) GetBySlug(ctx context.Context, slug string) (*model.Channel, error) {
+func (s *ChannelStoreImpl) GetChannelBySlug(ctx context.Context, slug string) (*model.Channel, error) {
 	keyCond := expression.KeyAnd(
 		expression.Key("GSI1PK").Equal(expression.Value(chanSlugGSI1PK(slug))),
 		expression.Key("GSI1SK").BeginsWith("CHAN#"),
@@ -183,7 +183,7 @@ func (s *ChannelStoreImpl) GetByName(ctx context.Context, name string) (*model.C
 	return &item.Channel, nil
 }
 
-func (s *ChannelStoreImpl) Update(ctx context.Context, ch *model.Channel) error {
+func (s *ChannelStoreImpl) UpdateChannel(ctx context.Context, ch *model.Channel) error {
 	item := channelItem{
 		PK:      channelPK(ch.ID),
 		SK:      metaSK(),
@@ -245,7 +245,7 @@ func (s *ChannelStoreImpl) IncrementMessageSeq(ctx context.Context, channelID st
 	return attrs.MessageSeq, nil
 }
 
-func (s *ChannelStoreImpl) ListPublic(ctx context.Context, limit int, lastKey string) ([]*model.Channel, string, error) {
+func (s *ChannelStoreImpl) ListPublicChannels(ctx context.Context, limit int, lastKey string) ([]*model.Channel, string, error) {
 	keyCond := expression.Key("GSI2PK").Equal(expression.Value(publicChanGSI2PK()))
 	builder := expression.NewBuilder().WithKeyCondition(keyCond)
 
@@ -302,12 +302,12 @@ func (s *ChannelStoreImpl) ListPublic(ctx context.Context, limit int, lastKey st
 	return channels, nextKey, nil
 }
 
-// ListAll walks every channel in the workspace via Scan with a
+// ListAllChannels walks every channel in the workspace via Scan with a
 // PK-prefix filter. Used only by admin maintenance flows (search
 // reindex, etc.) — the per-user / per-public Query paths cover the
 // hot read paths. Pages through Scan's LastEvaluatedKey so private
 // channels are included regardless of cluster size.
-func (s *ChannelStoreImpl) ListAll(ctx context.Context) ([]*model.Channel, error) {
+func (s *ChannelStoreImpl) ListAllChannels(ctx context.Context) ([]*model.Channel, error) {
 	channels := make([]*model.Channel, 0)
 	expr := mustExpr(expression.NewBuilder().WithFilter(
 		expression.Name("PK").BeginsWith("CHAN#").And(

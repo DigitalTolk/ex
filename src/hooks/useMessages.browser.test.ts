@@ -163,6 +163,26 @@ describe('useMessages cache helpers', () => {
     expect(qc.getQueryState(queryKeys.thread('conversations/ch-1', 'm-root'))?.isInvalidated).toBe(true);
   });
 
+  it('invalidateThreadBothScopes narrows to one scope when the event names it', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(queryKeys.thread('channels/ch-1', 'm-root'), [msg('m1', { parentMessageID: 'm-root' })]);
+    qc.setQueryData(queryKeys.thread('conversations/ch-1', 'm-root'), [msg('m1', { parentMessageID: 'm-root' })]);
+    invalidateThreadBothScopes(qc, 'ch-1', 'm-root', 'channel');
+    expect(qc.getQueryState(queryKeys.thread('channels/ch-1', 'm-root'))?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(queryKeys.thread('conversations/ch-1', 'm-root'))?.isInvalidated).toBe(false);
+    invalidateThreadBothScopes(qc, 'ch-1', 'm-root', 'conversation');
+    expect(qc.getQueryState(queryKeys.thread('conversations/ch-1', 'm-root'))?.isInvalidated).toBe(true);
+  });
+
+  it('appendReplyToThreadCache only touches the scope named by the reply parentType', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(queryKeys.thread('channels/ch-1', 'm-root'), [msg('m-root')]);
+    qc.setQueryData(queryKeys.thread('conversations/ch-1', 'm-root'), [msg('m-root')]);
+    appendReplyToThreadCache(qc, 'ch-1', 'm-root', msg('r1', { parentMessageID: 'm-root', parentType: 'channel' }));
+    expect((qc.getQueryData(queryKeys.thread('channels/ch-1', 'm-root')) as Message[]).length).toBe(2);
+    expect((qc.getQueryData(queryKeys.thread('conversations/ch-1', 'm-root')) as Message[]).length).toBe(1);
+  });
+
   it('appendReplyToThreadCache appends a new reply to the cached thread and reports present', () => {
     const qc = new QueryClient();
     qc.setQueryData(queryKeys.thread('channels/ch-1', 'm-root'), [msg('m-root'), msg('r1', { parentMessageID: 'm-root' })]);
@@ -175,7 +195,7 @@ describe('useMessages cache helpers', () => {
   it('appendReplyToThreadCache is idempotent when the reply is already cached', () => {
     const qc = new QueryClient();
     qc.setQueryData(queryKeys.thread('conversations/ch-1', 'm-root'), [msg('m-root'), msg('r1', { parentMessageID: 'm-root' })]);
-    const present = appendReplyToThreadCache(qc, 'ch-1', 'm-root', msg('r1', { parentMessageID: 'm-root' }));
+    const present = appendReplyToThreadCache(qc, 'ch-1', 'm-root', msg('r1', { parentMessageID: 'm-root', parentType: 'conversation' }));
     expect(present).toBe(true);
     const thread = qc.getQueryData(queryKeys.thread('conversations/ch-1', 'm-root')) as Message[];
     expect(thread.map((m) => m.id)).toEqual(['m-root', 'r1']);

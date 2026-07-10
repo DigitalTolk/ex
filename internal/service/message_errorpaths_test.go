@@ -221,27 +221,17 @@ func TestSend_ConversationTouchError(t *testing.T) {
 	}
 }
 
-type mockActivator struct {
-	err    error
-	called bool
-}
-
-func (m *mockActivator) Activate(_ context.Context, _ string) error {
-	m.called = true
-	return m.err
-}
-
 func TestSend_ConversationActivatesAndBumpsSeq(t *testing.T) {
 	svc, _, _, conversations, _ := setupMessageService()
 	conversations.conversations["c1"] = &model.Conversation{ID: "c1", ParticipantIDs: []string{"u1", "u2"}}
-	act := &mockActivator{}
+	act := &ConversationActivatorMock{}
 	seqStore := &mockUnreadSeqStore{}
 	svc.SetActivator(act)
 	svc.SetConversationSeqStore(seqStore)
 	if _, err := svc.Send(context.Background(), "u1", "c1", ParentConversation, "hi", ""); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if !act.called {
+	if len(act.ActivateCalls()) != 1 {
 		t.Error("first top-level message should activate the conversation")
 	}
 	waitForCond(t, func() bool { return seqStore.count("c1") == 1 }, "conversation seq to bump")
@@ -250,7 +240,9 @@ func TestSend_ConversationActivatesAndBumpsSeq(t *testing.T) {
 func TestSend_ConversationActivateError(t *testing.T) {
 	svc, _, _, conversations, _ := setupMessageService()
 	conversations.conversations["c1"] = &model.Conversation{ID: "c1", ParticipantIDs: []string{"u1", "u2"}}
-	svc.SetActivator(&mockActivator{err: errors.New("boom")})
+	svc.SetActivator(&ConversationActivatorMock{
+		ActivateFunc: func(context.Context, string) error { return errors.New("boom") },
+	})
 	// Activate failure is logged, not fatal.
 	if _, err := svc.Send(context.Background(), "u1", "c1", ParentConversation, "hi", ""); err != nil {
 		t.Fatalf("Send should tolerate activate failure, got %v", err)

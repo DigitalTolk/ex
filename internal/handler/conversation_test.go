@@ -191,7 +191,7 @@ func (s *dataUserStoreForConv) NotificationSettingsFor(_ context.Context, userID
 }
 
 type convHandlerEnv struct {
-	handler  *ConversationHandler
+	handler     *ConversationHandler
 	convs       *dataConversationStore
 	users       *dataUserStoreForConv
 	members     *dataMembershipStore

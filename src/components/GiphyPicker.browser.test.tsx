@@ -64,6 +64,8 @@ describe('GiphyPicker browser behavior', () => {
     expect(portal.element()).toHaveAttribute('data-mobile-sheet', 'true');
     expect(Number.parseFloat(getComputedStyle(portal.element()).borderBottomWidth)).toBe(0);
 
+    // The grid arrives via React.lazy — wait for it before measuring overflow.
+    await expect.element(screen.getByTestId('mock-giphy-results')).toBeVisible();
     const scroller = screen.getByTestId('giphy-grid').element();
     expect(scroller).toHaveAttribute('data-swipe-scroll', 'true');
     expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);

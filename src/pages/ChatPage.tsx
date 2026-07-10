@@ -213,7 +213,7 @@ export default function ChatPage() {
         // so the fallback is a near no-op that avoids a refetch-driven flicker
         // on the visible thread.
         if (!appendReplyToThreadCache(queryClient, parentID, parentMessageID, msg)) {
-          invalidateThreadBothScopes(queryClient, parentID, parentMessageID);
+          invalidateThreadBothScopes(queryClient, parentID, parentMessageID, msg.parentType);
         }
         // NOTE: /threads is patched from the root's message.edited event
         // (upsertUserThreadFromRoot in onMessageEdited), NOT invalidated here —
@@ -248,7 +248,7 @@ export default function ChatPage() {
       if (!msg) return;
       const { parentID, parentMessageID, id } = msg;
       markMessageDeletedInCache(queryClient, parentID, id, parentMessageID, msg);
-      invalidateThreadBothScopes(queryClient, parentID, parentMessageID || id);
+      invalidateThreadBothScopes(queryClient, parentID, parentMessageID || id, msg.parentType);
       invalidateUnfurlsForMessage(queryClient, id);
       // /threads page reads body + replyCount via the userThreads list;
       // a deletion can change either, so refresh the list too.

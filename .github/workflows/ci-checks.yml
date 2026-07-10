@@ -41,6 +41,9 @@ jobs:
       - name: Frontend deps
         run: npm ci
 
+      - name: Wire-type drift (tygo)
+        run: make check-types-drift
+
       - name: ESLint
         run: npx eslint src/
 
@@ -81,35 +84,11 @@ jobs:
           github-token: ${{ github.token }}
 
   test-frontend:
+    # ONE frontend job: the jsdom + browser vitest projects run together so
+    # the 100% coverage gate applies to the MERGED report (the per-suite
+    # split no longer exists). Runs in the playwright container because the
+    # browser projects need its browsers; jsdom runs fine there too.
     name: Frontend
-    runs-on: ubuntu-latest
-    needs: lint
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Frontend deps
-        run: npm ci
-
-      - name: Run vitest with coverage
-        run: npx vitest run --coverage
-
-      - name: Upload frontend coverage to Coveralls
-        uses: coverallsapp/github-action@v2
-        with:
-          file: coverage/lcov.info
-          flag-name: frontend
-          parallel: true
-          base-path: .
-          github-token: ${{ github.token }}
-
-  test-browser:
-    name: Browser
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/digitaltolk/docker-builder-playwright:1.59.1
@@ -120,8 +99,20 @@ jobs:
       - name: Frontend deps
         run: npm ci
 
-      - name: Run browser tests
-        run: npm run test:browser:coverage
+      - name: Run vitest (all projects) with merged coverage
+        run: npx vitest run --coverage
+
+      - name: Coverage universe (no file silently ungraded)
+        run: node scripts/check-coverage-universe.mjs
+
+      - name: Upload frontend coverage to Coveralls
+        uses: coverallsapp/github-action@v2
+        with:
+          file: coverage/lcov.info
+          flag-name: frontend
+          parallel: true
+          base-path: .
+          github-token: ${{ github.token }}
 
   coverage-finish:
     # Tells Coveralls that all parallel coverage uploads are done so it can

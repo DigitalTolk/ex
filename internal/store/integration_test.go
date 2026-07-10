@@ -183,12 +183,12 @@ func TestUserStore_CreateAndGet(t *testing.T) {
 
 	user := makeUser("u-1", "Alice@Test.COM", "Alice")
 
-	if err := s.Create(ctx, user); err != nil {
+	if err := s.CreateUser(ctx, user); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
 	// Get by ID.
-	got, err := s.GetByID(ctx, "u-1")
+	got, err := s.GetUser(ctx, "u-1")
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestUserStore_CreateAndGet(t *testing.T) {
 	}
 
 	// Get by Email.
-	got2, err := s.GetByEmail(ctx, "ALICE@test.com")
+	got2, err := s.GetUserByEmail(ctx, "ALICE@test.com")
 	if err != nil {
 		t.Fatalf("GetByEmail: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestUserStore_GetUsersByIDs(t *testing.T) {
 		makeUser("bu-2", "b@test.com", "Bob"),
 		makeUser("bu-3", "c@test.com", "Carol"),
 	} {
-		if err := s.Create(ctx, u); err != nil {
+		if err := s.CreateUser(ctx, u); err != nil {
 			t.Fatalf("Create %s: %v", u.ID, err)
 		}
 	}
@@ -248,7 +248,7 @@ func TestUserStore_GetByID_NotFound(t *testing.T) {
 	s := NewUserStore(db)
 	ctx := context.Background()
 
-	_, err := s.GetByID(ctx, "nonexistent")
+	_, err := s.GetUser(ctx, "nonexistent")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -259,7 +259,7 @@ func TestUserStore_GetByEmail_NotFound(t *testing.T) {
 	s := NewUserStore(db)
 	ctx := context.Background()
 
-	_, err := s.GetByEmail(ctx, "nobody@test.com")
+	_, err := s.GetUserByEmail(ctx, "nobody@test.com")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -271,18 +271,18 @@ func TestUserStore_Update(t *testing.T) {
 	ctx := context.Background()
 
 	user := makeUser("u-upd", "update@test.com", "Before")
-	if err := s.Create(ctx, user); err != nil {
+	if err := s.CreateUser(ctx, user); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
 	user.DisplayName = "After"
 	user.Email = "Update@Test.COM"
 	user.UpdatedAt = time.Now().Truncate(time.Millisecond)
-	if err := s.Update(ctx, user); err != nil {
+	if err := s.UpdateUser(ctx, user); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
-	got, err := s.GetByID(ctx, "u-upd")
+	got, err := s.GetUser(ctx, "u-upd")
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestUserStore_Update_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	user := makeUser("u-ghost", "ghost@test.com", "Ghost")
-	err := s.Update(ctx, user)
+	err := s.UpdateUser(ctx, user)
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -317,12 +317,12 @@ func TestUserStore_List(t *testing.T) {
 			fmt.Sprintf("list%d@test.com", i),
 			fmt.Sprintf("User %d", i),
 		)
-		if err := s.Create(ctx, u); err != nil {
+		if err := s.CreateUser(ctx, u); err != nil {
 			t.Fatalf("Create user %d: %v", i, err)
 		}
 	}
 
-	users, _, err := s.List(ctx, 10, "")
+	users, _, err := s.ListUsers(ctx, 10, "")
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -346,7 +346,7 @@ func TestUserStore_HasUsers(t *testing.T) {
 	}
 
 	// After creating a user, HasUsers should return true.
-	if err := s.Create(ctx, makeUser("u-has", "has@test.com", "Has")); err != nil {
+	if err := s.CreateUser(ctx, makeUser("u-has", "has@test.com", "Has")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -365,12 +365,12 @@ func TestUserStore_DuplicateEmail(t *testing.T) {
 	ctx := context.Background()
 
 	user1 := makeUser("u-dup1", "dup@test.com", "First")
-	if err := s.Create(ctx, user1); err != nil {
+	if err := s.CreateUser(ctx, user1); err != nil {
 		t.Fatalf("Create first: %v", err)
 	}
 
 	user2 := makeUser("u-dup2", "dup@test.com", "Second")
-	err := s.Create(ctx, user2)
+	err := s.CreateUser(ctx, user2)
 	if !errors.Is(err, ErrAlreadyExists) {
 		t.Errorf("expected ErrAlreadyExists, got %v", err)
 	}
@@ -381,13 +381,13 @@ func TestUserStore_DuplicateEmailCaseInsensitive(t *testing.T) {
 	s := NewUserStore(db)
 	ctx := context.Background()
 
-	if err := s.Create(ctx, makeUser("u-dup-case1", "Dup@Test.com", "First")); err != nil {
+	if err := s.CreateUser(ctx, makeUser("u-dup-case1", "Dup@Test.com", "First")); err != nil {
 		t.Fatalf("Create first: %v", err)
 	}
-	if err := s.Create(ctx, makeUser("u-dup-case2", "dup@test.com", "Second")); !errors.Is(err, ErrAlreadyExists) {
+	if err := s.CreateUser(ctx, makeUser("u-dup-case2", "dup@test.com", "Second")); !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("expected ErrAlreadyExists, got %v", err)
 	}
-	got, err := s.GetByEmail(ctx, "DUP@test.com")
+	got, err := s.GetUserByEmail(ctx, "DUP@test.com")
 	if err != nil {
 		t.Fatalf("GetByEmail: %v", err)
 	}
@@ -423,14 +423,14 @@ func TestUserStore_GetByEmail_RepairsMissingEmailIndex(t *testing.T) {
 		t.Fatalf("put legacy user without email index: %v", err)
 	}
 
-	got, err := s.GetByEmail(ctx, "LEGACY@test.com")
+	got, err := s.GetUserByEmail(ctx, "LEGACY@test.com")
 	if err != nil {
 		t.Fatalf("GetByEmail fallback: %v", err)
 	}
 	if got.ID != legacy.ID {
 		t.Fatalf("GetByEmail returned %q, want %q", got.ID, legacy.ID)
 	}
-	if _, err := s.GetByEmail(ctx, "legacy@test.com"); err != nil {
+	if _, err := s.GetUserByEmail(ctx, "legacy@test.com"); err != nil {
 		t.Fatalf("GetByEmail after repair: %v", err)
 	}
 }
@@ -460,7 +460,7 @@ func TestUserStore_CreateRejectsLegacyDuplicateWithoutEmailIndex(t *testing.T) {
 	}
 
 	dupe := makeUser("u-new-dup", "LEGACY-DUP@test.com", "Legacy")
-	if err := s.Create(ctx, dupe); !errors.Is(err, ErrAlreadyExists) {
+	if err := s.CreateUser(ctx, dupe); !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("Create duplicate = %v, want ErrAlreadyExists", err)
 	}
 }
@@ -475,7 +475,7 @@ func TestUserStore_EmailFallbackHelpers(t *testing.T) {
 	}
 
 	user := makeUser("u-email-helper", "helper@test.com", "Helper")
-	if err := s.Create(ctx, user); err != nil {
+	if err := s.CreateUser(ctx, user); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if err := s.ensureEmailIndex(ctx, user.Email, user.ID); !errors.Is(err, ErrAlreadyExists) {
@@ -493,11 +493,11 @@ func TestChannelStore_CreateAndGet(t *testing.T) {
 	ctx := context.Background()
 
 	ch := makeChannel("ch-1", "general", "general", model.ChannelTypePublic)
-	if err := s.Create(ctx, ch); err != nil {
+	if err := s.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	got, err := s.GetByID(ctx, "ch-1")
+	got, err := s.GetChannel(ctx, "ch-1")
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -517,7 +517,7 @@ func TestChannelStore_GetByID_NotFound(t *testing.T) {
 	s := NewChannelStore(db)
 	ctx := context.Background()
 
-	_, err := s.GetByID(ctx, "nonexistent")
+	_, err := s.GetChannel(ctx, "nonexistent")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -529,11 +529,11 @@ func TestChannelStore_GetBySlug(t *testing.T) {
 	ctx := context.Background()
 
 	ch := makeChannel("ch-slug", "Random", "random-slug", model.ChannelTypePublic)
-	if err := s.Create(ctx, ch); err != nil {
+	if err := s.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	got, err := s.GetBySlug(ctx, "random-slug")
+	got, err := s.GetChannelBySlug(ctx, "random-slug")
 	if err != nil {
 		t.Fatalf("GetBySlug: %v", err)
 	}
@@ -547,7 +547,7 @@ func TestChannelStore_GetBySlug_NotFound(t *testing.T) {
 	s := NewChannelStore(db)
 	ctx := context.Background()
 
-	_, err := s.GetBySlug(ctx, "no-such-slug")
+	_, err := s.GetChannelBySlug(ctx, "no-such-slug")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -559,7 +559,7 @@ func TestChannelStore_GetByName(t *testing.T) {
 	ctx := context.Background()
 
 	ch := makeChannel("ch-name", "unique-name-test", "unique-name-test", model.ChannelTypePublic)
-	if err := s.Create(ctx, ch); err != nil {
+	if err := s.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -584,18 +584,18 @@ func TestChannelStore_Update(t *testing.T) {
 	ctx := context.Background()
 
 	ch := makeChannel("ch-upd", "before", "before-slug", model.ChannelTypePublic)
-	if err := s.Create(ctx, ch); err != nil {
+	if err := s.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
 	ch.Name = "after"
 	ch.Description = "updated description"
 	ch.UpdatedAt = time.Now().Truncate(time.Millisecond)
-	if err := s.Update(ctx, ch); err != nil {
+	if err := s.UpdateChannel(ctx, ch); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
-	got, err := s.GetByID(ctx, "ch-upd")
+	got, err := s.GetChannel(ctx, "ch-upd")
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -613,7 +613,7 @@ func TestChannelStore_Update_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	ch := makeChannel("ch-ghost", "ghost", "ghost-slug", model.ChannelTypePublic)
-	err := s.Update(ctx, ch)
+	err := s.UpdateChannel(ctx, ch)
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -630,12 +630,12 @@ func TestChannelStore_ListPublic(t *testing.T) {
 	priv := makeChannel("ch-priv", "priv", "priv-slug", model.ChannelTypePrivate)
 
 	for _, ch := range []*model.Channel{pub1, pub2, priv} {
-		if err := s.Create(ctx, ch); err != nil {
+		if err := s.CreateChannel(ctx, ch); err != nil {
 			t.Fatalf("Create %s: %v", ch.ID, err)
 		}
 	}
 
-	channels, _, err := s.ListPublic(ctx, 10, "")
+	channels, _, err := s.ListPublicChannels(ctx, 10, "")
 	if err != nil {
 		t.Fatalf("ListPublic: %v", err)
 	}
@@ -657,11 +657,11 @@ func TestChannelStore_DuplicateID(t *testing.T) {
 	ctx := context.Background()
 
 	ch := makeChannel("ch-dup", "dup", "dup-slug", model.ChannelTypePublic)
-	if err := s.Create(ctx, ch); err != nil {
+	if err := s.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create first: %v", err)
 	}
 
-	err := s.Create(ctx, ch)
+	err := s.CreateChannel(ctx, ch)
 	if !errors.Is(err, ErrAlreadyExists) {
 		t.Errorf("expected ErrAlreadyExists, got %v", err)
 	}
@@ -682,12 +682,12 @@ func TestChannelStore_DuplicateSlugDifferentID(t *testing.T) {
 	ctx := context.Background()
 
 	chA := makeChannel("ch-a-id", "engineering", "engineering", model.ChannelTypePublic)
-	if err := s.Create(ctx, chA); err != nil {
+	if err := s.CreateChannel(ctx, chA); err != nil {
 		t.Fatalf("Create A: %v", err)
 	}
 
 	chB := makeChannel("ch-b-id", "engineering", "engineering", model.ChannelTypePublic)
-	err := s.Create(ctx, chB)
+	err := s.CreateChannel(ctx, chB)
 	if !errors.Is(err, ErrAlreadyExists) {
 		t.Errorf("expected ErrAlreadyExists for second create on the same slug, got %v", err)
 	}
@@ -704,7 +704,7 @@ func TestMembershipStore_AddAndList(t *testing.T) {
 	ctx := context.Background()
 
 	ch := makeChannel("ch-mem", "membership-test", "mem-slug", model.ChannelTypePublic)
-	if err := cs.Create(ctx, ch); err != nil {
+	if err := cs.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create channel: %v", err)
 	}
 
@@ -729,7 +729,7 @@ func TestMembershipStore_AddAndList(t *testing.T) {
 	}
 
 	// List channel members.
-	members, err := ms.ListChannelMembers(ctx, "ch-mem")
+	members, err := ms.ListMembers(ctx, "ch-mem")
 	if err != nil {
 		t.Fatalf("ListChannelMembers: %v", err)
 	}
@@ -751,6 +751,30 @@ func TestMembershipStore_AddAndList(t *testing.T) {
 	if userChannels[0].ChannelID != "ch-mem" {
 		t.Errorf("ChannelID = %q, want %q", userChannels[0].ChannelID, "ch-mem")
 	}
+
+	// AddMember (the service-facing entry point) derives the channel from
+	// the membership row itself — same dual write, no *model.Channel param.
+	member2 := &model.ChannelMembership{
+		ChannelID:   "ch-mem",
+		UserID:      "u-mem2",
+		Role:        model.ChannelRoleMember,
+		DisplayName: "Mem2",
+		JoinedAt:    time.Now().Truncate(time.Millisecond),
+	}
+	userChan2 := &model.UserChannel{
+		UserID:      "u-mem2",
+		ChannelID:   "ch-mem",
+		ChannelName: "membership-test",
+		ChannelType: model.ChannelTypePublic,
+		Role:        model.ChannelRoleMember,
+		JoinedAt:    time.Now().Truncate(time.Millisecond),
+	}
+	if err := ms.AddMember(ctx, member2, userChan2); err != nil {
+		t.Fatalf("AddMember: %v", err)
+	}
+	if got, err := ms.GetMembership(ctx, "ch-mem", "u-mem2"); err != nil || got.DisplayName != "Mem2" {
+		t.Fatalf("GetMembership after AddMember = %+v (err=%v)", got, err)
+	}
 }
 
 func TestMembershipStore_GetMembership(t *testing.T) {
@@ -760,7 +784,7 @@ func TestMembershipStore_GetMembership(t *testing.T) {
 	ctx := context.Background()
 
 	ch := makeChannel("ch-getmem", "get-mem", "get-mem-slug", model.ChannelTypePublic)
-	if err := cs.Create(ctx, ch); err != nil {
+	if err := cs.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create channel: %v", err)
 	}
 
@@ -784,7 +808,7 @@ func TestMembershipStore_GetMembership(t *testing.T) {
 		t.Fatalf("AddChannelMember: %v", err)
 	}
 
-	got, err := ms.GetChannelMembership(ctx, "ch-getmem", "u-getmem")
+	got, err := ms.GetMembership(ctx, "ch-getmem", "u-getmem")
 	if err != nil {
 		t.Fatalf("GetChannelMembership: %v", err)
 	}
@@ -798,7 +822,7 @@ func TestMembershipStore_GetMembership_NotFound(t *testing.T) {
 	ms := NewMembershipStore(db)
 	ctx := context.Background()
 
-	_, err := ms.GetChannelMembership(ctx, "ch-x", "u-x")
+	_, err := ms.GetMembership(ctx, "ch-x", "u-x")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -811,7 +835,7 @@ func TestMembershipStore_Remove(t *testing.T) {
 	ctx := context.Background()
 
 	ch := makeChannel("ch-rm", "remove", "rm-slug", model.ChannelTypePublic)
-	if err := cs.Create(ctx, ch); err != nil {
+	if err := cs.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create channel: %v", err)
 	}
 
@@ -833,18 +857,18 @@ func TestMembershipStore_Remove(t *testing.T) {
 	}
 
 	// Verify it exists.
-	_, err := ms.GetChannelMembership(ctx, "ch-rm", "u-rm")
+	_, err := ms.GetMembership(ctx, "ch-rm", "u-rm")
 	if err != nil {
 		t.Fatalf("GetChannelMembership before remove: %v", err)
 	}
 
 	// Remove.
-	if err := ms.RemoveChannelMember(ctx, "ch-rm", "u-rm"); err != nil {
+	if err := ms.RemoveMember(ctx, "ch-rm", "u-rm"); err != nil {
 		t.Fatalf("RemoveChannelMember: %v", err)
 	}
 
 	// Verify it's gone.
-	_, err = ms.GetChannelMembership(ctx, "ch-rm", "u-rm")
+	_, err = ms.GetMembership(ctx, "ch-rm", "u-rm")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound after removal, got %v", err)
 	}
@@ -857,7 +881,7 @@ func TestMembershipStore_UpdateRole(t *testing.T) {
 	ctx := context.Background()
 
 	ch := makeChannel("ch-role", "role", "role-slug", model.ChannelTypePublic)
-	if err := cs.Create(ctx, ch); err != nil {
+	if err := cs.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create channel: %v", err)
 	}
 
@@ -879,11 +903,11 @@ func TestMembershipStore_UpdateRole(t *testing.T) {
 	}
 
 	// Update role to admin.
-	if err := ms.UpdateChannelRole(ctx, "ch-role", "u-role", model.ChannelRoleAdmin); err != nil {
+	if err := ms.UpdateMemberRole(ctx, "ch-role", "u-role", model.ChannelRoleAdmin); err != nil {
 		t.Fatalf("UpdateChannelRole: %v", err)
 	}
 
-	got, err := ms.GetChannelMembership(ctx, "ch-role", "u-role")
+	got, err := ms.GetMembership(ctx, "ch-role", "u-role")
 	if err != nil {
 		t.Fatalf("GetChannelMembership: %v", err)
 	}
@@ -903,7 +927,7 @@ func TestMessageStore_CreateAndList(t *testing.T) {
 	ctx := context.Background()
 
 	ch := makeChannel("ch-msg", "messages", "msg-slug", model.ChannelTypePublic)
-	if err := cs.Create(ctx, ch); err != nil {
+	if err := cs.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create channel: %v", err)
 	}
 
@@ -915,12 +939,12 @@ func TestMessageStore_CreateAndList(t *testing.T) {
 			Body:      fmt.Sprintf("Message %d", i),
 			CreatedAt: time.Now().Truncate(time.Millisecond),
 		}
-		if err := ms.Create(ctx, msg); err != nil {
+		if err := ms.CreateMessage(ctx, msg); err != nil {
 			t.Fatalf("Create message %d: %v", i, err)
 		}
 	}
 
-	messages, hasMore, err := ms.List(ctx, "ch-msg", "", 10)
+	messages, hasMore, err := ms.ListMessages(ctx, "ch-msg", "", 10)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -946,13 +970,13 @@ func TestMessageStore_ListWithPagination(t *testing.T) {
 			Body:      fmt.Sprintf("Paginated %d", i),
 			CreatedAt: time.Now().Truncate(time.Millisecond),
 		}
-		if err := ms.Create(ctx, msg); err != nil {
+		if err := ms.CreateMessage(ctx, msg); err != nil {
 			t.Fatalf("Create message %d: %v", i, err)
 		}
 	}
 
 	// Request with limit=3, should have more.
-	messages, hasMore, err := ms.List(ctx, "ch-pag", "", 3)
+	messages, hasMore, err := ms.ListMessages(ctx, "ch-pag", "", 3)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -978,13 +1002,13 @@ func TestMessageStore_ListAround_ReturnsCenteredWindow(t *testing.T) {
 			ID: id, ParentID: "ch-around", AuthorID: "u-1",
 			Body: fmt.Sprintf("m %d", i), CreatedAt: time.Now().Truncate(time.Millisecond),
 		}
-		if err := ms.Create(ctx, msg); err != nil {
+		if err := ms.CreateMessage(ctx, msg); err != nil {
 			t.Fatalf("Create %d: %v", i, err)
 		}
 	}
 
 	// Anchor on msg #5, ask for 2 before + 2 after.
-	got, hasMoreOlder, hasMoreNewer, err := ms.ListAround(ctx, "ch-around", ids[5], 2, 2)
+	got, hasMoreOlder, hasMoreNewer, err := ms.ListMessagesAround(ctx, "ch-around", ids[5], 2, 2)
 	if err != nil {
 		t.Fatalf("ListAround: %v", err)
 	}
@@ -1014,12 +1038,12 @@ func TestMessageStore_ListAfter_ReturnsNewerMessages(t *testing.T) {
 			ID: id, ParentID: "ch-after", AuthorID: "u-1",
 			Body: fmt.Sprintf("a %d", i), CreatedAt: time.Now().Truncate(time.Millisecond),
 		}
-		if err := ms.Create(ctx, msg); err != nil {
+		if err := ms.CreateMessage(ctx, msg); err != nil {
 			t.Fatalf("Create %d: %v", i, err)
 		}
 	}
 	// "After msg-after-01": expect [04, 03, 02] newest-first, hasMore=false.
-	got, hasMore, err := ms.ListAfter(ctx, "ch-after", "msg-after-01", 10)
+	got, hasMore, err := ms.ListMessagesAfter(ctx, "ch-after", "msg-after-01", 10)
 	if err != nil {
 		t.Fatalf("ListAfter: %v", err)
 	}
@@ -1049,11 +1073,11 @@ func TestMessageStore_GetByID(t *testing.T) {
 		Body:      "Get me",
 		CreatedAt: time.Now().Truncate(time.Millisecond),
 	}
-	if err := ms.Create(ctx, msg); err != nil {
+	if err := ms.CreateMessage(ctx, msg); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	got, err := ms.GetByID(ctx, "ch-getmsg", "msg-get")
+	got, err := ms.GetMessage(ctx, "ch-getmsg", "msg-get")
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -1067,7 +1091,7 @@ func TestMessageStore_GetByID_NotFound(t *testing.T) {
 	ms := NewMessageStore(db)
 	ctx := context.Background()
 
-	_, err := ms.GetByID(ctx, "ch-x", "msg-x")
+	_, err := ms.GetMessage(ctx, "ch-x", "msg-x")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -1085,18 +1109,18 @@ func TestMessageStore_Update(t *testing.T) {
 		Body:      "Original",
 		CreatedAt: time.Now().Truncate(time.Millisecond),
 	}
-	if err := ms.Create(ctx, msg); err != nil {
+	if err := ms.CreateMessage(ctx, msg); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
 	editedAt := time.Now().Truncate(time.Millisecond)
 	msg.Body = "Edited"
 	msg.EditedAt = &editedAt
-	if err := ms.Update(ctx, msg.ParentID, msg); err != nil {
+	if err := ms.UpdateMessage(ctx, msg); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
-	got, err := ms.GetByID(ctx, "ch-updmsg", "msg-upd")
+	got, err := ms.GetMessage(ctx, "ch-updmsg", "msg-upd")
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -1125,7 +1149,7 @@ func TestMessageStore_IncrementReplyMetadata(t *testing.T) {
 		AttachmentIDs: []string{"att-1", "att-2"},
 		CreatedAt:     time.Now().Truncate(time.Millisecond),
 	}
-	if err := ms.Create(ctx, root); err != nil {
+	if err := ms.CreateMessage(ctx, root); err != nil {
 		t.Fatalf("Create root: %v", err)
 	}
 
@@ -1147,7 +1171,7 @@ func TestMessageStore_IncrementReplyMetadata(t *testing.T) {
 		}
 	}
 
-	got, err := ms.GetByID(ctx, root.ParentID, root.ID)
+	got, err := ms.GetMessage(ctx, root.ParentID, root.ID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -1176,7 +1200,7 @@ func TestMessageStore_IncrementReplyMetadata_ConcurrentAdd(t *testing.T) {
 		Body:      "concurrent",
 		CreatedAt: time.Now().Truncate(time.Millisecond),
 	}
-	if err := ms.Create(ctx, root); err != nil {
+	if err := ms.CreateMessage(ctx, root); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -1195,7 +1219,7 @@ func TestMessageStore_IncrementReplyMetadata_ConcurrentAdd(t *testing.T) {
 		}
 	}
 
-	got, err := ms.GetByID(ctx, root.ParentID, root.ID)
+	got, err := ms.GetMessage(ctx, root.ParentID, root.ID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -1225,7 +1249,7 @@ func TestMessageStore_Update_NotFound(t *testing.T) {
 		ParentID: "ch-ghost",
 		Body:     "Ghost",
 	}
-	err := ms.Update(ctx, msg.ParentID, msg)
+	err := ms.UpdateMessage(ctx, msg)
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -1243,15 +1267,15 @@ func TestMessageStore_Delete(t *testing.T) {
 		Body:      "Delete me",
 		CreatedAt: time.Now().Truncate(time.Millisecond),
 	}
-	if err := ms.Create(ctx, msg); err != nil {
+	if err := ms.CreateMessage(ctx, msg); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := ms.Delete(ctx, "ch-delmsg", "msg-del"); err != nil {
+	if err := ms.DeleteMessage(ctx, "ch-delmsg", "msg-del"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	_, err := ms.GetByID(ctx, "ch-delmsg", "msg-del")
+	_, err := ms.GetMessage(ctx, "ch-delmsg", "msg-del")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound after delete, got %v", err)
 	}
@@ -1291,11 +1315,11 @@ func TestConversationStore_CreateAndGet(t *testing.T) {
 		},
 	}
 
-	if err := cs.Create(ctx, conv, members); err != nil {
+	if err := cs.CreateConversation(ctx, conv, members); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	got, err := cs.GetByID(ctx, "conv-1")
+	got, err := cs.GetConversation(ctx, "conv-1")
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -1312,7 +1336,7 @@ func TestConversationStore_GetByID_NotFound(t *testing.T) {
 	cs := NewConversationStore(db)
 	ctx := context.Background()
 
-	_, err := cs.GetByID(ctx, "conv-nonexistent")
+	_, err := cs.GetConversation(ctx, "conv-nonexistent")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -1348,7 +1372,7 @@ func TestConversationStore_ListUser(t *testing.T) {
 		},
 	}
 
-	if err := cs.Create(ctx, conv, members); err != nil {
+	if err := cs.CreateConversation(ctx, conv, members); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -1382,7 +1406,7 @@ func TestConversationStore_IsMember(t *testing.T) {
 		{UserID: "u-im2", ConversationID: "conv-ismem", JoinedAt: time.Now()},
 	}
 
-	if err := cs.Create(ctx, conv, members); err != nil {
+	if err := cs.CreateConversation(ctx, conv, members); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -1444,7 +1468,7 @@ func TestInviteStore_CreateGetDelete(t *testing.T) {
 	}
 
 	// Create.
-	if err := is.Create(ctx, invite); err != nil {
+	if err := is.CreateInvite(ctx, invite); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	rawKey, err := db.Client.GetItem(ctx, &dynamodb.GetItemInput{
@@ -1459,7 +1483,7 @@ func TestInviteStore_CreateGetDelete(t *testing.T) {
 	}
 
 	// Get.
-	got, err := is.GetByToken(ctx, "invite-token-1")
+	got, err := is.GetInvite(ctx, "invite-token-1")
 	if err != nil {
 		t.Fatalf("GetByToken: %v", err)
 	}
@@ -1474,12 +1498,12 @@ func TestInviteStore_CreateGetDelete(t *testing.T) {
 	}
 
 	// Delete.
-	if err := is.Delete(ctx, "invite-token-1"); err != nil {
+	if err := is.DeleteInvite(ctx, "invite-token-1"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
 	// Verify gone.
-	_, err = is.GetByToken(ctx, "invite-token-1")
+	_, err = is.GetInvite(ctx, "invite-token-1")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound after delete, got %v", err)
 	}
@@ -1490,7 +1514,7 @@ func TestInviteStore_GetByToken_NotFound(t *testing.T) {
 	is := NewInviteStore(db)
 	ctx := context.Background()
 
-	_, err := is.GetByToken(ctx, "nonexistent-token")
+	_, err := is.GetInvite(ctx, "nonexistent-token")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -1509,11 +1533,11 @@ func TestInviteStore_DuplicateToken(t *testing.T) {
 		CreatedAt: time.Now().Truncate(time.Millisecond),
 	}
 
-	if err := is.Create(ctx, invite); err != nil {
+	if err := is.CreateInvite(ctx, invite); err != nil {
 		t.Fatalf("Create first: %v", err)
 	}
 
-	err := is.Create(ctx, invite)
+	err := is.CreateInvite(ctx, invite)
 	if !errors.Is(err, ErrAlreadyExists) {
 		t.Errorf("expected ErrAlreadyExists, got %v", err)
 	}
@@ -1536,12 +1560,12 @@ func TestTokenStore_CreateGetDelete(t *testing.T) {
 	}
 
 	// Create.
-	if err := ts.Create(ctx, token); err != nil {
+	if err := ts.StoreRefreshToken(ctx, token); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
 	// Get.
-	got, err := ts.GetByHash(ctx, "hash-1")
+	got, err := ts.GetRefreshToken(ctx, "hash-1")
 	if err != nil {
 		t.Fatalf("GetByHash: %v", err)
 	}
@@ -1550,12 +1574,12 @@ func TestTokenStore_CreateGetDelete(t *testing.T) {
 	}
 
 	// Delete.
-	if err := ts.Delete(ctx, "hash-1"); err != nil {
+	if err := ts.DeleteRefreshToken(ctx, "hash-1"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
 	// Verify gone.
-	_, err = ts.GetByHash(ctx, "hash-1")
+	_, err = ts.GetRefreshToken(ctx, "hash-1")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound after delete, got %v", err)
 	}
@@ -1572,15 +1596,15 @@ func TestTokenStore_MarkRotated(t *testing.T) {
 		ExpiresAt: time.Now().Add(720 * time.Hour).Truncate(time.Millisecond),
 		CreatedAt: time.Now().Truncate(time.Millisecond),
 	}
-	if err := ts.Create(ctx, token); err != nil {
+	if err := ts.StoreRefreshToken(ctx, token); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
 	rotatedAt := time.Now().Truncate(time.Millisecond)
-	if err := ts.MarkRotated(ctx, "hash-rot", rotatedAt, "hash-successor"); err != nil {
+	if err := ts.MarkRefreshTokenRotated(ctx, "hash-rot", rotatedAt, "hash-successor"); err != nil {
 		t.Fatalf("MarkRotated: %v", err)
 	}
-	got, err := ts.GetByHash(ctx, "hash-rot")
+	got, err := ts.GetRefreshToken(ctx, "hash-rot")
 	if err != nil {
 		t.Fatalf("GetByHash after MarkRotated: %v", err)
 	}
@@ -1593,7 +1617,7 @@ func TestTokenStore_MarkRotated(t *testing.T) {
 
 	// Stamping a nonexistent token reports ErrNotFound instead of silently
 	// creating a floating row.
-	if err := ts.MarkRotated(ctx, "hash-missing", rotatedAt, "x"); !errors.Is(err, ErrNotFound) {
+	if err := ts.MarkRefreshTokenRotated(ctx, "hash-missing", rotatedAt, "x"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("MarkRotated missing = %v, want ErrNotFound", err)
 	}
 }
@@ -1603,7 +1627,7 @@ func TestTokenStore_GetByHash_NotFound(t *testing.T) {
 	ts := NewTokenStore(db)
 	ctx := context.Background()
 
-	_, err := ts.GetByHash(ctx, "nonexistent-hash")
+	_, err := ts.GetRefreshToken(ctx, "nonexistent-hash")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -1621,11 +1645,11 @@ func TestTokenStore_DuplicateHash(t *testing.T) {
 		CreatedAt: time.Now().Truncate(time.Millisecond),
 	}
 
-	if err := ts.Create(ctx, token); err != nil {
+	if err := ts.StoreRefreshToken(ctx, token); err != nil {
 		t.Fatalf("Create first: %v", err)
 	}
 
-	err := ts.Create(ctx, token)
+	err := ts.StoreRefreshToken(ctx, token)
 	if !errors.Is(err, ErrAlreadyExists) {
 		t.Errorf("expected ErrAlreadyExists, got %v", err)
 	}
@@ -1644,19 +1668,19 @@ func TestTokenStore_DeleteAllForUser(t *testing.T) {
 			ExpiresAt: time.Now().Add(720 * time.Hour).Truncate(time.Millisecond),
 			CreatedAt: time.Now().Truncate(time.Millisecond),
 		}
-		if err := ts.Create(ctx, token); err != nil {
+		if err := ts.StoreRefreshToken(ctx, token); err != nil {
 			t.Fatalf("Create token %d: %v", i, err)
 		}
 	}
 
 	// Delete all for user.
-	if err := ts.DeleteAllForUser(ctx, "u-delall"); err != nil {
+	if err := ts.DeleteAllRefreshTokensForUser(ctx, "u-delall"); err != nil {
 		t.Fatalf("DeleteAllForUser: %v", err)
 	}
 
 	// Verify all gone.
 	for i := 0; i < 3; i++ {
-		_, err := ts.GetByHash(ctx, fmt.Sprintf("dau-hash-%d", i))
+		_, err := ts.GetRefreshToken(ctx, fmt.Sprintf("dau-hash-%d", i))
 		if !errors.Is(err, ErrNotFound) {
 			t.Errorf("token %d: expected ErrNotFound, got %v", i, err)
 		}
@@ -1765,7 +1789,7 @@ func TestMessageStore_ListWithBefore(t *testing.T) {
 			Body:      fmt.Sprintf("Before test %d", i),
 			CreatedAt: time.Now().Truncate(time.Millisecond),
 		}
-		if err := ms.Create(ctx, msg); err != nil {
+		if err := ms.CreateMessage(ctx, msg); err != nil {
 			t.Fatalf("Create message %d: %v", i, err)
 		}
 	}
@@ -1773,7 +1797,7 @@ func TestMessageStore_ListWithBefore(t *testing.T) {
 	// List with "before" cursor must EXCLUDE the cursor message —
 	// otherwise paginated reads duplicate the boundary item across
 	// adjacent pages.
-	messages, _, err := ms.List(ctx, "ch-before", "bmsg-04", 10)
+	messages, _, err := ms.ListMessages(ctx, "ch-before", "bmsg-04", 10)
 	if err != nil {
 		t.Fatalf("List with before: %v", err)
 	}
@@ -1806,12 +1830,12 @@ func TestMessageStore_ListPagination_PagesAreDisjoint(t *testing.T) {
 			Body:      fmt.Sprintf("disjoint %d", i),
 			CreatedAt: time.Now().Truncate(time.Millisecond),
 		}
-		if err := ms.Create(ctx, msg); err != nil {
+		if err := ms.CreateMessage(ctx, msg); err != nil {
 			t.Fatalf("Create %d: %v", i, err)
 		}
 	}
 
-	page1, hasMore, err := ms.List(ctx, "ch-disjoint", "", 3)
+	page1, hasMore, err := ms.ListMessages(ctx, "ch-disjoint", "", 3)
 	if err != nil {
 		t.Fatalf("List page1: %v", err)
 	}
@@ -1823,7 +1847,7 @@ func TestMessageStore_ListPagination_PagesAreDisjoint(t *testing.T) {
 	}
 	cursor := page1[len(page1)-1].ID
 
-	page2, _, err := ms.List(ctx, "ch-disjoint", cursor, 3)
+	page2, _, err := ms.ListMessages(ctx, "ch-disjoint", cursor, 3)
 	if err != nil {
 		t.Fatalf("List page2: %v", err)
 	}
@@ -1852,11 +1876,11 @@ func TestMessageStore_ConversationParent(t *testing.T) {
 		Body:      "DM message",
 		CreatedAt: time.Now().Truncate(time.Millisecond),
 	}
-	if err := ms.Create(ctx, msg); err != nil {
+	if err := ms.CreateMessage(ctx, msg); err != nil {
 		t.Fatalf("Create DM message: %v", err)
 	}
 
-	got, err := ms.GetByID(ctx, "dm_abc123", "msg-dm1")
+	got, err := ms.GetMessage(ctx, "dm_abc123", "msg-dm1")
 	if err != nil {
 		t.Fatalf("GetByID DM: %v", err)
 	}
@@ -1872,11 +1896,11 @@ func TestMessageStore_ConversationParent(t *testing.T) {
 		Body:      "Group message",
 		CreatedAt: time.Now().Truncate(time.Millisecond),
 	}
-	if err := ms.Create(ctx, msg2); err != nil {
+	if err := ms.CreateMessage(ctx, msg2); err != nil {
 		t.Fatalf("Create group message: %v", err)
 	}
 
-	got2, err := ms.GetByID(ctx, "grp_xyz789", "msg-grp1")
+	got2, err := ms.GetMessage(ctx, "grp_xyz789", "msg-grp1")
 	if err != nil {
 		t.Fatalf("GetByID group: %v", err)
 	}

@@ -17,7 +17,7 @@ func seedSidebarChannel(t *testing.T, db *DB, userID, channelID string) {
 	ms := NewMembershipStore(db)
 	ctx := context.Background()
 	ch := makeChannel(channelID, channelID, channelID+"-slug", model.ChannelTypePublic)
-	if err := cs.Create(ctx, ch); err != nil {
+	if err := cs.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create channel: %v", err)
 	}
 	now := time.Now().Truncate(time.Millisecond)
@@ -38,7 +38,7 @@ func seedSidebarConversation(t *testing.T, db *DB, userID, convID string) {
 		{UserID: userID, ConversationID: convID, Type: model.ConversationTypeDM},
 		{UserID: "u-other", ConversationID: convID, Type: model.ConversationTypeDM},
 	}
-	if err := cs.Create(ctx, conv, members); err != nil {
+	if err := cs.CreateConversation(ctx, conv, members); err != nil {
 		t.Fatalf("Create conversation: %v", err)
 	}
 }

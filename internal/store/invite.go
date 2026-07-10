@@ -14,9 +14,9 @@ import (
 
 // InviteStore defines operations on Invite entities.
 type InviteStore interface {
-	Create(ctx context.Context, invite *model.Invite) error
-	GetByToken(ctx context.Context, token string) (*model.Invite, error)
-	Delete(ctx context.Context, token string) error
+	CreateInvite(ctx context.Context, invite *model.Invite) error
+	GetInvite(ctx context.Context, token string) (*model.Invite, error)
+	DeleteInvite(ctx context.Context, token string) error
 }
 
 // InviteStoreImpl implements InviteStore backed by DynamoDB.
@@ -44,7 +44,7 @@ func inviteTokenHash(token string) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
-func (s *InviteStoreImpl) Create(ctx context.Context, invite *model.Invite) error {
+func (s *InviteStoreImpl) CreateInvite(ctx context.Context, invite *model.Invite) error {
 	stored := *invite
 	stored.Token = ""
 	item := inviteItem{
@@ -70,7 +70,7 @@ func (s *InviteStoreImpl) Create(ctx context.Context, invite *model.Invite) erro
 	return nil
 }
 
-func (s *InviteStoreImpl) GetByToken(ctx context.Context, token string) (*model.Invite, error) {
+func (s *InviteStoreImpl) GetInvite(ctx context.Context, token string) (*model.Invite, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.Table),
 		Key:       compositeKey(invitePK(inviteTokenHash(token)), metaSK()),
@@ -89,7 +89,7 @@ func (s *InviteStoreImpl) GetByToken(ctx context.Context, token string) (*model.
 	return &item.Invite, nil
 }
 
-func (s *InviteStoreImpl) Delete(ctx context.Context, token string) error {
+func (s *InviteStoreImpl) DeleteInvite(ctx context.Context, token string) error {
 	_, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(s.Table),
 		Key:       compositeKey(invitePK(inviteTokenHash(token)), metaSK()),

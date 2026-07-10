@@ -95,10 +95,10 @@ type usersChannelsSource struct {
 
 func (s *usersChannelsSource) ListUsers(ctx context.Context) ([]*model.User, error) {
 	return paginate.All(ctx, func(ctx context.Context, cursor string) ([]*model.User, string, error) {
-		return s.users.List(ctx, 200, cursor)
+		return s.users.ListUsers(ctx, 200, cursor)
 	}, 0)
 }
 
 func (s *usersChannelsSource) ListChannels(ctx context.Context) ([]*model.Channel, error) {
-	return s.channels.ListAll(ctx)
+	return s.channels.ListAllChannels(ctx)
 }

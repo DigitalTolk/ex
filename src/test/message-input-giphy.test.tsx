@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { apiFetch } from '@/lib/api';
@@ -91,6 +91,20 @@ vi.mock('@/hooks/useSettings', () => ({
 }));
 
 import { MessageInput } from '@/components/chat/MessageInput';
+
+// GiphyGrid arrives via React.lazy. Pre-load the module so the lazy
+// resolution is a deterministic microtask inside the tests' own awaited
+// act()s — as raw chunk I/O it can land between act scopes under
+// full-suite saturation and trip the console-gate's act() check.
+beforeAll(async () => {
+  await import('@/components/GiphyGrid');
+});
+
+// Drain any trailing microtasks (the mock Grid's fetch .then → setState)
+// inside act before each test ends.
+afterEach(async () => {
+  await act(async () => {});
+});
 
 function renderInput(onSend = vi.fn()) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });

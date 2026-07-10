@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { GiphyFetch, type GifsResult } from '@giphy/js-fetch-api';
-import { Grid } from '@giphy/react-components';
-import type IGif from '@giphy/js-types/dist/gif';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { PopoverPortal } from '@/components/PopoverPortal';
 import { useIsMobile } from '@/hooks/useIsMobile';
+
+// The grid is the only part that touches the Giphy SDK; lazy-loading it
+// keeps the ~1MB @giphy vendor chunk out of the main bundle until a user
+// actually opens the GIF picker.
+const GiphyGrid = lazy(() => import('@/components/GiphyGrid'));
 
 // PickedGIF is the shape we hand back to the composer: just the fields
 // the message body needs. The Grid's onGifClick gives us a full IGif;
@@ -28,30 +30,12 @@ interface GiphyPickerProps {
 const MAX_GRID_WIDTH = 336;
 const MIN_GRID_WIDTH = 180;
 const POPOVER_HEIGHT = 380;
-const GRID_GUTTER = 6;
-const PAGE_SIZE = 12;
 const POPOVER_MARGIN = 8;
 const POPOVER_PADDING_X = 16;
 
 // SEARCH_DEBOUNCE_MS keeps us under the per-key Giphy rate limits and
 // avoids the Grid restarting from scratch on every keystroke.
 const SEARCH_DEBOUNCE_MS = 250;
-
-function pickGIFDimensions(gif: IGif) {
-  const rendition = gif.images.original_mp4 || gif.images.original;
-  return {
-    width: rendition?.width,
-    height: rendition?.height,
-  };
-}
-
-function emptyGiphyResult(offset: number): GifsResult {
-  return {
-    data: [],
-    pagination: { total_count: 0, count: 0, offset },
-    meta: { status: 200, msg: 'OK', response_id: '' },
-  };
-}
 
 function computeGridWidth() {
   /* istanbul ignore next -- SSR guard: this app is browser-only, so window is always defined in tests */
@@ -61,10 +45,8 @@ function computeGridWidth() {
   return Math.max(MIN_GRID_WIDTH, Math.min(MAX_GRID_WIDTH, available));
 }
 
-// GiphyPicker opens a popover with a search box and the Giphy SDK's
-// `<Grid>` component. The Grid handles infinite scroll, masonry layout,
-// image rendering, and direct client-side requests to GIPHY via the
-// SDK fetch client; this app does not proxy GIPHY API or media traffic.
+// GiphyPicker opens a popover with a search box and the lazily-loaded
+// GiphyGrid (the Giphy SDK's `<Grid>` behind React.lazy).
 export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy picker', onOpenChange }: GiphyPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -73,7 +55,6 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
   const triggerRef = useRef<HTMLSpanElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const isMobile = useIsMobile();
-  const gf = useMemo(() => new GiphyFetch(apiKey.trim()), [apiKey]);
 
   useEffect(() => {
     if (open && !isMobile) inputRef.current?.focus();
@@ -102,16 +83,6 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
     return () => window.clearTimeout(t);
   }, [query]);
 
-  const fetchGifs = useCallback(
-    (offset: number) => {
-      if (!apiKey.trim()) return Promise.resolve(emptyGiphyResult(offset));
-      const options = { offset, limit: PAGE_SIZE, rating: 'pg' as const };
-      const term = debouncedQuery.trim();
-      return term ? gf.search(term, options) : gf.trending(options);
-    },
-    [apiKey, debouncedQuery, gf],
-  );
-
   const close = useCallback(() => {
     inputRef.current?.blur();
     setOpen(false);
@@ -120,16 +91,9 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
     setDebouncedQuery('');
   }, [onOpenChange]);
 
-  const handleGifClick = useCallback(
-    (gif: IGif, e: React.SyntheticEvent) => {
-      // Grid renders gifs as anchor tags by default — preventDefault
-      // stops the click from navigating to giphy.com.
-      e.preventDefault();
-      onSelect({
-        id: String(gif.id),
-        title: gif.title || 'GIF',
-        ...pickGIFDimensions(gif),
-      });
+  const handlePick = useCallback(
+    (gif: PickedGIF) => {
+      onSelect(gif);
       close();
     },
     [close, onSelect],
@@ -181,22 +145,19 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
           data-swipe-scroll="true"
         >
           {open && (
-            <Grid
-              key={debouncedQuery /* reset state when search changes */}
-              width={gridWidth}
-              columns={gridColumns}
-              gutter={GRID_GUTTER}
-              fetchGifs={fetchGifs}
-              onGifClick={handleGifClick}
-              noLink
-              hideAttribution
-              noResultsMessage={
-                <p className="py-3 text-center text-xs text-muted-foreground">No GIFs found</p>
-              }
-              loader={() => (
+            <Suspense
+              fallback={
                 <p className="py-3 text-center text-xs text-muted-foreground">Loading…</p>
-              )}
-            />
+              }
+            >
+              <GiphyGrid
+                apiKey={apiKey}
+                query={debouncedQuery}
+                width={gridWidth}
+                columns={gridColumns}
+                onPick={handlePick}
+              />
+            </Suspense>
           )}
         </div>
         <a
