@@ -47,6 +47,11 @@ export default defineConfig({
     ],
   },
   test: {
+    // Cap the worker pool: the browser project's three Playwright instances
+    // run alongside the jsdom pool in the merged run, and an uncapped pool
+    // oversubscribes the machine badly enough to flake timing-sensitive
+    // tests that pass in isolation.
+    maxWorkers: '50%',
     coverage: {
       provider: 'istanbul',
       // json-summary writes coverage/coverage-summary.json with the merged
@@ -99,6 +104,13 @@ export default defineConfig({
           exclude: ['src/**/*.browser.test.{ts,tsx}'],
           setupFiles: ['./src/test/react-act-setup.ts', './src/test/setup.ts'],
           css: true,
+          // Same rationale as the browser project's raised ceiling below:
+          // in the merged run the jsdom workers share the machine with three
+          // Playwright instances, and a userEvent-driven test can exceed the
+          // 5s default under that saturation (seen on CreateChannelDialog).
+          // This only affects how long a slow test may run — assertions and
+          // hangs still fail, just with a later report.
+          testTimeout: 30000,
         },
       },
       {

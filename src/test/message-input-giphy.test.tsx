@@ -162,7 +162,7 @@ describe('MessageInput — Giphy integration', () => {
     renderInput();
 
     fireEvent.click(screen.getByLabelText('GIF'));
-    const tile = await screen.findByTestId('giphy-tile');
+    const tile = await screen.findByTestId('giphy-tile', {}, { timeout: 10000 });
     fireEvent.click(tile);
 
     await waitFor(() => {
@@ -185,7 +185,7 @@ describe('MessageInput — Giphy integration', () => {
     renderInput();
 
     fireEvent.click(screen.getByLabelText('GIF'));
-    const search = await screen.findByLabelText('Search GIFs');
+    const search = await screen.findByLabelText('Search GIFs', {}, { timeout: 10000 });
     const pointerDown = new PointerEvent('pointerdown', { bubbles: true, cancelable: true });
     const mouseDown = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
 
@@ -208,7 +208,7 @@ describe('MessageInput — Giphy integration', () => {
     const editor = screen.getByLabelText('Message input');
     fireEvent.focus(editor);
     fireEvent.click(screen.getByLabelText('GIF'));
-    const search = await screen.findByLabelText('Search GIFs');
+    const search = await screen.findByLabelText('Search GIFs', {}, { timeout: 10000 });
 
     fireEvent.blur(editor);
     fireEvent.pointerDown(search, { pointerType: 'touch' });
