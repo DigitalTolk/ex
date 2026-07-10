@@ -18,21 +18,29 @@ import OIDCCallbackPage from '@/pages/OIDCCallbackPage';
 import ChatPage from '@/pages/ChatPage';
 import { ChannelView } from '@/components/chat/ChannelView';
 import { ConversationView } from '@/components/chat/ConversationView';
-import DirectoriesPage from '@/pages/DirectoriesPage';
-import AdminPage from '@/pages/AdminPage';
-import IncomingWebhooksPage from '@/pages/IncomingWebhooksPage';
-import CustomEmojiPage from '@/pages/CustomEmojiPage';
-import NewConversationPage from '@/pages/NewConversationPage';
-import ThreadsPage from '@/pages/ThreadsPage';
-import DraftsPage from '@/pages/DraftsPage';
-import ActivityPage from '@/pages/ActivityPage';
-import SearchResultsPage from '@/pages/SearchResultsPage';
-import { NotFoundPage } from '@/pages/NotFoundPage';
 import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
 import { removeBootSplash } from '@/lib/boot-splash';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useServerVersion } from '@/hooks/useServerVersion';
-import { useEffect, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
+
+// Cold routes are code-split with React.lazy so their code (and any deps
+// only they use) stays out of the initial bundle. The boot/hot path stays
+// eager on purpose: LoginPage + OIDCCallbackPage carry the sign-in flow and
+// ChatPage/ChannelView/ConversationView are where every session lands —
+// lazy-loading those would just add a fallback flash after auth.
+const DirectoriesPage = lazy(() => import('@/pages/DirectoriesPage'));
+const AdminPage = lazy(() => import('@/pages/AdminPage'));
+const IncomingWebhooksPage = lazy(() => import('@/pages/IncomingWebhooksPage'));
+const CustomEmojiPage = lazy(() => import('@/pages/CustomEmojiPage'));
+const NewConversationPage = lazy(() => import('@/pages/NewConversationPage'));
+const ThreadsPage = lazy(() => import('@/pages/ThreadsPage'));
+const DraftsPage = lazy(() => import('@/pages/DraftsPage'));
+const ActivityPage = lazy(() => import('@/pages/ActivityPage'));
+const SearchResultsPage = lazy(() => import('@/pages/SearchResultsPage'));
+const NotFoundPage = lazy(() =>
+  import('@/pages/NotFoundPage').then((m) => ({ default: m.NotFoundPage })),
+);
 
 // How long the boot spinner runs before admitting the connection is slow and
 // offering the sign-in escape hatch. Auth restore retries with backoff behind
@@ -168,7 +176,24 @@ export default function App() {
                       <div className="flex h-dvh flex-col bg-sidebar pt-safe-top">
                         <div className="min-h-0 flex-1 bg-background">
                           <RoutedErrorBoundary>
-                            <AppRoutes />
+                            {/* Fallback for lazy route chunks. Inside the
+                                error boundary so a failed chunk fetch (stale
+                                deploy) latches a recoverable error screen
+                                instead of a blank page. */}
+                            <Suspense
+                              fallback={
+                                <div
+                                  className="flex h-full items-center justify-center"
+                                  role="status"
+                                  aria-label="Loading page"
+                                  data-testid="route-loading"
+                                >
+                                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden="true" />
+                                </div>
+                              }
+                            >
+                              <AppRoutes />
+                            </Suspense>
                           </RoutedErrorBoundary>
                         </div>
                       </div>

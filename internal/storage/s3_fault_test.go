@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	smithy "github.com/aws/smithy-go"
@@ -20,8 +20,8 @@ var errFault = errors.New("s3 fault")
 // faultClient implements s3API; each method returns errFault unless a
 // custom GetObject output is supplied (for the body-read error case).
 type faultClient struct {
-	getOut *s3.GetObjectOutput
-	getErr error
+	getOut  *s3.GetObjectOutput
+	getErr  error
 	headErr error
 }
 

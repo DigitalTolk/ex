@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { MessageItem } from './MessageItem';
 import type { Message } from '@/types';
+import { usePresenceStore } from '@/stores/presence';
 
 const mockEditMutate = vi.fn();
 const mockDeleteMutate = vi.fn();
@@ -163,11 +164,12 @@ describe('MessageItem', () => {
   });
 
   it('renders the online indicator on the author avatar', () => {
+    // Presence now comes from the per-author store subscription, not a prop.
+    usePresenceStore.getState().setUserOnline(makeMessage().authorID, true);
     renderWithProviders(
       <MessageItem
         message={makeMessage()}
         authorName="Alice Johnson"
-        authorOnline
         authorUserStatus={{ emoji: ':house:', text: 'Working from home' }}
         isOwn={false}
       />,

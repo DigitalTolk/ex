@@ -28,7 +28,7 @@ func TestTokenStore_Create_PutItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewTokenStore(withFault(db, func(f *faultClient) { f.failPutItem = true }))
-	err := s.Create(ctx, makeRefreshToken("hash-e1", "u-te"))
+	err := s.StoreRefreshToken(ctx, makeRefreshToken("hash-e1", "u-te"))
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Create: want errInjected, got %v", err)
 	}
@@ -38,7 +38,7 @@ func TestTokenStore_GetByHash_GetItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewTokenStore(withFault(db, func(f *faultClient) { f.failGetItem = true }))
-	_, err := s.GetByHash(ctx, "hash-e1")
+	_, err := s.GetRefreshToken(ctx, "hash-e1")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("GetByHash: want errInjected, got %v", err)
 	}
@@ -48,7 +48,7 @@ func TestTokenStore_Delete_DeleteItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewTokenStore(withFault(db, func(f *faultClient) { f.failDeleteItem = true }))
-	err := s.Delete(ctx, "hash-e1")
+	err := s.DeleteRefreshToken(ctx, "hash-e1")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("Delete: want errInjected, got %v", err)
 	}
@@ -59,7 +59,7 @@ func TestTokenStore_DeleteAllForUser_ScanError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewTokenStore(withFault(db, func(f *faultClient) { f.failScan = true }))
-	err := s.DeleteAllForUser(ctx, "u-te")
+	err := s.DeleteAllRefreshTokensForUser(ctx, "u-te")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("DeleteAllForUser scan: want errInjected, got %v", err)
 	}
@@ -70,11 +70,11 @@ func TestTokenStore_DeleteAllForUser_ScanError(t *testing.T) {
 func TestTokenStore_DeleteAllForUser_BatchWriteItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
-	if err := NewTokenStore(db).Create(ctx, makeRefreshToken("hash-bw", "u-bw")); err != nil {
+	if err := NewTokenStore(db).StoreRefreshToken(ctx, makeRefreshToken("hash-bw", "u-bw")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	s := NewTokenStore(withFault(db, func(f *faultClient) { f.failBatchWriteItem = true }))
-	err := s.DeleteAllForUser(ctx, "u-bw")
+	err := s.DeleteAllRefreshTokensForUser(ctx, "u-bw")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("DeleteAllForUser batch: want errInjected, got %v", err)
 	}
@@ -85,12 +85,12 @@ func TestTokenStore_DeleteAllForUser_BatchWriteItemError(t *testing.T) {
 func TestTokenStore_DeleteAllForUser_RetriesUnprocessed(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
-	if err := NewTokenStore(db).Create(ctx, makeRefreshToken("hash-rt", "u-rt")); err != nil {
+	if err := NewTokenStore(db).StoreRefreshToken(ctx, makeRefreshToken("hash-rt", "u-rt")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	uc := &unprocessedClient{DynamoAPI: db.Client, table: db.Table, remaining: 1}
 	s := NewTokenStore(&DB{Client: uc, Table: db.Table})
-	if err := s.DeleteAllForUser(ctx, "u-rt"); err != nil {
+	if err := s.DeleteAllRefreshTokensForUser(ctx, "u-rt"); err != nil {
 		t.Fatalf("DeleteAllForUser retry: %v", err)
 	}
 }
@@ -100,12 +100,12 @@ func TestTokenStore_DeleteAllForUser_RetriesUnprocessed(t *testing.T) {
 func TestTokenStore_DeleteAllForUser_ExhaustsRetries(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
-	if err := NewTokenStore(db).Create(ctx, makeRefreshToken("hash-ex", "u-ex")); err != nil {
+	if err := NewTokenStore(db).StoreRefreshToken(ctx, makeRefreshToken("hash-ex", "u-ex")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	uc := &unprocessedClient{DynamoAPI: db.Client, table: db.Table, remaining: 99}
 	s := NewTokenStore(&DB{Client: uc, Table: db.Table})
-	err := s.DeleteAllForUser(ctx, "u-ex")
+	err := s.DeleteAllRefreshTokensForUser(ctx, "u-ex")
 	if err == nil || !strings.Contains(err.Error(), "unprocessed after retries") {
 		t.Fatalf("DeleteAllForUser exhausted: want 'unprocessed after retries', got %v", err)
 	}

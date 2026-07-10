@@ -172,7 +172,7 @@ func arCollectVictims(ctx context.Context, channelStore *store.ChannelStoreImpl,
 func arApplyRelink(ctx context.Context, messageStore *store.MessageStoreImpl, attachmentStore *store.AttachmentStoreImpl, indexStore *store.ParentIndexStoreImpl, v arVictim, attachmentIDs []string) error {
 	updated := *v.msg
 	updated.AttachmentIDs = append(append([]string(nil), v.msg.AttachmentIDs...), attachmentIDs...)
-	if err := messageStore.Update(ctx, v.parentID, &updated); err != nil {
+	if err := messageStore.UpdateMessage(ctx, &updated); err != nil {
 		return fmt.Errorf("update message: %w", err)
 	}
 	for _, aid := range attachmentIDs {

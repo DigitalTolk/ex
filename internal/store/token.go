@@ -15,11 +15,11 @@ import (
 
 // TokenStore defines operations on RefreshToken entities.
 type TokenStore interface {
-	Create(ctx context.Context, token *model.RefreshToken) error
-	GetByHash(ctx context.Context, hash string) (*model.RefreshToken, error)
-	MarkRotated(ctx context.Context, hash string, rotatedAt time.Time, supersededBy string) error
-	Delete(ctx context.Context, hash string) error
-	DeleteAllForUser(ctx context.Context, userID string) error
+	StoreRefreshToken(ctx context.Context, token *model.RefreshToken) error
+	GetRefreshToken(ctx context.Context, hash string) (*model.RefreshToken, error)
+	MarkRefreshTokenRotated(ctx context.Context, hash string, rotatedAt time.Time, supersededBy string) error
+	DeleteRefreshToken(ctx context.Context, hash string) error
+	DeleteAllRefreshTokensForUser(ctx context.Context, userID string) error
 }
 
 // TokenStoreImpl implements TokenStore backed by DynamoDB.
@@ -55,7 +55,7 @@ func userTokenGSI1PK(userID string) string { return "USERTOKEN#" + userID }
 // fallback keeps revocation complete.
 const tokenIndexSeededPK = "TOKENIDXSEEDED"
 
-func (s *TokenStoreImpl) Create(ctx context.Context, token *model.RefreshToken) error {
+func (s *TokenStoreImpl) StoreRefreshToken(ctx context.Context, token *model.RefreshToken) error {
 	item := refreshTokenItem{
 		PK:           rtokenPK(token.TokenHash),
 		SK:           metaSK(),
@@ -81,7 +81,7 @@ func (s *TokenStoreImpl) Create(ctx context.Context, token *model.RefreshToken) 
 	return nil
 }
 
-func (s *TokenStoreImpl) GetByHash(ctx context.Context, hash string) (*model.RefreshToken, error) {
+func (s *TokenStoreImpl) GetRefreshToken(ctx context.Context, hash string) (*model.RefreshToken, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.Table),
 		Key:       compositeKey(rtokenPK(hash), metaSK()),
@@ -100,10 +100,10 @@ func (s *TokenStoreImpl) GetByHash(ctx context.Context, hash string) (*model.Ref
 	return &item.RefreshToken, nil
 }
 
-// MarkRotated stamps a refresh token as used-and-superseded without deleting
+// MarkRefreshTokenRotated stamps a refresh token as used-and-superseded without deleting
 // it. The row keeps its original TTL; whether a later reuse is honored is the
 // service's call (allowed only while the successor is itself unused).
-func (s *TokenStoreImpl) MarkRotated(ctx context.Context, hash string, rotatedAt time.Time, supersededBy string) error {
+func (s *TokenStoreImpl) MarkRefreshTokenRotated(ctx context.Context, hash string, rotatedAt time.Time, supersededBy string) error {
 	upd := expression.
 		Set(expression.Name("rotatedAt"), expression.Value(rotatedAt)).
 		Set(expression.Name("supersededBy"), expression.Value(supersededBy))
@@ -126,7 +126,7 @@ func (s *TokenStoreImpl) MarkRotated(ctx context.Context, hash string, rotatedAt
 	return nil
 }
 
-func (s *TokenStoreImpl) Delete(ctx context.Context, hash string) error {
+func (s *TokenStoreImpl) DeleteRefreshToken(ctx context.Context, hash string) error {
 	_, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(s.Table),
 		Key:       compositeKey(rtokenPK(hash), metaSK()),
@@ -137,7 +137,7 @@ func (s *TokenStoreImpl) Delete(ctx context.Context, hash string) error {
 	return nil
 }
 
-func (s *TokenStoreImpl) DeleteAllForUser(ctx context.Context, userID string) error {
+func (s *TokenStoreImpl) DeleteAllRefreshTokensForUser(ctx context.Context, userID string) error {
 	// Fast path: the user's tokens live in one GSI partition — a Query bounded
 	// by the user's own session count instead of a Scan of the entire table.
 	// The GSI is trustworthy alone only once the legacy backfill has run

@@ -333,5 +333,5 @@ func planSidebarPositions(section []sidebarRow, insertAt int, moved store.Sideba
 	return updates
 }
 
-func boolPtr(b bool) *bool      { return &b }
-func strPtr(s string) *string   { return &s }
+func boolPtr(b bool) *bool    { return &b }
+func strPtr(s string) *string { return &s }

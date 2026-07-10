@@ -446,13 +446,13 @@ func TestChannelStore_ListAll_ReturnsPublicAndPrivate(t *testing.T) {
 
 	pub := &model.Channel{ID: "ch-listall-pub", Name: "pub", Slug: "pub", Type: model.ChannelTypePublic, CreatedAt: time.Now()}
 	priv := &model.Channel{ID: "ch-listall-priv", Name: "priv", Slug: "priv", Type: model.ChannelTypePrivate, CreatedAt: time.Now()}
-	if err := s.Create(ctx, pub); err != nil {
+	if err := s.CreateChannel(ctx, pub); err != nil {
 		t.Fatalf("Create pub: %v", err)
 	}
-	if err := s.Create(ctx, priv); err != nil {
+	if err := s.CreateChannel(ctx, priv); err != nil {
 		t.Fatalf("Create priv: %v", err)
 	}
-	all, err := s.ListAll(ctx)
+	all, err := s.ListAllChannels(ctx)
 	if err != nil {
 		t.Fatalf("ListAll: %v", err)
 	}
@@ -517,10 +517,10 @@ func TestConversationStore_ListAll(t *testing.T) {
 		{UserID: "u-1", ConversationID: conv.ID, JoinedAt: time.Now()},
 		{UserID: "u-2", ConversationID: conv.ID, JoinedAt: time.Now()},
 	}
-	if err := s.Create(ctx, conv, members); err != nil {
+	if err := s.CreateConversation(ctx, conv, members); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	all, err := s.ListAll(ctx)
+	all, err := s.ListAllConversations(ctx)
 	if err != nil {
 		t.Fatalf("ListAll: %v", err)
 	}
@@ -742,15 +742,15 @@ func TestConversationStore_Activate(t *testing.T) {
 			JoinedAt:       time.Now().Truncate(time.Millisecond),
 		},
 	}
-	if err := cs.Create(ctx, conv, members); err != nil {
+	if err := cs.CreateConversation(ctx, conv, members); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := cs.Activate(ctx, "conv-act", []string{"u-act-a", "u-act-b"}); err != nil {
+	if err := cs.ActivateConversation(ctx, "conv-act", []string{"u-act-a", "u-act-b"}); err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
 
-	got, err := cs.GetByID(ctx, "conv-act")
+	got, err := cs.GetConversation(ctx, "conv-act")
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -789,13 +789,13 @@ func TestConversationStore_Touch(t *testing.T) {
 		{UserID: "u-touch-a", ConversationID: "conv-touch", Type: model.ConversationTypeDM, DisplayName: "User B", JoinedAt: initial, UpdatedAt: initial},
 		{UserID: "u-touch-b", ConversationID: "conv-touch", Type: model.ConversationTypeDM, DisplayName: "User A", JoinedAt: initial, UpdatedAt: initial},
 	}
-	if err := cs.Create(ctx, conv, members); err != nil {
+	if err := cs.CreateConversation(ctx, conv, members); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := cs.Touch(ctx, conv.ID, conv.ParticipantIDs, touchedAt); err != nil {
+	if err := cs.TouchConversation(ctx, conv.ID, conv.ParticipantIDs, touchedAt); err != nil {
 		t.Fatalf("Touch: %v", err)
 	}
-	got, err := cs.GetByID(ctx, conv.ID)
+	got, err := cs.GetConversation(ctx, conv.ID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -809,7 +809,7 @@ func TestConversationStore_Touch(t *testing.T) {
 	if len(userConvs) != 1 || !userConvs[0].UpdatedAt.Equal(touchedAt) {
 		t.Fatalf("user conversation UpdatedAt = %+v, want %s", userConvs, touchedAt)
 	}
-	if err := cs.Touch(ctx, "conv-missing", []string{"u-touch-a"}, touchedAt); !errors.Is(err, ErrNotFound) {
+	if err := cs.TouchConversation(ctx, "conv-missing", []string{"u-touch-a"}, touchedAt); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing Touch err = %v, want ErrNotFound", err)
 	}
 }
@@ -819,14 +819,14 @@ func TestConversationStore_Activate_NonexistentTable(t *testing.T) {
 	cs := NewConversationStore(db)
 	ctx := context.Background()
 
-	err := cs.Activate(ctx, "conv-x", []string{"u-a", "u-b"})
+	err := cs.ActivateConversation(ctx, "conv-x", []string{"u-a", "u-b"})
 	if err == nil {
 		t.Error("expected error on missing table")
 	}
 }
 
 // ============================================================================
-// Membership Store: SetUserChannelMute
+// Membership Store: SetMute
 // ============================================================================
 
 func TestMembershipStore_SetUserChannelMute(t *testing.T) {
@@ -836,7 +836,7 @@ func TestMembershipStore_SetUserChannelMute(t *testing.T) {
 	ctx := context.Background()
 
 	ch := makeChannel("ch-mute", "mute", "mute-slug", model.ChannelTypePublic)
-	if err := cs.Create(ctx, ch); err != nil {
+	if err := cs.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create channel: %v", err)
 	}
 
@@ -857,8 +857,8 @@ func TestMembershipStore_SetUserChannelMute(t *testing.T) {
 	}
 
 	// Mute.
-	if err := ms.SetUserChannelMute(ctx, "ch-mute", "u-mute", true); err != nil {
-		t.Fatalf("SetUserChannelMute true: %v", err)
+	if err := ms.SetMute(ctx, "ch-mute", "u-mute", true); err != nil {
+		t.Fatalf("SetMute true: %v", err)
 	}
 	chans, err := ms.ListUserChannels(ctx, "u-mute")
 	if err != nil {
@@ -872,8 +872,8 @@ func TestMembershipStore_SetUserChannelMute(t *testing.T) {
 	}
 
 	// Unmute.
-	if err := ms.SetUserChannelMute(ctx, "ch-mute", "u-mute", false); err != nil {
-		t.Fatalf("SetUserChannelMute false: %v", err)
+	if err := ms.SetMute(ctx, "ch-mute", "u-mute", false); err != nil {
+		t.Fatalf("SetMute false: %v", err)
 	}
 	chans, err = ms.ListUserChannels(ctx, "u-mute")
 	if err != nil {
@@ -892,7 +892,7 @@ func TestChannelStore_IncrementMessageSeq(t *testing.T) {
 	ctx := context.Background()
 	cs := NewChannelStore(db)
 	ch := makeChannel("ch-seq", "seq", "seq-slug", model.ChannelTypePublic)
-	if err := cs.Create(ctx, ch); err != nil {
+	if err := cs.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create channel: %v", err)
 	}
 
@@ -905,7 +905,7 @@ func TestChannelStore_IncrementMessageSeq(t *testing.T) {
 			t.Fatalf("IncrementMessageSeq returned %d, want %d", got, want)
 		}
 	}
-	reloaded, err := cs.GetByID(ctx, "ch-seq")
+	reloaded, err := cs.GetChannel(ctx, "ch-seq")
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -939,7 +939,7 @@ func TestMembershipStore_SetChannelLastRead(t *testing.T) {
 	cs := NewChannelStore(db)
 	ms := NewMembershipStore(db)
 	ch := makeChannel("ch-lr", "lr", "lr-slug", model.ChannelTypePublic)
-	if err := cs.Create(ctx, ch); err != nil {
+	if err := cs.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create channel: %v", err)
 	}
 	member := &model.ChannelMembership{ChannelID: "ch-lr", UserID: "u-lr", Role: model.ChannelRoleMember, JoinedAt: time.Now().Truncate(time.Millisecond)}
@@ -979,7 +979,7 @@ func TestConversationStore_IncrementMessageSeq(t *testing.T) {
 		{UserID: "u-a", ConversationID: "conv-seq", JoinedAt: time.Now()},
 		{UserID: "u-b", ConversationID: "conv-seq", JoinedAt: time.Now()},
 	}
-	if err := cs.Create(ctx, conv, members); err != nil {
+	if err := cs.CreateConversation(ctx, conv, members); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -992,7 +992,7 @@ func TestConversationStore_IncrementMessageSeq(t *testing.T) {
 			t.Fatalf("IncrementMessageSeq returned %d, want %d", got, want)
 		}
 	}
-	reloaded, err := cs.GetByID(ctx, "conv-seq")
+	reloaded, err := cs.GetConversation(ctx, "conv-seq")
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -1047,10 +1047,10 @@ func TestUserStore_NotificationSettingsFor(t *testing.T) {
 	custom := model.DefaultNotificationSettings()
 	custom.DesktopLevel = model.NotificationLevelAll
 	custom.Keywords = []string{"deploy"}
-	if err := us.Create(ctx, &model.User{ID: "u-ns-a", Email: "ns-a@x.com", DisplayName: "A", NotificationSettings: &custom, CreatedAt: time.Now()}); err != nil {
+	if err := us.CreateUser(ctx, &model.User{ID: "u-ns-a", Email: "ns-a@x.com", DisplayName: "A", NotificationSettings: &custom, CreatedAt: time.Now()}); err != nil {
 		t.Fatalf("create u-ns-a: %v", err)
 	}
-	if err := us.Create(ctx, &model.User{ID: "u-ns-b", Email: "ns-b@x.com", DisplayName: "B", CreatedAt: time.Now()}); err != nil {
+	if err := us.CreateUser(ctx, &model.User{ID: "u-ns-b", Email: "ns-b@x.com", DisplayName: "B", CreatedAt: time.Now()}); err != nil {
 		t.Fatalf("create u-ns-b: %v", err)
 	}
 
@@ -1082,7 +1082,7 @@ func TestMembershipStore_UserChannelNotifPrefs(t *testing.T) {
 	ctx := context.Background()
 
 	ch := makeChannel("ch-mm", "mm", "mm-slug", model.ChannelTypePublic)
-	if err := cs.Create(ctx, ch); err != nil {
+	if err := cs.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create channel: %v", err)
 	}
 	for _, uid := range []string{"u-mm-a", "u-mm-b"} {
@@ -1093,8 +1093,8 @@ func TestMembershipStore_UserChannelNotifPrefs(t *testing.T) {
 		}
 	}
 	// Only u-mm-a mutes the channel.
-	if err := ms.SetUserChannelMute(ctx, "ch-mm", "u-mm-a", true); err != nil {
-		t.Fatalf("SetUserChannelMute: %v", err)
+	if err := ms.SetMute(ctx, "ch-mm", "u-mm-a", true); err != nil {
+		t.Fatalf("SetMute: %v", err)
 	}
 	// u-mm-b overrides every field so each SET branch is exercised.
 	allLevel := model.NotificationLevelAll
@@ -1102,7 +1102,7 @@ func TestMembershipStore_UserChannelNotifPrefs(t *testing.T) {
 	threadOff := false
 	ignore := true
 	follow := true
-	if err := ms.SetUserChannelNotifPrefs(ctx, "ch-mm", "u-mm-b", model.ChannelNotificationOverride{
+	if err := ms.SetNotifPrefs(ctx, "ch-mm", "u-mm-b", model.ChannelNotificationOverride{
 		DesktopLevel:        &allLevel,
 		MobileLevel:         &mobileAll,
 		ThreadReplies:       &threadOff,
@@ -1130,7 +1130,7 @@ func TestMembershipStore_UserChannelNotifPrefs(t *testing.T) {
 	}
 
 	// Clearing an override (nil fields) removes the stored attributes.
-	if err := ms.SetUserChannelNotifPrefs(ctx, "ch-mm", "u-mm-b", model.ChannelNotificationOverride{}); err != nil {
+	if err := ms.SetNotifPrefs(ctx, "ch-mm", "u-mm-b", model.ChannelNotificationOverride{}); err != nil {
 		t.Fatalf("SetUserChannelNotifPrefs clear: %v", err)
 	}
 	cleared, err := ms.UserChannelNotifPrefs(ctx, "ch-mm", []string{"u-mm-b"})
@@ -1153,7 +1153,7 @@ func TestMembershipStore_SetUserChannelMute_NotFound(t *testing.T) {
 	ms := NewMembershipStore(db)
 	ctx := context.Background()
 
-	err := ms.SetUserChannelMute(ctx, "ch-ghost", "u-ghost", true)
+	err := ms.SetMute(ctx, "ch-ghost", "u-ghost", true)
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -1164,7 +1164,7 @@ func TestMembershipStore_SetUserChannelMute_NonexistentTable(t *testing.T) {
 	ms := NewMembershipStore(db)
 	ctx := context.Background()
 
-	err := ms.SetUserChannelMute(ctx, "ch-x", "u-x", true)
+	err := ms.SetMute(ctx, "ch-x", "u-x", true)
 	if err == nil {
 		t.Error("expected error on missing table")
 	}
@@ -1184,7 +1184,7 @@ func TestMembershipStore_SetUserChannelFavorite(t *testing.T) {
 	ctx := context.Background()
 
 	ch := makeChannel("ch-fav", "fav", "fav-slug", model.ChannelTypePublic)
-	if err := cs.Create(ctx, ch); err != nil {
+	if err := cs.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create channel: %v", err)
 	}
 	now := time.Now().Truncate(time.Millisecond)
@@ -1194,7 +1194,7 @@ func TestMembershipStore_SetUserChannelFavorite(t *testing.T) {
 		t.Fatalf("AddChannelMember: %v", err)
 	}
 
-	if err := ms.SetUserChannelFavorite(ctx, "ch-fav", "u-fav", true); err != nil {
+	if err := ms.SetFavorite(ctx, "ch-fav", "u-fav", true); err != nil {
 		t.Fatalf("SetUserChannelFavorite true: %v", err)
 	}
 	chans, err := ms.ListUserChannels(ctx, "u-fav")
@@ -1205,7 +1205,7 @@ func TestMembershipStore_SetUserChannelFavorite(t *testing.T) {
 		t.Errorf("expected Favorite=true after pin, got %+v", chans)
 	}
 
-	if err := ms.SetUserChannelFavorite(ctx, "ch-fav", "u-fav", false); err != nil {
+	if err := ms.SetFavorite(ctx, "ch-fav", "u-fav", false); err != nil {
 		t.Fatalf("SetUserChannelFavorite false: %v", err)
 	}
 	chans, _ = ms.ListUserChannels(ctx, "u-fav")
@@ -1223,7 +1223,7 @@ func TestMembershipStore_SetUserChannelCategory(t *testing.T) {
 	ctx := context.Background()
 
 	ch := makeChannel("ch-cat", "cat", "cat-slug", model.ChannelTypePublic)
-	if err := cs.Create(ctx, ch); err != nil {
+	if err := cs.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create channel: %v", err)
 	}
 	now := time.Now().Truncate(time.Millisecond)
@@ -1234,7 +1234,7 @@ func TestMembershipStore_SetUserChannelCategory(t *testing.T) {
 	}
 
 	pos := 1200
-	if err := ms.SetUserChannelCategory(ctx, "ch-cat", "u-cat", "cat-id-1", &pos); err != nil {
+	if err := ms.SetCategory(ctx, "ch-cat", "u-cat", "cat-id-1", &pos); err != nil {
 		t.Fatalf("SetUserChannelCategory: %v", err)
 	}
 	chans, _ := ms.ListUserChannels(ctx, "u-cat")
@@ -1246,7 +1246,7 @@ func TestMembershipStore_SetUserChannelCategory(t *testing.T) {
 	}
 
 	// Clearing back to the empty string is the "remove from category" path.
-	if err := ms.SetUserChannelCategory(ctx, "ch-cat", "u-cat", "", nil); err != nil {
+	if err := ms.SetCategory(ctx, "ch-cat", "u-cat", "", nil); err != nil {
 		t.Fatalf("SetUserChannelCategory clear: %v", err)
 	}
 	chans, _ = ms.ListUserChannels(ctx, "u-cat")
@@ -1262,10 +1262,10 @@ func TestMembershipStore_SetUserChannelFavorite_NotFound(t *testing.T) {
 	ms := NewMembershipStore(db)
 	ctx := context.Background()
 
-	if err := ms.SetUserChannelFavorite(ctx, "ch-ghost", "u-ghost", true); !errors.Is(err, ErrNotFound) {
+	if err := ms.SetFavorite(ctx, "ch-ghost", "u-ghost", true); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
-	if err := ms.SetUserChannelCategory(ctx, "ch-ghost", "u-ghost", "cat", nil); !errors.Is(err, ErrNotFound) {
+	if err := ms.SetCategory(ctx, "ch-ghost", "u-ghost", "cat", nil); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -1277,10 +1277,10 @@ func TestMembershipStore_SetUserChannelFavorite_NonexistentTable(t *testing.T) {
 	ms := NewMembershipStore(db)
 	ctx := context.Background()
 
-	if err := ms.SetUserChannelFavorite(ctx, "ch-x", "u-x", true); err == nil {
+	if err := ms.SetFavorite(ctx, "ch-x", "u-x", true); err == nil {
 		t.Error("expected error on missing table")
 	}
-	if err := ms.SetUserChannelCategory(ctx, "ch-x", "u-x", "c", nil); err == nil {
+	if err := ms.SetCategory(ctx, "ch-x", "u-x", "c", nil); err == nil {
 		t.Error("expected error on missing table")
 	}
 }
@@ -1314,11 +1314,11 @@ func TestConversationStore_SetUserConversationFavorite(t *testing.T) {
 	ctx := context.Background()
 
 	conv, members := makeConv("conv-fav", "u-cf-a", "u-cf-b")
-	if err := cs.Create(ctx, conv, members); err != nil {
+	if err := cs.CreateConversation(ctx, conv, members); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := cs.SetUserConversationFavorite(ctx, "conv-fav", "u-cf-a", true); err != nil {
+	if err := cs.SetFavorite(ctx, "conv-fav", "u-cf-a", true); err != nil {
 		t.Fatalf("SetUserConversationFavorite true: %v", err)
 	}
 	got, err := cs.ListUserConversations(ctx, "u-cf-a")
@@ -1334,7 +1334,7 @@ func TestConversationStore_SetUserConversationFavorite(t *testing.T) {
 		t.Errorf("other participant's Favorite must remain false: %+v", gotB)
 	}
 
-	if err := cs.SetUserConversationFavorite(ctx, "conv-fav", "u-cf-a", false); err != nil {
+	if err := cs.SetFavorite(ctx, "conv-fav", "u-cf-a", false); err != nil {
 		t.Fatalf("SetUserConversationFavorite false: %v", err)
 	}
 	got, _ = cs.ListUserConversations(ctx, "u-cf-a")
@@ -1349,12 +1349,12 @@ func TestConversationStore_SetUserConversationCategory(t *testing.T) {
 	ctx := context.Background()
 
 	conv, members := makeConv("conv-cat", "u-cc-a", "u-cc-b")
-	if err := cs.Create(ctx, conv, members); err != nil {
+	if err := cs.CreateConversation(ctx, conv, members); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
 	pos := 2400
-	if err := cs.SetUserConversationCategory(ctx, "conv-cat", "u-cc-a", "cat-conv-1", &pos); err != nil {
+	if err := cs.SetCategory(ctx, "conv-cat", "u-cc-a", "cat-conv-1", &pos); err != nil {
 		t.Fatalf("SetUserConversationCategory: %v", err)
 	}
 	got, err := cs.ListUserConversations(ctx, "u-cc-a")
@@ -1368,7 +1368,7 @@ func TestConversationStore_SetUserConversationCategory(t *testing.T) {
 		t.Errorf("expected SidebarPosition=%d, got %+v", pos, got)
 	}
 
-	if err := cs.SetUserConversationCategory(ctx, "conv-cat", "u-cc-a", "", nil); err != nil {
+	if err := cs.SetCategory(ctx, "conv-cat", "u-cc-a", "", nil); err != nil {
 		t.Fatalf("SetUserConversationCategory clear: %v", err)
 	}
 	got, _ = cs.ListUserConversations(ctx, "u-cc-a")
@@ -1382,10 +1382,10 @@ func TestConversationStore_SetUserConversationFavorite_NotFound(t *testing.T) {
 	cs := NewConversationStore(db)
 	ctx := context.Background()
 
-	if err := cs.SetUserConversationFavorite(ctx, "conv-ghost", "u-ghost", true); !errors.Is(err, ErrNotFound) {
+	if err := cs.SetFavorite(ctx, "conv-ghost", "u-ghost", true); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
-	if err := cs.SetUserConversationCategory(ctx, "conv-ghost", "u-ghost", "x", nil); !errors.Is(err, ErrNotFound) {
+	if err := cs.SetCategory(ctx, "conv-ghost", "u-ghost", "x", nil); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -1395,10 +1395,10 @@ func TestConversationStore_SetUserConversationFavorite_NonexistentTable(t *testi
 	cs := NewConversationStore(db)
 	ctx := context.Background()
 
-	if err := cs.SetUserConversationFavorite(ctx, "conv-x", "u-x", true); err == nil {
+	if err := cs.SetFavorite(ctx, "conv-x", "u-x", true); err == nil {
 		t.Error("expected error on missing table")
 	}
-	if err := cs.SetUserConversationCategory(ctx, "conv-x", "u-x", "c", nil); err == nil {
+	if err := cs.SetCategory(ctx, "conv-x", "u-x", "c", nil); err == nil {
 		t.Error("expected error on missing table")
 	}
 }
@@ -1412,17 +1412,17 @@ func TestThreadFollowStore_SetGetAndList(t *testing.T) {
 	follow := &model.ThreadFollow{
 		UserID: "u-1", ParentID: "ch-1", ParentType: "channel", ThreadRootID: "root-1", Following: true, UpdatedAt: now,
 	}
-	if err := s.Set(ctx, follow); err != nil {
+	if err := s.SetThreadFollow(ctx, follow); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	unfollow := &model.ThreadFollow{
 		UserID: "u-2", ParentID: "ch-1", ParentType: "channel", ThreadRootID: "root-1", Following: false, UpdatedAt: now.Add(time.Second),
 	}
-	if err := s.Set(ctx, unfollow); err != nil {
+	if err := s.SetThreadFollow(ctx, unfollow); err != nil {
 		t.Fatalf("Set unfollow: %v", err)
 	}
 
-	got, err := s.Get(ctx, "u-1", "ch-1", "root-1")
+	got, err := s.GetThreadFollow(ctx, "u-1", "ch-1", "root-1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -1430,7 +1430,7 @@ func TestThreadFollowStore_SetGetAndList(t *testing.T) {
 		t.Fatalf("unexpected follow: %+v", got)
 	}
 
-	userRows, err := s.ListUser(ctx, "u-1")
+	userRows, err := s.ListUserThreadFollows(ctx, "u-1")
 	if err != nil {
 		t.Fatalf("ListUser: %v", err)
 	}
@@ -1438,7 +1438,7 @@ func TestThreadFollowStore_SetGetAndList(t *testing.T) {
 		t.Fatalf("ListUser = %+v, want one root-1 row", userRows)
 	}
 
-	threadRows, err := s.ListThread(ctx, "ch-1", "root-1")
+	threadRows, err := s.ListThreadFollows(ctx, "ch-1", "root-1")
 	if err != nil {
 		t.Fatalf("ListThread: %v", err)
 	}
@@ -1457,7 +1457,7 @@ func TestThreadFollowStore_SetGetAndList(t *testing.T) {
 func TestThreadFollowStore_GetNotFound(t *testing.T) {
 	db := setupDynamoDB(t)
 	s := NewThreadFollowStore(db)
-	_, err := s.Get(context.Background(), "u-missing", "ch-1", "root-1")
+	_, err := s.GetThreadFollow(context.Background(), "u-missing", "ch-1", "root-1")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get missing error = %v, want ErrNotFound", err)
 	}
@@ -1469,28 +1469,28 @@ func TestUserStateStore_SetListDelete(t *testing.T) {
 	ctx := context.Background()
 	seenAt := time.Now().UTC().Truncate(time.Millisecond)
 
-	if err := s.Set(ctx, &model.UserStateItem{
+	if err := s.SetUserState(ctx, &model.UserStateItem{
 		UserID: "u-1", Kind: model.UserStateThreadNotification, TargetID: "ch-1", UpdatedAt: seenAt,
 	}); err != nil {
 		t.Fatalf("Set channel notification: %v", err)
 	}
-	if err := s.Set(ctx, &model.UserStateItem{
+	if err := s.SetUserState(ctx, &model.UserStateItem{
 		UserID: "u-1", Kind: model.UserStateThreadSeen, TargetID: "root-1", ParentID: "ch-1", ParentType: "channel", ThreadRootID: "root-1", SeenAt: &seenAt, UpdatedAt: seenAt,
 	}); err != nil {
 		t.Fatalf("Set thread seen: %v", err)
 	}
 
-	rows, err := s.List(ctx, "u-1")
+	rows, err := s.ListUserState(ctx, "u-1")
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if len(rows) != 2 {
 		t.Fatalf("List count = %d, want 2", len(rows))
 	}
-	if err := s.Delete(ctx, "u-1", model.UserStateThreadNotification, "ch-1"); err != nil {
+	if err := s.DeleteUserState(ctx, "u-1", model.UserStateThreadNotification, "ch-1"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	rows, err = s.List(ctx, "u-1")
+	rows, err = s.ListUserState(ctx, "u-1")
 	if err != nil {
 		t.Fatalf("List after delete: %v", err)
 	}
@@ -1508,13 +1508,13 @@ func TestUserStateStore_SetListDelete(t *testing.T) {
 func TestUserStateStore_NonexistentTableErrors(t *testing.T) {
 	s := NewUserStateStore(brokenDB(t))
 	ctx := context.Background()
-	if err := s.Set(ctx, &model.UserStateItem{UserID: "u", Kind: model.UserStateHiddenConversation, TargetID: "conv"}); err == nil {
+	if err := s.SetUserState(ctx, &model.UserStateItem{UserID: "u", Kind: model.UserStateHiddenConversation, TargetID: "conv"}); err == nil {
 		t.Fatal("expected Set error")
 	}
-	if err := s.Delete(ctx, "u", model.UserStateHiddenConversation, "conv"); err == nil {
+	if err := s.DeleteUserState(ctx, "u", model.UserStateHiddenConversation, "conv"); err == nil {
 		t.Fatal("expected Delete error")
 	}
-	if _, err := s.List(ctx, "u"); err == nil {
+	if _, err := s.ListUserState(ctx, "u"); err == nil {
 		t.Fatal("expected List error")
 	}
 }
@@ -1524,14 +1524,14 @@ func TestThreadFollowStore_EmptyListsAndNonexistentTable(t *testing.T) {
 	s := NewThreadFollowStore(db)
 	ctx := context.Background()
 
-	userRows, err := s.ListUser(ctx, "u-empty")
+	userRows, err := s.ListUserThreadFollows(ctx, "u-empty")
 	if err != nil {
 		t.Fatalf("ListUser empty: %v", err)
 	}
 	if len(userRows) != 0 {
 		t.Fatalf("ListUser empty len = %d, want 0", len(userRows))
 	}
-	threadRows, err := s.ListThread(ctx, "ch-empty", "root-empty")
+	threadRows, err := s.ListThreadFollows(ctx, "ch-empty", "root-empty")
 	if err != nil {
 		t.Fatalf("ListThread empty: %v", err)
 	}
@@ -1540,18 +1540,18 @@ func TestThreadFollowStore_EmptyListsAndNonexistentTable(t *testing.T) {
 	}
 
 	broken := NewThreadFollowStore(&DB{Client: db.Client, Table: "missing-thread-follow-table"})
-	if err := broken.Set(ctx, &model.ThreadFollow{
+	if err := broken.SetThreadFollow(ctx, &model.ThreadFollow{
 		UserID: "u-1", ParentID: "ch-1", ParentType: "channel", ThreadRootID: "root-1", Following: true, UpdatedAt: time.Now(),
 	}); err == nil {
 		t.Fatal("Set on nonexistent table: expected error")
 	}
-	if _, err := broken.Get(ctx, "u-1", "ch-1", "root-1"); err == nil {
+	if _, err := broken.GetThreadFollow(ctx, "u-1", "ch-1", "root-1"); err == nil {
 		t.Fatal("Get on nonexistent table: expected error")
 	}
-	if _, err := broken.ListUser(ctx, "u-1"); err == nil {
+	if _, err := broken.ListUserThreadFollows(ctx, "u-1"); err == nil {
 		t.Fatal("ListUser on nonexistent table: expected error")
 	}
-	if _, err := broken.ListThread(ctx, "ch-1", "root-1"); err == nil {
+	if _, err := broken.ListThreadFollows(ctx, "ch-1", "root-1"); err == nil {
 		t.Fatal("ListThread on nonexistent table: expected error")
 	}
 }
@@ -1563,7 +1563,7 @@ func TestThreadFollowStore_SetMany(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
 	// Empty input is a no-op (no DDB call) — we should not error.
-	if err := s.SetMany(ctx, nil); err != nil {
+	if err := s.SetThreadFollowMany(ctx, nil); err != nil {
 		t.Fatalf("SetMany(nil): %v", err)
 	}
 
@@ -1572,11 +1572,11 @@ func TestThreadFollowStore_SetMany(t *testing.T) {
 		{UserID: "u-b", ParentID: "ch-1", ParentType: "channel", ThreadRootID: "root-1", Following: true, UpdatedAt: now},
 		{UserID: "u-c", ParentID: "ch-1", ParentType: "channel", ThreadRootID: "root-1", Following: true, UpdatedAt: now},
 	}
-	if err := s.SetMany(ctx, follows); err != nil {
+	if err := s.SetThreadFollowMany(ctx, follows); err != nil {
 		t.Fatalf("SetMany: %v", err)
 	}
 
-	rows, err := s.ListThread(ctx, "ch-1", "root-1")
+	rows, err := s.ListThreadFollows(ctx, "ch-1", "root-1")
 	if err != nil {
 		t.Fatalf("ListThread: %v", err)
 	}
@@ -1614,11 +1614,11 @@ func TestThreadFollowStore_SetMany_ChunksLargerThanBatchLimit(t *testing.T) {
 			UpdatedAt:    now,
 		})
 	}
-	if err := s.SetMany(ctx, follows); err != nil {
+	if err := s.SetThreadFollowMany(ctx, follows); err != nil {
 		t.Fatalf("SetMany: %v", err)
 	}
 
-	rows, err := s.ListThread(ctx, "ch-large", "root-large")
+	rows, err := s.ListThreadFollows(ctx, "ch-large", "root-large")
 	if err != nil {
 		t.Fatalf("ListThread: %v", err)
 	}

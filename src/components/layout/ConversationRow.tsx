@@ -15,6 +15,7 @@ import {
   useSetConversationCategory,
 } from '@/hooks/useSidebar';
 import { useRowLongPressMenu } from '@/hooks/useRowLongPressMenu';
+import { useIsOnline } from '@/stores/presence';
 import type { UserConversation, UserStatus } from '@/types';
 import { type CSSProperties } from 'react';
 
@@ -27,7 +28,11 @@ interface Props {
   notifyCount?: number;
   dmAvatarURL?: string;
   dmUserStatus?: UserStatus;
-  dmOnline?: boolean;
+  // The DM partner's user ID — the row subscribes to THAT user's presence
+  // itself (per-row zustand selector), so a presence flip re-renders only
+  // the affected row, not the whole sidebar. Unset for group rows: groups
+  // render no availability dot.
+  dmUserID?: string;
   onClose: () => void;
   onHide: (convID: string) => void;
   draggable?: boolean;
@@ -48,7 +53,7 @@ export function ConversationRow({
   notifyCount = 0,
   dmAvatarURL,
   dmUserStatus,
-  dmOnline,
+  dmUserID,
   onClose,
   onHide,
   draggable,
@@ -57,6 +62,10 @@ export function ConversationRow({
   suppressNavigation,
   onSuppressNavigationConsumed,
 }: Props) {
+  const partnerOnline = useIsOnline(dmUserID);
+  // Groups (no dmUserID) must keep `undefined` — a boolean would render an
+  // availability notch on the group avatar.
+  const dmOnline = dmUserID ? partnerOnline : undefined;
   const favorite = useFavoriteConversation();
   const setCategory = useSetConversationCategory();
   // Mobile long-press opens the (otherwise hidden) row menu; shared with

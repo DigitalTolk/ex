@@ -1484,10 +1484,6 @@ func (s *dataThreadFollowStore) SetThreadFollowMany(ctx context.Context, follows
 	return nil
 }
 
-func (s *dataThreadFollowStore) SetMany(ctx context.Context, follows []*model.ThreadFollow) error {
-	return s.SetThreadFollowMany(ctx, follows)
-}
-
 func (s *dataThreadFollowStore) GetThreadFollow(_ context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error) {
 	f, ok := s.rows[dataThreadFollowKey(userID, parentID, threadRootID)]
 	if !ok {
@@ -1517,22 +1513,6 @@ func (s *dataThreadFollowStore) ListThreadFollows(_ context.Context, parentID, t
 		}
 	}
 	return out, nil
-}
-
-func (s *dataThreadFollowStore) Set(ctx context.Context, follow *model.ThreadFollow) error {
-	return s.SetThreadFollow(ctx, follow)
-}
-
-func (s *dataThreadFollowStore) Get(ctx context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error) {
-	return s.GetThreadFollow(ctx, userID, parentID, threadRootID)
-}
-
-func (s *dataThreadFollowStore) ListUser(ctx context.Context, userID string) ([]*model.ThreadFollow, error) {
-	return s.ListUserThreadFollows(ctx, userID)
-}
-
-func (s *dataThreadFollowStore) ListThread(ctx context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error) {
-	return s.ListThreadFollows(ctx, parentID, threadRootID)
 }
 
 func TestThreadHandler_FollowAndUnfollow(t *testing.T) {
@@ -1666,59 +1646,6 @@ func TestNormalizeThreadParentType(t *testing.T) {
 		if ok != tt.ok || got != tt.want {
 			t.Fatalf("normalizeThreadParentType(%q) = %q, %v; want %q, %v", tt.raw, got, ok, tt.want, tt.ok)
 		}
-	}
-}
-
-func TestThreadFollowStoreAdapter_Delegates(t *testing.T) {
-	backing := newDataThreadFollowStore()
-	if NewThreadFollowStoreAdapter(nil) == nil {
-		t.Fatal("NewThreadFollowStoreAdapter returned nil")
-	}
-	adapter := &ThreadFollowStoreAdapter{s: backing}
-	ctx := context.Background()
-	follow := &model.ThreadFollow{
-		UserID: "u-1", ParentID: "ch-1", ParentType: service.ParentChannel, ThreadRootID: "root-1", Following: true, UpdatedAt: time.Now(),
-	}
-	if err := adapter.SetThreadFollow(ctx, follow); err != nil {
-		t.Fatalf("SetThreadFollow: %v", err)
-	}
-	got, err := adapter.GetThreadFollow(ctx, "u-1", "ch-1", "root-1")
-	if err != nil {
-		t.Fatalf("GetThreadFollow: %v", err)
-	}
-	if !got.Following {
-		t.Fatalf("Following = false, want true")
-	}
-	userRows, err := adapter.ListUserThreadFollows(ctx, "u-1")
-	if err != nil {
-		t.Fatalf("ListUserThreadFollows: %v", err)
-	}
-	if len(userRows) != 1 {
-		t.Fatalf("ListUserThreadFollows len = %d, want 1", len(userRows))
-	}
-	threadRows, err := adapter.ListThreadFollows(ctx, "ch-1", "root-1")
-	if err != nil {
-		t.Fatalf("ListThreadFollows: %v", err)
-	}
-	if len(threadRows) != 1 {
-		t.Fatalf("ListThreadFollows len = %d, want 1", len(threadRows))
-	}
-
-	// SetThreadFollowMany delegates to the backing's SetMany — the
-	// rows must show up on the next ListThreadFollows.
-	batch := []*model.ThreadFollow{
-		{UserID: "u-batch-a", ParentID: "ch-1", ParentType: service.ParentChannel, ThreadRootID: "root-1", Following: true, UpdatedAt: time.Now()},
-		{UserID: "u-batch-b", ParentID: "ch-1", ParentType: service.ParentChannel, ThreadRootID: "root-1", Following: true, UpdatedAt: time.Now()},
-	}
-	if err := adapter.SetThreadFollowMany(ctx, batch); err != nil {
-		t.Fatalf("SetThreadFollowMany: %v", err)
-	}
-	rows, err := adapter.ListThreadFollows(ctx, "ch-1", "root-1")
-	if err != nil {
-		t.Fatalf("ListThreadFollows after batch: %v", err)
-	}
-	if len(rows) != 3 {
-		t.Errorf("after batch: got %d rows, want 3 (1 original + 2 batched)", len(rows))
 	}
 }
 

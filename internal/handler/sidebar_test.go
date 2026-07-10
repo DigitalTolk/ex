@@ -711,7 +711,6 @@ func TestSidebarHandler_SetConversationCategory_NoServiceWired(t *testing.T) {
 	}
 }
 
-
 func (s *stubSidebarCategoryStore) SetPositions(_ context.Context, userID string, positions map[string]int) error {
 	for id, pos := range positions {
 		if row, ok := s.rows[userID+"#"+id]; ok {

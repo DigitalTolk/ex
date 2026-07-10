@@ -1,8 +1,8 @@
 package service
 
 import (
-	"sync"
 	"context"
+	"sync"
 	"testing"
 	"time"
 

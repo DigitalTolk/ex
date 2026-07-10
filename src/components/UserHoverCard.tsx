@@ -12,7 +12,7 @@ import { PopoverPortal } from '@/components/PopoverPortal';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { PresenceDot } from '@/components/PresenceDot';
 import { presenceNotchStyle } from '@/lib/presence';
-import { usePresence } from '@/context/PresenceContext';
+import { useIsOnline } from '@/stores/presence';
 import { formatStatusUntil } from '@/lib/user-status';
 import { formatLastSeen, formatTimeZoneDelta, formatTimeZoneName, isValidTimeZone } from '@/lib/user-time';
 import type { Conversation, User, UserStatus } from '@/types';
@@ -50,10 +50,11 @@ export function UserHoverCard({
   const triggerRef = useRef<HTMLSpanElement>(null);
   const navigate = useNavigate();
   // Mention hovers know only userId; author hovers pass `online` and
-  // `avatarURL` from their userMap. Fall back to global presence and
-  // the lazy /users fetch so both paths render identical chrome.
-  const presence = usePresence();
-  const effectiveOnline = online ?? presence.isOnline(userId);
+  // `avatarURL` from their userMap. Fall back to the per-user presence
+  // selector (re-renders only when THIS user's flag flips) and the lazy
+  // /users fetch so both paths render identical chrome.
+  const storeOnline = useIsOnline(userId);
+  const effectiveOnline = online ?? storeOnline;
 
   const startDM = useMutation({
     mutationFn: () =>

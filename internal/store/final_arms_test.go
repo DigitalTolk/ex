@@ -24,11 +24,11 @@ func TestQueryPaginationContinuations(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("channel ListAll", func(t *testing.T) {
-		if err := NewChannelStore(db).Create(ctx, makeChannel("ch-pg", "Pg", "pg", model.ChannelTypePublic)); err != nil {
+		if err := NewChannelStore(db).CreateChannel(ctx, makeChannel("ch-pg", "Pg", "pg", model.ChannelTypePublic)); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 		faulted := withFault(db, func(f *faultClient) { f.pageScanOnce = true })
-		got, err := NewChannelStore(faulted).ListAll(ctx)
+		got, err := NewChannelStore(faulted).ListAllChannels(ctx)
 		if err != nil || len(got) == 0 {
 			t.Fatalf("ListAll: %v (%d)", err, len(got))
 		}
@@ -36,11 +36,11 @@ func TestQueryPaginationContinuations(t *testing.T) {
 
 	t.Run("conversation ListAll", func(t *testing.T) {
 		conv := &model.Conversation{ID: "conv-pg", Type: model.ConversationTypeDM, ParticipantIDs: []string{"a", "b"}, CreatedAt: time.Now()}
-		if err := NewConversationStore(db).Create(ctx, conv, nil); err != nil {
+		if err := NewConversationStore(db).CreateConversation(ctx, conv, nil); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 		faulted := withFault(db, func(f *faultClient) { f.pageScanOnce = true })
-		got, err := NewConversationStore(faulted).ListAll(ctx)
+		got, err := NewConversationStore(faulted).ListAllConversations(ctx)
 		if err != nil || len(got) == 0 {
 			t.Fatalf("ListAll: %v (%d)", err, len(got))
 		}
@@ -48,7 +48,7 @@ func TestQueryPaginationContinuations(t *testing.T) {
 
 	t.Run("message ListThreadReplies", func(t *testing.T) {
 		reply := &model.Message{ID: "m-pg-r", ParentID: "ch-pg", AuthorID: "u-1", Body: "r", ParentMessageID: "m-pg-root", CreatedAt: time.Now()}
-		if err := NewMessageStore(db).Create(ctx, reply); err != nil {
+		if err := NewMessageStore(db).CreateMessage(ctx, reply); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 		faulted := withFault(db, func(f *faultClient) { f.pageQueryOnce = true })
@@ -78,7 +78,7 @@ func TestQueryPaginationContinuations(t *testing.T) {
 
 	t.Run("membership notif prefs unprocessed continuation", func(t *testing.T) {
 		ch := makeChannel("ch-pg2", "Pg2", "pg2", model.ChannelTypePublic)
-		if err := NewChannelStore(db).Create(ctx, ch); err != nil {
+		if err := NewChannelStore(db).CreateChannel(ctx, ch); err != nil {
 			t.Fatalf("Create channel: %v", err)
 		}
 		ms := NewMembershipStore(db)
@@ -133,7 +133,7 @@ func TestAttachmentRemoveRefCorruptAttributes(t *testing.T) {
 func TestTokenMarkRotatedGenericError(t *testing.T) {
 	db := setupDynamoDB(t)
 	faulted := withFault(db, func(f *faultClient) { f.failUpdateItem = true })
-	err := NewTokenStore(faulted).MarkRotated(context.Background(), "hash-x", time.Now(), "succ")
+	err := NewTokenStore(faulted).MarkRefreshTokenRotated(context.Background(), "hash-x", time.Now(), "succ")
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("MarkRotated: want errInjected, got %v", err)
 	}

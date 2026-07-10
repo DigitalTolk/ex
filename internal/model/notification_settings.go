@@ -44,7 +44,7 @@ type NotificationSettings struct {
 	ThreadReplies       bool                    `json:"threadReplies" dynamodbav:"threadReplies"`
 	IgnoreGroupMentions bool                    `json:"ignoreGroupMentions" dynamodbav:"ignoreGroupMentions"`
 	FollowAllThreads    bool                    `json:"followAllThreads" dynamodbav:"followAllThreads"`
-	Keywords            []string                `json:"keywords" dynamodbav:"keywords,omitempty"`
+	Keywords            []string                `json:"keywords,omitempty" dynamodbav:"keywords,omitempty"`
 }
 
 // DefaultNotificationSettings is the baseline applied to any user who has

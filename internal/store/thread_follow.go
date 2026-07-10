@@ -13,11 +13,11 @@ import (
 )
 
 type ThreadFollowStore interface {
-	Set(ctx context.Context, follow *model.ThreadFollow) error
-	SetMany(ctx context.Context, follows []*model.ThreadFollow) error
-	Get(ctx context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error)
-	ListUser(ctx context.Context, userID string) ([]*model.ThreadFollow, error)
-	ListThread(ctx context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error)
+	SetThreadFollow(ctx context.Context, follow *model.ThreadFollow) error
+	SetThreadFollowMany(ctx context.Context, follows []*model.ThreadFollow) error
+	GetThreadFollow(ctx context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error)
+	ListUserThreadFollows(ctx context.Context, userID string) ([]*model.ThreadFollow, error)
+	ListThreadFollows(ctx context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error)
 }
 
 type ThreadFollowStoreImpl struct {
@@ -42,7 +42,7 @@ type threadFollowItem struct {
 // BatchWriteItem (25 ops). Callers chunk larger inputs themselves.
 const dynamoBatchWriteLimit = 25
 
-// SetMany writes a slice of follows in a single BatchWriteItem call
+// SetThreadFollowMany writes a slice of follows in a single BatchWriteItem call
 // (chunked to the 25-op DynamoDB limit). Used when a single message
 // touches multiple users at once — e.g. a thread reply that mentions
 // several teammates — so we hit DDB once instead of N times.
@@ -51,7 +51,7 @@ const dynamoBatchWriteLimit = 25
 // way TransactWriteItems would, but follow records are idempotent
 // PutItems anyway: re-writing an existing record with the same body
 // is a no-op for the user-visible state.
-func (s *ThreadFollowStoreImpl) SetMany(ctx context.Context, follows []*model.ThreadFollow) error {
+func (s *ThreadFollowStoreImpl) SetThreadFollowMany(ctx context.Context, follows []*model.ThreadFollow) error {
 	if len(follows) == 0 {
 		return nil
 	}
@@ -99,7 +99,7 @@ func (s *ThreadFollowStoreImpl) SetMany(ctx context.Context, follows []*model.Th
 	return nil
 }
 
-func (s *ThreadFollowStoreImpl) Set(ctx context.Context, follow *model.ThreadFollow) error {
+func (s *ThreadFollowStoreImpl) SetThreadFollow(ctx context.Context, follow *model.ThreadFollow) error {
 	item := threadFollowItem{
 		PK:           userPK(follow.UserID),
 		SK:           threadFollowSK(follow.ParentID, follow.ThreadRootID),
@@ -118,7 +118,7 @@ func (s *ThreadFollowStoreImpl) Set(ctx context.Context, follow *model.ThreadFol
 	return nil
 }
 
-func (s *ThreadFollowStoreImpl) ListThread(ctx context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error) {
+func (s *ThreadFollowStoreImpl) ListThreadFollows(ctx context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error) {
 	keyCond := expression.Key("GSI1PK").Equal(expression.Value(threadFollowGSI1PK(parentID, threadRootID)))
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 	// Drain every page: these are the thread's watchers, i.e. notification
@@ -144,7 +144,7 @@ func (s *ThreadFollowStoreImpl) ListThread(ctx context.Context, parentID, thread
 	return follows, nil
 }
 
-func (s *ThreadFollowStoreImpl) Get(ctx context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error) {
+func (s *ThreadFollowStoreImpl) GetThreadFollow(ctx context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.Table),
 		Key:       compositeKey(userPK(userID), threadFollowSK(parentID, threadRootID)),
@@ -162,7 +162,7 @@ func (s *ThreadFollowStoreImpl) Get(ctx context.Context, userID, parentID, threa
 	return &item.ThreadFollow, nil
 }
 
-func (s *ThreadFollowStoreImpl) ListUser(ctx context.Context, userID string) ([]*model.ThreadFollow, error) {
+func (s *ThreadFollowStoreImpl) ListUserThreadFollows(ctx context.Context, userID string) ([]*model.ThreadFollow, error) {
 	keyCond := expression.KeyAnd(
 		expression.Key("PK").Equal(expression.Value(userPK(userID))),
 		expression.Key("SK").BeginsWith("THREAD#"),
@@ -193,10 +193,10 @@ func (s *ThreadFollowStoreImpl) ListUser(ctx context.Context, userID string) ([]
 // NOT under the THREADFOLLOW# prefix so ListUser's begins_with never sees it.
 const threadSeedSK = "THREADSEED"
 
-// SetIfAbsent writes a follow row ONLY when the user has no explicit record
+// SetThreadFollowIfAbsent writes a follow row ONLY when the user has no explicit record
 // for that thread yet — the write-time participation index must never clobber
 // a deliberate unfollow (Following=false) with an implicit re-follow.
-func (s *ThreadFollowStoreImpl) SetIfAbsent(ctx context.Context, follow *model.ThreadFollow) error {
+func (s *ThreadFollowStoreImpl) SetThreadFollowIfAbsent(ctx context.Context, follow *model.ThreadFollow) error {
 	item := threadFollowItem{
 		PK:           userPK(follow.UserID),
 		SK:           threadFollowSK(follow.ParentID, follow.ThreadRootID),

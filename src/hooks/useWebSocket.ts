@@ -109,6 +109,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
       if (seenOrderRef.current.length > dedupCapacity) {
         const oldest = seenOrderRef.current.shift();
         /* v8 ignore next -- length just exceeded dedupCapacity, so shift() always returns a string; the falsy arm is defensive */
+        /* istanbul ignore next -- length just exceeded dedupCapacity, so shift() always returns a string; the falsy arm is defensive */
         if (oldest) seenIdsRef.current.delete(oldest);
       }
     }

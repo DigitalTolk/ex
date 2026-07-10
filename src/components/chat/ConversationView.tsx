@@ -23,7 +23,6 @@ import {
 } from '@/hooks/useMessages';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
-import { usePresence } from '@/context/PresenceContext';
 import { useNotifications } from '@/context/NotificationContext';
 import { markThreadSeen } from '@/hooks/useThreads';
 import { collectMessageUserIDs, findLastOwnMessageId } from '@/lib/message-users';
@@ -33,6 +32,7 @@ import { TagSearchPanel } from '@/components/TagSearchPanel';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useDeepLinkAnchor } from '@/hooks/useDeepLinkAnchor';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useIsOnline } from '@/stores/presence';
 import {
   useDraftAttachmentChips,
   useDraftForScope,
@@ -87,7 +87,6 @@ export function ConversationView() {
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const { setActiveConversation, setActiveThread } = useUnread();
-  const { online } = usePresence();
   const quickReactions = useFrequentEmojis(3);
   const { setActiveParent } = useNotifications();
   const { data: conversation, error: conversationError, isLoading: conversationLoading } = useConversation(id);
@@ -299,14 +298,23 @@ export function ConversationView() {
 
   const userMap = useMemo(() => {
     const m: Record<string, UserMapEntry> = {};
-    if (user) m[user.id] = { displayName: user.displayName, avatarURL: user.avatarURL, userStatus: user.userStatus, online: true };
+    if (user) m[user.id] = { displayName: user.displayName, avatarURL: user.avatarURL, userStatus: user.userStatus };
     if (usersData) {
       for (const u of usersData) {
-        m[u.id] = { displayName: u.displayName || 'Unknown', avatarURL: u.avatarURL, userStatus: u.userStatus, online: online.has(u.id) };
+        m[u.id] = { displayName: u.displayName || 'Unknown', avatarURL: u.avatarURL, userStatus: u.userStatus };
       }
     }
     return m;
-  }, [user, usersData, online]);
+  }, [user, usersData]);
+
+  // Per-user presence for the DM partner (header dot + intro card). The
+  // hook must run unconditionally, so the partner ID is derived here and
+  // the dm-only branches below consume the result.
+  const dmPartnerID =
+    conversation?.type === 'dm'
+      ? conversation.participantIDs?.find((pid) => pid !== user?.id)
+      : undefined;
+  const partnerOnline = useIsOnline(dmPartnerID);
 
   const derivedTitle = useMemo(
     () => deriveConversationTitle(conversation, user?.id, userMap),
@@ -344,7 +352,7 @@ export function ConversationView() {
       dmOtherUserID = otherID;
       dmOtherUserAvatar = userMap[otherID]?.avatarURL;
       dmOtherUserStatus = userMap[otherID]?.userStatus;
-      dmOtherUserOnline = userMap[otherID]?.online;
+      dmOtherUserOnline = partnerOnline;
     } else if (user) {
       dmOtherUserID = user.id;
       dmOtherUserAvatar = user.avatarURL;
@@ -387,7 +395,7 @@ export function ConversationView() {
           <DMIntro
             otherDisplayName={other?.displayName ?? 'Unknown'}
             otherAvatarURL={other?.avatarURL}
-            online={other?.online}
+            online={partnerOnline}
           />
         );
       }

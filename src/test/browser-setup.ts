@@ -3,6 +3,9 @@ import '@vitest/browser/matchers';
 import '../index.css';
 import { APP_VERSION_META, BUILD_VERSION_META } from '@/lib/version-meta';
 import './console-gate';
+import { resetPresenceStoreForTests } from '@/stores/presence';
+import { resetTypingStoreForTests } from '@/stores/typing';
+import { afterEach } from 'vitest';
 
 if (typeof document !== 'undefined') {
   if (!document.querySelector(`meta[name="${APP_VERSION_META}"]`)) {
@@ -41,3 +44,12 @@ function stampTierClasses() {
 }
 stampTierClasses();
 window.addEventListener('resize', stampTierClasses);
+
+// The presence/typing zustand stores are module-global (per-user/-bucket
+// selector subscriptions for hot paths) — without a reset, one test's
+// state leaks into the next test in the same file. Reset after every
+// test so suites keep the isolation they had with provider-local state.
+afterEach(() => {
+  resetPresenceStoreForTests();
+  resetTypingStoreForTests();
+});

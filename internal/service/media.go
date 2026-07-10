@@ -9,9 +9,9 @@ import (
 	"net/url"
 	"time"
 
+	"encoding/json"
 	"github.com/DigitalTolk/ex/internal/cache"
 	"github.com/DigitalTolk/ex/internal/store"
-	"encoding/json"
 )
 
 // MediaURLCache is the Redis-shaped cache used to map stable browser media

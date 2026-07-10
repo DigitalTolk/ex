@@ -13,7 +13,6 @@ import (
 // Redis-free WSHandler tests live here; everything that needs a live broker
 // (and therefore the shared Redis container) is in ws_integration_test.go.
 
-
 func TestWSHandler_Connect_Unauthenticated(t *testing.T) {
 	h := &WSHandler{}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/ws", nil)

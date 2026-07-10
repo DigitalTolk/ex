@@ -1,4 +1,4 @@
-.PHONY: dev dev-up dev-down dev-logs build frontend run docker clean deps check check-dist-placeholder
+.PHONY: dev dev-up dev-down dev-logs build frontend run docker clean deps check check-dist-placeholder types check-types-drift
 
 # The app version is derived from a SHA-256 of the embedded index.html at
 # server startup — no VERSION env-var to keep in sync between Go and Vite.
@@ -59,6 +59,8 @@ check:
 	go test ./cmd/...
 	@echo "=== Go coverage gate (100%, see .testcoverage.yml + COVERAGE.md) ==="
 	go run github.com/vladopajic/go-test-coverage/v2@v2.18.8 --config=.testcoverage.yml
+	@echo "=== Wire-type drift (tygo) ==="
+	$(MAKE) check-types-drift
 	@echo "=== Frontend type-check ==="
 	# `tsc --noEmit` on a project-references root tsconfig is a no-op
 	# — it ignores `references` unless --build is set. The production
@@ -67,9 +69,7 @@ check:
 	npx tsc -b --noEmit
 	@echo "=== Frontend lint ==="
 	npx eslint src/
-	@echo "=== Frontend coverage partition ==="
-	node scripts/check-coverage-partition.mjs
-	@echo "=== Frontend test ==="
+	@echo "=== Frontend test (jsdom + browser projects, merged coverage) ==="
 	@tmp=$$(mktemp); \
 		npx vitest run --coverage > "$$tmp" 2>&1; \
 		status=$$?; \
@@ -85,12 +85,27 @@ check:
 			exit 1; \
 		fi; \
 		rm -f "$$tmp"
-	@echo "=== Frontend browser test ==="
-	npm run test:browser:coverage
-	@node scripts/check-browser-universe.mjs
-	@summary=coverage-browser/coverage-summary.json; \
+	@node scripts/check-coverage-universe.mjs
+	@summary=coverage/coverage-summary.json; \
 		if [ ! -f "$$summary" ]; then \
 			echo "$$summary not produced by vitest — coverage gate cannot run" >&2; \
 			exit 1; \
 		fi; \
-		node -e "const s=require('./$$summary').total; const bad=['statements','branches','functions','lines'].filter(m=>s[m].pct<100); for (const m of ['statements','branches','functions','lines']) console.log('browser '+m+' coverage: '+s[m].pct+'%'); if (bad.length) { console.error('browser coverage below 100% for: '+bad.join(', ')); process.exit(1); }" 
+		node -e "const s=require('./$$summary').total; const bad=['statements','branches','functions','lines'].filter(m=>s[m].pct<100); for (const m of ['statements','branches','functions','lines']) console.log('frontend '+m+' coverage (merged): '+s[m].pct+'%'); if (bad.length) { console.error('frontend merged coverage below 100% for: '+bad.join(', ')); process.exit(1); }" 
+
+# Regenerate the TypeScript mirror of the Go wire types (internal/model).
+types:
+	go tool tygo generate
+
+# Fail when src/types/generated.ts drifts from internal/model — regenerate
+# side-effect-free (restore the committed file on mismatch so a failed check
+# leaves the tree untouched).
+check-types-drift:
+	@cp src/types/generated.ts /tmp/ex-generated-types-check.ts; \
+	go tool tygo generate; \
+	if ! cmp -s src/types/generated.ts /tmp/ex-generated-types-check.ts; then \
+		mv /tmp/ex-generated-types-check.ts src/types/generated.ts; \
+		echo "src/types/generated.ts is stale — run 'make types' and commit the result" >&2; \
+		exit 1; \
+	fi; \
+	rm -f /tmp/ex-generated-types-check.ts

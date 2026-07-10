@@ -59,7 +59,9 @@ describe('renderMarkdown', () => {
     ] as const;
     for (const hint of supported) {
       const { container, unmount } = render(<>{renderMarkdown(`\`\`\`${hint}\ncode\n\`\`\``)}</>);
-      const pre = container.querySelector('pre');
+      // CodeBlock renders a line-number gutter <pre> plus the code <pre>;
+      // the language attribute lives on the latter.
+      const pre = container.querySelector('pre[data-language]');
       const code = container.querySelector('code');
       expect(pre?.getAttribute('data-language')).toBe(hint);
       expect(code).toHaveClass('hljs');
@@ -71,7 +73,7 @@ describe('renderMarkdown', () => {
   it('renders an unsupported fence hint as plain instead of trusting the token', () => {
     for (const hint of ['f#', 'objective-c', 'haskell', 'totally-made-up'] as const) {
       const { container, unmount } = render(<>{renderMarkdown(`\`\`\`${hint}\ncode\n\`\`\``)}</>);
-      const pre = container.querySelector('pre');
+      const pre = container.querySelector('pre[data-language]');
       const code = container.querySelector('code');
       expect(pre?.getAttribute('data-language')).toBe('plain');
       expect(code?.className ?? '').not.toContain('hljs');
@@ -92,8 +94,10 @@ describe('renderMarkdown', () => {
   });
 
   it('does not add synthetic vertical margin to fenced code blocks', () => {
+    // The CodeBlock wrapper owns the box — it must carry my-0 so adjacent
+    // fences butt up against each other without synthetic gaps.
     const { container } = render(<>{renderMarkdown('```\none\n```')}</>);
-    expect(container.querySelector('pre')).toHaveClass('my-0');
+    expect(container.firstElementChild).toHaveClass('my-0');
   });
 
   it.each([
@@ -102,7 +106,9 @@ describe('renderMarkdown', () => {
     ['two', '```\none\n```\n\n\n```php\ntwo\n```', 2],
   ])('renders exactly %s blank line(s) between adjacent fenced code blocks', (_label, markdown, blanks) => {
     const { container } = render(<>{renderMarkdown(markdown)}</>);
-    expect(container.querySelectorAll('pre')).toHaveLength(2);
+    // One CodeBlock (one copy button) per fence — `pre` alone would also
+    // match each block's line-number gutter.
+    expect(container.querySelectorAll('[data-testid="code-copy-button"]')).toHaveLength(2);
     expect(container.querySelectorAll('p')).toHaveLength(blanks);
   });
 
@@ -119,12 +125,15 @@ describe('renderMarkdown', () => {
     expect(links[0]).not.toHaveClass('underline');
   });
 
-  it('renders an unsafe-scheme markdown link as literal text, not an href', () => {
+  it('renders an unsafe-scheme markdown link as inert text, not an href', () => {
+    // Unified with the server-tree path: the hydrator's `a` component
+    // strips the anchor and renders only the link text.
     const { container } = render(
       <>{renderMarkdown('click [here](javascript:alert(1)) now')}</>,
     );
     expect(container.querySelector('a')).toBeNull();
-    expect(container.textContent).toContain('[here](javascript:alert(1))');
+    expect(container.textContent).toContain('click here');
+    expect(container.textContent).not.toContain('javascript:');
   });
 
   it('keeps http protocol visible for bare URLs', () => {

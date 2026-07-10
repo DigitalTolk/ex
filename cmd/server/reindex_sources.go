@@ -3,28 +3,28 @@ package main
 import (
 	"context"
 
-	"github.com/DigitalTolk/ex/internal/handler"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/paginate"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
-// reindexSources adapts the handler-level store adapters to the slim
+// reindexSources adapts the store impls to the slim
 // `search.reindexSources` interface the Reindexer expects. Each method
 // pulls the entire population of one resource — workspaces are small
 // enough that an in-memory list per resource is fine for an admin-
 // triggered maintenance flow.
 type reindexSources struct {
-	users    *handler.UserStoreAdapter
-	channels *handler.ChannelStoreAdapter
-	convs    *handler.ConversationStoreAdapter
-	messages *handler.MessageStoreAdapter
+	users    *store.UserStoreImpl
+	channels *store.ChannelStoreImpl
+	convs    *store.ConversationStoreImpl
+	messages *store.MessageStoreImpl
 }
 
 func newReindexSources(
-	users *handler.UserStoreAdapter,
-	channels *handler.ChannelStoreAdapter,
-	convs *handler.ConversationStoreAdapter,
-	messages *handler.MessageStoreAdapter,
+	users *store.UserStoreImpl,
+	channels *store.ChannelStoreImpl,
+	convs *store.ConversationStoreImpl,
+	messages *store.MessageStoreImpl,
 ) *reindexSources {
 	return &reindexSources{users: users, channels: channels, convs: convs, messages: messages}
 }

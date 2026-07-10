@@ -65,20 +65,48 @@ interface CustomTagProps {
   'data-value'?: string;
 }
 
+// ALLOWED_TAGS is the complete tag vocabulary the server's goldmark→hast
+// emitter produces (internal/service/markdown.go + markdown_custom_syntax.go)
+// — keep the two in lockstep. Defense-in-depth: the server is the trust
+// boundary, but a buggy or compromised tree must not be able to smuggle an
+// arbitrary element (script/iframe/object/…) into the message DOM. Unknown
+// tags are UNWRAPPED (children render, the element itself is dropped) so a
+// vocabulary drift degrades to unstyled text rather than losing content.
+const ALLOWED_TAGS = new Set([
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'p', 'a', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code',
+  'em', 'strong', 's', 'hr',
+  'table', 'thead', 'tbody', 'tr', 'th', 'td',
+  'ex-mention-user', 'ex-mention-channel', 'ex-mention-group',
+  'ex-hashtag', 'ex-giphy', 'ex-media-literal', 'ex-emoji-shortcode',
+  'ex-bare-url',
+]);
+
 // normaliseTree defensively patches a tree before handing it to
 // hast-util-to-jsx-runtime. The hydrator reads `node.children.length`
 // unconditionally on element/root nodes — a tree with `children`
 // missing (e.g. a malformed server response, a server emitting
 // `omitempty` on empty arrays) crashes the hydrator and brings down
 // the whole message render via React's error boundary. We patch in
-// `children: []` for any element/root that arrives without one.
+// `children: []` for any element/root that arrives without one, and
+// enforce the tag allowlist (see ALLOWED_TAGS).
 function normaliseTree(node: HastNode): HastNode {
   if (node.type === 'text') return node;
-  const kids = node.children ?? [];
+  const kids = (node.children ?? []).flatMap(normaliseChild);
   return {
     ...node,
-    children: kids.map(normaliseTree),
+    children: kids,
   };
+}
+
+// normaliseChild unwraps disallowed elements: their (normalised) children
+// take their place in the parent, the element wrapper is discarded.
+function normaliseChild(node: HastNode): HastNode[] {
+  if (node.type === 'text') return [node];
+  if (node.type === 'element' && node.tagName && !ALLOWED_TAGS.has(node.tagName)) {
+    return (node.children ?? []).flatMap(normaliseChild);
+  }
+  return [normaliseTree(node)];
 }
 
 // RenderOptsContext threads per-message render options (currentUserId,

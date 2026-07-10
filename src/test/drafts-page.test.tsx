@@ -262,4 +262,19 @@ describe('DraftsPage', () => {
     });
     expect(vi.mocked(apiFetch).mock.calls.some(([p]) => String(p).startsWith('/api/v1/drafts/draft-4'))).toBe(false);
   });
+
+  it('shows the empty state when the drafts query errors (data stays undefined)', async () => {
+    // Exercises the `drafts?.length ?? 0` fallback arm: a failed query
+    // leaves `data` undefined with isLoading false.
+    vi.mocked(apiFetch).mockImplementation(async (path) => {
+      if (path === '/api/v1/drafts') throw new Error('drafts down');
+      if (path === '/api/v1/channels') return [];
+      if (path === '/api/v1/conversations') return [];
+      return undefined;
+    });
+
+    renderPage();
+
+    expect(await screen.findByTestId('drafts-empty')).toBeInTheDocument();
+  });
 });

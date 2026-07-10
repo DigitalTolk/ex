@@ -48,6 +48,7 @@ import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
+import { useIsOnline } from '@/stores/presence';
 import type { Message, UserStatus } from '@/types';
 
 // Module-level Set so MessageList/ThreadPanel don't need to thread a
@@ -74,7 +75,6 @@ interface MessageItemProps {
   authorName: string;
   authorAvatarURL?: string;
   authorUserStatus?: UserStatus;
-  authorOnline?: boolean;
   isOwn: boolean;
   channelId?: string;
   channelSlug?: string;
@@ -181,7 +181,6 @@ function MessageItemImpl({
   authorName,
   authorAvatarURL,
   authorUserStatus,
-  authorOnline,
   isOwn,
   channelId,
   channelSlug,
@@ -197,6 +196,13 @@ function MessageItemImpl({
   quickReactions,
 }: MessageItemProps) {
   const isWebhook = !!message.webhookUsername;
+  // Per-author presence subscription: only rows whose author actually
+  // flipped re-render on a presence event, instead of every visible row
+  // re-rendering because the whole userMap was rebuilt from the online
+  // set. Webhook rows keep `undefined` — the integration is not a user,
+  // so the avatar renders no availability notch at all.
+  const authorPresence = useIsOnline(message.authorID);
+  const authorOnline = isWebhook ? undefined : authorPresence;
   const displayAuthorName = message.webhookUsername || authorName;
   // Webhook posts must NOT borrow the creator's avatar — show the
   // integration's own avatar (override URL or initials of its username),

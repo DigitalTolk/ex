@@ -3,7 +3,6 @@ package handler
 import (
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
@@ -78,12 +77,12 @@ func isValidationError(err error) bool {
 	return false
 }
 
+// isDuplicateError maps uniqueness conflicts to 409 via the sentinels —
+// the old error-string matching ("already exists"/"already taken") broke the
+// codebase's errors.Is convention and silently decayed whenever a message
+// was reworded.
 func isDuplicateError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "already exists") || strings.Contains(msg, "already taken")
+	return errors.Is(err, store.ErrAlreadyExists) || errors.Is(err, service.ErrAlreadyExists)
 }
 
 // writeServiceError maps a service-layer error to an HTTP response: a

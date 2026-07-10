@@ -19,6 +19,7 @@ var ErrCacheMiss = errors.New("cache miss")
 
 const userKeyPrefix = "user:"
 const userCacheTTL = 15 * time.Minute
+
 // presenceKeyPrefix keys a PER-USER SORTED SET of live connection IDs, each
 // scored by its own expiry (unix ms). This replaced the old plain INCR/DECR
 // counter, whose value was an opaque integer that couldn't say WHICH

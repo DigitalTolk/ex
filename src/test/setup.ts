@@ -3,6 +3,8 @@ import { vi } from 'vitest';
 import { createElement, type ReactNode } from 'react';
 import { APP_VERSION_META, BUILD_VERSION_META } from '@/lib/version-meta';
 import './console-gate';
+import { resetPresenceStoreForTests } from '@/stores/presence';
+import { resetTypingStoreForTests } from '@/stores/typing';
 
 // @base-ui/react/scroll-area uses ResizeObserver inside Root and emits
 // async state updates that show up in tests as "An update to
@@ -183,3 +185,12 @@ if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
     }),
   });
 }
+
+// The presence/typing zustand stores are module-global (per-user/-bucket
+// selector subscriptions for hot paths) — without a reset, one test's
+// state leaks into the next test in the same file. Reset after every
+// test so suites keep the isolation they had with provider-local state.
+afterEach(() => {
+  resetPresenceStoreForTests();
+  resetTypingStoreForTests();
+});

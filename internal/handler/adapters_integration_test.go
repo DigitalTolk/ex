@@ -153,11 +153,11 @@ func setupDynamoForAdapters(t *testing.T) *store.DB {
 	return db
 }
 
-func TestUserStoreAdapter(t *testing.T) {
+func TestUserStore_ServiceSurface(t *testing.T) {
 	db := setupDynamoForAdapters(t)
 	ctx := context.Background()
 	storeImpl := store.NewUserStore(db)
-	adapter := NewUserStoreAdapter(storeImpl)
+	adapter := storeImpl
 
 	now := time.Now().Truncate(time.Millisecond)
 	user := &model.User{
@@ -239,11 +239,11 @@ func TestUserStoreAdapter(t *testing.T) {
 	}
 }
 
-func TestChannelStoreAdapter(t *testing.T) {
+func TestChannelStore_ServiceSurface(t *testing.T) {
 	db := setupDynamoForAdapters(t)
 	ctx := context.Background()
 	storeImpl := store.NewChannelStore(db)
-	adapter := NewChannelStoreAdapter(storeImpl)
+	adapter := storeImpl
 
 	now := time.Now().Truncate(time.Millisecond)
 	ch := &model.Channel{
@@ -303,19 +303,19 @@ func TestChannelStoreAdapter(t *testing.T) {
 	}
 }
 
-func TestMembershipStoreAdapter(t *testing.T) {
+func TestMembershipStore_ServiceSurface(t *testing.T) {
 	db := setupDynamoForAdapters(t)
 	ctx := context.Background()
 	chanStore := store.NewChannelStore(db)
 	memStore := store.NewMembershipStore(db)
-	adapter := NewMembershipStoreAdapter(memStore)
+	adapter := memStore
 
 	now := time.Now().Truncate(time.Millisecond)
 	ch := &model.Channel{
 		ID: "ch-ma-1", Name: "ma-chan", Slug: "ma-chan",
 		Type: model.ChannelTypePublic, CreatedBy: "test", CreatedAt: now, UpdatedAt: now,
 	}
-	if err := chanStore.Create(ctx, ch); err != nil {
+	if err := chanStore.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create channel: %v", err)
 	}
 
@@ -390,11 +390,11 @@ func TestMembershipStoreAdapter(t *testing.T) {
 	}
 }
 
-func TestConversationStoreAdapter(t *testing.T) {
+func TestConversationStore_ServiceSurface(t *testing.T) {
 	db := setupDynamoForAdapters(t)
 	ctx := context.Background()
 	storeImpl := store.NewConversationStore(db)
-	adapter := NewConversationStoreAdapter(storeImpl)
+	adapter := storeImpl
 
 	now := time.Now().Truncate(time.Millisecond)
 	conv := &model.Conversation{
@@ -447,11 +447,11 @@ func TestConversationStoreAdapter(t *testing.T) {
 	}
 }
 
-func TestMessageStoreAdapter(t *testing.T) {
+func TestMessageStore_ServiceSurface(t *testing.T) {
 	db := setupDynamoForAdapters(t)
 	ctx := context.Background()
 	storeImpl := store.NewMessageStore(db)
-	adapter := NewMessageStoreAdapter(storeImpl)
+	adapter := storeImpl
 
 	now := time.Now().Truncate(time.Millisecond)
 	msg := &model.Message{
@@ -496,11 +496,11 @@ func TestMessageStoreAdapter(t *testing.T) {
 // thin pass-throughs but they are wired into the production handler so
 // a regression-proof test belongs at the adapter layer, not just inside
 // the store package.
-func TestMessageStoreAdapter_ListAfter_ListAround(t *testing.T) {
+func TestMessageStore_ListAfterAround_ServiceSurface(t *testing.T) {
 	db := setupDynamoForAdapters(t)
 	ctx := context.Background()
 	storeImpl := store.NewMessageStore(db)
-	adapter := NewMessageStoreAdapter(storeImpl)
+	adapter := storeImpl
 
 	// Seed a small ordered set of messages so before/after windows have
 	// something predictable to bracket.
@@ -553,11 +553,11 @@ func TestMessageStoreAdapter_ListAfter_ListAround(t *testing.T) {
 	}
 }
 
-func TestInviteStoreAdapter(t *testing.T) {
+func TestInviteStore_ServiceSurface(t *testing.T) {
 	db := setupDynamoForAdapters(t)
 	ctx := context.Background()
 	storeImpl := store.NewInviteStore(db)
-	adapter := NewInviteStoreAdapter(storeImpl)
+	adapter := storeImpl
 
 	now := time.Now().Truncate(time.Millisecond)
 	inv := &model.Invite{
@@ -582,11 +582,11 @@ func TestInviteStoreAdapter(t *testing.T) {
 	}
 }
 
-func TestTokenStoreAdapter(t *testing.T) {
+func TestTokenStore_ServiceSurface(t *testing.T) {
 	db := setupDynamoForAdapters(t)
 	ctx := context.Background()
 	storeImpl := store.NewTokenStore(db)
-	adapter := NewTokenStoreAdapter(storeImpl)
+	adapter := storeImpl
 
 	now := time.Now().Truncate(time.Millisecond)
 	rt := &model.RefreshToken{

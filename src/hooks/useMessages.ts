@@ -116,18 +116,44 @@ type MessageInfiniteUpdater = (old: MessageInfiniteData | undefined) => MessageI
 // infiniteQueryBehavior.js:65) which truncates the page chain after a
 // fetchPreviousPage — leaving deep-linked viewers stuck on a 2-message
 // slice with no working sentinels.
-function patchBothScopes(qc: QueryClient, parentID: string, updater: MessageInfiniteUpdater) {
-  // We don't know whether parentID names a channel or a conversation.
-  // setQueriesData is a no-op for non-matching keys, so patch both.
-  qc.setQueriesData<MessageInfiniteData>({ queryKey: queryKeys.channelMessagesAll(parentID) }, updater);
-  qc.setQueriesData<MessageInfiniteData>({ queryKey: queryKeys.conversationMessagesAll(parentID) }, updater);
+function patchBothScopes(
+  qc: QueryClient,
+  parentID: string,
+  updater: MessageInfiniteUpdater,
+  parentType?: Message['parentType'],
+) {
+  // When the event names its parent scope (server stamps parentType on
+  // message events), patch only that scope. Without it, we can't tell
+  // whether parentID names a channel or a conversation — setQueriesData
+  // is a no-op for non-matching keys, so patch both.
+  if (parentType !== 'conversation') {
+    qc.setQueriesData<MessageInfiniteData>({ queryKey: queryKeys.channelMessagesAll(parentID) }, updater);
+  }
+  if (parentType !== 'channel') {
+    qc.setQueriesData<MessageInfiniteData>({ queryKey: queryKeys.conversationMessagesAll(parentID) }, updater);
+  }
+}
+
+// threadScopePaths narrows the thread-query parent paths the same way
+// patchBothScopes narrows list scopes: one path when the event names its
+// parent type, both when it doesn't.
+function threadScopePaths(parentID: string, parentType?: Message['parentType']): string[] {
+  if (parentType === 'channel') return [`channels/${parentID}`];
+  if (parentType === 'conversation') return [`conversations/${parentID}`];
+  return [`channels/${parentID}`, `conversations/${parentID}`];
 }
 
 // Same channel-or-conversation ambiguity as patchBothScopes — invalidate
-// the thread query under both possible parent paths.
-export function invalidateThreadBothScopes(qc: QueryClient, parentID: string, threadRootID: string) {
-  qc.invalidateQueries({ queryKey: queryKeys.thread(`channels/${parentID}`, threadRootID) });
-  qc.invalidateQueries({ queryKey: queryKeys.thread(`conversations/${parentID}`, threadRootID) });
+// the thread query under each possible parent path.
+export function invalidateThreadBothScopes(
+  qc: QueryClient,
+  parentID: string,
+  threadRootID: string,
+  parentType?: Message['parentType'],
+) {
+  for (const path of threadScopePaths(parentID, parentType)) {
+    qc.invalidateQueries({ queryKey: queryKeys.thread(path, threadRootID) });
+  }
 }
 
 // Patch a single message in the thread query cache in place (both possible
@@ -142,8 +168,9 @@ export function invalidateThreadBothScopes(qc: QueryClient, parentID: string, th
 export function patchMessageInThreadCache(qc: QueryClient, parentID: string, threadRootID: string, msg: Message) {
   const updater = (old: Message[] | undefined) =>
     old ? old.map((m) => (m.id === msg.id ? msg : m)) : old;
-  qc.setQueryData<Message[]>(queryKeys.thread(`channels/${parentID}`, threadRootID), updater);
-  qc.setQueryData<Message[]>(queryKeys.thread(`conversations/${parentID}`, threadRootID), updater);
+  for (const path of threadScopePaths(parentID, msg.parentType)) {
+    qc.setQueryData<Message[]>(queryKeys.thread(path, threadRootID), updater);
+  }
 }
 
 // appendReplyToThreadCache appends a NEW thread reply to the thread message
@@ -174,8 +201,9 @@ export function appendReplyToThreadCache(
     if (old.some((m) => m.id === msg.id)) return old;
     return [...old, msg];
   };
-  qc.setQueryData<Message[]>(queryKeys.thread(`channels/${parentID}`, threadRootID), updater);
-  qc.setQueryData<Message[]>(queryKeys.thread(`conversations/${parentID}`, threadRootID), updater);
+  for (const path of threadScopePaths(parentID, msg.parentType)) {
+    qc.setQueryData<Message[]>(queryKeys.thread(path, threadRootID), updater);
+  }
   return present;
 }
 
@@ -220,7 +248,7 @@ export function appendMessageToCache(qc: QueryClient, parentID: string, msg: Mes
     };
     present = true;
     return { ...old, pages: [patched, ...old.pages.slice(1)] };
-  });
+  }, msg.parentType);
   return present;
 }
 
@@ -234,7 +262,7 @@ export function updateMessageInCache(qc: QueryClient, parentID: string, msg: Mes
       return { ...p, items: p.items.map((m) => (m.id === msg.id ? msg : m)) };
     });
     return changed ? { ...old, pages } : old;
-  });
+  }, msg.parentType);
 }
 
 function deletedMessagePatch(existing: Message, patch?: Partial<Message>): Message {
@@ -271,10 +299,10 @@ export function markMessageDeletedInCache(
       };
     });
     return changed ? { ...old, pages } : old;
-  });
+  }, patch?.parentType);
 
   const threadRootID = parentMessageID || msgId;
-  for (const path of [`channels/${parentID}`, `conversations/${parentID}`]) {
+  for (const path of threadScopePaths(parentID, patch?.parentType)) {
     qc.setQueryData<Message[]>(queryKeys.thread(path, threadRootID), (old) => {
       if (!old || !old.some((m) => m.id === msgId)) return old;
       return old.map((m) => (m.id === msgId ? deletedMessagePatch(m, patch) : m));

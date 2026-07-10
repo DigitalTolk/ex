@@ -102,7 +102,7 @@ func TestConversationStore_NotifyCountLifecycle(t *testing.T) {
 		{UserID: "u-a", ConversationID: "conv-nc", JoinedAt: time.Now()},
 		{UserID: "u-b", ConversationID: "conv-nc", JoinedAt: time.Now()},
 	}
-	if err := cs.Create(ctx, conv, members); err != nil {
+	if err := cs.CreateConversation(ctx, conv, members); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 

@@ -3,25 +3,24 @@ package store
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
-	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"golang.org/x/sync/errgroup"
 )
 
 // MessageStore defines operations on Message entities.
 type MessageStore interface {
-	Create(ctx context.Context, msg *model.Message) error
-	GetByID(ctx context.Context, parentID, msgID string) (*model.Message, error)
-	List(ctx context.Context, parentID string, before string, limit int) ([]*model.Message, bool, error)
-	Update(ctx context.Context, parentID string, msg *model.Message) error
-	Delete(ctx context.Context, parentID, msgID string) error
+	CreateMessage(ctx context.Context, msg *model.Message) error
+	GetMessage(ctx context.Context, parentID, msgID string) (*model.Message, error)
+	ListMessages(ctx context.Context, parentID string, before string, limit int) ([]*model.Message, bool, error)
+	UpdateMessage(ctx context.Context, msg *model.Message) error
+	DeleteMessage(ctx context.Context, parentID, msgID string) error
 }
 
 // MessageStoreImpl implements MessageStore backed by DynamoDB.
@@ -65,33 +64,18 @@ func newMessageItem(parentID string, msg *model.Message) messageItem {
 	return item
 }
 
-// parentPK returns the partition key for the message's parent (channel or conversation).
-// The parentID must already be prefixed (e.g. "CHAN#xxx" or "CONV#xxx") or be a raw ID
-// that the caller contextualizes. Here we accept the raw parent ID and determine the
-// prefix from the message's ParentID field. Since messages can live under channels or
-// conversations, the caller must supply the full PK-ready parentID.
+// parentPK returns the partition key for a message's parent. Channels AND
+// conversations share the CHAN# message-key namespace: conversation IDs are
+// DeriveID ULIDs, so they can never collide with channel IDs, and the store
+// only needs write/read consistency — not the parent's entity type. (A
+// historical dm_/grp_ prefix sniff used to route to CONV# here, but real
+// conversation IDs never carried those prefixes, so every existing message
+// row lives under CHAN#; routing by type now would orphan them.)
 func parentPK(parentID string) string {
-	// The parentID is the raw channel or conversation ID. The caller (service layer)
-	// decides whether to prefix with CHAN# or CONV#. For the store, we just need
-	// a consistent key. Messages use the same PK as their parent entity.
-	//
-	// Convention: if parentID starts with "dm_" or looks like a conversation ID,
-	// use CONV#, otherwise use CHAN#. However, to keep the store layer simple and
-	// not encode business logic, we let the caller pass the parentID as-is and
-	// the service layer should pass the full PK prefix.
-	//
-	// For simplicity and consistency with the key patterns described, we'll
-	// assume parentID is a channel or conversation ID and we prefix accordingly.
-	// The Message model's ParentID stores the raw ID.
-	//
-	// We use a simple heuristic: if it starts with "dm_" or "grp_" it's a conversation.
-	if len(parentID) > 3 && (parentID[:3] == "dm_" || parentID[:4] == "grp_") {
-		return convPK(parentID)
-	}
 	return channelPK(parentID)
 }
 
-func (s *MessageStoreImpl) Create(ctx context.Context, msg *model.Message) error {
+func (s *MessageStoreImpl) CreateMessage(ctx context.Context, msg *model.Message) error {
 	item := newMessageItem(msg.ParentID, msg)
 
 	av := mustAttrs(attributevalue.MarshalMap(item))
@@ -110,7 +94,7 @@ func (s *MessageStoreImpl) Create(ctx context.Context, msg *model.Message) error
 	return nil
 }
 
-func (s *MessageStoreImpl) GetByID(ctx context.Context, parentID, msgID string) (*model.Message, error) {
+func (s *MessageStoreImpl) GetMessage(ctx context.Context, parentID, msgID string) (*model.Message, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.Table),
 		Key:       compositeKey(parentPK(parentID), msgSK(msgID)),
@@ -129,7 +113,7 @@ func (s *MessageStoreImpl) GetByID(ctx context.Context, parentID, msgID string) 
 	return &item.Message, nil
 }
 
-func (s *MessageStoreImpl) List(ctx context.Context, parentID string, before string, limit int) ([]*model.Message, bool, error) {
+func (s *MessageStoreImpl) ListMessages(ctx context.Context, parentID string, before string, limit int) ([]*model.Message, bool, error) {
 	pk := parentPK(parentID)
 
 	var keyCond expression.KeyConditionBuilder
@@ -267,7 +251,7 @@ func (s *MessageStoreImpl) StampThreadIndex(ctx context.Context, parentID, msgID
 // `after` cursor (a message ID), ordered newest-first like List.
 // Used by the bidirectional message paginator when a user is anchored
 // in mid-history and scrolls down toward the live tail.
-func (s *MessageStoreImpl) ListAfter(ctx context.Context, parentID, after string, limit int) ([]*model.Message, bool, error) {
+func (s *MessageStoreImpl) ListMessagesAfter(ctx context.Context, parentID, after string, limit int) ([]*model.Message, bool, error) {
 	if after == "" {
 		return nil, false, nil
 	}
@@ -322,47 +306,40 @@ func (s *MessageStoreImpl) ListAfter(ctx context.Context, parentID, after string
 // (target Get, older Query, newer Query) are independent and run
 // concurrently; ListAround is on the user-perceived path for every
 // "Jump to message" so latency multiplies if they serialize.
-func (s *MessageStoreImpl) ListAround(ctx context.Context, parentID, msgID string, before, after int) ([]*model.Message, bool, bool, error) {
+func (s *MessageStoreImpl) ListMessagesAround(ctx context.Context, parentID, msgID string, before, after int) ([]*model.Message, bool, bool, error) {
 	var (
-		wg                            sync.WaitGroup
-		target                        *model.Message
-		older, newer                  []*model.Message
-		hasMoreOlder, hasMoreNewer    bool
-		errTarget, errOlder, errNewer error
+		target                     *model.Message
+		older, newer               []*model.Message
+		hasMoreOlder, hasMoreNewer bool
 	)
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
-		defer safe.Recover()
-		target, errTarget = s.GetByID(ctx, parentID, msgID)
-	}()
-	go func() {
-		defer wg.Done()
-		defer safe.Recover()
-		older, hasMoreOlder, errOlder = s.List(ctx, parentID, msgID, before)
-	}()
-	go func() {
-		defer wg.Done()
-		defer safe.Recover()
-		newer, hasMoreNewer, errNewer = s.ListAfter(ctx, parentID, msgID, after)
-	}()
-	wg.Wait()
-	for _, err := range []error{errTarget, errOlder, errNewer} {
-		if err != nil {
-			return nil, false, false, err
-		}
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		var err error
+		target, err = s.GetMessage(gctx, parentID, msgID)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		older, hasMoreOlder, err = s.ListMessages(gctx, parentID, msgID, before)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		newer, hasMoreNewer, err = s.ListMessagesAfter(gctx, parentID, msgID, after)
+		return err
+	})
+	if err := g.Wait(); err != nil {
+		return nil, false, false, err
 	}
 	out := make([]*model.Message, 0, len(older)+len(newer)+1)
 	out = append(out, newer...)
-	if target != nil {
-		out = append(out, target)
-	}
+	out = append(out, target)
 	out = append(out, older...)
 	return out, hasMoreOlder, hasMoreNewer, nil
 }
 
-func (s *MessageStoreImpl) Update(ctx context.Context, parentID string, msg *model.Message) error {
-	item := newMessageItem(parentID, msg)
+func (s *MessageStoreImpl) UpdateMessage(ctx context.Context, msg *model.Message) error {
+	item := newMessageItem(msg.ParentID, msg)
 
 	av := mustAttrs(attributevalue.MarshalMap(item))
 
@@ -413,7 +390,7 @@ func mergeRecentAuthors(prev []string, authorID string) []string {
 // two simultaneous authors is dropped from the avatar stack. Count
 // integrity is unaffected.
 func (s *MessageStoreImpl) IncrementReplyMetadata(ctx context.Context, parentID, msgID string, replyTime time.Time, replyAuthorID string) (*model.Message, error) {
-	parent, err := s.GetByID(ctx, parentID, msgID)
+	parent, err := s.GetMessage(ctx, parentID, msgID)
 	if err != nil {
 		return nil, err
 	}
@@ -446,7 +423,7 @@ func (s *MessageStoreImpl) IncrementReplyMetadata(ctx context.Context, parentID,
 	return &item.Message, nil
 }
 
-func (s *MessageStoreImpl) Delete(ctx context.Context, parentID, msgID string) error {
+func (s *MessageStoreImpl) DeleteMessage(ctx context.Context, parentID, msgID string) error {
 	_, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(s.Table),
 		Key:       compositeKey(parentPK(parentID), msgSK(msgID)),

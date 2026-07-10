@@ -38,9 +38,9 @@ type User struct {
 	// DefaultNotificationSettings applies.
 	NotificationSettings *NotificationSettings `json:"notificationSettings,omitempty" dynamodbav:"notificationSettings,omitempty"`
 	Status               string                `json:"status" dynamodbav:"status"` // "active", "deactivated"
-	LastSeenAt    *time.Time   `json:"lastSeenAt,omitempty" dynamodbav:"lastSeenAt,omitempty"`
-	CreatedAt     time.Time    `json:"createdAt" dynamodbav:"createdAt"`
-	UpdatedAt     time.Time    `json:"updatedAt" dynamodbav:"updatedAt"`
+	LastSeenAt           *time.Time            `json:"lastSeenAt,omitempty" dynamodbav:"lastSeenAt,omitempty"`
+	CreatedAt            time.Time             `json:"createdAt" dynamodbav:"createdAt"`
+	UpdatedAt            time.Time             `json:"updatedAt" dynamodbav:"updatedAt"`
 }
 
 type UserStatus struct {

@@ -1,4 +1,5 @@
-import { useTyping, formatTypingPhrase, threadTypingKey } from '@/context/TypingContext';
+import { formatTypingPhrase } from '@/context/TypingContext';
+import { useThreadTypingFor, useTypingFor } from '@/stores/typing';
 import type { UserMapEntry } from './MessageList';
 
 interface Props {
@@ -16,15 +17,15 @@ interface Props {
 // the input — then a normal-flow sibling that reflowed on show/hide; this is
 // the overlay done right, anchored to the composer wrapper.)
 //
-// This component renders ONLY main-list typing (typingByParent), so a
+// This component renders ONLY main-list typing (useTypingFor), so a
 // reply being composed inside an open ThreadPanel does not show up
 // down here in the channel view. Thread typing is rendered separately
-// by ThreadTypingIndicator below.
+// by ThreadTypingIndicator below. Both subscribe per-bucket via the
+// typing store, so typing anywhere else in the workspace does not
+// re-render this composer overlay.
 export function TypingIndicator({ parentID, userMap }: Props) {
-  const { typingByParent } = useTyping();
-  if (!parentID) return null;
-  const ids = typingByParent[parentID] ?? [];
-  if (ids.length === 0) return null;
+  const ids = useTypingFor(parentID ?? '');
+  if (!parentID || ids.length === 0) return null;
   const names = ids.map((id) => userMap?.[id]?.displayName ?? id);
   return (
     <div
@@ -44,13 +45,11 @@ interface ThreadProps {
 }
 
 // ThreadTypingIndicator renders typing happening inside a thread reply
-// composer. It reads from typingByThread, keyed by (parentID, threadRootID),
-// so unrelated thread typing or main-list typing never bleeds in.
+// composer. It reads the (parentID, threadRootID) bucket, so unrelated
+// thread typing or main-list typing never bleeds in.
 export function ThreadTypingIndicator({ parentID, threadRootID, userMap }: ThreadProps) {
-  const { typingByThread } = useTyping();
-  if (!parentID || !threadRootID) return null;
-  const ids = typingByThread[threadTypingKey(parentID, threadRootID)] ?? [];
-  if (ids.length === 0) return null;
+  const ids = useThreadTypingFor(parentID ?? '', threadRootID);
+  if (!parentID || !threadRootID || ids.length === 0) return null;
   const names = ids.map((id) => userMap?.[id]?.displayName ?? id);
   return (
     <div

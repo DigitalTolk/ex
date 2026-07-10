@@ -27,6 +27,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/storage"
 	"github.com/DigitalTolk/ex/internal/store"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/sync/errgroup"
 )
 
 // wsOriginPatternsFromCORS converts the CORS allow-list (which holds
@@ -109,18 +110,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ------------------------------------------------------------------ Stores (with adapters to bridge store/service interfaces)
-	userStore := handler.NewUserStoreAdapter(store.NewUserStore(db))
-	channelStore := handler.NewChannelStoreAdapter(store.NewChannelStore(db))
-	membershipStore := handler.NewMembershipStoreAdapter(store.NewMembershipStore(db))
-	conversationStore := handler.NewConversationStoreAdapter(store.NewConversationStore(db))
-	messageStore := handler.NewMessageStoreAdapter(store.NewMessageStore(db))
-	threadFollowStore := handler.NewThreadFollowStoreAdapter(store.NewThreadFollowStore(db))
+	// ------------------------------------------------------------------ Stores (impls satisfy the service interfaces directly)
+	userStore := store.NewUserStore(db)
+	channelStore := store.NewChannelStore(db)
+	membershipStore := store.NewMembershipStore(db)
+	conversationStore := store.NewConversationStore(db)
+	messageStore := store.NewMessageStore(db)
+	threadFollowStore := store.NewThreadFollowStore(db)
 	parentIndexStore := handler.NewParentIndexAdapter(store.NewParentIndexStore(db))
-	userStateStore := handler.NewUserStateStoreAdapter(store.NewUserStateStore(db))
-	inviteStore := handler.NewInviteStoreAdapter(store.NewInviteStore(db))
+	userStateStore := store.NewUserStateStore(db)
+	inviteStore := store.NewInviteStore(db)
 	rawTokenStore := store.NewTokenStore(db)
-	tokenStore := handler.NewTokenStoreAdapter(rawTokenStore)
+	tokenStore := rawTokenStore
 	// One-time background backfill of the per-user token partition (GSI1):
 	// once the seeded marker lands, account deactivation revokes tokens with
 	// a Query instead of a full-table Scan. Idempotent and concurrency-safe,
@@ -205,18 +206,24 @@ func main() {
 	convSvc := service.NewConversationService(conversationStore, userStore, redisCache, brokerAdapter, redisPubSub)
 	convSvc.SetMediaURLCache(redisCache)
 	convSvc.SetUserProfileResolver(userSvc)
-	messageSvc := service.NewMessageService(messageStore, membershipStore, conversationStore, redisPubSub, brokerAdapter)
-	// Unread is tracked with one seq counter per parent (channel or
-	// conversation). The counter lives on the parent store; the per-user
-	// last-read on the membership store for channels and the conversation store
-	// for conversations — UnreadSeqAdapter binds the two halves.
-	messageSvc.SetChannelSeqStore(handler.NewUnreadSeqAdapter(channelStore.IncrementMessageSeq, membershipStore.SetChannelLastRead))
-	messageSvc.SetConversationSeqStore(handler.NewUnreadSeqAdapter(conversationStore.IncrementMessageSeq, conversationStore.SetConversationLastRead))
-	messageSvc.SetThreadFollowStore(threadFollowStore)
-	messageSvc.SetUserStateStore(userStateStore)
-	messageSvc.SetParentIndex(parentIndexStore)
-	messageSvc.SetMarkdownRenderer(service.NewMarkdownRenderer())
-	messageSvc.SetActivator(convSvc)
+	messageSvc := service.NewMessageServiceFromDeps(service.MessageServiceDeps{
+		Messages:      messageStore,
+		Memberships:   membershipStore,
+		Conversations: conversationStore,
+		Publisher:     redisPubSub,
+		Broker:        brokerAdapter,
+		// Unread is tracked with one seq counter per parent (channel or
+		// conversation). The counter lives on the parent store; the per-user
+		// last-read on the membership store for channels and the conversation
+		// store for conversations — UnreadSeqAdapter binds the two halves.
+		ChannelSeq:      handler.NewUnreadSeqAdapter(channelStore.IncrementMessageSeq, membershipStore.SetChannelLastRead),
+		ConversationSeq: handler.NewUnreadSeqAdapter(conversationStore.IncrementMessageSeq, conversationStore.SetConversationLastRead),
+		ThreadFollows:   threadFollowStore,
+		UserState:       userStateStore,
+		ParentIndex:     parentIndexStore,
+		Markdown:        service.NewMarkdownRenderer(),
+		Activator:       convSvc,
+	})
 	userStateSvc := service.NewUserStateService(userStateStore, redisPubSub)
 	emojiSvc := service.NewEmojiService(emojiStore, userStore, redisPubSub)
 	if s3Client != nil {
@@ -234,17 +241,30 @@ func main() {
 		defer cancel()
 		// ID-only lists: topic names need no channel META, unread math or DM
 		// profile resolution — the full sidebar lists made every presence
-		// transition cost two enriched reads.
-		var topics []string
-		if ids, err := channelSvc.ListUserChannelIDs(ctx, userID); err == nil {
-			for _, id := range ids {
-				topics = append(topics, pubsub.ChannelName(id))
+		// transition cost two enriched reads. The two lookups are independent,
+		// so they run concurrently; each stays best-effort (a failed side just
+		// contributes no topics), so the goroutines never return an error.
+		var channelIDs, convIDs []string
+		var g errgroup.Group
+		g.Go(func() error {
+			if ids, err := channelSvc.ListUserChannelIDs(ctx, userID); err == nil {
+				channelIDs = ids
 			}
+			return nil
+		})
+		g.Go(func() error {
+			if ids, err := convSvc.ListUserConversationIDs(ctx, userID); err == nil {
+				convIDs = ids
+			}
+			return nil
+		})
+		_ = g.Wait()
+		topics := make([]string, 0, len(channelIDs)+len(convIDs))
+		for _, id := range channelIDs {
+			topics = append(topics, pubsub.ChannelName(id))
 		}
-		if ids, err := convSvc.ListUserConversationIDs(ctx, userID); err == nil {
-			for _, id := range ids {
-				topics = append(topics, pubsub.ConversationName(id))
-			}
+		for _, id := range convIDs {
+			topics = append(topics, pubsub.ConversationName(id))
 		}
 		return topics
 	})
@@ -256,16 +276,24 @@ func main() {
 	attachmentSvc.SetMediaURLCache(redisCache)
 	attachmentSvc.SetAccessChecker(messageSvc)
 	messageSvc.SetAttachmentManager(attachmentSvc)
-	notificationSvc := service.NewNotificationService(redisPubSub, membershipStore, conversationStore, channelStore, userStore, messageStore)
-	notificationSvc.SetPresence(presenceSvc)
-	notificationSvc.SetThreadFollowStore(threadFollowStore)
-	notificationSvc.SetUserStateService(userStateSvc)
-	// Desktop-delivery acks: the notifier reads them to gate the deferred
-	// mobile-push fallback; the WS handler (below) records them. Both share the
-	// same Redis-backed store so an ack and the deferred push can live on
-	// different backend instances.
-	notificationSvc.SetAckStore(redisCache)
-	notificationSvc.SetNameCache(redisCache) // cache channel/author names off the per-message notify path
+	notificationSvc := service.NewNotificationServiceFromDeps(service.NotificationServiceDeps{
+		Publisher:     redisPubSub,
+		Memberships:   membershipStore,
+		Conversations: conversationStore,
+		Channels:      channelStore,
+		Users:         userStore,
+		Messages:      messageStore,
+		Presence:      presenceSvc,
+		ThreadFollows: threadFollowStore,
+		UserState:     userStateSvc,
+		// Desktop-delivery acks: the notifier reads them to gate the deferred
+		// mobile-push fallback; the WS handler (below) records them. Both share
+		// the same Redis-backed store so an ack and the deferred push can live
+		// on different backend instances.
+		AckStore: redisCache,
+		// Cache channel/author names off the per-message notify path.
+		NameCache: redisCache,
+	})
 	oneSignalPush, err := service.NewOneSignalPushSender(service.OneSignalConfig{
 		AppID:     cfg.OneSignalAppID,
 		APIKey:    cfg.OneSignalRESTAPIKey,

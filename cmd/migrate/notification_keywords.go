@@ -26,7 +26,7 @@ func runNotificationKeywords(ctx context.Context, db *store.DB, args []string) i
 	var scanned, seeded, skipped, errCount int
 	cursor := ""
 	for {
-		page, next, err := users.List(ctx, nkPageSize, cursor)
+		page, next, err := users.ListUsers(ctx, nkPageSize, cursor)
 		if err != nil {
 			fatal("list users", err)
 		}
@@ -45,7 +45,7 @@ func runNotificationKeywords(ctx context.Context, db *store.DB, args []string) i
 				continue
 			}
 			u.NotificationSettings = ns
-			if err := users.Update(ctx, u); err != nil {
+			if err := users.UpdateUser(ctx, u); err != nil {
 				slog.Warn("update user failed", "userID", u.ID, "error", err)
 				errCount++
 				continue

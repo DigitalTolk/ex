@@ -1,8 +1,9 @@
-import { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useCallback, useRef, type ReactNode } from 'react';
 import { useLatestRef } from '@/hooks/useLatestRef';
 import { ExponentialBackoff, handleAll, retry } from 'cockatiel';
 import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
+import { usePresenceStore } from '@/stores/presence';
 
 interface PresenceState {
   online: Set<string>;
@@ -29,7 +30,9 @@ export const presenceRetry = {
 };
 
 export function PresenceProvider({ children }: { children: ReactNode }) {
-  const [online, setOnline] = useState<Set<string>>(new Set());
+  // State lives in the zustand store (per-user selectors for hot paths);
+  // this provider owns the lifecycle and re-exposes the context API.
+  const online = usePresenceStore((s) => s.online);
   const { isAuthenticated, user } = useAuth();
   // Monotonic token so a slow in-flight backfill can never clobber the
   // result of a NEWER refresh (reconnects can fire while one is running).
@@ -47,14 +50,14 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
         // online if the app is running, and a publish race can otherwise
         // drop their own presence event before the WS subscribes.
         if (userIDRef.current) next.add(userIDRef.current);
-        setOnline(next);
+        usePresenceStore.getState().replaceOnline(next);
       })
       .catch(() => {
         if (seq !== fetchSeqRef.current) return;
         // Even when every retry fails, seed self so the user's own dot is
         // correct; live presence.changed events keep updating the set.
         const selfID = userIDRef.current;
-        if (selfID) setOnline((prev) => (prev.has(selfID) ? prev : new Set(prev).add(selfID)));
+        if (selfID) usePresenceStore.getState().setUserOnline(selfID, true);
       });
     // userIDRef is a stable ref — listed to satisfy exhaustive-deps.
   }, [userIDRef]);
@@ -68,15 +71,7 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
   const isOnline = useCallback((userId: string) => online.has(userId), [online]);
 
   const setUserOnline = useCallback((userId: string, isOnlineNow: boolean) => {
-    setOnline((prev) => {
-      const has = prev.has(userId);
-      if (isOnlineNow && has) return prev;
-      if (!isOnlineNow && !has) return prev;
-      const next = new Set(prev);
-      if (isOnlineNow) next.add(userId);
-      else next.delete(userId);
-      return next;
-    });
+    usePresenceStore.getState().setUserOnline(userId, isOnlineNow);
   }, []);
 
   // Memoized so a presence event only re-renders consumers via the `online`

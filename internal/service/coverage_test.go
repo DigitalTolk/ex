@@ -6,19 +6,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
 	"golang.org/x/crypto/bcrypt"
 )
 
-// adminCtx returns a context where ClaimsFromContext yields a SystemRoleAdmin
-// user. Useful for exercising paths gated on isSystemAdmin.
-func adminCtx(userID string) context.Context {
-	return middleware.ContextWithClaims(context.Background(), &model.TokenClaims{
-		UserID:     userID,
-		SystemRole: model.SystemRoleAdmin,
-	})
+// seedSystemAdmin registers userID as a SystemRoleAdmin in the mock user
+// store — the single RBAC source isSystemAdmin consults. Useful for
+// exercising the system-admin bypass paths.
+func seedSystemAdmin(users *mockUserStore, userID string) {
+	users.users[userID] = &model.User{ID: userID, SystemRole: model.SystemRoleAdmin}
 }
 
 // ============================================================================
@@ -183,17 +180,55 @@ func TestArchive_UpdateChannelError(t *testing.T) {
 	}
 }
 
+// isSystemAdmin fails closed on every guard: empty userID, user-store
+// error, and a service wired without a user store.
+func TestIsSystemAdmin_FailsClosed(t *testing.T) {
+	svc, _, _, users, _, _ := setupChannelServiceWithUsers()
+	seedSystemAdmin(users, "sys-admin")
+	if !svc.isSystemAdmin(context.Background(), "sys-admin") {
+		t.Fatal("stored admin should be recognized")
+	}
+	if svc.isSystemAdmin(context.Background(), "") {
+		t.Fatal("empty userID must not be admin")
+	}
+	users.getUserErr = errors.New("user store down")
+	if svc.isSystemAdmin(context.Background(), "sys-admin") {
+		t.Fatal("user-store error must fail closed")
+	}
+	nilUsers := NewChannelService(newMockChannelStore(), newMockMembershipStore(), nil, newMockMessageStore(), newMockCache(), newMockBroker(), newMockPublisher())
+	if nilUsers.isSystemAdmin(context.Background(), "sys-admin") {
+		t.Fatal("nil user store must fail closed")
+	}
+}
+
+// A system admin who IS a member, but below the required role, still gets
+// the bypass (checkPermission consults the stored role on a shortfall).
+func TestCheckPermission_MemberBelowRole_SystemAdminBypass(t *testing.T) {
+	svc, channels, memberships, users, _, _ := setupChannelServiceWithUsers()
+	seedSystemAdmin(users, "sys-admin")
+	channels.channels["ch-low"] = &model.Channel{ID: "ch-low", Name: "low", Type: model.ChannelTypePublic}
+	memberships.memberships["ch-low#sys-admin"] = &model.ChannelMembership{
+		ChannelID: "ch-low",
+		UserID:    "sys-admin",
+		Role:      model.ChannelRoleMember,
+	}
+	if err := svc.Archive(context.Background(), "sys-admin", "ch-low"); err != nil {
+		t.Fatalf("Archive with member-role admin: %v", err)
+	}
+}
+
 // Archive as system admin should bypass channel-level permission checks.
 func TestArchive_SystemAdminBypass(t *testing.T) {
-	svc, channels, _, _, _ := setupChannelService()
-	ctx := adminCtx("sys-admin")
+	svc, channels, _, users, _, _ := setupChannelServiceWithUsers()
+	seedSystemAdmin(users, "sys-admin")
+	ctx := context.Background()
 
 	channels.channels["ch-sys-arch"] = &model.Channel{
 		ID:   "ch-sys-arch",
 		Name: "sys-arch",
 		Type: model.ChannelTypePublic,
 	}
-	// No membership for sys-admin, but admin context allows bypass.
+	// No membership for sys-admin, but the stored admin role allows bypass.
 	if err := svc.Archive(ctx, "sys-admin", "ch-sys-arch"); err != nil {
 		t.Fatalf("Archive: %v", err)
 	}
@@ -213,8 +248,9 @@ func TestUpdateMemberRole_PermissionDenied(t *testing.T) {
 }
 
 func TestUpdateMemberRole_PromoteToOwner_BySystemAdmin(t *testing.T) {
-	svc, _, memberships, _, _ := setupChannelService()
-	ctx := adminCtx("sys-admin")
+	svc, _, memberships, users, _, _ := setupChannelServiceWithUsers()
+	seedSystemAdmin(users, "sys-admin")
+	ctx := context.Background()
 
 	// Target exists, sys-admin has no membership but is system admin.
 	memberships.memberships["ch-promo#target"] = &model.ChannelMembership{
@@ -596,8 +632,9 @@ func TestRemoveMember_TargetNotFound(t *testing.T) {
 
 // Owner removed by system admin -> allowed.
 func TestRemoveMember_OwnerBySystemAdmin(t *testing.T) {
-	svc, _, memberships, _, _ := setupChannelService()
-	ctx := adminCtx("sys-admin")
+	svc, _, memberships, users, _, _ := setupChannelServiceWithUsers()
+	seedSystemAdmin(users, "sys-admin")
+	ctx := context.Background()
 
 	memberships.memberships["ch-rosa#admin"] = &model.ChannelMembership{
 		ChannelID: "ch-rosa",

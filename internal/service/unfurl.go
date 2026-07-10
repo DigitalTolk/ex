@@ -14,9 +14,10 @@ import (
 	"net/http"
 	"net/url"
 	"path"
-	"regexp"
 	"strings"
 	"time"
+
+	"golang.org/x/net/html"
 )
 
 // UnfurlPreview is the payload returned for a successfully unfurled URL.
@@ -583,19 +584,11 @@ func isPublicIP(ip net.IP) bool {
 	return true
 }
 
-// metaTagRE matches a self-closing or open <meta …> tag in any order.
-// Cheap & good-enough: we only care about a fixed set of name/property
-// values, never the surrounding HTML structure.
-var metaTagRE = regexp.MustCompile(`(?is)<meta\b([^>]+)>`)
-var attrRE = regexp.MustCompile(`(?is)([a-zA-Z:_-]+)\s*=\s*("([^"]*)"|'([^']*)')`)
-var titleRE = regexp.MustCompile(`(?is)<title\b[^>]*>(.*?)</title>`)
-var linkTagRE = regexp.MustCompile(`(?is)<link\b([^>]+)>`)
-var imgTagRE = regexp.MustCompile(`(?is)<img\b([^>]+)>`)
-
 // scrapePreview pulls OG/Twitter/standard metadata out of an HTML
-// document. The output URL is always the requested URL; everything else
-// is best-effort.
-func scrapePreview(html string, requestedURL string) *UnfurlPreview {
+// document using x/net/html's tokenizer — spec-grade lexing (quoting,
+// entities, attribute order) instead of HTML-by-regex. The output URL is
+// always the requested URL; everything else is best-effort.
+func scrapePreview(doc string, requestedURL string) *UnfurlPreview {
 	preview := &UnfurlPreview{URL: requestedURL}
 	base, _ := url.Parse(requestedURL)
 	resolveImage := func(raw string) string {
@@ -616,72 +609,101 @@ func scrapePreview(html string, requestedURL string) *UnfurlPreview {
 		}
 		return base.ResolveReference(ref).String()
 	}
-	tagAttrs := func(tagBody string) map[string]string {
-		out := make(map[string]string, 4)
-		for _, m := range attrRE.FindAllStringSubmatch(tagBody, -1) {
-			val := m[3]
-			if val == "" {
-				val = m[4]
+
+	// Fallback candidates are collected during the single token pass and
+	// applied after it, preserving the precedence of the old scraper:
+	// og/twitter meta beats <title> / <link rel=image_src>, which beats
+	// the first <img> in the document.
+	var (
+		titleText string
+		titleDone bool
+		inTitle   bool
+		linkImage string
+		firstImg  string
+		sawImg    bool
+	)
+
+	z := html.NewTokenizer(strings.NewReader(doc))
+scan:
+	for {
+		switch z.Next() {
+		case html.ErrorToken:
+			// io.EOF or malformed input — either way, keep what we have.
+			break scan
+		case html.TextToken:
+			if inTitle {
+				titleText += string(z.Text())
 			}
-			out[strings.ToLower(m[1])] = val
-		}
-		return out
-	}
-	for _, m := range metaTagRE.FindAllStringSubmatch(html, -1) {
-		attrs := tagAttrs(m[1])
-		key := attrs["property"]
-		if key == "" {
-			key = attrs["name"]
-		}
-		val := attrs["content"]
-		if val == "" {
-			continue
-		}
-		switch strings.ToLower(key) {
-		case "og:title", "twitter:title":
-			if preview.Title == "" {
-				preview.Title = val
+		case html.StartTagToken, html.SelfClosingTagToken:
+			name, hasAttr := z.TagName()
+			attrs := make(map[string]string, 4)
+			for hasAttr {
+				var key, val []byte
+				key, val, hasAttr = z.TagAttr()
+				attrs[string(key)] = string(val)
 			}
-		case "og:description", "twitter:description", "description":
-			if preview.Description == "" {
-				preview.Description = val
+			switch string(name) {
+			case "meta":
+				key := attrs["property"]
+				if key == "" {
+					key = attrs["name"]
+				}
+				val := attrs["content"]
+				if val == "" {
+					continue
+				}
+				switch strings.ToLower(key) {
+				case "og:title", "twitter:title":
+					if preview.Title == "" {
+						preview.Title = val
+					}
+				case "og:description", "twitter:description", "description":
+					if preview.Description == "" {
+						preview.Description = val
+					}
+				case "og:image", "twitter:image", "twitter:image:src":
+					if preview.Image == "" {
+						preview.Image = resolveImage(val)
+					}
+				case "og:site_name":
+					if preview.SiteName == "" {
+						preview.SiteName = val
+					}
+				}
+			case "title":
+				if !titleDone {
+					inTitle = true
+				}
+			case "link":
+				// <link rel="image_src" href="…"> — used by some sites
+				// (coveralls.io, older blogs) instead of og:image.
+				if linkImage == "" && strings.EqualFold(attrs["rel"], "image_src") && attrs["href"] != "" {
+					linkImage = attrs["href"]
+				}
+			case "img":
+				if !sawImg {
+					sawImg = true
+					firstImg = attrs["src"]
+				}
 			}
-		case "og:image", "twitter:image", "twitter:image:src":
-			if preview.Image == "" {
-				preview.Image = resolveImage(val)
-			}
-		case "og:site_name":
-			if preview.SiteName == "" {
-				preview.SiteName = val
+		case html.EndTagToken:
+			name, _ := z.TagName()
+			if string(name) == "title" && inTitle {
+				inTitle = false
+				titleDone = true
 			}
 		}
 	}
 	if preview.Title == "" {
-		if m := titleRE.FindStringSubmatch(html); m != nil {
-			preview.Title = strings.TrimSpace(m[1])
-		}
+		preview.Title = strings.TrimSpace(titleText)
 	}
-	if preview.Image == "" {
-		// <link rel="image_src" href="…"> — used by some sites
-		// (coveralls.io, older blogs) instead of og:image.
-		for _, m := range linkTagRE.FindAllStringSubmatch(html, -1) {
-			attrs := tagAttrs(m[1])
-			if strings.EqualFold(attrs["rel"], "image_src") && attrs["href"] != "" {
-				preview.Image = resolveImage(attrs["href"])
-				break
-			}
-		}
+	if preview.Image == "" && linkImage != "" {
+		preview.Image = resolveImage(linkImage)
 	}
-	if preview.Image == "" {
-		// Last resort: first reasonably-sized <img> in the document.
-		// Tracking pixels ("1x1.gif") are common in the head; skip
-		// images whose src clearly points at a pixel.
-		if m := imgTagRE.FindStringSubmatch(html); m != nil {
-			attrs := tagAttrs(m[1])
-			if src := attrs["src"]; src != "" && !strings.Contains(src, "1x1") {
-				preview.Image = resolveImage(src)
-			}
-		}
+	// Last resort: the first <img> in the document — but skip obvious
+	// tracking pixels ("1x1.gif"), which are common in the head.
+	if preview.Image == "" && firstImg != "" && !strings.Contains(firstImg, "1x1") {
+		preview.Image = resolveImage(firstImg)
 	}
 	return preview
 }

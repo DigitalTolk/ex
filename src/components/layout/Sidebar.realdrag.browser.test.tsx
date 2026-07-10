@@ -481,8 +481,11 @@ describe('Sidebar real drag-and-drop (no library mock)', () => {
     // The end-of-section push-aside gap opened; sliding onto it leaves the
     // tail target's hit area, so pragmatic asks the tail zone's getIsSticky
     // to retain it (same dead-zone contract as the row targets).
-    const gap = document.querySelector('[data-testid="sidebar-drop-gap-__channels__"]');
-    expect(gap, 'the end-of-section gap should have opened').toBeTruthy();
+    const gap = await vi.waitFor(() => {
+      const el = document.querySelector('[data-testid="sidebar-drop-gap-__channels__"]');
+      expect(el, 'the end-of-section gap should have opened').toBeTruthy();
+      return el as Element;
+    });
     const overGap = fire('dragover', gap!, center(gap!));
     expect(overGap.defaultPrevented, 'sticky must keep the tail drop acceptable over the gap').toBe(true);
     fire('drop', gap!, center(gap!));
@@ -532,11 +535,14 @@ describe('Sidebar real drag-and-drop (no library mock)', () => {
     // The category push-aside gap opened above cat-work; sliding onto it
     // leaves the hitbox, so pragmatic asks the hitbox's getIsSticky to retain
     // it — the same no-dead-zone contract as the channel targets.
-    const gap = document.querySelector('[data-testid="sidebar-drop-gap-cat-cat-work"]');
-    expect(gap, 'the category gap should have opened above cat-work').toBeTruthy();
-    const overGap = fire('dragover', gap!, center(gap!));
+    const gap = await vi.waitFor(() => {
+      const el = document.querySelector('[data-testid="sidebar-drop-gap-cat-cat-work"]');
+      expect(el, 'the category gap should have opened above cat-work').toBeTruthy();
+      return el as Element;
+    });
+    const overGap = fire('dragover', gap, center(gap));
     expect(overGap.defaultPrevented, 'sticky must keep the boundary hitbox acceptable over the gap').toBe(true);
-    fire('drop', gap!, center(gap!));
+    fire('drop', gap, center(gap));
     fire('dragend', source!);
     await nextFrame();
 
@@ -640,9 +646,11 @@ describe('Sidebar real drag-and-drop (no library mock)', () => {
     fire('dragover', rowOther!, bottomEdge(rowOther!));
     fire('drop', rowOther!, bottomEdge(rowOther!));
     fire('dragend', source!);
-    await nextFrame();
+    // Polled: under full-suite CPU saturation the drop handler's commit can
+    // lag a frame on webkit — the release-before-commit semantics under test
+    // were already fixed at fire-time above.
+    await vi.waitFor(() => expect(reorderSidebarMutate).toHaveBeenCalled());
 
-    expect(reorderSidebarMutate).toHaveBeenCalled();
     const updates = reorderSidebarMutate.mock.calls[0]?.[0]?.updates as Array<{ id: string; sidebarPosition: number }>;
     const posOf = (id: string) => updates.find((u) => u.id === id)?.sidebarPosition ?? -1;
     // ch-a lands at the END (after ch-other), not the stale slot before ch-other.

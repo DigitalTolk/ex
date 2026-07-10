@@ -38,7 +38,6 @@ type inboundMessage struct {
 	MessageID       string `json:"messageID"`       // optional — set on a "notification.ack" frame
 }
 
-
 // typingGate caches per-connection membership verdicts for typing frames.
 // Typing is the chattiest inbound event (keystroke bursts) and each frame
 // paid a DynamoDB membership read; a verdict is stable enough to reuse for

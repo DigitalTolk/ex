@@ -82,14 +82,15 @@ func TestChannelService_Create_MemberAllowed(t *testing.T) {
 }
 
 func TestChannelService_GetVisibleByID_AccessCases(t *testing.T) {
-	svc, channels, memberships, _, _ := setupChannelService()
+	svc, channels, memberships, users, _, _ := setupChannelServiceWithUsers()
+	seedSystemAdmin(users, "admin")
 	channels.channels["visible"] = &model.Channel{ID: "visible", Slug: "visible", Type: model.ChannelTypePrivate}
 	channels.channels["archived"] = &model.Channel{ID: "archived", Slug: "archived", Type: model.ChannelTypePrivate, Archived: true}
 
 	if _, err := svc.GetVisibleByID(context.Background(), "user-1", "archived"); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("archived err = %v, want ErrForbidden", err)
 	}
-	if _, err := svc.GetVisibleByID(adminCtx("admin"), "admin", "visible"); !errors.Is(err, ErrForbidden) {
+	if _, err := svc.GetVisibleByID(context.Background(), "admin", "visible"); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("admin must NOT auto-access a private channel: %v", err)
 	}
 	if _, err := svc.GetVisibleByID(context.Background(), "user-1", "visible"); !errors.Is(err, ErrForbidden) {
@@ -103,14 +104,15 @@ func TestChannelService_GetVisibleByID_AccessCases(t *testing.T) {
 }
 
 func TestChannelService_GetVisibleBySlug_AccessCases(t *testing.T) {
-	svc, channels, memberships, _, _ := setupChannelService()
+	svc, channels, memberships, users, _, _ := setupChannelServiceWithUsers()
+	seedSystemAdmin(users, "admin")
 	channels.channels["visible-slug"] = &model.Channel{ID: "visible-slug", Slug: "visible-slug", Type: model.ChannelTypePrivate}
 	channels.channels["archived-slug"] = &model.Channel{ID: "archived-slug", Slug: "archived-slug", Type: model.ChannelTypePrivate, Archived: true}
 
 	if _, err := svc.GetVisibleBySlug(context.Background(), "user-1", "archived-slug"); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("archived slug err = %v, want ErrForbidden", err)
 	}
-	if _, err := svc.GetVisibleBySlug(adminCtx("admin"), "admin", "visible-slug"); !errors.Is(err, ErrForbidden) {
+	if _, err := svc.GetVisibleBySlug(context.Background(), "admin", "visible-slug"); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("admin must NOT auto-access a private channel by slug: %v", err)
 	}
 	if _, err := svc.GetVisibleBySlug(context.Background(), "user-1", "visible-slug"); !errors.Is(err, ErrForbidden) {

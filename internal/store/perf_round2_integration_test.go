@@ -48,30 +48,30 @@ func TestTokenStore_UserTokenIndexLifecycle(t *testing.T) {
 
 	// Legacy rows: created then stripped of their index attributes.
 	for _, h := range []string{"legacy-1", "legacy-2"} {
-		if err := s.Create(ctx, tokenFor("u-legacy", h)); err != nil {
+		if err := s.StoreRefreshToken(ctx, tokenFor("u-legacy", h)); err != nil {
 			t.Fatalf("Create %s: %v", h, err)
 		}
 		stripTokenGSI(t, db, h)
 	}
 	// A modern row for another user (indexed at create time).
-	if err := s.Create(ctx, tokenFor("u-other", "modern-1")); err != nil {
+	if err := s.StoreRefreshToken(ctx, tokenFor("u-other", "modern-1")); err != nil {
 		t.Fatalf("Create modern: %v", err)
 	}
 
 	// Unseeded: DeleteAllForUser stays on the Scan path and still revokes
 	// the legacy (unindexed) rows — revocation is never incomplete.
-	if err := s.DeleteAllForUser(ctx, "u-legacy"); err != nil {
+	if err := s.DeleteAllRefreshTokensForUser(ctx, "u-legacy"); err != nil {
 		t.Fatalf("DeleteAllForUser (scan path): %v", err)
 	}
-	if _, err := s.GetByHash(ctx, "legacy-1"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.GetRefreshToken(ctx, "legacy-1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("legacy-1 after scan revoke = %v, want gone", err)
 	}
-	if _, err := s.GetByHash(ctx, "modern-1"); err != nil {
+	if _, err := s.GetRefreshToken(ctx, "modern-1"); err != nil {
 		t.Fatalf("other user's token must survive: %v", err)
 	}
 
 	// Backfill: indexes remaining legacy rows and writes the seeded marker.
-	if err := s.Create(ctx, tokenFor("u-legacy2", "legacy-3")); err != nil {
+	if err := s.StoreRefreshToken(ctx, tokenFor("u-legacy2", "legacy-3")); err != nil {
 		t.Fatalf("Create legacy-3: %v", err)
 	}
 	stripTokenGSI(t, db, "legacy-3")
@@ -89,19 +89,19 @@ func TestTokenStore_UserTokenIndexLifecycle(t *testing.T) {
 
 	// Seeded: DeleteAllForUser takes the GSI Query path and finds the
 	// backfilled legacy row.
-	if err := s.DeleteAllForUser(ctx, "u-legacy2"); err != nil {
+	if err := s.DeleteAllRefreshTokensForUser(ctx, "u-legacy2"); err != nil {
 		t.Fatalf("DeleteAllForUser (index path): %v", err)
 	}
-	if _, err := s.GetByHash(ctx, "legacy-3"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.GetRefreshToken(ctx, "legacy-3"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("legacy-3 after index revoke = %v, want gone", err)
 	}
-	if _, err := s.GetByHash(ctx, "modern-1"); err != nil {
+	if _, err := s.GetRefreshToken(ctx, "modern-1"); err != nil {
 		t.Fatalf("other user's token must survive the index path too: %v", err)
 	}
-	if err := s.DeleteAllForUser(ctx, "u-other"); err != nil {
+	if err := s.DeleteAllRefreshTokensForUser(ctx, "u-other"); err != nil {
 		t.Fatalf("DeleteAllForUser modern: %v", err)
 	}
-	if _, err := s.GetByHash(ctx, "modern-1"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.GetRefreshToken(ctx, "modern-1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("modern-1 after revoke = %v, want gone", err)
 	}
 }
@@ -112,7 +112,7 @@ func TestTokenStore_IndexPathFaults(t *testing.T) {
 
 	// Marker probe failure surfaces (revocation must not silently pick a path).
 	s := NewTokenStore(withFault(db, func(f *faultClient) { f.failGetItem = true }))
-	if err := s.DeleteAllForUser(ctx, "u-x"); !errors.Is(err, errInjected) {
+	if err := s.DeleteAllRefreshTokensForUser(ctx, "u-x"); !errors.Is(err, errInjected) {
 		t.Fatalf("marker probe fault = %v, want errInjected", err)
 	}
 	if err := s.EnsureUserTokenIndex(ctx); !errInjectedIs(err) {
@@ -124,7 +124,7 @@ func TestTokenStore_IndexPathFaults(t *testing.T) {
 		t.Fatalf("backfill scan fault = %v", err)
 	}
 	seedLegacy := func(hash string) {
-		if err := NewTokenStore(db).Create(ctx, tokenFor("u-f", hash)); err != nil {
+		if err := NewTokenStore(db).StoreRefreshToken(ctx, tokenFor("u-f", hash)); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 		stripTokenGSI(t, db, hash)
@@ -141,7 +141,7 @@ func TestTokenStore_IndexPathFaults(t *testing.T) {
 	if err := NewTokenStore(db).EnsureUserTokenIndex(ctx); err != nil {
 		t.Fatalf("EnsureUserTokenIndex: %v", err)
 	}
-	if err := NewTokenStore(withFault(db, func(f *faultClient) { f.failQuery = true })).DeleteAllForUser(ctx, "u-f"); !errInjectedIs(err) {
+	if err := NewTokenStore(withFault(db, func(f *faultClient) { f.failQuery = true })).DeleteAllRefreshTokensForUser(ctx, "u-f"); !errInjectedIs(err) {
 		t.Fatalf("index query fault = %v", err)
 	}
 	// Corrupt row in the backfill scan hits the unmarshal arm — needs a fresh
@@ -156,7 +156,7 @@ func TestTokenStore_BackfillSkipsUserlessRow(t *testing.T) {
 	s := NewTokenStore(db)
 	// A garbage RTOKEN row with no userID is unrevocable — the backfill skips
 	// it (it expires via TTL) instead of failing the whole run.
-	if err := s.Create(ctx, tokenFor("", "userless-1")); err != nil {
+	if err := s.StoreRefreshToken(ctx, tokenFor("", "userless-1")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	stripTokenGSI(t, db, "userless-1")
@@ -171,7 +171,7 @@ func TestTokenStore_BackfillSkipsUserlessRow(t *testing.T) {
 func TestTokenStore_BackfillCorruptRow(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
-	if err := NewTokenStore(db).Create(ctx, tokenFor("u-c", "corrupt-src")); err != nil {
+	if err := NewTokenStore(db).StoreRefreshToken(ctx, tokenFor("u-c", "corrupt-src")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	stripTokenGSI(t, db, "corrupt-src")
@@ -316,7 +316,7 @@ func TestUserStore_ClearUserStatusIfExpired(t *testing.T) {
 		Status: "active", CreatedAt: time.Now(),
 		UserStatus: &model.UserStatus{Emoji: ":zzz:", Text: "away", ClearAt: &clearAt},
 	}
-	if err := s.Create(ctx, u); err != nil {
+	if err := s.CreateUser(ctx, u); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -325,7 +325,7 @@ func TestUserStore_ClearUserStatusIfExpired(t *testing.T) {
 	if err != nil || !cleared {
 		t.Fatalf("ClearUserStatusIfExpired = %v (err=%v), want cleared", cleared, err)
 	}
-	got, err := s.GetByID(ctx, u.ID)
+	got, err := s.GetUser(ctx, u.ID)
 	if err != nil || got.UserStatus != nil {
 		t.Fatalf("status after clear = %+v (err=%v), want nil", got.UserStatus, err)
 	}
@@ -334,14 +334,14 @@ func TestUserStore_ClearUserStatusIfExpired(t *testing.T) {
 	// the conditional no-ops.
 	newClear := time.Now().Add(time.Hour).Truncate(time.Millisecond)
 	got.UserStatus = &model.UserStatus{Emoji: ":new:", Text: "back", ClearAt: &newClear}
-	if err := s.Update(ctx, got); err != nil {
+	if err := s.UpdateUser(ctx, got); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	cleared, err = s.ClearUserStatusIfExpired(ctx, u.ID, clearAt, now)
 	if err != nil || cleared {
 		t.Fatalf("stale clear = %v (err=%v), want no-op", cleared, err)
 	}
-	fresh, _ := s.GetByID(ctx, u.ID)
+	fresh, _ := s.GetUser(ctx, u.ID)
 	if fresh.UserStatus == nil || fresh.UserStatus.Text != "back" {
 		t.Fatalf("fresh status clobbered: %+v", fresh.UserStatus)
 	}
@@ -359,14 +359,14 @@ func TestTokenStore_IndexPathBatchDeleteFault(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewTokenStore(db)
-	if err := s.Create(ctx, tokenFor("u-bd", "bd-1")); err != nil {
+	if err := s.StoreRefreshToken(ctx, tokenFor("u-bd", "bd-1")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if err := s.EnsureUserTokenIndex(ctx); err != nil {
 		t.Fatalf("EnsureUserTokenIndex: %v", err)
 	}
 	faulted := NewTokenStore(withFault(db, func(f *faultClient) { f.failBatchWriteItem = true }))
-	if err := faulted.DeleteAllForUser(ctx, "u-bd"); !errors.Is(err, errInjected) {
+	if err := faulted.DeleteAllRefreshTokensForUser(ctx, "u-bd"); !errors.Is(err, errInjected) {
 		t.Fatalf("batch delete fault = %v, want errInjected", err)
 	}
 }

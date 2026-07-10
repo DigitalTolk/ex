@@ -13,9 +13,9 @@ func marshalJSON(v interface{}) ([]byte, error) { return json.Marshal(v) }
 //
 // Three node variants share one struct:
 //
-//   { "type": "root",    "children": [...] }
-//   { "type": "element", "tagName": "p", "properties": {...}, "children": [...] }
-//   { "type": "text",    "value": "..." }
+//	{ "type": "root",    "children": [...] }
+//	{ "type": "element", "tagName": "p", "properties": {...}, "children": [...] }
+//	{ "type": "text",    "value": "..." }
 //
 // Custom domain tags use `tagName: "ex-mention-user"`, `"ex-hashtag"`,
 // `"ex-giphy"` and so on; the frontend's components map maps them to

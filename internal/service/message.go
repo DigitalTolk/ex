@@ -28,6 +28,13 @@ const (
 
 // ConversationActivator is implemented by ConversationService and lets
 // MessageService activate a conversation on first message send.
+//
+// Test-double policy: stateful fakes (in-memory maps mimicking store
+// semantics) stay hand-written in mocks_test.go; purely mechanical stubs —
+// a programmable func + call recording, like this one — are generated with
+// moq (`go generate ./internal/service/`).
+//
+//go:generate go tool moq -out activator_moq_test.go -stub . ConversationActivator
 type ConversationActivator interface {
 	Activate(ctx context.Context, convID string) error
 }
@@ -100,7 +107,59 @@ type ReactionActivityRecorder interface {
 	RecordReaction(ctx context.Context, msg *model.Message, parentType, actorID, emoji string)
 }
 
-// NewMessageService creates a MessageService with the given dependencies.
+// MessageServiceDeps declares the full dependency surface of MessageService
+// in one place, splitting hard requirements from optional capabilities. The
+// production wiring (cmd/server) constructs through this so a half-wired
+// service can't escape into the router; tests use NewMessageService with just
+// the core five and opt into extras via the Set* methods.
+type MessageServiceDeps struct {
+	// Required core.
+	Messages      MessageStore
+	Memberships   MembershipStore
+	Conversations ConversationStore
+	Publisher     Publisher
+	Broker        Broker
+
+	// Required in production, optional in tests.
+	ChannelSeq      UnreadSeqStore
+	ConversationSeq UnreadSeqStore
+	ThreadFollows   ThreadFollowStore
+	UserState       UserStateStore
+	ParentIndex     ParentPinFileIndexStore
+	Markdown        *MarkdownRenderer
+	Activator       ConversationActivator
+
+	// Optional capabilities (nil degrades gracefully). AttachmentManager is
+	// NOT here: attachments and messages reference each other, so that edge
+	// is late-bound via SetAttachmentManager after both exist.
+	Notifier  MessageNotifier
+	Indexer   MessageIndexer
+	Reactions ReactionActivityRecorder
+}
+
+// NewMessageServiceFromDeps constructs a fully-wired MessageService.
+func NewMessageServiceFromDeps(d MessageServiceDeps) *MessageService {
+	return &MessageService{
+		messages:      d.Messages,
+		memberships:   d.Memberships,
+		conversations: d.Conversations,
+		publisher:     d.Publisher,
+		broker:        d.Broker,
+		channelSeq:    d.ChannelSeq,
+		convSeq:       d.ConversationSeq,
+		threadFollows: d.ThreadFollows,
+		userState:     d.UserState,
+		parentIndex:   d.ParentIndex,
+		markdown:      d.Markdown,
+		activator:     d.Activator,
+		notifier:      d.Notifier,
+		indexer:       d.Indexer,
+		reactions:     d.Reactions,
+	}
+}
+
+// NewMessageService creates a MessageService from the required core five —
+// the test-oriented constructor; optional capabilities attach via Set*.
 func NewMessageService(
 	messages MessageStore,
 	memberships MembershipStore,
@@ -108,13 +167,13 @@ func NewMessageService(
 	publisher Publisher,
 	broker Broker,
 ) *MessageService {
-	return &MessageService{
-		messages:      messages,
-		memberships:   memberships,
-		conversations: conversations,
-		publisher:     publisher,
-		broker:        broker,
-	}
+	return NewMessageServiceFromDeps(MessageServiceDeps{
+		Messages:      messages,
+		Memberships:   memberships,
+		Conversations: conversations,
+		Publisher:     publisher,
+		Broker:        broker,
+	})
 }
 
 // SetActivator wires the conversation activator. Called from main wiring after

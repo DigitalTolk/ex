@@ -41,11 +41,11 @@ func main() {
 		Status:       "active",
 		CreatedAt:    time.Now(),
 	}
-	if err := users.Create(ctx, user); err != nil {
+	if err := users.CreateUser(ctx, user); err != nil {
 		log.Printf("user create (may already exist): %v", err)
 	}
 
-	ch, err := channels.GetByID(ctx, "ch-repro")
+	ch, err := channels.GetChannel(ctx, "ch-repro")
 	if err != nil {
 		log.Fatalf("channel missing (run seed 1 first): %v", err)
 	}

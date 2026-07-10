@@ -182,4 +182,46 @@ describe('message cache patch helpers (browser)', () => {
     markMessageDeletedInCache(qc, 'ch-1', 'm1', undefined, { authorID: 'admin', createdAt: '2026-06-01T00:00:00Z' });
     expect(read(qc)[0]).toMatchObject({ deleted: true, body: '', authorID: 'admin', createdAt: '2026-06-01T00:00:00Z' });
   });
+
+  // The scope-narrowing arms: when the event names its parent type, only that
+  // scope's cache is touched — the other scope (same parentID) stays intact.
+  function seedConversation(qc: QueryClient, items: Message[]) {
+    qc.setQueryData(queryKeys.conversationMessages('ch-1', null), {
+      pages: [{ items, hasMoreNewer: false, newestID: items[0]?.id }],
+      pageParams: [undefined],
+    });
+  }
+  function readConversation(qc: QueryClient): Message[] {
+    const data = qc.getQueryData(queryKeys.conversationMessages('ch-1', null)) as
+      | { pages: Array<{ items: Message[] }> }
+      | undefined;
+    return data?.pages[0]?.items ?? [];
+  }
+
+  it('a channel-scoped event leaves a same-ID conversation cache untouched', () => {
+    const qc = new QueryClient();
+    seed(qc, [msg('m1')]);
+    seedConversation(qc, [msg('m1')]);
+    updateMessageInCache(qc, 'ch-1', msg('m1', { body: 'edited', parentType: 'channel' }));
+    expect(read(qc)[0].body).toBe('edited');
+    expect(readConversation(qc)[0].body).toBe('m1');
+  });
+
+  it('a conversation-scoped event leaves a same-ID channel cache untouched', () => {
+    const qc = new QueryClient();
+    seed(qc, [msg('m1')]);
+    seedConversation(qc, [msg('m1')]);
+    updateMessageInCache(qc, 'ch-1', msg('m1', { body: 'edited', parentType: 'conversation' }));
+    expect(read(qc)[0].body).toBe('m1');
+    expect(readConversation(qc)[0].body).toBe('edited');
+  });
+
+  it('markMessageDeletedInCache narrows by the patch parentType', () => {
+    const qc = new QueryClient();
+    seed(qc, [msg('m1')]);
+    seedConversation(qc, [msg('m1')]);
+    markMessageDeletedInCache(qc, 'ch-1', 'm1', undefined, { parentType: 'conversation' });
+    expect(read(qc)[0].deleted).toBeUndefined();
+    expect(readConversation(qc)[0].deleted).toBe(true);
+  });
 });

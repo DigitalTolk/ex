@@ -22,6 +22,7 @@ const DISMISS_VELOCITY = 400;
 
 function offscreen(horizontal: boolean) {
   /* v8 ignore next -- SSR guard; this browser-only app always has window */
+  /* istanbul ignore next -- SSR guard; this browser-only app always has window */
   if (typeof window === 'undefined') return horizontal ? 600 : 800;
   return horizontal ? window.innerWidth : window.innerHeight;
 }

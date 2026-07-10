@@ -21,6 +21,7 @@ let pendingConsumes = 0;
 const consumedPops = new WeakSet<Event>();
 
 /* v8 ignore next -- browser-only app: window always exists; the guard is for module import under SSR-style tooling */
+/* istanbul ignore next -- browser-only app: window always exists; the guard is for module import under SSR-style tooling */
 if (typeof window !== 'undefined') {
   window.addEventListener('popstate', (e) => {
     if (pendingConsumes > 0) {

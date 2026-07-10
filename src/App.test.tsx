@@ -26,10 +26,12 @@ describe('App', () => {
     render(<App />);
     expect(screen.getByTestId('app-auth-loading')).toBeInTheDocument();
     expect(screen.queryByText('Loading...')).toBeNull();
+    // Generous timeout: auth restore + route render can lag under
+    // full-suite saturation in the merged multi-project run.
     await waitFor(() => {
       // After auth finishes loading, unauthenticated user sees login page
       expect(screen.getByText('Welcome back')).toBeInTheDocument();
-    });
+    }, { timeout: 10000 });
   });
 
   it('dismisses the index.html boot splash on first commit', async () => {

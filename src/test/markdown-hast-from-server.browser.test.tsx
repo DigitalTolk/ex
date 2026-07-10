@@ -101,4 +101,40 @@ describe('renderMarkdown — server hast fixtures', () => {
     expect(channelPill).not.toBeNull();
     expect(channelPill?.textContent).toBe('~general');
   });
+
+  it('unwraps tags outside the allowlist, keeping their text children', async () => {
+    const hostile: HastNode = {
+      type: 'root',
+      children: [
+        {
+          type: 'element',
+          tagName: 'p',
+          children: [
+            {
+              type: 'element',
+              tagName: 'script',
+              children: [{ type: 'text', value: 'not-executed' }],
+            },
+            {
+              // Childless on purpose (omitempty): must unwrap to nothing
+              // instead of crashing the normaliser.
+              type: 'element',
+              tagName: 'iframe',
+              properties: { src: 'https://evil.example' },
+            },
+            { type: 'text', value: ' safe' },
+          ],
+        },
+      ],
+    };
+    const screen = await render(<>{renderMarkdown('', { tree: hostile })}</>);
+    expect(screen.container.querySelector('script, iframe')).toBeNull();
+    await expect.element(screen.getByText('not-executed safe')).toBeVisible();
+  });
+
+  it('renders a bare text root (malformed server tree) as plain text', async () => {
+    const textRoot = { type: 'text', value: 'plain text root' } as HastNode;
+    const screen = await render(<>{renderMarkdown('', { tree: textRoot })}</>);
+    await expect.element(screen.getByText('plain text root')).toBeVisible();
+  });
 });

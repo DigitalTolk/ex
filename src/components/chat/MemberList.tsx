@@ -212,7 +212,10 @@ export function MemberList({ members, channelId, channelSlug, currentUserId, cur
           {members.map((m) => {
             const entry = userMap?.[m.userID];
             const avatarURL = entry?.avatarURL;
-            const online = entry?.online;
+            // Presence comes straight from the context set — the userMap no
+            // longer carries an online flag (message rows subscribe per-author
+            // via the presence store instead; see MessageItem).
+            const memberOnline = online.has(m.userID);
             return (
               <div key={m.userID} className="group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50">
                 <UserHoverCard
@@ -220,7 +223,7 @@ export function MemberList({ members, channelId, channelSlug, currentUserId, cur
                   displayName={m.displayName || 'Unknown'}
                   avatarURL={avatarURL}
                   userStatus={entry?.userStatus}
-                  online={online}
+                  online={memberOnline}
                   currentUserId={currentUserId}
                   showInlineStatus={false}
                 >
@@ -228,7 +231,7 @@ export function MemberList({ members, channelId, channelSlug, currentUserId, cur
                     <UserAvatar
                       displayName={m.displayName || ''}
                       avatarURL={avatarURL}
-                      online={online}
+                      online={memberOnline}
                     />
                   </span>
                 </UserHoverCard>

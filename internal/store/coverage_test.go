@@ -36,13 +36,13 @@ func TestUserStore_List_Pagination(t *testing.T) {
 		)
 		u.CreatedAt = base.Add(time.Duration(i) * time.Second)
 		u.UpdatedAt = u.CreatedAt
-		if err := s.Create(ctx, u); err != nil {
+		if err := s.CreateUser(ctx, u); err != nil {
 			t.Fatalf("Create %d: %v", i, err)
 		}
 	}
 
 	// First page (limit 2).
-	page1, next, err := s.List(ctx, 2, "")
+	page1, next, err := s.ListUsers(ctx, 2, "")
 	if err != nil {
 		t.Fatalf("List page1: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestUserStore_List_Pagination(t *testing.T) {
 	}
 
 	// Second page using lastKey to exercise the ExclusiveStartKey branch.
-	page2, _, err := s.List(ctx, 2, next)
+	page2, _, err := s.ListUsers(ctx, 2, next)
 	if err != nil {
 		t.Fatalf("List page2: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestUserStore_HasUsers_NonEmpty(t *testing.T) {
 	s := NewUserStore(db)
 	ctx := context.Background()
 
-	if err := s.Create(ctx, makeUser("u-hu", "hu@test.com", "HU")); err != nil {
+	if err := s.CreateUser(ctx, makeUser("u-hu", "hu@test.com", "HU")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	has, err := s.HasUsers(ctx)
@@ -151,12 +151,12 @@ func TestChannelStore_ListPublic_Pagination(t *testing.T) {
 		)
 		ch.CreatedAt = base.Add(time.Duration(i) * time.Second)
 		ch.UpdatedAt = ch.CreatedAt
-		if err := s.Create(ctx, ch); err != nil {
+		if err := s.CreateChannel(ctx, ch); err != nil {
 			t.Fatalf("Create %d: %v", i, err)
 		}
 	}
 
-	page1, next, err := s.ListPublic(ctx, 2, "")
+	page1, next, err := s.ListPublicChannels(ctx, 2, "")
 	if err != nil {
 		t.Fatalf("ListPublic page1: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestChannelStore_ListPublic_Pagination(t *testing.T) {
 	}
 
 	// Second page exercises the ExclusiveStartKey branch.
-	page2, _, err := s.ListPublic(ctx, 2, next)
+	page2, _, err := s.ListPublicChannels(ctx, 2, next)
 	if err != nil {
 		t.Fatalf("ListPublic page2: %v", err)
 	}
@@ -183,17 +183,17 @@ func TestChannelStore_ListPublic_FiltersArchived(t *testing.T) {
 	ctx := context.Background()
 
 	live := makeChannel("ch-live", "live", "live-slug", model.ChannelTypePublic)
-	if err := s.Create(ctx, live); err != nil {
+	if err := s.CreateChannel(ctx, live); err != nil {
 		t.Fatalf("Create live: %v", err)
 	}
 
 	archived := makeChannel("ch-arch", "arch", "arch-slug", model.ChannelTypePublic)
 	archived.Archived = true
-	if err := s.Create(ctx, archived); err != nil {
+	if err := s.CreateChannel(ctx, archived); err != nil {
 		t.Fatalf("Create archived: %v", err)
 	}
 
-	channels, _, err := s.ListPublic(ctx, 50, "")
+	channels, _, err := s.ListPublicChannels(ctx, 50, "")
 	if err != nil {
 		t.Fatalf("ListPublic: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestMembershipStore_AddChannelMember_Duplicate(t *testing.T) {
 	ctx := context.Background()
 
 	ch := makeChannel("ch-dupmem", "dupmem", "dupmem-slug", model.ChannelTypePublic)
-	if err := cs.Create(ctx, ch); err != nil {
+	if err := cs.CreateChannel(ctx, ch); err != nil {
 		t.Fatalf("Create channel: %v", err)
 	}
 
@@ -248,7 +248,7 @@ func TestMembershipStore_UpdateChannelRole_NotFound(t *testing.T) {
 	ms := NewMembershipStore(db)
 	ctx := context.Background()
 
-	err := ms.UpdateChannelRole(ctx, "ch-ghost", "u-ghost", model.ChannelRoleAdmin)
+	err := ms.UpdateMemberRole(ctx, "ch-ghost", "u-ghost", model.ChannelRoleAdmin)
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -260,7 +260,7 @@ func TestMembershipStore_RemoveChannelMember_Idempotent(t *testing.T) {
 	ctx := context.Background()
 
 	// Removing a non-existent membership should not error (delete is idempotent).
-	if err := ms.RemoveChannelMember(ctx, "ch-nope", "u-nope"); err != nil {
+	if err := ms.RemoveMember(ctx, "ch-nope", "u-nope"); err != nil {
 		t.Errorf("expected no error removing nonexistent member, got %v", err)
 	}
 }
@@ -270,7 +270,7 @@ func TestMembershipStore_ListChannelMembers_Empty(t *testing.T) {
 	ms := NewMembershipStore(db)
 	ctx := context.Background()
 
-	members, err := ms.ListChannelMembers(ctx, "ch-no-members")
+	members, err := ms.ListMembers(ctx, "ch-no-members")
 	if err != nil {
 		t.Fatalf("ListChannelMembers: %v", err)
 	}
@@ -309,11 +309,11 @@ func TestMessageStore_Create_Duplicate(t *testing.T) {
 		Body:      "Hello",
 		CreatedAt: time.Now().Truncate(time.Millisecond),
 	}
-	if err := ms.Create(ctx, msg); err != nil {
+	if err := ms.CreateMessage(ctx, msg); err != nil {
 		t.Fatalf("Create first: %v", err)
 	}
 
-	err := ms.Create(ctx, msg)
+	err := ms.CreateMessage(ctx, msg)
 	if !errors.Is(err, ErrAlreadyExists) {
 		t.Errorf("expected ErrAlreadyExists, got %v", err)
 	}
@@ -332,12 +332,12 @@ func TestMessageStore_Create_DMParent(t *testing.T) {
 		Body:      "DM body",
 		CreatedAt: time.Now().Truncate(time.Millisecond),
 	}
-	if err := ms.Create(ctx, msg); err != nil {
+	if err := ms.CreateMessage(ctx, msg); err != nil {
 		t.Fatalf("Create DM: %v", err)
 	}
 
 	// Confirm round-trip via the same parentPK selection.
-	got, err := ms.GetByID(ctx, "dm_create_test", "msg-dmcreate")
+	got, err := ms.GetMessage(ctx, "dm_create_test", "msg-dmcreate")
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestMessageStore_Delete_Idempotent(t *testing.T) {
 	ms := NewMessageStore(db)
 	ctx := context.Background()
 
-	if err := ms.Delete(ctx, "ch-nodel", "msg-nodel"); err != nil {
+	if err := ms.DeleteMessage(ctx, "ch-nodel", "msg-nodel"); err != nil {
 		t.Errorf("expected no error deleting nonexistent message, got %v", err)
 	}
 }
@@ -361,7 +361,7 @@ func TestMessageStore_List_Empty(t *testing.T) {
 	ms := NewMessageStore(db)
 	ctx := context.Background()
 
-	msgs, hasMore, err := ms.List(ctx, "ch-empty", "", 10)
+	msgs, hasMore, err := ms.ListMessages(ctx, "ch-empty", "", 10)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -395,11 +395,11 @@ func TestConversationStore_Create_Duplicate(t *testing.T) {
 		{UserID: "u-db", ConversationID: "conv-dup", JoinedAt: time.Now()},
 	}
 
-	if err := cs.Create(ctx, conv, members); err != nil {
+	if err := cs.CreateConversation(ctx, conv, members); err != nil {
 		t.Fatalf("Create first: %v", err)
 	}
 
-	err := cs.Create(ctx, conv, members)
+	err := cs.CreateConversation(ctx, conv, members)
 	if !errors.Is(err, ErrAlreadyExists) {
 		t.Errorf("expected ErrAlreadyExists, got %v", err)
 	}
@@ -443,7 +443,7 @@ func TestTokenStore_DeleteAllForUser_NoTokens(t *testing.T) {
 	ctx := context.Background()
 
 	// User has no tokens; should be a no-op (empty page path).
-	if err := ts.DeleteAllForUser(ctx, "u-no-tokens"); err != nil {
+	if err := ts.DeleteAllRefreshTokensForUser(ctx, "u-no-tokens"); err != nil {
 		t.Errorf("DeleteAllForUser empty: %v", err)
 	}
 }
@@ -453,7 +453,7 @@ func TestTokenStore_Delete_Idempotent(t *testing.T) {
 	ts := NewTokenStore(db)
 	ctx := context.Background()
 
-	if err := ts.Delete(ctx, "no-such-hash"); err != nil {
+	if err := ts.DeleteRefreshToken(ctx, "no-such-hash"); err != nil {
 		t.Errorf("expected no error deleting nonexistent token, got %v", err)
 	}
 }
@@ -467,7 +467,7 @@ func TestInviteStore_Delete_Idempotent(t *testing.T) {
 	is := NewInviteStore(db)
 	ctx := context.Background()
 
-	if err := is.Delete(ctx, "no-such-invite-token"); err != nil {
+	if err := is.DeleteInvite(ctx, "no-such-invite-token"); err != nil {
 		t.Errorf("expected no error deleting nonexistent invite, got %v", err)
 	}
 }
@@ -587,19 +587,19 @@ func TestStores_NonexistentTable_ReturnsWrappedError(t *testing.T) {
 
 	// User store
 	us := NewUserStore(db)
-	if err := us.Create(ctx, makeUser("u-x", "x@x", "X")); err == nil {
+	if err := us.CreateUser(ctx, makeUser("u-x", "x@x", "X")); err == nil {
 		t.Error("UserStore.Create: expected error against missing table")
 	}
-	if _, err := us.GetByID(ctx, "u-x"); err == nil {
+	if _, err := us.GetUser(ctx, "u-x"); err == nil {
 		t.Error("UserStore.GetByID: expected error")
 	}
-	if _, err := us.GetByEmail(ctx, "x@x"); err == nil {
+	if _, err := us.GetUserByEmail(ctx, "x@x"); err == nil {
 		t.Error("UserStore.GetByEmail: expected error")
 	}
-	if err := us.Update(ctx, makeUser("u-x", "x@x", "X")); err == nil {
+	if err := us.UpdateUser(ctx, makeUser("u-x", "x@x", "X")); err == nil {
 		t.Error("UserStore.Update: expected error")
 	}
-	if _, _, err := us.List(ctx, 10, ""); err == nil {
+	if _, _, err := us.ListUsers(ctx, 10, ""); err == nil {
 		t.Error("UserStore.List: expected error")
 	}
 	if _, err := us.HasUsers(ctx); err == nil {
@@ -609,22 +609,22 @@ func TestStores_NonexistentTable_ReturnsWrappedError(t *testing.T) {
 	// Channel store
 	cs := NewChannelStore(db)
 	ch := makeChannel("ch-x", "x", "x", model.ChannelTypePublic)
-	if err := cs.Create(ctx, ch); err == nil {
+	if err := cs.CreateChannel(ctx, ch); err == nil {
 		t.Error("ChannelStore.Create: expected error")
 	}
-	if _, err := cs.GetByID(ctx, "ch-x"); err == nil {
+	if _, err := cs.GetChannel(ctx, "ch-x"); err == nil {
 		t.Error("ChannelStore.GetByID: expected error")
 	}
-	if _, err := cs.GetBySlug(ctx, "x"); err == nil {
+	if _, err := cs.GetChannelBySlug(ctx, "x"); err == nil {
 		t.Error("ChannelStore.GetBySlug: expected error")
 	}
 	if _, err := cs.GetByName(ctx, "x"); err == nil {
 		t.Error("ChannelStore.GetByName: expected error")
 	}
-	if err := cs.Update(ctx, ch); err == nil {
+	if err := cs.UpdateChannel(ctx, ch); err == nil {
 		t.Error("ChannelStore.Update: expected error")
 	}
-	if _, _, err := cs.ListPublic(ctx, 10, ""); err == nil {
+	if _, _, err := cs.ListPublicChannels(ctx, 10, ""); err == nil {
 		t.Error("ChannelStore.ListPublic: expected error")
 	}
 
@@ -635,47 +635,47 @@ func TestStores_NonexistentTable_ReturnsWrappedError(t *testing.T) {
 	if err := ms.AddChannelMember(ctx, ch, mem, uc); err == nil {
 		t.Error("MembershipStore.AddChannelMember: expected error")
 	}
-	if err := ms.RemoveChannelMember(ctx, "ch-x", "u-x"); err == nil {
+	if err := ms.RemoveMember(ctx, "ch-x", "u-x"); err == nil {
 		t.Error("MembershipStore.RemoveChannelMember: expected error")
 	}
-	if _, err := ms.GetChannelMembership(ctx, "ch-x", "u-x"); err == nil {
+	if _, err := ms.GetMembership(ctx, "ch-x", "u-x"); err == nil {
 		t.Error("MembershipStore.GetChannelMembership: expected error")
 	}
-	if _, err := ms.ListChannelMembers(ctx, "ch-x"); err == nil {
+	if _, err := ms.ListMembers(ctx, "ch-x"); err == nil {
 		t.Error("MembershipStore.ListChannelMembers: expected error")
 	}
 	if _, err := ms.ListUserChannels(ctx, "u-x"); err == nil {
 		t.Error("MembershipStore.ListUserChannels: expected error")
 	}
-	if err := ms.UpdateChannelRole(ctx, "ch-x", "u-x", model.ChannelRoleAdmin); err == nil {
+	if err := ms.UpdateMemberRole(ctx, "ch-x", "u-x", model.ChannelRoleAdmin); err == nil {
 		t.Error("MembershipStore.UpdateChannelRole: expected error")
 	}
 
 	// Message store
 	mss := NewMessageStore(db)
 	msg := &model.Message{ID: "m-x", ParentID: "ch-x", AuthorID: "u-x", Body: "x", CreatedAt: time.Now()}
-	if err := mss.Create(ctx, msg); err == nil {
+	if err := mss.CreateMessage(ctx, msg); err == nil {
 		t.Error("MessageStore.Create: expected error")
 	}
-	if _, err := mss.GetByID(ctx, "ch-x", "m-x"); err == nil {
+	if _, err := mss.GetMessage(ctx, "ch-x", "m-x"); err == nil {
 		t.Error("MessageStore.GetByID: expected error")
 	}
-	if _, _, err := mss.List(ctx, "ch-x", "", 10); err == nil {
+	if _, _, err := mss.ListMessages(ctx, "ch-x", "", 10); err == nil {
 		t.Error("MessageStore.List: expected error")
 	}
-	if err := mss.Update(ctx, "ch-x", msg); err == nil {
+	if err := mss.UpdateMessage(ctx, msg); err == nil {
 		t.Error("MessageStore.Update: expected error")
 	}
-	if _, _, err := mss.ListAfter(ctx, "ch-x", "m-x", 10); err == nil {
+	if _, _, err := mss.ListMessagesAfter(ctx, "ch-x", "m-x", 10); err == nil {
 		t.Error("MessageStore.ListAfter: expected error")
 	}
-	if _, _, _, err := mss.ListAround(ctx, "ch-x", "m-x", 10, 10); err == nil {
+	if _, _, _, err := mss.ListMessagesAround(ctx, "ch-x", "m-x", 10, 10); err == nil {
 		t.Error("MessageStore.ListAround: expected error")
 	}
 	if _, err := mss.IncrementReplyMetadata(ctx, "ch-x", "m-x", time.Now(), "u-x"); err == nil {
 		t.Error("MessageStore.IncrementReplyMetadata: expected error")
 	}
-	if err := mss.Delete(ctx, "ch-x", "m-x"); err == nil {
+	if err := mss.DeleteMessage(ctx, "ch-x", "m-x"); err == nil {
 		t.Error("MessageStore.Delete: expected error")
 	}
 
@@ -693,61 +693,61 @@ func TestStores_NonexistentTable_ReturnsWrappedError(t *testing.T) {
 		{UserID: "u-a", ConversationID: "v-x", JoinedAt: time.Now()},
 		{UserID: "u-b", ConversationID: "v-x", JoinedAt: time.Now()},
 	}
-	if err := convs.Create(ctx, conv, mems); err == nil {
+	if err := convs.CreateConversation(ctx, conv, mems); err == nil {
 		t.Error("ConversationStore.Create: expected error")
 	}
-	if _, err := convs.GetByID(ctx, "v-x"); err == nil {
+	if _, err := convs.GetConversation(ctx, "v-x"); err == nil {
 		t.Error("ConversationStore.GetByID: expected error")
 	}
 	if _, err := convs.ListUserConversations(ctx, "u-a"); err == nil {
 		t.Error("ConversationStore.ListUserConversations: expected error")
 	}
-	if err := convs.Activate(ctx, "v-x", []string{"u-a", "u-b"}); err == nil {
+	if err := convs.ActivateConversation(ctx, "v-x", []string{"u-a", "u-b"}); err == nil {
 		t.Error("ConversationStore.Activate: expected error")
 	}
-	if err := convs.Touch(ctx, "v-x", []string{"u-a", "u-b"}, time.Now()); err == nil {
+	if err := convs.TouchConversation(ctx, "v-x", []string{"u-a", "u-b"}, time.Now()); err == nil {
 		t.Error("ConversationStore.Touch: expected error")
 	}
-	if err := convs.SetUserConversationFavorite(ctx, "v-x", "u-a", true); err == nil {
+	if err := convs.SetFavorite(ctx, "v-x", "u-a", true); err == nil {
 		t.Error("ConversationStore.SetUserConversationFavorite: expected error")
 	}
 	pos := 1
-	if err := convs.SetUserConversationCategory(ctx, "v-x", "u-a", "cat-x", &pos); err == nil {
+	if err := convs.SetCategory(ctx, "v-x", "u-a", "cat-x", &pos); err == nil {
 		t.Error("ConversationStore.SetUserConversationCategory: expected error")
 	}
 	if _, err := convs.IsMember(ctx, "v-x", "u-a"); err == nil {
 		t.Error("ConversationStore.IsMember: expected error")
 	}
-	if _, err := convs.ListAll(ctx); err == nil {
+	if _, err := convs.ListAllConversations(ctx); err == nil {
 		t.Error("ConversationStore.ListAll: expected error")
 	}
 
 	// Invite store
 	inv := &model.Invite{Token: "t-x", Email: "x@x", InviterID: "u-x", ExpiresAt: time.Now().Add(time.Hour), CreatedAt: time.Now()}
 	is := NewInviteStore(db)
-	if err := is.Create(ctx, inv); err == nil {
+	if err := is.CreateInvite(ctx, inv); err == nil {
 		t.Error("InviteStore.Create: expected error")
 	}
-	if _, err := is.GetByToken(ctx, "t-x"); err == nil {
+	if _, err := is.GetInvite(ctx, "t-x"); err == nil {
 		t.Error("InviteStore.GetByToken: expected error")
 	}
-	if err := is.Delete(ctx, "t-x"); err == nil {
+	if err := is.DeleteInvite(ctx, "t-x"); err == nil {
 		t.Error("InviteStore.Delete: expected error")
 	}
 
 	// Token store
 	ts := NewTokenStore(db)
 	tok := &model.RefreshToken{TokenHash: "h-x", UserID: "u-x", ExpiresAt: time.Now().Add(time.Hour), CreatedAt: time.Now()}
-	if err := ts.Create(ctx, tok); err == nil {
+	if err := ts.StoreRefreshToken(ctx, tok); err == nil {
 		t.Error("TokenStore.Create: expected error")
 	}
-	if _, err := ts.GetByHash(ctx, "h-x"); err == nil {
+	if _, err := ts.GetRefreshToken(ctx, "h-x"); err == nil {
 		t.Error("TokenStore.GetByHash: expected error")
 	}
-	if err := ts.Delete(ctx, "h-x"); err == nil {
+	if err := ts.DeleteRefreshToken(ctx, "h-x"); err == nil {
 		t.Error("TokenStore.Delete: expected error")
 	}
-	if err := ts.DeleteAllForUser(ctx, "u-x"); err == nil {
+	if err := ts.DeleteAllRefreshTokensForUser(ctx, "u-x"); err == nil {
 		t.Error("TokenStore.DeleteAllForUser: expected error")
 	}
 }

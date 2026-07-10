@@ -19,8 +19,8 @@ import (
 
 // fakeTicketStore is an in-memory WSTicketStore for handler tests.
 type fakeTicketStore struct {
-	mu         sync.Mutex
-	tickets    map[string]struct {
+	mu      sync.Mutex
+	tickets map[string]struct {
 		userID   string
 		deadline time.Time
 	}
