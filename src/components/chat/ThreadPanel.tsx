@@ -507,7 +507,6 @@ export function ThreadPanel({
                   authorName={u?.displayName ?? 'Unknown'}
                   authorAvatarURL={u?.avatarURL}
                   authorUserStatus={u?.userStatus}
-                  authorOnline={u?.online}
                   isOwn={isOwnMessage(msg, currentUserId)}
                   channelId={channelId}
                   conversationId={conversationId}

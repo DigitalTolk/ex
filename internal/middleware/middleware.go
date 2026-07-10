@@ -11,7 +11,7 @@ import (
 
 	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/model"
-	"github.com/google/uuid"
+	"github.com/oklog/ulid/v2"
 )
 
 type contextKey string
@@ -213,7 +213,7 @@ func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Request-ID")
 		if id == "" {
-			id = uuid.NewString()
+			id = ulid.Make().String()
 		}
 
 		ctx := context.WithValue(r.Context(), requestIDKey, id)

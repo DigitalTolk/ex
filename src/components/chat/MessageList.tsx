@@ -29,7 +29,6 @@ export interface UserMapEntry {
   displayName: string;
   avatarURL?: string;
   userStatus?: UserStatus;
-  online?: boolean;
 }
 
 interface MessageListProps {
@@ -574,7 +573,6 @@ const MessageRow = memo(function MessageRow({
         authorName={u?.displayName ?? 'Unknown'}
         authorAvatarURL={u?.avatarURL}
         authorUserStatus={u?.userStatus}
-        authorOnline={u?.online}
         isOwn={isOwnMessage(msg, currentUserId)}
         channelId={channelId}
         channelSlug={channelSlug}

@@ -13,7 +13,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/safe"
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
 )
 
 // NotificationKind tags a notification with its semantic class so the client
@@ -309,13 +309,9 @@ var (
 // desktop alerts AND mobile fallbacks — which the notification contract
 // treats as an incident, not a degradation.
 func retryAudienceLoad[T any](ctx context.Context, load func() (T, error)) (T, error) {
-	var out T
-	err := backoff.Retry(func() error {
-		var err error
-		out, err = load()
-		return err
-	}, backoff.WithContext(backoff.WithMaxRetries(backoff.NewConstantBackOff(audienceRetryInterval), audienceRetryMaxRetries), ctx))
-	return out, err
+	return backoff.Retry(ctx, load,
+		backoff.WithBackOff(backoff.NewConstantBackOff(audienceRetryInterval)),
+		backoff.WithMaxTries(uint(audienceRetryMaxRetries)+1))
 }
 
 func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model.Message, parentType, parentName string) memberSnapshot {

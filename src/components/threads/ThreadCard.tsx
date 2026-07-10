@@ -20,7 +20,6 @@ import {
   useDraftForScope,
   useSaveDraft,
 } from '@/hooks/useDrafts';
-import { usePresence } from '@/context/PresenceContext';
 import { collectMessageUserIDs } from '@/lib/message-users';
 import {
   markThreadSeen,
@@ -104,7 +103,6 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
     [messages],
   );
   const { map: userMap } = useUsersBatch(userIDs);
-  const presence = usePresence();
   const quickReactions = useFrequentEmojis(3);
   const unfollowThread = useUnfollowThread();
 
@@ -280,7 +278,6 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
               authorName={userMap.get(root.authorID)?.displayName ?? 'Unknown'}
               authorAvatarURL={userMap.get(root.authorID)?.avatarURL}
               authorUserStatus={userMap.get(root.authorID)?.userStatus}
-              authorOnline={presence.isOnline(root.authorID)}
               isOwn={root.authorID === currentUserId}
               channelId={channelId}
               conversationId={conversationId}
@@ -315,7 +312,6 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
                 authorName={userMap.get(msg.authorID)?.displayName ?? 'Unknown'}
                 authorAvatarURL={userMap.get(msg.authorID)?.avatarURL}
                 authorUserStatus={userMap.get(msg.authorID)?.userStatus}
-                authorOnline={presence.isOnline(msg.authorID)}
                 isOwn={msg.authorID === currentUserId}
                 channelId={channelId}
                 conversationId={conversationId}

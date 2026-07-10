@@ -118,7 +118,6 @@ export function PinnedPanel({
                 message={msg}
                 authorName={u?.displayName ?? 'Unknown'}
                 authorAvatarURL={u?.avatarURL}
-                authorOnline={u?.online}
                 isOwn={isOwnMessage(msg, currentUserId)}
                 channelId={channelId}
                 channelSlug={channelSlug}

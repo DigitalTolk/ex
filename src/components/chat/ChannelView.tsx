@@ -22,7 +22,6 @@ import {
 } from '@/hooks/useMessages';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
-import { usePresence } from '@/context/PresenceContext';
 import { useNotifications } from '@/context/NotificationContext';
 import { canEditChannel, canArchiveChannel, canLeaveChannel, roleNumber } from '@/lib/roles';
 import { markThreadSeen } from '@/hooks/useThreads';
@@ -64,7 +63,6 @@ export function ChannelView() {
   const queryClient = useQueryClient();
   const { setActiveChannel, setActiveThread } = useUnread();
   const { setActiveParent } = useNotifications();
-  const { online } = usePresence();
   const quickReactions = useFrequentEmojis(3);
   const inputRef = useRef<MessageInputHandle>(null);
   const isMobile = useIsMobile();
@@ -317,16 +315,16 @@ export function ChannelView() {
     const m: Record<string, UserMapEntry> = {};
     if (members) {
       for (const mem of members) {
-        m[mem.userID] = { displayName: mem.displayName || 'Unknown', online: online.has(mem.userID) };
+        m[mem.userID] = { displayName: mem.displayName || 'Unknown' };
       }
     }
     if (usersData) {
       for (const u of usersData) {
-        m[u.id] = { displayName: u.displayName || 'Unknown', avatarURL: u.avatarURL, userStatus: u.userStatus, online: online.has(u.id) };
+        m[u.id] = { displayName: u.displayName || 'Unknown', avatarURL: u.avatarURL, userStatus: u.userStatus };
       }
     }
     return m;
-  }, [members, usersData, online]);
+  }, [members, usersData]);
 
   const currentUserRole = members?.find(m => m.userID === user?.id)?.role;
   const canEdit = canEditChannel(currentUserRole);

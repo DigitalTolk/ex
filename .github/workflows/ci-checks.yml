@@ -48,7 +48,10 @@ jobs:
         run: npx eslint src/
 
       - name: TypeScript type-check
-        run: npx tsc -p tsconfig.json --noEmit
+        # `-b` is required: a project-references root tsconfig ignores
+        # `references` unless --build is set, so plain `tsc -p` checks
+        # nothing (same reasoning as the Makefile's tsc step).
+        run: npx tsc -b --noEmit
 
   test-backend:
     name: Backend

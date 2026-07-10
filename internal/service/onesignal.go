@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v5"
 )
 
 // ErrPushUndeliverable marks a push failure that retrying cannot fix — a 4xx
@@ -191,8 +191,10 @@ func (s *OneSignalPushSender) Send(ctx context.Context, recipientUserID string, 
 		// ERROR-loudness contract covers it.
 		return classifyOneSignalAccepted(io.ReadAll(io.LimitReader(res.Body, oneSignalResponseLimit)))
 	}
-	policy := backoff.WithContext(backoff.WithMaxRetries(backoff.NewConstantBackOff(s.retryInterval), s.maxRetries), ctx)
-	return backoff.Retry(attempt, policy)
+	_, err := backoff.Retry(ctx, func() (struct{}, error) { return struct{}{}, attempt() },
+		backoff.WithBackOff(backoff.NewConstantBackOff(s.retryInterval)),
+		backoff.WithMaxTries(uint(s.maxRetries)+1))
+	return err
 }
 
 func (s *OneSignalPushSender) absoluteURL(deepLink string) string {
