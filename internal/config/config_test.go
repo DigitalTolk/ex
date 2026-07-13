@@ -19,6 +19,7 @@ func clearEnv(t *testing.T) {
 		"SENTRY_FRONTEND_DSN", "SENTRY_FRONTEND_TRACES_SAMPLE_RATE",
 		"SENTRY_FRONTEND_REPLAY_SESSION_SAMPLE_RATE", "SENTRY_FRONTEND_REPLAY_ERROR_SAMPLE_RATE",
 		"ACCESS_LOG_ENABLED",
+		"MS_TENANT_ID", "MS_CLIENT_ID", "MS_CLIENT_SECRET",
 	}
 
 	saved := make(map[string]string)
@@ -387,4 +388,62 @@ func TestLoadPushWorkerConcurrency(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoadMSGraph(t *testing.T) {
+	t.Run("disabled by default", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.MSGraphEnabled() {
+			t.Error("MSGraphEnabled() = true without MS_TENANT_ID")
+		}
+	})
+
+	t.Run("credentials default to the OIDC app registration", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("MS_TENANT_ID", "tenant-1")
+		t.Setenv("OIDC_CLIENT_ID", "oidc-client")
+		t.Setenv("OIDC_CLIENT_SECRET", "oidc-secret")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if !cfg.MSGraphEnabled() {
+			t.Error("MSGraphEnabled() = false with MS_TENANT_ID set")
+		}
+		if cfg.MSClientID != "oidc-client" || cfg.MSClientSecret != "oidc-secret" {
+			t.Errorf("MS credentials = %q/%q, want OIDC fallback", cfg.MSClientID, cfg.MSClientSecret)
+		}
+	})
+
+	t.Run("explicit credentials override OIDC", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("MS_TENANT_ID", "tenant-1")
+		t.Setenv("OIDC_CLIENT_ID", "oidc-client")
+		t.Setenv("OIDC_CLIENT_SECRET", "oidc-secret")
+		t.Setenv("MS_CLIENT_ID", "ms-client")
+		t.Setenv("MS_CLIENT_SECRET", "ms-secret")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.MSClientID != "ms-client" || cfg.MSClientSecret != "ms-secret" {
+			t.Errorf("MS credentials = %q/%q, want explicit overrides", cfg.MSClientID, cfg.MSClientSecret)
+		}
+	})
+
+	t.Run("fails closed on tenant without credentials", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("MS_TENANT_ID", "tenant-1")
+		if _, err := Load(); err == nil {
+			t.Fatal("Load with MS_TENANT_ID but no credentials should fail")
+		}
+	})
 }

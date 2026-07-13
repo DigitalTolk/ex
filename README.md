@@ -57,6 +57,26 @@ OIDC_CLIENT_SECRET=your-client-secret
 BASE_URL=http://localhost:8080
 ```
 
+#### Microsoft 365 integration (optional)
+
+When the workspace signs in through Microsoft Entra ID, setting `MS_TENANT_ID` enables the tighter Microsoft 365 integration — no per-user account linking:
+
+- **Profile enrichment**: each SSO login syncs the user's phone number and manager from the directory onto their Ex profile (hover card + directory page), broadcast live via `user.updated`.
+- **`/mstmeetings` slash command**: creates a Microsoft Teams online meeting organized by the invoking user, invites everyone in the current chat (channel, group or DM), and posts the join link into the chat.
+
+```bash
+MS_TENANT_ID={tenant-id}          # enables the integration
+MS_CLIENT_ID=...                  # optional — defaults to OIDC_CLIENT_ID
+MS_CLIENT_SECRET=...              # optional — defaults to OIDC_CLIENT_SECRET
+```
+
+The app authenticates against Microsoft Graph app-only (client credentials), so the app registration needs these **application permissions** with admin consent:
+
+1. `User.Read.All` — read phone + manager from the directory
+2. `OnlineMeetings.ReadWrite.All` — create Teams meetings on behalf of users. Graph additionally requires an [application access policy](https://learn.microsoft.com/graph/cloud-communication-online-meeting-application-access-policy) granted to the app for the organizing users (`New-CsApplicationAccessPolicy` + `Grant-CsApplicationAccessPolicy` in Teams PowerShell).
+
+Without `MS_TENANT_ID` everything above is disabled and the app behaves exactly as before.
+
 ### Google Workspace
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com) > **APIs & Services** > **Credentials** > **Create OAuth client ID**
@@ -98,6 +118,9 @@ When SMTP is not configured, invite links are logged to the server console.
 | `OIDC_ISSUER`        | -                                 | OIDC provider issuer URL                                |
 | `OIDC_CLIENT_ID`     | -                                 | OIDC client ID                                          |
 | `OIDC_CLIENT_SECRET` | -                                 | OIDC client secret                                      |
+| `MS_TENANT_ID`       | -                                 | Entra ID tenant — enables the Microsoft 365 integration (profile sync + `/mstmeetings`) |
+| `MS_CLIENT_ID`       | `OIDC_CLIENT_ID`                  | Graph app-registration client ID override               |
+| `MS_CLIENT_SECRET`   | `OIDC_CLIENT_SECRET`              | Graph app-registration client secret override            |
 | `JWT_SECRET`         | `dev-secret-change-me` (dev only) | JWT signing secret (`openssl rand -base64 48`)          |
 | `AWS_REGION`         | `us-east-1`                       | AWS region                                              |
 | `DYNAMODB_TABLE`     | `ex`                              | DynamoDB table name (single-table design — see below)   |

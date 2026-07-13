@@ -48,6 +48,7 @@ const EMPTY_PROVIDERS: CompletionProviders = {
   channels: () => [],
   customEmojis: () => [],
   skinTone: () => '',
+  commands: () => [],
 };
 
 interface Props {
@@ -137,6 +138,7 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
             channels: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).channels(),
             customEmojis: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).customEmojis(),
             skinTone: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).skinTone(),
+            commands: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).commands?.() ?? [],
           }),
           composerTheme,
           // Autocomplete popup placement: rendered into <body> (escapes every

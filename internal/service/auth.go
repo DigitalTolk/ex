@@ -14,7 +14,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/store"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -47,6 +49,13 @@ type AuthService struct {
 	oidc         OIDCProvider // may be nil when OIDC is not configured
 	cache        Cache
 	indexer      UserIndexer
+	// directory, when set, enriches OIDC logins with employee-directory
+	// attributes (phone + manager). Lookups are fail-open: an outage
+	// degrades to an un-enriched login.
+	directory DirectoryLookup
+	// publisher broadcasts user.updated when a login-time directory sync
+	// changes an existing profile, so open clients refresh it live.
+	publisher Publisher
 }
 
 const (
@@ -92,6 +101,14 @@ func (s *AuthService) SetChannelJoiner(j ChannelJoiner) { s.joiner = j }
 
 func (s *AuthService) SetIndexer(i UserIndexer) { s.indexer = i }
 
+// SetDirectory wires the employee-directory lookup (Microsoft Graph) used to
+// enrich OIDC logins with phone + manager. Optional; nil disables enrichment.
+func (s *AuthService) SetDirectory(d DirectoryLookup) { s.directory = d }
+
+// SetPublisher wires the event publisher used to broadcast user.updated when
+// a directory sync changes a profile. Optional.
+func (s *AuthService) SetPublisher(p Publisher) { s.publisher = p }
+
 func (s *AuthService) indexUser(ctx context.Context, u *model.User) {
 	indexUser(ctx, s.indexer, u)
 }
@@ -133,6 +150,18 @@ func (s *AuthService) HandleOIDCCallback(ctx context.Context, code, state, nonce
 		return "", "", nil, err
 	}
 
+	// Employee-directory enrichment (phone + manager). Fail-open: a
+	// directory outage must degrade to an un-enriched login, never block it.
+	var dirProfile *DirectoryProfile
+	if s.directory != nil {
+		dp, derr := s.directory.LookupProfile(ctx, email, info.ObjectID)
+		if derr != nil {
+			slog.Warn("auth: directory profile lookup failed; continuing login without enrichment", "error", derr)
+		} else {
+			dirProfile = dp
+		}
+	}
+
 	// Look up the user by email; create if not found.
 	user, err = s.users.GetUserByEmail(ctx, email)
 	if err != nil {
@@ -164,7 +193,9 @@ func (s *AuthService) HandleOIDCCallback(ctx context.Context, code, state, nonce
 			LastSeenAt:           &now,
 			CreatedAt:            now,
 			UpdatedAt:            now,
+			MSObjectID:           info.ObjectID,
 		}
+		applyDirectoryProfile(user, dirProfile)
 		if err := s.users.CreateUser(ctx, user); err != nil {
 			if errors.Is(err, store.ErrAlreadyExists) {
 				return "", "", nil, errors.New("auth: a user with this email already exists")
@@ -179,10 +210,32 @@ func (s *AuthService) HandleOIDCCallback(ctx context.Context, code, state, nonce
 		user.AvatarURL = info.Picture
 		user.LastSeenAt = &now
 		user.UpdatedAt = now
+		if info.ObjectID != "" {
+			user.MSObjectID = info.ObjectID
+		}
+		directoryChanged := dirProfile != nil &&
+			(user.Phone != dirProfile.Phone || !user.Manager.Equal(dirProfile.Manager))
+		applyDirectoryProfile(user, dirProfile)
 		if err := s.users.UpdateUser(ctx, user); err != nil {
 			return "", "", nil, fmt.Errorf("auth: update user: %w", err)
 		}
+		if s.cache != nil {
+			// Drop the cached profile so the refreshed fields are visible
+			// immediately (UserService reads cache-first).
+			_ = s.cache.Delete(ctx, "user:"+user.ID)
+		}
 		s.indexUser(ctx, user)
+		if directoryChanged {
+			// Broadcast the change so peers with this profile open (hover
+			// card, directory) refresh without a reload.
+			events.Publish(ctx, s.publisher, pubsub.UserEvents(), events.EventUserUpdated, map[string]any{
+				"id":          user.ID,
+				"displayName": user.DisplayName,
+				"avatarURL":   user.AvatarURL,
+				"phone":       user.Phone,
+				"manager":     user.Manager,
+			})
+		}
 	}
 
 	// Ensure #general exists and the user is a member.
@@ -533,6 +586,21 @@ func (s *AuthService) authorizedInviteChannelIDs(ctx context.Context, inviterID 
 		cleaned = append(cleaned, chID)
 	}
 	return cleaned, nil
+}
+
+// applyDirectoryProfile stamps synced directory attributes onto the user.
+// A nil profile (directory disabled, user not in the directory, or the lookup
+// failed) leaves the stored attributes untouched — a transient miss must not
+// wipe previously synced data.
+func applyDirectoryProfile(user *model.User, dp *DirectoryProfile) {
+	if dp == nil {
+		return
+	}
+	user.Phone = dp.Phone
+	user.Manager = dp.Manager
+	if dp.ObjectID != "" {
+		user.MSObjectID = dp.ObjectID
+	}
 }
 
 // ensureGeneralChannel creates the #general channel if it doesn't exist and adds

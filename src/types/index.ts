@@ -14,6 +14,17 @@ export interface User {
   online?: boolean;
   lastSeenAt?: string;
   notificationSettings?: NotificationSettings;
+  // Directory attributes synced from Microsoft 365 at SSO login (read-only).
+  phone?: string;
+  manager?: UserManager;
+}
+
+// UserManager is the employee-directory manager reference shown on profile
+// surfaces; userID links to their Ex account when they have one.
+export interface UserManager {
+  displayName: string;
+  email?: string;
+  userID?: string;
 }
 
 // NotificationLevel gates which messages fire a sound + popup (desktop) or

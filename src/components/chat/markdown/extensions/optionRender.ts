@@ -12,7 +12,8 @@ export type OptionMeta =
   | { kind: 'user'; displayName: string; email?: string; avatarURL?: string; online: boolean; statusEmoji?: string }
   | { kind: 'group'; title: string; description: string }
   | { kind: 'channel'; slug: string; isPrivate: boolean }
-  | { kind: 'emoji'; name: string; glyph?: string; imageURL?: string };
+  | { kind: 'emoji'; name: string; glyph?: string; imageURL?: string }
+  | { kind: 'command'; name: string; description: string };
 
 export interface MentionCompletion extends Completion {
   meta?: OptionMeta;
@@ -90,6 +91,11 @@ export function renderMentionOption(completion: Completion): Node | null {
   } else if (meta.kind === 'channel') {
     row.appendChild(svgIcon(meta.isPrivate ? LOCK_SVG : HASH_SVG));
     row.appendChild(textCol(`~${meta.slug}`));
+  } else if (meta.kind === 'command') {
+    // Slash commands render with an avatar-style circle showing "/", matching
+    // the @all/@here group rows.
+    row.appendChild(el('span', 'cm-option-avatar cm-option-group', '/'));
+    row.appendChild(textCol(`/${meta.name}`, meta.description));
   } else {
     const glyph = el('span', 'cm-option-emoji');
     if (meta.glyph) {

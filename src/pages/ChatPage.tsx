@@ -346,6 +346,8 @@ export default function ChatPage() {
             : {}),
           ...(updated.timeZone !== undefined ? { timeZone: updated.timeZone } : {}),
           ...(updated.lastSeenAt !== undefined ? { lastSeenAt: updated.lastSeenAt } : {}),
+          ...(updated.phone !== undefined ? { phone: updated.phone } : {}),
+          ...(updated.manager !== undefined ? { manager: updated.manager ?? undefined } : {}),
         });
       }
       // Avatar/displayName changed for some user — invalidate user batches and

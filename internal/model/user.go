@@ -41,6 +41,37 @@ type User struct {
 	LastSeenAt           *time.Time            `json:"lastSeenAt,omitempty" dynamodbav:"lastSeenAt,omitempty"`
 	CreatedAt            time.Time             `json:"createdAt" dynamodbav:"createdAt"`
 	UpdatedAt            time.Time             `json:"updatedAt" dynamodbav:"updatedAt"`
+
+	// Phone and Manager are directory attributes synced from Microsoft 365
+	// at SSO login when the Graph integration is enabled. They are owned by
+	// the directory (read-only in the app) and shown on profile surfaces.
+	Phone   string       `json:"phone,omitempty" dynamodbav:"phone,omitempty"`
+	Manager *UserManager `json:"manager,omitempty" dynamodbav:"manager,omitempty"`
+
+	// MSObjectID is the user's Azure AD directory object id (the verified
+	// `oid` ID-token claim), captured at login so Graph lookups don't depend
+	// on email == userPrincipalName. Internal only — never serialized to
+	// clients.
+	MSObjectID string `json:"-" dynamodbav:"msObjectID,omitempty"`
+}
+
+// UserManager is a lightweight reference to a user's manager from the
+// employee directory. UserID is set when the manager is also an Ex user
+// (matched by email) so clients can link to their profile.
+type UserManager struct {
+	DisplayName string `json:"displayName" dynamodbav:"displayName"`
+	Email       string `json:"email,omitempty" dynamodbav:"email,omitempty"`
+	UserID      string `json:"userID,omitempty" dynamodbav:"userID,omitempty"`
+}
+
+// Equal reports whether two manager references carry the same directory data.
+// Used to decide whether a login-time directory sync actually changed the
+// profile (and therefore whether to broadcast user.updated).
+func (m *UserManager) Equal(other *UserManager) bool {
+	if m == nil || other == nil {
+		return m == other
+	}
+	return *m == *other
 }
 
 type UserStatus struct {

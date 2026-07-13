@@ -211,4 +211,7 @@ type OIDCUserInfo struct {
 	Email   string
 	Name    string
 	Picture string
+	// ObjectID is the Azure AD directory object id (`oid` claim); empty for
+	// non-AAD identity providers.
+	ObjectID string
 }

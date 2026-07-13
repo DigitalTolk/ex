@@ -30,13 +30,13 @@ func (f fakeAuthProvider) Exchange(context.Context, string, string) (*auth.OIDCU
 // auth.OIDCUserInfo onto a service.OIDCUserInfo.
 func TestOIDCAdapter_Exchange_Success(t *testing.T) {
 	a := &oidcAdapter{p: fakeAuthProvider{info: &auth.OIDCUserInfo{
-		Email: "u@example.com", Name: "U Ser", Picture: "https://img/u.png",
+		Email: "u@example.com", Name: "U Ser", Picture: "https://img/u.png", ObjectID: "oid-1",
 	}}}
 	got, err := a.Exchange(context.Background(), "code", "nonce")
 	if err != nil {
 		t.Fatalf("Exchange: %v", err)
 	}
-	if got.Email != "u@example.com" || got.Name != "U Ser" || got.Picture != "https://img/u.png" {
+	if got.Email != "u@example.com" || got.Name != "U Ser" || got.Picture != "https://img/u.png" || got.ObjectID != "oid-1" {
 		t.Fatalf("mapped info = %+v", got)
 	}
 }

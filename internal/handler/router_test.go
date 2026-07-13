@@ -195,6 +195,7 @@ func TestNewRouter_AllOptionalHandlersWired(t *testing.T) {
 		Sidebar:      &SidebarHandler{},
 		Search:       &SearchHandler{},
 		Webhook:      &WebhookHandler{},
+		Command:      &CommandHandler{},
 		JWT:          jwtMgr,
 		AppVersion:   "test",
 		AllowOrigins: []string{"*"},
@@ -219,6 +220,7 @@ func TestNewRouter_AllOptionalHandlersWired(t *testing.T) {
 		"/api/v1/attachments",
 		"/api/v1/unfurl",
 		"/api/v1/admin/webhooks",
+		"/api/v1/commands",
 	}
 	for _, p := range paths {
 		req := httptest.NewRequest(http.MethodGet, p, nil)

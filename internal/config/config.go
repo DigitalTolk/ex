@@ -29,6 +29,16 @@ type Config struct {
 	OIDCClientID     string
 	OIDCClientSecret string
 
+	// Microsoft 365 integration (app-only Graph API): profile enrichment
+	// (phone + manager) and the /mstmeetings slash command. Setting
+	// MS_TENANT_ID enables it; the client credentials default to the OIDC
+	// app registration (the workspace already signs in through it), with
+	// MS_CLIENT_ID / MS_CLIENT_SECRET as explicit overrides. The secret is
+	// server-only and must never be exposed through frontend config.
+	MSTenantID     string
+	MSClientID     string
+	MSClientSecret string
+
 	// JWT
 	JWTSecret     string
 	JWTAccessTTL  time.Duration
@@ -190,7 +200,23 @@ func Load() (*Config, error) {
 	}
 	c.PushWorkerConcurrency = pc
 
+	// Microsoft 365: fail closed on a half-configured integration — a set
+	// tenant with no usable credentials must abort boot, not silently run
+	// with Graph features off.
+	c.MSTenantID = os.Getenv("MS_TENANT_ID")
+	c.MSClientID = envOr("MS_CLIENT_ID", c.OIDCClientID)
+	c.MSClientSecret = envOr("MS_CLIENT_SECRET", c.OIDCClientSecret)
+	if c.MSTenantID != "" && (c.MSClientID == "" || c.MSClientSecret == "") {
+		return nil, fmt.Errorf("MS_TENANT_ID is set but no client credentials are available (set MS_CLIENT_ID/MS_CLIENT_SECRET or OIDC_CLIENT_ID/OIDC_CLIENT_SECRET)")
+	}
+
 	return c, nil
+}
+
+// MSGraphEnabled reports whether the Microsoft 365 (Graph) integration is
+// configured.
+func (c *Config) MSGraphEnabled() bool {
+	return c.MSTenantID != ""
 }
 
 func (c *Config) IsDev() bool {
