@@ -371,4 +371,63 @@ describe('MessageItem browser behavior', () => {
     expect(time).not.toBeNull();
     expect(time?.className).toMatch(/opacity-(0|100)/);
   });
+
+  it('a grouped (headerless) message still surfaces its edited marker', async () => {
+    await renderWithProviders(
+      <MessageItem
+        message={makeMessage({ body: 'fixed a typo', editedAt: '2026-07-13T10:00:00Z' })}
+        firstInGroup={false}
+        authorName="Alice"
+        isOwn={false}
+        channelId="channel-1"
+        currentUserId="user-1"
+      />,
+    );
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('fixed a typo');
+    });
+    // No header row to carry "(edited)" — the marker renders under the body.
+    const marker = document.querySelector('[data-testid="grouped-edited-marker"]');
+    expect(marker).not.toBeNull();
+    expect(marker?.textContent).toBe('(edited)');
+  });
+
+  it('an unedited grouped message shows no edited marker', async () => {
+    await renderWithProviders(
+      <MessageItem
+        message={makeMessage({ body: 'pristine' })}
+        firstInGroup={false}
+        authorName="Alice"
+        isOwn={false}
+        channelId="channel-1"
+        currentUserId="user-1"
+      />,
+    );
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('pristine');
+    });
+    expect(document.querySelector('[data-testid="grouped-edited-marker"]')).toBeNull();
+  });
+
+  it('the header timestamp never wraps onto a second row, even with a long author name', async () => {
+    await renderWithProviders(
+      <MessageItem
+        message={makeMessage({ body: 'hello' })}
+        firstInGroup
+        authorName="An Extremely Long Authorname That Forces The Header To Squeeze Everything Else"
+        isOwn={false}
+        channelId="channel-1"
+        currentUserId="user-1"
+      />,
+    );
+    let time: HTMLTimeElement | null = null;
+    await vi.waitFor(() => {
+      time = document.querySelector('time');
+      expect(time).not.toBeNull();
+    });
+    const rect = (time as unknown as HTMLElement).getBoundingClientRect();
+    // One line of text-xs is ~16px; a wrapped label would double that.
+    expect(rect.height).toBeLessThan(24);
+    expect(getComputedStyle(time as unknown as HTMLElement).whiteSpace).toBe('nowrap');
+  });
 });

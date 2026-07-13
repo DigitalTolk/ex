@@ -255,7 +255,12 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
           <BellOff className="h-3.5 w-3.5" />
           Unfollow
         </Button>
-        <span className="text-xs text-muted-foreground">
+        <span
+          // shrink-0 + nowrap: on a narrow mobile header the flex squeeze
+          // otherwise wraps "4 replies" onto two rows — the title (min-w-0,
+          // ellipsis) is the only element that may give way.
+          className="shrink-0 whitespace-nowrap text-xs text-muted-foreground"
+        >
           {summary.replyCount} {summary.replyCount === 1 ? 'reply' : 'replies'}
         </span>
       </header>

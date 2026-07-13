@@ -116,6 +116,18 @@ func extractCustomTokens(input string) []*HastNode {
 		})}
 	})
 
+	// Bare URLs — after images (whose parens contain URLs the image pass
+	// must claim first) but BEFORE emoji shortcodes: SharePoint-style URLs
+	// carry `/:x:/`, `/:w:/` … path segments that the emoji pass would
+	// otherwise turn into an ❌ glyph, splitting the link in two. A colon
+	// token inside a URL is part of the URL, never an emoji.
+	pieces = splitTokens(pieces, bareURLRE, func(m []string, _ int) []*HastNode {
+		return []*HastNode{exElement("ex-bare-url", map[string]interface{}{
+			"data-href":  m[0],
+			"data-value": m[0],
+		})}
+	})
+
 	// Emoji shortcodes — toned first.
 	pieces = splitTokens(pieces, emojiTonedRE, func(m []string, _ int) []*HastNode {
 		return []*HastNode{exElement("ex-emoji-shortcode", map[string]interface{}{
@@ -127,14 +139,6 @@ func extractCustomTokens(input string) []*HastNode {
 	pieces = splitTokens(pieces, emojiBareRE, func(m []string, _ int) []*HastNode {
 		return []*HastNode{exElement("ex-emoji-shortcode", map[string]interface{}{
 			"data-name":  m[1],
-			"data-value": m[0],
-		})}
-	})
-
-	// Bare URLs — last so explicit links/etc. are already claimed.
-	pieces = splitTokens(pieces, bareURLRE, func(m []string, _ int) []*HastNode {
-		return []*HastNode{exElement("ex-bare-url", map[string]interface{}{
-			"data-href":  m[0],
 			"data-value": m[0],
 		})}
 	})
