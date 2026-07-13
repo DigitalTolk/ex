@@ -94,6 +94,12 @@ jobs:
     name: Frontend
     runs-on: ubuntu-latest
     container:
+      # Tag must track the playwright-core version in package-lock.json —
+      # vitest launches the browsers this image pre-installs, and a mismatch
+      # fails with "Executable doesn't exist". playwright is pinned to 1.59.1
+      # via package.json `overrides`: 1.61.x hangs/crashes the merged vitest
+      # browser run ("[birpc] rpc is closed") with @vitest/browser-playwright
+      # 4.1.x — re-test the pin when bumping vitest.
       image: ghcr.io/digitaltolk/docker-builder-playwright:1.59.1
     needs: lint
     steps:

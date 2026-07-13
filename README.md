@@ -57,25 +57,7 @@ OIDC_CLIENT_SECRET=your-client-secret
 BASE_URL=http://localhost:8080
 ```
 
-#### Microsoft 365 integration (optional)
-
-When the workspace signs in through Microsoft Entra ID, setting `MS_TENANT_ID` enables the tighter Microsoft 365 integration — no per-user account linking:
-
-- **Profile enrichment**: each SSO login syncs the user's phone number and manager from the directory onto their Ex profile (hover card + directory page), broadcast live via `user.updated`.
-- **`/mstmeetings` slash command**: creates a Microsoft Teams online meeting organized by the invoking user, invites everyone in the current chat (channel, group or DM), and posts the join link into the chat.
-
-```bash
-MS_TENANT_ID={tenant-id}          # enables the integration
-MS_CLIENT_ID=...                  # optional — defaults to OIDC_CLIENT_ID
-MS_CLIENT_SECRET=...              # optional — defaults to OIDC_CLIENT_SECRET
-```
-
-The app authenticates against Microsoft Graph app-only (client credentials), so the app registration needs these **application permissions** with admin consent:
-
-1. `User.Read.All` — read phone + manager from the directory
-2. `OnlineMeetings.ReadWrite.All` — create Teams meetings on behalf of users. Graph additionally requires an [application access policy](https://learn.microsoft.com/graph/cloud-communication-online-meeting-application-access-policy) granted to the app for the organizing users (`New-CsApplicationAccessPolicy` + `Grant-CsApplicationAccessPolicy` in Teams PowerShell).
-
-Without `MS_TENANT_ID` everything above is disabled and the app behaves exactly as before.
+Workspaces on Entra ID can additionally enable the tighter [Microsoft 365 Integration](#microsoft-365-integration-optional) (directory profile sync + the `/mstmeetings` slash command).
 
 ### Google Workspace
 
@@ -93,6 +75,61 @@ BASE_URL=http://localhost:8080
 ### Any OIDC Provider
 
 Any provider that supports OpenID Connect Discovery (`.well-known/openid-configuration`) will work. Set `OIDC_ISSUER` to the issuer URL, and register `{BASE_URL}/auth/oidc/callback` as the redirect URI.
+
+## Microsoft 365 Integration (optional)
+
+When the workspace signs in through Microsoft Entra ID, setting `MS_TENANT_ID` enables a tighter Microsoft 365 integration — with **no per-user account linking**, because the app authenticates against Microsoft Graph app-only (client credentials) using the same app registration the workspace already signs in through:
+
+- **Profile enrichment** — each SSO login syncs the user's phone number and manager from the directory onto their Ex profile (hover card + directory page), broadcast live via `user.updated`. Values come from Entra ID's `mobilePhone`/`businessPhones` fields and the manager assignment, so they only appear for users whose directory profiles have them filled in.
+- **`/mstmeetings` slash command** — creates a Microsoft Teams online meeting organized by the invoking user, invites everyone in the current chat (channel, group or DM), and posts the join link into the chat.
+
+Without `MS_TENANT_ID`, everything below is disabled and the app behaves exactly as before.
+
+There is no separate "enable Graph" switch in Azure — Microsoft Graph is always available. Setup is two things in Azure plus one Teams policy:
+
+### 1. Add the application permissions (Azure Portal)
+
+1. [Azure Portal](https://portal.azure.com) > **Microsoft Entra ID** > **App registrations** > your app (the one whose client ID is in `OIDC_CLIENT_ID`)
+2. **API permissions** > **Add a permission** > **Microsoft Graph** > **Application permissions** (⚠️ not *Delegated* — the app calls Graph as itself, with no signed-in user)
+3. Add:
+   - `User.Read.All` — read phone + manager from the directory
+   - `OnlineMeetings.ReadWrite.All` — create Teams meetings
+4. Click **Grant admin consent for \<tenant\>** — the Status column must show a green check. Without this step the permissions sit there un-consented and every Graph call returns 403.
+
+### 2. Grant the Teams application access policy (PowerShell)
+
+Graph's rule for **app-only** meeting creation is that permissions alone are not sufficient: the tenant must explicitly authorize the app to act on behalf of the organizing users via an [application access policy](https://learn.microsoft.com/graph/cloud-communication-online-meeting-application-access-policy). Run once as a Teams administrator:
+
+```powershell
+Install-Module MicrosoftTeams
+Connect-MicrosoftTeams
+
+New-CsApplicationAccessPolicy -Identity "ex-meetings" `
+  -AppIds "<your-client-id>" `
+  -Description "Allow Ex to create Teams meetings on behalf of users"
+
+# Tenant-wide (simplest):
+Grant-CsApplicationAccessPolicy -PolicyName "ex-meetings" -Global
+```
+
+To scope it instead, grant per user: `Grant-CsApplicationAccessPolicy -PolicyName "ex-meetings" -Identity "user@yourdomain.com"`. Propagation can take up to ~30 minutes — a 403 from `/mstmeetings` right after granting usually just means "wait a bit."
+
+Profile enrichment needs only step 1 — if you skip step 2, logins still sync phone/manager and only meeting creation fails.
+
+### 3. Configure Ex
+
+```bash
+MS_TENANT_ID={tenant-id}          # from the app registration's Overview page — enables the integration
+MS_CLIENT_ID=...                  # optional — defaults to OIDC_CLIENT_ID
+MS_CLIENT_SECRET=...              # optional — defaults to OIDC_CLIENT_SECRET
+```
+
+Restart and check the boot log for `Microsoft 365 integration enabled`.
+
+### 4. Verify
+
+- **Profiles**: log out and back in (the sync runs at SSO login, so existing sessions pick up data on their next login), then open your profile hover card — phone and manager should appear.
+- **Meetings**: type `/mstmeetings` in any channel or DM and send — the join link should post into the chat. If it errors, check the server log: a Graph 403 there means the access policy (step 2) hasn't propagated or wasn't granted to that user.
 
 ## Email Invites (SMTP)
 
