@@ -132,6 +132,23 @@ func TestCommandRunForbidden(t *testing.T) {
 	}
 }
 
+func TestCommandRunUserFacingDenial(t *testing.T) {
+	svc := service.NewCommandService()
+	svc.Register(&testCommand{name: "mstmeetings", err: &service.CommandUserError{Message: "Teams meetings can only be started by workspace (SSO) members."}})
+	h := NewCommandHandler(svc)
+
+	rec := httptest.NewRecorder()
+	h.Run(rec, commandRequest(t, http.MethodPost, "/api/v1/commands/run",
+		`{"command":"mstmeetings","parentType":"channel","parentID":"c1"}`, true))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	// The message is user-facing by contract — it must reach the client verbatim.
+	if !strings.Contains(rec.Body.String(), "workspace (SSO) members") {
+		t.Errorf("body = %q, want the denial message", rec.Body.String())
+	}
+}
+
 func TestCommandRunInternalError(t *testing.T) {
 	svc := service.NewCommandService()
 	svc.Register(&testCommand{name: "mstmeetings", err: errors.New("graph down")})

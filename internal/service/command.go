@@ -13,6 +13,16 @@ import (
 // newer deploy removed) gets a clean error instead of a generic 500.
 var ErrUnknownCommand = errors.New("command: unknown command")
 
+// CommandUserError is a command failure whose message is safe — and meant —
+// to be shown verbatim to the invoking user (e.g. "guests can't start
+// meetings"). Anything not wrapped in it stays a generic 500 so internal
+// details never leak into the composer.
+type CommandUserError struct {
+	Message string
+}
+
+func (e *CommandUserError) Error() string { return "command: " + e.Message }
+
 // CommandInfo describes a slash command to clients; the composer's "/"
 // autocomplete renders exactly this.
 type CommandInfo struct {

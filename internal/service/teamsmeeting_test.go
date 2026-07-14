@@ -200,6 +200,21 @@ func TestTeamsMeetingOrganizerFallsBackToEmail(t *testing.T) {
 	}
 }
 
+func TestTeamsMeetingGuestInvokerGetsUserFacingDenial(t *testing.T) {
+	env := setupTeamsMeeting()
+	env.addChannelMember("chan-1", "guesty")
+	env.users.users["guesty"] = &model.User{ID: "guesty", Email: "g@ext.example.com", AuthProvider: model.AuthProviderGuest}
+
+	_, err := env.cmd.Run(context.Background(), CommandRequest{UserID: "guesty", ParentID: "chan-1", ParentType: ParentChannel})
+	var userErr *CommandUserError
+	if !errors.As(err, &userErr) || !strings.Contains(userErr.Message, "workspace (SSO) members") {
+		t.Fatalf("err = %v, want a CommandUserError explaining the guest restriction", err)
+	}
+	if env.meetings.gotReq != nil || env.sender.gotUser != "" {
+		t.Error("no meeting must be created and no message posted for a guest invoker")
+	}
+}
+
 func TestTeamsMeetingOrganizerDirectoryResolutionError(t *testing.T) {
 	env := setupTeamsMeeting()
 	env.addChannelMember("chan-1", "alice")

@@ -66,12 +66,16 @@ func (h *CommandHandler) Run(w http.ResponseWriter, r *http.Request) {
 		ParentID:   body.ParentID,
 		ParentType: body.ParentType,
 	})
+	var userErr *service.CommandUserError
 	switch {
 	case err == nil:
 		clearSentDraft(r.Context(), h.draftClearer, userID, body.ParentID, body.ParentType, "")
 		writeJSON(w, http.StatusOK, JSON{"message": msg})
 	case errors.Is(err, service.ErrUnknownCommand):
 		writeError(w, http.StatusNotFound, "unknown_command", "unknown command")
+	case errors.As(err, &userErr):
+		// A user-facing denial: the composer shows this message verbatim.
+		writeError(w, http.StatusForbidden, "command_denied", userErr.Message)
 	case errors.Is(err, service.ErrForbidden):
 		writeError(w, http.StatusForbidden, "forbidden", "you do not have access to this chat")
 	default:

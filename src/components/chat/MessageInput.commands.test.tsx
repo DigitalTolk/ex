@@ -9,7 +9,20 @@ import { MessageInput } from './MessageInput';
 // the command hooks (the hooks themselves are covered in useCommands.test.ts)
 // and drive the real MessageInput send path.
 
-vi.mock('@/lib/api', () => ({ apiFetch: vi.fn().mockResolvedValue([]) }));
+vi.mock('@/lib/api', () => ({
+  apiFetch: vi.fn().mockResolvedValue([]),
+  ApiError: class ApiError extends Error {
+    status: number;
+    payload?: unknown;
+
+    constructor(status: number, message: string, payload?: unknown) {
+      super(message);
+      this.status = status;
+      this.payload = payload;
+    }
+  },
+}));
+import { ApiError } from '@/lib/api';
 
 vi.mock('@/hooks/useConversations', async (orig) => ({
   ...(await orig<typeof import('@/hooks/useConversations')>()),
@@ -165,6 +178,46 @@ describe('MessageInput slash commands', () => {
     expect(useCommandsMock).toHaveBeenCalledWith(false);
     expect(runCommandMock).not.toHaveBeenCalled();
     expect(onSend).toHaveBeenCalledWith({ body: '/mstmeetings', attachmentIDs: [] });
+  });
+
+  it('shows the server-authored denial message when the backend provides one', async () => {
+    runCommandMock.mockImplementation((_input, opts?: { onError?: (e: unknown) => void }) => {
+      opts?.onError?.(new ApiError(403, 'Forbidden', {
+        error: { code: 'command_denied', message: 'Teams meetings can only be started by workspace (SSO) members.' },
+      }));
+    });
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        initialBody="/mstmeetings"
+        typingParentID="chan-1"
+        typingParentType="channel"
+      />,
+    );
+    await sendViaEnter();
+
+    const alert = await screen.findByTestId('command-error');
+    expect(alert.textContent).toBe('Teams meetings can only be started by workspace (SSO) members.');
+  });
+
+  it('falls back to the retry text for ApiErrors without a usable message', async () => {
+    for (const payload of [undefined, { error: { message: '' } }]) {
+      runCommandMock.mockImplementation((_input, opts?: { onError?: (e: unknown) => void }) => {
+        opts?.onError?.(new ApiError(500, 'Internal', payload));
+      });
+      const view = render(
+        <MessageInput
+          onSend={vi.fn()}
+          initialBody="/mstmeetings"
+          typingParentID="chan-1"
+          typingParentType="channel"
+        />,
+      );
+      await sendViaEnter();
+      const alert = await screen.findByTestId('command-error');
+      expect(alert.textContent).toContain("Couldn't run /mstmeetings");
+      view.unmount();
+    }
   });
 
   it('shows an inline error when the command fails', async () => {

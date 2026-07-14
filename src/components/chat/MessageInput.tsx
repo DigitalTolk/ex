@@ -48,6 +48,17 @@ import { ApiError } from '@/lib/api';
 
 const TYPING_PING_INTERVAL_MS = 3000;
 
+// commandDenialMessage extracts a server-authored, user-facing denial from a
+// failed slash-command run (the backend marks those with a structured error
+// message, e.g. "guests can't start Teams meetings"). Anything else — network
+// failures, generic 500s — returns null and the caller shows the retry text.
+function commandDenialMessage(err: unknown): string | null {
+  if (!(err instanceof ApiError)) return null;
+  const payload = err.payload as { error?: { message?: unknown } } | undefined;
+  const message = payload?.error?.message;
+  return typeof message === 'string' && message !== '' ? message : null;
+}
+
 // How long a composer must have been hidden before, on waking, it drops its
 // "the user edited this" claim and defers to the server's draft state. Long
 // enough that a quick alt-tab never clobbers live typing; short enough that a
@@ -344,7 +355,12 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     if (commandName) {
       runCommand(
         { command: commandName, parentType: commandTarget!.parentType, parentID: commandTarget!.parentID },
-        { onError: () => setCommandError(`Couldn't run /${commandName} — please try again.`) },
+        {
+          onError: (err) =>
+            setCommandError(
+              commandDenialMessage(err) ?? `Couldn't run /${commandName} — please try again.`,
+            ),
+        },
       );
     } else {
       onSend({ body: normalizeEmojiInBody(trimmed), attachmentIDs: drafts.map((d) => d.id) });

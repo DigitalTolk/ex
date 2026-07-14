@@ -88,6 +88,11 @@ func (t *TeamsMeetingCommand) Run(ctx context.Context, req CommandRequest) (*mod
 	if err != nil {
 		return nil, fmt.Errorf("teams meeting: resolve organizer: %w", err)
 	}
+	if organizer.AuthProvider == model.AuthProviderGuest {
+		// A guest has no Entra identity to organize as — fail with a message
+		// the composer can show instead of a misleading "try again".
+		return nil, &CommandUserError{Message: "Teams meetings can only be started by workspace (SSO) members — guest accounts have no Microsoft 365 identity."}
+	}
 	organizerKey := organizer.MSObjectID
 	if organizerKey == "" {
 		// No oid on record (session predates oid capture and the sweep
