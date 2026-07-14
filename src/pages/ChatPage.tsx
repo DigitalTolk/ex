@@ -324,6 +324,12 @@ export default function ChatPage() {
       // stream (source of truth) so the sidebar badge + list update live.
       queryClient.invalidateQueries({ queryKey: queryKeys.activity() });
     },
+    onActivityRead: () => {
+      // The feed was marked read on another device/tab — refetch so this
+      // device's badge clears too instead of lingering until the next
+      // activity.new (SPEC GAP-3 / I-4).
+      queryClient.invalidateQueries({ queryKey: queryKeys.activity() });
+    },
     onThreadUpdated: (data: unknown) => {
       // Participant-scoped reply metadata: the server only sends this to users
       // who belong in the thread, so patch the /threads row directly from the

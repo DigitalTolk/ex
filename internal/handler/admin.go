@@ -90,6 +90,17 @@ func (h *AdminHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// PushStats returns this instance's mobile-push pipeline counters
+// (scheduled / delivered / ack-suppressed / undeliverable — SPEC P4), so an
+// admin can verify the desktop-ack ⇄ mobile-fallback arbitration is doing
+// what the reliability contract says. Admin-only; per-instance numbers.
+func (h *AdminHandler) PushStats(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, JSON{"push": service.PushMetricsSnapshot()})
+}
+
 // SearchStatus returns the search cluster's health, per-index doc
 // counts/sizes, and the most recent reindex progress. Admin-only.
 // Returns 503 with a structured payload (`configured: false`) when

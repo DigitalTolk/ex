@@ -5,6 +5,7 @@ import App from './App.tsx'
 import { initErrorReporting } from '@/lib/sentry'
 import { startLayoutTierTracking } from '@/lib/device'
 import { initTabCoordinator } from '@/lib/tab-leader'
+import { initDesktopPresence } from '@/lib/desktop-presence'
 
 // Before first render so boot-time crashes (the blank-screen class) are
 // captured. No-op unless the server injected a Sentry DSN.
@@ -20,6 +21,10 @@ startLayoutTierTracking()
 // activity/viewing knowledge. Booted here (not in a provider) so the module
 // stays inert in tests, which then behave single-tab by default.
 initTabCoordinator()
+
+// Desktop-shell OS-presence bridge (lock/sleep/idle → stop acking so the
+// mobile fallback fires). No-op outside the ex-electron shell.
+initDesktopPresence()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

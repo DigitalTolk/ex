@@ -50,7 +50,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
-import { getSeenMap, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, useUserThreads } from '@/hooks/useThreads';
+import { getSeenMap, mergeSeenMaps, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, useUserThreads } from '@/hooks/useThreads';
 import { useUserState } from '@/hooks/useUserState';
 import { useDrafts } from '@/hooks/useDrafts';
 import { useActivity } from '@/hooks/useActivity';
@@ -153,7 +153,7 @@ export function Sidebar({ onClose }: SidebarProps) {
         threads ?? [],
         userState?.threadNotifications ?? [],
         unreadThreadNotifications ?? new Set(),
-        { ...(userState?.threadSeen ?? {}), ...localSeenMap },
+        mergeSeenMaps(userState?.threadSeen, localSeenMap),
       ).size,
     [localSeenMap, threads, unreadThreadNotifications, userState?.threadNotifications, userState?.threadSeen],
   );

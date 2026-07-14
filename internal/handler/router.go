@@ -253,6 +253,7 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("GET /api/v1/admin/settings", middleware.WrapFunc(adminH.GetSettings, authMW))
 		mux.Handle("PUT /api/v1/admin/settings", middleware.WrapFunc(adminH.UpdateSettings, authMW))
 		mux.Handle("GET /api/v1/admin/search/status", middleware.WrapFunc(adminH.SearchStatus, authMW))
+		mux.Handle("GET /api/v1/admin/push-stats", middleware.WrapFunc(adminH.PushStats, authMW))
 		mux.Handle("POST /api/v1/admin/search/reindex", middleware.WrapFunc(adminH.StartSearchReindex, authMW))
 		mux.Handle("POST /api/v1/admin/search/rebuild-mapping", middleware.WrapFunc(adminH.StartSearchMappingRebuild, authMW))
 	}

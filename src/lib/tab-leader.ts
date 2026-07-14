@@ -20,12 +20,24 @@
 // single-tab case — dispatch locally. A duplicate popup beats a silent miss.
 
 import { BroadcastChannel, createLeaderElection, type LeaderElector } from 'broadcast-channel';
-import { setActivityBroadcast } from '@/lib/user-activity';
+import { isHardAway, setActivityBroadcast, setAttentionBroadcast } from '@/lib/user-activity';
+import { setThreadScopeBroadcast, threadScopeSnapshot } from '@/lib/thread-scope';
 
 interface TabState {
   visible: boolean;
+  // OS window focus. A visible-but-blurred tab (second monitor, background
+  // window) is NOT proof anyone is at the device — remote checks require it
+  // (SPEC GAP-7). Old-version tabs omit it; undefined reads as unfocused,
+  // which fails toward "away" (no ack), the safe direction.
+  focused: boolean;
+  // This tab believes the device is hard-away (screen locked / just woke /
+  // OS idle — SPEC §2 R2/R3). A hard-away tab can never vouch for the user.
+  hardAway: boolean;
   lastActivityAt: number;
   activeParent: string | null;
+  // Thread roots being read in this tab (open panel + /threads cards in
+  // view), so the leader can suppress thread-reply alerts device-wide.
+  activeThreads: string[];
 }
 
 type TabMessage =
@@ -59,8 +71,11 @@ function postState(): void {
   if (!channel) return;
   const state: TabState = {
     visible: document.visibilityState === 'visible',
+    focused: typeof document.hasFocus === 'function' ? document.hasFocus() : false,
+    hardAway: isHardAway(),
     lastActivityAt: lastActivityBroadcastAt,
     activeParent: localActiveParent,
+    activeThreads: threadScopeSnapshot(),
   };
   try {
     void channel.postMessage({ kind: 'state', tabId, state }).catch(() => {});
@@ -93,7 +108,9 @@ export function initTabCoordinator(options?: { type?: 'simulate' }): void {
     }
     remote.set(msg.tabId, { ...msg.state, at: Date.now() });
   };
-  // Activity re-broadcasts are throttled; visibility flips always send.
+  // Activity re-broadcasts are throttled; visibility, focus, attention
+  // (hard-away/wake) and thread-scope flips always send — they are the exact
+  // bits the leader's away/suppression decisions hinge on.
   setActivityBroadcast((at) => {
     if (at - lastActivityBroadcastAt < activityBroadcastThrottleMs) {
       lastActivityBroadcastAt = at;
@@ -102,7 +119,11 @@ export function initTabCoordinator(options?: { type?: 'simulate' }): void {
     lastActivityBroadcastAt = at;
     postState();
   });
+  setAttentionBroadcast(postState);
+  setThreadScopeBroadcast(postState);
   document.addEventListener('visibilitychange', onVisibilityChange);
+  window.addEventListener('focus', onVisibilityChange);
+  window.addEventListener('blur', onVisibilityChange);
   window.addEventListener('pagehide', onPageHide);
   postState();
 }
@@ -154,24 +175,51 @@ export function setTabActiveParent(parentID: string | null): void {
   postState();
 }
 
-// remoteTabViewing: some OTHER tab is visible, recently active, and viewing
-// this parent — the whole-device version of the active-view suppression.
+// remoteTabAttentive: shared core of the whole-device checks — the sibling's
+// snapshot is fresh, its page visible, its window FOCUSED, it is not
+// hard-away (locked/woke), and it saw input within the window. Focus and
+// hard-away are required (SPEC R4/GAP-7): a visible-but-blurred tab on a
+// second monitor, or any tab on a locked machine, must never vouch for the
+// user being at the device.
+function remoteTabAttentive(s: TabState & { at: number }, withinMs: number): boolean {
+  return (
+    s.at >= Date.now() - remoteStateTTL &&
+    s.visible &&
+    s.focused === true &&
+    s.hardAway !== true &&
+    s.lastActivityAt >= Date.now() - withinMs
+  );
+}
+
+// remoteTabViewing: some OTHER tab is attentive and viewing this parent —
+// the whole-device version of the active-view suppression.
 export function remoteTabViewing(parentID: string, withinMs: number): boolean {
-  const cutoff = Date.now() - withinMs;
   for (const s of remote.values()) {
-    if (s.at >= Date.now() - remoteStateTTL && s.visible && s.activeParent === parentID && s.lastActivityAt >= cutoff) {
+    if (remoteTabAttentive(s, withinMs) && s.activeParent === parentID) {
       return true;
     }
   }
   return false;
 }
 
-// remoteUserAtDevice: some OTHER tab is visible with recent input — the
-// whole-device version of the ack gate's "user demonstrably at the device".
-export function remoteUserAtDevice(withinMs: number): boolean {
-  const cutoff = Date.now() - withinMs;
+// remoteTabViewingThread: some OTHER tab is attentive and reading this thread
+// root (open panel or /threads card in view) — the whole-device version of
+// the thread suppression (SPEC I-5).
+export function remoteTabViewingThread(threadRootID: string, withinMs: number): boolean {
   for (const s of remote.values()) {
-    if (s.at >= Date.now() - remoteStateTTL && s.visible && s.lastActivityAt >= cutoff) {
+    if (remoteTabAttentive(s, withinMs) && (s.activeThreads ?? []).includes(threadRootID)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// remoteUserAtDevice: some OTHER tab is attentive (visible + focused + recent
+// input, not hard-away) — the whole-device version of the ack gate's "user
+// demonstrably at the device".
+export function remoteUserAtDevice(withinMs: number): boolean {
+  for (const s of remote.values()) {
+    if (remoteTabAttentive(s, withinMs)) {
       return true;
     }
   }
@@ -182,8 +230,12 @@ export function remoteUserAtDevice(withinMs: number): boolean {
 // starts from the uncoordinated (single-tab) baseline.
 export async function resetTabCoordinatorForTests(): Promise<void> {
   document.removeEventListener('visibilitychange', onVisibilityChange);
+  window.removeEventListener('focus', onVisibilityChange);
+  window.removeEventListener('blur', onVisibilityChange);
   window.removeEventListener('pagehide', onPageHide);
   setActivityBroadcast(null);
+  setAttentionBroadcast(null);
+  setThreadScopeBroadcast(null);
   // try/catch (not .catch): bc returns undefined — not a promise — from a
   // second close/die on an already-torn channel, and can also throw
   // synchronously; both shapes land here.

@@ -148,10 +148,13 @@ func (s *ActivityService) Feed(ctx context.Context, userID string) (ActivityFeed
 	return ActivityFeed{Items: items, Unread: unread}, nil
 }
 
-// MarkSeen advances the user's read watermark so the unread badge clears.
+// MarkSeen advances the user's read watermark so the unread badge clears,
+// then nudges the user's OTHER devices (activity.read) so their badges clear
+// too instead of lingering until the next activity.new (SPEC GAP-3 / I-4).
 func (s *ActivityService) MarkSeen(ctx context.Context, userID string) error {
 	if err := s.store.MarkActivitySeen(ctx, userID); err != nil {
 		return fmt.Errorf("activity mark seen: %w", err)
 	}
+	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventActivityRead, map[string]any{})
 	return nil
 }

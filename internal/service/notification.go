@@ -865,6 +865,11 @@ func (s *NotificationService) sendMobilePush(ctx context.Context, recipientUserI
 		}
 		delay = ackFallbackDelay
 	}
+	if delay > 0 {
+		pushMetrics.scheduledDeferred.Add(1)
+	} else {
+		pushMetrics.scheduledImmediate.Add(1)
+	}
 	// The scheduled task is Redis-backed, so it survives restarts and any
 	// instance's worker can deliver it. WithoutCancel: scheduling is a quick
 	// Redis write that must not be aborted by the caller's teardown — a
