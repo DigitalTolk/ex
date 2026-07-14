@@ -828,10 +828,12 @@ export function Sidebar({ onClose }: SidebarProps) {
     channelDragStartedAtRef.current = null;
     lastChannelDebugKeyRef.current = null;
     clearDropTarget();
-    suppressNavigationResetRef.current = window.setTimeout(() => {
-      setSuppressChannelNavigationID(null);
-      suppressNavigationResetRef.current = null;
-    }, 750);
+    // Reuses clearSuppressedChannelNavigation as the callback (clearTimeout on
+    // the already-fired id is a no-op) instead of a dedicated closure: the
+    // unmount cleanup below can cancel this timer before it ever fires in a
+    // test run, and a function literal that only executes when the suite
+    // happens to outlast 750ms is a coverage coin-flip (bit CI 2026-07-14).
+    suppressNavigationResetRef.current = window.setTimeout(clearSuppressedChannelNavigation, 750);
   }
 
   function clearSuppressedChannelNavigation() {

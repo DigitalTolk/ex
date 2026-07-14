@@ -503,6 +503,39 @@ describe('Sidebar', () => {
     });
   });
 
+  it('clears the pending suppress-navigation reset timer on unmount', () => {
+    // A drop schedules a 750ms reset; unmounting before it fires must clear
+    // it, or the callback lands in a torn-down tree (this crashed test
+    // teardown with "window is not defined"). unmount() runs synchronously
+    // after the drop — no event-loop yield — so the timer is deterministically
+    // still pending here.
+    mockChannels = [
+      { ...baseMockChannels[0], favorite: true },
+      { ...baseMockChannels[1] },
+      { ...baseMockChannels[2] },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    const setTimeoutSpy = vi.spyOn(window, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout');
+    const view = renderSidebar();
+
+    const header = screen.getByTestId('sidebar-group-header-__favorites__');
+    mockRect(header, { top: -20, bottom: 0 });
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-2'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
+    fireDragOver(header, dataTransfer, 19);
+    fireDrop(header, dataTransfer, 19);
+
+    const resetIdx = setTimeoutSpy.mock.calls.findLastIndex((c) => c[1] === 750);
+    expect(resetIdx).toBeGreaterThanOrEqual(0);
+    const resetID = setTimeoutSpy.mock.results[resetIdx].value as number;
+
+    view.unmount();
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(resetID);
+    setTimeoutSpy.mockRestore();
+    clearTimeoutSpy.mockRestore();
+  });
+
   it('unfavorites a favorited channel when it is dropped into a regular section', async () => {
     // ch-2 is favorited (renders in Favorites); dropping it back onto a
     // regular channel row schedules an unfavorite.
