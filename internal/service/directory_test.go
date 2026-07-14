@@ -24,6 +24,11 @@ func (s *stubGraph) GetUserProfile(_ context.Context, key string) (*msgraph.User
 	return s.profile, s.profileErr
 }
 
+func (s *stubGraph) ResolveUserByEmail(_ context.Context, email string) (*msgraph.UserProfile, error) {
+	s.profileKeys = append(s.profileKeys, "email:"+email)
+	return s.profile, s.profileErr
+}
+
 func (s *stubGraph) GetUserManager(_ context.Context, key string) (*msgraph.UserProfile, error) {
 	s.managerKeys = append(s.managerKeys, key)
 	return s.manager, s.managerErr
@@ -42,8 +47,10 @@ func TestLookupProfileKeysByObjectIDThenEmail(t *testing.T) {
 	if _, err := svc.LookupProfile(context.Background(), "alice@example.com", ""); err != nil {
 		t.Fatalf("LookupProfile: %v", err)
 	}
-	if graph.profileKeys[0] != "oid-1" || graph.profileKeys[1] != "alice@example.com" {
-		t.Errorf("profile keys = %v, want object id then email fallback", graph.profileKeys)
+	// An oid key hits the direct lookup; an email key routes through the
+	// mail!=UPN-tolerant resolver.
+	if graph.profileKeys[0] != "oid-1" || graph.profileKeys[1] != "email:alice@example.com" {
+		t.Errorf("profile keys = %v, want object id then email resolver", graph.profileKeys)
 	}
 }
 

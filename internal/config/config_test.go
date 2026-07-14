@@ -19,7 +19,7 @@ func clearEnv(t *testing.T) {
 		"SENTRY_FRONTEND_DSN", "SENTRY_FRONTEND_TRACES_SAMPLE_RATE",
 		"SENTRY_FRONTEND_REPLAY_SESSION_SAMPLE_RATE", "SENTRY_FRONTEND_REPLAY_ERROR_SAMPLE_RATE",
 		"ACCESS_LOG_ENABLED",
-		"MS_TENANT_ID", "MS_CLIENT_ID", "MS_CLIENT_SECRET",
+		"MS_TENANT_ID", "MS_CLIENT_ID", "MS_CLIENT_SECRET", "MS_PROFILE_SYNC_INTERVAL",
 	}
 
 	saved := make(map[string]string)
@@ -446,4 +446,40 @@ func TestLoadMSGraph(t *testing.T) {
 			t.Fatal("Load with MS_TENANT_ID but no credentials should fail")
 		}
 	})
+}
+
+func TestLoadMSProfileSyncInterval(t *testing.T) {
+	t.Run("default 12h", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.MSProfileSyncInterval != 12*time.Hour {
+			t.Errorf("MSProfileSyncInterval = %v, want 12h", cfg.MSProfileSyncInterval)
+		}
+	})
+	t.Run("custom", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("MS_PROFILE_SYNC_INTERVAL", "30m")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.MSProfileSyncInterval != 30*time.Minute {
+			t.Errorf("MSProfileSyncInterval = %v, want 30m", cfg.MSProfileSyncInterval)
+		}
+	})
+	for _, bad := range []string{"abc", "-1h", "0"} {
+		t.Run("rejects "+bad, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("ENV", "development")
+			t.Setenv("MS_PROFILE_SYNC_INTERVAL", bad)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load with MS_PROFILE_SYNC_INTERVAL=%q should fail", bad)
+			}
+		})
+	}
 }

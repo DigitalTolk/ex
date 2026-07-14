@@ -146,6 +146,46 @@ func (c *Client) GetUserProfile(ctx context.Context, key string) (*UserProfile, 
 	return &p, nil
 }
 
+// FindUserByEmail resolves a user by their mail attribute via an OData
+// filter. The plain /users/{key} path treats an email as a userPrincipalName,
+// which 404s in tenants where mail != UPN — this is the fallback that keeps
+// email-keyed resolution working there. ErrNotFound when no user carries the
+// address.
+func (c *Client) FindUserByEmail(ctx context.Context, email string) (*UserProfile, error) {
+	// OData string literals escape single quotes by doubling them.
+	filter := "mail eq '" + strings.ReplaceAll(email, "'", "''") + "'"
+	var res struct {
+		Value []UserProfile `json:"value"`
+	}
+	path := "/users" + profileSelect + "&$top=1&$filter=" + url.QueryEscape(filter)
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &res); err != nil {
+		return nil, err
+	}
+	if len(res.Value) == 0 {
+		return nil, ErrNotFound
+	}
+	return &res.Value[0], nil
+}
+
+// ResolveUserByEmail resolves an email to a directory profile. The app's
+// source of truth is the OIDC email claim, which for Entra ID is the mail
+// attribute — so the mail filter runs FIRST. Matching against UPNs first
+// risks the wrong person in tenants where logins and mailboxes use different
+// local parts (e.g. UPN firstname.lastname@ vs mail firstname@ — one user's
+// mail can equal ANOTHER user's UPN). The UPN-keyed lookup remains as the
+// fallback for accounts whose mail attribute is unset (their email claim was
+// the UPN). Oid-keyed callers should use GetUserProfile directly.
+func (c *Client) ResolveUserByEmail(ctx context.Context, email string) (*UserProfile, error) {
+	p, err := c.FindUserByEmail(ctx, email)
+	if err == nil {
+		return p, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+	return c.GetUserProfile(ctx, email)
+}
+
 // GetUserManager fetches a user's manager from the directory hierarchy.
 // ErrNotFound when the user has no manager assigned (or doesn't exist).
 func (c *Client) GetUserManager(ctx context.Context, key string) (*UserProfile, error) {
@@ -156,12 +196,21 @@ func (c *Client) GetUserManager(ctx context.Context, key string) (*UserProfile, 
 	return &p, nil
 }
 
+// MeetingAttendee identifies one invitee. ObjectID (the AAD object id) is
+// what actually lands the person on the meeting roster for app-only created
+// meetings — a bare UPN frequently fails to resolve there and leaves the
+// participant list empty. UPN rides along as the display/resolution fallback.
+type MeetingAttendee struct {
+	UPN      string
+	ObjectID string
+}
+
 // OnlineMeetingRequest describes the Teams meeting to create.
 type OnlineMeetingRequest struct {
-	Subject      string
-	StartAt      time.Time
-	EndAt        time.Time
-	AttendeeUPNs []string
+	Subject   string
+	StartAt   time.Time
+	EndAt     time.Time
+	Attendees []MeetingAttendee
 }
 
 // OnlineMeeting is the created meeting slice the app needs.
@@ -171,9 +220,16 @@ type OnlineMeeting struct {
 	Subject string `json:"subject"`
 }
 
+type meetingParticipantIdentity struct {
+	User struct {
+		ID string `json:"id"`
+	} `json:"user"`
+}
+
 type meetingParticipantPayload struct {
-	UPN  string `json:"upn"`
-	Role string `json:"role"`
+	UPN      string                      `json:"upn,omitempty"`
+	Role     string                      `json:"role"`
+	Identity *meetingParticipantIdentity `json:"identity,omitempty"`
 }
 
 type onlineMeetingPayload struct {
@@ -194,12 +250,17 @@ func (c *Client) CreateOnlineMeeting(ctx context.Context, organizerKey string, r
 		EndDateTime:   req.EndAt.UTC().Format(time.RFC3339),
 		Subject:       req.Subject,
 	}
-	payload.Participants.Attendees = make([]meetingParticipantPayload, 0, len(req.AttendeeUPNs))
-	for _, upn := range req.AttendeeUPNs {
-		if strings.TrimSpace(upn) == "" {
+	payload.Participants.Attendees = make([]meetingParticipantPayload, 0, len(req.Attendees))
+	for _, a := range req.Attendees {
+		if strings.TrimSpace(a.UPN) == "" && strings.TrimSpace(a.ObjectID) == "" {
 			continue
 		}
-		payload.Participants.Attendees = append(payload.Participants.Attendees, meetingParticipantPayload{UPN: upn, Role: "attendee"})
+		p := meetingParticipantPayload{UPN: a.UPN, Role: "attendee"}
+		if a.ObjectID != "" {
+			p.Identity = &meetingParticipantIdentity{}
+			p.Identity.User.ID = a.ObjectID
+		}
+		payload.Participants.Attendees = append(payload.Participants.Attendees, p)
 	}
 
 	var meeting OnlineMeeting
@@ -286,6 +347,18 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload, dest 
 		return ErrNotFound
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		// Surface Graph's machine-readable error code (never the message —
+		// it can carry directory PII) so ops can tell a consent problem from
+		// a malformed request.
+		var ge struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		_ = json.NewDecoder(io.LimitReader(res.Body, responseLimit)).Decode(&ge)
+		if ge.Error.Code != "" {
+			return fmt.Errorf("msgraph: request failed with status %d (code %s)", res.StatusCode, ge.Error.Code)
+		}
 		return fmt.Errorf("msgraph: request failed with status %d", res.StatusCode)
 	}
 	if err := json.NewDecoder(io.LimitReader(res.Body, responseLimit)).Decode(dest); err != nil {

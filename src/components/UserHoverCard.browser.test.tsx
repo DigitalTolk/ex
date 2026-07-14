@@ -147,6 +147,33 @@ describe('UserHoverCard browser', () => {
     expect(document.body.textContent).toContain('Boss Person');
   });
 
+  it('orders rows as contact info (Email, Phone, Manager) then the time group — matching the Directory page', async () => {
+    apiFetchMock.mockResolvedValue({
+      id: 'u-1',
+      displayName: 'Alice',
+      email: 'alice@example.com',
+      phone: '+46 70 123 45 67',
+      manager: { displayName: 'Boss Person' },
+      timeZone: 'Asia/Tokyo',
+      lastSeenAt: '2026-07-13T10:00:00Z',
+      status: 'active',
+      userStatus: undefined,
+    });
+    await render(
+      <Wrap>
+        <UserHoverCard userId="u-1" displayName="Alice">
+          <span data-testid="order-trigger">Alice</span>
+        </UserHoverCard>
+      </Wrap>,
+    );
+    (document.querySelector('[data-testid="order-trigger"]') as HTMLElement).click();
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('Boss Person');
+    });
+    const labels = Array.from(document.querySelectorAll('dl dt')).map((d) => d.textContent);
+    expect(labels).toEqual(['Email', 'Phone', 'Manager', 'Local time', 'Timezone', 'Last seen']);
+  });
+
   it('omits the phone and manager rows when the directory attributes are absent', async () => {
     apiFetchMock.mockResolvedValue({
       id: 'u-1',

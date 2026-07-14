@@ -182,15 +182,6 @@ export function UserHoverCard({
                 </dd>
               </div>
             )}
-            {effectiveTimeZone && (
-              <div className="flex justify-between gap-3">
-                <dt className="text-muted-foreground">Local time</dt>
-                <dd className="text-right">
-                  {new Date().toLocaleTimeString(undefined, { timeZone: effectiveTimeZone, hour: 'numeric', minute: '2-digit' })}
-                  {timeZoneDelta && <span className="ml-1 text-muted-foreground">({timeZoneDelta})</span>}
-                </dd>
-              </div>
-            )}
             {userDetails?.phone && (
               <div className="flex justify-between gap-3">
                 <dt className="text-muted-foreground">Phone</dt>
@@ -209,6 +200,15 @@ export function UserHoverCard({
                 <dt className="text-muted-foreground">Manager</dt>
                 <dd className="min-w-0 text-right">
                   <span className="break-words">{userDetails.manager.displayName}</span>
+                </dd>
+              </div>
+            )}
+            {effectiveTimeZone && (
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">Local time</dt>
+                <dd className="text-right">
+                  {new Date().toLocaleTimeString(undefined, { timeZone: effectiveTimeZone, hour: 'numeric', minute: '2-digit' })}
+                  {timeZoneDelta && <span className="ml-1 text-muted-foreground">({timeZoneDelta})</span>}
                 </dd>
               </div>
             )}

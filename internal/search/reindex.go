@@ -383,7 +383,9 @@ type fileBucket struct {
 func (r *Reindexer) bulkMessages(ctx context.Context, msgs []*model.Message, parentType string, files map[string]*fileBucket) error {
 	entries := make([]BulkEntry, 0, len(msgs))
 	for _, m := range msgs {
-		if m == nil || m.System {
+		// Same exclusions as LiveIndexer.IndexMessage — a reindex must not
+		// resurrect docs the live path never creates.
+		if m == nil || m.System || m.NoIndex {
 			continue
 		}
 		entries = append(entries, BulkEntry{ID: m.ID, Doc: messageDoc(m, parentType)})

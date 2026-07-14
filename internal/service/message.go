@@ -392,6 +392,18 @@ func (s *MessageService) deleteFromIndex(ctx context.Context, id string) {
 // Attachments are bound by ID after the message row is persisted so dangling
 // refs are impossible.
 func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType, body, parentMessageID string, attachmentIDs ...string) (*model.Message, error) {
+	return s.send(ctx, userID, parentID, parentType, body, parentMessageID, false, attachmentIDs...)
+}
+
+// SendNoIndex is Send for machine-posted ephemera (e.g. the /mstmeetings join
+// link): the message behaves normally everywhere except the search index,
+// which never sees it — live indexing and the admin reindex both honor the
+// persisted NoIndex flag.
+func (s *MessageService) SendNoIndex(ctx context.Context, userID, parentID, parentType, body, parentMessageID string, attachmentIDs ...string) (*model.Message, error) {
+	return s.send(ctx, userID, parentID, parentType, body, parentMessageID, true, attachmentIDs...)
+}
+
+func (s *MessageService) send(ctx context.Context, userID, parentID, parentType, body, parentMessageID string, noIndex bool, attachmentIDs ...string) (*model.Message, error) {
 	// For conversations the access check already loads the conversation row —
 	// keep it so the activity block below doesn't re-read the same entity.
 	var sendConv *model.Conversation
@@ -441,6 +453,7 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 		Body:            body,
 		ParentMessageID: parentMessageID,
 		AttachmentIDs:   attachmentIDs,
+		NoIndex:         noIndex,
 		CreatedAt:       now,
 	}
 

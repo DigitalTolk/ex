@@ -17,16 +17,21 @@ import (
 const teamsMeetingDuration = time.Hour
 
 // MeetingCreator is the slice of the Graph client the command needs, as an
-// interface so tests stub meeting creation without HTTP.
+// interface so tests stub meeting creation without HTTP. ResolveUserByEmail
+// recovers the organizer's AAD object id (tolerating mail != UPN tenants):
+// the app-only onlineMeetings endpoint rejects UPN/email keys with a 400, so
+// a user whose session predates oid capture must be resolved first.
 type MeetingCreator interface {
 	CreateOnlineMeeting(ctx context.Context, organizerKey string, req msgraph.OnlineMeetingRequest) (*msgraph.OnlineMeeting, error)
+	ResolveUserByEmail(ctx context.Context, email string) (*msgraph.UserProfile, error)
 }
 
 // MeetingMessageSender posts the join-link message into the chat; satisfied
-// by MessageService.Send (which emits message.new and runs the normal
-// notification pipeline).
+// by MessageService.SendNoIndex (message.new + the normal notification
+// pipeline, but excluded from the search index — a stale join link
+// surfacing in search results is noise, not content).
 type MeetingMessageSender interface {
-	Send(ctx context.Context, userID, parentID, parentType, body, parentMessageID string, attachmentIDs ...string) (*model.Message, error)
+	SendNoIndex(ctx context.Context, userID, parentID, parentType, body, parentMessageID string, attachmentIDs ...string) (*model.Message, error)
 }
 
 // MeetingUserResolver resolves users for organizer/attendee data; satisfied
@@ -85,22 +90,38 @@ func (t *TeamsMeetingCommand) Run(ctx context.Context, req CommandRequest) (*mod
 	}
 	organizerKey := organizer.MSObjectID
 	if organizerKey == "" {
-		organizerKey = organizer.Email
+		// No oid on record (session predates oid capture and the sweep
+		// hasn't reached this user yet) — resolve it now; email/UPN keys
+		// 400 on the app-only onlineMeetings endpoint.
+		profile, err := t.deps.Meetings.ResolveUserByEmail(ctx, organizer.Email)
+		if err != nil {
+			return nil, fmt.Errorf("teams meeting: resolve organizer directory id: %w", err)
+		}
+		organizerKey = profile.ID
 	}
 
 	now := time.Now()
 	meeting, err := t.deps.Meetings.CreateOnlineMeeting(ctx, organizerKey, msgraph.OnlineMeetingRequest{
-		Subject:      t.subject(ctx, req),
-		StartAt:      now,
-		EndAt:        now.Add(teamsMeetingDuration),
-		AttendeeUPNs: t.attendeeUPNs(ctx, memberIDs, req.UserID),
+		Subject:   t.subject(ctx, req),
+		StartAt:   now,
+		EndAt:     now.Add(teamsMeetingDuration),
+		Attendees: t.attendees(ctx, memberIDs, req.UserID),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("teams meeting: create: %w", err)
 	}
 
 	body := fmt.Sprintf("Started a **Teams meeting** — [Join the meeting](%s)", meeting.JoinURL)
-	return t.deps.Sender.Send(ctx, req.UserID, req.ParentID, req.ParentType, body, "")
+	if req.ParentType == ParentChannel {
+		// "Call everyone in": lead with @all so the message alerts every
+		// member through the standard notification pipeline (desktop popup,
+		// deferred mobile push when away/offline) — subject to each
+		// recipient's mute/group-mention preferences, like any @all. DMs and
+		// group chats need no mention: their messages already alert every
+		// participant.
+		body = "@all " + body
+	}
+	return t.deps.Sender.SendNoIndex(ctx, req.UserID, req.ParentID, req.ParentType, body, "")
 }
 
 // chatMemberIDs returns everyone in the target chat, verifying the invoker
@@ -150,11 +171,14 @@ func (t *TeamsMeetingCommand) subject(ctx context.Context, req CommandRequest) s
 	return "Teams meeting"
 }
 
-// attendeeUPNs maps the chat's members to invitable addresses. Best-effort by
-// design: the join link lands in the chat for everyone regardless, so a
-// member the batch can't resolve (or with no email) is skipped, not fatal.
-// The invoker is excluded — they're the organizer.
-func (t *TeamsMeetingCommand) attendeeUPNs(ctx context.Context, memberIDs []string, invokerID string) []string {
+// attendees maps the chat's members onto the meeting roster. The AAD object
+// id (synced at login / by the directory sweep) is what reliably lands a
+// person on an app-only meeting's participant list; the email/UPN rides along
+// as fallback. Best-effort by design: the join link lands in the chat for
+// everyone regardless, so a member the batch can't resolve (or with neither
+// email nor object id) is skipped, not fatal. The invoker is excluded —
+// they're the organizer.
+func (t *TeamsMeetingCommand) attendees(ctx context.Context, memberIDs []string, invokerID string) []msgraph.MeetingAttendee {
 	others := make([]string, 0, len(memberIDs))
 	for _, id := range memberIDs {
 		if id != invokerID {
@@ -164,11 +188,12 @@ func (t *TeamsMeetingCommand) attendeeUPNs(ctx context.Context, memberIDs []stri
 	// UserService.GetBatch is best-effort and never returns an error (failed
 	// rows are dropped) — same contract the users/batch handler relies on.
 	users, _ := t.deps.Users.GetBatch(ctx, others)
-	upns := make([]string, 0, len(users))
+	out := make([]msgraph.MeetingAttendee, 0, len(users))
 	for _, u := range users {
-		if u.Email != "" {
-			upns = append(upns, u.Email)
+		if u.Email == "" && u.MSObjectID == "" {
+			continue
 		}
+		out = append(out, msgraph.MeetingAttendee{UPN: u.Email, ObjectID: u.MSObjectID})
 	}
-	return upns
+	return out
 }

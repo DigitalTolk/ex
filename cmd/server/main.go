@@ -364,9 +364,19 @@ func main() {
 		slog.Error("failed to init Microsoft Graph client", "error", gerr)
 		os.Exit(1)
 	}
+	var directorySync *service.DirectorySyncService
 	if graphClient != nil {
-		authSvc.SetDirectory(service.NewMSDirectoryService(graphClient, userStore))
+		msDirectory := service.NewMSDirectoryService(graphClient, userStore)
+		authSvc.SetDirectory(msDirectory)
 		authSvc.SetPublisher(redisPubSub)
+		// Periodic re-sync: Entra edits (new manager, changed number) must
+		// propagate without waiting for each owner's next login. Redis-lock
+		// elected, so a cluster sweeps once per window; started below with
+		// the other background jobs.
+		directorySync = service.NewDirectorySyncService(msDirectory, userStore, redisCache, redisPubSub, redisCache, store.NewID)
+		// Offboarding: an account deleted in Entra is deactivated (sessions
+		// ended) on the next sweep, and reactivated if it reappears.
+		directorySync.SetStatusSetter(userSvc)
 		commandSvc.Register(service.NewTeamsMeetingCommand(service.TeamsMeetingDeps{
 			Meetings:      graphClient,
 			Sender:        messageSvc,
@@ -583,6 +593,11 @@ func main() {
 	backgroundCtx, stopBackground := context.WithCancel(context.Background())
 	defer stopBackground()
 	go userSvc.RunExpiredStatusSweeper(backgroundCtx, time.Minute, 0)
+	// Directory re-sync (phone + manager from MS Graph): first sweep at boot
+	// doubles as the workspace backfill.
+	if directorySync != nil {
+		go directorySync.Run(backgroundCtx, cfg.MSProfileSyncInterval)
+	}
 	// Fire due reminders into their owners' activity streams + alerts. Claiming
 	// is atomic in Redis, so running this on every instance never double-fires.
 	go runReminderPoller(backgroundCtx, reminderSvc, 20*time.Second)

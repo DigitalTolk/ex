@@ -38,6 +38,11 @@ type Config struct {
 	MSTenantID     string
 	MSClientID     string
 	MSClientSecret string
+	// MSProfileSyncInterval paces the periodic directory re-sync (phone +
+	// manager for every OIDC user) so changes made in Entra propagate even
+	// when their owner doesn't re-login (MS_PROFILE_SYNC_INTERVAL, default
+	// 12h). The first sweep runs at boot and doubles as the backfill.
+	MSProfileSyncInterval time.Duration
 
 	// JWT
 	JWTSecret     string
@@ -209,6 +214,12 @@ func Load() (*Config, error) {
 	if c.MSTenantID != "" && (c.MSClientID == "" || c.MSClientSecret == "") {
 		return nil, fmt.Errorf("MS_TENANT_ID is set but no client credentials are available (set MS_CLIENT_ID/MS_CLIENT_SECRET or OIDC_CLIENT_ID/OIDC_CLIENT_SECRET)")
 	}
+	syncInterval := envOr("MS_PROFILE_SYNC_INTERVAL", "12h")
+	d, err = time.ParseDuration(syncInterval)
+	if err != nil || d <= 0 {
+		return nil, fmt.Errorf("invalid MS_PROFILE_SYNC_INTERVAL %q: must be a positive duration", syncInterval)
+	}
+	c.MSProfileSyncInterval = d
 
 	return c, nil
 }

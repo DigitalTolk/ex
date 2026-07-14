@@ -30,8 +30,11 @@ type DirectoryLookup interface {
 
 // GraphDirectory is the slice of the Microsoft Graph client the directory
 // service uses, as an interface so tests stub it without HTTP.
+// ResolveUserByEmail covers tenants where mail != userPrincipalName (a plain
+// /users/{email} lookup would 404 there).
 type GraphDirectory interface {
 	GetUserProfile(ctx context.Context, key string) (*msgraph.UserProfile, error)
+	ResolveUserByEmail(ctx context.Context, email string) (*msgraph.UserProfile, error)
 	GetUserManager(ctx context.Context, key string) (*msgraph.UserProfile, error)
 }
 
@@ -53,12 +56,15 @@ func NewMSDirectoryService(graph GraphDirectory, users UserStore) *MSDirectorySe
 // lookup failure degrades to a phone-only profile — half the enrichment beats
 // failing the login sync entirely.
 func (s *MSDirectoryService) LookupProfile(ctx context.Context, email, objectID string) (*DirectoryProfile, error) {
-	key := objectID
-	if key == "" {
-		key = email
+	var profile *msgraph.UserProfile
+	var err error
+	if objectID != "" {
+		profile, err = s.graph.GetUserProfile(ctx, objectID)
+	} else {
+		// No stored oid yet (user hasn't logged in since oid capture) — an
+		// email key must tolerate mail != UPN tenants.
+		profile, err = s.graph.ResolveUserByEmail(ctx, email)
 	}
-
-	profile, err := s.graph.GetUserProfile(ctx, key)
 	if err != nil {
 		if errors.Is(err, msgraph.ErrNotFound) {
 			return nil, nil
@@ -68,7 +74,10 @@ func (s *MSDirectoryService) LookupProfile(ctx context.Context, email, objectID 
 
 	dp := &DirectoryProfile{ObjectID: profile.ID, Phone: profile.Phone()}
 
-	manager, err := s.graph.GetUserManager(ctx, key)
+	// Key the manager read by the profile's canonical object id — the input
+	// key may have been an email, which /users/{key}/manager would treat as
+	// a UPN.
+	manager, err := s.graph.GetUserManager(ctx, profile.ID)
 	if err != nil {
 		if !errors.Is(err, msgraph.ErrNotFound) {
 			slog.Warn("directory: manager lookup failed; syncing phone only", "error", err)

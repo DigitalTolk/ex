@@ -17,8 +17,20 @@ import (
 type stubMeetingCreator struct {
 	meeting      *msgraph.OnlineMeeting
 	err          error
+	profile      *msgraph.UserProfile
+	profileErr   error
 	gotOrganizer string
 	gotReq       *msgraph.OnlineMeetingRequest
+}
+
+func (s *stubMeetingCreator) ResolveUserByEmail(_ context.Context, key string) (*msgraph.UserProfile, error) {
+	if s.profileErr != nil {
+		return nil, s.profileErr
+	}
+	if s.profile != nil {
+		return s.profile, nil
+	}
+	return &msgraph.UserProfile{ID: "oid-for-" + key}, nil
 }
 
 func (s *stubMeetingCreator) CreateOnlineMeeting(_ context.Context, organizerKey string, req msgraph.OnlineMeetingRequest) (*msgraph.OnlineMeeting, error) {
@@ -37,7 +49,7 @@ type stubMeetingSender struct {
 	gotID   string
 }
 
-func (s *stubMeetingSender) Send(_ context.Context, userID, parentID, parentType, body, parentMessageID string, _ ...string) (*model.Message, error) {
+func (s *stubMeetingSender) SendNoIndex(_ context.Context, userID, parentID, parentType, body, parentMessageID string, _ ...string) (*model.Message, error) {
 	s.gotUser, s.gotID, s.gotType, s.gotBody = userID, parentID, parentType, body
 	if parentMessageID != "" {
 		return nil, errors.New("commands must post top-level messages")
@@ -125,8 +137,8 @@ func TestTeamsMeetingChannelHappyPath(t *testing.T) {
 	env.addChannelMember("chan-1", "bob")
 	env.addChannelMember("chan-1", "carol")
 	env.users.users["alice"] = &model.User{ID: "alice", Email: "alice@example.com", MSObjectID: "oid-alice"}
-	env.users.users["bob"] = &model.User{ID: "bob", Email: "bob@example.com"}
-	env.users.users["carol"] = &model.User{ID: "carol"} // no email → skipped
+	env.users.users["bob"] = &model.User{ID: "bob", Email: "bob@example.com", MSObjectID: "oid-bob"}
+	env.users.users["carol"] = &model.User{ID: "carol"} // no email, no oid → skipped
 
 	msg, err := env.cmd.Run(context.Background(), CommandRequest{UserID: "alice", ParentID: "chan-1", ParentType: ParentChannel})
 	if err != nil {
@@ -142,8 +154,9 @@ func TestTeamsMeetingChannelHappyPath(t *testing.T) {
 	if got := env.meetings.gotReq.Subject; got != "Teams meeting · ~general" {
 		t.Errorf("subject = %q", got)
 	}
-	if got := env.meetings.gotReq.AttendeeUPNs; !slices.Equal(got, []string{"bob@example.com"}) {
-		t.Errorf("attendees = %v, want bob only (invoker excluded, no-email skipped)", got)
+	wantAttendees := []msgraph.MeetingAttendee{{UPN: "bob@example.com", ObjectID: "oid-bob"}}
+	if got := env.meetings.gotReq.Attendees; !slices.Equal(got, wantAttendees) {
+		t.Errorf("attendees = %v, want bob only with his AAD object id (invoker excluded, unresolvable skipped)", got)
 	}
 	if d := env.meetings.gotReq.EndAt.Sub(env.meetings.gotReq.StartAt); d != teamsMeetingDuration {
 		t.Errorf("meeting duration = %v, want %v", d, teamsMeetingDuration)
@@ -157,6 +170,12 @@ func TestTeamsMeetingChannelHappyPath(t *testing.T) {
 	}
 	if !strings.Contains(env.sender.gotBody, "[Join the meeting](https://teams.microsoft.com/l/meetup-join/xyz)") {
 		t.Errorf("body = %q, want markdown join link", env.sender.gotBody)
+	}
+	// Channel meetings lead with @all so every member is alerted through the
+	// normal notification pipeline (popup + deferred mobile push), subject to
+	// their own mute/group-mention preferences.
+	if !strings.HasPrefix(env.sender.gotBody, "@all ") {
+		t.Errorf("body = %q, want @all prefix for a channel meeting", env.sender.gotBody)
 	}
 
 	// GetBatch must not have been asked for the invoker.
@@ -174,8 +193,24 @@ func TestTeamsMeetingOrganizerFallsBackToEmail(t *testing.T) {
 	if _, err := env.cmd.Run(context.Background(), CommandRequest{UserID: "alice", ParentID: "chan-1", ParentType: ParentChannel}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if env.meetings.gotOrganizer != "alice@example.com" {
-		t.Errorf("organizer = %q, want email fallback", env.meetings.gotOrganizer)
+	// Email keys 400 on the app-only onlineMeetings endpoint — the command
+	// must resolve the directory object id first.
+	if env.meetings.gotOrganizer != "oid-for-alice@example.com" {
+		t.Errorf("organizer = %q, want resolved directory id", env.meetings.gotOrganizer)
+	}
+}
+
+func TestTeamsMeetingOrganizerDirectoryResolutionError(t *testing.T) {
+	env := setupTeamsMeeting()
+	env.addChannelMember("chan-1", "alice")
+	env.users.users["alice"] = &model.User{ID: "alice", Email: "alice@example.com"}
+	env.meetings.profileErr = errors.New("graph down")
+
+	if _, err := env.cmd.Run(context.Background(), CommandRequest{UserID: "alice", ParentID: "chan-1", ParentType: ParentChannel}); err == nil || !strings.Contains(err.Error(), "resolve organizer directory id") {
+		t.Fatalf("err = %v, want directory-id resolution error", err)
+	}
+	if env.sender.gotUser != "" {
+		t.Error("no message must be posted when the organizer could not be resolved")
 	}
 }
 
@@ -211,8 +246,11 @@ func TestTeamsMeetingConversationHappyPath(t *testing.T) {
 	if env.meetings.gotReq.Subject != "Teams meeting" {
 		t.Errorf("subject = %q, want generic conversation subject", env.meetings.gotReq.Subject)
 	}
-	if got := env.meetings.gotReq.AttendeeUPNs; !slices.Equal(got, []string{"bob@example.com"}) {
+	if got := env.meetings.gotReq.Attendees; !slices.Equal(got, []msgraph.MeetingAttendee{{UPN: "bob@example.com"}}) {
 		t.Errorf("attendees = %v", got)
+	}
+	if strings.HasPrefix(env.sender.gotBody, "@all") {
+		t.Errorf("body = %q — conversations must not carry @all (their messages already alert every participant)", env.sender.gotBody)
 	}
 	if env.sender.gotType != ParentConversation {
 		t.Errorf("posted into parentType %q", env.sender.gotType)

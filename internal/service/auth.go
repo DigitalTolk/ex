@@ -14,9 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
-	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/store"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -228,13 +226,7 @@ func (s *AuthService) HandleOIDCCallback(ctx context.Context, code, state, nonce
 		if directoryChanged {
 			// Broadcast the change so peers with this profile open (hover
 			// card, directory) refresh without a reload.
-			events.Publish(ctx, s.publisher, pubsub.UserEvents(), events.EventUserUpdated, map[string]any{
-				"id":          user.ID,
-				"displayName": user.DisplayName,
-				"avatarURL":   user.AvatarURL,
-				"phone":       user.Phone,
-				"manager":     user.Manager,
-			})
+			publishUserDirectoryUpdated(ctx, s.publisher, user)
 		}
 	}
 

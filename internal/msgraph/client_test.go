@@ -305,7 +305,11 @@ func TestCreateOnlineMeeting(t *testing.T) {
 		Subject:      "Teams meeting · ~general",
 		StartAt:      start,
 		EndAt:        start.Add(time.Hour),
-		AttendeeUPNs: []string{"bob@example.com", "  ", "carol@example.com"},
+		Attendees: []MeetingAttendee{
+			{UPN: "bob@example.com", ObjectID: "oid-bob"},
+			{UPN: "  "},
+			{UPN: "carol@example.com"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("CreateOnlineMeeting: %v", err)
@@ -316,10 +320,18 @@ func TestCreateOnlineMeeting(t *testing.T) {
 	if got.StartDateTime != "2026-07-12T18:00:00Z" || got.EndDateTime != "2026-07-12T19:00:00Z" {
 		t.Errorf("times = %q → %q", got.StartDateTime, got.EndDateTime)
 	}
-	if len(got.Participants.Attendees) != 2 ||
-		got.Participants.Attendees[0] != (meetingParticipantPayload{UPN: "bob@example.com", Role: "attendee"}) ||
-		got.Participants.Attendees[1].UPN != "carol@example.com" {
-		t.Errorf("attendees = %+v", got.Participants.Attendees)
+	if len(got.Participants.Attendees) != 2 {
+		t.Fatalf("attendees = %+v, want 2 (blank skipped)", got.Participants.Attendees)
+	}
+	// bob carries the AAD identity — that's what lands him on the roster of
+	// an app-only created meeting (bare UPNs often fail to resolve there).
+	bob := got.Participants.Attendees[0]
+	if bob.UPN != "bob@example.com" || bob.Role != "attendee" || bob.Identity == nil || bob.Identity.User.ID != "oid-bob" {
+		t.Errorf("bob = %+v, want UPN + identity.user.id", bob)
+	}
+	carol := got.Participants.Attendees[1]
+	if carol.UPN != "carol@example.com" || carol.Identity != nil {
+		t.Errorf("carol = %+v, want UPN only (no identity without an object id)", carol)
 	}
 }
 
@@ -384,4 +396,117 @@ func TestMustHelpersPanic(t *testing.T) {
 	}
 	assertPanics("mustRequest", func() { mustRequest(nil, errors.New("boom")) })
 	assertPanics("mustJSON", func() { mustJSON(nil, errors.New("boom")) })
+}
+
+func TestDoJSONSurfacesGraphErrorCode(t *testing.T) {
+	tokenSrv, _ := newTokenServer(t, 3600)
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"code":"InvalidRequest","message":"secret details"}}`))
+	}))
+	defer graphSrv.Close()
+
+	c := newClient(t, tokenSrv.URL, graphSrv.URL)
+	_, err := c.GetUserProfile(context.Background(), "a")
+	if err == nil || !strings.Contains(err.Error(), "status 400 (code InvalidRequest)") {
+		t.Fatalf("err = %v, want status with Graph error code", err)
+	}
+	if strings.Contains(err.Error(), "secret details") {
+		t.Error("Graph error message must not leak into the error")
+	}
+}
+
+func TestFindUserByEmail(t *testing.T) {
+	tokenSrv, _ := newTokenServer(t, 3600)
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/users" {
+			t.Errorf("path = %q, want /users", r.URL.Path)
+		}
+		// OData string literals double their single quotes.
+		if got := r.URL.Query().Get("$filter"); got != "mail eq 'o''brien@example.com'" {
+			t.Errorf("$filter = %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"value": []map[string]any{{"id": "oid-ob", "displayName": "O'Brien"}}})
+	}))
+	defer graphSrv.Close()
+
+	c := newClient(t, tokenSrv.URL, graphSrv.URL)
+	p, err := c.FindUserByEmail(context.Background(), "o'brien@example.com")
+	if err != nil || p.ID != "oid-ob" {
+		t.Fatalf("FindUserByEmail = (%+v, %v)", p, err)
+	}
+}
+
+func TestFindUserByEmailNoMatchIsNotFound(t *testing.T) {
+	tokenSrv, _ := newTokenServer(t, 3600)
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"value": []map[string]any{}})
+	}))
+	defer graphSrv.Close()
+
+	c := newClient(t, tokenSrv.URL, graphSrv.URL)
+	if _, err := c.FindUserByEmail(context.Background(), "ghost@example.com"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestFindUserByEmailRequestError(t *testing.T) {
+	tokenSrv, _ := newTokenServer(t, 3600)
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer graphSrv.Close()
+
+	c := newClient(t, tokenSrv.URL, graphSrv.URL)
+	if _, err := c.FindUserByEmail(context.Background(), "a@example.com"); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestResolveUserByEmail(t *testing.T) {
+	tokenSrv, _ := newTokenServer(t, 3600)
+	t.Run("the mail attribute wins — it is what the OIDC email claim means", func(t *testing.T) {
+		var upnCalls int
+		graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/users" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"value": []map[string]any{{"id": "oid-mail"}}})
+				return
+			}
+			// /users/{key} — the UPN path must not run when mail matched:
+			// another user's UPN may equal this user's mail address.
+			upnCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "oid-WRONG-person"})
+		}))
+		defer graphSrv.Close()
+		c := newClient(t, tokenSrv.URL, graphSrv.URL)
+		p, err := c.ResolveUserByEmail(context.Background(), "firstname@example.com")
+		if err != nil || p.ID != "oid-mail" || upnCalls != 0 {
+			t.Fatalf("ResolveUserByEmail = (%+v, %v), upnCalls=%d — mail must win", p, err, upnCalls)
+		}
+	})
+	t.Run("accounts without a mail attribute fall back to the UPN lookup", func(t *testing.T) {
+		graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/users" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"value": []map[string]any{}}) // no mail match
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "oid-upn"})
+		}))
+		defer graphSrv.Close()
+		c := newClient(t, tokenSrv.URL, graphSrv.URL)
+		p, err := c.ResolveUserByEmail(context.Background(), "upn-only@example.com")
+		if err != nil || p.ID != "oid-upn" {
+			t.Fatalf("ResolveUserByEmail = (%+v, %v), want the UPN fallback hit", p, err)
+		}
+	})
+	t.Run("a non-404 filter error propagates without the fallback", func(t *testing.T) {
+		graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+		}))
+		defer graphSrv.Close()
+		c := newClient(t, tokenSrv.URL, graphSrv.URL)
+		if _, err := c.ResolveUserByEmail(context.Background(), "a@example.com"); err == nil || !strings.Contains(err.Error(), "status 403") {
+			t.Fatalf("err = %v, want the 403 propagated", err)
+		}
+	})
 }

@@ -97,9 +97,10 @@ func (l *LiveIndexer) DeleteChannel(ctx context.Context, id string) error {
 
 // IndexMessage upserts the message and any attached files. System
 // messages are skipped — they carry no user-authored content and just
-// inflate the index.
+// inflate the index. NoIndex messages (machine-posted ephemera like
+// meeting join links) are excluded by contract.
 func (l *LiveIndexer) IndexMessage(ctx context.Context, m *model.Message, parentType string) error {
-	if m == nil || m.System {
+	if m == nil || m.System || m.NoIndex {
 		return nil
 	}
 	if err := l.w.IndexDoc(ctx, IndexMessages, m.ID, messageDoc(m, parentType)); err != nil {

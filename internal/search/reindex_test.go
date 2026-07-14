@@ -312,7 +312,7 @@ func TestReindexer_bulkMessages_SkipsNilAttachment(t *testing.T) {
 func TestReindexer_bulkMessages_NoEntriesEarlyReturn(t *testing.T) {
 	w := &fakeBulk{}
 	r := &Reindexer{src: &fakeSources{}, w: w}
-	msgs := []*model.Message{{ID: "m-sys", System: true}, nil}
+	msgs := []*model.Message{{ID: "m-sys", System: true}, nil, {ID: "m-noindex", NoIndex: true}}
 	if err := r.bulkMessages(context.Background(), msgs, "channel", nil); err != nil {
 		t.Fatalf("bulkMessages: %v", err)
 	}
