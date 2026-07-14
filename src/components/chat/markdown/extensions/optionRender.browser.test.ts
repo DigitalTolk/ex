@@ -98,4 +98,12 @@ describe('renderMentionOption', () => {
     expect(glyph.querySelector('img')).toBeNull();
     expect(row.querySelector('.cm-option-title')?.textContent).toBe(':mystery:');
   });
+
+  it('renders a slash command with a "/" circle, name and description', () => {
+    const row = render({ kind: 'command', name: 'mstmeetings', description: 'Start a Microsoft Teams meeting' })!;
+    const circle = row.querySelector('.cm-option-avatar.cm-option-group')!;
+    expect(circle.textContent).toBe('/');
+    expect(row.querySelector('.cm-option-title')?.textContent).toBe('/mstmeetings');
+    expect(row.querySelector('.cm-option-sub')?.textContent).toBe('Start a Microsoft Teams meeting');
+  });
 });

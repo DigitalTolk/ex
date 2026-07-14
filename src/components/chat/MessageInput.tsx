@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useImperativeHandle, forwardRef, type ReactNode } from 'react';
+import { useState, useRef, useCallback, useImperativeHandle, useMemo, forwardRef, type ReactNode } from 'react';
 import {
   Send,
   Paperclip,
@@ -29,6 +29,7 @@ import { Label } from '@/components/ui/label';
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { GiphyPicker, type PickedGIF } from '@/components/GiphyPicker';
 import { useWorkspaceSettings } from '@/hooks/useSettings';
+import { useCommands, useRunCommand } from '@/hooks/useCommands';
 import { AttachmentChip, type DraftAttachment } from '@/components/chat/AttachmentChip';
 import { uploadAttachment, useDeleteDraftAttachment } from '@/hooks/useAttachments';
 import { isImageAttachment } from '@/lib/file-helpers';
@@ -46,6 +47,17 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { ApiError } from '@/lib/api';
 
 const TYPING_PING_INTERVAL_MS = 3000;
+
+// commandDenialMessage extracts a server-authored, user-facing denial from a
+// failed slash-command run (the backend marks those with a structured error
+// message, e.g. "guests can't start Teams meetings"). Anything else — network
+// failures, generic 500s — returns null and the caller shows the retry text.
+function commandDenialMessage(err: unknown): string | null {
+  if (!(err instanceof ApiError)) return null;
+  const payload = err.payload as { error?: { message?: unknown } } | undefined;
+  const message = payload?.error?.message;
+  return typeof message === 'string' && message !== '' ? message : null;
+}
 
 // How long a composer must have been hidden before, on waking, it drops its
 // "the user edited this" claim and defers to the server's draft state. Long
@@ -169,6 +181,21 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   }, []);
   const { data: settings } = useWorkspaceSettings();
   const isMobile = useIsMobile();
+  // Slash commands run only from a main chat composer: an edit box rewrites an
+  // existing message and a thread reply box targets a thread — neither is a
+  // place to start a meeting from.
+  const commandTarget = useMemo(
+    () =>
+      variant === 'composer' && submitLabel === undefined && onCancel === undefined &&
+      typingThreadRootID === undefined && typingParentID && typingParentType
+        ? { parentID: typingParentID, parentType: typingParentType }
+        : undefined,
+    [variant, submitLabel, onCancel, typingThreadRootID, typingParentID, typingParentType],
+  );
+  const { data: commands = [] } = useCommands(commandTarget !== undefined);
+  const { mutate: runCommand } = useRunCommand();
+  const [commandError, setCommandError] = useState('');
+  const slashCommandsProvider = useCallback(() => commands, [commands]);
   /* istanbul ignore next -- the `?? ''` fallback only applies when settings.giphyAPIKey is undefined, but the settings object always carries the field; defensive. */
   const giphyAPIKey = settings?.giphyAPIKey?.trim() ?? '';
   /* istanbul ignore next -- the `?? false` fallback only applies when settings.giphyEnabled is undefined, but the settings object always carries the flag; defensive. */
@@ -315,8 +342,29 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
 
   const handleSend = useCallback(() => {
     if (!canSend) return;
-    const normalized = normalizeEmojiInBody(body.trim());
-    onSend({ body: normalized, attachmentIDs: drafts.map((d) => d.id) });
+    const trimmed = body.trim();
+    // A message that is exactly a registered slash command (no attachments)
+    // executes instead of posting; anything else — including unknown
+    // "/words" — sends as a normal message.
+    const commandName = (() => {
+      if (!commandTarget || drafts.length > 0) return null;
+      const name = /^\/([\w-]+)$/.exec(trimmed)?.[1]?.toLowerCase();
+      return name && commands.some((c) => c.name === name) ? name : null;
+    })();
+    setCommandError('');
+    if (commandName) {
+      runCommand(
+        { command: commandName, parentType: commandTarget!.parentType, parentID: commandTarget!.parentID },
+        {
+          onError: (err) =>
+            setCommandError(
+              commandDenialMessage(err) ?? `Couldn't run /${commandName} — please try again.`,
+            ),
+        },
+      );
+    } else {
+      onSend({ body: normalizeEmojiInBody(trimmed), attachmentIDs: drafts.map((d) => d.id) });
+    }
     if (variant === 'inline') return; // parent unmounts the inline edit
     drafts.forEach((d) => d.localURL && URL.revokeObjectURL(d.localURL));
     // The local-edit claim blocks the mirror from rehydrating the just-sent
@@ -330,7 +378,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       return;
     }
     queueMicrotask(() => editorRef.current?.focus());
-  }, [canSend, body, drafts, onSend, variant, isMobile, submitLabel, collapseMobileComposer]);
+  }, [canSend, body, drafts, onSend, variant, isMobile, submitLabel, collapseMobileComposer, commandTarget, commands, runCommand]);
 
   useEffect(() => {
     if (variant !== 'composer') return;
@@ -801,6 +849,15 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           {uploadError}
         </div>
       )}
+      {commandError && (
+        <div
+          className="mb-2 rounded-md bg-destructive/10 p-2 text-xs text-destructive"
+          role="alert"
+          data-testid="command-error"
+        >
+          {commandError}
+        </div>
+      )}
       {bodyOverLimit && (
         <div
           className="mb-2 rounded-md bg-destructive/10 p-2 text-xs text-destructive"
@@ -888,6 +945,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             // @-mention typeahead. Only a channel composer has a channel
             // roster; DMs (and the typing-less edit box) pass nothing.
             mentionChannelId={typingParentType === 'channel' ? typingParentID : undefined}
+            slashCommands={commandTarget ? slashCommandsProvider : undefined}
             className="flex-1"
             editorClassName={
               compactMobileComposer

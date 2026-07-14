@@ -30,7 +30,14 @@ function offscreen(horizontal: boolean) {
 function scrollBodyAtTop(target: EventTarget | null) {
   if (!(target instanceof Element)) return true;
   const scroller = target.closest<HTMLElement>('[data-swipe-scroll="true"]');
-  return !scroller || scroller.scrollTop <= 0;
+  if (!scroller) return true;
+  // A scrollER WITH ROOM TO SCROLL never arms the dismiss drag — not even at
+  // scrollTop 0. A sheet always opens at the top, so arming there meant
+  // Motion captured the very first vertical touch and the body could never
+  // START scrolling (the "emoji picker won't scroll on mobile" bug). Native
+  // pan handles the body; dismissing stays available from the sheet's
+  // non-scrolling chrome (header/search) and the backdrop.
+  return scroller.scrollTop <= 0 && scroller.scrollHeight <= scroller.clientHeight + 1;
 }
 
 // `open` should be passed by callers whose host component STAYS MOUNTED while

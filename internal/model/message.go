@@ -9,6 +9,11 @@ type Message struct {
 	AuthorID        string     `json:"authorID" dynamodbav:"authorID"`
 	Body            string     `json:"body" dynamodbav:"body"`
 	System          bool       `json:"system,omitempty" dynamodbav:"system,omitempty"`
+	// NoIndex keeps the message out of the search index (live indexing AND
+	// admin reindex) — for machine-posted ephemera like /mstmeetings join
+	// links, where a stale meeting URL surfacing in search is noise. Internal
+	// only, never serialized to clients.
+	NoIndex bool `json:"-" dynamodbav:"noIndex,omitempty"`
 	ParentMessageID string     `json:"parentMessageID,omitempty" dynamodbav:"parentMessageID,omitempty"` // root message of the thread
 	ReplyCount      int        `json:"replyCount,omitempty" dynamodbav:"replyCount,omitempty"`           // count of replies (only set on root messages)
 	LastReplyAt     *time.Time `json:"lastReplyAt,omitempty" dynamodbav:"lastReplyAt,omitempty"`         // timestamp of the latest reply (only set on root messages)

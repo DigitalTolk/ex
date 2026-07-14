@@ -13,6 +13,10 @@ type OIDCUserInfo struct {
 	Email   string
 	Name    string
 	Picture string
+	// ObjectID is the Azure AD directory object id (`oid` claim). Empty for
+	// identity providers that don't emit it; when present it keys Microsoft
+	// Graph lookups without assuming email == userPrincipalName.
+	ObjectID string
 }
 
 // OIDCProvider wraps an OpenID Connect provider for authentication.
@@ -76,17 +80,19 @@ func (p *OIDCProvider) Exchange(ctx context.Context, code, nonce string) (*OIDCU
 	}
 
 	var claims struct {
-		Email   string `json:"email"`
-		Name    string `json:"name"`
-		Picture string `json:"picture"`
+		Email    string `json:"email"`
+		Name     string `json:"name"`
+		Picture  string `json:"picture"`
+		ObjectID string `json:"oid"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
 		return nil, fmt.Errorf("parse id_token claims: %w", err)
 	}
 
 	return &OIDCUserInfo{
-		Email:   claims.Email,
-		Name:    claims.Name,
-		Picture: claims.Picture,
+		Email:    claims.Email,
+		Name:     claims.Name,
+		Picture:  claims.Picture,
+		ObjectID: claims.ObjectID,
 	}, nil
 }

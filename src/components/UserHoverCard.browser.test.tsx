@@ -120,6 +120,83 @@ describe('UserHoverCard browser', () => {
     expect(document.body.textContent).toMatch(/Tokyo/);
   });
 
+  it('shows phone (as a tel: link) and manager rows when the directory synced them', async () => {
+    apiFetchMock.mockResolvedValue({
+      id: 'u-1',
+      displayName: 'Alice',
+      email: 'alice@example.com',
+      phone: '+46 70 123 45 67',
+      manager: { displayName: 'Boss Person', email: 'boss@example.com', userID: 'u-9' },
+      status: 'active',
+      userStatus: undefined,
+    });
+    await render(
+      <Wrap>
+        <UserHoverCard userId="u-1" displayName="Alice">
+          <span data-testid="directory-trigger">Alice</span>
+        </UserHoverCard>
+      </Wrap>,
+    );
+    (document.querySelector('[data-testid="directory-trigger"]') as HTMLElement).click();
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('+46 70 123 45 67');
+    });
+    const tel = document.querySelector('a[href="tel:+46 70 123 45 67"]');
+    expect(tel).not.toBeNull();
+    expect(document.body.textContent).toContain('Manager');
+    expect(document.body.textContent).toContain('Boss Person');
+  });
+
+  it('orders rows as contact info (Email, Phone, Manager) then the time group — matching the Directory page', async () => {
+    apiFetchMock.mockResolvedValue({
+      id: 'u-1',
+      displayName: 'Alice',
+      email: 'alice@example.com',
+      phone: '+46 70 123 45 67',
+      manager: { displayName: 'Boss Person' },
+      timeZone: 'Asia/Tokyo',
+      lastSeenAt: '2026-07-13T10:00:00Z',
+      status: 'active',
+      userStatus: undefined,
+    });
+    await render(
+      <Wrap>
+        <UserHoverCard userId="u-1" displayName="Alice">
+          <span data-testid="order-trigger">Alice</span>
+        </UserHoverCard>
+      </Wrap>,
+    );
+    (document.querySelector('[data-testid="order-trigger"]') as HTMLElement).click();
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('Boss Person');
+    });
+    const labels = Array.from(document.querySelectorAll('dl dt')).map((d) => d.textContent);
+    expect(labels).toEqual(['Email', 'Phone', 'Manager', 'Local time', 'Timezone', 'Last seen']);
+  });
+
+  it('omits the phone and manager rows when the directory attributes are absent', async () => {
+    apiFetchMock.mockResolvedValue({
+      id: 'u-1',
+      displayName: 'Alice',
+      email: 'alice@example.com',
+      status: 'active',
+      userStatus: undefined,
+    });
+    await render(
+      <Wrap>
+        <UserHoverCard userId="u-1" displayName="Alice">
+          <span data-testid="nodir-trigger">Alice</span>
+        </UserHoverCard>
+      </Wrap>,
+    );
+    (document.querySelector('[data-testid="nodir-trigger"]') as HTMLElement).click();
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('alice@example.com');
+    });
+    expect(document.body.textContent).not.toContain('Phone');
+    expect(document.body.textContent).not.toContain('Manager');
+  });
+
   it('dismisses the open card with Escape (PopoverPortal onDismiss closes it)', async () => {
     apiFetchMock.mockResolvedValue({
       id: 'u-1',

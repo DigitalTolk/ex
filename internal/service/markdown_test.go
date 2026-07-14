@@ -285,6 +285,35 @@ func TestMarkdownRenderer_BareURLToken(t *testing.T) {
 	}
 }
 
+// SharePoint share links carry `/:x:/`, `/:w:/` … path segments. The emoji
+// pass used to run before the bare-URL pass and turned `:x:` into an ❌
+// glyph, splitting the link in two — a colon token inside a URL is part of
+// the URL, never an emoji.
+func TestMarkdownRenderer_URLWithEmojiLikeSegmentStaysWhole(t *testing.T) {
+	r := NewMarkdownRenderer()
+	full := "https://dtolk-my.sharepoint.com/:x:/g/personal/user_example_com/IQA2IkvbBpT7kB?e=Jb5oB7"
+	out := r.RenderToHast("see " + full + " now")
+	url := findFirstByTag(out, "ex-bare-url")
+	if url == nil || url.Properties["data-href"] != full {
+		t.Fatalf("bare-url = %+v, want the full SharePoint URL", url)
+	}
+	if emo := findFirstByTag(out, "ex-emoji-shortcode"); emo != nil {
+		t.Errorf("emoji token extracted from inside a URL: %+v", emo)
+	}
+}
+
+// An emoji shortcode OUTSIDE a URL still resolves when both share a line.
+func TestMarkdownRenderer_EmojiNextToURLStillResolves(t *testing.T) {
+	r := NewMarkdownRenderer()
+	out := r.RenderToHast(":x: broken build https://ci.example.org/run/1")
+	if emo := findFirstByTag(out, "ex-emoji-shortcode"); emo == nil || emo.Properties["data-name"] != "x" {
+		t.Errorf("emoji = %+v", emo)
+	}
+	if url := findFirstByTag(out, "ex-bare-url"); url == nil || url.Properties["data-href"] != "https://ci.example.org/run/1" {
+		t.Errorf("bare-url = %+v", url)
+	}
+}
+
 func TestMarkdownRenderer_EmojiShortcodeBare(t *testing.T) {
 	r := NewMarkdownRenderer()
 	out := r.RenderToHast(":smile:")

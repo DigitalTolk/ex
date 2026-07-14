@@ -306,6 +306,19 @@ func TestLiveIndexer_IndexMessage_SkipsSystemMessages(t *testing.T) {
 	}
 }
 
+func TestLiveIndexer_IndexMessage_SkipsNoIndexMessages(t *testing.T) {
+	w := &recordingWriter{}
+	idx := &LiveIndexer{w: w}
+	// Machine-posted ephemera (e.g. /mstmeetings join links) opt out of the
+	// index entirely.
+	if err := idx.IndexMessage(context.Background(), &model.Message{ID: "m", Body: "join link", NoIndex: true}, "channel"); err != nil {
+		t.Fatalf("no-index message must be skipped silently: %v", err)
+	}
+	if len(w.indexed) != 0 {
+		t.Errorf("no-index message must not produce IndexDoc calls, got %d", len(w.indexed))
+	}
+}
+
 func TestNewIndexer_NilClientReturnsNoop(t *testing.T) {
 	idx := NewIndexer(nil)
 	if _, ok := idx.(NoopIndexer); !ok {

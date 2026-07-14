@@ -134,6 +134,21 @@ describe('event payload parsers', () => {
     expect(parseUserUpdated({ id: '' })).toBeNull();
   });
 
+  it('parseUserUpdated validates the directory fields (phone + manager)', () => {
+    const ok = parseUserUpdated({
+      id: 'u-1',
+      phone: '+46 70 123 45 67',
+      manager: { displayName: 'Boss', email: 'boss@example.com', userID: 'u-9' },
+    });
+    expect(ok?.phone).toBe('+46 70 123 45 67');
+    expect(ok?.manager).toEqual({ displayName: 'Boss', email: 'boss@example.com', userID: 'u-9' });
+
+    // A cleared manager arrives as explicit null.
+    expect(parseUserUpdated({ id: 'u-1', manager: null })?.manager).toBeNull();
+    // A malformed manager (no displayName) must not feed garbage into caches.
+    expect(parseUserUpdated({ id: 'u-1', manager: { email: 'x@y.z' } })).toBeNull();
+  });
+
   it('parseThreadUpdated accepts a full ThreadSummary and allows an empty rootBody', () => {
     const ok = parseThreadUpdated({
       parentID: 'ch-1',

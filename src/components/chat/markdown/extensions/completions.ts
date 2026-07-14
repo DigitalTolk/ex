@@ -12,12 +12,14 @@ import {
   type MentionProviders,
 } from './mentionAutocomplete';
 import { emojiSource, type EmojiProviders } from './emojiAutocomplete';
+import { slashCommandSource, type SlashCommandProviders } from './slashCommands';
 import { renderMentionOption } from './optionRender';
 
 // Single CodeMirror autocompletion instance combining every composer source:
-// @-mentions, ~-channels and :emoji:. CM6 merges sibling `autocompletion()`
-// configs unpredictably, so the editor installs exactly one with all sources.
-export type CompletionProviders = MentionProviders & EmojiProviders;
+// @-mentions, ~-channels, :emoji: and /commands. CM6 merges sibling
+// `autocompletion()` configs unpredictably, so the editor installs exactly one
+// with all sources.
+export type CompletionProviders = MentionProviders & EmojiProviders & SlashCommandProviders;
 
 // Hovering an option makes it the *selected* option, so the mouse and the
 // keyboard share a single selection. Without this, resting the pointer over the
@@ -57,6 +59,7 @@ export function composerAutocomplete(providers: CompletionProviders) {
         userMentionSource(providers),
         channelMentionSource(providers),
         emojiSource(providers),
+        slashCommandSource(providers),
       ],
       closeOnBlur: true,
       icons: false,

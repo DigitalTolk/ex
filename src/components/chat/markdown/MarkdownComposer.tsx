@@ -8,6 +8,7 @@ import { activeStatus } from '@/lib/user-status';
 import type { EmojiSkinTone } from '@/lib/emoji-shortcodes';
 import { MarkdownEditor, type WysiwygEditorHandle, type ActiveFormat } from './MarkdownEditor';
 import type { CompletionProviders } from './extensions/completions';
+import type { SlashCommand } from './extensions/slashCommands';
 
 export type { WysiwygEditorHandle, ActiveFormat };
 
@@ -27,6 +28,9 @@ interface Props {
   // Channel the composer targets (when it's a channel). Enables the @-mention
   // member / special / not-in-channel partitioning. Omitted for DMs and edits.
   mentionChannelId?: string;
+  // Server-defined slash commands for the "/" popup. Only the main chat
+  // composer passes this; edit boxes and thread reply boxes omit it (no popup).
+  slashCommands?: () => SlashCommand[];
 }
 
 // MarkdownComposer is the production composer: a drop-in for the old Lexical
@@ -35,7 +39,7 @@ interface Props {
 // feeds it to the CodeMirror MarkdownEditor's autocomplete. The editor itself
 // keeps the document as raw markdown — see MarkdownEditor for the architecture.
 export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function MarkdownComposer(
-  { mentionChannelId, ...editorProps },
+  { mentionChannelId, slashCommands, ...editorProps },
   ref,
 ) {
   const { data: users = [] } = useAllUsers();
@@ -70,8 +74,9 @@ export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function 
         channels.map((c) => ({ channelID: c.channelID, channelName: c.channelName, channelType: c.channelType })),
       customEmojis: () => customEmojis,
       skinTone: () => skinTone,
+      commands: slashCommands,
     }),
-    [users, online, memberIds, channels, customEmojis, skinTone],
+    [users, online, memberIds, channels, customEmojis, skinTone, slashCommands],
   );
 
   return (

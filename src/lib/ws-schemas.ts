@@ -53,6 +53,13 @@ const userUpdatedSchema = z.object({
   userStatus: z.unknown().optional(),
   timeZone: z.string().optional(),
   lastSeenAt: z.string().optional(),
+  // Directory attributes (MS365 login sync). manager is a small object or
+  // explicit null (cleared in the directory); phone "" means cleared.
+  phone: z.string().optional(),
+  manager: z
+    .object({ displayName: z.string(), email: z.string().optional(), userID: z.string().optional() })
+    .nullable()
+    .optional(),
 });
 
 // thread.updated carries a full ThreadSummary so the client can add/patch the
@@ -115,6 +122,8 @@ export interface UserUpdatedPayload {
   userStatus?: unknown;
   timeZone?: string;
   lastSeenAt?: string;
+  phone?: string;
+  manager?: { displayName: string; email?: string; userID?: string } | null;
 }
 export const parseUserUpdated = parser(userUpdatedSchema);
 

@@ -635,6 +635,23 @@ export interface User {
   lastSeenAt?: string /* RFC3339 */;
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
+  /**
+   * Phone and Manager are directory attributes synced from Microsoft 365
+   * at SSO login when the Graph integration is enabled. They are owned by
+   * the directory (read-only in the app) and shown on profile surfaces.
+   */
+  phone?: string;
+  manager?: UserManager;
+}
+/**
+ * UserManager is a lightweight reference to a user's manager from the
+ * employee directory. UserID is set when the manager is also an Ex user
+ * (matched by email) so clients can link to their profile.
+ */
+export interface UserManager {
+  displayName: string;
+  email?: string;
+  userID?: string;
 }
 export interface UserStatus {
   emoji: string;

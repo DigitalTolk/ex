@@ -805,8 +805,11 @@ function MessageItemImpl({
           <Tooltip>
             <TooltipTrigger
               // Timestamp sits right after the author name (Slack-style),
-              // separated by the header row's gap-2.
-              className="text-xs text-muted-foreground cursor-default"
+              // separated by the header row's gap-2. shrink-0 + nowrap so a
+              // relative label ("3 minutes ago") never wraps onto a second
+              // row on narrow mobile headers — the author name (min-w-0,
+              // truncate) is the element that gives way.
+              className="shrink-0 whitespace-nowrap text-xs text-muted-foreground cursor-default"
               render={<time dateTime={message.createdAt} />}
             >
               {/* Threads have no day dividers, so an absolute clock time is
@@ -869,6 +872,14 @@ function MessageItemImpl({
                 openTag={openTag}
               />
             </div>
+            {/* Grouped rows have no header (that's where the header rows show
+                "(edited)"), so an edit would otherwise be invisible — surface
+                the marker under the body instead. */}
+            {!firstInGroup && message.editedAt && (
+              <span data-testid="grouped-edited-marker" className="text-xs text-muted-foreground">
+                (edited)
+              </span>
+            )}
             {(() => {
               if (message.noUnfurl) return null;
               // First URL in the body (skipping code) gets a preview

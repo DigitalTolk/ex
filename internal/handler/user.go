@@ -240,6 +240,10 @@ func publicUserJSON(u *model.User) JSON {
 		"userStatus":  u.UserStatus,
 		"timeZone":    u.TimeZone,
 		"lastSeenAt":  u.LastSeenAt,
+		// Directory attributes synced from Microsoft 365 — profile-card
+		// facts, visible to any member (like email above).
+		"phone":   u.Phone,
+		"manager": u.Manager,
 	}
 }
 

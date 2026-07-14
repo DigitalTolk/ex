@@ -182,6 +182,27 @@ export function UserHoverCard({
                 </dd>
               </div>
             )}
+            {userDetails?.phone && (
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">Phone</dt>
+                <dd className="truncate">
+                  <a
+                    className="text-link transition-colors hover:text-link/80"
+                    href={`tel:${userDetails.phone}`}
+                  >
+                    {userDetails.phone}
+                  </a>
+                </dd>
+              </div>
+            )}
+            {userDetails?.manager && (
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">Manager</dt>
+                <dd className="min-w-0 text-right">
+                  <span className="break-words">{userDetails.manager.displayName}</span>
+                </dd>
+              </div>
+            )}
             {effectiveTimeZone && (
               <div className="flex justify-between gap-3">
                 <dt className="text-muted-foreground">Local time</dt>

@@ -42,6 +42,14 @@ vi.mock('@/hooks/useSettings', () => ({
   useUpdateWorkspaceSettings: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+// Same act()-hygiene for the slash-command registry query (enabled whenever
+// the composer has a chat target, i.e. the typing props are set). Behavior is
+// covered in MessageInput.commands.test.tsx.
+vi.mock('@/hooks/useCommands', () => ({
+  useCommands: () => ({ data: [] }),
+  useRunCommand: () => ({ mutate: vi.fn() }),
+}));
+
 function render(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return rtlRender(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);

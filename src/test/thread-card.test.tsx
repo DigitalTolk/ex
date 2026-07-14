@@ -256,6 +256,16 @@ describe('ThreadCard', () => {
     expect(screen.queryByTestId('thread-card-expand')).toBeNull();
   });
 
+  it('keeps the reply count on one line (nowrap + no shrink) so mobile headers cannot wrap it', async () => {
+    apiFetchMock.mockResolvedValue([]);
+    renderCard(makeSummary({ replyCount: 4 }));
+    const label = await screen.findByText('4 replies');
+    // The header squeeze must fall on the truncating title, never wrap this
+    // label onto two rows (mobile /threads regression).
+    expect(label.className).toContain('whitespace-nowrap');
+    expect(label.className).toContain('shrink-0');
+  });
+
   it('collapses long threads to root + last 2 replies + a "Show N more replies" toggle', async () => {
     // 1 root + 12 replies = 13 messages, over the 10-cap. Replies = 12,
     // tail = 2, hidden = 10.

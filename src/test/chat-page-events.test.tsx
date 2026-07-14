@@ -830,6 +830,29 @@ describe('ChatPage WebSocket handlers', () => {
     });
   });
 
+  it('onUserUpdated patches synced directory fields (phone + manager) on the authenticated user', () => {
+    renderAt('/');
+    (capturedOptions.onUserUpdated as (d: unknown) => void)({
+      id: 'u-me',
+      phone: '+46 70 123 45 67',
+      manager: { displayName: 'Boss', email: 'boss@example.com', userID: 'u-boss' },
+    });
+    expect(patchUserMock).toHaveBeenCalledWith({
+      phone: '+46 70 123 45 67',
+      manager: { displayName: 'Boss', email: 'boss@example.com', userID: 'u-boss' },
+    });
+  });
+
+  it('onUserUpdated maps a cleared (null) manager to undefined', () => {
+    renderAt('/');
+    (capturedOptions.onUserUpdated as (d: unknown) => void)({
+      id: 'u-me',
+      phone: '',
+      manager: null,
+    });
+    expect(patchUserMock).toHaveBeenCalledWith({ phone: '', manager: undefined });
+  });
+
   it('onNotificationSettingsUpdated patches the authenticated user settings', () => {
     renderAt('/');
     (capturedOptions.onNotificationSettingsUpdated as (d: unknown) => void)({

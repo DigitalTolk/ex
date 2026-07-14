@@ -343,6 +343,11 @@ describe('MarkdownEditor handle + keymap branches', () => {
     await waitForLabel(view, '~general');
     trigger(view, ':smile');
     await waitForLabel(view, ':smile:');
+    // These providers carry no `commands` key (composer surfaces that offer
+    // no slash commands, e.g. edit boxes) — "/" must offer nothing.
+    trigger(view, '/');
+    await vi.waitFor(() => expect(completionStatus(view.state)).not.toBe('pending'));
+    expect(currentCompletions(view.state)).toHaveLength(0);
   });
 
   it('renders the autocomplete popup in <body> and above the app top layer (no clip/transform ancestor can hide it)', async () => {
@@ -493,6 +498,10 @@ describe('MarkdownEditor handle + keymap branches', () => {
     trigger(view, '~gen');
     await settle();
     expect(currentCompletions(view.state).map((c) => c.label)).not.toContain('~general');
+    // Slash commands are server-defined — without a provider "/" offers nothing.
+    trigger(view, '/');
+    await settle();
+    expect(currentCompletions(view.state)).toHaveLength(0);
     // Standard emoji are built-in (provider-independent) → still resolve.
     trigger(view, ':smile');
     await waitForLabel(view, ':smile:');

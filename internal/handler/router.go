@@ -45,6 +45,7 @@ func NewRouter(d *Deps) http.Handler {
 	searchH := d.Search
 	webhookH := d.Webhook
 	activityH := d.Activity
+	commandH := d.Command
 	jwtMgr := d.JWT
 	frontendFS := d.FrontendFS
 	appVersion := d.AppVersion
@@ -182,6 +183,13 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/reminders", middleware.WrapFunc(activityH.CreateReminder, authMW, writeLimit))
 		mux.Handle("GET /api/v1/reminders", middleware.WrapFunc(activityH.ListReminders, authMW))
 		mux.Handle("DELETE /api/v1/reminders/{id}", middleware.WrapFunc(activityH.CancelReminder, authMW))
+	}
+
+	// ------------------------------------------------------------------ Slash commands
+	if commandH != nil {
+		mux.Handle("GET /api/v1/commands", middleware.WrapFunc(commandH.List, authMW))
+		// Runs post messages into chats, so they share the per-user write limit.
+		mux.Handle("POST /api/v1/commands/run", middleware.WrapFunc(commandH.Run, authMW, writeLimit))
 	}
 
 	// ------------------------------------------------------------------ Sidebar (per-user)

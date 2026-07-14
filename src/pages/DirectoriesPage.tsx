@@ -351,6 +351,24 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                   )}
                 </div>
                 <dl className="space-y-2 text-xs text-muted-foreground md:space-y-1">
+                  {u.phone && (
+                    <div className="md:flex md:justify-between md:gap-2" data-testid="directory-meta-phone">
+                      <dt className="font-medium text-muted-foreground md:font-normal">Phone</dt>
+                      <dd className="mt-0.5 min-w-0 truncate md:mt-0 md:text-right">
+                        <a className="text-link transition-colors hover:text-link/80" href={`tel:${u.phone}`}>
+                          {u.phone}
+                        </a>
+                      </dd>
+                    </div>
+                  )}
+                  {u.manager && (
+                    <div className="md:flex md:justify-between md:gap-2" data-testid="directory-meta-manager">
+                      <dt className="font-medium text-muted-foreground md:font-normal">Manager</dt>
+                      <dd className="mt-0.5 min-w-0 truncate text-foreground md:mt-0 md:text-right md:text-muted-foreground">
+                        {u.manager.displayName}
+                      </dd>
+                    </div>
+                  )}
                   {effectiveTimeZone && (
                     <div className="md:flex md:justify-between md:gap-2" data-testid="directory-meta-local-time">
                       <dt className="font-medium text-muted-foreground md:font-normal">Local time</dt>

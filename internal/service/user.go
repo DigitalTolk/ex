@@ -798,6 +798,40 @@ func (s *UserService) SetStatus(ctx context.Context, targetID string, deactivate
 	if user.AuthProvider != model.AuthProviderGuest {
 		return nil, errors.New("user: only guest accounts can be deactivated")
 	}
+	return s.applyStatus(ctx, user, deactivated)
+}
+
+// SetStatusFromDirectory flips an SSO-managed account's status on behalf of
+// the employee directory (the periodic MS Graph sweep): an account deleted
+// upstream is deactivated — ending its live sessions, since SSO removal alone
+// doesn't invalidate refresh tokens — and reactivated if it reappears. Manual
+// admin toggling of SSO users stays forbidden (SetStatus's guest-only guard);
+// the directory is the only authority for these accounts.
+func (s *UserService) SetStatusFromDirectory(ctx context.Context, targetID string, deactivated bool) error {
+	user, err := s.users.GetUser(ctx, targetID)
+	if err != nil {
+		return fmt.Errorf("user: get: %w", err)
+	}
+	backfillAuthProvider(user)
+	if user.AuthProvider != model.AuthProviderOIDC {
+		return errors.New("user: directory status only applies to SSO accounts")
+	}
+	wantStatus := "active"
+	if deactivated {
+		wantStatus = "deactivated"
+	}
+	if user.Status == wantStatus {
+		return nil
+	}
+	_, err = s.applyStatus(ctx, user, deactivated)
+	return err
+}
+
+// applyStatus persists an active/deactivated flip and runs every side effect
+// deactivation demands: cache eviction, refresh-token wipe + force-logout
+// (a deactivated account must not keep a working session), and the
+// user.updated broadcast.
+func (s *UserService) applyStatus(ctx context.Context, user *model.User, deactivated bool) (*model.User, error) {
 	if deactivated {
 		user.Status = "deactivated"
 	} else {
@@ -808,7 +842,7 @@ func (s *UserService) SetStatus(ctx context.Context, targetID string, deactivate
 		return nil, fmt.Errorf("user: update status: %w", err)
 	}
 	if s.cache != nil {
-		_ = s.cache.Delete(ctx, "user:"+targetID)
+		_ = s.cache.Delete(ctx, "user:"+user.ID)
 	}
 	s.resolveAvatar(ctx, user)
 
@@ -819,10 +853,10 @@ func (s *UserService) SetStatus(ctx context.Context, targetID string, deactivate
 	// expire.
 	if deactivated {
 		if s.tokens != nil {
-			_ = s.tokens.DeleteAllRefreshTokensForUser(ctx, targetID)
+			_ = s.tokens.DeleteAllRefreshTokensForUser(ctx, user.ID)
 		}
-		events.Publish(ctx, s.publisher, pubsub.UserChannel(targetID), events.EventForceLogout, map[string]any{
-			"userID": targetID,
+		events.Publish(ctx, s.publisher, pubsub.UserChannel(user.ID), events.EventForceLogout, map[string]any{
+			"userID": user.ID,
 			"reason": "deactivated",
 		})
 	}

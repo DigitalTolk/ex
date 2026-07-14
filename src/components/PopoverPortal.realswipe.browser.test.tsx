@@ -12,7 +12,7 @@ import { swipe } from '@/test/gestures';
 
 afterEach(() => cleanup());
 
-function Harness({ onDismiss }: { onDismiss: () => void }) {
+function Harness({ onDismiss, children }: { onDismiss: () => void; children?: React.ReactNode }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   return (
     <div>
@@ -20,7 +20,7 @@ function Harness({ onDismiss }: { onDismiss: () => void }) {
         Open
       </button>
       <PopoverPortal open triggerRef={triggerRef} onDismiss={onDismiss} mobileSheet ariaLabel="Demo sheet">
-        <div data-testid="popover-content">Hello sheet</div>
+        {children ?? <div data-testid="popover-content">Hello sheet</div>}
       </PopoverPortal>
     </div>
   );
@@ -52,5 +52,53 @@ describe('PopoverPortal mobile sheet — real swipe-to-dismiss', () => {
 
     await new Promise((r) => setTimeout(r, 60));
     expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it('a swipe on a SCROLLABLE body never arms the dismiss drag (emoji-picker scroll regression)', async () => {
+    if (window.innerWidth > 767) return;
+    const onDismiss = vi.fn();
+    await render(
+      <Harness onDismiss={onDismiss}>
+        <div
+          data-testid="tall-scroller"
+          data-swipe-scroll="true"
+          style={{ height: 120, overflowY: 'auto' }}
+        >
+          <div style={{ height: 600 }}>tall content</div>
+        </div>
+      </Harness>,
+    );
+    await vi.waitFor(() => expect(sheet()).not.toBeNull());
+
+    // Even at scrollTop 0 a scrollable body belongs to native scroll — a
+    // down-drag over it must NOT dismiss the sheet (pre-fix it did, and the
+    // captured gesture was also why the picker grid could never scroll).
+    const scroller = document.querySelector('[data-testid="tall-scroller"]') as HTMLElement;
+    await swipe(scroller, { dy: 200, steps: 8, stepMs: 18 });
+
+    await new Promise((r) => setTimeout(r, 60));
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it('a swipe on a short (non-scrollable) swipe-scroll body still dismisses', async () => {
+    if (window.innerWidth > 767) return;
+    const onDismiss = vi.fn();
+    await render(
+      <Harness onDismiss={onDismiss}>
+        <div
+          data-testid="short-scroller"
+          data-swipe-scroll="true"
+          style={{ height: 120, overflowY: 'auto' }}
+        >
+          <div style={{ height: 40 }}>short content</div>
+        </div>
+      </Harness>,
+    );
+    await vi.waitFor(() => expect(sheet()).not.toBeNull());
+
+    const scroller = document.querySelector('[data-testid="short-scroller"]') as HTMLElement;
+    await swipe(scroller, { dy: 200, steps: 8, stepMs: 18 });
+
+    await vi.waitFor(() => expect(onDismiss).toHaveBeenCalled());
   });
 });

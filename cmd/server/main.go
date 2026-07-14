@@ -19,6 +19,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/eventlog"
 	"github.com/DigitalTolk/ex/internal/handler"
 	"github.com/DigitalTolk/ex/internal/middleware"
+	"github.com/DigitalTolk/ex/internal/msgraph"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/redisx"
 	"github.com/DigitalTolk/ex/internal/safe"
@@ -349,6 +350,44 @@ func main() {
 	webhookSvc.SetMembershipResolver(membershipStore)
 	webhookSvc.SetPublisher(redisPubSub)
 
+	// ------------------------------------------------- Microsoft 365 (Graph)
+	// App-only Graph client keyed to the same Azure AD app registration the
+	// workspace signs in through — no per-user account linking. Enables
+	// login-time profile enrichment (phone + manager) and /mstmeetings.
+	commandSvc := service.NewCommandService()
+	graphClient, gerr := msgraph.New(msgraph.Config{
+		TenantID:     cfg.MSTenantID,
+		ClientID:     cfg.MSClientID,
+		ClientSecret: cfg.MSClientSecret,
+	})
+	if gerr != nil {
+		slog.Error("failed to init Microsoft Graph client", "error", gerr)
+		os.Exit(1)
+	}
+	var directorySync *service.DirectorySyncService
+	if graphClient != nil {
+		msDirectory := service.NewMSDirectoryService(graphClient, userStore)
+		authSvc.SetDirectory(msDirectory)
+		authSvc.SetPublisher(redisPubSub)
+		// Periodic re-sync: Entra edits (new manager, changed number) must
+		// propagate without waiting for each owner's next login. Redis-lock
+		// elected, so a cluster sweeps once per window; started below with
+		// the other background jobs.
+		directorySync = service.NewDirectorySyncService(msDirectory, userStore, redisCache, redisPubSub, redisCache, store.NewID)
+		// Offboarding: an account deleted in Entra is deactivated (sessions
+		// ended) on the next sweep, and reactivated if it reappears.
+		directorySync.SetStatusSetter(userSvc)
+		commandSvc.Register(service.NewTeamsMeetingCommand(service.TeamsMeetingDeps{
+			Meetings:      graphClient,
+			Sender:        messageSvc,
+			Users:         userSvc,
+			Memberships:   membershipStore,
+			Conversations: conversationStore,
+			Channels:      channelStore,
+		}))
+		slog.Info("Microsoft 365 integration enabled", "tenant", cfg.MSTenantID)
+	}
+
 	// ------------------------------------------------------------------ Handlers
 	authH := handler.NewAuthHandler(authSvc, jwtMgr)
 	userH := handler.NewUserHandler(userSvc, s3Client)
@@ -370,12 +409,14 @@ func main() {
 	attachmentH := handler.NewAttachmentHandler(attachmentSvc)
 	adminH := handler.NewAdminHandler(settingsSvc)
 	webhookH := handler.NewWebhookHandler(webhookSvc)
+	commandH := handler.NewCommandHandler(commandSvc)
 	threadH := handler.NewThreadHandler(messageSvc)
 	draftSvc := service.NewDraftService(store.NewRedisDraftStore(redisCache.Client()), messageStore, membershipStore, conversationStore, redisPubSub)
 	// Fold draft-clear into message send: a successful send clears the scope's
 	// draft server-side, so the client makes no separate clear request.
 	channelH.SetDraftClearer(draftSvc)
 	convH.SetDraftClearer(draftSvc)
+	commandH.SetDraftClearer(draftSvc)
 	draftH := handler.NewDraftHandler(draftSvc)
 
 	// ------------------------------------------------------------ Activity + reminders
@@ -519,6 +560,7 @@ func main() {
 		Search:       searchH,
 		Webhook:      webhookH,
 		Activity:     activityH,
+		Command:      commandH,
 		JWT:          jwtMgr,
 		FrontendFS:   frontendDist,
 		AppVersion:   appVersion,
@@ -551,6 +593,11 @@ func main() {
 	backgroundCtx, stopBackground := context.WithCancel(context.Background())
 	defer stopBackground()
 	go userSvc.RunExpiredStatusSweeper(backgroundCtx, time.Minute, 0)
+	// Directory re-sync (phone + manager from MS Graph): first sweep at boot
+	// doubles as the workspace backfill.
+	if directorySync != nil {
+		go directorySync.Run(backgroundCtx, cfg.MSProfileSyncInterval)
+	}
 	// Fire due reminders into their owners' activity streams + alerts. Claiming
 	// is atomic in Redis, so running this on every instance never double-fires.
 	go runReminderPoller(backgroundCtx, reminderSvc, 20*time.Second)

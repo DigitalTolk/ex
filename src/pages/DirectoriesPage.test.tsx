@@ -74,6 +74,43 @@ describe('DirectoriesPage', () => {
     expect(await screen.findByText('Members API exploded')).toBeInTheDocument();
   });
 
+  it('shows phone (tel: link) and manager rows for directory-synced members', async () => {
+    mockBrowseChannels.mockReturnValue({ data: [], isLoading: false });
+    mockUserChannels.mockReturnValue({ data: [] });
+    mockApiFetch.mockResolvedValue([
+      {
+        id: 'u-2',
+        email: 'b@b.c',
+        displayName: 'Bob',
+        systemRole: 'member',
+        status: 'active',
+        phone: '+46 70 123 45 67',
+        manager: { displayName: 'Boss Person', email: 'boss@b.c', userID: 'u-9' },
+        timeZone: 'Asia/Tokyo',
+        lastSeenAt: '2026-07-13T10:00:00Z',
+      },
+      { id: 'u-3', email: 'c@b.c', displayName: 'Cara', systemRole: 'member', status: 'active' },
+    ]);
+    window.history.pushState({}, '', '/directory/users');
+    renderWithProviders(<DirectoriesPage />);
+    await screen.findByTestId('members-grid');
+
+    const phoneRow = await screen.findByTestId('directory-meta-phone');
+    const tel = phoneRow.querySelector('a[href="tel:+46 70 123 45 67"]');
+    expect(tel).not.toBeNull();
+    expect(tel!.textContent).toBe('+46 70 123 45 67');
+    expect(screen.getByTestId('directory-meta-manager').textContent).toContain('Boss Person');
+
+    // Cara has no synced attributes — exactly one of each row exists.
+    expect(screen.getAllByTestId('directory-meta-phone')).toHaveLength(1);
+    expect(screen.getAllByTestId('directory-meta-manager')).toHaveLength(1);
+
+    // Row order matches the hover card: contact info, then the time group.
+    const card = phoneRow.closest('dl')!;
+    const labels = Array.from(card.querySelectorAll('dt')).map((d) => d.textContent);
+    expect(labels).toEqual(['Phone', 'Manager', 'Local time', 'Timezone', 'Last seen']);
+  });
+
   it('shows a generic error when an admin role change rejects with a non-Error', async () => {
     mockRole = 'admin';
     mockBrowseChannels.mockReturnValue({ data: [], isLoading: false });
