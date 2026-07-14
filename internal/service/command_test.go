@@ -74,3 +74,10 @@ func TestCommandServiceRunDispatches(t *testing.T) {
 		t.Errorf("command received %+v, want %+v", cmd.got, req)
 	}
 }
+
+func TestCommandUserErrorMessage(t *testing.T) {
+	err := &CommandUserError{Message: "guests can't do that"}
+	if err.Error() != "command: guests can't do that" {
+		t.Errorf("Error() = %q", err.Error())
+	}
+}
