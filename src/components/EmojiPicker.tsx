@@ -309,6 +309,10 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
             className="mb-1.5 flex shrink-0 justify-center gap-0.5 border-b pb-1"
             role="tablist"
             aria-label="Emoji categories"
+            // Chrome band: touch-action none makes a downward drag here a
+            // reliable sheet-dismiss on real devices (the browser must not
+            // claim it as a native scroll). Taps on the tabs are unaffected.
+            style={{ touchAction: 'none' }}
           >
             {categories.map((c) => {
               const selected = c.slug === activeCategory;
@@ -461,7 +465,8 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
             )}
           </div>
         </div>
-        <div className="mt-1.5 flex shrink-0 items-center justify-center gap-0.5 border-t pt-1.5" role="radiogroup" aria-label="Emoji skin tone">
+        {/* Chrome band (see the category tablist): drags here dismiss the sheet. */}
+        <div className="mt-1.5 flex shrink-0 items-center justify-center gap-0.5 border-t pt-1.5" role="radiogroup" aria-label="Emoji skin tone" style={{ touchAction: 'none' }}>
           <span className="text-xs font-medium text-muted-foreground">Skin tone</span>
           {EMOJI_SKIN_TONES.map((tone) => (
             <button

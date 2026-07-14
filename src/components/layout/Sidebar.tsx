@@ -844,6 +844,19 @@ export function Sidebar({ onClose }: SidebarProps) {
     setSuppressChannelNavigationID(null);
   }
 
+  // A drop schedules the 750ms suppress-navigation reset above; clear it on
+  // unmount so the timer never fires into a torn-down tree (it crashed test
+  // teardown with "window is not defined" when a suite ended within 750ms of
+  // a drop).
+  useEffect(
+    () => () => {
+      if (suppressNavigationResetRef.current !== null) {
+        window.clearTimeout(suppressNavigationResetRef.current);
+      }
+    },
+    [],
+  );
+
   // Live "push-aside" preview: while a channel/DM/category is dragged, open a
   // row-height gap at the slot it would land in (WYSIWYG), so the rows/sections
   // below shift down and it's obvious where a drop will go. It's driven by the

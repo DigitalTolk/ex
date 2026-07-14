@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
-import { animate, useMotionValue, type PanInfo } from 'motion/react';
+import { animate, useDragControls, useMotionValue, type PanInfo } from 'motion/react';
 import { useIsMobile } from './useIsMobile';
 
 // Motion-powered replacement for the old react-swipeable based
@@ -10,11 +10,18 @@ import { useIsMobile } from './useIsMobile';
 // mobile enter slide-in, so enter + drag + dismiss all animate through
 // one transform — no CSS keyframes or AnimatePresence wiring needed.
 //
-// Inner scroll is preserved: for the vertical ("down") variant the drag
-// is only armed on pointer-down when the panel's scroll body is already
-// at the top, so scrolling a long sheet never gets hijacked by the
-// dismiss gesture. The horizontal ("right") variant doesn't conflict with
-// vertical scrolling, so it's always armed on mobile.
+// Inner scroll is preserved: the vertical ("down") variant never lets Motion
+// own the pointerdown (dragListener: false). Instead the drag is started
+// imperatively (useDragControls) from touches that do NOT land on a
+// scrollable body, so scrolling a long sheet is native from the very first
+// gesture. This matters twice over: Motion's own drag listener applies a
+// touch-action override (pan-x for drag:"y") that WebKit honors for the
+// whole subtree — freezing descendant scrollers — and an armed-then-disarm
+// React state round-trip always lost the gesture that was already latched.
+// The horizontal ("right") variant doesn't conflict with vertical scrolling,
+// so it keeps Motion's own listener (whose pan-y override is exactly right
+// there: it blocks stray horizontal native pans of code blocks/tables while
+// a panel drag is possible).
 
 export const SWIPE_DISMISS_SPRING = { type: 'spring' as const, stiffness: 600, damping: 45 };
 const DISMISS_DISTANCE = 72;
@@ -31,8 +38,8 @@ function scrollBodyAtTop(target: EventTarget | null) {
   if (!(target instanceof Element)) return true;
   const scroller = target.closest<HTMLElement>('[data-swipe-scroll="true"]');
   if (!scroller) return true;
-  // A scrollER WITH ROOM TO SCROLL never arms the dismiss drag — not even at
-  // scrollTop 0. A sheet always opens at the top, so arming there meant
+  // A scrollER WITH ROOM TO SCROLL never starts the dismiss drag — not even
+  // at scrollTop 0. A sheet always opens at the top, so starting there meant
   // Motion captured the very first vertical touch and the body could never
   // START scrolling (the "emoji picker won't scroll on mobile" bug). Native
   // pan handles the body; dismissing stays available from the sheet's
@@ -48,8 +55,8 @@ export function useSwipeDismiss(direction: 'right' | 'down', onDismiss: () => vo
   const isMobile = useIsMobile();
   const horizontal = direction === 'right';
   const offset = useMotionValue(0);
+  const dragControls = useDragControls();
   const [dismissing, setDismissing] = useState(false);
-  const [armed, setArmed] = useState(true);
   // Whether the live transform is currently displaced from its resting
   // position. Starts true on mobile (the panel mounts off-screen and
   // slides in) so the right-rail panels carry a left border while moving,
@@ -96,11 +103,13 @@ export function useSwipeDismiss(direction: 'right' | 'down', onDismiss: () => vo
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
-      // The horizontal gesture never fights vertical scroll; the vertical
-      // one only arms when the sheet is scrolled to the top.
-      setArmed(horizontal || scrollBodyAtTop(e.target));
+      // A touch on a scrollable body belongs to native scroll. Anything else
+      // (the sheet's chrome: header, search, tone row, backless padding)
+      // starts the dismiss drag for THIS gesture — imperatively, so there is
+      // no state round-trip that loses the already-latched gesture.
+      if (scrollBodyAtTop(e.target)) dragControls.start(e);
     },
-    [horizontal],
+    [dragControls],
   );
 
   const onDragEnd = useCallback(
@@ -135,16 +144,34 @@ export function useSwipeDismiss(direction: 'right' | 'down', onDismiss: () => vo
   return {
     dismissing,
     settled,
-    motionProps: {
-      drag: (armed ? (horizontal ? 'x' : 'y') : false) as 'x' | 'y' | false,
-      dragDirectionLock: true,
-      dragConstraints: horizontal ? { left: 0, right: 0 } : { top: 0, bottom: 0 },
-      // Follow the finger past the constraint only in the dismiss
-      // direction; the opposite direction stays pinned.
-      dragElastic: horizontal ? { left: 0, right: 1 } : { top: 0, bottom: 1 },
-      style: horizontal ? { x: offset } : { y: offset },
-      onPointerDown,
-      onDragEnd,
-    },
+    motionProps: horizontal
+      ? {
+          drag: 'x' as const,
+          dragDirectionLock: true,
+          dragConstraints: { left: 0, right: 0 },
+          // Follow the finger past the constraint only in the dismiss
+          // direction; the opposite direction stays pinned.
+          dragElastic: { left: 0, right: 1 },
+          style: { x: offset },
+          onDragEnd,
+        }
+      : {
+          drag: 'y' as const,
+          // Motion must NOT own the pointerdown (see header comment): its
+          // listener would apply the pan-x touch-action override that blocks
+          // descendant scrollers on WebKit and capture the gesture before
+          // scroll-intent is known. onPointerDown starts the drag from
+          // chrome touches only.
+          dragControls,
+          dragListener: false,
+          dragDirectionLock: true,
+          dragConstraints: { top: 0, bottom: 0 },
+          dragElastic: { top: 0, bottom: 1 },
+          // pan-y so the sheet's subtree stays natively pannable — with
+          // dragListener off Motion no longer forces pan-x here.
+          style: { y: offset, touchAction: 'pan-y' as const },
+          onPointerDown,
+          onDragEnd,
+        },
   };
 }

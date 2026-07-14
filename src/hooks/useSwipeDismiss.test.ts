@@ -6,8 +6,17 @@ import { useSwipeDismiss } from './useSwipeDismiss';
 const mobileRef = { value: true };
 vi.mock('./useIsMobile', () => ({ useIsMobile: () => mobileRef.value }));
 
+// Observe imperative drag starts without disturbing the rest of motion/react
+// (the enter/exit animations in these tests run the real engine).
+const dragControlsMock = vi.hoisted(() => ({ start: vi.fn() }));
+vi.mock('motion/react', async (orig) => ({
+  ...(await orig<typeof import('motion/react')>()),
+  useDragControls: () => dragControlsMock,
+}));
+
 beforeEach(() => {
   mobileRef.value = true;
+  dragControlsMock.start.mockReset();
 });
 
 function pan(x: number, y: number, vx = 0, vy = 0): PanInfo {
@@ -94,17 +103,28 @@ describe('useSwipeDismiss', () => {
     await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
   });
 
-  it('arms the vertical drag when the pointer is not over a scroll body', () => {
+  it('never hands Motion the vertical pointerdown (no touch-action override on the sheet)', () => {
     const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
-    act(() =>
-      (result.current.motionProps as MotionProps).onPointerDown?.({
-        target: document,
-      } as unknown as React.PointerEvent),
-    );
-    expect((result.current.motionProps as MotionProps).drag).toBe('y');
+    const props = result.current.motionProps as MotionProps & {
+      dragListener?: boolean;
+      style?: { touchAction?: string };
+    };
+    // dragListener:false is what keeps Motion from forcing touch-action:pan-x
+    // onto the whole sheet (which WebKit honors subtree-wide, freezing the
+    // emoji grid); the explicit pan-y keeps native panning available.
+    expect(props.drag).toBe('y');
+    expect(props.dragListener).toBe(false);
+    expect(props.style?.touchAction).toBe('pan-y');
   });
 
-  it('disarms the vertical drag when the scroll body is not at the top', () => {
+  it('starts the vertical drag imperatively when the pointer is not over a scroll body', () => {
+    const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
+    const e = { target: document } as unknown as React.PointerEvent;
+    act(() => (result.current.motionProps as MotionProps).onPointerDown?.(e));
+    expect(dragControlsMock.start).toHaveBeenCalledWith(e);
+  });
+
+  it('leaves the gesture to native scroll when the scroll body can scroll', () => {
     const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
     const scroller = document.createElement('div');
     scroller.setAttribute('data-swipe-scroll', 'true');
@@ -116,7 +136,23 @@ describe('useSwipeDismiss', () => {
         target: child,
       } as unknown as React.PointerEvent),
     );
-    expect((result.current.motionProps as MotionProps).drag).toBe(false);
+    expect(dragControlsMock.start).not.toHaveBeenCalled();
+  });
+
+  it('starts the drag from a swipe-scroll body that has no room to scroll', () => {
+    const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
+    const scroller = document.createElement('div');
+    scroller.setAttribute('data-swipe-scroll', 'true');
+    // scrollTop 0 and scrollHeight <= clientHeight: nothing to scroll, so the
+    // touch belongs to the dismiss gesture.
+    const child = document.createElement('div');
+    scroller.appendChild(child);
+    act(() =>
+      (result.current.motionProps as MotionProps).onPointerDown?.({
+        target: child,
+      } as unknown as React.PointerEvent),
+    );
+    expect(dragControlsMock.start).toHaveBeenCalledTimes(1);
   });
 
   // Regression: on a host that stays mounted while the panel toggles (a
