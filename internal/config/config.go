@@ -107,6 +107,25 @@ type Config struct {
 	// OpenSearch / Elasticsearch reachable without AWS auth.
 	OpenSearchAWSRegion  string
 	OpenSearchAWSService string // "es" (default) or "aoss" for Serverless
+
+	// Cliffy identity bridge. When both are set, ex can exchange a signed
+	// assertion of one of its users for a short-TTL CliffHub token (the bridge
+	// acts as that user under CliffHub RBAC). CliffyBridgeSecret is shared with
+	// CliffHub (its CLIFFY_BRIDGE_SECRET) and never reaches the browser. Leave
+	// either empty to disable Cliffy.
+	CliffyBridgeSecret  string
+	CliffyBridgeMintURL string
+	// CliffyAgentURL is CliffHub's Next.js agent endpoint (…/api/ai/chat). When
+	// set, ex proxies the Cliffy panel's chat to it with the caller's bridged
+	// token injected server-side. Empty disables the chat proxy (the bridge and
+	// session probe still work).
+	CliffyAgentURL string
+	// CliffyWebBase is CliffHub's user-facing WEB origin (e.g.
+	// https://cliffhub.example) — where Cliffy's /tasks/<id> links should point.
+	// Often the same host as the agent, but not always (in local dev the agent
+	// runs on a dev port while the web app is served elsewhere). Empty → ex falls
+	// back to the agent URL's origin.
+	CliffyWebBase string
 }
 
 func Load() (*Config, error) {
@@ -143,6 +162,10 @@ func Load() (*Config, error) {
 		OpenSearchURL:        os.Getenv("OPENSEARCH_URL"),
 		OpenSearchAWSRegion:  os.Getenv("OPENSEARCH_AWS_REGION"),
 		OpenSearchAWSService: envOr("OPENSEARCH_AWS_SERVICE", "es"),
+		CliffyBridgeSecret:   os.Getenv("CLIFFY_BRIDGE_SECRET"),
+		CliffyBridgeMintURL:  os.Getenv("CLIFFY_BRIDGE_MINT_URL"),
+		CliffyAgentURL:       os.Getenv("CLIFFY_AGENT_URL"),
+		CliffyWebBase:        os.Getenv("CLIFFY_WEB_BASE"),
 	}
 
 	accessTTL := envOr("JWT_ACCESS_TTL", "15m")
@@ -220,6 +243,15 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid MS_PROFILE_SYNC_INTERVAL %q: must be a positive duration", syncInterval)
 	}
 	c.MSProfileSyncInterval = d
+	// Cliffy bridge is all-or-nothing: a secret without a mint URL (or vice
+	// versa) is a half-configured integration that would fail only at call
+	// time, so fail fast at boot instead.
+	if (c.CliffyBridgeSecret == "") != (c.CliffyBridgeMintURL == "") {
+		return nil, fmt.Errorf("CLIFFY_BRIDGE_SECRET and CLIFFY_BRIDGE_MINT_URL must be set together")
+	}
+	if c.CliffyBridgeSecret != "" && c.Env != "development" && utf8.RuneCountInString(c.CliffyBridgeSecret) < 32 {
+		return nil, fmt.Errorf("CLIFFY_BRIDGE_SECRET must be at least 32 characters outside development")
+	}
 
 	return c, nil
 }
