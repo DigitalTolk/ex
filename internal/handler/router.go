@@ -53,9 +53,11 @@ func NewRouter(d *Deps) http.Handler {
 
 	mux := http.NewServeMux()
 
-	authMW := middleware.Auth(jwtMgr)
+	// d.BotTokens (when set) additionally accepts bot API tokens on every route
+	// below; nil keeps auth JWT-only.
+	authMW := middleware.AuthWithBots(jwtMgr, nil, d.BotTokens)
 	if userH != nil && userH.userSvc != nil {
-		authMW = middleware.AuthWithUserStatus(jwtMgr, userH.userSvc)
+		authMW = middleware.AuthWithBots(jwtMgr, userH.userSvc, d.BotTokens)
 	}
 
 	// ------------------------------------------------------------------ Health
@@ -71,6 +73,23 @@ func NewRouter(d *Deps) http.Handler {
 	}
 	if unfurlH != nil {
 		mux.Handle("GET /api/v1/unfurl", middleware.WrapFunc(unfurlH.Get, authMW))
+	}
+	// Cliffy identity-bridge session probe — only wired when the bridge is
+	// configured. Establishes/refreshes the caller's CliffHub session; the
+	// token stays server-side.
+	if d.Cliffy != nil {
+		mux.Handle("POST /api/v1/cliffy/session", middleware.WrapFunc(d.Cliffy.CreateSession, authMW))
+		// Streaming proxy to CliffHub's agent — the bridged token is injected
+		// server-side; the per-user cost cap lives in the handler.
+		mux.Handle("POST /api/v1/cliffy/chat", middleware.WrapFunc(d.Cliffy.Chat, authMW))
+		// Write passthrough for approved writeApi calls (token injected server-side).
+		mux.Handle("POST /api/v1/cliffy/api", middleware.WrapFunc(d.Cliffy.ProxyAPI, authMW))
+		// Share a Cliffy card into the current conversation (both participants see it).
+		mux.Handle("POST /api/v1/cliffy/share", middleware.WrapFunc(d.Cliffy.Share, authMW))
+		// Revoke the caller's bridged CliffHub session (called on logout).
+		mux.Handle("POST /api/v1/cliffy/revoke", middleware.WrapFunc(d.Cliffy.Revoke, authMW))
+		// Collective (shared) Cliffy sessions — a Cliffy thread shared with chosen
+		// ex users, synced live; the agent runs server-side (read-only).
 	}
 
 	// ------------------------------------------------------------------ Auth (public)
@@ -265,6 +284,27 @@ func NewRouter(d *Deps) http.Handler {
 		// spam amplification (a touch higher than the auth limit since busy
 		// integrations legitimately post more often).
 		mux.Handle("POST /hooks/{id}", middleware.WrapFunc(webhookH.Execute, middleware.RateLimit(d.RateLimiter, 60, time.Minute)))
+	}
+	// Bot accounts: admin-only identity + credential management. There is no
+	// bot-specific messaging route — a bot is a real user, so it joins channels
+	// and posts through the same endpoints as everyone else, authenticated by
+	// the token issued here.
+	if d.Bot != nil {
+		mux.Handle("GET /api/v1/admin/bots", middleware.WrapFunc(d.Bot.List, authMW))
+		mux.Handle("POST /api/v1/admin/bots", middleware.WrapFunc(d.Bot.Create, authMW))
+		mux.Handle("GET /api/v1/admin/bots/{id}", middleware.WrapFunc(d.Bot.Get, authMW))
+		mux.Handle("DELETE /api/v1/admin/bots/{id}", middleware.WrapFunc(d.Bot.Delete, authMW))
+		mux.Handle("PUT /api/v1/admin/bots/{id}/webhook", middleware.WrapFunc(d.Bot.SetWebhook, authMW))
+	}
+
+	// MCP server — bots/agents reach ex's tools over the Model Context Protocol,
+	// behind AuthWithBots so tools run as the calling bot/user. Streamable-HTTP
+	// uses one path for POST (requests) + GET (event stream).
+	if d.Bot != nil {
+		mux.Handle("/api/v1/mcp", middleware.Wrap(NewMCPHTTPHandler(d.MCPChat), authMW))
+		mux.Handle("GET /api/v1/admin/bots/{id}/tokens", middleware.WrapFunc(d.Bot.ListTokens, authMW))
+		mux.Handle("POST /api/v1/admin/bots/{id}/tokens", middleware.WrapFunc(d.Bot.CreateToken, authMW))
+		mux.Handle("DELETE /api/v1/admin/bots/{id}/tokens/{tokenID}", middleware.WrapFunc(d.Bot.RevokeToken, authMW))
 	}
 
 	// ------------------------------------------------------------------ WebSocket

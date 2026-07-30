@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -387,6 +388,25 @@ func main() {
 		}))
 		slog.Info("Microsoft 365 integration enabled", "tenant", cfg.MSTenantID)
 	}
+	// Bot accounts. Always wired — unlike the Cliffy bridge this needs no
+	// configuration and stays inert until an admin creates a bot. Bots are real
+	// users authenticating with their own tokens, so no other service needs to
+	// know they exist.
+	botSvc := service.NewBotService(store.NewBotStore(db), userStore)
+	botSvc.SetUserService(userSvc)
+
+	// Cliffy identity bridge — nil (feature disabled) unless CLIFFY_BRIDGE_*
+	// are set. When enabled, it exchanges an ex user's signed assertion for a
+	// short-TTL CliffHub token, cached in Redis until just before it expires.
+	cliffyBridge, err := service.NewCliffyBridge(service.CliffyBridgeConfig{
+		Secret:  cfg.CliffyBridgeSecret,
+		MintURL: cfg.CliffyBridgeMintURL,
+		Cache:   redisCache,
+	})
+	if err != nil {
+		slog.Error("failed to init Cliffy bridge", "error", err)
+		os.Exit(1)
+	}
 
 	// ------------------------------------------------------------------ Handlers
 	authH := handler.NewAuthHandler(authSvc, jwtMgr)
@@ -410,6 +430,54 @@ func main() {
 	adminH := handler.NewAdminHandler(settingsSvc)
 	webhookH := handler.NewWebhookHandler(webhookSvc)
 	commandH := handler.NewCommandHandler(commandSvc)
+	botH := handler.NewBotHandler(botSvc)
+	// The write passthrough targets the same CliffHub API host as the mint URL.
+	cliffyAPIOrigin := ""
+	if u, uerr := url.Parse(cfg.CliffyBridgeMintURL); uerr == nil && u.Scheme != "" && u.Host != "" {
+		cliffyAPIOrigin = u.Scheme + "://" + u.Host
+	}
+	// CliffHub's user-facing web origin (for turning Cliffy's /tasks/<id> links
+	// absolute). Prefer the explicit CLIFFY_WEB_BASE; otherwise assume the web app
+	// shares the agent's origin (true in prod, not in local dev where the agent
+	// runs on a dev port).
+	cliffyWebBase := strings.TrimRight(strings.TrimSpace(cfg.CliffyWebBase), "/")
+	if cliffyWebBase == "" {
+		if u, uerr := url.Parse(cfg.CliffyAgentURL); uerr == nil && u.Scheme != "" && u.Host != "" {
+			cliffyWebBase = u.Scheme + "://" + u.Host
+		}
+	}
+	cliffyH := handler.NewCliffyHandler(handler.CliffyHandlerConfig{
+		Bridge:      cliffyBridge,
+		AgentURL:    cfg.CliffyAgentURL,
+		APIOrigin:   cliffyAPIOrigin,
+		WebBase:     cliffyWebBase,
+		Limiter:     redisCache,
+		Poster:      messageSvc,
+		ConvReader:  messageSvc,
+		Users:       redisCache,
+		InChatStore: store.NewCliffyInChatStore(redisCache.Client()),
+	})
+	// External (outgoing-webhook) bots: a mention of a bot_ account with a callback
+	// URL is dispatched over HTTP. Resolver backed by the bot service.
+	messageSvc.SetBotDirectory(botSvc)
+
+	// Register Cliffy as an in-chat bot on the generic dispatch platform: an
+	// "@cliffy" mention (or a reply in its thread) is routed to its handler and
+	// the reply posts back as the Cliffy bot. Only when both the bridge AND the
+	// agent are configured — otherwise Cliffy stays inert. (First consumer of the
+	// bot registry; other bots register the same way.)
+	if cliffyH != nil && cfg.CliffyAgentURL != "" {
+		if _, err := botSvc.EnsureBot(ctx, handler.CliffyAuthorID, handler.CliffyUsername); err != nil {
+			slog.Warn("could not provision Cliffy bot account", "error", err)
+		}
+		messageSvc.RegisterBot(service.BotConfig{
+			UserID:    handler.CliffyAuthorID,
+			Handle:    "cliffy",
+			Username:  handler.CliffyUsername,
+			IconEmoji: handler.CliffyIconEmoji,
+			Handler:   cliffyH,
+		})
+	}
 	threadH := handler.NewThreadHandler(messageSvc)
 	draftSvc := service.NewDraftService(store.NewRedisDraftStore(redisCache.Client()), messageStore, membershipStore, conversationStore, redisPubSub)
 	// Fold draft-clear into message send: a successful send clears the scope's
@@ -561,6 +629,10 @@ func main() {
 		Webhook:      webhookH,
 		Activity:     activityH,
 		Command:      commandH,
+		Cliffy:       cliffyH,
+		Bot:          botH,
+		BotTokens:    botSvc,
+		MCPChat:      messageSvc,
 		JWT:          jwtMgr,
 		FrontendFS:   frontendDist,
 		AppVersion:   appVersion,
