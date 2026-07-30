@@ -26,7 +26,7 @@ interface Props {
 export function TypingIndicator({ parentID, userMap }: Props) {
   const ids = useTypingFor(parentID ?? '');
   if (!parentID || ids.length === 0) return null;
-  const names = ids.map((id) => userMap?.[id]?.displayName ?? id);
+  const names = ids.map((id) => userMap?.[id]?.displayName ?? (id === 'bot_cliffy' ? 'Cliffy' : id));
   return (
     <div
       data-testid="typing-indicator"
@@ -50,7 +50,7 @@ interface ThreadProps {
 export function ThreadTypingIndicator({ parentID, threadRootID, userMap }: ThreadProps) {
   const ids = useThreadTypingFor(parentID ?? '', threadRootID);
   if (!parentID || !threadRootID || ids.length === 0) return null;
-  const names = ids.map((id) => userMap?.[id]?.displayName ?? id);
+  const names = ids.map((id) => userMap?.[id]?.displayName ?? (id === 'bot_cliffy' ? 'Cliffy' : id));
   return (
     <div
       data-testid="thread-typing-indicator"
