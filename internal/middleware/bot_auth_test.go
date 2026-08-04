@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/model"
 )
 
@@ -178,5 +177,6 @@ func TestBotTokenPrefixCannotCollideWithJWT(t *testing.T) {
 	if model.BotTokenPrefix == "" {
 		t.Fatal("BotTokenPrefix must not be empty")
 	}
-	var _ *auth.JWTManager = mgr
+	// What matters is the prefixes above, not mgr's type — newTestJWTManager's
+	// signature already guarantees that, so no assertion is needed here.
 }

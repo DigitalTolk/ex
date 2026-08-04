@@ -121,8 +121,8 @@ func (s *BotService) ConfigureWebhook(ctx context.Context, botUserID string, cfg
 		return "", err
 	}
 	bot.CallbackURL = trimmed
-	switch {
-	case bot.CallbackURL == "":
+	switch bot.CallbackURL {
+	case "":
 		// Clearing the URL clears everything that only makes sense with it, so a
 		// re-enabled bot can't silently resurrect an old transport or trigger set.
 		bot.CallbackSecret = ""

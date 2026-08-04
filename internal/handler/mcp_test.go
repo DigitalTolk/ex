@@ -26,14 +26,14 @@ func TestMCPServer_ToolRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("server connect: %v", err)
 	}
-	defer serverSession.Close()
+	defer func() { _ = serverSession.Close() }()
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
 	cs, err := client.Connect(ctx, clientT, nil)
 	if err != nil {
 		t.Fatalf("client connect: %v", err)
 	}
-	defer cs.Close()
+	defer func() { _ = cs.Close() }()
 
 	// Tools are discoverable.
 	tools, err := cs.ListTools(ctx, nil)
@@ -120,7 +120,7 @@ func TestMCPServer_HTTPToolsRunAsCaller(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client connect: %v", err)
 	}
-	defer cs.Close()
+	defer func() { _ = cs.Close() }()
 
 	structured := func(res *mcp.CallToolResult) map[string]any {
 		if res.IsError {

@@ -176,14 +176,9 @@ func (a *MessageAction) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
-	*a = MessageAction{
-		ID:          w.ID,
-		Name:        w.Name,
-		Type:        w.Type,
-		Style:       w.Style,
-		Disabled:    w.Disabled,
-		Options:     w.Options,
-		Integration: w.Integration,
-	}
+	// A direct conversion, not a field-by-field literal: the two structs are
+	// identical apart from their tags, so this cannot silently drop a field the
+	// way an enumerated literal would when one is added to only one of them.
+	*a = MessageAction(w)
 	return nil
 }
