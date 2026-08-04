@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BotsPanel } from './BotsPanel';
 import type { Bot, BotToken } from '@/hooks/useBots';
 
@@ -71,6 +71,11 @@ beforeEach(() => {
   mocks.state.revokeToken = { isError: false, error: null };
   mocks.useBots.mockReturnValue({ data: [] });
   mocks.useBotTokens.mockReturnValue({ data: [] });
+});
+
+afterEach(() => {
+  // A fake clock left installed hangs every later test that awaits a query.
+  vi.useRealTimers();
 });
 
 describe('BotsPanel', () => {
@@ -330,8 +335,93 @@ describe('BotsPanel', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument());
   });
 
-  // Both ConfirmDialogs are always mounted, so each cancel is exercised in its
-  // own render to keep the "Cancel" button unambiguous.
+
+  it('the confirm button reverts after its timeout, clearing the pending timer', async () => {
+    vi.useFakeTimers();
+    const { copyToClipboard } = await import('@/lib/clipboard');
+    vi.mocked(copyToClipboard).mockResolvedValue(undefined);
+    mocks.useBots.mockReturnValue({ data: [makeBot()] });
+    mocks.createToken.mockImplementation((_label, opts?: { onSuccess?: (t: unknown) => void }) =>
+      opts?.onSuccess?.({ ...makeToken(), token: 'exbot_copy_me' }),
+    );
+    render(<BotsPanel />);
+    expand('Helper');
+    fireEvent.click(screen.getByRole('button', { name: /Issue token/ }));
+    // The clipboard write resolves in a microtask, so the state it sets has to
+    // be flushed inside act before it can be observed.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Copy secret' }));
+    });
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument();
+    // The 2s revert, and with it the effect cleanup that cancels the timer —
+    // without it a copy right before unmount would fire into a dead component.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2100);
+    });
+    expect(screen.getByRole('button', { name: 'Copy secret' })).toBeInTheDocument();
+  });
+
+  it('renders with no data at all — the hooks may not have resolved yet', () => {
+    mocks.useBots.mockReturnValue({});
+    mocks.useBotTokens.mockReturnValue({});
+    render(<BotsPanel />);
+    expect(screen.getByText('No bots yet.')).toBeInTheDocument();
+  });
+
+  it('renders an expanded row before its tokens have loaded', () => {
+    mocks.useBots.mockReturnValue({ data: [makeBot()] });
+    mocks.useBotTokens.mockReturnValue({});
+    render(<BotsPanel />);
+    expand('Helper');
+    expect(screen.getByText('No tokens yet.')).toBeInTheDocument();
+  });
+
+  it('falls back to "token" for an unlabelled token', () => {
+    mocks.useBots.mockReturnValue({ data: [makeBot()] });
+    mocks.useBotTokens.mockReturnValue({ data: [makeToken({ label: '' })] });
+    render(<BotsPanel />);
+    expand('Helper');
+    // An unlabelled token still has to be identifiable and revocable.
+    expect(screen.getByText('token')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Revoke token' })).toBeInTheDocument();
+  });
+
+  it('turns the match-anywhere trigger back off', () => {
+    mocks.useBots.mockReturnValue({ data: [makeBot({ trigger_when: 1, callback_url: 'https://b.example/h' })] });
+    render(<BotsPanel />);
+    expand('Helper');
+
+    const anywhere = screen.getByLabelText(/Match anywhere in the message/);
+    expect(anywhere).toBeChecked();
+    fireEvent.click(anywhere);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(mocks.setWebhook.mock.calls[0][0].trigger_when).toBe(0);
+  });
+
+  it('reveals nothing when a saved webhook returns no secret', () => {
+    // Re-saving an existing webhook does not re-issue its secret.
+    mocks.useBots.mockReturnValue({ data: [makeBot()] });
+    mocks.setWebhook.mockImplementation((_input, opts?: { onSuccess?: (r: unknown) => void }) =>
+      opts?.onSuccess?.({ ok: true }),
+    );
+    render(<BotsPanel />);
+    expand('Helper');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(screen.queryByText('Copy secret')).toBeNull();
+  });
+
+  it('falls back to generic wording for a non-Error webhook or create failure', () => {
+    mocks.useBots.mockReturnValue({ data: [makeBot()] });
+    mocks.state.setWebhook = { isPending: false, isError: true, error: 'a bare string' };
+    mocks.state.createBot = { isPending: false, isError: true, error: { code: 500 } };
+    render(<BotsPanel />);
+    expand('Helper');
+    expect(screen.getByText('Could not save webhook')).toBeInTheDocument();
+    expect(screen.getByText('Could not create bot')).toBeInTheDocument();
+  });
+
+  // Each cancel is exercised in its own render to keep the "Cancel" button
+  // unambiguous.
   it('cancelling the revoke dialog does not revoke', async () => {
     mocks.useBots.mockReturnValue({ data: [makeBot()] });
     mocks.useBotTokens.mockReturnValue({ data: [makeToken({ token_id: 'tid-live', label: 'live' })] });

@@ -180,6 +180,18 @@ describe('MessageRichAttachments interactive actions', () => {
     );
   });
 
+  it('still says something when the failure is not an Error', async () => {
+    // A rejection that isn't an Error (a bare string from a stray throw) must
+    // not leave the button looking like it silently did nothing.
+    vi.mocked(apiFetch).mockRejectedValue('gateway exploded');
+    renderWithClient(<MessageRichAttachments attachments={buttonAttachment} actionTarget={target} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent("That didn't work — please try again."),
+    );
+  });
+
   it('renders actions disabled with no target, and honours the disabled flag', () => {
     // No target (a preview or search result): the buttons still render so the
     // message reads as intended, but cannot be used.

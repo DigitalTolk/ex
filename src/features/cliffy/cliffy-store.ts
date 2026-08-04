@@ -12,13 +12,13 @@ export type LauncherPos = { x: number; y: number };
 
 // Persist only the two bits that should survive a reload: whether the widget is
 // dismissed, and where the user dragged its icon. (Open/scope/seed are session
-// state.) localStorage — ex is a Vite SPA, so window is always available; guard
-// anyway so tests/SSR can't throw.
+// state.) ex is a Vite SPA with no SSR, so `window` always exists by the time
+// this module loads; what is NOT guaranteed is that localStorage works — Safari
+// private mode and a full quota both throw — hence the try/catch on each side.
 const WIDGET_LS_KEY = 'cliffy.widget.v1';
 type WidgetPersist = { hidden: boolean; pos: LauncherPos | null };
 
 function loadWidget(): WidgetPersist {
-  if (typeof window === 'undefined') return { hidden: false, pos: null };
   try {
     const raw = window.localStorage.getItem(WIDGET_LS_KEY);
     if (raw) {
@@ -32,7 +32,6 @@ function loadWidget(): WidgetPersist {
 }
 
 function saveWidget(p: WidgetPersist): void {
-  if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(WIDGET_LS_KEY, JSON.stringify(p));
   } catch {

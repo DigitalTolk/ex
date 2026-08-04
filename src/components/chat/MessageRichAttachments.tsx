@@ -119,6 +119,8 @@ function AttachmentActions({
   const [note, setNote] = useState('');
 
   const run = (action: MessageAction, selectedOption?: string) => {
+    /* istanbul ignore next -- defensive: every control below is `disabled`
+       without a target, so React never fires a handler in that state. */
     if (!target) return;
     setNote('');
     invoke.mutate(

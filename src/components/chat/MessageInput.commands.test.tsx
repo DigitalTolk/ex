@@ -97,6 +97,49 @@ describe('MessageInput slash commands', () => {
     });
   });
 
+  it('shows an ephemeral reply to the caller and opens a redirect the command asked for', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    runCommandMock.mockImplementation((_input, opts?: { onSuccess?: (r: unknown) => void }) => {
+      opts?.onSuccess?.({ ephemeral_text: 'Only you can see this', goto_location: 'https://meet.example/abc' });
+    });
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        initialBody="/mstmeetings"
+        typingParentID="chan-1"
+        typingParentType="channel"
+      />,
+    );
+    await sendViaEnter();
+
+    // An ephemeral reply has no message to fan out — it belongs in the
+    // composer's own notice area, visible to this caller only.
+    const notice = await screen.findByTestId('command-notice');
+    expect(notice.textContent).toContain('Only you can see this');
+    expect(open).toHaveBeenCalledWith('https://meet.example/abc', '_blank', 'noopener,noreferrer');
+    open.mockRestore();
+  });
+
+  it('shows nothing extra for a command that only posts', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    runCommandMock.mockImplementation((_input, opts?: { onSuccess?: (r: unknown) => void }) => {
+      opts?.onSuccess?.({});
+    });
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        initialBody="/mstmeetings"
+        typingParentID="chan-1"
+        typingParentType="channel"
+      />,
+    );
+    await sendViaEnter();
+
+    expect(screen.queryByTestId('command-notice')).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+    open.mockRestore();
+  });
+
   it('matches command names case-insensitively', async () => {
     const onSend = vi.fn();
     render(

@@ -322,20 +322,24 @@ function BotRow({ bot }: { bot: Bot }) {
           setConfirmDelete(false);
         }}
       />
-      <ConfirmDialog
-        open={revokeID !== null}
-        onOpenChange={(o) => {
-          if (!o) setRevokeID(null);
-        }}
-        title="Revoke token?"
-        description="Any client using this token will stop working immediately."
-        confirmLabel="Revoke"
-        destructive
-        onConfirm={() => {
-          if (revokeID) revokeToken.mutate(revokeID);
-          setRevokeID(null);
-        }}
-      />
+      {/* Mounted only while a token is actually pending revocation — that keeps
+          revokeID non-null inside onConfirm without a guard for a state that
+          can't occur, and makes any close a plain dismissal, mirroring the
+          delete dialog above. */}
+      {revokeID !== null && (
+        <ConfirmDialog
+          open
+          onOpenChange={() => setRevokeID(null)}
+          title="Revoke token?"
+          description="Any client using this token will stop working immediately."
+          confirmLabel="Revoke"
+          destructive
+          onConfirm={() => {
+            revokeToken.mutate(revokeID);
+            setRevokeID(null);
+          }}
+        />
+      )}
     </div>
   );
 }

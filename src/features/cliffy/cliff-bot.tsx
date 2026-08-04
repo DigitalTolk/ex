@@ -27,6 +27,15 @@ const EYE_BASE = {
 const CENTER = { x: 160, y: 156 };
 const EYE_LINE_Y = 124;
 
+// ONE stable object for the lifetime of the module, never a fresh literal in
+// render. React re-sets innerHTML whenever this prop's identity changes — even
+// for a byte-identical string — which would tear down and rebuild the whole SVG
+// on every re-render of this component: the CSS animations restart mid-flight,
+// and worse, the cursor-tracking effect below captures the element ONCE and does
+// not re-run on re-render, so it would be left driving a detached node and the
+// cat would silently freeze. CLIFF_BOT_SVG is a constant, so this is safe.
+const BOT_MARKUP = { __html: CLIFF_BOT_SVG };
+
 /**
  * The animated Cliff cat. Renders the mascot SVG and drives its state.
  *
@@ -198,12 +207,13 @@ export function CliffBot({
           // Plan a wandering walk toward where the cursor is resting: a goal
           // vector + a perpendicular sway axis + randomized sway/stagger so no
           // two approaches look the same and none of them are a straight line.
-          const d = Math.hypot(pointer.x - cx, pointer.y - cy) || 1;
-          const reach = Math.min(LEAN_MAX, d * 0.55);
-          goal.x = ((pointer.x - cx) / d) * reach;
-          goal.y = ((pointer.y - cy) / d) * reach;
-          perp.x = -(pointer.y - cy) / d;
-          perp.y = (pointer.x - cx) / d;
+          // `dist` is the same hypotenuse, already computed this frame, and
+          // reaching here means dist > nearPx — so it is safe to divide by.
+          const reach = Math.min(LEAN_MAX, dist * 0.55);
+          goal.x = ((pointer.x - cx) / dist) * reach;
+          goal.y = ((pointer.y - cy) / dist) * reach;
+          perp.x = -(pointer.y - cy) / dist;
+          perp.y = (pointer.x - cx) / dist;
           approach = 0;
           wobAmp = 24 + Math.random() * 30; // px of side-to-side meander
           wobF1 = 0.0026 + Math.random() * 0.0042;
@@ -261,7 +271,7 @@ export function CliffBot({
       window.removeEventListener("resize", refreshRect);
       window.removeEventListener("scroll", refreshRect);
       window.removeEventListener("blur", forget);
-      if (raf) cancelAnimationFrame(raf);
+      cancelAnimationFrame(raf);
       host.style.transform = "";
     };
   }, [state, interactive, nearPx]);
@@ -271,7 +281,7 @@ export function CliffBot({
       ref={hostRef}
       aria-hidden
       className={cn("block", className)}
-      dangerouslySetInnerHTML={{ __html: CLIFF_BOT_SVG }}
+      dangerouslySetInnerHTML={BOT_MARKUP}
     />
   );
 }
