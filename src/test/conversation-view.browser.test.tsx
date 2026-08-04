@@ -283,8 +283,11 @@ function renderRoute(initialPath: string) {
         <PresenceProvider>
           <NotificationProvider>
             <TypingProvider>
+              {/* 100dvh, not a fixed 800: the real shell fills the viewport, so a
+                  short box would float the docked composer above the bottom and
+                  misplace every viewport-anchored fixed element relative to it. */}
               <MemoryRouter initialEntries={[initialPath]}>
-                <div style={{ height: 800, width: 1280 }}>
+                <div style={{ height: '100dvh', width: 1280 }}>
                   <Routes>
                     <Route path="/" element={<ChatPage />}>
                       <Route path="conversation/:id" element={<ConversationView />} />
@@ -317,7 +320,7 @@ function renderBare(initialPath: string, opts: { initialTag?: string } = {}) {
             <TypingProvider>
               <TagSearchProvider initialTag={opts.initialTag ?? null}>
                 <MemoryRouter initialEntries={[initialPath]}>
-                  <div style={{ height: 800, width: 1280 }}>{routes}</div>
+                  <div style={{ height: '100dvh', width: 1280 }}>{routes}</div>
                 </MemoryRouter>
               </TagSearchProvider>
             </TypingProvider>

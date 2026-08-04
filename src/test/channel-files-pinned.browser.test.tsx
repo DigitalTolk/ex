@@ -233,8 +233,11 @@ function renderRoute(initialPath: string) {
         <PresenceProvider>
           <NotificationProvider>
             <TypingProvider>
+              {/* 100dvh, not a fixed 800: the real shell fills the viewport, so a
+                  short box would float the docked composer above the bottom and
+                  misplace every viewport-anchored fixed element relative to it. */}
               <MemoryRouter initialEntries={[initialPath]}>
-                <div style={{ height: 800, width: 1280 }}>
+                <div style={{ height: '100dvh', width: 1280 }}>
                   <Routes>
                     <Route path="/" element={<ChatPage />}>
                       <Route path="channel/:id" element={<ChannelView />} />
@@ -261,7 +264,7 @@ function renderNoSlug() {
           <NotificationProvider>
             <TypingProvider>
               <MemoryRouter initialEntries={['/channel']}>
-                <div style={{ height: 800, width: 1280 }}>
+                <div style={{ height: '100dvh', width: 1280 }}>
                   <Routes>
                     <Route path="/channel" element={<ChannelView />} />
                   </Routes>
@@ -287,7 +290,7 @@ function renderWithActiveTag(initialPath: string) {
             <TypingProvider>
               <TagSearchProvider initialTag="urgent">
                 <MemoryRouter initialEntries={[initialPath]}>
-                  <div style={{ height: 800, width: 1280 }}>
+                  <div style={{ height: '100dvh', width: 1280 }}>
                     <Routes>
                       <Route path="/channel/:id" element={<ChannelView />} />
                     </Routes>

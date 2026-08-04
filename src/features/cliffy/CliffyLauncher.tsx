@@ -8,8 +8,16 @@ import { CliffBot } from './cliff-bot';
 
 const LAUNCHER_SIZE = 72;
 const EDGE = 8; // keep this much of the icon clear of the viewport edge
-const ANCHOR_RIGHT = 20; // matches `right-5`
-const ANCHOR_BOTTOM = 96; // matches `bottom-24`
+const ANCHOR_RIGHT = 20;
+// The docked composer owns the bottom ~140px of the shell at every tier (p-3 +
+// a 60px editor + a 36px toolbar), so its box top edge sits 128px up; a focused
+// mobile composer lands in the same band once its toolbar appears. Anchoring at
+// 160 keeps the launcher's box entirely clear of that band, so it can never
+// intercept a composer click — Send, or a click into the editor to place the
+// caret. These constants are the single source of truth: the CSS anchor below
+// is driven from them rather than from `bottom-*`/`right-*` classes, so the
+// anchor and the drag bounds cannot drift apart.
+const ANCHOR_BOTTOM = 160;
 
 /**
  * Global Cliffy entry point: the animated mascot that opens a compact chat card.
@@ -55,15 +63,14 @@ export function CliffyLauncher() {
 
   // Constrain the drag so the icon can't be lost off-screen. Offsets are relative
   // to the default bottom-right anchor: negative x/y move it left/up.
-  const bounds =
-    typeof window !== 'undefined'
-      ? {
-          left: -(window.innerWidth - ANCHOR_RIGHT - LAUNCHER_SIZE - EDGE),
-          right: ANCHOR_RIGHT - EDGE,
-          top: -(window.innerHeight - ANCHOR_BOTTOM - LAUNCHER_SIZE - EDGE),
-          bottom: ANCHOR_BOTTOM - EDGE,
-        }
-      : undefined;
+  const bounds = {
+    left: -(window.innerWidth - ANCHOR_RIGHT - LAUNCHER_SIZE - EDGE),
+    right: ANCHOR_RIGHT - EDGE,
+    top: -(window.innerHeight - ANCHOR_BOTTOM - LAUNCHER_SIZE - EDGE),
+    // 0, not ANCHOR_BOTTOM - EDGE: the composer band below the anchor is
+    // reserved, so a drag must not be able to put the mascot back over it.
+    bottom: 0,
+  };
 
   return (
     <>
@@ -101,8 +108,9 @@ export function CliffyLauncher() {
             draggedRef.current = true;
           }}
           onDragEnd={() => setLauncherPos({ x: x.get(), y: y.get() })}
-          style={{ x, y }}
-          className="group fixed bottom-24 right-5 z-40 cursor-grab active:cursor-grabbing"
+          style={{ x, y, right: ANCHOR_RIGHT, bottom: ANCHOR_BOTTOM }}
+          data-testid="cliffy-launcher"
+          className="group fixed z-40 cursor-grab active:cursor-grabbing"
         >
           <motion.button
             type="button"
@@ -122,7 +130,12 @@ export function CliffyLauncher() {
             style={{ width: LAUNCHER_SIZE, height: LAUNCHER_SIZE }}
             className="flex items-center justify-center [filter:drop-shadow(0_0_4px_rgba(0,0,0,0.45))_drop-shadow(0_8px_16px_rgba(0,0,0,0.30))]"
           >
-            <CliffBot className="size-full" />
+            {/* The mascot leans up to LEAN_MAX px toward the cursor when idle, and
+                its SVG is overflow-visible — so without this the ART is
+                hit-testable well outside the button box and can steal clicks
+                anywhere it wanders. Excluding it leaves the button itself as the
+                target, so clicks, hover and drag all still work. */}
+            <CliffBot className="size-full pointer-events-none" />
           </motion.button>
 
           <button
@@ -134,8 +147,10 @@ export function CliffyLauncher() {
             aria-label="Hide Cliffy (type /cliffy or press Cmd/Ctrl+Shift+C to bring it back)"
             title="Hide Cliffy — type /cliffy or press Cmd/Ctrl+Shift+C to bring it back"
             // Hover-reveal on desktop; always tappable on touch (no hover there).
+            // group-focus-within too, or `display:none` makes it unreachable by
+            // keyboard — there'd be no way to dismiss Cliffy without a pointer.
             className={`absolute -right-1 -top-1 size-5 items-center justify-center rounded-full border border-border/60 bg-background text-muted-foreground shadow-md transition-colors hover:text-foreground ${
-              isMobile ? 'flex' : 'hidden group-hover:flex'
+              isMobile ? 'flex' : 'hidden group-hover:flex group-focus-within:flex'
             }`}
           >
             <X className="size-3" />

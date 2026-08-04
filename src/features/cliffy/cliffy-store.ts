@@ -113,6 +113,30 @@ export const useCliffyStore = create<CliffyState>((set, get) => ({
   },
 }));
 
+/**
+ * Resets the widget to a first-visit state: in-memory AND the persisted copy.
+ *
+ * Browser test files share one origin, so without this a test that dismisses
+ * Cliffy (or drags it) leaks into every later file's run — the mascot would
+ * simply not be there. Called from the test setups alongside the other store
+ * resets. Test-only; nothing in the app calls it.
+ */
+export function resetCliffyWidgetForTests() {
+  try {
+    window.localStorage.removeItem(WIDGET_LS_KEY);
+  } catch {
+    // A storage-denied environment has nothing to clear.
+  }
+  useCliffyStore.setState({
+    open: false,
+    seedPrompt: null,
+    scope: null,
+    cliffhubBase: null,
+    hidden: false,
+    launcherPos: null,
+  });
+}
+
 // `/cliffy` optionally followed by a prompt. Matches the whole trimmed body so
 // a message that merely mentions /cliffy mid-sentence is NOT intercepted.
 const CLIFFY_COMMAND = /^\/cliffy(?:\s+([\s\S]*))?$/i;

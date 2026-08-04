@@ -5,6 +5,7 @@ import { APP_VERSION_META, BUILD_VERSION_META } from '@/lib/version-meta';
 import './console-gate';
 import { resetPresenceStoreForTests } from '@/stores/presence';
 import { resetTypingStoreForTests } from '@/stores/typing';
+import { resetCliffyWidgetForTests } from '@/features/cliffy/cliffy-store';
 
 // @base-ui/react/scroll-area uses ResizeObserver inside Root and emits
 // async state updates that show up in tests as "An update to
@@ -193,4 +194,7 @@ if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
 afterEach(() => {
   resetPresenceStoreForTests();
   resetTypingStoreForTests();
+  // The Cliffy widget persists dismissal + position to localStorage, which is
+  // shared across test files on one origin.
+  resetCliffyWidgetForTests();
 });

@@ -128,7 +128,6 @@ export function CliffBot({
       svg.classList.add("is-" + name);
       svg.setAttribute("data-state", name === "away" ? "idle" : name);
       lastState = name;
-      console.log(`[CliffBot] state → ${name}`);
       onStateChangeRef.current?.(name === "away" ? "idle" : name);
     };
 
@@ -158,7 +157,6 @@ export function CliffBot({
         lean.x = 0;
         lean.y = 0;
         approach = 0;
-        console.log("[CliffBot] cursor moved → happy, walking home");
       }
     };
 
@@ -213,10 +211,6 @@ export function CliffBot({
           wobF2 = 0.006 + Math.random() * 0.007;
           wobP2 = Math.random() * Math.PI * 2;
           host.style.transition = "none"; // JS drives the approach frame-by-frame
-          console.log(
-            `[CliffBot] curious after ${(idleFor / 1000).toFixed(1)}s idle → walking toward cursor`,
-            { dist: Math.round(d), goal: { x: Math.round(goal.x), y: Math.round(goal.y) }, wobAmp: Math.round(wobAmp) },
-          );
         }
         // Eased progress with per-frame randomness → it speeds up and dawdles
         // unevenly (random stagger), never a constant glide.

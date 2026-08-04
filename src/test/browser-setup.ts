@@ -5,6 +5,7 @@ import { APP_VERSION_META, BUILD_VERSION_META } from '@/lib/version-meta';
 import './console-gate';
 import { resetPresenceStoreForTests } from '@/stores/presence';
 import { resetTypingStoreForTests } from '@/stores/typing';
+import { resetCliffyWidgetForTests } from '@/features/cliffy/cliffy-store';
 import { afterEach } from 'vitest';
 
 if (typeof document !== 'undefined') {
@@ -52,4 +53,7 @@ window.addEventListener('resize', stampTierClasses);
 afterEach(() => {
   resetPresenceStoreForTests();
   resetTypingStoreForTests();
+  // The Cliffy widget persists dismissal + position to localStorage, which is
+  // shared across test files on one origin.
+  resetCliffyWidgetForTests();
 });
