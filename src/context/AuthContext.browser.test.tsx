@@ -173,7 +173,13 @@ describe('AuthContext', () => {
     await new Promise((r) => setTimeout(r, 200));
     (screen.getByTestId('logout').element() as HTMLButtonElement).click();
     await new Promise((r) => setTimeout(r, 200));
-    expect(fetchMock.mock.calls[0][0]).toBe('/auth/logout');
+    // Order matters and is deliberate: Cliffy's bridge session is torn down
+    // first, while the access token is still valid to authenticate the revoke;
+    // only then does /auth/logout end the ex session.
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
+      '/api/v1/cliffy/revoke',
+      '/auth/logout',
+    ]);
     expect(clearAccessTokenMock).toHaveBeenCalled();
     expect(screen.getByTestId('state').element().textContent).toBe('(none)');
   });
