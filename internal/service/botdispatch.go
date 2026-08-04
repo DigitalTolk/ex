@@ -25,8 +25,34 @@ type BotHandler interface {
 	// OwnsThread reports whether a non-@mention reply in the given thread is
 	// directed at this bot (i.e. the bot already spoke there).
 	OwnsThread(ctx context.Context, rootMessageID string) bool
-	// Handle runs one turn and returns the reply text ("" = post nothing).
-	Handle(ctx context.Context, ev BotEvent) (string, error)
+	// Handle runs one turn and returns the reply (a zero BotReply posts nothing).
+	Handle(ctx context.Context, ev BotEvent) (BotReply, error)
+}
+
+// BotReply is one bot turn's response, in Mattermost's reply shape so the
+// in-process and outgoing-webhook transports produce identical results.
+type BotReply struct {
+	// Text is the message body. Empty with no Attachments posts nothing.
+	Text string
+	// Attachments are MM/Slack-style rich attachments, including any interactive
+	// actions (see model.MessageAction).
+	Attachments []model.MessageAttachment
+	// Username / IconURL / IconEmoji override the bot's display identity for this
+	// one post, as MM's response fields do. Empty falls back to the bot's own.
+	Username  string
+	IconURL   string
+	IconEmoji string
+	// Ephemeral marks a reply meant only for the asking user. ex has no ephemeral
+	// messages in a channel, so an ephemeral *dispatch* reply is dropped rather
+	// than shown to everyone — the safe direction, since the integration asked for
+	// it not to be public. (Slash commands, which have a live HTTP caller to
+	// answer, do deliver ephemeral text — see extcommand.go.)
+	Ephemeral bool
+}
+
+// Empty reports whether this reply has nothing to post.
+func (r BotReply) Empty() bool {
+	return strings.TrimSpace(r.Text) == "" && len(r.Attachments) == 0
 }
 
 // BotEvent is a chat message addressed to a bot.
@@ -35,7 +61,9 @@ type BotEvent struct {
 	AskerID       string       // the human addressing the bot (the bot acts as them)
 	ParentID      string       // channel or conversation id
 	ParentType    string       // ParentChannel | ParentConversation
+	MessageID     string       // the message that addressed the bot (MM's post_id)
 	Prompt        string       // the request, mention stripped
+	TriggerWord   string       // the trigger word that fired, if dispatch was by trigger
 	RootMessageID string       // thread root the reply belongs under
 	History       []BotMessage // prior turns in this thread, oldest-first
 }
@@ -131,6 +159,7 @@ type botDetection struct {
 	static        BotConfig // …that bot
 	staticPrompt  string    // …with the mention stripped
 	externalBotID string    // or an external (webhook) bot addressed by @[bot_…]
+	triggerWord   string    // …or fired by this trigger word instead of a mention
 	threadReply   bool      // or a reply in an existing thread (ownership resolved later)
 }
 
@@ -144,15 +173,16 @@ func (s *MessageService) detectBot(msg *model.Message) botDetection {
 	if msg.System || msg.AuthorID == WebhookAuthorID || model.IsBotUserID(msg.AuthorID) {
 		return d
 	}
-	// Cheap byte-scan early-out: a bot is addressed only via an "@" (mention) or
-	// by replying in a bot's thread. A plain top-level human message can't match,
-	// so skip all the regex/parse work below. Thread continuity is an in-process
-	// concept (webhook bots don't own threads), so only pay the thread-reply path
-	// when at least one in-process bot is registered — otherwise a reply in any
-	// thread would needlessly spawn a turn that resolves to no owner.
-	// (A finer per-thread "has a bot participated" filter is a later optimization.)
+	// Cheap byte-scan early-out: a bot is addressed via an "@" (mention), by a
+	// registered trigger word, or by replying in a bot's thread. Thread continuity
+	// is an in-process concept (webhook bots don't own threads), so only pay the
+	// thread-reply path when at least one in-process bot is registered — otherwise
+	// a reply in any thread would needlessly spawn a turn that resolves to no
+	// owner. (A finer per-thread "has a bot participated" filter is a later
+	// optimization.)
 	d.threadReply = msg.ParentMessageID != "" && len(s.bots) > 0
-	if !d.threadReply && strings.IndexByte(msg.Body, '@') < 0 {
+	hasTriggers := s.botTriggers != nil
+	if !d.threadReply && !hasTriggers && strings.IndexByte(msg.Body, '@') < 0 {
 		return d
 	}
 
@@ -186,10 +216,66 @@ func (s *MessageService) detectBot(msg *model.Message) botDetection {
 			}
 		}
 	}
-	// An "@" that isn't a bot mention and isn't a bot thread → nothing to do.
+	// Trigger words — Mattermost's outgoing-webhook trigger model, and how most
+	// existing MM bots are invoked. Only consulted when no mention already
+	// matched, so an explicit @mention always wins over an incidental word.
+	if !d.matchedStatic && d.externalBotID == "" && hasTriggers {
+		if botID, word := s.matchTriggerWord(scan); botID != "" {
+			d.externalBotID, d.triggerWord = botID, word
+		}
+	}
+
+	// An "@" that isn't a bot mention, no trigger word, and not a bot thread →
+	// nothing to do.
 	d.dispatch = d.matchedStatic || d.externalBotID != "" || d.threadReply
 	return d
 }
+
+// botTriggerMaxWordsScanned bounds the contains-mode scan. A trigger word is a
+// short token at or near the start of a request; scanning an entire pasted
+// document for one would put unbounded work on the synchronous send path.
+const botTriggerMaxWordsScanned = 64
+
+// matchTriggerWord resolves a message body against the trigger-word index. The
+// first word is always tested (MM's default "starts with" mode); the remaining
+// words are only scanned when some bot actually registered a "contains" trigger,
+// so the common case costs one map lookup.
+func (s *MessageService) matchTriggerWord(scan string) (botUserID, word string) {
+	if s.botTriggers == nil {
+		return "", ""
+	}
+	fields := strings.Fields(scan)
+	if len(fields) == 0 {
+		return "", ""
+	}
+	limit := 1
+	if s.botTriggers.HasContainsTriggers() {
+		limit = min(len(fields), botTriggerMaxWordsScanned)
+	}
+	for i := 0; i < limit; i++ {
+		candidate := strings.ToLower(strings.Trim(fields[i], botTriggerTrimCutset))
+		if candidate == "" {
+			continue
+		}
+		botID, when, ok := s.botTriggers.TriggerBot(candidate)
+		if !ok {
+			continue
+		}
+		// A "starts with" trigger only fires in the first position, even though the
+		// scan above may have walked further for another bot's contains-trigger.
+		if when == model.BotTriggerWhenStartsWith && i != 0 {
+			continue
+		}
+		return botID, candidate
+	}
+	return "", ""
+}
+
+// botTriggerTrimCutset strips the punctuation that naturally surrounds a word in
+// prose, so "deploy," and "(deploy)" match the trigger "deploy". Kept narrow:
+// characters that can legitimately be *part* of a trigger (- _ / @ #) are not
+// trimmed, so a "/deploy"-style trigger still matches exactly.
+const botTriggerTrimCutset = `.,;:!?"'“”‘’()[]{}<>`
 
 func (s *MessageService) maybeDispatchToBots(ctx context.Context, msg *model.Message, parentType string) {
 	d := s.detectBot(msg)
@@ -231,8 +317,19 @@ func (s *MessageService) maybeDispatchToBots(ctx context.Context, msg *model.Mes
 			if !ok {
 				return
 			}
-			cfg = BotConfig{UserID: d.externalBotID, Username: t.Name, Handler: webhookBotHandler{target: t}}
-			p = strings.TrimSpace(botBracketMentionRe.ReplaceAllString(body, ""))
+			cfg = BotConfig{
+				UserID:   d.externalBotID,
+				Username: t.Name,
+				Handler:  webhookBotHandler{target: t, resolver: s.botCtx},
+			}
+			if d.triggerWord != "" {
+				// A trigger-word invocation sends the message verbatim, trigger word
+				// included, because MM's contract passes the full `text` alongside
+				// `trigger_word` and receivers parse their arguments out of it.
+				p = strings.TrimSpace(body)
+			} else {
+				p = strings.TrimSpace(botBracketMentionRe.ReplaceAllString(body, ""))
+			}
 		default: // thread continuation → the in-process bot that owns this thread
 			for i := range s.bots {
 				if s.bots[i].cfg.Handler.OwnsThread(bg, threadRoot) {
@@ -256,16 +353,24 @@ func (s *MessageService) maybeDispatchToBots(ctx context.Context, msg *model.Mes
 			AskerID:       askerID,
 			ParentID:      parentID,
 			ParentType:    parentType,
+			MessageID:     msgID,
 			Prompt:        p,
+			TriggerWord:   d.triggerWord,
 			RootMessageID: root,
 			History:       s.botThreadHistory(bg, cfg.UserID, askerID, parentID, parentType, root, msgID),
 		})
 		stop()
 		if err != nil {
 			slog.Warn("bot dispatch: handler failed", "bot", cfg.UserID, "parent", parentID, "error", err)
-			reply = "Sorry — I couldn't respond just now. Please try again."
+			reply = BotReply{Text: "Sorry — I couldn't respond just now. Please try again."}
 		}
-		if strings.TrimSpace(reply) == "" {
+		// An ephemeral reply is addressed to the asker alone, and a channel post is
+		// the opposite of that, so it is dropped rather than broadcast.
+		if reply.Ephemeral {
+			slog.Debug("bot dispatch: dropping ephemeral reply (not supported in-channel)", "bot", cfg.UserID)
+			return
+		}
+		if reply.Empty() {
 			return
 		}
 		if _, err := s.postBotReply(bg, cfg, askerID, parentID, parentType, root, reply); err != nil {
@@ -275,19 +380,31 @@ func (s *MessageService) maybeDispatchToBots(ctx context.Context, msg *model.Mes
 }
 
 // postBotReply posts a bot's reply as that bot (access-checked against the asker,
-// threaded under root), rendered as a bot message via the webhook overrides.
-func (s *MessageService) postBotReply(ctx context.Context, cfg BotConfig, requesterID, parentID, parentType, parentMessageID, body string) (*model.Message, error) {
+// threaded under root), rendered as a bot message via the webhook overrides. A
+// per-reply username/icon (MM lets a response override them) wins over the bot's
+// registered identity; the AUTHOR is always the bot itself, never the override.
+func (s *MessageService) postBotReply(ctx context.Context, cfg BotConfig, requesterID, parentID, parentType, parentMessageID string, reply BotReply) (*model.Message, error) {
 	if err := s.checkAccess(ctx, requesterID, parentID, parentType); err != nil {
 		return nil, err
+	}
+	username := reply.Username
+	if username == "" {
+		username = cfg.Username
+	}
+	iconEmoji := reply.IconEmoji
+	if iconEmoji == "" && reply.IconURL == "" {
+		iconEmoji = cfg.IconEmoji
 	}
 	return s.SendWebhook(ctx, WebhookMessageInput{
 		ParentID:        parentID,
 		ParentType:      parentType,
 		ParentMessageID: parentMessageID,
 		AuthorID:        cfg.UserID,
-		Username:        cfg.Username,
-		IconEmoji:       cfg.IconEmoji,
-		Body:            body,
+		Username:        username,
+		AvatarURL:       reply.IconURL,
+		IconEmoji:       iconEmoji,
+		Body:            reply.Text,
+		Attachments:     PrepareActions(reply.Attachments),
 	})
 }
 
@@ -332,6 +449,11 @@ func clampRunes(s string, max int) string {
 	return string(r[:max])
 }
 
+// botTypingRefreshInterval is how often the indicator is re-broadcast while a
+// turn runs; the client's own indicator expires after ~6s. A var, not a const,
+// so tests can exercise the refresh without waiting seconds for a tick.
+var botTypingRefreshInterval = 4 * time.Second
+
 // botTyping broadcasts a "<Bot> is typing…" indicator and keeps it alive (the
 // client indicator expires after ~6s) until the returned stop func is called.
 func (s *MessageService) botTyping(ctx context.Context, cfg BotConfig, parentID, parentType, parentMessageID string) func() {
@@ -347,8 +469,11 @@ func (s *MessageService) botTyping(ctx context.Context, cfg BotConfig, parentID,
 	}
 	emit()
 	done := make(chan struct{})
+	// Read the interval on the caller's goroutine, not inside the spawned one, so
+	// the value is captured at a well-defined point.
+	interval := botTypingRefreshInterval
 	safe.Go(func() {
-		t := time.NewTicker(4 * time.Second)
+		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
 			select {

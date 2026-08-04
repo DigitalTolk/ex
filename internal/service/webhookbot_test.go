@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/DigitalTolk/ex/internal/model"
 )
 
 // useLoopbackWebhookClient points the package webhook client at a plain dialer so
@@ -59,8 +61,8 @@ func TestWebhookBotHandler_PostsSignedEventAndReturnsReply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if reply != "hello from the bot" {
-		t.Errorf("reply = %q", reply)
+	if reply.Text != "hello from the bot" {
+		t.Errorf("reply.Text = %q", reply.Text)
 	}
 	if gotUserID != "u-1" {
 		t.Errorf("attested user_id = %q, want u-1", gotUserID)
@@ -112,7 +114,97 @@ func TestWebhookBotHandler_EphemeralNotPosted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if reply != "" {
-		t.Errorf("ephemeral reply should not be posted; got %q", reply)
+	// The reply carries the text but is flagged ephemeral; the DISPATCHER is what
+	// declines to post it (an ephemeral in-channel post has no meaning in ex).
+	if !reply.Ephemeral {
+		t.Error("reply.Ephemeral = false, want true")
 	}
+}
+
+func TestWebhookBotHandler_MattermostTransportSendsFormFields(t *testing.T) {
+	useLoopbackWebhookClient(t)
+	var got map[string]string
+	var contentType, gotSig string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		contentType = r.Header.Get("Content-Type")
+		gotSig = r.Header.Get("X-Ex-Signature")
+		_ = r.ParseForm()
+		got = map[string]string{}
+		for k := range r.PostForm {
+			got[k] = r.PostForm.Get(k)
+		}
+		// A real MM receiver answers with MM's reply shape.
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"response_type": "in_channel",
+			"text":          "deploying",
+			"username":      "Deploy Bot",
+		})
+	}))
+	defer srv.Close()
+
+	h := webhookBotHandler{
+		target: BotWebhookTarget{
+			URL:       srv.URL,
+			Secret:    "mm-token",
+			Name:      "Deployer",
+			Transport: model.BotTransportMattermost,
+		},
+		resolver: stubMMResolver{channelSlug: "releases", userName: "anna.smith"},
+	}
+	reply, err := h.Handle(context.Background(), BotEvent{
+		BotUserID: "bot_dep", AskerID: "u-1", ParentID: "ch-1", ParentType: ParentChannel,
+		MessageID: "msg-9", Prompt: "deploy web", TriggerWord: "deploy",
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	if contentType != "application/x-www-form-urlencoded" {
+		t.Errorf("Content-Type = %q, want form encoding", contentType)
+	}
+	// The exact field names an existing Mattermost receiver parses.
+	want := map[string]string{
+		"token":        "mm-token",
+		"team_id":      MMSyntheticTeamID,
+		"team_domain":  MMSyntheticTeamDomain,
+		"channel_id":   "ch-1",
+		"channel_name": "releases",
+		"user_id":      "u-1",
+		"user_name":    "anna.smith",
+		"post_id":      "msg-9",
+		"text":         "deploy web",
+		"trigger_word": "deploy",
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("form[%q] = %q, want %q", k, got[k], v)
+		}
+	}
+	if got["timestamp"] == "" {
+		t.Error("form[timestamp] is empty")
+	}
+	// The MM transport must NOT also send ex's signature header: a receiver
+	// configured for MM verifies the body token, and sending both would advertise
+	// an authentication path that isn't the one in use.
+	if gotSig != "" {
+		t.Errorf("MM transport sent X-Ex-Signature = %q, want none", gotSig)
+	}
+	if reply.Text != "deploying" || reply.Username != "Deploy Bot" || reply.Ephemeral {
+		t.Errorf("reply = %+v, want in-channel text with a username override", reply)
+	}
+}
+
+// stubMMResolver is a BotContextResolver with fixed answers.
+type stubMMResolver struct {
+	channelName string
+	channelSlug string
+	userName    string
+}
+
+func (s stubMMResolver) ChannelContext(context.Context, string, string) (string, string, string) {
+	return s.channelName, s.channelSlug, mmChannelTypeOpen
+}
+
+func (s stubMMResolver) UserContext(context.Context, string) (string, string) {
+	return s.userName, s.userName
 }

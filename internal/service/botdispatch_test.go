@@ -10,8 +10,8 @@ import (
 // stubBotHandler satisfies BotHandler for registration; detectBot never calls it.
 type stubBotHandler struct{}
 
-func (stubBotHandler) OwnsThread(context.Context, string) bool          { return false }
-func (stubBotHandler) Handle(context.Context, BotEvent) (string, error) { return "", nil }
+func (stubBotHandler) OwnsThread(context.Context, string) bool            { return false }
+func (stubBotHandler) Handle(context.Context, BotEvent) (BotReply, error) { return BotReply{}, nil }
 
 // fakeBotDir is a BotDirectory that knows a fixed set of external bots.
 type fakeBotDir struct{ known map[string]BotWebhookTarget }
@@ -20,6 +20,19 @@ func (f fakeBotDir) WebhookBot(_ context.Context, id string) (BotWebhookTarget, 
 	t, ok := f.known[id]
 	return t, ok
 }
+
+// fakeTriggerIndex is a BotTriggerIndex over a fixed word→bot map.
+type fakeTriggerIndex struct {
+	words       map[string]triggerEntry
+	hasContains bool
+}
+
+func (f fakeTriggerIndex) TriggerBot(word string) (string, model.BotTriggerWhen, bool) {
+	e, ok := f.words[word]
+	return e.botUserID, e.when, ok
+}
+
+func (f fakeTriggerIndex) HasContainsTriggers() bool { return f.hasContains }
 
 // newDispatchSvc returns a MessageService with an in-process bot "@cliffy"
 // registered, and optionally an external-bot directory.
@@ -31,6 +44,23 @@ func newDispatchSvc(dir BotDirectory) *MessageService {
 	}
 	return s
 }
+
+// newTriggerSvc returns a dispatch service with a trigger-word index wired.
+func newTriggerSvc(dir BotDirectory, idx BotTriggerIndex) *MessageService {
+	s := newDispatchSvc(dir)
+	s.SetBotTriggerIndex(idx)
+	return s
+}
+
+var (
+	startsWithIndex = fakeTriggerIndex{words: map[string]triggerEntry{
+		"deploy": {botUserID: "bot_ext", when: model.BotTriggerWhenStartsWith},
+	}}
+	containsIndex = fakeTriggerIndex{
+		words:       map[string]triggerEntry{"deploy": {botUserID: "bot_ext", when: model.BotTriggerWhenContains}},
+		hasContains: true,
+	}
+)
 
 func TestDetectBot(t *testing.T) {
 	dir := fakeBotDir{known: map[string]BotWebhookTarget{
@@ -47,6 +77,7 @@ func TestDetectBot(t *testing.T) {
 		staticUserID  string
 		staticPrompt  string
 		externalBotID string
+		triggerWord   string
 		threadReply   bool
 	}{
 		{
@@ -136,6 +167,68 @@ func TestDetectBot(t *testing.T) {
 			}(),
 			msg: &model.Message{ID: "m3", Body: "yes, go", AuthorID: "u1", ParentMessageID: "root9"},
 		},
+
+		// --- Trigger words (Mattermost's outgoing-webhook trigger model) ---
+		{
+			name:          "a leading trigger word dispatches to its external bot",
+			svc:           newTriggerSvc(dir, startsWithIndex),
+			msg:           &model.Message{Body: "deploy web to prod", AuthorID: "u1"},
+			dispatch:      true,
+			externalBotID: "bot_ext",
+			triggerWord:   "deploy",
+		},
+		{
+			name:          "trailing punctuation still matches the trigger word",
+			svc:           newTriggerSvc(dir, startsWithIndex),
+			msg:           &model.Message{Body: "deploy: web", AuthorID: "u1"},
+			dispatch:      true,
+			externalBotID: "bot_ext",
+			triggerWord:   "deploy",
+		},
+		{
+			name:          "trigger matching is case-insensitive",
+			svc:           newTriggerSvc(dir, startsWithIndex),
+			msg:           &model.Message{Body: "Deploy web", AuthorID: "u1"},
+			dispatch:      true,
+			externalBotID: "bot_ext",
+			triggerWord:   "deploy",
+		},
+		{
+			// The default (and MM's) mode is start-of-message only, so an
+			// incidental mid-sentence occurrence must not fire a bot.
+			name: "a starts-with trigger does NOT fire mid-message",
+			svc:  newTriggerSvc(dir, startsWithIndex),
+			msg:  &model.Message{Body: "we should deploy web later", AuthorID: "u1"},
+		},
+		{
+			name:          "a contains trigger fires mid-message",
+			svc:           newTriggerSvc(dir, containsIndex),
+			msg:           &model.Message{Body: "we should deploy web later", AuthorID: "u1"},
+			dispatch:      true,
+			externalBotID: "bot_ext",
+			triggerWord:   "deploy",
+		},
+		{
+			name: "a trigger word inside a code fence does not fire",
+			svc:  newTriggerSvc(dir, startsWithIndex),
+			msg:  &model.Message{Body: "```\ndeploy web\n```", AuthorID: "u1"},
+		},
+		{
+			// An explicit mention is a direct address; a trigger word is incidental.
+			// The mention must win so the prompt is the mention-stripped text.
+			name:          "an @mention wins over a trigger word in the same message",
+			svc:           newTriggerSvc(dir, containsIndex),
+			msg:           &model.Message{Body: "@cliffy deploy web", AuthorID: "u1"},
+			dispatch:      true,
+			matchedStatic: true,
+			staticUserID:  "bot_cliffy",
+			staticPrompt:  "deploy web",
+		},
+		{
+			name: "a bot's own message never fires a trigger word (no loops)",
+			svc:  newTriggerSvc(dir, startsWithIndex),
+			msg:  &model.Message{Body: "deploy web", AuthorID: "bot_ext"},
+		},
 	}
 
 	for _, tc := range tests {
@@ -155,6 +248,9 @@ func TestDetectBot(t *testing.T) {
 			}
 			if d.externalBotID != tc.externalBotID {
 				t.Errorf("externalBotID = %q, want %q", d.externalBotID, tc.externalBotID)
+			}
+			if d.triggerWord != tc.triggerWord {
+				t.Errorf("triggerWord = %q, want %q", d.triggerWord, tc.triggerWord)
 			}
 			if d.threadReply != tc.threadReply {
 				t.Errorf("threadReply = %v, want %v", d.threadReply, tc.threadReply)

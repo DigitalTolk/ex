@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
+	"github.com/DigitalTolk/ex/internal/service"
 )
 
 // NewRouter builds the application HTTP handler, registering all routes.
@@ -209,6 +210,32 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("GET /api/v1/commands", middleware.WrapFunc(commandH.List, authMW))
 		// Runs post messages into chats, so they share the per-user write limit.
 		mux.Handle("POST /api/v1/commands/run", middleware.WrapFunc(commandH.Run, authMW, writeLimit))
+	}
+
+	// ------------------------------------------- External (Mattermost-shaped) commands
+	if d.ExternalCommand != nil {
+		mux.Handle("GET /api/v1/admin/commands", middleware.WrapFunc(d.ExternalCommand.List, authMW))
+		mux.Handle("POST /api/v1/admin/commands", middleware.WrapFunc(d.ExternalCommand.Create, authMW))
+		mux.Handle("GET /api/v1/admin/commands/{id}", middleware.WrapFunc(d.ExternalCommand.Get, authMW))
+		mux.Handle("PATCH /api/v1/admin/commands/{id}", middleware.WrapFunc(d.ExternalCommand.Update, authMW))
+		mux.Handle("DELETE /api/v1/admin/commands/{id}", middleware.WrapFunc(d.ExternalCommand.Delete, authMW))
+		// A command's response_url. Public by design — the path token is the whole
+		// credential (see the handler) — so it sits with the other /hooks endpoints
+		// and carries the same IP rate limit as an incoming webhook.
+		mux.Handle("POST /hooks/commands/{token}", middleware.WrapFunc(
+			d.ExternalCommand.DeliverResponse,
+			middleware.RateLimit(d.RateLimiter, 60, time.Minute),
+		))
+	}
+
+	// ------------------------------------------------------- Interactive message actions
+	if d.MessageAction != nil {
+		// Registered per parent type, like every other message route. Actions call
+		// out to integrations and can post, so they take the per-user write limit.
+		mux.Handle("POST /api/v1/channels/{id}/messages/{msgId}/actions/{actionId}",
+			middleware.WrapFunc(d.MessageAction.Invoke(service.ParentChannel), authMW, writeLimit))
+		mux.Handle("POST /api/v1/conversations/{id}/messages/{msgId}/actions/{actionId}",
+			middleware.WrapFunc(d.MessageAction.Invoke(service.ParentConversation), authMW, writeLimit))
 	}
 
 	// ------------------------------------------------------------------ Sidebar (per-user)

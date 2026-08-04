@@ -334,7 +334,7 @@ export function ConversationView() {
   // leaving chat for a non-chat page falls back to personal Cliffy.
   useEffect(() => {
     if (!id) return;
-    useCliffyStore.getState().setScope({ type: 'conversation', id, name: derivedTitle });
+    useCliffyStore.getState().setScope({ type: 'conversation', id, name: derivedTitle ?? undefined });
     return () => useCliffyStore.getState().setScope(null);
   }, [id, derivedTitle]);
 

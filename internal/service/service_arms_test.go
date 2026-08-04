@@ -239,12 +239,23 @@ func TestMustHelpersPanic(t *testing.T) {
 		}()
 		mustJSONBody(nil, errors.New("boom"))
 	})
+	t.Run("mustSigned", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("mustSigned must panic on error")
+			}
+		}()
+		mustSigned("", errors.New("boom"))
+	})
 	t.Run("passthrough", func(t *testing.T) {
 		if got := string(mustThumb([]byte("t"), nil)); got != "t" {
 			t.Fatalf("mustThumb = %q", got)
 		}
 		if got := string(mustJSONBody([]byte("j"), nil)); got != "j" {
 			t.Fatalf("mustJSONBody = %q", got)
+		}
+		if got := mustSigned("signed", nil); got != "signed" {
+			t.Fatalf("mustSigned = %q", got)
 		}
 	})
 }

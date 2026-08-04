@@ -204,3 +204,84 @@ func TestCommandRunSuccess(t *testing.T) {
 		t.Errorf("draft clear calls = %+v, want one for the run's scope", clearer.calls)
 	}
 }
+
+// An integration failure is the integration's fault, not ex's: 502 with a
+// user-facing note, so the composer says something useful instead of showing a
+// generic error.
+func TestCommandRunIntegrationFailureIsBadGateway(t *testing.T) {
+	svc := service.NewCommandService()
+	svc.SetExternalRunner(failingCommandRunner{})
+	h := NewCommandHandler(svc)
+
+	rec := httptest.NewRecorder()
+	h.Run(rec, commandRequest(t, http.MethodPost, "/api/v1/commands/run",
+		`{"command":"/deploy","parentType":"channel","parentID":"ch1","text":"web"}`, true))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// An external command's ephemeral reply and navigation ride alongside `message`
+// in the same response, so an older client reading only `message` still works.
+func TestCommandRunReturnsEphemeralAndGoto(t *testing.T) {
+	svc := service.NewCommandService()
+	svc.SetExternalRunner(staticCommandRunner{result: service.CommandResult{
+		EphemeralText: "only for you",
+		GotoLocation:  "https://example.com/build/9",
+	}})
+	h := NewCommandHandler(svc)
+
+	rec := httptest.NewRecorder()
+	h.Run(rec, commandRequest(t, http.MethodPost, "/api/v1/commands/run",
+		`{"command":"deploy","parentType":"channel","parentID":"ch1"}`, true))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var got map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got["ephemeral_text"] != "only for you" || got["goto_location"] != "https://example.com/build/9" {
+		t.Errorf("response = %+v, want the ephemeral text and navigation", got)
+	}
+}
+
+// The arguments after the trigger reach the runner as MM's `text`.
+func TestCommandRunForwardsText(t *testing.T) {
+	runner := &recordingCommandRunner{}
+	svc := service.NewCommandService()
+	svc.SetExternalRunner(runner)
+	h := NewCommandHandler(svc)
+
+	rec := httptest.NewRecorder()
+	h.Run(rec, commandRequest(t, http.MethodPost, "/api/v1/commands/run",
+		`{"command":"deploy","parentType":"channel","parentID":"ch1","text":"  web v2  "}`, true))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if runner.got.Text != "web v2" {
+		t.Errorf("text = %q, want it trimmed and forwarded", runner.got.Text)
+	}
+}
+
+type failingCommandRunner struct{}
+
+func (failingCommandRunner) ListCommands(context.Context) []service.CommandInfo { return nil }
+func (failingCommandRunner) RunCommand(context.Context, string, service.CommandRequest) (service.CommandResult, error) {
+	return service.CommandResult{}, service.ErrCommandRunFailed
+}
+
+type staticCommandRunner struct{ result service.CommandResult }
+
+func (staticCommandRunner) ListCommands(context.Context) []service.CommandInfo { return nil }
+func (s staticCommandRunner) RunCommand(context.Context, string, service.CommandRequest) (service.CommandResult, error) {
+	return s.result, nil
+}
+
+type recordingCommandRunner struct{ got service.CommandRequest }
+
+func (*recordingCommandRunner) ListCommands(context.Context) []service.CommandInfo { return nil }
+func (r *recordingCommandRunner) RunCommand(_ context.Context, _ string, req service.CommandRequest) (service.CommandResult, error) {
+	r.got = req
+	return service.CommandResult{}, nil
+}

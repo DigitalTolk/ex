@@ -29,15 +29,27 @@ export interface RunCommandInput {
   command: string;
   parentType: 'channel' | 'conversation';
   parentID: string;
+  /** Everything typed after the trigger word. Built-in commands take none;
+   *  external (Mattermost-shaped) ones receive it as MM's `text` field. */
+  text?: string;
 }
 
-// Executes a slash command in a chat. The command's result arrives as a
+export interface RunCommandResult {
+  /** The post the command made, if it posted in-channel. */
+  message?: Message;
+  /** A reply for the invoking user only — shown in the composer, never posted. */
+  ephemeral_text?: string;
+  /** An http(s) URL the command asked the client to open. Server-filtered. */
+  goto_location?: string;
+}
+
+// Executes a slash command in a chat. An in-channel result also arrives as a
 // normal message over the WebSocket (message.new), so success needs no cache
-// work here.
+// work here; ephemeral_text is the part only this caller ever sees.
 export function useRunCommand() {
   return useMutation({
     mutationFn: (input: RunCommandInput) =>
-      apiFetch<{ message: Message }>('/api/v1/commands/run', {
+      apiFetch<RunCommandResult>('/api/v1/commands/run', {
         method: 'POST',
         body: JSON.stringify(input),
       }),

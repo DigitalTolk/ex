@@ -100,6 +100,8 @@ type MessageService struct {
 	reactions     ReactionActivityRecorder
 	bots          []registeredBot
 	botDir        BotDirectory
+	botTriggers   BotTriggerIndex
+	botCtx        BotContextResolver
 }
 
 // ReactionActivityRecorder records "someone reacted to your message" hints into
@@ -695,21 +697,58 @@ func (s *MessageService) SendBotCard(
 	requestUserID, authorID, username, iconEmoji, parentID, parentType, parentMessageID, body string,
 	attachments []model.MessageAttachment,
 ) (*model.Message, error) {
-	if requestUserID == "" {
-		return nil, fmt.Errorf("message: requester required: %w", ErrForbidden)
-	}
-	if err := s.checkAccess(ctx, requestUserID, parentID, parentType); err != nil {
-		return nil, err
-	}
-	return s.SendWebhook(ctx, WebhookMessageInput{
+	return s.PostBotCard(ctx, BotCardInput{
+		RequestUserID:   requestUserID,
+		AuthorID:        authorID,
+		Username:        username,
+		IconEmoji:       iconEmoji,
 		ParentID:        parentID,
 		ParentType:      parentType,
 		ParentMessageID: parentMessageID,
-		AuthorID:        authorID,
 		Body:            body,
-		Username:        username,
-		IconEmoji:       iconEmoji,
 		Attachments:     attachments,
+	})
+}
+
+// BotCardInput is the named-field form of SendBotCard's parameters. Preferred for
+// new callers: the positional signature above predates the icon_url and
+// attachment-action fields integrations now set, and nine positional strings is
+// past the point where a call site is readable.
+type BotCardInput struct {
+	// RequestUserID is the human on whose behalf the post happens. Their access is
+	// what is checked — the bot never posts somewhere the requester cannot.
+	RequestUserID string
+	// AuthorID is the bot account authoring the post. Empty stamps the generic
+	// webhook sentinel.
+	AuthorID        string
+	Username        string
+	IconEmoji       string
+	IconURL         string
+	ParentID        string
+	ParentType      string
+	ParentMessageID string
+	Body            string
+	Attachments     []model.MessageAttachment
+}
+
+// PostBotCard posts a bot-authored card on a user's behalf. See SendBotCard.
+func (s *MessageService) PostBotCard(ctx context.Context, in BotCardInput) (*model.Message, error) {
+	if in.RequestUserID == "" {
+		return nil, fmt.Errorf("message: requester required: %w", ErrForbidden)
+	}
+	if err := s.checkAccess(ctx, in.RequestUserID, in.ParentID, in.ParentType); err != nil {
+		return nil, err
+	}
+	return s.SendWebhook(ctx, WebhookMessageInput{
+		ParentID:        in.ParentID,
+		ParentType:      in.ParentType,
+		ParentMessageID: in.ParentMessageID,
+		AuthorID:        in.AuthorID,
+		Body:            in.Body,
+		Username:        in.Username,
+		AvatarURL:       in.IconURL,
+		IconEmoji:       in.IconEmoji,
+		Attachments:     in.Attachments,
 	})
 }
 

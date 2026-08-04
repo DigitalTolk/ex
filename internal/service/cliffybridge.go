@@ -205,12 +205,9 @@ type mintResponse struct {
 }
 
 func (b *CliffyBridge) mint(ctx context.Context, userID, email string) (cachedBridgeToken, error) {
-	assertion, err := b.signAssertion(userID, email)
-	if err != nil {
-		return cachedBridgeToken{}, fmt.Errorf("cliffybridge: sign assertion: %w", err)
-	}
-
-	body, _ := json.Marshal(map[string]string{"assertion": assertion})
+	// HS256 signing with a []byte key cannot fail, so there is no error to guard
+	// here — a guard would be unreachable (and uncoverable) code.
+	body, _ := json.Marshal(map[string]string{"assertion": b.signAssertion(userID, email)})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.mintURL, bytes.NewReader(body))
 	if err != nil {
 		return cachedBridgeToken{}, fmt.Errorf("cliffybridge: build request: %w", err)
@@ -247,7 +244,10 @@ func (b *CliffyBridge) mint(ctx context.Context, userID, email string) (cachedBr
 // signAssertion mints the short-lived HS256 assertion CliffHub verifies. It
 // uses MapClaims so the `aud` claim serializes as a plain string (CliffHub
 // accepts either shape) and the JSON is exactly what firebase/php-jwt expects.
-func (b *CliffyBridge) signAssertion(userID, email string) (string, error) {
+//
+// Returns no error: HMAC signing only fails on a key that is not a []byte, and
+// b.secret always is (see mustSigned).
+func (b *CliffyBridge) signAssertion(userID, email string) string {
 	now := b.now()
 	claims := jwt.MapClaims{
 		"iss":   bridgeAssertionIssuer,
@@ -257,7 +257,7 @@ func (b *CliffyBridge) signAssertion(userID, email string) (string, error) {
 		"iat":   now.Unix(),
 		"exp":   now.Add(b.assertionTTL).Unix(),
 	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(b.secret)
+	return mustSigned(jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(b.secret))
 }
 
 // Revoke tears down a user's bridged session on ex logout: it clears the cached
@@ -276,11 +276,7 @@ func (b *CliffyBridge) Revoke(ctx context.Context, userID, email string) error {
 		return nil
 	}
 
-	assertion, err := b.signAssertion(userID, strings.TrimSpace(email))
-	if err != nil {
-		return fmt.Errorf("cliffybridge: sign revoke assertion: %w", err)
-	}
-	body, _ := json.Marshal(map[string]string{"assertion": assertion})
+	body, _ := json.Marshal(map[string]string{"assertion": b.signAssertion(userID, strings.TrimSpace(email))})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.revokeURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("cliffybridge: build revoke request: %w", err)

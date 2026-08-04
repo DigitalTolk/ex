@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
@@ -28,9 +29,13 @@ func NewBotHandler(svc *service.BotService) *BotHandler {
 
 // botResponse pairs a bot's metadata with the parts of its user row admins need
 // to see (display name and whether it's been retired).
+//
+// Field names are snake_case throughout this API, matching Mattermost's
+// integration APIs — third-party tooling written against MM's bot endpoints then
+// reads ex's responses without a field-name translation layer.
 type botResponse struct {
 	*model.BotAccount
-	DisplayName string `json:"displayName,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
 	Status      string `json:"status,omitempty"`
 }
 
@@ -60,16 +65,22 @@ func (h *BotHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
 	}
+	// Mattermost's POST /api/v4/bots takes username + display_name; ex's bot has a
+	// single name. All three spellings are accepted so a client written against
+	// either API works, with the most specific winning.
 	var body struct {
 		Name        string `json:"name"`
+		Username    string `json:"username"`
+		DisplayName string `json:"display_name"`
 		Description string `json:"description"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
+	name := firstNonBlank(body.Name, body.DisplayName, body.Username)
 	actorID := middleware.UserIDFromContext(r.Context())
-	user, bot, err := h.svc.CreateBot(r.Context(), actorID, body.Name, body.Description)
+	user, bot, err := h.svc.CreateBot(r.Context(), actorID, name, body.Description)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "create_error", err.Error())
 		return
@@ -114,32 +125,54 @@ func (h *BotHandler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 // SetWebhook makes a bot an external (outgoing-webhook) bot, or clears it
-// (empty callback_url). ex then POSTs each @mention event to the URL and posts
-// the response back.
+// (empty callback_url). ex then POSTs each @mention or trigger-word event to the
+// URL and posts the response back.
+//
+// transport selects the event wire format: "mattermost" for MM's form-encoded
+// outgoing-webhook payload (what an existing MM bot parses), or "ex" — the
+// default — for ex's HMAC-signed JSON.
 func (h *BotHandler) SetWebhook(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
 	}
 	var body struct {
-		CallbackURL string `json:"callback_url"`
+		CallbackURL  string   `json:"callback_url"`
+		Transport    string   `json:"transport"`
+		TriggerWords []string `json:"trigger_words"`
+		TriggerWhen  int      `json:"trigger_when"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
 	id := pathParam(r, "id")
-	secret, err := h.svc.SetWebhook(r.Context(), id, body.CallbackURL)
+	secret, err := h.svc.ConfigureWebhook(r.Context(), id, service.BotWebhookConfig{
+		CallbackURL:  body.CallbackURL,
+		Transport:    model.BotTransport(body.Transport),
+		TriggerWords: body.TriggerWords,
+		TriggerWhen:  model.BotTriggerWhen(body.TriggerWhen),
+	})
 	if err != nil {
-		if errors.Is(err, service.ErrInvalidCallbackURL) {
+		switch {
+		case errors.Is(err, service.ErrInvalidCallbackURL):
 			writeError(w, http.StatusBadRequest, "invalid_callback_url", err.Error())
-			return
+		case errors.Is(err, service.ErrInvalidTransport):
+			writeError(w, http.StatusBadRequest, "invalid_transport", err.Error())
+		case errors.Is(err, service.ErrInvalidTriggerWord),
+			errors.Is(err, service.ErrTooManyTriggerWords),
+			errors.Is(err, service.ErrTriggerWordsNeedCallback):
+			writeError(w, http.StatusBadRequest, "invalid_trigger_words", err.Error())
+		default:
+			h.writeLookupError(w, r, err)
 		}
-		h.writeLookupError(w, r, err)
 		return
 	}
-	slog.Info("bot audit: webhook set", "actorID", middleware.UserIDFromContext(r.Context()), "botUserID", id, "enabled", body.CallbackURL != "")
-	// Reveal the signing secret once so the operator can verify X-Ex-Signature on
-	// the receiver. Empty when the webhook was cleared.
+	slog.Info("bot audit: webhook set",
+		"actorID", middleware.UserIDFromContext(r.Context()), "botUserID", id,
+		"enabled", body.CallbackURL != "", "transport", body.Transport, "triggers", len(body.TriggerWords))
+	// Reveal the shared secret once so the operator can configure the receiver: it
+	// verifies X-Ex-Signature under the "ex" transport, and is the body's `token`
+	// under "mattermost". Empty when the webhook was cleared.
 	writeJSON(w, http.StatusOK, JSON{"ok": true, "signing_secret": secret})
 }
 
@@ -198,6 +231,17 @@ func (h *BotHandler) RevokeToken(w http.ResponseWriter, r *http.Request) {
 		"actorID", middleware.UserIDFromContext(r.Context()),
 		"botUserID", botID, "tokenID", tokenID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// firstNonBlank returns the first argument that isn't blank — used where an API
+// accepts several spellings of the same field for compatibility.
+func firstNonBlank(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // writeLookupError maps a service error to a response: a missing bot or token

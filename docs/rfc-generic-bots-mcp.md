@@ -1,6 +1,8 @@
 # Generic bots + MCP for ex (Mattermost-shaped)
 
-**Status:** Implemented (platform + MCP + Cliffy-on-platform landed; gaps noted in §8)
+**Status:** Implemented (platform + MCP + Cliffy-on-platform landed; Mattermost
+payload compatibility — outgoing webhooks, trigger words, slash commands,
+interactive actions — landed; gaps noted in §8)
 **Author:** Habib Altaf · **Reviewer:** Günter Grodotzki (CTO) · **Date:** 2026-07-29
 
 This is the single design record for turning ex's hardcoded `@cliffy` assistant
@@ -37,21 +39,51 @@ webhooks). Cliffy was a **separate legacy path** bypassing all of it. The work w
 | Bot **auth on all routes** (`exbot_` → same claims as a human) | ✅ | `middleware.AuthWithBots`, `handler/router.go` |
 | Bot **admin CRUD API** (create bot, issue/revoke tokens, set webhook) | ✅ | `handler/bot.go`, `/api/v1/admin/bots…` |
 | **Incoming webhooks** (post as bot; MM/Slack payload) | ✅ compatible | `service/webhook.go`, public `POST /hooks/{id}` |
-| **Event dispatch** (notify a bot on `@mention` / thread reply) | ✅ | `service/botdispatch.go` (`RegisterBot`, `maybeDispatchToBots`) |
-| **Outgoing webhooks** (HMAC-signed event → bot callback URL → reply) | ✅ ex's own contract | `service/webhookbot.go` (`webhookBotHandler`) |
-
-**Honesty on "Mattermost-compatible":** incoming webhooks and the bot-account/token
-model are genuinely MM/Slack-*compatible* (same payloads/auth). Outgoing webhooks
-are **not**: ex POSTs its own JSON event signed with `X-Ex-Timestamp` + HMAC
-`X-Ex-Signature`, where MM POSTs form-encoded fields with a body `token`. Only the
-*reply* shape (`text` + `response_type`) is MM/Slack-style. So an existing MM
-outgoing-webhook bot would **not** work against ex unchanged. Slash commands and
-interactive message actions don't exist yet (§8). Net: ex is Mattermost-*shaped*
-(D1), a deliberate design choice — not a drop-in Mattermost.
+| **Event dispatch** (`@mention` / trigger word / thread reply) | ✅ | `service/botdispatch.go` (`RegisterBot`, `maybeDispatchToBots`) |
+| **Outgoing webhooks** — MM form-encoded **or** ex signed JSON | ✅ compatible (MM transport) | `service/webhookbot.go` |
+| **Trigger words** (MM's `trigger_word` / `trigger_when`) | ✅ compatible | `service/bottriggers.go` |
 | **MCP server** (tool protocol over Streamable HTTP) | ✅ | `handler/mcp.go`, `/api/v1/mcp` behind `AuthWithBots` |
-| **Slash commands** (register + MM request/response) | ❌ gap | designed, not wired (§8) |
-| **Interactive message actions** (attachment buttons + callback) | ❌ gap | §8 |
-| **Bot-admin frontend UI** | ❌ gap | backend exists; no `src` page |
+| **Slash commands** (register + MM request/response + `response_url`) | ✅ compatible | `service/extcommand.go`, `handler/extcommand.go` |
+| **Interactive message actions** (attachment buttons/selects + callback) | ✅ compatible | `service/messageactions.go`, `handler/messageaction.go` |
+| **Bot-admin frontend UI** | ✅ | `src/pages/BotsPage.tsx`, `src/components/admin/BotsPanel.tsx` |
+
+**Where "Mattermost-compatible" now holds — and where it doesn't.** The three
+integration *payloads* third-party bots actually depend on are emitted in MM's exact
+wire shape, so an existing MM receiver works unchanged:
+
+- **Incoming webhooks** — same payload (`text`, `channel`, `username`, `icon_url`,
+  `icon_emoji`, `attachments`) and same semantics (`~channel`/`@user` targeting,
+  `<!channel>`/`<url|label>` translation, creator-must-be-member).
+- **Outgoing webhooks** — per-bot `transport`. `"mattermost"` POSTs MM's
+  form-encoded fields (`token`, `team_id`, `channel_id`, `channel_name`, `user_id`,
+  `user_name`, `post_id`, `text`, `trigger_word`, `timestamp`) with the shared
+  secret as the body `token`. `"ex"` (the default for new bots) keeps ex's
+  HMAC-signed JSON, which is strictly better authentication — a signature bound to
+  a timestamp rather than a bearer token in the body.
+- **Slash commands** — MM's form-encoded invocation, MM's response
+  (`response_type`, `text`, `attachments`, `username`, `icon_url`,
+  `goto_location`), and a working `response_url` for delayed replies
+  (30-minute TTL, matching MM's documented window).
+- **Interactive actions** — MM's attachment `actions` with `integration.{url,
+  context}`, MM's action request (`user_id`, `channel_id`, `post_id`, `trigger_id`,
+  `context`) and response (`ephemeral_text`, `update.{message,props.attachments}`).
+
+**Still not a drop-in Mattermost server (D1).** ex serves `/api/v1`, not
+`/api/v4`, so MM's *client libraries* (`mattermost-driver`, `mmpy_bot`) and its
+plugin system do not work against ex. Doing that would need, beyond route
+translation: a real unique `username` on `model.User` (plus a backfill — ex users
+have only email + display name), a synthetic team threaded through every
+team-scoped route, an id format MM clients accept (`bot_<ulid>` is 30 chars where
+MM validates 26 lowercase alphanumerics), and a `/api/v4/websocket` speaking MM's
+frame protocol. That remains a non-goal.
+
+**Two documented approximations** in the MM payloads, both centralized in
+`service/mmcompat.go`:
+
+- `team_id` / `team_domain` are a **single synthetic team** — ex has no teams.
+- `user_name` is **derived from the email local part** — ex has no usernames. It is
+  a display label, not an identifier: it is not unique and nothing resolves a user
+  from it. Receivers must key on `user_id`.
 
 ## 3. The problem it replaced: Cliffy as a parallel hardcoded path
 
@@ -93,9 +125,9 @@ it stops being hardcoded *in ex*.
   (`EnsureBot`), triggered via Track A dispatch, replying through the platform. Its
   in-chat handler (`handler/cliffy_inchat.go`) implements `BotHandler`; confirm-first
   writes, threaded continuity, and "typing…" are ordinary bot behaviors. It reaches
-  CliffHub via the identity bridge (§7). (Note: because ex's *outgoing*-webhook
-  contract is bespoke, not MM's, a bot is portable across ex's own bot models — not
-  a drop-in against a real Mattermost server; see the honesty note in §2.)
+  CliffHub via the identity bridge (§7). (Note: an MM outgoing-webhook *receiver*
+  now works against ex unchanged via the `"mattermost"` transport, but ex is still
+  not a server MM's own client libraries can drive — see §2.)
 
 ## 5. Bot identity & "act-as-user" (decided, implemented)
 
@@ -194,14 +226,53 @@ feeds raw channel messages to the agent as instructions (only the conversation
 
 ## 8. Gaps / not yet done
 
-- **Slash commands & interactive actions** — designed, not wired (confirm-first is
-  currently phrase-classified, not an attachment-button callback).
-- **Bot-admin UI** — backend API exists; no `src` page yet.
+- **Cliffy's confirm-first is still phrase-classified**, not an attachment-button
+  callback — now that interactive actions exist, moving it onto a real
+  Approve/Cancel button is a straightforward follow-up.
+- **Interactive dialogs** — MM's `trigger_id`-authorized modal dialogs. ex mints and
+  sends a `trigger_id` for payload compatibility but has nowhere to open a dialog,
+  so an integration that opens one on the callback gets no modal.
+- **Ephemeral posts** — ex has no ephemeral message in a channel. A slash command's
+  ephemeral response works (it answers its live HTTP caller), but an ephemeral
+  *bot-dispatch* reply is dropped and an ephemeral *delayed* command response is
+  dropped: with no caller to answer, the safe direction is not posting.
+- **Command rename** — the trigger is a claimed unique key, so renaming is
+  delete + re-create rather than an in-place edit.
 - **Cliffy widget vs in-chat** — the standalone `CliffyLauncher`/`CliffyPanel` widget
   still ships alongside the in-chat `@cliffy` bot; consolidating onto the bot path is
   a follow-up product decision.
-- **Live external-bot run** — outgoing-webhook transport is unit-tested; no external
-  bot exercised end-to-end yet.
+- **Live external-bot run** — both transports are unit-tested against an httptest
+  receiver; no real third-party MM bot exercised end-to-end yet. That is the one
+  remaining proof that the compatibility claim above holds in practice.
+
+## 8a. Test coverage of the bot platform
+
+The whole surface in §2 is now at the repo's 100% statement gate (see COVERAGE.md),
+including the parts that predated this work and had none: `store/bot.go` and
+`store/redis_cliffy_inchat.go` were at 0%, `handler/bot.go` at 4%,
+`handler/cliffy_inchat.go` at 4%, and `service/botdispatch.go`'s async half at 42%.
+
+Three seams were added to make otherwise-untestable behaviour reachable, each
+narrowing a concrete class of bug:
+
+- **`handler.cliffyPendingStore`** — the in-chat pending store is an interface, so
+  the confirm-first race (two "yes" replies, only one may execute the write) is
+  tested deterministically instead of by timing. Note the trap this introduced and
+  now guards against: assigning a nil `*store.CliffyInChatStore` to an interface
+  field yields a *non-nil* interface, so `NewCliffyHandler` assigns it only when
+  non-nil — otherwise every `h.inchat != nil` guard passes and then dereferences.
+- **`handler.MessageActionInvoker`** — the action endpoint takes an interface, so
+  its HTTP contract is tested without standing up the message service.
+- **`service.CommandResponseStore`** — the delayed-response (`response_url`) store
+  is an interface, so that path is tested without Redis.
+
+Per the coverage policy, provably-dead error guards were deleted rather than
+annotated: `json.Marshal` over all-string payloads (three sites), HMAC signing
+with a `[]byte` key (now `service.mustSigned`), re-marshalling a value that just
+came from `json.Unmarshal` (now `handler.mustJSON`), and a duplicated
+not-configured branch in `ProxyAPI` that its own fail-fast guard already covered.
+`CreateCommand` uses the package's existing `randRead` seam so its
+randomness-failure arm stays reachable.
 - **Live MCP `tools/call` with a real `exbot_` token** — covered hermetically by the
   HTTP test; a live smoke against the running server is pending.
 - **Cliffy live agent run** — point `CLIFFY_AGENT_URL` at a running CliffHub agent and
@@ -211,7 +282,18 @@ feeds raw channel messages to the agent as instructions (only the conversation
 
 - **D1 — MM-*shaped*, not literal `/api/v4`.** Adopt MM's bot/webhook/slash *patterns
   and payloads* on ex's own `/api/v1`. Literal `/api/v4` is a large permanent surface
-  whose only payoff is running MM's ecosystem verbatim — not our goal.
+  whose only payoff is running MM's ecosystem verbatim — not our goal. Refined by D4.
+- **D4 — payload-level compatibility, deliberately.** Outgoing webhooks, slash
+  commands, and interactive actions now speak MM's exact wire format, because that
+  is what real MM integrations are built against — most "Mattermost bots" are
+  webhook/slash-command integrations, not driver-based clients. This buys genuine
+  compatibility without the permanent second public API surface (and the username
+  migration) that literal `/api/v4` would require. The admin APIs are snake_case for
+  the same reason.
+- **D5 — the outgoing-webhook transport is per bot, and defaults to ex's.** A new
+  bot gets HMAC-signed JSON; `"mattermost"` is opt-in for a bot that already exists
+  elsewhere. Defaulting the other way would hand every new integration the weaker
+  body-token authentication for no benefit.
 - **D2 — ex as an MCP server first; Cliffy as an MCP client of CliffHub second.**
 - **D3 — both hosting models; the outgoing webhook is the generic contract**,
   in-process responders an optimization on the same event contract.

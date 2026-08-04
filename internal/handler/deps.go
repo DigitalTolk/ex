@@ -50,6 +50,12 @@ type Deps struct {
 	Webhook    *WebhookHandler
 	Activity   *ActivityHandler
 	Command    *CommandHandler
+	// ExternalCommand serves admin CRUD for Mattermost-shaped slash commands and
+	// their public response_url endpoint; nil skips those routes (built-in
+	// commands still work).
+	ExternalCommand *ExternalCommandHandler
+	// MessageAction runs interactive attachment actions; nil skips those routes.
+	MessageAction *MessageActionHandler
 	// Cliffy is nil unless the CliffHub identity bridge is configured.
 	Cliffy *CliffyHandler
 	// Bot serves the admin bot-account API; nil skips those routes.

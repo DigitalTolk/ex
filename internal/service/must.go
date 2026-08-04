@@ -24,3 +24,13 @@ func mustJSONBody(b []byte, err error) []byte {
 	}
 	return b
 }
+
+// mustSigned unwraps a JWT SignedString for an HMAC key. HS256 signing only fails
+// on a key that is not a []byte, and every caller here passes one, so the error
+// branch at the call site was permanently dead.
+func mustSigned(token string, err error) string {
+	if err != nil {
+		panic(fmt.Sprintf("service: HMAC signing of a static claim set failed: %v", err))
+	}
+	return token
+}

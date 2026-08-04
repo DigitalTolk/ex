@@ -275,6 +275,14 @@ func botTokenPK(hash string) string { return "BOTTOKEN#" + hash }
 // count instead of a full-table Scan (the same shape as userTokenGSI1PK).
 func botTokenGSI1PK(botUserID string) string { return "BOTTOKENBOT#" + botUserID }
 
+// External slash commands: a metadata row per command, plus a claim row per
+// trigger word so uniqueness is enforced by a conditional write rather than a
+// read-then-write race (the same pattern as USEREMAIL#).
+func extCommandPK(id string) string { return "COMMAND#" + id }
+func extCommandTriggerPK(trigger string) string {
+	return "COMMANDTRIGGER#" + strings.ToLower(strings.TrimSpace(trigger))
+}
+
 func categoryNameSK(name string) string {
 	return "CATEGORYNAME#" + strings.ToLower(strings.TrimSpace(name))
 }

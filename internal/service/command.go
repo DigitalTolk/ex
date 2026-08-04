@@ -36,6 +36,33 @@ type CommandRequest struct {
 	UserID     string
 	ParentID   string
 	ParentType string // ParentChannel or ParentConversation
+	// Text is everything after the trigger word — the command's arguments. Always
+	// empty for built-in commands, which take none; external (Mattermost-shaped)
+	// commands receive it as MM's `text` field.
+	Text string
+}
+
+// CommandResult is the outcome of a slash-command run.
+//
+// Built-in commands only ever post a message. External commands additionally
+// support Mattermost's two other outcomes: an ephemeral reply shown to the caller
+// alone (MM's default response type), and a client-side navigation.
+type CommandResult struct {
+	// Message is the post the command made, when it made one.
+	Message *model.Message `json:"message,omitempty"`
+	// EphemeralText is shown only to the invoking user and is never persisted.
+	EphemeralText string `json:"ephemeral_text,omitempty"`
+	// GotoLocation is an http(s) URL the client should open. Already filtered.
+	GotoLocation string `json:"goto_location,omitempty"`
+}
+
+// ExternalCommandRunner supplies admin-registered (Mattermost-shaped) commands to
+// the registry. Satisfied by *ExternalCommandService; nil means built-ins only.
+type ExternalCommandRunner interface {
+	// ListCommands returns the external commands for the "/" autocomplete.
+	ListCommands(ctx context.Context) []CommandInfo
+	// RunCommand invokes one by trigger, reporting ErrUnknownCommand if absent.
+	RunCommand(ctx context.Context, trigger string, req CommandRequest) (CommandResult, error)
 }
 
 // Command is one executable slash command. Run returns the message the
@@ -52,6 +79,8 @@ type Command interface {
 type CommandService struct {
 	order  []CommandInfo
 	byName map[string]Command
+	// external serves admin-registered commands. Set once at wiring time.
+	external ExternalCommandRunner
 }
 
 // NewCommandService creates an empty registry.
@@ -67,23 +96,59 @@ func (s *CommandService) Register(cmd Command) {
 	s.byName[info.Name] = cmd
 }
 
-// List returns the registered commands in registration order. Always
-// non-nil so the handler serializes an empty array, not null.
-func (s *CommandService) List() []CommandInfo {
-	out := make([]CommandInfo, len(s.order))
-	copy(out, s.order)
+// SetExternalRunner wires admin-registered external commands into the registry.
+// Optional — without it, only compiled-in commands exist.
+func (s *CommandService) SetExternalRunner(r ExternalCommandRunner) { s.external = r }
+
+// BuiltinTriggers returns the set of compiled-in triggers, so external-command
+// registration can refuse to shadow one (a built-in always wins in Run below, so
+// an external command on the same trigger would be silently dead).
+func (s *CommandService) BuiltinTriggers() map[string]bool {
+	out := make(map[string]bool, len(s.byName))
+	for name := range s.byName {
+		out[name] = true
+	}
 	return out
 }
 
-// Run executes a registered command. The command itself owns access control
-// (each verifies the caller's membership in the target chat before acting).
-func (s *CommandService) Run(ctx context.Context, name string, req CommandRequest) (*model.Message, error) {
-	cmd, ok := s.byName[name]
-	if !ok {
-		return nil, fmt.Errorf("command %q: %w", name, ErrUnknownCommand)
+// List returns the commands available to clients: built-ins in registration
+// order, then external ones. Always non-nil so the handler serializes an empty
+// array, not null.
+func (s *CommandService) List(ctx context.Context) []CommandInfo {
+	out := make([]CommandInfo, len(s.order))
+	copy(out, s.order)
+	if s.external == nil {
+		return out
 	}
+	// A built-in with the same trigger shadows an external command at dispatch, so
+	// it also shadows it in the list — offering both would show a duplicate entry
+	// where only one can ever run.
+	builtin := s.BuiltinTriggers()
+	for _, info := range s.external.ListCommands(ctx) {
+		if builtin[info.Name] {
+			continue
+		}
+		out = append(out, info)
+	}
+	return out
+}
+
+// Run executes a registered command: a built-in if one owns the name, otherwise
+// an external one. Each command owns its own access control (built-ins verify the
+// caller's membership; the external runner checks it before calling out).
+func (s *CommandService) Run(ctx context.Context, name string, req CommandRequest) (CommandResult, error) {
 	if req.ParentType != ParentChannel && req.ParentType != ParentConversation {
-		return nil, fmt.Errorf("command: unknown parent type %q: %w", req.ParentType, ErrForbidden)
+		return CommandResult{}, fmt.Errorf("command: unknown parent type %q: %w", req.ParentType, ErrForbidden)
 	}
-	return cmd.Run(ctx, req)
+	if cmd, ok := s.byName[name]; ok {
+		msg, err := cmd.Run(ctx, req)
+		if err != nil {
+			return CommandResult{}, err
+		}
+		return CommandResult{Message: msg}, nil
+	}
+	if s.external != nil {
+		return s.external.RunCommand(ctx, name, req)
+	}
+	return CommandResult{}, fmt.Errorf("command %q: %w", name, ErrUnknownCommand)
 }

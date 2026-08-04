@@ -20,6 +20,9 @@ func clearEnv(t *testing.T) {
 		"SENTRY_FRONTEND_REPLAY_SESSION_SAMPLE_RATE", "SENTRY_FRONTEND_REPLAY_ERROR_SAMPLE_RATE",
 		"ACCESS_LOG_ENABLED",
 		"MS_TENANT_ID", "MS_CLIENT_ID", "MS_CLIENT_SECRET", "MS_PROFILE_SYNC_INTERVAL",
+		// The Cliffy bridge vars are validated as a pair, so an ambient value would
+		// make every other Load test depend on the developer's shell.
+		"CLIFFY_BRIDGE_SECRET", "CLIFFY_BRIDGE_MINT_URL", "CLIFFY_AGENT_URL", "CLIFFY_WEB_BASE",
 	}
 
 	saved := make(map[string]string)
@@ -481,5 +484,52 @@ func TestLoadMSProfileSyncInterval(t *testing.T) {
 				t.Fatalf("Load with MS_PROFILE_SYNC_INTERVAL=%q should fail", bad)
 			}
 		})
+	}
+}
+
+// The Cliffy bridge is half-configured if only one of the secret/mint-URL pair is
+// set — that would fail at call time instead of at boot, so Load fails fast.
+func TestLoadCliffyBridgePairing(t *testing.T) {
+	t.Run("secret without a mint URL is rejected", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("CLIFFY_BRIDGE_SECRET", "a-secret-that-is-long-enough-here")
+		t.Setenv("CLIFFY_BRIDGE_MINT_URL", "")
+		if _, err := Load(); err == nil {
+			t.Fatal("want a boot failure for a half-configured bridge")
+		}
+	})
+
+	t.Run("a mint URL without a secret is rejected", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("CLIFFY_BRIDGE_SECRET", "")
+		t.Setenv("CLIFFY_BRIDGE_MINT_URL", "https://cliffhub.example/api/ai/bridge/mint")
+		if _, err := Load(); err == nil {
+			t.Fatal("want a boot failure for a half-configured bridge")
+		}
+	})
+
+	t.Run("both set together is accepted", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("CLIFFY_BRIDGE_SECRET", "a-secret-that-is-long-enough-here")
+		t.Setenv("CLIFFY_BRIDGE_MINT_URL", "https://cliffhub.example/api/ai/bridge/mint")
+		if _, err := Load(); err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+	})
+}
+
+// Outside development the bridge secret must be long enough to be a real HMAC
+// key — a short one would boot fine and then sign assertions weakly.
+func TestLoadRejectsShortCliffyBridgeSecretOutsideDevelopment(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("ENV", "production")
+	t.Setenv("JWT_SECRET", "a-production-jwt-secret-of-sufficient-length")
+	t.Setenv("CLIFFY_BRIDGE_SECRET", "too-short")
+	t.Setenv("CLIFFY_BRIDGE_MINT_URL", "https://cliffhub.example/api/ai/bridge/mint")
+	if _, err := Load(); err == nil {
+		t.Fatal("want a boot failure for a short bridge secret outside development")
 	}
 }

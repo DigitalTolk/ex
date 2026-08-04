@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -304,5 +305,93 @@ func TestNewRouter_MinimalDepsBuilds(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/healthz = %d, want 200", rec.Code)
+	}
+}
+
+// The optional-handler blocks in NewRouter only execute when their Deps field is
+// set, so a Deps carrying only the required core leaves those routes unregistered.
+// This wires every optional handler this package owns and asserts each route
+// matched — a 401/403/404-from-the-handler is fine, an unmatched route falls
+// through to the SPA and returns HTML.
+func TestRouterRegistersOptionalIntegrationRoutes(t *testing.T) {
+	jwtMgr := auth.NewJWTManager("test-secret-that-is-long-enough-for-hs256", 15*time.Minute, 24*time.Hour)
+	router := NewRouter(&Deps{
+		Auth: &AuthHandler{}, User: &UserHandler{}, Channel: &ChannelHandler{},
+		Conversation: &ConversationHandler{}, WS: &WSHandler{},
+		JWT: jwtMgr, AppVersion: "test", AllowOrigins: []string{"*"},
+
+		// The integration surface: bots, MCP, MM-shaped commands, interactive
+		// actions, and the Cliffy bridge.
+		Bot:             &BotHandler{},
+		ExternalCommand: &ExternalCommandHandler{},
+		MessageAction:   &MessageActionHandler{},
+		Cliffy:          &CliffyHandler{},
+	})
+
+	routes := []struct {
+		method string
+		path   string
+	}{
+		// Bot admin + tokens.
+		{"GET", "/api/v1/admin/bots"},
+		{"POST", "/api/v1/admin/bots"},
+		{"GET", "/api/v1/admin/bots/bot_x"},
+		{"DELETE", "/api/v1/admin/bots/bot_x"},
+		{"PUT", "/api/v1/admin/bots/bot_x/webhook"},
+		{"GET", "/api/v1/admin/bots/bot_x/tokens"},
+		{"POST", "/api/v1/admin/bots/bot_x/tokens"},
+		{"DELETE", "/api/v1/admin/bots/bot_x/tokens/tid"},
+		// MCP shares one path for POST (requests) and GET (event stream).
+		{"POST", "/api/v1/mcp"},
+		{"GET", "/api/v1/mcp"},
+		// Mattermost-shaped slash commands.
+		{"GET", "/api/v1/admin/commands"},
+		{"POST", "/api/v1/admin/commands"},
+		{"GET", "/api/v1/admin/commands/c1"},
+		{"PATCH", "/api/v1/admin/commands/c1"},
+		{"DELETE", "/api/v1/admin/commands/c1"},
+		// Interactive attachment actions, per parent type.
+		{"POST", "/api/v1/channels/ch1/messages/m1/actions/act1"},
+		{"POST", "/api/v1/conversations/conv1/messages/m1/actions/act1"},
+		// Cliffy bridge.
+		{"POST", "/api/v1/cliffy/session"},
+		{"POST", "/api/v1/cliffy/chat"},
+		{"POST", "/api/v1/cliffy/api"},
+		{"POST", "/api/v1/cliffy/share"},
+		{"POST", "/api/v1/cliffy/revoke"},
+	}
+	for _, r := range routes {
+		req := httptest.NewRequest(r.method, r.path, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		// An unregistered API path falls through to the SPA handler, which answers
+		// with HTML rather than the JSON/401 a matched route produces.
+		if ct := rec.Header().Get("Content-Type"); strings.HasPrefix(ct, "text/html") {
+			t.Errorf("%s %s fell through to the SPA (status %d) — route not registered", r.method, r.path, rec.Code)
+		}
+	}
+}
+
+// The command response_url is deliberately public: the path token is the whole
+// credential, so it must match without authentication.
+func TestRouterRegistersPublicCommandResponseHook(t *testing.T) {
+	jwtMgr := auth.NewJWTManager("test-secret-that-is-long-enough-for-hs256", 15*time.Minute, 24*time.Hour)
+	svc := service.NewExternalCommandService(service.ExternalCommandDeps{Store: newMemExtCommandStore()})
+	router := NewRouter(&Deps{
+		Auth: &AuthHandler{}, User: &UserHandler{}, Channel: &ChannelHandler{},
+		Conversation: &ConversationHandler{}, WS: &WSHandler{},
+		JWT: jwtMgr, AppVersion: "test", AllowOrigins: []string{"*"},
+		ExternalCommand: NewExternalCommandHandler(svc),
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/hooks/commands/some-token", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	// Reached the handler (unknown token → 404 JSON), not a 401 and not the SPA.
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 from the handler (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "not_found") {
+		t.Errorf("body = %s, want the handler's JSON error", rec.Body.String())
 	}
 }

@@ -88,6 +88,7 @@ describe('MessageInput slash commands', () => {
       command: 'mstmeetings',
       parentType: 'channel',
       parentID: 'chan-1',
+      text: '',
     });
     expect(onSend).not.toHaveBeenCalled();
     // The composer clears like a normal send.
@@ -113,6 +114,7 @@ describe('MessageInput slash commands', () => {
       command: 'mstmeetings',
       parentType: 'conversation',
       parentID: 'conv-1',
+      text: '',
     });
     expect(onSend).not.toHaveBeenCalled();
   });
@@ -236,5 +238,48 @@ describe('MessageInput slash commands', () => {
 
     const alert = await screen.findByTestId('command-error');
     expect(alert.textContent).toContain("Couldn't run /mstmeetings");
+  });
+
+  // External (Mattermost-shaped) commands take arguments, so everything after the
+  // trigger word must run as the command's text rather than post as a message.
+  it('passes the text after the trigger word as the command arguments', async () => {
+    const onSend = vi.fn();
+    render(
+      <MessageInput
+        onSend={onSend}
+        initialBody="/mstmeetings standup with the team"
+        typingParentID="chan-1"
+        typingParentType="channel"
+      />,
+    );
+    await sendViaEnter();
+
+    expect(runCommandMock).toHaveBeenCalledTimes(1);
+    expect(runCommandMock.mock.calls[0][0]).toEqual({
+      command: 'mstmeetings',
+      parentType: 'channel',
+      parentID: 'chan-1',
+      text: 'standup with the team',
+    });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("shows an ephemeral reply as a notice, not an error", async () => {
+    runCommandMock.mockImplementation((_input, opts?: { onSuccess?: (r: unknown) => void }) => {
+      opts?.onSuccess?.({ ephemeral_text: 'Only you can see this' });
+    });
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        initialBody="/mstmeetings"
+        typingParentID="chan-1"
+        typingParentType="channel"
+      />,
+    );
+    await sendViaEnter();
+
+    const notice = await screen.findByTestId('command-notice');
+    expect(notice.textContent).toContain('Only you can see this');
+    expect(screen.queryByTestId('command-error')).toBeNull();
   });
 });

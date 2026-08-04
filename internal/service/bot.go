@@ -24,6 +24,17 @@ import (
 // which tokens exist.
 var ErrBotTokenInvalid = errors.New("bot: invalid token")
 
+// Trigger-word and transport validation errors. Callers map these to a 400.
+var (
+	ErrInvalidTriggerWord  = errors.New("bot: trigger words must be non-empty and contain no whitespace")
+	ErrTooManyTriggerWords = fmt.Errorf("bot: at most %d trigger words", maxTriggerWords)
+	ErrInvalidTransport    = errors.New("bot: transport must be \"ex\" or \"mattermost\"")
+	// ErrTriggerWordsNeedCallback rejects triggers on a bot with no callback URL.
+	// Silently accepting them would leave an admin looking at configured triggers
+	// that can never fire (RefreshTriggers skips callback-less bots).
+	ErrTriggerWordsNeedCallback = errors.New("bot: trigger words require a callback URL")
+)
+
 // botEmailDomain is the synthetic email domain for bot accounts. Every user row
 // needs a unique email — the store keeps a USEREMAIL# uniqueness row per user,
 // so bots sharing an empty email would collide on the second bot ever created.
@@ -50,6 +61,10 @@ type BotService struct {
 	// an N-instance deployment writes at most N times per interval per token.
 	lastUsedMu sync.Mutex
 	lastUsed   map[string]time.Time
+
+	// triggers is the lock-free trigger-word snapshot read by the message send
+	// path. See bottriggers.go.
+	triggers triggerIndexPtr
 }
 
 func NewBotService(bots store.BotStore, users store.UserStore) *BotService {
@@ -63,19 +78,44 @@ func (s *BotService) SetUserService(u *UserService) { s.userSvc = u }
 
 func botEmail(userID string) string { return userID + "@" + botEmailDomain }
 
-// SetWebhook makes a bot an EXTERNAL (outgoing-webhook) bot: ex POSTs each event
-// to callbackURL (validated as a public https endpoint) and posts the response
-// back. It returns the HMAC signing secret so the admin can configure the
-// receiver to verify X-Ex-Signature — without this, the signature would be
-// unverifiable and therefore worthless. The URL must be a public https endpoint.
-// An empty url clears the webhook (returns "").
-func (s *BotService) SetWebhook(ctx context.Context, botUserID, callbackURL string) (string, error) {
-	trimmed := strings.TrimSpace(callbackURL)
+// BotWebhookConfig is the admin-supplied outgoing-webhook configuration of a bot.
+type BotWebhookConfig struct {
+	// CallbackURL must be a public https endpoint. Empty clears the webhook (and
+	// with it the transport and trigger words).
+	CallbackURL string
+	// Transport selects the event wire format; empty means model.BotTransportEx.
+	Transport model.BotTransport
+	// TriggerWords fire the bot without an @mention (MM's trigger model).
+	TriggerWords []string
+	TriggerWhen  model.BotTriggerWhen
+}
+
+// ConfigureWebhook makes a bot an EXTERNAL (outgoing-webhook) bot: ex POSTs each
+// event to CallbackURL (validated as a public https endpoint) and posts the
+// response back. It returns the shared secret so the admin can configure the
+// receiver — under the "ex" transport to verify X-Ex-Signature, under
+// "mattermost" to compare the body's `token`. Without it the authentication on
+// either transport would be unverifiable and therefore worthless.
+//
+// An empty CallbackURL clears the webhook, its secret, and its triggers.
+func (s *BotService) ConfigureWebhook(ctx context.Context, botUserID string, cfg BotWebhookConfig) (string, error) {
+	trimmed := strings.TrimSpace(cfg.CallbackURL)
 	if trimmed != "" {
 		if err := validateCallbackURL(trimmed); err != nil {
 			return "", err
 		}
 	}
+	if !cfg.Transport.Valid() {
+		return "", ErrInvalidTransport
+	}
+	words, err := normalizeTriggerWords(cfg.TriggerWords)
+	if err != nil {
+		return "", err
+	}
+	if len(words) > 0 && trimmed == "" {
+		return "", ErrTriggerWordsNeedCallback
+	}
+
 	bot, err := s.bots.GetBot(ctx, botUserID)
 	if err != nil {
 		return "", err
@@ -83,18 +123,31 @@ func (s *BotService) SetWebhook(ctx context.Context, botUserID, callbackURL stri
 	bot.CallbackURL = trimmed
 	switch {
 	case bot.CallbackURL == "":
+		// Clearing the URL clears everything that only makes sense with it, so a
+		// re-enabled bot can't silently resurrect an old transport or trigger set.
 		bot.CallbackSecret = ""
-	case bot.CallbackSecret == "":
-		var b [24]byte
-		if _, err := randRead(b[:]); err != nil {
-			return "", fmt.Errorf("bot: webhook secret: %w", err)
+		bot.Transport = ""
+		bot.TriggerWords = nil
+		bot.TriggerWhen = model.BotTriggerWhenStartsWith
+	default:
+		if bot.CallbackSecret == "" {
+			var b [24]byte
+			if _, err := randRead(b[:]); err != nil {
+				return "", fmt.Errorf("bot: webhook secret: %w", err)
+			}
+			bot.CallbackSecret = "exwhsec_" + base64.RawURLEncoding.EncodeToString(b[:])
 		}
-		bot.CallbackSecret = "exwhsec_" + base64.RawURLEncoding.EncodeToString(b[:])
+		bot.Transport = cfg.Transport.Normalized()
+		bot.TriggerWords = words
+		bot.TriggerWhen = cfg.TriggerWhen
 	}
 	bot.UpdatedAt = time.Now()
 	if err := s.bots.UpdateBot(ctx, bot); err != nil {
 		return "", err
 	}
+	// Triggers changed → rebuild the dispatcher's snapshot. Off the request path:
+	// the write already succeeded, and the periodic refresh is the backstop.
+	s.refreshTriggersAsync(ctx)
 	// The stored secret is revealed here so the operator can configure the
 	// receiver. (It is never serialized by the read APIs — json:"-".)
 	return bot.CallbackSecret, nil
@@ -106,7 +159,14 @@ func (s *BotService) WebhookBot(ctx context.Context, botUserID string) (BotWebho
 	if err != nil || bot == nil || strings.TrimSpace(bot.CallbackURL) == "" {
 		return BotWebhookTarget{}, false
 	}
-	return BotWebhookTarget{URL: bot.CallbackURL, Secret: bot.CallbackSecret, Name: bot.Name}, true
+	return BotWebhookTarget{
+		URL:          bot.CallbackURL,
+		Secret:       bot.CallbackSecret,
+		Name:         bot.Name,
+		Transport:    bot.Transport,
+		TriggerWords: bot.TriggerWords,
+		TriggerWhen:  bot.TriggerWhen,
+	}, true
 }
 
 // EnsureBot idempotently provisions a bot with a FIXED user id — for built-in
@@ -251,9 +311,25 @@ func (s *BotService) DeleteBot(ctx context.Context, botUserID string) error {
 		}
 	}
 
+	// Clear the outgoing-webhook config before anything else user-visible: while
+	// the META row survives (so authored messages still resolve), WebhookBot()
+	// resolves from it, and a retired bot must stop being dispatchable — otherwise
+	// an @mention or trigger word would still POST to its callback and post a
+	// reply as a deactivated account.
+	if bot, err := s.bots.GetBot(ctx, botUserID); err == nil && bot != nil {
+		bot.CallbackURL, bot.CallbackSecret = "", ""
+		bot.TriggerWords, bot.TriggerWhen = nil, model.BotTriggerWhenStartsWith
+		bot.UpdatedAt = time.Now()
+		if err := s.bots.UpdateBot(ctx, bot); err != nil {
+			return fmt.Errorf("bot: clear webhook on delete: %w", err)
+		}
+	}
+
 	if err := s.bots.RemoveBotFromDirectory(ctx, botUserID); err != nil {
 		return err
 	}
+	// Drop this bot's trigger words from the dispatcher's snapshot.
+	s.refreshTriggersAsync(ctx)
 
 	if s.userSvc != nil {
 		if _, err := s.userSvc.SetStatus(ctx, botUserID, true); err != nil {

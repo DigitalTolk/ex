@@ -1,6 +1,9 @@
-import type { MessageAttachment } from '@/types';
+import { useState } from 'react';
+import type { MessageAction, MessageAttachment } from '@/types';
 import { renderMarkdown } from '@/lib/markdown';
 import { isSafeUrl } from '@/lib/url-safety';
+import { Button } from '@/components/ui/button';
+import { useInvokeMessageAction } from '@/hooks/useMessageActions';
 
 // Image src must be a real fetchable URL — http(s) only. isSafeUrl also admits
 // mailto (fine for links, not images), so narrow it here. The backend already
@@ -11,7 +14,24 @@ function safeImg(url?: string): string | undefined {
   return url;
 }
 
-export function MessageRichAttachments({ attachments, onContentHeightChange }: { attachments?: MessageAttachment[]; onContentHeightChange?: () => void }) {
+// The chat an attachment lives in, needed to invoke its interactive actions.
+// Absent (e.g. in a preview or a search result) renders the actions disabled
+// rather than hiding them, so the message still reads the way its author meant.
+export interface AttachmentActionTarget {
+  parentType: 'channel' | 'conversation';
+  parentID: string;
+  messageID: string;
+}
+
+export function MessageRichAttachments({
+  attachments,
+  onContentHeightChange,
+  actionTarget,
+}: {
+  attachments?: MessageAttachment[];
+  onContentHeightChange?: () => void;
+  actionTarget?: AttachmentActionTarget;
+}) {
   if (!attachments?.length) return null;
   return (
     <div className="mt-2 space-y-2">
@@ -72,10 +92,108 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
               {att.footer}
             </div>
           )}
+          {att.actions?.length ? (
+            <AttachmentActions actions={att.actions} target={actionTarget} onContentHeightChange={onContentHeightChange} />
+          ) : null}
         </div>
       ))}
     </div>
   );
+}
+
+// AttachmentActions renders an attachment's interactive controls and invokes them.
+//
+// One request is in flight at a time per attachment: an action commonly rewrites
+// the message it lives on, so letting a second fire while the first is still
+// running would race two updates against the same post.
+function AttachmentActions({
+  actions,
+  target,
+  onContentHeightChange,
+}: {
+  actions: MessageAction[];
+  target?: AttachmentActionTarget;
+  onContentHeightChange?: () => void;
+}) {
+  const invoke = useInvokeMessageAction();
+  const [note, setNote] = useState('');
+
+  const run = (action: MessageAction, selectedOption?: string) => {
+    if (!target) return;
+    setNote('');
+    invoke.mutate(
+      { ...target, actionID: action.id, selectedOption },
+      {
+        onSuccess: (res) => {
+          // The updated post arrives over the WebSocket; only the ephemeral text
+          // is ours to show, and only to the person who clicked.
+          setNote(res.ephemeral_text ?? '');
+          onContentHeightChange?.();
+        },
+        onError: (err) => {
+          setNote(err instanceof Error ? err.message : "That didn't work — please try again.");
+          onContentHeightChange?.();
+        },
+      },
+    );
+  };
+
+  return (
+    <div className="mt-3 space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {actions.map((action) =>
+          action.type === 'select' ? (
+            <select
+              key={action.id}
+              aria-label={action.name}
+              defaultValue=""
+              disabled={action.disabled || !target || invoke.isPending}
+              onChange={(e) => run(action, e.target.value)}
+              className="h-8 max-w-full rounded-md border bg-background px-2 text-sm disabled:opacity-50"
+            >
+              <option value="" disabled>
+                {action.name}
+              </option>
+              {action.options?.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.text}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <Button
+              key={action.id}
+              size="sm"
+              variant={buttonVariantFor(action.style)}
+              disabled={action.disabled || !target || invoke.isPending}
+              onClick={() => run(action, undefined)}
+            >
+              {action.name}
+            </Button>
+          ),
+        )}
+      </div>
+      {note && (
+        <p className="text-xs text-muted-foreground" role="status">
+          {note}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// buttonVariantFor maps Mattermost's action styles onto ex's button variants.
+// MM also allows an arbitrary hex colour there; those fall back to the default
+// rather than injecting an inline colour that would ignore the theme.
+function buttonVariantFor(style?: string) {
+  switch (style) {
+    case 'primary':
+      return 'default' as const;
+    case 'danger':
+      return 'destructive' as const;
+    default:
+      return 'outline' as const;
+  }
 }
 
 function validColor(value?: string) {

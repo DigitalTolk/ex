@@ -458,8 +458,36 @@ func main() {
 		InChatStore: store.NewCliffyInChatStore(redisCache.Client()),
 	})
 	// External (outgoing-webhook) bots: a mention of a bot_ account with a callback
-	// URL is dispatched over HTTP. Resolver backed by the bot service.
+	// URL — or a message starting with one of its trigger words — is dispatched
+	// over HTTP. Resolvers backed by the bot service.
 	messageSvc.SetBotDirectory(botSvc)
+	messageSvc.SetBotTriggerIndex(botSvc)
+	// Channel/user names for Mattermost-shaped payloads (channel_name, user_name).
+	mmResolver := service.NewMMContextResolver(channelStore, userStore)
+	messageSvc.SetBotContextResolver(mmResolver)
+	// Trigger words are read on the synchronous send path from an in-memory
+	// snapshot, so it is loaded now and refreshed periodically (a change made by
+	// another instance converges within the refresh interval).
+	botSvc.StartTriggerRefresh(ctx)
+
+	// Mattermost-shaped slash commands. Always wired, like bot accounts: inert
+	// until an admin registers one. Delayed responses (response_url) need Redis for
+	// the one-shot tokens and BaseURL to build the URL — both always present here.
+	extCommandSvc := service.NewExternalCommandService(service.ExternalCommandDeps{
+		Store:     store.NewExternalCommandStore(db),
+		Messages:  messageSvc,
+		Responses: store.NewCommandResponseStore(redisCache.Client()),
+		Resolver:  mmResolver,
+		BaseURL:   cfg.BaseURL,
+		// Read lazily: built-ins register above and below this point, and an
+		// external command must never shadow one.
+		Reserved: commandSvc.BuiltinTriggers,
+	})
+	commandSvc.SetExternalRunner(extCommandSvc)
+	extCommandH := handler.NewExternalCommandHandler(extCommandSvc)
+	// Interactive attachment actions (buttons / selects) call back into whichever
+	// integration posted the attachment.
+	messageActionH := handler.NewMessageActionHandler(messageSvc)
 
 	// Register Cliffy as an in-chat bot on the generic dispatch platform: an
 	// "@cliffy" mention (or a reply in its thread) is routed to its handler and
@@ -609,33 +637,35 @@ func main() {
 		cfg.BaseURL, channelStore, membershipStore, conversationStore, messageStore, userSvc, attachmentSvc,
 	))
 	router := handler.NewRouter(&handler.Deps{
-		Auth:         authH,
-		User:         userH,
-		UserState:    userStateH,
-		Channel:      channelH,
-		Conversation: convH,
-		WS:           wsH,
-		Upload:       uploadH,
-		Emoji:        emojiH,
-		Presence:     presenceH,
-		Attachment:   attachmentH,
-		Admin:        adminH,
-		Thread:       threadH,
-		Draft:        draftH,
-		Version:      versionH,
-		Unfurl:       unfurlH,
-		Sidebar:      sidebarH,
-		Search:       searchH,
-		Webhook:      webhookH,
-		Activity:     activityH,
-		Command:      commandH,
-		Cliffy:       cliffyH,
-		Bot:          botH,
-		BotTokens:    botSvc,
-		MCPChat:      messageSvc,
-		JWT:          jwtMgr,
-		FrontendFS:   frontendDist,
-		AppVersion:   appVersion,
+		Auth:            authH,
+		User:            userH,
+		UserState:       userStateH,
+		Channel:         channelH,
+		Conversation:    convH,
+		WS:              wsH,
+		Upload:          uploadH,
+		Emoji:           emojiH,
+		Presence:        presenceH,
+		Attachment:      attachmentH,
+		Admin:           adminH,
+		Thread:          threadH,
+		Draft:           draftH,
+		Version:         versionH,
+		Unfurl:          unfurlH,
+		Sidebar:         sidebarH,
+		Search:          searchH,
+		Webhook:         webhookH,
+		Activity:        activityH,
+		Command:         commandH,
+		ExternalCommand: extCommandH,
+		MessageAction:   messageActionH,
+		Cliffy:          cliffyH,
+		Bot:             botH,
+		BotTokens:       botSvc,
+		MCPChat:         messageSvc,
+		JWT:             jwtMgr,
+		FrontendFS:      frontendDist,
+		AppVersion:      appVersion,
 		// Frontend-only Sentry opt-in — served to every UI surface via meta tags.
 		SentryFrontend: handler.SentryFrontendConfig{
 			DSN:                     cfg.SentryFrontendDSN,

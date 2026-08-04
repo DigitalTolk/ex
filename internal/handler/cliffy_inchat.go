@@ -23,12 +23,22 @@ func (h *CliffyHandler) OwnsThread(ctx context.Context, rootMessageID string) bo
 	return h.inchat != nil && h.inchat.IsCliffyThread(ctx, rootMessageID)
 }
 
-// Handle runs one in-chat Cliffy turn as the asking user and returns the reply
+// Handle satisfies service.BotHandler. Cliffy is a text-only bot: it never sets
+// the attachment, identity-override, or ephemeral fields of a BotReply, so this
+// adapts its reply text to the platform's richer reply shape.
+func (h *CliffyHandler) Handle(ctx context.Context, req service.BotEvent) (service.BotReply, error) {
+	text, err := h.handleTurn(ctx, req)
+	if err != nil {
+		return service.BotReply{}, err
+	}
+	return service.BotReply{Text: text}, nil
+}
+
+// handleTurn runs one in-chat Cliffy turn as the asking user and returns the reply
 // text to post. It resolves a pending write-confirmation first ("yes"/"no"),
 // otherwise runs the agent: a look-up/summary answers directly, a requested
 // change is proposed and parked for confirmation (confirm-in-chat).
-// Satisfies service.BotHandler.
-func (h *CliffyHandler) Handle(ctx context.Context, req service.BotEvent) (string, error) {
+func (h *CliffyHandler) handleTurn(ctx context.Context, req service.BotEvent) (string, error) {
 	if h.agentURL == "" {
 		return "", fmt.Errorf("cliffy: agent not configured")
 	}

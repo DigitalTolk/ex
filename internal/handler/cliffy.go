@@ -114,8 +114,24 @@ type CliffyHandler struct {
 	poster     cliffyPoster
 	convReader cliffyConvReader
 	users      cliffyUserResolver
-	inchat     *store.CliffyInChatStore
+	inchat     cliffyPendingStore
 	client     *http.Client
+}
+
+// cliffyPendingStore is the short-lived in-chat state Cliffy needs: a parked
+// write awaiting the asker's yes/no, and markers for threads it has spoken in.
+// An interface (rather than *store.CliffyInChatStore) so the confirm-first race —
+// two "yes" replies arriving at once, where only one may execute the write — is
+// testable deterministically instead of by timing. Satisfied by
+// *store.CliffyInChatStore.
+type cliffyPendingStore interface {
+	SetPending(ctx context.Context, chatID, userID string, p *store.CliffyPendingWrite) error
+	GetPending(ctx context.Context, chatID, userID string) (*store.CliffyPendingWrite, error)
+	// TakePending claims the parked write atomically; a second caller gets nil.
+	TakePending(ctx context.Context, chatID, userID string) (*store.CliffyPendingWrite, error)
+	ClearPending(ctx context.Context, chatID, userID string)
+	MarkThread(ctx context.Context, rootID string)
+	IsCliffyThread(ctx context.Context, rootID string) bool
 }
 
 // NewCliffyHandler returns a handler, or nil when the bridge is disabled so the
@@ -124,7 +140,7 @@ func NewCliffyHandler(cfg CliffyHandlerConfig) *CliffyHandler {
 	if cfg.Bridge == nil {
 		return nil
 	}
-	return &CliffyHandler{
+	h := &CliffyHandler{
 		bridge:     cfg.Bridge,
 		agentURL:   strings.TrimSpace(cfg.AgentURL),
 		apiOrigin:  strings.TrimRight(strings.TrimSpace(cfg.APIOrigin), "/"),
@@ -133,11 +149,17 @@ func NewCliffyHandler(cfg CliffyHandlerConfig) *CliffyHandler {
 		poster:     cfg.Poster,
 		convReader: cfg.ConvReader,
 		users:      cfg.Users,
-		inchat:     cfg.InChatStore,
 		// No Client.Timeout: streaming responses run for the length of the
 		// agent turn. The request context bounds it instead.
 		client: &http.Client{},
 	}
+	// Assigned only when non-nil: inchat is an interface, and storing a nil
+	// *store.CliffyInChatStore in it would produce a non-nil interface holding a
+	// nil pointer — every `h.inchat != nil` guard would pass and then dereference.
+	if cfg.InChatStore != nil {
+		h.inchat = cfg.InChatStore
+	}
+	return h
 }
 
 // CreateSession establishes (or refreshes) a CliffHub session for the signed-in
@@ -347,16 +369,12 @@ func (h *CliffyHandler) ProxyAPI(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errCliffyBadPath):
 		writeError(w, http.StatusBadRequest, "cliffy_bad_path", "That action path isn't allowed.")
 		return
-	case errors.Is(err, errCliffyNotConfigured):
-		writeError(w, http.StatusServiceUnavailable, "cliffy_unconfigured", "Cliffy actions aren't configured.")
-		return
 	case err != nil:
-		// A bridge/mint failure gets its specific response; anything else
-		// (network to CliffHub) is a generic upstream error.
-		if h.writeBridgeError(w, err) {
-			return
-		}
-		writeError(w, http.StatusBadGateway, "cliffy_unavailable", "Cliffy is temporarily unavailable. Please try again.")
+		// errCliffyNotConfigured cannot reach here — the handler fails fast on an
+		// unconfigured origin above. A bridge/mint failure gets its specific
+		// response; anything else (network to CliffHub) falls through to
+		// writeBridgeError's generic upstream error.
+		h.writeBridgeError(w, err)
 		return
 	}
 
@@ -498,10 +516,8 @@ func (h *CliffyHandler) enrichWithTranscript(ctx context.Context, userID string,
 	}
 	ctxObj["messages"] = transcript
 	payload["context"] = ctxObj
-	if out, err := json.Marshal(payload); err == nil {
-		return out
-	}
-	return body
+	// payload came from json.Unmarshal of body, so re-marshalling it cannot fail.
+	return mustJSON(json.Marshal(payload))
 }
 
 // buildTranscript lists the scope's recent messages (access-checked via the

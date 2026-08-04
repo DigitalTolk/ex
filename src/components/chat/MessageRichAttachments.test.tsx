@@ -1,6 +1,16 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
-import { MessageRichAttachments } from './MessageRichAttachments';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MessageRichAttachments, type AttachmentActionTarget } from './MessageRichAttachments';
+import { apiFetch } from '@/lib/api';
+
+vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
+
+// Interactive actions go through react-query, so those cases need a provider.
+function renderWithClient(node: React.ReactNode) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  return render(<QueryClientProvider client={qc}>{node}</QueryClientProvider>);
+}
 
 describe('MessageRichAttachments', () => {
   it('renders nothing without attachments', () => {
@@ -87,5 +97,102 @@ describe('MessageRichAttachments', () => {
     expect(screen.getByText('Evil title').closest('a')).toBeNull();
     // No <img> survives the unsafe scheme filter.
     expect(document.querySelectorAll('img')).toHaveLength(0);
+  });
+});
+
+describe('MessageRichAttachments interactive actions', () => {
+  const target: AttachmentActionTarget = {
+    parentType: 'channel',
+    parentID: 'ch1',
+    messageID: 'm1',
+  };
+  const buttonAttachment = [
+    {
+      text: 'PR #12',
+      actions: [
+        { id: 'act1', name: 'Approve', type: 'button' as const, style: 'primary' },
+        { id: 'act2', name: 'Reject', type: 'button' as const, style: 'danger' },
+      ],
+    },
+  ];
+
+  beforeEach(() => {
+    vi.mocked(apiFetch).mockReset();
+  });
+
+  it('invokes the action by id and shows the ephemeral reply', async () => {
+    vi.mocked(apiFetch).mockResolvedValue({ ephemeral_text: 'Approved — thanks!' });
+    renderWithClient(<MessageRichAttachments attachments={buttonAttachment} actionTarget={target} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Approved — thanks!'));
+    // The client names only the action id — never a callback URL or context, which
+    // stay server-side.
+    expect(apiFetch).toHaveBeenCalledWith(
+      '/api/v1/channels/ch1/messages/m1/actions/act1',
+      { method: 'POST', body: JSON.stringify({ selected_option: '' }) },
+    );
+  });
+
+  it('sends the chosen option for a select action', async () => {
+    vi.mocked(apiFetch).mockResolvedValue({});
+    renderWithClient(
+      <MessageRichAttachments
+        actionTarget={target}
+        attachments={[
+          {
+            text: 'Pick one',
+            actions: [
+              {
+                id: 'sel1',
+                name: 'Environment',
+                type: 'select' as const,
+                options: [
+                  { text: 'Staging', value: 'staging' },
+                  { text: 'Production', value: 'prod' },
+                ],
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'prod' } });
+
+    await waitFor(() =>
+      expect(apiFetch).toHaveBeenCalledWith('/api/v1/channels/ch1/messages/m1/actions/sel1', {
+        method: 'POST',
+        body: JSON.stringify({ selected_option: 'prod' }),
+      }),
+    );
+  });
+
+  it('surfaces an integration failure without posting anything', async () => {
+    vi.mocked(apiFetch).mockRejectedValue(new Error("That action's integration didn't respond."));
+    renderWithClient(<MessageRichAttachments attachments={buttonAttachment} actionTarget={target} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent("That action's integration didn't respond."),
+    );
+  });
+
+  it('renders actions disabled with no target, and honours the disabled flag', () => {
+    // No target (a preview or search result): the buttons still render so the
+    // message reads as intended, but cannot be used.
+    const { unmount } = renderWithClient(<MessageRichAttachments attachments={buttonAttachment} />);
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
+    unmount();
+
+    renderWithClient(
+      <MessageRichAttachments
+        actionTarget={target}
+        attachments={[{ actions: [{ id: 'a', name: 'Gone', type: 'button' as const, disabled: true }] }]}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Gone' })).toBeDisabled();
   });
 });

@@ -32,6 +32,7 @@ import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 const DirectoriesPage = lazy(() => import('@/pages/DirectoriesPage'));
 const AdminPage = lazy(() => import('@/pages/AdminPage'));
 const IncomingWebhooksPage = lazy(() => import('@/pages/IncomingWebhooksPage'));
+const BotsPage = lazy(() => import('@/pages/BotsPage'));
 const CustomEmojiPage = lazy(() => import('@/pages/CustomEmojiPage'));
 const NewConversationPage = lazy(() => import('@/pages/NewConversationPage'));
 const ThreadsPage = lazy(() => import('@/pages/ThreadsPage'));
@@ -141,6 +142,7 @@ function AppRoutes() {
         <Route path="drafts" element={<DraftsPage />} />
         <Route path="admin" element={<AdminPage />} />
         <Route path="webhooks" element={<IncomingWebhooksPage />} />
+        <Route path="bots" element={<BotsPage />} />
         <Route path="emojis" element={<CustomEmojiPage />} />
         <Route path="channel/:id" element={<ChannelView />} />
         <Route path="conversations/new" element={<NewConversationPage />} />
