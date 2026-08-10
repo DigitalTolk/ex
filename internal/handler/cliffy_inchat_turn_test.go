@@ -265,11 +265,46 @@ func TestDescribeWriteResult(t *testing.T) {
 			want:    "✅ Created **Ship it**\nhttps://cliffhub.example/tasks/7",
 		},
 		{
-			name:    "no link for a non-task path",
+			name:    "no link for a path with no known web route",
 			webBase: "https://cliffhub.example",
 			write:   &store.CliffyPendingWrite{Path: "api/projects"},
 			body:    `{"id":"7","name":"Core"}`,
 			want:    "✅ Created **Core**.",
+		},
+		{
+			// The real SupportTicketResource shape: display_id + summary, NOT
+			// ticket_key/title/name. Previously nothing matched, so the reply fell
+			// through to echoing the approved summary and named no record at all.
+			name:    "support ticket names the record and links to it",
+			webBase: "https://cliffhub.example",
+			write:   &store.CliffyPendingWrite{Path: "api/support/tickets", Summary: "Create a new high-priority support ticket titled 'ticket for test'"},
+			body:    `{"id":"de25c8d3-bfff-461c-be4b-4ed133531d7a","display_id":"TK-00086","summary":"ticket for test","priority":"high"}`,
+			want:    "✅ Created **TK-00086** — ticket for test\nhttps://cliffhub.example/support-tickets/de25c8d3-bfff-461c-be4b-4ed133531d7a",
+		},
+		{
+			// "tickets" does not contain "task", which is why the old substring
+			// heuristic produced no link even with an id and a web base in hand.
+			name:    "support ticket links without a leading-slash-normalised path",
+			webBase: "https://cliffhub.example",
+			write:   &store.CliffyPendingWrite{Path: "/api/support/tickets"},
+			body:    `{"id":"abc","display_id":"TK-1","summary":"printer down"}`,
+			want:    "✅ Created **TK-1** — printer down\nhttps://cliffhub.example/support-tickets/abc",
+		},
+		{
+			name:    "summary alone still names the record",
+			webBase: "",
+			write:   &store.CliffyPendingWrite{Path: "api/support/tickets"},
+			body:    `{"id":"abc","summary":"printer down"}`,
+			want:    "✅ Created **printer down**.",
+		},
+		{
+			// Envelope + the ticket shape together — Laravel resources wrap single
+			// records, so this is the shape a real store() response actually has.
+			name:    "enveloped support ticket",
+			webBase: "https://cliffhub.example",
+			write:   &store.CliffyPendingWrite{Path: "api/support/tickets"},
+			body:    `{"data":{"id":"xyz","display_id":"TK-9","summary":"vpn broken"}}`,
+			want:    "✅ Created **TK-9** — vpn broken\nhttps://cliffhub.example/support-tickets/xyz",
 		},
 	}
 	for _, tc := range tests {

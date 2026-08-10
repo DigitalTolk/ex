@@ -230,14 +230,32 @@ func (h *CliffyHandler) executeWrite(ctx context.Context, userID, email string, 
 	return res.Status, res.Body, nil
 }
 
+// cliffhubRecordRoutes maps a CliffHub write path prefix to the web route its
+// created record lives at, so the confirmation can link to it.
+//
+// An explicit table rather than a substring test on the path: `strings.Contains(
+// p.Path, "task")` looked like it covered tickets and did not ("tickets" has no
+// "task" in it), so support tickets silently got no link while also being sent to
+// a /tasks/<id> URL that would not have resolved. Longest prefix wins, so a more
+// specific path can override a general one.
+var cliffhubRecordRoutes = []struct{ pathPrefix, webRoute string }{
+	{"api/support/tickets", "/support-tickets/"},
+	{"api/work/tasks", "/tasks/"},
+}
+
 // describeWriteResult builds a short confirmation from the created record — with
-// a CliffHub link for tasks (the common case), otherwise a plain "done".
+// a CliffHub link when the record's web route is known, otherwise a plain "done".
 func (h *CliffyHandler) describeWriteResult(p *store.CliffyPendingWrite, body []byte) string {
+	// Field names differ per CliffHub resource: tasks expose ticket_key/title,
+	// support tickets expose display_id/summary (SupportTicketResource). Accept
+	// both, or the confirmation degrades to echoing the user's own request back.
 	type record struct {
 		ID        string `json:"id"`
 		TicketKey string `json:"ticket_key"`
+		DisplayID string `json:"display_id"`
 		Title     string `json:"title"`
 		Name      string `json:"name"`
+		Summary   string `json:"summary"`
 	}
 	// Accept both {"data":{...}} (Laravel resource) and a flat object.
 	var flat record
@@ -251,13 +269,21 @@ func (h *CliffyHandler) describeWriteResult(p *store.CliffyPendingWrite, body []
 		r = *env.Data
 	}
 	id, key, label := r.ID, r.TicketKey, r.Title
+	if key == "" {
+		key = r.DisplayID
+	}
 	if label == "" {
 		label = r.Name
 	}
+	if label == "" {
+		label = r.Summary
+	}
 
 	link := ""
-	if h.webBase != "" && id != "" && strings.Contains(p.Path, "task") {
-		link = h.webBase + "/tasks/" + id
+	if h.webBase != "" && id != "" {
+		if route := cliffhubWebRoute(p.Path); route != "" {
+			link = h.webBase + route + id
+		}
 	}
 
 	head := "✅ Done"
@@ -273,6 +299,21 @@ func (h *CliffyHandler) describeWriteResult(p *store.CliffyPendingWrite, body []
 		return head + "\n" + link
 	}
 	return head + "."
+}
+
+// cliffhubWebRoute returns the web route for a write path, or "" when the record
+// has no known page. Longest matching prefix wins so a specific path beats a
+// general one regardless of table order.
+func cliffhubWebRoute(path string) string {
+	p := "/" + strings.TrimLeft(strings.TrimSpace(path), "/")
+	route, longest := "", 0
+	for _, r := range cliffhubRecordRoutes {
+		prefix := "/" + strings.TrimLeft(r.pathPrefix, "/")
+		if strings.HasPrefix(p, prefix) && len(prefix) > longest {
+			route, longest = r.webRoute, len(prefix)
+		}
+	}
+	return route
 }
 
 // runAgentTurn POSTs one turn to the agent and returns its text plus the first
