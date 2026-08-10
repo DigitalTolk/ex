@@ -487,10 +487,11 @@ func TestLoadMSProfileSyncInterval(t *testing.T) {
 	}
 }
 
-// The Cliffy bridge is half-configured if only one of the secret/mint-URL pair is
-// set — that would fail at call time instead of at boot, so Load fails fast.
+// The bridge secret is the feature's on/off switch. The three URLs default to
+// CliffHub production, so only an explicitly blanked mint URL is a
+// half-configuration — and that fails at boot rather than at call time.
 func TestLoadCliffyBridgePairing(t *testing.T) {
-	t.Run("secret without a mint URL is rejected", func(t *testing.T) {
+	t.Run("secret with an explicitly blanked mint URL is rejected", func(t *testing.T) {
 		clearEnv(t)
 		t.Setenv("ENV", "development")
 		t.Setenv("CLIFFY_BRIDGE_SECRET", "a-secret-that-is-long-enough-here")
@@ -500,13 +501,54 @@ func TestLoadCliffyBridgePairing(t *testing.T) {
 		}
 	})
 
-	t.Run("a mint URL without a secret is rejected", func(t *testing.T) {
+	t.Run("no secret leaves Cliffy disabled, defaults notwithstanding", func(t *testing.T) {
 		clearEnv(t)
 		t.Setenv("ENV", "development")
 		t.Setenv("CLIFFY_BRIDGE_SECRET", "")
-		t.Setenv("CLIFFY_BRIDGE_MINT_URL", "https://cliffhub.example/api/ai/bridge/mint")
-		if _, err := Load(); err == nil {
-			t.Fatal("want a boot failure for a half-configured bridge")
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		// The URLs are populated from the defaults, but with no secret the bridge
+		// is never constructed (NewCliffyBridge returns nil), so Cliffy is off.
+		if c.CliffyBridgeSecret != "" {
+			t.Fatalf("CliffyBridgeSecret = %q, want empty", c.CliffyBridgeSecret)
+		}
+		if c.CliffyBridgeMintURL != defaultCliffyMintURL {
+			t.Fatalf("CliffyBridgeMintURL = %q, want the default", c.CliffyBridgeMintURL)
+		}
+	})
+
+	t.Run("the URLs default to CliffHub production when unset", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("CLIFFY_BRIDGE_SECRET", "a-secret-that-is-long-enough-here")
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.CliffyBridgeMintURL != defaultCliffyMintURL {
+			t.Fatalf("CliffyBridgeMintURL = %q, want %q", c.CliffyBridgeMintURL, defaultCliffyMintURL)
+		}
+		if c.CliffyAgentURL != defaultCliffyAgentURL {
+			t.Fatalf("CliffyAgentURL = %q, want %q", c.CliffyAgentURL, defaultCliffyAgentURL)
+		}
+		if c.CliffyWebBase != defaultCliffyWebBase {
+			t.Fatalf("CliffyWebBase = %q, want %q", c.CliffyWebBase, defaultCliffyWebBase)
+		}
+	})
+
+	t.Run("an explicit URL overrides the default", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("CLIFFY_BRIDGE_SECRET", "a-secret-that-is-long-enough-here")
+		t.Setenv("CLIFFY_BRIDGE_MINT_URL", "http://localhost:8199/api/ai/bridge/mint")
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.CliffyBridgeMintURL != "http://localhost:8199/api/ai/bridge/mint" {
+			t.Fatalf("CliffyBridgeMintURL = %q, want the override", c.CliffyBridgeMintURL)
 		}
 	})
 
