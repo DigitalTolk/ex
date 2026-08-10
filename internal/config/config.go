@@ -125,19 +125,24 @@ type Config struct {
 	// setting: the three URLs below default to CliffHub production, so an empty
 	// secret is what disables Cliffy.
 	CliffyBridgeSecret string
+	// For all three URLs below, UNSET means "CliffHub production" (the constants
+	// above) and an explicitly EMPTY value means "none" — which is a distinct,
+	// documented setting per field, not a way to ask for the default.
+	//
 	// CliffyBridgeMintURL is the LARAVEL mint route on CliffHub's API host — a
 	// different host from the agent below (pointing it at the Next app returns
-	// HTML and every mint 502s).
+	// HTML and every mint 502s). Empty with a secret set is a boot failure.
 	CliffyBridgeMintURL string
 	// CliffyAgentURL is CliffHub's NEXT.js agent endpoint (…/api/ai/chat) on the
-	// web host. ex proxies the Cliffy panel's chat to it with the caller's
-	// bridged token injected server-side. Explicitly blank disables the chat
-	// proxy (the bridge and session probe still work).
+	// web host. ex proxies the Cliffy panel's chat to it with the caller's bridged
+	// token injected server-side. Empty runs the bridge WITHOUT the chat: the
+	// session probe and write passthrough still work, chat 503s, and the in-chat
+	// @cliffy bot is never registered (cmd/server/main.go).
 	CliffyAgentURL string
 	// CliffyWebBase is CliffHub's user-facing WEB origin — where Cliffy's
 	// /tasks/<id> links should point. Usually the agent's host, but not always
 	// (in local dev the agent runs on a dev port while the web app is served
-	// elsewhere). Empty → ex falls back to the agent URL's origin.
+	// elsewhere). Empty → ex derives it from the agent URL's origin.
 	CliffyWebBase string
 }
 
@@ -275,6 +280,16 @@ func Load() (*Config, error) {
 	}
 
 	return c, nil
+}
+
+// CliffyTargetsDefaultCliffHub reports whether Cliffy is enabled AND still
+// pointed at the compiled-in production CliffHub. A non-production deployment in
+// that state creates real records in the real CliffHub, so the caller warns
+// about it at boot — the failure is silent otherwise, because everything works.
+func (c *Config) CliffyTargetsDefaultCliffHub() bool {
+	return c.CliffyBridgeSecret != "" &&
+		c.CliffyBridgeMintURL == defaultCliffyMintURL &&
+		c.CliffyAgentURL == defaultCliffyAgentURL
 }
 
 // MSGraphEnabled reports whether the Microsoft 365 (Graph) integration is

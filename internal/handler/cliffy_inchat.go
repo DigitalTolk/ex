@@ -236,8 +236,8 @@ func (h *CliffyHandler) executeWrite(ctx context.Context, userID, email string, 
 // An explicit table rather than a substring test on the path: `strings.Contains(
 // p.Path, "task")` looked like it covered tickets and did not ("tickets" has no
 // "task" in it), so support tickets silently got no link while also being sent to
-// a /tasks/<id> URL that would not have resolved. Longest prefix wins, so a more
-// specific path can override a general one.
+// a /tasks/<id> URL that would not have resolved. Matching rules — segment
+// boundaries, longest prefix — live in cliffhubWebRoute.
 var cliffhubRecordRoutes = []struct{ pathPrefix, webRoute string }{
 	{"api/support/tickets", "/support-tickets/"},
 	{"api/work/tasks", "/tasks/"},
@@ -301,17 +301,36 @@ func (h *CliffyHandler) describeWriteResult(p *store.CliffyPendingWrite, body []
 	return head + "."
 }
 
-// cliffhubWebRoute returns the web route for a write path, or "" when the record
-// has no known page. Longest matching prefix wins so a specific path beats a
-// general one regardless of table order.
+// cliffhubWebRoute returns the web route for a write path, or "" when there is
+// no page we can honestly link to.
+//
+// The path must address the collection itself (a create) or a single record in
+// it (an update) — matching must stop at a segment boundary. A plain prefix test
+// linked a write to a SUB-resource, say api/work/tasks/42/comments, as
+// /tasks/<comment-id>: a live-looking URL for an entirely different record,
+// which is the same wrong-link failure the route table replaced.
+//
+// The longest matching prefix wins, so a nested collection added to the table
+// later beats its parent regardless of order.
 func cliffhubWebRoute(path string) string {
-	p := "/" + strings.TrimLeft(strings.TrimSpace(path), "/")
+	p := strings.Trim(strings.TrimSpace(path), "/")
 	route, longest := "", 0
 	for _, r := range cliffhubRecordRoutes {
-		prefix := "/" + strings.TrimLeft(r.pathPrefix, "/")
-		if strings.HasPrefix(p, prefix) && len(prefix) > longest {
-			route, longest = r.webRoute, len(prefix)
+		prefix := strings.Trim(r.pathPrefix, "/")
+		if len(prefix) <= longest {
+			continue
 		}
+		rest, ok := strings.CutPrefix(p, prefix)
+		// rest == "" is the collection; anything else must begin a new segment,
+		// so api/work/tasksfoo doesn't read as a task.
+		if !ok || (rest != "" && !strings.HasPrefix(rest, "/")) {
+			continue
+		}
+		// One segment left is a record id; deeper is a sub-resource, not the record.
+		if strings.Contains(strings.TrimPrefix(rest, "/"), "/") {
+			continue
+		}
+		route, longest = r.webRoute, len(prefix)
 	}
 	return route
 }

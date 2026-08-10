@@ -195,14 +195,18 @@ ex user (OIDC/JWT)                         CliffHub (Sanctum + Spatie RBAC)
   revoke-on-logout**, not ability-scoping. Trust anchor is the shared OIDC tenant;
   email is the v1 match key.
 
-**Config — ex** (`internal/config/config.go`), all `CLIFFY_*` set together or not at all:
+**Config — ex** (`internal/config/config.go`). The secret is the on/off switch; the
+three URLs default to **CliffHub production**, so any other environment must
+override all three or it writes to the real CliffHub (boot logs a warning when it
+detects that). Unset ⇒ the production default; explicitly empty ⇒ "none", which
+means something different per row:
 
 | Env | Meaning |
 |---|---|
-| `CLIFFY_BRIDGE_SECRET` | Shared HMAC secret (≥32 chars outside dev). Signs the assertion. |
-| `CLIFFY_BRIDGE_MINT_URL` | CliffHub mint URL (`…/api/ai/bridge/mint`). |
-| `CLIFFY_AGENT_URL` | CliffHub Next agent (`…/api/ai/chat`). Empty → session probe works, chat 503. |
-| `CLIFFY_WEB_BASE` | CliffHub web app base for task links (e.g. `https://cliffhub.example`). |
+| `CLIFFY_BRIDGE_SECRET` | Shared HMAC secret (≥32 chars outside dev). Signs the assertion. **Unset ⇒ Cliffy is off.** |
+| `CLIFFY_BRIDGE_MINT_URL` | CliffHub mint URL (`…/api/ai/bridge/mint`) — the LARAVEL API host. Empty alongside a secret ⇒ boot failure. |
+| `CLIFFY_AGENT_URL` | CliffHub NEXT agent (`…/api/ai/chat`) — the web host. Empty ⇒ session probe and write passthrough work, chat 503s, in-chat `@cliffy` bot never registers. |
+| `CLIFFY_WEB_BASE` | CliffHub web base for record links. Empty ⇒ derived from the agent URL's origin. |
 
 **Config — CliffHub** (`config/services.php → cliffy_bridge`): `CLIFFY_BRIDGE_SECRET`
 (must match ex), `CLIFFY_BRIDGE_TOKEN_TTL` (900s), `CLIFFY_BRIDGE_ASSERTION_MAX_AGE`

@@ -552,6 +552,41 @@ func TestLoadCliffyBridgePairing(t *testing.T) {
 		}
 	})
 
+	t.Run("targeting the default CliffHub is detectable for the boot warning", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("CLIFFY_BRIDGE_SECRET", "a-secret-that-is-long-enough-here")
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if !c.CliffyTargetsDefaultCliffHub() {
+			t.Fatal("want the defaults to be reported as production CliffHub")
+		}
+
+		// Overriding the agent (a local dev port) is enough to clear it.
+		t.Setenv("CLIFFY_AGENT_URL", "http://localhost:3000/api/ai/chat")
+		c, err = Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.CliffyTargetsDefaultCliffHub() {
+			t.Fatal("an overridden agent URL must not report as production CliffHub")
+		}
+	})
+
+	t.Run("Cliffy disabled never reports as targeting production", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.CliffyTargetsDefaultCliffHub() {
+			t.Fatal("no secret means Cliffy is off — nothing to warn about")
+		}
+	})
+
 	t.Run("both set together is accepted", func(t *testing.T) {
 		clearEnv(t)
 		t.Setenv("ENV", "development")

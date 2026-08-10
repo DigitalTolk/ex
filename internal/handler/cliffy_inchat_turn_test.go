@@ -298,6 +298,31 @@ func TestDescribeWriteResult(t *testing.T) {
 			want:    "✅ Created **printer down**.",
 		},
 		{
+			// A comment is not the task: linking /tasks/<comment-id> would be a
+			// live-looking URL for the wrong record, so we link nothing.
+			name:    "no link for a write to a sub-resource",
+			webBase: "https://cliffhub.example",
+			write:   &store.CliffyPendingWrite{Path: "api/work/tasks/42/comments"},
+			body:    `{"id":"99","title":"looks good"}`,
+			want:    "✅ Created **looks good**.",
+		},
+		{
+			// Updating one record still links to it — the id comes from the response.
+			name:    "an update of a single record still links",
+			webBase: "https://cliffhub.example",
+			write:   &store.CliffyPendingWrite{Path: "api/work/tasks/42"},
+			body:    `{"id":"42","ticket_key":"TASK-42","title":"Ship it"}`,
+			want:    "✅ Created **TASK-42** — Ship it\nhttps://cliffhub.example/tasks/42",
+		},
+		{
+			// Matching must stop at a segment boundary, not mid-word.
+			name:    "no link when the prefix only matches mid-segment",
+			webBase: "https://cliffhub.example",
+			write:   &store.CliffyPendingWrite{Path: "api/work/tasksomething"},
+			body:    `{"id":"7","title":"Nope"}`,
+			want:    "✅ Created **Nope**.",
+		},
+		{
 			// Envelope + the ticket shape together — Laravel resources wrap single
 			// records, so this is the shape a real store() response actually has.
 			name:    "enveloped support ticket",

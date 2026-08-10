@@ -407,6 +407,13 @@ func main() {
 		slog.Error("failed to init Cliffy bridge", "error", err)
 		os.Exit(1)
 	}
+	// The CLIFFY_* URLs default to production, so a non-production deployment that
+	// forgot to override them writes real tasks and tickets into the real CliffHub
+	// — and works perfectly while doing it. Say so loudly at boot.
+	if cfg.Env != "production" && cfg.CliffyTargetsDefaultCliffHub() {
+		slog.Warn("Cliffy is pointed at PRODUCTION CliffHub from a non-production deployment — override CLIFFY_BRIDGE_MINT_URL, CLIFFY_AGENT_URL and CLIFFY_WEB_BASE",
+			"env", cfg.Env, "mint_url", cfg.CliffyBridgeMintURL)
+	}
 
 	// ------------------------------------------------------------------ Handlers
 	authH := handler.NewAuthHandler(authSvc, jwtMgr)
