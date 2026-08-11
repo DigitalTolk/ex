@@ -132,19 +132,93 @@ Restart and check the boot log for `Microsoft 365 integration enabled`.
 - **Profiles**: log out and back in (the sync runs at SSO login, so existing sessions pick up data on their next login), then open your profile hover card — phone and manager should appear.
 - **Meetings**: type `/mstmeetings` in any channel or DM and send — the join link should post into the chat. If it errors, check the server log: a Graph 403 there means the access policy (step 2) hasn't propagated or wasn't granted to that user.
 
-## Email Invites (SMTP)
+## Transactional Email
 
-To send invite links via email, configure the following environment variables:
+Two flows send mail: **guest invitations** and **password resets**. Message
+construction and SMTP delivery use [go-mail](https://github.com/wneessen/go-mail);
+Amazon SES is supported natively through the AWS SDK.
+
+Pick a transport with `EMAIL_PROVIDER` (`smtp`, the default, or `ses`). An
+unknown value fails the boot rather than silently sending nothing.
+
+**SMTP** — any relay:
 
 ```bash
+EMAIL_PROVIDER=smtp
 SMTP_HOST=smtp.example.com
-SMTP_PORT=587
-SMTP_USER=your-smtp-user
+SMTP_PORT=587                      # 587/25 use STARTTLS; 465 uses implicit TLS
+SMTP_USER=your-smtp-user           # omit for a relay that needs no auth
 SMTP_PASS=your-smtp-password
-SMTP_FROM=noreply@yourcompany.com
+EMAIL_FROM="Ex <noreply@yourcompany.com>"
 ```
 
-When SMTP is not configured, invite links are logged to the server console.
+TLS is opportunistic: it is used whenever the relay offers STARTTLS, so a
+trusted local relay (or a dev container such as Mailpit) works unchanged.
+
+**SES** — the API, not the SMTP endpoint, so there are no SMTP credentials to
+mint or rotate:
+
+```bash
+EMAIL_PROVIDER=ses
+AWS_REGION=eu-north-1              # SES is regional; the sender is verified per-region
+EMAIL_FROM="Ex <noreply@yourcompany.com>"
+SES_CONFIGURATION_SET=ex-transactional   # optional: bounce/complaint event publishing
+```
+
+Credentials come from the default AWS chain (env → task role → IRSA → IMDS) —
+the same identity DynamoDB and S3 use, so an IAM-role deploy needs no extra
+secrets. The S3 static keys are deliberately NOT reused: they point at MinIO in
+local setups. For local SES testing set `AWS_ACCESS_KEY_ID` /
+`AWS_SECRET_ACCESS_KEY`.
+
+Links inside the mail are built from `BASE_URL`, so set that to the public
+origin or recipients get unreachable links.
+
+**Mail is optional and never load-bearing.** With no transport configured
+(`SMTP_HOST` unset, or `EMAIL_PROVIDER=ses` with no `AWS_REGION`) the app boots
+normally (logging a warning) and every flow still works — the invite dialog and
+the admin reset dialog both show a copyable link for the admin to relay by
+hand. The reset dialog states explicitly whether the email was sent, so an
+admin is never left assuming delivery that did not happen. A malformed
+`EMAIL_FROM`, by contrast, fails the boot: that is a misconfiguration, not an
+opt-out.
+
+### Verifying the settings
+
+**Admin → Workspace settings → Email** shows the effective transport and sender,
+and sends a real test message through it. Leave the recipient blank to mail
+yourself. On failure the transport's own error is shown verbatim
+(`connection refused`, `535 auth failed`, `email address is not verified`) —
+that string is what tells you which setting is wrong. A success only means the
+server handed the message over without an error, so if nothing arrives, check
+the spam folder and the sending domain's SPF/DKIM records next.
+
+Delivery is covered end-to-end against a real mail server: the integration
+suite (`make check`) starts [Mailpit](https://github.com/axllent/mailpit) in a
+container, sends the real invite and reset templates through it, and reads them
+back through Mailpit's API to assert headers, both MIME alternatives, non-ASCII
+subjects, and long-body line limits. SES sends the same rendered MIME as a raw
+message, so it inherits that guarantee.
+
+### Password reset (guest accounts only)
+
+Guests — accounts created by accepting an invite — hold a local bcrypt
+password and can recover it two ways:
+
+- **Self-service**: "Forgot your password?" on the sign-in page
+  (`/forgot-password`) emails a one-time link.
+- **Admin-initiated**: Directory → Users → the guest's "..." menu → *Reset
+  password*, which emails the link and shows it to the admin.
+
+Either way the link is single-use, expires in one hour, and redeeming it
+revokes every existing session for that account.
+
+**SSO users can never have a password reset here.** Their credential lives in
+the identity provider; the server refuses to mint or redeem a reset for an
+OIDC account (the check keys on the auth provider, so an SSO user demoted to
+the guest *role* is still excluded), and the UI does not offer the action.
+Self-service requests for an SSO address answer exactly like requests for an
+unknown address, so neither can be used to enumerate accounts.
 
 ## Configuration
 
@@ -166,11 +240,14 @@ When SMTP is not configured, invite links are logged to the server console.
 | `DYNAMODB_ENDPOINT`  | -                                 | DynamoDB endpoint (set for local dev)                   |
 | `REDIS_URL`          | `redis://localhost:6379`          | Redis connection URL                                    |
 | `ACCESS_LOG_ENABLED` | `true`                            | Set `false` to silence per-request logs except 5xx responses |
-| `SMTP_HOST`          | -                                 | SMTP server hostname                                    |
-| `SMTP_PORT`          | `587`                             | SMTP server port                                        |
-| `SMTP_USER`          | -                                 | SMTP username                                           |
+| `EMAIL_PROVIDER`     | `smtp`                            | Mail transport: `smtp` or `ses`. Unknown value = boot failure |
+| `EMAIL_FROM`         | `SMTP_FROM`                       | Sender address for invites and password resets; accepts `Name <addr>`. Malformed = boot failure |
+| `SES_CONFIGURATION_SET` | -                              | SES only: configuration set for bounce/complaint event publishing |
+| `SMTP_HOST`          | -                                 | SMTP server hostname. Unset = mail disabled (links are shown for manual relay) |
+| `SMTP_PORT`          | `587`                             | SMTP server port (587/25 STARTTLS, 465 implicit TLS)    |
+| `SMTP_USER`          | -                                 | SMTP username (omit for an unauthenticated relay)       |
 | `SMTP_PASS`          | -                                 | SMTP password                                           |
-| `SMTP_FROM`          | -                                 | Sender email address for invites                        |
+| `SMTP_FROM`          | `noreply@example.com`             | Legacy sender address; `EMAIL_FROM` falls back to this  |
 | `SENTRY_FRONTEND_DSN`| -                                 | Enables Sentry in the SPA (served as a meta tag to browsers + both native shells) |
 | `SENTRY_FRONTEND_TRACES_SAMPLE_RATE` | `0` (off)         | Sentry browser performance tracing sample rate (0..1)  |
 | `SENTRY_FRONTEND_REPLAY_SESSION_SAMPLE_RATE` | `0` (off) | Sentry session replay: sample rate for all sessions (0..1) |

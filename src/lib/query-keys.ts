@@ -72,6 +72,7 @@ export const queryKeys = {
   // Admin / unfurl
   unfurl: (url: string) => ['unfurl', url] as const,
   adminSearchStatus: () => ['admin-search-status'] as const,
+  adminEmailStatus: () => ['admin-email-status'] as const,
   incomingWebhooks: () => ['incoming-webhooks'] as const,
 };
 

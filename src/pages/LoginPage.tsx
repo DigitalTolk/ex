@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -199,6 +199,16 @@ export default function LoginPage() {
               >
                 {isSubmitting ? 'Signing in...' : 'Sign in'}
               </Button>
+              {/* Guest accounts only — SSO passwords live in the identity
+                  provider, which is why this sits under the guest form. */}
+              <p className="text-center">
+                <Link
+                  to="/forgot-password"
+                  className="text-sm text-muted-foreground underline-offset-4 hover:underline"
+                >
+                  Forgot your password?
+                </Link>
+              </p>
             </form>
           </>
         )}

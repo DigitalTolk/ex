@@ -3,8 +3,10 @@ package handler
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/email"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/search"
@@ -36,6 +38,11 @@ type AdminHandler struct {
 	searchSt   SearchStatusReporter
 	reindexer  *search.Reindexer
 	mappingReb MappingRebuildController
+	// mailer is nil when no mail transport is configured; the email-admin
+	// routes then report that state rather than failing.
+	mailer        email.Sender
+	emailProvider string
+	emailFrom     string
 }
 
 // NewAdminHandler constructs an AdminHandler.
@@ -56,6 +63,88 @@ func (h *AdminHandler) SetSearch(reporter SearchStatusReporter, reindexer *searc
 // nil → the mapping-rebuild route answers 503, same as an unconfigured search.
 func (h *AdminHandler) SetMappingRebuilder(reb MappingRebuildController) {
 	h.mappingReb = reb
+}
+
+// SetMailer wires the configured transactional-mail transport plus the
+// settings an admin needs to see to make sense of a test result. A nil sender
+// means no transport is configured; EmailStatus reports that instead of
+// pretending mail works.
+func (h *AdminHandler) SetMailer(sender email.Sender, provider, from string) {
+	h.mailer = sender
+	h.emailProvider = provider
+	h.emailFrom = from
+}
+
+// emailStatusResponse tells an admin what the server will do when it sends
+// mail, so a test result can be interpreted against the actual settings.
+type emailStatusResponse struct {
+	Configured bool   `json:"configured"`
+	Provider   string `json:"provider"`
+	From       string `json:"from"`
+}
+
+// EmailStatus reports the effective mail configuration. Admin-only: the
+// sender identity and transport are operational details.
+func (h *AdminHandler) EmailStatus(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, emailStatusResponse{
+		Configured: h.mailer != nil,
+		Provider:   h.emailProvider,
+		From:       h.emailFrom,
+	})
+}
+
+// SendTestEmail sends a diagnostic message so an admin can verify the mail
+// settings end to end without waiting for a real invite or password reset.
+// Admin-only.
+//
+// The recipient defaults to the calling admin's own address — the common case
+// is "does this work at all?", and it keeps a misconfigured server from being
+// used to mail arbitrary strangers.
+func (h *AdminHandler) SendTestEmail(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	var body struct {
+		To string `json:"to"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	to := strings.TrimSpace(body.To)
+	if to == "" {
+		to = middleware.ClaimsFromContext(r.Context()).Email
+	}
+	if to == "" {
+		writeError(w, http.StatusBadRequest, "invalid_body", "a recipient address is required")
+		return
+	}
+
+	if h.mailer == nil {
+		writeError(w, http.StatusServiceUnavailable, "email_not_configured",
+			"no mail transport is configured; set EMAIL_PROVIDER and its settings")
+		return
+	}
+
+	if err := h.mailer.Send(r.Context(), email.TestMessage(to, h.emailProvider)); err != nil {
+		// The transport's own error text is the entire point of this
+		// endpoint ("connection refused", "535 auth failed", "email address
+		// is not verified") — an admin cannot fix the settings without it.
+		// This is a deliberate, admin-only exception to the generic-error
+		// rule that applies to member-facing endpoints.
+		writeError(w, http.StatusBadGateway, "email_send_failed", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, JSON{
+		"sent":     true,
+		"to":       to,
+		"provider": h.emailProvider,
+		"from":     h.emailFrom,
+	})
 }
 
 // settingsResponse is the wire shape returned from GetSettings. It
