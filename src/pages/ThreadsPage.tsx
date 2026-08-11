@@ -3,6 +3,7 @@ import { PageContainer } from '@/components/layout/PageContainer';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   getSeenMap,
+  mergeSeenMaps,
   sortThreadsByUnreadThenActivity,
   THREAD_SEEN_CHANGED_EVENT,
   threadDeepLink,
@@ -42,7 +43,7 @@ export default function ThreadsPage() {
         threads,
         userState?.threadNotifications ?? [],
         unreadThreadNotifications,
-        { ...(userState?.threadSeen ?? {}), ...localSeenMap },
+        mergeSeenMaps(userState?.threadSeen, localSeenMap),
       ),
     [localSeenMap, threads, unreadThreadNotifications, userState],
   );

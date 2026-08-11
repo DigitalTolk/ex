@@ -7,7 +7,7 @@ import {
   type NotificationPayload,
 } from './NotificationContext';
 import * as storageModule from '@/lib/storage';
-import { resetNotificationDedup } from '@/lib/notification-dedup';
+import { recordNotification, resetNotificationDedup } from '@/lib/notification-dedup';
 import { markUserActivity } from '@/lib/user-activity';
 
 const sendWSMock = vi.hoisted(() => vi.fn());
@@ -33,12 +33,14 @@ const tabLeaderMock = vi.hoisted(() => ({
   leader: true,
   others: false,
   viewing: false,
+  viewingThread: false,
   atDevice: false,
 }));
 vi.mock('@/lib/tab-leader', () => ({
   isLeaderTab: () => tabLeaderMock.leader,
   hasOtherTabs: () => tabLeaderMock.others,
   remoteTabViewing: () => tabLeaderMock.viewing,
+  remoteTabViewingThread: () => tabLeaderMock.viewingThread,
   remoteUserAtDevice: () => tabLeaderMock.atDevice,
   setTabActiveParent: vi.fn(),
   initTabCoordinator: vi.fn(),
@@ -72,6 +74,7 @@ beforeEach(() => {
   tabLeaderMock.leader = true;
   tabLeaderMock.others = false;
   tabLeaderMock.viewing = false;
+  tabLeaderMock.viewingThread = false;
   tabLeaderMock.atDevice = false;
   // The storage mock persists across tests; reset it so one test's pref
   // changes don't leak into the next (e.g. a disabled browserEnabled).
@@ -261,7 +264,7 @@ describe('NotificationContext browser', () => {
       await vi.waitFor(() => expect(captured).not.toBeNull());
       sendWSMock.mockClear();
 
-      markUserActivity(Date.now() - 25 * 60_000); // last input 25 minutes ago (past the 20min active window)
+      markUserActivity(Date.now() - 25 * 60_000); // last input 25 minutes ago (past the 10min attention window)
       captured!.dispatch(basePayload({ messageID: 'm-idle' }));
       await vi.waitFor(() => expect(instances.length).toBe(1)); // popup still surfaced
       expect(sendWSMock).not.toHaveBeenCalled();
@@ -675,11 +678,38 @@ describe('NotificationContext browser', () => {
     expect(api).not.toBeNull();
     api!.setSoundEnabled(true);
     api!.setBrowserEnabled(true);
+    api!.setIdleDetectionEnabled(true);
     api!.dispatch(basePayload());
     api!.setActiveParent('x');
     api!.setCurrentUserID('y');
     const r = await api!.requestPermission();
     expect(r).toBe('unsupported');
+  });
+
+  it('suppresses (and acks) a thread reply being read in a SIBLING tab (remote thread-view)', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      // This (leader) tab is idle; the OTHER tab is attentively reading the
+      // thread — the leader must suppress on the sibling's behalf and ack.
+      markUserActivity(Date.now() - 25 * 60_000);
+      tabLeaderMock.viewingThread = true;
+      captured!.dispatch(basePayload({
+        kind: 'thread_reply',
+        parentMessageID: 'root-remote',
+        messageID: 'm-remote-thread',
+        authorID: 'u-other',
+      }));
+      expect(instances.length).toBe(0);
+      expect(sendWSMock).toHaveBeenCalledWith(
+        { type: 'notification.ack', messageID: 'm-remote-thread' },
+        expect.objectContaining({ buffer: true }),
+      );
+    } finally {
+      restore();
+    }
   });
 });
 
@@ -738,7 +768,7 @@ describe('multi-tab coordination', () => {
     }
   });
 
-  it('a non-leader tab with known siblings holds and drops when it never becomes leader', async () => {
+  it('a non-leader tab drops the held copy once the leader records it (cross-tab dedup)', async () => {
     const instances: FakeNote[] = [];
     const restore = installFakeNotification(instances);
     try {
@@ -748,10 +778,30 @@ describe('multi-tab coordination', () => {
       tabLeaderMock.others = true;
 
       captured!.dispatch(basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-2', authorID: 'u-other', messageID: 'm-held' }));
-      // Held past the (mocked 40ms) hold window and never promoted → the
-      // leader tab owns this alert; nothing surfaces here.
-      await new Promise((r) => setTimeout(r, 120));
+      // The healthy-leader case: it surfaces + records the alert during the
+      // hold, so this tab stays quiet forever.
+      recordNotification('m-held', Date.now());
+      await new Promise((r) => setTimeout(r, 200));
       expect(instances.length).toBe(0);
+    } finally {
+      restore();
+    }
+  });
+
+  it('a non-leader tab surfaces anyway after two holds with no leader delivery (SPEC GAP-13)', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      tabLeaderMock.leader = false;
+      tabLeaderMock.others = true;
+
+      captured!.dispatch(basePayload({ kind: 'mention', parentType: 'conversation', parentID: 'conv-2', authorID: 'u-other', messageID: 'm-orphaned' }));
+      // Nobody ever records the alert — the leader died mid-surfacing (or
+      // its election never settled). After two hold windows this tab must
+      // deliver: a possible duplicate beats a silent miss.
+      await vi.waitFor(() => expect(instances.length).toBe(1), { timeout: 2_000 });
     } finally {
       restore();
     }

@@ -206,6 +206,36 @@ func TestActivityService_FeedAndMarkSeen(t *testing.T) {
 	}
 }
 
+// A successful MarkSeen must nudge the user's other devices (activity.read) so
+// their badges clear — the missing event was SPEC GAP-3 (mobile read left the
+// desktop badge lit until the next activity.new).
+func TestActivityService_MarkSeenPublishesActivityRead(t *testing.T) {
+	pub := newMockPublisher()
+	svc := NewActivityService(newFakeActivityStore(), pub)
+
+	if err := svc.MarkSeen(context.Background(), "u-1"); err != nil {
+		t.Fatalf("MarkSeen = %v", err)
+	}
+	if !activityEventPublished(pub, events.EventActivityRead) {
+		t.Fatal("MarkSeen must publish activity.read to the user channel")
+	}
+}
+
+// A failed watermark write must NOT claim the feed was read on other devices.
+func TestActivityService_MarkSeenStoreErrorSkipsPublish(t *testing.T) {
+	store := newFakeActivityStore()
+	store.seenErr = errors.New("boom")
+	pub := newMockPublisher()
+	svc := NewActivityService(store, pub)
+
+	if err := svc.MarkSeen(context.Background(), "u-1"); err == nil {
+		t.Fatal("expected seen error")
+	}
+	if activityEventPublished(pub, events.EventActivityRead) {
+		t.Fatal("a store failure must skip the activity.read nudge")
+	}
+}
+
 func TestActivityService_FeedErrors(t *testing.T) {
 	listErrStore := newFakeActivityStore()
 	listErrStore.listErr = errors.New("list boom")
@@ -231,13 +261,17 @@ func TestActivityService_AddItemNilStore(t *testing.T) {
 }
 
 func activityPublishedFor(pub *mockPublisher, userID string) bool {
+	_ = userID
+	return activityEventPublished(pub, events.EventActivityNew)
+}
+
+func activityEventPublished(pub *mockPublisher, eventType string) bool {
 	pub.mu.Lock()
 	defer pub.mu.Unlock()
 	for _, p := range pub.published {
-		if p.event.Type == events.EventActivityNew {
+		if p.event.Type == eventType {
 			return true
 		}
 	}
-	_ = userID
 	return false
 }

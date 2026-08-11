@@ -69,6 +69,12 @@ const (
 	// activity store is the source of truth, so the client just refetches the
 	// list. Sent to the user's personal channel (pubsub.UserChannel).
 	EventActivityNew = "activity.new"
+	// EventActivityRead tells a user's OTHER clients that the activity read
+	// watermark advanced (they marked the feed read somewhere), so every
+	// device clears its badge instead of waiting for the next activity.new.
+	// Data-less nudge like activity.new: the Redis watermark is the source of
+	// truth and clients refetch the feed. Sent to pubsub.UserChannel.
+	EventActivityRead = "activity.read"
 	// EventThreadUpdated patches a thread participant's /threads list live when a
 	// reply lands. Sent per-participant (pubsub.UserChannel) — the participant
 	// scoping is what the channel-topic message.edited can't provide, so the
@@ -99,10 +105,12 @@ var ephemeralTypes = map[string]struct{}{
 	EventReplayDone:      {},
 	EventReplayExhausted: {},
 	EventNotificationNew: {},
-	// activity.new is a data-less "your activity changed" nudge; the durable
-	// Redis activity store is the source of truth and the client refetches the
-	// list on reconnect, so replaying the nudge would be pure noise.
-	EventActivityNew: {},
+	// activity.new / activity.read are data-less "your activity changed"
+	// nudges; the durable Redis activity store is the source of truth and the
+	// client refetches the list on reconnect, so replaying them would be pure
+	// noise.
+	EventActivityNew:  {},
+	EventActivityRead: {},
 	// thread.updated is a live /threads-list patch; ListUserThreads is the
 	// durable source of truth and is re-read on reconnect, so replaying it
 	// would be noise (and could re-add a row the user has since left).

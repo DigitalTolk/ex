@@ -175,6 +175,7 @@ vi.mock('@/hooks/useConversations', () => ({
 vi.mock('@/hooks/useThreads', () => ({
   THREAD_SEEN_CHANGED_EVENT: 'ex:thread-seen-changed',
   getSeenMap: () => ({}),
+  mergeSeenMaps: (server: Record<string, string> | undefined, local: Record<string, string>) => ({ ...(server ?? {}), ...local }),
   unreadThreadIDs: () => new Set<string>(),
   useUserThreads: () => ({ data: [] }),
 }));

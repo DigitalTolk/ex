@@ -808,6 +808,16 @@ describe('ChatPage WebSocket handlers', () => {
     }).not.toThrow();
   });
 
+  it('onActivityRead refetches the activity stream so a remote mark-read clears this badge', () => {
+    // GAP-3 regression: marking activity read on mobile must clear the desktop
+    // badge — the handler refetches the feed (watermark is server-side truth).
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onActivityRead as (d: unknown) => void)({});
+    const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(calls).toContainEqual(['activity']);
+  });
+
   it('onUserUpdated invalidates user-batch + member + channel + conversation caches', () => {
     renderAt('/');
     expect(() => {

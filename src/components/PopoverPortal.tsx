@@ -154,6 +154,21 @@ export function PopoverPortal({
         data-swipe-dismissing={String(dismissing)}
         {...sheetDragHandlers}
       >
+        {renderSheet && (
+          <div
+            className="flex shrink-0 items-center justify-center pb-2 pt-2"
+            // The grab handle is the guaranteed swipe-to-dismiss surface:
+            // touch-action none here keeps the browser from claiming the
+            // gesture as a (no-op) native scroll and pointer-cancelling the
+            // drag. Everywhere else the sheet stays pan-y so scroll bodies
+            // (e.g. the emoji grid) pan natively from the very first touch.
+            style={{ touchAction: 'none' }}
+            aria-hidden="true"
+            data-testid="sheet-grab-handle"
+          >
+            <div className="h-1 w-9 rounded-full bg-border-strong" />
+          </div>
+        )}
         {children}
       </motion.div>
     </>,

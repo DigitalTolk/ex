@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { swipe } from '@/test/gestures';
 import { EmojiPicker } from './EmojiPicker';
 
 // Browser coverage for EmojiPicker — exercises trigger, search,
@@ -207,6 +208,33 @@ describe('EmojiPicker browser', () => {
     await vi.waitFor(() => {
       expect(onOpenChange).toHaveBeenCalledWith(true);
     });
+  });
+
+  it('mobile sheet: a drag on the emoji grid never dismisses; a drag on the category row closes the picker', async () => {
+    if (window.innerWidth > 767) return; // sheet + drag gestures are mobile-only
+    const onOpenChange = vi.fn();
+    const screen = await render(
+      <Wrap>
+        <EmojiPicker onSelect={vi.fn()} onOpenChange={onOpenChange} />
+      </Wrap>,
+    );
+    await screen.getByLabelText('Open emoji picker').click();
+    await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(true));
+    await new Promise((r) => setTimeout(r, 300)); // let the enter spring settle
+
+    // A drag on the SCROLLABLE emoji grid belongs to scrolling, not dismissal
+    // (this is the "emoji picker won't scroll on mobile" arbitration).
+    const grid = document.querySelector('[data-swipe-scroll="true"]') as HTMLElement;
+    await swipe(grid, { dy: 200, steps: 8, stepMs: 18 });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+
+    // The category row is dismiss chrome (touch-action none, see EmojiPicker):
+    // a downward drag there closes the whole picker.
+    const tablist = document.querySelector('[role="tablist"][aria-label="Emoji categories"]') as HTMLElement;
+    expect(getComputedStyle(tablist).touchAction).toBe('none');
+    await swipe(tablist, { dy: 200, steps: 8, stepMs: 18 });
+    await vi.waitFor(() => expect(onOpenChange).toHaveBeenLastCalledWith(false), { timeout: 3000 });
   });
 
   it('reopens and toggles closed via the same trigger (desktop only)', async () => {

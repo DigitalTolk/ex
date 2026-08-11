@@ -14,13 +14,14 @@ import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import type { Message } from '@/types';
-import { useInView } from '@/hooks/useInView';
+import { useInView, useLiveInView } from '@/hooks/useInView';
 import {
   useDraftAttachmentChips,
   useDraftForScope,
   useSaveDraft,
 } from '@/hooks/useDrafts';
 import { collectMessageUserIDs } from '@/lib/message-users';
+import { addInViewThread, removeInViewThread } from '@/lib/thread-scope';
 import {
   markThreadSeen,
   useThreadMessages,
@@ -73,6 +74,20 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
     if (!inView || !unread) return;
     markSummaryThreadSeen(summary);
   }, [inView, summary, unread]);
+
+  // While this card is CURRENTLY in the viewport the user is reading the
+  // thread (SPEC D-3) — register it so a live reply neither pops a
+  // notification nor lights the Threads badge. liveInView (non-sticky) is
+  // deliberate: the sticky inView above would keep a scrolled-past card
+  // registered forever. The attention gates (visible + focused + recent
+  // input) are applied by the suppression check itself, so cards registered
+  // in a backgrounded tab never suppress anything.
+  const liveInView = useLiveInView(ref);
+  useEffect(() => {
+    if (!liveInView) return;
+    addInViewThread(summary.threadRootID);
+    return () => removeInViewThread(summary.threadRootID);
+  }, [liveInView, summary.threadRootID]);
 
   const { data: messages, isLoading } = useThreadMessages({
     channelId,

@@ -14,11 +14,22 @@ let current: Sender | null = null;
 // ephemeral / non-replayable, so the desktop popup the user already saw would
 // fail to cancel the deferred mobile push. Bounded so a long outage can't grow
 // the queue without limit (oldest dropped first).
-const pending: string[] = [];
+//
+// Frames may also carry `maxAgeMs` (SPEC I-13): a frame older than that at
+// flush time is DROPPED, not sent. An ack computed while the user was at the
+// desk, buffered through a sleep + wake + reconnect, must not cancel a mobile
+// push minutes later — by then the phone is the right destination.
+interface BufferedFrame {
+  frame: string;
+  enqueuedAt: number;
+  maxAgeMs?: number;
+}
+
+const pending: BufferedFrame[] = [];
 const MAX_PENDING = 64;
 
-function enqueue(frame: string): void {
-  pending.push(frame);
+function enqueue(entry: BufferedFrame): void {
+  pending.push(entry);
   if (pending.length > MAX_PENDING) pending.shift();
 }
 
@@ -32,11 +43,17 @@ export function clearWSPending(): void {
 export function setWSSender(s: Sender | null): void {
   current = s;
   if (!s) return;
-  // Flush buffered frames oldest-first. If the freshly-installed socket dies
-  // mid-flush, keep the unsent remainder queued for the next reconnect.
+  // Flush buffered frames oldest-first, dropping expired ones. If the
+  // freshly-installed socket dies mid-flush, keep the unsent remainder queued
+  // for the next reconnect.
   while (pending.length > 0) {
+    const head = pending[0];
+    if (head.maxAgeMs !== undefined && Date.now() - head.enqueuedAt > head.maxAgeMs) {
+      pending.shift();
+      continue;
+    }
     try {
-      s(pending[0]);
+      s(head.frame);
       pending.shift();
     } catch {
       break;
@@ -47,7 +64,8 @@ export function setWSSender(s: Sender | null): void {
 // sendWS serialises and sends a frame. Pass `{ buffer: true }` for frames that
 // must not be lost across a reconnect blip (acks); fire-and-forget ephemera
 // (typing pings) omit it and are simply dropped when the socket is down.
-export function sendWS(payload: unknown, opts?: { buffer?: boolean }): void {
+// `maxAgeMs` bounds how stale a buffered frame may be at flush time.
+export function sendWS(payload: unknown, opts?: { buffer?: boolean; maxAgeMs?: number }): void {
   let frame: string;
   try {
     frame = JSON.stringify(payload);
@@ -64,5 +82,5 @@ export function sendWS(payload: unknown, opts?: { buffer?: boolean }): void {
       // buffered frame is still queued for the next reconnect.
     }
   }
-  if (opts?.buffer) enqueue(frame);
+  if (opts?.buffer) enqueue({ frame, enqueuedAt: Date.now(), maxAgeMs: opts.maxAgeMs });
 }

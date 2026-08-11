@@ -228,8 +228,12 @@ const listAllPageSize = 500
 
 // publicUserJSON projects a user to the fields safe for ANY authenticated member
 // (the limited shape BatchGetUsers returns to non-admins, plus email for mention
-// matching). systemRole / authProvider are admin-only and must never leak
-// through a roster fetch by a regular member or guest.
+// matching). authProvider is admin-only and must never leak through a roster
+// fetch by a regular member or guest. systemRole is deliberately PUBLIC
+// (product decision 2026-07-17, reversing the 2026-06-28 audit redaction):
+// who is an admin is org-visible information — the directory renders a role
+// pill for every viewer, and omitting the field made members see empty
+// badges.
 func publicUserJSON(u *model.User) JSON {
 	return JSON{
 		"id":          u.ID,
@@ -237,6 +241,7 @@ func publicUserJSON(u *model.User) JSON {
 		"email":       u.Email,
 		"avatarURL":   u.AvatarURL,
 		"status":      u.Status,
+		"systemRole":  u.SystemRole,
 		"userStatus":  u.UserStatus,
 		"timeZone":    u.TimeZone,
 		"lastSeenAt":  u.LastSeenAt,
@@ -256,9 +261,9 @@ func publicUserList(users []*model.User) []JSON {
 }
 
 // usersForCaller returns the FULL user objects to an admin caller (the admin
-// directory page needs systemRole/authProvider to render roles and gate
-// promote/demote) and the limited public projection to everyone else, so a
-// regular member or guest can't read those admin-only fields.
+// directory page needs authProvider to gate promote/demote) and the limited
+// public projection to everyone else, so a regular member or guest can't read
+// the remaining admin-only fields (systemRole is public — see publicUserJSON).
 func usersForCaller(r *http.Request, users []*model.User) any {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if claims != nil && claims.SystemRole == model.SystemRoleAdmin {

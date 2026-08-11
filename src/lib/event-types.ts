@@ -32,6 +32,7 @@ export const EventType = {
   ReplayExhausted: 'replay.exhausted',
   WebhookChanged: 'webhook.changed',
   ActivityNew: 'activity.new',
+  ActivityRead: 'activity.read',
   ThreadUpdated: 'thread.updated',
 } as const;
 
@@ -52,6 +53,7 @@ export const EPHEMERAL_EVENT_TYPES = new Set<string>([
   EventType.ReplayDone,
   EventType.ReplayExhausted,
   EventType.ActivityNew,
+  EventType.ActivityRead,
   EventType.ThreadUpdated,
   'typing',
 ]);
