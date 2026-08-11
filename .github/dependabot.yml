@@ -41,9 +41,17 @@ updates:
     schedule:
       interval: "daily"
     ignore:
+      # @types/node must track the Node runtime the app is pinned to
+      # (package.json engines + the node:24 build stage), not npm's latest.
       - dependency-name: "@types/node"
         versions:
           - ">=25.0.0"
+      # TypeScript stays on the 6.x line deliberately — 7.x is the native-port
+      # compiler and is a breaking change for the type-check gate and for
+      # typescript-eslint. Revisit as an intentional migration, not a bump.
+      - dependency-name: "typescript"
+        versions:
+          - ">=7.0.0"
     groups:
       npm:
         patterns:

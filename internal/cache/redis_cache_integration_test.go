@@ -988,3 +988,51 @@ func TestWSTickets(t *testing.T) {
 		t.Fatal("consume against dead redis must error")
 	}
 }
+
+func TestPasswordResetTickets(t *testing.T) {
+	c, plain := setupRealTestCache(t)
+	ctx := context.Background()
+
+	if err := c.MintPasswordResetTicket(ctx, "hash-1", "u-guest", time.Hour); err != nil {
+		t.Fatalf("MintPasswordResetTicket: %v", err)
+	}
+	uid, err := c.ConsumePasswordResetTicket(ctx, "hash-1")
+	if err != nil || uid != "u-guest" {
+		t.Fatalf("ConsumePasswordResetTicket = (%q, %v), want (u-guest, nil)", uid, err)
+	}
+	// Single-use: a redeemed reset link can never be replayed (GETDEL).
+	if uid, err := c.ConsumePasswordResetTicket(ctx, "hash-1"); err != nil || uid != "" {
+		t.Fatalf("second redemption = (%q, %v), want empty", uid, err)
+	}
+	// Unknown and empty tokens read as not-found, not errors — the caller
+	// answers with the same generic "invalid or expired link" either way.
+	if uid, err := c.ConsumePasswordResetTicket(ctx, "never-minted"); err != nil || uid != "" {
+		t.Fatalf("unknown token = (%q, %v), want empty", uid, err)
+	}
+	if uid, err := c.ConsumePasswordResetTicket(ctx, ""); err != nil || uid != "" {
+		t.Fatalf("empty token = (%q, %v), want empty", uid, err)
+	}
+	// An expired ticket is gone: the TTL bounds how long a leaked link lives.
+	if err := c.MintPasswordResetTicket(ctx, "hash-exp", "u-guest", time.Hour); err != nil {
+		t.Fatalf("MintPasswordResetTicket: %v", err)
+	}
+	expireNow(t, plain, pwResetKeyPrefix+"hash-exp")
+	if uid, err := c.ConsumePasswordResetTicket(ctx, "hash-exp"); err != nil || uid != "" {
+		t.Fatalf("expired token = (%q, %v), want empty", uid, err)
+	}
+	// Guard arms: empty inputs at mint.
+	if err := c.MintPasswordResetTicket(ctx, "", "u-guest", time.Hour); err == nil {
+		t.Fatal("empty token mint must error")
+	}
+	if err := c.MintPasswordResetTicket(ctx, "hash-2", "", time.Hour); err == nil {
+		t.Fatal("empty user mint must error")
+	}
+	// Redis-error arms.
+	dead := newDeadCache(t)
+	if err := dead.MintPasswordResetTicket(ctx, "h", "u", time.Hour); err == nil {
+		t.Fatal("mint against dead redis must error")
+	}
+	if _, err := dead.ConsumePasswordResetTicket(ctx, "h"); err == nil {
+		t.Fatal("consume against dead redis must error")
+	}
+}

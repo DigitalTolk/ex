@@ -24,6 +24,7 @@ import { usePresence } from '@/context/PresenceContext';
 import { apiFetch } from '@/lib/api';
 import { getInitials } from '@/lib/format';
 import { PresenceDot } from '@/components/PresenceDot';
+import { PasswordResetDialog } from '@/components/PasswordResetDialog';
 import { presenceNotchStyle } from '@/lib/presence';
 import { formatLastSeen, formatTimeZoneDelta, formatTimeZoneName, isValidTimeZone } from '@/lib/user-time';
 import type { User } from '@/types';
@@ -183,6 +184,8 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [error, setError] = useState('');
+  // The guest whose password reset dialog is open (null = closed).
+  const [resetTarget, setResetTarget] = useState<User | null>(null);
   const { isOnline } = usePresence();
   const { openDM, isPending: openDMPending } = useOpenDM();
   const qc = useQueryClient();
@@ -430,6 +433,17 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                         >
                           Set as Guest
                         </DropdownMenuItem>
+                        {/* Password actions are guest-only: an SSO user's
+                            credential lives in the identity provider, and the
+                            server rejects a reset for one. */}
+                        {u.authProvider === 'guest' && (
+                          <DropdownMenuItem
+                            onClick={() => setResetTarget(u)}
+                            data-testid={`reset-password-${u.id}`}
+                          >
+                            Reset password
+                          </DropdownMenuItem>
+                        )}
                         {u.authProvider === 'guest' && (
                           u.status === 'deactivated' ? (
                             <DropdownMenuItem
@@ -456,6 +470,12 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
           );
         })}
       </div>
+
+      {/* Mounted only while a target is selected, so each guest gets a fresh
+          dialog — see PasswordResetDialog's docblock. */}
+      {resetTarget && (
+        <PasswordResetDialog user={resetTarget} onClose={() => setResetTarget(null)} />
+      )}
     </>
   );
 }

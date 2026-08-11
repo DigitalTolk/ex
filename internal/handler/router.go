@@ -91,6 +91,11 @@ func NewRouter(d *Deps) http.Handler {
 	mux.HandleFunc("POST /auth/logout", authH.Logout)
 	mux.Handle("POST /auth/invite/accept", middleware.WrapFunc(authH.AcceptInvite, authLimit))
 	mux.Handle("POST /auth/login", middleware.WrapFunc(authH.GuestLogin, authLimit))
+	// Password recovery for guest accounts. Rate-limited with the other
+	// credential endpoints: both are brute-forceable (address probing and
+	// reset-token guessing respectively).
+	mux.Handle("POST /auth/password/forgot", middleware.WrapFunc(authH.ForgotPassword, authLimit))
+	mux.Handle("POST /auth/password/reset", middleware.WrapFunc(authH.ResetPassword, authLimit))
 
 	// ------------------------------------------------------------------ Auth (protected)
 	mux.Handle("POST /auth/invite", middleware.WrapFunc(authH.CreateInvite, authMW))
@@ -106,6 +111,9 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("GET /api/v1/users/{id}", middleware.WrapFunc(userH.GetUser, authMW))
 	mux.Handle("PATCH /api/v1/users/{id}/role", middleware.WrapFunc(userH.UpdateUserRole, authMW))
 	mux.Handle("PATCH /api/v1/users/{id}/status", middleware.WrapFunc(userH.SetUserStatus, authMW))
+	// Admin-initiated password reset for a guest. Lives on AuthHandler (the
+	// AuthService owns credentials) but is addressed under the user it acts on.
+	mux.Handle("POST /api/v1/users/{id}/password-reset", middleware.WrapFunc(authH.AdminResetUserPassword, authMW))
 	mux.Handle("GET /api/v1/users", middleware.WrapFunc(userH.ListUsers, authMW))
 
 	if userStateH != nil {
@@ -254,6 +262,10 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("PUT /api/v1/admin/settings", middleware.WrapFunc(adminH.UpdateSettings, authMW))
 		mux.Handle("GET /api/v1/admin/search/status", middleware.WrapFunc(adminH.SearchStatus, authMW))
 		mux.Handle("GET /api/v1/admin/push-stats", middleware.WrapFunc(adminH.PushStats, authMW))
+		// Mail diagnostics: read the effective transport, and send a real
+		// message through it to verify the settings.
+		mux.Handle("GET /api/v1/admin/email", middleware.WrapFunc(adminH.EmailStatus, authMW))
+		mux.Handle("POST /api/v1/admin/email/test", middleware.WrapFunc(adminH.SendTestEmail, authMW))
 		mux.Handle("POST /api/v1/admin/search/reindex", middleware.WrapFunc(adminH.StartSearchReindex, authMW))
 		mux.Handle("POST /api/v1/admin/search/rebuild-mapping", middleware.WrapFunc(adminH.StartSearchMappingRebuild, authMW))
 	}

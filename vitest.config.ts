@@ -171,7 +171,9 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      // import.meta.dirname (not __dirname): Vite 8's `configLoader: 'native'`
+      // loads this config as a real ESM module, where __dirname is undefined.
+      '@': path.resolve(import.meta.dirname, './src'),
     },
   },
 });
