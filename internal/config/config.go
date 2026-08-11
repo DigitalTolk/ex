@@ -8,6 +8,16 @@ import (
 	"unicode/utf8"
 )
 
+// CliffHub production endpoints, used when the matching CLIFFY_* var is unset.
+// These are public URLs, not secrets — the shared HMAC secret is what actually
+// gates the bridge. Mint lives on the API (Laravel) host; the agent is a Next
+// route on the web host — deliberately two different hosts.
+const (
+	defaultCliffyMintURL  = "https://cliffhub-2-api.digitaltolk.net/api/ai/bridge/mint"
+	defaultCliffyAgentURL = "https://cliffhub.digitaltolk.net/api/ai/chat"
+	defaultCliffyWebBase  = "https://cliffhub.digitaltolk.net"
+)
+
 type Config struct {
 	Port string
 	Env  string // "development" or "production"
@@ -107,6 +117,33 @@ type Config struct {
 	// OpenSearch / Elasticsearch reachable without AWS auth.
 	OpenSearchAWSRegion  string
 	OpenSearchAWSService string // "es" (default) or "aoss" for Serverless
+
+	// Cliffy identity bridge. ex exchanges a signed assertion of one of its users
+	// for a short-TTL CliffHub token (the bridge acts as that user under CliffHub
+	// RBAC). CliffyBridgeSecret is shared with CliffHub (its
+	// CLIFFY_BRIDGE_SECRET), never reaches the browser, and is the ONLY required
+	// setting: the three URLs below default to CliffHub production, so an empty
+	// secret is what disables Cliffy.
+	CliffyBridgeSecret string
+	// For all three URLs below, UNSET means "CliffHub production" (the constants
+	// above) and an explicitly EMPTY value means "none" — which is a distinct,
+	// documented setting per field, not a way to ask for the default.
+	//
+	// CliffyBridgeMintURL is the LARAVEL mint route on CliffHub's API host — a
+	// different host from the agent below (pointing it at the Next app returns
+	// HTML and every mint 502s). Empty with a secret set is a boot failure.
+	CliffyBridgeMintURL string
+	// CliffyAgentURL is CliffHub's NEXT.js agent endpoint (…/api/ai/chat) on the
+	// web host. ex proxies the Cliffy panel's chat to it with the caller's bridged
+	// token injected server-side. Empty runs the bridge WITHOUT the chat: the
+	// session probe and write passthrough still work, chat 503s, and the in-chat
+	// @cliffy bot is never registered (cmd/server/main.go).
+	CliffyAgentURL string
+	// CliffyWebBase is CliffHub's user-facing WEB origin — where Cliffy's
+	// /tasks/<id> links should point. Usually the agent's host, but not always
+	// (in local dev the agent runs on a dev port while the web app is served
+	// elsewhere). Empty → ex derives it from the agent URL's origin.
+	CliffyWebBase string
 }
 
 func Load() (*Config, error) {
@@ -143,6 +180,17 @@ func Load() (*Config, error) {
 		OpenSearchURL:        os.Getenv("OPENSEARCH_URL"),
 		OpenSearchAWSRegion:  os.Getenv("OPENSEARCH_AWS_REGION"),
 		OpenSearchAWSService: envOr("OPENSEARCH_AWS_SERVICE", "es"),
+		CliffyBridgeSecret:   os.Getenv("CLIFFY_BRIDGE_SECRET"),
+		// Non-secret and stable, so they default to CliffHub production instead of
+		// being repeated in every deployment: a prod deploy needs only the secret.
+		// Any other environment (staging, or local dev via run-cliffy-dev.sh) MUST
+		// override all three, or it talks to production CliffHub.
+		// envUnlessSet, not envOr: setting one to "" is a deliberate choice (opt out
+		// of the chat proxy, or refuse to inherit the prod default), not a request
+		// for the default.
+		CliffyBridgeMintURL: envUnlessSet("CLIFFY_BRIDGE_MINT_URL", defaultCliffyMintURL),
+		CliffyAgentURL:      envUnlessSet("CLIFFY_AGENT_URL", defaultCliffyAgentURL),
+		CliffyWebBase:       envUnlessSet("CLIFFY_WEB_BASE", defaultCliffyWebBase),
 	}
 
 	accessTTL := envOr("JWT_ACCESS_TTL", "15m")
@@ -220,8 +268,28 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid MS_PROFILE_SYNC_INTERVAL %q: must be a positive duration", syncInterval)
 	}
 	c.MSProfileSyncInterval = d
+	// The secret alone is the on/off switch — the mint URL has a default, so it
+	// can only be empty if a deployment explicitly blanked it. A secret with no
+	// mint URL is a half-configured integration that would fail at call time
+	// rather than at boot, so fail fast here instead.
+	if c.CliffyBridgeSecret != "" && c.CliffyBridgeMintURL == "" {
+		return nil, fmt.Errorf("CLIFFY_BRIDGE_SECRET is set but CLIFFY_BRIDGE_MINT_URL is empty")
+	}
+	if c.CliffyBridgeSecret != "" && c.Env != "development" && utf8.RuneCountInString(c.CliffyBridgeSecret) < 32 {
+		return nil, fmt.Errorf("CLIFFY_BRIDGE_SECRET must be at least 32 characters outside development")
+	}
 
 	return c, nil
+}
+
+// CliffyTargetsDefaultCliffHub reports whether Cliffy is enabled AND still
+// pointed at the compiled-in production CliffHub. A non-production deployment in
+// that state creates real records in the real CliffHub, so the caller warns
+// about it at boot — the failure is silent otherwise, because everything works.
+func (c *Config) CliffyTargetsDefaultCliffHub() bool {
+	return c.CliffyBridgeSecret != "" &&
+		c.CliffyBridgeMintURL == defaultCliffyMintURL &&
+		c.CliffyAgentURL == defaultCliffyAgentURL
 }
 
 // MSGraphEnabled reports whether the Microsoft 365 (Graph) integration is
@@ -241,6 +309,16 @@ func (c *Config) OIDCRedirectURL() string {
 
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// envUnlessSet is envOr that honours a deliberately EMPTY value: only an absent
+// variable gets the fallback. Used where blank is a meaningful setting (blanking
+// CLIFFY_AGENT_URL turns the chat proxy off) rather than "give me the default".
+func envUnlessSet(key, fallback string) string {
+	if v, ok := os.LookupEnv(key); ok {
 		return v
 	}
 	return fallback

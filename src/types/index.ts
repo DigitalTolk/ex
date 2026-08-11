@@ -135,12 +135,31 @@ export interface MessageAttachment {
   thumb_url?: string;
   footer?: string;
   footer_icon?: string;
+  actions?: MessageAction[];
 }
 
 export interface MessageAttachmentField {
   title?: string;
   value?: string;
   short?: boolean;
+}
+
+/** An interactive control on an attachment (Mattermost's interactive messages).
+ *  The callback URL and its context stay server-side — the client sends back only
+ *  `id`, which is why there's no `integration` field here. */
+export interface MessageAction {
+  id: string;
+  name: string;
+  type?: 'button' | 'select';
+  /** Mattermost's cosmetic hint; ex maps primary/danger onto button variants. */
+  style?: string;
+  disabled?: boolean;
+  options?: MessageActionOption[];
+}
+
+export interface MessageActionOption {
+  text: string;
+  value: string;
 }
 
 export interface MessageDraft {
@@ -370,5 +389,7 @@ export type WireDriftChecks = [
   AssertAssignable<Required<Conversation>, wire.Conversation>,
   AssertAssignable<Required<Message>, wire.Message>,
   AssertAssignable<Required<MessageAttachment>, wire.MessageAttachment>,
+  AssertAssignable<Required<MessageAction>, wire.MessageAction>,
+  AssertAssignable<Required<MessageActionOption>, wire.MessageActionOption>,
   AssertAssignable<Required<MessageDraft>, wire.MessageDraft>,
 ];

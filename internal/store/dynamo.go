@@ -265,6 +265,24 @@ func userStateSK(kind, targetID string) string { return "STATE#" + kind + "#" + 
 func webhookPK(id string) string               { return "WEBHOOK#" + id }
 func webhookSK() string                        { return "META" }
 
+// Bot accounts: metadata rows keyed by the bot's user ID, and token rows keyed
+// by the token's SHA-256 hash so authentication is a single keyed GetItem.
+func botPK(userID string) string    { return "BOT#" + userID }
+func botTokenPK(hash string) string { return "BOTTOKEN#" + hash }
+
+// botTokenGSI1PK is the per-bot token partition on GSI1, so listing or
+// revoking every token a bot holds is a Query bounded by that bot's token
+// count instead of a full-table Scan (the same shape as userTokenGSI1PK).
+func botTokenGSI1PK(botUserID string) string { return "BOTTOKENBOT#" + botUserID }
+
+// External slash commands: a metadata row per command, plus a claim row per
+// trigger word so uniqueness is enforced by a conditional write rather than a
+// read-then-write race (the same pattern as USEREMAIL#).
+func extCommandPK(id string) string { return "COMMAND#" + id }
+func extCommandTriggerPK(trigger string) string {
+	return "COMMANDTRIGGER#" + strings.ToLower(strings.TrimSpace(trigger))
+}
+
 func categoryNameSK(name string) string {
 	return "CATEGORYNAME#" + strings.ToLower(strings.TrimSpace(name))
 }

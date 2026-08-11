@@ -98,6 +98,10 @@ type MessageService struct {
 	channelSeq    UnreadSeqStore
 	convSeq       UnreadSeqStore
 	reactions     ReactionActivityRecorder
+	bots          []registeredBot
+	botDir        BotDirectory
+	botTriggers   BotTriggerIndex
+	botCtx        BotContextResolver
 }
 
 // ReactionActivityRecorder records "someone reacted to your message" hints into
@@ -297,7 +301,13 @@ const detachedTimeout = 30 * time.Second
 // detachedContext returns a cancellation-free copy of ctx (so the work survives
 // the request ending) but with a finite deadline so it can't hang forever.
 func detachedContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), detachedTimeout)
+	return detachedContextTimeout(ctx, detachedTimeout)
+}
+
+// detachedContextTimeout is detachedContext with a caller-chosen deadline (e.g. a
+// bot turn needs longer than the default bookkeeping timeout).
+func detachedContextTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), d)
 }
 
 // indexMessage / deleteFromIndex dispatch on a detached goroutine so a
@@ -360,10 +370,11 @@ func (s *MessageService) writeUnreadSeq(ctx context.Context, store UnreadSeqStor
 		slog.Warn("unread seq increment failed", "parentID", parentID, "error", err)
 		return
 	}
-	// The webhook sentinel is not a member and keeps no read state — marking
-	// it read can only fail ("store: item not found" WARN on every webhook
-	// post). Recipients' unread still bumps via the seq increment above.
-	if authorID == WebhookAuthorID {
+	// The webhook sentinel and bots are not channel members and keep no read
+	// state — marking them read can only fail ("store: item not found" WARN on
+	// every post). Recipients' unread still bumps via the seq increment above.
+	// (Bots have no unread UI, so skipping their own last-read is harmless.)
+	if authorID == WebhookAuthorID || model.IsBotUserID(authorID) {
 		return
 	}
 	if err := store.SetLastRead(ctx, parentID, authorID, seq); err != nil {
@@ -561,6 +572,10 @@ func (s *MessageService) send(ctx context.Context, userID, parentID, parentType,
 
 	s.indexMessage(ctx, msg, parentType)
 
+	// If the message @mentions a registered bot (or continues a bot's thread),
+	// dispatch it off the send path. Fully detached — never adds latency.
+	s.maybeDispatchToBots(ctx, msg, parentType)
+
 	// Thread reply: republish the authoritative parent so subscribers see
 	// the new replyCount / avatar stack without a re-fetch. The metadata
 	// itself was already persisted before message.new to keep /threads
@@ -585,6 +600,10 @@ type WebhookMessageInput struct {
 	AvatarURL   string
 	IconEmoji   string
 	Attachments []model.MessageAttachment
+	// ParentMessageID (optional) threads the post as a reply under that root —
+	// used by in-chat Cliffy so a back-and-forth stays in one thread. External
+	// webhooks leave it empty (always top-level).
+	ParentMessageID string
 }
 
 func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput) (*model.Message, error) {
@@ -612,11 +631,22 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 	if err := ValidateAttachmentCount(len(in.Attachments)); err != nil {
 		return nil, err
 	}
+	// A threaded post (Cliffy replying in a thread) must reference a live root.
+	if in.ParentMessageID != "" {
+		root, err := s.messages.GetMessage(ctx, parentID, in.ParentMessageID)
+		if err != nil {
+			return nil, fmt.Errorf("message: thread root: %w", err)
+		}
+		if root.Deleted {
+			return nil, ErrThreadDeleted
+		}
+	}
 	msg := &model.Message{
 		ID:                 store.NewID(),
 		ParentID:           parentID,
 		AuthorID:           authorID,
 		Body:               in.Body,
+		ParentMessageID:    in.ParentMessageID,
 		WebhookUsername:    in.Username,
 		WebhookAvatarURL:   in.AvatarURL,
 		WebhookIconEmoji:   in.IconEmoji,
@@ -629,16 +659,97 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 	if err := s.messages.CreateMessage(ctx, msg); err != nil {
 		return nil, fmt.Errorf("message: create webhook: %w", err)
 	}
-	switch parentType {
-	case ParentChannel:
-		s.bumpUnreadSeq(ctx, s.channelSeq, parentID, authorID)
-	case ParentConversation:
-		s.bumpUnreadSeq(ctx, s.convSeq, parentID, authorID)
+	// Only a top-level post is new conversation/channel activity; a thread reply
+	// updates its root's metadata instead (mirrors Send).
+	var updatedThreadRoot *model.Message
+	if in.ParentMessageID == "" {
+		switch parentType {
+		case ParentChannel:
+			s.bumpUnreadSeq(ctx, s.channelSeq, parentID, authorID)
+		case ParentConversation:
+			s.bumpUnreadSeq(ctx, s.convSeq, parentID, authorID)
+		}
+	} else {
+		if updated, err := s.messages.IncrementReplyMetadata(ctx, parentID, in.ParentMessageID, msg.CreatedAt, authorID); err == nil {
+			updatedThreadRoot = updated
+			s.recordThreadParticipation(ctx, msg, parentType, updated)
+		} else {
+			slog.Warn("webhook thread reply metadata increment failed", "rootID", in.ParentMessageID, "replyID", msg.ID, "error", err)
+		}
 	}
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageNew, msg)
-	s.notify(ctx, msg, parentType, nil) // webhook posts are always top-level, never thread replies
+	s.notify(ctx, msg, parentType, updatedThreadRoot)
 	s.indexMessage(ctx, msg, parentType)
+	if updatedThreadRoot != nil {
+		s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, updatedThreadRoot)
+	}
 	return msg, nil
+}
+
+// SendBotCard posts a bot-authored card into a channel or conversation on a
+// user's behalf — e.g. the "share to conversation" action, so both participants
+// see something a bot created. It first verifies the REQUESTING user may post to
+// the scope (so a user can't make a bot speak into a conversation they aren't
+// in), then posts under the given bot identity. Generic: the caller supplies the
+// bot's author id / display name / icon — this service holds no bot branding.
+func (s *MessageService) SendBotCard(
+	ctx context.Context,
+	requestUserID, authorID, username, iconEmoji, parentID, parentType, parentMessageID, body string,
+	attachments []model.MessageAttachment,
+) (*model.Message, error) {
+	return s.PostBotCard(ctx, BotCardInput{
+		RequestUserID:   requestUserID,
+		AuthorID:        authorID,
+		Username:        username,
+		IconEmoji:       iconEmoji,
+		ParentID:        parentID,
+		ParentType:      parentType,
+		ParentMessageID: parentMessageID,
+		Body:            body,
+		Attachments:     attachments,
+	})
+}
+
+// BotCardInput is the named-field form of SendBotCard's parameters. Preferred for
+// new callers: the positional signature above predates the icon_url and
+// attachment-action fields integrations now set, and nine positional strings is
+// past the point where a call site is readable.
+type BotCardInput struct {
+	// RequestUserID is the human on whose behalf the post happens. Their access is
+	// what is checked — the bot never posts somewhere the requester cannot.
+	RequestUserID string
+	// AuthorID is the bot account authoring the post. Empty stamps the generic
+	// webhook sentinel.
+	AuthorID        string
+	Username        string
+	IconEmoji       string
+	IconURL         string
+	ParentID        string
+	ParentType      string
+	ParentMessageID string
+	Body            string
+	Attachments     []model.MessageAttachment
+}
+
+// PostBotCard posts a bot-authored card on a user's behalf. See SendBotCard.
+func (s *MessageService) PostBotCard(ctx context.Context, in BotCardInput) (*model.Message, error) {
+	if in.RequestUserID == "" {
+		return nil, fmt.Errorf("message: requester required: %w", ErrForbidden)
+	}
+	if err := s.checkAccess(ctx, in.RequestUserID, in.ParentID, in.ParentType); err != nil {
+		return nil, err
+	}
+	return s.SendWebhook(ctx, WebhookMessageInput{
+		ParentID:        in.ParentID,
+		ParentType:      in.ParentType,
+		ParentMessageID: in.ParentMessageID,
+		AuthorID:        in.AuthorID,
+		Body:            in.Body,
+		Username:        in.Username,
+		AvatarURL:       in.IconURL,
+		IconEmoji:       in.IconEmoji,
+		Attachments:     in.Attachments,
+	})
 }
 
 func (s *MessageService) followMentionedThreadUsers(ctx context.Context, msg *model.Message, parentType string) {

@@ -6,6 +6,7 @@ import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { Header } from '@/components/layout/Header';
 import { MessageList } from './MessageList';
 import { MessageInput, type MessageInputHandle, type MessageInputValue } from './MessageInput';
+import { useCliffyStore, isCliffyCommand, cliffyPrompt } from '@/features/cliffy/cliffy-store';
 import { MessageDropZone } from './MessageDropZone';
 import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
@@ -167,6 +168,13 @@ export function ConversationView() {
   );
   const handleSendMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {
+      // `/cliffy …` opens the private Cliffy panel seeded + scoped to this DM
+      // rather than posting a message the other participant would see.
+      if (isCliffyCommand(value.body)) {
+        // Scope is kept current by the nav effect below; just open + seed.
+        useCliffyStore.getState().openCliffy({ prompt: cliffyPrompt(value.body) });
+        return;
+      }
       // Draft lifecycle (condemn at mutate, cache patch-out on success,
       // rollback on error) is owned by useSendMessage.
       sendMessage.mutate(value);
@@ -321,6 +329,14 @@ export function ConversationView() {
     [conversation, user?.id, userMap],
   );
   useDocumentTitle(derivedTitle);
+  // Keep Cliffy's scope pointed at the DM/group being viewed, so the shared
+  // panel targets this conversation and its people. Cleared on unmount so
+  // leaving chat for a non-chat page falls back to personal Cliffy.
+  useEffect(() => {
+    if (!id) return;
+    useCliffyStore.getState().setScope({ type: 'conversation', id, name: derivedTitle ?? undefined });
+    return () => useCliffyStore.getState().setScope(null);
+  }, [id, derivedTitle]);
 
   if (!id) {
     return (

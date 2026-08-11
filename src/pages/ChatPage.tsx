@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { CliffyLauncher } from '@/features/cliffy/CliffyLauncher';
 import { useUnread } from '@/context/UnreadContext';
 import { useAuth } from '@/context/AuthContext';
 import { usePresence } from '@/context/PresenceContext';
@@ -576,6 +577,7 @@ export default function ChatPage() {
       <MobileChatReadyGate>
         <Outlet />
       </MobileChatReadyGate>
+      <CliffyLauncher />
     </AppLayout>
   );
 }

@@ -10,6 +10,7 @@ import {
 import type { User } from '@/types';
 import {
   setAccessToken,
+  getAccessToken,
   clearAccessToken,
   apiFetch,
   refreshAccessToken,
@@ -110,6 +111,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    // Best-effort: tear down any Cliffy bridge session while the token is still
+    // valid (no-op / 404 when Cliffy is disabled — ignored).
+    try {
+      await fetch('/api/v1/cliffy/revoke', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { Authorization: `Bearer ${getAccessToken() ?? ''}` },
+      });
+    } catch {
+      // ignore
+    }
     try {
       await fetch('/auth/logout', {
         method: 'POST',

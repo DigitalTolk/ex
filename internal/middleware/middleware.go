@@ -35,9 +35,31 @@ type authUserStore interface {
 	UserStatus(ctx context.Context, id string) (string, error)
 }
 
+// BotTokenValidator resolves a bot API token into claims. Implemented by
+// *service.BotService; kept as a narrow interface here so the middleware (and
+// the router that wires it) never depends on the service package.
+type BotTokenValidator interface {
+	ValidateBotToken(ctx context.Context, token string) (*model.TokenClaims, error)
+}
+
 // AuthWithUserStatus validates a JWT and, when a user store is supplied,
 // rejects tokens for accounts that have since been deactivated.
 func AuthWithUserStatus(jwtMgr *auth.JWTManager, users authUserStore) func(http.Handler) http.Handler {
+	return AuthWithBots(jwtMgr, users, nil)
+}
+
+// AuthWithBots is AuthWithUserStatus plus bot-token support: a bearer value
+// carrying model.BotTokenPrefix is resolved by the bot validator instead of the
+// JWT manager. The two token spaces cannot overlap — a JWT always begins "eyJ"
+// (base64url of `{"`) — so the prefix test is unambiguous.
+//
+// Both paths then share the deactivation check below, which is what enforces
+// bot retirement: DeleteBot deactivates the bot's user, and this check rejects
+// its remaining tokens on their next request.
+//
+// A nil validator makes the bot branch unreachable, so behaviour is identical
+// to the JWT-only middleware this replaces.
+func AuthWithBots(jwtMgr *auth.JWTManager, users authUserStore, bots BotTokenValidator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tokenStr := extractToken(r)
@@ -46,7 +68,13 @@ func AuthWithUserStatus(jwtMgr *auth.JWTManager, users authUserStore) func(http.
 				return
 			}
 
-			claims, err := jwtMgr.ValidateToken(tokenStr)
+			var claims *model.TokenClaims
+			var err error
+			if bots != nil && strings.HasPrefix(tokenStr, model.BotTokenPrefix) {
+				claims, err = bots.ValidateBotToken(r.Context(), tokenStr)
+			} else {
+				claims, err = jwtMgr.ValidateToken(tokenStr)
+			}
 			if err != nil {
 				http.Error(w, "invalid token", http.StatusUnauthorized)
 				return

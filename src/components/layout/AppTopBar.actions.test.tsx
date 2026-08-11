@@ -92,6 +92,13 @@ describe('AppTopBar menu actions', () => {
     expect(screen.getByTestId('location-probe')).toHaveTextContent('/webhooks');
   });
 
+  it('navigates to the bots page from the menu', () => {
+    renderTopBar();
+    fireEvent.click(screen.getByTestId('topbar-account'));
+    fireEvent.click(screen.getByTestId('user-menu-bots'));
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/bots');
+  });
+
   it('shows the change-server item on native and resets the server on confirm', () => {
     mockNative = true;
     renderTopBar();

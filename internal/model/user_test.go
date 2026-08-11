@@ -21,3 +21,17 @@ func TestUserManagerEqual(t *testing.T) {
 		}
 	}
 }
+
+func TestUserIsBot(t *testing.T) {
+	// Callers use this instead of hardcoding the AuthProvider string.
+	if !(&User{AuthProvider: AuthProviderBot}).IsBot() {
+		t.Error("a bot account must report IsBot")
+	}
+	if (&User{AuthProvider: AuthProviderOIDC}).IsBot() {
+		t.Error("an SSO user is not a bot")
+	}
+	var nilUser *User
+	if nilUser.IsBot() {
+		t.Error("a nil user must not report as a bot")
+	}
+}

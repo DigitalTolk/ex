@@ -209,6 +209,22 @@ describe('ChannelView - actions', () => {
     );
   });
 
+  it('/cliffy opens the private assistant instead of posting to the channel', async () => {
+    const { useCliffyStore } = await import('@/features/cliffy/cliffy-store');
+    useCliffyStore.setState({ open: false, seedPrompt: null });
+    const user = userEvent.setup();
+    renderChannelView();
+
+    const input = screen.getByLabelText('Message input');
+    await user.type(input, '/cliffy who is on leave?{enter}');
+
+    // Nothing is posted — the channel must not see the prompt.
+    expect(mockSendMutate).not.toHaveBeenCalled();
+    const s = useCliffyStore.getState();
+    expect(s.open).toBe(true);
+    expect(s.seedPrompt).toBe('who is on leave?');
+  });
+
   it('owner can archive channel — archives via apiFetch DELETE and navigates', async () => {
     renderChannelView();
 

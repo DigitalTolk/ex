@@ -663,3 +663,45 @@
     font-size: 0.875rem;
   }
 }
+
+/* ── Cliffy panel animations (ported from CliffHub, adapted to ex tokens) ── */
+@keyframes cliff-heading-sheen {
+  0% { background-position: 0% 0; }
+  100% { background-position: -200% 0; }
+}
+.cliff-heading-sheen {
+  background-image: linear-gradient(
+    100deg,
+    var(--color-foreground) 0%,
+    var(--color-foreground) 35%,
+    color-mix(in oklch, var(--color-brand) 85%, var(--color-foreground)) 50%,
+    var(--color-foreground) 65%,
+    var(--color-foreground) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: cliff-heading-sheen 6s ease-in-out infinite;
+}
+@keyframes cliff-shine {
+  0% { transform: translateX(-130%) skewX(-20deg); }
+  60%, 100% { transform: translateX(230%) skewX(-20deg); }
+}
+.cliff-shine { position: relative; overflow: hidden; }
+.cliff-shine::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 45%;
+  pointer-events: none;
+  background: linear-gradient(100deg, transparent 0%, rgba(255,255,255,0.35) 50%, transparent 100%);
+  opacity: 0;
+  transform: translateX(-130%) skewX(-20deg);
+}
+.cliff-shine:hover::after { opacity: 1; animation: cliff-shine 0.9s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .cliff-heading-sheen { animation: none; }
+  .cliff-shine:hover::after { display: none; }
+}

@@ -18,6 +18,10 @@ type AuthProvider string
 const (
 	AuthProviderOIDC  AuthProvider = "oidc"
 	AuthProviderGuest AuthProvider = "guest"
+	// AuthProviderBot marks a bot account: a real user row that authenticates
+	// with a bot API token instead of a session JWT, so it can hold channel
+	// memberships and author messages like any other member.
+	AuthProviderBot AuthProvider = "bot"
 )
 
 type User struct {
@@ -73,6 +77,10 @@ func (m *UserManager) Equal(other *UserManager) bool {
 	}
 	return *m == *other
 }
+
+// IsBot reports whether this user is a bot account, so callers don't have to
+// hardcode the AuthProvider string.
+func (u *User) IsBot() bool { return u != nil && u.AuthProvider == AuthProviderBot }
 
 type UserStatus struct {
 	Emoji   string     `json:"emoji" dynamodbav:"emoji"`

@@ -769,6 +769,12 @@ func (s *UserService) UpdateRole(ctx context.Context, _, targetID string, role m
 	if user.AuthProvider == model.AuthProviderGuest && role != model.SystemRoleGuest {
 		return nil, errors.New("user: guests cannot be promoted; member and admin roles are SSO-only")
 	}
+	// A bot authenticates with a long-lived token held by an external app, so
+	// granting it admin would hand workspace administration to whoever holds
+	// that token. Bots stay members for their whole lifetime.
+	if user.AuthProvider == model.AuthProviderBot {
+		return nil, errors.New("user: bot accounts always have the member role")
+	}
 	user.SystemRole = role
 	user.UpdatedAt = time.Now()
 	if err := s.users.UpdateUser(ctx, user); err != nil {
@@ -782,8 +788,11 @@ func (s *UserService) UpdateRole(ctx context.Context, _, targetID string, role m
 	return user, nil
 }
 
-// SetStatus marks a user active or deactivated. Only guest accounts can be
-// deactivated this way — SSO-managed users are governed by the upstream IdP.
+// SetStatus marks a user active or deactivated. Only guest and bot accounts can
+// be deactivated this way — SSO-managed users are governed by the upstream IdP.
+// Bots are included because deactivating one is how a bot is retired: the
+// per-request status check then rejects its tokens, and BotService.DeleteBot
+// routes through here to reuse the cache invalidation and events below.
 // The handler enforces actor admin rights; this performs the mutation and
 // emits a user.updated event so connected clients refresh.
 func (s *UserService) SetStatus(ctx context.Context, targetID string, deactivated bool) (*model.User, error) {
@@ -795,8 +804,8 @@ func (s *UserService) SetStatus(ctx context.Context, targetID string, deactivate
 		return nil, fmt.Errorf("user: get: %w", err)
 	}
 	backfillAuthProvider(user)
-	if user.AuthProvider != model.AuthProviderGuest {
-		return nil, errors.New("user: only guest accounts can be deactivated")
+	if user.AuthProvider != model.AuthProviderGuest && user.AuthProvider != model.AuthProviderBot {
+		return nil, errors.New("user: only guest and bot accounts can be deactivated")
 	}
 	return s.applyStatus(ctx, user, deactivated)
 }

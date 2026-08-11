@@ -17,6 +17,10 @@ Thumbs.db
 /CLAUDE.md
 /.claude/scheduled_tasks.lock
 
+# Dev-only local Cliffy user seeder — never committed (creates a local
+# login for manual testing; not part of the server build).
+/cmd/cliffylocaluser/
+
 # Go
 *.exe
 *.exe~
@@ -51,3 +55,6 @@ coverage.out
 coverage.html
 /.vitest-attachments/
 __screenshots__/
+
+# Machine-local dev launcher with CLIFFY_* env (secret sourced from CliffHub .env).
+/run-cliffy-dev.sh
