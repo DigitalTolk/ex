@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { EmojiPicker } from '@/components/EmojiPicker';
-import { canDriveNativeTouch, nativeTouchScroll } from '@/test/native-scroll';
+import { nativeTouchScroll, touchScrollWorks } from '@/test/native-scroll';
 
 // The mobile bottom sheets, proven against REAL touch input.
 //
@@ -60,9 +60,14 @@ async function openPicker() {
 
 describe('emoji picker sheet — native touch scrolling', () => {
   it('scrolls when the gesture starts inside the emoji grid', async () => {
+    // Probe the harness BEFORE the picker opens (the probe's synthesized
+    // input must never land on the surface under test). Gesture assertions
+    // run only where the harness can genuinely scroll: webkit has no CDP,
+    // and some CI chromium builds synthesize gestures that move nothing.
+    const gesturesWork = await touchScrollWorks();
     const body = await openPicker();
     expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
-    if (!canDriveNativeTouch()) return;
+    if (!gesturesWork) return;
 
     const rect = body.getBoundingClientRect();
     await nativeTouchScroll(body, {
@@ -79,12 +84,13 @@ describe('emoji picker sheet — native touch scrolling', () => {
   // browser, having handed the gesture to JS, also did nothing. The picker
   // read as frozen.
   it('scrolls when the gesture starts on the frequently-used shelf', async () => {
+    const gesturesWork = await touchScrollWorks();
     const body = await openPicker();
     const shelf = document.querySelector('[data-testid="emoji-frequent-grid"]') as HTMLElement;
     expect(shelf).not.toBeNull();
     // The shelf must live inside the one scroll region, not above it.
     expect(body.contains(shelf)).toBe(true);
-    if (!canDriveNativeTouch()) return;
+    if (!gesturesWork) return;
 
     await nativeTouchScroll(shelf, { dy: -120 });
 

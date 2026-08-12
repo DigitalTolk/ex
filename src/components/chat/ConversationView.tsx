@@ -46,6 +46,7 @@ import { clearConversationUnreadInCache } from '@/lib/unread-cache';
 import type { Conversation, Message } from '@/types';
 import type { UserMapEntry } from './MessageList';
 import type { DraftAttachment } from './AttachmentChip';
+import { useMarkReadOnReturn } from '@/hooks/useMarkReadOnReturn';
 
 function errorStatus(err: unknown): number | null {
   return typeof err === 'object' && err !== null && 'status' in err
@@ -199,23 +200,35 @@ export function ConversationView() {
     [editMessage, editingMessage, id],
   );
 
+  // Drop the badge instantly in the list cache, then persist the read so it
+  // stays cleared on a reload (the refetch confirms the server count is 0).
+  const markConversationRead = useCallback(
+    (openedID: string) => {
+      clearConversationUnreadInCache(queryClient, openedID);
+      void apiFetch<void>(`/api/v1/conversations/${openedID}/read`, { method: 'PUT' })
+        .catch(() => undefined)
+        .finally(() => {
+          queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+        });
+    },
+    [queryClient],
+  );
+
   useEffect(() => {
     if (!id) return;
-    // Drop the badge instantly in the list cache, then persist the read so it
-    // stays cleared on a reload (the refetch confirms the server count is 0).
-    clearConversationUnreadInCache(queryClient, id);
+    markConversationRead(id);
     setActiveConversation(id);
     setActiveParent(id);
-    void apiFetch<void>(`/api/v1/conversations/${id}/read`, { method: 'PUT' })
-      .catch(() => undefined)
-      .finally(() => {
-        queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
-      });
     return () => {
       setActiveConversation(null);
       setActiveParent(null);
     };
-  }, [id, setActiveConversation, setActiveParent, queryClient]);
+  }, [id, setActiveConversation, setActiveParent, markConversationRead]);
+
+  // Messages that arrived while this DM's window was blurred/hidden bump the
+  // badge instead of auto-reading (ChatPage's attention gate) — returning to
+  // the window is what reads them.
+  useMarkReadOnReturn(id, markConversationRead);
 
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
   const inputRef = useRef<MessageInputHandle>(null);

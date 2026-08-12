@@ -61,19 +61,64 @@ export async function nativeTouchScroll(el: Element, { dy, from }: NativeScrollO
   const rect = el.getBoundingClientRect();
   const origin = from ?? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
   const point = toPagePoint(origin.x, origin.y);
+  // Touch emulation stays ON afterwards — the chromium-mobile project's
+  // Playwright context is itself touch-enabled, and flipping the override
+  // off behind its back would strip that.
   await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
   try {
-    await client.send('Input.synthesizeScrollGesture', {
-      x: Math.round(point.x),
-      y: Math.round(point.y),
-      xDistance: 0,
-      yDistance: Math.round(dy * point.scale),
-      gestureSourceType: 'touch',
-      speed: 800,
-    });
-    // Let momentum/settling finish before the caller reads scrollTop.
-    await new Promise((resolve) => setTimeout(resolve, 400));
-  } finally {
-    await client.send('Emulation.setTouchEmulationEnabled', { enabled: false, maxTouchPoints: 1 });
+    // Input synthesis targets the focused/foreground page; CI window
+    // managers don't always grant that. Best-effort.
+    await client.send('Page.bringToFront');
+  } catch {
+    // Page domain unavailable on this session — proceed.
   }
+  await client.send('Input.synthesizeScrollGesture', {
+    x: Math.round(point.x),
+    y: Math.round(point.y),
+    xDistance: 0,
+    yDistance: Math.round(dy * point.scale),
+    gestureSourceType: 'touch',
+    speed: 800,
+  });
+  // Let momentum/settling finish before the caller reads scrollTop.
+  await new Promise((resolve) => setTimeout(resolve, 400));
+}
+
+// Whether THIS environment's CDP input synthesis produces real compositor
+// scrolling — probed once per test file against a plain overflow div with no
+// app code involved. Chromium's headless shell on some CI hosts accepts
+// synthesizeScrollGesture and scrolls nothing (observed 2026-08-12: green
+// locally on macOS, scrollTop stuck at 0 on Linux CI). Callers skip the
+// GESTURE assertions when the harness itself can't scroll — the structural
+// assertions (scroll region containment, scrollability, drag-chrome
+// attributes) must run unconditionally, since those are what pin the
+// regression's shape.
+let touchScrollCapability: boolean | null = null;
+
+export async function touchScrollWorks(): Promise<boolean> {
+  if (!canDriveNativeTouch()) return false;
+  if (touchScrollCapability !== null) return touchScrollCapability;
+  const probe = document.createElement('div');
+  probe.style.cssText =
+    'position:fixed;left:0;top:0;width:200px;height:200px;overflow-y:auto;z-index:2147483647;background:#fff';
+  const filler = document.createElement('div');
+  filler.style.height = '2000px';
+  probe.appendChild(filler);
+  // The synthesized gesture dispatches REAL pointer/touch events; swallow
+  // them at the probe so app-level document listeners (e.g. a popover's
+  // outside-pointerdown dismiss) never see the probe's input. Callers should
+  // still probe BEFORE mounting the surface under test.
+  for (const type of ['pointerdown', 'pointerup', 'touchstart', 'touchend', 'mousedown', 'mouseup', 'click']) {
+    probe.addEventListener(type, (e) => e.stopPropagation());
+  }
+  document.body.appendChild(probe);
+  try {
+    await nativeTouchScroll(probe, { dy: -120 });
+    touchScrollCapability = probe.scrollTop > 0;
+  } catch {
+    touchScrollCapability = false;
+  } finally {
+    probe.remove();
+  }
+  return touchScrollCapability;
 }

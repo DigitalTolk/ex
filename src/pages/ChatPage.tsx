@@ -11,6 +11,7 @@ import { useWebSocket } from '@/hooks/useWebSocket';
 import { setServerVersion } from '@/hooks/useServerVersion';
 import { sendWS } from '@/lib/ws-sender';
 import { localTimeZone } from '@/lib/user-time';
+import { isUserAttentive, suppressionWindowMs } from '@/lib/user-activity';
 import { slugify } from '@/lib/format';
 import { isOwnMessage } from '@/lib/message-users';
 import {
@@ -151,9 +152,18 @@ export default function ChatPage() {
           // /leaving), isn't "new channel activity" — only a top-level human
           // message bumps the channel's unread indicator.
           if (!parentMessageID && !msg.system) {
-            if (isActiveChannel(parentID)) {
-              // Already viewing it — keep the server caught up so the badge
-              // doesn't reappear on a reload (mirrors the conversation path).
+            // "The route is open" is NOT "the user read it": auto-marking the
+            // active parent read while the window was blurred/hidden erased
+            // every trace of the message (no badge, no bold row, no title
+            // count — and read-sync cleared the phone too) the moment the OS
+            // banner auto-dismissed. Reading requires the SUPPRESSION tier's
+            // evidence — actually looking at the page — the same bar the
+            // popup-suppression uses; the views mark read again when the
+            // window regains focus (Slack semantics).
+            if (isActiveChannel(parentID) && isUserAttentive(suppressionWindowMs)) {
+              // Genuinely watching it — keep the server caught up so the
+              // badge doesn't reappear on a reload (mirrors the conversation
+              // path).
               void apiFetch<void>(`/api/v1/channels/${encodeURIComponent(parentID)}/read`, { method: 'PUT' })
                 .catch(() => undefined);
             } else {
@@ -168,7 +178,10 @@ export default function ChatPage() {
           // must NOT bump the DM's unread count — the backend no longer bumps
           // the conversation seq for thread replies either, so the two agree.
           if (!parentMessageID && !msg.system) {
-            if (isActiveConversation(parentID)) {
+            // Same attention gate as the channel arm above: an open-but-
+            // unwatched DM must keep its unread trace (this was the "no
+            // desktop notification from the DM I last had open" complaint).
+            if (isActiveConversation(parentID) && isUserAttentive(suppressionWindowMs)) {
               clearConversationUnreadInCache(queryClient, parentID);
               void apiFetch<void>(`/api/v1/conversations/${encodeURIComponent(parentID)}/read`, { method: 'PUT' })
                 .catch(() => undefined);

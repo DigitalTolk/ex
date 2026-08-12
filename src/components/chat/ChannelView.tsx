@@ -48,6 +48,7 @@ import { TagSearchPanel } from '@/components/TagSearchPanel';
 import type { Message } from '@/types';
 import type { UserMapEntry } from './MessageList';
 import type { DraftAttachment } from './AttachmentChip';
+import { useMarkReadOnReturn } from '@/hooks/useMarkReadOnReturn';
 
 function errorStatus(err: unknown): number | null {
   return typeof err === 'object' && err !== null && 'status' in err
@@ -224,27 +225,39 @@ export function ChannelView() {
     },
     [channelID, editMessage, editingMessage],
   );
+  // Optimistically drop the server-side unread badge for this channel so the
+  // sidebar clears instantly, then persist the read so it stays cleared on a
+  // reload (mirrors the conversation read-on-open). The helper guards the
+  // not-yet-loaded list — an inline `prev?.map` would resolve undefined on a
+  // cold deep-link and clobber the cache.
+  const markChannelRead = useCallback(
+    (openedID: string) => {
+      clearChannelUnreadInCache(queryClient, openedID);
+      void apiFetch<void>(`/api/v1/channels/${openedID}/read`, { method: 'PUT' })
+        .catch(() => undefined)
+        .finally(() => {
+          queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+        });
+    },
+    [queryClient],
+  );
+
   useEffect(() => {
     if (!channel?.id) return;
     const openedID = channel.id;
     setActiveChannel(openedID);
     setActiveParent(openedID);
-    // Optimistically drop the server-side unread badge for this channel so the
-    // sidebar clears instantly, then persist the read so it stays cleared on a
-    // reload (mirrors the conversation read-on-open). The helper guards the
-    // not-yet-loaded list — an inline `prev?.map` would resolve undefined on a
-    // cold deep-link and clobber the cache.
-    clearChannelUnreadInCache(queryClient, openedID);
-    void apiFetch<void>(`/api/v1/channels/${openedID}/read`, { method: 'PUT' })
-      .catch(() => undefined)
-      .finally(() => {
-        queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
-      });
+    markChannelRead(openedID);
     return () => {
       setActiveChannel(null);
       setActiveParent(null);
     };
-  }, [channel?.id, setActiveChannel, setActiveParent, queryClient]);
+  }, [channel?.id, setActiveChannel, setActiveParent, markChannelRead]);
+
+  // Messages that arrived while this channel's window was blurred/hidden bump
+  // the badge instead of auto-reading (ChatPage's attention gate) — returning
+  // to the window is what reads them.
+  useMarkReadOnReturn(channel?.id, markChannelRead);
 
   // Reset locally-opened thread when the channel changes; deliberate
   // synchronous reset. URL-driven thread state (?thread=…) doesn't need
