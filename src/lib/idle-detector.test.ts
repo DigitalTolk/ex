@@ -92,20 +92,36 @@ describe('idle-detector', () => {
     expect(await requestIdleDetectionPermission()).toBe(false);
   });
 
-  it('latches hard-away on OS idle or screen lock, and releases on active+unlocked (R2)', async () => {
+  it('latches hard-away on screen lock only, releasing on unlock (R2)', async () => {
     installFake();
     expect(await startIdleDetection()).toBe(true);
     const det = FakeIdleDetector.instances[0];
     expect(det.startedWith?.threshold).toBe(idleDetectorThresholdMs);
     expect(isHardAway()).toBe(false);
 
-    det.fire('idle', 'unlocked');
-    expect(isHardAway()).toBe(true);
-    det.fire('active', 'unlocked');
-    expect(isHardAway()).toBe(false);
     det.fire('active', 'locked');
     expect(isHardAway()).toBe(true);
     det.fire('active', 'unlocked');
+    expect(isHardAway()).toBe(false);
+  });
+
+  // THE REGRESSION (2026-08-12): userState 'idle' fires after just 60s of OS
+  // quiet (the API minimum) — a user reading trips it while at the desk.
+  // Latching hard-away on it made the desktop refuse to ack, buzzing the
+  // phone for every alert. Idle is absence of fresh evidence, not proof of
+  // absence: the ack tier's input-recency window owns that path. Only a
+  // LOCKED screen is definitive.
+  it("userState 'idle' alone is NOT hard-away — reading at the desk keeps acking", async () => {
+    installFake();
+    expect(await startIdleDetection()).toBe(true);
+    const det = FakeIdleDetector.instances[0];
+
+    det.fire('idle', 'unlocked');
+    expect(isHardAway()).toBe(false);
+    // Lock while idle still latches; unlock releases even while idle.
+    det.fire('idle', 'locked');
+    expect(isHardAway()).toBe(true);
+    det.fire('idle', 'unlocked');
     expect(isHardAway()).toBe(false);
   });
 

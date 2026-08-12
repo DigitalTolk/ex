@@ -8,6 +8,7 @@ import { sendWS } from '@/lib/ws-sender';
 import { hasSeenNotification, recordNotification } from '@/lib/notification-dedup';
 import {
   attentionWindowMs,
+  isUserAtDevice,
   isUserAttentive,
   startUserActivityTracking,
   suppressionWindowMs,
@@ -43,11 +44,20 @@ import {
 // by attention-constants.test.ts.
 export const ackFreshnessMs = 15_000;
 
-// deviceAttentive: is a human demonstrably at this device, in THIS tab or a
-// sibling (visible + focused + fresh input + not hard-away)? The gate for
-// every ack (SPEC R4).
+// deviceAttentive: was a human demonstrably at this DEVICE recently — real
+// input within the attention window in THIS tab or a sibling, and no
+// definitive not-at-device signal (lock / suspend / wake latch)? The gate
+// for every ack (SPEC R4, revised 2026-08-12).
+//
+// Deliberately NOT window-focus/page-visibility gated: the OS banner
+// surfaces over whatever app the user is in, so "which window has focus"
+// says nothing about whether the human saw it. Requiring focus here was the
+// regression that buzzed the phone for every alert while the user sat at
+// the desktop working in another window. Focus/visibility still gate the
+// SUPPRESSION tier below (surfacing nothing is a claim about looking at
+// the ex window itself).
 function deviceAttentive(): boolean {
-  return isUserAttentive(attentionWindowMs) || remoteUserAtDevice(attentionWindowMs);
+  return isUserAtDevice(attentionWindowMs) || remoteUserAtDevice(attentionWindowMs);
 }
 
 // ackDesktopDelivery tells the backend the desktop made the user aware of this
@@ -470,12 +480,13 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // fallback is then the only way the alert reaches the user.
     if (n.messageID && delivered) {
       recordNotification(n.messageID, now);
-      // Ack ONLY when someone is demonstrably at this device (visible +
-      // FOCUSED page with recent input and no hard-away signal — in ANY tab;
-      // the leader may be a background tab while the user works in another).
-      // A popup surfaced on an abandoned-but-open (or locked, or just-woken)
-      // laptop must not stand the mobile push down — no ack means the
-      // backend's deferred fallback delivers to the phone, Slack-style.
+      // Ack ONLY when someone was demonstrably at this device recently (real
+      // input within the attention window in ANY tab, no lock/suspend/wake
+      // latch — the ex window itself may be blurred or hidden; the OS banner
+      // surfaces over whatever the user is doing). A popup surfaced on an
+      // abandoned-but-open (or locked, or just-woken) laptop must not stand
+      // the mobile push down — no ack means the backend's deferred fallback
+      // delivers to the phone, Slack-style.
       const attentive = deviceAttentive();
       traceNotification('surfaced', n.messageID, { acked: attentive });
       if (attentive) {

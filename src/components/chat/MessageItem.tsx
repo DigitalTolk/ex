@@ -601,6 +601,7 @@ function MessageItemImpl({
           className="flex shrink-0 items-center justify-center pb-2 pt-2"
           style={{ touchAction: 'none' }}
           aria-hidden="true"
+          data-sheet-drag="true"
           data-testid="sheet-grab-handle"
         >
           <div className="h-1 w-9 rounded-full bg-border-strong" />

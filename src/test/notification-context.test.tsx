@@ -785,6 +785,63 @@ describe('NotificationProvider', () => {
     expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-ack' });
   });
 
+  // THE 2026-08-12 REGRESSION, end to end: the user sits at the desktop
+  // working in ANOTHER app — the ex window is blurred (and here even hidden),
+  // but they touched the machine two minutes ago. The OS banner surfaces over
+  // whatever they're doing, so the desktop DID deliver — it must ack, or the
+  // phone buzzes 30s later for every single message ("constantly receiving
+  // mobile notifications despite being active in my desktop app"). Focus
+  // gates suppression, never the ack.
+  it('acks a surfaced alert while the ex window is blurred/hidden but input is fresh (at the device, other app)', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    renderProbe();
+    act(() => {
+      window.dispatchEvent(new Event('blur'));
+      markUserActivity(Date.now() - 2 * 60_000);
+      dispatchSpy!({ ...samplePayload, messageID: 'm-other-app' });
+    });
+    // The popup still surfaces (the OS shows banners for background windows)…
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    // …and the desktop claims it: the phone stays silent.
+    expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-other-app' });
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+  });
+
+  it('still refuses to ack a blurred window whose input is stale (genuinely away)', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    renderProbe();
+    act(() => {
+      window.dispatchEvent(new Event('blur'));
+      markUserActivity(Date.now() - 25 * 60_000);
+      dispatchSpy!({ ...samplePayload, messageID: 'm-truly-away' });
+    });
+    expect(sendWSMock).not.toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-truly-away' });
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+      markUserActivity();
+    });
+  });
+
+  it('never suppresses for the active parent while the window is blurred — even though it acks', () => {
+    // The two tiers must not blur together: at-device (ack) is satisfied,
+    // attentive-on-parent (suppress) is not — so the popup still surfaces.
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    renderProbe();
+    act(() => {
+      window.dispatchEvent(new Event('blur'));
+      markUserActivity();
+      setActiveSpy!('ch-1');
+      dispatchSpy!({ ...channelMessagePayload, messageID: 'm-blur-parent' });
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-blur-parent' });
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+  });
+
   it('does NOT ack a surfaced alert while the user is idle (mobile fallback must fire)', () => {
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
     markUserActivity(Date.now() - 25 * 60_000); // user left the desk 25 min ago (past the 10min attention window)

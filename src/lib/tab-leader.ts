@@ -175,20 +175,34 @@ export function setTabActiveParent(parentID: string | null): void {
   postState();
 }
 
-// remoteTabAttentive: shared core of the whole-device checks — the sibling's
-// snapshot is fresh, its page visible, its window FOCUSED, it is not
-// hard-away (locked/woke), and it saw input within the window. Focus and
-// hard-away are required (SPEC R4/GAP-7): a visible-but-blurred tab on a
-// second monitor, or any tab on a locked machine, must never vouch for the
-// user being at the device.
-function remoteTabAttentive(s: TabState & { at: number }, withinMs: number): boolean {
+// The remote checks mirror the local two-tier split (SPEC §2, revised
+// 2026-08-12):
+//
+// remoteTabAtDevice — the ACK tier's evidence: the sibling's snapshot is
+// fresh, it is not hard-away (locked/suspended/woke), and it saw REAL input
+// within the window. Visibility/focus are deliberately not consulted — input
+// recency is the proof a human was at the device, and requiring the ex
+// window to also be focused pushed every alert to the phone of a user
+// working in another app. GAP-7's actual hole (a blurred tab vouching with
+// NO input evidence) stays closed by R1: only real input stamps
+// lastActivityAt, and a blurred tab receives no input.
+function remoteTabAtDevice(s: TabState & { at: number }, withinMs: number): boolean {
   return (
     s.at >= Date.now() - remoteStateTTL &&
-    s.visible &&
-    s.focused === true &&
-    s.hardAway !== true &&
+    // Strict === false: the snapshot must AFFIRM it is not hard-away. An
+    // old-version sibling that omits the field can't prove its input stamps
+    // survived a lock/wake, so it fails toward "away" — the safe direction.
+    s.hardAway === false &&
     s.lastActivityAt >= Date.now() - withinMs
   );
+}
+
+// remoteTabAttentive — the SUPPRESSION tier: "surface nothing" claims the
+// user is LOOKING at that tab, so it additionally requires the page visible
+// and the window FOCUSED (SPEC R5/GAP-7): a visible-but-blurred tab on a
+// second monitor must never justify suppressing an alert entirely.
+function remoteTabAttentive(s: TabState & { at: number }, withinMs: number): boolean {
+  return remoteTabAtDevice(s, withinMs) && s.visible && s.focused === true;
 }
 
 // remoteTabViewing: some OTHER tab is attentive and viewing this parent —
@@ -214,12 +228,13 @@ export function remoteTabViewingThread(threadRootID: string, withinMs: number): 
   return false;
 }
 
-// remoteUserAtDevice: some OTHER tab is attentive (visible + focused + recent
-// input, not hard-away) — the whole-device version of the ack gate's "user
-// demonstrably at the device".
+// remoteUserAtDevice: some OTHER tab saw real input within the window and is
+// not hard-away — the whole-device version of the ack gate's "user
+// demonstrably at the device". Focus/visibility of that tab is irrelevant
+// here (see remoteTabAtDevice).
 export function remoteUserAtDevice(withinMs: number): boolean {
   for (const s of remote.values()) {
-    if (remoteTabAttentive(s, withinMs)) {
+    if (remoteTabAtDevice(s, withinMs)) {
       return true;
     }
   }

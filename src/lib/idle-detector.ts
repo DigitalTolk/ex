@@ -47,9 +47,14 @@ export async function requestIdleDetectionPermission(): Promise<boolean> {
   }
 }
 
-// startIdleDetection begins observing; idempotent while running. Any OS-idle
-// or screen-locked state latches the hard-away flag so the desktop stops
-// acking (R2); back to active+unlocked releases it. Returns false when the
+// startIdleDetection begins observing; idempotent while running. Only a
+// LOCKED screen latches the hard-away flag (R2): lock is definitive "not at
+// this device". `userState: 'idle'` (60s without OS input — the API minimum)
+// is deliberately NOT hard-away: it is absence of fresh evidence, not proof
+// of absence — a user reading goes OS-quiet in 60s while at the desk, and
+// latching here buzzed their phone for every alert (same regression as the
+// shell bridge's old idle mapping). The ack tier's input window owns the
+// idle → phone handoff. Unlock releases the latch. Returns false when the
 // API is unavailable, permission wasn't granted, or start() throws — the
 // caller falls back to the web floor, never worse off.
 export async function startIdleDetection(): Promise<boolean> {
@@ -61,8 +66,7 @@ export async function startIdleDetection(): Promise<boolean> {
   try {
     const detector = new ctor();
     detector.addEventListener('change', () => {
-      const away = detector.userState === 'idle' || detector.screenState === 'locked';
-      setHardAway(HARD_AWAY_REASON, away);
+      setHardAway(HARD_AWAY_REASON, detector.screenState === 'locked');
     });
     await detector.start({ threshold: idleDetectorThresholdMs, signal: controller.signal });
     return true;

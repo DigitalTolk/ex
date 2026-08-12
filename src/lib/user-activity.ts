@@ -144,15 +144,39 @@ export function startUserActivityTracking(): void {
   wakeTimer = window.setInterval(wakeProbe, wakeProbeIntervalMs);
 }
 
-// isUserAttentive reports whether a human is demonstrably at this device: the
-// page is visible, the window has OS focus, no hard-away signal is latched,
-// and real input was seen within the window. A hidden page or a blurred
+// The two attention tiers demand DIFFERENT evidence, because they authorize
+// different actions (SPEC §2, revised 2026-08-12):
+//
+//   isUserAtDevice — the ACK tier. "May the desktop stand the mobile push
+//   down?" The OS banner surfaces over whatever app the user is in, so the
+//   only question is whether a human was at the DEVICE recently: real input
+//   within the window, and no definitive not-at-device signal (lock /
+//   suspend / wake latch). Window focus and page visibility are deliberately
+//   NOT consulted: an abandoned machine keeps its focus state, and a user
+//   working in their IDE loses it — focus separates "looking at ex" from
+//   "looking at something else", never "at the desk" from "gone". Requiring
+//   it here was the 2026-07/08 regression that pushed every alert to the
+//   phone of a user sitting at the desktop in another window.
+//
+//   isUserAttentive — the SUPPRESSION tier. "May we surface NOTHING because
+//   the user is looking right at the parent?" That claim is about the ex
+//   window itself, so it keeps the full requirement: visible + focused +
+//   fresh input + no hard-away.
+
+// isUserAtDevice: a human was demonstrably at this device within the window —
+// regardless of which window has their focus.
+export function isUserAtDevice(withinMs: number): boolean {
+  if (isHardAway()) return false;
+  return Date.now() - lastActivityAt <= withinMs;
+}
+
+// isUserAttentive: at the device AND looking at this page — visible, focused,
+// no hard-away, real input within the window. A hidden page or a blurred
 // window is never attentive (other tab, other app, minimized, screen locked).
 export function isUserAttentive(withinMs: number): boolean {
   if (document.visibilityState !== 'visible') return false;
   if (!focused) return false;
-  if (isHardAway()) return false;
-  return Date.now() - lastActivityAt <= withinMs;
+  return isUserAtDevice(withinMs);
 }
 
 // resetUserActivityForTests restores the module baseline AND tears the

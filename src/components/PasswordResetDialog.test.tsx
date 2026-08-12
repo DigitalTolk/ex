@@ -67,7 +67,7 @@ describe('PasswordResetDialog', () => {
     expect(await screen.findByRole('status')).toHaveTextContent(
       /emailed to guest@example\.com/i,
     );
-    expect(screen.getByLabelText(/password reset link/i)).toHaveValue(
+    expect(screen.getByLabelText('Password reset link')).toHaveValue(
       'https://ex.example.com/reset-password/tok-123',
     );
   });
@@ -89,7 +89,7 @@ describe('PasswordResetDialog', () => {
       /email is not configured, so nothing was sent/i,
     );
     // The link is still there to relay by hand.
-    expect(screen.getByLabelText(/password reset link/i)).toHaveValue(
+    expect(screen.getByLabelText('Password reset link')).toHaveValue(
       'https://ex.example.com/reset-password/tok-123',
     );
   });
@@ -110,7 +110,7 @@ describe('PasswordResetDialog', () => {
     render(<PasswordResetDialog user={guest} onClose={vi.fn()} />);
 
     await user.click(screen.getByRole('button', { name: /create reset link/i }));
-    await user.click(await screen.findByRole('button', { name: /^copy$/i }));
+    await user.click(await screen.findByRole('button', { name: 'Copy password reset link' }));
 
     expect(writeText).toHaveBeenCalledWith('https://ex.example.com/reset-password/tok-123');
   });

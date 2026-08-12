@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { CopyButton } from '@/components/ui/copy-button';
 import { apiFetch } from '@/lib/api';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import type { User } from '@/types';
@@ -90,12 +91,7 @@ export function PasswordResetDialog({ user, onClose }: PasswordResetDialogProps)
               {/* No text-sm override — the Input's text-base md:text-sm keeps
                   16px on mobile so a stray tap doesn't iOS-zoom the sheet. */}
               <Input value={ticket.resetURL} readOnly aria-label="Password reset link" />
-              <Button
-                size="sm"
-                onClick={() => navigator.clipboard.writeText(ticket.resetURL)}
-              >
-                Copy
-              </Button>
+              <CopyButton value={ticket.resetURL} label="Copy password reset link" />
             </div>
             <p className="text-xs text-muted-foreground">
               The link can be used once and expires in one hour. Signing in with

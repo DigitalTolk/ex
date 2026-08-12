@@ -267,11 +267,23 @@ describe('MessageInput slash commands', () => {
     // and must leave the retyped text in place.
     const user = userEvent.setup();
     const editor = await screen.findByLabelText('Message input');
+    // The pending status must be up, and the retyped command must have
+    // reached component state (an enabled send button is the observable
+    // proof), BEFORE the second Enter. Without both, the Enter takes the
+    // `!canSend` early-return instead of the in-flight guard — which
+    // satisfies every assertion below while never exercising the thing this
+    // test is named after, and shows up only as a coverage drop.
+    expect(screen.getByTestId('command-pending')).toBeInTheDocument();
     await user.type(editor, '/mstmeetings');
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled();
+    });
     editor.focus();
     await user.keyboard('{Enter}');
     expect(runCommandMock).toHaveBeenCalledTimes(1);
     expect(editor.textContent).toContain('/mstmeetings');
+    // Still pending: the re-submit was swallowed, not run and settled.
+    expect(screen.getByTestId('command-pending')).toBeInTheDocument();
 
     // A normal message is not blocked by the in-flight command.
     await user.keyboard(' now');

@@ -4,6 +4,7 @@ import {
   clockJumpMs,
   forceAwayUntilInput,
   isHardAway,
+  isUserAtDevice,
   isUserAttentive,
   isWindowFocused,
   markUserActivity,
@@ -172,6 +173,49 @@ describe('user-activity (attention model)', () => {
     } finally {
       document.hasFocus = orig;
     }
+  });
+
+  // The ACK tier (SPEC R4, revised 2026-08-12): "at the device" is input
+  // recency + no hard signal — NOT window focus. Requiring focus here was
+  // the regression that buzzed the phone for every alert while the user sat
+  // at the desktop working in another app: the OS banner surfaced over their
+  // IDE, the blurred ex window refused to ack, and 30s later the phone went
+  // off anyway. An abandoned machine keeps its focus state, so focus never
+  // separated "at the desk" from "gone" in the first place — input recency,
+  // the wake latch, and lock/suspend do.
+  describe('isUserAtDevice (ack tier)', () => {
+    it('a BLURRED window with fresh input is still at-device', () => {
+      window.dispatchEvent(new Event('blur'));
+      expect(isWindowFocused()).toBe(false);
+      expect(isUserAtDevice(60_000)).toBe(true);
+      // …while the suppression tier rightly refuses.
+      expect(isUserAttentive(60_000)).toBe(false);
+    });
+
+    it('a HIDDEN page with fresh input is still at-device', () => {
+      setVisibility('hidden');
+      expect(isUserAtDevice(60_000)).toBe(true);
+      expect(isUserAttentive(60_000)).toBe(false);
+    });
+
+    it('stale input is not at-device, focused or not', () => {
+      markUserActivity(Date.now() - 11 * 60_000);
+      expect(isUserAtDevice(10 * 60_000)).toBe(false);
+    });
+
+    it('hard-away (lock/suspend) overrides fresh input', () => {
+      setHardAway('shell', true);
+      expect(isUserAtDevice(60_000)).toBe(false);
+      setHardAway('shell', false);
+      expect(isUserAtDevice(60_000)).toBe(true);
+    });
+
+    it('the wake latch overrides fresh-looking input until real input arrives (R3)', () => {
+      forceAwayUntilInput();
+      expect(isUserAtDevice(60_000)).toBe(false);
+      document.dispatchEvent(new Event('keydown', { bubbles: true }));
+      expect(isUserAtDevice(60_000)).toBe(true);
+    });
   });
 
   it('exports a coherent window lattice (I-11): suppression <= attention', () => {

@@ -2,10 +2,9 @@ import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { Globe, Search, MessageSquare, MoreVertical } from 'lucide-react';
+import { Globe, MessageSquare, MoreVertical } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -28,6 +27,7 @@ import { PasswordResetDialog } from '@/components/PasswordResetDialog';
 import { presenceNotchStyle } from '@/lib/presence';
 import { formatLastSeen, formatTimeZoneDelta, formatTimeZoneName, isValidTimeZone } from '@/lib/user-time';
 import type { User } from '@/types';
+import { SearchInput } from '@/components/ui/search-input';
 
 type Tab = 'channels' | 'members';
 
@@ -106,16 +106,13 @@ function ChannelsTab() {
 
   return (
     <>
-      <div className="relative mb-4">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search channels..."
-          aria-label="Search channels"
-          className="pl-9"
-        />
-      </div>
+      <SearchInput
+        containerClassName="mb-4"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search channels..."
+        aria-label="Search channels"
+      />
 
       {isLoading && (
         <div className="space-y-3">
@@ -258,16 +255,13 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
 
   return (
     <>
-      <div className="relative mb-4">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search members..."
-          aria-label="Search members"
-          className="pl-9"
-        />
-      </div>
+      <SearchInput
+        containerClassName="mb-4"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search members..."
+        aria-label="Search members"
+      />
 
       {visibleError && (
         <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive mb-4" role="alert">
