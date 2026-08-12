@@ -6,13 +6,25 @@
 // DOM event on each transition. No contextBridge — the chat window runs a
 // remote SPA, so DOM state is the only shared surface.
 //
-// Mapping (SPEC R2/R3):
-//   locked / suspended / idle → hard-away: the desktop must not ack, the
-//     mobile fallback owns the alert (Slack's "1 minute after locking").
+// Mapping (SPEC R2/R3, revised 2026-08-12):
+//   locked / suspended → hard-away: definitive "not at this device" — the
+//     desktop must not ack, the mobile fallback owns the alert (Slack's
+//     "1 minute after locking").
+//   idle → release hard-away, no stamp. The shell flags idle after only 60s
+//     of OS quiet (AWAY_IDLE_THRESHOLD_SEC — Mattermost's PRESENCE-dot
+//     threshold, not a push-routing one). That is absence of fresh evidence,
+//     not proof of absence: a user reading a thread goes OS-quiet in 60s
+//     while sitting right there. Treating it as hard-away was the regression
+//     that buzzed the phone for every alert ~90s into reading anything. The
+//     attention clock simply stops being stamped, so the ack tier's 10-min
+//     input window (attentionWindowMs) owns the idle → phone handoff —
+//     Slack's "idle ⇒ ~10 min", vs lock's fast path above.
 //   active → release hard-away AND stamp the activity clock: the shell only
-//     reports active while OS-level input is fresh, which is stronger
-//     evidence than anything the page can see (it also clears the wake
-//     latch after a resume, since unlocking required real input).
+//     reports active while OS-level input is fresh (re-asserted every 60s),
+//     which is stronger evidence than anything the page can see (it also
+//     clears the wake latch after a resume, since unlocking required real
+//     input) — and it keeps the clock fresh while the user works in ANOTHER
+//     window, where the page sees no input at all.
 //   unsupported / attribute absent / unknown → release: the shell can't
 //     vouch either way (e.g. Linux/Wayland), so the web floor governs.
 //
@@ -34,7 +46,6 @@ function applyShellPresence(): void {
   switch (state) {
     case 'locked':
     case 'suspended':
-    case 'idle':
       setHardAway(HARD_AWAY_REASON, true);
       break;
     case 'active':
@@ -42,9 +53,10 @@ function applyShellPresence(): void {
       markUserActivity();
       break;
     default:
+      // 'idle' (see header — the attention clock owns that path),
       // 'unsupported', absent, or an unknown future value — the shell has no
-      // verdict; never latch away on a broken source (that would spam mobile
-      // for a user who IS at the desktop).
+      // hard verdict; never latch away on a soft/broken source (that would
+      // spam mobile for a user who IS at the desktop).
       setHardAway(HARD_AWAY_REASON, false);
   }
 }

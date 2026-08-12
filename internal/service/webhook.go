@@ -206,6 +206,13 @@ func (s *IncomingWebhookService) URL(wh *model.IncomingWebhook) string {
 	return s.baseURL + "/hooks/" + wh.ID
 }
 
+// ErrWebhookDMRejected marks an Execute payload whose direct-message target
+// cannot be served (resolver not wired, or the webhook tried to DM its own
+// creator). A sentinel rather than string matching: the handler maps it to a
+// 400 with a FIXED user-facing message — the wrapped detail is for logs only,
+// never for the unauthenticated caller.
+var ErrWebhookDMRejected = errors.New("webhook: direct-message target rejected")
+
 func (s *IncomingWebhookService) Execute(ctx context.Context, id string, payload IncomingWebhookPayload) error {
 	wh, err := s.store.Get(ctx, id)
 	if err != nil {
@@ -337,7 +344,7 @@ func (s *IncomingWebhookService) ensureCreatorCanPost(ctx context.Context, wh *m
 
 func (s *IncomingWebhookService) targetDM(ctx context.Context, wh *model.IncomingWebhook, raw string) (*model.Conversation, error) {
 	if s.dms == nil || s.users == nil || wh.CreatedBy == "" {
-		return nil, errors.New("webhook: direct-message resolver is not configured")
+		return nil, fmt.Errorf("%w: resolver is not configured", ErrWebhookDMRejected)
 	}
 	targetName := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "@"))
 	if targetName == "" {
@@ -350,7 +357,7 @@ func (s *IncomingWebhookService) targetDM(ctx context.Context, wh *model.Incomin
 	// Mattermost forbids a webhook direct-messaging its own creator (the
 	// "DM" would just be the creator talking to themselves).
 	if target.ID == wh.CreatedBy {
-		return nil, errors.New("webhook: cannot direct-message the webhook creator")
+		return nil, fmt.Errorf("%w: cannot direct-message the webhook creator", ErrWebhookDMRejected)
 	}
 	return s.dms.GetOrCreateDM(ctx, wh.CreatedBy, target.ID)
 }

@@ -106,22 +106,32 @@ describe('initTabCoordinator', () => {
         expect(remoteUserAtDevice(60_000)).toBe(false);
       });
       expect(remoteTabViewing('ch-9', 60_000)).toBe(false);
-      // Hidden tab: never counts as at-device or viewing.
+      // Hidden tab with fresh input: still at-device for the ACK tier (the
+      // input happened at this machine; which window shows is irrelevant) —
+      // but never a reason to suppress (viewing requires visible+focused).
       await peer.postMessage({
         kind: 'state',
         tabId: 'peer-1',
         state: attentivePeer({ visible: false, activeParent: 'ch-9' }),
       });
       await vi.waitFor(() => {
-        expect(remoteUserAtDevice(60_000)).toBe(false);
+        expect(remoteTabViewing('ch-9', 60_000)).toBe(false);
       });
-      expect(remoteTabViewing('ch-9', 60_000)).toBe(false);
+      expect(remoteUserAtDevice(60_000)).toBe(true);
     } finally {
       await peer.close();
     }
   });
 
-  it('a visible-but-BLURRED sibling never vouches for the user (SPEC GAP-7 / G-P2.2)', async () => {
+  // SPEC GAP-7 / G-P2.2, revised 2026-08-12: a blurred sibling must never
+  // justify SUPPRESSING an alert (that claims the user is looking at it) —
+  // but with FRESH INPUT it does vouch that a human is at the device, so the
+  // desktop may ack what it surfaced. Requiring focus for the ack tier was
+  // the regression that buzzed the phone for every alert while the user
+  // worked in another window. The real GAP-7 hole (a blurred tab vouching
+  // with NO input evidence) stays closed by R1: only real input stamps the
+  // clock, and a blurred tab receives no input.
+  it('a visible-but-BLURRED sibling with fresh input vouches at-device, never for suppression', async () => {
     initTabCoordinator({ type: 'simulate' });
     const peer = makePeerChannel();
     try {
@@ -133,9 +143,19 @@ describe('initTabCoordinator', () => {
       await vi.waitFor(() => {
         expect(hasOtherTabs()).toBe(true);
       });
-      expect(remoteUserAtDevice(60_000)).toBe(false);
+      expect(remoteUserAtDevice(60_000)).toBe(true);
       expect(remoteTabViewing('ch-9', 60_000)).toBe(false);
       expect(remoteTabViewingThread('root-7', 60_000)).toBe(false);
+      // Blurred AND input-stale: not even at-device — the GAP-7 scenario
+      // (an abandoned second-monitor tab) stays unable to ack.
+      await peer.postMessage({
+        kind: 'state',
+        tabId: 'peer-blur',
+        state: attentivePeer({ focused: false, lastActivityAt: Date.now() - 60 * 60_000 }),
+      });
+      await vi.waitFor(() => {
+        expect(remoteUserAtDevice(60_000)).toBe(false);
+      });
     } finally {
       await peer.close();
     }
@@ -206,7 +226,8 @@ describe('initTabCoordinator', () => {
     const peer = makePeerChannel();
     try {
       // A tab running the previous app version broadcasts without the new
-      // fields — it must never ack for the device (missing focus proof).
+      // fields — hardAway is undefined, so it cannot AFFIRM its input stamps
+      // survived a lock/wake, and it must never ack for the device.
       await peer.postMessage({
         kind: 'state',
         tabId: 'peer-old',

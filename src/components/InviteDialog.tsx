@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { CopyButton } from '@/components/ui/copy-button';
 import { Label } from '@/components/ui/label';
 import { ApiError, apiFetch } from '@/lib/api';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -78,16 +79,14 @@ export function InviteDialog({ open, onOpenChange }: InviteDialogProps) {
 
         {status === 'sent' && inviteLink ? (
           <div className="space-y-3">
-            <p className="text-sm text-emerald-600 dark:text-emerald-400" role="status">
+            <p className="text-sm text-online" role="status">
               Invitation sent! Share this link:
             </p>
             <div className="flex items-center gap-2">
               {/* No text-sm override — the Input's text-base md:text-sm keeps
                   16px on mobile so a stray tap doesn't iOS-zoom the sheet. */}
-              <Input value={inviteLink} readOnly />
-              <Button size="sm" onClick={() => navigator.clipboard.writeText(inviteLink)}>
-                Copy
-              </Button>
+              <Input value={inviteLink} readOnly aria-label="Invite link" />
+              <CopyButton value={inviteLink} label="Copy invite link" />
             </div>
           </div>
         ) : status === 'already-member' ? (

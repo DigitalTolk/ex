@@ -5,6 +5,7 @@ import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import ChatPage from '@/pages/ChatPage';
 import { apiFetch } from '@/lib/api';
 import { resetServerVersionForTests } from '@/hooks/useServerVersion';
+import { forceAwayUntilInput, resetUserActivityForTests } from '@/lib/user-activity';
 
 let capturedOptions: Record<string, ((data: unknown) => void) | boolean | undefined> = {};
 const authUserMock = vi.hoisted(() => ({
@@ -46,9 +47,10 @@ const unhideConversation = vi.fn();
 
 // The unread badge is now patched straight into the list cache by these helpers
 // (single source). Mock them so the handler tests assert the intent directly.
-const { bumpChannelUnread, bumpConversationUnread, clearConversationUnreadInCache } = vi.hoisted(() => ({
+const { bumpChannelUnread, bumpConversationUnread, clearChannelUnreadInCache, clearConversationUnreadInCache } = vi.hoisted(() => ({
   bumpChannelUnread: vi.fn(),
   bumpConversationUnread: vi.fn(),
+  clearChannelUnreadInCache: vi.fn(),
   clearConversationUnreadInCache: vi.fn(),
 }));
 vi.mock('@/lib/unread-cache', async (importOriginal) => ({
@@ -57,6 +59,7 @@ vi.mock('@/lib/unread-cache', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/unread-cache')>()),
   bumpChannelUnread,
   bumpConversationUnread,
+  clearChannelUnreadInCache,
   clearConversationUnreadInCache,
 }));
 
@@ -161,6 +164,9 @@ function renderAt(path: string, qcSeed?: (qc: QueryClient) => void) {
 
 describe('ChatPage WebSocket handlers', () => {
   beforeEach(() => {
+    // The attention model is a module singleton — a hard-away latched by one
+    // test must not leak into the next.
+    resetUserActivityForTests();
     act(() => resetServerVersionForTests());
     capturedOptions = {};
     authUserMock.current = {
@@ -172,6 +178,7 @@ describe('ChatPage WebSocket handlers', () => {
     };
     bumpChannelUnread.mockReset();
     bumpConversationUnread.mockReset();
+    clearChannelUnreadInCache.mockReset();
     clearConversationUnreadInCache.mockReset();
     markThreadNotificationUnread.mockReset();
     isActiveChannel.mockReset();
@@ -243,7 +250,44 @@ describe('ChatPage WebSocket handlers', () => {
     const handler = capturedOptions.onMessageNew as (d: unknown) => void;
     handler(msg({ authorID: 'u-other', parentType: 'channel' }));
     expect(bumpChannelUnread).not.toHaveBeenCalled();
+    // Mirrors the conversation arm: a badge left over from an idle spell is
+    // cleared client-side too, not just server-side (review finding: the
+    // channel arm used to skip the cache clear, leaving a stale badge until
+    // an unrelated refetch).
+    expect(clearChannelUnreadInCache).toHaveBeenCalledWith(expect.anything(), 'ch-1');
     expect(vi.mocked(apiFetch)).toHaveBeenCalledWith('/api/v1/channels/ch-1/read', { method: 'PUT' });
+  });
+
+  // THE "no notification from the DM I last had open" regression: an OPEN
+  // route is not a READING user. When the window is blurred/hidden (here:
+  // hard-away, one of the not-attentive arms), auto-marking the active
+  // parent read erased the unread badge / bold row / title count the moment
+  // the transient OS banner dismissed — no trace the message ever arrived,
+  // on desktop OR (via read-sync) on the phone. Not attentive ⇒ bump the
+  // badge like any other parent; the view marks read on window re-focus.
+  it('onMessageNew on the ACTIVE channel while NOT attentive bumps unread instead of auto-reading', () => {
+    isActiveChannel.mockReturnValue(true);
+    forceAwayUntilInput();
+    renderAt('/', (qc) => {
+      qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
+    });
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+    handler(msg({ authorID: 'u-other', parentType: 'channel' }));
+    expect(vi.mocked(apiFetch)).not.toHaveBeenCalledWith('/api/v1/channels/ch-1/read', { method: 'PUT' });
+    expect(bumpChannelUnread).toHaveBeenCalledWith(expect.anything(), 'ch-1');
+  });
+
+  it('onMessageNew on the ACTIVE conversation while NOT attentive bumps unread instead of auto-reading', () => {
+    isActiveConversation.mockReturnValue(true);
+    forceAwayUntilInput();
+    renderAt('/', (qc) => {
+      qc.setQueryData(['userConversations'], [{ conversationID: 'conv-1' }]);
+    });
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+    handler(msg({ parentID: 'conv-1', authorID: 'u-other', parentType: 'conversation' }));
+    expect(vi.mocked(apiFetch)).not.toHaveBeenCalledWith('/api/v1/conversations/conv-1/read', { method: 'PUT' });
+    expect(clearConversationUnreadInCache).not.toHaveBeenCalled();
+    expect(bumpConversationUnread).toHaveBeenCalledWith(expect.anything(), 'conv-1');
   });
 
   it('onMessageNew does NOT mark the channel unread for a thread reply', () => {

@@ -12,9 +12,9 @@ import { useIsMobile } from './useIsMobile';
 //
 // Inner scroll is preserved: the vertical ("down") variant never lets Motion
 // own the pointerdown (dragListener: false). Instead the drag is started
-// imperatively (useDragControls) from touches that do NOT land on a
-// scrollable body, so scrolling a long sheet is native from the very first
-// gesture. This matters twice over: Motion's own drag listener applies a
+// imperatively (useDragControls) only from surfaces where a vertical drag can
+// mean nothing else (see shouldStartDismissDrag), so scrolling a long sheet is
+// native from the very first gesture. This matters twice over: Motion's own drag listener applies a
 // touch-action override (pan-x for drag:"y") that WebKit honors for the
 // whole subtree — freezing descendant scrollers — and an armed-then-disarm
 // React state round-trip always lost the gesture that was already latched.
@@ -34,17 +34,42 @@ function offscreen(horizontal: boolean) {
   return horizontal ? window.innerWidth : window.innerHeight;
 }
 
-function scrollBodyAtTop(target: EventTarget | null) {
-  if (!(target instanceof Element)) return true;
+// Attribute marking a surface whose vertical drag means "dismiss this sheet"
+// and nothing else — the grab handle, and chrome strips (category tabs, the
+// skin-tone row) that already opt out of native panning with touch-action:none.
+export const SHEET_DRAG_ATTR = 'data-sheet-drag';
+
+function hasRoomToScroll(el: Element) {
+  return el.scrollHeight > el.clientHeight + 1;
+}
+
+// Whether a pointerdown inside the sheet should arm the dismiss drag.
+//
+// Erring PERMISSIVE here is what made the emoji and GIF pickers feel frozen on
+// a phone. The drag is pinned in the up direction (dragConstraints top:0 +
+// dragElastic top:0), so once Motion claims a gesture an UPWARD swipe moves
+// nothing at all: not the sheet, and — because the browser has handed the
+// gesture to JS — not the list underneath it either. A finger dragged up over
+// the "Frequently used" shelf or the category strip went into a black hole,
+// which reads exactly as "I can't scroll this popup".
+//
+// So the default is now to DECLINE. Only two surfaces claim a vertical drag:
+// explicit drag chrome, and a scroll body with nothing left to scroll.
+function shouldStartDismissDrag(target: EventTarget | null, root: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target.closest(`[${SHEET_DRAG_ATTR}="true"]`)) return true;
   const scroller = target.closest<HTMLElement>('[data-swipe-scroll="true"]');
-  if (!scroller) return true;
-  // A scrollER WITH ROOM TO SCROLL never starts the dismiss drag — not even
-  // at scrollTop 0. A sheet always opens at the top, so starting there meant
+  // A scroller WITH ROOM TO SCROLL never starts the dismiss drag — not even at
+  // scrollTop 0. A sheet always opens at the top, so gating on scrollTop meant
   // Motion captured the very first vertical touch and the body could never
-  // START scrolling (the "emoji picker won't scroll on mobile" bug). Native
-  // pan handles the body; dismissing stays available from the sheet's
-  // non-scrolling chrome (header/search) and the backdrop.
-  return scroller.scrollTop <= 0 && scroller.scrollHeight <= scroller.clientHeight + 1;
+  // START scrolling.
+  if (scroller) return !hasRoomToScroll(scroller);
+  // Unmarked chrome (a search field, a section label, a shelf). Claim the
+  // gesture only when there is nothing anywhere in this sheet that a drag
+  // could have been meant to scroll — otherwise assume the user was reaching
+  // for the list and leave the gesture to the browser.
+  if (!(root instanceof Element)) return true;
+  return !Array.from(root.querySelectorAll('[data-swipe-scroll="true"]')).some(hasRoomToScroll);
 }
 
 // `open` should be passed by callers whose host component STAYS MOUNTED while
@@ -103,11 +128,9 @@ export function useSwipeDismiss(direction: 'right' | 'down', onDismiss: () => vo
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
-      // A touch on a scrollable body belongs to native scroll. Anything else
-      // (the sheet's chrome: header, search, tone row, backless padding)
-      // starts the dismiss drag for THIS gesture — imperatively, so there is
-      // no state round-trip that loses the already-latched gesture.
-      if (scrollBodyAtTop(e.target)) dragControls.start(e);
+      // Started imperatively so there is no state round-trip that loses the
+      // already-latched gesture.
+      if (shouldStartDismissDrag(e.target, e.currentTarget)) dragControls.start(e);
     },
     [dragControls],
   );

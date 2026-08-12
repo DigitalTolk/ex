@@ -117,25 +117,47 @@ describe('useSwipeDismiss', () => {
     expect(props.style?.touchAction).toBe('pan-y');
   });
 
-  it('starts the vertical drag imperatively when the pointer is not over a scroll body', () => {
+  // jsdom reports 0 for both metrics, so the "can this actually scroll?"
+  // question has to be stubbed explicitly.
+  function sizeAs(el: HTMLElement, { scrollHeight, clientHeight }: { scrollHeight: number; clientHeight: number }) {
+    Object.defineProperty(el, 'scrollHeight', { value: scrollHeight, configurable: true });
+    Object.defineProperty(el, 'clientHeight', { value: clientHeight, configurable: true });
+  }
+
+  function sheetWith(body: HTMLElement) {
+    const root = document.createElement('div');
+    root.appendChild(body);
+    return root;
+  }
+
+  function pointerDownOn(
+    props: MotionProps,
+    target: EventTarget | null,
+    currentTarget: EventTarget | null,
+  ) {
+    act(() => props.onPointerDown?.({ target, currentTarget } as unknown as React.PointerEvent));
+  }
+
+  it('starts the vertical drag from the explicit grab handle even over a scrollable body', () => {
     const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
-    const e = { target: document } as unknown as React.PointerEvent;
-    act(() => (result.current.motionProps as MotionProps).onPointerDown?.(e));
-    expect(dragControlsMock.start).toHaveBeenCalledWith(e);
+    const scroller = document.createElement('div');
+    scroller.setAttribute('data-swipe-scroll', 'true');
+    sizeAs(scroller, { scrollHeight: 900, clientHeight: 200 });
+    const handle = document.createElement('div');
+    handle.setAttribute('data-sheet-drag', 'true');
+    scroller.appendChild(handle);
+    pointerDownOn(result.current.motionProps as MotionProps, handle, sheetWith(scroller));
+    expect(dragControlsMock.start).toHaveBeenCalledTimes(1);
   });
 
   it('leaves the gesture to native scroll when the scroll body can scroll', () => {
     const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
     const scroller = document.createElement('div');
     scroller.setAttribute('data-swipe-scroll', 'true');
-    Object.defineProperty(scroller, 'scrollTop', { value: 50, configurable: true });
+    sizeAs(scroller, { scrollHeight: 900, clientHeight: 200 });
     const child = document.createElement('div');
     scroller.appendChild(child);
-    act(() =>
-      (result.current.motionProps as MotionProps).onPointerDown?.({
-        target: child,
-      } as unknown as React.PointerEvent),
-    );
+    pointerDownOn(result.current.motionProps as MotionProps, child, sheetWith(scroller));
     expect(dragControlsMock.start).not.toHaveBeenCalled();
   });
 
@@ -143,15 +165,59 @@ describe('useSwipeDismiss', () => {
     const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
     const scroller = document.createElement('div');
     scroller.setAttribute('data-swipe-scroll', 'true');
-    // scrollTop 0 and scrollHeight <= clientHeight: nothing to scroll, so the
-    // touch belongs to the dismiss gesture.
+    sizeAs(scroller, { scrollHeight: 100, clientHeight: 200 });
     const child = document.createElement('div');
     scroller.appendChild(child);
-    act(() =>
-      (result.current.motionProps as MotionProps).onPointerDown?.({
-        target: child,
-      } as unknown as React.PointerEvent),
-    );
+    pointerDownOn(result.current.motionProps as MotionProps, child, sheetWith(scroller));
+    expect(dragControlsMock.start).toHaveBeenCalledTimes(1);
+  });
+
+  // The picker-won't-scroll regression: chrome that sits OUTSIDE the scroll
+  // body (a shelf, a section label, the search row) must not claim a vertical
+  // gesture while there is still something on screen to scroll — the drag is
+  // pinned upward, so claiming it means the finger moves and nothing happens.
+  it('declines a drag from unmarked chrome while the sheet has something to scroll', () => {
+    const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
+    const scroller = document.createElement('div');
+    scroller.setAttribute('data-swipe-scroll', 'true');
+    sizeAs(scroller, { scrollHeight: 900, clientHeight: 200 });
+    const root = sheetWith(scroller);
+    const chrome = document.createElement('div');
+    root.appendChild(chrome);
+    pointerDownOn(result.current.motionProps as MotionProps, chrome, root);
+    expect(dragControlsMock.start).not.toHaveBeenCalled();
+  });
+
+  it('starts the drag from unmarked chrome when nothing in the sheet can scroll', () => {
+    const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
+    const scroller = document.createElement('div');
+    scroller.setAttribute('data-swipe-scroll', 'true');
+    sizeAs(scroller, { scrollHeight: 100, clientHeight: 200 });
+    const root = sheetWith(scroller);
+    const chrome = document.createElement('div');
+    root.appendChild(chrome);
+    pointerDownOn(result.current.motionProps as MotionProps, chrome, root);
+    expect(dragControlsMock.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts the drag from chrome in a sheet with no scroll body at all', () => {
+    const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
+    const root = document.createElement('div');
+    const chrome = document.createElement('div');
+    root.appendChild(chrome);
+    pointerDownOn(result.current.motionProps as MotionProps, chrome, root);
+    expect(dragControlsMock.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a pointerdown whose target is not an element', () => {
+    const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
+    pointerDownOn(result.current.motionProps as MotionProps, document, document.createElement('div'));
+    expect(dragControlsMock.start).not.toHaveBeenCalled();
+  });
+
+  it('falls back to starting the drag when the sheet root is not an element', () => {
+    const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
+    pointerDownOn(result.current.motionProps as MotionProps, document.createElement('div'), null);
     expect(dragControlsMock.start).toHaveBeenCalledTimes(1);
   });
 

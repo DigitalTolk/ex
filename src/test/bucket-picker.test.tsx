@@ -60,7 +60,7 @@ describe('BucketPicker', () => {
     expect(onPick).toHaveBeenCalledWith('u-1');
   });
 
-  it('closes on an outside mousedown but stays open for clicks inside', async () => {
+  it('closes on an outside pointerdown but stays open for clicks inside', async () => {
     apiFetchMock.mockImplementation((url: string) => {
       if (url.startsWith('/api/v1/users/batch')) {
         return Promise.resolve([{ id: 'u-1', displayName: 'Alice' }]);
@@ -78,13 +78,14 @@ describe('BucketPicker', () => {
     fireEvent.click(screen.getByTestId('bucket-picker-users'));
     await waitFor(() => screen.getByText('Alice'));
 
-    // A mousedown INSIDE the dropdown must not dismiss it (the row's own
-    // click handler is what commits a pick).
-    fireEvent.mouseDown(screen.getByText('Alice'));
+    // A pointerdown INSIDE the dropdown must not dismiss it (the row's own
+    // click handler is what commits a pick). PopoverPortal listens on
+    // pointerdown so the same rule holds for a finger as for a mouse.
+    fireEvent.pointerDown(screen.getByText('Alice'));
     expect(screen.getByRole('listbox')).toBeInTheDocument();
 
-    // A mousedown anywhere OUTSIDE dismisses without picking.
-    fireEvent.mouseDown(document.body);
+    // A pointerdown anywhere OUTSIDE dismisses without picking.
+    fireEvent.pointerDown(document.body);
     await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
   });
 
