@@ -12,6 +12,7 @@ import { setServerVersion } from '@/hooks/useServerVersion';
 import { sendWS } from '@/lib/ws-sender';
 import { localTimeZone } from '@/lib/user-time';
 import { isUserAttentive, suppressionWindowMs } from '@/lib/user-activity';
+import { classifyParentArrival, resolveParentKind } from '@/lib/message-arrival';
 import { slugify } from '@/lib/format';
 import { isOwnMessage } from '@/lib/message-users';
 import {
@@ -135,63 +136,55 @@ export default function ChatPage() {
       clearTyping(parentID, authorID, parentMessageID ?? '');
       const userChannels = queryClient.getQueryData<{ channelID: string }[]>(queryKeys.userChannels()) ?? [];
       const userConversations = queryClient.getQueryData<{ conversationID: string }[]>(queryKeys.userConversations()) ?? [];
-      const isCachedChannel = userChannels.some((channel) => channel.channelID === parentID);
-      const isCachedConversation = userConversations.some((conv) => conv.conversationID === parentID);
-      const isChannelParent = msg.parentType === 'channel' || (!msg.parentType && isCachedChannel);
-      const isConversationParent =
-        msg.parentType === 'conversation' || (!msg.parentType && !isCachedChannel && isCachedConversation);
+      const parentKind = resolveParentKind(
+        msg.parentType,
+        userChannels.some((channel) => channel.channelID === parentID),
+        userConversations.some((conv) => conv.conversationID === parentID),
+      );
       // A webhook message carries its creator's userID as authorID, but it is
       // not "your own message": the bot posted it, not you. Mirror the backend
       // notification path (which excludes the author only for non-webhook
       // messages) so a webhook YOU created still bumps your unread indicator —
       // otherwise it would fire a desktop alert but leave the badge unset.
       const isOwnAuthor = isOwnMessage(msg, user?.id);
-      if (!isOwnAuthor) {
-        if (isChannelParent) {
-          // A reply posted into a thread, or a system event (someone joining
-          // /leaving), isn't "new channel activity" — only a top-level human
-          // message bumps the channel's unread indicator.
-          if (!parentMessageID && !msg.system) {
-            // "The route is open" is NOT "the user read it": auto-marking the
-            // active parent read while the window was blurred/hidden erased
-            // every trace of the message (no badge, no bold row, no title
-            // count — and read-sync cleared the phone too) the moment the OS
-            // banner auto-dismissed. Reading requires the SUPPRESSION tier's
-            // evidence — actually looking at the page — the same bar the
-            // popup-suppression uses; the views mark read again when the
-            // window regains focus (Slack semantics).
-            if (isActiveChannel(parentID) && isUserAttentive(suppressionWindowMs)) {
-              // Genuinely watching it — keep the server caught up so the
-              // badge doesn't reappear on a reload (mirrors the conversation
-              // path).
-              void apiFetch<void>(`/api/v1/channels/${encodeURIComponent(parentID)}/read`, { method: 'PUT' })
-                .catch(() => undefined);
-            } else {
-              // Patch the unread count straight into the list cache (single
-              // source) — no session delta to reconcile.
-              bumpChannelUnread(queryClient, parentID);
-            }
-          }
-        } else if (isConversationParent) {
-          // Mirror the channel rule: only a top-level human message is "new
-          // conversation activity". A thread-only reply (or a system event)
-          // must NOT bump the DM's unread count — the backend no longer bumps
-          // the conversation seq for thread replies either, so the two agree.
-          if (!parentMessageID && !msg.system) {
-            // Same attention gate as the channel arm above: an open-but-
-            // unwatched DM must keep its unread trace (this was the "no
-            // desktop notification from the DM I last had open" complaint).
-            if (isActiveConversation(parentID) && isUserAttentive(suppressionWindowMs)) {
-              clearConversationUnreadInCache(queryClient, parentID);
-              void apiFetch<void>(`/api/v1/conversations/${encodeURIComponent(parentID)}/read`, { method: 'PUT' })
-                .catch(() => undefined);
-            } else {
-              bumpConversationUnread(queryClient, parentID);
-            }
-          }
+      // What this message does to its parent's unread state is a pure rule
+      // (lib/message-arrival, mirrored from CLAUDE.md's truth table): only a
+      // top-level, non-system message from someone else counts; and "the
+      // route is open" only reads it while the user is demonstrably LOOKING
+      // (the ghost-DM bug). The views re-mark read on window focus.
+      const viewingParent =
+        parentKind === 'channel'
+          ? isActiveChannel(parentID)
+          : parentKind === 'conversation' && isActiveConversation(parentID);
+      const arrival = classifyParentArrival({
+        isOwnAuthor,
+        isThreadReply: !!parentMessageID,
+        isSystem: !!msg.system,
+        viewingParent,
+        attentive: isUserAttentive(suppressionWindowMs),
+      });
+      if (parentKind === 'channel') {
+        if (arrival === 'mark-read') {
+          // Watching it happen — clear any badge left over from an idle
+          // spell and keep the server caught up for reloads.
+          clearChannelUnreadInCache(queryClient, parentID);
+          void apiFetch<void>(`/api/v1/channels/${encodeURIComponent(parentID)}/read`, { method: 'PUT' })
+            .catch(() => undefined);
+        } else if (arrival === 'bump-unread') {
+          // Patch the unread count straight into the list cache (single
+          // source) — no session delta to reconcile.
+          bumpChannelUnread(queryClient, parentID);
+        }
+      } else if (parentKind === 'conversation') {
+        if (arrival === 'mark-read') {
+          clearConversationUnreadInCache(queryClient, parentID);
+          void apiFetch<void>(`/api/v1/conversations/${encodeURIComponent(parentID)}/read`, { method: 'PUT' })
+            .catch(() => undefined);
+        } else if (arrival === 'bump-unread') {
+          bumpConversationUnread(queryClient, parentID);
         }
       }
-      if (isConversationParent) {
+      if (parentKind === 'conversation') {
         if (isOwnAuthor || !isActiveConversation(parentID)) {
           unhideConversation(parentID);
         }

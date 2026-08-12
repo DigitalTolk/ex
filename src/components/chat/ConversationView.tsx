@@ -38,15 +38,14 @@ import {
   useDraftForScope,
   useSaveDraft,
 } from '@/hooks/useDrafts';
-import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { firstName } from '@/lib/format';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { clearConversationUnreadInCache } from '@/lib/unread-cache';
-import type { Conversation, Message } from '@/types';
+import type { Conversation } from '@/types';
 import type { UserMapEntry } from './MessageList';
-import type { DraftAttachment } from './AttachmentChip';
 import { useMarkReadOnReturn } from '@/hooks/useMarkReadOnReturn';
+import { useEditingMessage } from '@/hooks/useEditingMessage';
 
 function errorStatus(err: unknown): number | null {
   return typeof err === 'object' && err !== null && 'status' in err
@@ -109,43 +108,14 @@ export function ConversationView() {
   );
   const { data: draft } = useDraftForScope(draftScope);
   const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
-  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const isMobile = useIsMobile();
-  const activeEditingMessage = isMobile ? editingMessage : null;
-  const editAttachmentIDs = useMemo(
-    () => activeEditingMessage?.attachmentIDs ?? [],
-    [activeEditingMessage],
-  );
-  // Pass the access context so the server authorizes the resolve — without
-  // it the batch returns nothing, the edit composer opens with no attachment
-  // chips, and saving would wipe the message's attachments.
-  const { map: editAttachmentMap, isLoading: editAttachmentsLoading } = useAttachmentsBatch(
-    editAttachmentIDs,
-    activeEditingMessage
-      ? { parentID: id, parentType: 'conversation', messageID: activeEditingMessage.id }
-      : undefined,
-  );
-  const editDraftAttachments = useMemo<DraftAttachment[]>(
-    () =>
-      editAttachmentIDs
-        .map((id): DraftAttachment | null => {
-          const att = editAttachmentMap.get(id);
-          if (!att) return null;
-          return {
-            id: att.id,
-            filename: att.filename,
-            contentType: att.contentType,
-            size: att.size,
-            progress: 1,
-            ...(att.url ? { url: att.url } : {}),
-            ...(att.squareThumbnailURL ? { squareThumbnailURL: att.squareThumbnailURL } : {}),
-          };
-        })
-        .filter((att): att is DraftAttachment => att !== null),
-    [editAttachmentIDs, editAttachmentMap],
-  );
-  const editReady =
-    !editingMessage || editAttachmentIDs.length === 0 || !editAttachmentsLoading;
+  const {
+    editingMessage,
+    setEditingMessage,
+    activeEditingMessage,
+    editDraftAttachments,
+    editReady,
+  } = useEditingMessage(id, 'conversation');
   const editMessage = useEditMessage();
   const saveDraft = useSaveDraft();
   const saveDraftMutate = saveDraft.mutate;
@@ -197,7 +167,7 @@ export function ConversationView() {
         { onSuccess: () => setEditingMessage(null) },
       );
     },
-    [editMessage, editingMessage, id],
+    [editMessage, editingMessage, id, setEditingMessage],
   );
 
   // Drop the badge instantly in the list cache, then persist the read so it
@@ -265,8 +235,10 @@ export function ConversationView() {
   // Reset locally-opened thread when the conversation changes.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setThreadRootID(null), [id]);
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => setEditingMessage(null), [id]);
+  // setEditingMessage is a useState setter re-exported through
+  // useEditingMessage — stable, so listing it is a behavioral no-op that
+  // satisfies exhaustive-deps (the lint can't see through the hook).
+  useEffect(() => setEditingMessage(null), [id, setEditingMessage]);
 
   // The displayed thread is the local one if set, otherwise the URL-
   // driven one — unless the user has dismissed it.

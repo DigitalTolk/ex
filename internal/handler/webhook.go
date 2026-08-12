@@ -2,7 +2,9 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -70,7 +72,7 @@ func (h *WebhookHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	wh, err := h.svc.Update(r.Context(), pathParam(r, "id"), &body)
 	if err != nil {
-		if strings.Contains(err.Error(), store.ErrNotFound.Error()) {
+		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "webhook not found")
 			return
 		}
@@ -100,15 +102,18 @@ func (h *WebhookHandler) Execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.Execute(r.Context(), id, payload); err != nil {
-		if strings.Contains(err.Error(), "direct-message") {
-			writeError(w, http.StatusBadRequest, "unsupported_channel", err.Error())
+		// This is an UNAUTHENTICATED ingress: internal error text never goes
+		// to the caller. Fixed messages per class; the detail is logged.
+		if errors.Is(err, service.ErrWebhookDMRejected) {
+			writeError(w, http.StatusBadRequest, "unsupported_channel", "webhook cannot post to that direct-message target")
 			return
 		}
-		if strings.Contains(err.Error(), store.ErrNotFound.Error()) {
+		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "webhook or channel not found")
 			return
 		}
-		writeError(w, http.StatusBadRequest, "webhook_error", err.Error())
+		slog.Warn("webhook execute failed", "webhookID", id, "error", err)
+		writeError(w, http.StatusBadRequest, "webhook_error", "webhook request could not be processed")
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")

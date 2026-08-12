@@ -47,9 +47,10 @@ const unhideConversation = vi.fn();
 
 // The unread badge is now patched straight into the list cache by these helpers
 // (single source). Mock them so the handler tests assert the intent directly.
-const { bumpChannelUnread, bumpConversationUnread, clearConversationUnreadInCache } = vi.hoisted(() => ({
+const { bumpChannelUnread, bumpConversationUnread, clearChannelUnreadInCache, clearConversationUnreadInCache } = vi.hoisted(() => ({
   bumpChannelUnread: vi.fn(),
   bumpConversationUnread: vi.fn(),
+  clearChannelUnreadInCache: vi.fn(),
   clearConversationUnreadInCache: vi.fn(),
 }));
 vi.mock('@/lib/unread-cache', async (importOriginal) => ({
@@ -58,6 +59,7 @@ vi.mock('@/lib/unread-cache', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/unread-cache')>()),
   bumpChannelUnread,
   bumpConversationUnread,
+  clearChannelUnreadInCache,
   clearConversationUnreadInCache,
 }));
 
@@ -176,6 +178,7 @@ describe('ChatPage WebSocket handlers', () => {
     };
     bumpChannelUnread.mockReset();
     bumpConversationUnread.mockReset();
+    clearChannelUnreadInCache.mockReset();
     clearConversationUnreadInCache.mockReset();
     markThreadNotificationUnread.mockReset();
     isActiveChannel.mockReset();
@@ -247,6 +250,11 @@ describe('ChatPage WebSocket handlers', () => {
     const handler = capturedOptions.onMessageNew as (d: unknown) => void;
     handler(msg({ authorID: 'u-other', parentType: 'channel' }));
     expect(bumpChannelUnread).not.toHaveBeenCalled();
+    // Mirrors the conversation arm: a badge left over from an idle spell is
+    // cleared client-side too, not just server-side (review finding: the
+    // channel arm used to skip the cache clear, leaving a stale badge until
+    // an unrelated refetch).
+    expect(clearChannelUnreadInCache).toHaveBeenCalledWith(expect.anything(), 'ch-1');
     expect(vi.mocked(apiFetch)).toHaveBeenCalledWith('/api/v1/channels/ch-1/read', { method: 'PUT' });
   });
 
