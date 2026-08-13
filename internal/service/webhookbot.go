@@ -221,7 +221,9 @@ func (h webhookBotHandler) buildMattermostRequest(ctx context.Context, ev BotEve
 	form.Set("post_id", ev.MessageID)
 	form.Set("text", ev.Prompt)
 	form.Set("trigger_word", ev.TriggerWord)
-	form.Set("timestamp", strconv.FormatInt(time.Now().Unix(), 10))
+	// Milliseconds, not seconds: MM's docs show a seconds example, but a real
+	// server (verified against MM 11.9) sends epoch milliseconds here.
+	form.Set("timestamp", strconv.FormatInt(time.Now().UnixMilli(), 10))
 	// MM's outgoing webhooks have no thread field; ex adds root_id so a receiver
 	// that wants thread context can use it. An MM receiver ignores unknown fields.
 	form.Set("root_id", ev.RootMessageID)

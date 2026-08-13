@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/DigitalTolk/ex/internal/model"
@@ -180,8 +181,10 @@ func TestWebhookBotHandler_MattermostTransportSendsFormFields(t *testing.T) {
 			t.Errorf("form[%q] = %q, want %q", k, got[k], v)
 		}
 	}
-	if got["timestamp"] == "" {
-		t.Error("form[timestamp] is empty")
+	// Real MM sends epoch milliseconds (verified live against MM 11.9), so a
+	// receiver parsing this field must see a ms-scale value, not seconds.
+	if ts, err := strconv.ParseInt(got["timestamp"], 10, 64); err != nil || ts < 1_000_000_000_000 {
+		t.Errorf("form[timestamp] = %q, want epoch milliseconds", got["timestamp"])
 	}
 	// The MM transport must NOT also send ex's signature header: a receiver
 	// configured for MM verifies the body token, and sending both would advertise
