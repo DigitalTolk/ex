@@ -1,10 +1,16 @@
-import { useEffect, useRef } from 'react';
+import { lazy, Suspense, useEffect, useRef } from 'react';
 import { motion, useMotionValue } from 'motion/react';
 import { X } from 'lucide-react';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { CliffyPanel } from './CliffyPanel';
 import { useCliffyStore } from './cliffy-store';
 import { CliffBot } from './cliff-bot';
+
+// Lazy so the panel's chat stack (@assistant-ui, the AI SDK, react-markdown)
+// stays out of the entry chunk — the launcher mounts for every session, but
+// the panel only for users who actually open Cliffy.
+const CliffyPanel = lazy(() =>
+  import('./CliffyPanel').then((m) => ({ default: m.CliffyPanel })),
+);
 
 const LAUNCHER_SIZE = 72;
 const EDGE = 8; // keep this much of the icon clear of the viewport edge
@@ -84,7 +90,9 @@ export function CliffyLauncher() {
             transition={{ type: 'spring', stiffness: 340, damping: 34 }}
             className="fixed inset-0 z-50 flex flex-col bg-background pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)]"
           >
-            <CliffyPanel onClose={close} />
+            <Suspense fallback={null}>
+              <CliffyPanel onClose={close} />
+            </Suspense>
           </motion.div>
         ) : (
           <motion.div
@@ -94,7 +102,9 @@ export function CliffyLauncher() {
             style={{ transformOrigin: 'bottom right' }}
             className="fixed bottom-24 right-5 z-50 flex h-[min(620px,calc(100dvh-8rem))] w-[min(420px,calc(100vw-2.5rem))] flex-col overflow-hidden rounded-2xl border border-border/60 bg-background shadow-2xl ring-1 ring-black/[0.04] dark:ring-white/[0.06]"
           >
-            <CliffyPanel onClose={close} />
+            <Suspense fallback={null}>
+              <CliffyPanel onClose={close} />
+            </Suspense>
           </motion.div>
         ))}
 
