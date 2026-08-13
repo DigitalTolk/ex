@@ -326,9 +326,11 @@ func NewRouter(d *Deps) http.Handler {
 
 	// MCP server — bots/agents reach ex's tools over the Model Context Protocol,
 	// behind AuthWithBots so tools run as the calling bot/user. Streamable-HTTP
-	// uses one path for POST (requests) + GET (event stream).
+	// uses one path for POST (requests) + GET (event stream). writeLimit too:
+	// postMessage runs on this path, and without it a leaked token could flood
+	// channels at wire speed, sidestepping the cap every REST send carries.
 	if d.Bot != nil {
-		mux.Handle("/api/v1/mcp", middleware.Wrap(NewMCPHTTPHandler(d.MCPChat), authMW))
+		mux.Handle("/api/v1/mcp", middleware.Wrap(NewMCPHTTPHandler(d.MCPChat), authMW, writeLimit))
 		mux.Handle("GET /api/v1/admin/bots/{id}/tokens", middleware.WrapFunc(d.Bot.ListTokens, authMW))
 		mux.Handle("POST /api/v1/admin/bots/{id}/tokens", middleware.WrapFunc(d.Bot.CreateToken, authMW))
 		mux.Handle("DELETE /api/v1/admin/bots/{id}/tokens/{tokenID}", middleware.WrapFunc(d.Bot.RevokeToken, authMW))
