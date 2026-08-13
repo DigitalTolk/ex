@@ -116,10 +116,12 @@ func NewMobilePushTaskHandler(ack NotificationAckStore, provider MobilePushSende
 		}
 		if ack != nil && p.Notification.MessageID != "" && ack.WasNotificationAcked(ctx, p.RecipientUserID, p.Notification.MessageID) {
 			// Desktop confirmed delivery — no push needed.
+			pushMetrics.ackSuppressed.Add(1)
 			return nil
 		}
 		if err := provider.Send(ctx, p.RecipientUserID, p.Notification); err != nil {
 			if errors.Is(err, ErrPushUndeliverable) {
+				pushMetrics.undeliverable.Add(1)
 				// The offline/no-ack fallback produced NO alert for this
 				// recipient (no registered device / provider rejected the
 				// target). Retrying cannot fix it — log LOUDLY and archive.
@@ -134,6 +136,7 @@ func NewMobilePushTaskHandler(ack NotificationAckStore, provider MobilePushSende
 			}
 			// Transient (network / 5xx after the provider's own fast retries):
 			// return the error so asynq redelivers on the push retry curve.
+			pushMetrics.transientFailures.Add(1)
 			slog.Warn("mobile push attempt failed; task will retry",
 				"userID", p.RecipientUserID,
 				"messageID", p.Notification.MessageID,
@@ -141,6 +144,7 @@ func NewMobilePushTaskHandler(ack NotificationAckStore, provider MobilePushSende
 			)
 			return err
 		}
+		pushMetrics.delivered.Add(1)
 		return nil
 	}
 }

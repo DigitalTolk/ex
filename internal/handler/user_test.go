@@ -600,13 +600,16 @@ func TestListUsers(t *testing.T) {
 		return rows
 	}
 
-	// A non-admin (member) caller must NOT see admin-only fields.
+	// A non-admin (member) caller must NOT see the remaining admin-only field
+	// (authProvider) — but MUST receive systemRole: roles are public (product
+	// decision 2026-07-17; the directory shows a role pill to every viewer,
+	// and the old redaction made members see empty badges).
 	for _, row := range listAs(&model.User{ID: "caller-m", Email: "m@t.co", SystemRole: model.SystemRoleMember}) {
-		if _, ok := row["systemRole"]; ok {
-			t.Errorf("ListUsers leaked systemRole to a member: %v", row)
-		}
 		if _, ok := row["authProvider"]; ok {
 			t.Errorf("ListUsers leaked authProvider to a member: %v", row)
+		}
+		if row["systemRole"] != "admin" {
+			t.Errorf("ListUsers must return systemRole to a member caller, got %v", row["systemRole"])
 		}
 	}
 

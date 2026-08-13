@@ -1,9 +1,8 @@
-import { useMemo, useState, type ReactNode } from 'react';
-import { Check, Copy } from 'lucide-react';
+import { useMemo, type ReactNode } from 'react';
 import { toJsxRuntime } from 'hast-util-to-jsx-runtime';
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime';
 import { highlightToHast, codeFenceLabel } from '@/lib/code-highlight';
-import { copyToClipboard } from '@/lib/clipboard';
+import { CopyButton } from '@/components/ui/copy-button';
 
 interface CodeBlockProps {
   code: string;
@@ -14,7 +13,6 @@ interface CodeBlockProps {
 // the fence names a known language (with a line-number gutter), plain
 // otherwise, and always with a "copy code" button.
 export function CodeBlock({ code, language }: CodeBlockProps) {
-  const [copied, setCopied] = useState(false);
   const tree = useMemo(() => highlightToHast(code, language), [code, language]);
   // Validate the fence token against the supported set: a supported language
   // keeps its label, but an unknown one degrades to "plain" rather than leaking
@@ -29,12 +27,6 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
     ? toJsxRuntime(tree, { Fragment, jsx, jsxs })
     : display;
 
-  async function handleCopy() {
-    await copyToClipboard(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }
-
   return (
     <div className="group relative my-0 overflow-hidden rounded-md bg-muted text-xs font-mono">
       <div className="absolute right-1.5 top-1.5 z-10 flex items-center gap-1">
@@ -46,11 +38,11 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
             {langLabel}
           </span>
         )}
-        <button
-          type="button"
-          onClick={handleCopy}
-          aria-label={copied ? 'Code copied' : 'Copy code'}
-          title={copied ? 'Copied' : 'Copy code'}
+        <CopyButton
+          value={code}
+          label="Copy code"
+          variant="outline"
+          size="icon-xs"
           data-testid="code-copy-button"
           // Hover-revealed, desktop-only. On touch there is no hover, and the
           // mobile chrome stays minimal (whole-message copy lives in the
@@ -58,10 +50,8 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
           // an invisible tap target that silently copied on stray taps, so
           // mobile also needs pointer-events-none (same treatment as the
           // sidebar row kebabs).
-          className="inline-flex h-6 w-6 items-center justify-center rounded border bg-background/80 text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 mobile:pointer-events-none"
-        >
-          {copied ? <Check className="h-3 w-3" aria-hidden /> : <Copy className="h-3 w-3" aria-hidden />}
-        </button>
+          className="bg-background/80 text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 mobile:pointer-events-none"
+        />
       </div>
       <div className="flex">
         {highlighted && (

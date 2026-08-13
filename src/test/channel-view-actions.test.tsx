@@ -27,7 +27,7 @@ vi.mock('@/components/chat/markdown/MarkdownComposer', () => ({
     </div>
   ),
 }));
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ChannelView } from '@/components/chat/ChannelView';
@@ -69,26 +69,31 @@ vi.mock('@/context/AuthContext', () => ({
   }),
 }));
 
+// ONE stable object: ChannelView's mount effect lists setActiveChannel /
+// setActiveParent in its deps, so a mock that mints fresh vi.fn()s per render
+// re-runs the effect on every re-render — which re-PUTs /read and makes any
+// call-count assertion about the read marker meaningless.
+const unreadValue = {
+  unreadChannels: new Set(),
+  unreadChannelNotifications: new Set(),
+  unreadConversations: new Set(),
+  hiddenConversations: new Set(),
+  markChannelUnread: vi.fn(),
+  markChannelNotificationUnread: vi.fn(),
+  markConversationUnread: vi.fn(),
+  clearChannelUnread: vi.fn(),
+  clearConversationUnread: vi.fn(),
+  hideConversation: vi.fn(),
+  unhideConversation: vi.fn(),
+  setActiveChannel: vi.fn(),
+  setActiveConversation: vi.fn(),
+  isActiveChannel: vi.fn(() => false),
+  isActiveConversation: vi.fn(() => false),
+  setActiveThread: vi.fn(),
+  isActiveThread: vi.fn(() => false),
+};
 vi.mock('@/context/UnreadContext', () => ({
-  useUnread: () => ({
-    unreadChannels: new Set(),
-    unreadChannelNotifications: new Set(),
-    unreadConversations: new Set(),
-    hiddenConversations: new Set(),
-    markChannelUnread: vi.fn(),
-    markChannelNotificationUnread: vi.fn(),
-    markConversationUnread: vi.fn(),
-    clearChannelUnread: vi.fn(),
-    clearConversationUnread: vi.fn(),
-    hideConversation: vi.fn(),
-    unhideConversation: vi.fn(),
-    setActiveChannel: vi.fn(),
-    setActiveConversation: vi.fn(),
-    isActiveChannel: vi.fn(() => false),
-    isActiveConversation: vi.fn(() => false),
-    setActiveThread: vi.fn(),
-    isActiveThread: vi.fn(() => false),
-  }),
+  useUnread: () => unreadValue,
 }));
 
 vi.mock('@/context/PresenceContext', () => ({
@@ -179,6 +184,47 @@ describe('ChannelView - member actions', () => {
   it('renders channel for a regular member', () => {
     renderChannelView();
     expect(screen.getByRole('heading', { name: 'general' })).toBeInTheDocument();
+  });
+
+  // The other half of the attention-gated read model: messages that arrive
+  // while the window is blurred keep the unread badge (ChatPage bumps it);
+  // the read is persisted when the user comes BACK to the window. Without
+  // this, an unwatched-but-open channel accumulated unread that nothing ever
+  // cleared until a route change.
+  it('marks the channel read again when the window regains focus', async () => {
+    renderChannelView();
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-1/read', { method: 'PUT' });
+    });
+    mockApiFetch.mockClear();
+    // jsdom's hasFocus() is false; a real focus event implies focus.
+    const hasFocusSpy = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    try {
+      fireEvent.focus(window);
+      await waitFor(() => {
+        expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-1/read', { method: 'PUT' });
+      });
+    } finally {
+      hasFocusSpy.mockRestore();
+    }
+  });
+
+  it('does NOT re-read on a visibility flip while the window stays unfocused', async () => {
+    renderChannelView();
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-1/read', { method: 'PUT' });
+    });
+    mockApiFetch.mockClear();
+    const hasFocusSpy = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    try {
+      fireEvent(document, new Event('visibilitychange'));
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 20));
+      });
+      expect(mockApiFetch).not.toHaveBeenCalledWith('/api/v1/channels/ch-1/read', { method: 'PUT' });
+    } finally {
+      hasFocusSpy.mockRestore();
+    }
   });
 });
 

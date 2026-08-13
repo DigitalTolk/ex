@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { act, render } from '@testing-library/react';
-import { useInView } from '@/hooks/useInView';
+import { useRef } from 'react';
+import { useInView, useLiveInView } from '@/hooks/useInView';
 
 // jsdom doesn't ship IntersectionObserver — install a controllable
 // stub so we can drive the in-view transition deterministically.
@@ -119,6 +120,66 @@ describe('useInView', () => {
     });
     const states: boolean[] = [];
     render(<Probe onState={(v) => states.push(v)} />);
+    expect(states[0]).toBe(true);
+  });
+});
+
+function LiveProbe(props: { onState: (live: boolean) => void; attach?: boolean }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  props.onState(useLiveInView(ref));
+  return props.attach === false ? <div /> : <div ref={ref} data-testid="live-probe" />;
+}
+
+describe('useLiveInView', () => {
+  let originalIO: typeof IntersectionObserver | undefined;
+
+  beforeEach(() => {
+    originalIO = (globalThis as { IntersectionObserver?: typeof IntersectionObserver }).IntersectionObserver;
+    FakeObserver.instances = [];
+    Object.defineProperty(globalThis, 'IntersectionObserver', {
+      value: FakeObserver,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    if (originalIO) {
+      Object.defineProperty(globalThis, 'IntersectionObserver', {
+        value: originalIO,
+        configurable: true,
+        writable: true,
+      });
+    }
+  });
+
+  it('is NON-sticky: tracks the element in and back OUT of the viewport', () => {
+    const states: boolean[] = [];
+    render(<LiveProbe onState={(v) => states.push(v)} />);
+    expect(states[0]).toBe(false);
+    act(() => FakeObserver.instances[0].fire(true));
+    expect(states.at(-1)).toBe(true);
+    // Scrolled past — a sticky flag here would keep suppressing thread
+    // notifications for a card the user is no longer reading (SPEC D-3).
+    act(() => FakeObserver.instances[0].fire(false));
+    expect(states.at(-1)).toBe(false);
+  });
+
+  it('does not observe when the ref is never attached', () => {
+    const states: boolean[] = [];
+    render(<LiveProbe attach={false} onState={(v) => states.push(v)} />);
+    expect(FakeObserver.instances).toHaveLength(0);
+    expect(states.at(-1)).toBe(false);
+  });
+
+  it('falls back to live=true when IntersectionObserver is unavailable', () => {
+    Object.defineProperty(globalThis, 'IntersectionObserver', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
+    const states: boolean[] = [];
+    render(<LiveProbe onState={(v) => states.push(v)} />);
     expect(states[0]).toBe(true);
   });
 });

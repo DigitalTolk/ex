@@ -186,6 +186,32 @@ export function markThreadSeen(
   }
 }
 
+// seenTime parses a seen-map timestamp, treating unparseable values as 0 so a
+// corrupt entry never outranks a real one.
+function seenTime(at: string | undefined): number {
+  if (!at) return 0;
+  const t = new Date(at).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+// mergeSeenMaps folds the server threadSeen map with the per-device local
+// seen map, keeping the NEWER timestamp per thread. Every consumer must use
+// this instead of a spread: `{...server, ...local}` let a stale local entry
+// shadow a newer server watermark, so a thread read on another device stayed
+// unread here forever (SPEC GAP-2 / I-4).
+export function mergeSeenMaps(
+  server: Record<string, string> | undefined,
+  local: Record<string, string>,
+): Record<string, string> {
+  const merged: Record<string, string> = { ...(server ?? {}) };
+  for (const [threadRootID, at] of Object.entries(local)) {
+    if (seenTime(at) >= seenTime(merged[threadRootID])) {
+      merged[threadRootID] = at;
+    }
+  }
+  return merged;
+}
+
 // hasUnreadActivity returns true when latestActivityAt is newer than the
 // recorded seen timestamp (or no seen entry exists yet).
 export function hasUnreadActivity(t: ThreadSummary, seen: Record<string, string> = loadSeen()): boolean {

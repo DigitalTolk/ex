@@ -2,6 +2,7 @@ package handler
 
 import (
 	"crypto/subtle"
+	"errors"
 	"net/http"
 	"net/url"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/service"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // AuthHandler exposes HTTP endpoints for authentication flows.
@@ -331,6 +333,104 @@ func (h *AuthHandler) GuestLogin(w http.ResponseWriter, r *http.Request) {
 		"accessToken": accessToken,
 		"user":        user,
 	})
+}
+
+// AdminResetUserPassword mints a one-time password-reset link for a guest
+// account and emails it to that guest. Admin-only.
+//
+// The link comes back in the response as well, so an admin can relay it
+// directly when mail is unconfigured or the relay is down; `emailSent` tells
+// the UI which story to show. SSO users are rejected with 409 — their
+// credential lives in the identity provider and must stay there.
+func (h *AuthHandler) AdminResetUserPassword(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	targetID := pathParam(r, "id")
+	if targetID == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "user ID is required")
+		return
+	}
+
+	ticket, err := h.authSvc.CreatePasswordResetForUser(r.Context(), targetID)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			writeError(w, http.StatusNotFound, "not_found", "user not found")
+		case errors.Is(err, service.ErrPasswordResetUnsupported):
+			writeError(w, http.StatusConflict, "sso_account", err.Error())
+		case errors.Is(err, service.ErrPasswordResetUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "reset_unavailable", err.Error())
+		default:
+			writeInternalError(w, r, "reset_error", err)
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, ticket)
+}
+
+// ForgotPassword is the unauthenticated "email me a reset link" endpoint for
+// guest accounts. It always answers 204: the response must not reveal whether
+// an address is registered, whether it is a guest, or whether mail went out.
+func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email string `json:"email"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+
+	// RequestPasswordReset answers nil or ErrPasswordResetUnavailable and
+	// nothing else: every per-account failure (unknown address, SSO account,
+	// store outage, mail outage) is deliberately swallowed so this response
+	// cannot be used to enumerate accounts. Hence a single error arm, and a
+	// fixed message rather than the error's own — that keeps the endpoint
+	// non-revealing even if the service's error set ever widens.
+	if err := h.authSvc.RequestPasswordReset(r.Context(), body.Email); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "reset_unavailable",
+			service.ErrPasswordResetUnavailable.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ResetPassword redeems a one-time reset token and sets a new password. The
+// caller is unauthenticated — the token IS the credential — so the token is
+// single-use and every existing session for the account is revoked.
+func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Token    string `json:"token"`
+		Password string `json:"password"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if body.Token == "" || body.Password == "" {
+		writeError(w, http.StatusBadRequest, "invalid_body", "token and password are required")
+		return
+	}
+
+	if err := h.authSvc.ResetPassword(r.Context(), body.Token, body.Password); err != nil {
+		switch {
+		case errors.Is(err, service.ErrPasswordResetInvalid), errors.Is(err, service.ErrPasswordResetUnsupported):
+			writeError(w, http.StatusBadRequest, "invalid_token", err.Error())
+		case errors.Is(err, service.ErrPasswordResetUnavailable):
+			writeError(w, http.StatusServiceUnavailable, "reset_unavailable", err.Error())
+		case errors.Is(err, store.ErrNotFound):
+			// The ticket outlived its account (deleted between mint and use).
+			writeError(w, http.StatusBadRequest, "invalid_token", service.ErrPasswordResetInvalid.Error())
+		default:
+			// A too-short password is the only other user-caused failure.
+			writeError(w, http.StatusBadRequest, "invalid_password", err.Error())
+		}
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // setRefreshCookie sets a secure httpOnly cookie containing the refresh token.

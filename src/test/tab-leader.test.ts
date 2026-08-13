@@ -6,21 +6,45 @@ import {
   hasOtherTabs,
   setTabActiveParent,
   remoteTabViewing,
+  remoteTabViewingThread,
   remoteUserAtDevice,
   resetTabCoordinatorForTests,
   getTabChannelForTests,
   getTabElectorForTests,
 } from '@/lib/tab-leader';
-import { markUserActivity, setActivityBroadcast } from '@/lib/user-activity';
+import { markUserActivity, resetUserActivityForTests, setActivityBroadcast } from '@/lib/user-activity';
+import { resetThreadScopeForTests } from '@/lib/thread-scope';
 
 // The coordinator runs against REAL broadcast-channel primitives in
 // 'simulate' mode: channels created with the same name inside this process
 // deliver to each other, so a test can stand in for a second tab.
 
-type AnyMsg = { kind: string; tabId: string; state?: { visible: boolean; lastActivityAt: number; activeParent: string | null } };
+interface PeerState {
+  visible: boolean;
+  focused?: boolean;
+  hardAway?: boolean;
+  lastActivityAt: number;
+  activeParent: string | null;
+  activeThreads?: string[];
+}
+type AnyMsg = { kind: string; tabId: string; state?: PeerState };
 
 function makePeerChannel(): BroadcastChannel<AnyMsg> {
   return new BroadcastChannel<AnyMsg>('ex-tabs', { type: 'simulate' });
+}
+
+// An attentive sibling snapshot: visible + focused + fresh input, not
+// hard-away. Individual tests override fields to probe each rejection arm.
+function attentivePeer(overrides: Partial<PeerState> = {}): PeerState {
+  return {
+    visible: true,
+    focused: true,
+    hardAway: false,
+    lastActivityAt: Date.now(),
+    activeParent: null,
+    activeThreads: [],
+    ...overrides,
+  };
 }
 
 async function flush(ms = 50): Promise<void> {
@@ -30,6 +54,8 @@ async function flush(ms = 50): Promise<void> {
 afterEach(async () => {
   await resetTabCoordinatorForTests();
   setActivityBroadcast(null);
+  resetUserActivityForTests();
+  resetThreadScopeForTests();
 });
 
 describe('uninitialized (single-tab / test) baseline', () => {
@@ -60,34 +86,159 @@ describe('initTabCoordinator', () => {
       await peer.postMessage({
         kind: 'state',
         tabId: 'peer-1',
-        state: { visible: true, lastActivityAt: Date.now(), activeParent: 'ch-9' },
+        state: attentivePeer({ activeParent: 'ch-9', activeThreads: ['root-7'] }),
       });
       await vi.waitFor(() => {
         expect(hasOtherTabs()).toBe(true);
       });
       expect(remoteTabViewing('ch-9', 60_000)).toBe(true);
       expect(remoteTabViewing('ch-other', 60_000)).toBe(false);
+      expect(remoteTabViewingThread('root-7', 60_000)).toBe(true);
+      expect(remoteTabViewingThread('root-other', 60_000)).toBe(false);
       expect(remoteUserAtDevice(60_000)).toBe(true);
       // Stale activity: the tab is there but the human is not.
       await peer.postMessage({
         kind: 'state',
         tabId: 'peer-1',
-        state: { visible: true, lastActivityAt: Date.now() - 60 * 60_000, activeParent: 'ch-9' },
+        state: attentivePeer({ lastActivityAt: Date.now() - 60 * 60_000, activeParent: 'ch-9' }),
       });
       await vi.waitFor(() => {
         expect(remoteUserAtDevice(60_000)).toBe(false);
       });
       expect(remoteTabViewing('ch-9', 60_000)).toBe(false);
-      // Hidden tab: never counts as at-device or viewing.
+      // Hidden tab with fresh input: still at-device for the ACK tier (the
+      // input happened at this machine; which window shows is irrelevant) —
+      // but never a reason to suppress (viewing requires visible+focused).
       await peer.postMessage({
         kind: 'state',
         tabId: 'peer-1',
-        state: { visible: false, lastActivityAt: Date.now(), activeParent: 'ch-9' },
+        state: attentivePeer({ visible: false, activeParent: 'ch-9' }),
+      });
+      await vi.waitFor(() => {
+        expect(remoteTabViewing('ch-9', 60_000)).toBe(false);
+      });
+      expect(remoteUserAtDevice(60_000)).toBe(true);
+    } finally {
+      await peer.close();
+    }
+  });
+
+  // SPEC GAP-7 / G-P2.2, revised 2026-08-12: a blurred sibling must never
+  // justify SUPPRESSING an alert (that claims the user is looking at it) —
+  // but with FRESH INPUT it does vouch that a human is at the device, so the
+  // desktop may ack what it surfaced. Requiring focus for the ack tier was
+  // the regression that buzzed the phone for every alert while the user
+  // worked in another window. The real GAP-7 hole (a blurred tab vouching
+  // with NO input evidence) stays closed by R1: only real input stamps the
+  // clock, and a blurred tab receives no input.
+  it('a visible-but-BLURRED sibling with fresh input vouches at-device, never for suppression', async () => {
+    initTabCoordinator({ type: 'simulate' });
+    const peer = makePeerChannel();
+    try {
+      await peer.postMessage({
+        kind: 'state',
+        tabId: 'peer-blur',
+        state: attentivePeer({ focused: false, activeParent: 'ch-9', activeThreads: ['root-7'] }),
+      });
+      await vi.waitFor(() => {
+        expect(hasOtherTabs()).toBe(true);
+      });
+      expect(remoteUserAtDevice(60_000)).toBe(true);
+      expect(remoteTabViewing('ch-9', 60_000)).toBe(false);
+      expect(remoteTabViewingThread('root-7', 60_000)).toBe(false);
+      // Blurred AND input-stale: not even at-device — the GAP-7 scenario
+      // (an abandoned second-monitor tab) stays unable to ack.
+      await peer.postMessage({
+        kind: 'state',
+        tabId: 'peer-blur',
+        state: attentivePeer({ focused: false, lastActivityAt: Date.now() - 60 * 60_000 }),
       });
       await vi.waitFor(() => {
         expect(remoteUserAtDevice(60_000)).toBe(false);
       });
+    } finally {
+      await peer.close();
+    }
+  });
+
+  it('a hard-away sibling (locked / just woke) never vouches for the user (SPEC R2/R3)', async () => {
+    initTabCoordinator({ type: 'simulate' });
+    const peer = makePeerChannel();
+    try {
+      await peer.postMessage({
+        kind: 'state',
+        tabId: 'peer-locked',
+        state: attentivePeer({ hardAway: true, activeParent: 'ch-9', activeThreads: ['root-7'] }),
+      });
+      await vi.waitFor(() => {
+        expect(hasOtherTabs()).toBe(true);
+      });
+      expect(remoteUserAtDevice(60_000)).toBe(false);
       expect(remoteTabViewing('ch-9', 60_000)).toBe(false);
+      expect(remoteTabViewingThread('root-7', 60_000)).toBe(false);
+    } finally {
+      await peer.close();
+    }
+  });
+
+  it('an attentive sibling with no activeThreads field (old version) never matches a thread', async () => {
+    initTabCoordinator({ type: 'simulate' });
+    const peer = makePeerChannel();
+    try {
+      const state = attentivePeer({ activeParent: 'ch-9' });
+      delete state.activeThreads; // pre-thread-scope snapshot shape
+      await peer.postMessage({ kind: 'state', tabId: 'peer-no-threads', state });
+      await vi.waitFor(() => {
+        expect(hasOtherTabs()).toBe(true);
+      });
+      expect(remoteUserAtDevice(60_000)).toBe(true); // attentive in every other way
+      expect(remoteTabViewingThread('root-7', 60_000)).toBe(false);
+    } finally {
+      await peer.close();
+    }
+  });
+
+  it('broadcasts focused=false when document.hasFocus is unavailable (fail toward away)', async () => {
+    const peer = makePeerChannel();
+    const seen: AnyMsg[] = [];
+    peer.onmessage = (m) => {
+      seen.push(m);
+    };
+    const orig = document.hasFocus;
+    // @ts-expect-error — simulating an environment without hasFocus
+    document.hasFocus = undefined;
+    try {
+      initTabCoordinator({ type: 'simulate' });
+      setTabActiveParent('ch-nofocus');
+      await vi.waitFor(() => {
+        expect(seen.some((m) => m.kind === 'state' && m.state?.activeParent === 'ch-nofocus')).toBe(true);
+      });
+      const last = seen.filter((m) => m.kind === 'state').at(-1);
+      expect(last?.state?.focused).toBe(false);
+    } finally {
+      document.hasFocus = orig;
+      await peer.close();
+    }
+  });
+
+  it('an OLD-VERSION sibling snapshot (no focused/hardAway fields) fails toward away', async () => {
+    initTabCoordinator({ type: 'simulate' });
+    const peer = makePeerChannel();
+    try {
+      // A tab running the previous app version broadcasts without the new
+      // fields — hardAway is undefined, so it cannot AFFIRM its input stamps
+      // survived a lock/wake, and it must never ack for the device.
+      await peer.postMessage({
+        kind: 'state',
+        tabId: 'peer-old',
+        state: { visible: true, lastActivityAt: Date.now(), activeParent: 'ch-9' },
+      });
+      await vi.waitFor(() => {
+        expect(hasOtherTabs()).toBe(true);
+      });
+      expect(remoteUserAtDevice(60_000)).toBe(false);
+      expect(remoteTabViewing('ch-9', 60_000)).toBe(false);
+      expect(remoteTabViewingThread('root-7', 60_000)).toBe(false);
     } finally {
       await peer.close();
     }

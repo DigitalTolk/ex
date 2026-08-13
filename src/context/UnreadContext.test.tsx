@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useState } from 'react';
 import { render, screen, act } from '@testing-library/react';
 import { UnreadProvider, useUnread } from './UnreadContext';
+import { addInViewThread, resetThreadScopeForTests } from '@/lib/thread-scope';
 
 function TestConsumer() {
   // Active channel/conversation are refs (no re-render on change); a tick forces
@@ -45,6 +46,7 @@ function TestConsumer() {
 describe('UnreadContext', () => {
   beforeEach(() => {
     localStorage.clear();
+    resetThreadScopeForTests();
   });
 
   it('throws when used outside its provider', () => {
@@ -108,6 +110,22 @@ describe('UnreadContext', () => {
     act(() => screen.getByText('deactivateThread').click());
     act(() => screen.getByText('tick').click());
     expect(screen.getByTestId('is-active-thread')).toHaveTextContent('false');
+  });
+
+  it('isActiveThread also covers a /threads card in the viewport (SPEC GAP-5)', () => {
+    render(
+      <UnreadProvider>
+        <TestConsumer />
+      </UnreadProvider>,
+    );
+    expect(screen.getByTestId('is-active-thread')).toHaveTextContent('false');
+    // Reading the thread inline on /threads (card in view, no panel open)
+    // must count as active so replies neither badge nor popup.
+    act(() => {
+      addInViewThread('root-1');
+      screen.getByText('tick').click();
+    });
+    expect(screen.getByTestId('is-active-thread')).toHaveTextContent('true');
   });
 
   it('hide/unhide conversation persists to localStorage', () => {

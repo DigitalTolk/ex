@@ -479,4 +479,98 @@ describe('DirectoriesPage', () => {
     expect(screen.getByText('public-ch')).toBeInTheDocument();
     expect(screen.queryByText('private-ch')).not.toBeInTheDocument();
   });
+
+  describe('guest password reset', () => {
+    const roster: User[] = [
+      { id: 'u-g', email: 'g@b.c', displayName: 'Guesty', systemRole: 'guest', authProvider: 'guest', status: 'active' },
+      { id: 'u-s', email: 's@b.c', displayName: 'Ssonia', systemRole: 'member', authProvider: 'oidc', status: 'active' },
+    ] as User[];
+
+    function mockRoster(onReset?: (url: string) => unknown) {
+      mockBrowseChannels.mockReturnValue({ data: [], isLoading: false });
+      mockUserChannels.mockReturnValue({ data: [] });
+      mockApiFetch.mockImplementation((url: string) => {
+        if (url.includes('/password-reset')) {
+          return Promise.resolve(onReset ? onReset(url) : {});
+        }
+        return Promise.resolve(roster);
+      });
+      window.history.pushState({}, '', '/directory/users');
+    }
+
+    it('offers the action for a guest and creates a link', async () => {
+      mockRole = 'admin';
+      const calls: string[] = [];
+      mockRoster((url) => {
+        calls.push(url);
+        return {
+          resetURL: 'https://ex.example.com/reset-password/tok-1',
+          expiresAt: '2026-08-11T17:00:00Z',
+          emailSent: true,
+        };
+      });
+      const user = userEvent.setup();
+      renderWithProviders(<DirectoriesPage />);
+      await screen.findByTestId('members-grid');
+
+      await user.click(await screen.findByLabelText('Manage Guesty'));
+      await user.click(await screen.findByTestId('reset-password-u-g'));
+
+      await user.click(await screen.findByRole('button', { name: /create reset link/i }));
+      await waitFor(() =>
+        expect(calls).toContain('/api/v1/users/u-g/password-reset'),
+      );
+      expect(await screen.findByRole('status')).toHaveTextContent(/emailed to g@b\.c/i);
+    });
+
+    it('closes the dialog without resetting anything when dismissed', async () => {
+      mockRole = 'admin';
+      const calls: string[] = [];
+      mockRoster((url) => {
+        calls.push(url);
+        return {};
+      });
+      const user = userEvent.setup();
+      renderWithProviders(<DirectoriesPage />);
+      await screen.findByTestId('members-grid');
+
+      await user.click(await screen.findByLabelText('Manage Guesty'));
+      await user.click(await screen.findByTestId('reset-password-u-g'));
+      expect(
+        await screen.findByRole('button', { name: /create reset link/i }),
+      ).toBeInTheDocument();
+
+      await user.keyboard('{Escape}');
+      await waitFor(() =>
+        expect(
+          screen.queryByRole('button', { name: /create reset link/i }),
+        ).not.toBeInTheDocument(),
+      );
+      expect(calls).toHaveLength(0);
+    });
+
+    // The load-bearing guard: an SSO account's password lives in the identity
+    // provider, so the action must not even be offered.
+    it('does not offer the action for an SSO account', async () => {
+      mockRole = 'admin';
+      mockRoster();
+      const user = userEvent.setup();
+      renderWithProviders(<DirectoriesPage />);
+      await screen.findByTestId('members-grid');
+
+      await user.click(await screen.findByLabelText('Manage Ssonia'));
+      expect(await screen.findByText('Set as Guest')).toBeInTheDocument();
+      expect(screen.queryByTestId('reset-password-u-s')).not.toBeInTheDocument();
+    });
+
+    it('is not offered to non-admins at all', async () => {
+      mockRole = 'member';
+      mockRoster();
+      renderWithProviders(<DirectoriesPage />);
+      await screen.findByTestId('members-grid');
+
+      expect(screen.queryByLabelText('Manage Guesty')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('reset-password-u-g')).not.toBeInTheDocument();
+    });
+  });
 });

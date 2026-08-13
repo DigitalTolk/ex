@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConversationView } from './ConversationView';
@@ -29,23 +29,27 @@ vi.mock('@/context/AuthContext', () => ({
   }),
 }));
 
+// ONE stable object (see channel-view-actions.test): the mount effect lists
+// setActiveConversation/setActiveParent in its deps, so per-render vi.fn()
+// identities would re-run it — re-PUTting /read on every re-render.
+const unreadValue = {
+  unreadChannels: new Set(),
+  unreadChannelNotifications: new Set(),
+  unreadConversations: new Set(),
+  markChannelUnread: vi.fn(),
+  markChannelNotificationUnread: vi.fn(),
+  markConversationUnread: vi.fn(),
+  clearChannelUnread: vi.fn(),
+  clearConversationUnread: vi.fn(),
+  setActiveChannel: vi.fn(),
+  setActiveConversation: vi.fn(),
+  isActiveChannel: vi.fn(() => false),
+  isActiveConversation: vi.fn(() => false),
+  setActiveThread: vi.fn(),
+  isActiveThread: vi.fn(() => false),
+};
 vi.mock('@/context/UnreadContext', () => ({
-  useUnread: () => ({
-    unreadChannels: new Set(),
-    unreadChannelNotifications: new Set(),
-    unreadConversations: new Set(),
-    markChannelUnread: vi.fn(),
-    markChannelNotificationUnread: vi.fn(),
-    markConversationUnread: vi.fn(),
-    clearChannelUnread: vi.fn(),
-    clearConversationUnread: vi.fn(),
-    setActiveChannel: vi.fn(),
-    setActiveConversation: vi.fn(),
-    isActiveChannel: vi.fn(() => false),
-    isActiveConversation: vi.fn(() => false),
-    setActiveThread: vi.fn(),
-    isActiveThread: vi.fn(() => false),
-  }),
+  useUnread: () => unreadValue,
 }));
 
 vi.mock('@/context/PresenceContext', () => ({
@@ -152,6 +156,27 @@ describe('ConversationView', () => {
   it('does not render member toggle for DM conversations', () => {
     renderConversationView();
     expect(screen.queryByLabelText('Toggle member list')).not.toBeInTheDocument();
+  });
+
+  // Attention-gated read, return half (see ChatPage's message.new gate):
+  // messages that arrived while this DM's window was blurred keep their
+  // unread badge; the read persists when the user comes back.
+  it('marks the conversation read again when the window regains focus', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    renderConversationView();
+    await waitFor(() => {
+      expect(vi.mocked(apiFetch)).toHaveBeenCalledWith('/api/v1/conversations/conv-1/read', { method: 'PUT' });
+    });
+    vi.mocked(apiFetch).mockClear();
+    const hasFocusSpy = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    try {
+      fireEvent.focus(window);
+      await waitFor(() => {
+        expect(vi.mocked(apiFetch)).toHaveBeenCalledWith('/api/v1/conversations/conv-1/read', { method: 'PUT' });
+      });
+    } finally {
+      hasFocusSpy.mockRestore();
+    }
   });
 
   it('keeps MessageList as a direct child of MessageDropZone (no nested wrapper) — broke DM scrolling when wrapped', () => {

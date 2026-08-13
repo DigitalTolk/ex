@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { render as rtlRender, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MessageInput } from './MessageInput';
@@ -263,6 +263,90 @@ describe('MessageInput slash commands', () => {
       expect(alert.textContent).toContain("Couldn't run /mstmeetings");
       view.unmount();
     }
+  });
+
+  it('shows a running indicator until the command settles', async () => {
+    // Commands like /mstmeetings take a Graph round-trip before the result
+    // message lands — the composer must show progress for that window.
+    let settle: (() => void) | undefined;
+    runCommandMock.mockImplementation((_input, opts?: { onSettled?: () => void }) => {
+      settle = opts?.onSettled;
+    });
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        initialBody="/mstmeetings"
+        typingParentID="chan-1"
+        typingParentType="channel"
+      />,
+    );
+    await sendViaEnter();
+
+    const status = await screen.findByTestId('command-pending');
+    expect(status.textContent).toContain('Running /mstmeetings…');
+
+    act(() => settle!());
+    await waitFor(() => {
+      expect(screen.queryByTestId('command-pending')).toBeNull();
+    });
+  });
+
+  it('swallows a re-submitted command while one is running, but not normal messages', async () => {
+    let settle: (() => void) | undefined;
+    runCommandMock.mockImplementation((_input, opts?: { onSettled?: () => void }) => {
+      settle = opts?.onSettled;
+    });
+    const onSend = vi.fn();
+    render(
+      <MessageInput
+        onSend={onSend}
+        initialBody="/mstmeetings"
+        typingParentID="chan-1"
+        typingParentType="channel"
+      />,
+    );
+    await sendViaEnter();
+    expect(runCommandMock).toHaveBeenCalledTimes(1);
+
+    // Re-submitting the command while it runs must not start a second one —
+    // and must leave the retyped text in place.
+    const user = userEvent.setup();
+    const editor = await screen.findByLabelText('Message input');
+    // The pending status must be up, and the retyped command must have
+    // reached component state (an enabled send button is the observable
+    // proof), BEFORE the second Enter. Without both, the Enter takes the
+    // `!canSend` early-return instead of the in-flight guard — which
+    // satisfies every assertion below while never exercising the thing this
+    // test is named after, and shows up only as a coverage drop.
+    expect(screen.getByTestId('command-pending')).toBeInTheDocument();
+    await user.type(editor, '/mstmeetings');
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled();
+    });
+    editor.focus();
+    await user.keyboard('{Enter}');
+    expect(runCommandMock).toHaveBeenCalledTimes(1);
+    expect(editor.textContent).toContain('/mstmeetings');
+    // Still pending: the re-submit was swallowed, not run and settled.
+    expect(screen.getByTestId('command-pending')).toBeInTheDocument();
+
+    // A normal message is not blocked by the in-flight command. It has to be
+    // text that is not a command at all: everything after a trigger word is
+    // the command's arguments, so "/mstmeetings now" is still an invocation
+    // and is swallowed by the guard above — not a normal message.
+    await user.keyboard('{Backspace>12/}');
+    await user.keyboard('hello');
+    await user.keyboard('{Enter}');
+    expect(onSend).toHaveBeenCalledTimes(1);
+
+    // Once settled, the command can run again.
+    act(() => settle!());
+    await waitFor(() => {
+      expect(screen.queryByTestId('command-pending')).toBeNull();
+    });
+    await user.type(editor, '/mstmeetings');
+    await user.keyboard('{Enter}');
+    expect(runCommandMock).toHaveBeenCalledTimes(2);
   });
 
   it('shows an inline error when the command fails', async () => {

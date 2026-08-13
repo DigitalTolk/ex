@@ -67,7 +67,7 @@ describe('InviteDialog - submit flow', () => {
     expect(screen.getByLabelText(/email address/i)).toBeInTheDocument();
   });
 
-  it('shows Copy button when invite link is present', async () => {
+  it('shows the copy button when invite link is present', async () => {
     mockApiFetch.mockResolvedValue({ token: 'tok-abc' });
     const user = userEvent.setup();
 
@@ -76,10 +76,10 @@ describe('InviteDialog - submit flow', () => {
     await user.type(screen.getByLabelText(/email address/i), 'bob@test.com');
     await user.click(screen.getByText('Send invitation'));
 
-    expect(await screen.findByText('Copy')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Copy invite link' })).toBeInTheDocument();
   });
 
-  it('copies invite link via navigator.clipboard.writeText when Copy is clicked', async () => {
+  it('copies the invite link via navigator.clipboard.writeText when the copy button is clicked', async () => {
     mockApiFetch.mockResolvedValue({ token: 'tok-abc' });
     const writeText = vi.fn().mockResolvedValue(undefined);
     // Set up navigator.clipboard if missing (jsdom may not provide it)
@@ -99,7 +99,7 @@ describe('InviteDialog - submit flow', () => {
     await user.type(screen.getByLabelText(/email address/i), 'bob@test.com');
     await user.click(screen.getByText('Send invitation'));
 
-    const copyBtn = await screen.findByText('Copy');
+    const copyBtn = await screen.findByRole('button', { name: 'Copy invite link' });
     await user.click(copyBtn);
 
     expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/\/invite\/tok-abc$/));

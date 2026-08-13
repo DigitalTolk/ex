@@ -69,7 +69,7 @@ describe('InviteDialog browser behavior', () => {
     await expect.element(screen.getByText(/Invitation sent/)).toBeVisible();
     const linkInput = document.querySelector('input[readonly]') as HTMLInputElement;
     expect(linkInput.value).toContain('/invite/invite-token-1');
-    await screen.getByRole('button', { name: 'Copy' }).click();
+    await screen.getByRole('button', { name: 'Copy invite link' }).click();
     expect(writeText).toHaveBeenCalledWith(linkInput.value);
   });
 

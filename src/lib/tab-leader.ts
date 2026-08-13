@@ -20,12 +20,24 @@
 // single-tab case — dispatch locally. A duplicate popup beats a silent miss.
 
 import { BroadcastChannel, createLeaderElection, type LeaderElector } from 'broadcast-channel';
-import { setActivityBroadcast } from '@/lib/user-activity';
+import { isHardAway, setActivityBroadcast, setAttentionBroadcast } from '@/lib/user-activity';
+import { setThreadScopeBroadcast, threadScopeSnapshot } from '@/lib/thread-scope';
 
 interface TabState {
   visible: boolean;
+  // OS window focus. A visible-but-blurred tab (second monitor, background
+  // window) is NOT proof anyone is at the device — remote checks require it
+  // (SPEC GAP-7). Old-version tabs omit it; undefined reads as unfocused,
+  // which fails toward "away" (no ack), the safe direction.
+  focused: boolean;
+  // This tab believes the device is hard-away (screen locked / just woke /
+  // OS idle — SPEC §2 R2/R3). A hard-away tab can never vouch for the user.
+  hardAway: boolean;
   lastActivityAt: number;
   activeParent: string | null;
+  // Thread roots being read in this tab (open panel + /threads cards in
+  // view), so the leader can suppress thread-reply alerts device-wide.
+  activeThreads: string[];
 }
 
 type TabMessage =
@@ -59,8 +71,11 @@ function postState(): void {
   if (!channel) return;
   const state: TabState = {
     visible: document.visibilityState === 'visible',
+    focused: typeof document.hasFocus === 'function' ? document.hasFocus() : false,
+    hardAway: isHardAway(),
     lastActivityAt: lastActivityBroadcastAt,
     activeParent: localActiveParent,
+    activeThreads: threadScopeSnapshot(),
   };
   try {
     void channel.postMessage({ kind: 'state', tabId, state }).catch(() => {});
@@ -93,7 +108,9 @@ export function initTabCoordinator(options?: { type?: 'simulate' }): void {
     }
     remote.set(msg.tabId, { ...msg.state, at: Date.now() });
   };
-  // Activity re-broadcasts are throttled; visibility flips always send.
+  // Activity re-broadcasts are throttled; visibility, focus, attention
+  // (hard-away/wake) and thread-scope flips always send — they are the exact
+  // bits the leader's away/suppression decisions hinge on.
   setActivityBroadcast((at) => {
     if (at - lastActivityBroadcastAt < activityBroadcastThrottleMs) {
       lastActivityBroadcastAt = at;
@@ -102,7 +119,11 @@ export function initTabCoordinator(options?: { type?: 'simulate' }): void {
     lastActivityBroadcastAt = at;
     postState();
   });
+  setAttentionBroadcast(postState);
+  setThreadScopeBroadcast(postState);
   document.addEventListener('visibilitychange', onVisibilityChange);
+  window.addEventListener('focus', onVisibilityChange);
+  window.addEventListener('blur', onVisibilityChange);
   window.addEventListener('pagehide', onPageHide);
   postState();
 }
@@ -154,24 +175,66 @@ export function setTabActiveParent(parentID: string | null): void {
   postState();
 }
 
-// remoteTabViewing: some OTHER tab is visible, recently active, and viewing
-// this parent — the whole-device version of the active-view suppression.
+// The remote checks mirror the local two-tier split (SPEC §2, revised
+// 2026-08-12):
+//
+// remoteTabAtDevice — the ACK tier's evidence: the sibling's snapshot is
+// fresh, it is not hard-away (locked/suspended/woke), and it saw REAL input
+// within the window. Visibility/focus are deliberately not consulted — input
+// recency is the proof a human was at the device, and requiring the ex
+// window to also be focused pushed every alert to the phone of a user
+// working in another app. GAP-7's actual hole (a blurred tab vouching with
+// NO input evidence) stays closed by R1: only real input stamps
+// lastActivityAt, and a blurred tab receives no input.
+function remoteTabAtDevice(s: TabState & { at: number }, withinMs: number): boolean {
+  return (
+    s.at >= Date.now() - remoteStateTTL &&
+    // Strict === false: the snapshot must AFFIRM it is not hard-away. An
+    // old-version sibling that omits the field can't prove its input stamps
+    // survived a lock/wake, so it fails toward "away" — the safe direction.
+    s.hardAway === false &&
+    s.lastActivityAt >= Date.now() - withinMs
+  );
+}
+
+// remoteTabAttentive — the SUPPRESSION tier: "surface nothing" claims the
+// user is LOOKING at that tab, so it additionally requires the page visible
+// and the window FOCUSED (SPEC R5/GAP-7): a visible-but-blurred tab on a
+// second monitor must never justify suppressing an alert entirely.
+function remoteTabAttentive(s: TabState & { at: number }, withinMs: number): boolean {
+  return remoteTabAtDevice(s, withinMs) && s.visible && s.focused === true;
+}
+
+// remoteTabViewing: some OTHER tab is attentive and viewing this parent —
+// the whole-device version of the active-view suppression.
 export function remoteTabViewing(parentID: string, withinMs: number): boolean {
-  const cutoff = Date.now() - withinMs;
   for (const s of remote.values()) {
-    if (s.at >= Date.now() - remoteStateTTL && s.visible && s.activeParent === parentID && s.lastActivityAt >= cutoff) {
+    if (remoteTabAttentive(s, withinMs) && s.activeParent === parentID) {
       return true;
     }
   }
   return false;
 }
 
-// remoteUserAtDevice: some OTHER tab is visible with recent input — the
-// whole-device version of the ack gate's "user demonstrably at the device".
-export function remoteUserAtDevice(withinMs: number): boolean {
-  const cutoff = Date.now() - withinMs;
+// remoteTabViewingThread: some OTHER tab is attentive and reading this thread
+// root (open panel or /threads card in view) — the whole-device version of
+// the thread suppression (SPEC I-5).
+export function remoteTabViewingThread(threadRootID: string, withinMs: number): boolean {
   for (const s of remote.values()) {
-    if (s.at >= Date.now() - remoteStateTTL && s.visible && s.lastActivityAt >= cutoff) {
+    if (remoteTabAttentive(s, withinMs) && (s.activeThreads ?? []).includes(threadRootID)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// remoteUserAtDevice: some OTHER tab saw real input within the window and is
+// not hard-away — the whole-device version of the ack gate's "user
+// demonstrably at the device". Focus/visibility of that tab is irrelevant
+// here (see remoteTabAtDevice).
+export function remoteUserAtDevice(withinMs: number): boolean {
+  for (const s of remote.values()) {
+    if (remoteTabAtDevice(s, withinMs)) {
       return true;
     }
   }
@@ -182,8 +245,12 @@ export function remoteUserAtDevice(withinMs: number): boolean {
 // starts from the uncoordinated (single-tab) baseline.
 export async function resetTabCoordinatorForTests(): Promise<void> {
   document.removeEventListener('visibilitychange', onVisibilityChange);
+  window.removeEventListener('focus', onVisibilityChange);
+  window.removeEventListener('blur', onVisibilityChange);
   window.removeEventListener('pagehide', onPageHide);
   setActivityBroadcast(null);
+  setAttentionBroadcast(null);
+  setThreadScopeBroadcast(null);
   // try/catch (not .catch): bc returns undefined — not a promise — from a
   // second close/die on an already-torn channel, and can also throw
   // synchronously; both shapes land here.

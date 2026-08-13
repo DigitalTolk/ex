@@ -27,6 +27,7 @@ vi.mock('@/pages/DraftsPage', () => ({ default: () => <div data-testid="stub-Dra
 vi.mock('@/pages/ActivityPage', () => ({ default: () => <div data-testid="stub-ActivityPage" /> }));
 vi.mock('@/pages/SearchResultsPage', () => ({ default: () => <div data-testid="stub-SearchResultsPage" /> }));
 vi.mock('@/pages/NotFoundPage', () => ({ NotFoundPage: () => <div data-testid="stub-NotFoundPage" /> }));
+vi.mock('@/pages/ResetPasswordPage', () => ({ default: () => <div data-testid="stub-ResetPasswordPage" /> }));
 
 describe('App — lazy cold routes', () => {
   beforeEach(() => {
@@ -79,6 +80,9 @@ describe('App — lazy cold routes', () => {
       ['/bots', 'stub-BotsPage'],
       ['/emojis', 'stub-CustomEmojiPage'],
       ['/conversations/new', 'stub-NewConversationPage'],
+      // Password recovery is public: both modes must resolve without auth.
+      ['/forgot-password', 'stub-ResetPasswordPage'],
+      ['/reset-password/tok-123', 'stub-ResetPasswordPage'],
       ['/no-such-page', 'stub-NotFoundPage'],
     ];
     for (const [path, stub] of routes) {

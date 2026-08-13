@@ -98,6 +98,11 @@ describe('MessageInput slash-command flow (real composer)', () => {
       text: '',
     });
     expect(onSend).not.toHaveBeenCalled();
+    // The in-flight status line shows while the command runs server-side
+    // (the mock never settles, so it stays up).
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('command-pending').element().textContent).toContain('Running /mstmeetings…');
+    });
     // The composer clears like a normal send.
     await vi.waitFor(() => {
       expect(screen.getByLabelText('Message input').element().textContent).toBe('');

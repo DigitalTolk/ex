@@ -70,4 +70,20 @@ describe('LoginPage', () => {
       screen.queryByRole('button', { name: /sign in with single sign-on/i }),
     ).not.toBeInTheDocument();
   });
+
+  it('links to password recovery from the guest form', async () => {
+    renderLoginPage();
+    const link = await screen.findByRole('link', { name: /forgot your password/i });
+    expect(link).toHaveAttribute('href', '/forgot-password');
+  });
+
+  // Recovery is a guest-only concept: an invitee is choosing their FIRST
+  // password, so offering "forgot yours?" there would be nonsense.
+  it('does not offer password recovery in invite mode', async () => {
+    renderLoginPage('/invite/abc123');
+    await screen.findByText(/accept invitation/i);
+    expect(
+      screen.queryByRole('link', { name: /forgot your password/i }),
+    ).not.toBeInTheDocument();
+  });
 });

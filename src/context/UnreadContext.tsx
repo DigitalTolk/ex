@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState, useCallback, u
 import { readJSON, writeJSON } from '@/lib/storage';
 import { apiFetch } from '@/lib/api';
 import { THREAD_SEEN_CHANGED_EVENT } from '@/hooks/useThreads';
+import { isThreadInView, setPanelThread } from '@/lib/thread-scope';
 
 interface UnreadState {
   // Thread-unread is the only unread state that still lives in the client: thread
@@ -96,6 +97,9 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
   const isActiveConversation = useCallback((id: string) => activeConvRef.current === id, []);
   const setActiveThread = useCallback((id: string | null) => {
     activeThreadRef.current = id;
+    // Share the open panel's thread with @/lib/thread-scope so notification
+    // suppression (this tab + siblings via tab-leader) knows it's being read.
+    setPanelThread(id);
     // Opening a thread clears any pending live notification for it, so the
     // Threads nav doesn't stay highlighted from a reply that arrived just
     // before it was opened.
@@ -108,7 +112,13 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
       });
     }
   }, []);
-  const isActiveThread = useCallback((id: string) => activeThreadRef.current === id, []);
+  // Active = the open ThreadPanel OR a /threads card currently in the
+  // viewport (thread-scope) — reading a thread inline on /threads must
+  // suppress the Threads-nav badge exactly like the panel does (SPEC GAP-5).
+  const isActiveThread = useCallback(
+    (id: string) => activeThreadRef.current === id || isThreadInView(id),
+    [],
+  );
 
   useEffect(() => {
     const handleThreadSeen = (event: Event) => {

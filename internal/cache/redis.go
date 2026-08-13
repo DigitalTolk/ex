@@ -410,6 +410,44 @@ func (c *RedisCache) ConsumeWSTicket(ctx context.Context, ticket string) (string
 	return val[:sep], time.UnixMilli(ms), nil
 }
 
+// pwResetKeyPrefix backs single-use password-reset tickets for guest (local
+// password) accounts. Keyed by the SHA-256 of the token, never the token
+// itself: a Redis dump or a stray MONITOR then yields nothing usable, exactly
+// like the refresh-token store. GETDEL redemption makes replay structurally
+// impossible, and the TTL bounds how long a leaked link stays live.
+const pwResetKeyPrefix = "pwreset:"
+
+// MintPasswordResetTicket stores a reset ticket under the token's hash. The
+// caller owns token generation and hashing so the raw token exists only in
+// the link it emails.
+func (c *RedisCache) MintPasswordResetTicket(ctx context.Context, tokenHash, userID string, ttl time.Duration) error {
+	if tokenHash == "" || userID == "" {
+		return errors.New("cache: empty password reset token or user")
+	}
+	if err := c.client.Set(ctx, pwResetKeyPrefix+tokenHash, userID, ttl).Err(); err != nil {
+		return fmt.Errorf("cache: mint password reset ticket: %w", err)
+	}
+	return nil
+}
+
+// ConsumePasswordResetTicket atomically redeems a ticket (GETDEL — a second
+// redemption of the same token finds nothing). Returns ("", nil) for an
+// unknown, expired, or already-used token; the caller answers with a generic
+// "invalid or expired link".
+func (c *RedisCache) ConsumePasswordResetTicket(ctx context.Context, tokenHash string) (string, error) {
+	if tokenHash == "" {
+		return "", nil
+	}
+	userID, err := c.client.GetDel(ctx, pwResetKeyPrefix+tokenHash).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("cache: consume password reset ticket: %w", err)
+	}
+	return userID, nil
+}
+
 // MarkNotificationAcked records that the user's client confirmed receipt of the
 // desktop notification for messageID. Used by the deferred mobile-push fallback
 // to cancel a push once the desktop has actually delivered the alert.

@@ -79,6 +79,26 @@ describe('ws-sender', () => {
     setWSSender(null);
   });
 
+  it('drops a buffered frame older than its maxAgeMs at flush time (SPEC I-13)', () => {
+    vi.useFakeTimers();
+    try {
+      sendWS({ type: 'notification.ack', messageID: 'm-stale' }, { buffer: true, maxAgeMs: 15_000 });
+      sendWS({ type: 'notification.ack', messageID: 'm-forever' }, { buffer: true });
+      // The machine sleeps through the reconnect window; by flush time the
+      // ack is stale — sending it would cancel a mobile push the user needs.
+      vi.setSystemTime(Date.now() + 16_000);
+      sendWS({ type: 'notification.ack', messageID: 'm-fresh' }, { buffer: true, maxAgeMs: 15_000 });
+      const send = vi.fn();
+      setWSSender(send);
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(send).toHaveBeenNthCalledWith(1, JSON.stringify({ type: 'notification.ack', messageID: 'm-forever' }));
+      expect(send).toHaveBeenNthCalledWith(2, JSON.stringify({ type: 'notification.ack', messageID: 'm-fresh' }));
+      setWSSender(null);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('bounds the buffer, dropping the oldest frames past the cap', () => {
     for (let i = 0; i < 70; i += 1) {
       sendWS({ type: 'notification.ack', messageID: `m-${i}` }, { buffer: true });

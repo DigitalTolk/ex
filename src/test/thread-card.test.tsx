@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThreadCard } from '@/components/threads/ThreadCard';
 import { resetSeenCache, threadDeepLink, type ThreadSummary } from '@/hooks/useThreads';
+import { isThreadInView, resetThreadScopeForTests } from '@/lib/thread-scope';
 import type { Message } from '@/types';
 
 const apiFetchMock = vi.fn();
@@ -160,6 +161,7 @@ describe('ThreadCard', () => {
     mockDraft = undefined;
     localStorage.clear();
     resetSeenCache();
+    resetThreadScopeForTests();
     lastMessageInputProps.current = null;
     // Default: useUsersBatch sees /api/v1/users/batch — return [].
     apiFetchMock.mockImplementation((url: string) => {
@@ -168,6 +170,15 @@ describe('ThreadCard', () => {
       }
       return Promise.resolve([]);
     });
+  });
+
+  it('registers the thread as being read while the card is in view, and unregisters on unmount (SPEC D-3)', () => {
+    // jsdom has no IntersectionObserver → useLiveInView falls back to
+    // in-view, so mounting registers and unmounting must unregister.
+    const { unmount } = renderCard(makeSummary());
+    expect(isThreadInView('msg-root')).toBe(true);
+    unmount();
+    expect(isThreadInView('msg-root')).toBe(false);
   });
 
   it('renders the title as a link to the deep-link target', async () => {
