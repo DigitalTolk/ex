@@ -633,6 +633,25 @@ func TestDeliverDelayedResponse(t *testing.T) {
 		}
 	})
 
+	t.Run("a blank response_type is ephemeral (the MM default), never a public post", func(t *testing.T) {
+		// An integration that omits response_type expects MM's default — private.
+		// Posting it in_channel would publish output meant only for the invoker.
+		svc, _, responses, messages := setupExtCommandsWithResponses(t)
+		before := len(messages.messages)
+		if err := responses.Put(ctx, "tok4", &store.PendingCommandResponse{
+			Trigger: "deploy", UserID: "u1", ParentID: "ch1", ParentType: ParentChannel,
+		}); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+		body := strings.NewReader(`{"text":"internal progress note for the invoker"}`)
+		if err := svc.DeliverDelayedResponse(ctx, "tok4", body); err != nil {
+			t.Fatalf("DeliverDelayedResponse: %v", err)
+		}
+		if len(messages.messages) != before {
+			t.Error("a delayed response without response_type must not be posted publicly")
+		}
+	})
+
 	t.Run("a user who lost access cannot be posted on behalf of", func(t *testing.T) {
 		svc, _, responses, _ := setupExtCommandsWithResponses(t)
 		if err := responses.Put(ctx, "tok3", &store.PendingCommandResponse{

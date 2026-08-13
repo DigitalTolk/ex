@@ -518,8 +518,10 @@ func (s *ExternalCommandService) DeliverDelayedResponse(ctx context.Context, tok
 	}
 	// A delayed response has no live caller to show ephemeral text to, so — unlike
 	// the synchronous path — ephemeral here means "nothing to deliver" rather than
-	// defaulting to a channel post.
-	if res.ResponseType != "" && !strings.EqualFold(strings.TrimSpace(res.ResponseType), MMResponseTypeInChannel) {
+	// defaulting to a channel post. MM also defaults a BLANK response_type to
+	// ephemeral, so only an explicit in_channel may go public: anything else
+	// posted here would publish output the integration expected to be private.
+	if !strings.EqualFold(strings.TrimSpace(res.ResponseType), MMResponseTypeInChannel) {
 		slog.Debug("command: dropping ephemeral delayed response", "trigger", pending.Trigger)
 		return nil
 	}
