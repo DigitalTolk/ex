@@ -33,6 +33,19 @@ const vendorChunks: Array<[string, (id: string) => boolean]> = [
   ['virtual-vendor', (id) => id.includes('/node_modules/react-virtuoso/')],
 ]
 
+// The Cliffy panel's chat stack. Exempt from the `vendor` catch-all (return
+// undefined, don't name a chunk) so the bundler places it by reachability:
+// it's only imported behind CliffyLauncher's lazy import, so it lands in the
+// lazy panel graph and only users who actually open Cliffy download it.
+// (Naming a manual chunk here instead would drag shared CJS-interop helpers
+// into it and make the entry import the whole stack statically.)
+const lazyOnlyVendor = (id: string) =>
+  id.includes('/node_modules/@assistant-ui/') ||
+  id.includes('/node_modules/@ai-sdk/') ||
+  id.includes('/node_modules/ai/') ||
+  id.includes('/node_modules/react-markdown/') ||
+  id.includes('/node_modules/remark-gfm/')
+
 function preserveDistGitignore() {
   return {
     name: 'preserve-dist-gitignore',
@@ -57,7 +70,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (!id.includes('/node_modules/')) return undefined
+          if (!id.includes('/node_modules/') || lazyOnlyVendor(id)) return undefined
           return vendorChunks.find(([, match]) => match(id))?.[0] ?? 'vendor'
         },
       },

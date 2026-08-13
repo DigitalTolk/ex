@@ -94,6 +94,8 @@ describe('MessageInput slash-command flow (real composer)', () => {
       command: 'mstmeetings',
       parentType: 'channel',
       parentID: 'chan-1',
+      // Arguments after the trigger word; empty for a bare built-in command.
+      text: '',
     });
     expect(onSend).not.toHaveBeenCalled();
     // The in-flight status line shows while the command runs server-side

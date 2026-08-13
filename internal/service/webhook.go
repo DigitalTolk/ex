@@ -242,6 +242,10 @@ func (s *IncomingWebhookService) Execute(ctx context.Context, id string, payload
 	for _, a := range payload.Attachments {
 		attachments = append(attachments, s.sanitizeAttachment(ctx, a))
 	}
+	// An incoming webhook may carry interactive actions (MM's interactive
+	// messages). PrepareActions is what validates their callback URLs and mints
+	// ids, so it must run on this path too — not just on bot replies.
+	attachments = PrepareActions(attachments)
 	// Webhook posts are authored by the webhook bot, NOT the human who created
 	// the webhook. Attributing them to wh.CreatedBy would make the message
 	// "their own" everywhere that keys off AuthorID — suppressing their unread

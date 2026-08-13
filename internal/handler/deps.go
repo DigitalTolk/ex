@@ -50,6 +50,22 @@ type Deps struct {
 	Webhook    *WebhookHandler
 	Activity   *ActivityHandler
 	Command    *CommandHandler
+	// ExternalCommand serves admin CRUD for Mattermost-shaped slash commands and
+	// their public response_url endpoint; nil skips those routes (built-in
+	// commands still work).
+	ExternalCommand *ExternalCommandHandler
+	// MessageAction runs interactive attachment actions; nil skips those routes.
+	MessageAction *MessageActionHandler
+	// Cliffy is nil unless the CliffHub identity bridge is configured.
+	Cliffy *CliffyHandler
+	// Bot serves the admin bot-account API; nil skips those routes.
+	Bot *BotHandler
+	// MCPChat backs the MCP server's chat tools (postMessage/readChannel).
+	// Nil registers only the identity/health tools (ping/whoami).
+	MCPChat MCPChat
+	// BotTokens, when set, lets every authenticated route accept a bot API
+	// token in place of a session JWT. Nil leaves auth JWT-only.
+	BotTokens middleware.BotTokenValidator
 
 	// SPA/static.
 	FrontendFS fs.FS

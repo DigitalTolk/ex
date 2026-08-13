@@ -196,6 +196,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const { data: commands = [] } = useCommands(commandTarget !== undefined);
   const { mutate: runCommand } = useRunCommand();
   const [commandError, setCommandError] = useState('');
+  // An external command's ephemeral reply — shown to this caller only.
+  const [commandNotice, setCommandNotice] = useState('');
   // Name of the slash command currently executing server-side. Commands like
   // /mstmeetings take a few seconds (a Graph round-trip) before their result
   // message lands over the WebSocket — this drives a "Running /x…" status so
@@ -352,25 +354,42 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     // A message that is exactly a registered slash command (no attachments)
     // executes instead of posting; anything else — including unknown
     // "/words" — sends as a normal message.
-    const commandName = (() => {
+    // A registered slash command executes instead of posting. Anything after the
+    // trigger word is the command's arguments — external commands take them, so
+    // "/deploy web v2" must run rather than post as a message.
+    const invocation = (() => {
       if (!commandTarget || drafts.length > 0) return null;
-      const name = /^\/([\w-]+)$/.exec(trimmed)?.[1]?.toLowerCase();
-      return name && commands.some((c) => c.name === name) ? name : null;
+      const match = /^\/([\w-]+)(?:\s+([\s\S]*))?$/.exec(trimmed);
+      const name = match?.[1]?.toLowerCase();
+      if (!name || !commands.some((c) => c.name === name)) return null;
+      return { name, text: (match?.[2] ?? '').trim() };
     })();
     // While a command is in flight, swallow a re-submitted command (double
     // Enter must not start two meetings) — the status line is already up.
     // Normal messages still send.
-    if (commandName && pendingCommand) return;
+    if (invocation && pendingCommand) return;
     setCommandError('');
-    if (commandName) {
-      setPendingCommand(commandName);
+    setCommandNotice('');
+    if (invocation) {
+      setPendingCommand(invocation.name);
       runCommand(
-        { command: commandName, parentType: commandTarget!.parentType, parentID: commandTarget!.parentID },
         {
+          command: invocation.name,
+          parentType: commandTarget!.parentType,
+          parentID: commandTarget!.parentID,
+          text: invocation.text,
+        },
+        {
+          onSuccess: (res) => {
+            // An ephemeral reply is for this caller alone — there's no message to
+            // fan out, so the composer's own notice area is where it belongs.
+            if (res?.ephemeral_text) setCommandNotice(res.ephemeral_text);
+            if (res?.goto_location) window.open(res.goto_location, '_blank', 'noopener,noreferrer');
+          },
           onSettled: () => setPendingCommand(''),
           onError: (err) =>
             setCommandError(
-              commandDenialMessage(err) ?? `Couldn't run /${commandName} — please try again.`,
+              commandDenialMessage(err) ?? `Couldn't run /${invocation.name} — please try again.`,
             ),
         },
       );
@@ -878,6 +897,17 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
         >
           <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
           Running /{pendingCommand}…
+        </div>
+      )}
+      {/* A command's ephemeral reply: information, not a failure, so it is styled
+          as a notice and announced politely rather than as an alert. */}
+      {commandNotice && (
+        <div
+          className="mb-2 rounded-md bg-muted p-2 text-xs text-muted-foreground"
+          role="status"
+          data-testid="command-notice"
+        >
+          {commandNotice}
         </div>
       )}
       {bodyOverLimit && (

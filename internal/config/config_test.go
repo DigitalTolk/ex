@@ -20,6 +20,9 @@ func clearEnv(t *testing.T) {
 		"SENTRY_FRONTEND_REPLAY_SESSION_SAMPLE_RATE", "SENTRY_FRONTEND_REPLAY_ERROR_SAMPLE_RATE",
 		"ACCESS_LOG_ENABLED",
 		"MS_TENANT_ID", "MS_CLIENT_ID", "MS_CLIENT_SECRET", "MS_PROFILE_SYNC_INTERVAL",
+		// The Cliffy bridge vars are validated as a pair, so an ambient value would
+		// make every other Load test depend on the developer's shell.
+		"CLIFFY_BRIDGE_SECRET", "CLIFFY_BRIDGE_MINT_URL", "CLIFFY_AGENT_URL", "CLIFFY_WEB_BASE",
 		"EMAIL_PROVIDER", "EMAIL_FROM", "SES_CONFIGURATION_SET",
 	}
 
@@ -482,6 +485,130 @@ func TestLoadMSProfileSyncInterval(t *testing.T) {
 				t.Fatalf("Load with MS_PROFILE_SYNC_INTERVAL=%q should fail", bad)
 			}
 		})
+	}
+}
+
+// The bridge secret is the feature's on/off switch. The three URLs default to
+// CliffHub production, so only an explicitly blanked mint URL is a
+// half-configuration — and that fails at boot rather than at call time.
+func TestLoadCliffyBridgePairing(t *testing.T) {
+	t.Run("secret with an explicitly blanked mint URL is rejected", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("CLIFFY_BRIDGE_SECRET", "a-secret-that-is-long-enough-here")
+		t.Setenv("CLIFFY_BRIDGE_MINT_URL", "")
+		if _, err := Load(); err == nil {
+			t.Fatal("want a boot failure for a half-configured bridge")
+		}
+	})
+
+	t.Run("no secret leaves Cliffy disabled, defaults notwithstanding", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("CLIFFY_BRIDGE_SECRET", "")
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		// The URLs are populated from the defaults, but with no secret the bridge
+		// is never constructed (NewCliffyBridge returns nil), so Cliffy is off.
+		if c.CliffyBridgeSecret != "" {
+			t.Fatalf("CliffyBridgeSecret = %q, want empty", c.CliffyBridgeSecret)
+		}
+		if c.CliffyBridgeMintURL != defaultCliffyMintURL {
+			t.Fatalf("CliffyBridgeMintURL = %q, want the default", c.CliffyBridgeMintURL)
+		}
+	})
+
+	t.Run("the URLs default to CliffHub production when unset", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("CLIFFY_BRIDGE_SECRET", "a-secret-that-is-long-enough-here")
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.CliffyBridgeMintURL != defaultCliffyMintURL {
+			t.Fatalf("CliffyBridgeMintURL = %q, want %q", c.CliffyBridgeMintURL, defaultCliffyMintURL)
+		}
+		if c.CliffyAgentURL != defaultCliffyAgentURL {
+			t.Fatalf("CliffyAgentURL = %q, want %q", c.CliffyAgentURL, defaultCliffyAgentURL)
+		}
+		if c.CliffyWebBase != defaultCliffyWebBase {
+			t.Fatalf("CliffyWebBase = %q, want %q", c.CliffyWebBase, defaultCliffyWebBase)
+		}
+	})
+
+	t.Run("an explicit URL overrides the default", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("CLIFFY_BRIDGE_SECRET", "a-secret-that-is-long-enough-here")
+		t.Setenv("CLIFFY_BRIDGE_MINT_URL", "http://localhost:8199/api/ai/bridge/mint")
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.CliffyBridgeMintURL != "http://localhost:8199/api/ai/bridge/mint" {
+			t.Fatalf("CliffyBridgeMintURL = %q, want the override", c.CliffyBridgeMintURL)
+		}
+	})
+
+	t.Run("targeting the default CliffHub is detectable for the boot warning", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("CLIFFY_BRIDGE_SECRET", "a-secret-that-is-long-enough-here")
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if !c.CliffyTargetsDefaultCliffHub() {
+			t.Fatal("want the defaults to be reported as production CliffHub")
+		}
+
+		// Overriding the agent (a local dev port) is enough to clear it.
+		t.Setenv("CLIFFY_AGENT_URL", "http://localhost:3000/api/ai/chat")
+		c, err = Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.CliffyTargetsDefaultCliffHub() {
+			t.Fatal("an overridden agent URL must not report as production CliffHub")
+		}
+	})
+
+	t.Run("Cliffy disabled never reports as targeting production", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.CliffyTargetsDefaultCliffHub() {
+			t.Fatal("no secret means Cliffy is off — nothing to warn about")
+		}
+	})
+
+	t.Run("both set together is accepted", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("CLIFFY_BRIDGE_SECRET", "a-secret-that-is-long-enough-here")
+		t.Setenv("CLIFFY_BRIDGE_MINT_URL", "https://cliffhub.example/api/ai/bridge/mint")
+		if _, err := Load(); err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+	})
+}
+
+// Outside development the bridge secret must be long enough to be a real HMAC
+// key — a short one would boot fine and then sign assertions weakly.
+func TestLoadRejectsShortCliffyBridgeSecretOutsideDevelopment(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("ENV", "production")
+	t.Setenv("JWT_SECRET", "a-production-jwt-secret-of-sufficient-length")
+	t.Setenv("CLIFFY_BRIDGE_SECRET", "too-short")
+	t.Setenv("CLIFFY_BRIDGE_MINT_URL", "https://cliffhub.example/api/ai/bridge/mint")
+	if _, err := Load(); err == nil {
+		t.Fatal("want a boot failure for a short bridge secret outside development")
 	}
 }
 

@@ -33,7 +33,7 @@ func (h *CommandHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return
 	}
-	writeJSON(w, http.StatusOK, JSON{"commands": h.commands.List()})
+	writeJSON(w, http.StatusOK, JSON{"commands": h.commands.List(r.Context())})
 }
 
 // Run executes a slash command in a chat. The command posts its result into
@@ -50,6 +50,10 @@ func (h *CommandHandler) Run(w http.ResponseWriter, r *http.Request) {
 		Command    string `json:"command"`
 		ParentType string `json:"parentType"`
 		ParentID   string `json:"parentID"`
+		// Text is the command's arguments — everything the user typed after the
+		// trigger. Built-in commands ignore it; external (MM-shaped) commands
+		// receive it as MM's `text` field.
+		Text string `json:"text"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
@@ -61,16 +65,23 @@ func (h *CommandHandler) Run(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg, err := h.commands.Run(r.Context(), body.Command, service.CommandRequest{
+	result, err := h.commands.Run(r.Context(), body.Command, service.CommandRequest{
 		UserID:     userID,
 		ParentID:   body.ParentID,
 		ParentType: body.ParentType,
+		Text:       strings.TrimSpace(body.Text),
 	})
 	var userErr *service.CommandUserError
 	switch {
 	case err == nil:
 		clearSentDraft(r.Context(), h.draftClearer, userID, body.ParentID, body.ParentType, "")
-		writeJSON(w, http.StatusOK, JSON{"message": msg})
+		// message stays top-level for the existing clients; ephemeral_text and
+		// goto_location are the MM-shaped additions an external command can return.
+		writeJSON(w, http.StatusOK, JSON{
+			"message":        result.Message,
+			"ephemeral_text": result.EphemeralText,
+			"goto_location":  result.GotoLocation,
+		})
 	case errors.Is(err, service.ErrUnknownCommand):
 		writeError(w, http.StatusNotFound, "unknown_command", "unknown command")
 	case errors.As(err, &userErr):
@@ -78,6 +89,11 @@ func (h *CommandHandler) Run(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "command_denied", userErr.Message)
 	case errors.Is(err, service.ErrForbidden):
 		writeError(w, http.StatusForbidden, "forbidden", "you do not have access to this chat")
+	case errors.Is(err, service.ErrCommandRunFailed):
+		// The integration — not ex — failed. 502 says so, and the composer shows a
+		// user-facing note instead of a generic error.
+		writeError(w, http.StatusBadGateway, "command_integration_failed",
+			"That command's integration didn't respond. Please try again.")
 	default:
 		writeInternalError(w, r, "command_error", err)
 	}

@@ -160,6 +160,22 @@ describe('ConversationView - extra coverage', () => {
     );
   });
 
+  it('/cliffy opens the private assistant instead of posting to the DM', async () => {
+    // The other participant must never see the prompt: Cliffy here is private.
+    const { useCliffyStore } = await import('@/features/cliffy/cliffy-store');
+    useCliffyStore.setState({ open: false, seedPrompt: null });
+    const user = userEvent.setup();
+    renderConversationView();
+
+    const inputs = await screen.findAllByPlaceholderText(/Message/);
+    await user.type(inputs[0], '/cliffy summarise this{enter}');
+
+    expect(mockSendMutate).not.toHaveBeenCalled();
+    const cliffy = useCliffyStore.getState();
+    expect(cliffy.open).toBe(true);
+    expect(cliffy.seedPrompt).toBe('summarise this');
+  });
+
   it('renders group conversation with member toggle', async () => {
     renderConversationView();
     expect(await screen.findByLabelText('Toggle member list')).toBeInTheDocument();

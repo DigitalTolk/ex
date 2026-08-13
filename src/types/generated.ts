@@ -137,6 +137,108 @@ export interface RefreshToken {
 }
 
 //////////
+// source: bot.go
+
+/**
+ * BotTokenPrefix marks a bearer credential as a bot API token rather than a
+ * session JWT. The auth middleware routes on this prefix, which is safe because
+ * a JWT always begins "eyJ" (the base64url of `{"`). External integrations may
+ * pattern-match on it, so it is permanent API surface.
+ */
+export const BotTokenPrefix = "exbot_";
+/**
+ * BotUserIDPrefix namespaces bot user IDs. It keeps a bot's ID visually
+ * distinct from a human's bare ULID in logs and message authorship, and it
+ * guarantees a bot can never collide with the non-User sentinel author IDs
+ * ("webhook", "cliffy") that predate bot accounts.
+ */
+export const BotUserIDPrefix = "bot_";
+/**
+ * BotTransport selects the wire format ex uses to POST an event to an external
+ * bot's callback URL.
+ */
+export type BotTransport = string;
+/**
+ * BotTransportEx is ex's own JSON event, authenticated by an HMAC
+ * X-Ex-Signature header. The default for a bot created without an explicit
+ * transport, and the only option before MM compatibility landed.
+ */
+export const BotTransportEx: BotTransport = "ex";
+/**
+ * BotTransportMattermost is Mattermost's outgoing-webhook format:
+ * form-encoded fields with the shared secret carried as the body's `token`.
+ * An unmodified Mattermost outgoing-webhook receiver works against this.
+ */
+export const BotTransportMattermost: BotTransport = "mattermost";
+/**
+ * BotTriggerWhen selects where a trigger word must appear in a message for the
+ * bot to fire. It mirrors Mattermost's `trigger_when` on outgoing webhooks.
+ */
+export type BotTriggerWhen = number /* int */;
+/**
+ * BotTriggerWhenStartsWith fires only when the message *begins* with the
+ * trigger word. Mattermost's default, and ex's.
+ */
+export const BotTriggerWhenStartsWith: BotTriggerWhen = 0;
+/**
+ * BotTriggerWhenContains fires when the trigger word appears anywhere in the
+ * message as a standalone word.
+ */
+export const BotTriggerWhenContains: BotTriggerWhen = 1;
+/**
+ * BotAccount is the admin-facing metadata for a bot identity. The bot's actual
+ * identity — what makes it a channel member, a message author, and a mention
+ * target — is a real User row whose ID equals UserID here; this record only
+ * carries the fields a human user has no use for.
+ */
+export interface BotAccount {
+  user_id: string;
+  name: string;
+  description?: string;
+  created_by: string;
+  create_at: string /* RFC3339 */;
+  update_at: string /* RFC3339 */;
+  /**
+   * Outgoing-webhook transport: when CallbackURL is set, this is an EXTERNAL
+   * bot — ex POSTs each @mention/trigger-word event to CallbackURL and posts
+   * the response back. Empty → in-process/none.
+   */
+  callback_url?: string;
+  /**
+   * Transport is the wire format for CallbackURL. Empty means BotTransportEx.
+   */
+  transport?: BotTransport;
+  /**
+   * TriggerWords fire the bot on a message that is not an @mention — MM's
+   * outgoing-webhook trigger model, which is how most existing MM bots are
+   * invoked. Matched case-insensitively as whole words.
+   */
+  trigger_words?: string[];
+  /**
+   * TriggerWhen selects start-of-message (default) vs anywhere matching.
+   */
+  trigger_when?: BotTriggerWhen;
+}
+/**
+ * BotToken is a revocable bearer credential for a BotAccount. Only the SHA-256
+ * hash of the secret is persisted (TokenHash, never serialized): the plaintext
+ * is returned once at issuance and is unrecoverable afterwards, so a leaked
+ * database dump can't be replayed against the API.
+ */
+export interface BotToken {
+  /**
+   * TokenID is the admin-visible handle used to revoke this token, so the UI
+   * never has to hold (or display) the hash.
+   */
+  token_id: string;
+  bot_user_id: string;
+  label?: string;
+  create_at: string /* RFC3339 */;
+  last_used_at?: string /* RFC3339 */;
+  revoked_at?: string /* RFC3339 */;
+}
+
+//////////
 // source: channel.go
 
 export type ChannelType = string;
@@ -165,6 +267,66 @@ export interface Channel {
    */
   messageSeq?: number /* int64 */;
 }
+
+//////////
+// source: command.go
+
+/**
+ * ExternalCommand is an admin-registered slash command backed by an HTTP
+ * integration, in Mattermost's slash-command shape: ex POSTs the invocation to
+ * RequestURL and posts (or shows) whatever comes back.
+ * It is distinct from ex's built-in commands, which are compiled in and
+ * registered at wiring time (see service.Command). Both appear in one list to
+ * clients, so the composer's "/" autocomplete does not care which is which.
+ */
+export interface ExternalCommand {
+  id: string;
+  /**
+   * Trigger is the word after the slash, without it — "deploy" for "/deploy".
+   * Unique across all commands, built-in included, and always lowercase.
+   */
+  trigger: string;
+  /**
+   * Title and Description are what the "/" autocomplete shows.
+   */
+  title?: string;
+  description?: string;
+  /**
+   * AutocompleteHint describes the arguments, e.g. "[service] [version]".
+   */
+  autocomplete_hint?: string;
+  /**
+   * RequestURL is the integration endpoint; must be a public https URL.
+   */
+  request_url: string;
+  /**
+   * Method is "P" (POST, default) or "G" (GET), matching MM's field.
+   */
+  method?: string;
+  /**
+   * BotUserID, when set, is the bot account an in-channel response is authored
+   * by — so the post has a real bot identity behind it rather than the generic
+   * webhook sentinel. Optional.
+   */
+  bot_user_id?: string;
+  /**
+   * Username / IconURL override the display identity of an in-channel response,
+   * as MM's command config does.
+   */
+  username?: string;
+  icon_url?: string;
+  created_by: string;
+  create_at: string /* RFC3339 */;
+  update_at: string /* RFC3339 */;
+}
+/**
+ * Command HTTP methods, matching Mattermost's single-letter field.
+ */
+export const CommandMethodPost = "P";
+/**
+ * Command HTTP methods, matching Mattermost's single-letter field.
+ */
+export const CommandMethodGet = "G";
 
 //////////
 // source: conversation.go
@@ -492,11 +654,74 @@ export interface MessageAttachment {
   thumb_url?: string;
   footer?: string;
   footer_icon?: string;
+  /**
+   * Actions are interactive controls (buttons / select menus) rendered under
+   * the attachment, in Mattermost's interactive-message shape. Clicking one
+   * calls back into the integration that posted the attachment.
+   */
+  actions?: MessageAction[];
 }
 export interface MessageAttachmentField {
   title?: string;
   value?: string;
   short?: boolean;
+}
+/**
+ * MessageAction types, matching Mattermost's interactive message actions.
+ */
+export const MessageActionTypeButton = "button";
+/**
+ * MessageAction types, matching Mattermost's interactive message actions.
+ */
+export const MessageActionTypeSelect = "select";
+/**
+ * MessageAction is one interactive control on an attachment. The client sends
+ * back only the action's ID; ex resolves the stored Integration server-side and
+ * calls it. That indirection is deliberate — see Integration below.
+ */
+export interface MessageAction {
+  /**
+   * ID identifies this action within the message. Supplied by the integration
+   * or minted at post time so it is always non-empty and unique per message.
+   */
+  id: string;
+  name: string;
+  /**
+   * Type is MessageActionTypeButton (default) or MessageActionTypeSelect.
+   */
+  type?: string;
+  /**
+   * Style is MM's cosmetic hint: "default", "primary", "success", "good",
+   * "warning", "danger", or a hex colour. Rendered as a button variant.
+   */
+  style?: string;
+  /**
+   * Disabled renders the control as non-interactive.
+   */
+  disabled?: boolean;
+  /**
+   * Options are the choices for a select action.
+   */
+  options?: MessageActionOption[];
+}
+/**
+ * MessageActionOption is one choice in a select action.
+ */
+export interface MessageActionOption {
+  text: string;
+  value: string;
+}
+/**
+ * ActionIntegration is the server-side callback target of a MessageAction.
+ */
+export interface ActionIntegration {
+  url: string;
+  /**
+   * Context is arbitrary integration-owned JSON echoed back on invocation. It
+   * is how an integration knows *which* thing the button referred to without
+   * ex understanding its domain.
+   */
+  context?: { [key: string]: any};
 }
 
 //////////
@@ -614,6 +839,12 @@ export const SystemRoleGuest: SystemRole = "guest";
 export type AuthProvider = string;
 export const AuthProviderOIDC: AuthProvider = "oidc";
 export const AuthProviderGuest: AuthProvider = "guest";
+/**
+ * AuthProviderBot marks a bot account: a real user row that authenticates
+ * with a bot API token instead of a session JWT, so it can hold channel
+ * memberships and author messages like any other member.
+ */
+export const AuthProviderBot: AuthProvider = "bot";
 export interface User {
   id: string;
   email: string;

@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Menu,
+  Bot,
   Settings,
   LogOut,
   User as UserIcon,
@@ -149,6 +150,13 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
             label: 'Incoming webhooks',
             onSelect: () => navigate('/webhooks'),
             testID: 'user-menu-webhooks',
+          } satisfies MenuAction,
+          {
+            key: 'bots',
+            icon: <Bot className="h-4 w-4" />,
+            label: 'Bots',
+            onSelect: () => navigate('/bots'),
+            testID: 'user-menu-bots',
           } satisfies MenuAction,
           {
             key: 'admin',

@@ -5,6 +5,7 @@ import { Header } from '@/components/layout/Header';
 import { NotificationPreferencesDialog } from '@/components/channels/NotificationPreferencesDialog';
 import { MessageList } from './MessageList';
 import { MessageInput, type MessageInputHandle, type MessageInputValue } from './MessageInput';
+import { useCliffyStore, isCliffyCommand, cliffyPrompt } from '@/features/cliffy/cliffy-store';
 import { MessageDropZone } from './MessageDropZone';
 import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
@@ -117,6 +118,14 @@ export function ChannelView() {
   } = useChannelMessages(channel?.id, mainAnchor);
   const sendMessage = useSendChannelMessage(channel?.id);
   const channelID = channel?.id;
+  // Keep Cliffy's scope pointed at the channel being viewed, so the shared
+  // panel (opened from the floating launcher) targets this channel. Cleared on
+  // unmount so leaving chat for a non-chat page falls back to personal Cliffy.
+  useEffect(() => {
+    if (!channelID) return;
+    useCliffyStore.getState().setScope({ type: 'channel', id: channelID, name: channel?.name });
+    return () => useCliffyStore.getState().setScope(null);
+  }, [channelID, channel?.name]);
   const draftScope = useMemo(
     () => ({ parentID: channelID, parentType: 'channel' as const }),
     [channelID],
@@ -154,6 +163,13 @@ export function ChannelView() {
   );
   const handleSendMessage = useCallback(
     (value: { body: string; attachmentIDs: string[] }) => {
+      // `/cliffy …` isn't a channel message: open the (private) Cliffy panel
+      // seeded with the prompt and scoped to this channel, and don't post it.
+      if (isCliffyCommand(value.body)) {
+        // Scope is kept current by the nav effect above; just open + seed.
+        useCliffyStore.getState().openCliffy({ prompt: cliffyPrompt(value.body) });
+        return;
+      }
       // Surface an invite prompt for any mentioned non-members (supersedes a
       // previous prompt; empty result clears it).
       checkMentions(value.body);

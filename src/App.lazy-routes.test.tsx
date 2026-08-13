@@ -19,6 +19,7 @@ vi.mock('@/pages/ChatPage', async () => {
 vi.mock('@/pages/DirectoriesPage', () => ({ default: () => <div data-testid="stub-DirectoriesPage" /> }));
 vi.mock('@/pages/AdminPage', () => ({ default: () => <div data-testid="stub-AdminPage" /> }));
 vi.mock('@/pages/IncomingWebhooksPage', () => ({ default: () => <div data-testid="stub-IncomingWebhooksPage" /> }));
+vi.mock('@/pages/BotsPage', () => ({ default: () => <div data-testid="stub-BotsPage" /> }));
 vi.mock('@/pages/CustomEmojiPage', () => ({ default: () => <div data-testid="stub-CustomEmojiPage" /> }));
 vi.mock('@/pages/NewConversationPage', () => ({ default: () => <div data-testid="stub-NewConversationPage" /> }));
 vi.mock('@/pages/ThreadsPage', () => ({ default: () => <div data-testid="stub-ThreadsPage" /> }));
@@ -76,6 +77,7 @@ describe('App — lazy cold routes', () => {
       ['/drafts', 'stub-DraftsPage'],
       ['/admin', 'stub-AdminPage'],
       ['/webhooks', 'stub-IncomingWebhooksPage'],
+      ['/bots', 'stub-BotsPage'],
       ['/emojis', 'stub-CustomEmojiPage'],
       ['/conversations/new', 'stub-NewConversationPage'],
       // Password recovery is public: both modes must resolve without auth.

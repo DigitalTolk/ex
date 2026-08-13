@@ -88,12 +88,56 @@ describe('MessageInput slash commands', () => {
       command: 'mstmeetings',
       parentType: 'channel',
       parentID: 'chan-1',
+      text: '',
     });
     expect(onSend).not.toHaveBeenCalled();
     // The composer clears like a normal send.
     await waitFor(() => {
       expect(screen.getByLabelText('Message input').textContent).toBe('');
     });
+  });
+
+  it('shows an ephemeral reply to the caller and opens a redirect the command asked for', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    runCommandMock.mockImplementation((_input, opts?: { onSuccess?: (r: unknown) => void }) => {
+      opts?.onSuccess?.({ ephemeral_text: 'Only you can see this', goto_location: 'https://meet.example/abc' });
+    });
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        initialBody="/mstmeetings"
+        typingParentID="chan-1"
+        typingParentType="channel"
+      />,
+    );
+    await sendViaEnter();
+
+    // An ephemeral reply has no message to fan out — it belongs in the
+    // composer's own notice area, visible to this caller only.
+    const notice = await screen.findByTestId('command-notice');
+    expect(notice.textContent).toContain('Only you can see this');
+    expect(open).toHaveBeenCalledWith('https://meet.example/abc', '_blank', 'noopener,noreferrer');
+    open.mockRestore();
+  });
+
+  it('shows nothing extra for a command that only posts', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    runCommandMock.mockImplementation((_input, opts?: { onSuccess?: (r: unknown) => void }) => {
+      opts?.onSuccess?.({});
+    });
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        initialBody="/mstmeetings"
+        typingParentID="chan-1"
+        typingParentType="channel"
+      />,
+    );
+    await sendViaEnter();
+
+    expect(screen.queryByTestId('command-notice')).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+    open.mockRestore();
   });
 
   it('matches command names case-insensitively', async () => {
@@ -113,6 +157,7 @@ describe('MessageInput slash commands', () => {
       command: 'mstmeetings',
       parentType: 'conversation',
       parentID: 'conv-1',
+      text: '',
     });
     expect(onSend).not.toHaveBeenCalled();
   });
@@ -285,8 +330,12 @@ describe('MessageInput slash commands', () => {
     // Still pending: the re-submit was swallowed, not run and settled.
     expect(screen.getByTestId('command-pending')).toBeInTheDocument();
 
-    // A normal message is not blocked by the in-flight command.
-    await user.keyboard(' now');
+    // A normal message is not blocked by the in-flight command. It has to be
+    // text that is not a command at all: everything after a trigger word is
+    // the command's arguments, so "/mstmeetings now" is still an invocation
+    // and is swallowed by the guard above — not a normal message.
+    await user.keyboard('{Backspace>12/}');
+    await user.keyboard('hello');
     await user.keyboard('{Enter}');
     expect(onSend).toHaveBeenCalledTimes(1);
 
@@ -316,5 +365,48 @@ describe('MessageInput slash commands', () => {
 
     const alert = await screen.findByTestId('command-error');
     expect(alert.textContent).toContain("Couldn't run /mstmeetings");
+  });
+
+  // External (Mattermost-shaped) commands take arguments, so everything after the
+  // trigger word must run as the command's text rather than post as a message.
+  it('passes the text after the trigger word as the command arguments', async () => {
+    const onSend = vi.fn();
+    render(
+      <MessageInput
+        onSend={onSend}
+        initialBody="/mstmeetings standup with the team"
+        typingParentID="chan-1"
+        typingParentType="channel"
+      />,
+    );
+    await sendViaEnter();
+
+    expect(runCommandMock).toHaveBeenCalledTimes(1);
+    expect(runCommandMock.mock.calls[0][0]).toEqual({
+      command: 'mstmeetings',
+      parentType: 'channel',
+      parentID: 'chan-1',
+      text: 'standup with the team',
+    });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("shows an ephemeral reply as a notice, not an error", async () => {
+    runCommandMock.mockImplementation((_input, opts?: { onSuccess?: (r: unknown) => void }) => {
+      opts?.onSuccess?.({ ephemeral_text: 'Only you can see this' });
+    });
+    render(
+      <MessageInput
+        onSend={vi.fn()}
+        initialBody="/mstmeetings"
+        typingParentID="chan-1"
+        typingParentType="channel"
+      />,
+    );
+    await sendViaEnter();
+
+    const notice = await screen.findByTestId('command-notice');
+    expect(notice.textContent).toContain('Only you can see this');
+    expect(screen.queryByTestId('command-error')).toBeNull();
   });
 });

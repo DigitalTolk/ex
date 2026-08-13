@@ -931,7 +931,17 @@ function MessageItemImpl({
                 onContentHeightChange={onContentHeightChange}
               />
             )}
-            <MessageRichAttachments attachments={message.messageAttachments} onContentHeightChange={onContentHeightChange} />
+            <MessageRichAttachments
+              attachments={message.messageAttachments}
+              onContentHeightChange={onContentHeightChange}
+              actionTarget={
+                channelId
+                  ? { parentType: 'channel', parentID: channelId, messageID: message.id }
+                  : conversationId
+                    ? { parentType: 'conversation', parentID: conversationId, messageID: message.id }
+                    : undefined
+              }
+            />
             {reactionEntries.length > 0 && (
               <div className="mt-1 flex flex-wrap items-center gap-1" role="list" aria-label="Reactions">
                 {reactionEntries.map(([emoji, users]) => {
