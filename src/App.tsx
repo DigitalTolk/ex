@@ -36,6 +36,9 @@ const CustomEmojiPage = lazy(() => import('@/pages/CustomEmojiPage'));
 const NewConversationPage = lazy(() => import('@/pages/NewConversationPage'));
 const ThreadsPage = lazy(() => import('@/pages/ThreadsPage'));
 const DraftsPage = lazy(() => import('@/pages/DraftsPage'));
+const AgentsPage = lazy(() => import('@/pages/AgentsPage'));
+const SkillsPage = lazy(() => import('@/pages/SkillsPage'));
+const ConnectorsPage = lazy(() => import('@/pages/ConnectorsPage'));
 const ActivityPage = lazy(() => import('@/pages/ActivityPage'));
 const SearchResultsPage = lazy(() => import('@/pages/SearchResultsPage'));
 const NotFoundPage = lazy(() =>
@@ -139,6 +142,9 @@ function AppRoutes() {
         <Route path="activity" element={<ActivityPage />} />
         <Route path="threads" element={<ThreadsPage />} />
         <Route path="drafts" element={<DraftsPage />} />
+        <Route path="agents" element={<AgentsPage />} />
+        <Route path="skills" element={<SkillsPage />} />
+        <Route path="connectors" element={<ConnectorsPage />} />
         <Route path="admin" element={<AdminPage />} />
         <Route path="webhooks" element={<IncomingWebhooksPage />} />
         <Route path="emojis" element={<CustomEmojiPage />} />

@@ -38,6 +38,12 @@ import {
   parseUserChannelUpdated,
   parseUserUpdated,
 } from '@/lib/ws-schemas';
+import {
+  onRunProgress as onAgentRunProgress,
+  onRunUpdated as onAgentRunUpdated,
+} from '@/stores/agent-runs';
+import { onRunApproval as onAgentRunApproval } from '@/stores/agent-approvals';
+import { RunActivityDrawer } from '@/components/chat/RunActivityDrawer';
 import { apiFetch } from '@/lib/api';
 import {
   bumpChannelUnread,
@@ -99,7 +105,7 @@ export default function ChatPage() {
   } = useUnread();
   const { user, logout, patchUser } = useAuth();
   const { setUserOnline, refreshPresence } = usePresence();
-  const { dispatch: dispatchNotification, setCurrentUserID } = useNotifications();
+  const { dispatch: dispatchNotification, notifyApproval, setCurrentUserID } = useNotifications();
   const { recordTyping, clearTyping, setSelfUserID } = useTyping();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -536,6 +542,63 @@ export default function ChatPage() {
       // indicator surfaces in the side panel rather than the main list.
       recordTyping(evt.parentID, evt.userID, evt.parentMessageID ?? '');
     },
+    // Live agent-run activity for the channel's activity bar. run.updated is
+    // the lifecycle (add on active, remove on terminal); run.progress is the
+    // "what is it doing" beat. Both land in the agent-runs store; the
+    // AgentActivityIndicator subscribes per parent.
+    onRunUpdated: (data: unknown) => {
+      onAgentRunUpdated(data);
+    },
+    onRunProgress: (data: unknown) => {
+      onAgentRunProgress(data);
+    },
+    // Blocking approval requests (plan-v2 §7): the card above the composer
+    // for the invoker; requests appear pending, settle frames remove them.
+    onRunApproval: (data: unknown) => {
+      onAgentRunApproval(data);
+      // The run.approval frame is the authoritative signal for a blocking gate,
+      // so the desktop alert is derived from it rather than from the parallel
+      // notification.new (whose identity is the invoking message, which every
+      // gate in a run shares). Only a fresh PENDING gate addressed to this user
+      // alerts — settle/expiry frames just clear the card.
+      const a = data as {
+        approvalID?: string;
+        invokerID?: string;
+        agentName?: string;
+        parentID?: string;
+        parentType?: string;
+        messageID?: string;
+        summary?: string;
+        options?: string[];
+        state?: string;
+      } | null;
+      if (!a?.approvalID || !a.parentID || a.state !== 'pending') return;
+      if (!user?.id || a.invokerID !== user.id) return;
+      const parentType = a.parentType === 'conversation' ? 'conversation' : 'channel';
+      // Channel routes are by SLUG, so resolve it from the cached channel list
+      // the same way the channel-rename/remove handlers below do. A cache miss
+      // yields no link rather than a broken one — the alert still surfaces.
+      let deepLink = '';
+      if (parentType === 'conversation') {
+        deepLink = `/conversation/${a.parentID}`;
+      } else {
+        const chans = queryClient.getQueryData<{ channelID: string; channelName: string }[]>(
+          queryKeys.userChannels(),
+        );
+        const ch = chans?.find((c) => c.channelID === a.parentID);
+        if (ch) deepLink = `/channel/${slugify(ch.channelName)}`;
+      }
+      notifyApproval({
+        approvalID: a.approvalID,
+        parentID: a.parentID,
+        parentType,
+        agentName: a.agentName || undefined,
+        summary: a.summary ?? '',
+        asksChoice: Array.isArray(a.options) && a.options.length > 0,
+        messageID: a.messageID,
+        deepLink,
+      });
+    },
     onReconnect: () => {
       // Refresh non-infinite peripheral lists outright. With server
       // replay enabled, message events arrive via the durable inbox,
@@ -576,6 +639,9 @@ export default function ChatPage() {
       <MobileChatReadyGate>
         <Outlet />
       </MobileChatReadyGate>
+      {/* Run Activity Drawer: mounted once at the chat root; opened from the
+          agent activity chip via the run-drawer store. */}
+      <RunActivityDrawer />
     </AppLayout>
   );
 }

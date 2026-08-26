@@ -19,7 +19,10 @@ import { queryClient } from '@/lib/query-client';
 import { resetDraftSessionState } from '@/hooks/useDrafts';
 import { resetUserStateSessionState } from '@/hooks/useUserState';
 import { resetSidebarReorderSessionState } from '@/hooks/useSidebar';
+import { resetAgentRunsSessionState } from '@/stores/agent-runs';
+import { resetAgentApprovalsSessionState } from '@/stores/agent-approvals';
 import { clearMobilePushUser, identifyMobilePushUser } from '@/lib/mobile-push-identity';
+import { provideRunnerToken, resetRunnerHandoff } from '@/lib/agent-runner';
 
 interface AuthState {
   user: User | null;
@@ -107,6 +110,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     resetDraftSessionState();
     resetUserStateSessionState();
     resetSidebarReorderSessionState();
+    // Agent activity chips and pending approval cards live in module-level
+    // stores that queryClient.clear() doesn't touch — clear them too, or the
+    // next user in this tab sees the previous user's live runs / approvals.
+    resetAgentRunsSessionState();
+    resetAgentApprovalsSessionState();
   }, []);
 
   const logout = useCallback(async () => {
@@ -130,6 +138,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.addEventListener(AUTH_INVALID_EVENT, resetLocalSession);
     return () => window.removeEventListener(AUTH_INVALID_EVENT, resetLocalSession);
   }, [resetLocalSession]);
+
+  // Inside the desktop shell: hand the agent-runner token down once a
+  // session exists (no-op in browser tabs — the bridge is absent). The
+  // latch resets on user change so a different login re-mints.
+  useEffect(() => {
+    if (!user) {
+      resetRunnerHandoff();
+      return;
+    }
+    void provideRunnerToken();
+  }, [user]);
 
   const setAuth = useCallback((token: string, userData: User) => {
     setAccessToken(token);

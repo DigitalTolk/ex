@@ -1,0 +1,15 @@
+# syntax=docker/dockerfile:1
+#
+# Development-only image: Vite dev server with HMR. Source changes arrive via
+# `docker compose watch` sync (see docker-compose.dev.yml); dependency changes
+# (package.json / package-lock.json) trigger a rebuild instead.
+FROM node:24-trixie
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+COPY . .
+
+EXPOSE 5173
+CMD ["npm", "run", "dev", "--", "--host"]

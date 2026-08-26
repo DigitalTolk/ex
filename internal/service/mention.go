@@ -41,6 +41,27 @@ var userMentionPattern = regexp.MustCompile(`@\[([^|\]]+)\|([^\]]+)\]`)
 // hands@example.com" (yes, contrived, but the rule is cheap to enforce).
 var groupMentionPattern = regexp.MustCompile(`(^|[^\w@])@(all|here)\b`)
 
+// Code segments are QUOTED syntax, not speech: a mention inside a fenced
+// block or inline code span must neither notify nor invoke. Discovered the
+// hard way — an agent pasting a guide full of example mentions summoned
+// every agent the examples named. The renderer already keeps code literal
+// (walkAndExtractCustom skips <code>/<pre>); this makes dispatch agree.
+var (
+	fencedCodePattern = regexp.MustCompile("(?s)(^|\n)\\s*```.*?(```|$)")
+	inlineCodePattern = regexp.MustCompile("`[^`\n]*`")
+)
+
+// stripCodeSegments blanks fenced blocks and inline code spans so mention
+// scanning never sees them. Replacement keeps a space so adjacent tokens
+// don't fuse into false positives.
+func stripCodeSegments(body string) string {
+	if !strings.Contains(body, "`") {
+		return body
+	}
+	body = fencedCodePattern.ReplaceAllString(body, " ")
+	return inlineCodePattern.ReplaceAllString(body, " ")
+}
+
 // ParseMentions extracts all @-mentions from a message body.
 //
 // Duplicate user mentions (the same userID mentioned twice in one message)
@@ -51,6 +72,7 @@ func ParseMentions(body string) ParsedMentions {
 	if body == "" {
 		return out
 	}
+	body = stripCodeSegments(body)
 
 	seen := make(map[string]bool)
 	for _, m := range userMentionPattern.FindAllStringSubmatch(body, -1) {

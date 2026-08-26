@@ -268,3 +268,74 @@ func webhookSK() string                        { return "META" }
 func categoryNameSK(name string) string {
 	return "CATEGORYNAME#" + strings.ToLower(strings.TrimSpace(name))
 }
+
+// Agent-orchestration keys (plan-v2 §4, revised: agents are SHARED users —
+// one gg, one qib for the whole workspace, owned by no one). Agent users are
+// ordinary USER#/PROFILE rows with deterministic IDs; per-user behavior
+// overrides live under the user's own partition.
+
+func agentTplPK(slug string) string { return "AGENTTPL#" + slug }
+func allAgentTplGSI2PK() string     { return "ALL_AGENTTPL" }
+
+// agentPrefsSK stores one user's preferences for a shared agent (their
+// prompt, harness pin, model) under that USER's partition — attribution and
+// preference are per-invoker; the agent itself carries no owner.
+func agentPrefsSK(slug string) string { return "AGENTCFG#" + slug }
+
+func runPK(runID string) string { return "RUN#" + runID }
+func runEvtSK(seq int64) string { return fmt.Sprintf("EVT#%020d", seq) }
+func runDigestSK() string       { return "DIGEST" }
+
+// Runs are indexed two ways: by parent (drawer lists runs in a channel) and
+// by liveness (the reconciler sweeps non-terminal runs past their deadline
+// with one Query instead of a table scan).
+func runParentGSI1PK(parentID string) string { return "RUNPARENT#" + parentID }
+func runGSI1SK(runID string) string          { return "RUN#" + runID }
+func activeRunsGSI2PK() string               { return "ACTIVE_RUNS" }
+func activeRunGSI2SK(deadline time.Time, runID string) string {
+	return deadline.UTC().Format(time.RFC3339Nano) + "#" + runID
+}
+
+// runqPK holds the per-owner claim queue: one row per pending run, deleted
+// on claim. The runner long-polls this partition.
+func runqPK(ownerID string) string { return "RUNQ#" + ownerID }
+func runqSK(runID string) string   { return "RUN#" + runID }
+
+// runnerSK stores a runner registration under its owner's user partition.
+func runnerSK(runnerID string) string { return "RUNNER#" + runnerID }
+
+// ctxPK holds a parent's shared-context items (plan-v2 §8): one partition per
+// channel/conversation, item ULIDs as the sort key so a single Query returns
+// them in creation order.
+func ctxPK(parentType, parentID string) string { return "CTX#" + parentType + "#" + parentID }
+func ctxSK(itemID string) string               { return "ITEM#" + itemID }
+
+// Approvals and artifacts live under their run's partition, next to the
+// EVT# timeline — one Query returns a run's whole story.
+func approvalSK(id string) string { return "APPROVAL#" + id }
+func artifactSK(id string) string { return "ART#" + id }
+
+// Skills are workspace-wide instruction packs (plan.md §2c).
+func skillPK(id string) string  { return "SKILL#" + id }
+func allSkillsGSI2PK() string   { return "ALL_SKILLS" }
+
+// agentMemSK stores one agent's core memory FOR one invoker, under that
+// invoker's partition (next to their AGENTCFG# prefs — same scoping logic).
+func agentMemSK(agentID string) string { return "AGENTMEM#" + agentID }
+
+// Agent subscriptions are read two ways: by parent on every message
+// (dispatch) and workspace-wide (heartbeat sweep).
+func agentSubPK(parentID string) string { return "AGENTSUB#" + parentID }
+func agentSubSK(id string) string       { return "SUB#" + id }
+func allAgentSubsGSI2PK() string        { return "ALL_AGENTSUBS" }
+
+// Task claims + agent thread follows are both thread-scoped: one partition
+// per (parent, thread root), TTL'd rows inside.
+func taskClaimPK(parentID, threadRootID string) string {
+	return "TASKCLAIM#" + parentID + "#" + threadRootID
+}
+func taskClaimSK(label string) string { return "L#" + label }
+func agentFollowPK(parentID, threadRootID string) string {
+	return "AGENTFOLLOW#" + parentID + "#" + threadRootID
+}
+func agentFollowSK(agentID, invokerID string) string { return "F#" + agentID + "#" + invokerID }

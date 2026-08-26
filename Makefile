@@ -1,4 +1,9 @@
-.PHONY: dev dev-up dev-down dev-logs build frontend run docker clean deps check check-dist-placeholder types check-types-drift
+.PHONY: dev dev-up dev-down dev-logs dev-watch dev-watch-down dev-watch-logs build frontend run seed docker clean deps check check-dist-placeholder types check-types-drift
+
+# The hot-reload stack layers docker-compose.dev.yml over the base file, so
+# every dev-watch target must pass both -f flags (compose has no way to make
+# an override implicit for a non-default filename).
+DEV_COMPOSE := docker compose -f docker-compose.yml -f docker-compose.dev.yml
 
 # The app version is derived from a SHA-256 of the embedded index.html at
 # server startup — no VERSION env-var to keep in sync between Go and Vite.
@@ -19,6 +24,29 @@ dev-down:
 dev-logs:
 	docker compose logs -f
 
+# Hot-reload dev stack — no image rebuild per edit. The Go server runs under
+# air and the frontend under the Vite dev server (HMR); `--watch` syncs changed
+# host files into the running containers and only re-images when a dependency
+# manifest (go.mod/go.sum, package.json/package-lock.json) changes.
+#
+# Open http://localhost:5173 — Vite serves the SPA and proxies /api (incl. the
+# WebSocket) and /auth to the app on :8500. Use `make dev` instead when you need
+# to verify the real production path, where the SPA is go:embed-ed into the binary.
+dev-watch:
+	$(DEV_COMPOSE) up --watch
+
+# No dev-watch-up counterpart to dev-up: the file watcher only runs in the
+# foreground, and `up -d` would start the stack with no sync at all — a dev
+# stack that looks live but silently ignores every edit.
+
+# Stop the hot-reload stack
+dev-watch-down:
+	$(DEV_COMPOSE) down
+
+# Tail hot-reload logs (air rebuilds and Vite HMR show up here)
+dev-watch-logs:
+	$(DEV_COMPOSE) logs -f
+
 # Build production binary (includes embedded frontend)
 build: frontend
 	go build -o bin/ex ./cmd/server
@@ -30,6 +58,12 @@ frontend:
 # Run Go server directly (requires DynamoDB + Redis already running)
 run:
 	go run ./cmd/server
+
+# Seed local-dev data: guest users (alice/bob/carol@example.com, password123),
+# #general + #engineering with memberships, and a few messages. Idempotent;
+# targets the compose stack's dynamodb-local on :28000 by default.
+seed:
+	go run ./cmd/seed
 
 # Build production Docker image
 docker:

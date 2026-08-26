@@ -30,6 +30,9 @@ import {
   ChevronDown,
   BookUser,
   MessagesSquare,
+  Bot,
+  Cable,
+  Sparkles,
   FilePenLine,
   MoreVertical,
   Trash2,
@@ -1000,6 +1003,51 @@ export function Sidebar({ onClose }: SidebarProps) {
                 {draftCount > 99 ? '99+' : draftCount}
               </Badge>
             )}
+          </NavLink>
+
+          <NavLink
+            to="/agents"
+            onClick={onClose}
+            className={({ isActive }) =>
+              `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
+                isActive
+                  ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
+                  : 'text-gray-300 hover:bg-white/10 hover:text-white'
+              }`
+            }
+          >
+            <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>Agents</span>
+          </NavLink>
+
+          <NavLink
+            to="/skills"
+            onClick={onClose}
+            className={({ isActive }) =>
+              `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
+                isActive
+                  ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
+                  : 'text-gray-300 hover:bg-white/10 hover:text-white'
+              }`
+            }
+          >
+            <Sparkles className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>Skills</span>
+          </NavLink>
+
+          <NavLink
+            to="/connectors"
+            onClick={onClose}
+            className={({ isActive }) =>
+              `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
+                isActive
+                  ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
+                  : 'text-gray-300 hover:bg-white/10 hover:text-white'
+              }`
+            }
+          >
+            <Cable className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>Connectors</span>
           </NavLink>
 
           {/* Visual break between top-level pages and the channel/DM list. */}

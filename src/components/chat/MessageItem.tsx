@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon, AlarmClock } from 'lucide-react';
+import { Bot, Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon, AlarmClock, Eye } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
@@ -20,7 +20,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { ReminderDialog } from '@/components/chat/ReminderDialog';
+import { WatcherDialog, type EditingWatcher } from '@/components/chat/WatcherDialog';
 import { useCreateReminder } from '@/hooks/useActivity';
+import { useParentWatchers, useAgents, type WatchActionMode } from '@/hooks/useAgents';
 import { REMINDER_PRESETS, computeReminderTime, toLocalInputValue, type ReminderPresetKey } from '@/lib/reminder-times';
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { UserHoverCard } from '@/components/UserHoverCard';
@@ -43,6 +45,9 @@ import { MessageRichAttachments } from '@/components/chat/MessageRichAttachments
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { extractURLs, formatLongDateTime, formatRelative } from '@/lib/format';
 import { registerEditMessageHandler } from '@/lib/window-events';
+import { openRunDrawer } from '@/stores/run-drawer';
+import { ArtifactCard } from '@/components/chat/ArtifactCard';
+import { parseArtifactMarker } from '@/lib/artifact-marker';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
@@ -292,6 +297,7 @@ function MessageItemImpl({
   const setPinned = useSetPinned();
   const createReminder = useCreateReminder();
   const [reminderDialogOpen, setReminderDialogOpen] = useState(false);
+  const [watcherDialogOpen, setWatcherDialogOpen] = useState(false);
   const [reminderSeed, setReminderSeed] = useState('');
   const { data: emojiMap } = useEmojiMap();
   const { openTag } = useTagOpen();
@@ -304,6 +310,33 @@ function MessageItemImpl({
     parentType: message.parentType === 'conversation' ? ('conversation' as const) : ('channel' as const),
     channelSlug,
   };
+
+  // Watcher badge: the viewer's own thread-scoped watchers on THIS message.
+  // One query per parent (react-query dedupes across rows); we match by
+  // threadRootID so only the watched thread's root message is badged.
+  const { data: parentWatchers } = useParentWatchers(reminderTarget.parentType, message.parentID);
+  const { data: agentRoster } = useAgents();
+  const myWatchers = useMemo(
+    () => (parentWatchers ?? []).filter((w) => w.threadRootID === message.id),
+    [parentWatchers, message.id],
+  );
+  const [manageWatchersOpen, setManageWatchersOpen] = useState(false);
+  // The thread's watchers as the dialog's editable list (resolve agent id →
+  // slug + display name from the roster).
+  const editingWatchers = useMemo<EditingWatcher[]>(
+    () =>
+      myWatchers.map((w) => {
+        const agent = agentRoster?.find((a) => a.id === w.agentID);
+        return {
+          id: w.id,
+          slug: agent?.slug ?? '',
+          agentName: agent?.displayName ?? 'an agent',
+          instruction: w.instruction ?? '',
+          actionMode: (w.actionMode ?? 'notify') as WatchActionMode,
+        };
+      }),
+    [myWatchers, agentRoster],
+  );
 
   // One builder so the preset (mutate) and custom-dialog (mutateAsync) paths
   // can't drift on the payload shape.
@@ -632,6 +665,20 @@ function MessageItemImpl({
           }
         />
         <div className="flex flex-col rounded-lg border">
+          {message.agentRunID && (
+            <button
+              type="button"
+              className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
+              onClick={() => {
+                setMobileActionsOpen(false);
+                openRunDrawer(message.agentRunID ?? '');
+              }}
+              aria-label="Show agent activity"
+            >
+              <Bot className="h-4 w-4" />
+              Show activity
+            </button>
+          )}
           <button
             type="button"
             className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
@@ -802,6 +849,24 @@ function MessageItemImpl({
               BOT
             </span>
           )}
+          {message.agentInvokerID && (
+            // Shared agents post on someone's behalf — say whose ("gg · for
+            // Bob"), mirroring the "bob's gg" naming agents see in context.
+            // With a run link, the badge doubles as the door to the run
+            // drawer (timeline, artifacts, spend).
+            <button
+              type="button"
+              disabled={!message.agentRunID}
+              onClick={() => message.agentRunID && openRunDrawer(message.agentRunID)}
+              title={message.agentRunID ? 'Show agent activity' : undefined}
+              className={`shrink-0 rounded bg-muted px-1 text-[10px] font-medium leading-4 text-muted-foreground ${
+                message.agentRunID ? 'cursor-pointer hover:bg-accent hover:text-foreground' : ''
+              }`}
+              aria-label={`Invoked by ${userMap?.get(message.agentInvokerID)?.displayName ?? 'a teammate'}`}
+            >
+              for {userMap?.get(message.agentInvokerID)?.displayName ?? 'a teammate'}
+            </button>
+          )}
           <Tooltip>
             <TooltipTrigger
               // Timestamp sits right after the author name (Slack-style),
@@ -831,6 +896,18 @@ function MessageItemImpl({
               <Pin className="h-3 w-3" />
               Pinned
             </span>
+          )}
+          {myWatchers.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setManageWatchersOpen(true)}
+              className="inline-flex items-center gap-0.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-xs text-primary transition-colors hover:bg-primary/20"
+              aria-label={`Watching — ${myWatchers.length} agent watcher${myWatchers.length > 1 ? 's' : ''} (click to manage)`}
+              data-testid="watcher-indicator"
+            >
+              <Eye className="h-3 w-3" />
+              Watching{myWatchers.length > 1 ? ` ·${myWatchers.length}` : ''}
+            </button>
           )}
         </div>
         )}
@@ -1031,6 +1108,15 @@ function MessageItemImpl({
               <MoreHorizontal className="h-3.5 w-3.5" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
+              {message.agentRunID && (
+                <DropdownMenuItem
+                  onClick={() => openRunDrawer(message.agentRunID ?? '')}
+                  aria-label="Show agent activity"
+                >
+                  <Bot className="mr-2 h-4 w-4" />
+                  Show activity
+                </DropdownMenuItem>
+              )}
               {/* Static labels: the menu closes on click, so a "… copied"
                   swap would never be seen on desktop. */}
               <DropdownMenuItem
@@ -1080,6 +1166,13 @@ function MessageItemImpl({
                   </DropdownMenuItem>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
+              <DropdownMenuItem
+                onClick={() => setWatcherDialogOpen(true)}
+                data-testid="watch-thread"
+                aria-label="Add a watcher to this thread"
+              >
+                <Eye className="mr-2 h-4 w-4" /> Watch thread…
+              </DropdownMenuItem>
               {isOwn && (
                 <>
                   {canEdit && (
@@ -1118,6 +1211,27 @@ function MessageItemImpl({
           onConfirm={scheduleReminderAsync}
         />
       )}
+      {watcherDialogOpen && (
+        <WatcherDialog
+          open
+          onOpenChange={setWatcherDialogOpen}
+          parentID={message.parentID}
+          parentType={message.parentType === 'conversation' ? 'conversation' : 'channel'}
+          threadRootID={message.parentMessageID || message.id}
+        />
+      )}
+      {manageWatchersOpen && editingWatchers.length > 0 && (
+        <WatcherDialog
+          open
+          onOpenChange={(o) => {
+            if (!o) setManageWatchersOpen(false);
+          }}
+          parentID={message.parentID}
+          parentType={message.parentType === 'conversation' ? 'conversation' : 'channel'}
+          threadRootID={message.parentMessageID || message.id}
+          editingList={editingWatchers}
+        />
+      )}
     </div>
   );
 }
@@ -1151,6 +1265,12 @@ const MessageBody = memo(function MessageBody({
   onContentHeightChange,
   openTag,
 }: MessageBodyProps) {
+  // Artifact marker messages render as a compact expand/download card
+  // instead of markdown — the marker is machine syntax, not prose.
+  const artifactMarker = parseArtifactMarker(message.body);
+  if (artifactMarker) {
+    return <ArtifactCard marker={artifactMarker} />;
+  }
   return (
     <>
       {renderMarkdown(message.body, {

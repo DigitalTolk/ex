@@ -54,7 +54,17 @@ type AuthService struct {
 	// publisher broadcasts user.updated when a login-time directory sync
 	// changes an existing profile, so open clients refresh it live.
 	publisher Publisher
+	// guestLoginAnyRole lifts GuestLogin's role gate (dev stacks only, where
+	// OIDC isn't configured and password login is the only path). Off by
+	// default; see SetGuestLoginAnyRole.
+	guestLoginAnyRole bool
 }
+
+// SetGuestLoginAnyRole allows password login for non-guest roles. Intended
+// ONLY for local dev (GUEST_LOGIN_ANY_ROLE=true in the compose overlay):
+// production users authenticate via OIDC and carry no password hash, so even
+// misconfigured this cannot log an SSO account in — but keep it off anyway.
+func (s *AuthService) SetGuestLoginAnyRole(v bool) { s.guestLoginAnyRole = v }
 
 const (
 	minGuestPasswordLen = 8
@@ -528,11 +538,13 @@ func (s *AuthService) GuestLogin(ctx context.Context, email, password string) (a
 		return "", "", nil, fmt.Errorf("auth: get user by email: %w", err)
 	}
 
-	if user.SystemRole != model.SystemRoleGuest {
+	if user.SystemRole != model.SystemRoleGuest && !s.guestLoginAnyRole {
 		// A real (e.g. SSO) account exists at this email. Spend the same dummy
 		// bcrypt the not-found path does and return the SAME generic message, so
 		// an unauthenticated caller can't enumerate non-guest accounts by timing
-		// OR by error text.
+		// OR by error text. GUEST_LOGIN_ANY_ROLE (dev stacks only — no OIDC
+		// locally) lifts the role gate; the password check below still stands,
+		// and SSO users carry no password hash, so they remain unloginable here.
 		_ = bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(password))
 		return "", "", nil, errors.New("auth: invalid credentials")
 	}

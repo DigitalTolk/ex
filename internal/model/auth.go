@@ -6,12 +6,30 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// Token scopes. An empty Scope is an ordinary interactive session token.
+// Scoped tokens are accepted ONLY by their dedicated middleware — the
+// regular Auth middleware rejects them, so a leaked runner or run token can
+// never drive the interactive API.
+const (
+	TokenScopeRunner = "runner" // desktop runner: register/claim/heartbeat/report
+	TokenScopeRun    = "run"    // one run's MCP tool calls, invoker-scoped
+)
+
 type TokenClaims struct {
 	jwt.RegisteredClaims
 	UserID      string     `json:"uid"`
 	Email       string     `json:"email"`
 	DisplayName string     `json:"name"`
 	SystemRole  SystemRole `json:"role"`
+
+	// Scope marks non-interactive tokens (see TokenScope*). Empty = session.
+	Scope string `json:"scope,omitempty"`
+	// RunID binds a run-scoped token to exactly one run.
+	RunID string `json:"runID,omitempty"`
+	// ActorID is the agent user a run-scoped token posts as. UserID stays
+	// the invoker — permissions are always the invoking human's; ActorID is
+	// authorship only.
+	ActorID string `json:"actorID,omitempty"`
 }
 
 type RefreshToken struct {

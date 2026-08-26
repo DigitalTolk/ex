@@ -1,0 +1,73 @@
+# Development override: hot reload via `docker compose watch`.
+#
+#   make dev-watch
+#   # or: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --watch
+#
+# `sync` copies changed host files into the running container, where air (Go)
+# or Vite (frontend) picks them up; `rebuild` re-images the service — reserved
+# for dependency manifests, which is the only time an image rebuild is needed.
+# The stock `docker compose up --build` / `make dev` path is untouched and
+# remains the way to verify the real embedded production build.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      # The base file's stale-embed protection is pointless here: source
+      # arrives via watch sync, nothing is baked into the image.
+      no_cache: false
+    environment:
+      # In dev the browser talks to Vite (5173), which proxies /api and /auth
+      # here — auth redirects must land back on the Vite origin.
+      BASE_URL: http://localhost:5173
+      # Local stacks have no OIDC, so password login is the only door — let
+      # the seeded admin (alice) in through it so channel creation is
+      # testable. Never set outside dev.
+      GUEST_LOGIN_ANY_ROLE: "true"
+      # Microsoft SSO / Graph settings are NOT here on purpose: the base
+      # compose already loads ex/.env for the app (env_file, required:false),
+      # which is where the optional integrations belong. Anything listed under
+      # `environment:` would OVERRIDE that file, so keep this block to dev
+      # TOPOLOGY only (ports, origins, guest login) and put tenant-specific or
+      # secret values in ex/.env.
+    develop:
+      watch:
+        - action: sync
+          path: ./cmd
+          target: /app/cmd
+        - action: sync
+          path: ./internal
+          target: /app/internal
+        - action: sync
+          path: ./frontend.go
+          target: /app/frontend.go
+        - action: rebuild
+          path: go.mod
+        - action: rebuild
+          path: go.sum
+
+  vite:
+    build:
+      context: .
+      dockerfile: Dockerfile.vite
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_PROXY_TARGET: http://app:8500
+    depends_on:
+      - app
+    develop:
+      watch:
+        - action: sync
+          path: ./src
+          target: /app/src
+        - action: sync
+          path: ./public
+          target: /app/public
+        - action: sync
+          path: ./index.html
+          target: /app/index.html
+        - action: rebuild
+          path: package.json
+        - action: rebuild
+          path: package-lock.json

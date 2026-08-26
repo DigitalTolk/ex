@@ -5,19 +5,27 @@ import {
   NotificationProvider,
   useNotifications,
   type NotificationPayload,
+  type ApprovalAlert,
 } from '@/context/NotificationContext';
 import { resetNotificationDedup } from '@/lib/notification-dedup';
 import { markUserActivity } from '@/lib/user-activity';
 
 const playMock = vi.fn();
+const approvalChimeMock = vi.fn();
 vi.mock('@/lib/notification-sound', () => ({
   playNotificationPing: () => playMock(),
+  playApprovalChime: () => approvalChimeMock(),
 }));
 
 const sendWSMock = vi.fn();
 vi.mock('@/lib/ws-sender', () => ({
   sendWS: (payload: unknown) => sendWSMock(payload),
   setWSSender: vi.fn(),
+}));
+
+const toastMock = vi.fn();
+vi.mock('@/lib/toast', () => ({
+  showToast: (...args: unknown[]) => toastMock(...args),
 }));
 
 // Default payload is a DM message — DMs always notify, so this represents
@@ -51,17 +59,19 @@ let setUserSpy: ((id: string | null) => void) | null = null;
 let setSoundSpy: ((v: boolean) => void) | null = null;
 let setBrowserSpy: ((v: boolean) => void) | null = null;
 let permissionSpy: string | null = null;
+let notifyApprovalSpy: ((a: ApprovalAlert) => void) | null = null;
 
 function Probe() {
-  const { dispatch, setActiveParent, setCurrentUserID, setSoundEnabled, setBrowserEnabled, permission } = useNotifications();
+  const { dispatch, notifyApproval, setActiveParent, setCurrentUserID, setSoundEnabled, setBrowserEnabled, permission } = useNotifications();
   useEffect(() => {
     dispatchSpy = dispatch;
+    notifyApprovalSpy = notifyApproval;
     setActiveSpy = setActiveParent;
     setUserSpy = setCurrentUserID;
     setSoundSpy = setSoundEnabled;
     setBrowserSpy = setBrowserEnabled;
     permissionSpy = permission;
-  }, [dispatch, setActiveParent, setCurrentUserID, setSoundEnabled, setBrowserEnabled, permission]);
+  }, [dispatch, notifyApproval, setActiveParent, setCurrentUserID, setSoundEnabled, setBrowserEnabled, permission]);
   return <div data-testid="probe">{permission}</div>;
 }
 
@@ -97,7 +107,10 @@ describe('NotificationProvider', () => {
 
   beforeEach(() => {
     playMock.mockReset();
+    approvalChimeMock.mockReset();
     sendWSMock.mockReset();
+    toastMock.mockReset();
+    notifyApprovalSpy = null;
     resetNotificationDedup();
     dispatchSpy = null;
     setActiveSpy = null;
@@ -342,6 +355,151 @@ describe('NotificationProvider', () => {
     });
     expect(playMock).not.toHaveBeenCalled();
     expect(notificationCtor).not.toHaveBeenCalled();
+  });
+
+  // ---- agent approval gates (notifyApproval) ------------------------------
+  // An approval BLOCKS the run until the invoker answers, so a swallowed alert
+  // stalls the work indefinitely. These gates deliberately do NOT go through
+  // `dispatch`: their identity is the approvalID, because every gate in a run
+  // carries the same invoking messageID.
+  const approval: ApprovalAlert = {
+    approvalID: 'appr-1',
+    parentID: 'ch-1',
+    parentType: 'channel',
+    agentName: 'gg',
+    summary: 'Use the GitLab connector (gitlab) for this task',
+    messageID: 'invoking-msg-1',
+    deepLink: '/channel/sandbox',
+  };
+
+  it('fires a banner for a pending approval when the invoker is elsewhere', () => {
+    renderProbe();
+    act(() => notifyApprovalSpy!(approval));
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    // Visually distinct from every message alert, which never carries a glyph.
+    expect(notificationCtor.mock.calls[0][0]).toBe('✋ gg needs your approval');
+    const opts = notificationCtor.mock.calls[0][1] as NotificationOptions;
+    expect(opts.body).toBe('Use the GitLab connector (gitlab) for this task');
+    // The custom ping is the only sound source, as for every other alert.
+    expect(opts.silent).toBe(true);
+    // Distinct from every other alert: its own chime, and a banner that asks
+    // the platform not to auto-dismiss it.
+    expect(opts.requireInteraction).toBe(true);
+    expect(approvalChimeMock).toHaveBeenCalledTimes(1);
+    expect(playMock).not.toHaveBeenCalled();
+  });
+
+  it('says "needs your input" when the agent offers choices', () => {
+    renderProbe();
+    act(() => notifyApprovalSpy!({ ...approval, asksChoice: true }));
+    expect(notificationCtor.mock.calls[0][0]).toBe('❓ gg needs your input');
+  });
+
+  it('alerts even while the invoker is focused on that very channel', () => {
+    // Unlike a message, a gate HALTS the run until answered, so it is never
+    // suppressed for "you're already looking at it". This is the behaviour
+    // approvals had before this path existed, and is deliberate.
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    renderProbe();
+    act(() => {
+      setActiveSpy!('ch-1');
+      markUserActivity();
+      notifyApprovalSpy!(approval);
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(approvalChimeMock).toHaveBeenCalledTimes(1);
+    // Surfaced on a device someone is demonstrably at → the deferred mobile
+    // push stands down.
+    expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'invoking-msg-1' });
+  });
+
+  it('still fires when that parent is on screen but the window is not focused', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    renderProbe();
+    act(() => {
+      setActiveSpy!('ch-1');
+      notifyApprovalSpy!(approval);
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it('fires for BOTH gates of one run (same invoking message, different approvals)', () => {
+    // The regression that made this path necessary: a messageID-keyed dedup
+    // collapsed every gate in a run into the first one's entry.
+    renderProbe();
+    act(() => notifyApprovalSpy!(approval));
+    act(() => notifyApprovalSpy!({ ...approval, approvalID: 'appr-2', summary: 'Run a shell command' }));
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+  });
+
+  it('fires even when the invoking message already produced its own alert', () => {
+    // A colleague writes "@alice @gg can you look at this?": the mention alert
+    // records that messageID, and the approval must not collide with it.
+    renderProbe();
+    act(() => dispatchSpy!({ ...channelMessagePayload, kind: 'mention', messageID: 'invoking-msg-1' }));
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    act(() => notifyApprovalSpy!(approval));
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+  });
+
+  it('dedupes a redelivered copy of the SAME approval', () => {
+    renderProbe();
+    act(() => notifyApprovalSpy!(approval));
+    act(() => notifyApprovalSpy!(approval));
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to an in-app toast when no OS banner is possible', () => {
+    // A blocking gate must never be invisible, so a denied/absent permission
+    // still surfaces something the user can act on.
+    notificationCtor = installNotification('denied');
+    renderProbe();
+    act(() => notifyApprovalSpy!(approval));
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    expect(approvalChimeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks the desktop shell to flag the app (dock bounce) for an approval', () => {
+    const attention = vi.fn();
+    Object.defineProperty(window, '__EX_ATTENTION__', { value: attention, configurable: true });
+    renderProbe();
+    act(() => notifyApprovalSpy!(approval));
+    expect(attention).toHaveBeenCalledTimes(1);
+    delete (window as Window & { __EX_ATTENTION__?: () => void }).__EX_ATTENTION__;
+  });
+
+  it('never flags the app for an ordinary message', () => {
+    // The signal only keeps meaning "something is waiting on you" if nothing
+    // else uses it.
+    const attention = vi.fn();
+    Object.defineProperty(window, '__EX_ATTENTION__', { value: attention, configurable: true });
+    renderProbe();
+    act(() => dispatchSpy!(samplePayload));
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(attention).not.toHaveBeenCalled();
+    delete (window as Window & { __EX_ATTENTION__?: () => void }).__EX_ATTENTION__;
+  });
+
+  it('does not flag the app when nothing was surfaced', () => {
+    // Popups off → nothing surfaced → no dock bounce either. (When a banner or
+    // toast DOES surface, the shell still skips the bounce if its window is
+    // focused, so an app you are using never bounces its own dock.)
+    const attention = vi.fn();
+    Object.defineProperty(window, '__EX_ATTENTION__', { value: attention, configurable: true });
+    renderProbe();
+    act(() => setBrowserSpy!(false));
+    act(() => notifyApprovalSpy!(approval));
+    expect(attention).not.toHaveBeenCalled();
+    delete (window as Window & { __EX_ATTENTION__?: () => void }).__EX_ATTENTION__;
+  });
+
+  it('stays silent when the user turned browser popups off', () => {
+    renderProbe();
+    act(() => setBrowserSpy!(false));
+    act(() => notifyApprovalSpy!(approval));
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(toastMock).not.toHaveBeenCalled();
   });
 
   it('still fires for channel mentions when no other suppression applies', () => {

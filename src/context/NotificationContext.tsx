@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { playNotificationPing } from '@/lib/notification-sound';
+import { playApprovalChime, playNotificationPing } from '@/lib/notification-sound';
 import { hasDndBridge, isDndActive } from '@/lib/dnd';
+import { requestOsAttention } from '@/lib/attention';
 import { showToast } from '@/lib/toast';
 import { readJSON, writeJSON } from '@/lib/storage';
 import { useLatestRef } from '@/hooks/useLatestRef';
@@ -43,6 +44,30 @@ function ackDesktopDelivery(messageID: string | undefined): void {
 // recognized — keep this in lockstep with the Go side.
 export type NotificationKind = 'message' | 'mention' | 'thread_reply';
 
+// ApprovalAlert is an agent run blocked on the invoker's decision. It does NOT
+// go through `dispatch`: an approval is not a message, and reusing the message
+// path was actively wrong. Its identity is the approvalID, not a messageID —
+// every gate in a run carries the SAME invoking messageID, so a message-keyed
+// dedup silently swallowed the second gate, and a gate on a message the user
+// had already been alerted about never surfaced at all. It also needs its own
+// deep link (the parent hosting the card) and its own suppression rule.
+export interface ApprovalAlert {
+  approvalID: string;
+  parentID: string;
+  parentType: 'channel' | 'conversation';
+  // Agent display name when known, for the title; falls back to a generic one.
+  agentName?: string;
+  summary: string;
+  // Whether the agent is asking a question (options present) rather than
+  // asking permission — changes the wording only.
+  asksChoice?: boolean;
+  // Invoking message, used ONLY to ack desktop delivery so the deferred mobile
+  // push stands down. Never a dedup key.
+  messageID?: string;
+  // Where clicking the banner should land (the parent hosting the card).
+  deepLink: string;
+}
+
 export interface NotificationPayload {
   kind: NotificationKind;
   title: string;
@@ -81,6 +106,7 @@ interface NotificationContextValue {
   permission: Permission;
   requestPermission: () => Promise<Permission>;
   dispatch: (n: NotificationPayload) => void;
+  notifyApproval: (a: ApprovalAlert) => void;
   setActiveParent: (parentID: string | null) => void;
   setCurrentUserID: (id: string | null) => void;
 }
@@ -135,14 +161,14 @@ function navigateInApp(href: string) {
 // ping lags the banner by a few ms, which is imperceptible). Without a
 // bridge the ping plays immediately: this path is only reached for surfaces
 // the OS does not deliver, where no DnD signal exists.
-function playPingRespectingDnd(): void {
+function playPingRespectingDnd(sound: () => void = playNotificationPing): void {
   if (hasDndBridge()) {
     void isDndActive().then((dnd) => {
-      if (!dnd) playNotificationPing();
+      if (!dnd) sound();
     });
     return;
   }
-  playNotificationPing();
+  sound();
 }
 
 const NotificationContext = createContext<NotificationContextValue | undefined>(undefined);
@@ -417,6 +443,102 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     }
   }, [permissionRef, prefsRef, dispatchRef]);
 
+  // notifyApproval surfaces a blocking agent-approval gate. Deliberately a
+  // separate path from `dispatch` — see ApprovalAlert for why reusing the
+  // message path was wrong. Kept here rather than in its own module so there
+  // stays exactly ONE owner of "how an alert reaches the user" (permission,
+  // prefs, the silent-banner + custom-ping pairing, and the toast fallback).
+  const notifyApproval = useCallback((a: ApprovalAlert) => {
+    if (!a.approvalID) return;
+    const now = Date.now();
+    // Identity is the approval itself, namespaced so it can never collide with
+    // a messageID in the shared cross-tab store.
+    const key = `approval:${a.approvalID}`;
+    if (hasSeenNotification(key, now)) return;
+
+    // NO active-view / focus suppression, deliberately (user's call, 2026-08-21).
+    // Messages get suppressed when you're staring at the channel because missing
+    // one costs nothing; a gate HALTS an agent run until it is answered, so it
+    // always alerts — even with the app focused on that very channel. This
+    // matches the behaviour approvals had before this path existed: they went
+    // through `dispatch` as a non-message kind, which the active-view rule
+    // never applied to.
+
+    // Visual marker in the TITLE, which is the one place every surface renders
+    // identically — OS banner, Notification Center list, and the toast
+    // fallback. The desktop shell omits the web `icon` (macOS shows the app
+    // icon instead), so an icon could not carry this. Two glyphs, because a
+    // question and a permission gate need different responses from the reader.
+    const glyph = a.asksChoice ? '❓' : '✋';
+    const title = a.agentName
+      ? `${glyph} ${a.agentName} needs your ${a.asksChoice ? 'input' : 'approval'}`
+      : a.asksChoice
+        ? `${glyph} An agent needs your input`
+        : `${glyph} Approval needed`;
+    const body = a.summary || 'Open the conversation to decide.';
+    const open = () => {
+      if (a.deepLink) navigateInApp(a.deepLink);
+    };
+
+    const { soundEnabled, browserEnabled } = prefsRef.current;
+    let delivered = false;
+    const canBanner =
+      browserEnabled && permissionRef.current === 'granted' && notificationsSupported();
+
+    if (canBanner) {
+      try {
+        // silent: true everywhere — the custom ping below is the only sound, so
+        // banner and ping never double up. No tag: tag collisions are treated
+        // as silent updates, which would hide a second gate's banner.
+        const opts: NotificationOptions = {
+          body,
+          silent: true,
+          // A blocking gate should not evaporate before it is seen. Honoured on
+          // Windows/Linux/web; macOS decides banner-vs-alert persistence per
+          // app in System Settings, so there it is a harmless no-op rather than
+          // something to rely on.
+          requireInteraction: true,
+        };
+        if (!window.__EX_DESKTOP__) opts.icon = '/logo.svg';
+        const note = new Notification(title, opts);
+        note.onclick = () => {
+          window.focus();
+          open();
+          note.close();
+        };
+        note.onclose = () => {
+          note.onclick = null;
+          note.onclose = null;
+        };
+        delivered = true;
+      } catch {
+        // Constructor can throw in embedded webviews even with permission.
+        delivered = false;
+      }
+    }
+    // Toast whenever no OS banner could be shown, so a BLOCKING gate is never
+    // invisible: no Notification API, permission not granted, or a constructor
+    // that threw. Tapping it goes where the banner would have.
+    if (!delivered && browserEnabled) {
+      showToast(body, 'success', { title, kind: 'notification', onActivate: open });
+      delivered = true;
+    }
+    if (soundEnabled && delivered) playPingRespectingDnd(playApprovalChime);
+    // Ask the desktop shell to flag the app (dock bounce / taskbar flash). A
+    // banner is transient and easy to miss; this persists in the periphery
+    // until they look, and no ordinary message triggers it. No-op in a browser.
+    if (delivered) requestOsAttention();
+
+    if (delivered) {
+      recordNotification(key, now);
+      // Same rule as messages: only claim delivery when someone is actually at
+      // this device, otherwise leave the mobile fallback to do its job.
+      if (isUserActive(desktopActiveWindowMs) || remoteUserAtDevice(desktopActiveWindowMs)) {
+        ackDesktopDelivery(a.messageID);
+      }
+    }
+  }, [permissionRef, prefsRef]);
+
   useEffect(() => {
     dispatchRef.current = dispatch;
   });
@@ -429,10 +551,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       permission,
       requestPermission,
       dispatch,
+      notifyApproval,
       setActiveParent,
       setCurrentUserID,
     }),
-    [prefs, permission, requestPermission, dispatch, setActiveParent, setCurrentUserID, setSoundEnabled, setBrowserEnabled],
+    [prefs, permission, requestPermission, dispatch, notifyApproval, setActiveParent, setCurrentUserID, setSoundEnabled, setBrowserEnabled],
   );
 
   return <NotificationContext.Provider value={value}>{children}</NotificationContext.Provider>;
@@ -447,6 +570,7 @@ const noopValue: NotificationContextValue = {
   permission: 'unsupported',
   requestPermission: async () => 'unsupported',
   dispatch: () => {},
+  notifyApproval: () => {},
   setActiveParent: () => {},
   setCurrentUserID: () => {},
 };

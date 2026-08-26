@@ -33,6 +33,9 @@ export const EventType = {
   WebhookChanged: 'webhook.changed',
   ActivityNew: 'activity.new',
   ThreadUpdated: 'thread.updated',
+  RunUpdated: 'run.updated',
+  RunProgress: 'run.progress',
+  RunApproval: 'run.approval',
 } as const;
 
 export type EventTypeName = (typeof EventType)[keyof typeof EventType];
@@ -53,5 +56,6 @@ export const EPHEMERAL_EVENT_TYPES = new Set<string>([
   EventType.ReplayExhausted,
   EventType.ActivityNew,
   EventType.ThreadUpdated,
+  EventType.RunProgress,
   'typing',
 ]);

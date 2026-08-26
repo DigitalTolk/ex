@@ -19,7 +19,7 @@ import {
 // Reuses the canonical regexes from lib/mention-syntax so the composer and the
 // message renderer agree on exactly what a mention is.
 
-type PillKind = 'user' | 'channel' | 'group';
+type PillKind = 'user' | 'channel' | 'group' | 'connector';
 
 class PillWidget extends WidgetType {
   readonly label: string;
@@ -113,3 +113,54 @@ const mentionAtomicRanges = EditorView.atomicRanges.of((view) => {
 });
 
 export const mentionPills = [mentionPillsPlugin, mentionAtomicRanges];
+
+// ---- Connector pills ----
+//
+// "/cliffhub" tokens (the composer's connector picks) render as pills too —
+// but only for slugs that are actually installed connectors, so prose like
+// "a /tmp path" never turns into UI. The document keeps the raw "/slug" text
+// (that's what the backend parses); the pill is presentation only.
+
+const CONNECTOR_TOKEN_RE_GLOBAL = /(^|\s)\/([a-z0-9][a-z0-9-]*)/g;
+
+function buildConnectorDecorations(view: EditorView, slugs: Set<string>): DecorationSet {
+  if (slugs.size === 0) return Decoration.none;
+  const widgets: Range<Decoration>[] = [];
+  for (const { from, to } of view.visibleRanges) {
+    const text = view.state.sliceDoc(from, to);
+    for (const m of text.matchAll(CONNECTOR_TOKEN_RE_GLOBAL)) {
+      if (!slugs.has(m[2])) continue;
+      const start = from + matchStart(m) + m[1].length;
+      const end = start + 1 + m[2].length;
+      if (caretInside(view, start, end)) continue; // reveal raw token for editing
+      widgets.push(
+        Decoration.replace({
+          widget: new PillWidget(`/${m[2]}`, 'connector'),
+          inclusive: false,
+        }).range(start, end),
+      );
+    }
+  }
+  return Decoration.set(widgets, true);
+}
+
+// connectorPills is a factory (unlike mentionPills) because it needs the live
+// list of installed connector slugs from the app layer.
+export function connectorPills(getSlugs: () => string[]) {
+  const plugin = ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
+      constructor(view: EditorView) {
+        this.decorations = buildConnectorDecorations(view, new Set(getSlugs()));
+      }
+      update(update: ViewUpdate) {
+        this.decorations = buildConnectorDecorations(update.view, new Set(getSlugs()));
+      }
+    },
+    { decorations: (v) => v.decorations },
+  );
+  const atomic = EditorView.atomicRanges.of(
+    (view) => view.plugin(plugin)?.decorations ?? Decoration.none,
+  );
+  return [plugin, atomic];
+}

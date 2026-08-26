@@ -16,6 +16,12 @@ type Config struct {
 	// responses are recorded (ACCESS_LOG_ENABLED, default true).
 	AccessLogEnabled bool
 
+	// GuestLoginAnyRole lifts the guest-only gate on password login
+	// (GUEST_LOGIN_ANY_ROLE, default false). Local-dev affordance: without
+	// OIDC the guest form is the only login, and guests can't create
+	// channels. SSO users carry no password hash, so this can't log them in.
+	GuestLoginAnyRole bool
+
 	// DynamoDB
 	AWSRegion        string
 	DynamoDBTable    string
@@ -189,6 +195,17 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("invalid ACCESS_LOG_ENABLED %q: must be a boolean", v)
 		}
 		c.AccessLogEnabled = b
+	}
+
+	// Dev-only: GUEST_LOGIN_ANY_ROLE=true lets the password login form accept
+	// non-guest roles (local stacks have no OIDC, and channel creation is
+	// blocked for guests). Default off; set only in docker-compose.dev.yml.
+	if v := os.Getenv("GUEST_LOGIN_ANY_ROLE"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid GUEST_LOGIN_ANY_ROLE %q: must be a boolean", v)
+		}
+		c.GuestLoginAnyRole = b
 	}
 
 	proxyCount := envOr("TRUSTED_PROXY_COUNT", "1")

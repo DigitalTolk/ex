@@ -42,6 +42,13 @@ vi.mock('@/hooks/useSettings', () => ({
   useUpdateWorkspaceSettings: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+// Same act()-hygiene for the connectors registry query (feeds the "/"
+// connector picker in MarkdownComposer).
+vi.mock('@/hooks/useConnectors', async (orig) => ({
+  ...(await orig<typeof import('@/hooks/useConnectors')>()),
+  useConnectors: () => ({ data: [] }),
+}));
+
 // Same act()-hygiene for the slash-command registry query (enabled whenever
 // the composer has a chat target, i.e. the typing props are set). Behavior is
 // covered in MessageInput.commands.test.tsx.
