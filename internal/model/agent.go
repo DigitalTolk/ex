@@ -84,6 +84,13 @@ type AgentLimits struct {
 // existed, or unresolved configs) fall back to platform defaults.
 func (l AgentLimits) WallClockFor(mode string) time.Duration {
 	def := DefaultAgentLimits()
+	// Coding-task runs have NO wall-clock cap by decision (plan-coding-agent):
+	// the rolling idle deadline (silence kills) and the Stop button are the
+	// only reapers. The "ceiling" is just a far horizon so the run token and
+	// HardDeadline math stay finite.
+	if mode == RunModeTask {
+		return taskModeHorizon
+	}
 	if mode == RunModeDirect {
 		sec := l.MaxTaskWallClockSec
 		if sec <= 0 {
@@ -103,6 +110,9 @@ func (l AgentLimits) WallClockFor(mode string) time.Duration {
 // back to platform defaults.
 func (l AgentLimits) TurnsFor(mode string) int {
 	def := DefaultAgentLimits()
+	if mode == RunModeTask {
+		return TaskModeUnlimitedTurns
+	}
 	if mode == RunModeDirect {
 		if l.MaxTaskTurns > 0 {
 			return l.MaxTaskTurns
@@ -194,8 +204,26 @@ type UserAgentPrefs struct {
 	// FollowUpAsk: the agent must ask me (approval gate) before actually
 	// posting a follow-up reply.
 	FollowUpAsk bool `json:"followUpAsk,omitempty" dynamodbav:"followUpAsk,omitempty"`
+	// AutoAllow lists harness tool CLASSES (AutoAllow*) this user pre-approves
+	// for runs of this agent — the "don't ask me again for reads" dial. The
+	// runner's permission gateway honors it locally; everything else still
+	// raises an approval card.
+	AutoAllow []string `json:"autoAllow,omitempty" dynamodbav:"autoAllow,omitempty"`
 
 	UpdatedAt time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
+}
+
+// Harness tool classes a user may pre-approve (UserAgentPrefs.AutoAllow).
+const (
+	AutoAllowRead  = "read"  // Read / Glob / Grep / notebook reads
+	AutoAllowEdit  = "edit"  // Edit / MultiEdit / Write / NotebookEdit
+	AutoAllowShell = "shell" // Bash
+	AutoAllowWeb   = "web"   // WebFetch / WebSearch
+)
+
+// ValidAutoAllow reports whether c names a known tool class.
+func ValidAutoAllow(c string) bool {
+	return c == AutoAllowRead || c == AutoAllowEdit || c == AutoAllowShell || c == AutoAllowWeb
 }
 
 // Follow-up modes.
@@ -225,6 +253,7 @@ type ResolvedAgentConfig struct {
 	FollowUpMode      string      `json:"followUpMode"`
 	FollowUpMins      int         `json:"followUpMins"`
 	FollowUpAsk       bool        `json:"followUpAsk"`
+	AutoAllow         []string    `json:"autoAllow,omitempty"`
 }
 
 // RunState is the run lifecycle state machine. Direct mode at Phase 1 uses:
@@ -301,17 +330,24 @@ type Run struct {
 	ActionMode       string `json:"actionMode,omitempty" dynamodbav:"actionMode,omitempty"`
 
 	// Config snapshot — what this run actually executes under.
-	Harness       string      `json:"harness" dynamodbav:"harness"`
-	Model         string      `json:"model,omitempty" dynamodbav:"model,omitempty"`
-	ExecutionMode string      `json:"executionMode,omitempty" dynamodbav:"executionMode,omitempty"`
-	PersonaHash   string      `json:"personaHash" dynamodbav:"personaHash"`
-	Persona       string      `json:"-" dynamodbav:"persona"` // full text for the runner; hash for display
-	SkillIDs      []string    `json:"skillIDs,omitempty" dynamodbav:"skillIDs,omitempty"`
+	Harness       string   `json:"harness" dynamodbav:"harness"`
+	Model         string   `json:"model,omitempty" dynamodbav:"model,omitempty"`
+	ExecutionMode string   `json:"executionMode,omitempty" dynamodbav:"executionMode,omitempty"`
+	PersonaHash   string   `json:"personaHash" dynamodbav:"personaHash"`
+	Persona       string   `json:"-" dynamodbav:"persona"` // full text for the runner; hash for display
+	SkillIDs      []string `json:"skillIDs,omitempty" dynamodbav:"skillIDs,omitempty"`
 	// ConnectorSlugs: the /connector tokens the invoking message carried —
 	// the user's explicit pick of which external services this run may use.
 	// The runner only syncs docs + injects credentials for these.
 	ConnectorSlugs []string `json:"connectorSlugs,omitempty" dynamodbav:"connectorSlugs,omitempty"`
-	Limits        AgentLimits `json:"limits" dynamodbav:"limits"`
+	// TaskID binds the run to a coding task (RunModeTask): its thread root is
+	// the task card, its budget is uncapped, and the runner prepares the
+	// project workspace before the harness starts.
+	TaskID string `json:"taskID,omitempty" dynamodbav:"taskID,omitempty"`
+	// AutoAllow: the invoker's pre-approved harness tool classes, snapshotted
+	// so the runner's permission gateway can skip the card for them.
+	AutoAllow []string    `json:"autoAllow,omitempty" dynamodbav:"autoAllow,omitempty"`
+	Limits    AgentLimits `json:"limits" dynamodbav:"limits"`
 
 	Spend RunSpend `json:"spend" dynamodbav:"spend"`
 
@@ -384,6 +420,9 @@ type Approval struct {
 
 	Summary string `json:"summary" dynamodbav:"summary"`
 	Risk    string `json:"risk,omitempty" dynamodbav:"risk,omitempty"`
+	// Kind is the harness tool class (AutoAllow*) for permission-gateway
+	// approvals — lets the card offer "always allow reads for this agent".
+	Kind string `json:"kind,omitempty" dynamodbav:"kind,omitempty"`
 	// Options turns the gate into a multiple-choice question (the ask_user
 	// tool): the invoker picks one instead of approve/deny, and the pick
 	// lands in Choice. Empty = plain yes/no approval.
@@ -399,6 +438,11 @@ type Approval struct {
 	ReplyThreadRoot  string `json:"replyThreadRoot,omitempty" dynamodbav:"replyThreadRoot,omitempty"`
 	ReplyToMessageID string `json:"replyToMessageID,omitempty" dynamodbav:"replyToMessageID,omitempty"`
 
+	// Note is what the invoker typed alongside the decision — "no, use the
+	// seed DB instead" — relayed to the agent inside the blocked tool call
+	// (the deny message of a permission prompt, the text of a denied
+	// request_approval), so a refusal comes with direction, not silence.
+	Note      string     `json:"note,omitempty" dynamodbav:"note,omitempty"`
 	State     string     `json:"state" dynamodbav:"state"`
 	Deadline  time.Time  `json:"deadline" dynamodbav:"deadline"`
 	DecidedBy string     `json:"decidedBy,omitempty" dynamodbav:"decidedBy,omitempty"`
@@ -547,7 +591,23 @@ const (
 	RunModeWatch     = "watch"     // subscription-triggered
 	RunModeHeartbeat = "heartbeat" // periodic idle check-in
 	RunModeFollowUp  = "followup"  // un-tagged invoker reply in a followed thread
+	RunModeTask      = "task"      // bound to a coding task (uncapped, workspace-backed)
 )
+
+// Task-mode budgets: "no limits" by decision. The horizon exists only so
+// deadlines and run tokens stay finite; the idle reaper is what actually
+// ends a stuck task. (taskModeHorizon stays unexported: tygo cannot mirror a
+// time.Duration expression into the SPA's generated types.)
+const (
+	taskModeHorizon        = 30 * 24 * time.Hour
+	TaskModeUnlimitedTurns = 1 << 30
+)
+
+// TaskModeHorizon returns the far ceiling used for task-mode runs.
+func TaskModeHorizon() time.Duration { return taskModeHorizon }
+
+// ModeUncapped reports whether a run mode is exempt from turn/token budgets.
+func ModeUncapped(mode string) bool { return mode == RunModeTask }
 
 // TaskClaim is one agent's atomic claim on a part of a co-invoked task
 // ("hindi", "auth.go") — first write wins, so two agents invoked together

@@ -67,11 +67,11 @@ func (s *RunStore) GetApproval(ctx context.Context, runID, approvalID string) (*
 // chosen option for ask_user gates). Conditional on pending so a decision and
 // the expiry sweep can race safely — exactly one writer wins; the loser gets
 // ErrStaleApproval.
-func (s *RunStore) SettleApproval(ctx context.Context, runID, approvalID, state, decidedBy, choice string, decidedAt time.Time) error {
+func (s *RunStore) SettleApproval(ctx context.Context, runID, approvalID, state, decidedBy, choice, note string, decidedAt time.Time) error {
 	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:           aws.String(s.Table),
 		Key:                 compositeKey(runPK(runID), approvalSK(approvalID)),
-		UpdateExpression:    aws.String("SET #st = :st, decidedBy = :by, decidedAt = :at, #ch = :ch"),
+		UpdateExpression:    aws.String("SET #st = :st, decidedBy = :by, decidedAt = :at, #ch = :ch, note = :note"),
 		ConditionExpression: aws.String("#st = :pending"),
 		ExpressionAttributeNames: map[string]string{
 			"#st": "state",
@@ -82,6 +82,7 @@ func (s *RunStore) SettleApproval(ctx context.Context, runID, approvalID, state,
 			":by":      &types.AttributeValueMemberS{Value: decidedBy},
 			":at":      &types.AttributeValueMemberS{Value: decidedAt.UTC().Format(time.RFC3339Nano)},
 			":ch":      &types.AttributeValueMemberS{Value: choice},
+			":note":    &types.AttributeValueMemberS{Value: note},
 			":pending": &types.AttributeValueMemberS{Value: model.ApprovalPending},
 		},
 	})

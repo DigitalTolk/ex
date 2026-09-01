@@ -549,6 +549,15 @@ func main() {
 		SearchAccess:  searchAccess,
 		Reminders:     reminderSvc,
 	})
+	// Coding tasks (plan-coding-agent.md): the deterministic task layer around
+	// the dev agent — project channels, task threads, lifecycle gates. The
+	// orchestrator reads tasks for dispatch/claim/bundles; the task service
+	// owns creation and transitions.
+	taskStore := store.NewTaskStore(db)
+	orchestrator.SetTaskStore(taskStore)
+	codingTaskSvc := service.NewCodingTaskService(taskStore, channelSvc, messageSvc, userStore, agentSvc, orchestrator)
+	codingTaskSvc.SetBaseURL(cfg.BaseURL)
+	codingTaskH := handler.NewCodingTaskHandler(codingTaskSvc, orchestrator)
 	if searchClient != nil {
 		ids := newIDSearcher(searcher)
 		userSvc.SetSearcher(ids)
@@ -616,6 +625,7 @@ func main() {
 		AgentRunTool: agentRunToolH,
 		Context:      handler.NewContextHandler(contextSvc),
 		Connector:    connectorH,
+		CodingTask:   codingTaskH,
 		JWT:          jwtMgr,
 		FrontendFS:   frontendDist,
 		AppVersion:   appVersion,

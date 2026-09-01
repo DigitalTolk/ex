@@ -23,6 +23,9 @@ export interface PendingApproval {
   messageID?: string;
   summary: string;
   risk?: string;
+  // kind is the harness tool class (read | edit | shell | web) for permission
+  // gateway approvals — enables "always allow <kind>" on the card.
+  kind?: string;
   options?: string[];
   // replyText marks an editable REPLY PROPOSAL (propose_reply): the agent's
   // drafted reply the invoker can edit + send, or cancel. replyToMessageID is
@@ -86,6 +89,7 @@ export function onRunApproval(data: unknown): void {
     messageID?: string;
     summary?: string;
     risk?: string;
+    kind?: string;
     options?: string[];
     replyText?: string;
     replyToMessageID?: string;
@@ -107,6 +111,7 @@ export function onRunApproval(data: unknown): void {
     messageID: p.messageID,
     summary: p.summary ?? '',
     risk: p.risk,
+    kind: typeof p.kind === 'string' && p.kind ? p.kind : undefined,
     options: Array.isArray(p.options) ? p.options : undefined,
     replyText: typeof p.replyText === 'string' && p.replyText ? p.replyText : undefined,
     replyToMessageID: p.replyToMessageID,

@@ -16,6 +16,7 @@ import {
   useDeleteAgentSubscription,
   useUpdateAgentPrefs,
   type AgentView,
+  AUTO_ALLOW_CLASSES,
 } from '@/hooks/useAgents';
 import { useUserChannels } from '@/hooks/useChannels';
 
@@ -239,6 +240,8 @@ function AgentCard({ agent }: { agent: AgentView }) {
   const [followUp, setFollowUp] = useState(initialFollowUp);
   const [followUpAsk, setFollowUpAsk] = useState(agent.prefs.followUpAsk ?? false);
   const [execMode, setExecMode] = useState(agent.prefs.executionMode ?? '');
+  const initialAutoAllow = [...(agent.prefs.autoAllow ?? [])].sort().join(',');
+  const [autoAllow, setAutoAllow] = useState<string[]>(agent.prefs.autoAllow ?? []);
   const [saved, setSaved] = useState(false);
 
   const isBedrock = harness === 'bedrock';
@@ -251,6 +254,7 @@ function AgentCard({ agent }: { agent: AgentView }) {
     execMode !== (agent.prefs.executionMode ?? '') ||
     followUp !== initialFollowUp ||
     followUpAsk !== (agent.prefs.followUpAsk ?? false) ||
+    [...autoAllow].sort().join(',') !== initialAutoAllow ||
     chainRounds !==
       (agent.prefs.limits?.maxChainRounds ? String(agent.prefs.limits.maxChainRounds) : '');
 
@@ -267,6 +271,7 @@ function AgentCard({ agent }: { agent: AgentView }) {
           followUpMode: followUp === 'always' ? 'always' : followUp.startsWith('window:') ? 'window' : '',
           followUpMins: followUp.startsWith('window:') ? Number(followUp.slice(7)) : 0,
           followUpAsk,
+          autoAllow,
           // Whole-struct semantics server-side: a number sets the override,
           // an empty struct resets to inherit.
           limits: chainRounds ? { maxChainRounds: Number(chainRounds) } : {},
@@ -409,6 +414,29 @@ function AgentCard({ agent }: { agent: AgentView }) {
               ask me before it replies
             </label>
           )}
+          <fieldset className="pb-2">
+            <legend className="text-sm font-medium">Don’t ask me to approve</legend>
+            <p className="mb-1 text-xs text-muted-foreground">
+              Pre-approve harness tool classes for @{agent.displayName} on your machine. Everything
+              else still shows an approval card; inside a coding task the workspace profile applies too.
+            </p>
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {AUTO_ALLOW_CLASSES.map((c) => (
+                <label key={c.id} className="flex items-center gap-1.5 text-sm" title={c.hint}>
+                  <input
+                    type="checkbox"
+                    checked={autoAllow.includes(c.id)}
+                    onChange={(e) =>
+                      setAutoAllow((prev) =>
+                        e.target.checked ? [...prev.filter((x) => x !== c.id), c.id] : prev.filter((x) => x !== c.id),
+                      )
+                    }
+                  />
+                  {c.label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
           <Button onClick={save} disabled={!dirty || update.isPending} className="ml-auto">
             {saved ? <Check className="mr-1 h-4 w-4" /> : null}
             {saved ? 'Saved' : update.isPending ? 'Saving…' : 'Save'}

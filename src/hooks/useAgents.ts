@@ -33,7 +33,18 @@ export interface UserAgentPrefs {
   followUpMode?: string; // "" | "off" | "window" | "always"
   followUpMins?: number;
   followUpAsk?: boolean;
+  // Harness tool classes pre-approved for this agent ("always allow reads").
+  autoAllow?: string[];
 }
+
+// The permission classes a user can pre-approve per agent — mirrors the
+// backend's AutoAllow* constants.
+export const AUTO_ALLOW_CLASSES: { id: string; label: string; hint: string }[] = [
+  { id: 'read', label: 'Read files', hint: 'Read / Glob / Grep' },
+  { id: 'edit', label: 'Edit & write files', hint: 'Edit / Write' },
+  { id: 'shell', label: 'Run shell commands', hint: 'Bash' },
+  { id: 'web', label: 'Fetch the web', hint: 'WebFetch / WebSearch' },
+];
 
 export interface ResolvedAgentConfig {
   harness: string;
@@ -64,6 +75,7 @@ export interface AgentPrefsPatch {
   followUpMode?: string;
   followUpMins?: number;
   followUpAsk?: boolean;
+  autoAllow?: string[];
 }
 
 export interface AgentSubscription {

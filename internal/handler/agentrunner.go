@@ -388,6 +388,9 @@ type requestApprovalBody struct {
 	Summary string   `json:"summary"`
 	Risk    string   `json:"risk"`
 	Options []string `json:"options"`
+	// ToolKind: the harness tool class for permission-gateway approvals
+	// (read | edit | shell | web) — enables "always allow" on the card.
+	ToolKind string `json:"toolKind"`
 }
 
 // RequestApproval opens a blocking human-in-the-loop gate. The MCP server
@@ -405,7 +408,7 @@ func (h *AgentRunToolHandler) RequestApproval(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
-	a, err := h.orch.RequestApproval(r.Context(), run, body.Summary, body.Risk, body.Options)
+	a, err := h.orch.RequestApprovalKind(r.Context(), run, body.Summary, body.Risk, body.Options, body.ToolKind)
 	if err != nil {
 		if errors.Is(err, service.ErrValidation) {
 			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -426,7 +429,7 @@ func (h *AgentRunToolHandler) GetApproval(w http.ResponseWriter, r *http.Request
 		h.writeToolError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, JSON{"state": a.State, "decidedBy": a.DecidedBy, "choice": a.Choice, "deadline": a.Deadline})
+	writeJSON(w, http.StatusOK, JSON{"state": a.State, "decidedBy": a.DecidedBy, "choice": a.Choice, "note": a.Note, "deadline": a.Deadline})
 }
 
 type publishArtifactBody struct {
@@ -632,8 +635,10 @@ func (h *AgentRunToolHandler) ProposeReply(w http.ResponseWriter, r *http.Reques
 // an agent can reference a specific message instead of pasting an opaque
 // [m:<id>] marker. The URL uses the workspace origin (BASE_URL) and the same
 // grammar the client unfurls into a quoted-message card:
-//   <base>/channel/<channelID>#msg-<id>   (optional ?thread=<root>)
-//   <base>/conversation/<convID>#msg-<id>
+//
+//	<base>/channel/<channelID>#msg-<id>   (optional ?thread=<root>)
+//	<base>/conversation/<convID>#msg-<id>
+//
 // Defaults to the run's own parent when no target is given. Access is checked
 // with the INVOKER's permissions — an agent can't mint a link into a channel
 // its invoker can't see.

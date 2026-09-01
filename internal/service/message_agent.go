@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
@@ -168,3 +169,35 @@ func (s *MessageService) SetMachineReaction(ctx context.Context, actorID, parent
 	return nil
 }
 
+// RewriteAgentMessage replaces the body of an AGENT-authored machine message
+// (a task card marker, a lifecycle notice) in place — backend-only, no access
+// check on purpose: the orchestrator/task service is the sole caller and the
+// author is the shared agent user, not a channel member. Refuses to touch
+// human-authored messages so it can never become an edit-anything primitive.
+func (s *MessageService) RewriteAgentMessage(ctx context.Context, agentID, parentID, parentType, msgID, body string) (*model.Message, error) {
+	if err := ValidateMessageBody(body); err != nil {
+		return nil, err
+	}
+	msg, err := s.messages.GetMessage(ctx, parentID, msgID)
+	if err != nil {
+		return nil, fmt.Errorf("message: get for rewrite: %w", err)
+	}
+	if msg.AuthorID != agentID || msg.AgentInvokerID == "" {
+		return nil, fmt.Errorf("message: rewrite is limited to this agent's own machine messages: %w", ErrForbidden)
+	}
+	if msg.Deleted {
+		return nil, ErrThreadDeleted
+	}
+	if msg.Body == body {
+		return msg, nil
+	}
+	msg.Body = body
+	now := time.Now()
+	msg.EditedAt = &now
+	if err := s.messages.UpdateMessage(ctx, msg); err != nil {
+		return nil, fmt.Errorf("message: rewrite: %w", err)
+	}
+	s.attachRendered(msg)
+	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, msg)
+	return msg, nil
+}

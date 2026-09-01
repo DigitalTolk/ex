@@ -27,6 +27,19 @@ declare global {
     // signal keeps meaning "something is waiting on you". Fire-and-forget;
     // absent in browser tabs/PWA, where a banner is all the platform offers.
     __EX_ATTENTION__?: () => void;
+    // Desktop-shell bridge that raises a NATIVE OS notification carrying the
+    // agent gate's decision buttons (Approve / Reject, or the choices) — the
+    // web Notification API has no action buttons, so this is the only way to
+    // decide from the notification itself. Present only in the desktop app;
+    // the shell relays the clicked verdict back as an 'ex:approval-decision'
+    // DOM CustomEvent. Absent in browser tabs/PWA (they use the web banner).
+    __EX_APPROVAL_NOTIFY__?: (payload: {
+      approvalID: string;
+      runID: string;
+      title: string;
+      body: string;
+      choices?: string[];
+    }) => void;
     // Desktop-shell bridge for the agent-runner token handoff: the SPA mints
     // a runner-scoped token (POST /api/v1/agents/runner-token) and hands it
     // to the Electron shell, which runs local agent harnesses with it.

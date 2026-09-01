@@ -59,6 +59,9 @@ type Deps struct {
 	Context *ContextHandler
 	// Connectors: external-service API docs + per-user credentials.
 	Connector *ConnectorHandler
+	// Coding tasks (plan-coding-agent.md): run-scoped task tools + the human
+	// task-card surface. Registered only when AgentRunTool is also set.
+	CodingTask *CodingTaskHandler
 
 	// SPA/static.
 	FrontendFS fs.FS

@@ -563,6 +563,7 @@ export default function ChatPage() {
       // alerts — settle/expiry frames just clear the card.
       const a = data as {
         approvalID?: string;
+        runID?: string;
         invokerID?: string;
         agentName?: string;
         parentID?: string;
@@ -590,11 +591,13 @@ export default function ChatPage() {
       }
       notifyApproval({
         approvalID: a.approvalID,
+        runID: a.runID ?? '',
         parentID: a.parentID,
         parentType,
         agentName: a.agentName || undefined,
         summary: a.summary ?? '',
         asksChoice: Array.isArray(a.options) && a.options.length > 0,
+        options: Array.isArray(a.options) ? a.options : undefined,
         messageID: a.messageID,
         deepLink,
       });

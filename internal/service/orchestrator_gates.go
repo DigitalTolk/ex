@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/events"
-	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -44,7 +44,17 @@ var (
 // options non-empty turns it into a multiple-choice question (ask_user): the
 // invoker picks one instead of approving/denying.
 func (o *Orchestrator) RequestApproval(ctx context.Context, run *model.Run, summary, risk string, options []string) (*model.Approval, error) {
+	return o.RequestApprovalKind(ctx, run, summary, risk, options, "")
+}
+
+// RequestApprovalKind is RequestApproval with the harness tool class (read /
+// edit / shell / web) for permission-gateway approvals — the card uses it to
+// offer "always allow <class> for this agent". Empty kind = a plain gate.
+func (o *Orchestrator) RequestApprovalKind(ctx context.Context, run *model.Run, summary, risk string, options []string, kind string) (*model.Approval, error) {
 	summary = strings.TrimSpace(summary)
+	if !model.ValidAutoAllow(kind) {
+		kind = ""
+	}
 	if summary == "" {
 		return nil, fmt.Errorf("orchestrator: approval summary required: %w", ErrValidation)
 	}
@@ -80,6 +90,7 @@ func (o *Orchestrator) RequestApproval(ctx context.Context, run *model.Run, summ
 		InvokerID: run.InvokerID,
 		Summary:   summary,
 		Risk:      risk,
+		Kind:      kind,
 		Options:   options,
 		State:     model.ApprovalPending,
 		Deadline:  deadline,
@@ -89,7 +100,7 @@ func (o *Orchestrator) RequestApproval(ctx context.Context, run *model.Run, summ
 		return nil, err
 	}
 	o.appendEvent(ctx, run, now.UnixNano(), run.AgentID, "approval.requested", map[string]any{
-		"approvalID": a.ID, "summary": summary, "risk": risk, "deadline": deadline, "options": options,
+		"approvalID": a.ID, "summary": summary, "risk": risk, "kind": kind, "deadline": deadline, "options": options,
 	})
 	o.setState(ctx, run, StateEmojiBlocked)
 	// Published ONLY to the invoker's private inbox — an approval is a
@@ -208,7 +219,7 @@ func (o *Orchestrator) ApprovalStatus(ctx context.Context, runID, approvalID str
 	}
 	if a.State == model.ApprovalPending && o.now().After(a.Deadline) {
 		now := o.now()
-		if err := o.runs.SettleApproval(ctx, runID, approvalID, model.ApprovalExpired, "", "", now); err == nil {
+		if err := o.runs.SettleApproval(ctx, runID, approvalID, model.ApprovalExpired, "", "", "", now); err == nil {
 			a.State = model.ApprovalExpired
 			a.DecidedAt = &now
 			if run, err := o.runs.GetRun(ctx, runID); err == nil {
@@ -258,8 +269,15 @@ func (o *Orchestrator) DecideApproval(ctx context.Context, deciderID, runID, app
 	if approve {
 		state = model.ApprovalApproved
 	}
+	// For a reply proposal the text IS the (edited) reply; for every other
+	// gate it is the invoker's note to the agent — direction that rides the
+	// tool result ("no — use the seed DB instead").
+	note := ""
+	if a.ReplyText == "" {
+		note = clipText(strings.TrimSpace(editedText), 2000)
+	}
 	now := o.now()
-	if err := o.runs.SettleApproval(ctx, runID, approvalID, state, deciderID, choice, now); err != nil {
+	if err := o.runs.SettleApproval(ctx, runID, approvalID, state, deciderID, choice, note, now); err != nil {
 		if errors.Is(err, store.ErrStaleApproval) {
 			return nil, ErrApprovalSettled
 		}
@@ -269,9 +287,10 @@ func (o *Orchestrator) DecideApproval(ctx context.Context, deciderID, runID, app
 	a.DecidedBy = deciderID
 	a.DecidedAt = &now
 	a.Choice = choice
+	a.Note = note
 	if run, err := o.runs.GetRun(ctx, runID); err == nil {
 		o.appendEvent(ctx, run, now.UnixNano(), deciderID, "approval.decided", map[string]any{
-			"approvalID": a.ID, "state": state, "choice": choice,
+			"approvalID": a.ID, "state": state, "choice": choice, "note": note,
 		})
 		if !run.State.Terminal() {
 			o.setState(ctx, run, StateEmojiWorking)
@@ -325,11 +344,12 @@ func (o *Orchestrator) publishApproval(ctx context.Context, run *model.Run, a *m
 		// this frame can ack it and stand the deferred mobile push down.
 		"messageID": run.MessageID,
 		"summary":   a.Summary,
-		"risk":       a.Risk,
-		"options":    a.Options,
-		"choice":     a.Choice,
-		"state":      a.State,
-		"deadline":   a.Deadline,
+		"risk":      a.Risk,
+		"kind":      a.Kind,
+		"options":   a.Options,
+		"choice":    a.Choice,
+		"state":     a.State,
+		"deadline":  a.Deadline,
 		// Editable reply proposal (propose_reply): the drafted reply + the
 		// message it answers, so the card can render an editable draft.
 		"replyText":        a.ReplyText,
@@ -339,7 +359,10 @@ func (o *Orchestrator) publishApproval(ctx context.Context, run *model.Run, a *m
 	// + mobile) so they notice even away from the thread, not just the live
 	// card. Only for a freshly-requested approval (state pending), never on
 	// settle/expiry updates.
-	if o.notifier != nil && a.State == model.ApprovalPending {
+	// Tool-permission gates arrive in bursts (a run reading five files asks
+	// five times); one alert per run per minute is plenty — the cards still
+	// appear individually, only the desktop/mobile ping is throttled.
+	if o.notifier != nil && a.State == model.ApprovalPending && !o.throttleToolAlert(run.ID, a) {
 		title := "Approval needed"
 		if agentName != "" {
 			verb := "needs your approval"
@@ -359,6 +382,25 @@ func (o *Orchestrator) publishApproval(ctx context.Context, run *model.Run, a *m
 			CreatedAt:  o.now(),
 		})
 	}
+}
+
+// toolAlertWindow spaces the desktop/mobile alerts for permission-gateway
+// approvals of one run.
+const toolAlertWindow = 60 * time.Second
+
+// throttleToolAlert reports whether a permission-gateway approval's alert
+// should be suppressed because one already went out for this run recently.
+// Plain approvals (request_approval / ask_user / proposals) are never throttled.
+func (o *Orchestrator) throttleToolAlert(runID string, a *model.Approval) bool {
+	if a.Risk != "tool" && a.Kind == "" {
+		return false
+	}
+	now := o.now()
+	if last, ok := o.toolAlertAt.Load(runID); ok && now.Sub(last.(time.Time)) < toolAlertWindow {
+		return true
+	}
+	o.toolAlertAt.Store(runID, now)
+	return false
 }
 
 // PublishArtifact stores one run-produced document (size- and count-capped)
@@ -528,6 +570,15 @@ func (o *Orchestrator) cancelRun(ctx context.Context, run *model.Run, stopperID 
 	o.setState(ctx, run, StateEmojiBlocked)
 	o.publishRun(ctx, run)
 	o.writeDigest(ctx, run, "")
+	// A stopped run that never posted would leave nothing to click: the live
+	// chip is gone and no message carries its run id. Post a marker AS the
+	// agent so "Show activity" keeps the log reachable.
+	if run.Spend.Posts == 0 && (run.Mode == model.RunModeDirect || run.Mode == model.RunModeTask) {
+		note := fmt.Sprintf("⏹️ stopped after %d turns — open Show activity for the log.", run.Spend.Turns)
+		if _, err := o.messages.SendAsAgentRun(ctx, run.AgentID, run.InvokerID, run.ParentID, run.ParentType, note, o.replyThreadRoot(run), run.ID); err != nil {
+			slog.Debug("stop notice failed", "runID", run.ID, "error", err)
+		}
+	}
 	return nil
 }
 
@@ -565,6 +616,39 @@ func (o *Orchestrator) ThreadSpend(ctx context.Context, run *model.Run) ThreadSp
 		sum.Posts += p.Spend.Posts
 	}
 	return sum
+}
+
+// ThreadTimeline is every run threaded under one root message (a coding
+// task's card, a debate's opening post), oldest first, with all their events
+// concatenated in time order. "Show activity" on a thread root shows the
+// whole thread's work, not just the run that posted the root.
+func (o *Orchestrator) ThreadTimeline(ctx context.Context, parentID, rootID string) ([]*model.Run, []*model.RunEvent, error) {
+	peers, err := o.runs.ListRunsByParent(ctx, parentID, 100)
+	if err != nil {
+		return nil, nil, err
+	}
+	var runs []*model.Run
+	for i := len(peers) - 1; i >= 0; i-- { // newest-first → oldest-first
+		if o.replyThreadRoot(peers[i]) == rootID {
+			runs = append(runs, peers[i])
+		}
+	}
+	var events []*model.RunEvent
+	for _, r := range runs {
+		evts, err := o.runs.ListRunEvents(ctx, r.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		events = append(events, evts...)
+	}
+	return runs, events, nil
+}
+
+// ThreadMessages lists a thread's messages (root + replies) for the caller,
+// access-checked by the message service — the whole-thread activity view
+// shows dev's posts and the requester's steering inline with the tool work.
+func (o *Orchestrator) ThreadMessages(ctx context.Context, userID, parentID, parentType, rootID string) ([]*model.Message, error) {
+	return o.messages.ListThreadMessages(ctx, userID, parentID, parentType, rootID)
 }
 
 // RecordMemoryUpdate audits an update_memory tool call.

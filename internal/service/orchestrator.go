@@ -107,15 +107,22 @@ type Assignment struct {
 	AskFirst     bool   `json:"askFirst,omitempty"`
 	// WatchInstruction + ActionMode drive watcher runs: the standing order and
 	// how much the agent may do (notify/draft/reply/autonomous).
-	WatchInstruction string            `json:"watchInstruction,omitempty"`
-	ActionMode       string            `json:"actionMode,omitempty"`
-	Prompt           string            `json:"prompt"`
-	ContextBundle    string            `json:"contextBundle"`
-	ConnectorSlugs   []string          `json:"connectorSlugs,omitempty"`
-	Limits           model.AgentLimits `json:"limits"`
-	MCPToken         string            `json:"mcpToken"`
-	LeaseExpiresAt   time.Time         `json:"leaseExpiresAt"`
-	Deadline         time.Time         `json:"deadline"`
+	WatchInstruction string   `json:"watchInstruction,omitempty"`
+	ActionMode       string   `json:"actionMode,omitempty"`
+	Prompt           string   `json:"prompt"`
+	ContextBundle    string   `json:"contextBundle"`
+	ConnectorSlugs   []string `json:"connectorSlugs,omitempty"`
+	// Task is set on coding-task runs (RunModeTask): the workspace manager
+	// prepares the project checkout from it before the harness starts.
+	Task *model.TaskSpec `json:"task,omitempty"`
+	// AutoAllow: harness tool classes the invoker pre-approved for this agent
+	// (read | edit | shell | web) — the runner's permission gateway skips the
+	// approval card for them.
+	AutoAllow      []string          `json:"autoAllow,omitempty"`
+	Limits         model.AgentLimits `json:"limits"`
+	MCPToken       string            `json:"mcpToken"`
+	LeaseExpiresAt time.Time         `json:"leaseExpiresAt"`
+	Deadline       time.Time         `json:"deadline"`
 }
 
 // runTokenMinter is the slice of auth.JWTManager the orchestrator needs.
@@ -142,7 +149,7 @@ type orchestratorRunStore interface {
 	ListRunsByParent(ctx context.Context, parentID string, limit int) ([]*model.Run, error)
 	PutApproval(ctx context.Context, a *model.Approval) error
 	GetApproval(ctx context.Context, runID, approvalID string) (*model.Approval, error)
-	SettleApproval(ctx context.Context, runID, approvalID, state, decidedBy, choice string, decidedAt time.Time) error
+	SettleApproval(ctx context.Context, runID, approvalID, state, decidedBy, choice, note string, decidedAt time.Time) error
 	ListApprovals(ctx context.Context, runID string) ([]*model.Approval, error)
 	PutArtifact(ctx context.Context, a *model.Artifact) error
 	ListArtifacts(ctx context.Context, runID string) ([]*model.Artifact, error)
@@ -170,6 +177,26 @@ type orchestratorUsers interface {
 // leaves DMs mention-gated like every other surface.
 type orchestratorConversations interface {
 	GetConversation(ctx context.Context, id string) (*model.Conversation, error)
+}
+
+// orchestratorTasks is the coding-task persistence the orchestrator reads on
+// dispatch (is this thread a task thread?), at claim (pin the workspace to
+// the runner) and when assembling bundles. Optional seam (SetTaskStore): nil
+// disables every task path.
+type orchestratorTasks interface {
+	GetTask(ctx context.Context, id string) (*model.CodingTask, error)
+	GetTaskByThread(ctx context.Context, threadRootID string) (*model.CodingTask, error)
+	ListTasksByChannel(ctx context.Context, channelID string) ([]*model.CodingTask, error)
+	UpdateTask(ctx context.Context, t *model.CodingTask, expectState model.TaskState) error
+	ListProjects(ctx context.Context) ([]*model.CodingProject, error)
+}
+
+// taskBind carries an explicit task binding into startRun: the task the run
+// serves plus an optional prompt override (a routed top-level message or a
+// server-initiated kickoff/sign-off run has no natural "@mention body").
+type taskBind struct {
+	task   *model.CodingTask
+	prompt string
 }
 
 // Orchestrator owns the run lifecycle: mention-gated invocation, the claim
@@ -237,7 +264,17 @@ type Orchestrator struct {
 	// completion can be delivered privately even when the agent forgot to call
 	// notify_owner. Optional: nil = fall back to suppressing the answer.
 	ownerDM ownerDMResolver
+
+	// tasks resolves coding tasks for dispatch/claim/bundle. Optional: nil
+	// keeps every run a plain chat run.
+	tasks orchestratorTasks
+
+	// toolAlertAt throttles permission-gateway approval alerts per run.
+	toolAlertAt sync.Map // runID -> time.Time
 }
+
+// SetTaskStore wires coding-task persistence (plan-coding-agent.md).
+func (o *Orchestrator) SetTaskStore(t orchestratorTasks) { o.tasks = t }
 
 // NewOrchestrator wires the orchestrator.
 func NewOrchestrator(runs orchestratorRunStore, agentSvc *AgentService, users orchestratorUsers, messages orchestratorMessages, pub Publisher, tokens runTokenMinter) *Orchestrator {
@@ -353,9 +390,16 @@ func (o *Orchestrator) OnMessage(ctx context.Context, msg *model.Message, parent
 		}
 	}
 	for _, target := range targets {
-		if err := o.invokeWith(ctx, target, author, msg, parentType, 0, nil, model.RunModeDirect, co, nil); err != nil {
+		if err := o.invokeWith(ctx, target, author, msg, parentType, 0, nil, model.RunModeDirect, co, nil, nil); err != nil {
 			o.postInvokeFailure(ctx, target, author, msg, parentType, err)
 		}
+	}
+	// Coding tasks: an un-mentioned message in a task thread (or, top-level
+	// in a project channel, from someone steering their one active task)
+	// resumes the task's agent. Runs before follow-ups so the dev agent is
+	// marked invoked and not double-fired.
+	if len(targets) == 0 {
+		o.dispatchTask(ctx, msg, parentType, author, invoked)
 	}
 	o.dispatchSubscriptions(ctx, msg, parentType, invoked)
 	o.dispatchFollowUps(ctx, msg, parentType, invoked)
@@ -550,12 +594,12 @@ func (o *Orchestrator) invoke(ctx context.Context, agent, invoker *model.User, m
 // invokeMode is invoke with an explicit run mode (watch / heartbeat runs) and
 // an optional watcher spec (nil for direct/chain).
 func (o *Orchestrator) invokeMode(ctx context.Context, agent, invoker *model.User, msg *model.Message, parentType string, round int, pending []string, mode string, spec *watchSpec) error {
-	return o.invokeWith(ctx, agent, invoker, msg, parentType, round, pending, mode, nil, spec)
+	return o.invokeWith(ctx, agent, invoker, msg, parentType, round, pending, mode, nil, spec, nil)
 }
 
 // invokeWith is the full invocation path: mode plus the co-invocation roster
 // (display names, mention order) when one message summoned several agents.
-func (o *Orchestrator) invokeWith(ctx context.Context, agent, invoker *model.User, msg *model.Message, parentType string, round int, pending []string, mode string, co []string, spec *watchSpec) error {
+func (o *Orchestrator) invokeWith(ctx context.Context, agent, invoker *model.User, msg *model.Message, parentType string, round int, pending []string, mode string, co []string, spec *watchSpec, bind *taskBind) error {
 	resolved, err := o.agentSvc.Resolve(ctx, agent, invoker.ID)
 	if err != nil {
 		return err
@@ -582,15 +626,15 @@ func (o *Orchestrator) invokeWith(ctx context.Context, agent, invoker *model.Use
 		// while the creator is away (and queueOfflineRun re-labels the run as
 		// direct, losing the mode's gates). Watchers coalesce missed triggers
 		// via PendingCatchUp instead.
-		if offline && resolved.OfflinePolicy == model.OfflinePolicyQueue && mode == model.RunModeDirect {
-			return o.queueOfflineRun(ctx, agent, invoker, msg, parentType, resolved, round, pending, co, spec)
+		if offline && resolved.OfflinePolicy == model.OfflinePolicyQueue && (mode == model.RunModeDirect || mode == model.RunModeTask) {
+			return o.queueOfflineRun(ctx, agent, invoker, msg, parentType, resolved, round, pending, co, spec, bind)
 		}
 		if harnessMissing {
 			return fmt.Errorf("%w: %s not detected on your machine", ErrAgentOffline, resolved.Harness)
 		}
 		return ErrAgentOffline
 	}
-	_, err = o.startRun(ctx, agent, invoker, msg, parentType, resolved, round, pending, mode, co, spec)
+	_, err = o.startRun(ctx, agent, invoker, msg, parentType, resolved, round, pending, mode, co, spec, bind)
 	return err
 }
 
@@ -598,8 +642,8 @@ func (o *Orchestrator) invokeWith(ctx context.Context, agent, invoker *model.Use
 // queue TTL) and posts a ⏳ notice — never silence. The claim path tightens
 // the deadline back to the wall-clock limit when a runner finally takes it;
 // the deadline sweep fails it as unclaimed_expired if none ever does.
-func (o *Orchestrator) queueOfflineRun(ctx context.Context, agent, invoker *model.User, msg *model.Message, parentType string, resolved *model.ResolvedAgentConfig, round int, pending []string, co []string, spec *watchSpec) error {
-	run, err := o.startRun(ctx, agent, invoker, msg, parentType, resolved, round, pending, model.RunModeDirect, co, spec)
+func (o *Orchestrator) queueOfflineRun(ctx context.Context, agent, invoker *model.User, msg *model.Message, parentType string, resolved *model.ResolvedAgentConfig, round int, pending []string, co []string, spec *watchSpec, bind *taskBind) error {
+	run, err := o.startRun(ctx, agent, invoker, msg, parentType, resolved, round, pending, model.RunModeDirect, co, spec, bind)
 	if err != nil {
 		return err
 	}
@@ -659,10 +703,10 @@ func (o *Orchestrator) postInvokeFailure(ctx context.Context, agent, invoker *mo
 // changes nothing in flight. At most one active run per (thread, agent):
 // a busy agent returns ErrAgentBusy instead of stacking turns.
 func (o *Orchestrator) StartRun(ctx context.Context, agent, invoker *model.User, msg *model.Message, parentType string, resolved *model.ResolvedAgentConfig, round int, pending []string) (*model.Run, error) {
-	return o.startRun(ctx, agent, invoker, msg, parentType, resolved, round, pending, model.RunModeDirect, nil, nil)
+	return o.startRun(ctx, agent, invoker, msg, parentType, resolved, round, pending, model.RunModeDirect, nil, nil, nil)
 }
 
-func (o *Orchestrator) startRun(ctx context.Context, agent, invoker *model.User, msg *model.Message, parentType string, resolved *model.ResolvedAgentConfig, round int, pending []string, mode string, co []string, spec *watchSpec) (*model.Run, error) {
+func (o *Orchestrator) startRun(ctx context.Context, agent, invoker *model.User, msg *model.Message, parentType string, resolved *model.ResolvedAgentConfig, round int, pending []string, mode string, co []string, spec *watchSpec, bind *taskBind) (*model.Run, error) {
 	now := o.now()
 	invokerID := invoker.ID
 	personaHash := sha256.Sum256([]byte(resolved.Persona))
@@ -675,6 +719,30 @@ func (o *Orchestrator) startRun(ctx context.Context, agent, invoker *model.User,
 	// as a harness slash command). Thread follow-ups inherit the thread's picks.
 	connectorSlugs := o.resolveConnectorPicks(ctx, invoker.ID, msg, parentType)
 	prompt := stripConnectorTokens(stripMentionMarkup(msg.Body), connectorSlugs)
+	// Coding-task binding: an explicit bind (routed/kickoff/sign-off runs), or
+	// implicit — any run of the task's agent inside a task thread IS a task
+	// run (mentions and follow-ups included), so it gets the workspace, the
+	// uncapped budget and the task-scoped bundle.
+	if bind == nil && o.tasks != nil && msg.ParentMessageID != "" {
+		if t, err := o.tasks.GetTaskByThread(ctx, msg.ParentMessageID); err == nil && t != nil && !t.State.Terminal() && t.AgentID == agent.ID {
+			bind = &taskBind{task: t}
+		}
+	}
+	threadRoot := msg.ParentMessageID
+	taskID := ""
+	if bind != nil && bind.task != nil {
+		mode = model.RunModeTask
+		taskID = bind.task.ID
+		// Every task run threads under the task card, even when the trigger
+		// was a top-level message routed to the task.
+		threadRoot = bind.task.ThreadRootID
+		if bind.prompt != "" {
+			prompt = bind.prompt
+		}
+		// The gitlab connector rides every task run when the requester has it
+		// installed: the runner needs the credential for clone/push/MR.
+		connectorSlugs = o.withTaskConnectors(ctx, invokerID, connectorSlugs)
+	}
 	run := &model.Run{
 		ID:               store.NewID(),
 		AgentID:          agent.ID,
@@ -682,10 +750,12 @@ func (o *Orchestrator) startRun(ctx context.Context, agent, invoker *model.User,
 		InvokerID:        invokerID,
 		ParentID:         msg.ParentID,
 		ParentType:       parentType,
-		ThreadRootID:     msg.ParentMessageID,
+		ThreadRootID:     threadRoot,
 		MessageID:        msg.ID,
 		State:            model.RunStateQueued,
 		Mode:             mode,
+		TaskID:           taskID,
+		AutoAllow:        resolved.AutoAllow,
 		Prompt:           prompt,
 		Round:            round,
 		PendingAgentIDs:  pending,
@@ -700,7 +770,7 @@ func (o *Orchestrator) startRun(ctx context.Context, agent, invoker *model.User,
 		Persona:          resolved.Persona,
 		PersonaHash:      hex.EncodeToString(personaHash[:8]),
 		SkillIDs:         resolved.SkillIDs,
-		Limits: resolved.Limits,
+		Limits:           resolved.Limits,
 		// Pre-claim deadline is just the claim window — a run that no runner
 		// picks up dies fast regardless of mode. The real budget (rolling
 		// deadline + mode-aware hard ceiling) is set at claim time.
@@ -744,8 +814,13 @@ func (o *Orchestrator) afterTerminal(ctx context.Context, run *model.Run) {
 			turn := d.(*deferredTurn)
 			if invoker, err := o.users.GetUser(ctx, turn.invokerID); err == nil {
 				if agent, err := o.users.GetUser(ctx, turn.agentID); err == nil {
-					if err := o.invoke(ctx, agent, invoker, turn.msg, turn.parentType, turn.round, nil); err != nil &&
-						!errors.Is(err, ErrAgentBusy) {
+					var err error
+					if turn.bind != nil {
+						err = o.invokeWith(ctx, agent, invoker, turn.msg, turn.parentType, turn.round, nil, model.RunModeTask, nil, nil, turn.bind)
+					} else {
+						err = o.invoke(ctx, agent, invoker, turn.msg, turn.parentType, turn.round, nil)
+					}
+					if err != nil && !errors.Is(err, ErrAgentBusy) {
 						o.postInvokeFailure(ctx, agent, invoker, turn.msg, turn.parentType, err)
 					}
 				}
@@ -847,6 +922,10 @@ type deferredTurn struct {
 	msg        *model.Message
 	parentType string
 	round      int
+	// bind carries a coding-task binding for steering that arrived while the
+	// task's run was live (routed top-level messages need it — they don't sit
+	// in the task thread, so implicit binding can't find the task).
+	bind *taskBind
 }
 
 // threadRootOf mirrors replyThreadRoot for a raw message.
@@ -1022,6 +1101,13 @@ func (o *Orchestrator) claimOnce(ctx context.Context, ownerID, runnerID string, 
 		if !has[run.Harness] {
 			continue // another runner (or a future install) may take it
 		}
+		// Coding-task runs are pinned to the machine that holds the checkout;
+		// another live runner of the same owner must leave them alone. A dead
+		// pinned runner releases the pin (the new machine re-clones).
+		task, err := o.taskForClaim(ctx, run, ownerID, runnerID)
+		if err != nil {
+			continue
+		}
 		lease := o.now().Add(runLeaseTTL)
 		if err := o.runs.ClaimRun(ctx, run, runnerID, lease); err != nil {
 			if errors.Is(err, store.ErrStaleRun) {
@@ -1062,6 +1148,11 @@ func (o *Orchestrator) claimOnce(ctx context.Context, ownerID, runnerID string, 
 			continue
 		}
 		bundle, bundleStats := o.buildBundle(ctx, run)
+		var taskSpec *model.TaskSpec
+		if task != nil {
+			o.pinTaskRun(ctx, task, run, runnerID)
+			taskSpec = taskSpecOf(task)
+		}
 		agentName := run.AgentID
 		invokerName := run.InvokerID
 		if names, err := o.users.GetUsersByIDs(ctx, []string{run.AgentID, run.InvokerID}); err == nil {
@@ -1100,9 +1191,11 @@ func (o *Orchestrator) claimOnce(ctx context.Context, ownerID, runnerID string, 
 			Prompt:           run.Prompt,
 			ContextBundle:    bundle,
 			ConnectorSlugs:   run.ConnectorSlugs,
+			Task:             taskSpec,
+			AutoAllow:        run.AutoAllow,
 			Limits:           run.Limits,
-			MCPToken:       token,
-			LeaseExpiresAt: lease,
+			MCPToken:         token,
+			LeaseExpiresAt:   lease,
 			// The runner's local kill timer is the last-resort backstop — give
 			// it the hard ceiling. The rolling deadline is enforced server-side
 			// (ReportEvents abort + sweep → heartbeat kill list), which is what
@@ -1163,11 +1256,15 @@ func (o *Orchestrator) ReportEvents(ctx context.Context, runnerID, runID string,
 	}
 	// Enforce limits after ingesting the whole batch. Turn budget is
 	// mode-aware: direct tasks get depth, ambient conversation stays short.
-	if run.Spend.Turns > run.Limits.TurnsFor(run.Mode) {
-		return true, "turn_limit", o.finishLimit(ctx, run, prevState, "turn_limit")
-	}
-	if run.Spend.InputTokens+run.Spend.OutputTokens > run.Limits.MaxTokens {
-		return true, "token_budget", o.finishLimit(ctx, run, prevState, "token_budget")
+	// Coding-task runs are uncapped by decision (turns, tokens, wall clock):
+	// only the rolling idle deadline and an explicit Stop end them.
+	if !model.ModeUncapped(run.Mode) {
+		if run.Spend.Turns > run.Limits.TurnsFor(run.Mode) {
+			return true, "turn_limit", o.finishLimit(ctx, run, prevState, "turn_limit")
+		}
+		if run.Spend.InputTokens+run.Spend.OutputTokens > run.Limits.MaxTokens {
+			return true, "token_budget", o.finishLimit(ctx, run, prevState, "token_budget")
+		}
 	}
 	if now.After(run.Deadline) {
 		return true, "deadline", o.finishLimit(ctx, run, prevState, "deadline")
@@ -1267,6 +1364,17 @@ func (o *Orchestrator) CompleteRun(ctx context.Context, runnerID, runID, finalTe
 		} else {
 			// The fallback post can hand the turn to another agent too.
 			o.ChainFromAgentPost(ctx, run, msg)
+		}
+	}
+	// A direct run that ends with NOTHING posted (no message, empty final
+	// text) leaves no message carrying its run id — and with the live chip
+	// gone, its timeline would be unreachable. Drop a one-line marker so the
+	// activity drawer stays one click away. Ambient modes (watch/heartbeat/
+	// follow-up) end silently by design and are left alone.
+	if run.Spend.Posts == 0 && strings.TrimSpace(finalText) == "" && (run.Mode == model.RunModeDirect || run.Mode == model.RunModeTask) {
+		note := fmt.Sprintf("✅ finished without posting a reply (%d turns) — open Show activity for the log.", run.Spend.Turns)
+		if _, err := o.messages.SendAsAgentRun(ctx, run.AgentID, run.InvokerID, run.ParentID, run.ParentType, note, o.replyThreadRoot(run), run.ID); err != nil {
+			slog.Debug("silent-completion notice failed", "runID", run.ID, "error", err)
 		}
 	}
 	o.appendEvent(ctx, run, o.now().UnixNano(), run.AgentID, "run.completed", map[string]any{"spend": run.Spend})
@@ -1896,6 +2004,18 @@ func (o *Orchestrator) buildBundle(ctx context.Context, run *model.Run) (string,
 	task := "# Task\n" + run.Prompt + "\n"
 	budget -= len(task)
 
+	// Layer 0.1 — coding task (RunModeTask): the deterministic spec the run
+	// serves. Never trimmed; the runner adds the machine-local workspace
+	// facts (checkout path, registry commands) in its own preamble.
+	taskSection := ""
+	if run.TaskID != "" && o.tasks != nil {
+		if t, err := o.tasks.GetTask(ctx, run.TaskID); err == nil && t != nil {
+			taskSection = renderTaskSection(t)
+			budget -= len(taskSection)
+		}
+	}
+	stats["codingTask"] = taskSection != ""
+
 	// Layer 0.5 — the agent's own core memory for THIS invoker (buzz's
 	// engrams). Injected every turn, small by contract. On read ERROR inject
 	// nothing — an outage must never read as "no memory" and tempt the agent
@@ -2027,6 +2147,21 @@ func (o *Orchestrator) buildBundle(ctx context.Context, run *model.Run) (string,
 	}
 	stats["connectorsIndexed"] = connectorsIndexed
 
+	// Layer 0.9 — known coding projects (products → repos), so an intake run
+	// hands "finish CS-7 in CliffHub" to create_coding_task with the right
+	// project and repos, and knows when to ask instead of guessing. Only for
+	// runs that are NOT already bound to a task (a task run has its section).
+	projectsIndex := ""
+	if o.tasks != nil && run.TaskID == "" {
+		if projects, err := o.tasks.ListProjects(ctx); err == nil {
+			if s := renderProjectsIndex(projects); s != "" && len(s) <= budget && len(s) <= 4000 {
+				projectsIndex = s
+				budget -= len(s)
+			}
+		}
+	}
+	stats["projectsIndexed"] = projectsIndex != ""
+
 	// Fetch the raw layers first; selection happens against the budget below.
 	var pinned, unpinned []*model.ContextItem
 	if o.ctxSvc != nil {
@@ -2137,11 +2272,13 @@ func (o *Orchestrator) buildBundle(ctx context.Context, run *model.Run) (string,
 
 	var b strings.Builder
 	b.WriteString(task)
+	b.WriteString(taskSection)
 	b.WriteString(memSection)
 	b.WriteString(coSection)
 	b.WriteString(attachedSection)
 	b.WriteString(skillIndex)
 	b.WriteString(connectorIndex)
+	b.WriteString(projectsIndex)
 	if len(pinnedLines)+len(unpinnedLines) > 0 {
 		b.WriteString("\n# Shared context\n")
 		for _, l := range pinnedLines {

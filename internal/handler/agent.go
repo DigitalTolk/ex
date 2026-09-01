@@ -288,6 +288,81 @@ func (h *AgentHandler) Timeline(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ThreadTimeline is the drawer's whole-thread view: every run under one root
+// message, merged. Same shape as Timeline (run = the latest, so state/stop/
+// polling keep working) plus `runs`.
+// GET /api/v1/runs/thread?parent=<channel|conversation id>&root=<message id>
+func (h *AgentHandler) ThreadTimeline(w http.ResponseWriter, r *http.Request) {
+	callerID := middleware.UserIDFromContext(r.Context())
+	parentID, rootID := r.URL.Query().Get("parent"), r.URL.Query().Get("root")
+	if parentID == "" || rootID == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "parent and root are required")
+		return
+	}
+	runs, evts, err := h.orch.ThreadTimeline(r.Context(), parentID, rootID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", "failed to load thread activity")
+		return
+	}
+	if len(runs) == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "no agent activity in this thread")
+		return
+	}
+	// Access mirrors Timeline: an invoker of any run, else a member of the parent.
+	invoker := false
+	for _, run := range runs {
+		if run.InvokerID == callerID {
+			invoker = true
+			break
+		}
+	}
+	if !invoker && (h.access == nil || h.access.CheckAccess(r.Context(), callerID, parentID, runs[0].ParentType) != nil) {
+		writeError(w, http.StatusForbidden, "forbidden", "no access to this thread")
+		return
+	}
+	users := JSON{}
+	var artifacts []*model.Artifact
+	for _, run := range runs {
+		for _, id := range []string{run.AgentID, run.InvokerID} {
+			if _, seen := users[id]; seen {
+				continue
+			}
+			if u, err := h.users.GetByID(r.Context(), id); err == nil {
+				users[id] = u.DisplayName
+			}
+		}
+		if arts, err := h.orch.Artifacts(r.Context(), run.ID); err == nil {
+			artifacts = append(artifacts, arts...)
+		}
+	}
+	// The thread's own messages ride along so posts and steering replies read
+	// inline with the work. Bodies are clipped — the drawer is a timeline, the
+	// thread itself is one click away.
+	msgs := []JSON{}
+	if thread, err := h.orch.ThreadMessages(r.Context(), callerID, parentID, runs[0].ParentType, rootID); err == nil {
+		for _, m := range thread {
+			if m.Deleted || m.Body == "" {
+				continue // tombstoned
+			}
+			body := m.Body
+			if rs := []rune(body); len(rs) > 600 {
+				body = string(rs[:600]) + "…"
+			}
+			if _, seen := users[m.AuthorID]; !seen {
+				if u, err := h.users.GetByID(r.Context(), m.AuthorID); err == nil {
+					users[m.AuthorID] = u.DisplayName
+				}
+			}
+			msgs = append(msgs, JSON{"id": m.ID, "authorID": m.AuthorID, "body": body, "createdAt": m.CreatedAt})
+		}
+	}
+	latest := runs[len(runs)-1]
+	writeJSON(w, http.StatusOK, JSON{
+		"run": latest, "runs": runs, "events": evts, "users": users, "artifacts": artifacts, "messages": msgs,
+		"threadSpend": h.orch.ThreadSpend(r.Context(), latest),
+	})
+}
+
 // StopRun cancels every live run in this run's conversation thread — the
 // human brake on a runaway agent discussion. Allowed for the invoker or any
 // member of the parent (it's their channel being flooded).

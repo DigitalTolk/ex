@@ -163,6 +163,21 @@ func (s *ChannelService) resolveDisplayName(ctx context.Context, userID string) 
 // (invite-acceptance accounts) cannot create channels — they're scoped to
 // the channels they're explicitly invited into plus #general.
 func (s *ChannelService) Create(ctx context.Context, userID, name string, chanType model.ChannelType, description string) (*model.Channel, error) {
+	return s.createChannel(ctx, userID, store.NewID(), name, chanType, description)
+}
+
+// CreateWithID is Create with a caller-chosen (derived) ID — for canonical
+// channels that must have the same identity everywhere without coordination,
+// e.g. a coding project's channel (DeriveID("codechan#"+projectPath)). The
+// slug-uniqueness rules are unchanged.
+func (s *ChannelService) CreateWithID(ctx context.Context, userID, id, name string, chanType model.ChannelType, description string) (*model.Channel, error) {
+	if id == "" {
+		return nil, fmt.Errorf("channel: id required: %w", ErrValidation)
+	}
+	return s.createChannel(ctx, userID, id, name, chanType, description)
+}
+
+func (s *ChannelService) createChannel(ctx context.Context, userID, id, name string, chanType model.ChannelType, description string) (*model.Channel, error) {
 	if s.users != nil {
 		if u, err := s.users.GetUser(ctx, userID); err == nil && u != nil {
 			if u.SystemRole == model.SystemRoleGuest {
@@ -190,7 +205,7 @@ func (s *ChannelService) Create(ctx context.Context, userID, name string, chanTy
 	}
 	now := time.Now()
 	ch := &model.Channel{
-		ID:          store.NewID(),
+		ID:          id,
 		Name:        name,
 		Slug:        slug,
 		Description: description,

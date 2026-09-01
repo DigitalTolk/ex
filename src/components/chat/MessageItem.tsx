@@ -45,9 +45,11 @@ import { MessageRichAttachments } from '@/components/chat/MessageRichAttachments
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { extractURLs, formatLongDateTime, formatRelative } from '@/lib/format';
 import { registerEditMessageHandler } from '@/lib/window-events';
-import { openRunDrawer } from '@/stores/run-drawer';
+import { openRunDrawer, openThreadDrawer } from '@/stores/run-drawer';
 import { ArtifactCard } from '@/components/chat/ArtifactCard';
+import { TaskCard } from '@/components/chat/TaskCard';
 import { parseArtifactMarker } from '@/lib/artifact-marker';
+import { parseTaskMarker } from '@/lib/task-marker';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
@@ -665,13 +667,16 @@ function MessageItemImpl({
           }
         />
         <div className="flex flex-col rounded-lg border">
-          {message.agentRunID && (
+          {(message.agentRunID || (!message.parentMessageID && (message.replyCount ?? 0) > 0)) && (
             <button
               type="button"
               className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
               onClick={() => {
                 setMobileActionsOpen(false);
-                openRunDrawer(message.agentRunID ?? '');
+                // A thread root opens the WHOLE thread's activity (every run
+                // under it); any other message opens its own run.
+                if (!message.parentMessageID && (message.replyCount ?? 0) > 0) openThreadDrawer(message.parentID, message.id);
+                else openRunDrawer(message.agentRunID ?? '');
               }}
               aria-label="Show agent activity"
             >
@@ -1108,9 +1113,13 @@ function MessageItemImpl({
               <MoreHorizontal className="h-3.5 w-3.5" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
-              {message.agentRunID && (
+              {(message.agentRunID || (!message.parentMessageID && (message.replyCount ?? 0) > 0)) && (
                 <DropdownMenuItem
-                  onClick={() => openRunDrawer(message.agentRunID ?? '')}
+                  onClick={() =>
+                    !message.parentMessageID && (message.replyCount ?? 0) > 0
+                      ? openThreadDrawer(message.parentID, message.id)
+                      : openRunDrawer(message.agentRunID ?? '')
+                  }
                   aria-label="Show agent activity"
                 >
                   <Bot className="mr-2 h-4 w-4" />
@@ -1270,6 +1279,12 @@ const MessageBody = memo(function MessageBody({
   const artifactMarker = parseArtifactMarker(message.body);
   if (artifactMarker) {
     return <ArtifactCard marker={artifactMarker} />;
+  }
+  // Coding-task card markers (the root of a task thread) render as a live
+  // task card: flair, state, links, and the requester's sign-off.
+  const taskMarker = parseTaskMarker(message.body);
+  if (taskMarker) {
+    return <TaskCard marker={taskMarker} currentUserId={currentUserId} />;
   }
   return (
     <>

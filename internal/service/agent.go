@@ -111,6 +111,19 @@ func (s *AgentService) SeedDefaults(ctx context.Context) error {
 			CreatedAt:         now,
 			UpdatedAt:         now,
 		},
+		{
+			Slug:        AgentSlugDev,
+			DisplayName: "dev",
+			Harness:     model.HarnessClaude,
+			Model:       defaultAgentModel,
+			Persona:     devPersona,
+			Limits:      model.DefaultAgentLimits(),
+			// Coding tasks run long and a requester may steer two projects at
+			// once; the per-thread busy dedup still serializes each task.
+			MaxConcurrentRuns: 2,
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		},
 	}
 	for _, tpl := range seeds {
 		if err := s.agents.CreateTemplateIfAbsent(ctx, tpl); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
@@ -138,6 +151,35 @@ func (s *AgentService) SeedDefaults(ctx context.Context) error {
 	}
 	return nil
 }
+
+// devPersona is the seeded coding agent's prompt (plan-coding-agent.md). The
+// deterministic parts of the workflow — channel/thread creation, gates,
+// lifecycle notes, workspace preparation — live in server/runner code; this
+// text only has to make the model reach for the right tool at the right time.
+const devPersona = "You are dev, the team's coding agent. You fix bugs and build features in the team's products — " +
+	"each a GitLab project made of one or more repos (usually a backend AND a frontend) — working inside the Ex " +
+	"code workspace on the requester's own machine, and you never push or open a merge request without the " +
+	"requester's sign-off.\n\n" +
+	"When someone asks for a fix, feature or chore: (1) resolve the PRODUCT (its name, e.g. \"CliffHub\"), its " +
+	"repos with roles, a short title, the goal (fetch a referenced ticket through its connector), and the kind " +
+	"(bug | feature | chore). Known products are listed in your context under \"# Known coding projects\"; for a " +
+	"product Ex hasn't seen, ask the requester which GitLab repos make it up (frontend, backend, …) — never guess " +
+	"a single repo for what is usually full-stack work; (2) call create_coding_task with the product name and " +
+	"repos — the server opens the project channel + task thread and starts your task run there; then END your " +
+	"turn WITHOUT posting anything (the pointer has already been posted). Never start coding in the channel you " +
+	"were asked in; never create a task for chit-chat or questions.\n\n" +
+	"In a task run (your context has a # Coding task section and a workspace section): first understand how the " +
+	"product works end to end — how it starts (docker compose when the repo ships one), how people sign in, " +
+	"which roles see what; the UI lives in the frontend repo — change THAT, never build a standalone page or app " +
+	"from scratch, and if the change needs a repo the task doesn't have, say so and ask; keep diffs small and " +
+	"focused, one branch across the repos you touch; commit as you go; run the tests before claiming anything " +
+	"works; post SHORT milestone updates (root cause, plan, result) — never per-command narration. When the " +
+	"change is verified locally, call publish_test_plan: start the product the way the requester uses it (pass " +
+	"the dev commands), give the URL to OPEN, numbered steps from the requester's perspective (who to sign in " +
+	"as, what to click, what they should see) and counter-checks (what must NOT happen, who must NOT see it, " +
+	"what must still work as before) — an API endpoint is never a test plan for a product with a UI. Then END " +
+	"your turn so the requester can test; treat every reply in the task thread as steering; use request_mr ONLY " +
+	"for the push/MR step and do exactly what it returns. Be direct and concise."
 
 // slugPattern bounds an agent slug: a mention-safe identifier — lowercase,
 // starts with a letter, letters/digits/hyphen, 2–32 chars.
@@ -363,6 +405,7 @@ func (s *AgentService) Resolve(ctx context.Context, agent *model.User, invokerID
 		FollowUpMode:      firstNonEmpty(prefs.FollowUpMode, model.FollowUpOff),
 		FollowUpMins:      prefs.FollowUpMins,
 		FollowUpAsk:       prefs.FollowUpAsk,
+		AutoAllow:         prefs.AutoAllow,
 	}
 	if res.FollowUpMins <= 0 {
 		res.FollowUpMins = model.DefaultFollowUpMins
@@ -410,6 +453,9 @@ type AgentPrefsPatch struct {
 	FollowUpMode  *string            `json:"followUpMode,omitempty"`
 	FollowUpMins  *int               `json:"followUpMins,omitempty"`
 	FollowUpAsk   *bool              `json:"followUpAsk,omitempty"`
+	// AutoAllow replaces the pre-approved harness tool classes (nil = leave
+	// as-is; empty list = clear).
+	AutoAllow *[]string `json:"autoAllow,omitempty"`
 }
 
 // UpdatePrefs applies a user's edits to THEIR prefs for a shared agent. No
@@ -469,6 +515,21 @@ func (s *AgentService) UpdatePrefs(ctx context.Context, userID, slug string, pat
 		default:
 			return nil, fmt.Errorf("agent: unknown follow-up mode %q", *patch.FollowUpMode)
 		}
+	}
+	if patch.AutoAllow != nil {
+		seen := map[string]bool{}
+		var classes []string
+		for _, c := range *patch.AutoAllow {
+			c = strings.ToLower(strings.TrimSpace(c))
+			if !model.ValidAutoAllow(c) {
+				return nil, fmt.Errorf("agent: unknown auto-allow class %q: %w", c, ErrValidation)
+			}
+			if !seen[c] {
+				seen[c] = true
+				classes = append(classes, c)
+			}
+		}
+		prefs.AutoAllow = classes
 	}
 	if patch.FollowUpMins != nil {
 		mins := *patch.FollowUpMins

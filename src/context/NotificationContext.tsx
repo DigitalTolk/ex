@@ -3,6 +3,8 @@ import { playApprovalChime, playNotificationPing } from '@/lib/notification-soun
 import { hasDndBridge, isDndActive } from '@/lib/dnd';
 import { requestOsAttention } from '@/lib/attention';
 import { showToast } from '@/lib/toast';
+import { apiFetch } from '@/lib/api';
+import { settleApprovalLocally } from '@/stores/agent-approvals';
 import { readJSON, writeJSON } from '@/lib/storage';
 import { useLatestRef } from '@/hooks/useLatestRef';
 import { sendWS } from '@/lib/ws-sender';
@@ -53,6 +55,9 @@ export type NotificationKind = 'message' | 'mention' | 'thread_reply';
 // deep link (the parent hosting the card) and its own suppression rule.
 export interface ApprovalAlert {
   approvalID: string;
+  // The run the gate belongs to — needed to POST the decision straight from
+  // the notification's Approve/Reject buttons.
+  runID: string;
   parentID: string;
   parentType: 'channel' | 'conversation';
   // Agent display name when known, for the title; falls back to a generic one.
@@ -61,6 +66,8 @@ export interface ApprovalAlert {
   // Whether the agent is asking a question (options present) rather than
   // asking permission — changes the wording only.
   asksChoice?: boolean;
+  // The choices, when it's a question — each becomes a button on the alert.
+  options?: string[];
   // Invoking message, used ONLY to ack desktop delivery so the deferred mobile
   // push stands down. Never a dedup key.
   messageID?: string;
@@ -482,8 +489,30 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
     const { soundEnabled, browserEnabled } = prefsRef.current;
     let delivered = false;
+
+    // Desktop app: hand the gate to the shell, which raises a NATIVE OS
+    // notification carrying Approve / Reject (or the choices) as real system
+    // buttons — the web Notification API cannot do action buttons, so this is
+    // the only way to decide from the notification itself. The shell calls
+    // back through onApprovalDecision (a useEffect below) to POST the verdict.
+    // Skip the web banner entirely on this path so there's no double alert.
+    if (browserEnabled && window.__EX_APPROVAL_NOTIFY__) {
+      try {
+        window.__EX_APPROVAL_NOTIFY__({
+          approvalID: a.approvalID,
+          runID: a.runID,
+          title,
+          body,
+          choices: a.asksChoice && a.options ? a.options.slice(0, 4) : undefined,
+        });
+        delivered = true;
+      } catch {
+        delivered = false; // fall through to the web banner below
+      }
+    }
+
     const canBanner =
-      browserEnabled && permissionRef.current === 'granted' && notificationsSupported();
+      !delivered && browserEnabled && permissionRef.current === 'granted' && notificationsSupported();
 
     if (canBanner) {
       try {
@@ -518,7 +547,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     }
     // Toast whenever no OS banner could be shown, so a BLOCKING gate is never
     // invisible: no Notification API, permission not granted, or a constructor
-    // that threw. Tapping it goes where the banner would have.
+    // that threw. Tapping it goes where the banner would have. (The native
+    // desktop path handles its own delivery above.)
     if (!delivered && browserEnabled) {
       showToast(body, 'success', { title, kind: 'notification', onActivate: open });
       delivered = true;
@@ -542,6 +572,28 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     dispatchRef.current = dispatch;
   });
+
+  // The desktop shell relays a click on a NATIVE notification's Approve /
+  // Reject / choice button back here (via the preload's approval bridge) as a
+  // DOM CustomEvent — this is the receiving end of __EX_APPROVAL_NOTIFY__.
+  // Event name matches ex-electron/src/lib/approval-bridge.ts
+  // (APPROVAL_DECISION_EVENT); the payload carries runID so we can POST the
+  // verdict without any lookup.
+  useEffect(() => {
+    const onDecision = (e: Event) => {
+      const d = (e as CustomEvent<{ approvalID?: string; runID?: string; approve?: boolean; choice?: string }>).detail;
+      if (!d?.approvalID || !d.runID) return;
+      apiFetch(`/api/v1/runs/${d.runID}/approvals/${d.approvalID}`, {
+        method: 'POST',
+        body: JSON.stringify({ approve: d.approve === true, choice: d.choice }),
+      }).catch(() => {
+        // Already settled (raced an expiry) or offline — the event stream reconciles.
+      });
+      settleApprovalLocally(d.approvalID);
+    };
+    document.addEventListener('ex:approval-decision', onDecision);
+    return () => document.removeEventListener('ex:approval-decision', onDecision);
+  }, []);
 
   const value = useMemo(
     () => ({

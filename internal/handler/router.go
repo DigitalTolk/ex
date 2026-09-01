@@ -279,6 +279,7 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("PATCH /api/v1/agents/{slug}", middleware.WrapFunc(d.Agent.RenameAgent, authMW, middleware.RequireSystemRole(model.SystemRoleAdmin), writeLimit))
 		mux.Handle("PATCH /api/v1/agents/{slug}/prefs", middleware.WrapFunc(d.Agent.UpdatePrefs, authMW))
 		mux.Handle("POST /api/v1/agents/runner-token", middleware.WrapFunc(d.Agent.MintRunnerToken, authMW))
+		mux.Handle("GET /api/v1/runs/thread", middleware.WrapFunc(d.Agent.ThreadTimeline, authMW))
 		mux.Handle("GET /api/v1/runs/{id}", middleware.WrapFunc(d.Agent.Timeline, authMW))
 		mux.Handle("GET /api/v1/runs/{id}/artifacts/{artifactID}", middleware.WrapFunc(d.Agent.GetArtifact, authMW))
 		mux.Handle("POST /api/v1/runs/{id}/approvals/{approvalID}", middleware.WrapFunc(d.Agent.DecideApproval, authMW, writeLimit))
@@ -337,6 +338,20 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("GET /api/v1/agent/run/skills", middleware.WrapFunc(d.AgentRunTool.ListSkills, runMW))
 		mux.Handle("POST /api/v1/agent/run/skills/{id}", middleware.WrapFunc(d.AgentRunTool.InvokeSkill, runMW))
 		mux.Handle("POST /api/v1/agent/run/link-message", middleware.WrapFunc(d.AgentRunTool.LinkMessage, runMW))
+		if d.CodingTask != nil {
+			// Coding tasks (plan-coding-agent.md): the run-scoped task tools…
+			mux.Handle("POST /api/v1/agent/run/coding-task", middleware.WrapFunc(d.CodingTask.Create, runMW, writeLimit))
+			mux.Handle("POST /api/v1/agent/run/coding-task/report", middleware.WrapFunc(d.CodingTask.Report, runMW, writeLimit))
+			mux.Handle("POST /api/v1/agent/run/coding-task/test-plan", middleware.WrapFunc(d.CodingTask.TestPlan, runMW, writeLimit))
+			mux.Handle("POST /api/v1/agent/run/coding-task/request-mr", middleware.WrapFunc(d.CodingTask.RequestMR, runMW, writeLimit))
+			// …and the human surface (task card, sign-off, steering).
+			mux.Handle("GET /api/v1/coding-tasks/{id}", middleware.WrapFunc(d.CodingTask.Get, authMW))
+			mux.Handle("POST /api/v1/coding-tasks/{id}/signoff", middleware.WrapFunc(d.CodingTask.SignOff, authMW, writeLimit))
+			mux.Handle("POST /api/v1/coding-tasks/{id}/close", middleware.WrapFunc(d.CodingTask.Close, authMW, writeLimit))
+			mux.Handle("PATCH /api/v1/coding-tasks/{id}", middleware.WrapFunc(d.CodingTask.SetSteering, authMW, writeLimit))
+			mux.Handle("GET /api/v1/channels/{id}/coding-tasks", middleware.WrapFunc(d.CodingTask.ListByChannel, authMW))
+			mux.Handle("GET /api/v1/coding-projects", middleware.WrapFunc(d.CodingTask.ListProjects, authMW))
+		}
 		if d.AgentRunTool.workspace != nil {
 			// Ex-wide tools: everything the INVOKER could do, done as the agent.
 			mux.Handle("GET /api/v1/agent/run/channels", middleware.WrapFunc(d.AgentRunTool.ListChannels, runMW))

@@ -244,7 +244,7 @@ func (f *fakeRunStore) GetApproval(_ context.Context, runID, approvalID string) 
 	return &cp, nil
 }
 
-func (f *fakeRunStore) SettleApproval(_ context.Context, runID, approvalID, state, decidedBy, choice string, decidedAt time.Time) error {
+func (f *fakeRunStore) SettleApproval(_ context.Context, runID, approvalID, state, decidedBy, choice, note string, decidedAt time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	a, ok := f.approvals[runID+"#"+approvalID]
@@ -257,6 +257,7 @@ func (f *fakeRunStore) SettleApproval(_ context.Context, runID, approvalID, stat
 	a.State = state
 	a.DecidedBy = decidedBy
 	a.Choice = choice
+	a.Note = note
 	a.DecidedAt = &decidedAt
 	return nil
 }
