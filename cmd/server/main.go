@@ -235,12 +235,21 @@ func main() {
 	agentSvc := service.NewAgentService(agentStore, userStore)
 	orchestrator := service.NewOrchestrator(runStore, agentSvc, userStore, messageSvc, redisPubSub, jwtMgr)
 	messageSvc.SetAgentDispatcher(orchestrator)
+	// Deleting a chat sweeps its agent-run activity logs (a thread root sweeps
+	// every reply's logs too).
+	messageSvc.SetRunLogPurger(orchestrator)
 	orchestrator.SetConversationReader(conversationStore)
 	orchestrator.SetOwnerDMResolver(convSvc)
 	// Shared context (CTX#, plan-v2 §8): visibility rides the message-service
 	// access check, so context is readable exactly where the chat is.
 	contextSvc := service.NewContextService(store.NewContextStore(db), messageSvc)
 	orchestrator.SetContextService(contextSvc)
+	// Tier terminal runs' timelines to S3 (hot events stay in DynamoDB while a
+	// run is live; on completion they roll into one object and the hot rows are
+	// pruned). No S3 configured → events stay in DynamoDB.
+	if s3Client != nil {
+		orchestrator.SetEventArchive(storage.NewEventArchive(s3Client))
+	}
 	agentH := handler.NewAgentHandler(agentSvc, orchestrator, userSvc, jwtMgr)
 	// The Run Activity Drawer is readable by anyone who can read the channel
 	// the run happened in (plan-v2 Phase 2), not just the invoker.
@@ -252,6 +261,21 @@ func main() {
 	connectorSvc := service.NewConnectorService(store.NewConnectorStore(db))
 	connectorH := handler.NewConnectorHandler(connectorSvc, orchestrator)
 	orchestrator.SetConnectorRegistry(connectorSvc)
+	// The connector catalog is SOURCED from the standalone connector-provider:
+	// ex pulls docs + admin auth from it (never the reverse). Wire it and warm
+	// the registry once at boot; admins re-pull via POST /api/v1/connectors/sync.
+	if cfg.ConnectorProviderURL != "" {
+		connectorSvc.SetProvider(cfg.ConnectorProviderURL, cfg.ConnectorProviderKey)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			if res, err := connectorSvc.SyncFromProvider(ctx, "system"); err != nil {
+				slog.Warn("connector-provider startup sync failed", "error", err)
+			} else {
+				slog.Info("connector-provider startup sync", "synced", res.Synced, "skipped", len(res.Skipped))
+			}
+		}()
+	}
 
 	userStateSvc := service.NewUserStateService(userStateStore, redisPubSub)
 	emojiSvc := service.NewEmojiService(emojiStore, userStore, redisPubSub)

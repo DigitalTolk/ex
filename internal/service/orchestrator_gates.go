@@ -579,6 +579,9 @@ func (o *Orchestrator) cancelRun(ctx context.Context, run *model.Run, stopperID 
 			slog.Debug("stop notice failed", "runID", run.ID, "error", err)
 		}
 	}
+	// Cancel doesn't run afterTerminal (it skips the continuation logic), so
+	// tier the stopped run's timeline to object storage here.
+	o.archiveEvents(ctx, run)
 	return nil
 }
 
@@ -635,7 +638,7 @@ func (o *Orchestrator) ThreadTimeline(ctx context.Context, parentID, rootID stri
 	}
 	var events []*model.RunEvent
 	for _, r := range runs {
-		evts, err := o.runs.ListRunEvents(ctx, r.ID)
+		evts, err := o.loadEvents(ctx, r)
 		if err != nil {
 			return nil, nil, err
 		}

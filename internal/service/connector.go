@@ -37,6 +37,11 @@ type connectorStore interface {
 type ConnectorService struct {
 	store connectorStore
 	http  *http.Client
+	// connector-provider: the standalone service ex pulls its connector
+	// catalog from (docs + admin auth). Empty → no provider wired; the
+	// registry is only whatever was ingested directly.
+	providerURL string
+	providerKey string
 }
 
 func NewConnectorService(s connectorStore) *ConnectorService {

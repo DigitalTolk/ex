@@ -64,6 +64,22 @@ func (h *ConnectorHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, JSON{"connector": c})
 }
 
+// Sync pulls the connector catalog from the connector-provider and ingests it
+// into the registry (admin-gated at the route). Replaces the old sync script.
+func (h *ConnectorHandler) Sync(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.ClaimsFromContext(r.Context())
+	res, err := h.connectors.SyncFromProvider(r.Context(), claims.UserID)
+	if err != nil {
+		if errors.Is(err, service.ErrConnectorInvalid) {
+			writeError(w, http.StatusServiceUnavailable, "no_provider", "no connector provider configured")
+			return
+		}
+		writeError(w, http.StatusBadGateway, "provider_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, JSON{"synced": res.Synced, "skipped": res.Skipped})
+}
+
 // Install connects the caller: paste-a-token, or email/password for
 // password-kind connectors (with a two-factor round trip when the auth
 // service demands one).

@@ -415,6 +415,14 @@ export interface Run {
   failReason?: string;
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
+  /**
+   * EventsArchived is set once a terminal run's timeline has been rolled into
+   * a single object-storage blob and the per-event EVT# rows pruned from the
+   * hot table — completed runs are the bulk of event volume, so this keeps
+   * DynamoDB small. Timeline reads for such runs load from the archive
+   * instead of the EVT# rows; live runs keep their events in DynamoDB.
+   */
+  eventsArchived?: boolean;
 }
 /**
  * RunEvent is one append-only timeline row. Seq is assigned by the writer

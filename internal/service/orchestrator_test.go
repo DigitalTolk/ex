@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -191,6 +192,13 @@ func (f *fakeRunStore) ListRunEvents(_ context.Context, runID string) ([]*model.
 		out = append(out, &cp)
 	}
 	return out, nil
+}
+
+func (f *fakeRunStore) DeleteRunEvents(_ context.Context, runID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.events, runID)
+	return nil
 }
 
 func (f *fakeRunStore) PutDigest(_ context.Context, d *model.RunDigest) error {
@@ -993,6 +1001,162 @@ func TestOrchestrator_EventAppendIdempotent(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("retried batch duplicated timeline: %d tool events", count)
+	}
+}
+
+// fakeArchive is an in-memory eventArchive for the tiering test.
+type fakeArchive struct {
+	mu    sync.Mutex
+	blobs map[string][]*model.RunEvent
+	fail  bool
+}
+
+func (a *fakeArchive) Archive(_ context.Context, runID string, events []*model.RunEvent) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.fail {
+		return errors.New("archive boom")
+	}
+	if a.blobs == nil {
+		a.blobs = map[string][]*model.RunEvent{}
+	}
+	cp := make([]*model.RunEvent, len(events))
+	for i, e := range events {
+		c := *e
+		cp[i] = &c
+	}
+	a.blobs[runID] = cp
+	return nil
+}
+
+func (a *fakeArchive) Delete(_ context.Context, runID string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.blobs, runID)
+	return nil
+}
+
+func (a *fakeArchive) Load(_ context.Context, runID string) ([]*model.RunEvent, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	evts, ok := a.blobs[runID]
+	if !ok {
+		return nil, errors.New("no archive")
+	}
+	return evts, nil
+}
+
+func TestOrchestrator_EventsTierToArchiveOnComplete(t *testing.T) {
+	fx := newOrchFixture(t)
+	arch := &fakeArchive{}
+	fx.orch.SetEventArchive(arch)
+
+	run := fx.startRun(t)
+	fx.claim(t)
+	if _, _, err := fx.orch.ReportEvents(context.Background(), "r1", run.ID,
+		[]RunEventInput{{Seq: 1, Type: "tool", Payload: map[string]any{"name": "post_message"}}}); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+
+	if err := fx.orch.CompleteRun(context.Background(), "r1", run.ID, "done", nil); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	// Hot rows pruned...
+	if hot, _ := fx.runs.ListRunEvents(context.Background(), run.ID); len(hot) != 0 {
+		t.Fatalf("hot events not pruned after archive: %d rows", len(hot))
+	}
+	// ...archive holds the timeline...
+	if got := arch.blobs[run.ID]; len(got) == 0 {
+		t.Fatalf("archive empty after terminal")
+	}
+	// ...and the drawer read transparently comes from the archive.
+	_, evts, err := fx.orch.Timeline(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("timeline: %v", err)
+	}
+	var sawTool, sawCompleted bool
+	for _, e := range evts {
+		switch e.Type {
+		case "tool":
+			sawTool = true
+		case "run.completed":
+			sawCompleted = true
+		}
+	}
+	if !sawTool || !sawCompleted {
+		t.Fatalf("archived timeline incomplete: tool=%v completed=%v (%d events)", sawTool, sawCompleted, len(evts))
+	}
+}
+
+func TestOrchestrator_ArchiveFailureKeepsHotEvents(t *testing.T) {
+	fx := newOrchFixture(t)
+	fx.orch.SetEventArchive(&fakeArchive{fail: true})
+
+	run := fx.startRun(t)
+	fx.claim(t)
+	if _, _, err := fx.orch.ReportEvents(context.Background(), "r1", run.ID,
+		[]RunEventInput{{Seq: 1, Type: "tool"}}); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if err := fx.orch.CompleteRun(context.Background(), "r1", run.ID, "done", nil); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	// Archive write failed → events MUST remain in DynamoDB (no data loss).
+	if hot, _ := fx.runs.ListRunEvents(context.Background(), run.ID); len(hot) == 0 {
+		t.Fatalf("hot events pruned despite archive failure — timeline lost")
+	}
+	if _, evts, _ := fx.orch.Timeline(context.Background(), run.ID); len(evts) == 0 {
+		t.Fatalf("timeline empty after failed archive")
+	}
+}
+
+func TestOrchestrator_PurgeThreadLogsCascade(t *testing.T) {
+	fx := newOrchFixture(t)
+	arch := &fakeArchive{blobs: map[string][]*model.RunEvent{}}
+	fx.orch.SetEventArchive(arch)
+	ctx := context.Background()
+
+	seed := func(id, msgID, threadRoot string, archived bool) {
+		run := &model.Run{ID: id, ParentID: "chanX", MessageID: msgID, ThreadRootID: threadRoot, State: model.RunStateCompleted}
+		if err := fx.runs.CreateRun(ctx, run); err != nil {
+			t.Fatalf("seed run %s: %v", id, err)
+		}
+		if archived {
+			run.EventsArchived = true
+			_ = fx.runs.UpdateRun(ctx, run, model.RunStateCompleted)
+			arch.blobs[id] = []*model.RunEvent{{RunID: id, Seq: 1, Type: "run.completed"}}
+		} else {
+			_ = fx.runs.AppendRunEvent(ctx, &model.RunEvent{RunID: id, Seq: 1, Type: "tool"})
+		}
+	}
+
+	// A thread rooted at "root": the root's own run (archived) + a reply run
+	// (still hot). Plus an unrelated run in the same channel that must survive.
+	seed("r-root", "root", "", true)    // replyThreadRoot -> "root"
+	seed("r-reply", "reply1", "root", false) // replyThreadRoot -> "root"
+	seed("r-other", "other", "otherRoot", true) // replyThreadRoot -> "otherRoot"
+
+	fx.orch.PurgeThreadLogs(ctx, "chanX", "root")
+
+	// Root run's archived log deleted.
+	if _, ok := arch.blobs["r-root"]; ok {
+		t.Error("root run archived log not deleted")
+	}
+	// Reply run's hot events deleted.
+	if evts, _ := fx.runs.ListRunEvents(ctx, "r-reply"); len(evts) != 0 {
+		t.Errorf("reply run hot events not deleted: %d", len(evts))
+	}
+	// Unrelated run's log untouched.
+	if _, ok := arch.blobs["r-other"]; !ok {
+		t.Error("unrelated run's log was wrongly deleted")
+	}
+
+	// Deleting a single reply purges only its own run's log.
+	seed("r-solo", "solo", "someRoot", false)
+	fx.orch.PurgeThreadLogs(ctx, "chanX", "solo")
+	if evts, _ := fx.runs.ListRunEvents(ctx, "r-solo"); len(evts) != 0 {
+		t.Errorf("solo reply run events not purged: %d", len(evts))
 	}
 }
 

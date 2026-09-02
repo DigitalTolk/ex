@@ -144,6 +144,7 @@ type orchestratorRunStore interface {
 	ListActiveRuns(ctx context.Context) ([]*model.Run, error)
 	AppendRunEvent(ctx context.Context, evt *model.RunEvent) error
 	ListRunEvents(ctx context.Context, runID string) ([]*model.RunEvent, error)
+	DeleteRunEvents(ctx context.Context, runID string) error
 	PutDigest(ctx context.Context, d *model.RunDigest) error
 	GetDigest(ctx context.Context, runID string) (*model.RunDigest, error)
 	ListRunsByParent(ctx context.Context, parentID string, limit int) ([]*model.Run, error)
@@ -259,6 +260,11 @@ type Orchestrator struct {
 	// connectors validates /connector picks against the registry (nil → the
 	// feature is off and picks never attach to runs).
 	connectors connectorRegistry
+
+	// archive tiers a terminal run's timeline into object storage and prunes
+	// the hot DynamoDB rows (nil → archiving is off and events stay in
+	// DynamoDB — e.g. dev without S3 configured).
+	archive eventArchive
 
 	// ownerDM opens the creator↔agent 1:1 DM so a notify/draft watcher's
 	// completion can be delivered privately even when the agent forgot to call
@@ -839,6 +845,10 @@ func (o *Orchestrator) afterTerminal(ctx context.Context, run *model.Run) {
 		}
 		o.startNextPending(ctx, run.PendingAgentIDs, run.InvokerID, msg, run.ParentType)
 	}
+	// The run is done: tier its timeline to object storage and drop the hot
+	// rows. Last, so every lifecycle event (including run.completed/failed) is
+	// already written and gets archived.
+	o.archiveEvents(ctx, run)
 }
 
 // startNextPending starts the first startable agent from a pending roster,
@@ -1589,7 +1599,7 @@ func (o *Orchestrator) Timeline(ctx context.Context, runID string) (*model.Run, 
 	if err != nil {
 		return nil, nil, err
 	}
-	evts, err := o.runs.ListRunEvents(ctx, runID)
+	evts, err := o.loadEvents(ctx, run)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2816,6 +2826,100 @@ func stripConnectorTokens(body string, slugs []string) string {
 type connectorRegistry interface {
 	KnownSlugs(ctx context.Context) (map[string]bool, error)
 	InstalledIndex(ctx context.Context, userID string) ([]ConnectorIndexEntry, error)
+}
+
+// eventArchive tiers a terminal run's timeline into object storage
+// (implemented by storage.EventArchive). Best-effort: any failure leaves the
+// events in DynamoDB, so a timeline is never lost.
+type eventArchive interface {
+	Archive(ctx context.Context, runID string, events []*model.RunEvent) error
+	Load(ctx context.Context, runID string) ([]*model.RunEvent, error)
+	Delete(ctx context.Context, runID string) error
+}
+
+// PurgeThreadLogs deletes the run-event logs — archived S3 objects and any hot
+// DynamoDB rows — for every run tied to a deleted message: the runs that
+// message invoked, and (when msgID is a thread root) every reply run in that
+// thread. Wired into message deletion so a chat's activity logs don't outlive
+// it; deleting a parent chat sweeps all its replies' logs. Best-effort — a run
+// whose log fails to delete is logged, never fatal.
+func (o *Orchestrator) PurgeThreadLogs(ctx context.Context, parentID, msgID string) {
+	if msgID == "" {
+		return
+	}
+	peers, err := o.runs.ListRunsByParent(ctx, parentID, 500)
+	if err != nil {
+		slog.Warn("purge thread logs: list runs failed", "parentID", parentID, "msgID", msgID, "error", err)
+		return
+	}
+	for _, run := range peers {
+		// A run belongs to this delete if msgID is its thread root (covers a
+		// root delete: the root run and every reply run) or its own invoking
+		// message (covers deleting a single reply).
+		if o.replyThreadRoot(run) != msgID && run.MessageID != msgID {
+			continue
+		}
+		o.purgeRunLog(ctx, run)
+	}
+}
+
+func (o *Orchestrator) purgeRunLog(ctx context.Context, run *model.Run) {
+	if run.EventsArchived && o.archive != nil {
+		if err := o.archive.Delete(ctx, run.ID); err != nil {
+			slog.Warn("purge run log: archive delete failed", "runID", run.ID, "error", err)
+		}
+	}
+	if err := o.runs.DeleteRunEvents(ctx, run.ID); err != nil {
+		slog.Warn("purge run log: hot events delete failed", "runID", run.ID, "error", err)
+	}
+}
+
+// SetEventArchive enables tiering terminal runs' events to object storage.
+func (o *Orchestrator) SetEventArchive(a eventArchive) { o.archive = a }
+
+// archiveEvents rolls a terminal run's timeline into object storage and drops
+// the hot DynamoDB rows. Best-effort at every step: if the archive write, the
+// marker save, or the prune fails, the events remain readable in DynamoDB — so
+// this can shrink the table but never lose a timeline. Only the marker being
+// durably set unlocks the prune, so reads always find exactly one source.
+func (o *Orchestrator) archiveEvents(ctx context.Context, run *model.Run) {
+	if o.archive == nil || run.EventsArchived {
+		return
+	}
+	evts, err := o.runs.ListRunEvents(ctx, run.ID)
+	if err != nil || len(evts) == 0 {
+		return
+	}
+	if err := o.archive.Archive(ctx, run.ID, evts); err != nil {
+		slog.Warn("run events archive failed", "runID", run.ID, "error", err)
+		return
+	}
+	run.EventsArchived = true
+	if err := o.runs.UpdateRun(ctx, run, run.State); err != nil {
+		// Marker didn't stick — do NOT prune, or a read would find neither the
+		// rows nor a marker pointing at the archive. Leave everything in place.
+		slog.Warn("run archive marker save failed", "runID", run.ID, "error", err)
+		return
+	}
+	if err := o.runs.DeleteRunEvents(ctx, run.ID); err != nil {
+		// Archived + marked, but the hot rows lingered — harmless (reads use
+		// the archive now); they can be swept later.
+		slog.Warn("run events prune failed", "runID", run.ID, "error", err)
+	}
+}
+
+// loadEvents reads a run's timeline from wherever it lives: the archive for a
+// tiered terminal run, the hot DynamoDB rows otherwise. A failed archive read
+// falls back to the hot store so a transient S3 blip can't blank a timeline.
+func (o *Orchestrator) loadEvents(ctx context.Context, run *model.Run) ([]*model.RunEvent, error) {
+	if run.EventsArchived && o.archive != nil {
+		if evts, err := o.archive.Load(ctx, run.ID); err == nil {
+			return evts, nil
+		} else {
+			slog.Warn("run events archive load failed; falling back to hot store", "runID", run.ID, "error", err)
+		}
+	}
+	return o.runs.ListRunEvents(ctx, run.ID)
 }
 
 // AttachConnector adds a connector to a LIVE run (the use_connector tool):

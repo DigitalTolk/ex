@@ -73,6 +73,13 @@ type Config struct {
 	// App
 	BaseURL string
 
+	// ConnectorProvider is the standalone connector-provider ex pulls its
+	// connector catalog (docs + admin auth) from. Empty → no provider; the
+	// registry holds only directly-ingested connectors. Set per environment
+	// (stg-ex → stg provider, prd-ex → prod provider) — never hardcoded.
+	ConnectorProviderURL string
+	ConnectorProviderKey string
+
 	// SentryFrontendDSN, when non-empty, enables Sentry error reporting in the
 	// SPA: the server stamps it into the served index.html, so browsers and
 	// the native shells all pick it up on next load. Backend observability is
@@ -144,6 +151,8 @@ func Load() (*Config, error) {
 		S3SecretKey:          os.Getenv("S3_SECRET_KEY"),
 		S3Region:             envOr("S3_REGION", "us-east-1"),
 		BaseURL:              envOr("BASE_URL", "http://localhost:8080"),
+		ConnectorProviderURL: os.Getenv("CONNECTOR_PROVIDER_URL"),
+		ConnectorProviderKey: os.Getenv("CONNECTOR_PROVIDER_API_KEY"),
 		OneSignalAppID:       os.Getenv("ONESIGNAL_APP_ID"),
 		OneSignalRESTAPIKey:  os.Getenv("ONESIGNAL_REST_API_KEY"),
 		OpenSearchURL:        os.Getenv("OPENSEARCH_URL"),

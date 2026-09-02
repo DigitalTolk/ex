@@ -68,6 +68,16 @@ type AgentDispatcher interface {
 	OnMessage(ctx context.Context, msg *model.Message, parentType string)
 }
 
+// RunLogPurger deletes the agent-run activity logs tied to a message when it
+// is deleted (implemented by the Orchestrator). Optional seam
+// (SetRunLogPurger) — nil means deleting a chat leaves its run logs in place.
+type RunLogPurger interface {
+	PurgeThreadLogs(ctx context.Context, parentID, msgID string)
+}
+
+// SetRunLogPurger wires run-log cleanup into message deletion. Optional.
+func (s *MessageService) SetRunLogPurger(p RunLogPurger) { s.runLogPurger = p }
+
 // SetAgentDispatcher wires the agent run dispatcher. Optional — when nil,
 // agent mentions are inert.
 func (s *MessageService) SetAgentDispatcher(d AgentDispatcher) { s.agentDispatcher = d }

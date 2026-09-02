@@ -308,6 +308,7 @@ func NewRouter(d *Deps) http.Handler {
 	if d.Connector != nil {
 		mux.Handle("GET /api/v1/connectors", middleware.WrapFunc(d.Connector.List, authMW))
 		mux.Handle("POST /api/v1/connectors", middleware.WrapFunc(d.Connector.Ingest, authMW, middleware.RequireSystemRole(model.SystemRoleAdmin), writeLimit))
+		mux.Handle("POST /api/v1/connectors/sync", middleware.WrapFunc(d.Connector.Sync, authMW, middleware.RequireSystemRole(model.SystemRoleAdmin), writeLimit))
 		mux.Handle("POST /api/v1/connectors/{slug}/install", middleware.WrapFunc(d.Connector.Install, authMW, writeLimit))
 		mux.Handle("PATCH /api/v1/connectors/{slug}/install", middleware.WrapFunc(d.Connector.UpdateInstall, authMW, writeLimit))
 		mux.Handle("POST /api/v1/connectors/{slug}/verify", middleware.WrapFunc(d.Connector.VerifyInstall, authMW, writeLimit))

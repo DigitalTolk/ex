@@ -391,6 +391,38 @@ func (s *RunStore) AppendRunEvent(ctx context.Context, evt *model.RunEvent) erro
 	return nil
 }
 
+// DeleteRunEvents removes every EVT# row for a run. Called after the events
+// have been archived to object storage on terminal state, so the hot table
+// holds only live runs' timelines. Deleting a handful-to-hundreds of rows once
+// per finished run is well within a background step's budget.
+func (s *RunStore) DeleteRunEvents(ctx context.Context, runID string) error {
+	keyCond := expression.Key("PK").Equal(expression.Value(runPK(runID))).
+		And(expression.Key("SK").BeginsWith("EVT#"))
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
+	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(s.Table),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		return fmt.Errorf("store: list run events for delete: %w", err)
+	}
+	for _, raw := range items {
+		var item runEventItem
+		if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
+			continue // unreadable row — skip; nothing to key a delete on
+		}
+		if _, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+			TableName: aws.String(s.Table),
+			Key:       compositeKey(runPK(runID), runEvtSK(item.Seq)),
+		}); err != nil {
+			return fmt.Errorf("store: delete run event: %w", err)
+		}
+	}
+	return nil
+}
+
 // ListRunEvents returns a run's timeline in seq order (the zero-padded SK
 // sorts numerically).
 func (s *RunStore) ListRunEvents(ctx context.Context, runID string) ([]*model.RunEvent, error) {

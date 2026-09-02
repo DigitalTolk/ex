@@ -127,6 +127,13 @@ services:
       S3_SECRET_KEY: minioadmin
       S3_REGION: us-east-1
       OPENSEARCH_URL: http://opensearch:9200
+      # Optional: point ex at a running connector-provider to pull its connector
+      # catalog. Off by default. To test locally, run a provider on the host and
+      # set these (host.docker.internal reaches the host from the container):
+      #   CONNECTOR_PROVIDER_URL: http://host.docker.internal:8600
+      #   CONNECTOR_PROVIDER_API_KEY: <the provider's PROVIDER_API_KEY>
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       dynamodb:
         condition: service_healthy

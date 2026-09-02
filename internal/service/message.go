@@ -101,6 +101,9 @@ type MessageService struct {
 	// agentDispatcher starts agent runs for @mentioned agent users. Optional
 	// seam (SetAgentDispatcher) — nil means agent mentions are inert.
 	agentDispatcher AgentDispatcher
+	// runLogPurger deletes agent-run activity logs when their chat is deleted.
+	// Optional seam (SetRunLogPurger) — nil leaves run logs untouched.
+	runLogPurger RunLogPurger
 }
 
 // ReactionActivityRecorder records "someone reacted to your message" hints into
@@ -1635,7 +1638,25 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 		s.cascadeDeleteThreadReplies(ctx, parentID, parentType, msgID)
 	}
 
+	// Sweep the agent-run activity logs for this chat: the runs it invoked and
+	// — for a thread root — every reply run's log too. Off the delete path: log
+	// deletion (S3 + DynamoDB rows) must never slow or fail the user's delete.
+	s.purgeRunLogs(ctx, parentID, msgID)
+
 	return nil
+}
+
+// purgeRunLogs asks the run-log purger to delete a deleted message's activity
+// logs, detached from the request so cleanup never blocks the delete.
+func (s *MessageService) purgeRunLogs(ctx context.Context, parentID, msgID string) {
+	if s.runLogPurger == nil {
+		return
+	}
+	safe.Go(func() {
+		bg, cancel := detachedContext(ctx)
+		defer cancel()
+		s.runLogPurger.PurgeThreadLogs(bg, parentID, msgID)
+	})
 }
 
 // softDeleteMessage tombstones a single message: clears its body /
