@@ -96,7 +96,7 @@ func (s *TaskStore) GetTask(ctx context.Context, id string) (*model.CodingTask, 
 	if err := attributevalue.UnmarshalMap(out.Item, &it); err != nil {
 		return nil, fmt.Errorf("store: unmarshal task: %w", err)
 	}
-	it.CodingTask.NormalizeLegacy()
+	it.NormalizeLegacy()
 	return &it.CodingTask, nil
 }
 
@@ -142,7 +142,7 @@ func (s *TaskStore) ListTasksByChannel(ctx context.Context, channelID string) ([
 		if err := attributevalue.UnmarshalMap(raw, &it); err != nil {
 			return nil, fmt.Errorf("store: unmarshal task: %w", err)
 		}
-		it.CodingTask.NormalizeLegacy()
+		it.NormalizeLegacy()
 		out = append(out, &it.CodingTask)
 	}
 	return out, nil
@@ -174,7 +174,7 @@ func (s *TaskStore) GetTaskByThread(ctx context.Context, threadRootID string) (*
 	if err := attributevalue.UnmarshalMap(out.Items[0], &it); err != nil {
 		return nil, fmt.Errorf("store: unmarshal task: %w", err)
 	}
-	it.CodingTask.NormalizeLegacy()
+	it.NormalizeLegacy()
 	return &it.CodingTask, nil
 }
 

@@ -1154,7 +1154,9 @@ func (o *Orchestrator) claimOnce(ctx context.Context, ownerID, runnerID string, 
 		// with activity, and the run token must outlive every extension.
 		token, err := o.tokens.GenerateRunToken(run.ID, run.InvokerID, run.AgentID, run.HardDeadline)
 		if err != nil {
-			o.failRun(ctx, run, "token_mint_failed")
+			if failErr := o.failRun(ctx, run, "token_mint_failed"); failErr != nil {
+				slog.Warn("claim: fail-run after token mint failure", "runID", run.ID, "error", failErr)
+			}
 			continue
 		}
 		bundle, bundleStats := o.buildBundle(ctx, run)
@@ -2485,7 +2487,7 @@ func (o *Orchestrator) Window(ctx context.Context, accessorID, parentID, parentT
 		if m.ReplyCount > 0 {
 			suffix = fmt.Sprintf(" [thread: %d replies]", m.ReplyCount)
 		}
-		b.WriteString(fmt.Sprintf("[m:%s] %s %s: %s%s\n", m.ID, label, m.CreatedAt.Format("15:04"), defangThreadBody(m.Body), suffix))
+		fmt.Fprintf(&b, "[m:%s] %s %s: %s%s\n", m.ID, label, m.CreatedAt.Format("15:04"), defangThreadBody(m.Body), suffix)
 	}
 	return b.String(), nil
 }

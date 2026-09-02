@@ -41,8 +41,10 @@ export function useConnectors() {
 // TwoFactorError surfaces the auth service's 2FA challenge so the dialog can
 // swap to a code input and retry with { twoFactorCode, accessCode }.
 export class TwoFactorError extends Error {
-  constructor(public accessCode: string) {
+  accessCode: string;
+  constructor(accessCode: string) {
     super('two-factor code required');
+    this.accessCode = accessCode;
   }
 }
 
