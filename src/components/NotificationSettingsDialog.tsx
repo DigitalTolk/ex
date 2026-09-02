@@ -20,6 +20,8 @@ import { useAuth } from '@/context/AuthContext';
 import { useNotifications } from '@/context/NotificationContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { apiFetch } from '@/lib/api';
+import { idleDetectionSupported, requestIdleDetectionPermission } from '@/lib/idle-detector';
+import { getNotificationTrace } from '@/lib/notification-trace';
 import type {
   MobileNotificationLevel,
   NotificationLevel,
@@ -225,9 +227,26 @@ function NotificationSettingsBody({ onOpenChange }: { onOpenChange: (open: boole
 // any popups" — the test bypasses the server entirely and exercises the exact
 // last-mile path (permission + browserEnabled + the OS).
 function NotificationDeliverySection() {
-  const { prefs, setBrowserEnabled, setSoundEnabled, permission, requestPermission, dispatch } =
+  const { prefs, setBrowserEnabled, setSoundEnabled, setIdleDetectionEnabled, permission, requestPermission, dispatch } =
     useNotifications();
   const [status, setStatus] = useState('');
+  const [idleStatus, setIdleStatus] = useState('');
+  // Re-read the trace ring buffer when the diagnostics block is toggled open.
+  const [, setTraceTick] = useState(0);
+
+  async function handleIdleDetectionToggle(on: boolean) {
+    setIdleStatus('');
+    if (!on) {
+      setIdleDetectionEnabled(false);
+      return;
+    }
+    // Permission needs this click's user-gesture context.
+    const granted = await requestIdleDetectionPermission();
+    setIdleDetectionEnabled(granted);
+    if (!granted) {
+      setIdleStatus('Idle-detection permission was not granted — enable it in your browser’s site settings and try again.');
+    }
+  }
 
   async function sendTest() {
     let perm = permission;
@@ -294,6 +313,21 @@ function NotificationDeliverySection() {
         checked={prefs.soundEnabled}
         onChange={setSoundEnabled}
       />
+      {idleDetectionSupported() && (
+        <NotificationToggleRow
+          label="Away detection (screen lock & idle)"
+          description="Let this browser detect screen lock and idle time, so alerts reach your phone the moment you step away instead of sitting on a locked desktop."
+          checked={prefs.idleDetectionEnabled}
+          onChange={(on) => {
+            void handleIdleDetectionToggle(on);
+          }}
+        />
+      )}
+      {idleStatus && (
+        <p className="text-xs text-muted-foreground" role="status" data-testid="idle-detection-status">
+          {idleStatus}
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
@@ -309,6 +343,31 @@ function NotificationDeliverySection() {
           {status}
         </p>
       )}
+
+      <details
+        data-testid="notification-trace"
+        className="text-xs text-muted-foreground"
+        onToggle={() => setTraceTick((t) => t + 1)}
+      >
+        <summary className="cursor-pointer select-none">Recent notification decisions (diagnostics)</summary>
+        {(() => {
+          const trace = getNotificationTrace().slice(-20).reverse();
+          if (trace.length === 0) {
+            return <p className="pt-1">No notifications processed in this tab yet.</p>;
+          }
+          return (
+            <ul className="space-y-0.5 pt-1 font-mono">
+              {trace.map((e, i) => (
+                <li key={`${e.at}-${i}`} data-testid="notification-trace-entry">
+                  {new Date(e.at).toLocaleTimeString()} {e.step}
+                  {e.messageID ? ` ${e.messageID}` : ''}
+                  {e.detail ? ` ${JSON.stringify(e.detail)}` : ''}
+                </li>
+              ))}
+            </ul>
+          );
+        })()}
+      </details>
     </div>
   );
 }

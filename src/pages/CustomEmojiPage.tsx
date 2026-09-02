@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Trash2, ImagePlus, X, Search } from 'lucide-react';
+import { Trash2, ImagePlus, X } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { useEmojis, useUploadEmoji, useDeleteEmoji } from '@/hooks/useEmoji';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
@@ -11,6 +11,7 @@ import { useAuth } from '@/context/AuthContext';
 import { isGuest } from '@/lib/roles';
 import { formatBytes } from '@/lib/format';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { SearchInput } from '@/components/ui/search-input';
 
 const NAME_RE = /^[a-z0-9_+-]{1,32}$/;
 
@@ -173,7 +174,12 @@ export default function CustomEmojiPage() {
                   value={name}
                   onChange={(e) => setName(e.target.value.toLowerCase())}
                   placeholder="party_parrot"
-                  className="h-9 border-0 px-0 shadow-none focus-visible:ring-0"
+                  // The field is fused between the two `:` spans, so it must
+                  // carry NO horizontal padding. Restate it at the mobile
+                  // variant: the Input base's own mobile:px-4 outranks a plain
+                  // px-0 below 768px and the shortcode drifted away from its
+                  // leading colon.
+                  className="h-9 border-0 px-0 mobile:px-0 shadow-none focus-visible:ring-0"
                   aria-label="Emoji shortcode"
                 />
                 <span className="select-none px-2 text-muted-foreground">:</span>
@@ -238,19 +244,14 @@ export default function CustomEmojiPage() {
               ({emojis?.length ?? 0})
             </span>
           </h2>
-          <div className="relative w-full sm:max-w-xs">
-            <Search
-              className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
-              aria-hidden
-            />
-            <Input
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder="Search emojis..."
-              aria-label="Search custom emojis"
-              className="h-9 pl-8"
-            />
-          </div>
+          <SearchInput
+            containerClassName="w-full sm:max-w-xs"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Search emojis..."
+            aria-label="Search custom emojis"
+            className="h-9"
+          />
         </div>
 
         <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-4">

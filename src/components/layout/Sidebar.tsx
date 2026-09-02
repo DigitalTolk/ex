@@ -53,7 +53,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
-import { getSeenMap, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, useUserThreads } from '@/hooks/useThreads';
+import { getSeenMap, mergeSeenMaps, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, useUserThreads } from '@/hooks/useThreads';
 import { useUserState } from '@/hooks/useUserState';
 import { useDrafts } from '@/hooks/useDrafts';
 import { useActivity } from '@/hooks/useActivity';
@@ -156,7 +156,7 @@ export function Sidebar({ onClose }: SidebarProps) {
         threads ?? [],
         userState?.threadNotifications ?? [],
         unreadThreadNotifications ?? new Set(),
-        { ...(userState?.threadSeen ?? {}), ...localSeenMap },
+        mergeSeenMaps(userState?.threadSeen, localSeenMap),
       ).size,
     [localSeenMap, threads, unreadThreadNotifications, userState?.threadNotifications, userState?.threadSeen],
   );
@@ -831,10 +831,12 @@ export function Sidebar({ onClose }: SidebarProps) {
     channelDragStartedAtRef.current = null;
     lastChannelDebugKeyRef.current = null;
     clearDropTarget();
-    suppressNavigationResetRef.current = window.setTimeout(() => {
-      setSuppressChannelNavigationID(null);
-      suppressNavigationResetRef.current = null;
-    }, 750);
+    // Reuses clearSuppressedChannelNavigation as the callback (clearTimeout on
+    // the already-fired id is a no-op) instead of a dedicated closure: the
+    // unmount cleanup below can cancel this timer before it ever fires in a
+    // test run, and a function literal that only executes when the suite
+    // happens to outlast 750ms is a coverage coin-flip (bit CI 2026-07-14).
+    suppressNavigationResetRef.current = window.setTimeout(clearSuppressedChannelNavigation, 750);
   }
 
   function clearSuppressedChannelNavigation() {
@@ -846,6 +848,19 @@ export function Sidebar({ onClose }: SidebarProps) {
     }
     setSuppressChannelNavigationID(null);
   }
+
+  // A drop schedules the 750ms suppress-navigation reset above; clear it on
+  // unmount so the timer never fires into a torn-down tree (it crashed test
+  // teardown with "window is not defined" when a suite ended within 750ms of
+  // a drop).
+  useEffect(
+    () => () => {
+      if (suppressNavigationResetRef.current !== null) {
+        window.clearTimeout(suppressNavigationResetRef.current);
+      }
+    },
+    [],
+  );
 
   // Live "push-aside" preview: while a channel/DM/category is dragged, open a
   // row-height gap at the slot it would land in (WYSIWYG), so the rows/sections

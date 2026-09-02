@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
+import { resetNotificationTraceForTests, traceNotification } from '@/lib/notification-trace';
 import { render, cleanup } from 'vitest-browser-react';
 import { userEvent } from 'vitest/browser';
 import { NotificationSettingsDialog } from './NotificationSettingsDialog';
@@ -34,15 +35,29 @@ const isMobileRef = vi.hoisted(() => ({ value: false }));
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => isMobileRef.value }));
 
 const notif = vi.hoisted(() => ({
-  prefs: { soundEnabled: true, browserEnabled: true },
+  prefs: { soundEnabled: true, browserEnabled: true, idleDetectionEnabled: false },
   permission: 'granted' as string,
   dispatch: vi.fn(),
   requestPermission: vi.fn(async () => 'granted' as string),
   setBrowserEnabled: vi.fn(),
   setSoundEnabled: vi.fn(),
+  setIdleDetectionEnabled: vi.fn(),
 }));
 vi.mock('@/context/NotificationContext', () => ({
   useNotifications: () => notif,
+}));
+
+const idleDetector = vi.hoisted(() => {
+  const state = {
+    supported: true,
+    permission: true,
+    request: vi.fn(async () => state.permission),
+  };
+  return state;
+});
+vi.mock('@/lib/idle-detector', () => ({
+  idleDetectionSupported: () => idleDetector.supported,
+  requestIdleDetectionPermission: idleDetector.request,
 }));
 
 function okUser(overrides?: Record<string, unknown>) {
@@ -65,8 +80,13 @@ describe('NotificationSettingsDialog browser', () => {
     notif.requestPermission.mockResolvedValue('granted');
     notif.setBrowserEnabled.mockClear();
     notif.setSoundEnabled.mockClear();
+    notif.setIdleDetectionEnabled.mockClear();
     notif.permission = 'granted';
-    notif.prefs = { soundEnabled: true, browserEnabled: true };
+    notif.prefs = { soundEnabled: true, browserEnabled: true, idleDetectionEnabled: false };
+    idleDetector.supported = true;
+    idleDetector.permission = true;
+    idleDetector.request.mockClear();
+    resetNotificationTraceForTests();
     vi.mocked(apiFetch).mockReset();
     vi.mocked(apiFetch).mockResolvedValue(okUser() as never);
     authState.user.notificationSettings = {
@@ -269,7 +289,7 @@ describe('NotificationSettingsDialog browser', () => {
   });
 
   it('explains when popups are turned off but sound played', async () => {
-    notif.prefs = { soundEnabled: true, browserEnabled: false };
+    notif.prefs = { soundEnabled: true, browserEnabled: false, idleDetectionEnabled: false };
     const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
     await screen.getByTestId('send-test-notification').click();
     await expect.element(screen.getByTestId('test-notification-status')).toHaveTextContent(/popup/i);
@@ -277,13 +297,63 @@ describe('NotificationSettingsDialog browser', () => {
 
   it('toggling browser popups on requests permission when not yet asked', async () => {
     notif.permission = 'default';
-    notif.prefs = { soundEnabled: true, browserEnabled: false }; // start OFF so the click turns it ON
+    notif.prefs = { soundEnabled: true, browserEnabled: false, idleDetectionEnabled: false }; // start OFF so the click turns it ON
     const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
     await screen.getByRole('switch', { name: 'Browser popups' }).click();
     expect(notif.setBrowserEnabled).toHaveBeenCalledWith(true);
     expect(notif.requestPermission).toHaveBeenCalled();
     await screen.getByRole('switch', { name: 'Notification sound' }).click();
     expect(notif.setSoundEnabled).toHaveBeenCalled();
+  });
+
+  it('enabling away detection requests permission from the toggle gesture and persists the grant', async () => {
+    const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    await screen.getByRole('switch', { name: /Away detection/ }).click();
+    await vi.waitFor(() => {
+      expect(notif.setIdleDetectionEnabled).toHaveBeenCalledWith(true);
+    });
+  });
+
+  it('a denied idle-detection permission leaves the feature off and explains why', async () => {
+    idleDetector.permission = false;
+    const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    await screen.getByRole('switch', { name: /Away detection/ }).click();
+    await vi.waitFor(() => {
+      expect(notif.setIdleDetectionEnabled).toHaveBeenCalledWith(false);
+    });
+    await expect.element(screen.getByTestId('idle-detection-status')).toHaveTextContent(/not granted/i);
+  });
+
+  it('disabling away detection never re-prompts for permission', async () => {
+    notif.prefs = { soundEnabled: true, browserEnabled: true, idleDetectionEnabled: true };
+    const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    await screen.getByRole('switch', { name: /Away detection/ }).click();
+    expect(notif.setIdleDetectionEnabled).toHaveBeenCalledWith(false);
+    expect(idleDetector.request).not.toHaveBeenCalled();
+  });
+
+  it('hides the away-detection toggle when the browser has no IdleDetector', async () => {
+    idleDetector.supported = false;
+    const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    await expect.element(screen.getByRole('switch', { name: 'Notification sound' })).toBeVisible();
+    expect(document.querySelector('[role="switch"][aria-label*="Away detection"]')).toBeNull();
+    expect(screen.container.textContent).not.toContain('Away detection');
+  });
+
+  it('diagnostics readout shows the placeholder when no notifications were processed, and entries when they were', async () => {
+    const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
+    const details = screen.getByTestId('notification-trace');
+    await details.getByText(/Recent notification decisions/).click();
+    await expect.element(details).toHaveTextContent(/No notifications processed/);
+    // A processed notification appears after re-opening the block — one full
+    // entry and one bare entry (no messageID/detail, e.g. a payload-less step).
+    traceNotification('suppressed-thread', 'm-diag', { thread: 'root-9' });
+    traceNotification('held');
+    await details.getByText(/Recent notification decisions/).click(); // close
+    await details.getByText(/Recent notification decisions/).click(); // reopen re-reads
+    const entries = screen.getByTestId('notification-trace-entry').elements();
+    expect(entries.some((el) => /suppressed-thread m-diag/.test(el.textContent ?? ''))).toBe(true);
+    expect(entries.some((el) => /held\s*$/.test(el.textContent ?? ''))).toBe(true);
   });
 
   it('hides the desktop footer Save button on mobile', async () => {

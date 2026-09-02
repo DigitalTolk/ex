@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/DigitalTolk/ex/internal/email"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
 	"golang.org/x/crypto/bcrypt"
@@ -54,6 +55,15 @@ type AuthService struct {
 	// publisher broadcasts user.updated when a login-time directory sync
 	// changes an existing profile, so open clients refresh it live.
 	publisher Publisher
+	// resets stores single-use password-reset tickets (guest accounts only).
+	// Nil when unwired — see password_reset.go.
+	resets PasswordResetStore
+	// mailer delivers transactional email (invites, password resets). Nil
+	// when SMTP is unconfigured: links are still minted and returned to the
+	// caller, they just aren't delivered.
+	mailer email.Sender
+	// baseURL is the public origin used to build links inside emails.
+	baseURL string
 	// guestLoginAnyRole lifts GuestLogin's role gate (dev stacks only, where
 	// OIDC isn't configured and password login is the only path). Off by
 	// default; see SetGuestLoginAnyRole.
@@ -406,8 +416,14 @@ func (s *AuthService) Logout(ctx context.Context, refreshTokenRaw string) error 
 
 // CreateInvite generates an invitation token, stores the invite with a 72-hour
 // expiry, and returns the invite model.
-func (s *AuthService) CreateInvite(ctx context.Context, inviterID, email string, channelIDs []string) (*model.Invite, error) {
-	email, err := normalizeEmailAddress(email)
+// The invite link is emailed to the invitee when SMTP is configured, and is
+// also returned so the inviter can copy it directly — the invite must not
+// depend on mail being up.
+//
+// The parameter is inviteeEmail, not email: this file imports the email
+// package, and a parameter named email would shadow it.
+func (s *AuthService) CreateInvite(ctx context.Context, inviterID, inviteeEmail string, channelIDs []string) (*model.Invite, error) {
+	addr, err := normalizeEmailAddress(inviteeEmail)
 	if err != nil {
 		return nil, err
 	}
@@ -424,7 +440,7 @@ func (s *AuthService) CreateInvite(ctx context.Context, inviterID, email string,
 	now := time.Now()
 	inv := &model.Invite{
 		Token:      token,
-		Email:      email,
+		Email:      addr,
 		InviterID:  inviterID,
 		ChannelIDs: channelIDs,
 		ExpiresAt:  now.Add(72 * time.Hour),
@@ -433,7 +449,22 @@ func (s *AuthService) CreateInvite(ctx context.Context, inviterID, email string,
 	if err := s.invites.CreateInvite(ctx, inv); err != nil {
 		return nil, fmt.Errorf("auth: store invite: %w", err)
 	}
+	s.deliver(ctx, email.InviteMessage(addr, s.inviterName(ctx, inviterID), s.baseURL+"/invite/"+token), "invite", inviterID)
 	return inv, nil
+}
+
+// inviterName resolves the inviter's display name for the invitation email.
+// Best-effort: a lookup failure just yields a nameless invitation rather than
+// blocking it.
+func (s *AuthService) inviterName(ctx context.Context, inviterID string) string {
+	if s.mailer == nil {
+		return ""
+	}
+	user, err := s.users.GetUser(ctx, inviterID)
+	if err != nil {
+		return ""
+	}
+	return user.DisplayName
 }
 
 // AcceptInvite validates the invite token, creates a guest user, adds the user
@@ -443,8 +474,8 @@ func (s *AuthService) AcceptInvite(ctx context.Context, token, displayName, pass
 	if displayName == "" || utf8.RuneCountInString(displayName) > maxDisplayNameLen {
 		return "", "", nil, fmt.Errorf("auth: display name must be 1-%d characters", maxDisplayNameLen)
 	}
-	if utf8.RuneCountInString(password) < minGuestPasswordLen || len(password) > maxGuestPasswordLen {
-		return "", "", nil, fmt.Errorf("auth: password must be at least %d characters", minGuestPasswordLen)
+	if err := validateGuestPassword(password); err != nil {
+		return "", "", nil, err
 	}
 	inv, err := s.invites.GetInvite(ctx, token)
 	if err != nil {

@@ -8,7 +8,8 @@ import {
   type ApprovalAlert,
 } from '@/context/NotificationContext';
 import { resetNotificationDedup } from '@/lib/notification-dedup';
-import { markUserActivity } from '@/lib/user-activity';
+import { markUserActivity, setHardAway } from '@/lib/user-activity';
+import { addInViewThread, resetThreadScopeForTests, setPanelThread } from '@/lib/thread-scope';
 
 const playMock = vi.fn();
 const approvalChimeMock = vi.fn();
@@ -21,6 +22,15 @@ const sendWSMock = vi.fn();
 vi.mock('@/lib/ws-sender', () => ({
   sendWS: (payload: unknown) => sendWSMock(payload),
   setWSSender: vi.fn(),
+}));
+
+const idleDetectorMock = vi.hoisted(() => ({
+  start: vi.fn(async () => true),
+  stop: vi.fn(),
+}));
+vi.mock('@/lib/idle-detector', () => ({
+  startIdleDetection: idleDetectorMock.start,
+  stopIdleDetection: idleDetectorMock.stop,
 }));
 
 const toastMock = vi.fn();
@@ -58,11 +68,12 @@ let setActiveSpy: ((id: string | null) => void) | null = null;
 let setUserSpy: ((id: string | null) => void) | null = null;
 let setSoundSpy: ((v: boolean) => void) | null = null;
 let setBrowserSpy: ((v: boolean) => void) | null = null;
+let setIdleSpy: ((v: boolean) => void) | null = null;
 let permissionSpy: string | null = null;
 let notifyApprovalSpy: ((a: ApprovalAlert) => void) | null = null;
 
 function Probe() {
-  const { dispatch, notifyApproval, setActiveParent, setCurrentUserID, setSoundEnabled, setBrowserEnabled, permission } = useNotifications();
+  const { dispatch, notifyApproval, setActiveParent, setCurrentUserID, setSoundEnabled, setBrowserEnabled, setIdleDetectionEnabled, permission } = useNotifications();
   useEffect(() => {
     dispatchSpy = dispatch;
     notifyApprovalSpy = notifyApproval;
@@ -70,8 +81,9 @@ function Probe() {
     setUserSpy = setCurrentUserID;
     setSoundSpy = setSoundEnabled;
     setBrowserSpy = setBrowserEnabled;
+    setIdleSpy = setIdleDetectionEnabled;
     permissionSpy = permission;
-  }, [dispatch, notifyApproval, setActiveParent, setCurrentUserID, setSoundEnabled, setBrowserEnabled, permission]);
+  }, [dispatch, notifyApproval, setActiveParent, setCurrentUserID, setSoundEnabled, setBrowserEnabled, setIdleDetectionEnabled, permission]);
   return <div data-testid="probe">{permission}</div>;
 }
 
@@ -203,6 +215,11 @@ describe('NotificationProvider', () => {
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
     renderProbe();
     act(() => {
+      // Attention requires real focus + input now (jsdom boots with
+      // document.hasFocus() === false): being "at" the DM means the window
+      // is focused and input was seen within the suppression window.
+      window.dispatchEvent(new Event('focus'));
+      markUserActivity();
       setActiveSpy!('dm-1');
       dispatchSpy!(samplePayload);
     });
@@ -327,6 +344,161 @@ describe('NotificationProvider', () => {
     });
     expect(notificationCtor).toHaveBeenCalledTimes(1);
     expect(playMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('the idle-detection opt-in starts the detector, and turning it off stops it', () => {
+    idleDetectorMock.start.mockClear();
+    idleDetectorMock.stop.mockClear();
+    renderProbe();
+    expect(idleDetectorMock.start).not.toHaveBeenCalled(); // default off
+    act(() => setIdleSpy!(true));
+    expect(idleDetectorMock.start).toHaveBeenCalledTimes(1);
+    act(() => setIdleSpy!(false));
+    expect(idleDetectorMock.stop).toHaveBeenCalled();
+    // The preference persists for the next session.
+    const stored = JSON.parse(localStorage.getItem('ex.notifications.prefs.v1') ?? '{}') as { idleDetectionEnabled?: boolean };
+    expect(stored.idleDetectionEnabled).toBe(false);
+  });
+
+  it('a persisted idle-detection opt-in starts the detector on mount', () => {
+    idleDetectorMock.start.mockClear();
+    localStorage.setItem(
+      'ex.notifications.prefs.v1',
+      JSON.stringify({ soundEnabled: true, browserEnabled: true, idleDetectionEnabled: true }),
+    );
+    renderProbe();
+    expect(idleDetectorMock.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('suppresses (and acks) a thread reply while that thread is on screen and the user is attentive (SPEC I-5 / G-P1.1)', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    renderProbe();
+    try {
+      act(() => {
+        window.dispatchEvent(new Event('focus'));
+        markUserActivity();
+        setPanelThread('root-1');
+        dispatchSpy!({
+          ...channelMessagePayload,
+          kind: 'thread_reply',
+          parentMessageID: 'root-1',
+          messageID: 'm-thr-active',
+        });
+      });
+      expect(notificationCtor).not.toHaveBeenCalled();
+      expect(playMock).not.toHaveBeenCalled();
+      // Suppressed-because-reading counts as awareness: the desktop claims
+      // the alert so the deferred mobile push stands down.
+      expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-thr-active' });
+    } finally {
+      resetThreadScopeForTests();
+    }
+  });
+
+  it('suppresses (and acks) a thread reply while its /threads card is in the viewport (G-P1.3)', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    renderProbe();
+    try {
+      act(() => {
+        window.dispatchEvent(new Event('focus'));
+        markUserActivity();
+        addInViewThread('root-card');
+        dispatchSpy!({
+          ...channelMessagePayload,
+          kind: 'thread_reply',
+          parentMessageID: 'root-card',
+          messageID: 'm-thr-card',
+        });
+      });
+      expect(notificationCtor).not.toHaveBeenCalled();
+      expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-thr-card' });
+    } finally {
+      resetThreadScopeForTests();
+    }
+  });
+
+  it('a suppressed thread reply without a messageID has no ack to send (defensive arm)', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    renderProbe();
+    try {
+      act(() => {
+        window.dispatchEvent(new Event('focus'));
+        markUserActivity();
+        setPanelThread('root-1');
+        dispatchSpy!({
+          ...channelMessagePayload,
+          kind: 'thread_reply',
+          parentMessageID: 'root-1',
+          messageID: undefined,
+        });
+      });
+      expect(notificationCtor).not.toHaveBeenCalled();
+      expect(sendWSMock).not.toHaveBeenCalled();
+    } finally {
+      resetThreadScopeForTests();
+    }
+  });
+
+  it('surfaces a thread reply when that thread is NOT being read (G-P1.2)', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    renderProbe();
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+      markUserActivity();
+      dispatchSpy!({
+        ...channelMessagePayload,
+        kind: 'thread_reply',
+        parentMessageID: 'root-elsewhere',
+        messageID: 'm-thr-other',
+      });
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(playMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a thread reply to an on-screen thread still SURFACES when input is older than the suppression window — but acks, being within the attention window (R5 tiering)', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    renderProbe();
+    try {
+      act(() => {
+        window.dispatchEvent(new Event('focus'));
+        // 5 minutes idle: beyond suppressionWindowMs (2min) so nothing may be
+        // silently swallowed; within attentionWindowMs (10min) so the desktop
+        // still claims delivery after surfacing.
+        markUserActivity(Date.now() - 5 * 60_000);
+        setPanelThread('root-1');
+        dispatchSpy!({
+          ...channelMessagePayload,
+          kind: 'thread_reply',
+          parentMessageID: 'root-1',
+          messageID: 'm-thr-idle',
+        });
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-thr-idle' });
+    } finally {
+      resetThreadScopeForTests();
+    }
+  });
+
+  it('a hard-away signal (screen lock / wake) surfaces the popup but withholds the ack, so mobile fires (R2/I-2)', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    renderProbe();
+    try {
+      act(() => {
+        window.dispatchEvent(new Event('focus'));
+        markUserActivity();
+        setHardAway('shell', true);
+        dispatchSpy!({ ...samplePayload, messageID: 'm-locked' });
+      });
+      // The popup may surface (it'll sit behind the lock screen) — but the
+      // desktop must NOT claim the alert: no ack means the deferred mobile
+      // push delivers to the phone.
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      expect(sendWSMock).not.toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-locked' });
+    } finally {
+      setHardAway('shell', false);
+    }
   });
 
   it('fires a regular channel message when the backend published it (e.g. channel set to "all messages")', () => {
@@ -771,9 +943,66 @@ describe('NotificationProvider', () => {
     expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-ack' });
   });
 
+  // THE 2026-08-12 REGRESSION, end to end: the user sits at the desktop
+  // working in ANOTHER app — the ex window is blurred (and here even hidden),
+  // but they touched the machine two minutes ago. The OS banner surfaces over
+  // whatever they're doing, so the desktop DID deliver — it must ack, or the
+  // phone buzzes 30s later for every single message ("constantly receiving
+  // mobile notifications despite being active in my desktop app"). Focus
+  // gates suppression, never the ack.
+  it('acks a surfaced alert while the ex window is blurred/hidden but input is fresh (at the device, other app)', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    renderProbe();
+    act(() => {
+      window.dispatchEvent(new Event('blur'));
+      markUserActivity(Date.now() - 2 * 60_000);
+      dispatchSpy!({ ...samplePayload, messageID: 'm-other-app' });
+    });
+    // The popup still surfaces (the OS shows banners for background windows)…
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    // …and the desktop claims it: the phone stays silent.
+    expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-other-app' });
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+  });
+
+  it('still refuses to ack a blurred window whose input is stale (genuinely away)', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    renderProbe();
+    act(() => {
+      window.dispatchEvent(new Event('blur'));
+      markUserActivity(Date.now() - 25 * 60_000);
+      dispatchSpy!({ ...samplePayload, messageID: 'm-truly-away' });
+    });
+    expect(sendWSMock).not.toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-truly-away' });
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+      markUserActivity();
+    });
+  });
+
+  it('never suppresses for the active parent while the window is blurred — even though it acks', () => {
+    // The two tiers must not blur together: at-device (ack) is satisfied,
+    // attentive-on-parent (suppress) is not — so the popup still surfaces.
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    renderProbe();
+    act(() => {
+      window.dispatchEvent(new Event('blur'));
+      markUserActivity();
+      setActiveSpy!('ch-1');
+      dispatchSpy!({ ...channelMessagePayload, messageID: 'm-blur-parent' });
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendWSMock).toHaveBeenCalledWith({ type: 'notification.ack', messageID: 'm-blur-parent' });
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+  });
+
   it('does NOT ack a surfaced alert while the user is idle (mobile fallback must fire)', () => {
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
-    markUserActivity(Date.now() - 25 * 60_000); // user left the desk 25 min ago (past the 20min active window)
+    markUserActivity(Date.now() - 25 * 60_000); // user left the desk 25 min ago (past the 10min attention window)
     renderProbe();
     act(() => {
       dispatchSpy!({ ...samplePayload, messageID: 'm-idle-jsdom' });

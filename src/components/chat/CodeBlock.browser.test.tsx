@@ -18,14 +18,14 @@ afterEach(async () => {
 });
 
 describe('CodeBlock copy confirmation (browser)', () => {
-  it('flips to "Code copied" after a click and returns to rest', async () => {
+  it('flips to "Copied" after a click and returns to rest', async () => {
     const result = await render(<CodeBlock code={'const a = 1;\n'} language="ts" />);
     active = result;
     const btn = document.querySelector('[data-testid="code-copy-button"]') as HTMLButtonElement;
     expect(btn.getAttribute('aria-label')).toBe('Copy code');
 
     btn.click();
-    await expect.poll(() => btn.getAttribute('aria-label')).toBe('Code copied');
+    await expect.poll(() => btn.getAttribute('aria-label')).toBe('Copied');
     expect(btn.getAttribute('title')).toBe('Copied');
     expect(vi.mocked(copyToClipboard)).toHaveBeenCalledWith('const a = 1;\n');
 

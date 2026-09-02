@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 
 interface UseInViewOptions {
   // Margin around the root that expands the "in view" area. Defaults to
@@ -42,4 +42,27 @@ export function useInView<T extends HTMLElement>({ rootMargin = '200px' }: UseIn
   }, [inView, rootMargin]);
 
   return { ref, inView };
+}
+
+// useLiveInView tracks CURRENT viewport intersection of an existing ref —
+// non-sticky, unlike useInView: it flips back to false when the element
+// scrolls out. Used for "is the user reading this right now" registration
+// (thread-scope), where a sticky flag would keep suppressing notifications
+// for a card merely scrolled past. No rootMargin: only genuine visibility
+// counts. Falls back to true when IntersectionObserver is unavailable
+// (jsdom), matching useInView's no-virtualization baseline.
+export function useLiveInView<T extends HTMLElement>(ref: RefObject<T | null>): boolean {
+  const [live, setLive] = useState(typeof IntersectionObserver === 'undefined');
+  useEffect(() => {
+    const node = ref.current;
+    if (!node || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        setLive(entry.isIntersecting);
+      }
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [ref]);
+  return live;
 }

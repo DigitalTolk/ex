@@ -14,6 +14,7 @@ import {
   ImagePlay,
   X,
   Save,
+  Loader2,
 } from 'lucide-react';
 import { useEffect } from 'react';
 import { Button } from '@/components/ui/button';
@@ -195,6 +196,11 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const { data: commands = [] } = useCommands(commandTarget !== undefined);
   const { mutate: runCommand } = useRunCommand();
   const [commandError, setCommandError] = useState('');
+  // Name of the slash command currently executing server-side. Commands like
+  // /mstmeetings take a few seconds (a Graph round-trip) before their result
+  // message lands over the WebSocket — this drives a "Running /x…" status so
+  // the composer never looks like it swallowed the command.
+  const [pendingCommand, setPendingCommand] = useState('');
   const slashCommandsProvider = useCallback(() => commands, [commands]);
   /* istanbul ignore next -- the `?? ''` fallback only applies when settings.giphyAPIKey is undefined, but the settings object always carries the field; defensive. */
   const giphyAPIKey = settings?.giphyAPIKey?.trim() ?? '';
@@ -351,11 +357,17 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       const name = /^\/([\w-]+)$/.exec(trimmed)?.[1]?.toLowerCase();
       return name && commands.some((c) => c.name === name) ? name : null;
     })();
+    // While a command is in flight, swallow a re-submitted command (double
+    // Enter must not start two meetings) — the status line is already up.
+    // Normal messages still send.
+    if (commandName && pendingCommand) return;
     setCommandError('');
     if (commandName) {
+      setPendingCommand(commandName);
       runCommand(
         { command: commandName, parentType: commandTarget!.parentType, parentID: commandTarget!.parentID },
         {
+          onSettled: () => setPendingCommand(''),
           onError: (err) =>
             setCommandError(
               commandDenialMessage(err) ?? `Couldn't run /${commandName} — please try again.`,
@@ -378,7 +390,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       return;
     }
     queueMicrotask(() => editorRef.current?.focus());
-  }, [canSend, body, drafts, onSend, variant, isMobile, submitLabel, collapseMobileComposer, commandTarget, commands, runCommand]);
+  }, [canSend, body, drafts, onSend, variant, isMobile, submitLabel, collapseMobileComposer, commandTarget, commands, runCommand, pendingCommand]);
 
   useEffect(() => {
     if (variant !== 'composer') return;
@@ -856,6 +868,16 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           data-testid="command-error"
         >
           {commandError}
+        </div>
+      )}
+      {pendingCommand && (
+        <div
+          className="mb-2 flex items-center gap-2 rounded-md bg-muted p-2 text-xs text-muted-foreground"
+          role="status"
+          data-testid="command-pending"
+        >
+          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+          Running /{pendingCommand}…
         </div>
       )}
       {bodyOverLimit && (

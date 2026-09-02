@@ -20,6 +20,7 @@ func clearEnv(t *testing.T) {
 		"SENTRY_FRONTEND_REPLAY_SESSION_SAMPLE_RATE", "SENTRY_FRONTEND_REPLAY_ERROR_SAMPLE_RATE",
 		"ACCESS_LOG_ENABLED",
 		"MS_TENANT_ID", "MS_CLIENT_ID", "MS_CLIENT_SECRET", "MS_PROFILE_SYNC_INTERVAL",
+		"EMAIL_PROVIDER", "EMAIL_FROM", "SES_CONFIGURATION_SET",
 	}
 
 	saved := make(map[string]string)
@@ -482,4 +483,58 @@ func TestLoadMSProfileSyncInterval(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A typo'd transport must abort the boot: silently sending no mail would look
+// like "email is just broken" in production.
+func TestLoadInvalidEmailProvider(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("ENV", "development")
+	t.Setenv("EMAIL_PROVIDER", "sendgrid")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error for an unknown EMAIL_PROVIDER")
+	}
+}
+
+func TestLoadEmailProviderAndFrom(t *testing.T) {
+	t.Run("defaults to smtp and inherits SMTP_FROM", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("SMTP_FROM", "Ex <noreply@example.com>")
+
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.EmailProvider != "smtp" {
+			t.Errorf("EmailProvider = %q, want smtp", c.EmailProvider)
+		}
+		// An SMTP-era config must keep working without EMAIL_FROM.
+		if c.EmailFrom != "Ex <noreply@example.com>" {
+			t.Errorf("EmailFrom = %q, want the SMTP_FROM fallback", c.EmailFrom)
+		}
+	})
+
+	t.Run("ses with an explicit sender and configuration set", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("EMAIL_PROVIDER", "ses")
+		t.Setenv("EMAIL_FROM", "noreply@ses.example.com")
+		t.Setenv("SES_CONFIGURATION_SET", "ex-transactional")
+
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.EmailProvider != "ses" {
+			t.Errorf("EmailProvider = %q, want ses", c.EmailProvider)
+		}
+		if c.EmailFrom != "noreply@ses.example.com" {
+			t.Errorf("EmailFrom = %q, want the explicit EMAIL_FROM", c.EmailFrom)
+		}
+		if c.SESConfigurationSet != "ex-transactional" {
+			t.Errorf("SESConfigurationSet = %q", c.SESConfigurationSet)
+		}
+	})
 }

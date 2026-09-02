@@ -80,6 +80,25 @@ describe('PopoverPortal mobile sheet — real swipe-to-dismiss', () => {
     expect(onDismiss).not.toHaveBeenCalled();
   });
 
+  it('the grab handle is rendered with touch-action none and a swipe on it dismisses', async () => {
+    if (window.innerWidth > 767) return;
+    const onDismiss = vi.fn();
+    await render(<Harness onDismiss={onDismiss} />);
+    await vi.waitFor(() => expect(sheet()).not.toBeNull());
+
+    // touch-action none on the handle is load-bearing: it keeps a real
+    // browser from claiming the downward gesture as a native scroll (and
+    // pointer-cancelling the drag). The sheet itself stays pan-y so inner
+    // scroll bodies pan natively — the handle is the guaranteed dismiss
+    // surface.
+    const handle = document.querySelector('[data-testid="sheet-grab-handle"]') as HTMLElement;
+    expect(handle).not.toBeNull();
+    expect(getComputedStyle(handle).touchAction).toBe('none');
+
+    await swipe(handle, { dy: 200, steps: 8, stepMs: 18 });
+    await vi.waitFor(() => expect(onDismiss).toHaveBeenCalled());
+  });
+
   it('a swipe on a short (non-scrollable) swipe-scroll body still dismisses', async () => {
     if (window.innerWidth > 767) return;
     const onDismiss = vi.fn();

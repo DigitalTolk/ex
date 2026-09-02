@@ -10,7 +10,9 @@ import tailwindcss from '@tailwindcss/vite'
 // `<meta name="app-version">` into the served HTML and exposes the same
 // hash via /api/v1/version — no Vite-side env var to keep in sync.
 
-const distGitignorePath = path.resolve(__dirname, 'dist', '.gitignore')
+// import.meta.dirname (not __dirname): Vite 8's `configLoader: 'native'`
+// loads this config as a real ESM module, where __dirname is undefined.
+const distGitignorePath = path.resolve(import.meta.dirname, 'dist', '.gitignore')
 const vendorChunks: Array<[string, (id: string) => boolean]> = [
   ['react-vendor', (id) => /node_modules\/(react|react-dom|react-router|react-router-dom)\//.test(id)],
   ['query-vendor', (id) => id.includes('/node_modules/@tanstack/react-query/')],
@@ -70,7 +72,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
   server: {

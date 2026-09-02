@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { setDocumentNotificationCount } from '@/lib/document-title';
-import { getSeenMap, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, useUserThreads } from '@/hooks/useThreads';
+import { getSeenMap, mergeSeenMaps, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, useUserThreads } from '@/hooks/useThreads';
 import { useUserState } from '@/hooks/useUserState';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
@@ -26,7 +26,7 @@ export function NotificationCountTitleBridge() {
     if (!isAuthenticated) {
       return 0;
     }
-    const seenMap = { ...(userState?.threadSeen ?? {}), ...localSeenMap };
+    const seenMap = mergeSeenMaps(userState?.threadSeen, localSeenMap);
     return unreadThreadIDs(threads, userState?.threadNotifications ?? [], unreadThreadNotifications, seenMap).size;
   }, [isAuthenticated, localSeenMap, threads, unreadThreadNotifications, userState]);
 

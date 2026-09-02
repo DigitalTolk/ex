@@ -162,8 +162,17 @@ describe('MessageItem - mobile actions', () => {
 
     const sheet = screen.getByTestId('mobile-message-actions');
     expect(sheet.parentElement).toHaveClass('z-[120]');
-    expect(sheet).toHaveClass('bottom-0', 'max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)]', 'overflow-y-auto');
+    // The sheet root clips; scrolling lives on the inner data-swipe-scroll
+    // body so the drag/scroll arbitration (useSwipeDismiss) can tell a menu
+    // pan from a dismiss, and the grab handle is the guaranteed dismiss
+    // surface (touch-action none — a real browser must not claim its gesture
+    // as a native scroll).
+    expect(sheet).toHaveClass('bottom-0', 'max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)]', 'overflow-hidden');
     expect(sheet).toHaveClass('border-x-0', 'border-b-0');
+    const body = sheet.querySelector('[data-swipe-scroll="true"]');
+    expect(body).toHaveClass('overflow-y-auto');
+    const handle = screen.getByTestId('sheet-grab-handle');
+    expect(handle.style.touchAction).toBe('none');
   });
 
   it('offers copy text and suppresses native text selection affordances on mobile', async () => {

@@ -16,6 +16,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/cache"
 	"github.com/DigitalTolk/ex/internal/config"
+	"github.com/DigitalTolk/ex/internal/email"
 	"github.com/DigitalTolk/ex/internal/eventlog"
 	"github.com/DigitalTolk/ex/internal/handler"
 	"github.com/DigitalTolk/ex/internal/middleware"
@@ -195,6 +196,29 @@ func main() {
 	// ------------------------------------------------------------------ Services
 	brokerAdapter := handler.NewBrokerAdapter(broker)
 	authSvc := service.NewAuthService(userStore, tokenStore, inviteStore, membershipStore, channelStore, jwtMgr, oidcAdapter, redisCache)
+	// Redis backs single-use password-reset tickets (guest accounts only).
+	authSvc.SetPasswordResetStore(redisCache)
+	// Transactional email is OPTIONAL: with SMTP_HOST unset the app runs
+	// exactly as before — invites and resets still mint their links, they
+	// just aren't delivered, and the admin relays them by hand.
+	// mailer stays nil when unconfigured; the admin email panel reports that
+	// state rather than pretending mail works.
+	var mailer email.Sender
+	if m, merr := newMailer(ctx, cfg); merr != nil {
+		// A malformed sender address or a bad transport setting is a
+		// misconfiguration, not an opt-out: fail the boot rather than
+		// silently running without mail.
+		if !errors.Is(merr, email.ErrNotConfigured) {
+			slog.Error("failed to init mail transport", "provider", cfg.EmailProvider, "error", merr)
+			os.Exit(1)
+		}
+		slog.Warn("no mail transport configured; invite and password-reset links must be relayed by hand",
+			"provider", cfg.EmailProvider)
+	} else {
+		mailer = m
+		slog.Info("transactional email enabled", "provider", cfg.EmailProvider)
+	}
+	authSvc.SetMailer(mailer, cfg.BaseURL)
 	authSvc.SetGuestLoginAnyRole(cfg.GuestLoginAnyRole)
 	var avatarSigner service.AvatarSigner
 	if s3Client != nil {
@@ -473,6 +497,9 @@ func main() {
 	})
 	attachmentH := handler.NewAttachmentHandler(attachmentSvc)
 	adminH := handler.NewAdminHandler(settingsSvc)
+	// Mail diagnostics: an admin can read the effective transport and send a
+	// real test message through it.
+	adminH.SetMailer(mailer, cfg.EmailProvider, cfg.EmailFrom)
 	webhookH := handler.NewWebhookHandler(webhookSvc)
 	commandH := handler.NewCommandHandler(commandSvc)
 	threadH := handler.NewThreadHandler(messageSvc)
@@ -797,6 +824,24 @@ func runReminderPoller(ctx context.Context, svc *service.ReminderService, interv
 // browser-bound presigned uploads. The public endpoint wins (it is what the
 // presigned URLs carry); only http origins are returned since the base CSP
 // already permits https:.
+// newMailer builds the configured transactional-mail transport. It returns
+// email.ErrNotConfigured when the selected provider has no settings, which the
+// caller treats as "run without mail" rather than a failure — links are still
+// minted and shown in-app for manual relay.
+func newMailer(ctx context.Context, cfg *config.Config) (email.Sender, error) {
+	if cfg.EmailProvider == "ses" {
+		return email.NewSESSender(ctx, email.SESConfig{
+			// SES shares the deployment's AWS region and credential chain
+			// with DynamoDB and S3, so an IAM-role deploy needs no extra
+			// secrets.
+			Region:           cfg.AWSRegion,
+			From:             cfg.EmailFrom,
+			ConfigurationSet: cfg.SESConfigurationSet,
+		})
+	}
+	return email.NewSMTPSender(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.EmailFrom)
+}
+
 func uploadConnectSrcOrigins(publicEndpoint, endpoint string) []string {
 	raw := publicEndpoint
 	if raw == "" {

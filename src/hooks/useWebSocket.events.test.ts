@@ -86,6 +86,16 @@ describe('useWebSocket event coverage', () => {
     expect(onActivityNew).toHaveBeenCalled();
   });
 
+  it('routes activity.read to onActivityRead', async () => {
+    const onActivityRead = vi.fn();
+    renderHook(() => useWebSocket({ onActivityRead, enabled: true }));
+    await flushConnect();
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    ws.simulateMessage(JSON.stringify({ id: 'actr1', type: 'activity.read', data: '{}' }));
+    expect(onActivityRead).toHaveBeenCalled();
+  });
+
   it('routes thread.updated to onThreadUpdated', async () => {
     const onThreadUpdated = vi.fn();
     renderHook(() => useWebSocket({ onThreadUpdated, enabled: true }));

@@ -309,6 +309,13 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
             className="mb-1.5 flex shrink-0 justify-center gap-0.5 border-b pb-1"
             role="tablist"
             aria-label="Emoji categories"
+            // Chrome band: touch-action none makes a downward drag here a
+            // reliable sheet-dismiss on real devices (the browser must not
+            // claim it as a native scroll). Taps on the tabs are unaffected.
+            // data-sheet-drag says so explicitly — without it the sheet now
+            // declines the gesture and this strip would swallow drags.
+            data-sheet-drag="true"
+            style={{ touchAction: 'none' }}
           >
             {categories.map((c) => {
               const selected = c.slug === activeCategory;
@@ -335,7 +342,15 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
             })}
           </div>
         )}
-        <div className="flex min-h-0 flex-1 flex-col">
+        {/* ONE scroll region for the whole landing view. The shelves used to
+            sit OUTSIDE the scroller as pinned chrome, which meant a finger
+            dragged upward over "Frequently used" was neither scrolling the
+            grid nor moving the sheet — the picker felt frozen on a phone. */}
+        <div
+          className="flex min-h-0 flex-1 flex-col overflow-y-auto"
+          data-swipe-scroll="true"
+          data-testid="emoji-scroll-body"
+        >
           {onLandingPage && visibleFrequent.length > 0 && (
             <div className="mb-1.5 shrink-0 border-b pb-1.5">
               <div className="mb-1 text-center text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -410,10 +425,9 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                 : standardCategoryLabel}
           </div>
           <div
-            className="grid min-h-0 flex-1 grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 overflow-y-auto mobile:grid-cols-[repeat(7,2.75rem)]"
+            className="grid grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 mobile:grid-cols-[repeat(7,2.75rem)]"
             role="list"
             aria-label={activeCategory === CUSTOM_CATEGORY_SLUG && !query.trim() ? 'Custom emojis' : 'Standard emojis'}
-            data-swipe-scroll="true"
           >
             {filteredCustom.map((e) => (
               <button
@@ -461,7 +475,8 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
             )}
           </div>
         </div>
-        <div className="mt-1.5 flex shrink-0 items-center justify-center gap-0.5 border-t pt-1.5" role="radiogroup" aria-label="Emoji skin tone">
+        {/* Chrome band (see the category tablist): drags here dismiss the sheet. */}
+        <div className="mt-1.5 flex shrink-0 items-center justify-center gap-0.5 border-t pt-1.5" role="radiogroup" aria-label="Emoji skin tone" data-sheet-drag="true" style={{ touchAction: 'none' }}>
           <span className="text-xs font-medium text-muted-foreground">Skin tone</span>
           {EMOJI_SKIN_TONES.map((tone) => (
             <button

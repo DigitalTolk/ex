@@ -622,14 +622,29 @@ function MessageItemImpl({
         role="dialog"
         aria-modal="true"
         aria-label="Message actions"
-        data-swipe-scroll="true"
-        className={`absolute inset-x-0 bottom-0 max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)] overflow-y-auto rounded-t-xl border-x-0 border-b-0 border-t bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-lg ${mobileActionsSuppressed ? 'hidden' : ''}`}
+        className={`absolute inset-x-0 bottom-0 flex max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)] flex-col overflow-hidden rounded-t-xl border-x-0 border-b-0 border-t bg-popover text-popover-foreground shadow-lg ${mobileActionsSuppressed ? 'hidden' : ''}`}
         data-testid="mobile-message-actions"
         data-actions-suppressed={mobileActionsSuppressed ? 'true' : 'false'}
         data-swipe-dismissing={String(swipeDismissing)}
         ref={setMobileActionsNode}
         {...mobileActionsMotion}
       >
+        {/* Grab handle: the guaranteed swipe-to-dismiss surface. touch-action
+            none keeps the browser from claiming the gesture as a native
+            scroll; the menu body below scrolls natively when it overflows. */}
+        <div
+          className="flex shrink-0 items-center justify-center pb-2 pt-2"
+          style={{ touchAction: 'none' }}
+          aria-hidden="true"
+          data-sheet-drag="true"
+          data-testid="sheet-grab-handle"
+        >
+          <div className="h-1 w-9 rounded-full bg-border-strong" />
+        </div>
+        <div
+          data-swipe-scroll="true"
+          className="min-h-0 flex-1 overflow-y-auto p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] pt-0"
+        >
         {!inThread && (
           <Button
             type="button"
@@ -750,6 +765,7 @@ function MessageItemImpl({
           <AlarmClock className="h-4 w-4" />
           Remind me
         </button>
+        </div>
       </motion.div>
       )}
     </div>

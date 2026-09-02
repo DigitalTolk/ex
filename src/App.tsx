@@ -41,6 +41,9 @@ const SkillsPage = lazy(() => import('@/pages/SkillsPage'));
 const ConnectorsPage = lazy(() => import('@/pages/ConnectorsPage'));
 const ActivityPage = lazy(() => import('@/pages/ActivityPage'));
 const SearchResultsPage = lazy(() => import('@/pages/SearchResultsPage'));
+// Password recovery is a cold path (guest accounts only, rarely hit) — keep
+// it out of the boot bundle even though it sits next to the login flow.
+const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
 const NotFoundPage = lazy(() =>
   import('@/pages/NotFoundPage').then((m) => ({ default: m.NotFoundPage })),
 );
@@ -123,6 +126,8 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/invite/:token" element={<LoginPage />} />
+      <Route path="/forgot-password" element={<ResetPasswordPage />} />
+      <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
       <Route path="/oidc/callback" element={<OIDCCallbackPage />} />
       <Route
         path="/"

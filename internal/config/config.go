@@ -55,7 +55,23 @@ type Config struct {
 	JWTAccessTTL  time.Duration
 	JWTRefreshTTL time.Duration
 
-	// SMTP (for invites)
+	// Transactional email (guest invites, password resets). Optional: with
+	// no transport configured the app runs normally and the links are shown
+	// in-app for manual relay.
+	//
+	// EmailProvider selects the transport: "smtp" (default) or "ses". SES
+	// sends through the AWS API rather than an SMTP endpoint, so it
+	// authenticates with the ambient IAM identity — no SMTP credentials to
+	// mint or rotate.
+	EmailProvider string
+	// EmailFrom is the sender identity for both transports. Defaults to
+	// SMTPFrom so an SMTP-era config keeps working unchanged.
+	EmailFrom string
+	// SESConfigurationSet is optional; when set, SES publishes delivery,
+	// bounce, and complaint events for these sends to it.
+	SESConfigurationSet string
+
+	// SMTP
 	SMTPHost string
 	SMTPPort string
 	SMTPUser string
@@ -139,6 +155,8 @@ func Load() (*Config, error) {
 		OIDCClientID:         os.Getenv("OIDC_CLIENT_ID"),
 		OIDCClientSecret:     os.Getenv("OIDC_CLIENT_SECRET"),
 		JWTSecret:            os.Getenv("JWT_SECRET"),
+		EmailProvider:        envOr("EMAIL_PROVIDER", "smtp"),
+		SESConfigurationSet:  os.Getenv("SES_CONFIGURATION_SET"),
 		SMTPHost:             os.Getenv("SMTP_HOST"),
 		SMTPPort:             envOr("SMTP_PORT", "587"),
 		SMTPUser:             os.Getenv("SMTP_USER"),
@@ -246,6 +264,16 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid MS_PROFILE_SYNC_INTERVAL %q: must be a positive duration", syncInterval)
 	}
 	c.MSProfileSyncInterval = d
+
+	// EMAIL_FROM is the transport-neutral sender; it falls back to SMTP_FROM
+	// so a config written before SES support keeps working unchanged.
+	c.EmailFrom = envOr("EMAIL_FROM", c.SMTPFrom)
+	// Fail closed on an unknown transport rather than silently sending no
+	// mail: a typo'd EMAIL_PROVIDER would otherwise look like "email is just
+	// broken" in production.
+	if c.EmailProvider != "smtp" && c.EmailProvider != "ses" {
+		return nil, fmt.Errorf("invalid EMAIL_PROVIDER %q: must be \"smtp\" or \"ses\"", c.EmailProvider)
+	}
 
 	return c, nil
 }

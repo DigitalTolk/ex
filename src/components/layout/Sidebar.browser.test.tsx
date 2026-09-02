@@ -153,6 +153,7 @@ let mockThreads: Array<{
 vi.mock('@/hooks/useThreads', () => ({
   THREAD_SEEN_CHANGED_EVENT: 'ex:thread-seen-changed',
   getSeenMap: () => ({}),
+  mergeSeenMaps: (server: Record<string, string> | undefined, local: Record<string, string>) => ({ ...(server ?? {}), ...local }),
   unreadThreadIDs: (threads: typeof mockThreads) => new Set(threads.map((t) => t.threadRootID)),
   useUserThreads: () => ({ data: mockThreads }),
 }));

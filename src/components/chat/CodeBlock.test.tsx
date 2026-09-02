@@ -70,7 +70,7 @@ describe('CodeBlock', () => {
     });
     // Copies the raw code including the trailing newline.
     expect(copyMock).toHaveBeenCalledWith('x = 1\n');
-    expect(btn).toHaveAttribute('aria-label', 'Code copied');
+    expect(btn).toHaveAttribute('aria-label', 'Copied');
     act(() => vi.advanceTimersByTime(1600));
     expect(btn).toHaveAttribute('aria-label', 'Copy code');
   });

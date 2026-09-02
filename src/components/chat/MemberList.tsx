@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { X, UserPlus, ArrowRight } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -21,6 +20,7 @@ import { MEMBER_LIST_WIDTH } from '@/lib/panel-width';
 import { PanelResizeHandle } from '@/components/layout/PanelResizeHandle';
 import type { ChannelMembership, UserStatus } from '@/types';
 import type { UserMapEntry } from './MessageList';
+import { SearchInput } from '@/components/ui/search-input';
 
 interface MemberListProps {
   members: ChannelMembership[];
@@ -156,19 +156,14 @@ export function MemberList({ members, channelId, channelSlug, currentUserId, cur
 
       {canManage && (
         <div className="border-b p-3 space-y-2">
-          <div className="relative">
-            <UserPlus className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Add a member by name or email..."
-              aria-label="Add member"
-              // The Input base applies mobile:px-4, which would otherwise win
-              // over pl-8 at mobile and let the placeholder slide under the
-              // UserPlus icon — restate the left padding at the same variant.
-              className="pl-8 mobile:pl-10 h-9"
-            />
-          </div>
+          <SearchInput
+            icon={UserPlus}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Add a member by name or email..."
+            aria-label="Add member"
+            className="h-9"
+          />
           {error && (
             <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive" role="alert">
               {error}
