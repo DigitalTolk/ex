@@ -49,6 +49,13 @@ vi.mock('@/hooks/useEmoji', () => ({
   useEmojiMap: () => ({ data: { partyparrot: 'https://emoji.test/parrot.gif' } }),
 }));
 
+// The composer's "/" typeahead lists installed connectors via react-query;
+// this suite renders without a QueryClientProvider, so stub the hook.
+vi.mock('@/hooks/useConnectors', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useConnectors')>()),
+  useConnectors: () => ({ data: [] }),
+}));
+
 vi.mock('@/context/AuthContext', () => ({
   useOptionalAuth: () => ({
     user: { id: 'u-me', email: 'me@x.test', displayName: 'Me', emojiSkinTone: 'medium' },
