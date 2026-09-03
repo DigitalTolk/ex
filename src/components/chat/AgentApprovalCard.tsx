@@ -72,6 +72,7 @@ export function AgentApprovalCard({ parentID, userMap }: Props) {
 
   const alwaysAllow = async (a: PendingApproval) => {
     const agent = roster?.find((r) => r.id === a.agentID);
+    /* istanbul ignore if -- the button only renders when the same render's roster/kind predicate holds */
     if (!agent || !a.kind) return;
     setBusy(a.approvalID);
     try {
@@ -335,7 +336,7 @@ function ReplyProposal({
     text?: string,
   ) => Promise<void>;
 }) {
-  const [text, setText] = useState(approval.replyText ?? "");
+  const [text, setText] = useState(/* istanbul ignore next -- ReplyProposal mounts only when replyText is truthy */ approval.replyText ?? "");
   return (
     <div className="space-y-2">
       <p className="text-[11px] text-muted-foreground">

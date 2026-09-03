@@ -691,7 +691,7 @@ function MessageItemImpl({
                 // A thread root opens the WHOLE thread's activity (every run
                 // under it); any other message opens its own run.
                 if (!message.parentMessageID && (message.replyCount ?? 0) > 0) openThreadDrawer(message.parentID, message.id);
-                else openRunDrawer(message.agentRunID ?? '');
+                else openRunDrawer(/* istanbul ignore next -- the button's gate guarantees agentRunID */ message.agentRunID ?? '');
               }}
               aria-label="Show agent activity"
             >
@@ -1134,7 +1134,7 @@ function MessageItemImpl({
                   onClick={() =>
                     !message.parentMessageID && (message.replyCount ?? 0) > 0
                       ? openThreadDrawer(message.parentID, message.id)
-                      : openRunDrawer(message.agentRunID ?? '')
+                      : openRunDrawer(/* istanbul ignore next -- the menu item's gate guarantees agentRunID */ message.agentRunID ?? '')
                   }
                   aria-label="Show agent activity"
                 >
@@ -1249,6 +1249,7 @@ function MessageItemImpl({
         <WatcherDialog
           open
           onOpenChange={(o) => {
+            /* istanbul ignore else -- the dialog never calls onOpenChange(true) */
             if (!o) setManageWatchersOpen(false);
           }}
           parentID={message.parentID}

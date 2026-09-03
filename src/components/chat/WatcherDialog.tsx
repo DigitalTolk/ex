@@ -77,6 +77,11 @@ export function WatcherDialog({ open, onOpenChange, parentID, parentType, thread
   const effectiveSlug = slug || usable[0]?.slug || '';
   const modeHint = WATCH_ACTION_MODES.find((m) => m.value === actionMode)?.hint ?? '';
 
+  /* istanbul ignore next -- edit mode implies a non-empty editingList */
+  const editCount = editingList?.length ?? 0;
+  /* istanbul ignore next -- edit mode always has a selection */
+  const selectedID = selected?.id ?? '';
+
   const confirm = async () => {
     if (!isEdit && !effectiveSlug) {
       setError('Pick an agent.');
@@ -117,6 +122,7 @@ export function WatcherDialog({ open, onOpenChange, parentID, parentType, thread
   };
 
   const remove = async () => {
+    /* istanbul ignore if -- remove renders only in edit mode, where a watcher is always selected */
     if (!selected) return;
     setPending(true);
     setError('');
@@ -144,13 +150,13 @@ export function WatcherDialog({ open, onOpenChange, parentID, parentType, thread
           {isEdit ? (
             // Manage mode: which watcher (a picker only when several watch this
             // thread), agent name shown read-only.
-            (editingList?.length ?? 0) > 1 ? (
+            editCount > 1 ? (
               <label className="block">
                 <span className="mb-1 block text-xs font-medium text-muted-foreground">Watcher</span>
                 <select
                   aria-label="Which watcher"
                   className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm mobile:h-11"
-                  value={selected?.id ?? ''}
+                  value={selectedID}
                   onChange={(e) => selectWatcher(e.target.value)}
                 >
                   {editingList?.map((w) => (

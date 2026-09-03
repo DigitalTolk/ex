@@ -305,6 +305,7 @@ function buildSteps(events: TimelineEvent[]): Step[] {
         break;
       default: {
         const line = systemLine(e);
+        /* istanbul ignore else -- systemLine's default arm always yields a line; null is future-proofing in the signature */
         if (line) steps.push({ kind: 'system', seq: e.seq, at: e.createdAt, ...line });
       }
     }
@@ -587,12 +588,15 @@ export function RunActivityDrawer() {
   // pure (no Date.now() in render).
   const { data, error, isLoading, dataUpdatedAt } = useQuery({
     queryKey: ['run-timeline', runID, thread?.parentID ?? null, thread?.rootID ?? null],
-    queryFn: () =>
-      apiFetch<TimelineResponse>(
+    queryFn: () => {
+      /* istanbul ignore next -- the query is disabled unless runID or thread is set */
+      const rid = runID ?? '';
+      return apiFetch<TimelineResponse>(
         thread
           ? `/api/v1/runs/thread?parent=${encodeURIComponent(thread.parentID)}&root=${encodeURIComponent(thread.rootID)}`
-          : `/api/v1/runs/${runID ?? ''}`,
-      ),
+          : `/api/v1/runs/${rid}`,
+      );
+    },
     enabled: isOpen,
     // Live runs keep growing their timeline; poll until terminal.
     refetchInterval: (query) =>
@@ -612,6 +616,7 @@ export function RunActivityDrawer() {
 
   const run = data?.run;
   const stopConversation = async () => {
+    /* istanbul ignore if -- the Stop button renders only inside a run-gated block */
     if (!run) return;
     setStopping(true);
     try {
@@ -635,6 +640,7 @@ export function RunActivityDrawer() {
     if (!events.length) return null;
     const startMs = new Date(events[0].createdAt).getTime();
     const lastMs = new Date(events[events.length - 1].createdAt).getTime();
+    /* istanbul ignore next -- events imply data implies run (refetchInterval dereferences it), and dataUpdatedAt > 0 whenever data exists */
     const endMs = TERMINAL.has(run?.state ?? '') ? lastMs : Math.max(lastMs, dataUpdatedAt || 0);
     const totalMs = Math.max(0, endMs - startMs);
     let waitMs = 0;

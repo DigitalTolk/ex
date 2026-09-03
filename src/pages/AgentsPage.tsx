@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Bot, Check, Eye, Plus, X } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Badge } from '@/components/ui/badge';
@@ -243,6 +243,9 @@ function AgentCard({ agent }: { agent: AgentView }) {
   const initialAutoAllow = [...(agent.prefs.autoAllow ?? [])].sort().join(',');
   const [autoAllow, setAutoAllow] = useState<string[]>(agent.prefs.autoAllow ?? []);
   const [saved, setSaved] = useState(false);
+  // The saved-flash timer must die with the card, or it fires into a torn-down tree.
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(savedTimer.current), []);
 
   const isBedrock = harness === 'bedrock';
 
@@ -280,7 +283,8 @@ function AgentCard({ agent }: { agent: AgentView }) {
       {
         onSuccess: () => {
           setSaved(true);
-          setTimeout(() => setSaved(false), 2000);
+          clearTimeout(savedTimer.current);
+          savedTimer.current = setTimeout(() => setSaved(false), 2000);
         },
       },
     );

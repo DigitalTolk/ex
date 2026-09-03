@@ -34,7 +34,7 @@ function ensureContext(): AudioContext | null {
 // AudioContext. Scheduling onto a suspended context drops the tone:
 // the start time sits at currentTime=0 while the clock is paused, and
 // once the clock advances the scheduled time is already in the past.
-function scheduleTone(c: AudioContext, kind: AlertTone = 'message'): void {
+function scheduleTone(c: AudioContext, kind: AlertTone): void {
   const now = c.currentTime;
   if (kind === 'approval') {
     scheduleApprovalTone(c, now);
