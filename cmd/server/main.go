@@ -219,6 +219,7 @@ func main() {
 		slog.Info("transactional email enabled", "provider", cfg.EmailProvider)
 	}
 	authSvc.SetMailer(mailer, cfg.BaseURL)
+	authSvc.SetGuestLoginAnyRole(cfg.GuestLoginAnyRole)
 	var avatarSigner service.AvatarSigner
 	if s3Client != nil {
 		avatarSigner = s3Client
@@ -249,6 +250,57 @@ func main() {
 		Markdown:        service.NewMarkdownRenderer(),
 		Activator:       convSvc,
 	})
+	// ---------------------------------------------------------- Agent runs
+	// Agents-as-users + the run orchestrator (plan-v2). Additive: agents ride
+	// the existing user rows, runs/timelines are new RUN# items, fan-out uses
+	// the existing pub/sub.
+	agentStore := store.NewAgentStore(db)
+	runStore := store.NewRunStore(db)
+	agentSvc := service.NewAgentService(agentStore, userStore)
+	orchestrator := service.NewOrchestrator(runStore, agentSvc, userStore, messageSvc, redisPubSub, jwtMgr)
+	messageSvc.SetAgentDispatcher(orchestrator)
+	// Deleting a chat sweeps its agent-run activity logs (a thread root sweeps
+	// every reply's logs too).
+	messageSvc.SetRunLogPurger(orchestrator)
+	orchestrator.SetConversationReader(conversationStore)
+	orchestrator.SetOwnerDMResolver(convSvc)
+	// Shared context (CTX#, plan-v2 §8): visibility rides the message-service
+	// access check, so context is readable exactly where the chat is.
+	contextSvc := service.NewContextService(store.NewContextStore(db), messageSvc)
+	orchestrator.SetContextService(contextSvc)
+	// Tier terminal runs' timelines to S3 (hot events stay in DynamoDB while a
+	// run is live; on completion they roll into one object and the hot rows are
+	// pruned). No S3 configured → events stay in DynamoDB.
+	if s3Client != nil {
+		orchestrator.SetEventArchive(storage.NewEventArchive(s3Client))
+	}
+	agentH := handler.NewAgentHandler(agentSvc, orchestrator, userSvc, jwtMgr)
+	// The Run Activity Drawer is readable by anyone who can read the channel
+	// the run happened in (plan-v2 Phase 2), not just the invoker.
+	agentH.SetTimelineAccess(messageSvc)
+	agentRunToolH := handler.NewAgentRunToolHandler(orchestrator, messageSvc, contextSvc, agentSvc)
+	agentRunToolH.SetBaseURL(cfg.BaseURL)
+	// Connectors: external-service API docs bundles + per-user credentials
+	// (installed via the SPA, shipped to the invoker's runner per run).
+	connectorSvc := service.NewConnectorService(store.NewConnectorStore(db))
+	connectorH := handler.NewConnectorHandler(connectorSvc, orchestrator)
+	orchestrator.SetConnectorRegistry(connectorSvc)
+	// The connector catalog is SOURCED from the standalone connector-provider:
+	// ex pulls docs + admin auth from it (never the reverse). Wire it and warm
+	// the registry once at boot; admins re-pull via POST /api/v1/connectors/sync.
+	if cfg.ConnectorProviderURL != "" {
+		connectorSvc.SetProvider(cfg.ConnectorProviderURL, cfg.ConnectorProviderKey)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			if res, err := connectorSvc.SyncFromProvider(ctx, "system"); err != nil {
+				slog.Warn("connector-provider startup sync failed", "error", err)
+			} else {
+				slog.Info("connector-provider startup sync", "synced", res.Synced, "skipped", len(res.Skipped))
+			}
+		}()
+	}
+
 	userStateSvc := service.NewUserStateService(userStateStore, redisPubSub)
 	emojiSvc := service.NewEmojiService(emojiStore, userStore, redisPubSub)
 	if s3Client != nil {
@@ -358,6 +410,7 @@ func main() {
 		}
 	}
 	messageSvc.SetNotifier(notificationSvc)
+	orchestrator.SetApprovalNotifier(notificationSvc)
 	settingsSvc := service.NewSettingsService(store.NewSettingsStore(db))
 	attachmentSvc.SetUploadLimits(settingsSvc)
 	unfurlSvc := service.NewUnfurlService(redisCache)
@@ -430,6 +483,18 @@ func main() {
 	uploadH := handler.NewUploadHandler(s3Client)
 	emojiH := handler.NewEmojiHandler(emojiSvc)
 	presenceH := handler.NewPresenceHandler(presenceSvc)
+	// Shared agents always read as online — they're services, not sockets.
+	presenceH.SetAlwaysOnline(func(r *http.Request) []string {
+		agents, err := agentSvc.ListAgents(r.Context())
+		if err != nil {
+			return nil
+		}
+		ids := make([]string, 0, len(agents))
+		for _, a := range agents {
+			ids = append(ids, a.ID)
+		}
+		return ids
+	})
 	attachmentH := handler.NewAttachmentHandler(attachmentSvc)
 	adminH := handler.NewAdminHandler(settingsSvc)
 	// Mail diagnostics: an admin can read the effective transport and send a
@@ -526,6 +591,24 @@ func main() {
 	// CACHE-FIRST service — not the raw store — so per-keystroke
 	// autocomplete stays off DynamoDB for warm IDs.
 	searchH := handler.NewSearchHandler(searcher, searchAccess, userSvc, channelSvc)
+	// Ex-wide agent tools (channels, DMs, search, reactions) — every check
+	// runs against the INVOKER's access, never the agent's.
+	agentRunToolH.SetWorkspace(handler.AgentWorkspaceDeps{
+		Channels:      channelSvc,
+		Conversations: convSvc,
+		Searcher:      searcher,
+		SearchAccess:  searchAccess,
+		Reminders:     reminderSvc,
+	})
+	// Coding tasks (plan-coding-agent.md): the deterministic task layer around
+	// the dev agent — project channels, task threads, lifecycle gates. The
+	// orchestrator reads tasks for dispatch/claim/bundles; the task service
+	// owns creation and transitions.
+	taskStore := store.NewTaskStore(db)
+	orchestrator.SetTaskStore(taskStore)
+	codingTaskSvc := service.NewCodingTaskService(taskStore, channelSvc, messageSvc, userStore, agentSvc, orchestrator)
+	codingTaskSvc.SetBaseURL(cfg.BaseURL)
+	codingTaskH := handler.NewCodingTaskHandler(codingTaskSvc, orchestrator)
 	if searchClient != nil {
 		ids := newIDSearcher(searcher)
 		userSvc.SetSearcher(ids)
@@ -588,6 +671,12 @@ func main() {
 		Webhook:      webhookH,
 		Activity:     activityH,
 		Command:      commandH,
+		Agent:        agentH,
+		AgentRunner:  handler.NewAgentRunnerHandler(agentSvc, orchestrator),
+		AgentRunTool: agentRunToolH,
+		Context:      handler.NewContextHandler(contextSvc),
+		Connector:    connectorH,
+		CodingTask:   codingTaskH,
 		JWT:          jwtMgr,
 		FrontendFS:   frontendDist,
 		AppVersion:   appVersion,
@@ -620,6 +709,14 @@ func main() {
 	backgroundCtx, stopBackground := context.WithCancel(context.Background())
 	defer stopBackground()
 	go userSvc.RunExpiredStatusSweeper(backgroundCtx, time.Minute, 0)
+	// Seed the gg/qib templates AND their shared agent users (idempotent;
+	// never overwrites admin edits), then start the run reconciler: boot
+	// recovery of active runs + the deadline/lease sweep that turns a closed
+	// laptop into run.failed{runner_lost} instead of a stuck run.
+	if err := agentSvc.SeedDefaults(backgroundCtx); err != nil {
+		slog.Error("agent seed failed", "error", err)
+	}
+	orchestrator.StartReconciler(backgroundCtx)
 	// Directory re-sync (phone + manager from MS Graph): first sweep at boot
 	// doubles as the workspace backfill.
 	if directorySync != nil {

@@ -98,6 +98,12 @@ type MessageService struct {
 	channelSeq    UnreadSeqStore
 	convSeq       UnreadSeqStore
 	reactions     ReactionActivityRecorder
+	// agentDispatcher starts agent runs for @mentioned agent users. Optional
+	// seam (SetAgentDispatcher) — nil means agent mentions are inert.
+	agentDispatcher AgentDispatcher
+	// runLogPurger deletes agent-run activity logs when their chat is deleted.
+	// Optional seam (SetRunLogPurger) — nil leaves run logs untouched.
+	runLogPurger RunLogPurger
 }
 
 // ReactionActivityRecorder records "someone reacted to your message" hints into
@@ -392,7 +398,21 @@ func (s *MessageService) deleteFromIndex(ctx context.Context, id string) {
 // Attachments are bound by ID after the message row is persisted so dangling
 // refs are impossible.
 func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType, body, parentMessageID string, attachmentIDs ...string) (*model.Message, error) {
-	return s.send(ctx, userID, parentID, parentType, body, parentMessageID, false, attachmentIDs...)
+	return s.send(ctx, userID, userID, parentID, parentType, body, parentMessageID, false, attachmentIDs...)
+}
+
+// SendAsAgent posts a message authored by an agent instance while checking
+// access against the INVOKING human (plan-v2 §3: an agent's permissions are
+// always the invoker's — agents are not channel members and never gain reach
+// their invoker lacks).
+func (s *MessageService) SendAsAgent(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID string) (*model.Message, error) {
+	return s.SendAsAgentRun(ctx, agentID, invokerID, parentID, parentType, body, parentMessageID, "")
+}
+
+// SendAsAgentRun is SendAsAgent carrying the producing run's ID, so the
+// message links back to its run drawer ("Show activity").
+func (s *MessageService) SendAsAgentRun(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string) (*model.Message, error) {
+	return s.sendRun(ctx, agentID, invokerID, parentID, parentType, body, parentMessageID, false, runID)
 }
 
 // SendNoIndex is Send for machine-posted ephemera (e.g. the /mstmeetings join
@@ -400,20 +420,30 @@ func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType,
 // which never sees it — live indexing and the admin reindex both honor the
 // persisted NoIndex flag.
 func (s *MessageService) SendNoIndex(ctx context.Context, userID, parentID, parentType, body, parentMessageID string, attachmentIDs ...string) (*model.Message, error) {
-	return s.send(ctx, userID, parentID, parentType, body, parentMessageID, true, attachmentIDs...)
+	return s.send(ctx, userID, userID, parentID, parentType, body, parentMessageID, true, attachmentIDs...)
 }
 
-func (s *MessageService) send(ctx context.Context, userID, parentID, parentType, body, parentMessageID string, noIndex bool, attachmentIDs ...string) (*model.Message, error) {
+// send persists and fans out one message. authorID is who the message is
+// FROM; accessorID is whose membership authorizes the write. They differ
+// only on the agent path (SendAsAgent) — everywhere else both are the
+// sending user.
+func (s *MessageService) send(ctx context.Context, authorID, accessorID, parentID, parentType, body, parentMessageID string, noIndex bool, attachmentIDs ...string) (*model.Message, error) {
+	return s.sendRun(ctx, authorID, accessorID, parentID, parentType, body, parentMessageID, noIndex, "", attachmentIDs...)
+}
+
+// sendRun is send plus the producing agent run's ID (agent path only).
+func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, parentID, parentType, body, parentMessageID string, noIndex bool, runID string, attachmentIDs ...string) (*model.Message, error) {
+	userID := authorID
 	// For conversations the access check already loads the conversation row —
 	// keep it so the activity block below doesn't re-read the same entity.
 	var sendConv *model.Conversation
 	if parentType == ParentConversation {
-		conv, err := s.conversationAccess(ctx, userID, parentID)
+		conv, err := s.conversationAccess(ctx, accessorID, parentID)
 		if err != nil {
 			return nil, err
 		}
 		sendConv = conv
-	} else if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+	} else if err := s.checkAccess(ctx, accessorID, parentID, parentType); err != nil {
 		return nil, err
 	}
 
@@ -455,6 +485,12 @@ func (s *MessageService) send(ctx context.Context, userID, parentID, parentType,
 		AttachmentIDs:   attachmentIDs,
 		NoIndex:         noIndex,
 		CreatedAt:       now,
+	}
+	// Agent path (SendAsAgent): record whose invocation this post serves.
+	// Agents are shared — "gg" alone is ambiguous; "bob's gg" is not.
+	if authorID != accessorID {
+		msg.AgentInvokerID = accessorID
+		msg.AgentRunID = runID
 	}
 
 	if err := s.messages.CreateMessage(ctx, msg); err != nil {
@@ -570,6 +606,12 @@ func (s *MessageService) send(ctx context.Context, userID, parentID, parentType,
 	if updatedThreadRoot != nil {
 		s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, updatedThreadRoot)
 	}
+
+	// Agent invocation is mention-gated (plan-v2 §5): a persisted message that
+	// @mentions an agent user starts a run. Detached like notify — model
+	// latency must never ride the send path. The dispatcher itself skips
+	// non-human authors, so an agent's own post can never trigger another run.
+	s.dispatchAgents(ctx, msg, parentType)
 
 	s.attachRendered(msg)
 	return msg, nil
@@ -1596,7 +1638,25 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 		s.cascadeDeleteThreadReplies(ctx, parentID, parentType, msgID)
 	}
 
+	// Sweep the agent-run activity logs for this chat: the runs it invoked and
+	// — for a thread root — every reply run's log too. Off the delete path: log
+	// deletion (S3 + DynamoDB rows) must never slow or fail the user's delete.
+	s.purgeRunLogs(ctx, parentID, msgID)
+
 	return nil
+}
+
+// purgeRunLogs asks the run-log purger to delete a deleted message's activity
+// logs, detached from the request so cleanup never blocks the delete.
+func (s *MessageService) purgeRunLogs(ctx context.Context, parentID, msgID string) {
+	if s.runLogPurger == nil {
+		return
+	}
+	safe.Go(func() {
+		bg, cancel := detachedContext(ctx)
+		defer cancel()
+		s.runLogPurger.PurgeThreadLogs(bg, parentID, msgID)
+	})
 }
 
 // softDeleteMessage tombstones a single message: clears its body /
@@ -1684,11 +1744,31 @@ func (s *MessageService) cascadeDeleteThreadReplies(ctx context.Context, parentI
 // it if the user has already reacted with that emoji. The updated message is
 // persisted and a message.edited event is published so all clients refresh.
 func (s *MessageService) ToggleReaction(ctx context.Context, userID, parentID, parentType, msgID, emoji string) (*model.Message, error) {
-	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+	return s.toggleReaction(ctx, userID, userID, parentID, parentType, msgID, emoji)
+}
+
+// ToggleReactionAsAgent toggles a NORMAL (non machine-state) reaction
+// authored by a shared agent, authorized by the INVOKER's access — the same
+// author/accessor split as SendAsAgent. Machine-state emojis stay
+// backend-only (SetMachineReaction).
+func (s *MessageService) ToggleReactionAsAgent(ctx context.Context, agentID, invokerID, parentID, parentType, msgID, emoji string) (*model.Message, error) {
+	return s.toggleReaction(ctx, agentID, invokerID, parentID, parentType, msgID, emoji)
+}
+
+// toggleReaction: actorID is who the reaction belongs to; accessorID is
+// whose membership authorizes it. Equal everywhere except the agent path.
+func (s *MessageService) toggleReaction(ctx context.Context, actorID, accessorID, parentID, parentType, msgID, emoji string) (*model.Message, error) {
+	userID := actorID
+	if err := s.checkAccess(ctx, accessorID, parentID, parentType); err != nil {
 		return nil, err
 	}
 	if emoji == "" {
 		return nil, errors.New("message: emoji required")
+	}
+	// Machine state reactions are backend-written only (SetMachineReaction);
+	// letting a human toggle one would fake an agent's run state (plan-v2 §3).
+	if IsMachineStateEmoji(emoji) {
+		return nil, ErrReservedEmoji
 	}
 
 	msg, err := s.messages.GetMessage(ctx, parentID, msgID)

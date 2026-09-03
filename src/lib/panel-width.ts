@@ -37,6 +37,16 @@ export const MEMBER_LIST_WIDTH: PanelWidthConfig = {
   max: 480,
 };
 
+// The run-activity drawer carries dense timeline rows (API calls, grep
+// commands, clipped results) — it defaults wider than the thread panel and
+// may grow to most of the viewport for reading raw responses.
+export const RUN_DRAWER_WIDTH: PanelWidthConfig = {
+  key: 'ex.layout.runDrawerWidth',
+  defaultWidth: 560,
+  min: 384, // the historical fixed max-w-sm
+  max: 1024,
+};
+
 // Fired on window whenever the widths are reset (profile settings button),
 // so live panels snap back without a reload.
 export const PANEL_WIDTHS_RESET_EVENT = 'ex:panel-widths-reset';
@@ -73,6 +83,7 @@ export function resetPanelWidths(): void {
     window.localStorage.removeItem(SIDEBAR_WIDTH.key);
     window.localStorage.removeItem(SIDE_PANEL_WIDTH.key);
     window.localStorage.removeItem(MEMBER_LIST_WIDTH.key);
+    window.localStorage.removeItem(RUN_DRAWER_WIDTH.key);
   } catch {
     // Nothing stored anywhere reachable — the event alone resets live state.
   }

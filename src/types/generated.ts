@@ -68,6 +68,711 @@ export interface Reminder {
 }
 
 //////////
+// source: agent.go
+
+/**
+ * UserKind discriminates humans from agent instances on the shared user
+ * record. The zero value ("") is a human so every pre-existing row keeps its
+ * meaning without a migration.
+ */
+export type UserKind = string;
+export const UserKindHuman: UserKind = ""; // implicit on all existing rows
+export const UserKindAgent: UserKind = "agent";
+/**
+ * Harness names an agent backend. claude/codex are LOCAL CLI harnesses the
+ * runner drives by spawning a process; bedrock is an API harness — the agent
+ * loop calls a hosted LLM (AWS Bedrock Converse) instead of a local CLI, so
+ * it has the chat/workspace tool surface but NO local shell or filesystem.
+ */
+export const HarnessClaude = "claude";
+/**
+ * Harness names an agent backend. claude/codex are LOCAL CLI harnesses the
+ * runner drives by spawning a process; bedrock is an API harness — the agent
+ * loop calls a hosted LLM (AWS Bedrock Converse) instead of a local CLI, so
+ * it has the chat/workspace tool surface but NO local shell or filesystem.
+ */
+export const HarnessCodex = "codex";
+/**
+ * Harness names an agent backend. claude/codex are LOCAL CLI harnesses the
+ * runner drives by spawning a process; bedrock is an API harness — the agent
+ * loop calls a hosted LLM (AWS Bedrock Converse) instead of a local CLI, so
+ * it has the chat/workspace tool surface but NO local shell or filesystem.
+ */
+export const HarnessBedrock = "bedrock";
+/**
+ * Execution modes for API harnesses. Runner = the loop runs on the invoker's
+ * desktop app (their machine's AWS credentials); Server = the backend runs
+ * the loop (SSO-federated credentials), so the agent answers with no desktop
+ * app open. CLI harnesses are always runner-executed.
+ */
+export const ExecutionRunner = "runner";
+/**
+ * Execution modes for API harnesses. Runner = the loop runs on the invoker's
+ * desktop app (their machine's AWS credentials); Server = the backend runs
+ * the loop (SSO-federated credentials), so the agent answers with no desktop
+ * app open. CLI harnesses are always runner-executed.
+ */
+export const ExecutionServer = "server";
+/**
+ * Per-invoker agent availability, derived at read time (never stored on the
+ * agent — agents belong to no one). NeedsSetup means the CALLER's runners
+ * lack the harness their pin resolves to; Offline means no live runner.
+ */
+export const AgentStatusActive = "active";
+/**
+ * Per-invoker agent availability, derived at read time (never stored on the
+ * agent — agents belong to no one). NeedsSetup means the CALLER's runners
+ * lack the harness their pin resolves to; Offline means no live runner.
+ */
+export const AgentStatusNeedsSetup = "needs_setup";
+/**
+ * Per-invoker agent availability, derived at read time (never stored on the
+ * agent — agents belong to no one). NeedsSetup means the CALLER's runners
+ * lack the harness their pin resolves to; Offline means no live runner.
+ */
+export const AgentStatusOffline = "offline";
+/**
+ * AgentLimits are the hard bounds the orchestrator enforces per run. The
+ * zero value of any field means "no override" at the config layer; the
+ * resolved value is never zero (platform defaults apply last).
+ */
+export interface AgentLimits {
+  maxTurns?: number /* int */;
+  /**
+   * MaxWallClockSec caps CONVERSATION runs — ambient invocations (watch,
+   * heartbeat, follow-up) where the expected output is a short reply and a
+   * stuck harness should die fast.
+   */
+  maxWallClockSec?: number /* int */;
+  maxTokens?: number /* int64 */;
+  maxPosts?: number /* int */;
+  maxConsultDepth?: number /* int */;
+  /**
+   * MaxChainRounds bounds agent-to-agent handoffs per conversation chain:
+   * a human invocation is round 0; each @mention handoff starts the next
+   * round. The INVOKER's resolved value rides the run snapshot, so "how
+   * long may a debate I start run" is a per-user tunable.
+   */
+  maxChainRounds?: number /* int */;
+  /**
+   * MaxTaskWallClockSec is the HARD ceiling for direct-@mention runs, where
+   * the user may have asked for real work (coding, research) that
+   * legitimately runs long. A direct run doesn't get this up front — every
+   * run starts on the short MaxWallClockSec window and earns extensions by
+   * producing events (see Orchestrator.ReportEvents); this is the absolute
+   * cap those extensions can never pass. Runaway backstop, not a pace-setter.
+   */
+  maxTaskWallClockSec?: number /* int */;
+  /**
+   * MaxTaskTurns is the turn budget for direct runs. A turn is one harness
+   * iteration (every tool call consumes one), so real tasks burn them fast —
+   * the conversation budget (MaxTurns) starves a coding task at ~13 tool
+   * calls.
+   */
+  maxTaskTurns?: number /* int */;
+}
+/**
+ * AgentTemplate is a workspace-level agent definition ("gg", "qib"). One
+ * shared agent user exists per template — agents belong to NO ONE. Runs are
+ * attributed to whoever invoked them, and execute on the invoker's own
+ * machine with the invoker's per-user preferences applied. Admin-managed.
+ */
+export interface AgentTemplate {
+  slug: string;
+  displayName: string;
+  harness: string;
+  model?: string;
+  /**
+   * ExecutionMode applies to API harnesses (bedrock): "runner" (default) or
+   * "server". Empty/ignored for CLI harnesses, which are always runner-run.
+   */
+  executionMode?: string;
+  persona: string;
+  skillIDs?: string[];
+  limits: AgentLimits;
+  maxConcurrentRuns: number /* int */;
+  createdAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
+}
+/**
+ * AgentConfig marks a user row as one of the shared agent users. It carries
+ * identity only — behavior lives on the template plus each invoker's
+ * UserAgentPrefs, resolved per run.
+ */
+export interface AgentConfig {
+  templateSlug: string;
+}
+/**
+ * UserAgentPrefs are ONE USER's preferences for how a shared agent behaves
+ * when THEY invoke it — the prompt they edit, the harness pin, the model.
+ * Nil/empty fields inherit the template. Stored per (userID, slug); never on
+ * the agent, which is shared.
+ */
+export interface UserAgentPrefs {
+  userID: string;
+  slug: string;
+  harness?: string;
+  model?: string;
+  persona?: string;
+  limits?: AgentLimits;
+  /**
+   * ExecutionMode (API harnesses only): "runner" | "server". "" inherits.
+   */
+  executionMode?: string;
+  /**
+   * OfflinePolicy: "" inherits the platform default (reject).
+   */
+  offlinePolicy?: string;
+  /**
+   * Thread follow-ups: whether MY invocations of this agent keep listening
+   * when I reply in the same thread WITHOUT re-tagging it. "" inherits the
+   * platform default (off). Runs on my quota — my agent, my choice.
+   */
+  followUpMode?: string;
+  followUpMins?: number /* int */;
+  /**
+   * FollowUpAsk: the agent must ask me (approval gate) before actually
+   * posting a follow-up reply.
+   */
+  followUpAsk?: boolean;
+  /**
+   * AutoAllow lists harness tool CLASSES (AutoAllow*) this user pre-approves
+   * for runs of this agent — the "don't ask me again for reads" dial. The
+   * runner's permission gateway honors it locally; everything else still
+   * raises an approval card.
+   */
+  autoAllow?: string[];
+  updatedAt: string /* RFC3339 */;
+}
+/**
+ * Harness tool classes a user may pre-approve (UserAgentPrefs.AutoAllow).
+ */
+export const AutoAllowRead = "read"; // Read / Glob / Grep / notebook reads
+/**
+ * Harness tool classes a user may pre-approve (UserAgentPrefs.AutoAllow).
+ */
+export const AutoAllowEdit = "edit"; // Edit / MultiEdit / Write / NotebookEdit
+/**
+ * Harness tool classes a user may pre-approve (UserAgentPrefs.AutoAllow).
+ */
+export const AutoAllowShell = "shell"; // Bash
+/**
+ * Harness tool classes a user may pre-approve (UserAgentPrefs.AutoAllow).
+ */
+export const AutoAllowWeb = "web"; // WebFetch / WebSearch
+/**
+ * Follow-up modes.
+ */
+export const FollowUpOff = "off"; // default: mentions only
+/**
+ * Follow-up modes.
+ */
+export const FollowUpWindow = "window"; // follow for FollowUpMins after the agent's last post
+/**
+ * Follow-up modes.
+ */
+export const FollowUpAlways = "always"; // follow the thread indefinitely
+/**
+ * DefaultFollowUpMins is the window when the pref enables follow-ups without
+ * picking a duration.
+ */
+export const DefaultFollowUpMins = 10;
+/**
+ * ResolvedAgentConfig is the effective configuration a run executes under:
+ * invoker prefs ?? template ?? platform default, computed at run start and
+ * snapshotted onto the Run row so mid-run edits never change an in-flight
+ * run (plan-v2 §4).
+ */
+export interface ResolvedAgentConfig {
+  harness: string;
+  model: string;
+  executionMode: string;
+  persona: string;
+  skillIDs?: string[];
+  limits: AgentLimits;
+  maxConcurrentRuns: number /* int */;
+  offlinePolicy: string;
+  followUpMode: string;
+  followUpMins: number /* int */;
+  followUpAsk: boolean;
+  autoAllow?: string[];
+}
+/**
+ * RunState is the run lifecycle state machine. Direct mode at Phase 1 uses:
+ * queued → acknowledged → running → completed | failed | canceled.
+ */
+export type RunState = string;
+export const RunStateQueued: RunState = "queued";
+export const RunStateAcknowledged: RunState = "acknowledged";
+export const RunStateRunning: RunState = "running";
+export const RunStateCompleted: RunState = "completed";
+export const RunStateFailed: RunState = "failed";
+export const RunStateCanceled: RunState = "canceled";
+/**
+ * RunSpend accumulates the resources a run has consumed, updated from
+ * runner-reported usage events. Runner figures are untrusted input — the
+ * orchestrator clamps and enforces against the run's limits (plan-v2 §9).
+ */
+export interface RunSpend {
+  turns: number /* int */;
+  inputTokens: number /* int64 */;
+  outputTokens: number /* int64 */;
+  posts: number /* int */;
+}
+/**
+ * Run is one bounded agent task: invoked by a human mention, executed by the
+ * owner's runner, audited via its EVT# timeline.
+ */
+export interface Run {
+  id: string;
+  agentID: string; // shared agent user id
+  /**
+   * OwnerID is whose MACHINE executes the run. Agents belong to no one, so
+   * this is always the invoker at Phase 1 — kept as a separate field because
+   * it answers a different question (where does it run) than InvokerID does
+   * (whose task, whose permissions, whose prefs).
+   */
+  ownerID: string;
+  invokerID: string;
+  parentID: string;
+  parentType: string;
+  threadRootID?: string;
+  messageID: string; // invoking message (state reactions land here)
+  state: RunState;
+  mode: string; // "direct" at Phase 1
+  prompt: string;
+  /**
+   * Round is the agent-to-agent handoff depth: 0 = human-invoked; an agent
+   * whose reply @mentions another agent starts that agent at Round+1. The
+   * orchestrator refuses rounds past the chain cap — the anti-loop bound
+   * from plan.md §5.
+   */
+  round?: number /* int */;
+  /**
+   * PendingAgentIDs sequences a multi-agent human invocation ("@gg & @qib
+   * discuss…"): only the first agent starts immediately; each terminal run
+   * kicks the next, so every later agent SEES the earlier replies instead
+   * of producing a parallel stateless answer.
+   */
+  pendingAgentIDs?: string[];
+  /**
+   * CoInvoked lists the display names of ALL agents the invoking message
+   * summoned, in mention order. >1 entry means parallel peers: the bundle
+   * renders the roster so ordered task splits ("one do X, the other Y")
+   * resolve deterministically by position instead of racing.
+   */
+  coInvoked?: string[];
+  /**
+   * AskFirst (follow-up runs): the invoker requires an approval gate before
+   * the agent posts its reply.
+   */
+  askFirst?: boolean;
+  /**
+   * WatchInstruction + ActionMode carry a watcher's standing order into the
+   * run (watch/heartbeat modes). ActionMode also gates posting: notify/draft
+   * runs are barred from public posts server-side.
+   */
+  watchInstruction?: string;
+  actionMode?: string;
+  /**
+   * Config snapshot — what this run actually executes under.
+   */
+  harness: string;
+  model?: string;
+  executionMode?: string;
+  personaHash: string;
+  skillIDs?: string[];
+  /**
+   * ConnectorSlugs: the /connector tokens the invoking message carried —
+   * the user's explicit pick of which external services this run may use.
+   * The runner only syncs docs + injects credentials for these.
+   */
+  connectorSlugs?: string[];
+  /**
+   * TaskID binds the run to a coding task (RunModeTask): its thread root is
+   * the task card, its budget is uncapped, and the runner prepares the
+   * project workspace before the harness starts.
+   */
+  taskID?: string;
+  /**
+   * AutoAllow: the invoker's pre-approved harness tool classes, snapshotted
+   * so the runner's permission gateway can skip the card for them.
+   */
+  autoAllow?: string[];
+  limits: AgentLimits;
+  spend: RunSpend;
+  runnerID?: string;
+  leaseExpiresAt?: string /* RFC3339 */;
+  /**
+   * Deadline is the ROLLING kill time: every run starts on the short
+   * conversation window and each event batch extends it (harness activity =
+   * stay alive; silence = die soon). HardDeadline is the absolute ceiling
+   * extensions can never pass — WallClockFor(mode) from claim time. Zero
+   * HardDeadline (pre-field runs) means no extensions.
+   */
+  deadline: string /* RFC3339 */;
+  hardDeadline?: string /* RFC3339 */;
+  failReason?: string;
+  createdAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
+  /**
+   * EventsArchived is set once a terminal run's timeline has been rolled into
+   * a single object-storage blob and the per-event EVT# rows pruned from the
+   * hot table — completed runs are the bulk of event volume, so this keeps
+   * DynamoDB small. Timeline reads for such runs load from the archive
+   * instead of the EVT# rows; live runs keep their events in DynamoDB.
+   */
+  eventsArchived?: boolean;
+}
+/**
+ * RunEvent is one append-only timeline row. Seq is assigned by the writer
+ * that owns the sequence (orchestrator for lifecycle events, runner batches
+ * carry their own runner-side seq offset) and writes are idempotent on
+ * (RunID, Seq) so a retried batch cannot duplicate the timeline.
+ */
+export interface RunEvent {
+  runID: string;
+  seq: number /* int64 */;
+  actorID: string;
+  type: string;
+  payload?: { [key: string]: any};
+  createdAt: string /* RFC3339 */;
+}
+/**
+ * RunDigest is the ≤5-bullet summary written at terminal state, read into
+ * other agents' context bundles (plan-v2 §8). InvokerID keeps the "whose
+ * invocation was this" attribution — the agent itself is shared.
+ */
+export interface RunDigest {
+  runID: string;
+  agentID: string;
+  invokerID: string;
+  summary: string;
+  state: RunState;
+  createdAt: string /* RFC3339 */;
+}
+/**
+ * Offline policies: what a mention does when the invoker has no live runner.
+ * Reject (default) fails fast with a legible notice; queue holds the run
+ * until the invoker's desktop app comes online (bounded — see the
+ * orchestrator's queue TTL).
+ */
+export const OfflinePolicyReject = "reject";
+/**
+ * Offline policies: what a mention does when the invoker has no live runner.
+ * Reject (default) fails fast with a legible notice; queue holds the run
+ * until the invoker's desktop app comes online (bounded — see the
+ * orchestrator's queue TTL).
+ */
+export const OfflinePolicyQueue = "queue";
+/**
+ * Approval lifecycle states.
+ */
+export const ApprovalPending = "pending";
+/**
+ * Approval lifecycle states.
+ */
+export const ApprovalApproved = "approved";
+/**
+ * Approval lifecycle states.
+ */
+export const ApprovalDenied = "denied";
+/**
+ * Approval lifecycle states.
+ */
+export const ApprovalExpired = "expired";
+/**
+ * Approval is one blocking human-in-the-loop gate inside a run (plan-v2 §7):
+ * the agent's request_approval tool call parks until the INVOKER decides or
+ * the deadline lapses (which resolves as denied{approval_timeout} inside the
+ * tool call — the harness never hits its own MCP timeout first).
+ */
+export interface Approval {
+  id: string;
+  runID: string;
+  agentID: string;
+  invokerID: string; // the only user who may decide
+  summary: string;
+  risk?: string;
+  /**
+   * Kind is the harness tool class (AutoAllow*) for permission-gateway
+   * approvals — lets the card offer "always allow reads for this agent".
+   */
+  kind?: string;
+  /**
+   * Options turns the gate into a multiple-choice question (the ask_user
+   * tool): the invoker picks one instead of approve/deny, and the pick
+   * lands in Choice. Empty = plain yes/no approval.
+   */
+  options?: string[];
+  choice?: string;
+  /**
+   * ReplyText makes this an editable REPLY PROPOSAL (the propose_reply tool):
+   * a reply the agent drafted for the invoker to approve/edit/cancel. When
+   * set, approving posts this text (or the invoker's edit) in the thread as
+   * the agent; denying posts nothing. ReplyThreadRoot is where it lands, and
+   * ReplyToMessageID is the message it answers (shown for context in the UI).
+   */
+  replyText?: string;
+  replyThreadRoot?: string;
+  replyToMessageID?: string;
+  /**
+   * Note is what the invoker typed alongside the decision — "no, use the
+   * seed DB instead" — relayed to the agent inside the blocked tool call
+   * (the deny message of a permission prompt, the text of a denied
+   * request_approval), so a refusal comes with direction, not silence.
+   */
+  note?: string;
+  state: string;
+  deadline: string /* RFC3339 */;
+  decidedBy?: string;
+  decidedAt?: string /* RFC3339 */;
+  createdAt: string /* RFC3339 */;
+}
+/**
+ * Approval option bounds (ask_user).
+ */
+export const ApprovalMaxOptions = 5;
+/**
+ * Approval option bounds (ask_user).
+ */
+export const ApprovalOptionMaxLen = 120;
+/**
+ * Artifact is a run-produced document too large or too durable for a chat
+ * message (plan-v2 §7). Content is stored inline (small, capped) — the
+ * drawer is the viewer; S3 offload arrives if artifacts outgrow this.
+ */
+export interface Artifact {
+  id: string;
+  runID: string;
+  agentID: string;
+  invokerID: string;
+  kind: string; // freeform: "markdown", "diff", …
+  title: string;
+  content?: string;
+  createdAt: string /* RFC3339 */;
+}
+/**
+ * Artifact bounds.
+ */
+export const ArtifactMaxBytes = 64 * 1024;
+/**
+ * Artifact bounds.
+ */
+export const ArtifactsPerRun = 5;
+/**
+ * Raw API responses (auto-captured connector_call bodies) get their own,
+ * larger budget — they exist so a human can audit what the agent actually
+ * saw, and a research-y run makes a dozen calls.
+ */
+export const ArtifactKindAPIResponse = "api_response";
+/**
+ * Artifact bounds.
+ */
+export const APIResponseArtifactsPerRun = 25;
+/**
+ * Skill is a named instruction pack agents can pull in mid-run via
+ * invoke_skill (plan.md §2c, chat-scoped at this phase: a skill carries
+ * instructions, not extra tool grants — the tool surface is fixed and
+ * already bounded by the invoker's permissions).
+ */
+export interface Skill {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  createdBy: string;
+  createdAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
+}
+/**
+ * Skill bounds.
+ */
+export const SkillNameMaxLen = 64;
+/**
+ * Skill bounds.
+ */
+export const SkillDescriptionMaxLen = 256;
+/**
+ * Skill bounds.
+ */
+export const SkillInstructionsMaxLen = 8 * 1024;
+/**
+ * AgentMemory is one agent's self-maintained "core" memory FOR ONE INVOKER
+ * (buzz's engrams, scoped to our shared-agent model: a memory written while
+ * serving Alice must never leak into a bundle Bob's run reads — bundles are
+ * invoker-visible by contract). Injected into every bundle; replaced whole
+ * via the update_memory tool.
+ */
+export interface AgentMemory {
+  agentID: string;
+  invokerID: string;
+  content: string;
+  updatedAt: string /* RFC3339 */;
+}
+/**
+ * AgentMemoryMaxBytes caps the core memory (buzz keeps ~10KB healthy).
+ */
+export const AgentMemoryMaxBytes = 8 * 1024;
+/**
+ * AgentSubscription makes an agent WATCH a channel for its creator: human
+ * messages matching the filter invoke the agent un-mentioned, on the
+ * CREATOR's machine and quota (they opted in). HeartbeatMins > 0 adds
+ * periodic idle check-ins.
+ */
+export interface AgentSubscription {
+  id: string;
+  agentID: string;
+  creatorID: string; // whose quota/machine
+  parentID: string;
+  parentType: string;
+  /**
+   * Keywords: any-match (case-insensitive substring) triggers; empty means
+   * every human message triggers. Kept deliberately simpler than buzz's
+   * evalexpr filters — no expression engine to time-box.
+   */
+  keywords?: string[];
+  /**
+   * ThreadRootID scopes the watcher to ONE thread (the message it was
+   * attached to). Empty = the whole channel/conversation. When set, only
+   * messages in that thread trigger.
+   */
+  threadRootID?: string;
+  /**
+   * Instruction is the creator's standing order — what to watch for and what
+   * to do ("DM me if the budget comes up", "draft answers I'd give"). Injected
+   * into the watch run's prompt. Empty = the agent's default watch behavior.
+   */
+  instruction?: string;
+  /**
+   * ActionMode caps what the watcher may DO on a trigger (WatchAction*). Empty
+   * defaults to notify — the safest: DM the creator, never post publicly.
+   */
+  actionMode?: string;
+  heartbeatMins?: number /* int */;
+  lastRunAt?: string /* RFC3339 */;
+  /**
+   * PendingCatchUp marks triggers this watcher COULDN'T act on — creator
+   * offline, or the agent already busy in the thread. Instead of one run
+   * per missed message (overwhelming: 20 messages = 20 runs = 20 DMs) the
+   * flag coalesces them: the reconcile sweep starts ONE catch-up run
+   * covering everything since PendingSince, then clears it.
+   */
+  pendingCatchUp?: boolean;
+  pendingSince?: string /* RFC3339 */;
+  /**
+   * PendingOffline records that at least one missed trigger happened while
+   * the creator was OFFLINE (vs merely agent-busy). Offline backlogs on a
+   * local CLI harness are processed only with the creator's consent — the
+   * sweep notifies instead of auto-running, and CatchUpNotifiedAt dedupes
+   * that ask (re-armed when the flags clear). Busy-only backlogs auto-run.
+   */
+  pendingOffline?: boolean;
+  catchUpNotifiedAt?: string /* RFC3339 */;
+  createdAt: string /* RFC3339 */;
+}
+/**
+ * Watcher action modes — the safety dial, ascending in autonomy. Enforced
+ * server-side: notify/draft runs cannot post publicly (only DM the creator).
+ */
+export const WatchActionNotify = "notify"; // DM the creator only; never posts publicly
+/**
+ * Watcher action modes — the safety dial, ascending in autonomy. Enforced
+ * server-side: notify/draft runs cannot post publicly (only DM the creator).
+ */
+export const WatchActionDraft = "draft"; // DM the creator a ready-to-send reply; never posts
+/**
+ * Watcher action modes — the safety dial, ascending in autonomy. Enforced
+ * server-side: notify/draft runs cannot post publicly (only DM the creator).
+ */
+export const WatchActionReply = "reply"; // may post publicly, but must request_approval first
+/**
+ * Watcher action modes — the safety dial, ascending in autonomy. Enforced
+ * server-side: notify/draft runs cannot post publicly (only DM the creator).
+ */
+export const WatchActionAutonomous = "autonomous"; // may post publicly with no approval
+/**
+ * Run modes beyond plain mentions.
+ */
+export const RunModeDirect = "direct";
+/**
+ * Run modes beyond plain mentions.
+ */
+export const RunModeWatch = "watch"; // subscription-triggered
+/**
+ * Run modes beyond plain mentions.
+ */
+export const RunModeHeartbeat = "heartbeat"; // periodic idle check-in
+/**
+ * Run modes beyond plain mentions.
+ */
+export const RunModeFollowUp = "followup"; // un-tagged invoker reply in a followed thread
+/**
+ * Run modes beyond plain mentions.
+ */
+export const RunModeTask = "task"; // bound to a coding task (uncapped, workspace-backed)
+/**
+ * Task-mode budgets: "no limits" by decision. The horizon exists only so
+ * deadlines and run tokens stay finite; the idle reaper is what actually
+ * ends a stuck task. (taskModeHorizon stays unexported: tygo cannot mirror a
+ * time.Duration expression into the SPA's generated types.)
+ */
+export const TaskModeUnlimitedTurns = 1 << 30;
+/**
+ * TaskClaim is one agent's atomic claim on a part of a co-invoked task
+ * ("hindi", "auth.go") — first write wins, so two agents invoked together
+ * can split work without racing. Scoped to a thread; rows carry a TTL.
+ */
+export interface TaskClaim {
+  parentID: string;
+  threadRootID: string;
+  label: string;
+  agentID: string;
+  invokerID: string;
+  createdAt: string /* RFC3339 */;
+}
+/**
+ * TaskClaimLabelMaxLen bounds claim labels.
+ */
+export const TaskClaimLabelMaxLen = 64;
+/**
+ * AgentThreadFollow marks that an agent recently posted in a thread while
+ * serving an invoker. The invoker's later UN-TAGGED replies in that thread
+ * re-invoke the agent (per the invoker's follow-up prefs) — like a person
+ * who stays in a conversation they just spoke in. Distinct from the human
+ * notification ThreadFollow. Rows carry a TTL.
+ */
+export interface AgentThreadFollow {
+  parentID: string;
+  parentType: string;
+  threadRootID: string;
+  agentID: string;
+  invokerID: string;
+  lastPostAt: string /* RFC3339 */;
+}
+/**
+ * RunnerHarness is one detected CLI on a runner host.
+ */
+export interface RunnerHarness {
+  name: string;
+  version?: string;
+  authed: boolean;
+}
+/**
+ * RunnerRegistration is a live runner process on one of the owner's
+ * machines. Rows carry a DynamoDB TTL so dead runners self-reap.
+ */
+export interface RunnerRegistration {
+  runnerID: string;
+  ownerID: string;
+  host: string;
+  os: string;
+  harnesses: RunnerHarness[];
+  leaseExpiresAt: string /* RFC3339 */;
+  createdAt: string /* RFC3339 */;
+}
+
+//////////
 // source: attachment.go
 
 /**
@@ -105,12 +810,40 @@ export interface Attachment {
 //////////
 // source: auth.go
 
+/**
+ * Token scopes. An empty Scope is an ordinary interactive session token.
+ * Scoped tokens are accepted ONLY by their dedicated middleware — the
+ * regular Auth middleware rejects them, so a leaked runner or run token can
+ * never drive the interactive API.
+ */
+export const TokenScopeRunner = "runner"; // desktop runner: register/claim/heartbeat/report
+/**
+ * Token scopes. An empty Scope is an ordinary interactive session token.
+ * Scoped tokens are accepted ONLY by their dedicated middleware — the
+ * regular Auth middleware rejects them, so a leaked runner or run token can
+ * never drive the interactive API.
+ */
+export const TokenScopeRun = "run"; // one run's MCP tool calls, invoker-scoped
 export interface TokenClaims {
   RegisteredClaims: any /* jwt.RegisteredClaims */;
   uid: string;
   email: string;
   name: string;
   role: SystemRole;
+  /**
+   * Scope marks non-interactive tokens (see TokenScope*). Empty = session.
+   */
+  scope?: string;
+  /**
+   * RunID binds a run-scoped token to exactly one run.
+   */
+  runID?: string;
+  /**
+   * ActorID is the agent user a run-scoped token posts as. UserID stays
+   * the invoker — permissions are always the invoking human's; ActorID is
+   * authorship only.
+   */
+  actorID?: string;
 }
 export interface RefreshToken {
   tokenHash: string;
@@ -165,6 +898,453 @@ export interface Channel {
    */
   messageSeq?: number /* int64 */;
 }
+
+//////////
+// source: codingtask.go
+
+/**
+ * CodingProject is a product the team works on: a name, its repos with
+ * roles, and the project channel. Learned on first use (the intake agent
+ * resolves the repos with the requester) and reused by every later task.
+ */
+export interface CodingProject {
+  key: string; // slug, e.g. "cliffhub"
+  name: string; // display, e.g. "CliffHub"
+  repos: ProjectRepo[];
+  channelID: string;
+  createdBy: string;
+  createdAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
+}
+/**
+ * ProjectRepo is one GitLab repository of a project with its role in the
+ * product — the role is what tells the agent where UI work belongs.
+ */
+export interface ProjectRepo {
+  path: string; // GitLab "group/sub/repo"
+  role: string; // RepoRole*
+  /**
+   * DefaultBranch, when known (learned by the runner from origin/HEAD).
+   */
+  defaultBranch?: string;
+}
+/**
+ * Repo roles.
+ */
+export const RepoRoleBackend = "backend";
+/**
+ * Repo roles.
+ */
+export const RepoRoleFrontend = "frontend";
+/**
+ * Repo roles.
+ */
+export const RepoRoleMobile = "mobile";
+/**
+ * Repo roles.
+ */
+export const RepoRoleInfra = "infra";
+/**
+ * Repo roles.
+ */
+export const RepoRoleOther = "other";
+/**
+ * CodingTask is one unit of coding work the dev agent performs for a
+ * requester in one project, across one or more of its repos.
+ */
+export interface CodingTask {
+  id: string;
+  projectKey: string;
+  projectName: string;
+  title: string;
+  goal: string;
+  kind: string; // TaskKind* — drives the flair
+  state: TaskState;
+  /**
+   * Steering: who may direct the task in chat — the requester only
+   * (default) or anyone in the project channel. Authority (approvals, MR
+   * sign-off) stays with the requester regardless.
+   */
+  steering?: string;
+  channelID: string; // the project channel
+  threadRootID: string; // the task card message
+  requesterID: string;
+  agentID: string; // the coding agent user (dev)
+  /**
+   * RunnerID is machine affinity: the checkouts live on the runner that
+   * took the first task run, so later runs must land there too.
+   */
+  runnerID?: string;
+  /**
+   * Repos the task touches, each with its own branch/MR. The first entry
+   * is the primary (naming, default cwd hints).
+   */
+  repos: TaskRepo[];
+  ticket?: TaskTicket;
+  /**
+   * TestPlan is the requester-facing "how to test" the agent published.
+   */
+  testPlan?: TestPlan;
+  /**
+   * SignedOffAt records the requester's "ship it" — the MR gate.
+   */
+  signedOffAt?: string /* RFC3339 */;
+  runIDs?: string[];
+  lastRunAt?: string /* RFC3339 */;
+  createdAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
+}
+/**
+ * TaskRepo is one repo's slice of a task.
+ */
+export interface TaskRepo {
+  path: string;
+  role: string;
+  baseBranch?: string;
+  branch: string;
+  /**
+   * WorkspaceDir is the runner-reported checkout path (informational — it
+   * describes THAT machine's disk).
+   */
+  workspaceDir?: string;
+  mrURL?: string;
+  /**
+   * Changed reports whether the branch carries commits beyond its base
+   * (runner-reported at MR time); untouched repos get no MR.
+   */
+  changed?: boolean;
+}
+/**
+ * TestPlan is the requester-facing verification recipe: where to open the
+ * product, the steps that should work, and the counter-checks that should
+ * NOT (the other role's view, the regression you'd expect). API-only
+ * instructions are not a test plan when the product has a UI.
+ */
+export interface TestPlan {
+  /**
+   * URL the requester opens — the product UI (or an API base when the
+   * project genuinely has no UI).
+   */
+  url?: string;
+  /**
+   * Steps from the requester's perspective, in order.
+   */
+  steps: string[];
+  /**
+   * CounterSteps are what must NOT happen / who must NOT see it.
+   */
+  counterSteps?: string[];
+  /**
+   * Accounts names the roles/test users to use (never secrets).
+   */
+  accounts?: string;
+  notes?: string;
+}
+/**
+ * TaskTicket links a task to a ticket in a ticketing connector (CliffHub…).
+ */
+export interface TaskTicket {
+  connector: string;
+  id: string;
+  url?: string;
+}
+/**
+ * TaskState is the task lifecycle. Transitions are validated server-side —
+ * notably nothing reaches mr_created without the sign-off gate.
+ */
+export type TaskState = string;
+export const TaskStateCreated: TaskState = "created";
+export const TaskStateWorkspaceReady: TaskState = "workspace_ready";
+export const TaskStateInProgress: TaskState = "in_progress";
+export const TaskStateAwaitingTest: TaskState = "awaiting_user_test";
+export const TaskStateMRCreated: TaskState = "mr_created";
+export const TaskStateDone: TaskState = "done";
+export const TaskStateSetupFailed: TaskState = "setup_failed";
+export const TaskStateAbandoned: TaskState = "abandoned";
+/**
+ * Task kinds — the flair the channel shows.
+ */
+export const TaskKindBug = "bug";
+/**
+ * Task kinds — the flair the channel shows.
+ */
+export const TaskKindFeature = "feature";
+/**
+ * Task kinds — the flair the channel shows.
+ */
+export const TaskKindChore = "chore";
+/**
+ * Steering modes.
+ */
+export const TaskSteeringRequester = "requester"; // default: only the requester directs
+/**
+ * Steering modes.
+ */
+export const TaskSteeringAnyone = "anyone"; // any project-channel member may steer
+/**
+ * Task bounds.
+ */
+export const TaskTitleMaxLen = 120;
+/**
+ * Task bounds.
+ */
+export const TaskGoalMaxLen = 8 * 1024;
+/**
+ * Task bounds.
+ */
+export const TaskProjectPathMaxLen = 200;
+/**
+ * Task bounds.
+ */
+export const TaskProjectNameMaxLen = 64;
+/**
+ * Task bounds.
+ */
+export const TaskNoteMaxLen = 4 * 1024;
+/**
+ * Task bounds.
+ */
+export const TaskBranchMaxLen = 120;
+/**
+ * Task bounds.
+ */
+export const TaskMaxRepos = 6;
+/**
+ * Task bounds.
+ */
+export const TestPlanMaxSteps = 20;
+/**
+ * Task bounds.
+ */
+export const TestPlanStepMaxLen = 400;
+/**
+ * TaskSpec is the task snapshot handed to the runner on an Assignment — what
+ * the workspace manager needs to prepare the checkouts and what the prompt
+ * preamble narrates. Never carries credentials (those ride the connector
+ * payload).
+ */
+export interface TaskSpec {
+  id: string;
+  projectKey: string;
+  projectName: string;
+  title: string;
+  goal: string;
+  kind: string;
+  state: string;
+  repos: TaskSpecRepo[];
+  channelID: string;
+  threadRootID: string;
+  testURL?: string;
+  signedOff?: boolean;
+  /**
+   * RunnerID is the machine the workspace is pinned to ("" until the first
+   * task run is claimed). The runner compares it with its own ID: a
+   * mismatch means the checkouts live elsewhere and it is inheriting.
+   */
+  runnerID?: string;
+}
+/**
+ * TaskSpecRepo is one repo on the runner's spec.
+ */
+export interface TaskSpecRepo {
+  path: string;
+  role: string;
+  branch: string;
+  baseBranch?: string;
+  mrURL?: string;
+}
+
+//////////
+// source: connector.go
+
+/**
+ * Connectors give agents API access to external services. A connector is a
+ * docs bundle (index.yml + per-service endpoint YAMLs + a grep catalog)
+ * authored to the connector standard, plus just enough auth metadata for Ex
+ * to collect a per-user credential at install time. Admin-managed; users
+ * install and connect their own account.
+ */
+export interface Connector {
+  slug: string;
+  title: string;
+  description: string;
+  baseURL: string;
+  /**
+   * AuthKind: how a user connects.
+   *   "paste"    — paste a bearer token (the only option).
+   *   "password" — sign in with email/password (DT auth password grant),
+   *                with paste-a-token always available as a fallback.
+   */
+  authKind: string;
+  /**
+   * TokenURL + ClientID drive the password grant (AuthKind "password").
+   */
+  tokenURL?: string;
+  clientID?: string;
+  /**
+   * VerifyURL is an authenticated GET used to validate a credential at
+   * install time ("connected as {name}").
+   */
+  verifyURL?: string;
+  /**
+   * FileNames is the docs-bundle manifest; contents live in separate rows.
+   */
+  fileNames: string[];
+  /**
+   * Services is the parsed services: manifest from the bundle's index.yml —
+   * the hierarchy layer between the connector and its endpoint docs (which
+   * service file owns which domain). Validated at ingest: every entry must
+   * resolve to a shipped file and every service file must be listed.
+   */
+  services?: ConnectorServiceInfo[];
+  createdBy: string;
+  createdAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
+}
+/**
+ * ConnectorFile is one docs file in a connector's bundle.
+ */
+export interface ConnectorFile {
+  slug: string;
+  name: string;
+  content: string;
+}
+/**
+ * ConnectorServiceInfo is one entry of a connector's service manifest
+ * (index.yml services:) — name, owning file, and what the domain covers.
+ */
+export interface ConnectorServiceInfo {
+  name: string;
+  file: string;
+  endpoints?: number /* int */;
+  description?: string;
+  /**
+   * RoutePrefixes are the distinct route_id prefixes found in this
+   * service's endpoint docs (e.g. tasks-and-stories.yaml → ["work"]).
+   * Manifest names and route prefixes often differ — scoped catalog greps
+   * must use these, not the service name.
+   */
+  routePrefixes?: string[];
+}
+/**
+ * ConnectorInstall is one user's connection to a connector. The token is the
+ * user's own credential for that service (stored server-side for v1; the
+ * runner injects it into agent runs as $<PREFIX>_TOKEN).
+ */
+export interface ConnectorInstall {
+  userID: string;
+  connectorSlug: string;
+  /**
+   * Status: "connected" (verify passed) or "unverified" (verify endpoint
+   * unreachable from the server — token accepted, will be proven at use).
+   */
+  status: string;
+  connectedAs?: string;
+  /**
+   * AgentUse: may an AGENT attach this connector to a run itself (via the
+   * use_connector tool) when the user didn't /pick it?
+   *   "ask" (default, empty = ask) — one approval card per run
+   *   "always" — auto-attach, no ask
+   *   "never"  — only explicit /picks work
+   */
+  agentUse?: string;
+  installedAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
+}
+/**
+ * Connector agent-use policies.
+ */
+export const ConnectorAgentUseAsk = "ask";
+/**
+ * Connector agent-use policies.
+ */
+export const ConnectorAgentUseAlways = "always";
+/**
+ * Connector agent-use policies.
+ */
+export const ConnectorAgentUseNever = "never";
+/**
+ * Connector bounds.
+ */
+export const ConnectorSlugMaxLen = 64;
+/**
+ * Connector bounds.
+ */
+export const ConnectorTitleMaxLen = 128;
+/**
+ * Connector bounds.
+ */
+export const ConnectorDescriptionMaxLen = 1024;
+/**
+ * Connector bounds.
+ */
+export const ConnectorFileMaxBytes = 350 * 1024; // stay under the DynamoDB item cap
+/**
+ * Connector bounds.
+ */
+export const ConnectorMaxFiles = 64;
+/**
+ * Connector bounds.
+ */
+export const ConnectorTokenMaxLen = 4096;
+/**
+ * Connector auth kinds.
+ */
+export const ConnectorAuthPaste = "paste";
+/**
+ * Connector auth kinds.
+ */
+export const ConnectorAuthPassword = "password";
+/**
+ * ConnectorAuthNone: the service needs no credential (anonymous access) —
+ * install is a bare "connect", calls carry no Authorization header.
+ */
+export const ConnectorAuthNone = "none";
+/**
+ * Connector install statuses.
+ */
+export const ConnectorStatusConnected = "connected";
+/**
+ * Connector install statuses.
+ */
+export const ConnectorStatusUnverified = "unverified";
+
+//////////
+// source: context.go
+
+/**
+ * ContextItem is one curated shared-context entry for a channel or
+ * conversation (plan-v2 §8): briefs, decisions, constraints. Humans write
+ * them in the UI; agents append via the write_shared_context tool. Every
+ * agent run in that parent reads them — this is the "central context which
+ * they can share".
+ */
+export interface ContextItem {
+  id: string;
+  parentID: string;
+  parentType: string;
+  /**
+   * AuthorID is who wrote the item — a human user or a shared agent. When
+   * an agent wrote it, InvokerID records whose run it was (the agent is
+   * shared; attribution is always to the invoking human).
+   */
+  authorID: string;
+  invokerID?: string;
+  body: string;
+  pinned?: boolean;
+  createdAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
+}
+/**
+ * Shared-context governance bounds (plan-v2 §8). Config-worthy later; consts
+ * until someone needs to tune them.
+ */
+export const ContextItemMaxBytes = 2048;
+/**
+ * Shared-context governance bounds (plan-v2 §8). Config-worthy later; consts
+ * until someone needs to tune them.
+ */
+export const ContextItemsPerScope = 50;
 
 //////////
 // source: conversation.go
@@ -468,6 +1648,20 @@ export interface Message {
   webhookAvatarURL?: string;
   webhookIconEmoji?: string; // emoji name (no colons) from icon_emoji; rendered as the avatar
   messageAttachments?: MessageAttachment[];
+  /**
+   * AgentInvokerID attributes an agent-authored message to the human whose
+   * invocation produced it. Agents are shared ("gg" belongs to no one), so
+   * a reader — human or another agent's context bundle — needs this to say
+   * "bob's gg said X" rather than an ambiguous "gg said X". Set only on the
+   * SendAsAgent path.
+   */
+  agentInvokerID?: string;
+  /**
+   * AgentRunID links an agent-authored message to the run that produced it,
+   * so the UI can offer "Show activity" (the run drawer: timeline,
+   * artifacts, spend) straight from the message.
+   */
+  agentRunID?: string;
 }
 export interface MessageAttachment {
   fallback?: string;
@@ -614,6 +1808,12 @@ export const SystemRoleGuest: SystemRole = "guest";
 export type AuthProvider = string;
 export const AuthProviderOIDC: AuthProvider = "oidc";
 export const AuthProviderGuest: AuthProvider = "guest";
+/**
+ * AuthProviderAgent marks agent-instance users. No auth flow accepts it:
+ * agents have no password and no OIDC identity, so no session can ever be
+ * minted for one — they act only through run-scoped tokens.
+ */
+export const AuthProviderAgent: AuthProvider = "agent";
 export interface User {
   id: string;
   email: string;
@@ -642,6 +1842,17 @@ export interface User {
    */
   phone?: string;
   manager?: UserManager;
+  /**
+   * Kind discriminates humans ("") from agent instances ("agent"). Agents
+   * are the same kind of thing as a human user — member lists, mentions,
+   * presence and authorship all resolve through the same user id — with
+   * AgentConfig carrying the agent-only settings.
+   */
+  kind?: UserKind;
+  /**
+   * AgentConfig is set only when Kind == UserKindAgent.
+   */
+  agentConfig?: AgentConfig;
 }
 /**
  * UserManager is a lightweight reference to a user's manager from the

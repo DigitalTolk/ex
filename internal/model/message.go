@@ -3,17 +3,17 @@ package model
 import "time"
 
 type Message struct {
-	ID              string     `json:"id" dynamodbav:"id"`
-	ParentID        string     `json:"parentID" dynamodbav:"parentID"` // channel or conversation ID
-	ParentType      string     `json:"parentType,omitempty" dynamodbav:"-"`
-	AuthorID        string     `json:"authorID" dynamodbav:"authorID"`
-	Body            string     `json:"body" dynamodbav:"body"`
-	System          bool       `json:"system,omitempty" dynamodbav:"system,omitempty"`
+	ID         string `json:"id" dynamodbav:"id"`
+	ParentID   string `json:"parentID" dynamodbav:"parentID"` // channel or conversation ID
+	ParentType string `json:"parentType,omitempty" dynamodbav:"-"`
+	AuthorID   string `json:"authorID" dynamodbav:"authorID"`
+	Body       string `json:"body" dynamodbav:"body"`
+	System     bool   `json:"system,omitempty" dynamodbav:"system,omitempty"`
 	// NoIndex keeps the message out of the search index (live indexing AND
 	// admin reindex) — for machine-posted ephemera like /mstmeetings join
 	// links, where a stale meeting URL surfacing in search is noise. Internal
 	// only, never serialized to clients.
-	NoIndex bool `json:"-" dynamodbav:"noIndex,omitempty"`
+	NoIndex         bool       `json:"-" dynamodbav:"noIndex,omitempty"`
 	ParentMessageID string     `json:"parentMessageID,omitempty" dynamodbav:"parentMessageID,omitempty"` // root message of the thread
 	ReplyCount      int        `json:"replyCount,omitempty" dynamodbav:"replyCount,omitempty"`           // count of replies (only set on root messages)
 	LastReplyAt     *time.Time `json:"lastReplyAt,omitempty" dynamodbav:"lastReplyAt,omitempty"`         // timestamp of the latest reply (only set on root messages)
@@ -53,6 +53,16 @@ type Message struct {
 	WebhookAvatarURL   string              `json:"webhookAvatarURL,omitempty" dynamodbav:"webhookAvatarURL,omitempty"`
 	WebhookIconEmoji   string              `json:"webhookIconEmoji,omitempty" dynamodbav:"webhookIconEmoji,omitempty"` // emoji name (no colons) from icon_emoji; rendered as the avatar
 	MessageAttachments []MessageAttachment `json:"messageAttachments,omitempty" dynamodbav:"messageAttachments,omitempty"`
+	// AgentInvokerID attributes an agent-authored message to the human whose
+	// invocation produced it. Agents are shared ("gg" belongs to no one), so
+	// a reader — human or another agent's context bundle — needs this to say
+	// "bob's gg said X" rather than an ambiguous "gg said X". Set only on the
+	// SendAsAgent path.
+	AgentInvokerID string `json:"agentInvokerID,omitempty" dynamodbav:"agentInvokerID,omitempty"`
+	// AgentRunID links an agent-authored message to the run that produced it,
+	// so the UI can offer "Show activity" (the run drawer: timeline,
+	// artifacts, spend) straight from the message.
+	AgentRunID string `json:"agentRunID,omitempty" dynamodbav:"agentRunID,omitempty"`
 }
 
 // Tombstone clears a message's content in place for a soft delete: it flags

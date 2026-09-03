@@ -22,6 +22,7 @@ vi.mock('@/lib/ws-sender', () => ({
 
 vi.mock('@/lib/notification-sound', () => ({
   playNotificationPing: vi.fn(),
+  playApprovalChime: vi.fn(),
 }));
 
 // Controllable tab-leader mock: defaults mirror the module's inert

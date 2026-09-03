@@ -102,6 +102,12 @@ export interface Message {
   webhookAvatarURL?: string;
   webhookIconEmoji?: string;
   messageAttachments?: MessageAttachment[];
+  // Agent-authored messages carry the human whose invocation produced them
+  // (agents are shared — "gg" alone doesn't say whose task it served).
+  agentInvokerID?: string;
+  // …and the run that produced them, so "Show activity" can open the run
+  // drawer (timeline, artifacts, spend) straight from the message.
+  agentRunID?: string;
 }
 
 // HastNode mirrors the server-side hast tree shape. Three node

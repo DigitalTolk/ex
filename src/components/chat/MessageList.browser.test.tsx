@@ -40,6 +40,14 @@ vi.mock('@/hooks/useActivity', () => ({
   useCreateReminder: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(() => Promise.resolve({})), isPending: false }),
 }));
 
+// MessageItem also queries the viewer's thread watchers and the agent roster
+// (react-query) — same deal: no QueryClientProvider here, so stub the hooks.
+vi.mock('@/hooks/useAgents', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useAgents')>()),
+  useParentWatchers: () => ({ data: [] }),
+  useAgents: () => ({ data: [] }),
+}));
+
 vi.mock('@/hooks/useUnfurl', () => ({
   useUnfurl: () => ({
     data: {

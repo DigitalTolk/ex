@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
+	"github.com/DigitalTolk/ex/internal/model"
 )
 
 // NewRouter builds the application HTTP handler, registering all routes.
@@ -278,6 +279,116 @@ func NewRouter(d *Deps) http.Handler {
 		// spam amplification (a touch higher than the auth limit since busy
 		// integrations legitimately post more often).
 		mux.Handle("POST /hooks/{id}", middleware.WrapFunc(webhookH.Execute, middleware.RateLimit(d.RateLimiter, 60, time.Minute)))
+	}
+
+	// ------------------------------------------------------------------ Agents
+	// Three token audiences, three middlewares: interactive sessions for the
+	// SPA surface, runner-scoped tokens for the desktop runner, run-scoped
+	// tokens for one run's MCP tool calls. Each middleware accepts exactly
+	// its own scope, so a leaked machine token can't reach the wrong API.
+	if d.Agent != nil {
+		mux.Handle("GET /api/v1/agents", middleware.WrapFunc(d.Agent.List, authMW))
+		mux.Handle("POST /api/v1/agents", middleware.WrapFunc(d.Agent.CreateAgent, authMW, middleware.RequireSystemRole(model.SystemRoleAdmin), writeLimit))
+		mux.Handle("PATCH /api/v1/agents/{slug}", middleware.WrapFunc(d.Agent.RenameAgent, authMW, middleware.RequireSystemRole(model.SystemRoleAdmin), writeLimit))
+		mux.Handle("PATCH /api/v1/agents/{slug}/prefs", middleware.WrapFunc(d.Agent.UpdatePrefs, authMW))
+		mux.Handle("POST /api/v1/agents/runner-token", middleware.WrapFunc(d.Agent.MintRunnerToken, authMW))
+		mux.Handle("GET /api/v1/runs/thread", middleware.WrapFunc(d.Agent.ThreadTimeline, authMW))
+		mux.Handle("GET /api/v1/runs/{id}", middleware.WrapFunc(d.Agent.Timeline, authMW))
+		mux.Handle("GET /api/v1/runs/{id}/artifacts/{artifactID}", middleware.WrapFunc(d.Agent.GetArtifact, authMW))
+		mux.Handle("POST /api/v1/runs/{id}/approvals/{approvalID}", middleware.WrapFunc(d.Agent.DecideApproval, authMW, writeLimit))
+		mux.Handle("POST /api/v1/runs/{id}/stop", middleware.WrapFunc(d.Agent.StopRun, authMW, writeLimit))
+		mux.Handle("GET /api/v1/agents/{slug}/subscriptions", middleware.WrapFunc(d.Agent.ListSubscriptions, authMW))
+		mux.Handle("POST /api/v1/agents/{slug}/subscriptions", middleware.WrapFunc(d.Agent.CreateSubscription, authMW, writeLimit))
+		mux.Handle("PATCH /api/v1/agents/{slug}/subscriptions/{parentID}/{id}", middleware.WrapFunc(d.Agent.UpdateSubscription, authMW, writeLimit))
+		mux.Handle("DELETE /api/v1/agents/{slug}/subscriptions/{parentID}/{id}", middleware.WrapFunc(d.Agent.DeleteSubscription, authMW, writeLimit))
+		mux.Handle("GET /api/v1/channels/{id}/watchers", middleware.WrapFunc(d.Agent.ListParentWatchers, authMW))
+		mux.Handle("GET /api/v1/conversations/{id}/watchers", middleware.WrapFunc(d.Agent.ListParentWatchers, authMW))
+		mux.Handle("POST /api/v1/watchers/{parentID}/{id}/catchup", middleware.WrapFunc(d.Agent.DecideCatchUp, authMW, writeLimit))
+		mux.Handle("GET /api/v1/skills", middleware.WrapFunc(d.Agent.ListSkills, authMW))
+		mux.Handle("POST /api/v1/skills", middleware.WrapFunc(d.Agent.CreateSkill, authMW, writeLimit))
+		mux.Handle("PATCH /api/v1/skills/{id}", middleware.WrapFunc(d.Agent.UpdateSkill, authMW, writeLimit))
+		mux.Handle("DELETE /api/v1/skills/{id}", middleware.WrapFunc(d.Agent.DeleteSkill, authMW, writeLimit))
+	}
+	if d.AgentRunner != nil {
+		runnerMW := middleware.AuthScope(jwtMgr, model.TokenScopeRunner)
+		mux.Handle("POST /api/v1/agent/runner/register", middleware.WrapFunc(d.AgentRunner.Register, runnerMW))
+		mux.Handle("POST /api/v1/agent/runner/claim", middleware.WrapFunc(d.AgentRunner.Claim, runnerMW))
+		mux.Handle("POST /api/v1/agent/runner/heartbeat", middleware.WrapFunc(d.AgentRunner.Heartbeat, runnerMW))
+		mux.Handle("POST /api/v1/agent/runner/runs/{id}/events", middleware.WrapFunc(d.AgentRunner.Events, runnerMW))
+		mux.Handle("POST /api/v1/agent/runner/runs/{id}/complete", middleware.WrapFunc(d.AgentRunner.Complete, runnerMW))
+		mux.Handle("POST /api/v1/agent/runner/runs/{id}/fail", middleware.WrapFunc(d.AgentRunner.Fail, runnerMW))
+	}
+	if d.Connector != nil {
+		mux.Handle("GET /api/v1/connectors", middleware.WrapFunc(d.Connector.List, authMW))
+		mux.Handle("POST /api/v1/connectors", middleware.WrapFunc(d.Connector.Ingest, authMW, middleware.RequireSystemRole(model.SystemRoleAdmin), writeLimit))
+		mux.Handle("POST /api/v1/connectors/sync", middleware.WrapFunc(d.Connector.Sync, authMW, middleware.RequireSystemRole(model.SystemRoleAdmin), writeLimit))
+		mux.Handle("POST /api/v1/connectors/{slug}/install", middleware.WrapFunc(d.Connector.Install, authMW, writeLimit))
+		mux.Handle("PATCH /api/v1/connectors/{slug}/install", middleware.WrapFunc(d.Connector.UpdateInstall, authMW, writeLimit))
+		mux.Handle("POST /api/v1/connectors/{slug}/verify", middleware.WrapFunc(d.Connector.VerifyInstall, authMW, writeLimit))
+		mux.Handle("DELETE /api/v1/connectors/{slug}/install", middleware.WrapFunc(d.Connector.Uninstall, authMW, writeLimit))
+	}
+	if d.AgentRunTool != nil {
+		runMW := middleware.AuthScope(jwtMgr, model.TokenScopeRun)
+		if d.Connector != nil {
+			// Runner pulls the invoker's installed connectors (docs + tokens)
+			// at run start — run-token scoped, so a run only sees the
+			// connectors of the person it acts for.
+			mux.Handle("GET /api/v1/agent/run/connectors", middleware.WrapFunc(d.Connector.RunnerConnectors, runMW))
+			mux.Handle("POST /api/v1/agent/run/use-connector", middleware.WrapFunc(d.Connector.UseConnector, runMW, writeLimit))
+		}
+		// Agent posts share the per-user write limit so a runaway agent can't
+		// out-post a human (keyed by the invoker's user id from the token).
+		mux.Handle("POST /api/v1/agent/run/messages", middleware.WrapFunc(d.AgentRunTool.PostMessage, runMW, writeLimit))
+		mux.Handle("GET /api/v1/agent/run/thread", middleware.WrapFunc(d.AgentRunTool.GetThread, runMW))
+		mux.Handle("GET /api/v1/agent/run/context", middleware.WrapFunc(d.AgentRunTool.GetContext, runMW))
+		mux.Handle("POST /api/v1/agent/run/context", middleware.WrapFunc(d.AgentRunTool.WriteContext, runMW, writeLimit))
+		mux.Handle("POST /api/v1/agent/run/state", middleware.WrapFunc(d.AgentRunTool.SetState, runMW))
+		mux.Handle("POST /api/v1/agent/run/memory", middleware.WrapFunc(d.AgentRunTool.UpdateMemory, runMW, writeLimit))
+		mux.Handle("POST /api/v1/agent/run/claims", middleware.WrapFunc(d.AgentRunTool.ClaimTask, runMW, writeLimit))
+		mux.Handle("POST /api/v1/agent/run/approvals", middleware.WrapFunc(d.AgentRunTool.RequestApproval, runMW, writeLimit))
+		mux.Handle("POST /api/v1/agent/run/propose-reply", middleware.WrapFunc(d.AgentRunTool.ProposeReply, runMW, writeLimit))
+		mux.Handle("GET /api/v1/agent/run/approvals/{id}", middleware.WrapFunc(d.AgentRunTool.GetApproval, runMW))
+		mux.Handle("POST /api/v1/agent/run/artifacts", middleware.WrapFunc(d.AgentRunTool.PublishArtifact, runMW, writeLimit))
+		mux.Handle("GET /api/v1/agent/run/skills", middleware.WrapFunc(d.AgentRunTool.ListSkills, runMW))
+		mux.Handle("POST /api/v1/agent/run/skills/{id}", middleware.WrapFunc(d.AgentRunTool.InvokeSkill, runMW))
+		mux.Handle("POST /api/v1/agent/run/link-message", middleware.WrapFunc(d.AgentRunTool.LinkMessage, runMW))
+		if d.CodingTask != nil {
+			// Coding tasks (plan-coding-agent.md): the run-scoped task tools…
+			mux.Handle("POST /api/v1/agent/run/coding-task", middleware.WrapFunc(d.CodingTask.Create, runMW, writeLimit))
+			mux.Handle("POST /api/v1/agent/run/coding-task/report", middleware.WrapFunc(d.CodingTask.Report, runMW, writeLimit))
+			mux.Handle("POST /api/v1/agent/run/coding-task/test-plan", middleware.WrapFunc(d.CodingTask.TestPlan, runMW, writeLimit))
+			mux.Handle("POST /api/v1/agent/run/coding-task/request-mr", middleware.WrapFunc(d.CodingTask.RequestMR, runMW, writeLimit))
+			// …and the human surface (task card, sign-off, steering).
+			mux.Handle("GET /api/v1/coding-tasks/{id}", middleware.WrapFunc(d.CodingTask.Get, authMW))
+			mux.Handle("POST /api/v1/coding-tasks/{id}/signoff", middleware.WrapFunc(d.CodingTask.SignOff, authMW, writeLimit))
+			mux.Handle("POST /api/v1/coding-tasks/{id}/close", middleware.WrapFunc(d.CodingTask.Close, authMW, writeLimit))
+			mux.Handle("PATCH /api/v1/coding-tasks/{id}", middleware.WrapFunc(d.CodingTask.SetSteering, authMW, writeLimit))
+			mux.Handle("GET /api/v1/channels/{id}/coding-tasks", middleware.WrapFunc(d.CodingTask.ListByChannel, authMW))
+			mux.Handle("GET /api/v1/coding-projects", middleware.WrapFunc(d.CodingTask.ListProjects, authMW))
+		}
+		if d.AgentRunTool.workspace != nil {
+			// Ex-wide tools: everything the INVOKER could do, done as the agent.
+			mux.Handle("GET /api/v1/agent/run/channels", middleware.WrapFunc(d.AgentRunTool.ListChannels, runMW))
+			mux.Handle("POST /api/v1/agent/run/channels", middleware.WrapFunc(d.AgentRunTool.CreateChannel, runMW, writeLimit))
+			mux.Handle("POST /api/v1/agent/run/channels/{id}/join", middleware.WrapFunc(d.AgentRunTool.JoinChannel, runMW, writeLimit))
+			mux.Handle("GET /api/v1/agent/run/channels/{id}/messages", middleware.WrapFunc(d.AgentRunTool.ReadChannel, runMW))
+			mux.Handle("POST /api/v1/agent/run/channels/{id}/messages", middleware.WrapFunc(d.AgentRunTool.PostToChannel, runMW, writeLimit))
+			mux.Handle("GET /api/v1/agent/run/search", middleware.WrapFunc(d.AgentRunTool.SearchWorkspace, runMW))
+			mux.Handle("POST /api/v1/agent/run/reactions", middleware.WrapFunc(d.AgentRunTool.React, runMW, writeLimit))
+			mux.Handle("GET /api/v1/agent/run/users", middleware.WrapFunc(d.AgentRunTool.ListUsers, runMW))
+			mux.Handle("POST /api/v1/agent/run/dm", middleware.WrapFunc(d.AgentRunTool.SendDM, runMW, writeLimit))
+			mux.Handle("POST /api/v1/agent/run/reminders", middleware.WrapFunc(d.AgentRunTool.SetReminder, runMW, writeLimit))
+			mux.Handle("GET /api/v1/agent/run/reminders", middleware.WrapFunc(d.AgentRunTool.ListReminders, runMW))
+			mux.Handle("DELETE /api/v1/agent/run/reminders/{id}", middleware.WrapFunc(d.AgentRunTool.CancelReminder, runMW, writeLimit))
+			mux.Handle("POST /api/v1/agent/run/pins", middleware.WrapFunc(d.AgentRunTool.PinMessage, runMW, writeLimit))
+			mux.Handle("POST /api/v1/agent/run/notify", middleware.WrapFunc(d.AgentRunTool.NotifyOwner, runMW, writeLimit))
+		}
+	}
+	if d.Context != nil {
+		mux.Handle("GET /api/v1/context/{parentType}/{parentID}", middleware.WrapFunc(d.Context.List, authMW))
+		mux.Handle("POST /api/v1/context/{parentType}/{parentID}", middleware.WrapFunc(d.Context.Create, authMW, writeLimit))
+		mux.Handle("PATCH /api/v1/context/{parentType}/{parentID}/{itemID}", middleware.WrapFunc(d.Context.SetPinned, authMW, writeLimit))
+		mux.Handle("DELETE /api/v1/context/{parentType}/{parentID}/{itemID}", middleware.WrapFunc(d.Context.Delete, authMW, writeLimit))
 	}
 
 	// ------------------------------------------------------------------ WebSocket

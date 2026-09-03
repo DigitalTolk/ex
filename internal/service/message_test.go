@@ -2707,3 +2707,54 @@ func TestMessageService_IndexFailuresDoNotBlockOperations(t *testing.T) {
 		}
 	})
 }
+
+// Machine-state reactions: 👀⚙️✅ accumulate as a durable trail, but the
+// transient states (⏳ queued, ⛔ blocked, 🧠, 🔍) leave when the next state
+// lands — a settled approval must not keep flying ⛔ on the message forever.
+func TestMessageService_MachineReactionTransientStates(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+	memberships.memberships["ch1#u1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u1", Role: model.ChannelRoleMember}
+	msg, err := svc.Send(ctx, "u1", "ch1", ParentChannel, "deploy it", "")
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	set := func(state string) {
+		t.Helper()
+		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, msg.ID, state); err != nil {
+			t.Fatalf("set %q: %v", state, err)
+		}
+	}
+	has := func(state string) bool {
+		got, _ := messages.GetMessage(ctx, "ch1", msg.ID)
+		for _, u := range got.Reactions[state] {
+			if u == "agent-1" {
+				return true
+			}
+		}
+		return false
+	}
+
+	set(StateEmojiRead)
+	set(StateEmojiWorking)
+	set(StateEmojiBlocked)
+	if !has(StateEmojiRead) || !has(StateEmojiWorking) || !has(StateEmojiBlocked) {
+		t.Fatal("expected 👀 ⚙️ ⛔ while blocked")
+	}
+
+	// Unblocking (back to ⚙️, which is ALREADY set) still clears ⛔.
+	set(StateEmojiWorking)
+	if has(StateEmojiBlocked) {
+		t.Fatal("⛔ survived the return to ⚙️")
+	}
+	if !has(StateEmojiRead) || !has(StateEmojiWorking) {
+		t.Fatal("durable trail was clobbered by the transient clear")
+	}
+
+	// ✅ joins the trail; nothing transient remains.
+	set(StateEmojiDone)
+	if !has(StateEmojiRead) || !has(StateEmojiWorking) || !has(StateEmojiDone) {
+		t.Fatal("expected the full 👀 ⚙️ ✅ trail")
+	}
+}

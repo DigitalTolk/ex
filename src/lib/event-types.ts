@@ -34,6 +34,9 @@ export const EventType = {
   ActivityNew: 'activity.new',
   ActivityRead: 'activity.read',
   ThreadUpdated: 'thread.updated',
+  RunUpdated: 'run.updated',
+  RunProgress: 'run.progress',
+  RunApproval: 'run.approval',
 } as const;
 
 export type EventTypeName = (typeof EventType)[keyof typeof EventType];
@@ -55,5 +58,6 @@ export const EPHEMERAL_EVENT_TYPES = new Set<string>([
   EventType.ActivityNew,
   EventType.ActivityRead,
   EventType.ThreadUpdated,
+  EventType.RunProgress,
   'typing',
 ]);

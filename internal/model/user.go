@@ -18,6 +18,10 @@ type AuthProvider string
 const (
 	AuthProviderOIDC  AuthProvider = "oidc"
 	AuthProviderGuest AuthProvider = "guest"
+	// AuthProviderAgent marks agent-instance users. No auth flow accepts it:
+	// agents have no password and no OIDC identity, so no session can ever be
+	// minted for one — they act only through run-scoped tokens.
+	AuthProviderAgent AuthProvider = "agent"
 )
 
 type User struct {
@@ -53,7 +57,18 @@ type User struct {
 	// on email == userPrincipalName. Internal only — never serialized to
 	// clients.
 	MSObjectID string `json:"-" dynamodbav:"msObjectID,omitempty"`
+
+	// Kind discriminates humans ("") from agent instances ("agent"). Agents
+	// are the same kind of thing as a human user — member lists, mentions,
+	// presence and authorship all resolve through the same user id — with
+	// AgentConfig carrying the agent-only settings.
+	Kind UserKind `json:"kind,omitempty" dynamodbav:"kind,omitempty"`
+	// AgentConfig is set only when Kind == UserKindAgent.
+	AgentConfig *AgentConfig `json:"agentConfig,omitempty" dynamodbav:"agentConfig,omitempty"`
 }
+
+// IsAgent reports whether the user is an agent instance.
+func (u *User) IsAgent() bool { return u != nil && u.Kind == UserKindAgent }
 
 // UserManager is a lightweight reference to a user's manager from the
 // employee directory. UserID is set when the manager is also an Ex user

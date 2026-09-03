@@ -65,6 +65,52 @@ func (m *JWTManager) GenerateAccessToken(user *model.User) (string, error) {
 	return token.SignedString(m.secret)
 }
 
+// GenerateRunnerToken mints the long-lived, revocable token the desktop
+// runner authenticates with. Minted from an authenticated SPA session (never
+// via the refresh flow — see plan-v2 §3) and accepted only by the runner
+// middleware.
+func (m *JWTManager) GenerateRunnerToken(user *model.User, ttl time.Duration) (string, error) {
+	now := time.Now()
+	claims := model.TokenClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   user.ID,
+			Issuer:    jwtIssuer,
+			Audience:  jwt.ClaimStrings{jwtAudience},
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
+		},
+		UserID:      user.ID,
+		Email:       user.Email,
+		DisplayName: user.DisplayName,
+		SystemRole:  user.SystemRole,
+		Scope:       model.TokenScopeRunner,
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(m.secret)
+}
+
+// GenerateRunToken mints the per-run token the local MCP server uses for
+// tool calls. UserID is the INVOKER (permissions), ActorID the agent
+// instance (authorship), and it expires with the run's deadline.
+func (m *JWTManager) GenerateRunToken(runID, invokerID, agentID string, expiresAt time.Time) (string, error) {
+	now := time.Now()
+	claims := model.TokenClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   invokerID,
+			Issuer:    jwtIssuer,
+			Audience:  jwt.ClaimStrings{jwtAudience},
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+		},
+		UserID:  invokerID,
+		Scope:   model.TokenScopeRun,
+		RunID:   runID,
+		ActorID: agentID,
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(m.secret)
+}
+
 // GenerateRefreshToken produces a cryptographically random refresh token.
 // It returns the raw base64url-encoded value (to send to the client) and the
 // SHA-256 hash of that value (to store server-side).
