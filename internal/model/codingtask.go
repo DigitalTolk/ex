@@ -90,6 +90,13 @@ type CodingTask struct {
 	// RunnerID is machine affinity: the checkouts live on the runner that
 	// took the first task run, so later runs must land there too.
 	RunnerID string `json:"runnerID,omitempty" dynamodbav:"runnerID,omitempty"`
+	// RunnerOwnerID is whose machine holds that pin. Runner registrations are
+	// stored per owner, so without it a liveness check can only look at the
+	// CLAIMER's runners — which reports every other owner's live pin as dead
+	// and lets the claim steal the workspace. Empty on rows written before the
+	// field existed; the requester's machine is the right fallback, since task
+	// runs execute for the requester.
+	RunnerOwnerID string `json:"runnerOwnerID,omitempty" dynamodbav:"runnerOwnerID,omitempty"`
 
 	// Repos the task touches, each with its own branch/MR. The first entry
 	// is the primary (naming, default cwd hints).
@@ -123,7 +130,16 @@ type CodingTask struct {
 // one repo becomes Repos[0] (role unknown → other), the project is named
 // after that repo, and a published test link becomes a one-step test plan.
 // Idempotent; a no-op for rows that already carry repos.
-func (t *CodingTask) NormalizeLegacy() {
+//
+// Reports whether it actually upgraded anything, so the store can log when a
+// legacy row is still being read. That is the signal this compatibility layer
+// needs to be deletable: it has no writers, so once nothing logs it for a
+// retention period the fields and this function can go — until then, deleting
+// them would silently blank the project and repos of any surviving row.
+func (t *CodingTask) NormalizeLegacy() (upgraded bool) {
+	upgraded = t.LegacyProjectPath != "" || t.LegacyTestURL != "" || t.LegacyMRURL != "" ||
+		t.LegacyBranch != "" || t.LegacyBaseBranch != "" || t.LegacyWorkspaceDir != "" ||
+		t.LegacyTestNotes != ""
 	if len(t.Repos) == 0 && t.LegacyProjectPath != "" {
 		t.Repos = []TaskRepo{{
 			Path:         t.LegacyProjectPath,
@@ -150,6 +166,7 @@ func (t *CodingTask) NormalizeLegacy() {
 	}
 	t.LegacyProjectPath, t.LegacyBranch, t.LegacyBaseBranch, t.LegacyWorkspaceDir = "", "", "", ""
 	t.LegacyMRURL, t.LegacyTestURL, t.LegacyTestNotes = "", "", ""
+	return upgraded
 }
 
 // legacyProjectKey slugs a name the way the service's ProjectKey does (kept

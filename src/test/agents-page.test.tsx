@@ -8,6 +8,9 @@ import type { UserChannel } from '@/types';
 type ApiInit = { method?: string; body?: string };
 
 const mockApiFetch = vi.fn<(path: string, init?: ApiInit) => Promise<unknown>>();
+const showToast = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/toast', () => ({ showToast }));
+
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   apiFetch: (path: string, init?: ApiInit) => mockApiFetch(path, init),
@@ -534,5 +537,16 @@ describe('AgentsPage', () => {
 
     fireEvent.click(within(screen.getByTestId('agent-sub-s1')).getByRole('button', { name: 'Stop watching' }));
     await waitFor(() => expect(deletes).toContain('/api/v1/agents/gg/subscriptions/ch-1/s1'));
+  });
+
+  it('says so when stopping a watcher fails instead of leaving the row silently in place', async () => {
+    installRoutes({
+      mutate: (path, init) =>
+        init?.method === 'DELETE' ? Promise.reject(new Error('offline')) : Promise.resolve({}),
+    });
+    renderPage();
+    const row = await screen.findByTestId('agent-sub-s1');
+    fireEvent.click(within(row).getByRole('button', { name: 'Stop watching' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith("Couldn't stop that watcher — try again."));
   });
 });

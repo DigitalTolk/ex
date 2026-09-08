@@ -8,6 +8,9 @@ import type { Connector } from '@/hooks/useConnectors';
 type ApiInit = { method?: string; body?: string };
 
 const mockApiFetch = vi.fn<(path: string, init?: ApiInit) => Promise<unknown>>();
+const showToast = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/toast', () => ({ showToast }));
+
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   apiFetch: (path: string, init?: ApiInit) => mockApiFetch(path, init),
@@ -355,5 +358,16 @@ describe('ConnectorsPage', () => {
     const gitlab = await findCard('gitlab');
     fireEvent.click(gitlab.getByRole('button', { name: 'Disconnect' }));
     await waitFor(() => expect(deletes).toEqual(['/api/v1/connectors/gitlab/install']));
+  });
+
+  it('says so when a disconnect fails instead of looking like it worked', async () => {
+    installRoutes({
+      mutate: (path, init) =>
+        init?.method === 'DELETE' ? Promise.reject(new Error('offline')) : Promise.resolve({}),
+    });
+    renderPage();
+    const gitlab = await findCard('gitlab');
+    fireEvent.click(gitlab.getByRole('button', { name: 'Disconnect' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith("Couldn't disconnect — try again."));
   });
 });

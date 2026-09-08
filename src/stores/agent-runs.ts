@@ -16,7 +16,6 @@ export interface AgentRunActivity {
   agentID: string;
   invokerID?: string;
   parentID: string;
-  threadRootID?: string;
   state: string;
   // Human-readable "what it's doing" — from the latest progress beat.
   action: string;
@@ -71,6 +70,25 @@ function stateLabel(state: string): string {
   }
 }
 
+// reusePerParent keeps each parent's array IDENTITY stable when its contents
+// have not changed. Without it a beat on ANY parent handed every subscriber a
+// brand-new array, so one channel's run tick re-rendered the activity surface
+// of every other open parent — defeating the per-parent isolation this shape
+// exists to provide.
+function reusePerParent<T>(
+  prev: Record<string, T[]>,
+  next: Record<string, T[]>,
+  same: (a: T, b: T) => boolean,
+): Record<string, T[]> {
+  for (const [parentID, list] of Object.entries(next)) {
+    const before = prev[parentID];
+    if (before && before.length === list.length && before.every((e, i) => same(e, list[i]))) {
+      next[parentID] = before;
+    }
+  }
+  return next;
+}
+
 function publish(): void {
   const next: Record<string, AgentRunActivity[]> = {};
   for (const e of entries.values()) {
@@ -79,7 +97,9 @@ function publish(): void {
   for (const list of Object.values(next)) {
     list.sort((a, b) => a.runID.localeCompare(b.runID)); // stable order
   }
-  useAgentRunsStore.setState({ runsByParent: next });
+  useAgentRunsStore.setState((s) => ({
+    runsByParent: reusePerParent(s.runsByParent, next, (a, b) => a === b),
+  }));
   const wantTimer = entries.size > 0 || terminated.size > 0;
   if (wantTimer && !sweepTimer) {
     sweepTimer = setInterval(sweep, 15_000);
@@ -133,7 +153,6 @@ export function onRunUpdated(data: unknown): void {
     agentID: run.agentID,
     invokerID: run.invokerID,
     parentID: run.parentID,
-    threadRootID: run.threadRootID,
     state: run.state,
     action: prev?.action ?? stateLabel(run.state),
     updatedAt: Date.now(),
@@ -176,7 +195,6 @@ export function onRunProgress(data: unknown): void {
     agentID: p.agentID,
     invokerID: p.invokerID ?? prev?.invokerID,
     parentID: p.parentID,
-    threadRootID: p.threadRootID ?? prev?.threadRootID,
     state: prev?.state ?? 'running',
     action,
     updatedAt: Date.now(),

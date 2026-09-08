@@ -3,8 +3,7 @@ import { playApprovalChime, playNotificationPing } from '@/lib/notification-soun
 import { hasDndBridge, isDndActive } from '@/lib/dnd';
 import { requestOsAttention } from '@/lib/attention';
 import { showToast } from '@/lib/toast';
-import { apiFetch } from '@/lib/api';
-import { settleApprovalLocally } from '@/stores/agent-approvals';
+import { decideApproval } from '@/lib/approvals';
 import { readJSON, writeJSON } from '@/lib/storage';
 import { useLatestRef } from '@/hooks/useLatestRef';
 import { sendWS } from '@/lib/ws-sender';
@@ -663,13 +662,15 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     const onDecision = (e: Event) => {
       const d = (e as CustomEvent<{ approvalID?: string; runID?: string; approve?: boolean; choice?: string }>).detail;
       if (!d?.approvalID || !d.runID) return;
-      apiFetch(`/api/v1/runs/${d.runID}/approvals/${d.approvalID}`, {
-        method: 'POST',
-        body: JSON.stringify({ approve: d.approve === true, choice: d.choice }),
-      }).catch(() => {
-        // Already settled (raced an expiry) or offline — the event stream reconciles.
+      // Shared with the in-app card: the local card is dismissed only once the
+      // server has the decision, so a failed POST leaves the gate visible
+      // instead of turning the click into a timeout-denial.
+      void decideApproval({
+        approvalID: d.approvalID,
+        runID: d.runID,
+        approve: d.approve === true,
+        choice: d.choice,
       });
-      settleApprovalLocally(d.approvalID);
     };
     document.addEventListener('ex:approval-decision', onDecision);
     return () => document.removeEventListener('ex:approval-decision', onDecision);

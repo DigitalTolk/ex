@@ -189,6 +189,10 @@ func (d *hagentCovDir) GetSkill(_ context.Context, id string) (*model.Skill, err
 	return sk, nil
 }
 
+func (d *hagentCovDir) ListSkillIndex(ctx context.Context) ([]*model.Skill, error) {
+	return d.ListSkills(ctx)
+}
+
 func (d *hagentCovDir) ListSkills(_ context.Context) ([]*model.Skill, error) {
 	if err := d.trip("ListSkills"); err != nil {
 		return nil, err
@@ -247,6 +251,22 @@ func (d *hagentCovDir) ListSubscriptionsByParent(_ context.Context, parentID str
 		return nil, err
 	}
 	return d.subs[parentID], nil
+}
+
+// ListSubscriptionsByCreator mirrors the store's creator index; the fake
+// filters its own rows.
+func (d *hagentCovDir) ListSubscriptionsByCreator(ctx context.Context, creatorID, agentID string) ([]*model.AgentSubscription, error) {
+	all, err := d.ListAllSubscriptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.AgentSubscription, 0, len(all))
+	for _, sub := range all {
+		if sub.CreatorID == creatorID && sub.AgentID == agentID {
+			out = append(out, sub)
+		}
+	}
+	return out, nil
 }
 
 func (d *hagentCovDir) ListAllSubscriptions(_ context.Context) ([]*model.AgentSubscription, error) {
@@ -338,6 +358,53 @@ func (s *hagentCovRunStore) UpdateRun(_ context.Context, run *model.Run, _ model
 	}
 	s.runs[run.ID] = run
 	return nil
+}
+
+// AddRunSpend / AddRunPosts mirror the store's atomic counter updates: they
+// mutate the stored row in place and hand it back as committed.
+func (s *hagentCovRunStore) AddRunSpend(_ context.Context, runID, runnerID string, d store.RunSpendDelta) (*model.Run, error) {
+	if err := s.trip("AddRunSpend"); err != nil {
+		return nil, err
+	}
+	run, ok := s.runs[runID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if run.State.Terminal() || run.RunnerID != runnerID {
+		return nil, store.ErrStaleRun
+	}
+	run.Spend.Turns += d.Turns
+	run.Spend.InputTokens += d.InputTokens
+	run.Spend.OutputTokens += d.OutputTokens
+	run.LastRunnerSeq = d.LastRunnerSeq
+	if d.State != "" {
+		run.State = d.State
+	}
+	if !d.Deadline.IsZero() {
+		run.Deadline = d.Deadline
+	}
+	if !d.Lease.IsZero() {
+		l := d.Lease
+		run.LeaseExpiresAt = &l
+	}
+	cp := *run
+	return &cp, nil
+}
+
+func (s *hagentCovRunStore) AddRunPosts(_ context.Context, runID string, delta int) (*model.Run, error) {
+	if err := s.trip("AddRunPosts"); err != nil {
+		return nil, err
+	}
+	run, ok := s.runs[runID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if run.State.Terminal() {
+		return nil, store.ErrStaleRun
+	}
+	run.Spend.Posts += delta
+	cp := *run
+	return &cp, nil
 }
 
 func (s *hagentCovRunStore) RenewRunLease(_ context.Context, _, _ string, _ time.Time) error {
@@ -464,6 +531,7 @@ func (u *hagentCovOrchUsers) GetUsersByIDs(ctx context.Context, ids []string) ([
 type hagentCovMessages struct {
 	thread    []*model.Message
 	threadErr error
+	checkAccessErr error
 }
 
 func (m *hagentCovMessages) SendAsAgentRun(_ context.Context, _, _, _, _, _, _, _ string) (*model.Message, error) {
@@ -472,6 +540,24 @@ func (m *hagentCovMessages) SendAsAgentRun(_ context.Context, _, _, _, _, _, _, 
 
 func (m *hagentCovMessages) SetMachineReaction(_ context.Context, _, _, _, _, _ string) error {
 	return nil
+}
+
+// CheckAccess is the membership rule behind run reads; the fakes allow
+// everything unless a test flips checkAccessErr.
+func (m *hagentCovMessages) CheckAccess(context.Context, string, string, string) error {
+	return m.checkAccessErr
+}
+
+// ThreadWindowMessages mirrors the bounded window read.
+func (m *hagentCovMessages) ThreadWindowMessages(ctx context.Context, userID, parentID, parentType, threadRootID string, limit int) ([]*model.Message, error) {
+	all, err := m.ListThreadMessages(ctx, userID, parentID, parentType, threadRootID)
+	if err != nil || limit <= 0 {
+		return nil, err
+	}
+	if len(all) > limit {
+		all = all[len(all)-limit:]
+	}
+	return all, nil
 }
 
 func (m *hagentCovMessages) ListThreadMessages(_ context.Context, _, _, _, _ string) ([]*model.Message, error) {
@@ -779,9 +865,11 @@ func TestHagentCovTimeline(t *testing.T) {
 	env.runs.events["r1"] = []*model.RunEvent{{RunID: "r1", Seq: 1, Type: "run.created"}}
 	env.runs.arts["r1"] = []*model.Artifact{{ID: "art1", RunID: "r1", Title: "doc"}}
 
-	// Non-invoker with no access checker wired: forbidden.
+	// Non-invoker who isn't a member of the parent: forbidden.
+	env.msgs.checkAccessErr = errors.New("hagentCov: not a member")
 	rec = hagentCovDo(env.h.Timeline, hagentCovReq(http.MethodGet, "/api/v1/runs/r1", "", "u2", pv))
 	hagentCovWant(t, rec, http.StatusForbidden)
+	env.msgs.checkAccessErr = nil
 
 	// Artifacts load fails for the invoker.
 	env.runs.failFrom["ListArtifacts"] = 1
@@ -828,9 +916,11 @@ func TestHagentCovThreadTimeline(t *testing.T) {
 	env.runs.events["r2"] = []*model.RunEvent{{RunID: "r2", Seq: 2, Type: "run.created"}}
 	env.runs.arts["r1"] = []*model.Artifact{{ID: "art1", RunID: "r1"}}
 
-	// Neither invoker nor member: forbidden (no access checker wired).
+	// Neither invoker nor member: forbidden.
+	env.msgs.checkAccessErr = errors.New("hagentCov: not a member")
 	rec = hagentCovDo(env.h.ThreadTimeline, hagentCovReq(http.MethodGet, target, "", "u9", nil))
 	hagentCovWant(t, rec, http.StatusForbidden)
+	env.msgs.checkAccessErr = nil
 
 	env.msgs.thread = []*model.Message{
 		{ID: "tm1", AuthorID: "u1", Deleted: true},
@@ -870,13 +960,17 @@ func TestHagentCovStopRun(t *testing.T) {
 
 	env.runs.runs["r1"] = hagentCovRun("r1", env.agentID) // no parent listing yet
 
+	env.msgs.checkAccessErr = errors.New("hagentCov: not a member")
 	rec = hagentCovDo(env.h.StopRun, hagentCovReq(http.MethodPost, "/api/v1/runs/r1/stop", "", "u2", pv))
 	hagentCovWant(t, rec, http.StatusForbidden)
+	env.msgs.checkAccessErr = nil
 
-	env.runs.failFrom["ListRunsByParent"] = 1
+	// The stop path reads the ACTIVE_RUNS index, so that is the failure that
+	// must surface as a 500.
+	env.runs.failFrom["ListActiveRuns"] = 1
 	rec = hagentCovDo(env.h.StopRun, hagentCovReq(http.MethodPost, "/api/v1/runs/r1/stop", "", "u1", pv))
 	hagentCovWant(t, rec, http.StatusInternalServerError)
-	delete(env.runs.failFrom, "ListRunsByParent")
+	delete(env.runs.failFrom, "ListActiveRuns")
 
 	rec = hagentCovDo(env.h.StopRun, hagentCovReq(http.MethodPost, "/api/v1/runs/r1/stop", "", "u1", pv))
 	hagentCovWant(t, rec, http.StatusOK)
@@ -900,8 +994,10 @@ func TestHagentCovGetArtifact(t *testing.T) {
 	env.runs.runs["r1"] = hagentCovRun("r1", env.agentID)
 	env.runs.arts["r1"] = []*model.Artifact{{ID: "art1", RunID: "r1", Title: "doc"}}
 
+	env.msgs.checkAccessErr = errors.New("hagentCov: not a member")
 	rec = hagentCovDo(env.h.GetArtifact, hagentCovReq(http.MethodGet, "/api/v1/runs/r1/artifacts/art1", "", "u2", pv))
 	hagentCovWant(t, rec, http.StatusForbidden)
+	env.msgs.checkAccessErr = nil
 
 	env.runs.failFrom["ListArtifacts"] = 1
 	rec = hagentCovDo(env.h.GetArtifact, hagentCovReq(http.MethodGet, "/api/v1/runs/r1/artifacts/art1", "", "u1", pv))
@@ -943,9 +1039,17 @@ func TestHagentCovDecideApproval(t *testing.T) {
 	rec = hagentCovDo(env.h.DecideApproval, hagentCovReq(http.MethodPost, target, `{"approve":true}`, "u1", pv))
 	hagentCovWant(t, rec, http.StatusConflict)
 
-	// Happy path: pending, invoker decides; the run row itself is gone so the
-	// post-settle bookkeeping is skipped.
-	env.runs.approvals["r1|a1"] = &model.Approval{ID: "a1", RunID: "r1", InvokerID: "u1", State: model.ApprovalPending}
+	// A pending gate whose deadline has passed is over — the run stopped
+	// polling, so a decision nobody will read is refused rather than recorded.
+	env.runs.approvals["r1|a1"] = &model.Approval{ID: "a1", RunID: "r1", InvokerID: "u1",
+		State: model.ApprovalPending, Deadline: time.Now().Add(-time.Minute)}
+	rec = hagentCovDo(env.h.DecideApproval, hagentCovReq(http.MethodPost, target, `{"approve":true}`, "u1", pv))
+	hagentCovWant(t, rec, http.StatusConflict)
+
+	// Happy path: pending, in time, invoker decides; the run row itself is gone
+	// so the post-settle bookkeeping is skipped.
+	env.runs.approvals["r1|a1"] = &model.Approval{ID: "a1", RunID: "r1", InvokerID: "u1",
+		State: model.ApprovalPending, Deadline: time.Now().Add(time.Hour)}
 	rec = hagentCovDo(env.h.DecideApproval, hagentCovReq(http.MethodPost, target, `{"approve":true}`, "u1", pv))
 	hagentCovWant(t, rec, http.StatusOK)
 	if got := hagentCovJSON(t, rec)["state"]; got != model.ApprovalApproved {

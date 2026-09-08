@@ -48,7 +48,6 @@ describe('agent-approvals store', () => {
       parentID: 'chan1',
       agentID: '',
       invokerID: '',
-      parentType: 'channel',
       summary: '',
     });
     expect(card.kind).toBeUndefined();
@@ -75,7 +74,6 @@ describe('agent-approvals store', () => {
     expect(approvalsFor('chan1')[0]).toMatchObject({
       agentID: 'a-gg',
       invokerID: 'u-1',
-      parentType: 'conversation',
       messageID: 'm-1',
       summary: 'Run rm -rf?',
       risk: 'high',

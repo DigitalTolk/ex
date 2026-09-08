@@ -3,6 +3,7 @@ import { render, screen, fireEvent, act, waitFor, within } from '@testing-librar
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RunActivityDrawer } from '@/components/chat/RunActivityDrawer';
 import { closeRunDrawer, openRunDrawer, openThreadDrawer, useRunDrawerStore } from '@/stores/run-drawer';
+import { ApiError } from '@/lib/api';
 
 type ApiInit = { method?: string; body?: string };
 
@@ -128,6 +129,23 @@ describe('RunActivityDrawer', () => {
     expect(await screen.findByText(/Couldn’t load this run/)).toBeInTheDocument();
   });
 
+  it('reads a 404 as "nothing to show", not as an access problem', async () => {
+    // A thread with replies but no agent runs answers 404; the generic copy
+    // read as "you can't see this" on an ordinary human thread.
+    installTimeline(new ApiError(404, 'no agent activity in this thread'));
+    act(() => openThreadDrawer('chan-1', 'root-1'));
+    const view = renderDrawer();
+    expect(await screen.findByText('No agent has worked in this thread yet.')).toBeInTheDocument();
+    view.unmount();
+    act(() => closeRunDrawer());
+
+    // A deleted run says so instead.
+    installTimeline(new ApiError(404, 'run not found'));
+    act(() => openRunDrawer('run-gone'));
+    renderDrawer();
+    expect(await screen.findByText('That run no longer exists.')).toBeInTheDocument();
+  });
+
   it('polls a live run, offers Stop, and reports elapsed with approval wait subtracted', async () => {
     const now = Date.now();
     const iso = (offMs: number) => new Date(now - 60_000 + offMs).toISOString();
@@ -194,6 +212,17 @@ describe('RunActivityDrawer', () => {
     // Unknown author falls back to the raw id; a task marker reads as a card label.
     expect(within(drawer).getByText('u-ghost')).toBeInTheDocument();
     expect(within(drawer).getByText('📌 Task card')).toBeInTheDocument();
+  });
+
+  it('falls back to raw ids when the users map is missing an actor', async () => {
+    // The map comes from the API; a deleted user (or a partial lookup) leaves
+    // the header with an id rather than a blank.
+    installTimeline({ run: runFx(), events: [], users: {} });
+    act(() => openRunDrawer('run-1'));
+    renderDrawer();
+    const drawer = await screen.findByTestId('run-activity-drawer');
+    await waitFor(() => expect(within(drawer).getByText('ag-1')).toBeInTheDocument());
+    expect(within(drawer).getByText(/for u-1/)).toBeInTheDocument();
   });
 
   it('lists artifacts (single one expanded) with working copy buttons and raw API responses folded', async () => {

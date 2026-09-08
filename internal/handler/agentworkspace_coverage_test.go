@@ -58,6 +58,45 @@ func (f *hwsCovRunStore) UpdateRun(_ context.Context, run *model.Run, _ model.Ru
 	f.runs[run.ID] = run
 	return nil
 }
+// AddRunSpend / AddRunPosts mirror the store's atomic counter updates.
+func (f *hwsCovRunStore) AddRunSpend(_ context.Context, runID, runnerID string, d store.RunSpendDelta) (*model.Run, error) {
+	if f.updateErr != nil {
+		return nil, f.updateErr
+	}
+	run, ok := f.runs[runID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if run.State.Terminal() || run.RunnerID != runnerID {
+		return nil, store.ErrStaleRun
+	}
+	run.Spend.Turns += d.Turns
+	run.Spend.InputTokens += d.InputTokens
+	run.Spend.OutputTokens += d.OutputTokens
+	run.LastRunnerSeq = d.LastRunnerSeq
+	if d.State != "" {
+		run.State = d.State
+	}
+	cp := *run
+	return &cp, nil
+}
+
+func (f *hwsCovRunStore) AddRunPosts(_ context.Context, runID string, delta int) (*model.Run, error) {
+	if f.updateErr != nil {
+		return nil, f.updateErr
+	}
+	run, ok := f.runs[runID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if run.State.Terminal() {
+		return nil, store.ErrStaleRun
+	}
+	run.Spend.Posts += delta
+	cp := *run
+	return &cp, nil
+}
+
 func (f *hwsCovRunStore) RenewRunLease(context.Context, string, string, time.Time) error {
 	return nil
 }
@@ -113,6 +152,7 @@ func (f *hwsCovRunStore) ListArtifacts(context.Context, string) ([]*model.Artifa
 type hwsCovOrchMsgs struct {
 	msgs    []*model.Message
 	listErr error
+	checkAccessErr error
 }
 
 func (f *hwsCovOrchMsgs) SendAsAgentRun(context.Context, string, string, string, string, string, string, string) (*model.Message, error) {
@@ -121,6 +161,24 @@ func (f *hwsCovOrchMsgs) SendAsAgentRun(context.Context, string, string, string,
 func (f *hwsCovOrchMsgs) SetMachineReaction(context.Context, string, string, string, string, string) error {
 	return nil
 }
+// CheckAccess is the membership rule behind run reads; the fakes allow
+// everything unless a test flips checkAccessErr.
+func (f *hwsCovOrchMsgs) CheckAccess(context.Context, string, string, string) error {
+	return f.checkAccessErr
+}
+
+// ThreadWindowMessages mirrors the bounded window read.
+func (f *hwsCovOrchMsgs) ThreadWindowMessages(ctx context.Context, userID, parentID, parentType, threadRootID string, limit int) ([]*model.Message, error) {
+	all, err := f.ListThreadMessages(ctx, userID, parentID, parentType, threadRootID)
+	if err != nil || limit <= 0 {
+		return nil, err
+	}
+	if len(all) > limit {
+		all = all[len(all)-limit:]
+	}
+	return all, nil
+}
+
 func (f *hwsCovOrchMsgs) ListThreadMessages(context.Context, string, string, string, string) ([]*model.Message, error) {
 	return f.msgs, f.listErr
 }
@@ -165,6 +223,7 @@ func (hwsCovAgentDir) PutSkill(context.Context, *model.Skill) error       { retu
 func (hwsCovAgentDir) GetSkill(context.Context, string) (*model.Skill, error) {
 	return nil, store.ErrNotFound
 }
+func (hwsCovAgentDir) ListSkillIndex(context.Context) ([]*model.Skill, error) { return nil, nil }
 func (hwsCovAgentDir) ListSkills(context.Context) ([]*model.Skill, error) { return nil, nil }
 func (hwsCovAgentDir) DeleteSkill(context.Context, string) error          { return nil }
 func (hwsCovAgentDir) PutAgentMemory(context.Context, *model.AgentMemory) error {
@@ -177,6 +236,9 @@ func (hwsCovAgentDir) PutAgentSubscription(context.Context, *model.AgentSubscrip
 	return nil
 }
 func (hwsCovAgentDir) ListSubscriptionsByParent(context.Context, string) ([]*model.AgentSubscription, error) {
+	return nil, nil
+}
+func (hwsCovAgentDir) ListSubscriptionsByCreator(context.Context, string, string) ([]*model.AgentSubscription, error) {
 	return nil, nil
 }
 func (hwsCovAgentDir) ListAllSubscriptions(context.Context) ([]*model.AgentSubscription, error) {

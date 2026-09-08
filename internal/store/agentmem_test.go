@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
@@ -93,6 +95,40 @@ func TestAgentSubscriptionStore_CRUD(t *testing.T) {
 		t.Fatalf("list all: want 3, got %d", len(all))
 	}
 
+	// The creator index answers "my watchers for this agent" without draining
+	// the whole ALL_AGENTSUBS partition.
+	mine, err := s.ListSubscriptionsByCreator(ctx, "u-creator", "a-gg")
+	if err != nil {
+		t.Fatalf("list by creator: %v", err)
+	}
+	if len(mine) != 3 {
+		t.Fatalf("list by creator: want 3, got %d", len(mine))
+	}
+	if other, err := s.ListSubscriptionsByCreator(ctx, "u-creator", "a-other"); err != nil || len(other) != 0 {
+		t.Fatalf("another agent's watchers must not match: %d %v", len(other), err)
+	}
+	if nobody, err := s.ListSubscriptionsByCreator(ctx, "u-nobody", "a-gg"); err != nil || len(nobody) != 0 {
+		t.Fatalf("another creator's watchers must not match: %d %v", len(nobody), err)
+	}
+
+	// A THREAD-scoped watcher expires (it can only ever fire in one thread);
+	// a channel-wide one is a standing order and must not.
+	threadSub := mkAgentSubFixture("sub-thread", "ch-1")
+	threadSub.ThreadRootID = "root-1"
+	threadSub.CreatedAt = time.Now().UTC()
+	ranAt := threadSub.CreatedAt.Add(time.Hour)
+	threadSub.LastRunAt = &ranAt
+	if err := s.PutAgentSubscription(ctx, threadSub); err != nil {
+		t.Fatalf("put thread sub: %v", err)
+	}
+	ttl := subTTLAttr(t, db, "ch-1", "sub-thread")
+	if want := ranAt.Add(threadSubTTL).Unix(); ttl != want {
+		t.Fatalf("thread-scoped ttl = %d, want %d (from the later LastRunAt)", ttl, want)
+	}
+	if ttl := subTTLAttr(t, db, "ch-1", "sub-2"); ttl != 0 {
+		t.Fatalf("channel-wide watcher must not expire, got ttl %d", ttl)
+	}
+
 	if err := s.DeleteAgentSubscription(ctx, "ch-1", "sub-1"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -100,9 +136,27 @@ func TestAgentSubscriptionStore_CRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list after delete: %v", err)
 	}
-	if len(byParent) != 1 {
-		t.Fatalf("list after delete: want 1, got %d", len(byParent))
+	// sub-2 plus the thread-scoped one added above.
+	if len(byParent) != 2 {
+		t.Fatalf("list after delete: want 2, got %d", len(byParent))
 	}
+}
+
+// subTTLAttr reads the raw `ttl` attribute of one subscription row.
+func subTTLAttr(t *testing.T, db *DB, parentID, id string) int64 {
+	t.Helper()
+	out, err := db.Client.GetItem(context.Background(), &dynamodb.GetItemInput{
+		TableName: aws.String(db.Table),
+		Key:       compositeKey(agentSubPK(parentID), agentSubSK(id)),
+	})
+	if err != nil {
+		t.Fatalf("get sub row: %v", err)
+	}
+	var item agentSubItem
+	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
+		t.Fatalf("unmarshal sub row: %v", err)
+	}
+	return item.TTL
 }
 
 func TestAgentMemSubs_SDKErrorArms(t *testing.T) {
@@ -114,6 +168,12 @@ func TestAgentMemSubs_SDKErrorArms(t *testing.T) {
 		err := s.PutAgentMemory(ctx, &model.AgentMemory{AgentID: "a", InvokerID: "u"})
 		if !errors.Is(err, errInjected) {
 			t.Fatalf("PutAgentMemory: want errInjected, got %v", err)
+		}
+	})
+	t.Run("ListByCreator QueryError", func(t *testing.T) {
+		s := NewAgentStore(withFault(db, func(f *faultClient) { f.failQuery = true }))
+		if _, err := s.ListSubscriptionsByCreator(ctx, "u", "a"); !errors.Is(err, errInjected) {
+			t.Fatalf("ListSubscriptionsByCreator: want errInjected, got %v", err)
 		}
 	})
 	t.Run("GetMemory GetItemError", func(t *testing.T) {

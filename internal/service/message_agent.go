@@ -25,6 +25,7 @@ const (
 	StateEmojiBlocked   = "⛔"  // blocked / awaiting approval
 	StateEmojiFailed    = "❌"  // failed
 	StateEmojiQueued    = "⏳"  // queued until the invoker's runner is online
+	StateEmojiStopped   = "⏹️" // canceled by a human (StopThread)
 )
 
 // machineStateEmojis is the closed set of reaction names reserved for the
@@ -38,6 +39,7 @@ var machineStateEmojis = map[string]struct{}{
 	StateEmojiBlocked:   {},
 	StateEmojiFailed:    {},
 	StateEmojiQueued:    {},
+	StateEmojiStopped:   {},
 }
 
 // transientStateEmojis describe what is happening RIGHT NOW (queued, blocked
@@ -100,14 +102,16 @@ func (s *MessageService) dispatchAgents(ctx context.Context, msg *model.Message,
 // States are cumulative, not exclusive — a message an agent read keeps 👀
 // when ⚙️ lands, and both stay when ✅ arrives, so the trail reads as a
 // history: saw it → worked on it → done. Idempotent per (emoji, actor).
-// state == "" clears every machine emoji for the actor (unused today; kept
-// for symmetry).
+//
+// An empty state is refused: the "clear every machine emoji" branch this used
+// to carry had no caller outside its own test, and a silent no-op is a worse
+// answer than saying the argument is wrong.
 //
 // Backend-only: no access check on purpose — the orchestrator is the sole
 // caller and the agent actor is not a channel member. The human-facing path
 // (ToggleReaction) rejects these emojis instead.
 func (s *MessageService) SetMachineReaction(ctx context.Context, actorID, parentID, parentType, msgID, state string) error {
-	if state != "" && !IsMachineStateEmoji(state) {
+	if !IsMachineStateEmoji(state) {
 		return fmt.Errorf("message: %q is not a machine state emoji", state)
 	}
 	msg, err := s.messages.GetMessage(ctx, parentID, msgID)
@@ -117,60 +121,40 @@ func (s *MessageService) SetMachineReaction(ctx context.Context, actorID, parent
 	if msg.Reactions == nil {
 		msg.Reactions = map[string][]string{}
 	}
-	if state == "" {
-		for emoji := range machineStateEmojis {
-			users := msg.Reactions[emoji]
-			for i, u := range users {
-				if u == actorID {
-					users = append(users[:i], users[i+1:]...)
-					break
-				}
-			}
-			if len(users) == 0 {
-				delete(msg.Reactions, emoji)
-			} else {
-				msg.Reactions[emoji] = users
-			}
+	changed := false
+	// A new state ends whatever transient state preceded it — ⛔ must not
+	// outlive the approval it announced, ⏳ must not outlive the queue.
+	for emoji := range transientStateEmojis {
+		if emoji == state {
+			continue
 		}
-	} else {
-		changed := false
-		// A new state ends whatever transient state preceded it — ⛔ must not
-		// outlive the approval it announced, ⏳ must not outlive the queue.
-		for emoji := range transientStateEmojis {
-			if emoji == state {
-				continue
-			}
-			users := msg.Reactions[emoji]
-			for i, u := range users {
-				if u == actorID {
-					users = append(users[:i], users[i+1:]...)
-					changed = true
-					break
-				}
-			}
-			if len(users) == 0 {
-				delete(msg.Reactions, emoji)
-			} else {
-				msg.Reactions[emoji] = users
-			}
-		}
-		already := false
-		for _, u := range msg.Reactions[state] {
+		users := msg.Reactions[emoji]
+		for i, u := range users {
 			if u == actorID {
-				already = true
+				users = append(users[:i], users[i+1:]...)
+				changed = true
 				break
 			}
 		}
-		if !already {
-			msg.Reactions[state] = append(msg.Reactions[state], actorID)
-			changed = true
-		}
-		if !changed {
-			return nil // nothing to persist or fan out
+		if len(users) == 0 {
+			delete(msg.Reactions, emoji)
+		} else {
+			msg.Reactions[emoji] = users
 		}
 	}
-	if len(msg.Reactions) == 0 {
-		msg.Reactions = nil
+	already := false
+	for _, u := range msg.Reactions[state] {
+		if u == actorID {
+			already = true
+			break
+		}
+	}
+	if !already {
+		msg.Reactions[state] = append(msg.Reactions[state], actorID)
+		changed = true
+	}
+	if !changed {
+		return nil // nothing to persist or fan out
 	}
 	if err := s.messages.UpdateMessage(ctx, msg); err != nil {
 		return fmt.Errorf("message: update state reaction: %w", err)

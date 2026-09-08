@@ -24,10 +24,26 @@ type ogateCovStore struct {
 	settleErr        error
 	updateRunErrs    map[string]error // runID -> forced UpdateRun error
 	listByParentErr  error
+	listActiveErr    error
+	getRunErr        error
 	listApprovalsErr error
 	putArtifactErr   error
 	listArtifactsErr error
 	listEventsErr    error
+}
+
+func (s *ogateCovStore) GetRun(ctx context.Context, runID string) (*model.Run, error) {
+	if s.getRunErr != nil {
+		return nil, s.getRunErr
+	}
+	return s.fakeRunStore.GetRun(ctx, runID)
+}
+
+func (s *ogateCovStore) ListActiveRuns(ctx context.Context) ([]*model.Run, error) {
+	if s.listActiveErr != nil {
+		return nil, s.listActiveErr
+	}
+	return s.fakeRunStore.ListActiveRuns(ctx)
 }
 
 func (s *ogateCovStore) PutApproval(ctx context.Context, a *model.Approval) error {
@@ -181,12 +197,12 @@ func TestOgateCovRequestApprovalValidation(t *testing.T) {
 	ctx := context.Background()
 	run := fx.run("ogc-r1", "mA", "")
 
-	if _, err := fx.orch.RequestApproval(ctx, run, "   ", "low", nil); !errors.Is(err, ErrValidation) {
+	if _, err := fx.orch.RequestApproval(ctx, run, ApprovalRequest{Summary: "   ", Risk: "low"}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("empty summary: want ErrValidation, got %v", err)
 	}
 
 	long := strings.Repeat("s", 1100)
-	a, err := fx.orch.RequestApproval(ctx, run, long, "low", nil)
+	a, err := fx.orch.RequestApproval(ctx, run, ApprovalRequest{Summary: long, Risk: "low"})
 	if err != nil {
 		t.Fatalf("long summary: %v", err)
 	}
@@ -194,7 +210,7 @@ func TestOgateCovRequestApprovalValidation(t *testing.T) {
 		t.Fatalf("summary not clipped: %d bytes", len(a.Summary))
 	}
 
-	if _, err := fx.orch.RequestApproval(ctx, run, "pick", "", []string{"a", "   "}); !errors.Is(err, ErrValidation) {
+	if _, err := fx.orch.RequestApproval(ctx, run, ApprovalRequest{Summary: "pick", Options: []string{"a", "   "}}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("blank option: want ErrValidation, got %v", err)
 	}
 
@@ -202,12 +218,12 @@ func TestOgateCovRequestApprovalValidation(t *testing.T) {
 	tight := &model.Run{ID: "ogc-tight", AgentID: testGGID, InvokerID: "u-alice",
 		ParentID: "ogc-chan", ParentType: ParentChannel, MessageID: "mA",
 		Deadline: fx.now.Add(5 * time.Second)}
-	if _, err := fx.orch.RequestApproval(ctx, tight, "too late", "", nil); !errors.Is(err, ErrValidation) {
+	if _, err := fx.orch.RequestApproval(ctx, tight, ApprovalRequest{Summary: "too late"}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("near-deadline run: want ErrValidation, got %v", err)
 	}
 
 	fx.store.putApprovalErr = errors.New("put approval boom")
-	if _, err := fx.orch.RequestApproval(ctx, run, "will fail", "", nil); err == nil || errors.Is(err, ErrValidation) {
+	if _, err := fx.orch.RequestApproval(ctx, run, ApprovalRequest{Summary: "will fail"}); err == nil || errors.Is(err, ErrValidation) {
 		t.Fatalf("put failure: want store error, got %v", err)
 	}
 	fx.store.putApprovalErr = nil
@@ -345,7 +361,7 @@ func TestOgateCovDecideApprovalErrors(t *testing.T) {
 	ctx := context.Background()
 	run := fx.run("ogc-r5", "mA", "")
 
-	if _, err := fx.orch.DecideApproval(ctx, "u-alice", run.ID, "no-such", true, "", ""); err == nil {
+	if _, err := fx.orch.DecideApproval(ctx, "u-alice", run.ID, "no-such", Decision{Approve: true}); err == nil {
 		t.Fatal("unknown approval decided")
 	}
 
@@ -356,12 +372,12 @@ func TestOgateCovDecideApprovalErrors(t *testing.T) {
 	}
 
 	fx.store.settleErr = store.ErrStaleApproval
-	if _, err := fx.orch.DecideApproval(ctx, "u-alice", run.ID, "ap-d", true, "", ""); !errors.Is(err, ErrApprovalSettled) {
+	if _, err := fx.orch.DecideApproval(ctx, "u-alice", run.ID, "ap-d", Decision{Approve: true}); !errors.Is(err, ErrApprovalSettled) {
 		t.Fatalf("stale settle: want ErrApprovalSettled, got %v", err)
 	}
 
 	fx.store.settleErr = errors.New("settle write boom")
-	if _, err := fx.orch.DecideApproval(ctx, "u-alice", run.ID, "ap-d", true, "", ""); err == nil || errors.Is(err, ErrApprovalSettled) {
+	if _, err := fx.orch.DecideApproval(ctx, "u-alice", run.ID, "ap-d", Decision{Approve: true}); err == nil || errors.Is(err, ErrApprovalSettled) {
 		t.Fatalf("settle failure: want raw error, got %v", err)
 	}
 	fx.store.settleErr = nil
@@ -382,7 +398,7 @@ func TestOgateCovApprovedReplyPostFails(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	fx.msgs.sendErr = errors.New("post boom")
-	decided, err := fx.orch.DecideApproval(ctx, "u-alice", run.ID, "ap-reply", true, "", "")
+	decided, err := fx.orch.DecideApproval(ctx, "u-alice", run.ID, "ap-reply", Decision{Approve: true})
 	if err != nil || decided.State != model.ApprovalApproved {
 		t.Fatalf("decide: %+v, %v", decided, err)
 	}
@@ -399,7 +415,7 @@ func TestOgateCovChoiceApprovalNotificationVerb(t *testing.T) {
 	fx.orch.SetApprovalNotifier(fn)
 	run := fx.run("ogc-r7", "mA", "")
 
-	if _, err := fx.orch.RequestApproval(context.Background(), run, "which one?", "", []string{"a", "b"}); err != nil {
+	if _, err := fx.orch.RequestApproval(context.Background(), run, ApprovalRequest{Summary: "which one?", Options: []string{"a", "b"}}); err != nil {
 		t.Fatalf("request: %v", err)
 	}
 	if len(fn.got) != 1 || !strings.Contains(fn.got[0].Title, "gg needs your input") {
@@ -416,10 +432,10 @@ func TestOgateCovToolAlertThrottle(t *testing.T) {
 	run := fx.run("ogc-r8", "mA", "")
 	ctx := context.Background()
 
-	if _, err := fx.orch.RequestApprovalKind(ctx, run, "read main.go", "tool", nil, "read"); err != nil {
+	if _, err := fx.orch.RequestApproval(ctx, run, ApprovalRequest{Summary: "read main.go", Risk: "tool", Kind: "read"}); err != nil {
 		t.Fatalf("request 1: %v", err)
 	}
-	if _, err := fx.orch.RequestApprovalKind(ctx, run, "read util.go", "tool", nil, "read"); err != nil {
+	if _, err := fx.orch.RequestApproval(ctx, run, ApprovalRequest{Summary: "read util.go", Risk: "tool", Kind: "read"}); err != nil {
 		t.Fatalf("request 2: %v", err)
 	}
 	if len(fn.got) != 1 {
@@ -478,11 +494,11 @@ func TestOgateCovPublishArtifact(t *testing.T) {
 	}
 }
 
-// HasApprovedApproval surfaces a listing failure.
-func TestOgateCovHasApprovedApprovalListErr(t *testing.T) {
+// HasDeliberateApproval surfaces a listing failure.
+func TestOgateCovHasDeliberateApprovalListErr(t *testing.T) {
 	fx := newOgateCovFX(t)
 	fx.store.listApprovalsErr = errors.New("list approvals boom")
-	if _, err := fx.orch.HasApprovedApproval(context.Background(), "any"); err == nil {
+	if _, err := fx.orch.HasDeliberateApproval(context.Background(), "any"); err == nil {
 		t.Fatal("list failure swallowed")
 	}
 }
@@ -532,11 +548,13 @@ func TestOgateCovStopThread(t *testing.T) {
 	}
 
 	main := fx.run("ogc-main", "mA", "")
-	fx.store.listByParentErr = errors.New("list peers boom")
+	// The stop path reads the ACTIVE_RUNS index (complete, unlike a bounded
+	// per-parent page); its failure must surface, not stop nothing quietly.
+	fx.store.listActiveErr = errors.New("list active boom")
 	if _, err := fx.orch.StopThread(ctx, "u-alice", main.ID); err == nil {
-		t.Fatal("peer listing failure swallowed")
+		t.Fatal("active-run listing failure swallowed")
 	}
-	fx.store.listByParentErr = nil
+	fx.store.listActiveErr = nil
 
 	// Peers: one terminal, one in another thread, one whose cancel loses the
 	// race (stale = already finished), one whose cancel fails hard.
@@ -622,19 +640,19 @@ func TestOgateCovThreadTimeline(t *testing.T) {
 		}
 	}
 
-	runs, evts, err := fx.orch.ThreadTimeline(ctx, "ogc-chan", "mA")
+	runs, evts, _, err := fx.orch.ThreadTimeline(ctx, "u-alice", "ogc-chan", "mA")
 	if err != nil || len(runs) != 2 || len(evts) != 2 {
 		t.Fatalf("timeline: runs=%d events=%d err=%v", len(runs), len(evts), err)
 	}
 
 	fx.store.listEventsErr = errors.New("events boom")
-	if _, _, err := fx.orch.ThreadTimeline(ctx, "ogc-chan", "mA"); err == nil {
+	if _, _, _, err := fx.orch.ThreadTimeline(ctx, "u-alice", "ogc-chan", "mA"); err == nil {
 		t.Fatal("event load failure swallowed")
 	}
 	fx.store.listEventsErr = nil
 
 	fx.store.listByParentErr = errors.New("list boom")
-	if _, _, err := fx.orch.ThreadTimeline(ctx, "ogc-chan", "mA"); err == nil {
+	if _, _, _, err := fx.orch.ThreadTimeline(ctx, "u-alice", "ogc-chan", "mA"); err == nil {
 		t.Fatal("run listing failure swallowed")
 	}
 	fx.store.listByParentErr = nil

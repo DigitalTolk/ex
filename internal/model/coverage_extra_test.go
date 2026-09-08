@@ -578,3 +578,22 @@ func TestModelCovUserIsAgent(t *testing.T) {
 		t.Error("agent IsAgent() = false, want true")
 	}
 }
+
+// Approval purposes are the structured "<action>:<subject>" strings that let a
+// gate verify a decision by EQUALITY instead of hunting for a slug or an id
+// inside the card's prose.
+func TestApprovalPurposes(t *testing.T) {
+	if got := ApprovalPurposeConnector("cliffhub"); got != "connector:cliffhub" {
+		t.Fatalf("connector purpose = %q", got)
+	}
+	if got := ApprovalPurposeTaskMR("t-1"); got != "task-mr:t-1" {
+		t.Fatalf("task-mr purpose = %q", got)
+	}
+	// The subject is what makes "core" and "core-eu" different purposes.
+	if ApprovalPurposeConnector("core") == ApprovalPurposeConnector("core-eu") {
+		t.Fatal("connector purposes must distinguish slug prefixes")
+	}
+	if ApprovalPurposeWatchReply == "" {
+		t.Fatal("the reply-mode purpose must be a non-empty constant")
+	}
+}

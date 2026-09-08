@@ -25,6 +25,9 @@ var errAgentCov = errors.New("agentCov: boom")
 type agentCovDir struct {
 	*fakeAgentDir
 	errs map[string]error
+	// hideCreatorIndex makes the creator-indexed listing answer nothing, which
+	// is how rows written before that index existed behave.
+	hideCreatorIndex bool
 }
 
 func agentCovNewDir() *agentCovDir {
@@ -106,6 +109,25 @@ func (d *agentCovDir) ListSubscriptionsByParent(ctx context.Context, parentID st
 		return nil, err
 	}
 	return d.fakeAgentDir.ListSubscriptionsByParent(ctx, parentID)
+}
+
+// ListSubscriptionsByCreator mirrors the store's creator index; the fake
+// filters its own rows.
+func (d *agentCovDir) ListSubscriptionsByCreator(ctx context.Context, creatorID, agentID string) ([]*model.AgentSubscription, error) {
+	if d.hideCreatorIndex {
+		return nil, nil
+	}
+	all, err := d.ListAllSubscriptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.AgentSubscription, 0, len(all))
+	for _, sub := range all {
+		if sub.CreatorID == creatorID && sub.AgentID == agentID {
+			out = append(out, sub)
+		}
+	}
+	return out, nil
 }
 
 func (d *agentCovDir) ListAllSubscriptions(ctx context.Context) ([]*model.AgentSubscription, error) {
@@ -216,7 +238,7 @@ func TestAgentCovSeedDefaults(t *testing.T) {
 
 func TestAgentCovCreateAgent(t *testing.T) {
 	ctx := context.Background()
-	svc, dir, _ := agentCovNewSvc()
+	svc, dir, users := agentCovNewSvc()
 
 	bad := []CreateAgentInput{
 		{Slug: "Bad Slug", Persona: "p"},                                                   // slug pattern
@@ -250,8 +272,17 @@ func TestAgentCovCreateAgent(t *testing.T) {
 	}
 	delete(dir.errs, "CreateAgentUser")
 
-	// The template row survived the failed user create above → duplicate slug.
-	if _, err := svc.CreateAgent(ctx, CreateAgentInput{Slug: " ZED ", Persona: "p"}); !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "already exists") {
+	// The template row survived the failed user create above, so the agent is
+	// HALF-CREATED: creating again finishes it instead of wedging the slug.
+	if _, err := svc.CreateAgent(ctx, CreateAgentInput{Slug: " ZED ", Persona: "p"}); err != nil {
+		t.Fatalf("half-created agent must converge, got %v", err)
+	}
+	// Fully built now → a real duplicate.
+	users.users[AgentUserID("zed")] = &model.User{
+		ID: AgentUserID("zed"), Kind: model.UserKindAgent,
+		AgentConfig: &model.AgentConfig{TemplateSlug: "zed"},
+	}
+	if _, err := svc.CreateAgent(ctx, CreateAgentInput{Slug: "zed", Persona: "p"}); !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("want already exists, got %v", err)
 	}
 

@@ -7,6 +7,9 @@ import type { Skill } from '@/hooks/useAgents';
 type ApiInit = { method?: string; body?: string };
 
 const mockApiFetch = vi.fn<(path: string, init?: ApiInit) => Promise<unknown>>();
+const showToast = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/toast', () => ({ showToast }));
+
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   apiFetch: (path: string, init?: ApiInit) => mockApiFetch(path, init),
@@ -256,5 +259,17 @@ describe('SkillsPage', () => {
       expect(screen.queryByTestId('skill-card-release-notes')).not.toBeInTheDocument(),
     );
     expect(screen.getByTestId('skill-card-triage')).toBeInTheDocument();
+  });
+
+  it('says so when a delete fails instead of leaving the card silently in place', async () => {
+    installRoutes({
+      mutate: (path, init) =>
+        init?.method === 'DELETE' ? Promise.reject(new Error('offline')) : Promise.resolve({}),
+    });
+    renderPage();
+    await screen.findByTestId('skill-card-release-notes');
+    fireEvent.click(screen.getByLabelText('Delete release-notes'));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete “release-notes”?' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith("Couldn't delete that skill — try again."));
   });
 });

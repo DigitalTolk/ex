@@ -126,6 +126,11 @@ type hconnCovRuns struct {
 	attached    []string
 	approval    *model.Approval
 	approvalErr error
+	// raised records the purposes the handler asked the server to gate, and
+	// granted decides the verification arm.
+	raised   []string
+	raiseErr error
+	granted  bool
 }
 
 func (r *hconnCovRuns) GetLiveRun(_ context.Context, _ string) (*model.Run, error) {
@@ -143,11 +148,21 @@ func (r *hconnCovRuns) AttachConnector(_ context.Context, _, slug, _ string) err
 	return nil
 }
 
-func (r *hconnCovRuns) ApprovalStatus(_ context.Context, _, _ string) (*model.Approval, error) {
-	if r.approvalErr != nil {
-		return nil, r.approvalErr
+func (r *hconnCovRuns) RequestApproval(_ context.Context, _ *model.Run, req service.ApprovalRequest) (*model.Approval, error) {
+	if r.raiseErr != nil {
+		return nil, r.raiseErr
 	}
-	return r.approval, nil
+	r.raised = append(r.raised, req.Purpose)
+	a := &model.Approval{ID: "hconncov-appr", Summary: req.Summary, Purpose: req.Purpose, State: model.ApprovalPending}
+	r.approval = a
+	return a, nil
+}
+
+func (r *hconnCovRuns) ApprovalGranted(_ context.Context, _, _, _ string) (*model.Approval, bool) {
+	if r.approvalErr != nil || !r.granted {
+		return nil, false
+	}
+	return r.approval, true
 }
 
 // hconnCovPresenceStore drives PresenceService.OnlineUserIDs deterministically.
@@ -231,7 +246,7 @@ func TestHconnCovConnectorList(t *testing.T) {
 // --- connector.go: Ingest ------------------------------------------------------
 
 func TestHconnCovConnectorIngest(t *testing.T) {
-	valid := `{"slug":"s1","title":"T","baseURL":"http://x","authKind":"paste","files":[{"name":"readme.md","content":"hi"}]}`
+	valid := `{"slug":"s1","title":"T","baseURL":"https://x.example.com","authKind":"paste","files":[{"name":"readme.md","content":"hi"}]}`
 
 	t.Run("bad body is 400", func(t *testing.T) {
 		h := hconnCovHandler(hconnCovNewStore(), nil)
@@ -678,8 +693,28 @@ func TestHconnCovConnectorUse(t *testing.T) {
 		}
 	})
 
-	t.Run("policy ask without approval returns ask", func(t *testing.T) {
-		h := hconnCovHandler(seed(""), liveRun()) // empty policy defaults to ask
+	t.Run("policy ask raises the gate itself and returns its id", func(t *testing.T) {
+		runs := liveRun()
+		h := hconnCovHandler(seed(""), runs) // empty policy defaults to ask
+		rec := httptest.NewRecorder()
+		h.UseConnector(rec, hconnCovReq(http.MethodPost, "/api/v1/agent/run/use-connector", `{"connector":"s1","reason":"look up a booking"}`, hconnCovRunClaims(), ""))
+		body := rec.Body.String()
+		if rec.Code != http.StatusOK || !strings.Contains(body, `"ask"`) || !strings.Contains(body, `"hconncov-appr"`) {
+			t.Fatalf("status=%d body=%s", rec.Code, body)
+		}
+		// The purpose — not prose — is what the second call verifies.
+		if len(runs.raised) != 1 || runs.raised[0] != model.ApprovalPurposeConnector("s1") {
+			t.Fatalf("raised=%v", runs.raised)
+		}
+		if !strings.Contains(runs.approval.Summary, "look up a booking") {
+			t.Fatalf("summary should carry the agent's reason: %q", runs.approval.Summary)
+		}
+	})
+
+	t.Run("gate that cannot be raised still asks", func(t *testing.T) {
+		runs := liveRun()
+		runs.raiseErr = errors.New("too close to the deadline")
+		h := hconnCovHandler(seed(model.ConnectorAgentUseAsk), runs)
 		rec := httptest.NewRecorder()
 		h.UseConnector(rec, hconnCovReq(http.MethodPost, "/api/v1/agent/run/use-connector", `{"connector":"s1"}`, hconnCovRunClaims(), ""))
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ask"`) {
@@ -700,7 +735,9 @@ func TestHconnCovConnectorUse(t *testing.T) {
 
 	t.Run("approved approval attaches", func(t *testing.T) {
 		runs := liveRun()
-		runs.approval = &model.Approval{ID: "ap1", State: model.ApprovalApproved, Summary: "Attach connector s1 to this run"}
+		runs.approval = &model.Approval{ID: "ap1", State: model.ApprovalApproved,
+			Summary: "Attach connector s1 to this run", Purpose: model.ApprovalPurposeConnector("s1")}
+		runs.granted = true
 		h := hconnCovHandler(seed(model.ConnectorAgentUseAsk), runs)
 		rec := httptest.NewRecorder()
 		h.UseConnector(rec, hconnCovReq(http.MethodPost, "/api/v1/agent/run/use-connector", `{"connector":"s1","approvalID":"ap1"}`, hconnCovRunClaims(), ""))
@@ -719,11 +756,28 @@ func TestHconnCovConnectorRunner(t *testing.T) {
 	t.Run("service failure is 500", func(t *testing.T) {
 		st := hconnCovNewStore()
 		st.errListInstalls = errors.New("boom")
-		h := hconnCovHandler(st, &hconnCovRuns{})
+		h := hconnCovHandler(st, &hconnCovRuns{run: &model.Run{ID: "hconncov-run", InvokerID: "hconncov-inv", ConnectorSlugs: []string{"s1"}}})
 		rec := httptest.NewRecorder()
 		h.RunnerConnectors(rec, hconnCovReq(http.MethodGet, "/api/v1/agent/run/connectors", "", hconnCovRunClaims(), ""))
 		if rec.Code != http.StatusInternalServerError {
 			t.Fatalf("status=%d, want 500", rec.Code)
+		}
+	})
+
+	t.Run("no picks ships an empty list, not null", func(t *testing.T) {
+		// Nothing is fetched at all when the run picked nothing, and the
+		// payload stays iterable client-side.
+		st := hconnCovNewStore()
+		st.connectors["s1"] = hconnCovPasteConnector("s1")
+		st.installs[hconnCovKey("hconncov-inv", "s1")] = &model.ConnectorInstall{UserID: "hconncov-inv", ConnectorSlug: "s1", Token: "t1"}
+		h := hconnCovHandler(st, &hconnCovRuns{run: &model.Run{ID: "hconncov-run", InvokerID: "hconncov-inv"}})
+		rec := httptest.NewRecorder()
+		h.RunnerConnectors(rec, hconnCovReq(http.MethodGet, "/api/v1/agent/run/connectors", "", hconnCovRunClaims(), ""))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		if body := rec.Body.String(); !strings.Contains(body, `"connectors":[]`) {
+			t.Fatalf("want an empty array, got %s", body)
 		}
 	})
 

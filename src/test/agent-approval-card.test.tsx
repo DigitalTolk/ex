@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AgentApprovalCard } from '@/components/chat/AgentApprovalCard';
+import { ApiError } from '@/lib/api';
 import { onRunApproval, resetAgentApprovalsSessionState } from '@/stores/agent-approvals';
 import type { UserMapEntry } from '@/components/chat/MessageList';
 
@@ -158,7 +159,7 @@ describe('AgentApprovalCard', () => {
     );
   });
 
-  it('disables the buttons while a decision is in flight and settles even when the POST fails', async () => {
+  it('disables the buttons while a decision is in flight, and KEEPS the card when the POST fails', async () => {
     const gate = deferred<unknown>();
     installRoutes({ decide: () => gate.promise });
     seedApproval('ap-1');
@@ -167,8 +168,20 @@ describe('AgentApprovalCard', () => {
     fireEvent.click(within(card).getByRole('button', { name: 'Approve' }));
     await waitFor(() => expect(within(card).getByTestId('approval-deny')).toBeDisabled());
     expect(within(card).getByTestId('approval-note')).toBeDisabled();
-    gate.reject(new Error('already settled'));
-    // The catch arm still removes the card locally.
+    gate.reject(new Error('network down'));
+    // A decision the server never received must NOT dismiss the card: the
+    // agent is still waiting, and a silent dismissal turned the user's
+    // Approve into a timeout-denial minutes later.
+    await waitFor(() => expect(screen.getByTestId('approval-send-failed')).toBeInTheDocument());
+    expect(screen.getByTestId('agent-approval-card')).toBeInTheDocument();
+    expect(within(card).getByTestId('approval-deny')).not.toBeDisabled();
+  });
+
+  it('dismisses the card when the server says the gate is already resolved', async () => {
+    installRoutes({ decide: () => Promise.reject(new ApiError(409, 'already settled')) });
+    seedApproval('ap-1');
+    renderCard('c-1');
+    fireEvent.click(screen.getByTestId('approval-deny'));
     await waitFor(() => expect(screen.queryByTestId('agent-approval-card')).not.toBeInTheDocument());
   });
 
@@ -308,14 +321,15 @@ describe('AgentApprovalCard', () => {
     expect(prefs).not.toHaveBeenCalled();
   });
 
-  it('still approves when the pref save fails, and settles when an approval POST fails', async () => {
-    const decide = vi.fn(() => Promise.reject(new Error('raced the timeout')));
+  it('still approves when the pref save fails, and keeps the card when the approval POST fails', async () => {
+    const decide = vi.fn(() => Promise.reject(new Error('network down')));
     installRoutes({ prefs: () => Promise.reject(new Error('nope')), decide });
     seedApproval('ap-1', { kind: 'web' });
     renderCard('c-1');
     fireEvent.click(await screen.findByTestId('approval-always-allow'));
-    await waitFor(() => expect(screen.queryByTestId('agent-approval-card')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('approval-send-failed')).toBeInTheDocument());
     expect(decide).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('agent-approval-card')).toBeInTheDocument();
   });
 
   it('falls back to the raw kind for classes outside the preset list and to "agent" without a user map', async () => {

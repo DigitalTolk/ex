@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 func makeMessage(parentID, id, author, body string) *model.Message {
@@ -100,6 +102,26 @@ func TestMessageStore_ListThreadReplies(t *testing.T) {
 	if len(again) != 2 {
 		t.Fatalf("after update len = %d, want 2 (GSI key preserved on Update)", len(again))
 	}
+
+	// The BOUNDED read the agent context window uses: newest N, handed back
+	// oldest-first, without draining an hours-long task thread.
+	newest, err := s.ListThreadRepliesNewest(ctx, "01-root", 1)
+	if err != nil {
+		t.Fatalf("ListThreadRepliesNewest: %v", err)
+	}
+	if len(newest) != 1 || newest[0].ID != "03-r2" {
+		t.Fatalf("newest(1) = %+v, want [03-r2]", newest)
+	}
+	all, err := s.ListThreadRepliesNewest(ctx, "01-root", 10)
+	if err != nil {
+		t.Fatalf("ListThreadRepliesNewest all: %v", err)
+	}
+	if len(all) != 2 || all[0].ID != "02-r1" || all[1].ID != "03-r2" {
+		t.Fatalf("newest(10) = %+v, want [02-r1 03-r2] oldest-first", all)
+	}
+	if got, err := s.ListThreadRepliesNewest(ctx, "01-root", 0); err != nil || got != nil {
+		t.Fatalf("newest(0) = %+v %v, want nil", got, err)
+	}
 }
 
 func TestMessageStore_ListThreadReplies_QueryError(t *testing.T) {
@@ -109,6 +131,21 @@ func TestMessageStore_ListThreadReplies_QueryError(t *testing.T) {
 	if _, err := s.ListThreadReplies(ctx, "root"); !errors.Is(err, errInjected) {
 		t.Fatalf("ListThreadReplies: want errInjected, got %v", err)
 	}
+	if _, err := s.ListThreadRepliesNewest(ctx, "root", 5); !errors.Is(err, errInjected) {
+		t.Fatalf("ListThreadRepliesNewest: want errInjected, got %v", err)
+	}
+}
+
+func TestMessageStore_ListThreadRepliesNewest_CorruptRow(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewMessageStore(withFault(db, func(f *faultClient) {
+		f.transformQuery = func(o *dynamodb.QueryOutput) *dynamodb.QueryOutput {
+			o.Items = []map[string]types.AttributeValue{corruptRow()}
+			return o
+		}
+	}))
+	_, err := s.ListThreadRepliesNewest(context.Background(), "root", 5)
+	assertUnmarshalErr(t, err, "ListThreadRepliesNewest")
 }
 
 func TestMessageStore_StampThreadIndex(t *testing.T) {

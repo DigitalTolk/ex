@@ -291,7 +291,10 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/agents", middleware.WrapFunc(d.Agent.CreateAgent, authMW, middleware.RequireSystemRole(model.SystemRoleAdmin), writeLimit))
 		mux.Handle("PATCH /api/v1/agents/{slug}", middleware.WrapFunc(d.Agent.RenameAgent, authMW, middleware.RequireSystemRole(model.SystemRoleAdmin), writeLimit))
 		mux.Handle("PATCH /api/v1/agents/{slug}/prefs", middleware.WrapFunc(d.Agent.UpdatePrefs, authMW))
-		mux.Handle("POST /api/v1/agents/runner-token", middleware.WrapFunc(d.Agent.MintRunnerToken, authMW))
+		// Rate-limited like every other write: minting is cheap for the caller
+		// and signs a long-lived credential, so it must not be the one POST a
+		// client can hammer freely.
+		mux.Handle("POST /api/v1/agents/runner-token", middleware.WrapFunc(d.Agent.MintRunnerToken, authMW, writeLimit))
 		mux.Handle("GET /api/v1/runs/thread", middleware.WrapFunc(d.Agent.ThreadTimeline, authMW))
 		mux.Handle("GET /api/v1/runs/{id}", middleware.WrapFunc(d.Agent.Timeline, authMW))
 		mux.Handle("GET /api/v1/runs/{id}/artifacts/{artifactID}", middleware.WrapFunc(d.Agent.GetArtifact, authMW))

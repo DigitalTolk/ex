@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { WatcherDialog, type EditingWatcher } from '@/components/chat/WatcherDialog';
+import { WatcherDialog, type WatchedThreadRow } from '@/components/chat/WatcherDialog';
 
 type ApiInit = { method?: string; body?: string };
 
@@ -37,7 +37,7 @@ function installRoutes(opts: {
   });
 }
 
-function renderDialog(over: { editingList?: EditingWatcher[]; onOpenChange?: (o: boolean) => void } = {}) {
+function renderDialog(over: { editingList?: WatchedThreadRow[]; onOpenChange?: (o: boolean) => void } = {}) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -50,16 +50,18 @@ function renderDialog(over: { editingList?: EditingWatcher[]; onOpenChange?: (o:
         parentID="c-1"
         parentType="channel"
         threadRootID="m-1"
-        editingList={over.editingList}
+        editingRows={over.editingList}
       />
     </QueryClientProvider>,
   );
   return { onOpenChange };
 }
 
-const editing: EditingWatcher[] = [
-  { id: 'w-1', slug: 'gg', agentName: 'GG', instruction: 'ping me on deploys', actionMode: 'notify' },
-  { id: 'w-2', slug: 'hh', agentName: 'HH', instruction: 'draft replies', actionMode: 'draft' },
+// The dialog resolves agent id → slug + display name from its own roster
+// query, so managed watchers arrive as the API returns them.
+const editing: WatchedThreadRow[] = [
+  { id: 'w-1', agentID: 'id-gg', instruction: 'ping me on deploys', actionMode: 'notify' },
+  { id: 'w-2', agentID: 'id-hh', instruction: 'draft replies', actionMode: 'draft' },
 ];
 
 beforeEach(() => {
@@ -187,6 +189,7 @@ describe('WatcherDialog manage mode', () => {
   it('offers a watcher picker when several watch the thread and switches fields', async () => {
     installRoutes();
     renderDialog({ editingList: editing });
+    await screen.findByText('GG');
     expect(await screen.findByText('Manage watcher')).toBeInTheDocument();
     const picker = screen.getByLabelText('Which watcher') as HTMLSelectElement;
     expect((screen.getByLabelText('Watcher instruction') as HTMLTextAreaElement).value).toBe('ping me on deploys');
@@ -205,6 +208,7 @@ describe('WatcherDialog manage mode', () => {
   it('shows the agent read-only when only one watcher exists', async () => {
     installRoutes();
     renderDialog({ editingList: [editing[0]] });
+    await screen.findByText('GG');
     expect(await screen.findByText('Watching agent:')).toBeInTheDocument();
     expect(screen.getByText('GG')).toBeInTheDocument();
     expect(screen.queryByLabelText('Which watcher')).not.toBeInTheDocument();
@@ -214,6 +218,7 @@ describe('WatcherDialog manage mode', () => {
     const mutate = vi.fn(() => Promise.resolve({}));
     installRoutes({ mutate });
     const { onOpenChange } = renderDialog({ editingList: editing });
+    await screen.findByText('GG');
     await screen.findByText('Manage watcher');
     fireEvent.change(screen.getByLabelText('Watcher instruction'), { target: { value: 'new order' } });
     fireEvent.click(screen.getByTestId('watcher-confirm'));
@@ -231,6 +236,7 @@ describe('WatcherDialog manage mode', () => {
   it('requires an instruction in manage mode too', async () => {
     installRoutes();
     renderDialog({ editingList: editing });
+    await screen.findByText('GG');
     await screen.findByText('Manage watcher');
     fireEvent.change(screen.getByLabelText('Watcher instruction'), { target: { value: '' } });
     fireEvent.click(screen.getByTestId('watcher-confirm'));
@@ -240,6 +246,7 @@ describe('WatcherDialog manage mode', () => {
   it('shows the edit-flavored error when the update fails', async () => {
     installRoutes({ mutate: () => Promise.reject(new Error('nope')) });
     renderDialog({ editingList: editing });
+    await screen.findByText('GG');
     await screen.findByText('Manage watcher');
     fireEvent.click(screen.getByTestId('watcher-confirm'));
     expect(await screen.findByTestId('watcher-error')).toHaveTextContent("Couldn't update the watcher — please try again.");
@@ -250,6 +257,7 @@ describe('WatcherDialog manage mode', () => {
     const mutate = vi.fn(() => Promise.resolve({}));
     installRoutes({ mutate });
     const { onOpenChange } = renderDialog({ editingList: editing });
+    await screen.findByText('GG');
     await screen.findByText('Manage watcher');
     fireEvent.click(screen.getByTestId('watcher-delete'));
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
@@ -263,6 +271,7 @@ describe('WatcherDialog manage mode', () => {
   it('surfaces a delete failure and re-enables the buttons', async () => {
     installRoutes({ mutate: (_p, init) => (init?.method === 'DELETE' ? Promise.reject(new Error('nope')) : Promise.resolve({})) });
     renderDialog({ editingList: editing });
+    await screen.findByText('GG');
     await screen.findByText('Manage watcher');
     fireEvent.click(screen.getByTestId('watcher-delete'));
     expect(await screen.findByTestId('watcher-error')).toHaveTextContent("Couldn't remove the watcher — please try again.");
@@ -274,5 +283,27 @@ describe('WatcherDialog manage mode', () => {
     await waitFor(() => expect(screen.getByTestId('watcher-confirm')).toHaveTextContent('Saving…'));
     release({});
     await waitFor(() => expect(screen.getByTestId('watcher-confirm')).toHaveTextContent('Save changes'));
+  });
+});
+
+describe('WatcherDialog manage mode before the roster lands', () => {
+  it('refuses to write until the watched agent resolves', async () => {
+    // Manage mode routes by the agent's SLUG, which the dialog resolves from
+    // its own roster query. A roster that does not carry the watched agent
+    // (still loading, or the agent was removed) leaves no route to call.
+    installRoutes({ agents: [] });
+    renderDialog({ editingList: editing });
+    await screen.findByTestId('watcher-dialog');
+
+    // Both write paths refuse and SAY why, rather than firing a request at
+    // /agents//subscriptions/… .
+    fireEvent.click(screen.getByTestId('watcher-confirm'));
+    expect(await screen.findByText(/Still loading this watcher/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('watcher-delete'));
+    expect(await screen.findByText(/Still loading this watcher/)).toBeInTheDocument();
+    for (const [path] of mockApiFetch.mock.calls) {
+      expect(path).not.toContain('/agents//');
+    }
   });
 });

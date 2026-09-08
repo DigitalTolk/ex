@@ -204,13 +204,6 @@ export function useDecideCatchUp() {
   });
 }
 
-// invalidateParentWatchers refreshes the badge set after a watcher is added or
-// removed (create/delete only know the agent slug, not the parent key).
-export function useInvalidateParentWatchers() {
-  const queryClient = useQueryClient();
-  return () => void queryClient.invalidateQueries({ queryKey: ['parent-watchers'] });
-}
-
 // useUpdateWatcher edits a watcher's standing order (instruction + action mode)
 // in place. Agent + thread are fixed; changing those is remove + re-add.
 export function useUpdateWatcher() {
@@ -274,6 +267,13 @@ export function useAgents() {
       return res?.agents ?? [];
     },
   });
+}
+
+// agentByID resolves a roster entry by agent id. Three surfaces (the approval
+// card, the watcher dialog, the catch-up card) each hand-wrote this lookup
+// against a possibly-undefined roster.
+export function agentByID(roster: AgentView[] | undefined, agentID: string): AgentView | undefined {
+  return roster?.find((a) => a.id === agentID);
 }
 
 // ---------------------------------------------------------------- skills

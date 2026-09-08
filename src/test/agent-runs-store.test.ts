@@ -104,32 +104,29 @@ describe('agent-runs store (timers, labels, tombstones)', () => {
     expect(runsFor('chan1')[0].action).toBe('working…');
   });
 
-  it('a beat carries invoker/thread/state forward from the previous entry', () => {
+  it('a beat carries invoker/state forward from the previous entry', () => {
     onRunUpdated({
       id: 'r1',
       agentID: 'a-gg',
       invokerID: 'u-1',
       parentID: 'chan1',
-      threadRootID: 'root-1',
       state: 'acknowledged',
     });
     onRunProgress(progress({ kind: 'tool', tool: 'set_state' })); // beat omits them
     expect(runsFor('chan1')[0]).toMatchObject({
       invokerID: 'u-1',
-      threadRootID: 'root-1',
       state: 'acknowledged',
     });
 
     // A beat's own fields win over the carried ones.
-    onRunProgress(progress({ kind: 'tool', tool: 'set_state', invokerID: 'u-2', threadRootID: 'root-2' }));
-    expect(runsFor('chan1')[0]).toMatchObject({ invokerID: 'u-2', threadRootID: 'root-2' });
+    onRunProgress(progress({ kind: 'tool', tool: 'set_state', invokerID: 'u-2' }));
+    expect(runsFor('chan1')[0]).toMatchObject({ invokerID: 'u-2' });
   });
 
-  it('a beat for a never-seen run defaults invoker/thread to unset and state to running', () => {
+  it('a beat for a never-seen run defaults invoker to unset and state to running', () => {
     onRunProgress(progress({ kind: 'tool', tool: 'set_state' }));
     const [run] = runsFor('chan1');
     expect(run.invokerID).toBeUndefined();
-    expect(run.threadRootID).toBeUndefined();
     expect(run.state).toBe('running');
   });
 

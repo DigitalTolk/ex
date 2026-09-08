@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -80,6 +81,19 @@ func (s *TaskStore) CreateTask(ctx context.Context, t *model.CodingTask) error {
 	return nil
 }
 
+// DeleteTask removes a task row. Used to unwind a half-built task: the
+// one-active-task rule and the card post both come AFTER the row exists, so a
+// creation that loses either has to leave nothing behind.
+func (s *TaskStore) DeleteTask(ctx context.Context, id string) error {
+	if _, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(s.Table),
+		Key:       compositeKey(taskPK(id), metaSK()),
+	}); err != nil {
+		return fmt.Errorf("store: delete task: %w", err)
+	}
+	return nil
+}
+
 // GetTask fetches one task by ID.
 func (s *TaskStore) GetTask(ctx context.Context, id string) (*model.CodingTask, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
@@ -96,7 +110,12 @@ func (s *TaskStore) GetTask(ctx context.Context, id string) (*model.CodingTask, 
 	if err := attributevalue.UnmarshalMap(out.Item, &it); err != nil {
 		return nil, fmt.Errorf("store: unmarshal task: %w", err)
 	}
-	it.NormalizeLegacy()
+	if it.NormalizeLegacy() {
+		// A row from before projects/repos existed. Nothing writes these fields
+		// any more, so this line is the evidence the compatibility layer is
+		// still load-bearing; silence over a retention window means it can go.
+		slog.Warn("coding task: read a legacy single-repo row", "taskID", it.ID)
+	}
 	return &it.CodingTask, nil
 }
 
@@ -142,7 +161,12 @@ func (s *TaskStore) ListTasksByChannel(ctx context.Context, channelID string) ([
 		if err := attributevalue.UnmarshalMap(raw, &it); err != nil {
 			return nil, fmt.Errorf("store: unmarshal task: %w", err)
 		}
-		it.NormalizeLegacy()
+		if it.NormalizeLegacy() {
+			// A row from before projects/repos existed. Nothing writes these fields
+			// any more, so this line is the evidence the compatibility layer is
+			// still load-bearing; silence over a retention window means it can go.
+			slog.Warn("coding task: read a legacy single-repo row", "taskID", it.ID)
+		}
 		out = append(out, &it.CodingTask)
 	}
 	return out, nil
@@ -174,7 +198,12 @@ func (s *TaskStore) GetTaskByThread(ctx context.Context, threadRootID string) (*
 	if err := attributevalue.UnmarshalMap(out.Items[0], &it); err != nil {
 		return nil, fmt.Errorf("store: unmarshal task: %w", err)
 	}
-	it.NormalizeLegacy()
+	if it.NormalizeLegacy() {
+		// A row from before projects/repos existed. Nothing writes these fields
+		// any more, so this line is the evidence the compatibility layer is
+		// still load-bearing; silence over a retention window means it can go.
+		slog.Warn("coding task: read a legacy single-repo row", "taskID", it.ID)
+	}
 	return &it.CodingTask, nil
 }
 

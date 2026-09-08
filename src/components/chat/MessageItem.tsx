@@ -20,9 +20,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { ReminderDialog } from '@/components/chat/ReminderDialog';
-import { WatcherDialog, type EditingWatcher } from '@/components/chat/WatcherDialog';
+import { WatcherDialog } from '@/components/chat/WatcherDialog';
 import { useCreateReminder } from '@/hooks/useActivity';
-import { useParentWatchers, useAgents, type WatchActionMode } from '@/hooks/useAgents';
+import { useParentWatchers } from '@/hooks/useAgents';
 import { REMINDER_PRESETS, computeReminderTime, toLocalInputValue, type ReminderPresetKey } from '@/lib/reminder-times';
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { UserHoverCard } from '@/components/UserHoverCard';
@@ -317,28 +317,27 @@ function MessageItemImpl({
   // One query per parent (react-query dedupes across rows); we match by
   // threadRootID so only the watched thread's root message is badged.
   const { data: parentWatchers } = useParentWatchers(reminderTarget.parentType, message.parentID);
-  const { data: agentRoster } = useAgents();
   const myWatchers = useMemo(
     () => (parentWatchers ?? []).filter((w) => w.threadRootID === message.id),
     [parentWatchers, message.id],
   );
   const [manageWatchersOpen, setManageWatchersOpen] = useState(false);
-  // The thread's watchers as the dialog's editable list (resolve agent id →
-  // slug + display name from the roster).
-  const editingWatchers = useMemo<EditingWatcher[]>(
-    () =>
-      myWatchers.map((w) => {
-        const agent = agentRoster?.find((a) => a.id === w.agentID);
-        return {
-          id: w.id,
-          slug: agent?.slug ?? '',
-          agentName: agent?.displayName ?? 'an agent',
-          instruction: w.instruction ?? '',
-          actionMode: (w.actionMode ?? 'notify') as WatchActionMode,
-        };
-      }),
-    [myWatchers, agentRoster],
-  );
+
+  // "Show activity" appears in two places (the desktop menu and the mobile
+  // sheet) and both had their own copy of this predicate and its branch. One
+  // definition: a thread ROOT opens the whole thread's activity, any other
+  // message opens its own run.
+  const activityTarget = useMemo<{ kind: 'thread' } | { kind: 'run'; runID: string } | null>(() => {
+    if (!message.parentMessageID && (message.replyCount ?? 0) > 0) return { kind: 'thread' };
+    if (message.agentRunID) return { kind: 'run', runID: message.agentRunID };
+    return null;
+  }, [message.parentMessageID, message.replyCount, message.agentRunID]);
+  const openActivity = () => {
+    /* istanbul ignore if -- both entry points render only when activityTarget is set */
+    if (!activityTarget) return;
+    if (activityTarget.kind === 'thread') openThreadDrawer(message.parentID, message.id);
+    else openRunDrawer(activityTarget.runID);
+  };
 
   // One builder so the preset (mutate) and custom-dialog (mutateAsync) paths
   // can't drift on the payload shape.
@@ -682,16 +681,13 @@ function MessageItemImpl({
           }
         />
         <div className="flex flex-col rounded-lg border">
-          {(message.agentRunID || (!message.parentMessageID && (message.replyCount ?? 0) > 0)) && (
+          {activityTarget && (
             <button
               type="button"
               className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
               onClick={() => {
                 setMobileActionsOpen(false);
-                // A thread root opens the WHOLE thread's activity (every run
-                // under it); any other message opens its own run.
-                if (!message.parentMessageID && (message.replyCount ?? 0) > 0) openThreadDrawer(message.parentID, message.id);
-                else openRunDrawer(/* istanbul ignore next -- the button's gate guarantees agentRunID */ message.agentRunID ?? '');
+                openActivity();
               }}
               aria-label="Show agent activity"
             >
@@ -1129,13 +1125,9 @@ function MessageItemImpl({
               <MoreHorizontal className="h-3.5 w-3.5" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
-              {(message.agentRunID || (!message.parentMessageID && (message.replyCount ?? 0) > 0)) && (
+              {activityTarget && (
                 <DropdownMenuItem
-                  onClick={() =>
-                    !message.parentMessageID && (message.replyCount ?? 0) > 0
-                      ? openThreadDrawer(message.parentID, message.id)
-                      : openRunDrawer(/* istanbul ignore next -- the menu item's gate guarantees agentRunID */ message.agentRunID ?? '')
-                  }
+                  onClick={openActivity}
                   aria-label="Show agent activity"
                 >
                   <Bot className="mr-2 h-4 w-4" />
@@ -1245,7 +1237,7 @@ function MessageItemImpl({
           threadRootID={message.parentMessageID || message.id}
         />
       )}
-      {manageWatchersOpen && editingWatchers.length > 0 && (
+      {manageWatchersOpen && myWatchers.length > 0 && (
         <WatcherDialog
           open
           onOpenChange={(o) => {
@@ -1255,7 +1247,7 @@ function MessageItemImpl({
           parentID={message.parentID}
           parentType={message.parentType === 'conversation' ? 'conversation' : 'channel'}
           threadRootID={message.parentMessageID || message.id}
-          editingList={editingWatchers}
+          editingRows={myWatchers}
         />
       )}
     </div>

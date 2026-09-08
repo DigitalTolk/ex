@@ -28,6 +28,8 @@ type orchCovRunStore struct {
 	failGetRun        error
 	failUpdateRun     error
 	failUpdateExpect  *model.RunState // when non-nil, failUpdateRun applies only to this expect
+	failAddSpend      error
+	failAddPosts      error
 	failListQueued    error
 	failClaimRun      error
 	failListActive    error
@@ -59,6 +61,20 @@ func (s *orchCovRunStore) UpdateRun(ctx context.Context, run *model.Run, expect 
 		return s.failUpdateRun
 	}
 	return s.fakeRunStore.UpdateRun(ctx, run, expect)
+}
+
+func (s *orchCovRunStore) AddRunSpend(ctx context.Context, runID, runnerID string, d store.RunSpendDelta) (*model.Run, error) {
+	if s.failAddSpend != nil {
+		return nil, s.failAddSpend
+	}
+	return s.fakeRunStore.AddRunSpend(ctx, runID, runnerID, d)
+}
+
+func (s *orchCovRunStore) AddRunPosts(ctx context.Context, runID string, delta int) (*model.Run, error) {
+	if s.failAddPosts != nil {
+		return nil, s.failAddPosts
+	}
+	return s.fakeRunStore.AddRunPosts(ctx, runID, delta)
 }
 
 func (s *orchCovRunStore) ListQueuedRuns(ctx context.Context, ownerID string, limit int) ([]string, error) {
@@ -138,6 +154,7 @@ type orchCovMsgs struct {
 	failReaction   error
 	failListThread error
 	failList       error
+	checkAccessErr error
 }
 
 func (m *orchCovMsgs) SendAsAgentRun(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string) (*model.Message, error) {
@@ -152,6 +169,24 @@ func (m *orchCovMsgs) SetMachineReaction(ctx context.Context, actorID, parentID,
 		return m.failReaction
 	}
 	return m.fakeOrchMessages.SetMachineReaction(ctx, actorID, parentID, parentType, msgID, state)
+}
+
+// CheckAccess is the membership rule behind run reads; the fakes allow
+// everything unless a test flips checkAccessErr.
+func (m *orchCovMsgs) CheckAccess(context.Context, string, string, string) error {
+	return m.checkAccessErr
+}
+
+// ThreadWindowMessages mirrors the bounded window read.
+func (m *orchCovMsgs) ThreadWindowMessages(ctx context.Context, userID, parentID, parentType, threadRootID string, limit int) ([]*model.Message, error) {
+	all, err := m.ListThreadMessages(ctx, userID, parentID, parentType, threadRootID)
+	if err != nil || limit <= 0 {
+		return nil, err
+	}
+	if len(all) > limit {
+		all = all[len(all)-limit:]
+	}
+	return all, nil
 }
 
 func (m *orchCovMsgs) ListThreadMessages(ctx context.Context, userID, parentID, parentType, threadRootID string) ([]*model.Message, error) {
@@ -198,6 +233,22 @@ func (d *orchCovDir) PutAgentSubscription(ctx context.Context, sub *model.AgentS
 		return d.failPutSub
 	}
 	return d.fakeAgentDir.PutAgentSubscription(ctx, sub)
+}
+
+// ListSubscriptionsByCreator mirrors the store's creator index; the fake
+// filters its own rows.
+func (d *orchCovDir) ListSubscriptionsByCreator(ctx context.Context, creatorID, agentID string) ([]*model.AgentSubscription, error) {
+	all, err := d.ListAllSubscriptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.AgentSubscription, 0, len(all))
+	for _, sub := range all {
+		if sub.CreatorID == creatorID && sub.AgentID == agentID {
+			out = append(out, sub)
+		}
+	}
+	return out, nil
 }
 
 func (d *orchCovDir) ListAllSubscriptions(ctx context.Context) ([]*model.AgentSubscription, error) {
@@ -399,6 +450,17 @@ func newOrchCovFixture(t *testing.T) *orchCovFixture {
 }
 
 // start starts a gg run for alice with a custom invoking message.
+// allSubs is the one subscription listing the reconciler tick now takes and
+// hands to both sweeps.
+func (fx *orchCovFixture) allSubs(t *testing.T) []*model.AgentSubscription {
+	t.Helper()
+	subs, err := fx.dir.fakeAgentDir.ListAllSubscriptions(context.Background())
+	if err != nil {
+		t.Fatalf("list all subscriptions: %v", err)
+	}
+	return subs
+}
+
 func (fx *orchCovFixture) start(t *testing.T, msgID, threadRoot string) *model.Run {
 	t.Helper()
 	msg := &model.Message{
@@ -411,7 +473,7 @@ func (fx *orchCovFixture) start(t *testing.T, msgID, threadRoot string) *model.R
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	run, err := fx.orch.StartRun(context.Background(), agent, invoker, msg, ParentChannel, resolved, 0, nil)
+	run, err := fx.orch.startRun(context.Background(), invocation{agent: agent, invoker: invoker, msg: msg, parentType: ParentChannel}, resolved)
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
@@ -679,12 +741,12 @@ func TestOrchCov_StartRunCreateFailsReleasesSlot(t *testing.T) {
 	msg := &model.Message{ID: "m1", ParentID: "chan1", AuthorID: "u-alice", Body: "@gg go"}
 
 	fx.runs.failCreateRun = errOrchCov
-	if _, err := fx.orch.StartRun(ctx, agent, invoker, msg, ParentChannel, resolved, 0, nil); err == nil {
+	if _, err := fx.orch.startRun(ctx, invocation{agent: agent, invoker: invoker, msg: msg, parentType: ParentChannel}, resolved); err == nil {
 		t.Fatal("create failure not surfaced")
 	}
 	// The thread-turn slot must have been released: a retry succeeds.
 	fx.runs.failCreateRun = nil
-	if _, err := fx.orch.StartRun(ctx, agent, invoker, msg, ParentChannel, resolved, 0, nil); err != nil {
+	if _, err := fx.orch.startRun(ctx, invocation{agent: agent, invoker: invoker, msg: msg, parentType: ParentChannel}, resolved); err != nil {
 		t.Fatalf("slot leaked after create failure: %v", err)
 	}
 }
@@ -706,7 +768,7 @@ func TestOrchCov_DeferredTurnStartFailurePostsNotice(t *testing.T) {
 
 	// Runner vanishes before gg finishes: the deferred start fails → ⛔ notice.
 	fx.dir.runners = map[string][]*model.RunnerRegistration{}
-	if err := fx.orch.CompleteRun(ctx, "r1", run.ID, "done", nil); err != nil {
+	if err := fx.orch.CompleteRun(ctx, "u-alice", "r1", run.ID, "done", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	if !strings.Contains(fx.msgs.lastPost(), "⛔") {
@@ -714,58 +776,83 @@ func TestOrchCov_DeferredTurnStartFailurePostsNotice(t *testing.T) {
 	}
 }
 
-func TestOrchCov_PendingRosterKicksNextAgent(t *testing.T) {
+// A handoff parked while the target was mid-turn starts when that turn ends —
+// and, if the busy run finished in the gap before the park, immediately.
+func TestOrchCov_DeferredTurnStartsAfterTerminal(t *testing.T) {
 	fx := newOrchCovFixture(t)
 	ctx := context.Background()
-	agent, _ := fx.users.GetUser(ctx, testGGID)
-	invoker, _ := fx.users.GetUser(ctx, "u-alice")
-	resolved, _ := fx.orch.agentSvc.Resolve(ctx, agent, invoker.ID)
-	msg := &model.Message{ID: "m1", ParentID: "chan1", AuthorID: "u-alice", Body: "@gg then @qib"}
-	run, err := fx.orch.StartRun(ctx, agent, invoker, msg, ParentChannel, resolved, 0, []string{testQibID})
+	qib, _ := fx.users.GetUser(ctx, testQibID)
+	alice, _ := fx.users.GetUser(ctx, "u-alice")
+	resolved, _ := fx.orch.agentSvc.Resolve(ctx, qib, alice.ID)
+	msg := &model.Message{ID: "m1", ParentID: "chan1", AuthorID: "u-alice", Body: "@qib go"}
+	run, err := fx.orch.startRun(ctx, invocation{agent: qib, invoker: alice, msg: msg, parentType: ParentChannel}, resolved)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	// A second mention of qib in the same thread is BUSY: parked, not started.
+	post := &model.Message{ID: "m2", ParentID: "chan1", ParentMessageID: "m1", AuthorID: testGGID,
+		Body: "@[" + testQibID + "|qib] your turn"}
+	key := fx.orch.threadAgentKey(run)
+	fx.orch.deferTurn(ctx, key, &deferredTurn{agentID: qib.ID, invokerID: alice.ID, msg: post, parentType: ParentChannel, round: 1})
+	if _, ok := fx.orch.deferredTurns.Load(key); !ok {
+		t.Fatal("handoff was not parked while the thread slot was held")
+	}
+	// A SECOND handoff for the same pair loses — the first one stands.
+	fx.orch.deferTurn(ctx, key, &deferredTurn{agentID: qib.ID, invokerID: alice.ID, msg: post, parentType: ParentChannel, round: 2})
+	if d, _ := fx.orch.deferredTurns.Load(key); d.(*deferredTurn).round != 1 {
+		t.Fatal("second handoff overwrote the first")
+	}
 	fx.claim(t)
-	if err := fx.orch.CompleteRun(ctx, "r1", run.ID, "gg is done", nil); err != nil {
+	if err := fx.orch.CompleteRun(ctx, "u-alice", "r1", run.ID, "qib is done", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	ids, _ := fx.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 10)
-	var qibStarted bool
-	for _, id := range ids {
-		r, _ := fx.runs.fakeRunStore.GetRun(ctx, id)
-		if r.AgentID == testQibID {
-			qibStarted = true
-		}
+	if len(ids) != 1 {
+		t.Fatalf("parked handoff never started after the busy turn ended: %v", ids)
 	}
-	if !qibStarted {
-		t.Fatal("pending qib run not started after gg finished")
+	if r, _ := fx.runs.fakeRunStore.GetRun(ctx, ids[0]); r.AgentID != testQibID || r.Round != 1 {
+		t.Fatalf("wrong handoff started: %+v", r)
 	}
 }
 
-func TestOrchCov_StartNextPendingArms(t *testing.T) {
+// The orphan window: the busy run terminates between ErrAgentBusy and the
+// park, so nothing would ever come back for the entry. deferTurn starts it.
+func TestOrchCov_DeferredTurnStartsWhenSlotAlreadyFree(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+	qib, _ := fx.users.GetUser(ctx, testQibID)
+	alice, _ := fx.users.GetUser(ctx, "u-alice")
+	post := &model.Message{ID: "m2", ParentID: "chan1", ParentMessageID: "m1", AuthorID: testGGID,
+		Body: "@[" + testQibID + "|qib] your turn"}
+	fx.orch.deferTurn(ctx, "chan1#m1#"+testQibID, &deferredTurn{
+		agentID: qib.ID, invokerID: alice.ID, msg: post, parentType: ParentChannel, round: 1})
+	ids, _ := fx.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 10)
+	if len(ids) != 1 {
+		t.Fatalf("orphaned handoff not started: %v", ids)
+	}
+}
+
+// Lookup blips are logged and dropped, never panics; a start failure posts the
+// in-thread notice.
+func TestOrchCov_StartDeferredTurnArms(t *testing.T) {
 	fx := newOrchCovFixture(t)
 	ctx := context.Background()
 	msg := &model.Message{ID: "m1", ParentID: "chan1", Body: "task"}
 
-	// Invoker lookup fails.
-	fx.orch.startNextPending(ctx, []string{testQibID}, "u-gone", msg, ParentChannel)
+	fx.orch.startDeferredTurn(ctx, "no-such-key") // nothing parked
+
+	fx.orch.deferredTurns.Store("k1", &deferredTurn{agentID: testQibID, invokerID: "u-gone", msg: msg, parentType: ParentChannel})
+	fx.orch.startDeferredTurn(ctx, "k1")
 	if ids, _ := fx.runs.fakeRunStore.ListQueuedRuns(ctx, "u-gone", 10); len(ids) != 0 {
 		t.Fatalf("vanished invoker started runs: %v", ids)
 	}
 
-	// Roster of unknown id + human only: nothing startable, no panic.
-	fx.orch.startNextPending(ctx, []string{"u-nobody", "u-bob"}, "u-alice", msg, ParentChannel)
+	fx.orch.deferredTurns.Store("k2", &deferredTurn{agentID: "u-nobody", invokerID: "u-alice", msg: msg, parentType: ParentChannel})
+	fx.orch.startDeferredTurn(ctx, "k2")
 
-	// First pending fails (ghost agent, Resolve error) → notice + move to qib.
-	fx.orch.startNextPending(ctx, []string{orchCovGhostID, testQibID}, "u-alice", msg, ParentChannel)
-	ids, _ := fx.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 10)
-	if len(ids) != 1 {
-		t.Fatalf("expected exactly qib's run, got %v", ids)
-	}
-	r, _ := fx.runs.fakeRunStore.GetRun(ctx, ids[0])
-	if r.AgentID != testQibID {
-		t.Fatalf("wrong agent started: %s", r.AgentID)
-	}
+	// A ghost agent fails Resolve → the invoker gets a notice.
+	fx.orch.deferredTurns.Store("k3", &deferredTurn{agentID: orchCovGhostID, invokerID: "u-alice", msg: msg, parentType: ParentChannel})
+	fx.orch.startDeferredTurn(ctx, "k3")
 	if !strings.Contains(fx.msgs.lastPost(), "couldn't start") {
 		t.Fatalf("ghost failure posted no notice: %q", fx.msgs.lastPost())
 	}
@@ -812,7 +899,7 @@ func TestOrchCov_ChainBusyDeferralFromTopLevelPost(t *testing.T) {
 	qib, _ := fx.users.GetUser(ctx, testQibID)
 	alice, _ := fx.users.GetUser(ctx, "u-alice")
 	resolved, _ := fx.orch.agentSvc.Resolve(ctx, qib, alice.ID)
-	if _, err := fx.orch.StartRun(ctx, qib, alice, msg, ParentChannel, resolved, 0, nil); err != nil {
+	if _, err := fx.orch.startRun(ctx, invocation{agent: qib, invoker: alice, msg: msg, parentType: ParentChannel}, resolved); err != nil {
 		t.Fatalf("start qib: %v", err)
 	}
 	// gg's TOP-LEVEL post (no ParentMessageID) tags qib → threadRootOf uses msg.ID.
@@ -1120,10 +1207,11 @@ func TestOrchCov_ClaimMintFailureAndFailRunAlsoFails(t *testing.T) {
 	}
 }
 
-func TestOrchCov_LinkifyInvalidUTF8NameSkipped(t *testing.T) {
+func TestOrchCov_LinkifyHandlesInvalidUTF8Name(t *testing.T) {
 	fx := newOrchCovFixture(t)
-	// A display name that is not valid UTF-8 makes regexp.Compile fail even
-	// after QuoteMeta; linkify must skip it, not panic.
+	// A display name that is not valid UTF-8 used to make regexp.Compile fail,
+	// and the mention was silently dropped. The single-pass scan matches it by
+	// bytes, so it resolves like any other name — and never panics.
 	fx.users.users["u-bad"] = &model.User{ID: "u-bad", DisplayName: "bad\xffname"}
 	fx.msgs.thread = []*model.Message{
 		{ID: "t1", AuthorID: "u-bad", Body: "hi", CreatedAt: *fx.now},
@@ -1134,8 +1222,8 @@ func TestOrchCov_LinkifyInvalidUTF8NameSkipped(t *testing.T) {
 	if !strings.Contains(got, "@[u-alice|Alice]") {
 		t.Fatalf("valid names must still linkify: %q", got)
 	}
-	if strings.Contains(got, "u-bad") {
-		t.Fatalf("invalid-UTF-8 name was linkified: %q", got)
+	if !strings.Contains(got, "@[u-bad|bad\xffname]") {
+		t.Fatalf("byte-exact name should linkify: %q", got)
 	}
 }
 
@@ -1157,7 +1245,7 @@ func TestOrchCov_ClaimTokenMintFailureFailsRun(t *testing.T) {
 
 func TestOrchCov_ReportEventsRunMissing(t *testing.T) {
 	fx := newOrchCovFixture(t)
-	if _, _, err := fx.orch.ReportEvents(context.Background(), "r1", "nope", nil); err == nil {
+	if _, _, err := fx.orch.ReportEvents(context.Background(), "u-alice", "r1", "nope", nil); err == nil {
 		t.Fatal("missing run accepted")
 	}
 }
@@ -1166,7 +1254,7 @@ func TestOrchCov_ReportEventsProgressStateAndToolFanout(t *testing.T) {
 	fx := newOrchCovFixture(t)
 	run := fx.start(t, "m1", "root1") // threaded → publishProgress carries threadRootID
 	fx.claim(t)
-	abort, _, err := fx.orch.ReportEvents(context.Background(), "r1", run.ID, []RunEventInput{
+	abort, _, err := fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID, []RunEventInput{
 		{Seq: 1, Type: "progress", Payload: map[string]any{"text": strings.Repeat("p", 400)}},
 		{Seq: 2, Type: "state"},
 		{Seq: 3, Type: "tool", Payload: map[string]any{"name": "get_thread", "detail": "reading"}},
@@ -1207,7 +1295,7 @@ func TestOrchCov_ReportEventsExtensionClampedAtHardDeadline(t *testing.T) {
 		t.Fatalf("claim: %d %v", len(as), err)
 	}
 	*fx.now = fx.now.Add(10 * time.Second)
-	if _, _, err := fx.orch.ReportEvents(ctx, "r1", run.ID, []RunEventInput{{Seq: 1, Type: "tool"}}); err != nil {
+	if _, _, err := fx.orch.ReportEvents(ctx, "u-alice", "r1", run.ID, []RunEventInput{{Seq: 1, Type: "tool"}}); err != nil {
 		t.Fatalf("report: %v", err)
 	}
 	got, _ := fx.runs.fakeRunStore.GetRun(ctx, run.ID)
@@ -1221,14 +1309,14 @@ func TestOrchCov_ReportEventsPersistFailures(t *testing.T) {
 	fx := newOrchCovFixture(t)
 	run := fx.start(t, "m1", "")
 	fx.claim(t)
-	fx.runs.failUpdateRun = store.ErrStaleRun
-	abort, reason, err := fx.orch.ReportEvents(context.Background(), "r1", run.ID, []RunEventInput{{Seq: 1, Type: "turn"}})
+	fx.runs.failAddSpend = store.ErrStaleRun
+	abort, reason, err := fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID, []RunEventInput{{Seq: 1, Type: "turn"}})
 	if !abort || reason != "run_closed" || !errors.Is(err, ErrRunClosed) {
 		t.Fatalf("stale persist: abort=%v reason=%q err=%v", abort, reason, err)
 	}
 	// Hard write error → surfaced without abort.
-	fx.runs.failUpdateRun = errOrchCov
-	abort, _, err = fx.orch.ReportEvents(context.Background(), "r1", run.ID, []RunEventInput{{Seq: 2, Type: "turn"}})
+	fx.runs.failAddSpend = errOrchCov
+	abort, _, err = fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID, []RunEventInput{{Seq: 2, Type: "turn"}})
 	if abort || !errors.Is(err, errOrchCov) {
 		t.Fatalf("hard persist: abort=%v err=%v", abort, err)
 	}
@@ -1244,7 +1332,7 @@ func TestOrchCov_FinishLimitUpdateFails(t *testing.T) {
 	for i := 0; i < turns; i++ {
 		batch = append(batch, RunEventInput{Seq: int64(i + 1), Type: "turn"})
 	}
-	abort, reason, err := fx.orch.ReportEvents(context.Background(), "r1", run.ID, batch)
+	abort, reason, err := fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID, batch)
 	if !abort || reason != "turn_limit" || err == nil {
 		t.Fatalf("finishLimit write failure: abort=%v reason=%q err=%v", abort, reason, err)
 	}
@@ -1260,7 +1348,7 @@ func TestOrchCov_FinishLimitNoticePostFails(t *testing.T) {
 	for i := 0; i < turns; i++ {
 		batch = append(batch, RunEventInput{Seq: int64(i + 1), Type: "turn"})
 	}
-	abort, reason, err := fx.orch.ReportEvents(context.Background(), "r1", run.ID, batch)
+	abort, reason, err := fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID, batch)
 	if !abort || reason != "turn_limit" || err != nil {
 		t.Fatalf("limit with failed notice: abort=%v reason=%q err=%v", abort, reason, err)
 	}
@@ -1275,18 +1363,18 @@ func TestOrchCov_CompleteRunErrorArms(t *testing.T) {
 	run := fx.start(t, "m1", "")
 	fx.claim(t)
 
-	if err := fx.orch.CompleteRun(context.Background(), "r1", "nope", "x", nil); err == nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", "nope", "x", nil); err == nil {
 		t.Fatal("missing run completed")
 	}
-	if err := fx.orch.CompleteRun(context.Background(), "r-evil", run.ID, "x", nil); !errors.Is(err, ErrWrongRunner) {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r-evil", run.ID, "x", nil); !errors.Is(err, ErrWrongRunner) {
 		t.Fatalf("wrong runner: %v", err)
 	}
 	fx.runs.failUpdateRun = store.ErrStaleRun
-	if err := fx.orch.CompleteRun(context.Background(), "r1", run.ID, "x", nil); !errors.Is(err, ErrRunClosed) {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", run.ID, "x", nil); !errors.Is(err, ErrRunClosed) {
 		t.Fatalf("stale complete: %v", err)
 	}
 	fx.runs.failUpdateRun = errOrchCov
-	if err := fx.orch.CompleteRun(context.Background(), "r1", run.ID, "x", nil); !errors.Is(err, errOrchCov) {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", run.ID, "x", nil); !errors.Is(err, errOrchCov) {
 		t.Fatalf("hard complete error: %v", err)
 	}
 }
@@ -1296,7 +1384,7 @@ func TestOrchCov_CompleteFinalPostFails(t *testing.T) {
 	run := fx.start(t, "m1", "")
 	fx.claim(t)
 	fx.msgs.failSend = errOrchCov
-	if err := fx.orch.CompleteRun(context.Background(), "r1", run.ID, "the answer", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", run.ID, "the answer", nil); err != nil {
 		t.Fatalf("complete must survive post failure: %v", err)
 	}
 	got, _ := fx.runs.fakeRunStore.GetRun(context.Background(), run.ID)
@@ -1309,7 +1397,7 @@ func TestOrchCov_CompleteSilentRunLeavesMarker(t *testing.T) {
 	fx := newOrchCovFixture(t)
 	run := fx.start(t, "m1", "")
 	fx.claim(t)
-	if err := fx.orch.CompleteRun(context.Background(), "r1", run.ID, "", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", run.ID, "", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	if !strings.Contains(fx.msgs.lastPost(), "finished without posting") {
@@ -1321,7 +1409,7 @@ func TestOrchCov_CompleteSilentRunLeavesMarker(t *testing.T) {
 	run2 := fx2.start(t, "m1", "")
 	fx2.claim(t)
 	fx2.msgs.failSend = errOrchCov
-	if err := fx2.orch.CompleteRun(context.Background(), "r1", run2.ID, "", nil); err != nil {
+	if err := fx2.orch.CompleteRun(context.Background(), "u-alice", "r1", run2.ID, "", nil); err != nil {
 		t.Fatalf("complete with failing marker: %v", err)
 	}
 }
@@ -1337,7 +1425,7 @@ func TestOrchCov_WatchEmptyFinalTextSkips(t *testing.T) {
 	if err := fx.runs.fakeRunStore.UpdateRun(context.Background(), got, got.State); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if err := fx.orch.CompleteRun(context.Background(), "r1", run.ID, "   ", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", run.ID, "   ", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	evts, _ := fx.runs.fakeRunStore.ListRunEvents(context.Background(), run.ID)
@@ -1360,7 +1448,7 @@ func TestOrchCov_WatchReplyDraftFails(t *testing.T) {
 	got.ActionMode = model.WatchActionReply
 	_ = fx.runs.fakeRunStore.UpdateRun(context.Background(), got, got.State)
 	fx.runs.failPutApproval = errOrchCov
-	if err := fx.orch.CompleteRun(context.Background(), "r1", run.ID, "draft this", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", run.ID, "draft this", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	evts, _ := fx.runs.fakeRunStore.ListRunEvents(context.Background(), run.ID)
@@ -1384,7 +1472,7 @@ func TestOrchCov_WatchDMDeliveryFailures(t *testing.T) {
 	got.ActionMode = model.WatchActionNotify
 	_ = fx.runs.fakeRunStore.UpdateRun(context.Background(), got, got.State)
 	fx.orch.SetOwnerDMResolver(&orchCovDM{fail: errOrchCov})
-	if err := fx.orch.CompleteRun(context.Background(), "r1", run.ID, "found something", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", run.ID, "found something", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	evts, _ := fx.runs.fakeRunStore.ListRunEvents(context.Background(), run.ID)
@@ -1407,7 +1495,7 @@ func TestOrchCov_WatchDMDeliveryFailures(t *testing.T) {
 	_ = fx2.runs.fakeRunStore.UpdateRun(context.Background(), got2, got2.State)
 	fx2.orch.SetOwnerDMResolver(&orchCovDM{convID: "dm1"})
 	fx2.msgs.failSend = errOrchCov
-	if err := fx2.orch.CompleteRun(context.Background(), "r1", run2.ID, "draft text", nil); err != nil {
+	if err := fx2.orch.CompleteRun(context.Background(), "u-alice", "r1", run2.ID, "draft text", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	evts2, _ := fx2.runs.fakeRunStore.ListRunEvents(context.Background(), run2.ID)
@@ -1429,16 +1517,16 @@ func TestOrchCov_FailRunErrorArms(t *testing.T) {
 	run := fx.start(t, "m1", "")
 	fx.claim(t)
 
-	if err := fx.orch.FailRun(context.Background(), "r1", "nope", "x"); err == nil {
+	if err := fx.orch.FailRun(context.Background(), "u-alice", "r1", "nope", "x"); err == nil {
 		t.Fatal("missing run failed silently")
 	}
-	if err := fx.orch.FailRun(context.Background(), "r-evil", run.ID, "x"); !errors.Is(err, ErrWrongRunner) {
+	if err := fx.orch.FailRun(context.Background(), "u-alice", "r-evil", run.ID, "x"); !errors.Is(err, ErrWrongRunner) {
 		t.Fatalf("wrong runner: %v", err)
 	}
-	if err := fx.orch.CompleteRun(context.Background(), "r1", run.ID, "done", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", run.ID, "done", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
-	if err := fx.orch.FailRun(context.Background(), "r1", run.ID, "x"); !errors.Is(err, ErrRunClosed) {
+	if err := fx.orch.FailRun(context.Background(), "u-alice", "r1", run.ID, "x"); !errors.Is(err, ErrRunClosed) {
 		t.Fatalf("terminal fail: %v", err)
 	}
 }
@@ -1448,11 +1536,11 @@ func TestOrchCov_FailRunUpdateArms(t *testing.T) {
 	run := fx.start(t, "m1", "")
 	fx.claim(t)
 	fx.runs.failUpdateRun = store.ErrStaleRun
-	if err := fx.orch.FailRun(context.Background(), "r1", run.ID, "runner_error"); err != nil {
+	if err := fx.orch.FailRun(context.Background(), "u-alice", "r1", run.ID, "runner_error"); err != nil {
 		t.Fatalf("stale fail should be nil: %v", err)
 	}
 	fx.runs.failUpdateRun = errOrchCov
-	if err := fx.orch.FailRun(context.Background(), "r1", run.ID, "runner_error"); !errors.Is(err, errOrchCov) {
+	if err := fx.orch.FailRun(context.Background(), "u-alice", "r1", run.ID, "runner_error"); !errors.Is(err, errOrchCov) {
 		t.Fatalf("hard fail error: %v", err)
 	}
 }
@@ -1461,7 +1549,7 @@ func TestOrchCov_PostFailNoticePublicPostFails(t *testing.T) {
 	fx := newOrchCovFixture(t)
 	run := fx.start(t, "m1", "")
 	fx.msgs.failSend = errOrchCov
-	if err := fx.orch.FailRun(context.Background(), "r1", run.ID, "runner_error: boom"); err != nil {
+	if err := fx.orch.FailRun(context.Background(), "u-alice", "r1", run.ID, "runner_error: boom"); err != nil {
 		t.Fatalf("fail: %v", err)
 	}
 }
@@ -1474,7 +1562,7 @@ func TestOrchCov_PostFailNoticeGatedDMArms(t *testing.T) {
 	got.ActionMode = model.WatchActionNotify
 	_ = fx.runs.fakeRunStore.UpdateRun(context.Background(), got, got.State)
 	fx.orch.SetOwnerDMResolver(&orchCovDM{fail: errOrchCov})
-	if err := fx.orch.FailRun(context.Background(), "r1", run.ID, "runner_lost"); err != nil {
+	if err := fx.orch.FailRun(context.Background(), "u-alice", "r1", run.ID, "runner_lost"); err != nil {
 		t.Fatalf("fail: %v", err)
 	}
 
@@ -1485,7 +1573,7 @@ func TestOrchCov_PostFailNoticeGatedDMArms(t *testing.T) {
 	got2.ActionMode = model.WatchActionReply
 	_ = fx2.runs.fakeRunStore.UpdateRun(context.Background(), got2, got2.State)
 	fx2.orch.SetOwnerDMResolver(&orchCovDM{convID: "dm-priv"})
-	if err := fx2.orch.FailRun(context.Background(), "r1", run2.ID, "runner_lost"); err != nil {
+	if err := fx2.orch.FailRun(context.Background(), "u-alice", "r1", run2.ID, "runner_lost"); err != nil {
 		t.Fatalf("fail: %v", err)
 	}
 	fx2.msgs.mu.Lock()
@@ -1506,7 +1594,7 @@ func TestOrchCov_PostFailNoticeGatedDMArms(t *testing.T) {
 	_ = fx3.runs.fakeRunStore.UpdateRun(context.Background(), got3, got3.State)
 	fx3.orch.SetOwnerDMResolver(&orchCovDM{convID: "dm1"})
 	fx3.msgs.failSend = errOrchCov
-	if err := fx3.orch.FailRun(context.Background(), "r1", run3.ID, "runner_lost"); err != nil {
+	if err := fx3.orch.FailRun(context.Background(), "u-alice", "r1", run3.ID, "runner_lost"); err != nil {
 		t.Fatalf("fail: %v", err)
 	}
 }
@@ -1521,11 +1609,11 @@ func TestOrchCov_RecordAgentPostArms(t *testing.T) {
 	run := fx.start(t, "m1", "")
 	fx.claim(t)
 
-	fx.runs.failUpdateRun = errOrchCov
+	fx.runs.failAddPosts = errOrchCov
 	if _, err := fx.orch.RecordAgentPost(context.Background(), run.ID); !errors.Is(err, errOrchCov) {
 		t.Fatalf("update failure: %v", err)
 	}
-	fx.runs.failUpdateRun = nil
+	fx.runs.failAddPosts = nil
 
 	// Follow-marker write failure is non-fatal.
 	fx.dir.failPutFollow = errOrchCov
@@ -1534,7 +1622,7 @@ func TestOrchCov_RecordAgentPostArms(t *testing.T) {
 	}
 	fx.dir.failPutFollow = nil
 
-	if err := fx.orch.CompleteRun(context.Background(), "r1", run.ID, "done", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", run.ID, "done", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	if _, err := fx.orch.RecordAgentPost(context.Background(), run.ID); !errors.Is(err, ErrRunClosed) {
@@ -1584,12 +1672,12 @@ func TestOrchCov_SetRunState(t *testing.T) {
 
 func TestOrchCov_TimelineErrorArms(t *testing.T) {
 	fx := newOrchCovFixture(t)
-	if _, _, err := fx.orch.Timeline(context.Background(), "nope"); err == nil {
+	if _, _, _, err := fx.orch.Timeline(context.Background(), "u-alice", "nope"); err == nil {
 		t.Fatal("missing run accepted")
 	}
 	run := fx.start(t, "m1", "")
 	fx.runs.failListEvents = errOrchCov
-	if _, _, err := fx.orch.Timeline(context.Background(), run.ID); !errors.Is(err, errOrchCov) {
+	if _, _, _, err := fx.orch.Timeline(context.Background(), "u-alice", run.ID); !errors.Is(err, errOrchCov) {
 		t.Fatalf("event list failure: %v", err)
 	}
 }
@@ -1611,7 +1699,7 @@ func TestOrchCov_HeartbeatArms(t *testing.T) {
 	fx.claim(t)
 	done := fx.start(t, "m2", "")
 	fx.claim(t)
-	if err := fx.orch.CompleteRun(ctx, "r1", done.ID, "done", nil); err != nil {
+	if err := fx.orch.CompleteRun(ctx, "u-alice", "r1", done.ID, "done", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	foreign := fx.start(t, "m3", "")
@@ -1706,10 +1794,6 @@ func TestOrchCov_SweepWatchCatchUpsSkipArms(t *testing.T) {
 	fx := newOrchCovFixture(t)
 	ctx := context.Background()
 
-	fx.dir.failListAllSubs = errOrchCov
-	fx.orch.sweepWatchCatchUps(ctx)
-	fx.dir.failListAllSubs = nil
-
 	now := *fx.now
 	_ = fx.dir.fakeAgentDir.PutAgentSubscription(ctx, &model.AgentSubscription{
 		ID: "s-human", AgentID: "u-bob", CreatorID: "u-alice", ParentID: "chan1", ParentType: ParentChannel,
@@ -1719,7 +1803,7 @@ func TestOrchCov_SweepWatchCatchUpsSkipArms(t *testing.T) {
 		ID: "s-gone", AgentID: testGGID, CreatorID: "u-gone", ParentID: "chan1", ParentType: ParentChannel,
 		PendingCatchUp: true, PendingSince: &now,
 	})
-	fx.orch.sweepWatchCatchUps(ctx)
+	fx.orch.sweepWatchCatchUps(ctx, fx.allSubs(t))
 	if ids, _ := fx.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 10); len(ids) != 0 {
 		t.Fatalf("skip arms started runs: %v", ids)
 	}
@@ -1804,10 +1888,6 @@ func TestOrchCov_SweepHeartbeatsSkipArms(t *testing.T) {
 	fx := newOrchCovFixture(t)
 	ctx := context.Background()
 
-	fx.dir.failListAllSubs = errOrchCov
-	fx.orch.sweepHeartbeats(ctx)
-	fx.dir.failListAllSubs = nil
-
 	// No heartbeat configured → skipped.
 	_ = fx.dir.fakeAgentDir.PutAgentSubscription(ctx, &model.AgentSubscription{
 		ID: "s-watch", AgentID: testGGID, CreatorID: "u-alice", ParentID: "chan1", ParentType: ParentChannel,
@@ -1822,7 +1902,7 @@ func TestOrchCov_SweepHeartbeatsSkipArms(t *testing.T) {
 		ID: "s-gone", AgentID: testQibID, CreatorID: "u-gone", ParentID: "chan1", ParentType: ParentChannel,
 		HeartbeatMins: 1,
 	})
-	fx.orch.sweepHeartbeats(ctx)
+	fx.orch.sweepHeartbeats(ctx, fx.allSubs(t))
 	if ids, _ := fx.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 10); len(ids) != 0 {
 		t.Fatalf("skip arms started runs: %v", ids)
 	}
@@ -1834,7 +1914,7 @@ func TestOrchCov_SweepHeartbeatsSkipArms(t *testing.T) {
 		HeartbeatMins: 1,
 	})
 	fx2.dir.failPutSub = errOrchCov
-	fx2.orch.sweepHeartbeats(ctx)
+	fx2.orch.sweepHeartbeats(ctx, fx2.allSubs(t))
 	if ids, _ := fx2.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 10); len(ids) != 0 {
 		t.Fatalf("failed mark still invoked: %v", ids)
 	}
@@ -1846,7 +1926,7 @@ func TestOrchCov_SweepHeartbeatsSkipArms(t *testing.T) {
 		HeartbeatMins: 1,
 	})
 	fx3.dir.runners = map[string][]*model.RunnerRegistration{}
-	fx3.orch.sweepHeartbeats(ctx)
+	fx3.orch.sweepHeartbeats(ctx, fx3.allSubs(t))
 	if ids, _ := fx3.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 10); len(ids) != 0 {
 		t.Fatalf("offline heartbeat queued a run: %v", ids)
 	}
@@ -1943,7 +2023,7 @@ func TestOrchCov_BundleBudgetExhaustionDropsLayers(t *testing.T) {
 	// Shared context (one item), a digest peer, a connector index, skills.
 	ctxSvc, _ := newTestContextService(allowAll{})
 	fx.orch.SetContextService(ctxSvc)
-	if _, err := ctxSvc.Write(ctx, "u-alice", "", "u-alice", "chan1", ParentChannel, "a decision", false); err != nil {
+	if _, err := ctxSvc.Write(ctx, ContextWrite{AuthorID: "u-alice", AccessorID: "u-alice", ParentID: "chan1", ParentType: ParentChannel, Body: "a decision"}); err != nil {
 		t.Fatalf("ctx write: %v", err)
 	}
 	fx.orch.SetConnectorRegistry(&orchCovRegistry{
@@ -2026,7 +2106,8 @@ func TestOrchCov_BundleAgentAuthoredContextAttribution(t *testing.T) {
 	ctxSvc, _ := newTestContextService(allowAll{})
 	fx.orch.SetContextService(ctxSvc)
 	// Agent-authored item: attributed possessively to the invoker.
-	if _, err := ctxSvc.Write(ctx, testGGID, "u-alice", "u-alice", "chan1", ParentChannel, "agent finding", false); err != nil {
+	if _, err := ctxSvc.Write(ctx, ContextWrite{AuthorID: testGGID, InvokerID: "u-alice", AccessorID: "u-alice",
+		ParentID: "chan1", ParentType: ParentChannel, Body: "agent finding"}); err != nil {
 		t.Fatalf("ctx write: %v", err)
 	}
 	run := &model.Run{
@@ -2213,15 +2294,37 @@ func TestOrchCov_WriteDigestArms(t *testing.T) {
 
 func TestOrchCov_WakeAndWaiter(t *testing.T) {
 	fx := newOrchCovFixture(t)
-	ch := fx.orch.waiter("u-w")
+	ch, release := fx.orch.waiter("u-w")
 	fx.orch.wake("u-w")
 	select {
 	case <-ch:
 	case <-time.After(time.Second):
 		t.Fatal("waiter channel not closed by wake")
 	}
+	// Releasing after the wake already removed the entry is a no-op.
+	release()
 	// Waking with no waiter registered is a no-op.
 	fx.orch.wake("u-nobody")
+
+	// Two pollers share one channel, and the entry is dropped only when the
+	// LAST one leaves — otherwise an owner who polled once kept a channel in
+	// the map for the process's life.
+	_, releaseA := fx.orch.waiter("u-two")
+	_, releaseB := fx.orch.waiter("u-two")
+	releaseA()
+	fx.orch.mu.Lock()
+	stillThere := fx.orch.wakeups["u-two"] != nil
+	fx.orch.mu.Unlock()
+	if !stillThere {
+		t.Fatal("entry dropped while a poller was still waiting")
+	}
+	releaseB()
+	fx.orch.mu.Lock()
+	gone := fx.orch.wakeups["u-two"] == nil
+	fx.orch.mu.Unlock()
+	if !gone {
+		t.Fatal("entry not dropped after the last poller left")
+	}
 }
 
 func TestOrchCov_ClampAndPayloadHelpers(t *testing.T) {

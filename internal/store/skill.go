@@ -47,19 +47,9 @@ func (s *AgentStore) PutSkill(ctx context.Context, sk *model.Skill) error {
 
 // GetSkill fetches one skill.
 func (s *AgentStore) GetSkill(ctx context.Context, id string) (*model.Skill, error) {
-	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(s.Table),
-		Key:       compositeKey(skillPK(id), metaSK()),
-	})
+	item, err := getItem[skillItem](ctx, s.DB, skillPK(id), metaSK(), "skill")
 	if err != nil {
-		return nil, fmt.Errorf("store: get skill: %w", err)
-	}
-	if out.Item == nil {
-		return nil, ErrNotFound
-	}
-	var item skillItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
-		return nil, fmt.Errorf("store: unmarshal skill: %w", err)
+		return nil, err
 	}
 	return &item.Skill, nil
 }
@@ -68,22 +58,47 @@ func (s *AgentStore) GetSkill(ctx context.Context, id string) (*model.Skill, err
 func (s *AgentStore) ListSkills(ctx context.Context) ([]*model.Skill, error) {
 	keyCond := expression.Key("GSI2PK").Equal(expression.Value(allSkillsGSI2PK()))
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
-	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
+	items, err := queryAllOf[skillItem](ctx, s.DB, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		IndexName:                 aws.String("GSI2"),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-	})
+	}, "skills")
 	if err != nil {
-		return nil, fmt.Errorf("store: list skills: %w", err)
+		return nil, err
 	}
 	out := make([]*model.Skill, 0, len(items))
-	for _, raw := range items {
-		var item skillItem
-		if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
-			return nil, fmt.Errorf("store: unmarshal skill: %w", err)
-		}
+	for _, item := range items {
+		out = append(out, &item.Skill)
+	}
+	return out, nil
+}
+
+// ListSkillIndex is ListSkills projected to the routing fields (id, name,
+// description) — Instructions are NOT loaded.
+//
+// The bundle's ambient skill index and the list_skills tool need a line each;
+// reading full 8KB instruction bodies for every skill on every bundle build
+// (and every tool call) to render a ~2KB index was most of that read wasted.
+// The full row is one GetSkill away for the skills that are actually used.
+func (s *AgentStore) ListSkillIndex(ctx context.Context) ([]*model.Skill, error) {
+	keyCond := expression.Key("GSI2PK").Equal(expression.Value(allSkillsGSI2PK()))
+	proj := expression.NamesList(expression.Name("id"), expression.Name("name"), expression.Name("description"))
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).WithProjection(proj).Build())
+	items, err := queryAllOf[skillItem](ctx, s.DB, &dynamodb.QueryInput{
+		TableName:                 aws.String(s.Table),
+		IndexName:                 aws.String("GSI2"),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ProjectionExpression:      expr.Projection(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	}, "skill index")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.Skill, 0, len(items))
+	for _, item := range items {
 		out = append(out, &item.Skill)
 	}
 	return out, nil

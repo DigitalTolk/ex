@@ -57,37 +57,14 @@ func (s *ConnectorStore) PutConnector(ctx context.Context, c *model.Connector, f
 	if c.Slug == "" {
 		return errors.New("store: connector slug required")
 	}
-	// Delete files that are no longer in the manifest.
-	if old, err := s.GetConnector(ctx, c.Slug); err == nil {
-		keep := make(map[string]bool, len(files))
-		for _, f := range files {
-			keep[f.Name] = true
-		}
-		for _, name := range old.FileNames {
-			if !keep[name] {
-				if _, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-					TableName: aws.String(s.Table),
-					Key:       compositeKey(connectorPK(c.Slug), connectorFileSK(name)),
-				}); err != nil {
-					return fmt.Errorf("store: prune connector file: %w", err)
-				}
-			}
-		}
-	}
-
-	meta := connectorItem{
-		PK:        connectorPK(c.Slug),
-		SK:        metaSK(),
-		GSI2PK:    allConnectorsGSI2PK(),
-		GSI2SK:    connectorPK(c.Slug),
-		Connector: *c,
-	}
-	if _, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(s.Table),
-		Item:      mustAttrs(attributevalue.MarshalMap(meta)),
-	}); err != nil {
-		return fmt.Errorf("store: put connector: %w", err)
-	}
+	// MANIFEST LAST. A bundle is up to 64 rows of 350KB, far past what one
+	// transaction can carry, so the ordering is the atomicity: files, then the
+	// meta row whose FileNames name them, then the prune of what the new
+	// manifest dropped. At every point in between, every file the LIVE
+	// manifest names exists. (Meta-first — the old order — left a published
+	// manifest pointing at rows that had not been written yet, and runners
+	// fetched the bundle by that manifest.)
+	old, oldErr := s.GetConnector(ctx, c.Slug)
 	for _, f := range files {
 		f.Slug = c.Slug
 		item := connectorFileItem{
@@ -102,24 +79,44 @@ func (s *ConnectorStore) PutConnector(ctx context.Context, c *model.Connector, f
 			return fmt.Errorf("store: put connector file %s: %w", f.Name, err)
 		}
 	}
+	meta := connectorItem{
+		PK:        connectorPK(c.Slug),
+		SK:        metaSK(),
+		GSI2PK:    allConnectorsGSI2PK(),
+		GSI2SK:    connectorPK(c.Slug),
+		Connector: *c,
+	}
+	if _, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(s.Table),
+		Item:      mustAttrs(attributevalue.MarshalMap(meta)),
+	}); err != nil {
+		return fmt.Errorf("store: put connector: %w", err)
+	}
+	if oldErr == nil {
+		keep := make(map[string]bool, len(files))
+		for _, f := range files {
+			keep[f.Name] = true
+		}
+		for _, name := range old.FileNames {
+			if keep[name] {
+				continue
+			}
+			if _, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+				TableName: aws.String(s.Table),
+				Key:       compositeKey(connectorPK(c.Slug), connectorFileSK(name)),
+			}); err != nil {
+				return fmt.Errorf("store: prune connector file: %w", err)
+			}
+		}
+	}
 	return nil
 }
 
 // GetConnector fetches one connector's metadata.
 func (s *ConnectorStore) GetConnector(ctx context.Context, slug string) (*model.Connector, error) {
-	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(s.Table),
-		Key:       compositeKey(connectorPK(slug), metaSK()),
-	})
+	item, err := getItem[connectorItem](ctx, s.DB, connectorPK(slug), metaSK(), "connector")
 	if err != nil {
-		return nil, fmt.Errorf("store: get connector: %w", err)
-	}
-	if out.Item == nil {
-		return nil, ErrNotFound
-	}
-	var item connectorItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
-		return nil, fmt.Errorf("store: unmarshal connector: %w", err)
+		return nil, err
 	}
 	return &item.Connector, nil
 }
@@ -128,22 +125,18 @@ func (s *ConnectorStore) GetConnector(ctx context.Context, slug string) (*model.
 func (s *ConnectorStore) ListConnectors(ctx context.Context) ([]*model.Connector, error) {
 	keyCond := expression.Key("GSI2PK").Equal(expression.Value(allConnectorsGSI2PK()))
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
-	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
+	items, err := queryAllOf[connectorItem](ctx, s.DB, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		IndexName:                 aws.String("GSI2"),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-	})
+	}, "connectors")
 	if err != nil {
-		return nil, fmt.Errorf("store: list connectors: %w", err)
+		return nil, err
 	}
 	out := make([]*model.Connector, 0, len(items))
-	for _, raw := range items {
-		var item connectorItem
-		if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
-			return nil, fmt.Errorf("store: unmarshal connector: %w", err)
-		}
+	for _, item := range items {
 		out = append(out, &item.Connector)
 	}
 	return out, nil
@@ -219,19 +212,9 @@ func (s *ConnectorStore) PutInstall(ctx context.Context, in *model.ConnectorInst
 
 // GetInstall fetches one user's install of one connector.
 func (s *ConnectorStore) GetInstall(ctx context.Context, userID, slug string) (*model.ConnectorInstall, error) {
-	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(s.Table),
-		Key:       compositeKey(userPK(userID), connInstallSK(slug)),
-	})
+	item, err := getItem[connectorInstallItem](ctx, s.DB, userPK(userID), connInstallSK(slug), "install")
 	if err != nil {
-		return nil, fmt.Errorf("store: get install: %w", err)
-	}
-	if out.Item == nil {
-		return nil, ErrNotFound
-	}
-	var item connectorInstallItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
-		return nil, fmt.Errorf("store: unmarshal install: %w", err)
+		return nil, err
 	}
 	return &item.ConnectorInstall, nil
 }
@@ -241,21 +224,17 @@ func (s *ConnectorStore) ListInstalls(ctx context.Context, userID string) ([]*mo
 	keyCond := expression.Key("PK").Equal(expression.Value(userPK(userID))).
 		And(expression.Key("SK").BeginsWith("CONNINST#"))
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
-	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
+	items, err := queryAllOf[connectorInstallItem](ctx, s.DB, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-	})
+	}, "installs")
 	if err != nil {
-		return nil, fmt.Errorf("store: list installs: %w", err)
+		return nil, err
 	}
 	out := make([]*model.ConnectorInstall, 0, len(items))
-	for _, raw := range items {
-		var item connectorInstallItem
-		if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
-			return nil, fmt.Errorf("store: unmarshal install: %w", err)
-		}
+	for _, item := range items {
 		// Defensive: only rows that really are installs.
 		if strings.HasPrefix(item.SK, "CONNINST#") {
 			out = append(out, &item.ConnectorInstall)

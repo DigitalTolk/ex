@@ -310,11 +310,6 @@ type Run struct {
 	// orchestrator refuses rounds past the chain cap — the anti-loop bound
 	// from plan.md §5.
 	Round int `json:"round,omitempty" dynamodbav:"round,omitempty"`
-	// PendingAgentIDs sequences a multi-agent human invocation ("@gg & @qib
-	// discuss…"): only the first agent starts immediately; each terminal run
-	// kicks the next, so every later agent SEES the earlier replies instead
-	// of producing a parallel stateless answer.
-	PendingAgentIDs []string `json:"pendingAgentIDs,omitempty" dynamodbav:"pendingAgentIDs,omitempty"`
 	// CoInvoked lists the display names of ALL agents the invoking message
 	// summoned, in mention order. >1 entry means parallel peers: the bundle
 	// renders the roster so ordered task splits ("one do X, the other Y")
@@ -350,6 +345,11 @@ type Run struct {
 	Limits    AgentLimits `json:"limits" dynamodbav:"limits"`
 
 	Spend RunSpend `json:"spend" dynamodbav:"spend"`
+	// LastRunnerSeq is the highest runner-supplied event sequence whose spend
+	// has already been counted. A batch retried after a lost HTTP response
+	// re-reports the same sequences; without this high-water mark its turns and
+	// tokens would be added twice and could trip a limit early.
+	LastRunnerSeq int64 `json:"lastRunnerSeq,omitempty" dynamodbav:"lastRunnerSeq,omitempty"`
 
 	RunnerID       string     `json:"runnerID,omitempty" dynamodbav:"runnerID,omitempty"`
 	LeaseExpiresAt *time.Time `json:"leaseExpiresAt,omitempty" dynamodbav:"leaseExpiresAt,omitempty"`
@@ -430,6 +430,13 @@ type Approval struct {
 	// Kind is the harness tool class (AutoAllow*) for permission-gateway
 	// approvals — lets the card offer "always allow reads for this agent".
 	Kind string `json:"kind,omitempty" dynamodbav:"kind,omitempty"`
+	// Purpose binds the approval to the exact action it authorizes, so a gate
+	// verifies a decision by EQUALITY instead of searching for a slug or an id
+	// inside the prose (where "core" matched "core-eu", and any approved
+	// approval at all satisfied the reply-mode gate). Set ONLY by the server
+	// when the server itself raises the gate — an agent-raised approval can
+	// never carry one, which is what makes it trustworthy.
+	Purpose string `json:"purpose,omitempty" dynamodbav:"purpose,omitempty"`
 	// Options turns the gate into a multiple-choice question (the ask_user
 	// tool): the invoker picks one instead of approve/deny, and the pick
 	// lands in Choice. Empty = plain yes/no approval.
@@ -456,6 +463,20 @@ type Approval struct {
 	DecidedAt *time.Time `json:"decidedAt,omitempty" dynamodbav:"decidedAt,omitempty"`
 	CreatedAt time.Time  `json:"createdAt" dynamodbav:"createdAt"`
 }
+
+// Approval purposes. Structured "<action>:<subject>" strings, minted only by
+// the server-side gate that raises the approval.
+const (
+	ApprovalPurposeWatchReply = "watch-reply"
+)
+
+// ApprovalPurposeConnector is the purpose that authorizes attaching one
+// connector to a live run.
+func ApprovalPurposeConnector(slug string) string { return "connector:" + slug }
+
+// ApprovalPurposeTaskMR is the purpose that authorizes pushing and opening the
+// merge request(s) for one coding task.
+func ApprovalPurposeTaskMR(taskID string) string { return "task-mr:" + taskID }
 
 // Approval option bounds (ask_user).
 const (

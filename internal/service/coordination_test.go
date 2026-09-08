@@ -58,7 +58,7 @@ func TestOrchestrator_ClaimTaskFirstWins(t *testing.T) {
 	qib, _ := fx.users.GetUser(context.Background(), testQibID)
 	invoker, _ := fx.users.GetUser(context.Background(), "u-alice")
 	resolved, _ := fx.orch.agentSvc.Resolve(context.Background(), qib, "u-alice")
-	qibRun, err := fx.orch.StartRun(context.Background(), qib, invoker, msg, ParentChannel, resolved, 0, nil)
+	qibRun, err := fx.orch.startRun(context.Background(), invocation{agent: qib, invoker: invoker, msg: msg, parentType: ParentChannel}, resolved)
 	if err != nil {
 		t.Fatalf("qib run: %v", err)
 	}
@@ -280,7 +280,8 @@ func TestAgentService_CreateAgent(t *testing.T) {
 	}
 
 	// The new agent resolves under its template (the agent user carries the
-	// template slug; production stores the user row CreateAgentUser wrote).
+	// template slug). The fake dir and the fake user store are separate, so
+	// register the row CreateAgentUser wrote in production.
 	agent := &model.User{
 		ID: AgentUserID("zed"), DisplayName: "Zed",
 		Kind: model.UserKindAgent, AgentConfig: &model.AgentConfig{TemplateSlug: "zed"},
@@ -289,7 +290,14 @@ func TestAgentService_CreateAgent(t *testing.T) {
 		t.Fatalf("resolve new agent: %v (harness %q)", err, r.Harness)
 	}
 
-	// Duplicate slug is refused.
+	// A template WITHOUT its agent user is half-created: creating again
+	// completes it rather than wedging the slug forever.
+	if _, err := svc.CreateAgent(context.Background(), CreateAgentInput{Slug: "zed", Persona: "y"}); err != nil {
+		t.Fatalf("half-created agent must converge, got %v", err)
+	}
+
+	// Duplicate slug is refused once the agent is fully built.
+	fx.users.users[agent.ID] = agent
 	if _, err := svc.CreateAgent(context.Background(), CreateAgentInput{Slug: "zed", Persona: "y"}); err == nil {
 		t.Fatal("duplicate slug accepted")
 	}

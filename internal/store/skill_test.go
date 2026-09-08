@@ -61,6 +61,24 @@ func TestSkillStore_CRUD(t *testing.T) {
 		t.Fatalf("list: want 2 skills, got %d", len(all))
 	}
 
+	// The projected index carries the routing fields and NOT the instructions
+	// (the bundle renders a line each; loading 8KB bodies for that was waste).
+	idx, err := s.ListSkillIndex(ctx)
+	if err != nil {
+		t.Fatalf("list index: %v", err)
+	}
+	if len(idx) != 2 {
+		t.Fatalf("index: want 2 skills, got %d", len(idx))
+	}
+	for _, sk := range idx {
+		if sk.ID == "" || sk.Name == "" {
+			t.Fatalf("index row missing routing fields: %+v", sk)
+		}
+		if sk.Instructions != "" {
+			t.Fatalf("index must not carry instructions: %+v", sk)
+		}
+	}
+
 	if err := s.DeleteSkill(ctx, "sk-1"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -104,6 +122,12 @@ func TestSkillStore_SDKErrorArms(t *testing.T) {
 			t.Fatalf("ListSkills: want errInjected, got %v", err)
 		}
 	})
+	t.Run("ListIndex QueryError", func(t *testing.T) {
+		s := NewAgentStore(withFault(db, func(f *faultClient) { f.failQuery = true }))
+		if _, err := s.ListSkillIndex(ctx); !errors.Is(err, errInjected) {
+			t.Fatalf("ListSkillIndex: want errInjected, got %v", err)
+		}
+	})
 	t.Run("Delete DeleteItemError", func(t *testing.T) {
 		s := NewAgentStore(withFault(db, func(f *faultClient) { f.failDeleteItem = true }))
 		if err := s.DeleteSkill(ctx, "sk-e"); !errors.Is(err, errInjected) {
@@ -136,5 +160,15 @@ func TestSkillStore_CorruptRows(t *testing.T) {
 		})
 		_, err := NewAgentStore(faulted).ListSkills(ctx)
 		assertUnmarshalErr(t, err, "ListSkills")
+	})
+	t.Run("ListSkillIndex", func(t *testing.T) {
+		faulted := withFault(db, func(f *faultClient) {
+			f.transformQuery = func(o *dynamodb.QueryOutput) *dynamodb.QueryOutput {
+				o.Items = []map[string]types.AttributeValue{corruptRow()}
+				return o
+			}
+		})
+		_, err := NewAgentStore(faulted).ListSkillIndex(ctx)
+		assertUnmarshalErr(t, err, "ListSkillIndex")
 	})
 }

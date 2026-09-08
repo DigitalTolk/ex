@@ -258,37 +258,41 @@ func TestMsgagCovSetMachineReaction(t *testing.T) {
 		}
 	})
 
-	t.Run("clear removes only the actor and keeps other holders", func(t *testing.T) {
+	t.Run("an empty state is refused", func(t *testing.T) {
+		// The "clear every machine emoji" branch had no caller outside this
+		// test; a silent no-op is a worse answer than saying the argument is
+		// wrong.
+		svc, messages, _, _, _ := setupMessageService()
+		msgagCovSeed(messages, &model.Message{
+			ID: "m1", ParentID: "ch1", Body: "x",
+			Reactions: map[string][]string{StateEmojiRead: {"agent-1"}},
+		})
+		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", ""); err == nil {
+			t.Fatal("empty state should be refused")
+		}
+	})
+
+	t.Run("a transient state is replaced, and an emptied map is nilled", func(t *testing.T) {
 		svc, messages, _, _, _ := setupMessageService()
 		msg := msgagCovSeed(messages, &model.Message{
 			ID: "m1", ParentID: "ch1", Body: "x",
 			Reactions: map[string][]string{
-				StateEmojiRead:    {"agent-1"},
-				StateEmojiWorking: {"agent-1", "agent-other"},
+				StateEmojiBlocked: {"agent-1", "agent-other"},
+				StateEmojiQueued:  {"agent-1"},
 			},
 		})
-		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", ""); err != nil {
-			t.Fatalf("clear: %v", err)
+		// ⚙️ ends both transient markers for THIS actor only.
+		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", StateEmojiWorking); err != nil {
+			t.Fatalf("set: %v", err)
 		}
-		if _, ok := msg.Reactions[StateEmojiRead]; ok {
-			t.Error("👀 should be deleted once its only holder is cleared")
+		if _, ok := msg.Reactions[StateEmojiQueued]; ok {
+			t.Error("⏳ should be deleted once its only holder moved on")
 		}
-		if got := msg.Reactions[StateEmojiWorking]; len(got) != 1 || got[0] != "agent-other" {
-			t.Fatalf("reactions[⚙️] = %v, want [agent-other]", got)
+		if got := msg.Reactions[StateEmojiBlocked]; len(got) != 1 || got[0] != "agent-other" {
+			t.Fatalf("reactions[⛔] = %v, want [agent-other]", got)
 		}
-	})
-
-	t.Run("clearing the sole reactor nils the map", func(t *testing.T) {
-		svc, messages, _, _, _ := setupMessageService()
-		msg := msgagCovSeed(messages, &model.Message{
-			ID: "m1", ParentID: "ch1", Body: "x",
-			Reactions: map[string][]string{StateEmojiRead: {"agent-1"}},
-		})
-		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, "m1", ""); err != nil {
-			t.Fatalf("clear: %v", err)
-		}
-		if msg.Reactions != nil {
-			t.Fatalf("Reactions = %v, want nil once the map empties", msg.Reactions)
+		if got := msg.Reactions[StateEmojiWorking]; len(got) != 1 || got[0] != "agent-1" {
+			t.Fatalf("reactions[⚙️] = %v, want [agent-1]", got)
 		}
 	})
 

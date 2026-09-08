@@ -2074,6 +2074,86 @@ func TestMessageService_ListThreadMessages_NotMember(t *testing.T) {
 	}
 }
 
+// ThreadWindowMessages is the BOUNDED thread read the agent context window
+// uses: newest N, oldest-first, without draining an hours-long task thread.
+func TestMessageService_ThreadWindowMessages(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+	memberships.memberships["ch-win#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch-win", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+	messages.messages["ch-win#01-root"] = &model.Message{
+		ID: "01-root", ParentID: "ch-win", AuthorID: "user-1", Body: "root", ReplyCount: 3,
+	}
+	for _, id := range []string{"02-r1", "03-r2", "04-r3"} {
+		messages.messages["ch-win#"+id] = &model.Message{
+			ID: id, ParentID: "ch-win", AuthorID: "user-1", Body: id, ParentMessageID: "01-root",
+		}
+	}
+
+	// A non-positive limit reads nothing at all.
+	if got, err := svc.ThreadWindowMessages(ctx, "user-1", "ch-win", ParentChannel, "01-root", 0); err != nil || got != nil {
+		t.Fatalf("limit 0: %+v %v", got, err)
+	}
+	// Non-members are refused before any read.
+	if _, err := svc.ThreadWindowMessages(ctx, "user-9", "ch-win", ParentChannel, "01-root", 5); err == nil {
+		t.Fatal("non-member must be refused")
+	}
+
+	// The newest two replies, root first.
+	got, err := svc.ThreadWindowMessages(ctx, "user-1", "ch-win", ParentChannel, "01-root", 2)
+	if err != nil {
+		t.Fatalf("window: %v", err)
+	}
+	if len(got) != 3 || got[0].ID != "01-root" || got[1].ID != "03-r2" || got[2].ID != "04-r3" {
+		t.Fatalf("window = %+v, want root + the newest two replies", ids(got))
+	}
+
+	// A SHORT page that also falls short of the root's ReplyCount means the
+	// thread is un-backfilled, and the complete path answers instead. (A full
+	// page is legitimately just the window, as asserted above.)
+	messages.noThreadIndex = true
+	full, err := svc.ThreadWindowMessages(ctx, "user-1", "ch-win", ParentChannel, "01-root", 2)
+	if err != nil {
+		t.Fatalf("window fallback: %v", err)
+	}
+	if len(full) != 4 {
+		t.Fatalf("fallback should return the whole thread, got %v", ids(full))
+	}
+	messages.noThreadIndex = false
+
+	// Store failures surface, both for the root and for the replies.
+	messages.getErr = errors.New("get boom")
+	if _, err := svc.ThreadWindowMessages(ctx, "user-1", "ch-win", ParentChannel, "01-root", 2); err == nil {
+		t.Fatal("root-get failure should surface")
+	}
+	messages.getErr = nil
+	messages.threadReplyErr = errors.New("thread boom")
+	if _, err := svc.ThreadWindowMessages(ctx, "user-1", "ch-win", ParentChannel, "01-root", 2); err == nil {
+		t.Fatal("reply-listing failure should surface")
+	}
+	messages.threadReplyErr = nil
+
+	// A thread whose root is gone still returns its replies.
+	delete(messages.messages, "ch-win#01-root")
+	rootless, err := svc.ThreadWindowMessages(ctx, "user-1", "ch-win", ParentChannel, "01-root", 5)
+	if err != nil {
+		t.Fatalf("rootless window: %v", err)
+	}
+	if len(rootless) != 3 {
+		t.Fatalf("rootless window = %v, want the three replies", ids(rootless))
+	}
+}
+
+// ids renders a message slice as its ids, for readable failures.
+func ids(msgs []*model.Message) []string {
+	out := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, m.ID)
+	}
+	return out
+}
+
 func TestMessageService_ToggleReaction_Add(t *testing.T) {
 	svc, messages, memberships, _, publisher := setupMessageService()
 	ctx := context.Background()

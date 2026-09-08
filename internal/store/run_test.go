@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -310,10 +311,10 @@ func TestRunStore_SDKErrorArms(t *testing.T) {
 			t.Fatalf("AppendRunEvent: want errInjected, got %v", err)
 		}
 	})
-	t.Run("DeleteRunEvents per-row DeleteItemError", func(t *testing.T) {
-		s := NewRunStore(withFault(db, func(f *faultClient) { f.failDeleteItem = true }))
+	t.Run("DeleteRunEvents BatchWriteItemError", func(t *testing.T) {
+		s := NewRunStore(withFault(db, func(f *faultClient) { f.failBatchWriteItem = true }))
 		if err := s.DeleteRunEvents(ctx, "run-s"); !errors.Is(err, errInjected) {
-			t.Fatalf("DeleteRunEvents delete: want errInjected, got %v", err)
+			t.Fatalf("DeleteRunEvents batch delete: want errInjected, got %v", err)
 		}
 	})
 	t.Run("PutDigest PutItemError", func(t *testing.T) {
@@ -369,11 +370,159 @@ func TestRunStore_CorruptRows(t *testing.T) {
 		_, err := NewRunStore(withFault(db, corruptQ)).ListRunEvents(ctx, "run-x")
 		assertUnmarshalErr(t, err, "ListRunEvents")
 	})
-	t.Run("DeleteRunEvents skips unreadable rows", func(t *testing.T) {
-		// A corrupt EVT row can't key a delete — the loop skips it and the
-		// call still succeeds.
-		if err := NewRunStore(withFault(db, corruptQ)).DeleteRunEvents(ctx, "run-x"); err != nil {
-			t.Fatalf("DeleteRunEvents corrupt skip: %v", err)
+	// DeleteRunEvents decodes nothing (its query projects KEYS ONLY), so it has
+	// no corrupt-row arm; its batching is covered in
+	// TestRunStore_DeleteRunEventsBatches.
+}
+
+// DeleteRunEvents deletes in batches of 25 with an UnprocessedItems drain: a
+// task-mode timeline is turn-uncapped, so "a handful of rows" is not a bound.
+func TestRunStore_DeleteRunEventsBatches(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewRunStore(db)
+	// 60 rows → three batches, the last one partial.
+	for i := 1; i <= 60; i++ {
+		if err := s.AppendRunEvent(ctx, &model.RunEvent{RunID: "run-many", Seq: int64(i), Type: "turn"}); err != nil {
+			t.Fatalf("append %d: %v", i, err)
 		}
+	}
+	if evts, err := s.ListRunEvents(ctx, "run-many"); err != nil || len(evts) != 60 {
+		t.Fatalf("seeded %d events (err %v), want 60", len(evts), err)
+	}
+	if err := s.DeleteRunEvents(ctx, "run-many"); err != nil {
+		t.Fatalf("DeleteRunEvents: %v", err)
+	}
+	if evts, err := s.ListRunEvents(ctx, "run-many"); err != nil || len(evts) != 0 {
+		t.Fatalf("after delete: %d events (err %v), want 0", len(evts), err)
+	}
+}
+
+// A batch DynamoDB reports as unprocessed is retried, and an endlessly
+// unprocessed batch fails loudly rather than silently leaving rows behind.
+func TestRunStore_DeleteRunEventsUnprocessed(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	seed := func(runID string) {
+		if err := NewRunStore(db).AppendRunEvent(ctx, &model.RunEvent{RunID: runID, Seq: 1, Type: "turn"}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+
+	seed("run-unp1")
+	retryOnce := &unprocessedClient{DynamoAPI: db.Client, table: db.Table, remaining: 1}
+	if err := NewRunStore(&DB{Client: retryOnce, Table: db.Table}).DeleteRunEvents(ctx, "run-unp1"); err != nil {
+		t.Fatalf("retry then succeed: %v", err)
+	}
+
+	seed("run-unp2")
+	never := &unprocessedClient{DynamoAPI: db.Client, table: db.Table, remaining: 99}
+	err := NewRunStore(&DB{Client: never, Table: db.Table}).DeleteRunEvents(ctx, "run-unp2")
+	if err == nil || !strings.Contains(err.Error(), "unprocessed after retries") {
+		t.Fatalf("exhausted retries must fail loudly, got %v", err)
+	}
+}
+
+// AddRunSpend/AddRunPosts are the ATOMIC counter writers: they apply deltas to
+// the committed row rather than rewriting it from a caller snapshot, so two
+// writers that observed the same state cannot revert each other.
+func TestRunStore_AtomicCounters(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewRunStore(db)
+
+	run := mkRunFixture("run-atomic", "u-1", time.Now().Add(time.Hour))
+	if err := s.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	lease := time.Now().Add(time.Minute).UTC().Truncate(time.Millisecond)
+	if err := s.ClaimRun(ctx, run, "r-1", lease); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	// A batch's deltas, a state move, a rolling-deadline extension and a lease
+	// renewal all ride one update.
+	newDeadline := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Millisecond)
+	newLease := time.Now().Add(5 * time.Minute).UTC().Truncate(time.Millisecond)
+	got, err := s.AddRunSpend(ctx, run.ID, "r-1", RunSpendDelta{
+		Turns: 2, InputTokens: 30, OutputTokens: 40, LastRunnerSeq: 7,
+		State: model.RunStateRunning, Deadline: newDeadline, Lease: newLease,
+	})
+	if err != nil {
+		t.Fatalf("add spend: %v", err)
+	}
+	if got.Spend.Turns != 2 || got.Spend.InputTokens != 30 || got.Spend.OutputTokens != 40 {
+		t.Fatalf("committed spend = %+v", got.Spend)
+	}
+	if got.LastRunnerSeq != 7 || got.State != model.RunStateRunning {
+		t.Fatalf("committed seq/state = %d/%s", got.LastRunnerSeq, got.State)
+	}
+	if !got.Deadline.Equal(newDeadline) || got.LeaseExpiresAt == nil || !got.LeaseExpiresAt.Equal(newLease) {
+		t.Fatalf("committed deadline/lease = %v / %v", got.Deadline, got.LeaseExpiresAt)
+	}
+
+	// A post bump lands on top WITHOUT touching the turn counters, and a
+	// second spend batch adds to what is already committed.
+	posted, err := s.AddRunPosts(ctx, run.ID, 1)
+	if err != nil {
+		t.Fatalf("add posts: %v", err)
+	}
+	if posted.Spend.Posts != 1 || posted.Spend.Turns != 2 {
+		t.Fatalf("post bump clobbered the ledger: %+v", posted.Spend)
+	}
+	again, err := s.AddRunSpend(ctx, run.ID, "r-1", RunSpendDelta{Turns: 1, LastRunnerSeq: 9})
+	if err != nil {
+		t.Fatalf("add spend 2: %v", err)
+	}
+	if again.Spend.Turns != 3 || again.Spend.Posts != 1 {
+		t.Fatalf("second batch did not accumulate: %+v", again.Spend)
+	}
+
+	// Another runner is refused; so is a terminal run.
+	if _, err := s.AddRunSpend(ctx, run.ID, "r-evil", RunSpendDelta{Turns: 1}); !errors.Is(err, ErrStaleRun) {
+		t.Fatalf("foreign runner: want ErrStaleRun, got %v", err)
+	}
+	done := *again
+	done.State = model.RunStateCompleted
+	if err := s.UpdateRun(ctx, &done, model.RunStateRunning); err != nil {
+		t.Fatalf("terminalize: %v", err)
+	}
+	if _, err := s.AddRunSpend(ctx, run.ID, "r-1", RunSpendDelta{Turns: 1}); !errors.Is(err, ErrStaleRun) {
+		t.Fatalf("terminal run: want ErrStaleRun, got %v", err)
+	}
+	if _, err := s.AddRunPosts(ctx, run.ID, 1); !errors.Is(err, ErrStaleRun) {
+		t.Fatalf("terminal post bump: want ErrStaleRun, got %v", err)
+	}
+}
+
+func TestRunStore_AtomicCountersErrorArms(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+
+	t.Run("UpdateItemError", func(t *testing.T) {
+		s := NewRunStore(withFault(db, func(f *faultClient) { f.failUpdateItem = true }))
+		if _, err := s.AddRunSpend(ctx, "run-e", "r-1", RunSpendDelta{}); !errors.Is(err, errInjected) {
+			t.Fatalf("AddRunSpend: want errInjected, got %v", err)
+		}
+		if _, err := s.AddRunPosts(ctx, "run-e", 1); !errors.Is(err, errInjected) {
+			t.Fatalf("AddRunPosts: want errInjected, got %v", err)
+		}
+	})
+	t.Run("corrupt returned row", func(t *testing.T) {
+		run := mkRunFixture("run-corrupt", "u-1", time.Now().Add(time.Hour))
+		if err := NewRunStore(db).CreateRun(ctx, run); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if err := NewRunStore(db).ClaimRun(ctx, run, "r-1", time.Now().Add(time.Minute)); err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		faulted := withFault(db, func(f *faultClient) {
+			f.transformUpdateItem = func(o *dynamodb.UpdateItemOutput) *dynamodb.UpdateItemOutput {
+				o.Attributes = corruptRow()
+				return o
+			}
+		})
+		_, err := NewRunStore(faulted).AddRunSpend(ctx, run.ID, "r-1", RunSpendDelta{Turns: 1})
+		assertUnmarshalErr(t, err, "AddRunSpend")
 	})
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/oklog/ulid/v2"
@@ -41,6 +42,7 @@ type DynamoAPI interface {
 	CreateTable(ctx context.Context, params *dynamodb.CreateTableInput, optFns ...func(*dynamodb.Options)) (*dynamodb.CreateTableOutput, error)
 	DeleteItem(ctx context.Context, params *dynamodb.DeleteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
 	DescribeTable(ctx context.Context, params *dynamodb.DescribeTableInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DescribeTableOutput, error)
+	DescribeTimeToLive(ctx context.Context, params *dynamodb.DescribeTimeToLiveInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DescribeTimeToLiveOutput, error)
 	GetItem(ctx context.Context, params *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
 	PutItem(ctx context.Context, params *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
 	Query(ctx context.Context, params *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error)
@@ -99,6 +101,46 @@ func (db *DB) queryAll(ctx context.Context, input *dynamodb.QueryInput) ([]map[s
 			return items, nil
 		}
 		input.ExclusiveStartKey = out.LastEvaluatedKey
+	}
+}
+
+// CheckTTL verifies that DynamoDB's TTL is actually enabled on the `ttl`
+// attribute, and warns loudly when it is not.
+//
+// TTL is what reaps runner registrations, task claims, thread follows,
+// invites and thread-scoped watchers — but it is only ever ENABLED by
+// EnsureTable, which runs in development. A production table provisioned
+// elsewhere (Terraform, console) with TTL off, or pointed at a different
+// attribute, silently accumulates every one of those rows forever, and nothing
+// in the system notices. Diagnostic only: never fatal, since a workspace may
+// deliberately manage expiry itself.
+func (db *DB) CheckTTL(ctx context.Context) {
+	out, err := db.Client.DescribeTimeToLive(ctx, &dynamodb.DescribeTimeToLiveInput{
+		TableName: aws.String(db.Table),
+	})
+	if err != nil {
+		slog.Warn("could not verify DynamoDB TTL; expiring rows may accumulate",
+			"table", db.Table, "error", err)
+		return
+	}
+	desc := out.TimeToLiveDescription
+	if desc == nil || desc.TimeToLiveStatus != types.TimeToLiveStatusEnabled {
+		status := types.TimeToLiveStatusDisabled
+		if desc != nil {
+			status = desc.TimeToLiveStatus
+		}
+		slog.Warn("DynamoDB TTL is NOT enabled on this table — runner registrations, "+
+			"task claims, thread follows, invites and thread-scoped watchers will never expire",
+			"table", db.Table, "status", status)
+		return
+	}
+	if desc.AttributeName == nil || *desc.AttributeName != "ttl" {
+		attr := ""
+		if desc.AttributeName != nil {
+			attr = *desc.AttributeName
+		}
+		slog.Warn("DynamoDB TTL is enabled on the wrong attribute; expiring rows will never expire",
+			"table", db.Table, "attribute", attr, "want", "ttl")
 	}
 }
 
@@ -197,6 +239,48 @@ func (db *DB) EnsureTable(ctx context.Context) error {
 	return nil
 }
 
+// getItem fetches one row by key and unmarshals it into T.
+//
+// It replaces a dozen identical bodies whose only differences were the key,
+// the row type and two error strings — each one an opportunity to forget the
+// nil-item check, which reads as a zero-valued row instead of ErrNotFound.
+func getItem[T any](ctx context.Context, db *DB, pk, sk, what string) (*T, error) {
+	out, err := db.Client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(db.Table),
+		Key:       compositeKey(pk, sk),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: get %s: %w", what, err)
+	}
+	if out.Item == nil {
+		return nil, ErrNotFound
+	}
+	var item T
+	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
+		return nil, fmt.Errorf("store: unmarshal %s: %w", what, err)
+	}
+	return &item, nil
+}
+
+// queryAllOf drains every page of a query and unmarshals each row into T — the
+// list-shaped counterpart to getItem, and the reason individual list methods
+// no longer hand-roll the drain-and-unmarshal loop.
+func queryAllOf[T any](ctx context.Context, db *DB, in *dynamodb.QueryInput, what string) ([]T, error) {
+	items, err := db.queryAll(ctx, in)
+	if err != nil {
+		return nil, fmt.Errorf("store: list %s: %w", what, err)
+	}
+	out := make([]T, 0, len(items))
+	for _, raw := range items {
+		var item T
+		if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
+			return nil, fmt.Errorf("store: unmarshal %s: %w", what, err)
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
 // NewID generates a new ULID suitable for use as an entity identifier.
 // ULIDs are time-ordered and lexicographically sortable.
 func NewID() string {
@@ -292,8 +376,19 @@ func runDigestSK() string       { return "DIGEST" }
 func runParentGSI1PK(parentID string) string { return "RUNPARENT#" + parentID }
 func runGSI1SK(runID string) string          { return "RUN#" + runID }
 func activeRunsGSI2PK() string               { return "ACTIVE_RUNS" }
+
+// sortableTimeLayout is RFC3339 with a FIXED-WIDTH nanosecond fraction.
+// time.RFC3339Nano trims trailing zeros, which breaks lexicographic ordering
+// at sub-second boundaries: "…:00Z" and "…:00.5Z" differ in their first
+// distinguishing byte ('Z' vs '.'), so the whole-second deadline sorts after
+// the half-second one. Padding makes byte order agree with chronology.
+const sortableTimeLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
+// sortableTime renders t for use inside a sort key.
+func sortableTime(t time.Time) string { return t.UTC().Format(sortableTimeLayout) }
+
 func activeRunGSI2SK(deadline time.Time, runID string) string {
-	return deadline.UTC().Format(time.RFC3339Nano) + "#" + runID
+	return sortableTime(deadline) + "#" + runID
 }
 
 // runqPK holds the per-owner claim queue: one row per pending run, deleted
@@ -316,8 +411,8 @@ func approvalSK(id string) string { return "APPROVAL#" + id }
 func artifactSK(id string) string { return "ART#" + id }
 
 // Skills are workspace-wide instruction packs (plan.md §2c).
-func skillPK(id string) string  { return "SKILL#" + id }
-func allSkillsGSI2PK() string   { return "ALL_SKILLS" }
+func skillPK(id string) string { return "SKILL#" + id }
+func allSkillsGSI2PK() string  { return "ALL_SKILLS" }
 
 // agentMemSK stores one agent's core memory FOR one invoker, under that
 // invoker's partition (next to their AGENTCFG# prefs — same scoping logic).
@@ -328,6 +423,12 @@ func agentMemSK(agentID string) string { return "AGENTMEM#" + agentID }
 func agentSubPK(parentID string) string { return "AGENTSUB#" + parentID }
 func agentSubSK(id string) string       { return "SUB#" + id }
 func allAgentSubsGSI2PK() string        { return "ALL_AGENTSUBS" }
+
+// Subscriptions are also indexed BY CREATOR on GSI1, so "my watchers for this
+// agent" is one bounded query instead of a drain of the whole ALL_AGENTSUBS
+// partition on an ordinary user GET.
+func agentSubCreatorGSI1PK(creatorID string) string   { return "AGENTSUBS_BY_CREATOR#" + creatorID }
+func agentSubCreatorGSI1SK(agentID, id string) string { return agentID + "#" + id }
 
 // Task claims + agent thread follows are both thread-scoped: one partition
 // per (parent, thread root), TTL'd rows inside.

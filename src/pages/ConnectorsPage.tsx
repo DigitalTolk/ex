@@ -15,6 +15,7 @@ import {
   useVerifyConnector,
   type Connector,
 } from '@/hooks/useConnectors';
+import { showToast } from '@/lib/toast';
 
 // ConnectorsPage: external services agents can call. Installing = connecting
 // YOUR account (paste a bearer token, or sign in for password-kind
@@ -94,7 +95,11 @@ function ConnectorCard({ connector: c }: { connector: Connector }) {
                 variant="outline"
                 size="sm"
                 disabled={uninstall.isPending}
-                onClick={() => uninstall.mutate(c.slug)}
+                onClick={() =>
+                  uninstall.mutate(c.slug, {
+                    onError: () => showToast("Couldn't disconnect — try again."),
+                  })
+                }
               >
                 <Unplug className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
                 Disconnect

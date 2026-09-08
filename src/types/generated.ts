@@ -349,13 +349,6 @@ export interface Run {
    */
   round?: number /* int */;
   /**
-   * PendingAgentIDs sequences a multi-agent human invocation ("@gg & @qib
-   * discuss…"): only the first agent starts immediately; each terminal run
-   * kicks the next, so every later agent SEES the earlier replies instead
-   * of producing a parallel stateless answer.
-   */
-  pendingAgentIDs?: string[];
-  /**
    * CoInvoked lists the display names of ALL agents the invoking message
    * summoned, in mention order. >1 entry means parallel peers: the bundle
    * renders the roster so ordered task splits ("one do X, the other Y")
@@ -401,6 +394,13 @@ export interface Run {
   autoAllow?: string[];
   limits: AgentLimits;
   spend: RunSpend;
+  /**
+   * LastRunnerSeq is the highest runner-supplied event sequence whose spend
+   * has already been counted. A batch retried after a lost HTTP response
+   * re-reports the same sequences; without this high-water mark its turns and
+   * tokens would be added twice and could trip a limit early.
+   */
+  lastRunnerSeq?: number /* int64 */;
   runnerID?: string;
   leaseExpiresAt?: string /* RFC3339 */;
   /**
@@ -500,6 +500,15 @@ export interface Approval {
    */
   kind?: string;
   /**
+   * Purpose binds the approval to the exact action it authorizes, so a gate
+   * verifies a decision by EQUALITY instead of searching for a slug or an id
+   * inside the prose (where "core" matched "core-eu", and any approved
+   * approval at all satisfied the reply-mode gate). Set ONLY by the server
+   * when the server itself raises the gate — an agent-raised approval can
+   * never carry one, which is what makes it trustworthy.
+   */
+  purpose?: string;
+  /**
    * Options turns the gate into a multiple-choice question (the ask_user
    * tool): the invoker picks one instead of approve/deny, and the pick
    * lands in Choice. Empty = plain yes/no approval.
@@ -529,6 +538,11 @@ export interface Approval {
   decidedAt?: string /* RFC3339 */;
   createdAt: string /* RFC3339 */;
 }
+/**
+ * Approval purposes. Structured "<action>:<subject>" strings, minted only by
+ * the server-side gate that raises the approval.
+ */
+export const ApprovalPurposeWatchReply = "watch-reply";
 /**
  * Approval option bounds (ask_user).
  */
@@ -976,6 +990,15 @@ export interface CodingTask {
    */
   runnerID?: string;
   /**
+   * RunnerOwnerID is whose machine holds that pin. Runner registrations are
+   * stored per owner, so without it a liveness check can only look at the
+   * CLAIMER's runners — which reports every other owner's live pin as dead
+   * and lets the claim steal the workspace. Empty on rows written before the
+   * field existed; the requester's machine is the right fallback, since task
+   * runs execute for the requester.
+   */
+  runnerOwnerID?: string;
+  /**
    * Repos the task touches, each with its own branch/MR. The first entry
    * is the primary (naming, default cwd hints).
    */
@@ -1283,6 +1306,10 @@ export const ConnectorFileMaxBytes = 350 * 1024; // stay under the DynamoDB item
  * Connector bounds.
  */
 export const ConnectorMaxFiles = 64;
+/**
+ * Connector bounds.
+ */
+export const ConnectorFileNameMaxLen = 128;
 /**
  * Connector bounds.
  */

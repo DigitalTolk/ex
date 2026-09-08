@@ -14,6 +14,7 @@ import {
   useUpdateSkill,
   type Skill,
 } from '@/hooks/useAgents';
+import { showToast } from '@/lib/toast';
 
 // SkillsPage: workspace skill packs — named instruction sets any agent can
 // pull in mid-run ("use the release-notes skill…"). Anyone can create one;
@@ -184,7 +185,11 @@ function SkillCard({ skill }: { skill: Skill }) {
                 <button
                   type="button"
                   disabled={del.isPending}
-                  onClick={() => del.mutate(skill.id)}
+                  onClick={() =>
+                    del.mutate(skill.id, {
+                      onError: () => showToast("Couldn't delete that skill — try again."),
+                    })
+                  }
                   className="rounded-md border border-red-500/40 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-500/10 disabled:opacity-50 dark:text-red-400"
                 >
                   Delete “{skill.name}”?

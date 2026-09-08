@@ -40,12 +40,14 @@ type runItem struct {
 	model.Run
 }
 
+// runqItem is one pending claim-queue row. Deliberately minimal: the claim
+// long-poll reads this partition constantly and needs only the run id — the
+// agent and the creation time were written but never read, and both are on the
+// run row (the SK's ULID already orders by creation).
 type runqItem struct {
-	PK        string    `dynamodbav:"PK"`
-	SK        string    `dynamodbav:"SK"`
-	RunID     string    `dynamodbav:"runID"`
-	AgentID   string    `dynamodbav:"agentID"`
-	CreatedAt time.Time `dynamodbav:"createdAt"`
+	PK    string `dynamodbav:"PK"`
+	SK    string `dynamodbav:"SK"`
+	RunID string `dynamodbav:"runID"`
 }
 
 // CreateRun writes the run META row and its claim-queue row in one
@@ -66,11 +68,9 @@ func (s *RunStore) CreateRun(ctx context.Context, run *model.Run) error {
 	}
 	runAV := mustAttrs(attributevalue.MarshalMap(item))
 	qAV := mustAttrs(attributevalue.MarshalMap(runqItem{
-		PK:        runqPK(run.OwnerID),
-		SK:        runqSK(run.ID),
-		RunID:     run.ID,
-		AgentID:   run.AgentID,
-		CreatedAt: run.CreatedAt,
+		PK:    runqPK(run.OwnerID),
+		SK:    runqSK(run.ID),
+		RunID: run.ID,
 	}))
 	_, err := s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
@@ -96,19 +96,9 @@ func (s *RunStore) CreateRun(ctx context.Context, run *model.Run) error {
 
 // GetRun fetches one run by ID.
 func (s *RunStore) GetRun(ctx context.Context, runID string) (*model.Run, error) {
-	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(s.Table),
-		Key:       compositeKey(runPK(runID), metaSK()),
-	})
+	item, err := getItem[runItem](ctx, s.DB, runPK(runID), metaSK(), "run")
 	if err != nil {
-		return nil, fmt.Errorf("store: get run: %w", err)
-	}
-	if out.Item == nil {
-		return nil, ErrNotFound
-	}
-	var item runItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
-		return nil, fmt.Errorf("store: unmarshal run: %w", err)
+		return nil, err
 	}
 	return &item.Run, nil
 }
@@ -160,10 +150,7 @@ func (s *RunStore) UpdateRun(ctx context.Context, run *model.Run, expectState mo
 func (s *RunStore) RenewRunLease(ctx context.Context, runID, runnerID string, lease time.Time) error {
 	upd := expression.Set(expression.Name("leaseExpiresAt"), expression.Value(lease)).
 		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC()))
-	cond := expression.Name("runnerID").Equal(expression.Value(runnerID)).
-		And(expression.Name("state").NotEqual(expression.Value(string(model.RunStateCompleted)))).
-		And(expression.Name("state").NotEqual(expression.Value(string(model.RunStateFailed)))).
-		And(expression.Name("state").NotEqual(expression.Value(string(model.RunStateCanceled))))
+	cond := expression.Name("runnerID").Equal(expression.Value(runnerID)).And(runNotTerminal())
 	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).WithCondition(cond).Build())
 	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:                 aws.String(s.Table),
@@ -180,6 +167,102 @@ func (s *RunStore) RenewRunLease(ctx context.Context, runID, runnerID string, le
 		return fmt.Errorf("store: renew run lease: %w", err)
 	}
 	return nil
+}
+
+// runNotTerminal is the shared "this run is still live" condition used by
+// every surgical (partial-update) writer, so they can never resurrect a run
+// that finished between the caller's read and its write.
+func runNotTerminal() expression.ConditionBuilder {
+	return expression.Name("state").NotEqual(expression.Value(string(model.RunStateCompleted))).
+		And(expression.Name("state").NotEqual(expression.Value(string(model.RunStateFailed)))).
+		And(expression.Name("state").NotEqual(expression.Value(string(model.RunStateCanceled))))
+}
+
+// RunSpendDelta is one runner batch's contribution to a run's ledger, plus the
+// liveness facts the batch proves.
+type RunSpendDelta struct {
+	Turns        int
+	InputTokens  int64
+	OutputTokens int64
+	// LastRunnerSeq is the highest runner sequence counted so far. Persisted so
+	// a batch retried after a lost HTTP response contributes nothing twice.
+	LastRunnerSeq int64
+	// State, when set, moves the run (acknowledged → running on the first
+	// state event).
+	State model.RunState
+	// Deadline, when non-zero, is the extended rolling deadline (its GSI2 sort
+	// key moves with it so the sweep sees the extension).
+	Deadline time.Time
+	// Lease, when non-zero, renews the runner lease.
+	Lease time.Time
+}
+
+// AddRunSpend applies a batch's spend with ATOMIC ADDs rather than the
+// whole-row rewrite UpdateRun performs, and returns the run as it stands after
+// the write.
+//
+// UpdateRun conditions only on state, so two writers that observe the same
+// state — an event batch and a concurrent post-count bump — both pass and the
+// last one wins, silently reverting the other's counter (a reverted
+// Spend.Posts makes CompleteRun re-post the final answer as a duplicate).
+// ADD is applied by DynamoDB to the committed value, so no writer can lose
+// another's increment, and the caller enforces limits against the returned
+// (committed) totals instead of its own arithmetic.
+func (s *RunStore) AddRunSpend(ctx context.Context, runID, runnerID string, d RunSpendDelta) (*model.Run, error) {
+	upd := expression.
+		Add(expression.Name("spend.turns"), expression.Value(d.Turns)).
+		Add(expression.Name("spend.inputTokens"), expression.Value(d.InputTokens)).
+		Add(expression.Name("spend.outputTokens"), expression.Value(d.OutputTokens)).
+		Set(expression.Name("lastRunnerSeq"), expression.Value(d.LastRunnerSeq)).
+		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC()))
+	if d.State != "" {
+		upd = upd.Set(expression.Name("state"), expression.Value(string(d.State)))
+	}
+	if !d.Deadline.IsZero() {
+		upd = upd.Set(expression.Name("deadline"), expression.Value(d.Deadline)).
+			Set(expression.Name("GSI2SK"), expression.Value(activeRunGSI2SK(d.Deadline, runID)))
+	}
+	if !d.Lease.IsZero() {
+		upd = upd.Set(expression.Name("leaseExpiresAt"), expression.Value(d.Lease))
+	}
+	cond := expression.Name("runnerID").Equal(expression.Value(runnerID)).And(runNotTerminal())
+	return s.updateRunReturning(ctx, runID, upd, cond, "add run spend")
+}
+
+// AddRunPosts increments the run's post counter atomically and returns the
+// committed run — the counterpart to AddRunSpend for the post_message tool, so
+// a post bump and an in-flight event batch can no longer clobber each other.
+func (s *RunStore) AddRunPosts(ctx context.Context, runID string, delta int) (*model.Run, error) {
+	upd := expression.Add(expression.Name("spend.posts"), expression.Value(delta)).
+		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC()))
+	return s.updateRunReturning(ctx, runID, upd, runNotTerminal(), "add run posts")
+}
+
+// updateRunReturning runs one conditional partial update and returns the whole
+// row as committed. A failed condition means the run went terminal or moved to
+// another runner — ErrStaleRun, the signal every caller already understands.
+func (s *RunStore) updateRunReturning(ctx context.Context, runID string, upd expression.UpdateBuilder, cond expression.ConditionBuilder, what string) (*model.Run, error) {
+	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).WithCondition(cond).Build())
+	out, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(s.Table),
+		Key:                       compositeKey(runPK(runID), metaSK()),
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ReturnValues:              types.ReturnValueAllNew,
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return nil, ErrStaleRun
+		}
+		return nil, fmt.Errorf("store: %s: %w", what, err)
+	}
+	var item runItem
+	if err := attributevalue.UnmarshalMap(out.Attributes, &item); err != nil {
+		return nil, fmt.Errorf("store: unmarshal run: %w", err)
+	}
+	return &item.Run, nil
 }
 
 // -------------------------------------------------------------- claim queue
@@ -275,7 +358,7 @@ func (s *RunStore) DeleteQueueEntry(ctx context.Context, ownerID, runID string) 
 // before `now` — one bounded Query on the ACTIVE_RUNS partition, no scan.
 func (s *RunStore) ListActiveRunsPastDeadline(ctx context.Context, now time.Time, limit int) ([]*model.Run, error) {
 	keyCond := expression.Key("GSI2PK").Equal(expression.Value(activeRunsGSI2PK())).
-		And(expression.Key("GSI2SK").LessThan(expression.Value(now.UTC().Format(time.RFC3339Nano))))
+		And(expression.Key("GSI2SK").LessThan(expression.Value(sortableTime(now))))
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
@@ -306,22 +389,18 @@ func (s *RunStore) ListActiveRunsPastDeadline(ctx context.Context, now time.Time
 func (s *RunStore) ListActiveRuns(ctx context.Context) ([]*model.Run, error) {
 	keyCond := expression.Key("GSI2PK").Equal(expression.Value(activeRunsGSI2PK()))
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
-	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
+	items, err := queryAllOf[runItem](ctx, s.DB, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		IndexName:                 aws.String("GSI2"),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-	})
+	}, "active runs")
 	if err != nil {
-		return nil, fmt.Errorf("store: list active runs: %w", err)
+		return nil, err
 	}
 	runs := make([]*model.Run, 0, len(items))
-	for _, raw := range items {
-		var item runItem
-		if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
-			return nil, fmt.Errorf("store: unmarshal run: %w", err)
-		}
+	for _, item := range items {
 		r := item.Run
 		runs = append(runs, &r)
 	}
@@ -393,8 +472,12 @@ func (s *RunStore) AppendRunEvent(ctx context.Context, evt *model.RunEvent) erro
 
 // DeleteRunEvents removes every EVT# row for a run. Called after the events
 // have been archived to object storage on terminal state, so the hot table
-// holds only live runs' timelines. Deleting a handful-to-hundreds of rows once
-// per finished run is well within a background step's budget.
+// holds only live runs' timelines.
+//
+// Task-mode timelines are turn-uncapped, so this can be thousands of rows:
+// the query projects KEYS ONLY (no payloads read back) and the deletes go out
+// 25 at a time, draining UnprocessedItems — the same discipline the token
+// revocation sweep uses.
 func (s *RunStore) DeleteRunEvents(ctx context.Context, runID string) error {
 	keyCond := expression.Key("PK").Equal(expression.Value(runPK(runID))).
 		And(expression.Key("SK").BeginsWith("EVT#"))
@@ -404,20 +487,44 @@ func (s *RunStore) DeleteRunEvents(ctx context.Context, runID string) error {
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+		ProjectionExpression:      aws.String("PK, SK"),
 	})
 	if err != nil {
 		return fmt.Errorf("store: list run events for delete: %w", err)
 	}
-	for _, raw := range items {
-		var item runEventItem
-		if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
-			continue // unreadable row — skip; nothing to key a delete on
+	return s.batchDeleteKeys(ctx, items, "delete run events")
+}
+
+// batchDeleteKeys deletes the PK/SK pairs of already-fetched rows in batches of
+// 25, retrying UnprocessedItems: under throttling DynamoDB returns deletes it
+// silently did NOT apply, and a dropped delete here would leave orphan rows
+// behind an archived timeline.
+func (s *RunStore) batchDeleteKeys(ctx context.Context, items []map[string]types.AttributeValue, what string) error {
+	for i := 0; i < len(items); i += 25 {
+		end := min(i+25, len(items))
+		batch := make([]types.WriteRequest, 0, end-i)
+		for _, item := range items[i:end] {
+			batch = append(batch, types.WriteRequest{
+				DeleteRequest: &types.DeleteRequest{
+					Key: map[string]types.AttributeValue{"PK": item["PK"], "SK": item["SK"]},
+				},
+			})
 		}
-		if _, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-			TableName: aws.String(s.Table),
-			Key:       compositeKey(runPK(runID), runEvtSK(item.Seq)),
-		}); err != nil {
-			return fmt.Errorf("store: delete run event: %w", err)
+		input := &dynamodb.BatchWriteItemInput{
+			RequestItems: map[string][]types.WriteRequest{s.Table: batch},
+		}
+		for attempt := 0; attempt < 3; attempt++ {
+			out, err := s.Client.BatchWriteItem(ctx, input)
+			if err != nil {
+				return fmt.Errorf("store: %s: %w", what, err)
+			}
+			if len(out.UnprocessedItems[s.Table]) == 0 {
+				break
+			}
+			if attempt == 2 {
+				return fmt.Errorf("store: %s: %d unprocessed after retries", what, len(out.UnprocessedItems[s.Table]))
+			}
+			input.RequestItems = out.UnprocessedItems
 		}
 	}
 	return nil
@@ -429,21 +536,17 @@ func (s *RunStore) ListRunEvents(ctx context.Context, runID string) ([]*model.Ru
 	keyCond := expression.Key("PK").Equal(expression.Value(runPK(runID))).
 		And(expression.Key("SK").BeginsWith("EVT#"))
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
-	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
+	items, err := queryAllOf[runEventItem](ctx, s.DB, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-	})
+	}, "run events")
 	if err != nil {
-		return nil, fmt.Errorf("store: list run events: %w", err)
+		return nil, err
 	}
 	out := make([]*model.RunEvent, 0, len(items))
-	for _, raw := range items {
-		var item runEventItem
-		if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
-			return nil, fmt.Errorf("store: unmarshal run event: %w", err)
-		}
+	for _, item := range items {
 		e := item.RunEvent
 		e.RunID = runID
 		out = append(out, &e)
@@ -478,19 +581,9 @@ func (s *RunStore) PutDigest(ctx context.Context, d *model.RunDigest) error {
 
 // GetDigest fetches a run's digest, ErrNotFound when none was written.
 func (s *RunStore) GetDigest(ctx context.Context, runID string) (*model.RunDigest, error) {
-	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(s.Table),
-		Key:       compositeKey(runPK(runID), runDigestSK()),
-	})
+	item, err := getItem[runDigestItem](ctx, s.DB, runPK(runID), runDigestSK(), "run digest")
 	if err != nil {
-		return nil, fmt.Errorf("store: get run digest: %w", err)
-	}
-	if out.Item == nil {
-		return nil, ErrNotFound
-	}
-	var item runDigestItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
-		return nil, fmt.Errorf("store: unmarshal run digest: %w", err)
+		return nil, err
 	}
 	d := item.RunDigest
 	d.RunID = runID

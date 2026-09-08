@@ -59,8 +59,14 @@ export function useInstallConnector() {
         });
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
-          const p = err.payload as { error?: string; accessCode?: string } | undefined;
-          if (p?.error === 'two_factor_required') throw new TwoFactorError(p.accessCode ?? '');
+          // The 2FA challenge uses the standard error envelope
+          // ({error:{code}}); the bare-string form is the pre-unification
+          // shape, kept so a cached SPA build still recognises it.
+          const p = err.payload as
+            | { error?: string | { code?: string }; accessCode?: string }
+            | undefined;
+          const code = typeof p?.error === 'string' ? p.error : p?.error?.code;
+          if (code === 'two_factor_required') throw new TwoFactorError(p?.accessCode ?? '');
         }
         throw err;
       }

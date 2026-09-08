@@ -76,6 +76,54 @@ func (f *fakeRunStore) UpdateRun(_ context.Context, run *model.Run, expect model
 	return nil
 }
 
+// AddRunSpend mirrors the store's ATOMIC adds: it mutates the stored row in
+// place (never rewriting it from a caller snapshot), so a concurrent post bump
+// survives, and returns the row as committed.
+func (f *fakeRunStore) AddRunSpend(_ context.Context, runID, runnerID string, d store.RunSpendDelta) (*model.Run, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cur, ok := f.runs[runID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if cur.State.Terminal() || cur.RunnerID != runnerID {
+		return nil, store.ErrStaleRun
+	}
+	cur.Spend.Turns += d.Turns
+	cur.Spend.InputTokens += d.InputTokens
+	cur.Spend.OutputTokens += d.OutputTokens
+	cur.LastRunnerSeq = d.LastRunnerSeq
+	if d.State != "" {
+		cur.State = d.State
+	}
+	if !d.Deadline.IsZero() {
+		cur.Deadline = d.Deadline
+	}
+	if !d.Lease.IsZero() {
+		l := d.Lease
+		cur.LeaseExpiresAt = &l
+	}
+	cur.UpdatedAt = time.Now()
+	cp := *cur
+	return &cp, nil
+}
+
+func (f *fakeRunStore) AddRunPosts(_ context.Context, runID string, delta int) (*model.Run, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cur, ok := f.runs[runID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if cur.State.Terminal() {
+		return nil, store.ErrStaleRun
+	}
+	cur.Spend.Posts += delta
+	cur.UpdatedAt = time.Now()
+	cp := *cur
+	return &cp, nil
+}
+
 func (f *fakeRunStore) RenewRunLease(_ context.Context, runID, runnerID string, lease time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -314,6 +362,9 @@ type fakeAgentDir struct {
 	subs      map[string]*model.AgentSubscription // by ID
 	claims    map[string]*model.TaskClaim         // parentID#threadRoot#label
 	follows   map[string]*model.AgentThreadFollow // parentID#threadRoot#agentID#invokerID
+	// failListRunners makes the live-runner lookup fail, which the workspace
+	// pin treats as "assume live" (an outage must not steal a checkout).
+	failListRunners error
 }
 
 func newFakeAgentDir() *fakeAgentDir {
@@ -413,6 +464,9 @@ func (f *fakeAgentDir) PutRunner(_ context.Context, reg *model.RunnerRegistratio
 func (f *fakeAgentDir) ListRunners(_ context.Context, ownerID string) ([]*model.RunnerRegistration, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failListRunners != nil {
+		return nil, f.failListRunners
+	}
 	var out []*model.RunnerRegistration
 	for _, r := range f.runners[ownerID] {
 		cp := *r
@@ -441,6 +495,12 @@ func (f *fakeAgentDir) GetSkill(_ context.Context, id string) (*model.Skill, err
 	}
 	cp := *sk
 	return &cp, nil
+}
+
+// ListSkillIndex mirrors the store's projected listing; the fake keeps whole
+// rows, so it simply reuses ListSkills.
+func (f *fakeAgentDir) ListSkillIndex(ctx context.Context) ([]*model.Skill, error) {
+	return f.ListSkills(ctx)
 }
 
 func (f *fakeAgentDir) ListSkills(_ context.Context) ([]*model.Skill, error) {
@@ -502,6 +562,22 @@ func (f *fakeAgentDir) ListSubscriptionsByParent(_ context.Context, parentID str
 		if sub.ParentID == parentID {
 			cp := *sub
 			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+// ListSubscriptionsByCreator mirrors the store's creator index; the fake
+// filters its own rows.
+func (f *fakeAgentDir) ListSubscriptionsByCreator(ctx context.Context, creatorID, agentID string) ([]*model.AgentSubscription, error) {
+	all, err := f.ListAllSubscriptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.AgentSubscription, 0, len(all))
+	for _, sub := range all {
+		if sub.CreatorID == creatorID && sub.AgentID == agentID {
+			out = append(out, sub)
 		}
 	}
 	return out, nil
@@ -596,6 +672,7 @@ type fakeOrchMessages struct {
 	reactions []string
 	// thread backs ListThreadMessages/List for bundle-rendering tests.
 	thread []*model.Message
+	checkAccessErr error
 }
 
 func (f *fakeOrchMessages) SendAsAgentRun(_ context.Context, _, _, parentID, parentType, body, _, _ string) (*model.Message, error) {
@@ -611,6 +688,24 @@ func (f *fakeOrchMessages) SetMachineReaction(_ context.Context, _, _, _, _, sta
 	defer f.mu.Unlock()
 	f.reactions = append(f.reactions, state)
 	return nil
+}
+
+// CheckAccess is the membership rule behind run reads; the fakes allow
+// everything unless a test flips checkAccessErr.
+func (f *fakeOrchMessages) CheckAccess(context.Context, string, string, string) error {
+	return f.checkAccessErr
+}
+
+// ThreadWindowMessages mirrors the bounded window read.
+func (f *fakeOrchMessages) ThreadWindowMessages(ctx context.Context, userID, parentID, parentType, threadRootID string, limit int) ([]*model.Message, error) {
+	all, err := f.ListThreadMessages(ctx, userID, parentID, parentType, threadRootID)
+	if err != nil || limit <= 0 {
+		return nil, err
+	}
+	if len(all) > limit {
+		all = all[len(all)-limit:]
+	}
+	return all, nil
 }
 
 func (f *fakeOrchMessages) ListThreadMessages(_ context.Context, _, _, _, _ string) ([]*model.Message, error) {
@@ -757,7 +852,7 @@ func (fx *orchFixture) startRun(t *testing.T) *model.Run {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	run, err := fx.orch.StartRun(context.Background(), agent, invoker, msg, ParentChannel, resolved, 0, nil)
+	run, err := fx.orch.startRun(context.Background(), invocation{agent: agent, invoker: invoker, msg: msg, parentType: ParentChannel}, resolved)
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
@@ -791,7 +886,7 @@ func TestOrchestrator_TurnCapAborts(t *testing.T) {
 	for i := 0; i <= maxTurns; i++ { // one past the cap
 		batch = append(batch, RunEventInput{Seq: int64(i + 1), Type: "turn"})
 	}
-	abort, reason, err := fx.orch.ReportEvents(context.Background(), "r1", run.ID, batch)
+	abort, reason, err := fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID, batch)
 	if err != nil {
 		t.Fatalf("report: %v", err)
 	}
@@ -815,7 +910,7 @@ func TestOrchestrator_TokenBudgetAborts(t *testing.T) {
 	run := fx.startRun(t)
 	fx.claim(t)
 
-	abort, reason, err := fx.orch.ReportEvents(context.Background(), "r1", run.ID, []RunEventInput{
+	abort, reason, err := fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID, []RunEventInput{
 		{Seq: 1, Type: "usage", Payload: map[string]any{
 			"inputTokens": float64(run.Limits.MaxTokens), "outputTokens": float64(1),
 		}},
@@ -839,7 +934,7 @@ func TestOrchestrator_UsageReportsClamped(t *testing.T) {
 
 	// A single absurd report is clamped, not trusted — but even the clamped
 	// figure blows the budget, so the run still converges to failed.
-	abort, reason, _ := fx.orch.ReportEvents(context.Background(), "r1", run.ID, []RunEventInput{
+	abort, reason, _ := fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID, []RunEventInput{
 		{Seq: 1, Type: "usage", Payload: map[string]any{"inputTokens": float64(1 << 60)}},
 	})
 	if !abort || reason != "token_budget" {
@@ -858,7 +953,7 @@ func TestOrchestrator_DeadlineAborts(t *testing.T) {
 
 	// Direct runs carry the (long) task cap — advance past that.
 	*fx.now = fx.now.Add(run.Limits.WallClockFor(run.Mode) + 10*time.Second)
-	abort, reason, err := fx.orch.ReportEvents(context.Background(), "r1", run.ID, []RunEventInput{
+	abort, reason, err := fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID, []RunEventInput{
 		{Seq: 1, Type: "turn"},
 	})
 	if err != nil {
@@ -930,7 +1025,7 @@ func TestOrchestrator_WrongRunnerRejected(t *testing.T) {
 	run := fx.startRun(t)
 	fx.claim(t)
 
-	abort, reason, err := fx.orch.ReportEvents(context.Background(), "r-evil", run.ID, []RunEventInput{
+	abort, reason, err := fx.orch.ReportEvents(context.Background(), "u-alice", "r-evil", run.ID, []RunEventInput{
 		{Seq: 1, Type: "turn"},
 	})
 	if !abort || reason != "wrong_runner" || err == nil {
@@ -946,14 +1041,14 @@ func TestOrchestrator_TerminalRunRejectsEverything(t *testing.T) {
 	fx := newOrchFixture(t)
 	run := fx.startRun(t)
 	fx.claim(t)
-	if err := fx.orch.CompleteRun(context.Background(), "r1", run.ID, "done!", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", run.ID, "done!", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
-	abort, _, err := fx.orch.ReportEvents(context.Background(), "r1", run.ID, []RunEventInput{{Seq: 9, Type: "turn"}})
+	abort, _, err := fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID, []RunEventInput{{Seq: 9, Type: "turn"}})
 	if !abort || err == nil {
 		t.Fatal("terminal run accepted events")
 	}
-	if err := fx.orch.CompleteRun(context.Background(), "r1", run.ID, "again", nil); err == nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", run.ID, "again", nil); err == nil {
 		t.Fatal("double complete accepted")
 	}
 	if _, err := fx.orch.GetLiveRun(context.Background(), run.ID); err == nil {
@@ -966,7 +1061,7 @@ func TestOrchestrator_CompletePostsFinalTextWhenAgentNeverPosted(t *testing.T) {
 	run := fx.startRun(t)
 	fx.claim(t)
 
-	if err := fx.orch.CompleteRun(context.Background(), "r1", run.ID, "the summary", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", run.ID, "the summary", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	if fx.msgs.lastPost() != "the summary" {
@@ -986,10 +1081,10 @@ func TestOrchestrator_EventAppendIdempotent(t *testing.T) {
 	fx.claim(t)
 
 	batch := []RunEventInput{{Seq: 1, Type: "tool", Payload: map[string]any{"name": "post_message"}}}
-	if _, _, err := fx.orch.ReportEvents(context.Background(), "r1", run.ID, batch); err != nil {
+	if _, _, err := fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID, batch); err != nil {
 		t.Fatalf("report 1: %v", err)
 	}
-	if _, _, err := fx.orch.ReportEvents(context.Background(), "r1", run.ID, batch); err != nil {
+	if _, _, err := fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID, batch); err != nil {
 		t.Fatalf("report 2 (retry): %v", err)
 	}
 	evts, _ := fx.runs.ListRunEvents(context.Background(), run.ID)
@@ -1053,12 +1148,12 @@ func TestOrchestrator_EventsTierToArchiveOnComplete(t *testing.T) {
 
 	run := fx.startRun(t)
 	fx.claim(t)
-	if _, _, err := fx.orch.ReportEvents(context.Background(), "r1", run.ID,
+	if _, _, err := fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID,
 		[]RunEventInput{{Seq: 1, Type: "tool", Payload: map[string]any{"name": "post_message"}}}); err != nil {
 		t.Fatalf("report: %v", err)
 	}
 
-	if err := fx.orch.CompleteRun(context.Background(), "r1", run.ID, "done", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", run.ID, "done", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 
@@ -1071,7 +1166,7 @@ func TestOrchestrator_EventsTierToArchiveOnComplete(t *testing.T) {
 		t.Fatalf("archive empty after terminal")
 	}
 	// ...and the drawer read transparently comes from the archive.
-	_, evts, err := fx.orch.Timeline(context.Background(), run.ID)
+	_, evts, _, err := fx.orch.Timeline(context.Background(), "u-alice", run.ID)
 	if err != nil {
 		t.Fatalf("timeline: %v", err)
 	}
@@ -1095,18 +1190,18 @@ func TestOrchestrator_ArchiveFailureKeepsHotEvents(t *testing.T) {
 
 	run := fx.startRun(t)
 	fx.claim(t)
-	if _, _, err := fx.orch.ReportEvents(context.Background(), "r1", run.ID,
+	if _, _, err := fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID,
 		[]RunEventInput{{Seq: 1, Type: "tool"}}); err != nil {
 		t.Fatalf("report: %v", err)
 	}
-	if err := fx.orch.CompleteRun(context.Background(), "r1", run.ID, "done", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", run.ID, "done", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	// Archive write failed → events MUST remain in DynamoDB (no data loss).
 	if hot, _ := fx.runs.ListRunEvents(context.Background(), run.ID); len(hot) == 0 {
 		t.Fatalf("hot events pruned despite archive failure — timeline lost")
 	}
-	if _, evts, _ := fx.orch.Timeline(context.Background(), run.ID); len(evts) == 0 {
+	if _, evts, _, _ := fx.orch.Timeline(context.Background(), "u-alice", run.ID); len(evts) == 0 {
 		t.Fatalf("timeline empty after failed archive")
 	}
 }
@@ -1285,7 +1380,7 @@ func TestOrchestrator_PostCapTracked(t *testing.T) {
 
 func (fx *orchFixture) completeActive(t *testing.T, runID string) {
 	t.Helper()
-	if err := fx.orch.CompleteRun(context.Background(), "r1", runID, "done", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", runID, "done", nil); err != nil {
 		t.Fatalf("complete %s: %v", runID, err)
 	}
 }
@@ -1309,9 +1404,6 @@ func TestOrchestrator_MultiAgentMentionsRunInParallel(t *testing.T) {
 	for _, id := range ids {
 		run, _ := fx.runs.GetRun(context.Background(), id)
 		agents[run.AgentID] = true
-		if len(run.PendingAgentIDs) != 0 {
-			t.Fatalf("parallel runs must carry no pending roster: %+v", run.PendingAgentIDs)
-		}
 		if run.Round != 0 {
 			t.Fatalf("human invocation is round 0, got %d", run.Round)
 		}
@@ -1489,7 +1581,7 @@ func TestOrchestrator_FailRunPostsNotice(t *testing.T) {
 	fx := newOrchFixture(t)
 	run := fx.startRun(t)
 
-	if err := fx.orch.FailRun(context.Background(), "r1", run.ID, "runner_error: Error: ENOENT: open '/tmp/x/mcp.json'"); err != nil {
+	if err := fx.orch.FailRun(context.Background(), "u-alice", "r1", run.ID, "runner_error: Error: ENOENT: open '/tmp/x/mcp.json'"); err != nil {
 		t.Fatalf("fail: %v", err)
 	}
 
@@ -1549,7 +1641,7 @@ func TestOrchestrator_FailRunGatedWatcherStaysPrivate(t *testing.T) {
 	}
 	before := fx.msgs.lastPost()
 
-	if err := fx.orch.FailRun(context.Background(), "r1", run.ID, "runner_lost"); err != nil {
+	if err := fx.orch.FailRun(context.Background(), "u-alice", "r1", run.ID, "runner_lost"); err != nil {
 		t.Fatalf("fail: %v", err)
 	}
 

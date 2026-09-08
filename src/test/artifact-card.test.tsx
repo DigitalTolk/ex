@@ -118,6 +118,14 @@ describe('ArtifactCard', () => {
     expect(clickedAnchors[0].download).toBe('Fix Plan v2.patch');
   });
 
+  it('reports a failed download instead of dropping an unhandled rejection', async () => {
+    mockApiFetch.mockRejectedValue(new Error('offline'));
+    renderCard();
+    fireEvent.click(screen.getByLabelText('Download Release notes'));
+    expect(await screen.findByTestId('artifact-download-failed')).toBeInTheDocument();
+    expect(clickedAnchors).toHaveLength(0);
+  });
+
   it('maps artifact kinds to download extensions with sensible fallbacks', async () => {
     const cases: Array<[kind: string, ext: string]> = [
       ['md', 'md'],

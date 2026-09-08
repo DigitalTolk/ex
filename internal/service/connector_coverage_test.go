@@ -150,8 +150,10 @@ func TestConnCovIngestManifestAndCatalogEdges(t *testing.T) {
 			catalog = f.Content
 		}
 	}
+	// Only `id` is required (the provider's rule), so an endpoint with no
+	// method still gets a row — with an empty method/path column.
 	lines := strings.Split(strings.TrimSpace(catalog), "\n")
-	if len(lines) != 1 || !strings.HasPrefix(lines[0], "beta.list\t") {
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "beta.broken\t") || !strings.HasPrefix(lines[1], "beta.list\t") {
 		t.Fatalf("catalog = %q", catalog)
 	}
 }
@@ -340,7 +342,7 @@ func TestConnCovVerifyInstall(t *testing.T) {
 	}
 	// Still down at verify time → kept unverified, legible error.
 	inst, err = svc.VerifyInstall(ctx, "u", "flaky")
-	if !errors.Is(err, ErrLoginFailed) || inst == nil || inst.Status != model.ConnectorStatusUnverified {
+	if !errors.Is(err, ErrServiceUnreachable) || inst == nil || inst.Status != model.ConnectorStatusUnverified {
 		t.Fatalf("unreachable verify: inst=%+v err=%v", inst, err)
 	}
 
@@ -546,7 +548,7 @@ func TestConnCovForRunnerEdges(t *testing.T) {
 	es := newConnCovErrStore()
 	svc := NewConnectorService(es)
 	es.listInstallsErr = errors.New("connCov: list installs failed")
-	if _, err := svc.ForRunner(ctx, "u"); !errors.Is(err, es.listInstallsErr) {
+	if _, err := svc.ForRunner(ctx, "u", []string{"ghost"}); !errors.Is(err, es.listInstallsErr) {
 		t.Fatalf("want list error, got %v", err)
 	}
 	es.listInstallsErr = nil
@@ -555,7 +557,7 @@ func TestConnCovForRunnerEdges(t *testing.T) {
 	if err := es.PutInstall(ctx, &model.ConnectorInstall{UserID: "u", ConnectorSlug: "ghost", Token: "t"}); err != nil {
 		t.Fatalf("put install: %v", err)
 	}
-	rows, err := svc.ForRunner(ctx, "u")
+	rows, err := svc.ForRunner(ctx, "u", []string{"ghost"})
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("dangling: rows=%+v err=%v", rows, err)
 	}
@@ -573,13 +575,13 @@ func TestConnCovForRunnerEdges(t *testing.T) {
 		t.Fatalf("put install: %v", err)
 	}
 	es.getFilesErr = errors.New("connCov: files failed")
-	if _, err := svc.ForRunner(ctx, "u2"); !errors.Is(err, es.getFilesErr) {
+	if _, err := svc.ForRunner(ctx, "u2", []string{"own-usage"}); !errors.Is(err, es.getFilesErr) {
 		t.Fatalf("want files error, got %v", err)
 	}
 	es.getFilesErr = nil
 
 	// Bundle ships its own _USAGE.md → not overridden; identity is injected.
-	rows, err = svc.ForRunner(ctx, "u2")
+	rows, err = svc.ForRunner(ctx, "u2", []string{"own-usage"})
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("rows=%+v err=%v", rows, err)
 	}
@@ -617,8 +619,8 @@ func TestConnCovPasswordGrantEdges(t *testing.T) {
 	}
 
 	seedConnector(t, svc, "pw-unreach", model.ConnectorAuthPassword, "http://127.0.0.1:1/x", "")
-	if _, err := svc.Install(ctx, "u", "pw-unreach", InstallInput{Email: "a@x.com", Password: "p"}); !errors.Is(err, ErrLoginFailed) || !strings.Contains(err.Error(), "unreachable") {
-		t.Fatalf("unreachable auth: want ErrLoginFailed unreachable, got %v", err)
+	if _, err := svc.Install(ctx, "u", "pw-unreach", InstallInput{Email: "a@x.com", Password: "p"}); !errors.Is(err, ErrServiceUnreachable) || !strings.Contains(err.Error(), "unreachable") {
+		t.Fatalf("unreachable auth: want ErrServiceUnreachable, got %v", err)
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -627,7 +629,7 @@ func TestConnCovPasswordGrantEdges(t *testing.T) {
 	}))
 	defer srv.Close()
 	seedConnector(t, svc, "pw-500", model.ConnectorAuthPassword, srv.URL, "")
-	if _, err := svc.Install(ctx, "u", "pw-500", InstallInput{Email: "a@x.com", Password: "p"}); !errors.Is(err, ErrLoginFailed) || !strings.Contains(err.Error(), "HTTP 500") {
+	if _, err := svc.Install(ctx, "u", "pw-500", InstallInput{Email: "a@x.com", Password: "p"}); !errors.Is(err, ErrServiceUnreachable) || !strings.Contains(err.Error(), "HTTP 500") {
 		t.Fatalf("500 with no message: got %v", err)
 	}
 }

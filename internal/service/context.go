@@ -57,8 +57,26 @@ func (s *ContextService) List(ctx context.Context, accessorID, parentID, parentT
 // permissions gate the write. For humans the two are the same; for agent runs
 // the accessor is the INVOKER (plan-v2 §3 — an agent can never write where
 // the invoker can't).
-func (s *ContextService) Write(ctx context.Context, authorID, invokerID, accessorID, parentID, parentType, body string, pinned bool) (*model.ContextItem, error) {
-	body = strings.TrimSpace(body)
+// ContextWrite is one shared-context append.
+//
+// The three IDs are genuinely different and were positional: AuthorID is who
+// wrote it (an agent, for an agent-authored item), InvokerID attributes that
+// agent's invocation, and AccessorID is whose membership gates the write. Six
+// strings and a bool in a row made a swap invisible at a call site.
+type ContextWrite struct {
+	AuthorID   string
+	InvokerID  string
+	AccessorID string
+	ParentID   string
+	ParentType string
+	Body       string
+	Pinned     bool
+}
+
+func (s *ContextService) Write(ctx context.Context, in ContextWrite) (*model.ContextItem, error) {
+	authorID, invokerID, accessorID := in.AuthorID, in.InvokerID, in.AccessorID
+	parentID, parentType, pinned := in.ParentID, in.ParentType, in.Pinned
+	body := strings.TrimSpace(in.Body)
 	if body == "" {
 		return nil, fmt.Errorf("context: body required: %w", ErrValidation)
 	}

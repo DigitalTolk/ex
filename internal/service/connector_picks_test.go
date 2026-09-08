@@ -31,7 +31,7 @@ func startPickRun(t *testing.T, fx *orchFixture, msg *model.Message) *model.Run 
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	run, err := fx.orch.StartRun(context.Background(), agent, invoker, msg, ParentChannel, resolved, 0, nil)
+	run, err := fx.orch.startRun(context.Background(), invocation{agent: agent, invoker: invoker, msg: msg, parentType: ParentChannel}, resolved)
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}

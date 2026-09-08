@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -40,30 +41,31 @@ func (s *AgentStore) PutAgentMemory(ctx context.Context, m *model.AgentMemory) e
 
 // GetAgentMemory fetches the (agent, invoker) core memory.
 func (s *AgentStore) GetAgentMemory(ctx context.Context, invokerID, agentID string) (*model.AgentMemory, error) {
-	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(s.Table),
-		Key:       compositeKey(userPK(invokerID), agentMemSK(agentID)),
-	})
+	item, err := getItem[agentMemItem](ctx, s.DB, userPK(invokerID), agentMemSK(agentID), "agent memory")
 	if err != nil {
-		return nil, fmt.Errorf("store: get agent memory: %w", err)
-	}
-	if out.Item == nil {
-		return nil, ErrNotFound
-	}
-	var item agentMemItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
-		return nil, fmt.Errorf("store: unmarshal agent memory: %w", err)
+		return nil, err
 	}
 	return &item.AgentMemory, nil
 }
 
 // ---------------------------------------------------------- subscriptions
 
+// threadSubTTL reaps THREAD-SCOPED watchers: they can only ever fire for
+// messages in one thread, so once that conversation goes quiet the row is
+// dead weight — and it sits in ALL_AGENTSUBS, which the reconciler drains
+// whole on every tick. Same 30-day window the follow markers use, and only for
+// thread-scoped rows: a channel-wide watcher is a standing order the user
+// configured and must never expire on its own.
+const threadSubTTL = 30 * 24 * time.Hour
+
 type agentSubItem struct {
 	PK     string `dynamodbav:"PK"`
 	SK     string `dynamodbav:"SK"`
+	GSI1PK string `dynamodbav:"GSI1PK,omitempty"`
+	GSI1SK string `dynamodbav:"GSI1SK,omitempty"`
 	GSI2PK string `dynamodbav:"GSI2PK"`
 	GSI2SK string `dynamodbav:"GSI2SK"`
+	TTL    int64  `dynamodbav:"ttl,omitempty"`
 	model.AgentSubscription
 }
 
@@ -75,9 +77,18 @@ func (s *AgentStore) PutAgentSubscription(ctx context.Context, sub *model.AgentS
 	item := agentSubItem{
 		PK:                agentSubPK(sub.ParentID),
 		SK:                agentSubSK(sub.ID),
+		GSI1PK:            agentSubCreatorGSI1PK(sub.CreatorID),
+		GSI1SK:            agentSubCreatorGSI1SK(sub.AgentID, sub.ID),
 		GSI2PK:            allAgentSubsGSI2PK(),
 		GSI2SK:            agentSubSK(sub.ID),
 		AgentSubscription: *sub,
+	}
+	if sub.ThreadRootID != "" {
+		last := sub.CreatedAt
+		if sub.LastRunAt != nil && sub.LastRunAt.After(last) {
+			last = *sub.LastRunAt
+		}
+		item.TTL = last.Add(threadSubTTL).Unix()
 	}
 	av := mustAttrs(attributevalue.MarshalMap(item))
 	if _, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
@@ -119,6 +130,30 @@ func (s *AgentStore) ListAllSubscriptions(ctx context.Context) ([]*model.AgentSu
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: list all subscriptions: %w", err)
+	}
+	return unmarshalSubs(items)
+}
+
+// ListSubscriptionsByCreator returns one creator's subscriptions for one
+// agent — a bounded GSI1 query, not a drain of every subscription in the
+// workspace (which is what a user opening the agents page used to cost).
+//
+// Rows written before the creator index existed carry no GSI1 keys and are
+// invisible here; ListSubscriptionsFor handles that by falling back once and
+// rewriting what it finds, so the index fills in without an ops migration.
+func (s *AgentStore) ListSubscriptionsByCreator(ctx context.Context, creatorID, agentID string) ([]*model.AgentSubscription, error) {
+	keyCond := expression.Key("GSI1PK").Equal(expression.Value(agentSubCreatorGSI1PK(creatorID))).
+		And(expression.Key("GSI1SK").BeginsWith(agentID + "#"))
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
+	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(s.Table),
+		IndexName:                 aws.String("GSI1"),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: list subscriptions by creator: %w", err)
 	}
 	return unmarshalSubs(items)
 }

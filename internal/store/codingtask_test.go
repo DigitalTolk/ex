@@ -101,6 +101,81 @@ func TestTaskStore_TaskLifecycle(t *testing.T) {
 	if _, err := s.GetTaskByThread(ctx, "m-not-a-task"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("by non-task thread: want ErrNotFound, got %v", err)
 	}
+
+	// DeleteTask unwinds a task that never became real (a lost create race, a
+	// card that could not be posted).
+	if err := s.DeleteTask(ctx, "task-2"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := s.GetTask(ctx, "task-2"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("get after delete: want ErrNotFound, got %v", err)
+	}
+	// Deleting an absent task is a no-op, not an error.
+	if err := s.DeleteTask(ctx, "task-2"); err != nil {
+		t.Fatalf("delete absent: %v", err)
+	}
+}
+
+// A row written by the SINGLE-REPO model still reads correctly through every
+// path, and each read reports that the compatibility layer is still in use —
+// the signal that says when it becomes safe to delete.
+func TestTaskStore_LegacyRowsNormalizeOnEveryRead(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewTaskStore(db)
+
+	legacy := mkCodingTaskFixture("task-legacy", "m-root-legacy")
+	legacy.Repos = nil
+	legacy.ProjectKey, legacy.ProjectName = "", ""
+	legacy.LegacyProjectPath = "group/repo"
+	legacy.LegacyBranch, legacy.LegacyBaseBranch = "ex/task-legacy", "main"
+	legacy.LegacyTestURL, legacy.LegacyTestNotes = "http://localhost:3000", "seed first"
+	if err := s.CreateTask(ctx, legacy); err != nil {
+		t.Fatalf("create legacy: %v", err)
+	}
+
+	assertUpgraded := func(what string, got *model.CodingTask) {
+		t.Helper()
+		if len(got.Repos) != 1 || got.Repos[0].Path != "group/repo" || got.Repos[0].Branch != "ex/task-legacy" {
+			t.Fatalf("%s: repos not folded: %+v", what, got.Repos)
+		}
+		if got.ProjectName != "repo" || got.ProjectKey == "" {
+			t.Fatalf("%s: project not derived: key=%q name=%q", what, got.ProjectKey, got.ProjectName)
+		}
+		if got.TestPlan == nil || got.TestPlan.URL != "http://localhost:3000" {
+			t.Fatalf("%s: test plan not folded: %+v", what, got.TestPlan)
+		}
+		if got.LegacyProjectPath != "" || got.LegacyTestURL != "" {
+			t.Fatalf("%s: legacy fields not cleared: %+v", what, got)
+		}
+	}
+
+	byID, err := s.GetTask(ctx, "task-legacy")
+	if err != nil {
+		t.Fatalf("get legacy: %v", err)
+	}
+	assertUpgraded("GetTask", byID)
+
+	byThread, err := s.GetTaskByThread(ctx, "m-root-legacy")
+	if err != nil {
+		t.Fatalf("by thread: %v", err)
+	}
+	assertUpgraded("GetTaskByThread", byThread)
+
+	list, err := s.ListTasksByChannel(ctx, "ch-proj")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	found := false
+	for _, got := range list {
+		if got.ID == "task-legacy" {
+			assertUpgraded("ListTasksByChannel", got)
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("legacy task missing from the channel listing")
+	}
 }
 
 func TestTaskStore_Task_Validation(t *testing.T) {
@@ -211,6 +286,14 @@ func TestTaskStore_SDKErrorArms(t *testing.T) {
 			t.Fatalf("ListProjects: want errInjected, got %v", err)
 		}
 	})
+}
+
+func TestTaskStore_DeleteTask_DeleteItemError(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewTaskStore(withFault(db, func(f *faultClient) { f.failDeleteItem = true }))
+	if err := s.DeleteTask(context.Background(), "t-any"); !errors.Is(err, errInjected) {
+		t.Fatalf("DeleteTask: want errInjected, got %v", err)
+	}
 }
 
 func TestTaskStore_CorruptRows(t *testing.T) {

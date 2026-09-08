@@ -60,14 +60,14 @@ func TestContextCov_WriteStoreErrors(t *testing.T) {
 
 	t.Run("list fails", func(t *testing.T) {
 		st := &ctxCovStore{fakeCtxStore: newFakeCtxStore(), failList: true}
-		_, err := ctxCovService(st).Write(ctx, "u-a", "", "u-a", "ch-1", "channel", "body", false)
+		_, err := ctxCovService(st).Write(ctx, ContextWrite{AuthorID: "u-a", AccessorID: "u-a", ParentID: "ch-1", ParentType: "channel", Body: "body"})
 		if !errors.Is(err, errCtxCov) {
 			t.Fatalf("Write with list failure: want injected error, got %v", err)
 		}
 	})
 	t.Run("put fails", func(t *testing.T) {
 		st := &ctxCovStore{fakeCtxStore: newFakeCtxStore(), failPut: true}
-		_, err := ctxCovService(st).Write(ctx, "u-a", "", "u-a", "ch-1", "channel", "body", false)
+		_, err := ctxCovService(st).Write(ctx, ContextWrite{AuthorID: "u-a", AccessorID: "u-a", ParentID: "ch-1", ParentType: "channel", Body: "body"})
 		if !errors.Is(err, errCtxCov) {
 			t.Fatalf("Write with put failure: want injected error, got %v", err)
 		}
@@ -79,7 +79,7 @@ func TestContextCov_SetPinned(t *testing.T) {
 	st := &ctxCovStore{fakeCtxStore: newFakeCtxStore()}
 	svc := ctxCovService(st)
 
-	it, err := svc.Write(ctx, "u-a", "", "u-a", "ch-1", "channel", "pin me", false)
+	it, err := svc.Write(ctx, ContextWrite{AuthorID: "u-a", AccessorID: "u-a", ParentID: "ch-1", ParentType: "channel", Body: "pin me"})
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestContextCov_ListHappy(t *testing.T) {
 	ctx := context.Background()
 	st := &ctxCovStore{fakeCtxStore: newFakeCtxStore()}
 	svc := ctxCovService(st)
-	if _, err := svc.Write(ctx, "u-a", "", "u-a", "ch-1", "channel", "note", false); err != nil {
+	if _, err := svc.Write(ctx, ContextWrite{AuthorID: "u-a", AccessorID: "u-a", ParentID: "ch-1", ParentType: "channel", Body: "note"}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	items, err := svc.List(ctx, "u-a", "ch-1", "channel")

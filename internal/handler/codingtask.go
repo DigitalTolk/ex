@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -95,7 +94,7 @@ func (h *CodingTaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body createTaskBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
@@ -178,7 +177,7 @@ func (h *CodingTaskHandler) Report(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body reportTaskBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
@@ -215,7 +214,7 @@ func (h *CodingTaskHandler) TestPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body testPlanBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
@@ -249,11 +248,11 @@ func (h *CodingTaskHandler) RequestMR(w http.ResponseWriter, r *http.Request) {
 	}
 	// An empty body is fine (the first call carries no approval); malformed
 	// JSON is not.
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil && !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
-	status, t, err := h.tasks.RequestMR(r.Context(), run, strings.TrimSpace(body.ApprovalID))
+	status, t, gate, err := h.tasks.RequestMR(r.Context(), run, strings.TrimSpace(body.ApprovalID))
 	if err != nil {
 		writeTaskError(w, err)
 		return
@@ -269,7 +268,17 @@ func (h *CodingTaskHandler) RequestMR(w http.ResponseWriter, r *http.Request) {
 		out["message"] = "approved — push each changed repo's branch and open its merge request, then report mr_created with the MR URLs"
 	case service.MRStatusAsk:
 		out["summary"] = service.MRApprovalSummary(t)
-		out["message"] = "the requester has not signed off yet — raise the approval with the given summary and call again with its approvalID"
+		out["message"] = "the requester has not signed off yet — wait for the given approvalID to be decided and call again with it"
+		if gate != nil {
+			// The server already raised the card: the runner waits on THIS
+			// approval rather than composing one, so nothing the model writes
+			// can stand in for the requester's sign-off.
+			out["approvalID"] = gate.ID
+			out["summary"] = gate.Summary
+			out["deadline"] = gate.Deadline
+		} else {
+			out["message"] = "the requester has not signed off yet — raise the approval with the given summary and call again with its approvalID"
+		}
 	case service.MRStatusNotReady:
 		out["message"] = "not ready: publish a test plan and let the requester verify before asking for an MR"
 	default:
@@ -385,7 +394,7 @@ func (h *CodingTaskHandler) SetSteering(w http.ResponseWriter, r *http.Request) 
 	var body struct {
 		Steering string `json:"steering"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Steering == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.Steering == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "steering required (requester | anyone)")
 		return
 	}
@@ -405,7 +414,7 @@ func (h *CodingTaskHandler) Close(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		State string `json:"state"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.State == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.State == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "state required (done | abandoned)")
 		return
 	}

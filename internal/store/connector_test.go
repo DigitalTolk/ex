@@ -140,11 +140,21 @@ func TestConnectorStore_SDKErrorArms(t *testing.T) {
 		t.Fatalf("seed nofiles: %v", err)
 	}
 
-	t.Run("PutConnector meta PutItemError", func(t *testing.T) {
+	t.Run("PutConnector file PutItemError", func(t *testing.T) {
 		s := NewConnectorStore(withFault(db, func(f *faultClient) { f.failPutItem = true }))
 		err := s.PutConnector(ctx, mkConnectorFixture("svc-x", "a.yaml"), mkConnFiles("svc-x", "a.yaml"))
 		if !errors.Is(err, errInjected) {
 			t.Fatalf("PutConnector: want errInjected, got %v", err)
+		}
+	})
+	t.Run("PutConnector meta PutItemError", func(t *testing.T) {
+		// Files land, the MANIFEST row fails: the bundle is written before the
+		// row that names it, so the manifest never points at rows that are not
+		// there. The second PutItem is the meta row (one file precedes it).
+		s := NewConnectorStore(withFault(db, func(f *faultClient) { f.failPutItemFromCall = 2 }))
+		err := s.PutConnector(ctx, mkConnectorFixture("svc-meta", "a.yaml"), mkConnFiles("svc-meta", "a.yaml"))
+		if !errors.Is(err, errInjected) || !strings.Contains(err.Error(), "put connector:") {
+			t.Fatalf("meta put: want the manifest arm, got %v", err)
 		}
 	})
 	t.Run("PutConnector prune DeleteItemError", func(t *testing.T) {

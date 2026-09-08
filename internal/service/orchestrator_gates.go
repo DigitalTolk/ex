@@ -39,19 +39,33 @@ var (
 	ErrArtifactCap     = errors.New("orchestrator: per-run artifact cap reached")
 )
 
-// RequestApproval opens a pending approval and parks the run's state on ⛔.
-// The MCP server polls ApprovalStatus until a decision or the deadline.
-// options non-empty turns it into a multiple-choice question (ask_user): the
-// invoker picks one instead of approving/denying.
-func (o *Orchestrator) RequestApproval(ctx context.Context, run *model.Run, summary, risk string, options []string) (*model.Approval, error) {
-	return o.RequestApprovalKind(ctx, run, summary, risk, options, "")
+// ApprovalRequest describes one human-in-the-loop gate.
+//
+// Purpose is the field that makes a decision verifiable: a gate that later
+// checks "was THIS authorized?" compares purposes for equality instead of
+// searching the summary prose. It is settable only from server-side callers —
+// the agent-facing endpoint always leaves it empty, so a purpose on an
+// approval is proof the server raised that gate itself.
+type ApprovalRequest struct {
+	Summary string
+	Risk    string
+	// Options non-empty turns the gate into a multiple-choice question
+	// (ask_user): the invoker picks one instead of approving/denying.
+	Options []string
+	// Kind is the harness tool class (read / edit / shell / web) for
+	// permission-gateway approvals — the card uses it to offer "always allow
+	// <class> for this agent". Empty = a plain gate.
+	Kind    string
+	Purpose string
 }
 
-// RequestApprovalKind is RequestApproval with the harness tool class (read /
-// edit / shell / web) for permission-gateway approvals — the card uses it to
-// offer "always allow <class> for this agent". Empty kind = a plain gate.
-func (o *Orchestrator) RequestApprovalKind(ctx context.Context, run *model.Run, summary, risk string, options []string, kind string) (*model.Approval, error) {
-	summary = strings.TrimSpace(summary)
+// RequestApproval opens a pending approval and parks the run's state on ⛔.
+// The MCP server polls ApprovalStatus until a decision or the deadline.
+func (o *Orchestrator) RequestApproval(ctx context.Context, run *model.Run, req ApprovalRequest) (*model.Approval, error) {
+	summary := strings.TrimSpace(req.Summary)
+	// Risk is a short label the card renders ("low"/"high"/"tool"); it arrives
+	// from the agent and was never bounded.
+	risk, options, kind := clipText(strings.TrimSpace(req.Risk), 32), req.Options, req.Kind
 	if !model.ValidAutoAllow(kind) {
 		kind = ""
 	}
@@ -91,6 +105,7 @@ func (o *Orchestrator) RequestApprovalKind(ctx context.Context, run *model.Run, 
 		Summary:   summary,
 		Risk:      risk,
 		Kind:      kind,
+		Purpose:   req.Purpose,
 		Options:   options,
 		State:     model.ApprovalPending,
 		Deadline:  deadline,
@@ -100,7 +115,8 @@ func (o *Orchestrator) RequestApprovalKind(ctx context.Context, run *model.Run, 
 		return nil, err
 	}
 	o.appendEvent(ctx, run, now.UnixNano(), run.AgentID, "approval.requested", map[string]any{
-		"approvalID": a.ID, "summary": summary, "risk": risk, "kind": kind, "deadline": deadline, "options": options,
+		"approvalID": a.ID, "summary": summary, "risk": risk, "kind": kind,
+		"purpose": req.Purpose, "deadline": deadline, "options": options,
 	})
 	o.setState(ctx, run, StateEmojiBlocked)
 	// Published ONLY to the invoker's private inbox — an approval is a
@@ -178,7 +194,7 @@ func (o *Orchestrator) ClaimTask(ctx context.Context, run *model.Run, label stri
 		CreatedAt:    o.now(),
 	}
 	mine = true
-	if err := o.agentSvc.agents.PutTaskClaim(ctx, claim); err != nil {
+	if err := o.agentSvc.PutTaskClaim(ctx, claim); err != nil {
 		if !errors.Is(err, store.ErrClaimTaken) {
 			return false, nil, err
 		}
@@ -187,7 +203,7 @@ func (o *Orchestrator) ClaimTask(ctx context.Context, run *model.Run, label stri
 	if mine {
 		o.appendEvent(ctx, run, o.now().UnixNano(), run.AgentID, "task.claimed", map[string]any{"label": norm})
 	}
-	claims, err := o.agentSvc.agents.ListTaskClaims(ctx, run.ParentID, threadRoot)
+	claims, err := o.agentSvc.TaskClaims(ctx, run.ParentID, threadRoot)
 	if err != nil {
 		return mine, nil, nil // the claim verdict stands even if the listing hiccups
 	}
@@ -222,11 +238,22 @@ func (o *Orchestrator) ApprovalStatus(ctx context.Context, runID, approvalID str
 		if err := o.runs.SettleApproval(ctx, runID, approvalID, model.ApprovalExpired, "", "", "", now); err == nil {
 			a.State = model.ApprovalExpired
 			a.DecidedAt = &now
-			if run, err := o.runs.GetRun(ctx, runID); err == nil {
-				o.appendEvent(ctx, run, now.UnixNano(), run.AgentID, "approval.expired", map[string]any{"approvalID": a.ID})
-				o.setState(ctx, run, StateEmojiWorking) // unblock the display
-				o.publishApproval(ctx, run, a)
+			run, rerr := o.runs.GetRun(ctx, runID)
+			if rerr != nil {
+				// The settle stuck but the run is unreadable: the invoker's card
+				// would sit pending forever with nothing to clear it, so say so
+				// instead of returning quietly.
+				slog.Warn("approval expiry: run read failed; card not refreshed",
+					"runID", runID, "approvalID", approvalID, "error", rerr)
+				return a, nil
 			}
+			o.appendEvent(ctx, run, now.UnixNano(), run.AgentID, "approval.expired", map[string]any{"approvalID": a.ID})
+			// Only a LIVE run goes back to ⚙️: re-marking a finished run as
+			// working (which a late poll used to do) contradicts its ✅/❌.
+			if !run.State.Terminal() {
+				o.setState(ctx, run, StateEmojiWorking) // unblock the display
+			}
+			o.publishApproval(ctx, run, a)
 		} else if !errors.Is(err, store.ErrStaleApproval) {
 			return nil, err
 		} else if fresh, err := o.runs.GetApproval(ctx, runID, approvalID); err == nil {
@@ -236,11 +263,24 @@ func (o *Orchestrator) ApprovalStatus(ctx context.Context, runID, approvalID str
 	return a, nil
 }
 
-// DecideApproval records the INVOKER's verdict. Nobody else may decide —
-// the run acts with the invoker's permissions, so the risk is theirs. For a
-// multiple-choice gate (Options set), choice must name one of the options
-// and the settle records it.
-func (o *Orchestrator) DecideApproval(ctx context.Context, deciderID, runID, approvalID string, approve bool, choice, editedText string) (*model.Approval, error) {
+// Decision is one invoker's verdict on a gate.
+//
+// Text is mode-overloaded by design, and the naming used to hide it: on a
+// REPLY PROPOSAL it is the edited reply that gets posted; on every other gate
+// it is a note that rides the tool result back to the agent ("no — use the
+// seed DB instead"). Two strings and a bool as positional arguments made that
+// impossible to read at a call site.
+type Decision struct {
+	Approve bool
+	// Choice names one of the gate's Options (ask_user); ignored otherwise.
+	Choice string
+	Text   string
+}
+
+// DecideApproval records the INVOKER's verdict. Nobody else may decide — the
+// run acts with the invoker's permissions, so the risk is theirs.
+func (o *Orchestrator) DecideApproval(ctx context.Context, deciderID, runID, approvalID string, d Decision) (*model.Approval, error) {
+	approve, choice, editedText := d.Approve, d.Choice, d.Text
 	a, err := o.runs.GetApproval(ctx, runID, approvalID)
 	if err != nil {
 		return nil, err
@@ -249,6 +289,15 @@ func (o *Orchestrator) DecideApproval(ctx context.Context, deciderID, runID, app
 		return nil, ErrNotInvoker
 	}
 	if a.State != model.ApprovalPending {
+		return nil, ErrApprovalSettled
+	}
+	// Past its deadline the gate is over: the run has stopped polling (or has
+	// ended), so recording a decision no agent will ever read would leave the
+	// human believing they approved something. Expire it and say so.
+	if o.now().After(a.Deadline) {
+		if _, err := o.ApprovalStatus(ctx, runID, approvalID); err != nil {
+			return nil, err
+		}
 		return nil, ErrApprovalSettled
 	}
 	if len(a.Options) > 0 && approve {
@@ -319,6 +368,70 @@ func (o *Orchestrator) DecideApproval(ctx context.Context, deciderID, runID, app
 	return a, nil
 }
 
+// ApprovalGranted reports whether approvalID is an APPROVED decision that
+// authorizes exactly `purpose` for this run — the check every server-side gate
+// makes before acting on "the invoker said yes".
+//
+// Purpose equality is the whole point: the gates used to accept any approved
+// approval whose summary happened to CONTAIN a slug or a task id, so a
+// connector named "core" was authorized by a card about "core-eu" and a
+// permission click on a file read authorized a public post. An approval with
+// no purpose predates the server-raised gates (an older desktop build asks the
+// agent to raise the card itself); it is accepted only as a plain deliberate
+// gate — never a permission-gateway click, never a reply proposal — and the
+// caller still checks its subject.
+func (o *Orchestrator) ApprovalGranted(ctx context.Context, runID, approvalID, purpose string) (*model.Approval, bool) {
+	if approvalID == "" {
+		return nil, false
+	}
+	a, err := o.ApprovalStatus(ctx, runID, approvalID)
+	if err != nil || a.State != model.ApprovalApproved {
+		return nil, false
+	}
+	if a.Purpose != "" {
+		return a, a.Purpose == purpose
+	}
+	// Legacy path. It must at least be a deliberate gate the human answered —
+	// not a permission-gateway click, not a reply proposal — and, when the
+	// purpose names a subject, that subject has to appear in the summary as a
+	// WHOLE token, so "core" is no longer authorized by a card about "core-eu".
+	if a.Kind != "" || a.Risk == "tool" || a.ReplyText != "" {
+		return a, false
+	}
+	_, subject, hasSubject := strings.Cut(purpose, ":")
+	return a, !hasSubject || containsToken(a.Summary, subject)
+}
+
+// containsToken reports whether s contains token delimited by non-word
+// characters — the difference between authorizing "core" and authorizing
+// "core-eu".
+func containsToken(s, token string) bool {
+	if token == "" {
+		return false
+	}
+	for i := 0; i+len(token) <= len(s); i++ {
+		if s[i:i+len(token)] != token {
+			continue
+		}
+		if (i == 0 || !isTokenByte(s[i-1])) && (i+len(token) == len(s) || !isTokenByte(s[i+len(token)])) {
+			return true
+		}
+	}
+	return false
+}
+
+// isTokenByte reports whether b continues an identifier-like token (letters,
+// digits, '-', '_', '.') — the characters a slug or an id is made of.
+func isTokenByte(b byte) bool {
+	switch {
+	case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9':
+		return true
+	case b == '-', b == '_', b == '.':
+		return true
+	}
+	return false
+}
+
 // publishApproval fans the approval to the INVOKER'S PRIVATE INBOX only —
 // never the channel topic. Only the person whose machine/permissions are at
 // stake may see or decide it; other members receive nothing.
@@ -328,9 +441,7 @@ func (o *Orchestrator) publishApproval(ctx context.Context, run *model.Run, a *m
 	// frame only clears a card so it needs no name.
 	agentName := ""
 	if a.State == model.ApprovalPending {
-		if agent, err := o.users.GetUser(ctx, run.AgentID); err == nil && agent != nil {
-			agentName = agent.DisplayName
-		}
+		agentName = o.agentDisplayName(ctx, run.AgentID)
 	}
 	events.Publish(ctx, o.pub, pubsub.UserChannel(a.InvokerID), events.EventRunApproval, map[string]any{
 		"approvalID": a.ID,
@@ -384,6 +495,26 @@ func (o *Orchestrator) publishApproval(ctx context.Context, run *model.Run, a *m
 	}
 }
 
+// agentDisplayName resolves an agent's name from the cached shared-agent
+// roster, falling back to a direct read.
+//
+// Tool-permission gates arrive in bursts (a run reading five files asks five
+// times) and each one used to cost a fresh GetUser purely to title the alert.
+// The roster is memoized for 30s and changes ~never, so it answers almost
+// always; the fallback covers an agent that is not in it.
+func (o *Orchestrator) agentDisplayName(ctx context.Context, agentID string) string {
+	for _, agent := range o.sharedAgents(ctx) {
+		if agent.ID == agentID {
+			return agent.DisplayName
+		}
+	}
+	agent, err := o.users.GetUser(ctx, agentID)
+	if err != nil || agent == nil {
+		return "" // unknown agent: the card falls back to a generic title
+	}
+	return agent.DisplayName
+}
+
 // toolAlertWindow spaces the desktop/mobile alerts for permission-gateway
 // approvals of one run.
 const toolAlertWindow = 60 * time.Second
@@ -391,6 +522,8 @@ const toolAlertWindow = 60 * time.Second
 // throttleToolAlert reports whether a permission-gateway approval's alert
 // should be suppressed because one already went out for this run recently.
 // Plain approvals (request_approval / ask_user / proposals) are never throttled.
+// throttleToolAlert's map is dropped by disarmLeaseTimer, which every terminal
+// path goes through — otherwise it grew one entry per gated run, forever.
 func (o *Orchestrator) throttleToolAlert(runID string, a *model.Approval) bool {
 	if a.Risk != "tool" && a.Kind == "" {
 		return false
@@ -475,17 +608,23 @@ func markerSafe(s string) string {
 	}, s)
 }
 
-// Artifacts lists a run's artifacts for the drawer.
-// HasApprovedApproval reports whether any approval for this run was granted —
-// the hard server-side check behind reply-mode watchers (they may post publicly
-// only after the invoker approves, not merely because the prompt told them to).
-func (o *Orchestrator) HasApprovedApproval(ctx context.Context, runID string) (bool, error) {
+// HasDeliberateApproval reports whether the invoker granted a DELIBERATE gate
+// on this run — the hard server-side check behind reply-mode watchers, which
+// may post publicly only after the invoker says yes, not merely because the
+// prompt told them to.
+//
+// "Deliberate" excludes the two kinds of approval that mean something else: a
+// permission-gateway click (Kind set, or Risk "tool") is consent for one
+// harness tool call, and a reply proposal is consent for the SERVER to post
+// that exact text. Counting either as blanket permission to post is how a
+// notify-only watcher talked its way into a channel.
+func (o *Orchestrator) HasDeliberateApproval(ctx context.Context, runID string) (bool, error) {
 	approvals, err := o.runs.ListApprovals(ctx, runID)
 	if err != nil {
 		return false, err
 	}
 	for _, a := range approvals {
-		if a.State == model.ApprovalApproved {
+		if a.State == model.ApprovalApproved && a.Kind == "" && a.Risk != "tool" && a.ReplyText == "" {
 			return true, nil
 		}
 	}
@@ -496,6 +635,19 @@ func (o *Orchestrator) Artifacts(ctx context.Context, runID string) ([]*model.Ar
 	return o.runs.ListArtifacts(ctx, runID)
 }
 
+// ArtifactsForCaller lists a run's artifacts the caller is allowed to see.
+func (o *Orchestrator) ArtifactsForCaller(ctx context.Context, callerID, runID string) (*model.Run, []*model.Artifact, error) {
+	run, err := o.RunForCaller(ctx, callerID, runID)
+	if err != nil {
+		return nil, nil, err
+	}
+	arts, err := o.runs.ListArtifacts(ctx, run.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return run, arts, nil
+}
+
 // RecordSkillInvoked audits an invoke_skill call on the run's timeline.
 func (o *Orchestrator) RecordSkillInvoked(ctx context.Context, run *model.Run, skill *model.Skill) {
 	o.appendEvent(ctx, run, o.now().UnixNano(), run.AgentID, "skill.invoked", map[string]any{
@@ -503,7 +655,9 @@ func (o *Orchestrator) RecordSkillInvoked(ctx context.Context, run *model.Run, s
 	})
 }
 
-// Run returns a run by ID regardless of state (drawer/stop access checks).
+// Run returns a run by ID regardless of state. Unchecked — internal callers
+// only (the reconciler, the purge sweep). Anything serving a request uses
+// RunForCaller.
 func (o *Orchestrator) Run(ctx context.Context, runID string) (*model.Run, error) {
 	return o.runs.GetRun(ctx, runID)
 }
@@ -518,20 +672,24 @@ func (o *Orchestrator) StopThread(ctx context.Context, stopperID, runID string) 
 	}
 	thread := o.replyThreadRoot(run)
 	// Drop deferred handoffs FIRST so a cancellation can't start one.
-	prefix := run.ParentID + "#" + thread + "#"
+	prefix := turnKeyPrefix(run.ParentID, thread)
 	o.deferredTurns.Range(func(k, _ any) bool {
 		if strings.HasPrefix(k.(string), prefix) {
 			o.deferredTurns.Delete(k)
 		}
 		return true
 	})
-	peers, err := o.runs.ListRunsByParent(ctx, run.ParentID, 100)
+	// The ACTIVE_RUNS index, not a bounded page of the parent's history: only a
+	// NON-TERMINAL run can be canceled, that index holds exactly those (and
+	// stays small by construction), while a 100-row page of a busy channel
+	// could silently miss the very run the human is trying to stop.
+	peers, err := o.runs.ListActiveRuns(ctx)
 	if err != nil {
 		return 0, err
 	}
 	stopped := 0
 	for _, p := range peers {
-		if p.State.Terminal() || o.replyThreadRoot(p) != thread {
+		if p.ParentID != run.ParentID || p.State.Terminal() || o.replyThreadRoot(p) != thread {
 			continue
 		}
 		if err := o.cancelRun(ctx, p, stopperID); err != nil {
@@ -548,28 +706,17 @@ func (o *Orchestrator) StopThread(ctx context.Context, stopperID, runID string) 
 // because the whole point is that the conversation ends here.
 func (o *Orchestrator) cancelRun(ctx context.Context, run *model.Run, stopperID string) error {
 	prevState := run.State
-	run.State = model.RunStateCanceled
-	run.FailReason = "stopped_by_user"
-	run.PendingAgentIDs = nil
-	run.UpdatedAt = o.now()
-	if err := o.runs.UpdateRun(ctx, run, prevState); err != nil {
+	if err := o.beginTerminal(ctx, run, prevState, model.RunStateCanceled, "stopped_by_user"); err != nil {
 		if errors.Is(err, store.ErrStaleRun) {
 			return nil // finished in the meantime — fine
 		}
 		return err
 	}
-	if prevState == model.RunStateQueued {
-		_ = o.runs.DeleteQueueEntry(ctx, run.OwnerID, run.ID)
-	}
-	o.disarmLeaseTimer(run.ID)
 	// Release the thread slot without afterTerminal's continuation logic.
 	if key, ok := o.runThreadKey.LoadAndDelete(run.ID); ok {
 		o.threadActive.Delete(key.(string))
 	}
-	o.appendEvent(ctx, run, o.now().UnixNano(), stopperID, "run.canceled", map[string]any{"by": stopperID})
-	o.setState(ctx, run, StateEmojiBlocked)
-	o.publishRun(ctx, run)
-	o.writeDigest(ctx, run, "")
+	o.finishTerminal(ctx, run, stopperID, "run.canceled", map[string]any{"by": stopperID}, "")
 	// A stopped run that never posted would leave nothing to click: the live
 	// chip is gone and no message carries its run id. Post a marker AS the
 	// agent so "Show activity" keeps the log reachable.
@@ -597,18 +744,43 @@ type ThreadSpendSummary struct {
 	Posts        int   `json:"posts"`
 }
 
+// threadRunPage bounds the per-parent listing the drawer's display layers read
+// (spend totals, peer digests, whole-thread timeline). A saturated page is
+// logged, never silently truncated — and the one place where completeness is
+// required (StopThread) reads the ACTIVE_RUNS index instead.
+const threadRunPage = 100
+
+// threadRuns returns the runs of one parent that belong to `thread`, from a
+// bounded page of the parent's history.
+func (o *Orchestrator) threadRuns(ctx context.Context, parentID, thread string) []*model.Run {
+	peers, err := o.runs.ListRunsByParent(ctx, parentID, threadRunPage)
+	if err != nil {
+		slog.Warn("thread runs: listing failed", "parentID", parentID, "error", err)
+		return nil
+	}
+	if len(peers) >= threadRunPage {
+		slog.Warn("thread runs: page saturated; older runs are not included",
+			"parentID", parentID, "page", threadRunPage)
+	}
+	out := make([]*model.Run, 0, len(peers))
+	for _, p := range peers {
+		if o.replyThreadRoot(p) == thread {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // ThreadSpend sums spend over the given run's thread.
 func (o *Orchestrator) ThreadSpend(ctx context.Context, run *model.Run) ThreadSpendSummary {
+	return SpendOf(o.threadRuns(ctx, run.ParentID, o.replyThreadRoot(run)))
+}
+
+// SpendOf totals spend across runs the caller ALREADY has — the whole-thread
+// drawer view was re-running the same 100-run listing purely to add this line.
+func SpendOf(runs []*model.Run) ThreadSpendSummary {
 	var sum ThreadSpendSummary
-	peers, err := o.runs.ListRunsByParent(ctx, run.ParentID, 100)
-	if err != nil {
-		return sum
-	}
-	thread := o.replyThreadRoot(run)
-	for _, p := range peers {
-		if o.replyThreadRoot(p) != thread {
-			continue
-		}
+	for _, p := range runs {
 		sum.Runs++
 		if !p.State.Terminal() {
 			sum.Active++
@@ -625,10 +797,10 @@ func (o *Orchestrator) ThreadSpend(ctx context.Context, run *model.Run) ThreadSp
 // task's card, a debate's opening post), oldest first, with all their events
 // concatenated in time order. "Show activity" on a thread root shows the
 // whole thread's work, not just the run that posted the root.
-func (o *Orchestrator) ThreadTimeline(ctx context.Context, parentID, rootID string) ([]*model.Run, []*model.RunEvent, error) {
-	peers, err := o.runs.ListRunsByParent(ctx, parentID, 100)
+func (o *Orchestrator) ThreadTimeline(ctx context.Context, callerID, parentID, rootID string) ([]*model.Run, []*model.RunEvent, int, error) {
+	peers, err := o.runs.ListRunsByParent(ctx, parentID, threadRunPage)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	var runs []*model.Run
 	for i := len(peers) - 1; i >= 0; i-- { // newest-first → oldest-first
@@ -636,15 +808,32 @@ func (o *Orchestrator) ThreadTimeline(ctx context.Context, parentID, rootID stri
 			runs = append(runs, peers[i])
 		}
 	}
+	// Access is decided here, not by the caller: invoker of any run in the
+	// thread, else a member of the parent.
+	if len(runs) > 0 {
+		allowed := false
+		for _, r := range runs {
+			if r.InvokerID == callerID {
+				allowed = true
+				break
+			}
+		}
+		if !allowed && o.messages.CheckAccess(ctx, callerID, parentID, runs[0].ParentType) != nil {
+			return nil, nil, 0, ErrNoRunAccess
+		}
+	}
 	var events []*model.RunEvent
 	for _, r := range runs {
 		evts, err := o.loadEvents(ctx, r)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 		events = append(events, evts...)
 	}
-	return runs, events, nil
+	// A whole THREAD of task runs is many runs' timelines concatenated, so the
+	// same bound applies here.
+	kept, dropped := clipTimeline(events)
+	return runs, kept, dropped, nil
 }
 
 // ThreadMessages lists a thread's messages (root + replies) for the caller,

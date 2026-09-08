@@ -1,6 +1,8 @@
 import { Eye, Loader2, Play, X } from 'lucide-react';
 import { useState } from 'react';
-import { useAgents, useDecideCatchUp, useParentWatchers } from '@/hooks/useAgents';
+import { agentByID, useAgents, useDecideCatchUp, useParentWatchers } from '@/hooks/useAgents';
+import { showToast } from '@/lib/toast';
+import { NoticeCard, noticeStackClass } from './NoticeCardChrome';
 import { useAuth } from '@/context/AuthContext';
 import { formatRelative } from '@/lib/format';
 
@@ -29,31 +31,38 @@ export function WatcherCatchUpCard({ parentID, parentType }: Props) {
     setBusy(id);
     decide.mutate(
       { parentID, id, process },
-      { onSettled: () => setBusy(null) },
+      {
+        // A failure here left the card sitting there with no explanation, so
+        // the backlog looked ignored. Say so; the card stays for a retry.
+        onError: () => showToast("Couldn't send that — try again."),
+        onSettled: () => setBusy(null),
+      },
     );
   };
 
   return (
-    <div className="pointer-events-auto mb-1 ml-1 flex w-fit max-w-xl flex-col gap-2" aria-live="polite">
+    <div className={noticeStackClass} aria-live="polite">
       {asks.map((w) => {
-        const agent = agents?.find((a) => a.id === w.agentID);
+        const agent = agentByID(agents, w.agentID);
         const isBusy = busy === w.id;
         return (
-          <div
+          <NoticeCard
             key={w.id}
-            data-testid="watcher-catchup-card"
-            className="w-full overflow-hidden rounded-xl border border-primary/30 bg-background/95 shadow-lg backdrop-blur"
+            accent="catchup"
+            testID="watcher-catchup-card"
+            header={
+              <>
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/20">
+                  <Eye className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+                </span>
+                <span className="text-xs font-semibold">
+                  {agent?.displayName ?? 'A watcher'}
+                  <span className="font-normal text-muted-foreground"> has a backlog to catch up on</span>
+                </span>
+              </>
+            }
           >
-            <div className="flex items-center gap-2 border-b border-primary/20 bg-primary/10 px-3 py-2">
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/20">
-                <Eye className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
-              </span>
-              <span className="text-xs font-semibold">
-                {agent?.displayName ?? 'A watcher'}
-                <span className="font-normal text-muted-foreground"> has a backlog to catch up on</span>
-              </span>
-            </div>
-            <div className="px-3 py-2.5">
+            <>
               <p className="text-xs leading-relaxed text-muted-foreground">
                 Messages arrived{w.pendingSince ? ` ${formatRelative(w.pendingSince)}` : ''} while you were
                 away{w.instruction ? <> — standing order: <span className="italic">“{w.instruction}”</span></> : ''}.
@@ -85,8 +94,8 @@ export function WatcherCatchUpCard({ parentID, parentType }: Props) {
                   Dismiss
                 </button>
               </div>
-            </div>
-          </div>
+            </>
+          </NoticeCard>
         );
       })}
     </div>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -37,16 +38,17 @@ type AgentDirectoryStore interface {
 	GetAgentPrefs(ctx context.Context, userID, slug string) (*model.UserAgentPrefs, error)
 	PutRunner(ctx context.Context, reg *model.RunnerRegistration) error
 	ListRunners(ctx context.Context, ownerID string) ([]*model.RunnerRegistration, error)
-	DeleteRunner(ctx context.Context, ownerID, runnerID string) error
 	PutSkill(ctx context.Context, sk *model.Skill) error
 	GetSkill(ctx context.Context, id string) (*model.Skill, error)
 	ListSkills(ctx context.Context) ([]*model.Skill, error)
+	ListSkillIndex(ctx context.Context) ([]*model.Skill, error)
 	DeleteSkill(ctx context.Context, id string) error
 	PutAgentMemory(ctx context.Context, m *model.AgentMemory) error
 	GetAgentMemory(ctx context.Context, invokerID, agentID string) (*model.AgentMemory, error)
 	PutAgentSubscription(ctx context.Context, sub *model.AgentSubscription) error
 	ListSubscriptionsByParent(ctx context.Context, parentID string) ([]*model.AgentSubscription, error)
 	ListAllSubscriptions(ctx context.Context) ([]*model.AgentSubscription, error)
+	ListSubscriptionsByCreator(ctx context.Context, creatorID, agentID string) ([]*model.AgentSubscription, error)
 	DeleteAgentSubscription(ctx context.Context, parentID, id string) error
 	PutTaskClaim(ctx context.Context, c *model.TaskClaim) error
 	ListTaskClaims(ctx context.Context, parentID, threadRootID string) ([]*model.TaskClaim, error)
@@ -238,11 +240,25 @@ func (s *AgentService) CreateAgent(ctx context.Context, in CreateAgentInput) (*m
 		}
 	}
 
-	// Uniqueness: refuse if a template already claims this slug.
-	if _, err := s.agents.GetTemplate(ctx, slug); err == nil {
-		return nil, fmt.Errorf("agent: %q already exists: %w", slug, ErrValidation)
-	} else if !errors.Is(err, store.ErrNotFound) {
-		return nil, err
+	// Uniqueness: refuse only a FULLY built agent. Creation is two writes (the
+	// template, then the singleton agent user) and the second can fail — which
+	// used to wedge the slug permanently: the template made every retry
+	// "already exists" while no agent user existed to mention, and nothing
+	// converged. A template with no user is half-created, so finish it.
+	created := time.Now()
+	existing, terr := s.agents.GetTemplate(ctx, slug)
+	switch {
+	case terr == nil:
+		if _, uerr := s.users.GetUser(ctx, AgentUserID(slug)); uerr == nil {
+			return nil, fmt.Errorf("agent: %q already exists: %w", slug, ErrValidation)
+		} else if !errors.Is(uerr, store.ErrNotFound) {
+			return nil, uerr
+		}
+		created = existing.CreatedAt
+		slog.Warn("agent: completing a half-created agent (template without its user)", "slug", slug)
+	case errors.Is(terr, store.ErrNotFound):
+	default:
+		return nil, terr
 	}
 
 	now := time.Now()
@@ -255,7 +271,7 @@ func (s *AgentService) CreateAgent(ctx context.Context, in CreateAgentInput) (*m
 		Persona:           persona,
 		Limits:            model.DefaultAgentLimits(),
 		MaxConcurrentRuns: 1,
-		CreatedAt:         now,
+		CreatedAt:         created,
 		UpdatedAt:         now,
 	}
 	if err := s.agents.PutTemplate(ctx, tpl); err != nil {
@@ -295,12 +311,20 @@ func (s *AgentService) RenameAgent(ctx context.Context, slug, newName string) (*
 	if err := s.agents.PutTemplate(ctx, tpl); err != nil {
 		return nil, fmt.Errorf("agent: rename template: %w", err)
 	}
-	if u, err := s.users.GetUser(ctx, AgentUserID(slug)); err == nil && u != nil {
+	u, err := s.users.GetUser(ctx, AgentUserID(slug))
+	switch {
+	case err == nil && u != nil:
 		u.DisplayName = name
 		u.UpdatedAt = time.Now()
 		if err := s.users.UpdateUser(ctx, u); err != nil {
 			return nil, fmt.Errorf("agent: rename user: %w", err)
 		}
+	case errors.Is(err, store.ErrNotFound):
+		// No agent user yet (half-created agent) — the template rename stands.
+	case err != nil:
+		// Anything else left the @name people actually see out of sync with the
+		// template; report it instead of returning a misleading success.
+		return nil, fmt.Errorf("agent: rename user lookup: %w", err)
 	}
 	return tpl, nil
 }
@@ -476,7 +500,7 @@ func (s *AgentService) UpdatePrefs(ctx context.Context, userID, slug string, pat
 		case "", model.HarnessClaude, model.HarnessCodex, model.HarnessBedrock:
 			prefs.Harness = *patch.Harness
 		default:
-			return nil, fmt.Errorf("agent: unknown harness %q", *patch.Harness)
+			return nil, fmt.Errorf("agent: unknown harness %q: %w", *patch.Harness, ErrValidation)
 		}
 	}
 	if patch.Model != nil {
@@ -487,7 +511,7 @@ func (s *AgentService) UpdatePrefs(ctx context.Context, userID, slug string, pat
 		case "", model.ExecutionRunner, model.ExecutionServer:
 			prefs.ExecutionMode = *patch.ExecutionMode
 		default:
-			return nil, fmt.Errorf("agent: unknown execution mode %q", *patch.ExecutionMode)
+			return nil, fmt.Errorf("agent: unknown execution mode %q: %w", *patch.ExecutionMode, ErrValidation)
 		}
 	}
 	if patch.Persona != nil {
@@ -505,7 +529,7 @@ func (s *AgentService) UpdatePrefs(ctx context.Context, userID, slug string, pat
 		case "", model.OfflinePolicyReject, model.OfflinePolicyQueue:
 			prefs.OfflinePolicy = *patch.OfflinePolicy
 		default:
-			return nil, fmt.Errorf("agent: unknown offline policy %q", *patch.OfflinePolicy)
+			return nil, fmt.Errorf("agent: unknown offline policy %q: %w", *patch.OfflinePolicy, ErrValidation)
 		}
 	}
 	if patch.FollowUpMode != nil {
@@ -513,7 +537,7 @@ func (s *AgentService) UpdatePrefs(ctx context.Context, userID, slug string, pat
 		case "", model.FollowUpOff, model.FollowUpWindow, model.FollowUpAlways:
 			prefs.FollowUpMode = *patch.FollowUpMode
 		default:
-			return nil, fmt.Errorf("agent: unknown follow-up mode %q", *patch.FollowUpMode)
+			return nil, fmt.Errorf("agent: unknown follow-up mode %q: %w", *patch.FollowUpMode, ErrValidation)
 		}
 	}
 	if patch.AutoAllow != nil {
@@ -534,7 +558,7 @@ func (s *AgentService) UpdatePrefs(ctx context.Context, userID, slug string, pat
 	if patch.FollowUpMins != nil {
 		mins := *patch.FollowUpMins
 		if mins < 0 || mins > 24*60 {
-			return nil, fmt.Errorf("agent: follow-up minutes out of range (0–1440)")
+			return nil, fmt.Errorf("agent: follow-up minutes out of range (0–1440): %w", ErrValidation)
 		}
 		prefs.FollowUpMins = mins
 	}
@@ -648,9 +672,65 @@ func (s *AgentService) DeleteSkill(ctx context.Context, callerID, id string) err
 	return s.agents.DeleteSkill(ctx, id)
 }
 
-// ListSkills returns every workspace skill.
+// ListSkills returns every workspace skill, instructions included (the admin
+// directory).
 func (s *AgentService) ListSkills(ctx context.Context) ([]*model.Skill, error) {
 	return s.agents.ListSkills(ctx)
+}
+
+// ListSkillIndex returns id/name/description only — what a routing hint needs.
+func (s *AgentService) ListSkillIndex(ctx context.Context) ([]*model.Skill, error) {
+	return s.agents.ListSkillIndex(ctx)
+}
+
+// ------------------------------------------------- directory pass-throughs
+//
+// The orchestrator drives the same directory this service owns (runner
+// registrations, subscriptions, task claims, follow markers). It used to reach
+// straight through `agentSvc.agents` — another type's unexported field — so
+// every one of those writes bypassed this service entirely and nothing here
+// could ever add a rule to them. These are the seams it goes through instead.
+
+// PutRunner records a runner registration (heartbeat/registration path).
+func (s *AgentService) PutRunner(ctx context.Context, reg *model.RunnerRegistration) error {
+	return s.agents.PutRunner(ctx, reg)
+}
+
+// PutSubscription writes a subscription row as-is (flag updates, catch-up
+// bookkeeping). CreateSubscription is the validating entry point for new ones.
+func (s *AgentService) PutSubscription(ctx context.Context, sub *model.AgentSubscription) error {
+	return s.agents.PutAgentSubscription(ctx, sub)
+}
+
+// SubscriptionsByParent lists every subscription watching one parent.
+func (s *AgentService) SubscriptionsByParent(ctx context.Context, parentID string) ([]*model.AgentSubscription, error) {
+	return s.agents.ListSubscriptionsByParent(ctx, parentID)
+}
+
+// AllSubscriptions lists every subscription in the workspace (the reconcile
+// sweeps read it once per tick).
+func (s *AgentService) AllSubscriptions(ctx context.Context) ([]*model.AgentSubscription, error) {
+	return s.agents.ListAllSubscriptions(ctx)
+}
+
+// PutTaskClaim writes a co-invocation task claim iff its label is free.
+func (s *AgentService) PutTaskClaim(ctx context.Context, c *model.TaskClaim) error {
+	return s.agents.PutTaskClaim(ctx, c)
+}
+
+// TaskClaims lists the claims on one thread.
+func (s *AgentService) TaskClaims(ctx context.Context, parentID, threadRootID string) ([]*model.TaskClaim, error) {
+	return s.agents.ListTaskClaims(ctx, parentID, threadRootID)
+}
+
+// PutAgentFollow upserts the (agent, invoker) follow marker for a thread.
+func (s *AgentService) PutAgentFollow(ctx context.Context, f *model.AgentThreadFollow) error {
+	return s.agents.PutAgentFollow(ctx, f)
+}
+
+// AgentFollows lists the follow markers on one thread.
+func (s *AgentService) AgentFollows(ctx context.Context, parentID, threadRootID string) ([]*model.AgentThreadFollow, error) {
+	return s.agents.ListAgentFollows(ctx, parentID, threadRootID)
 }
 
 // GetSkill fetches one skill.
@@ -752,15 +832,30 @@ func (s *AgentService) ListSubscriptionsFor(ctx context.Context, creatorID, slug
 	if err != nil {
 		return nil, err
 	}
+	// One bounded query on the creator index. Rows written before that index
+	// existed answer nothing, so a miss falls back to the (expensive) full
+	// listing ONCE and rewrites what it finds — the index then answers every
+	// later call, with no ops migration to schedule.
+	out, err := s.agents.ListSubscriptionsByCreator(ctx, creatorID, agent.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > 0 {
+		return out, nil
+	}
 	all, err := s.agents.ListAllSubscriptions(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*model.AgentSubscription, 0)
+	out = make([]*model.AgentSubscription, 0)
 	for _, sub := range all {
-		if sub.CreatorID == creatorID && sub.AgentID == agent.ID {
-			out = append(out, sub)
+		if sub.CreatorID != creatorID || sub.AgentID != agent.ID {
+			continue
 		}
+		if err := s.agents.PutAgentSubscription(ctx, sub); err != nil {
+			slog.Warn("agent: subscription creator-index backfill failed", "subID", sub.ID, "error", err)
+		}
+		out = append(out, sub)
 	}
 	return out, nil
 }

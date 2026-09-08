@@ -26,6 +26,12 @@ type ctaskCovStore struct {
 	listErr          error
 	createTaskErr    error
 	updateTaskErr    error
+	listByChannelErr error
+	deleteTaskErr    error
+	// afterCreate runs once right after a successful CreateTask — the hook the
+	// concurrent-create race needs, since the loser is only discoverable once
+	// both rows are durable.
+	afterCreate func()
 }
 
 func (s *ctaskCovStore) GetProject(ctx context.Context, key string) (*model.CodingProject, error) {
@@ -53,14 +59,30 @@ func (s *ctaskCovStore) ListTasksByChannel(ctx context.Context, channelID string
 	if s.listErr != nil {
 		return nil, s.listErr
 	}
+	if s.listByChannelErr != nil {
+		return nil, s.listByChannelErr
+	}
 	return s.fakeTaskStore.ListTasksByChannel(ctx, channelID)
+}
+
+func (s *ctaskCovStore) DeleteTask(ctx context.Context, id string) error {
+	if s.deleteTaskErr != nil {
+		return s.deleteTaskErr
+	}
+	return s.fakeTaskStore.DeleteTask(ctx, id)
 }
 
 func (s *ctaskCovStore) CreateTask(ctx context.Context, t *model.CodingTask) error {
 	if s.createTaskErr != nil {
 		return s.createTaskErr
 	}
-	return s.fakeTaskStore.CreateTask(ctx, t)
+	if err := s.fakeTaskStore.CreateTask(ctx, t); err != nil {
+		return err
+	}
+	if s.afterCreate != nil {
+		s.afterCreate()
+	}
+	return nil
 }
 
 func (s *ctaskCovStore) UpdateTask(ctx context.Context, t *model.CodingTask, expect model.TaskState) error {
@@ -259,11 +281,12 @@ func TestCtaskCovNormalizeRepos(t *testing.T) {
 }
 
 func TestCtaskCovLifecycleNotes(t *testing.T) {
+	ctx := context.Background()
 	fx := newCtaskCovFixture(t)
 	base := &model.CodingTask{Repos: []model.TaskRepo{{Path: "g/r", Branch: "ex/task-1", MRURL: "https://gitlab/x/-/merge_requests/2"}}}
 	at := func(s model.TaskState) *model.CodingTask { cp := *base; cp.State = s; return &cp }
 
-	if got := fx.svc.lifecycleNote(at(model.TaskStateInProgress), model.TaskStateInProgress, TaskUpdate{}); got != "" {
+	if got := fx.svc.lifecycleNote(ctx, at(model.TaskStateInProgress), model.TaskStateInProgress, TaskUpdate{}); got != "" {
 		t.Fatalf("same state and no note must say nothing, got %q", got)
 	}
 	wants := map[model.TaskState]string{
@@ -274,23 +297,24 @@ func TestCtaskCovLifecycleNotes(t *testing.T) {
 		model.TaskStateAbandoned:      "Task abandoned",
 	}
 	for state, want := range wants {
-		if got := fx.svc.lifecycleNote(at(state), model.TaskStateCreated, TaskUpdate{}); !strings.Contains(got, want) {
+		if got := fx.svc.lifecycleNote(ctx, at(state), model.TaskStateCreated, TaskUpdate{}); !strings.Contains(got, want) {
 			t.Fatalf("%s note = %q, want it to contain %q", state, got, want)
 		}
 	}
-	if got := fx.svc.lifecycleNote(at(model.TaskStateCreated), model.TaskStateSetupFailed, TaskUpdate{}); got != "" {
+	if got := fx.svc.lifecycleNote(ctx, at(model.TaskStateCreated), model.TaskStateSetupFailed, TaskUpdate{}); got != "" {
 		t.Fatalf("created has no standard line, got %q", got)
 	}
 }
 
 func TestCtaskCovTestPlanNoteNotes(t *testing.T) {
+	ctx := context.Background()
 	fx := newCtaskCovFixture(t)
 	task := fx.seedTask(model.TaskStateAwaitingTest)
 	task.TestPlan = &model.TestPlan{
 		URL: "http://localhost:3000", Steps: []string{"open it"}, CounterSteps: []string{"no crash"},
 		Accounts: "hr1", Notes: "seed the db first",
 	}
-	note := fx.svc.testPlanNote(task)
+	note := fx.svc.testPlanNote(ctx, task)
 	for _, want := range []string{"Ready to test", "hr1", "open it", "no crash", "seed the db first"} {
 		if !strings.Contains(note, want) {
 			t.Fatalf("test-plan note missing %q:\n%s", want, note)
@@ -542,9 +566,6 @@ func TestCtaskCovReadAPIs(t *testing.T) {
 	ctx := context.Background()
 	task := fx.seedTask(model.TaskStateInProgress)
 
-	if got, err := fx.svc.Get(ctx, task.ID); err != nil || got.ID != task.ID {
-		t.Fatalf("get: %v %+v", err, got)
-	}
 	if _, err := fx.svc.GetVisible(ctx, "u-alice", "nope"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("get visible on an unknown id: %v", err)
 	}
@@ -667,14 +688,14 @@ func TestCtaskCovRequestMRGatesAndApproval(t *testing.T) {
 	ctx := context.Background()
 	task := fx.seedTask(model.TaskStateAwaitingTest)
 
-	if _, _, err := fx.svc.RequestMR(ctx, &model.Run{ID: "r"}, ""); !errors.Is(err, ErrNotTaskRun) {
+	if _, _, _, err := fx.svc.RequestMR(ctx, &model.Run{ID: "r"}, ""); !errors.Is(err, ErrNotTaskRun) {
 		t.Fatalf("an unbound run must be refused, got %v", err)
 	}
-	if _, _, err := fx.svc.RequestMR(ctx, &model.Run{ID: "r", TaskID: "nope"}, ""); !errors.Is(err, store.ErrNotFound) {
+	if _, _, _, err := fx.svc.RequestMR(ctx, &model.Run{ID: "r", TaskID: "nope"}, ""); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("an unknown task must surface, got %v", err)
 	}
 	early := ctaskCovSeedTask(t, fx, "t-early", model.TaskStateCreated, "u-alice")
-	if status, _, err := fx.svc.RequestMR(ctx, &model.Run{ID: "r3", TaskID: early.ID, InvokerID: "u-alice"}, ""); err != nil || status != MRStatusNotReady {
+	if status, _, _, err := fx.svc.RequestMR(ctx, &model.Run{ID: "r3", TaskID: early.ID, InvokerID: "u-alice"}, ""); err != nil || status != MRStatusNotReady {
 		t.Fatalf("a task before testing must be not_ready, got %q %v", status, err)
 	}
 
@@ -683,7 +704,7 @@ func TestCtaskCovRequestMRGatesAndApproval(t *testing.T) {
 	if err := fx.runs.PutApproval(ctx, &model.Approval{ID: "ap1", RunID: run.ID, State: model.ApprovalApproved, Summary: MRApprovalSummary(task)}); err != nil {
 		t.Fatal(err)
 	}
-	status, got, err := fx.svc.RequestMR(ctx, run, "ap1")
+	status, got, _, err := fx.svc.RequestMR(ctx, run, "ap1")
 	if err != nil || status != MRStatusApproved || got.SignedOffAt == nil {
 		t.Fatalf("an approved approval must sign off: %q %v %+v", status, err, got)
 	}
@@ -695,7 +716,7 @@ func TestCtaskCovRequestMRGatesAndApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	fx.store.updateTaskErr = errors.New("update down")
-	if _, _, err := fx.svc.RequestMR(ctx, run2, "ap2"); err == nil || !strings.Contains(err.Error(), "update down") {
+	if _, _, _, err := fx.svc.RequestMR(ctx, run2, "ap2"); err == nil || !strings.Contains(err.Error(), "update down") {
 		t.Fatalf("the sign-off write failure must surface, got %v", err)
 	}
 }

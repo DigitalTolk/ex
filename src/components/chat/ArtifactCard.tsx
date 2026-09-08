@@ -1,19 +1,14 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, Download, FileText, Loader2 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import { formatBytes } from '@/lib/format';
 import type { ArtifactMarker } from '@/lib/artifact-marker';
 
 // ArtifactCard: the inline chat rendering of a published artifact marker
 // (see lib/artifact-marker.ts) — title + size at a glance, content fetched
 // only when expanded or downloaded, so a 60KB doc costs the thread nothing
 // until someone asks for it.
-
-function formatBytes(n: number): string {
-  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${n} B`;
-}
 
 function fileExtension(kind: string): string {
   switch (kind.toLowerCase()) {
@@ -35,6 +30,7 @@ function fileExtension(kind: string): string {
 export function ArtifactCard({ marker }: { marker: ArtifactMarker }) {
   const [open, setOpen] = useState(false);
   const [wantContent, setWantContent] = useState(false);
+  const queryClient = useQueryClient();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['artifact', marker.runID, marker.artifactID],
@@ -46,8 +42,11 @@ export function ArtifactCard({ marker }: { marker: ArtifactMarker }) {
     staleTime: Infinity, // artifacts are immutable once published
   });
 
-  const download = () => {
+  const [downloadFailed, setDownloadFailed] = useState(false);
+
+  const download = async () => {
     setWantContent(true);
+    setDownloadFailed(false);
     const save = (content: string) => {
       const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
@@ -59,10 +58,24 @@ export function ArtifactCard({ marker }: { marker: ArtifactMarker }) {
     };
     if (data?.artifact.content != null) {
       save(data.artifact.content);
-    } else {
-      void apiFetch<{ artifact: { content?: string } }>(
-        `/api/v1/runs/${marker.runID}/artifacts/${marker.artifactID}`,
-      ).then((res) => save(res.artifact.content ?? ''));
+      return;
+    }
+    // Fetch through the SAME query cache the expanded view uses (staleTime is
+    // Infinity — artifacts are immutable), so expanding and downloading no
+    // longer make two requests for identical bytes. A failure is reported
+    // instead of becoming an unhandled rejection.
+    try {
+      const res = await queryClient.fetchQuery({
+        queryKey: ['artifact', marker.runID, marker.artifactID],
+        queryFn: () =>
+          apiFetch<{ artifact: { title: string; kind: string; content?: string } }>(
+            `/api/v1/runs/${marker.runID}/artifacts/${marker.artifactID}`,
+          ),
+        staleTime: Infinity,
+      });
+      save(res.artifact.content ?? '');
+    } catch {
+      setDownloadFailed(true);
     }
   };
 
@@ -95,7 +108,7 @@ export function ArtifactCard({ marker }: { marker: ArtifactMarker }) {
         </span>
         <button
           type="button"
-          onClick={download}
+          onClick={() => void download()}
           title="Download"
           aria-label={`Download ${marker.title}`}
           className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -103,6 +116,11 @@ export function ArtifactCard({ marker }: { marker: ArtifactMarker }) {
           <Download className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
       </div>
+      {downloadFailed && (
+        <div role="alert" data-testid="artifact-download-failed" className="border-t px-3 py-2 text-xs text-muted-foreground">
+          Couldn’t download this artifact — try again.
+        </div>
+      )}
       {open && (
         <div className="border-t">
           {isLoading && (

@@ -393,6 +393,39 @@ func (f *htaskCovRunStore) UpdateRun(_ context.Context, run *model.Run, _ model.
 	return nil
 }
 
+// AddRunSpend / AddRunPosts mirror the store's atomic counter updates.
+func (f *htaskCovRunStore) AddRunSpend(_ context.Context, runID, runnerID string, d store.RunSpendDelta) (*model.Run, error) {
+	run, ok := f.runs[runID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if run.State.Terminal() || run.RunnerID != runnerID {
+		return nil, store.ErrStaleRun
+	}
+	run.Spend.Turns += d.Turns
+	run.Spend.InputTokens += d.InputTokens
+	run.Spend.OutputTokens += d.OutputTokens
+	run.LastRunnerSeq = d.LastRunnerSeq
+	if d.State != "" {
+		run.State = d.State
+	}
+	cp := *run
+	return &cp, nil
+}
+
+func (f *htaskCovRunStore) AddRunPosts(_ context.Context, runID string, delta int) (*model.Run, error) {
+	run, ok := f.runs[runID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if run.State.Terminal() {
+		return nil, store.ErrStaleRun
+	}
+	run.Spend.Posts += delta
+	cp := *run
+	return &cp, nil
+}
+
 func (f *htaskCovRunStore) RenewRunLease(context.Context, string, string, time.Time) error { return nil }
 func (f *htaskCovRunStore) ListQueuedRuns(context.Context, string, int) ([]string, error) {
 	return nil, nil
@@ -491,6 +524,10 @@ func (f *htaskCovAgentDir) PutSkill(context.Context, *model.Skill) error       {
 func (f *htaskCovAgentDir) GetSkill(context.Context, string) (*model.Skill, error) {
 	return nil, store.ErrNotFound
 }
+func (f *htaskCovAgentDir) ListSkillIndex(ctx context.Context) ([]*model.Skill, error) {
+	return f.ListSkills(ctx)
+}
+
 func (f *htaskCovAgentDir) ListSkills(context.Context) ([]*model.Skill, error) { return nil, nil }
 func (f *htaskCovAgentDir) DeleteSkill(context.Context, string) error          { return nil }
 func (f *htaskCovAgentDir) PutAgentMemory(context.Context, *model.AgentMemory) error {
@@ -505,6 +542,22 @@ func (f *htaskCovAgentDir) PutAgentSubscription(context.Context, *model.AgentSub
 func (f *htaskCovAgentDir) ListSubscriptionsByParent(context.Context, string) ([]*model.AgentSubscription, error) {
 	return nil, nil
 }
+// ListSubscriptionsByCreator mirrors the store's creator index; the fake
+// filters its own rows.
+func (f *htaskCovAgentDir) ListSubscriptionsByCreator(ctx context.Context, creatorID, agentID string) ([]*model.AgentSubscription, error) {
+	all, err := f.ListAllSubscriptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.AgentSubscription, 0, len(all))
+	for _, sub := range all {
+		if sub.CreatorID == creatorID && sub.AgentID == agentID {
+			out = append(out, sub)
+		}
+	}
+	return out, nil
+}
+
 func (f *htaskCovAgentDir) ListAllSubscriptions(context.Context) ([]*model.AgentSubscription, error) {
 	return nil, nil
 }
@@ -584,6 +637,18 @@ func (f *htaskCovMessages) SetMachineReaction(context.Context, string, string, s
 	return nil
 }
 
+// ThreadWindowMessages mirrors the bounded window read.
+func (f *htaskCovMessages) ThreadWindowMessages(ctx context.Context, userID, parentID, parentType, threadRootID string, limit int) ([]*model.Message, error) {
+	all, err := f.ListThreadMessages(ctx, userID, parentID, parentType, threadRootID)
+	if err != nil || limit <= 0 {
+		return nil, err
+	}
+	if len(all) > limit {
+		all = all[len(all)-limit:]
+	}
+	return all, nil
+}
+
 func (f *htaskCovMessages) ListThreadMessages(context.Context, string, string, string, string) ([]*model.Message, error) {
 	return nil, nil
 }
@@ -645,6 +710,11 @@ type htaskCovTaskStore struct {
 
 func newHtaskCovTaskStore() *htaskCovTaskStore {
 	return &htaskCovTaskStore{tasks: map[string]*model.CodingTask{}, projects: map[string]*model.CodingProject{}}
+}
+
+func (f *htaskCovTaskStore) DeleteTask(_ context.Context, id string) error {
+	delete(f.tasks, id)
+	return nil
 }
 
 func (f *htaskCovTaskStore) CreateTask(_ context.Context, t *model.CodingTask) error {
@@ -795,6 +865,9 @@ func (fx *htaskCovFixture) seedRun(t *testing.T, id, invokerID, taskID string) *
 		ID: id, AgentID: htaskCovDevID, OwnerID: invokerID, InvokerID: invokerID,
 		ParentID: "chan-general", ParentType: service.ParentChannel, MessageID: "m-" + id,
 		State: model.RunStateRunning, Mode: model.RunModeTask, TaskID: taskID,
+		// A live deadline: server-raised approval gates refuse to park a run
+		// that is already about to be killed.
+		Deadline: now.Add(time.Hour), HardDeadline: now.Add(2 * time.Hour),
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := fx.runs.CreateRun(context.Background(), run); err != nil {
@@ -1094,6 +1167,39 @@ func TestHtaskCovRequestMR(t *testing.T) {
 		}
 		if sum, _ := out["summary"].(string); !strings.Contains(sum, task.ID) {
 			t.Fatalf("summary must carry the task id: %v", out["summary"])
+		}
+		// The SERVER raised the card and hands back its id: the runner waits on
+		// that approval instead of composing one, so nothing the model writes
+		// can stand in for the requester's sign-off.
+		if id, _ := out["approvalID"].(string); id == "" {
+			t.Fatalf("no server-raised approval id: %v", out)
+		}
+		if !strings.Contains(out["message"].(string), "wait for the given approvalID") {
+			t.Fatalf("message should point at the raised gate: %v", out["message"])
+		}
+	})
+
+	t.Run("ask falls back when the gate cannot be raised", func(t *testing.T) {
+		// A run too close to its deadline to park cannot carry a gate; the
+		// response then tells an older runner to raise its own card.
+		fx := newHtaskCovFixture(t)
+		task := fx.seedTask(t, "t1", model.TaskStateAwaitingTest, htaskCovBackendRepos())
+		run := fx.seedRun(t, "run-tight", "u-alice", task.ID)
+		fx.runs.runs[run.ID].Deadline = time.Now().Add(time.Second)
+		rec := httptest.NewRecorder()
+		fx.h.RequestMR(rec, htaskCovReq(http.MethodPost, "/api/v1/agent/run/coding-task/request-mr", "{}", "u-alice", "run-tight"))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request-mr = %d (%s)", rec.Code, rec.Body.String())
+		}
+		out := htaskCovDecode(t, rec)
+		if out["status"] != service.MRStatusAsk {
+			t.Fatalf("status = %v, want ask", out["status"])
+		}
+		if _, ok := out["approvalID"]; ok {
+			t.Fatalf("no gate should be reported: %v", out)
+		}
+		if !strings.Contains(out["message"].(string), "raise the approval") {
+			t.Fatalf("message should ask the runner to raise it: %v", out["message"])
 		}
 	})
 

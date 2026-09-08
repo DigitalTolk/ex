@@ -18,7 +18,7 @@ func TestOrchestrator_ApprovalDecidedByInvoker(t *testing.T) {
 	run := fx.startRun(t)
 	fx.claim(t)
 
-	a, err := fx.orch.RequestApproval(context.Background(), run, "delete 3 stale branches", "low", nil)
+	a, err := fx.orch.RequestApproval(context.Background(), run, ApprovalRequest{Summary: "delete 3 stale branches", Risk: "low"})
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -27,11 +27,11 @@ func TestOrchestrator_ApprovalDecidedByInvoker(t *testing.T) {
 	}
 
 	// A bystander may not decide.
-	if _, err := fx.orch.DecideApproval(context.Background(), "u-bob", run.ID, a.ID, true, "", ""); !errors.Is(err, ErrNotInvoker) {
+	if _, err := fx.orch.DecideApproval(context.Background(), "u-bob", run.ID, a.ID, Decision{Approve: true}); !errors.Is(err, ErrNotInvoker) {
 		t.Fatalf("bystander decision: want ErrNotInvoker, got %v", err)
 	}
 
-	decided, err := fx.orch.DecideApproval(context.Background(), "u-alice", run.ID, a.ID, true, "", "")
+	decided, err := fx.orch.DecideApproval(context.Background(), "u-alice", run.ID, a.ID, Decision{Approve: true})
 	if err != nil {
 		t.Fatalf("decide: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestOrchestrator_ApprovalDecidedByInvoker(t *testing.T) {
 		t.Fatalf("expected ⚙️ after decision, got %q", fx.msgs.lastReaction())
 	}
 	// Exactly once.
-	if _, err := fx.orch.DecideApproval(context.Background(), "u-alice", run.ID, a.ID, false, "", ""); !errors.Is(err, ErrApprovalSettled) {
+	if _, err := fx.orch.DecideApproval(context.Background(), "u-alice", run.ID, a.ID, Decision{}); !errors.Is(err, ErrApprovalSettled) {
 		t.Fatalf("second decision: want ErrApprovalSettled, got %v", err)
 	}
 	// The poll sees the verdict.
@@ -59,7 +59,7 @@ func TestOrchestrator_ApprovalExpiresAtDeadline(t *testing.T) {
 	run := fx.startRun(t)
 	fx.claim(t)
 
-	a, err := fx.orch.RequestApproval(context.Background(), run, "post to #announcements", "", nil)
+	a, err := fx.orch.RequestApproval(context.Background(), run, ApprovalRequest{Summary: "post to #announcements"})
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestOrchestrator_ApprovalExpiresAtDeadline(t *testing.T) {
 		t.Fatalf("state = %q, want expired", got.State)
 	}
 	// A late decision loses cleanly.
-	if _, err := fx.orch.DecideApproval(context.Background(), "u-alice", run.ID, a.ID, true, "", ""); !errors.Is(err, ErrApprovalSettled) {
+	if _, err := fx.orch.DecideApproval(context.Background(), "u-alice", run.ID, a.ID, Decision{Approve: true}); !errors.Is(err, ErrApprovalSettled) {
 		t.Fatalf("late decision: want ErrApprovalSettled, got %v", err)
 	}
 }
@@ -84,7 +84,7 @@ func TestOrchestrator_ApprovalDeadlineCappedByRun(t *testing.T) {
 	run := fx.startRun(t)
 	fx.claim(t)
 
-	a, err := fx.orch.RequestApproval(context.Background(), run, "risky thing", "high", nil)
+	a, err := fx.orch.RequestApproval(context.Background(), run, ApprovalRequest{Summary: "risky thing", Risk: "high"})
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -101,18 +101,18 @@ func TestOrchestrator_ChoiceApproval(t *testing.T) {
 	fx.claim(t)
 
 	// A single option is not a choice.
-	if _, err := fx.orch.RequestApproval(context.Background(), run, "pick one", "", []string{"only"}); !errors.Is(err, ErrValidation) {
+	if _, err := fx.orch.RequestApproval(context.Background(), run, ApprovalRequest{Summary: "pick one", Options: []string{"only"}}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("single option accepted: %v", err)
 	}
-	a, err := fx.orch.RequestApproval(context.Background(), run, "which backend?", "", []string{"claude", "codex"})
+	a, err := fx.orch.RequestApproval(context.Background(), run, ApprovalRequest{Summary: "which backend?", Options: []string{"claude", "codex"}})
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
 	// A pick outside the options is rejected and the approval stays pending.
-	if _, err := fx.orch.DecideApproval(context.Background(), "u-alice", run.ID, a.ID, true, "gemini", ""); !errors.Is(err, ErrValidation) {
+	if _, err := fx.orch.DecideApproval(context.Background(), "u-alice", run.ID, a.ID, Decision{Approve: true, Choice: "gemini"}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("off-menu choice accepted: %v", err)
 	}
-	decided, err := fx.orch.DecideApproval(context.Background(), "u-alice", run.ID, a.ID, true, "codex", "")
+	decided, err := fx.orch.DecideApproval(context.Background(), "u-alice", run.ID, a.ID, Decision{Approve: true, Choice: "codex"})
 	if err != nil {
 		t.Fatalf("decide: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestOrchestrator_StopThreadCancelsConversation(t *testing.T) {
 		t.Fatalf("stop started new work: %v", ids)
 	}
 	// Runner events against the canceled run are rejected with abort.
-	abort, reason, _ := fx.orch.ReportEvents(context.Background(), "r1", run.ID, []RunEventInput{{Seq: 1, Type: "turn"}})
+	abort, reason, _ := fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID, []RunEventInput{{Seq: 1, Type: "turn"}})
 	if !abort || reason != "run_closed" {
 		t.Fatalf("canceled run still accepts events: abort=%v reason=%q", abort, reason)
 	}
@@ -170,7 +170,7 @@ func TestOrchestrator_ApprovalIsInvokerPrivate(t *testing.T) {
 	run := fx.startRun(t)
 	fx.claim(t)
 
-	a, err := fx.orch.RequestApproval(context.Background(), run, "publish the summary", "low", nil)
+	a, err := fx.orch.RequestApproval(context.Background(), run, ApprovalRequest{Summary: "publish the summary", Risk: "low"})
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestOrchestrator_ApprovalIsInvokerPrivate(t *testing.T) {
 	}
 
 	// A non-invoker cannot decide.
-	if _, err := fx.orch.DecideApproval(context.Background(), "u-bob", run.ID, a.ID, true, "", ""); err == nil {
+	if _, err := fx.orch.DecideApproval(context.Background(), "u-bob", run.ID, a.ID, Decision{Approve: true}); err == nil {
 		t.Fatal("a bystander decided an approval that wasn't theirs")
 	}
 	got, _ := fx.orch.ApprovalStatus(context.Background(), run.ID, a.ID)
@@ -189,7 +189,7 @@ func TestOrchestrator_ApprovalIsInvokerPrivate(t *testing.T) {
 	}
 
 	// The invoker can.
-	if _, err := fx.orch.DecideApproval(context.Background(), "u-alice", run.ID, a.ID, true, "", ""); err != nil {
+	if _, err := fx.orch.DecideApproval(context.Background(), "u-alice", run.ID, a.ID, Decision{Approve: true}); err != nil {
 		t.Fatalf("invoker decide: %v", err)
 	}
 	got, _ = fx.orch.ApprovalStatus(context.Background(), run.ID, a.ID)

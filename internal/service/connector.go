@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -52,24 +54,81 @@ func NewConnectorService(s connectorStore) *ConnectorService {
 }
 
 var (
-	ErrConnectorInvalid  = errors.New("connector invalid")
-	ErrTokenRejected     = errors.New("token rejected by the service")
-	ErrLoginFailed       = errors.New("login failed")
-	ErrTwoFactorRequired = errors.New("two-factor code required")
+	ErrConnectorInvalid = errors.New("connector invalid")
+	ErrTokenRejected    = errors.New("token rejected by the service")
+	// ErrLoginFailed: the external service REJECTED the caller's credentials
+	// (401 to the caller). ErrServiceUnreachable: we could not reach it at all
+	// (502 — nothing is wrong with the caller). These used to be one sentinel,
+	// which is why one handler answered 401 and another 502 for the same error.
+	ErrLoginFailed        = errors.New("login failed")
+	ErrServiceUnreachable = errors.New("service unreachable")
+	ErrTwoFactorRequired  = errors.New("two-factor code required")
 )
 
 var connectorSlugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
+// allowPrivateConnectorTargets relaxes validateOutboundURL so a development
+// workspace can register a connector pointing at a service on the same
+// machine. False in production, where the server sits inside a private network
+// and a loopback/RFC-1918 target is an SSRF primitive rather than a real
+// integration. A var (like the lease/pacing knobs) so tests — which verify
+// against loopback httptest servers — can relax it as well.
+var allowPrivateConnectorTargets = false
+
+// AllowPrivateConnectorTargets opts the workspace into private/plain-HTTP
+// connector endpoints. Wired from config at boot; development only.
+func AllowPrivateConnectorTargets(v bool) { allowPrivateConnectorTargets = v }
+
+// validateOutboundURL gates every admin/provider-supplied URL the server will
+// later fetch WITH A USER'S CREDENTIAL attached (verify, token grant, base).
+// Without it, "https://…" was never actually required and neither was a
+// routable host, so a registry entry could point the server — and the token —
+// at loopback, a link-local metadata endpoint, or the private network the
+// server sits in. Empty is allowed: the optional URLs are simply unset.
+func validateOutboundURL(raw string) error {
+	if raw == "" || allowPrivateConnectorTargets {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return errors.New("is not a valid URL")
+	}
+	if u.Scheme != "https" {
+		return errors.New("must be https")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return errors.New("missing host")
+	}
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return errors.New("must not be a loopback host")
+	}
+	if ip := net.ParseIP(host); ip != nil && !publicIP(ip) {
+		return errors.New("must not be a private or loopback address")
+	}
+	return nil
+}
+
+// publicIP reports whether ip is globally routable — the addresses an SSRF
+// probe would reach are exactly the ones this rejects (loopback, link-local
+// including the 169.254.169.254 metadata endpoint, RFC-1918/ULA private
+// ranges, unspecified, multicast).
+func publicIP(ip net.IP) bool {
+	return !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() &&
+		!ip.IsLinkLocalMulticast() && !ip.IsUnspecified() && !ip.IsMulticast() &&
+		!ip.IsInterfaceLocalMulticast()
+}
+
 // IngestInput is the admin payload that registers (or replaces) a connector.
 type IngestInput struct {
-	Slug        string               `json:"slug"`
-	Title       string               `json:"title"`
-	Description string               `json:"description"`
-	BaseURL     string               `json:"baseURL"`
-	AuthKind    string               `json:"authKind"`
-	TokenURL    string               `json:"tokenURL"`
-	ClientID    string               `json:"clientID"`
-	VerifyURL   string               `json:"verifyURL"`
+	Slug        string                `json:"slug"`
+	Title       string                `json:"title"`
+	Description string                `json:"description"`
+	BaseURL     string                `json:"baseURL"`
+	AuthKind    string                `json:"authKind"`
+	TokenURL    string                `json:"tokenURL"`
+	ClientID    string                `json:"clientID"`
+	VerifyURL   string                `json:"verifyURL"`
 	Files       []model.ConnectorFile `json:"files"`
 }
 
@@ -87,13 +146,24 @@ func (s *ConnectorService) Ingest(ctx context.Context, callerID string, in Inges
 	if in.AuthKind == model.ConnectorAuthPassword && in.TokenURL == "" {
 		return nil, fmt.Errorf("%w: password connectors need tokenURL", ErrConnectorInvalid)
 	}
+	// Every one of these is fetched SERVER-SIDE with a user's bearer token or
+	// password attached, so they are an SSRF surface: refuse anything that
+	// isn't plain https to a routable host before it can be stored.
+	for label, u := range map[string]string{"baseURL": in.BaseURL, "tokenURL": in.TokenURL, "verifyURL": in.VerifyURL} {
+		if err := validateOutboundURL(u); err != nil {
+			return nil, fmt.Errorf("%w: %s %s", ErrConnectorInvalid, label, err.Error())
+		}
+	}
 	if len(in.Files) == 0 || len(in.Files) > model.ConnectorMaxFiles {
 		return nil, fmt.Errorf("%w: 1-%d files required", ErrConnectorInvalid, model.ConnectorMaxFiles)
 	}
 	names := make([]string, 0, len(in.Files))
 	seen := map[string]bool{}
 	for _, f := range in.Files {
-		if f.Name == "" || strings.Contains(f.Name, "/") || strings.Contains(f.Name, "..") {
+		// Names become paths on the runner's disk: no separators of either
+		// flavor, no traversal, and a bounded length.
+		if f.Name == "" || len(f.Name) > model.ConnectorFileNameMaxLen ||
+			strings.ContainsAny(f.Name, `/\`) || strings.Contains(f.Name, "..") {
 			return nil, fmt.Errorf("%w: bad file name %q", ErrConnectorInvalid, f.Name)
 		}
 		if len(f.Content) > model.ConnectorFileMaxBytes {
@@ -223,12 +293,25 @@ func parseServicesManifest(files []model.ConnectorFile) ([]model.ConnectorServic
 // service's RoutePrefixes with the distinct route_id prefixes it actually
 // uses — manifest names and route prefixes often differ (tasks-and-stories
 // endpoints are work.*), and scoped greps must use the real prefix.
+// generateCatalog derives the _catalog.tsv grep surface for a bundle that did
+// NOT ship one, and records each service's real route_id prefixes on the
+// manifest either way.
+//
+// The connector-provider is the CANONICAL catalog emitter (kb.BuildCatalog):
+// it regenerates the file on every publish, so a provider-sourced bundle
+// always arrives with one and this function only supplies the prefixes. This
+// is the fallback for a bundle ingested directly, and it follows the
+// provider's rules exactly — id is the only required field, keywords are
+// space-joined, every column is collapsed to one line, and rows are sorted by
+// id. The two emitters had drifted (different required fields, comma-joined
+// keywords, source-order rows, invented "user"/"read-only" defaults), so the
+// same bundle produced different catalogs depending on how it was ingested.
 func generateCatalog(files []model.ConnectorFile, services []model.ConnectorServiceInfo) string {
 	byName := map[string]string{}
 	for _, f := range files {
 		byName[f.Name] = f.Content
 	}
-	flat := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	oneLine := func(s string) string { return strings.Join(strings.Fields(s), " ") }
 	var rows []string
 	for i, svc := range services {
 		var doc struct {
@@ -247,27 +330,19 @@ func generateCatalog(files []model.ConnectorFile, services []model.ConnectorServ
 		}
 		prefixes := map[string]bool{}
 		for _, e := range doc.Endpoints {
-			if e.ID == "" || e.Method == "" || e.Path == "" {
+			if e.ID == "" {
 				continue
 			}
 			if p, _, ok := strings.Cut(e.ID, "."); ok && p != "" {
 				prefixes[p] = true
 			}
-			aud := e.Audience
-			if aud == "" {
-				aud = "user"
-			}
-			se := e.SideEffects
-			if se == "" {
-				se = "read-only"
-			}
 			rows = append(rows, strings.Join([]string{
-				e.ID,
-				e.Method + " " + e.Path,
-				se,
-				aud,
-				flat(e.Summary),
-				flat(strings.Join(e.Keywords, ",")),
+				oneLine(e.ID),
+				oneLine(strings.TrimSpace(e.Method + " " + e.Path)),
+				oneLine(e.SideEffects),
+				oneLine(e.Audience),
+				oneLine(e.Summary),
+				oneLine(strings.Join(e.Keywords, " ")),
 			}, "\t"))
 		}
 		ps := make([]string, 0, len(prefixes))
@@ -280,6 +355,7 @@ func generateCatalog(files []model.ConnectorFile, services []model.ConnectorServ
 	if len(rows) == 0 {
 		return ""
 	}
+	sort.Strings(rows)
 	return strings.Join(rows, "\n") + "\n"
 }
 
@@ -332,12 +408,6 @@ type InstallInput struct {
 	// Two-factor continuation (second call after ErrTwoFactorRequired).
 	TwoFactorCode string `json:"twoFactorCode"`
 	AccessCode    string `json:"accessCode"`
-}
-
-// TwoFactorChallenge is returned (via error) when the auth service demands a
-// second factor; the client re-calls Install with the code + AccessCode.
-type TwoFactorChallenge struct {
-	AccessCode string `json:"accessCode"`
 }
 
 var errTwoFactorChallenge = func(access string) error {
@@ -417,8 +487,16 @@ func (s *ConnectorService) Install(ctx context.Context, userID, slug string, in 
 		InstalledAt:   now,
 		UpdatedAt:     now,
 	}
+	// A reinstall is a CREDENTIAL refresh, not a policy reset: carry the user's
+	// agent-use decision and their captured identity forward. Rebuilding the row
+	// from scratch silently downgraded "never" to "ask" (and dropped the
+	// identity file) every time a token was refreshed.
 	if old, err := s.store.GetInstall(ctx, userID, slug); err == nil {
 		inst.InstalledAt = old.InstalledAt
+		inst.AgentUse = old.AgentUse
+		if inst.Identity == "" {
+			inst.Identity = old.Identity
+		}
 	}
 	if err := s.store.PutInstall(ctx, inst); err != nil {
 		return nil, err
@@ -464,7 +542,7 @@ func (s *ConnectorService) VerifyInstall(ctx context.Context, userID, slug strin
 	case verr == nil && (code == 401 || code == 403):
 		return nil, ErrTokenRejected
 	default:
-		return inst, fmt.Errorf("%w: service unreachable — still unverified", ErrLoginFailed)
+		return inst, fmt.Errorf("%w: still unverified", ErrServiceUnreachable)
 	}
 }
 
@@ -498,10 +576,23 @@ func (s *ConnectorService) InstalledIndex(ctx context.Context, userID string) ([
 	if err != nil {
 		return nil, err
 	}
+	if len(installs) == 0 {
+		return nil, nil
+	}
+	// One registry listing instead of a GetConnector per install: this runs on
+	// every bundle build, and the registry is a handful of small rows.
+	all, err := s.store.ListConnectors(ctx)
+	if err != nil {
+		return nil, err
+	}
+	bySlug := make(map[string]*model.Connector, len(all))
+	for _, c := range all {
+		bySlug[c.Slug] = c
+	}
 	out := make([]ConnectorIndexEntry, 0, len(installs))
 	for _, in := range installs {
-		c, err := s.store.GetConnector(ctx, in.ConnectorSlug)
-		if err != nil {
+		c, ok := bySlug[in.ConnectorSlug]
+		if !ok {
 			continue // dangling install
 		}
 		use := in.AgentUse
@@ -655,15 +746,31 @@ folder.
 `
 }
 
-// ForRunner returns everything the invoker has installed, ready to sync to
-// the runner's disk and env.
-func (s *ConnectorService) ForRunner(ctx context.Context, invokerID string) ([]RunnerConnector, error) {
+// ForRunner returns the invoker's installs, ready to sync to the runner's disk
+// and env — restricted to `slugs`, the run's explicit picks.
+//
+// Filtering happens BEFORE the fetch on purpose: each bundle is up to 64 files
+// of 350KB, so loading every install and letting the caller discard the rest
+// cost one full bundle read per install on every run start (10 installs, 1
+// pick = ~10x wasted reads). Empty slugs means no picks, hence nothing to
+// send — the user decides which services a run may touch.
+func (s *ConnectorService) ForRunner(ctx context.Context, invokerID string, slugs []string) ([]RunnerConnector, error) {
+	if len(slugs) == 0 {
+		return nil, nil
+	}
+	want := make(map[string]bool, len(slugs))
+	for _, sl := range slugs {
+		want[sl] = true
+	}
 	installs, err := s.store.ListInstalls(ctx, invokerID)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]RunnerConnector, 0, len(installs))
+	out := make([]RunnerConnector, 0, len(slugs))
 	for _, in := range installs {
+		if !want[in.ConnectorSlug] {
+			continue
+		}
 		c, err := s.store.GetConnector(ctx, in.ConnectorSlug)
 		if err != nil {
 			continue // registry entry removed; skip the dangling install
@@ -734,7 +841,7 @@ func (s *ConnectorService) passwordGrant(ctx context.Context, c *model.Connector
 	req.Header.Set("Accept", "application/json")
 	res, err := s.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("%w: auth service unreachable: %v", ErrLoginFailed, err)
+		return "", fmt.Errorf("%w: auth service unreachable: %v", ErrServiceUnreachable, err)
 	}
 	defer func() { _ = res.Body.Close() }()
 	raw, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
@@ -752,6 +859,12 @@ func (s *ConnectorService) passwordGrant(ctx context.Context, c *model.Connector
 		msg := out.Message
 		if msg == "" {
 			msg = fmt.Sprintf("HTTP %d", res.StatusCode)
+		}
+		// Classify by WHOSE fault it is: a 4xx means the auth service rejected
+		// these credentials (the caller can fix that), a 5xx means the auth
+		// service itself is broken (the caller cannot).
+		if res.StatusCode >= 500 {
+			return "", fmt.Errorf("%w: auth service returned %s", ErrServiceUnreachable, msg)
 		}
 		return "", fmt.Errorf("%w: %s", ErrLoginFailed, msg)
 	}

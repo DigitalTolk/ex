@@ -113,6 +113,57 @@ func (s *hrunnerCovRunStore) UpdateRun(_ context.Context, run *model.Run, expect
 	return nil
 }
 
+// AddRunSpend / AddRunPosts mirror the store's atomic counter updates: they
+// mutate the stored row in place and hand it back as committed.
+func (s *hrunnerCovRunStore) AddRunSpend(_ context.Context, runID, runnerID string, d store.RunSpendDelta) (*model.Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.updateErr != nil {
+		return nil, s.updateErr
+	}
+	run, ok := s.runs[runID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if run.State.Terminal() || run.RunnerID != runnerID {
+		return nil, store.ErrStaleRun
+	}
+	run.Spend.Turns += d.Turns
+	run.Spend.InputTokens += d.InputTokens
+	run.Spend.OutputTokens += d.OutputTokens
+	run.LastRunnerSeq = d.LastRunnerSeq
+	if d.State != "" {
+		run.State = d.State
+	}
+	if !d.Deadline.IsZero() {
+		run.Deadline = d.Deadline
+	}
+	if !d.Lease.IsZero() {
+		l := d.Lease
+		run.LeaseExpiresAt = &l
+	}
+	cp := *run
+	return &cp, nil
+}
+
+func (s *hrunnerCovRunStore) AddRunPosts(_ context.Context, runID string, delta int) (*model.Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.updateErr != nil {
+		return nil, s.updateErr
+	}
+	run, ok := s.runs[runID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if run.State.Terminal() {
+		return nil, store.ErrStaleRun
+	}
+	run.Spend.Posts += delta
+	cp := *run
+	return &cp, nil
+}
+
 func (s *hrunnerCovRunStore) RenewRunLease(_ context.Context, runID, runnerID string, lease time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -338,6 +389,10 @@ func (d *hrunnerCovDir) GetSkill(_ context.Context, id string) (*model.Skill, er
 	return nil, store.ErrNotFound
 }
 
+func (d *hrunnerCovDir) ListSkillIndex(ctx context.Context) ([]*model.Skill, error) {
+	return d.ListSkills(ctx)
+}
+
 func (d *hrunnerCovDir) ListSkills(context.Context) ([]*model.Skill, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -369,6 +424,22 @@ func (d *hrunnerCovDir) PutAgentSubscription(context.Context, *model.AgentSubscr
 func (d *hrunnerCovDir) ListSubscriptionsByParent(context.Context, string) ([]*model.AgentSubscription, error) {
 	return nil, nil
 }
+// ListSubscriptionsByCreator mirrors the store's creator index; the fake
+// filters its own rows.
+func (d *hrunnerCovDir) ListSubscriptionsByCreator(ctx context.Context, creatorID, agentID string) ([]*model.AgentSubscription, error) {
+	all, err := d.ListAllSubscriptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.AgentSubscription, 0, len(all))
+	for _, sub := range all {
+		if sub.CreatorID == creatorID && sub.AgentID == agentID {
+			out = append(out, sub)
+		}
+	}
+	return out, nil
+}
+
 func (d *hrunnerCovDir) ListAllSubscriptions(context.Context) ([]*model.AgentSubscription, error) {
 	return nil, nil
 }
@@ -439,6 +510,7 @@ func (f *hrunnerCovUsers) GetUsersByIDs(_ context.Context, ids []string) ([]*mod
 type hrunnerCovOrchMsgs struct {
 	mu   sync.Mutex
 	sent []string
+	checkAccessErr error
 }
 
 func (f *hrunnerCovOrchMsgs) SendAsAgentRun(_ context.Context, agentID, _, parentID, parentType, body, parentMessageID, runID string) (*model.Message, error) {
@@ -455,6 +527,24 @@ func (f *hrunnerCovOrchMsgs) SendAsAgentRun(_ context.Context, agentID, _, paren
 func (f *hrunnerCovOrchMsgs) SetMachineReaction(context.Context, string, string, string, string, string) error {
 	return nil
 }
+// CheckAccess is the membership rule behind run reads; the fakes allow
+// everything unless a test flips checkAccessErr.
+func (f *hrunnerCovOrchMsgs) CheckAccess(context.Context, string, string, string) error {
+	return f.checkAccessErr
+}
+
+// ThreadWindowMessages mirrors the bounded window read.
+func (f *hrunnerCovOrchMsgs) ThreadWindowMessages(ctx context.Context, userID, parentID, parentType, threadRootID string, limit int) ([]*model.Message, error) {
+	all, err := f.ListThreadMessages(ctx, userID, parentID, parentType, threadRootID)
+	if err != nil || limit <= 0 {
+		return nil, err
+	}
+	if len(all) > limit {
+		all = all[len(all)-limit:]
+	}
+	return all, nil
+}
+
 func (f *hrunnerCovOrchMsgs) ListThreadMessages(context.Context, string, string, string, string) ([]*model.Message, error) {
 	return nil, nil
 }
@@ -508,6 +598,19 @@ func (s *hrunnerCovMsgStore) DeleteMessage(context.Context, string, string) erro
 func (s *hrunnerCovMsgStore) ListMessages(context.Context, string, string, int) ([]*model.Message, bool, error) {
 	return nil, false, nil
 }
+// ListThreadRepliesNewest mirrors the store's bounded read: the newest
+// `limit` replies, oldest-first.
+func (s *hrunnerCovMsgStore) ListThreadRepliesNewest(ctx context.Context, threadRootID string, limit int) ([]*model.Message, error) {
+	all, err := s.ListThreadReplies(ctx, threadRootID)
+	if err != nil || limit <= 0 {
+		return nil, err
+	}
+	if len(all) > limit {
+		all = all[len(all)-limit:]
+	}
+	return all, nil
+}
+
 func (s *hrunnerCovMsgStore) ListThreadReplies(context.Context, string) ([]*model.Message, error) {
 	return nil, nil
 }
@@ -858,6 +961,30 @@ func TestHrunnerCovClaim(t *testing.T) {
 			t.Errorf("assignment = %v", a)
 		}
 	})
+	t.Run("oversized batch is clamped", func(t *testing.T) {
+		// `max` is runner-supplied and was unbounded: one call could ask for
+		// every queued run at once, each of them a full bundle build.
+		fx := hrunnerCovNewFix(t)
+		fx.runs.mu.Lock()
+		for i := 0; i < maxClaimBatch+3; i++ {
+			id := fmt.Sprintf("hrc-many-%02d", i)
+			fx.runs.runs[id] = &model.Run{
+				ID: id, AgentID: hrunnerCovAgentID, InvokerID: hrunnerCovInvoker, OwnerID: hrunnerCovInvoker,
+				ParentID: hrunnerCovChan, ParentType: service.ParentChannel,
+				State: model.RunStateQueued, Harness: model.HarnessClaude, Limits: model.DefaultAgentLimits(),
+			}
+			fx.runs.queue = append(fx.runs.queue, id)
+		}
+		fx.runs.mu.Unlock()
+		rec := hrunnerCovDo(t, fx.runnerH.Claim, http.MethodPost,
+			fmt.Sprintf(`{"runnerID":"r-clamp","harnesses":["claude"],"waitSec":5,"max":%d}`, maxClaimBatch*10),
+			hrunnerCovRunnerClaims(), nil)
+		hrunnerCovWantStatus(t, rec, http.StatusOK)
+		as, _ := hrunnerCovBody(t, rec)["assignments"].([]any)
+		if len(as) == 0 || len(as) > maxClaimBatch {
+			t.Fatalf("handed out %d assignments, want 1..%d", len(as), maxClaimBatch)
+		}
+	})
 	t.Run("empty wait yields 204", func(t *testing.T) {
 		fx := hrunnerCovNewFix(t)
 		rec := hrunnerCovDo(t, fx.runnerH.Claim, http.MethodPost, `{"runnerID":"r1","waitSec":1}`, hrunnerCovRunnerClaims(), nil)
@@ -1084,13 +1211,40 @@ func TestHrunnerCovPostMessage(t *testing.T) {
 		run := fx.addRun(&model.Run{ThreadRootID: hrunnerCovRoot})
 		_ = run
 		fx.runs.mu.Lock()
-		fx.runs.getRunErrAfter = 1 // GetLiveRun succeeds; RecordAgentPost's read fails
+		fx.runs.updateErr = errors.New("hrunnerCov: post counter write failed")
 		fx.runs.mu.Unlock()
 		rec := hrunnerCovDo(t, fx.toolH.PostMessage, http.MethodPost, `{"body":"hi again"}`, hrunnerCovToolClaims(hrunnerCovRunID), nil)
 		hrunnerCovWantStatus(t, rec, http.StatusOK)
 		got := hrunnerCovBody(t, rec)
 		if got["remainingPosts"] != float64(0) {
 			t.Errorf("remainingPosts = %v, want 0", got["remainingPosts"])
+		}
+	})
+	t.Run("a failed post releases its idempotency key", func(t *testing.T) {
+		// The key is claimed BEFORE the post so a concurrent retry cannot
+		// double-post; a post that then fails must release it, or the retry
+		// would be deduped against a message that never existed.
+		fx := hrunnerCovNewFix(t)
+		// A parent the invoker cannot post into: the send is rejected AFTER the
+		// key was claimed.
+		run := fx.addRun(&model.Run{ParentID: "hrc-no-access", ParentType: service.ParentChannel})
+		rec := hrunnerCovDo(t, fx.toolH.PostMessage, http.MethodPost,
+			`{"body":"hi","idempotencyKey":"k-1"}`, hrunnerCovToolClaims(hrunnerCovRunID), nil)
+		hrunnerCovWantStatus(t, rec, http.StatusForbidden)
+
+		// Move the run somewhere postable and retry the SAME key.
+		fx.runs.mu.Lock()
+		fx.runs.runs[run.ID].ParentID = hrunnerCovChan
+		fx.runs.mu.Unlock()
+		rec = hrunnerCovDo(t, fx.toolH.PostMessage, http.MethodPost,
+			`{"body":"hi","idempotencyKey":"k-1"}`, hrunnerCovToolClaims(hrunnerCovRunID), nil)
+		hrunnerCovWantStatus(t, rec, http.StatusOK)
+		got := hrunnerCovBody(t, rec)
+		if got["deduped"] == true {
+			t.Fatalf("the retry was deduped against a post that never happened: %v", got)
+		}
+		if got["messageID"] == "" {
+			t.Fatalf("retry did not post: %v", got)
 		}
 	})
 }
@@ -1152,7 +1306,9 @@ func TestHrunnerCovWriteContext(t *testing.T) {
 		fx.addRun(&model.Run{})
 		fx.ctxst.listN = model.ContextItemsPerScope
 		rec := hrunnerCovDo(t, fx.toolH.WriteContext, http.MethodPost, `{"body":"fact"}`, hrunnerCovToolClaims(hrunnerCovRunID), nil)
-		hrunnerCovWantStatus(t, rec, http.StatusTooManyRequests)
+		// One status per sentinel: a full shared context is 409 everywhere now
+		// (it used to answer 429 here and 409 on the SPA route).
+		hrunnerCovWantStatus(t, rec, http.StatusConflict)
 	})
 	t.Run("forbidden", func(t *testing.T) {
 		fx := hrunnerCovNewFix(t)

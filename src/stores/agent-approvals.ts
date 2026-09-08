@@ -16,7 +16,6 @@ export interface PendingApproval {
   agentID: string;
   invokerID: string;
   parentID: string;
-  parentType?: 'channel' | 'conversation';
   // The message that invoked the run. Only used to ack desktop delivery so the
   // deferred mobile push stands down — never as a dedup key, since every gate
   // in a run shares it.
@@ -55,7 +54,17 @@ function publish(): void {
   for (const list of Object.values(next)) {
     list.sort((a, b) => a.approvalID.localeCompare(b.approvalID));
   }
-  useAgentApprovalsStore.setState({ approvalsByParent: next });
+  // Each parent keeps its array identity while its contents are unchanged, so
+  // one parent's approval beat does not re-render every other open surface.
+  useAgentApprovalsStore.setState((s) => {
+    for (const [parentID, list] of Object.entries(next)) {
+      const before = s.approvalsByParent[parentID];
+      if (before && before.length === list.length && before.every((e, i) => e === list[i])) {
+        next[parentID] = before;
+      }
+    }
+    return { approvalsByParent: next };
+  });
   if (entries.size > 0 && !sweepTimer) {
     sweepTimer = setInterval(sweep, 30_000);
   } else if (entries.size === 0 && sweepTimer) {
@@ -107,7 +116,6 @@ export function onRunApproval(data: unknown): void {
     agentID: p.agentID ?? '',
     invokerID: p.invokerID ?? '',
     parentID: p.parentID,
-    parentType: p.parentType === 'conversation' ? 'conversation' : 'channel',
     messageID: p.messageID,
     summary: p.summary ?? '',
     risk: p.risk,

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import {
   Dialog,
@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import {
+  agentByID,
   useAgents,
   useCreateWatcher,
   useUpdateWatcher,
@@ -29,6 +30,17 @@ export interface EditingWatcher {
   actionMode: WatchActionMode;
 }
 
+// WatchedThreadRow is one of the viewer's watchers as the API returns it. The
+// dialog resolves agent ids against its OWN roster query, so callers no longer
+// need a roster of their own — MessageItem was mounting a useAgents observer
+// per message row purely to map ids to names for this list.
+export interface WatchedThreadRow {
+  id: string;
+  agentID: string;
+  instruction?: string;
+  actionMode?: string;
+}
+
 interface WatcherDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -39,14 +51,28 @@ interface WatcherDialogProps {
   // When set (non-empty), the dialog MANAGES these existing watchers — edit
   // their standing order, switch between them, or delete — instead of adding a
   // new one. Empty/undefined = the add-a-watcher flow.
-  editingList?: EditingWatcher[];
+  editingRows?: WatchedThreadRow[];
 }
 
 // WatcherDialog is the single surface for thread watchers: add one (pick agent,
 // instruction, autonomy) or MANAGE existing ones (same form, prefilled, with
 // Update + Delete). Mirrors the "Remind me" flow — one message action, one form.
-export function WatcherDialog({ open, onOpenChange, parentID, parentType, threadRootID, editingList }: WatcherDialogProps) {
+export function WatcherDialog({ open, onOpenChange, parentID, parentType, threadRootID, editingRows }: WatcherDialogProps) {
   const { data: agents } = useAgents();
+  const editingList = useMemo<EditingWatcher[] | undefined>(
+    () =>
+      editingRows?.map((w) => {
+        const agent = agentByID(agents, w.agentID);
+        return {
+          id: w.id,
+          slug: agent?.slug ?? '',
+          agentName: agent?.displayName ?? 'an agent',
+          instruction: w.instruction ?? '',
+          actionMode: (w.actionMode ?? 'notify') as WatchActionMode,
+        };
+      }),
+    [editingRows, agents],
+  );
   const createWatcher = useCreateWatcher();
   const updateWatcher = useUpdateWatcher();
   const removeWatcher = useRemoveWatcher();
@@ -82,9 +108,21 @@ export function WatcherDialog({ open, onOpenChange, parentID, parentType, thread
   /* istanbul ignore next -- edit mode always has a selection */
   const selectedID = selected?.id ?? '';
 
+  // Manage mode routes by the watched agent's SLUG, which the dialog resolves
+  // from its own roster query. Until that lands there is no route to call, so
+  // the write paths refuse and SAY SO — a disabled button with no explanation
+  // leaves the person guessing, and a guard only in the disabled attribute is
+  // one refactor away from firing a request at /agents//subscriptions/… .
+  const notReady = isEdit && !selected?.slug;
+  const notReadyMessage = 'Still loading this watcher’s agent — try again in a moment.';
+
   const confirm = async () => {
     if (!isEdit && !effectiveSlug) {
       setError('Pick an agent.');
+      return;
+    }
+    if (notReady) {
+      setError(notReadyMessage);
       return;
     }
     if (!instruction.trim()) {
@@ -124,6 +162,10 @@ export function WatcherDialog({ open, onOpenChange, parentID, parentType, thread
   const remove = async () => {
     /* istanbul ignore if -- remove renders only in edit mode, where a watcher is always selected */
     if (!selected) return;
+    if (notReady) {
+      setError(notReadyMessage);
+      return;
+    }
     setPending(true);
     setError('');
     try {

@@ -97,6 +97,10 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	// Outside development the table is provisioned elsewhere, so TTL enablement
+	// is an ASSUMPTION — assert it at boot rather than discovering years of
+	// unexpired runner/claim/follow rows later.
+	db.CheckTTL(ctx)
 
 	// ------------------------------------------------------------------ Redis (cache)
 	redisCache, err := cache.NewRedisCache(cfg.RedisURL)
@@ -283,6 +287,10 @@ func main() {
 	// Connectors: external-service API docs bundles + per-user credentials
 	// (installed via the SPA, shipped to the invoker's runner per run).
 	connectorSvc := service.NewConnectorService(store.NewConnectorStore(db))
+	// Connector endpoints are fetched server-side WITH a user's credential, so
+	// production refuses plain HTTP and non-routable targets outright (SSRF);
+	// a dev workspace may point a connector at a service on the same machine.
+	service.AllowPrivateConnectorTargets(cfg.IsDev())
 	connectorH := handler.NewConnectorHandler(connectorSvc, orchestrator)
 	orchestrator.SetConnectorRegistry(connectorSvc)
 	// The connector catalog is SOURCED from the standalone connector-provider:

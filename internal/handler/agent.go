@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -102,7 +101,7 @@ type createAgentBody struct {
 // POST /api/v1/agents
 func (h *AgentHandler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	var body createAgentBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
@@ -132,7 +131,7 @@ func (h *AgentHandler) RenameAgent(w http.ResponseWriter, r *http.Request) {
 		DisplayName string    `json:"displayName"`
 		SkillIDs    *[]string `json:"skillIDs"` // nil = unchanged, [] = clear
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
@@ -193,21 +192,19 @@ func (h *AgentHandler) UpdatePrefs(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
 	slug := r.PathValue("slug")
 	var patch service.AgentPrefsPatch
-	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+	if err := readAgentJSON(r, &patch, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
 	if _, err := h.agents.UpdatePrefs(r.Context(), callerID, slug, patch); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "unknown agent")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		// The shared table, not a blanket 400 carrying err.Error(): a store
+		// failure here answered "bad request" with an internal chain in it.
+		writeAgentError(w, r, err, "internal")
 		return
 	}
 	agent, err := h.agents.GetAgentBySlug(r.Context(), slug)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "agent lookup failed")
+		writeInternalError(w, r, "internal", err)
 		return
 	}
 	v, err := h.view(r, agent, callerID)
@@ -248,23 +245,12 @@ func (h *AgentHandler) MintRunnerToken(w http.ResponseWriter, r *http.Request) {
 // GET /api/v1/runs/{id}
 func (h *AgentHandler) Timeline(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
-	run, evts, err := h.orch.Timeline(r.Context(), r.PathValue("id"))
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "not_found", "run not found")
-		return
-	}
+	// Access lives in the orchestrator (the invoker always, otherwise any
+	// member of the run's parent), so every reader of a timeline gets it.
+	run, evts, evtsDropped, err := h.orch.Timeline(r.Context(), callerID, r.PathValue("id"))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "failed to load run")
+		writeRunAccessError(w, r, err, "failed to load run")
 		return
-	}
-	// Access: the invoker always; otherwise any member of the run's parent —
-	// agent work in a shared channel is shared context, and the timeline
-	// contains nothing the channel itself doesn't already expose.
-	if callerID != run.InvokerID {
-		if h.access == nil || h.access.CheckAccess(r.Context(), callerID, run.ParentID, run.ParentType) != nil {
-			writeError(w, http.StatusForbidden, "forbidden", "no access to this run")
-			return
-		}
 	}
 	// Display names for the drawer header (agent + invoker are the only
 	// actors a timeline carries).
@@ -277,7 +263,7 @@ func (h *AgentHandler) Timeline(w http.ResponseWriter, r *http.Request) {
 	// Artifacts ride along (small, inline-capped) — the drawer is their viewer.
 	artifacts, err := h.orch.Artifacts(r.Context(), run.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "failed to load artifacts")
+		writeInternalError(w, r, "internal", err)
 		return
 	}
 	// Whole-conversation totals: a chained debate is many runs, and a fresh
@@ -285,6 +271,9 @@ func (h *AgentHandler) Timeline(w http.ResponseWriter, r *http.Request) {
 	threadSpend := h.orch.ThreadSpend(r.Context(), run)
 	writeJSON(w, http.StatusOK, JSON{
 		"run": run, "events": evts, "users": users, "artifacts": artifacts, "threadSpend": threadSpend,
+		// A turn-uncapped task run can produce thousands of events; the newest
+		// are returned and this says how many older ones were left out.
+		"eventsOmitted": evtsDropped,
 	})
 }
 
@@ -299,25 +288,13 @@ func (h *AgentHandler) ThreadTimeline(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "parent and root are required")
 		return
 	}
-	runs, evts, err := h.orch.ThreadTimeline(r.Context(), parentID, rootID)
+	runs, evts, evtsDropped, err := h.orch.ThreadTimeline(r.Context(), callerID, parentID, rootID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "failed to load thread activity")
+		writeRunAccessError(w, r, err, "failed to load thread activity")
 		return
 	}
 	if len(runs) == 0 {
 		writeError(w, http.StatusNotFound, "not_found", "no agent activity in this thread")
-		return
-	}
-	// Access mirrors Timeline: an invoker of any run, else a member of the parent.
-	invoker := false
-	for _, run := range runs {
-		if run.InvokerID == callerID {
-			invoker = true
-			break
-		}
-	}
-	if !invoker && (h.access == nil || h.access.CheckAccess(r.Context(), callerID, parentID, runs[0].ParentType) != nil) {
-		writeError(w, http.StatusForbidden, "forbidden", "no access to this thread")
 		return
 	}
 	users := JSON{}
@@ -359,7 +336,10 @@ func (h *AgentHandler) ThreadTimeline(w http.ResponseWriter, r *http.Request) {
 	latest := runs[len(runs)-1]
 	writeJSON(w, http.StatusOK, JSON{
 		"run": latest, "runs": runs, "events": evts, "users": users, "artifacts": artifacts, "messages": msgs,
-		"threadSpend": h.orch.ThreadSpend(r.Context(), latest),
+		"eventsOmitted": evtsDropped,
+		// Totalled from the runs already in hand — this used to re-run the same
+		// hundred-run listing just to add one line.
+		"threadSpend": service.SpendOf(runs),
 	})
 }
 
@@ -369,20 +349,10 @@ func (h *AgentHandler) ThreadTimeline(w http.ResponseWriter, r *http.Request) {
 // POST /api/v1/runs/{id}/stop
 func (h *AgentHandler) StopRun(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
-	run, err := h.orch.Run(r.Context(), r.PathValue("id"))
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "not_found", "run not found")
-		return
-	}
+	run, err := h.orch.RunForCaller(r.Context(), callerID, r.PathValue("id"))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "failed to load run")
+		writeRunAccessError(w, r, err, "failed to load run")
 		return
-	}
-	if callerID != run.InvokerID {
-		if h.access == nil || h.access.CheckAccess(r.Context(), callerID, run.ParentID, run.ParentType) != nil {
-			writeError(w, http.StatusForbidden, "forbidden", "no access to this run")
-			return
-		}
 	}
 	stopped, err := h.orch.StopThread(r.Context(), callerID, run.ID)
 	if err != nil {
@@ -398,24 +368,9 @@ func (h *AgentHandler) StopRun(w http.ResponseWriter, r *http.Request) {
 // GET /api/v1/runs/{id}/artifacts/{artifactID}
 func (h *AgentHandler) GetArtifact(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
-	run, err := h.orch.Run(r.Context(), r.PathValue("id"))
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "not_found", "run not found")
-		return
-	}
+	_, artifacts, err := h.orch.ArtifactsForCaller(r.Context(), callerID, r.PathValue("id"))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "failed to load run")
-		return
-	}
-	if callerID != run.InvokerID {
-		if h.access == nil || h.access.CheckAccess(r.Context(), callerID, run.ParentID, run.ParentType) != nil {
-			writeError(w, http.StatusForbidden, "forbidden", "no access to this run")
-			return
-		}
-	}
-	artifacts, err := h.orch.Artifacts(r.Context(), run.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "failed to load artifacts")
+		writeRunAccessError(w, r, err, "failed to load artifacts")
 		return
 	}
 	for _, a := range artifacts {
@@ -440,11 +395,12 @@ type decideApprovalBody struct {
 func (h *AgentHandler) DecideApproval(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
 	var body decideApprovalBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
-	a, err := h.orch.DecideApproval(r.Context(), callerID, r.PathValue("id"), r.PathValue("approvalID"), body.Approve, body.Choice, body.Text)
+	a, err := h.orch.DecideApproval(r.Context(), callerID, r.PathValue("id"), r.PathValue("approvalID"),
+		service.Decision{Approve: body.Approve, Choice: body.Choice, Text: body.Text})
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrNotFound):
@@ -507,7 +463,7 @@ func (h *AgentHandler) ListParentWatchers(w http.ResponseWriter, r *http.Request
 func (h *AgentHandler) CreateSubscription(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
 	var body createSubscriptionBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ParentID == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.ParentID == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "parentID required")
 		return
 	}
@@ -563,7 +519,7 @@ func (h *AgentHandler) UpdateSubscription(w http.ResponseWriter, r *http.Request
 		Instruction string `json:"instruction"`
 		ActionMode  string `json:"actionMode"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
@@ -590,7 +546,7 @@ func (h *AgentHandler) DecideCatchUp(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Process bool `json:"process"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
@@ -633,7 +589,7 @@ func (h *AgentHandler) ListSkills(w http.ResponseWriter, r *http.Request) {
 func (h *AgentHandler) CreateSkill(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
 	var body skillBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
@@ -654,7 +610,7 @@ func (h *AgentHandler) CreateSkill(w http.ResponseWriter, r *http.Request) {
 func (h *AgentHandler) UpdateSkill(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
 	var patch service.SkillPatch
-	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+	if err := readAgentJSON(r, &patch, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}

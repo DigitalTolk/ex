@@ -19,10 +19,19 @@ type fakeTaskStore struct {
 	mu       sync.Mutex
 	tasks    map[string]*model.CodingTask
 	projects map[string]*model.CodingProject
+	// getByThreadErr distinguishes a real store failure from "no task on this
+	// thread" — the two used to be indistinguishable, so a blip silently
+	// dropped steering.
+	getByThreadErr error
 }
 
 func newFakeTaskStore() *fakeTaskStore {
 	return &fakeTaskStore{tasks: map[string]*model.CodingTask{}, projects: map[string]*model.CodingProject{}}
+}
+
+func (f *fakeTaskStore) DeleteTask(_ context.Context, id string) error {
+	delete(f.tasks, id)
+	return nil
 }
 
 func (f *fakeTaskStore) CreateTask(_ context.Context, t *model.CodingTask) error {
@@ -80,6 +89,9 @@ func (f *fakeTaskStore) ListTasksByChannel(_ context.Context, channelID string) 
 func (f *fakeTaskStore) GetTaskByThread(_ context.Context, threadRootID string) (*model.CodingTask, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.getByThreadErr != nil {
+		return nil, f.getByThreadErr
+	}
 	for _, t := range f.tasks {
 		if t.ThreadRootID == threadRootID && threadRootID != "" {
 			cp := *t
@@ -333,7 +345,7 @@ func (fx *taskFixture) intakeRun(t *testing.T, agentID, msgID string) *model.Run
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	run, err := fx.orch.StartRun(ctx, agent, alice, &model.Message{ID: msgID, ParentID: "chan-general", AuthorID: "u-alice", Body: "@dev fix"}, ParentChannel, resolved, 0, nil)
+	run, err := fx.orch.startRun(ctx, invocation{agent: agent, invoker: alice, msg: &model.Message{ID: msgID, ParentID: "chan-general", AuthorID: "u-alice", Body: "@dev fix"}, parentType: ParentChannel}, resolved)
 	if err != nil {
 		t.Fatalf("intake run: %v", err)
 	}
@@ -391,7 +403,7 @@ func TestOrchestrator_TaskThreadReplyResumesTaskRun(t *testing.T) {
 		batch = append(batch, RunEventInput{Seq: int64(i), Type: "turn"})
 	}
 	batch = append(batch, RunEventInput{Seq: 301, Type: "usage", Payload: map[string]any{"inputTokens": float64(5_000_000), "outputTokens": float64(0)}})
-	abort, reason, err := fx.orch.ReportEvents(ctx, "r1", run.ID, batch)
+	abort, reason, err := fx.orch.ReportEvents(ctx, "u-alice", "r1", run.ID, batch)
 	if err != nil || abort {
 		t.Fatalf("task run must be uncapped: abort=%v reason=%q err=%v", abort, reason, err)
 	}
@@ -474,7 +486,7 @@ func TestOrchestrator_TaskSteeringWhileBusyIsDeferred(t *testing.T) {
 	if err != nil || len(as) != 1 {
 		t.Fatalf("claim: %v", err)
 	}
-	if err := fx.orch.CompleteRun(ctx, "r1", first[0].ID, "done for now", nil); err != nil {
+	if err := fx.orch.CompleteRun(ctx, "u-alice", "r1", first[0].ID, "done for now", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	runs := fx.runsByMode(model.RunModeTask)
@@ -700,10 +712,10 @@ func TestCodingTaskService_CreateFlowAndGates(t *testing.T) {
 	}
 
 	// The MR gate.
-	if status, _, err := fx.svc.RequestMR(ctx, run, ""); err != nil || status != MRStatusAsk {
+	if status, _, _, err := fx.svc.RequestMR(ctx, run, ""); err != nil || status != MRStatusAsk {
 		t.Fatalf("request_mr before sign-off must ask, got %q %v", status, err)
 	}
-	if status, _, _ := fx.svc.RequestMR(ctx, run, "bogus"); status != MRStatusDenied {
+	if status, _, _, _ := fx.svc.RequestMR(ctx, run, "bogus"); status != MRStatusDenied {
 		t.Fatalf("unknown approval must be denied, got %q", status)
 	}
 	if _, err := fx.svc.Report(ctx, run, TaskUpdate{State: model.TaskStateMRCreated, Repos: []RepoUpdate{{Path: "dt/booking-portal-api", MRURL: "https://gitlab/x/-/merge_requests/1"}}}); !errors.Is(err, ErrTaskTransition) {
@@ -726,7 +738,7 @@ func TestCodingTaskService_CreateFlowAndGates(t *testing.T) {
 	if mrRun == nil || !strings.Contains(mrRun.Prompt, "request_mr") {
 		t.Fatalf("sign-off must start the MR run: %+v", mrRun)
 	}
-	if status, _, err := fx.svc.RequestMR(ctx, mrRun, ""); err != nil || status != MRStatusApproved {
+	if status, _, _, err := fx.svc.RequestMR(ctx, mrRun, ""); err != nil || status != MRStatusApproved {
 		t.Fatalf("request_mr after sign-off must be approved, got %q %v", status, err)
 	}
 	// mr_created needs at least one MR URL even after sign-off.

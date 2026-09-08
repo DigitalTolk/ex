@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // Coding-task hooks on the orchestrator (plan-coding-agent.md). Everything
@@ -30,7 +31,8 @@ func (o *Orchestrator) StartTaskRun(ctx context.Context, task *model.CodingTask,
 	if !agent.IsAgent() {
 		return errors.New("orchestrator: task agent is not an agent")
 	}
-	return o.invokeWith(ctx, agent, requester, msg, ParentChannel, 0, nil, model.RunModeTask, nil, nil, &taskBind{task: task, prompt: prompt})
+	return o.invoke(ctx, invocation{agent: agent, invoker: requester, msg: msg, parentType: ParentChannel,
+		mode: model.RunModeTask, bind: &taskBind{task: task, prompt: prompt}})
 }
 
 // dispatchTask resumes a task's agent for an UN-MENTIONED message: a reply
@@ -49,7 +51,12 @@ func (o *Orchestrator) dispatchTask(ctx context.Context, msg *model.Message, par
 	if msg.ParentMessageID != "" {
 		t, err := o.tasks.GetTaskByThread(ctx, msg.ParentMessageID)
 		if err != nil {
-			return // not a task thread
+			// "No task on this thread" is the ordinary case and silent. A real
+			// store error is NOT: it silently drops steering, so say so.
+			if !errors.Is(err, store.ErrNotFound) {
+				slog.Warn("task routing: thread lookup failed", "threadRootID", msg.ParentMessageID, "error", err)
+			}
+			return
 		}
 		task = t
 	} else {
@@ -74,15 +81,17 @@ func (o *Orchestrator) dispatchTask(ctx context.Context, msg *model.Message, par
 	if task.State.Terminal() || !task.SteerEntitled(author.ID) || invoked[task.AgentID] {
 		return
 	}
-	agent, err := o.users.GetUser(ctx, task.AgentID)
-	if err != nil || !agent.IsAgent() {
+	agent := o.agentUser(ctx, task.AgentID)
+	if agent == nil {
 		return
 	}
 	invoker := author
 	if author.ID != task.RequesterID {
-		if invoker, err = o.users.GetUser(ctx, task.RequesterID); err != nil {
+		requester, err := o.users.GetUser(ctx, task.RequesterID)
+		if err != nil {
 			return
 		}
+		invoker = requester
 	}
 	invoked[agent.ID] = true
 	bind := &taskBind{task: task}
@@ -91,13 +100,13 @@ func (o *Orchestrator) dispatchTask(ctx context.Context, msg *model.Message, par
 	} else if author.ID != task.RequesterID {
 		bind.prompt = fmt.Sprintf("[steering by %s, a channel member — the requester allowed anyone to steer] %s", author.DisplayName, stripMentionMarkup(msg.Body))
 	}
-	err = o.invokeWith(ctx, agent, invoker, msg, parentType, 0, nil, model.RunModeTask, nil, nil, bind)
+	err := o.invoke(ctx, invocation{agent: agent, invoker: invoker, msg: msg, parentType: parentType,
+		mode: model.RunModeTask, bind: bind})
 	if errors.Is(err, ErrAgentBusy) {
 		// Steering that lands mid-run must not be lost: park it as the
 		// thread's deferred turn (first wins) and start it when the current
 		// run ends — the same mechanism chain mentions use.
-		key := msg.ParentID + "#" + task.ThreadRootID + "#" + agent.ID
-		o.deferredTurns.LoadOrStore(key, &deferredTurn{
+		o.deferTurn(ctx, turnKey(msg.ParentID, task.ThreadRootID, agent.ID), &deferredTurn{
 			agentID: agent.ID, invokerID: invoker.ID, msg: msg, parentType: parentType, bind: bind,
 		})
 		return
@@ -143,24 +152,53 @@ func (o *Orchestrator) taskForClaim(ctx context.Context, run *model.Run, ownerID
 		slog.Warn("claim: task lookup failed", "runID", run.ID, "taskID", run.TaskID, "error", err)
 		return nil, nil // the run still executes; it just has no spec
 	}
-	if task.RunnerID != "" && task.RunnerID != runnerID {
-		if runners, err := o.agentSvc.LiveRunners(ctx, ownerID); err == nil {
-			for _, r := range runners {
-				if r.RunnerID == task.RunnerID {
-					return nil, errors.New("task pinned to another live runner")
-				}
-			}
-		}
+	if task.RunnerID != "" && task.RunnerID != runnerID && o.pinnedRunnerLive(ctx, task, ownerID) {
+		return nil, errors.New("task pinned to another live runner")
 	}
 	return task, nil
+}
+
+// pinnedRunnerLive reports whether the machine holding the task's workspace pin
+// is still alive.
+//
+// Runner registrations are keyed by OWNER, so liveness has to be checked
+// against the pin's own owner (RunnerOwnerID, falling back to the requester for
+// rows written before that field): checking only the claimer's runners made
+// every cross-owner claim read the pin as dead and steal the workspace out from
+// under the machine that holds the checkout. A lookup failure counts as LIVE —
+// an outage must not be grounds for stealing a workspace.
+func (o *Orchestrator) pinnedRunnerLive(ctx context.Context, task *model.CodingTask, claimerOwnerID string) bool {
+	owner := task.RunnerOwnerID
+	if owner == "" {
+		owner = task.RequesterID
+	}
+	for _, id := range []string{owner, claimerOwnerID} {
+		if id == "" {
+			continue
+		}
+		runners, err := o.agentSvc.LiveRunners(ctx, id)
+		if err != nil {
+			return true
+		}
+		for _, r := range runners {
+			if r.RunnerID == task.RunnerID {
+				return true
+			}
+		}
+		if claimerOwnerID == owner {
+			break // same owner — one lookup answers it
+		}
+	}
+	return false
 }
 
 // pinTaskRun records the claim on the task: workspace machine affinity (first
 // claim wins; a released pin re-pins), the run id, and the last-run time.
 func (o *Orchestrator) pinTaskRun(ctx context.Context, task *model.CodingTask, run *model.Run, runnerID string) {
 	changed := false
-	if task.RunnerID != runnerID {
+	if task.RunnerID != runnerID || task.RunnerOwnerID != run.OwnerID {
 		task.RunnerID = runnerID
+		task.RunnerOwnerID = run.OwnerID
 		changed = true
 	}
 	seen := false

@@ -29,9 +29,10 @@ type providerRegistration struct {
 	VerifyURL   string `json:"verifyURL"`
 }
 
+// providerManifest is one connector's manifest as the provider serves it. Slug
+// and revision are deliberately absent: the sync takes both from the listing
+// row it is iterating, so decoding them here only invited the two to disagree.
 type providerManifest struct {
-	Slug         string `json:"slug"`
-	Revision     string `json:"revision"`
 	Title        string `json:"title"`
 	Description  string `json:"description"`
 	Files        []struct {

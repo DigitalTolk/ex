@@ -46,19 +46,9 @@ func (s *RunStore) PutApproval(ctx context.Context, a *model.Approval) error {
 
 // GetApproval fetches one approval.
 func (s *RunStore) GetApproval(ctx context.Context, runID, approvalID string) (*model.Approval, error) {
-	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(s.Table),
-		Key:       compositeKey(runPK(runID), approvalSK(approvalID)),
-	})
+	item, err := getItem[approvalItem](ctx, s.DB, runPK(runID), approvalSK(approvalID), "approval")
 	if err != nil {
-		return nil, fmt.Errorf("store: get approval: %w", err)
-	}
-	if out.Item == nil {
-		return nil, ErrNotFound
-	}
-	var item approvalItem
-	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
-		return nil, fmt.Errorf("store: unmarshal approval: %w", err)
+		return nil, err
 	}
 	return &item.Approval, nil
 }
@@ -100,21 +90,17 @@ func (s *RunStore) ListApprovals(ctx context.Context, runID string) ([]*model.Ap
 	keyCond := expression.Key("PK").Equal(expression.Value(runPK(runID))).
 		And(expression.Key("SK").BeginsWith("APPROVAL#"))
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
-	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
+	items, err := queryAllOf[approvalItem](ctx, s.DB, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-	})
+	}, "approvals")
 	if err != nil {
-		return nil, fmt.Errorf("store: list approvals: %w", err)
+		return nil, err
 	}
 	out := make([]*model.Approval, 0, len(items))
-	for _, raw := range items {
-		var item approvalItem
-		if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
-			return nil, fmt.Errorf("store: unmarshal approval: %w", err)
-		}
+	for _, item := range items {
 		out = append(out, &item.Approval)
 	}
 	return out, nil
@@ -150,21 +136,17 @@ func (s *RunStore) ListArtifacts(ctx context.Context, runID string) ([]*model.Ar
 	keyCond := expression.Key("PK").Equal(expression.Value(runPK(runID))).
 		And(expression.Key("SK").BeginsWith("ART#"))
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
-	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
+	items, err := queryAllOf[artifactItem](ctx, s.DB, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-	})
+	}, "artifacts")
 	if err != nil {
-		return nil, fmt.Errorf("store: list artifacts: %w", err)
+		return nil, err
 	}
 	out := make([]*model.Artifact, 0, len(items))
-	for _, raw := range items {
-		var item artifactItem
-		if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
-			return nil, fmt.Errorf("store: unmarshal artifact: %w", err)
-		}
+	for _, item := range items {
 		out = append(out, &item.Artifact)
 	}
 	return out, nil

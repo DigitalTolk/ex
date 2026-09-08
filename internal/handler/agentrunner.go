@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -17,6 +16,11 @@ import (
 // maxClaimWait caps the claim long-poll well below the global 30s request
 // timeout (plan-v2 §5 — do not go near it).
 const maxClaimWait = 20 * time.Second
+
+// maxClaimBatch caps how many runs one claim call may take. Each assignment
+// mints a token and assembles a full context bundle, so this is real work per
+// item; a runner executes them one at a time anyway.
+const maxClaimBatch = 8
 
 // AgentRunnerHandler serves the desktop runner's API. Every route sits
 // behind AuthScope(runner): claims.UserID is the runner's OWNER.
@@ -55,7 +59,7 @@ func (b *runnerRegisterBody) registration(ownerID string) *model.RunnerRegistrat
 func (h *AgentRunnerHandler) Register(w http.ResponseWriter, r *http.Request) {
 	ownerID := middleware.UserIDFromContext(r.Context())
 	var body runnerRegisterBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RunnerID == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.RunnerID == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "runnerID required")
 		return
 	}
@@ -88,13 +92,18 @@ type claimBody struct {
 func (h *AgentRunnerHandler) Claim(w http.ResponseWriter, r *http.Request) {
 	ownerID := middleware.UserIDFromContext(r.Context())
 	var body claimBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RunnerID == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.RunnerID == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "runnerID required")
 		return
 	}
 	wait := time.Duration(body.WaitSec) * time.Second
 	if wait <= 0 || wait > maxClaimWait {
 		wait = maxClaimWait
+	}
+	// Max is runner-supplied and was unbounded: one claim call could ask for
+	// every queued run at once (each one a bundle build). Clamp it.
+	if body.Max > maxClaimBatch {
+		body.Max = maxClaimBatch
 	}
 	assignments, err := h.orch.Claim(r.Context(), ownerID, body.RunnerID, body.Harnesses, body.Max, wait)
 	if err != nil {
@@ -120,14 +129,18 @@ type runnerEventsBody struct {
 // whether to abort (limit tripped / run closed).
 // POST /api/v1/agent/runner/runs/{id}/events
 func (h *AgentRunnerHandler) Events(w http.ResponseWriter, r *http.Request) {
+	ownerID := middleware.UserIDFromContext(r.Context())
 	var body runnerEventsBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RunnerID == "" {
+	if err := readAgentJSON(r, &body, eventBatchBodyBytes); err != nil || body.RunnerID == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "runnerID required")
 		return
 	}
-	abort, reason, err := h.orch.ReportEvents(r.Context(), body.RunnerID, r.PathValue("id"), body.Events)
+	// The AUTHENTICATED owner rides along: body.RunnerID alone is
+	// unauthenticated input, so the orchestrator binds the run to this token's
+	// user before touching it.
+	abort, reason, err := h.orch.ReportEvents(r.Context(), ownerID, body.RunnerID, r.PathValue("id"), body.Events)
 	if err != nil && !abort {
-		h.writeRunError(w, err)
+		h.writeRunError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"abort": abort, "reason": reason})
@@ -142,13 +155,14 @@ type completeBody struct {
 // Complete finalizes a run.
 // POST /api/v1/agent/runner/runs/{id}/complete
 func (h *AgentRunnerHandler) Complete(w http.ResponseWriter, r *http.Request) {
+	ownerID := middleware.UserIDFromContext(r.Context())
 	var body completeBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RunnerID == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.RunnerID == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "runnerID required")
 		return
 	}
-	if err := h.orch.CompleteRun(r.Context(), body.RunnerID, r.PathValue("id"), body.FinalText, body.Usage); err != nil {
-		h.writeRunError(w, err)
+	if err := h.orch.CompleteRun(r.Context(), ownerID, body.RunnerID, r.PathValue("id"), body.FinalText, body.Usage); err != nil {
+		h.writeRunError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"ok": true})
@@ -162,8 +176,9 @@ type failBody struct {
 // Fail records a runner-side failure.
 // POST /api/v1/agent/runner/runs/{id}/fail
 func (h *AgentRunnerHandler) Fail(w http.ResponseWriter, r *http.Request) {
+	ownerID := middleware.UserIDFromContext(r.Context())
 	var body failBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RunnerID == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.RunnerID == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "runnerID required")
 		return
 	}
@@ -171,8 +186,8 @@ func (h *AgentRunnerHandler) Fail(w http.ResponseWriter, r *http.Request) {
 	if reason == "" {
 		reason = "runner_error"
 	}
-	if err := h.orch.FailRun(r.Context(), body.RunnerID, r.PathValue("id"), reason); err != nil {
-		h.writeRunError(w, err)
+	if err := h.orch.FailRun(r.Context(), ownerID, body.RunnerID, r.PathValue("id"), reason); err != nil {
+		h.writeRunError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"ok": true})
@@ -189,7 +204,7 @@ type heartbeatBody struct {
 func (h *AgentRunnerHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	ownerID := middleware.UserIDFromContext(r.Context())
 	var body heartbeatBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RunnerID == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.RunnerID == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "runnerID required")
 		return
 	}
@@ -204,7 +219,7 @@ func (h *AgentRunnerHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, JSON{"kill": kill})
 }
 
-func (h *AgentRunnerHandler) writeRunError(w http.ResponseWriter, err error) {
+func (h *AgentRunnerHandler) writeRunError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "run not found")
@@ -213,7 +228,9 @@ func (h *AgentRunnerHandler) writeRunError(w http.ResponseWriter, err error) {
 	case errors.Is(err, service.ErrWrongRunner):
 		writeError(w, http.StatusConflict, "wrong_runner", "run is leased to another runner")
 	default:
-		writeError(w, http.StatusInternalServerError, "internal", "run update failed")
+		// The real error is a wrapped store/pubsub chain: log it against the
+		// request id rather than dropping it on the floor.
+		writeInternalError(w, r, "internal", err)
 	}
 }
 
@@ -239,9 +256,50 @@ type AgentRunToolHandler struct {
 	baseURL string
 
 	// Post idempotency: (runID, key) → message ID. In-memory is honest for a
-	// single-instance server; entries die with the run's natural horizon.
-	mu    sync.Mutex
-	posts map[string]string
+	// single-instance server. Bounded and FIFO-evicted: the map used to grow
+	// one entry per idempotent post for the process's whole life, and the
+	// "entries die with the run" comment described something no code did.
+	mu       sync.Mutex
+	posts    map[string]string
+	postKeys []string
+}
+
+// maxPostIdempotencyKeys bounds the post-dedup map. A run posts at most
+// MaxPosts times, so this covers hundreds of concurrent runs; the oldest
+// entries fall off, and losing one only means a retried post is not deduped.
+const maxPostIdempotencyKeys = 4096
+
+// claimPost claims key for this request. ok is false when another request
+// already holds it — then existing is that request's message id, or empty
+// while its post is still in flight. Claiming and checking in one critical
+// section is the point: the old code checked, released the lock, posted, then
+// set, so two retries of the same post both passed the check and posted twice.
+func (h *AgentRunToolHandler) claimPost(key string) (existing string, ok bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if prev, held := h.posts[key]; held {
+		return prev, false
+	}
+	h.posts[key] = ""
+	h.postKeys = append(h.postKeys, key)
+	for len(h.postKeys) > maxPostIdempotencyKeys {
+		delete(h.posts, h.postKeys[0])
+		h.postKeys = h.postKeys[1:]
+	}
+	return "", true
+}
+
+// forgetPost releases a claimed idempotency key after a failed post.
+func (h *AgentRunToolHandler) forgetPost(key string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.posts, key)
+	for i, k := range h.postKeys {
+		if k == key {
+			h.postKeys = append(h.postKeys[:i], h.postKeys[i+1:]...)
+			break
+		}
+	}
 }
 
 // SetBaseURL wires the public origin used to build message permalinks.
@@ -260,14 +318,12 @@ type postMessageBody struct {
 // PostMessage posts into the run's thread as the agent, capped per run.
 // POST /api/v1/agent/run/messages
 func (h *AgentRunToolHandler) PostMessage(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, claims := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	var body postMessageBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Body) == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || strings.TrimSpace(body.Body) == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "body required")
 		return
 	}
@@ -283,14 +339,16 @@ func (h *AgentRunToolHandler) PostMessage(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusTooManyRequests, "post_cap", "per-run post cap reached")
 		return
 	}
+	// Claim the idempotency key BEFORE posting, with a placeholder: a
+	// concurrent retry then sees the claim instead of racing past an
+	// already-released lock and posting a duplicate.
+	idemKey := ""
 	if body.IdempotencyKey != "" {
-		h.mu.Lock()
-		if msgID, ok := h.posts[claims.RunID+"#"+body.IdempotencyKey]; ok {
-			h.mu.Unlock()
-			writeJSON(w, http.StatusOK, JSON{"messageID": msgID, "deduped": true})
+		idemKey = claims.RunID + "#" + body.IdempotencyKey
+		if prev, ok := h.claimPost(idemKey); !ok {
+			writeJSON(w, http.StatusOK, JSON{"messageID": prev, "deduped": true})
 			return
 		}
-		h.mu.Unlock()
 	}
 	threadRoot := run.ThreadRootID
 	if threadRoot == "" {
@@ -301,12 +359,15 @@ func (h *AgentRunToolHandler) PostMessage(w http.ResponseWriter, r *http.Request
 	text := h.orch.LinkifyMentions(r.Context(), run, body.Body)
 	msg, err := h.messages.SendAsAgentRun(r.Context(), claims.ActorID, claims.UserID, run.ParentID, run.ParentType, text, threadRoot, claims.RunID)
 	if err != nil {
+		if idemKey != "" {
+			h.forgetPost(idemKey) // the post never happened; let a retry through
+		}
 		writeError(w, http.StatusForbidden, "forbidden", "post rejected")
 		return
 	}
-	if body.IdempotencyKey != "" {
+	if idemKey != "" {
 		h.mu.Lock()
-		h.posts[claims.RunID+"#"+body.IdempotencyKey] = msg.ID
+		h.posts[idemKey] = msg.ID
 		h.mu.Unlock()
 	}
 	remaining, err := h.orch.RecordAgentPost(r.Context(), claims.RunID)
@@ -323,10 +384,8 @@ func (h *AgentRunToolHandler) PostMessage(w http.ResponseWriter, r *http.Request
 // labels the context bundle uses, read as the invoker.
 // GET /api/v1/agent/run/thread
 func (h *AgentRunToolHandler) GetThread(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, _ := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	text := h.orch.ThreadWindow(r.Context(), run, 50)
@@ -337,10 +396,8 @@ func (h *AgentRunToolHandler) GetThread(w http.ResponseWriter, r *http.Request) 
 // tool for long runs whose claim-time bundle went stale (plan-v2 §8).
 // GET /api/v1/agent/run/context
 func (h *AgentRunToolHandler) GetContext(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, _ := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"text": h.orch.BundleForRun(r.Context(), run)})
@@ -355,29 +412,23 @@ type writeContextBody struct {
 // INVOKER's access and audited on the run timeline.
 // POST /api/v1/agent/run/context
 func (h *AgentRunToolHandler) WriteContext(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, claims := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	var body writeContextBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
-	item, err := h.ctxSvc.Write(r.Context(), claims.ActorID, claims.UserID, claims.UserID, run.ParentID, run.ParentType, body.Body, body.Pinned)
+	item, err := h.ctxSvc.Write(r.Context(), service.ContextWrite{
+		// Authored by the AGENT, attributed to (and access-checked as) its invoker.
+		AuthorID: claims.ActorID, InvokerID: claims.UserID, AccessorID: claims.UserID,
+		ParentID: run.ParentID, ParentType: run.ParentType,
+		Body: body.Body, Pinned: body.Pinned,
+	})
 	if err != nil {
-		switch {
-		case errors.Is(err, service.ErrValidation):
-			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-		case errors.Is(err, service.ErrContextFull):
-			writeError(w, http.StatusTooManyRequests, "context_full", "shared context is full for this channel")
-		case errors.Is(err, service.ErrForbidden):
-			writeError(w, http.StatusForbidden, "forbidden", "no access to this channel")
-		default:
-			writeError(w, http.StatusInternalServerError, "internal", "context write failed")
-		}
+		writeAgentError(w, r, err, "internal")
 		return
 	}
 	h.orch.RecordContextWrite(r.Context(), run, item.ID, item.Pinned)
@@ -397,18 +448,20 @@ type requestApprovalBody struct {
 // polls GetApproval until it settles (plan-v2 §7 approval timing).
 // POST /api/v1/agent/run/approvals
 func (h *AgentRunToolHandler) RequestApproval(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, _ := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	var body requestApprovalBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
-	a, err := h.orch.RequestApprovalKind(r.Context(), run, body.Summary, body.Risk, body.Options, body.ToolKind)
+	// No Purpose: an approval the AGENT raised can never authorize a
+	// server-side gate (see Orchestrator.ApprovalGranted).
+	a, err := h.orch.RequestApproval(r.Context(), run, service.ApprovalRequest{
+		Summary: body.Summary, Risk: body.Risk, Options: body.Options, Kind: body.ToolKind,
+	})
 	if err != nil {
 		if errors.Is(err, service.ErrValidation) {
 			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -426,7 +479,7 @@ func (h *AgentRunToolHandler) GetApproval(w http.ResponseWriter, r *http.Request
 	claims := middleware.ClaimsFromContext(r.Context())
 	a, err := h.orch.ApprovalStatus(r.Context(), claims.RunID, r.PathValue("id"))
 	if err != nil {
-		h.writeToolError(w, err)
+		h.writeToolError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"state": a.State, "decidedBy": a.DecidedBy, "choice": a.Choice, "note": a.Note, "deadline": a.Deadline})
@@ -441,27 +494,18 @@ type publishArtifactBody struct {
 // PublishArtifact stores a run-produced document, viewable in the drawer.
 // POST /api/v1/agent/run/artifacts
 func (h *AgentRunToolHandler) PublishArtifact(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, _ := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	var body publishArtifactBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
 	a, err := h.orch.PublishArtifact(r.Context(), run, body.Kind, body.Title, body.Content)
 	if err != nil {
-		switch {
-		case errors.Is(err, service.ErrValidation):
-			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-		case errors.Is(err, service.ErrArtifactCap):
-			writeError(w, http.StatusTooManyRequests, "artifact_cap", "per-run artifact cap reached")
-		default:
-			writeError(w, http.StatusInternalServerError, "internal", "artifact publish failed")
-		}
+		writeAgentError(w, r, err, "internal")
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"artifactID": a.ID})
@@ -473,10 +517,10 @@ func (h *AgentRunToolHandler) PublishArtifact(w http.ResponseWriter, r *http.Req
 func (h *AgentRunToolHandler) ListSkills(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if _, err := h.orch.GetLiveRun(r.Context(), claims.RunID); err != nil {
-		h.writeToolError(w, err)
+		h.writeToolError(w, r, err)
 		return
 	}
-	skills, err := h.agents.ListSkills(r.Context())
+	skills, err := h.agents.ListSkillIndex(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "skill list failed")
 		return
@@ -491,10 +535,8 @@ func (h *AgentRunToolHandler) ListSkills(w http.ResponseWriter, r *http.Request)
 // InvokeSkill returns a skill's instructions and audits the use.
 // POST /api/v1/agent/run/skills/{id}
 func (h *AgentRunToolHandler) InvokeSkill(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, _ := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	sk, err := h.agents.GetSkill(r.Context(), r.PathValue("id"))
@@ -514,14 +556,12 @@ type updateMemoryBody struct {
 // into every future bundle for this pairing).
 // POST /api/v1/agent/run/memory
 func (h *AgentRunToolHandler) UpdateMemory(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, claims := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	var body updateMemoryBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
@@ -545,14 +585,12 @@ type claimTaskBody struct {
 // wins) so parallel agents can split work without racing.
 // POST /api/v1/agent/run/claims
 func (h *AgentRunToolHandler) ClaimTask(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, _ := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	var body claimTaskBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
@@ -577,25 +615,46 @@ type setStateBody struct {
 func (h *AgentRunToolHandler) SetState(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	var body setStateBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
 	if err := h.orch.SetRunState(r.Context(), claims.RunID, body.State); err != nil {
-		h.writeToolError(w, err)
+		h.writeToolError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"ok": true})
 }
 
-func (h *AgentRunToolHandler) writeToolError(w http.ResponseWriter, err error) {
+// liveRun resolves the run behind a run-scoped token and writes the error
+// response itself, returning nil when the caller must stop.
+//
+// This four-line preamble opened THIRTY-ONE tool handlers, each free to forget
+// the error branch or map it differently. Callers that also need the claims
+// take them from the second return.
+func (h *AgentRunToolHandler) liveRun(w http.ResponseWriter, r *http.Request) (*model.Run, *model.TokenClaims) {
+	claims := middleware.ClaimsFromContext(r.Context())
+	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
+	if err != nil {
+		h.writeToolError(w, r, err)
+		return nil, nil
+	}
+	return run, claims
+}
+
+func (h *AgentRunToolHandler) writeToolError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "run not found")
 	case errors.Is(err, service.ErrRunClosed):
 		writeError(w, http.StatusConflict, "run_closed", "run reached a terminal state")
-	default:
+	case errors.Is(err, service.ErrValidation):
+		// The only 4xx whose message is genuinely for the caller.
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+	default:
+		// This used to be a blanket 400 carrying err.Error() — an internal
+		// chain returned to the caller as a "bad request", with nothing logged.
+		writeInternalError(w, r, "internal", err)
 	}
 }
 
@@ -604,10 +663,8 @@ func (h *AgentRunToolHandler) writeToolError(w http.ResponseWriter, err error) {
 // the server posts the (possibly edited) text. Fire-and-forget: the run may end.
 // POST /api/v1/agent/run/propose-reply
 func (h *AgentRunToolHandler) ProposeReply(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, _ := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	var body struct {
@@ -615,7 +672,7 @@ func (h *AgentRunToolHandler) ProposeReply(w http.ResponseWriter, r *http.Reques
 		ThreadRoot string `json:"thread_root"`
 		ReplyTo    string `json:"reply_to"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Text) == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || strings.TrimSpace(body.Text) == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "text (the drafted reply) required")
 		return
 	}
@@ -644,10 +701,8 @@ func (h *AgentRunToolHandler) ProposeReply(w http.ResponseWriter, r *http.Reques
 // its invoker can't see.
 // POST /api/v1/agent/run/link-message
 func (h *AgentRunToolHandler) LinkMessage(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, claims := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	var body struct {
@@ -656,7 +711,7 @@ func (h *AgentRunToolHandler) LinkMessage(w http.ResponseWriter, r *http.Request
 		ConversationID string `json:"conversation_id"`
 		ThreadRoot     string `json:"thread_root"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.MessageID) == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || strings.TrimSpace(body.MessageID) == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "message_id required")
 		return
 	}

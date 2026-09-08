@@ -11,7 +11,6 @@ import {
   useDecideCatchUp,
   useDeleteAgentSubscription,
   useDeleteSkill,
-  useInvalidateParentWatchers,
   useParentWatchers,
   useRemoveWatcher,
   useSkills,
@@ -188,17 +187,6 @@ describe('useDecideCatchUp', () => {
       '/api/v1/watchers/ch-1/w1/catchup',
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ process: true }) }),
     );
-    expect(spy).toHaveBeenCalledWith({ queryKey: ['parent-watchers'] });
-  });
-});
-
-describe('useInvalidateParentWatchers', () => {
-  it('returns a callback that invalidates the badge queries', () => {
-    const { qc, Wrapper } = wrap();
-    const spy = vi.spyOn(qc, 'invalidateQueries');
-    const { result } = renderHook(() => useInvalidateParentWatchers(), { wrapper: Wrapper });
-
-    result.current();
     expect(spy).toHaveBeenCalledWith({ queryKey: ['parent-watchers'] });
   });
 });

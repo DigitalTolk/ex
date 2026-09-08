@@ -234,7 +234,7 @@ func TestConnector_ForRunnerShipsInstalledBundles(t *testing.T) {
 		t.Fatalf("install: %v", err)
 	}
 
-	rows, err := svc.ForRunner(context.Background(), "u-alice")
+	rows, err := svc.ForRunner(context.Background(), "u-alice", []string{"cliffhub", "core"})
 	if err != nil {
 		t.Fatalf("forRunner: %v", err)
 	}
@@ -252,9 +252,19 @@ func TestConnector_ForRunnerShipsInstalledBundles(t *testing.T) {
 	}
 
 	// Nothing installed → nothing shipped.
-	rows, err = svc.ForRunner(context.Background(), "u-bob")
+	rows, err = svc.ForRunner(context.Background(), "u-bob", []string{"cliffhub"})
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("bob rows = %v err = %v", rows, err)
+	}
+	// No picks → nothing fetched at all: the run may touch no service.
+	rows, err = svc.ForRunner(context.Background(), "u-alice", nil)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("unpicked rows = %v err = %v", rows, err)
+	}
+	// An install the run did NOT pick is never bundled.
+	rows, err = svc.ForRunner(context.Background(), "u-alice", []string{"core"})
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("non-picked rows = %v err = %v", rows, err)
 	}
 }
 
@@ -398,12 +408,21 @@ endpoints:
 	if len(lines) != 2 {
 		t.Fatalf("want 2 catalog rows, got %d: %q", len(lines), catalog)
 	}
+	// The provider is the canonical emitter and this fallback matches it
+	// byte-for-byte: six columns, missing fields left EMPTY (no invented
+	// defaults), keywords space-joined, rows sorted by id.
 	first := strings.Split(lines[0], "\t")
-	if len(first) != 6 || first[0] != "work.tasks.index" || first[1] != "GET api/work/tasks" || first[2] != "read-only" || first[3] != "user" {
+	if len(first) != 6 || first[0] != "work.tasks.index" || first[1] != "GET api/work/tasks" {
 		t.Fatalf("bad catalog row: %q", lines[0])
 	}
 	if strings.Contains(first[4], "\t") {
 		t.Fatalf("summary not sanitized: %q", first[4])
+	}
+	if strings.Contains(first[5], ",") {
+		t.Fatalf("keywords must be space-joined like the provider's: %q", first[5])
+	}
+	if lines[0] > lines[1] {
+		t.Fatalf("catalog rows must be sorted by id: %q", catalog)
 	}
 }
 

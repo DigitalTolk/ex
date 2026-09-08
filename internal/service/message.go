@@ -727,6 +727,43 @@ func (s *MessageService) followMentionedThreadUsers(ctx context.Context, msg *mo
 // ListThreadMessages returns the root message followed by all reply messages
 // for a thread, in chronological order (oldest first). ULIDs sort by timestamp,
 // so we sort by ID ascending — the underlying ListMessages returns descending.
+// ThreadWindowMessages returns at most `limit` of a thread's newest messages
+// (root included), for the agent context bundle. Unlike ListThreadMessages it
+// never drains the whole thread — the window is fixed, and a coding-task
+// thread is not.
+//
+// The GSI-lag fallback needs care here: a FULL page means the thread is at
+// least `limit` long and the window is legitimately complete, so only a SHORT
+// page that also falls short of the root's ReplyCount indicates an
+// un-backfilled thread and defers to the complete path. (Comparing against
+// ReplyCount alone would fall back on every thread longer than the window —
+// exactly the case this read exists for.)
+func (s *MessageService) ThreadWindowMessages(ctx context.Context, userID, parentID, parentType, threadRootID string, limit int) ([]*model.Message, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+		return nil, err
+	}
+	root, err := s.messages.GetMessage(ctx, parentID, threadRootID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, fmt.Errorf("message: thread window root: %w", err)
+	}
+	replies, err := s.messages.ListThreadRepliesNewest(ctx, threadRootID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("message: thread window: %w", err)
+	}
+	if root != nil && len(replies) < limit && len(replies) < root.ReplyCount {
+		return s.ListThreadMessages(ctx, userID, parentID, parentType, threadRootID)
+	}
+	out := make([]*model.Message, 0, len(replies)+1)
+	if root != nil {
+		out = append(out, root)
+	}
+	out = append(out, replies...)
+	return out, nil
+}
+
 func (s *MessageService) ListThreadMessages(ctx context.Context, userID, parentID, parentType, threadRootID string) ([]*model.Message, error) {
 	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, err

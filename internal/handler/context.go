@@ -1,13 +1,10 @@
 package handler
 
 import (
-	"encoding/json"
-	"errors"
 	"net/http"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/service"
-	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // ContextHandler serves the human side of shared context (plan-v2 §8):
@@ -28,7 +25,7 @@ func (h *ContextHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 	items, err := h.ctxSvc.List(r.Context(), userID, r.PathValue("parentID"), r.PathValue("parentType"))
 	if err != nil {
-		h.writeContextError(w, err)
+		h.writeContextError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"items": items})
@@ -44,13 +41,18 @@ type createContextBody struct {
 func (h *ContextHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 	var body createContextBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
-	item, err := h.ctxSvc.Write(r.Context(), userID, "", userID, r.PathValue("parentID"), r.PathValue("parentType"), body.Body, body.Pinned)
+	item, err := h.ctxSvc.Write(r.Context(), service.ContextWrite{
+		// A human's own item: no invoking agent to attribute.
+		AuthorID: userID, AccessorID: userID,
+		ParentID: r.PathValue("parentID"), ParentType: r.PathValue("parentType"),
+		Body: body.Body, Pinned: body.Pinned,
+	})
 	if err != nil {
-		h.writeContextError(w, err)
+		h.writeContextError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, JSON{"item": item})
@@ -65,13 +67,13 @@ type pinContextBody struct {
 func (h *ContextHandler) SetPinned(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 	var body pinContextBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
 	item, err := h.ctxSvc.SetPinned(r.Context(), userID, r.PathValue("parentID"), r.PathValue("parentType"), r.PathValue("itemID"), body.Pinned)
 	if err != nil {
-		h.writeContextError(w, err)
+		h.writeContextError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"item": item})
@@ -82,23 +84,14 @@ func (h *ContextHandler) SetPinned(w http.ResponseWriter, r *http.Request) {
 func (h *ContextHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 	if err := h.ctxSvc.Delete(r.Context(), userID, r.PathValue("parentID"), r.PathValue("parentType"), r.PathValue("itemID")); err != nil {
-		h.writeContextError(w, err)
+		h.writeContextError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"ok": true})
 }
 
-func (h *ContextHandler) writeContextError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, service.ErrValidation):
-		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-	case errors.Is(err, service.ErrContextFull):
-		writeError(w, http.StatusConflict, "context_full", "shared context is full for this channel")
-	case errors.Is(err, service.ErrForbidden):
-		writeError(w, http.StatusForbidden, "forbidden", "no access")
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", "context item not found")
-	default:
-		writeError(w, http.StatusInternalServerError, "internal", "context operation failed")
-	}
+func (h *ContextHandler) writeContextError(w http.ResponseWriter, r *http.Request, err error) {
+	// "internal" keeps the wire code the SPA already switches on; the operation
+	// is identified in the server log by method + path.
+	writeAgentError(w, r, err, "internal")
 }

@@ -69,21 +69,17 @@ func (s *AgentStore) ListTaskClaims(ctx context.Context, parentID, threadRootID 
 	keyCond := expression.Key("PK").Equal(expression.Value(taskClaimPK(parentID, threadRootID))).
 		And(expression.Key("SK").BeginsWith("L#"))
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
-	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
+	items, err := queryAllOf[taskClaimItem](ctx, s.DB, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-	})
+	}, "task claims")
 	if err != nil {
-		return nil, fmt.Errorf("store: list task claims: %w", err)
+		return nil, err
 	}
 	out := make([]*model.TaskClaim, 0, len(items))
-	for _, raw := range items {
-		var item taskClaimItem
-		if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
-			return nil, fmt.Errorf("store: unmarshal task claim: %w", err)
-		}
+	for _, item := range items {
 		out = append(out, &item.TaskClaim)
 	}
 	return out, nil
@@ -125,21 +121,17 @@ func (s *AgentStore) ListAgentFollows(ctx context.Context, parentID, threadRootI
 	keyCond := expression.Key("PK").Equal(expression.Value(agentFollowPK(parentID, threadRootID))).
 		And(expression.Key("SK").BeginsWith("F#"))
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
-	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
+	items, err := queryAllOf[agentFollowItem](ctx, s.DB, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-	})
+	}, "agent follows")
 	if err != nil {
-		return nil, fmt.Errorf("store: list agent follows: %w", err)
+		return nil, err
 	}
 	out := make([]*model.AgentThreadFollow, 0, len(items))
-	for _, raw := range items {
-		var item agentFollowItem
-		if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
-			return nil, fmt.Errorf("store: unmarshal agent follow: %w", err)
-		}
+	for _, item := range items {
 		out = append(out, &item.AgentThreadFollow)
 	}
 	return out, nil

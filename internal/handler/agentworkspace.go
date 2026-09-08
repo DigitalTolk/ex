@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -41,7 +40,7 @@ func (h *AgentRunToolHandler) SetWorkspace(deps AgentWorkspaceDeps) { h.workspac
 func (h *AgentRunToolHandler) ListChannels(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if _, err := h.orch.GetLiveRun(r.Context(), claims.RunID); err != nil {
-		h.writeToolError(w, err)
+		h.writeToolError(w, r, err)
 		return
 	}
 	channels, err := h.workspace.Channels.ListUserChannels(r.Context(), claims.UserID)
@@ -69,14 +68,12 @@ type createChannelBody struct {
 // it (guests can't create channels; the service enforces that).
 // POST /api/v1/agent/run/channels
 func (h *AgentRunToolHandler) CreateChannel(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, claims := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	var body createChannelBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Name) == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || strings.TrimSpace(body.Name) == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "name required")
 		return
 	}
@@ -102,10 +99,8 @@ func (h *AgentRunToolHandler) CreateChannel(w http.ResponseWriter, r *http.Reque
 // JoinChannel joins the INVOKER to a public channel.
 // POST /api/v1/agent/run/channels/{id}/join
 func (h *AgentRunToolHandler) JoinChannel(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, claims := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	channelID := r.PathValue("id")
@@ -123,13 +118,12 @@ func (h *AgentRunToolHandler) JoinChannel(w http.ResponseWriter, r *http.Request
 func (h *AgentRunToolHandler) ReadChannel(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if _, err := h.orch.GetLiveRun(r.Context(), claims.RunID); err != nil {
-		h.writeToolError(w, err)
+		h.writeToolError(w, r, err)
 		return
 	}
-	limit := queryInt(r, "limit", 30)
-	if limit > 50 {
-		limit = 50
-	}
+	// clampInt, not a bare upper bound: a NEGATIVE limit slipped past the
+	// one-sided check and reached the store as-is.
+	limit := clampInt(queryInt(r, "limit", 30), 1, 50)
 	text, err := h.orch.Window(r.Context(), claims.UserID, r.PathValue("id"), service.ParentChannel, "", limit)
 	if err != nil {
 		writeError(w, http.StatusForbidden, "forbidden", "the invoker cannot read this channel")
@@ -149,14 +143,12 @@ type postChannelBody struct {
 // Shares the per-run post cap with post_message.
 // POST /api/v1/agent/run/channels/{id}/messages
 func (h *AgentRunToolHandler) PostToChannel(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, claims := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	var body postChannelBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Body) == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || strings.TrimSpace(body.Body) == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "body required")
 		return
 	}
@@ -193,7 +185,7 @@ func (h *AgentRunToolHandler) PostToChannel(w http.ResponseWriter, r *http.Reque
 func (h *AgentRunToolHandler) SearchWorkspace(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if _, err := h.orch.GetLiveRun(r.Context(), claims.RunID); err != nil {
-		h.writeToolError(w, err)
+		h.writeToolError(w, r, err)
 		return
 	}
 	q := strings.TrimSpace(queryParam(r, "q", ""))
@@ -210,10 +202,7 @@ func (h *AgentRunToolHandler) SearchWorkspace(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "internal", "access resolution failed")
 		return
 	}
-	limit := queryInt(r, "limit", 10)
-	if limit > 20 {
-		limit = 20
-	}
+	limit := clampInt(queryInt(r, "limit", 10), 1, 20)
 	res, err := h.workspace.Searcher.Messages(r.Context(), search.MessageQuery{
 		Q: q, AllowedParentIDs: allowed, Limit: limit,
 	})
@@ -246,14 +235,12 @@ type reactBody struct {
 // React toggles a normal reaction as the agent, authorized by the invoker.
 // POST /api/v1/agent/run/reactions
 func (h *AgentRunToolHandler) React(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, claims := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	var body reactBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.MessageID == "" || body.Emoji == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.MessageID == "" || body.Emoji == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "messageID and emoji required")
 		return
 	}
@@ -283,7 +270,7 @@ func (h *AgentRunToolHandler) React(w http.ResponseWriter, r *http.Request) {
 func (h *AgentRunToolHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if _, err := h.orch.GetLiveRun(r.Context(), claims.RunID); err != nil {
-		h.writeToolError(w, err)
+		h.writeToolError(w, r, err)
 		return
 	}
 	if h.workspace.Searcher == nil {
@@ -316,14 +303,12 @@ type sendDMBody struct {
 // posts into it as the agent. Shares the per-run post cap.
 // POST /api/v1/agent/run/dm
 func (h *AgentRunToolHandler) SendDM(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, claims := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	var body sendDMBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.UserID == "" || strings.TrimSpace(body.Body) == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.UserID == "" || strings.TrimSpace(body.Body) == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "userID and body required")
 		return
 	}
@@ -363,10 +348,8 @@ func (h *AgentRunToolHandler) SendDM(w http.ResponseWriter, r *http.Request) {
 // either remind_at (RFC3339) or in_minutes.
 // POST /api/v1/agent/run/reminders
 func (h *AgentRunToolHandler) SetReminder(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, claims := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	if h.workspace == nil || h.workspace.Reminders == nil {
@@ -378,7 +361,7 @@ func (h *AgentRunToolHandler) SetReminder(w http.ResponseWriter, r *http.Request
 		RemindAt  string  `json:"remind_at"`  // RFC3339
 		InMinutes float64 `json:"in_minutes"` // convenience: minutes from now
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
@@ -423,7 +406,7 @@ func (h *AgentRunToolHandler) SetReminder(w http.ResponseWriter, r *http.Request
 func (h *AgentRunToolHandler) ListReminders(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if _, err := h.orch.GetLiveRun(r.Context(), claims.RunID); err != nil {
-		h.writeToolError(w, err)
+		h.writeToolError(w, r, err)
 		return
 	}
 	if h.workspace == nil || h.workspace.Reminders == nil {
@@ -448,10 +431,8 @@ func (h *AgentRunToolHandler) ListReminders(w http.ResponseWriter, r *http.Reque
 // CancelReminder cancels one of the invoker's pending reminders.
 // DELETE /api/v1/agent/run/reminders/{id}
 func (h *AgentRunToolHandler) CancelReminder(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, claims := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	if h.workspace == nil || h.workspace.Reminders == nil {
@@ -470,17 +451,15 @@ func (h *AgentRunToolHandler) CancelReminder(w http.ResponseWriter, r *http.Requ
 // PinMessage pins or unpins a message in the run's thread (as the invoker).
 // POST /api/v1/agent/run/pins
 func (h *AgentRunToolHandler) PinMessage(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, claims := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	var body struct {
 		MessageID string `json:"message_id"`
 		Pinned    *bool  `json:"pinned"` // default true
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.MessageID == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.MessageID == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "message_id required")
 		return
 	}
@@ -510,10 +489,8 @@ func (h *AgentRunToolHandler) PinMessage(w http.ResponseWriter, r *http.Request)
 // appears in the watched channel. Not gated by the notify-only post block.
 // POST /api/v1/agent/run/notify
 func (h *AgentRunToolHandler) NotifyOwner(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
-	if err != nil {
-		h.writeToolError(w, err)
+	run, claims := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	if h.workspace == nil || h.workspace.Conversations == nil {
@@ -523,7 +500,7 @@ func (h *AgentRunToolHandler) NotifyOwner(w http.ResponseWriter, r *http.Request
 	var body struct {
 		Body string `json:"body"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Body) == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || strings.TrimSpace(body.Body) == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "body required")
 		return
 	}
@@ -552,7 +529,10 @@ func (h *AgentRunToolHandler) replyApprovalOK(w http.ResponseWriter, ctx context
 	if run.ActionMode != model.WatchActionReply {
 		return true
 	}
-	approved, err := h.orch.HasApprovedApproval(ctx, run.ID)
+	// A DELIBERATE approval only. This used to accept any approved approval on
+	// the run, so a permission-gateway click ("allow reading main.go") licensed
+	// a public post in a channel — exactly the thing reply mode exists to gate.
+	approved, err := h.orch.HasDeliberateApproval(ctx, run.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "approval check failed")
 		return false

@@ -42,6 +42,7 @@ var (
 // taskStore is the persistence surface (store.TaskStore).
 type taskStore interface {
 	CreateTask(ctx context.Context, t *model.CodingTask) error
+	DeleteTask(ctx context.Context, id string) error
 	GetTask(ctx context.Context, id string) (*model.CodingTask, error)
 	UpdateTask(ctx context.Context, t *model.CodingTask, expectState model.TaskState) error
 	ListTasksByChannel(ctx context.Context, channelID string) ([]*model.CodingTask, error)
@@ -172,6 +173,66 @@ type CreateTaskResult struct {
 //
 // v0 rule: ONE active task per project — a second ask gets ErrTaskActive
 // with a pointer to the running task.
+// taskFields is CreateTaskInput after validation and normalization — the
+// first third of Create, split out so the function reads as the sequence of
+// jobs it performs (validate → resolve project → claim the slot → post the
+// card → record → kick off) rather than one 220-line block.
+type taskFields struct {
+	name  string
+	key   string
+	title string
+	goal  string
+	kind  string
+	repos []model.TaskRepo
+}
+
+func validateTaskInput(in CreateTaskInput) (taskFields, error) {
+	var f taskFields
+	f.name = strings.TrimSpace(in.Project)
+	if f.name == "" || len(f.name) > model.TaskProjectNameMaxLen {
+		return f, fmt.Errorf("task: project (product) name required, ≤%d chars: %w", model.TaskProjectNameMaxLen, ErrValidation)
+	}
+	// A repo path passed as the project name is the classic mistake — the
+	// product is "CliffHub", not "dtolk/internal-tools/cliffhub-2-backend".
+	if strings.Contains(f.name, "/") {
+		return f, fmt.Errorf("task: project must be the PRODUCT name (e.g. \"CliffHub\"), not a repo path — pass repos separately: %w", ErrValidation)
+	}
+	f.key = ProjectKey(f.name)
+	if !model.ValidProjectKey(f.key) {
+		return f, fmt.Errorf("task: project name %q does not make a usable key: %w", f.name, ErrValidation)
+	}
+	f.title = strings.TrimSpace(in.Title)
+	if f.title == "" {
+		return f, fmt.Errorf("task: title required: %w", ErrValidation)
+	}
+	// Ticket APIs hand back HTML entities ("Birthday &amp; Anniversary") —
+	// decode so the card, branch name and MR title read as text.
+	f.title = clipText(html.UnescapeString(f.title), model.TaskTitleMaxLen)
+	f.goal = html.UnescapeString(strings.TrimSpace(in.Goal))
+	if f.goal == "" {
+		return f, fmt.Errorf("task: goal required: %w", ErrValidation)
+	}
+	if len(f.goal) > model.TaskGoalMaxLen {
+		return f, fmt.Errorf("task: goal too long (max %d): %w", model.TaskGoalMaxLen, ErrValidation)
+	}
+	f.kind = strings.ToLower(strings.TrimSpace(in.Kind))
+	if f.kind == "" {
+		f.kind = model.TaskKindBug
+	}
+	if !model.ValidTaskKind(f.kind) {
+		return f, fmt.Errorf("task: kind must be bug, feature or chore: %w", ErrValidation)
+	}
+	if err := validBranchName(in.BaseBranch); err != nil {
+		return f, err
+	}
+	repos, err := normalizeRepos(in.Repos, in.BaseBranch)
+	if err != nil {
+		return f, err
+	}
+	f.repos = repos
+	return f, nil
+}
+
 func (s *CodingTaskService) Create(ctx context.Context, run *model.Run, in CreateTaskInput) (*CreateTaskResult, error) {
 	agent, err := s.users.GetUser(ctx, AgentUserID(AgentSlugDev))
 	if err != nil || !agent.IsAgent() {
@@ -182,47 +243,11 @@ func (s *CodingTaskService) Create(ctx context.Context, run *model.Run, in Creat
 		return nil, fmt.Errorf("task: requester lookup: %w", err)
 	}
 
-	name := strings.TrimSpace(in.Project)
-	if name == "" || len(name) > model.TaskProjectNameMaxLen {
-		return nil, fmt.Errorf("task: project (product) name required, ≤%d chars: %w", model.TaskProjectNameMaxLen, ErrValidation)
-	}
-	// A repo path passed as the project name is the classic mistake — the
-	// product is "CliffHub", not "dtolk/internal-tools/cliffhub-2-backend".
-	if strings.Contains(name, "/") {
-		return nil, fmt.Errorf("task: project must be the PRODUCT name (e.g. \"CliffHub\"), not a repo path — pass repos separately: %w", ErrValidation)
-	}
-	key := ProjectKey(name)
-	if !model.ValidProjectKey(key) {
-		return nil, fmt.Errorf("task: project name %q does not make a usable key: %w", name, ErrValidation)
-	}
-	title := strings.TrimSpace(in.Title)
-	if title == "" {
-		return nil, fmt.Errorf("task: title required: %w", ErrValidation)
-	}
-	// Ticket APIs hand back HTML entities ("Birthday &amp; Anniversary") —
-	// decode so the card, branch name and MR title read as text.
-	title = clipText(html.UnescapeString(title), model.TaskTitleMaxLen)
-	goal := html.UnescapeString(strings.TrimSpace(in.Goal))
-	if goal == "" {
-		return nil, fmt.Errorf("task: goal required: %w", ErrValidation)
-	}
-	if len(goal) > model.TaskGoalMaxLen {
-		return nil, fmt.Errorf("task: goal too long (max %d): %w", model.TaskGoalMaxLen, ErrValidation)
-	}
-	kind := strings.ToLower(strings.TrimSpace(in.Kind))
-	if kind == "" {
-		kind = model.TaskKindBug
-	}
-	if !model.ValidTaskKind(kind) {
-		return nil, fmt.Errorf("task: kind must be bug, feature or chore: %w", ErrValidation)
-	}
-	if err := validBranchName(in.BaseBranch); err != nil {
-		return nil, err
-	}
-	repos, err := normalizeRepos(in.Repos, in.BaseBranch)
+	fields, err := validateTaskInput(in)
 	if err != nil {
 		return nil, err
 	}
+	name, key, title, goal, kind, repos := fields.name, fields.key, fields.title, fields.goal, fields.kind, fields.repos
 
 	// Project: known → reuse (and learn any new repos); new → needs repos.
 	proj, err := s.tasks.GetProject(ctx, key)
@@ -328,14 +353,25 @@ func (s *CodingTaskService) Create(ctx context.Context, run *model.Run, in Creat
 	}
 
 	// The task card is the thread root — posted by dev, for the requester,
-	// before the row exists (the row needs the message ID).
+	// before the row exists (the row needs the message ID). Anything that goes
+	// wrong from here rewrites that card instead of leaving it as a task card
+	// for a task that does not exist.
 	card, err := s.messages.SendAsAgentRun(ctx, agent.ID, requester.ID, ch.ID, ParentChannel, TaskMarker(task), "", run.ID)
 	if err != nil {
 		return nil, fmt.Errorf("task: post card: %w", err)
 	}
 	task.ThreadRootID = card.ID
 	if err := s.tasks.CreateTask(ctx, task); err != nil {
+		s.retractCard(ctx, task, "⛔ Couldn't record this task — nothing was started. Ask again.")
 		return nil, fmt.Errorf("task: create: %w", err)
+	}
+	// The one-active-task rule above is a SCAN, so two concurrent creates both
+	// pass it. Re-reading once our row is durable makes the race visible, and
+	// ULIDs give both racers the same verdict without coordinating: the task
+	// created first wins, the loser retracts itself. Without this the project
+	// ended up with two active tasks and nothing to repair it.
+	if err := s.settleTaskRace(ctx, task); err != nil {
+		return nil, err
 	}
 	if _, err := s.messages.SetPinned(ctx, requester.ID, ch.ID, ParentChannel, card.ID, true); err != nil {
 		slog.Warn("task card pin failed", "taskID", task.ID, "error", err)
@@ -581,19 +617,11 @@ func primaryBranch(t *model.CodingTask) string {
 func invokeFailureDetail(err error) string {
 	switch {
 	case errors.Is(err, ErrAgentOffline):
-		if tail, ok := strings.CutPrefix(err.Error(), ErrAgentOffline.Error()+": "); ok {
-			return tail + "."
-		}
-		return "your ex desktop app isn't online."
+		return offlineDetail(err, "your ex desktop app isn't online.")
 	case errors.Is(err, ErrAgentBusy):
 		return "dev is already busy in this thread."
 	}
 	return "the run couldn't start."
-}
-
-// Get fetches a task.
-func (s *CodingTaskService) Get(ctx context.Context, id string) (*model.CodingTask, error) {
-	return s.tasks.GetTask(ctx, id)
 }
 
 // GetVisible fetches a task the caller may see (member of its channel).
@@ -697,7 +725,7 @@ func (s *CodingTaskService) Report(ctx context.Context, run *model.Run, up TaskU
 	s.orch.RecordWorkspaceAction(ctx, run, "task_state", map[string]any{
 		"taskID": t.ID, "from": prev, "to": t.State, "note": clipText(up.Note, 300),
 	})
-	if note := s.lifecycleNote(t, prev, up); note != "" {
+	if note := s.lifecycleNote(ctx, t, prev, up); note != "" {
 		s.postNote(ctx, t, run.ID, note)
 	}
 	if t.State != prev {
@@ -727,7 +755,7 @@ func (s *CodingTaskService) learnDefaultBranch(ctx context.Context, projectKey, 
 
 // lifecycleNote is the deterministic thread line for an update: the
 // reporter's own note when it gave one, else a standard line per transition.
-func (s *CodingTaskService) lifecycleNote(t *model.CodingTask, prev model.TaskState, up TaskUpdate) string {
+func (s *CodingTaskService) lifecycleNote(ctx context.Context, t *model.CodingTask, prev model.TaskState, up TaskUpdate) string {
 	if strings.TrimSpace(up.Note) != "" {
 		return strings.TrimSpace(up.Note)
 	}
@@ -740,7 +768,7 @@ func (s *CodingTaskService) lifecycleNote(t *model.CodingTask, prev model.TaskSt
 	case model.TaskStateInProgress:
 		return "⚙️ Working on it."
 	case model.TaskStateAwaitingTest:
-		return s.testPlanNote(t)
+		return s.testPlanNote(ctx, t)
 	case model.TaskStateSetupFailed:
 		return "⚠️ Setup failed — see the run activity for details."
 	case model.TaskStateMRCreated:
@@ -763,9 +791,12 @@ func plural(n int) string {
 // testPlanNote renders the requester-facing "how to test" — the product
 // entry point, numbered steps from the requester's perspective, and the
 // counter-checks that must NOT work. Honest about where the link works.
-func (s *CodingTaskService) testPlanNote(t *model.CodingTask) string {
+// testPlanNote takes the REQUEST context: a detached context.Background()
+// here escaped cancellation and request deadlines for a lookup that only
+// decorates a note.
+func (s *CodingTaskService) testPlanNote(ctx context.Context, t *model.CodingTask) string {
 	name := "the requester"
-	if u, err := s.users.GetUser(context.Background(), t.RequesterID); err == nil && u != nil {
+	if u, err := s.users.GetUser(ctx, t.RequesterID); err == nil && u != nil {
 		name = u.DisplayName
 	}
 	var b strings.Builder
@@ -882,31 +913,76 @@ const (
 // signed off (card button, or an approval card raised by this very tool);
 // "ask" tells the tool to raise that approval; anything before the requester
 // has tested is not_ready.
-func (s *CodingTaskService) RequestMR(ctx context.Context, run *model.Run, approvalID string) (status string, t *model.CodingTask, err error) {
+// gate is the approval it raised on the "ask" path — empty when it could not
+// be raised, so an older runner falls back to raising its own card.
+func (s *CodingTaskService) RequestMR(ctx context.Context, run *model.Run, approvalID string) (status string, t *model.CodingTask, gate *model.Approval, err error) {
 	if run.TaskID == "" {
-		return "", nil, ErrNotTaskRun
+		return "", nil, nil, ErrNotTaskRun
 	}
 	t, err = s.tasks.GetTask(ctx, run.TaskID)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	if t.State != model.TaskStateAwaitingTest && t.State != model.TaskStateMRCreated {
-		return MRStatusNotReady, t, nil
+		return MRStatusNotReady, t, nil, nil
 	}
 	if t.SignedOffAt != nil {
-		return MRStatusApproved, t, nil
+		return MRStatusApproved, t, nil, nil
 	}
 	if approvalID == "" {
-		return MRStatusAsk, t, nil
+		// Raise the gate HERE: the server owns the card's text and stamps the
+		// purpose, so the decision can later be verified by equality instead of
+		// by finding the task id somewhere in the prose.
+		a, err := s.orch.RequestApproval(ctx, run, ApprovalRequest{
+			Summary: MRApprovalSummary(t),
+			Risk:    "high",
+			Purpose: model.ApprovalPurposeTaskMR(t.ID),
+		})
+		if err != nil {
+			return MRStatusAsk, t, nil, nil // older runner raises its own card
+		}
+		return MRStatusAsk, t, a, nil
 	}
-	a, err := s.orch.ApprovalStatus(ctx, run.ID, approvalID)
-	if err != nil || a.State != model.ApprovalApproved || !strings.Contains(a.Summary, t.ID) {
-		return MRStatusDenied, t, nil
+	if _, ok := s.orch.ApprovalGranted(ctx, run.ID, approvalID, model.ApprovalPurposeTaskMR(t.ID)); !ok {
+		return MRStatusDenied, t, nil, nil
 	}
 	if _, err := s.signOff(ctx, t, run.InvokerID, run.ID); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
-	return MRStatusApproved, t, nil
+	return MRStatusApproved, t, nil, nil
+}
+
+// settleTaskRace yields to a competing active task in the same project that
+// was created before ours.
+func (s *CodingTaskService) settleTaskRace(ctx context.Context, task *model.CodingTask) error {
+	tasks, err := s.tasks.ListTasksByChannel(ctx, task.ChannelID)
+	if err != nil {
+		return nil // the pre-write scan already passed; don't fail on a read blip
+	}
+	for _, t := range tasks {
+		if t.ID == task.ID || t.State.Terminal() || t.State == model.TaskStateMRCreated {
+			continue
+		}
+		if t.ID < task.ID {
+			if derr := s.tasks.DeleteTask(ctx, task.ID); derr != nil {
+				slog.Warn("task: losing racer not removed; row may linger", "taskID", task.ID, "error", derr)
+			}
+			s.retractCard(ctx, task, "⛔ Another task is already active in this project — follow it at "+s.TaskURL(t))
+			return fmt.Errorf("%w: %q is %s — follow it at %s", ErrTaskActive, t.Title, t.State, s.TaskURL(t))
+		}
+	}
+	return nil
+}
+
+// retractCard rewrites a task card whose task never came to exist, so the
+// thread says what happened instead of rendering a card for nothing.
+func (s *CodingTaskService) retractCard(ctx context.Context, task *model.CodingTask, note string) {
+	if task.ThreadRootID == "" {
+		return
+	}
+	if _, err := s.messages.RewriteAgentMessage(ctx, task.AgentID, task.ChannelID, ParentChannel, task.ThreadRootID, note); err != nil {
+		slog.Warn("task: card retraction failed", "taskID", task.ID, "error", err)
+	}
 }
 
 // MRApprovalSummary is the approval-card text request_mr raises; RequestMR
@@ -943,6 +1019,11 @@ func (s *CodingTaskService) SignOff(ctx context.Context, callerID, taskID string
 	}
 	requester, err := s.users.GetUser(ctx, t.RequesterID)
 	if err != nil {
+		// Sign-off is recorded but the MR run cannot start without the
+		// requester's identity — the ONE thing this call exists to do. Saying
+		// so in the thread beats returning a clean success.
+		slog.Warn("task: sign-off requester lookup failed; MR run not started", "taskID", t.ID, "error", err)
+		s.postNote(ctx, t, "", "⛔ Signed off, but couldn't start the merge-request run. Reply here to retry.")
 		return t, nil
 	}
 	// Synthetic trigger in the task thread — no reactions land anywhere.

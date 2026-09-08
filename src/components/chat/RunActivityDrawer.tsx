@@ -19,12 +19,23 @@ import {
   Wrench,
   X,
 } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { PanelResizeHandle } from '@/components/layout/PanelResizeHandle';
 import { usePanelWidth } from '@/hooks/usePanelWidth';
-import { apiFetch } from '@/lib/api';
+import { ApiError, apiFetch } from '@/lib/api';
 import { RUN_DRAWER_WIDTH } from '@/lib/panel-width';
 import { closeRunDrawer, useRunDrawerStore } from '@/stores/run-drawer';
+import {
+  TERMINAL,
+  buildTimeline,
+  fmtDur,
+  fmtTime,
+  shortPath,
+  toolFamily,
+  type Step,
+  type TimelineResponse,
+  type ToolFamily,
+} from '@/lib/run-timeline';
 
 // Run Activity Drawer (plan-v2 Phase 2): the replayable audit view of one
 // agent run — what config it snapshotted (harness/model), what context it
@@ -39,309 +50,7 @@ import { closeRunDrawer, useRunDrawerStore } from '@/stores/run-drawer';
 // speech; approvals stand out in amber; harness chatter (turns, token ticks)
 // is folded away behind a toggle.
 
-interface RunSpend {
-  turns: number;
-  inputTokens: number;
-  outputTokens: number;
-  posts: number;
-}
-
-interface TimelineRun {
-  id: string;
-  agentID: string;
-  invokerID: string;
-  parentID: string;
-  parentType: string;
-  state: string;
-  round?: number;
-  harness: string;
-  model?: string;
-  personaHash: string;
-  spend: RunSpend;
-  failReason?: string;
-  createdAt: string;
-}
-
-interface TimelineEvent {
-  runID: string;
-  seq: number;
-  actorID: string;
-  type: string;
-  payload?: Record<string, unknown>;
-  createdAt: string;
-}
-
-interface RunArtifact {
-  id: string;
-  kind: string;
-  title: string;
-  content?: string;
-  createdAt: string;
-}
-
-interface ThreadSpend {
-  runs: number;
-  active: number;
-  turns: number;
-  inputTokens: number;
-  outputTokens: number;
-  posts: number;
-}
-
-interface TimelineResponse {
-  run: TimelineRun;
-  // Thread mode: every run under the root, oldest first (run = the latest),
-  // plus the thread's messages so posts and replies read inline with the work.
-  runs?: TimelineRun[];
-  messages?: { id: string; authorID: string; body: string; createdAt: string }[];
-  events: TimelineEvent[];
-  users: Record<string, string>;
-  artifacts?: RunArtifact[];
-  threadSpend?: ThreadSpend;
-}
-
-const TERMINAL = new Set(['completed', 'failed', 'canceled']);
-
-function num(payload: Record<string, unknown> | undefined, key: string): number {
-  const v = payload?.[key];
-  return typeof v === 'number' ? v : 0;
-}
-
-function str(payload: Record<string, unknown> | undefined, key: string): string {
-  const v = payload?.[key];
-  return typeof v === 'string' ? v : '';
-}
-
-function obj(payload: Record<string, unknown> | undefined, key: string): Record<string, unknown> | undefined {
-  const v = payload?.[key];
-  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
-}
-
-// fmtDur renders a span the way someone reading a timeline wants it: seconds
-// with one decimal while sub-minute (so a 4.2s tool call is distinguishable
-// from a 4.9s one), whole minutes above that.
-function fmtDur(ms: number): string {
-  const s = ms / 1000;
-  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)}s`;
-  const m = Math.floor(s / 60);
-  const rest = Math.round(s % 60);
-  if (m < 60) return `${m}m${String(rest).padStart(2, '0')}s`;
-  return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`;
-}
-
-function fmtTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
-// shortPath trims a long absolute path to its tail so the file name and its
-// nearest folders stay readable in a chip.
-function shortPath(p: string): string {
-  const parts = p.split('/').filter(Boolean);
-  if (parts.length <= 3) return p;
-  return `…/${parts.slice(-3).join('/')}`;
-}
-
-// ------------------------------------------------------------------ steps
-
-// A Step is one rendered unit of the timeline. Tool steps absorb their result
-// (the next tool_result for the same tool name); consecutive progress beats
-// merge into one narration block; everything else is a system row.
-type Step =
-  | {
-      kind: 'tool';
-      seq: number;
-      at: string;
-      name: string; // bare tool name, mcp__ex__ prefix stripped
-      detail: string;
-      input?: Record<string, unknown>;
-      result?: string;
-      resultIsError?: boolean;
-      durationMs?: number;
-    }
-  | { kind: 'narration'; seq: number; at: string; text: string }
-  | { kind: 'approval'; seq: number; at: string; text: string; state: 'asked' | 'approved' | 'denied' | 'expired' }
-  | { kind: 'system'; seq: number; at: string; text: string; tone?: 'ok' | 'bad' | 'muted' }
-  | { kind: 'chatter'; seq: number; at: string; text: string }
-  // A message posted in the thread (dev's milestone, the requester's steering).
-  | { kind: 'message'; seq: number; at: string; author: string; text: string };
-
-function systemLine(e: TimelineEvent): { text: string; tone?: 'ok' | 'bad' | 'muted' } | null {
-  switch (e.type) {
-    case 'run.invoked':
-      return { text: 'Run invoked', tone: 'muted' };
-    case 'run.acknowledged':
-      return { text: 'Claimed by the runner', tone: 'muted' };
-    case 'context.assembled': {
-      const parts = [
-        `${num(e.payload, 'threadMessages')} thread messages`,
-        `${num(e.payload, 'contextPinned') + num(e.payload, 'contextItems')} shared-context items`,
-        `${num(e.payload, 'digests')} peer digests`,
-      ];
-      const dropped =
-        num(e.payload, 'threadMessagesDropped') +
-        num(e.payload, 'contextPinnedDropped') +
-        num(e.payload, 'contextItemsDropped') +
-        num(e.payload, 'digestsDropped');
-      const task = e.payload?.['codingTask'] === true ? ', coding-task spec' : '';
-      return {
-        text: `Context assembled — ${parts.join(', ')}${task}${dropped > 0 ? ` (${dropped} trimmed for budget)` : ''}`,
-        tone: 'muted',
-      };
-    }
-    case 'prompt': {
-      const est = num(e.payload, 'oursTokensEst');
-      const resumed = e.payload?.['resumed'] === true;
-      return { text: `Prompt sent — ≈${est.toLocaleString()} tokens from Ex${resumed ? ' (warm resume)' : ''}`, tone: 'muted' };
-    }
-    case 'connector.attached':
-      return { text: `Attached connector ${str(e.payload, 'slug')} — ${str(e.payload, 'reason')}` };
-    case 'watch.delivered':
-      return { text: 'Watcher result delivered' };
-    case 'watch.skipped':
-      return { text: 'Watcher decided nothing matched (no delivery)', tone: 'muted' };
-    case 'context.written':
-      return { text: 'Saved an item to shared context' };
-    case 'artifact.created':
-      return { text: `Published artifact “${str(e.payload, 'title')}”` };
-    case 'skill.invoked':
-      return { text: `Used skill “${str(e.payload, 'name')}”` };
-    case 'run.queued_offline':
-      return { text: 'Queued — waiting for the desktop app to come online', tone: 'muted' };
-    case 'run.canceled':
-      return { text: 'Stopped by a human', tone: 'bad' };
-    case 'run.completed':
-      return { text: 'Completed', tone: 'ok' };
-    case 'run.failed':
-      return { text: `Failed — ${str(e.payload, 'reason') || 'unknown reason'}`, tone: 'bad' };
-    case 'workspace.task_created':
-      return { text: `Opened coding task in ${str(e.payload, 'project')}` };
-    case 'workspace.task_state':
-      return { text: `Task ${str(e.payload, 'from')} → ${str(e.payload, 'to')}${str(e.payload, 'note') ? ` — ${str(e.payload, 'note')}` : ''}` };
-    default:
-      if (e.type.startsWith('workspace.')) {
-        return { text: e.type.slice('workspace.'.length).replace(/_/g, ' '), tone: 'muted' };
-      }
-      return { text: e.type, tone: 'muted' };
-  }
-}
-
-// buildSteps folds the raw event list into rendered steps.
-function buildSteps(events: TimelineEvent[]): Step[] {
-  const steps: Step[] = [];
-  // Tool steps awaiting their result, by tool name (FIFO per name).
-  const pending = new Map<string, Extract<Step, { kind: 'tool' }>[]>();
-  for (const e of events) {
-    switch (e.type) {
-      case 'tool': {
-        const raw = str(e.payload, 'name');
-        const step: Extract<Step, { kind: 'tool' }> = {
-          kind: 'tool',
-          seq: e.seq,
-          at: e.createdAt,
-          name: raw.replace(/^mcp__ex__/, ''),
-          detail: str(e.payload, 'detail'),
-          input: obj(e.payload, 'input'),
-        };
-        steps.push(step);
-        const q = pending.get(raw) ?? [];
-        q.push(step);
-        pending.set(raw, q);
-        break;
-      }
-      case 'tool_result': {
-        const raw = str(e.payload, 'name');
-        const detail = str(e.payload, 'detail');
-        const q = pending.get(raw);
-        const target = q?.shift();
-        if (target) {
-          target.result = detail.replace(/^ERROR:\s*/, '');
-          target.resultIsError = detail.startsWith('ERROR:');
-          target.durationMs = Math.max(0, new Date(e.createdAt).getTime() - new Date(target.at).getTime());
-        } else if (detail) {
-          steps.push({ kind: 'system', seq: e.seq, at: e.createdAt, text: `↳ ${detail}`, tone: 'muted' });
-        }
-        break;
-      }
-      case 'progress': {
-        const text = str(e.payload, 'text').trim();
-        if (!text) break;
-        const last = steps[steps.length - 1];
-        if (last && last.kind === 'narration') {
-          last.text = `${last.text}\n${text}`;
-        } else {
-          steps.push({ kind: 'narration', seq: e.seq, at: e.createdAt, text });
-        }
-        break;
-      }
-      case 'approval.requested':
-        steps.push({ kind: 'approval', seq: e.seq, at: e.createdAt, text: str(e.payload, 'summary'), state: 'asked' });
-        break;
-      case 'approval.decided': {
-        const st = str(e.payload, 'state') === 'approved' ? 'approved' : 'denied';
-        const choice = str(e.payload, 'choice');
-        steps.push({
-          kind: 'approval',
-          seq: e.seq,
-          at: e.createdAt,
-          text: st === 'approved' ? (choice ? `Approved — chose “${choice}”` : 'Approved') : 'Denied',
-          state: st,
-        });
-        break;
-      }
-      case 'approval.expired':
-        steps.push({ kind: 'approval', seq: e.seq, at: e.createdAt, text: 'Expired undecided (counts as denied)', state: 'expired' });
-        break;
-      case 'turn':
-        steps.push({ kind: 'chatter', seq: e.seq, at: e.createdAt, text: 'Harness turn' });
-        break;
-      case 'usage': {
-        const inTok = num(e.payload, 'inputTokens');
-        const outTok = num(e.payload, 'outputTokens');
-        steps.push({ kind: 'chatter', seq: e.seq, at: e.createdAt, text: `Tokens — ${inTok.toLocaleString()} in / ${outTok.toLocaleString()} out` });
-        break;
-      }
-      case 'state':
-        steps.push({ kind: 'chatter', seq: e.seq, at: e.createdAt, text: `State ${str(e.payload, 'state')}` });
-        break;
-      default: {
-        const line = systemLine(e);
-        /* istanbul ignore else -- systemLine's default arm always yields a line; null is future-proofing in the signature */
-        if (line) steps.push({ kind: 'system', seq: e.seq, at: e.createdAt, ...line });
-      }
-    }
-  }
-  return steps;
-}
-
 // ------------------------------------------------------------- tool render
-
-type ToolFamily = 'shell' | 'edit' | 'write' | 'read' | 'search' | 'web' | 'ex' | 'other';
-
-function toolFamily(name: string): ToolFamily {
-  switch (name) {
-    case 'Bash':
-    case 'shell':
-      return 'shell';
-    case 'Edit':
-    case 'MultiEdit':
-      return 'edit';
-    case 'Write':
-    case 'NotebookEdit':
-      return 'write';
-    case 'Read':
-    case 'NotebookRead':
-      return 'read';
-    case 'Glob':
-    case 'Grep':
-    case 'LS':
-      return 'search';
-    case 'WebFetch':
-    case 'WebSearch':
-      return 'web';
-    default:
-      return /^[a-z_]+$/.test(name) ? 'ex' : 'other';
-  }
-}
 
 function ToolIcon({ family }: { family: ToolFamily }) {
   const cls = 'h-3.5 w-3.5 shrink-0';
@@ -507,9 +216,13 @@ function ToolBody({ step }: { step: Extract<Step, { kind: 'tool' }> }) {
 
 function ToolStep({ step, gapMs }: { step: Extract<Step, { kind: 'tool' }>; gapMs: number }) {
   const family = toolFamily(step.name);
-  // Edits and writes are the point of a coding run — show them open. Reads,
-  // searches and shell output stay folded behind a one-line result preview.
-  const [open, setOpen] = useState(family === 'edit' || family === 'write' || !!step.resultIsError);
+  // Edits and writes are the point of a coding run — show them open, and so is
+  // anything that ERRORED. Derived rather than seeded into state: a tool's
+  // result arrives in a later event, so a step that mounts pending and fails a
+  // second later used to stay folded. An explicit toggle wins from then on.
+  const autoOpen = family === 'edit' || family === 'write' || !!step.resultIsError;
+  const [toggled, setToggled] = useState<boolean | null>(null);
+  const open = toggled ?? autoOpen;
   const hasBody =
     !!step.result || !!step.input?.command || !!step.input?.old_string || !!step.input?.new_string || !!step.input?.content || !!step.input?.json;
   const preview = step.result ? step.result.replace(/\s+/g, ' ').slice(0, 110) : '';
@@ -517,7 +230,7 @@ function ToolStep({ step, gapMs }: { step: Extract<Step, { kind: 'tool' }>; gapM
     <li className="rounded-md border border-border/70 bg-muted/20">
       <button
         type="button"
-        onClick={() => hasBody && setOpen((v) => !v)}
+        onClick={() => hasBody && setToggled(!open)}
         className={`flex w-full items-start gap-2 px-2 py-1.5 text-left text-xs ${hasBody ? 'hover:bg-accent/40' : ''}`}
         aria-expanded={hasBody ? open : undefined}
       >
@@ -567,6 +280,10 @@ function StateBadge({ state }: { state: string }) {
   );
 }
 
+// EMPTY_USERS is a stable identity so the memo below doesn't re-run on every
+// render while the query is still loading.
+const EMPTY_USERS: Record<string, string> = {};
+
 export function RunActivityDrawer() {
   const runID = useRunDrawerStore((s) => s.runID);
   const thread = useRunDrawerStore((s) => s.thread);
@@ -574,6 +291,10 @@ export function RunActivityDrawer() {
   const queryClient = useQueryClient();
   const [stopping, setStopping] = useState(false);
   const [copiedArtifact, setCopiedArtifact] = useState<string | null>(null);
+  // The "copied ✓" flash timer, cleared on unmount: closing the drawer within
+  // its window used to leave a setState firing at a gone component.
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(copiedTimer.current), []);
   const [showChatter, setShowChatter] = useState(false);
   // Resizable like the thread panel: drag the left edge, double-click to
   // reset, width persists across sessions.
@@ -612,6 +333,26 @@ export function RunActivityDrawer() {
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [isOpen]);
 
+  // ONE memo for the whole derived timeline. Every figure below (elapsed,
+  // prompt split, steps, counts) is a fold over the event list, and it used to
+  // be recomputed on every render — once per pointermove while the panel was
+  // being dragged, and again on each 2.5s poll of a long task timeline.
+  // One name lookup for the whole component. Computed unconditionally so the
+  // "no data yet" shape is the same object shape as the loaded one — the
+  // alternative (`data?.users[id]` at each call site) put an unreachable
+  // optional-chain branch in a helper only ever called with data present.
+  const users = data?.users ?? EMPTY_USERS;
+  const timeline = useMemo(
+    () =>
+      buildTimeline(data, {
+        showChatter,
+        /* istanbul ignore next -- dataUpdatedAt is > 0 whenever data exists */
+        nowMs: dataUpdatedAt || 0,
+        authorName: (id) => users[id] ?? id,
+      }),
+    [data, users, showChatter, dataUpdatedAt],
+  );
+
   if (!isOpen) return null;
 
   const run = data?.run;
@@ -628,56 +369,8 @@ export function RunActivityDrawer() {
       setStopping(false);
     }
   };
-  const name = (id: string) => data?.users[id] ?? id;
-  const events = (data?.events ?? [])
-    .slice()
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.seq - b.seq);
-  // Elapsed: wall clock from the first event to the last (or to now while the
-  // run is live). Time parked on an approval prompt is a human waiting, not the
-  // agent working, so it is subtracted out and reported separately — otherwise
-  // a run that sat overnight on a gate reads as an eight-hour agent.
-  const timing = (() => {
-    if (!events.length) return null;
-    const startMs = new Date(events[0].createdAt).getTime();
-    const lastMs = new Date(events[events.length - 1].createdAt).getTime();
-    /* istanbul ignore next -- events imply data implies run (refetchInterval dereferences it), and dataUpdatedAt > 0 whenever data exists */
-    const endMs = TERMINAL.has(run?.state ?? '') ? lastMs : Math.max(lastMs, dataUpdatedAt || 0);
-    const totalMs = Math.max(0, endMs - startMs);
-    let waitMs = 0;
-    let askedAt: number | null = null;
-    for (const e of events) {
-      if (e.type === 'approval.requested') askedAt = new Date(e.createdAt).getTime();
-      else if (askedAt !== null && (e.type === 'approval.decided' || e.type === 'approval.expired')) {
-        waitMs += Math.max(0, new Date(e.createdAt).getTime() - askedAt);
-        askedAt = null;
-      }
-    }
-    return { totalMs, waitMs, workMs: Math.max(0, totalMs - waitMs) };
-  })();
-  const promptSplit = (() => {
-    const p = events.find((e) => e.type === 'prompt');
-    const firstUsage = events.find((e) => e.type === 'usage' && num(e.payload, 'inputTokens') > 0);
-    if (!p || !firstUsage) return null;
-    const ours = num(p.payload, 'oursTokensEst');
-    const first = num(firstUsage.payload, 'inputTokens');
-    if (ours <= 0 || first <= 0) return null;
-    return { ours: Math.min(ours, first), harness: Math.max(0, first - ours) };
-  })();
-
-  // Thread mode interleaves the thread's messages with the work, by time —
-  // the card marker reads as a label, not raw syntax.
-  const messageSteps: Step[] = (data?.messages ?? []).map((m, i) => ({
-    kind: 'message' as const,
-    seq: 1_000_000_000 + i,
-    at: m.createdAt,
-    author: name(m.authorID),
-    text: m.body.startsWith('[task:') ? '📌 Task card' : m.body,
-  }));
-  const steps = [...buildSteps(events), ...messageSteps]
-    .sort((a, b) => a.at.localeCompare(b.at) || a.seq - b.seq)
-    .filter((s) => showChatter || s.kind !== 'chatter');
-  const toolCount = steps.filter((s) => s.kind === 'tool').length;
-  const editCount = steps.filter((s) => s.kind === 'tool' && (toolFamily(s.name) === 'edit' || toolFamily(s.name) === 'write')).length;
+  const name = (id: string) => users[id] ?? id;
+  const { timing, promptSplit, steps, toolCount, editCount } = timeline;
 
   return (
     <div
@@ -714,7 +407,14 @@ export function RunActivityDrawer() {
         {isLoading && <div className="text-sm text-muted-foreground">Loading…</div>}
         {error != null && (
           <div className="text-sm text-muted-foreground">
-            Couldn’t load this run — it may be in a channel you don’t have access to.
+            {/* A thread with replies but no agent runs answers 404 — that is
+                "nothing to show", not "you can't see this". The generic copy
+                read as an access error on ordinary human threads. */}
+            {error instanceof ApiError && error.status === 404
+              ? thread
+                ? 'No agent has worked in this thread yet.'
+                : 'That run no longer exists.'
+              : 'Couldn’t load this run — it may be in a channel you don’t have access to.'}
           </div>
         )}
         {run && (
@@ -835,7 +535,8 @@ export function RunActivityDrawer() {
                             e.preventDefault();
                             void navigator.clipboard.writeText(a.content ?? '');
                             setCopiedArtifact(a.id);
-                            setTimeout(() => setCopiedArtifact(null), 1500);
+                            clearTimeout(copiedTimer.current);
+                            copiedTimer.current = setTimeout(() => setCopiedArtifact(null), 1500);
                           }}
                           className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
                         >

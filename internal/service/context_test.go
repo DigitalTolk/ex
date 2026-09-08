@@ -104,31 +104,31 @@ func TestContextService_Governance(t *testing.T) {
 	ctx := context.Background()
 
 	// Size cap: one byte over is rejected.
-	if _, err := svc.Write(ctx, "u1", "", "u1", "p1", ParentChannel, strings.Repeat("x", model.ContextItemMaxBytes+1), false); err == nil {
+	if _, err := svc.Write(ctx, ContextWrite{AuthorID: "u1", AccessorID: "u1", ParentID: "p1", ParentType: ParentChannel, Body: strings.Repeat("x", model.ContextItemMaxBytes+1)}); err == nil {
 		t.Fatal("oversized item accepted")
 	}
 	// Empty body rejected.
-	if _, err := svc.Write(ctx, "u1", "", "u1", "p1", ParentChannel, "  ", false); err == nil {
+	if _, err := svc.Write(ctx, ContextWrite{AuthorID: "u1", AccessorID: "u1", ParentID: "p1", ParentType: ParentChannel, Body: "  "}); err == nil {
 		t.Fatal("empty item accepted")
 	}
 	// Per-parent cap.
 	for i := 0; i < model.ContextItemsPerScope; i++ {
-		if _, err := svc.Write(ctx, "u1", "", "u1", "p1", ParentChannel, "fact", false); err != nil {
+		if _, err := svc.Write(ctx, ContextWrite{AuthorID: "u1", AccessorID: "u1", ParentID: "p1", ParentType: ParentChannel, Body: "fact"}); err != nil {
 			t.Fatalf("write %d: %v", i, err)
 		}
 	}
-	if _, err := svc.Write(ctx, "u1", "", "u1", "p1", ParentChannel, "one too many", false); err == nil || !strings.Contains(err.Error(), "full") {
+	if _, err := svc.Write(ctx, ContextWrite{AuthorID: "u1", AccessorID: "u1", ParentID: "p1", ParentType: ParentChannel, Body: "one too many"}); err == nil || !strings.Contains(err.Error(), "full") {
 		t.Fatalf("expected ErrContextFull, got %v", err)
 	}
 	// A different parent is unaffected by the cap.
-	if _, err := svc.Write(ctx, "u1", "", "u1", "p2", ParentChannel, "fine", false); err != nil {
+	if _, err := svc.Write(ctx, ContextWrite{AuthorID: "u1", AccessorID: "u1", ParentID: "p2", ParentType: ParentChannel, Body: "fine"}); err != nil {
 		t.Fatalf("other parent rejected: %v", err)
 	}
 }
 
 func TestContextService_AccessGated(t *testing.T) {
 	svc, _ := newTestContextService(denyAll{})
-	if _, err := svc.Write(context.Background(), "u1", "", "u1", "p1", ParentChannel, "x", false); err == nil {
+	if _, err := svc.Write(context.Background(), ContextWrite{AuthorID: "u1", AccessorID: "u1", ParentID: "p1", ParentType: ParentChannel, Body: "x"}); err == nil {
 		t.Fatal("write allowed without access")
 	}
 	if _, err := svc.List(context.Background(), "u1", "p1", ParentChannel); err == nil {
@@ -140,11 +140,11 @@ func TestContextService_EditRights(t *testing.T) {
 	svc, _ := newTestContextService(allowAll{})
 	ctx := context.Background()
 
-	human, err := svc.Write(ctx, "u-alice", "", "u-alice", "p1", ParentChannel, "human fact", false)
+	human, err := svc.Write(ctx, ContextWrite{AuthorID: "u-alice", AccessorID: "u-alice", ParentID: "p1", ParentType: ParentChannel, Body: "human fact"})
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	agent, err := svc.Write(ctx, "agent-gg", "u-alice", "u-alice", "p1", ParentChannel, "agent fact", false)
+	agent, err := svc.Write(ctx, ContextWrite{AuthorID: "agent-gg", InvokerID: "u-alice", AccessorID: "u-alice", ParentID: "p1", ParentType: ParentChannel, Body: "agent fact"})
 	if err != nil {
 		t.Fatalf("agent write: %v", err)
 	}
@@ -174,10 +174,10 @@ func TestOrchestrator_BundleLayersAndAudit(t *testing.T) {
 
 	ctxSvc, _ := newTestContextService(allowAll{})
 	fx.orch.SetContextService(ctxSvc)
-	if _, err := ctxSvc.Write(context.Background(), "u-alice", "", "u-alice", "chan1", ParentChannel, "unpinned decision", false); err != nil {
+	if _, err := ctxSvc.Write(context.Background(), ContextWrite{AuthorID: "u-alice", AccessorID: "u-alice", ParentID: "chan1", ParentType: ParentChannel, Body: "unpinned decision"}); err != nil {
 		t.Fatalf("ctx write: %v", err)
 	}
-	if _, err := ctxSvc.Write(context.Background(), "u-alice", "", "u-alice", "chan1", ParentChannel, "pinned constraint", true); err != nil {
+	if _, err := ctxSvc.Write(context.Background(), ContextWrite{AuthorID: "u-alice", AccessorID: "u-alice", ParentID: "chan1", ParentType: ParentChannel, Body: "pinned constraint", Pinned: true}); err != nil {
 		t.Fatalf("ctx write: %v", err)
 	}
 

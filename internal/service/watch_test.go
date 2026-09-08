@@ -13,6 +13,17 @@ import (
 // A subscription invokes the agent on a matching un-mentioned message — as
 // the CREATOR (their machine/quota), in watch mode. Non-matching messages
 // and messages that already mentioned the agent don't double-invoke.
+// watchAllSubs is the single subscription listing the reconciler tick reads
+// and hands to both sweeps.
+func watchAllSubs(t *testing.T, fx *orchFixture) []*model.AgentSubscription {
+	t.Helper()
+	subs, err := fx.dir.ListAllSubscriptions(context.Background())
+	if err != nil {
+		t.Fatalf("list all subscriptions: %v", err)
+	}
+	return subs
+}
+
 func TestOrchestrator_SubscriptionDispatch(t *testing.T) {
 	fx := newOrchFixture(t)
 	_ = fx.dir.PutAgentSubscription(context.Background(), &model.AgentSubscription{
@@ -125,7 +136,7 @@ func TestOrchestrator_NotifyWatcherNoPublicFallback(t *testing.T) {
 	}
 	as := fx.claim(t) // claims the run, runnerID "r1"
 	postsBefore := len(fx.msgs.posts)
-	if err := fx.orch.CompleteRun(context.Background(), "r1", as.RunID, "here is a public summary", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", as.RunID, "here is a public summary", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	if len(fx.msgs.posts) != postsBefore {
@@ -162,7 +173,7 @@ func TestOrchestrator_NotifyWatcherPrivateFallback(t *testing.T) {
 	}, ParentChannel)
 	as := fx.claim(t)
 
-	if err := fx.orch.CompleteRun(context.Background(), "r1", as.RunID, "here is a private tldr", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", as.RunID, "here is a private tldr", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	// Exactly one post, and it landed in the DM — never in the watched channel.
@@ -192,7 +203,7 @@ func TestOrchestrator_NotifyWatcherSkipDeliversNothing(t *testing.T) {
 		ID: "nk", ParentID: "chan1", ParentMessageID: "r1", AuthorID: "u-alice", Body: "off-topic",
 	}, ParentChannel)
 	as := fx.claim(t)
-	if err := fx.orch.CompleteRun(context.Background(), "r1", as.RunID, "SKIP", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", as.RunID, "SKIP", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	if len(fx.msgs.posts) != 0 {
@@ -219,7 +230,7 @@ func TestOrchestrator_ReplyWatcherDeterministicDraft(t *testing.T) {
 	as := fx.claim(t)
 
 	before := len(fx.msgs.posts)
-	if err := fx.orch.CompleteRun(context.Background(), "r1", as.RunID, "Here is my reply.", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", as.RunID, "Here is my reply.", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	// Nothing posted yet — it's a pending draft.
@@ -238,7 +249,7 @@ func TestOrchestrator_ReplyWatcherDeterministicDraft(t *testing.T) {
 		t.Fatalf("expected a pending reply draft, got %+v", draft)
 	}
 	// Approving posts the (unedited) reply to the thread.
-	if _, err := fx.orch.DecideApproval(context.Background(), "u-alice", as.RunID, draft.ID, true, "", ""); err != nil {
+	if _, err := fx.orch.DecideApproval(context.Background(), "u-alice", as.RunID, draft.ID, Decision{Approve: true}); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 	if len(fx.msgs.posts) != before+1 || fx.msgs.posts[before] != "Here is my reply." {
@@ -262,23 +273,23 @@ func TestOrchestrator_ReplyWatcherNeedsApproval(t *testing.T) {
 
 	// Complete with final text but NO approval → suppressed (no public post).
 	before := len(fx.msgs.posts)
-	if err := fx.orch.CompleteRun(context.Background(), "r1", as.RunID, "a public answer", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", as.RunID, "a public answer", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	if len(fx.msgs.posts) != before {
 		t.Fatalf("reply watcher posted publicly without approval: %v", fx.msgs.posts[before:])
 	}
 
-	// HasApprovedApproval flips once an approval is granted.
-	ok, _ := fx.orch.HasApprovedApproval(context.Background(), as.RunID)
+	// HasDeliberateApproval flips once an approval is granted.
+	ok, _ := fx.orch.HasDeliberateApproval(context.Background(), as.RunID)
 	if ok {
 		t.Fatal("no approval should exist yet")
 	}
 	_ = fx.runs.PutApproval(context.Background(), &model.Approval{
 		ID: "ap1", RunID: as.RunID, InvokerID: "u-alice", State: model.ApprovalApproved,
 	})
-	if ok, _ := fx.orch.HasApprovedApproval(context.Background(), as.RunID); !ok {
-		t.Fatal("HasApprovedApproval should be true after an approval is granted")
+	if ok, _ := fx.orch.HasDeliberateApproval(context.Background(), as.RunID); !ok {
+		t.Fatal("HasDeliberateApproval should be true after an approval is granted")
 	}
 }
 
@@ -298,7 +309,7 @@ func TestOrchestrator_ProposeReplyEditAndPost(t *testing.T) {
 
 	// Deny → nothing posted.
 	before := len(fx.msgs.posts)
-	deny, _ := fx.orch.DecideApproval(context.Background(), run.InvokerID, run.ID, a.ID, false, "", "")
+	deny, _ := fx.orch.DecideApproval(context.Background(), run.InvokerID, run.ID, a.ID, Decision{})
 	if deny.State != model.ApprovalDenied || len(fx.msgs.posts) != before {
 		t.Fatalf("deny should post nothing: state=%s posts=%d", deny.State, len(fx.msgs.posts))
 	}
@@ -306,7 +317,7 @@ func TestOrchestrator_ProposeReplyEditAndPost(t *testing.T) {
 	// A second proposal, approved WITH an edit → the edited text is posted.
 	a2, _ := fx.orch.ProposeReply(context.Background(), run, "Original draft.", "", "")
 	before = len(fx.msgs.posts)
-	if _, err := fx.orch.DecideApproval(context.Background(), run.InvokerID, run.ID, a2.ID, true, "", "My edited reply."); err != nil {
+	if _, err := fx.orch.DecideApproval(context.Background(), run.InvokerID, run.ID, a2.ID, Decision{Approve: true, Text: "My edited reply."}); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 	if len(fx.msgs.posts) != before+1 || fx.msgs.posts[before] != "My edited reply." {
@@ -371,7 +382,7 @@ func TestOrchestrator_HeartbeatSweep(t *testing.T) {
 		ParentID: "chan1", ParentType: ParentChannel, HeartbeatMins: 30,
 	})
 
-	fx.orch.sweepHeartbeats(context.Background())
+	fx.orch.sweepHeartbeats(context.Background(), watchAllSubs(t, fx))
 	ids, _ := fx.runs.ListQueuedRuns(context.Background(), "u-alice", 10)
 	if len(ids) != 1 {
 		t.Fatalf("expected 1 heartbeat run, got %d", len(ids))
@@ -390,14 +401,14 @@ func TestOrchestrator_HeartbeatSweep(t *testing.T) {
 	run.State = model.RunStateCompleted
 	fx.runs.runs[run.ID] = run
 	*fx.now = fx.now.Add(5 * time.Minute)
-	fx.orch.sweepHeartbeats(context.Background())
+	fx.orch.sweepHeartbeats(context.Background(), watchAllSubs(t, fx))
 	if ids, _ := fx.runs.ListQueuedRuns(context.Background(), "u-alice", 10); len(ids) != 0 {
 		t.Fatalf("heartbeat re-fired inside its interval: %v", ids)
 	}
 
 	// Past the interval: fires again.
 	*fx.now = fx.now.Add(31 * time.Minute)
-	fx.orch.sweepHeartbeats(context.Background())
+	fx.orch.sweepHeartbeats(context.Background(), watchAllSubs(t, fx))
 	if ids, _ := fx.runs.ListQueuedRuns(context.Background(), "u-alice", 10); len(ids) != 1 {
 		t.Fatalf("heartbeat did not re-fire after interval: %v", ids)
 	}
@@ -447,7 +458,7 @@ func TestOrchestrator_RollingDeadlineExtendsWithActivity(t *testing.T) {
 	// Activity at T+4min (inside the window) extends the deadline well past
 	// the original conversation cap.
 	*fx.now = fx.now.Add(4 * time.Minute)
-	abort, reason, err := fx.orch.ReportEvents(context.Background(), "r1", run.ID, []RunEventInput{{Seq: 1, Type: "turn"}})
+	abort, reason, err := fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID, []RunEventInput{{Seq: 1, Type: "turn"}})
 	if err != nil || abort {
 		t.Fatalf("active run aborted: %v %q %v", abort, reason, err)
 	}
@@ -458,7 +469,7 @@ func TestOrchestrator_RollingDeadlineExtendsWithActivity(t *testing.T) {
 
 	// Silence past the idle window → next report aborts on deadline.
 	*fx.now = fx.now.Add(taskIdleWindow + time.Minute)
-	abort, reason, _ = fx.orch.ReportEvents(context.Background(), "r1", run.ID, []RunEventInput{{Seq: 2, Type: "turn"}})
+	abort, reason, _ = fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID, []RunEventInput{{Seq: 2, Type: "turn"}})
 	if !abort || reason != "deadline" {
 		t.Fatalf("idle run should die on deadline, got abort=%v reason=%q", abort, reason)
 	}
@@ -480,7 +491,7 @@ func TestOrchestrator_RollingDeadlineCappedAtHardCeiling(t *testing.T) {
 	for elapsed := time.Duration(0); elapsed < cap+30*time.Minute; elapsed += 10 * time.Minute {
 		*fx.now = fx.now.Add(10 * time.Minute)
 		seq++
-		abort, reason, _ := fx.orch.ReportEvents(context.Background(), "r1", run.ID, []RunEventInput{{Seq: seq, Type: "turn"}})
+		abort, reason, _ := fx.orch.ReportEvents(context.Background(), "u-alice", "r1", run.ID, []RunEventInput{{Seq: seq, Type: "turn"}})
 		if abort {
 			abortReason = reason
 			break
@@ -532,7 +543,7 @@ func TestOrchestrator_WatchOfflineCoalesces(t *testing.T) {
 	// (asking while the creator can't act would waste the one notification).
 	fn := &fakeNotifier{}
 	fx.orch.SetApprovalNotifier(fn)
-	fx.orch.sweepWatchCatchUps(context.Background())
+	fx.orch.sweepWatchCatchUps(context.Background(), watchAllSubs(t, fx))
 	if ids, _ := fx.runs.ListQueuedRuns(context.Background(), "u-alice", 10); len(ids) != 0 {
 		t.Fatal("catch-up must not start while creator is offline")
 	}
@@ -543,7 +554,7 @@ func TestOrchestrator_WatchOfflineCoalesces(t *testing.T) {
 	// Runner returns → CLI harness backlog needs CONSENT: no auto-run, ONE
 	// notification, flag survives.
 	fx.dir.runners = savedRunners
-	fx.orch.sweepWatchCatchUps(context.Background())
+	fx.orch.sweepWatchCatchUps(context.Background(), watchAllSubs(t, fx))
 	if ids, _ := fx.runs.ListQueuedRuns(context.Background(), "u-alice", 10); len(ids) != 0 {
 		t.Fatal("CLI offline backlog must not auto-run — it asks first")
 	}
@@ -551,7 +562,7 @@ func TestOrchestrator_WatchOfflineCoalesces(t *testing.T) {
 		t.Fatalf("expected exactly one catch-up ask notification, got %+v", fn.got)
 	}
 	// Re-sweep: no re-ask (notified stamp).
-	fx.orch.sweepWatchCatchUps(context.Background())
+	fx.orch.sweepWatchCatchUps(context.Background(), watchAllSubs(t, fx))
 	if len(fn.got) != 1 {
 		t.Fatalf("re-asked on every sweep: %d notifications", len(fn.got))
 	}
@@ -574,7 +585,7 @@ func TestOrchestrator_WatchOfflineCoalesces(t *testing.T) {
 	}
 
 	// Idempotent: another sweep/decide starts nothing new.
-	fx.orch.sweepWatchCatchUps(context.Background())
+	fx.orch.sweepWatchCatchUps(context.Background(), watchAllSubs(t, fx))
 	_ = fx.orch.DecideCatchUp(context.Background(), "u-alice", "chan1", "subOff", true)
 	if ids, _ := fx.runs.ListQueuedRuns(context.Background(), "u-alice", 10); len(ids) != 1 {
 		t.Fatalf("re-fired without new triggers: %d runs", len(ids))
@@ -640,17 +651,17 @@ func TestOrchestrator_WatchBusyCoalesces(t *testing.T) {
 	}
 
 	// Sweep while run 1 is still active: blocked, flag survives.
-	fx.orch.sweepWatchCatchUps(context.Background())
+	fx.orch.sweepWatchCatchUps(context.Background(), watchAllSubs(t, fx))
 	subs, _ = fx.dir.ListSubscriptionsByParent(context.Background(), "chan1")
 	if !subs[0].PendingCatchUp {
 		t.Fatal("flag must survive a blocked sweep")
 	}
 
 	// Run 1 finishes → next sweep starts the single catch-up run.
-	if err := fx.orch.CompleteRun(context.Background(), "r1", as.RunID, "SKIP", nil); err != nil {
+	if err := fx.orch.CompleteRun(context.Background(), "u-alice", "r1", as.RunID, "SKIP", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
-	fx.orch.sweepWatchCatchUps(context.Background())
+	fx.orch.sweepWatchCatchUps(context.Background(), watchAllSubs(t, fx))
 	ids, _ := fx.runs.ListQueuedRuns(context.Background(), "u-alice", 10)
 	if len(ids) != 1 {
 		t.Fatalf("expected one catch-up run after the thread freed, got %d", len(ids))

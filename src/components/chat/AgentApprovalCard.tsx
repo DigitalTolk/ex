@@ -8,18 +8,19 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import { apiFetch } from "@/lib/api";
+import { decideApproval } from "@/lib/approvals";
 import { useAuth } from "@/context/AuthContext";
 import {
   AUTO_ALLOW_CLASSES,
+  agentByID,
   useAgents,
   useUpdateAgentPrefs,
 } from "@/hooks/useAgents";
 import {
-  settleApprovalLocally,
   useAgentApprovalsFor,
   type PendingApproval,
 } from "@/stores/agent-approvals";
+import { NoticeCard, noticeStackClass } from "./NoticeCardChrome";
 import type { UserMapEntry } from "./MessageList";
 
 interface Props {
@@ -57,6 +58,10 @@ export function AgentApprovalCard({ parentID, userMap }: Props) {
   const { user } = useAuth();
   const approvals = useAgentApprovalsFor(parentID ?? "");
   const [busy, setBusy] = useState<string | null>(null);
+  // Which cards failed to send. A dismissed card the server never heard about
+  // silently became a timeout-denial, so a failed decision keeps its card and
+  // says so.
+  const [failed, setFailed] = useState<Record<string, boolean>>({});
   // "Always allow reads for gg": flips the caller's per-agent pref, then
   // approves this card. Needs the agent roster (id → slug + current prefs).
   const { data: roster } = useAgents();
@@ -71,7 +76,7 @@ export function AgentApprovalCard({ parentID, userMap }: Props) {
   if (!parentID || mine.length === 0) return null;
 
   const alwaysAllow = async (a: PendingApproval) => {
-    const agent = roster?.find((r) => r.id === a.agentID);
+    const agent = agentByID(roster, a.agentID);
     /* istanbul ignore if -- the button only renders when the same render's roster/kind predicate holds */
     if (!agent || !a.kind) return;
     setBusy(a.approvalID);
@@ -92,16 +97,12 @@ export function AgentApprovalCard({ parentID, userMap }: Props) {
       (m) => m.kind === a.kind && m.agentID === a.agentID,
     );
     for (const m of sameKind) {
-      try {
-        await apiFetch(`/api/v1/runs/${m.runID}/approvals/${m.approvalID}`, {
-          method: "POST",
-          body: JSON.stringify({ approve: true }),
-        });
-      } catch {
-        // settled already / transient
-      } finally {
-        settleApprovalLocally(m.approvalID);
-      }
+      const ok = await decideApproval({
+        approvalID: m.approvalID,
+        runID: m.runID,
+        approve: true,
+      });
+      if (!ok) setFailed((prev) => ({ ...prev, [m.approvalID]: true }));
     }
     setBusy(null);
   };
@@ -114,38 +115,30 @@ export function AgentApprovalCard({ parentID, userMap }: Props) {
     text?: string,
   ) => {
     setBusy(approvalID);
-    try {
-      await apiFetch(`/api/v1/runs/${runID}/approvals/${approvalID}`, {
-        method: "POST",
-        body: JSON.stringify({ approve, choice, text }),
-      });
-    } catch {
-      // Already settled (raced the timeout) or transient — either way the
-      // event stream/sweep reconciles the card; nothing useful to surface.
-    } finally {
-      settleApprovalLocally(approvalID);
-      setBusy(null);
-    }
+    const ok = await decideApproval({ approvalID, runID, approve, choice, text });
+    // The card is dismissed by decideApproval only when the server has the
+    // decision. If it does not, keep it and let the person retry — dismissing
+    // here turned their Approve into a timeout-denial minutes later.
+    setFailed((prev) => ({ ...prev, [approvalID]: !ok }));
+    setBusy(null);
   };
 
   return (
-    <div
-      className="pointer-events-auto mb-1 ml-1 flex w-fit max-w-xl flex-col gap-2"
-      aria-live="polite"
-    >
+    <div className={noticeStackClass} aria-live="polite">
       {mine.map((a) => {
         const isReply = !!a.replyText;
         const isChoice = !isReply && (a.options?.length ?? 0) > 0;
         const isBusy = busy === a.approvalID;
+        const sendFailed = failed[a.approvalID] === true;
         const agentLabel = userMap?.[a.agentID]?.displayName ?? "agent";
         return (
-          <div
+          <NoticeCard
             key={a.approvalID}
-            data-testid="agent-approval-card"
-            className="w-full overflow-hidden rounded-xl border border-amber-500/30 bg-background/95 shadow-lg backdrop-blur"
-          >
-            {/* Identity strip: who is asking, and what kind of ask it is. */}
-            <div className="flex items-center gap-2 border-b border-amber-500/20 bg-amber-500/10 px-3 py-2">
+            accent="approval"
+            testID="agent-approval-card"
+            /* Identity strip: who is asking, and what kind of ask it is. */
+            header={
+              <>
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-amber-500/20">
                 <Bot
                   className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400"
@@ -175,9 +168,20 @@ export function AgentApprovalCard({ parentID, userMap }: Props) {
                       ? "question"
                       : "approval")}
               </span>
-            </div>
-
-            <div className="px-3 py-2.5">
+              </>
+            }
+          >
+            <>
+              {sendFailed && (
+                <p
+                  role="alert"
+                  data-testid="approval-send-failed"
+                  className="mb-2 rounded-md border border-red-500/40 bg-red-500/10 px-2.5 py-1.5 text-[11px] text-red-600 dark:text-red-400"
+                >
+                  Couldn&apos;t send your decision — check your connection and
+                  try again. The agent is still waiting.
+                </p>
+              )}
               {isReply ? (
                 <ReplyProposal approval={a} busy={isBusy} onDecide={decide} />
               ) : (
@@ -285,7 +289,7 @@ export function AgentApprovalCard({ parentID, userMap }: Props) {
                             ? "No — do this instead"
                             : "Deny"}
                         </button>
-                        {a.kind && roster?.some((r) => r.id === a.agentID) && (
+                        {a.kind && agentByID(roster, a.agentID) && (
                           <button
                             type="button"
                             disabled={isBusy}
@@ -309,8 +313,8 @@ export function AgentApprovalCard({ parentID, userMap }: Props) {
                   )}
                 </>
               )}
-            </div>
-          </div>
+            </>
+          </NoticeCard>
         );
       })}
     </div>

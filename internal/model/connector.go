@@ -113,6 +113,7 @@ const (
 	ConnectorDescriptionMaxLen = 1024
 	ConnectorFileMaxBytes      = 350 * 1024 // stay under the DynamoDB item cap
 	ConnectorMaxFiles          = 64
+	ConnectorFileNameMaxLen    = 128
 	ConnectorTokenMaxLen       = 4096
 )
 
