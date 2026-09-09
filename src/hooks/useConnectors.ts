@@ -48,6 +48,23 @@ export class TwoFactorError extends Error {
   }
 }
 
+// SyncResult mirrors POST /api/v1/connectors/sync: what a provider re-pull
+// did. Admin-only; the server also polls the provider every minute on its
+// own, so the button is for "I just published, show it NOW".
+export interface SyncResult {
+  synced: string[];
+  skipped?: Record<string, string>;
+}
+
+export function useSyncConnectors() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<SyncResult>('/api/v1/connectors/sync', { method: 'POST', body: JSON.stringify({}) }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: CONNECTORS_KEY }),
+  });
+}
+
 export function useInstallConnector() {
   const queryClient = useQueryClient();
   return useMutation({

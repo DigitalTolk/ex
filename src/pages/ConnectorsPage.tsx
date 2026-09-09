@@ -1,15 +1,17 @@
 import { useState } from 'react';
-import { Cable, Check, Plug, Unplug } from 'lucide-react';
+import { Cable, Check, Plug, RefreshCw, Unplug } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useAuth } from '@/context/AuthContext';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import {
   TwoFactorError,
   useConnectors,
   useInstallConnector,
+  useSyncConnectors,
   useUninstallConnector,
   useUpdateConnectorInstall,
   useVerifyConnector,
@@ -23,11 +25,13 @@ import { showToast } from '@/lib/toast';
 export default function ConnectorsPage() {
   useDocumentTitle('Connectors');
   const { data: connectors, isLoading } = useConnectors();
+  const { user } = useAuth();
 
   return (
     <PageContainer
       title="Connectors"
       description="External services agents can use on your behalf. Install one with your own credentials, then pick it per message by typing / in the composer."
+      actions={user?.systemRole === 'admin' && <SyncButton />}
     >
       {isLoading && (
         <div className="space-y-3" data-testid="connectors-loading">
@@ -48,6 +52,39 @@ export default function ConnectorsPage() {
         {connectors?.map((c) => <ConnectorCard key={c.slug} connector={c} />)}
       </div>
     </PageContainer>
+  );
+}
+
+// SyncButton (admin-only): re-pull the registry from the connector-provider
+// right now. The server also polls each minute, so this exists for "I just
+// published a connector, show it without the wait".
+function SyncButton() {
+  const sync = useSyncConnectors();
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={sync.isPending}
+      onClick={() =>
+        sync.mutate(undefined, {
+          onSuccess: (res) => {
+            const skipped = Object.keys(res?.skipped ?? {}).length;
+            showToast(
+              skipped > 0
+                ? `Synced ${res?.synced.length ?? 0} connector(s), ${skipped} skipped`
+                : `Connectors up to date (${res?.synced.length ?? 0} synced)`,
+            );
+          },
+          onError: () => showToast("Couldn't sync from the connector provider — try again."),
+        })
+      }
+    >
+      <RefreshCw
+        className={`mr-1 h-3.5 w-3.5 ${sync.isPending ? 'animate-spin' : ''}`}
+        aria-hidden="true"
+      />
+      {sync.isPending ? 'Syncing…' : 'Sync from provider'}
+    </Button>
   );
 }
 

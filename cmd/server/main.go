@@ -299,12 +299,28 @@ func main() {
 	if cfg.ConnectorProviderURL != "" {
 		connectorSvc.SetProvider(cfg.ConnectorProviderURL, cfg.ConnectorProviderKey)
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-			if res, err := connectorSvc.SyncFromProvider(ctx, "system"); err != nil {
-				slog.Warn("connector-provider startup sync failed", "error", err)
-			} else {
-				slog.Info("connector-provider startup sync", "synced", res.Synced, "skipped", len(res.Skipped))
+			syncOnce := func(force bool) {
+				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				defer cancel()
+				res, err := connectorSvc.SyncFromProvider(ctx, "system", force)
+				switch {
+				case err != nil:
+					slog.Warn("connector-provider sync failed", "error", err)
+				case force || len(res.Synced) > 0:
+					slog.Info("connector-provider sync", "synced", res.Synced, "unchanged", len(res.Unchanged), "skipped", len(res.Skipped))
+				}
+			}
+			// Boot sync forces a full pull: registration changes (baseURL,
+			// auth) don't bump the provider revision, so a restart is the
+			// moment they propagate. The minute ticker is revision-gated —
+			// an unchanged catalog costs one small listing fetch, and only
+			// new or re-published connectors are re-downloaded. Runs are
+			// sequential on this goroutine, so they never overlap.
+			syncOnce(true)
+			t := time.NewTicker(time.Minute)
+			defer t.Stop()
+			for range t.C {
+				syncOnce(false)
 			}
 		}()
 	}

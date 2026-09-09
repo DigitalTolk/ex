@@ -16,6 +16,21 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   apiFetch: (path: string, init?: ApiInit) => mockApiFetch(path, init),
 }));
 
+// The page reads the viewer's role to decide whether to offer the admin
+// sync button; tests flip this between member and admin.
+const authRole = vi.hoisted(() => ({ value: 'member' }));
+vi.mock('@/context/AuthContext', () => ({
+  useAuth: () => ({
+    user: {
+      id: 'u-1',
+      email: 'a@b.c',
+      displayName: 'Alice',
+      systemRole: authRole.value,
+      status: 'active',
+    },
+  }),
+}));
+
 // jira: paste-token, not installed. gitlab: password sign-in, connected as a
 // user, agents always allowed. sentry: installed but unverified. figma: no
 // credential needed, connected without an account name.
@@ -102,6 +117,7 @@ async function findCard(slug: string) {
 
 beforeEach(() => {
   mockApiFetch.mockReset();
+  authRole.value = 'member';
 });
 
 describe('ConnectorsPage', () => {
@@ -369,5 +385,60 @@ describe('ConnectorsPage', () => {
     const gitlab = await findCard('gitlab');
     fireEvent.click(gitlab.getByRole('button', { name: 'Disconnect' }));
     await waitFor(() => expect(showToast).toHaveBeenCalledWith("Couldn't disconnect — try again."));
+  });
+
+  it('hides the provider sync button from members', async () => {
+    installRoutes();
+    renderPage();
+    await findCard('jira');
+    expect(screen.queryByRole('button', { name: /Sync from provider/ })).toBeNull();
+  });
+
+  it('lets an admin sync from the provider and refetches the list', async () => {
+    authRole.value = 'admin';
+    let lists = 0;
+    installRoutes({
+      connectors: async () => {
+        lists += 1;
+        return { connectors: connectorFixtures() };
+      },
+      mutate: (path, init) =>
+        path === '/api/v1/connectors/sync' && init?.method === 'POST'
+          ? Promise.resolve({ synced: ['metabase'], skipped: {} })
+          : Promise.resolve({}),
+    });
+    renderPage();
+    await findCard('jira');
+    fireEvent.click(screen.getByRole('button', { name: /Sync from provider/ }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('Connectors up to date (1 synced)'));
+    // The sync invalidates the connectors query → the page refetches.
+    await waitFor(() => expect(lists).toBeGreaterThan(1));
+  });
+
+  it('reports skipped connectors and sync failures', async () => {
+    authRole.value = 'admin';
+    installRoutes({
+      mutate: (path, init) =>
+        path === '/api/v1/connectors/sync' && init?.method === 'POST'
+          ? Promise.resolve({ synced: [], skipped: { broken: 'no registration' } })
+          : Promise.resolve({}),
+    });
+    renderPage();
+    await findCard('jira');
+    fireEvent.click(screen.getByRole('button', { name: /Sync from provider/ }));
+    await waitFor(() =>
+      expect(showToast).toHaveBeenCalledWith('Synced 0 connector(s), 1 skipped'),
+    );
+
+    installRoutes({
+      mutate: (path, init) =>
+        path === '/api/v1/connectors/sync' && init?.method === 'POST'
+          ? Promise.reject(new ApiError(502, 'provider_error'))
+          : Promise.resolve({}),
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Sync from provider/ }));
+    await waitFor(() =>
+      expect(showToast).toHaveBeenCalledWith("Couldn't sync from the connector provider — try again."),
+    );
   });
 });

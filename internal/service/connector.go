@@ -130,6 +130,9 @@ type IngestInput struct {
 	ClientID    string                `json:"clientID"`
 	VerifyURL   string                `json:"verifyURL"`
 	Files       []model.ConnectorFile `json:"files"`
+	// Revision is set by the provider sync (the bundle's content hash);
+	// direct admin uploads leave it empty.
+	Revision string `json:"revision,omitempty"`
 }
 
 // Ingest registers or replaces a connector (admin-gated at the route).
@@ -204,6 +207,7 @@ func (s *ConnectorService) Ingest(ctx context.Context, callerID string, in Inges
 		TokenURL:    in.TokenURL,
 		ClientID:    in.ClientID,
 		VerifyURL:   in.VerifyURL,
+		Revision:    in.Revision,
 		FileNames:   names,
 		Services:    services,
 		CreatedBy:   callerID,

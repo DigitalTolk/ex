@@ -72,8 +72,9 @@ func (s *ConnectorService) providerGet(ctx context.Context, path string) ([]byte
 
 // SyncResult reports what one provider sync did.
 type SyncResult struct {
-	Synced  []string          `json:"synced"`
-	Skipped map[string]string `json:"skipped,omitempty"` // slug → reason
+	Synced    []string          `json:"synced"`
+	Unchanged []string          `json:"unchanged,omitempty"` // revision matched; not re-pulled
+	Skipped   map[string]string `json:"skipped,omitempty"`   // slug → reason
 }
 
 // SyncFromProvider pulls every PUBLISHED connector from the provider and
@@ -81,7 +82,14 @@ type SyncResult struct {
 // published revision, or no registration (admin hasn't said how to connect
 // it), is skipped with a reason rather than failing the whole sync — one bad
 // source never blocks the rest.
-func (s *ConnectorService) SyncFromProvider(ctx context.Context, callerID string) (*SyncResult, error) {
+//
+// Unless force is set, a connector whose stored revision already matches the
+// provider's is left alone — the periodic sync then costs one listing fetch
+// when nothing changed. force re-ingests everything: registration changes
+// (baseURL, auth) live in the provider's config, not the bundle, so they
+// don't bump the revision — the admin sync endpoint and the boot sync force
+// so those still propagate.
+func (s *ConnectorService) SyncFromProvider(ctx context.Context, callerID string, force bool) (*SyncResult, error) {
 	if !s.ProviderConfigured() {
 		return nil, fmt.Errorf("%w: no connector provider configured", ErrConnectorInvalid)
 	}
@@ -99,11 +107,30 @@ func (s *ConnectorService) SyncFromProvider(ctx context.Context, callerID string
 		return nil, fmt.Errorf("connector provider list: %w", err)
 	}
 
+	// One listing of what we already hold beats a per-slug read; ListConnectors
+	// returns metadata only (no file contents).
+	stored := map[string]string{}
+	if !force {
+		existing, err := s.store.ListConnectors(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("connector sync: list stored: %w", err)
+		}
+		for _, c := range existing {
+			stored[c.Slug] = c.Revision
+		}
+	}
+
 	out := &SyncResult{Skipped: map[string]string{}}
 	for _, row := range list.Connectors {
 		if row.Revision == "" {
 			out.Skipped[row.Slug] = "no published revision"
 			continue
+		}
+		if !force {
+			if rev, ok := stored[row.Slug]; ok && rev == row.Revision {
+				out.Unchanged = append(out.Unchanged, row.Slug)
+				continue
+			}
 		}
 		mBody, err := s.providerGet(ctx, "/v1/connectors/"+row.Slug)
 		if err != nil {
@@ -140,7 +167,8 @@ func (s *ConnectorService) SyncFromProvider(ctx context.Context, callerID string
 			Slug: row.Slug, Title: title, Description: desc,
 			BaseURL: reg.BaseURL, AuthKind: reg.AuthKind,
 			TokenURL: reg.TokenURL, ClientID: reg.ClientID, VerifyURL: reg.VerifyURL,
-			Files: files,
+			Revision: row.Revision,
+			Files:    files,
 		}); err != nil {
 			out.Skipped[row.Slug] = "ingest: " + err.Error()
 			continue

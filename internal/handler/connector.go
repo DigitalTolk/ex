@@ -63,7 +63,9 @@ func (h *ConnectorHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 // into the registry (admin-gated at the route). Replaces the old sync script.
 func (h *ConnectorHandler) Sync(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
-	res, err := h.connectors.SyncFromProvider(r.Context(), claims.UserID)
+	// force: an admin pressing sync means "pull it all now" — including
+	// registration-only changes, which carry no revision bump.
+	res, err := h.connectors.SyncFromProvider(r.Context(), claims.UserID, true)
 	if err != nil {
 		if errors.Is(err, service.ErrConnectorInvalid) {
 			writeError(w, http.StatusServiceUnavailable, "no_provider", "no connector provider configured")

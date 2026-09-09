@@ -1210,6 +1210,14 @@ export interface Connector {
    */
   verifyURL?: string;
   /**
+   * Revision is the provider's content hash for the ingested bundle. The
+   * periodic provider sync skips any connector whose provider revision
+   * still equals this, so an unchanged catalog costs one listing fetch.
+   * Empty for connectors ingested by direct admin upload — those never
+   * match a provider revision and are re-pulled on the next sync.
+   */
+  revision?: string;
+  /**
    * FileNames is the docs-bundle manifest; contents live in separate rows.
    */
   fileNames: string[];

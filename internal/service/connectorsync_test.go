@@ -51,7 +51,7 @@ func (p *fakeProvider) handler() http.Handler {
 
 func TestSyncFromProvider_NotConfigured(t *testing.T) {
 	svc := NewConnectorService(newMemConnectorStore())
-	if _, err := svc.SyncFromProvider(context.Background(), "admin"); !errors.Is(err, ErrConnectorInvalid) {
+	if _, err := svc.SyncFromProvider(context.Background(), "admin", false); !errors.Is(err, ErrConnectorInvalid) {
 		t.Fatalf("unconfigured: want ErrConnectorInvalid, got %v", err)
 	}
 	if svc.ProviderConfigured() {
@@ -65,7 +65,7 @@ func TestSyncFromProvider_ListErrors(t *testing.T) {
 		srv.Close() // dead endpoint → transport error
 		svc := NewConnectorService(newMemConnectorStore())
 		svc.SetProvider(srv.URL, "k")
-		if _, err := svc.SyncFromProvider(context.Background(), "admin"); err == nil || !strings.Contains(err.Error(), "unreachable") {
+		if _, err := svc.SyncFromProvider(context.Background(), "admin", false); err == nil || !strings.Contains(err.Error(), "unreachable") {
 			t.Fatalf("dead provider: want unreachable error, got %v", err)
 		}
 	})
@@ -75,7 +75,7 @@ func TestSyncFromProvider_ListErrors(t *testing.T) {
 		defer srv.Close()
 		svc := NewConnectorService(newMemConnectorStore())
 		svc.SetProvider(srv.URL, "k")
-		if _, err := svc.SyncFromProvider(context.Background(), "admin"); err == nil || !strings.Contains(err.Error(), "HTTP 500") {
+		if _, err := svc.SyncFromProvider(context.Background(), "admin", false); err == nil || !strings.Contains(err.Error(), "HTTP 500") {
 			t.Fatalf("500 list: want HTTP 500 error, got %v", err)
 		}
 	})
@@ -85,7 +85,7 @@ func TestSyncFromProvider_ListErrors(t *testing.T) {
 		defer srv.Close()
 		svc := NewConnectorService(newMemConnectorStore())
 		svc.SetProvider(srv.URL, "k")
-		if _, err := svc.SyncFromProvider(context.Background(), "admin"); err == nil || !strings.Contains(err.Error(), "list") {
+		if _, err := svc.SyncFromProvider(context.Background(), "admin", false); err == nil || !strings.Contains(err.Error(), "list") {
 			t.Fatalf("garbage list: want parse error, got %v", err)
 		}
 	})
@@ -142,7 +142,7 @@ func TestSyncFromProvider_MixedCatalog(t *testing.T) {
 	svc := NewConnectorService(st)
 	svc.SetProvider(srv.URL+"/", "secret-key") // trailing slash exercises TrimRight
 
-	res, err := svc.SyncFromProvider(context.Background(), "admin")
+	res, err := svc.SyncFromProvider(context.Background(), "admin", false)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -190,11 +190,72 @@ func TestSyncFromProvider_BadSlugURL(t *testing.T) {
 	defer srv.Close()
 	svc := NewConnectorService(newMemConnectorStore())
 	svc.SetProvider(srv.URL, "k")
-	res, err := svc.SyncFromProvider(context.Background(), "admin")
+	res, err := svc.SyncFromProvider(context.Background(), "admin", false)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if len(res.Synced) != 0 || res.Skipped["bad\nslug"] == "" {
 		t.Fatalf("bad slug: want skipped, got %+v", res)
+	}
+}
+
+// The minute-level poll must be cheap: a stored revision matching the
+// provider's leaves the connector untouched (no manifest/file fetches, no
+// rewrite). force re-pulls regardless — registration-only changes (baseURL,
+// auth) carry no revision bump — and a real revision bump re-ingests without
+// force.
+func TestSyncFromProvider_RevisionSkip(t *testing.T) {
+	manifest := func(base string) string {
+		return `{"slug": "good", "files": [{"name": "api.yaml"}],
+			"registration": {"title": "Good", "baseURL": "` + base + `", "authKind": "none"}}`
+	}
+	p := &fakeProvider{
+		list:      `{"connectors": [{"slug": "good", "revision": "rev-1"}]}`,
+		manifests: map[string]string{"good": manifest("https://a.example.net")},
+		files:     map[string]string{"good/api.yaml": "service: api\nendpoints: []\n"},
+	}
+	srv := httptest.NewServer(p.handler())
+	defer srv.Close()
+	st := newMemConnectorStore()
+	svc := NewConnectorService(st)
+	svc.SetProvider(srv.URL, "k")
+
+	if res, err := svc.SyncFromProvider(context.Background(), "admin", false); err != nil || len(res.Synced) != 1 {
+		t.Fatalf("first sync: res=%+v err=%v", res, err)
+	}
+	if st.connectors["good"].Revision != "rev-1" {
+		t.Fatalf("stored revision: want rev-1, got %q", st.connectors["good"].Revision)
+	}
+
+	// Same revision, changed registration: a non-force sync reports it
+	// unchanged and rewrites nothing…
+	p.manifests["good"] = manifest("https://b.example.net")
+	res, err := svc.SyncFromProvider(context.Background(), "admin", false)
+	if err != nil {
+		t.Fatalf("second sync: %v", err)
+	}
+	if len(res.Synced) != 0 || len(res.Unchanged) != 1 || res.Unchanged[0] != "good" {
+		t.Fatalf("unchanged skip: got %+v", res)
+	}
+	if st.connectors["good"].BaseURL != "https://a.example.net" {
+		t.Fatalf("skipped connector was rewritten: %+v", st.connectors["good"])
+	}
+
+	// …force pulls it anyway…
+	if res, err := svc.SyncFromProvider(context.Background(), "admin", true); err != nil || len(res.Synced) != 1 || len(res.Unchanged) != 0 {
+		t.Fatalf("force sync: res=%+v err=%v", res, err)
+	}
+	if st.connectors["good"].BaseURL != "https://b.example.net" {
+		t.Fatalf("force did not re-ingest: %+v", st.connectors["good"])
+	}
+
+	// …and a revision bump re-ingests without force.
+	p.list = `{"connectors": [{"slug": "good", "revision": "rev-2"}]}`
+	p.manifests["good"] = manifest("https://c.example.net")
+	if res, err := svc.SyncFromProvider(context.Background(), "admin", false); err != nil || len(res.Synced) != 1 {
+		t.Fatalf("bumped sync: res=%+v err=%v", res, err)
+	}
+	if st.connectors["good"].Revision != "rev-2" || st.connectors["good"].BaseURL != "https://c.example.net" {
+		t.Fatalf("bumped revision not ingested: %+v", st.connectors["good"])
 	}
 }
