@@ -68,11 +68,12 @@ function SyncButton() {
       onClick={() =>
         sync.mutate(undefined, {
           onSuccess: (res) => {
+            const synced = res?.synced.length ?? 0;
             const skipped = Object.keys(res?.skipped ?? {}).length;
             showToast(
               skipped > 0
-                ? `Synced ${res?.synced.length ?? 0} connector(s), ${skipped} skipped`
-                : `Connectors up to date (${res?.synced.length ?? 0} synced)`,
+                ? `Synced ${synced} connector(s), ${skipped} skipped`
+                : `Connectors up to date (${synced} synced)`,
             );
           },
           onError: () => showToast("Couldn't sync from the connector provider — try again."),

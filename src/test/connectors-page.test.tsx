@@ -415,6 +415,28 @@ describe('ConnectorsPage', () => {
     await waitFor(() => expect(lists).toBeGreaterThan(1));
   });
 
+  it('shows a syncing state and tolerates an empty sync response', async () => {
+    authRole.value = 'admin';
+    const d = deferred<unknown>();
+    installRoutes({
+      mutate: (path, init) =>
+        path === '/api/v1/connectors/sync' && init?.method === 'POST'
+          ? d.promise
+          : Promise.resolve({}),
+    });
+    renderPage();
+    await findCard('jira');
+    fireEvent.click(screen.getByRole('button', { name: 'Sync from provider' }));
+    // In flight: label flips and the button locks so a double-click can't
+    // queue a second pull.
+    expect(await screen.findByRole('button', { name: 'Syncing…' })).toBeDisabled();
+    // apiFetch can resolve undefined (empty body); the toast falls back to 0.
+    d.resolve(undefined);
+    await waitFor(() =>
+      expect(showToast).toHaveBeenCalledWith('Connectors up to date (0 synced)'),
+    );
+  });
+
   it('reports skipped connectors and sync failures', async () => {
     authRole.value = 'admin';
     installRoutes({
