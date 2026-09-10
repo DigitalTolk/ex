@@ -464,3 +464,138 @@ describe('ConnectorsPage', () => {
     );
   });
 });
+
+describe('sso_window connectors', () => {
+  const ssoConnector = (): Connector => ({
+    slug: 'cliffhub',
+    title: 'CliffHub',
+    description: 'Team ops',
+    baseURL: 'https://cliffhub-api.example.net',
+    authKind: 'sso_window',
+    startURL: 'https://cliffhub-api.example.net/api/auth/microsoft',
+    capturePattern: '/callback?token={token}',
+    installed: false,
+  });
+
+  afterEach(() => {
+    delete window.__EX_CONNECTOR_SSO__;
+  });
+
+  it('one-click signs in via the shell bridge and installs the captured token', async () => {
+    const bridge = vi.fn(async () => 'captured-tok');
+    window.__EX_CONNECTOR_SSO__ = bridge;
+    let installBody: string | undefined;
+    installRoutes({
+      connectors: async () => ({ connectors: [ssoConnector()] }),
+      mutate: (path, init) => {
+        if (path === '/api/v1/connectors/cliffhub/install' && init?.method === 'POST') {
+          installBody = init.body;
+          return Promise.resolve({ install: {} });
+        }
+        return Promise.resolve({});
+      },
+    });
+    renderPage();
+    const card = await findCard('cliffhub');
+    fireEvent.click(card.getByRole('button', { name: 'Install' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in to CliffHub' }));
+    await waitFor(() => expect(installBody).toBe(JSON.stringify({ token: 'captured-tok' })));
+    expect(bridge).toHaveBeenCalledWith(
+      'https://cliffhub-api.example.net/api/auth/microsoft',
+      '/callback?token={token}',
+    );
+  });
+
+  it('shows the bridge error and stays open when sign-in fails', async () => {
+    window.__EX_CONNECTOR_SSO__ = vi.fn(async () => {
+      throw new Error('sign-in window was closed');
+    });
+    installRoutes({ connectors: async () => ({ connectors: [ssoConnector()] }) });
+    renderPage();
+    const card = await findCard('cliffhub');
+    fireEvent.click(card.getByRole('button', { name: 'Install' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in to CliffHub' }));
+    expect(await screen.findByText('sign-in window was closed')).toBeInTheDocument();
+  });
+
+  it('reports a generic message for non-Error bridge failures', async () => {
+    window.__EX_CONNECTOR_SSO__ = vi.fn(() => Promise.reject('nope'));
+    installRoutes({ connectors: async () => ({ connectors: [ssoConnector()] }) });
+    renderPage();
+    const card = await findCard('cliffhub');
+    fireEvent.click(card.getByRole('button', { name: 'Install' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in to CliffHub' }));
+    expect(await screen.findByText('sign-in window failed')).toBeInTheDocument();
+  });
+
+  it('surfaces an install failure after a successful capture', async () => {
+    window.__EX_CONNECTOR_SSO__ = vi.fn(async () => 'tok');
+    installRoutes({
+      connectors: async () => ({ connectors: [ssoConnector()] }),
+      mutate: (path, init) =>
+        init?.method === 'POST' && path.endsWith('/install')
+          ? Promise.reject(new ApiError(401, 'token rejected'))
+          : Promise.resolve({}),
+    });
+    renderPage();
+    const card = await findCard('cliffhub');
+    fireEvent.click(card.getByRole('button', { name: 'Install' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in to CliffHub' }));
+    await waitFor(() => expect(screen.getByText(/token rejected|connection failed/)).toBeInTheDocument());
+  });
+
+  it('falls back to paste with a desktop hint when no bridge is available', async () => {
+    installRoutes({ connectors: async () => ({ connectors: [ssoConnector()] }) });
+    renderPage();
+    const card = await findCard('cliffhub');
+    fireEvent.click(card.getByRole('button', { name: 'Install' }));
+    expect(await screen.findByText(/desktop app signs in to CliffHub/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sign in to CliffHub' })).toBeNull();
+    // Paste still works.
+    fireEvent.change(screen.getByLabelText('Bearer token'), { target: { value: 'tok-manual' } });
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
+  });
+
+  it('offers no sign-in button when the connector lacks a startURL', async () => {
+    window.__EX_CONNECTOR_SSO__ = vi.fn(async () => 't');
+    const c = ssoConnector();
+    delete (c as Partial<Connector>).startURL;
+    installRoutes({ connectors: async () => ({ connectors: [c] }) });
+    renderPage();
+    const card = await findCard('cliffhub');
+    fireEvent.click(card.getByRole('button', { name: 'Install' }));
+    await screen.findByTestId('connect-form');
+    expect(screen.queryByRole('button', { name: 'Sign in to CliffHub' })).toBeNull();
+  });
+});
+
+describe('sso_window install edge', () => {
+  it('reports a generic message for a non-Error install failure', async () => {
+    window.__EX_CONNECTOR_SSO__ = vi.fn(async () => 'tok');
+    installRoutes({
+      connectors: async () => ({
+        connectors: [
+          {
+            slug: 'cliffhub',
+            title: 'CliffHub',
+            description: 'Team ops',
+            baseURL: 'https://cliffhub-api.example.net',
+            authKind: 'sso_window',
+            startURL: 'https://cliffhub-api.example.net/api/auth/microsoft',
+            installed: false,
+          } satisfies Connector,
+        ],
+      }),
+      mutate: (path, init) =>
+        init?.method === 'POST' && path.endsWith('/install')
+          ? Promise.reject('kaput')
+          : Promise.resolve({}),
+    });
+    renderPage();
+    const card = await findCard('cliffhub');
+    fireEvent.click(card.getByRole('button', { name: 'Install' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in to CliffHub' }));
+    expect(await screen.findByText('connection failed')).toBeInTheDocument();
+    delete window.__EX_CONNECTOR_SSO__;
+  });
+});

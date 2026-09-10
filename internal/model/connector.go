@@ -29,6 +29,14 @@ type Connector struct {
 	// install time ("connected as {name}").
 	VerifyURL string `json:"verifyURL,omitempty" dynamodbav:"verifyURL,omitempty"`
 
+	// StartURL is the SSO entry point opened by an sso_window connect; the
+	// service redirects through its own login (silent when the user holds a
+	// live Microsoft session) and lands on a URL matching CapturePattern
+	// (e.g. "/callback?token={token}"), from which the shell captures the
+	// service-minted bearer.
+	StartURL       string `json:"startURL,omitempty" dynamodbav:"startURL,omitempty"`
+	CapturePattern string `json:"capturePattern,omitempty" dynamodbav:"capturePattern,omitempty"`
+
 	// Revision is the provider's content hash for the ingested bundle. The
 	// periodic provider sync skips any connector whose provider revision
 	// still equals this, so an unchanged catalog costs one listing fetch.
@@ -84,13 +92,13 @@ type ConnectorServiceInfo struct {
 // user's own credential for that service (stored server-side for v1; the
 // runner injects it into agent runs as $<PREFIX>_TOKEN).
 type ConnectorInstall struct {
-	UserID        string    `json:"userID" dynamodbav:"userID"`
-	ConnectorSlug string    `json:"connectorSlug" dynamodbav:"connectorSlug"`
-	Token         string    `json:"-" dynamodbav:"token"`
+	UserID        string `json:"userID" dynamodbav:"userID"`
+	ConnectorSlug string `json:"connectorSlug" dynamodbav:"connectorSlug"`
+	Token         string `json:"-" dynamodbav:"token"`
 	// Status: "connected" (verify passed) or "unverified" (verify endpoint
 	// unreachable from the server — token accepted, will be proven at use).
-	Status      string    `json:"status" dynamodbav:"status"`
-	ConnectedAs string    `json:"connectedAs,omitempty" dynamodbav:"connectedAs,omitempty"`
+	Status      string `json:"status" dynamodbav:"status"`
+	ConnectedAs string `json:"connectedAs,omitempty" dynamodbav:"connectedAs,omitempty"`
 	// Identity is the raw verify-endpoint response captured at connect time —
 	// the caller's own profile on that service (ids, name, email). Synced to
 	// runs as _identity.json so agents resolve "who am I" locally instead of
@@ -128,6 +136,13 @@ const (
 const (
 	ConnectorAuthPaste    = "paste"
 	ConnectorAuthPassword = "password"
+	// ConnectorAuthSSOWindow: connecting opens the service's own SSO entry
+	// point (StartURL) in a window — the user's Microsoft session signs in
+	// silently — and the client captures the service-minted bearer from the
+	// redirect matching CapturePattern. Install then proceeds exactly like
+	// paste, with the captured token. Web clients without a capture-capable
+	// shell fall back to pasting.
+	ConnectorAuthSSOWindow = "sso_window"
 	// ConnectorAuthNone: the service needs no credential (anonymous access) —
 	// install is a bare "connect", calls carry no Authorization header.
 	ConnectorAuthNone = "none"

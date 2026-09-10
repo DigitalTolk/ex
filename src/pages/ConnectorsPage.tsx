@@ -203,14 +203,56 @@ function AgentUseControl({ connector: c }: { connector: Connector }) {
   );
 }
 
+// SSOConnectButton: one-click connect for sso_window connectors inside the
+// desktop shell — the shell opens the service's own SSO entry (the user's
+// Microsoft session signs in silently), captures the service-minted token
+// from the redirect, and the token installs exactly like a paste.
+function SSOConnectButton({
+  title,
+  startURL,
+  capturePattern,
+  onToken,
+  onError,
+  busy,
+}: {
+  title: string;
+  startURL: string;
+  capturePattern?: string;
+  onToken: (token: string) => void;
+  onError: (message: string) => void;
+  busy: boolean;
+}) {
+  const [waiting, setWaiting] = useState(false);
+  return (
+    <Button
+      size="sm"
+      disabled={waiting || busy}
+      onClick={() => {
+        setWaiting(true);
+        window
+          .__EX_CONNECTOR_SSO__!(startURL, capturePattern)
+          .then(onToken)
+          .catch((err: unknown) =>
+            onError(err instanceof Error ? err.message : 'sign-in window failed'),
+          )
+          .finally(() => setWaiting(false));
+      }}
+    >
+      {waiting ? 'Finish signing in in your browser…' : `Sign in to ${title}`}
+    </Button>
+  );
+}
+
 // ConnectForm collects the credential: paste-a-token always; email/password
 // (with a 2FA step when the auth service demands one) for password-kind
-// connectors. Without a credential the connector is not usable — install IS
-// connecting.
+// connectors; sso_window connectors get one-click sign-in in the desktop
+// shell (paste stays the browser fallback). Without a credential the
+// connector is not usable — install IS connecting.
 function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: () => void }) {
   const install = useInstallConnector();
   const canLogin = c.authKind === 'password';
   const anonymous = c.authKind === 'none';
+  const canSSO = c.authKind === 'sso_window' && !!window.__EX_CONNECTOR_SSO__ && !!c.startURL;
   const [mode, setMode] = useState<'login' | 'paste'>(canLogin ? 'login' : 'paste');
   const [token, setToken] = useState('');
   const [email, setEmail] = useState('');
@@ -254,6 +296,34 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
 
   return (
     <div className="mt-3 space-y-3 rounded-md border bg-muted/30 p-3" data-testid="connect-form">
+      {canSSO && !needsCode && (
+        <div className="flex flex-wrap items-center gap-2">
+          <SSOConnectButton
+            title={c.title}
+            startURL={c.startURL as string}
+            capturePattern={c.capturePattern}
+            busy={install.isPending}
+            onError={setError}
+            onToken={(t) =>
+              install.mutate(
+                { slug: c.slug, payload: { token: t } },
+                {
+                  onSuccess: onDone,
+                  onError: (err) => setError(err instanceof Error ? err.message : 'connection failed'),
+                },
+              )
+            }
+          />
+          <span className="text-xs text-muted-foreground">
+            Opens your browser (already signed in to Microsoft) — or paste a token below.
+          </span>
+        </div>
+      )}
+      {c.authKind === 'sso_window' && !canSSO && (
+        <p className="text-xs text-muted-foreground">
+          The desktop app signs in to {c.title} with one click; in the browser, paste a token.
+        </p>
+      )}
       {canLogin && !needsCode && (
         <div className="inline-flex rounded-md border p-0.5 text-sm" role="tablist" aria-label="Connection method">
           <button

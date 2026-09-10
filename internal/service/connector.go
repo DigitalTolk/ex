@@ -130,6 +130,9 @@ type IngestInput struct {
 	ClientID    string                `json:"clientID"`
 	VerifyURL   string                `json:"verifyURL"`
 	Files       []model.ConnectorFile `json:"files"`
+	// StartURL + CapturePattern drive sso_window connects (see model.Connector).
+	StartURL       string `json:"startURL,omitempty"`
+	CapturePattern string `json:"capturePattern,omitempty"`
 	// Revision is set by the provider sync (the bundle's content hash);
 	// direct admin uploads leave it empty.
 	Revision string `json:"revision,omitempty"`
@@ -143,16 +146,22 @@ func (s *ConnectorService) Ingest(ctx context.Context, callerID string, in Inges
 	if in.Title == "" || in.BaseURL == "" {
 		return nil, fmt.Errorf("%w: title and baseURL required", ErrConnectorInvalid)
 	}
-	if in.AuthKind != model.ConnectorAuthPaste && in.AuthKind != model.ConnectorAuthPassword && in.AuthKind != model.ConnectorAuthNone {
-		return nil, fmt.Errorf("%w: authKind must be paste, password, or none", ErrConnectorInvalid)
+	switch in.AuthKind {
+	case model.ConnectorAuthPaste, model.ConnectorAuthPassword, model.ConnectorAuthNone, model.ConnectorAuthSSOWindow:
+	default:
+		return nil, fmt.Errorf("%w: authKind must be paste, password, sso_window, or none", ErrConnectorInvalid)
 	}
 	if in.AuthKind == model.ConnectorAuthPassword && in.TokenURL == "" {
 		return nil, fmt.Errorf("%w: password connectors need tokenURL", ErrConnectorInvalid)
 	}
+	if in.AuthKind == model.ConnectorAuthSSOWindow && in.StartURL == "" {
+		return nil, fmt.Errorf("%w: sso_window connectors need startURL", ErrConnectorInvalid)
+	}
 	// Every one of these is fetched SERVER-SIDE with a user's bearer token or
-	// password attached, so they are an SSRF surface: refuse anything that
-	// isn't plain https to a routable host before it can be stored.
-	for label, u := range map[string]string{"baseURL": in.BaseURL, "tokenURL": in.TokenURL, "verifyURL": in.VerifyURL} {
+	// password attached — or, for startURL, opened in the user's shell — so
+	// they are an SSRF/phishing surface: refuse anything that isn't plain
+	// https to a routable host before it can be stored.
+	for label, u := range map[string]string{"baseURL": in.BaseURL, "tokenURL": in.TokenURL, "verifyURL": in.VerifyURL, "startURL": in.StartURL} {
 		if err := validateOutboundURL(u); err != nil {
 			return nil, fmt.Errorf("%w: %s %s", ErrConnectorInvalid, label, err.Error())
 		}
@@ -199,20 +208,22 @@ func (s *ConnectorService) Ingest(ctx context.Context, callerID string, in Inges
 
 	now := time.Now().UTC()
 	c := &model.Connector{
-		Slug:        in.Slug,
-		Title:       strings.TrimSpace(in.Title),
-		Description: strings.TrimSpace(in.Description),
-		BaseURL:     strings.TrimRight(in.BaseURL, "/"),
-		AuthKind:    in.AuthKind,
-		TokenURL:    in.TokenURL,
-		ClientID:    in.ClientID,
-		VerifyURL:   in.VerifyURL,
-		Revision:    in.Revision,
-		FileNames:   names,
-		Services:    services,
-		CreatedBy:   callerID,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		Slug:           in.Slug,
+		Title:          strings.TrimSpace(in.Title),
+		Description:    strings.TrimSpace(in.Description),
+		BaseURL:        strings.TrimRight(in.BaseURL, "/"),
+		AuthKind:       in.AuthKind,
+		TokenURL:       in.TokenURL,
+		ClientID:       in.ClientID,
+		VerifyURL:      in.VerifyURL,
+		StartURL:       in.StartURL,
+		CapturePattern: in.CapturePattern,
+		Revision:       in.Revision,
+		FileNames:      names,
+		Services:       services,
+		CreatedBy:      callerID,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 	if old, err := s.store.GetConnector(ctx, in.Slug); err == nil {
 		c.CreatedBy = old.CreatedBy
