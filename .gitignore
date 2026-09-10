@@ -41,6 +41,7 @@ Thumbs.db
 # Build
 /ex
 /migrate
+/seed
 /bin/
 /tmp/
 node_modules/
