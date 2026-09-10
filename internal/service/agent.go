@@ -368,13 +368,54 @@ func (s *AgentService) SetAgentSkills(ctx context.Context, slug string, skillIDs
 	return tpl, nil
 }
 
+// SetAgentEngine re-pins an agent template's execution backend: harness, and
+// optionally model + execution mode (admin-gated at the route). Changing the
+// harness with no model given CLEARS the template model — model ids live in a
+// harness's own namespace, and carrying one across harnesses hands the new
+// harness a foreign string (the same rule Resolve applies to prefs).
+func (s *AgentService) SetAgentEngine(ctx context.Context, slug, harness, mdl, executionMode string) (*model.AgentTemplate, error) {
+	switch harness {
+	case model.HarnessClaude, model.HarnessCodex, model.HarnessBedrock:
+	default:
+		return nil, fmt.Errorf("agent: unknown harness %q: %w", harness, ErrValidation)
+	}
+	switch executionMode {
+	case "":
+	case model.ExecutionRunner, model.ExecutionServer:
+		if !model.HarnessIsAPI(harness) {
+			return nil, fmt.Errorf("agent: execution mode applies to API harnesses only: %w", ErrValidation)
+		}
+	default:
+		return nil, fmt.Errorf("agent: unknown execution mode %q: %w", executionMode, ErrValidation)
+	}
+	tpl, err := s.agents.GetTemplate(ctx, strings.ToLower(strings.TrimSpace(slug)))
+	if err != nil {
+		return nil, err
+	}
+	if mdl == "" && harness != tpl.Harness {
+		tpl.Model = ""
+	} else if mdl != "" {
+		tpl.Model = strings.TrimSpace(mdl)
+	}
+	tpl.Harness = harness
+	tpl.ExecutionMode = executionMode
+	tpl.UpdatedAt = time.Now()
+	if err := s.agents.PutTemplate(ctx, tpl); err != nil {
+		return nil, fmt.Errorf("agent: set engine: %w", err)
+	}
+	return tpl, nil
+}
+
 // defaultAPIModel is the model id used when an API harness has no explicit
 // pin. Bedrock ids are inference-profile / model ids in the account's region;
-// this default targets Claude Sonnet, overridable per-user and per-template.
+// this default is the EU cross-region Claude Haiku profile — the one with a
+// working Marketplace agreement in our accounts (Sonnet agreements were
+// denied; see cliffhub's infra/bedrock.tf notes). Overridable per-user and
+// per-template.
 func defaultAPIModel(harness string) string {
 	switch harness {
 	case model.HarnessBedrock:
-		return "anthropic.claude-3-5-sonnet-20241022-v2:0"
+		return "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
 	default:
 		return ""
 	}

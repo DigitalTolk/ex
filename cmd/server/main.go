@@ -12,6 +12,10 @@ import (
 	"syscall"
 	"time"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+
 	ex "github.com/DigitalTolk/ex"
 	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/cache"
@@ -293,6 +297,29 @@ func main() {
 	service.AllowPrivateConnectorTargets(cfg.IsDev())
 	connectorH := handler.NewConnectorHandler(connectorSvc, orchestrator)
 	orchestrator.SetConnectorRegistry(connectorSvc)
+	// Server-side bedrock execution: agents with harness=bedrock and
+	// executionMode=server run their Converse loop in THIS process on the
+	// task role's credentials — they answer with no desktop app open, and
+	// connector calls never leave the backend. Off unless BEDROCK_REGION is
+	// set; then server-mode invocations keep failing legibly.
+	if cfg.BedrockRegion != "" {
+		bctx, bcancel := context.WithTimeout(context.Background(), 15*time.Second)
+		bedrockOpts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(cfg.BedrockRegion)}
+		// Local dev: the environment's AWS_* creds belong to dynamodb-local,
+		// so Bedrock gets its own static credentials when provided.
+		if cfg.BedrockAccessKeyID != "" {
+			bedrockOpts = append(bedrockOpts, awsconfig.WithCredentialsProvider(
+				credentials.NewStaticCredentialsProvider(cfg.BedrockAccessKeyID, cfg.BedrockSecretAccessKey, cfg.BedrockSessionToken)))
+		}
+		bedrockCfg, err := awsconfig.LoadDefaultConfig(bctx, bedrockOpts...)
+		bcancel()
+		if err != nil {
+			slog.Error("bedrock: aws config load failed; server-side agents disabled", "error", err)
+		} else {
+			orchestrator.SetServerEngine(service.NewServerEngine(orchestrator, connectorSvc, bedrockruntime.NewFromConfig(bedrockCfg)))
+			slog.Info("bedrock server engine enabled", "region", cfg.BedrockRegion)
+		}
+	}
 	// The connector catalog is SOURCED from the standalone connector-provider:
 	// ex pulls docs + admin auth from it (never the reverse). Wire it and warm
 	// the registry once at boot; admins re-pull via POST /api/v1/connectors/sync.

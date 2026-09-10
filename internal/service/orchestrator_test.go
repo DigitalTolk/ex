@@ -25,6 +25,10 @@ type fakeRunStore struct {
 	digest    map[string]*model.RunDigest
 	approvals map[string]*model.Approval // runID#approvalID
 	artifacts map[string][]*model.Artifact
+	// Fault seams for arms unreachable through the public surface.
+	onGetRun       func(runID string) // runs before every GetRun read
+	failClaim      error              // next ClaimRun returns this
+	failUpdateOnce error              // next UpdateRun returns this, then clears
 }
 
 func newFakeRunStore() *fakeRunStore {
@@ -51,6 +55,12 @@ func (f *fakeRunStore) CreateRun(_ context.Context, run *model.Run) error {
 }
 
 func (f *fakeRunStore) GetRun(_ context.Context, runID string) (*model.Run, error) {
+	// Fault seam: server-engine tests drop or mutate a run mid-flight to reach
+	// the report/complete/fail error arms — invoked unlocked so the hook may
+	// use the locking helpers below.
+	if f.onGetRun != nil {
+		f.onGetRun(runID)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	run, ok := f.runs[runID]
@@ -61,9 +71,20 @@ func (f *fakeRunStore) GetRun(_ context.Context, runID string) (*model.Run, erro
 	return &cp, nil
 }
 
+// dropRun removes a run row (fault helper for onGetRun hooks).
+func (f *fakeRunStore) dropRun(runID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.runs, runID)
+}
+
 func (f *fakeRunStore) UpdateRun(_ context.Context, run *model.Run, expect model.RunState) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.failUpdateOnce; err != nil {
+		f.failUpdateOnce = nil
+		return err
+	}
 	cur, ok := f.runs[run.ID]
 	if !ok {
 		return store.ErrNotFound
@@ -155,6 +176,9 @@ func (f *fakeRunStore) ListQueuedRuns(_ context.Context, ownerID string, limit i
 func (f *fakeRunStore) ClaimRun(_ context.Context, run *model.Run, runnerID string, lease time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failClaim != nil {
+		return f.failClaim
+	}
 	cur, ok := f.runs[run.ID]
 	if !ok {
 		return store.ErrNotFound
@@ -365,6 +389,8 @@ type fakeAgentDir struct {
 	// failListRunners makes the live-runner lookup fail, which the workspace
 	// pin treats as "assume live" (an outage must not steal a checkout).
 	failListRunners error
+	// failPutTemplate makes template writes fail (engine re-pin error arm).
+	failPutTemplate error
 }
 
 func newFakeAgentDir() *fakeAgentDir {
@@ -379,6 +405,9 @@ func newFakeAgentDir() *fakeAgentDir {
 func (f *fakeAgentDir) PutTemplate(_ context.Context, tpl *model.AgentTemplate) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failPutTemplate != nil {
+		return f.failPutTemplate
+	}
 	cp := *tpl
 	f.templates[tpl.Slug] = &cp
 	return nil
@@ -671,7 +700,7 @@ type fakeOrchMessages struct {
 	postDest  []string // parentType|parentID for the matching posts entry
 	reactions []string
 	// thread backs ListThreadMessages/List for bundle-rendering tests.
-	thread []*model.Message
+	thread         []*model.Message
 	checkAccessErr error
 }
 
@@ -746,6 +775,9 @@ func (f *fakeOrchMessages) lastReaction() string {
 // fakeUsers implements orchestratorUsers.
 type fakeUsers struct {
 	users map[string]*model.User
+	// failByIDs makes batch lookups fail — claim paths must fall back to raw
+	// ids for display names instead of erroring the claim.
+	failByIDs error
 }
 
 func (f *fakeUsers) GetUser(_ context.Context, id string) (*model.User, error) {
@@ -767,6 +799,9 @@ func (f *fakeUsers) UpdateUser(_ context.Context, user *model.User) error {
 }
 
 func (f *fakeUsers) GetUsersByIDs(_ context.Context, ids []string) ([]*model.User, error) {
+	if f.failByIDs != nil {
+		return nil, f.failByIDs
+	}
 	var out []*model.User
 	for _, id := range ids {
 		if u, ok := f.users[id]; ok {
@@ -1228,8 +1263,8 @@ func TestOrchestrator_PurgeThreadLogsCascade(t *testing.T) {
 
 	// A thread rooted at "root": the root's own run (archived) + a reply run
 	// (still hot). Plus an unrelated run in the same channel that must survive.
-	seed("r-root", "root", "", true)    // replyThreadRoot -> "root"
-	seed("r-reply", "reply1", "root", false) // replyThreadRoot -> "root"
+	seed("r-root", "root", "", true)            // replyThreadRoot -> "root"
+	seed("r-reply", "reply1", "root", false)    // replyThreadRoot -> "root"
 	seed("r-other", "other", "otherRoot", true) // replyThreadRoot -> "otherRoot"
 
 	fx.orch.PurgeThreadLogs(ctx, "chanX", "root")

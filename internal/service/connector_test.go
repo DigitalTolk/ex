@@ -19,6 +19,10 @@ type memConnectorStore struct {
 	connectors map[string]*model.Connector
 	files      map[string][]model.ConnectorFile
 	installs   map[string]*model.ConnectorInstall // userID#slug
+	// failListInstalls fails install listing (server-engine connector-load arm).
+	failListInstalls error
+	// failListConnectors fails registry listing (sync revision-map arm).
+	failListConnectors error
 }
 
 func newMemConnectorStore() *memConnectorStore {
@@ -46,6 +50,9 @@ func (m *memConnectorStore) GetConnector(_ context.Context, slug string) (*model
 }
 
 func (m *memConnectorStore) ListConnectors(_ context.Context) ([]*model.Connector, error) {
+	if m.failListConnectors != nil {
+		return nil, m.failListConnectors
+	}
 	out := make([]*model.Connector, 0, len(m.connectors))
 	for _, c := range m.connectors {
 		cp := *c
@@ -74,6 +81,9 @@ func (m *memConnectorStore) GetInstall(_ context.Context, userID, slug string) (
 }
 
 func (m *memConnectorStore) ListInstalls(_ context.Context, userID string) ([]*model.ConnectorInstall, error) {
+	if m.failListInstalls != nil {
+		return nil, m.failListInstalls
+	}
 	out := []*model.ConnectorInstall{}
 	for _, in := range m.installs {
 		if in.UserID == userID {

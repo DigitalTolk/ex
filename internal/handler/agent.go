@@ -66,9 +66,13 @@ func (h *AgentHandler) view(r *http.Request, agent *model.User, callerID string)
 	if err != nil {
 		return agentView{}, err
 	}
-	// Availability is per-caller: runs execute on the CALLER's machine.
+	// Availability is per-caller: runs execute on the CALLER's machine —
+	// except server-executed API harnesses, which run in the backend and are
+	// available with no desktop app at all.
 	status := model.AgentStatusOffline
-	if runners, err := h.agents.LiveRunners(r.Context(), callerID); err == nil && len(runners) > 0 {
+	if model.HarnessIsAPI(resolved.Harness) && resolved.ExecutionMode == model.ExecutionServer {
+		status = model.AgentStatusActive
+	} else if runners, err := h.agents.LiveRunners(r.Context(), callerID); err == nil && len(runners) > 0 {
 		if service.RunnerHasHarness(runners, resolved.Harness) {
 			status = model.AgentStatusActive
 		} else {
@@ -130,13 +134,21 @@ func (h *AgentHandler) RenameAgent(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		DisplayName string    `json:"displayName"`
 		SkillIDs    *[]string `json:"skillIDs"` // nil = unchanged, [] = clear
+		// Engine re-pin: harness required when set; model/executionMode ride it.
+		Harness       string `json:"harness"`
+		Model         string `json:"model"`
+		ExecutionMode string `json:"executionMode"`
 	}
 	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
-	if body.DisplayName == "" && body.SkillIDs == nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "nothing to update — set displayName and/or skillIDs")
+	if body.DisplayName == "" && body.SkillIDs == nil && body.Harness == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "nothing to update — set displayName, skillIDs and/or harness")
+		return
+	}
+	if body.Harness == "" && (body.Model != "" || body.ExecutionMode != "") {
+		writeError(w, http.StatusBadRequest, "bad_request", "model/executionMode require harness")
 		return
 	}
 	fail := func(err error, what string) {
@@ -161,6 +173,12 @@ func (h *AgentHandler) RenameAgent(w http.ResponseWriter, r *http.Request) {
 	if body.SkillIDs != nil {
 		if tpl, err = h.agents.SetAgentSkills(r.Context(), r.PathValue("slug"), *body.SkillIDs); err != nil {
 			fail(err, "set agent skills")
+			return
+		}
+	}
+	if body.Harness != "" {
+		if tpl, err = h.agents.SetAgentEngine(r.Context(), r.PathValue("slug"), body.Harness, body.Model, body.ExecutionMode); err != nil {
+			fail(err, "set agent engine")
 			return
 		}
 	}

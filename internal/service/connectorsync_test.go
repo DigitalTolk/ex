@@ -259,3 +259,19 @@ func TestSyncFromProvider_RevisionSkip(t *testing.T) {
 		t.Fatalf("bumped revision not ingested: %+v", st.connectors["good"])
 	}
 }
+
+// A stored-registry listing failure aborts a non-force sync before any
+// provider fetches — the revision map is what makes the poll cheap, and
+// syncing blind would re-ingest everything.
+func TestSyncFromProvider_StoredListFailure(t *testing.T) {
+	p := &fakeProvider{list: `{"connectors": []}`}
+	srv := httptest.NewServer(p.handler())
+	defer srv.Close()
+	st := newMemConnectorStore()
+	st.failListConnectors = errors.New("dynamo down")
+	svc := NewConnectorService(st)
+	svc.SetProvider(srv.URL, "k")
+	if _, err := svc.SyncFromProvider(context.Background(), "admin", false); err == nil || !strings.Contains(err.Error(), "list stored") {
+		t.Fatalf("stored list failure: %v", err)
+	}
+}

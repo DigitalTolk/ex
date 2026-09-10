@@ -529,8 +529,8 @@ func (u *hagentCovOrchUsers) GetUsersByIDs(ctx context.Context, ids []string) ([
 }
 
 type hagentCovMessages struct {
-	thread    []*model.Message
-	threadErr error
+	thread         []*model.Message
+	threadErr      error
 	checkAccessErr error
 }
 
@@ -719,6 +719,31 @@ func TestHagentCovRenameAgent(t *testing.T) {
 	hagentCovWant(t, rec, http.StatusOK)
 	if _, ok := hagentCovJSON(t, rec)["agent"]; !ok {
 		t.Fatalf("missing agent in body: %s", rec.Body.String())
+	}
+
+	// Engine fields without a harness are rejected outright (displayName keeps
+	// the request past the nothing-to-update guard so THIS guard is the one
+	// that fires).
+	rec = hagentCovDo(env.h.RenameAgent, hagentCovReq(http.MethodPatch, "/api/v1/agents/gg", `{"displayName":"GG3","model":"m"}`, "u1", slug))
+	hagentCovWant(t, rec, http.StatusBadRequest)
+
+	// Engine validation arm: unknown harness.
+	rec = hagentCovDo(env.h.RenameAgent, hagentCovReq(http.MethodPatch, "/api/v1/agents/gg", `{"harness":"warp"}`, "u1", slug))
+	hagentCovWant(t, rec, http.StatusBadRequest)
+
+	// Engine happy path: pin gg to server-side bedrock.
+	rec = hagentCovDo(env.h.RenameAgent, hagentCovReq(http.MethodPatch, "/api/v1/agents/gg", `{"harness":"bedrock","executionMode":"server"}`, "u1", slug))
+	hagentCovWant(t, rec, http.StatusOK)
+	if agent, ok := hagentCovJSON(t, rec)["agent"].(map[string]any); !ok || agent["harness"] != "bedrock" || agent["executionMode"] != "server" {
+		t.Fatalf("engine pin not reflected: %s", rec.Body.String())
+	}
+
+	// A server-executed agent is ACTIVE with no desktop runner online — the
+	// backend runs it, so the list must not show it offline.
+	rec = hagentCovDo(env.h.List, hagentCovReq(http.MethodGet, "/api/v1/agents", "", "u1", nil))
+	hagentCovWant(t, rec, http.StatusOK)
+	if body := rec.Body.String(); !strings.Contains(body, `"slug":"gg"`) || !strings.Contains(body, `"status":"active"`) {
+		t.Fatalf("server-mode agent not active in list: %s", body)
 	}
 }
 

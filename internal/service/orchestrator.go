@@ -291,10 +291,23 @@ type Orchestrator struct {
 
 	// toolAlertAt throttles permission-gateway approval alerts per run.
 	toolAlertAt sync.Map // runID -> time.Time
+
+	// serverEngine executes API-harness runs in the backend (ExecutionServer).
+	// Optional: nil keeps server-mode invocations failing legibly.
+	serverEngine serverDispatcher
+}
+
+// serverDispatcher hands a queued run to the backend executor (ServerEngine;
+// narrowed for tests).
+type serverDispatcher interface {
+	Dispatch(runID string)
 }
 
 // SetTaskStore wires coding-task persistence (plan-coding-agent.md).
 func (o *Orchestrator) SetTaskStore(t orchestratorTasks) { o.tasks = t }
+
+// SetServerEngine wires the backend executor for server-mode API-harness runs.
+func (o *Orchestrator) SetServerEngine(e serverDispatcher) { o.serverEngine = e }
 
 // NewOrchestrator wires the orchestrator.
 func NewOrchestrator(runs orchestratorRunStore, agentSvc *AgentService, users orchestratorUsers, messages orchestratorMessages, pub Publisher, tokens runTokenMinter) *Orchestrator {
@@ -695,11 +708,20 @@ func (o *Orchestrator) invoke(ctx context.Context, in invocation) error {
 	if err != nil {
 		return err
 	}
-	// Server-side API execution isn't wired yet — the backend worker that
-	// runs the Converse loop with SSO-federated credentials is the next
-	// slice. Fail legibly instead of queueing a run nothing will execute.
+	// Server-side API execution: the backend engine runs the Converse loop —
+	// no desktop runner involved, so the offline/queue machinery below is
+	// bypassed entirely. Unwired engine still fails legibly instead of
+	// queueing a run nothing will execute.
 	if model.HarnessIsAPI(resolved.Harness) && resolved.ExecutionMode == model.ExecutionServer {
-		return fmt.Errorf("%w: server-side execution isn't available yet — set %s to run on your machine", ErrAgentOffline, agent.DisplayName)
+		if o.serverEngine == nil {
+			return fmt.Errorf("%w: server-side execution isn't available yet — set %s to run on your machine", ErrAgentOffline, agent.DisplayName)
+		}
+		run, err := o.startRun(ctx, in, resolved)
+		if err != nil {
+			return err
+		}
+		o.serverEngine.Dispatch(run.ID)
+		return nil
 	}
 	// Offline fails fast with a legible message rather than queueing into
 	// silence (plan-v2 §2) — unless the invoker opted into offlinePolicy
@@ -1411,6 +1433,72 @@ func (o *Orchestrator) claimOnce(ctx context.Context, ownerID, runnerID string, 
 		})
 	}
 	return out, nil
+}
+
+// claimServerRun claims ONE queued run for the backend engine — the
+// server-side mirror of claimOnce, minus the parts that only make sense for a
+// desktop runner: no harness inventory (the engine IS the bedrock harness),
+// no MCP token (tools run in-process), and no coding tasks (a server run has
+// no workspace, so task mode is refused outright rather than queued into
+// silence).
+func (o *Orchestrator) claimServerRun(ctx context.Context, runID string) (*Assignment, *model.Run, error) {
+	run, err := o.runs.GetRun(ctx, runID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if run.State != model.RunStateQueued {
+		return nil, nil, ErrRunClosed
+	}
+	if run.Mode == model.RunModeTask {
+		if err := o.failRun(ctx, run, "task_needs_runner"); err != nil {
+			slog.Warn("server claim: task-mode fail failed", "runID", run.ID, "error", err)
+		}
+		return nil, nil, fmt.Errorf("server engine: coding tasks need a desktop runner")
+	}
+	lease := o.now().Add(runLeaseTTL)
+	if err := o.runs.ClaimRun(ctx, run, serverRunnerID, lease); err != nil {
+		return nil, nil, err
+	}
+	o.rebaseClaimDeadlines(run)
+	if err := o.runs.UpdateRun(ctx, run, model.RunStateAcknowledged); err != nil {
+		if errors.Is(err, store.ErrStaleRun) {
+			return nil, nil, ErrRunClosed
+		}
+		slog.Warn("server claim: deadline re-base failed", "runID", run.ID, "error", err)
+	}
+	o.armLeaseTimer(run.ID, lease)
+	o.startTypingTicker(run)
+	bundle, bundleStats := o.buildBundle(ctx, run)
+	agentName, invokerName := o.claimNames(ctx, run)
+	o.setState(ctx, run, StateEmojiRead)
+	o.appendEvent(ctx, run, 2, run.AgentID, "run.acknowledged", map[string]any{"runnerID": serverRunnerID})
+	o.appendEvent(ctx, run, 3, run.AgentID, "context.assembled", bundleStats)
+	o.publishRun(ctx, run)
+	return &Assignment{
+		RunID:            run.ID,
+		AgentID:          run.AgentID,
+		AgentName:        agentName,
+		InvokerID:        run.InvokerID,
+		InvokerName:      invokerName,
+		ParentID:         run.ParentID,
+		ParentType:       run.ParentType,
+		ThreadRootID:     run.ThreadRootID,
+		MessageID:        run.MessageID,
+		Harness:          run.Harness,
+		Model:            run.Model,
+		Persona:          run.Persona,
+		Mode:             run.Mode,
+		AskFirst:         run.AskFirst,
+		WatchInstruction: run.WatchInstruction,
+		ActionMode:       run.ActionMode,
+		Prompt:           run.Prompt,
+		ContextBundle:    bundle,
+		ConnectorSlugs:   run.ConnectorSlugs,
+		AutoAllow:        run.AutoAllow,
+		Limits:           run.Limits,
+		LeaseExpiresAt:   lease,
+		Deadline:         run.HardDeadline,
+	}, run, nil
 }
 
 // runForRunner loads a run for a runner-API call and enforces BOTH bindings:
