@@ -1221,6 +1221,15 @@ export interface Connector {
    */
   verifyURL?: string;
   /**
+   * StartURL is the SSO entry point opened by an sso_window connect; the
+   * service redirects through its own login (silent when the user holds a
+   * live Microsoft session) and lands on a URL matching CapturePattern
+   * (e.g. "/callback?token={token}"), from which the shell captures the
+   * service-minted bearer.
+   */
+  startURL?: string;
+  capturePattern?: string;
+  /**
    * Revision is the provider's content hash for the ingested bundle. The
    * periodic provider sync skips any connector whose provider revision
    * still equals this, so an unchanged catalog costs one listing fetch.
@@ -1341,6 +1350,16 @@ export const ConnectorAuthPaste = "paste";
  * Connector auth kinds.
  */
 export const ConnectorAuthPassword = "password";
+/**
+ * ConnectorAuthSSOWindow: connecting opens the service's own SSO entry
+ * point (StartURL) in a shell window — the user signs in with their
+ * Microsoft account — and the shell captures the service-minted bearer
+ * from the redirect matching CapturePattern (falling back to sniffing the
+ * Authorization header on the service's own API calls). Install then
+ * proceeds exactly like paste, with the captured token. Web clients
+ * without a capture-capable shell fall back to pasting.
+ */
+export const ConnectorAuthSSOWindow = "sso_window";
 /**
  * ConnectorAuthNone: the service needs no credential (anonymous access) —
  * install is a bare "connect", calls carry no Authorization header.

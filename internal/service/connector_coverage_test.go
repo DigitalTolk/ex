@@ -538,6 +538,14 @@ func TestConnCovUsageDocServices(t *testing.T) {
 	if !strings.Contains(doc, "- misc (misc.yaml) — no routes") {
 		t.Fatalf("prefix-less service rendered wrong:\n%s", doc)
 	}
+	// The response-verification rule must survive: a 2xx isn't proof the filter
+	// applied, and a wrong-looking result is probed, not thrashed around.
+	if !strings.Contains(doc, "A 2xx is NOT proof the call did what you asked") {
+		t.Fatalf("response-verification rule missing:\n%s", doc)
+	}
+	if !strings.Contains(doc, "PROBE THE SAVED") {
+		t.Fatalf("probe-before-concluding rule missing:\n%s", doc)
+	}
 }
 
 // ForRunner edge arms: store errors, dangling installs, a bundle shipping its

@@ -630,3 +630,36 @@ describe('AgentsPage', () => {
     await waitFor(() => expect(showToast).toHaveBeenCalledWith("Couldn't stop that watcher — try again."));
   });
 });
+
+describe('AgentCard persona fallbacks', () => {
+  // A server that has no template prompt for a slug omits both defaultPersona
+  // and resolved.persona (omitempty) — the editor must come up EMPTY, not
+  // crash, and "custom prompt" must not be claimed.
+  it('renders an empty prompt editor when neither a default nor a resolved persona exists', async () => {
+    mockUser = { id: 'u-1' };
+    installRoutes({
+      agents: async () => ({
+        agents: [
+          {
+            id: 'ag-np',
+            displayName: 'np',
+            slug: 'np',
+            status: 'active',
+            prefs: { userID: 'u-1', slug: 'np' },
+            resolved: {
+              harness: 'claude',
+              model: '',
+              persona: undefined as unknown as string,
+              limits: {},
+              maxConcurrentRuns: 1,
+            },
+          } satisfies AgentView,
+        ],
+      }),
+    });
+    renderPage();
+    const card = await openCard('np');
+    expect(card.getByLabelText('Prompt for @np')).toHaveValue('');
+    expect(card.queryByText('custom prompt')).toBeNull();
+  });
+});

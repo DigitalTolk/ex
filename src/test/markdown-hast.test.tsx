@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { renderMarkdown } from '@/lib/markdown';
-import { renderHastTree } from '@/lib/markdown-hast';
+import { decoratePicks, renderHastTree } from '@/lib/markdown-hast';
 import type { HastNode } from '@/types';
 
 // Server-style hast trees that the backend's RenderToHast produces.
@@ -449,5 +449,24 @@ describe('pick pills (decoratePicks)', () => {
     const tree = root(el('p', {}, text('use /gitlab')));
     const { container } = render(<>{renderMarkdown('', { tree, pickTokens: new Set() })}</>);
     expect(container.querySelectorAll('[data-testid="pick-pill"]')).toHaveLength(0);
+  });
+
+  // Server-rendered hast omits empty fields, so nodes can arrive without a
+  // value, tagName, or children — decoratePicks must treat each as its empty
+  // equivalent instead of crashing on the sparse shape.
+  it('tolerates sparse nodes: missing text value, element tagName, and children', () => {
+    expect(decoratePicks({ type: 'text' } as HastNode, tokens)).toEqual([{ type: 'text' }]);
+    expect(decoratePicks({ type: 'element' } as HastNode, tokens)).toEqual([
+      { type: 'element', children: [] },
+    ]);
+    const viaTagless = decoratePicks(
+      { type: 'element', children: [{ type: 'text', value: 'run /gitlab' }] } as HastNode,
+      tokens,
+    );
+    expect(viaTagless).toHaveLength(1);
+    expect(viaTagless[0].children).toEqual([
+      { type: 'text', value: 'run ' },
+      { type: 'element', tagName: 'ex-pick', properties: {}, children: [{ type: 'text', value: '/gitlab' }] },
+    ]);
   });
 });

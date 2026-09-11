@@ -130,6 +130,9 @@ type IngestInput struct {
 	ClientID    string                `json:"clientID"`
 	VerifyURL   string                `json:"verifyURL"`
 	Files       []model.ConnectorFile `json:"files"`
+	// StartURL + CapturePattern drive sso_window connects (see model.Connector).
+	StartURL       string `json:"startURL,omitempty"`
+	CapturePattern string `json:"capturePattern,omitempty"`
 	// Revision is set by the provider sync (the bundle's content hash);
 	// direct admin uploads leave it empty.
 	Revision string `json:"revision,omitempty"`
@@ -144,17 +147,21 @@ func (s *ConnectorService) Ingest(ctx context.Context, callerID string, in Inges
 		return nil, fmt.Errorf("%w: title and baseURL required", ErrConnectorInvalid)
 	}
 	switch in.AuthKind {
-	case model.ConnectorAuthPaste, model.ConnectorAuthPassword, model.ConnectorAuthNone:
+	case model.ConnectorAuthPaste, model.ConnectorAuthPassword, model.ConnectorAuthNone, model.ConnectorAuthSSOWindow:
 	default:
-		return nil, fmt.Errorf("%w: authKind must be paste, password, or none", ErrConnectorInvalid)
+		return nil, fmt.Errorf("%w: authKind must be paste, password, sso_window, or none", ErrConnectorInvalid)
 	}
 	if in.AuthKind == model.ConnectorAuthPassword && in.TokenURL == "" {
 		return nil, fmt.Errorf("%w: password connectors need tokenURL", ErrConnectorInvalid)
 	}
+	if in.AuthKind == model.ConnectorAuthSSOWindow && in.StartURL == "" {
+		return nil, fmt.Errorf("%w: sso_window connectors need startURL", ErrConnectorInvalid)
+	}
 	// Every one of these is fetched SERVER-SIDE with a user's bearer token or
-	// password attached — so they are an SSRF surface: refuse anything that
-	// isn't plain https to a routable host before it can be stored.
-	for label, u := range map[string]string{"baseURL": in.BaseURL, "tokenURL": in.TokenURL, "verifyURL": in.VerifyURL} {
+	// password attached — or, for startURL, opened in the user's shell — so
+	// they are an SSRF/phishing surface: refuse anything that isn't plain
+	// https to a routable host before it can be stored.
+	for label, u := range map[string]string{"baseURL": in.BaseURL, "tokenURL": in.TokenURL, "verifyURL": in.VerifyURL, "startURL": in.StartURL} {
 		if err := validateOutboundURL(u); err != nil {
 			return nil, fmt.Errorf("%w: %s %s", ErrConnectorInvalid, label, err.Error())
 		}
@@ -206,15 +213,17 @@ func (s *ConnectorService) Ingest(ctx context.Context, callerID string, in Inges
 		Description:    strings.TrimSpace(in.Description),
 		BaseURL:        strings.TrimRight(in.BaseURL, "/"),
 		AuthKind:       in.AuthKind,
-		TokenURL:    in.TokenURL,
-		ClientID:    in.ClientID,
-		VerifyURL:   in.VerifyURL,
-		Revision:    in.Revision,
-		FileNames:   names,
-		Services:    services,
-		CreatedBy:   callerID,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		TokenURL:       in.TokenURL,
+		ClientID:       in.ClientID,
+		VerifyURL:      in.VerifyURL,
+		StartURL:       in.StartURL,
+		CapturePattern: in.CapturePattern,
+		Revision:       in.Revision,
+		FileNames:      names,
+		Services:       services,
+		CreatedBy:      callerID,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 	if old, err := s.store.GetConnector(ctx, in.Slug); err == nil {
 		c.CreatedBy = old.CreatedBy
@@ -734,6 +743,16 @@ folder.
   Extract ONLY the field you need with a capped one-liner instead of reading the file:
   grep -oE '"id":"[^"]+"' _identity.json | head -1
   Call a live auth/me-style endpoint only if the file is missing or a call 403s.
+- A 2xx is NOT proof the call did what you asked — read the response before trusting it.
+  Confirm it reflects your request: does meta.total fit your filter, and do the returned
+  rows actually carry the value you filtered on? A filter that changed nothing was IGNORED
+  — many APIs silently drop an unknown query param and return the FULL, unfiltered set (a
+  per-person list that comes back with total in the thousands, or rows whose owner isn't
+  who you filtered for, was never filtered). When a result looks wrong, PROBE THE SAVED
+  FILE for the few fields that show why — the filters echoed in meta, the suspect field on
+  a couple of rows — BEFORE you conclude "none/all" or reach for another endpoint. One
+  diagnostic read then fix the ONE param per the docs and call again; never a spray of
+  guessed endpoints and param spellings, and never reverse-engineer an API from its source.
 - Unexpectedly EMPTY result: at most TWO follow-ups — (1) drop the most suspect filter,
   (2) fix that one filter per the docs. Still empty? The answer IS "none found"; report it
   with the filters you used. Never spiral into reverse-engineering filter semantics.
