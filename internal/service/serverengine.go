@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -53,9 +54,16 @@ type ServerEngine struct {
 	client     bedrock.Client
 	http       *http.Client
 	sem        chan struct{}
+	// runAPIBase is this process's own HTTP listener (loopback) — non-empty
+	// enables the bridged workspace tools, which speak the run-tool API.
+	runAPIBase string
 	// afterRun is a test seam observing run completion (nil in production).
 	afterRun func(runID string)
 }
+
+// SetRunAPIBase wires the loopback address of the server's own run-tool API
+// (e.g. "http://127.0.0.1:8080"); empty leaves the bridged tools off.
+func (e *ServerEngine) SetRunAPIBase(base string) { e.runAPIBase = strings.TrimRight(base, "/") }
 
 // NewServerEngine wires the backend executor. The orchestrator gains the
 // dispatcher via SetServerEngine — done by the caller so the two can be
@@ -113,7 +121,9 @@ func (e *ServerEngine) execute(runID string) {
 	// model call, exactly as a runner's first heartbeat does.
 	report(RunEventInput{Type: "state", Payload: map[string]any{"state": "running"}})
 
-	tools, toolsDesc, err := e.buildTools(ctx, run)
+	tools, toolsDesc, err := e.buildTools(ctx, run, asg.MCPToken, func(text string) {
+		report(RunEventInput{Type: "progress", Payload: map[string]any{"text": text}})
+	})
 	if err != nil {
 		slog.Warn("server engine: connector load failed", "runID", run.ID, "error", err)
 		if failErr := e.orch.FailRun(ctx, run.OwnerID, serverRunnerID, run.ID, "connector_load_failed"); failErr != nil {
@@ -138,7 +148,7 @@ func (e *ServerEngine) execute(runID string) {
 			case "tool_call":
 				report(RunEventInput{Type: "tool", Payload: map[string]any{
 					"name":   payloadString(payload, "tool"),
-					"detail": payloadString(payload, "detail"),
+					"detail": toolDetail(payloadString(payload, "tool"), payloadString(payload, "input")),
 				}})
 			case "text":
 				report(RunEventInput{Type: "progress", Payload: map[string]any{"text": payloadString(payload, "preview")}})
@@ -170,9 +180,16 @@ func (e *ServerEngine) execute(runID string) {
 // public posts), plus connector tools for the run's /picks and the invoker's
 // agentUse=always installs. The returned string is the system-prompt section
 // describing the connected services.
-func (e *ServerEngine) buildTools(ctx context.Context, run *model.Run) ([]bedrock.Tool, string, error) {
+func (e *ServerEngine) buildTools(ctx context.Context, run *model.Run, runToken string, progress func(string)) ([]bedrock.Tool, string, error) {
 	tools := e.workspaceTools(run)
-	connTools, desc, err := e.connectorTools(ctx, run)
+	tools = append(tools, e.approvalTools(run, progress)...)
+	if e.runAPIBase != "" && runToken != "" {
+		// The bridged workspace surface: driven through this process's own
+		// run-tool HTTP API with the run's token, so caps, gating and audit
+		// are the real handlers' — identical to a desktop runner's calls.
+		tools = append(tools, bridgeTools(&runAPI{base: e.runAPIBase, token: runToken, http: e.http})...)
+	}
+	connTools, desc, err := e.connectorTools(ctx, run, progress)
 	if err != nil {
 		return nil, "", err
 	}
@@ -182,10 +199,44 @@ func (e *ServerEngine) buildTools(ctx context.Context, run *model.Run) ([]bedroc
 // connectorTools loads the run's usable connectors: explicit /picks always,
 // plus installs the invoker marked agentUse=always (pre-approved — "ask"
 // installs need the approval flow, which server runs don't carry yet).
-func (e *ServerEngine) connectorTools(ctx context.Context, run *model.Run) ([]bedrock.Tool, string, error) {
+// Approval-wait pacing (vars so tests can shrink them): how often use_connector
+// polls a pending approval, and how often it drops a progress note while
+// waiting — the notes double as activity that keeps the run's rolling deadline
+// and lease alive through a long human pause.
+var (
+	approvalPollInterval = 2 * time.Second
+	approvalWaitNote     = 20 * time.Second
+)
+
+// connectorSurface is a run's live connector state: attached bundles (usable
+// now) and installed-but-unattached slugs the model may request with
+// use_connector. Mutable mid-run — an approval attaches a connector while the
+// Converse loop is running — hence the lock.
+type connectorSurface struct {
+	mu         sync.Mutex
+	attached   map[string]RunnerConnector
+	unattached map[string]string // slug → agentUse ("" = ask)
+}
+
+func (s *connectorSurface) get(slug string) (RunnerConnector, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, ok := s.attached[slug]
+	return c, ok
+}
+
+func (s *connectorSurface) attach(c RunnerConnector) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.attached[c.Slug] = c
+	delete(s.unattached, c.Slug)
+}
+
+func (e *ServerEngine) connectorTools(ctx context.Context, run *model.Run, progress func(string)) ([]bedrock.Tool, string, error) {
 	if e.connectors == nil {
 		return nil, "", nil
 	}
+	surface := &connectorSurface{attached: map[string]RunnerConnector{}, unattached: map[string]string{}}
 	slugs := append([]string(nil), run.ConnectorSlugs...)
 	if idx, err := e.connectors.InstalledIndex(ctx, run.InvokerID); err == nil {
 		have := make(map[string]bool, len(slugs))
@@ -193,33 +244,49 @@ func (e *ServerEngine) connectorTools(ctx context.Context, run *model.Run) ([]be
 			have[s] = true
 		}
 		for _, entry := range idx {
-			if entry.AgentUse == model.ConnectorAgentUseAlways && !have[entry.Slug] {
+			switch {
+			case entry.AgentUse == model.ConnectorAgentUseAlways && !have[entry.Slug]:
 				slugs = append(slugs, entry.Slug)
+			case !have[entry.Slug]:
+				// ask (default) or never: listed so the model can request —
+				// or be told plainly it may not.
+				surface.unattached[entry.Slug] = entry.AgentUse
 			}
 		}
 	} else {
 		slog.Warn("server engine: installed index failed; using picks only", "runID", run.ID, "error", err)
 	}
-	if len(slugs) == 0 {
+	if len(slugs) == 0 && len(surface.unattached) == 0 {
 		return nil, "", nil
 	}
-	rows, err := e.connectors.ForRunner(ctx, run.InvokerID, slugs)
-	if err != nil {
-		return nil, "", err
+	if len(slugs) > 0 {
+		rows, err := e.connectors.ForRunner(ctx, run.InvokerID, slugs)
+		if err != nil {
+			return nil, "", err
+		}
+		for _, c := range rows {
+			surface.attached[c.Slug] = c
+		}
 	}
-	if len(rows) == 0 {
+	if len(surface.attached) == 0 && len(surface.unattached) == 0 {
 		return nil, "", nil
 	}
-	bySlug := make(map[string]RunnerConnector, len(rows))
+
 	var desc strings.Builder
 	desc.WriteString("\n# Connected services\n")
-	for _, c := range rows {
-		bySlug[c.Slug] = c
+	for _, c := range surface.attached {
 		fmt.Fprintf(&desc, "- /%s — %s (%s). Doc files:", c.Slug, c.Title, c.Description)
 		for _, f := range c.Files {
 			fmt.Fprintf(&desc, " %s", f.Name)
 		}
 		desc.WriteString("\n")
+	}
+	for slug, use := range surface.unattached {
+		if use == model.ConnectorAgentUseNever {
+			fmt.Fprintf(&desc, "- /%s — installed, but the invoker has blocked agent use (only an explicit /%s pick works).\n", slug, slug)
+		} else {
+			fmt.Fprintf(&desc, "- /%s — installed but NOT attached: call use_connector with a one-line reason; the invoker gets an approval card.\n", slug)
+		}
 	}
 	desc.WriteString("Read a service's _USAGE.md (and grep-worthy _catalog.tsv) with connector_doc " +
 		"BEFORE calling it; then use connector_call for the API itself.\n")
@@ -243,9 +310,9 @@ func (e *ServerEngine) connectorTools(ctx context.Context, run *model.Run) ([]be
 				if err := json.Unmarshal(input, &in); err != nil {
 					return "bad input: " + err.Error(), true
 				}
-				c, ok := bySlug[in.Connector]
+				c, ok := surface.get(in.Connector)
 				if !ok {
-					return "unknown connector: " + in.Connector, true
+					return notAttachedMsg(in.Connector), true
 				}
 				for _, f := range c.Files {
 					if strings.EqualFold(f.Name, in.File) {
@@ -253,6 +320,25 @@ func (e *ServerEngine) connectorTools(ctx context.Context, run *model.Run) ([]be
 					}
 				}
 				return "no such file: " + in.File, true
+			},
+		},
+		{
+			Name: "use_connector",
+			Description: "Request access to an INSTALLED but unattached connector (they're listed in " +
+				"# Connected services). The invoker gets an approval card and this call waits for " +
+				"their decision — give a one-line reason they'll read. On approval the connector's " +
+				"docs and connector_call become available.",
+			Schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"connector": map[string]any{"type": "string", "description": "Installed connector slug, e.g. 'cliffhub'."},
+					"reason":    map[string]any{"type": "string", "description": "One line: why this task needs the service."},
+				},
+				"required":             []string{"connector", "reason"},
+				"additionalProperties": false,
+			},
+			Call: func(callCtx context.Context, input json.RawMessage) (string, bool) {
+				return e.useConnector(callCtx, run, surface, progress, input)
 			},
 		},
 		{
@@ -274,11 +360,232 @@ func (e *ServerEngine) connectorTools(ctx context.Context, run *model.Run) ([]be
 				"additionalProperties": false,
 			},
 			Call: func(callCtx context.Context, input json.RawMessage) (string, bool) {
-				return e.connectorCall(callCtx, bySlug, input)
+				return e.connectorCall(callCtx, surface.get, input)
 			},
 		},
 	}
 	return tools, desc.String(), nil
+}
+
+// notAttachedMsg is the model-facing refusal for a connector that isn't part
+// of this run's surface (never installed, or installed but not yet attached).
+func notAttachedMsg(slug string) string {
+	return "connector " + slug + " is not attached to this run — attached services are listed in " +
+		"# Connected services; an installed one can be requested with use_connector"
+}
+
+// useConnector handles the agent-initiated attach: instant for agentUse
+// "always", refused for "never", and human-gated for "ask" — an approval card
+// lands in the INVOKER's inbox and this call parks until they decide, the
+// approval expires (5 min cap), or the run ends. Waiting emits periodic
+// progress notes, which double as liveness so the rolling deadline doesn't
+// reap a run that's only waiting on a human.
+func (e *ServerEngine) useConnector(ctx context.Context, run *model.Run, surface *connectorSurface, progress func(string), input json.RawMessage) (string, bool) {
+	var in struct{ Connector, Reason string }
+	if err := json.Unmarshal(input, &in); err != nil {
+		return "bad input: " + err.Error(), true
+	}
+	slug := strings.TrimSpace(in.Connector)
+	if _, ok := surface.get(slug); ok {
+		return "already attached — call connector_doc / connector_call directly", false
+	}
+	surface.mu.Lock()
+	use, installed := surface.unattached[slug]
+	surface.mu.Unlock()
+	if !installed {
+		return notAttachedMsg(slug) + " (and the invoker has not installed it — they connect it on the Connectors page)", true
+	}
+	if use == model.ConnectorAgentUseNever {
+		return "the invoker has blocked agent-initiated use of /" + slug + " — only an explicit /" + slug + " pick in their message attaches it", true
+	}
+	attach := func() (string, bool) {
+		rows, err := e.connectors.ForRunner(ctx, run.InvokerID, []string{slug})
+		if err != nil || len(rows) == 0 {
+			return "attach failed — the install could not be loaded; tell the invoker to reconnect /" + slug, true
+		}
+		surface.attach(rows[0])
+		var files strings.Builder
+		for _, f := range rows[0].Files {
+			files.WriteString(" " + f.Name)
+		}
+		return "attached /" + slug + ". Doc files:" + files.String() + ". Read _USAGE.md before calling.", false
+	}
+	// Only ask/"" reach here: always-installs were attached at build time, so
+	// the surface's unattached set holds ask and never entries alone.
+	reason := strings.TrimSpace(in.Reason)
+	if reason == "" {
+		return "a one-line reason is required — the invoker reads it on the approval card", true
+	}
+	a, err := e.orch.RequestApproval(ctx, run, ApprovalRequest{
+		Summary: "Use the /" + slug + " connector — " + clipText(reason, 300),
+		Risk:    "connector",
+		Purpose: "use_connector:" + slug,
+	})
+	if err != nil {
+		return "could not raise the approval: " + err.Error(), true
+	}
+	cur, failMsg := e.awaitDecision(ctx, run, a.ID, "approve /"+slug, progress)
+	if failMsg != "" {
+		return failMsg, true
+	}
+	switch cur.State {
+	case model.ApprovalApproved:
+		return attach()
+	case model.ApprovalDenied:
+		return "the invoker denied using /" + slug + " for this task", true
+	default:
+		return "the approval expired unanswered — proceed without /" + slug + " or tell the invoker what you needed it for", true
+	}
+}
+
+// awaitDecision blocks-by-polling until the given approval settles, the run
+// ends, or the lookup fails. Waiting emits periodic progress notes, which
+// double as liveness so the rolling deadline doesn't reap a run that's only
+// waiting on a human. Returns the settled approval, or a non-empty message the
+// calling tool should hand back to the model as an error.
+func (e *ServerEngine) awaitDecision(ctx context.Context, run *model.Run, approvalID, waiting string, progress func(string)) (*model.Approval, string) {
+	progress("waiting for the invoker to " + waiting + "…")
+	lastNote := time.Now()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, "the run ended before the approval was decided"
+		case <-time.After(approvalPollInterval):
+		}
+		cur, err := e.orch.ApprovalStatus(ctx, run.ID, approvalID)
+		if err != nil {
+			return nil, "approval lookup failed: " + err.Error()
+		}
+		if cur.State != model.ApprovalPending {
+			return cur, ""
+		}
+		if time.Since(lastNote) >= approvalWaitNote {
+			lastNote = time.Now()
+			progress("still waiting for the invoker to " + waiting + "…")
+		}
+	}
+}
+
+// approvalTools is the human-in-the-loop surface: request_approval (a yes/no
+// gate on a consequential action) and ask_user (a multiple-choice question).
+// Both block on the invoker's decision exactly as the runner's MCP tools do —
+// same cards, same private inbox, same timeout-is-a-denial semantics.
+func (e *ServerEngine) approvalTools(run *model.Run, progress func(string)) []bedrock.Tool {
+	return []bedrock.Tool{
+		{
+			Name: "request_approval",
+			Description: "Ask the human who invoked you to approve a consequential action BEFORE taking " +
+				"it — e.g. posting to a wide audience, or anything they might reasonably want to veto. " +
+				"BLOCKS until they approve, deny, or the request times out (a timeout is a denial). " +
+				"Use sparingly; routine replies need no approval.",
+			Schema: obj(map[string]any{
+				"summary": str("One or two sentences: exactly what you want to do and why."),
+				"risk":    str("Your assessment of the blast radius: low, medium or high."),
+			}, "summary"),
+			Call: func(ctx context.Context, input json.RawMessage) (string, bool) {
+				var in struct{ Summary, Risk string }
+				if err := json.Unmarshal(input, &in); err != nil || strings.TrimSpace(in.Summary) == "" {
+					return "request_approval requires a summary", true
+				}
+				a, err := e.orch.RequestApproval(ctx, run, ApprovalRequest{Summary: in.Summary, Risk: in.Risk})
+				if err != nil {
+					return "could not raise the approval: " + err.Error(), true
+				}
+				cur, failMsg := e.awaitDecision(ctx, run, a.ID, "decide the approval", progress)
+				if failMsg != "" {
+					return failMsg, true
+				}
+				switch cur.State {
+				case model.ApprovalApproved:
+					if cur.Note != "" {
+						return "approved — proceed with the action. The invoker adds: " + cur.Note, false
+					}
+					return "approved — proceed with the action", false
+				case model.ApprovalDenied:
+					if cur.Note != "" {
+						return "denied by the invoker — do NOT take the action. They say: " + cur.Note + " — follow that instead", true
+					}
+					return "denied by the invoker — do NOT take the action; explain and wind down", true
+				default:
+					return "denied (approval timed out) — nobody decided in time; do NOT take the action", true
+				}
+			},
+		},
+		{
+			Name: "ask_user",
+			Description: "Ask the human who invoked you to pick ONE option when a decision is genuinely " +
+				"theirs — a tradeoff you cannot resolve from the thread. BLOCKS until they choose or it " +
+				"times out. 2–5 short options. Do not use it for questions the thread already answers.",
+			Schema: obj(map[string]any{
+				"question": str("The question, one or two sentences."),
+				"options": map[string]any{
+					"type": "array", "items": map[string]any{"type": "string"},
+					"minItems": 2, "maxItems": model.ApprovalMaxOptions,
+					"description": "Mutually exclusive answers, ≤120 chars each.",
+				},
+			}, "question", "options"),
+			Call: func(ctx context.Context, input json.RawMessage) (string, bool) {
+				var in struct {
+					Question string
+					Options  []string
+				}
+				if err := json.Unmarshal(input, &in); err != nil || strings.TrimSpace(in.Question) == "" || len(in.Options) < 2 {
+					return "ask_user requires a question and 2–5 options", true
+				}
+				a, err := e.orch.RequestApproval(ctx, run, ApprovalRequest{Summary: in.Question, Options: in.Options})
+				if err != nil {
+					return "could not raise the question: " + err.Error(), true
+				}
+				cur, failMsg := e.awaitDecision(ctx, run, a.ID, "answer the question", progress)
+				if failMsg != "" {
+					return failMsg, true
+				}
+				switch {
+				case cur.State == model.ApprovalApproved && cur.Choice != "":
+					if cur.Note != "" {
+						return "the invoker chose: " + cur.Choice + " — and adds: " + cur.Note, false
+					}
+					return "the invoker chose: " + cur.Choice, false
+				case cur.State == model.ApprovalDenied && cur.Note != "":
+					return "the invoker answered in their own words instead: " + cur.Note, true
+				case cur.State == model.ApprovalDenied:
+					return "the invoker dismissed the question — decide sensibly yourself and say which assumption you made", true
+				default:
+					return "no answer in time — decide sensibly yourself and say which assumption you made", true
+				}
+			},
+		},
+	}
+}
+
+// toolDetail turns a tool call's clipped input into the one-line narration the
+// activity timeline shows ("cliffhub API: GET api/people") — the difference
+// between an auditable run and a wall of bare tool names.
+func toolDetail(tool, rawInput string) string {
+	var in struct {
+		Connector string `json:"connector"`
+		Method    string `json:"method"`
+		Path      string `json:"path"`
+		File      string `json:"file"`
+		Reason    string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(rawInput), &in); err != nil {
+		return clipText(rawInput, 120)
+	}
+	switch tool {
+	case "connector_call":
+		m := strings.ToUpper(strings.TrimSpace(in.Method))
+		if m == "" {
+			m = "GET"
+		}
+		return in.Connector + " API: " + m + " " + in.Path
+	case "connector_doc":
+		return in.Connector + " doc: " + in.File
+	case "use_connector":
+		return "attach /" + in.Connector + ": " + clipText(in.Reason, 80)
+	default:
+		return clipText(rawInput, 120)
+	}
 }
 
 // workspaceTools is the chat/workspace surface of a server run — the same
@@ -427,7 +734,7 @@ func (e *ServerEngine) workspaceTools(run *model.Run) []bedrock.Tool {
 // The URL is derived from the connector's stored base — the model supplies
 // only the path — and the same outbound-URL gate that guards ingestion guards
 // the final URL, so a crafted path can't retarget the credential.
-func (e *ServerEngine) connectorCall(ctx context.Context, bySlug map[string]RunnerConnector, input json.RawMessage) (string, bool) {
+func (e *ServerEngine) connectorCall(ctx context.Context, lookup func(string) (RunnerConnector, bool), input json.RawMessage) (string, bool) {
 	var in struct {
 		Connector string            `json:"connector"`
 		Method    string            `json:"method"`
@@ -438,9 +745,9 @@ func (e *ServerEngine) connectorCall(ctx context.Context, bySlug map[string]Runn
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "bad input: " + err.Error(), true
 	}
-	c, ok := bySlug[in.Connector]
+	c, ok := lookup(in.Connector)
 	if !ok {
-		return "unknown connector: " + in.Connector + " (only the /connector picks of this task are available)", true
+		return notAttachedMsg(in.Connector), true
 	}
 	method := strings.ToUpper(strings.TrimSpace(in.Method))
 	if method == "" {
@@ -522,8 +829,12 @@ Working:
 - The thread is ALREADY in your context ("# Thread"). Call get_thread only for what the
   bundle lacks — newer replies or older history; get_context re-reads the full bundle.
 - write_shared_context records durable facts/decisions for later runs in this chat.
-- You have NO shell, NO files, NO web browsing. Coding work is never done from this run —
-  tell the invoker to route it to the dev agent instead.
+- Workspace tools (channels, search, DMs, reactions, reminders, pins) act with your
+  invoker's access, audited. Actions beyond what was asked (creating channels, DMing
+  people): request_approval first. A decision that is genuinely the invoker's: ask_user.
+- You have NO shell, NO files, NO web browsing. CODING WORK — fixing a bug, building a
+  feature, changing repository files — is NEVER done from this run: hand off with
+  create_coding_task (project = the PRODUCT name) and end your turn.
 `)
 	if a.WatchInstruction != "" {
 		fmt.Fprintf(&b, "\n# Standing order (watch)\n%s\nIf the triggering activity does not match, reply exactly SKIP.\n", a.WatchInstruction)

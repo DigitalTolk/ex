@@ -1445,10 +1445,10 @@ func (o *Orchestrator) claimOnce(ctx context.Context, ownerID, runnerID string, 
 
 // claimServerRun claims ONE queued run for the backend engine — the
 // server-side mirror of claimOnce, minus the parts that only make sense for a
-// desktop runner: no harness inventory (the engine IS the bedrock harness),
-// no MCP token (tools run in-process), and no coding tasks (a server run has
-// no workspace, so task mode is refused outright rather than queued into
-// silence).
+// desktop runner: no harness inventory (the engine IS the bedrock harness)
+// and no coding tasks (a server run has no workspace, so task mode is refused
+// outright rather than queued into silence). It still mints a run token: the
+// engine's bridged workspace tools call the run-tool HTTP API over loopback.
 func (o *Orchestrator) claimServerRun(ctx context.Context, runID string) (*Assignment, *model.Run, error) {
 	run, err := o.runs.GetRun(ctx, runID)
 	if err != nil {
@@ -1476,6 +1476,15 @@ func (o *Orchestrator) claimServerRun(ctx context.Context, runID string) (*Assig
 	}
 	o.armLeaseTimer(run.ID, lease)
 	o.startTypingTicker(run)
+	// The engine's workspace tools ride the run-tool HTTP API over loopback —
+	// same token contract as a desktop runner's assignment.
+	token, err := o.tokens.GenerateRunToken(run.ID, run.InvokerID, run.AgentID, run.HardDeadline)
+	if err != nil {
+		if failErr := o.failRun(ctx, run, "token_mint_failed"); failErr != nil {
+			slog.Warn("server claim: fail-run after token mint failure", "runID", run.ID, "error", failErr)
+		}
+		return nil, nil, fmt.Errorf("server claim: mint run token: %w", err)
+	}
 	bundle, bundleStats := o.buildBundle(ctx, run)
 	agentName, invokerName := o.claimNames(ctx, run)
 	o.setState(ctx, run, StateEmojiRead)
@@ -1504,6 +1513,7 @@ func (o *Orchestrator) claimServerRun(ctx context.Context, runID string) (*Assig
 		ConnectorSlugs:   run.ConnectorSlugs,
 		AutoAllow:        run.AutoAllow,
 		Limits:           run.Limits,
+		MCPToken:         token,
 		LeaseExpiresAt:   lease,
 		Deadline:         run.HardDeadline,
 	}, run, nil

@@ -59,6 +59,14 @@ func bedrockToolCall(tool string, input map[string]any) *bedrockruntime.Converse
 	}
 }
 
+// mapLookup adapts a plain map to connectorCall's live-lookup signature.
+func mapLookup(m map[string]RunnerConnector) func(string) (RunnerConnector, bool) {
+	return func(slug string) (RunnerConnector, bool) {
+		c, ok := m[slug]
+		return c, ok
+	}
+}
+
 // dispatchAndWait runs one server execution to completion via the engine.
 func dispatchAndWait(t *testing.T, e *ServerEngine, runID string) {
 	t.Helper()
@@ -180,9 +188,9 @@ func TestServerEngine_ConnectorCallGuards(t *testing.T) {
 	bySlug := map[string]RunnerConnector{"hub": {Slug: "hub", BaseURL: api.URL, Token: "t"}}
 
 	call := func(input string) (string, bool) {
-		return e.connectorCall(context.Background(), bySlug, json.RawMessage(input))
+		return e.connectorCall(context.Background(), mapLookup(bySlug), json.RawMessage(input))
 	}
-	if out, isErr := call(`{"connector":"nope","path":"x"}`); !isErr || !strings.Contains(out, "unknown connector") {
+	if out, isErr := call(`{"connector":"nope","path":"x"}`); !isErr || !strings.Contains(out, "not attached") {
 		t.Fatalf("unknown connector: %q", out)
 	}
 	if out, isErr := call(`{"connector":"hub","method":"DELETE","path":"x"}`); !isErr || !strings.Contains(out, "DELETE") {
@@ -202,7 +210,7 @@ func TestServerEngine_ConnectorCallGuards(t *testing.T) {
 	}
 	// A base that can't form a valid URL dies at request construction.
 	broken := map[string]RunnerConnector{"hub": {Slug: "hub", BaseURL: "ht tp://broken", Token: "t"}}
-	if out, isErr := e.connectorCall(context.Background(), broken, json.RawMessage(`{"connector":"hub","path":"x"}`)); !isErr || !strings.Contains(out, "request build failed") {
+	if out, isErr := e.connectorCall(context.Background(), mapLookup(broken), json.RawMessage(`{"connector":"hub","path":"x"}`)); !isErr || !strings.Contains(out, "request build failed") {
 		t.Fatalf("unparsable base: %q", out)
 	}
 	// The outbound gate itself: under the production posture (no private
@@ -262,6 +270,11 @@ func TestOrchestrator_InvokeDispatchesToServerEngine(t *testing.T) {
 type dispatcherFunc func(runID string)
 
 func (f dispatcherFunc) Dispatch(runID string) { f(runID) }
+
+// mintFunc is a runTokenMinter whose behavior the test chooses per call.
+type mintFunc func() (string, error)
+
+func (f mintFunc) GenerateRunToken(_, _, _ string, _ time.Time) (string, error) { return f() }
 
 func TestAgentService_SetAgentEngine(t *testing.T) {
 	fx := newOrchFixture(t)
@@ -451,7 +464,7 @@ func TestServerEngine_DocToolArms(t *testing.T) {
 	st.installs["u1#hub"] = &model.ConnectorInstall{UserID: "u1", ConnectorSlug: "hub", Token: "t"}
 	fx := newOrchFixture(t)
 	e := &ServerEngine{orch: fx.orch, connectors: NewConnectorService(st), http: &http.Client{}}
-	tools, desc, err := e.buildTools(context.Background(), &model.Run{InvokerID: "u1", ConnectorSlugs: []string{"hub"}})
+	tools, desc, err := e.buildTools(context.Background(), &model.Run{InvokerID: "u1", ConnectorSlugs: []string{"hub"}}, "", func(string) {})
 	if err != nil || !strings.Contains(desc, "/hub") {
 		t.Fatalf("buildTools: %v", err)
 	}
@@ -459,7 +472,7 @@ func TestServerEngine_DocToolArms(t *testing.T) {
 	if out, isErr := doc(context.Background(), json.RawMessage(`not json`)); !isErr || !strings.Contains(out, "bad input") {
 		t.Fatalf("bad input: %q", out)
 	}
-	if out, isErr := doc(context.Background(), json.RawMessage(`{"connector":"ghost","file":"x"}`)); !isErr || !strings.Contains(out, "unknown connector") {
+	if out, isErr := doc(context.Background(), json.RawMessage(`{"connector":"ghost","file":"x"}`)); !isErr || !strings.Contains(out, "not attached") {
 		t.Fatalf("unknown connector: %q", out)
 	}
 	if out, isErr := doc(context.Background(), json.RawMessage(`{"connector":"hub","file":"ghost.yaml"}`)); !isErr || !strings.Contains(out, "no such file") {
@@ -483,7 +496,7 @@ func TestServerEngine_ConnectorCallSeamsAndBody(t *testing.T) {
 	bySlug := map[string]RunnerConnector{"hub": {Slug: "hub", BaseURL: api.URL, Token: "t"}}
 
 	// Happy POST with body — response over the cap gets truncated.
-	out, isErr := e.connectorCall(context.Background(), bySlug, json.RawMessage(`{"connector":"hub","method":"POST","path":"x","body":{"a":1}}`))
+	out, isErr := e.connectorCall(context.Background(), mapLookup(bySlug), json.RawMessage(`{"connector":"hub","method":"POST","path":"x","body":{"a":1}}`))
 	if isErr || !strings.Contains(out, "HTTP 200") || !strings.Contains(out, "[response truncated]") {
 		t.Fatalf("post+truncate: err=%v %q", isErr, out[:80])
 	}
@@ -494,7 +507,7 @@ func TestServerEngine_ConnectorCallSeamsAndBody(t *testing.T) {
 	// Seam: body marshal failure.
 	old := marshalJSON
 	marshalJSON = func(any) ([]byte, error) { return nil, errors.New("marshal boom") }
-	out, isErr = e.connectorCall(context.Background(), bySlug, json.RawMessage(`{"connector":"hub","path":"x","body":{}}`))
+	out, isErr = e.connectorCall(context.Background(), mapLookup(bySlug), json.RawMessage(`{"connector":"hub","path":"x","body":{}}`))
 	marshalJSON = old
 	if !isErr || !strings.Contains(out, "bad body") {
 		t.Fatalf("marshal seam: %q", out)
@@ -505,7 +518,7 @@ func TestServerEngine_ConnectorCallSeamsAndBody(t *testing.T) {
 	newRequest = func(context.Context, string, string, io.Reader) (*http.Request, error) {
 		return nil, errors.New("request boom")
 	}
-	out, isErr = e.connectorCall(context.Background(), bySlug, json.RawMessage(`{"connector":"hub","path":"x"}`))
+	out, isErr = e.connectorCall(context.Background(), mapLookup(bySlug), json.RawMessage(`{"connector":"hub","path":"x"}`))
 	newRequest = oldReq
 	if !isErr || !strings.Contains(out, "request build failed") {
 		t.Fatalf("request seam: %q", out)
@@ -513,7 +526,7 @@ func TestServerEngine_ConnectorCallSeamsAndBody(t *testing.T) {
 
 	// Transport failure: server gone.
 	api.Close()
-	out, isErr = e.connectorCall(context.Background(), bySlug, json.RawMessage(`{"connector":"hub","path":"x"}`))
+	out, isErr = e.connectorCall(context.Background(), mapLookup(bySlug), json.RawMessage(`{"connector":"hub","path":"x"}`))
 	if !isErr || !strings.Contains(out, "request failed") {
 		t.Fatalf("transport arm: %q", out)
 	}
@@ -571,6 +584,55 @@ func TestOrchestrator_ClaimServerRunArms(t *testing.T) {
 	if asg.AgentName != testGGID || asg.InvokerID != "u-alice" {
 		t.Fatalf("names must fall back to ids: %+v", asg.AgentName)
 	}
+	// The claim minted a run token — the bridged workspace tools ride the
+	// run-tool HTTP API and are dead without one.
+	if asg.MCPToken == "" {
+		t.Fatal("server claim must mint a run token")
+	}
+
+	// Token mint failure fails the run legibly.
+	runMintID := func() string {
+		msg := &model.Message{ID: "m-mint", ParentID: "chan-mint", AuthorID: "u-alice", Body: "hi"}
+		agent, _ := fx.users.GetUser(context.Background(), testGGID)
+		invoker, _ := fx.users.GetUser(context.Background(), "u-alice")
+		resolved, _ := fx.orch.agentSvc.Resolve(context.Background(), agent, invoker.ID)
+		r, err := fx.orch.startRun(context.Background(), invocation{agent: agent, invoker: invoker, msg: msg, parentType: ParentChannel}, resolved)
+		if err != nil {
+			t.Fatalf("start mint run: %v", err)
+		}
+		return r.ID
+	}()
+	goodMinter := fx.orch.tokens
+	fx.orch.tokens = &orchCovMinter{fail: errors.New("kms down")}
+	if _, _, err := fx.orch.claimServerRun(context.Background(), runMintID); err == nil {
+		t.Fatal("mint failure must fail the claim")
+	}
+	fx.orch.tokens = goodMinter
+	if got, _ := fx.runs.GetRun(context.Background(), runMintID); got.State != model.RunStateFailed || got.FailReason != "token_mint_failed" {
+		t.Fatalf("run not failed on mint error: %+v", got)
+	}
+	// Mint failure whose fail write ALSO fails (warn arm).
+	runMint2ID := func() string {
+		msg := &model.Message{ID: "m-mint2", ParentID: "chan-mint2", AuthorID: "u-alice", Body: "hi"}
+		agent, _ := fx.users.GetUser(context.Background(), testGGID)
+		invoker, _ := fx.users.GetUser(context.Background(), "u-alice")
+		resolved, _ := fx.orch.agentSvc.Resolve(context.Background(), agent, invoker.ID)
+		r, err := fx.orch.startRun(context.Background(), invocation{agent: agent, invoker: invoker, msg: msg, parentType: ParentChannel}, resolved)
+		if err != nil {
+			t.Fatalf("start mint run2: %v", err)
+		}
+		return r.ID
+	}()
+	// The store break must land AFTER the acknowledge write (which would
+	// otherwise consume the one-shot failure), so the minter itself plants it.
+	fx.orch.tokens = mintFunc(func() (string, error) {
+		fx.runs.failUpdateOnce = errors.New("dynamo hiccup")
+		return "", errors.New("kms down")
+	})
+	if _, _, err := fx.orch.claimServerRun(context.Background(), runMint2ID); err == nil {
+		t.Fatal("mint failure must fail the claim even when the fail write errors")
+	}
+	fx.orch.tokens = goodMinter
 
 	// Task-mode refusal whose fail write ALSO fails (warn arm).
 	run3ID := func() string {
@@ -826,25 +888,28 @@ func TestServerEngine_AlwaysConnectorsAutoAttach(t *testing.T) {
 	st.installs["u-alice#ask"] = &model.ConnectorInstall{UserID: "u-alice", ConnectorSlug: "ask", Token: "t", AgentUse: model.ConnectorAgentUseAsk}
 	e := NewServerEngine(fx.orch, NewConnectorService(st), nil)
 
-	// No picks: the always-install rides along; the ask-install does not.
-	_, desc, err := e.buildTools(context.Background(), &model.Run{ID: "r1", InvokerID: "u-alice"})
+	// No picks: the always-install attaches; the ask-install is advertised as
+	// attachable via use_connector, not attached.
+	_, desc, err := e.buildTools(context.Background(), &model.Run{ID: "r1", InvokerID: "u-alice"}, "", func(string) {})
 	if err != nil {
 		t.Fatalf("buildTools: %v", err)
 	}
-	if !strings.Contains(desc, "/hub") || strings.Contains(desc, "/ask") {
+	if !strings.Contains(desc, "/hub — Hub") || !strings.Contains(desc, "/ask — installed but NOT attached") {
 		t.Fatalf("always-attach wrong: %q", desc)
 	}
 
-	// Picks and always-installs merge without duplicates.
-	tools, desc2, err := e.buildTools(context.Background(), &model.Run{ID: "r2", InvokerID: "u-alice", ConnectorSlugs: []string{"hub", "ask"}})
-	if err != nil || strings.Count(desc2, "/hub") != 1 || !strings.Contains(desc2, "/ask") {
+	// Picks and always-installs merge without duplicates; a picked ask-install
+	// attaches directly.
+	tools, desc2, err := e.buildTools(context.Background(), &model.Run{ID: "r2", InvokerID: "u-alice", ConnectorSlugs: []string{"hub", "ask"}}, "", func(string) {})
+	if err != nil || strings.Count(desc2, "/hub") != 1 || !strings.Contains(desc2, "/ask — Ask") {
 		t.Fatalf("merge: %v %q", err, desc2)
 	}
 	toolByName(t, tools, "connector_call")
+	toolByName(t, tools, "use_connector")
 
 	// Index failure degrades to picks only.
 	st.failListInstalls = errors.New("dynamo down")
-	if _, _, err := e.buildTools(context.Background(), &model.Run{ID: "r3", InvokerID: "u-alice"}); err != nil {
+	if _, _, err := e.buildTools(context.Background(), &model.Run{ID: "r3", InvokerID: "u-alice"}, "", func(string) {}); err != nil {
 		t.Fatalf("index failure must not fail the run: %v", err)
 	}
 }
@@ -873,5 +938,417 @@ func TestAgentService_RunnerModeRejectedEverywhere(t *testing.T) {
 	resolved, err := svc.Resolve(ctx, agent, "u-alice")
 	if err != nil || resolved.ExecutionMode != model.ExecutionServer {
 		t.Fatalf("legacy runner not coerced: %+v err=%v", resolved, err)
+	}
+}
+
+func TestToolDetail(t *testing.T) {
+	for _, tc := range []struct{ tool, input, want string }{
+		{"connector_call", `{"connector":"hub","path":"api/people"}`, "hub API: GET api/people"},
+		{"connector_call", `{"connector":"hub","method":"post","path":"api/x"}`, "hub API: POST api/x"},
+		{"connector_doc", `{"connector":"hub","file":"_USAGE.md"}`, "hub doc: _USAGE.md"},
+		{"use_connector", `{"connector":"hub","reason":"need people data"}`, "attach /hub: need people data"},
+		{"mystery_tool", `{"x":1}`, `{"x":1}`},
+		{"connector_call", `not json`, "not json"},
+	} {
+		if got := toolDetail(tc.tool, tc.input); got != tc.want {
+			t.Fatalf("toolDetail(%s, %s) = %q, want %q", tc.tool, tc.input, got, tc.want)
+		}
+	}
+}
+
+// askSurfaceFixture builds an engine + run with one ask-install ("hub"), one
+// never-install ("locked"), and one picked-and-attached connector ("pin").
+func askSurfaceFixture(t *testing.T) (*orchFixture, *ServerEngine, *memConnectorStore, *model.Run, []bedrock.Tool, *[]string) {
+	t.Helper()
+	fx := newOrchFixture(t)
+	st := newMemConnectorStore()
+	for _, slug := range []string{"hub", "locked", "pin"} {
+		st.connectors[slug] = &model.Connector{Slug: slug, Title: strings.ToUpper(slug), BaseURL: "https://" + slug + ".example.net", AuthKind: model.ConnectorAuthPaste, FileNames: []string{"a.yaml"}}
+		st.files[slug] = []model.ConnectorFile{{Slug: slug, Name: "a.yaml", Content: "x"}}
+	}
+	st.installs["u-alice#hub"] = &model.ConnectorInstall{UserID: "u-alice", ConnectorSlug: "hub", Token: "t"} // "" = ask
+	st.installs["u-alice#locked"] = &model.ConnectorInstall{UserID: "u-alice", ConnectorSlug: "locked", Token: "t", AgentUse: model.ConnectorAgentUseNever}
+	st.installs["u-alice#pin"] = &model.ConnectorInstall{UserID: "u-alice", ConnectorSlug: "pin", Token: "t"}
+	e := NewServerEngine(fx.orch, NewConnectorService(st), nil)
+	run := fx.startRun(t)
+	fx.runs.mu.Lock()
+	fx.runs.runs[run.ID].ConnectorSlugs = []string{"pin"}
+	run = fx.runs.runs[run.ID]
+	fx.runs.mu.Unlock()
+	notes := &[]string{}
+	tools, desc, err := e.buildTools(context.Background(), run, "", func(s string) { *notes = append(*notes, s) })
+	if err != nil {
+		t.Fatalf("buildTools: %v", err)
+	}
+	if !strings.Contains(desc, "/hub — installed but NOT attached") || !strings.Contains(desc, "/locked — installed, but the invoker has blocked") {
+		t.Fatalf("desc: %q", desc)
+	}
+	return fx, e, st, run, tools, notes
+}
+
+// approveWhenPending watches the fake store for the run's pending approval and
+// decides it — the invoker acting on the card.
+func approveWhenPending(t *testing.T, fx *orchFixture, runID string, d Decision) {
+	t.Helper()
+	go func() {
+		for i := 0; i < 500; i++ {
+			time.Sleep(2 * time.Millisecond)
+			fx.runs.mu.Lock()
+			var id string
+			for k, a := range fx.runs.approvals {
+				if strings.HasPrefix(k, runID+"#") && a.State == model.ApprovalPending {
+					id = a.ID
+				}
+			}
+			fx.runs.mu.Unlock()
+			if id != "" {
+				_, _ = fx.orch.DecideApproval(context.Background(), "u-alice", runID, id, d)
+				return
+			}
+		}
+	}()
+}
+
+func TestServerEngine_UseConnectorApproveFlow(t *testing.T) {
+	oldPoll, oldNote := approvalPollInterval, approvalWaitNote
+	approvalPollInterval, approvalWaitNote = 5*time.Millisecond, time.Millisecond
+	defer func() { approvalPollInterval, approvalWaitNote = oldPoll, oldNote }()
+
+	fx, _, _, run, tools, notes := askSurfaceFixture(t)
+	use := toolByName(t, tools, "use_connector").Call
+
+	// Let the gate sit pending across at least one poll so the still-waiting
+	// note fires before the approval lands.
+	time.AfterFunc(25*time.Millisecond, func() { approveWhenPending(t, fx, run.ID, Decision{Approve: true}) })
+	out, isErr := use(context.Background(), json.RawMessage(`{"connector":"hub","reason":"need people data"}`))
+	if isErr || !strings.Contains(out, "attached /hub") || !strings.Contains(out, "a.yaml") {
+		t.Fatalf("approve flow: err=%v %q", isErr, out)
+	}
+	// The wait narrated itself: the initial note plus at least one
+	// still-waiting reminder while the gate sat pending.
+	if len(*notes) < 2 || !strings.Contains((*notes)[0], "waiting for the invoker") || !strings.Contains((*notes)[1], "still waiting") {
+		t.Fatalf("wait notes: %v", *notes)
+	}
+	// Attached for real: connector_call now resolves the slug.
+	if out, _ := toolByName(t, tools, "connector_doc").Call(context.Background(), json.RawMessage(`{"connector":"hub","file":"a.yaml"}`)); out != "x" {
+		t.Fatalf("post-attach doc read: %q", out)
+	}
+	// Second use_connector short-circuits.
+	if out, isErr := use(context.Background(), json.RawMessage(`{"connector":"hub","reason":"again"}`)); isErr || !strings.Contains(out, "already attached") {
+		t.Fatalf("re-attach: %q", out)
+	}
+}
+
+func TestServerEngine_UseConnectorDeniedExpiredAndErrors(t *testing.T) {
+	oldPoll := approvalPollInterval
+	approvalPollInterval = 5 * time.Millisecond
+	defer func() { approvalPollInterval = oldPoll }()
+
+	fx, _, st, run, tools, _ := askSurfaceFixture(t)
+	use := toolByName(t, tools, "use_connector").Call
+	ctx := context.Background()
+
+	if out, isErr := use(ctx, json.RawMessage(`not json`)); !isErr || !strings.Contains(out, "bad input") {
+		t.Fatalf("bad input: %q", out)
+	}
+	if out, isErr := use(ctx, json.RawMessage(`{"connector":"ghost","reason":"r"}`)); !isErr || !strings.Contains(out, "not installed") {
+		t.Fatalf("not installed: %q", out)
+	}
+	if out, isErr := use(ctx, json.RawMessage(`{"connector":"locked","reason":"r"}`)); !isErr || !strings.Contains(out, "blocked agent-initiated use") {
+		t.Fatalf("never: %q", out)
+	}
+	if out, isErr := use(ctx, json.RawMessage(`{"connector":"pin","reason":"r"}`)); isErr || !strings.Contains(out, "already attached") {
+		t.Fatalf("picked connector: %q", out)
+	}
+	if out, isErr := use(ctx, json.RawMessage(`{"connector":"hub","reason":"  "}`)); !isErr || !strings.Contains(out, "reason is required") {
+		t.Fatalf("reason: %q", out)
+	}
+
+	// Denied.
+	approveWhenPending(t, fx, run.ID, Decision{Approve: false})
+	if out, isErr := use(ctx, json.RawMessage(`{"connector":"hub","reason":"r"}`)); !isErr || !strings.Contains(out, "denied") {
+		t.Fatalf("denied: %q", out)
+	}
+
+	// Expired: settle the next pending approval as expired ourselves.
+	go func() {
+		for i := 0; i < 500; i++ {
+			time.Sleep(2 * time.Millisecond)
+			fx.runs.mu.Lock()
+			var id string
+			for k, a := range fx.runs.approvals {
+				if strings.HasPrefix(k, run.ID+"#") && a.State == model.ApprovalPending {
+					id = a.ID
+				}
+			}
+			fx.runs.mu.Unlock()
+			if id != "" {
+				_ = fx.runs.SettleApproval(context.Background(), run.ID, id, model.ApprovalExpired, "", "", "", time.Now())
+				return
+			}
+		}
+	}()
+	if out, isErr := use(ctx, json.RawMessage(`{"connector":"hub","reason":"r"}`)); !isErr || !strings.Contains(out, "expired unanswered") {
+		t.Fatalf("expired: %q", out)
+	}
+
+	// Approved but the registry row vanished before attach → legible failure.
+	approveWhenPending(t, fx, run.ID, Decision{Approve: true})
+	delete(st.connectors, "hub")
+	if out, isErr := use(ctx, json.RawMessage(`{"connector":"hub","reason":"r"}`)); !isErr || !strings.Contains(out, "attach failed") {
+		t.Fatalf("attach failure: %q", out)
+	}
+	st.connectors["hub"] = &model.Connector{Slug: "hub", Title: "HUB", BaseURL: "https://hub.example.net", AuthKind: model.ConnectorAuthPaste, FileNames: []string{"a.yaml"}}
+
+	// Run context dies while waiting.
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if out, isErr := use(cancelled, json.RawMessage(`{"connector":"hub","reason":"r"}`)); !isErr || !strings.Contains(out, "run ended") {
+		t.Fatalf("ctx done: %q", out)
+	}
+
+	// Approval row lost mid-wait → lookup failure surfaces.
+	go func() {
+		for i := 0; i < 500; i++ {
+			time.Sleep(2 * time.Millisecond)
+			fx.runs.mu.Lock()
+			var key string
+			for k, a := range fx.runs.approvals {
+				if strings.HasPrefix(k, run.ID+"#") && a.State == model.ApprovalPending {
+					key = k
+				}
+			}
+			if key != "" {
+				delete(fx.runs.approvals, key)
+			}
+			fx.runs.mu.Unlock()
+			if key != "" {
+				return
+			}
+		}
+	}()
+	if out, isErr := use(ctx, json.RawMessage(`{"connector":"hub","reason":"r"}`)); !isErr || !strings.Contains(out, "approval lookup failed") {
+		t.Fatalf("lookup failure: %q", out)
+	}
+
+	// Run too close to its deadline → the approval itself is refused.
+	fx.runs.mu.Lock()
+	fx.runs.runs[run.ID].Deadline = fx.orch.now()
+	run.Deadline = fx.orch.now()
+	fx.runs.mu.Unlock()
+	if out, isErr := use(ctx, json.RawMessage(`{"connector":"hub","reason":"r"}`)); !isErr || !strings.Contains(out, "could not raise the approval") {
+		t.Fatalf("raise failure: %q", out)
+	}
+}
+
+func TestServerEngine_ApprovalTools(t *testing.T) {
+	oldPoll, oldNote := approvalPollInterval, approvalWaitNote
+	approvalPollInterval, approvalWaitNote = 5*time.Millisecond, time.Millisecond
+	defer func() { approvalPollInterval, approvalWaitNote = oldPoll, oldNote }()
+
+	fx := newOrchFixture(t)
+	e := NewServerEngine(fx.orch, NewConnectorService(newMemConnectorStore()), nil)
+	run := fx.startRun(t)
+	tools := e.approvalTools(run, func(string) {})
+	req := toolByName(t, tools, "request_approval").Call
+	ask := toolByName(t, tools, "ask_user").Call
+	ctx := context.Background()
+
+	// Bad inputs never open a gate.
+	if out, isErr := req(ctx, json.RawMessage(`not json`)); !isErr || !strings.Contains(out, "requires a summary") {
+		t.Fatalf("req bad json: %q", out)
+	}
+	if out, isErr := req(ctx, json.RawMessage(`{"summary":"  "}`)); !isErr || !strings.Contains(out, "requires a summary") {
+		t.Fatalf("req blank summary: %q", out)
+	}
+	if out, isErr := ask(ctx, json.RawMessage(`not json`)); !isErr || !strings.Contains(out, "requires a question") {
+		t.Fatalf("ask bad json: %q", out)
+	}
+	if out, isErr := ask(ctx, json.RawMessage(`{"question":"q","options":["only one"]}`)); !isErr || !strings.Contains(out, "2–5 options") {
+		t.Fatalf("ask one option: %q", out)
+	}
+
+	// request_approval: approved with the invoker's note, then without.
+	approveWhenPending(t, fx, run.ID, Decision{Approve: true, Text: "go ahead"})
+	if out, isErr := req(ctx, json.RawMessage(`{"summary":"post the report","risk":"low"}`)); isErr || out != "approved — proceed with the action. The invoker adds: go ahead" {
+		t.Fatalf("approved+note: err=%v %q", isErr, out)
+	}
+	approveWhenPending(t, fx, run.ID, Decision{Approve: true})
+	if out, isErr := req(ctx, json.RawMessage(`{"summary":"post the report"}`)); isErr || out != "approved — proceed with the action" {
+		t.Fatalf("approved: err=%v %q", isErr, out)
+	}
+
+	// Denied with direction, then without.
+	approveWhenPending(t, fx, run.ID, Decision{Approve: false, Text: "use the seed DB instead"})
+	if out, isErr := req(ctx, json.RawMessage(`{"summary":"drop the table"}`)); !isErr || !strings.Contains(out, "They say: use the seed DB instead") {
+		t.Fatalf("denied+note: %q", out)
+	}
+	approveWhenPending(t, fx, run.ID, Decision{Approve: false})
+	if out, isErr := req(ctx, json.RawMessage(`{"summary":"drop the table"}`)); !isErr || !strings.Contains(out, "explain and wind down") {
+		t.Fatalf("denied: %q", out)
+	}
+
+	// Expired: settle the pending gate as expired ourselves.
+	expireWhenPending := func() {
+		go func() {
+			for i := 0; i < 500; i++ {
+				time.Sleep(2 * time.Millisecond)
+				fx.runs.mu.Lock()
+				var id string
+				for k, a := range fx.runs.approvals {
+					if strings.HasPrefix(k, run.ID+"#") && a.State == model.ApprovalPending {
+						id = a.ID
+					}
+				}
+				fx.runs.mu.Unlock()
+				if id != "" {
+					_ = fx.runs.SettleApproval(context.Background(), run.ID, id, model.ApprovalExpired, "", "", "", time.Now())
+					return
+				}
+			}
+		}()
+	}
+	expireWhenPending()
+	if out, isErr := req(ctx, json.RawMessage(`{"summary":"s"}`)); !isErr || !strings.Contains(out, "nobody decided in time") {
+		t.Fatalf("req expired: %q", out)
+	}
+
+	// ask_user: a choice with a note, then a bare choice.
+	approveWhenPending(t, fx, run.ID, Decision{Approve: true, Choice: "B", Text: "and hurry"})
+	if out, isErr := ask(ctx, json.RawMessage(`{"question":"which?","options":["A","B"]}`)); isErr || out != "the invoker chose: B — and adds: and hurry" {
+		t.Fatalf("choice+note: err=%v %q", isErr, out)
+	}
+	approveWhenPending(t, fx, run.ID, Decision{Approve: true, Choice: "A"})
+	if out, isErr := ask(ctx, json.RawMessage(`{"question":"which?","options":["A","B"]}`)); isErr || out != "the invoker chose: A" {
+		t.Fatalf("choice: err=%v %q", isErr, out)
+	}
+
+	// Dismissed with their own words, then silently.
+	approveWhenPending(t, fx, run.ID, Decision{Approve: false, Text: "neither — do both"})
+	if out, isErr := ask(ctx, json.RawMessage(`{"question":"which?","options":["A","B"]}`)); !isErr || !strings.Contains(out, "answered in their own words instead: neither — do both") {
+		t.Fatalf("own words: %q", out)
+	}
+	approveWhenPending(t, fx, run.ID, Decision{Approve: false})
+	if out, isErr := ask(ctx, json.RawMessage(`{"question":"which?","options":["A","B"]}`)); !isErr || !strings.Contains(out, "dismissed the question") {
+		t.Fatalf("dismissed: %q", out)
+	}
+
+	// Timed out.
+	expireWhenPending()
+	if out, isErr := ask(ctx, json.RawMessage(`{"question":"q","options":["A","B"]}`)); !isErr || !strings.Contains(out, "no answer in time") {
+		t.Fatalf("ask expired: %q", out)
+	}
+
+	// The run ends mid-wait. These leave their gates pending, so they come
+	// after every flow that scans for a pending approval to decide.
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if out, isErr := req(cancelled, json.RawMessage(`{"summary":"s"}`)); !isErr || !strings.Contains(out, "run ended") {
+		t.Fatalf("req ctx done: %q", out)
+	}
+	if out, isErr := ask(cancelled, json.RawMessage(`{"question":"q","options":["A","B"]}`)); !isErr || !strings.Contains(out, "run ended") {
+		t.Fatalf("ask ctx done: %q", out)
+	}
+
+	// The orchestrator refuses the gate: 6 options break the 2–5 rule server-side.
+	if out, isErr := ask(ctx, json.RawMessage(`{"question":"q","options":["1","2","3","4","5","6"]}`)); !isErr || !strings.Contains(out, "could not raise the question") {
+		t.Fatalf("ask raise refusal: %q", out)
+	}
+	// And for request_approval: a run at its deadline can't wait for a human.
+	fx.runs.mu.Lock()
+	fx.runs.runs[run.ID].Deadline = fx.orch.now()
+	run.Deadline = fx.orch.now()
+	fx.runs.mu.Unlock()
+	if out, isErr := req(ctx, json.RawMessage(`{"summary":"s"}`)); !isErr || !strings.Contains(out, "could not raise the approval") {
+		t.Fatalf("req raise refusal: %q", out)
+	}
+}
+
+func TestServerEngine_BuildToolsBridge(t *testing.T) {
+	fx := newOrchFixture(t)
+	e := NewServerEngine(fx.orch, NewConnectorService(newMemConnectorStore()), nil)
+	e.SetRunAPIBase("http://127.0.0.1:1/")
+	if e.runAPIBase != "http://127.0.0.1:1" {
+		t.Fatalf("trailing slash kept: %q", e.runAPIBase)
+	}
+	run := &model.Run{ID: "r", InvokerID: "u-alice"}
+
+	// With a run token the bridged surface (and the approval tools) ride along.
+	tools, _, err := e.buildTools(context.Background(), run, "tok", func(string) {})
+	if err != nil {
+		t.Fatalf("buildTools: %v", err)
+	}
+	toolByName(t, tools, "list_channels")
+	toolByName(t, tools, "create_coding_task")
+	toolByName(t, tools, "request_approval")
+	toolByName(t, tools, "ask_user")
+
+	// Without a token the bridge is off — those tools would only error.
+	tools, _, err = e.buildTools(context.Background(), run, "", func(string) {})
+	if err != nil {
+		t.Fatalf("buildTools no token: %v", err)
+	}
+	for _, tl := range tools {
+		if tl.Name == "list_channels" {
+			t.Fatal("bridge tools offered without a run token")
+		}
+	}
+}
+
+func TestServerEngine_ConnectorToolsDanglingPicks(t *testing.T) {
+	// Picks that resolve to nothing (uninstalled slug) and no other installs:
+	// no connector tools at all.
+	fx := newOrchFixture(t)
+	e := NewServerEngine(fx.orch, NewConnectorService(newMemConnectorStore()), nil)
+	tools, desc, err := e.buildTools(context.Background(), &model.Run{ID: "r", InvokerID: "u-alice", ConnectorSlugs: []string{"ghost"}}, "", func(string) {})
+	if err != nil || desc != "" {
+		t.Fatalf("dangling picks: %v %q", err, desc)
+	}
+	for _, tl := range tools {
+		if strings.HasPrefix(tl.Name, "connector") || tl.Name == "use_connector" {
+			t.Fatalf("connector tool offered with nothing usable: %s", tl.Name)
+		}
+	}
+}
+
+func TestServerEngine_UseConnectorFullDispatch(t *testing.T) {
+	// The whole journey through Dispatch: model requests an ask-connector,
+	// the invoker approves the card, the attached API gets called, the run
+	// completes — with the wait's progress notes flowing through ReportEvents.
+	oldPoll, oldNote := approvalPollInterval, approvalWaitNote
+	approvalPollInterval, approvalWaitNote = 5*time.Millisecond, time.Millisecond
+	defer func() { approvalPollInterval, approvalWaitNote = oldPoll, oldNote }()
+
+	fx := newOrchFixture(t)
+	var gotPath string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"todos":[]}`))
+	}))
+	defer api.Close()
+	st := newMemConnectorStore()
+	st.connectors["hub"] = &model.Connector{Slug: "hub", Title: "Hub", BaseURL: api.URL, AuthKind: model.ConnectorAuthPaste, FileNames: []string{"a.yaml"}}
+	st.files["hub"] = []model.ConnectorFile{{Slug: "hub", Name: "a.yaml", Content: "x"}}
+	st.installs["u-alice#hub"] = &model.ConnectorInstall{UserID: "u-alice", ConnectorSlug: "hub", Token: "t"} // ask
+	run := fx.startRun(t)
+
+	fb := &fakeBedrock{outs: []*bedrockruntime.ConverseOutput{
+		bedrockToolCall("use_connector", map[string]any{"connector": "hub", "reason": "need the todo list"}),
+		bedrockToolCall("connector_call", map[string]any{"connector": "hub", "path": "api/todos"}),
+		bedrockText("no todos — you're free"),
+	}}
+	e := NewServerEngine(fx.orch, NewConnectorService(st), fb)
+	approveWhenPending(t, fx, run.ID, Decision{Approve: true})
+	dispatchAndWait(t, e, run.ID)
+
+	got, _ := fx.runs.GetRun(context.Background(), run.ID)
+	if got.State != model.RunStateCompleted {
+		t.Fatalf("state: %s (fail=%q)", got.State, got.FailReason)
+	}
+	if gotPath != "/api/todos" {
+		t.Fatalf("post-approval call never landed: %q", gotPath)
+	}
+	if !strings.Contains(fx.msgs.lastPost(), "you're free") {
+		t.Fatalf("final text: %q", fx.msgs.lastPost())
 	}
 }

@@ -10,11 +10,7 @@ export interface Connector {
   title: string;
   description: string;
   baseURL: string;
-  authKind: 'paste' | 'password' | 'sso_window' | 'none';
-  // sso_window: the service's SSO entry point the shell opens for one-click
-  // connect, and the redirect pattern it captures the minted token from.
-  startURL?: string;
-  capturePattern?: string;
+  authKind: 'paste' | 'password' | 'none';
   installed: boolean;
   installStatus?: 'connected' | 'unverified';
   connectedAs?: string;

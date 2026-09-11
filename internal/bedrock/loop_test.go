@@ -256,3 +256,28 @@ func TestDocumentJSON(t *testing.T) {
 		t.Fatalf("real doc must serialize, got %q", got)
 	}
 }
+
+func TestRun_ToolCallInputPreviewClipped(t *testing.T) {
+	big := strings.Repeat("y", 300)
+	c := &fakeClient{outs: []*bedrockruntime.ConverseOutput{
+		toolOut("echo", map[string]any{"blob": big}),
+		textOut(types.StopReasonEndTurn, "ok", 1, 1),
+	}}
+	var preview string
+	_, _, err := Run(context.Background(), c, Config{
+		ModelID: "m", Prompt: "p",
+		Tools: []Tool{{Name: "echo", Description: "d", Schema: map[string]any{"type": "object"},
+			Call: func(_ context.Context, _ json.RawMessage) (string, bool) { return "ok", false }}},
+		OnEvent: func(kind string, p map[string]any) {
+			if kind == "tool_call" {
+				preview, _ = p["input"].(string)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(preview) != 240 || !strings.Contains(preview, "blob") {
+		t.Fatalf("input preview must clip to 240, got %d", len(preview))
+	}
+}

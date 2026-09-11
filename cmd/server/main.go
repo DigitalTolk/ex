@@ -316,7 +316,12 @@ func main() {
 		if err != nil {
 			slog.Error("bedrock: aws config load failed; server-side agents disabled", "error", err)
 		} else {
-			orchestrator.SetServerEngine(service.NewServerEngine(orchestrator, connectorSvc, bedrockruntime.NewFromConfig(bedrockCfg)))
+			engine := service.NewServerEngine(orchestrator, connectorSvc, bedrockruntime.NewFromConfig(bedrockCfg))
+			// The bridged workspace tools (channels, DMs, reminders, skills, …)
+			// speak this process's own run-tool HTTP API over loopback, with the
+			// run's token — full parity with a desktop runner's tool surface.
+			engine.SetRunAPIBase("http://127.0.0.1:" + cfg.Port)
+			orchestrator.SetServerEngine(engine)
 			slog.Info("bedrock server engine enabled", "region", cfg.BedrockRegion)
 		}
 	}

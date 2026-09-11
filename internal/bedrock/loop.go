@@ -169,7 +169,13 @@ func Run(ctx context.Context, client Client, cfg Config) (string, Usage, error) 
 		for _, tu := range toolUses {
 			name := aws.ToString(tu.Name)
 			raw := documentJSON(tu.Input)
-			emit(cfg.OnEvent, "tool_call", map[string]any{"tool": name})
+			// The clipped input rides along so the run timeline can say what
+			// the call actually did, not just which tool ran.
+			inputPreview := string(raw)
+			if len(inputPreview) > 240 {
+				inputPreview = inputPreview[:240]
+			}
+			emit(cfg.OnEvent, "tool_call", map[string]any{"tool": name, "input": inputPreview})
 			text, isErr := callTool(ctx, tools, name, raw)
 			if len(text) > toolResultCap {
 				text = text[:toolResultCap] + "\n…[truncated]"

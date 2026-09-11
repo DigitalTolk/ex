@@ -468,37 +468,16 @@ func TestConnector_InstallAnonymous(t *testing.T) {
 	}
 }
 
-// sso_window connectors: startURL is required, SSRF-gated like every other
-// stored URL, and the captured-token install rides the paste path unchanged.
-func TestIngest_SSOWindow(t *testing.T) {
+// The one-click SSO auth kind was removed: "sso_window" is no longer a valid
+// authKind and ingest refuses it like any other unknown value.
+func TestIngest_SSOWindowRemoved(t *testing.T) {
 	svc := NewConnectorService(newMemConnectorStore())
-	base := IngestInput{
+	_, err := svc.Ingest(context.Background(), "admin", IngestInput{
 		Slug: "hub", Title: "Hub", BaseURL: "https://hub.example.net",
-		AuthKind: model.ConnectorAuthSSOWindow,
+		AuthKind: "sso_window",
 		Files:    []model.ConnectorFile{{Name: "index.yml", Content: "title: Hub"}},
-	}
-
-	if _, err := svc.Ingest(context.Background(), "admin", base); !errors.Is(err, ErrConnectorInvalid) || !strings.Contains(err.Error(), "startURL") {
-		t.Fatalf("missing startURL: %v", err)
-	}
-
-	AllowPrivateConnectorTargets(false)
-	bad := base
-	bad.StartURL = "http://hub.example.net/api/auth/microsoft"
-	_, err := svc.Ingest(context.Background(), "admin", bad)
-	AllowPrivateConnectorTargets(true)
-	if !errors.Is(err, ErrConnectorInvalid) || !strings.Contains(err.Error(), "startURL") {
-		t.Fatalf("plain-http startURL must be refused: %v", err)
-	}
-
-	good := base
-	good.StartURL = "https://hub.example.net/api/auth/microsoft"
-	good.CapturePattern = "/callback?token={token}"
-	c, err := svc.Ingest(context.Background(), "admin", good)
-	if err != nil {
-		t.Fatalf("ingest: %v", err)
-	}
-	if c.StartURL != good.StartURL || c.CapturePattern != good.CapturePattern || c.AuthKind != model.ConnectorAuthSSOWindow {
-		t.Fatalf("sso fields not stored: %+v", c)
+	})
+	if !errors.Is(err, ErrConnectorInvalid) || !strings.Contains(err.Error(), "authKind") {
+		t.Fatalf("sso_window must be refused: %v", err)
 	}
 }

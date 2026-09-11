@@ -46,11 +46,6 @@ declare global {
     // Injected by the shell's chat preload; absent in browser tabs/PWA.
     __EX_AGENT_RUNNER__?: { provideToken: (token: string) => void };
 
-    // Desktop shell one-click connector sign-in: opens the service's SSO
-    // entry in a shell window and resolves with the bearer captured from the
-    // redirect matching the connector's capture pattern. Rejects on timeout,
-    // a closed window, or a shell-side error. Absent in browsers.
-    __EX_CONNECTOR_SSO__?: (startURL: string, capturePattern?: string) => Promise<string>;
     // Test-only override for lib/device.ts deviceKind(): the jsdom and
     // browser setups pin it so width-driven tests keep their historical
     // meaning; production never sets it.

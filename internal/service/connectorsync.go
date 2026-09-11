@@ -20,15 +20,13 @@ import (
 
 // providerRegistration mirrors the connector-provider's served auth block.
 type providerRegistration struct {
-	Title          string `json:"title"`
-	Description    string `json:"description"`
-	BaseURL        string `json:"baseURL"`
-	AuthKind       string `json:"authKind"`
-	TokenURL       string `json:"tokenURL"`
-	ClientID       string `json:"clientID"`
-	VerifyURL      string `json:"verifyURL"`
-	StartURL       string `json:"startURL"`
-	CapturePattern string `json:"capturePattern"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	BaseURL     string `json:"baseURL"`
+	AuthKind    string `json:"authKind"`
+	TokenURL    string `json:"tokenURL"`
+	ClientID    string `json:"clientID"`
+	VerifyURL   string `json:"verifyURL"`
 }
 
 // providerManifest is one connector's manifest as the provider serves it. Slug
@@ -169,7 +167,6 @@ func (s *ConnectorService) SyncFromProvider(ctx context.Context, callerID string
 			Slug: row.Slug, Title: title, Description: desc,
 			BaseURL: reg.BaseURL, AuthKind: reg.AuthKind,
 			TokenURL: reg.TokenURL, ClientID: reg.ClientID, VerifyURL: reg.VerifyURL,
-			StartURL: reg.StartURL, CapturePattern: reg.CapturePattern,
 			Revision: row.Revision,
 			Files:    files,
 		}); err != nil {
