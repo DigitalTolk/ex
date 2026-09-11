@@ -77,7 +77,7 @@ export function NewAgentForm({ onDone }: { onDone: () => void }) {
             className={isBedrock ? 'mt-1 w-72' : 'mt-1 w-48'}
             value={model}
             placeholder={
-              isBedrock ? 'eu.anthropic.claude-haiku-4-5-20251001-v1:0' : 'backend default'
+              isBedrock ? 'eu.anthropic.claude-opus-5' : 'backend default'
             }
             onChange={(e) => setModel(e.target.value)}
           />

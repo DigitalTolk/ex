@@ -180,7 +180,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
               value={model}
               placeholder={
                 isBedrock
-                  ? agent.resolved.model || 'eu.anthropic.claude-haiku-4-5-20251001-v1:0'
+                  ? agent.resolved.model || 'eu.anthropic.claude-opus-5'
                   : agent.resolved.model || 'harness default'
               }
               onChange={(e) => setModel(e.target.value)}

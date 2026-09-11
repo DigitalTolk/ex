@@ -412,14 +412,12 @@ func (s *AgentService) SetAgentEngine(ctx context.Context, slug, harness, mdl, e
 
 // defaultAPIModel is the model id used when an API harness has no explicit
 // pin. Bedrock ids are inference-profile / model ids in the account's region;
-// this default is the EU cross-region Claude Haiku profile — the one with a
-// working Marketplace agreement in our accounts (Sonnet agreements were
-// denied; see cliffhub's infra/bedrock.tf notes). Overridable per-user and
-// per-template.
+// this default is the EU cross-region Claude Opus 5 profile (the Claude 5
+// family carries no date suffix). Overridable per-user and per-template.
 func defaultAPIModel(harness string) string {
 	switch harness {
 	case model.HarnessBedrock:
-		return "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+		return "eu.anthropic.claude-opus-5"
 	default:
 		return ""
 	}

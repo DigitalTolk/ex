@@ -455,10 +455,7 @@ describe('AgentsPage', () => {
 
     const gg = await findCard('gg');
     fireEvent.change(gg.getByLabelText('Backend'), { target: { value: 'bedrock' } });
-    expect(gg.getByLabelText('Model')).toHaveAttribute(
-      'placeholder',
-      'eu.anthropic.claude-haiku-4-5-20251001-v1:0',
-    );
+    expect(gg.getByLabelText('Model')).toHaveAttribute('placeholder', 'eu.anthropic.claude-opus-5');
     // Bedrock is server-only: no Runs-on choice exists, and the copy says so.
     expect(gg.queryByLabelText('Runs on')).not.toBeInTheDocument();
     expect(gg.getByText(/Runs via AWS Bedrock ON THE SERVER/)).toBeInTheDocument();
