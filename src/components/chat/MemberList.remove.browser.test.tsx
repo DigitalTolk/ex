@@ -63,12 +63,18 @@ describe('MemberList remove (real hover)', () => {
     // coverage run the first style pass can land a frame late, and a one-shot
     // read here was the suite's recurring flake.
     await expect
-      .poll(() => Number(getComputedStyle(removeBtn).opacity) >= 0.6, { timeout: 5_000 })
+      .poll(() => Number(getComputedStyle(removeBtn).opacity) >= 0.6, { timeout: 10_000 })
       .toBe(true);
-    // …and full-strength once the row is hovered (transition needs a frame
-    // or two more under instrumentation).
-    await screen.getByText('Bob').hover();
-    await expect.poll(() => getComputedStyle(removeBtn).opacity, { timeout: 5_000 }).toBe('1');
+    // …and full-strength once the row is hovered. The hover is re-driven on
+    // every poll attempt: under the instrumented coverage run a single real
+    // pointer move can land before layout settles and miss the row, and no
+    // amount of style polling recovers from a missed hover.
+    await expect
+      .poll(async () => {
+        await screen.getByText('Bob').hover();
+        return getComputedStyle(removeBtn).opacity;
+      }, { timeout: 10_000 })
+      .toBe('1');
     // …and clickable.
     removeBtn.click();
     await expect
