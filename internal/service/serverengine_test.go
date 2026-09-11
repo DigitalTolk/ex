@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
+	"github.com/DigitalTolk/ex/internal/bedrock"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
 )
@@ -448,12 +449,13 @@ func TestServerEngine_DocToolArms(t *testing.T) {
 	st.connectors["hub"] = &model.Connector{Slug: "hub", Title: "Hub", BaseURL: "https://hub.example.net", AuthKind: model.ConnectorAuthPaste, FileNames: []string{"api.yaml"}}
 	st.files["hub"] = []model.ConnectorFile{{Slug: "hub", Name: "api.yaml", Content: "endpoints: []"}}
 	st.installs["u1#hub"] = &model.ConnectorInstall{UserID: "u1", ConnectorSlug: "hub", Token: "t"}
-	e := &ServerEngine{connectors: NewConnectorService(st), http: &http.Client{}}
+	fx := newOrchFixture(t)
+	e := &ServerEngine{orch: fx.orch, connectors: NewConnectorService(st), http: &http.Client{}}
 	tools, desc, err := e.buildTools(context.Background(), &model.Run{InvokerID: "u1", ConnectorSlugs: []string{"hub"}})
-	if err != nil || len(tools) != 2 || !strings.Contains(desc, "/hub") {
-		t.Fatalf("buildTools: %v %d", err, len(tools))
+	if err != nil || !strings.Contains(desc, "/hub") {
+		t.Fatalf("buildTools: %v", err)
 	}
-	doc := tools[0].Call
+	doc := toolByName(t, tools, "connector_doc").Call
 	if out, isErr := doc(context.Background(), json.RawMessage(`not json`)); !isErr || !strings.Contains(out, "bad input") {
 		t.Fatalf("bad input: %q", out)
 	}
@@ -636,4 +638,240 @@ func TestServerEngine_LoopAndFailRunBothFail(t *testing.T) {
 	}
 	e := NewServerEngine(fx.orch, nil, &fakeBedrock{}) // no scripted responses → loop error
 	dispatchAndWait(t, e, run.ID)
+}
+
+func TestOrchestrator_RunnersNeverClaimServerRuns(t *testing.T) {
+	// The desktop runner advertises the bedrock harness too — but a
+	// server-mode run belongs to the backend engine alone. Before this guard,
+	// the runner's long-poll raced the engine for the queued run and, on
+	// winning, executed it on the invoker's LOCAL AWS credentials.
+	fx := newOrchFixture(t)
+	_ = fx.dir.PutRunner(context.Background(), &model.RunnerRegistration{
+		RunnerID: "r-bedrock", OwnerID: "u-alice",
+		Harnesses:      []model.RunnerHarness{{Name: model.HarnessClaude}, {Name: model.HarnessBedrock}},
+		LeaseExpiresAt: time.Now().Add(time.Hour),
+	})
+	run := fx.startRun(t)
+	fx.runs.mu.Lock()
+	fx.runs.runs[run.ID].Harness = model.HarnessBedrock
+	fx.runs.runs[run.ID].ExecutionMode = model.ExecutionServer
+	fx.runs.mu.Unlock()
+
+	as, err := fx.orch.Claim(context.Background(), "u-alice", "r-bedrock", []string{model.HarnessClaude, model.HarnessBedrock}, 5, 0)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if len(as) != 0 {
+		t.Fatalf("runner must not claim a server-mode run, got %d assignments", len(as))
+	}
+
+	// The server engine still claims it fine.
+	if _, _, err := fx.orch.claimServerRun(context.Background(), run.ID); err != nil {
+		t.Fatalf("server claim after runner poll: %v", err)
+	}
+}
+
+// toolByName finds one tool of the surface — index-free so the surface can
+// grow without breaking every test.
+func toolByName(t *testing.T, tools []bedrock.Tool, name string) bedrock.Tool {
+	t.Helper()
+	for _, tool := range tools {
+		if tool.Name == name {
+			return tool
+		}
+	}
+	t.Fatalf("tool %s not in surface (%d tools)", name, len(tools))
+	return bedrock.Tool{}
+}
+
+func toolNames(tools []bedrock.Tool) []string {
+	out := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		out = append(out, tool.Name)
+	}
+	return out
+}
+
+func TestServerEngine_WorkspaceTools(t *testing.T) {
+	fx := newOrchFixture(t)
+	ctxSvc, _ := newTestContextService(allowAll{})
+	fx.orch.SetContextService(ctxSvc)
+	dm := &orchCovDM{convID: "dm-1"}
+	fx.orch.SetOwnerDMResolver(dm)
+	run := fx.startRun(t)
+	e := NewServerEngine(fx.orch, nil, nil)
+
+	tools := e.workspaceTools(run)
+	for _, want := range []string{"get_thread", "get_context", "write_shared_context", "notify_owner", "post_message"} {
+		toolByName(t, tools, want)
+	}
+	ctx := context.Background()
+
+	// get_thread / get_context return text, never errors.
+	if out, isErr := toolByName(t, tools, "get_thread").Call(ctx, json.RawMessage(`{}`)); isErr {
+		t.Fatalf("get_thread: %q", out)
+	}
+	if out, isErr := toolByName(t, tools, "get_context").Call(ctx, json.RawMessage(`{}`)); isErr || out == "" {
+		t.Fatalf("get_context: %q", out)
+	}
+
+	// write_shared_context: bad input, then a real write.
+	wctx := toolByName(t, tools, "write_shared_context").Call
+	if out, isErr := wctx(ctx, json.RawMessage(`{}`)); !isErr || !strings.Contains(out, "body required") {
+		t.Fatalf("ctx bad input: %q", out)
+	}
+	if out, isErr := wctx(ctx, json.RawMessage(`not json`)); !isErr {
+		t.Fatalf("ctx bad json: %q", out)
+	}
+	if out, isErr := wctx(ctx, json.RawMessage(`{"body":"decision: ship it","pinned":true}`)); isErr || !strings.Contains(out, "written") {
+		t.Fatalf("ctx write: %q", out)
+	}
+	// A denied write surfaces as a tool error, not a crash.
+	deniedCtx, _ := newTestContextService(denyAll{})
+	fx.orch.SetContextService(deniedCtx)
+	wdenied := toolByName(t, e.workspaceTools(run), "write_shared_context").Call
+	if out, isErr := wdenied(ctx, json.RawMessage(`{"body":"nope"}`)); !isErr || !strings.Contains(out, "context write failed") {
+		t.Fatalf("denied ctx write: %q", out)
+	}
+	fx.orch.SetContextService(ctxSvc)
+
+	// notify_owner: bad input, DM-open failure, send failure, then success.
+	notify := toolByName(t, tools, "notify_owner").Call
+	if out, isErr := notify(ctx, json.RawMessage(`{}`)); !isErr {
+		t.Fatalf("notify bad input: %q", out)
+	}
+	if out, isErr := notify(ctx, json.RawMessage(`not json`)); !isErr {
+		t.Fatalf("notify bad json: %q", out)
+	}
+	dm.fail = errors.New("dm down")
+	if out, isErr := notify(ctx, json.RawMessage(`{"body":"psst"}`)); !isErr || !strings.Contains(out, "DM open failed") {
+		t.Fatalf("notify dm fail: %q", out)
+	}
+	dm.fail = nil
+	fx.msgs.failSendOnce = errors.New("send down")
+	if out, isErr := notify(ctx, json.RawMessage(`{"body":"psst"}`)); !isErr || !strings.Contains(out, "DM send failed") {
+		t.Fatalf("notify send fail: %q", out)
+	}
+	if out, isErr := notify(ctx, json.RawMessage(`{"body":"psst"}`)); isErr || !strings.Contains(out, "privately") {
+		t.Fatalf("notify: %q", out)
+	}
+	if !strings.Contains(fx.msgs.lastPost(), "psst") {
+		t.Fatal("notify body never sent")
+	}
+
+	// post_message: bad input, post-cap, store loss, send failure,
+	// RecordAgentPost failure (remaining=0 arm), then success.
+	post := toolByName(t, tools, "post_message").Call
+	if out, isErr := post(ctx, json.RawMessage(`{"body":"  "}`)); !isErr {
+		t.Fatalf("post bad input: %q", out)
+	}
+	if out, isErr := post(ctx, json.RawMessage(`not json`)); !isErr {
+		t.Fatalf("post bad json: %q", out)
+	}
+	fx.runs.mu.Lock()
+	fx.runs.runs[run.ID].Spend.Posts = run.Limits.MaxPosts
+	fx.runs.mu.Unlock()
+	if out, isErr := post(ctx, json.RawMessage(`{"body":"x"}`)); !isErr || !strings.Contains(out, "post cap") {
+		t.Fatalf("post cap: %q", out)
+	}
+	fx.runs.mu.Lock()
+	fx.runs.runs[run.ID].Spend.Posts = 0
+	fx.runs.mu.Unlock()
+	fx.msgs.failSendOnce = errors.New("send down")
+	if out, isErr := post(ctx, json.RawMessage(`{"body":"x"}`)); !isErr || !strings.Contains(out, "post rejected") {
+		t.Fatalf("post send fail: %q", out)
+	}
+	fx.runs.failAddPostsOnce = errors.New("ledger down")
+	if out, isErr := post(ctx, json.RawMessage(`{"body":"y"}`)); isErr || !strings.Contains(out, "0 post(s) remaining") {
+		t.Fatalf("post with ledger failure must still succeed: %q", out)
+	}
+	if out, isErr := post(ctx, json.RawMessage(`{"body":"part one"}`)); isErr || !strings.Contains(out, "posted [m:") {
+		t.Fatalf("post: %q", out)
+	}
+
+	// GetRun loss: the cap check can't read the run → rejected.
+	fx.runs.dropRun(run.ID)
+	if out, isErr := post(ctx, json.RawMessage(`{"body":"z"}`)); !isErr || !strings.Contains(out, "post rejected") {
+		t.Fatalf("post after store loss: %q", out)
+	}
+}
+
+func TestServerEngine_WatchModesGetNoPostTool(t *testing.T) {
+	fx := newOrchFixture(t)
+	run := fx.startRun(t)
+	e := NewServerEngine(fx.orch, nil, nil)
+	for _, mode := range []string{model.WatchActionNotify, model.WatchActionDraft, model.WatchActionReply} {
+		run.ActionMode = mode
+		names := strings.Join(toolNames(e.workspaceTools(run)), ",")
+		if strings.Contains(names, "post_message") {
+			t.Fatalf("mode %s must not offer post_message: %s", mode, names)
+		}
+	}
+	// Without ctx service and DM resolver those tools are absent too.
+	run.ActionMode = ""
+	names := strings.Join(toolNames(e.workspaceTools(run)), ",")
+	if strings.Contains(names, "write_shared_context") || strings.Contains(names, "notify_owner") {
+		t.Fatalf("unwired deps must not offer their tools: %s", names)
+	}
+}
+
+func TestServerEngine_AlwaysConnectorsAutoAttach(t *testing.T) {
+	fx := newOrchFixture(t)
+	st := newMemConnectorStore()
+	st.connectors["hub"] = &model.Connector{Slug: "hub", Title: "Hub", BaseURL: "https://hub.example.net", AuthKind: model.ConnectorAuthPaste, FileNames: []string{"a.yaml"}}
+	st.files["hub"] = []model.ConnectorFile{{Slug: "hub", Name: "a.yaml", Content: "x"}}
+	st.installs["u-alice#hub"] = &model.ConnectorInstall{UserID: "u-alice", ConnectorSlug: "hub", Token: "t", AgentUse: model.ConnectorAgentUseAlways}
+	st.connectors["ask"] = &model.Connector{Slug: "ask", Title: "Ask", BaseURL: "https://ask.example.net", AuthKind: model.ConnectorAuthPaste, FileNames: []string{"a.yaml"}}
+	st.files["ask"] = []model.ConnectorFile{{Slug: "ask", Name: "a.yaml", Content: "x"}}
+	st.installs["u-alice#ask"] = &model.ConnectorInstall{UserID: "u-alice", ConnectorSlug: "ask", Token: "t", AgentUse: model.ConnectorAgentUseAsk}
+	e := NewServerEngine(fx.orch, NewConnectorService(st), nil)
+
+	// No picks: the always-install rides along; the ask-install does not.
+	_, desc, err := e.buildTools(context.Background(), &model.Run{ID: "r1", InvokerID: "u-alice"})
+	if err != nil {
+		t.Fatalf("buildTools: %v", err)
+	}
+	if !strings.Contains(desc, "/hub") || strings.Contains(desc, "/ask") {
+		t.Fatalf("always-attach wrong: %q", desc)
+	}
+
+	// Picks and always-installs merge without duplicates.
+	tools, desc2, err := e.buildTools(context.Background(), &model.Run{ID: "r2", InvokerID: "u-alice", ConnectorSlugs: []string{"hub", "ask"}})
+	if err != nil || strings.Count(desc2, "/hub") != 1 || !strings.Contains(desc2, "/ask") {
+		t.Fatalf("merge: %v %q", err, desc2)
+	}
+	toolByName(t, tools, "connector_call")
+
+	// Index failure degrades to picks only.
+	st.failListInstalls = errors.New("dynamo down")
+	if _, _, err := e.buildTools(context.Background(), &model.Run{ID: "r3", InvokerID: "u-alice"}); err != nil {
+		t.Fatalf("index failure must not fail the run: %v", err)
+	}
+}
+
+func TestAgentService_RunnerModeRejectedEverywhere(t *testing.T) {
+	fx := newOrchFixture(t)
+	svc := fx.orch.agentSvc
+	ctx := context.Background()
+	runner := model.ExecutionRunner
+
+	if _, err := svc.UpdatePrefs(ctx, "u-alice", AgentSlugGG, AgentPrefsPatch{ExecutionMode: &runner}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("prefs runner: %v", err)
+	}
+	if _, err := svc.SetAgentEngine(ctx, AgentSlugGG, model.HarnessBedrock, "", model.ExecutionRunner); !errors.Is(err, ErrValidation) {
+		t.Fatalf("engine runner: %v", err)
+	}
+	if _, err := svc.CreateAgent(ctx, CreateAgentInput{Slug: "srv", Persona: "p", Harness: model.HarnessBedrock, ExecutionMode: model.ExecutionRunner}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("create runner: %v", err)
+	}
+	// Legacy stored "runner" rows are coerced to server at resolve time.
+	fx.dir.mu.Lock()
+	fx.dir.templates[AgentSlugGG].Harness = model.HarnessBedrock
+	fx.dir.templates[AgentSlugGG].ExecutionMode = model.ExecutionRunner
+	fx.dir.mu.Unlock()
+	agent, _ := fx.users.GetUser(ctx, testGGID)
+	resolved, err := svc.Resolve(ctx, agent, "u-alice")
+	if err != nil || resolved.ExecutionMode != model.ExecutionServer {
+		t.Fatalf("legacy runner not coerced: %+v err=%v", resolved, err)
+	}
 }

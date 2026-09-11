@@ -38,7 +38,7 @@ function agentFixtures(): AgentView[] {
       id: 'ag-qib',
       displayName: 'qib',
       slug: 'qib',
-      status: 'needs_setup',
+      status: 'active',
       prefs: {
         userID: 'u-1',
         slug: 'qib',
@@ -212,12 +212,11 @@ describe('AgentsPage', () => {
     expect(gg.queryByLabelText('ask me before it replies')).not.toBeInTheDocument();
 
     const qib = await findCard('qib');
-    expect(qib.getByText('CLI missing on your machine')).toBeInTheDocument();
+    expect(qib.getByText('ready — runs on the server')).toBeInTheDocument();
     expect(qib.getByText('for you: bedrock · anthropic.claude-3-5')).toBeInTheDocument();
     expect(qib.getByLabelText('Model')).toHaveAttribute('placeholder', 'anthropic.claude-3-5');
     expect(qib.getByLabelText('Discussion rounds')).toHaveValue(5);
     expect(qib.getByLabelText('Discussion rounds')).toHaveAttribute('placeholder', '8');
-    expect(qib.getByLabelText('Runs on')).toHaveValue('runner');
     expect(qib.getByLabelText('Thread follow-ups')).toHaveValue('window:30');
     expect(qib.getByLabelText('ask me before it replies')).toBeChecked();
     expect(qib.getByLabelText('Read files')).toBeChecked();
@@ -267,9 +266,9 @@ describe('AgentsPage', () => {
     fireEvent.change(form.getByLabelText('Prompt (persona)'), { target: { value: 'Be helpful.' } });
     expect(createBtn).toBeEnabled();
 
-    expect(form.queryByLabelText('Runs on')).not.toBeInTheDocument();
+    expect(form.queryByText(/Runs on the server/)).not.toBeInTheDocument();
     fireEvent.change(form.getByLabelText('Backend'), { target: { value: 'bedrock' } });
-    fireEvent.change(form.getByLabelText('Runs on'), { target: { value: 'server' } });
+    expect(form.getByText(/Runs on the server/)).toBeInTheDocument();
     fireEvent.change(form.getByLabelText('Model'), { target: { value: 'bed-model' } });
 
     createResult = () => Promise.reject(new Error('slug taken'));
@@ -285,7 +284,7 @@ describe('AgentsPage', () => {
       ([p, i]) => p === '/api/v1/agents' && i?.method === 'POST',
     );
     expect(posts).toHaveLength(2);
-    expect(JSON.parse(posts[0][1]!.body!)).toMatchObject({ harness: 'bedrock', executionMode: 'server' });
+    expect(JSON.parse(posts[0][1]!.body!)).toMatchObject({ harness: 'bedrock', executionMode: '' });
     expect(JSON.parse(posts[1][1]!.body!)).toEqual({
       slug: 'res-1',
       displayName: 'Res',
@@ -390,7 +389,7 @@ describe('AgentsPage', () => {
         persona: 'My qib persona',
         harness: 'bedrock',
         model: 'new-model',
-        executionMode: 'runner',
+        executionMode: '',
         offlinePolicy: 'queue',
         followUpMode: 'window',
         followUpMins: 30,
@@ -435,22 +434,19 @@ describe('AgentsPage', () => {
     );
   });
 
-  it('switching a default card to bedrock reveals the runner controls', async () => {
+  it('switching a default card to bedrock reveals the bedrock controls (server-only)', async () => {
     installRoutes();
     renderPage();
 
     const gg = await findCard('gg');
-    expect(gg.queryByLabelText('Runs on')).not.toBeInTheDocument();
     fireEvent.change(gg.getByLabelText('Backend'), { target: { value: 'bedrock' } });
     expect(gg.getByLabelText('Model')).toHaveAttribute(
       'placeholder',
-      'anthropic.claude-3-5-sonnet-20241022-v2:0',
+      'eu.anthropic.claude-haiku-4-5-20251001-v1:0',
     );
-    const exec = gg.getByLabelText('Runs on');
-    expect(exec).toHaveValue('runner');
-    fireEvent.change(exec, { target: { value: 'server' } });
-    expect(exec).toHaveValue('server');
-    expect(gg.getByText(/Runs via AWS Bedrock/)).toBeInTheDocument();
+    // Bedrock is server-only: no Runs-on choice exists, and the copy says so.
+    expect(gg.queryByLabelText('Runs on')).not.toBeInTheDocument();
+    expect(gg.getByText(/Runs via AWS Bedrock ON THE SERVER/)).toBeInTheDocument();
   });
 
   it('shows the follow-up ask checkbox once a window is chosen', async () => {

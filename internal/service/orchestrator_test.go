@@ -26,9 +26,10 @@ type fakeRunStore struct {
 	approvals map[string]*model.Approval // runID#approvalID
 	artifacts map[string][]*model.Artifact
 	// Fault seams for arms unreachable through the public surface.
-	onGetRun       func(runID string) // runs before every GetRun read
-	failClaim      error              // next ClaimRun returns this
-	failUpdateOnce error              // next UpdateRun returns this, then clears
+	onGetRun         func(runID string) // runs before every GetRun read
+	failClaim        error              // next ClaimRun returns this
+	failUpdateOnce   error              // next UpdateRun returns this, then clears
+	failAddPostsOnce error              // next AddRunPosts returns this, then clears
 }
 
 func newFakeRunStore() *fakeRunStore {
@@ -132,6 +133,10 @@ func (f *fakeRunStore) AddRunSpend(_ context.Context, runID, runnerID string, d 
 func (f *fakeRunStore) AddRunPosts(_ context.Context, runID string, delta int) (*model.Run, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.failAddPostsOnce; err != nil {
+		f.failAddPostsOnce = nil
+		return nil, err
+	}
 	cur, ok := f.runs[runID]
 	if !ok {
 		return nil, store.ErrNotFound
@@ -702,11 +707,17 @@ type fakeOrchMessages struct {
 	// thread backs ListThreadMessages/List for bundle-rendering tests.
 	thread         []*model.Message
 	checkAccessErr error
+	// failSendOnce fails the next SendAsAgentRun (server-tool error arms).
+	failSendOnce error
 }
 
 func (f *fakeOrchMessages) SendAsAgentRun(_ context.Context, _, _, parentID, parentType, body, _, _ string) (*model.Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.failSendOnce; err != nil {
+		f.failSendOnce = nil
+		return nil, err
+	}
 	f.posts = append(f.posts, body)
 	f.postDest = append(f.postDest, parentType+"|"+parentID)
 	return &model.Message{ID: "m-posted", Body: body}, nil

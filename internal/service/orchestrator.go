@@ -1346,6 +1346,14 @@ func (o *Orchestrator) claimOnce(ctx context.Context, ownerID, runnerID string, 
 			_ = o.runs.DeleteQueueEntry(ctx, ownerID, id)
 			continue
 		}
+		if run.ExecutionMode == model.ExecutionServer {
+			// Server-executed API runs are the backend engine's alone. They
+			// still land in the claim queue (startRun is shared), and a
+			// desktop runner advertising the bedrock harness would otherwise
+			// RACE the engine for them — and execute on the invoker's local
+			// AWS credentials, exactly what server mode exists to avoid.
+			continue
+		}
 		if !has[run.Harness] {
 			continue // another runner (or a future install) may take it
 		}

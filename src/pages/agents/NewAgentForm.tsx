@@ -11,7 +11,6 @@ export function NewAgentForm({ onDone }: { onDone: () => void }) {
   const [displayName, setDisplayName] = useState('');
   const [harness, setHarness] = useState('claude');
   const [model, setModel] = useState('');
-  const [execMode, setExecMode] = useState('runner');
   const [persona, setPersona] = useState('');
   const isBedrock = harness === 'bedrock';
   const valid = /^[a-z][a-z0-9-]{1,31}$/.test(slug) && persona.trim().length > 0;
@@ -23,7 +22,8 @@ export function NewAgentForm({ onDone }: { onDone: () => void }) {
         displayName,
         harness,
         model,
-        executionMode: isBedrock ? execMode : '',
+        // Bedrock agents always run server-side; nothing to choose.
+        executionMode: '',
         persona,
       },
       { onSuccess: onDone },
@@ -77,26 +77,15 @@ export function NewAgentForm({ onDone }: { onDone: () => void }) {
             className={isBedrock ? 'mt-1 w-72' : 'mt-1 w-48'}
             value={model}
             placeholder={
-              isBedrock ? 'anthropic.claude-3-5-sonnet-20241022-v2:0' : 'backend default'
+              isBedrock ? 'eu.anthropic.claude-haiku-4-5-20251001-v1:0' : 'backend default'
             }
             onChange={(e) => setModel(e.target.value)}
           />
         </div>
         {isBedrock && (
-          <div>
-            <Label htmlFor="new-agent-exec">Runs on</Label>
-            <select
-              id="new-agent-exec"
-              className="mt-1 block rounded-md border bg-transparent p-2 text-sm"
-              value={execMode}
-              onChange={(e) => setExecMode(e.target.value)}
-            >
-              <option value="runner">the invoker’s machine</option>
-              <option value="server" disabled>
-                the server — coming soon
-              </option>
-            </select>
-          </div>
+          <p className="self-end pb-2 text-xs text-muted-foreground">
+            Runs on the server — no desktop app or personal AWS credentials needed.
+          </p>
         )}
       </div>
       <div>

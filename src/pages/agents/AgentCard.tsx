@@ -11,10 +11,11 @@ import {
 } from '@/hooks/useAgents';
 import { WatchedChannels } from './WatchedChannels';
 
-function statusBadge(status: string) {
+function statusBadge(status: string, serverRun: boolean) {
   switch (status) {
     case 'active':
-      return <Badge variant="secondary">ready on your machine</Badge>;
+      // Bedrock agents execute in the backend — "your machine" would be a lie.
+      return <Badge variant="secondary">{serverRun ? 'ready — runs on the server' : 'ready on your machine'}</Badge>;
     case 'needs_setup':
       return <Badge variant="destructive">CLI missing on your machine</Badge>;
     case 'offline':
@@ -45,7 +46,6 @@ export function AgentCard({ agent }: { agent: AgentView }) {
         : '';
   const [followUp, setFollowUp] = useState(initialFollowUp);
   const [followUpAsk, setFollowUpAsk] = useState(agent.prefs.followUpAsk ?? false);
-  const [execMode, setExecMode] = useState(agent.prefs.executionMode ?? '');
   const initialAutoAllow = [...(agent.prefs.autoAllow ?? [])].sort().join(',');
   const [autoAllow, setAutoAllow] = useState<string[]>(agent.prefs.autoAllow ?? []);
   const [saved, setSaved] = useState(false);
@@ -60,7 +60,6 @@ export function AgentCard({ agent }: { agent: AgentView }) {
     harness !== (agent.prefs.harness ?? '') ||
     model !== (agent.prefs.model ?? '') ||
     offlinePolicy !== (agent.prefs.offlinePolicy ?? '') ||
-    execMode !== (agent.prefs.executionMode ?? '') ||
     followUp !== initialFollowUp ||
     followUpAsk !== (agent.prefs.followUpAsk ?? false) ||
     [...autoAllow].sort().join(',') !== initialAutoAllow ||
@@ -75,7 +74,9 @@ export function AgentCard({ agent }: { agent: AgentView }) {
           persona,
           harness,
           model,
-          executionMode: isBedrock ? execMode : '',
+          // Bedrock agents always run server-side; the field is cleared so
+          // stale "runner" prefs from before that decision can't linger.
+          executionMode: '',
           offlinePolicy,
           followUpMode: followUp === 'always' ? 'always' : followUp.startsWith('window:') ? 'window' : '',
           followUpMins: followUp.startsWith('window:') ? Number(followUp.slice(7)) : 0,
@@ -101,7 +102,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
       <div className="mb-3 flex items-center gap-2">
         <Bot className="h-5 w-5 text-muted-foreground" />
         <span className="font-semibold">@{agent.displayName}</span>
-        {statusBadge(agent.status)}
+        {statusBadge(agent.status, agent.resolved.harness === 'bedrock')}
         <span className="ml-auto text-xs text-muted-foreground">
           for you: {agent.resolved.harness}
           {agent.resolved.model ? ` · ${agent.resolved.model}` : ''}
@@ -139,22 +140,6 @@ export function AgentCard({ agent }: { agent: AgentView }) {
               <option value="bedrock">AWS Bedrock (API)</option>
             </select>
           </div>
-          {isBedrock && (
-            <div>
-              <Label htmlFor={`exec-${agent.slug}`}>Runs on</Label>
-              <select
-                id={`exec-${agent.slug}`}
-                className="mt-1 block rounded-md border bg-transparent p-2 text-sm"
-                value={execMode || 'runner'}
-                onChange={(e) => setExecMode(e.target.value)}
-              >
-                <option value="runner">my machine (AWS creds)</option>
-                <option value="server" disabled>
-                  the server — coming soon
-                </option>
-              </select>
-            </div>
-          )}
           <div>
             <Label htmlFor={`rounds-${agent.slug}`}>Discussion rounds</Label>
             <Input
@@ -188,7 +173,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
               value={model}
               placeholder={
                 isBedrock
-                  ? agent.resolved.model || 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+                  ? agent.resolved.model || 'eu.anthropic.claude-haiku-4-5-20251001-v1:0'
                   : agent.resolved.model || 'harness default'
               }
               onChange={(e) => setModel(e.target.value)}
@@ -255,10 +240,11 @@ export function AgentCard({ agent }: { agent: AgentView }) {
 
         {isBedrock && (
           <p className="text-xs text-muted-foreground">
-            Runs via AWS Bedrock through your machine’s AWS credentials (no Claude/Codex CLI
-            needed). Bedrock agents use the chat and workspace tools only — no local shell or
-            files. Enter a Bedrock model id or inference-profile ARN above (e.g. a Claude, Llama,
-            or Mistral model). Server-side runs (no desktop app needed) are coming next.
+            Runs via AWS Bedrock ON THE SERVER — no desktop app, CLI, or personal AWS
+            credentials involved; the backend’s own AWS role makes the model calls. Bedrock
+            agents use the chat, workspace, and connector tools — never anyone’s local shell or
+            files. Enter a Bedrock model id or inference-profile ARN above (e.g. a Claude,
+            Llama, or Mistral model).
           </p>
         )}
 

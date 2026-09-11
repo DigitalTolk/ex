@@ -333,8 +333,8 @@ func TestResolve_APIHarnessGetsModelAndExecMode(t *testing.T) {
 	if r.Model == "" {
 		t.Fatal("API harness must resolve a default model id")
 	}
-	if r.ExecutionMode != model.ExecutionRunner {
-		t.Fatalf("execMode = %q, want runner default", r.ExecutionMode)
+	if r.ExecutionMode != model.ExecutionServer {
+		t.Fatalf("execMode = %q, want server (the only mode API harnesses run in)", r.ExecutionMode)
 	}
 
 	// An explicit server-mode pin is preserved (execution itself is guarded

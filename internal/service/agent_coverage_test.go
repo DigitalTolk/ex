@@ -291,7 +291,7 @@ func TestAgentCovCreateAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create bedrock: %v", err)
 	}
-	if tpl.Model != defaultAPIModel(model.HarnessBedrock) || tpl.ExecutionMode != model.ExecutionRunner ||
+	if tpl.Model != defaultAPIModel(model.HarnessBedrock) || tpl.ExecutionMode != model.ExecutionServer ||
 		tpl.DisplayName != "br" || tpl.Persona != "p" || tpl.MaxConcurrentRuns != 1 {
 		t.Fatalf("bedrock defaults wrong: %+v", tpl)
 	}

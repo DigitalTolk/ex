@@ -275,7 +275,7 @@ func TestAgentService_CreateAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if tpl.Model == "" || tpl.ExecutionMode != model.ExecutionRunner {
+	if tpl.Model == "" || tpl.ExecutionMode != model.ExecutionServer {
 		t.Fatalf("bedrock agent should default model+execMode, got model=%q exec=%q", tpl.Model, tpl.ExecutionMode)
 	}
 

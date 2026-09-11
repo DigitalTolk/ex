@@ -232,12 +232,14 @@ func (s *AgentService) CreateAgent(ctx context.Context, in CreateAgentInput) (*m
 		if mdl == "" {
 			mdl = defaultAPIModel(harness)
 		}
-		execMode = firstNonEmpty(in.ExecutionMode, model.ExecutionRunner)
-		switch execMode {
-		case model.ExecutionRunner, model.ExecutionServer:
+		switch in.ExecutionMode {
+		case "", model.ExecutionServer:
+		case model.ExecutionRunner:
+			return nil, fmt.Errorf("agent: bedrock agents run on the server only: %w", ErrValidation)
 		default:
-			return nil, fmt.Errorf("agent: unknown execution mode %q: %w", execMode, ErrValidation)
+			return nil, fmt.Errorf("agent: unknown execution mode %q: %w", in.ExecutionMode, ErrValidation)
 		}
+		execMode = model.ExecutionServer
 	}
 
 	// Uniqueness: refuse only a FULLY built agent. Creation is two writes (the
@@ -381,10 +383,12 @@ func (s *AgentService) SetAgentEngine(ctx context.Context, slug, harness, mdl, e
 	}
 	switch executionMode {
 	case "":
-	case model.ExecutionRunner, model.ExecutionServer:
+	case model.ExecutionServer:
 		if !model.HarnessIsAPI(harness) {
 			return nil, fmt.Errorf("agent: execution mode applies to API harnesses only: %w", ErrValidation)
 		}
+	case model.ExecutionRunner:
+		return nil, fmt.Errorf("agent: bedrock agents run on the server only: %w", ErrValidation)
 	default:
 		return nil, fmt.Errorf("agent: unknown execution mode %q: %w", executionMode, ErrValidation)
 	}
@@ -456,7 +460,11 @@ func (s *AgentService) Resolve(ctx context.Context, agent *model.User, invokerID
 		if mdl == "" {
 			mdl = defaultAPIModel(harness)
 		}
-		execMode = firstNonEmpty(prefs.ExecutionMode, tpl.ExecutionMode, model.ExecutionRunner)
+		// API harnesses run SERVER-SIDE only: the backend's task role makes
+		// the model call, and an invoker's own cloud credentials are never
+		// used. Stored "runner" values (pre-decision rows) are coerced here
+		// rather than migrated.
+		execMode = model.ExecutionServer
 	}
 	res := &model.ResolvedAgentConfig{
 		Harness:           harness,
@@ -549,8 +557,10 @@ func (s *AgentService) UpdatePrefs(ctx context.Context, userID, slug string, pat
 	}
 	if patch.ExecutionMode != nil {
 		switch *patch.ExecutionMode {
-		case "", model.ExecutionRunner, model.ExecutionServer:
+		case "", model.ExecutionServer:
 			prefs.ExecutionMode = *patch.ExecutionMode
+		case model.ExecutionRunner:
+			return nil, fmt.Errorf("agent: bedrock agents run on the server only: %w", ErrValidation)
 		default:
 			return nil, fmt.Errorf("agent: unknown execution mode %q: %w", *patch.ExecutionMode, ErrValidation)
 		}
