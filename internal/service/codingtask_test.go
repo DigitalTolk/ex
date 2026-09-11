@@ -718,6 +718,19 @@ func TestCodingTaskService_CreateFlowAndGates(t *testing.T) {
 	if status, _, _, _ := fx.svc.RequestMR(ctx, run, "bogus"); status != MRStatusDenied {
 		t.Fatalf("unknown approval must be denied, got %q", status)
 	}
+	// Pin BOTH gate arms deterministically: a healthy deadline raises the
+	// server-side card; a run at its own deadline can't wait for a human, so
+	// the older-runner fallback answers "ask" with no card.
+	savedDeadline := run.Deadline
+	run.Deadline = fx.orch.now().Add(time.Hour)
+	if status, _, gate, err := fx.svc.RequestMR(ctx, run, ""); err != nil || status != MRStatusAsk || gate == nil {
+		t.Fatalf("request_mr must raise the server gate: %q gate=%v err=%v", status, gate, err)
+	}
+	run.Deadline = fx.orch.now()
+	if status, _, gate, err := fx.svc.RequestMR(ctx, run, ""); err != nil || status != MRStatusAsk || gate != nil {
+		t.Fatalf("refused gate must fall back to runner-side ask: %q gate=%v err=%v", status, gate, err)
+	}
+	run.Deadline = savedDeadline
 	if _, err := fx.svc.Report(ctx, run, TaskUpdate{State: model.TaskStateMRCreated, Repos: []RepoUpdate{{Path: "dt/booking-portal-api", MRURL: "https://gitlab/x/-/merge_requests/1"}}}); !errors.Is(err, ErrTaskTransition) {
 		t.Fatalf("mr_created without sign-off must be refused, got %v", err)
 	}

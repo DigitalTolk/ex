@@ -63,6 +63,12 @@ type Message struct {
 	// so the UI can offer "Show activity" (the run drawer: timeline,
 	// artifacts, spend) straight from the message.
 	AgentRunID string `json:"agentRunID,omitempty" dynamodbav:"agentRunID,omitempty"`
+	// AgentSkills names the skills this run actually USED when it posted —
+	// explicit /skill picks plus invoke_skill calls, never the template's
+	// standing skills. Rendered as badges next to the "for <invoker>" tag, so
+	// skill usage is visible to everyone in the thread (run logs are
+	// invoker-only, this is the public trace).
+	AgentSkills []string `json:"agentSkills,omitempty" dynamodbav:"agentSkills,omitempty"`
 }
 
 // Tombstone clears a message's content in place for a soft delete: it flags

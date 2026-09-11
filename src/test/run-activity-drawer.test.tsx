@@ -129,6 +129,15 @@ describe('RunActivityDrawer', () => {
     expect(await screen.findByText(/Couldn’t load this run/)).toBeInTheDocument();
   });
 
+  it('says logs are invoker-only on a 403', async () => {
+    installTimeline(new ApiError(403, 'no access to this run'));
+    act(() => openRunDrawer('run-not-mine'));
+    renderDrawer();
+    expect(
+      await screen.findByText('Only the person who invoked a run can see its activity.'),
+    ).toBeInTheDocument();
+  });
+
   it('reads a 404 as "nothing to show", not as an access problem', async () => {
     // A thread with replies but no agent runs answers 404; the generic copy
     // read as "you can't see this" on an ordinary human thread.

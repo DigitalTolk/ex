@@ -55,6 +55,10 @@ vi.mock('@/hooks/useConnectors', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useConnectors')>()),
   useConnectors: () => ({ data: [] }),
 }));
+vi.mock('@/hooks/useAgents', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useAgents')>()),
+  useSkills: () => ({ data: [] }),
+}));
 
 vi.mock('@/context/AuthContext', () => ({
   useOptionalAuth: () => ({

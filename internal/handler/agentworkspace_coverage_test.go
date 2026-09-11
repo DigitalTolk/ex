@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -150,9 +151,10 @@ func (f *hwsCovRunStore) ListArtifacts(context.Context, string) ([]*model.Artifa
 // ------------------------------------------------- orchestrator side fakes
 
 type hwsCovOrchMsgs struct {
-	msgs    []*model.Message
-	listErr error
+	msgs           []*model.Message
+	listErr        error
 	checkAccessErr error
+	lastThreadRoot string
 }
 
 func (f *hwsCovOrchMsgs) SendAsAgentRun(context.Context, string, string, string, string, string, string, string) (*model.Message, error) {
@@ -167,8 +169,10 @@ func (f *hwsCovOrchMsgs) CheckAccess(context.Context, string, string, string) er
 	return f.checkAccessErr
 }
 
-// ThreadWindowMessages mirrors the bounded window read.
+// ThreadWindowMessages mirrors the bounded window read; lastThreadRoot lets
+// tests assert what root a ?thread= reference resolved to.
 func (f *hwsCovOrchMsgs) ThreadWindowMessages(ctx context.Context, userID, parentID, parentType, threadRootID string, limit int) ([]*model.Message, error) {
+	f.lastThreadRoot = threadRootID
 	all, err := f.ListThreadMessages(ctx, userID, parentID, parentType, threadRootID)
 	if err != nil || limit <= 0 {
 		return nil, err
@@ -357,6 +361,7 @@ type hwsCovEnv struct {
 	remStore *hwsCovRemStore
 	searcher *hwsCovSearcher
 	access   *hwsCovAccessStub
+	pinIndex *dataParentIndexStore
 }
 
 func newHwsCovEnv(t *testing.T) *hwsCovEnv {
@@ -408,10 +413,20 @@ func newHwsCovEnv(t *testing.T) *hwsCovEnv {
 		t.Fatalf("seed membership: %v", err)
 	}
 	msgs.messages["hws-home#hws-m1"] = &model.Message{
-		ID: "hws-m1", ParentID: "hws-home", AuthorID: "hws-bob", Body: "root",
+		ID: "hws-m1", ParentID: "hws-home", AuthorID: "hws-bob", Body: "root", Pinned: true,
+	}
+	// A threaded reply, so ?thread= resolution has a reply → root case.
+	msgs.messages["hws-home#hws-r1"] = &model.Message{
+		ID: "hws-r1", ParentID: "hws-home", AuthorID: "hws-bob", Body: "reply", ParentMessageID: "hws-m1",
 	}
 
 	messageSvc := service.NewMessageService(msgs, members, convs, nil, broker)
+	parentIndex := newDataParentIndexStore()
+	// Production main always wires a parent index, so do the same here.
+	messageSvc.SetParentIndex(newParentIndexAdapterFromBacking(parentIndex))
+	if err := parentIndex.SetPinIndex(context.Background(), "hws-home", "hws-m1", "hws-inv", time.Now()); err != nil {
+		t.Fatalf("seed pin: %v", err)
+	}
 	channelSvc := service.NewChannelService(chans, members, nil, msgs, newMockCache(), broker, nil)
 	convSvc := service.NewConversationService(convs, users, nil, broker, nil)
 	remStore := &hwsCovRemStore{cancelOK: true}
@@ -445,6 +460,7 @@ func newHwsCovEnv(t *testing.T) *hwsCovEnv {
 		remStore: remStore,
 		searcher: searcher,
 		access:   access,
+		pinIndex: parentIndex,
 	}
 }
 
@@ -465,7 +481,10 @@ func (e *hwsCovEnv) do(t *testing.T, h http.HandlerFunc, method, target, body, p
 	}
 	req = req.WithContext(middleware.ContextWithClaims(req.Context(), claims))
 	if pathID != "" {
+		// Handlers read either {id} or {userID}; setting both is inert for
+		// whichever one a handler doesn't use.
 		req.SetPathValue("id", pathID)
+		req.SetPathValue("userID", pathID)
 	}
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -498,6 +517,8 @@ func TestHwsCovGetLiveRunGate(t *testing.T) {
 		{"CreateChannel", env.h.CreateChannel, http.MethodPost, `{"name":"x"}`},
 		{"JoinChannel", env.h.JoinChannel, http.MethodPost, ""},
 		{"ReadChannel", env.h.ReadChannel, http.MethodGet, ""},
+		{"ReadPins", env.h.ReadPins, http.MethodGet, ""},
+		{"ReadDM", env.h.ReadDM, http.MethodGet, ""},
 		{"PostToChannel", env.h.PostToChannel, http.MethodPost, `{"body":"hi"}`},
 		{"SearchWorkspace", env.h.SearchWorkspace, http.MethodGet, ""},
 		{"React", env.h.React, http.MethodPost, `{"messageID":"m","emoji":"x"}`},
@@ -595,6 +616,78 @@ func TestHwsCovReadChannel(t *testing.T) {
 		env := newHwsCovEnv(t)
 		rec := env.do(t, env.h.ReadChannel, http.MethodGet, "/?limit=99", "", "hws-home", nil)
 		hwsCovWant(t, rec, http.StatusOK, `"text"`)
+	})
+	t.Run("thread: a reply's [m:<id>] marker resolves to its root", func(t *testing.T) {
+		env := newHwsCovEnv(t)
+		rec := env.do(t, env.h.ReadChannel, http.MethodGet, "/?thread=%5Bm%3Ahws-r1%5D", "", "hws-home", nil)
+		hwsCovWant(t, rec, http.StatusOK, `"text"`)
+		if env.orchMsgs.lastThreadRoot != "hws-m1" {
+			t.Fatalf("reply not resolved to root: %q", env.orchMsgs.lastThreadRoot)
+		}
+	})
+	t.Run("thread: a permalink's #msg- fragment works", func(t *testing.T) {
+		env := newHwsCovEnv(t)
+		link := url.QueryEscape("https://ex.example.net/channel/hws-home#msg-hws-m1")
+		rec := env.do(t, env.h.ReadChannel, http.MethodGet, "/?thread="+link, "", "hws-home", nil)
+		hwsCovWant(t, rec, http.StatusOK, `"text"`)
+		if env.orchMsgs.lastThreadRoot != "hws-m1" {
+			t.Fatalf("permalink not resolved: %q", env.orchMsgs.lastThreadRoot)
+		}
+	})
+	t.Run("thread: an unknown id passes through unchanged", func(t *testing.T) {
+		env := newHwsCovEnv(t)
+		rec := env.do(t, env.h.ReadChannel, http.MethodGet, "/?thread=hws-ghost-msg", "", "hws-home", nil)
+		hwsCovWant(t, rec, http.StatusOK, `"text"`)
+		if env.orchMsgs.lastThreadRoot != "hws-ghost-msg" {
+			t.Fatalf("unknown id rewritten: %q", env.orchMsgs.lastThreadRoot)
+		}
+	})
+	t.Run("thread: resolve refused outside the invoker's channels", func(t *testing.T) {
+		env := newHwsCovEnv(t)
+		rec := env.do(t, env.h.ReadChannel, http.MethodGet, "/?thread=hws-m1", "", "hws-elsewhere", nil)
+		hwsCovWant(t, rec, http.StatusForbidden, "cannot read this channel")
+	})
+}
+
+func TestHwsCovReadPins(t *testing.T) {
+	t.Run("happy", func(t *testing.T) {
+		env := newHwsCovEnv(t)
+		rec := env.do(t, env.h.ReadPins, http.MethodGet, "/", "", "hws-home", nil)
+		hwsCovWant(t, rec, http.StatusOK, "[m:hws-m1]")
+	})
+	t.Run("list failure", func(t *testing.T) {
+		env := newHwsCovEnv(t)
+		env.pinIndex.listPinErr = errors.New("boom")
+		rec := env.do(t, env.h.ReadPins, http.MethodGet, "/", "", "hws-home", nil)
+		hwsCovWant(t, rec, http.StatusForbidden, "cannot read this channel")
+	})
+	t.Run("non-member channel refused", func(t *testing.T) {
+		env := newHwsCovEnv(t)
+		rec := env.do(t, env.h.ReadPins, http.MethodGet, "/", "", "hws-elsewhere", nil)
+		hwsCovWant(t, rec, http.StatusForbidden, "cannot read this channel")
+	})
+}
+
+func TestHwsCovReadDM(t *testing.T) {
+	t.Run("happy with thread narrowing", func(t *testing.T) {
+		env := newHwsCovEnv(t)
+		env.orchMsgs.msgs = []*model.Message{{ID: "hws-dm1", ParentID: "conv", AuthorID: "hws-bob", Body: "dm line", CreatedAt: time.Now()}}
+		rec := env.do(t, env.h.ReadDM, http.MethodGet, "/?thread=hws-dm-thread", "", "hws-bob", nil)
+		hwsCovWant(t, rec, http.StatusOK, "dm line")
+		if env.orchMsgs.lastThreadRoot != "hws-dm-thread" {
+			t.Fatalf("thread not passed: %q", env.orchMsgs.lastThreadRoot)
+		}
+	})
+	t.Run("window error", func(t *testing.T) {
+		env := newHwsCovEnv(t)
+		env.orchMsgs.listErr = errors.New("boom")
+		rec := env.do(t, env.h.ReadDM, http.MethodGet, "/", "", "hws-bob", nil)
+		hwsCovWant(t, rec, http.StatusForbidden, "cannot read this conversation")
+	})
+	t.Run("unknown user cannot open a DM", func(t *testing.T) {
+		env := newHwsCovEnv(t)
+		rec := env.do(t, env.h.ReadDM, http.MethodGet, "/", "", "hws-ghost-user", nil)
+		hwsCovWant(t, rec, http.StatusBadRequest, "could not open the DM")
 	})
 }
 
@@ -721,6 +814,12 @@ func TestHwsCovReact(t *testing.T) {
 		env := newHwsCovEnv(t)
 		rec := env.do(t, env.h.React, http.MethodPost, "/",
 			`{"messageID":"hws-m1","emoji":"👍"}`, "", nil)
+		hwsCovWant(t, rec, http.StatusOK, `"ok":true`)
+	})
+	t.Run("marker forms accepted", func(t *testing.T) {
+		env := newHwsCovEnv(t)
+		rec := env.do(t, env.h.React, http.MethodPost, "/",
+			`{"messageID":"[m:hws-m1]","emoji":"👍","parentID":"[ch:hws-home]"}`, "", nil)
 		hwsCovWant(t, rec, http.StatusOK, `"ok":true`)
 	})
 }
@@ -903,6 +1002,11 @@ func TestHwsCovPinMessage(t *testing.T) {
 	t.Run("happy pin", func(t *testing.T) {
 		env := newHwsCovEnv(t)
 		rec := env.do(t, env.h.PinMessage, http.MethodPost, "/", `{"message_id":"hws-m1"}`, "", nil)
+		hwsCovWant(t, rec, http.StatusOK, "Pinned the message.")
+	})
+	t.Run("marker form [m:<id>] accepted", func(t *testing.T) {
+		env := newHwsCovEnv(t)
+		rec := env.do(t, env.h.PinMessage, http.MethodPost, "/", `{"message_id":"[m:hws-m1]"}`, "", nil)
 		hwsCovWant(t, rec, http.StatusOK, "Pinned the message.")
 	})
 	t.Run("happy unpin", func(t *testing.T) {

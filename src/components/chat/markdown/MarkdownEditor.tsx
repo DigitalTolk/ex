@@ -131,10 +131,15 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
           composerHighlight,
           inlinePreview,
           mentionPills,
-          // "/cliffhub" connector picks render as pills (installed slugs only).
-          connectorPills(() =>
-            (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).connectors?.().map((c) => c.name) ?? [],
-          ),
+          // "/cliffhub" connector picks and "/weekly-report" skill picks
+          // render as pills (installed connectors + workspace skills).
+          connectorPills(() => {
+            const p = cbRef.current.completionProviders ?? EMPTY_PROVIDERS;
+            return [
+              ...(p.connectors?.().map((c) => c.name) ?? []),
+              ...(p.skills?.().map((s) => s.name) ?? []),
+            ];
+          }),
           emojiGlyphs((name) => (cbRef.current.customEmojiMap?.() ?? {})[name]),
           composerAutocomplete({
             users: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).users(),
@@ -145,6 +150,7 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
             skinTone: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).skinTone(),
             commands: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).commands?.() ?? [],
             connectors: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).connectors?.() ?? [],
+            skills: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).skills?.() ?? [],
           }),
           composerTheme,
           // Autocomplete popup placement: rendered into <body> (escapes every

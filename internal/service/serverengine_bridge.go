@@ -175,9 +175,16 @@ func bridgeTools(api *runAPI) []bedrock.Tool {
 			},
 		},
 		{
-			Name:        "read_channel",
-			Description: "Read a channel's recent messages (your invoker's access) — the way to see a conversation outside your own thread, including one a permalink points at.",
-			Schema:      obj(in{"channelID": str("Channel id."), "limit": num("Messages to read (max 50, default 30).")}, "channelID"),
+			Name: "read_channel",
+			Description: "Read a channel with your invoker's access. Without thread: recent TOP-LEVEL messages only " +
+				"(replies are hidden; [thread: N replies] marks where they live). With thread (any message id from " +
+				"that thread — a permalink's #msg-<id> works): that thread's actual messages. When a task points at " +
+				"a message or thread, read it here directly — do not reconstruct it from search.",
+			Schema: obj(in{
+				"channelID": str("Channel id."),
+				"thread":    str("Any message id inside the thread to read (bare id or [m:<id>]); omit for the channel's top level."),
+				"limit":     num("Messages to read (max 50, default 30)."),
+			}, "channelID"),
 			Call: func(ctx context.Context, raw json.RawMessage) (string, bool) {
 				v := parse(raw)
 				id := s(v, "channelID")
@@ -191,11 +198,66 @@ func bridgeTools(api *runAPI) []bedrock.Tool {
 						limit = 50
 					}
 				}
-				status, data := api.call(ctx, "GET", "/api/v1/agent/run/channels/"+url.PathEscape(id)+"/messages?limit="+fmt.Sprint(limit), nil)
+				path := "/api/v1/agent/run/channels/" + url.PathEscape(id) + "/messages?limit=" + fmt.Sprint(limit)
+				if thread := s(v, "thread"); thread != "" {
+					path += "&thread=" + url.QueryEscape(thread)
+				}
+				status, data := api.call(ctx, "GET", path, nil)
 				if status < 200 || status >= 300 {
 					return describeRunFailure(status, data), true
 				}
-				return dataStr(data, "text", "(channel is empty)"), false
+				return dataStr(data, "text", "(no messages)"), false
+			},
+		},
+		{
+			Name: "read_pins",
+			Description: "List a channel's pinned messages — the durable decisions, links and reference posts " +
+				"members chose to keep visible. Check pins before asking a human for standing facts about a channel.",
+			Schema: obj(in{"channelID": str("Channel id.")}, "channelID"),
+			Call: func(ctx context.Context, raw json.RawMessage) (string, bool) {
+				id := s(parse(raw), "channelID")
+				if id == "" {
+					return "read_pins requires channelID", true
+				}
+				status, data := api.call(ctx, "GET", "/api/v1/agent/run/channels/"+url.PathEscape(id)+"/pins", nil)
+				if status < 200 || status >= 300 {
+					return describeRunFailure(status, data), true
+				}
+				return dataStr(data, "text", "(no pinned messages)"), false
+			},
+		},
+		{
+			Name: "read_dm",
+			Description: "Read your INVOKER's own direct-message history with one user (they already see it in the " +
+				"app). Use it when the task references something said in a DM; accepts the same thread narrowing " +
+				"as read_channel.",
+			Schema: obj(in{
+				"userID": str("The other participant's user id (from list_users or an @-mention)."),
+				"thread": str("Optional: any message id inside a DM thread to read just that thread."),
+				"limit":  num("Messages to read (max 50, default 30)."),
+			}, "userID"),
+			Call: func(ctx context.Context, raw json.RawMessage) (string, bool) {
+				v := parse(raw)
+				uid := s(v, "userID")
+				if uid == "" {
+					return "read_dm requires userID", true
+				}
+				limit := 30
+				if n, ok := v["limit"].(float64); ok && n > 0 {
+					limit = int(n)
+					if limit > 50 {
+						limit = 50
+					}
+				}
+				path := "/api/v1/agent/run/dm/" + url.PathEscape(uid) + "/messages?limit=" + fmt.Sprint(limit)
+				if thread := s(v, "thread"); thread != "" {
+					path += "&thread=" + url.QueryEscape(thread)
+				}
+				status, data := api.call(ctx, "GET", path, nil)
+				if status < 200 || status >= 300 {
+					return describeRunFailure(status, data), true
+				}
+				return dataStr(data, "text", "(no messages with that user)"), false
 			},
 		},
 		{
@@ -220,8 +282,11 @@ func bridgeTools(api *runAPI) []bedrock.Tool {
 			},
 		},
 		{
-			Name:        "search_messages",
-			Description: "Full-text search across the workspace with your invoker's access — messages, channels, people.",
+			Name: "search_messages",
+			Description: "Full-text search across the workspace with your invoker's access — for DISCOVERY, when " +
+				"you have no handle on where something lives. When you already hold a message id, permalink, " +
+				"channel or user, read the source directly (read_channel / read_dm / read_pins) instead: search " +
+				"returns scattered single messages, never a whole conversation.",
 			Schema:      obj(in{"query": str("Search terms."), "limit": num("Max results (default 10, max 20).")}, "query"),
 			Call: func(ctx context.Context, raw json.RawMessage) (string, bool) {
 				v := parse(raw)

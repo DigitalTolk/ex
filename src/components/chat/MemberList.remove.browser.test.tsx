@@ -59,11 +59,16 @@ describe('MemberList remove (real hover)', () => {
     const screen = await renderList();
     const removeBtn = document.querySelector('[aria-label="Remove Bob"]') as HTMLElement;
     expect(removeBtn).not.toBeNull();
-    // Discoverable without hovering (muted)…
-    expect(Number(getComputedStyle(removeBtn).opacity)).toBeGreaterThanOrEqual(0.6);
-    // …and full-strength once the row is hovered.
+    // Discoverable without hovering (muted)… Polled: under the instrumented
+    // coverage run the first style pass can land a frame late, and a one-shot
+    // read here was the suite's recurring flake.
+    await expect
+      .poll(() => Number(getComputedStyle(removeBtn).opacity) >= 0.6, { timeout: 5_000 })
+      .toBe(true);
+    // …and full-strength once the row is hovered (transition needs a frame
+    // or two more under instrumentation).
     await screen.getByText('Bob').hover();
-    await expect.poll(() => getComputedStyle(removeBtn).opacity).toBe('1');
+    await expect.poll(() => getComputedStyle(removeBtn).opacity, { timeout: 5_000 }).toBe('1');
     // …and clickable.
     removeBtn.click();
     await expect

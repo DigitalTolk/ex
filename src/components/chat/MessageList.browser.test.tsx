@@ -46,6 +46,11 @@ vi.mock('@/hooks/useAgents', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useAgents')>()),
   useParentWatchers: () => ({ data: [] }),
   useAgents: () => ({ data: [] }),
+  useSkills: () => ({ data: [] }),
+}));
+vi.mock('@/hooks/useConnectors', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useConnectors')>()),
+  useConnectors: () => ({ data: [] }),
 }));
 
 vi.mock('@/hooks/useUnfurl', () => ({

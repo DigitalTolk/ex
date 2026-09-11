@@ -104,6 +104,9 @@ type MessageService struct {
 	// runLogPurger deletes agent-run activity logs when their chat is deleted.
 	// Optional seam (SetRunLogPurger) — nil leaves run logs untouched.
 	runLogPurger RunLogPurger
+	// skillBadges names the skills a run used, stamped on its agent posts.
+	// Optional seam (SetRunSkillResolver) — nil means no badges.
+	skillBadges func(ctx context.Context, runID string) []string
 }
 
 // ReactionActivityRecorder records "someone reacted to your message" hints into
@@ -231,6 +234,12 @@ func (s *MessageService) SetChannelSeqStore(c UnreadSeqStore) { s.channelSeq = c
 
 // SetReactionRecorder wires the activity recorder used to log reaction hints.
 func (s *MessageService) SetReactionRecorder(r ReactionActivityRecorder) { s.reactions = r }
+
+// SetRunSkillResolver wires the orchestrator's RunSkillBadges: agent-run
+// posts get the run's used-skill names stamped on the message (nil = none).
+func (s *MessageService) SetRunSkillResolver(f func(ctx context.Context, runID string) []string) {
+	s.skillBadges = f
+}
 
 // attachRendered populates the Rendered field on every supplied
 // Message. Centralising this means every return path in the service
@@ -491,6 +500,12 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 	if authorID != accessorID {
 		msg.AgentInvokerID = accessorID
 		msg.AgentRunID = runID
+		// Skill badges: the run's /skill picks + invoke_skill calls, stamped
+		// on the message so skill usage stays visible to the whole thread
+		// (run logs are invoker-only). Resolver wired by the orchestrator.
+		if runID != "" && s.skillBadges != nil {
+			msg.AgentSkills = s.skillBadges(ctx, runID)
+		}
 	}
 
 	if err := s.messages.CreateMessage(ctx, msg); err != nil {
@@ -722,6 +737,26 @@ func (s *MessageService) followMentionedThreadUsers(ctx context.Context, msg *mo
 	if err := s.threadFollows.SetThreadFollowMany(ctx, follows); err != nil {
 		slog.Warn("thread mention follow batch failed", "count", len(follows), "threadRootID", msg.ParentMessageID, "error", err)
 	}
+}
+
+// ResolveThreadRoot maps any message id to the root of its thread: a reply
+// resolves to its ParentMessageID, a root (or unthreaded message) to itself.
+// Permalinks point at arbitrary messages — this is what lets "read the thread
+// this link is in" work no matter which message the link names. Access-checked
+// like every other read; an unknown id passes through unchanged (the window
+// read that follows renders what actually exists).
+func (s *MessageService) ResolveThreadRoot(ctx context.Context, userID, parentID, parentType, msgID string) (string, error) {
+	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+		return "", err
+	}
+	m, err := s.messages.GetMessage(ctx, parentID, msgID)
+	if err != nil || m == nil {
+		return msgID, nil
+	}
+	if m.ParentMessageID != "" {
+		return m.ParentMessageID, nil
+	}
+	return m.ID, nil
 }
 
 // ListThreadMessages returns the root message followed by all reply messages

@@ -380,6 +380,13 @@ export interface Run {
   personaHash: string;
   skillIDs?: string[];
   /**
+   * PickedSkillIDs: the subset of SkillIDs the INVOKING MESSAGE picked with
+   * /skill tokens (template-attached skills excluded). These badge the
+   * agent's replies — a standing template skill on every message would be
+   * noise, an explicit pick is signal.
+   */
+  pickedSkillIDs?: string[];
+  /**
    * ConnectorSlugs: the /connector tokens the invoking message carried —
    * the user's explicit pick of which external services this run may use.
    * The runner only syncs docs + injects credentials for these.
@@ -1701,6 +1708,14 @@ export interface Message {
    * artifacts, spend) straight from the message.
    */
   agentRunID?: string;
+  /**
+   * AgentSkills names the skills this run actually USED when it posted —
+   * explicit /skill picks plus invoke_skill calls, never the template's
+   * standing skills. Rendered as badges next to the "for <invoker>" tag, so
+   * skill usage is visible to everyone in the thread (run logs are
+   * invoker-only, this is the public trace).
+   */
+  agentSkills?: string[];
 }
 export interface MessageAttachment {
   fallback?: string;

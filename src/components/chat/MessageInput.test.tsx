@@ -49,6 +49,12 @@ vi.mock('@/hooks/useConnectors', async (orig) => ({
   useConnectors: () => ({ data: [] }),
 }));
 
+// …and the skills registry query (feeds the "/" skill picker).
+vi.mock('@/hooks/useAgents', async (orig) => ({
+  ...(await orig<typeof import('@/hooks/useAgents')>()),
+  useSkills: () => ({ data: [] }),
+}));
+
 // Same act()-hygiene for the slash-command registry query (enabled whenever
 // the composer has a chat target, i.e. the typing props are set). Behavior is
 // covered in MessageInput.commands.test.tsx.

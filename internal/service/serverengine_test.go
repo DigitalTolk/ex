@@ -276,6 +276,17 @@ type mintFunc func() (string, error)
 
 func (f mintFunc) GenerateRunToken(_, _, _ string, _ time.Time) (string, error) { return f() }
 
+func TestAgentService_Template(t *testing.T) {
+	fx := newOrchFixture(t)
+	tpl, err := fx.orch.agentSvc.Template(context.Background(), AgentSlugGG)
+	if err != nil || tpl == nil || tpl.Slug != AgentSlugGG {
+		t.Fatalf("template read: %+v %v", tpl, err)
+	}
+	if _, err := fx.orch.agentSvc.Template(context.Background(), "nope"); err == nil {
+		t.Fatal("unknown slug must error")
+	}
+}
+
 func TestAgentService_SetAgentEngine(t *testing.T) {
 	fx := newOrchFixture(t)
 	svc := fx.orch.agentSvc

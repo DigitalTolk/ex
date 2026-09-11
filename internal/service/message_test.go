@@ -1954,6 +1954,36 @@ func TestSendMessage_ThreadStateReadyBeforeMessageNew(t *testing.T) {
 	}
 }
 
+// ResolveThreadRoot maps any message reference to its thread root: a reply
+// to its ParentMessageID, a root (or unknown id) to itself — access-checked.
+func TestMessageService_ResolveThreadRoot(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+
+	memberships.memberships["ch-rtr#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch-rtr", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+	messages.messages["ch-rtr#01-root"] = &model.Message{ID: "01-root", ParentID: "ch-rtr", AuthorID: "user-1", Body: "root"}
+	messages.messages["ch-rtr#02-r1"] = &model.Message{ID: "02-r1", ParentID: "ch-rtr", AuthorID: "user-1", Body: "r", ParentMessageID: "01-root"}
+
+	// A reply resolves to its root; a root to itself.
+	if got, err := svc.ResolveThreadRoot(ctx, "user-1", "ch-rtr", ParentChannel, "02-r1"); err != nil || got != "01-root" {
+		t.Fatalf("reply resolve = %q %v, want 01-root", got, err)
+	}
+	if got, err := svc.ResolveThreadRoot(ctx, "user-1", "ch-rtr", ParentChannel, "01-root"); err != nil || got != "01-root" {
+		t.Fatalf("root resolve = %q %v", got, err)
+	}
+	// An unknown id passes through unchanged — the window read that follows
+	// renders what actually exists.
+	if got, err := svc.ResolveThreadRoot(ctx, "user-1", "ch-rtr", ParentChannel, "ghost"); err != nil || got != "ghost" {
+		t.Fatalf("unknown resolve = %q %v, want ghost", got, err)
+	}
+	// A non-member is refused before any read.
+	if _, err := svc.ResolveThreadRoot(ctx, "user-2", "ch-rtr", ParentChannel, "02-r1"); err == nil {
+		t.Fatal("non-member must be refused")
+	}
+}
+
 // ListThreadMessages returns the root and all its replies in chronological
 // order (oldest first). Without sorting, the underlying store returns msgs
 // in map iteration order — this is a regression test for that bug.

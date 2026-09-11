@@ -108,6 +108,9 @@ export interface Message {
   // …and the run that produced them, so "Show activity" can open the run
   // drawer (timeline, artifacts, spend) straight from the message.
   agentRunID?: string;
+  // Skills the run USED (explicit /picks + invoke_skill calls) — rendered as
+  // badges next to the "for <invoker>" tag.
+  agentSkills?: string[];
 }
 
 // HastNode mirrors the server-side hast tree shape. Three node

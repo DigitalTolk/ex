@@ -226,6 +226,14 @@ type orchCovDir struct {
 	failPutFollow         error
 	failListRunners       error
 	failListTemplates     error
+	failListSkillIndex    error
+}
+
+func (d *orchCovDir) ListSkillIndex(ctx context.Context) ([]*model.Skill, error) {
+	if d.failListSkillIndex != nil {
+		return nil, d.failListSkillIndex
+	}
+	return d.fakeAgentDir.ListSkillIndex(ctx)
 }
 
 func (d *orchCovDir) PutAgentSubscription(ctx context.Context, sub *model.AgentSubscription) error {
@@ -960,6 +968,41 @@ func TestOrchCov_SharedAgentsListFailureReturnsStale(t *testing.T) {
 	fx.dir.failListTemplates = errOrchCov
 	if got := fx.orch.sharedAgents(context.Background()); got != nil {
 		t.Fatalf("expected nil roster on list failure, got %d agents", len(got))
+	}
+}
+
+// clipTimeline's both arms, pinned directly for the same reason as
+// agentDisplayName below: incidental coverage flapped with test ordering.
+func TestOrchCov_ClipTimeline(t *testing.T) {
+	evts := make([]*model.RunEvent, maxTimelineEvents+3)
+	for i := range evts {
+		evts[i] = &model.RunEvent{Seq: int64(i)}
+	}
+	kept, dropped := clipTimeline(evts)
+	if len(kept) != maxTimelineEvents || dropped != 3 || kept[0].Seq != 3 {
+		t.Fatalf("clip over limit: kept=%d dropped=%d first=%d", len(kept), dropped, kept[0].Seq)
+	}
+	if kept, dropped := clipTimeline(evts[:5]); len(kept) != 5 || dropped != 0 {
+		t.Fatalf("clip under limit: kept=%d dropped=%d", len(kept), dropped)
+	}
+}
+
+// agentDisplayName's three arms, pinned directly — its coverage used to ride
+// incidental publishApproval calls and flapped with test ordering.
+func TestOrchCov_AgentDisplayName(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+	// Roster hit: the shared agent resolves from the memoized list.
+	if got := fx.orch.agentDisplayName(ctx, testGGID); got == "" {
+		t.Fatal("roster agent must resolve to a display name")
+	}
+	// Roster miss + direct read: a human user is not in the agent roster.
+	if got := fx.orch.agentDisplayName(ctx, "u-alice"); got == "" {
+		t.Fatal("known user must resolve via the direct read")
+	}
+	// Roster miss + unknown id: the generic-title fallback.
+	if got := fx.orch.agentDisplayName(ctx, "ghost-agent"); got != "" {
+		t.Fatalf("unknown agent must yield empty, got %q", got)
 	}
 }
 
@@ -2435,6 +2478,15 @@ func TestOrchCov_ResolveConnectorPicksSlugLookupFails(t *testing.T) {
 	msg := &model.Message{ID: "m1", ParentID: "chan1", Body: "/gitlab check the MR"}
 	if got := fx.orch.resolveConnectorPicks(context.Background(), "u-alice", msg, ParentChannel); got != nil {
 		t.Fatalf("expected no picks on registry failure, got %v", got)
+	}
+}
+
+func TestOrchCov_ResolveSkillPicksIndexLookupFails(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	fx.dir.failListSkillIndex = errOrchCov
+	msg := &model.Message{ID: "m1", ParentID: "chan1", Body: "/weekly-report do the usual"}
+	if ids, tokens := fx.orch.resolveSkillPicks(context.Background(), "u-alice", msg, ParentChannel); ids != nil || tokens != nil {
+		t.Fatalf("expected no picks on index failure, got %v %v", ids, tokens)
 	}
 }
 

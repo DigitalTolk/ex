@@ -39,6 +39,23 @@ func TestMsgCov_SendAsAgentAttribution(t *testing.T) {
 	if msg2.AgentInvokerID != "u-inv" || msg2.AgentRunID != "" {
 		t.Fatalf("wrapper attribution: %+v", msg2)
 	}
+
+	// With the skill resolver wired, run-linked posts carry used-skill badges;
+	// run-less agent posts never call it.
+	svc.SetRunSkillResolver(func(_ context.Context, runID string) []string {
+		if runID == "run-9" {
+			return []string{"Weekly Report"}
+		}
+		return nil
+	})
+	badged, err := svc.SendAsAgentRun(ctx, "a-gg", "u-inv", "ch1", ParentChannel, "with skill", "", "run-9")
+	if err != nil || len(badged.AgentSkills) != 1 || badged.AgentSkills[0] != "Weekly Report" {
+		t.Fatalf("skill badge missing: %+v %v", badged, err)
+	}
+	plain, err := svc.SendAsAgent(ctx, "a-gg", "u-inv", "ch1", ParentChannel, "no run", "")
+	if err != nil || plain.AgentSkills != nil {
+		t.Fatalf("run-less post must carry no badges: %+v %v", plain, err)
+	}
 }
 
 func TestMsgCov_ToggleReactionAsAgent(t *testing.T) {

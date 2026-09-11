@@ -18,8 +18,10 @@ import (
 // secret at MVP; per-token revocation is a Phase-4 item.
 const runnerTokenTTL = 30 * 24 * time.Hour
 
-// timelineAccessChecker gates non-invoker reads of a run timeline by parent
-// membership (the message-service check).
+// timelineAccessChecker verifies parent membership (the message-service
+// check). Once it also widened timeline reads to channel members; run LOGS
+// are invoker-only now (orchestrator checkRunAccess), so its one remaining
+// job is gating watch-subscription creation by channel access.
 type timelineAccessChecker interface {
 	CheckAccess(ctx context.Context, userID, parentID, parentType string) error
 }
@@ -39,9 +41,8 @@ func NewAgentHandler(agents *service.AgentService, orch *service.Orchestrator, u
 	return &AgentHandler{agents: agents, orch: orch, users: users, jwt: jwt}
 }
 
-// SetTimelineAccess widens Timeline reads from invoker-only to any member of
-// the run's parent (plan-v2 Phase 2 — the drawer). Optional; nil keeps the
-// Phase-1 invoker-only rule.
+// SetTimelineAccess wires the parent-membership checker used by watch
+// subscriptions. It no longer widens timeline reads — logs are invoker-only.
 func (h *AgentHandler) SetTimelineAccess(a timelineAccessChecker) { h.access = a }
 
 // agentView is the SPA shape for one shared agent as seen by the caller:
@@ -54,6 +55,11 @@ type agentView struct {
 	Status      string                     `json:"status"` // per-caller availability
 	Prefs       *model.UserAgentPrefs      `json:"prefs"`
 	Resolved    *model.ResolvedAgentConfig `json:"resolved"`
+	// DefaultPersona is the workspace template's prompt, separate from
+	// resolved (which is the caller's override when one is set). The agents
+	// page pre-fills the editor with the effective prompt and needs this to
+	// know when an edit lands back ON the default (→ store "inherit").
+	DefaultPersona string `json:"defaultPersona"`
 }
 
 func (h *AgentHandler) view(r *http.Request, agent *model.User, callerID string) (agentView, error) {
@@ -63,6 +69,10 @@ func (h *AgentHandler) view(r *http.Request, agent *model.User, callerID string)
 		return agentView{}, err
 	}
 	resolved, err := h.agents.Resolve(r.Context(), agent, callerID)
+	if err != nil {
+		return agentView{}, err
+	}
+	tpl, err := h.agents.Template(r.Context(), slug)
 	if err != nil {
 		return agentView{}, err
 	}
@@ -80,12 +90,13 @@ func (h *AgentHandler) view(r *http.Request, agent *model.User, callerID string)
 		}
 	}
 	return agentView{
-		ID:          agent.ID,
-		DisplayName: agent.DisplayName,
-		Slug:        slug,
-		Status:      status,
-		Prefs:       prefs,
-		Resolved:    resolved,
+		ID:             agent.ID,
+		DisplayName:    agent.DisplayName,
+		Slug:           slug,
+		Status:         status,
+		Prefs:          prefs,
+		Resolved:       resolved,
+		DefaultPersona: tpl.Persona,
 	}, nil
 }
 
@@ -367,7 +378,7 @@ func (h *AgentHandler) ThreadTimeline(w http.ResponseWriter, r *http.Request) {
 // POST /api/v1/runs/{id}/stop
 func (h *AgentHandler) StopRun(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
-	run, err := h.orch.RunForCaller(r.Context(), callerID, r.PathValue("id"))
+	run, err := h.orch.RunForParentMember(r.Context(), callerID, r.PathValue("id"))
 	if err != nil {
 		writeRunAccessError(w, r, err, "failed to load run")
 		return

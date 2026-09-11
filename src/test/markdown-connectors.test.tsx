@@ -40,6 +40,15 @@ vi.mock('@/hooks/useConnectors', async (orig) => ({
     ],
   }),
 }));
+vi.mock('@/hooks/useAgents', async (orig) => ({
+  ...(await orig<typeof import('@/hooks/useAgents')>()),
+  useSkills: () => ({
+    data: [
+      { id: 'sk1', name: 'Weekly Report', description: 'digest of the week' },
+      { id: 'sk2', name: '---', description: 'unpickable name normalizes to nothing' },
+    ],
+  }),
+}));
 
 function ctx(doc: string, pos = doc.length): CompletionContext {
   return new CompletionContext(EditorState.create({ doc }), pos, false);
@@ -54,6 +63,7 @@ const providers = {
     { name: 'gitlab', description: 'GitLab — MRs' },
     { name: 'trello', description: 'Trello — boards' },
   ],
+  skills: () => [{ name: 'weekly-report', description: 'Weekly Report — digest' }],
 };
 
 describe('slashCommandSource', () => {
@@ -69,12 +79,21 @@ describe('slashCommandSource', () => {
     expect(res?.options.map((o) => o.label)).toEqual(['/gitlab']);
   });
 
-  it('offers commands only as the whole message, connectors anywhere', () => {
+  it('offers commands only as the whole message, connectors and skills anywhere', () => {
     const atStart = slashCommandSource(providers)(ctx('/'));
-    expect(atStart?.options.map((o) => o.label)).toEqual(['/deploy', '/standup', '/gitlab', '/trello']);
+    expect(atStart?.options.map((o) => o.label)).toEqual([
+      '/deploy',
+      '/standup',
+      '/gitlab',
+      '/trello',
+      '/weekly-report',
+    ]);
 
     const midMessage = slashCommandSource(providers)(ctx('check /'));
-    expect(midMessage?.options.map((o) => o.label)).toEqual(['/gitlab', '/trello']);
+    expect(midMessage?.options.map((o) => o.label)).toEqual(['/gitlab', '/trello', '/weekly-report']);
+
+    const skillsOnly = slashCommandSource(providers)(ctx('do the /week'));
+    expect(skillsOnly?.options.map((o) => o.label)).toEqual(['/weekly-report']);
 
     const filtered = slashCommandSource(providers)(ctx('/dep'));
     expect(filtered?.options.map((o) => o.label)).toEqual(['/deploy']);

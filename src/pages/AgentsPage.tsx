@@ -23,7 +23,7 @@ export default function AgentsPage() {
   return (
     <PageContainer
       title="Agents"
-      description="Shared agents anyone can @mention. When you invoke one, it runs on your machine through the desktop app — with your settings below."
+      description="Shared agents anyone can @mention — expand one to set your own prompt and options."
     >
       {isAdmin && (
         <div className="mb-4">
@@ -39,9 +39,9 @@ export default function AgentsPage() {
       )}
 
       {isLoading && (
-        <div className="space-y-3" data-testid="agents-loading">
-          {Array.from({ length: 2 }).map((_, i) => (
-            <Skeleton key={i} className="h-48 w-full" />
+        <div className="space-y-2" data-testid="agents-loading">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Skeleton key={i} className="h-12 w-full" />
           ))}
         </div>
       )}
@@ -53,7 +53,7 @@ export default function AgentsPage() {
         </div>
       )}
 
-      <div className="space-y-4">
+      <div className="space-y-2">
         {agents?.map((agent) => (
           // Key includes EVERY server-side pref value the card edits, so a
           // successful save (or an update from another tab) remounts it with

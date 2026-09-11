@@ -247,6 +247,9 @@ type Orchestrator struct {
 	// agents tagging each other can't fork parallel chains (plan.md §5).
 	threadActive sync.Map // threadAgentKey -> runID
 	runThreadKey sync.Map // runID -> threadAgentKey
+	// skillUses collects invoke_skill calls per LIVE run for message badges
+	// (RunSkillBadges); dropped at terminal.
+	skillUses sync.Map // runID -> *skillUseSet
 	// deferredTurns holds ONE queued handoff per (thread, agent): a chain
 	// mention that arrived while the target was mid-turn. Started when the
 	// target's current run terminates — dropping these instead (the old
@@ -842,11 +845,15 @@ func (o *Orchestrator) startRun(ctx context.Context, in invocation, resolved *mo
 	if in.spec != nil {
 		watchInstruction, actionMode = in.spec.Instruction, in.spec.ActionMode
 	}
-	// /connector picks: validated against the registry, recorded as run
-	// metadata, and rewritten out of the prompt (a leading "/slug" would read
-	// as a harness slash command). Thread follow-ups inherit the thread's picks.
+	// /picks share one grammar: a token names a connector (external service)
+	// or a skill (instruction pack, by normalized name). Both are validated
+	// against their registries, recorded as run metadata, and rewritten out of
+	// the prompt (a leading "/slug" would read as a harness slash command).
+	// Thread follow-ups inherit the thread's picks — in channels and DMs alike.
 	connectorSlugs := o.resolveConnectorPicks(ctx, invoker.ID, msg, parentType)
-	prompt := clipText(stripConnectorTokens(stripMentionMarkup(msg.Body), connectorSlugs), maxPromptChars)
+	pickedSkillIDs, skillTokens := o.resolveSkillPicks(ctx, invoker.ID, msg, parentType)
+	prompt := clipText(stripConnectorTokens(stripMentionMarkup(msg.Body),
+		append(append([]string{}, connectorSlugs...), skillTokens...)), maxPromptChars)
 	// Coding-task binding: an explicit bind (routed/kickoff/sign-off runs), or
 	// implicit — any run of the task's agent inside a task thread IS a task
 	// run (mentions and follow-ups included), so it gets the workspace, the
@@ -901,7 +908,8 @@ func (o *Orchestrator) startRun(ctx context.Context, in invocation, resolved *mo
 		ExecutionMode:    resolved.ExecutionMode,
 		Persona:          resolved.Persona,
 		PersonaHash:      hex.EncodeToString(personaHash[:8]),
-		SkillIDs:         resolved.SkillIDs,
+		SkillIDs:         mergeSkillIDs(resolved.SkillIDs, pickedSkillIDs),
+		PickedSkillIDs:   pickedSkillIDs,
 		Limits:           resolved.Limits,
 		// Pre-claim deadline is just the claim window — a run that no runner
 		// picks up dies fast regardless of mode. The real budget (rolling
@@ -961,6 +969,7 @@ func (o *Orchestrator) agentUser(ctx context.Context, id string) *model.User {
 // sequential multi-agent invocation (which now sees this run's reply in its
 // context bundle).
 func (o *Orchestrator) afterTerminal(ctx context.Context, run *model.Run) {
+	o.skillUses.Delete(run.ID)
 	if key, ok := o.runThreadKey.LoadAndDelete(run.ID); ok {
 		o.threadActive.Delete(key.(string))
 		// A handoff queued while this agent was mid-turn starts now — it will
@@ -2020,30 +2029,29 @@ func (o *Orchestrator) SetRunState(ctx context.Context, runID, state string) err
 // ErrNoRunAccess means the caller may neither read nor act on this run.
 var ErrNoRunAccess = errors.New("orchestrator: no access to this run")
 
-// checkRunAccess is the ONE definition of who may see a run: the invoker
-// always, otherwise any member of the run's parent — agent work in a shared
-// channel is shared context, and a timeline exposes nothing the channel does
-// not already. The rule was copy-pasted at four handler sites while these
-// reads returned runs unfiltered, so the next internal caller would have
-// inherited no protection.
+// checkRunAccess is the ONE definition of who may READ a run's logs: the
+// INVOKER, nobody else. A timeline used to be channel-visible ("it exposes
+// nothing the channel does not already") — that stopped being true when the
+// tool surface grew reads the channel never sees: the invoker's own DMs
+// (read_dm), their workspace-wide search hits, their memory updates, and
+// connector call details. The run acts with the invoker's permissions, so the
+// record of what it did is the invoker's too.
 //
-// A denial here is deliberately DISTINGUISHABLE from "no such run" (403 vs
-// 404). Channel membership is not a secret inside a workspace, run ids are
-// unguessable ULIDs, and "you don't have access to this run" is something a
-// person can act on — where a blanket 404 would just look broken. The
-// RUNNER API takes the opposite line (see runForRunner): there the caller is
-// a machine credential, so someone else's run is reported as absent.
-func (o *Orchestrator) checkRunAccess(ctx context.Context, callerID string, run *model.Run) error {
+// A denial is deliberately DISTINGUISHABLE from "no such run" (403 vs 404):
+// run chips in the thread already show that an agent worked, so "only the
+// invoker can see this run's activity" is honest and actionable where a
+// blanket 404 would just look broken. The RUNNER API takes the opposite line
+// (see runForRunner): there the caller is a machine credential, so someone
+// else's run is reported as absent. ACTING on a run (the stop brake) keeps
+// the wider member rule — see RunForParentMember.
+func (o *Orchestrator) checkRunAccess(_ context.Context, callerID string, run *model.Run) error {
 	if callerID != "" && callerID == run.InvokerID {
 		return nil
 	}
-	if err := o.messages.CheckAccess(ctx, callerID, run.ParentID, run.ParentType); err != nil {
-		return ErrNoRunAccess
-	}
-	return nil
+	return ErrNoRunAccess
 }
 
-// RunForCaller loads a run the caller is allowed to see.
+// RunForCaller loads a run the caller is allowed to see (invoker-only).
 func (o *Orchestrator) RunForCaller(ctx context.Context, callerID, runID string) (*model.Run, error) {
 	run, err := o.runs.GetRun(ctx, runID)
 	if err != nil {
@@ -2051,6 +2059,23 @@ func (o *Orchestrator) RunForCaller(ctx context.Context, callerID, runID string)
 	}
 	if err := o.checkRunAccess(ctx, callerID, run); err != nil {
 		return nil, err
+	}
+	return run, nil
+}
+
+// RunForParentMember loads a run the caller is allowed to STOP: the invoker, or
+// any member of the run's parent — a runaway agent floods THEIR channel, so
+// the brake stays shared even though the logs do not.
+func (o *Orchestrator) RunForParentMember(ctx context.Context, callerID, runID string) (*model.Run, error) {
+	run, err := o.runs.GetRun(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	if callerID != "" && callerID == run.InvokerID {
+		return run, nil
+	}
+	if err := o.messages.CheckAccess(ctx, callerID, run.ParentID, run.ParentType); err != nil {
+		return nil, ErrNoRunAccess
 	}
 	return run, nil
 }
@@ -2553,6 +2578,24 @@ func (b *bundleBuilder) codingTask() {
 	b.stats["codingTask"] = section != ""
 }
 
+// toolCraft is a compact, generalized playbook for the workspace tools every
+// harness carries. It exists because models default to full-text search for
+// everything: the single most common tool failure is reconstructing a known
+// location from keyword hits instead of just reading it.
+func (b *bundleBuilder) toolCraft() {
+	b.must("\n# Using workspace tools\n" +
+		"- Read, don't search, when you hold a handle: a [m:<id>] marker, a #msg-<id> permalink, a [ch:<id>] or a " +
+		"user id names exactly where something lives — open it directly (read_channel with thread, read_dm, " +
+		"read_pins, get_thread). Search is for DISCOVERY, when you have no reference at all; it returns scattered " +
+		"single messages, never a whole conversation.\n" +
+		"- Channel windows show top-level messages only — the substance of a discussion lives in its thread " +
+		"([thread: N replies] marks one). Read the thread itself before answering anything that happened inside it.\n" +
+		"- Prefer one more targeted call over guessing. If something stays out of reach after that, say exactly " +
+		"what you could and couldn't see — never present a partial view as the whole.\n" +
+		"- Reference messages as clickable links (link_message), and act with the lightest tool that does the job " +
+		"— a reaction, not a post, to acknowledge.\n")
+}
+
 // memory is the agent's own core memory for THIS invoker (buzz's engrams),
 // injected every turn and small by contract. On a read ERROR nothing is
 // injected: an outage must never read as "no memory" and tempt the agent to
@@ -2611,7 +2654,7 @@ func (b *bundleBuilder) skills() {
 			attachedCount++
 		}
 		if sb.Len() > 0 {
-			s := "\n# Attached skills (this agent's standing procedures — follow when they apply)\n" + sb.String()
+			s := "\n# Attached skills (standing procedures and this message's /skill picks — follow when they apply)\n" + sb.String()
 			if !b.take(s) {
 				attachedCount = 0 // over budget: dropped whole, so count honestly
 			}
@@ -2844,6 +2887,7 @@ func (o *Orchestrator) buildBundle(ctx context.Context, run *model.Run) (string,
 	b := o.newBundleBuilder(ctx, run)
 	b.taskBrief()
 	b.codingTask()
+	b.toolCraft()
 	b.memory()
 	b.coRoster()
 	b.skills()
@@ -2979,6 +3023,13 @@ func (o *Orchestrator) Window(ctx context.Context, accessorID, parentID, parentT
 	if len(msgs) > limit {
 		msgs = msgs[len(msgs)-limit:]
 	}
+	return o.RenderMessages(ctx, msgs), nil
+}
+
+// RenderMessages renders messages in the bundle format ([m:<id>] name hh:mm:
+// body) — the shared renderer behind Window and the pin-listing tool, so
+// every message a tool hands the model carries the same labels and markers.
+func (o *Orchestrator) RenderMessages(ctx context.Context, msgs []*model.Message) string {
 	names := o.actorNames(ctx, msgs)
 	var b strings.Builder
 	for _, m := range msgs {
@@ -3003,7 +3054,7 @@ func (o *Orchestrator) Window(ctx context.Context, accessorID, parentID, parentT
 		}
 		fmt.Fprintf(&b, "[m:%s] %s %s: %s%s\n", m.ID, label, m.CreatedAt.Format("15:04"), defangThreadBody(m.Body), suffix)
 	}
-	return b.String(), nil
+	return b.String()
 }
 
 // mentionMarkupRE / channelMarkupRE match the editor's raw mention tokens.
@@ -3505,6 +3556,87 @@ func (o *Orchestrator) SetConnectorRegistry(r connectorRegistry) { o.connectors 
 // — "/cliffhub find X" then "now update Y" keeps cliffhub attached, because a
 // human never re-types the pick mid-conversation (and a warm session that
 // remembers the workflow would otherwise find its credentials gone).
+// skillToken normalizes a skill's display name to its /pick token: "Weekly
+// Report" → "weekly-report" — the shape connector slugs already use, so ONE
+// "/" grammar covers services and skills.
+func skillToken(name string) string {
+	var b strings.Builder
+	dash := false
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			dash = false
+			continue
+		}
+		if !dash && b.Len() > 0 {
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+	return strings.TrimRight(b.String(), "-")
+}
+
+// mergeSkillIDs appends invocation-picked skills after the template's
+// attached ones, deduped and order-preserving.
+func mergeSkillIDs(attached, picked []string) []string {
+	if len(picked) == 0 {
+		return attached
+	}
+	seen := make(map[string]bool, len(attached)+len(picked))
+	out := make([]string, 0, len(attached)+len(picked))
+	for _, id := range append(append([]string{}, attached...), picked...) {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// resolveSkillPicks maps a message's /tokens onto workspace skills by
+// normalized name — "/weekly-report do the usual" attaches the "Weekly
+// Report" skill's FULL instructions to this run, wherever the agent was
+// invoked (channel or DM). Same thread inheritance as connector picks: a
+// bare follow-up keeps the thread's picks. Tokens that match no skill are
+// left alone — they may be connector picks (the grammars are shared) or
+// plain text.
+func (o *Orchestrator) resolveSkillPicks(ctx context.Context, invokerID string, msg *model.Message, parentType string) (ids, tokens []string) {
+	candidates := parseConnectorTokens(msg.Body)
+	if len(candidates) == 0 && msg.ParentMessageID != "" {
+		if msgs, err := o.messages.ListThreadMessages(ctx, invokerID, msg.ParentID, parentType, msg.ParentMessageID); err == nil {
+			seen := map[string]bool{}
+			for _, m := range msgs {
+				for _, c := range parseConnectorTokens(m.Body) {
+					if !seen[c] {
+						seen[c] = true
+						candidates = append(candidates, c)
+					}
+				}
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	index, err := o.agentSvc.ListSkillIndex(ctx)
+	if err != nil {
+		slog.Warn("skill index lookup failed; run gets no skill picks", "error", err)
+		return nil, nil
+	}
+	byToken := make(map[string]string, len(index))
+	for _, sk := range index {
+		byToken[skillToken(sk.Name)] = sk.ID
+	}
+	for _, c := range candidates {
+		if id, ok := byToken[c]; ok {
+			ids = append(ids, id)
+			tokens = append(tokens, c)
+		}
+	}
+	return ids, tokens
+}
+
 func (o *Orchestrator) resolveConnectorPicks(ctx context.Context, invokerID string, msg *model.Message, parentType string) []string {
 	if o.connectors == nil {
 		return nil

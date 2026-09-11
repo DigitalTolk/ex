@@ -296,6 +296,13 @@ func (s *AgentService) CreateAgent(ctx context.Context, in CreateAgentInput) (*m
 	return tpl, nil
 }
 
+// Template returns one shared agent's workspace template — the defaults a
+// user's prefs override (the agents page shows the default persona as real,
+// editable text, so it needs the template separately from the resolve).
+func (s *AgentService) Template(ctx context.Context, slug string) (*model.AgentTemplate, error) {
+	return s.agents.GetTemplate(ctx, slug)
+}
+
 // RenameAgent changes a shared agent's display name (the @name people see) on
 // both the template and its singleton agent user. Admin-only at the handler.
 func (s *AgentService) RenameAgent(ctx context.Context, slug, newName string) (*model.AgentTemplate, error) {

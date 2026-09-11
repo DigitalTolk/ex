@@ -144,6 +144,8 @@ func TestBridgeTools_BadInput(t *testing.T) {
 		{"create_channel", `{}`, "requires a name"},
 		{"join_channel", `{}`, "requires channelID"},
 		{"read_channel", `{}`, "requires channelID"},
+		{"read_pins", `{}`, "requires channelID"},
+		{"read_dm", `{}`, "requires userID"},
 		{"post_to_channel", `{"channelID":"c"}`, "requires channelID and body"},
 		{"search_messages", `{}`, "requires a query"},
 		{"add_reaction", `{"messageID":"m"}`, "requires messageID and emoji"},
@@ -173,6 +175,8 @@ var bridgeMinimalInputs = map[string]string{
 	"create_channel":     `{"name":"x"}`,
 	"join_channel":       `{"channelID":"c"}`,
 	"read_channel":       `{"channelID":"c"}`,
+	"read_pins":          `{"channelID":"c"}`,
+	"read_dm":            `{"userID":"u"}`,
 	"post_to_channel":    `{"channelID":"c","body":"b"}`,
 	"search_messages":    `{"query":"q"}`,
 	"add_reaction":       `{"messageID":"m","emoji":"x"}`,
@@ -240,8 +244,37 @@ func TestBridgeTools_Success(t *testing.T) {
 		t.Fatalf("read_channel clamp: %q %s", out, h.last().query)
 	}
 	h.respond(200, `{}`)
-	if out, _ := h.call(t, "read_channel", `{"channelID":"c"}`); out != "(channel is empty)" || h.last().query != "limit=30" {
+	if out, _ := h.call(t, "read_channel", `{"channelID":"c"}`); out != "(no messages)" || h.last().query != "limit=30" {
 		t.Fatalf("read_channel default: %q %s", out, h.last().query)
+	}
+	// read_channel with thread — the id rides the query string verbatim (the
+	// server normalizes markers/permalinks).
+	h.respond(200, `{"text":"thread msgs"}`)
+	if out, _ := h.call(t, "read_channel", `{"channelID":"c","thread":"[m:m9]"}`); out != "thread msgs" || h.last().query != "limit=30&thread=%5Bm%3Am9%5D" {
+		t.Fatalf("read_channel thread: %q %s", out, h.last().query)
+	}
+
+	// read_pins
+	h.respond(200, `{"text":"[m:p1] alice 10:00: decision"}`)
+	if out, isErr := h.call(t, "read_pins", `{"channelID":"c"}`); isErr || out != "[m:p1] alice 10:00: decision" || !strings.HasSuffix(h.last().path, "/channels/c/pins") {
+		t.Fatalf("read_pins: %v %q %s", isErr, out, h.last().path)
+	}
+	h.respond(200, `{}`)
+	if out, _ := h.call(t, "read_pins", `{"channelID":"c"}`); out != "(no pinned messages)" {
+		t.Fatalf("read_pins empty: %q", out)
+	}
+
+	// read_dm — default limit, thread narrowing, empty fallback
+	h.respond(200, `{"text":"dm history"}`)
+	if out, isErr := h.call(t, "read_dm", `{"userID":"u1","thread":"m3","limit":80}`); isErr || out != "dm history" {
+		t.Fatalf("read_dm: %v %q", isErr, out)
+	}
+	if r := h.last(); !strings.HasSuffix(r.path, "/dm/u1/messages") || r.query != "limit=50&thread=m3" {
+		t.Fatalf("read_dm request: %+v", r)
+	}
+	h.respond(200, `{}`)
+	if out, _ := h.call(t, "read_dm", `{"userID":"u1"}`); out != "(no messages with that user)" || h.last().query != "limit=30" {
+		t.Fatalf("read_dm empty: %q %s", out, h.last().query)
 	}
 
 	// post_to_channel with thread_root

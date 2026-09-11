@@ -34,6 +34,17 @@ type AgentWorkspaceDeps struct {
 // SetWorkspace wires the workspace tool dependencies.
 func (h *AgentRunToolHandler) SetWorkspace(deps AgentWorkspaceDeps) { h.workspace = &deps }
 
+// threadRef normalizes a thread reference from a tool call: models hold
+// message ids as bare ULIDs, as [m:<id>] bundle markers, or inside a
+// permalink's #msg-<id> fragment — accept all three.
+func threadRef(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if i := strings.LastIndex(ref, "#msg-"); i >= 0 {
+		ref = ref[i+len("#msg-"):]
+	}
+	return trimMarker(ref, "m")
+}
+
 // ListChannels lists the channels the INVOKER is in (the ones the agent can
 // read/post via their access).
 // GET /api/v1/agent/run/channels
@@ -114,22 +125,76 @@ func (h *AgentRunToolHandler) JoinChannel(w http.ResponseWriter, r *http.Request
 
 // ReadChannel renders another channel's recent messages in bundle format,
 // read as the invoker.
-// GET /api/v1/agent/run/channels/{id}/messages
+// GET /api/v1/agent/run/channels/{id}/messages?limit=&thread=
+// Without thread: the channel's recent TOP-LEVEL messages. With thread (any
+// message id inside a thread — a permalink's target included): that thread's
+// messages, the reply bodies a channel window deliberately omits.
 func (h *AgentRunToolHandler) ReadChannel(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if _, err := h.orch.GetLiveRun(r.Context(), claims.RunID); err != nil {
 		h.writeToolError(w, r, err)
 		return
 	}
+	h.windowText(w, r, claims.UserID, r.PathValue("id"), service.ParentChannel, "the invoker cannot read this channel")
+}
+
+// windowText renders a parent's window for a run tool: optional ?thread=
+// narrowing (any message id in the thread — resolved to its root), clamped
+// ?limit=, access enforced as the invoker. Shared by ReadChannel and ReadDM.
+func (h *AgentRunToolHandler) windowText(w http.ResponseWriter, r *http.Request, userID, parentID, parentType, denied string) {
 	// clampInt, not a bare upper bound: a NEGATIVE limit slipped past the
 	// one-sided check and reached the store as-is.
 	limit := clampInt(queryInt(r, "limit", 30), 1, 50)
-	text, err := h.orch.Window(r.Context(), claims.UserID, r.PathValue("id"), service.ParentChannel, "", limit)
+	thread := threadRef(r.URL.Query().Get("thread"))
+	if thread != "" {
+		root, err := h.messages.ResolveThreadRoot(r.Context(), userID, parentID, parentType, thread)
+		if err != nil {
+			writeError(w, http.StatusForbidden, "forbidden", denied)
+			return
+		}
+		thread = root
+	}
+	text, err := h.orch.Window(r.Context(), userID, parentID, parentType, thread, limit)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "forbidden", denied)
+		return
+	}
+	writeJSON(w, http.StatusOK, JSON{"text": text})
+}
+
+// ReadPins lists a channel's pinned messages — the durable stuff members
+// chose to keep visible (decisions, links, standing docs).
+// GET /api/v1/agent/run/channels/{id}/pins
+func (h *AgentRunToolHandler) ReadPins(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.ClaimsFromContext(r.Context())
+	if _, err := h.orch.GetLiveRun(r.Context(), claims.RunID); err != nil {
+		h.writeToolError(w, r, err)
+		return
+	}
+	msgs, err := h.messages.ListPinned(r.Context(), claims.UserID, r.PathValue("id"), service.ParentChannel)
 	if err != nil {
 		writeError(w, http.StatusForbidden, "forbidden", "the invoker cannot read this channel")
 		return
 	}
-	writeJSON(w, http.StatusOK, JSON{"text": text})
+	writeJSON(w, http.StatusOK, JSON{"text": h.orch.RenderMessages(r.Context(), msgs)})
+}
+
+// ReadDM reads the INVOKER's own direct conversation with one user — their
+// message history with that person, which the invoker can already see in the
+// app. Supports the same thread narrowing as ReadChannel.
+// GET /api/v1/agent/run/dm/{userID}/messages?limit=&thread=
+func (h *AgentRunToolHandler) ReadDM(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.ClaimsFromContext(r.Context())
+	if _, err := h.orch.GetLiveRun(r.Context(), claims.RunID); err != nil {
+		h.writeToolError(w, r, err)
+		return
+	}
+	conv, err := h.workspace.Conversations.GetOrCreateDM(r.Context(), claims.UserID, r.PathValue("userID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "could not open the DM")
+		return
+	}
+	h.windowText(w, r, claims.UserID, conv.ID, service.ParentConversation, "the invoker cannot read this conversation")
 }
 
 type postChannelBody struct {
@@ -244,16 +309,18 @@ func (h *AgentRunToolHandler) React(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "messageID and emoji required")
 		return
 	}
+	// Accept the [m:<id>] / [ch:<id>] marker forms models copy from the bundle.
+	msgID := threadRef(body.MessageID)
 	parentID, parentType := run.ParentID, run.ParentType
 	if body.ParentID != "" {
-		parentID = body.ParentID
+		parentID = trimMarker(body.ParentID, "ch")
 		if body.ParentType != "" {
 			parentType = body.ParentType
 		} else {
 			parentType = service.ParentChannel
 		}
 	}
-	if _, err := h.messages.ToggleReactionAsAgent(r.Context(), claims.ActorID, claims.UserID, parentID, parentType, body.MessageID, body.Emoji); err != nil {
+	if _, err := h.messages.ToggleReactionAsAgent(r.Context(), claims.ActorID, claims.UserID, parentID, parentType, msgID, body.Emoji); err != nil {
 		if errors.Is(err, service.ErrReservedEmoji) {
 			writeError(w, http.StatusBadRequest, "reserved_emoji", "that emoji is reserved for run states")
 			return
@@ -381,7 +448,7 @@ func (h *AgentRunToolHandler) SetReminder(w http.ResponseWriter, r *http.Request
 		return
 	}
 	// Anchor to the caller-named message, else the message that invoked the run.
-	msgID := body.MessageID
+	msgID := threadRef(body.MessageID)
 	if msgID == "" {
 		msgID = run.MessageID
 	}
@@ -463,11 +530,15 @@ func (h *AgentRunToolHandler) PinMessage(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "bad_request", "message_id required")
 		return
 	}
+	// Models copy ids straight from the bundle as [m:<id>] markers — accept
+	// that form here like link_message does (live-tested: the raw marker used
+	// to come back as "pin rejected").
+	msgID := threadRef(body.MessageID)
 	pinned := true
 	if body.Pinned != nil {
 		pinned = *body.Pinned
 	}
-	if _, err := h.messages.SetPinned(r.Context(), claims.UserID, run.ParentID, run.ParentType, body.MessageID, pinned); err != nil {
+	if _, err := h.messages.SetPinned(r.Context(), claims.UserID, run.ParentID, run.ParentType, msgID, pinned); err != nil {
 		writeError(w, http.StatusForbidden, "forbidden", "pin rejected")
 		return
 	}
@@ -475,7 +546,7 @@ func (h *AgentRunToolHandler) PinMessage(w http.ResponseWriter, r *http.Request)
 	if !pinned {
 		action = "message_unpinned"
 	}
-	h.orch.RecordWorkspaceAction(r.Context(), run, action, map[string]any{"messageID": body.MessageID})
+	h.orch.RecordWorkspaceAction(r.Context(), run, action, map[string]any{"messageID": msgID})
 	verb := "Pinned"
 	if !pinned {
 		verb = "Unpinned"

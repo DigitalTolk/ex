@@ -56,10 +56,13 @@ function agentFixtures(): AgentView[] {
       resolved: {
         harness: 'bedrock',
         model: 'anthropic.claude-3-5',
-        persona: 'Default qib persona',
+        // resolved = the caller's override when one is set; the template
+        // default rides separately in defaultPersona (matches the server).
+        persona: 'My qib persona',
         limits: { maxChainRounds: 8 },
         maxConcurrentRuns: 2,
       },
+      defaultPersona: 'Default qib persona',
     },
     {
       id: 'ag-aa',
@@ -152,6 +155,13 @@ async function findCard(slug: string) {
   return within(await screen.findByTestId(`agent-card-${slug}`));
 }
 
+// Cards are collapsed rows; expand one to reach its editor.
+async function openCard(slug: string, name = slug) {
+  const card = await findCard(slug);
+  fireEvent.click(card.getByRole('button', { name: `Configure @${name}` }));
+  return card;
+}
+
 // The Watch button is disabled whenever no channel is chosen, so the
 // defensive early-return inside add() can't be reached through a real
 // click: both React's event system and base-ui's useButton swallow clicks
@@ -209,19 +219,40 @@ describe('AgentsPage', () => {
     installRoutes({ channels: () => chans.promise });
     renderPage();
 
-    const gg = await findCard('gg');
+    const gg = await openCard('gg');
     expect(screen.queryByRole('button', { name: 'New agent' })).not.toBeInTheDocument();
 
     expect(gg.getByText('ready on your machine')).toBeInTheDocument();
     expect(gg.getByText('for you: claude')).toBeInTheDocument();
+    // Progressive: nothing customized → Advanced starts collapsed; the
+    // default prompt sits IN the editor as real text.
+    expect(gg.getByLabelText('Prompt for @gg')).toHaveValue('Default gg persona');
+    expect(gg.getByText(/workspace default — edit to make it yours/)).toBeInTheDocument();
+    expect(gg.queryByLabelText('Model')).not.toBeInTheDocument();
+    fireEvent.click(gg.getByRole('button', { name: 'Advanced' }));
     expect(gg.getByLabelText('Model')).toHaveAttribute('placeholder', 'harness default');
     expect(gg.getByLabelText('Discussion rounds')).toHaveAttribute('placeholder', '12');
     expect(gg.getByLabelText('Thread follow-ups')).toHaveValue('');
     expect(gg.queryByLabelText('ask me before it replies')).not.toBeInTheDocument();
+    // Collapsing again hides it (the chevron flips).
+    fireEvent.click(gg.getByRole('button', { name: 'Advanced' }));
+    expect(gg.queryByLabelText('Model')).not.toBeInTheDocument();
+    fireEvent.click(gg.getByRole('button', { name: 'Advanced' }));
+    // The whole CARD collapses back to its one-line row too.
+    fireEvent.click(gg.getByRole('button', { name: 'Configure @gg' }));
+    expect(gg.queryByLabelText('Prompt for @gg')).not.toBeInTheDocument();
+    fireEvent.click(gg.getByRole('button', { name: 'Configure @gg' }));
+    fireEvent.click(gg.getByRole('button', { name: 'Advanced' }));
 
-    const qib = await findCard('qib');
+    const qib = await openCard('qib');
+    // The collapsed row already says what's customized, before expanding.
+    expect(qib.getByText('custom prompt')).toBeInTheDocument();
+    expect(qib.getByText('6 customized')).toBeInTheDocument();
     expect(qib.getByText('ready — runs on the server')).toBeInTheDocument();
     expect(qib.getByText('for you: bedrock · anthropic.claude-3-5')).toBeInTheDocument();
+    // Overrides exist → Advanced opens itself and says how many.
+    expect(qib.getByText(/customized/)).toBeInTheDocument();
+    expect(qib.getByLabelText('Prompt for @qib')).toHaveValue('My qib persona');
     expect(qib.getByLabelText('Model')).toHaveAttribute('placeholder', 'anthropic.claude-3-5');
     expect(qib.getByLabelText('Discussion rounds')).toHaveValue(5);
     expect(qib.getByLabelText('Discussion rounds')).toHaveAttribute('placeholder', '8');
@@ -234,14 +265,14 @@ describe('AgentsPage', () => {
     expect(qib.getByText(/Runs via AWS Bedrock/)).toBeInTheDocument();
     expect(qib.getByText(/on the server, with your\s+access/)).toBeInTheDocument();
 
-    const aa = await findCard('aa');
+    const aa = await openCard('aa');
     expect(aa.getByText('desktop app not running')).toBeInTheDocument();
 
     const ns = await findCard('ns');
     expect(ns.getByText('CLI missing on your machine')).toBeInTheDocument();
     expect(aa.getByLabelText('Thread follow-ups')).toHaveValue('always');
 
-    const ww = await findCard('ww');
+    const ww = await openCard('ww');
     expect(ww.getByText('paused')).toBeInTheDocument();
     expect(ww.getByLabelText('Thread follow-ups')).toHaveValue('window:10');
     expect(ww.getByLabelText('Model')).toHaveAttribute('placeholder', 'codex-large');
@@ -276,11 +307,22 @@ describe('AgentsPage', () => {
     fireEvent.change(form.getByLabelText('Handle'), { target: { value: 'RES-1' } });
     expect(form.getByLabelText('Handle')).toHaveValue('res-1');
     expect(form.getByLabelText('Display name')).toHaveAttribute('placeholder', 'res-1');
-    expect(createBtn).toBeDisabled();
+    // The starter prompt is REAL editable text that tracks the handle until
+    // touched — so a valid handle alone already makes the form submittable.
+    expect((form.getByLabelText('Prompt (persona)') as HTMLTextAreaElement).value).toContain('@res-1');
+    expect(createBtn).toBeEnabled();
     fireEvent.change(form.getByLabelText('Display name'), { target: { value: 'Res' } });
     fireEvent.change(form.getByLabelText('Prompt (persona)'), { target: { value: 'Be helpful.' } });
-    expect(createBtn).toBeEnabled();
+    // Once touched, the prompt stops tracking the handle and offers a reset.
+    fireEvent.change(form.getByLabelText('Handle'), { target: { value: 'res-1' } });
+    expect(form.getByLabelText('Prompt (persona)')).toHaveValue('Be helpful.');
+    fireEvent.click(form.getByRole('button', { name: 'Reset to starter' }));
+    expect((form.getByLabelText('Prompt (persona)') as HTMLTextAreaElement).value).toContain('@res-1');
+    fireEvent.change(form.getByLabelText('Prompt (persona)'), { target: { value: 'Be helpful.' } });
 
+    // Backend/model are progressive too: hidden until Advanced is opened.
+    expect(form.queryByLabelText('Backend')).not.toBeInTheDocument();
+    fireEvent.click(form.getByRole('button', { name: 'Advanced' }));
     expect(form.queryByText(/Runs on the server/)).not.toBeInTheDocument();
     fireEvent.change(form.getByLabelText('Backend'), { target: { value: 'bedrock' } });
     expect(form.getByText(/Runs on the server/)).toBeInTheDocument();
@@ -347,10 +389,12 @@ describe('AgentsPage', () => {
     });
     renderPage();
 
-    const gg = await findCard('gg');
+    const gg = await openCard('gg');
     expect(gg.getByRole('button', { name: 'Save' })).toBeDisabled();
 
-    fireEvent.change(gg.getByLabelText('Your prompt for @gg'), { target: { value: 'custom prompt' } });
+    fireEvent.change(gg.getByLabelText('Prompt for @gg'), { target: { value: 'custom prompt' } });
+    // Auto-allow lives in Advanced (collapsed — gg has no overrides yet).
+    fireEvent.click(gg.getByRole('button', { name: 'Advanced' }));
     // Check two auto-allow classes, then untick one again.
     fireEvent.click(gg.getByLabelText('Read files'));
     fireEvent.click(gg.getByLabelText('Edit & write files'));
@@ -382,6 +426,31 @@ describe('AgentsPage', () => {
     });
   });
 
+  it('resetting the prompt to the workspace default stores inherit, not a copy', async () => {
+    let patchBody: unknown;
+    installRoutes({
+      mutate: (path, init) => {
+        if (path === '/api/v1/agents/qib/prefs' && init?.method === 'PATCH') {
+          patchBody = JSON.parse(init.body!);
+          return Promise.resolve({});
+        }
+        return undefined;
+      },
+    });
+    renderPage();
+
+    const qib = await openCard('qib');
+    // qib carries a custom prompt: the editor holds it and offers the way back.
+    expect(qib.getByText(/Your version — applies only when/)).toBeInTheDocument();
+    fireEvent.click(qib.getByRole('button', { name: 'Reset to workspace default' }));
+    expect(qib.getByLabelText('Prompt for @qib')).toHaveValue('Default qib persona');
+    expect(qib.getByText(/workspace default — edit to make it yours/)).toBeInTheDocument();
+    // Text matching the default is stored as "" (inherit), so future default
+    // improvements keep flowing.
+    fireEvent.click(qib.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect((patchBody as { persona: string }).persona).toBe(''));
+  });
+
   it('saves fully-set bedrock prefs (window follow-up, chain rounds, auto-allow)', async () => {
     let patchBody: unknown;
     installRoutes({
@@ -395,7 +464,7 @@ describe('AgentsPage', () => {
     });
     renderPage();
 
-    const qib = await findCard('qib');
+    const qib = await openCard('qib');
     fireEvent.change(qib.getByLabelText('Model'), { target: { value: 'new-model' } });
     fireEvent.click(qib.getByRole('button', { name: 'Save' }));
 
@@ -428,7 +497,7 @@ describe('AgentsPage', () => {
     });
     renderPage();
 
-    const aa = await findCard('aa');
+    const aa = await openCard('aa');
     fireEvent.change(aa.getByLabelText('If your app is offline'), { target: { value: 'queue' } });
     fireEvent.change(aa.getByLabelText('Discussion rounds'), { target: { value: '3' } });
     fireEvent.click(aa.getByRole('button', { name: 'Save' }));
@@ -453,7 +522,8 @@ describe('AgentsPage', () => {
     installRoutes();
     renderPage();
 
-    const gg = await findCard('gg');
+    const gg = await openCard('gg');
+    fireEvent.click(gg.getByRole('button', { name: 'Advanced' }));
     fireEvent.change(gg.getByLabelText('Backend'), { target: { value: 'bedrock' } });
     expect(gg.getByLabelText('Model')).toHaveAttribute('placeholder', 'eu.anthropic.claude-opus-5');
     // Bedrock is server-only: no Runs-on choice exists, and the copy says so.
@@ -465,7 +535,8 @@ describe('AgentsPage', () => {
     installRoutes();
     renderPage();
 
-    const gg = await findCard('gg');
+    const gg = await openCard('gg');
+    fireEvent.click(gg.getByRole('button', { name: 'Advanced' }));
     fireEvent.change(gg.getByLabelText('Thread follow-ups'), { target: { value: 'window:10' } });
     const ask = gg.getByLabelText('ask me before it replies');
     fireEvent.click(ask);
@@ -482,7 +553,7 @@ describe('AgentsPage', () => {
     });
     renderPage();
 
-    const ww = await findCard('ww');
+    const ww = await openCard('ww');
     fireEvent.change(ww.getByLabelText('Thread follow-ups'), { target: { value: 'window:60' } });
     fireEvent.click(ww.getByRole('button', { name: 'Save' }));
     expect(await ww.findByText('Save failed.')).toBeInTheDocument();
@@ -510,7 +581,7 @@ describe('AgentsPage', () => {
     });
     renderPage();
 
-    const gg = await findCard('gg');
+    const gg = await openCard('gg');
     await gg.findByTestId('agent-sub-s1');
 
     const watchBtn = () => gg.getByRole('button', { name: 'Watch' });
@@ -553,6 +624,7 @@ describe('AgentsPage', () => {
         init?.method === 'DELETE' ? Promise.reject(new Error('offline')) : Promise.resolve({}),
     });
     renderPage();
+    await openCard('gg');
     const row = await screen.findByTestId('agent-sub-s1');
     fireEvent.click(within(row).getByRole('button', { name: 'Stop watching' }));
     await waitFor(() => expect(showToast).toHaveBeenCalledWith("Couldn't stop that watcher — try again."));

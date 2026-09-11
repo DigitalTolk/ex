@@ -34,6 +34,21 @@ vi.mock('@/hooks/useAgents', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useAgents')>()),
   useParentWatchers: () => ({ data: mockWatchers }),
   useAgents: () => ({ data: mockRoster }),
+  useSkills: () => ({
+    data: [
+      { id: 'sk1', name: 'Weekly Report', description: 'digest' },
+      { id: 'sk2', name: '---', description: 'normalizes to nothing' },
+    ],
+  }),
+}));
+vi.mock('@/hooks/useConnectors', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useConnectors')>()),
+  useConnectors: () => ({
+    data: [
+      { slug: 'gitlab', title: 'GitLab', description: 'MRs', baseURL: '', authKind: 'none', installed: true },
+      { slug: 'trello', title: 'Trello', description: 'Boards', baseURL: '', authKind: 'none', installed: false },
+    ],
+  }),
 }));
 
 function makeMessage(overrides: Partial<Message> = {}): Message {
@@ -103,14 +118,25 @@ afterEach(() => {
 });
 
 describe('MessageItem agent affordances', () => {
-  it('shows who invoked an agent post and opens the run drawer from the badge', () => {
-    const userMap = new Map([['u-9', { displayName: 'Bob' }]]);
-    renderItem(makeMessage({ agentInvokerID: 'u-9', agentRunID: 'run-7' }), { userMap });
-    const badge = screen.getByLabelText('Invoked by Bob');
-    expect(badge).toHaveTextContent('for Bob');
+  it('shows who invoked an agent post and opens the run drawer from the badge for the invoker', () => {
+    const userMap = new Map([['u-1', { displayName: 'Me' }]]);
+    renderItem(makeMessage({ agentInvokerID: 'u-1', agentRunID: 'run-7' }), { userMap });
+    const badge = screen.getByLabelText('Invoked by Me');
+    expect(badge).toHaveTextContent('for Me');
     expect(badge).toHaveAttribute('title', 'Show agent activity');
     fireEvent.click(badge);
     expect(useRunDrawerStore.getState().runID).toBe('run-7');
+  });
+
+  it("someone else's run gets an inert badge and no activity menu — logs are invoker-only", () => {
+    const userMap = new Map([['u-9', { displayName: 'Bob' }]]);
+    renderItem(makeMessage({ agentInvokerID: 'u-9', agentRunID: 'run-7', parentMessageID: 'root-1' }), { userMap });
+    const badge = screen.getByLabelText('Invoked by Bob');
+    expect(badge).toBeDisabled();
+    expect(badge).not.toHaveAttribute('title');
+    fireEvent.click(badge);
+    expect(useRunDrawerStore.getState().runID).toBeNull();
+    expect(screen.queryByLabelText('Show agent activity')).not.toBeInTheDocument();
   });
 
   it('renders the badge inert without a run link and generic without a user map', () => {
@@ -218,6 +244,25 @@ describe('MessageItem agent affordances', () => {
     longPress(container.querySelector('#msg-msg-1') as Element);
     fireEvent.click(within(screen.getByTestId('mobile-message-actions')).getByLabelText('Show agent activity'));
     expect(useRunDrawerStore.getState().runID).toBe('run-5');
+  });
+
+  it('badges the skills a run used next to the invoker tag', () => {
+    const userMap = new Map([['u-9', { displayName: 'Bob' }]]);
+    renderItem(
+      makeMessage({ agentInvokerID: 'u-9', agentRunID: 'run-7', agentSkills: ['Weekly Report', 'Audit'] }),
+      { userMap },
+    );
+    expect(screen.getByLabelText('Used skill Weekly Report')).toHaveTextContent('⚡ Weekly Report');
+    expect(screen.getByLabelText('Used skill Audit')).toBeInTheDocument();
+  });
+
+  it('renders known /pick tokens (installed connector, skill) as pills in the sent message', () => {
+    renderItem(makeMessage({ body: 'use /gitlab and /weekly-report but /trello stays text' }));
+    const pills = Array.from(document.querySelectorAll('[data-testid="pick-pill"]')).map(
+      (p) => p.textContent,
+    );
+    // trello isn't installed, so its token stays plain text.
+    expect(pills).toEqual(['/gitlab', '/weekly-report']);
   });
 
   it('renders artifact markers as artifact cards and task markers as task cards', () => {

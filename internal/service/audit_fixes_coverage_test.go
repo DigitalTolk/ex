@@ -219,17 +219,44 @@ func TestOgateCov_AccessCheckedReads(t *testing.T) {
 	if _, arts, err := fx.orch.ArtifactsForCaller(ctx, "u-alice", run.ID); err != nil || len(arts) != 1 {
 		t.Fatalf("invoker read: %d %v", len(arts), err)
 	}
-	// A member of the parent (CheckAccess passes) too.
+	// Artifacts keep the MEMBER rule: the agent publishes them INTO the
+	// conversation, so a member of the parent reads them…
 	if _, arts, err := fx.orch.ArtifactsForCaller(ctx, "u-bob", run.ID); err != nil || len(arts) != 1 {
-		t.Fatalf("member read: %d %v", len(arts), err)
+		t.Fatalf("member artifact read: %d %v", len(arts), err)
 	}
-	// A non-member: refused.
+	// …while a non-member is refused.
 	fx.msgs.checkAccessErr = errors.New("ogc: not a member")
 	if _, _, err := fx.orch.ArtifactsForCaller(ctx, "u-bob", run.ID); !errors.Is(err, ErrNoRunAccess) {
-		t.Fatalf("non-member read: want ErrNoRunAccess, got %v", err)
+		t.Fatalf("non-member artifact read: want ErrNoRunAccess, got %v", err)
 	}
+	fx.msgs.checkAccessErr = nil
+	// LOGS are invoker-only: even a member of the parent is refused — the
+	// timeline carries the invoker's DM reads, search hits and memory.
+	if _, _, _, err := fx.orch.Timeline(ctx, "u-bob", run.ID); !errors.Is(err, ErrNoRunAccess) {
+		t.Fatalf("member timeline read must be refused: want ErrNoRunAccess, got %v", err)
+	}
+	// The thread view: a member who invoked nothing in the thread gets 403
+	// (the chips are visible, so "not yours" beats a broken-looking 404)…
 	if _, _, _, err := fx.orch.ThreadTimeline(ctx, "u-bob", run.ParentID, "root-a"); !errors.Is(err, ErrNoRunAccess) {
-		t.Fatalf("non-member thread read: want ErrNoRunAccess, got %v", err)
+		t.Fatalf("non-invoker thread read: want ErrNoRunAccess, got %v", err)
+	}
+	// …while the invoker sees exactly their own runs.
+	if runs, _, _, err := fx.orch.ThreadTimeline(ctx, "u-alice", run.ParentID, "root-a"); err != nil || len(runs) != 1 || runs[0].InvokerID != "u-alice" {
+		t.Fatalf("invoker thread read: %d %v", len(runs), err)
+	}
+	// Stopping keeps the wider member rule — it's their channel being flooded.
+	if got, err := fx.orch.RunForParentMember(ctx, "u-bob", run.ID); err != nil || got.ID != run.ID {
+		t.Fatalf("member stop access: %v", err)
+	}
+	if got, err := fx.orch.RunForParentMember(ctx, "u-alice", run.ID); err != nil || got.ID != run.ID {
+		t.Fatalf("invoker stop access: %v", err)
+	}
+	fx.msgs.checkAccessErr = errors.New("ogc: not a member")
+	if _, err := fx.orch.RunForParentMember(ctx, "u-bob", run.ID); !errors.Is(err, ErrNoRunAccess) {
+		t.Fatalf("non-member stop: want ErrNoRunAccess, got %v", err)
+	}
+	if _, err := fx.orch.RunForParentMember(ctx, "u-bob", "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown run stop: %v", err)
 	}
 	fx.msgs.checkAccessErr = nil
 

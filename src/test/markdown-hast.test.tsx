@@ -412,3 +412,42 @@ describe('tag allowlist (defense-in-depth)', () => {
     expect(screen.getByTestId('allow-text-root').textContent).toBe('just text');
   });
 });
+
+describe('pick pills (decoratePicks)', () => {
+  const tokens = new Set(['gitlab', 'weekly-report']);
+
+  it('renders known /tokens as pills and leaves unknown ones as text', () => {
+    const tree = root(el('p', {}, text('use /gitlab and /weekly-report but not /mystery ok')));
+    const { container } = render(<>{renderMarkdown('', { tree, pickTokens: tokens })}</>);
+    const pills = Array.from(container.querySelectorAll('[data-testid="pick-pill"]')).map(
+      (p) => p.textContent,
+    );
+    expect(pills).toEqual(['/gitlab', '/weekly-report']);
+    expect(container.textContent).toBe('use /gitlab and /weekly-report but not /mystery ok');
+  });
+
+  it('a pick can start the message and end it', () => {
+    const tree = root(el('p', {}, text('/gitlab check /weekly-report')));
+    const { container } = render(<>{renderMarkdown('', { tree, pickTokens: tokens })}</>);
+    expect(container.querySelectorAll('[data-testid="pick-pill"]')).toHaveLength(2);
+  });
+
+  it('never decorates inside links, code, or custom elements — and mid-word slashes stay text', () => {
+    const tree = root(
+      el('p', {},
+        el('a', { href: 'https://x.test/gitlab' }, text('see /gitlab here')),
+        el('code', {}, text('rm /gitlab')),
+        el('ex-hashtag', { 'data-tag': 't' }, text('/gitlab')),
+        text(' a/gitlab glued'),
+      ),
+    );
+    const { container } = render(<>{renderMarkdown('', { tree, pickTokens: tokens })}</>);
+    expect(container.querySelectorAll('[data-testid="pick-pill"]')).toHaveLength(0);
+  });
+
+  it('an empty token set (and absent opts) skips decoration entirely', () => {
+    const tree = root(el('p', {}, text('use /gitlab')));
+    const { container } = render(<>{renderMarkdown('', { tree, pickTokens: new Set() })}</>);
+    expect(container.querySelectorAll('[data-testid="pick-pill"]')).toHaveLength(0);
+  });
+});

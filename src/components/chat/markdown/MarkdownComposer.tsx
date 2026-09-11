@@ -10,6 +10,8 @@ import { MarkdownEditor, type WysiwygEditorHandle, type ActiveFormat } from './M
 import type { CompletionProviders } from './extensions/completions';
 import type { SlashCommand } from './extensions/slashCommands';
 import { useConnectors } from '@/hooks/useConnectors';
+import { useSkills } from '@/hooks/useAgents';
+import { skillPickToken } from '@/lib/picks';
 
 export type { WysiwygEditorHandle, ActiveFormat };
 
@@ -62,6 +64,17 @@ export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function 
         .map((c) => ({ name: c.slug, description: c.title + ' — ' + c.description })),
     [allConnectors],
   );
+  // …and the workspace SKILLS: "/weekly-report" attaches that skill's
+  // instructions to the agent run this message invokes (works in DMs too).
+  // Token = the server's normalization of the skill name.
+  const { data: allSkills } = useSkills();
+  const skillPicks = useMemo(
+    () =>
+      (allSkills ?? [])
+        .map((s) => ({ name: skillPickToken(s.name), description: s.name + ' — ' + s.description }))
+        .filter((s) => s.name !== ''),
+    [allSkills],
+  );
 
   // Partition the @-mention list by channel membership only when we actually
   // know the roster — otherwise a mid-load empty set would mislabel everyone.
@@ -88,8 +101,9 @@ export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function 
       skinTone: () => skinTone,
       commands: slashCommands,
       connectors: () => installedConnectors,
+      skills: () => skillPicks,
     }),
-    [users, online, memberIds, channels, customEmojis, skinTone, slashCommands, installedConnectors],
+    [users, online, memberIds, channels, customEmojis, skinTone, slashCommands, installedConnectors, skillPicks],
   );
 
   return (

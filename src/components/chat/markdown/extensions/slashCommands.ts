@@ -24,6 +24,9 @@ export interface SlashCommandProviders {
   // Unlike commands, connector tokens are inline: they complete at any
   // word-start "/" and the rest of the message follows.
   connectors?: () => SlashCommand[];
+  // Workspace skills — "/weekly-report" attaches that skill's instructions to
+  // the agent run this message invokes. Inline, like connector picks.
+  skills?: () => SlashCommand[];
 }
 
 // Grouped-menu headers (same chrome as the @-mention popup's
@@ -43,6 +46,7 @@ function mkSection(name: string, rank: number): CompletionSection {
 }
 const SECTION_COMMANDS = mkSection('Commands', 0);
 const SECTION_CONNECTORS = mkSection('Connectors', 1);
+const SECTION_SKILLS = mkSection('Skills', 2);
 
 // Replace the matched range with the full command; the send handler runs it.
 function applyCommand(text: string) {
@@ -80,8 +84,8 @@ export function slashCommandSource(providers: SlashCommandProviders): Completion
         });
       }
     }
-    // Connector picks are inline: anywhere a word starts with "/". Inserting
-    // adds a trailing space so typing flows straight into the ask.
+    // Connector and skill picks are inline: anywhere a word starts with "/".
+    // Inserting adds a trailing space so typing flows straight into the ask.
     for (const c of providers.connectors?.() ?? []) {
       if (!c.name.toLowerCase().startsWith(query)) continue;
       options.push({
@@ -91,6 +95,17 @@ export function slashCommandSource(providers: SlashCommandProviders): Completion
         section: SECTION_CONNECTORS,
         apply: applyCommand(`/${c.name} `),
         meta: { kind: 'command', name: c.name, description: c.description },
+      });
+    }
+    for (const s of providers.skills?.() ?? []) {
+      if (!s.name.toLowerCase().startsWith(query)) continue;
+      options.push({
+        label: `/${s.name}`,
+        detail: s.description,
+        type: 'keyword',
+        section: SECTION_SKILLS,
+        apply: applyCommand(`/${s.name} `),
+        meta: { kind: 'command', name: s.name, description: s.description },
       });
     }
     if (options.length === 0) return null;

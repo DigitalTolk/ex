@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/events"
@@ -636,8 +637,12 @@ func (o *Orchestrator) Artifacts(ctx context.Context, runID string) ([]*model.Ar
 }
 
 // ArtifactsForCaller lists a run's artifacts the caller is allowed to see.
+// Artifacts keep the MEMBER rule the logs gave up: an agent publishes an
+// artifact INTO a conversation (its card renders there for everyone), so
+// anyone who can read that conversation can open it — unlike the timeline,
+// which records the invoker's private tool activity.
 func (o *Orchestrator) ArtifactsForCaller(ctx context.Context, callerID, runID string) (*model.Run, []*model.Artifact, error) {
-	run, err := o.RunForCaller(ctx, callerID, runID)
+	run, err := o.RunForParentMember(ctx, callerID, runID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -653,6 +658,70 @@ func (o *Orchestrator) RecordSkillInvoked(ctx context.Context, run *model.Run, s
 	o.appendEvent(ctx, run, o.now().UnixNano(), run.AgentID, "skill.invoked", map[string]any{
 		"skillID": skill.ID, "name": skill.Name,
 	})
+	// Remember the NAME for this run's message badges (see RunSkillBadges).
+	// In-memory on purpose: a lost entry after a restart degrades one badge,
+	// never the run — and the picked-skill badges are durable on the run row.
+	names, _ := o.skillUses.LoadOrStore(run.ID, &skillUseSet{})
+	names.(*skillUseSet).add(skill.ID, skill.Name)
+}
+
+// skillUseSet collects the skills one run invoked, deduped by id.
+type skillUseSet struct {
+	mu    sync.Mutex
+	ids   map[string]bool
+	names []string
+}
+
+func (s *skillUseSet) add(id, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ids == nil {
+		s.ids = map[string]bool{}
+	}
+	if s.ids[id] {
+		return
+	}
+	s.ids[id] = true
+	s.names = append(s.names, name)
+}
+
+func (s *skillUseSet) list() ([]string, map[string]bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string{}, s.names...), s.ids
+}
+
+// runSkillBadgeCap bounds the badge row on one message.
+const runSkillBadgeCap = 4
+
+// RunSkillBadges names the skills a run USED, for the badges on its posted
+// messages: the invoking message's /skill picks plus every invoke_skill call
+// so far — never the template's standing skills (they'd tag every reply).
+// Wired into MessageService via SetRunSkillResolver.
+func (o *Orchestrator) RunSkillBadges(ctx context.Context, runID string) []string {
+	if runID == "" {
+		return nil
+	}
+	var names []string
+	invoked := map[string]bool{}
+	if v, ok := o.skillUses.Load(runID); ok {
+		names, invoked = v.(*skillUseSet).list()
+	}
+	run, err := o.runs.GetRun(ctx, runID)
+	if err == nil {
+		for _, id := range run.PickedSkillIDs {
+			if invoked[id] {
+				continue // invoked AND picked: one badge
+			}
+			if sk, err := o.agentSvc.GetSkill(ctx, id); err == nil && sk != nil {
+				names = append(names, sk.Name)
+			}
+		}
+	}
+	if len(names) > runSkillBadgeCap {
+		names = names[:runSkillBadgeCap]
+	}
+	return names
 }
 
 // Run returns a run by ID regardless of state. Unchecked — internal callers
@@ -803,24 +872,24 @@ func (o *Orchestrator) ThreadTimeline(ctx context.Context, callerID, parentID, r
 		return nil, nil, 0, err
 	}
 	var runs []*model.Run
+	othersRuns := false
 	for i := len(peers) - 1; i >= 0; i-- { // newest-first → oldest-first
-		if o.replyThreadRoot(peers[i]) == rootID {
-			runs = append(runs, peers[i])
+		if o.replyThreadRoot(peers[i]) != rootID {
+			continue
 		}
+		// Logs are INVOKER-only (see checkRunAccess): the thread view shows
+		// the caller's own runs and silently omits everyone else's.
+		if peers[i].InvokerID != callerID {
+			othersRuns = true
+			continue
+		}
+		runs = append(runs, peers[i])
 	}
-	// Access is decided here, not by the caller: invoker of any run in the
-	// thread, else a member of the parent.
-	if len(runs) > 0 {
-		allowed := false
-		for _, r := range runs {
-			if r.InvokerID == callerID {
-				allowed = true
-				break
-			}
-		}
-		if !allowed && o.messages.CheckAccess(ctx, callerID, parentID, runs[0].ParentType) != nil {
-			return nil, nil, 0, ErrNoRunAccess
-		}
+	// The thread has agent activity, none of it the caller's: say "not
+	// yours" (403) rather than "nothing here" — the chips are already
+	// visible in the thread, so a 404 would read as broken.
+	if len(runs) == 0 && othersRuns {
+		return nil, nil, 0, ErrNoRunAccess
 	}
 	var events []*model.RunEvent
 	for _, r := range runs {

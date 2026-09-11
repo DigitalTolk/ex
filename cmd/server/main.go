@@ -270,6 +270,8 @@ func main() {
 	// Deleting a chat sweeps its agent-run activity logs (a thread root sweeps
 	// every reply's logs too).
 	messageSvc.SetRunLogPurger(orchestrator)
+	// Agent posts carry used-skill badges (picks + invoke_skill calls).
+	messageSvc.SetRunSkillResolver(orchestrator.RunSkillBadges)
 	orchestrator.SetConversationReader(conversationStore)
 	orchestrator.SetOwnerDMResolver(convSvc)
 	// Shared context (CTX#, plan-v2 §8): visibility rides the message-service

@@ -333,6 +333,11 @@ type Run struct {
 	PersonaHash   string   `json:"personaHash" dynamodbav:"personaHash"`
 	Persona       string   `json:"-" dynamodbav:"persona"` // full text for the runner; hash for display
 	SkillIDs      []string `json:"skillIDs,omitempty" dynamodbav:"skillIDs,omitempty"`
+	// PickedSkillIDs: the subset of SkillIDs the INVOKING MESSAGE picked with
+	// /skill tokens (template-attached skills excluded). These badge the
+	// agent's replies — a standing template skill on every message would be
+	// noise, an explicit pick is signal.
+	PickedSkillIDs []string `json:"pickedSkillIDs,omitempty" dynamodbav:"pickedSkillIDs,omitempty"`
 	// ConnectorSlugs: the /connector tokens the invoking message carried —
 	// the user's explicit pick of which external services this run may use.
 	// The runner only syncs docs + injects credentials for these.

@@ -765,6 +765,23 @@ func TestHagentCovListErrors(t *testing.T) {
 	env.dir.failFrom["GetTemplate"] = 1
 	rec = hagentCovDo(env.h.List, hagentCovReq(http.MethodGet, "/api/v1/agents", "", "u1", nil))
 	hagentCovWant(t, rec, http.StatusInternalServerError)
+
+	// view: the defaultPersona template read fails (the SECOND GetTemplate —
+	// the first serves Resolve).
+	env = hagentCovNewEnv()
+	env.dir.failFrom["GetTemplate"] = 2
+	rec = hagentCovDo(env.h.List, hagentCovReq(http.MethodGet, "/api/v1/agents", "", "u1", nil))
+	hagentCovWant(t, rec, http.StatusInternalServerError)
+
+	// Happy view carries the template's prompt separately from resolved, so
+	// the SPA can tell "inherited default" from "user override".
+	env = hagentCovNewEnv()
+	rec = hagentCovDo(env.h.List, hagentCovReq(http.MethodGet, "/api/v1/agents", "", "u1", nil))
+	hagentCovWant(t, rec, http.StatusOK)
+	agents := hagentCovJSON(t, rec)["agents"].([]any)
+	if got := agents[0].(map[string]any)["defaultPersona"]; got != "be gg" {
+		t.Fatalf("defaultPersona = %v, want %q", got, "be gg")
+	}
 }
 
 func TestHagentCovListStatuses(t *testing.T) {
@@ -909,10 +926,11 @@ func TestHagentCovTimeline(t *testing.T) {
 		t.Fatalf("users = %v", body["users"])
 	}
 
-	// Non-invoker allowed through the membership checker.
+	// A non-invoker stays refused even with the membership checker wired:
+	// logs are invoker-only (the checker now only gates watch subscriptions).
 	env.h.SetTimelineAccess(&hagentCovAccess{})
 	rec = hagentCovDo(env.h.Timeline, hagentCovReq(http.MethodGet, "/api/v1/runs/r1", "", "u2", pv))
-	hagentCovWant(t, rec, http.StatusOK)
+	hagentCovWant(t, rec, http.StatusForbidden)
 }
 
 func TestHagentCovThreadTimeline(t *testing.T) {

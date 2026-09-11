@@ -22,7 +22,9 @@ import {
 import { ReminderDialog } from '@/components/chat/ReminderDialog';
 import { WatcherDialog } from '@/components/chat/WatcherDialog';
 import { useCreateReminder } from '@/hooks/useActivity';
-import { useParentWatchers } from '@/hooks/useAgents';
+import { useParentWatchers, useSkills } from '@/hooks/useAgents';
+import { useConnectors } from '@/hooks/useConnectors';
+import { skillPickToken } from '@/lib/picks';
 import { REMINDER_PRESETS, computeReminderTime, toLocalInputValue, type ReminderPresetKey } from '@/lib/reminder-times';
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { UserHoverCard } from '@/components/UserHoverCard';
@@ -326,12 +328,16 @@ function MessageItemImpl({
   // "Show activity" appears in two places (the desktop menu and the mobile
   // sheet) and both had their own copy of this predicate and its branch. One
   // definition: a thread ROOT opens the whole thread's activity, any other
-  // message opens its own run.
+  // message opens its own run. Run LOGS are invoker-only server-side, so a
+  // run posted for someone else gets no affordance at all (a thread root
+  // stays — the server filters it to the caller's own runs).
   const activityTarget = useMemo<{ kind: 'thread' } | { kind: 'run'; runID: string } | null>(() => {
     if (!message.parentMessageID && (message.replyCount ?? 0) > 0) return { kind: 'thread' };
-    if (message.agentRunID) return { kind: 'run', runID: message.agentRunID };
+    if (message.agentRunID && (!message.agentInvokerID || message.agentInvokerID === currentUserId)) {
+      return { kind: 'run', runID: message.agentRunID };
+    }
     return null;
-  }, [message.parentMessageID, message.replyCount, message.agentRunID]);
+  }, [message.parentMessageID, message.replyCount, message.agentRunID, message.agentInvokerID, currentUserId]);
   const openActivity = () => {
     /* istanbul ignore if -- both entry points render only when activityTarget is set */
     if (!activityTarget) return;
@@ -870,20 +876,43 @@ function MessageItemImpl({
             // Shared agents post on someone's behalf — say whose ("gg · for
             // Bob"), mirroring the "bob's gg" naming agents see in context.
             // With a run link, the badge doubles as the door to the run
-            // drawer (timeline, artifacts, spend).
+            // drawer (timeline, artifacts, spend) — but run logs are
+            // invoker-only, so the door only opens on your own runs.
             <button
               type="button"
-              disabled={!message.agentRunID}
-              onClick={() => message.agentRunID && openRunDrawer(message.agentRunID)}
-              title={message.agentRunID ? 'Show agent activity' : undefined}
+              disabled={!message.agentRunID || message.agentInvokerID !== currentUserId}
+              onClick={() =>
+                message.agentRunID &&
+                message.agentInvokerID === currentUserId &&
+                openRunDrawer(message.agentRunID)
+              }
+              title={
+                message.agentRunID && message.agentInvokerID === currentUserId
+                  ? 'Show agent activity'
+                  : undefined
+              }
               className={`shrink-0 rounded bg-muted px-1 text-[10px] font-medium leading-4 text-muted-foreground ${
-                message.agentRunID ? 'cursor-pointer hover:bg-accent hover:text-foreground' : ''
+                message.agentRunID && message.agentInvokerID === currentUserId
+                  ? 'cursor-pointer hover:bg-accent hover:text-foreground'
+                  : ''
               }`}
               aria-label={`Invoked by ${userMap?.get(message.agentInvokerID)?.displayName ?? 'a teammate'}`}
             >
               for {userMap?.get(message.agentInvokerID)?.displayName ?? 'a teammate'}
             </button>
           )}
+          {(message.agentSkills ?? []).map((skill) => (
+            // Skills the run used — visible to the whole thread (unlike the
+            // run's activity log, which is invoker-only).
+            <span
+              key={`skill-${skill}`}
+              className="shrink-0 rounded bg-muted px-1 text-[10px] font-medium leading-4 text-muted-foreground"
+              title="Skill used in this run"
+              aria-label={`Used skill ${skill}`}
+            >
+              ⚡ {skill}
+            </span>
+          ))}
           <Tooltip>
             <TooltipTrigger
               // Timestamp sits right after the author name (Slack-style),
@@ -1283,6 +1312,20 @@ const MessageBody = memo(function MessageBody({
   onContentHeightChange,
   openTag,
 }: MessageBodyProps) {
+  // Known /pick tokens (installed connectors + workspace skills) render as
+  // pills in the SENT message too — the token stays meaningful after send
+  // instead of degrading to plain text the moment it leaves the composer.
+  const { data: allConnectors } = useConnectors();
+  const { data: allSkills } = useSkills();
+  const pickTokens = useMemo(() => {
+    const t = new Set<string>();
+    for (const c of allConnectors ?? []) if (c.installed) t.add(c.slug);
+    for (const sk of allSkills ?? []) {
+      const tok = skillPickToken(sk.name);
+      if (tok) t.add(tok);
+    }
+    return t;
+  }, [allConnectors, allSkills]);
   // Artifact marker messages render as a compact expand/download card
   // instead of markdown — the marker is machine syntax, not prose.
   const artifactMarker = parseArtifactMarker(message.body);
@@ -1299,6 +1342,7 @@ const MessageBody = memo(function MessageBody({
     <>
       {renderMarkdown(message.body, {
         tree: message.rendered,
+        pickTokens,
         emojiMap,
         largeEmoji: isEmojiOnlyMessage(message.body, emojiMap),
         currentUserId,

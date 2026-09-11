@@ -61,6 +61,10 @@ export interface AgentView {
   status: 'active' | 'needs_setup' | 'offline' | string;
   prefs: UserAgentPrefs;
   resolved: ResolvedAgentConfig;
+  // The workspace template's prompt — the text `resolved.persona` falls back
+  // to when the caller has no override. The card pre-fills the editor with
+  // the effective prompt and stores "inherit" when an edit matches this.
+  defaultPersona?: string;
 }
 
 // Patch shape for PATCH /api/v1/agents/{slug}/prefs. Empty string resets a

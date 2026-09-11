@@ -414,7 +414,9 @@ export function RunActivityDrawer() {
               ? thread
                 ? 'No agent has worked in this thread yet.'
                 : 'That run no longer exists.'
-              : 'Couldn’t load this run — it may be in a channel you don’t have access to.'}
+              : error instanceof ApiError && error.status === 403
+                ? 'Only the person who invoked a run can see its activity.'
+                : 'Couldn’t load this run — it may be in a channel you don’t have access to.'}
           </div>
         )}
         {run && (
