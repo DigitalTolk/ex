@@ -12,6 +12,10 @@ import (
 	"syscall"
 	"time"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+
 	ex "github.com/DigitalTolk/ex"
 	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/cache"
@@ -97,6 +101,10 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	// Outside development the table is provisioned elsewhere, so TTL enablement
+	// is an ASSUMPTION — assert it at boot rather than discovering years of
+	// unexpired runner/claim/follow rows later.
+	db.CheckTTL(ctx)
 
 	// ------------------------------------------------------------------ Redis (cache)
 	redisCache, err := cache.NewRedisCache(cfg.RedisURL)
@@ -219,6 +227,7 @@ func main() {
 		slog.Info("transactional email enabled", "provider", cfg.EmailProvider)
 	}
 	authSvc.SetMailer(mailer, cfg.BaseURL)
+	authSvc.SetGuestLoginAnyRole(cfg.GuestLoginAnyRole)
 	var avatarSigner service.AvatarSigner
 	if s3Client != nil {
 		avatarSigner = s3Client
@@ -249,6 +258,107 @@ func main() {
 		Markdown:        service.NewMarkdownRenderer(),
 		Activator:       convSvc,
 	})
+	// ---------------------------------------------------------- Agent runs
+	// Agents-as-users + the run orchestrator (plan-v2). Additive: agents ride
+	// the existing user rows, runs/timelines are new RUN# items, fan-out uses
+	// the existing pub/sub.
+	agentStore := store.NewAgentStore(db)
+	runStore := store.NewRunStore(db)
+	agentSvc := service.NewAgentService(agentStore, userStore)
+	orchestrator := service.NewOrchestrator(runStore, agentSvc, userStore, messageSvc, redisPubSub, jwtMgr)
+	messageSvc.SetAgentDispatcher(orchestrator)
+	// Deleting a chat sweeps its agent-run activity logs (a thread root sweeps
+	// every reply's logs too).
+	messageSvc.SetRunLogPurger(orchestrator)
+	// Agent posts carry used-skill badges (picks + invoke_skill calls).
+	messageSvc.SetRunSkillResolver(orchestrator.RunSkillBadges)
+	orchestrator.SetConversationReader(conversationStore)
+	orchestrator.SetOwnerDMResolver(convSvc)
+	// Shared context (CTX#, plan-v2 §8): visibility rides the message-service
+	// access check, so context is readable exactly where the chat is.
+	contextSvc := service.NewContextService(store.NewContextStore(db), messageSvc)
+	orchestrator.SetContextService(contextSvc)
+	// Tier terminal runs' timelines to S3 (hot events stay in DynamoDB while a
+	// run is live; on completion they roll into one object and the hot rows are
+	// pruned). No S3 configured → events stay in DynamoDB.
+	if s3Client != nil {
+		orchestrator.SetEventArchive(storage.NewEventArchive(s3Client))
+	}
+	agentH := handler.NewAgentHandler(agentSvc, orchestrator, userSvc, jwtMgr)
+	// The Run Activity Drawer is readable by anyone who can read the channel
+	// the run happened in (plan-v2 Phase 2), not just the invoker.
+	agentH.SetTimelineAccess(messageSvc)
+	agentRunToolH := handler.NewAgentRunToolHandler(orchestrator, messageSvc, contextSvc, agentSvc)
+	agentRunToolH.SetBaseURL(cfg.BaseURL)
+	// Connectors: external-service API docs bundles + per-user credentials
+	// (installed via the SPA, shipped to the invoker's runner per run).
+	connectorSvc := service.NewConnectorService(store.NewConnectorStore(db))
+	// Connector endpoints are fetched server-side WITH a user's credential, so
+	// production refuses plain HTTP and non-routable targets outright (SSRF);
+	// a dev workspace may point a connector at a service on the same machine.
+	service.AllowPrivateConnectorTargets(cfg.IsDev())
+	connectorH := handler.NewConnectorHandler(connectorSvc, orchestrator)
+	orchestrator.SetConnectorRegistry(connectorSvc)
+	// Server-side bedrock execution: agents with harness=bedrock and
+	// executionMode=server run their Converse loop in THIS process on the
+	// task role's credentials — they answer with no desktop app open, and
+	// connector calls never leave the backend. Off unless BEDROCK_REGION is
+	// set; then server-mode invocations keep failing legibly.
+	if cfg.BedrockRegion != "" {
+		bctx, bcancel := context.WithTimeout(context.Background(), 15*time.Second)
+		bedrockOpts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(cfg.BedrockRegion)}
+		// Local dev: the environment's AWS_* creds belong to dynamodb-local,
+		// so Bedrock gets its own static credentials when provided.
+		if cfg.BedrockAccessKeyID != "" {
+			bedrockOpts = append(bedrockOpts, awsconfig.WithCredentialsProvider(
+				credentials.NewStaticCredentialsProvider(cfg.BedrockAccessKeyID, cfg.BedrockSecretAccessKey, cfg.BedrockSessionToken)))
+		}
+		bedrockCfg, err := awsconfig.LoadDefaultConfig(bctx, bedrockOpts...)
+		bcancel()
+		if err != nil {
+			slog.Error("bedrock: aws config load failed; server-side agents disabled", "error", err)
+		} else {
+			engine := service.NewServerEngine(orchestrator, connectorSvc, bedrockruntime.NewFromConfig(bedrockCfg))
+			// The bridged workspace tools (channels, DMs, reminders, skills, …)
+			// speak this process's own run-tool HTTP API over loopback, with the
+			// run's token — full parity with a desktop runner's tool surface.
+			engine.SetRunAPIBase("http://127.0.0.1:" + cfg.Port)
+			orchestrator.SetServerEngine(engine)
+			slog.Info("bedrock server engine enabled", "region", cfg.BedrockRegion)
+		}
+	}
+	// The connector catalog is SOURCED from the standalone connector-provider:
+	// ex pulls docs + admin auth from it (never the reverse). Wire it and warm
+	// the registry once at boot; admins re-pull via POST /api/v1/connectors/sync.
+	if cfg.ConnectorProviderURL != "" {
+		connectorSvc.SetProvider(cfg.ConnectorProviderURL, cfg.ConnectorProviderKey)
+		go func() {
+			syncOnce := func(force bool) {
+				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				defer cancel()
+				res, err := connectorSvc.SyncFromProvider(ctx, "system", force)
+				switch {
+				case err != nil:
+					slog.Warn("connector-provider sync failed", "error", err)
+				case force || len(res.Synced) > 0:
+					slog.Info("connector-provider sync", "synced", res.Synced, "unchanged", len(res.Unchanged), "skipped", len(res.Skipped))
+				}
+			}
+			// Boot sync forces a full pull: registration changes (baseURL,
+			// auth) don't bump the provider revision, so a restart is the
+			// moment they propagate. The minute ticker is revision-gated —
+			// an unchanged catalog costs one small listing fetch, and only
+			// new or re-published connectors are re-downloaded. Runs are
+			// sequential on this goroutine, so they never overlap.
+			syncOnce(true)
+			t := time.NewTicker(time.Minute)
+			defer t.Stop()
+			for range t.C {
+				syncOnce(false)
+			}
+		}()
+	}
+
 	userStateSvc := service.NewUserStateService(userStateStore, redisPubSub)
 	emojiSvc := service.NewEmojiService(emojiStore, userStore, redisPubSub)
 	if s3Client != nil {
@@ -358,6 +468,7 @@ func main() {
 		}
 	}
 	messageSvc.SetNotifier(notificationSvc)
+	orchestrator.SetApprovalNotifier(notificationSvc)
 	settingsSvc := service.NewSettingsService(store.NewSettingsStore(db))
 	attachmentSvc.SetUploadLimits(settingsSvc)
 	unfurlSvc := service.NewUnfurlService(redisCache)
@@ -430,6 +541,18 @@ func main() {
 	uploadH := handler.NewUploadHandler(s3Client)
 	emojiH := handler.NewEmojiHandler(emojiSvc)
 	presenceH := handler.NewPresenceHandler(presenceSvc)
+	// Shared agents always read as online — they're services, not sockets.
+	presenceH.SetAlwaysOnline(func(r *http.Request) []string {
+		agents, err := agentSvc.ListAgents(r.Context())
+		if err != nil {
+			return nil
+		}
+		ids := make([]string, 0, len(agents))
+		for _, a := range agents {
+			ids = append(ids, a.ID)
+		}
+		return ids
+	})
 	attachmentH := handler.NewAttachmentHandler(attachmentSvc)
 	adminH := handler.NewAdminHandler(settingsSvc)
 	// Mail diagnostics: an admin can read the effective transport and send a
@@ -526,6 +649,24 @@ func main() {
 	// CACHE-FIRST service — not the raw store — so per-keystroke
 	// autocomplete stays off DynamoDB for warm IDs.
 	searchH := handler.NewSearchHandler(searcher, searchAccess, userSvc, channelSvc)
+	// Ex-wide agent tools (channels, DMs, search, reactions) — every check
+	// runs against the INVOKER's access, never the agent's.
+	agentRunToolH.SetWorkspace(handler.AgentWorkspaceDeps{
+		Channels:      channelSvc,
+		Conversations: convSvc,
+		Searcher:      searcher,
+		SearchAccess:  searchAccess,
+		Reminders:     reminderSvc,
+	})
+	// Coding tasks (plan-coding-agent.md): the deterministic task layer around
+	// the dev agent — project channels, task threads, lifecycle gates. The
+	// orchestrator reads tasks for dispatch/claim/bundles; the task service
+	// owns creation and transitions.
+	taskStore := store.NewTaskStore(db)
+	orchestrator.SetTaskStore(taskStore)
+	codingTaskSvc := service.NewCodingTaskService(taskStore, channelSvc, messageSvc, userStore, agentSvc, orchestrator)
+	codingTaskSvc.SetBaseURL(cfg.BaseURL)
+	codingTaskH := handler.NewCodingTaskHandler(codingTaskSvc, orchestrator)
 	if searchClient != nil {
 		ids := newIDSearcher(searcher)
 		userSvc.SetSearcher(ids)
@@ -588,6 +729,12 @@ func main() {
 		Webhook:      webhookH,
 		Activity:     activityH,
 		Command:      commandH,
+		Agent:        agentH,
+		AgentRunner:  handler.NewAgentRunnerHandler(agentSvc, orchestrator),
+		AgentRunTool: agentRunToolH,
+		Context:      handler.NewContextHandler(contextSvc),
+		Connector:    connectorH,
+		CodingTask:   codingTaskH,
 		JWT:          jwtMgr,
 		FrontendFS:   frontendDist,
 		AppVersion:   appVersion,
@@ -620,6 +767,14 @@ func main() {
 	backgroundCtx, stopBackground := context.WithCancel(context.Background())
 	defer stopBackground()
 	go userSvc.RunExpiredStatusSweeper(backgroundCtx, time.Minute, 0)
+	// Seed the gg/qib templates AND their shared agent users (idempotent;
+	// never overwrites admin edits), then start the run reconciler: boot
+	// recovery of active runs + the deadline/lease sweep that turns a closed
+	// laptop into run.failed{runner_lost} instead of a stuck run.
+	if err := agentSvc.SeedDefaults(backgroundCtx); err != nil {
+		slog.Error("agent seed failed", "error", err)
+	}
+	orchestrator.StartReconciler(backgroundCtx)
 	// Directory re-sync (phone + manager from MS Graph): first sweep at boot
 	// doubles as the workspace backfill.
 	if directorySync != nil {

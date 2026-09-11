@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon, AlarmClock } from 'lucide-react';
+import { Bot, Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon, AlarmClock, Eye } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
@@ -20,7 +20,11 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { ReminderDialog } from '@/components/chat/ReminderDialog';
+import { WatcherDialog } from '@/components/chat/WatcherDialog';
 import { useCreateReminder } from '@/hooks/useActivity';
+import { useParentWatchers, useSkills } from '@/hooks/useAgents';
+import { useConnectors } from '@/hooks/useConnectors';
+import { skillPickToken } from '@/lib/picks';
 import { REMINDER_PRESETS, computeReminderTime, toLocalInputValue, type ReminderPresetKey } from '@/lib/reminder-times';
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { UserHoverCard } from '@/components/UserHoverCard';
@@ -43,6 +47,11 @@ import { MessageRichAttachments } from '@/components/chat/MessageRichAttachments
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { extractURLs, formatLongDateTime, formatRelative } from '@/lib/format';
 import { registerEditMessageHandler } from '@/lib/window-events';
+import { openRunDrawer, openThreadDrawer } from '@/stores/run-drawer';
+import { ArtifactCard } from '@/components/chat/ArtifactCard';
+import { TaskCard } from '@/components/chat/TaskCard';
+import { parseArtifactMarker } from '@/lib/artifact-marker';
+import { parseTaskMarker } from '@/lib/task-marker';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
@@ -292,6 +301,7 @@ function MessageItemImpl({
   const setPinned = useSetPinned();
   const createReminder = useCreateReminder();
   const [reminderDialogOpen, setReminderDialogOpen] = useState(false);
+  const [watcherDialogOpen, setWatcherDialogOpen] = useState(false);
   const [reminderSeed, setReminderSeed] = useState('');
   const { data: emojiMap } = useEmojiMap();
   const { openTag } = useTagOpen();
@@ -303,6 +313,36 @@ function MessageItemImpl({
     parentID: message.parentID,
     parentType: message.parentType === 'conversation' ? ('conversation' as const) : ('channel' as const),
     channelSlug,
+  };
+
+  // Watcher badge: the viewer's own thread-scoped watchers on THIS message.
+  // One query per parent (react-query dedupes across rows); we match by
+  // threadRootID so only the watched thread's root message is badged.
+  const { data: parentWatchers } = useParentWatchers(reminderTarget.parentType, message.parentID);
+  const myWatchers = useMemo(
+    () => (parentWatchers ?? []).filter((w) => w.threadRootID === message.id),
+    [parentWatchers, message.id],
+  );
+  const [manageWatchersOpen, setManageWatchersOpen] = useState(false);
+
+  // "Show activity" appears in two places (the desktop menu and the mobile
+  // sheet) and both had their own copy of this predicate and its branch. One
+  // definition: a thread ROOT opens the whole thread's activity, any other
+  // message opens its own run. Run LOGS are invoker-only server-side, so a
+  // run posted for someone else gets no affordance at all (a thread root
+  // stays — the server filters it to the caller's own runs).
+  const activityTarget = useMemo<{ kind: 'thread' } | { kind: 'run'; runID: string } | null>(() => {
+    if (!message.parentMessageID && (message.replyCount ?? 0) > 0) return { kind: 'thread' };
+    if (message.agentRunID && (!message.agentInvokerID || message.agentInvokerID === currentUserId)) {
+      return { kind: 'run', runID: message.agentRunID };
+    }
+    return null;
+  }, [message.parentMessageID, message.replyCount, message.agentRunID, message.agentInvokerID, currentUserId]);
+  const openActivity = () => {
+    /* istanbul ignore if -- both entry points render only when activityTarget is set */
+    if (!activityTarget) return;
+    if (activityTarget.kind === 'thread') openThreadDrawer(message.parentID, message.id);
+    else openRunDrawer(activityTarget.runID);
   };
 
   // One builder so the preset (mutate) and custom-dialog (mutateAsync) paths
@@ -647,6 +687,20 @@ function MessageItemImpl({
           }
         />
         <div className="flex flex-col rounded-lg border">
+          {activityTarget && (
+            <button
+              type="button"
+              className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
+              onClick={() => {
+                setMobileActionsOpen(false);
+                openActivity();
+              }}
+              aria-label="Show agent activity"
+            >
+              <Bot className="h-4 w-4" />
+              Show activity
+            </button>
+          )}
           <button
             type="button"
             className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
@@ -818,6 +872,47 @@ function MessageItemImpl({
               BOT
             </span>
           )}
+          {message.agentInvokerID && (
+            // Shared agents post on someone's behalf — say whose ("gg · for
+            // Bob"), mirroring the "bob's gg" naming agents see in context.
+            // With a run link, the badge doubles as the door to the run
+            // drawer (timeline, artifacts, spend) — but run logs are
+            // invoker-only, so the door only opens on your own runs.
+            <button
+              type="button"
+              disabled={!message.agentRunID || message.agentInvokerID !== currentUserId}
+              onClick={() =>
+                message.agentRunID &&
+                message.agentInvokerID === currentUserId &&
+                openRunDrawer(message.agentRunID)
+              }
+              title={
+                message.agentRunID && message.agentInvokerID === currentUserId
+                  ? 'Show agent activity'
+                  : undefined
+              }
+              className={`shrink-0 rounded bg-muted px-1 text-[10px] font-medium leading-4 text-muted-foreground ${
+                message.agentRunID && message.agentInvokerID === currentUserId
+                  ? 'cursor-pointer hover:bg-accent hover:text-foreground'
+                  : ''
+              }`}
+              aria-label={`Invoked by ${userMap?.get(message.agentInvokerID)?.displayName ?? 'a teammate'}`}
+            >
+              for {userMap?.get(message.agentInvokerID)?.displayName ?? 'a teammate'}
+            </button>
+          )}
+          {(message.agentSkills ?? []).map((skill) => (
+            // Skills the run used — visible to the whole thread (unlike the
+            // run's activity log, which is invoker-only).
+            <span
+              key={`skill-${skill}`}
+              className="shrink-0 rounded bg-muted px-1 text-[10px] font-medium leading-4 text-muted-foreground"
+              title="Skill used in this run"
+              aria-label={`Used skill ${skill}`}
+            >
+              ⚡ {skill}
+            </span>
+          ))}
           <Tooltip>
             <TooltipTrigger
               // Timestamp sits right after the author name (Slack-style),
@@ -847,6 +942,18 @@ function MessageItemImpl({
               <Pin className="h-3 w-3" />
               Pinned
             </span>
+          )}
+          {myWatchers.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setManageWatchersOpen(true)}
+              className="inline-flex items-center gap-0.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-xs text-primary transition-colors hover:bg-primary/20"
+              aria-label={`Watching — ${myWatchers.length} agent watcher${myWatchers.length > 1 ? 's' : ''} (click to manage)`}
+              data-testid="watcher-indicator"
+            >
+              <Eye className="h-3 w-3" />
+              Watching{myWatchers.length > 1 ? ` ·${myWatchers.length}` : ''}
+            </button>
           )}
         </div>
         )}
@@ -1047,6 +1154,15 @@ function MessageItemImpl({
               <MoreHorizontal className="h-3.5 w-3.5" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
+              {activityTarget && (
+                <DropdownMenuItem
+                  onClick={openActivity}
+                  aria-label="Show agent activity"
+                >
+                  <Bot className="mr-2 h-4 w-4" />
+                  Show activity
+                </DropdownMenuItem>
+              )}
               {/* Static labels: the menu closes on click, so a "… copied"
                   swap would never be seen on desktop. */}
               <DropdownMenuItem
@@ -1096,6 +1212,13 @@ function MessageItemImpl({
                   </DropdownMenuItem>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
+              <DropdownMenuItem
+                onClick={() => setWatcherDialogOpen(true)}
+                data-testid="watch-thread"
+                aria-label="Add a watcher to this thread"
+              >
+                <Eye className="mr-2 h-4 w-4" /> Watch thread…
+              </DropdownMenuItem>
               {isOwn && (
                 <>
                   {canEdit && (
@@ -1134,6 +1257,28 @@ function MessageItemImpl({
           onConfirm={scheduleReminderAsync}
         />
       )}
+      {watcherDialogOpen && (
+        <WatcherDialog
+          open
+          onOpenChange={setWatcherDialogOpen}
+          parentID={message.parentID}
+          parentType={message.parentType === 'conversation' ? 'conversation' : 'channel'}
+          threadRootID={message.parentMessageID || message.id}
+        />
+      )}
+      {manageWatchersOpen && myWatchers.length > 0 && (
+        <WatcherDialog
+          open
+          onOpenChange={(o) => {
+            /* istanbul ignore else -- the dialog never calls onOpenChange(true) */
+            if (!o) setManageWatchersOpen(false);
+          }}
+          parentID={message.parentID}
+          parentType={message.parentType === 'conversation' ? 'conversation' : 'channel'}
+          threadRootID={message.parentMessageID || message.id}
+          editingRows={myWatchers}
+        />
+      )}
     </div>
   );
 }
@@ -1167,10 +1312,37 @@ const MessageBody = memo(function MessageBody({
   onContentHeightChange,
   openTag,
 }: MessageBodyProps) {
+  // Known /pick tokens (installed connectors + workspace skills) render as
+  // pills in the SENT message too — the token stays meaningful after send
+  // instead of degrading to plain text the moment it leaves the composer.
+  const { data: allConnectors } = useConnectors();
+  const { data: allSkills } = useSkills();
+  const pickTokens = useMemo(() => {
+    const t = new Set<string>();
+    for (const c of allConnectors ?? []) if (c.installed) t.add(c.slug);
+    for (const sk of allSkills ?? []) {
+      const tok = skillPickToken(sk.name);
+      if (tok) t.add(tok);
+    }
+    return t;
+  }, [allConnectors, allSkills]);
+  // Artifact marker messages render as a compact expand/download card
+  // instead of markdown — the marker is machine syntax, not prose.
+  const artifactMarker = parseArtifactMarker(message.body);
+  if (artifactMarker) {
+    return <ArtifactCard marker={artifactMarker} />;
+  }
+  // Coding-task card markers (the root of a task thread) render as a live
+  // task card: flair, state, links, and the requester's sign-off.
+  const taskMarker = parseTaskMarker(message.body);
+  if (taskMarker) {
+    return <TaskCard marker={taskMarker} currentUserId={currentUserId} />;
+  }
   return (
     <>
       {renderMarkdown(message.body, {
         tree: message.rendered,
+        pickTokens,
         emojiMap,
         largeEmoji: isEmojiOnlyMessage(message.body, emojiMap),
         currentUserId,

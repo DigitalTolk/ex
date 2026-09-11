@@ -14,6 +14,9 @@ import { ResourceErrorPage } from '@/pages/ResourceErrorPage';
 import { FilesPanel } from './FilesPanel';
 import { ChannelIntro } from './ConversationIntro';
 import { TypingIndicator } from './TypingIndicator';
+import { AgentActivityIndicator } from './AgentActivityIndicator';
+import { AgentApprovalCard } from './AgentApprovalCard';
+import { WatcherCatchUpCard } from './WatcherCatchUpCard';
 import { useChannelBySlug, useChannelMembers, useMuteChannel, useUserChannels } from '@/hooks/useChannels';
 import {
   useChannelMessages,
@@ -465,7 +468,12 @@ export function ChannelView() {
               lastOwnMessageId={activeEditingMessage ? undefined : lastOwnMessageId}
               aboveInput={
                 activeEditingMessage ? undefined : (
-                  <TypingIndicator parentID={channel?.id} userMap={userMap} />
+                  <>
+                    <AgentApprovalCard parentID={channel?.id} userMap={userMap} />
+                    <WatcherCatchUpCard parentID={channel?.id} parentType="channel" />
+                    <AgentActivityIndicator parentID={channel?.id} userMap={userMap} />
+                    <TypingIndicator parentID={channel?.id} userMap={userMap} />
+                  </>
                 )
               }
             />

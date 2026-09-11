@@ -7,7 +7,7 @@ import { Strikethrough, Autolink } from '@lezer/markdown';
 import type { WysiwygEditorHandle, ActiveFormat } from './types';
 import { composerTheme, composerHighlight } from './theme';
 import { inlinePreview } from './extensions/inlinePreview';
-import { mentionPills } from './extensions/mentionPills';
+import { connectorPills, mentionPills } from './extensions/mentionPills';
 import { emojiGlyphs } from './extensions/emojiGlyphs';
 import { composerAutocomplete, type CompletionProviders } from './extensions/completions';
 import { applyMark, applyBlock, getActiveFormats } from './extensions/commands';
@@ -49,6 +49,7 @@ const EMPTY_PROVIDERS: CompletionProviders = {
   customEmojis: () => [],
   skinTone: () => '',
   commands: () => [],
+  connectors: () => [],
 };
 
 interface Props {
@@ -130,6 +131,15 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
           composerHighlight,
           inlinePreview,
           mentionPills,
+          // "/cliffhub" connector picks and "/weekly-report" skill picks
+          // render as pills (installed connectors + workspace skills).
+          connectorPills(() => {
+            const p = cbRef.current.completionProviders ?? EMPTY_PROVIDERS;
+            return [
+              ...(p.connectors?.().map((c) => c.name) ?? []),
+              ...(p.skills?.().map((s) => s.name) ?? []),
+            ];
+          }),
           emojiGlyphs((name) => (cbRef.current.customEmojiMap?.() ?? {})[name]),
           composerAutocomplete({
             users: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).users(),
@@ -139,6 +149,8 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
             customEmojis: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).customEmojis(),
             skinTone: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).skinTone(),
             commands: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).commands?.() ?? [],
+            connectors: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).connectors?.() ?? [],
+            skills: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).skills?.() ?? [],
           }),
           composerTheme,
           // Autocomplete popup placement: rendered into <body> (escapes every
