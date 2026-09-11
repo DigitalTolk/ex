@@ -100,17 +100,21 @@ export const HarnessCodex = "codex";
  */
 export const HarnessBedrock = "bedrock";
 /**
- * Execution modes for API harnesses. Runner = the loop runs on the invoker's
- * desktop app (their machine's AWS credentials); Server = the backend runs
- * the loop (SSO-federated credentials), so the agent answers with no desktop
- * app open. CLI harnesses are always runner-executed.
+ * Execution modes for API harnesses. API harnesses run SERVER-side only: the
+ * backend executes the loop on the service's task role, so the agent answers
+ * with no desktop app open and an invoker's own cloud credentials are never
+ * involved. ExecutionRunner survives only as a legacy stored value — Resolve
+ * coerces it to server, validators reject it on write, and the runner claim
+ * path skips server runs outright. CLI harnesses are always runner-executed.
  */
 export const ExecutionRunner = "runner";
 /**
- * Execution modes for API harnesses. Runner = the loop runs on the invoker's
- * desktop app (their machine's AWS credentials); Server = the backend runs
- * the loop (SSO-federated credentials), so the agent answers with no desktop
- * app open. CLI harnesses are always runner-executed.
+ * Execution modes for API harnesses. API harnesses run SERVER-side only: the
+ * backend executes the loop on the service's task role, so the agent answers
+ * with no desktop app open and an invoker's own cloud credentials are never
+ * involved. ExecutionRunner survives only as a legacy stored value — Resolve
+ * coerces it to server, validators reject it on write, and the runner claim
+ * path skips server runs outright. CLI harnesses are always runner-executed.
  */
 export const ExecutionServer = "server";
 /**

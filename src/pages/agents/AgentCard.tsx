@@ -54,6 +54,11 @@ export function AgentCard({ agent }: { agent: AgentView }) {
   useEffect(() => () => clearTimeout(savedTimer.current), []);
 
   const isBedrock = harness === 'bedrock';
+  // The EFFECTIVE backend decides which controls make sense: with the select
+  // on "default", the workspace default (resolved) is what actually runs.
+  // Server-run bedrock agents have no desktop app to be offline and no local
+  // harness tools to pre-approve — those controls would be noise-shaped lies.
+  const effectiveBedrock = (harness || agent.resolved.harness) === 'bedrock';
 
   const dirty =
     persona !== (agent.prefs.persona ?? '') ||
@@ -153,18 +158,20 @@ export function AgentCard({ agent }: { agent: AgentView }) {
               onChange={(e) => setChainRounds(e.target.value)}
             />
           </div>
-          <div>
-            <Label htmlFor={`offline-${agent.slug}`}>If your app is offline</Label>
-            <select
-              id={`offline-${agent.slug}`}
-              className="mt-1 block rounded-md border bg-transparent p-2 text-sm"
-              value={offlinePolicy}
-              onChange={(e) => setOfflinePolicy(e.target.value)}
-            >
-              <option value="">fail fast (default)</option>
-              <option value="queue">queue up to 1 hour</option>
-            </select>
-          </div>
+          {!effectiveBedrock && (
+            <div>
+              <Label htmlFor={`offline-${agent.slug}`}>If your app is offline</Label>
+              <select
+                id={`offline-${agent.slug}`}
+                className="mt-1 block rounded-md border bg-transparent p-2 text-sm"
+                value={offlinePolicy}
+                onChange={(e) => setOfflinePolicy(e.target.value)}
+              >
+                <option value="">fail fast (default)</option>
+                <option value="queue">queue up to 1 hour</option>
+              </select>
+            </div>
+          )}
           <div>
             <Label htmlFor={`model-${agent.slug}`}>Model</Label>
             <Input
@@ -209,6 +216,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
               ask me before it replies
             </label>
           )}
+          {!effectiveBedrock && (
           <fieldset className="pb-2">
             <legend className="text-sm font-medium">Don’t ask me to approve</legend>
             <p className="mb-1 text-xs text-muted-foreground">
@@ -232,6 +240,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
               ))}
             </div>
           </fieldset>
+          )}
           <Button onClick={save} disabled={!dirty || update.isPending} className="ml-auto">
             {saved ? <Check className="mr-1 h-4 w-4" /> : null}
             {saved ? 'Saved' : update.isPending ? 'Saving…' : 'Save'}

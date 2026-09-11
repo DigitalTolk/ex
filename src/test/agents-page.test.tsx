@@ -70,6 +70,14 @@ function agentFixtures(): AgentView[] {
       resolved: { harness: 'claude', model: '', persona: 'Default aa persona', limits: {}, maxConcurrentRuns: 1 },
     },
     {
+      id: 'ag-ns',
+      displayName: 'ns',
+      slug: 'ns',
+      status: 'needs_setup',
+      prefs: { userID: 'u-1', slug: 'ns' },
+      resolved: { harness: 'codex', model: '', persona: 'Default ns persona', limits: {}, maxConcurrentRuns: 1 },
+    },
+    {
       id: 'ag-ww',
       displayName: 'ww',
       slug: 'ww',
@@ -219,11 +227,18 @@ describe('AgentsPage', () => {
     expect(qib.getByLabelText('Discussion rounds')).toHaveAttribute('placeholder', '8');
     expect(qib.getByLabelText('Thread follow-ups')).toHaveValue('window:30');
     expect(qib.getByLabelText('ask me before it replies')).toBeChecked();
-    expect(qib.getByLabelText('Read files')).toBeChecked();
+    // Server-run bedrock agents have no desktop app to be offline and no
+    // local harness tools to pre-approve — those controls must be absent.
+    expect(qib.queryByLabelText('Read files')).not.toBeInTheDocument();
+    expect(qib.queryByLabelText('If your app is offline')).not.toBeInTheDocument();
     expect(qib.getByText(/Runs via AWS Bedrock/)).toBeInTheDocument();
+    expect(qib.getByText(/on the server, with your\s+access/)).toBeInTheDocument();
 
     const aa = await findCard('aa');
     expect(aa.getByText('desktop app not running')).toBeInTheDocument();
+
+    const ns = await findCard('ns');
+    expect(ns.getByText('CLI missing on your machine')).toBeInTheDocument();
     expect(aa.getByLabelText('Thread follow-ups')).toHaveValue('always');
 
     const ww = await findCard('ww');

@@ -52,9 +52,9 @@ export function WatchedChannels({ agent }: { agent: AgentView }) {
         Watched channels
       </div>
       <p className="mb-2 text-xs text-muted-foreground">
-        @{agent.displayName} reacts to matching messages in these channels without being mentioned — on
-        your machine, with your access. Keywords empty = every message; check-ins post only when
-        something needs attention.
+        @{agent.displayName} reacts to matching messages in these channels without being mentioned —{' '}
+        {agent.resolved.harness === 'bedrock' ? 'on the server' : 'on your machine'}, with your
+        access. Keywords empty = every message; check-ins post only when something needs attention.
       </p>
       {(subs?.length ?? 0) > 0 && (
         <ul className="mb-2 space-y-1">
