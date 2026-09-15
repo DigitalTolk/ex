@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -84,6 +85,10 @@ func (s *UserService) indexUser(ctx context.Context, u *model.User) {
 // edits) and AuthService (signup / invite acceptance).
 func indexUser(ctx context.Context, idx UserIndexer, u *model.User) {
 	if idx == nil || u == nil {
+		return
+	}
+	// Keeps bots out of mention autocomplete and user search.
+	if u.IsBot {
 		return
 	}
 	if err := idx.IndexUser(ctx, u); err != nil {
@@ -717,7 +722,7 @@ func (s *UserService) Search(ctx context.Context, query string, limit int) ([]*m
 			out := make([]*model.User, 0, len(ids))
 			for _, id := range ids {
 				u, err := s.users.GetUser(ctx, id)
-				if err != nil || u == nil {
+				if err != nil || u == nil || u.IsBot {
 					continue
 				}
 				normalizeUserProfile(u)
@@ -736,6 +741,9 @@ func (s *UserService) Search(ctx context.Context, query string, limit int) ([]*m
 	query = strings.ToLower(query)
 	var results []*model.User
 	for _, u := range all {
+		if u.IsBot {
+			continue
+		}
 		if strings.Contains(strings.ToLower(u.DisplayName), query) ||
 			strings.Contains(strings.ToLower(u.Email), query) {
 			normalizeUserProfile(u)
@@ -877,6 +885,9 @@ func (s *UserService) List(ctx context.Context, limit int, cursor string) ([]*mo
 	if err != nil {
 		return nil, "", fmt.Errorf("user: list: %w", err)
 	}
+	// Filtered after paging, not in the store: a store-side filter would return
+	// short pages. Bots are a handful of rows.
+	users = slices.DeleteFunc(users, func(u *model.User) bool { return u != nil && u.IsBot })
 	for _, u := range users {
 		normalizeUserProfile(u)
 	}
