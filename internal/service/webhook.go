@@ -48,6 +48,12 @@ type WebhookUserResolver interface {
 	List(ctx context.Context, limit int, cursor string) ([]*model.User, string, error)
 }
 
+// WebhookBotProvisioner creates (or returns) the machine account a webhook
+// direct-messages from. Implemented by UserService.
+type WebhookBotProvisioner interface {
+	EnsureBotUser(ctx context.Context, botID, displayName string) (*model.User, error)
+}
+
 // WebhookMembershipResolver checks whether the webhook creator is a member
 // of a channel — used to gate channel overrides into private channels.
 type WebhookMembershipResolver interface {
@@ -70,6 +76,7 @@ type IncomingWebhookService struct {
 	images      WebhookImageProxy
 	dms         WebhookDMResolver
 	users       WebhookUserResolver
+	bots        WebhookBotProvisioner
 	memberships WebhookMembershipResolver
 	publisher   Publisher
 	baseURL     string
@@ -82,6 +89,8 @@ func NewIncomingWebhookService(store IncomingWebhookStore, channels WebhookChann
 func (s *IncomingWebhookService) SetDMResolver(dms WebhookDMResolver) { s.dms = dms }
 
 func (s *IncomingWebhookService) SetUserResolver(users WebhookUserResolver) { s.users = users }
+
+func (s *IncomingWebhookService) SetBotProvisioner(b WebhookBotProvisioner) { s.bots = b }
 
 func (s *IncomingWebhookService) SetMembershipResolver(m WebhookMembershipResolver) {
 	s.memberships = m
@@ -213,12 +222,16 @@ func (s *IncomingWebhookService) URL(wh *model.IncomingWebhook) string {
 // never for the unauthenticated caller.
 var ErrWebhookDMRejected = errors.New("webhook: direct-message target rejected")
 
+// ErrWebhookUnavailable marks an infrastructure failure rather than a bad
+// request. The handler maps it to 503 so the caller retries.
+var ErrWebhookUnavailable = errors.New("webhook: delivery temporarily unavailable")
+
 func (s *IncomingWebhookService) Execute(ctx context.Context, id string, payload IncomingWebhookPayload) error {
 	wh, err := s.store.Get(ctx, id)
 	if err != nil {
 		return fmt.Errorf("webhook: get: %w", err)
 	}
-	parentID, parentType, err := s.targetParent(ctx, wh, payload.Channel)
+	target, err := s.targetParent(ctx, wh, payload.Channel)
 	if err != nil {
 		return err
 	}
@@ -246,12 +259,18 @@ func (s *IncomingWebhookService) Execute(ctx context.Context, id string, payload
 	// the webhook. Attributing them to wh.CreatedBy would make the message
 	// "their own" everywhere that keys off AuthorID — suppressing their unread
 	// badge, hiding their desktop alert's counterpart, and even letting them
-	// edit/delete the bot's message. The creator is just the configurer; routing
-	// and the private-channel post gate still use wh.CreatedBy from the webhook
-	// record. Leave AuthorID empty so SendWebhook stamps the "webhook" sentinel.
+	// edit/delete the bot's message. The creator is just the configurer; the
+	// private-channel post gate still uses wh.CreatedBy from the webhook record.
+	//
+	// Channel posts carry the "webhook" sentinel, since the webhook is not a
+	// channel member. DM posts carry the bot's real account ID: the bot is a
+	// participant of the conversation, and the notification fan-out excludes
+	// the author from its audience — which is precisely what leaves the
+	// recipient as the only person notified.
 	_, err = s.messages.SendWebhook(ctx, WebhookMessageInput{
-		ParentID:    parentID,
-		ParentType:  parentType,
+		ParentID:    target.parentID,
+		ParentType:  target.parentType,
+		AuthorID:    target.authorID,
 		Body:        s.translateMattermostMarkup(ctx, payload.Text),
 		Username:    username,
 		AvatarURL:   avatarURL,
@@ -268,19 +287,30 @@ func normalizeEmojiName(raw string) string {
 	return strings.Trim(strings.TrimSpace(raw), ":")
 }
 
-func (s *IncomingWebhookService) targetParent(ctx context.Context, wh *model.IncomingWebhook, raw string) (string, string, error) {
-	if !wh.LockToChannel && strings.HasPrefix(strings.TrimSpace(raw), "@") {
-		conv, err := s.targetDM(ctx, wh, raw)
-		if err != nil {
-			return "", "", err
+// webhookTarget is where a delivery lands and who it is authored as.
+type webhookTarget struct {
+	parentID   string
+	parentType string
+	authorID   string
+}
+
+// isDMTarget reports whether the channel field names a person: Mattermost's
+// "@name" or a bare email. Channel slugs never contain "@".
+func isDMTarget(raw string) bool { return strings.Contains(strings.TrimSpace(raw), "@") }
+
+func (s *IncomingWebhookService) targetParent(ctx context.Context, wh *model.IncomingWebhook, raw string) (webhookTarget, error) {
+	if isDMTarget(raw) {
+		// Reject rather than quietly redirect to the bound channel.
+		if wh.LockToChannel {
+			return webhookTarget{}, fmt.Errorf("%w: webhook is locked to its channel and cannot direct-message", ErrWebhookDMRejected)
 		}
-		return conv.ID, ParentConversation, nil
+		return s.targetDM(ctx, wh, raw)
 	}
 	ch, err := s.targetChannel(ctx, wh, raw)
 	if err != nil {
-		return "", "", err
+		return webhookTarget{}, err
 	}
-	return ch.ID, ParentChannel, nil
+	return webhookTarget{parentID: ch.ID, parentType: ParentChannel, authorID: WebhookAuthorID}, nil
 }
 
 func (s *IncomingWebhookService) targetChannel(ctx context.Context, wh *model.IncomingWebhook, raw string) (*model.Channel, error) {
@@ -342,24 +372,36 @@ func (s *IncomingWebhookService) ensureCreatorCanPost(ctx context.Context, wh *m
 	return nil
 }
 
-func (s *IncomingWebhookService) targetDM(ctx context.Context, wh *model.IncomingWebhook, raw string) (*model.Conversation, error) {
-	if s.dms == nil || s.users == nil || wh.CreatedBy == "" {
-		return nil, fmt.Errorf("%w: resolver is not configured", ErrWebhookDMRejected)
+// targetDM resolves a DM target to the bot↔recipient conversation. The
+// creator configures the integration; they are not a party to its messages.
+func (s *IncomingWebhookService) targetDM(ctx context.Context, wh *model.IncomingWebhook, raw string) (webhookTarget, error) {
+	if s.dms == nil || s.users == nil || s.bots == nil {
+		return webhookTarget{}, fmt.Errorf("%w: resolver is not configured", ErrWebhookDMRejected)
 	}
 	targetName := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "@"))
 	if targetName == "" {
-		return nil, store.ErrNotFound
+		return webhookTarget{}, store.ErrNotFound
 	}
 	target, err := s.findWebhookTargetUser(ctx, targetName)
 	if err != nil {
-		return nil, err
+		return webhookTarget{}, err
 	}
-	// Mattermost forbids a webhook direct-messaging its own creator (the
-	// "DM" would just be the creator talking to themselves).
-	if target.ID == wh.CreatedBy {
-		return nil, fmt.Errorf("%w: cannot direct-message the webhook creator", ErrWebhookDMRejected)
+	// Addressable by ID despite being hidden from search; a bot-to-bot DM has
+	// no reader.
+	if target.IsBot {
+		return webhookTarget{}, fmt.Errorf("%w: cannot direct-message a bot account", ErrWebhookDMRejected)
 	}
-	return s.dms.GetOrCreateDM(ctx, wh.CreatedBy, target.ID)
+	bot, err := s.bots.EnsureBotUser(ctx, WebhookBotUserID(wh.ID), wh.Username)
+	if err != nil {
+		return webhookTarget{}, fmt.Errorf("%w: provision bot: %w", ErrWebhookUnavailable, err)
+	}
+	conv, err := s.dms.GetOrCreateDM(ctx, bot.ID, target.ID)
+	if err != nil {
+		// A missing user still surfaces as ErrNotFound; the handler checks
+		// that first.
+		return webhookTarget{}, fmt.Errorf("%w: open conversation: %w", ErrWebhookUnavailable, err)
+	}
+	return webhookTarget{parentID: conv.ID, parentType: ParentConversation, authorID: bot.ID}, nil
 }
 
 // webhookDirectUserResolver is the optional point-read capability of the

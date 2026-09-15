@@ -104,6 +104,25 @@ func (f *fakeWebhookDMResolver) GetOrCreateDM(_ context.Context, userA, userB st
 	return conv, nil
 }
 
+// fakeWebhookBots stands in for UserService's bot provisioning: it hands back
+// a bot account for the requested ID and records the display name it was asked
+// to label it with.
+type fakeWebhookBots struct {
+	err   error
+	names map[string]string
+}
+
+func (f *fakeWebhookBots) EnsureBotUser(_ context.Context, botID, displayName string) (*model.User, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.names == nil {
+		f.names = map[string]string{}
+	}
+	f.names[botID] = displayName
+	return &model.User{ID: botID, DisplayName: displayName, IsBot: true}, nil
+}
+
 type fakeWebhookUsers struct {
 	users []*model.User
 	err   error
@@ -279,35 +298,6 @@ func TestIncomingWebhookService_ValidationListDeleteAndOverrides(t *testing.T) {
 	}
 }
 
-func TestIncomingWebhookService_DirectMessageOverride(t *testing.T) {
-	ctx := context.Background()
-	ch := &model.Channel{ID: "ch-1", Name: "General", Slug: "general"}
-	messages := newMockMessageStore()
-	msgSvc := NewMessageService(messages, nil, nil, newMockPublisher(), nil)
-	webhooks := &fakeWebhookStore{items: map[string]*model.IncomingWebhook{
-		"wh": {ID: "wh", ChannelID: ch.ID, CreatedBy: "creator-1", Username: "stored", CreatedAt: time.Now()},
-	}}
-	svc := NewIncomingWebhookService(webhooks, fakeWebhookChannels{
-		byID: map[string]*model.Channel{ch.ID: ch},
-	}, msgSvc, nil, "")
-	svc.SetDMResolver(&fakeWebhookDMResolver{})
-	svc.SetUserResolver(fakeWebhookUsers{users: []*model.User{
-		{ID: "creator-1", DisplayName: "Alice", Email: "alice@example.com"},
-		{ID: "bob-1", DisplayName: "Bob Smith", Email: "bob@example.com"},
-	}})
-
-	if err := svc.Execute(ctx, "wh", IncomingWebhookPayload{Text: "hello", Channel: "@bob"}); err != nil {
-		t.Fatalf("Execute DM override: %v", err)
-	}
-	msg := onlyStoredMessage(t, messages)
-	// The DM is still routed between the creator and the target (wh.CreatedBy
-	// drives GetOrCreateDM), but the message is authored by the "webhook"
-	// sentinel — not the creator — so it's never treated as the creator's own.
-	if msg.ParentID != "creator-1__bob-1" || msg.AuthorID != "webhook" {
-		t.Fatalf("DM webhook message = %#v", msg)
-	}
-}
-
 func TestIncomingWebhookService_TranslatesMattermostMentionsToMessageLinks(t *testing.T) {
 	ctx := context.Background()
 	ch := &model.Channel{ID: "ch-1", Name: "General", Slug: "general"}
@@ -391,16 +381,17 @@ func TestIncomingWebhookService_DirectMessageResolutionErrors(t *testing.T) {
 	if err := svc.Execute(ctx, "missing", IncomingWebhookPayload{Text: "hello"}); err == nil {
 		t.Fatal("Execute missing webhook succeeded")
 	}
-	if _, _, err := svc.targetParent(ctx, wh, "@"); err == nil {
+	if _, err := svc.targetParent(ctx, wh, "@"); err == nil {
 		t.Fatal("blank DM target succeeded")
 	}
 	svc.SetDMResolver(&fakeWebhookDMResolver{})
+	svc.SetBotProvisioner(&fakeWebhookBots{})
 	svc.SetUserResolver(fakeWebhookUsers{err: assertWebhookErr("users down")})
-	if _, _, err := svc.targetParent(ctx, wh, "@bob"); err == nil || !strings.Contains(err.Error(), "list users") {
+	if _, err := svc.targetParent(ctx, wh, "@bob"); err == nil || !strings.Contains(err.Error(), "list users") {
 		t.Fatalf("list users err = %v", err)
 	}
 	svc.SetUserResolver(fakeWebhookUsers{users: []*model.User{nil, &model.User{ID: "u-1", DisplayName: "Alice", Email: "alice@example.com"}}})
-	if _, _, err := svc.targetParent(ctx, wh, "@bob"); err == nil {
+	if _, err := svc.targetParent(ctx, wh, "@bob"); err == nil {
 		t.Fatal("unknown DM target succeeded")
 	}
 	if _, err := svc.targetChannel(ctx, wh, "@bob"); !errors.Is(err, store.ErrNotFound) {
@@ -626,35 +617,6 @@ func TestIncomingWebhookService_IconEmojiStoresName(t *testing.T) {
 	}
 }
 
-func TestIncomingWebhookService_DMPaginationAndSelfBlock(t *testing.T) {
-	ctx := context.Background()
-	ch := &model.Channel{ID: "ch-1", Slug: "general"}
-	messages := newMockMessageStore()
-	msgSvc := NewMessageService(messages, nil, nil, nil, nil)
-	wh := &model.IncomingWebhook{ID: "wh", ChannelID: ch.ID, CreatedBy: "creator-1", CreatedAt: time.Now()}
-	svc := NewIncomingWebhookService(&fakeWebhookStore{items: map[string]*model.IncomingWebhook{"wh": wh}}, fakeWebhookChannels{
-		byID: map[string]*model.Channel{ch.ID: ch},
-	}, msgSvc, nil, "")
-	svc.SetDMResolver(&fakeWebhookDMResolver{})
-	svc.SetUserResolver(&pagingWebhookUsers{pages: [][]*model.User{
-		{{ID: "creator-1", DisplayName: "Alice", Email: "alice@example.com"}},
-		{{ID: "x", DisplayName: "Decoy"}},
-		{{ID: "bob-1", DisplayName: "Bob Smith", Email: "bob@example.com"}},
-	}})
-
-	// Self-DM (the @name resolves to the creator) is forbidden.
-	if err := svc.Execute(ctx, "wh", IncomingWebhookPayload{Text: "hi", Channel: "@alice"}); err == nil || !strings.Contains(err.Error(), "creator") {
-		t.Fatalf("self DM err = %v", err)
-	}
-	// A target on the third page is still resolved.
-	if err := svc.Execute(ctx, "wh", IncomingWebhookPayload{Text: "hi", Channel: "@bob"}); err != nil {
-		t.Fatalf("paged DM: %v", err)
-	}
-	if got := onlyStoredMessage(t, messages).ParentID; got != "creator-1__bob-1" {
-		t.Fatalf("paged DM parent = %q", got)
-	}
-}
-
 func TestIncomingWebhookService_PublishesChangedEvents(t *testing.T) {
 	ctx := context.Background()
 	ch := &model.Channel{ID: "ch-1", Slug: "general"}
@@ -783,5 +745,282 @@ func TestIncomingWebhookService_Update(t *testing.T) {
 	store0.updateErr = assertWebhookErr("update failed")
 	if _, err := svc.Update(ctx, "wh", &model.IncomingWebhook{Title: "x", ChannelID: ch.ID}); err == nil {
 		t.Fatal("Update store error succeeded")
+	}
+}
+
+// botDMFixture wires a webhook whose DM path is fully configured, plus the
+// fakes the assertions read back from.
+func botDMFixture(t *testing.T, wh *model.IncomingWebhook, users []*model.User) (*IncomingWebhookService, *mockMessageStore, *fakeWebhookBots) {
+	t.Helper()
+	ch := &model.Channel{ID: "ch-1", Name: "General", Slug: "general"}
+	if wh.ChannelID == "" {
+		wh.ChannelID = ch.ID
+	}
+	messages := newMockMessageStore()
+	msgSvc := NewMessageService(messages, nil, nil, newMockPublisher(), nil)
+	svc := NewIncomingWebhookService(
+		&fakeWebhookStore{items: map[string]*model.IncomingWebhook{wh.ID: wh}},
+		fakeWebhookChannels{byID: map[string]*model.Channel{ch.ID: ch}},
+		msgSvc, nil, "")
+	svc.SetDMResolver(&fakeWebhookDMResolver{})
+	svc.SetUserResolver(fakeWebhookUsers{users: users})
+	bots := &fakeWebhookBots{}
+	svc.SetBotProvisioner(bots)
+	return svc, messages, bots
+}
+
+func dmWebhook() *model.IncomingWebhook {
+	return &model.IncomingWebhook{ID: "wh", CreatedBy: "u-creator", Username: "Deploy Bot", CreatedAt: time.Now()}
+}
+
+// Every addressing form lands in the same bot↔recipient conversation, authored
+// by the bot. The creator is never a participant: they configure the
+// integration, they are not a party to its messages.
+func TestIncomingWebhookService_DirectMessageTargetForms(t *testing.T) {
+	users := []*model.User{
+		{ID: "u-creator", DisplayName: "Cara", Email: "cara@example.com"},
+		{ID: "bob-1", DisplayName: "Bob Smith", Email: "bob@example.com"},
+	}
+	botID := WebhookBotUserID("wh")
+	wantConv := botID + "__bob-1"
+
+	for _, target := range []string{"bob@example.com", "@bob@example.com", "@Bob Smith", "@bob-1"} {
+		t.Run(target, func(t *testing.T) {
+			svc, messages, bots := botDMFixture(t, dmWebhook(), users)
+			if err := svc.Execute(context.Background(), "wh", IncomingWebhookPayload{
+				Text: "build 412 failed", Channel: target,
+			}); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			msg := onlyStoredMessage(t, messages)
+			if msg.ParentID != wantConv {
+				t.Errorf("conversation = %q, want the bot↔recipient DM %q", msg.ParentID, wantConv)
+			}
+			if msg.AuthorID != botID {
+				t.Errorf("authorID = %q, want the bot so the fan-out excludes it", msg.AuthorID)
+			}
+			if bots.names[botID] != "Deploy Bot" {
+				t.Errorf("thread label = %q, want the webhook's username", bots.names[botID])
+			}
+		})
+	}
+}
+
+// The creator is an ordinary recipient now. The old self-DM rejection existed
+// only because the creator was one of the two participants.
+func TestIncomingWebhookService_DirectMessagesItsOwnCreator(t *testing.T) {
+	svc, messages, _ := botDMFixture(t, dmWebhook(), []*model.User{
+		{ID: "u-creator", DisplayName: "Cara", Email: "cara@example.com"},
+	})
+	if err := svc.Execute(context.Background(), "wh", IncomingWebhookPayload{Text: "hi", Channel: "cara@example.com"}); err != nil {
+		t.Fatalf("DM to creator: %v", err)
+	}
+	if got, want := onlyStoredMessage(t, messages).ParentID, WebhookBotUserID("wh")+"__u-creator"; got != want {
+		t.Errorf("conversation = %q, want %q", got, want)
+	}
+}
+
+// Two webhooks messaging the same person get separate threads, so the
+// recipient can tell the integrations apart.
+func TestIncomingWebhookService_EachWebhookOwnsItsThread(t *testing.T) {
+	users := []*model.User{{ID: "bob-1", Email: "bob@example.com"}}
+	ctx := context.Background()
+	deploy, deployMsgs, _ := botDMFixture(t, &model.IncomingWebhook{ID: "wh-deploy", CreatedAt: time.Now()}, users)
+	pager, pagerMsgs, _ := botDMFixture(t, &model.IncomingWebhook{ID: "wh-pager", CreatedAt: time.Now()}, users)
+
+	if err := deploy.Execute(ctx, "wh-deploy", IncomingWebhookPayload{Text: "deployed", Channel: "bob@example.com"}); err != nil {
+		t.Fatalf("deploy webhook: %v", err)
+	}
+	if err := pager.Execute(ctx, "wh-pager", IncomingWebhookPayload{Text: "paged", Channel: "bob@example.com"}); err != nil {
+		t.Fatalf("pager webhook: %v", err)
+	}
+	if a, b := onlyStoredMessage(t, deployMsgs).ParentID, onlyStoredMessage(t, pagerMsgs).ParentID; a == b {
+		t.Fatalf("both webhooks shared conversation %q; each should own its own thread", a)
+	}
+}
+
+// A locked webhook must refuse a person-addressed payload, not redirect it to
+// the bound channel and answer 200.
+func TestIncomingWebhookService_LockedWebhookRejectsDMTarget(t *testing.T) {
+	wh := dmWebhook()
+	wh.LockToChannel = true
+	svc, messages, bots := botDMFixture(t, wh, []*model.User{{ID: "bob-1", Email: "bob@example.com"}})
+
+	err := svc.Execute(context.Background(), "wh", IncomingWebhookPayload{Text: "salary review", Channel: "bob@example.com"})
+	if !errors.Is(err, ErrWebhookDMRejected) {
+		t.Fatalf("locked webhook DM err = %v, want ErrWebhookDMRejected", err)
+	}
+	if len(messages.messages) != 0 {
+		t.Errorf("published %d messages; the payload must not reach the channel", len(messages.messages))
+	}
+	if len(bots.names) != 0 {
+		t.Errorf("locked webhook provisioned a bot account: %v", bots.names)
+	}
+}
+
+// Every way a DM can fail, and the error class each maps to. The class matters
+// at an unauthenticated ingress: only ErrWebhookUnavailable tells the caller to
+// retry.
+func TestIncomingWebhookService_DirectMessageFailureModes(t *testing.T) {
+	bob := []*model.User{{ID: "bob-1", Email: "bob@example.com"}}
+	for _, tc := range []struct {
+		name    string
+		users   []*model.User
+		setup   func(*IncomingWebhookService)
+		target  string
+		wantErr error
+	}{
+		{
+			name: "no provisioner wired", users: bob,
+			setup:  func(s *IncomingWebhookService) { s.SetBotProvisioner(nil) },
+			target: "bob@example.com", wantErr: ErrWebhookDMRejected,
+		},
+		{
+			name:  "target is itself a bot",
+			users: []*model.User{{ID: "bot-other", DisplayName: "Other Bot", IsBot: true}},
+			// Bots stay addressable by ID even though they are hidden from search.
+			target: "@bot-other", wantErr: ErrWebhookDMRejected,
+		},
+		{
+			name: "provisioning the bot fails", users: bob,
+			setup: func(s *IncomingWebhookService) {
+				s.SetBotProvisioner(&fakeWebhookBots{err: errors.New("users table throttled")})
+			},
+			target: "bob@example.com", wantErr: ErrWebhookUnavailable,
+		},
+		{
+			name: "opening the conversation fails", users: bob,
+			setup: func(s *IncomingWebhookService) {
+				s.SetDMResolver(&failingWebhookDMResolver{err: errors.New("conversations down")})
+			},
+			target: "bob@example.com", wantErr: ErrWebhookUnavailable,
+		},
+		{
+			name: "no such recipient", users: bob,
+			target: "nobody@example.com", wantErr: store.ErrNotFound,
+		},
+		{
+			name: "target names nobody", users: bob,
+			target: "@", wantErr: store.ErrNotFound,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, messages, _ := botDMFixture(t, dmWebhook(), tc.users)
+			if tc.setup != nil {
+				tc.setup(svc)
+			}
+			err := svc.Execute(context.Background(), "wh", IncomingWebhookPayload{Text: "hi", Channel: tc.target})
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			if len(messages.messages) != 0 {
+				t.Errorf("stored %d messages despite the failure", len(messages.messages))
+			}
+		})
+	}
+}
+
+type failingWebhookDMResolver struct{ err error }
+
+func (f *failingWebhookDMResolver) GetOrCreateDM(context.Context, string, string) (*model.Conversation, error) {
+	return nil, f.err
+}
+
+func TestIsDMTarget(t *testing.T) {
+	for _, raw := range []string{"@bob", "@bob@example.com", "bob@example.com", "  bob@example.com  ", "@Bob Smith"} {
+		if !isDMTarget(raw) {
+			t.Errorf("isDMTarget(%q) = false, want true", raw)
+		}
+	}
+	for _, raw := range []string{"", "general", "builds", "team-updates", "#general", "no-at-sign.com"} {
+		if isDMTarget(raw) {
+			t.Errorf("isDMTarget(%q) = true, want false", raw)
+		}
+	}
+}
+
+// The directory walk is the last resort in findWebhookTargetUser, after the
+// email and search-index lookups miss. It must follow the cursor rather than
+// giving up on the first page.
+func TestIncomingWebhookService_DirectMessageTargetOnALaterPage(t *testing.T) {
+	svc, messages, _ := botDMFixture(t, dmWebhook(), nil)
+	svc.SetUserResolver(&pagingWebhookUsers{pages: [][]*model.User{
+		{{ID: "u-creator", DisplayName: "Cara", Email: "cara@example.com"}},
+		{{ID: "x", DisplayName: "Decoy"}},
+		{{ID: "bob-1", DisplayName: "Bob Smith", Email: "bob@example.com"}},
+	}})
+
+	if err := svc.Execute(context.Background(), "wh", IncomingWebhookPayload{Text: "hi", Channel: "@Bob Smith"}); err != nil {
+		t.Fatalf("paged DM: %v", err)
+	}
+	if got, want := onlyStoredMessage(t, messages).ParentID, WebhookBotUserID("wh")+"__bob-1"; got != want {
+		t.Errorf("conversation = %q, want %q", got, want)
+	}
+}
+
+// End-to-end across the real UserService, ConversationService and
+// MessageService. Mocks cannot show this: routing DMs through a per-webhook bot
+// means every thread is newly created, and a new conversation is born
+// un-activated — invisible to everyone but its creator. The two halves have to
+// compose, or the feature delivers messages nobody can see.
+func TestWebhookDM_EndToEnd_BotThreadIsVisibleToRecipient(t *testing.T) {
+	ctx := context.Background()
+
+	users := newMockUserStore()
+	users.users["creator-1"] = &model.User{ID: "creator-1", DisplayName: "Alice", Email: "alice@example.com", Status: "active"}
+	users.users["bob-1"] = &model.User{ID: "bob-1", DisplayName: "Bob Smith", Email: "bob@example.com", Status: "active"}
+
+	conversations := newMockConversationStore()
+	publisher := newMockPublisher()
+	userSvc := NewUserService(users, newMockCache(), nil, publisher)
+	convSvc := NewConversationService(conversations, users, newMockCache(), newMockBroker(), publisher)
+
+	messages := newMockMessageStore()
+	msgSvc := NewMessageService(messages, nil, nil, publisher, nil)
+	msgSvc.SetActivator(convSvc)
+
+	ch := &model.Channel{ID: "ch-1", Name: "General", Slug: "general"}
+	wh := &model.IncomingWebhook{ID: "wh", ChannelID: ch.ID, CreatedBy: "creator-1", Username: "Deploy Bot", CreatedAt: time.Now()}
+	whSvc := NewIncomingWebhookService(
+		&fakeWebhookStore{items: map[string]*model.IncomingWebhook{"wh": wh}},
+		fakeWebhookChannels{byID: map[string]*model.Channel{ch.ID: ch}},
+		msgSvc, nil, "")
+	whSvc.SetDMResolver(convSvc)
+	whSvc.SetUserResolver(userSvc)
+	whSvc.SetBotProvisioner(userSvc)
+
+	if err := whSvc.Execute(ctx, "wh", IncomingWebhookPayload{
+		Text:    "build 412 failed",
+		Channel: "bob@example.com",
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	msg := onlyStoredMessage(t, messages)
+	conv, err := conversations.GetConversation(ctx, msg.ParentID)
+	if err != nil {
+		t.Fatalf("conversation %q was never created: %v", msg.ParentID, err)
+	}
+
+	// Un-activated conversations are hidden from every participant but their
+	// creator — here, the bot. Only the real ConversationService can show this.
+	if !conv.Activated {
+		t.Fatal("conversation left un-activated — the recipient would never see the message")
+	}
+	var row *model.UserConversation
+	for _, uc := range conversations.userConvs["bob-1"] {
+		if uc.ConversationID == conv.ID {
+			row = uc
+		}
+	}
+	if row == nil {
+		t.Fatal("recipient has no sidebar row for the conversation")
+	}
+	if !row.Activated {
+		t.Error("recipient's sidebar row left un-activated")
+	}
+	// The label is snapshotted from the bot account a real UserService wrote.
+	if row.DisplayName != "Deploy Bot" {
+		t.Errorf("recipient's thread label = %q, want the integration's name", row.DisplayName)
 	}
 }
