@@ -1795,15 +1795,17 @@ func TestNotificationService_WebhookUsernameAndFallbackBody(t *testing.T) {
 	}
 
 	// Attachments-only webhook message: the override username drives the
-	// title and the attachment fallback drives the body.
+	// title and the attachment fallback drives the body. A channel webhook
+	// post carries the sentinel author, which is what Execute stamps — the
+	// bot account only authors DM posts, where it is a participant.
 	svc.NotifyForMessage(ctx, &model.Message{
-		ID: "m1", ParentID: "ch1", AuthorID: "u-author",
+		ID: "m1", ParentID: "ch1", AuthorID: WebhookAuthorID,
 		WebhookUsername:    "CI Bot",
 		MessageAttachments: []model.MessageAttachment{{Fallback: "build failed"}},
 	}, ParentChannel, nil)
 
 	// Both members opted into "all messages". The creator is a normal
-	// recipient too: the webhook sentinel authored the post, so u-author is
+	// recipient too: the webhook sentinel matches no member, so u-author is
 	// NOT excluded the way a real message author would be.
 	if len(push.calls) != 2 {
 		t.Fatalf("push count = %d, want 2 (both members incl. webhook creator)", len(push.calls))
@@ -2090,5 +2092,35 @@ func TestNotificationService_WideFanOutParallelBumps(t *testing.T) {
 		if nf.ParentUnreadNotifyCount != 1 {
 			t.Fatalf("recipient %s count = %d, want 1", uid, nf.ParentUnreadNotifyCount)
 		}
+	}
+}
+
+// The behaviour the bot-owned DM change exists for: when a webhook DMs
+// someone, that person is the ONLY one notified.
+//
+// The audience is the conversation's participants minus the author. With the
+// bot as both a participant and the author, the exclusion lands on the bot and
+// the recipient is all that is left.
+func TestNotificationService_WebhookDM_NotifiesOnlyTheRecipient(t *testing.T) {
+	svc, pub, _, conv, _, users := setupNotifier(t)
+	botID := WebhookBotUserID("wh")
+	convID := botID + "__bob-1"
+
+	users.users[botID] = &model.User{ID: botID, DisplayName: "Deploy Bot", IsBot: true}
+	users.users["bob-1"] = &model.User{ID: "bob-1", DisplayName: "Bob"}
+	conv.conversations[convID] = &model.Conversation{
+		ID: convID, Type: model.ConversationTypeDM, ParticipantIDs: []string{botID, "bob-1"},
+	}
+
+	svc.NotifyForMessage(context.Background(), &model.Message{
+		ID: "m1", ParentID: convID, AuthorID: botID,
+		Body: "build 412 failed", WebhookUsername: "Deploy Bot",
+	}, ParentConversation, nil)
+
+	if got := len(pub.published); got != 1 {
+		t.Fatalf("notification count = %d, want exactly 1 (the recipient)", got)
+	}
+	if got := pub.published[0].channel; got != pubsub.UserChannel("bob-1") {
+		t.Errorf("notified %s, want only the recipient", got)
 	}
 }
