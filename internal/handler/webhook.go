@@ -112,6 +112,13 @@ func (h *WebhookHandler) Execute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "not_found", "webhook or channel not found")
 			return
 		}
+		// Transient infrastructure failure: tell the caller to retry rather
+		// than letting a throttled store look like a malformed payload.
+		if errors.Is(err, service.ErrWebhookUnavailable) {
+			slog.Warn("webhook execute unavailable", "webhookID", id, "error", err)
+			writeError(w, http.StatusServiceUnavailable, "unavailable", "webhook delivery temporarily unavailable, retry shortly")
+			return
+		}
 		slog.Warn("webhook execute failed", "webhookID", id, "error", err)
 		writeError(w, http.StatusBadRequest, "webhook_error", "webhook request could not be processed")
 		return

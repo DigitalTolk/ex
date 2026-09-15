@@ -129,6 +129,12 @@ func (s *DirectorySyncService) Sweep(ctx context.Context, interval time.Duration
 			return
 		}
 		for _, u := range users {
+			// Bots are never in the upstream directory. Two incidental guards
+			// already skip them, but backfillAuthProvider marks any
+			// password-less account OIDC, so say it directly.
+			if u.IsBot {
+				continue
+			}
 			if u.AuthProvider != model.AuthProviderOIDC {
 				continue // guests aren't in the directory
 			}

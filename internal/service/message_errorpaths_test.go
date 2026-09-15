@@ -3,9 +3,12 @@ package service
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
+	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/pubsub"
 )
 
 // grantChannelMember makes checkAccess pass for a channel parent.
@@ -255,5 +258,122 @@ func TestSend_ConversationSeqErrorIsNonFatal(t *testing.T) {
 	svc.SetConversationSeqStore(&mockUnreadSeqStore{err: errors.New("boom")})
 	if _, err := svc.Send(context.Background(), "u1", "c1", ParentConversation, "hi", ""); err != nil {
 		t.Fatalf("Send should tolerate seq failure, got %v", err)
+	}
+}
+
+// A webhook DM must activate the conversation the way a human send does.
+// GetOrCreateDM hands back an un-activated conversation the first time the
+// creator and recipient are paired, and un-activated conversations are hidden
+// from everyone but the creator — so without this the bot's message is stored
+// and broadcast but never appears for the recipient.
+func TestSendWebhook_ConversationActivates(t *testing.T) {
+	svc, _, _, conversations, _ := setupMessageService()
+	conversations.conversations["c1"] = &model.Conversation{ID: "c1", ParticipantIDs: []string{"u1", "u2"}}
+	act := &ConversationActivatorMock{}
+	svc.SetActivator(act)
+
+	if _, err := svc.SendWebhook(context.Background(), WebhookMessageInput{
+		ParentID:   "c1",
+		ParentType: ParentConversation,
+		Body:       "alert",
+	}); err != nil {
+		t.Fatalf("SendWebhook: %v", err)
+	}
+	if len(act.ActivateCalls()) != 1 {
+		t.Fatalf("webhook DM should activate the conversation, got %d calls", len(act.ActivateCalls()))
+	}
+	if got := act.ActivateCalls()[0].ConvID; got != "c1" {
+		t.Errorf("activated convID = %q, want %q", got, "c1")
+	}
+}
+
+// Channel webhooks have no conversation to activate.
+func TestSendWebhook_ChannelDoesNotActivate(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	act := &ConversationActivatorMock{}
+	svc.SetActivator(act)
+
+	if _, err := svc.SendWebhook(context.Background(), WebhookMessageInput{
+		ParentID:   "ch1",
+		ParentType: ParentChannel,
+		Body:       "alert",
+	}); err != nil {
+		t.Fatalf("SendWebhook: %v", err)
+	}
+	if len(act.ActivateCalls()) != 0 {
+		t.Errorf("channel webhook should not activate a conversation, got %d calls", len(act.ActivateCalls()))
+	}
+}
+
+// Activation failure is logged, not fatal — the message still delivers.
+func TestSendWebhook_ConversationActivateErrorIsNonFatal(t *testing.T) {
+	svc, _, _, conversations, _ := setupMessageService()
+	conversations.conversations["c1"] = &model.Conversation{ID: "c1", ParticipantIDs: []string{"u1", "u2"}}
+	svc.SetActivator(&ConversationActivatorMock{
+		ActivateFunc: func(context.Context, string) error { return errors.New("boom") },
+	})
+
+	if _, err := svc.SendWebhook(context.Background(), WebhookMessageInput{
+		ParentID:   "c1",
+		ParentType: ParentConversation,
+		Body:       "alert",
+	}); err != nil {
+		t.Fatalf("SendWebhook should tolerate activate failure, got %v", err)
+	}
+}
+
+// A bot thread receives only webhook traffic, so if SendWebhook never touches
+// the conversation its updatedAt stays frozen at creation and the sidebar --
+// which orders on updatedAt -- sorts it as though it had been idle ever since.
+func TestSendWebhook_TouchesConversationActivity(t *testing.T) {
+	svc, _, _, conversations, publisher := setupMessageService()
+	conversations.conversations["c1"] = &model.Conversation{ID: "c1", ParticipantIDs: []string{"bot-x", "u2"}}
+	svc.SetActivator(&ConversationActivatorMock{})
+
+	if _, err := svc.SendWebhook(context.Background(), WebhookMessageInput{
+		ParentID: "c1", ParentType: ParentConversation, Body: "alert",
+	}); err != nil {
+		t.Fatalf("SendWebhook: %v", err)
+	}
+
+	if conversations.conversations["c1"].UpdatedAt.IsZero() {
+		t.Error("webhook DM did not advance the conversation's activity timestamp")
+	}
+	// Each participant's client needs to re-sort its sidebar.
+	var notified []string
+	for _, p := range publisher.published {
+		if p.event.Type == events.EventUserChannelUpdated {
+			notified = append(notified, p.channel)
+		}
+	}
+	for _, want := range []string{pubsub.UserChannel("bot-x"), pubsub.UserChannel("u2")} {
+		if !slices.Contains(notified, want) {
+			t.Errorf("no userchannel.updated for %s; got %v", want, notified)
+		}
+	}
+}
+
+// Ordering is cosmetic: a touch failure must not fail an already-stored message.
+func TestSendWebhook_TouchFailureIsNonFatal(t *testing.T) {
+	svc, _, _, conversations, _ := setupMessageService()
+	conversations.conversations["c1"] = &model.Conversation{ID: "c1", ParticipantIDs: []string{"bot-x", "u2"}}
+	conversations.touchErr = errors.New("boom")
+
+	if _, err := svc.SendWebhook(context.Background(), WebhookMessageInput{
+		ParentID: "c1", ParentType: ParentConversation, Body: "alert",
+	}); err != nil {
+		t.Fatalf("SendWebhook should tolerate touch failure, got %v", err)
+	}
+}
+
+// Nor must a failure to read the conversation back.
+func TestSendWebhook_ConversationLoadFailureIsNonFatal(t *testing.T) {
+	svc, _, _, conversations, _ := setupMessageService()
+	conversations.getErr = errors.New("dynamo down")
+
+	if _, err := svc.SendWebhook(context.Background(), WebhookMessageInput{
+		ParentID: "c1", ParentType: ParentConversation, Body: "alert",
+	}); err != nil {
+		t.Fatalf("SendWebhook should tolerate conversation load failure, got %v", err)
 	}
 }

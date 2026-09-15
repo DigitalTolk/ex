@@ -636,6 +636,12 @@ export interface User {
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
   /**
+   * IsBot marks a machine account: today, the backing identity of an incoming
+   * webhook. A bot owns the DM conversations its webhook posts into, and is
+   * hidden from the people directory, user search and mention autocomplete.
+   */
+  isBot?: boolean;
+  /**
    * Phone and Manager are directory attributes synced from Microsoft 365
    * at SSO login when the Graph integration is enabled. They are owned by
    * the directory (read-only in the app) and shown on profile surfaces.
