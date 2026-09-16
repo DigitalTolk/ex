@@ -249,7 +249,7 @@ describe('NotificationSettingsDialog browser', () => {
     expect(payload.kind).toBe('mention'); // not "message" → can't be active-view-suppressed
     expect(payload.messageID).toMatch(/^test-/); // unique → never deduped
     expect(payload.parentType).toBe('channel');
-    await expect.element(screen.getByTestId('test-notification-status')).toHaveTextContent(/Sent/i);
+    await expect.element(screen.getByTestId('test-notification-status')).toMatchTextContent(/Sent/i);
   });
 
   it('requests permission first when it has not been granted yet', async () => {
@@ -264,7 +264,7 @@ describe('NotificationSettingsDialog browser', () => {
     notif.requestPermission.mockResolvedValue('default'); // user dismissed the prompt
     const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
     await screen.getByTestId('send-test-notification').click();
-    await expect.element(screen.getByTestId('test-notification-status')).toHaveTextContent(/not granted/i);
+    await expect.element(screen.getByTestId('test-notification-status')).toMatchTextContent(/not granted/i);
   });
 
   it('toggling browser popups off never re-requests permission', async () => {
@@ -278,21 +278,21 @@ describe('NotificationSettingsDialog browser', () => {
     notif.permission = 'denied';
     const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
     await screen.getByTestId('send-test-notification').click();
-    await expect.element(screen.getByTestId('test-notification-status')).toHaveTextContent(/blocked/i);
+    await expect.element(screen.getByTestId('test-notification-status')).toMatchTextContent(/blocked/i);
   });
 
   it('explains when web notifications are unsupported', async () => {
     notif.permission = 'unsupported';
     const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
     await screen.getByTestId('send-test-notification').click();
-    await expect.element(screen.getByTestId('test-notification-status')).toHaveTextContent(/does not support/i);
+    await expect.element(screen.getByTestId('test-notification-status')).toMatchTextContent(/does not support/i);
   });
 
   it('explains when popups are turned off but sound played', async () => {
     notif.prefs = { soundEnabled: true, browserEnabled: false, idleDetectionEnabled: false };
     const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
     await screen.getByTestId('send-test-notification').click();
-    await expect.element(screen.getByTestId('test-notification-status')).toHaveTextContent(/popup/i);
+    await expect.element(screen.getByTestId('test-notification-status')).toMatchTextContent(/popup/i);
   });
 
   it('toggling browser popups on requests permission when not yet asked', async () => {
@@ -321,7 +321,7 @@ describe('NotificationSettingsDialog browser', () => {
     await vi.waitFor(() => {
       expect(notif.setIdleDetectionEnabled).toHaveBeenCalledWith(false);
     });
-    await expect.element(screen.getByTestId('idle-detection-status')).toHaveTextContent(/not granted/i);
+    await expect.element(screen.getByTestId('idle-detection-status')).toMatchTextContent(/not granted/i);
   });
 
   it('disabling away detection never re-prompts for permission', async () => {
@@ -344,7 +344,7 @@ describe('NotificationSettingsDialog browser', () => {
     const screen = await render(<NotificationSettingsDialog open onOpenChange={vi.fn()} />);
     const details = screen.getByTestId('notification-trace');
     await details.getByText(/Recent notification decisions/).click();
-    await expect.element(details).toHaveTextContent(/No notifications processed/);
+    await expect.element(details).toMatchTextContent(/No notifications processed/);
     // A processed notification appears after re-opening the block — one full
     // entry and one bare entry (no messageID/detail, e.g. a payload-less step).
     traceNotification('suppressed-thread', 'm-diag', { thread: 'root-9' });

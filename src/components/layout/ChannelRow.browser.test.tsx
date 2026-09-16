@@ -178,7 +178,7 @@ describe('ChannelRow browser behaviour', () => {
     await openChannelMenu(screen);
     // Native click (not the auto-retrying locator click) so a still-settling
     // menu portal under full-suite CPU load can't hang it to the timeout.
-    (screen.getByText('Work').element() as HTMLElement).click();
+    (screen.getByText('Move to Work').element() as HTMLElement).click();
     // isFav → favorite(false) then setCategory(cat-1).
     await vi.waitFor(() => expect(favoriteMutate).toHaveBeenCalledWith({ channelID: 'ch-1', favorite: false }));
     expect(setCategoryMutate).toHaveBeenCalledWith({ channelID: 'ch-1', categoryID: 'cat-1' });
@@ -244,7 +244,7 @@ describe('ChannelRow browser behaviour', () => {
     categoriesData.data = [{ id: 'cat-1', name: 'Work' }];
     const screen = await renderRow();
     await openChannelMenu(screen);
-    const item = screen.getByText('Work');
+    const item = screen.getByText('Move to Work');
     await expect.element(item).toBeVisible();
     // Native click — avoids the actionability-retry hang under CPU load.
     (item.element() as HTMLElement).click();
