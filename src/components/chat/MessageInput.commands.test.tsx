@@ -274,6 +274,14 @@ describe('MessageInput slash commands', () => {
     // satisfies every assertion below while never exercising the thing this
     // test is named after, and shows up only as a coverage drop.
     expect(screen.getByTestId('command-pending')).toBeInTheDocument();
+    // The first send clears the composer asynchronously (setBody('') plus an
+    // imperative editor setMarkdown('')). Retyping before that lands lets the
+    // clear wipe the retyped command out from under us, which is how this
+    // test loses the guard under CPU load. A disabled send button is the
+    // observable proof that the clear has finished.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
+    });
     await user.type(editor, '/mstmeetings');
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled();
@@ -282,6 +290,11 @@ describe('MessageInput slash commands', () => {
     await user.keyboard('{Enter}');
     expect(runCommandMock).toHaveBeenCalledTimes(1);
     expect(editor.textContent).toContain('/mstmeetings');
+    // A sendable composer proves that Enter reached the in-flight guard rather
+    // than the `!canSend` early return. Without this the two paths are
+    // indistinguishable here, and losing the guard shows up only as a coverage
+    // drop in a later CI run instead of as a failure in this test.
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled();
     // Still pending: the re-submit was swallowed, not run and settled.
     expect(screen.getByTestId('command-pending')).toBeInTheDocument();
 
