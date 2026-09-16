@@ -25,7 +25,7 @@ COPY src/ ./src/
 RUN npm run build
 
 # Stage 2: Build Go binary
-FROM golang:1.26-trixie AS backend
+FROM golang:1.27-trixie AS backend
 ARG GIT_TAG=""
 ARG GIT_SHA=""
 WORKDIR /app
