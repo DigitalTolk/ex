@@ -144,7 +144,7 @@ describe('EditProfileDialog browser', () => {
     const screen = await render(<Wrap><EditProfileDialog open onOpenChange={vi.fn()} /></Wrap>);
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
     await userEvent.upload(fileInput, pngFile('doc.pdf', 'application/pdf'));
-    await expect.element(screen.getByRole('alert')).toHaveTextContent('JPEG, PNG, or WebP');
+    await expect.element(screen.getByRole('alert')).toMatchTextContent('JPEG, PNG, or WebP');
   });
 
   it('rejects an avatar file larger than 2MB', async () => {
@@ -152,7 +152,7 @@ describe('EditProfileDialog browser', () => {
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
     const big = new File([new Uint8Array(2 * 1024 * 1024 + 10)], 'big.png', { type: 'image/png' });
     await userEvent.upload(fileInput, big);
-    await expect.element(screen.getByRole('alert')).toHaveTextContent('smaller than 2MB');
+    await expect.element(screen.getByRole('alert')).toMatchTextContent('smaller than 2MB');
   });
 
   it('uploads a new avatar (presign + PUT) and saves it with the returned key', async () => {

@@ -169,7 +169,7 @@ describe('UserStatusDialog browser', () => {
     );
     await vi.waitFor(() => expect(document.getElementById('status-text')).not.toBeNull());
     await screen.getByRole('button', { name: 'Save status' }).click();
-    await expect.element(screen.getByRole('alert')).toHaveTextContent('Choose an emoji and status text');
+    await expect.element(screen.getByRole('alert')).toMatchTextContent('Choose an emoji and status text');
     expect(vi.mocked(apiFetch)).not.toHaveBeenCalled();
   });
 
@@ -299,7 +299,7 @@ describe('UserStatusDialog browser', () => {
     native.call(input, 'x'.repeat(40));
     input.dispatchEvent(new Event('input', { bubbles: true }));
     await screen.getByRole('button', { name: 'Save status' }).click();
-    await expect.element(screen.getByRole('alert')).toHaveTextContent('32 characters or fewer');
+    await expect.element(screen.getByRole('alert')).toMatchTextContent('32 characters or fewer');
     expect(vi.mocked(apiFetch)).not.toHaveBeenCalled();
   });
 
