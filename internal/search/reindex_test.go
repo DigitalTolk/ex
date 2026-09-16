@@ -428,3 +428,53 @@ func TestReindexer_PropagatesListError(t *testing.T) {
 		t.Error("expected LastError to surface ddb failure")
 	}
 }
+
+// A rebuild reads straight from the user store, bypassing the service that
+// keeps bots out of the index — so one admin "reindex" click would otherwise
+// re-admit every bot, synthetic email and all.
+func TestReindexer_doRun_SkipsBots(t *testing.T) {
+	src := &fakeSources{users: []*model.User{
+		{ID: "u1", DisplayName: "Deploy Dave"},
+		{ID: "bot-abc", DisplayName: "Deploy Bot", IsBot: true},
+		{ID: "u2", DisplayName: "Erin"},
+	}}
+	w := &fakeBulk{}
+	r := &Reindexer{src: src, w: w}
+
+	if err := r.doRun(context.Background()); err != nil {
+		t.Fatalf("doRun: %v", err)
+	}
+	if got := w.calls[IndexUsers]; got != 2 {
+		t.Errorf("indexed %d users, want 2 (the bot must be skipped)", got)
+	}
+	if r.progress.Users != 2 {
+		t.Errorf("progress.Users = %d, want 2", r.progress.Users)
+	}
+}
+
+// Same guard on the analyzer-migration rebuild path.
+func TestRecreateUsersChannels_SkipsBots(t *testing.T) {
+	src := &seqSources{
+		userLists: [][]*model.User{{
+			{ID: "u1", DisplayName: "Alice"},
+			{ID: "bot-abc", DisplayName: "Deploy Bot", IsBot: true},
+		}},
+		channelLists: [][]*model.Channel{{{ID: "c1", Name: "general"}}},
+	}
+	rc := &fakeRebuilder{}
+
+	users, _, err := RecreateUsersChannels(context.Background(), rc, src)
+	if err != nil {
+		t.Fatalf("RecreateUsersChannels: %v", err)
+	}
+	if users != 1 {
+		t.Errorf("indexed %d users, want 1 (the bot must be skipped)", users)
+	}
+	for _, ids := range rc.bulked {
+		for _, id := range ids {
+			if id == "bot-abc" {
+				t.Error("bot was written into the rebuilt user index")
+			}
+		}
+	}
+}

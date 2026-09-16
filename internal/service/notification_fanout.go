@@ -67,13 +67,15 @@ func retryAudienceLoad[T any](ctx context.Context, load func() (T, error)) (T, e
 }
 
 func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model.Message, parentType, parentName string) memberSnapshot {
-	// Webhook posts have no human author to exclude — the "author" is the
-	// webhook sentinel, and the creator didn't write the message, so they
-	// stay in the audience as a normal, level-gated recipient.
+	// The author never notifies themselves. For a webhook posting into a
+	// CHANNEL the author is the "webhook" sentinel, which matches no member,
+	// so nobody is excluded and the creator stays in the audience as a normal,
+	// level-gated recipient — they didn't write the message.
+	//
+	// For a webhook posting into a DM the author is the webhook's bot account,
+	// which IS a participant. Excluding it is what leaves the recipient as the
+	// only person notified.
 	excludeID := msg.AuthorID
-	if msg.WebhookUsername != "" {
-		excludeID = ""
-	}
 	switch parentType {
 	case ParentChannel:
 		members, err := retryAudienceLoad(ctx, func() ([]*model.ChannelMembership, error) {

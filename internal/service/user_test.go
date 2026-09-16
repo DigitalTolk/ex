@@ -1267,3 +1267,38 @@ func TestUserService_RunExpiredStatusSweeper_ClearsAndTicks(t *testing.T) {
 		t.Fatal("expected expired status to be cleared")
 	}
 }
+
+// Bots participate in conversations but are not colleagues: they must stay out
+// of the people directory, user search, and the index that backs mention
+// autocomplete.
+func TestUserService_BotsAreHiddenFromPeopleSurfaces(t *testing.T) {
+	users := newMockUserStore()
+	users.users["u1"] = &model.User{ID: "u1", DisplayName: "Deploy Dave", Email: "dave@example.com"}
+	users.users["bot-wh"] = &model.User{ID: "bot-wh", DisplayName: "Deploy Bot", Email: "bot-wh@bots.ex.invalid", IsBot: true}
+	svc := NewUserService(users, nil, nil, nil)
+	idx := &stubUserIndexer{}
+	svc.SetIndexer(idx)
+	ctx := context.Background()
+
+	listed, _, err := svc.List(ctx, 50, "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listed) != 1 || listed[0].IsBot {
+		t.Errorf("directory returned %d users including bots; want only the human", len(listed))
+	}
+
+	found, err := svc.Search(ctx, "deploy", 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(found) != 1 || found[0].IsBot {
+		t.Errorf("search returned %d users including bots; want only the human", len(found))
+	}
+
+	svc.indexUser(ctx, users.users["bot-wh"])
+	svc.indexUser(ctx, users.users["u1"])
+	if len(idx.indexed) != 1 || idx.indexed[0] != "u1" {
+		t.Errorf("indexed %v, want only the human user", idx.indexed)
+	}
+}

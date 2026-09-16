@@ -243,3 +243,24 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatal("condition not reached in time")
 }
+
+// Machine accounts are by definition absent from the upstream Microsoft 365
+// directory, so the sweep must never judge them by it. Two incidental guards
+// already skip them (a bot has no AuthProvider, and deactivation additionally
+// requires an MSObjectID), but backfillAuthProvider classifies any
+// password-less account as OIDC, so the explicit IsBot skip is what keeps this
+// from becoming "every webhook bot is deactivated on the next sweep".
+func TestDirectorySyncSweepSkipsBots(t *testing.T) {
+	dir := &stubDirectoryLookup{} // nil profile: nobody is found in the directory
+	bot := &model.User{ID: "bot-abc", DisplayName: "Deploy Bot", IsBot: true, Status: "active"}
+	env := setupDirectorySync(dir, []*model.User{bot})
+
+	env.svc.Sweep(context.Background(), time.Hour)
+
+	if dir.gotEmail != "" {
+		t.Errorf("directory was queried for bot account %q", dir.gotEmail)
+	}
+	if got := env.users.users["bot-abc"].Status; got != "active" {
+		t.Errorf("bot status = %q, want it left active", got)
+	}
+}
