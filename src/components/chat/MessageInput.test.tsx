@@ -177,6 +177,42 @@ describe('MessageInput', () => {
     setMobileMatch(false);
   });
 
+  it('sends on bare Enter on mobile when the iPad shell reports a hardware keyboard', async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    setMobileMatch(true);
+    window.__EX_HARDWARE_KEYBOARD__ = true;
+    render(<MessageInput onSend={onSend} initialBody="Hello" />);
+
+    const editor = await screen.findByLabelText('Message input');
+    expect(editor).toHaveAttribute('enterkeyhint', 'send');
+    act(() => {
+      editor.focus();
+    });
+    await user.keyboard('{Enter}');
+
+    expect(onSend).toHaveBeenCalled();
+    delete window.__EX_HARDWARE_KEYBOARD__;
+    setMobileMatch(false);
+  });
+
+  it('breaks the line on bare Enter at tablet width while the on-screen keyboard is in use', async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    window.__EX_HARDWARE_KEYBOARD__ = false;
+    render(<MessageInput onSend={onSend} initialBody="Hello" />);
+
+    const editor = await screen.findByLabelText('Message input');
+    expect(editor).toHaveAttribute('enterkeyhint', 'enter');
+    act(() => {
+      editor.focus();
+    });
+    await user.keyboard('{Enter}');
+
+    expect(onSend).not.toHaveBeenCalled();
+    delete window.__EX_HARDWARE_KEYBOARD__;
+  });
+
   it('moves the mobile send action into the formatting toolbar while focused', async () => {
     setMobileMatch(true);
     render(<MessageInput onSend={vi.fn()} initialBody="Hello" />);

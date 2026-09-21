@@ -238,7 +238,10 @@ function renderSidebar(onClose = vi.fn()) {
   );
 }
 
+// Phone width is a touch device; the wide layout is a mouse device unless a
+// test pins touch itself (iPad). Drag-to-reorder follows the device, not width.
 function setMobileMatch(matches: boolean) {
+  window.__EX_FORCE_DEVICE__ = matches ? 'touch' : 'desktop';
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
     value: vi.fn(() => ({
@@ -315,6 +318,20 @@ describe('Sidebar', () => {
     await waitFor(() => {
       expect(channelRow.ondragstart).toBeNull();
     });
+  });
+
+  it('swaps drag-to-reorder and hover-only actions for touch ones on a wide touch screen (iPad)', async () => {
+    window.__EX_FORCE_DEVICE__ = 'touch';
+    renderSidebar();
+
+    const channelRow = screen.getByTestId('channel-row-ch-1') as HTMLElement;
+    expect(channelRow).not.toHaveClass('cursor-grab');
+    await waitFor(() => {
+      expect(channelRow.ondragstart).toBeNull();
+    });
+    expect(screen.getByTestId('sidebar-create-channel')).toHaveClass('touch:opacity-100', 'touch:h-7');
+    expect(screen.getByTestId('sidebar-new-dm')).toHaveClass('touch:opacity-100', 'touch:h-7');
+    expect(screen.getByTestId('sidebar-dm-sort-menu')).toHaveClass('touch:opacity-100', 'mobile:hidden');
   });
 
   it('renders channel list', () => {

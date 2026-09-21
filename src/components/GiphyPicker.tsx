@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { PopoverPortal } from '@/components/PopoverPortal';
-import { useIsMobile } from '@/hooks/useIsMobile';
+import { useAutoFocusTextInput } from '@/hooks/useHardwareKeyboard';
 
 // The grid is the only part that touches the Giphy SDK; lazy-loading it
 // keeps the ~1MB @giphy vendor chunk out of the main bundle until a user
@@ -54,11 +54,11 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
   const [gridWidth, setGridWidth] = useState(computeGridWidth);
   const triggerRef = useRef<HTMLSpanElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const isMobile = useIsMobile();
+  const autoFocusTextInput = useAutoFocusTextInput();
 
   useEffect(() => {
-    if (open && !isMobile) inputRef.current?.focus();
-  }, [isMobile, open]);
+    if (open && autoFocusTextInput) inputRef.current?.focus();
+  }, [autoFocusTextInput, open]);
 
   useEffect(() => {
     if (!open) return;

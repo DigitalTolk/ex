@@ -54,7 +54,7 @@ import { getSeenMap, mergeSeenMaps, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, 
 import { useUserState } from '@/hooks/useUserState';
 import { useDrafts } from '@/hooks/useDrafts';
 import { useActivity } from '@/hooks/useActivity';
-import { useIsMobile } from '@/hooks/useIsMobile';
+import { deviceKind } from '@/lib/device';
 import { useCategories, useCreateCategory, useDeleteCategory, useReorderCategories, useReorderSidebar, type SidebarMoveRequest } from '@/hooks/useSidebar';
 import { groupSidebarItems, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
 import { computeSidebarReorder, type SidebarSectionTarget } from '@/lib/sidebar-reorder';
@@ -125,7 +125,11 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [categoryCreateError, setCategoryCreateError] = useState('');
   const navigate = useNavigate();
   const location = useLocation();
-  const isMobile = useIsMobile();
+  // Drag-to-reorder is for mouse/trackpad devices only. On a touch device — a
+  // phone, or an iPad at any width — a hold on a row opens its menu
+  // (useRowLongPressMenu), and iPadOS would start a native drag lift from that
+  // same hold.
+  const dragDisabled = deviceKind() === 'touch';
   const directoryActive = location.pathname === '/directory' || location.pathname.startsWith('/directory/');
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
   // null = closed; otherwise the section being deleted. Modal confirm
@@ -921,7 +925,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   }, []);
 
   return (
-    <div className="flex h-full w-full min-w-0 flex-col text-gray-300 mobile:select-none mobile:touch-pan-y mobile:[-webkit-touch-callout:none] mobile:[-webkit-user-select:none]">
+    <div className="flex h-full w-full min-w-0 flex-col text-gray-300 touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]">
       <ScrollArea
         className="min-h-0 w-full flex-1 mobile:touch-pan-y"
         scrollbarClassName="opacity-0 transition-opacity data-[scrolling]:opacity-100"
@@ -1134,7 +1138,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                   {categoryGap && <DropGap sectionKey={section.key} testId={`sidebar-drop-gap-cat-${section.key}`} />}
                   {(isFavorites || isUserCategory || isChannelsDefault) && (
                     <PragmaticCategoryDropHitbox
-                      active={!isMobile && isDraggingCategory}
+                      active={!dragDisabled && isDraggingCategory}
                       data={{
                         type: 'section-header-target',
                         sectionKey: section.key,
@@ -1145,9 +1149,9 @@ export function Sidebar({ onClose }: SidebarProps) {
                   )}
                   <PragmaticCategoryHeader
                     id={section.key}
-                    draggable={isUserCategory && !isMobile}
+                    draggable={isUserCategory && !dragDisabled}
                     dropData={
-                      !isMobile && (isFavorites || isUserCategory || isChannelsDefault)
+                      !dragDisabled && (isFavorites || isUserCategory || isChannelsDefault)
                         ? {
                             type: 'section-header-target',
                             sectionKey: section.key,
@@ -1177,14 +1181,15 @@ export function Sidebar({ onClose }: SidebarProps) {
                       />
                       <span className="truncate">{section.title}</span>
                     </div>
-                    {/* Hover-revealed actions per section type. */}
+                    {/* Hover-revealed actions per section type; always shown
+                        (and finger-sized) on touch devices, which have no hover. */}
                     {isChannelsDefault && !isGuest(user?.systemRole) && (
                       <button
                         onClick={() => setCreateChannelOpen(true)}
                         aria-label="Create channel"
                         title="Create channel"
                         data-testid="sidebar-create-channel"
-                        className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white mobile:h-10 mobile:w-10 mobile:opacity-100"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:h-10 mobile:w-10"
                       >
                         <Plus className="h-3.5 w-3.5" />
                       </button>
@@ -1205,7 +1210,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                           aria-label="New direct message"
                           title="New direct message"
                           data-testid="sidebar-new-dm"
-                          className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white mobile:h-10 mobile:w-10 mobile:opacity-100"
+                          className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:h-10 mobile:w-10"
                         >
                           <Plus className="h-3.5 w-3.5" />
                         </button>
@@ -1218,7 +1223,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                           <DropdownMenuTrigger
                             aria-label="Sort direct messages"
                             data-testid="sidebar-dm-sort-menu"
-                            className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white mobile:hidden"
+                            className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:hidden"
                           >
                             <MoreVertical className="h-3.5 w-3.5" />
                           </DropdownMenuTrigger>
@@ -1240,7 +1245,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                         <DropdownMenuTrigger
                           aria-label={`Manage ${section.title} category`}
                           data-testid={`sidebar-category-menu-${section.key}`}
-                          className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white mobile:h-10 mobile:w-10 mobile:opacity-100"
+                          className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:h-10 mobile:w-10"
                         >
                           <MoreVertical className="h-3.5 w-3.5" />
                         </DropdownMenuTrigger>
@@ -1280,7 +1285,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                               sectionKey={section.key}
                               index={channelDropIndex}
                               channel={item.channel}
-                              disabled={isMobile}
+                              disabled={dragDisabled}
                             >
                               {(dragProps) => (
                                 <ChannelRow
@@ -1288,7 +1293,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                                   hasUnread={!!item.channel.unread}
                                   notifyCount={Number(item.channel.unreadNotifyCount ?? 0)}
                                   onClose={onClose}
-                                  draggable={!isMobile}
+                                  draggable={!dragDisabled}
                                   suppressNavigation={suppressChannelNavigationID === item.channel.channelID}
                                   onSuppressNavigationConsumed={clearSuppressedChannelNavigation}
                                   {...dragProps}
@@ -1323,7 +1328,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                               sectionKey={section.key}
                               index={conversationDropIndex}
                               conversation={conv}
-                              disabled={isMobile}
+                              disabled={dragDisabled}
                             >
                               {(dragProps) => (
                                 <ConversationRow
@@ -1335,7 +1340,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                                   dmUserID={otherID}
                                   onClose={onClose}
                                   onHide={hideConversation}
-                                  draggable={!isMobile}
+                                  draggable={!dragDisabled}
                                   suppressNavigation={suppressChannelNavigationID === conv.conversationID}
                                   onSuppressNavigationConsumed={clearSuppressedChannelNavigation}
                                   {...dragProps}

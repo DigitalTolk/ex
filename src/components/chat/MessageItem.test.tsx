@@ -523,13 +523,115 @@ describe('MessageItem', () => {
       );
       const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
 
-      expect(row).toHaveClass('mobile:touch-pan-y', 'mobile:[-webkit-touch-callout:none]');
+      expect(row).toHaveClass('touch:touch-pan-y', 'touch:[-webkit-touch-callout:none]');
       const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
-      row.dispatchEvent(contextMenu);
+      act(() => {
+        row.dispatchEvent(contextMenu);
+      });
       expect(contextMenu.defaultPrevented).toBe(true);
     } finally {
       Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
     }
+  });
+
+  describe('on a wide touch screen (iPad in the full tier)', () => {
+    // jsdom runs at 1024px on a pinned touch device and matchMedia reports
+    // no phone width, so these render the iPad layout: not mobile, but touch.
+    it('edits inline from the long-press sheet instead of asking a phone composer', async () => {
+      const onEditMessage = vi.fn();
+      renderWithProviders(
+        <MessageItem
+          message={makeMessage()}
+          authorName="Alice"
+          isOwn={true}
+          channelId="channel-1"
+          currentUserId="user-1"
+          onEditMessage={onEditMessage}
+        />,
+      );
+      const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
+      act(() => {
+        fireEvent.pointerDown(row, { pointerType: 'touch' });
+      });
+      await act(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve, 430));
+      });
+
+      const sheet = screen.getByTestId('mobile-message-actions');
+      expect(sheet.parentElement).not.toHaveClass('md:hidden');
+      fireEvent.click(within(sheet).getByText('Edit'));
+
+      expect(await screen.findByTestId('inline-edit')).toBeInTheDocument();
+      expect(onEditMessage).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument();
+    });
+
+    it('opens the action sheet from a trackpad secondary click and hides the hover toolbar', () => {
+      renderWithProviders(
+        <MessageItem
+          message={makeMessage()}
+          authorName="Alice"
+          isOwn={false}
+          channelId="channel-1"
+          currentUserId="user-1"
+        />,
+      );
+      const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
+      expect(screen.getByRole('toolbar', { name: 'Message actions' })).toHaveClass('touch:hidden');
+
+      const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+      act(() => {
+        row.dispatchEvent(contextMenu);
+      });
+
+      expect(contextMenu.defaultPrevented).toBe(true);
+      expect(screen.getByTestId('mobile-message-actions')).toBeInTheDocument();
+    });
+
+    it('does not open the action sheet for a deleted message', () => {
+      renderWithProviders(
+        <MessageItem
+          message={makeMessage({ deleted: true })}
+          authorName="Alice"
+          isOwn={false}
+          channelId="channel-1"
+          currentUserId="user-1"
+        />,
+      );
+      const row = document.querySelector('[data-message-id="msg-1"]')!;
+      const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+      act(() => {
+        row.dispatchEvent(contextMenu);
+      });
+
+      expect(contextMenu.defaultPrevented).toBe(true);
+      expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument();
+    });
+
+    it('leaves the native context menu alone on a desktop device', () => {
+      window.__EX_FORCE_DEVICE__ = 'desktop';
+      try {
+        renderWithProviders(
+          <MessageItem
+            message={makeMessage()}
+            authorName="Alice"
+            isOwn={false}
+            channelId="channel-1"
+            currentUserId="user-1"
+          />,
+        );
+        const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
+        const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+        act(() => {
+          row.dispatchEvent(contextMenu);
+        });
+
+        expect(contextMenu.defaultPrevented).toBe(false);
+        expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument();
+      } finally {
+        window.__EX_FORCE_DEVICE__ = 'touch';
+      }
+    });
   });
 
   it('closes mobile reaction overlays after picking an emoji', async () => {
