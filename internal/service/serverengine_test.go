@@ -146,6 +146,51 @@ func TestServerEngine_ConnectorToolRoundTrip(t *testing.T) {
 	}
 }
 
+// The header shape is the connector's: an API-key connector calls with its
+// own header and never Authorization; an anonymous one sends no credential
+// header at all.
+func TestServerEngine_ConnectorCallHonoursAuthHeader(t *testing.T) {
+	fx := newOrchFixture(t)
+	run := fx.startRun(t)
+
+	got := map[string]http.Header{}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got[r.URL.Path] = r.Header.Clone()
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer api.Close()
+
+	st := newMemConnectorStore()
+	st.connectors["mb"] = &model.Connector{Slug: "mb", Title: "Metabase", BaseURL: api.URL, AuthKind: model.ConnectorAuthPaste, AuthHeader: "X-Api-Key: {token}", FileNames: []string{"api.yaml"}}
+	st.files["mb"] = []model.ConnectorFile{{Slug: "mb", Name: "api.yaml", Content: "endpoints: [user]"}}
+	st.installs["u-alice#mb"] = &model.ConnectorInstall{UserID: "u-alice", ConnectorSlug: "mb", Token: "mb_key"}
+	st.connectors["open"] = &model.Connector{Slug: "open", Title: "Open", BaseURL: api.URL, AuthKind: model.ConnectorAuthNone, FileNames: []string{"api.yaml"}}
+	st.files["open"] = []model.ConnectorFile{{Slug: "open", Name: "api.yaml", Content: "endpoints: [status]"}}
+	st.installs["u-alice#open"] = &model.ConnectorInstall{UserID: "u-alice", ConnectorSlug: "open"}
+	connSvc := NewConnectorService(st)
+
+	fx.runs.mu.Lock()
+	fx.runs.runs[run.ID].ConnectorSlugs = []string{"mb", "open"}
+	fx.runs.mu.Unlock()
+
+	fb := &fakeBedrock{outs: []*bedrockruntime.ConverseOutput{
+		bedrockToolCall("connector_call", map[string]any{"connector": "mb", "path": "api/user/current"}),
+		bedrockToolCall("connector_call", map[string]any{"connector": "open", "path": "status"}),
+		bedrockText("done"),
+	}}
+	e := NewServerEngine(fx.orch, connSvc, fb)
+	dispatchAndWait(t, e, run.ID)
+
+	mb := got["/api/user/current"]
+	if mb == nil || mb.Get("X-Api-Key") != "mb_key" || mb.Get("Authorization") != "" {
+		t.Fatalf("metabase call headers wrong: %v", mb)
+	}
+	open := got["/status"]
+	if open == nil || open.Get("Authorization") != "" || open.Get("X-Api-Key") != "" {
+		t.Fatalf("anonymous call must carry no credential header: %v", open)
+	}
+}
+
 func TestServerEngine_LoopFailureFailsRun(t *testing.T) {
 	fx := newOrchFixture(t)
 	run := fx.startRun(t)

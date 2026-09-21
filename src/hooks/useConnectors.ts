@@ -15,6 +15,9 @@ export interface Connector {
   // connect, and the redirect pattern it captures the minted token from.
   startURL?: string;
   capturePattern?: string;
+  // How a pasted credential is sent ("X-Api-Key: {token}" → the form asks
+  // for an API key); absent = Authorization: Bearer.
+  authHeader?: string;
   installed: boolean;
   installStatus?: 'connected' | 'unverified';
   connectedAs?: string;

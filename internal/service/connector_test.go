@@ -142,6 +142,56 @@ func TestConnector_InstallPasteVerified(t *testing.T) {
 	}
 }
 
+// A connector whose credential is an API key (Metabase) verifies and later
+// calls with THAT header — never Authorization: Bearer — and a template that
+// could inject a second header is refused at ingest.
+func TestConnector_InstallPasteCustomAuthHeader(t *testing.T) {
+	verify := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			t.Errorf("custom-header connector sent Authorization %q", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("X-Api-Key") != "mb_key" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"common_name": "Analytics Bot", "email": "bot@example.com"})
+	}))
+	defer verify.Close()
+
+	svc := NewConnectorService(newMemConnectorStore())
+	if _, err := svc.Ingest(context.Background(), "u-admin", IngestInput{
+		Slug: "metabase", Title: "Metabase", BaseURL: "https://mb.example.net/api",
+		AuthKind: model.ConnectorAuthPaste, VerifyURL: verify.URL, AuthHeader: " X-Api-Key: {token} ",
+		Files: []model.ConnectorFile{{Name: "index.yml", Content: "schema: 1"}},
+	}); err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	c, _ := svc.store.GetConnector(context.Background(), "metabase")
+	if c.AuthHeader != "X-Api-Key: {token}" {
+		t.Fatalf("authHeader not stored/trimmed: %q", c.AuthHeader)
+	}
+	inst, err := svc.Install(context.Background(), "u-alice", "metabase", InstallInput{Token: "mb_key"})
+	if err != nil || inst.Status != model.ConnectorStatusConnected {
+		t.Fatalf("install with API key: %v %+v", err, inst)
+	}
+	if _, err := svc.Install(context.Background(), "u-alice", "metabase", InstallInput{Token: "nope"}); !errors.Is(err, ErrTokenRejected) {
+		t.Fatalf("wrong key must be rejected, got %v", err)
+	}
+	// The runner payload carries the template so connector_call matches.
+	rows, err := svc.ForRunner(context.Background(), "u-alice", []string{"metabase"})
+	if err != nil || len(rows) != 1 || rows[0].AuthHeader != "X-Api-Key: {token}" || rows[0].Token != "mb_key" {
+		t.Fatalf("runner payload must carry authHeader: %v %+v", err, rows)
+	}
+	// Header injection is refused at ingest.
+	if _, err := svc.Ingest(context.Background(), "u-admin", IngestInput{
+		Slug: "evil", Title: "Evil", BaseURL: "https://e.example.net", AuthKind: model.ConnectorAuthPaste,
+		AuthHeader: "X-Api-Key: {token}\r\nX-Admin: 1",
+		Files:      []model.ConnectorFile{{Name: "index.yml", Content: "schema: 1"}},
+	}); !errors.Is(err, ErrConnectorInvalid) {
+		t.Fatalf("multi-line authHeader must be ErrConnectorInvalid, got %v", err)
+	}
+}
+
 // An unreachable verify endpoint must NOT block installing — the token is
 // accepted as "unverified" (the staging VPN may simply be invisible to the
 // server).
@@ -507,5 +557,33 @@ func TestIngest_SSOWindow(t *testing.T) {
 	}
 	if c.StartURL != good.StartURL || c.CapturePattern != good.CapturePattern || c.AuthKind != model.ConnectorAuthSSOWindow {
 		t.Fatalf("sso fields not stored: %+v", c)
+	}
+}
+
+// displayName prefers a human label over a synthetic address: Metabase's API
+// keys report common_name (the key's name) and an "@api-key.invalid" email.
+func TestConnector_DisplayNameShapes(t *testing.T) {
+	cases := map[string]string{
+		`{"employee":{"name":"Alice A"}}`:                                                     "Alice A",
+		`{"data":{"user":{"name":"Bob"}}}`:                                                    "Bob",
+		`{"name":"Carol","email":"c@x.com"}`:                                                  "Carol",
+		`{"common_name":"Test","first_name":"Test","email":"api-key-user-1@api-key.invalid"}`: "Test",
+		`{"first_name":"Dana","last_name":"Diaz","email":"d@x.com"}`:                          "Dana Diaz",
+		`{"first_name":"Solo","last_name":"","email":"s@x.com"}`:                              "Solo",
+		`{"display_name":"  Eve  "}`:                                                          "Eve",
+		`{"email":"only@x.com"}`:                                                              "only@x.com",
+		`{"email":"api-key-user-9373@api-key.invalid"}`:                                       "API key",
+		`{"first_name":"","last_name":"","email":"k@API-KEY.INVALID"}`:                        "API key",
+		`{"email":"svc@bot.example"}`:                                                         "API key",
+		`{"email":"nobody@localhost"}`:                                                        "API key",
+		`{"email":"real@example.com"}`:                                                        "real@example.com",
+		`{"name":""}`:                                                                         "",
+		`[1,2]`:                                                                               "",
+		`not json`:                                                                            "",
+	}
+	for raw, want := range cases {
+		if got := displayName([]byte(raw)); got != want {
+			t.Errorf("displayName(%s) = %q, want %q", raw, got, want)
+		}
 	}
 }

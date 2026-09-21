@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ConnectorsPage from '@/pages/ConnectorsPage';
+import { credentialNoun } from '@/lib/connector-ui';
 import { ApiError } from '@/lib/api';
 import type { Connector } from '@/hooks/useConnectors';
 
@@ -120,7 +121,46 @@ beforeEach(() => {
   authRole.value = 'member';
 });
 
+describe('credentialNoun', () => {
+  it('asks for an API key only when the credential header is not Authorization', () => {
+    expect(credentialNoun({})).toBe('bearer token');
+    expect(credentialNoun({ authHeader: '' })).toBe('bearer token');
+    expect(credentialNoun({ authHeader: 'Authorization: Bearer {token}' })).toBe('bearer token');
+    expect(credentialNoun({ authHeader: 'authorization: Token {token}' })).toBe('bearer token');
+    expect(credentialNoun({ authHeader: 'X-Api-Key: {token}' })).toBe('API key');
+    expect(credentialNoun({ authHeader: 'X-Api-Key' })).toBe('API key');
+  });
+});
+
 describe('ConnectorsPage', () => {
+  it('labels the paste field "API key" for connectors whose header is not Authorization', async () => {
+    installRoutes({
+      connectors: async () => ({
+        connectors: [
+          {
+            slug: 'metabase', title: 'Metabase', description: 'BI', baseURL: 'https://mb.example.net/api',
+            authKind: 'paste', authHeader: 'X-Api-Key: {token}', installed: false,
+          },
+          {
+            slug: 'legacy', title: 'Legacy', description: 'old', baseURL: 'https://l.example.net',
+            authKind: 'password', authHeader: 'X-Api-Key: {token}', installed: false,
+          },
+        ],
+      }),
+    });
+    renderPage();
+    const mb = await findCard('metabase');
+    fireEvent.click(mb.getByRole('button', { name: 'Connect' }));
+    const form = within(mb.getByTestId('connect-form'));
+    expect(form.getByLabelText('API key')).toHaveAttribute('placeholder', 'paste your API key for this service');
+    expect(form.queryByLabelText('Bearer token')).toBeNull();
+    // A password-kind connector with an API-key header names its paste tab accordingly.
+    const legacy = await findCard('legacy');
+    fireEvent.click(legacy.getByRole('button', { name: 'Connect' }));
+    const lform = within(legacy.getByTestId('connect-form'));
+    expect(lform.getByRole('tab', { name: 'Paste an API key' })).toBeInTheDocument();
+  });
+
   it('shows loading skeletons while connectors load', () => {
     installRoutes({ connectors: () => new Promise(() => {}) });
     renderPage();

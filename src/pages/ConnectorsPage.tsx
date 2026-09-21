@@ -18,7 +18,7 @@ import {
   useVerifyConnector,
   type Connector,
 } from '@/hooks/useConnectors';
-import { connectorInitials, connectorTint, summarizeError } from '@/lib/connector-ui';
+import { connectorInitials, connectorTint, credentialNoun, summarizeError } from '@/lib/connector-ui';
 import { showToast } from '@/lib/toast';
 
 // ConnectorsPage: external services agents can call on the user's behalf.
@@ -326,6 +326,10 @@ function SSOConnectButton({
 function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: () => void }) {
   const install = useInstallConnector();
   const canLogin = c.authKind === 'password';
+  // What the paste field asks for: a connector whose credential header is
+  // not Authorization takes an API key (Metabase's X-Api-Key). Calling that a
+  // "bearer token" had people pasting the right key under the wrong name.
+  const credential = credentialNoun(c);
   const anonymous = c.authKind === 'none';
   const canSSO = c.authKind === 'sso_window' && !!window.__EX_CONNECTOR_SSO__ && !!c.startURL;
   const [mode, setMode] = useState<'login' | 'paste'>(canLogin ? 'login' : 'paste');
@@ -429,7 +433,7 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
             Sign in
           </button>
           <button type="button" role="tab" aria-selected={mode === 'paste'} onClick={() => setMode('paste')} className={tabClass(mode === 'paste')}>
-            Paste a bearer token
+            {credential === 'API key' ? 'Paste an API key' : 'Paste a bearer token'}
           </button>
         </div>
       )}
@@ -453,13 +457,13 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
       ) : mode === 'paste' ? (
         ssoIdle ? null : (
           <div className="max-w-xl">
-            <Label htmlFor={`conn-token-${c.slug}`}>Bearer token</Label>
+            <Label htmlFor={`conn-token-${c.slug}`}>{credential === 'API key' ? 'API key' : 'Bearer token'}</Label>
             <Input
               id={`conn-token-${c.slug}`}
               className="mt-1 h-8 font-mono"
               type="password"
               value={token}
-              placeholder="paste your token for this service"
+              placeholder={`paste your ${credential} for this service`}
               autoFocus
               onChange={(e) => setToken(e.target.value)}
             />

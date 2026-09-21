@@ -1243,6 +1243,15 @@ export interface Connector {
    */
   verifyURL?: string;
   /**
+   * AuthHeader is HOW a credential rides a request: a header template with
+   * {token} in it — "X-Api-Key: {token}" for Metabase API keys, or
+   * "X-Metabase-Session: {token}". Empty means the default
+   * "Authorization: Bearer {token}". Admin-owned (it comes with the
+   * registration, never from KB content) and it changes only the header
+   * shape, never the destination — the host stays pinned to BaseURL.
+   */
+  authHeader?: string;
+  /**
    * StartURL is the SSO entry point opened by an sso_window connect; the
    * service redirects through its own login (silent when the user holds a
    * live Microsoft session) and lands on a URL matching CapturePattern
@@ -1395,6 +1404,10 @@ export const ConnectorStatusConnected = "connected";
  * Connector install statuses.
  */
 export const ConnectorStatusUnverified = "unverified";
+/**
+ * DefaultAuthHeader is the credential header used when a connector sets none.
+ */
+export const DefaultAuthHeader = "Authorization: Bearer {token}";
 
 //////////
 // source: context.go

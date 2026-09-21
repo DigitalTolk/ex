@@ -59,3 +59,10 @@ export function summarizeError(message: string): ErrorSummary {
   if (text.length > ERROR_SUMMARY_MAX) text = text.slice(0, ERROR_SUMMARY_MAX - 1) + '…';
   return text === raw ? { summary: text } : { summary: text, details: raw };
 }
+
+// credentialNoun names the credential a connector's paste field wants, from
+// its auth header template: anything other than Authorization is an API key.
+export function credentialNoun(c: { authHeader?: string }): 'API key' | 'bearer token' {
+  const name = (c.authHeader ?? '').split(':')[0].trim().toLowerCase();
+  return name && name !== 'authorization' ? 'API key' : 'bearer token';
+}

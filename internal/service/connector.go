@@ -133,6 +133,9 @@ type IngestInput struct {
 	// StartURL + CapturePattern drive sso_window connects (see model.Connector).
 	StartURL       string `json:"startURL,omitempty"`
 	CapturePattern string `json:"capturePattern,omitempty"`
+	// AuthHeader: how the credential is sent (see model.Connector.AuthHeader);
+	// empty = Authorization: Bearer.
+	AuthHeader string `json:"authHeader,omitempty"`
 	// Revision is set by the provider sync (the bundle's content hash);
 	// direct admin uploads leave it empty.
 	Revision string `json:"revision,omitempty"`
@@ -161,6 +164,9 @@ func (s *ConnectorService) Ingest(ctx context.Context, callerID string, in Inges
 	// password attached — or, for startURL, opened in the user's shell — so
 	// they are an SSRF/phishing surface: refuse anything that isn't plain
 	// https to a routable host before it can be stored.
+	if err := model.ValidateAuthHeader(in.AuthHeader); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrConnectorInvalid, err)
+	}
 	for label, u := range map[string]string{"baseURL": in.BaseURL, "tokenURL": in.TokenURL, "verifyURL": in.VerifyURL, "startURL": in.StartURL} {
 		if err := validateOutboundURL(u); err != nil {
 			return nil, fmt.Errorf("%w: %s %s", ErrConnectorInvalid, label, err.Error())
@@ -218,6 +224,7 @@ func (s *ConnectorService) Ingest(ctx context.Context, callerID string, in Inges
 		VerifyURL:      in.VerifyURL,
 		StartURL:       in.StartURL,
 		CapturePattern: in.CapturePattern,
+		AuthHeader:     strings.TrimSpace(in.AuthHeader),
 		Revision:       in.Revision,
 		FileNames:      names,
 		Services:       services,
@@ -457,7 +464,7 @@ func (s *ConnectorService) Install(ctx context.Context, userID, slug string, in 
 				return nil, err
 			}
 		default:
-			return nil, fmt.Errorf("%w: paste a bearer token", ErrConnectorInvalid)
+			return nil, fmt.Errorf("%w: paste the service's token or API key", ErrConnectorInvalid)
 		}
 	}
 	if len(token) > model.ConnectorTokenMaxLen {
@@ -466,7 +473,7 @@ func (s *ConnectorService) Install(ctx context.Context, userID, slug string, in 
 
 	status, connectedAs, identity := model.ConnectorStatusUnverified, "", ""
 	if c.VerifyURL != "" {
-		code, body, verr := s.authedGet(ctx, c.VerifyURL, token)
+		code, body, verr := s.authedGet(ctx, c, c.VerifyURL, token)
 		switch {
 		case verr == nil && code >= 200 && code < 300:
 			status = model.ConnectorStatusConnected
@@ -533,7 +540,7 @@ func (s *ConnectorService) VerifyInstall(ctx context.Context, userID, slug strin
 	if c.VerifyURL == "" {
 		return inst, nil
 	}
-	code, body, verr := s.authedGet(ctx, c.VerifyURL, inst.Token)
+	code, body, verr := s.authedGet(ctx, c, c.VerifyURL, inst.Token)
 	switch {
 	case verr == nil && code >= 200 && code < 300:
 		inst.Status = model.ConnectorStatusConnected
@@ -556,14 +563,17 @@ func (s *ConnectorService) VerifyInstall(ctx context.Context, userID, slug strin
 // RunnerConnector is one installed connector shipped to the runner: docs
 // bundle + the invoker's token + the env prefix agents use.
 type RunnerConnector struct {
-	Slug        string                       `json:"slug"`
-	Title       string                       `json:"title"`
-	Description string                       `json:"description"`
-	BaseURL     string                       `json:"baseURL"`
-	EnvPrefix   string                       `json:"envPrefix"`
-	Token       string                       `json:"token"`
-	Files       []model.ConnectorFile        `json:"files"`
-	Services    []model.ConnectorServiceInfo `json:"services,omitempty"`
+	Slug        string `json:"slug"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	BaseURL     string `json:"baseURL"`
+	EnvPrefix   string `json:"envPrefix"`
+	Token       string `json:"token"`
+	// AuthHeader: header template the runner sends the token in (empty =
+	// Authorization: Bearer) — see model.Connector.AuthHeader.
+	AuthHeader string                       `json:"authHeader,omitempty"`
+	Files      []model.ConnectorFile        `json:"files"`
+	Services   []model.ConnectorServiceInfo `json:"services,omitempty"`
 }
 
 // ConnectorIndexEntry is one row of the ambient connector index — enough for
@@ -820,6 +830,7 @@ func (s *ConnectorService) ForRunner(ctx context.Context, invokerID string, slug
 			BaseURL:     c.BaseURL,
 			EnvPrefix:   c.EnvPrefix(),
 			Token:       in.Token,
+			AuthHeader:  c.AuthHeader,
 			Files:       files,
 			Services:    c.Services,
 		})
@@ -888,16 +899,18 @@ func (s *ConnectorService) passwordGrant(ctx context.Context, c *model.Connector
 	return out.AccessToken, nil
 }
 
-func (s *ConnectorService) authedGet(ctx context.Context, url, token string) (int, []byte, error) {
+func (s *ConnectorService) authedGet(ctx context.Context, c *model.Connector, url, token string) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return 0, nil, err
 	}
 	req.Header.Set("Accept", "application/json")
 	// Anonymous connectors (auth kind "none") verify without a credential —
-	// a bare "Bearer " header could 401 an otherwise-open instance.
+	// a bare "Bearer " header could 401 an otherwise-open instance. The
+	// header shape is the connector's (Metabase wants X-Api-Key).
 	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+		name, value := c.CredentialHeader(token)
+		req.Header.Set(name, value)
 	}
 	res, err := s.http.Do(req)
 	if err != nil {
@@ -976,24 +989,58 @@ func displayName(raw []byte) string {
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return ""
 	}
+	// Metabase (and others) carry the human label in common_name or
+	// first/last name; an API key's email there is a synthetic
+	// "api-key-user-<uuid>@api-key.invalid", which is the LAST thing to show.
 	paths := [][]string{
 		{"employee", "name"}, {"data", "user", "name"}, {"data", "name"},
-		{"user", "name"}, {"name"}, {"email"},
+		{"user", "name"}, {"name"}, {"common_name"}, {"display_name"}, {"displayName"}, {"full_name"},
 	}
-	for _, p := range paths {
+	lookup := func(p []string) string {
 		node := v
-		ok := true
 		for _, k := range p {
 			m, isMap := node.(map[string]any)
 			if !isMap {
-				ok = false
-				break
+				return ""
 			}
 			node = m[k]
 		}
-		if s, isStr := node.(string); ok && isStr && s != "" {
+		s, _ := node.(string)
+		return strings.TrimSpace(s)
+	}
+	for _, p := range paths {
+		if s := lookup(p); s != "" {
 			return s
 		}
 	}
-	return ""
+	if first := lookup([]string{"first_name"}); first != "" {
+		if last := lookup([]string{"last_name"}); last != "" {
+			return first + " " + last
+		}
+		return first
+	}
+	email := lookup([]string{"email"})
+	// A synthetic address under a reserved TLD (Metabase mints
+	// "api-key-user-<uuid>@api-key.invalid" for keys without a name) is
+	// machinery, not identity — showing it reads as an error to a human.
+	if isSyntheticAddress(email) {
+		return "API key"
+	}
+	return email
+}
+
+// isSyntheticAddress reports an email whose domain can never resolve —
+// the reserved TLDs of RFC 2606/6761 that services use for placeholder users.
+func isSyntheticAddress(email string) bool {
+	at := strings.LastIndexByte(email, '@')
+	if at < 0 {
+		return false
+	}
+	host := strings.ToLower(email[at+1:])
+	for _, tld := range []string{".invalid", ".example", ".test", ".localhost"} {
+		if strings.HasSuffix(host, tld) || host == strings.TrimPrefix(tld, ".") {
+			return true
+		}
+	}
+	return false
 }

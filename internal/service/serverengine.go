@@ -786,7 +786,12 @@ func (e *ServerEngine) connectorCall(ctx context.Context, lookup func(string) (R
 	if err != nil {
 		return "request build failed: " + err.Error(), true
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
+	// The connector decides the header shape (Metabase: X-Api-Key); an
+	// anonymous connector has no token and sends no credential header.
+	if c.Token != "" {
+		name, value := model.RenderAuthHeader(c.AuthHeader, c.Token)
+		req.Header.Set(name, value)
+	}
 	req.Header.Set("Accept", "application/json")
 	if bodyReader != nil {
 		req.Header.Set("Content-Type", "application/json")

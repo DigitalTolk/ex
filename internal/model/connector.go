@@ -1,6 +1,8 @@
 package model
 
 import (
+	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -28,6 +30,13 @@ type Connector struct {
 	// VerifyURL is an authenticated GET used to validate a credential at
 	// install time ("connected as {name}").
 	VerifyURL string `json:"verifyURL,omitempty" dynamodbav:"verifyURL,omitempty"`
+	// AuthHeader is HOW a credential rides a request: a header template with
+	// {token} in it — "X-Api-Key: {token}" for Metabase API keys, or
+	// "X-Metabase-Session: {token}". Empty means the default
+	// "Authorization: Bearer {token}". Admin-owned (it comes with the
+	// registration, never from KB content) and it changes only the header
+	// shape, never the destination — the host stays pinned to BaseURL.
+	AuthHeader string `json:"authHeader,omitempty" dynamodbav:"authHeader,omitempty"`
 
 	// StartURL is the SSO entry point opened by an sso_window connect; the
 	// service redirects through its own login (silent when the user holds a
@@ -154,3 +163,53 @@ const (
 	ConnectorStatusConnected  = "connected"
 	ConnectorStatusUnverified = "unverified"
 )
+
+// DefaultAuthHeader is the credential header used when a connector sets none.
+const DefaultAuthHeader = "Authorization: Bearer {token}"
+
+// RenderAuthHeader turns a connector's AuthHeader template into the header
+// (name, value) that carries token. Accepted shapes: "Name: prefix {token}",
+// "Name: {token}", "Name: Prefix" (token appended after a space) and a bare
+// "Name" (token as the whole value). Empty template → DefaultAuthHeader.
+func RenderAuthHeader(template, token string) (name, value string) {
+	t := strings.TrimSpace(template)
+	if t == "" {
+		t = DefaultAuthHeader
+	}
+	name, rest, hasColon := strings.Cut(t, ":")
+	name = strings.TrimSpace(name)
+	rest = strings.TrimSpace(rest)
+	switch {
+	case !hasColon || rest == "":
+		return name, token
+	case strings.Contains(rest, "{token}"):
+		return name, strings.ReplaceAll(rest, "{token}", token)
+	default:
+		return name, rest + " " + token
+	}
+}
+
+// CredentialHeader renders this connector's credential header for token.
+func (c *Connector) CredentialHeader(token string) (name, value string) {
+	return RenderAuthHeader(c.AuthHeader, token)
+}
+
+var authHeaderNameRe = regexp.MustCompile(`^[A-Za-z0-9!#$%&'*+.^_\x60|~-]+$`)
+
+// ValidateAuthHeader accepts an empty template or one whose header name is a
+// legal HTTP field name and whose value part carries no line breaks — the
+// two ways a template could smuggle a second header into every request.
+func ValidateAuthHeader(template string) error {
+	t := strings.TrimSpace(template)
+	if t == "" {
+		return nil
+	}
+	if strings.ContainsAny(t, "\r\n") {
+		return errors.New("authHeader must be a single line")
+	}
+	name, _, _ := strings.Cut(t, ":")
+	if !authHeaderNameRe.MatchString(strings.TrimSpace(name)) {
+		return fmt.Errorf("authHeader %q: invalid header name", template)
+	}
+	return nil
+}
