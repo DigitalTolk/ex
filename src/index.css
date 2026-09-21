@@ -16,10 +16,12 @@
    `not-mobile:` everything that isn't mobile-native. They exist so behavioral
    CSS and the JS hooks share ONE predicate — width-only `max-md:` remains for
    purely space-adaptive styling that narrow desktop windows should keep. */
-/* `touch:` is the INPUT axis, independent of tier: every touch device (phone,
-   iPad at any width). Declared before `mobile:` so on phones the mobile-tier
-   styling still wins where both set the same property; on an iPad in the
-   compact/full tier it swaps hover-revealed affordances for tappable ones. */
+/* `touch:` is the INPUT axis, independent of tier: a device where touch is the
+   only way to point at things (a phone, or an iPad on its own). It swaps
+   hover-revealed affordances for tappable ones. Attaching a trackpad or mouse
+   to an iPad drops the root `device-touch` class and the hover UI returns (see
+   lib/device.ts). Declared before `mobile:` so on phones the mobile-tier
+   styling still wins where both set the same property. */
 @custom-variant touch (&:where(.device-touch, .device-touch *));
 @custom-variant mobile (&:where(.tier-mobile, .tier-mobile *));
 @custom-variant compact (&:where(.tier-compact, .tier-compact *));

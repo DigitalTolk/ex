@@ -287,6 +287,12 @@ describe('MessageInput slash commands', () => {
       expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled();
     });
     editor.focus();
+    // Focus must actually be in the composer, or the Enter below lands on the
+    // body: the command count then stays at 1 for the wrong reason and every
+    // assertion still passes. Assert it so that failure is loud.
+    await waitFor(() => {
+      expect(editor.contains(document.activeElement) || document.activeElement === editor).toBe(true);
+    });
     await user.keyboard('{Enter}');
     expect(runCommandMock).toHaveBeenCalledTimes(1);
     expect(editor.textContent).toContain('/mstmeetings');
@@ -295,6 +301,14 @@ describe('MessageInput slash commands', () => {
     // indistinguishable here, and losing the guard shows up only as a coverage
     // drop in a later CI run instead of as a failure in this test.
     expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled();
+    // Re-submit once more through the send BUTTON. A keystroke has to survive
+    // CodeMirror's focus handling to reach handleSend, which under a loaded CI
+    // runner it sometimes doesn't — the test still passed and the guard simply
+    // stopped being covered. A click always reaches handleSend, so the guard is
+    // exercised deterministically.
+    await user.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(runCommandMock).toHaveBeenCalledTimes(1);
+    expect(editor.textContent).toContain('/mstmeetings');
     // Still pending: the re-submit was swallowed, not run and settled.
     expect(screen.getByTestId('command-pending')).toBeInTheDocument();
 

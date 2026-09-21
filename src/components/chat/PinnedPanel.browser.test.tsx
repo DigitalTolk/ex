@@ -81,8 +81,31 @@ function renderPanel(messages: Message[] = [pinned()], onClose: () => void = vi.
   );
 }
 
+// The panel mounts inside SidePanel, which arms a history sentinel for Back on
+// mobile (useMobileBackClose) and consumes it with history.back() when it
+// unmounts. That traversal is asynchronous: without waiting for it, the next
+// test pushes its own URL and the late pop drops it back to the previous
+// test's entry — a flake that only showed up under a loaded CI runner.
+function historySettled(quietMs = 60) {
+  return new Promise<void>((resolve) => {
+    let timer = window.setTimeout(done, quietMs);
+    function done() {
+      window.removeEventListener('popstate', restart);
+      resolve();
+    }
+    function restart() {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(done, quietMs);
+    }
+    window.addEventListener('popstate', restart);
+  });
+}
+
 describe('PinnedPanel browser behaviour', () => {
-  afterEach(() => cleanup());
+  afterEach(async () => {
+    cleanup();
+    await historySettled();
+  });
 
   it('renders the pinned panel header', async () => {
     const screen = await renderPanel();

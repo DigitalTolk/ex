@@ -103,7 +103,7 @@ describe('UserHoverCard — click-to-open + DM action', () => {
   });
 
 
-  it('pads the mobile card content away from iPhone rounded corners', async () => {
+  it('pads the touch card content away from iPhone rounded corners', async () => {
     setMobileMatch(true);
     apiFetchMock.mockResolvedValue({ id: 'u-other', displayName: 'Bob', status: 'active' });
     renderCard();
@@ -112,10 +112,10 @@ describe('UserHoverCard — click-to-open + DM action', () => {
     const dialog = await screen.findByRole('tooltip');
 
     expect(dialog).toHaveClass(
-      'mobile:border-b-0',
-      'mobile:pb-[calc(env(safe-area-inset-bottom)+0.75rem)]',
-      'mobile:pl-[max(0.75rem,env(safe-area-inset-left))]',
-      'mobile:pr-[max(0.75rem,env(safe-area-inset-right))]',
+      'touch:border-b-0',
+      'touch:pb-[calc(env(safe-area-inset-bottom)+0.75rem)]',
+      'touch:pl-[max(0.75rem,env(safe-area-inset-left))]',
+      'touch:pr-[max(0.75rem,env(safe-area-inset-right))]',
     );
   });
 

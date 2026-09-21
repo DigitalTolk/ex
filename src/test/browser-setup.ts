@@ -52,4 +52,7 @@ window.addEventListener('resize', stampTierClasses);
 afterEach(() => {
   resetPresenceStoreForTests();
   resetTypingStoreForTests();
+  // A test that attaches a mouse/trackpad must not leak it into the next one.
+  // (Set directly rather than through lib/device — see the import note above.)
+  delete window.__EX_POINTER_DEVICE__;
 });

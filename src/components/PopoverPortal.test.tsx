@@ -35,6 +35,8 @@ describe('PopoverPortal', () => {
     document.body.innerHTML = '';
     mockIsMobile = false;
     capturedSwipeDismiss = undefined;
+    // Back to the suite default, so a test that pins a device kind can't leak.
+    window.__EX_FORCE_DEVICE__ = 'touch';
   });
 
   it('renders its children into a portal', () => {
@@ -85,7 +87,9 @@ describe('PopoverPortal', () => {
   });
 
   it('ignores the swipe-down gesture when not rendering as a sheet', () => {
-    // Desktop (not mobile) → renderSheet false → the swipe callback is a no-op.
+    // A pointer device → renderSheet false → the swipe callback is a no-op.
+    // (The jsdom default is a touch device, which now sheets at any width.)
+    window.__EX_FORCE_DEVICE__ = 'desktop';
     const { onDismiss } = renderPortal(vi.fn(), { mobileSheet: true });
     capturedSwipeDismiss?.();
     expect(onDismiss).not.toHaveBeenCalled();
