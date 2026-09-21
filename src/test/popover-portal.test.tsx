@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { useRef } from 'react';
 import { PopoverPortal } from '@/components/PopoverPortal';
+import { POINTER_DEVICE_EVENT } from '@/lib/device';
 
 function Harness({
   open,
@@ -242,10 +243,31 @@ describe('PopoverPortal', () => {
     });
     expect(portal).toHaveAttribute('data-mobile-sheet', 'true');
     expect(portal.style.bottom).toBe('0px');
-    expect(portal.style.width).toBe('100vw');
+    expect(portal.style.width).toBe('100%');
+    expect(portal.style.maxWidth).toBe('min(100vw, 32rem)');
     expect(portal.style.maxHeight).toBe('50dvh');
     expect(portal.style.overscrollBehaviorY).toBe('contain');
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
+  });
+
+  it('sheets on a touch tablet running the desktop layout, and anchors again once a trackpad arrives', async () => {
+    // Regression: the message action sheet hides its own trigger while the
+    // emoji picker opens. Anchored to that zero-size rect the picker landed in
+    // the top-left corner; as a sheet it comes up from the bottom.
+    const { rerender } = render(
+      <Harness open mobileSheet triggerRect={{ top: 0, bottom: 0, left: 0, right: 0 }} />,
+    );
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+    });
+    expect(screen.getByTestId('popover-portal')).toHaveAttribute('data-mobile-sheet', 'true');
+
+    act(() => {
+      window.__EX_POINTER_DEVICE__ = true;
+      window.dispatchEvent(new CustomEvent(POINTER_DEVICE_EVENT, { detail: { connected: true } }));
+    });
+    rerender(<Harness open mobileSheet triggerRect={{ top: 0, bottom: 0, left: 0, right: 0 }} />);
+    expect(screen.getByTestId('popover-portal')).toHaveAttribute('data-mobile-sheet', 'false');
   });
 
   it('dismisses a mobile sheet from its scrim', () => {
