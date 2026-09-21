@@ -8,14 +8,14 @@ require (
 	github.com/DataDog/dd-trace-go/contrib/redis/go-redis.v9/v2 v2.10.1
 	github.com/HugoSmits86/nativewebp v1.3.0
 	github.com/aws/aws-sdk-go-v2 v1.47.0
-	github.com/aws/aws-sdk-go-v2/config v1.33.4
-	github.com/aws/aws-sdk-go-v2/credentials v1.20.4
-	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.21.4
-	github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression v1.9.4
-	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.68.0
+	github.com/aws/aws-sdk-go-v2/config v1.33.5
+	github.com/aws/aws-sdk-go-v2/credentials v1.20.5
+	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.21.5
+	github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression v1.9.5
+	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.69.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.113.1
-	github.com/aws/aws-sdk-go-v2/service/sesv2 v1.73.0
-	github.com/aws/smithy-go v1.28.1
+	github.com/aws/aws-sdk-go-v2/service/sesv2 v1.74.0
+	github.com/aws/smithy-go v1.28.2
 	github.com/coder/websocket v1.8.15
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -32,7 +32,7 @@ require (
 )
 
 require (
-	github.com/DataDog/go-libddwaf/v5 v5.0.0 // indirect
+	github.com/DataDog/go-libddwaf/v5 v5.0.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/eventbridge v1.48.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/kinesis v1.46.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sfn v1.45.5 // indirect
@@ -57,24 +57,24 @@ require (
 require (
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
-	github.com/DataDog/datadog-agent/comp/core/tagger/origindetection v0.82.1 // indirect
-	github.com/DataDog/datadog-agent/pkg/obfuscate v0.82.1 // indirect
-	github.com/DataDog/datadog-agent/pkg/opentelemetry-mapping-go/otlp/attributes v0.82.1 // indirect
-	github.com/DataDog/datadog-agent/pkg/proto v0.82.1 // indirect
-	github.com/DataDog/datadog-agent/pkg/remoteconfig/state v0.82.1 // indirect
-	github.com/DataDog/datadog-agent/pkg/trace v0.82.1 // indirect
-	github.com/DataDog/datadog-agent/pkg/trace/log v0.82.1 // indirect
-	github.com/DataDog/datadog-agent/pkg/trace/stats v0.82.1 // indirect
-	github.com/DataDog/datadog-agent/pkg/trace/traceutil v0.82.1 // indirect
-	github.com/DataDog/datadog-go/v5 v5.9.0 // indirect
+	github.com/DataDog/datadog-agent/comp/core/tagger/origindetection v0.82.3 // indirect
+	github.com/DataDog/datadog-agent/pkg/obfuscate v0.82.3 // indirect
+	github.com/DataDog/datadog-agent/pkg/opentelemetry-mapping-go/otlp/attributes v0.82.3 // indirect
+	github.com/DataDog/datadog-agent/pkg/proto v0.82.3 // indirect
+	github.com/DataDog/datadog-agent/pkg/remoteconfig/state v0.82.3 // indirect
+	github.com/DataDog/datadog-agent/pkg/trace v0.82.3 // indirect
+	github.com/DataDog/datadog-agent/pkg/trace/log v0.82.3 // indirect
+	github.com/DataDog/datadog-agent/pkg/trace/stats v0.82.3 // indirect
+	github.com/DataDog/datadog-agent/pkg/trace/traceutil v0.82.3 // indirect
+	github.com/DataDog/datadog-go/v5 v5.9.1 // indirect
 	github.com/DataDog/dd-trace-go/v2 v2.10.1
 	github.com/DataDog/go-runtime-metrics-internal v0.0.4-0.20260217080614-b0f4edc38a6d // indirect
 	github.com/DataDog/go-sqllexer v0.2.4 // indirect
 	github.com/DataDog/go-tuf v1.1.1-0.5.2 // indirect
-	github.com/DataDog/orchestrion v1.13.0
+	github.com/DataDog/orchestrion v1.13.1
 	github.com/DataDog/sketches-go v1.4.8 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/antithesishq/antithesis-sdk-go v0.7.2 // indirect
+	github.com/antithesishq/antithesis-sdk-go v0.8.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.20 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.20.0 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.3 // indirect
@@ -89,7 +89,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/signin v1.10.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.38.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.43.0 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sts v1.50.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sts v1.51.0 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/blakesmith/ar v0.0.0-20190502131153-809d4375e1fb // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3
@@ -109,12 +109,11 @@ require (
 	github.com/cpuguy83/dockercfg v0.3.2 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
 	github.com/dave/dst v0.27.4 // indirect
-	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/go-connections v0.7.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/ebitengine/purego v0.10.2 // indirect
+	github.com/ebitengine/purego v0.11.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
@@ -133,7 +132,7 @@ require (
 	github.com/magiconair/properties v1.8.10 // indirect
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
-	github.com/mattn/go-runewidth v0.0.27 // indirect
+	github.com/mattn/go-runewidth v0.0.28 // indirect
 	github.com/minio/highwayhash v1.0.4 // indirect
 	github.com/minio/simdjson-go v0.4.5 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
@@ -156,21 +155,20 @@ require (
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/outcaste-io/ristretto v0.2.3 // indirect
-	github.com/petermattis/goid v0.0.0-20260816044145-ed329add6b1b // indirect
+	github.com/petermattis/goid v0.0.0-20260820044319-269ab09b5261 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
-	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/polyfloyd/go-errorlint v1.8.1-0.20250906200200-9b25878c4dea // indirect
 	github.com/power-devops/perfstat v0.0.0-20260805114148-88456608a4f6 // indirect
 	github.com/puzpuzpuz/xsync/v3 v3.5.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rs/zerolog v1.35.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
-	github.com/secure-systems-lab/go-securesystemslib v0.11.0 // indirect
-	github.com/shirou/gopsutil/v4 v4.26.7 // indirect
+	github.com/secure-systems-lab/go-securesystemslib v0.11.1 // indirect
+	github.com/shirou/gopsutil/v4 v4.26.8 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
+	github.com/stretchr/testify v1.12.1 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
@@ -183,14 +181,14 @@ require (
 	github.com/xrash/smetrics v0.0.0-20250705151800-55b8f293f342 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
-	go.opentelemetry.io/collector/component v1.64.0 // indirect
-	go.opentelemetry.io/collector/featuregate v1.64.0 // indirect
-	go.opentelemetry.io/collector/pdata v1.64.0 // indirect
-	go.opentelemetry.io/collector/pdata/pprofile v0.158.0 // indirect
+	go.opentelemetry.io/collector/component v1.65.0 // indirect
+	go.opentelemetry.io/collector/featuregate v1.65.0 // indirect
+	go.opentelemetry.io/collector/pdata v1.65.0 // indirect
+	go.opentelemetry.io/collector/pdata/pprofile v0.159.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
-	go.opentelemetry.io/otel v1.45.0 // indirect
-	go.opentelemetry.io/otel/metric v1.45.0 // indirect
-	go.opentelemetry.io/otel/trace v1.45.0 // indirect
+	go.opentelemetry.io/otel v1.46.0 // indirect
+	go.opentelemetry.io/otel/metric v1.46.0 // indirect
+	go.opentelemetry.io/otel/trace v1.46.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
@@ -204,9 +202,8 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.49.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260810153831-ec0a7760b754 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260831171406-18b4a7587f8a // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 tool (
