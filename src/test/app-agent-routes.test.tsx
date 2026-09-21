@@ -66,6 +66,9 @@ describe('App — agent feature lazy routes', () => {
     window.history.pushState({}, '', path);
     const view = render(<App />);
     expect(await screen.findByTestId(stub, {}, { timeout: 15000 })).toBeInTheDocument();
+    // Every hub page renders inside the AI hub layout's tab strip.
+    expect(screen.getByRole('navigation', { name: 'AI sections' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Skills' })).toHaveAttribute('href', '/skills');
     view.unmount();
   });
 });

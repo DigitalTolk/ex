@@ -58,21 +58,28 @@ function renderAt(path: string) {
   );
 }
 
-// The active-route styling of the agent-feature nav links (NavLink isActive
-// arms) — each link renders bold + marked when its route is current.
-describe('Sidebar — agent feature links active state', () => {
-  it.each([
-    ['/agents', 'Agents'],
-    ['/skills', 'Skills'],
-    ['/connectors', 'Connectors'],
-  ])('marks %s active only on its own route', (path, label) => {
-    const view = renderAt(path);
-    const active = screen.getByRole('link', { name: label });
-    expect(active.className).toContain('font-semibold');
-    const others = ['Agents', 'Skills', 'Connectors'].filter((l) => l !== label);
-    for (const other of others) {
-      expect(screen.getByRole('link', { name: other }).className).not.toContain('font-semibold');
-    }
-    view.unmount();
+// The three agent-feature pages share ONE sidebar entry ("Agents"); it lights up
+// on every hub route and only there, and the old per-page links are gone.
+describe('Sidebar — Agents hub entry', () => {
+  it.each([['/agents'], ['/skills'], ['/connectors'], ['/connectors/cliffhub']])(
+    'marks the Agents entry active on %s',
+    (path) => {
+      const view = renderAt(path);
+      const ai = screen.getByRole('link', { name: 'Agents' });
+      expect(ai.className).toContain('font-semibold');
+      expect(ai).toHaveAttribute('aria-current', 'page');
+      expect(ai).toHaveAttribute('href', '/agents');
+      for (const gone of ['Skills', 'Connectors']) {
+        expect(screen.queryByRole('link', { name: gone })).not.toBeInTheDocument();
+      }
+      view.unmount();
+    },
+  );
+
+  it('is not active elsewhere', () => {
+    renderAt('/activity');
+    const ai = screen.getByRole('link', { name: 'Agents' });
+    expect(ai.className).not.toContain('font-semibold');
+    expect(ai).not.toHaveAttribute('aria-current');
   });
 });
