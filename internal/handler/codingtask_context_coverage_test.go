@@ -969,7 +969,8 @@ func TestHtaskCovCreate(t *testing.T) {
 		if out["taskID"] == "" || out["project"] != "Booking Portal" || out["projectKey"] != "booking-portal" {
 			t.Fatalf("create response wrong: %v", out)
 		}
-		if out["channelSlug"] != "booking-portal" || out["projectCreated"] != true || out["kickoffStarted"] != true {
+		// Channels are per requester since 2026-09-21: "<project>-<handle>".
+		if out["channelSlug"] != "booking-portal-alice" || out["projectCreated"] != true || out["kickoffStarted"] != true {
 			t.Fatalf("create response wrong: %v", out)
 		}
 		text, _ := out["text"].(string)
