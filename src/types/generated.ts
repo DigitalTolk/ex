@@ -953,7 +953,12 @@ export interface CodingProject {
   key: string; // slug, e.g. "cliffhub"
   name: string; // display, e.g. "CliffHub"
   repos: ProjectRepo[];
-  channelID: string;
+  /**
+   * No channel here on purpose: a project has one channel PER REQUESTER,
+   * derived from (project key, requester id) — see service.ProjectChannelID.
+   * Rows written before 2026-09-21 carry a channelID attribute for the old
+   * shared channel; it is ignored on read.
+   */
   createdBy: string;
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;

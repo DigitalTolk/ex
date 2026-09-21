@@ -752,9 +752,9 @@ func TestCtaskCov_ConcurrentCreateYieldsToTheOlderTask(t *testing.T) {
 	fx := newCtaskCovFixture(t)
 	ctx := context.Background()
 	run := fx.intakeRun(t, testDevID, "cc-race")
-	chID := ProjectChannelID("portal")
+	chID := ProjectChannelID("portal", "u-alice")
 	if err := fx.tasks.CreateProject(ctx, &model.CodingProject{
-		Key: "portal", Name: "Portal", ChannelID: chID,
+		Key: "portal", Name: "Portal",
 		Repos: []model.ProjectRepo{{Path: "g/r", Role: model.RepoRoleBackend}},
 	}); err != nil {
 		t.Fatal(err)

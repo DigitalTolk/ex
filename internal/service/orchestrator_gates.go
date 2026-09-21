@@ -458,10 +458,14 @@ func (o *Orchestrator) publishApproval(ctx context.Context, run *model.Run, a *m
 		"summary":   a.Summary,
 		"risk":      a.Risk,
 		"kind":      a.Kind,
-		"options":   a.Options,
-		"choice":    a.Choice,
-		"state":     a.State,
-		"deadline":  a.Deadline,
+		// Purpose lets the card recognise a server-raised connector gate
+		// ("connector:<slug>") and offer "always allow <slug>" — the same
+		// dial as the Connectors page's agent-use setting, one click away.
+		"purpose":  a.Purpose,
+		"options":  a.Options,
+		"choice":   a.Choice,
+		"state":    a.State,
+		"deadline": a.Deadline,
 		// Editable reply proposal (propose_reply): the drafted reply + the
 		// message it answers, so the card can render an editable draft.
 		"replyText":        a.ReplyText,

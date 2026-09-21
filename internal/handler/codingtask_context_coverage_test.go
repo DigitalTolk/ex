@@ -426,7 +426,9 @@ func (f *htaskCovRunStore) AddRunPosts(_ context.Context, runID string, delta in
 	return &cp, nil
 }
 
-func (f *htaskCovRunStore) RenewRunLease(context.Context, string, string, time.Time) error { return nil }
+func (f *htaskCovRunStore) RenewRunLease(context.Context, string, string, time.Time) error {
+	return nil
+}
 func (f *htaskCovRunStore) ListQueuedRuns(context.Context, string, int) ([]string, error) {
 	return nil, nil
 }
@@ -542,6 +544,7 @@ func (f *htaskCovAgentDir) PutAgentSubscription(context.Context, *model.AgentSub
 func (f *htaskCovAgentDir) ListSubscriptionsByParent(context.Context, string) ([]*model.AgentSubscription, error) {
 	return nil, nil
 }
+
 // ListSubscriptionsByCreator mirrors the store's creator index; the fake
 // filters its own rows.
 func (f *htaskCovAgentDir) ListSubscriptionsByCreator(ctx context.Context, creatorID, agentID string) ([]*model.AgentSubscription, error) {
@@ -687,6 +690,20 @@ func (f *htaskCovChannels) CreateWithID(_ context.Context, userID, id, name stri
 	ch := &model.Channel{ID: id, Name: name, Slug: name, Type: chanType, Description: description, CreatedBy: userID}
 	f.channels[id] = ch
 	f.members[id] = map[string]bool{userID: true}
+	return ch, nil
+}
+
+func (f *htaskCovChannels) Update(_ context.Context, _, channelID string, name, description *string) (*model.Channel, error) {
+	ch, ok := f.channels[channelID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if name != nil {
+		ch.Name, ch.Slug = *name, *name
+	}
+	if description != nil {
+		ch.Description = *description
+	}
 	return ch, nil
 }
 

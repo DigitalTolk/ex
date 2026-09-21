@@ -25,6 +25,9 @@ export interface PendingApproval {
   // kind is the harness tool class (read | edit | shell | web) for permission
   // gateway approvals — enables "always allow <kind>" on the card.
   kind?: string;
+  // purpose is the server-set action binding ("connector:<slug>" for a
+  // use_connector gate) — enables "always allow <connector>" on the card.
+  purpose?: string;
   options?: string[];
   // replyText marks an editable REPLY PROPOSAL (propose_reply): the agent's
   // drafted reply the invoker can edit + send, or cancel. replyToMessageID is
@@ -99,6 +102,7 @@ export function onRunApproval(data: unknown): void {
     summary?: string;
     risk?: string;
     kind?: string;
+  purpose?: string;
     options?: string[];
     replyText?: string;
     replyToMessageID?: string;
@@ -120,6 +124,7 @@ export function onRunApproval(data: unknown): void {
     summary: p.summary ?? '',
     risk: p.risk,
     kind: typeof p.kind === 'string' && p.kind ? p.kind : undefined,
+    purpose: typeof p.purpose === 'string' && p.purpose ? p.purpose : undefined,
     options: Array.isArray(p.options) ? p.options : undefined,
     replyText: typeof p.replyText === 'string' && p.replyText ? p.replyText : undefined,
     replyToMessageID: p.replyToMessageID,

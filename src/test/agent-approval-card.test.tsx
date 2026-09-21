@@ -37,6 +37,7 @@ interface Routes {
   agents?: () => Promise<unknown>;
   prefs?: (path: string, init?: ApiInit) => Promise<unknown>;
   decide?: (path: string, init?: ApiInit) => Promise<unknown>;
+  install?: (path: string, init?: ApiInit) => Promise<unknown>;
 }
 
 function installRoutes(over: Routes = {}) {
@@ -46,6 +47,9 @@ function installRoutes(over: Routes = {}) {
     }
     if (init?.method === 'PATCH' && path.endsWith('/prefs')) {
       return (over.prefs ?? (() => Promise.resolve(rosterAgent({ prefs: { userID: 'u-1', slug: 'gg', autoAllow: ['read'] } }))))(path, init);
+    }
+    if (init?.method === 'PATCH' && path.endsWith('/install')) {
+      return (over.install ?? (() => Promise.resolve({})))(path, init);
     }
     if (init?.method === 'POST' && path.includes('/approvals/')) {
       return (over.decide ?? (() => Promise.resolve({})))(path, init);
@@ -306,6 +310,51 @@ describe('AgentApprovalCard', () => {
     expect(decide).toHaveBeenCalledWith('/api/v1/runs/run-2/approvals/ap-2', expect.objectContaining({ body: JSON.stringify({ approve: true }) }));
     // The shell gate stays pending.
     expect(screen.getByTestId('agent-approval-card')).toHaveTextContent('ls');
+  });
+
+  it('connector gates offer "always allow <slug>": flips the install policy then approves every pending gate for it', async () => {
+    const decide = vi.fn(() => Promise.resolve({}));
+    const install = vi.fn(() => Promise.resolve({}));
+    installRoutes({ decide, install });
+    seedApproval('ap-1', { purpose: 'connector:meetingmind', summary: 'Use the MeetingMind connector (meetingmind) for this task' });
+    seedApproval('ap-2', { purpose: 'connector:meetingmind', runID: 'run-2', summary: 'Use the MeetingMind connector (meetingmind) again' });
+    seedApproval('ap-3', { purpose: 'connector:cliffhub', summary: 'Use the CliffHub connector (cliffhub) for this task' });
+    renderCard('c-1');
+
+    const buttons = await screen.findAllByTestId('approval-always-allow-connector');
+    expect(buttons).toHaveLength(3);
+    expect(buttons[0]).toHaveTextContent('Always allow meetingmind');
+    expect(buttons[0].title).toContain('meetingmind');
+    // No harness-class button on a connector gate.
+    expect(screen.queryByTestId('approval-always-allow')).not.toBeInTheDocument();
+    fireEvent.click(buttons[0]);
+
+    await waitFor(() => expect(screen.getAllByTestId('agent-approval-card')).toHaveLength(1));
+    expect(install).toHaveBeenCalledTimes(1);
+    expect(install).toHaveBeenCalledWith(
+      '/api/v1/connectors/meetingmind/install',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ agentUse: 'always' }) }),
+    );
+    expect(decide).toHaveBeenCalledTimes(2);
+    expect(decide).toHaveBeenCalledWith('/api/v1/runs/run-1/approvals/ap-1', expect.objectContaining({ body: JSON.stringify({ approve: true }) }));
+    expect(decide).toHaveBeenCalledWith('/api/v1/runs/run-2/approvals/ap-2', expect.objectContaining({ body: JSON.stringify({ approve: true }) }));
+    // The cliffhub gate stays pending.
+    expect(screen.getByTestId('agent-approval-card')).toHaveTextContent('CliffHub');
+  });
+
+  it('connector always-allow still approves when the policy save fails, and keeps the card when the approval POST fails', async () => {
+    const decide = vi.fn(() => Promise.reject(new Error('network down')));
+    installRoutes({ install: () => Promise.reject(new Error('nope')), decide });
+    seedApproval('ap-1', { purpose: 'connector:gitlab' });
+    renderCard('c-1');
+    fireEvent.click(await screen.findByTestId('approval-always-allow-connector'));
+    await waitFor(() => expect(screen.getByTestId('approval-send-failed')).toBeInTheDocument());
+    expect(decide).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('agent-approval-card')).toBeInTheDocument();
+    // A gate with an unrelated purpose gets neither always-allow button.
+    seedApproval('ap-9', { purpose: 'task-mr:t1', runID: 'run-9' });
+    await waitFor(() => expect(screen.getAllByTestId('agent-approval-card')).toHaveLength(2));
+    expect(screen.getAllByTestId('approval-always-allow-connector')).toHaveLength(1);
   });
 
   it('skips the pref save when the kind is already auto-allowed', async () => {

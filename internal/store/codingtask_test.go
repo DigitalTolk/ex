@@ -22,7 +22,6 @@ func mkCodingTaskFixture(id, threadRootID string) *model.CodingTask {
 		Goal:         "login button does nothing",
 		Kind:         "bug",
 		State:        model.TaskStateCreated,
-		ChannelID:    "ch-proj",
 		ThreadRootID: threadRootID,
 		RequesterID:  "u-alice",
 		AgentID:      "a-dev",
@@ -34,7 +33,6 @@ func mkCodingProjectFixture(key string) *model.CodingProject {
 	return &model.CodingProject{
 		Key:       key,
 		Name:      "Acme",
-		ChannelID: "ch-proj",
 		CreatedBy: "u-alice",
 		CreatedAt: now,
 		UpdatedAt: now,

@@ -16,6 +16,7 @@ import {
   useAgents,
   useUpdateAgentPrefs,
 } from "@/hooks/useAgents";
+import { useUpdateConnectorInstall } from "@/hooks/useConnectors";
 import {
   useAgentApprovalsFor,
   type PendingApproval,
@@ -47,6 +48,15 @@ function renderInlineCode(text: string): ReactNode[] {
   );
 }
 
+// connectorOf returns the connector slug a server-raised use_connector gate
+// is about ("connector:meetingmind" → "meetingmind"), or "" for any other gate.
+const CONNECTOR_PURPOSE = "connector:";
+function connectorOf(a: PendingApproval): string {
+  return a.purpose?.startsWith(CONNECTOR_PURPOSE)
+    ? a.purpose.slice(CONNECTOR_PURPOSE.length)
+    : "";
+}
+
 // AgentApprovalCard: the human-in-the-loop gate (plan-v2 §7). When an agent
 // calls request_approval (or a native tool hits the permission gateway), its
 // run parks and this card appears above the composer FOR THE INVOKER — the
@@ -66,6 +76,10 @@ export function AgentApprovalCard({ parentID, userMap }: Props) {
   // approves this card. Needs the agent roster (id → slug + current prefs).
   const { data: roster } = useAgents();
   const updatePrefs = useUpdateAgentPrefs();
+  // "Always allow meetingmind": a server-raised use_connector gate carries
+  // purpose "connector:<slug>"; the button flips that install's agent-use
+  // policy to "always" (the Connectors page dial) and approves the card.
+  const updateInstall = useUpdateConnectorInstall();
 
   // "Tell it what to do instead": free text that rides the decision to the
   // agent — the deny message of a permission prompt, or the note inside a
@@ -97,6 +111,30 @@ export function AgentApprovalCard({ parentID, userMap }: Props) {
       (m) => m.kind === a.kind && m.agentID === a.agentID,
     );
     for (const m of sameKind) {
+      const ok = await decideApproval({
+        approvalID: m.approvalID,
+        runID: m.runID,
+        approve: true,
+      });
+      if (!ok) setFailed((prev) => ({ ...prev, [m.approvalID]: true }));
+    }
+    setBusy(null);
+  };
+
+  const alwaysAllowConnector = async (a: PendingApproval) => {
+    const slug = connectorOf(a);
+    /* istanbul ignore if -- the button only renders when connectorOf() is non-empty */
+    if (!slug) return;
+    setBusy(a.approvalID);
+    try {
+      await updateInstall.mutateAsync({ slug, agentUse: "always" });
+    } catch {
+      // Policy save failed — still honor the one-off approval below.
+    }
+    // The policy applies to the NEXT use_connector; every gate already
+    // pending for this connector is approved here so the user isn't re-asked.
+    const samePurpose = mine.filter((m) => m.purpose === a.purpose);
+    for (const m of samePurpose) {
       const ok = await decideApproval({
         approvalID: m.approvalID,
         runID: m.runID,
@@ -306,6 +344,22 @@ export function AgentApprovalCard({ parentID, userMap }: Props) {
                             {AUTO_ALLOW_CLASSES.find(
                               (c) => c.id === a.kind,
                             )?.label.toLowerCase() ?? a.kind}
+                          </button>
+                        )}
+                        {!a.kind && connectorOf(a) && (
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void alwaysAllowConnector(a)}
+                            data-testid="approval-always-allow-connector"
+                            title={`Stop asking when an agent wants to use ${connectorOf(a)} for you — sets that connector's agent use to "always" on your Connectors page; approves every pending request for it too`}
+                            className="ml-auto inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+                          >
+                            <ShieldCheck
+                              className="h-3.5 w-3.5"
+                              aria-hidden="true"
+                            />
+                            Always allow {connectorOf(a)}
                           </button>
                         )}
                       </div>

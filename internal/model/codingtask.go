@@ -23,13 +23,16 @@ import (
 // roles, and the project channel. Learned on first use (the intake agent
 // resolves the repos with the requester) and reused by every later task.
 type CodingProject struct {
-	Key       string        `json:"key" dynamodbav:"key"`   // slug, e.g. "cliffhub"
-	Name      string        `json:"name" dynamodbav:"name"` // display, e.g. "CliffHub"
-	Repos     []ProjectRepo `json:"repos" dynamodbav:"repos"`
-	ChannelID string        `json:"channelID" dynamodbav:"channelID"`
-	CreatedBy string        `json:"createdBy" dynamodbav:"createdBy"`
-	CreatedAt time.Time     `json:"createdAt" dynamodbav:"createdAt"`
-	UpdatedAt time.Time     `json:"updatedAt" dynamodbav:"updatedAt"`
+	Key   string        `json:"key" dynamodbav:"key"`   // slug, e.g. "cliffhub"
+	Name  string        `json:"name" dynamodbav:"name"` // display, e.g. "CliffHub"
+	Repos []ProjectRepo `json:"repos" dynamodbav:"repos"`
+	// No channel here on purpose: a project has one channel PER REQUESTER,
+	// derived from (project key, requester id) — see service.ProjectChannelID.
+	// Rows written before 2026-09-21 carry a channelID attribute for the old
+	// shared channel; it is ignored on read.
+	CreatedBy string    `json:"createdBy" dynamodbav:"createdBy"`
+	CreatedAt time.Time `json:"createdAt" dynamodbav:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
 }
 
 // ProjectRepo is one GitLab repository of a project with its role in the

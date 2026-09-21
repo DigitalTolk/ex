@@ -53,12 +53,15 @@ type taskStore interface {
 	ListProjects(ctx context.Context) ([]*model.CodingProject, error)
 }
 
-// taskChannels is the channel surface: create-or-reuse the project channel
-// by derived ID and manage its membership without a human actor.
+// taskChannels is the channel surface: create-or-reuse a requester's project
+// channel by derived ID and manage its membership without a human actor.
 type taskChannels interface {
 	GetByID(ctx context.Context, id string) (*model.Channel, error)
 	GetBySlug(ctx context.Context, slug string) (*model.Channel, error)
 	CreateWithID(ctx context.Context, userID, id, name string, chanType model.ChannelType, description string) (*model.Channel, error)
+	// Update renames/re-describes a channel as actorID (owner/admin) — used
+	// once, to give a pre-2026-09-21 shared project channel its owner's name.
+	Update(ctx context.Context, actorID, channelID string, name, description *string) (*model.Channel, error)
 	AutoJoinChannel(ctx context.Context, userID, channelID string, role model.ChannelRole) error
 	IsMember(ctx context.Context, userID, channelID string) bool
 }
@@ -107,10 +110,60 @@ func ProjectKey(name string) string {
 	return strings.Trim(slugify(strings.TrimSpace(name)), "-")
 }
 
-// ProjectChannelID is the derived, coordination-free ID of a project's
-// channel: the first task on a project creates it, every later task finds it.
-func ProjectChannelID(projectKey string) string {
+// ProjectChannelID is the derived, coordination-free ID of ONE REQUESTER's
+// channel for a project: Alice's first task on CliffHub creates
+// ~cliffhub-alice, every later task of hers finds it; Bob's tasks on the same
+// product land in ~cliffhub-bob. The server never adds anyone to another
+// person's channel — sharing is an ordinary private-channel invite.
+//
+// Decision 2026-09-21, reversing the 2026-08-26 "one shared channel per
+// project": that design auto-joined every later requester (bypassing the
+// invite that every other private channel requires), showed them each
+// other's task threads, approval relays and test links, and — through the
+// one-active-task-per-channel rule — let one requester's task block or even
+// close (supersede) another's.
+func ProjectChannelID(projectKey, requesterID string) string {
+	return store.DeriveID("codechan#" + projectKey + "#" + requesterID)
+}
+
+// legacyProjectChannelID is the pre-2026-09-21 derivation: one channel per
+// project, shared. Still consulted so the requester who CREATED such a
+// channel keeps using it (their task history lives there); anyone else on
+// the project gets their own channel and is never added to the old one.
+func legacyProjectChannelID(projectKey string) string {
 	return store.DeriveID("codechan#" + projectKey)
+}
+
+// requesterHandle is the short slug that marks a requester's project channel
+// as theirs (~cliffhub-alice): the display name, else the email's local part,
+// else a stub of the user id. Never empty, always slug-safe.
+func requesterHandle(u *model.User) string {
+	if h := strings.Trim(slugify(u.DisplayName), "-"); h != "" {
+		return h
+	}
+	if at := strings.IndexByte(u.Email, '@'); at > 0 {
+		if h := strings.Trim(slugify(u.Email[:at]), "-"); h != "" {
+			return h
+		}
+	}
+	id := strings.ToLower(u.ID)
+	if len(id) > 6 {
+		id = id[len(id)-6:]
+	}
+	return "u" + strings.Trim(slugify(id), "-")
+}
+
+// requesterChannelName is the requester's project channel name, clipped to
+// the channel-name cap without a dangling dash: "<project>-<handle>".
+func requesterChannelName(projectKey string, requester *model.User) string {
+	return clipChannelName(projectKey + "-" + requesterHandle(requester))
+}
+
+func clipChannelName(s string) string {
+	if len(s) > MaxChannelNameLen {
+		s = s[:MaxChannelNameLen]
+	}
+	return strings.Trim(s, "-")
 }
 
 // TaskMarker renders the task card message body — machine syntax the SPA
@@ -171,8 +224,10 @@ type CreateTaskResult struct {
 // cleanly instead of hacking on the invoker's disk) — but dev is the only
 // agent that WORKS it: the card, the thread, the runs are all dev's.
 //
-// v0 rule: ONE active task per project — a second ask gets ErrTaskActive
-// with a pointer to the running task.
+// v0 rule: ONE active task per project PER REQUESTER (tasks are counted by
+// channel, and channels are per requester) — a second ask gets ErrTaskActive
+// with a pointer to the running task. Two people working the same product
+// never block or supersede each other.
 // taskFields is CreateTaskInput after validation and normalization — the
 // first third of Create, split out so the function reads as the sequence of
 // jobs it performs (validate → resolve project → claim the slot → post the
@@ -269,7 +324,6 @@ func (s *CodingTaskService) Create(ctx context.Context, run *model.Run, in Creat
 		proj = &model.CodingProject{
 			Key:       key,
 			Name:      name,
-			ChannelID: ProjectChannelID(key),
 			CreatedBy: requester.ID,
 			CreatedAt: s.now(),
 			UpdatedAt: s.now(),
@@ -285,8 +339,9 @@ func (s *CodingTaskService) Create(ctx context.Context, run *model.Run, in Creat
 		return nil, fmt.Errorf("%w: %q has no repos on record", ErrProjectUnknown, name)
 	}
 
-	channelID := proj.ChannelID
-	// One active task per project (v0).
+	channelID := s.requesterChannelID(ctx, requester, key)
+	// One active task per project per requester (v0) — the channel is the
+	// requester's, so this never sees anyone else's tasks.
 	existing, err := s.tasks.ListTasksByChannel(ctx, channelID)
 	if err != nil {
 		return nil, fmt.Errorf("task: list: %w", err)
@@ -315,8 +370,9 @@ func (s *CodingTaskService) Create(ctx context.Context, run *model.Run, in Creat
 			return nil, fmt.Errorf("task: create project: %w", err)
 		}
 	}
-	// Membership is server-managed: the requester (creator or later joiner)
-	// and the coding agent are always in the project channel.
+	// Membership is server-managed for exactly two parties: the requester
+	// (who owns the channel) and the coding agent. Nobody else is ever added
+	// here — teammates join a requester's channel only by invitation.
 	if !s.channels.IsMember(ctx, requester.ID, ch.ID) {
 		if err := s.channels.AutoJoinChannel(ctx, requester.ID, ch.ID, model.ChannelRoleMember); err != nil {
 			return nil, fmt.Errorf("task: add requester to channel: %w", err)
@@ -527,26 +583,55 @@ func repoNames(repos []model.TaskRepo) []string {
 	return out
 }
 
-// ensureChannel finds the project channel by derived ID or creates it, named
-// after the PRODUCT (falling back to "<name> code", then a short hash, when a
-// human channel already owns the slug).
+// requesterChannelID picks the channel a requester's tasks on a project live
+// in: their own derived channel — or, for the person who created a project's
+// pre-2026-09-21 shared channel, that channel, so their history stays put.
+// Lookup errors fall through to the own-channel id; ensureChannel surfaces
+// them on its own read.
+func (s *CodingTaskService) requesterChannelID(ctx context.Context, requester *model.User, projectKey string) string {
+	own := ProjectChannelID(projectKey, requester.ID)
+	if ch, err := s.channels.GetByID(ctx, own); err == nil && ch != nil {
+		return own
+	}
+	legacy := legacyProjectChannelID(projectKey)
+	if ch, err := s.channels.GetByID(ctx, legacy); err == nil && ch != nil && ch.CreatedBy == requester.ID {
+		return legacy
+	}
+	return own
+}
+
+// channelDescription says whose channel this is and how others get in — the
+// sidebar name alone ("~cliffhub-alice") should already answer that, the
+// description makes it explicit.
+func channelDescription(requester *model.User, proj *model.CodingProject) string {
+	who := strings.TrimSpace(requester.DisplayName)
+	if who == "" {
+		who = requesterHandle(requester)
+	}
+	return clipText(who+"'s coding tasks for "+proj.Name+" ("+strings.Join(projectRepoNames(proj), ", ")+
+		") — one thread per task, run by dev on "+who+"'s machine. Private: invite teammates to let them follow along.", MaxChannelDescriptionLen)
+}
+
+// ensureChannel finds the requester's project channel by derived ID or
+// creates it, named "<project>-<requester>" (falling back to a short hash
+// suffix when a human channel already owns that slug). A legacy shared
+// channel reached here (requesterChannelID handed it back to its creator) is
+// renamed to the same scheme once, so every project channel reads the same
+// way in the sidebar: whose it is, at a glance.
 func (s *CodingTaskService) ensureChannel(ctx context.Context, requester *model.User, channelID string, proj *model.CodingProject) (*model.Channel, bool, error) {
 	if ch, err := s.channels.GetByID(ctx, channelID); err == nil && ch != nil {
+		if ch.ID == legacyProjectChannelID(proj.Key) {
+			ch = s.adoptLegacyChannel(ctx, requester, ch, proj)
+		}
 		return ch, false, nil
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, false, fmt.Errorf("task: channel lookup: %w", err)
 	}
 	// Channel names are slug-style (ValidateChannelName) — the pretty product
-	// name lives in the description. proj.Key is a valid slug by construction;
-	// clip the suffixed fallbacks back under the name cap.
-	clip := func(s string) string {
-		if len(s) > MaxChannelNameLen {
-			s = strings.Trim(s[:MaxChannelNameLen], "-")
-		}
-		return s
-	}
-	candidates := []string{proj.Key, clip(proj.Key + "-code"), clip(proj.Key + "-" + strings.ToLower(channelID[len(channelID)-6:]))}
-	desc := clipText("Coding tasks for "+proj.Name+" ("+strings.Join(projectRepoNames(proj), ", ")+") — one thread per task, run by dev.", MaxChannelDescriptionLen)
+	// name lives in the description. proj.Key is a valid slug by construction.
+	base := requesterChannelName(proj.Key, requester)
+	candidates := []string{base, clipChannelName(base + "-" + strings.ToLower(channelID[len(channelID)-6:]))}
+	desc := channelDescription(requester, proj)
 	var lastErr error
 	for _, name := range candidates {
 		if existing, err := s.channels.GetBySlug(ctx, slugify(name)); err == nil && existing != nil {
@@ -566,6 +651,29 @@ func (s *CodingTaskService) ensureChannel(ctx context.Context, requester *model.
 		return ch, false, nil
 	}
 	return nil, false, fmt.Errorf("task: create project channel: %w", lastErr)
+}
+
+// adoptLegacyChannel gives a pre-2026-09-21 shared project channel its
+// creator's name and description ("cliffhub" → "cliffhub-alice") the first
+// time they file a task after the change. Best-effort: a failed rename
+// leaves the old name and is logged; the channel still works. Members who
+// were auto-joined under the old rule are NOT removed — the owner decides.
+func (s *CodingTaskService) adoptLegacyChannel(ctx context.Context, requester *model.User, ch *model.Channel, proj *model.CodingProject) *model.Channel {
+	want := requesterChannelName(proj.Key, requester)
+	if ch.Slug == slugify(want) {
+		return ch
+	}
+	if existing, err := s.channels.GetBySlug(ctx, slugify(want)); err == nil && existing != nil && existing.ID != ch.ID {
+		slog.Warn("legacy project channel keeps its name — slug taken", "channelID", ch.ID, "want", want)
+		return ch
+	}
+	desc := channelDescription(requester, proj)
+	updated, err := s.channels.Update(ctx, requester.ID, ch.ID, &want, &desc)
+	if err != nil || updated == nil {
+		slog.Warn("legacy project channel rename failed", "channelID", ch.ID, "want", want, "error", err)
+		return ch
+	}
+	return updated
 }
 
 func projectRepoNames(p *model.CodingProject) []string {

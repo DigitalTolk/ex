@@ -198,6 +198,38 @@ func (f *fakeTaskChannels) CreateWithID(_ context.Context, userID, id, name stri
 	return ch, nil
 }
 
+func (f *fakeTaskChannels) Update(_ context.Context, actorID, channelID string, name, description *string) (*model.Channel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ch, ok := f.channels[channelID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	// Owner-only, like the real service's admin check.
+	if ch.CreatedBy != actorID {
+		return nil, ErrForbidden
+	}
+	if name != nil {
+		if err := ValidateChannelName(*name); err != nil {
+			return nil, err
+		}
+		slug := slugify(*name)
+		for id, other := range f.channels {
+			if id != channelID && other.Slug == slug {
+				return nil, ErrAlreadyExists
+			}
+		}
+		ch.Name, ch.Slug = *name, slug
+	}
+	if description != nil {
+		if err := ValidateChannelDescription(*description); err != nil {
+			return nil, err
+		}
+		ch.Description = *description
+	}
+	return ch, nil
+}
+
 func (f *fakeTaskChannels) AutoJoinChannel(_ context.Context, userID, channelID string, _ model.ChannelRole) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -338,14 +370,20 @@ func (fx *taskFixture) runsByMode(mode string) []*model.Run {
 
 func (fx *taskFixture) intakeRun(t *testing.T, agentID, msgID string) *model.Run {
 	t.Helper()
+	return fx.intakeRunAs(t, agentID, msgID, "u-alice")
+}
+
+// intakeRunAs starts an intake run invoked by invokerID (the requester).
+func (fx *taskFixture) intakeRunAs(t *testing.T, agentID, msgID, invokerID string) *model.Run {
+	t.Helper()
 	ctx := context.Background()
 	agent, _ := fx.users.GetUser(ctx, agentID)
-	alice, _ := fx.users.GetUser(ctx, "u-alice")
-	resolved, err := fx.orch.agentSvc.Resolve(ctx, agent, alice.ID)
+	invoker, _ := fx.users.GetUser(ctx, invokerID)
+	resolved, err := fx.orch.agentSvc.Resolve(ctx, agent, invoker.ID)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	run, err := fx.orch.startRun(ctx, invocation{agent: agent, invoker: alice, msg: &model.Message{ID: msgID, ParentID: "chan-general", AuthorID: "u-alice", Body: "@dev fix"}, parentType: ParentChannel}, resolved)
+	run, err := fx.orch.startRun(ctx, invocation{agent: agent, invoker: invoker, msg: &model.Message{ID: msgID, ParentID: "chan-general", AuthorID: invokerID, Body: "@dev fix"}, parentType: ParentChannel}, resolved)
 	if err != nil {
 		t.Fatalf("intake run: %v", err)
 	}
@@ -507,7 +545,7 @@ func TestOrchestrator_TaskSteeringWhileBusyIsDeferred(t *testing.T) {
 func TestOrchestrator_ProjectsIndexInBundle(t *testing.T) {
 	fx := newTaskFixture(t)
 	_ = fx.tasks.CreateProject(context.Background(), &model.CodingProject{
-		Key: "cliffhub", Name: "CliffHub", ChannelID: "chan-ch",
+		Key: "cliffhub", Name: "CliffHub",
 		Repos: []model.ProjectRepo{{Path: "dtolk/internal-tools/cliffhub-2-backend", Role: "backend"}, {Path: "dtolk/internal-tools/cliffhub-2-frontend", Role: "frontend"}},
 	})
 	run := fx.startRun(t) // a plain gg run
@@ -606,9 +644,14 @@ func TestCodingTaskService_CreateFlowAndGates(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	task := res.Task
-	wantChan := ProjectChannelID("booking-portal")
-	if task.ChannelID != wantChan || !res.ChannelCreated || !res.ProjectCreated || res.Channel.Slug != "booking-portal" || res.Channel.Type != model.ChannelTypePrivate {
-		t.Fatalf("project channel wrong: task=%+v channel=%+v", task, res.Channel)
+	alice, _ := fx.users.GetUser(ctx, "u-alice")
+	wantChan := ProjectChannelID("booking-portal", "u-alice")
+	wantSlug := "booking-portal-" + requesterHandle(alice)
+	if task.ChannelID != wantChan || !res.ChannelCreated || !res.ProjectCreated || res.Channel.Slug != wantSlug || res.Channel.Type != model.ChannelTypePrivate {
+		t.Fatalf("requester's project channel wrong (want slug %s): task=%+v channel=%+v", wantSlug, task, res.Channel)
+	}
+	if !strings.Contains(res.Channel.Description, "Private: invite teammates") {
+		t.Fatalf("channel description must say how others get in: %q", res.Channel.Description)
 	}
 	if task.ProjectKey != "booking-portal" || task.ProjectName != "Booking Portal" || len(task.Repos) != 2 || task.Repos[0].Branch != task.Repos[1].Branch || !strings.HasPrefix(task.Repos[0].Branch, "ex/task-") {
 		t.Fatalf("task repos wrong: %+v", task)
@@ -617,7 +660,7 @@ func TestCodingTaskService_CreateFlowAndGates(t *testing.T) {
 		t.Fatal("requester and dev must be members of the project channel")
 	}
 	proj, err := fx.tasks.GetProject(ctx, "booking-portal")
-	if err != nil || len(proj.Repos) != 2 || proj.ChannelID != wantChan {
+	if err != nil || len(proj.Repos) != 2 {
 		t.Fatalf("project must be recorded with its repos: %+v %v", proj, err)
 	}
 	cards := fx.tmsgs.postsIn(wantChan, "")
@@ -776,20 +819,151 @@ func TestCodingTaskService_CreateFlowAndGates(t *testing.T) {
 	}
 }
 
+// Two requesters on one product never share a channel, never see each
+// other's tasks, and never block each other — the 2026-09-21 rule.
+func TestCodingTaskService_ChannelPerRequester(t *testing.T) {
+	fx := newTaskFixture(t)
+	ctx := context.Background()
+	alice, _ := fx.users.GetUser(ctx, "u-alice")
+	bob, _ := fx.users.GetUser(ctx, "u-bob")
+
+	aliceRun := fx.intakeRunAs(t, testDevID, "ask-a", "u-alice")
+	resA, err := fx.svc.Create(ctx, aliceRun, CreateTaskInput{Project: "Booking Portal", Repos: bookingRepos, Title: "A's task", Goal: "g"})
+	if err != nil {
+		t.Fatalf("alice create: %v", err)
+	}
+	// Alice's task is still active — Bob's ask on the same product must NOT
+	// be refused (previously ErrTaskActive) and must land in Bob's own channel.
+	bobRun := fx.intakeRunAs(t, testDevID, "ask-b", "u-bob")
+	resB, err := fx.svc.Create(ctx, bobRun, CreateTaskInput{Project: "Booking Portal", Title: "B's task", Goal: "g"})
+	if err != nil {
+		t.Fatalf("bob create while alice's task is active: %v", err)
+	}
+	if resA.Channel.ID == resB.Channel.ID || !resB.ChannelCreated || resB.ProjectCreated {
+		t.Fatalf("bob must get his own channel on the known project: a=%+v b=%+v", resA.Channel, resB.Channel)
+	}
+	if resA.Channel.ID != ProjectChannelID("booking-portal", "u-alice") || resB.Channel.ID != ProjectChannelID("booking-portal", "u-bob") {
+		t.Fatalf("channel ids must derive from (project, requester): a=%s b=%s", resA.Channel.ID, resB.Channel.ID)
+	}
+	if resA.Channel.Slug != "booking-portal-"+requesterHandle(alice) || resB.Channel.Slug != "booking-portal-"+requesterHandle(bob) {
+		t.Fatalf("channel names must carry the owner's handle: a=%s b=%s", resA.Channel.Slug, resB.Channel.Slug)
+	}
+	if resB.Channel.CreatedBy != "u-bob" || !fx.chans.IsMember(ctx, "u-bob", resB.Channel.ID) || !fx.chans.IsMember(ctx, testDevID, resB.Channel.ID) {
+		t.Fatalf("bob and dev must be the members of bob's channel: %+v", resB.Channel)
+	}
+	if fx.chans.IsMember(ctx, "u-bob", resA.Channel.ID) || fx.chans.IsMember(ctx, "u-alice", resB.Channel.ID) {
+		t.Fatal("the server must never add a requester to another requester's channel")
+	}
+	// (Task visibility itself is the message service's channel-access check,
+	// which the fake here does not model — membership above is the input it
+	// decides on.)
+	// Bob's own second ask IS still gated by his own active task.
+	if _, err := fx.svc.Create(ctx, bobRun, CreateTaskInput{Project: "Booking Portal", Title: "B2", Goal: "g"}); !errors.Is(err, ErrTaskActive) {
+		t.Fatalf("a requester's second active task must still be refused, got %v", err)
+	}
+	// Two tasks on one project at once — one per requester.
+	if list, _ := fx.tasks.ListTasksByChannel(ctx, resA.Channel.ID); len(list) != 1 || list[0].RequesterID != "u-alice" {
+		t.Fatalf("alice's channel must hold only her task: %+v", list)
+	}
+}
+
+// A shared project channel created before 2026-09-21 keeps serving its
+// creator (renamed to the new scheme); everyone else gets their own.
+func TestCodingTaskService_LegacySharedChannel(t *testing.T) {
+	fx := newTaskFixture(t)
+	ctx := context.Background()
+	alice, _ := fx.users.GetUser(ctx, "u-alice")
+	legacyID := legacyProjectChannelID("cliffhub")
+	fx.chans.channels[legacyID] = &model.Channel{ID: legacyID, Name: "cliffhub", Slug: "cliffhub", Type: model.ChannelTypePrivate, CreatedBy: "u-alice"}
+	// Bob was auto-joined under the old rule.
+	fx.chans.members[legacyID] = map[string]bool{"u-alice": true, testDevID: true, "u-bob": true}
+	repos := []RepoInput{{Path: "dtolk/internal-tools/cliffhub-2-backend", Role: "backend"}}
+
+	resA, err := fx.svc.Create(ctx, fx.intakeRunAs(t, testDevID, "ask-la", "u-alice"), CreateTaskInput{Project: "CliffHub", Repos: repos, Title: "T", Goal: "g"})
+	if err != nil {
+		t.Fatalf("alice create: %v", err)
+	}
+	if resA.Channel.ID != legacyID || resA.ChannelCreated {
+		t.Fatalf("the creator must keep the legacy channel: %+v", resA.Channel)
+	}
+	if want := "cliffhub-" + requesterHandle(alice); resA.Channel.Slug != want || !strings.Contains(resA.Channel.Description, "Private: invite teammates") {
+		t.Fatalf("legacy channel must be renamed to %s with the new description: %+v", want, resA.Channel)
+	}
+	if !fx.chans.IsMember(ctx, "u-bob", legacyID) {
+		t.Fatal("previously auto-joined members are left for the owner to manage, not removed")
+	}
+	// Bob is a member of the legacy channel but not its creator: his task
+	// gets his own channel, and the legacy one is untouched.
+	resB, err := fx.svc.Create(ctx, fx.intakeRunAs(t, testDevID, "ask-lb", "u-bob"), CreateTaskInput{Project: "CliffHub", Title: "T", Goal: "g"})
+	if err != nil {
+		t.Fatalf("bob create: %v", err)
+	}
+	if resB.Channel.ID != ProjectChannelID("cliffhub", "u-bob") || !resB.ChannelCreated || resB.Channel.Slug != "cliffhub-bob" {
+		t.Fatalf("bob must get ~cliffhub-bob, got %+v", resB.Channel)
+	}
+	// A second task by alice finds the (renamed) legacy channel again — no
+	// rename churn, no duplicate.
+	tk, _ := fx.tasks.GetTask(ctx, resA.Task.ID)
+	tk.State = model.TaskStateDone
+	_ = fx.tasks.UpdateTask(ctx, tk, model.TaskStateCreated)
+	resA2, err := fx.svc.Create(ctx, fx.intakeRunAs(t, testDevID, "ask-la2", "u-alice"), CreateTaskInput{Project: "CliffHub", Title: "T2", Goal: "g"})
+	if err != nil || resA2.Channel.ID != legacyID || resA2.ChannelCreated {
+		t.Fatalf("alice's later task must reuse the legacy channel: %v %+v", err, resA2)
+	}
+	// Legacy channel whose slug is taken by a human channel: rename is
+	// skipped, channel still serves.
+	fx2 := newTaskFixture(t)
+	fx2.chans.channels[legacyID] = &model.Channel{ID: legacyID, Name: "cliffhub", Slug: "cliffhub", CreatedBy: "u-alice"}
+	fx2.chans.members[legacyID] = map[string]bool{"u-alice": true}
+	taken := "cliffhub-" + requesterHandle(alice)
+	fx2.chans.channels["human"] = &model.Channel{ID: "human", Name: taken, Slug: taken}
+	fx2.chans.members["human"] = map[string]bool{}
+	res2, err := fx2.svc.Create(ctx, fx2.intakeRunAs(t, testDevID, "ask-lc", "u-alice"), CreateTaskInput{Project: "CliffHub", Repos: repos, Title: "T", Goal: "g"})
+	if err != nil || res2.Channel.ID != legacyID || res2.Channel.Slug != "cliffhub" {
+		t.Fatalf("a taken slug must leave the legacy name alone: %v %+v", err, res2.Channel)
+	}
+}
+
+func TestRequesterHandle(t *testing.T) {
+	cases := []struct {
+		u    model.User
+		want string
+	}{
+		{model.User{ID: "u1", DisplayName: "Shivesh Tripathi", Email: "st@x.com"}, "shivesh-tripathi"},
+		{model.User{ID: "u1", DisplayName: "  ", Email: "bob.smith@x.com"}, "bob-smith"},
+		{model.User{ID: "01ABCDEF", DisplayName: "!!!", Email: "@x.com"}, "uabcdef"},
+		{model.User{ID: "u7"}, "uu7"},
+	}
+	for _, c := range cases {
+		if got := requesterHandle(&c.u); got != c.want {
+			t.Errorf("requesterHandle(%+v) = %q, want %q", c.u, got, c.want)
+		}
+	}
+	long := strings.Repeat("k", 30)
+	if n := requesterChannelName(long, &model.User{DisplayName: "Alice"}); len(n) > MaxChannelNameLen || strings.HasSuffix(n, "-") || ValidateChannelName(n) != nil {
+		t.Fatalf("clipped name must stay valid: %q", n)
+	}
+}
+
 func TestCodingTaskService_KnownProjectAndChannelFallback(t *testing.T) {
 	fx := newTaskFixture(t)
 	ctx := context.Background()
-	// A human channel already owns ~cliffhub: the project channel falls back
-	// to "cliffhub code", keyed by the derived ID either way.
-	fx.chans.channels["human"] = &model.Channel{ID: "human", Name: "CliffHub", Slug: "cliffhub"}
+	// A human channel already owns ~cliffhub-<alice>: the requester's project
+	// channel falls back to a hash-suffixed name, keyed by the derived ID
+	// either way.
+	alice, _ := fx.users.GetUser(ctx, "u-alice")
+	taken := "cliffhub-" + requesterHandle(alice)
+	fx.chans.channels["human"] = &model.Channel{ID: "human", Name: taken, Slug: taken}
 	fx.chans.members["human"] = map[string]bool{}
 	run := fx.intakeRun(t, testDevID, "ask3")
 	res, err := fx.svc.Create(ctx, run, CreateTaskInput{Project: "CliffHub", Repos: []RepoInput{{Path: "dtolk/internal-tools/cliffhub-2-backend", Role: "backend"}}, Title: "T", Goal: "g"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if res.Channel.ID != ProjectChannelID("cliffhub") || res.Channel.Slug != "cliffhub-code" {
-		t.Fatalf("expected the '<name> code' fallback, got %+v", res.Channel)
+	wantID := ProjectChannelID("cliffhub", "u-alice")
+	wantSlug := taken + "-" + strings.ToLower(wantID[len(wantID)-6:])
+	if res.Channel.ID != wantID || res.Channel.Slug != wantSlug {
+		t.Fatalf("expected the hash-suffixed fallback %s, got %+v", wantSlug, res.Channel)
 	}
 	// Finish it, then a later task on the same product with a NEW repo (the
 	// frontend) reuses the channel, defaults to the known repos, and the

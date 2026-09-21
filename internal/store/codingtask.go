@@ -235,8 +235,8 @@ func (s *TaskStore) projectItem(p *model.CodingProject) projectItem {
 
 // CreateProject writes a new project; ErrAlreadyExists if the key is taken.
 func (s *TaskStore) CreateProject(ctx context.Context, p *model.CodingProject) error {
-	if p.Key == "" || p.ChannelID == "" {
-		return errors.New("store: project key and channelID required")
+	if p.Key == "" {
+		return errors.New("store: project key required")
 	}
 	av := mustAttrs(attributevalue.MarshalMap(s.projectItem(p)))
 	if _, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{

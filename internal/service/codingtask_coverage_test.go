@@ -381,7 +381,7 @@ func TestCtaskCovCreateStoreErrors(t *testing.T) {
 	}
 	fx.store.getProjectErr = nil
 
-	if err := fx.tasks.CreateProject(ctx, &model.CodingProject{Key: "empty", Name: "Empty", ChannelID: ProjectChannelID("empty")}); err != nil {
+	if err := fx.tasks.CreateProject(ctx, &model.CodingProject{Key: "empty", Name: "Empty"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fx.svc.Create(ctx, run, CreateTaskInput{Project: "Empty", Title: "T", Goal: "g"}); !errors.Is(err, ErrProjectUnknown) {
@@ -427,8 +427,8 @@ func TestCtaskCovCreateMembershipFailures(t *testing.T) {
 	// The channel pre-exists without the requester, and joining her fails.
 	fx := newCtaskCovFixture(t)
 	run := fx.intakeRun(t, testDevID, "cc-mb1")
-	chID := ProjectChannelID("portal")
-	fx.chans.channels[chID] = &model.Channel{ID: chID, Name: "portal", Slug: "portal"}
+	chID := ProjectChannelID("portal", "u-alice")
+	fx.chans.channels[chID] = &model.Channel{ID: chID, Name: "portal-alice", Slug: "portal-alice", CreatedBy: "u-alice"}
 	fx.chans.members[chID] = map[string]bool{}
 	fx.chns.joinErr["u-alice"] = errors.New("join down")
 	if _, err := fx.svc.Create(ctx, run, in); err == nil || !strings.Contains(err.Error(), "add requester") {
@@ -449,7 +449,7 @@ func TestCtaskCovCreateMergeUpgradeSurvivesUpdateFailure(t *testing.T) {
 	ctx := context.Background()
 	run := fx.intakeRun(t, testDevID, "cc-mg1")
 	if err := fx.tasks.CreateProject(ctx, &model.CodingProject{
-		Key: "portal", Name: "Portal", ChannelID: ProjectChannelID("portal"),
+		Key: "portal", Name: "Portal",
 		Repos: []model.ProjectRepo{{Path: "g/r", Role: model.RepoRoleOther}},
 	}); err != nil {
 		t.Fatal(err)
@@ -487,9 +487,9 @@ func TestCtaskCovCreateSupersededCloseFailure(t *testing.T) {
 	fx := newCtaskCovFixture(t)
 	ctx := context.Background()
 	run := fx.intakeRun(t, testDevID, "cc-su1")
-	chID := ProjectChannelID("portal")
+	chID := ProjectChannelID("portal", "u-alice")
 	if err := fx.tasks.CreateProject(ctx, &model.CodingProject{
-		Key: "portal", Name: "Portal", ChannelID: chID,
+		Key: "portal", Name: "Portal",
 		Repos: []model.ProjectRepo{{Path: "g/r", Role: model.RepoRoleBackend}},
 	}); err != nil {
 		t.Fatal(err)
@@ -539,21 +539,22 @@ func TestCtaskCovEnsureChannelRaceAndFailure(t *testing.T) {
 	ctx := context.Background()
 	alice := &model.User{ID: "u-alice"}
 	longKey := strings.Repeat("k", 30) // forces the fallback-name clip
-	proj := &model.CodingProject{Key: longKey, Name: "K", ChannelID: ProjectChannelID(longKey)}
+	proj := &model.CodingProject{Key: longKey, Name: "K"}
+	chID := ProjectChannelID(longKey, alice.ID)
 
 	// Hard create failure on every candidate, and the read-back finds nothing.
 	fx := newCtaskCovFixture(t)
 	fx.chns.createErr = errors.New("create down")
-	if _, _, err := fx.svc.ensureChannel(ctx, alice, proj.ChannelID, proj); err == nil || !strings.Contains(err.Error(), "create project channel") {
+	if _, _, err := fx.svc.ensureChannel(ctx, alice, chID, proj); err == nil || !strings.Contains(err.Error(), "create project channel") {
 		t.Fatalf("hard create failure must surface, got %v", err)
 	}
 
 	// Lost create race: every candidate collides, the derived-ID read-back wins.
 	fx2 := newCtaskCovFixture(t)
-	want := &model.Channel{ID: proj.ChannelID, Name: longKey, Slug: longKey}
+	want := &model.Channel{ID: chID, Name: longKey, Slug: longKey}
 	fx2.chns.createErr = ErrAlreadyExists
 	fx2.chns.raceChannel = want
-	ch, created, err := fx2.svc.ensureChannel(ctx, alice, proj.ChannelID, proj)
+	ch, created, err := fx2.svc.ensureChannel(ctx, alice, chID, proj)
 	if err != nil || created || ch != want {
 		t.Fatalf("a lost race must resolve by read-back: %v created=%v ch=%+v", err, created, ch)
 	}
@@ -631,7 +632,7 @@ func TestCtaskCovLearnDefaultBranchUpdateFailure(t *testing.T) {
 	ctx := context.Background()
 	task := fx.seedTask(model.TaskStateInProgress)
 	if err := fx.tasks.CreateProject(ctx, &model.CodingProject{
-		Key: "booking-portal", Name: "Booking Portal", ChannelID: "chan1",
+		Key: "booking-portal", Name: "Booking Portal",
 		Repos: []model.ProjectRepo{{Path: "dt/booking-portal-api", Role: model.RepoRoleBackend, DefaultBranch: "main"}},
 	}); err != nil {
 		t.Fatal(err)
