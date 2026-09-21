@@ -1,74 +1,111 @@
 import { useState } from 'react';
-import { Check, Pencil, Plus, Sparkles, Trash2, X } from 'lucide-react';
+import { Check, Globe, Lock, Pencil, Plus, Sparkles, Trash2, X } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
+import { TooltipIconButton } from '@/components/ui/tooltip-icon-button';
 import { useAuth } from '@/context/AuthContext';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import {
+  isSkillPublished,
   useCreateSkill,
   useDeleteSkill,
   useSkills,
   useUpdateSkill,
   type Skill,
+  type SkillVisibility,
 } from '@/hooks/useAgents';
 import { showToast } from '@/lib/toast';
 
-// SkillsPage: workspace skill packs — named instruction sets any agent can
-// pull in mid-run ("use the release-notes skill…"). Anyone can create one;
-// only the author edits or deletes theirs.
+// SkillsPage: instruction packs agents pull in mid-run ("use the release-notes
+// skill…"). A skill belongs to whoever made it: private by default (only you),
+// or published for the whole workspace to USE — but never to edit. Your own
+// skills group first; the team's published ones follow.
 export default function SkillsPage() {
   useDocumentTitle('Skills');
   const { data: skills, isLoading } = useSkills();
+  const { user } = useAuth();
   const [creating, setCreating] = useState(false);
+
+  const all = skills ?? [];
+  const mine = all.filter((s) => s.createdBy === user?.id);
+  const theirs = all.filter((s) => s.createdBy !== user?.id);
 
   return (
     <PageContainer
       title="Skills"
       description="Reusable instruction packs for agents. Ask an agent to “use the <name> skill” — or let it discover them itself mid-task."
-    >
-      <div className="mb-4">
-        {creating ? (
-          <SkillForm onDone={() => setCreating(false)} />
-        ) : (
-          <Button onClick={() => setCreating(true)}>
-            <Plus className="mr-1 h-4 w-4" aria-hidden="true" />
+      actions={
+        !creating && (
+          <Button size="sm" onClick={() => setCreating(true)}>
+            <Plus aria-hidden="true" />
             New skill
           </Button>
-        )}
-      </div>
+        )
+      }
+    >
+      {creating && (
+        <div className="mb-5">
+          <SkillForm onDone={() => setCreating(false)} />
+        </div>
+      )}
 
       {isLoading && (
-        <div className="space-y-3" data-testid="skills-loading">
+        <div className="space-y-2" data-testid="skills-loading">
           {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-20 w-full" />
+            <Skeleton key={i} className="h-[68px] w-full rounded-xl" />
           ))}
         </div>
       )}
 
-      {!isLoading && (skills?.length ?? 0) === 0 && !creating && (
+      {!isLoading && all.length === 0 && !creating && (
         <div className="py-12 text-center text-muted-foreground" data-testid="skills-empty">
           <Sparkles className="mx-auto mb-3 h-8 w-8" />
           <p>No skills yet. Create one — e.g. a “release-notes” pack with your team’s format.</p>
         </div>
       )}
 
-      <div className="space-y-3">
-        {skills?.map((sk) => <SkillCard key={sk.id} skill={sk} />)}
+      <div className="space-y-6">
+        {mine.length > 0 && (
+          <Section title="Your skills" count={mine.length}>
+            {mine.map((sk) => <SkillRow key={sk.id} skill={sk} own />)}
+          </Section>
+        )}
+        {theirs.length > 0 && (
+          <Section title="Shared by the team" count={theirs.length}>
+            {theirs.map((sk) => <SkillRow key={sk.id} skill={sk} own={false} />)}
+          </Section>
+        )}
       </div>
     </PageContainer>
   );
 }
 
-// SkillForm creates a new skill, or edits an existing one when passed in.
+function Section({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
+  return (
+    <section>
+      <h2 className="mb-2 px-1 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+        {title} <span className="text-muted-foreground/60">({count})</span>
+      </h2>
+      <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60 bg-card">
+        {children}
+      </div>
+    </section>
+  );
+}
+
+// SkillForm creates a new skill (with a visibility choice) or edits an existing
+// one. Editing never touches visibility — publishing is a separate, explicit
+// toggle on the row — so the edit patch stays name/description/instructions.
 function SkillForm({ skill, onDone }: { skill?: Skill; onDone: () => void }) {
   const create = useCreateSkill();
   const update = useUpdateSkill();
   const [name, setName] = useState(skill?.name ?? '');
   const [description, setDescription] = useState(skill?.description ?? '');
   const [instructions, setInstructions] = useState(skill?.instructions ?? '');
+  const [visibility, setVisibility] = useState<SkillVisibility>('private');
   const pending = create.isPending || update.isPending;
   const valid = name.trim() && description.trim() && instructions.trim();
 
@@ -77,12 +114,12 @@ function SkillForm({ skill, onDone }: { skill?: Skill; onDone: () => void }) {
     if (skill) {
       update.mutate({ id: skill.id, patch: { name, description, instructions } }, done);
     } else {
-      create.mutate({ name, description, instructions }, done);
+      create.mutate({ name, description, instructions, visibility }, done);
     }
   };
 
   return (
-    <div className="space-y-3 rounded-lg border p-4" data-testid="skill-form">
+    <div className="space-y-3 rounded-xl border border-border/60 bg-card p-4" data-testid="skill-form">
       <div className="flex flex-wrap gap-3">
         <div className="min-w-48 flex-1">
           <Label htmlFor="skill-name">Name</Label>
@@ -122,6 +159,27 @@ function SkillForm({ skill, onDone }: { skill?: Skill; onDone: () => void }) {
         />
         <p className="mt-0.5 text-xs text-muted-foreground">{instructions.length}/8192</p>
       </div>
+      {!skill && (
+        <fieldset className="space-y-1.5">
+          <legend className="text-sm font-medium">Visibility</legend>
+          <div className="flex flex-wrap gap-2">
+            <VisibilityChoice
+              active={visibility === 'private'}
+              onClick={() => setVisibility('private')}
+              icon={<Lock className="h-3.5 w-3.5" aria-hidden="true" />}
+              title="Private"
+              blurb="Only you can see and use it"
+            />
+            <VisibilityChoice
+              active={visibility === 'published'}
+              onClick={() => setVisibility('published')}
+              icon={<Globe className="h-3.5 w-3.5" aria-hidden="true" />}
+              title="Published"
+              blurb="The whole workspace can use it"
+            />
+          </div>
+        </fieldset>
+      )}
       {(create.isError || update.isError) && (
         <p className="text-sm text-destructive">
           Save failed
@@ -135,10 +193,10 @@ function SkillForm({ skill, onDone }: { skill?: Skill; onDone: () => void }) {
       )}
       <div className="flex gap-2">
         <Button onClick={save} disabled={!valid || pending}>
-          <Check className="mr-1 h-4 w-4" aria-hidden="true" />
+          <Check aria-hidden="true" />
           {pending ? 'Saving…' : skill ? 'Save changes' : 'Create skill'}
         </Button>
-        <Button variant="outline" onClick={onDone} disabled={pending}>
+        <Button variant="ghost" onClick={onDone} disabled={pending}>
           Cancel
         </Button>
       </div>
@@ -146,42 +204,127 @@ function SkillForm({ skill, onDone }: { skill?: Skill; onDone: () => void }) {
   );
 }
 
-function SkillCard({ skill }: { skill: Skill }) {
-  const { user } = useAuth();
+// VisibilityChoice is one option in the create form's Private/Published picker.
+function VisibilityChoice({
+  active,
+  onClick,
+  icon,
+  title,
+  blurb,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  title: string;
+  blurb: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      onClick={onClick}
+      className={
+        'flex min-w-52 flex-1 items-start gap-2 rounded-lg border p-2.5 text-left transition-colors ' +
+        (active ? 'border-primary/60 bg-primary/5' : 'border-border/60 hover:bg-muted')
+      }
+    >
+      <span className={'mt-0.5 ' + (active ? 'text-primary' : 'text-muted-foreground')}>{icon}</span>
+      <span className="min-w-0">
+        <span className="block text-sm font-medium">{title}</span>
+        <span className="block text-xs text-muted-foreground">{blurb}</span>
+      </span>
+    </button>
+  );
+}
+
+// VisibilityBadge names a skill's current state: a lock for private, a globe
+// for published. Shown on your own skills (the team's are all published).
+function VisibilityBadge({ published }: { published: boolean }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+      {published ? (
+        <Globe className="h-3 w-3" aria-hidden="true" />
+      ) : (
+        <Lock className="h-3 w-3" aria-hidden="true" />
+      )}
+      {published ? 'Published' : 'Private'}
+    </span>
+  );
+}
+
+function SkillRow({ skill, own }: { skill: Skill; own: boolean }) {
   const del = useDeleteSkill();
+  const update = useUpdateSkill();
   const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const own = skill.createdBy === user?.id;
+  const published = isSkillPublished(skill);
 
   if (editing) {
-    return <SkillForm skill={skill} onDone={() => setEditing(false)} />;
+    return (
+      <div className="p-4">
+        <SkillForm skill={skill} onDone={() => setEditing(false)} />
+      </div>
+    );
   }
 
+  const togglePublish = () =>
+    update.mutate(
+      { id: skill.id, patch: { visibility: published ? 'private' : 'published' } },
+      { onError: () => showToast("Couldn't change who can use that skill — try again.") },
+    );
+
   return (
-    <div className="rounded-lg border p-4" data-testid={`skill-card-${skill.name}`}>
-      <div className="flex items-start gap-2">
-        <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+    <div className="px-4 py-3" data-testid={`skill-card-${skill.name}`}>
+      <div className="flex items-start gap-3">
+        <div
+          aria-hidden="true"
+          className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground"
+        >
+          <Sparkles className="h-4 w-4" />
+        </div>
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-baseline gap-x-2">
-            <span className="font-semibold">{skill.name}</span>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="font-medium">{skill.name}</span>
+            {own && <VisibilityBadge published={published} />}
             <span className="text-xs text-muted-foreground">
               updated {new Date(skill.updatedAt).toLocaleDateString()}
             </span>
-          </div>
-          <p className="mt-0.5 text-sm text-muted-foreground">{skill.description}</p>
-          <details className="mt-2">
-            <summary className="cursor-pointer select-none text-xs text-muted-foreground hover:text-foreground">
-              Instructions
-            </summary>
-            <pre className="mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/50 p-2.5 font-mono text-xs leading-relaxed">
-              {skill.instructions}
-            </pre>
-          </details>
-        </div>
-        {own && (
-          <div className="flex shrink-0 items-center gap-1">
-            {confirmDelete ? (
-              <>
+            {own && !confirmDelete && (
+              <div className="ml-auto flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="text-muted-foreground"
+                  disabled={update.isPending}
+                  onClick={togglePublish}
+                >
+                  {published ? (
+                    <>
+                      <Lock aria-hidden="true" />
+                      Make private
+                    </>
+                  ) : (
+                    <>
+                      <Globe aria-hidden="true" />
+                      Publish
+                    </>
+                  )}
+                </Button>
+                <TooltipIconButton label={`Edit ${skill.name}`} onClick={() => setEditing(true)}>
+                  <Pencil aria-hidden="true" />
+                </TooltipIconButton>
+                <TooltipIconButton
+                  label={`Delete ${skill.name}`}
+                  className="hover:text-destructive"
+                  onClick={() => setConfirmDelete(true)}
+                >
+                  <Trash2 aria-hidden="true" />
+                </TooltipIconButton>
+              </div>
+            )}
+            {own && confirmDelete && (
+              <div className="ml-auto flex items-center gap-1">
                 <button
                   type="button"
                   disabled={del.isPending}
@@ -190,41 +333,26 @@ function SkillCard({ skill }: { skill: Skill }) {
                       onError: () => showToast("Couldn't delete that skill — try again."),
                     })
                   }
-                  className="rounded-md border border-red-500/40 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-500/10 disabled:opacity-50 dark:text-red-400"
+                  className="rounded-md border border-destructive/40 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50"
                 >
                   Delete “{skill.name}”?
                 </button>
-                <button
-                  type="button"
-                  aria-label="Cancel delete"
-                  onClick={() => setConfirmDelete(false)}
-                  className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                >
-                  <X className="h-3.5 w-3.5" aria-hidden="true" />
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  aria-label={`Edit ${skill.name}`}
-                  onClick={() => setEditing(true)}
-                  className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                >
-                  <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Delete ${skill.name}`}
-                  onClick={() => setConfirmDelete(true)}
-                  className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-red-500"
-                >
-                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                </button>
-              </>
+                <TooltipIconButton label="Cancel delete" onClick={() => setConfirmDelete(false)}>
+                  <X aria-hidden="true" />
+                </TooltipIconButton>
+              </div>
             )}
           </div>
-        )}
+          <p className="mt-0.5 text-sm text-muted-foreground">{skill.description}</p>
+          <details className="mt-2">
+            <summary className="cursor-pointer text-xs text-muted-foreground select-none hover:text-foreground">
+              Instructions
+            </summary>
+            <pre className="mt-1.5 max-h-64 overflow-auto rounded bg-muted/50 p-2.5 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap">
+              {skill.instructions}
+            </pre>
+          </details>
+        </div>
       </div>
     </div>
   );

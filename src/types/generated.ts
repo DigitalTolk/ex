@@ -606,22 +606,39 @@ export interface Skill {
   name: string;
   description: string;
   instructions: string;
+  /**
+   * Visibility gates who beyond the author may see and use the skill:
+   * "private" — only the author; "published" — everyone in the workspace may
+   * see and USE it, but still only the author may edit, delete, or change its
+   * visibility. Empty is treated as published so skills authored before this
+   * field existed stay workspace-wide (see IsPublished).
+   */
+  visibility?: string;
   createdBy: string;
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
 }
 /**
- * Skill bounds.
+ * Skill bounds and visibility values.
  */
 export const SkillNameMaxLen = 64;
 /**
- * Skill bounds.
+ * Skill bounds and visibility values.
  */
 export const SkillDescriptionMaxLen = 256;
 /**
- * Skill bounds.
+ * Skill bounds and visibility values.
  */
 export const SkillInstructionsMaxLen = 8 * 1024;
+/**
+ * SkillVisibilityPrivate: only the author sees or uses it (the default for
+ * a newly created skill). SkillVisibilityPublished: shared workspace-wide.
+ */
+export const SkillVisibilityPrivate = "private";
+/**
+ * Skill bounds and visibility values.
+ */
+export const SkillVisibilityPublished = "published";
 /**
  * AgentMemory is one agent's self-maintained "core" memory FOR ONE INVOKER
  * (buzz's engrams, scoped to our shared-agent model: a memory written while

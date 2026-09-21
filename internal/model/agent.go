@@ -521,20 +521,40 @@ const (
 // instructions, not extra tool grants — the tool surface is fixed and
 // already bounded by the invoker's permissions).
 type Skill struct {
-	ID           string    `json:"id" dynamodbav:"id"`
-	Name         string    `json:"name" dynamodbav:"name"`
-	Description  string    `json:"description" dynamodbav:"description"`
-	Instructions string    `json:"instructions" dynamodbav:"instructions"`
-	CreatedBy    string    `json:"createdBy" dynamodbav:"createdBy"`
-	CreatedAt    time.Time `json:"createdAt" dynamodbav:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
+	ID           string `json:"id" dynamodbav:"id"`
+	Name         string `json:"name" dynamodbav:"name"`
+	Description  string `json:"description" dynamodbav:"description"`
+	Instructions string `json:"instructions" dynamodbav:"instructions"`
+	// Visibility gates who beyond the author may see and use the skill:
+	// "private" — only the author; "published" — everyone in the workspace may
+	// see and USE it, but still only the author may edit, delete, or change its
+	// visibility. Empty is treated as published so skills authored before this
+	// field existed stay workspace-wide (see IsPublished).
+	Visibility string    `json:"visibility,omitempty" dynamodbav:"visibility,omitempty"`
+	CreatedBy  string    `json:"createdBy" dynamodbav:"createdBy"`
+	CreatedAt  time.Time `json:"createdAt" dynamodbav:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
 }
 
-// Skill bounds.
+// IsPublished reports whether a skill is visible to and usable by the whole
+// workspace. Legacy rows (empty Visibility) count as published — they were
+// workspace-wide before the field existed and must not silently disappear.
+func (s *Skill) IsPublished() bool { return s.Visibility != SkillVisibilityPrivate }
+
+// VisibleTo reports whether userID may see and use this skill: its author
+// always, anyone else only when it is published.
+func (s *Skill) VisibleTo(userID string) bool { return s.IsPublished() || s.CreatedBy == userID }
+
+// Skill bounds and visibility values.
 const (
 	SkillNameMaxLen         = 64
 	SkillDescriptionMaxLen  = 256
 	SkillInstructionsMaxLen = 8 * 1024
+
+	// SkillVisibilityPrivate: only the author sees or uses it (the default for
+	// a newly created skill). SkillVisibilityPublished: shared workspace-wide.
+	SkillVisibilityPrivate   = "private"
+	SkillVisibilityPublished = "published"
 )
 
 // AgentMemory is one agent's self-maintained "core" memory FOR ONE INVOKER

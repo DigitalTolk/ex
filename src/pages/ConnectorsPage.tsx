@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Cable, Check, Plug, RefreshCw, Unplug } from 'lucide-react';
+import { Cable, Check, LogIn, RefreshCw, Unplug } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
+import { TooltipIconButton } from '@/components/ui/tooltip-icon-button';
 import { useAuth } from '@/context/AuthContext';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import {
@@ -17,41 +18,77 @@ import {
   useVerifyConnector,
   type Connector,
 } from '@/hooks/useConnectors';
+import { connectorInitials, connectorTint, summarizeError } from '@/lib/connector-ui';
 import { showToast } from '@/lib/toast';
 
-// ConnectorsPage: external services agents can call. Installing = connecting
-// YOUR account (paste a bearer token, or sign in for password-kind
-// connectors). Pick a connector per message by typing /slug in the composer.
+// ConnectorsPage: external services agents can call on the user's behalf.
+// Connecting = linking YOUR account (one-click sign-in, a pasted bearer token,
+// or email/password for password-kind connectors). Connected services come
+// first; everything else waits under "Available". Pick a connector per
+// message by typing /slug in the composer.
+//
+// Visually one flat list per section — hairline-divided rows on a single
+// surface, quiet text actions, no card-in-card — so the page reads as a
+// settings list rather than a grid of boxes.
 export default function ConnectorsPage() {
   useDocumentTitle('Connectors');
   const { data: connectors, isLoading } = useConnectors();
   const { user } = useAuth();
+  const all = connectors ?? [];
+  const connected = all.filter((c) => c.installed);
+  const available = all.filter((c) => !c.installed);
 
   return (
     <PageContainer
       title="Connectors"
-      description="External services agents can use on your behalf. Install one with your own credentials, then pick it per message by typing / in the composer."
+      description="Services your agents can use on your behalf. Connect with your own account, then type / in a message to pick one."
       actions={user?.systemRole === 'admin' && <SyncButton />}
     >
       {isLoading && (
-        <div className="space-y-3" data-testid="connectors-loading">
-          {Array.from({ length: 2 }).map((_, i) => (
-            <Skeleton key={i} className="h-24 w-full" />
+        <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60" data-testid="connectors-loading">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3 px-4 py-4">
+              <Skeleton className="h-8 w-8 rounded-full" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-3.5 w-40" />
+                <Skeleton className="h-3 w-3/4" />
+              </div>
+            </div>
           ))}
         </div>
       )}
 
-      {!isLoading && (connectors?.length ?? 0) === 0 && (
+      {!isLoading && all.length === 0 && (
         <div className="py-12 text-center text-muted-foreground" data-testid="connectors-empty">
           <Cable className="mx-auto mb-3 h-8 w-8" />
           <p>No connectors yet. An admin adds them to the workspace registry.</p>
         </div>
       )}
 
-      <div className="space-y-3">
-        {connectors?.map((c) => <ConnectorCard key={c.slug} connector={c} />)}
+      <div className="space-y-7">
+        {connected.length > 0 && (
+          <Section title="Connected" count={connected.length}>
+            {connected.map((c) => <ConnectorRow key={c.slug} connector={c} />)}
+          </Section>
+        )}
+        {available.length > 0 && (
+          <Section title="Available" count={available.length}>
+            {available.map((c) => <ConnectorRow key={c.slug} connector={c} />)}
+          </Section>
+        )}
       </div>
     </PageContainer>
+  );
+}
+
+function Section({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
+  return (
+    <section>
+      <h2 className="mb-2 px-1 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+        {title} <span className="text-muted-foreground/60">({count})</span>
+      </h2>
+      <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60 bg-card">{children}</div>
+    </section>
   );
 }
 
@@ -80,115 +117,149 @@ function SyncButton() {
         })
       }
     >
-      <RefreshCw
-        className={`mr-1 h-3.5 w-3.5 ${sync.isPending ? 'animate-spin' : ''}`}
-        aria-hidden="true"
-      />
+      <RefreshCw className={sync.isPending ? 'animate-spin' : ''} aria-hidden="true" />
       {sync.isPending ? 'Syncing…' : 'Sync from provider'}
     </Button>
   );
 }
 
-function ConnectorCard({ connector: c }: { connector: Connector }) {
+// ConnectorRow: two lines. Line one is identity and state — monogram, name,
+// /slug, then the status — with the row's controls right-aligned on the same
+// line: the agent-use policy and icon-only Reconnect / Disconnect once
+// connected, a quiet Connect before. Line two is the description, one line
+// on desktop. The connect form opens beneath as a hairline-separated strip.
+function ConnectorRow({ connector: c }: { connector: Connector }) {
   const [connecting, setConnecting] = useState(false);
   const uninstall = useUninstallConnector();
+  const verify = useVerifyConnector();
+  const unverified = c.installed && c.installStatus !== 'connected';
 
   return (
-    <div className="rounded-lg border p-4" data-testid={`connector-card-${c.slug}`}>
+    <div className="px-4 py-3" data-testid={`connector-card-${c.slug}`}>
       <div className="flex items-start gap-3">
-        <Cable className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-baseline gap-x-2">
-            <span className="font-semibold">{c.title}</span>
-            <code className="text-xs text-muted-foreground">/{c.slug}</code>
-            {c.installed && (
-              <span
-                className={
-                  'rounded-full px-2 py-0.5 text-xs font-medium ' +
-                  (c.installStatus === 'connected'
-                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                    : 'bg-amber-500/15 text-amber-600 dark:text-amber-400')
-                }
-              >
-                {c.installStatus === 'connected'
-                  ? `connected${c.connectedAs ? ` as ${c.connectedAs}` : ''}`
-                  : 'connected (unverified)'}
-              </span>
-            )}
-            {c.installed && c.installStatus !== 'connected' && <VerifyButton slug={c.slug} />}
-          </div>
-          <p className="mt-0.5 text-sm text-muted-foreground">{c.description}</p>
-          {c.installed && <AgentUseControl connector={c} />}
-          {connecting && (
-            <ConnectForm connector={c} onDone={() => setConnecting(false)} />
-          )}
+        <div
+          aria-hidden="true"
+          className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-semibold ${connectorTint(c.slug)}`}
+        >
+          {connectorInitials(c.title)}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {c.installed ? (
-            <>
-              <Button variant="outline" size="sm" onClick={() => setConnecting(true)}>
-                Reconnect
+
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="font-medium">{c.title}</span>
+            <span className="font-mono text-xs text-muted-foreground">/{c.slug}</span>
+            {c.installed && <StatusBadge connector={c} />}
+            {unverified && (
+              <Button variant="ghost" size="xs" className="text-muted-foreground" disabled={verify.isPending} onClick={() => verify.mutate(c.slug)}>
+                {verify.isPending ? 'Verifying…' : 'Verify now'}
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={uninstall.isPending}
-                onClick={() =>
-                  uninstall.mutate(c.slug, {
-                    onError: () => showToast("Couldn't disconnect — try again."),
-                  })
-                }
-              >
-                <Unplug className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
-                Disconnect
-              </Button>
-            </>
-          ) : (
-            !connecting && (
-              <Button size="sm" onClick={() => setConnecting(true)}>
-                <Plug className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
-                Install
-              </Button>
-            )
+            )}
+            {!connecting && (
+              <div className="ml-auto flex items-center gap-1">
+                {c.installed ? (
+                  <>
+                    <AgentUseControl connector={c} />
+                    <TooltipIconButton
+                      label="Reconnect"
+                      className="text-muted-foreground"
+                      onClick={() => setConnecting(true)}
+                    >
+                      <RefreshCw aria-hidden="true" />
+                    </TooltipIconButton>
+                    <TooltipIconButton
+                      label="Disconnect"
+                      className="text-muted-foreground hover:text-destructive"
+                      disabled={uninstall.isPending}
+                      onClick={() =>
+                        uninstall.mutate(c.slug, {
+                          onError: () => showToast("Couldn't disconnect — try again."),
+                        })
+                      }
+                    >
+                      <Unplug aria-hidden="true" />
+                    </TooltipIconButton>
+                  </>
+                ) : (
+                  <Button variant="outline" size="xs" onClick={() => setConnecting(true)}>
+                    Connect
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
+          <p className="mt-0.5 line-clamp-2 text-sm text-muted-foreground sm:line-clamp-1" title={c.description}>
+            {c.description}
+          </p>
+          {verify.isError && (
+            <div className="mt-1.5">
+              <ErrorNote message={verify.error instanceof Error ? verify.error.message : 'failed'} />
+            </div>
           )}
+
+          {connecting && <ConnectForm connector={c} onDone={() => setConnecting(false)} />}
         </div>
       </div>
     </div>
   );
 }
 
-// VerifyButton re-checks an unverified install's token against the service
-// ("unverified" only means the service was unreachable at install time).
-function VerifyButton({ slug }: { slug: string }) {
-  const verify = useVerifyConnector();
+// StatusBadge: a dot and one phrase, no fill. Green when the service confirmed
+// the credential; amber "Unverified" when the token was accepted but the
+// service couldn't be reached at connect time (Verify now re-checks).
+function StatusBadge({ connector: c }: { connector: Connector }) {
+  const ok = c.installStatus === 'connected';
   return (
-    <span className="inline-flex items-center gap-1">
-      <button
-        type="button"
-        disabled={verify.isPending}
-        onClick={() => verify.mutate(slug)}
-        className="rounded-md border px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
-      >
-        {verify.isPending ? 'Verifying…' : 'Verify now'}
-      </button>
-      {verify.isError && (
-        <span className="text-xs text-destructive">
-          {verify.error instanceof Error ? verify.error.message : 'failed'}
-        </span>
-      )}
+    <span className="inline-flex items-center gap-1.5 text-xs">
+      <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${ok ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+      <span className={ok ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}>
+        {ok ? `Connected${c.connectedAs ? ` as ${c.connectedAs}` : ''}` : 'Unverified'}
+      </span>
     </span>
   );
 }
 
+// ErrorNote shows a service failure as one readable line. A gateway that
+// answers with a whole HTML error page collapses to its title; the raw text
+// stays one click away behind "Details" instead of flooding the row.
+function ErrorNote({ message }: { message: string }) {
+  const { summary, details } = summarizeError(message);
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="text-xs text-destructive">
+      <span>{summary}</span>
+      {details && (
+        <>
+          {' '}
+          <button
+            type="button"
+            className="underline underline-offset-2 hover:text-foreground"
+            onClick={() => setOpen((v) => !v)}
+          >
+            {open ? 'Hide details' : 'Details'}
+          </button>
+          {open && (
+            <pre className="mt-1.5 max-h-40 overflow-auto rounded-md bg-muted/60 p-2 text-[11px] break-all whitespace-pre-wrap text-muted-foreground">
+              {details}
+            </pre>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // AgentUseControl: may agents attach this connector to a task themselves
-// (the use_connector tool)? "Ask first" raises one approval card per run.
+// (the use_connector tool)? "Ask me first" raises one approval card per run.
+// Rendered as a quiet inline select, not a form field.
 function AgentUseControl({ connector: c }: { connector: Connector }) {
   const update = useUpdateConnectorInstall();
   return (
-    <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-      <span>Agents may use this:</span>
+    <label className="flex items-center gap-1 text-xs text-muted-foreground">
+      <span className="whitespace-nowrap">
+        Agents<span className="sr-only"> may use this</span>:
+      </span>
       <select
-        className="rounded-md border bg-transparent px-1.5 py-0.5 text-xs"
+        className="h-6 min-w-0 rounded-md border-0 bg-transparent px-1 text-xs font-medium text-foreground/80 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         value={c.agentUse ?? 'ask'}
         disabled={update.isPending}
         onChange={(e) =>
@@ -197,7 +268,7 @@ function AgentUseControl({ connector: c }: { connector: Connector }) {
       >
         <option value="ask">Ask me first</option>
         <option value="always">Always allow</option>
-        <option value="never">Only when I pick /{c.slug}</option>
+        <option value="never">Only when I pick it</option>
       </select>
     </label>
   );
@@ -239,6 +310,7 @@ function SSOConnectButton({
           .finally(() => setWaiting(false));
       }}
     >
+      <LogIn aria-hidden="true" />
       {waiting ? 'Finish signing in in the window…' : `Sign in to ${c.title}`}
     </Button>
   );
@@ -247,8 +319,10 @@ function SSOConnectButton({
 // ConnectForm collects the credential: paste-a-token always; email/password
 // (with a 2FA step when the auth service demands one) for password-kind
 // connectors; sso_window connectors get one-click sign-in in the desktop
-// shell (paste stays the browser fallback). Without a credential the
-// connector is not usable — install IS connecting.
+// shell with paste tucked behind a link as the fallback (and shown outright
+// in a browser, which has no shell). Without a credential the connector is
+// not usable — install IS connecting. It renders as a hairline-separated
+// strip inside the row, one line when it can be.
 function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: () => void }) {
   const install = useInstallConnector();
   const canLogin = c.authKind === 'password';
@@ -261,7 +335,12 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
   const [twoFactorCode, setTwoFactorCode] = useState('');
   const [accessCode, setAccessCode] = useState('');
   const [error, setError] = useState('');
+  // sso_window: paste-a-token is a fallback tucked behind a link, revealed on click.
+  const [showPaste, setShowPaste] = useState(false);
   const needsCode = accessCode !== '';
+  // In the SSO idle state the sign-in line is the whole form; Cancel sits on
+  // it and there is no submit row.
+  const ssoIdle = canSSO && !showPaste;
 
   const submit = () => {
     setError('');
@@ -295,10 +374,13 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
         ? token.trim().length > 0
         : email.trim().length > 0 && password.length > 0;
 
+  const tabClass = (active: boolean) =>
+    `rounded-md px-2.5 py-1 ${active ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground'}`;
+
   return (
-    <div className="mt-3 space-y-3 rounded-md border bg-muted/30 p-3" data-testid="connect-form">
-      {canSSO && !needsCode && (
-        <div className="flex flex-wrap items-center gap-2">
+    <div className="mt-3 space-y-2.5 border-t border-border/60 pt-3" data-testid="connect-form">
+      {canSSO && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <SSOConnectButton
             connector={c}
             busy={install.isPending}
@@ -314,8 +396,25 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
             }
           />
           <span className="text-xs text-muted-foreground">
-            Opens a sign-in window — use your Microsoft account. Or paste a token below.
+            Opens a sign-in window with your Microsoft account.
+            {ssoIdle && (
+              <>
+                {' · '}
+                <button
+                  type="button"
+                  onClick={() => setShowPaste(true)}
+                  className="underline underline-offset-2 hover:text-foreground"
+                >
+                  Paste a token instead
+                </button>
+              </>
+            )}
           </span>
+          {ssoIdle && (
+            <Button size="xs" variant="ghost" className="ml-auto text-muted-foreground" onClick={onDone} disabled={install.isPending}>
+              Cancel
+            </Button>
+          )}
         </div>
       )}
       {c.authKind === 'sso_window' && !canSSO && (
@@ -323,24 +422,13 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
           The desktop app signs in to {c.title} with one click; in the browser, paste a token.
         </p>
       )}
+
       {canLogin && !needsCode && (
-        <div className="inline-flex rounded-md border p-0.5 text-sm" role="tablist" aria-label="Connection method">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === 'login'}
-            onClick={() => setMode('login')}
-            className={`rounded px-3 py-1 ${mode === 'login' ? 'bg-accent font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-          >
+        <div className="inline-flex rounded-lg bg-muted p-0.5 text-xs" role="tablist" aria-label="Connection method">
+          <button type="button" role="tab" aria-selected={mode === 'login'} onClick={() => setMode('login')} className={tabClass(mode === 'login')}>
             Sign in
           </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === 'paste'}
-            onClick={() => setMode('paste')}
-            className={`rounded px-3 py-1 ${mode === 'paste' ? 'bg-accent font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-          >
+          <button type="button" role="tab" aria-selected={mode === 'paste'} onClick={() => setMode('paste')} className={tabClass(mode === 'paste')}>
             Paste a bearer token
           </button>
         </div>
@@ -355,7 +443,7 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
           <Label htmlFor={`conn-2fa-${c.slug}`}>Two-factor code</Label>
           <Input
             id={`conn-2fa-${c.slug}`}
-            className="mt-1"
+            className="mt-1 h-8"
             value={twoFactorCode}
             placeholder="123456"
             autoFocus
@@ -363,28 +451,30 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
           />
         </div>
       ) : mode === 'paste' ? (
-        <div>
-          <Label htmlFor={`conn-token-${c.slug}`}>Bearer token</Label>
-          <Input
-            id={`conn-token-${c.slug}`}
-            className="mt-1 font-mono"
-            type="password"
-            value={token}
-            placeholder="paste your token for this service"
-            autoFocus
-            onChange={(e) => setToken(e.target.value)}
-          />
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Stored for your account only; agents use it when you pick /{c.slug} in a message.
-          </p>
-        </div>
+        ssoIdle ? null : (
+          <div className="max-w-xl">
+            <Label htmlFor={`conn-token-${c.slug}`}>Bearer token</Label>
+            <Input
+              id={`conn-token-${c.slug}`}
+              className="mt-1 h-8 font-mono"
+              type="password"
+              value={token}
+              placeholder="paste your token for this service"
+              autoFocus
+              onChange={(e) => setToken(e.target.value)}
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Stored for your account only; agents use it when you pick /{c.slug} in a message.
+            </p>
+          </div>
+        )
       ) : (
         <div className="flex flex-wrap gap-3">
           <div className="min-w-56 flex-1">
             <Label htmlFor={`conn-email-${c.slug}`}>Email</Label>
             <Input
               id={`conn-email-${c.slug}`}
-              className="mt-1"
+              className="mt-1 h-8"
               type="email"
               value={email}
               autoFocus
@@ -395,29 +485,31 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
             <Label htmlFor={`conn-password-${c.slug}`}>Password</Label>
             <Input
               id={`conn-password-${c.slug}`}
-              className="mt-1"
+              className="mt-1 h-8"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
-            <p className="mt-0.5 text-xs text-muted-foreground">
+            <p className="mt-1 text-xs text-muted-foreground">
               Exchanged for a token once — your password is never stored.
             </p>
           </div>
         </div>
       )}
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && <ErrorNote message={error} />}
 
-      <div className="flex gap-2">
-        <Button size="sm" onClick={submit} disabled={!valid || install.isPending}>
-          <Check className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
-          {install.isPending ? 'Connecting…' : needsCode ? 'Verify code' : 'Connect'}
-        </Button>
-        <Button size="sm" variant="outline" onClick={onDone} disabled={install.isPending}>
-          Cancel
-        </Button>
-      </div>
+      {!ssoIdle && (
+        <div className="flex items-center gap-2">
+          <Button size="sm" onClick={submit} disabled={!valid || install.isPending}>
+            <Check aria-hidden="true" />
+            {install.isPending ? 'Connecting…' : needsCode ? 'Verify code' : 'Connect'}
+          </Button>
+          <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={onDone} disabled={install.isPending}>
+            Cancel
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

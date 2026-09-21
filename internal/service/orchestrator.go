@@ -2645,9 +2645,12 @@ func (b *bundleBuilder) skills() {
 	if len(b.run.SkillIDs) > 0 {
 		var sb strings.Builder
 		for _, id := range b.run.SkillIDs {
-			sk, err := b.o.agentSvc.GetSkill(b.ctx, id)
+			// Scope to the invoker: a private skill someone else owns must never
+			// be injected into this run's bundle, even if it got attached to the
+			// template. GetVisibleSkill returns not-found for one they can't use.
+			sk, err := b.o.agentSvc.GetVisibleSkill(b.ctx, b.run.InvokerID, id)
 			if err != nil || sk == nil {
-				continue // deleted/unknown skill — skip, never fail the bundle
+				continue // deleted/unknown/not-visible skill — skip, never fail the bundle
 			}
 			attached[sk.ID] = true
 			sb.WriteString("## " + sk.Name + "\n" + sk.Instructions + "\n")
@@ -2660,7 +2663,7 @@ func (b *bundleBuilder) skills() {
 			}
 		}
 	}
-	if skills, err := b.o.agentSvc.ListSkillIndex(b.ctx); err == nil {
+	if skills, err := b.o.agentSvc.ListSkillIndex(b.ctx, b.run.InvokerID); err == nil {
 		var sb strings.Builder
 		for _, sk := range skills {
 			if attached[sk.ID] {
@@ -3619,7 +3622,7 @@ func (o *Orchestrator) resolveSkillPicks(ctx context.Context, invokerID string, 
 	if len(candidates) == 0 {
 		return nil, nil
 	}
-	index, err := o.agentSvc.ListSkillIndex(ctx)
+	index, err := o.agentSvc.ListSkillIndex(ctx, invokerID)
 	if err != nil {
 		slog.Warn("skill index lookup failed; run gets no skill picks", "error", err)
 		return nil, nil

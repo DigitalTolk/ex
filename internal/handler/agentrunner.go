@@ -520,7 +520,9 @@ func (h *AgentRunToolHandler) ListSkills(w http.ResponseWriter, r *http.Request)
 		h.writeToolError(w, r, err)
 		return
 	}
-	skills, err := h.agents.ListSkillIndex(r.Context())
+	// claims.UserID is the invoking human even on a run token — scope the list
+	// to skills they may use (published, or their own private ones).
+	skills, err := h.agents.ListSkillIndex(r.Context(), claims.UserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "skill list failed")
 		return
@@ -539,7 +541,10 @@ func (h *AgentRunToolHandler) InvokeSkill(w http.ResponseWriter, r *http.Request
 	if run == nil {
 		return
 	}
-	sk, err := h.agents.GetSkill(r.Context(), r.PathValue("id"))
+	// Only a skill the invoker may use: their own, or anyone's published one.
+	// Someone else's private skill reads as not found, so a run can never
+	// invoke a private skill it wasn't offered.
+	sk, err := h.agents.GetVisibleSkill(r.Context(), run.InvokerID, r.PathValue("id"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "unknown skill")
 		return

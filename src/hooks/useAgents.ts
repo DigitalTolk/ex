@@ -282,14 +282,25 @@ export function agentByID(roster: AgentView[] | undefined, agentID: string): Age
 
 // ---------------------------------------------------------------- skills
 
+export type SkillVisibility = 'private' | 'published';
+
 export interface Skill {
   id: string;
   name: string;
   description: string;
   instructions: string;
+  // "private" (only the author) or "published" (whole workspace may use it).
+  // Empty from legacy rows is treated as published (see isSkillPublished).
+  visibility?: SkillVisibility | '';
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+}
+
+// isSkillPublished mirrors the server's rule: anything not explicitly private
+// is published, so pre-visibility rows stay workspace-wide.
+export function isSkillPublished(skill: Skill): boolean {
+  return skill.visibility !== 'private';
 }
 
 const SKILLS_KEY = ['skills'] as const;
@@ -307,8 +318,12 @@ export function useSkills() {
 export function useCreateSkill() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (body: { name: string; description: string; instructions: string }) =>
-      apiFetch<{ skill: Skill }>('/api/v1/skills', { method: 'POST', body: JSON.stringify(body) }),
+    mutationFn: async (body: {
+      name: string;
+      description: string;
+      instructions: string;
+      visibility?: SkillVisibility;
+    }) => apiFetch<{ skill: Skill }>('/api/v1/skills', { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: SKILLS_KEY }),
   });
 }
@@ -321,7 +336,7 @@ export function useUpdateSkill() {
       patch,
     }: {
       id: string;
-      patch: { name?: string; description?: string; instructions?: string };
+      patch: { name?: string; description?: string; instructions?: string; visibility?: SkillVisibility };
     }) =>
       apiFetch<{ skill: Skill }>(`/api/v1/skills/${id}`, {
         method: 'PATCH',

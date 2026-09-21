@@ -90,6 +90,27 @@ func (d *agentCovDir) PutSkill(ctx context.Context, sk *model.Skill) error {
 	return d.fakeAgentDir.PutSkill(ctx, sk)
 }
 
+func (d *agentCovDir) GetSkill(ctx context.Context, id string) (*model.Skill, error) {
+	if err := d.errs["GetSkill"]; err != nil {
+		return nil, err
+	}
+	return d.fakeAgentDir.GetSkill(ctx, id)
+}
+
+func (d *agentCovDir) ListSkills(ctx context.Context) ([]*model.Skill, error) {
+	if err := d.errs["ListSkills"]; err != nil {
+		return nil, err
+	}
+	return d.fakeAgentDir.ListSkills(ctx)
+}
+
+func (d *agentCovDir) ListSkillIndex(ctx context.Context) ([]*model.Skill, error) {
+	if err := d.errs["ListSkillIndex"]; err != nil {
+		return nil, err
+	}
+	return d.fakeAgentDir.ListSkillIndex(ctx)
+}
+
 func (d *agentCovDir) GetAgentMemory(ctx context.Context, invokerID, agentID string) (*model.AgentMemory, error) {
 	if err := d.errs["GetAgentMemory"]; err != nil {
 		return nil, err
@@ -355,10 +376,10 @@ func TestAgentCovSetAgentSkills(t *testing.T) {
 	svc, dir, users := agentCovNewSvc()
 	agentCovSeedAgent(t, dir, users, "gg")
 
-	if _, err := svc.SetAgentSkills(ctx, "nope", nil); !errors.Is(err, store.ErrNotFound) {
+	if _, err := svc.SetAgentSkills(ctx, "u1", "nope", nil); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("want not found, got %v", err)
 	}
-	if _, err := svc.SetAgentSkills(ctx, "gg", []string{"ghost"}); !errors.Is(err, ErrValidation) {
+	if _, err := svc.SetAgentSkills(ctx, "u1", "gg", []string{"ghost"}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("want unknown skill, got %v", err)
 	}
 
@@ -370,17 +391,17 @@ func TestAgentCovSetAgentSkills(t *testing.T) {
 		}
 		ids = append(ids, id)
 	}
-	if _, err := svc.SetAgentSkills(ctx, "gg", ids); !errors.Is(err, ErrValidation) {
+	if _, err := svc.SetAgentSkills(ctx, "u1", "gg", ids); !errors.Is(err, ErrValidation) {
 		t.Fatalf("want too many skills, got %v", err)
 	}
 
 	dir.errs["PutTemplate"] = errAgentCov
-	if _, err := svc.SetAgentSkills(ctx, "gg", ids[:2]); err == nil || !strings.Contains(err.Error(), "set skills") {
+	if _, err := svc.SetAgentSkills(ctx, "u1", "gg", ids[:2]); err == nil || !strings.Contains(err.Error(), "set skills") {
 		t.Fatalf("want set skills error, got %v", err)
 	}
 	delete(dir.errs, "PutTemplate")
 
-	tpl, err := svc.SetAgentSkills(ctx, " GG", []string{" sk-0 ", "", "sk-0", "sk-1"})
+	tpl, err := svc.SetAgentSkills(ctx, "u1", " GG", []string{" sk-0 ", "", "sk-0", "sk-1"})
 	if err != nil {
 		t.Fatalf("set skills: %v", err)
 	}
@@ -628,19 +649,19 @@ func TestAgentCovSkillsCRUD(t *testing.T) {
 		{"n", "d", strings.Repeat("i", model.SkillInstructionsMaxLen+1)}, // instructions too long
 	}
 	for i, c := range bad {
-		if _, err := svc.CreateSkill(ctx, "u1", c[0], c[1], c[2]); !errors.Is(err, ErrValidation) {
+		if _, err := svc.CreateSkill(ctx, "u1", c[0], c[1], c[2], ""); !errors.Is(err, ErrValidation) {
 			t.Fatalf("bad skill %d: want validation, got %v", i, err)
 		}
 	}
 
 	dir.errs["PutSkill"] = errAgentCov
-	if _, err := svc.CreateSkill(ctx, "u1", "n", "d", "i"); !errors.Is(err, errAgentCov) {
+	if _, err := svc.CreateSkill(ctx, "u1", "n", "d", "i", ""); !errors.Is(err, errAgentCov) {
 		t.Fatalf("want put error, got %v", err)
 	}
 	delete(dir.errs, "PutSkill")
 
-	sk, err := svc.CreateSkill(ctx, "u1", " Deploy ", " d ", "steps")
-	if err != nil || sk.Name != "Deploy" || sk.Description != "d" || sk.CreatedBy != "u1" {
+	sk, err := svc.CreateSkill(ctx, "u1", " Deploy ", " d ", "steps", "")
+	if err != nil || sk.Name != "Deploy" || sk.Description != "d" || sk.CreatedBy != "u1" || sk.Visibility != model.SkillVisibilityPrivate {
 		t.Fatalf("create skill: %v %+v", err, sk)
 	}
 
@@ -666,7 +687,7 @@ func TestAgentCovSkillsCRUD(t *testing.T) {
 	if got, err := svc.GetSkill(ctx, sk.ID); err != nil || got.Name != "New" {
 		t.Fatalf("get skill: %v", err)
 	}
-	if all, err := svc.ListSkills(ctx); err != nil || len(all) != 1 {
+	if all, err := svc.ListSkills(ctx, "u1"); err != nil || len(all) != 1 {
 		t.Fatalf("list skills: %v (%d)", err, len(all))
 	}
 
@@ -865,4 +886,86 @@ func TestAgentCovLiveRunners(t *testing.T) {
 	if err != nil || len(live) != 1 || live[0].RunnerID != "r-live" {
 		t.Fatalf("live runners: %v %+v", err, live)
 	}
+}
+
+// Visibility + ownership: private-by-default, published sharing, caller-scoped
+// listing, GetVisibleSkill's not-found-for-others'-private, and the store-error
+// arms on the visibility-aware read paths.
+func TestAgentCovSkillVisibility(t *testing.T) {
+	ctx := context.Background()
+	svc, dir, _ := agentCovNewSvc()
+	sp := func(s string) *string { return &s }
+
+	// normalizeVisibility via CreateSkill: blank → private, explicit published,
+	// unknown → rejected.
+	priv, err := svc.CreateSkill(ctx, "owner", "Priv", "d", "i", "")
+	if err != nil || priv.Visibility != model.SkillVisibilityPrivate {
+		t.Fatalf("blank visibility must default to private: %v %+v", err, priv)
+	}
+	pub, err := svc.CreateSkill(ctx, "owner", "Pub", "d", "i", model.SkillVisibilityPublished)
+	if err != nil || pub.Visibility != model.SkillVisibilityPublished {
+		t.Fatalf("published create: %v %+v", err, pub)
+	}
+	if _, err := svc.CreateSkill(ctx, "owner", "Bad", "d", "i", "sometimes"); !errors.Is(err, ErrValidation) {
+		t.Fatalf("unknown visibility must be rejected, got %v", err)
+	}
+
+	// A legacy row (no Visibility) counts as published for everyone.
+	if err := dir.fakeAgentDir.PutSkill(ctx, &model.Skill{ID: "legacy", Name: "Legacy", Instructions: "i", CreatedBy: "someone"}); err != nil {
+		t.Fatalf("seed legacy: %v", err)
+	}
+
+	// The owner sees all three; a stranger sees only the two published ones.
+	if own, err := svc.ListSkills(ctx, "owner"); err != nil || len(own) != 3 {
+		t.Fatalf("owner should see 3, got %d (%v)", len(own), err)
+	}
+	strangerIdx, err := svc.ListSkillIndex(ctx, "stranger")
+	if err != nil {
+		t.Fatalf("stranger index: %v", err)
+	}
+	if len(strangerIdx) != 2 {
+		t.Fatalf("stranger should see 2 published, got %d", len(strangerIdx))
+	}
+	for _, sk := range strangerIdx {
+		if sk.ID == priv.ID {
+			t.Fatal("stranger must not see the owner's private skill")
+		}
+	}
+
+	// GetVisibleSkill: owner reads own private; stranger gets not-found for it
+	// but reads a published one.
+	if _, err := svc.GetVisibleSkill(ctx, "owner", priv.ID); err != nil {
+		t.Fatalf("owner should read own private skill: %v", err)
+	}
+	if _, err := svc.GetVisibleSkill(ctx, "stranger", priv.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("stranger must get not-found for a private skill, got %v", err)
+	}
+	if _, err := svc.GetVisibleSkill(ctx, "stranger", pub.ID); err != nil {
+		t.Fatalf("stranger should read a published skill: %v", err)
+	}
+
+	// UpdateSkill visibility patch: publish, then reject a bogus value.
+	if upd, err := svc.UpdateSkill(ctx, "owner", priv.ID, SkillPatch{Visibility: sp(model.SkillVisibilityPublished)}); err != nil || upd.Visibility != model.SkillVisibilityPublished {
+		t.Fatalf("publish via patch: %v %+v", err, upd)
+	}
+	if _, err := svc.UpdateSkill(ctx, "owner", priv.ID, SkillPatch{Visibility: sp("bogus")}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("bogus visibility patch must be rejected, got %v", err)
+	}
+
+	// Store-error arms on the visibility-aware read paths.
+	dir.errs["GetSkill"] = errAgentCov
+	if _, err := svc.GetVisibleSkill(ctx, "owner", pub.ID); !errors.Is(err, errAgentCov) {
+		t.Fatalf("GetVisibleSkill store error: %v", err)
+	}
+	delete(dir.errs, "GetSkill")
+	dir.errs["ListSkills"] = errAgentCov
+	if _, err := svc.ListSkills(ctx, "owner"); !errors.Is(err, errAgentCov) {
+		t.Fatalf("ListSkills store error: %v", err)
+	}
+	delete(dir.errs, "ListSkills")
+	dir.errs["ListSkillIndex"] = errAgentCov
+	if _, err := svc.ListSkillIndex(ctx, "owner"); !errors.Is(err, errAgentCov) {
+		t.Fatalf("ListSkillIndex store error: %v", err)
+	}
+	delete(dir.errs, "ListSkillIndex")
 }

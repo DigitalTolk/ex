@@ -182,7 +182,8 @@ func (h *AgentHandler) RenameAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if body.SkillIDs != nil {
-		if tpl, err = h.agents.SetAgentSkills(r.Context(), r.PathValue("slug"), *body.SkillIDs); err != nil {
+		callerID := middleware.UserIDFromContext(r.Context())
+		if tpl, err = h.agents.SetAgentSkills(r.Context(), callerID, r.PathValue("slug"), *body.SkillIDs); err != nil {
 			fail(err, "set agent skills")
 			return
 		}
@@ -600,12 +601,15 @@ type skillBody struct {
 	Name         string `json:"name"`
 	Description  string `json:"description"`
 	Instructions string `json:"instructions"`
+	Visibility   string `json:"visibility"`
 }
 
-// ListSkills returns the workspace skill directory.
+// ListSkills returns the skills the caller may see: every published skill plus
+// their own private ones.
 // GET /api/v1/skills
 func (h *AgentHandler) ListSkills(w http.ResponseWriter, r *http.Request) {
-	skills, err := h.agents.ListSkills(r.Context())
+	callerID := middleware.UserIDFromContext(r.Context())
+	skills, err := h.agents.ListSkills(r.Context(), callerID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "skill list failed")
 		return
@@ -622,7 +626,7 @@ func (h *AgentHandler) CreateSkill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
-	sk, err := h.agents.CreateSkill(r.Context(), callerID, body.Name, body.Description, body.Instructions)
+	sk, err := h.agents.CreateSkill(r.Context(), callerID, body.Name, body.Description, body.Instructions, body.Visibility)
 	if err != nil {
 		if errors.Is(err, service.ErrValidation) {
 			writeError(w, http.StatusBadRequest, "bad_request", err.Error())

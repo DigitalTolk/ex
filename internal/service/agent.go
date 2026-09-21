@@ -347,7 +347,7 @@ const AgentSkillsMax = 8
 // injected verbatim into every run's context bundle ("# Attached skills"),
 // so the agent follows them without needing to discover them. Empty list
 // clears. Every id must name an existing skill.
-func (s *AgentService) SetAgentSkills(ctx context.Context, slug string, skillIDs []string) (*model.AgentTemplate, error) {
+func (s *AgentService) SetAgentSkills(ctx context.Context, callerID, slug string, skillIDs []string) (*model.AgentTemplate, error) {
 	slug = strings.ToLower(strings.TrimSpace(slug))
 	tpl, err := s.agents.GetTemplate(ctx, slug)
 	if err != nil {
@@ -360,7 +360,10 @@ func (s *AgentService) SetAgentSkills(ctx context.Context, slug string, skillIDs
 		if id == "" || seen[id] {
 			continue
 		}
-		if _, err := s.agents.GetSkill(ctx, id); err != nil {
+		// Only a skill the caller may use can be attached — their own (private
+		// or published) or anyone's published one. Someone else's private
+		// skill reads as unknown, so attaching it is refused.
+		if _, err := s.GetVisibleSkill(ctx, callerID, id); err != nil {
 			return nil, fmt.Errorf("agent: unknown skill %q: %w", id, ErrValidation)
 		}
 		seen[id] = true
@@ -643,11 +646,27 @@ func (s *AgentService) GetPrefs(ctx context.Context, userID, slug string) (*mode
 
 // ---------------------------------------------------------------- skills
 
-// SkillPatch is the editable slice of a skill.
+// SkillPatch is the editable slice of a skill. Visibility flips private ↔
+// published — author-only, like every other edit.
 type SkillPatch struct {
 	Name         *string `json:"name,omitempty"`
 	Description  *string `json:"description,omitempty"`
 	Instructions *string `json:"instructions,omitempty"`
+	Visibility   *string `json:"visibility,omitempty"`
+}
+
+// normalizeVisibility maps a requested visibility to a stored value, defaulting
+// a blank/unknown request to private — a new skill is the author's until they
+// choose to publish. Returns ErrValidation for a non-blank unknown value.
+func normalizeVisibility(v string) (string, error) {
+	switch v {
+	case "", model.SkillVisibilityPrivate:
+		return model.SkillVisibilityPrivate, nil
+	case model.SkillVisibilityPublished:
+		return model.SkillVisibilityPublished, nil
+	default:
+		return "", fmt.Errorf("agent: skill visibility must be private or published: %w", ErrValidation)
+	}
 }
 
 func validateSkillFields(name, description, instructions string) error {
@@ -666,10 +685,15 @@ func validateSkillFields(name, description, instructions string) error {
 	return nil
 }
 
-// CreateSkill adds a workspace skill. Any member may define one; edits and
-// deletion belong to its author.
-func (s *AgentService) CreateSkill(ctx context.Context, authorID, name, description, instructions string) (*model.Skill, error) {
+// CreateSkill adds a skill owned by its author. Any member may define one;
+// edits, deletion, and publishing belong to the author. New skills default to
+// private (visibility "") — the author opts into sharing by publishing.
+func (s *AgentService) CreateSkill(ctx context.Context, authorID, name, description, instructions, visibility string) (*model.Skill, error) {
 	if err := validateSkillFields(name, description, instructions); err != nil {
+		return nil, err
+	}
+	vis, err := normalizeVisibility(visibility)
+	if err != nil {
 		return nil, err
 	}
 	now := time.Now()
@@ -678,6 +702,7 @@ func (s *AgentService) CreateSkill(ctx context.Context, authorID, name, descript
 		Name:         strings.TrimSpace(name),
 		Description:  strings.TrimSpace(description),
 		Instructions: instructions,
+		Visibility:   vis,
 		CreatedBy:    authorID,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -706,6 +731,13 @@ func (s *AgentService) UpdateSkill(ctx context.Context, callerID, id string, pat
 	if patch.Instructions != nil {
 		sk.Instructions = *patch.Instructions
 	}
+	if patch.Visibility != nil {
+		vis, err := normalizeVisibility(*patch.Visibility)
+		if err != nil {
+			return nil, err
+		}
+		sk.Visibility = vis
+	}
 	if err := validateSkillFields(sk.Name, sk.Description, sk.Instructions); err != nil {
 		return nil, err
 	}
@@ -728,15 +760,52 @@ func (s *AgentService) DeleteSkill(ctx context.Context, callerID, id string) err
 	return s.agents.DeleteSkill(ctx, id)
 }
 
-// ListSkills returns every workspace skill, instructions included (the admin
-// directory).
-func (s *AgentService) ListSkills(ctx context.Context) ([]*model.Skill, error) {
-	return s.agents.ListSkills(ctx)
+// ListSkills returns the skills visible to callerID — every published skill
+// plus the caller's own private ones — instructions included. A private skill
+// owned by someone else never appears.
+func (s *AgentService) ListSkills(ctx context.Context, callerID string) ([]*model.Skill, error) {
+	all, err := s.agents.ListSkills(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return visibleSkills(all, callerID), nil
 }
 
-// ListSkillIndex returns id/name/description only — what a routing hint needs.
-func (s *AgentService) ListSkillIndex(ctx context.Context) ([]*model.Skill, error) {
-	return s.agents.ListSkillIndex(ctx)
+// ListSkillIndex returns id/name/description only — what a routing hint needs —
+// scoped to what callerID may see and use.
+func (s *AgentService) ListSkillIndex(ctx context.Context, callerID string) ([]*model.Skill, error) {
+	all, err := s.agents.ListSkillIndex(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return visibleSkills(all, callerID), nil
+}
+
+// visibleSkills keeps only the skills userID may see and use (published, or
+// authored by them).
+func visibleSkills(all []*model.Skill, userID string) []*model.Skill {
+	out := make([]*model.Skill, 0, len(all))
+	for _, sk := range all {
+		if sk.VisibleTo(userID) {
+			out = append(out, sk)
+		}
+	}
+	return out
+}
+
+// GetVisibleSkill fetches a skill only if userID may use it — the author, or
+// anyone once it is published. A private skill owned by someone else reads as
+// not found, so its existence never leaks. This is the check every USE path
+// (run-tool invoke, agent attach) goes through.
+func (s *AgentService) GetVisibleSkill(ctx context.Context, userID, id string) (*model.Skill, error) {
+	sk, err := s.agents.GetSkill(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !sk.VisibleTo(userID) {
+		return nil, store.ErrNotFound
+	}
+	return sk, nil
 }
 
 // ------------------------------------------------- directory pass-throughs

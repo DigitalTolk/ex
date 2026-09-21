@@ -713,20 +713,20 @@ func TestOrchestrator_SkillsInBundle(t *testing.T) {
 	fx := newOrchFixture(t)
 	svc := NewAgentService(fx.dir, fx.users)
 
-	sk1, err := svc.CreateSkill(context.Background(), "u-alice", "Release checklist", "How we ship", "1. tag 2. build 3. announce in #general")
+	sk1, err := svc.CreateSkill(context.Background(), "u-alice", "Release checklist", "How we ship", "1. tag 2. build 3. announce in #general", model.SkillVisibilityPublished)
 	if err != nil {
 		t.Fatalf("create skill: %v", err)
 	}
-	sk2, err := svc.CreateSkill(context.Background(), "u-alice", "Incident triage", "What to do when prod breaks", "page the on-call, open a thread")
+	sk2, err := svc.CreateSkill(context.Background(), "u-alice", "Incident triage", "What to do when prod breaks", "page the on-call, open a thread", model.SkillVisibilityPublished)
 	if err != nil {
 		t.Fatalf("create skill: %v", err)
 	}
 
 	// Attach sk1 to gg; validation rejects unknown ids and over-cap lists.
-	if _, err := svc.SetAgentSkills(context.Background(), AgentSlugGG, []string{sk1.ID}); err != nil {
+	if _, err := svc.SetAgentSkills(context.Background(), "u-alice", AgentSlugGG, []string{sk1.ID}); err != nil {
 		t.Fatalf("set skills: %v", err)
 	}
-	if _, err := svc.SetAgentSkills(context.Background(), AgentSlugGG, []string{"nope"}); !errors.Is(err, ErrValidation) {
+	if _, err := svc.SetAgentSkills(context.Background(), "u-alice", AgentSlugGG, []string{"nope"}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("unknown skill id should be rejected, got %v", err)
 	}
 

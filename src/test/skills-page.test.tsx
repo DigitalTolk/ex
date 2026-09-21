@@ -27,6 +27,7 @@ function skillFixtures(): Skill[] {
       name: 'release-notes',
       description: 'Format release notes',
       instructions: 'Step 1: gather MRs',
+      visibility: 'published',
       createdBy: 'u-1',
       createdAt: '2026-01-05T10:00:00Z',
       updatedAt: '2026-02-11T09:30:00Z',
@@ -36,6 +37,7 @@ function skillFixtures(): Skill[] {
       name: 'triage',
       description: 'Bug triage flow',
       instructions: 'Label severity first',
+      visibility: 'published',
       createdBy: 'u-2',
       createdAt: '2026-01-06T10:00:00Z',
       updatedAt: '2026-02-12T09:30:00Z',
@@ -182,6 +184,7 @@ describe('SkillsPage', () => {
       name: 'test-skill',
       description: 'When testing',
       instructions: 'do things',
+      visibility: 'private',
     });
   });
 
@@ -271,5 +274,106 @@ describe('SkillsPage', () => {
     fireEvent.click(screen.getByLabelText('Delete release-notes'));
     fireEvent.click(screen.getByRole('button', { name: 'Delete “release-notes”?' }));
     await waitFor(() => expect(showToast).toHaveBeenCalledWith("Couldn't delete that skill — try again."));
+  });
+  it('groups skills into "Your skills" and "Shared by the team"', async () => {
+    installRoutes();
+    renderPage();
+    await screen.findByTestId('skill-card-release-notes');
+    expect(screen.getByRole('heading', { name: 'Your skills (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Shared by the team (1)' })).toBeInTheDocument();
+  });
+
+  it('shows a published badge on an own skill and unpublishes it via the toggle', async () => {
+    const bodies: unknown[] = [];
+    installRoutes({
+      mutate: (path, init) => {
+        if (path === '/api/v1/skills/sk-1' && init?.method === 'PATCH') {
+          bodies.push(JSON.parse(init.body!));
+          return Promise.resolve({ skill: skillFixtures()[0] });
+        }
+        return undefined;
+      },
+    });
+    renderPage();
+    const card = within(await screen.findByTestId('skill-card-release-notes'));
+    expect(card.getByText('Published')).toBeInTheDocument();
+    fireEvent.click(card.getByRole('button', { name: 'Make private' }));
+    await waitFor(() => expect(bodies).toEqual([{ visibility: 'private' }]));
+  });
+
+  it('publishes a private own skill via the toggle', async () => {
+    const bodies: unknown[] = [];
+    installRoutes({
+      skills: async () => ({
+        skills: [{ ...skillFixtures()[0], visibility: 'private' }],
+      }),
+      mutate: (path, init) => {
+        if (path === '/api/v1/skills/sk-1' && init?.method === 'PATCH') {
+          bodies.push(JSON.parse(init.body!));
+          return Promise.resolve({ skill: skillFixtures()[0] });
+        }
+        return undefined;
+      },
+    });
+    renderPage();
+    const card = within(await screen.findByTestId('skill-card-release-notes'));
+    expect(card.getByText('Private')).toBeInTheDocument();
+    fireEvent.click(card.getByRole('button', { name: 'Publish' }));
+    await waitFor(() => expect(bodies).toEqual([{ visibility: 'published' }]));
+  });
+
+  it('creates a published skill when that visibility is chosen', async () => {
+    const bodies: unknown[] = [];
+    installRoutes({
+      skills: async () => ({}),
+      mutate: (path, init) => {
+        if (path === '/api/v1/skills' && init?.method === 'POST') {
+          bodies.push(JSON.parse(init.body!));
+          return Promise.resolve({ skill: skillFixtures()[0] });
+        }
+        return undefined;
+      },
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'New skill' }));
+    const form = within(screen.getByTestId('skill-form'));
+    fireEvent.change(form.getByLabelText('Name'), { target: { value: 'shared-skill' } });
+    fireEvent.change(form.getByLabelText('Description'), { target: { value: 'For everyone' } });
+    fireEvent.change(form.getByLabelText('Instructions'), { target: { value: 'do it' } });
+    // Toggle Private (exercises its handler) then settle on Published.
+    fireEvent.click(form.getByRole('radio', { name: /Private/ }));
+    fireEvent.click(form.getByRole('radio', { name: /Published/ }));
+    fireEvent.click(form.getByRole('button', { name: 'Create skill' }));
+    await waitFor(() =>
+      expect(bodies).toEqual([
+        { name: 'shared-skill', description: 'For everyone', instructions: 'do it', visibility: 'published' },
+      ]),
+    );
+  });
+
+  it("a team skill is use-only: no edit, delete, publish, or visibility controls", async () => {
+    installRoutes();
+    renderPage();
+    const card = within(await screen.findByTestId('skill-card-triage'));
+    expect(card.queryByLabelText('Edit triage')).not.toBeInTheDocument();
+    expect(card.queryByLabelText('Delete triage')).not.toBeInTheDocument();
+    expect(card.queryByRole('button', { name: 'Publish' })).not.toBeInTheDocument();
+    expect(card.queryByRole('button', { name: 'Make private' })).not.toBeInTheDocument();
+    // Its instructions are still readable — using it, not editing it.
+    expect(card.getByText('Label severity first')).toBeInTheDocument();
+  });
+  it('says so when changing a skill\'s visibility fails', async () => {
+    installRoutes({
+      mutate: (path, init) =>
+        path === '/api/v1/skills/sk-1' && init?.method === 'PATCH'
+          ? Promise.reject(new Error('offline'))
+          : undefined,
+    });
+    renderPage();
+    const card = within(await screen.findByTestId('skill-card-release-notes'));
+    fireEvent.click(card.getByRole('button', { name: 'Make private' }));
+    await waitFor(() =>
+      expect(showToast).toHaveBeenCalledWith("Couldn't change who can use that skill — try again."),
+    );
   });
 });

@@ -146,24 +146,24 @@ describe('ConnectorsPage', () => {
 
     const jira = await findCard('jira');
     expect(jira.getByText('/jira')).toBeInTheDocument();
-    expect(jira.getByRole('button', { name: 'Install' })).toBeInTheDocument();
+    expect(jira.getByRole('button', { name: 'Connect' })).toBeInTheDocument();
     expect(jira.queryByText(/connected/)).not.toBeInTheDocument();
     expect(jira.queryByLabelText(/Agents may use this/)).not.toBeInTheDocument();
 
     const gitlab = await findCard('gitlab');
-    expect(gitlab.getByText('connected as shivesh')).toBeInTheDocument();
+    expect(gitlab.getByText('Connected as shivesh')).toBeInTheDocument();
     expect(gitlab.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
     expect(gitlab.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument();
     expect(gitlab.queryByRole('button', { name: 'Verify now' })).not.toBeInTheDocument();
     expect(gitlab.getByLabelText(/Agents may use this/)).toHaveValue('always');
 
     const sentry = await findCard('sentry');
-    expect(sentry.getByText('connected (unverified)')).toBeInTheDocument();
+    expect(sentry.getByText('Unverified')).toBeInTheDocument();
     expect(sentry.getByRole('button', { name: 'Verify now' })).toBeInTheDocument();
     expect(sentry.getByLabelText(/Agents may use this/)).toHaveValue('ask');
 
     const figma = await findCard('figma');
-    expect(figma.getByText('connected')).toBeInTheDocument();
+    expect(figma.getByText('Connected')).toBeInTheDocument();
   });
 
   it('updates the agent-use policy', async () => {
@@ -228,12 +228,12 @@ describe('ConnectorsPage', () => {
     renderPage();
 
     const jira = await findCard('jira');
-    fireEvent.click(jira.getByRole('button', { name: 'Install' }));
+    fireEvent.click(jira.getByRole('button', { name: 'Connect' }));
     const form = within(jira.getByTestId('connect-form'));
-    // Paste-kind connectors have no sign-in tab strip and hide the Install CTA
-    // while the form is open.
+    // Paste-kind connectors have no sign-in tab strip and hide the card's
+    // Connect CTA while the form is open — only the form's Connect remains.
     expect(jira.queryByRole('tab')).not.toBeInTheDocument();
-    expect(jira.queryByRole('button', { name: 'Install' })).not.toBeInTheDocument();
+    expect(jira.getAllByRole('button', { name: 'Connect' })).toHaveLength(1);
 
     const connectBtn = () => form.getByRole('button', { name: 'Connect' });
     expect(connectBtn()).toBeDisabled();
@@ -270,7 +270,7 @@ describe('ConnectorsPage', () => {
     expect(bodies).toHaveLength(6);
 
     // Reopen and cancel.
-    fireEvent.click(jira.getByRole('button', { name: 'Install' }));
+    fireEvent.click(jira.getByRole('button', { name: 'Connect' }));
     fireEvent.click(within(jira.getByTestId('connect-form')).getByRole('button', { name: 'Cancel' }));
     expect(jira.queryByTestId('connect-form')).not.toBeInTheDocument();
   });
@@ -394,6 +394,45 @@ describe('ConnectorsPage', () => {
     expect(screen.queryByRole('button', { name: /Sync from provider/ })).toBeNull();
   });
 
+  it('groups connectors into Connected and Available sections with counts', async () => {
+    installRoutes();
+    renderPage();
+    await findCard('jira');
+    // gitlab, sentry, figma are installed; jira is not.
+    expect(screen.getByRole('heading', { name: 'Connected (3)' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Available (1)' })).toBeInTheDocument();
+  });
+
+  it('omits the Available section when everything is already connected', async () => {
+    installRoutes({ connectors: async () => ({ connectors: connectorFixtures().filter((c) => c.installed) }) });
+    renderPage();
+    await findCard('gitlab');
+    expect(screen.getByRole('heading', { name: 'Connected (3)' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /Available/ })).toBeNull();
+  });
+
+  it('shows a gateway error page as its title, with the raw page behind a Details toggle', async () => {
+    const page =
+      '<!DOCTYPE html><html><head><title>digitaltolk.net | 502: Bad gateway</title></head><body><h1>Bad gateway</h1></body></html>';
+    installRoutes({
+      mutate: (path, init) =>
+        path === '/api/v1/connectors/sentry/verify' && init?.method === 'POST'
+          ? Promise.reject(new ApiError(502, page))
+          : undefined,
+    });
+    renderPage();
+    const sentry = await findCard('sentry');
+    fireEvent.click(sentry.getByRole('button', { name: 'Verify now' }));
+    expect(await sentry.findByText('digitaltolk.net | 502: Bad gateway')).toBeInTheDocument();
+    // The raw markup is not dumped into the card…
+    expect(sentry.queryByText(/<h1>/)).toBeNull();
+    // …but one click away.
+    fireEvent.click(sentry.getByRole('button', { name: 'Details' }));
+    expect(sentry.getByText(/<h1>Bad gateway<\/h1>/)).toBeInTheDocument();
+    fireEvent.click(sentry.getByRole('button', { name: 'Hide details' }));
+    expect(sentry.queryByText(/<h1>/)).toBeNull();
+  });
+
   it('lets an admin sync from the provider and refetches the list', async () => {
     authRole.value = 'admin';
     let lists = 0;
@@ -498,7 +537,7 @@ describe('sso_window connectors', () => {
     });
     renderPage();
     const card = await findCard('cliffhub');
-    fireEvent.click(card.getByRole('button', { name: 'Install' }));
+    fireEvent.click(card.getByRole('button', { name: 'Connect' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Sign in to CliffHub' }));
     await waitFor(() => expect(installBody).toBe(JSON.stringify({ token: 'captured-tok' })));
     expect(bridge).toHaveBeenCalledWith({
@@ -508,6 +547,23 @@ describe('sso_window connectors', () => {
     });
   });
 
+  it('hides the token field behind a link when SSO is available, revealing it on click', async () => {
+    window.__EX_CONNECTOR_SSO__ = vi.fn(async () => 'x');
+    installRoutes({ connectors: async () => ({ connectors: [ssoConnector()] }) });
+    renderPage();
+    const card = await findCard('cliffhub');
+    fireEvent.click(card.getByRole('button', { name: 'Connect' }));
+    await screen.findByRole('button', { name: 'Sign in to CliffHub' });
+    // Token input is tucked away and the primary Connect button is suppressed —
+    // signing in is the main action.
+    expect(screen.queryByLabelText('Bearer token')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Connect' })).toBeNull();
+    // The small fallback link reveals the paste field + its Connect button.
+    fireEvent.click(screen.getByRole('button', { name: 'Paste a token instead' }));
+    fireEvent.change(screen.getByLabelText('Bearer token'), { target: { value: 'tok-x' } });
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
+  });
+
   it('shows the bridge error and stays open when sign-in fails', async () => {
     window.__EX_CONNECTOR_SSO__ = vi.fn(async () => {
       throw new Error('sign-in window was closed');
@@ -515,7 +571,7 @@ describe('sso_window connectors', () => {
     installRoutes({ connectors: async () => ({ connectors: [ssoConnector()] }) });
     renderPage();
     const card = await findCard('cliffhub');
-    fireEvent.click(card.getByRole('button', { name: 'Install' }));
+    fireEvent.click(card.getByRole('button', { name: 'Connect' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Sign in to CliffHub' }));
     expect(await screen.findByText('sign-in window was closed')).toBeInTheDocument();
   });
@@ -525,7 +581,7 @@ describe('sso_window connectors', () => {
     installRoutes({ connectors: async () => ({ connectors: [ssoConnector()] }) });
     renderPage();
     const card = await findCard('cliffhub');
-    fireEvent.click(card.getByRole('button', { name: 'Install' }));
+    fireEvent.click(card.getByRole('button', { name: 'Connect' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Sign in to CliffHub' }));
     expect(await screen.findByText('sign-in window failed')).toBeInTheDocument();
   });
@@ -541,7 +597,7 @@ describe('sso_window connectors', () => {
     });
     renderPage();
     const card = await findCard('cliffhub');
-    fireEvent.click(card.getByRole('button', { name: 'Install' }));
+    fireEvent.click(card.getByRole('button', { name: 'Connect' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Sign in to CliffHub' }));
     await waitFor(() => expect(screen.getByText(/token rejected|connection failed/)).toBeInTheDocument());
   });
@@ -550,7 +606,7 @@ describe('sso_window connectors', () => {
     installRoutes({ connectors: async () => ({ connectors: [ssoConnector()] }) });
     renderPage();
     const card = await findCard('cliffhub');
-    fireEvent.click(card.getByRole('button', { name: 'Install' }));
+    fireEvent.click(card.getByRole('button', { name: 'Connect' }));
     expect(await screen.findByText(/desktop app signs in to CliffHub/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Sign in to CliffHub' })).toBeNull();
     // Paste still works.
@@ -565,7 +621,7 @@ describe('sso_window connectors', () => {
     installRoutes({ connectors: async () => ({ connectors: [c] }) });
     renderPage();
     const card = await findCard('cliffhub');
-    fireEvent.click(card.getByRole('button', { name: 'Install' }));
+    fireEvent.click(card.getByRole('button', { name: 'Connect' }));
     await screen.findByTestId('connect-form');
     expect(screen.queryByRole('button', { name: 'Sign in to CliffHub' })).toBeNull();
   });
@@ -581,7 +637,7 @@ describe('sso_window connectors', () => {
     });
     renderPage();
     const card = await findCard('cliffhub');
-    fireEvent.click(card.getByRole('button', { name: 'Install' }));
+    fireEvent.click(card.getByRole('button', { name: 'Connect' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Sign in to CliffHub' }));
     expect(await screen.findByText('connection failed')).toBeInTheDocument();
   });
