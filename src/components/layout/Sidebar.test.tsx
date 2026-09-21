@@ -334,6 +334,18 @@ describe('Sidebar', () => {
     expect(screen.getByTestId('sidebar-dm-sort-menu')).toHaveClass('touch:opacity-100', 'mobile:hidden');
   });
 
+  it('re-enables drag-to-reorder on a touch screen once a trackpad is attached', async () => {
+    window.__EX_FORCE_DEVICE__ = 'touch';
+    window.__EX_POINTER_DEVICE__ = true;
+    renderSidebar();
+
+    const channelRow = screen.getByTestId('channel-row-ch-1') as HTMLElement;
+    expect(channelRow).toHaveClass('cursor-grab');
+    await waitFor(() => {
+      expect(channelRow.ondragstart).not.toBeNull();
+    });
+  });
+
   it('renders channel list', () => {
     renderSidebar();
     expect(screen.getByText('general')).toBeInTheDocument();

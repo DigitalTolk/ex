@@ -566,7 +566,7 @@ describe('MessageItem', () => {
       expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument();
     });
 
-    it('opens the action sheet from a trackpad secondary click and hides the hover toolbar', () => {
+    it('opens the action sheet from a secondary click while touch is the only pointer', () => {
       renderWithProviders(
         <MessageItem
           message={makeMessage()}
@@ -606,6 +606,31 @@ describe('MessageItem', () => {
 
       expect(contextMenu.defaultPrevented).toBe(true);
       expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument();
+    });
+
+    it('leaves the secondary click alone once a trackpad is attached (the hover toolbar is back)', () => {
+      window.__EX_POINTER_DEVICE__ = true;
+      renderWithProviders(
+        <MessageItem
+          message={makeMessage()}
+          authorName="Alice"
+          isOwn={false}
+          channelId="channel-1"
+          currentUserId="user-1"
+        />,
+      );
+      const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
+      const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+      act(() => {
+        row.dispatchEvent(contextMenu);
+      });
+
+      expect(contextMenu.defaultPrevented).toBe(false);
+      expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument();
+      // Long-press still works: an iPad user keeps reaching for the screen.
+      act(() => {
+        fireEvent.pointerDown(row, { pointerType: 'touch' });
+      });
     });
 
     it('leaves the native context menu alone on a desktop device', () => {

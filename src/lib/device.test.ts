@@ -3,9 +3,13 @@ import {
   applyLayoutTierClasses,
   currentLayoutTier,
   deviceKind,
+  hasPointerDevice,
   isElectronMac,
   layoutTierFor,
+  POINTER_DEVICE_EVENT,
+  resetPointerDeviceForTests,
   startLayoutTierTracking,
+  subscribePointerDevice,
 } from './device';
 
 // The jsdom setup pins __EX_FORCE_DEVICE__='touch'; these tests exercise the
@@ -126,6 +130,92 @@ describe('applyLayoutTierClasses / startLayoutTierTracking', () => {
     const stop2 = startLayoutTierTracking();
     expect(() => stop2()).not.toThrow();
     stop1();
+  });
+});
+
+describe('hasPointerDevice', () => {
+  function reportPointer(connected: boolean) {
+    window.__EX_POINTER_DEVICE__ = connected;
+    window.dispatchEvent(new CustomEvent(POINTER_DEVICE_EVENT, { detail: { connected } }));
+  }
+  function mouseInput() {
+    window.dispatchEvent(new PointerEvent('pointerover', { pointerType: 'mouse', bubbles: true }));
+  }
+
+  afterEach(() => {
+    resetPointerDeviceForTests();
+  });
+
+  it('is false until a mouse/trackpad shows up', () => {
+    expect(hasPointerDevice()).toBe(false);
+  });
+
+  it('follows the shell report', () => {
+    window.__EX_POINTER_DEVICE__ = true;
+    expect(hasPointerDevice()).toBe(true);
+  });
+
+  it('latches on real mouse input where no shell reports (iPad Safari), ignoring touch input', () => {
+    const stop = startLayoutTierTracking();
+    try {
+      window.dispatchEvent(new PointerEvent('pointerover', { pointerType: 'touch', bubbles: true }));
+      expect(hasPointerDevice()).toBe(false);
+      mouseInput();
+      expect(hasPointerDevice()).toBe(true);
+      // Already latched: a second mouse event changes nothing.
+      mouseInput();
+      expect(hasPointerDevice()).toBe(true);
+    } finally {
+      stop();
+    }
+  });
+
+  it('drops the latch when the shell reports the pointer gone', () => {
+    const stop = startLayoutTierTracking();
+    try {
+      mouseInput();
+      expect(hasPointerDevice()).toBe(true);
+      reportPointer(false);
+      expect(hasPointerDevice()).toBe(false);
+      reportPointer(true);
+      expect(hasPointerDevice()).toBe(true);
+    } finally {
+      stop();
+    }
+  });
+
+  it('notifies subscribers only on a real change, and stops on unsubscribe', () => {
+    const stop = startLayoutTierTracking();
+    const onChange = vi.fn();
+    const unsubscribe = subscribePointerDevice(onChange);
+    try {
+      mouseInput();
+      expect(onChange).toHaveBeenCalledTimes(1);
+      mouseInput();
+      expect(onChange).toHaveBeenCalledTimes(1);
+      reportPointer(true);
+      expect(onChange).toHaveBeenCalledTimes(1);
+      unsubscribe();
+      reportPointer(false);
+      expect(onChange).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+      stop();
+    }
+  });
+
+  it('takes the touch class off the root when a pointer arrives, and puts it back when it goes', () => {
+    const root = document.documentElement;
+    const stop = startLayoutTierTracking();
+    try {
+      expect(root.classList.contains('device-touch')).toBe(true);
+      mouseInput();
+      expect(root.classList.contains('device-touch')).toBe(false);
+      window.dispatchEvent(new CustomEvent(POINTER_DEVICE_EVENT, { detail: {} }));
+      expect(root.classList.contains('device-touch')).toBe(true);
+    } finally {
+      stop();
+    }
   });
 });
 
