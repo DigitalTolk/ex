@@ -44,13 +44,13 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
           variant="outline"
           size="icon-xs"
           data-testid="code-copy-button"
-          // Hover-revealed, desktop-only. On touch there is no hover, and the
-          // mobile chrome stays minimal (whole-message copy lives in the
-          // long-press sheet) — but opacity-0 ALONE still hit-tests, leaving
-          // an invisible tap target that silently copied on stray taps, so
-          // mobile also needs pointer-events-none (same treatment as the
-          // sidebar row kebabs).
-          className="bg-background/80 text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 mobile:pointer-events-none"
+          // Hover-revealed on desktop. Touch has no hover: wide touch screens
+          // (iPad) show it outright, while the phone chrome stays minimal
+          // (whole-message copy lives in the long-press sheet) — but
+          // opacity-0 ALONE still hit-tests, leaving an invisible tap target
+          // that silently copied on stray taps, so mobile also needs
+          // pointer-events-none (same treatment as the sidebar row kebabs).
+          className="bg-background/80 text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 touch:opacity-100 mobile:pointer-events-none mobile:opacity-0"
         />
       </div>
       <div className="flex">

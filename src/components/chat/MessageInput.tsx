@@ -45,6 +45,7 @@ import { normalizeEmojiInBody } from '@/lib/emoji-shortcodes';
 import { isHttpUrl } from '@/lib/utils';
 import { dispatchEditMessage, onFocusComposer } from '@/lib/window-events';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useAutoFocusTextInput, useSubmitOnEnter } from '@/hooks/useHardwareKeyboard';
 import { ApiError } from '@/lib/api';
 
 const TYPING_PING_INTERVAL_MS = 3000;
@@ -182,6 +183,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   }, []);
   const { data: settings } = useWorkspaceSettings();
   const isMobile = useIsMobile();
+  const submitOnEnter = useSubmitOnEnter();
+  const autoFocusTextInput = useAutoFocusTextInput();
   // Slash commands run only from a main chat composer: an edit box rewrites an
   // existing message and a thread reply box targets a thread — neither is a
   // place to start a meeting from.
@@ -209,7 +212,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const isEditingMode = submitLabel !== undefined || onCancel !== undefined;
 
   const hasInitialDraftValue = initialBody !== '' || initialDrafts.length > 0;
-  const suppressAutoFocus = isMobile && variant === 'composer';
+  const suppressAutoFocus = !autoFocusTextInput && variant === 'composer';
   const hasComposerContent = body.trim() !== '' || drafts.length > 0;
   const compactMobileComposer =
     variant === 'composer' && !editorFocused && !hasComposerContent;
@@ -852,6 +855,10 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               editorFocused || !bottomInset
                 ? 'mobile:pb-1'
                 : 'mobile:pb-[max(0.25rem,env(safe-area-inset-bottom))]'
+            } ${
+              // Wider tiers keep the p-3 gutter but clear the iPad home
+              // indicator (the inset is 0 on desktop, so max() is a no-op).
+              bottomInset ? 'not-mobile:pb-[max(0.75rem,env(safe-area-inset-bottom))]' : ''
             } ${compactMobileComposer && !editorFocused ? 'mobile:px-4' : 'mobile:px-2'}`
       }
       data-composer-focused={editorFocused ? 'true' : 'false'}
@@ -958,7 +965,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             }}
             onSubmit={handleSend}
             onCancel={onCancel}
-            submitOnEnter={!isMobile}
+            submitOnEnter={submitOnEnter}
             onPasteFiles={uploadFiles}
             onArrowUpEmpty={requestEditLast}
             placeholder={isUploading ? 'Uploading…' : placeholder}

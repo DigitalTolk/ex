@@ -9,7 +9,7 @@ import { useAuth } from '@/context/AuthContext';
 import { usePresence } from '@/context/PresenceContext';
 import { UserPickerRow } from '@/components/UserPickerRow';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useIsMobile } from '@/hooks/useIsMobile';
+import { useAutoFocusTextInput } from '@/hooks/useHardwareKeyboard';
 import type { Message } from '@/types';
 
 interface PickedUser {
@@ -26,7 +26,7 @@ export default function NewConversationPage() {
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const { user } = useAuth();
-  const isMobile = useIsMobile();
+  const autoFocusTextInput = useAutoFocusTextInput();
   const { data: searchResults } = useSearchUsers(query);
   const { online } = usePresence();
   const createConversation = useCreateConversation();
@@ -189,7 +189,7 @@ export default function NewConversationPage() {
               // Desktop-only autofocus (the InviteDialog convention): on mobile
               // an autofocused input pops the keyboard mid page-transition and
               // forces focus-scroll inside the overflow-hidden app shell.
-              autoFocus={!isMobile}
+              autoFocus={autoFocusTextInput}
               className="min-w-[8rem] flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground mobile:text-base"
             />
           </div>

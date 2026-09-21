@@ -6,6 +6,7 @@ import { CopyButton } from '@/components/ui/copy-button';
 import { Label } from '@/components/ui/label';
 import { ApiError, apiFetch } from '@/lib/api';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useAutoFocusTextInput } from '@/hooks/useHardwareKeyboard';
 
 interface InviteDialogProps {
   open: boolean;
@@ -16,6 +17,7 @@ type Status = 'idle' | 'sent' | 'already-member';
 
 export function InviteDialog({ open, onOpenChange }: InviteDialogProps) {
   const isMobile = useIsMobile();
+  const autoFocusTextInput = useAutoFocusTextInput();
   const [email, setEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [inviteLink, setInviteLink] = useState('');
@@ -117,7 +119,7 @@ export function InviteDialog({ open, onOpenChange }: InviteDialogProps) {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="colleague@example.com"
                 required
-                autoFocus={!isMobile}
+                autoFocus={autoFocusTextInput}
               />
             </div>
             {/* Mobile surfaces "Send invitation" in the dialog's top-right

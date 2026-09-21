@@ -80,20 +80,21 @@ describe('ConversationRow', () => {
     expect(screen.getByText('Bob')).toBeInTheDocument();
   });
 
-  it('keeps the star tappable but hides the kebab on mobile (opened via long-press)', () => {
+  it('keeps the star tappable but hides the kebab on touch devices (opened via long-press)', () => {
     renderRow(sampleConv);
 
     const link = screen.getByText('Bob').closest('a')!;
     const star = screen.getByTestId(`conv-fav-toggle-${sampleConv.conversationID}`);
     const menu = screen.getByTestId(`conv-row-menu-${sampleConv.conversationID}`);
-    expect(link).toHaveClass('mobile:pr-20');
-    // Star stays a visible tap target on mobile.
-    expect(star).toHaveClass('mobile:h-9', 'mobile:w-9', 'mobile:opacity-100');
-    // The management kebab is NOT an always-visible tap target on mobile — it's
+    expect(link).toHaveClass('touch:pr-16', 'mobile:pr-20');
+    // Star stays a visible tap target on every touch device (phone-sized on
+    // phones, finger-sized on an iPad's wider sidebar).
+    expect(star).toHaveClass('touch:opacity-100', 'touch:h-7', 'touch:w-7', 'mobile:h-9', 'mobile:w-9');
+    // The management kebab is NOT an always-visible tap target on touch — it's
     // kept mounted only so Radix can anchor the menu, and opened by long-pressing
     // the row instead.
-    expect(menu).toHaveClass('mobile:pointer-events-none', 'mobile:opacity-0');
-    expect(menu).not.toHaveClass('mobile:opacity-100');
+    expect(menu).toHaveClass('touch:pointer-events-none', 'touch:opacity-0');
+    expect(menu).not.toHaveClass('touch:opacity-100');
   });
 
   it('renders DM status on the row', () => {

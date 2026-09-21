@@ -205,6 +205,9 @@ async function fireRealDrag(source: Element, target: Element) {
 }
 
 beforeEach(() => {
+  // Drag-to-reorder is a mouse/trackpad feature: touch devices (every project
+  // but chromium-desktop pins one) get the long-press row menu instead.
+  window.__EX_FORCE_DEVICE__ = 'desktop';
   reorderSidebarMutate.mockClear();
   reorderCategoriesMutate.mockClear();
 });

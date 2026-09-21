@@ -286,6 +286,19 @@ describe('MarkdownEditor handle + keymap branches', () => {
     expect(cm.getAttribute('enterkeyhint')).toBe('enter');
   });
 
+  it('updates enterkeyhint when submitOnEnter flips after mount (hardware keyboard attached/detached)', async () => {
+    const ref = createRef<WysiwygEditorHandle>();
+    const screen = await render(<MarkdownEditor ref={ref} ariaLabel="Message input" submitOnEnter={false} />);
+    const cm = () => ref.current!.getElement()!.querySelector('.cm-content') as HTMLElement;
+    expect(cm().getAttribute('enterkeyhint')).toBe('enter');
+
+    await screen.rerender(<MarkdownEditor ref={ref} ariaLabel="Message input" submitOnEnter />);
+    await vi.waitFor(() => expect(cm().getAttribute('enterkeyhint')).toBe('send'));
+
+    await screen.rerender(<MarkdownEditor ref={ref} ariaLabel="Message input" submitOnEnter={false} />);
+    await vi.waitFor(() => expect(cm().getAttribute('enterkeyhint')).toBe('enter'));
+  });
+
   it('renders the placeholder as an overlay (outside the contenteditable)', async () => {
     const { ref, screen } = await mount({ placeholder: 'Type a message…' });
     // The overlay carries the text; the editor's own content stays empty.

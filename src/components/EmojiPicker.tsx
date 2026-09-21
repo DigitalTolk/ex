@@ -33,6 +33,7 @@ import { getFrequentEmojis, recordEmojiUse } from '@/lib/emoji-frequency';
 import { apiFetch, getAccessToken } from '@/lib/api';
 import * as AuthContext from '@/context/AuthContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useAutoFocusTextInput } from '@/hooks/useHardwareKeyboard';
 import type { User } from '@/types';
 
 type SelectMode = 'shortcode' | 'reaction';
@@ -136,6 +137,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
   const [activeCategory, setActiveCategory] = useState<string>(EMOJI_CATEGORIES[0]?.slug ?? '');
   const auth = useEmojiPickerAuth();
   const isMobile = useIsMobile();
+  const autoFocusTextInput = useAutoFocusTextInput();
   const user = auth?.user;
   const [skinTone, setSkinTone] = useState<EmojiSkinTone>(user?.emojiSkinTone ?? '');
   const profileSkinToneRef = useRef<EmojiSkinTone>(user?.emojiSkinTone ?? '');
@@ -207,8 +209,8 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
   }, [activeCategory, customEmojis, query]);
 
   useEffect(() => {
-    if (open && !isMobile) inputRef.current?.focus();
-  }, [isMobile, open]);
+    if (open && autoFocusTextInput) inputRef.current?.focus();
+  }, [autoFocusTextInput, open]);
 
   useEffect(() => {
     if (!open) return;

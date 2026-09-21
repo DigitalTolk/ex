@@ -190,9 +190,9 @@ describe('Sidebar grouped rendering', () => {
     renderSidebar();
     const scrollArea = screen.getByTestId('sidebar-scroll-area');
     expect(scrollArea.parentElement).toHaveClass(
-      'mobile:select-none',
-      'mobile:[-webkit-touch-callout:none]',
-      'mobile:[-webkit-user-select:none]',
+      'touch:select-none',
+      'touch:[-webkit-touch-callout:none]',
+      'touch:[-webkit-user-select:none]',
     );
     expect(scrollArea).toHaveClass('min-h-0', 'flex-1');
     expect(scrollArea.querySelector('[data-slot="scroll-area-scrollbar"]')).toHaveClass(
@@ -222,11 +222,11 @@ describe('Sidebar grouped rendering', () => {
     expect(within(empty).getByText('Reading List')).toBeInTheDocument();
   });
 
-  it('keeps the category kebab visible on mobile where hover is unavailable', () => {
+  it('keeps the category kebab visible on touch devices where hover is unavailable', () => {
     renderSidebar();
 
     const menu = screen.getByTestId('sidebar-category-menu-cat-work');
-    expect(menu).toHaveClass('opacity-0', 'group-hover/sec:opacity-100', 'mobile:opacity-100');
+    expect(menu).toHaveClass('opacity-0', 'group-hover/sec:opacity-100', 'touch:opacity-100');
   });
 
   it('renders default Channels group with uncategorised channels', () => {
