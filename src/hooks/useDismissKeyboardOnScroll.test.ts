@@ -2,14 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { useDismissKeyboardOnScroll } from './useDismissKeyboardOnScroll';
 
-const mobileRef = { value: true };
-vi.mock('./useIsMobile', () => ({ useIsMobile: () => mobileRef.value }));
-
 beforeEach(() => {
-  mobileRef.value = true;
+  window.__EX_FORCE_DEVICE__ = 'touch';
 });
 afterEach(() => {
   document.body.innerHTML = '';
+  window.__EX_FORCE_DEVICE__ = 'touch';
+  delete window.__EX_HARDWARE_KEYBOARD__;
 });
 
 function fireTouchMove(target: EventTarget) {
@@ -66,8 +65,19 @@ describe('useDismissKeyboardOnScroll', () => {
     expect(document.activeElement).toBe(editor);
   });
 
+  it('keeps the focus while the iPad shell reports a hardware keyboard', () => {
+    window.__EX_HARDWARE_KEYBOARD__ = true;
+    const input = document.createElement('input');
+    const elsewhere = document.createElement('div');
+    document.body.append(input, elsewhere);
+    renderHook(() => useDismissKeyboardOnScroll());
+    input.focus();
+    fireTouchMove(elsewhere);
+    expect(document.activeElement).toBe(input);
+  });
+
   it('does not attach the listener on desktop', () => {
-    mobileRef.value = false;
+    window.__EX_FORCE_DEVICE__ = 'desktop';
     const input = document.createElement('input');
     const elsewhere = document.createElement('div');
     document.body.append(input, elsewhere);

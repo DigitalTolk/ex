@@ -562,3 +562,57 @@ func TestWebhookHandlerExecuteGenericErrorIs400(t *testing.T) {
 		t.Fatalf("body = %s, want webhook_error code", res.Body.String())
 	}
 }
+
+// handlerWebhookBotsDown fails bot provisioning the way a throttled or
+// unreachable users table would.
+type handlerWebhookBotsDown struct{}
+
+func (handlerWebhookBotsDown) EnsureBotUser(context.Context, string, string) (*model.User, error) {
+	return nil, assertErr("users table throttled")
+}
+
+type handlerWebhookDMs struct{}
+
+func (handlerWebhookDMs) GetOrCreateDM(_ context.Context, a, b string) (*model.Conversation, error) {
+	return &model.Conversation{ID: a + "__" + b, ParticipantIDs: []string{a, b}}, nil
+}
+
+type handlerWebhookUsers struct{}
+
+func (handlerWebhookUsers) List(context.Context, int, string) ([]*model.User, string, error) {
+	return []*model.User{{ID: "bob-1", DisplayName: "Bob", Email: "bob@example.com"}}, "", nil
+}
+
+// A transient store failure must answer 503, not 400. This is an
+// unauthenticated ingress: a 400 tells a well-behaved integration its payload
+// was bad and not to retry, which silently drops an alert that would have
+// succeeded a moment later.
+func TestWebhookHandlerExecute_TransientFailureIsRetryable(t *testing.T) {
+	general := &model.Channel{ID: "ch-general", Name: "General", Slug: "general"}
+	channels := handlerWebhookChannels{
+		byID:   map[string]*model.Channel{general.ID: general},
+		bySlug: map[string]*model.Channel{general.Slug: general},
+	}
+	webhooks := &handlerWebhookStore{items: map[string]*model.IncomingWebhook{
+		"wh": {ID: "wh", Title: "CI", ChannelID: general.ID, CreatedBy: "creator-1"},
+	}}
+	msgSvc := service.NewMessageService(&handlerWebhookMessageStore{messages: map[string]*model.Message{}}, nil, nil, nil, nil)
+	svc := service.NewIncomingWebhookService(webhooks, channels, msgSvc, nil, "")
+	svc.SetDMResolver(handlerWebhookDMs{})
+	svc.SetUserResolver(handlerWebhookUsers{})
+	svc.SetBotProvisioner(handlerWebhookBotsDown{})
+	h := NewWebhookHandler(svc)
+
+	req := httptest.NewRequest(http.MethodPost, "/hooks/wh", strings.NewReader(`{"text":"build failed","channel":"bob@example.com"}`))
+	req.SetPathValue("id", "wh")
+	res := httptest.NewRecorder()
+	h.Execute(res, req)
+
+	if res.Code != http.StatusServiceUnavailable {
+		t.Fatalf("transient failure status = %d, want 503", res.Code)
+	}
+	// The internal error text must never reach an unauthenticated caller.
+	if body := res.Body.String(); strings.Contains(body, "throttled") {
+		t.Errorf("response leaked internal error detail: %s", body)
+	}
+}

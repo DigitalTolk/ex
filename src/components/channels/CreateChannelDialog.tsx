@@ -13,6 +13,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { useCreateChannel } from '@/hooks/useChannels';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useAutoFocusTextInput } from '@/hooks/useHardwareKeyboard';
 import {
   MAX_CHANNEL_DESCRIPTION_LEN,
   MAX_CHANNEL_NAME_LEN,
@@ -37,6 +38,7 @@ export function CreateChannelDialog({
   const createChannel = useCreateChannel();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
+  const autoFocusTextInput = useAutoFocusTextInput();
 
   // Validation runs on every keystroke. We DON'T render the error while
   // the field is empty (would scream at the user before they've typed)
@@ -139,7 +141,7 @@ export function CreateChannelDialog({
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. marketing"
               required
-              autoFocus={!isMobile}
+              autoFocus={autoFocusTextInput}
               aria-invalid={nameError ? 'true' : 'false'}
               aria-describedby="channel-name-help"
             />

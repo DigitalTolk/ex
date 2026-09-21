@@ -482,6 +482,7 @@ func main() {
 	webhookSvc := service.NewIncomingWebhookService(store.NewIncomingWebhookStore(db), channelSvc, messageSvc, unfurlSvc, cfg.BaseURL)
 	webhookSvc.SetDMResolver(convSvc)
 	webhookSvc.SetUserResolver(userSvc)
+	webhookSvc.SetBotProvisioner(userSvc)
 	webhookSvc.SetMembershipResolver(membershipStore)
 	webhookSvc.SetPublisher(redisPubSub)
 

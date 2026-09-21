@@ -62,6 +62,10 @@ declare global {
     // browser setups pin it so width-driven tests keep their historical
     // meaning; production never sets it.
     __EX_FORCE_DEVICE__?: 'touch' | 'desktop';
+    // Set by the ex-mobile iOS shell: true while typing comes from a hardware
+    // keyboard, false while it goes through the on-screen keyboard. Absent
+    // everywhere else. See hooks/useHardwareKeyboard.ts.
+    __EX_HARDWARE_KEYBOARD__?: boolean;
     Capacitor?: {
       isNativePlatform?: () => boolean;
       Plugins?: {

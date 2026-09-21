@@ -550,18 +550,7 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 			// per recipient. The author is marked caught up so their own message
 			// never shows as unread to them.
 			s.bumpUnreadSeq(ctx, s.convSeq, parentID, userID)
-			if err := s.conversations.TouchConversation(ctx, parentID, conv.ParticipantIDs, now); err != nil {
-				slog.Warn("conversation activity touch failed", "convID", parentID, "error", err)
-			} else {
-				userChannels := make([]string, 0, len(conv.ParticipantIDs))
-				for _, participantID := range conv.ParticipantIDs {
-					userChannels = append(userChannels, pubsub.UserChannel(participantID))
-				}
-				events.PublishMany(ctx, s.publisher, userChannels, events.EventUserChannelUpdated, map[string]any{
-					"conversationID": parentID,
-					"updatedAt":      now,
-				})
-			}
+			s.touchConversationActivity(ctx, parentID, conv.ParticipantIDs, now)
 			// Activate the conversation on first top-level message so non-creator
 			// participants see it appear in their sidebars only after activity exists.
 			if s.activator != nil {
@@ -632,6 +621,24 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 	return msg, nil
 }
 
+// touchConversationActivity advances the activity timestamp and tells each
+// participant to re-sort. The sidebar orders on updatedAt.
+func (s *MessageService) touchConversationActivity(ctx context.Context, convID string, participantIDs []string, at time.Time) {
+	if err := s.conversations.TouchConversation(ctx, convID, participantIDs, at); err != nil {
+		// Ordering is cosmetic; the message is already stored.
+		slog.Warn("conversation activity touch failed", "convID", convID, "error", err)
+		return
+	}
+	userChannels := make([]string, 0, len(participantIDs))
+	for _, participantID := range participantIDs {
+		userChannels = append(userChannels, pubsub.UserChannel(participantID))
+	}
+	events.PublishMany(ctx, s.publisher, userChannels, events.EventUserChannelUpdated, map[string]any{
+		"conversationID": convID,
+		"updatedAt":      at,
+	})
+}
+
 type WebhookMessageInput struct {
 	ChannelID   string
 	ParentID    string
@@ -691,6 +698,23 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 		s.bumpUnreadSeq(ctx, s.channelSeq, parentID, authorID)
 	case ParentConversation:
 		s.bumpUnreadSeq(ctx, s.convSeq, parentID, authorID)
+		// A bot thread receives only webhook traffic: untouched here, its
+		// updatedAt stays frozen at creation.
+		if s.conversations != nil {
+			if conv, err := s.conversations.GetConversation(ctx, parentID); err != nil {
+				slog.Warn("conversation load for webhook activity failed", "convID", parentID, "error", err)
+			} else {
+				s.touchConversationActivity(ctx, parentID, conv.ParticipantIDs, msg.CreatedAt)
+			}
+		}
+		// The human send path's first-message activation: a DM from
+		// GetOrCreateDM starts un-activated and is hidden from everyone but
+		// its creator, so without this the message is delivered but invisible.
+		if s.activator != nil {
+			if err := s.activator.Activate(ctx, parentID); err != nil {
+				slog.Warn("webhook conversation activate failed", "convID", parentID, "error", err)
+			}
+		}
 	}
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageNew, msg)
 	s.notify(ctx, msg, parentType, nil) // webhook posts are always top-level, never thread replies

@@ -31,6 +31,13 @@ function contentClassExtension(editorClassName: string) {
   return EditorView.contentAttributes.of({ class: `${BASE_CONTENT_CLASS} ${editorClassName}`.trim() });
 }
 
+// On-screen keyboard return key label: "send" when Enter submits. Lives in its
+// own compartment because submitOnEnter flips at runtime when the iPad shell
+// reports a hardware keyboard being attached or detached.
+function enterKeyHintExtension(submitOnEnter: boolean) {
+  return EditorView.contentAttributes.of({ enterkeyhint: submitOnEnter ? 'send' : 'enter' });
+}
+
 // Toggle the placeholder overlay imperatively (not via React state) so the
 // CodeMirror update listener — which fires outside React's act() — never
 // triggers a state update that would warn in tests or churn renders.
@@ -115,6 +122,7 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
   // Compartment so the (dynamic) editorClassName can be reconfigured on the
   // contenteditable after mount — the compact mobile composer toggles it.
   const classCompartment = useMemo(() => new Compartment(), []);
+  const enterKeyHintCompartment = useMemo(() => new Compartment(), []);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -171,9 +179,8 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
             'aria-label': ariaLabel,
             role: 'textbox',
             'aria-multiline': 'true',
-            // Mobile keyboard hints: a "send" return key when Enter submits, plus
-            // sentence capitalisation / autocorrect / spellcheck for prose.
-            enterkeyhint: submitOnEnter ? 'send' : 'enter',
+            // Mobile keyboard hints: sentence capitalisation / autocorrect /
+            // spellcheck for prose (the return key label is enterKeyHintExtension).
             autocapitalize: 'sentences',
             autocorrect: 'on',
             spellcheck: 'true',
@@ -182,6 +189,7 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
           // (the scroll box), matching the old composer. CM merges the `class`
           // attribute with `cm-content`. Reconfigured below when it changes.
           classCompartment.of(contentClassExtension(editorClassName)),
+          enterKeyHintCompartment.of(enterKeyHintExtension(submitOnEnter)),
           keymap.of([
             {
               key: 'Enter',
@@ -290,6 +298,19 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
     if (!v) return;
     v.dispatch({ effects: classCompartment.reconfigure(contentClassExtension(editorClassName)) });
   }, [editorClassName, classCompartment]);
+
+  // The Enter keymap reads submitOnEnter through cbRef; keep the return key
+  // label in step with it. The mount effect already applied the initial value,
+  // so only an actual flip dispatches.
+  const appliedSubmitOnEnterRef = useRef(submitOnEnter);
+  useEffect(() => {
+    if (appliedSubmitOnEnterRef.current === submitOnEnter) return;
+    appliedSubmitOnEnterRef.current = submitOnEnter;
+    const v = viewRef.current;
+    /* istanbul ignore next -- the view always exists once this effect runs (mount effect created it synchronously above); defensive guard. */
+    if (!v) return;
+    v.dispatch({ effects: enterKeyHintCompartment.reconfigure(enterKeyHintExtension(submitOnEnter)) });
+  }, [submitOnEnter, enterKeyHintCompartment]);
 
   // Every handle method needs the live EditorView, which only exists after the
   // mount effect ran — and the handle is only reachable by the parent after

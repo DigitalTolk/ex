@@ -53,6 +53,7 @@ import { TaskCard } from '@/components/chat/TaskCard';
 import { parseArtifactMarker } from '@/lib/artifact-marker';
 import { parseTaskMarker } from '@/lib/task-marker';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { deviceKind } from '@/lib/device';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
@@ -115,14 +116,15 @@ function formatTime(dateStr: string): string {
 }
 
 // One reaction chip. Tap toggles the viewer's reaction; the "who reacted"
-// list lives in a hover tooltip, which touch can't reach — so on mobile a
-// LONG-PRESS surfaces the same reactor list as a toast instead. Split out of
-// the render loop because the long-press needs its own hook instance per chip.
+// list lives in a hover tooltip, which touch can't reach — so on touch devices
+// (phones and iPads alike) a LONG-PRESS surfaces the same reactor list as a
+// toast instead. Split out of the render loop because the long-press needs its
+// own hook instance per chip.
 function ReactionChip({
   reactedByMe,
   ariaLabel,
   reactorsText,
-  isMobile,
+  isTouch,
   onToggle,
   tooltipContent,
   children,
@@ -131,13 +133,13 @@ function ReactionChip({
   ariaLabel: string;
   // Pre-formatted "Alice, Bob reacted with 👍" line for the mobile toast.
   reactorsText: string;
-  isMobile: boolean;
+  isTouch: boolean;
   onToggle: () => void;
   tooltipContent: ReactNode;
   children: ReactNode;
 }) {
   const longPress = useLongPress({
-    enabled: isMobile,
+    enabled: isTouch,
     onLongPress: () => showToast(reactorsText, 'success'),
   });
   return (
@@ -221,6 +223,9 @@ function MessageItemImpl({
   // attributed to the creator (authorName resolves to the creator).
   const integrationOwnerName = isWebhook ? authorName : undefined;
   const isMobile = useIsMobile();
+  // Touch devices get the long-press action sheet instead of the hover
+  // toolbar at EVERY width: an iPad in the full tier has no hover either.
+  const isTouch = deviceKind() === 'touch';
   const [isEditing, setIsEditing] = useState(false);
   // Visibility tracked in JS (not Tailwind group-hover) because Radix's
   // open dropdown changes pointer-events/focus and breaks CSS :hover
@@ -456,7 +461,8 @@ function MessageItemImpl({
 
   function handleMobileEdit() {
     closeMobileActions();
-    onEditMessage?.(message);
+    // The sheet also opens on wide touch screens, where editing is inline.
+    startEdit();
   }
 
   const editAttachmentIDs = isEditing ? (message.attachmentIDs ?? []) : [];
@@ -560,17 +566,19 @@ function MessageItemImpl({
   // small threshold or release cancels; the haptic fires inside the hook).
   // This used to be a hand-rolled copy of the same pattern — keep the one
   // implementation in the hook.
+  const mobileActionsAvailable = !isEditing && !message.deleted && !message.system;
+  function openMobileActions() {
+    // Opening the action bar should dismiss the keyboard if the composer had
+    // focus, so the sheet isn't fighting the keyboard.
+    blurActiveInput();
+    setMobileActionsSuppressed(false);
+    setMobileActionsOpen(true);
+    notifyMessageHovered(message.id);
+  }
   const longPress = useLongPress({
-    enabled: !isEditing && !message.deleted && !message.system,
+    enabled: mobileActionsAvailable,
     delayMs: 420,
-    onLongPress: () => {
-      // Long-pressing to open the action bar should dismiss the keyboard
-      // if the composer had focus, so the sheet isn't fighting the keyboard.
-      blurActiveInput();
-      setMobileActionsSuppressed(false);
-      setMobileActionsOpen(true);
-      notifyMessageHovered(message.id);
-    },
+    onLongPress: openMobileActions,
   });
   useTransientOverlayCleanup(mobileActionsOpen, { rootRef: mobileActionsRef, lockScroll: true });
 
@@ -610,7 +618,7 @@ function MessageItemImpl({
   const mobileActionsOverlay = !isEditing && !message.deleted && (mobileActionsOpen || mobileReactionPickerOpen) ? (
     <div
       ref={mobileActionsRef}
-      className="fixed inset-0 z-[120] select-none [-webkit-touch-callout:none] [-webkit-user-select:none] md:hidden"
+      className="fixed inset-0 z-[120] select-none [-webkit-touch-callout:none] [-webkit-user-select:none]"
       role="presentation"
       onContextMenu={(event) => event.preventDefault()}
     >
@@ -627,7 +635,7 @@ function MessageItemImpl({
         role="dialog"
         aria-modal="true"
         aria-label="Message actions"
-        className={`absolute inset-x-0 bottom-0 flex max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)] flex-col overflow-hidden rounded-t-xl border-x-0 border-b-0 border-t bg-popover text-popover-foreground shadow-lg ${mobileActionsSuppressed ? 'hidden' : ''}`}
+        className={`absolute inset-x-0 bottom-0 flex max-h-[calc(100dvh-env(safe-area-inset-top)-0.75rem)] flex-col overflow-hidden rounded-t-xl border-x-0 border-b-0 border-t bg-popover text-popover-foreground shadow-lg md:mx-auto md:max-w-lg md:border-x ${mobileActionsSuppressed ? 'hidden' : ''}`}
         data-testid="mobile-message-actions"
         data-actions-suppressed={mobileActionsSuppressed ? 'true' : 'false'}
         data-swipe-dismissing={String(swipeDismissing)}
@@ -784,12 +792,15 @@ function MessageItemImpl({
       onMouseLeave={() => setHovered(false)}
       {...longPress.handlers}
       onContextMenu={(event) => {
-        if (!isMobile) return;
+        if (!isTouch) return;
         event.preventDefault();
+        // A trackpad/mouse secondary click on an iPad opens the same sheet as
+        // a long-press (a no-op where the long-press itself already opened it).
+        if (mobileActionsAvailable) openMobileActions();
       }}
       className={`relative flex items-start gap-3 rounded-md px-2 ${firstInGroup ? 'py-1.5' : 'py-0.5'} hover:bg-chat-hover ${
         message.pinned ? 'border-l-2 border-pinned pl-2' : ''
-      } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} mobile:select-none mobile:touch-pan-y mobile:[-webkit-touch-callout:none] mobile:[-webkit-user-select:none]`}
+      } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]`}
     >
       {firstInGroup ? (
         <UserHoverCard
@@ -1049,7 +1060,7 @@ function MessageItemImpl({
                       reactedByMe={reactedByMe}
                       ariaLabel={`${renderReactionLabel(emoji)} ${users.length}, ${reactedByMe ? 'reacted' : 'react'}`}
                       reactorsText={`${formatReactors(users)} reacted with ${renderReactionLabel(emoji)}`}
-                      isMobile={isMobile}
+                      isTouch={isTouch}
                       onToggle={() => handleReact(emoji)}
                       tooltipContent={
                         <>
@@ -1099,7 +1110,7 @@ function MessageItemImpl({
 
       {!isEditing && !message.deleted && (
         <div
-          className="absolute right-2 -top-3 flex items-center gap-0.5 rounded-md border bg-background shadow-sm transition-opacity mobile:hidden"
+          className="absolute right-2 -top-3 flex items-center gap-0.5 rounded-md border bg-background shadow-sm transition-opacity touch:hidden"
           style={{ opacity: toolbarVisible ? 1 : 0 }}
           data-actions-pinned={actionsMenuOpen ? 'true' : 'false'}
           data-actions-visible={toolbarVisible ? 'true' : 'false'}

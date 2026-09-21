@@ -83,6 +83,10 @@ func RecreateUsersChannels(ctx context.Context, rc IndexRebuilder, src UsersChan
 		}
 		entries := make([]BulkEntry, 0, len(list))
 		for _, u := range list {
+			// Bots are never indexed — same guard as bulkUsers.
+			if u.IsBot {
+				continue
+			}
 			entries = append(entries, BulkEntry{ID: u.ID, Doc: userDoc(u)})
 		}
 		return entries, nil
@@ -339,13 +343,19 @@ func (r *Reindexer) doRun(ctx context.Context) error {
 func (r *Reindexer) bulkUsers(ctx context.Context, users []*model.User) error {
 	entries := make([]BulkEntry, 0, len(users))
 	for _, u := range users {
+		// A rebuild reads straight from the store, bypassing service.indexUser
+		// — without this a reindex quietly re-admits every bot.
+		if u.IsBot {
+			continue
+		}
 		entries = append(entries, BulkEntry{ID: u.ID, Doc: userDoc(u)})
 	}
 	if err := r.w.Bulk(ctx, IndexUsers, entries); err != nil {
 		return fmt.Errorf("reindex: bulk users: %w", err)
 	}
 	r.mu.Lock()
-	r.progress.Users = len(users)
+	// What was indexed, not what was read: bots are skipped above.
+	r.progress.Users = len(entries)
 	r.mu.Unlock()
 	r.persist(ctx, false)
 	return nil

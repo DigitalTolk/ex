@@ -188,7 +188,7 @@ describe('CustomEmojiPage browser', () => {
     await pickFile();
     await screen.getByLabelText('Emoji shortcode').fill('bad!name');
     await screen.getByRole('button', { name: 'Save' }).click();
-    await expect.element(screen.getByRole('alert')).toHaveTextContent(/1–32 chars/);
+    await expect.element(screen.getByRole('alert')).toMatchTextContent(/1–32 chars/);
     expect(uploadMutate).not.toHaveBeenCalled();
   });
 
