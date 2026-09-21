@@ -235,13 +235,14 @@ func (s *ConnectorService) Ingest(ctx context.Context, callerID string, in Inges
 	return c, nil
 }
 
-// parseServicesManifest extracts index.yml's services: manifest and validates
-// it against the shipped files, both directions: a manifest entry pointing at
-// a missing file is stale (agents would grep a service that no longer
-// exists); a shipped service file absent from the manifest is invisible to
-// hierarchy-first lookup. Bundles without an index.yml (or without a
-// services: key) pass through with no manifest — the KB standard wants one,
-// but tiny hand-rolled connectors stay legal.
+// parseServicesManifest extracts index.yml's services: manifest. A manifest
+// entry pointing at a missing file is stale and rejected (agents would grep a
+// service that no longer exists). A shipped service file NOT listed in the
+// manifest is simply not surfaced as a service — it is skipped, never a failed
+// ingest, so one forgotten entry costs only that service's hierarchy listing
+// and can never take the whole connector dark. Bundles without an index.yml
+// (or without a services: key) pass through with no manifest — the KB standard
+// wants one, but tiny hand-rolled connectors stay legal.
 func parseServicesManifest(files []model.ConnectorFile) ([]model.ConnectorServiceInfo, error) {
 	var indexContent string
 	shipped := map[string]bool{}
@@ -269,7 +270,6 @@ func parseServicesManifest(files []model.ConnectorFile) ([]model.ConnectorServic
 		return nil, nil
 	}
 	out := make([]model.ConnectorServiceInfo, 0, len(idx.Services))
-	listed := map[string]bool{}
 	for _, s := range idx.Services {
 		if s.File == "" {
 			return nil, errors.New("index.yml services: entry missing file")
@@ -277,7 +277,6 @@ func parseServicesManifest(files []model.ConnectorFile) ([]model.ConnectorServic
 		if !shipped[s.File] {
 			return nil, fmt.Errorf("index.yml services: lists %s but the bundle does not ship it — stale manifest entry", s.File)
 		}
-		listed[s.File] = true
 		name := s.Service
 		if name == "" {
 			name = strings.TrimSuffix(s.File, ".yaml")
@@ -289,16 +288,9 @@ func parseServicesManifest(files []model.ConnectorFile) ([]model.ConnectorServic
 			Description: strings.TrimSpace(s.Description),
 		})
 	}
-	for name := range shipped {
-		// Service files are the .yaml docs that aren't infrastructure
-		// (index, enums/catalog/usage underscore files).
-		if !strings.HasSuffix(name, ".yaml") || strings.HasPrefix(name, "_") || name == "index.yaml" {
-			continue
-		}
-		if !listed[name] {
-			return nil, fmt.Errorf("bundle ships %s but index.yml services: does not list it — hierarchy-first lookup would never find it", name)
-		}
-	}
+	// A shipped service file that the manifest does not list is intentionally
+	// left out of the hierarchy rather than rejected — a missing entry hides
+	// that one service, it never fails the whole connector's ingest.
 	return out, nil
 }
 

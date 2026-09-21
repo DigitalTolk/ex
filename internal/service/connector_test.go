@@ -320,9 +320,10 @@ func TestParseConnectorTokens(t *testing.T) {
 	}
 }
 
-// The services: manifest is validated both directions at ingest — a stale
-// entry (file gone) and an unlisted service file are both rejected; a parsed
-// manifest lands on the connector for hierarchy-first lookup.
+// The services: manifest at ingest: a stale entry (file gone) is rejected, but
+// a shipped service file the manifest doesn't list is skipped (not rejected) —
+// it just doesn't appear in the hierarchy, and the rest of the connector still
+// ingests. A parsed manifest lands on the connector for hierarchy-first lookup.
 func TestConnector_IngestServicesManifest(t *testing.T) {
 	svc := NewConnectorService(newMemConnectorStore())
 	base := IngestInput{
@@ -352,14 +353,20 @@ func TestConnector_IngestServicesManifest(t *testing.T) {
 		t.Fatal("stale manifest entry (leave.yaml missing) not rejected")
 	}
 
+	// A shipped file the manifest doesn't list must NOT fail ingest — the
+	// connector still lands, work.yaml is simply absent from the hierarchy.
 	unlisted := base
 	unlisted.Files = []model.ConnectorFile{
 		{Name: "index.yml", Content: manifest},
 		{Name: "leave.yaml", Content: "service: leave"},
 		{Name: "work.yaml", Content: "service: work"},
 	}
-	if _, err := svc.Ingest(context.Background(), "u-admin", unlisted); err == nil {
-		t.Fatal("unlisted service file (work.yaml) not rejected")
+	uc, err := svc.Ingest(context.Background(), "u-admin", unlisted)
+	if err != nil {
+		t.Fatalf("unlisted service file must not fail ingest: %v", err)
+	}
+	if len(uc.Services) != 1 || uc.Services[0].File != "leave.yaml" {
+		t.Fatalf("only listed services should surface, got: %+v", uc.Services)
 	}
 
 	// No manifest at all stays legal (tiny hand-rolled bundles).
