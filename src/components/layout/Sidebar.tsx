@@ -57,6 +57,7 @@ import { useUserState } from '@/hooks/useUserState';
 import { useDrafts } from '@/hooks/useDrafts';
 import { useActivity } from '@/hooks/useActivity';
 import { deviceKind } from '@/lib/device';
+import { usePointerDevice } from '@/hooks/usePointerDevice';
 import { useCategories, useCreateCategory, useDeleteCategory, useReorderCategories, useReorderSidebar, type SidebarMoveRequest } from '@/hooks/useSidebar';
 import { groupSidebarItems, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
 import { computeSidebarReorder, type SidebarSectionTarget } from '@/lib/sidebar-reorder';
@@ -130,11 +131,11 @@ export function Sidebar({ onClose }: SidebarProps) {
   // The AI hub entry is one link for three routes, so its active state is
   // ours to compute — NavLink would only match /agents.
   const aiHubActive = isAiHubPath(location.pathname);
-  // Drag-to-reorder is for mouse/trackpad devices only. On a touch device — a
-  // phone, or an iPad at any width — a hold on a row opens its menu
-  // (useRowLongPressMenu), and iPadOS would start a native drag lift from that
-  // same hold.
-  const dragDisabled = deviceKind() === 'touch';
+  // Drag-to-reorder needs a mouse or trackpad. Without one — a phone, or an
+  // iPad on its own — a hold on a row opens its menu (useRowLongPressMenu) and
+  // iPadOS would start a native drag lift from that same hold.
+  const pointerDevice = usePointerDevice();
+  const dragDisabled = deviceKind() === 'touch' && !pointerDevice;
   const directoryActive = location.pathname === '/directory' || location.pathname.startsWith('/directory/');
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
   // null = closed; otherwise the section being deleted. Modal confirm

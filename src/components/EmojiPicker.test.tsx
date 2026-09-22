@@ -88,6 +88,8 @@ describe('EmojiPicker', () => {
     freqRef.value = [];
     emojisRef.value = [];
     recordMock.mockClear();
+    // Back to the suite default, so a test that pins a device kind can't leak.
+    window.__EX_FORCE_DEVICE__ = 'touch';
   });
 
   function seedWorkPack(entries: Array<{ name: string; gettingWorkDone?: boolean }>) {
@@ -231,7 +233,7 @@ describe('EmojiPicker', () => {
     const dialog = screen.getByRole('dialog');
     expect(dialog.className).toContain('w-[336px]');
     expect(dialog.className).toContain('h-[460px]');
-    expect(dialog.className).toContain('mobile:h-[50dvh]');
+    expect(dialog.className).toContain('touch:h-[50dvh]');
 
     const tabs = screen.getAllByTestId('emoji-category-tab');
     expect(tabs).toHaveLength(10);
@@ -244,7 +246,7 @@ describe('EmojiPicker', () => {
     expect(screen.getByRole('list', { name: /standard emojis/i }).className).toContain('grid-cols-[repeat(9,2rem)]');
   });
 
-  it('uses larger emoji tap targets on mobile', async () => {
+  it('uses larger emoji tap targets on touch', async () => {
     const originalMatchMedia = window.matchMedia;
     setMobileMatch(true);
     const user = userEvent.setup();
@@ -254,9 +256,9 @@ describe('EmojiPicker', () => {
     const list = screen.getByRole('list', { name: /standard emojis/i });
     const tile = screen.getAllByTestId('emoji-picker-tile')[0];
 
-    expect(list.className).toContain('mobile:grid-cols-[repeat(7,2.75rem)]');
-    expect(tile.className).toContain('mobile:h-11');
-    expect(tile.className).toContain('mobile:w-11');
+    expect(list.className).toContain('touch:grid-cols-[repeat(7,2.75rem)]');
+    expect(tile.className).toContain('touch:h-11');
+    expect(tile.className).toContain('touch:w-11');
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
   });
 
@@ -269,7 +271,7 @@ describe('EmojiPicker', () => {
 
     const dialog = screen.getByRole('dialog');
     expect(dialog).toHaveAttribute('data-mobile-sheet', 'true');
-    expect(dialog.className).toContain('mobile:h-[50dvh]');
+    expect(dialog.className).toContain('touch:h-[50dvh]');
     expect(dialog).toHaveStyle({ maxHeight: '50dvh', overscrollBehaviorY: 'contain' });
     Object.defineProperty(window, 'matchMedia', { configurable: true, value: originalMatchMedia });
   });
@@ -326,7 +328,9 @@ describe('EmojiPicker', () => {
   });
 
   it('shows up to two rows of the most-used emojis at the top', async () => {
-    // Seed 20 entries — desktop shows 9 cols × 2 rows = 18.
+    // Seed 20 entries — desktop shows 9 cols × 2 rows = 18. The column count
+    // follows the input device (the jsdom default is touch), not the width.
+    window.__EX_FORCE_DEVICE__ = 'desktop';
     seedFrequency(Array.from({ length: 20 }, (_, i) => `:freq${i}:`));
     const user = userEvent.setup();
     render(<EmojiPicker onSelect={vi.fn()} />);
@@ -375,6 +379,7 @@ describe('EmojiPicker', () => {
   });
 
   it('over-fetches so the shelf still fills two full rows after work-pack dedup', async () => {
+    window.__EX_FORCE_DEVICE__ = 'desktop';
     // Regression for the "15 not 18" report: three of the user's most-used
     // emojis are ALSO pinned in "Getting Work Done". They're deduped out of the
     // frequent shelf (rendering a tile twice wastes a slot) — but because the

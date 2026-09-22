@@ -566,7 +566,7 @@ describe('MessageItem', () => {
       expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument();
     });
 
-    it('opens the action sheet from a trackpad secondary click and hides the hover toolbar', () => {
+    it('opens the action sheet from a secondary click while touch is the only pointer', () => {
       renderWithProviders(
         <MessageItem
           message={makeMessage()}
@@ -606,6 +606,60 @@ describe('MessageItem', () => {
 
       expect(contextMenu.defaultPrevented).toBe(true);
       expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument();
+    });
+
+    it('brings the reaction picker up from the bottom, not out of the top-left corner', async () => {
+      // The sheet hides itself while the picker opens, so the picker's trigger
+      // has a zero-size rect: anchored to it the panel landed at (0,0).
+      const user = (await import('@testing-library/user-event')).default.setup();
+      renderWithProviders(
+        <MessageItem
+          message={makeMessage()}
+          authorName="Alice"
+          isOwn={false}
+          channelId="channel-1"
+          currentUserId="user-1"
+        />,
+      );
+      const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
+      act(() => {
+        fireEvent.pointerDown(row, { pointerType: 'touch' });
+      });
+      await act(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve, 430));
+      });
+
+      await user.click(within(screen.getByTestId('mobile-message-actions')).getByLabelText('Add reaction'));
+
+      const portal = screen.getByTestId('popover-portal');
+      expect(portal).toHaveAttribute('data-mobile-sheet', 'true');
+      expect(portal.style.bottom).toBe('0px');
+      expect(portal.style.top).toBe('');
+    });
+
+    it('leaves the secondary click alone once a trackpad is attached (the hover toolbar is back)', () => {
+      window.__EX_POINTER_DEVICE__ = true;
+      renderWithProviders(
+        <MessageItem
+          message={makeMessage()}
+          authorName="Alice"
+          isOwn={false}
+          channelId="channel-1"
+          currentUserId="user-1"
+        />,
+      );
+      const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
+      const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+      act(() => {
+        row.dispatchEvent(contextMenu);
+      });
+
+      expect(contextMenu.defaultPrevented).toBe(false);
+      expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument();
+      // Long-press still works: an iPad user keeps reaching for the screen.
+      act(() => {
+        fireEvent.pointerDown(row, { pointerType: 'touch' });
+      });
     });
 
     it('leaves the native context menu alone on a desktop device', () => {
