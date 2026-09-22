@@ -112,7 +112,7 @@ export function UserHoverCard({
         preferredAlign="start"
         role="tooltip"
         mobileSheet
-        className="w-72 rounded-md border bg-popover p-3 shadow-lg mobile:w-screen mobile:max-w-none mobile:rounded-b-none mobile:rounded-t-xl mobile:border-b-0 mobile:pb-[calc(env(safe-area-inset-bottom)+0.75rem)] mobile:pl-[max(0.75rem,env(safe-area-inset-left))] mobile:pr-[max(0.75rem,env(safe-area-inset-right))]"
+        className="w-72 rounded-md border bg-popover p-3 shadow-lg touch:w-screen touch:max-w-none touch:rounded-b-none touch:rounded-t-xl touch:border-b-0 touch:pb-[calc(env(safe-area-inset-bottom)+0.75rem)] touch:pl-[max(0.75rem,env(safe-area-inset-left))] touch:pr-[max(0.75rem,env(safe-area-inset-right))]"
       >
         {integrationOwnerName ? (
           <div data-testid="hover-card-integration">

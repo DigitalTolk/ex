@@ -54,6 +54,7 @@ import { parseArtifactMarker } from '@/lib/artifact-marker';
 import { parseTaskMarker } from '@/lib/task-marker';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { deviceKind } from '@/lib/device';
+import { usePointerDevice } from '@/hooks/usePointerDevice';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
@@ -223,9 +224,14 @@ function MessageItemImpl({
   // attributed to the creator (authorName resolves to the creator).
   const integrationOwnerName = isWebhook ? authorName : undefined;
   const isMobile = useIsMobile();
-  // Touch devices get the long-press action sheet instead of the hover
-  // toolbar at EVERY width: an iPad in the full tier has no hover either.
+  // A touch SCREEN keeps the long-press gestures armed at every width, even
+  // when a trackpad is attached — an iPad user reaches for the screen anyway.
   const isTouch = deviceKind() === 'touch';
+  // A mouse/trackpad brings the hover toolbar back (the `touch:hidden` class
+  // drops with the root `device-touch` class), so the secondary-click stand-in
+  // for it is not needed and the native selection behaviour stays.
+  const pointerDevice = usePointerDevice();
+  const touchOnly = isTouch && !pointerDevice;
   const [isEditing, setIsEditing] = useState(false);
   // Visibility tracked in JS (not Tailwind group-hover) because Radix's
   // open dropdown changes pointer-events/focus and breaks CSS :hover
@@ -792,10 +798,11 @@ function MessageItemImpl({
       onMouseLeave={() => setHovered(false)}
       {...longPress.handlers}
       onContextMenu={(event) => {
-        if (!isTouch) return;
+        // Without a pointing device there is no hover toolbar to reach, so a
+        // secondary click (an iPad keyboard case, or Android's long-press
+        // contextmenu) stands in for it and opens the action sheet.
+        if (!touchOnly) return;
         event.preventDefault();
-        // A trackpad/mouse secondary click on an iPad opens the same sheet as
-        // a long-press (a no-op where the long-press itself already opened it).
         if (mobileActionsAvailable) openMobileActions();
       }}
       className={`relative flex items-start gap-3 rounded-md px-2 ${firstInGroup ? 'py-1.5' : 'py-0.5'} hover:bg-chat-hover ${

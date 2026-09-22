@@ -3,6 +3,7 @@ import { vi } from 'vitest';
 import { createElement, type ReactNode } from 'react';
 import { APP_VERSION_META, BUILD_VERSION_META } from '@/lib/version-meta';
 import './console-gate';
+import { resetPointerDeviceForTests } from '@/lib/device';
 import { resetPresenceStoreForTests } from '@/stores/presence';
 import { resetTypingStoreForTests } from '@/stores/typing';
 
@@ -193,4 +194,6 @@ if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
 afterEach(() => {
   resetPresenceStoreForTests();
   resetTypingStoreForTests();
+  // Same reason: an attached mouse/trackpad is a module-global latch.
+  resetPointerDeviceForTests();
 });

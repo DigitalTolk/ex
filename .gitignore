@@ -45,6 +45,7 @@ Thumbs.db
 /bin/
 /tmp/
 node_modules/
+/*.log
 
 # Coverage
 /coverage/

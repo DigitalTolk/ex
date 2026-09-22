@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, type ReactNode, type RefObject } from '
 import { createPortal } from 'react-dom';
 import { usePopoverPosition } from '@/hooks/usePopoverPosition';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { usePointerDevice } from '@/hooks/usePointerDevice';
+import { deviceKind } from '@/lib/device';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
@@ -48,7 +50,14 @@ export function PopoverPortal({
 }: PopoverPortalProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
-  const renderSheet = mobileSheet && isMobile;
+  const pointerDevice = usePointerDevice();
+  // Sheet wherever touch is the only pointer — phones AND a tablet running the
+  // desktop layout. Anchoring to a trigger assumes a trigger that is still on
+  // screen and a pointer that can reach a popover next to it: the message
+  // action sheet HIDES its trigger while the picker opens (a zero-size rect
+  // pins the popover to the top-left corner), and a thumb is nowhere near it.
+  // With a mouse/trackpad the anchored popover is the better fit again.
+  const renderSheet = mobileSheet && (isMobile || (deviceKind() === 'touch' && !pointerDevice));
   const { dismissing, motionProps } = useSwipeDismiss('down', () => {
     // The drag handlers are only attached in sheet mode, so this callback
     // only fires when renderSheet is true; the false arm and the
@@ -129,8 +138,11 @@ export function PopoverPortal({
               right: 0,
               bottom: 0,
               zIndex: 1000,
-              width: '100vw',
-              maxWidth: '100vw',
+              // Full width on a phone; on a tablet capped and centred so it
+              // matches the message action sheet instead of spanning 1024px+.
+              width: '100%',
+              maxWidth: 'min(100vw, 32rem)',
+              marginInline: 'auto',
               maxHeight: '50dvh',
               overflow: 'hidden',
               overscrollBehaviorY: 'contain',

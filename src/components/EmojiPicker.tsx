@@ -32,8 +32,9 @@ import { fuzzyMatch } from '@/lib/fuzzy';
 import { getFrequentEmojis, recordEmojiUse } from '@/lib/emoji-frequency';
 import { apiFetch, getAccessToken } from '@/lib/api';
 import * as AuthContext from '@/context/AuthContext';
-import { useIsMobile } from '@/hooks/useIsMobile';
 import { useAutoFocusTextInput } from '@/hooks/useHardwareKeyboard';
+import { usePointerDevice } from '@/hooks/usePointerDevice';
+import { deviceKind } from '@/lib/device';
 import type { User } from '@/types';
 
 type SelectMode = 'shortcode' | 'reaction';
@@ -136,8 +137,9 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
   /* istanbul ignore next -- EMOJI_CATEGORIES is a non-empty compile-time constant, so the ?.slug / ?? '' fallbacks are dead defensive arms */
   const [activeCategory, setActiveCategory] = useState<string>(EMOJI_CATEGORIES[0]?.slug ?? '');
   const auth = useEmojiPickerAuth();
-  const isMobile = useIsMobile();
   const autoFocusTextInput = useAutoFocusTextInput();
+  const pointerDevice = usePointerDevice();
+  const touchOnly = deviceKind() === 'touch' && !pointerDevice;
   const user = auth?.user;
   const [skinTone, setSkinTone] = useState<EmojiSkinTone>(user?.emojiSkinTone ?? '');
   const profileSkinToneRef = useRef<EmojiSkinTone>(user?.emojiSkinTone ?? '');
@@ -164,7 +166,9 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
   // Two rows of the user's most-used emojis, fetched from the server each
   // time the picker opens (see the trigger's onClick) so a fresh pick shows
   // up next time. Stored per-user in Redis, not on this device.
-  const frequentLimit = (isMobile ? MOBILE_COLS : DESKTOP_COLS) * FREQUENT_ROWS;
+  // Column count follows the grid's `touch:` variant, so the frequent rows stay
+  // whole on a touch tablet too.
+  const frequentLimit = (touchOnly ? MOBILE_COLS : DESKTOP_COLS) * FREQUENT_ROWS;
   // Curated "Getting Work Done" shelf: custom emojis flagged on the upload
   // page, rendered right below "Frequently used" (capped to the same two
   // rows).
@@ -294,7 +298,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
         preferredAlign="end"
         ariaLabel={ariaLabel}
         mobileSheet
-        className="flex h-[460px] w-[336px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md mobile:h-[50dvh] mobile:w-screen mobile:max-w-none mobile:rounded-b-none mobile:rounded-t-xl mobile:border-x-0 mobile:border-b-0 mobile:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]"
+        className="flex h-[460px] w-[336px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md touch:h-[50dvh] touch:w-screen touch:max-w-none touch:rounded-b-none touch:rounded-t-xl touch:border-x-0 touch:border-b-0 touch:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]"
       >
         <Input
           ref={inputRef}
@@ -304,7 +308,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
           aria-label="Search emojis"
           // No text-sm override: the Input's own text-base md:text-sm keeps
           // the field at 16px on mobile so iOS doesn't zoom on focus.
-          className="mb-1.5 h-8 mobile:h-11 shrink-0"
+          className="mb-1.5 h-8 touch:h-11 shrink-0"
         />
         {!query.trim() && (
           <div
@@ -359,7 +363,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                 Frequently used
               </div>
               <div
-                className="grid grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 mobile:grid-cols-[repeat(7,2.75rem)]"
+                className="grid grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 touch:grid-cols-[repeat(7,2.75rem)]"
                 role="list"
                 aria-label="Frequently used emojis"
                 data-testid="emoji-frequent-grid"
@@ -371,7 +375,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                     role="listitem"
                     data-testid="emoji-frequent-tile"
                     onClick={() => handlePick(shortcode)}
-                    className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted mobile:h-11 mobile:w-11"
+                    className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
                     aria-label={`React with ${shortcode}`}
                     title={shortcode}
                   >
@@ -379,7 +383,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                       emoji={shortcode}
                       customMap={customMap}
                       size="lg"
-                      className="mobile:h-[30px] mobile:w-[30px] mobile:text-[30px]"
+                      className="touch:h-[30px] touch:w-[30px] touch:text-[30px]"
                     />
                   </button>
                 ))}
@@ -392,7 +396,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                 Getting Work Done
               </div>
               <div
-                className="grid grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 mobile:grid-cols-[repeat(7,2.75rem)]"
+                className="grid grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 touch:grid-cols-[repeat(7,2.75rem)]"
                 role="list"
                 aria-label="Getting Work Done emojis"
                 data-testid="emoji-workpack-grid"
@@ -404,7 +408,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                     role="listitem"
                     data-testid="emoji-workpack-tile"
                     onClick={() => handlePick(`:${e.name}:`)}
-                    className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted mobile:h-11 mobile:w-11"
+                    className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
                     aria-label={`React with :${e.name}:`}
                     title={`:${e.name}:`}
                   >
@@ -412,7 +416,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                       emoji={`:${e.name}:`}
                       customMap={customMap}
                       size="lg"
-                      className="mobile:h-[30px] mobile:w-[30px] mobile:text-[30px]"
+                      className="touch:h-[30px] touch:w-[30px] touch:text-[30px]"
                     />
                   </button>
                 ))}
@@ -427,7 +431,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                 : standardCategoryLabel}
           </div>
           <div
-            className="grid grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 mobile:grid-cols-[repeat(7,2.75rem)]"
+            className="grid grid-cols-[repeat(9,2rem)] content-start justify-center gap-0.5 touch:grid-cols-[repeat(7,2.75rem)]"
             role="list"
             aria-label={activeCategory === CUSTOM_CATEGORY_SLUG && !query.trim() ? 'Custom emojis' : 'Standard emojis'}
           >
@@ -438,7 +442,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                 role="listitem"
                 data-testid="emoji-picker-tile"
                 onClick={() => handlePick(`:${e.name}:`)}
-                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted mobile:h-11 mobile:w-11"
+                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
                 aria-label={`React with :${e.name}:`}
                 title={`:${e.name}:`}
               >
@@ -446,7 +450,7 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                   emoji={`:${e.name}:`}
                   customMap={{ [e.name]: e.imageURL }}
                   size="lg"
-                  className="mobile:h-[30px] mobile:w-[30px] mobile:text-[30px]"
+                  className="touch:h-[30px] touch:w-[30px] touch:text-[30px]"
                 />
               </button>
             ))}
@@ -460,14 +464,14 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
                   role="listitem"
                   data-testid="emoji-picker-tile"
                   onClick={() => handlePick(shortcode)}
-                  className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted mobile:h-11 mobile:w-11"
+                  className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted touch:h-11 touch:w-11"
                   aria-label={`React with ${shortcode}`}
                   title={shortcode}
                 >
                   <EmojiGlyph
                     emoji={supportsEmojiSkinTone(e.unicode) ? tonedEmoji : e.unicode}
                     size="lg"
-                    className="mobile:text-[30px]"
+                    className="touch:text-[30px]"
                   />
                 </button>
               );

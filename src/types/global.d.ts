@@ -66,6 +66,10 @@ declare global {
     // keyboard, false while it goes through the on-screen keyboard. Absent
     // everywhere else. See hooks/useHardwareKeyboard.ts.
     __EX_HARDWARE_KEYBOARD__?: boolean;
+    // Set by the ex-mobile iOS shell: true while a mouse or trackpad (iPad
+    // Magic Keyboard) is attached. Absent everywhere else — lib/device.ts then
+    // falls back to watching for real mouse input.
+    __EX_POINTER_DEVICE__?: boolean;
     Capacitor?: {
       isNativePlatform?: () => boolean;
       Plugins?: {
