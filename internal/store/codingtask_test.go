@@ -22,6 +22,7 @@ func mkCodingTaskFixture(id, threadRootID string) *model.CodingTask {
 		Goal:         "login button does nothing",
 		Kind:         "bug",
 		State:        model.TaskStateCreated,
+		ChannelID:    "ch-proj",
 		ThreadRootID: threadRootID,
 		RequesterID:  "u-alice",
 		AgentID:      "a-dev",
@@ -195,8 +196,8 @@ func TestTaskStore_ProjectLifecycle(t *testing.T) {
 	if err := s.CreateProject(ctx, mkCodingProjectFixture("acme")); !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("duplicate project: want ErrAlreadyExists, got %v", err)
 	}
-	if err := s.CreateProject(ctx, &model.CodingProject{Key: "half"}); err == nil {
-		t.Fatal("create without channelID: want error")
+	if err := s.CreateProject(ctx, &model.CodingProject{Name: "half"}); err == nil {
+		t.Fatal("create without key: want error")
 	}
 
 	p.Name = "Acme Corp"
