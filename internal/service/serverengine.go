@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/bedrock"
+	"github.com/DigitalTolk/ex/internal/connectordocs"
 	"github.com/DigitalTolk/ex/internal/model"
 )
 
@@ -288,10 +289,50 @@ func (e *ServerEngine) connectorTools(ctx context.Context, run *model.Run, progr
 			fmt.Fprintf(&desc, "- /%s — installed but NOT attached: call use_connector with a one-line reason; the invoker gets an approval card.\n", slug)
 		}
 	}
-	desc.WriteString("Read a service's _USAGE.md (and grep-worthy _catalog.tsv) with connector_doc " +
-		"BEFORE calling it; then use connector_call for the API itself.\n")
+	desc.WriteString("Find a service's endpoint with connector_lookup (query words, then route_id) " +
+		"BEFORE calling it — it replaces reading whole doc files; connector_doc reads one full file " +
+		"when lookup isn't enough; then use connector_call for the API itself.\n")
 
 	tools := []bedrock.Tool{
+		{
+			Name: "connector_lookup",
+			Description: "Find a connected service's endpoint WITHOUT reading whole doc files. Pass " +
+				"query (words from the question) to search the catalog — you get the matching rows " +
+				"(route_id, method+path, side effects, summary); a single match also inlines that " +
+				"endpoint's full contract block with every enum it references. Pass route_id for a " +
+				"known endpoint's contract directly. Prefer this over connector_doc.",
+			Schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"connector": map[string]any{"type": "string", "description": "Connector slug, e.g. 'cliffhub'."},
+					"query":     map[string]any{"type": "string", "description": "Search words from the question, e.g. 'leads pipeline'."},
+					"route_id":  map[string]any{"type": "string", "description": "Exact route id from the catalog, e.g. 'meetings.upcoming'."},
+					"service":   map[string]any{"type": "string", "description": "Optional route prefix scope, e.g. 'one_on_ones'."},
+				},
+				"required":             []string{"connector"},
+				"additionalProperties": false,
+			},
+			Call: func(_ context.Context, input json.RawMessage) (string, bool) {
+				var in struct {
+					Connector string `json:"connector"`
+					Query     string `json:"query"`
+					RouteID   string `json:"route_id"`
+					Service   string `json:"service"`
+				}
+				if err := json.Unmarshal(input, &in); err != nil {
+					return "bad input: " + err.Error(), true
+				}
+				c, ok := surface.get(in.Connector)
+				if !ok {
+					return notAttachedMsg(in.Connector), true
+				}
+				files := make([]connectordocs.File, 0, len(c.Files))
+				for _, f := range c.Files {
+					files = append(files, connectordocs.File{Name: f.Name, Content: f.Content})
+				}
+				return connectordocs.Lookup(files, c.Slug, in.Query, in.RouteID, in.Service)
+			},
+		},
 		{
 			Name: "connector_doc",
 			Description: "Read one doc file of a connected service (start with _USAGE.md, then " +
@@ -344,8 +385,8 @@ func (e *ServerEngine) connectorTools(ctx context.Context, run *model.Run, progr
 		{
 			Name: "connector_call",
 			Description: "Call a connected external service API (the /connector picked for this " +
-				"task). Auth is handled for you. Look the endpoint up in the connector docs FIRST " +
-				"(connector_doc), then call it. Use query for query-string params (keep pages " +
+				"task). Auth is handled for you. Look the endpoint up FIRST (connector_lookup), " +
+				"then call it. Use query for query-string params (keep pages " +
 				"small) and body for JSON bodies. DELETE is not available in server runs.",
 			Schema: map[string]any{
 				"type": "object",
@@ -568,6 +609,8 @@ func toolDetail(tool, rawInput string) string {
 		Path      string `json:"path"`
 		File      string `json:"file"`
 		Reason    string `json:"reason"`
+		Query     string `json:"query"`
+		RouteID   string `json:"route_id"`
 	}
 	if err := json.Unmarshal([]byte(rawInput), &in); err != nil {
 		return clipText(rawInput, 120)
@@ -581,6 +624,15 @@ func toolDetail(tool, rawInput string) string {
 		return in.Connector + " API: " + m + " " + in.Path
 	case "connector_doc":
 		return in.Connector + " doc: " + in.File
+	case "connector_lookup":
+		q := in.Query
+		if in.RouteID != "" {
+			if q != "" {
+				q += " "
+			}
+			q += "route " + in.RouteID
+		}
+		return in.Connector + " lookup: " + q
 	case "use_connector":
 		return "attach /" + in.Connector + ": " + clipText(in.Reason, 80)
 	default:

@@ -110,26 +110,43 @@ func Run(ctx context.Context, client Client, cfg Config) (string, Usage, error) 
 	var usage Usage
 	var lastText string
 
+	// Prompt caching (Claude models): without checkpoints, Converse re-bills
+	// the ENTIRE history as fresh input on every round-trip, so a run's input
+	// spend grows quadratically with tool calls. One checkpoint after system
+	// caches the fixed prefix (tool defs + rules); a per-request checkpoint on
+	// the last message caches the growing history — msgs is append-only, so
+	// each request's history is a strict prefix of the next and prior
+	// checkpoints become cache hits.
+	cache := strings.Contains(cfg.ModelID, "anthropic.claude")
+	system := []types.SystemContentBlock{&types.SystemContentBlockMemberText{Value: cfg.System}}
+	if cache {
+		system = append(system, &types.SystemContentBlockMemberCachePoint{Value: types.CachePointBlock{Type: types.CachePointTypeDefault}})
+	}
+
 	for iter := 0; iter < maxIters; iter++ {
 		out, err := client.Converse(ctx, &bedrockruntime.ConverseInput{
 			ModelId:         aws.String(cfg.ModelID),
-			System:          []types.SystemContentBlock{&types.SystemContentBlockMemberText{Value: cfg.System}},
-			Messages:        msgs,
+			System:          system,
+			Messages:        cachedMessages(msgs, cache),
 			ToolConfig:      toolCfg,
 			InferenceConfig: &types.InferenceConfiguration{MaxTokens: aws.Int32(maxTokens)},
 		})
 		if err != nil {
 			return lastText, usage, fmt.Errorf("bedrock: converse: %w", err)
 		}
-		var turnIn, turnOut int64
+		var turnIn, turnOut, cacheRead, cacheWrite int64
 		if out.Usage != nil {
-			turnIn, turnOut = int64(aws.ToInt32(out.Usage.InputTokens)), int64(aws.ToInt32(out.Usage.OutputTokens))
+			cacheRead, cacheWrite = int64(aws.ToInt32(out.Usage.CacheReadInputTokens)), int64(aws.ToInt32(out.Usage.CacheWriteInputTokens))
+			// FRESH input is uncached input + cache writes; cache READS are
+			// near-free re-reads of the shared prefix and must not count
+			// against the run's token limits (mirrors the CLI harness).
+			turnIn, turnOut = int64(aws.ToInt32(out.Usage.InputTokens))+cacheWrite, int64(aws.ToInt32(out.Usage.OutputTokens))
 			usage.InputTokens += turnIn
 			usage.OutputTokens += turnOut
 		}
 		// One "turn" per Converse round-trip, carrying that trip's token spend —
 		// the caller's live ledger (turn/token limits) feeds on these.
-		emit(cfg.OnEvent, "turn", map[string]any{"inputTokens": turnIn, "outputTokens": turnOut})
+		emit(cfg.OnEvent, "turn", map[string]any{"inputTokens": turnIn, "outputTokens": turnOut, "cacheRead": cacheRead, "cacheWrite": cacheWrite})
 
 		reply, ok := out.Output.(*types.ConverseOutputMemberMessage)
 		if !ok || reply == nil {
@@ -237,4 +254,20 @@ func emit(fn func(string, map[string]any), kind string, payload map[string]any) 
 	if fn != nil {
 		fn(kind, payload)
 	}
+}
+
+// cachedMessages decorates the request with a prompt-cache checkpoint on the
+// LAST message. The history itself is never mutated — the checkpoint is
+// request-scoped, re-derived each round-trip, so checkpoints never stack up
+// inside msgs as the conversation grows.
+func cachedMessages(msgs []types.Message, cache bool) []types.Message {
+	if !cache || len(msgs) == 0 {
+		return msgs
+	}
+	out := append([]types.Message{}, msgs...)
+	last := out[len(out)-1]
+	content := append(append([]types.ContentBlock{}, last.Content...),
+		&types.ContentBlockMemberCachePoint{Value: types.CachePointBlock{Type: types.CachePointTypeDefault}})
+	out[len(out)-1] = types.Message{Role: last.Role, Content: content}
+	return out
 }

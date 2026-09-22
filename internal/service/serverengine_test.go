@@ -539,6 +539,33 @@ func TestServerEngine_DocToolArms(t *testing.T) {
 	}
 }
 
+func TestServerEngine_LookupToolArms(t *testing.T) {
+	st := newMemConnectorStore()
+	st.connectors["hub"] = &model.Connector{Slug: "hub", Title: "Hub", BaseURL: "https://hub.example.net", AuthKind: model.ConnectorAuthPaste, FileNames: []string{"_catalog.tsv", "api.yaml"}}
+	st.files["hub"] = []model.ConnectorFile{
+		{Slug: "hub", Name: "_catalog.tsv", Content: "people.list\tGET /api/people\tnone\tuser\tList people\tpeople\n"},
+		{Slug: "hub", Name: "api.yaml", Content: "eps:\n  - id: people.list\n    method: GET\n"},
+	}
+	st.installs["u1#hub"] = &model.ConnectorInstall{UserID: "u1", ConnectorSlug: "hub", Token: "t"}
+	fx := newOrchFixture(t)
+	e := &ServerEngine{orch: fx.orch, connectors: NewConnectorService(st), http: &http.Client{}}
+	tools, desc, err := e.buildTools(context.Background(), &model.Run{InvokerID: "u1", ConnectorSlugs: []string{"hub"}}, "", func(string) {})
+	if err != nil || !strings.Contains(desc, "connector_lookup") {
+		t.Fatalf("buildTools must advertise lookup: %v %q", err, desc)
+	}
+	look := toolByName(t, tools, "connector_lookup").Call
+	if out, isErr := look(context.Background(), json.RawMessage(`not json`)); !isErr || !strings.Contains(out, "bad input") {
+		t.Fatalf("bad input: %q", out)
+	}
+	if out, isErr := look(context.Background(), json.RawMessage(`{"connector":"ghost","query":"people"}`)); !isErr || !strings.Contains(out, "not attached") {
+		t.Fatalf("unknown connector: %q", out)
+	}
+	out, isErr := look(context.Background(), json.RawMessage(`{"connector":"hub","query":"list people"}`))
+	if isErr || !strings.Contains(out, "people.list | GET /api/people") || !strings.Contains(out, "--- contract: people.list") {
+		t.Fatalf("lookup: %q %v", out, isErr)
+	}
+}
+
 func TestServerEngine_ConnectorCallSeamsAndBody(t *testing.T) {
 	var gotBody string
 	big := strings.Repeat("z", connectorResponseCap+100)
@@ -1002,6 +1029,9 @@ func TestToolDetail(t *testing.T) {
 		{"connector_call", `{"connector":"hub","path":"api/people"}`, "hub API: GET api/people"},
 		{"connector_call", `{"connector":"hub","method":"post","path":"api/x"}`, "hub API: POST api/x"},
 		{"connector_doc", `{"connector":"hub","file":"_USAGE.md"}`, "hub doc: _USAGE.md"},
+		{"connector_lookup", `{"connector":"hub","query":"leads"}`, "hub lookup: leads"},
+		{"connector_lookup", `{"connector":"hub","query":"leads","route_id":"crm.leads"}`, "hub lookup: leads route crm.leads"},
+		{"connector_lookup", `{"connector":"hub","route_id":"crm.leads"}`, "hub lookup: route crm.leads"},
 		{"use_connector", `{"connector":"hub","reason":"need people data"}`, "attach /hub: need people data"},
 		{"mystery_tool", `{"x":1}`, `{"x":1}`},
 		{"connector_call", `not json`, "not json"},

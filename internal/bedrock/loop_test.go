@@ -281,3 +281,72 @@ func TestRun_ToolCallInputPreviewClipped(t *testing.T) {
 		t.Fatalf("input preview must clip to 240, got %d", len(preview))
 	}
 }
+
+// Claude models get prompt-cache checkpoints: one fixed after system, one
+// request-scoped on the last message — and cache reads never count as fresh
+// input, while cache writes do.
+func TestRun_PromptCacheCheckpoints(t *testing.T) {
+	tool := toolOut("lookup", map[string]any{"q": "x"})
+	tool.Usage = &types.TokenUsage{
+		InputTokens:           aws.Int32(7),
+		OutputTokens:          aws.Int32(3),
+		CacheWriteInputTokens: aws.Int32(900),
+	}
+	done := textOut(types.StopReasonEndTurn, "done", 5, 2)
+	done.Usage.CacheReadInputTokens = aws.Int32(900)
+	c := &fakeClient{outs: []*bedrockruntime.ConverseOutput{tool, done}}
+
+	_, usage, err := Run(context.Background(), c, Config{
+		ModelID: "eu.anthropic.claude-opus-5-v1", System: "s", Prompt: "p",
+		Tools: []Tool{{Name: "lookup", Schema: map[string]any{}, Call: func(context.Context, json.RawMessage) (string, bool) { return "hit", false }}},
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// Fresh input = uncached + cache writes; the 900 cached read on trip 2 is free.
+	if usage.InputTokens != 7+900+5 || usage.OutputTokens != 5 {
+		t.Fatalf("usage: %+v", usage)
+	}
+	for i, call := range c.calls {
+		if n := len(call.System); n != 2 {
+			t.Fatalf("call %d: system blocks = %d, want text + cachePoint", i, n)
+		}
+		if _, ok := call.System[1].(*types.SystemContentBlockMemberCachePoint); !ok {
+			t.Fatalf("call %d: system[1] is %T, want cachePoint", i, call.System[1])
+		}
+		last := call.Messages[len(call.Messages)-1].Content
+		if _, ok := last[len(last)-1].(*types.ContentBlockMemberCachePoint); !ok {
+			t.Fatalf("call %d: last block is %T, want cachePoint", i, last[len(last)-1])
+		}
+		// Request-scoped decoration only: HISTORY messages carry no checkpoints.
+		for m, msg := range call.Messages[:len(call.Messages)-1] {
+			for _, b := range msg.Content {
+				if _, ok := b.(*types.ContentBlockMemberCachePoint); ok {
+					t.Fatalf("call %d: stacked cachePoint in history message %d", i, m)
+				}
+			}
+		}
+	}
+}
+
+// Non-Claude models get no checkpoints (Converse rejects them), and the empty
+// guard leaves an empty history alone.
+func TestCachedMessages_Gating(t *testing.T) {
+	msgs := []types.Message{{Role: types.ConversationRoleUser, Content: []types.ContentBlock{&types.ContentBlockMemberText{Value: "p"}}}}
+	if got := cachedMessages(msgs, false); len(got[0].Content) != 1 {
+		t.Fatalf("cache=false must pass messages through, got %d blocks", len(got[0].Content))
+	}
+	if got := cachedMessages(nil, true); got != nil {
+		t.Fatalf("empty history must stay empty, got %v", got)
+	}
+	if got := cachedMessages(msgs, true); len(msgs[0].Content) != 1 || len(got[0].Content) != 2 {
+		t.Fatal("cache=true must decorate a copy, never the history itself")
+	}
+	c := &fakeClient{outs: []*bedrockruntime.ConverseOutput{textOut(types.StopReasonEndTurn, "ok", 1, 1)}}
+	if _, _, err := Run(context.Background(), c, Config{ModelID: "m", System: "s", Prompt: "p"}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(c.calls[0].System) != 1 {
+		t.Fatalf("non-claude model must not get a system cachePoint")
+	}
+}
