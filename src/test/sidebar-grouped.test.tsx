@@ -190,9 +190,9 @@ describe('Sidebar grouped rendering', () => {
     renderSidebar();
     const scrollArea = screen.getByTestId('sidebar-scroll-area');
     expect(scrollArea.parentElement).toHaveClass(
-      'touch:select-none',
-      'touch:[-webkit-touch-callout:none]',
-      'touch:[-webkit-user-select:none]',
+      'no-pointer:select-none',
+      'no-pointer:[-webkit-touch-callout:none]',
+      'no-pointer:[-webkit-user-select:none]',
     );
     expect(scrollArea).toHaveClass('min-h-0', 'flex-1');
     expect(scrollArea.querySelector('[data-slot="scroll-area-scrollbar"]')).toHaveClass(

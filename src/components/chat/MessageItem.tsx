@@ -753,7 +753,7 @@ function MessageItemImpl({
       }}
       className={`relative flex items-start gap-3 rounded-md px-2 ${firstInGroup ? 'py-1.5' : 'py-0.5'} hover:bg-chat-hover ${
         message.pinned ? 'border-l-2 border-pinned pl-2' : ''
-      } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]`}
+      } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} no-pointer:select-none no-pointer:touch-pan-y no-pointer:[-webkit-touch-callout:none] no-pointer:[-webkit-user-select:none]`}
     >
       {firstInGroup ? (
         <UserHoverCard
@@ -1010,7 +1010,7 @@ function MessageItemImpl({
 
       {!isEditing && !message.deleted && (
         <div
-          className="absolute right-2 -top-3 flex items-center gap-0.5 rounded-md border bg-background shadow-sm transition-opacity touch:hidden"
+          className="absolute right-2 -top-3 flex items-center gap-0.5 rounded-md border bg-background shadow-sm transition-opacity no-pointer:hidden"
           style={{ opacity: toolbarVisible ? 1 : 0 }}
           data-actions-pinned={actionsMenuOpen ? 'true' : 'false'}
           data-actions-visible={toolbarVisible ? 'true' : 'false'}

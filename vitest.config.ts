@@ -52,6 +52,13 @@ export default defineConfig({
     // oversubscribes the machine badly enough to flake timing-sensitive
     // tests that pass in isolation.
     maxWorkers: '50%',
+    // Retry budget for "wait until the UI settles" assertions. The default is
+    // 1s, which on a loaded CI runner is what separates "slow" from "broken":
+    // a real-hover spec polling for an opacity change, or a waitFor on an
+    // async mutation, loses the race and fails while passing everywhere else.
+    // A genuinely broken assertion still fails — it just takes longer to say
+    // so. `expect.element()` in the browser projects polls through this too.
+    expect: { poll: { timeout: 5_000 } },
     coverage: {
       provider: 'istanbul',
       // json-summary writes coverage/coverage-summary.json with the merged
