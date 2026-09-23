@@ -2020,13 +2020,19 @@ func TestOrchCov_OnLeaseExpiredArms(t *testing.T) {
 }
 
 func TestOrchCov_LeaseTimerFiresAndFailsRun(t *testing.T) {
+	// A lapsed lease re-arms at the floor, never a negative delay (the
+	// negative-delay hot loop melted CI on 2026-09-23). Shrink the floor so
+	// the fire is immediate for the test.
+	old := leaseRetryFloor
+	leaseRetryFloor = 10 * time.Millisecond
+	t.Cleanup(func() { leaseRetryFloor = old })
 	fx := newOrchCovFixture(t)
 	run := fx.start(t, "m1", "")
 	fx.claim(t)
-	// Lapse the lease in orchestrator time, then re-arm the timer with a
-	// wall-clock lease already in the past so AfterFunc fires immediately.
+	// Lapse the lease in orchestrator time, then re-arm with a lease already
+	// past on the orchestrator's own clock so the floor path fires.
 	*fx.now = fx.now.Add(runLeaseTTL + time.Minute)
-	fx.orch.armLeaseTimer(run.ID, time.Now().Add(-5*time.Second))
+	fx.orch.armLeaseTimer(run.ID, fx.now.Add(-5*time.Second))
 	orchCovWait(t, "lease timer to fail the run", func() bool {
 		got, _ := fx.runs.fakeRunStore.GetRun(context.Background(), run.ID)
 		return got.State == model.RunStateFailed && got.FailReason == "runner_lost"

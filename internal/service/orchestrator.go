@@ -2437,8 +2437,21 @@ func (o *Orchestrator) onLeaseExpired(runID string) {
 	}
 }
 
+// leaseRetryFloor is the minimum lease-timer delay. However clocks disagree,
+// a lease timer must never re-fire in a hot loop. A var so tests can shrink.
+var leaseRetryFloor = time.Second
+
 func (o *Orchestrator) armLeaseTimer(runID string, lease time.Time) {
-	d := time.Until(lease) + 2*time.Second // small grace for clock skew
+	// The delay MUST derive from the same clock as every lease comparison
+	// (o.now — a test seam). Mixing time.Until's wall clock with a frozen
+	// test clock made expired timers re-arm with a negative delay forever:
+	// onLeaseExpired saw "renewed" (fake now), re-armed "already past" (real
+	// now), and fired again instantly — millions of goroutines across a CI
+	// run until the package timeout (2026-09-23).
+	d := lease.Sub(o.now()) + 2*time.Second // small grace for clock skew
+	if d < leaseRetryFloor {
+		d = leaseRetryFloor
+	}
 	if t, ok := o.timers.Load(runID); ok {
 		t.(*time.Timer).Reset(d)
 		return
