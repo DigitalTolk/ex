@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
@@ -348,5 +349,63 @@ func TestCachedMessages_Gating(t *testing.T) {
 	}
 	if len(c.calls[0].System) != 1 {
 		t.Fatalf("non-claude model must not get a system cachePoint")
+	}
+}
+
+// A turn's tool calls run CONCURRENTLY (wall clock = slowest call, not the
+// sum) while results still return in request order. The two tools rendezvous:
+// each returns "ok" only if the other has already started — serial execution
+// would leave the first stuck until its 2s bailout.
+func TestRun_ParallelToolExecution(t *testing.T) {
+	multi := &bedrockruntime.ConverseOutput{
+		StopReason: types.StopReasonToolUse,
+		Usage:      &types.TokenUsage{InputTokens: aws.Int32(5), OutputTokens: aws.Int32(2)},
+		Output: &types.ConverseOutputMemberMessage{Value: types.Message{
+			Role: types.ConversationRoleAssistant,
+			Content: []types.ContentBlock{
+				&types.ContentBlockMemberToolUse{Value: types.ToolUseBlock{ToolUseId: aws.String("tu-a"), Name: aws.String("a"), Input: document.NewLazyDocument(map[string]any{})}},
+				&types.ContentBlockMemberToolUse{Value: types.ToolUseBlock{ToolUseId: aws.String("tu-b"), Name: aws.String("b"), Input: document.NewLazyDocument(map[string]any{})}},
+			},
+		}},
+	}
+	c := &fakeClient{outs: []*bedrockruntime.ConverseOutput{multi, textOut(types.StopReasonEndTurn, "done", 1, 1)}}
+	aStarted, bStarted := make(chan struct{}), make(chan struct{})
+	rendezvous := func(mine, other chan struct{}) func(context.Context, json.RawMessage) (string, bool) {
+		return func(context.Context, json.RawMessage) (string, bool) {
+			close(mine)
+			select {
+			case <-other:
+				return "ok", false
+			case <-time.After(2 * time.Second):
+				return "still serial", true
+			}
+		}
+	}
+	var kinds []string
+	_, _, err := Run(context.Background(), c, Config{
+		ModelID: "m", System: "s", Prompt: "p",
+		Tools: []Tool{
+			{Name: "a", Schema: map[string]any{}, Call: rendezvous(aStarted, bStarted)},
+			{Name: "b", Schema: map[string]any{}, Call: rendezvous(bStarted, aStarted)},
+		},
+		OnEvent: func(kind string, _ map[string]any) { kinds = append(kinds, kind) },
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	last := c.calls[1].Messages[len(c.calls[1].Messages)-1]
+	tr0 := last.Content[0].(*types.ContentBlockMemberToolResult).Value
+	tr1 := last.Content[1].(*types.ContentBlockMemberToolResult).Value
+	if aws.ToString(tr0.ToolUseId) != "tu-a" || aws.ToString(tr1.ToolUseId) != "tu-b" {
+		t.Fatalf("results out of request order: %v %v", tr0.ToolUseId, tr1.ToolUseId)
+	}
+	for i, tr := range []types.ToolResultBlock{tr0, tr1} {
+		if got := tr.Content[0].(*types.ToolResultContentBlockMemberText).Value; got != "ok" {
+			t.Fatalf("tool %d did not run concurrently: %q", i, got)
+		}
+	}
+	// Every call is announced before any result lands (OnEvent stays ordered).
+	if !strings.Contains(strings.Join(kinds, ","), "tool_call,tool_call,tool_result,tool_result") {
+		t.Fatalf("event order: %v", kinds)
 	}
 }

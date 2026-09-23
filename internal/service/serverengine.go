@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -292,7 +293,11 @@ func (e *ServerEngine) connectorTools(ctx context.Context, run *model.Run, progr
 	desc.WriteString("Find a service's endpoint with connector_lookup (query words, then route_id) " +
 		"BEFORE calling it — it replaces reading whole doc files; connector_doc reads one full file " +
 		"when lookup isn't enough; then use connector_call for the API itself.\n")
+	desc.WriteString("Who the invoker is on a service (name, email, ids): connector_doc file " +
+		"\"_identity.json\" — captured at connect time; NEVER call auth/me-style endpoints for it.\n")
 
+	// One repeat-call cache per run (see connectorCall).
+	callMemo := &sync.Map{}
 	tools := []bedrock.Tool{
 		{
 			Name: "connector_lookup",
@@ -401,7 +406,7 @@ func (e *ServerEngine) connectorTools(ctx context.Context, run *model.Run, progr
 				"additionalProperties": false,
 			},
 			Call: func(callCtx context.Context, input json.RawMessage) (string, bool) {
-				return e.connectorCall(callCtx, surface.get, input)
+				return e.connectorCall(callCtx, surface.get, input, callMemo)
 			},
 		},
 	}
@@ -786,7 +791,10 @@ func (e *ServerEngine) workspaceTools(run *model.Run) []bedrock.Tool {
 // The URL is derived from the connector's stored base — the model supplies
 // only the path — and the same outbound-URL gate that guards ingestion guards
 // the final URL, so a crafted path can't retarget the credential.
-func (e *ServerEngine) connectorCall(ctx context.Context, lookup func(string) (RunnerConnector, bool), input json.RawMessage) (string, bool) {
+// connectorCall proxies one API call. memo is the run's repeat-call cache:
+// a model that re-issues a byte-identical GET (it happens after slow answers)
+// gets the earlier result instantly instead of hitting the service again.
+func (e *ServerEngine) connectorCall(ctx context.Context, lookup func(string) (RunnerConnector, bool), input json.RawMessage, memo *sync.Map) (string, bool) {
 	var in struct {
 		Connector string            `json:"connector"`
 		Method    string            `json:"method"`
@@ -848,8 +856,22 @@ func (e *ServerEngine) connectorCall(ctx context.Context, lookup func(string) (R
 	if bodyReader != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	// Repeat-call cache (successful GETs only): the full URL carries the query,
+	// so only a byte-identical read hits.
+	memoKey := method + " " + full
+	if method == http.MethodGet && memo != nil {
+		if cached, ok := memo.Load(memoKey); ok {
+			return "[repeat of an identical call this run — cached result; the data has NOT been re-fetched]\n" + cached.(string), false
+		}
+	}
 	res, err := e.http.Do(req)
 	if err != nil {
+		// A slow service reads as a transport error; the raw Go text ("context
+		// deadline exceeded") makes models retry blind. Say what to do instead.
+		var ne net.Error
+		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
+			return fmt.Sprintf("the service did not answer within %s — retry ONCE with a smaller page (e.g. per_page=10) or fewer filters; if that also times out, STOP and report the service as slow. Never repeat the identical call.", connectorHTTPTimeout), true
+		}
 		return "request failed: " + err.Error(), true
 	}
 	defer func() { _ = res.Body.Close() }()
@@ -859,7 +881,11 @@ func (e *ServerEngine) connectorCall(ctx context.Context, lookup func(string) (R
 		body = body[:connectorResponseCap]
 		clipped = "\n…[response truncated]"
 	}
-	return fmt.Sprintf("HTTP %d\n%s%s", res.StatusCode, string(body), clipped), res.StatusCode >= 400
+	out := fmt.Sprintf("HTTP %d\n%s%s", res.StatusCode, string(body), clipped)
+	if method == http.MethodGet && memo != nil && res.StatusCode < 400 {
+		memo.Store(memoKey, out)
+	}
+	return out, res.StatusCode >= 400
 }
 
 // serverSystemRules is the server-run counterpart of the desktop runner's

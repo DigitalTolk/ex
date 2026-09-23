@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -233,7 +234,7 @@ func TestServerEngine_ConnectorCallGuards(t *testing.T) {
 	bySlug := map[string]RunnerConnector{"hub": {Slug: "hub", BaseURL: api.URL, Token: "t"}}
 
 	call := func(input string) (string, bool) {
-		return e.connectorCall(context.Background(), mapLookup(bySlug), json.RawMessage(input))
+		return e.connectorCall(context.Background(), mapLookup(bySlug), json.RawMessage(input), nil)
 	}
 	if out, isErr := call(`{"connector":"nope","path":"x"}`); !isErr || !strings.Contains(out, "not attached") {
 		t.Fatalf("unknown connector: %q", out)
@@ -255,7 +256,7 @@ func TestServerEngine_ConnectorCallGuards(t *testing.T) {
 	}
 	// A base that can't form a valid URL dies at request construction.
 	broken := map[string]RunnerConnector{"hub": {Slug: "hub", BaseURL: "ht tp://broken", Token: "t"}}
-	if out, isErr := e.connectorCall(context.Background(), mapLookup(broken), json.RawMessage(`{"connector":"hub","path":"x"}`)); !isErr || !strings.Contains(out, "request build failed") {
+	if out, isErr := e.connectorCall(context.Background(), mapLookup(broken), json.RawMessage(`{"connector":"hub","path":"x"}`), nil); !isErr || !strings.Contains(out, "request build failed") {
 		t.Fatalf("unparsable base: %q", out)
 	}
 	// The outbound gate itself: under the production posture (no private
@@ -579,7 +580,7 @@ func TestServerEngine_ConnectorCallSeamsAndBody(t *testing.T) {
 	bySlug := map[string]RunnerConnector{"hub": {Slug: "hub", BaseURL: api.URL, Token: "t"}}
 
 	// Happy POST with body — response over the cap gets truncated.
-	out, isErr := e.connectorCall(context.Background(), mapLookup(bySlug), json.RawMessage(`{"connector":"hub","method":"POST","path":"x","body":{"a":1}}`))
+	out, isErr := e.connectorCall(context.Background(), mapLookup(bySlug), json.RawMessage(`{"connector":"hub","method":"POST","path":"x","body":{"a":1}}`), nil)
 	if isErr || !strings.Contains(out, "HTTP 200") || !strings.Contains(out, "[response truncated]") {
 		t.Fatalf("post+truncate: err=%v %q", isErr, out[:80])
 	}
@@ -590,7 +591,7 @@ func TestServerEngine_ConnectorCallSeamsAndBody(t *testing.T) {
 	// Seam: body marshal failure.
 	old := marshalJSON
 	marshalJSON = func(any) ([]byte, error) { return nil, errors.New("marshal boom") }
-	out, isErr = e.connectorCall(context.Background(), mapLookup(bySlug), json.RawMessage(`{"connector":"hub","path":"x","body":{}}`))
+	out, isErr = e.connectorCall(context.Background(), mapLookup(bySlug), json.RawMessage(`{"connector":"hub","path":"x","body":{}}`), nil)
 	marshalJSON = old
 	if !isErr || !strings.Contains(out, "bad body") {
 		t.Fatalf("marshal seam: %q", out)
@@ -601,7 +602,7 @@ func TestServerEngine_ConnectorCallSeamsAndBody(t *testing.T) {
 	newRequest = func(context.Context, string, string, io.Reader) (*http.Request, error) {
 		return nil, errors.New("request boom")
 	}
-	out, isErr = e.connectorCall(context.Background(), mapLookup(bySlug), json.RawMessage(`{"connector":"hub","path":"x"}`))
+	out, isErr = e.connectorCall(context.Background(), mapLookup(bySlug), json.RawMessage(`{"connector":"hub","path":"x"}`), nil)
 	newRequest = oldReq
 	if !isErr || !strings.Contains(out, "request build failed") {
 		t.Fatalf("request seam: %q", out)
@@ -609,7 +610,7 @@ func TestServerEngine_ConnectorCallSeamsAndBody(t *testing.T) {
 
 	// Transport failure: server gone.
 	api.Close()
-	out, isErr = e.connectorCall(context.Background(), mapLookup(bySlug), json.RawMessage(`{"connector":"hub","path":"x"}`))
+	out, isErr = e.connectorCall(context.Background(), mapLookup(bySlug), json.RawMessage(`{"connector":"hub","path":"x"}`), nil)
 	if !isErr || !strings.Contains(out, "request failed") {
 		t.Fatalf("transport arm: %q", out)
 	}
@@ -1436,5 +1437,75 @@ func TestServerEngine_UseConnectorFullDispatch(t *testing.T) {
 	}
 	if !strings.Contains(fx.msgs.lastPost(), "you're free") {
 		t.Fatalf("final text: %q", fx.msgs.lastPost())
+	}
+}
+
+// The connector_call seams added for the CS run-log findings: identical GETs
+// are served from a per-run memo (slow services get hit once), timeouts come
+// back as actionable guidance instead of a Go transport error, and the tool
+// surface steers identity questions to _identity.json.
+func TestServerEngine_ConnectorCallMemoAndTimeout(t *testing.T) {
+	var hits int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		switch r.URL.Path {
+		case "/slow":
+			time.Sleep(300 * time.Millisecond)
+		case "/fail":
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+		_, _ = w.Write([]byte(r.Method + " " + r.URL.RequestURI()))
+	}))
+	defer api.Close()
+
+	st := newMemConnectorStore()
+	st.connectors["hub"] = &model.Connector{Slug: "hub", Title: "Hub", BaseURL: api.URL, AuthKind: model.ConnectorAuthPaste, FileNames: []string{"api.yaml"}}
+	st.files["hub"] = []model.ConnectorFile{{Slug: "hub", Name: "api.yaml", Content: "eps: []"}}
+	st.installs["u1#hub"] = &model.ConnectorInstall{UserID: "u1", ConnectorSlug: "hub", Token: "t"}
+	fx := newOrchFixture(t)
+	e := &ServerEngine{orch: fx.orch, connectors: NewConnectorService(st), http: &http.Client{Timeout: 100 * time.Millisecond}}
+	tools, desc, err := e.buildTools(context.Background(), &model.Run{InvokerID: "u1", ConnectorSlugs: []string{"hub"}}, "", func(string) {})
+	if err != nil || !strings.Contains(desc, `"_identity.json"`) {
+		t.Fatalf("desc must steer identity reads to _identity.json: err=%v", err)
+	}
+	call := toolByName(t, tools, "connector_call").Call
+
+	get := json.RawMessage(`{"connector":"hub","path":"api/people","query":{"page":"1"}}`)
+	out, isErr := call(context.Background(), get)
+	if isErr || !strings.Contains(out, "GET /api/people?page=1") {
+		t.Fatalf("first GET: %q %v", out, isErr)
+	}
+	out, isErr = call(context.Background(), get)
+	if isErr || !strings.HasPrefix(out, "[repeat of an identical call") || !strings.Contains(out, "GET /api/people?page=1") {
+		t.Fatalf("second identical GET must serve from memo: %q %v", out, isErr)
+	}
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Fatalf("memo missed: %d upstream hits", n)
+	}
+	// A different query is a different call.
+	if out, _ = call(context.Background(), json.RawMessage(`{"connector":"hub","path":"api/people","query":{"page":"2"}}`)); strings.HasPrefix(out, "[repeat") {
+		t.Fatalf("different query must not hit the memo: %q", out)
+	}
+	// Writes are never memoized — two identical POSTs both reach upstream.
+	post := json.RawMessage(`{"connector":"hub","method":"POST","path":"api/people"}`)
+	before := atomic.LoadInt32(&hits)
+	_, _ = call(context.Background(), post)
+	_, _ = call(context.Background(), post)
+	if atomic.LoadInt32(&hits) != before+2 {
+		t.Fatal("POSTs must never be served from the memo")
+	}
+	// Failed GETs are not cached: both attempts reach upstream.
+	fail := json.RawMessage(`{"connector":"hub","path":"fail"}`)
+	before = atomic.LoadInt32(&hits)
+	if _, isErr = call(context.Background(), fail); !isErr {
+		t.Fatal("HTTP 500 must be an error result")
+	}
+	if _, isErr = call(context.Background(), fail); !isErr || atomic.LoadInt32(&hits) != before+2 {
+		t.Fatal("failed GETs must not be memoized")
+	}
+	// A timeout reads as instructions, not a transport error.
+	out, isErr = call(context.Background(), json.RawMessage(`{"connector":"hub","path":"slow"}`))
+	if !isErr || !strings.Contains(out, "did not answer within") || !strings.Contains(out, "retry ONCE") {
+		t.Fatalf("timeout text: %q %v", out, isErr)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
@@ -180,28 +181,51 @@ func Run(ctx context.Context, client Client, cfg Config) (string, Usage, error) 
 			return lastText, usage, ErrNoProgress
 		}
 
-		// Execute every requested tool; results ride back as ONE user message,
-		// which is what Converse requires for multi-tool turns.
-		var results []types.ContentBlock
-		for _, tu := range toolUses {
-			name := aws.ToString(tu.Name)
-			raw := documentJSON(tu.Input)
+		// Execute every requested tool CONCURRENTLY — the model batches
+		// independent calls on purpose, so a turn's wall clock should be its
+		// slowest call, not the sum (one slow upstream was costing 30s per
+		// call, serially). Results still ride back as ONE user message in
+		// request order, and OnEvent stays single-goroutine: calls are
+		// announced before the fan-out, results reported after it.
+		type outcome struct {
+			text  string
+			isErr bool
+		}
+		names := make([]string, len(toolUses))
+		raws := make([]json.RawMessage, len(toolUses))
+		outcomes := make([]outcome, len(toolUses))
+		for i, tu := range toolUses {
+			names[i] = aws.ToString(tu.Name)
+			raws[i] = documentJSON(tu.Input)
 			// The clipped input rides along so the run timeline can say what
 			// the call actually did, not just which tool ran.
-			inputPreview := string(raw)
+			inputPreview := string(raws[i])
 			if len(inputPreview) > 240 {
 				inputPreview = inputPreview[:240]
 			}
-			emit(cfg.OnEvent, "tool_call", map[string]any{"tool": name, "input": inputPreview})
-			text, isErr := callTool(ctx, tools, name, raw)
+			emit(cfg.OnEvent, "tool_call", map[string]any{"tool": names[i], "input": inputPreview})
+		}
+		var wg sync.WaitGroup
+		for i := range toolUses {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				text, isErr := callTool(ctx, tools, names[i], raws[i])
+				outcomes[i] = outcome{text: text, isErr: isErr}
+			}()
+		}
+		wg.Wait()
+		var results []types.ContentBlock
+		for i, tu := range toolUses {
+			text := outcomes[i].text
 			if len(text) > toolResultCap {
 				text = text[:toolResultCap] + "\n…[truncated]"
 			}
 			status := types.ToolResultStatusSuccess
-			if isErr {
+			if outcomes[i].isErr {
 				status = types.ToolResultStatusError
 			}
-			emit(cfg.OnEvent, "tool_result", map[string]any{"tool": name, "isError": isErr})
+			emit(cfg.OnEvent, "tool_result", map[string]any{"tool": names[i], "isError": outcomes[i].isErr})
 			results = append(results, &types.ContentBlockMemberToolResult{
 				Value: types.ToolResultBlock{
 					ToolUseId: tu.ToolUseId,
