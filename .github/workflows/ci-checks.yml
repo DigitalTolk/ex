@@ -87,11 +87,18 @@ jobs:
           github-token: ${{ github.token }}
 
   test-frontend:
-    # ONE frontend job: the jsdom + browser vitest projects run together so
-    # the 100% coverage gate applies to the MERGED report (the per-suite
-    # split no longer exists). Runs in the playwright container because the
-    # browser projects need its browsers; jsdom runs fine there too.
-    name: Frontend
+    # One job PER vitest project. They used to share a runner, where the four
+    # projects each ran files in parallel (maxWorkers is per project) and
+    # oversubscribed a 4-vCPU runner: assertions fired before their async work
+    # finished, jsdom tore down under a live File, and Playwright could not
+    # close a browser inside 10s. Splitting gives each project its own runner
+    # and, as a bonus, runs them at the same time.
+    #
+    # Each project writes a BLOB report; `test-frontend-coverage` merges them
+    # so the 100% gate still applies to the union, exactly as one run did.
+    # Per-project thresholds are switched off here because no single project
+    # covers everything — the merged report is the gate.
+    name: Frontend (${{ matrix.project }})
     runs-on: ubuntu-latest
     container:
       # Tag must track the playwright-core version in package-lock.json —
@@ -99,14 +106,55 @@ jobs:
       # fails with "Executable doesn't exist".
       image: ghcr.io/digitaltolk/docker-builder-playwright:1.61.1
     needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [jsdom, chromium-desktop, chromium-mobile, webkit-iphone]
     steps:
       - uses: actions/checkout@v7
 
       - name: Frontend deps
         run: npm ci
 
-      - name: Run vitest (all projects) with merged coverage
-        run: npx vitest run --coverage
+      - name: Run vitest (${{ matrix.project }})
+        run: >
+          npx vitest run --project ${{ matrix.project }}
+          --reporter=blob --outputFile=.vitest-reports/${{ matrix.project }}.json
+          --coverage
+          --coverage.thresholds.statements=0 --coverage.thresholds.branches=0
+          --coverage.thresholds.functions=0 --coverage.thresholds.lines=0
+
+      - name: Keep the blob report for the merge
+        uses: actions/upload-artifact@v7
+        with:
+          name: vitest-blob-${{ matrix.project }}
+          path: .vitest-reports/${{ matrix.project }}.json
+          retention-days: 1
+          if-no-files-found: error
+
+  test-frontend-coverage:
+    # The gate: merge every project's blob report and apply the thresholds to
+    # the union. `--merge-reports` re-runs nothing, so this is quick.
+    name: Frontend coverage
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/digitaltolk/docker-builder-playwright:1.61.1
+    needs: test-frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Frontend deps
+        run: npm ci
+
+      - name: Collect the projects' blob reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: vitest-blob-*
+          path: .vitest-reports
+          merge-multiple: true
+
+      - name: Merge reports and enforce the coverage gate
+        run: npx vitest --merge-reports=.vitest-reports --coverage
 
       - name: Coverage universe (no file silently ungraded)
         run: node scripts/check-coverage-universe.mjs
@@ -125,7 +173,7 @@ jobs:
     # combine them into a single report.
     name: Coverage
     runs-on: ubuntu-latest
-    needs: [test-backend, test-frontend]
+    needs: [test-backend, test-frontend-coverage]
     if: always()
     steps:
       - name: Coveralls Finished
