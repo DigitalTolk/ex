@@ -298,6 +298,11 @@ type Orchestrator struct {
 	// serverEngine executes API-harness runs in the backend (ExecutionServer).
 	// Optional: nil keeps server-mode invocations failing legibly.
 	serverEngine serverDispatcher
+
+	// skillPrefs supplies the invoker's hidden-skill set so the bundle's
+	// "# Workspace skills" index carries only what THEY chose to expose.
+	// Optional: nil means no per-user curation (every visible skill indexes).
+	skillPrefs skillPrefs
 }
 
 // serverDispatcher hands a queued run to the backend executor (ServerEngine;
@@ -306,11 +311,19 @@ type serverDispatcher interface {
 	Dispatch(runID string)
 }
 
+// skillPrefs is UserStateService narrowed to what bundle assembly needs.
+type skillPrefs interface {
+	HiddenSkillSet(ctx context.Context, userID string) (map[string]bool, error)
+}
+
 // SetTaskStore wires coding-task persistence (plan-coding-agent.md).
 func (o *Orchestrator) SetTaskStore(t orchestratorTasks) { o.tasks = t }
 
 // SetServerEngine wires the backend executor for server-mode API-harness runs.
 func (o *Orchestrator) SetServerEngine(e serverDispatcher) { o.serverEngine = e }
+
+// SetSkillPrefs wires per-user skill discovery curation into bundle assembly.
+func (o *Orchestrator) SetSkillPrefs(p skillPrefs) { o.skillPrefs = p }
 
 // NewOrchestrator wires the orchestrator.
 func NewOrchestrator(runs orchestratorRunStore, agentSvc *AgentService, users orchestratorUsers, messages orchestratorMessages, pub Publisher, tokens runTokenMinter) *Orchestrator {
@@ -2664,9 +2677,19 @@ func (b *bundleBuilder) skills() {
 		}
 	}
 	if skills, err := b.o.agentSvc.ListSkillIndex(b.ctx, b.run.InvokerID); err == nil {
+		// The invoker curates their own index: skills they hid don't appear —
+		// though an explicit /skill pick attaches one regardless (that path
+		// resolved above, before this filter). Lookup failure degrades to the
+		// uncurated index rather than dropping skills silently.
+		hidden := map[string]bool{}
+		if b.o.skillPrefs != nil {
+			if h, err := b.o.skillPrefs.HiddenSkillSet(b.ctx, b.run.InvokerID); err == nil {
+				hidden = h
+			}
+		}
 		var sb strings.Builder
 		for _, sk := range skills {
-			if attached[sk.ID] {
+			if attached[sk.ID] || hidden[sk.ID] {
 				continue
 			}
 			line := "- [sk:" + sk.ID + "] " + sk.Name + ": " + sk.Description + "\n"

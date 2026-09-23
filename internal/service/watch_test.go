@@ -327,7 +327,9 @@ func TestOrchestrator_ProposeReplyEditAndPost(t *testing.T) {
 
 type fakeNotifier struct{ got []Notification }
 
-func (f *fakeNotifier) NotifyDirect(_ context.Context, _ string, n Notification) { f.got = append(f.got, n) }
+func (f *fakeNotifier) NotifyDirect(_ context.Context, _ string, n Notification) {
+	f.got = append(f.got, n)
+}
 
 // A freshly-requested approval fires a distinct "approval" alert to the invoker
 // (desktop + mobile), on top of the live card. Settle updates don't re-alert.
@@ -771,5 +773,73 @@ func TestOrchestrator_MemoryInjectedPerInvoker(t *testing.T) {
 	// Size cap enforced.
 	if err := svc.UpdateMemory(context.Background(), "u-alice", testGGID, strings.Repeat("x", model.AgentMemoryMaxBytes+1)); err == nil {
 		t.Fatal("oversized memory accepted")
+	}
+}
+
+// Per-user curation: a skill the INVOKER hid disappears from their ambient
+// index — but hiding is discovery-only, so an explicitly attached skill still
+// rides the bundle with full instructions.
+func TestOrchestrator_SkillIndexHonorsHiddenSkills(t *testing.T) {
+	fx := newOrchFixture(t)
+	svc := NewAgentService(fx.dir, fx.users)
+
+	kept, err := svc.CreateSkill(context.Background(), "u-alice", "Release checklist", "How we ship", "1. tag 2. build", model.SkillVisibilityPublished)
+	if err != nil {
+		t.Fatalf("create kept: %v", err)
+	}
+	hidden, err := svc.CreateSkill(context.Background(), "u-alice", "Incident triage", "What to do when prod breaks", "page the on-call", model.SkillVisibilityPublished)
+	if err != nil {
+		t.Fatalf("create hidden: %v", err)
+	}
+	attachedHidden, err := svc.CreateSkill(context.Background(), "u-alice", "Retro notes", "How retros are written", "three columns, no blame", model.SkillVisibilityPublished)
+	if err != nil {
+		t.Fatalf("create attached: %v", err)
+	}
+	if _, err := svc.SetAgentSkills(context.Background(), "u-alice", AgentSlugGG, []string{attachedHidden.ID}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	states := NewUserStateService(newMockUserStateStore(), nil)
+	for _, id := range []string{hidden.ID, attachedHidden.ID} {
+		if err := states.HideSkill(context.Background(), "u-alice", id); err != nil {
+			t.Fatalf("hide: %v", err)
+		}
+	}
+	fx.orch.SetSkillPrefs(states)
+
+	fx.startRun(t)
+	a := fx.claim(t)
+	if !strings.Contains(a.ContextBundle, "[sk:"+kept.ID+"]") {
+		t.Fatalf("kept skill missing from index:\n%s", a.ContextBundle)
+	}
+	if strings.Contains(a.ContextBundle, "[sk:"+hidden.ID+"]") {
+		t.Fatalf("hidden skill leaked into the index:\n%s", a.ContextBundle)
+	}
+	// Hiding is not permission: the explicit attach still carries instructions.
+	if !strings.Contains(a.ContextBundle, "three columns, no blame") {
+		t.Fatalf("attached-but-hidden skill lost its instructions:\n%s", a.ContextBundle)
+	}
+}
+
+type failingSkillPrefs struct{}
+
+func (failingSkillPrefs) HiddenSkillSet(context.Context, string) (map[string]bool, error) {
+	return nil, errors.New("prefs store down")
+}
+
+// A prefs lookup failure degrades to the uncurated index — skills must not
+// vanish because a preferences read hiccuped.
+func TestOrchestrator_SkillIndexPrefsErrorDegrades(t *testing.T) {
+	fx := newOrchFixture(t)
+	svc := NewAgentService(fx.dir, fx.users)
+	sk, err := svc.CreateSkill(context.Background(), "u-alice", "Release checklist", "How we ship", "1. tag 2. build", model.SkillVisibilityPublished)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	fx.orch.SetSkillPrefs(failingSkillPrefs{})
+	fx.startRun(t)
+	a := fx.claim(t)
+	if !strings.Contains(a.ContextBundle, "[sk:"+sk.ID+"]") {
+		t.Fatalf("index dropped on prefs error:\n%s", a.ContextBundle)
 	}
 }

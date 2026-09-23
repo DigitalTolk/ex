@@ -30,6 +30,7 @@ const EMPTY_USER_STATE: UserState = {
   threadNotifications: [],
   threadSeen: {},
   hiddenConversations: [],
+  hiddenSkills: [],
 };
 
 export function useUserState(options?: { enabled?: boolean }) {
@@ -41,11 +42,29 @@ export function useUserState(options?: { enabled?: boolean }) {
         threadNotifications: state.threadNotifications ?? [],
         threadSeen: state.threadSeen ?? {},
         hiddenConversations: state.hiddenConversations ?? [],
+        hiddenSkills: state.hiddenSkills ?? [],
       };
     },
     enabled: options?.enabled ?? true,
     staleTime: 15_000,
     placeholderData: EMPTY_USER_STATE,
+  });
+}
+
+// useSetSkillHidden toggles one skill in/out of THIS user's agent discovery
+// index ("# Workspace skills"). Hiding is curation, not permission — an
+// explicit /skill pick still attaches a hidden skill.
+export function useSetSkillHidden() {
+  const qc = useQueryClient();
+  return useMutation({
+    onMutate: markLocalUserStateWrite,
+    mutationFn: ({ id, hidden }: { id: string; hidden: boolean }) =>
+      apiFetch<void>(`/api/v1/user-state/skills/${encodeURIComponent(id)}/hidden`, {
+        method: hidden ? 'PUT' : 'DELETE',
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.userState() });
+    },
   });
 }
 

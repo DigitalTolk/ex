@@ -360,6 +360,8 @@ func main() {
 	}
 
 	userStateSvc := service.NewUserStateService(userStateStore, redisPubSub)
+	// The invoker's hidden skills prune the bundle's "# Workspace skills" index.
+	orchestrator.SetSkillPrefs(userStateSvc)
 	emojiSvc := service.NewEmojiService(emojiStore, userStore, redisPubSub)
 	if s3Client != nil {
 		emojiSvc.SetSigner(s3Client)
@@ -528,6 +530,7 @@ func main() {
 	authH := handler.NewAuthHandler(authSvc, jwtMgr)
 	userH := handler.NewUserHandler(userSvc, s3Client)
 	userStateH := handler.NewUserStateHandler(userStateSvc, messageSvc, convSvc)
+	userStateH.SetSkillLookup(agentSvc)
 	channelH := handler.NewChannelHandler(channelSvc, messageSvc)
 	convH := handler.NewConversationHandler(convSvc, messageSvc)
 	wsH := handler.NewWSHandler(broker, channelSvc, convSvc, presenceSvc)

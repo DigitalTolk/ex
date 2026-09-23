@@ -12,12 +12,17 @@ export function TooltipIconButton({
   onClick,
   disabled,
   className,
+  pressed,
+  testId,
 }: {
   label: string;
   children: ReactNode;
   onClick?: () => void;
   disabled?: boolean;
   className?: string;
+  // For icon TOGGLES: exposes the on/off state as aria-pressed.
+  pressed?: boolean;
+  testId?: string;
 }) {
   return (
     <Tooltip>
@@ -29,6 +34,8 @@ export function TooltipIconButton({
             size="icon-xs"
             className={className}
             aria-label={label}
+            aria-pressed={pressed}
+            data-testid={testId}
             disabled={disabled}
             onClick={onClick}
           />

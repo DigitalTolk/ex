@@ -319,6 +319,9 @@ export interface UserState {
   threadNotifications: string[];
   threadSeen: Record<string, string>;
   hiddenConversations: string[];
+  // Skills this user removed from their agents' discovery index — explicit
+  // /skill picks still work.
+  hiddenSkills: string[];
 }
 
 export type ActivityType = 'reaction' | 'reminder';

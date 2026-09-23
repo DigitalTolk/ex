@@ -1991,6 +1991,13 @@ export type UserStateKind = string;
 export const UserStateThreadNotification: UserStateKind = "thread_notification";
 export const UserStateThreadSeen: UserStateKind = "thread_seen";
 export const UserStateHiddenConversation: UserStateKind = "hidden_conversation";
+/**
+ * UserStateHiddenSkill removes one skill from the "# Workspace skills"
+ * discovery index of THIS user's agent runs — a per-user curation knob so
+ * a workspace full of skills stays legible. An explicit /skill pick still
+ * attaches a hidden skill: hiding is about discovery, not permission.
+ */
+export const UserStateHiddenSkill: UserStateKind = "hidden_skill";
 export interface UserStateItem {
   userID: string;
   kind: UserStateKind;
@@ -2005,6 +2012,7 @@ export interface UserState {
   threadNotifications: string[];
   threadSeen: { [key: string]: string};
   hiddenConversations: string[];
+  hiddenSkills: string[];
 }
 
 //////////

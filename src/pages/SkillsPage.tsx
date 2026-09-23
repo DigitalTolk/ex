@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, Globe, Lock, Pencil, Plus, Sparkles, Trash2, X } from 'lucide-react';
+import { Check, Eye, EyeOff, Globe, Lock, Pencil, Plus, Sparkles, Trash2, X } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,6 +17,8 @@ import {
   type Skill,
   type SkillVisibility,
 } from '@/hooks/useAgents';
+import { useSetSkillHidden, useUserState } from '@/hooks/useUserState';
+import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { showToast } from '@/lib/toast';
 
 // SkillsPage: instruction packs agents pull in mid-run ("use the release-notes
@@ -32,11 +34,16 @@ export default function SkillsPage() {
   const all = skills ?? [];
   const mine = all.filter((s) => s.createdBy === user?.id);
   const theirs = all.filter((s) => s.createdBy !== user?.id);
+  // Who added each shared skill, and which ones this user hid from their
+  // agents' discovery index.
+  const { map: authors } = useUsersBatch(theirs.map((s) => s.createdBy));
+  const { data: userState } = useUserState();
+  const hiddenSkills = new Set(userState?.hiddenSkills ?? []);
 
   return (
     <PageContainer
       title="Skills"
-      description="Reusable instruction packs for agents. Ask an agent to “use the <name> skill” — or let it discover them itself mid-task."
+      description="Reusable instruction packs for agents. The switch on each row sets whether YOUR agents discover it on their own — an explicit /skill pick always works."
       actions={
         !creating && (
           <Button size="sm" onClick={() => setCreating(true)}>
@@ -70,12 +77,22 @@ export default function SkillsPage() {
       <div className="space-y-6">
         {mine.length > 0 && (
           <Section title="Your skills" count={mine.length}>
-            {mine.map((sk) => <SkillRow key={sk.id} skill={sk} own />)}
+            {mine.map((sk) => (
+              <SkillRow key={sk.id} skill={sk} own hidden={hiddenSkills.has(sk.id)} />
+            ))}
           </Section>
         )}
         {theirs.length > 0 && (
           <Section title="Shared by the team" count={theirs.length}>
-            {theirs.map((sk) => <SkillRow key={sk.id} skill={sk} own={false} />)}
+            {theirs.map((sk) => (
+              <SkillRow
+                key={sk.id}
+                skill={sk}
+                own={false}
+                hidden={hiddenSkills.has(sk.id)}
+                addedBy={authors.get(sk.createdBy)?.displayName}
+              />
+            ))}
           </Section>
         )}
       </div>
@@ -253,9 +270,10 @@ function VisibilityBadge({ published }: { published: boolean }) {
   );
 }
 
-function SkillRow({ skill, own }: { skill: Skill; own: boolean }) {
+function SkillRow({ skill, own, hidden, addedBy }: { skill: Skill; own: boolean; hidden: boolean; addedBy?: string }) {
   const del = useDeleteSkill();
   const update = useUpdateSkill();
+  const setHidden = useSetSkillHidden();
   const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const published = isSkillPublished(skill);
@@ -274,57 +292,71 @@ function SkillRow({ skill, own }: { skill: Skill; own: boolean }) {
       { onError: () => showToast("Couldn't change who can use that skill — try again.") },
     );
 
+  const toggleDiscovery = () =>
+    setHidden.mutate(
+      { id: skill.id, hidden: !hidden },
+      { onError: () => showToast("Couldn't change skill discovery — try again.") },
+    );
+
   return (
     <div className="px-4 py-3" data-testid={`skill-card-${skill.name}`}>
       <div className="flex items-start gap-3">
         <div
           aria-hidden="true"
-          className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground"
+          className={
+            'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground' +
+            (hidden ? ' opacity-50' : '')
+          }
         >
-          <Sparkles className="h-4 w-4" />
+          {hidden ? <EyeOff className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="font-medium">{skill.name}</span>
+          {/* Line 1: identity left, controls right — one action cluster, no
+              text buttons. The discovery switch is the row's ONE always-on
+              control; owner actions are compact icons behind tooltips. */}
+          <div className="flex items-center gap-2">
+            <span className={'truncate font-medium' + (hidden ? ' text-muted-foreground' : '')}>{skill.name}</span>
             {own && <VisibilityBadge published={published} />}
-            <span className="text-xs text-muted-foreground">
-              updated {new Date(skill.updatedAt).toLocaleDateString()}
-            </span>
-            {own && !confirmDelete && (
-              <div className="ml-auto flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  className="text-muted-foreground"
-                  disabled={update.isPending}
-                  onClick={togglePublish}
-                >
-                  {published ? (
-                    <>
-                      <Lock aria-hidden="true" />
-                      Make private
-                    </>
-                  ) : (
-                    <>
-                      <Globe aria-hidden="true" />
-                      Publish
-                    </>
-                  )}
-                </Button>
-                <TooltipIconButton label={`Edit ${skill.name}`} onClick={() => setEditing(true)}>
-                  <Pencil aria-hidden="true" />
-                </TooltipIconButton>
+            {!confirmDelete && (
+              <div className="ml-auto flex shrink-0 items-center gap-1">
                 <TooltipIconButton
-                  label={`Delete ${skill.name}`}
-                  className="hover:text-destructive"
-                  onClick={() => setConfirmDelete(true)}
+                  label={
+                    hidden
+                      ? `Hidden from your agents — show ${skill.name} again`
+                      : `Hide ${skill.name} from your agents (a /skill pick still works)`
+                  }
+                  pressed={!hidden}
+                  testId={`skill-discovery-${skill.name}`}
+                  disabled={setHidden.isPending}
+                  onClick={toggleDiscovery}
                 >
-                  <Trash2 aria-hidden="true" />
+                  {hidden ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
                 </TooltipIconButton>
+                {own && (
+                  <>
+                    <TooltipIconButton
+                      label={published ? 'Make private' : 'Publish'}
+                      disabled={update.isPending}
+                      onClick={togglePublish}
+                    >
+                      {published ? <Lock aria-hidden="true" /> : <Globe aria-hidden="true" />}
+                    </TooltipIconButton>
+                    <TooltipIconButton label={`Edit ${skill.name}`} onClick={() => setEditing(true)}>
+                      <Pencil aria-hidden="true" />
+                    </TooltipIconButton>
+                    <TooltipIconButton
+                      label={`Delete ${skill.name}`}
+                      className="hover:text-destructive"
+                      onClick={() => setConfirmDelete(true)}
+                    >
+                      <Trash2 aria-hidden="true" />
+                    </TooltipIconButton>
+                  </>
+                )}
               </div>
             )}
             {own && confirmDelete && (
-              <div className="ml-auto flex items-center gap-1">
+              <div className="ml-auto flex shrink-0 items-center gap-1">
                 <button
                   type="button"
                   disabled={del.isPending}
@@ -344,6 +376,22 @@ function SkillRow({ skill, own }: { skill: Skill; own: boolean }) {
             )}
           </div>
           <p className="mt-0.5 text-sm text-muted-foreground">{skill.description}</p>
+          {/* Line 3: quiet provenance, out of the title line's way. */}
+          <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground/80">
+            {!own && addedBy && (
+              <>
+                <span data-testid={`skill-author-${skill.name}`}>added by {addedBy}</span>
+                <span aria-hidden="true">·</span>
+              </>
+            )}
+            <span>updated {new Date(skill.updatedAt).toLocaleDateString()}</span>
+            {hidden && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>hidden from your agents</span>
+              </>
+            )}
+          </p>
           <details className="mt-2">
             <summary className="cursor-pointer text-xs text-muted-foreground select-none hover:text-foreground">
               Instructions

@@ -47,6 +47,7 @@ function skillFixtures(): Skill[] {
 
 interface Routes {
   skills?: () => Promise<unknown>;
+  hiddenSkills?: string[];
   mutate?: (path: string, init?: ApiInit) => Promise<unknown> | undefined;
 }
 
@@ -54,6 +55,12 @@ function installRoutes(over: Routes = {}) {
   mockApiFetch.mockImplementation((path, init) => {
     if (!init?.method && path === '/api/v1/skills') {
       return (over.skills ?? (async () => ({ skills: skillFixtures() })))();
+    }
+    if (!init?.method && path === '/api/v1/user-state') {
+      return Promise.resolve({ threadNotifications: [], threadSeen: {}, hiddenConversations: [], hiddenSkills: over.hiddenSkills ?? [] });
+    }
+    if (path === '/api/v1/users/batch') {
+      return Promise.resolve([{ id: 'u-2', displayName: 'Manisha', email: 'm@example.com', systemRole: 'member' }]);
     }
     return over.mutate?.(path, init) ?? Promise.resolve({});
   });
@@ -374,6 +381,51 @@ describe('SkillsPage', () => {
     fireEvent.click(card.getByRole('button', { name: 'Make private' }));
     await waitFor(() =>
       expect(showToast).toHaveBeenCalledWith("Couldn't change who can use that skill — try again."),
+    );
+  });
+});
+
+describe('skill discovery curation', () => {
+  it('names who added a shared skill', async () => {
+    installRoutes();
+    renderPage();
+    expect(await screen.findByTestId('skill-author-triage')).toHaveTextContent('added by Manisha');
+    // Own skills carry no author line — the section already says "Your skills".
+    expect(screen.queryByTestId('skill-author-release-notes')).toBeNull();
+  });
+
+  it('hides a skill from the agent discovery index with PUT, restores with DELETE', async () => {
+    const calls: { path: string; method?: string }[] = [];
+    installRoutes({
+      mutate: (path, init) => {
+        calls.push({ path, method: init?.method });
+        return Promise.resolve(undefined);
+      },
+    });
+    renderPage();
+    const toggle = await screen.findByTestId('skill-discovery-triage');
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-pressed', 'true'));
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(calls).toContainEqual({ path: '/api/v1/user-state/skills/sk-2/hidden', method: 'PUT' }),
+    );
+  });
+
+  it('shows the hidden state and unhides with DELETE', async () => {
+    const calls: { path: string; method?: string }[] = [];
+    installRoutes({
+      hiddenSkills: ['sk-2'],
+      mutate: (path, init) => {
+        calls.push({ path, method: init?.method });
+        return Promise.resolve(undefined);
+      },
+    });
+    renderPage();
+    const toggle = await screen.findByTestId('skill-discovery-triage');
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-pressed', 'false'));
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(calls).toContainEqual({ path: '/api/v1/user-state/skills/sk-2/hidden', method: 'DELETE' }),
     );
   });
 });
