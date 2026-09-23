@@ -663,3 +663,21 @@ describe('AgentCard persona fallbacks', () => {
     expect(card.queryByText('custom prompt')).toBeNull();
   });
 });
+
+describe('CLI agent explainer', () => {
+  it('tells web/app users why a CLI agent is unavailable and names the cloud alternative', async () => {
+    installRoutes();
+    renderPage();
+    // Offline claude agent: desktop app not running.
+    const aaNote = await screen.findByTestId('agent-cli-note-aa');
+    expect(aaNote).toHaveTextContent('runs on your own computer');
+    expect(aaNote).toHaveTextContent('claude CLI installed and logged in');
+    expect(aaNote).toHaveTextContent('Your desktop app is not running right now.');
+    expect(aaNote).toHaveTextContent('Bedrock');
+    // needs_setup codex agent: app online, CLI missing.
+    expect(screen.getByTestId('agent-cli-note-ns')).toHaveTextContent('missing or not signed in');
+    // Paused is not a CLI problem; bedrock agents have no desktop dependency.
+    expect(screen.queryByTestId('agent-cli-note-ww')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('agent-cli-note-qib')).not.toBeInTheDocument();
+  });
+});

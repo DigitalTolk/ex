@@ -681,8 +681,8 @@ func TestOrchCov_InvokeHarnessMissingSaysWhich(t *testing.T) {
 	msg := &model.Message{ID: "m1", ParentID: "chan1", AuthorID: "u-alice", Body: "@[" + testGGID + "|gg] hi"}
 	fx.orch.OnMessage(ctx, msg, ParentChannel)
 	post := fx.msgs.lastPost()
-	if !strings.Contains(post, "not detected on your machine") {
-		t.Fatalf("expected harness-missing notice, got %q", post)
+	if !strings.Contains(post, "CLI isn't set up on the machine") || !strings.Contains(post, "Bedrock agents") {
+		t.Fatalf("expected harness-missing notice with the cloud alternative, got %q", post)
 	}
 }
 

@@ -759,7 +759,7 @@ func (o *Orchestrator) invoke(ctx context.Context, in invocation) error {
 			return o.queueOfflineRun(ctx, in, resolved)
 		}
 		if harnessMissing {
-			return fmt.Errorf("%w: %s not detected on your machine", ErrAgentOffline, resolved.Harness)
+			return fmt.Errorf("%w: the %s CLI isn't set up on the machine running your ex desktop app — install it and sign in there, or use one of the Bedrock agents, which run in the cloud", ErrAgentOffline, resolved.Harness)
 		}
 		return ErrAgentOffline
 	}
@@ -826,8 +826,13 @@ func (o *Orchestrator) postInvokeFailure(ctx context.Context, agent, invoker *mo
 		// thread and its reply is coming. A second notice would be noise.
 		return
 	case errors.Is(cause, ErrAgentOffline):
+		// The mechanism is invisible from web/mobile, so the notice explains
+		// it: CLI agents execute on the INVOKER's computer via the desktop
+		// app; Bedrock agents run in the cloud and work from anywhere.
 		body = "⛔ " + agent.DisplayName + " can't run for " + invoker.DisplayName + " — " +
-			offlineDetail(cause, "open the ex desktop app on your machine to bring it online.")
+			offlineDetail(cause, "this agent runs on "+invoker.DisplayName+"'s own computer through the ex desktop app, "+
+				"which isn't online right now. Open the desktop app and stay signed in — or use one of the "+
+				"Bedrock agents, which run in the cloud and work from web and mobile.")
 	default:
 		slog.Warn("agent invoke failed", "agentID", agent.ID, "msgID", msg.ID, "error", cause)
 		body = "⛔ " + agent.DisplayName + " couldn't start on this task."

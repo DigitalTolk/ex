@@ -159,6 +159,25 @@ export function AgentCard({ agent }: { agent: AgentView }) {
         </span>
       </button>
 
+      {/* CLI agents execute on the user's own computer — invisible mechanics
+          from a browser or phone, so a non-active CLI agent explains itself
+          and names the cloud alternative. */}
+      {(agent.status === 'offline' || agent.status === 'needs_setup') && agent.resolved.harness !== 'bedrock' && (
+        <p
+          className="border-t bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-muted-foreground"
+          data-testid={`agent-cli-note-${agent.slug}`}
+        >
+          @{agent.displayName} uses the <span className="font-medium">{agent.resolved.harness} CLI</span>, so it runs
+          on <span className="font-medium">your own computer</span> — it needs the ex desktop app open and signed in,
+          with the {agent.resolved.harness} CLI installed and logged in there.
+          {agent.status === 'needs_setup'
+            ? ' Your desktop app is online but that CLI is missing or not signed in.'
+            : ' Your desktop app is not running right now.'}{' '}
+          From the web or mobile, use the <span className="font-medium">Bedrock</span> agents instead — they run in
+          the cloud and need no desktop app.
+        </p>
+      )}
+
       {open && (
       <div className="space-y-2.5 border-t p-3">
         <div>
