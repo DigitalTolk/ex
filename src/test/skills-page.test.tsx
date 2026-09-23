@@ -411,6 +411,15 @@ describe('skill discovery curation', () => {
     );
   });
 
+  it('toasts when the discovery toggle fails', async () => {
+    installRoutes({ mutate: () => Promise.reject(new Error('boom')) });
+    renderPage();
+    fireEvent.click(await screen.findByTestId('skill-discovery-triage'));
+    await waitFor(() =>
+      expect(showToast).toHaveBeenCalledWith("Couldn't change skill discovery — try again."),
+    );
+  });
+
   it('shows the hidden state and unhides with DELETE', async () => {
     const calls: { path: string; method?: string }[] = [];
     installRoutes({

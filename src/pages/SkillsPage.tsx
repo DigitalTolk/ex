@@ -37,8 +37,9 @@ export default function SkillsPage() {
   // Who added each shared skill, and which ones this user hid from their
   // agents' discovery index.
   const { map: authors } = useUsersBatch(theirs.map((s) => s.createdBy));
+  // useUserState carries placeholderData, so data is never undefined.
   const { data: userState } = useUserState();
-  const hiddenSkills = new Set(userState?.hiddenSkills ?? []);
+  const hiddenSkills = new Set(userState!.hiddenSkills);
 
   return (
     <PageContainer
