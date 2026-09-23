@@ -523,7 +523,7 @@ describe('MessageItem', () => {
       );
       const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
 
-      expect(row).toHaveClass('touch:touch-pan-y', 'touch:[-webkit-touch-callout:none]');
+      expect(row).toHaveClass('no-pointer:touch-pan-y', 'no-pointer:[-webkit-touch-callout:none]');
       const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
       act(() => {
         row.dispatchEvent(contextMenu);
@@ -577,7 +577,7 @@ describe('MessageItem', () => {
         />,
       );
       const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
-      expect(screen.getByRole('toolbar', { name: 'Message actions' })).toHaveClass('touch:hidden');
+      expect(screen.getByRole('toolbar', { name: 'Message actions' })).toHaveClass('no-pointer:hidden');
 
       const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
       act(() => {

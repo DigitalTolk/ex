@@ -926,7 +926,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   }, []);
 
   return (
-    <div className="flex h-full w-full min-w-0 flex-col text-gray-300 touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]">
+    <div className="flex h-full w-full min-w-0 flex-col text-gray-300 no-pointer:select-none no-pointer:touch-pan-y no-pointer:[-webkit-touch-callout:none] no-pointer:[-webkit-user-select:none]">
       <ScrollArea
         className="min-h-0 w-full flex-1 mobile:touch-pan-y"
         scrollbarClassName="opacity-0 transition-opacity data-[scrolling]:opacity-100"

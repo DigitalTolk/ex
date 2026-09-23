@@ -41,6 +41,8 @@ function stampTierClasses() {
   root.classList.remove('tier-mobile', 'tier-compact', 'tier-full');
   root.classList.add(tier);
   root.classList.toggle('device-touch', touch);
+  // No pointer is reported in tests, so a touch device has none (see lib/device).
+  root.classList.toggle('device-no-pointer', touch);
 }
 stampTierClasses();
 window.addEventListener('resize', stampTierClasses);
