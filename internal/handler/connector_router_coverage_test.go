@@ -303,7 +303,7 @@ func TestHconnCovConnectorSync(t *testing.T) {
 		}
 	})
 
-	t.Run("provider failure is 502", func(t *testing.T) {
+	t.Run("provider failure is 424", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
@@ -313,8 +313,8 @@ func TestHconnCovConnectorSync(t *testing.T) {
 		h := NewConnectorHandler(svc, nil)
 		rec := httptest.NewRecorder()
 		h.Sync(rec, hconnCovReq(http.MethodPost, "/api/v1/connectors/sync", "", hconnCovUserClaims(), ""))
-		if rec.Code != http.StatusBadGateway {
-			t.Fatalf("status=%d, want 502", rec.Code)
+		if rec.Code != http.StatusFailedDependency {
+			t.Fatalf("status=%d, want 424", rec.Code)
 		}
 	})
 
@@ -575,7 +575,7 @@ func TestHconnCovConnectorVerifyInstall(t *testing.T) {
 		}
 	})
 
-	t.Run("unreachable service is 502", func(t *testing.T) {
+	t.Run("unreachable service is 424 (502 bodies die at Cloudflare)", func(t *testing.T) {
 		verify := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 		deadURL := verify.URL
 		verify.Close() // keep the URL, kill the listener → connection refused
@@ -584,8 +584,8 @@ func TestHconnCovConnectorVerifyInstall(t *testing.T) {
 		h := hconnCovHandler(st, nil)
 		rec := httptest.NewRecorder()
 		h.VerifyInstall(rec, hconnCovReq(http.MethodPost, "/api/v1/connectors/s1/verify", "", hconnCovUserClaims(), "s1"))
-		if rec.Code != http.StatusBadGateway {
-			t.Fatalf("status=%d, want 502", rec.Code)
+		if rec.Code != http.StatusFailedDependency {
+			t.Fatalf("status=%d, want 424", rec.Code)
 		}
 	})
 

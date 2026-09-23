@@ -134,7 +134,11 @@ func serviceStatus(err error) (status int, code, message string, ok bool) {
 		return http.StatusUnauthorized, "login_failed", err.Error(), true
 	case errors.Is(err, service.ErrServiceUnreachable):
 		// We could not reach it at all — nothing is wrong with the caller.
-		return http.StatusBadGateway, "unreachable", err.Error(), true
+		// 424 (Failed Dependency), NOT 502: Cloudflare replaces origin
+		// 502/504 bodies with its own error page, so the explanation below
+		// never reached the browser ("digitaltolk.net | 502: Bad gateway",
+		// stg incident 2026-09-23). 424 passes through with the body intact.
+		return http.StatusFailedDependency, "unreachable", err.Error(), true
 	}
 	return 0, "", "", false
 }

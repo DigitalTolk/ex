@@ -71,7 +71,9 @@ func (h *ConnectorHandler) Sync(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "no_provider", "no connector provider configured")
 			return
 		}
-		writeError(w, http.StatusBadGateway, "provider_error", err.Error())
+		// 424, not 502 — a 502 body would be swallowed by the Cloudflare
+		// proxy in front of stg/prd (see serviceStatus in handler.go).
+		writeError(w, http.StatusFailedDependency, "provider_error", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"synced": res.Synced, "skipped": res.Skipped})

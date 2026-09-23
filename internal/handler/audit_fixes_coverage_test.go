@@ -38,7 +38,7 @@ func TestServiceStatusTable(t *testing.T) {
 		{"connector invalid", service.ErrConnectorInvalid, http.StatusBadRequest, "bad_request"},
 		{"token rejected", service.ErrTokenRejected, http.StatusUnauthorized, "token_rejected"},
 		{"login failed", service.ErrLoginFailed, http.StatusUnauthorized, "login_failed"},
-		{"service unreachable", service.ErrServiceUnreachable, http.StatusBadGateway, "unreachable"},
+		{"service unreachable", service.ErrServiceUnreachable, http.StatusFailedDependency, "unreachable"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -486,7 +487,10 @@ func (s *ConnectorService) Install(ctx context.Context, userID, slug string, in 
 		case verr == nil && (code == 401 || code == 403):
 			return nil, ErrTokenRejected
 		default:
-			// unreachable / 5xx → keep "unverified"
+			// unreachable / 5xx → keep "unverified". Log the REAL failure —
+			// the transport error names the broken layer (dial timeout vs
+			// refused vs DNS), which the 424 the caller sees cannot.
+			slog.Warn("connector verify unreachable", "slug", slug, "url", c.VerifyURL, "status", code, "error", verr)
 		}
 	}
 
@@ -556,6 +560,10 @@ func (s *ConnectorService) VerifyInstall(ctx context.Context, userID, slug strin
 	case verr == nil && (code == 401 || code == 403):
 		return nil, ErrTokenRejected
 	default:
+		// The transport error is the diagnosis (dial timeout = network/SG,
+		// refused = reached but closed, no such host = DNS) — log it here;
+		// the caller only sees the sanitized "still unverified".
+		slog.Warn("connector verify unreachable", "slug", slug, "url", c.VerifyURL, "status", code, "error", verr)
 		return inst, fmt.Errorf("%w: still unverified", ErrServiceUnreachable)
 	}
 }
