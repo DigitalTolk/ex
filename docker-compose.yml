@@ -81,6 +81,31 @@ services:
       retries: 10
       start_period: 30s
 
+  # Local SSO (Dex) so the dev stack can be signed into without a real
+  # identity provider. Test users + password live in dev/dex.yaml.
+  #
+  # `app` joins this container's network namespace (network_mode below) so
+  # the OIDC issuer http://localhost:5556/dex is the SAME URL for the browser
+  # and for the app's server-side discovery/token calls. Consequences:
+  #   - the app's port (8500) is published here, not on `app`;
+  #   - the `app` alias makes http://app:8500 (used by the Vite service in
+  #     docker-compose.dev.yml) keep resolving;
+  #   - extra_hosts for the app must live here too.
+  dex:
+    image: ghcr.io/dexidp/dex:v2.41.1
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./dev/dex.yaml:/etc/dex/config.yaml:ro
+    ports:
+      - "5556:5556"   # Dex (OIDC issuer http://localhost:5556/dex)
+      - "8500:8500"   # app (network_mode: service:dex)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      default:
+        aliases:
+          - app
+
   app:
     build:
       context: .
@@ -99,8 +124,8 @@ services:
         # --short HEAD` before `docker compose up`; CI should set it
         # explicitly. Defaults to "dev" — banner stays silent.
         VERSION: ${VERSION:-dev}
-    ports:
-      - "8500:8500"
+    # Shares Dex's network namespace — see the `dex` service above.
+    network_mode: service:dex
     restart: on-failure
     # Optional: a fresh checkout has no .env, and compose treats a missing
     # env_file as a hard error — which blocked `make dev` / `make dev-watch`
@@ -127,14 +152,20 @@ services:
       S3_SECRET_KEY: minioadmin
       S3_REGION: us-east-1
       OPENSEARCH_URL: http://opensearch:9200
+      # Local Dex SSO by default; set these in .env to use a real provider.
+      OIDC_ISSUER: ${OIDC_ISSUER:-http://localhost:5556/dex}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-ex-local}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-ex-local-secret}
       # Optional: point ex at a running connector-provider to pull its connector
       # catalog. Off by default. To test locally, run a provider on the host and
       # set these (host.docker.internal reaches the host from the container):
       #   CONNECTOR_PROVIDER_URL: http://host.docker.internal:8600
       #   CONNECTOR_PROVIDER_API_KEY: <the provider's PROVIDER_API_KEY>
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # extra_hosts (host.docker.internal) is set on `dex`: Docker rejects
+    # host mappings on a container that joins another's network namespace.
     depends_on:
+      dex:
+        condition: service_started
       dynamodb:
         condition: service_healthy
       redis:
