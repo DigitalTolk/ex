@@ -651,7 +651,7 @@ func (s hrunnerCovMembershipStore) UserChannelNotifPrefs(context.Context, string
 	return nil, nil
 }
 func (s hrunnerCovMembershipStore) SetMute(context.Context, string, string, bool) error { return nil }
-func (s hrunnerCovMembershipStore) SetChannelLastRead(context.Context, string, string, int64) error {
+func (s hrunnerCovMembershipStore) SetChannelLastRead(context.Context, string, string, int64, string) error {
 	return nil
 }
 func (s hrunnerCovMembershipStore) SetFavorite(context.Context, string, string, bool) error {
@@ -689,7 +689,7 @@ func (s hrunnerCovConvStore) TouchConversation(context.Context, string, []string
 func (s hrunnerCovConvStore) IncrementMessageSeq(context.Context, string) (int64, error) {
 	return 0, nil
 }
-func (s hrunnerCovConvStore) SetConversationLastRead(context.Context, string, string, int64) error {
+func (s hrunnerCovConvStore) SetConversationLastRead(context.Context, string, string, int64, string) error {
 	return nil
 }
 func (s hrunnerCovConvStore) SetFavorite(context.Context, string, string, bool) error { return nil }

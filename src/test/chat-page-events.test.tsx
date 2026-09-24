@@ -6,6 +6,7 @@ import ChatPage from '@/pages/ChatPage';
 import { apiFetch } from '@/lib/api';
 import { resetServerVersionForTests } from '@/hooks/useServerVersion';
 import { forceAwayUntilInput, resetUserActivityForTests } from '@/lib/user-activity';
+import { clearReadPosition, setListAtBottom } from '@/stores/read-position';
 
 let capturedOptions: Record<string, ((data: unknown) => void) | boolean | undefined> = {};
 const authUserMock = vi.hoisted(() => ({
@@ -224,7 +225,7 @@ describe('ChatPage WebSocket handlers', () => {
     expect(bumpChannelUnread).not.toHaveBeenCalled();
     // From someone else
     handler(msg({ authorID: 'u-other' }));
-    expect(bumpChannelUnread).toHaveBeenCalledWith(expect.anything(), 'ch-1');
+    expect(bumpChannelUnread).toHaveBeenCalledWith(expect.anything(), 'ch-1', undefined);
     expect(bumpConversationUnread).not.toHaveBeenCalled();
     expect(unhideConversation).not.toHaveBeenCalled();
   });
@@ -239,7 +240,7 @@ describe('ChatPage WebSocket handlers', () => {
     });
     const handler = capturedOptions.onMessageNew as (d: unknown) => void;
     handler(msg({ authorID: 'u-me', webhookUsername: 'alertbot' }));
-    expect(bumpChannelUnread).toHaveBeenCalledWith(expect.anything(), 'ch-1');
+    expect(bumpChannelUnread).toHaveBeenCalledWith(expect.anything(), 'ch-1', undefined);
   });
 
   it('onMessageNew on the ACTIVE channel PUTs the read marker instead of marking unread', () => {
@@ -254,8 +255,29 @@ describe('ChatPage WebSocket handlers', () => {
     // cleared client-side too, not just server-side (review finding: the
     // channel arm used to skip the cache clear, leaving a stale badge until
     // an unrelated refetch).
-    expect(clearChannelUnreadInCache).toHaveBeenCalledWith(expect.anything(), 'ch-1');
-    expect(vi.mocked(apiFetch)).toHaveBeenCalledWith('/api/v1/channels/ch-1/read', { method: 'PUT' });
+    expect(clearChannelUnreadInCache).toHaveBeenCalledWith(expect.anything(), 'ch-1', 'msg-1');
+    // Reads up to THIS message only — anything newer is judged on arrival.
+    expect(vi.mocked(apiFetch)).toHaveBeenCalledWith('/api/v1/channels/ch-1/read', {
+      method: 'PUT',
+      body: JSON.stringify({ upToMessageID: 'msg-1' }),
+    });
+  });
+
+  // THE missed-message bug: looking at the active channel but scrolled up
+  // reading history, the arriving message is NOT read — it bumps the badge
+  // (and gets the "New" divider + pill in the list) until the user scrolls
+  // back to the tail.
+  it('onMessageNew on the ACTIVE channel while scrolled up bumps unread instead of reading', () => {
+    isActiveChannel.mockReturnValue(true);
+    setListAtBottom('ch-1', false);
+    renderAt('/', (qc) => {
+      qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
+    });
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+    handler(msg({ authorID: 'u-other', parentType: 'channel' }));
+    expect(bumpChannelUnread).toHaveBeenCalledWith(expect.anything(), 'ch-1', undefined);
+    expect(vi.mocked(apiFetch)).not.toHaveBeenCalledWith('/api/v1/channels/ch-1/read', expect.anything());
+    clearReadPosition('ch-1');
   });
 
   // THE "no notification from the DM I last had open" regression: an OPEN
@@ -274,7 +296,7 @@ describe('ChatPage WebSocket handlers', () => {
     const handler = capturedOptions.onMessageNew as (d: unknown) => void;
     handler(msg({ authorID: 'u-other', parentType: 'channel' }));
     expect(vi.mocked(apiFetch)).not.toHaveBeenCalledWith('/api/v1/channels/ch-1/read', { method: 'PUT' });
-    expect(bumpChannelUnread).toHaveBeenCalledWith(expect.anything(), 'ch-1');
+    expect(bumpChannelUnread).toHaveBeenCalledWith(expect.anything(), 'ch-1', undefined);
   });
 
   it('onMessageNew on the ACTIVE conversation while NOT attentive bumps unread instead of auto-reading', () => {
@@ -287,7 +309,7 @@ describe('ChatPage WebSocket handlers', () => {
     handler(msg({ parentID: 'conv-1', authorID: 'u-other', parentType: 'conversation' }));
     expect(vi.mocked(apiFetch)).not.toHaveBeenCalledWith('/api/v1/conversations/conv-1/read', { method: 'PUT' });
     expect(clearConversationUnreadInCache).not.toHaveBeenCalled();
-    expect(bumpConversationUnread).toHaveBeenCalledWith(expect.anything(), 'conv-1');
+    expect(bumpConversationUnread).toHaveBeenCalledWith(expect.anything(), 'conv-1', undefined);
   });
 
   it('onMessageNew does NOT mark the channel unread for a thread reply', () => {
@@ -314,7 +336,7 @@ describe('ChatPage WebSocket handlers', () => {
 
     handler(msg({ parentID: 'ch-not-loaded', parentType: 'channel', authorID: 'u-other' }));
 
-    expect(bumpChannelUnread).toHaveBeenCalledWith(expect.anything(), 'ch-not-loaded');
+    expect(bumpChannelUnread).toHaveBeenCalledWith(expect.anything(), 'ch-not-loaded', undefined);
     expect(bumpConversationUnread).not.toHaveBeenCalled();
     expect(unhideConversation).not.toHaveBeenCalled();
   });
@@ -341,7 +363,7 @@ describe('ChatPage WebSocket handlers', () => {
 
     expect(bumpChannelUnread).not.toHaveBeenCalled();
     expect(bumpConversationUnread).toHaveBeenCalledTimes(1);
-    expect(bumpConversationUnread).toHaveBeenCalledWith(expect.anything(), 'conv-1');
+    expect(bumpConversationUnread).toHaveBeenCalledWith(expect.anything(), 'conv-1', undefined);
     expect(unhideConversation).toHaveBeenCalledWith('conv-1');
   });
 
@@ -355,8 +377,11 @@ describe('ChatPage WebSocket handlers', () => {
     handler(msg({ parentID: 'conv-1', parentType: 'conversation', authorID: 'u-other' }));
 
     expect(bumpConversationUnread).not.toHaveBeenCalled();
-    expect(clearConversationUnreadInCache).toHaveBeenCalledWith(expect.anything(), 'conv-1');
-    expect(apiFetch).toHaveBeenCalledWith('/api/v1/conversations/conv-1/read', { method: 'PUT' });
+    expect(clearConversationUnreadInCache).toHaveBeenCalledWith(expect.anything(), 'conv-1', 'msg-1');
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/conversations/conv-1/read', {
+      method: 'PUT',
+      body: JSON.stringify({ upToMessageID: 'msg-1' }),
+    });
   });
 
   it('onMessageNew without a valid Message payload is a no-op', () => {

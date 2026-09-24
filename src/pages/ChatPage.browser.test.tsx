@@ -29,6 +29,8 @@ const {
   bumpConversationUnread: mockBumpConversationUnread,
   clearChannelUnreadInCache: mockClearChannelUnreadInCache,
   clearConversationUnreadInCache: mockClearConversationUnreadInCache,
+  applyChannelReadInCache: mockApplyChannelRead,
+  applyConversationReadInCache: mockApplyConversationRead,
   touchConversationActivityInCache: mockTouchConversationActivity,
   setChannelNotifyCountInCache: mockSetChannelNotifyCount,
   setConversationNotifyCountInCache: mockSetConversationNotifyCount,
@@ -37,6 +39,8 @@ const {
   bumpConversationUnread: vi.fn(),
   clearChannelUnreadInCache: vi.fn(),
   clearConversationUnreadInCache: vi.fn(),
+  applyChannelReadInCache: vi.fn(),
+  applyConversationReadInCache: vi.fn(),
   touchConversationActivityInCache: vi.fn(() => true),
   setChannelNotifyCountInCache: vi.fn(),
   setConversationNotifyCountInCache: vi.fn(),
@@ -50,6 +54,8 @@ vi.mock('@/lib/unread-cache', () => ({
   bumpConversationUnread: mockBumpConversationUnread,
   clearChannelUnreadInCache: mockClearChannelUnreadInCache,
   clearConversationUnreadInCache: mockClearConversationUnreadInCache,
+  applyChannelReadInCache: mockApplyChannelRead,
+  applyConversationReadInCache: mockApplyConversationRead,
   touchConversationActivityInCache: mockTouchConversationActivity,
 }));
 
@@ -251,7 +257,7 @@ describe('ChatPage WS router (browser)', () => {
   it('onMessageNew marks unread for messages from other users to a channel', async () => {
     await renderChatPage();
     lastHandlers().onMessageNew?.(msg());
-    expect(mockBumpChannelUnread).toHaveBeenCalledWith(expect.anything(), "ch-99");
+    expect(mockBumpChannelUnread).toHaveBeenCalledWith(expect.anything(), "ch-99", undefined);
   });
 
   it('onMessageNew skips the unread mark for the local user', async () => {
@@ -277,7 +283,7 @@ describe('ChatPage WS router (browser)', () => {
     // No parentType, but parentID matches a cached user channel → treated as a
     // channel message and marked unread.
     lastHandlers().onMessageNew?.(msg({ parentType: undefined }));
-    expect(mockBumpChannelUnread).toHaveBeenCalledWith(expect.anything(), "ch-99");
+    expect(mockBumpChannelUnread).toHaveBeenCalledWith(expect.anything(), "ch-99", undefined);
   });
 
   it('onMessageNew infers a conversation parent from the cache when parentType is absent', async () => {
@@ -426,6 +432,33 @@ describe('ChatPage WS router (browser)', () => {
       const spy = vi.spyOn(qc, 'invalidateQueries');
       lastHandlers().onUserChannelUpdated?.({ conversationID: 'conv-1' });
       expect(mockClearConversationUnreadInCache).toHaveBeenCalledWith(expect.anything(), 'conv-1');
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    // The mark-read echo carries the server's remaining count + read point:
+    // patched in place (a read-up-to-message can leave some unread), never a
+    // list refetch.
+    it('mark-read echo with a count patches the channel row in place', async () => {
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      mockClearChannelUnreadInCache.mockClear();
+      lastHandlers().onUserChannelUpdated?.({ channelID: 'ch-99', unreadCount: 2, lastReadMsgID: '01J00000000000000000000002', lastReadSeq: 3, messageSeq: 5 });
+      expect(mockApplyChannelRead).toHaveBeenCalledWith(expect.anything(), 'ch-99', {
+        unreadCount: 2, lastReadMsgID: '01J00000000000000000000002', lastReadSeq: 3, messageSeq: 5,
+      });
+      expect(mockClearChannelUnreadInCache).not.toHaveBeenCalled();
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('mark-read echo with a count patches the conversation row in place', async () => {
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      mockClearConversationUnreadInCache.mockClear();
+      lastHandlers().onUserChannelUpdated?.({ conversationID: 'conv-1', unreadCount: 0 });
+      expect(mockApplyConversationRead).toHaveBeenCalledWith(expect.anything(), 'conv-1', {
+        unreadCount: 0, lastReadMsgID: undefined, lastReadSeq: undefined, messageSeq: undefined,
+      });
+      expect(mockClearConversationUnreadInCache).not.toHaveBeenCalled();
       expect(spy).not.toHaveBeenCalled();
     });
 

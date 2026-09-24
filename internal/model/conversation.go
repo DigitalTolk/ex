@@ -25,4 +25,8 @@ type Conversation struct {
 	// model.Channel.MessageSeq). Paired with each member's
 	// UserConversation.LastReadSeq it yields exact unread counts.
 	MessageSeq int64 `json:"messageSeq,omitempty" dynamodbav:"messageSeq,omitempty"`
+	// LastSeqAt is when MessageSeq was last claimed by a send. Internal: a
+	// read-to-current-seq waits until it has settled so an in-flight message
+	// isn't read before it exists. Zero on rows from before it was recorded.
+	LastSeqAt time.Time `json:"-" dynamodbav:"lastSeqAt,omitempty"`
 }

@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { Header } from '@/components/layout/Header';
@@ -42,12 +41,9 @@ import {
   useSaveDraft,
 } from '@/hooks/useDrafts';
 import { firstName } from '@/lib/format';
-import { apiFetch } from '@/lib/api';
-import { queryKeys } from '@/lib/query-keys';
-import { clearConversationUnreadInCache } from '@/lib/unread-cache';
 import type { Conversation } from '@/types';
 import type { UserMapEntry } from './MessageList';
-import { useMarkReadOnReturn } from '@/hooks/useMarkReadOnReturn';
+import { useUnreadMarker } from '@/hooks/useUnreadMarker';
 import { useEditingMessage } from '@/hooks/useEditingMessage';
 
 function errorStatus(err: unknown): number | null {
@@ -86,7 +82,6 @@ function deriveConversationTitle(
 
 export function ConversationView() {
   const { id } = useParams<{ id: string }>();
-  const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const { setActiveConversation, setActiveThread } = useUnread();
@@ -173,35 +168,27 @@ export function ConversationView() {
     [editMessage, editingMessage, id, setEditingMessage],
   );
 
-  // Drop the badge instantly in the list cache, then persist the read so it
-  // stays cleared on a reload (the refetch confirms the server count is 0).
-  const markConversationRead = useCallback(
-    (openedID: string) => {
-      clearConversationUnreadInCache(queryClient, openedID);
-      void apiFetch<void>(`/api/v1/conversations/${openedID}/read`, { method: 'PUT' })
-        .catch(() => undefined)
-        .finally(() => {
-          queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
-        });
-    },
-    [queryClient],
-  );
-
   useEffect(() => {
     if (!id) return;
-    markConversationRead(id);
     setActiveConversation(id);
     setActiveParent(id);
     return () => {
       setActiveConversation(null);
       setActiveParent(null);
     };
-  }, [id, setActiveConversation, setActiveParent, markConversationRead]);
+  }, [id, setActiveConversation, setActiveParent]);
 
-  // Messages that arrived while this DM's window was blurred/hidden bump the
-  // badge instead of auto-reading (ChatPage's attention gate) — returning to
-  // the window is what reads them.
-  useMarkReadOnReturn(id, markConversationRead);
+  // Read lifecycle (snapshot the read point → "New" divider → persist reads
+  // only while the user can see the tail) lives in useUnreadMarker.
+  const unread = useUnreadMarker({
+    kind: 'conversation',
+    parentID: id,
+    pages: data?.pages,
+    messagesLoaded: !isLoading && !!data,
+    hasOlderPages: !!hasNextPage,
+    hasNewerPages: !!hasPreviousPage,
+    currentUserId: user?.id,
+  });
 
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
   const inputRef = useRef<MessageInputHandle>(null);
@@ -434,6 +421,7 @@ export function ConversationView() {
             onEditMessage={isMobile ? setEditingMessage : undefined}
             anchorMsgId={mainAnchor}
             anchorRevision={navKey}
+            unread={unread}
             intro={intro ?? undefined}
           />
           {activeEditingMessage && !editReady ? (

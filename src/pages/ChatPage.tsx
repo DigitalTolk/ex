@@ -38,6 +38,7 @@ import {
   parseThreadUpdated,
   parseTyping,
   parseUserChannelUpdated,
+  type UserChannelUpdatedPayload,
   parseUserUpdated,
 } from '@/lib/ws-schemas';
 import {
@@ -46,15 +47,19 @@ import {
 } from '@/stores/agent-runs';
 import { onRunApproval as onAgentRunApproval } from '@/stores/agent-approvals';
 import { RunActivityDrawer } from '@/components/chat/RunActivityDrawer';
-import { apiFetch } from '@/lib/api';
+import { markArrivalRead } from '@/lib/mark-read';
+import { isListAtBottom } from '@/stores/read-position';
 import {
   bumpChannelUnread,
   bumpConversationUnread,
+  applyChannelReadInCache,
+  applyConversationReadInCache,
   clearChannelUnreadInCache,
   clearConversationUnreadInCache,
   touchConversationActivityInCache,
   setChannelNotifyCountInCache,
   setConversationNotifyCountInCache,
+  type ReadEcho,
 } from '@/lib/unread-cache';
 import { shouldRefetchDraftsForRemoteUpdate, useDrafts } from '@/hooks/useDrafts';
 import { useUserChannels } from '@/hooks/useChannels';
@@ -63,6 +68,12 @@ import { shouldRefetchSidebarForRemoteUpdate, useCategories } from '@/hooks/useS
 import { shouldRefetchUserStateForRemoteUpdate, useUserState } from '@/hooks/useUserState';
 import { markThreadSeen, upsertUserThreadFromRoot, upsertUserThreadRow, userThreadInCache, useUserThreads } from '@/hooks/useThreads';
 import { useIsMobile } from '@/hooks/useIsMobile';
+
+// readEcho picks the mark-read echo's read-point fields off a
+// userchannel.updated payload (see applyChannelReadInCache).
+function readEcho(unreadCount: number, evt: UserChannelUpdatedPayload): ReadEcho {
+  return { unreadCount, lastReadMsgID: evt.lastReadMsgID, lastReadSeq: evt.lastReadSeq, messageSeq: evt.messageSeq };
+}
 
 function MobileChatLoadingPage() {
   return (
@@ -154,10 +165,11 @@ export default function ChatPage() {
       // otherwise it would fire a desktop alert but leave the badge unset.
       const isOwnAuthor = isOwnMessage(msg, user?.id);
       // What this message does to its parent's unread state is a pure rule
-      // (lib/message-arrival, mirrored from CLAUDE.md's truth table): only a
-      // top-level, non-system message from someone else counts; and "the
-      // route is open" only reads it while the user is demonstrably LOOKING
-      // (the ghost-DM bug). The views re-mark read on window focus.
+      // (lib/message-arrival and its truth table): only a top-level,
+      // non-system message from someone else counts; and "the route is open"
+      // only reads it while the user is demonstrably LOOKING (the ghost-DM
+      // bug) AND parked at the tail (scrolled up, they haven't seen it). The
+      // views' useUnreadMarker reads the rest on scroll-to-bottom / focus.
       const viewingParent =
         parentKind === 'channel'
           ? isActiveChannel(parentID)
@@ -168,26 +180,24 @@ export default function ChatPage() {
         isSystem: !!msg.system,
         viewingParent,
         attentive: isUserAttentive(suppressionWindowMs),
+        atBottom: isListAtBottom(parentID),
       });
       if (parentKind === 'channel') {
         if (arrival === 'mark-read') {
           // Watching it happen — clear any badge left over from an idle
-          // spell and keep the server caught up for reloads.
-          clearChannelUnreadInCache(queryClient, parentID);
-          void apiFetch<void>(`/api/v1/channels/${encodeURIComponent(parentID)}/read`, { method: 'PUT' })
-            .catch(() => undefined);
+          // spell and keep the server caught up for reloads, up to THIS
+          // message (anything newer arriving later is judged on its own).
+          markArrivalRead(queryClient, 'channel', parentID, msg.id);
         } else if (arrival === 'bump-unread') {
           // Patch the unread count straight into the list cache (single
           // source) — no session delta to reconcile.
-          bumpChannelUnread(queryClient, parentID);
+          bumpChannelUnread(queryClient, parentID, msg.seq);
         }
       } else if (parentKind === 'conversation') {
         if (arrival === 'mark-read') {
-          clearConversationUnreadInCache(queryClient, parentID);
-          void apiFetch<void>(`/api/v1/conversations/${encodeURIComponent(parentID)}/read`, { method: 'PUT' })
-            .catch(() => undefined);
+          markArrivalRead(queryClient, 'conversation', parentID, msg.id);
         } else if (arrival === 'bump-unread') {
-          bumpConversationUnread(queryClient, parentID);
+          bumpConversationUnread(queryClient, parentID, msg.seq);
         }
       }
       if (parentKind === 'conversation') {
@@ -450,13 +460,23 @@ export default function ChatPage() {
         return;
       }
       if (evt.channelID) {
-        // Bare {channelID}: the user read this channel in another tab —
-        // clear the badge in place, no refetch.
-        clearChannelUnreadInCache(queryClient, evt.channelID);
+        // Bare {channelID}: the user read this channel (this or another tab).
+        // The echo carries the server's remaining count and the read point:
+        // patch both in place (a read-up-to-message can leave some unread),
+        // no refetch. A legacy echo without the count means "caught up".
+        if (typeof evt.unreadCount === 'number') {
+          applyChannelReadInCache(queryClient, evt.channelID, readEcho(evt.unreadCount, evt));
+        } else {
+          clearChannelUnreadInCache(queryClient, evt.channelID);
+        }
         return;
       }
       if (evt.conversationID) {
-        clearConversationUnreadInCache(queryClient, evt.conversationID);
+        if (typeof evt.unreadCount === 'number') {
+          applyConversationReadInCache(queryClient, evt.conversationID, readEcho(evt.unreadCount, evt));
+        } else {
+          clearConversationUnreadInCache(queryClient, evt.conversationID);
+        }
         return;
       }
       blanketRefresh();

@@ -99,13 +99,14 @@ func (s *dataConversationStore) IncrementMessageSeq(_ context.Context, convID st
 	return conv.MessageSeq, nil
 }
 
-func (s *dataConversationStore) SetConversationLastRead(_ context.Context, convID, userID string, seq int64) error {
+func (s *dataConversationStore) SetConversationLastRead(_ context.Context, convID, userID string, seq int64, msgID string) error {
 	if s.lastReadErr != nil {
 		return s.lastReadErr
 	}
 	for _, uc := range s.userConvs[userID] {
 		if uc.ConversationID == convID {
 			uc.LastReadSeq = seq
+			uc.LastReadMsgID = msgID
 			return nil
 		}
 	}
@@ -212,6 +213,7 @@ func setupConversationHandlerFull(t *testing.T) *convHandlerEnv {
 	parentIndex := newDataParentIndexStore()
 
 	convSvc := service.NewConversationService(convs, users, cache, broker, nil)
+	convSvc.SetMessageStore(messages)
 	messageSvc := service.NewMessageService(messages, members, convs, nil, broker)
 	messageSvc.SetParentIndex(newParentIndexAdapterFromBacking(parentIndex))
 	jwtMgr := auth.NewJWTManager("test-conv-full-secret", 15*time.Minute, 720*time.Hour)
@@ -485,6 +487,49 @@ func TestConversationHandler_MarkRead_Errors(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("read error status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+// PUT /read with {"upToMessageID"} reads up to that message only; a bad body
+// or an unknown message is a 400, never a silent read-everything.
+func TestConversationHandler_MarkRead_UpToMessage(t *testing.T) {
+	env := setupConversationHandlerFull(t)
+	user := &model.User{ID: "u-read", Email: "read@example.com", SystemRole: model.SystemRoleMember}
+	token, _ := env.jwtMgr.GenerateAccessToken(user)
+	env.convs.conversations["conv-read"] = &model.Conversation{
+		ID:             "conv-read",
+		Type:           model.ConversationTypeDM,
+		ParticipantIDs: []string{"u-read", "u-other"},
+		Activated:      true,
+		MessageSeq:     5,
+	}
+	env.convs.userConvs["u-read"] = []*model.UserConversation{{UserID: "u-read", ConversationID: "conv-read", Activated: true}}
+	env.messages.messages["conv-read#01J00000000000000000000003"] = &model.Message{ID: "01J00000000000000000000003", ParentID: "conv-read", Seq: 3}
+	// A later counted message keeps the read point at 3 (reading the newest
+	// would take the conversation's current seq).
+	env.messages.messages["conv-read#01J00000000000000000000004"] = &model.Message{ID: "01J00000000000000000000004", ParentID: "conv-read", Seq: 4}
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.MarkRead))
+
+	put := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/conversations/conv-read/read", strings.NewReader(body))
+		req.SetPathValue("id", "conv-read")
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := put(`{"upToMessageID":"01J00000000000000000000003"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body: %s", rec.Code, rec.Body.String())
+	}
+	if uc := env.convs.userConvs["u-read"][0]; uc.LastReadSeq != 3 || uc.LastReadMsgID != "01J00000000000000000000003" {
+		t.Fatalf("read point = (%d, %q), want (3, 01J…03)", uc.LastReadSeq, uc.LastReadMsgID)
+	}
+	if rec := put(`{"upToMessageID":"01J00000000000000000000099"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("unknown message status = %d, want 400", rec.Code)
+	}
+	if rec := put(`{"bogus":1}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("invalid body status = %d, want 400", rec.Code)
 	}
 }
 
