@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useState, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
-import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { monitorForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import {
   extractClosestEdge,
@@ -30,6 +30,7 @@ import {
   ChevronDown,
   BookUser,
   MessagesSquare,
+  Bot,
   FilePenLine,
   MoreVertical,
   Trash2,
@@ -38,6 +39,7 @@ import {
   Bell,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { AI_HUB_HOME, isAiHubPath } from '@/lib/ai-hub';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -126,6 +128,9 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [categoryCreateError, setCategoryCreateError] = useState('');
   const navigate = useNavigate();
   const location = useLocation();
+  // The AI hub entry is one link for three routes, so its active state is
+  // ours to compute — NavLink would only match /agents.
+  const aiHubActive = isAiHubPath(location.pathname);
   // Drag-to-reorder needs a mouse or trackpad. Without one — a phone, or an
   // iPad on its own — a hold on a row opens its menu (useRowLongPressMenu) and
   // iPadOS would start a native drag lift from that same hold.
@@ -1021,6 +1026,22 @@ export function Sidebar({ onClose }: SidebarProps) {
               </Badge>
             )}
           </NavLink>
+
+          {/* One entry for the whole AI hub — Agents, Skills and Connectors
+              are tabs inside it (AiHubLayout). Lit for all three routes. */}
+          <Link
+            to={AI_HUB_HOME}
+            onClick={onClose}
+            aria-current={aiHubActive ? 'page' : undefined}
+            className={`relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
+              aiHubActive
+                ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
+                : 'text-gray-300 hover:bg-white/10 hover:text-white'
+            }`}
+          >
+            <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>Agents</span>
+          </Link>
 
           {/* Visual break between top-level pages and the channel/DM list. */}
           <div

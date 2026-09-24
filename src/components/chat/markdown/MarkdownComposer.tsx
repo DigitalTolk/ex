@@ -9,6 +9,9 @@ import type { EmojiSkinTone } from '@/lib/emoji-shortcodes';
 import { MarkdownEditor, type WysiwygEditorHandle, type ActiveFormat } from './MarkdownEditor';
 import type { CompletionProviders } from './extensions/completions';
 import type { SlashCommand } from './extensions/slashCommands';
+import { useConnectors } from '@/hooks/useConnectors';
+import { useSkills } from '@/hooks/useAgents';
+import { skillPickToken } from '@/lib/picks';
 
 export type { WysiwygEditorHandle, ActiveFormat };
 
@@ -50,6 +53,28 @@ export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function 
   const { data: emojiMap = {} } = useEmojiMap();
   const auth = useOptionalAuth();
   const skinTone: EmojiSkinTone = auth?.user?.emojiSkinTone ?? '';
+  // "/" typeahead offers the user's INSTALLED connectors — picking one puts
+  // an inline "/slug" token in the message that scopes which external
+  // services the agent run may use.
+  const { data: allConnectors } = useConnectors();
+  const installedConnectors = useMemo(
+    () =>
+      (allConnectors ?? [])
+        .filter((c) => c.installed)
+        .map((c) => ({ name: c.slug, description: c.title + ' — ' + c.description })),
+    [allConnectors],
+  );
+  // …and the workspace SKILLS: "/weekly-report" attaches that skill's
+  // instructions to the agent run this message invokes (works in DMs too).
+  // Token = the server's normalization of the skill name.
+  const { data: allSkills } = useSkills();
+  const skillPicks = useMemo(
+    () =>
+      (allSkills ?? [])
+        .map((s) => ({ name: skillPickToken(s.name), description: s.name + ' — ' + s.description }))
+        .filter((s) => s.name !== ''),
+    [allSkills],
+  );
 
   // Partition the @-mention list by channel membership only when we actually
   // know the roster — otherwise a mid-load empty set would mislabel everyone.
@@ -75,8 +100,10 @@ export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function 
       customEmojis: () => customEmojis,
       skinTone: () => skinTone,
       commands: slashCommands,
+      connectors: () => installedConnectors,
+      skills: () => skillPicks,
     }),
-    [users, online, memberIds, channels, customEmojis, skinTone, slashCommands],
+    [users, online, memberIds, channels, customEmojis, skinTone, slashCommands, installedConnectors, skillPicks],
   );
 
   return (

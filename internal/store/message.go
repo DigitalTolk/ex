@@ -188,6 +188,46 @@ func (s *MessageStoreImpl) ListMessages(ctx context.Context, parentID string, be
 // lag, but clients receive it over the WebSocket broadcast, so the index only
 // needs to be authoritative for the historical thread. Tombstoned replies keep
 // their key (Update re-stamps), so deleted replies still appear as placeholders.
+// ListThreadRepliesNewest returns at most `limit` of a thread's NEWEST replies
+// (oldest-first in the result), one bounded query instead of a full drain.
+//
+// The context bundle keeps a 30-message window, and a coding-task thread runs
+// for hours — reading every reply to slice the tail off is the single biggest
+// avoidable read on the run hot path.
+func (s *MessageStoreImpl) ListThreadRepliesNewest(ctx context.Context, threadRootID string, limit int) ([]*model.Message, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	keyCond := expression.Key("GSI1PK").Equal(expression.Value(threadGSI1PK(threadRootID)))
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
+	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(s.Table),
+		IndexName:                 aws.String("GSI1"),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ScanIndexForward:          aws.Bool(false), // newest first
+		Limit:                     aws.Int32(int32(limit)),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: list newest thread replies: %w", err)
+	}
+	replies := make([]*model.Message, 0, len(out.Items))
+	for _, av := range out.Items {
+		var mi messageItem
+		if err := attributevalue.UnmarshalMap(av, &mi); err != nil {
+			return nil, fmt.Errorf("store: unmarshal thread reply: %w", err)
+		}
+		m := mi.Message
+		replies = append(replies, &m)
+	}
+	// Query returned newest-first; callers read oldest-first.
+	for i, j := 0, len(replies)-1; i < j; i, j = i+1, j-1 {
+		replies[i], replies[j] = replies[j], replies[i]
+	}
+	return replies, nil
+}
+
 func (s *MessageStoreImpl) ListThreadReplies(ctx context.Context, threadRootID string) ([]*model.Message, error) {
 	keyCond := expression.Key("GSI1PK").Equal(expression.Value(threadGSI1PK(threadRootID)))
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())

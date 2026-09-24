@@ -762,3 +762,54 @@ func TestWSHandler_Connect_SessionDeadlineClosesSocket(t *testing.T) {
 		}
 	}
 }
+
+// The write loop's hub-side eviction arm: when the BROKER closes a client
+// (server drain via Broker.Close, or an eviction) while the socket is still
+// up, Connect returns via client.Done() — pinned directly because it used to
+// be covered only by select-race luck.
+func TestWSHandler_Connect_BrokerCloseEndsConnection(t *testing.T) {
+	ps, err := pubsub.NewRedisPubSub("redis://" + redisAddrForTest(t))
+	if err != nil {
+		t.Fatalf("pubsub: %v", err)
+	}
+	broker := pubsub.NewBroker(ps)
+	t.Cleanup(func() { _ = broker.Close() })
+
+	channels := newDataChannelStore()
+	memberships := newDataMembershipStore()
+	convs := newDataConversationStore()
+	users := newDataUserStoreForConv()
+	bAdapter := NewBrokerAdapter(broker)
+	chanSvc := service.NewChannelService(channels, memberships, users, nil, nil, bAdapter, nil)
+	convSvc := service.NewConversationService(convs, users, nil, bAdapter, nil)
+	h := NewWSHandler(broker, chanSvc, convSvc, service.NewPresenceService(nil, nil))
+	jwtMgr := auth.NewJWTManager("ws-test-secret", 15*time.Minute, 720*time.Hour)
+	token := makeTokenForUser(jwtMgr, &model.User{ID: "u-ws-drain", Email: "wsd@test.com", SystemRole: model.SystemRoleMember})
+
+	srv := httptest.NewServer(middleware.Auth(jwtMgr)(http.HandlerFunc(h.Connect)))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := dialWS(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/", token)
+	if err != nil {
+		t.Fatalf("ws dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	// Let the handshake land so the write loop is parked in its select.
+	if _, _, err := conn.Read(ctx); err != nil {
+		t.Fatalf("handshake read: %v", err)
+	}
+
+	if err := broker.Close(); err != nil {
+		t.Fatalf("broker close: %v", err)
+	}
+	// The server side returns via client.Done() and tears the socket down —
+	// reads must fail (whatever frames were already in flight drain first).
+	for {
+		if _, _, err := conn.Read(ctx); err != nil {
+			return // connection ended, arm covered
+		}
+	}
+}

@@ -25,6 +25,7 @@ func (s *UserStateService) List(ctx context.Context, userID string) (*model.User
 		ThreadNotifications: []string{},
 		ThreadSeen:          map[string]string{},
 		HiddenConversations: []string{},
+		HiddenSkills:        []string{},
 	}
 	if s.store == nil || userID == "" {
 		return state, nil
@@ -43,10 +44,13 @@ func (s *UserStateService) List(ctx context.Context, userID string) (*model.User
 			}
 		case model.UserStateHiddenConversation:
 			state.HiddenConversations = append(state.HiddenConversations, item.TargetID)
+		case model.UserStateHiddenSkill:
+			state.HiddenSkills = append(state.HiddenSkills, item.TargetID)
 		}
 	}
 	sort.Strings(state.ThreadNotifications)
 	sort.Strings(state.HiddenConversations)
+	sort.Strings(state.HiddenSkills)
 	return state, nil
 }
 
@@ -90,6 +94,40 @@ func (s *UserStateService) HideConversation(ctx context.Context, userID, convID 
 
 func (s *UserStateService) UnhideConversation(ctx context.Context, userID, convID string) error {
 	return s.delete(ctx, userID, model.UserStateHiddenConversation, convID)
+}
+
+// HideSkill removes one skill from the discovery index of this user's agent
+// runs; UnhideSkill restores it. Hiding never blocks an explicit /skill pick.
+func (s *UserStateService) HideSkill(ctx context.Context, userID, skillID string) error {
+	return s.set(ctx, &model.UserStateItem{
+		UserID:    userID,
+		Kind:      model.UserStateHiddenSkill,
+		TargetID:  skillID,
+		UpdatedAt: time.Now(),
+	})
+}
+
+func (s *UserStateService) UnhideSkill(ctx context.Context, userID, skillID string) error {
+	return s.delete(ctx, userID, model.UserStateHiddenSkill, skillID)
+}
+
+// HiddenSkillSet is the orchestrator's view: the set of skill ids userID has
+// removed from their agents' discovery index.
+func (s *UserStateService) HiddenSkillSet(ctx context.Context, userID string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if s.store == nil || userID == "" {
+		return out, nil
+	}
+	items, err := s.store.ListUserState(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("user state: list: %w", err)
+	}
+	for _, item := range items {
+		if item.Kind == model.UserStateHiddenSkill {
+			out[item.TargetID] = true
+		}
+	}
+	return out, nil
 }
 
 func (s *UserStateService) set(ctx context.Context, item *model.UserStateItem) error {

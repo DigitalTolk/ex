@@ -36,6 +36,12 @@ const CustomEmojiPage = lazy(() => import('@/pages/CustomEmojiPage'));
 const NewConversationPage = lazy(() => import('@/pages/NewConversationPage'));
 const ThreadsPage = lazy(() => import('@/pages/ThreadsPage'));
 const DraftsPage = lazy(() => import('@/pages/DraftsPage'));
+const AgentsPage = lazy(() => import('@/pages/AgentsPage'));
+const SkillsPage = lazy(() => import('@/pages/SkillsPage'));
+const ConnectorsPage = lazy(() => import('@/pages/ConnectorsPage'));
+// Tiny layout shell — not worth its own chunk, and it must be there before
+// any of its lazy children resolve so the tab strip never flashes in late.
+import AiHubLayout from '@/pages/AiHubLayout';
 const ActivityPage = lazy(() => import('@/pages/ActivityPage'));
 const SearchResultsPage = lazy(() => import('@/pages/SearchResultsPage'));
 // Password recovery is a cold path (guest accounts only, rarely hit) — keep
@@ -144,6 +150,13 @@ function AppRoutes() {
         <Route path="activity" element={<ActivityPage />} />
         <Route path="threads" element={<ThreadsPage />} />
         <Route path="drafts" element={<DraftsPage />} />
+        {/* The AI hub: one sidebar entry, tabs over the three pages. Each page
+            keeps its own URL so deep links and callbacks are unchanged. */}
+        <Route element={<AiHubLayout />}>
+          <Route path="agents" element={<AgentsPage />} />
+          <Route path="skills" element={<SkillsPage />} />
+          <Route path="connectors" element={<ConnectorsPage />} />
+        </Route>
         <Route path="admin" element={<AdminPage />} />
         <Route path="webhooks" element={<IncomingWebhooksPage />} />
         <Route path="emojis" element={<CustomEmojiPage />} />

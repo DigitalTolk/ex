@@ -51,6 +51,13 @@ func AuthWithUserStatus(jwtMgr *auth.JWTManager, users authUserStore) func(http.
 				http.Error(w, "invalid token", http.StatusUnauthorized)
 				return
 			}
+			// Scoped tokens (runner, run) authenticate machines, not people —
+			// they are valid only on their dedicated routes via AuthScope. A
+			// leaked runner token must not drive the interactive API.
+			if claims.Scope != "" {
+				http.Error(w, "invalid token", http.StatusUnauthorized)
+				return
+			}
 			if users != nil {
 				status, err := users.UserStatus(r.Context(), claims.UserID)
 				if err != nil || status == "deactivated" {
@@ -59,6 +66,28 @@ func AuthWithUserStatus(jwtMgr *auth.JWTManager, users authUserStore) func(http.
 				}
 			}
 
+			ctx := context.WithValue(r.Context(), claimsKey, claims)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// AuthScope validates a JWT and requires it to carry exactly the given
+// scope. Session tokens (empty scope) and other scopes are rejected: the
+// runner API takes runner tokens only, the run-tool API run tokens only.
+func AuthScope(jwtMgr *auth.JWTManager, scope string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			tokenStr := extractToken(r)
+			if tokenStr == "" {
+				http.Error(w, "missing or invalid token", http.StatusUnauthorized)
+				return
+			}
+			claims, err := jwtMgr.ValidateToken(tokenStr)
+			if err != nil || claims.Scope != scope {
+				http.Error(w, "invalid token", http.StatusUnauthorized)
+				return
+			}
 			ctx := context.WithValue(r.Context(), claimsKey, claims)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
