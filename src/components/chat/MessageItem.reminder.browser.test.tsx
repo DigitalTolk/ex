@@ -101,6 +101,48 @@ describe('MessageItem "Remind me"', () => {
     expect(createReminderMutate.mock.calls[0][0]).toMatchObject({ parentID: 'conv-1', parentType: 'conversation' });
   });
 
+  // THE reported bug: messages loaded from the list API carry no parentType
+  // (only live WebSocket frames do). In a DM that used to fall back to
+  // "channel" and the server rejected the reminder (403). The view the row
+  // renders in decides.
+  it('schedules a DM reminder as a conversation even when the message has no parentType', async () => {
+    if (window.innerWidth <= 767) return;
+    const screen = await renderItem(
+      <MessageItem
+        message={makeMessage({ parentID: 'conv-1', parentType: undefined })}
+        authorName="Alice"
+        isOwn={false}
+        conversationId="conv-1"
+      />,
+    );
+    await openMenu();
+    await userEvent.click(screen.getByTestId('remind-me-trigger'));
+    await userEvent.click(screen.getByTestId('remind-in1h'));
+    expect(createReminderMutate.mock.calls[0][0]).toMatchObject({ parentID: 'conv-1', parentType: 'conversation' });
+  });
+
+  it('falls back to the message parentType outside a channel/conversation view', async () => {
+    if (window.innerWidth <= 767) return;
+    const screen = await renderItem(
+      <MessageItem message={makeMessage({ parentID: 'conv-1', parentType: 'conversation' })} authorName="Alice" isOwn={false} />,
+    );
+    await openMenu();
+    await userEvent.click(screen.getByTestId('remind-me-trigger'));
+    await userEvent.click(screen.getByTestId('remind-in1h'));
+    expect(createReminderMutate.mock.calls[0][0]).toMatchObject({ parentType: 'conversation' });
+  });
+
+  it('defaults to a channel when neither the view nor the message says', async () => {
+    if (window.innerWidth <= 767) return;
+    const screen = await renderItem(
+      <MessageItem message={makeMessage({ parentType: undefined })} authorName="Alice" isOwn={false} />,
+    );
+    await openMenu();
+    await userEvent.click(screen.getByTestId('remind-me-trigger'));
+    await userEvent.click(screen.getByTestId('remind-in1h'));
+    expect(createReminderMutate.mock.calls[0][0]).toMatchObject({ parentType: 'channel' });
+  });
+
   it('opens the custom dialog and schedules a chosen time', async () => {
     if (window.innerWidth <= 767) return;
     const screen = await renderItem(

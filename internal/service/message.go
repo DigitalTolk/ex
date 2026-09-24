@@ -845,7 +845,9 @@ func (s *MessageService) ListThreadMessages(ctx context.Context, userID, parentI
 	// the very latest reply lags the GSI also scans here — correct, just slower
 	// for that sub-second window; already-open clients got it over the WebSocket.
 	if root != nil && len(replies) < root.ReplyCount {
-		return s.listThreadByScan(ctx, parentID, threadRootID)
+		thread, err := s.listThreadByScan(ctx, parentID, threadRootID)
+		stampParentType(thread, parentType)
+		return thread, err
 	}
 	thread := make([]*model.Message, 0, len(replies)+1)
 	if root != nil {
@@ -853,6 +855,7 @@ func (s *MessageService) ListThreadMessages(ctx context.Context, userID, parentI
 	}
 	thread = append(thread, replies...)
 	sort.Slice(thread, func(i, j int) bool { return thread[i].ID < thread[j].ID })
+	stampParentType(thread, parentType)
 	s.attachRendered(thread...)
 	return thread, nil
 }
@@ -1427,7 +1430,20 @@ func (s *MessageService) List(ctx context.Context, userID, parentID, parentType,
 	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, false, err
 	}
-	return s.listTopLevel(ctx, parentID, before, limit)
+	msgs, hasMore, err := s.listTopLevel(ctx, parentID, before, limit)
+	stampParentType(msgs, parentType)
+	return msgs, hasMore, err
+}
+
+// stampParentType fills Message.ParentType on messages read from the store.
+// It isn't persisted (dynamodbav:"-") — live WebSocket frames stamp it in
+// publishEvent — so without this every list response went out without it,
+// and a client that needed it (the reminder target on a DM message) fell
+// back to "channel" and got a 403.
+func stampParentType(msgs []*model.Message, parentType string) {
+	for _, m := range msgs {
+		m.ParentType = parentType
+	}
 }
 
 // ListAfter returns top-level messages strictly newer than `after`.
@@ -1435,7 +1451,9 @@ func (s *MessageService) ListAfter(ctx context.Context, userID, parentID, parent
 	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, false, err
 	}
-	return s.listTopLevelAfter(ctx, parentID, after, limit)
+	msgs, hasMore, err := s.listTopLevelAfter(ctx, parentID, after, limit)
+	stampParentType(msgs, parentType)
+	return msgs, hasMore, err
 }
 
 // ListAround returns a top-level window centered on msgID so a deep-
@@ -1486,6 +1504,7 @@ func (s *MessageService) ListAround(ctx context.Context, userID, parentID, paren
 		out = append(out, target)
 	}
 	out = append(out, older...)
+	stampParentType(out, parentType)
 	s.attachRendered(out...)
 	return out, hasMoreOlder, hasMoreNewer, nil
 }
