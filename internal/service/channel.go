@@ -817,20 +817,53 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 	return filtered, nil
 }
 
-// MarkChannelRead catches the user up to the channel's current MessageSeq, so
-// the sidebar unread badge clears and stays cleared across reloads. Publishes a
-// user.channel.updated to the caller's own topic so other tabs/devices refetch
-// and drop the badge too. Returns ErrNotFound when the caller isn't a member.
-func (s *ChannelService) MarkChannelRead(ctx context.Context, userID, channelID string) error {
+// MarkChannelRead moves the user's read point in the channel forward — to the
+// channel's current MessageSeq, or, with upToMsgID, to just after that message
+// (see resolveReadPoint) — so the sidebar unread badge reflects it across
+// reloads. Forward-only: a point behind the stored one is a silent no-op.
+// Publishes a user.channel.updated to the caller's own topic so other
+// tabs/devices refetch the read point too. Returns ErrNotFound when the caller
+// isn't a member, ErrValidation for a bad upToMsgID.
+func (s *ChannelService) MarkChannelRead(ctx context.Context, userID, channelID, upToMsgID string) error {
 	ch, err := s.channels.GetChannel(ctx, channelID)
 	if err != nil {
 		return fmt.Errorf("channel: get: %w", err)
 	}
-	if err := s.memberships.SetChannelLastRead(ctx, channelID, userID, ch.MessageSeq); err != nil {
+	// Membership BEFORE any message lookup: resolving upToMsgID reads the
+	// channel's messages, and its 400s (unknown / thread reply) must not let a
+	// non-member probe which message IDs exist in a private channel.
+	if upToMsgID != "" {
+		if _, err := s.memberships.GetMembership(ctx, channelID, userID); err != nil {
+			return err
+		}
+	}
+	now := time.Now()
+	seq, msgID, err := resolveReadPoint(ctx, s.messages, channelID, ch.MessageSeq, seqSettled(ch.LastSeqAt, now), upToMsgID, now)
+	if err != nil {
+		return err
+	}
+	if err := s.memberships.SetChannelLastRead(ctx, channelID, userID, seq, msgID); err != nil {
+		// Already read past this point (a stale tab, a reordered request):
+		// success, but announce nothing — the numbers below would describe a
+		// read point that was never stored, and tabs would SET a wrong badge.
+		if errors.Is(err, store.ErrStaleReadPoint) {
+			return nil
+		}
 		return err
 	}
 	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
 		"channelID": channelID,
+		// What this read left unread: 0 lets other tabs clear the badge in
+		// place; > 0 (a read-up-to-message) tells them to refetch the count.
+		"unreadCount": max(0, ch.MessageSeq-seq),
+		// The read point itself, so every tab can move its cached watermark
+		// (the client places the "New" divider after it on the next open).
+		"lastReadMsgID": msgID,
+		// The seq pair behind unreadCount, so a tab can drop an echo older
+		// than one it already applied and keep counting messages it saw
+		// arrive after this read was computed.
+		"lastReadSeq": seq,
+		"messageSeq":  ch.MessageSeq,
 	})
 	return nil
 }

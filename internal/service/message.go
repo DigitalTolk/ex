@@ -47,7 +47,7 @@ type ConversationActivator interface {
 // dependency — when unset (e.g. a narrow unit test) the bump is simply skipped.
 type UnreadSeqStore interface {
 	IncrementMessageSeq(ctx context.Context, parentID string) (int64, error)
-	SetLastRead(ctx context.Context, parentID, userID string, seq int64) error
+	SetLastRead(ctx context.Context, parentID, userID string, seq int64, msgID string) error
 }
 
 // AttachmentRefManager is the AttachmentService capability MessageService uses
@@ -332,41 +332,74 @@ func (s *MessageService) notify(ctx context.Context, msg *model.Message, parentT
 	})
 }
 
-// bumpUnreadSeq advances a parent's unread counter for a new top-level message
-// and marks the author caught up (posting reads the parent for you, so your own
-// message never shows as unread to you). The same mechanism serves channels and
-// conversations — only the store differs. Like notify and indexMessage it runs
-// detached with a cancellation-free context: the two row writes are best-effort
-// unread bookkeeping that must never add to the sender's request latency, and
-// the count only has to be durable before the recipient reloads — not before
-// the send returns. No-op when the seq store isn't wired.
-func (s *MessageService) bumpUnreadSeq(ctx context.Context, store UnreadSeqStore, parentID, authorID string) {
+// unreadSeqStore returns the seq store a new message counts toward, or nil
+// when it doesn't count: only a top-level message bumps its parent's unread
+// counter (thread replies surface via thread notifications). System join/leave
+// messages never reach the send paths that call this.
+func (s *MessageService) unreadSeqStore(parentType, parentMessageID string) UnreadSeqStore {
+	if parentMessageID != "" {
+		return nil
+	}
+	switch parentType {
+	case ParentChannel:
+		return s.channelSeq
+	case ParentConversation:
+		return s.convSeq
+	}
+	return nil
+}
+
+// claimSeq advances the parent's unread counter for a new counted message and
+// returns the claimed value, which the caller stamps on the message as
+// Message.Seq. It runs synchronously BEFORE the message is persisted and
+// published: a recipient watching the parent marks it read the moment
+// message.new lands, and that read must see the incremented MessageSeq — the
+// old detached bump raced it, stamping the stale seq so the badge came back
+// on reload. The cost is one UpdateItem on the send path.
+//
+// Best-effort: a failed increment is logged and returns 0 (the message still
+// sends, it just can't anchor a read-up-to point). If the create that follows
+// fails, the claimed seq is simply skipped — recipients see one phantom
+// unread that clears on their next read. No-op when the seq store isn't wired.
+func (s *MessageService) claimSeq(ctx context.Context, store UnreadSeqStore, parentID string) int64 {
 	if store == nil {
+		return 0
+	}
+	seq, err := store.IncrementMessageSeq(ctx, parentID)
+	if err != nil {
+		slog.Warn("unread seq increment failed", "parentID", parentID, "error", err)
+		return 0
+	}
+	return seq
+}
+
+// markAuthorRead moves the author's read point to their own just-sent message
+// (posting reads the parent for you, so your own message never shows as unread
+// to you). Detached with a cancellation-free context like notify and
+// indexMessage: it's best-effort bookkeeping that must never add to the
+// sender's latency, and the forward-only store write makes reordered detached
+// writes harmless.
+func (s *MessageService) markAuthorRead(ctx context.Context, store UnreadSeqStore, msg *model.Message) {
+	// No seq claimed means nothing to anchor. The webhook sentinel is not a
+	// member and keeps no read state — marking it read can only fail ("store:
+	// item not found" WARN on every webhook post).
+	if store == nil || msg.Seq == 0 || msg.AuthorID == WebhookAuthorID {
 		return
 	}
 	safe.Go(func() {
 		bg, cancel := detachedContext(ctx)
 		defer cancel()
-		s.writeUnreadSeq(bg, store, parentID, authorID)
+		s.writeAuthorRead(bg, store, msg.ParentID, msg.AuthorID, msg.Seq, msg.ID)
 	})
 }
 
-// writeUnreadSeq is the synchronous core of bumpUnreadSeq, split out so it can
-// be unit-tested without racing the detached goroutine. O(1) — two row writes
-// regardless of member count, unlike a per-member fan-out.
-func (s *MessageService) writeUnreadSeq(ctx context.Context, store UnreadSeqStore, parentID, authorID string) {
-	seq, err := store.IncrementMessageSeq(ctx, parentID)
-	if err != nil {
-		slog.Warn("unread seq increment failed", "parentID", parentID, "error", err)
-		return
-	}
-	// The webhook sentinel is not a member and keeps no read state — marking
-	// it read can only fail ("store: item not found" WARN on every webhook
-	// post). Recipients' unread still bumps via the seq increment above.
-	if authorID == WebhookAuthorID {
-		return
-	}
-	if err := store.SetLastRead(ctx, parentID, authorID, seq); err != nil {
+// writeAuthorRead is the synchronous core of markAuthorRead, split out so it
+// can be unit-tested without racing the detached goroutine.
+func (s *MessageService) writeAuthorRead(ctx context.Context, seqStore UnreadSeqStore, parentID, authorID string, seq int64, msgID string) {
+	err := seqStore.SetLastRead(ctx, parentID, authorID, seq, msgID)
+	// Stale = the author already read past their own post (a newer read won
+	// the race) — nothing to do.
+	if err != nil && !errors.Is(err, store.ErrStaleReadPoint) {
 		slog.Warn("author last-read mark failed", "parentID", parentID, "userID", authorID, "error", err)
 	}
 }
@@ -447,7 +480,6 @@ func (s *MessageService) send(ctx context.Context, userID, parentID, parentType,
 
 	now := time.Now()
 	msg := &model.Message{
-		ID:              store.NewID(),
 		ParentID:        parentID,
 		AuthorID:        userID,
 		Body:            body,
@@ -456,6 +488,16 @@ func (s *MessageService) send(ctx context.Context, userID, parentID, parentType,
 		NoIndex:         noIndex,
 		CreatedAt:       now,
 	}
+
+	// Claim the unread seq before minting the ID. That narrows, but cannot
+	// close, seq/ID inversions (ULID entropy is random within a millisecond,
+	// and concurrent sends race), so nothing may assume "higher seq ⇒ later
+	// ID": the read point orders by seq (store.setReadPoint) and a read that
+	// reaches the newest message takes the parent's current seq
+	// (resolveReadPoint).
+	seqStore := s.unreadSeqStore(parentType, parentMessageID)
+	msg.Seq = s.claimSeq(ctx, seqStore, parentID)
+	msg.ID = store.NewID()
 
 	if err := s.messages.CreateMessage(ctx, msg); err != nil {
 		return nil, fmt.Errorf("message: create: %w", err)
@@ -467,6 +509,7 @@ func (s *MessageService) send(ctx context.Context, userID, parentID, parentType,
 		}
 		return nil, err
 	}
+	s.markAuthorRead(ctx, seqStore, msg)
 
 	// Maintain the per-parent FILE# index. Each attached file gets one
 	// row per parent — re-shares overwrite the existing row so the
@@ -490,15 +533,11 @@ func (s *MessageService) send(ctx context.Context, userID, parentID, parentType,
 	// counter, re-touch/re-order the conversation, or fan out
 	// userchannel.updated — otherwise the DM lights up as if a fresh top-level
 	// message arrived. Thread replies still reach participants via message.new
-	// (conversation topic) and notification.new (thread participants). This
-	// mirrors the channel rule below and the frontend gate in onMessageNew.
+	// (conversation topic) and notification.new (thread participants). The
+	// unread-counter half of this rule lives in unreadSeqStore; the frontend
+	// gate in onMessageNew mirrors both.
 	if parentType == ParentConversation && parentMessageID == "" {
 		if conv := sendConv; conv != nil {
-			// Unread is tracked with the same per-parent seq counter channels use
-			// — one increment + the author's last-read, instead of a Redis write
-			// per recipient. The author is marked caught up so their own message
-			// never shows as unread to them.
-			s.bumpUnreadSeq(ctx, s.convSeq, parentID, userID)
 			s.touchConversationActivity(ctx, parentID, conv.ParticipantIDs, now)
 			// Activate the conversation on first top-level message so non-creator
 			// participants see it appear in their sidebars only after activity exists.
@@ -508,14 +547,6 @@ func (s *MessageService) send(ctx context.Context, userID, parentID, parentType,
 				}
 			}
 		}
-	}
-
-	// Channel unread: only a top-level human message bumps the channel's
-	// unread counter (thread replies surface via thread notifications; system
-	// join/leave events aren't "new activity"). Mirrors the conversation rule
-	// above and the frontend rule in onMessageNew so live and persisted counts agree.
-	if parentType == ParentChannel && parentMessageID == "" && !msg.System {
-		s.bumpUnreadSeq(ctx, s.channelSeq, parentID, userID)
 	}
 
 	var updatedThreadRoot *model.Message
@@ -620,7 +651,6 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 		return nil, err
 	}
 	msg := &model.Message{
-		ID:                 store.NewID(),
 		ParentID:           parentID,
 		AuthorID:           authorID,
 		Body:               in.Body,
@@ -633,14 +663,15 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 	if msg.WebhookUsername == "" {
 		msg.WebhookUsername = "webhook"
 	}
+	// Webhook posts are always top-level, so they always count toward unread.
+	seqStore := s.unreadSeqStore(parentType, "")
+	msg.Seq = s.claimSeq(ctx, seqStore, parentID)
+	msg.ID = store.NewID()
 	if err := s.messages.CreateMessage(ctx, msg); err != nil {
 		return nil, fmt.Errorf("message: create webhook: %w", err)
 	}
-	switch parentType {
-	case ParentChannel:
-		s.bumpUnreadSeq(ctx, s.channelSeq, parentID, authorID)
-	case ParentConversation:
-		s.bumpUnreadSeq(ctx, s.convSeq, parentID, authorID)
+	s.markAuthorRead(ctx, seqStore, msg)
+	if parentType == ParentConversation {
 		// A bot thread receives only webhook traffic: untouched here, its
 		// updatedAt stays frozen at creation.
 		if s.conversations != nil {

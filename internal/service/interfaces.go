@@ -45,9 +45,10 @@ type MembershipStore interface {
 	// single fan-out instead of one query per user.
 	UserChannelNotifPrefs(ctx context.Context, channelID string, userIDs []string) (map[string]*model.UserChannel, error)
 	SetMute(ctx context.Context, channelID, userID string, muted bool) error
-	// SetChannelLastRead stamps the channel's current MessageSeq onto the
-	// user's row, marking everything up to it as read.
-	SetChannelLastRead(ctx context.Context, channelID, userID string, seq int64) error
+	// SetChannelLastRead moves the user's read point forward to seq (and the
+	// msgID watermark, when non-empty). Forward-only: a point behind the
+	// stored one is a silent no-op.
+	SetChannelLastRead(ctx context.Context, channelID, userID string, seq int64, msgID string) error
 	SetFavorite(ctx context.Context, channelID, userID string, favorite bool) error
 	SetCategory(ctx context.Context, channelID, userID, categoryID string, sidebarPosition *int) error
 	// SetNotifPrefs persists a user's per-channel notification overrides;
@@ -63,7 +64,7 @@ type ConversationStore interface {
 	ActivateConversation(ctx context.Context, convID string, participantIDs []string) error
 	TouchConversation(ctx context.Context, convID string, participantIDs []string, at time.Time) error
 	IncrementMessageSeq(ctx context.Context, convID string) (int64, error)
-	SetConversationLastRead(ctx context.Context, convID, userID string, seq int64) error
+	SetConversationLastRead(ctx context.Context, convID, userID string, seq int64, msgID string) error
 	SetFavorite(ctx context.Context, convID, userID string, favorite bool) error
 	SetCategory(ctx context.Context, convID, userID, categoryID string, sidebarPosition *int) error
 }

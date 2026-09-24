@@ -948,7 +948,7 @@ func TestMembershipStore_SetChannelLastRead(t *testing.T) {
 		t.Fatalf("AddChannelMember: %v", err)
 	}
 
-	if err := ms.SetChannelLastRead(ctx, "ch-lr", "u-lr", 12); err != nil {
+	if err := ms.SetChannelLastRead(ctx, "ch-lr", "u-lr", 12, ""); err != nil {
 		t.Fatalf("SetChannelLastRead: %v", err)
 	}
 	chans, err := ms.ListUserChannels(ctx, "u-lr")
@@ -963,7 +963,7 @@ func TestMembershipStore_SetChannelLastRead(t *testing.T) {
 func TestMembershipStore_SetChannelLastRead_NotMember(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
-	if err := NewMembershipStore(db).SetChannelLastRead(ctx, "ch-none", "u-none", 1); !errors.Is(err, ErrNotFound) {
+	if err := NewMembershipStore(db).SetChannelLastRead(ctx, "ch-none", "u-none", 1, ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("SetChannelLastRead non-member: want ErrNotFound, got %v", err)
 	}
 }
@@ -1002,7 +1002,7 @@ func TestConversationStore_IncrementMessageSeq(t *testing.T) {
 
 	// SetConversationLastRead stamps the user-side row; ListUserConversations
 	// reads it back.
-	if err := cs.SetConversationLastRead(ctx, "conv-seq", "u-b", 2); err != nil {
+	if err := cs.SetConversationLastRead(ctx, "conv-seq", "u-b", 2, ""); err != nil {
 		t.Fatalf("SetConversationLastRead: %v", err)
 	}
 	rows, err := cs.ListUserConversations(ctx, "u-b")
@@ -1034,7 +1034,7 @@ func TestConversationStore_IncrementMessageSeq_UpdateError(t *testing.T) {
 func TestConversationStore_SetConversationLastRead_NotMember(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
-	if err := NewConversationStore(db).SetConversationLastRead(ctx, "conv-none", "u-none", 1); !errors.Is(err, ErrNotFound) {
+	if err := NewConversationStore(db).SetConversationLastRead(ctx, "conv-none", "u-none", 1, ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("SetConversationLastRead non-member: want ErrNotFound, got %v", err)
 	}
 }

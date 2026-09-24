@@ -57,4 +57,8 @@ type Channel struct {
 	// without per-member writes or count queries. Starts at 0, so on rollout
 	// every member is "caught up" and only new messages count — no backfill.
 	MessageSeq int64 `json:"messageSeq,omitempty" dynamodbav:"messageSeq,omitempty"`
+	// LastSeqAt is when MessageSeq was last claimed by a send. Internal: a
+	// read-to-current-seq waits until it has settled so an in-flight message
+	// isn't read before it exists. Zero on rows from before it was recorded.
+	LastSeqAt time.Time `json:"-" dynamodbav:"lastSeqAt,omitempty"`
 }

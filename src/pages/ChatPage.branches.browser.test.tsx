@@ -38,6 +38,8 @@ vi.mock('@/lib/unread-cache', () => ({
   bumpConversationUnread: mockBumpConversationUnread,
   clearChannelUnreadInCache: vi.fn(),
   clearConversationUnreadInCache: mockClearConversationUnreadInCache,
+  applyChannelReadInCache: vi.fn(),
+  applyConversationReadInCache: vi.fn(),
   touchConversationActivityInCache: vi.fn(() => true),
 }));
 const isActiveConversationMock = vi.fn(() => true);
@@ -225,7 +227,7 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
   it('onMessageNew on an ACTIVE conversation clears unread and PUTs the read marker', async () => {
     await renderChatPage();
     lastHandlers().onMessageNew?.(msg({ parentID: 'conv-1', parentType: 'conversation' }));
-    expect(mockClearConversationUnreadInCache).toHaveBeenCalledWith(expect.anything(), "conv-1");
+    expect(mockClearConversationUnreadInCache).toHaveBeenCalledWith(expect.anything(), 'conv-1', expect.any(String));
     await vi.waitFor(() => {
       const call = mockApiFetch.mock.calls.find((c) => String(c[0]).includes('/conversations/conv-1/read'));
       expect(call).toBeDefined();
@@ -270,7 +272,7 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     try {
       await renderChatPage();
       lastHandlers().onMessageNew?.(msg({ parentID: 'conv-1', parentType: 'conversation' }));
-      expect(mockClearConversationUnreadInCache).toHaveBeenCalledWith(expect.anything(), 'conv-1');
+      expect(mockClearConversationUnreadInCache).toHaveBeenCalledWith(expect.anything(), 'conv-1', expect.any(String));
       await vi.waitFor(() => {
         const call = mockApiFetch.mock.calls.find((c) => String(c[0]).includes('/conversations/conv-1/read'));
         expect(call).toBeDefined();
@@ -300,7 +302,7 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     lastHandlers().onMessageNew?.(msg({
       parentID: 'conv-1', parentType: 'conversation', authorID: 'other-user',
     }));
-    expect(mockBumpConversationUnread).toHaveBeenCalledWith(expect.anything(), "conv-1");
+    expect(mockBumpConversationUnread).toHaveBeenCalledWith(expect.anything(), "conv-1", undefined);
   });
 
   it('onMessageNew unhides an active conversation when the author is the local user', async () => {

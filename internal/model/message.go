@@ -3,17 +3,22 @@ package model
 import "time"
 
 type Message struct {
-	ID              string     `json:"id" dynamodbav:"id"`
-	ParentID        string     `json:"parentID" dynamodbav:"parentID"` // channel or conversation ID
-	ParentType      string     `json:"parentType,omitempty" dynamodbav:"-"`
-	AuthorID        string     `json:"authorID" dynamodbav:"authorID"`
-	Body            string     `json:"body" dynamodbav:"body"`
-	System          bool       `json:"system,omitempty" dynamodbav:"system,omitempty"`
+	ID         string `json:"id" dynamodbav:"id"`
+	ParentID   string `json:"parentID" dynamodbav:"parentID"` // channel or conversation ID
+	ParentType string `json:"parentType,omitempty" dynamodbav:"-"`
+	AuthorID   string `json:"authorID" dynamodbav:"authorID"`
+	Body       string `json:"body" dynamodbav:"body"`
+	System     bool   `json:"system,omitempty" dynamodbav:"system,omitempty"`
+	// Seq is the parent's MessageSeq value this message claimed when it was
+	// sent — set only on messages that count toward unread (top-level,
+	// non-system). It lets a read-up-to-message request resolve the exact
+	// LastReadSeq for that point. Zero on uncounted and pre-Seq messages.
+	Seq int64 `json:"seq,omitempty" dynamodbav:"seq,omitempty"`
 	// NoIndex keeps the message out of the search index (live indexing AND
 	// admin reindex) — for machine-posted ephemera like /mstmeetings join
 	// links, where a stale meeting URL surfacing in search is noise. Internal
 	// only, never serialized to clients.
-	NoIndex bool `json:"-" dynamodbav:"noIndex,omitempty"`
+	NoIndex         bool       `json:"-" dynamodbav:"noIndex,omitempty"`
 	ParentMessageID string     `json:"parentMessageID,omitempty" dynamodbav:"parentMessageID,omitempty"` // root message of the thread
 	ReplyCount      int        `json:"replyCount,omitempty" dynamodbav:"replyCount,omitempty"`           // count of replies (only set on root messages)
 	LastReplyAt     *time.Time `json:"lastReplyAt,omitempty" dynamodbav:"lastReplyAt,omitempty"`         // timestamp of the latest reply (only set on root messages)

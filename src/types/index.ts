@@ -80,6 +80,8 @@ export interface Message {
   authorID: string;
   body: string;
   system?: boolean;
+  // Parent's unread seq this message claimed (top-level counted messages).
+  seq?: number;
   createdAt: string;
   editedAt?: string;
   parentMessageID?: string;
@@ -233,6 +235,11 @@ export interface UserChannel {
   channelType: 'public' | 'private';
   role: number;
   lastReadMsgID?: string;
+  // Server read point (Channel.MessageSeq consumed) — orders read echoes.
+  lastReadSeq?: number;
+  // Client-only: the highest message seq this tab has seen arrive, so a read
+  // echo computed before a message landed can't erase its unread.
+  seenSeq?: number;
   // Server-computed unread state (channel.MessageSeq - membership.LastReadSeq).
   // The authoritative source for the sidebar badge on cold load / after
   // reconnect; live message.new events layer a session delta on top.
@@ -272,6 +279,8 @@ export interface UserConversation {
   userStatus?: UserStatus;
   profileResolved?: boolean;
   lastReadMsgID?: string;
+  lastReadSeq?: number;
+  seenSeq?: number;
   unread?: boolean;
   // Server-computed exact unread count (Conversation.MessageSeq -
   // UserConversation.LastReadSeq) — same seq model as channels. The sidebar

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
@@ -208,9 +209,32 @@ func writeReadResourceError(w http.ResponseWriter, r *http.Request, err error, r
 		writeError(w, http.StatusNotFound, "not_found", resource+" not found")
 	case errors.Is(err, service.ErrForbidden):
 		writeError(w, http.StatusForbidden, "forbidden", "you do not have access to this "+resource)
+	case errors.Is(err, service.ErrValidation):
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 	default:
 		writeInternalError(w, r, "server_error", err)
 	}
+}
+
+// readMarkReadBody parses the optional PUT /read body. An empty body means
+// "read everything" (the pre-upToMessageID contract, kept for old clients) —
+// including a chunked empty body, whose ContentLength is -1, not 0;
+// {"upToMessageID": id} reads up to and including that message only (its
+// format is validated by the service).
+func readMarkReadBody(r *http.Request) (string, error) {
+	if r.ContentLength == 0 {
+		return "", nil
+	}
+	var body struct {
+		UpToMessageID string `json:"upToMessageID"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		if errors.Is(err, io.EOF) {
+			return "", nil
+		}
+		return "", err
+	}
+	return body.UpToMessageID, nil
 }
 
 // Update modifies a channel's name or description.
@@ -290,7 +314,12 @@ func (h *ChannelHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_id", "channel ID is required")
 		return
 	}
-	if err := h.channelSvc.MarkChannelRead(r.Context(), userID, id); err != nil {
+	upTo, err := readMarkReadBody(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if err := h.channelSvc.MarkChannelRead(r.Context(), userID, id, upTo); err != nil {
 		writeReadResourceError(w, r, err, "channel")
 		return
 	}

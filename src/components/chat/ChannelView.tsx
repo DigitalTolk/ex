@@ -27,7 +27,6 @@ import { canEditChannel, canArchiveChannel, canLeaveChannel, roleNumber } from '
 import { markThreadSeen } from '@/hooks/useThreads';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
-import { clearChannelUnreadInCache } from '@/lib/unread-cache';
 import { NonMemberInvitePrompt } from './NonMemberInvitePrompt';
 import { useNonMemberInvite } from '@/hooks/useNonMemberInvite';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
@@ -45,7 +44,7 @@ import {
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
 import type { UserMapEntry } from './MessageList';
-import { useMarkReadOnReturn } from '@/hooks/useMarkReadOnReturn';
+import { useUnreadMarker } from '@/hooks/useUnreadMarker';
 import { useEditingMessage } from '@/hooks/useEditingMessage';
 
 function errorStatus(err: unknown): number | null {
@@ -194,39 +193,28 @@ export function ChannelView() {
     },
     [channelID, editMessage, editingMessage, setEditingMessage],
   );
-  // Optimistically drop the server-side unread badge for this channel so the
-  // sidebar clears instantly, then persist the read so it stays cleared on a
-  // reload (mirrors the conversation read-on-open). The helper guards the
-  // not-yet-loaded list — an inline `prev?.map` would resolve undefined on a
-  // cold deep-link and clobber the cache.
-  const markChannelRead = useCallback(
-    (openedID: string) => {
-      clearChannelUnreadInCache(queryClient, openedID);
-      void apiFetch<void>(`/api/v1/channels/${openedID}/read`, { method: 'PUT' })
-        .catch(() => undefined)
-        .finally(() => {
-          queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
-        });
-    },
-    [queryClient],
-  );
-
   useEffect(() => {
     if (!channel?.id) return;
     const openedID = channel.id;
     setActiveChannel(openedID);
     setActiveParent(openedID);
-    markChannelRead(openedID);
     return () => {
       setActiveChannel(null);
       setActiveParent(null);
     };
-  }, [channel?.id, setActiveChannel, setActiveParent, markChannelRead]);
+  }, [channel?.id, setActiveChannel, setActiveParent]);
 
-  // Messages that arrived while this channel's window was blurred/hidden bump
-  // the badge instead of auto-reading (ChatPage's attention gate) — returning
-  // to the window is what reads them.
-  useMarkReadOnReturn(channel?.id, markChannelRead);
+  // Read lifecycle (snapshot the read point → "New" divider → persist reads
+  // only while the user can see the tail) lives in useUnreadMarker.
+  const unread = useUnreadMarker({
+    kind: 'channel',
+    parentID: channel?.id,
+    pages: data?.pages,
+    messagesLoaded: !isLoading && !!data,
+    hasOlderPages: !!hasNextPage,
+    hasNewerPages: !!hasPreviousPage,
+    currentUserId: user?.id,
+  });
 
   // Reset locally-opened thread when the channel changes; deliberate
   // synchronous reset. URL-driven thread state (?thread=…) doesn't need
@@ -427,6 +415,7 @@ export function ChannelView() {
             onEditMessage={isMobile ? setEditingMessage : undefined}
             anchorMsgId={mainAnchor}
             anchorRevision={navKey}
+            unread={unread}
             intro={
               channel ? (
                 <ChannelIntro

@@ -21,7 +21,7 @@ type MembershipStore interface {
 	ListUserChannels(ctx context.Context, userID string) ([]*model.UserChannel, error)
 	UpdateMemberRole(ctx context.Context, channelID, userID string, role model.ChannelRole) error
 	SetMute(ctx context.Context, channelID, userID string, muted bool) error
-	SetChannelLastRead(ctx context.Context, channelID, userID string, seq int64) error
+	SetChannelLastRead(ctx context.Context, channelID, userID string, seq int64, msgID string) error
 }
 
 // MembershipStoreImpl implements MembershipStore backed by DynamoDB.
@@ -346,16 +346,14 @@ func (s *MembershipStoreImpl) SetMute(ctx context.Context, channelID, userID str
 	return s.setUserChannelAttribute(ctx, channelID, userID, "muted", muted)
 }
 
-// SetChannelLastRead records how far this user has read in the channel by
-// stamping the channel's current MessageSeq onto their user-side row. unread
-// then derives as Channel.MessageSeq - LastReadSeq.
-func (s *MembershipStoreImpl) SetChannelLastRead(ctx context.Context, channelID, userID string, seq int64) error {
-	// Catching up on the channel also clears the alerted-message badge — the
-	// two travel together in ONE write so the sidebar can never show a stale
-	// numeric badge on a channel the user just read.
-	upd := expression.Set(expression.Name("lastReadSeq"), expression.Value(seq)).
-		Set(expression.Name("unreadNotifyCount"), expression.Value(0))
-	return s.updateUserChannel(ctx, channelID, userID, upd, "lastReadSeq")
+// SetChannelLastRead records how far this user has read in the channel: the
+// channel MessageSeq they've consumed (unread derives as Channel.MessageSeq -
+// LastReadSeq) plus, when non-empty, the ID of the message that point sits at
+// (the client's "New" divider watermark). Forward-only — see setReadPoint.
+// Catching up also clears the alerted-message badge in the same write, so the
+// sidebar can never show a stale numeric badge on a channel the user just read.
+func (s *MembershipStoreImpl) SetChannelLastRead(ctx context.Context, channelID, userID string, seq int64, msgID string) error {
+	return s.setReadPoint(ctx, compositeKey(userPK(userID), chanSK(channelID)), seq, msgID, "channel")
 }
 
 // IncrementNotifyCount bumps the user's alerted-unread badge for the channel

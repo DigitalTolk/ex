@@ -578,7 +578,7 @@ func TestConversationService_ListUserConversations_ComputesUnreadFromSeq(t *test
 		t.Fatalf("unread/count from seq missing: %+v", convs[0])
 	}
 
-	if err := svc.MarkConversationRead(ctx, "u-1", "conv-unread"); err != nil {
+	if err := svc.MarkConversationRead(ctx, "u-1", "conv-unread", ""); err != nil {
 		t.Fatalf("MarkConversationRead: %v", err)
 	}
 	convs, err = svc.ListUserConversations(ctx, "u-1")
@@ -595,12 +595,12 @@ func TestConversationService_MarkConversationRead_Errors(t *testing.T) {
 	ctx := context.Background()
 
 	// Missing conversation → wrapped GetConversation error.
-	if err := svc.MarkConversationRead(ctx, "u-1", "nope"); err == nil {
+	if err := svc.MarkConversationRead(ctx, "u-1", "nope", ""); err == nil {
 		t.Fatal("expected error for missing conversation")
 	}
 	// Non-participant → SetConversationLastRead has no user-side row → ErrNotFound.
 	convStore.conversations["conv-x"] = &model.Conversation{ID: "conv-x", MessageSeq: 1}
-	if err := svc.MarkConversationRead(ctx, "stranger", "conv-x"); !errors.Is(err, store.ErrNotFound) {
+	if err := svc.MarkConversationRead(ctx, "stranger", "conv-x", ""); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }

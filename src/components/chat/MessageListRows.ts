@@ -3,7 +3,12 @@ import type { Message } from '@/types';
 
 export type MessageListRow =
   | { kind: 'day'; key: string; date: string }
+  | { kind: 'unread'; key: string }
   | { kind: 'message'; key: string; message: Message; firstInGroup: boolean };
+
+// The "New" divider has ONE stable key per list: it never moves within a
+// visit, and a stable key lets Virtuoso's prepend bookkeeping count it once.
+export const UNREAD_DIVIDER_KEY = 'unread-divider';
 
 // Consecutive messages from the same author within this window collapse
 // into one visual group (Slack/Mattermost use ~5 minutes): only the first
@@ -33,7 +38,11 @@ export function isGroupedWithPrevious(prev: Message | null | undefined, msg: Mes
 // Each message row carries `firstInGroup`: false marks a compact
 // continuation of the message above it. A day divider always resets
 // grouping so the first message under a new day shows its full header.
-export function buildMessageListRows(allMessages: Message[]): MessageListRow[] {
+//
+// unreadDividerId, when set, inserts the "New" divider directly above that
+// message (below its day divider, if it opens a new day) and likewise resets
+// grouping so the first unread message shows its full header.
+export function buildMessageListRows(allMessages: Message[], unreadDividerId?: string): MessageListRow[] {
   const out: MessageListRow[] = [];
   let lastDate = '';
   let prev: Message | null = null;
@@ -43,6 +52,10 @@ export function buildMessageListRows(allMessages: Message[]): MessageListRow[] {
     if (d !== lastDate) {
       lastDate = d;
       out.push({ kind: 'day', key: `day-${d}`, date: msg.createdAt });
+      prev = null;
+    }
+    if (msg.id === unreadDividerId) {
+      out.push({ kind: 'unread', key: UNREAD_DIVIDER_KEY });
       prev = null;
     }
     out.push({ kind: 'message', key: msg.id, message: msg, firstInGroup: !isGroupedWithPrevious(prev, msg) });
@@ -87,12 +100,21 @@ export function nextVirtuosoState(
   const newFirstMsg = firstMessageId(rows);
   if (prevFirstMsg === newFirstMsg) {
     // Append-only update: the first message hasn't changed, so the
-    // new rows are at the END of the list.
+    // new rows are at the END of the list (or mid-list, like the unread
+    // divider — not a prepend either way).
     return { rows, firstItemIndex: prev.firstItemIndex };
   }
-  // Prepend: the first message changed AND the list grew.
+  // Prepend: the first message changed AND the list grew. Shift by how far
+  // the previous first message moved down — NOT by the total growth, which
+  // would also count rows inserted mid-list in the same update (the unread
+  // divider landing as a Jump's page-back resolves) and misplace the view.
+  const oldPos = prev.rows.findIndex((r) => r.kind === 'message' && r.message.id === prevFirstMsg);
+  const newPos = rows.findIndex((r) => r.kind === 'message' && r.message.id === prevFirstMsg);
+  // (The old first message can only be missing if the list was replaced
+  // wholesale — then the growth is the best estimate there is.)
+  const shift = newPos >= 0 ? newPos - oldPos : newLen - prevLen;
   return {
     rows,
-    firstItemIndex: prev.firstItemIndex - (newLen - prevLen),
+    firstItemIndex: prev.firstItemIndex - shift,
   };
 }
