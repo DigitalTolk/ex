@@ -50,9 +50,17 @@ export function UnreadDividerRow({
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          if (entry.isIntersecting) onPosition('visible');
-          else if (entry.boundingClientRect.bottom <= root.getBoundingClientRect().top) onPosition('above');
-          else onPosition('below');
+          if (entry.isIntersecting) {
+            onPosition('visible');
+            continue;
+          }
+          // Measure the node itself rather than trusting
+          // entry.boundingClientRect: WebKit (iOS Safari) reports a stale
+          // rect for a non-intersecting target, which put a divider BELOW
+          // the viewport "above" it — showing the jump-up banner for
+          // messages that are actually below the reader.
+          const above = node.getBoundingClientRect().bottom <= root.getBoundingClientRect().top;
+          onPosition(above ? 'above' : 'below');
         }
       },
       { root },
