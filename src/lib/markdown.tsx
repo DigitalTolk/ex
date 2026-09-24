@@ -14,6 +14,11 @@ export interface RenderOpts {
   // the viewer — same behaviour as Slack/Teams (yellow pill instead of
   // the default mute pill).
   currentUserId?: string;
+  // pickTokens marks word-start "/token" runs as pills in rendered
+  // messages — the sent-message counterpart of the composer's connector
+  // and skill pick pills. Only exact members of the set are decorated;
+  // links and code spans are left alone.
+  pickTokens?: ReadonlySet<string>;
   // renderUserMention wraps the rendered mention pill — typically with
   // UserHoverCard so hovering the @-name shows a profile popover.
   // When unset, the pill renders as a plain highlighted span.

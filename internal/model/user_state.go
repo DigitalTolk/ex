@@ -8,6 +8,11 @@ const (
 	UserStateThreadNotification UserStateKind = "thread_notification"
 	UserStateThreadSeen         UserStateKind = "thread_seen"
 	UserStateHiddenConversation UserStateKind = "hidden_conversation"
+	// UserStateHiddenSkill removes one skill from the "# Workspace skills"
+	// discovery index of THIS user's agent runs — a per-user curation knob so
+	// a workspace full of skills stays legible. An explicit /skill pick still
+	// attaches a hidden skill: hiding is about discovery, not permission.
+	UserStateHiddenSkill UserStateKind = "hidden_skill"
 )
 
 type UserStateItem struct {
@@ -25,4 +30,5 @@ type UserState struct {
 	ThreadNotifications []string          `json:"threadNotifications"`
 	ThreadSeen          map[string]string `json:"threadSeen"`
 	HiddenConversations []string          `json:"hiddenConversations"`
+	HiddenSkills        []string          `json:"hiddenSkills"`
 }

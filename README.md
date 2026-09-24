@@ -38,6 +38,30 @@ make dev-down     # stop all
 make dev-logs     # tail logs
 ```
 
+### Hot reload
+
+`make dev` bakes the frontend into the Go binary (`go:embed`), so every change
+means an image rebuild. For day-to-day work use the hot-reload stack instead:
+
+```bash
+make dev-watch       # hot reload, no image rebuild per change
+make dev-watch-down  # stop it
+make dev-watch-logs  # tail logs (air rebuilds + Vite HMR)
+```
+
+Open **http://localhost:5173** — the Vite dev server serves the SPA with HMR and
+proxies `/api` (including the WebSocket) and `/auth` to the Go app on `:8500`.
+The Go server runs under [air](https://github.com/air-verse/air) and recompiles
+in-container on save.
+
+This layers `docker-compose.dev.yml` over the base file, swapping the app to
+`Dockerfile.dev` and adding a `vite` service. `docker compose watch` syncs
+changed files into the running containers; only dependency manifests
+(`go.mod`/`go.sum`, `package.json`/`package-lock.json`) trigger a rebuild.
+
+Keep using `make dev` to verify the real production path before shipping — it's
+the only one that exercises the embedded-frontend build.
+
 ## SSO Configuration
 
 The app uses OpenID Connect (OIDC) for authentication. The OIDC redirect URL is always `{BASE_URL}/auth/oidc/callback` (e.g. `http://localhost:8080/auth/oidc/callback`). Register this as the redirect URI in your identity provider.

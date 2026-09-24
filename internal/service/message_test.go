@@ -1954,6 +1954,36 @@ func TestSendMessage_ThreadStateReadyBeforeMessageNew(t *testing.T) {
 	}
 }
 
+// ResolveThreadRoot maps any message reference to its thread root: a reply
+// to its ParentMessageID, a root (or unknown id) to itself — access-checked.
+func TestMessageService_ResolveThreadRoot(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+
+	memberships.memberships["ch-rtr#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch-rtr", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+	messages.messages["ch-rtr#01-root"] = &model.Message{ID: "01-root", ParentID: "ch-rtr", AuthorID: "user-1", Body: "root"}
+	messages.messages["ch-rtr#02-r1"] = &model.Message{ID: "02-r1", ParentID: "ch-rtr", AuthorID: "user-1", Body: "r", ParentMessageID: "01-root"}
+
+	// A reply resolves to its root; a root to itself.
+	if got, err := svc.ResolveThreadRoot(ctx, "user-1", "ch-rtr", ParentChannel, "02-r1"); err != nil || got != "01-root" {
+		t.Fatalf("reply resolve = %q %v, want 01-root", got, err)
+	}
+	if got, err := svc.ResolveThreadRoot(ctx, "user-1", "ch-rtr", ParentChannel, "01-root"); err != nil || got != "01-root" {
+		t.Fatalf("root resolve = %q %v", got, err)
+	}
+	// An unknown id passes through unchanged — the window read that follows
+	// renders what actually exists.
+	if got, err := svc.ResolveThreadRoot(ctx, "user-1", "ch-rtr", ParentChannel, "ghost"); err != nil || got != "ghost" {
+		t.Fatalf("unknown resolve = %q %v, want ghost", got, err)
+	}
+	// A non-member is refused before any read.
+	if _, err := svc.ResolveThreadRoot(ctx, "user-2", "ch-rtr", ParentChannel, "02-r1"); err == nil {
+		t.Fatal("non-member must be refused")
+	}
+}
+
 // ListThreadMessages returns the root and all its replies in chronological
 // order (oldest first). Without sorting, the underlying store returns msgs
 // in map iteration order — this is a regression test for that bug.
@@ -2072,6 +2102,86 @@ func TestMessageService_ListThreadMessages_NotMember(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected access error for non-member")
 	}
+}
+
+// ThreadWindowMessages is the BOUNDED thread read the agent context window
+// uses: newest N, oldest-first, without draining an hours-long task thread.
+func TestMessageService_ThreadWindowMessages(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+	memberships.memberships["ch-win#user-1"] = &model.ChannelMembership{
+		ChannelID: "ch-win", UserID: "user-1", Role: model.ChannelRoleMember,
+	}
+	messages.messages["ch-win#01-root"] = &model.Message{
+		ID: "01-root", ParentID: "ch-win", AuthorID: "user-1", Body: "root", ReplyCount: 3,
+	}
+	for _, id := range []string{"02-r1", "03-r2", "04-r3"} {
+		messages.messages["ch-win#"+id] = &model.Message{
+			ID: id, ParentID: "ch-win", AuthorID: "user-1", Body: id, ParentMessageID: "01-root",
+		}
+	}
+
+	// A non-positive limit reads nothing at all.
+	if got, err := svc.ThreadWindowMessages(ctx, "user-1", "ch-win", ParentChannel, "01-root", 0); err != nil || got != nil {
+		t.Fatalf("limit 0: %+v %v", got, err)
+	}
+	// Non-members are refused before any read.
+	if _, err := svc.ThreadWindowMessages(ctx, "user-9", "ch-win", ParentChannel, "01-root", 5); err == nil {
+		t.Fatal("non-member must be refused")
+	}
+
+	// The newest two replies, root first.
+	got, err := svc.ThreadWindowMessages(ctx, "user-1", "ch-win", ParentChannel, "01-root", 2)
+	if err != nil {
+		t.Fatalf("window: %v", err)
+	}
+	if len(got) != 3 || got[0].ID != "01-root" || got[1].ID != "03-r2" || got[2].ID != "04-r3" {
+		t.Fatalf("window = %+v, want root + the newest two replies", ids(got))
+	}
+
+	// A SHORT page that also falls short of the root's ReplyCount means the
+	// thread is un-backfilled, and the complete path answers instead. (A full
+	// page is legitimately just the window, as asserted above.)
+	messages.noThreadIndex = true
+	full, err := svc.ThreadWindowMessages(ctx, "user-1", "ch-win", ParentChannel, "01-root", 2)
+	if err != nil {
+		t.Fatalf("window fallback: %v", err)
+	}
+	if len(full) != 4 {
+		t.Fatalf("fallback should return the whole thread, got %v", ids(full))
+	}
+	messages.noThreadIndex = false
+
+	// Store failures surface, both for the root and for the replies.
+	messages.getErr = errors.New("get boom")
+	if _, err := svc.ThreadWindowMessages(ctx, "user-1", "ch-win", ParentChannel, "01-root", 2); err == nil {
+		t.Fatal("root-get failure should surface")
+	}
+	messages.getErr = nil
+	messages.threadReplyErr = errors.New("thread boom")
+	if _, err := svc.ThreadWindowMessages(ctx, "user-1", "ch-win", ParentChannel, "01-root", 2); err == nil {
+		t.Fatal("reply-listing failure should surface")
+	}
+	messages.threadReplyErr = nil
+
+	// A thread whose root is gone still returns its replies.
+	delete(messages.messages, "ch-win#01-root")
+	rootless, err := svc.ThreadWindowMessages(ctx, "user-1", "ch-win", ParentChannel, "01-root", 5)
+	if err != nil {
+		t.Fatalf("rootless window: %v", err)
+	}
+	if len(rootless) != 3 {
+		t.Fatalf("rootless window = %v, want the three replies", ids(rootless))
+	}
+}
+
+// ids renders a message slice as its ids, for readable failures.
+func ids(msgs []*model.Message) []string {
+	out := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, m.ID)
+	}
+	return out
 }
 
 func TestMessageService_ToggleReaction_Add(t *testing.T) {
@@ -2706,4 +2816,55 @@ func TestMessageService_IndexFailuresDoNotBlockOperations(t *testing.T) {
 			t.Error("expected ListFiles to surface index list error")
 		}
 	})
+}
+
+// Machine-state reactions: 👀⚙️✅ accumulate as a durable trail, but the
+// transient states (⏳ queued, ⛔ blocked, 🧠, 🔍) leave when the next state
+// lands — a settled approval must not keep flying ⛔ on the message forever.
+func TestMessageService_MachineReactionTransientStates(t *testing.T) {
+	svc, messages, memberships, _, _ := setupMessageService()
+	ctx := context.Background()
+	memberships.memberships["ch1#u1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u1", Role: model.ChannelRoleMember}
+	msg, err := svc.Send(ctx, "u1", "ch1", ParentChannel, "deploy it", "")
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	set := func(state string) {
+		t.Helper()
+		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, msg.ID, state); err != nil {
+			t.Fatalf("set %q: %v", state, err)
+		}
+	}
+	has := func(state string) bool {
+		got, _ := messages.GetMessage(ctx, "ch1", msg.ID)
+		for _, u := range got.Reactions[state] {
+			if u == "agent-1" {
+				return true
+			}
+		}
+		return false
+	}
+
+	set(StateEmojiRead)
+	set(StateEmojiWorking)
+	set(StateEmojiBlocked)
+	if !has(StateEmojiRead) || !has(StateEmojiWorking) || !has(StateEmojiBlocked) {
+		t.Fatal("expected 👀 ⚙️ ⛔ while blocked")
+	}
+
+	// Unblocking (back to ⚙️, which is ALREADY set) still clears ⛔.
+	set(StateEmojiWorking)
+	if has(StateEmojiBlocked) {
+		t.Fatal("⛔ survived the return to ⚙️")
+	}
+	if !has(StateEmojiRead) || !has(StateEmojiWorking) {
+		t.Fatal("durable trail was clobbered by the transient clear")
+	}
+
+	// ✅ joins the trail; nothing transient remains.
+	set(StateEmojiDone)
+	if !has(StateEmojiRead) || !has(StateEmojiWorking) || !has(StateEmojiDone) {
+		t.Fatal("expected the full 👀 ⚙️ ✅ trail")
+	}
 }

@@ -50,6 +50,18 @@ type Deps struct {
 	Webhook    *WebhookHandler
 	Activity   *ActivityHandler
 	Command    *CommandHandler
+	// Agent orchestration (plan-v2): SPA surface, desktop-runner API, and
+	// the run-scoped MCP tool API. All three nil-skippable as a unit.
+	Agent        *AgentHandler
+	AgentRunner  *AgentRunnerHandler
+	AgentRunTool *AgentRunToolHandler
+	// Shared context (CTX#, plan-v2 §8): the human curation surface.
+	Context *ContextHandler
+	// Connectors: external-service API docs + per-user credentials.
+	Connector *ConnectorHandler
+	// Coding tasks (plan-coding-agent.md): run-scoped task tools + the human
+	// task-card surface. Registered only when AgentRunTool is also set.
+	CodingTask *CodingTaskHandler
 
 	// SPA/static.
 	FrontendFS fs.FS

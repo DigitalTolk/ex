@@ -17,7 +17,9 @@ interface UploadInitResponse {
 }
 
 async function sha256Hex(buf: ArrayBuffer): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', buf);
+  // Uint8Array-wrap: a buffer from another realm (jsdom tests; some
+  // webviews) is rejected by SubtleCrypto as "not an ArrayBuffer".
+  const digest = await crypto.subtle.digest('SHA-256', new Uint8Array(buf));
   const bytes = new Uint8Array(digest);
   let out = '';
   for (let i = 0; i < bytes.length; i++) out += bytes[i].toString(16).padStart(2, '0');

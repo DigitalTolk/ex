@@ -489,6 +489,19 @@ func (s *handlerWebhookMessageStore) ListMessages(_ context.Context, parentID st
 	return out, false, nil
 }
 
+// ListThreadRepliesNewest mirrors the store's bounded read: the newest
+// `limit` replies, oldest-first.
+func (s *handlerWebhookMessageStore) ListThreadRepliesNewest(ctx context.Context, threadRootID string, limit int) ([]*model.Message, error) {
+	all, err := s.ListThreadReplies(ctx, threadRootID)
+	if err != nil || limit <= 0 {
+		return nil, err
+	}
+	if len(all) > limit {
+		all = all[len(all)-limit:]
+	}
+	return all, nil
+}
+
 func (s *handlerWebhookMessageStore) ListThreadReplies(_ context.Context, threadRootID string) ([]*model.Message, error) {
 	out := []*model.Message{}
 	for _, msg := range s.messages {
