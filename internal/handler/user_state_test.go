@@ -14,6 +14,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 func TestUserStateHandler_GetAndMutations(t *testing.T) {
@@ -338,4 +339,104 @@ func (m *mockUserStateStoreForHandler) ListUserState(_ context.Context, userID s
 		out = append(out, &cp)
 	}
 	return out, nil
+}
+
+// failingUserStateStore errors on every write — the 500 arm.
+type failingUserStateStore struct{}
+
+func (failingUserStateStore) SetUserState(context.Context, *model.UserStateItem) error {
+	return errors.New("dynamo down")
+}
+func (failingUserStateStore) DeleteUserState(context.Context, string, model.UserStateKind, string) error {
+	return errors.New("dynamo down")
+}
+func (failingUserStateStore) ListUserState(context.Context, string) ([]*model.UserStateItem, error) {
+	return nil, errors.New("dynamo down")
+}
+
+// visibleSkillStub satisfies the handler's skillLookup seam.
+type visibleSkillStub struct{ err error }
+
+func (s visibleSkillStub) GetVisibleSkill(_ context.Context, _, id string) (*model.Skill, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &model.Skill{ID: id}, nil
+}
+
+func TestUserStateHandler_SkillHiddenToggle(t *testing.T) {
+	stateStore := newMockUserStateStoreForHandler()
+	stateSvc := service.NewUserStateService(stateStore, nil)
+	handler := NewUserStateHandler(stateSvc, nil, nil)
+	handler.SetSkillLookup(visibleSkillStub{})
+	const userID = "u-1"
+
+	req := userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/skills/sk-1/hidden", nil, userID)
+	req.SetPathValue("id", "sk-1")
+	rec := httptest.NewRecorder()
+	handler.HideSkill(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("HideSkill status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	state, err := stateSvc.List(context.Background(), userID)
+	if err != nil || len(state.HiddenSkills) != 1 || state.HiddenSkills[0] != "sk-1" {
+		t.Fatalf("hidden skills after PUT = %#v err=%v", state, err)
+	}
+
+	req = userStateAuthedRequest(http.MethodDelete, "/api/v1/user-state/skills/sk-1/hidden", nil, userID)
+	req.SetPathValue("id", "sk-1")
+	rec = httptest.NewRecorder()
+	handler.UnhideSkill(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("UnhideSkill status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if state, _ := stateSvc.List(context.Background(), userID); len(state.HiddenSkills) != 0 {
+		t.Fatalf("hidden skills after DELETE = %#v", state.HiddenSkills)
+	}
+}
+
+func TestUserStateHandler_SkillHiddenErrors(t *testing.T) {
+	stateSvc := service.NewUserStateService(newMockUserStateStoreForHandler(), nil)
+	handler := NewUserStateHandler(stateSvc, nil, nil)
+
+	// Unauthenticated.
+	rec := httptest.NewRecorder()
+	handler.HideSkill(rec, httptest.NewRequest(http.MethodPut, "/api/v1/user-state/skills/sk-1/hidden", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth status = %d", rec.Code)
+	}
+	// Missing id.
+	req := userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/skills//hidden", nil, "u-1")
+	rec = httptest.NewRecorder()
+	handler.HideSkill(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing id status = %d", rec.Code)
+	}
+	// A skill the caller cannot see refuses to hide (existence never leaks).
+	handler.SetSkillLookup(visibleSkillStub{err: store.ErrNotFound})
+	req = userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/skills/sk-x/hidden", nil, "u-1")
+	req.SetPathValue("id", "sk-x")
+	rec = httptest.NewRecorder()
+	handler.HideSkill(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("invisible skill status = %d", rec.Code)
+	}
+	// Unhide skips the lookup — clearing a stale row must always work.
+	req = userStateAuthedRequest(http.MethodDelete, "/api/v1/user-state/skills/sk-x/hidden", nil, "u-1")
+	req.SetPathValue("id", "sk-x")
+	rec = httptest.NewRecorder()
+	handler.UnhideSkill(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("unhide status = %d", rec.Code)
+	}
+	// Store failure surfaces as 500.
+	failing := service.NewUserStateService(failingUserStateStore{}, nil)
+	broken := NewUserStateHandler(failing, nil, nil)
+	req = userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/skills/sk-1/hidden", nil, "u-1")
+	req.SetPathValue("id", "sk-1")
+	rec = httptest.NewRecorder()
+	broken.HideSkill(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("store failure status = %d", rec.Code)
+	}
 }

@@ -167,3 +167,51 @@ func TestUserStateService_ListAndMutations(t *testing.T) {
 		t.Fatalf("state after clear = %#v", state)
 	}
 }
+
+func TestUserStateService_SkillDiscoveryPrefs(t *testing.T) {
+	ctx := context.Background()
+	svc := NewUserStateService(newMockUserStateStore(), newMockPublisher())
+
+	if err := svc.HideSkill(ctx, "u-1", "sk-1"); err != nil {
+		t.Fatalf("HideSkill: %v", err)
+	}
+	if err := svc.HideSkill(ctx, "u-1", "sk-2"); err != nil {
+		t.Fatalf("HideSkill sk-2: %v", err)
+	}
+	state, err := svc.List(ctx, "u-1")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got := state.HiddenSkills; len(got) != 2 || got[0] != "sk-1" || got[1] != "sk-2" {
+		t.Fatalf("hidden skills = %#v", got)
+	}
+	set, err := svc.HiddenSkillSet(ctx, "u-1")
+	if err != nil || !set["sk-1"] || !set["sk-2"] || len(set) != 2 {
+		t.Fatalf("HiddenSkillSet = %#v err=%v", set, err)
+	}
+	// Another user's index is untouched.
+	if other, err := svc.HiddenSkillSet(ctx, "u-2"); err != nil || len(other) != 0 {
+		t.Fatalf("other user's set = %#v err=%v", other, err)
+	}
+	if err := svc.UnhideSkill(ctx, "u-1", "sk-1"); err != nil {
+		t.Fatalf("UnhideSkill: %v", err)
+	}
+	state, _ = svc.List(ctx, "u-1")
+	if got := state.HiddenSkills; len(got) != 1 || got[0] != "sk-2" {
+		t.Fatalf("hidden skills after unhide = %#v", got)
+	}
+	// A store failure surfaces (the orchestrator degrades to the uncurated index).
+	broken := newMockUserStateStore()
+	broken.listErr = assertErr("list")
+	if _, err := NewUserStateService(broken, nil).HiddenSkillSet(ctx, "u-1"); err == nil {
+		t.Fatal("expected HiddenSkillSet error")
+	}
+	// Nil store / empty user degrade to an empty set, never an error.
+	empty := NewUserStateService(nil, nil)
+	if set, err := empty.HiddenSkillSet(ctx, "u-1"); err != nil || len(set) != 0 {
+		t.Fatalf("nil store set = %#v err=%v", set, err)
+	}
+	if set, err := svc.HiddenSkillSet(ctx, ""); err != nil || len(set) != 0 {
+		t.Fatalf("empty user set = %#v err=%v", set, err)
+	}
+}

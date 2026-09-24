@@ -59,6 +59,9 @@ interface UseWebSocketOptions {
   onServerVersion?: WSCallback;
   onPing?: WSCallback;
   onTyping?: WSCallback;
+  onRunUpdated?: WSCallback;
+  onRunProgress?: WSCallback;
+  onRunApproval?: WSCallback;
   // Fires when the socket re-opens after a previous failure. The
   // initial connection does NOT trigger this — only true reconnects.
   // With auto-refetch disabled on infinite message queries, this is
@@ -289,6 +292,15 @@ export function useWebSocket(options: UseWebSocketOptions) {
               break;
             case 'typing':
               callbacksRef.current.onTyping?.(payload);
+              break;
+            case EventType.RunUpdated:
+              callbacksRef.current.onRunUpdated?.(payload);
+              break;
+            case EventType.RunProgress:
+              callbacksRef.current.onRunProgress?.(payload);
+              break;
+            case EventType.RunApproval:
+              callbacksRef.current.onRunApproval?.(payload);
               break;
           }
         } catch (err) {

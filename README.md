@@ -33,15 +33,15 @@ The DynamoDB table is created automatically on first start. The first user to lo
 
 ### Signing in locally
 
-The dev stack ships a lightweight OIDC provider ([Dex](https://dexidp.io/)), so no real SSO tenant is needed. Click **Sign in with SSO** and use one of the test accounts from `dev/dex.yaml` — all share the password `password`:
+The dev stack ships a lightweight OIDC provider ([Dex](https://dexidp.io/)), so no real SSO tenant is needed. Click **Sign in with SSO** and use one of the test accounts from `dev/dex.yaml` — the same accounts `make seed` creates, all with the password `password123`:
 
-| Email               | Name            |
-|---------------------|-----------------|
-| `admin@example.com` | Admin User      |
-| `alice@example.com` | Alice Andersson |
-| `bob@example.com`   | Bob Berg        |
+| Email               | Seeded role |
+|---------------------|-------------|
+| `alice@example.com` | admin       |
+| `bob@example.com`   | guest       |
+| `carol@example.com` | guest       |
 
-Sign in as `admin@example.com` first so it becomes the workspace admin. To use a real identity provider instead, set `OIDC_ISSUER`, `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` in `.env` (optional; see [SSO Configuration](#sso-configuration)) — those override the Dex defaults.
+Works with both `make dev` (http://localhost:8500) and `make dev-watch` (http://localhost:5173). On an unseeded stack the first user to sign in becomes admin, so sign in as Alice first. To use a real identity provider instead, set `OIDC_ISSUER`, `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` in `.env` (see [SSO Configuration](#sso-configuration)) — those override the Dex defaults.
 
 ```bash
 # Or use the Makefile shortcuts:
@@ -50,6 +50,30 @@ make dev-up       # background
 make dev-down     # stop all
 make dev-logs     # tail logs
 ```
+
+### Hot reload
+
+`make dev` bakes the frontend into the Go binary (`go:embed`), so every change
+means an image rebuild. For day-to-day work use the hot-reload stack instead:
+
+```bash
+make dev-watch       # hot reload, no image rebuild per change
+make dev-watch-down  # stop it
+make dev-watch-logs  # tail logs (air rebuilds + Vite HMR)
+```
+
+Open **http://localhost:5173** — the Vite dev server serves the SPA with HMR and
+proxies `/api` (including the WebSocket) and `/auth` to the Go app on `:8500`.
+The Go server runs under [air](https://github.com/air-verse/air) and recompiles
+in-container on save.
+
+This layers `docker-compose.dev.yml` over the base file, swapping the app to
+`Dockerfile.dev` and adding a `vite` service. `docker compose watch` syncs
+changed files into the running containers; only dependency manifests
+(`go.mod`/`go.sum`, `package.json`/`package-lock.json`) trigger a rebuild.
+
+Keep using `make dev` to verify the real production path before shipping — it's
+the only one that exercises the embedded-frontend build.
 
 ## SSO Configuration
 

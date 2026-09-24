@@ -1,0 +1,31 @@
+# syntax=docker/dockerfile:1
+#
+# Development-only image: runs the Go server under air (hot reload).
+# Source changes arrive via `docker compose watch` sync (see
+# docker-compose.dev.yml) and air recompiles/restarts in-container.
+FROM golang:1.26-trixie
+
+# Base compose passes VERSION; the dev build doesn't bake it in (the dev
+# server reports "dev"), consume it so the build doesn't warn.
+ARG VERSION=dev
+
+WORKDIR /app
+
+RUN go install github.com/air-verse/air@latest
+
+# Modules go into an image layer (no --mount=type=cache) because air re-runs
+# `go build` at RUNTIME and needs /go/pkg/mod populated inside the container.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# dist/ is dockerignored and the real frontend is Vite's job in dev, but
+# `//go:embed all:dist` needs the directory to exist with at least one file
+# to compile. Same placeholder convention as a fresh local checkout.
+RUN mkdir -p dist && printf '*\n!.gitignore\n' > dist/.gitignore
+
+# Pre-warm the build cache so air's first compile at startup is incremental.
+RUN go build -o /tmp/server ./cmd/server
+
+CMD ["air", "-build.cmd", "go build -o /tmp/server ./cmd/server", "-build.bin", "/tmp/server"]

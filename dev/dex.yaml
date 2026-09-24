@@ -22,22 +22,25 @@ staticClients:
     name: Ex (local dev)
     secret: ex-local-secret
     redirectURIs:
-      - http://localhost:8500/auth/oidc/callback
+      - http://localhost:8500/auth/oidc/callback   # make dev
+      - http://localhost:5173/auth/oidc/callback   # make dev-watch (Vite)
 
 enablePasswordDB: true
 
-# All test users share the password "password" (bcrypt hash below).
-# The first user to sign in is promoted to workspace admin.
+# Same accounts as the seed script (cmd/seed, `make seed`), so SSO and the
+# password form land on the same users. Password for all: "password123".
+# Alice is the seeded admin; on a fresh, unseeded stack the first user to
+# sign in via SSO is promoted to admin.
 staticPasswords:
-  - email: admin@example.com
-    username: Admin User
-    userID: 00000000-0000-0000-0000-000000000001
-    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
   - email: alice@example.com
-    username: Alice Andersson
-    userID: 00000000-0000-0000-0000-000000000002
-    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: Alice
+    userID: 00000000-0000-0000-0000-000000000001
+    hash: "$2a$10$BiLBlmahiELnvCwY7nerzOcwtELrwiGCfSsSBoTa86GRp3VZgILYm"
   - email: bob@example.com
-    username: Bob Berg
+    username: Bob
+    userID: 00000000-0000-0000-0000-000000000002
+    hash: "$2a$10$BiLBlmahiELnvCwY7nerzOcwtELrwiGCfSsSBoTa86GRp3VZgILYm"
+  - email: carol@example.com
+    username: Carol
     userID: 00000000-0000-0000-0000-000000000003
-    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    hash: "$2a$10$BiLBlmahiELnvCwY7nerzOcwtELrwiGCfSsSBoTa86GRp3VZgILYm"
