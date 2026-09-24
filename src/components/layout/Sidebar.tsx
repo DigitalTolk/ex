@@ -947,7 +947,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             className={({ isActive }) =>
               `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
                 isActive
-                  ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
+                  ? 'bg-background dark:bg-sidebar-accent text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
               }`
             }
@@ -974,7 +974,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             className={({ isActive }) =>
               `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
                 isActive
-                  ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
+                  ? 'bg-background dark:bg-sidebar-accent text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
               }`
             }
@@ -998,7 +998,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             className={() =>
               `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
                 directoryActive
-                  ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
+                  ? 'bg-background dark:bg-sidebar-accent text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
               }`
             }
@@ -1013,7 +1013,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             className={({ isActive }) =>
               `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
                 isActive
-                  ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
+                  ? 'bg-background dark:bg-sidebar-accent text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
                   : 'text-gray-300 hover:bg-white/10 hover:text-white'
               }`
             }
@@ -1035,7 +1035,7 @@ export function Sidebar({ onClose }: SidebarProps) {
             aria-current={aiHubActive ? 'page' : undefined}
             className={`relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
               aiHubActive
-                ? 'bg-background text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
+                ? 'bg-background dark:bg-sidebar-accent text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
                 : 'text-gray-300 hover:bg-white/10 hover:text-white'
             }`}
           >
