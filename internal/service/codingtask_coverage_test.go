@@ -234,7 +234,7 @@ func TestCtaskCovTaskURLAndPureHelpers(t *testing.T) {
 	if got := invokeFailureDetail(fmt.Errorf("%w: gg isn't reachable", ErrAgentOffline)); got != "gg isn't reachable." {
 		t.Fatalf("offline detail = %q", got)
 	}
-	if got := invokeFailureDetail(ErrAgentOffline); got != "your ex desktop app isn't online." {
+	if got := invokeFailureDetail(ErrAgentOffline); got != "dev runs on your own computer through the ex desktop app, which isn't online — open the app and stay signed in, then say retry." {
 		t.Fatalf("bare offline detail = %q", got)
 	}
 	if got := invokeFailureDetail(ErrAgentBusy); got != "dev is already busy in this thread." {
