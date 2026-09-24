@@ -81,6 +81,19 @@ services:
       retries: 10
       start_period: 30s
 
+  # Local SSO (Dex) so the dev stack can be signed into without a real
+  # identity provider. Test users + password live in dev/dex.yaml.
+  # `app` joins this container's network namespace, so the ports the app
+  # serves (8500) are published here too.
+  dex:
+    image: ghcr.io/dexidp/dex:v2.41.1
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./dev/dex.yaml:/etc/dex/config.yaml:ro
+    ports:
+      - "5556:5556"   # Dex (OIDC issuer http://localhost:5556/dex)
+      - "8500:8500"   # app (network_mode: service:dex below)
+
   app:
     build:
       context: .
@@ -99,10 +112,14 @@ services:
         # --short HEAD` before `docker compose up`; CI should set it
         # explicitly. Defaults to "dev" — banner stays silent.
         VERSION: ${VERSION:-dev}
-    ports:
-      - "8500:8500"
+    # Share Dex's network namespace so http://localhost:5556 (the OIDC
+    # issuer the browser sees) is also reachable from inside the app.
+    # Port 8500 is therefore published on the `dex` service.
+    network_mode: service:dex
     restart: on-failure
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
       PORT: "8500"
       ENV: development
@@ -121,7 +138,13 @@ services:
       S3_SECRET_KEY: minioadmin
       S3_REGION: us-east-1
       OPENSEARCH_URL: http://opensearch:9200
+      # Local Dex SSO by default; set these in .env to use a real provider.
+      OIDC_ISSUER: ${OIDC_ISSUER:-http://localhost:5556/dex}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-ex-local}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-ex-local-secret}
     depends_on:
+      dex:
+        condition: service_started
       dynamodb:
         condition: service_healthy
       redis:

@@ -1,0 +1,43 @@
+# Local-only OIDC provider (Dex) for `docker compose up`.
+# Lets you sign in to the dev stack without a real SSO tenant.
+# NEVER use this config outside local development.
+#
+# The issuer is http://localhost:5556/dex for BOTH the browser and the app:
+# the `app` service shares this container's network namespace
+# (network_mode: service:dex), so "localhost:5556" resolves to Dex from
+# inside the app container too — no hostname tricks or /etc/hosts edits.
+issuer: http://localhost:5556/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+  - id: ex-local
+    name: Ex (local dev)
+    secret: ex-local-secret
+    redirectURIs:
+      - http://localhost:8500/auth/oidc/callback
+
+enablePasswordDB: true
+
+# All test users share the password "password" (bcrypt hash below).
+# The first user to sign in is promoted to workspace admin.
+staticPasswords:
+  - email: admin@example.com
+    username: Admin User
+    userID: 00000000-0000-0000-0000-000000000001
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+  - email: alice@example.com
+    username: Alice Andersson
+    userID: 00000000-0000-0000-0000-000000000002
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+  - email: bob@example.com
+    username: Bob Berg
+    userID: 00000000-0000-0000-0000-000000000003
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"

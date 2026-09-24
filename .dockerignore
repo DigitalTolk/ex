@@ -27,6 +27,7 @@ Makefile
 # Compose config — we build the production image, not the local dev stack.
 docker-compose.yml
 docker-compose.*.yml
+dev/
 
 # Frontend build artefacts and dependencies — both stages reinstall and
 # rebuild from source.

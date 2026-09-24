@@ -26,9 +26,22 @@ docker compose up --build
 
 This builds the app using the production Dockerfile (frontend + Go binary) and starts it alongside DynamoDB Local and Redis.
 
-- **App**: http://localhost:8080 (serves both API and frontend)
+- **App**: http://localhost:8500 (serves both API and frontend)
+- **Local SSO (Dex)**: http://localhost:5556/dex
 
 The DynamoDB table is created automatically on first start. The first user to log in via SSO is automatically promoted to admin.
+
+### Signing in locally
+
+The dev stack ships a lightweight OIDC provider ([Dex](https://dexidp.io/)), so no real SSO tenant is needed. Click **Sign in with SSO** and use one of the test accounts from `dev/dex.yaml` — all share the password `password`:
+
+| Email               | Name            |
+|---------------------|-----------------|
+| `admin@example.com` | Admin User      |
+| `alice@example.com` | Alice Andersson |
+| `bob@example.com`   | Bob Berg        |
+
+Sign in as `admin@example.com` first so it becomes the workspace admin. To use a real identity provider instead, set `OIDC_ISSUER`, `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` in `.env` (optional; see [SSO Configuration](#sso-configuration)) — those override the Dex defaults.
 
 ```bash
 # Or use the Makefile shortcuts:
