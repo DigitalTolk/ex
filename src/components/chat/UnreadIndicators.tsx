@@ -51,7 +51,7 @@ export function UnreadDividerRow({
       (entries) => {
         for (const entry of entries) {
           if (entry.isIntersecting) onPosition('visible');
-          else if (entry.rootBounds && entry.boundingClientRect.bottom <= entry.rootBounds.top) onPosition('above');
+          else if (entry.boundingClientRect.bottom <= root.getBoundingClientRect().top) onPosition('above');
           else onPosition('below');
         }
       },

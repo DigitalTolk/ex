@@ -209,6 +209,28 @@ describe('MessageList unread chrome', () => {
     expect(document.querySelector('[data-testid="unread-banner"]')).toBeNull();
   });
 
+  // Once the reader has SEEN the divider, scrolling it back out of view (in
+  // either direction) never brings the banner back this visit.
+  it('keeps the divider "seen" after it scrolls out of view', async () => {
+    const messages = Array.from({ length: 60 }, (_, i) => msg(i));
+    await render(frame(
+      <MessageList {...baseProps} pages={[{ items: [...messages].reverse() }]} unread={unreadState({ dividerMsgId: 'm-57', count: 3 })} />,
+    ));
+    const scroller = scrollerEl();
+    await settleAtBottom(scroller);
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="unread-divider"]')).not.toBeNull(), { timeout: 3000 });
+    await animationFrames(4);
+    // Scroll to the top: the divider is now BELOW the viewport (still mounted
+    // in the overscan), then far out of the rendered window.
+    await browserAct(async () => {
+      scroller.scrollTop = 0;
+      scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+      await animationFrames(6);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(document.querySelector('[data-testid="unread-banner"]')).toBeNull();
+  });
+
   it('pending (first unread not loaded): Jump pages back until the divider lands', async () => {
     const fetchNextPage = vi.fn();
     const messages = Array.from({ length: 40 }, (_, i) => msg(i + 100));

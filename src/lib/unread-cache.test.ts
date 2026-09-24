@@ -161,7 +161,10 @@ describe('unread-cache read watermark', () => {
     ]);
     qc.setQueryData<UserConversation[]>(queryKeys.userConversations(), [
       { conversationID: 'c-1', type: 'dm', displayName: 'x' },
+      { conversationID: 'c-2', type: 'dm', displayName: 'y' },
     ]);
+    applyConversationReadInCache(qc, 'c-2', { unreadCount: 1, lastReadSeq: 2 });
+    expect(qc.getQueryData<UserConversation[]>(queryKeys.userConversations())![1]).toMatchObject({ unreadCount: 1, lastReadSeq: 2 });
     // M6 (seq 6) lands and bumps before the echo of a read at seq 5.
     bumpChannelUnread(qc, 'ch-1', 6);
     bumpChannelUnread(qc, 'ch-1');
@@ -169,6 +172,10 @@ describe('unread-cache read watermark', () => {
     expect(qc.getQueryData<UserChannel[]>(queryKeys.userChannels())![0]).toMatchObject({
       unread: true, unreadCount: 1, lastReadSeq: 5, seenSeq: 6,
     });
+    // An echo without messageSeq, on a row that has seen no arrivals, just
+    // takes the server count.
+    applyChannelReadInCache(qc, 'ch-1', { unreadCount: 2, lastReadSeq: 5 });
+    expect(qc.getQueryData<UserChannel[]>(queryKeys.userChannels())![0]).toMatchObject({ unreadCount: 2 });
     bumpConversationUnread(qc, 'c-1', 3);
     bumpConversationUnread(qc, 'c-1');
     applyConversationReadInCache(qc, 'c-1', { unreadCount: 0, lastReadSeq: 3, messageSeq: 3 });
