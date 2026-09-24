@@ -16,6 +16,12 @@ type Config struct {
 	// responses are recorded (ACCESS_LOG_ENABLED, default true).
 	AccessLogEnabled bool
 
+	// GuestLoginAnyRole lifts the guest-only gate on password login
+	// (GUEST_LOGIN_ANY_ROLE, default false). Local-dev affordance: without
+	// OIDC the guest form is the only login, and guests can't create
+	// channels. SSO users carry no password hash, so this can't log them in.
+	GuestLoginAnyRole bool
+
 	// DynamoDB
 	AWSRegion        string
 	DynamoDBTable    string
@@ -83,6 +89,28 @@ type Config struct {
 	// App
 	BaseURL string
 
+	// ConnectorProvider is the standalone connector-provider ex pulls its
+	// connector catalog (docs + admin auth) from. Empty → no provider; the
+	// registry holds only directly-ingested connectors. Set per environment
+	// (stg-ex → stg provider, prd-ex → prod provider) — never hardcoded.
+	ConnectorProviderURL string
+	ConnectorProviderKey string
+
+	// BedrockRegion enables server-side execution of bedrock-harness agents:
+	// the backend runs the Converse loop against AWS Bedrock in this region
+	// (task-role credentials). Empty → server mode stays off and such agents
+	// fail legibly at invoke. Use a region hosting the wanted models or a
+	// cross-region inference profile (eu.* profiles for EU data residency).
+	BedrockRegion string
+	// BedrockAccessKeyID (+Secret/SessionToken) override the default AWS
+	// credential chain FOR BEDROCK ONLY. Needed in local dev, where the
+	// environment's AWS_ACCESS_KEY_ID is the dummy credential for
+	// dynamodb-local — real Bedrock creds ride these instead. Unset in real
+	// deployments (the task role is the chain).
+	BedrockAccessKeyID     string
+	BedrockSecretAccessKey string
+	BedrockSessionToken    string
+
 	// SentryFrontendDSN, when non-empty, enables Sentry error reporting in the
 	// SPA: the server stamps it into the served index.html, so browsers and
 	// the native shells all pick it up on next load. Backend observability is
@@ -133,34 +161,40 @@ func Load() (*Config, error) {
 		// with the hardcoded "dev-secret-change-me" JWT key (forgeable admin
 		// tokens) plus wildcard CORS/WS origins. Local dev sets ENV=development
 		// explicitly (docker-compose.yml), so this only tightens the default.
-		Env:                  envOr("ENV", "production"),
-		AWSRegion:            envOr("AWS_REGION", "us-east-1"),
-		DynamoDBTable:        envOr("DYNAMODB_TABLE", "ex"),
-		DynamoDBEndpoint:     os.Getenv("DYNAMODB_ENDPOINT"),
-		RedisURL:             envOr("REDIS_URL", "redis://localhost:6379"),
-		OIDCIssuer:           os.Getenv("OIDC_ISSUER"),
-		OIDCClientID:         os.Getenv("OIDC_CLIENT_ID"),
-		OIDCClientSecret:     os.Getenv("OIDC_CLIENT_SECRET"),
-		JWTSecret:            os.Getenv("JWT_SECRET"),
-		EmailProvider:        envOr("EMAIL_PROVIDER", "smtp"),
-		SESConfigurationSet:  os.Getenv("SES_CONFIGURATION_SET"),
-		SMTPHost:             os.Getenv("SMTP_HOST"),
-		SMTPPort:             envOr("SMTP_PORT", "587"),
-		SMTPUser:             os.Getenv("SMTP_USER"),
-		SMTPPass:             os.Getenv("SMTP_PASS"),
-		SMTPFrom:             envOr("SMTP_FROM", "noreply@example.com"),
-		S3Endpoint:           os.Getenv("S3_ENDPOINT"),
-		S3PublicEndpoint:     os.Getenv("S3_PUBLIC_ENDPOINT"),
-		S3Bucket:             envOr("S3_BUCKET", "ex-avatars"),
-		S3AccessKey:          os.Getenv("S3_ACCESS_KEY"),
-		S3SecretKey:          os.Getenv("S3_SECRET_KEY"),
-		S3Region:             envOr("S3_REGION", "us-east-1"),
-		BaseURL:              envOr("BASE_URL", "http://localhost:8080"),
-		OneSignalAppID:       os.Getenv("ONESIGNAL_APP_ID"),
-		OneSignalRESTAPIKey:  os.Getenv("ONESIGNAL_REST_API_KEY"),
-		OpenSearchURL:        os.Getenv("OPENSEARCH_URL"),
-		OpenSearchAWSRegion:  os.Getenv("OPENSEARCH_AWS_REGION"),
-		OpenSearchAWSService: envOr("OPENSEARCH_AWS_SERVICE", "es"),
+		Env:                    envOr("ENV", "production"),
+		AWSRegion:              envOr("AWS_REGION", "us-east-1"),
+		DynamoDBTable:          envOr("DYNAMODB_TABLE", "ex"),
+		DynamoDBEndpoint:       os.Getenv("DYNAMODB_ENDPOINT"),
+		RedisURL:               envOr("REDIS_URL", "redis://localhost:6379"),
+		OIDCIssuer:             os.Getenv("OIDC_ISSUER"),
+		OIDCClientID:           os.Getenv("OIDC_CLIENT_ID"),
+		OIDCClientSecret:       os.Getenv("OIDC_CLIENT_SECRET"),
+		JWTSecret:              os.Getenv("JWT_SECRET"),
+		EmailProvider:          envOr("EMAIL_PROVIDER", "smtp"),
+		SESConfigurationSet:    os.Getenv("SES_CONFIGURATION_SET"),
+		SMTPHost:               os.Getenv("SMTP_HOST"),
+		SMTPPort:               envOr("SMTP_PORT", "587"),
+		SMTPUser:               os.Getenv("SMTP_USER"),
+		SMTPPass:               os.Getenv("SMTP_PASS"),
+		SMTPFrom:               envOr("SMTP_FROM", "noreply@example.com"),
+		S3Endpoint:             os.Getenv("S3_ENDPOINT"),
+		S3PublicEndpoint:       os.Getenv("S3_PUBLIC_ENDPOINT"),
+		S3Bucket:               envOr("S3_BUCKET", "ex-avatars"),
+		S3AccessKey:            os.Getenv("S3_ACCESS_KEY"),
+		S3SecretKey:            os.Getenv("S3_SECRET_KEY"),
+		S3Region:               envOr("S3_REGION", "us-east-1"),
+		BaseURL:                envOr("BASE_URL", "http://localhost:8080"),
+		ConnectorProviderURL:   os.Getenv("CONNECTOR_PROVIDER_URL"),
+		ConnectorProviderKey:   os.Getenv("CONNECTOR_PROVIDER_API_KEY"),
+		BedrockRegion:          os.Getenv("BEDROCK_REGION"),
+		BedrockAccessKeyID:     os.Getenv("BEDROCK_AWS_ACCESS_KEY_ID"),
+		BedrockSecretAccessKey: os.Getenv("BEDROCK_AWS_SECRET_ACCESS_KEY"),
+		BedrockSessionToken:    os.Getenv("BEDROCK_AWS_SESSION_TOKEN"),
+		OneSignalAppID:         os.Getenv("ONESIGNAL_APP_ID"),
+		OneSignalRESTAPIKey:    os.Getenv("ONESIGNAL_REST_API_KEY"),
+		OpenSearchURL:          os.Getenv("OPENSEARCH_URL"),
+		OpenSearchAWSRegion:    os.Getenv("OPENSEARCH_AWS_REGION"),
+		OpenSearchAWSService:   envOr("OPENSEARCH_AWS_SERVICE", "es"),
 	}
 
 	accessTTL := envOr("JWT_ACCESS_TTL", "15m")
@@ -207,6 +241,17 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("invalid ACCESS_LOG_ENABLED %q: must be a boolean", v)
 		}
 		c.AccessLogEnabled = b
+	}
+
+	// Dev-only: GUEST_LOGIN_ANY_ROLE=true lets the password login form accept
+	// non-guest roles (local stacks have no OIDC, and channel creation is
+	// blocked for guests). Default off; set only in docker-compose.dev.yml.
+	if v := os.Getenv("GUEST_LOGIN_ANY_ROLE"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid GUEST_LOGIN_ANY_ROLE %q: must be a boolean", v)
+		}
+		c.GuestLoginAnyRole = b
 	}
 
 	proxyCount := envOr("TRUSTED_PROXY_COUNT", "1")

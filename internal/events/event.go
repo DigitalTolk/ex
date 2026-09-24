@@ -75,6 +75,18 @@ const (
 	// Data-less nudge like activity.new: the Redis watermark is the source of
 	// truth and clients refetch the feed. Sent to pubsub.UserChannel.
 	EventActivityRead = "activity.read"
+	// Agent run lifecycle (plan-v2 §5/§9). Published to the parent's topic so
+	// every thread viewer sees state transitions live. run.updated carries the
+	// run snapshot; run.progress streams assistant deltas and is ephemeral —
+	// replaying half a paragraph of token deltas after a reconnect is noise
+	// (the posted message is the durable artifact).
+	EventRunUpdated  = "run.updated"
+	EventRunProgress = "run.progress"
+	// EventRunApproval carries a blocking approval request (and its later
+	// decision) to the parent's viewers. Persistent: an approval waiting on
+	// the invoker must survive a reconnect — the card is actionable state,
+	// not a transient beat.
+	EventRunApproval = "run.approval"
 	// EventThreadUpdated patches a thread participant's /threads list live when a
 	// reply lands. Sent per-participant (pubsub.UserChannel) — the participant
 	// scoping is what the channel-topic message.edited can't provide, so the
@@ -115,6 +127,9 @@ var ephemeralTypes = map[string]struct{}{
 	// durable source of truth and is re-read on reconnect, so replaying it
 	// would be noise (and could re-add a row the user has since left).
 	EventThreadUpdated: {},
+	// run.progress is a live typing-indicator-grade delta stream; the run's
+	// EVT# timeline is the durable record and run.updated carries state.
+	EventRunProgress: {},
 }
 
 // IsPersistent reports whether an event of this type should be appended

@@ -33,6 +33,13 @@ const vendorChunks: Array<[string, (id: string) => boolean]> = [
   ['virtual-vendor', (id) => id.includes('/node_modules/react-virtuoso/')],
 ]
 
+// Where the dev server proxies /api and /auth. In the containerised hot-reload
+// stack (`make dev-watch`) Vite runs in its own container and reaches the Go
+// service over the compose network, so docker-compose.dev.yml injects the
+// target; a bare `npm run dev` keeps talking to a local server on
+// config.Load's default PORT.
+const proxyTarget = process.env.VITE_PROXY_TARGET ?? 'http://localhost:8080'
+
 function preserveDistGitignore() {
   return {
     name: 'preserve-dist-gitignore',
@@ -71,12 +78,12 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        target: proxyTarget,
         changeOrigin: true,
         ws: true,
       },
       '/auth': {
-        target: 'http://localhost:8080',
+        target: proxyTarget,
         changeOrigin: true,
       },
     },

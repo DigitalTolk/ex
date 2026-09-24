@@ -197,7 +197,9 @@ describe('compact tier at a real 700px desktop viewport', () => {
       const left = document.querySelector('[data-topbar-left="true"]') as HTMLElement;
       expect(left).not.toBeNull();
       // 5.5rem = 88px clears the hiddenInset traffic-light cluster with margin.
-      expect(getComputedStyle(left).paddingLeft).toBe('88px');
+      // Polled: under the instrumented coverage run the first style pass can
+      // land a frame late, and a one-shot read here flaked the suite.
+      await expect.poll(() => getComputedStyle(left).paddingLeft, { timeout: 5_000 }).toBe('88px');
       const toggle = document.querySelector('[aria-label="Open channels"]') as HTMLElement;
       const search = document.querySelector('input[aria-label="Search"]') as HTMLElement;
       const toggleRect = toggle.getBoundingClientRect();

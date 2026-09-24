@@ -79,6 +79,10 @@ type MessageStore interface {
 	// ListThreadReplies returns every reply to a thread root via the GSI1
 	// thread index (one Query, oldest-first) instead of a parent scan.
 	ListThreadReplies(ctx context.Context, threadRootID string) ([]*model.Message, error)
+	// ListThreadRepliesNewest is the bounded form: at most `limit` of the
+	// newest replies, oldest-first. The context bundle keeps a fixed window,
+	// so it must not read an entire hours-long task thread to slice the tail.
+	ListThreadRepliesNewest(ctx context.Context, threadRootID string, limit int) ([]*model.Message, error)
 	// ListMessagesAfter returns messages strictly newer than the given
 	// cursor, oldest-first within the page but with the same
 	// newest-first ordering as ListMessages overall.

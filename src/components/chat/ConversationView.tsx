@@ -14,6 +14,9 @@ import { ResourceErrorPage } from '@/pages/ResourceErrorPage';
 import { FilesPanel } from './FilesPanel';
 import { DMIntro, SelfDMIntro, GroupIntro } from './ConversationIntro';
 import { TypingIndicator } from './TypingIndicator';
+import { AgentActivityIndicator } from './AgentActivityIndicator';
+import { AgentApprovalCard } from './AgentApprovalCard';
+import { WatcherCatchUpCard } from './WatcherCatchUpCard';
 import { useConversation } from '@/hooks/useConversations';
 import {
   useConversationMessages,
@@ -442,7 +445,12 @@ export function ConversationView() {
               lastOwnMessageId={activeEditingMessage ? undefined : lastOwnMessageId}
               aboveInput={
                 activeEditingMessage ? undefined : (
-                  <TypingIndicator parentID={id} userMap={userMap} />
+                  <>
+                    <AgentApprovalCard parentID={id} userMap={userMap} />
+                    <WatcherCatchUpCard parentID={id} parentType="conversation" />
+                    <AgentActivityIndicator parentID={id} userMap={userMap} />
+                    <TypingIndicator parentID={id} userMap={userMap} />
+                  </>
                 )
               }
             />

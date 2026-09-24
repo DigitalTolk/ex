@@ -104,6 +104,15 @@ export interface Message {
   webhookAvatarURL?: string;
   webhookIconEmoji?: string;
   messageAttachments?: MessageAttachment[];
+  // Agent-authored messages carry the human whose invocation produced them
+  // (agents are shared — "gg" alone doesn't say whose task it served).
+  agentInvokerID?: string;
+  // …and the run that produced them, so "Show activity" can open the run
+  // drawer (timeline, artifacts, spend) straight from the message.
+  agentRunID?: string;
+  // Skills the run USED (explicit /picks + invoke_skill calls) — rendered as
+  // badges next to the "for <invoker>" tag.
+  agentSkills?: string[];
 }
 
 // HastNode mirrors the server-side hast tree shape. Three node
@@ -319,6 +328,9 @@ export interface UserState {
   threadNotifications: string[];
   threadSeen: Record<string, string>;
   hiddenConversations: string[];
+  // Skills this user removed from their agents' discovery index — explicit
+  // /skill picks still work.
+  hiddenSkills: string[];
 }
 
 export type ActivityType = 'reaction' | 'reminder';

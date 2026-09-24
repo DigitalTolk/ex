@@ -86,10 +86,11 @@ func isDuplicateError(err error) bool {
 	return errors.Is(err, store.ErrAlreadyExists) || errors.Is(err, service.ErrAlreadyExists)
 }
 
-// writeServiceError maps a service-layer error to an HTTP response: a
-// validation error becomes 400, anything else uses the supplied
-// fallback. Centralized so a typo in user input doesn't surface as a
-// scary 500.
+// writeServiceError maps a service-layer error to an HTTP response for the
+// CHAT surfaces, which have a settled status contract the SPA switches on: the
+// shared sentinel table first (so a sentinel can't mean 409 here and 429 in
+// the agent API), then the duplicate/validation shapes this surface adds, then
+// the caller's own fallback status.
 func writeServiceError(w http.ResponseWriter, err error, fallbackStatus int, fallbackCode string) {
 	if isDuplicateError(err) {
 		writeError(w, http.StatusConflict, "conflict", err.Error())
@@ -102,6 +103,16 @@ func writeServiceError(w http.ResponseWriter, err error, fallbackStatus int, fal
 	if isValidationError(err) {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
+	}
+	// The shared sentinel table, minus ErrNotFound: on these routes the
+	// caller's fallback status is a deliberate choice (a conversation you are
+	// not a participant of answers 403 — "no such conversation" would be a
+	// different, and less accurate, story).
+	if !errors.Is(err, store.ErrNotFound) {
+		if status, code, message, ok := serviceStatus(err); ok {
+			writeError(w, status, code, message)
+			return
+		}
 	}
 	writeError(w, fallbackStatus, fallbackCode, err.Error())
 }

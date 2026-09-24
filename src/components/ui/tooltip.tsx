@@ -4,8 +4,9 @@ import { cn } from "@/lib/utils"
 
 function TooltipProvider({
   // A slight open delay so tooltips (timestamps, reactions, etc.) don't
-  // flash as the pointer sweeps across the message list.
-  delay = 400,
+  // flash as the pointer sweeps across the message list — but short enough
+  // that icon-only buttons explain themselves without a perceptible wait.
+  delay = 200,
   ...props
 }: TooltipPrimitive.Provider.Props) {
   return (

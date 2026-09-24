@@ -80,6 +80,9 @@ const ALLOWED_TAGS = new Set([
   'ex-mention-user', 'ex-mention-channel', 'ex-mention-group',
   'ex-hashtag', 'ex-giphy', 'ex-media-literal', 'ex-emoji-shortcode',
   'ex-bare-url',
+  // Client-injected (decoratePicks below), never server-emitted: a known
+  // "/token" pick rendered as a pill.
+  'ex-pick',
 ]);
 
 // normaliseTree defensively patches a tree before handing it to
@@ -123,7 +126,47 @@ function normaliseChild(node: HastNode): HastNode[] {
 const RenderOptsContext = createContext<RenderOpts | undefined>(undefined);
 const useRenderOpts = () => useContext(RenderOptsContext);
 
+// decoratePicks rewrites word-start "/token" runs in TEXT nodes into ex-pick
+// elements when the token names a known pick (installed connector or
+// workspace skill) — the sent-message counterpart of the composer's pick
+// pills. Pure copy-on-write: message.rendered lives in the query cache and
+// must never be mutated. Links, code and custom elements stay untouched — a
+// slash inside a URL or snippet is content, not a pick.
+const PICK_SKIP = new Set(['a', 'code', 'pre']);
+const pickPattern = /(^|\s)\/([a-z0-9][a-z0-9-]*)/g;
+
+export function decoratePicks(node: HastNode, tokens: ReadonlySet<string>): HastNode[] {
+  if (node.type === 'text') {
+    const text = node.value ?? '';
+    pickPattern.lastIndex = 0;
+    const out: HastNode[] = [];
+    let last = 0;
+    for (let m = pickPattern.exec(text); m; m = pickPattern.exec(text)) {
+      if (!tokens.has(m[2])) continue;
+      const start = m.index + m[1].length;
+      if (start > last) out.push({ type: 'text', value: text.slice(last, start) });
+      out.push({
+        type: 'element',
+        tagName: 'ex-pick',
+        properties: {},
+        children: [{ type: 'text', value: '/' + m[2] }],
+      });
+      last = start + m[2].length + 1;
+    }
+    if (out.length === 0) return [node];
+    if (last < text.length) out.push({ type: 'text', value: text.slice(last) });
+    return out;
+  }
+  if (node.type === 'element' && (PICK_SKIP.has(node.tagName ?? '') || (node.tagName ?? '').startsWith('ex-'))) {
+    return [node];
+  }
+  return [{ ...node, children: (node.children ?? []).flatMap((c) => decoratePicks(c, tokens)) }];
+}
+
 export function renderHastTree(tree: HastNode, opts?: RenderOpts): ReactNode {
+  if (opts?.pickTokens && opts.pickTokens.size > 0) {
+    tree = decoratePicks(tree, opts.pickTokens)[0];
+  }
   const rendered = toJsxRuntime(normaliseTree(tree) as unknown as HastNodes, {
     Fragment,
     jsx,
@@ -264,6 +307,15 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
       </a>
     );
   }) as AnyComponent,
+
+  'ex-pick': ((props: CustomTagProps) => (
+    <span
+      data-testid="pick-pill"
+      className={`${MENTION_PILL_BASE} bg-muted text-foreground/80`}
+    >
+      {props.children}
+    </span>
+  )) as AnyComponent,
 
   'ex-mention-group': ((props: CustomTagProps) => {
     const group = props['data-group'] ?? '';

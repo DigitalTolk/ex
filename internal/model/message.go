@@ -58,6 +58,22 @@ type Message struct {
 	WebhookAvatarURL   string              `json:"webhookAvatarURL,omitempty" dynamodbav:"webhookAvatarURL,omitempty"`
 	WebhookIconEmoji   string              `json:"webhookIconEmoji,omitempty" dynamodbav:"webhookIconEmoji,omitempty"` // emoji name (no colons) from icon_emoji; rendered as the avatar
 	MessageAttachments []MessageAttachment `json:"messageAttachments,omitempty" dynamodbav:"messageAttachments,omitempty"`
+	// AgentInvokerID attributes an agent-authored message to the human whose
+	// invocation produced it. Agents are shared ("gg" belongs to no one), so
+	// a reader — human or another agent's context bundle — needs this to say
+	// "bob's gg said X" rather than an ambiguous "gg said X". Set only on the
+	// SendAsAgent path.
+	AgentInvokerID string `json:"agentInvokerID,omitempty" dynamodbav:"agentInvokerID,omitempty"`
+	// AgentRunID links an agent-authored message to the run that produced it,
+	// so the UI can offer "Show activity" (the run drawer: timeline,
+	// artifacts, spend) straight from the message.
+	AgentRunID string `json:"agentRunID,omitempty" dynamodbav:"agentRunID,omitempty"`
+	// AgentSkills names the skills this run actually USED when it posted —
+	// explicit /skill picks plus invoke_skill calls, never the template's
+	// standing skills. Rendered as badges next to the "for <invoker>" tag, so
+	// skill usage is visible to everyone in the thread (run logs are
+	// invoker-only, this is the public trace).
+	AgentSkills []string `json:"agentSkills,omitempty" dynamodbav:"agentSkills,omitempty"`
 }
 
 // Tombstone clears a message's content in place for a soft delete: it flags

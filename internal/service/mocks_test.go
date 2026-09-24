@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -276,7 +277,7 @@ func (m *mockMembershipStore) AddMember(_ context.Context, mem *model.ChannelMem
 
 // mockUnreadSeqStore is the shared UnreadSeqStore fake for both channels and
 // conversations: a monotonically increasing per-parent counter plus a recorded
-// per-(parent,user) last-read. Mutex-guarded because bumpUnreadSeq writes it
+// per-(parent,user) last-read. Mutex-guarded because markAuthorRead writes it
 // from a detached goroutine while the test reads it back.
 type mockUnreadSeqStore struct {
 	mu             sync.Mutex
@@ -979,6 +980,19 @@ func (m *mockMessageStore) ListMessages(_ context.Context, parentID string, _ st
 	return result, m.listHasMore, nil
 }
 
+// ListThreadRepliesNewest mirrors the store's bounded read: the newest
+// `limit` replies, oldest-first.
+func (m *mockMessageStore) ListThreadRepliesNewest(ctx context.Context, threadRootID string, limit int) ([]*model.Message, error) {
+	all, err := m.ListThreadReplies(ctx, threadRootID)
+	if err != nil || limit <= 0 {
+		return nil, err
+	}
+	if len(all) > limit {
+		all = all[len(all)-limit:]
+	}
+	return all, nil
+}
+
 func (m *mockMessageStore) ListThreadReplies(_ context.Context, threadRootID string) ([]*model.Message, error) {
 	if m.threadReplyErr != nil {
 		return nil, m.threadReplyErr
@@ -992,6 +1006,10 @@ func (m *mockMessageStore) ListThreadReplies(_ context.Context, threadRootID str
 			result = append(result, msg)
 		}
 	}
+	// The real store answers in SK (id) order, and the bounded window read
+	// slices the tail before anything re-sorts — so the fake must not hand
+	// back map order.
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, nil
 }
 

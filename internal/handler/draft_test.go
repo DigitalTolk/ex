@@ -183,6 +183,10 @@ func (handlerMessageStore) DeleteMessage(context.Context, string, string) error 
 func (handlerMessageStore) ListMessages(context.Context, string, string, int) ([]*model.Message, bool, error) {
 	return nil, false, nil
 }
+func (handlerMessageStore) ListThreadRepliesNewest(context.Context, string, int) ([]*model.Message, error) {
+	return nil, nil
+}
+
 func (handlerMessageStore) ListThreadReplies(context.Context, string) ([]*model.Message, error) {
 	return nil, nil
 }

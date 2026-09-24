@@ -19,6 +19,16 @@ const (
 	// alert firing at its scheduled time. Always notifiable — the user
 	// explicitly asked to be alerted, so no gating applies.
 	NotificationKindReminder NotificationKind = "reminder"
+	// NotificationKindApproval fires when an agent the user invoked needs their
+	// decision (request_approval / ask_user). It blocks the run until answered,
+	// so it's always notifiable and the client renders it distinctly (it's an
+	// action the user must take, not just something to read).
+	NotificationKindApproval NotificationKind = "approval"
+	// NotificationKindCatchUp fires when a watcher accumulated an OFFLINE
+	// backlog on a local CLI harness and needs the creator's go-ahead to
+	// process it (their machine, their tokens). Always notifiable — it waits
+	// for a decision.
+	NotificationKindCatchUp NotificationKind = "catchup"
 )
 
 // notifiableKinds is the registry of kinds that should actually fire a
@@ -30,6 +40,8 @@ var notifiableKinds = map[NotificationKind]struct{}{
 	NotificationKindMention:     {},
 	NotificationKindThreadReply: {},
 	NotificationKindReminder:    {},
+	NotificationKindApproval:    {},
+	NotificationKindCatchUp:     {},
 }
 
 // IsNotifiable reports whether a kind should produce an actual user-facing

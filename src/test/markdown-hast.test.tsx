@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { renderMarkdown } from '@/lib/markdown';
-import { renderHastTree } from '@/lib/markdown-hast';
+import { decoratePicks, renderHastTree } from '@/lib/markdown-hast';
 import type { HastNode } from '@/types';
 
 // Server-style hast trees that the backend's RenderToHast produces.
@@ -410,5 +410,63 @@ describe('tag allowlist (defense-in-depth)', () => {
     const tree = { type: 'text', value: 'just text' } as never;
     render(<div data-testid="allow-text-root">{renderHastTree(tree)}</div>);
     expect(screen.getByTestId('allow-text-root').textContent).toBe('just text');
+  });
+});
+
+describe('pick pills (decoratePicks)', () => {
+  const tokens = new Set(['gitlab', 'weekly-report']);
+
+  it('renders known /tokens as pills and leaves unknown ones as text', () => {
+    const tree = root(el('p', {}, text('use /gitlab and /weekly-report but not /mystery ok')));
+    const { container } = render(<>{renderMarkdown('', { tree, pickTokens: tokens })}</>);
+    const pills = Array.from(container.querySelectorAll('[data-testid="pick-pill"]')).map(
+      (p) => p.textContent,
+    );
+    expect(pills).toEqual(['/gitlab', '/weekly-report']);
+    expect(container.textContent).toBe('use /gitlab and /weekly-report but not /mystery ok');
+  });
+
+  it('a pick can start the message and end it', () => {
+    const tree = root(el('p', {}, text('/gitlab check /weekly-report')));
+    const { container } = render(<>{renderMarkdown('', { tree, pickTokens: tokens })}</>);
+    expect(container.querySelectorAll('[data-testid="pick-pill"]')).toHaveLength(2);
+  });
+
+  it('never decorates inside links, code, or custom elements — and mid-word slashes stay text', () => {
+    const tree = root(
+      el('p', {},
+        el('a', { href: 'https://x.test/gitlab' }, text('see /gitlab here')),
+        el('code', {}, text('rm /gitlab')),
+        el('ex-hashtag', { 'data-tag': 't' }, text('/gitlab')),
+        text(' a/gitlab glued'),
+      ),
+    );
+    const { container } = render(<>{renderMarkdown('', { tree, pickTokens: tokens })}</>);
+    expect(container.querySelectorAll('[data-testid="pick-pill"]')).toHaveLength(0);
+  });
+
+  it('an empty token set (and absent opts) skips decoration entirely', () => {
+    const tree = root(el('p', {}, text('use /gitlab')));
+    const { container } = render(<>{renderMarkdown('', { tree, pickTokens: new Set() })}</>);
+    expect(container.querySelectorAll('[data-testid="pick-pill"]')).toHaveLength(0);
+  });
+
+  // Server-rendered hast omits empty fields, so nodes can arrive without a
+  // value, tagName, or children — decoratePicks must treat each as its empty
+  // equivalent instead of crashing on the sparse shape.
+  it('tolerates sparse nodes: missing text value, element tagName, and children', () => {
+    expect(decoratePicks({ type: 'text' } as HastNode, tokens)).toEqual([{ type: 'text' }]);
+    expect(decoratePicks({ type: 'element' } as HastNode, tokens)).toEqual([
+      { type: 'element', children: [] },
+    ]);
+    const viaTagless = decoratePicks(
+      { type: 'element', children: [{ type: 'text', value: 'run /gitlab' }] } as HastNode,
+      tokens,
+    );
+    expect(viaTagless).toHaveLength(1);
+    expect(viaTagless[0].children).toEqual([
+      { type: 'text', value: 'run ' },
+      { type: 'element', tagName: 'ex-pick', properties: {}, children: [{ type: 'text', value: '/gitlab' }] },
+    ]);
   });
 });

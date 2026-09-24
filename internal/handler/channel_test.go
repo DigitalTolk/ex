@@ -248,6 +248,19 @@ func (s *dataMessageStore) ListMessages(_ context.Context, parentID string, befo
 	return result, hasMore, nil
 }
 
+// ListThreadRepliesNewest mirrors the store's bounded read: the newest
+// `limit` replies, oldest-first.
+func (s *dataMessageStore) ListThreadRepliesNewest(ctx context.Context, threadRootID string, limit int) ([]*model.Message, error) {
+	all, err := s.ListThreadReplies(ctx, threadRootID)
+	if err != nil || limit <= 0 {
+		return nil, err
+	}
+	if len(all) > limit {
+		all = all[len(all)-limit:]
+	}
+	return all, nil
+}
+
 func (s *dataMessageStore) ListThreadReplies(_ context.Context, threadRootID string) ([]*model.Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -27,6 +27,9 @@ type faultClient struct {
 	failCreateTable    bool
 	failDeleteItem     bool
 	failDescribeTable  bool
+	// failDescribeTTL fails DescribeTimeToLive; ttlDesc replaces its answer.
+	failDescribeTTL bool
+	ttlDesc         *types.TimeToLiveDescription
 	// failDescribeTableFromCall (1-based) fails DescribeTable only from the
 	// N-th call on — lets EnsureTable's existence probe pass while the
 	// post-create waiter's probe fails.
@@ -38,6 +41,11 @@ type faultClient struct {
 	failScan                  bool
 	failTransactWriteItems    bool
 	failUpdateItem            bool
+	// failPutItemFromCall (1-based) fails PutItem only from the N-th call on —
+	// PutConnector writes the files BEFORE the manifest row, so reaching the
+	// meta-put arm needs the earlier file puts to succeed.
+	failPutItemFromCall int
+	putItemCalls        int
 	failUpdateTimeToLive      bool
 
 	// transform*, when set, rewrite the REAL output before returning — used to
@@ -93,6 +101,16 @@ func (f *faultClient) DeleteItem(ctx context.Context, in *dynamodb.DeleteItemInp
 	return f.DynamoAPI.DeleteItem(ctx, in, opts...)
 }
 
+func (f *faultClient) DescribeTimeToLive(ctx context.Context, in *dynamodb.DescribeTimeToLiveInput, opts ...func(*dynamodb.Options)) (*dynamodb.DescribeTimeToLiveOutput, error) {
+	if f.failDescribeTTL {
+		return nil, errInjected
+	}
+	if f.ttlDesc != nil {
+		return &dynamodb.DescribeTimeToLiveOutput{TimeToLiveDescription: f.ttlDesc}, nil
+	}
+	return f.DynamoAPI.DescribeTimeToLive(ctx, in, opts...)
+}
+
 func (f *faultClient) DescribeTable(ctx context.Context, in *dynamodb.DescribeTableInput, opts ...func(*dynamodb.Options)) (*dynamodb.DescribeTableOutput, error) {
 	if f.failDescribeTable {
 		return nil, errInjected
@@ -116,6 +134,10 @@ func (f *faultClient) GetItem(ctx context.Context, in *dynamodb.GetItemInput, op
 }
 
 func (f *faultClient) PutItem(ctx context.Context, in *dynamodb.PutItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error) {
+	f.putItemCalls++
+	if f.failPutItemFromCall > 0 && f.putItemCalls >= f.failPutItemFromCall {
+		return nil, errInjected
+	}
 	if f.failPutItem {
 		return nil, errInjected
 	}
