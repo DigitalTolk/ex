@@ -66,13 +66,41 @@ type agentUserGetter interface {
 // AgentService owns agent templates, the shared agent users, and per-user
 // preference resolution. Runs are the Orchestrator's business.
 type AgentService struct {
-	agents AgentDirectoryStore
-	users  agentUserGetter
+	agents  AgentDirectoryStore
+	users   agentUserGetter
+	indexer UserIndexer
 }
 
 // NewAgentService constructs an AgentService.
 func NewAgentService(agents AgentDirectoryStore, users agentUserGetter) *AgentService {
 	return &AgentService{agents: agents, users: users}
+}
+
+// SetIndexer wires the search indexer. Optional: deployments without a search
+// client resolve user search by linear scan instead, and need no index.
+func (s *AgentService) SetIndexer(i UserIndexer) { s.indexer = i }
+
+// indexAgentUser puts the shared agent user into user search, which is what
+// makes it findable in the DM composer.
+//
+// Called on every boot rather than only on first create: an agent seeded
+// before this existed is already in the store, so CreateAgentUser returns
+// ErrAlreadyExists and the row would otherwise stay unindexed — invisible to
+// search, and so impossible to DM — forever. Re-indexing an unchanged row is
+// cheap and idempotent.
+//
+// It indexes the STORED record, not the one just constructed: an admin may
+// have renamed the agent, and the constructed struct still carries the
+// template's display name.
+func (s *AgentService) indexAgentUser(ctx context.Context, id string) {
+	if s.indexer == nil {
+		return
+	}
+	stored, err := s.users.GetUser(ctx, id)
+	if err != nil || stored == nil {
+		return
+	}
+	indexUser(ctx, s.indexer, stored)
 }
 
 // AgentUserID derives the shared agent user's deterministic ID from its
@@ -150,6 +178,7 @@ func (s *AgentService) SeedDefaults(ctx context.Context) error {
 		if err := s.agents.CreateAgentUser(ctx, agentUser); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
 			return fmt.Errorf("agent: seed agent user %s: %w", tpl.Slug, err)
 		}
+		s.indexAgentUser(ctx, agentUser.ID)
 	}
 	return nil
 }
@@ -293,6 +322,7 @@ func (s *AgentService) CreateAgent(ctx context.Context, in CreateAgentInput) (*m
 	if err := s.agents.CreateAgentUser(ctx, agentUser); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
 		return nil, fmt.Errorf("agent: create agent user: %w", err)
 	}
+	s.indexAgentUser(ctx, agentUser.ID)
 	return tpl, nil
 }
 

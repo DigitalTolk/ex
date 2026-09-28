@@ -644,6 +644,10 @@ func main() {
 		channelSvc.SetIndexer(idx)
 		userSvc.SetIndexer(idx)
 		authSvc.SetIndexer(idx)
+		// Shared agent users are created through the agent store, which never
+		// went through UserService — so without this they never reached the
+		// index and could not be found in the DM composer.
+		agentSvc.SetIndexer(idx)
 	}
 	searcher := search.NewService(searchClient)
 	searchAccess := newSearchAccess(membershipStore, conversationStore)
