@@ -96,7 +96,9 @@
    * bg/base #FCFCFB (chat, top bar, composer) · sidebar #FBFBF9
    * bg/level1 (hover, fills) #F5F5F5 · bg/level2 (selected) #EDECE9
    * floating (menus, dialogs) #FFFFFF
-   * text/primary #0B0B0B · text/secondary #4F4C4D · text/muted #898780 · text/disabled #A7A5A6
+   * text/primary #0B0B0B · text/secondary #4F4C4D · text/muted #6D6B64 · text/disabled #A7A5A6
+   * (Figma muted #898780 is 3.5:1 on the base — darkened to #6D6B64 so
+   * muted text passes WCAG AA 4.5:1 on base, hover and selected rows.)
    * borders/subtle (dividers, fields, cards) #E3E3E2
    * borders/default (toolbars, strong outlines) #898780
    * primary/CTA #0B0B0B (neutral) · badges/highlights #DE5D83
@@ -119,7 +121,7 @@
   --color-secondary: #F5F5F5;
   --color-secondary-foreground: #0B0B0B;
   --color-muted: #F5F5F5;
-  --color-muted-foreground: #898780;
+  --color-muted-foreground: #6D6B64;
   --color-accent: #F5F5F5;
   --color-accent-foreground: #0B0B0B;
   --color-destructive: #DC2626;
@@ -134,6 +136,13 @@
   --color-brand: #DE5D83;
   --color-brand-hover: #C94E71;
   --color-brand-foreground: #FFFFFF;
+  /* Deeper brand pink for surfaces that carry TEXT (unread badges, the
+   * thread "new" pill, default buttons in dark mode). White on #DE5D83 is
+   * only 3.5:1; on #C15071 it is 4.5:1 (WCAG AA). #DE5D83 stays for
+   * icon-only / dot uses (send button, status dots), where 3:1 suffices.
+   * Same in both themes. */
+  --color-brand-strong: #C15071;
+  --color-brand-strong-hover: #A9455F;
   /* Disabled state of the dark-mode pink CTA button (spec: #EB9EB5). Applied
    * only to the message send button (via `dark:disabled:bg-brand-disabled` on
    * its className); every other dark-mode disabled button uses the neutral
