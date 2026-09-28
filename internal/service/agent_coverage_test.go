@@ -999,8 +999,9 @@ type agentCovLinkedUsers struct {
 }
 
 func (f *agentCovLinkedUsers) GetUser(ctx context.Context, id string) (*model.User, error) {
+	// Qualified on purpose: a bare f.GetUser would recurse into this method.
 	u, err := f.agentCovUsers.GetUser(ctx, id)
-	if err == nil || f.agentCovUsers.errGet != nil {
+	if err == nil || f.errGet != nil {
 		return u, err
 	}
 	f.dir.mu.Lock()
