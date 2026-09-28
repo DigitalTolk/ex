@@ -259,7 +259,7 @@ export function AppLayout({ children }: AppLayoutProps) {
 
         <div className="relative flex min-h-0 flex-1 overflow-hidden bg-background">
           <aside
-            className="relative hidden shrink-0 bg-sidebar text-sidebar-foreground lg:block dark:border-r dark:border-sidebar-border"
+            className="relative hidden shrink-0 bg-sidebar text-sidebar-foreground lg:block border-r border-sidebar-border"
             style={{ width: sidebarWidth }}
             data-app-chrome="true"
             data-keyboard-surface="sidebar"

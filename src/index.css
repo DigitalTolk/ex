@@ -91,39 +91,42 @@
   --animate-accordion-down: accordion-down 0.2s ease-out;
   --animate-accordion-up: accordion-up 0.2s ease-out;
 
-  /* Light theme — design system tokens
-   * bg/base #FFFFFF · bg/level1 (sidebar, chat hover) #F5F5F5
-   * bg/level2 (chat top bar) #FFFFFF · bg/level3 (typing field) #FBFBFB
-   * text/primary #231F20 · text/secondary #4F4C4D · text/muted #7B7979 · text/disabled #A7A5A6
-   * borders/default #BDBCBC · borders/level1 #E9E9E9
-   * primary/CTA #231F20 (neutral) · badges/highlights #DE5D83
+  /* Light theme — design system tokens (warm off-whites, per the Figma
+   * light-mode frames)
+   * bg/base #FCFCFB (chat, top bar, composer) · sidebar #FBFBF9
+   * bg/level1 (hover, fills) #F5F5F5 · bg/level2 (selected) #EDECE9
+   * floating (menus, dialogs) #FFFFFF
+   * text/primary #0B0B0B · text/secondary #4F4C4D · text/muted #898780 · text/disabled #A7A5A6
+   * borders/subtle (dividers, fields, cards) #E3E3E2
+   * borders/default (toolbars, strong outlines) #898780
+   * primary/CTA #0B0B0B (neutral) · badges/highlights #DE5D83
    *
    * `primary` is the NEUTRAL action colour, NOT pink. Pink (#DE5D83)
    * lives only in the `brand` token (unread counts, mention/status
    * dots, send-button CTA). See the dark block below for the full
    * rationale — keep the two themes symmetric.
    */
-  --color-background: #FFFFFF;
-  --color-foreground: #231F20;
-  --color-card: #FFFFFF;
-  --color-card-foreground: #231F20;
+  --color-background: #FCFCFB;
+  --color-foreground: #0B0B0B;
+  --color-card: #FCFCFB;
+  --color-card-foreground: #0B0B0B;
   --color-popover: #FFFFFF;
-  --color-popover-foreground: #231F20;
-  --color-primary: #231F20;
+  --color-popover-foreground: #0B0B0B;
+  --color-primary: #0B0B0B;
   --color-primary-foreground: #FFFFFF;
   --color-primary-hover: #4F4C4D;
   --color-link: #2563EB;
   --color-secondary: #F5F5F5;
-  --color-secondary-foreground: #231F20;
+  --color-secondary-foreground: #0B0B0B;
   --color-muted: #F5F5F5;
-  --color-muted-foreground: #7B7979;
+  --color-muted-foreground: #898780;
   --color-accent: #F5F5F5;
-  --color-accent-foreground: #231F20;
+  --color-accent-foreground: #0B0B0B;
   --color-destructive: #DC2626;
   --color-destructive-foreground: #FFFFFF;
-  --color-border: #E9E9E9;
-  --color-border-strong: #BDBCBC;
-  --color-input: #E9E9E9;
+  --color-border: #E3E3E2;
+  --color-border-strong: #898780;
+  --color-input: #E3E3E2;
   --color-ring: #BDBCBC;
   /* Brand / highlight pink — used for unread counts, mention badges,
    * and the dark-mode CTA send button. Stays the same in both themes
@@ -154,24 +157,24 @@
    * is a warm near-black card — NOT white — that floats above the app's own
    * near-black background, ringed in amber so it always reads as an alert. */
   --color-notification-toast: #FEF3C7;
-  --color-notification-toast-foreground: #231F20;
+  --color-notification-toast-foreground: #0B0B0B;
   --color-notification-toast-border: #FBBF24;
   --color-chart-1: #DE5D83;
   --color-chart-2: #4F4C4D;
   --color-chart-3: #7B7979;
   --color-chart-4: #BDBCBC;
-  --color-chart-5: #231F20;
-  --color-sidebar: #F5F5F5;
-  --color-sidebar-foreground: #231F20;
-  --color-sidebar-primary: #231F20;
+  --color-chart-5: #0B0B0B;
+  --color-sidebar: #FBFBF9;
+  --color-sidebar-foreground: #0B0B0B;
+  --color-sidebar-primary: #0B0B0B;
   --color-sidebar-primary-foreground: #FFFFFF;
-  --color-sidebar-accent: #E9E9E9;
-  --color-sidebar-accent-foreground: #231F20;
-  --color-sidebar-border: #E9E9E9;
+  --color-sidebar-accent: #EDECE9;
+  --color-sidebar-accent-foreground: #0B0B0B;
+  --color-sidebar-border: #E3E3E2;
   --color-sidebar-ring: #BDBCBC;
-  --color-chat-top: #FFFFFF;
+  --color-chat-top: #FCFCFB;
   --color-chat-hover: #F5F5F5;
-  --color-typing-field: #FBFBFB;
+  --color-typing-field: #FCFCFB;
 
   /* Radius scale — radius-* utilities expand to these values
    * (radius-none 0, xs 2, sm 4, md 6, lg 8, 2xl 16, capsule 999). */
@@ -482,12 +485,12 @@
   }
 
   html:not(.dark) [data-app-chrome="true"] .text-gray-500 {
-    color: #7B7979;
+    color: #7B7B7B;
   }
 
   html:not(.dark) [data-app-chrome="true"] .bg-white\/15,
   html:not(.dark) [data-app-chrome="true"] .bg-white\/20 {
-    background-color: #E9E9E9;
+    background-color: var(--color-sidebar-accent);
   }
 
   html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/10:hover,

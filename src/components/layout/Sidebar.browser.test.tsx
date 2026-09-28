@@ -1248,7 +1248,7 @@ describe('Sidebar browser render — rich fixtures', () => {
     const activityLink = document.querySelector('a[href="/activity"]') as HTMLAnchorElement;
     expect(activityLink).not.toBeNull();
     expect(activityLink.className).toContain('font-semibold');
-    expect(activityLink.className).toContain('bg-background');
+    expect(activityLink.className).toContain('bg-sidebar-accent');
   });
 
   it('shows an error message when category creation fails with a non-Error rejection', async () => {
