@@ -320,9 +320,21 @@ function MessageItemImpl({
   // The reminder target derives from the message itself (its parentID is always
   // set), with the channel slug carried for the deep link. Every message can take
   // a reminder.
+  //
+  // The parent TYPE comes from the view rendering the row (channelId /
+  // conversationId), not message.parentType: that field is only present on
+  // live WebSocket frames — messages loaded from the list API don't carry
+  // it — so falling back to "channel" sent DM reminders as channel reminders,
+  // which the server rejects (403) as "no access". message.parentType stays
+  // the fallback for rows rendered outside a channel/conversation view.
+  const parentType: 'channel' | 'conversation' = channelId
+    ? 'channel'
+    : conversationId || message.parentType === 'conversation'
+      ? 'conversation'
+      : 'channel';
   const reminderTarget = {
     parentID: message.parentID,
-    parentType: message.parentType === 'conversation' ? ('conversation' as const) : ('channel' as const),
+    parentType,
     channelSlug,
   };
 
