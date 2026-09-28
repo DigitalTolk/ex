@@ -969,3 +969,153 @@ func TestAgentCovSkillVisibility(t *testing.T) {
 	}
 	delete(dir.errs, "ListSkillIndex")
 }
+
+// agentCovIndexer records what reached the search index.
+type agentCovIndexer struct {
+	indexed map[string]*model.User
+	err     error
+}
+
+func (i *agentCovIndexer) IndexUser(_ context.Context, u *model.User) error {
+	if i.err != nil {
+		return i.err
+	}
+	if i.indexed == nil {
+		i.indexed = map[string]*model.User{}
+	}
+	cp := *u
+	i.indexed[u.ID] = &cp
+	return nil
+}
+
+func (i *agentCovIndexer) DeleteUser(_ context.Context, _ string) error { return nil }
+
+// agentCovLinkedUsers models production, where CreateAgentUser writes into the
+// very table GetUser reads back. The base fixture keeps the agent store and
+// the user store as two unconnected maps, which no deployment does.
+type agentCovLinkedUsers struct {
+	*agentCovUsers
+	dir *agentCovDir
+}
+
+func (f *agentCovLinkedUsers) GetUser(ctx context.Context, id string) (*model.User, error) {
+	// Qualified on purpose: a bare f.GetUser would recurse into this method.
+	u, err := f.agentCovUsers.GetUser(ctx, id)
+	if err == nil || f.errGet != nil {
+		return u, err
+	}
+	f.dir.mu.Lock()
+	defer f.dir.mu.Unlock()
+	stored, ok := f.dir.agents[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	cp := *stored
+	return &cp, nil
+}
+
+func agentCovNewLinkedSvc() (*AgentService, *agentCovDir, *agentCovUsers, *agentCovIndexer) {
+	dir := agentCovNewDir()
+	users := &agentCovUsers{users: map[string]*model.User{}}
+	idx := &agentCovIndexer{}
+	svc := NewAgentService(dir, &agentCovLinkedUsers{agentCovUsers: users, dir: dir})
+	svc.SetIndexer(idx)
+	return svc, dir, users, idx
+}
+
+// Agent users are written through the agent store, never UserService, so
+// nothing else ever put them in the index. Unindexed they cannot be found in
+// user search — which is how the DM composer resolves recipients — leaving an
+// agent un-DM-able on any deployment whose search is index-backed.
+func TestAgentService_SeedDefaults_IndexesAgentUsers(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _, idx := agentCovNewLinkedSvc()
+
+	if err := svc.SeedDefaults(ctx); err != nil {
+		t.Fatalf("SeedDefaults: %v", err)
+	}
+	for _, slug := range []string{AgentSlugGG, AgentSlugQib, AgentSlugDev} {
+		if idx.indexed[AgentUserID(slug)] == nil {
+			t.Fatalf("agent %s never reached the index", slug)
+		}
+	}
+
+	// Second boot: the rows exist, so CreateAgentUser reports ErrAlreadyExists.
+	// Indexing must still happen — otherwise agents seeded before this shipped
+	// stay invisible forever, with no way to repair short of a manual reindex.
+	idx.indexed = nil
+	if err := svc.SeedDefaults(ctx); err != nil {
+		t.Fatalf("SeedDefaults (second boot): %v", err)
+	}
+	if idx.indexed[AgentUserID(AgentSlugGG)] == nil {
+		t.Fatal("re-boot did not re-index an already-existing agent user")
+	}
+}
+
+// The stored row wins over the struct SeedDefaults just built, so an admin
+// rename is not silently reverted in the index by the next restart.
+func TestAgentService_IndexAgentUser_UsesStoredRecord(t *testing.T) {
+	ctx := context.Background()
+	svc, dir, users, idx := agentCovNewLinkedSvc()
+	agentCovSeedAgent(t, dir, users, AgentSlugGG)
+
+	id := AgentUserID(AgentSlugGG)
+	users.users[id].DisplayName = "Renamed By Admin"
+
+	if err := svc.SeedDefaults(ctx); err != nil {
+		t.Fatalf("SeedDefaults: %v", err)
+	}
+	if got := idx.indexed[id]; got == nil || got.DisplayName != "Renamed By Admin" {
+		t.Fatalf("indexed the constructed struct instead of the stored row: %+v", got)
+	}
+}
+
+func TestAgentService_IndexAgentUser_Degrades(t *testing.T) {
+	ctx := context.Background()
+
+	// No indexer: deployments without a search client answer user search by
+	// linear scan and need no index at all. Must not panic.
+	bare, _, _ := agentCovNewSvc()
+	bare.indexAgentUser(ctx, AgentUserID(AgentSlugGG))
+
+	svc, dir, users, idx := agentCovNewLinkedSvc()
+	agentCovSeedAgent(t, dir, users, AgentSlugGG)
+	id := AgentUserID(AgentSlugGG)
+
+	// Lookup failure: indexing is best-effort and must not break seeding.
+	users.errGet = errAgentCov
+	svc.indexAgentUser(ctx, id)
+	if len(idx.indexed) != 0 {
+		t.Fatal("indexed despite a failed lookup")
+	}
+	users.errGet = nil
+
+	// A row that is not there at all.
+	svc.indexAgentUser(ctx, AgentUserID("nope"))
+	if len(idx.indexed) != 0 {
+		t.Fatal("indexed a user that does not exist")
+	}
+
+	// Indexer failure is logged and swallowed, not propagated.
+	idx.err = errAgentCov
+	svc.indexAgentUser(ctx, id)
+	if len(idx.indexed) != 0 {
+		t.Fatal("recorded an index write that failed")
+	}
+}
+
+func TestAgentService_CreateAgent_IndexesAgentUser(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _, idx := agentCovNewLinkedSvc()
+
+	if _, err := svc.CreateAgent(ctx, CreateAgentInput{
+		Slug:        "ops",
+		DisplayName: "ops",
+		Persona:     "ops persona",
+	}); err != nil {
+		t.Fatalf("CreateAgent: %v", err)
+	}
+	if idx.indexed[AgentUserID("ops")] == nil {
+		t.Fatal("a newly created agent must be findable in user search")
+	}
+}
