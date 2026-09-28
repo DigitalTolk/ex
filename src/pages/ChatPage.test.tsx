@@ -229,7 +229,7 @@ describe('ChatPage', () => {
     renderChatPage();
     const opts = mockUseWebSocket.mock.calls[0][0];
     opts.onMessageNew(msg());
-    expect(mockBumpChannelUnread).toHaveBeenCalledWith(expect.anything(), 'ch-99');
+    expect(mockBumpChannelUnread).toHaveBeenCalledWith(expect.anything(), 'ch-99', undefined);
     expect(mockBumpConversationUnread).not.toHaveBeenCalledWith(expect.anything(), 'ch-99');
   });
 

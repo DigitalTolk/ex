@@ -30,8 +30,11 @@ type ConversationService struct {
 		GetByID(context.Context, string) (*model.User, error)
 	}
 	mediaCache MediaURLCache
-	broker     Broker
-	publisher  Publisher
+	// messages resolves read-up-to-message requests (MarkConversationRead).
+	// Optional: unset, a read always catches up to the latest message.
+	messages  MessageStore
+	broker    Broker
+	publisher Publisher
 }
 
 // NewConversationService creates a ConversationService with the given
@@ -50,6 +53,10 @@ func NewConversationService(conversations ConversationStore, users UserStore, _ 
 // SetMediaURLCache enables stable /api/v1/media URLs for transient DM avatar
 // enrichments. The URL is still derived from the authoritative user AvatarKey.
 func (s *ConversationService) SetMediaURLCache(c MediaURLCache) { s.mediaCache = c }
+
+// SetMessageStore wires the message store MarkConversationRead uses to resolve
+// a read-up-to-message point.
+func (s *ConversationService) SetMessageStore(m MessageStore) { s.messages = m }
 
 // SetUserProfileResolver lets list responses use the same cached/profile-
 // normalized user reads as the user API without changing conversation storage.
@@ -492,20 +499,43 @@ func (s *ConversationService) enrichUnread(ctx context.Context, rows []*model.Us
 	wg.Wait()
 }
 
-// MarkConversationRead catches the user up to the conversation's current
-// MessageSeq so the sidebar badge clears and stays cleared across reloads, and
-// notifies the caller's other tabs. Mirrors ChannelService.MarkChannelRead.
-// Returns ErrNotFound when the caller isn't a participant.
-func (s *ConversationService) MarkConversationRead(ctx context.Context, userID, convID string) error {
+// MarkConversationRead moves the user's read point in the conversation
+// forward (to the current MessageSeq, or to just after upToMsgID) and notifies
+// the caller's other tabs. Mirrors ChannelService.MarkChannelRead. Returns
+// ErrNotFound when the caller isn't a participant, ErrValidation for a bad
+// upToMsgID.
+func (s *ConversationService) MarkConversationRead(ctx context.Context, userID, convID, upToMsgID string) error {
 	conv, err := s.conversations.GetConversation(ctx, convID)
 	if err != nil {
 		return fmt.Errorf("conversation: get: %w", err)
 	}
-	if err := s.conversations.SetConversationLastRead(ctx, convID, userID, conv.MessageSeq); err != nil {
+	now := time.Now()
+	seq, msgID, err := resolveReadPoint(ctx, s.messages, convID, conv.MessageSeq, seqSettled(conv.LastSeqAt, now), upToMsgID, now)
+	if err != nil {
+		return err
+	}
+	if err := s.conversations.SetConversationLastRead(ctx, convID, userID, seq, msgID); err != nil {
+		// Already read past this point (a stale tab, a reordered request):
+		// success, but announce nothing — the numbers below would describe a
+		// read point that was never stored, and tabs would SET a wrong badge.
+		if errors.Is(err, store.ErrStaleReadPoint) {
+			return nil
+		}
 		return err
 	}
 	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
 		"conversationID": convID,
+		// What this read left unread: 0 lets other tabs clear the badge in
+		// place; > 0 (a read-up-to-message) tells them to refetch the count.
+		"unreadCount": max(0, conv.MessageSeq-seq),
+		// The read point itself, so every tab can move its cached watermark
+		// (the client places the "New" divider after it on the next open).
+		"lastReadMsgID": msgID,
+		// The seq pair behind unreadCount, so a tab can drop an echo older
+		// than one it already applied and keep counting messages it saw
+		// arrive after this read was computed.
+		"lastReadSeq": seq,
+		"messageSeq":  conv.MessageSeq,
 	})
 	return nil
 }

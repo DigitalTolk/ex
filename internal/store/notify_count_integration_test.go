@@ -60,7 +60,7 @@ func TestMembershipStore_NotifyCountLifecycle(t *testing.T) {
 	}
 
 	// Catching up clears the badge in the SAME write as the watermark.
-	if err := ms.SetChannelLastRead(ctx, "ch-nc", "u-1", 7); err != nil {
+	if err := ms.SetChannelLastRead(ctx, "ch-nc", "u-1", 7, ""); err != nil {
 		t.Fatalf("SetChannelLastRead: %v", err)
 	}
 	got := userChannelRow(t, db, "u-1", "ch-nc")
@@ -114,7 +114,7 @@ func TestConversationStore_NotifyCountLifecycle(t *testing.T) {
 		t.Fatalf("persisted = %+v (err=%v), want count 1", rows, err)
 	}
 
-	if err := cs.SetConversationLastRead(ctx, "conv-nc", "u-b", 3); err != nil {
+	if err := cs.SetConversationLastRead(ctx, "conv-nc", "u-b", 3, ""); err != nil {
 		t.Fatalf("SetConversationLastRead: %v", err)
 	}
 	rows, _ = cs.ListUserConversations(ctx, "u-b")

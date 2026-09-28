@@ -20,12 +20,12 @@ import (
 // (both on the conversation store) share the same MessageService unread path.
 type UnreadSeqAdapter struct {
 	incr     func(ctx context.Context, parentID string) (int64, error)
-	lastRead func(ctx context.Context, parentID, userID string, seq int64) error
+	lastRead func(ctx context.Context, parentID, userID string, seq int64, msgID string) error
 }
 
 func NewUnreadSeqAdapter(
 	incr func(ctx context.Context, parentID string) (int64, error),
-	lastRead func(ctx context.Context, parentID, userID string, seq int64) error,
+	lastRead func(ctx context.Context, parentID, userID string, seq int64, msgID string) error,
 ) *UnreadSeqAdapter {
 	return &UnreadSeqAdapter{incr: incr, lastRead: lastRead}
 }
@@ -33,8 +33,8 @@ func NewUnreadSeqAdapter(
 func (a *UnreadSeqAdapter) IncrementMessageSeq(ctx context.Context, parentID string) (int64, error) {
 	return a.incr(ctx, parentID)
 }
-func (a *UnreadSeqAdapter) SetLastRead(ctx context.Context, parentID, userID string, seq int64) error {
-	return a.lastRead(ctx, parentID, userID, seq)
+func (a *UnreadSeqAdapter) SetLastRead(ctx context.Context, parentID, userID string, seq int64, msgID string) error {
+	return a.lastRead(ctx, parentID, userID, seq, msgID)
 }
 
 // ParentIndexAdapter bridges store.ParentIndexStoreImpl into the

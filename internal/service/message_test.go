@@ -32,65 +32,103 @@ func setupMessageService() (*MessageService, *mockMessageStore, *mockMembershipS
 	return svc, messages, memberships, conversations, publisher
 }
 
-// writeUnreadSeq (the synchronous core of the detached bump) advances the
-// counter and marks the author caught up — their own post never shows as unread
-// to them. Tested directly so the assertion doesn't race the goroutine.
-func TestMessageService_WriteUnreadSeq(t *testing.T) {
+// unreadSeqStore picks the counter a new message counts toward: channel or
+// conversation for a top-level message, none for a thread reply or an unknown
+// parent type.
+func TestMessageService_UnreadSeqStore(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	channelSeq, convSeq := &mockUnreadSeqStore{}, &mockUnreadSeqStore{}
+	svc.SetChannelSeqStore(channelSeq)
+	svc.SetConversationSeqStore(convSeq)
+
+	if got := svc.unreadSeqStore(ParentChannel, ""); got != channelSeq {
+		t.Error("top-level channel message should count toward the channel seq")
+	}
+	if got := svc.unreadSeqStore(ParentConversation, ""); got != convSeq {
+		t.Error("top-level conversation message should count toward the conversation seq")
+	}
+	if got := svc.unreadSeqStore(ParentChannel, "root-1"); got != nil {
+		t.Error("thread reply must not count toward parent unread")
+	}
+	if got := svc.unreadSeqStore("bogus", ""); got != nil {
+		t.Error("unknown parent type must not count")
+	}
+}
+
+// claimSeq advances the parent's counter synchronously and returns the claimed
+// value for the caller to stamp as Message.Seq.
+func TestMessageService_ClaimSeq(t *testing.T) {
 	svc, _, _, _, _ := setupMessageService()
 	seqStore := &mockUnreadSeqStore{}
 	ctx := context.Background()
 
-	svc.writeUnreadSeq(ctx, seqStore, "ch1", "user-1")
-	if seqStore.count("ch1") != 1 {
-		t.Errorf("MessageSeq = %d, want 1", seqStore.count("ch1"))
+	if got := svc.claimSeq(ctx, seqStore, "ch1"); got != 1 {
+		t.Errorf("first claim = %d, want 1", got)
 	}
-	if seq, ok := seqStore.lastRead("ch1", "user-1"); !ok || seq != 1 {
-		t.Errorf("author last-read = %d (set=%v), want 1 (own post reads the parent)", seq, ok)
+	if got := svc.claimSeq(ctx, seqStore, "ch1"); got != 2 {
+		t.Errorf("second claim = %d, want 2", got)
+	}
+	if got := svc.claimSeq(ctx, nil, "ch1"); got != 0 {
+		t.Errorf("nil store claim = %d, want 0 (unwired is a no-op)", got)
 	}
 }
 
-// The webhook sentinel author has no membership row — the seq still bumps
-// (recipients' unread counts must advance) but the author last-read mark is
-// skipped. Regression: attempting it WARNed "store: item not found" on every
-// single webhook post.
-func TestMessageService_WriteUnreadSeq_WebhookSentinelSkipsLastRead(t *testing.T) {
+// IncrementMessageSeq failing is non-fatal: the claim yields 0 (the message
+// still sends, it just can't anchor a read-up-to point).
+func TestMessageService_ClaimSeq_IncrementErrorIsNonFatal(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	if got := svc.claimSeq(context.Background(), &mockUnreadSeqStore{err: errors.New("boom")}, "ch1"); got != 0 {
+		t.Errorf("claim on failed increment = %d, want 0", got)
+	}
+}
+
+// writeAuthorRead (the synchronous core of the detached markAuthorRead) moves
+// the author's read point to their own message — seq AND message ID.
+func TestMessageService_WriteAuthorRead(t *testing.T) {
 	svc, _, _, _, _ := setupMessageService()
 	seqStore := &mockUnreadSeqStore{}
 
-	svc.writeUnreadSeq(context.Background(), seqStore, "ch1", WebhookAuthorID)
-	if seqStore.count("ch1") != 1 {
-		t.Errorf("MessageSeq = %d, want 1 (recipients must still see unread)", seqStore.count("ch1"))
+	svc.writeAuthorRead(context.Background(), seqStore, "ch1", "user-1", 4, "m-4")
+	if seq, ok := seqStore.lastRead("ch1", "user-1"); !ok || seq != 4 {
+		t.Errorf("author last-read = %d (set=%v), want 4 (own post reads the parent)", seq, ok)
+	}
+	if got := seqStore.lastReadMsgID("ch1", "user-1"); got != "m-4" {
+		t.Errorf("author last-read msg = %q, want m-4", got)
+	}
+}
+
+// A SetLastRead failure is logged, not fatal (and must not panic).
+func TestMessageService_WriteAuthorRead_ErrorIsNonFatal(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	svc.writeAuthorRead(context.Background(), &mockUnreadSeqStore{lastErr: errors.New("boom")}, "ch1", "user-1", 1, "m-1")
+}
+
+// markAuthorRead skips everything it can't or mustn't mark: no store, no
+// claimed seq, and the webhook sentinel author — it has no membership row, so
+// attempting it WARNed "store: item not found" on every single webhook post.
+func TestMessageService_MarkAuthorRead_Skips(t *testing.T) {
+	svc, _, _, _, _ := setupMessageService()
+	seqStore := &mockUnreadSeqStore{}
+	ctx := context.Background()
+
+	svc.markAuthorRead(ctx, nil, &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "user-1", Seq: 1})
+	svc.markAuthorRead(ctx, seqStore, &model.Message{ID: "m2", ParentID: "ch1", AuthorID: "user-1"})
+	svc.markAuthorRead(ctx, seqStore, &model.Message{ID: "m3", ParentID: "ch1", AuthorID: WebhookAuthorID, Seq: 3})
+	// A counted message after the skips proves the goroutine path runs, and
+	// flushes any (wrongly) dispatched earlier write before we assert.
+	svc.markAuthorRead(ctx, seqStore, &model.Message{ID: "m4", ParentID: "ch1", AuthorID: "user-2", Seq: 4})
+	waitForCond(t, func() bool { _, ok := seqStore.lastRead("ch1", "user-2"); return ok }, "counted author read")
+	if _, ok := seqStore.lastRead("ch1", "user-1"); ok {
+		t.Error("uncounted message must not mark the author read")
 	}
 	if _, ok := seqStore.lastRead("ch1", WebhookAuthorID); ok {
 		t.Error("webhook sentinel must not get a last-read mark (it has no membership row)")
 	}
 }
 
-// IncrementMessageSeq failing must not set the author's last-read (and must not
-// panic) — unread tracking is best-effort, message delivery is not.
-func TestMessageService_WriteUnreadSeq_IncrementErrorIsNonFatal(t *testing.T) {
-	svc, _, _, _, _ := setupMessageService()
-	seqStore := &mockUnreadSeqStore{err: errors.New("boom")}
-
-	svc.writeUnreadSeq(context.Background(), seqStore, "ch1", "user-1")
-	if _, ok := seqStore.lastRead("ch1", "user-1"); ok {
-		t.Error("author last-read should not be set when increment failed")
-	}
-}
-
-// A SetLastRead failure after a successful increment is logged, not fatal.
-func TestMessageService_WriteUnreadSeq_SetLastReadErrorIsNonFatal(t *testing.T) {
-	svc, _, _, _, _ := setupMessageService()
-	seqStore := &mockUnreadSeqStore{lastErr: errors.New("boom")}
-
-	svc.writeUnreadSeq(context.Background(), seqStore, "ch1", "user-1")
-	if seqStore.count("ch1") != 1 {
-		t.Errorf("seq = %d, want 1 (increment still happened)", seqStore.count("ch1"))
-	}
-}
-
-// Send dispatches the (detached) unread-seq bump for a top-level channel
-// message. The bump runs in a goroutine, so poll for it.
+// Send claims the unread seq for a top-level channel message SYNCHRONOUSLY —
+// it's on the returned message (and so in message.new) — and then marks the
+// author read up to that message (detached, so poll for it).
 func TestMessageService_Send_BumpsChannelSeq(t *testing.T) {
 	svc, _, memberships, _, _ := setupMessageService()
 	seqStore := &mockUnreadSeqStore{}
@@ -98,10 +136,38 @@ func TestMessageService_Send_BumpsChannelSeq(t *testing.T) {
 	ctx := context.Background()
 	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember}
 
-	if _, err := svc.Send(ctx, "user-1", "ch1", ParentChannel, "first", ""); err != nil {
+	msg, err := svc.Send(ctx, "user-1", "ch1", ParentChannel, "first", "")
+	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	waitForCond(t, func() bool { return seqStore.count("ch1") == 1 }, "channel seq to bump after send")
+	if seqStore.count("ch1") != 1 || msg.Seq != 1 {
+		t.Fatalf("seq count=%d msg.Seq=%d, want both 1 before Send returns", seqStore.count("ch1"), msg.Seq)
+	}
+	waitForCond(t, func() bool { return seqStore.lastReadMsgID("ch1", "user-1") == msg.ID }, "author read point at own message")
+	if seq, _ := seqStore.lastRead("ch1", "user-1"); seq != 1 {
+		t.Errorf("author last-read seq = %d, want 1", seq)
+	}
+}
+
+// A thread reply never counts toward the parent's unread: no seq claimed.
+func TestMessageService_Send_ThreadReplyClaimsNoSeq(t *testing.T) {
+	svc, _, memberships, _, _ := setupMessageService()
+	seqStore := &mockUnreadSeqStore{}
+	svc.SetChannelSeqStore(seqStore)
+	ctx := context.Background()
+	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember}
+	root, err := svc.Send(ctx, "user-1", "ch1", ParentChannel, "root", "")
+	if err != nil {
+		t.Fatalf("Send root: %v", err)
+	}
+
+	reply, err := svc.Send(ctx, "user-1", "ch1", ParentChannel, "reply", root.ID)
+	if err != nil {
+		t.Fatalf("Send reply: %v", err)
+	}
+	if reply.Seq != 0 || seqStore.count("ch1") != 1 {
+		t.Errorf("reply.Seq=%d count=%d, want 0 and 1 (only the root counts)", reply.Seq, seqStore.count("ch1"))
+	}
 }
 
 // A conversation message bumps the conversation's seq counter the same way —

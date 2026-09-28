@@ -9,6 +9,11 @@ type Message struct {
 	AuthorID   string `json:"authorID" dynamodbav:"authorID"`
 	Body       string `json:"body" dynamodbav:"body"`
 	System     bool   `json:"system,omitempty" dynamodbav:"system,omitempty"`
+	// Seq is the parent's MessageSeq value this message claimed when it was
+	// sent — set only on messages that count toward unread (top-level,
+	// non-system). It lets a read-up-to-message request resolve the exact
+	// LastReadSeq for that point. Zero on uncounted and pre-Seq messages.
+	Seq int64 `json:"seq,omitempty" dynamodbav:"seq,omitempty"`
 	// NoIndex keeps the message out of the search index (live indexing AND
 	// admin reindex) — for machine-posted ephemera like /mstmeetings join
 	// links, where a stale meeting URL surfacing in search is noise. Internal

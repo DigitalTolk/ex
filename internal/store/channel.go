@@ -217,7 +217,11 @@ func (s *ChannelStoreImpl) UpdateChannel(ctx context.Context, ch *model.Channel)
 // returns the new value. ADD on a missing attribute treats it as 0, so the
 // first message returns 1 — no initialization needed.
 func (s *ChannelStoreImpl) IncrementMessageSeq(ctx context.Context, channelID string) (int64, error) {
-	upd := expression.Add(expression.Name("messageSeq"), expression.Value(1))
+	// lastSeqAt records WHEN the newest seq was claimed: a read that catches
+	// up to the current seq must not swallow a seq whose message is still
+	// being written (see service.resolveReadPoint).
+	upd := expression.Add(expression.Name("messageSeq"), expression.Value(1)).
+		Set(expression.Name("lastSeqAt"), expression.Value(time.Now().UTC()))
 	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).Build())
 
 	out, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{

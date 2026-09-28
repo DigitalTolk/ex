@@ -4,8 +4,19 @@
 // that produced the ghost-DM bug (an open route auto-marking messages read
 // while nobody was looking) — it earns its own module and its own tests.
 //
-// The authoritative behaviour spec is CLAUDE.md's user-perspective truth
-// table; message-arrival.test.ts mirrors it row by row.
+// User-perspective truth table (message-arrival.test.ts mirrors it row by
+// row; a local CLAUDE.md may carry the same table):
+//
+//   message                        | route open | looking | at tail | result
+//   -------------------------------+------------+---------+---------+------------
+//   own / thread reply / system    |     —      |    —    |    —    | ignore
+//   from someone else              |    yes     |   yes   |   yes   | mark-read
+//   from someone else              |    yes     |   yes   |   no    | bump-unread  (scrolled up: "New" divider + pill)
+//   from someone else              |    yes     |   no    |    —    | bump-unread  (ghost-DM bug)
+//   from someone else              |    no      |    —    |    —    | bump-unread
+//
+// Opening a parent, scrolling back to the tail, and returning to the window
+// while at the tail read it (useUnreadMarker); scrolled up, nothing is read.
 
 export type ParentKind = 'channel' | 'conversation' | null;
 
@@ -43,14 +54,19 @@ export interface ArrivalContext {
   // input (the suppression tier). An open route alone is never enough —
   // marking read without this was the ghost-DM bug.
   attentive: boolean;
+  // The open list is parked at the live tail, so the message lands in view.
+  // Scrolled up reading history, the user hasn't seen it: it stays unread
+  // (badge + "New" divider + pill) until they scroll back down.
+  atBottom: boolean;
 }
 
 // classifyParentArrival: what an arriving top-level message does to its
 // parent's unread state.
-//   mark-read   — the user is watching it happen: persist the read.
+//   mark-read   — the user is watching it happen (looking, at the tail):
+//                 persist the read.
 //   bump-unread — real new activity the user hasn't seen: badge it.
 //   ignore      — not parent-level activity at all.
 export function classifyParentArrival(ctx: ArrivalContext): ArrivalAction {
   if (ctx.isOwnAuthor || ctx.isThreadReply || ctx.isSystem) return 'ignore';
-  return ctx.viewingParent && ctx.attentive ? 'mark-read' : 'bump-unread';
+  return ctx.viewingParent && ctx.attentive && ctx.atBottom ? 'mark-read' : 'bump-unread';
 }

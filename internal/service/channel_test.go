@@ -1244,7 +1244,7 @@ func TestMarkChannelRead_StampsSeqAndPublishes(t *testing.T) {
 	ctx := context.Background()
 	channels.channels["ch-7"] = &model.Channel{ID: "ch-7", Name: "seven", Type: model.ChannelTypePublic, MessageSeq: 7}
 
-	if err := svc.MarkChannelRead(ctx, "user-1", "ch-7"); err != nil {
+	if err := svc.MarkChannelRead(ctx, "user-1", "ch-7", ""); err != nil {
 		t.Fatalf("MarkChannelRead: %v", err)
 	}
 	if got := memberships.lastReadSeqs["ch-7#user-1"]; got != 7 {
@@ -1266,14 +1266,14 @@ func TestMarkChannelRead_Errors(t *testing.T) {
 	ctx := context.Background()
 
 	// Missing channel → wrapped GetChannel error.
-	if err := svc.MarkChannelRead(ctx, "user-1", "nope"); err == nil {
+	if err := svc.MarkChannelRead(ctx, "user-1", "nope", ""); err == nil {
 		t.Fatal("expected error for missing channel")
 	}
 
 	// Non-member → SetChannelLastRead error surfaces (here forced).
 	channels.channels["ch-x"] = &model.Channel{ID: "ch-x", Name: "x", Type: model.ChannelTypePublic, MessageSeq: 1}
 	memberships.setLastReadErr = store.ErrNotFound
-	if err := svc.MarkChannelRead(ctx, "stranger", "ch-x"); !errors.Is(err, store.ErrNotFound) {
+	if err := svc.MarkChannelRead(ctx, "stranger", "ch-x", ""); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }

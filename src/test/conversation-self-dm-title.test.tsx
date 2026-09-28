@@ -58,6 +58,8 @@ vi.mock('@/context/NotificationContext', () => ({
 
 vi.mock('@/hooks/useConversations', () => ({
   useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
+  // The view's unread marker snapshots the sidebar row from this list.
+  useUserConversations: () => ({ data: [], isPending: false }),
   useConversation: () => ({
     data: {
       id: 'c-self',

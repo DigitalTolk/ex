@@ -332,7 +332,7 @@ func TestMembershipStore_ServiceSurface(t *testing.T) {
 		t.Fatalf("AddMember: %v", err)
 	}
 
-	if err := adapter.SetChannelLastRead(ctx, "ch-ma-1", "u-ma-1", 4); err != nil {
+	if err := adapter.SetChannelLastRead(ctx, "ch-ma-1", "u-ma-1", 4, ""); err != nil {
 		t.Fatalf("SetChannelLastRead: %v", err)
 	}
 

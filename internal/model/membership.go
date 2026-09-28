@@ -13,13 +13,18 @@ type ChannelMembership struct {
 
 // UserChannel represents a channel from the user's perspective (stored on user side).
 type UserChannel struct {
-	UserID        string      `json:"userID" dynamodbav:"userID"`
-	ChannelID     string      `json:"channelID" dynamodbav:"channelID"`
-	ChannelName   string      `json:"channelName" dynamodbav:"channelName"`
-	ChannelType   ChannelType `json:"channelType" dynamodbav:"channelType"`
-	Role          ChannelRole `json:"role" dynamodbav:"role"`
-	JoinedAt      time.Time   `json:"joinedAt" dynamodbav:"joinedAt"`
-	LastReadMsgID string      `json:"lastReadMsgID,omitempty" dynamodbav:"lastReadMsgID,omitempty"`
+	UserID      string      `json:"userID" dynamodbav:"userID"`
+	ChannelID   string      `json:"channelID" dynamodbav:"channelID"`
+	ChannelName string      `json:"channelName" dynamodbav:"channelName"`
+	ChannelType ChannelType `json:"channelType" dynamodbav:"channelType"`
+	Role        ChannelRole `json:"role" dynamodbav:"role"`
+	JoinedAt    time.Time   `json:"joinedAt" dynamodbav:"joinedAt"`
+	// LastReadMsgID is the ID of the message the read point sits at — the
+	// client places its "New" divider before the first message whose ID sorts
+	// after it (IDs are ULIDs, ordered like the list). A read-everything
+	// request stores a timestamp watermark in ID space instead (see
+	// store.ReadWatermarkID). Moves forward only, together with LastReadSeq.
+	LastReadMsgID string `json:"lastReadMsgID,omitempty" dynamodbav:"lastReadMsgID,omitempty"`
 	// LastReadSeq is the Channel.MessageSeq value this user had consumed as
 	// of their last read. unread count = max(0, Channel.MessageSeq -
 	// LastReadSeq); unread = count > 0. Set to the channel's current seq on
@@ -88,7 +93,8 @@ type UserConversation struct {
 	Activated      bool             `json:"activated" dynamodbav:"activated"`
 	JoinedAt       time.Time        `json:"joinedAt" dynamodbav:"joinedAt"`
 	UpdatedAt      time.Time        `json:"updatedAt,omitempty" dynamodbav:"updatedAt,omitempty"`
-	LastReadMsgID  string           `json:"lastReadMsgID,omitempty" dynamodbav:"lastReadMsgID,omitempty"`
+	// LastReadMsgID mirrors UserChannel.LastReadMsgID.
+	LastReadMsgID string `json:"lastReadMsgID,omitempty" dynamodbav:"lastReadMsgID,omitempty"`
 	// LastReadSeq mirrors UserChannel.LastReadSeq: unread = Conversation.MessageSeq
 	// - LastReadSeq. The same exact-count seq model backs channels and
 	// conversations alike (no more Redis unread boolean).

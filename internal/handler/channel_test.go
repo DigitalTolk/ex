@@ -169,7 +169,7 @@ func (s *dataMembershipStore) UserChannelNotifPrefs(_ context.Context, channelID
 func (s *dataMembershipStore) SetMute(_ context.Context, _, _ string, _ bool) error {
 	return nil
 }
-func (s *dataMembershipStore) SetChannelLastRead(_ context.Context, _, _ string, _ int64) error {
+func (s *dataMembershipStore) SetChannelLastRead(_ context.Context, _, _ string, _ int64, _ string) error {
 	return nil
 }
 func (s *dataMembershipStore) SetNotifPrefs(_ context.Context, _, _ string, _ model.ChannelNotificationOverride) error {
@@ -618,6 +618,51 @@ func TestChannelHandler_MarkRead(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("missing-id status = %d, want 400", rec.Code)
+	}
+}
+
+// PUT /read body handling: {"upToMessageID"} of a real message succeeds; a
+// malformed body or unknown message is a 400.
+func TestChannelHandler_MarkRead_UpToMessage(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.channels.channels["ch-read"] = &model.Channel{ID: "ch-read", Name: "read", Type: model.ChannelTypePublic, MessageSeq: 4}
+	env.messages.messages["ch-read#01J00000000000000000000002"] = &model.Message{ID: "01J00000000000000000000002", ParentID: "ch-read", Seq: 2}
+	env.memberships.memberships["ch-read#reader-1"] = &model.ChannelMembership{ChannelID: "ch-read", UserID: "reader-1", Role: model.ChannelRoleMember}
+	user := &model.User{ID: "reader-1", Email: "r@example.com", SystemRole: model.SystemRoleMember}
+	token := makeTokenForUser(env.jwtMgr, user)
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.MarkRead))
+
+	put := func(body string) int {
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/ch-read/read", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.SetPathValue("id", "ch-read")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := put(`{"upToMessageID":"01J00000000000000000000002"}`); code != http.StatusNoContent {
+		t.Errorf("valid upTo status = %d, want 204", code)
+	}
+	if code := put(`{"upToMessageID":"01J00000000000000000000099"}`); code != http.StatusBadRequest {
+		t.Errorf("unknown message status = %d, want 400", code)
+	}
+	if code := put(`not json`); code != http.StatusBadRequest {
+		t.Errorf("invalid body status = %d, want 400", code)
+	}
+	if code := put(`{"upToMessageID":"not-a-ulid"}`); code != http.StatusBadRequest {
+		t.Errorf("malformed ID status = %d, want 400", code)
+	}
+
+	// A chunked EMPTY body (ContentLength -1, no bytes) is "read everything",
+	// as an old/mobile client sends it — not a 400.
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/ch-read/read", strings.NewReader(""))
+	req.ContentLength = -1
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.SetPathValue("id", "ch-read")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("chunked empty body status = %d, want 204", rec.Code)
 	}
 }
 

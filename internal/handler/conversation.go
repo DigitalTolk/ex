@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
@@ -150,11 +151,20 @@ func (h *ConversationHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_id", "conversation ID is required")
 		return
 	}
+	upTo, err := readMarkReadBody(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
 	if _, err := h.convSvc.GetByID(r.Context(), userID, id); err != nil {
 		writeReadResourceError(w, r, err, "conversation")
 		return
 	}
-	if err := h.convSvc.MarkConversationRead(r.Context(), userID, id); err != nil {
+	if err := h.convSvc.MarkConversationRead(r.Context(), userID, id, upTo); err != nil {
+		if errors.Is(err, service.ErrValidation) {
+			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
 		writeInternalError(w, r, "read_error", err)
 		return
 	}

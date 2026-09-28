@@ -287,7 +287,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			threadAudience[msg.AuthorID] = true
 		}
 		// Posting a reply reads the thread for you: advance the author's
-		// seen watermark server-side (the thread analogue of bumpUnreadSeq
+		// seen watermark server-side (the thread analogue of markAuthorRead
 		// marking the author caught up on the parent) and clear any stale
 		// thread-notification row. The client RELIES on this and does not
 		// issue a follow-up seen PUT for its own replies — removing this

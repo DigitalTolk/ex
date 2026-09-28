@@ -250,6 +250,7 @@ type mockMembershipStore struct {
 	setMuteErr        error
 	setNotifErr       error
 	lastReadSeqs      map[string]int64 // key: channelID + "#" + userID
+	lastReadMsgIDs    map[string]string
 	setLastReadErr    error
 	addedUserChannels map[string]*model.UserChannel // key: channelID + "#" + userID
 }
@@ -276,14 +277,15 @@ func (m *mockMembershipStore) AddMember(_ context.Context, mem *model.ChannelMem
 
 // mockUnreadSeqStore is the shared UnreadSeqStore fake for both channels and
 // conversations: a monotonically increasing per-parent counter plus a recorded
-// per-(parent,user) last-read. Mutex-guarded because bumpUnreadSeq writes it
+// per-(parent,user) last-read. Mutex-guarded because markAuthorRead writes it
 // from a detached goroutine while the test reads it back.
 type mockUnreadSeqStore struct {
-	mu        sync.Mutex
-	seq       map[string]int64
-	lastReads map[string]int64 // key: parentID + "#" + userID
-	err       error
-	lastErr   error
+	mu             sync.Mutex
+	seq            map[string]int64
+	lastReads      map[string]int64 // key: parentID + "#" + userID
+	lastReadMsgIDs map[string]string
+	err            error
+	lastErr        error
 }
 
 func (m *mockUnreadSeqStore) IncrementMessageSeq(_ context.Context, parentID string) (int64, error) {
@@ -299,7 +301,7 @@ func (m *mockUnreadSeqStore) IncrementMessageSeq(_ context.Context, parentID str
 	return m.seq[parentID], nil
 }
 
-func (m *mockUnreadSeqStore) SetLastRead(_ context.Context, parentID, userID string, seq int64) error {
+func (m *mockUnreadSeqStore) SetLastRead(_ context.Context, parentID, userID string, seq int64, msgID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.lastErr != nil {
@@ -307,9 +309,17 @@ func (m *mockUnreadSeqStore) SetLastRead(_ context.Context, parentID, userID str
 	}
 	if m.lastReads == nil {
 		m.lastReads = make(map[string]int64)
+		m.lastReadMsgIDs = make(map[string]string)
 	}
 	m.lastReads[parentID+"#"+userID] = seq
+	m.lastReadMsgIDs[parentID+"#"+userID] = msgID
 	return nil
+}
+
+func (m *mockUnreadSeqStore) lastReadMsgID(parentID, userID string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastReadMsgIDs[parentID+"#"+userID]
 }
 
 func (m *mockUnreadSeqStore) count(parentID string) int64 {
@@ -334,8 +344,8 @@ type convSeqStore struct{ s *mockConversationStore }
 func (a convSeqStore) IncrementMessageSeq(ctx context.Context, parentID string) (int64, error) {
 	return a.s.IncrementMessageSeq(ctx, parentID)
 }
-func (a convSeqStore) SetLastRead(ctx context.Context, parentID, userID string, seq int64) error {
-	return a.s.SetConversationLastRead(ctx, parentID, userID, seq)
+func (a convSeqStore) SetLastRead(ctx context.Context, parentID, userID string, seq int64, msgID string) error {
+	return a.s.SetConversationLastRead(ctx, parentID, userID, seq, msgID)
 }
 
 // waitForCond polls cond until it holds (or fails the test), for asserting the
@@ -465,14 +475,16 @@ func (m *mockMembershipStore) SetMute(_ context.Context, channelID, userID strin
 	return nil
 }
 
-func (m *mockMembershipStore) SetChannelLastRead(_ context.Context, channelID, userID string, seq int64) error {
+func (m *mockMembershipStore) SetChannelLastRead(_ context.Context, channelID, userID string, seq int64, msgID string) error {
 	if m.setLastReadErr != nil {
 		return m.setLastReadErr
 	}
 	if m.lastReadSeqs == nil {
 		m.lastReadSeqs = make(map[string]int64)
+		m.lastReadMsgIDs = make(map[string]string)
 	}
 	m.lastReadSeqs[channelID+"#"+userID] = seq
+	m.lastReadMsgIDs[channelID+"#"+userID] = msgID
 	return nil
 }
 
@@ -764,6 +776,7 @@ type mockConversationStore struct {
 	listErr       error
 	touchErr      error
 	activateErr   error
+	lastReadErr   error // when set, SetConversationLastRead returns it
 }
 
 func newMockConversationStore() *mockConversationStore {
@@ -849,10 +862,14 @@ func (m *mockConversationStore) IncrementMessageSeq(_ context.Context, convID st
 	return conv.MessageSeq, nil
 }
 
-func (m *mockConversationStore) SetConversationLastRead(_ context.Context, convID, userID string, seq int64) error {
+func (m *mockConversationStore) SetConversationLastRead(_ context.Context, convID, userID string, seq int64, msgID string) error {
+	if m.lastReadErr != nil {
+		return m.lastReadErr
+	}
 	for _, uc := range m.userConvs[userID] {
 		if uc.ConversationID == convID {
 			uc.LastReadSeq = seq
+			uc.LastReadMsgID = msgID
 			return nil
 		}
 	}

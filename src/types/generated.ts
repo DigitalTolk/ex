@@ -1556,6 +1556,13 @@ export interface UserChannel {
   channelType: ChannelType;
   role: ChannelRole;
   joinedAt: string /* RFC3339 */;
+  /**
+   * LastReadMsgID is the ID of the message the read point sits at — the
+   * client places its "New" divider before the first message whose ID sorts
+   * after it (IDs are ULIDs, ordered like the list). A read-everything
+   * request stores a timestamp watermark in ID space instead (see
+   * store.ReadWatermarkID). Moves forward only, together with LastReadSeq.
+   */
   lastReadMsgID?: string;
   /**
    * LastReadSeq is the Channel.MessageSeq value this user had consumed as
@@ -1643,6 +1650,9 @@ export interface UserConversation {
   activated: boolean;
   joinedAt: string /* RFC3339 */;
   updatedAt?: string /* RFC3339 */;
+  /**
+   * LastReadMsgID mirrors UserChannel.LastReadMsgID.
+   */
   lastReadMsgID?: string;
   /**
    * LastReadSeq mirrors UserChannel.LastReadSeq: unread = Conversation.MessageSeq
@@ -1699,6 +1709,13 @@ export interface Message {
   authorID: string;
   body: string;
   system?: boolean;
+  /**
+   * Seq is the parent's MessageSeq value this message claimed when it was
+   * sent — set only on messages that count toward unread (top-level,
+   * non-system). It lets a read-up-to-message request resolve the exact
+   * LastReadSeq for that point. Zero on uncounted and pre-Seq messages.
+   */
+  seq?: number /* int64 */;
   parentMessageID?: string; // root message of the thread
   replyCount?: number /* int */; // count of replies (only set on root messages)
   lastReplyAt?: string /* RFC3339 */; // timestamp of the latest reply (only set on root messages)

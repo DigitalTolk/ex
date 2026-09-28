@@ -142,6 +142,12 @@ const userChannelUpdatedSchema = z.object({
   notificationPrefs: z.unknown().optional(),
   categories: z.boolean().optional(),
   userState: z.boolean().optional(),
+  // Mark-read only: what the read left unread (0 = fully caught up) and the
+  // read point it stored.
+  unreadCount: z.number().optional(),
+  lastReadMsgID: z.string().optional(),
+  lastReadSeq: z.number().optional(),
+  messageSeq: z.number().optional(),
 }).passthrough();
 
 export interface UserChannelUpdatedPayload {
@@ -154,6 +160,10 @@ export interface UserChannelUpdatedPayload {
   notificationPrefs?: unknown;
   categories?: boolean;
   userState?: boolean;
+  unreadCount?: number;
+  lastReadMsgID?: string;
+  lastReadSeq?: number;
+  messageSeq?: number;
 }
 export const parseUserChannelUpdated = parser(userChannelUpdatedSchema) as (
   v: unknown,

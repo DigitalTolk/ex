@@ -23,7 +23,7 @@ type ConversationStore interface {
 	ActivateConversation(ctx context.Context, convID string, participantIDs []string) error
 	TouchConversation(ctx context.Context, convID string, participantIDs []string, at time.Time) error
 	IncrementMessageSeq(ctx context.Context, convID string) (int64, error)
-	SetConversationLastRead(ctx context.Context, convID, userID string, seq int64) error
+	SetConversationLastRead(ctx context.Context, convID, userID string, seq int64, msgID string) error
 	ListAllConversations(ctx context.Context) ([]*model.Conversation, error)
 }
 
@@ -271,7 +271,11 @@ func (s *ConversationStoreImpl) TouchConversation(ctx context.Context, convID st
 // returns the new value (ADD treats a missing attribute as 0). Mirrors
 // ChannelStore.IncrementMessageSeq — the shared per-parent unread counter.
 func (s *ConversationStoreImpl) IncrementMessageSeq(ctx context.Context, convID string) (int64, error) {
-	upd := expression.Add(expression.Name("messageSeq"), expression.Value(1))
+	// lastSeqAt records WHEN the newest seq was claimed: a read that catches
+	// up to the current seq must not swallow a seq whose message is still
+	// being written (see service.resolveReadPoint).
+	upd := expression.Add(expression.Name("messageSeq"), expression.Value(1)).
+		Set(expression.Name("lastSeqAt"), expression.Value(time.Now().UTC()))
 	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).Build())
 
 	out, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
@@ -299,14 +303,11 @@ func (s *ConversationStoreImpl) IncrementMessageSeq(ctx context.Context, convID 
 	return attrs.MessageSeq, nil
 }
 
-// SetConversationLastRead stamps the conversation's current MessageSeq onto the
-// user-side row; unread then derives as MessageSeq - LastReadSeq.
-func (s *ConversationStoreImpl) SetConversationLastRead(ctx context.Context, convID, userID string, seq int64) error {
-	// Same one-write pairing as the channel side: reading the conversation
-	// clears the alerted-message badge with the watermark.
-	upd := expression.Set(expression.Name("lastReadSeq"), expression.Value(seq)).
-		Set(expression.Name("unreadNotifyCount"), expression.Value(0))
-	return s.updateUserConversation(ctx, convID, userID, upd, "lastReadSeq")
+// SetConversationLastRead records the user's read point in the conversation
+// (MessageSeq consumed + optional message-ID watermark), forward-only. Mirrors
+// MembershipStore.SetChannelLastRead, including clearing the alerted badge.
+func (s *ConversationStoreImpl) SetConversationLastRead(ctx context.Context, convID, userID string, seq int64, msgID string) error {
+	return s.setReadPoint(ctx, compositeKey(userPK(userID), convSK(convID)), seq, msgID, "conversation")
 }
 
 // IncrementNotifyCount mirrors the channel-side method for DM/group rows:

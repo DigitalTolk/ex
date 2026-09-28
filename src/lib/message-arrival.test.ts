@@ -27,14 +27,16 @@ describe('classifyParentArrival', () => {
     isSystem: false,
     viewingParent: false,
     attentive: false,
+    atBottom: true,
   };
 
-  // Mirrors CLAUDE.md's user-perspective truth table.
+  // Mirrors the user-perspective truth table in message-arrival.ts.
   const rows: Array<[string, Partial<ArrivalContext>, ReturnType<typeof classifyParentArrival>]> = [
     ['own message never touches the badge', { isOwnAuthor: true, viewingParent: true, attentive: true }, 'ignore'],
     ['thread reply belongs to the Threads nav, not the parent badge', { isThreadReply: true }, 'ignore'],
     ['system events (join/leave) are not new activity', { isSystem: true }, 'ignore'],
     ['watching it happen → read', { viewingParent: true, attentive: true }, 'mark-read'],
+    ['looking but scrolled up reading history → badge stays (missed-message bug)', { viewingParent: true, attentive: true, atBottom: false }, 'bump-unread'],
     ['route open but NOT looking (ghost-DM bug) → badge stays', { viewingParent: true, attentive: false }, 'bump-unread'],
     ['attentive but on a different parent → badge', { viewingParent: false, attentive: true }, 'bump-unread'],
     ['neither viewing nor attentive → badge', {}, 'bump-unread'],

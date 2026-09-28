@@ -7,6 +7,9 @@ import { deriveThreadMeta, isOwnMessage } from '@/lib/message-users';
 import type { Message, UserStatus } from '@/types';
 import { buildMessageListRows, nextVirtuosoState } from './MessageListRows';
 import { shouldAutoStickMessageList } from './message-list-autostick';
+import { NewMessagesPill, UnreadBanner, UnreadDividerRow, type DividerPosition } from './UnreadIndicators';
+import { setListAtBottom } from '@/stores/read-position';
+import type { UnreadMarkerState } from '@/hooks/useUnreadMarker';
 
 const ANCHOR_HIGHLIGHT_MS = 2200;
 const DEFAULT_MESSAGE_ROW_HEIGHT = 88;
@@ -18,6 +21,10 @@ const DEFAULT_MESSAGE_ROW_HEIGHT = 88;
 const MESSAGE_LIST_OVERSCAN_PX = 2000;
 const MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX = 4;
 const USER_SCROLL_AUTOSTICK_SUPPRESSION_MS = 1200;
+// Frames a jump-to-unread keeps re-aiming while rows measure in.
+const JUMP_SETTLE_FRAMES = 6;
+// Older pages one Jump may fetch looking for the first unread.
+const MAX_JUMP_PAGES = 5;
 
 // firstItemIndex is shifted down on every prepend (older-page fetch)
 // so Virtuoso identifies prepended rows as preceding existing ones
@@ -53,6 +60,9 @@ interface MessageListProps {
   // Viewer's most-used emoji shortcodes, forwarded to each message's action
   // bar as one-tap reaction shortcuts.
   quickReactions?: string[];
+  // Unread state from the view's useUnreadMarker: the "New" divider, the
+  // jump-to-new banner and the new-messages pill.
+  unread?: UnreadMarkerState;
 }
 
 export function MessageList(props: MessageListProps) {
@@ -84,9 +94,15 @@ function VirtuosoMessageList({
   anchorMsgId,
   anchorRevision,
   quickReactions,
+  unread,
 }: MessageListProps) {
+  const parentID = channelId ?? conversationId;
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const scrollerRef = useRef<HTMLElement | null>(null);
+  // State mirror of scrollerRef for render-time consumers (the divider's
+  // IntersectionObserver root): a ref read during the first render is null,
+  // which would silently observe against the document viewport instead.
+  const [scrollerEl, setScrollerEl] = useState<HTMLElement | null>(null);
   // Tracks whether the user is parked at the live tail. Driven purely by the
   // scroll handler below (true when scrolled to the bottom, false when the
   // user scrolls up) — deliberately NOT by Virtuoso's atBottomStateChange.
@@ -96,7 +112,21 @@ function VirtuosoMessageList({
   // that transient false it would race the ResizeObserver and intermittently
   // refuse to re-stick (the webkit "184px from bottom" flake). The scroll
   // handler only flips this on genuine user scrolls, so growth can't poison it.
-  const atBottomRef = useRef(true);
+  //
+  // A deep-link (anchor) mount lands mid-history, so it starts NOT at the
+  // bottom; reaching the bottom (scroll, or an anchor window that fits) flips
+  // it — otherwise arrivals would be read while the user reads old messages.
+  const atBottomRef = useRef(!anchorMsgId);
+  // Rendered mirror of atBottomRef (drives the new-messages pill).
+  const [atBottom, setAtBottom] = useState(!anchorMsgId);
+  // "Watching the live tail", published per parent to stores/read-position
+  // for the unread marker and ChatPage's arrival rule: at the bottom of the
+  // loaded slice AND that slice is the tail (a deep-link window with newer
+  // pages still unloaded is not).
+  const atLiveTail = atBottom && !hasPreviousPage;
+  useEffect(() => {
+    if (parentID) setListAtBottom(parentID, atLiveTail);
+  }, [parentID, atLiveTail]);
   const lastScrollerTopRef = useRef(0);
   const autoStickSuppressedUntilRef = useRef(0);
   const detachScrollerRef = useRef<(() => void) | null>(null);
@@ -136,7 +166,8 @@ function VirtuosoMessageList({
     [pages],
   );
   const threadMeta = useMemo(() => deriveThreadMeta(allMessages), [allMessages]);
-  const rows = useMemo(() => buildMessageListRows(allMessages), [allMessages]);
+  const dividerMsgId = unread?.dividerMsgId;
+  const rows = useMemo(() => buildMessageListRows(allMessages, dividerMsgId), [allMessages, dividerMsgId]);
 
   // `data` and `firstItemIndex` must reach Virtuoso in the SAME render
   // (its prepend contract). One useState with both fields + a sync
@@ -174,6 +205,15 @@ function VirtuosoMessageList({
     if (anchorAppliedRef.current === dedupKey) return;
     const scrollFrame = requestAnimationFrame(() => {
       virtuosoRef.current?.scrollToIndex({ index: anchorIndex, align: 'center' });
+      // An anchor window that fits the viewport never scrolls, so the scroll
+      // handler can't report "at bottom" — measure once after the jump.
+      requestAnimationFrame(() => {
+        const sc = scrollerRef.current;
+        if (sc && sc.scrollHeight - sc.scrollTop - sc.clientHeight <= MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX) {
+          atBottomRef.current = true;
+          setAtBottom(true);
+        }
+      });
       // Record "applied" only AFTER the scroll actually runs. On a cold
       // deeplink / notification open the `around` window mounts with the
       // anchor present, but Virtuoso's natural startReached prepends an
@@ -287,6 +327,7 @@ function VirtuosoMessageList({
 
     const scroller = ref instanceof HTMLElement ? ref : null;
     scrollerRef.current = scroller;
+    setScrollerEl(scroller);
     if (!scroller) return;
 
     lastScrollerTopRef.current = scroller.scrollTop;
@@ -297,9 +338,11 @@ function VirtuosoMessageList({
       if (nextScrollTop < previousScrollTop - 2 && distanceFromBottom > MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX) {
         autoStickSuppressedUntilRef.current = performance.now() + USER_SCROLL_AUTOSTICK_SUPPRESSION_MS;
         atBottomRef.current = false;
+        setAtBottom(false);
       } else if (distanceFromBottom <= MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX) {
         autoStickSuppressedUntilRef.current = 0;
         atBottomRef.current = true;
+        setAtBottom(true);
       }
       lastScrollerTopRef.current = nextScrollTop;
     };
@@ -308,6 +351,20 @@ function VirtuosoMessageList({
   }, []);
   useEffect(() => () => {
     detachScrollerRef.current?.();
+  }, []);
+
+  // Virtuoso's own at-bottom signal is trusted for TRUE only. Its false is
+  // transient during content growth (see atBottomRef), but its true is exact
+  // — and it catches what the scroll heuristic can't: WebKit's scroll
+  // correction after rows measure in can shrink scrollTop right after mount,
+  // which the heuristic reads as the user scrolling up, with no later scroll
+  // event to flip it back. Left uncorrected, messages arriving in plain view
+  // would be treated as unread.
+  const handleAtBottomStateChange = useCallback((bottom: boolean) => {
+    if (!bottom) return;
+    autoStickSuppressedUntilRef.current = 0;
+    atBottomRef.current = true;
+    setAtBottom(true);
   }, []);
 
   // Force-scroll-to-bottom when the bottom message becomes the
@@ -353,6 +410,91 @@ function VirtuosoMessageList({
     });
     return () => cancelAnimationFrame(raf);
   }, [anchorMsgId, renderRows, currentUserId, scrollToBottom]);
+
+  // --- Unread: banner visibility, Jump, dismiss -------------------------
+  // Where the "New" divider sits relative to the viewport. The row reports it
+  // via IntersectionObserver while mounted; when it's outside the rendered
+  // window (beyond the overscan) rangeChanged tells us which side it's on.
+  // 'visible' is sticky — once the reader has seen the first unread, the
+  // banner has done its job for this visit.
+  const [dividerPosition, setDividerPosition] = useState<DividerPosition | null>(null);
+  const reportDividerPosition = useCallback((p: DividerPosition) => {
+    setDividerPosition((prev) => (prev === 'visible' ? prev : p));
+  }, []);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [jumpPending, setJumpPending] = useState(false);
+  const dividerIndex = renderRows.findIndex((r) => r.kind === 'unread');
+  const firstItemIndex = virtuosoData.firstItemIndex;
+  const handleRangeChanged = useCallback(
+    (range: { startIndex: number; endIndex: number }) => {
+      if (dividerIndex < 0) return;
+      // Virtuoso reports absolute (firstItemIndex-offset) indices.
+      const start = range.startIndex - firstItemIndex;
+      const end = range.endIndex - firstItemIndex;
+      if (dividerIndex < start) reportDividerPosition('above');
+      else if (dividerIndex > end) reportDividerPosition('below');
+    },
+    [dividerIndex, firstItemIndex, reportDividerPosition],
+  );
+  // A pending divider (first unread in an unloaded older page) is above by
+  // definition.
+  const dividerAbove = unread?.pending || dividerPosition === 'above';
+  const showBanner = !!unread && !bannerDismissed && !jumpPending && unread.count > 0 && !!dividerAbove;
+  const showPill = !!unread && !atBottom && !hasPreviousPage && unread.newCount > 0;
+
+  // A far jump lands on ESTIMATED row heights; once the rows around the target
+  // mount and measure, the real offset differs. Re-issue the scroll for a few
+  // frames (until the divider reports itself visible) so the jump settles on
+  // the divider instead of near it.
+  const dividerVisibleRef = useRef(false);
+  useEffect(() => {
+    dividerVisibleRef.current = dividerPosition === 'visible';
+  }, [dividerPosition]);
+  const scrollToDivider = useCallback((index: number) => {
+    let frames = JUMP_SETTLE_FRAMES;
+    const step = () => {
+      virtuosoRef.current?.scrollToIndex({ index, align: 'start' });
+      frames -= 1;
+      if (frames > 0 && !dividerVisibleRef.current) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }, []);
+  // Pages a single Jump may pull while hunting for an unloaded first unread.
+  // Bounded so a count the client can't reconcile (or a failing fetch) can
+  // never page through the whole history: past the cap it lands on the
+  // oldest loaded message instead.
+  const jumpPagesRef = useRef(0);
+  const jumpToUnread = useCallback(() => {
+    setBannerDismissed(true);
+    if (dividerIndex >= 0) {
+      scrollToDivider(dividerIndex);
+      return;
+    }
+    // The first unread is in an older page: page back until it lands.
+    jumpPagesRef.current = 0;
+    setJumpPending(true);
+  }, [dividerIndex, scrollToDivider]);
+  const rowsSynced = rows === renderRows;
+  useEffect(() => {
+    if (!jumpPending) return;
+    // A freshly loaded page reaches Virtuoso's synced rows one layout pass
+    // after the props — judge "landed / nothing older" only once in sync.
+    if (!rowsSynced) return;
+    if (dividerIndex >= 0 || !hasNextPage || jumpPagesRef.current >= MAX_JUMP_PAGES) {
+      scrollToDivider(Math.max(dividerIndex, 0));
+      setJumpPending(false);
+      return;
+    }
+    if (!isFetchingNextPage) {
+      jumpPagesRef.current += 1;
+      fetchNextPage();
+    }
+  }, [jumpPending, rowsSynced, dividerIndex, hasNextPage, isFetchingNextPage, fetchNextPage, scrollToDivider]);
+  const unreadMarkRead = unread?.markRead;
+  const dismissBanner = useCallback(() => {
+    setBannerDismissed(true);
+    unreadMarkRead?.();
+  }, [unreadMarkRead]);
 
   // Memoize the Virtuoso Header/Footer COMPONENT identities so they only change
   // when their inputs do — defining them inline gave a fresh function every
@@ -414,6 +556,10 @@ function VirtuosoMessageList({
   // flush-left while messages still get their MessageRow px-4,
   // making the intro visibly shifted after the first message lands.
   return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+    {showBanner ? (
+      <UnreadBanner count={unread.count} since={unread.since} onJump={jumpToUnread} onDismiss={dismissBanner} />
+    ) : null}
     <Virtuoso
       ref={virtuosoRef}
       data={renderRows}
@@ -447,6 +593,8 @@ function VirtuosoMessageList({
       // at the bottom — the canonical chat behaviour.
       followOutput={hasPreviousPage ? false : followLiveOutput}
       scrollerRef={handleScrollerRef}
+      atBottomStateChange={handleAtBottomStateChange}
+      rangeChanged={handleRangeChanged}
       startReached={() => {
         if (hasNextPage && !isFetchingNextPage) fetchNextPage();
       }}
@@ -459,6 +607,9 @@ function VirtuosoMessageList({
       itemContent={(_index, row) => {
         /* istanbul ignore next -- react-virtuoso can momentarily call itemContent with an undefined row during prepend/firstItemIndex reconciliation; not deterministically reproducible. */
         if (!row) return null;
+        if (row.kind === 'unread') {
+          return <UnreadDividerRow root={scrollerEl} onPosition={reportDividerPosition} />;
+        }
         return row.kind === 'day' ? (
           <div
             data-testid="day-divider"
@@ -491,6 +642,8 @@ function VirtuosoMessageList({
       }}
       className="flex-1"
     />
+    {showPill ? <NewMessagesPill count={unread.newCount} onClick={scrollToBottom} /> : null}
+    </div>
   );
 }
 

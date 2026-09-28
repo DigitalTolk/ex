@@ -139,6 +139,9 @@ export function ImageLightbox({
     if (!open) return;
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
+        // Claim the key so other Esc handlers (the unread banner's
+        // mark-as-read) leave it alone.
+        e.preventDefault();
         handleClose();
         // Esc is a keyboard interaction, which flips :focus-visible on
         // for whatever element holds focus next — usually the

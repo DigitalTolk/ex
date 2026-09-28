@@ -95,7 +95,11 @@ export function PopoverPortal({
       onDismiss?.();
     }
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onDismiss?.();
+      if (e.key !== 'Escape') return;
+      // Claim the key so other Esc handlers (the unread banner's
+      // mark-as-read) leave it alone.
+      e.preventDefault();
+      onDismiss?.();
     }
     document.addEventListener('pointerdown', onDown);
     document.addEventListener('keydown', onKey);
