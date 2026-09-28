@@ -77,7 +77,7 @@ describe('layout tiers', () => {
 describe('applyLayoutTierClasses / startLayoutTierTracking', () => {
   const root = document.documentElement;
   beforeEach(() => {
-    root.classList.remove('tier-mobile', 'tier-compact', 'tier-full', 'device-touch', 'electron-mac');
+    root.classList.remove('tier-mobile', 'tier-compact', 'tier-full', 'device-touch', 'device-no-pointer', 'electron-mac');
   });
 
   it('stamps exactly one tier class plus the device class', () => {
@@ -204,15 +204,25 @@ describe('hasPointerDevice', () => {
     }
   });
 
-  it('takes the touch class off the root when a pointer arrives, and puts it back when it goes', () => {
+  it('drops only the no-pointer class when a pointer arrives — a touch screen is still a touch screen', () => {
+    // Regression: dropping `device-touch` too took the `touch:` affordances
+    // with it, and on iPadOS nothing brings them back — `hover:`/`group-hover:`
+    // sit behind `@media (hover: hover)`, which reports `none` there even with
+    // a Magic Keyboard. That left the sidebar's create-channel and new-DM
+    // buttons invisible and unreachable.
     const root = document.documentElement;
     const stop = startLayoutTierTracking();
     try {
       expect(root.classList.contains('device-touch')).toBe(true);
+      expect(root.classList.contains('device-no-pointer')).toBe(true);
+
       mouseInput();
-      expect(root.classList.contains('device-touch')).toBe(false);
+      expect(root.classList.contains('device-touch')).toBe(true);
+      expect(root.classList.contains('device-no-pointer')).toBe(false);
+
       window.dispatchEvent(new CustomEvent(POINTER_DEVICE_EVENT, { detail: {} }));
       expect(root.classList.contains('device-touch')).toBe(true);
+      expect(root.classList.contains('device-no-pointer')).toBe(true);
     } finally {
       stop();
     }

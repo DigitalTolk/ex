@@ -179,7 +179,7 @@ describe('MessageItem - mobile actions', () => {
     await openMobileActions(makeMessage({ body: 'Copy this text' }));
 
     const row = screen.getByText('Copy this text').closest('[data-message-id]')!;
-    expect(row).toHaveClass('touch:select-none', 'touch:[-webkit-user-select:none]', 'touch:[-webkit-touch-callout:none]');
+    expect(row).toHaveClass('no-pointer:select-none', 'no-pointer:[-webkit-user-select:none]', 'no-pointer:[-webkit-touch-callout:none]');
     await userEvent.click(screen.getByRole('button', { name: /Copy message text/i }));
 
     await waitFor(() => {

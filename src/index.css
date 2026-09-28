@@ -23,6 +23,11 @@
    lib/device.ts). Declared before `mobile:` so on phones the mobile-tier
    styling still wins where both set the same property. */
 @custom-variant touch (&:where(.device-touch, .device-touch *));
+/* `no-pointer:` is the narrower axis: a touch device with nothing to hover
+   with. Use it for affordances whose desktop form is revealed on hover — a
+   trackpad-equipped iPad hovers through JS handlers, but NOT through CSS, so
+   `touch:` alone would strand a hover-only control off-screen. */
+@custom-variant no-pointer (&:where(.device-no-pointer, .device-no-pointer *));
 @custom-variant mobile (&:where(.tier-mobile, .tier-mobile *));
 @custom-variant compact (&:where(.tier-compact, .tier-compact *));
 @custom-variant not-mobile (&:where(:not(.tier-mobile):not(.tier-mobile *)));

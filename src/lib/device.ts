@@ -137,9 +137,18 @@ export function applyLayoutTierClasses(): LayoutTier {
   const tier = currentLayoutTier();
   for (const cls of Object.values(TIER_CLASSES)) root.classList.remove(cls);
   root.classList.add(TIER_CLASSES[tier]);
-  // `device-touch` (the `touch:` variant) means touch is the ONLY way to point
-  // at things: a trackpad on an iPad takes it off and the hover UI returns.
-  root.classList.toggle('device-touch', deviceKind() === 'touch' && !hasPointerDevice());
+  // Two axes, because they are not the same question:
+  //  - `device-touch`: the screen is touched, so controls must be reachable by
+  //    finger. It stays on when a trackpad appears — CSS hover-reveal cannot
+  //    take over, since Tailwind gates `hover:`/`group-hover:` behind
+  //    `@media (hover: hover)`, which iPadOS reports as `none` even with a
+  //    Magic Keyboard attached. Dropping this hid the sidebar's create-channel
+  //    and new-DM buttons with no way to bring them back.
+  //  - `device-no-pointer`: nothing can hover, so a hover-only affordance needs
+  //    its touch stand-in (the message toolbar's long-press sheet). JS hover
+  //    handlers DO fire from a trackpad, so those come back on their own.
+  root.classList.toggle('device-touch', deviceKind() === 'touch');
+  root.classList.toggle('device-no-pointer', deviceKind() === 'touch' && !hasPointerDevice());
   root.classList.toggle('electron-mac', isElectronMac());
   return tier;
 }

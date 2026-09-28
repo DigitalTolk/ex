@@ -6,6 +6,12 @@ import './console-gate';
 import { resetPresenceStoreForTests } from '@/stores/presence';
 import { resetTypingStoreForTests } from '@/stores/typing';
 import { afterEach } from 'vitest';
+import { configure } from '@testing-library/dom';
+
+// Same reason as `expect.poll` in vitest.config.ts: testing-library's
+// waitFor/findBy default to a 1s budget, which a starved CI runner can
+// blow through on an async mutation that is merely slow, not broken.
+configure({ asyncUtilTimeout: 5_000 });
 
 if (typeof document !== 'undefined') {
   if (!document.querySelector(`meta[name="${APP_VERSION_META}"]`)) {
@@ -41,6 +47,8 @@ function stampTierClasses() {
   root.classList.remove('tier-mobile', 'tier-compact', 'tier-full');
   root.classList.add(tier);
   root.classList.toggle('device-touch', touch);
+  // No pointer is reported in tests, so a touch device has none (see lib/device).
+  root.classList.toggle('device-no-pointer', touch);
 }
 stampTierClasses();
 window.addEventListener('resize', stampTierClasses);
