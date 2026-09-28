@@ -93,7 +93,7 @@
 
   /* Light theme — design system tokens (warm off-whites, per the Figma
    * light-mode frames)
-   * bg/base #FCFCFB (chat, top bar, composer) · sidebar #FBFBF9
+   * bg/base #FCFCFB (chat, top bar, composer) · sidebar #F9F9F7
    * bg/level1 (hover, fills) #F5F5F5 · bg/level2 (selected) #EDECE9
    * floating (menus, dialogs) #FFFFFF
    * text/primary #0B0B0B · text/secondary #4F4C4D · text/muted #6D6B64 · text/disabled #A7A5A6
@@ -173,7 +173,7 @@
   --color-chart-3: #7B7979;
   --color-chart-4: #BDBCBC;
   --color-chart-5: #0B0B0B;
-  --color-sidebar: #FBFBF9;
+  --color-sidebar: #F9F9F7;
   --color-sidebar-foreground: #0B0B0B;
   --color-sidebar-primary: #0B0B0B;
   --color-sidebar-primary-foreground: #FFFFFF;
