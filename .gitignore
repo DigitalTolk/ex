@@ -53,4 +53,7 @@ node_modules/
 coverage.out
 coverage.html
 /.vitest-attachments/
+# Browser-mode failure screenshots. The path moved here from
+# .vitest-attachments/, and the stale rule let a run's PNGs into a commit.
+/.vitest/
 __screenshots__/
