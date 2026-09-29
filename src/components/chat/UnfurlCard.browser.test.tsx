@@ -225,7 +225,7 @@ describe('UnfurlCard browser behaviour', () => {
     useUnfurlMock.mockReturnValue({ data: { url: 'https://example.org', title: 'X' }, isLoading: false });
     const screen = await render(<UnfurlCard url="https://example.org" messageId="m-1" isAuthor={false} />);
     const s = cardStyle(screen);
-    // Subtle border #E9E9E9 ≈ rgb(233,233,233) on ALL sides (no dark left bar).
+    // Subtle border #E3E3E2 ≈ rgb(227,227,226) on ALL sides (no dark left bar).
     expect(s.borderLeftColor).toBe(s.borderTopColor);
     const [r, g, b] = s.borderTopColor.match(/\d+/g)!.map(Number);
     expect(r).toBeGreaterThan(210);
@@ -233,20 +233,20 @@ describe('UnfurlCard browser behaviour', () => {
     expect(b).toBeGreaterThan(210);
   });
 
-  it('fills the web card with the base background in light mode (#FFFFFF)', async () => {
+  it('fills the web card with the base background in light mode (#FCFCFB)', async () => {
     document.documentElement.classList.remove('dark');
     useUnfurlMock.mockReturnValue({ data: { url: 'https://example.org', title: 'X' }, isLoading: false });
     const screen = await render(<UnfurlCard url="https://example.org" messageId="m-1" isAuthor={false} />);
-    expect(cardStyle(screen).backgroundColor).toBe('rgb(255, 255, 255)');
+    expect(cardStyle(screen).backgroundColor).toBe('rgb(252, 252, 251)');
   });
 
-  it('fills the web card with the base background in dark mode (#231F20)', async () => {
+  it('fills the web card with the base background in dark mode (#1A1A1A)', async () => {
     document.documentElement.classList.add('dark');
     try {
       useUnfurlMock.mockReturnValue({ data: { url: 'https://example.org', title: 'X' }, isLoading: false });
       const screen = await render(<UnfurlCard url="https://example.org" messageId="m-2" isAuthor={false} />);
-      // #231F20 → rgb(35, 31, 32)
-      expect(cardStyle(screen).backgroundColor).toBe('rgb(35, 31, 32)');
+      // #1A1A1A → rgb(26, 26, 26)
+      expect(cardStyle(screen).backgroundColor).toBe('rgb(26, 26, 26)');
     } finally {
       document.documentElement.classList.remove('dark');
     }

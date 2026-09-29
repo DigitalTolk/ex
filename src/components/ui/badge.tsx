@@ -26,7 +26,7 @@ const badgeVariants = cva(
         // single-digit counts — it grows naturally for double-digit
         // via `min-w-4` rather than `min-w-5`.
         brand:
-          "bg-brand text-brand-foreground [a]:hover:bg-brand-hover rounded-sm h-4 min-w-4 px-1 py-0 leading-none",
+          "bg-brand-strong text-brand-foreground [a]:hover:bg-brand-strong-hover rounded-sm h-4 min-w-4 px-1 py-0 leading-none",
       },
     },
     defaultVariants: {

@@ -91,39 +91,44 @@
   --animate-accordion-down: accordion-down 0.2s ease-out;
   --animate-accordion-up: accordion-up 0.2s ease-out;
 
-  /* Light theme — design system tokens
-   * bg/base #FFFFFF · bg/level1 (sidebar, chat hover) #F5F5F5
-   * bg/level2 (chat top bar) #FFFFFF · bg/level3 (typing field) #FBFBFB
-   * text/primary #231F20 · text/secondary #4F4C4D · text/muted #7B7979 · text/disabled #A7A5A6
-   * borders/default #BDBCBC · borders/level1 #E9E9E9
-   * primary/CTA #231F20 (neutral) · badges/highlights #DE5D83
+  /* Light theme — design system tokens (warm off-whites, per the Figma
+   * light-mode frames)
+   * bg/base #FCFCFB (chat, top bar, composer) · sidebar #F9F9F7
+   * bg/level1 (hover, fills) #F5F5F5 · bg/level2 (selected) #EDECE9
+   * floating (menus, dialogs) #FFFFFF
+   * text/primary #0B0B0B · text/secondary #4F4C4D · text/muted #6D6B64 · text/disabled #A7A5A6
+   * (Figma muted #898780 is 3.5:1 on the base — darkened to #6D6B64 so
+   * muted text passes WCAG AA 4.5:1 on base, hover and selected rows.)
+   * borders/subtle (dividers, fields, cards) #E3E3E2
+   * borders/default (toolbars, strong outlines) #898780
+   * primary/CTA #0B0B0B (neutral) · badges/highlights #DE5D83
    *
    * `primary` is the NEUTRAL action colour, NOT pink. Pink (#DE5D83)
    * lives only in the `brand` token (unread counts, mention/status
    * dots, send-button CTA). See the dark block below for the full
    * rationale — keep the two themes symmetric.
    */
-  --color-background: #FFFFFF;
-  --color-foreground: #231F20;
-  --color-card: #FFFFFF;
-  --color-card-foreground: #231F20;
+  --color-background: #FCFCFB;
+  --color-foreground: #0B0B0B;
+  --color-card: #FCFCFB;
+  --color-card-foreground: #0B0B0B;
   --color-popover: #FFFFFF;
-  --color-popover-foreground: #231F20;
-  --color-primary: #231F20;
+  --color-popover-foreground: #0B0B0B;
+  --color-primary: #0B0B0B;
   --color-primary-foreground: #FFFFFF;
   --color-primary-hover: #4F4C4D;
   --color-link: #2563EB;
   --color-secondary: #F5F5F5;
-  --color-secondary-foreground: #231F20;
+  --color-secondary-foreground: #0B0B0B;
   --color-muted: #F5F5F5;
-  --color-muted-foreground: #7B7979;
+  --color-muted-foreground: #6D6B64;
   --color-accent: #F5F5F5;
-  --color-accent-foreground: #231F20;
+  --color-accent-foreground: #0B0B0B;
   --color-destructive: #DC2626;
   --color-destructive-foreground: #FFFFFF;
-  --color-border: #E9E9E9;
-  --color-border-strong: #BDBCBC;
-  --color-input: #E9E9E9;
+  --color-border: #E3E3E2;
+  --color-border-strong: #898780;
+  --color-input: #E3E3E2;
   --color-ring: #BDBCBC;
   /* Brand / highlight pink — used for unread counts, mention badges,
    * and the dark-mode CTA send button. Stays the same in both themes
@@ -131,6 +136,13 @@
   --color-brand: #DE5D83;
   --color-brand-hover: #C94E71;
   --color-brand-foreground: #FFFFFF;
+  /* Deeper brand pink for surfaces that carry TEXT (unread badges, the
+   * thread "new" pill, default buttons in dark mode). White on #DE5D83 is
+   * only 3.5:1; on #C15071 it is 4.5:1 (WCAG AA). #DE5D83 stays for
+   * icon-only / dot uses (send button, status dots), where 3:1 suffices.
+   * Same in both themes. */
+  --color-brand-strong: #C15071;
+  --color-brand-strong-hover: #A9455F;
   /* Disabled state of the dark-mode pink CTA button (spec: #EB9EB5). Applied
    * only to the message send button (via `dark:disabled:bg-brand-disabled` on
    * its className); every other dark-mode disabled button uses the neutral
@@ -154,24 +166,24 @@
    * is a warm near-black card — NOT white — that floats above the app's own
    * near-black background, ringed in amber so it always reads as an alert. */
   --color-notification-toast: #FEF3C7;
-  --color-notification-toast-foreground: #231F20;
+  --color-notification-toast-foreground: #0B0B0B;
   --color-notification-toast-border: #FBBF24;
   --color-chart-1: #DE5D83;
   --color-chart-2: #4F4C4D;
   --color-chart-3: #7B7979;
   --color-chart-4: #BDBCBC;
-  --color-chart-5: #231F20;
-  --color-sidebar: #F5F5F5;
-  --color-sidebar-foreground: #231F20;
-  --color-sidebar-primary: #231F20;
+  --color-chart-5: #0B0B0B;
+  --color-sidebar: #F9F9F7;
+  --color-sidebar-foreground: #0B0B0B;
+  --color-sidebar-primary: #0B0B0B;
   --color-sidebar-primary-foreground: #FFFFFF;
-  --color-sidebar-accent: #E9E9E9;
-  --color-sidebar-accent-foreground: #231F20;
-  --color-sidebar-border: #E9E9E9;
+  --color-sidebar-accent: #EDECE9;
+  --color-sidebar-accent-foreground: #0B0B0B;
+  --color-sidebar-border: #E3E3E2;
   --color-sidebar-ring: #BDBCBC;
-  --color-chat-top: #FFFFFF;
+  --color-chat-top: #FCFCFB;
   --color-chat-hover: #F5F5F5;
-  --color-typing-field: #FBFBFB;
+  --color-typing-field: #FCFCFB;
 
   /* Radius scale — radius-* utilities expand to these values
    * (radius-none 0, xs 2, sm 4, md 6, lg 8, 2xl 16, capsule 999). */
@@ -297,12 +309,17 @@
 
 @layer base {
   html.dark {
-    /* Dark theme — design system tokens
-     * bg/base #231F20 · bg/level1 (sidebar) #2C2829
-     * bg/level2 (chat top bar) #353132 · bg/level3 #3F3A3B
+    /* Dark theme — design system tokens (neutral greys, per the Figma
+     * dark-mode frames; replaces the earlier warm charcoal #231F20 ladder)
+     * bg/base #1A1A1A · bg/level1 (hover, floating) #232323
+     * bg/level2 (selected, fills) #2C2C2C
      * text/primary #FFFFFF · text/secondary #D3D2D2 · text/muted #A7A5A6 · text/disabled #7B7979
-     * borders/default #A7A5A6 · borders/subtle #4A4A4A
+     * borders/subtle (dividers, fields, composer) #242424
+     * borders/default (cards, toolbars, form inputs) #4A4A4A
      * primary/CTA #FFFFFF (neutral, inverted) · badges/highlights #DE5D83
+     * Sidebar #1D1D1D — a hair lighter than bg/base so the sidebar reads
+     * as its own column; the chat area, top bar and composer sit on
+     * bg/base, with #242424 dividers between them.
      *
      * IMPORTANT: `primary` is the NEUTRAL action colour (near-black in
      * light, white in dark) — it is NOT pink. Pink (#DE5D83) lives
@@ -312,38 +329,39 @@
      * `primary` drives every default button, focus accent, avatar
      * fallback and mention pill, so making it pink floods the whole UI.
      */
-    --color-background: #231F20;
+    --color-background: #1A1A1A;
     --color-foreground: #FFFFFF;
-    /* Cards = bg/base in dark. The previous level2 #353132 made every
+    /* Cards = bg/base in dark. A lighter card level made every
      * card-backed surface (thread cards + their messages, admin/drafts/
      * directory/search panels) read noticeably LIGHTER than the chat, so a
      * message inside a thread card looked brighter than the same message in
      * its channel. Anchoring `card` to base makes those surfaces match the
      * chat; their borders still delineate them. This is the single
      * fundamental knob — fix it here, not per component. */
-    --color-card: #231F20;
+    --color-card: #1A1A1A;
     --color-card-foreground: #FFFFFF;
     /* Floating surfaces (menus, dialogs, hover cards, tooltips) keep a
-     * subtle one-step elevation above base — but level1 #2C2829, not the
-     * glaring level2 #353132 they used before. */
-    --color-popover: #2C2829;
+     * subtle one-step elevation above base (level1). */
+    --color-popover: #232323;
     --color-popover-foreground: #FFFFFF;
     --color-primary: #FFFFFF;
-    --color-primary-foreground: #231F20;
+    --color-primary-foreground: #1A1A1A;
     --color-primary-hover: #D3D2D2;
     --color-link: #93C5FD;
-    --color-secondary: #3F3A3B;
+    --color-secondary: #2C2C2C;
     /* text/secondary per spec sheet (lower-emphasis body text) — #D3D2D2,
        not pure white, so secondary text reads a step below primary. */
     --color-secondary-foreground: #D3D2D2;
-    --color-muted: #3F3A3B;
+    --color-muted: #2C2C2C;
     --color-muted-foreground: #A7A5A6;
-    --color-accent: #3F3A3B;
+    --color-accent: #2C2C2C;
     --color-accent-foreground: #FFFFFF;
     --color-destructive: #F87171;
     --color-destructive-foreground: #FFFFFF;
-    --color-border: #4A4A4A;
-    --color-border-strong: #A7A5A6;
+    --color-border: #242424;
+    --color-border-strong: #4A4A4A;
+    /* Form inputs keep borders/default so fields stay visible on the
+       #232323 dialog/popover surface (#242424 would vanish there). */
     --color-input: #4A4A4A;
     --color-ring: #A7A5A6;
     --color-brand: #DE5D83;
@@ -357,7 +375,7 @@
     --color-caution: #3B2F12;
     --color-caution-foreground: #FCD34D;
     /* Dark notification banner: a warm near-black distinct from the app's
-     * #231F20 base (so it reads as a floating card, never white, never blended)
+     * #1A1A1A base (so it reads as a floating card, never white, never blended)
      * with warm amber text + edge to keep the "alert" identity. */
     --color-notification-toast: #17120F;
     --color-notification-toast-foreground: #FDE68A;
@@ -367,23 +385,20 @@
     --color-chart-3: #D3D2D2;
     --color-chart-4: #7B7979;
     --color-chart-5: #FFFFFF;
-    --color-sidebar: #2C2829;
+    --color-sidebar: #1D1D1D;
     --color-sidebar-foreground: #FFFFFF;
     --color-sidebar-primary: #FFFFFF;
-    --color-sidebar-primary-foreground: #231F20;
-    --color-sidebar-accent: #3F3A3B;
+    --color-sidebar-primary-foreground: #1A1A1A;
+    --color-sidebar-accent: #2C2C2C;
     --color-sidebar-accent-foreground: #FFFFFF;
-    --color-sidebar-border: #4A4A4A;
+    --color-sidebar-border: #242424;
     --color-sidebar-ring: #A7A5A6;
-    --color-chat-top: #353132;
+    --color-chat-top: #1A1A1A;
     /* Chat message-row hover = bg/level1, mirroring the light spec (where
-       "chat hover" is level1 #F5F5F5). Was #353132 (level2), a step too
-       light vs the reference screenshots. */
-    --color-chat-hover: #2C2829;
-    /* Composer / typing field. The reference dark screenshot shows it at
-       bg/base #231F20 (not the lighter level3 #3F3A3B the token sheet
-       labels) — a #3F3A3B field read as a washed-out light box in dark. */
-    --color-typing-field: #231F20;
+       "chat hover" is level1 #F5F5F5). */
+    --color-chat-hover: #232323;
+    /* Composer / typing field sits on bg/base, outlined by borders/subtle. */
+    --color-typing-field: #1A1A1A;
   }
 }
 
@@ -480,12 +495,12 @@
   }
 
   html:not(.dark) [data-app-chrome="true"] .text-gray-500 {
-    color: #7B7979;
+    color: #7B7B7B;
   }
 
   html:not(.dark) [data-app-chrome="true"] .bg-white\/15,
   html:not(.dark) [data-app-chrome="true"] .bg-white\/20 {
-    background-color: #E9E9E9;
+    background-color: var(--color-sidebar-accent);
   }
 
   html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/10:hover,
