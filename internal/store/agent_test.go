@@ -251,6 +251,12 @@ func TestAgentStore_SDKErrorArms(t *testing.T) {
 			t.Fatalf("DeleteRunner: want errInjected, got %v", err)
 		}
 	})
+	t.Run("DeleteAgentPrefs DeleteItemError", func(t *testing.T) {
+		s := NewAgentStore(withFault(db, func(f *faultClient) { f.failDeleteItem = true }))
+		if err := s.DeleteAgentPrefs(ctx, "u", "gg"); !errors.Is(err, errInjected) {
+			t.Fatalf("DeleteAgentPrefs: want errInjected, got %v", err)
+		}
+	})
 }
 
 func TestAgentStore_CorruptRows(t *testing.T) {

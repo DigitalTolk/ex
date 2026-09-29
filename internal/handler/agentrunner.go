@@ -362,7 +362,7 @@ func (h *AgentRunToolHandler) PostMessage(w http.ResponseWriter, r *http.Request
 		if idemKey != "" {
 			h.forgetPost(idemKey) // the post never happened; let a retry through
 		}
-		writeError(w, http.StatusForbidden, "forbidden", "post rejected")
+		writeError(w, http.StatusForbidden, "forbidden", "post rejected: "+err.Error())
 		return
 	}
 	if idemKey != "" {

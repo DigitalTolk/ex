@@ -709,6 +709,22 @@ func TestHagentCovRenameAgent(t *testing.T) {
 	rec = hagentCovDo(env.h.RenameAgent, hagentCovReq(http.MethodPatch, "/api/v1/agents/gg", `{"displayName":"`+long+`"}`, "u1", slug))
 	hagentCovWant(t, rec, http.StatusBadRequest)
 
+	// A persona-only patch. The "nothing to update" guard used to reject this
+	// before the persona branch could run, so the admin panel's prompt field
+	// silently did nothing.
+	rec = hagentCovDo(env.h.RenameAgent, hagentCovReq(http.MethodPatch, "/api/v1/agents/gg", `{"persona":"Be brief."}`, "u1", slug))
+	hagentCovWant(t, rec, http.StatusOK)
+	if got := env.dir.templates["gg"].Persona; got != "Be brief." {
+		t.Fatalf("template persona = %q, want %q", got, "Be brief.")
+	}
+	// Blank is refused rather than clearing it: Resolve falls back to the
+	// template persona, so emptying it leaves everyone with no instructions.
+	rec = hagentCovDo(env.h.RenameAgent, hagentCovReq(http.MethodPatch, "/api/v1/agents/gg", `{"persona":"   "}`, "u1", slug))
+	hagentCovWant(t, rec, http.StatusBadRequest)
+	// And an unknown agent is a 404 through the same fail() ladder.
+	rec = hagentCovDo(env.h.RenameAgent, hagentCovReq(http.MethodPatch, "/api/v1/agents/ghost", `{"persona":"x"}`, "u1", map[string]string{"slug": "ghost"}))
+	hagentCovWant(t, rec, http.StatusNotFound)
+
 	// Not-found arm: unknown agent.
 	rec = hagentCovDo(env.h.RenameAgent, hagentCovReq(http.MethodPatch, "/api/v1/agents/nope", `{"displayName":"New"}`, "u1", map[string]string{"slug": "nope"}))
 	hagentCovWant(t, rec, http.StatusNotFound)

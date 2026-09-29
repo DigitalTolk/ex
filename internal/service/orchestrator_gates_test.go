@@ -198,23 +198,36 @@ func TestOrchestrator_ApprovalIsInvokerPrivate(t *testing.T) {
 	}
 }
 
-// A chain handoff deferred while the target is busy must not be clobbered by
-// a later handoff from a DIFFERENT invoker — first wins (the deferred run
-// re-reads the thread and sees later mentions anyway).
-func TestOrchestrator_DeferredTurnFirstWins(t *testing.T) {
+// Turn dedup is PER INVOKER. Two handoffs from the same invoker collapse to
+// the first (the deferred run re-reads the thread and sees later mentions
+// anyway), but two different people asking the same agent in the same thread
+// are independent turns — each runs on its own invoker's machine, on their
+// quota. Keyed without the invoker, the second person's turn was dropped and
+// they were told nothing, which on a busy prd channel meant one person's
+// question silently cancelled everyone else's.
+func TestOrchestrator_DeferredTurnPerInvoker(t *testing.T) {
 	fx := newOrchFixture(t)
+	ctx := context.Background()
 	fx.users.users["u-bob"] = &model.User{ID: "u-bob", DisplayName: "Bob"}
-	_ = fx.dir.PutRunner(context.Background(), &model.RunnerRegistration{
+	_ = fx.dir.PutRunner(ctx, &model.RunnerRegistration{
 		RunnerID: "rb", OwnerID: "u-bob",
 		Harnesses:      []model.RunnerHarness{{Name: model.HarnessClaude}},
 		LeaseExpiresAt: time.Now().Add(time.Hour),
 	})
 
-	// qib is mid-turn in this thread.
-	key := "chan1#m1#" + testQibID
-	fx.orch.threadActive.Store(key, "qib-active-run")
+	// qib is mid-turn for ALICE. The slot must reference a REAL live run: a
+	// busy verdict is checked against the store, since an in-memory slot alone
+	// could be a leak from an instance that never saw the run finish.
+	aliceKey := "chan1#m1#" + testQibID + "#u-alice"
+	if err := fx.runs.CreateRun(ctx, &model.Run{
+		ID: "qib-active-run", AgentID: testQibID, InvokerID: "u-alice",
+		ParentID: "chan1", ParentType: ParentChannel, ThreadRootID: "m1", MessageID: "m1",
+		State: model.RunStateRunning, Limits: model.DefaultAgentLimits(),
+	}); err != nil {
+		t.Fatalf("seed the live run holding the slot: %v", err)
+	}
+	fx.orch.threadActive.Store(aliceKey, "qib-active-run")
 
-	// Alice's chain hands to qib first; Bob's arrives second.
 	mk := func(runID, invokerID string) *model.Run {
 		return &model.Run{ID: runID, AgentID: testGGID, InvokerID: invokerID,
 			ParentID: "chan1", ParentType: ParentChannel, ThreadRootID: "m1", MessageID: "m1",
@@ -222,15 +235,29 @@ func TestOrchestrator_DeferredTurnFirstWins(t *testing.T) {
 	}
 	post := &model.Message{ID: "mx", ParentID: "chan1", ParentMessageID: "m1", AuthorID: testGGID,
 		Body: "@[" + testQibID + "|qib] your take?"}
-	fx.orch.ChainFromAgentPost(context.Background(), mk("run-alice", "u-alice"), post)
-	fx.orch.ChainFromAgentPost(context.Background(), mk("run-bob", "u-bob"), post)
 
-	d, ok := fx.orch.deferredTurns.Load(key)
+	// Two handoffs on ALICE's behalf: the first wins, the second must not
+	// clobber it.
+	fx.orch.ChainFromAgentPost(ctx, mk("run-alice-1", "u-alice"), post)
+	fx.orch.ChainFromAgentPost(ctx, mk("run-alice-2", "u-alice"), post)
+	d, ok := fx.orch.deferredTurns.Load(aliceKey)
 	if !ok {
-		t.Fatal("no deferred turn queued")
+		t.Fatal("alice's handoff was not deferred while her own turn was live")
 	}
-	if d.(*deferredTurn).invokerID != "u-alice" {
-		t.Fatalf("first handoff clobbered: deferred invoker = %s", d.(*deferredTurn).invokerID)
+	if got := d.(*deferredTurn).invokerID; got != "u-alice" {
+		t.Fatalf("first handoff clobbered: deferred invoker = %s", got)
+	}
+
+	// Bob is a DIFFERENT person: alice's live turn must not consume his.
+	if _, taken := fx.orch.deferredTurns.Load("chan1#m1#" + testQibID + "#u-bob"); taken {
+		t.Fatal("bob already had a deferred turn before his handoff")
+	}
+	fx.orch.ChainFromAgentPost(ctx, mk("run-bob", "u-bob"), post)
+	if _, blocked := fx.orch.threadActive.Load(aliceKey); !blocked {
+		t.Fatal("alice's slot was released by bob's handoff")
+	}
+	if d2, ok := fx.orch.deferredTurns.Load(aliceKey); !ok || d2.(*deferredTurn).invokerID != "u-alice" {
+		t.Fatalf("bob's handoff landed in alice's slot: %+v", d2)
 	}
 }
 

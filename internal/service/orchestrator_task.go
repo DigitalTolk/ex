@@ -106,7 +106,7 @@ func (o *Orchestrator) dispatchTask(ctx context.Context, msg *model.Message, par
 		// Steering that lands mid-run must not be lost: park it as the
 		// thread's deferred turn (first wins) and start it when the current
 		// run ends — the same mechanism chain mentions use.
-		o.deferTurn(ctx, turnKey(msg.ParentID, task.ThreadRootID, agent.ID), &deferredTurn{
+		o.deferTurn(ctx, turnKey(msg.ParentID, task.ThreadRootID, agent.ID, msg.AuthorID), &deferredTurn{
 			agentID: agent.ID, invokerID: invoker.ID, msg: msg, parentType: parentType, bind: bind,
 		})
 		return

@@ -1017,3 +1017,161 @@ func TestOrchCov_TypingStopsWhenAgentPosts(t *testing.T) {
 		t.Fatal("typing ticker re-armed by a second post")
 	}
 }
+
+// A ticker armed by an instance that does NOT go on to finish the run must
+// still stop. The ticker is per-process memory; a run is not. recoverRuns
+// arms one on every instance that boots while a run is live, and the terminal
+// transition only stops the ticker where it happened — so on prd (two tasks)
+// the other instance published "… is typing" indefinitely, outliving the
+// reply by hours. The ticker now re-checks the store, so any instance heals
+// itself within one tick.
+func TestOrchCov_TypingTickerStopsWhenAnotherInstanceFinishedTheRun(t *testing.T) {
+	old := typingTickInterval
+	typingTickInterval = 5 * time.Millisecond
+	defer func() { typingTickInterval = old }()
+
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+	run := fx.start(t, "m1", "")
+	if _, err := fx.orch.Claim(ctx, "u-alice", "r1", []string{model.HarnessClaude}, 1, 0); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, armed := fx.orch.typing.Load(run.ID); !armed {
+		t.Fatal("claim must arm the typing ticker")
+	}
+
+	// Terminal in the STORE only — as if the other instance completed it.
+	// Nothing in this process is told, which is the whole problem.
+	stored, err := fx.runs.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if err := fx.runs.UpdateRun(ctx, stored, stored.State); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+	stored.State = model.RunStateCompleted
+	if err := fx.runs.UpdateRun(ctx, stored, model.RunStateAcknowledged); err != nil {
+		t.Fatalf("mark completed elsewhere: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, armed := fx.orch.typing.Load(run.ID); !armed {
+			return // healed itself
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("typing ticker still armed after the run went terminal elsewhere")
+}
+
+// A thread-turn slot left behind by an instance that never saw the run finish
+// must not wedge that (thread, agent) forever.
+//
+// The slot is per-PROCESS memory; a run's life is not. The runner's calls are
+// load balanced, so the terminal transition — and afterTerminal, which frees
+// the slot — can land on a different instance than the one that took it. That
+// instance holds no runThreadKey entry, so the slot was never released, and
+// every later message routed there returned ErrAgentBusy. The dispatcher
+// treats ErrAgentBusy as "already invoked", so the reply was not merely
+// delayed: the agent answered a couple of times and then went silent for
+// good, with nothing shown to the user.
+func TestOrchCov_ThreadSlotLeftByAnotherInstanceDoesNotWedgeTheThread(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+
+	// A finished run still holding the slot: exactly the state an instance is
+	// left in when the completion was handled elsewhere.
+	done := fx.start(t, "m1", "")
+	stored, err := fx.runs.GetRun(ctx, done.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if err := fx.runs.UpdateRun(ctx, stored, stored.State); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+	stored.State = model.RunStateCompleted
+	if err := fx.runs.UpdateRun(ctx, stored, model.RunStateQueued); err != nil {
+		t.Fatalf("finish it elsewhere: %v", err)
+	}
+	key := fx.orch.threadAgentKey(stored)
+	fx.orch.threadActive.Store(key, done.ID)
+	fx.orch.runThreadKey.Delete(done.ID) // this instance never knew about it
+
+	// The next turn in the same thread must go through.
+	next := fx.start(t, "m1", "")
+	if next == nil {
+		t.Fatal("a stale slot from another instance blocked the next turn")
+	}
+	if held, _ := fx.orch.threadActive.Load(key); held != next.ID {
+		t.Fatalf("slot holder = %v, want the new run %s", held, next.ID)
+	}
+
+	// And a slot held by a run that is genuinely LIVE still refuses — the
+	// dedup must survive; a mention storm should not stack runs.
+	live := fx.start(t, "m2", "")
+	liveKey := fx.orch.threadAgentKey(live)
+	if held, _ := fx.orch.threadActive.Load(liveKey); held != live.ID {
+		t.Fatalf("live run should hold its own slot, got %v", held)
+	}
+	if !fx.orch.threadSlotStillLive(ctx, live.ID) {
+		t.Fatal("a queued, non-terminal run must read as still holding the slot")
+	}
+}
+
+// A message sent while the agent is still working must be ANSWERED later, not
+// dropped. The in-flight run's prompt was assembled before this message
+// existed, so its reply cannot address it — yet ErrAgentBusy was treated as
+// "already invoked" and the message vanished with no reply and no notice. In a
+// DM with an agent that reads as the agent answering the first thing you said
+// and then ignoring you.
+func TestOrchCov_MessageSentWhileAgentBusyIsQueuedNotDropped(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+
+	first := fx.start(t, "m1", "")
+	key := fx.orch.threadAgentKey(first)
+	if _, held := fx.orch.threadActive.Load(key); !held {
+		t.Fatal("the live run should hold its thread slot")
+	}
+
+	// A second message from the SAME person, same thread, while that run lives.
+	second := &model.Message{
+		ID: "m2", ParentID: first.ParentID, ParentMessageID: first.MessageID,
+		AuthorID: first.InvokerID, Body: "@[" + first.AgentID + "|gg] and this too",
+	}
+	fx.orch.OnMessage(ctx, second, first.ParentType)
+
+	if _, queued := fx.orch.deferredTurns.Load(key); !queued {
+		t.Fatal("a message arriving mid-turn was dropped instead of queued")
+	}
+}
+
+// threadSlotStillLive decides whether a busy verdict is real. Its guard arms
+// matter: a slot pointing at a run nobody can read must NOT keep refusing
+// turns forever — one extra turn beats a permanently mute agent.
+func TestOrchCov_ThreadSlotStillLive_Guards(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+
+	if fx.orch.threadSlotStillLive(ctx, "") {
+		t.Fatal("an empty slot value must not read as live")
+	}
+	if fx.orch.threadSlotStillLive(ctx, 42) {
+		t.Fatal("a non-string slot value must not read as live")
+	}
+	if fx.orch.threadSlotStillLive(ctx, "no-such-run") {
+		t.Fatal("a run that cannot be found must not read as live")
+	}
+
+	// A store that errors is the same verdict: unreadable means "stop
+	// refusing", never "refuse forever".
+	live := fx.start(t, "m1", "")
+	fx.runs.failGetRun = errOrchCov
+	if fx.orch.threadSlotStillLive(ctx, live.ID) {
+		t.Fatal("an unreadable run must not read as live")
+	}
+	fx.runs.failGetRun = nil
+	if !fx.orch.threadSlotStillLive(ctx, live.ID) {
+		t.Fatal("a live run must read as live")
+	}
+}
