@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -81,6 +82,13 @@ func (d *agentCovDir) PutAgentPrefs(ctx context.Context, prefs *model.UserAgentP
 		return err
 	}
 	return d.fakeAgentDir.PutAgentPrefs(ctx, prefs)
+}
+
+func (d *agentCovDir) DeleteAgentPrefs(ctx context.Context, userID, slug string) error {
+	if err := d.errs["DeleteAgentPrefs"]; err != nil {
+		return err
+	}
+	return d.fakeAgentDir.DeleteAgentPrefs(ctx, userID, slug)
 }
 
 func (d *agentCovDir) PutSkill(ctx context.Context, sk *model.Skill) error {
@@ -665,21 +673,21 @@ func TestAgentCovSkillsCRUD(t *testing.T) {
 		t.Fatalf("create skill: %v %+v", err, sk)
 	}
 
-	if _, err := svc.UpdateSkill(ctx, "u1", "ghost", SkillPatch{}); !errors.Is(err, store.ErrNotFound) {
+	if _, err := svc.UpdateSkill(ctx, "u1", false, "ghost", SkillPatch{}); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("update: want not found, got %v", err)
 	}
-	if _, err := svc.UpdateSkill(ctx, "intruder", sk.ID, SkillPatch{}); !errors.Is(err, ErrForbidden) {
+	if _, err := svc.UpdateSkill(ctx, "intruder", false, sk.ID, SkillPatch{}); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("update: want forbidden, got %v", err)
 	}
-	if _, err := svc.UpdateSkill(ctx, "u1", sk.ID, SkillPatch{Name: sp("  ")}); !errors.Is(err, ErrValidation) {
+	if _, err := svc.UpdateSkill(ctx, "u1", false, sk.ID, SkillPatch{Name: sp("  ")}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("update: want validation, got %v", err)
 	}
 	dir.errs["PutSkill"] = errAgentCov
-	if _, err := svc.UpdateSkill(ctx, "u1", sk.ID, SkillPatch{Name: sp("New")}); !errors.Is(err, errAgentCov) {
+	if _, err := svc.UpdateSkill(ctx, "u1", false, sk.ID, SkillPatch{Name: sp("New")}); !errors.Is(err, errAgentCov) {
 		t.Fatalf("update: want put error, got %v", err)
 	}
 	delete(dir.errs, "PutSkill")
-	upd, err := svc.UpdateSkill(ctx, "u1", sk.ID, SkillPatch{Name: sp(" New "), Description: sp(" nd "), Instructions: sp("ni")})
+	upd, err := svc.UpdateSkill(ctx, "u1", false, sk.ID, SkillPatch{Name: sp(" New "), Description: sp(" nd "), Instructions: sp("ni")})
 	if err != nil || upd.Name != "New" || upd.Description != "nd" || upd.Instructions != "ni" {
 		t.Fatalf("update skill: %v %+v", err, upd)
 	}
@@ -691,13 +699,13 @@ func TestAgentCovSkillsCRUD(t *testing.T) {
 		t.Fatalf("list skills: %v (%d)", err, len(all))
 	}
 
-	if err := svc.DeleteSkill(ctx, "u1", "ghost"); !errors.Is(err, store.ErrNotFound) {
+	if err := svc.DeleteSkill(ctx, "u1", false, "ghost"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("delete: want not found, got %v", err)
 	}
-	if err := svc.DeleteSkill(ctx, "intruder", sk.ID); !errors.Is(err, ErrForbidden) {
+	if err := svc.DeleteSkill(ctx, "intruder", false, sk.ID); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("delete: want forbidden, got %v", err)
 	}
-	if err := svc.DeleteSkill(ctx, "u1", sk.ID); err != nil {
+	if err := svc.DeleteSkill(ctx, "u1", false, sk.ID); err != nil {
 		t.Fatalf("delete skill: %v", err)
 	}
 	if _, err := svc.GetSkill(ctx, sk.ID); !errors.Is(err, store.ErrNotFound) {
@@ -945,10 +953,10 @@ func TestAgentCovSkillVisibility(t *testing.T) {
 	}
 
 	// UpdateSkill visibility patch: publish, then reject a bogus value.
-	if upd, err := svc.UpdateSkill(ctx, "owner", priv.ID, SkillPatch{Visibility: sp(model.SkillVisibilityPublished)}); err != nil || upd.Visibility != model.SkillVisibilityPublished {
+	if upd, err := svc.UpdateSkill(ctx, "owner", false, priv.ID, SkillPatch{Visibility: sp(model.SkillVisibilityPublished)}); err != nil || upd.Visibility != model.SkillVisibilityPublished {
 		t.Fatalf("publish via patch: %v %+v", err, upd)
 	}
-	if _, err := svc.UpdateSkill(ctx, "owner", priv.ID, SkillPatch{Visibility: sp("bogus")}); !errors.Is(err, ErrValidation) {
+	if _, err := svc.UpdateSkill(ctx, "owner", false, priv.ID, SkillPatch{Visibility: sp("bogus")}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("bogus visibility patch must be rejected, got %v", err)
 	}
 
@@ -1118,4 +1126,194 @@ func TestAgentService_CreateAgent_IndexesAgentUser(t *testing.T) {
 	if idx.indexed[AgentUserID("ops")] == nil {
 		t.Fatal("a newly created agent must be findable in user search")
 	}
+}
+
+// agentCovRoster is a paging user lister; pageSize forces the walk to cross
+// pages so the cursor loop is exercised rather than assumed.
+type agentCovRoster struct {
+	users    []*model.User
+	pageSize int
+	err      error
+}
+
+func (r *agentCovRoster) ListUsers(_ context.Context, _ int, cursor string) ([]*model.User, string, error) {
+	if r.err != nil {
+		return nil, "", r.err
+	}
+	start := 0
+	if cursor != "" {
+		n, err := strconv.Atoi(cursor)
+		if err != nil {
+			return nil, "", fmt.Errorf("roster fake: bad cursor %q: %w", cursor, err)
+		}
+		start = n
+	}
+	end := start + r.pageSize
+	if end > len(r.users) {
+		end = len(r.users)
+	}
+	next := ""
+	if end < len(r.users) {
+		next = fmt.Sprintf("%d", end)
+	}
+	return r.users[start:end], next, nil
+}
+
+func agentCovOverrideFixture(t *testing.T) (*AgentService, *agentCovDir, *agentCovUsers, *agentCovRoster) {
+	t.Helper()
+	svc, dir, users := agentCovNewSvc()
+	agentCovSeedAgent(t, dir, users, AgentSlugGG)
+	roster := &agentCovRoster{pageSize: 2}
+	for _, id := range []string{"u1", "u2", "u3", "u4"} {
+		roster.users = append(roster.users, &model.User{ID: id, DisplayName: id})
+	}
+	// An agent user in the roster must be skipped: agents never invoke, so
+	// they never hold prefs, and counting one would inflate the figure an
+	// admin is shown.
+	roster.users = append(roster.users, &model.User{
+		ID: AgentUserID(AgentSlugGG), Kind: model.UserKindAgent,
+		AgentConfig: &model.AgentConfig{TemplateSlug: AgentSlugGG},
+	})
+	svc.SetUserLister(roster)
+	return svc, dir, users, roster
+}
+
+func TestAgentService_CountAndResetOverrides(t *testing.T) {
+	ctx := context.Background()
+	svc, dir, _, _ := agentCovOverrideFixture(t)
+
+	// Nobody has customized anything yet.
+	if n, err := svc.CountAgentOverrides(ctx, AgentSlugGG); err != nil || n != 0 {
+		t.Fatalf("empty count: %d (%v)", n, err)
+	}
+
+	for _, id := range []string{"u1", "u3"} {
+		if err := dir.PutAgentPrefs(ctx, &model.UserAgentPrefs{
+			UserID: id, Slug: AgentSlugGG, Harness: model.HarnessBedrock,
+		}); err != nil {
+			t.Fatalf("seed prefs: %v", err)
+		}
+	}
+	// Slug casing/padding must not change the answer — it comes off a URL.
+	if n, err := svc.CountAgentOverrides(ctx, "  GG  "); err != nil || n != 2 {
+		t.Fatalf("count: %d (%v)", n, err)
+	}
+
+	cleared, err := svc.ResetAgentOverrides(ctx, AgentSlugGG)
+	if err != nil || cleared != 2 {
+		t.Fatalf("reset: %d (%v)", cleared, err)
+	}
+	if n, err := svc.CountAgentOverrides(ctx, AgentSlugGG); err != nil || n != 0 {
+		t.Fatalf("after reset: %d (%v)", n, err)
+	}
+	// Resetting again is a no-op, not an error: an admin double-clicking must
+	// not see a failure.
+	if n, err := svc.ResetAgentOverrides(ctx, AgentSlugGG); err != nil || n != 0 {
+		t.Fatalf("second reset: %d (%v)", n, err)
+	}
+}
+
+func TestAgentService_Overrides_Failures(t *testing.T) {
+	ctx := context.Background()
+
+	// No lister wired (a deployment that never called SetUserLister).
+	bare, dirB, usersB := agentCovNewSvc()
+	agentCovSeedAgent(t, dirB, usersB, AgentSlugGG)
+	if _, err := bare.CountAgentOverrides(ctx, AgentSlugGG); !errors.Is(err, ErrValidation) {
+		t.Fatalf("no lister: %v", err)
+	}
+
+	svc, dir, _, roster := agentCovOverrideFixture(t)
+
+	// An unknown slug must fail, never report a confident zero.
+	if _, err := svc.CountAgentOverrides(ctx, "nosuchagent"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown slug: %v", err)
+	}
+
+	// Roster read failure.
+	roster.err = errAgentCov
+	if _, err := svc.CountAgentOverrides(ctx, AgentSlugGG); !errors.Is(err, errAgentCov) {
+		t.Fatalf("roster error: %v", err)
+	}
+	roster.err = nil
+
+	// A prefs read that fails for a reason other than "absent" must surface.
+	dir.errs["GetAgentPrefs"] = errAgentCov
+	if _, err := svc.CountAgentOverrides(ctx, AgentSlugGG); !errors.Is(err, errAgentCov) {
+		t.Fatalf("prefs error: %v", err)
+	}
+	delete(dir.errs, "GetAgentPrefs")
+
+	// A delete that fails stops the walk and reports.
+	if err := dir.PutAgentPrefs(ctx, &model.UserAgentPrefs{UserID: "u1", Slug: AgentSlugGG}); err != nil {
+		t.Fatalf("seed prefs: %v", err)
+	}
+	dir.errs["DeleteAgentPrefs"] = errAgentCov
+	if _, err := svc.ResetAgentOverrides(ctx, AgentSlugGG); !errors.Is(err, errAgentCov) {
+		t.Fatalf("delete error: %v", err)
+	}
+	delete(dir.errs, "DeleteAgentPrefs")
+}
+
+// An admin may repair or remove a skill someone else published — a bad skill
+// is workspace-visible, so waiting for its author is not a remedy.
+func TestAgentService_SkillAdminOverride(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _ := agentCovNewSvc()
+
+	sp := func(s string) *string { return &s }
+	sk, err := svc.CreateSkill(ctx, "author", "s", "d", "i", model.SkillVisibilityPublished)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// Still refused for an ordinary non-author.
+	if _, err := svc.UpdateSkill(ctx, "stranger", false, sk.ID, SkillPatch{Name: sp("x")}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("non-author update: %v", err)
+	}
+	upd, err := svc.UpdateSkill(ctx, "admin", true, sk.ID, SkillPatch{Name: sp("fixed")})
+	if err != nil || upd.Name != "fixed" {
+		t.Fatalf("admin update: %+v (%v)", upd, err)
+	}
+	if err := svc.DeleteSkill(ctx, "stranger", false, sk.ID); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("non-author delete: %v", err)
+	}
+	if err := svc.DeleteSkill(ctx, "admin", true, sk.ID); err != nil {
+		t.Fatalf("admin delete: %v", err)
+	}
+}
+
+func TestAgentService_SetAgentPersona(t *testing.T) {
+	ctx := context.Background()
+	svc, dir, users := agentCovNewSvc()
+	agentCovSeedAgent(t, dir, users, AgentSlugGG)
+
+	// Blank is refused rather than clearing: Resolve falls back to the
+	// template persona, so emptying it leaves everyone without an override
+	// running with no instructions at all.
+	for _, blank := range []string{"", "   ", "\n\t "} {
+		if _, err := svc.SetAgentPersona(ctx, AgentSlugGG, blank); !errors.Is(err, ErrValidation) {
+			t.Fatalf("blank %q: %v", blank, err)
+		}
+	}
+
+	if _, err := svc.SetAgentPersona(ctx, "ghost", "hello"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown slug: %v", err)
+	}
+
+	// Trimmed, stored, and readable back through the same path the prompt
+	// bundle uses.
+	tpl, err := svc.SetAgentPersona(ctx, "  GG  ", "  Be brief.  ")
+	if err != nil || tpl.Persona != "Be brief." {
+		t.Fatalf("set: %+v (%v)", tpl, err)
+	}
+	got, err := svc.Template(ctx, AgentSlugGG)
+	if err != nil || got.Persona != "Be brief." {
+		t.Fatalf("read back: %+v (%v)", got, err)
+	}
+
+	dir.errs["PutTemplate"] = errAgentCov
+	if _, err := svc.SetAgentPersona(ctx, AgentSlugGG, "x"); !errors.Is(err, errAgentCov) {
+		t.Fatalf("store error: %v", err)
+	}
+	delete(dir.errs, "PutTemplate")
 }

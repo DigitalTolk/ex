@@ -507,6 +507,9 @@ func (f *htaskCovAgentDir) CreateAgentUser(context.Context, *model.User) error {
 func (f *htaskCovAgentDir) PutAgentPrefs(context.Context, *model.UserAgentPrefs) error {
 	return nil
 }
+func (f *htaskCovAgentDir) DeleteAgentPrefs(context.Context, string, string) error {
+	return nil
+}
 func (f *htaskCovAgentDir) GetAgentPrefs(context.Context, string, string) (*model.UserAgentPrefs, error) {
 	return nil, store.ErrNotFound
 }

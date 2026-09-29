@@ -65,6 +65,12 @@ export interface AgentView {
   // to when the caller has no override. The card pre-fills the editor with
   // the effective prompt and stores "inherit" when an edit matches this.
   defaultPersona?: string;
+  // The TEMPLATE's engine — what a member inherits without prefs of their own.
+  // Separate from `resolved` (the caller's effective config) so the admin panel
+  // can show the workspace default rather than the viewing admin's own values.
+  defaultHarness?: string;
+  defaultModel?: string;
+  defaultExecutionMode?: string;
 }
 
 // Patch shape for PATCH /api/v1/agents/{slug}/prefs. Empty string resets a
@@ -382,6 +388,79 @@ export function useUpdateAgentPrefs() {
       queryClient.setQueryData<AgentView[]>(AGENTS_KEY, (prev) =>
         prev?.map((a) => (a.slug === updated.slug ? updated : a)),
       );
+    },
+  });
+}
+
+// ------------------------------------------------------- admin: the template
+//
+// These edit the WORKSPACE DEFAULT, not the caller's own settings. The two are
+// one letter apart in the URL (`/agents/gg` vs `/agents/gg/prefs`) and a mix-up
+// is invisible until someone asks why nothing changed for the team, so the
+// admin hooks live here under their own heading and say so in their names.
+
+// useUpdateAgentTemplate re-pins the shared agent everyone inherits.
+// Server-side admin-gated. `harness` must be sent for an engine change — the
+// handler skips the whole engine block without it, and a model sent alone is
+// silently ignored.
+export function useUpdateAgentTemplate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      slug,
+      patch,
+    }: {
+      slug: string;
+      patch: {
+        displayName?: string;
+        harness?: string;
+        model?: string;
+        executionMode?: string;
+        // Blank is refused server-side rather than clearing the prompt: every
+        // member without an override inherits it, so an empty one would leave
+        // them with no instructions.
+        persona?: string;
+      };
+    }) => apiFetch(`/api/v1/agents/${slug}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+    // The response carries the template, not the caller's AgentView, so refetch
+    // rather than patching the cache with the wrong shape.
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: AGENTS_KEY }),
+  });
+}
+
+const OVERRIDES_KEY = (slug: string) => ['agent-overrides', slug] as const;
+
+// useAgentOverrides counts the people whose own settings shadow the template.
+// It is a roster walk server-side, so it runs only while an admin actually has
+// the panel open.
+export function useAgentOverrides(slug: string, enabled: boolean) {
+  return useQuery({
+    queryKey: OVERRIDES_KEY(slug),
+    queryFn: async () => {
+      const res = await apiFetch<{ count: number }>(`/api/v1/agents/${slug}/overrides`);
+      return res.count;
+    },
+    enabled,
+  });
+}
+
+// useResetAgentOverrides deletes everyone's personal settings for one agent.
+// Destructive and not undoable: a prefs row is one document, so this also
+// clears each person's prompt, limits, follow-up settings and pre-approved
+// tool classes for that agent — not only the harness and model. Callers must
+// confirm first and say what it really clears.
+export function useResetAgentOverrides() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (slug: string) => {
+      const res = await apiFetch<{ cleared: number }>(`/api/v1/agents/${slug}/overrides`, {
+        method: 'DELETE',
+      });
+      return res.cleared;
+    },
+    onSuccess: (_cleared, slug) => {
+      void queryClient.invalidateQueries({ queryKey: OVERRIDES_KEY(slug) });
+      void queryClient.invalidateQueries({ queryKey: AGENTS_KEY });
     },
   });
 }

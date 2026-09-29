@@ -293,6 +293,8 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/agents", middleware.WrapFunc(d.Agent.CreateAgent, authMW, middleware.RequireSystemRole(model.SystemRoleAdmin), writeLimit))
 		mux.Handle("PATCH /api/v1/agents/{slug}", middleware.WrapFunc(d.Agent.RenameAgent, authMW, middleware.RequireSystemRole(model.SystemRoleAdmin), writeLimit))
 		mux.Handle("PATCH /api/v1/agents/{slug}/prefs", middleware.WrapFunc(d.Agent.UpdatePrefs, authMW))
+		mux.Handle("GET /api/v1/agents/{slug}/overrides", middleware.WrapFunc(d.Agent.CountOverrides, authMW, middleware.RequireSystemRole(model.SystemRoleAdmin)))
+		mux.Handle("DELETE /api/v1/agents/{slug}/overrides", middleware.WrapFunc(d.Agent.ResetOverrides, authMW, middleware.RequireSystemRole(model.SystemRoleAdmin), writeLimit))
 		// Rate-limited like every other write: minting is cheap for the caller
 		// and signs a long-lived credential, so it must not be the one POST a
 		// client can hammer freely.

@@ -215,6 +215,7 @@ func (hwsCovAgentDir) ListTemplates(context.Context) ([]*model.AgentTemplate, er
 }
 func (hwsCovAgentDir) CreateAgentUser(context.Context, *model.User) error          { return nil }
 func (hwsCovAgentDir) PutAgentPrefs(context.Context, *model.UserAgentPrefs) error  { return nil }
+func (hwsCovAgentDir) DeleteAgentPrefs(context.Context, string, string) error      { return nil }
 func (hwsCovAgentDir) GetAgentPrefs(context.Context, string, string) (*model.UserAgentPrefs, error) {
 	return nil, store.ErrNotFound
 }

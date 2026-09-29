@@ -196,6 +196,20 @@ func (s *AgentStore) PutAgentPrefs(ctx context.Context, prefs *model.UserAgentPr
 	return nil
 }
 
+// DeleteAgentPrefs removes one user's customization of a slug, so the run
+// falls back to the template again. Idempotent: DynamoDB's DeleteItem is a
+// no-op on a key that isn't there, and "they had nothing to clear" is the
+// same outcome as "cleared it".
+func (s *AgentStore) DeleteAgentPrefs(ctx context.Context, userID, slug string) error {
+	if _, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(s.Table),
+		Key:       compositeKey(userPK(userID), agentPrefsSK(slug)),
+	}); err != nil {
+		return fmt.Errorf("store: delete agent prefs: %w", err)
+	}
+	return nil
+}
+
 // GetAgentPrefs fetches one user's preferences for a slug. ErrNotFound when
 // they never customized it — callers treat that as "inherit everything".
 func (s *AgentStore) GetAgentPrefs(ctx context.Context, userID, slug string) (*model.UserAgentPrefs, error) {

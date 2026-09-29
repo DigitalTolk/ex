@@ -60,6 +60,14 @@ type agentView struct {
 	// page pre-fills the editor with the effective prompt and needs this to
 	// know when an edit lands back ON the default (→ store "inherit").
 	DefaultPersona string `json:"defaultPersona"`
+	// DefaultHarness/DefaultModel/DefaultExecutionMode are the template's
+	// engine, for the same reason: the admin panel edits the WORKSPACE
+	// DEFAULT, and `resolved` is the caller's own once they have prefs — an
+	// admin who had customised an agent would otherwise be shown their own
+	// values labelled as everyone's.
+	DefaultHarness       string `json:"defaultHarness"`
+	DefaultModel         string `json:"defaultModel"`
+	DefaultExecutionMode string `json:"defaultExecutionMode"`
 }
 
 func (h *AgentHandler) view(r *http.Request, agent *model.User, callerID string) (agentView, error) {
@@ -90,13 +98,16 @@ func (h *AgentHandler) view(r *http.Request, agent *model.User, callerID string)
 		}
 	}
 	return agentView{
-		ID:             agent.ID,
-		DisplayName:    agent.DisplayName,
-		Slug:           slug,
-		Status:         status,
-		Prefs:          prefs,
-		Resolved:       resolved,
-		DefaultPersona: tpl.Persona,
+		ID:                   agent.ID,
+		DisplayName:          agent.DisplayName,
+		Slug:                 slug,
+		Status:               status,
+		Prefs:                prefs,
+		Resolved:             resolved,
+		DefaultPersona:       tpl.Persona,
+		DefaultHarness:       tpl.Harness,
+		DefaultModel:         tpl.Model,
+		DefaultExecutionMode: tpl.ExecutionMode,
 	}, nil
 }
 
@@ -149,13 +160,16 @@ func (h *AgentHandler) RenameAgent(w http.ResponseWriter, r *http.Request) {
 		Harness       string `json:"harness"`
 		Model         string `json:"model"`
 		ExecutionMode string `json:"executionMode"`
+		// Template prompt. Blank = unchanged; the service refuses a blank
+		// prompt outright, so there is no "clear it" here by design.
+		Persona string `json:"persona"`
 	}
 	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
-	if body.DisplayName == "" && body.SkillIDs == nil && body.Harness == "" {
-		writeError(w, http.StatusBadRequest, "bad_request", "nothing to update — set displayName, skillIDs and/or harness")
+	if body.DisplayName == "" && body.SkillIDs == nil && body.Harness == "" && body.Persona == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "nothing to update — set displayName, skillIDs, harness and/or persona")
 		return
 	}
 	if body.Harness == "" && (body.Model != "" || body.ExecutionMode != "") {
@@ -191,6 +205,12 @@ func (h *AgentHandler) RenameAgent(w http.ResponseWriter, r *http.Request) {
 	if body.Harness != "" {
 		if tpl, err = h.agents.SetAgentEngine(r.Context(), r.PathValue("slug"), body.Harness, body.Model, body.ExecutionMode); err != nil {
 			fail(err, "set agent engine")
+			return
+		}
+	}
+	if body.Persona != "" {
+		if tpl, err = h.agents.SetAgentPersona(r.Context(), r.PathValue("slug"), body.Persona); err != nil {
+			fail(err, "set agent prompt")
 			return
 		}
 	}
@@ -638,7 +658,15 @@ func (h *AgentHandler) CreateSkill(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, JSON{"skill": sk})
 }
 
-// UpdateSkill applies the author's edits.
+// callerIsAdmin reports whether the request's signed claims carry the admin
+// system role. Used where authority WIDENS a caller's reach inside a handler
+// the middleware has already let through, rather than gating the route.
+func callerIsAdmin(r *http.Request) bool {
+	claims := middleware.ClaimsFromContext(r.Context())
+	return claims != nil && claims.SystemRole == model.SystemRoleAdmin
+}
+
+// UpdateSkill applies the author's edits — or an admin's.
 // PATCH /api/v1/skills/{id}
 func (h *AgentHandler) UpdateSkill(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
@@ -647,7 +675,7 @@ func (h *AgentHandler) UpdateSkill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
-	sk, err := h.agents.UpdateSkill(r.Context(), callerID, r.PathValue("id"), patch)
+	sk, err := h.agents.UpdateSkill(r.Context(), callerID, callerIsAdmin(r), r.PathValue("id"), patch)
 	if err != nil {
 		h.writeSkillError(w, err)
 		return
@@ -655,15 +683,55 @@ func (h *AgentHandler) UpdateSkill(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, JSON{"skill": sk})
 }
 
-// DeleteSkill removes a skill (author-only).
+// DeleteSkill removes a skill (author, or any admin).
 // DELETE /api/v1/skills/{id}
 func (h *AgentHandler) DeleteSkill(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
-	if err := h.agents.DeleteSkill(r.Context(), callerID, r.PathValue("id")); err != nil {
+	if err := h.agents.DeleteSkill(r.Context(), callerID, callerIsAdmin(r), r.PathValue("id")); err != nil {
 		h.writeSkillError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"ok": true})
+}
+
+// CountOverrides reports how many people have their own settings for an
+// agent, so an admin editing the workspace default can see how far it reaches.
+// GET /api/v1/agents/{slug}/overrides
+func (h *AgentHandler) CountOverrides(w http.ResponseWriter, r *http.Request) {
+	n, err := h.agents.CountAgentOverrides(r.Context(), r.PathValue("slug"))
+	if err != nil {
+		h.writeOverrideError(w, err, "count overrides")
+		return
+	}
+	writeJSON(w, http.StatusOK, JSON{"count": n})
+}
+
+// ResetOverrides clears everyone's personal settings for an agent so the
+// template governs the whole workspace.
+//
+// Destructive and not undoable: a prefs row is one document, so this also
+// clears each person's persona, limits, follow-up settings and pre-approved
+// tool classes for this agent — not only the harness and model. The count
+// comes back so the caller can report what it actually removed.
+// DELETE /api/v1/agents/{slug}/overrides
+func (h *AgentHandler) ResetOverrides(w http.ResponseWriter, r *http.Request) {
+	n, err := h.agents.ResetAgentOverrides(r.Context(), r.PathValue("slug"))
+	if err != nil {
+		h.writeOverrideError(w, err, "reset overrides")
+		return
+	}
+	writeJSON(w, http.StatusOK, JSON{"cleared": n})
+}
+
+func (h *AgentHandler) writeOverrideError(w http.ResponseWriter, err error, what string) {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not_found", "unknown agent")
+	case errors.Is(err, service.ErrValidation):
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, "internal", "failed to "+what)
+	}
 }
 
 func (h *AgentHandler) writeSkillError(w http.ResponseWriter, err error) {

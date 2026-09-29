@@ -140,6 +140,14 @@ func (d *hagentCovDir) PutAgentPrefs(_ context.Context, prefs *model.UserAgentPr
 	return nil
 }
 
+func (d *hagentCovDir) DeleteAgentPrefs(_ context.Context, userID, slug string) error {
+	if err := d.trip("DeleteAgentPrefs"); err != nil {
+		return err
+	}
+	delete(d.prefs, userID+"|"+slug)
+	return nil
+}
+
 func (d *hagentCovDir) GetAgentPrefs(_ context.Context, userID, slug string) (*model.UserAgentPrefs, error) {
 	if err := d.trip("GetAgentPrefs"); err != nil {
 		return nil, err
@@ -591,6 +599,7 @@ type hagentCovEnv struct {
 	msgs    *hagentCovMessages
 	agentID string
 	h       *AgentHandler
+	svc     *service.AgentService
 }
 
 // hagentCovNewEnv builds a handler over real services with one seeded shared
@@ -616,7 +625,7 @@ func hagentCovNewEnv() *hagentCovEnv {
 	jwtMgr := auth.NewJWTManager("hagent-cov-secret", 15*time.Minute, 720*time.Hour)
 	orch := service.NewOrchestrator(runs, agentSvc, &hagentCovOrchUsers{users: users}, msgs, hagentCovPub{}, jwtMgr)
 	h := NewAgentHandler(agentSvc, orch, userSvc, jwtMgr)
-	return &hagentCovEnv{dir: dir, runs: runs, users: users, msgs: msgs, agentID: agentID, h: h}
+	return &hagentCovEnv{dir: dir, runs: runs, users: users, msgs: msgs, agentID: agentID, h: h, svc: agentSvc}
 }
 
 // seedRun stores a run both by ID and in its parent's listing.
@@ -1345,4 +1354,83 @@ func TestHagentCovDeleteSkill(t *testing.T) {
 
 	rec = hagentCovDo(env.h.DeleteSkill, hagentCovReq(http.MethodDelete, "/api/v1/skills/sk1", "", "u1", map[string]string{"id": "sk1"}))
 	hagentCovWant(t, rec, http.StatusOK)
+}
+
+// hagentCovRoster is a one-page user lister for the override walk.
+type hagentCovRoster struct {
+	users []*model.User
+	err   error
+}
+
+func (r *hagentCovRoster) ListUsers(_ context.Context, _ int, _ string) ([]*model.User, string, error) {
+	return r.users, "", r.err
+}
+
+func TestHagentCovOverrides(t *testing.T) {
+	env := hagentCovNewEnv()
+	slug := map[string]string{"slug": "gg"}
+
+	// No roster wired: a validation error, not a 500 — the deployment is
+	// misconfigured, which is a different thing from the request being wrong.
+	rec := hagentCovDo(env.h.CountOverrides, hagentCovReq(http.MethodGet, "/api/v1/agents/gg/overrides", "", "u1", slug))
+	hagentCovWant(t, rec, http.StatusBadRequest)
+
+	env.svc.SetUserLister(&hagentCovRoster{users: []*model.User{
+		{ID: "u1", DisplayName: "u1"},
+		{ID: "u2", DisplayName: "u2"},
+	}})
+
+	// An unknown agent is a 404, never a confident zero.
+	rec = hagentCovDo(env.h.CountOverrides, hagentCovReq(http.MethodGet, "/api/v1/agents/ghost/overrides", "", "u1", map[string]string{"slug": "ghost"}))
+	hagentCovWant(t, rec, http.StatusNotFound)
+
+	// Nobody has customized gg yet.
+	rec = hagentCovDo(env.h.CountOverrides, hagentCovReq(http.MethodGet, "/api/v1/agents/gg/overrides", "", "u1", slug))
+	hagentCovWant(t, rec, http.StatusOK)
+	if got := hagentCovJSON(t, rec)["count"]; got != float64(0) {
+		t.Fatalf("count = %v, want 0", got)
+	}
+
+	// u2 customizes, so the count moves and the reset clears exactly that row.
+	if err := env.dir.PutAgentPrefs(context.Background(), &model.UserAgentPrefs{
+		UserID: "u2", Slug: "gg", Harness: model.HarnessBedrock,
+	}); err != nil {
+		t.Fatalf("seed prefs: %v", err)
+	}
+	rec = hagentCovDo(env.h.CountOverrides, hagentCovReq(http.MethodGet, "/api/v1/agents/gg/overrides", "", "u1", slug))
+	hagentCovWant(t, rec, http.StatusOK)
+	if got := hagentCovJSON(t, rec)["count"]; got != float64(1) {
+		t.Fatalf("count = %v, want 1", got)
+	}
+
+	rec = hagentCovDo(env.h.ResetOverrides, hagentCovReq(http.MethodDelete, "/api/v1/agents/gg/overrides", "", "u1", slug))
+	hagentCovWant(t, rec, http.StatusOK)
+	if got := hagentCovJSON(t, rec)["cleared"]; got != float64(1) {
+		t.Fatalf("cleared = %v, want 1", got)
+	}
+
+	// A store failure is a 500 on both verbs.
+	env.dir.failFrom["GetAgentPrefs"] = 1
+	rec = hagentCovDo(env.h.CountOverrides, hagentCovReq(http.MethodGet, "/api/v1/agents/gg/overrides", "", "u1", slug))
+	hagentCovWant(t, rec, http.StatusInternalServerError)
+	rec = hagentCovDo(env.h.ResetOverrides, hagentCovReq(http.MethodDelete, "/api/v1/agents/gg/overrides", "", "u1", slug))
+	hagentCovWant(t, rec, http.StatusInternalServerError)
+	delete(env.dir.failFrom, "GetAgentPrefs")
+}
+
+// callerIsAdmin reads the SIGNED claims, not a body field — a member must not
+// be able to widen their own reach over someone else's skill.
+func TestHagentCovCallerIsAdmin(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/skills/s1", nil)
+	if callerIsAdmin(req) {
+		t.Fatal("no claims must not read as admin")
+	}
+	req = req.WithContext(middleware.ContextWithClaims(req.Context(), &model.TokenClaims{UserID: "u1", SystemRole: model.SystemRoleMember}))
+	if callerIsAdmin(req) {
+		t.Fatal("member must not read as admin")
+	}
+	req = req.WithContext(middleware.ContextWithClaims(req.Context(), &model.TokenClaims{UserID: "u1", SystemRole: model.SystemRoleAdmin}))
+	if !callerIsAdmin(req) {
+		t.Fatal("admin claims must read as admin")
+	}
 }

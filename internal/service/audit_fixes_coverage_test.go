@@ -978,3 +978,42 @@ func TestConnCov_InstalledIndexBatchedRegistryRead(t *testing.T) {
 		t.Fatalf("empty policy should default to ask: %+v", idx[0])
 	}
 }
+
+// The typing ticker must stop when the agent POSTS, not when the run finally
+// goes terminal. It used to run until terminal, so a run that answered and
+// then spent its remaining turns winding down kept re-publishing "gg is
+// typing…" the whole time — and every frame bought another 6s of client-side
+// expiry after the last one, which is why the indicator outlived the reply.
+func TestOrchCov_TypingStopsWhenAgentPosts(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+	run := fx.start(t, "m1", "")
+
+	if _, err := fx.orch.Claim(ctx, "u-alice", "r1", []string{model.HarnessClaude}, 1, 0); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, armed := fx.orch.typing.Load(run.ID); !armed {
+		t.Fatal("claiming a run must arm the typing ticker")
+	}
+
+	if _, err := fx.orch.RecordAgentPost(ctx, run.ID); err != nil {
+		t.Fatalf("record post: %v", err)
+	}
+	if _, armed := fx.orch.typing.Load(run.ID); armed {
+		t.Fatal("typing ticker still armed after the agent posted")
+	}
+
+	// The run is still live — stopping the animation must not have closed it.
+	if got, err := fx.runs.GetRun(ctx, run.ID); err != nil || got.State.Terminal() {
+		t.Fatalf("post must not terminate the run: state=%v err=%v", got.State, err)
+	}
+
+	// A second post is harmless: once it has spoken, "still working" belongs
+	// to the activity chip, so the ticker stays off rather than re-arming.
+	if _, err := fx.orch.RecordAgentPost(ctx, run.ID); err != nil {
+		t.Fatalf("second post: %v", err)
+	}
+	if _, armed := fx.orch.typing.Load(run.ID); armed {
+		t.Fatal("typing ticker re-armed by a second post")
+	}
+}
