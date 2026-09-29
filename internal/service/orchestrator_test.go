@@ -469,6 +469,13 @@ func (f *fakeAgentDir) PutAgentPrefs(_ context.Context, prefs *model.UserAgentPr
 	return nil
 }
 
+func (f *fakeAgentDir) DeleteAgentPrefs(_ context.Context, userID, slug string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.prefs, userID+"#"+slug)
+	return nil
+}
+
 func (f *fakeAgentDir) GetAgentPrefs(_ context.Context, userID, slug string) (*model.UserAgentPrefs, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

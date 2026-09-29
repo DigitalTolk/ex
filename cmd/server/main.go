@@ -265,6 +265,9 @@ func main() {
 	agentStore := store.NewAgentStore(db)
 	runStore := store.NewRunStore(db)
 	agentSvc := service.NewAgentService(agentStore, userStore)
+	// Agent prefs are partitioned by user, so the admin panel's "how many
+	// people have their own settings" and its reset both walk the roster.
+	agentSvc.SetUserLister(userStore)
 	orchestrator := service.NewOrchestrator(runStore, agentSvc, userStore, messageSvc, redisPubSub, jwtMgr)
 	messageSvc.SetAgentDispatcher(orchestrator)
 	// Deleting a chat sweeps its agent-run activity logs (a thread root sweeps

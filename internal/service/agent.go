@@ -36,6 +36,7 @@ type AgentDirectoryStore interface {
 	CreateAgentUser(ctx context.Context, user *model.User) error
 	PutAgentPrefs(ctx context.Context, prefs *model.UserAgentPrefs) error
 	GetAgentPrefs(ctx context.Context, userID, slug string) (*model.UserAgentPrefs, error)
+	DeleteAgentPrefs(ctx context.Context, userID, slug string) error
 	PutRunner(ctx context.Context, reg *model.RunnerRegistration) error
 	ListRunners(ctx context.Context, ownerID string) ([]*model.RunnerRegistration, error)
 	PutSkill(ctx context.Context, sk *model.Skill) error
@@ -63,18 +64,31 @@ type agentUserGetter interface {
 	UpdateUser(ctx context.Context, user *model.User) error
 }
 
+// agentUserLister enumerates the workspace roster. Per-user agent prefs are
+// partitioned BY USER (PK=user#…, SK=agentprefs#<slug>), so "everyone who
+// customized this agent" has no index that can answer it — it is a walk of
+// the roster. Behind its own interface, and only ever driven by
+// admin-initiated, on-demand calls; never a hot path.
+type agentUserLister interface {
+	ListUsers(ctx context.Context, limit int, cursor string) ([]*model.User, string, error)
+}
+
 // AgentService owns agent templates, the shared agent users, and per-user
 // preference resolution. Runs are the Orchestrator's business.
 type AgentService struct {
-	agents  AgentDirectoryStore
-	users   agentUserGetter
-	indexer UserIndexer
+	agents   AgentDirectoryStore
+	users    agentUserGetter
+	indexer  UserIndexer
+	userList agentUserLister
 }
 
 // NewAgentService constructs an AgentService.
 func NewAgentService(agents AgentDirectoryStore, users agentUserGetter) *AgentService {
 	return &AgentService{agents: agents, users: users}
 }
+
+// SetUserLister wires the roster walk the override count and reset need.
+func (s *AgentService) SetUserLister(l agentUserLister) { s.userList = l }
 
 // SetIndexer wires the search indexer. Optional: deployments without a search
 // client resolve user search by linear scan instead, and need no index.
@@ -450,6 +464,100 @@ func (s *AgentService) SetAgentEngine(ctx context.Context, slug, harness, mdl, e
 	return tpl, nil
 }
 
+// SetAgentPersona replaces the template's prompt — the instructions every
+// member inherits unless they have written their own. Admin-gated at the route.
+//
+// Blank is refused rather than treated as "clear": Resolve falls back to the
+// template persona, so emptying it would leave everyone without an override
+// running with no instructions at all.
+func (s *AgentService) SetAgentPersona(ctx context.Context, slug, persona string) (*model.AgentTemplate, error) {
+	persona = strings.TrimSpace(persona)
+	if persona == "" {
+		return nil, fmt.Errorf("agent: prompt is required: %w", ErrValidation)
+	}
+	tpl, err := s.agents.GetTemplate(ctx, strings.ToLower(strings.TrimSpace(slug)))
+	if err != nil {
+		return nil, err
+	}
+	tpl.Persona = persona
+	tpl.UpdatedAt = time.Now()
+	if err := s.agents.PutTemplate(ctx, tpl); err != nil {
+		return nil, fmt.Errorf("agent: set persona: %w", err)
+	}
+	return tpl, nil
+}
+
+// agentOverridePage bounds one roster page during an override walk.
+const agentOverridePage = 200
+
+// forEachOverride walks the roster and visits every user holding their own
+// prefs row for slug. Agents are skipped: they never invoke, so they never
+// have prefs. A missing row is the normal case (inherit everything), not an
+// error.
+func (s *AgentService) forEachOverride(ctx context.Context, slug string, visit func(userID string) error) (int, error) {
+	if s.userList == nil {
+		return 0, fmt.Errorf("agent: roster walk unavailable: %w", ErrValidation)
+	}
+	slug = strings.ToLower(strings.TrimSpace(slug))
+	// Fail on an unknown slug rather than reporting a confident zero — a typo
+	// must not read as "nobody has customized this".
+	if _, err := s.agents.GetTemplate(ctx, slug); err != nil {
+		return 0, err
+	}
+	n, cursor := 0, ""
+	for {
+		users, next, err := s.userList.ListUsers(ctx, agentOverridePage, cursor)
+		if err != nil {
+			return n, fmt.Errorf("agent: list users: %w", err)
+		}
+		for _, u := range users {
+			if u.IsAgent() {
+				continue
+			}
+			if _, err := s.agents.GetAgentPrefs(ctx, u.ID, slug); err != nil {
+				if errors.Is(err, store.ErrNotFound) {
+					continue
+				}
+				return n, fmt.Errorf("agent: prefs for %s: %w", u.ID, err)
+			}
+			n++
+			if visit != nil {
+				if err := visit(u.ID); err != nil {
+					return n, err
+				}
+			}
+		}
+		if next == "" {
+			return n, nil
+		}
+		cursor = next
+	}
+}
+
+// CountAgentOverrides reports how many people have customized this agent, so
+// an admin editing the workspace default can see how far that default
+// actually reaches.
+func (s *AgentService) CountAgentOverrides(ctx context.Context, slug string) (int, error) {
+	return s.forEachOverride(ctx, slug, nil)
+}
+
+// ResetAgentOverrides deletes everyone's personal settings for one agent, so
+// the template becomes the effective config for the whole workspace.
+//
+// DESTRUCTIVE and not undoable: a prefs row is one document, so this clears a
+// person's persona, limits, follow-up settings and pre-approved tool classes
+// for this agent too — not just the harness and model an admin was thinking
+// about. The route is admin-gated and the UI confirms; this returns how many
+// rows it removed so the caller can say so.
+func (s *AgentService) ResetAgentOverrides(ctx context.Context, slug string) (int, error) {
+	return s.forEachOverride(ctx, slug, func(userID string) error {
+		if err := s.agents.DeleteAgentPrefs(ctx, userID, slug); err != nil {
+			return fmt.Errorf("agent: clear prefs for %s: %w", userID, err)
+		}
+		return nil
+	})
+}
+
 // defaultAPIModel is the model id used when an API harness has no explicit
 // pin. Bedrock ids are inference-profile / model ids in the account's region;
 // this default is the EU cross-region Claude Opus 5 profile (the Claude 5
@@ -743,13 +851,15 @@ func (s *AgentService) CreateSkill(ctx context.Context, authorID, name, descript
 	return sk, nil
 }
 
-// UpdateSkill applies the author's edits.
-func (s *AgentService) UpdateSkill(ctx context.Context, callerID, id string, patch SkillPatch) (*model.Skill, error) {
+// UpdateSkill applies the author's edits. Admins may edit anyone's skill: a
+// skill is workspace-visible once published, so a bad one is everyone's
+// problem and waiting for its author is not a fix.
+func (s *AgentService) UpdateSkill(ctx context.Context, callerID string, asAdmin bool, id string, patch SkillPatch) (*model.Skill, error) {
 	sk, err := s.agents.GetSkill(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if sk.CreatedBy != callerID {
+	if sk.CreatedBy != callerID && !asAdmin {
 		return nil, fmt.Errorf("agent: not the skill author: %w", ErrForbidden)
 	}
 	if patch.Name != nil {
@@ -779,12 +889,12 @@ func (s *AgentService) UpdateSkill(ctx context.Context, callerID, id string, pat
 }
 
 // DeleteSkill removes a skill (author-only).
-func (s *AgentService) DeleteSkill(ctx context.Context, callerID, id string) error {
+func (s *AgentService) DeleteSkill(ctx context.Context, callerID string, asAdmin bool, id string) error {
 	sk, err := s.agents.GetSkill(ctx, id)
 	if err != nil {
 		return err
 	}
-	if sk.CreatedBy != callerID {
+	if sk.CreatedBy != callerID && !asAdmin {
 		return fmt.Errorf("agent: not the skill author: %w", ErrForbidden)
 	}
 	return s.agents.DeleteSkill(ctx, id)

@@ -29,6 +29,10 @@ export default function SkillsPage() {
   useDocumentTitle('Skills');
   const { data: skills, isLoading } = useSkills();
   const { user } = useAuth();
+  // An admin can repair or remove a skill someone else published: a published
+  // skill is workspace-visible, so a bad one is everyone's problem and waiting
+  // for its author is not a remedy. Enforced server-side too.
+  const isAdmin = user?.systemRole === 'admin';
   const [creating, setCreating] = useState(false);
 
   const all = skills ?? [];
@@ -79,7 +83,7 @@ export default function SkillsPage() {
         {mine.length > 0 && (
           <Section title="Your skills" count={mine.length}>
             {mine.map((sk) => (
-              <SkillRow key={sk.id} skill={sk} own hidden={hiddenSkills.has(sk.id)} />
+              <SkillRow key={sk.id} skill={sk} own canManage hidden={hiddenSkills.has(sk.id)} />
             ))}
           </Section>
         )}
@@ -90,6 +94,7 @@ export default function SkillsPage() {
                 key={sk.id}
                 skill={sk}
                 own={false}
+                canManage={isAdmin}
                 hidden={hiddenSkills.has(sk.id)}
                 addedBy={authors.get(sk.createdBy)?.displayName}
               />
@@ -271,7 +276,23 @@ function VisibilityBadge({ published }: { published: boolean }) {
   );
 }
 
-function SkillRow({ skill, own, hidden, addedBy }: { skill: Skill; own: boolean; hidden: boolean; addedBy?: string }) {
+// `own` is authorship (drives provenance and the visibility badge);
+// `canManage` is authority to change it — the author, or any admin. They are
+// separate because an admin acting on someone else's skill should still see
+// whose it is.
+function SkillRow({
+  skill,
+  own,
+  hidden,
+  addedBy,
+  canManage,
+}: {
+  skill: Skill;
+  own: boolean;
+  hidden: boolean;
+  addedBy?: string;
+  canManage: boolean;
+}) {
   const del = useDeleteSkill();
   const update = useUpdateSkill();
   const setHidden = useSetSkillHidden();
@@ -333,7 +354,7 @@ function SkillRow({ skill, own, hidden, addedBy }: { skill: Skill; own: boolean;
                 >
                   {hidden ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
                 </TooltipIconButton>
-                {own && (
+                {canManage && (
                   <>
                     <TooltipIconButton
                       label={published ? 'Make private' : 'Publish'}
@@ -356,7 +377,7 @@ function SkillRow({ skill, own, hidden, addedBy }: { skill: Skill; own: boolean;
                 )}
               </div>
             )}
-            {own && confirmDelete && (
+            {canManage && confirmDelete && (
               <div className="ml-auto flex shrink-0 items-center gap-1">
                 <button
                   type="button"

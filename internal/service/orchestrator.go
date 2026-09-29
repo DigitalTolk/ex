@@ -1988,6 +1988,18 @@ func (o *Orchestrator) RecordAgentPost(ctx context.Context, runID string) (remai
 		}
 		return 0, err
 	}
+	// It has answered, so stop claiming it is typing. The ticker otherwise
+	// runs until the run goes TERMINAL, which is later — a run that posts and
+	// then spends its remaining turns on cleanup kept re-publishing typing the
+	// whole time, and each frame bought another 6s of client-side expiry after
+	// the last one. The SPA already drops the entry when the message lands;
+	// this is what stops it coming straight back.
+	//
+	// Not restarted for a second post in the same run: once an agent has
+	// spoken, "still working" belongs to the activity chip, not to a typing
+	// line under the reply it already sent.
+	o.stopTypingTicker(runID)
+
 	// The agent just spoke in this thread: refresh its follow marker so the
 	// invoker's later un-tagged replies can re-invoke it (per their prefs).
 	// Heartbeats have no thread (MessageID "") and are skipped.

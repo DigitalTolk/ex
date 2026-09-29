@@ -364,6 +364,7 @@ func (d *hrunnerCovDir) ListTemplates(context.Context) ([]*model.AgentTemplate, 
 
 func (d *hrunnerCovDir) CreateAgentUser(context.Context, *model.User) error       { return nil }
 func (d *hrunnerCovDir) PutAgentPrefs(context.Context, *model.UserAgentPrefs) error { return nil }
+func (d *hrunnerCovDir) DeleteAgentPrefs(context.Context, string, string) error { return nil }
 func (d *hrunnerCovDir) GetAgentPrefs(context.Context, string, string) (*model.UserAgentPrefs, error) {
 	return nil, store.ErrNotFound
 }

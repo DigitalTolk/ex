@@ -135,6 +135,19 @@ func TestAgentPrefsStore_RoundTrip(t *testing.T) {
 	if _, err := s.GetAgentPrefs(ctx, "u-1", "qib"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("get absent: want ErrNotFound, got %v", err)
 	}
+
+	// Delete drops the row, so the next resolve falls back to the template.
+	if err := s.DeleteAgentPrefs(ctx, "u-1", "gg"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := s.GetAgentPrefs(ctx, "u-1", "gg"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("get after delete: want ErrNotFound, got %v", err)
+	}
+	// Idempotent: clearing a row that is not there is the same outcome as
+	// clearing one that was, which is what lets an admin retry a reset.
+	if err := s.DeleteAgentPrefs(ctx, "u-1", "gg"); err != nil {
+		t.Fatalf("delete absent: %v", err)
+	}
 }
 
 func TestRunnerStore_CRUD(t *testing.T) {
