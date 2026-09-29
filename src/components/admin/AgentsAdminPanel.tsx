@@ -78,15 +78,22 @@ function AgentTemplateRow({ agent }: { agent: AgentView }) {
     persona.trim() !== (agent.defaultPersona ?? '').trim();
 
   function save() {
+    // Normalise the fields to what is actually being sent. Without this the
+    // form keeps the untrimmed text, stays permanently "dirty" against the
+    // saved template, and never settles back to showing it as saved.
+    const trimmedModel = model.trim();
+    const trimmedPersona = persona.trim();
+    setModel(trimmedModel);
+    setPersona(trimmedPersona);
     update.mutate({
       slug: agent.slug,
       patch: {
         // harness must ride along: the handler skips the engine block without
         // it, so a model sent alone is accepted and silently ignored.
         harness,
-        model: model.trim(),
+        model: trimmedModel,
         executionMode: isBedrock ? 'server' : '',
-        persona: persona.trim(),
+        persona: trimmedPersona,
       },
     });
   }

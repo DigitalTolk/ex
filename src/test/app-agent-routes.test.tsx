@@ -18,6 +18,7 @@ vi.mock('@/pages/ChatPage', async () => {
 vi.mock('@/pages/AgentsPage', () => ({ default: () => <div data-testid="stub-AgentsPage" /> }));
 vi.mock('@/pages/SkillsPage', () => ({ default: () => <div data-testid="stub-SkillsPage" /> }));
 vi.mock('@/pages/ConnectorsPage', () => ({ default: () => <div data-testid="stub-ConnectorsPage" /> }));
+vi.mock('@/pages/AdminAgentsPage', () => ({ default: () => <div data-testid="stub-AdminAgentsPage" /> }));
 
 describe('App — agent feature lazy routes', () => {
   beforeEach(() => {
@@ -69,6 +70,17 @@ describe('App — agent feature lazy routes', () => {
     // Every hub page renders inside the AI hub layout's tab strip.
     expect(screen.getByRole('navigation', { name: 'AI sections' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Skills' })).toHaveAttribute('href', '/skills');
+    view.unmount();
+  });
+
+  // The admin area has its own layout route, so its lazy child resolves
+  // through a different branch of App than the hub pages above.
+  it('resolves the /admin/agents chunk under the admin tab strip', async () => {
+    window.history.pushState({}, '', '/admin/agents');
+    const view = render(<App />);
+    expect(await screen.findByTestId('stub-AdminAgentsPage', {}, { timeout: 15000 })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Admin sections' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Agents' })).toHaveAttribute('href', '/admin/agents');
     view.unmount();
   });
 });
