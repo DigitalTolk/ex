@@ -1129,7 +1129,7 @@ function MessageItemImpl({
 
       {!isEditing && !message.deleted && (
         <div
-          className="absolute right-2 -top-3 flex items-center gap-0.5 rounded-md border bg-background shadow-sm transition-opacity touch:hidden"
+          className="absolute right-2 -top-3 flex items-center gap-0.5 rounded-md border border-border bg-background shadow-sm dark:border-border-strong transition-opacity touch:hidden"
           style={{ opacity: toolbarVisible ? 1 : 0 }}
           data-actions-pinned={actionsMenuOpen ? 'true' : 'false'}
           data-actions-visible={toolbarVisible ? 'true' : 'false'}

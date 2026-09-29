@@ -397,7 +397,7 @@ describe('MessageInput browser behavior', () => {
     }, { timeout: 20000 });
   });
 
-  // CTA tokens: light theme CTA is #231F20 (near-black), dark theme is
+  // CTA tokens: light theme CTA is #0B0B0B (near-black), dark theme is
   // #DE5D83 (brand pink). Lock both so a future palette tweak can't
   // accidentally re-pink the light-mode send button.
   it('paints the send button near-black in light mode', async () => {
@@ -417,7 +417,7 @@ describe('MessageInput browser behavior', () => {
     await vi.waitFor(() => {
       const rgb = parseRGB(getComputedStyle(send).backgroundColor);
       expect(rgb).not.toBeNull();
-      // Near-black (#231F20 → rgb(35,31,32))
+      // Near-black (#0B0B0B → rgb(11,11,11))
       expect(rgb![0]).toBeLessThan(60);
       expect(rgb![1]).toBeLessThan(60);
       expect(rgb![2]).toBeLessThan(60);

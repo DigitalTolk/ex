@@ -411,16 +411,16 @@ describe('Sidebar grouped rendering', () => {
 
   it('highlights Activity while on /activity', () => {
     renderSidebarAt('/activity');
-    expect(screen.getByText('Activity').closest('a')).toHaveClass('bg-background');
+    expect(screen.getByText('Activity').closest('a')).toHaveClass('bg-sidebar-accent');
     expect(screen.getByText('Activity').closest('a')).toHaveClass('font-semibold');
   });
 
   it('keeps Directory highlighted on nested directory routes', () => {
     renderSidebarAt('/directory/users');
 
-    // Active nav rows use the base background (bg/base) per the design spec,
-    // not the lighter bg-white/15 tint.
-    expect(screen.getByText('Directory').closest('a')).toHaveClass('bg-background');
+    // Active nav rows use the sidebar "selected" fill (bg/level2) per the
+    // Figma frames, not the lighter bg-white/15 tint.
+    expect(screen.getByText('Directory').closest('a')).toHaveClass('bg-sidebar-accent');
     expect(screen.getByText('Directory').closest('a')).toHaveClass('font-semibold');
   });
 

@@ -19,7 +19,7 @@ const buttonVariants = cva(
         // neutral `primary` accents (focus rings, avatar fallbacks, @mention
         // pills, switches), which stay neutral in both themes.
         default:
-          "bg-primary text-primary-foreground [a]:hover:bg-primary/80 dark:bg-brand dark:text-brand-foreground dark:[a]:hover:bg-brand-hover",
+          "bg-primary text-primary-foreground [a]:hover:bg-primary/80 dark:bg-brand-strong dark:text-brand-foreground dark:[a]:hover:bg-brand-strong-hover",
         outline:
           "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary:

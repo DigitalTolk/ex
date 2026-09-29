@@ -179,7 +179,7 @@ export function UnfurlCard({
         // Per the design spec the web (OpenGraph) card is bg/base with a
         // uniform subtle border (no coloured left accent) — matches the
         // GitHub card in the reference screenshots.
-        className="flex gap-3 overflow-hidden rounded-md border border-border bg-background p-2"
+        className="flex gap-3 overflow-hidden rounded-md border border-border bg-background p-2 dark:border-border-strong"
       >
         {safeImg(preview.image) && !imageBroken && (
           <img
