@@ -1252,6 +1252,16 @@ export interface Connector {
    */
   authHeader?: string;
   /**
+   * CredentialHint is the one-line "where do I get this?" shown under the
+   * paste field, and CredentialURL the page it links to (the service's own
+   * token screen). Both are admin-owned like the rest of the auth block, so
+   * each service can word its own instruction — "Bearer token" with no
+   * instruction had people pasting an OAuth app secret, or nothing at all.
+   * Only paste-kind connectors have anywhere to show them.
+   */
+  credentialHint?: string;
+  credentialURL?: string;
+  /**
    * StartURL is the SSO entry point opened by an sso_window connect; the
    * service redirects through its own login (silent when the user holds a
    * live Microsoft session) and lands on a URL matching CapturePattern
@@ -1404,6 +1414,11 @@ export const ConnectorStatusConnected = "connected";
  * Connector install statuses.
  */
 export const ConnectorStatusUnverified = "unverified";
+/**
+ * ConnectorCredentialHintMaxLen bounds CredentialHint: it is one line under a
+ * form field, not documentation — the bundle is where instructions belong.
+ */
+export const ConnectorCredentialHintMaxLen = 300;
 /**
  * DefaultAuthHeader is the credential header used when a connector sets none.
  */
