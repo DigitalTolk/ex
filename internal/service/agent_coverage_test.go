@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1141,7 +1142,11 @@ func (r *agentCovRoster) ListUsers(_ context.Context, _ int, cursor string) ([]*
 	}
 	start := 0
 	if cursor != "" {
-		fmt.Sscanf(cursor, "%d", &start)
+		n, err := strconv.Atoi(cursor)
+		if err != nil {
+			return nil, "", fmt.Errorf("roster fake: bad cursor %q: %w", cursor, err)
+		}
+		start = n
 	}
 	end := start + r.pageSize
 	if end > len(r.users) {
