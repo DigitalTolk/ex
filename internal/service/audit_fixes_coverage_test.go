@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1173,5 +1174,435 @@ func TestOrchCov_ThreadSlotStillLive_Guards(t *testing.T) {
 	fx.runs.failGetRun = nil
 	if !fx.orch.threadSlotStillLive(ctx, live.ID) {
 		t.Fatal("a live run must read as live")
+	}
+}
+
+// ---------------------------------------------------------------- reported
+// The two symptoms as they were actually reported, end to end, rather than
+// the mechanisms underneath them.
+
+// "Agents don't reply on all the replies in a DM thread": several turns in one
+// DM thread, each completing before the next message. EVERY human reply must
+// produce a run. It replied twice and then went silent for good, because the
+// thread-turn slot leaked and ErrAgentBusy reads as "already invoked".
+func TestOrchCov_DMThreadAnswersEveryReply(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+
+	// A 1:1 DM whose only other participant is gg → every message is for gg,
+	// no @mention needed, thread replies included.
+	fx.orch.SetConversationReader(&orchCovConvs{conv: &model.Conversation{
+		ID: "dm1", Type: model.ConversationTypeDM,
+		ParticipantIDs: []string{"u-alice", testGGID},
+	}})
+
+	root := "m-root"
+	queuedFor := func(i int) int {
+		ids, err := fx.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 50)
+		if err != nil {
+			t.Fatalf("turn %d: list queued: %v", i, err)
+		}
+		return len(ids)
+	}
+
+	// Six exchanges: send, let the run finish, send again.
+	for i := 1; i <= 6; i++ {
+		before := queuedFor(i)
+		msg := &model.Message{
+			ID: fmt.Sprintf("m%d", i), ParentID: "dm1", ParentMessageID: root,
+			AuthorID: "u-alice", Body: fmt.Sprintf("question %d", i),
+		}
+		fx.orch.OnMessage(ctx, msg, ParentConversation)
+
+		after := queuedFor(i)
+		if after != before+1 {
+			t.Fatalf("turn %d: no run started for a DM thread reply (queued %d → %d)", i, before, after)
+		}
+
+		// Finish it, exactly as a runner completing the turn would.
+		ids, _ := fx.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 50)
+		run, err := fx.runs.GetRun(ctx, ids[len(ids)-1])
+		if err != nil {
+			t.Fatalf("turn %d: get run: %v", i, err)
+		}
+		if err := fx.runs.UpdateRun(ctx, run, run.State); err != nil {
+			t.Fatalf("turn %d: seed state: %v", i, err)
+		}
+		state := run.State
+		run.State = model.RunStateCompleted
+		if err := fx.runs.UpdateRun(ctx, run, state); err != nil {
+			t.Fatalf("turn %d: complete: %v", i, err)
+		}
+		fx.orch.afterTerminal(ctx, run)
+	}
+}
+
+// "A lot of people using agents shouldn't interfere with each other": three
+// people mention the same agent in the SAME thread at the same time. Each must
+// get their own run — runs execute on the invoker's machine, on their quota.
+// Keyed without the invoker, the second and third were refused as "busy" and
+// silently dropped: one person's question cancelled everyone else's.
+func TestOrchCov_ConcurrentInvokersDoNotInterfere(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+
+	people := []string{"u-alice", "u-bob", "u-carol"}
+	for _, id := range people[1:] {
+		fx.users.users[id] = &model.User{ID: id, DisplayName: id}
+		if err := fx.dir.PutRunner(ctx, &model.RunnerRegistration{
+			RunnerID: "r-" + id, OwnerID: id,
+			Harnesses:      []model.RunnerHarness{{Name: model.HarnessClaude}},
+			LeaseExpiresAt: fx.now.Add(time.Hour),
+		}); err != nil {
+			t.Fatalf("seed runner for %s: %v", id, err)
+		}
+	}
+
+	// Nobody's turn is finished before the next person asks — the contended case.
+	for i, who := range people {
+		msg := &model.Message{
+			ID: fmt.Sprintf("mm%d", i), ParentID: "chan1", ParentMessageID: "shared-root",
+			AuthorID: who, Body: "@[" + testGGID + "|gg] mine please",
+		}
+		fx.orch.OnMessage(ctx, msg, ParentChannel)
+	}
+
+	for _, who := range people {
+		ids, err := fx.runs.fakeRunStore.ListQueuedRuns(ctx, who, 50)
+		if err != nil {
+			t.Fatalf("%s: list queued: %v", who, err)
+		}
+		if len(ids) == 0 {
+			t.Fatalf("%s got no run — another person's live turn consumed theirs", who)
+		}
+	}
+
+	// Each person's slot is their own, and holds their own run.
+	seen := map[string]string{}
+	for _, who := range people {
+		key := turnKey("chan1", "shared-root", testGGID, who)
+		held, ok := fx.orch.threadActive.Load(key)
+		if !ok {
+			t.Fatalf("%s has no thread slot of their own", who)
+		}
+		if prev, dup := seen[held.(string)]; dup {
+			t.Fatalf("%s and %s share run %v", who, prev, held)
+		}
+		seen[held.(string)] = who
+	}
+}
+
+// ------------------------------------------------------- two instances, one store
+//
+// prd runs service_count_desired = 2 behind a load balancer, so a run's calls
+// are split across instances at random. Every bug in this file's second half
+// came from that: the typing ticker, the thread-turn slot and runThreadKey are
+// per-PROCESS maps, and the instance that did not handle a run's terminal
+// transition never learned to clean up.
+//
+// Containers cannot show this — the local app shares Dex's network namespace,
+// so it cannot be scaled, and a real balancer routes at random anyway. Two
+// Orchestrators over ONE store is the same thing and deterministic: I choose
+// which instance sees which call, including the worst split.
+
+// orchCovTwoInstances is one shared store with two independent orchestrators
+// over it — a and b — each with its own in-memory maps, as two tasks have.
+type orchCovTwoInstances struct {
+	a, b  *Orchestrator
+	runs  *orchCovRunStore
+	dir   *orchCovDir
+	users *orchCovUsers
+}
+
+func newOrchCovTwoInstances(t *testing.T) *orchCovTwoInstances {
+	t.Helper()
+	// One fixture supplies the shared store and roster; the second instance is
+	// built over the SAME dependencies, which is exactly what a second task is.
+	fx := newOrchCovFixture(t)
+	second := NewOrchestrator(fx.runs, fx.orch.agentSvc, fx.users, fx.msgs, fakePub{}, &orchCovMinter{})
+	now := *fx.now
+	second.now = func() time.Time { return now }
+	dm := &orchCovConvs{conv: &model.Conversation{
+		ID: "dm1", Type: model.ConversationTypeDM,
+		ParticipantIDs: []string{"u-alice", testGGID},
+	}}
+	fx.orch.SetConversationReader(dm)
+	second.SetConversationReader(dm)
+	return &orchCovTwoInstances{a: fx.orch, b: second, runs: fx.runs, dir: fx.dir, users: fx.users}
+}
+
+// finishOn marks a run terminal in the store and runs the teardown on ONE
+// instance — the load balancer's choice, and the whole problem.
+func (x *orchCovTwoInstances) finishOn(t *testing.T, o *Orchestrator, runID string) {
+	t.Helper()
+	ctx := context.Background()
+	run, err := x.runs.GetRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("get run %s: %v", runID, err)
+	}
+	state := run.State
+	run.State = model.RunStateCompleted
+	if err := x.runs.UpdateRun(ctx, run, state); err != nil {
+		t.Fatalf("complete %s: %v", runID, err)
+	}
+	o.afterTerminal(ctx, run)
+}
+
+// The reported symptom, reproduced across two instances: a DM thread where
+// every turn is COMPLETED BY THE OTHER INSTANCE. The agent must still answer
+// every reply. Before the fix the first turn poisoned instance A's slot and it
+// went silent for good — "it replied a couple of times and then stopped".
+func TestOrchCov_TwoInstances_DMThreadKeepsAnsweringEveryReply(t *testing.T) {
+	x := newOrchCovTwoInstances(t)
+	ctx := context.Background()
+	const root = "dm-root"
+
+	queued := func() []string {
+		ids, err := x.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 50)
+		if err != nil {
+			t.Fatalf("list queued: %v", err)
+		}
+		return ids
+	}
+
+	for i := 1; i <= 5; i++ {
+		before := len(queued())
+		// Instance A takes the message...
+		x.a.OnMessage(ctx, &model.Message{
+			ID: fmt.Sprintf("dm-m%d", i), ParentID: "dm1", ParentMessageID: root,
+			AuthorID: "u-alice", Body: fmt.Sprintf("reply %d", i),
+		}, ParentConversation)
+
+		ids := queued()
+		if len(ids) != before+1 {
+			t.Fatalf("turn %d: instance A started no run for a DM reply (queued %d → %d)",
+				i, before, len(ids))
+		}
+		// ...and instance B handles the completion. The worst split, every time.
+		x.finishOn(t, x.b, ids[len(ids)-1])
+
+		// Neither instance may still believe the agent is typing or busy.
+		if _, typing := x.a.typing.Load(ids[len(ids)-1]); typing {
+			t.Fatalf("turn %d: instance A still animating typing after B finished the run", i)
+		}
+	}
+}
+
+// The same split, for the typing indicator specifically: A claims (arming its
+// ticker), B completes. A's ticker must stop itself — it is the only thing
+// publishing "… is typing", and nothing tells it the run ended.
+func TestOrchCov_TwoInstances_TypingStopsWhenTheOtherInstanceCompletes(t *testing.T) {
+	old := typingTickInterval
+	typingTickInterval = 5 * time.Millisecond
+	defer func() { typingTickInterval = old }()
+
+	x := newOrchCovTwoInstances(t)
+	ctx := context.Background()
+
+	x.a.OnMessage(ctx, &model.Message{
+		ID: "t-m1", ParentID: "dm1", ParentMessageID: "t-root",
+		AuthorID: "u-alice", Body: "work please",
+	}, ParentConversation)
+	ids, _ := x.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 50)
+	if len(ids) == 0 {
+		t.Fatal("no run queued")
+	}
+	runID := ids[len(ids)-1]
+
+	// A claims it, which is what arms a typing ticker.
+	if _, err := x.a.Claim(ctx, "u-alice", "r1", []string{model.HarnessClaude}, 1, 0); err != nil {
+		t.Fatalf("claim on A: %v", err)
+	}
+	if _, armed := x.a.typing.Load(runID); !armed {
+		t.Fatal("A should be animating typing for the run it claimed")
+	}
+
+	// B completes it. A is never told.
+	x.finishOn(t, x.b, runID)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, armed := x.a.typing.Load(runID); !armed {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal(`instance A kept publishing "… is typing" after instance B completed the run`)
+}
+
+// The handoff parked on one instance while the run it waits on is completed by
+// the OTHER one. Instance B's afterTerminal drains B's own deferral map and
+// finds nothing there, so unless A watches the run itself alice's second reply
+// is never answered — the remaining half of "agents don't reply to every reply
+// in a DM thread", and the one a single-process test cannot see.
+func TestOrchCov_TwoInstances_DeferredTurnSurvivesTheOtherInstanceFinishing(t *testing.T) {
+	old := deferredWatchInterval
+	deferredWatchInterval = 5 * time.Millisecond
+	defer func() { deferredWatchInterval = old }()
+
+	x := newOrchCovTwoInstances(t)
+	ctx := context.Background()
+	const root = "d-root"
+
+	queued := func() []string {
+		ids, err := x.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 50)
+		if err != nil {
+			t.Fatalf("list queued: %v", err)
+		}
+		return ids
+	}
+
+	// A takes the first reply and starts a run.
+	x.a.OnMessage(ctx, &model.Message{
+		ID: "d-m1", ParentID: "dm1", ParentMessageID: root,
+		AuthorID: "u-alice", Body: "first",
+	}, ParentConversation)
+	ids := queued()
+	if len(ids) != 1 {
+		t.Fatalf("instance A started no run for the first reply (queued %d)", len(ids))
+	}
+	first := ids[0]
+
+	// A takes the next reply too, mid-turn: refused as busy, so it parks.
+	x.a.OnMessage(ctx, &model.Message{
+		ID: "d-m2", ParentID: "dm1", ParentMessageID: root,
+		AuthorID: "u-alice", Body: "second",
+	}, ParentConversation)
+	if len(queued()) != 1 {
+		t.Fatal("the second reply should have been parked behind the live run, not started")
+	}
+	key := turnKey("dm1", root, testGGID, "u-alice")
+	if _, parked := x.a.deferredTurns.Load(key); !parked {
+		t.Fatal("the second reply was dropped instead of parked")
+	}
+
+	// Let the watchdog see the run still going for a few ticks first — the
+	// parked turn must not be started while the earlier one is live.
+	time.Sleep(25 * time.Millisecond)
+	if len(queued()) != 1 {
+		t.Fatal("the handoff started while the earlier turn was still running")
+	}
+
+	// B finishes the run. Nothing tells A.
+	x.finishOn(t, x.b, first)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(queued()) == 2 {
+			if _, parked := x.a.deferredTurns.Load(key); parked {
+				t.Fatal("the handoff started but was left parked, which would refuse the next one")
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("alice's second reply was lost: A parked it, B finished the run and looked for it in its own map")
+}
+
+// The watchdog gives the parked turn up when the run never releases the slot
+// anywhere it can see — holding it would refuse every later handoff for this
+// thread, since only one is parked per (thread, agent) and the first wins.
+func TestOrchCov_DeferredWatchExpires(t *testing.T) {
+	oldLimit, oldEvery := deferredWatchLimit, deferredWatchInterval
+	deferredWatchLimit, deferredWatchInterval = 5*time.Millisecond, time.Hour
+	defer func() { deferredWatchLimit, deferredWatchInterval = oldLimit, oldEvery }()
+
+	fx := newOrchCovFixture(t)
+	turn := &deferredTurn{agentID: testGGID, invokerID: "u-alice", msg: &model.Message{ID: "x-1"}}
+	fx.orch.deferredTurns.Store("k", turn)
+	fx.orch.watchDeferred(context.Background(), "k", "run-gone", turn)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, parked := fx.orch.deferredTurns.Load("k"); !parked {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("an unstartable handoff stayed parked, wedging the thread against every later one")
+}
+
+// Two things can start a parked turn — this instance's afterTerminal and this
+// watchdog — and only one may win. With the entry already taken the watchdog
+// must stand down rather than invoke a second time.
+func TestOrchCov_DeferredWatchStandsDownOnceStarted(t *testing.T) {
+	old := deferredWatchInterval
+	deferredWatchInterval = time.Millisecond
+	defer func() { deferredWatchInterval = old }()
+
+	fx := newOrchCovFixture(t)
+	turn := &deferredTurn{agentID: testGGID, invokerID: "u-alice", msg: &model.Message{ID: "y-1"}}
+	// Nothing parked: afterTerminal already took it.
+	fx.orch.watchDeferred(context.Background(), "k2", "run-any", turn)
+	time.Sleep(20 * time.Millisecond)
+	if ids, _ := fx.runs.fakeRunStore.ListQueuedRuns(context.Background(), "u-alice", 50); len(ids) != 0 {
+		t.Fatalf("the watchdog started a turn that was already handled (%d run(s))", len(ids))
+	}
+
+	// A slot held by nothing identifiable is not watchable at all.
+	fx.orch.deferredTurns.Store("k3", turn)
+	fx.orch.watchDeferred(context.Background(), "k3", 42, turn)
+	fx.orch.watchDeferred(context.Background(), "k3", "", turn)
+	time.Sleep(20 * time.Millisecond)
+	if _, parked := fx.orch.deferredTurns.Load("k3"); !parked {
+		t.Fatal("a handoff parked behind an unreadable slot should be left alone, not discarded")
+	}
+}
+
+// Many people, two instances, one thread: each person's turn must survive
+// whichever instance happens to take their message and whichever finishes it.
+func TestOrchCov_TwoInstances_ConcurrentPeopleDoNotInterfere(t *testing.T) {
+	x := newOrchCovTwoInstances(t)
+	ctx := context.Background()
+	people := []string{"u-alice", "u-bob", "u-carol", "u-dave"}
+
+	// Everyone except alice needs to exist AND have a runner of their own: an
+	// unknown author is ignored outright, and gg is a claude-CLI agent, so a
+	// run without the invoker's desktop app is refused as offline — both
+	// different failures from the one under test.
+	for _, id := range people[1:] {
+		x.users.users[id] = &model.User{ID: id, DisplayName: id}
+		if err := x.dir.PutRunner(ctx, &model.RunnerRegistration{
+			RunnerID: "r-" + id, OwnerID: id,
+			Harnesses:      []model.RunnerHarness{{Name: model.HarnessClaude}},
+			LeaseExpiresAt: time.Now().Add(time.Hour),
+		}); err != nil {
+			t.Fatalf("seed runner %s: %v", id, err)
+		}
+	}
+
+	// Alternate which instance receives each person's message, and finish each
+	// on the OTHER one — the interleaving a balancer produces.
+	instances := []*Orchestrator{x.a, x.b}
+	for i, who := range people {
+		in, out := instances[i%2], instances[(i+1)%2]
+		in.OnMessage(ctx, &model.Message{
+			ID: fmt.Sprintf("p-m%d", i), ParentID: "chan1", ParentMessageID: "p-root",
+			AuthorID: who, Body: "@[" + testGGID + "|gg] mine please",
+		}, ParentChannel)
+
+		ids, err := x.runs.fakeRunStore.ListQueuedRuns(ctx, who, 50)
+		if err != nil {
+			t.Fatalf("%s: list queued: %v", who, err)
+		}
+		if len(ids) == 0 {
+			t.Fatalf("%s got no run — someone else's turn consumed theirs", who)
+		}
+		x.finishOn(t, out, ids[len(ids)-1])
+	}
+
+	// A second round, to catch a slot poisoned by the first.
+	for i, who := range people {
+		in := instances[i%2]
+		before, _ := x.runs.fakeRunStore.ListQueuedRuns(ctx, who, 50)
+		in.OnMessage(ctx, &model.Message{
+			ID: fmt.Sprintf("p2-m%d", i), ParentID: "chan1", ParentMessageID: "p-root",
+			AuthorID: who, Body: "@[" + testGGID + "|gg] again",
+		}, ParentChannel)
+		after, _ := x.runs.fakeRunStore.ListQueuedRuns(ctx, who, 50)
+		if len(after) != len(before)+1 {
+			t.Fatalf("%s: second round produced no run (%d → %d) — their slot was left poisoned",
+				who, len(before), len(after))
+		}
 	}
 }

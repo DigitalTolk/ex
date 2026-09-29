@@ -1068,10 +1068,70 @@ func (o *Orchestrator) deferTurn(ctx context.Context, key string, turn *deferred
 	if _, loaded := o.deferredTurns.LoadOrStore(key, turn); loaded {
 		return
 	}
-	if _, busy := o.threadActive.Load(key); busy {
-		return // the live run's afterTerminal owns it
+	if held, busy := o.threadActive.Load(key); busy {
+		// This instance's afterTerminal owns the handoff — but only this
+		// instance's. The parked turn lives in per-PROCESS memory while the
+		// run it waits on does not: the terminal transition is load balanced,
+		// and when it lands on a sibling that instance drains its OWN (empty)
+		// deferral map. The handoff parked here then waits for a release that
+		// never comes — the agent answering one reply in a DM thread and
+		// nothing after it, which is the wedge this whole path exists to
+		// prevent. So watch the run from here too.
+		o.watchDeferred(ctx, key, held, turn)
+		return
 	}
 	o.startDeferredTurn(ctx, key)
+}
+
+// deferredWatchInterval paces the re-check of a run that a handoff is parked
+// behind, and deferredWatchLimit caps how long we wait for it. Vars so tests
+// can shrink them.
+var (
+	deferredWatchInterval = 2 * time.Second
+	deferredWatchLimit    = 30 * time.Minute
+)
+
+// watchDeferred starts the parked handoff if the run blocking it finishes
+// somewhere this instance cannot see. Whichever of the two paths gets there
+// first wins: startDeferredTurn takes the entry atomically, so afterTerminal
+// and this watchdog can never both start the same turn.
+func (o *Orchestrator) watchDeferred(ctx context.Context, key string, held any, turn *deferredTurn) {
+	runID, _ := held.(string)
+	if runID == "" {
+		return
+	}
+	// Detached from the request that parked the turn (it returns in
+	// milliseconds; the run it waits on can take minutes) but keeping its
+	// values.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deferredWatchLimit)
+	safe.Go(func() {
+		defer cancel()
+		ticker := time.NewTicker(deferredWatchInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				// Give the slot up rather than hold it: ONE turn is parked per
+				// (thread, agent) and the first one wins, so a stale entry
+				// would refuse every later handoff for this thread forever.
+				if o.deferredTurns.CompareAndDelete(key, turn) {
+					slog.Warn("deferred turn expired: run never released the thread slot",
+						"agentID", turn.agentID, "invokerID", turn.invokerID, "runID", runID)
+				}
+				return
+			case <-ticker.C:
+				if _, parked := o.deferredTurns.Load(key); !parked {
+					return // afterTerminal started it
+				}
+				if o.threadSlotStillLive(ctx, runID) {
+					continue
+				}
+				o.threadActive.CompareAndDelete(key, runID)
+				o.startDeferredTurn(ctx, key)
+				return
+			}
+		}
+	})
 }
 
 // startDeferredTurn starts the parked handoff for this thread+agent, if any.
