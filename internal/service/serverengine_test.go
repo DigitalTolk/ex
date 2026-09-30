@@ -1075,10 +1075,31 @@ func askSurfaceFixture(t *testing.T) (*orchFixture, *ServerEngine, *memConnector
 
 // approveWhenPending watches the fake store for the run's pending approval and
 // decides it — the invoker acting on the card.
+// approvalWaitBudget bounds both sides of every approval handshake in these
+// tests. awaitDecision polls until the approval settles or its ctx ends — it
+// has NO timeout of its own, by design, because a human may take minutes — so
+// a helper that gave up before the approval was even raised left the test
+// waiting forever and killed the whole package at the 10m test timeout. The
+// old budget was 500 iterations of 2ms: ample locally, and lost on a loaded
+// CI runner. Generous here costs nothing, because every wait below returns
+// the moment the approval appears.
+const approvalWaitBudget = 30 * time.Second
+
+// approvalCtx is the context for a test that waits on an approval: long
+// enough never to fire in a healthy run, short enough that a lost race fails
+// in seconds with a readable message instead of hanging the package.
+func approvalCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), approvalWaitBudget)
+	t.Cleanup(cancel)
+	return ctx
+}
+
 func approveWhenPending(t *testing.T, fx *orchFixture, runID string, d Decision) {
 	t.Helper()
 	go func() {
-		for i := 0; i < 500; i++ {
+		deadline := time.Now().Add(approvalWaitBudget)
+		for time.Now().Before(deadline) {
 			time.Sleep(2 * time.Millisecond)
 			fx.runs.mu.Lock()
 			var id string
@@ -1107,7 +1128,7 @@ func TestServerEngine_UseConnectorApproveFlow(t *testing.T) {
 	// Let the gate sit pending across at least one poll so the still-waiting
 	// note fires before the approval lands.
 	time.AfterFunc(25*time.Millisecond, func() { approveWhenPending(t, fx, run.ID, Decision{Approve: true}) })
-	out, isErr := use(context.Background(), json.RawMessage(`{"connector":"hub","reason":"need people data"}`))
+	out, isErr := use(approvalCtx(t), json.RawMessage(`{"connector":"hub","reason":"need people data"}`))
 	if isErr || !strings.Contains(out, "attached /hub") || !strings.Contains(out, "a.yaml") {
 		t.Fatalf("approve flow: err=%v %q", isErr, out)
 	}
@@ -1133,7 +1154,7 @@ func TestServerEngine_UseConnectorDeniedExpiredAndErrors(t *testing.T) {
 
 	fx, _, st, run, tools, _ := askSurfaceFixture(t)
 	use := toolByName(t, tools, "use_connector").Call
-	ctx := context.Background()
+	ctx := approvalCtx(t)
 
 	if out, isErr := use(ctx, json.RawMessage(`not json`)); !isErr || !strings.Contains(out, "bad input") {
 		t.Fatalf("bad input: %q", out)
@@ -1159,7 +1180,8 @@ func TestServerEngine_UseConnectorDeniedExpiredAndErrors(t *testing.T) {
 
 	// Expired: settle the next pending approval as expired ourselves.
 	go func() {
-		for i := 0; i < 500; i++ {
+		deadline := time.Now().Add(approvalWaitBudget)
+		for time.Now().Before(deadline) {
 			time.Sleep(2 * time.Millisecond)
 			fx.runs.mu.Lock()
 			var id string
@@ -1196,7 +1218,8 @@ func TestServerEngine_UseConnectorDeniedExpiredAndErrors(t *testing.T) {
 
 	// Approval row lost mid-wait → lookup failure surfaces.
 	go func() {
-		for i := 0; i < 500; i++ {
+		deadline := time.Now().Add(approvalWaitBudget)
+		for time.Now().Before(deadline) {
 			time.Sleep(2 * time.Millisecond)
 			fx.runs.mu.Lock()
 			var key string
@@ -1239,7 +1262,7 @@ func TestServerEngine_ApprovalTools(t *testing.T) {
 	tools := e.approvalTools(run, func(string) {})
 	req := toolByName(t, tools, "request_approval").Call
 	ask := toolByName(t, tools, "ask_user").Call
-	ctx := context.Background()
+	ctx := approvalCtx(t)
 
 	// Bad inputs never open a gate.
 	if out, isErr := req(ctx, json.RawMessage(`not json`)); !isErr || !strings.Contains(out, "requires a summary") {
@@ -1278,7 +1301,8 @@ func TestServerEngine_ApprovalTools(t *testing.T) {
 	// Expired: settle the pending gate as expired ourselves.
 	expireWhenPending := func() {
 		go func() {
-			for i := 0; i < 500; i++ {
+			deadline := time.Now().Add(approvalWaitBudget)
+			for time.Now().Before(deadline) {
 				time.Sleep(2 * time.Millisecond)
 				fx.runs.mu.Lock()
 				var id string

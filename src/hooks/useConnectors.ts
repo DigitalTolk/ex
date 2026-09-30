@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, apiFetch } from '@/lib/api';
 
 // Connectors: external-service API docs bundles agents can use. Users
-// install one by connecting their own account (paste a bearer token, or
+// install one by connecting their own account (paste an access token, or
 // email/password for password-kind connectors). Picked per-message with
 // "/slug" in the composer.
 export interface Connector {
@@ -16,8 +16,12 @@ export interface Connector {
   startURL?: string;
   capturePattern?: string;
   // How a pasted credential is sent ("X-Api-Key: {token}" → the form asks
-  // for an API key); absent = Authorization: Bearer.
+  // for an API key); absent = Authorization: Bearer (an access token).
   authHeader?: string;
+  // Where to get the credential: the line shown under the paste field and the
+  // service's own token page (see model.Connector.CredentialHint).
+  credentialHint?: string;
+  credentialURL?: string;
   installed: boolean;
   installStatus?: 'connected' | 'unverified';
   connectedAs?: string;

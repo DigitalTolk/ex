@@ -14,8 +14,8 @@ interface RunnerTokenResponse {
 let handedOff = false;
 
 // provideRunnerToken mints and hands the runner token to the desktop shell.
-// Once per app load is enough: the shell persists it (encrypted) and the
-// next launch re-mints on the next load anyway. No-op outside the shell.
+// Once per app load is enough: the shell holds it in memory only, so every
+// launch (and every reload) re-mints. No-op outside the shell.
 export async function provideRunnerToken(): Promise<void> {
   if (handedOff) return;
   const bridge = window.__EX_AGENT_RUNNER__;

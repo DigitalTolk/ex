@@ -12,7 +12,35 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/search"
 	"github.com/DigitalTolk/ex/internal/service"
+	"github.com/DigitalTolk/ex/internal/store"
 )
+
+// A tool error is the model's ONLY signal about what went wrong, and a model
+// given no reason invents one. A live run that failed to DM someone reported
+// "workspace/permission restrictions preventing agent-initiated DMs" and "the
+// user may be deactivated" — neither of which any of these paths can produce.
+// It had been told only "could not open the DM". So these helpers say what
+// actually happened and, where there is one, name the next move.
+
+// dmOpenFailure explains a GetOrCreateDM failure. The invoker always exists
+// (the run belongs to them), so a not-found is the RECIPIENT's id — which is
+// what happens when an agent guesses an id instead of resolving one.
+func dmOpenFailure(err error, userID string) string {
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Sprintf("no user with id %q — resolve the person with list_users and pass the id it returns", userID)
+	}
+	return "could not open the DM: " + err.Error()
+}
+
+// toolRejection keeps the underlying reason instead of discarding it. `hint`
+// names the usual cause when there is one; pass "" when there isn't.
+func toolRejection(what string, err error, hint string) string {
+	msg := what + ": " + err.Error()
+	if hint != "" {
+		msg += " — " + hint
+	}
+	return msg
+}
 
 // Workspace tool surface (Phase 3+): agents can act across Ex — list/create/
 // join channels, read and post outside their thread, search, react, DM —
@@ -43,6 +71,17 @@ func threadRef(ref string) string {
 		ref = ref[i+len("#msg-"):]
 	}
 	return trimMarker(ref, "m")
+}
+
+// userRef normalizes a user reference from a tool call. list_users answers in
+// the bundle's marker form (`[u:<id>] Name`), and models copy an id straight
+// out of what they were shown — so the bare id and the marker must both work.
+// Exactly the mistake threadRef already absorbs for message ids: a run that
+// looked up a real person still failed with "could not open the DM", because
+// GetUser was handed "[u:<id>]" and the user genuinely did not exist under
+// that key.
+func userRef(ref string) string {
+	return trimMarker(ref, "u")
 }
 
 // ListChannels lists the channels the INVOKER is in (the ones the agent can
@@ -189,9 +228,10 @@ func (h *AgentRunToolHandler) ReadDM(w http.ResponseWriter, r *http.Request) {
 		h.writeToolError(w, r, err)
 		return
 	}
-	conv, err := h.workspace.Conversations.GetOrCreateDM(r.Context(), claims.UserID, r.PathValue("userID"))
+	target := userRef(r.PathValue("userID"))
+	conv, err := h.workspace.Conversations.GetOrCreateDM(r.Context(), claims.UserID, target)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "could not open the DM")
+		writeError(w, http.StatusBadRequest, "bad_request", dmOpenFailure(err, target))
 		return
 	}
 	h.windowText(w, r, claims.UserID, conv.ID, service.ParentConversation, "the invoker cannot read this conversation")
@@ -325,7 +365,8 @@ func (h *AgentRunToolHandler) React(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "reserved_emoji", "that emoji is reserved for run states")
 			return
 		}
-		writeError(w, http.StatusForbidden, "forbidden", "reaction rejected")
+		writeError(w, http.StatusForbidden, "forbidden",
+			toolRejection("reaction rejected", err, "check the message id and that the invoker can see that channel"))
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"ok": true})
@@ -387,15 +428,16 @@ func (h *AgentRunToolHandler) SendDM(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, "post_cap", "per-run post cap reached")
 		return
 	}
-	conv, err := h.workspace.Conversations.GetOrCreateDM(r.Context(), claims.UserID, body.UserID)
+	target := userRef(body.UserID)
+	conv, err := h.workspace.Conversations.GetOrCreateDM(r.Context(), claims.UserID, target)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "could not open the DM")
+		writeError(w, http.StatusBadRequest, "bad_request", dmOpenFailure(err, target))
 		return
 	}
 	text := h.orch.LinkifyMentions(r.Context(), run, body.Body)
 	msg, err := h.messages.SendAsAgentRun(r.Context(), claims.ActorID, claims.UserID, conv.ID, service.ParentConversation, text, "", claims.RunID)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "forbidden", "DM rejected")
+		writeError(w, http.StatusForbidden, "forbidden", toolRejection("DM rejected", err, ""))
 		return
 	}
 	remaining, err := h.orch.RecordAgentPost(r.Context(), claims.RunID)
@@ -403,7 +445,7 @@ func (h *AgentRunToolHandler) SendDM(w http.ResponseWriter, r *http.Request) {
 		remaining = 0
 	}
 	h.orch.RecordWorkspaceAction(r.Context(), run, "dm_sent", map[string]any{
-		"toUserID": body.UserID, "conversationID": conv.ID, "messageID": msg.ID,
+		"toUserID": target, "conversationID": conv.ID, "messageID": msg.ID,
 	})
 	writeJSON(w, http.StatusOK, JSON{"messageID": msg.ID, "remainingPosts": remaining})
 }
@@ -539,7 +581,8 @@ func (h *AgentRunToolHandler) PinMessage(w http.ResponseWriter, r *http.Request)
 		pinned = *body.Pinned
 	}
 	if _, err := h.messages.SetPinned(r.Context(), claims.UserID, run.ParentID, run.ParentType, msgID, pinned); err != nil {
-		writeError(w, http.StatusForbidden, "forbidden", "pin rejected")
+		writeError(w, http.StatusForbidden, "forbidden",
+			toolRejection("pin rejected", err, "the message must be in this run's own channel or DM"))
 		return
 	}
 	action := "message_pinned"
@@ -578,13 +621,13 @@ func (h *AgentRunToolHandler) NotifyOwner(w http.ResponseWriter, r *http.Request
 	// The DM between the creator (invoker) and this agent.
 	conv, err := h.workspace.Conversations.GetOrCreateDM(r.Context(), claims.UserID, claims.ActorID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "could not open the owner DM")
+		writeError(w, http.StatusInternalServerError, "internal", "could not open the owner DM: "+err.Error())
 		return
 	}
 	text := h.orch.LinkifyMentions(r.Context(), run, body.Body)
 	msg, err := h.messages.SendAsAgentRun(r.Context(), claims.ActorID, claims.UserID, conv.ID, service.ParentConversation, text, "", claims.RunID)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "forbidden", "notify rejected")
+		writeError(w, http.StatusForbidden, "forbidden", toolRejection("notify rejected", err, ""))
 		return
 	}
 	h.orch.RecordWorkspaceAction(r.Context(), run, "owner_notified", map[string]any{

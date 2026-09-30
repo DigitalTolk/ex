@@ -560,6 +560,47 @@ func TestIngest_SSOWindow(t *testing.T) {
 	}
 }
 
+// The paste field's "where do I get this?" line comes WITH the registration,
+// so each service words its own. It is rendered as a link the user is invited
+// to click, which puts credentialURL on the same SSRF/phishing gate as every
+// other stored URL, and the hint on a length bound — it is one line under a
+// form field, not a second copy of the docs.
+func TestIngest_CredentialHint(t *testing.T) {
+	svc := NewConnectorService(newMemConnectorStore())
+	base := IngestInput{
+		Slug: "git", Title: "Git", BaseURL: "https://git.example.net/api/v4",
+		AuthKind: model.ConnectorAuthPaste,
+		Files:    []model.ConnectorFile{{Name: "index.yml", Content: "title: Git"}},
+	}
+
+	long := base
+	long.CredentialHint = strings.Repeat("x", model.ConnectorCredentialHintMaxLen+1)
+	if _, err := svc.Ingest(context.Background(), "admin", long); !errors.Is(err, ErrConnectorInvalid) ||
+		!strings.Contains(err.Error(), "credentialHint") {
+		t.Fatalf("overlong hint must be refused: %v", err)
+	}
+
+	AllowPrivateConnectorTargets(false)
+	bad := base
+	bad.CredentialURL = "http://git.example.net/-/user_settings/personal_access_tokens"
+	_, err := svc.Ingest(context.Background(), "admin", bad)
+	AllowPrivateConnectorTargets(true)
+	if !errors.Is(err, ErrConnectorInvalid) || !strings.Contains(err.Error(), "credentialURL") {
+		t.Fatalf("plain-http credentialURL must be refused: %v", err)
+	}
+
+	good := base
+	good.CredentialHint = "  Preferences → Access tokens, with the read_api scope.  "
+	good.CredentialURL = " https://git.example.net/-/user_settings/personal_access_tokens "
+	c, err := svc.Ingest(context.Background(), "admin", good)
+	if err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	if c.CredentialHint != strings.TrimSpace(good.CredentialHint) || c.CredentialURL != strings.TrimSpace(good.CredentialURL) {
+		t.Fatalf("credential hint not stored trimmed: %q / %q", c.CredentialHint, c.CredentialURL)
+	}
+}
+
 // displayName prefers a human label over a synthetic address: Metabase's API
 // keys report common_name (the key's name) and an "@api-key.invalid" email.
 func TestConnector_DisplayNameShapes(t *testing.T) {

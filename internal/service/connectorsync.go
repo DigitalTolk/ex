@@ -30,6 +30,8 @@ type providerRegistration struct {
 	StartURL       string `json:"startURL"`
 	CapturePattern string `json:"capturePattern"`
 	AuthHeader     string `json:"authHeader"`
+	CredentialHint string `json:"credentialHint"`
+	CredentialURL  string `json:"credentialURL"`
 }
 
 // providerManifest is one connector's manifest as the provider serves it. Slug
@@ -171,9 +173,10 @@ func (s *ConnectorService) SyncFromProvider(ctx context.Context, callerID string
 			BaseURL: reg.BaseURL, AuthKind: reg.AuthKind,
 			TokenURL: reg.TokenURL, ClientID: reg.ClientID, VerifyURL: reg.VerifyURL,
 			StartURL: reg.StartURL, CapturePattern: reg.CapturePattern,
-			AuthHeader: reg.AuthHeader,
-			Revision:   row.Revision,
-			Files:      files,
+			AuthHeader:     reg.AuthHeader,
+			CredentialHint: reg.CredentialHint, CredentialURL: reg.CredentialURL,
+			Revision: row.Revision,
+			Files:    files,
 		}); err != nil {
 			out.Skipped[row.Slug] = "ingest: " + err.Error()
 			continue

@@ -153,7 +153,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
         {statusBadge(agent.status, agent.resolved.harness === 'bedrock')}
         {customized && <Badge variant="outline">custom prompt</Badge>}
         {overrideCount > 0 && <Badge variant="outline">{overrideCount} customized</Badge>}
-        <span className="ml-auto text-xs text-muted-foreground">
+        <span className="ml-auto text-sm text-muted-foreground">
           for you: {agent.resolved.harness}
           {agent.resolved.model ? ` · ${agent.resolved.model}` : ''}
         </span>
@@ -164,7 +164,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
           and names the cloud alternative. */}
       {(agent.status === 'offline' || agent.status === 'needs_setup') && agent.resolved.harness !== 'bedrock' && (
         <p
-          className="border-t bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-muted-foreground"
+          className="border-t bg-amber-500/10 px-3 py-2 text-sm leading-relaxed text-muted-foreground"
           data-testid={`agent-cli-note-${agent.slug}`}
         >
           @{agent.displayName} uses the <span className="font-medium">{agent.resolved.harness} CLI</span>, so it runs
@@ -186,13 +186,13 @@ export function AgentCard({ agent }: { agent: AgentView }) {
             {customized ? (
               <button
                 type="button"
-                className="text-xs text-muted-foreground underline hover:text-foreground"
+                className="text-sm text-muted-foreground underline hover:text-foreground"
                 onClick={() => setPersona(defaultPersona)}
               >
                 Reset to workspace default
               </button>
             ) : (
-              <span className="text-xs text-muted-foreground">workspace default — edit to make it yours</span>
+              <span className="text-sm text-muted-foreground">workspace default — edit to make it yours</span>
             )}
           </div>
           <textarea
@@ -202,7 +202,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
             onChange={(e) => setPersona(e.target.value)}
           />
           {customized && (
-            <p className="mt-0.5 text-xs text-muted-foreground">
+            <p className="mt-0.5 text-sm text-muted-foreground">
               Your version — applies only when <em>you</em> invoke @{agent.displayName}, from your next
               task onward.
             </p>
@@ -318,7 +318,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
             {!effectiveBedrock && (
               <fieldset>
                 <legend className="text-sm font-medium">Don’t ask me to approve</legend>
-                <p className="mb-1 text-xs text-muted-foreground">
+                <p className="mb-1 text-sm text-muted-foreground">
                   Pre-approve harness tool classes for @{agent.displayName} on your machine. Everything
                   else still shows an approval card; inside a coding task the workspace profile applies too.
                 </p>
@@ -342,7 +342,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
             )}
 
             {isBedrock && (
-              <p className="text-xs text-muted-foreground">
+              <p className="text-sm text-muted-foreground">
                 Runs via AWS Bedrock ON THE SERVER — no desktop app, CLI, or personal AWS
                 credentials involved; the backend’s own AWS role makes the model calls. Bedrock
                 agents use the chat, workspace, and connector tools — never anyone’s local shell or

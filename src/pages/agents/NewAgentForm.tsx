@@ -64,7 +64,7 @@ export function NewAgentForm({ onDone }: { onDone: () => void }) {
               onChange={(e) => setSlug(e.target.value.toLowerCase())}
             />
           </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">Lowercase, how people @mention it.</p>
+          <p className="mt-0.5 text-sm text-muted-foreground">Lowercase, how people @mention it.</p>
         </div>
         <div>
           <Label htmlFor="new-agent-name">Display name</Label>
@@ -83,13 +83,13 @@ export function NewAgentForm({ onDone }: { onDone: () => void }) {
           {personaEdit !== null ? (
             <button
               type="button"
-              className="text-xs text-muted-foreground underline hover:text-foreground"
+              className="text-sm text-muted-foreground underline hover:text-foreground"
               onClick={() => setPersonaEdit(null)}
             >
               Reset to starter
             </button>
           ) : (
-            <span className="text-xs text-muted-foreground">starter prompt — tweak it to define this agent</span>
+            <span className="text-sm text-muted-foreground">starter prompt — tweak it to define this agent</span>
           )}
         </div>
         <textarea
@@ -138,7 +138,7 @@ export function NewAgentForm({ onDone }: { onDone: () => void }) {
             />
           </div>
           {isBedrock && (
-            <p className="self-end pb-2 text-xs text-muted-foreground">
+            <p className="self-end pb-2 text-sm text-muted-foreground">
               Runs on the server — no desktop app or personal AWS credentials needed.
             </p>
           )}

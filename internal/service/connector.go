@@ -137,6 +137,10 @@ type IngestInput struct {
 	// AuthHeader: how the credential is sent (see model.Connector.AuthHeader);
 	// empty = Authorization: Bearer.
 	AuthHeader string `json:"authHeader,omitempty"`
+	// CredentialHint + CredentialURL: the instruction shown under the paste
+	// field and the token page it links to (see model.Connector).
+	CredentialHint string `json:"credentialHint,omitempty"`
+	CredentialURL  string `json:"credentialURL,omitempty"`
 	// Revision is set by the provider sync (the bundle's content hash);
 	// direct admin uploads leave it empty.
 	Revision string `json:"revision,omitempty"`
@@ -168,7 +172,15 @@ func (s *ConnectorService) Ingest(ctx context.Context, callerID string, in Inges
 	if err := model.ValidateAuthHeader(in.AuthHeader); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrConnectorInvalid, err)
 	}
-	for label, u := range map[string]string{"baseURL": in.BaseURL, "tokenURL": in.TokenURL, "verifyURL": in.VerifyURL, "startURL": in.StartURL} {
+	// credentialURL is rendered as a link the user is invited to click, so it
+	// goes through the same gate as the rest: https, routable host, nothing
+	// exotic. A javascript: or data: "token page" would otherwise ship
+	// straight into the SPA with an admin's blessing.
+	if len(in.CredentialHint) > model.ConnectorCredentialHintMaxLen {
+		return nil, fmt.Errorf("%w: credentialHint must be at most %d characters",
+			ErrConnectorInvalid, model.ConnectorCredentialHintMaxLen)
+	}
+	for label, u := range map[string]string{"baseURL": in.BaseURL, "tokenURL": in.TokenURL, "verifyURL": in.VerifyURL, "startURL": in.StartURL, "credentialURL": in.CredentialURL} {
 		if err := validateOutboundURL(u); err != nil {
 			return nil, fmt.Errorf("%w: %s %s", ErrConnectorInvalid, label, err.Error())
 		}
@@ -226,6 +238,8 @@ func (s *ConnectorService) Ingest(ctx context.Context, callerID string, in Inges
 		StartURL:       in.StartURL,
 		CapturePattern: in.CapturePattern,
 		AuthHeader:     strings.TrimSpace(in.AuthHeader),
+		CredentialHint: strings.TrimSpace(in.CredentialHint),
+		CredentialURL:  strings.TrimSpace(in.CredentialURL),
 		Revision:       in.Revision,
 		FileNames:      names,
 		Services:       services,

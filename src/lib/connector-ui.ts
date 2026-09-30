@@ -62,7 +62,58 @@ export function summarizeError(message: string): ErrorSummary {
 
 // credentialNoun names the credential a connector's paste field wants, from
 // its auth header template: anything other than Authorization is an API key.
-export function credentialNoun(c: { authHeader?: string }): 'API key' | 'bearer token' {
+// Authorization takes what every service that mints one calls an access
+// token — "bearer" is how it rides the request, not what the user goes and
+// creates.
+export function credentialNoun(c: { authHeader?: string }): 'API key' | 'access token' {
   const name = (c.authHeader ?? '').split(':')[0].trim().toLowerCase();
-  return name && name !== 'authorization' ? 'API key' : 'bearer token';
+  return name && name !== 'authorization' ? 'API key' : 'access token';
+}
+
+function parseURL(raw?: string): URL | null {
+  try {
+    return new URL(raw ?? '');
+  } catch {
+    return null;
+  }
+}
+
+// httpURL keeps only a plain http(s) link. credentialURL is admin-owned and
+// the server refuses anything else at ingest, but it is rendered as an href
+// the user is invited to click — and rows registered before that check exist.
+function httpURL(raw?: string): string {
+  const u = parseURL(raw);
+  if (!u) return '';
+  return u.protocol === 'https:' || u.protocol === 'http:' ? u.toString() : '';
+}
+
+// tokenHelp is the "where do I get this?" line under the paste field.
+//
+// The connector says it: credentialHint/credentialURL come with the
+// registration, so each service words its own instruction and a new one needs
+// no change here. Either half may be missing — a hint with no page to open, or
+// a page that needs no explaining.
+//
+// GitLab falls back to a derived hint because it is the connector people
+// actually hit this on, and the fallback works before the registration
+// carries one. Nothing else gets a guess: a path we invented sends people
+// somewhere that does not exist, which is worse than no hint at all.
+export function tokenHelp(c: {
+  slug?: string;
+  baseURL?: string;
+  credentialHint?: string;
+  credentialURL?: string;
+}): { text: string; url: string } | null {
+  const hint = (c.credentialHint ?? '').trim();
+  const given = httpURL(c.credentialURL);
+  if (hint || given) return { text: hint, url: given };
+
+  const base = parseURL(c.baseURL);
+  if (!base) return null;
+  const host = base.hostname.toLowerCase();
+  if (!(host.includes('gitlab') || (c.slug ?? '').toLowerCase().includes('gitlab'))) return null;
+  return {
+    text: 'In GitLab: Preferences → Access tokens → Add new token, with the read_api and read_repository scopes.',
+    url: `${base.origin}/-/user_settings/personal_access_tokens`,
+  };
 }

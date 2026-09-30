@@ -18,7 +18,7 @@ import {
   useVerifyConnector,
   type Connector,
 } from '@/hooks/useConnectors';
-import { connectorInitials, connectorTint, credentialNoun, summarizeError } from '@/lib/connector-ui';
+import { connectorInitials, connectorTint, credentialNoun, summarizeError, tokenHelp } from '@/lib/connector-ui';
 import { showToast } from '@/lib/toast';
 
 // ConnectorsPage: external services agents can call on the user's behalf.
@@ -84,7 +84,7 @@ export default function ConnectorsPage() {
 function Section({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
   return (
     <section>
-      <h2 className="mb-2 px-1 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+      <h2 className="mb-2 px-1 text-sm font-medium tracking-wider text-muted-foreground uppercase">
         {title} <span className="text-muted-foreground/60">({count})</span>
       </h2>
       <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60 bg-card">{children}</div>
@@ -139,7 +139,7 @@ function ConnectorRow({ connector: c }: { connector: Connector }) {
       <div className="flex items-start gap-3">
         <div
           aria-hidden="true"
-          className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-semibold ${connectorTint(c.slug)}`}
+          className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold ${connectorTint(c.slug)}`}
         >
           {connectorInitials(c.title)}
         </div>
@@ -147,7 +147,7 @@ function ConnectorRow({ connector: c }: { connector: Connector }) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="font-medium">{c.title}</span>
-            <span className="font-mono text-xs text-muted-foreground">/{c.slug}</span>
+            <span className="font-mono text-sm text-muted-foreground">/{c.slug}</span>
             {c.installed && <StatusBadge connector={c} />}
             {unverified && (
               <Button variant="ghost" size="xs" className="text-muted-foreground" disabled={verify.isPending} onClick={() => verify.mutate(c.slug)}>
@@ -209,7 +209,7 @@ function ConnectorRow({ connector: c }: { connector: Connector }) {
 function StatusBadge({ connector: c }: { connector: Connector }) {
   const ok = c.installStatus === 'connected';
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs">
+    <span className="inline-flex items-center gap-1.5 text-sm">
       <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${ok ? 'bg-emerald-500' : 'bg-amber-500'}`} />
       <span className={ok ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}>
         {ok ? `Connected${c.connectedAs ? ` as ${c.connectedAs}` : ''}` : 'Unverified'}
@@ -225,7 +225,7 @@ function ErrorNote({ message }: { message: string }) {
   const { summary, details } = summarizeError(message);
   const [open, setOpen] = useState(false);
   return (
-    <div className="text-xs text-destructive">
+    <div className="text-sm text-destructive">
       <span>{summary}</span>
       {details && (
         <>
@@ -238,7 +238,7 @@ function ErrorNote({ message }: { message: string }) {
             {open ? 'Hide details' : 'Details'}
           </button>
           {open && (
-            <pre className="mt-1.5 max-h-40 overflow-auto rounded-md bg-muted/60 p-2 text-[11px] break-all whitespace-pre-wrap text-muted-foreground">
+            <pre className="mt-1.5 max-h-40 overflow-auto rounded-md bg-muted/60 p-2 text-sm break-all whitespace-pre-wrap text-muted-foreground">
               {details}
             </pre>
           )}
@@ -254,12 +254,12 @@ function ErrorNote({ message }: { message: string }) {
 function AgentUseControl({ connector: c }: { connector: Connector }) {
   const update = useUpdateConnectorInstall();
   return (
-    <label className="flex items-center gap-1 text-xs text-muted-foreground">
+    <label className="flex items-center gap-1 text-sm text-muted-foreground">
       <span className="whitespace-nowrap">
         Agents<span className="sr-only"> may use this</span>:
       </span>
       <select
-        className="h-6 min-w-0 rounded-md border-0 bg-transparent px-1 text-xs font-medium text-foreground/80 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="h-6 min-w-0 rounded-md border-0 bg-transparent px-1 text-sm font-medium text-foreground/80 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         value={c.agentUse ?? 'ask'}
         disabled={update.isPending}
         onChange={(e) =>
@@ -328,8 +328,11 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
   const canLogin = c.authKind === 'password';
   // What the paste field asks for: a connector whose credential header is
   // not Authorization takes an API key (Metabase's X-Api-Key). Calling that a
-  // "bearer token" had people pasting the right key under the wrong name.
+  // "bearer token" had people pasting the right key under the wrong name —
+  // and "access token" is what the services themselves call the one they mint.
   const credential = credentialNoun(c);
+  // Where to go and make one, when we can point at the exact page.
+  const help = tokenHelp(c);
   const anonymous = c.authKind === 'none';
   const canSSO = c.authKind === 'sso_window' && !!window.__EX_CONNECTOR_SSO__ && !!c.startURL;
   const [mode, setMode] = useState<'login' | 'paste'>(canLogin ? 'login' : 'paste');
@@ -399,7 +402,7 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
               )
             }
           />
-          <span className="text-xs text-muted-foreground">
+          <span className="text-sm text-muted-foreground">
             Opens a sign-in window with your Microsoft account.
             {ssoIdle && (
               <>
@@ -422,24 +425,24 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
         </div>
       )}
       {c.authKind === 'sso_window' && !canSSO && (
-        <p className="text-xs text-muted-foreground">
-          The desktop app signs in to {c.title} with one click; in the browser, paste a token.
+        <p className="text-sm text-muted-foreground">
+          The desktop app signs in to {c.title} with one click; in the browser, paste an access token.
         </p>
       )}
 
       {canLogin && !needsCode && (
-        <div className="inline-flex rounded-lg bg-muted p-0.5 text-xs" role="tablist" aria-label="Connection method">
+        <div className="inline-flex rounded-lg bg-muted p-0.5 text-sm" role="tablist" aria-label="Connection method">
           <button type="button" role="tab" aria-selected={mode === 'login'} onClick={() => setMode('login')} className={tabClass(mode === 'login')}>
             Sign in
           </button>
           <button type="button" role="tab" aria-selected={mode === 'paste'} onClick={() => setMode('paste')} className={tabClass(mode === 'paste')}>
-            {credential === 'API key' ? 'Paste an API key' : 'Paste a bearer token'}
+            {credential === 'API key' ? 'Paste an API key' : 'Paste an access token'}
           </button>
         </div>
       )}
 
       {anonymous ? (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           This service needs no credential — connecting just verifies it is reachable.
         </p>
       ) : needsCode ? (
@@ -457,7 +460,7 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
       ) : mode === 'paste' ? (
         ssoIdle ? null : (
           <div className="max-w-xl">
-            <Label htmlFor={`conn-token-${c.slug}`}>{credential === 'API key' ? 'API key' : 'Bearer token'}</Label>
+            <Label htmlFor={`conn-token-${c.slug}`}>{credential === 'API key' ? 'API key' : 'Access token'}</Label>
             <Input
               id={`conn-token-${c.slug}`}
               className="mt-1 h-8 font-mono"
@@ -467,7 +470,18 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
               autoFocus
               onChange={(e) => setToken(e.target.value)}
             />
-            <p className="mt-1 text-xs text-muted-foreground">
+            {help && (
+              <p className="mt-1 text-sm text-muted-foreground" data-testid={`conn-token-help-${c.slug}`}>
+                {help.text}
+                {help.text && help.url ? ' ' : null}
+                {help.url && (
+                  <a href={help.url} target="_blank" rel="noreferrer" className="text-link hover:underline">
+                    Open the token page
+                  </a>
+                )}
+              </p>
+            )}
+            <p className="mt-1 text-sm text-muted-foreground">
               Stored for your account only; agents use it when you pick /{c.slug} in a message.
             </p>
           </div>
@@ -494,7 +508,7 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
-            <p className="mt-1 text-xs text-muted-foreground">
+            <p className="mt-1 text-sm text-muted-foreground">
               Exchanged for a token once — your password is never stored.
             </p>
           </div>

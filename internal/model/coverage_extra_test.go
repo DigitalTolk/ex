@@ -597,3 +597,31 @@ func TestApprovalPurposes(t *testing.T) {
 		t.Fatal("the reply-mode purpose must be a non-empty constant")
 	}
 }
+
+// Skill visibility: a legacy row written before the field existed has an
+// empty Visibility and must still count as published — it was workspace-wide
+// then, and flipping it to private would make skills vanish for everyone.
+func TestSkill_IsPublishedAndVisibleTo(t *testing.T) {
+	cases := []struct {
+		name       string
+		visibility string
+		published  bool
+	}{
+		{"legacy row with no visibility", "", true},
+		{"explicitly published", SkillVisibilityPublished, true},
+		{"private", SkillVisibilityPrivate, false},
+	}
+	for _, c := range cases {
+		sk := &Skill{CreatedBy: "author", Visibility: c.visibility}
+		if got := sk.IsPublished(); got != c.published {
+			t.Fatalf("%s: IsPublished = %v, want %v", c.name, got, c.published)
+		}
+		// The author always sees their own, published or not.
+		if !sk.VisibleTo("author") {
+			t.Fatalf("%s: hidden from its own author", c.name)
+		}
+		if got := sk.VisibleTo("someone-else"); got != c.published {
+			t.Fatalf("%s: VisibleTo(other) = %v, want %v", c.name, got, c.published)
+		}
+	}
+}

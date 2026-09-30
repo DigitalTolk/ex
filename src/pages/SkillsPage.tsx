@@ -109,7 +109,7 @@ export default function SkillsPage() {
 function Section({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
   return (
     <section>
-      <h2 className="mb-2 px-1 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+      <h2 className="mb-2 px-1 text-sm font-medium tracking-wider text-muted-foreground uppercase">
         {title} <span className="text-muted-foreground/60">({count})</span>
       </h2>
       <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60 bg-card">
@@ -165,7 +165,7 @@ function SkillForm({ skill, onDone }: { skill?: Skill; onDone: () => void }) {
             maxLength={256}
             onChange={(e) => setDescription(e.target.value)}
           />
-          <p className="mt-0.5 text-xs text-muted-foreground">
+          <p className="mt-0.5 text-sm text-muted-foreground">
             Agents pick skills by this description — write it for them.
           </p>
         </div>
@@ -180,7 +180,7 @@ function SkillForm({ skill, onDone }: { skill?: Skill; onDone: () => void }) {
           maxLength={8192}
           onChange={(e) => setInstructions(e.target.value)}
         />
-        <p className="mt-0.5 text-xs text-muted-foreground">{instructions.length}/8192</p>
+        <p className="mt-0.5 text-sm text-muted-foreground">{instructions.length}/8192</p>
       </div>
       {!skill && (
         <fieldset className="space-y-1.5">
@@ -255,7 +255,7 @@ function VisibilityChoice({
       <span className={'mt-0.5 ' + (active ? 'text-primary' : 'text-muted-foreground')}>{icon}</span>
       <span className="min-w-0">
         <span className="block text-sm font-medium">{title}</span>
-        <span className="block text-xs text-muted-foreground">{blurb}</span>
+        <span className="block text-sm text-muted-foreground">{blurb}</span>
       </span>
     </button>
   );
@@ -265,7 +265,7 @@ function VisibilityChoice({
 // for published. Shown on your own skills (the team's are all published).
 function VisibilityBadge({ published }: { published: boolean }) {
   return (
-    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+    <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
       {published ? (
         <Globe className="h-3 w-3" aria-hidden="true" />
       ) : (
@@ -387,7 +387,7 @@ function SkillRow({
                       onError: () => showToast("Couldn't delete that skill — try again."),
                     })
                   }
-                  className="rounded-md border border-destructive/40 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                  className="rounded-md border border-destructive/40 px-2 py-1 text-sm font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50"
                 >
                   Delete “{skill.name}”?
                 </button>
@@ -399,7 +399,7 @@ function SkillRow({
           </div>
           <p className="mt-0.5 text-sm text-muted-foreground">{skill.description}</p>
           {/* Line 3: quiet provenance, out of the title line's way. */}
-          <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground/80">
+          <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-sm text-muted-foreground/80">
             {!own && addedBy && (
               <>
                 <span data-testid={`skill-author-${skill.name}`}>added by {addedBy}</span>
@@ -415,10 +415,10 @@ function SkillRow({
             )}
           </p>
           <details className="mt-2">
-            <summary className="cursor-pointer text-xs text-muted-foreground select-none hover:text-foreground">
+            <summary className="cursor-pointer text-sm text-muted-foreground select-none hover:text-foreground">
               Instructions
             </summary>
-            <pre className="mt-1.5 max-h-64 overflow-auto rounded bg-muted/50 p-2.5 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap">
+            <pre className="mt-1.5 max-h-64 overflow-auto rounded bg-muted/50 p-2.5 font-mono text-sm leading-relaxed break-words whitespace-pre-wrap">
               {skill.instructions}
             </pre>
           </details>

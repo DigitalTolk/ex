@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ConnectorsPage from '@/pages/ConnectorsPage';
-import { credentialNoun } from '@/lib/connector-ui';
+import { credentialNoun, tokenHelp } from '@/lib/connector-ui';
 import { ApiError } from '@/lib/api';
 import type { Connector } from '@/hooks/useConnectors';
 
@@ -123,12 +123,65 @@ beforeEach(() => {
 
 describe('credentialNoun', () => {
   it('asks for an API key only when the credential header is not Authorization', () => {
-    expect(credentialNoun({})).toBe('bearer token');
-    expect(credentialNoun({ authHeader: '' })).toBe('bearer token');
-    expect(credentialNoun({ authHeader: 'Authorization: Bearer {token}' })).toBe('bearer token');
-    expect(credentialNoun({ authHeader: 'authorization: Token {token}' })).toBe('bearer token');
+    expect(credentialNoun({})).toBe('access token');
+    expect(credentialNoun({ authHeader: '' })).toBe('access token');
+    expect(credentialNoun({ authHeader: 'Authorization: Bearer {token}' })).toBe('access token');
+    expect(credentialNoun({ authHeader: 'authorization: Token {token}' })).toBe('access token');
     expect(credentialNoun({ authHeader: 'X-Api-Key: {token}' })).toBe('API key');
     expect(credentialNoun({ authHeader: 'X-Api-Key' })).toBe('API key');
+  });
+});
+
+describe('tokenHelp', () => {
+  it('points at the token page of the connector own GitLab instance', () => {
+    expect(tokenHelp({ slug: 'gitlab', baseURL: 'https://git.example.net/api/v4' })).toEqual({
+      text: 'In GitLab: Preferences \u2192 Access tokens \u2192 Add new token, with the read_api and read_repository scopes.',
+      url: 'https://git.example.net/-/user_settings/personal_access_tokens',
+    });
+    // Recognised by host too, for a connector registered under another slug.
+    expect(tokenHelp({ slug: 'repos', baseURL: 'https://GitLab.example.net/api/v4' })?.url).toBe(
+      'https://gitlab.example.net/-/user_settings/personal_access_tokens',
+    );
+  });
+
+  it('prefers what the connector itself says over the derived fallback', () => {
+    expect(
+      tokenHelp({
+        slug: 'gitlab',
+        baseURL: 'https://git.example.net/api/v4',
+        credentialHint: '  Settings \u2192 Access tokens.  ',
+        credentialURL: 'https://git.example.net/-/tokens',
+      }),
+    ).toEqual({ text: 'Settings \u2192 Access tokens.', url: 'https://git.example.net/-/tokens' });
+    // Either half stands alone: a hint with no page, or a page needing no words.
+    expect(tokenHelp({ slug: 'mb', credentialHint: 'Admin \u2192 API keys.' })).toEqual({
+      text: 'Admin \u2192 API keys.',
+      url: '',
+    });
+    expect(tokenHelp({ slug: 'mb', credentialURL: 'https://mb.example.net/keys' })).toEqual({
+      text: '',
+      url: 'https://mb.example.net/keys',
+    });
+  });
+
+  it('refuses a credentialURL that is not a plain http(s) link', () => {
+    expect(tokenHelp({ slug: 'mb', credentialURL: 'javascript:alert(1)' })).toBeNull();
+    expect(tokenHelp({ slug: 'mb', credentialURL: 'data:text/html,<b>x' })).toBeNull();
+    expect(tokenHelp({ slug: 'mb', credentialURL: 'nonsense' })).toBeNull();
+    // …but it does not take the hint down with it.
+    expect(tokenHelp({ slug: 'mb', credentialHint: 'Admin \u2192 API keys.', credentialURL: 'javascript:alert(1)' })).toEqual({
+      text: 'Admin \u2192 API keys.',
+      url: '',
+    });
+  });
+
+  it('stays silent for services whose token page we cannot name', () => {
+    expect(tokenHelp({ slug: 'metabase', baseURL: 'https://mb.example.net/api' })).toBeNull();
+    // …including a row with a reachable base and no slug at all.
+    expect(tokenHelp({ baseURL: 'https://mb.example.net/api' })).toBeNull();
+    expect(tokenHelp({ slug: 'gitlab' })).toBeNull();
+    expect(tokenHelp({ slug: 'gitlab', baseURL: 'not-a-url' })).toBeNull();
+    expect(tokenHelp({})).toBeNull();
   });
 });
 
@@ -153,12 +206,81 @@ describe('ConnectorsPage', () => {
     fireEvent.click(mb.getByRole('button', { name: 'Connect' }));
     const form = within(mb.getByTestId('connect-form'));
     expect(form.getByLabelText('API key')).toHaveAttribute('placeholder', 'paste your API key for this service');
-    expect(form.queryByLabelText('Bearer token')).toBeNull();
+    expect(form.queryByLabelText('Access token')).toBeNull();
     // A password-kind connector with an API-key header names its paste tab accordingly.
     const legacy = await findCard('legacy');
     fireEvent.click(legacy.getByRole('button', { name: 'Connect' }));
     const lform = within(legacy.getByTestId('connect-form'));
     expect(lform.getByRole('tab', { name: 'Paste an API key' })).toBeInTheDocument();
+  });
+
+  it('tells GitLab users where to make an access token, and says nothing when it cannot', async () => {
+    installRoutes({
+      connectors: async () => ({
+        connectors: [
+          {
+            slug: 'gitlab', title: 'GitLab', description: 'repos', baseURL: 'https://git.example.net/api/v4',
+            authKind: 'paste', installed: false,
+          },
+          {
+            slug: 'metabase', title: 'Metabase', description: 'BI', baseURL: 'https://mb.example.net/api',
+            authKind: 'paste', authHeader: 'X-Api-Key: {token}', installed: false,
+          },
+        ],
+      }),
+    });
+    renderPage();
+    const gl = await findCard('gitlab');
+    fireEvent.click(gl.getByRole('button', { name: 'Connect' }));
+    const form = within(gl.getByTestId('connect-form'));
+    expect(form.getByLabelText('Access token')).toHaveAttribute('placeholder', 'paste your access token for this service');
+    const hint = form.getByTestId('conn-token-help-gitlab');
+    expect(hint.textContent).toContain('Preferences');
+    expect(hint.textContent).toContain('read_api');
+    expect(form.getByRole('link', { name: 'Open the token page' })).toHaveAttribute(
+      'href',
+      'https://git.example.net/-/user_settings/personal_access_tokens',
+    );
+
+    const mb = await findCard('metabase');
+    fireEvent.click(mb.getByRole('button', { name: 'Connect' }));
+    expect(within(mb.getByTestId('connect-form')).queryByTestId('conn-token-help-metabase')).toBeNull();
+  });
+
+  it('renders the instruction the connector registration supplies', async () => {
+    installRoutes({
+      connectors: async () => ({
+        connectors: [
+          {
+            slug: 'gitlab', title: 'GitLab', description: 'repos', baseURL: 'https://git.example.net/api/v4',
+            authKind: 'paste', installed: false,
+            credentialHint: 'Preferences \u2192 Access tokens, with the read_api scope.',
+            credentialURL: 'https://git.example.net/-/user_settings/personal_access_tokens',
+          },
+          {
+            slug: 'metabase', title: 'Metabase', description: 'BI', baseURL: 'https://mb.example.net/api',
+            authKind: 'paste', authHeader: 'X-Api-Key: {token}', installed: false,
+            credentialHint: 'Admin settings \u2192 API keys.',
+          },
+        ],
+      }),
+    });
+    renderPage();
+    const gl = await findCard('gitlab');
+    fireEvent.click(gl.getByRole('button', { name: 'Connect' }));
+    const form = within(gl.getByTestId('connect-form'));
+    expect(form.getByTestId('conn-token-help-gitlab').textContent).toContain('read_api scope');
+    expect(form.getByRole('link', { name: 'Open the token page' })).toHaveAttribute(
+      'href',
+      'https://git.example.net/-/user_settings/personal_access_tokens',
+    );
+
+    // A hint with no page to open renders as words alone, not a dead link.
+    const mb = await findCard('metabase');
+    fireEvent.click(mb.getByRole('button', { name: 'Connect' }));
+    const mform = within(mb.getByTestId('connect-form'));
+    expect(mform.getByTestId('conn-token-help-metabase').textContent).toBe('Admin settings \u2192 API keys.');
+    expect(mform.queryByRole('link', { name: 'Open the token page' })).toBeNull();
   });
 
   it('shows loading skeletons while connectors load', () => {
@@ -277,7 +399,7 @@ describe('ConnectorsPage', () => {
 
     const connectBtn = () => form.getByRole('button', { name: 'Connect' });
     expect(connectBtn()).toBeDisabled();
-    fireEvent.change(form.getByLabelText('Bearer token'), { target: { value: ' tok ' } });
+    fireEvent.change(form.getByLabelText('Access token'), { target: { value: ' tok ' } });
     expect(connectBtn()).toBeEnabled();
 
     installResult = () => Promise.reject('x');
@@ -340,9 +462,9 @@ describe('ConnectorsPage', () => {
 
     // Tab strip: sign-in is the default; paste swaps the credential inputs.
     expect(form.getByRole('tab', { name: 'Sign in' })).toHaveAttribute('aria-selected', 'true');
-    fireEvent.click(form.getByRole('tab', { name: 'Paste a bearer token' }));
-    expect(form.getByRole('tab', { name: 'Paste a bearer token' })).toHaveAttribute('aria-selected', 'true');
-    expect(form.getByLabelText('Bearer token')).toBeInTheDocument();
+    fireEvent.click(form.getByRole('tab', { name: 'Paste an access token' }));
+    expect(form.getByRole('tab', { name: 'Paste an access token' })).toHaveAttribute('aria-selected', 'true');
+    expect(form.getByLabelText('Access token')).toBeInTheDocument();
     fireEvent.click(form.getByRole('tab', { name: 'Sign in' }));
 
     const connectBtn = () => form.getByRole('button', { name: 'Connect' });
@@ -596,11 +718,11 @@ describe('sso_window connectors', () => {
     await screen.findByRole('button', { name: 'Sign in to CliffHub' });
     // Token input is tucked away and the primary Connect button is suppressed —
     // signing in is the main action.
-    expect(screen.queryByLabelText('Bearer token')).toBeNull();
+    expect(screen.queryByLabelText('Access token')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Connect' })).toBeNull();
     // The small fallback link reveals the paste field + its Connect button.
     fireEvent.click(screen.getByRole('button', { name: 'Paste a token instead' }));
-    fireEvent.change(screen.getByLabelText('Bearer token'), { target: { value: 'tok-x' } });
+    fireEvent.change(screen.getByLabelText('Access token'), { target: { value: 'tok-x' } });
     expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
   });
 
@@ -650,7 +772,7 @@ describe('sso_window connectors', () => {
     expect(await screen.findByText(/desktop app signs in to CliffHub/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Sign in to CliffHub' })).toBeNull();
     // Paste still works.
-    fireEvent.change(screen.getByLabelText('Bearer token'), { target: { value: 'tok-manual' } });
+    fireEvent.change(screen.getByLabelText('Access token'), { target: { value: 'tok-manual' } });
     expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
   });
 

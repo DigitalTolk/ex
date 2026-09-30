@@ -228,7 +228,8 @@ func bridgeTools(api *runAPI) []bedrock.Tool {
 		},
 		{
 			Name: "read_dm",
-			Description: "Read your INVOKER's own direct-message history with one user (they already see it in the " +
+			Description: "Read your INVOKER's own direct-message history with one user — pass an id from list_users, " +
+				"not a name (they already see it in the " +
 				"app). Use it when the task references something said in a DM; accepts the same thread narrowing " +
 				"as read_channel.",
 			Schema: obj(in{
@@ -287,7 +288,7 @@ func bridgeTools(api *runAPI) []bedrock.Tool {
 				"you have no handle on where something lives. When you already hold a message id, permalink, " +
 				"channel or user, read the source directly (read_channel / read_dm / read_pins) instead: search " +
 				"returns scattered single messages, never a whole conversation.",
-			Schema:      obj(in{"query": str("Search terms."), "limit": num("Max results (default 10, max 20).")}, "query"),
+			Schema: obj(in{"query": str("Search terms."), "limit": num("Max results (default 10, max 20).")}, "query"),
 			Call: func(ctx context.Context, raw json.RawMessage) (string, bool) {
 				v := parse(raw)
 				q := s(v, "query")
@@ -309,9 +310,10 @@ func bridgeTools(api *runAPI) []bedrock.Tool {
 			},
 		},
 		{
-			Name:        "add_reaction",
-			Description: "Toggle an emoji reaction on a message (e.g. acknowledge without a post).",
-			Schema:      obj(in{"messageID": str("Target message id ([m:<id>])."), "emoji": str("Emoji shortcode or literal."), "channelID": str("Channel id when the message is outside this run's parent.")}, "messageID", "emoji"),
+			Name: "add_reaction",
+			Description: "Toggle an emoji reaction on a message (e.g. acknowledge without a post). Pass the id from a " +
+				"[m:<id>] marker in your context.",
+			Schema: obj(in{"messageID": str("Target message id ([m:<id>])."), "emoji": str("Emoji shortcode or literal."), "channelID": str("Channel id when the message is outside this run's parent.")}, "messageID", "emoji"),
 			Call: func(ctx context.Context, raw json.RawMessage) (string, bool) {
 				v := parse(raw)
 				msgID, emoji := s(v, "messageID"), s(v, "emoji")
@@ -331,9 +333,10 @@ func bridgeTools(api *runAPI) []bedrock.Tool {
 			},
 		},
 		{
-			Name:        "list_users",
-			Description: "Find workspace members by name/email fragment — ids for DMs and mentions.",
-			Schema:      obj(in{"query": str("Name or email fragment (empty = everyone).")}),
+			Name: "list_users",
+			Description: "Find workspace members by name/email fragment — the ONLY way to turn a person's name into " +
+				"the id that send_dm, read_dm and mentions need.",
+			Schema: obj(in{"query": str("Name or email fragment (empty = everyone).")}),
 			Call: func(ctx context.Context, raw json.RawMessage) (string, bool) {
 				status, data := api.call(ctx, "GET", "/api/v1/agent/run/users?q="+url.QueryEscape(s(parse(raw), "query")), nil)
 				if status < 200 || status >= 300 {
@@ -343,9 +346,11 @@ func bridgeTools(api *runAPI) []bedrock.Tool {
 			},
 		},
 		{
-			Name:        "send_dm",
-			Description: "Send a direct message as the agent, on your invoker's behalf (counts against the post cap). DMing people beyond what was asked: request_approval first.",
-			Schema:      obj(in{"userID": str("Recipient user id."), "body": str("Message body.")}, "userID", "body"),
+			Name: "send_dm",
+			Description: "Send a direct message as the agent, on your invoker's behalf (counts against the post cap). " +
+				"userID must be a real id — call list_users first and pass the id it returns; a name, an @mention or " +
+				"a guessed id fails. DMing people beyond what was asked: request_approval first.",
+			Schema: obj(in{"userID": str("Recipient user id."), "body": str("Message body.")}, "userID", "body"),
 			Call: func(ctx context.Context, raw json.RawMessage) (string, bool) {
 				v := parse(raw)
 				uid, body := s(v, "userID"), s(v, "body")
@@ -455,9 +460,10 @@ func bridgeTools(api *runAPI) []bedrock.Tool {
 			},
 		},
 		{
-			Name:        "pin_message",
-			Description: "Pin (or unpin) a message in this conversation as your invoker.",
-			Schema:      obj(in{"message_id": str("The message to pin ([m:<id>])."), "pinned": map[string]any{"type": "boolean", "description": "false to unpin (default true)."}}, "message_id"),
+			Name: "pin_message",
+			Description: "Pin (or unpin) a message in this conversation as your invoker — only messages in THIS run's " +
+				"own channel or DM can be pinned.",
+			Schema: obj(in{"message_id": str("The message to pin ([m:<id>])."), "pinned": map[string]any{"type": "boolean", "description": "false to unpin (default true)."}}, "message_id"),
 			Call: func(ctx context.Context, raw json.RawMessage) (string, bool) {
 				v := parse(raw)
 				msgID := s(v, "message_id")

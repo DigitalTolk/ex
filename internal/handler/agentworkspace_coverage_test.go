@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -59,6 +60,7 @@ func (f *hwsCovRunStore) UpdateRun(_ context.Context, run *model.Run, _ model.Ru
 	f.runs[run.ID] = run
 	return nil
 }
+
 // AddRunSpend / AddRunPosts mirror the store's atomic counter updates.
 func (f *hwsCovRunStore) AddRunSpend(_ context.Context, runID, runnerID string, d store.RunSpendDelta) (*model.Run, error) {
 	if f.updateErr != nil {
@@ -119,8 +121,8 @@ func (f *hwsCovRunStore) AppendRunEvent(_ context.Context, evt *model.RunEvent) 
 func (f *hwsCovRunStore) ListRunEvents(context.Context, string) ([]*model.RunEvent, error) {
 	return nil, nil
 }
-func (f *hwsCovRunStore) DeleteRunEvents(context.Context, string) error       { return nil }
-func (f *hwsCovRunStore) PutDigest(context.Context, *model.RunDigest) error   { return nil }
+func (f *hwsCovRunStore) DeleteRunEvents(context.Context, string) error     { return nil }
+func (f *hwsCovRunStore) PutDigest(context.Context, *model.RunDigest) error { return nil }
 func (f *hwsCovRunStore) GetDigest(context.Context, string) (*model.RunDigest, error) {
 	return nil, store.ErrNotFound
 }
@@ -163,6 +165,7 @@ func (f *hwsCovOrchMsgs) SendAsAgentRun(context.Context, string, string, string,
 func (f *hwsCovOrchMsgs) SetMachineReaction(context.Context, string, string, string, string, string) error {
 	return nil
 }
+
 // CheckAccess is the membership rule behind run reads; the fakes allow
 // everything unless a test flips checkAccessErr.
 func (f *hwsCovOrchMsgs) CheckAccess(context.Context, string, string, string) error {
@@ -213,9 +216,9 @@ func (hwsCovAgentDir) GetTemplate(context.Context, string) (*model.AgentTemplate
 func (hwsCovAgentDir) ListTemplates(context.Context) ([]*model.AgentTemplate, error) {
 	return nil, nil
 }
-func (hwsCovAgentDir) CreateAgentUser(context.Context, *model.User) error          { return nil }
-func (hwsCovAgentDir) PutAgentPrefs(context.Context, *model.UserAgentPrefs) error  { return nil }
-func (hwsCovAgentDir) DeleteAgentPrefs(context.Context, string, string) error      { return nil }
+func (hwsCovAgentDir) CreateAgentUser(context.Context, *model.User) error         { return nil }
+func (hwsCovAgentDir) PutAgentPrefs(context.Context, *model.UserAgentPrefs) error { return nil }
+func (hwsCovAgentDir) DeleteAgentPrefs(context.Context, string, string) error     { return nil }
 func (hwsCovAgentDir) GetAgentPrefs(context.Context, string, string) (*model.UserAgentPrefs, error) {
 	return nil, store.ErrNotFound
 }
@@ -229,8 +232,8 @@ func (hwsCovAgentDir) GetSkill(context.Context, string) (*model.Skill, error) {
 	return nil, store.ErrNotFound
 }
 func (hwsCovAgentDir) ListSkillIndex(context.Context) ([]*model.Skill, error) { return nil, nil }
-func (hwsCovAgentDir) ListSkills(context.Context) ([]*model.Skill, error) { return nil, nil }
-func (hwsCovAgentDir) DeleteSkill(context.Context, string) error          { return nil }
+func (hwsCovAgentDir) ListSkills(context.Context) ([]*model.Skill, error)     { return nil, nil }
+func (hwsCovAgentDir) DeleteSkill(context.Context, string) error              { return nil }
 func (hwsCovAgentDir) PutAgentMemory(context.Context, *model.AgentMemory) error {
 	return nil
 }
@@ -688,7 +691,12 @@ func TestHwsCovReadDM(t *testing.T) {
 	t.Run("unknown user cannot open a DM", func(t *testing.T) {
 		env := newHwsCovEnv(t)
 		rec := env.do(t, env.h.ReadDM, http.MethodGet, "/", "", "hws-ghost-user", nil)
-		hwsCovWant(t, rec, http.StatusBadRequest, "could not open the DM")
+		// The id and the next move, not a bare "could not open the DM": this
+		// message IS the model's only signal, and a model given no reason
+		// invents one (a live run blamed "workspace/permission restrictions"
+		// and a "deactivated" account, neither of which this path produces).
+		hwsCovWant(t, rec, http.StatusBadRequest, "hws-ghost-user")
+		hwsCovWant(t, rec, http.StatusBadRequest, "list_users")
 	})
 }
 
@@ -851,6 +859,21 @@ func TestHwsCovListUsers(t *testing.T) {
 }
 
 func TestHwsCovSendDM(t *testing.T) {
+	// list_users answers "[u:<id>] Name", and models pass back the id exactly
+	// as they were shown it. Before this was absorbed, a run that had looked
+	// the person up correctly still failed with "could not open the DM" —
+	// GetUser was handed "[u:<id>]", which no user has as a key. Same mistake
+	// threadRef already absorbs for message ids.
+	t.Run("accepts the [u:id] marker list_users hands out", func(t *testing.T) {
+		for _, ref := range []string{"hws-bob", "[u:hws-bob]", "u:hws-bob", " [u:hws-bob] "} {
+			env := newHwsCovEnv(t)
+			body := `{"userID":` + strconv.Quote(ref) + `,"body":"hi"}`
+			rec := env.do(t, env.h.SendDM, http.MethodPost, "/", body, "", nil)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("userID %q: status %d, body %s", ref, rec.Code, rec.Body.String())
+			}
+		}
+	})
 	t.Run("bad body", func(t *testing.T) {
 		env := newHwsCovEnv(t)
 		rec := env.do(t, env.h.SendDM, http.MethodPost, "/", `{"userID":"","body":"hi"}`, "", nil)

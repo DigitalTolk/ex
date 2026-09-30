@@ -51,7 +51,7 @@ export function WatchedChannels({ agent }: { agent: AgentView }) {
         <Eye className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
         Watched channels
       </div>
-      <p className="mb-2 text-xs text-muted-foreground">
+      <p className="mb-2 text-sm text-muted-foreground">
         @{agent.displayName} reacts to matching messages in these channels without being mentioned —{' '}
         {agent.resolved.harness === 'bedrock' ? 'on the server' : 'on your machine'}, with your
         access. Keywords empty = every message; check-ins post only when something needs attention.
@@ -61,7 +61,7 @@ export function WatchedChannels({ agent }: { agent: AgentView }) {
           {subs?.map((sub) => (
             <li
               key={sub.id}
-              className="flex items-center gap-2 rounded-md border px-2 py-1 text-xs"
+              className="flex items-center gap-2 rounded-md border px-2 py-1 text-sm"
               data-testid={`agent-sub-${sub.id}`}
             >
               <span className="font-medium">~{channelName(sub.parentID)}</span>
@@ -89,7 +89,7 @@ export function WatchedChannels({ agent }: { agent: AgentView }) {
       <div className="flex flex-wrap items-center gap-2">
         <select
           aria-label="Channel to watch"
-          className="rounded-md border bg-transparent p-1.5 text-xs"
+          className="rounded-md border bg-transparent p-1.5 text-sm"
           value={channelID}
           onChange={(e) => setChannelID(e.target.value)}
         >
@@ -101,14 +101,14 @@ export function WatchedChannels({ agent }: { agent: AgentView }) {
           ))}
         </select>
         <Input
-          className="h-8 w-48 text-xs"
+          className="h-8 w-48 text-sm"
           placeholder="keywords, comma-separated"
           value={keywords}
           onChange={(e) => setKeywords(e.target.value)}
         />
         <select
           aria-label="Check-in interval"
-          className="rounded-md border bg-transparent p-1.5 text-xs"
+          className="rounded-md border bg-transparent p-1.5 text-sm"
           value={heartbeat}
           onChange={(e) => setHeartbeat(e.target.value)}
         >

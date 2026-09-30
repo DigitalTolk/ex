@@ -455,10 +455,18 @@ func (o *Orchestrator) OnMessage(ctx context.Context, msg *model.Message, parent
 	for _, target := range targets {
 		if err := o.invoke(ctx, invocation{agent: target, invoker: author, msg: msg,
 			parentType: parentType, co: co, runners: authorRunners}); err != nil {
-			// ErrAgentBusy still counts as invoked — that agent is mid-turn in
-			// this very thread and its reply covers the message. Anything else
-			// means no run exists, so let the ambient paths have their turn.
-			if !errors.Is(err, ErrAgentBusy) {
+			// ErrAgentBusy still counts as invoked — this person already has a
+			// live turn with this agent in this thread. But the in-flight run's
+			// prompt was assembled BEFORE this message existed, so its reply
+			// cannot address it: dropping the message meant a second question
+			// asked while the agent was still thinking got no answer and no
+			// notice. Queue it instead — afterTerminal starts it with the whole
+			// thread, including everything posted since.
+			if errors.Is(err, ErrAgentBusy) {
+				o.deferTurn(ctx, turnKey(msg.ParentID, threadRootOf(msg), target.ID, author.ID), &deferredTurn{
+					agentID: target.ID, invokerID: author.ID, msg: msg, parentType: parentType,
+				})
+			} else {
 				delete(invoked, target.ID)
 			}
 			o.postInvokeFailure(ctx, target, author, msg, parentType, err)
@@ -937,8 +945,26 @@ func (o *Orchestrator) startRun(ctx context.Context, in invocation, resolved *mo
 		UpdatedAt: now,
 	}
 	key := o.threadAgentKey(run)
-	if _, busy := o.threadActive.LoadOrStore(key, run.ID); busy {
-		return nil, ErrAgentBusy
+	if held, busy := o.threadActive.LoadOrStore(key, run.ID); busy {
+		// The slot is in-PROCESS memory, but a run's life is not: the runner's
+		// calls are load balanced, so the terminal transition — and with it
+		// afterTerminal, which releases this slot — can land on a different
+		// instance than the one that took it. That instance has no
+		// runThreadKey entry for the run, so the slot was never freed here and
+		// this (thread, agent) went permanently "busy": every later message
+		// routed to this instance returned ErrAgentBusy, which the dispatcher
+		// deliberately treats as "already invoked" and so answers with total
+		// silence. An agent replied a couple of times and then stopped for
+		// good.
+		//
+		// So a busy verdict is checked against the store rather than trusted.
+		// Only paid when we would otherwise refuse, and it converts a
+		// permanent wedge into a self-healing one.
+		if !o.threadSlotStillLive(ctx, held) {
+			o.threadActive.Store(key, run.ID)
+		} else {
+			return nil, ErrAgentBusy
+		}
 	}
 	if err := o.runs.CreateRun(ctx, run); err != nil {
 		o.threadActive.Delete(key)
@@ -955,16 +981,40 @@ func (o *Orchestrator) startRun(ctx context.Context, in invocation, resolved *mo
 }
 
 // threadAgentKey identifies "this agent in this thread" for turn dedup.
+// threadSlotStillLive reports whether the run holding a thread-turn slot is
+// genuinely still going. An unreadable or vanished run counts as finished:
+// refusing every future turn because of a run nobody can find is strictly
+// worse than letting one extra turn through.
+func (o *Orchestrator) threadSlotStillLive(ctx context.Context, held any) bool {
+	runID, _ := held.(string)
+	if runID == "" {
+		return false
+	}
+	cur, err := o.runs.GetRun(ctx, runID)
+	if err != nil || cur == nil {
+		return false
+	}
+	return !cur.State.Terminal()
+}
+
 func (o *Orchestrator) threadAgentKey(run *model.Run) string {
-	return turnKey(run.ParentID, o.replyThreadRoot(run), run.AgentID)
+	return turnKey(run.ParentID, o.replyThreadRoot(run), run.AgentID, run.InvokerID)
 }
 
 // turnKey is the ONE definition of the (parent, thread, agent) dedup key. It
 // was hand-built at three call sites, each free to drift from the others —
 // and a key that disagrees with threadAgentKey silently breaks turn dedup and
 // deferred handoffs, with nothing to notice it.
-func turnKey(parentID, threadRootID, agentID string) string {
-	return parentID + "#" + threadRootID + "#" + agentID
+// The INVOKER is part of the key. A run executes on its invoker's machine,
+// on their quota, with their prompt — so two people asking the same agent in
+// the same thread are two independent turns, not a collision. Keyed without
+// the invoker, the second person's mention returned ErrAgentBusy, which the
+// dispatcher treats as "already invoked" and answers with silence: on a busy
+// prd channel one person's question quietly cancelled everyone else's. Dedup
+// still holds where it was meant to — one live turn per person per agent per
+// thread, so a mention storm cannot stack runs.
+func turnKey(parentID, threadRootID, agentID, invokerID string) string {
+	return parentID + "#" + threadRootID + "#" + agentID + "#" + invokerID
 }
 
 // turnKeyPrefix matches every agent's key in one thread.
@@ -988,11 +1038,15 @@ func (o *Orchestrator) agentUser(ctx context.Context, id string) *model.User {
 // context bundle).
 func (o *Orchestrator) afterTerminal(ctx context.Context, run *model.Run) {
 	o.skillUses.Delete(run.ID)
-	if key, ok := o.runThreadKey.LoadAndDelete(run.ID); ok {
-		o.threadActive.Delete(key.(string))
+	// Recompute rather than rely on runThreadKey: this instance may never have
+	// invoked the run (recovered at boot, or invoked elsewhere), and then the
+	// lookup misses and the slot leaks.
+	o.runThreadKey.Delete(run.ID)
+	if key := o.threadAgentKey(run); key != "" {
+		o.threadActive.Delete(key)
 		// A handoff queued while this agent was mid-turn starts now — it will
 		// see everything posted since, including the message that tagged it.
-		o.startDeferredTurn(ctx, key.(string))
+		o.startDeferredTurn(ctx, key)
 	}
 	// The run is done: tier its timeline to object storage and drop the hot
 	// rows. Last, so every lifecycle event (including run.completed/failed) is
@@ -1014,10 +1068,70 @@ func (o *Orchestrator) deferTurn(ctx context.Context, key string, turn *deferred
 	if _, loaded := o.deferredTurns.LoadOrStore(key, turn); loaded {
 		return
 	}
-	if _, busy := o.threadActive.Load(key); busy {
-		return // the live run's afterTerminal owns it
+	if held, busy := o.threadActive.Load(key); busy {
+		// This instance's afterTerminal owns the handoff — but only this
+		// instance's. The parked turn lives in per-PROCESS memory while the
+		// run it waits on does not: the terminal transition is load balanced,
+		// and when it lands on a sibling that instance drains its OWN (empty)
+		// deferral map. The handoff parked here then waits for a release that
+		// never comes — the agent answering one reply in a DM thread and
+		// nothing after it, which is the wedge this whole path exists to
+		// prevent. So watch the run from here too.
+		o.watchDeferred(ctx, key, held, turn)
+		return
 	}
 	o.startDeferredTurn(ctx, key)
+}
+
+// deferredWatchInterval paces the re-check of a run that a handoff is parked
+// behind, and deferredWatchLimit caps how long we wait for it. Vars so tests
+// can shrink them.
+var (
+	deferredWatchInterval = 2 * time.Second
+	deferredWatchLimit    = 30 * time.Minute
+)
+
+// watchDeferred starts the parked handoff if the run blocking it finishes
+// somewhere this instance cannot see. Whichever of the two paths gets there
+// first wins: startDeferredTurn takes the entry atomically, so afterTerminal
+// and this watchdog can never both start the same turn.
+func (o *Orchestrator) watchDeferred(ctx context.Context, key string, held any, turn *deferredTurn) {
+	runID, _ := held.(string)
+	if runID == "" {
+		return
+	}
+	// Detached from the request that parked the turn (it returns in
+	// milliseconds; the run it waits on can take minutes) but keeping its
+	// values.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deferredWatchLimit)
+	safe.Go(func() {
+		defer cancel()
+		ticker := time.NewTicker(deferredWatchInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				// Give the slot up rather than hold it: ONE turn is parked per
+				// (thread, agent) and the first one wins, so a stale entry
+				// would refuse every later handoff for this thread forever.
+				if o.deferredTurns.CompareAndDelete(key, turn) {
+					slog.Warn("deferred turn expired: run never released the thread slot",
+						"agentID", turn.agentID, "invokerID", turn.invokerID, "runID", runID)
+				}
+				return
+			case <-ticker.C:
+				if _, parked := o.deferredTurns.Load(key); !parked {
+					return // afterTerminal started it
+				}
+				if o.threadSlotStillLive(ctx, runID) {
+					continue
+				}
+				o.threadActive.CompareAndDelete(key, runID)
+				o.startDeferredTurn(ctx, key)
+				return
+			}
+		}
+	})
 }
 
 // startDeferredTurn starts the parked handoff for this thread+agent, if any.
@@ -1082,7 +1196,7 @@ func (o *Orchestrator) ChainFromAgentPost(ctx context.Context, run *model.Run, m
 			if errors.Is(err, ErrAgentBusy) {
 				// The target is mid-turn in this thread — QUEUE the handoff
 				// instead of dropping it.
-				o.deferTurn(ctx, turnKey(run.ParentID, threadRootOf(msg), target.ID), &deferredTurn{
+				o.deferTurn(ctx, turnKey(run.ParentID, threadRootOf(msg), target.ID, run.InvokerID), &deferredTurn{
 					agentID: target.ID, invokerID: invoker.ID,
 					msg: msg, parentType: run.ParentType, round: nextRound,
 				})
@@ -2440,6 +2554,9 @@ func (o *Orchestrator) onLeaseExpired(runID string) {
 	defer cancel()
 	run, err := o.runs.GetRun(ctx, runID)
 	if err != nil || run.State.Terminal() {
+		// Already finished — by this instance or another. Either way nothing
+		// here should still be claiming the agent is typing.
+		o.stopTypingTicker(runID)
 		return
 	}
 	if run.LeaseExpiresAt != nil && run.LeaseExpiresAt.After(o.now()) {
@@ -2514,6 +2631,19 @@ func (o *Orchestrator) startTypingTicker(run *model.Run) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				// The store is the only shared truth about whether this run is
+				// still going. This ticker is per-PROCESS memory, but a run is
+				// not: recoverRuns arms a ticker on every instance that boots
+				// while the run is live, and the terminal transition only ever
+				// stops the ticker in the instance that handled it. With more
+				// than one instance (prd runs two) the others kept publishing
+				// "… is typing" forever — the indicator outliving the answer by
+				// hours, not seconds. Re-reading here costs one GetRun per tick
+				// per live run and makes every instance self-healing.
+				if cur, err := o.runs.GetRun(ctx, r.ID); err == nil && cur.State.Terminal() {
+					o.stopTypingTicker(r.ID)
+					return
+				}
 				o.publishAgentTyping(ctx, &r)
 			}
 		}

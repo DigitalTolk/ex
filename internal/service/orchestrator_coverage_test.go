@@ -24,22 +24,22 @@ var errOrchCov = errors.New("orchCov: boom")
 // orchCovRunStore wraps fakeRunStore with per-method error injection.
 type orchCovRunStore struct {
 	*fakeRunStore
-	failCreateRun     error
-	failGetRun        error
-	failUpdateRun     error
-	failUpdateExpect  *model.RunState // when non-nil, failUpdateRun applies only to this expect
-	failAddSpend      error
-	failAddPosts      error
-	failListQueued    error
-	failClaimRun      error
-	failListActive    error
-	failPastDeadline  error
-	failAppendEvent   error
-	failListEvents    error
-	failDeleteEvents  error
-	failPutDigest     error
-	failListByParent  error
-	failPutApproval   error
+	failCreateRun    error
+	failGetRun       error
+	failUpdateRun    error
+	failUpdateExpect *model.RunState // when non-nil, failUpdateRun applies only to this expect
+	failAddSpend     error
+	failAddPosts     error
+	failListQueued   error
+	failClaimRun     error
+	failListActive   error
+	failPastDeadline error
+	failAppendEvent  error
+	failListEvents   error
+	failDeleteEvents error
+	failPutDigest    error
+	failListByParent error
+	failPutApproval  error
 }
 
 func (s *orchCovRunStore) CreateRun(ctx context.Context, run *model.Run) error {
@@ -219,14 +219,14 @@ func (u *orchCovUsers) GetUsersByIDs(ctx context.Context, ids []string) ([]*mode
 // orchCovDir wraps fakeAgentDir with error injection.
 type orchCovDir struct {
 	*fakeAgentDir
-	failPutSub            error
-	failListAllSubs       error
-	failListSubsByParent  error
-	failPutRunner         error
-	failPutFollow         error
-	failListRunners       error
-	failListTemplates     error
-	failListSkillIndex    error
+	failPutSub           error
+	failListAllSubs      error
+	failListSubsByParent error
+	failPutRunner        error
+	failPutFollow        error
+	failListRunners      error
+	failListTemplates    error
+	failListSkillIndex   error
 }
 
 func (d *orchCovDir) ListSkillIndex(ctx context.Context) ([]*model.Skill, error) {
@@ -915,7 +915,9 @@ func TestOrchCov_ChainBusyDeferralFromTopLevelPost(t *testing.T) {
 		ParentType: ParentChannel, Limits: model.DefaultAgentLimits()}
 	post := &model.Message{ID: "m1", ParentID: "chan1", AuthorID: testGGID, Body: "@[" + testQibID + "|qib] ping"}
 	fx.orch.ChainFromAgentPost(ctx, ggRun, post)
-	if _, ok := fx.orch.deferredTurns.Load("chan1#m1#" + testQibID); !ok {
+	// Keyed per invoker: the chain runs on gg's invoker's behalf, so the slot
+	// it contends for is alice's, not "anyone's".
+	if _, ok := fx.orch.deferredTurns.Load("chan1#m1#" + testQibID + "#u-alice"); !ok {
 		t.Fatal("busy top-level chain handoff not deferred")
 	}
 }
@@ -1187,8 +1189,8 @@ func TestOrchCov_ClaimZeroLimitsAndDeadlineClamp(t *testing.T) {
 		ID: "run-manual", AgentID: testGGID, OwnerID: "u-alice", InvokerID: "u-alice",
 		ParentID: "chan1", ParentType: ParentChannel, MessageID: "m1",
 		State: model.RunStateQueued, Mode: model.RunModeDirect,
-		Harness: model.HarnessClaude,
-		Limits:  model.AgentLimits{MaxWallClockSec: 9_999_999, MaxTaskWallClockSec: 10},
+		Harness:  model.HarnessClaude,
+		Limits:   model.AgentLimits{MaxWallClockSec: 9_999_999, MaxTaskWallClockSec: 10},
 		Deadline: fx.now.Add(time.Hour), CreatedAt: *fx.now, UpdatedAt: *fx.now,
 	}
 	if err := fx.runs.fakeRunStore.CreateRun(ctx, run); err != nil {
@@ -1198,7 +1200,7 @@ func TestOrchCov_ClaimZeroLimitsAndDeadlineClamp(t *testing.T) {
 		ID: "run-manual2", AgentID: testQibID, OwnerID: "u-alice", InvokerID: "u-alice",
 		ParentID: "chan1", ParentType: ParentChannel, MessageID: "m2",
 		State: model.RunStateQueued, Mode: model.RunModeDirect,
-		Harness: model.HarnessClaude, // zero limits entirely
+		Harness:  model.HarnessClaude, // zero limits entirely
 		Deadline: fx.now.Add(time.Hour), CreatedAt: *fx.now, UpdatedAt: *fx.now,
 	}
 	if err := fx.runs.fakeRunStore.CreateRun(ctx, run2); err != nil {
@@ -2238,7 +2240,7 @@ func TestOrchCov_WindowRenderingArms(t *testing.T) {
 	base := *fx.now
 	fx.msgs.thread = []*model.Message{
 		{ID: "w1", AuthorID: "u-alice", Body: "oldest", CreatedAt: base.Add(-3 * time.Minute), ReplyCount: 2},
-		{ID: "w2", AuthorID: "u-bob", Body: "", CreatedAt: base.Add(-2 * time.Minute)},          // empty → skipped
+		{ID: "w2", AuthorID: "u-bob", Body: "", CreatedAt: base.Add(-2 * time.Minute)},                // empty → skipped
 		{ID: "w3", AuthorID: "u-bob", Body: "gone", Deleted: true, CreatedAt: base.Add(-time.Minute)}, // deleted → skipped
 		{ID: "w4", AuthorID: "u-bob", Body: "newest", CreatedAt: base},
 	}

@@ -148,6 +148,10 @@ type fakeTaskChannels struct {
 	mu       sync.Mutex
 	channels map[string]*model.Channel
 	members  map[string]map[string]bool // channelID -> userID
+	// failUpdate forces Update to fail, for the best-effort rename arm: a
+	// legacy channel that cannot be renamed must keep working under its old
+	// name rather than failing the task.
+	failUpdate error
 }
 
 func newFakeTaskChannels() *fakeTaskChannels {
@@ -201,6 +205,9 @@ func (f *fakeTaskChannels) CreateWithID(_ context.Context, userID, id, name stri
 func (f *fakeTaskChannels) Update(_ context.Context, actorID, channelID string, name, description *string) (*model.Channel, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failUpdate != nil {
+		return nil, f.failUpdate
+	}
 	ch, ok := f.channels[channelID]
 	if !ok {
 		return nil, store.ErrNotFound
@@ -1090,5 +1097,33 @@ func TestCodingTask_LegacyRowsNormalizeAndSignOffRetries(t *testing.T) {
 	notes := fx.tmsgs.postsIn("chan1", "card1")
 	if !strings.Contains(strings.Join(notes, "\n"), "Retrying the merge-request step") {
 		t.Fatalf("retry must be announced in the thread: %v", notes)
+	}
+}
+
+// Renaming a legacy project channel is BEST EFFORT. When the rename fails the
+// task must still be created against the old channel — the alternative is
+// refusing someone's work because a cosmetic rename didn't take.
+func TestCodingTaskService_LegacyChannelRenameFailureKeepsWorking(t *testing.T) {
+	fx := newTaskFixture(t)
+	ctx := context.Background()
+	legacyID := legacyProjectChannelID("cliffhub")
+	fx.chans.channels[legacyID] = &model.Channel{
+		ID: legacyID, Name: "cliffhub", Slug: "cliffhub",
+		Type: model.ChannelTypePrivate, CreatedBy: "u-alice",
+	}
+	fx.chans.members[legacyID] = map[string]bool{"u-alice": true, testDevID: true}
+	fx.chans.failUpdate = errors.New("rename refused")
+
+	repos := []RepoInput{{Path: "dtolk/internal-tools/cliffhub-2-backend", Role: "backend"}}
+	res, err := fx.svc.Create(ctx, fx.intakeRunAs(t, testDevID, "ask-lf", "u-alice"),
+		CreateTaskInput{Project: "CliffHub", Repos: repos, Title: "T", Goal: "g"})
+	if err != nil {
+		t.Fatalf("a failed rename must not fail the task: %v", err)
+	}
+	if res.Channel.ID != legacyID {
+		t.Fatalf("task must still land in the legacy channel, got %s", res.Channel.ID)
+	}
+	if res.Channel.Slug != "cliffhub" {
+		t.Fatalf("the old name must survive a failed rename, got %q", res.Channel.Slug)
 	}
 }

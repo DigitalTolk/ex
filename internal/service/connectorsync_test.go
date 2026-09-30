@@ -97,7 +97,8 @@ func TestSyncFromProvider_MixedCatalog(t *testing.T) {
 	goodManifest := `{
 		"slug": "good", "revision": "abc", "title": "", "description": "provider desc",
 		"files": [{"name": "api.yaml"}],
-		"registration": {"title": "", "description": "", "baseURL": "https://api.example.net", "authKind": "paste", "verifyURL": "https://api.example.net/me"}
+		"registration": {"title": "", "description": "", "baseURL": "https://api.example.net", "authKind": "paste", "verifyURL": "https://api.example.net/me",
+			"credentialHint": "Settings \u2192 Access tokens.", "credentialURL": "https://api.example.net/-/tokens"}
 	}`
 	badIngestManifest := `{
 		"slug": "badingest", "revision": "abc",
@@ -173,6 +174,11 @@ func TestSyncFromProvider_MixedCatalog(t *testing.T) {
 	}
 	if c.Description != "provider desc" {
 		t.Fatalf("description fallback: want provider desc, got %q", c.Description)
+	}
+	// The registration's "where do I get this?" line has to survive the trip:
+	// it is the whole point of putting it on the provider rather than in the SPA.
+	if c.CredentialHint != "Settings → Access tokens." || c.CredentialURL != "https://api.example.net/-/tokens" {
+		t.Fatalf("credential hint not carried from the registration: %q / %q", c.CredentialHint, c.CredentialURL)
 	}
 	if len(st.files["good"]) != 1 || st.files["good"][0].Content == "" {
 		t.Fatalf("files not ingested: %+v", st.files["good"])
