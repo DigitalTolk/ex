@@ -22,6 +22,7 @@ vi.mock('@/context/PresenceContext', () => ({
 vi.mock('@/components/settings/SettingsDialog', () => ({ SettingsDialog: ({ open }: { open: boolean }) => open ? <div data-testid="settings-open" /> : null }));
 vi.mock('@/components/UserStatusDialog', () => ({ UserStatusDialog: ({ open }: { open: boolean }) => open ? <div data-testid="status-open" /> : null }));
 vi.mock('@/components/AboutDialog', () => ({ AboutDialog: ({ open }: { open: boolean }) => open ? <div data-testid="about-open" /> : null }));
+vi.mock('@/components/emoji/CustomEmojiDialog', () => ({ CustomEmojiDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="emojis-open" /> : null) }));
 vi.mock('@/components/InviteDialog', () => ({ InviteDialog: ({ open }: { open: boolean }) => open ? <div data-testid="invite-open" /> : null }));
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 
@@ -63,11 +64,13 @@ describe('AccountMenu menu actions', () => {
     expect(screen.getByTestId('status-open')).toBeInTheDocument();
   });
 
-  it('navigates to the custom emoji page from the menu', () => {
+  it('opens Custom emojis as a pop-up (no navigation) from the menu', () => {
     renderMenu();
+    const before = screen.getByTestId('location-probe').textContent;
     fireEvent.click(screen.getByTestId('account-menu-trigger'));
     fireEvent.click(screen.getByTestId('user-menu-emojis'));
-    expect(screen.getByTestId('location-probe')).toHaveTextContent('/emojis');
+    expect(screen.getByTestId('emojis-open')).toBeInTheDocument();
+    expect(screen.getByTestId('location-probe').textContent).toBe(before);
   });
 
   it('triggers admin navigation from the menu without crashing', () => {

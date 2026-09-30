@@ -260,12 +260,14 @@ describe('AccountMenu own custom status', () => {
     mockUserStatus = undefined;
   });
 
-  it('does NOT overlay the custom status on the desktop account avatar (removed — it read as clutter)', () => {
+  it('shows the active custom status emoji right after the name (not on the avatar)', () => {
     mockUserStatus = { emoji: '🌴', text: 'On vacation' };
     renderMenu();
-    // Only the presence dot rides the avatar now; the status emoji is gone.
-    expect(screen.queryByLabelText("On vacation, won't clear automatically")).toBeNull();
-    expect(screen.getByTestId('account-menu-trigger').querySelector('[data-presence]')).not.toBeNull();
+    const trigger = screen.getByTestId('account-menu-trigger');
+    const badge = within(trigger).getByLabelText("On vacation, won't clear automatically");
+    // Sits beside the name, not overlaid on the avatar (which only carries the presence dot).
+    expect(badge.previousElementSibling?.textContent).toBe('Alice Wonder');
+    expect(trigger.querySelector('[data-presence]')).not.toBeNull();
   });
 
   it('renders no status badge when the user has none', () => {
@@ -273,14 +275,13 @@ describe('AccountMenu own custom status', () => {
     expect(screen.queryByLabelText(/won't clear automatically|until /)).toBeNull();
   });
 
-  it('keeps the status OFF the mobile account button but shows it inside the opened account sheet', () => {
+  it('shows the status on the mobile account button and inside the opened account sheet', () => {
     mockIsMobile = true;
     mockUserStatus = { emoji: '🌴', text: 'On vacation' };
     renderMenu();
-    // Not overlaid on the avatar button anymore.
-    expect(screen.queryByLabelText("On vacation, won't clear automatically")).toBeNull();
+    expect(within(screen.getByTestId('account-menu-trigger')).getByLabelText("On vacation, won't clear automatically")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('account-menu-trigger'));
-    // The sheet header still shows it next to the display name.
-    expect(screen.getByLabelText("On vacation, won't clear automatically")).toBeInTheDocument();
+    // The sheet header shows it next to the display name too.
+    expect(within(screen.getByTestId('mobile-account-sheet')).getByLabelText("On vacation, won't clear automatically")).toBeInTheDocument();
   });
 });
