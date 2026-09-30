@@ -17,6 +17,7 @@ vi.mock('./Sidebar', () => ({
 // providers for AppLayout's own structural assertions. The mock keeps
 // the open-channels button and a search input so the existing
 // mobile-shell and search-shell expectations still resolve.
+vi.mock('./AccountMenu', () => ({ AccountMenu: () => <div data-testid="sidebar-account" /> }));
 vi.mock('./AppTopBar', () => ({
   AppTopBar: ({ onOpenChannels, channelsButtonHidden }: { onOpenChannels?: () => void; channelsButtonHidden?: boolean }) => (
     <header
@@ -156,7 +157,7 @@ describe('AppLayout', () => {
     renderLayout();
 
     const aside = screen.getByTestId('sidebar').closest('aside')!;
-    expect(aside.className).toContain('lg:block');
+    expect(aside.className).toContain('lg:flex');
     expect(aside.className).not.toContain('fixed');
   });
 

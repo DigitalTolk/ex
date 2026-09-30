@@ -23,6 +23,7 @@ vi.mock('./Sidebar', () => ({
   ),
 }));
 
+vi.mock('./AccountMenu', () => ({ AccountMenu: () => <div data-testid="sidebar-account" /> }));
 vi.mock('./AppTopBar', () => ({
   AppTopBar: ({ onOpenChannels, channelsButtonHidden }: { onOpenChannels?: () => void; channelsButtonHidden?: boolean }) => (
     <header

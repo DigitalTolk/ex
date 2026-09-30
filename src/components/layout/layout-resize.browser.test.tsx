@@ -3,7 +3,7 @@ import { render } from 'vitest-browser-react';
 import { MemoryRouter } from 'react-router-dom';
 import { AppLayout } from './AppLayout';
 import { SidePanel } from '@/components/chat/SidePanel';
-import { EditProfileDialog } from '@/components/EditProfileDialog';
+import { AppearanceSettings } from '@/components/settings/AppearanceSettings';
 import {
   PANEL_WIDTHS_RESET_EVENT,
   SIDEBAR_WIDTH,
@@ -12,7 +12,7 @@ import {
 
 // Pixel-exact tests for the resizable layout panels: drag deltas map 1:1 to
 // widths, clamps hold at the configured bounds, widths persist across a
-// remount and profile settings resets everything.
+// remount and the Appearance settings reset puts everything back.
 
 vi.mock('@/components/SearchBar', () => ({ SearchBar: () => <input aria-label="Search" /> }));
 vi.mock('@/context/AuthContext', () => ({
@@ -26,6 +26,7 @@ vi.mock('@/context/ThemeContext', () => ({
 }));
 vi.mock('./Sidebar', () => ({ Sidebar: () => <nav data-testid="sidebar-body">channels</nav> }));
 vi.mock('./AppTopBar', () => ({ AppTopBar: () => <header data-testid="app-shell-header" /> }));
+vi.mock('./AccountMenu', () => ({ AccountMenu: () => <div data-testid="sidebar-account" /> }));
 vi.mock('@/components/NotificationPermissionBanner', () => ({ NotificationPermissionBanner: () => null }));
 vi.mock('@/components/UpdateBanner', () => ({ UpdateBanner: () => null }));
 vi.mock('@/hooks/useServerVersion', () => ({
@@ -151,13 +152,13 @@ describe('resizable side panel (desktop)', () => {
   });
 });
 
-describe('profile settings reset', () => {
+describe('appearance settings reset', () => {
   it('clears persisted widths, disables itself, and confirms', async () => {
     if (window.innerWidth < 768) return; // the reset row is desktop chrome
     localStorage.setItem(SIDEBAR_WIDTH.key, '350');
     localStorage.setItem(SIDE_PANEL_WIDTH.key, '520');
 
-    const result = await render(<EditProfileDialog open onOpenChange={() => undefined} />);
+    const result = await render(<AppearanceSettings />);
     active = result;
     const btn = result.getByTestId('reset-panel-widths');
     await expect.element(btn).toBeEnabled();
@@ -169,7 +170,7 @@ describe('profile settings reset', () => {
   });
 
   it('is disabled when nothing was customized', async () => {
-    const result = await render(<EditProfileDialog open onOpenChange={() => undefined} />);
+    const result = await render(<AppearanceSettings />);
     active = result;
     if (window.innerWidth < 768) return;
     await expect.element(result.getByTestId('reset-panel-widths')).toBeDisabled();
