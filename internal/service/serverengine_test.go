@@ -1180,7 +1180,8 @@ func TestServerEngine_UseConnectorDeniedExpiredAndErrors(t *testing.T) {
 
 	// Expired: settle the next pending approval as expired ourselves.
 	go func() {
-		for i := 0; i < 500; i++ {
+		deadline := time.Now().Add(approvalWaitBudget)
+		for time.Now().Before(deadline) {
 			time.Sleep(2 * time.Millisecond)
 			fx.runs.mu.Lock()
 			var id string
@@ -1300,7 +1301,8 @@ func TestServerEngine_ApprovalTools(t *testing.T) {
 	// Expired: settle the pending gate as expired ourselves.
 	expireWhenPending := func() {
 		go func() {
-			for i := 0; i < 500; i++ {
+			deadline := time.Now().Add(approvalWaitBudget)
+			for time.Now().Before(deadline) {
 				time.Sleep(2 * time.Millisecond)
 				fx.runs.mu.Lock()
 				var id string
