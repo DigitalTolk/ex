@@ -30,6 +30,7 @@ vi.mock('@/context/PresenceContext', () => ({
 vi.mock('@/components/settings/SettingsDialog', () => ({ SettingsDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="settings-open" /> : null) }));
 vi.mock('@/components/UserStatusDialog', () => ({ UserStatusDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="status-open" /> : null) }));
 vi.mock('@/components/AboutDialog', () => ({ AboutDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="about-open" /> : null) }));
+vi.mock('@/components/emoji/CustomEmojiDialog', () => ({ CustomEmojiDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="emojis-open" /> : null) }));
 vi.mock('@/components/InviteDialog', () => ({ InviteDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="invite-open" /> : null) }));
 vi.mock('@/lib/capacitor', () => ({ getCapacitorPlugin: () => null, isNativePlatform: () => false }));
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
@@ -133,11 +134,14 @@ describe('AccountMenu (browser)', () => {
     });
   });
 
-  it('navigates to the custom-emoji manager from the account menu', async () => {
+  it('opens the custom-emoji manager as a pop-up from the account menu', async () => {
     const screen = await renderMenu();
     await screen.getByTestId('account-menu-trigger').click();
     await screen.getByTestId('user-menu-emojis').click();
-    await expect.element(screen.getByTestId('location-probe')).toHaveTextContent('/emojis');
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="emojis-open"]')).not.toBeNull();
+    });
+    expect(screen.getByTestId('location-probe').element().textContent).not.toContain('/emojis');
   });
 
   it('navigates to the incoming-webhooks admin page from the account menu', async () => {

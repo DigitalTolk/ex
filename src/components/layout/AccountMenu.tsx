@@ -28,6 +28,7 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { isAdmin, isGuest } from '@/lib/roles';
 import { getCapacitorPlugin, isNativePlatform } from '@/lib/capacitor';
 import { SettingsDialog } from '@/components/settings/SettingsDialog';
+import { CustomEmojiDialog } from '@/components/emoji/CustomEmojiDialog';
 import { UserStatusDialog } from '@/components/UserStatusDialog';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { PresenceDot } from '@/components/PresenceDot';
@@ -47,7 +48,7 @@ interface MenuAction {
 /**
  * Account footer pinned to the bottom of the sidebar (avatar, name, chevron),
  * like the Claude app. It opens the menu of every user-facing action —
- * Settings, status, invites, custom emojis, admin, change server, about and
+ * Settings, status, invites, custom emojis (a pop-up), admin, change server, about and
  * sign-out — as an upward dropdown on desktop and a full-screen sheet on
  * mobile. Both surfaces render the same `menuActions` list.
  */
@@ -57,6 +58,7 @@ export function AccountMenu() {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [emojisOpen, setEmojisOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -111,7 +113,7 @@ export function AccountMenu() {
             key: 'emojis',
             icon: <Smile className="h-4 w-4" />,
             label: 'Custom emojis',
-            onSelect: () => navigate('/emojis'),
+            onSelect: () => setEmojisOpen(true),
             testID: 'user-menu-emojis',
           } satisfies MenuAction,
         ]
@@ -184,7 +186,12 @@ export function AccountMenu() {
         </Avatar>
         <PresenceDot online={userOnline} size={9} inset={0} />
       </span>
-      <span className="min-w-0 flex-1 truncate text-sm font-medium">{user?.displayName}</span>
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span className="min-w-0 truncate text-sm font-medium">{user?.displayName}</span>
+        {/* Active custom status (emoji) sits right after the name. No tooltip:
+            it's inside the menu trigger button, and the menu shows the rest. */}
+        <UserStatusIndicator status={user?.userStatus} tooltip={false} />
+      </span>
       <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
     </>
   );
@@ -273,6 +280,7 @@ export function AccountMenu() {
       </Dialog>
 
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <CustomEmojiDialog open={emojisOpen} onOpenChange={setEmojisOpen} />
       <UserStatusDialog
         key={`${user?.id ?? ''}:${user?.userStatus?.emoji ?? ''}:${user?.userStatus?.text ?? ''}:${user?.userStatus?.clearAt ?? ''}`}
         open={statusOpen}
