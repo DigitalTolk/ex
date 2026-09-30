@@ -180,6 +180,9 @@
   --color-sidebar-accent: #EDECE9;
   --color-sidebar-accent-foreground: #0B0B0B;
   --color-sidebar-border: #E3E3E2;
+  /* Hairline between rows inside a settings group — a step softer than
+   * `border`, so lists read as one group rather than a stack of boxes. */
+  --color-divider: #EFEEEC;
   --color-sidebar-ring: #BDBCBC;
   --color-chat-top: #FCFCFB;
   --color-chat-hover: #F5F5F5;
@@ -392,6 +395,9 @@
     --color-sidebar-accent: #2C2C2C;
     --color-sidebar-accent-foreground: #FFFFFF;
     --color-sidebar-border: #242424;
+    /* Row hairline; #2C2C2C (not the #242424 border) so it stays visible on
+       the #232323 dialog surface. */
+    --color-divider: #2C2C2C;
     --color-sidebar-ring: #A7A5A6;
     --color-chat-top: #1A1A1A;
     /* Chat message-row hover = bg/level1, mirroring the light spec (where

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
-import { EditProfileDialog } from './EditProfileDialog';
+import { SettingsDialog } from './settings/SettingsDialog';
 import { UserStatusDialog } from './UserStatusDialog';
 import { AuthProvider } from '@/lib/roles';
 import type { User } from '@/types';
@@ -34,6 +34,7 @@ vi.mock('@/context/ThemeContext', () => ({
 }));
 
 vi.mock('@/lib/api', () => ({
+  ApiError: class ApiError extends Error {},
   apiFetch: vi.fn(),
   getAccessToken: vi.fn(() => 'token'),
 }));
@@ -44,20 +45,19 @@ vi.mock('@/hooks/useEmoji', () => ({
 }));
 
 describe('Mobile user dialog browser behavior', () => {
-  it('surfaces the Edit Profile save in the top-right header on mobile (not a bottom bar)', async () => {
+  it('Settings saves as you go, so the mobile header offers Done (no Save button)', async () => {
     if (window.innerWidth > 767) return;
-    const screen = await render(<EditProfileDialog open={true} onOpenChange={vi.fn()} />);
+    const screen = await render(<SettingsDialog open={true} onOpenChange={vi.fn()} />);
 
-    const save = screen.getByRole('button', { name: 'Save' }).element();
-    await expect.element(save).toBeVisible();
-
-    // The save now lives in the dialog's top-right action cluster, near the
-    // top of the screen, so the keyboard can't cover it.
-    expect(save.closest('[data-slot="dialog-mobile-actions"]')).not.toBeNull();
-    const rect = save.getBoundingClientRect();
+    const done = screen.getByRole('button', { name: 'Done' }).element();
+    await expect.element(done).toBeVisible();
+    // Done sits in the dialog's top-right action cluster, near the top of the
+    // screen, as a compact control.
+    expect(done.closest('[data-slot="dialog-mobile-actions"]')).not.toBeNull();
+    const rect = done.getBoundingClientRect();
     expect(rect.top).toBeLessThan(window.innerHeight / 2);
-    // It's a compact control, not a screen-wide bottom button.
     expect(rect.width).toBeLessThan(window.innerWidth - 40);
+    expect(screen.getByRole('button', { name: 'Save' }).query()).toBeNull();
   });
 
   it('surfaces the Set Status save in the top-right header and keeps the controls stable on mobile', async () => {
