@@ -282,6 +282,7 @@ describe('AccountMenu own custom status', () => {
     expect(within(screen.getByTestId('account-menu-trigger')).getByLabelText("On vacation, won't clear automatically")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('account-menu-trigger'));
     // The sheet header shows it next to the display name too.
-    expect(within(screen.getByTestId('mobile-account-sheet')).getByLabelText("On vacation, won't clear automatically")).toBeInTheDocument();
+    // …in the profile card and in the status row.
+    expect(within(screen.getByTestId('mobile-account-sheet')).getAllByLabelText("On vacation, won't clear automatically")).toHaveLength(2);
   });
 });
