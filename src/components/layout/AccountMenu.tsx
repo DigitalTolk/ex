@@ -11,6 +11,7 @@ import {
   Smile,
   UserPlus,
   Webhook,
+  X,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
@@ -33,6 +34,11 @@ import { UserStatusDialog } from '@/components/UserStatusDialog';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { PresenceDot } from '@/components/PresenceDot';
 import { presenceNotchStyle } from '@/lib/presence';
+import { activeStatus, formatStatusUntilShort } from '@/lib/user-status';
+import { localTimeZone } from '@/lib/user-time';
+import { apiFetch, getAccessToken } from '@/lib/api';
+import { showToast } from '@/lib/toast';
+import type { User } from '@/types';
 import { AboutDialog } from '@/components/AboutDialog';
 import { InviteDialog } from '@/components/InviteDialog';
 
@@ -53,7 +59,7 @@ interface MenuAction {
  * mobile. Both surfaces render the same `menuActions` list.
  */
 export function AccountMenu() {
-  const { user, logout } = useAuth();
+  const { user, logout, setAuth } = useAuth();
   const { online } = usePresence();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -77,6 +83,23 @@ export function AccountMenu() {
   const nativePlugin = getCapacitorPlugin('ServerNavigation');
   const serverNavigation = isNativePlatform() && nativePlugin?.resetServer ? nativePlugin : null;
 
+  const status = activeStatus(user?.userStatus);
+
+  // The ✕ on the menu's status row: clear the custom status in place, without
+  // opening the status dialog.
+  async function clearStatus() {
+    try {
+      const updated = await apiFetch<User>('/api/v1/users/me/status', {
+        method: 'DELETE',
+        body: JSON.stringify({ timeZone: localTimeZone() }),
+      });
+      const token = getAccessToken();
+      if (token) setAuth(token, updated);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to clear status', 'error');
+    }
+  }
+
   async function handleLogout() {
     await logout();
     navigate('/login');
@@ -90,12 +113,19 @@ export function AccountMenu() {
       onSelect: () => setSettingsOpen(true),
       testID: 'user-menu-settings',
     },
-    {
-      key: 'status',
-      icon: <CalendarClock className="h-4 w-4" />,
-      label: 'Set status',
-      onSelect: () => setStatusOpen(true),
-    },
+    // While a status is active the status row at the top of the menu takes
+    // this entry's place (click it to edit, ✕ to clear).
+    ...(!status
+      ? [
+          {
+            key: 'status',
+            icon: <CalendarClock className="h-4 w-4" />,
+            label: 'Set status',
+            onSelect: () => setStatusOpen(true),
+            testID: 'user-menu-set-status',
+          } satisfies MenuAction,
+        ]
+      : []),
     ...(isAdmin(user?.systemRole)
       ? [
           {
@@ -188,9 +218,10 @@ export function AccountMenu() {
       </span>
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         <span className="min-w-0 truncate text-sm font-medium">{user?.displayName}</span>
-        {/* Active custom status (emoji) sits right after the name. No tooltip:
-            it's inside the menu trigger button, and the menu shows the rest. */}
-        <UserStatusIndicator status={user?.userStatus} tooltip={false} />
+        {/* Active custom status (emoji) sits right after the name. */}
+        {/* Hover shows the same status card as in chat. The trigger renders as
+            a <span> because it sits inside the menu-trigger button. */}
+        <UserStatusIndicator status={user?.userStatus} inlineTrigger />
       </span>
       <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
     </>
@@ -218,6 +249,33 @@ export function AccountMenu() {
               {triggerContent}
             </DropdownMenuTrigger>
             <DropdownMenuContent side="top" align="start" sideOffset={6} className="min-w-56">
+              {status && (
+                <>
+                  <div className="flex items-center gap-0.5" data-testid="user-menu-status-row">
+                    <DropdownMenuItem
+                      onClick={() => setStatusOpen(true)}
+                      className="min-w-0 flex-1 items-start gap-2 py-1.5"
+                      data-testid="user-menu-status"
+                    >
+                      <UserStatusIndicator status={status} tooltip={false} className="mt-0.5" />
+                      <span className="min-w-0">
+                        <span className="block truncate">{status.text}</span>
+                        <span className="block text-xs text-muted-foreground">{formatStatusUntilShort(status.clearAt)}</span>
+                      </span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      closeOnClick={false}
+                      onClick={() => void clearStatus()}
+                      aria-label="Clear status"
+                      className="size-8 shrink-0 justify-center p-0 text-muted-foreground"
+                      data-testid="user-menu-clear-status"
+                    >
+                      <X className="h-4 w-4" />
+                    </DropdownMenuItem>
+                  </div>
+                  <DropdownMenuSeparator />
+                </>
+              )}
               {menuActions.map((action, idx) => {
                 const separator = action.separatorBefore && idx > 0 ? (
                   <DropdownMenuSeparator key={`sep-${action.key}`} />
@@ -256,6 +314,34 @@ export function AccountMenu() {
               <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
             </div>
           </div>
+          {status && (
+            <div className="flex items-center gap-1 rounded-lg border px-1" data-testid="mobile-status-row">
+              <button
+                type="button"
+                onClick={() => {
+                  setStatusOpen(true);
+                  setMobileMenuOpen(false);
+                }}
+                className="flex min-h-12 min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-2 text-left hover:bg-muted"
+                data-testid="mobile-status"
+              >
+                <UserStatusIndicator status={status} tooltip={false} />
+                <span className="min-w-0">
+                  <span className="block truncate text-base">{status.text}</span>
+                  <span className="block text-xs text-muted-foreground">{formatStatusUntilShort(status.clearAt)}</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void clearStatus()}
+                aria-label="Clear status"
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                data-testid="mobile-clear-status"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
           <nav className="flex flex-col gap-1" aria-label="Account menu">
             {menuActions.map((action, idx) => (
               <span key={action.key}>

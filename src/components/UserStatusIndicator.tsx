@@ -8,9 +8,13 @@ interface UserStatusIndicatorProps {
   status?: UserStatus | null;
   className?: string;
   tooltip?: boolean;
+  // Render the tooltip trigger as a <span> instead of a <button> — for when
+  // the indicator sits inside another button (e.g. the sidebar account menu
+  // trigger), where a nested button would be invalid.
+  inlineTrigger?: boolean;
 }
 
-export function UserStatusIndicator({ status, className = '', tooltip = true }: UserStatusIndicatorProps) {
+export function UserStatusIndicator({ status, className = '', tooltip = true, inlineTrigger = false }: UserStatusIndicatorProps) {
   const current = activeStatus(status);
   const { data: emojiMap = {} } = useEmojiMap(!!current);
   if (!current) return null;
@@ -29,6 +33,7 @@ export function UserStatusIndicator({ status, className = '', tooltip = true }: 
     <TooltipProvider delay={500}>
       <Tooltip>
         <TooltipTrigger
+          render={inlineTrigger ? <span /> : undefined}
           className={`inline-flex h-5 w-5 shrink-0 items-center justify-center align-middle ${className}`}
           aria-label={`${current.text}, ${formatStatusUntil(current.clearAt)}`}
         >
