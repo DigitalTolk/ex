@@ -102,6 +102,17 @@ const ggSubs: AgentSubscription[] = [
     heartbeatMins: 30,
   },
   { id: 's2', agentID: 'ag-gg', creatorID: 'u-1', parentID: 'ch-gone', parentType: 'channel' },
+  {
+    id: 's3',
+    agentID: 'ag-gg',
+    creatorID: 'u-1',
+    parentID: 'ch-1',
+    parentType: 'channel',
+    instruction: "Post yesterday's revenue from metabase.",
+    schedule: '0 8 * * 1-5',
+    scheduleTZ: 'Europe/Stockholm',
+    actionMode: 'notify',
+  },
 ];
 
 const userChannels: UserChannel[] = [
@@ -111,6 +122,7 @@ const userChannels: UserChannel[] = [
 interface Routes {
   agents?: () => Promise<unknown>;
   channels?: () => Promise<unknown>;
+  ggSubs?: unknown[];
   mutate?: (path: string, init?: ApiInit) => Promise<unknown> | undefined;
 }
 
@@ -124,7 +136,7 @@ function installRoutes(over: Routes = {}) {
         return (over.channels ?? (async () => userChannels))();
       }
       const m = path.match(/^\/api\/v1\/agents\/([^/]+)\/subscriptions$/);
-      if (m) return Promise.resolve({ subscriptions: m[1] === 'gg' ? ggSubs : [] });
+      if (m) return Promise.resolve({ subscriptions: m[1] === 'gg' ? (over.ggSubs ?? ggSubs) : [] });
     }
     return over.mutate?.(path, init) ?? Promise.resolve({});
   });
@@ -679,5 +691,196 @@ describe('CLI agent explainer', () => {
     // Paused is not a CLI problem; bedrock agents have no desktop dependency.
     expect(screen.queryByTestId('agent-cli-note-ww')).not.toBeInTheDocument();
     expect(screen.queryByTestId('agent-cli-note-qib')).not.toBeInTheDocument();
+  });
+});
+
+describe('scheduled orders', () => {
+  it('lists an existing order in plain language, with its channel and instruction', async () => {
+    installRoutes();
+    renderPage();
+    await openCard('gg');
+    const row = await screen.findByTestId('agent-schedule-s3');
+    expect(row).toHaveTextContent('every weekday at 08:00 (Europe/Stockholm)');
+    expect(row).toHaveTextContent('~general');
+    expect(row).toHaveTextContent("Post yesterday's revenue from metabase.");
+  });
+
+  it('creates an order from the picker, sending cron + the viewer timezone', async () => {
+    const posts: { path: string; body: Record<string, unknown> }[] = [];
+    installRoutes({
+      mutate: (path, init) => {
+        if (init?.method === 'POST') {
+          posts.push({ path, body: JSON.parse(init.body ?? '{}') as Record<string, unknown> });
+        }
+        return Promise.resolve({});
+      },
+    });
+    renderPage();
+    const card = await openCard('gg');
+    await card.findByTestId('agent-schedule-s3'); // subscriptions loaded
+
+    fireEvent.click(card.getByRole('button', { name: /New scheduled order/ }));
+    const form = within(card.getByTestId('schedule-form'));
+    // A new channel is the default; this order goes to an existing one. The
+    // destination is a searchable combobox, so open it and pick.
+    fireEvent.click(form.getByRole('button', { name: 'Where the result goes' }));
+    // Scoped to the picker: the timezone <select> alone holds ~420 options.
+    fireEvent.click(await within(form.getByTestId('destination-options')).findByRole('option', { name: '~general' }));
+    fireEvent.change(card.getByLabelText('Repeats'), { target: { value: 'weekly' } });
+    fireEvent.change(card.getByLabelText('On'), { target: { value: '3' } });
+    fireEvent.change(card.getByLabelText('At'), { target: { value: '07:45' } });
+    fireEvent.change(card.getByLabelText('What should it do?'), {
+      target: { value: '  Summarise yesterday’s tickets.  ' },
+    });
+    fireEvent.click(card.getByRole('button', { name: 'Schedule it' }));
+
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0].path).toBe('/api/v1/agents/gg/subscriptions');
+    expect(posts[0].body).toMatchObject({
+      parentID: 'ch-1',
+      schedule: '45 7 * * 3',
+      instruction: 'Summarise yesterday’s tickets.',
+      actionMode: 'autonomous',
+    });
+    // The viewer's own zone rides along so "07:45" means their 07:45.
+    expect(typeof posts[0].body.scheduleTZ).toBe('string');
+  });
+
+  it('needs only an instruction when the agent is fixed and a new channel is the default', async () => {
+    installRoutes();
+    renderPage();
+    const card = await openCard('gg');
+    await card.findByTestId('agent-schedule-s3');
+    fireEvent.click(card.getByRole('button', { name: /New scheduled order/ }));
+    expect(card.getByRole('button', { name: 'Schedule it' })).toBeDisabled();
+    // The instruction also names the new channel, so one field arms the form.
+    fireEvent.change(card.getByLabelText('What should it do?'), { target: { value: 'do a thing' } });
+    expect(card.getByRole('button', { name: 'Schedule it' })).toBeEnabled();
+    // Cancel restores the collapsed state.
+    fireEvent.click(card.getByRole('button', { name: 'Cancel' }));
+    expect(card.queryByTestId('schedule-form')).not.toBeInTheDocument();
+  });
+
+  it('warns that a CLI agent only keeps its appointments while the desktop app runs', async () => {
+    installRoutes();
+    renderPage();
+    const card = await openCard('gg'); // gg resolves to the claude CLI
+    expect(await card.findByTestId('schedule-cli-warning-gg')).toHaveTextContent(
+      'runs on your own computer',
+    );
+    expect(card.getByTestId('schedule-cli-warning-gg')).toHaveTextContent('Bedrock agent');
+  });
+
+  it('deletes an order', async () => {
+    const deletes: string[] = [];
+    installRoutes({
+      mutate: (path, init) => {
+        if (init?.method === 'DELETE') deletes.push(path);
+        return Promise.resolve({});
+      },
+    });
+    renderPage();
+    const card = await openCard('gg');
+    await card.findByTestId('agent-schedule-s3');
+    fireEvent.click(card.getByLabelText(/Delete scheduled order/));
+    await waitFor(() =>
+      expect(deletes).toContain('/api/v1/agents/gg/subscriptions/ch-1/s3'),
+    );
+  });
+
+  it('shows a DM-delivered order as a DM, and no default zone when the browser has none', async () => {
+    const real = Intl.DateTimeFormat.prototype.resolvedOptions;
+    const spy = vi
+      .spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions')
+      .mockImplementation(function (this: Intl.DateTimeFormat) {
+        return { ...real.call(this), timeZone: '' };
+      });
+    installRoutes({
+      ggSubs: [
+        {
+          id: 's-dm',
+          agentID: 'ag-gg',
+          creatorID: 'u-1',
+          parentID: 'conv-1',
+          parentType: 'conversation',
+          instruction: 'DM me the numbers.',
+          schedule: '0 9 * * *',
+          scheduleTZ: 'UTC',
+        },
+      ],
+    });
+    try {
+      renderPage();
+      const card = await openCard('gg');
+      expect(await card.findByTestId('agent-schedule-s-dm')).toHaveTextContent('as a DM');
+      expect(card.getByText(/does these on a clock/)).not.toHaveTextContent('times default to');
+      fireEvent.click(card.getByLabelText(/Edit scheduled order/));
+      expect(card.getByTestId('schedule-form-destination')).toHaveTextContent('a DM');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('edits an order in place and closes the form once saved', async () => {
+    const patches: { path: string; body: Record<string, unknown> }[] = [];
+    installRoutes({
+      mutate: (path, init) => {
+        if (init?.method === 'PATCH') {
+          patches.push({ path, body: JSON.parse(init.body ?? '{}') as Record<string, unknown> });
+        }
+        return Promise.resolve({});
+      },
+    });
+    renderPage();
+    const card = await openCard('gg');
+    await card.findByTestId('agent-schedule-s3');
+    fireEvent.click(card.getByLabelText('Edit scheduled order for every weekday at 08:00 (Europe/Stockholm)'));
+    const form = within(card.getByTestId('schedule-form'));
+    expect(form.getByTestId('schedule-form-destination')).toHaveTextContent('~general');
+    fireEvent.change(form.getByLabelText('What should it do?'), { target: { value: 'Post it at nine.' } });
+    fireEvent.change(form.getByLabelText('At'), { target: { value: '09:00' } });
+    fireEvent.click(form.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0].path).toBe('/api/v1/agents/gg/subscriptions/ch-1/s3');
+    expect(patches[0].body).toMatchObject({
+      instruction: 'Post it at nine.',
+      schedule: '0 9 * * 1-5',
+      scheduleTZ: 'Europe/Stockholm',
+    });
+    await waitFor(() => expect(card.queryByTestId('schedule-form')).not.toBeInTheDocument());
+    expect(card.getByTestId('agent-schedule-s3')).toBeInTheDocument();
+  });
+
+  it('offers no edit for a spec the form cannot express', async () => {
+    installRoutes({
+      ggSubs: [
+        {
+          id: 's-rich',
+          agentID: 'ag-gg',
+          creatorID: 'u-1',
+          parentID: 'ch-1',
+          parentType: 'channel',
+          instruction: 'Poll.',
+          schedule: '*/15 * * * *',
+          scheduleTZ: 'UTC',
+        },
+      ],
+    });
+    renderPage();
+    const card = await openCard('gg');
+    await card.findByTestId('agent-schedule-s-rich');
+    expect(card.queryByLabelText(/Edit scheduled order/)).not.toBeInTheDocument();
+  });
+
+  it('toasts when deleting an order fails', async () => {
+    installRoutes({
+      mutate: (_path, init) =>
+        init?.method === 'DELETE' ? Promise.reject(new Error('offline')) : Promise.resolve({}),
+    });
+    renderPage();
+    const card = await openCard('gg');
+    await card.findByTestId('agent-schedule-s3');
+    fireEvent.click(card.getByLabelText(/Delete scheduled order/));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith("Couldn't delete that order — try again."));
   });
 });

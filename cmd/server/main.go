@@ -277,6 +277,8 @@ func main() {
 	messageSvc.SetRunSkillResolver(orchestrator.RunSkillBadges)
 	orchestrator.SetConversationReader(conversationStore)
 	orchestrator.SetOwnerDMResolver(convSvc)
+	// A scheduled order with no channel lives in the creator's DM with the agent.
+	agentSvc.SetDMResolver(convSvc)
 	// Shared context (CTX#, plan-v2 §8): visibility rides the message-service
 	// access check, so context is readable exactly where the chat is.
 	contextSvc := service.NewContextService(store.NewContextStore(db), messageSvc)
