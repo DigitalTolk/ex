@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { collectMessageUserIDs, findLastOwnMessageId, deriveThreadMeta } from './message-users';
 import { queryKeys, parentPath } from './query-keys';
 import { cn, isHttpUrl } from './utils';
-import { activeStatus, formatStatusUntil } from './user-status';
+import { activeStatus, formatStatusUntil, formatStatusUntilShort } from './user-status';
 import { setWSSender, sendWS } from './ws-sender';
 import type { Message, UserStatus } from '@/types';
 
@@ -146,6 +146,25 @@ describe('user-status', () => {
   it('formatStatusUntil returns "won\'t clear" for no input, the date string otherwise', () => {
     expect(formatStatusUntil()).toMatch(/won't clear/);
     expect(formatStatusUntil('2026-04-01T12:00:00Z')).toMatch(/until/);
+  });
+});
+
+describe('formatStatusUntilShort', () => {
+  const now = new Date(2026, 8, 30, 12, 0, 0);
+  it('says it never clears when there is no clear time', () => {
+    expect(formatStatusUntilShort(undefined, now)).toBe("Doesn't clear");
+  });
+  it('shows just the time when it clears later today', () => {
+    const label = formatStatusUntilShort(new Date(2026, 8, 30, 19, 0).toISOString(), now);
+    expect(label).toMatch(/^Until \d{1,2}:00\s?(PM|pm)?/);
+    expect(label).not.toMatch(/Sep|Oct/);
+  });
+  it('adds the date when it clears on another day', () => {
+    expect(formatStatusUntilShort(new Date(2026, 9, 2, 9, 30).toISOString(), now)).toMatch(/^Until Oct 2, /);
+  });
+  it('defaults "now" to the current time', () => {
+    const inAnHour = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    expect(formatStatusUntilShort(inAnHour)).toMatch(/^Until /);
   });
 });
 

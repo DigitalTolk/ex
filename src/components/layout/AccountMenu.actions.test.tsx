@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
-import { AppTopBar } from './AppTopBar';
+import { AccountMenu } from './AccountMenu';
 
 // Surfaces the active route so navigation actions can be asserted.
 function LocationProbe() {
@@ -19,11 +19,10 @@ vi.mock('@/context/AuthContext', () => ({
 vi.mock('@/context/PresenceContext', () => ({
   usePresence: () => ({ online: new Set<string>(), isOnline: () => false }),
 }));
-vi.mock('@/components/SearchBar', () => ({ SearchBar: () => <div aria-label="Search" /> }));
-vi.mock('@/components/EditProfileDialog', () => ({ EditProfileDialog: ({ open }: { open: boolean }) => open ? <div data-testid="edit-profile-open" /> : null }));
-vi.mock('@/components/NotificationSettingsDialog', () => ({ NotificationSettingsDialog: ({ open }: { open: boolean }) => open ? <div data-testid="notifications-open" /> : null }));
+vi.mock('@/components/settings/SettingsDialog', () => ({ SettingsDialog: ({ open }: { open: boolean }) => open ? <div data-testid="settings-open" /> : null }));
 vi.mock('@/components/UserStatusDialog', () => ({ UserStatusDialog: ({ open }: { open: boolean }) => open ? <div data-testid="status-open" /> : null }));
 vi.mock('@/components/AboutDialog', () => ({ AboutDialog: ({ open }: { open: boolean }) => open ? <div data-testid="about-open" /> : null }));
+vi.mock('@/components/emoji/CustomEmojiDialog', () => ({ CustomEmojiDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="emojis-open" /> : null) }));
 vi.mock('@/components/InviteDialog', () => ({ InviteDialog: ({ open }: { open: boolean }) => open ? <div data-testid="invite-open" /> : null }));
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 
@@ -40,10 +39,10 @@ vi.mock('@/lib/capacitor', () => ({
   getCapacitorPlugin: (name: string) => (name === 'ServerNavigation' && mockNative ? { resetServer } : null),
 }));
 
-function renderTopBar() {
+function renderMenu() {
   return render(
     <MemoryRouter initialEntries={['/']}>
-      <AppTopBar />
+      <AccountMenu />
       <Routes>
         <Route path="*" element={<LocationProbe />} />
       </Routes>
@@ -51,7 +50,7 @@ function renderTopBar() {
   );
 }
 
-describe('AppTopBar menu actions', () => {
+describe('AccountMenu menu actions', () => {
   beforeEach(() => {
     mockNative = false;
     logout.mockClear();
@@ -59,43 +58,38 @@ describe('AppTopBar menu actions', () => {
   });
 
   it('opens the status dialog from the menu', () => {
-    renderTopBar();
-    fireEvent.click(screen.getByTestId('topbar-account'));
+    renderMenu();
+    fireEvent.click(screen.getByTestId('account-menu-trigger'));
     fireEvent.click(screen.getByText('Set status'));
     expect(screen.getByTestId('status-open')).toBeInTheDocument();
   });
 
-  it('opens the notification settings dialog from the menu', () => {
-    renderTopBar();
-    fireEvent.click(screen.getByTestId('topbar-account'));
-    fireEvent.click(screen.getByTestId('user-menu-notifications'));
-    expect(screen.getByTestId('notifications-open')).toBeInTheDocument();
-  });
-
-  it('navigates to the custom emoji page from the menu', () => {
-    renderTopBar();
-    fireEvent.click(screen.getByTestId('topbar-account'));
+  it('opens Custom emojis as a pop-up (no navigation) from the menu', () => {
+    renderMenu();
+    const before = screen.getByTestId('location-probe').textContent;
+    fireEvent.click(screen.getByTestId('account-menu-trigger'));
     fireEvent.click(screen.getByTestId('user-menu-emojis'));
-    expect(screen.getByTestId('location-probe')).toHaveTextContent('/emojis');
+    expect(screen.getByTestId('emojis-open')).toBeInTheDocument();
+    expect(screen.getByTestId('location-probe').textContent).toBe(before);
   });
 
   it('triggers admin navigation from the menu without crashing', () => {
-    renderTopBar();
-    fireEvent.click(screen.getByTestId('topbar-account'));
+    renderMenu();
+    fireEvent.click(screen.getByTestId('account-menu-trigger'));
     expect(() => fireEvent.click(screen.getByTestId('user-menu-admin'))).not.toThrow();
   });
 
   it('navigates to the incoming-webhooks page from the menu', () => {
-    renderTopBar();
-    fireEvent.click(screen.getByTestId('topbar-account'));
+    renderMenu();
+    fireEvent.click(screen.getByTestId('account-menu-trigger'));
     fireEvent.click(screen.getByTestId('user-menu-webhooks'));
     expect(screen.getByTestId('location-probe')).toHaveTextContent('/webhooks');
   });
 
   it('shows the change-server item on native and resets the server on confirm', () => {
     mockNative = true;
-    renderTopBar();
-    fireEvent.click(screen.getByTestId('topbar-account'));
+    renderMenu();
+    fireEvent.click(screen.getByTestId('account-menu-trigger'));
     fireEvent.click(screen.getByTestId('user-menu-change-server'));
     // ConfirmDialog (real) renders with confirmLabel "Change server".
     fireEvent.click(screen.getByRole('button', { name: 'Change server' }));
