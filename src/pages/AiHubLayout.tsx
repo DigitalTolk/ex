@@ -2,8 +2,8 @@ import { NavLink, Outlet } from 'react-router-dom';
 import { AI_HUB_TABS } from '@/lib/ai-hub';
 
 // AiHubLayout is the pathless layout route behind the sidebar's single
-// "Agents" entry: a tab strip for the three agent-feature pages (Agents, Skills,
-// Connectors) above whichever page the URL names. The pages themselves and
+// "Agents" entry: a tab strip for the agent-feature pages (Agents, Skills,
+// Schedules, Connectors) above whichever page the URL names. The pages themselves and
 // their routes are untouched, so /skills and /connectors deep links, the
 // permalinks in chat and the connector callback flows all keep working — the
 // sidebar just stops listing them one by one.

@@ -9,6 +9,7 @@ import {
   type AgentView,
   AUTO_ALLOW_CLASSES,
 } from '@/hooks/useAgents';
+import { ScheduledOrders } from './ScheduledOrders';
 import { WatchedChannels } from './WatchedChannels';
 
 function statusBadge(status: string, serverRun: boolean) {
@@ -360,6 +361,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
         )}
 
         <WatchedChannels agent={agent} />
+        <ScheduledOrders agent={agent} />
       </div>
       )}
     </div>

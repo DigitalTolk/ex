@@ -460,6 +460,69 @@ func bridgeTools(api *runAPI) []bedrock.Tool {
 			},
 		},
 		{
+			Name: "list_schedules",
+			Description: "List YOUR INVOKER's scheduled orders across every agent: [sch:<id>] agent — when → where — " +
+				"instruction. Use this, never a cron or routine feature of your own, when they ask what they have scheduled.",
+			Schema: obj(in{}),
+			Call:   simple("GET", "/api/v1/agent/run/schedules", "text", "(no scheduled orders)"),
+		},
+		{
+			Name: "create_schedule",
+			Description: "Create a SCHEDULED ORDER for your invoker — an agent carries out `instruction` on a clock. " +
+				"`schedule` is five-field cron (minute hour day-of-month month day-of-week), e.g. \"0 9 * * 1-5\" = 09:00 on " +
+				"weekdays. `timezone` is IANA (e.g. Asia/Kolkata); it defaults to their profile zone, or UTC if they have " +
+				"none, so pass it whenever they said a local time. `destination`: \"here\" (default — this conversation), " +
+				"\"dm\" (a private DM to them) or a channel id [ch:<id>] they're in. `agent` defaults to you. Only for " +
+				"recurring work they asked for; confirm the time back to them.",
+			Schema: obj(in{
+				"instruction": str("What the agent should do each time it fires."),
+				"schedule":    str("Five-field cron spec."),
+				"timezone":    str("IANA timezone, e.g. Asia/Kolkata."),
+				"destination": str(`"here", "dm", or a channel id.`),
+				"agent":       str("Agent slug to carry it out; defaults to you."),
+				"connectors":  map[string]any{"type": "array", "description": "Connector slugs to pin.", "items": map[string]any{"type": "string"}},
+				"skills":      map[string]any{"type": "array", "description": "Skill ids [sk:<id>] to pin.", "items": map[string]any{"type": "string"}},
+			}, "instruction", "schedule"),
+			Call: func(ctx context.Context, raw json.RawMessage) (string, bool) {
+				v := parse(raw)
+				payload := in{}
+				for _, k := range []string{"instruction", "schedule", "timezone", "destination", "agent"} {
+					if x := s(v, k); x != "" {
+						payload[k] = x
+					}
+				}
+				if payload["instruction"] == nil || payload["schedule"] == nil {
+					return "create_schedule requires instruction and schedule", true
+				}
+				for _, k := range []string{"connectors", "skills"} {
+					if list, ok := v[k].([]any); ok {
+						payload[k] = list
+					}
+				}
+				status, data := api.call(ctx, "POST", "/api/v1/agent/run/schedules", payload)
+				if status < 200 || status >= 300 {
+					return describeRunFailure(status, data), true
+				}
+				return dataStr(data, "text", "scheduled"), false
+			},
+		},
+		{
+			Name:        "delete_schedule",
+			Description: "Remove one of your invoker's scheduled orders by its [sch:<id>] from list_schedules.",
+			Schema:      obj(in{"schedule_id": str("Order id from list_schedules.")}, "schedule_id"),
+			Call: func(ctx context.Context, raw json.RawMessage) (string, bool) {
+				id := s(parse(raw), "schedule_id")
+				if id == "" {
+					return "delete_schedule requires schedule_id", true
+				}
+				status, data := api.call(ctx, "DELETE", "/api/v1/agent/run/schedules/"+url.PathEscape(id), nil)
+				if status < 200 || status >= 300 {
+					return describeRunFailure(status, data), true
+				}
+				return dataStr(data, "text", "schedule removed"), false
+			},
+		},
+		{
 			Name: "pin_message",
 			Description: "Pin (or unpin) a message in this conversation as your invoker — only messages in THIS run's " +
 				"own channel or DM can be pinned.",

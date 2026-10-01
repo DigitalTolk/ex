@@ -359,6 +359,9 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("GET /api/v1/agent/run/skills", middleware.WrapFunc(d.AgentRunTool.ListSkills, runMW))
 		mux.Handle("POST /api/v1/agent/run/skills/{id}", middleware.WrapFunc(d.AgentRunTool.InvokeSkill, runMW))
 		mux.Handle("POST /api/v1/agent/run/link-message", middleware.WrapFunc(d.AgentRunTool.LinkMessage, runMW))
+		mux.Handle("GET /api/v1/agent/run/schedules", middleware.WrapFunc(d.AgentRunTool.ListSchedules, runMW))
+		mux.Handle("POST /api/v1/agent/run/schedules", middleware.WrapFunc(d.AgentRunTool.CreateSchedule, runMW, writeLimit))
+		mux.Handle("DELETE /api/v1/agent/run/schedules/{id}", middleware.WrapFunc(d.AgentRunTool.DeleteSchedule, runMW, writeLimit))
 		if d.CodingTask != nil {
 			// Coding tasks (plan-coding-agent.md): the run-scoped task tools…
 			mux.Handle("POST /api/v1/agent/run/coding-task", middleware.WrapFunc(d.CodingTask.Create, runMW, writeLimit))

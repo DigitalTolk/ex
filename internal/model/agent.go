@@ -93,7 +93,7 @@ func (l AgentLimits) WallClockFor(mode string) time.Duration {
 	if mode == RunModeTask {
 		return taskModeHorizon
 	}
-	if mode == RunModeDirect {
+	if mode == RunModeDirect || mode == RunModeScheduled {
 		sec := l.MaxTaskWallClockSec
 		if sec <= 0 {
 			sec = def.MaxTaskWallClockSec
@@ -115,7 +115,7 @@ func (l AgentLimits) TurnsFor(mode string) int {
 	if mode == RunModeTask {
 		return TaskModeUnlimitedTurns
 	}
-	if mode == RunModeDirect {
+	if mode == RunModeDirect || mode == RunModeScheduled {
 		if l.MaxTaskTurns > 0 {
 			return l.MaxTaskTurns
 		}
@@ -596,9 +596,27 @@ type AgentSubscription struct {
 	Instruction string `json:"instruction,omitempty" dynamodbav:"instruction,omitempty"`
 	// ActionMode caps what the watcher may DO on a trigger (WatchAction*). Empty
 	// defaults to notify — the safest: DM the creator, never post publicly.
-	ActionMode    string     `json:"actionMode,omitempty" dynamodbav:"actionMode,omitempty"`
-	HeartbeatMins int        `json:"heartbeatMins,omitempty" dynamodbav:"heartbeatMins,omitempty"`
-	LastRunAt     *time.Time `json:"lastRunAt,omitempty" dynamodbav:"lastRunAt,omitempty"`
+	ActionMode    string `json:"actionMode,omitempty" dynamodbav:"actionMode,omitempty"`
+	HeartbeatMins int    `json:"heartbeatMins,omitempty" dynamodbav:"heartbeatMins,omitempty"`
+	// Schedule turns this row into a STANDING ORDER on a clock rather than a
+	// watcher on messages: a five-field cron spec (internal/cron) evaluated in
+	// ScheduleTZ. "0 8 * * 1-5" with Instruction "post yesterday's metabase
+	// revenue" is the whole feature. A scheduled row never reacts to messages —
+	// the two triggers are deliberately exclusive, so a daily report doesn't
+	// also fire on every chat line.
+	Schedule string `json:"schedule,omitempty" dynamodbav:"schedule,omitempty"`
+	// ScheduleTZ is the IANA zone the spec is read in, defaulted at write time
+	// from the CREATOR's profile timezone — "8am" means their 8am, not the
+	// server's. Empty (unknown zone, or a user who never set one) reads as UTC.
+	ScheduleTZ string `json:"scheduleTZ,omitempty" dynamodbav:"scheduleTZ,omitempty"`
+	// ConnectorSlugs / SkillIDs pin the tools a standing order may reach for.
+	// A chat invocation names them with /picks in the message; a scheduled
+	// order has no message, and leaving the agent to guess which of a dozen
+	// connected services the instruction meant is exactly the confusion this
+	// removes. Empty = no pins (the agent discovers as usual).
+	ConnectorSlugs []string   `json:"connectorSlugs,omitempty" dynamodbav:"connectorSlugs,omitempty"`
+	SkillIDs       []string   `json:"skillIDs,omitempty" dynamodbav:"skillIDs,omitempty"`
+	LastRunAt      *time.Time `json:"lastRunAt,omitempty" dynamodbav:"lastRunAt,omitempty"`
 	// PendingCatchUp marks triggers this watcher COULDN'T act on — creator
 	// offline, or the agent already busy in the thread. Instead of one run
 	// per missed message (overwhelming: 20 messages = 20 runs = 20 DMs) the
@@ -647,6 +665,11 @@ const (
 	RunModeHeartbeat = "heartbeat" // periodic idle check-in
 	RunModeFollowUp  = "followup"  // un-tagged invoker reply in a followed thread
 	RunModeTask      = "task"      // bound to a coding task (uncapped, workspace-backed)
+	// RunModeScheduled is a cron-driven standing order. It carries the DIRECT
+	// budget, not the ambient one: the creator explicitly asked for this work
+	// ("pull yesterday's numbers and summarize"), which takes real tool calls,
+	// unlike a heartbeat's "glance and usually say nothing".
+	RunModeScheduled = "scheduled"
 )
 
 // Task-mode budgets: "no limits" by decision. The horizon exists only so

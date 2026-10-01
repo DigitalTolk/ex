@@ -832,7 +832,7 @@ func TestAgentCovUpdateDeleteSubscription(t *testing.T) {
 	}
 
 	dir.errs["ListSubscriptionsByParent"] = errAgentCov
-	if _, err := svc.UpdateSubscription(ctx, "u1", "ch1", "s1", "", ""); !errors.Is(err, errAgentCov) {
+	if _, err := svc.UpdateSubscription(ctx, "u1", "ch1", "s1", WatchInput{}); !errors.Is(err, errAgentCov) {
 		t.Fatalf("update: want list error, got %v", err)
 	}
 	if err := svc.DeleteSubscription(ctx, "u1", "ch1", "s1"); !errors.Is(err, errAgentCov) {
@@ -840,22 +840,22 @@ func TestAgentCovUpdateDeleteSubscription(t *testing.T) {
 	}
 	delete(dir.errs, "ListSubscriptionsByParent")
 
-	if _, err := svc.UpdateSubscription(ctx, "u1", "ch1", "s2", "", ""); !errors.Is(err, ErrForbidden) {
+	if _, err := svc.UpdateSubscription(ctx, "u1", "ch1", "s2", WatchInput{}); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("update: want forbidden, got %v", err)
 	}
-	if _, err := svc.UpdateSubscription(ctx, "u1", "ch1", "s1", "", "bogus"); !errors.Is(err, ErrValidation) {
+	if _, err := svc.UpdateSubscription(ctx, "u1", "ch1", "s1", WatchInput{ActionMode: "bogus"}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("update: want invalid mode, got %v", err)
 	}
 	dir.errs["PutAgentSubscription"] = errAgentCov
-	if _, err := svc.UpdateSubscription(ctx, "u1", "ch1", "s1", "x", ""); !errors.Is(err, errAgentCov) {
+	if _, err := svc.UpdateSubscription(ctx, "u1", "ch1", "s1", WatchInput{Instruction: "x"}); !errors.Is(err, errAgentCov) {
 		t.Fatalf("update: want put error, got %v", err)
 	}
 	delete(dir.errs, "PutAgentSubscription")
-	sub, err := svc.UpdateSubscription(ctx, "u1", "ch1", "s1", "  watch budget  ", model.WatchActionDraft)
+	sub, err := svc.UpdateSubscription(ctx, "u1", "ch1", "s1", WatchInput{Instruction: "  watch budget  ", ActionMode: model.WatchActionDraft})
 	if err != nil || sub.Instruction != "watch budget" || sub.ActionMode != model.WatchActionDraft {
 		t.Fatalf("update sub: %v %+v", err, sub)
 	}
-	if _, err := svc.UpdateSubscription(ctx, "u1", "ch1", "ghost", "", ""); !errors.Is(err, store.ErrNotFound) {
+	if _, err := svc.UpdateSubscription(ctx, "u1", "ch1", "ghost", WatchInput{}); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("update: want not found, got %v", err)
 	}
 

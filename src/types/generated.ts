@@ -692,6 +692,30 @@ export interface AgentSubscription {
    */
   actionMode?: string;
   heartbeatMins?: number /* int */;
+  /**
+   * Schedule turns this row into a STANDING ORDER on a clock rather than a
+   * watcher on messages: a five-field cron spec (internal/cron) evaluated in
+   * ScheduleTZ. "0 8 * * 1-5" with Instruction "post yesterday's metabase
+   * revenue" is the whole feature. A scheduled row never reacts to messages —
+   * the two triggers are deliberately exclusive, so a daily report doesn't
+   * also fire on every chat line.
+   */
+  schedule?: string;
+  /**
+   * ScheduleTZ is the IANA zone the spec is read in, defaulted at write time
+   * from the CREATOR's profile timezone — "8am" means their 8am, not the
+   * server's. Empty (unknown zone, or a user who never set one) reads as UTC.
+   */
+  scheduleTZ?: string;
+  /**
+   * ConnectorSlugs / SkillIDs pin the tools a standing order may reach for.
+   * A chat invocation names them with /picks in the message; a scheduled
+   * order has no message, and leaving the agent to guess which of a dozen
+   * connected services the instruction meant is exactly the confusion this
+   * removes. Empty = no pins (the agent discovers as usual).
+   */
+  connectorSlugs?: string[];
+  skillIDs?: string[];
   lastRunAt?: string /* RFC3339 */;
   /**
    * PendingCatchUp marks triggers this watcher COULDN'T act on — creator
@@ -753,6 +777,13 @@ export const RunModeFollowUp = "followup"; // un-tagged invoker reply in a follo
  * Run modes beyond plain mentions.
  */
 export const RunModeTask = "task"; // bound to a coding task (uncapped, workspace-backed)
+/**
+ * RunModeScheduled is a cron-driven standing order. It carries the DIRECT
+ * budget, not the ambient one: the creator explicitly asked for this work
+ * ("pull yesterday's numbers and summarize"), which takes real tool calls,
+ * unlike a heartbeat's "glance and usually say nothing".
+ */
+export const RunModeScheduled = "scheduled";
 /**
  * Task-mode budgets: "no limits" by decision. The horizon exists only so
  * deadlines and run tokens stay finite; the idle reaper is what actually

@@ -357,3 +357,43 @@ func TestResolve_APIHarnessGetsModelAndExecMode(t *testing.T) {
 	}
 }
 
+
+// A scheduled firing at a channel's top level answers no conversation: its
+// bundle keeps shared context (people pin it on purpose) but drops the
+// recent-channel window and other agents' conclusions — background it never
+// needed, paid for on every firing.
+func TestOrchestrator_BundleScheduledStandalone(t *testing.T) {
+	ctx := context.Background()
+	fx := newOrchFixture(t)
+	ctxSvc, _ := newTestContextService(allowAll{})
+	fx.orch.SetContextService(ctxSvc)
+	if _, err := ctxSvc.Write(ctx, ContextWrite{AuthorID: "u-alice", AccessorID: "u-alice", ParentID: "chan1", ParentType: ParentChannel, Body: "pinned constraint", Pinned: true}); err != nil {
+		t.Fatalf("ctx write: %v", err)
+	}
+	prior := &model.Run{
+		ID: "run-prior", AgentID: testQibID, OwnerID: "u-alice", InvokerID: "u-alice",
+		ParentID: "chan1", ParentType: ParentChannel, State: model.RunStateCompleted, CreatedAt: fx.now.Add(-time.Minute),
+	}
+	fx.runs.runs[prior.ID] = prior
+	_ = fx.runs.PutDigest(ctx, &model.RunDigest{RunID: prior.ID, AgentID: testQibID, InvokerID: "u-alice", Summary: "qib checked the claims", State: model.RunStateCompleted})
+
+	_ = fx.dir.PutAgentSubscription(ctx, &model.AgentSubscription{
+		ID: "sub-s", AgentID: testGGID, CreatorID: "u-alice", ParentID: "chan1", ParentType: ParentChannel,
+		Schedule: "0 8 * * *", ScheduleTZ: "UTC", Instruction: "daily report", ActionMode: model.WatchActionNotify,
+		CreatedAt: time.Date(2026, 9, 23, 9, 0, 0, 0, time.UTC),
+	})
+	*fx.now = time.Date(2026, 9, 24, 8, 0, 30, 0, time.UTC)
+	fx.orch.sweepSchedules(ctx, watchAllSubs(t, fx))
+	a := fx.claim(t)
+	if a.Mode != model.RunModeScheduled {
+		t.Fatalf("claimed a %s run", a.Mode)
+	}
+	if !strings.Contains(a.ContextBundle, "pinned constraint") {
+		t.Fatalf("shared context dropped:\n%s", a.ContextBundle)
+	}
+	for _, unwanted := range []string{"# Recent channel messages", "# What other agents concluded", "qib checked the claims"} {
+		if strings.Contains(a.ContextBundle, unwanted) {
+			t.Fatalf("standalone bundle still carries %q:\n%s", unwanted, a.ContextBundle)
+		}
+	}
+}
