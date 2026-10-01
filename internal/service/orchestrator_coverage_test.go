@@ -2499,3 +2499,100 @@ func TestOrchCov_ResolveSkillPicksIndexLookupFails(t *testing.T) {
 }
 
 func orchCovPtr[T any](v T) *T { return &v }
+
+func TestOrchCov_SweepSchedulesSkipArms(t *testing.T) {
+	ctx := context.Background()
+	// A spec that is always due, so each arm is reached on the first sweep.
+	const everyMinute = "* * * * *"
+	past := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	fx := newOrchCovFixture(t)
+	// Not scheduled → skipped by the guard.
+	_ = fx.dir.fakeAgentDir.PutAgentSubscription(ctx, &model.AgentSubscription{
+		ID: "s-watch", AgentID: testGGID, CreatorID: "u-alice", ParentID: "chan1", ParentType: ParentChannel,
+	})
+	// Scheduled, but not due yet (next firing is years out).
+	_ = fx.dir.fakeAgentDir.PutAgentSubscription(ctx, &model.AgentSubscription{
+		ID: "s-later", AgentID: testGGID, CreatorID: "u-alice", ParentID: "chan1", ParentType: ParentChannel,
+		Schedule: "0 8 * * *", Instruction: "x", CreatedAt: time.Now().Add(time.Hour),
+	})
+	// Due, but the "agent" is a human user.
+	_ = fx.dir.fakeAgentDir.PutAgentSubscription(ctx, &model.AgentSubscription{
+		ID: "s-human", AgentID: "u-bob", CreatorID: "u-alice", ParentID: "chan1", ParentType: ParentChannel,
+		Schedule: everyMinute, Instruction: "x", CreatedAt: past,
+	})
+	// Due, but the creator vanished.
+	_ = fx.dir.fakeAgentDir.PutAgentSubscription(ctx, &model.AgentSubscription{
+		ID: "s-gone", AgentID: testQibID, CreatorID: "u-gone", ParentID: "chan1", ParentType: ParentChannel,
+		Schedule: everyMinute, Instruction: "x", CreatedAt: past,
+	})
+	fx.orch.sweepSchedules(ctx, fx.allSubs(t))
+	if ids, _ := fx.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 10); len(ids) != 0 {
+		t.Fatalf("skip arms started runs: %v", ids)
+	}
+
+	// LastRunAt write failure → skipped before invoking, so a broken store
+	// can't hot-loop the order every tick.
+	fx2 := newOrchCovFixture(t)
+	_ = fx2.dir.fakeAgentDir.PutAgentSubscription(ctx, &model.AgentSubscription{
+		ID: "s-due", AgentID: testGGID, CreatorID: "u-alice", ParentID: "chan1", ParentType: ParentChannel,
+		Schedule: everyMinute, Instruction: "x", CreatedAt: past,
+	})
+	fx2.dir.failPutSub = errOrchCov
+	fx2.orch.sweepSchedules(ctx, fx2.allSubs(t))
+	if ids, _ := fx2.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 10); len(ids) != 0 {
+		t.Fatalf("failed mark still invoked: %v", ids)
+	}
+}
+
+// ListSchedules gathers the creator's scheduled orders across agents — never
+// their plain watchers or anyone else's orders — and SlugForAgent maps an
+// agent user id back to its template.
+func TestOrchCov_ListSchedulesAndSlugForAgent(t *testing.T) {
+	ctx := context.Background()
+	fx := newOrchCovFixture(t)
+	svc := fx.orch.agentSvc
+	for _, sub := range []*model.AgentSubscription{
+		{ID: "s-gg", AgentID: testGGID, CreatorID: "u-alice", ParentID: "chan1", ParentType: ParentChannel, Schedule: "0 9 * * 1-5", Instruction: "x"},
+		{ID: "s-qib", AgentID: testQibID, CreatorID: "u-alice", ParentID: "chan1", ParentType: ParentChannel, Schedule: "0 17 * * *", Instruction: "y"},
+		{ID: "w-gg", AgentID: testGGID, CreatorID: "u-alice", ParentID: "chan1", ParentType: ParentChannel, Instruction: "a watcher"},
+		{ID: "s-bob", AgentID: testGGID, CreatorID: "u-bob", ParentID: "chan1", ParentType: ParentChannel, Schedule: "0 9 * * *", Instruction: "bob's"},
+	} {
+		_ = fx.dir.fakeAgentDir.PutAgentSubscription(ctx, sub)
+	}
+	// A template whose agent user was never written is skipped, not fatal.
+	_ = fx.dir.PutTemplate(ctx, &model.AgentTemplate{Slug: "no-user-yet"})
+
+	got, err := svc.ListSchedules(ctx, "u-alice")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	ids := map[string]string{}
+	for _, e := range got {
+		ids[e.Sub.ID] = e.Slug
+	}
+	if len(ids) != 2 || ids["s-gg"] != AgentSlugGG || ids["s-qib"] != AgentSlugQib {
+		t.Fatalf("schedules = %v", ids)
+	}
+
+	if slug, err := svc.SlugForAgent(ctx, testQibID); err != nil || slug != AgentSlugQib {
+		t.Fatalf("slug for qib: %q %v", slug, err)
+	}
+	if _, err := svc.SlugForAgent(ctx, "u-alice"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("slug for a human: %v", err)
+	}
+
+	// Store failures surface.
+	fx.dir.failListAllSubs = errOrchCov
+	if _, err := svc.ListSchedules(ctx, "u-carol"); !errors.Is(err, errOrchCov) {
+		t.Fatalf("subscription failure: %v", err)
+	}
+	fx.dir.failListAllSubs = nil
+	fx.dir.failListTemplates = errOrchCov
+	if _, err := svc.ListSchedules(ctx, "u-alice"); !errors.Is(err, errOrchCov) {
+		t.Fatalf("template failure (list): %v", err)
+	}
+	if _, err := svc.SlugForAgent(ctx, testGGID); !errors.Is(err, errOrchCov) {
+		t.Fatalf("template failure (slug): %v", err)
+	}
+}

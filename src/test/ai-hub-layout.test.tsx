@@ -8,10 +8,12 @@ function renderAt(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <Routes>
+        {/* Stub one page per tab, derived from the source of truth so a new
+            tab can't silently render into an empty layout. */}
         <Route element={<AiHubLayout />}>
-          <Route path="/agents" element={<div data-testid="page-agents" />} />
-          <Route path="/skills" element={<div data-testid="page-skills" />} />
-          <Route path="/connectors" element={<div data-testid="page-connectors" />} />
+          {AI_HUB_TABS.map(({ to }) => (
+            <Route key={to} path={to} element={<div data-testid={`page-${to.slice(1)}`} />} />
+          ))}
         </Route>
       </Routes>
     </MemoryRouter>,
@@ -25,7 +27,7 @@ describe('AiHubLayout', () => {
       const view = renderAt(path);
       const nav = screen.getByRole('navigation', { name: 'AI sections' });
       const links = screen.getAllByRole('link');
-      expect(links.map((l) => l.textContent)).toEqual(['Agents', 'Skills', 'Connectors']);
+      expect(links.map((l) => l.textContent)).toEqual(AI_HUB_TABS.map((t) => t.label));
       const active = screen.getByRole('link', { name: label });
       expect(active).toHaveAttribute('aria-current', 'page');
       expect(active.className).toContain('font-semibold');

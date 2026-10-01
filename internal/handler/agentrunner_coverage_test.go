@@ -335,8 +335,12 @@ type hrunnerCovDir struct {
 	templates  []*model.AgentTemplate
 	skills     map[string]*model.Skill
 	taskClaims []*model.TaskClaim
+	subs       []*model.AgentSubscription
 
 	listTemplatesErr error
+	putSubErr        error
+	listSubsErr      error
+	deleteSubErr     error
 	listSkillsErr    error
 	putRunnerErr     error
 	putMemoryErr     error
@@ -419,11 +423,33 @@ func (d *hrunnerCovDir) GetAgentMemory(context.Context, string, string) (*model.
 	return nil, store.ErrNotFound
 }
 
-func (d *hrunnerCovDir) PutAgentSubscription(context.Context, *model.AgentSubscription) error {
+func (d *hrunnerCovDir) PutAgentSubscription(_ context.Context, sub *model.AgentSubscription) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.putSubErr != nil {
+		return d.putSubErr
+	}
+	for i, cur := range d.subs {
+		if cur.ID == sub.ID {
+			d.subs[i] = sub
+			return nil
+		}
+	}
+	d.subs = append(d.subs, sub)
 	return nil
 }
-func (d *hrunnerCovDir) ListSubscriptionsByParent(context.Context, string) ([]*model.AgentSubscription, error) {
-	return nil, nil
+func (d *hrunnerCovDir) ListSubscriptionsByParent(ctx context.Context, parentID string) ([]*model.AgentSubscription, error) {
+	all, err := d.ListAllSubscriptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.AgentSubscription, 0, len(all))
+	for _, sub := range all {
+		if sub.ParentID == parentID {
+			out = append(out, sub)
+		}
+	}
+	return out, nil
 }
 // ListSubscriptionsByCreator mirrors the store's creator index; the fake
 // filters its own rows.
@@ -442,9 +468,27 @@ func (d *hrunnerCovDir) ListSubscriptionsByCreator(ctx context.Context, creatorI
 }
 
 func (d *hrunnerCovDir) ListAllSubscriptions(context.Context) ([]*model.AgentSubscription, error) {
-	return nil, nil
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.listSubsErr != nil {
+		return nil, d.listSubsErr
+	}
+	return append([]*model.AgentSubscription(nil), d.subs...), nil
 }
-func (d *hrunnerCovDir) DeleteAgentSubscription(context.Context, string, string) error { return nil }
+func (d *hrunnerCovDir) DeleteAgentSubscription(_ context.Context, _, id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.deleteSubErr != nil {
+		return d.deleteSubErr
+	}
+	for i, cur := range d.subs {
+		if cur.ID == id {
+			d.subs = append(d.subs[:i], d.subs[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
 
 func (d *hrunnerCovDir) PutTaskClaim(_ context.Context, c *model.TaskClaim) error {
 	d.mu.Lock()

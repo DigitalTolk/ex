@@ -920,7 +920,15 @@ Working:
   create_coding_task (project = the PRODUCT name) and end your turn.
 `)
 	if a.WatchInstruction != "" {
-		fmt.Fprintf(&b, "\n# Standing order (watch)\n%s\nIf the triggering activity does not match, reply exactly SKIP.\n", a.WatchInstruction)
+		// A watcher judges whether the activity that woke it matches, and opts
+		// out with SKIP. A SCHEDULED order has no triggering activity to judge
+		// — the clock woke it — so telling it to consider SKIP would invite it
+		// to silently do nothing on the morning report it was asked for.
+		if a.Mode == model.RunModeScheduled {
+			fmt.Fprintf(&b, "\n# Standing order (scheduled)\n%s\nThis run was started by its schedule. Carry the order out and deliver the result here, as your reply in this conversation — not by DM or in another channel unless the order itself names somewhere else. If there is genuinely nothing to report, say so in one line rather than staying silent.\n", a.WatchInstruction)
+		} else {
+			fmt.Fprintf(&b, "\n# Standing order (watch)\n%s\nIf the triggering activity does not match, reply exactly SKIP.\n", a.WatchInstruction)
+		}
 	}
 	b.WriteString(toolsDesc)
 	return b.String()

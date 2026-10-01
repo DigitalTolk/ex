@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 
 // One shared workspace agent as served by GET /api/v1/agents. The agent
@@ -99,6 +99,13 @@ export interface AgentSubscription {
   threadRootID?: string;
   instruction?: string;
   actionMode?: WatchActionMode;
+  // A five-field cron spec turns the row into a SCHEDULED standing order
+  // (clock-driven) instead of a message watcher. scheduleTZ is the IANA zone
+  // it is read in — defaulted server-side to the creator's own timezone.
+  schedule?: string;
+  scheduleTZ?: string;
+  connectorSlugs?: string[];
+  skillIDs?: string[];
   // Catch-up state: the watcher missed triggers (pendingSince). When the miss
   // happened while the creator was OFFLINE and the agent is a local CLI, the
   // backend asks before processing — the card offers Process / Dismiss.
@@ -160,19 +167,83 @@ export function useAgentSubscriptions(slug: string) {
   });
 }
 
+// useAllAgentSchedules gathers the caller's SCHEDULED orders across every
+// agent for the Schedules page. One query per agent (there are a handful) and
+// the same cache entries the agent cards read, so creating an order on either
+// surface refreshes the other with no extra endpoint.
+export function useAllAgentSchedules(agents: AgentView[] | undefined) {
+  const list = agents ?? [];
+  const results = useQueries({
+    queries: list.map((a) => ({
+      queryKey: subsKey(a.slug),
+      queryFn: async () => {
+        const res = await apiFetch<{ subscriptions: AgentSubscription[] }>(
+          `/api/v1/agents/${a.slug}/subscriptions`,
+        );
+        return res.subscriptions ?? [];
+      },
+    })),
+  });
+  const rows = list.flatMap((agent, i) =>
+    (results[i]?.data ?? [])
+      .filter((sub) => sub.schedule)
+      .map((sub) => ({ agent, sub })),
+  );
+  return {
+    rows,
+    isLoading: results.some((r) => r.isLoading),
+  };
+}
+
 export function useCreateAgentSubscription(slug: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (body: {
-      parentID: string;
+      // Optional for SCHEDULED orders: with no parent the server files the
+      // order in the caller's own DM with the agent.
+      parentID?: string;
       parentType?: string;
       keywords?: string[];
       heartbeatMins?: number;
+      instruction?: string;
+      actionMode?: WatchActionMode;
+      schedule?: string;
+      scheduleTZ?: string;
+      // Tools pinned to a scheduled order, so it never has to guess which
+      // connected service or instruction pack the instruction meant.
+      connectorSlugs?: string[];
+      skillIDs?: string[];
     }) =>
       apiFetch(`/api/v1/agents/${slug}/subscriptions`, {
         method: 'POST',
         body: JSON.stringify(body),
       }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: subsKey(slug) }),
+  });
+}
+
+// useUpdateAgentSchedule edits a scheduled order in place. The PATCH is
+// FULL-STATE for the order fields — an omitted schedule would turn the order
+// back into a plain watcher — so every field is always sent. The destination
+// is part of the row's identity and can't change here.
+export function useUpdateAgentSchedule(slug: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (vars: {
+      parentID: string;
+      id: string;
+      instruction: string;
+      schedule: string;
+      scheduleTZ: string;
+      connectorSlugs: string[];
+      skillIDs: string[];
+    }) => {
+      const { parentID, id, ...patch } = vars;
+      return apiFetch(`/api/v1/agents/${slug}/subscriptions/${parentID}/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      });
+    },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: subsKey(slug) }),
   });
 }

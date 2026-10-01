@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -693,16 +694,16 @@ func TestAgentService_UpdateAndListWatchers(t *testing.T) {
 	}
 
 	// Edit instruction + mode.
-	up, err := svc.UpdateSubscription(context.Background(), "u-alice", "chan1", "w1", "new order", model.WatchActionReply)
+	up, err := svc.UpdateSubscription(context.Background(), "u-alice", "chan1", "w1", WatchInput{Instruction: "new order", ActionMode: model.WatchActionReply})
 	if err != nil || up.Instruction != "new order" || up.ActionMode != model.WatchActionReply {
 		t.Fatalf("update failed: %+v (err %v)", up, err)
 	}
 
 	// Non-creator can't edit; bad mode rejected.
-	if _, err := svc.UpdateSubscription(context.Background(), "u-bob", "chan1", "w1", "hijack", ""); !errors.Is(err, ErrForbidden) {
+	if _, err := svc.UpdateSubscription(context.Background(), "u-bob", "chan1", "w1", WatchInput{Instruction: "hijack"}); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("expected ErrForbidden, got %v", err)
 	}
-	if _, err := svc.UpdateSubscription(context.Background(), "u-alice", "chan1", "w1", "x", "bogus"); !errors.Is(err, ErrValidation) {
+	if _, err := svc.UpdateSubscription(context.Background(), "u-alice", "chan1", "w1", WatchInput{Instruction: "x", ActionMode: "bogus"}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("expected ErrValidation, got %v", err)
 	}
 }
@@ -842,4 +843,396 @@ func TestOrchestrator_SkillIndexPrefsErrorDegrades(t *testing.T) {
 	if !strings.Contains(a.ContextBundle, "[sk:"+sk.ID+"]") {
 		t.Fatalf("index dropped on prefs error:\n%s", a.ContextBundle)
 	}
+}
+
+// A scheduled subscription is a standing order on a CLOCK: it fires when its
+// cron spec comes due, never on chat traffic, and it carries the DIRECT turn
+// budget because the creator asked for real work.
+func TestOrchestrator_ScheduledOrderFiresOnSchedule(t *testing.T) {
+	ctx := context.Background()
+	fx := newOrchFixture(t)
+	// 08:00 every weekday, in a fixed zone so the test doesn't depend on the
+	// machine's locale.
+	_ = fx.dir.PutAgentSubscription(ctx, &model.AgentSubscription{
+		ID: "sub-s", AgentID: testGGID, CreatorID: "u-alice",
+		ParentID: "chan1", ParentType: ParentChannel,
+		Schedule: "0 8 * * 1-5", ScheduleTZ: "UTC",
+		Instruction: "Post yesterday's revenue from metabase.",
+		ActionMode:  model.WatchActionNotify,
+		CreatedAt:   time.Date(2026, 9, 23, 9, 0, 0, 0, time.UTC), // Wed, after 08:00
+	})
+
+	// Same day at 20:00: today's 08:00 already passed before it existed.
+	*fx.now = time.Date(2026, 9, 23, 20, 0, 0, 0, time.UTC)
+	fx.orch.sweepSchedules(ctx, watchAllSubs(t, fx))
+	if ids, _ := fx.runs.ListQueuedRuns(ctx, "u-alice", 10); len(ids) != 0 {
+		t.Fatalf("scheduled order fired retroactively: %d runs", len(ids))
+	}
+
+	// Next morning 08:00 — due.
+	*fx.now = time.Date(2026, 9, 24, 8, 0, 30, 0, time.UTC)
+	fx.orch.sweepSchedules(ctx, watchAllSubs(t, fx))
+	ids, _ := fx.runs.ListQueuedRuns(ctx, "u-alice", 10)
+	if len(ids) != 1 {
+		t.Fatalf("expected 1 scheduled run, got %d", len(ids))
+	}
+	run, _ := fx.runs.GetRun(ctx, ids[0])
+	if run.Mode != model.RunModeScheduled || run.MessageID != "" {
+		t.Fatalf("bad scheduled run: mode=%s msgID=%q", run.Mode, run.MessageID)
+	}
+	if !strings.Contains(run.Prompt, "scheduled order") || !strings.Contains(run.Prompt, "08:00") {
+		t.Fatalf("scheduled prompt should name the schedule: %q", run.Prompt)
+	}
+	if run.WatchInstruction != "Post yesterday's revenue from metabase." {
+		t.Fatalf("standing order lost: %q", run.WatchInstruction)
+	}
+	// Direct-tier budget, not the ambient one.
+	if run.Limits.TurnsFor(run.Mode) != model.DefaultAgentLimits().MaxTaskTurns {
+		t.Fatalf("scheduled run got the ambient turn budget: %d", run.Limits.TurnsFor(run.Mode))
+	}
+
+	// Ten minutes later the same morning: LastRunAt advanced, so no re-fire.
+	*fx.now = time.Date(2026, 9, 24, 8, 10, 0, 0, time.UTC)
+	fx.orch.sweepSchedules(ctx, watchAllSubs(t, fx))
+	if ids, _ := fx.runs.ListQueuedRuns(ctx, "u-alice", 10); len(ids) != 1 {
+		t.Fatalf("scheduled order re-fired within the same firing: %d runs", len(ids))
+	}
+
+	// The heartbeat sweep leaves scheduled rows alone: both sweeps advance
+	// LastRunAt, so sharing a row would scramble the cron's timing.
+	subs := watchAllSubs(t, fx)
+	subs[0].HeartbeatMins = 15
+	_ = fx.dir.PutAgentSubscription(ctx, subs[0])
+	*fx.now = time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	fx.orch.sweepHeartbeats(ctx, watchAllSubs(t, fx))
+	if ids, _ := fx.runs.ListQueuedRuns(ctx, "u-alice", 10); len(ids) != 1 {
+		t.Fatalf("heartbeat sweep also fired a scheduled row: %d runs", len(ids))
+	}
+}
+
+// The two triggers are exclusive: a scheduled row must never also react to
+// messages in its channel, or a daily report would fire on every chat line.
+func TestOrchestrator_ScheduledOrderIgnoresMessages(t *testing.T) {
+	ctx := context.Background()
+	fx := newOrchFixture(t)
+	_ = fx.dir.PutAgentSubscription(ctx, &model.AgentSubscription{
+		ID: "sub-s", AgentID: testGGID, CreatorID: "u-alice",
+		ParentID: "chan1", ParentType: ParentChannel,
+		Schedule: "0 8 * * *", ScheduleTZ: "UTC", Instruction: "daily report",
+		CreatedAt: time.Now(),
+	})
+	fx.orch.OnMessage(ctx, &model.Message{ID: "m1", ParentID: "chan1", AuthorID: "u-bob", Body: "morning all"}, ParentChannel)
+	if ids, _ := fx.runs.ListQueuedRuns(ctx, "u-alice", 10); len(ids) != 0 {
+		t.Fatalf("scheduled order fired on a chat message: %d runs", len(ids))
+	}
+}
+
+// A schedule that comes due while the creator is offline is not dropped: the
+// row is marked pending and the catch-up sweep runs it ONCE when they return,
+// with no consent card (they already consented by scheduling it).
+func TestOrchestrator_ScheduledOrderCatchesUpAfterOffline(t *testing.T) {
+	ctx := context.Background()
+	fx := newOrchFixture(t)
+	sub := &model.AgentSubscription{
+		ID: "sub-s", AgentID: testGGID, CreatorID: "u-alice",
+		ParentID: "chan1", ParentType: ParentChannel,
+		Schedule: "0 8 * * *", ScheduleTZ: "UTC", Instruction: "daily report",
+		ActionMode: model.WatchActionNotify,
+		CreatedAt:  time.Date(2026, 9, 23, 9, 0, 0, 0, time.UTC),
+	}
+	_ = fx.dir.PutAgentSubscription(ctx, sub)
+
+	// No live runner for alice → the fire is missed and flagged.
+	fx.dir.mu.Lock()
+	saved := fx.dir.runners["u-alice"]
+	fx.dir.runners["u-alice"] = nil
+	fx.dir.mu.Unlock()
+	*fx.now = time.Date(2026, 9, 24, 8, 0, 30, 0, time.UTC)
+	fx.orch.sweepSchedules(ctx, watchAllSubs(t, fx))
+	if ids, _ := fx.runs.ListQueuedRuns(ctx, "u-alice", 10); len(ids) != 0 {
+		t.Fatalf("offline creator still started a run: %d", len(ids))
+	}
+	after := watchAllSubs(t, fx)[0]
+	if !after.PendingCatchUp {
+		t.Fatal("missed scheduled order was dropped instead of flagged")
+	}
+
+	// Back online: the catch-up sweep runs it once, as a scheduled run that
+	// says it is late — no consent ask.
+	fx.dir.mu.Lock()
+	fx.dir.runners["u-alice"] = saved
+	fx.dir.mu.Unlock()
+	fx.orch.sweepWatchCatchUps(ctx, watchAllSubs(t, fx))
+	ids, _ := fx.runs.ListQueuedRuns(ctx, "u-alice", 10)
+	if len(ids) != 1 {
+		t.Fatalf("catch-up expected 1 run, got %d", len(ids))
+	}
+	run, _ := fx.runs.GetRun(ctx, ids[0])
+	if run.Mode != model.RunModeScheduled || !strings.Contains(run.Prompt, "late") {
+		t.Fatalf("catch-up run should be a late scheduled order: mode=%s prompt=%q", run.Mode, run.Prompt)
+	}
+	if watchAllSubs(t, fx)[0].PendingCatchUp {
+		t.Fatal("catch-up flag not cleared")
+	}
+}
+
+// Scheduling validation and the timezone default: "8am" must mean the
+// CREATOR's 8am, so an order saved without an explicit zone adopts their
+// profile timezone rather than the server's.
+func TestAgentService_ScheduleValidationAndTimezone(t *testing.T) {
+	ctx := context.Background()
+	fx := newOrchFixture(t)
+	svc := NewAgentService(fx.dir, fx.users)
+
+	// Alice's profile says Stockholm; she saves an order without naming a zone.
+	alice := fx.users.users["u-alice"]
+	alice.TimeZone = "Europe/Stockholm"
+
+	sub, err := svc.CreateSubscription(ctx, "u-alice", AgentSlugGG, "chan1", ParentChannel, nil, 0, WatchInput{
+		Instruction: "Post yesterday's revenue.",
+		Schedule:    "0 8 * * 1-5",
+	})
+	if err != nil {
+		t.Fatalf("create scheduled: %v", err)
+	}
+	if sub.Schedule != "0 8 * * 1-5" || sub.ScheduleTZ != "Europe/Stockholm" {
+		t.Fatalf("schedule/tz = %q/%q, want the creator's zone", sub.Schedule, sub.ScheduleTZ)
+	}
+
+	// An explicit zone wins over the profile.
+	sub2, err := svc.CreateSubscription(ctx, "u-alice", AgentSlugGG, "chan1", ParentChannel, nil, 0, WatchInput{
+		Instruction: "Nightly digest.", Schedule: "0 22 * * *", ScheduleTZ: "UTC",
+	})
+	if err != nil || sub2.ScheduleTZ != "UTC" {
+		t.Fatalf("explicit tz not kept: %q (err %v)", sub2.ScheduleTZ, err)
+	}
+
+	// A creator with no profile timezone leaves it empty — read as UTC later.
+	bob := &model.User{ID: "u-carol", DisplayName: "Carol"}
+	fx.users.users["u-carol"] = bob
+	sub3, err := svc.CreateSubscription(ctx, "u-carol", AgentSlugGG, "chan1", ParentChannel, nil, 0, WatchInput{
+		Instruction: "Weekly wrap.", Schedule: "0 16 * * 5",
+	})
+	if err != nil || sub3.ScheduleTZ != "" {
+		t.Fatalf("zone-less creator: tz=%q err=%v", sub3.ScheduleTZ, err)
+	}
+
+	// Rejections: unparseable spec, unknown zone, and a schedule with nothing
+	// to do (an order that wakes the agent to accomplish nothing).
+	for _, tc := range []struct {
+		name string
+		in   WatchInput
+	}{
+		{"bad spec", WatchInput{Instruction: "x", Schedule: "every morning"}},
+		{"out of range", WatchInput{Instruction: "x", Schedule: "0 99 * * *"}},
+		{"unknown zone", WatchInput{Instruction: "x", Schedule: "0 8 * * *", ScheduleTZ: "Mars/Olympus"}},
+		{"no instruction", WatchInput{Schedule: "0 8 * * *"}},
+	} {
+		if _, err := svc.CreateSubscription(ctx, "u-alice", AgentSlugGG, "chan1", ParentChannel, nil, 0, tc.in); !errors.Is(err, ErrValidation) {
+			t.Fatalf("%s: want ErrValidation, got %v", tc.name, err)
+		}
+	}
+
+	// Editing carries the same rules, and clearing the spec turns a scheduled
+	// order back into a plain watcher.
+	if _, err := svc.UpdateSubscription(ctx, "u-alice", "chan1", sub.ID, WatchInput{Instruction: "x", Schedule: "nope"}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("update with a bad spec: %v", err)
+	}
+	cleared, err := svc.UpdateSubscription(ctx, "u-alice", "chan1", sub.ID, WatchInput{Instruction: "watch instead"})
+	if err != nil || cleared.Schedule != "" || cleared.ScheduleTZ != "" {
+		t.Fatalf("clearing the schedule: %+v (err %v)", cleared, err)
+	}
+}
+
+// A scheduled order with no channel belongs in the creator's own DM with the
+// agent — "where does this run" is bookkeeping, and asking people to nominate
+// a channel for "DM me the numbers each morning" is a leaked detail.
+func TestAgentService_ScheduleDefaultsToCreatorDM(t *testing.T) {
+	ctx := context.Background()
+	fx := newOrchFixture(t)
+	svc := NewAgentService(fx.dir, fx.users)
+	dm := &fakeOwnerDM{convID: "conv-dm-1"}
+	svc.SetDMResolver(dm)
+
+	sub, err := svc.CreateSubscription(ctx, "u-alice", AgentSlugGG, "", "", nil, 0, WatchInput{
+		Instruction: "Post yesterday's revenue.",
+		Schedule:    "0 8 * * 1-5",
+		ScheduleTZ:  "UTC",
+	})
+	if err != nil {
+		t.Fatalf("create without a channel: %v", err)
+	}
+	if sub.ParentID != "conv-dm-1" || sub.ParentType != ParentConversation {
+		t.Fatalf("parent = %s/%s, want the creator↔agent DM", sub.ParentID, sub.ParentType)
+	}
+	// Resolved for THIS creator and THIS agent, not some other pair.
+	if dm.gotA != "u-alice" || dm.gotB != testGGID {
+		t.Fatalf("DM resolved for %s/%s", dm.gotA, dm.gotB)
+	}
+	// A named channel still wins.
+	sub2, err := svc.CreateSubscription(ctx, "u-alice", AgentSlugGG, "chan1", ParentChannel, nil, 0, WatchInput{
+		Instruction: "Post it publicly.", Schedule: "0 9 * * *",
+	})
+	if err != nil || sub2.ParentID != "chan1" || sub2.ParentType != ParentChannel {
+		t.Fatalf("explicit channel lost: %+v (err %v)", sub2, err)
+	}
+	// A resolver that fails surfaces its error instead of silently writing a
+	// parentless row the sweeps could never deliver.
+	broken := NewAgentService(fx.dir, fx.users)
+	broken.SetDMResolver(failingDM{})
+	if _, err := broken.CreateSubscription(ctx, "u-alice", AgentSlugGG, "", "", nil, 0, WatchInput{
+		Instruction: "x", Schedule: "0 8 * * *",
+	}); err == nil {
+		t.Fatal("DM resolution failure should surface")
+	}
+	// With no resolver wired, a parent-less create is a validation error
+	// rather than a row nobody can find.
+	bare := NewAgentService(fx.dir, fx.users)
+	if _, err := bare.CreateSubscription(ctx, "u-alice", AgentSlugGG, "", "", nil, 0, WatchInput{
+		Instruction: "x", Schedule: "0 8 * * *",
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("no resolver: want ErrValidation, got %v", err)
+	}
+}
+
+// failingDM stands in for a conversation service that can't open the DM.
+type failingDM struct{}
+
+func (failingDM) GetOrCreateDM(context.Context, string, string) (*model.Conversation, error) {
+	return nil, errors.New("dm store down")
+}
+
+// Pinned tools ride a scheduled order into its run, so a standing instruction
+// never has to guess which connected service or instruction pack it meant.
+// Stale pins (a removed connector, a skill the invoker can no longer see) are
+// filtered rather than failing the run.
+func TestOrchestrator_ScheduledOrderCarriesPinnedTools(t *testing.T) {
+	ctx := context.Background()
+	fx := newOrchFixture(t)
+	svc := NewAgentService(fx.dir, fx.users)
+	sk, err := svc.CreateSkill(ctx, "u-alice", "Release checklist", "How we ship", "1. tag", model.SkillVisibilityPublished)
+	if err != nil {
+		t.Fatalf("create skill: %v", err)
+	}
+	fx.orch.SetConnectorRegistry(fakeConnectorRegistry{known: map[string]bool{"metabase": true}})
+
+	_ = fx.dir.PutAgentSubscription(ctx, &model.AgentSubscription{
+		ID: "sub-tools", AgentID: testGGID, CreatorID: "u-alice",
+		ParentID: "chan1", ParentType: ParentChannel,
+		Schedule: "0 8 * * *", ScheduleTZ: "UTC", Instruction: "Numbers please.",
+		ActionMode: model.WatchActionNotify,
+		// "gone" is not in the registry; "sk-missing" is not a visible skill.
+		ConnectorSlugs: []string{"metabase", "gone"},
+		SkillIDs:       []string{sk.ID, "sk-missing"},
+		CreatedAt:      time.Date(2026, 9, 23, 9, 0, 0, 0, time.UTC),
+	})
+
+	*fx.now = time.Date(2026, 9, 24, 8, 0, 30, 0, time.UTC)
+	fx.orch.sweepSchedules(ctx, watchAllSubs(t, fx))
+	ids, _ := fx.runs.ListQueuedRuns(ctx, "u-alice", 10)
+	if len(ids) != 1 {
+		t.Fatalf("expected 1 scheduled run, got %d", len(ids))
+	}
+	run, _ := fx.runs.GetRun(ctx, ids[0])
+	if len(run.ConnectorSlugs) != 1 || run.ConnectorSlugs[0] != "metabase" {
+		t.Fatalf("connector pins = %v, want just the known one", run.ConnectorSlugs)
+	}
+	if len(run.PickedSkillIDs) != 1 || run.PickedSkillIDs[0] != sk.ID {
+		t.Fatalf("skill pins = %v, want just the visible one", run.PickedSkillIDs)
+	}
+}
+
+// fakeConnectorRegistry answers KnownSlugs for pin filtering.
+type fakeConnectorRegistry struct{ known map[string]bool }
+
+func (f fakeConnectorRegistry) KnownSlugs(context.Context) (map[string]bool, error) {
+	return f.known, nil
+}
+
+func (f fakeConnectorRegistry) InstalledIndex(context.Context, string) ([]ConnectorIndexEntry, error) {
+	return nil, nil
+}
+
+// Pin hygiene: lists are trimmed, lowercased, deduped and bounded, and a
+// skill the creator cannot see is dropped rather than silently widening what
+// the order may reach.
+func TestAgentService_CleanPins(t *testing.T) {
+	ctx := context.Background()
+	fx := newOrchFixture(t)
+	svc := NewAgentService(fx.dir, fx.users)
+	sk, err := svc.CreateSkill(ctx, "u-alice", "Release checklist", "How we ship", "1. tag", model.SkillVisibilityPublished)
+	if err != nil {
+		t.Fatalf("create skill: %v", err)
+	}
+	priv, err := svc.CreateSkill(ctx, "u-bob", "Bob's private", "his", "secret", model.SkillVisibilityPrivate)
+	if err != nil {
+		t.Fatalf("create private skill: %v", err)
+	}
+
+	many := make([]string, 0, 14)
+	for i := 0; i < 14; i++ {
+		many = append(many, fmt.Sprintf("conn-%02d", i))
+	}
+	slugs, skills := svc.cleanPins(ctx, "u-alice", WatchInput{
+		ConnectorSlugs: append([]string{" Metabase ", "metabase", ""}, many...),
+		SkillIDs:       []string{" " + sk.ID + " ", sk.ID, "", priv.ID, "sk-ghost"},
+	})
+	if len(slugs) != 10 || slugs[0] != "metabase" {
+		t.Fatalf("connector pins = %v, want lowercased+deduped and capped at 10", slugs)
+	}
+	if len(skills) != 1 || skills[0] != sk.ID {
+		t.Fatalf("skill pins = %v, want only the visible one", skills)
+	}
+
+	// A skill list over the cap stops at 10 too.
+	ids := make([]string, 0, 12)
+	for i := 0; i < 12; i++ {
+		s, cerr := svc.CreateSkill(ctx, "u-alice", fmt.Sprintf("Pack %d", i), "d", "i", model.SkillVisibilityPublished)
+		if cerr != nil {
+			t.Fatalf("create pack: %v", cerr)
+		}
+		ids = append(ids, s.ID)
+	}
+	if _, capped := svc.cleanPins(ctx, "u-alice", WatchInput{SkillIDs: ids}); len(capped) != 10 {
+		t.Fatalf("skill cap = %d, want 10", len(capped))
+	}
+}
+
+// Pin filtering at run time degrades safely: no registry, a failing registry,
+// and empty lists all yield no pins rather than an error.
+func TestOrchestrator_PinFilteringDegrades(t *testing.T) {
+	ctx := context.Background()
+	fx := newOrchFixture(t)
+	if got := fx.orch.knownConnectorSlugs(ctx, []string{"a"}); got != nil {
+		t.Fatalf("no registry wired should yield no pins, got %v", got)
+	}
+	if got := fx.orch.knownConnectorSlugs(ctx, nil); got != nil {
+		t.Fatalf("empty list = no pins, got %v", got)
+	}
+	fx.orch.SetConnectorRegistry(failingRegistry{})
+	if got := fx.orch.knownConnectorSlugs(ctx, []string{"a"}); got != nil {
+		t.Fatalf("registry failure should yield no pins, got %v", got)
+	}
+	// Duplicates collapse.
+	fx.orch.SetConnectorRegistry(fakeConnectorRegistry{known: map[string]bool{"a": true}})
+	if got := fx.orch.knownConnectorSlugs(ctx, []string{"a", "a", "b"}); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("dedup/filter = %v", got)
+	}
+	if got := fx.orch.visibleSkillIDs(ctx, "u-alice", nil); got != nil {
+		t.Fatalf("empty skill list = no pins, got %v", got)
+	}
+	svc := NewAgentService(fx.dir, fx.users)
+	sk, _ := svc.CreateSkill(ctx, "u-alice", "Pack", "d", "i", model.SkillVisibilityPublished)
+	if got := fx.orch.visibleSkillIDs(ctx, "u-alice", []string{sk.ID, sk.ID}); len(got) != 1 {
+		t.Fatalf("skill dedup = %v", got)
+	}
+}
+
+type failingRegistry struct{}
+
+func (failingRegistry) KnownSlugs(context.Context) (map[string]bool, error) {
+	return nil, errors.New("registry down")
+}
+func (failingRegistry) InstalledIndex(context.Context, string) ([]ConnectorIndexEntry, error) {
+	return nil, nil
 }

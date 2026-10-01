@@ -154,6 +154,8 @@ func TestBridgeTools_BadInput(t *testing.T) {
 		{"link_message", `{}`, "requires message_id"},
 		{"set_reminder", `{}`, "requires in_minutes or remind_at"},
 		{"cancel_reminder", `{}`, "requires reminder_id"},
+		{"create_schedule", `{"instruction":"x"}`, "requires instruction and schedule"},
+		{"delete_schedule", `{}`, "requires schedule_id"},
 		{"pin_message", `{}`, "requires message_id"},
 		{"publish_artifact", `{"title":"t"}`, "requires title and content"},
 		{"invoke_skill", `{}`, "requires skillID"},
@@ -187,6 +189,9 @@ var bridgeMinimalInputs = map[string]string{
 	"set_reminder":       `{"in_minutes":5}`,
 	"list_reminders":     `{}`,
 	"cancel_reminder":    `{"reminder_id":"r"}`,
+	"list_schedules":     `{}`,
+	"create_schedule":    `{"instruction":"i","schedule":"0 9 * * *"}`,
+	"delete_schedule":    `{"schedule_id":"s"}`,
 	"pin_message":        `{"message_id":"m"}`,
 	"publish_artifact":   `{"title":"t","content":"c"}`,
 	"list_skills":        `{}`,
@@ -434,5 +439,53 @@ func TestBridgeTools_Success(t *testing.T) {
 	h.respond(200, `{}`)
 	if out, isErr := h.call(t, "set_state", `{"state":"x"}`); isErr || out != "state updated" {
 		t.Fatalf("set_state: %v %q", isErr, out)
+	}
+}
+
+// The schedule tools shape their payloads for the run API: string fields only
+// when given, pinned lists passed through, and the id path-escaped on delete.
+func TestBridgeTools_Schedules(t *testing.T) {
+	h := newBridgeHarness(t)
+	h.respond(http.StatusOK, `{"text":"Scheduled [sch:s1]"}`)
+	out, isErr := h.call(t, "create_schedule", `{"instruction":"sprint tldr","schedule":"0 9 * * 1-5",`+
+		`"timezone":"Asia/Kolkata","destination":"dm","agent":"codey","connectors":["cliffhub"],"skills":["sk-1"]}`)
+	if isErr || out != "Scheduled [sch:s1]" {
+		t.Fatalf("create: err=%v %q", isErr, out)
+	}
+	req := h.last()
+	if req.method != "POST" || req.path != "/api/v1/agent/run/schedules" {
+		t.Fatalf("create request: %s %s", req.method, req.path)
+	}
+	for k, want := range map[string]string{"instruction": "sprint tldr", "schedule": "0 9 * * 1-5", "timezone": "Asia/Kolkata", "destination": "dm", "agent": "codey"} {
+		if req.body[k] != want {
+			t.Fatalf("create %s = %v, want %q", k, req.body[k], want)
+		}
+	}
+	if c, _ := req.body["connectors"].([]any); len(c) != 1 || c[0] != "cliffhub" {
+		t.Fatalf("connectors not passed: %v", req.body["connectors"])
+	}
+	if sk, _ := req.body["skills"].([]any); len(sk) != 1 || sk[0] != "sk-1" {
+		t.Fatalf("skills not passed: %v", req.body["skills"])
+	}
+	// Optional fields left out stay out, so the server applies its defaults.
+	if _, isErr := h.call(t, "create_schedule", `{"instruction":"i","schedule":"0 9 * * *"}`); isErr {
+		t.Fatal("minimal create failed")
+	}
+	if _, ok := h.last().body["timezone"]; ok {
+		t.Fatalf("empty timezone was sent: %v", h.last().body)
+	}
+
+	h.respond(http.StatusOK, `{}`)
+	if out, _ := h.call(t, "create_schedule", `{"instruction":"i","schedule":"0 9 * * *"}`); out != "scheduled" {
+		t.Fatalf("create fallback text: %q", out)
+	}
+	if out, isErr := h.call(t, "delete_schedule", `{"schedule_id":"a/b"}`); isErr || out != "schedule removed" {
+		t.Fatalf("delete: err=%v %q", isErr, out)
+	}
+	if req := h.last(); req.method != "DELETE" || req.path != "/api/v1/agent/run/schedules/a%2Fb" {
+		t.Fatalf("delete request: %s %s", req.method, req.path)
+	}
+	if out, _ := h.call(t, "list_schedules", `{}`); out != "(no scheduled orders)" {
+		t.Fatalf("list fallback: %q", out)
 	}
 }

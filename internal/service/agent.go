@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/cron"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
 )
@@ -73,6 +74,13 @@ type agentUserLister interface {
 	ListUsers(ctx context.Context, limit int, cursor string) ([]*model.User, string, error)
 }
 
+// agentDMResolver opens (or creates) the 1:1 DM between a user and an agent —
+// the default home for a scheduled order, so asking people to nominate a
+// channel for "DM me the numbers each morning" isn't necessary.
+type agentDMResolver interface {
+	GetOrCreateDM(ctx context.Context, userA, userB string) (*model.Conversation, error)
+}
+
 // AgentService owns agent templates, the shared agent users, and per-user
 // preference resolution. Runs are the Orchestrator's business.
 type AgentService struct {
@@ -80,7 +88,14 @@ type AgentService struct {
 	users    agentUserGetter
 	indexer  UserIndexer
 	userList agentUserLister
+	// dms resolves the creator↔agent DM for parent-less subscriptions.
+	// Optional: nil makes a missing parent a validation error instead.
+	dms agentDMResolver
 }
+
+// SetDMResolver wires DM resolution so a subscription can be created without
+// naming a channel (scheduled orders default to the creator's DM).
+func (s *AgentService) SetDMResolver(r agentDMResolver) { s.dms = r }
 
 // NewAgentService constructs an AgentService.
 func NewAgentService(agents AgentDirectoryStore, users agentUserGetter) *AgentService {
@@ -1041,6 +1056,70 @@ type WatchInput struct {
 	ThreadRootID string
 	Instruction  string
 	ActionMode   string
+	// Schedule (five-field cron) turns the row into a clock-driven standing
+	// order instead of a message watcher. ScheduleTZ is optional: empty adopts
+	// the CREATOR's profile timezone, so "0 8 * * 1-5" means 08:00 where they
+	// are.
+	Schedule   string
+	ScheduleTZ string
+	// Tools this order may reach for. Skills are validated against what the
+	// creator may see; connector slugs are filtered against the live registry
+	// when the run starts (a service can be removed after scheduling).
+	ConnectorSlugs []string
+	SkillIDs       []string
+}
+
+// cleanPins trims and bounds the pinned tool lists, dropping skills the
+// creator cannot see so a stale pick can't quietly widen their access.
+func (s *AgentService) cleanPins(ctx context.Context, creatorID string, in WatchInput) (slugs, skills []string) {
+	seen := map[string]bool{}
+	for _, c := range in.ConnectorSlugs {
+		c = strings.ToLower(strings.TrimSpace(c))
+		if c != "" && !seen[c] && len(slugs) < 10 {
+			seen[c] = true
+			slugs = append(slugs, c)
+		}
+	}
+	seen = map[string]bool{}
+	for _, id := range in.SkillIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] || len(skills) >= 10 {
+			continue
+		}
+		seen[id] = true
+		if _, err := s.GetVisibleSkill(ctx, creatorID, id); err == nil {
+			skills = append(skills, id)
+		}
+	}
+	return slugs, skills
+}
+
+// resolveSchedule validates a cron spec and settles its timezone. An empty
+// spec is not an error — it just means "not scheduled".
+func (s *AgentService) resolveSchedule(ctx context.Context, creatorID string, in WatchInput) (spec, tz string, err error) {
+	spec = strings.TrimSpace(in.Schedule)
+	if spec == "" {
+		return "", "", nil
+	}
+	if _, perr := cron.Parse(spec); perr != nil {
+		return "", "", fmt.Errorf("%w: %s", ErrValidation, perr.Error())
+	}
+	// A schedule with no standing order would wake the agent to do nothing.
+	if strings.TrimSpace(in.Instruction) == "" {
+		return "", "", fmt.Errorf("%w: a scheduled order needs an instruction — what should the agent do when it fires", ErrValidation)
+	}
+	tz = strings.TrimSpace(in.ScheduleTZ)
+	if tz == "" {
+		// The creator's own local time is the intent behind "8am". A user who
+		// never set a timezone falls through to UTC at read time.
+		if u, uerr := s.users.GetUser(ctx, creatorID); uerr == nil && u != nil {
+			tz = strings.TrimSpace(u.TimeZone)
+		}
+	}
+	if tz != "" && cron.Location(tz).String() == "UTC" && tz != "UTC" {
+		return "", "", fmt.Errorf("%w: unknown timezone %q", ErrValidation, tz)
+	}
+	return spec, tz, nil
 }
 
 func (s *AgentService) CreateSubscription(ctx context.Context, creatorID, slug, parentID, parentType string, keywords []string, heartbeatMins int, watch WatchInput) (*model.AgentSubscription, error) {
@@ -1072,18 +1151,41 @@ func (s *AgentService) CreateSubscription(ctx context.Context, creatorID, slug, 
 	if !model.ValidWatchActionMode(mode) {
 		return nil, fmt.Errorf("%w: unknown action mode %q", ErrValidation, mode)
 	}
+	schedule, scheduleTZ, err := s.resolveSchedule(ctx, creatorID, watch)
+	if err != nil {
+		return nil, err
+	}
+	// No channel named → the order lives in the creator's own DM with the
+	// agent. "Where should this run" is an implementation detail of the row;
+	// what people actually choose is where the RESULT lands, and a private
+	// DM is the safe default for unattended work.
+	if strings.TrimSpace(parentID) == "" {
+		if s.dms == nil {
+			return nil, fmt.Errorf("%w: a channel is required", ErrValidation)
+		}
+		dm, derr := s.dms.GetOrCreateDM(ctx, creatorID, agent.ID)
+		if derr != nil {
+			return nil, derr
+		}
+		parentID, parentType = dm.ID, ParentConversation
+	}
+	connectorSlugs, skillIDs := s.cleanPins(ctx, creatorID, watch)
 	sub := &model.AgentSubscription{
-		ID:            store.NewID(),
-		AgentID:       agent.ID,
-		CreatorID:     creatorID,
-		ParentID:      parentID,
-		ParentType:    parentType,
-		ThreadRootID:  strings.TrimSpace(watch.ThreadRootID),
-		Instruction:   instruction,
-		ActionMode:    mode,
-		Keywords:      clean,
-		HeartbeatMins: heartbeatMins,
-		CreatedAt:     time.Now(),
+		ID:             store.NewID(),
+		AgentID:        agent.ID,
+		CreatorID:      creatorID,
+		ParentID:       parentID,
+		ParentType:     parentType,
+		ThreadRootID:   strings.TrimSpace(watch.ThreadRootID),
+		Instruction:    instruction,
+		ActionMode:     mode,
+		Keywords:       clean,
+		HeartbeatMins:  heartbeatMins,
+		Schedule:       schedule,
+		ScheduleTZ:     scheduleTZ,
+		ConnectorSlugs: connectorSlugs,
+		SkillIDs:       skillIDs,
+		CreatedAt:      time.Now(),
 	}
 	if err := s.agents.PutAgentSubscription(ctx, sub); err != nil {
 		return nil, err
@@ -1125,6 +1227,54 @@ func (s *AgentService) ListSubscriptionsFor(ctx context.Context, creatorID, slug
 	return out, nil
 }
 
+// ScheduleEntry pairs a scheduled order with the agent that carries it out.
+type ScheduleEntry struct {
+	Slug string
+	Sub  *model.AgentSubscription
+}
+
+// SlugForAgent maps a shared agent user id back to its template slug — the id
+// is derived from the slug one way (AgentUserID), so this walks the handful
+// of templates.
+func (s *AgentService) SlugForAgent(ctx context.Context, agentID string) (string, error) {
+	templates, err := s.agents.ListTemplates(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, tpl := range templates {
+		if AgentUserID(tpl.Slug) == agentID {
+			return tpl.Slug, nil
+		}
+	}
+	return "", store.ErrNotFound
+}
+
+// ListSchedules returns the creator's SCHEDULED orders across every agent —
+// what an agent answers "what have I got scheduled?" from. One indexed query
+// per agent, and there are a handful.
+func (s *AgentService) ListSchedules(ctx context.Context, creatorID string) ([]ScheduleEntry, error) {
+	templates, err := s.agents.ListTemplates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []ScheduleEntry
+	for _, tpl := range templates {
+		subs, err := s.ListSubscriptionsFor(ctx, creatorID, tpl.Slug)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				continue // template without a user row — seed will converge it
+			}
+			return nil, err
+		}
+		for _, sub := range subs {
+			if sub.Schedule != "" {
+				out = append(out, ScheduleEntry{Slug: tpl.Slug, Sub: sub})
+			}
+		}
+	}
+	return out, nil
+}
+
 // ListWatchersInParent returns the viewer's OWN watchers in one channel/DM,
 // across all agents — the data the message list uses to badge watched threads.
 // Scoped to the viewer's own subscriptions (a watch is personal, like a
@@ -1147,7 +1297,10 @@ func (s *AgentService) ListWatchersInParent(ctx context.Context, viewerID, paren
 // instruction and/or action mode. The agent and thread scope are fixed — those
 // define a different watcher, so changing them means remove + re-add. An empty
 // actionMode leaves the mode unchanged; instruction is set as given (may clear).
-func (s *AgentService) UpdateSubscription(ctx context.Context, creatorID, parentID, id, instruction, actionMode string) (*model.AgentSubscription, error) {
+// UpdateSubscription rewrites a watcher's standing order. PATCH semantics are
+// FULL-STATE for the order fields (instruction, schedule): the caller sends
+// what the row should now say, so clearing a schedule is just sending none.
+func (s *AgentService) UpdateSubscription(ctx context.Context, creatorID, parentID, id string, in WatchInput) (*model.AgentSubscription, error) {
 	subs, err := s.agents.ListSubscriptionsByParent(ctx, parentID)
 	if err != nil {
 		return nil, err
@@ -1159,13 +1312,19 @@ func (s *AgentService) UpdateSubscription(ctx context.Context, creatorID, parent
 		if sub.CreatorID != creatorID {
 			return nil, fmt.Errorf("agent: not the subscription creator: %w", ErrForbidden)
 		}
-		if actionMode != "" {
-			if !model.ValidWatchActionMode(actionMode) {
-				return nil, fmt.Errorf("agent: invalid action mode %q: %w", actionMode, ErrValidation)
+		if in.ActionMode != "" {
+			if !model.ValidWatchActionMode(in.ActionMode) {
+				return nil, fmt.Errorf("agent: invalid action mode %q: %w", in.ActionMode, ErrValidation)
 			}
-			sub.ActionMode = actionMode
+			sub.ActionMode = in.ActionMode
 		}
-		sub.Instruction = strings.TrimSpace(instruction)
+		schedule, scheduleTZ, err := s.resolveSchedule(ctx, creatorID, in)
+		if err != nil {
+			return nil, err
+		}
+		sub.Schedule, sub.ScheduleTZ = schedule, scheduleTZ
+		sub.ConnectorSlugs, sub.SkillIDs = s.cleanPins(ctx, creatorID, in)
+		sub.Instruction = strings.TrimSpace(in.Instruction)
 		if err := s.agents.PutAgentSubscription(ctx, sub); err != nil {
 			return nil, err
 		}

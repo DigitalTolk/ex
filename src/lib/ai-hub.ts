@@ -1,11 +1,12 @@
-import { Bot, Cable, Sparkles } from 'lucide-react';
+import { Bot, Cable, CalendarClock, Sparkles } from 'lucide-react';
 
-// The AI hub: the three agent-feature pages the sidebar lists as ONE entry
+// The AI hub: the agent-feature pages the sidebar lists as ONE entry
 // ("Agents") and AiHubLayout renders as tabs. Shared here so the sidebar's
 // active state and the tab strip can never disagree about what belongs.
 export const AI_HUB_TABS = [
   { to: '/agents', label: 'Agents', Icon: Bot },
   { to: '/skills', label: 'Skills', Icon: Sparkles },
+  { to: '/schedules', label: 'Schedules', Icon: CalendarClock },
   { to: '/connectors', label: 'Connectors', Icon: Cable },
 ] as const;
 

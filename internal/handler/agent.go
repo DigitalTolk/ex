@@ -479,6 +479,14 @@ type createSubscriptionBody struct {
 	ThreadRootID string `json:"threadRootID"`
 	Instruction  string `json:"instruction"`
 	ActionMode   string `json:"actionMode"`
+	// Scheduled standing order (optional): a five-field cron spec, read in
+	// scheduleTZ — empty adopts the caller's profile timezone server-side.
+	Schedule   string `json:"schedule"`
+	ScheduleTZ string `json:"scheduleTZ"`
+	// Tools the order may use, so a standing instruction never has to guess
+	// which connected service or instruction pack it meant.
+	ConnectorSlugs []string `json:"connectorSlugs"`
+	SkillIDs       []string `json:"skillIDs"`
 }
 
 // ListSubscriptions returns the caller's watches for one agent.
@@ -513,21 +521,36 @@ func (h *AgentHandler) ListParentWatchers(w http.ResponseWriter, r *http.Request
 func (h *AgentHandler) CreateSubscription(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
 	var body createSubscriptionBody
-	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.ParentID == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
+		return
+	}
+	// A message WATCHER must name what it watches. A SCHEDULED order need
+	// not: with no parent the service puts it in the caller's own DM with the
+	// agent, which is where unattended results belong by default.
+	if body.ParentID == "" && body.Schedule == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "parentID required")
 		return
 	}
 	if body.ParentType == "" {
 		body.ParentType = "channel"
 	}
-	if h.access == nil || h.access.CheckAccess(r.Context(), callerID, body.ParentID, body.ParentType) != nil {
-		writeError(w, http.StatusForbidden, "forbidden", "no access to that channel")
-		return
+	// Access is checked only for a named parent; the DM the service falls back
+	// to is the caller's own by construction.
+	if body.ParentID != "" {
+		if h.access == nil || h.access.CheckAccess(r.Context(), callerID, body.ParentID, body.ParentType) != nil {
+			writeError(w, http.StatusForbidden, "forbidden", "no access to that channel")
+			return
+		}
 	}
 	sub, err := h.agents.CreateSubscription(r.Context(), callerID, r.PathValue("slug"), body.ParentID, body.ParentType, body.Keywords, body.HeartbeatMins, service.WatchInput{
-		ThreadRootID: body.ThreadRootID,
-		Instruction:  body.Instruction,
-		ActionMode:   body.ActionMode,
+		ThreadRootID:   body.ThreadRootID,
+		Instruction:    body.Instruction,
+		ActionMode:     body.ActionMode,
+		Schedule:       body.Schedule,
+		ScheduleTZ:     body.ScheduleTZ,
+		ConnectorSlugs: body.ConnectorSlugs,
+		SkillIDs:       body.SkillIDs,
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -566,14 +589,25 @@ func (h *AgentHandler) DeleteSubscription(w http.ResponseWriter, r *http.Request
 func (h *AgentHandler) UpdateSubscription(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
 	var body struct {
-		Instruction string `json:"instruction"`
-		ActionMode  string `json:"actionMode"`
+		Instruction    string   `json:"instruction"`
+		ActionMode     string   `json:"actionMode"`
+		Schedule       string   `json:"schedule"`
+		ScheduleTZ     string   `json:"scheduleTZ"`
+		ConnectorSlugs []string `json:"connectorSlugs"`
+		SkillIDs       []string `json:"skillIDs"`
 	}
 	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
-	sub, err := h.agents.UpdateSubscription(r.Context(), callerID, r.PathValue("parentID"), r.PathValue("id"), body.Instruction, body.ActionMode)
+	sub, err := h.agents.UpdateSubscription(r.Context(), callerID, r.PathValue("parentID"), r.PathValue("id"), service.WatchInput{
+		Instruction:    body.Instruction,
+		ActionMode:     body.ActionMode,
+		Schedule:       body.Schedule,
+		ScheduleTZ:     body.ScheduleTZ,
+		ConnectorSlugs: body.ConnectorSlugs,
+		SkillIDs:       body.SkillIDs,
+	})
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, JSON{"subscription": sub})

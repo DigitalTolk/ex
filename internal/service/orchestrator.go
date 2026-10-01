@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/cron"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
@@ -574,6 +575,12 @@ func (o *Orchestrator) dispatchSubscriptions(ctx context.Context, msg *model.Mes
 		if alreadyInvoked[sub.AgentID] || started[sub.AgentID] {
 			continue
 		}
+		// A scheduled row is a clock-driven standing order, not a watcher:
+		// sweepSchedules owns it. Without this a daily report would ALSO fire
+		// on every message in its channel.
+		if sub.Schedule != "" {
+			continue
+		}
 		// Thread-scoped watchers fire only for messages IN their thread; a
 		// whole-channel watcher (no thread) fires on any matching message.
 		if sub.ThreadRootID != "" && msg.ParentMessageID != sub.ThreadRootID {
@@ -633,7 +640,55 @@ func watchSpecFromSub(sub *model.AgentSubscription) *watchSpec {
 	if !model.ValidWatchActionMode(mode) {
 		mode = model.WatchActionNotify
 	}
-	return &watchSpec{Instruction: sub.Instruction, ActionMode: mode}
+	return &watchSpec{
+		Instruction:    sub.Instruction,
+		ActionMode:     mode,
+		ConnectorSlugs: sub.ConnectorSlugs,
+		SkillIDs:       sub.SkillIDs,
+	}
+}
+
+// knownConnectorSlugs keeps the slugs that still exist in the registry,
+// deduped and order-preserving — a pinned connector that was later removed
+// must not reach the run as a phantom.
+func (o *Orchestrator) knownConnectorSlugs(ctx context.Context, slugs []string) []string {
+	if len(slugs) == 0 || o.connectors == nil {
+		return nil
+	}
+	known, err := o.connectors.KnownSlugs(ctx)
+	if err != nil {
+		slog.Warn("connector slug lookup failed; run gets no pinned connectors", "error", err)
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(slugs))
+	for _, s := range slugs {
+		if known[s] && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// visibleSkillIDs keeps the skills the INVOKER may still use — a pinned skill
+// that was deleted or made private drops out rather than failing the run.
+func (o *Orchestrator) visibleSkillIDs(ctx context.Context, invokerID string, ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		if _, err := o.agentSvc.GetVisibleSkill(ctx, invokerID, id); err == nil {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // subscriptionMatches: empty keyword list matches everything; otherwise
@@ -660,6 +715,11 @@ func subscriptionMatches(sub *model.AgentSubscription, lowerBody string) bool {
 type watchSpec struct {
 	Instruction string
 	ActionMode  string
+	// Pinned tools for a scheduled order (no message means no /picks to
+	// parse). Validated where they are written, filtered again here against
+	// the live registry so a deleted connector just drops out.
+	ConnectorSlugs []string
+	SkillIDs       []string
 }
 
 // invocation is everything one agent invocation needs. It replaced an
@@ -878,6 +938,12 @@ func (o *Orchestrator) startRun(ctx context.Context, in invocation, resolved *mo
 	// Thread follow-ups inherit the thread's picks — in channels and DMs alike.
 	connectorSlugs := o.resolveConnectorPicks(ctx, invoker.ID, msg, parentType)
 	pickedSkillIDs, skillTokens := o.resolveSkillPicks(ctx, invoker.ID, msg, parentType)
+	// A standing order pins its tools up front instead of naming them in a
+	// message it never sends.
+	if in.spec != nil {
+		connectorSlugs = o.knownConnectorSlugs(ctx, append(connectorSlugs, in.spec.ConnectorSlugs...))
+		pickedSkillIDs = o.visibleSkillIDs(ctx, invoker.ID, append(pickedSkillIDs, in.spec.SkillIDs...))
+	}
 	prompt := clipText(stripConnectorTokens(stripMentionMarkup(msg.Body),
 		append(append([]string{}, connectorSlugs...), skillTokens...)), maxPromptChars)
 	// Coding-task binding: an explicit bind (routed/kickoff/sign-off runs), or
@@ -2302,6 +2368,7 @@ func (o *Orchestrator) StartReconciler(ctx context.Context) {
 					continue
 				}
 				o.sweepHeartbeats(ctx, subs)
+				o.sweepSchedules(ctx, subs)
 				o.sweepWatchCatchUps(ctx, subs)
 			}
 		}
@@ -2364,7 +2431,11 @@ func (o *Orchestrator) sweepWatchCatchUps(ctx context.Context, subs []*model.Age
 		// creator's consent — their machine and tokens, possibly a big pile.
 		// Ask once (notification + in-channel card) and wait for the decide
 		// endpoint; busy-only backlogs and API harnesses auto-run.
-		if sub.PendingOffline && o.catchUpNeedsConsent(ctx, agent, creator) {
+		//
+		// A SCHEDULED order skips the ask: the creator already consented by
+		// scheduling it, and "run my 08:00 report when I get in" is the whole
+		// point — a consent card for work they explicitly asked for is friction.
+		if sub.Schedule == "" && sub.PendingOffline && o.catchUpNeedsConsent(ctx, agent, creator) {
 			o.askCatchUp(ctx, sub, agent, creator)
 			continue
 		}
@@ -2424,18 +2495,28 @@ func (o *Orchestrator) startWatchCatchUp(ctx context.Context, sub *model.AgentSu
 	}
 	// Synthetic invocation (like heartbeats): no invoking message, but
 	// thread-scoped so replies/drafts land in the watched thread.
+	body := "Catch-up: messages arrived in what you watch" + since + " while you couldn't " +
+		"run (creator offline or you were busy). Review everything new since your last " +
+		"check and act ONCE per your standing order — one consolidated response covering " +
+		"all of it, never one reply per message."
+	mode := model.RunModeWatch
+	// A missed SCHEDULED order is late work, not a message backlog: do the
+	// thing now and say it's late, rather than reviewing a thread.
+	if sub.Schedule != "" {
+		body = "Your scheduled order (" + cron.Describe(sub.Schedule, sub.ScheduleTZ) + ") came due" + since +
+			" while you couldn't run (creator offline or you were busy). Carry it out NOW, once, and " +
+			"note in your reply that it is running late."
+		mode = model.RunModeScheduled
+	}
 	msg := &model.Message{
 		ID:              "",
 		ParentID:        sub.ParentID,
 		ParentMessageID: sub.ThreadRootID,
 		AuthorID:        creator.ID,
-		Body: "Catch-up: messages arrived in what you watch" + since + " while you couldn't " +
-			"run (creator offline or you were busy). Review everything new since your last " +
-			"check and act ONCE per your standing order — one consolidated response covering " +
-			"all of it, never one reply per message.",
+		Body:            body,
 	}
 	if err := o.invoke(ctx, invocation{agent: agent, invoker: creator, msg: msg, parentType: sub.ParentType,
-		mode: model.RunModeWatch, spec: watchSpecFromSub(sub)}); err != nil {
+		mode: mode, spec: watchSpecFromSub(sub)}); err != nil {
 		return err // flags stay set; retried/re-decidable
 	}
 	now := o.now()
@@ -2498,6 +2579,11 @@ func (o *Orchestrator) sweepHeartbeats(ctx context.Context, subs []*model.AgentS
 		if sub.HeartbeatMins <= 0 {
 			continue
 		}
+		// A cron spec wins over an interval: both sweeps advance LastRunAt, so
+		// letting them share a row would have them cancel each other's timing.
+		if sub.Schedule != "" {
+			continue
+		}
 		if sub.LastRunAt != nil && now.Sub(*sub.LastRunAt) < time.Duration(sub.HeartbeatMins)*time.Minute {
 			continue
 		}
@@ -2525,6 +2611,63 @@ func (o *Orchestrator) sweepHeartbeats(ctx context.Context, subs []*model.AgentS
 		if err := o.invoke(ctx, invocation{agent: agent, invoker: creator, msg: msg, parentType: sub.ParentType,
 			mode: model.RunModeHeartbeat, spec: watchSpecFromSub(sub)}); err != nil {
 			slog.Debug("heartbeat skipped", "subID", sub.ID, "error", err)
+		}
+	}
+}
+
+// sweepSchedules fires cron-driven standing orders that have come due —
+// "0 8 * * 1-5: post yesterday's numbers". Due-ness is computed from the LAST
+// firing (creation time for a schedule that never ran), so a server that was
+// down over three 08:00s fires ONCE on return, not three times, and a new
+// schedule never fires retroactively.
+//
+// Like heartbeats, LastRunAt advances BEFORE invoking: a failed start waits
+// for the next firing instead of retrying every 15s tick. Unlike heartbeats,
+// a missed firing is not simply dropped — the creator asked for this work, so
+// offline/busy marks the row pending and the catch-up sweep runs it once
+// they're back.
+func (o *Orchestrator) sweepSchedules(ctx context.Context, subs []*model.AgentSubscription) {
+	now := o.now()
+	for _, sub := range subs {
+		if sub.Schedule == "" {
+			continue
+		}
+		since := sub.CreatedAt
+		if sub.LastRunAt != nil {
+			since = *sub.LastRunAt
+		}
+		if !cron.Due(sub.Schedule, sub.ScheduleTZ, since, now) {
+			continue
+		}
+		sub.LastRunAt = &now
+		if err := o.agentSvc.PutSubscription(ctx, sub); err != nil {
+			continue
+		}
+		agent := o.agentUser(ctx, sub.AgentID)
+		if agent == nil {
+			continue
+		}
+		creator, err := o.users.GetUser(ctx, sub.CreatorID)
+		if err != nil {
+			continue
+		}
+		// Synthetic invocation: no invoking message. Thread-scoped when the
+		// order was attached to a thread, top-level in the channel otherwise.
+		msg := &model.Message{
+			ID:              "",
+			ParentID:        sub.ParentID,
+			ParentMessageID: sub.ThreadRootID,
+			AuthorID:        creator.ID,
+			Body: "Your scheduled order (" + cron.Describe(sub.Schedule, sub.ScheduleTZ) + ") is due now. " +
+				"Carry out the standing order below and deliver the result — this run was started by the " +
+				"clock, so there is no new message to judge relevance against.",
+		}
+		if err := o.invoke(ctx, invocation{agent: agent, invoker: creator, msg: msg, parentType: sub.ParentType,
+			mode: model.RunModeScheduled, spec: watchSpecFromSub(sub)}); err != nil {
+			if errors.Is(err, ErrAgentOffline) || errors.Is(err, ErrAgentBusy) {
+				o.markWatchPending(ctx, sub, errors.Is(err, ErrAgentOffline))
+			}
+			slog.Debug("scheduled order skipped", "subID", sub.ID, "error", err)
 		}
 	}
 }
@@ -2940,7 +3083,10 @@ func (b *bundleBuilder) sharedContext() {
 			}
 		}
 	}
-	digests := b.o.threadDigests(b.ctx, b.run)
+	var digests []*model.RunDigest
+	if !b.standalone() {
+		digests = b.o.threadDigests(b.ctx, b.run)
+	}
 
 	// Display names for context authors and digest actors, in one read.
 	names := b.o.displayNames(b.ctx, ctxActorIDs(pinned, unpinned, digests))
@@ -3062,6 +3208,16 @@ func (b *bundleBuilder) threadWindow() {
 	b.sections = append(b.sections, kept...)
 }
 
+// standalone reports a run that answers no conversation: a scheduled firing
+// at a channel's top level. Its order is the whole task — recent channel
+// messages and other agents' conclusions there were background it never
+// needed (~2-3k tokens every firing); it reads the channel with its tools when
+// the order calls for it. Pinned/shared context still rides along: people put
+// it there on purpose.
+func (b *bundleBuilder) standalone() bool {
+	return b.run.Mode == model.RunModeScheduled && b.run.ThreadRootID == ""
+}
+
 // buildBundle assembles the layered context document (plan-v2 §8): task
 // brief → shared context (pinned first) → digests of other runs in this
 // thread → thread window, under a deterministic char budget with whole-item
@@ -3080,7 +3236,9 @@ func (o *Orchestrator) buildBundle(ctx context.Context, run *model.Run) (string,
 	b.connectorIndex()
 	b.projects()
 	b.sharedContext()
-	b.threadWindow()
+	if !b.standalone() {
+		b.threadWindow()
+	}
 
 	doc := b.document()
 	// One log line per assembled bundle: what the run was actually given. The
