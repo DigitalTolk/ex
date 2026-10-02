@@ -205,7 +205,13 @@ describe('NotificationProvider — approval alerts', () => {
     expect(opts.body).toBe('Open the conversation to decide.');
     expect(approvalChimeMock).not.toHaveBeenCalled();
     // Clicking without a deep link still focuses without navigating.
+    const focusSpy = vi.spyOn(window, 'focus').mockImplementation(() => {});
+    const pathBefore = window.location.pathname + window.location.search;
     act(() => instances[0].onclick?.());
+    expect(focusSpy).toHaveBeenCalledTimes(1);
+    expect(window.location.pathname + window.location.search).toBe(pathBefore);
+    expect(instances[0].close).toHaveBeenCalled();
+    focusSpy.mockRestore();
   });
 
   it('hands the gate to the desktop shell with capped choices and skips the web banner', () => {

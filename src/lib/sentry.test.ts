@@ -68,7 +68,7 @@ describe('sentry error reporting', () => {
       integrations: [],
       replaysSessionSampleRate: 0,
       replaysOnErrorSampleRate: 0,
-      sendDefaultPii: false,
+      dataCollection: { userInfo: false, cookies: false },
       initialScope: { tags: { platform: 'web' } },
     });
     // Nothing sampled → neither heavy integration is constructed or loaded.
