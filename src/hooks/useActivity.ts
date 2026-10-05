@@ -4,10 +4,10 @@ import { queryKeys } from '@/lib/query-keys';
 import { showToast } from '@/lib/toast';
 import type { ActivityFeed, Reminder } from '@/types';
 
-const EMPTY_FEED: ActivityFeed = { items: [], unread: 0 };
+const EMPTY_FEED: ActivityFeed = { items: [], unread: 0, unreadByType: {} };
 
-// useActivity loads the user's activity stream (reaction hints + fired
-// reminders) plus the unread count. WS `activity.new` invalidates this query
+// useActivity loads the user's activity stream (mentions, thread replies, DMs,
+// reactions, channel adds and fired reminders) plus the unread counts. WS `activity.new` invalidates this query
 // (see ChatPage) so the badge and list stay live.
 export function useActivity() {
   return useQuery({
@@ -16,7 +16,11 @@ export function useActivity() {
       const res = await apiFetch<ActivityFeed>('/api/v1/activity');
       // Coerce a malformed/empty response so the query never resolves undefined.
       if (!res || !Array.isArray(res.items)) return EMPTY_FEED;
-      return { items: res.items, unread: typeof res.unread === 'number' ? res.unread : 0 };
+      return {
+        items: res.items,
+        unread: typeof res.unread === 'number' ? res.unread : 0,
+        unreadByType: res.unreadByType ?? {},
+      };
     },
     staleTime: 10_000,
   });
@@ -92,7 +96,9 @@ export function useMarkActivityRead() {
     onMutate: async () => {
       await qc.cancelQueries({ queryKey: queryKeys.activity() });
       qc.setQueryData<ActivityFeed>(queryKeys.activity(), (old) =>
-        old ? { ...old, unread: 0 } : old,
+        old
+          ? { ...old, unread: 0, unreadByType: {}, items: old.items.map((i) => ({ ...i, read: true })) }
+          : old,
       );
     },
     onSettled: () => {

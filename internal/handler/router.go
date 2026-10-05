@@ -200,6 +200,8 @@ func NewRouter(d *Deps) http.Handler {
 	if activityH != nil {
 		mux.Handle("GET /api/v1/activity", middleware.WrapFunc(activityH.Feed, authMW))
 		mux.Handle("PUT /api/v1/activity/read", middleware.WrapFunc(activityH.MarkRead, authMW))
+		mux.Handle("PUT /api/v1/activity/items/read", middleware.WrapFunc(activityH.SetItemsRead, authMW, writeLimit))
+		mux.Handle("POST /api/v1/activity/items/remove", middleware.WrapFunc(activityH.RemoveItems, authMW, writeLimit))
 		mux.Handle("POST /api/v1/reminders", middleware.WrapFunc(activityH.CreateReminder, authMW, writeLimit))
 		mux.Handle("GET /api/v1/reminders", middleware.WrapFunc(activityH.ListReminders, authMW))
 		mux.Handle("DELETE /api/v1/reminders/{id}", middleware.WrapFunc(activityH.CancelReminder, authMW))

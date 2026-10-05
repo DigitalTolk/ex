@@ -12,6 +12,27 @@ const (
 	// ActivityReminder records a "remind me about this message" reminder that
 	// has fired at its scheduled time.
 	ActivityReminder ActivityType = "reminder"
+	// ActivityMention records that a message addressed the user: an explicit
+	// @-mention, an @all/@here group mention, or one of their notification
+	// keywords. MentionKind says which.
+	ActivityMention ActivityType = "mention"
+	// ActivityThreadReply records a reply in a thread the user takes part in
+	// or follows.
+	ActivityThreadReply ActivityType = "thread_reply"
+	// ActivityDM records a message in one of the user's direct or group
+	// conversations.
+	ActivityDM ActivityType = "dm"
+	// ActivityChannelAdded records that someone else added the user to a
+	// channel.
+	ActivityChannelAdded ActivityType = "channel_added"
+)
+
+// MentionKind values for ActivityItem.MentionKind on ActivityMention items.
+const (
+	MentionKindUser    = "user"    // @-mentioned by name
+	MentionKindAll     = "all"     // @all / @channel
+	MentionKindHere    = "here"    // @here
+	MentionKindKeyword = "keyword" // matched one of the user's notification keywords
 )
 
 // ActivityItem is one entry in a user's personal activity stream (Slack-style
@@ -38,6 +59,21 @@ type ActivityItem struct {
 	// ActorID / Emoji are set for ActivityReaction: who reacted and with what.
 	ActorID string `json:"actorID,omitempty"`
 	Emoji   string `json:"emoji,omitempty"`
+	// ActorName is the display name to show instead of resolving ActorID — set
+	// for incoming-webhook messages, whose author is a bot sentinel.
+	ActorName string `json:"actorName,omitempty"`
+	// ParentName snapshots the channel name for ActivityChannelAdded items so
+	// the row can render before the client's channel list catches up.
+	ParentName string `json:"parentName,omitempty"`
+	// ThreadRootID is the root message of the thread for ActivityThreadReply
+	// items (and mentions made inside a thread), so the client can open the
+	// thread and group several replies into one row.
+	ThreadRootID string `json:"threadRootID,omitempty"`
+	// MentionKind is one of the MentionKind* values on ActivityMention items.
+	MentionKind string `json:"mentionKind,omitempty"`
+	// Read reports whether the user has read this item. It is resolved from the
+	// user's read state each time the stream is listed, not stored.
+	Read bool `json:"read"`
 }
 
 // Reminder is a scheduled "remind me about this message" entry. It lives until

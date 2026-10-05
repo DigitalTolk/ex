@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { Bell, Clock3, X } from 'lucide-react';
+import { AtSign, Bell, Clock3, MessageSquare, MessagesSquare, UserPlus, X } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -16,6 +16,32 @@ import { buildChannelHref, buildConversationHref } from '@/lib/message-deeplink'
 import { formatLongDateTime, formatRelative, slugify } from '@/lib/format';
 import type { ActivityItem, Reminder } from '@/types';
 
+// What a row says after the actor's name.
+function actorLabel(item: ActivityItem): string {
+  switch (item.type) {
+    case 'reaction':
+      return 'reacted to your message';
+    case 'thread_reply':
+      return 'replied in a thread';
+    case 'dm':
+      return 'sent you a message';
+    case 'channel_added':
+      return `added you to #${item.parentName || item.channelSlug || 'a channel'}`;
+    default:
+      if (item.mentionKind === 'all') return 'mentioned @all';
+      if (item.mentionKind === 'here') return 'mentioned @here';
+      if (item.mentionKind === 'keyword') return 'used one of your keywords';
+      return 'mentioned you';
+  }
+}
+
+// The icon for rows that aren't reactions (a reaction shows its emoji).
+function ActivityIcon({ type }: { type: ActivityItem['type'] }) {
+  const Icon =
+    type === 'thread_reply' ? MessagesSquare : type === 'dm' ? MessageSquare : type === 'channel_added' ? UserPlus : AtSign;
+  return <Icon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />;
+}
+
 export default function ActivityPage() {
   useDocumentTitle('Activity');
   const { data: feed, isLoading } = useActivity();
@@ -28,9 +54,9 @@ export default function ActivityPage() {
 
   const items = useMemo(() => feed?.items ?? [], [feed]);
 
-  // Resolve reactor display names in one batch.
+  // Resolve actor display names in one batch (reactors, authors, who added you).
   const actorIDs = useMemo(
-    () => items.filter((i) => i.type === 'reaction' && i.actorID).map((i) => i.actorID as string),
+    () => items.filter((i) => i.actorID && !i.actorName).map((i) => i.actorID as string),
     [items],
   );
   const { map: userMap } = useUsersBatch(actorIDs);
@@ -52,16 +78,19 @@ export default function ActivityPage() {
   // A thread reply links with its thread root so the thread opens on it —
   // replies never render in the main list.
   const hrefFor = (i: ActivityItem | Reminder) => {
-    if (i.parentType !== 'channel') return buildConversationHref(i.parentID, i.messageID, i.parentMessageID);
+    // Thread replies carry threadRootID; reactions and reminders on a reply
+    // carry parentMessageID.
+    const threadRoot = ('threadRootID' in i ? i.threadRootID : undefined) || i.parentMessageID;
+    if (i.parentType !== 'channel') return buildConversationHref(i.parentID, i.messageID, threadRoot);
     // Prefer the item's own slug snapshot, else the channel cache, else the id.
     const slug = i.channelSlug || channelSlugByID.get(i.parentID) || i.parentID;
-    return buildChannelHref(slug, i.messageID, i.parentMessageID);
+    return buildChannelHref(slug, i.messageID, threadRoot);
   };
 
   const pending = reminders ?? [];
 
   return (
-    <PageContainer title="Activity" description="Reactions to your messages and reminders.">
+    <PageContainer title="Activity" description="Mentions, replies, messages, reactions and reminders.">
       {pending.length > 0 && (
         <section className="mb-6" data-testid="pending-reminders">
           <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -115,12 +144,13 @@ export default function ActivityPage() {
 
       <div className="space-y-2">
         {items.map((item) => {
-          // A reaction row carries a clickable author (hover card), so the row
-          // can't be a single anchor (a button can't nest in an <a>): the author
-          // is a sibling hover card and the preview is the message link. A
-          // reminder row has no author, so the whole row stays a link.
-          if (item.type === 'reaction') {
+          // A row with an actor carries a clickable name (hover card), so the
+          // row can't be a single anchor (a button can't nest in an <a>): the
+          // actor is a sibling hover card and the preview is the link. A
+          // reminder row has no actor, so the whole row stays a link.
+          if (item.type !== 'reminder') {
             const actor = userMap.get(item.actorID ?? '');
+            const name = item.actorName || actor?.displayName || 'Someone';
             return (
               <div
                 key={item.id}
@@ -128,33 +158,37 @@ export default function ActivityPage() {
                 data-testid="activity-item"
               >
                 <span className="mt-0.5 shrink-0">
-                  <EmojiGlyph emoji={item.emoji ?? ''} customMap={emojiMap} size="lg" />
+                  {item.type === 'reaction' ? (
+                    <EmojiGlyph emoji={item.emoji ?? ''} customMap={emojiMap} size="lg" />
+                  ) : (
+                    <ActivityIcon type={item.type} />
+                  )}
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm">
-                    {item.actorID ? (
+                    {item.actorID && !item.actorName ? (
                       <UserHoverCard
                         userId={item.actorID}
-                        displayName={actor?.displayName ?? 'Someone'}
+                        displayName={name}
                         avatarURL={actor?.avatarURL}
                         userStatus={actor?.userStatus}
                         online={actor?.online}
                         currentUserId={user?.id}
                         triggerClassName="font-semibold cursor-pointer"
                       >
-                        {actor?.displayName ?? 'Someone'}
+                        {name}
                       </UserHoverCard>
                     ) : (
-                      <span className="font-semibold">Someone</span>
+                      <span className="font-semibold">{name}</span>
                     )}{' '}
-                    reacted to your message
+                    {actorLabel(item)}
                   </span>
                   <Link
                     to={hrefFor(item)}
                     className="mt-0.5 block truncate text-sm text-muted-foreground transition-colors hover:text-foreground"
                     data-testid="activity-link"
                   >
-                    {item.messagePreview || 'View message'}
+                    {item.messagePreview || (item.type === 'channel_added' ? 'Open channel' : 'View message')}
                   </Link>
                 </span>
                 <span className="shrink-0 text-xs text-muted-foreground">

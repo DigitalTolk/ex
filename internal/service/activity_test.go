@@ -12,14 +12,17 @@ import (
 
 // fakeActivityStore is an in-memory ActivityStore for service tests.
 type fakeActivityStore struct {
-	mu      sync.Mutex
-	items   map[string][]*model.ActivityItem
-	unread  int
-	addErr  error
-	listErr error
-	unrErr  error
-	seenErr error
-	seenCnt int
+	mu        sync.Mutex
+	items     map[string][]*model.ActivityItem
+	addErr    error
+	listErr   error
+	seenErr   error
+	readErr   error
+	removeErr error
+	seenCnt   int
+	readIDs   []string
+	readAs    bool
+	removed   []string
 }
 
 func newFakeActivityStore() *fakeActivityStore {
@@ -45,11 +48,18 @@ func (f *fakeActivityStore) ListActivity(_ context.Context, userID string) ([]*m
 	return f.items[userID], nil
 }
 
-func (f *fakeActivityStore) UnreadActivityCount(context.Context, string) (int, error) {
-	if f.unrErr != nil {
-		return 0, f.unrErr
-	}
-	return f.unread, nil
+func (f *fakeActivityStore) SetActivityRead(_ context.Context, _ string, ids []string, read bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readIDs, f.readAs = ids, read
+	return f.readErr
+}
+
+func (f *fakeActivityStore) RemoveActivity(_ context.Context, _ string, ids []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removed = ids
+	return f.removeErr
 }
 
 func (f *fakeActivityStore) MarkActivitySeen(context.Context, string) error {
@@ -208,14 +218,21 @@ func TestActivityService_AddSyncStoreErrorSkipsPublish(t *testing.T) {
 
 func TestActivityService_FeedAndMarkSeen(t *testing.T) {
 	store := newFakeActivityStore()
-	store.items["u-1"] = []*model.ActivityItem{{ID: "a"}, {ID: "b"}}
-	store.unread = 2
+	store.items["u-1"] = []*model.ActivityItem{
+		{ID: "a", Type: model.ActivityMention},
+		{ID: "b", Type: model.ActivityMention},
+		{ID: "c", Type: model.ActivityDM},
+		{ID: "d", Type: model.ActivityReaction, Read: true},
+	}
 	svc := NewActivityService(store, newMockPublisher())
 	ctx := context.Background()
 
 	feed, err := svc.Feed(ctx, "u-1")
-	if err != nil || len(feed.Items) != 2 || feed.Unread != 2 {
+	if err != nil || len(feed.Items) != 4 || feed.Unread != 3 {
 		t.Fatalf("Feed = %+v, %v", feed, err)
+	}
+	if feed.UnreadByType[model.ActivityMention] != 2 || feed.UnreadByType[model.ActivityDM] != 1 || feed.UnreadByType[model.ActivityReaction] != 0 {
+		t.Fatalf("UnreadByType = %v", feed.UnreadByType)
 	}
 	if err := svc.MarkSeen(ctx, "u-1"); err != nil || store.seenCnt != 1 {
 		t.Fatalf("MarkSeen = %v, seenCnt=%d", err, store.seenCnt)
@@ -258,11 +275,6 @@ func TestActivityService_FeedErrors(t *testing.T) {
 	if _, err := NewActivityService(listErrStore, newMockPublisher()).Feed(context.Background(), "u-1"); err == nil {
 		t.Error("expected list error")
 	}
-	unrErrStore := newFakeActivityStore()
-	unrErrStore.unrErr = errors.New("unread boom")
-	if _, err := NewActivityService(unrErrStore, newMockPublisher()).Feed(context.Background(), "u-1"); err == nil {
-		t.Error("expected unread error")
-	}
 	seenErrStore := newFakeActivityStore()
 	seenErrStore.seenErr = errors.New("seen boom")
 	if err := NewActivityService(seenErrStore, newMockPublisher()).MarkSeen(context.Background(), "u-1"); err == nil {
@@ -290,4 +302,111 @@ func activityEventPublished(pub *mockPublisher, eventType string) bool {
 		}
 	}
 	return false
+}
+
+func TestActivityService_SetItemsRead(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeActivityStore()
+	pub := newMockPublisher()
+	svc := NewActivityService(store, pub)
+
+	if err := svc.SetItemsRead(ctx, "u-1", []string{"a", "b"}, false); err != nil {
+		t.Fatalf("SetItemsRead: %v", err)
+	}
+	if len(store.readIDs) != 2 || store.readAs {
+		t.Fatalf("store got ids=%v read=%v", store.readIDs, store.readAs)
+	}
+	if !activityEventPublished(pub, events.EventActivityRead) {
+		t.Fatal("SetItemsRead must publish activity.read")
+	}
+
+	// Empty and oversized id lists are rejected before the store.
+	if err := svc.SetItemsRead(ctx, "u-1", nil, true); !errors.Is(err, ErrActivityIDsInvalid) {
+		t.Fatalf("empty ids = %v", err)
+	}
+	if err := svc.SetItemsRead(ctx, "u-1", make([]string, activityMaxIDs+1), true); !errors.Is(err, ErrActivityIDsInvalid) {
+		t.Fatalf("too many ids = %v", err)
+	}
+
+	// A store failure is returned and skips the nudge.
+	failing := newFakeActivityStore()
+	failing.readErr = errors.New("boom")
+	failPub := newMockPublisher()
+	if err := NewActivityService(failing, failPub).SetItemsRead(ctx, "u-1", []string{"a"}, true); err == nil {
+		t.Fatal("expected store error")
+	}
+	if activityEventPublished(failPub, events.EventActivityRead) {
+		t.Fatal("a store failure must skip the activity.read nudge")
+	}
+}
+
+func TestActivityService_RemoveItems(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeActivityStore()
+	pub := newMockPublisher()
+	svc := NewActivityService(store, pub)
+
+	if err := svc.RemoveItems(ctx, "u-1", []string{"a"}); err != nil {
+		t.Fatalf("RemoveItems: %v", err)
+	}
+	if len(store.removed) != 1 || store.removed[0] != "a" {
+		t.Fatalf("store removed %v", store.removed)
+	}
+	if !activityEventPublished(pub, events.EventActivityRead) {
+		t.Fatal("RemoveItems must publish activity.read")
+	}
+	if err := svc.RemoveItems(ctx, "u-1", nil); !errors.Is(err, ErrActivityIDsInvalid) {
+		t.Fatalf("empty ids = %v", err)
+	}
+	if err := svc.RemoveItems(ctx, "u-1", make([]string, activityMaxIDs+1)); !errors.Is(err, ErrActivityIDsInvalid) {
+		t.Fatalf("too many ids = %v", err)
+	}
+
+	failing := newFakeActivityStore()
+	failing.removeErr = errors.New("boom")
+	failPub := newMockPublisher()
+	if err := NewActivityService(failing, failPub).RemoveItems(ctx, "u-1", []string{"a"}); err == nil {
+		t.Fatal("expected store error")
+	}
+	if activityEventPublished(failPub, events.EventActivityRead) {
+		t.Fatal("a store failure must skip the activity.read nudge")
+	}
+}
+
+func TestActivityService_RecordForRecipients(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeActivityStore()
+	svc := NewActivityService(store, newMockPublisher())
+
+	// Nothing to record, and no store, are both no-ops.
+	svc.RecordForRecipients(ctx, nil)
+	NewActivityService(nil, newMockPublisher()).RecordForRecipients(ctx, map[string]*model.ActivityItem{"u-1": {ID: "x"}})
+
+	svc.RecordForRecipients(ctx, map[string]*model.ActivityItem{
+		"u-1": {ID: "a", Type: model.ActivityMention},
+		"u-2": {ID: "b", Type: model.ActivityDM},
+	})
+	waitForCond(t, func() bool { return store.count("u-1") == 1 && store.count("u-2") == 1 }, "recipient items recorded")
+}
+
+func TestActivityService_RecordChannelAdded(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeActivityStore()
+	svc := NewActivityService(store, newMockPublisher())
+	ch := &model.Channel{ID: "ch-1", Slug: "design-review", Name: "Design Review"}
+
+	// Self-adds, a missing actor and an unknown channel record nothing.
+	svc.RecordChannelAdded(ctx, "u-1", "u-1", ch)
+	svc.RecordChannelAdded(ctx, "", "u-1", ch)
+	svc.RecordChannelAdded(ctx, "u-2", "u-1", nil)
+
+	svc.RecordChannelAdded(ctx, "u-2", "u-1", ch)
+	waitForCond(t, func() bool { return store.count("u-1") == 1 }, "channel-added item recorded")
+	store.mu.Lock()
+	got := store.items["u-1"][0]
+	store.mu.Unlock()
+	if got.Type != model.ActivityChannelAdded || got.ActorID != "u-2" || got.ParentID != "ch-1" ||
+		got.ChannelSlug != "design-review" || got.ParentName != "Design Review" || got.ParentType != ParentChannel {
+		t.Fatalf("unexpected item %+v", got)
+	}
 }

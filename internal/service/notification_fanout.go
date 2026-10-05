@@ -17,6 +17,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/safe"
+	"github.com/DigitalTolk/ex/internal/store"
 	"github.com/cenkalti/backoff/v5"
 )
 
@@ -302,6 +303,28 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 
 	bodyLower := strings.ToLower(msg.Body)
 
+	// Activity-tab entries share everything but their id, type and mention
+	// kind; recipients get a copy of this template.
+	activityItems := make(map[string]*model.ActivityItem)
+	activityTemplate := model.ActivityItem{
+		CreatedAt:      baseNotif.CreatedAt,
+		MessageID:      msg.ID,
+		ParentID:       msg.ParentID,
+		ParentType:     parentType,
+		MessagePreview: activityPreview(notificationBody(msg)),
+		ActorID:        msg.AuthorID,
+		ActorName:      msg.WebhookUsername,
+		ThreadRootID:   msg.ParentMessageID,
+	}
+	if parentType == ParentChannel {
+		// For channels the display name is the slug the deep link uses.
+		activityTemplate.ChannelSlug = parentName
+	}
+	groupKind := model.MentionKindHere
+	if mentions.All {
+		groupKind = model.MentionKindAll
+	}
+
 	// Mobile pushes collected during the loop; their presence checks resolve
 	// in one batched read afterwards.
 	type pendingPush struct {
@@ -338,6 +361,16 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			r.keyword = keywordsMatchLower(bodyLower, eff.Keywords)
 		}
 
+		if s.activity != nil {
+			if typ, kind := activityFor(parentType, r, groupKind); typ != "" {
+				item := activityTemplate
+				item.ID = store.NewID()
+				item.Type = typ
+				item.MentionKind = kind
+				activityItems[uid] = &item
+			}
+		}
+
 		// DMs always notify their participants — "direct messages" is part of
 		// even the quiet "mentions, DMs & keywords" level — so they short-
 		// circuit the level machinery.
@@ -364,6 +397,10 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			threadAudience[uid] = true
 		}
 		plans = append(plans, alertPlan{uid: uid, mentioned: r.explicitMention || r.groupMention, desktop: desktop, mobile: mobile})
+	}
+
+	if s.activity != nil && len(activityItems) > 0 {
+		s.activity.RecordForRecipients(ctx, activityItems)
 	}
 
 	// Pass 2 — the per-recipient DynamoDB writes, bounded-parallel: badge
@@ -471,6 +508,32 @@ type recipientReasons struct {
 	threadParticipant bool // recipient participates in / follows the thread
 	threadReplies     bool // recipient wants thread-reply notifications
 	keyword           bool // message body matched one of the recipient's keywords
+}
+
+// activityFor decides which Activity-tab entry, if any, one recipient gets for
+// a message, returning the item type and (for mentions) the mention kind. It
+// follows the notification rules for mutes, @all/@here and keywords, but not
+// the delivery levels: the Activity tab lists what was addressed to you, so a
+// quiet desktop level doesn't hide a direct mention from it. groupKind is the
+// mention kind to use for an @all/@here mention.
+func activityFor(parentType string, r recipientReasons, groupKind string) (model.ActivityType, string) {
+	switch {
+	case r.explicitMention:
+		return model.ActivityMention, model.MentionKindUser
+	case parentType == ParentConversation && r.threadReply:
+		return model.ActivityThreadReply, ""
+	case parentType == ParentConversation:
+		return model.ActivityDM, ""
+	case r.muted:
+		return "", ""
+	case r.groupMention:
+		return model.ActivityMention, groupKind
+	case r.keyword:
+		return model.ActivityMention, model.MentionKindKeyword
+	case r.threadReply && r.threadParticipant && r.threadReplies:
+		return model.ActivityThreadReply, ""
+	}
+	return "", ""
 }
 
 // eligibleAtLevel decides whether a channel recipient should be notified at the

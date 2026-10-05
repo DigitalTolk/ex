@@ -34,10 +34,11 @@ describe('useActivity hooks', () => {
   });
 
   it('useActivity returns the feed', async () => {
-    vi.mocked(apiFetch).mockResolvedValue({ items: [{ id: 'a' }], unread: 2 });
+    vi.mocked(apiFetch).mockResolvedValue({ items: [{ id: 'a' }], unread: 2, unreadByType: { mention: 2 } });
     const { result } = renderHook(() => useActivity(), { wrapper: wrapperFor(makeClient()) });
     await waitFor(() => expect(result.current.data).toBeDefined());
     expect(result.current.data?.unread).toBe(2);
+    expect(result.current.data?.unreadByType).toEqual({ mention: 2 });
     expect(result.current.data?.items).toHaveLength(1);
   });
 
@@ -45,7 +46,7 @@ describe('useActivity hooks', () => {
     vi.mocked(apiFetch).mockResolvedValue({ nope: true });
     const { result } = renderHook(() => useActivity(), { wrapper: wrapperFor(makeClient()) });
     await waitFor(() => expect(result.current.data).toBeDefined());
-    expect(result.current.data).toEqual({ items: [], unread: 0 });
+    expect(result.current.data).toEqual({ items: [], unread: 0, unreadByType: {} });
   });
 
   it('useActivity defaults a missing unread count to 0', async () => {
@@ -53,6 +54,7 @@ describe('useActivity hooks', () => {
     const { result } = renderHook(() => useActivity(), { wrapper: wrapperFor(makeClient()) });
     await waitFor(() => expect(result.current.data).toBeDefined());
     expect(result.current.data?.unread).toBe(0);
+    expect(result.current.data?.unreadByType).toEqual({});
   });
 
   it('useReminders coerces a non-array to []', async () => {
@@ -102,10 +104,17 @@ describe('useActivity hooks', () => {
   it('useMarkActivityRead zeroes the unread count in cache', async () => {
     vi.mocked(apiFetch).mockResolvedValue(undefined);
     const client = makeClient();
-    client.setQueryData<ActivityFeed>(queryKeys.activity(), { items: [{ id: 'a' } as never], unread: 5 });
+    client.setQueryData<ActivityFeed>(queryKeys.activity(), {
+      items: [{ id: 'a', read: false } as never],
+      unread: 5,
+      unreadByType: { mention: 5 },
+    });
     const { result } = renderHook(() => useMarkActivityRead(), { wrapper: wrapperFor(client) });
     await result.current.mutateAsync();
-    expect(client.getQueryData<ActivityFeed>(queryKeys.activity())?.unread).toBe(0);
+    const feed = client.getQueryData<ActivityFeed>(queryKeys.activity());
+    expect(feed?.unread).toBe(0);
+    expect(feed?.unreadByType).toEqual({});
+    expect(feed?.items[0].read).toBe(true);
   });
 
   it('useMarkActivityRead cancels the in-flight activity fetch and reconciles so a stale read cannot clobber the zero', async () => {

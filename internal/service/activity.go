@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -17,10 +18,20 @@ import (
 // ActivityStore is the persistence the activity service needs.
 type ActivityStore interface {
 	AddActivity(ctx context.Context, userID string, item *model.ActivityItem) error
+	// ListActivity returns the stream newest-first with each item's Read flag
+	// resolved.
 	ListActivity(ctx context.Context, userID string) ([]*model.ActivityItem, error)
-	UnreadActivityCount(ctx context.Context, userID string) (int, error)
 	MarkActivitySeen(ctx context.Context, userID string) error
+	SetActivityRead(ctx context.Context, userID string, ids []string, read bool) error
+	RemoveActivity(ctx context.Context, userID string, ids []string) error
 }
+
+// ErrActivityIDsInvalid rejects a per-item request with no ids or more ids than
+// a stream can hold.
+var ErrActivityIDsInvalid = errors.New("activity: ids must list between 1 and 500 items")
+
+// activityMaxIDs bounds a per-item request; it matches the stream's size cap.
+const activityMaxIDs = 500
 
 // ChannelSlugResolver resolves a channel id to its slug so a reaction activity
 // item can snapshot the slug server-side (matching the reminder/webhook paths)
@@ -30,14 +41,18 @@ type ChannelSlugResolver interface {
 	GetByID(ctx context.Context, id string) (*model.Channel, error)
 }
 
-// ActivityFeed is the read model returned to a user's client.
+// ActivityFeed is the read model returned to a user's client. Unread counts
+// every unread item; UnreadByType splits that count by item type so the client
+// can mark which Activity tabs have something new.
 type ActivityFeed struct {
-	Items  []*model.ActivityItem `json:"items"`
-	Unread int                   `json:"unread"`
+	Items        []*model.ActivityItem      `json:"items"`
+	Unread       int                        `json:"unread"`
+	UnreadByType map[model.ActivityType]int `json:"unreadByType"`
 }
 
-// ActivityService owns the per-user activity stream (reaction hints + fired
-// reminders) and notifies a user's own clients when it changes.
+// ActivityService owns the per-user activity stream (mentions, thread replies,
+// DMs, reactions, channel adds and fired reminders) and notifies a user's own
+// clients when it changes.
 type ActivityService struct {
 	store     ActivityStore
 	publisher Publisher
@@ -136,17 +151,20 @@ func (s *ActivityService) addSync(ctx context.Context, userID string, item *mode
 	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventActivityNew, map[string]any{})
 }
 
-// Feed returns the user's activity items plus the unread count.
+// Feed returns the user's activity items plus the unread counts.
 func (s *ActivityService) Feed(ctx context.Context, userID string) (ActivityFeed, error) {
 	items, err := s.store.ListActivity(ctx, userID)
 	if err != nil {
 		return ActivityFeed{}, fmt.Errorf("activity feed: %w", err)
 	}
-	unread, err := s.store.UnreadActivityCount(ctx, userID)
-	if err != nil {
-		return ActivityFeed{}, fmt.Errorf("activity unread: %w", err)
+	feed := ActivityFeed{Items: items, UnreadByType: map[model.ActivityType]int{}}
+	for _, it := range items {
+		if !it.Read {
+			feed.Unread++
+			feed.UnreadByType[it.Type]++
+		}
 	}
-	return ActivityFeed{Items: items, Unread: unread}, nil
+	return feed, nil
 }
 
 // MarkSeen advances the user's read watermark so the unread badge clears,
@@ -158,4 +176,65 @@ func (s *ActivityService) MarkSeen(ctx context.Context, userID string) error {
 	}
 	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventActivityRead, map[string]any{})
 	return nil
+}
+
+// SetItemsRead marks specific items read or unread (the Activity tab's "Mark as
+// read" / "Mark as unread"), then nudges the user's other devices to refresh.
+func (s *ActivityService) SetItemsRead(ctx context.Context, userID string, ids []string, read bool) error {
+	if len(ids) == 0 || len(ids) > activityMaxIDs {
+		return ErrActivityIDsInvalid
+	}
+	if err := s.store.SetActivityRead(ctx, userID, ids, read); err != nil {
+		return fmt.Errorf("activity set read: %w", err)
+	}
+	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventActivityRead, map[string]any{})
+	return nil
+}
+
+// RemoveItems deletes specific items from the user's stream ("Remove from
+// activity"), then nudges the user's other devices to refresh.
+func (s *ActivityService) RemoveItems(ctx context.Context, userID string, ids []string) error {
+	if len(ids) == 0 || len(ids) > activityMaxIDs {
+		return ErrActivityIDsInvalid
+	}
+	if err := s.store.RemoveActivity(ctx, userID, ids); err != nil {
+		return fmt.Errorf("activity remove: %w", err)
+	}
+	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventActivityRead, map[string]any{})
+	return nil
+}
+
+// RecordForRecipients adds one pre-built item per recipient (userID → item) to
+// their streams — the notification fan-out's hand-off for mentions, thread
+// replies and DMs. Best-effort and off the send path: the writes run on one
+// detached goroutine, and a failed write is logged and skipped.
+func (s *ActivityService) RecordForRecipients(ctx context.Context, items map[string]*model.ActivityItem) {
+	if s.store == nil || len(items) == 0 {
+		return
+	}
+	safe.Go(func() {
+		bg, cancel := detachedContext(ctx)
+		defer cancel()
+		for userID, item := range items {
+			s.addSync(bg, userID, item)
+		}
+	})
+}
+
+// RecordChannelAdded tells a user that someone else added them to a channel.
+// No-op when the user added themselves or the channel is unknown.
+func (s *ActivityService) RecordChannelAdded(ctx context.Context, actorID, userID string, ch *model.Channel) {
+	if ch == nil || actorID == "" || actorID == userID {
+		return
+	}
+	s.add(ctx, userID, &model.ActivityItem{
+		ID:          store.NewID(),
+		Type:        model.ActivityChannelAdded,
+		CreatedAt:   time.Now(),
+		ParentID:    ch.ID,
+		ParentType:  ParentChannel,
+		ChannelSlug: ch.Slug,
+		ParentName:  ch.Name,
+		ActorID:     actorID,
+	})
 }

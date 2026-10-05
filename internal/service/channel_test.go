@@ -1572,3 +1572,29 @@ func TestLeave_PostsSystemMessage(t *testing.T) {
 		t.Error("expected message.new event for system leave message")
 	}
 }
+
+type recordingChannelActivity struct {
+	actorID, userID string
+	ch              *model.Channel
+}
+
+func (r *recordingChannelActivity) RecordChannelAdded(_ context.Context, actorID, userID string, ch *model.Channel) {
+	r.actorID, r.userID, r.ch = actorID, userID, ch
+}
+
+func TestChannelService_AddMember_RecordsActivity(t *testing.T) {
+	svc, channels, memberships, _, _ := setupChannelService()
+	rec := &recordingChannelActivity{}
+	svc.SetActivityRecorder(rec)
+	ctx := context.Background()
+
+	channels.channels["ch12"] = &model.Channel{ID: "ch12", Name: "design-review", Type: model.ChannelTypePublic}
+	memberships.memberships["ch12#admin-1"] = &model.ChannelMembership{ChannelID: "ch12", UserID: "admin-1", Role: model.ChannelRoleAdmin}
+
+	if err := svc.AddMember(ctx, "admin-1", "ch12", "user-new", model.ChannelRoleMember); err != nil {
+		t.Fatalf("AddMember: %v", err)
+	}
+	if rec.actorID != "admin-1" || rec.userID != "user-new" || rec.ch == nil || rec.ch.ID != "ch12" {
+		t.Fatalf("recorded %+v", rec)
+	}
+}

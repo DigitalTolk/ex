@@ -584,6 +584,8 @@ func main() {
 	activitySvc := service.NewActivityService(store.NewRedisActivityStore(redisCache.Client()), redisPubSub)
 	activitySvc.SetChannelResolver(channelSvc) // snapshot channel slug onto reaction activity items
 	messageSvc.SetReactionRecorder(activitySvc)
+	notificationSvc.SetActivityRecorder(activitySvc) // mentions, thread replies, DMs
+	channelSvc.SetActivityRecorder(activitySvc)      // "added you to #channel"
 	reminderStore := store.NewRedisReminderStore(redisCache.Client())
 	reminderSvc := service.NewReminderService(reminderStore, messageStore, messageSvc)
 	reminderSvc.SetDelivery(activitySvc, notificationSvc)

@@ -16,6 +16,8 @@ import (
 type ActivityService interface {
 	Feed(ctx context.Context, userID string) (service.ActivityFeed, error)
 	MarkSeen(ctx context.Context, userID string) error
+	SetItemsRead(ctx context.Context, userID string, ids []string, read bool) error
+	RemoveItems(ctx context.Context, userID string, ids []string) error
 }
 
 // ReminderService is the reminder behaviour the handler needs.
@@ -51,6 +53,9 @@ func (h *ActivityHandler) Feed(w http.ResponseWriter, r *http.Request) {
 	if feed.Items == nil {
 		feed.Items = []*model.ActivityItem{}
 	}
+	if feed.UnreadByType == nil {
+		feed.UnreadByType = map[model.ActivityType]int{}
+	}
 	writeJSON(w, http.StatusOK, feed)
 }
 
@@ -66,6 +71,64 @@ func (h *ActivityHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// SetItemsRead marks specific activity items read or unread.
+// Body: {"ids": ["..."], "read": true|false}.
+func (h *ActivityHandler) SetItemsRead(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	var body struct {
+		IDs  []string `json:"ids"`
+		Read *bool    `json:"read"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if body.Read == nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "read is required")
+		return
+	}
+	if err := h.activity.SetItemsRead(r.Context(), userID, body.IDs, *body.Read); err != nil {
+		writeActivityItemsError(w, r, "activity_items_read_error", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// RemoveItems deletes specific items from the caller's activity stream.
+// Body: {"ids": ["..."]}.
+func (h *ActivityHandler) RemoveItems(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if err := h.activity.RemoveItems(r.Context(), userID, body.IDs); err != nil {
+		writeActivityItemsError(w, r, "activity_items_remove_error", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeActivityItemsError maps a bad id list to 400 and anything else to 500.
+func writeActivityItemsError(w http.ResponseWriter, r *http.Request, code string, err error) {
+	if errors.Is(err, service.ErrActivityIDsInvalid) {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	writeInternalError(w, r, code, err)
 }
 
 // CreateReminder schedules a "remind me about this message" reminder.

@@ -39,6 +39,13 @@ type ChannelService struct {
 	publisher   Publisher
 	indexer     ChannelIndexer
 	searcher    ChannelSearcher
+	activity    ChannelActivityRecorder
+}
+
+// ChannelActivityRecorder adds "X added you to #channel" to the added user's
+// Activity tab. Implemented by ActivityService.
+type ChannelActivityRecorder interface {
+	RecordChannelAdded(ctx context.Context, actorID, userID string, ch *model.Channel)
 }
 
 // NewChannelService creates a ChannelService with the given dependencies.
@@ -58,6 +65,10 @@ func NewChannelService(channels ChannelStore, memberships MembershipStore, users
 func (s *ChannelService) SetIndexer(i ChannelIndexer) { s.indexer = i }
 
 func (s *ChannelService) SetSearcher(sr ChannelSearcher) { s.searcher = sr }
+
+// SetActivityRecorder wires the Activity tab. Optional — without it adding a
+// member works the same but nothing lands in their activity stream.
+func (s *ChannelService) SetActivityRecorder(a ChannelActivityRecorder) { s.activity = a }
 
 func (s *ChannelService) indexChannel(ctx context.Context, ch *model.Channel) {
 	if s.indexer == nil || ch == nil {
@@ -603,6 +614,9 @@ func (s *ChannelService) AddMember(ctx context.Context, actorID, channelID, user
 	})
 
 	s.postSystemMessage(ctx, channelID, displayName+" was added to the channel")
+	if s.activity != nil {
+		s.activity.RecordChannelAdded(ctx, actorID, userID, ch)
+	}
 	return nil
 }
 

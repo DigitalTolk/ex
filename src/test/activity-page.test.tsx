@@ -149,4 +149,47 @@ describe('ActivityPage', () => {
       expect(vi.mocked(apiFetch)).toHaveBeenCalledWith('/api/v1/reminders/r1', { method: 'DELETE' }),
     );
   });
+
+  it('renders mentions, thread replies, DMs and channel adds with the right labels and links', async () => {
+    const base = { createdAt: '2026-06-30T10:00:00Z', parentID: 'ch-1', parentType: 'channel', channelSlug: 'general', actorID: 'u-2' };
+    mockApi({
+      feed: {
+        items: [
+          { ...base, id: 'b1', type: 'mention', mentionKind: 'user', messageID: 'm1', messagePreview: 'can you share the palette?' },
+          { ...base, id: 'b2', type: 'mention', mentionKind: 'all', messageID: 'm2' },
+          { ...base, id: 'b3', type: 'mention', mentionKind: 'here', messageID: 'm3' },
+          { ...base, id: 'b4', type: 'mention', mentionKind: 'keyword', messageID: 'm4' },
+          { ...base, id: 'b5', type: 'thread_reply', messageID: 'm5', threadRootID: 'root-1' },
+          { ...base, id: 'b6', type: 'dm', parentID: 'conv-1', parentType: 'conversation', channelSlug: undefined, messageID: 'm6' },
+          { ...base, id: 'b7', type: 'channel_added', messageID: '', parentName: 'design-review' },
+          { ...base, id: 'b8', type: 'channel_added', messageID: '', channelSlug: 'ops' },
+          { ...base, id: 'b9', type: 'channel_added', messageID: '', channelSlug: undefined, parentID: 'ch-x' },
+          { ...base, id: 'b10', type: 'mention', mentionKind: 'user', messageID: 'm10', actorID: 'webhook', actorName: 'Deploy Bot' },
+        ],
+        unread: 0,
+      },
+    });
+    renderPage();
+    expect(await screen.findAllByText('mentioned you')).toHaveLength(2);
+    for (const label of [
+      'mentioned @all',
+      'mentioned @here',
+      'used one of your keywords',
+      'replied in a thread',
+      'sent you a message',
+      'added you to #design-review',
+      'added you to #ops',
+      'added you to #a channel',
+    ]) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+    // A webhook author shows its own name, without a hover card.
+    expect(screen.getByText('Deploy Bot')).toBeInTheDocument();
+    const hrefs = screen.getAllByTestId('activity-link').map((a) => a.getAttribute('href'));
+    expect(hrefs).toContain('/channel/general?thread=root-1#msg-m5');
+    expect(hrefs).toContain('/conversation/conv-1#msg-m6');
+    expect(hrefs).toContain('/channel/general');
+    expect(screen.getByText('can you share the palette?')).toBeInTheDocument();
+    expect(screen.getAllByText('Open channel')).toHaveLength(3);
+  });
 });
