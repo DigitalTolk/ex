@@ -115,6 +115,19 @@ describe('connector-expired alerts', () => {
     expect(window.location.pathname).toBe('/agents/connectors');
   });
 
+  it('omits the web icon inside the desktop shell, which supplies its own', () => {
+    const { ctor } = installNotification('granted');
+    (window as unknown as { __EX_DESKTOP__?: boolean }).__EX_DESKTOP__ = true;
+    try {
+      renderProbe();
+      act(() => dispatchSpy?.(expiredFx()));
+      expect(ctor).toHaveBeenCalledTimes(1);
+      expect((ctor.mock.calls[0][1] as NotificationOptions).icon).toBeUndefined();
+    } finally {
+      delete (window as unknown as { __EX_DESKTOP__?: boolean }).__EX_DESKTOP__;
+    }
+  });
+
   it('toasts when the Notification constructor throws in a webview', () => {
     installNotification('granted', { throws: true });
     renderProbe();
