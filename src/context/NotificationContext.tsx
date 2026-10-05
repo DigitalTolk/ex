@@ -80,7 +80,15 @@ function ackDesktopDelivery(messageID: string | undefined): void {
 // NotificationKind mirrors backend service.NotificationKind. Adding a new
 // kind here is the single client-side place where a new alert flavor is
 // recognized — keep this in lockstep with the Go side.
-export type NotificationKind = 'message' | 'mention' | 'thread_reply';
+export type NotificationKind =
+  | 'message'
+  | 'mention'
+  | 'thread_reply'
+  // A connector's credential was refused by its service. Not a message: no
+  // parent, no author, nothing to dedup by messageID — and the person is the
+  // only one who can fix it, so it surfaces like an approval rather than
+  // riding the message path.
+  | 'connector_expired';
 
 // ApprovalAlert is an agent run blocked on the invoker's decision. It does NOT
 // go through `dispatch`: an approval is not a message, and reusing the message
@@ -308,6 +316,48 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
   const dispatch = useCallback((n: NotificationPayload, force = false) => {
     const now = Date.now();
+    // A dead connector credential: none of the message machinery below
+    // applies (no messageID to dedup, no parent to be "already reading", no
+    // author to echo-suppress), and it must not be suppressed just because
+    // the person happens to be looking at a channel. Surface it and stop.
+    if (n.kind === 'connector_expired') {
+      const key = `connector:${n.deepLink}:${n.title}`;
+      if (hasSeenNotification(key, now)) return;
+      const open = () => {
+        if (n.deepLink) navigateInApp(n.deepLink);
+      };
+      const { soundEnabled, browserEnabled } = prefsRef.current;
+      let delivered = false;
+      if (browserEnabled && permissionRef.current === 'granted' && notificationsSupported()) {
+        try {
+          const opts: NotificationOptions = { body: n.body, silent: true };
+          if (!window.__EX_DESKTOP__) opts.icon = '/logo.svg';
+          const note = new Notification(n.title, opts);
+          note.onclick = () => {
+            window.focus();
+            open();
+            note.close();
+          };
+          delivered = true;
+        } catch {
+          delivered = false;
+        }
+      }
+      // Toast whenever no OS banner could be shown. Without this the alert is
+      // invisible wherever notification permission is missing or the platform
+      // drops it — and then an agent telling them to "press Reconnect" points
+      // at something they were never shown.
+      if (!delivered && browserEnabled) {
+        showToast(n.body, 'error', { title: n.title, kind: 'notification', onActivate: open });
+        delivered = true;
+      }
+      if (soundEnabled && delivered) playPingRespectingDnd(playApprovalChime);
+      if (delivered) {
+        requestOsAttention();
+        recordNotification(key, now);
+      }
+      return;
+    }
     // Drop a repeat of a message we've ALREADY alerted on (multi-tab fan-out /
     // a double-publish). Only a *check* here — we record the messageID as
     // alerted at the very end, and only once we actually surface sound or a

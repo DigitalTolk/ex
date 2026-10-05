@@ -24,7 +24,9 @@ export interface Connector {
   credentialHint?: string;
   credentialURL?: string;
   installed: boolean;
-  installStatus?: 'connected' | 'unverified';
+  // 'expired': the service has since refused the credential — the only
+  // status the person must act on (reconnect).
+  installStatus?: 'connected' | 'unverified' | 'expired';
   connectedAs?: string;
   // May agents attach this connector themselves (use_connector)?
   agentUse?: 'ask' | 'always' | 'never';

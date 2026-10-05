@@ -412,6 +412,43 @@ func bridgeTools(api *runAPI) []bedrock.Tool {
 			},
 		},
 		{
+			Name: "reconnect_connector",
+			Description: "Ask your invoker to reconnect a connector whose session or token has expired. " +
+				"You cannot reconnect it yourself — the credential is theirs and renewing it means them signing in. " +
+				"Use this when a connector you need is missing from the run or its calls come back 401/403, then tell them what you were trying to do.",
+			Schema: obj(in{"connector": str("Connector slug, e.g. marketingcrm.")}, "connector"),
+			Call: func(ctx context.Context, raw json.RawMessage) (string, bool) {
+				v := parse(raw)
+				slug := s(v, "connector")
+				if slug == "" {
+					return "reconnect_connector requires connector", true
+				}
+				status, data := api.call(ctx, "POST", "/api/v1/agent/run/connectors/reconnect", in{"connector": slug})
+				if status < 200 || status >= 300 {
+					return describeRunFailure(status, data), true
+				}
+				return dataStr(data, "text", "asked the invoker to reconnect"), false
+			},
+		},
+		{
+			Name: "disconnect_connector",
+			Description: "Remove your invoker's connection to a connector. Only when they ask for it — " +
+				"it revokes the credential's use for every agent, and reconnecting means them signing in again.",
+			Schema: obj(in{"connector": str("Connector slug, e.g. marketingcrm.")}, "connector"),
+			Call: func(ctx context.Context, raw json.RawMessage) (string, bool) {
+				v := parse(raw)
+				slug := s(v, "connector")
+				if slug == "" {
+					return "disconnect_connector requires connector", true
+				}
+				status, data := api.call(ctx, "POST", "/api/v1/agent/run/connectors/disconnect", in{"connector": slug})
+				if status < 200 || status >= 300 {
+					return describeRunFailure(status, data), true
+				}
+				return dataStr(data, "text", "disconnected"), false
+			},
+		},
+		{
 			Name:        "set_reminder",
 			Description: "Set a reminder for YOUR INVOKER — fires into their notifications, anchored to a message in this thread. Give in_minutes or remind_at (RFC3339 UTC).",
 			Schema:      obj(in{"in_minutes": num("Minutes from now."), "remind_at": str("Absolute time, RFC3339 UTC."), "message_id": str("Optional anchor message.")}),

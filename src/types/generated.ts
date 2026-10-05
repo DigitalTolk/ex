@@ -1380,6 +1380,14 @@ export interface ConnectorInstall {
    *   "never"  — only explicit /picks work
    */
   agentUse?: string;
+  /**
+   * VerifiedAt is when the credential was last PROVEN live against the
+   * service. Runs re-prove a stale one before handing it to an agent, so a
+   * dead credential is caught before the agent trips over it — bounded by a
+   * TTL so this costs one request per connector per quarter-hour, not one
+   * per call.
+   */
+  verifiedAt?: string /* RFC3339 */;
   installedAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
 }
@@ -1454,6 +1462,14 @@ export const ConnectorStatusConnected = "connected";
  * Connector install statuses.
  */
 export const ConnectorStatusUnverified = "unverified";
+/**
+ * ConnectorStatusExpired: the credential was accepted once and the service
+ * has since refused it (401/403). Sessions and tokens die — a 7-day cookie
+ * is a WHEN, not an if — and before this state the death surfaced as a raw
+ * "HTTP 401" inside an agent's reasoning: the agent guessed, the Connectors
+ * page still said "connected", and nobody told the person to reconnect.
+ */
+export const ConnectorStatusExpired = "expired";
 /**
  * ConnectorCredentialHintMaxLen bounds CredentialHint: it is one line under a
  * form field, not documentation — the bundle is where instructions belong.

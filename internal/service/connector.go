@@ -45,7 +45,14 @@ type ConnectorService struct {
 	// registry is only whatever was ingested directly.
 	providerURL string
 	providerKey string
+	// notifier delivers the "your connection expired" alert. Optional: unset
+	// in tests and in any wiring that has no notification stack.
+	notifier DirectNotifier
 }
+
+// SetExpiryNotifier wires the alert sent when a credential dies. Same seam
+// reminders use, so expiry rides the existing desktop + mobile delivery.
+func (s *ConnectorService) SetExpiryNotifier(n DirectNotifier) { s.notifier = n }
 
 func NewConnectorService(s connectorStore) *ConnectorService {
 	return &ConnectorService{
@@ -566,6 +573,7 @@ func (s *ConnectorService) VerifyInstall(ctx context.Context, userID, slug strin
 		return inst, nil
 	}
 	code, body, verr := s.authedGet(ctx, c, c.VerifyURL, inst.Token)
+	now := time.Now().UTC()
 	switch {
 	case verr == nil && code >= 200 && code < 300:
 		inst.Status = model.ConnectorStatusConnected
@@ -573,12 +581,17 @@ func (s *ConnectorService) VerifyInstall(ctx context.Context, userID, slug strin
 		if c.AuthKind != model.ConnectorAuthNone {
 			inst.Identity = clipIdentity(body)
 		}
-		inst.UpdatedAt = time.Now().UTC()
+		inst.VerifiedAt = now
+		inst.UpdatedAt = now
 		if err := s.store.PutInstall(ctx, inst); err != nil {
 			return nil, err
 		}
 		return inst, nil
 	case verr == nil && (code == 401 || code == 403):
+		// Record the death rather than only reporting it to this one caller:
+		// the row is what the Connectors page reads and what the next run
+		// checks, and it is also what makes the notification fire exactly once.
+		s.markExpired(ctx, inst, c)
 		return nil, ErrTokenRejected
 	default:
 		// The transport error is the diagnosis (dial timeout = network/SG,
@@ -586,6 +599,74 @@ func (s *ConnectorService) VerifyInstall(ctx context.Context, userID, slug strin
 		// the caller only sees the sanitized "still unverified".
 		slog.Warn("connector verify unreachable", "slug", slug, "url", c.VerifyURL, "status", code, "error", verr)
 		return inst, fmt.Errorf("%w: still unverified", ErrServiceUnreachable)
+	}
+}
+
+// verifyTTL bounds how often a run re-proves a credential. Short enough that
+// a dead one is caught within a quarter-hour of a person using agents, long
+// enough that a busy thread costs one request, not one per tool call.
+var verifyTTL = 15 * time.Minute
+
+// markExpired flips an install to "expired" and tells the owner once — on the
+// TRANSITION only, so a connector that stays dead does not nag on every run.
+// Best-effort: a failed write or a failed notification must never break the
+// call that discovered the expiry.
+func (s *ConnectorService) markExpired(ctx context.Context, inst *model.ConnectorInstall, c *model.Connector) {
+	if inst.Status == model.ConnectorStatusExpired {
+		return
+	}
+	inst.Status = model.ConnectorStatusExpired
+	inst.VerifiedAt = time.Now().UTC()
+	inst.UpdatedAt = inst.VerifiedAt
+	if err := s.store.PutInstall(ctx, inst); err != nil {
+		slog.Warn("connector expiry not recorded", "slug", inst.ConnectorSlug, "error", err)
+		return
+	}
+	s.notifyExpired(ctx, inst, c)
+}
+
+// notifyExpired delivers the reconnect prompt. Separate from the state change
+// so a deliberate ask can re-raise it without pretending the state changed.
+func (s *ConnectorService) notifyExpired(ctx context.Context, inst *model.ConnectorInstall, c *model.Connector) {
+	if s.notifier == nil {
+		return
+	}
+	s.notifier.NotifyDirect(ctx, inst.UserID, Notification{
+		Kind:      NotificationKindConnectorExpired,
+		Title:     c.Title + " needs reconnecting",
+		Body:      "Your " + c.Title + " session expired, so agents can no longer use it. Reconnect it to carry on.",
+		DeepLink:  "/agents/connectors",
+		CreatedAt: inst.UpdatedAt,
+	})
+}
+
+// freshToken returns the install's credential only if it is still believed
+// live, re-proving it when the last proof is older than verifyTTL. An
+// unreachable service leaves the credential alone: a network blip is not a
+// dead session, and withholding on it would break working connectors.
+func (s *ConnectorService) freshToken(ctx context.Context, inst *model.ConnectorInstall, c *model.Connector) (string, bool) {
+	if inst.Status == model.ConnectorStatusExpired {
+		return "", false
+	}
+	if c.VerifyURL == "" || time.Since(inst.VerifiedAt) < verifyTTL {
+		return inst.Token, true
+	}
+	code, body, verr := s.authedGet(ctx, c, c.VerifyURL, inst.Token)
+	switch {
+	case verr == nil && code >= 200 && code < 300:
+		inst.Status = model.ConnectorStatusConnected
+		inst.ConnectedAs = displayName(body)
+		inst.VerifiedAt = time.Now().UTC()
+		inst.UpdatedAt = inst.VerifiedAt
+		if err := s.store.PutInstall(ctx, inst); err != nil {
+			slog.Warn("connector re-verify not recorded", "slug", inst.ConnectorSlug, "error", err)
+		}
+		return inst.Token, true
+	case verr == nil && (code == 401 || code == 403):
+		s.markExpired(ctx, inst, c)
+		return "", false
+	default:
+		return inst.Token, true
 	}
 }
 
@@ -823,6 +904,7 @@ func (s *ConnectorService) ForRunner(ctx context.Context, invokerID string, slug
 		return nil, err
 	}
 	out := make([]RunnerConnector, 0, len(slugs))
+	var expired []string
 	for _, in := range installs {
 		if !want[in.ConnectorSlug] {
 			continue
@@ -852,19 +934,120 @@ func (s *ConnectorService) ForRunner(ctx context.Context, invokerID string, slug
 		if in.Identity != "" {
 			files = append(files, model.ConnectorFile{Slug: c.Slug, Name: "_identity.json", Content: in.Identity})
 		}
+		// Prove the credential before handing it to an agent. A dead one used
+		// to reach the model as a bare "HTTP 401" mid-task, which it could
+		// only guess at; now the connector is dropped from the run and the
+		// agent is told why, in words that name the fix.
+		token, live := s.freshToken(ctx, in, c)
+		if !live {
+			expired = append(expired, c.Title)
+			continue
+		}
 		out = append(out, RunnerConnector{
 			Slug:        c.Slug,
 			Title:       c.Title,
 			Description: c.Description,
 			BaseURL:     c.BaseURL,
 			EnvPrefix:   c.EnvPrefix(),
-			Token:       in.Token,
+			Token:       token,
 			AuthHeader:  c.AuthHeader,
 			Files:       files,
 			Services:    c.Services,
 		})
 	}
+	if len(expired) > 0 {
+		slog.Info("connectors withheld from run: credential expired", "invokerID", invokerID, "connectors", expired)
+	}
 	return out, nil
+}
+
+// AskReconnect raises the reconnect prompt with the connector's OWNER. It is
+// what an agent can honestly do about a dead credential: renewing it means a
+// person signing in, so the agent asks rather than pretends. Marks the install
+// expired first, so the Connectors page agrees with the notification and the
+// next run withholds the dead credential.
+// ReconnectOutcome is what AskReconnect found when it checked.
+type ReconnectOutcome string
+
+const (
+	// ReconnectLive: the credential still works — nothing to reconnect, and
+	// saying so beats sending the person to re-do a sign-in they do not need.
+	ReconnectLive ReconnectOutcome = "live"
+	// ReconnectAsked: the credential is dead and the owner has been prompted.
+	ReconnectAsked ReconnectOutcome = "asked"
+	// ReconnectUnknown: the service could not be reached, so the credential is
+	// neither proven dead nor proven live. Left alone.
+	ReconnectUnknown ReconnectOutcome = "unknown"
+)
+
+func (s *ConnectorService) AskReconnect(ctx context.Context, userID, slug string) (string, ReconnectOutcome, error) {
+	c, err := s.store.GetConnector(ctx, slug)
+	if err != nil {
+		return "", "", err
+	}
+	inst, err := s.store.GetInstall(ctx, userID, slug)
+	if err != nil {
+		return "", "", err
+	}
+	// Already known dead: re-raise the prompt without a second state change,
+	// since the person may simply have missed the first one.
+	if inst.Status == model.ConnectorStatusExpired {
+		s.notifyExpired(ctx, inst, c)
+		return c.Title, ReconnectAsked, nil
+	}
+	// CHECK before crying wolf. Asking "can you reconnect X" is usually a
+	// guess, and marking a working credential expired on that guess would
+	// withhold it from every later run until the person re-did a sign-in they
+	// never needed. A connector with no verify endpoint cannot be checked, so
+	// it is taken at its word rather than condemned.
+	if c.VerifyURL == "" {
+		return c.Title, ReconnectLive, nil
+	}
+	code, _, verr := s.authedGet(ctx, c, c.VerifyURL, inst.Token)
+	switch {
+	case verr == nil && code >= 200 && code < 300:
+		inst.VerifiedAt = time.Now().UTC()
+		if err := s.store.PutInstall(ctx, inst); err != nil {
+			slog.Warn("verify stamp not recorded", "slug", slug, "error", err)
+		}
+		return c.Title, ReconnectLive, nil
+	case verr == nil && (code == 401 || code == 403):
+		s.markExpired(ctx, inst, c)
+		return c.Title, ReconnectAsked, nil
+	default:
+		return c.Title, ReconnectUnknown, nil
+	}
+}
+
+// IsInstalled reports whether this user has this connector connected. The
+// agent-facing disconnect needs it because Uninstall is deliberately
+// idempotent for the UI — which would otherwise let an agent report
+// "disconnected /ghost" for something that never existed.
+func (s *ConnectorService) IsInstalled(ctx context.Context, userID, slug string) bool {
+	in, err := s.store.GetInstall(ctx, userID, slug)
+	return err == nil && in != nil
+}
+
+// ExpiredFor names the picked connectors whose credential is dead, so the run
+// can TELL the agent instead of leaving it to infer a silence. Read-only: the
+// verification already happened in ForRunner.
+func (s *ConnectorService) ExpiredFor(ctx context.Context, invokerID string, slugs []string) []string {
+	if len(slugs) == 0 {
+		return nil
+	}
+	var out []string
+	for _, sl := range slugs {
+		in, err := s.store.GetInstall(ctx, invokerID, sl)
+		if err != nil || in == nil || in.Status != model.ConnectorStatusExpired {
+			continue
+		}
+		title := sl
+		if c, err := s.store.GetConnector(ctx, sl); err == nil && c != nil && c.Title != "" {
+			title = c.Title
+		}
+		out = append(out, title)
+	}
+	return out
 }
 
 // passwordGrant exchanges email/password (and optionally a 2FA code) for a

@@ -29,6 +29,12 @@ const (
 	// process it (their machine, their tokens). Always notifiable — it waits
 	// for a decision.
 	NotificationKindCatchUp NotificationKind = "catchup"
+	// NotificationKindConnectorExpired fires when a connector's credential is
+	// refused by the service — a session or token that has run out. Always
+	// notifiable: the person's agents just lost access to a service they
+	// connected deliberately, and only they can reconnect it. Fired ONCE, on
+	// the transition, not on every run that finds it dead.
+	NotificationKindConnectorExpired NotificationKind = "connector_expired"
 )
 
 // notifiableKinds is the registry of kinds that should actually fire a
@@ -36,12 +42,13 @@ const (
 // design ask referenced — keep it data-driven so a new event type either
 // joins this set explicitly or stays silent. No magic, no hidden defaults.
 var notifiableKinds = map[NotificationKind]struct{}{
-	NotificationKindMessage:     {},
-	NotificationKindMention:     {},
-	NotificationKindThreadReply: {},
-	NotificationKindReminder:    {},
-	NotificationKindApproval:    {},
-	NotificationKindCatchUp:     {},
+	NotificationKindMessage:          {},
+	NotificationKindMention:          {},
+	NotificationKindThreadReply:      {},
+	NotificationKindReminder:         {},
+	NotificationKindApproval:         {},
+	NotificationKindCatchUp:          {},
+	NotificationKindConnectorExpired: {},
 }
 
 // IsNotifiable reports whether a kind should produce an actual user-facing

@@ -31,6 +31,10 @@ func (r *otaskCovRegistry) InstalledIndex(context.Context, string) ([]ConnectorI
 	return r.idx, r.err
 }
 
+func (r *otaskCovRegistry) ExpiredFor(context.Context, string, []string) []string {
+	return nil
+}
+
 // otaskCovSeed plants a task like seedTask but lets the caller mutate it
 // before it is stored (different requester/agent/state/thread).
 func otaskCovSeed(t *testing.T, fx *taskFixture, mutate func(*model.CodingTask)) *model.CodingTask {

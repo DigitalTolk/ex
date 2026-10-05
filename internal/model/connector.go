@@ -134,7 +134,13 @@ type ConnectorInstall struct {
 	//   "ask" (default, empty = ask) — one approval card per run
 	//   "always" — auto-attach, no ask
 	//   "never"  — only explicit /picks work
-	AgentUse    string    `json:"agentUse,omitempty" dynamodbav:"agentUse,omitempty"`
+	AgentUse string `json:"agentUse,omitempty" dynamodbav:"agentUse,omitempty"`
+	// VerifiedAt is when the credential was last PROVEN live against the
+	// service. Runs re-prove a stale one before handing it to an agent, so a
+	// dead credential is caught before the agent trips over it — bounded by a
+	// TTL so this costs one request per connector per quarter-hour, not one
+	// per call.
+	VerifiedAt  time.Time `json:"verifiedAt,omitempty" dynamodbav:"verifiedAt,omitempty"`
 	InstalledAt time.Time `json:"installedAt" dynamodbav:"installedAt"`
 	UpdatedAt   time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
 }
@@ -178,6 +184,12 @@ const (
 const (
 	ConnectorStatusConnected  = "connected"
 	ConnectorStatusUnverified = "unverified"
+	// ConnectorStatusExpired: the credential was accepted once and the service
+	// has since refused it (401/403). Sessions and tokens die — a 7-day cookie
+	// is a WHEN, not an if — and before this state the death surfaced as a raw
+	// "HTTP 401" inside an agent's reasoning: the agent guessed, the Connectors
+	// page still said "connected", and nobody told the person to reconnect.
+	ConnectorStatusExpired = "expired"
 )
 
 // ValidateCookieName accepts an empty name or a valid HTTP token; anything

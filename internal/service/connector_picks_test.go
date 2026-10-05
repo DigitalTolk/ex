@@ -11,8 +11,9 @@ import (
 
 // stubConnectorRegistry answers KnownSlugs/InstalledIndex from fixed sets.
 type stubConnectorRegistry struct {
-	slugs map[string]bool
-	index []ConnectorIndexEntry
+	slugs   map[string]bool
+	index   []ConnectorIndexEntry
+	expired []string
 }
 
 func (s *stubConnectorRegistry) KnownSlugs(context.Context) (map[string]bool, error) {
@@ -21,6 +22,10 @@ func (s *stubConnectorRegistry) KnownSlugs(context.Context) (map[string]bool, er
 
 func (s *stubConnectorRegistry) InstalledIndex(context.Context, string) ([]ConnectorIndexEntry, error) {
 	return s.index, nil
+}
+
+func (s *stubConnectorRegistry) ExpiredFor(context.Context, string, []string) []string {
+	return s.expired
 }
 
 func startPickRun(t *testing.T, fx *orchFixture, msg *model.Message) *model.Run {
@@ -145,5 +150,27 @@ func TestOrchestrator_AttachConnector(t *testing.T) {
 	got, _ := fx.runs.GetRun(context.Background(), run.ID)
 	if !reflect.DeepEqual(got.ConnectorSlugs, []string{"cliffhub"}) {
 		t.Fatalf("slugs = %v", got.ConnectorSlugs)
+	}
+}
+
+// A connector the invoker PICKED but whose credential is dead is withheld
+// from the run. The bundle has to say so: otherwise the agent reaches for a
+// tool that should be there, finds nothing, and invents a reason.
+func TestOrchestrator_ExpiredConnectorAnnouncedInBundle(t *testing.T) {
+	fx := newOrchFixture(t)
+	fx.orch.SetConnectorRegistry(&stubConnectorRegistry{
+		slugs:   map[string]bool{"cliffhub": true},
+		expired: []string{"CliffHub"},
+	})
+	run := startPickRun(t, fx, &model.Message{
+		ID: "m-exp1", ParentID: "chan1", AuthorID: "u-alice", Body: "/cliffhub who is habib?",
+	})
+	bundle, _ := fx.orch.buildBundle(context.Background(), run)
+	if !strings.Contains(bundle, "# Connector unavailable") ||
+		!strings.Contains(bundle, "CliffHub: the session expired") {
+		t.Fatalf("bundle must name the withheld connector:\n%s", bundle)
+	}
+	if !strings.Contains(bundle, "reconnect_connector") {
+		t.Fatalf("bundle must point at the tool that raises the prompt:\n%s", bundle)
 	}
 }

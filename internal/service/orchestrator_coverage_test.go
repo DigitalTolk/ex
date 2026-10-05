@@ -358,6 +358,7 @@ func (a *orchCovArchive) Delete(_ context.Context, runID string) error {
 
 // orchCovRegistry is a connectorRegistry with failure toggles.
 type orchCovRegistry struct {
+	expired   []string
 	slugs     map[string]bool
 	index     []ConnectorIndexEntry
 	failKnown error
@@ -376,6 +377,10 @@ func (r *orchCovRegistry) InstalledIndex(context.Context, string) ([]ConnectorIn
 		return nil, r.failIndex
 	}
 	return r.index, nil
+}
+
+func (r *orchCovRegistry) ExpiredFor(context.Context, string, []string) []string {
+	return r.expired
 }
 
 // orchCovConvs returns a fixed conversation for every lookup.

@@ -132,7 +132,8 @@ function ConnectorRow({ connector: c }: { connector: Connector }) {
   const [connecting, setConnecting] = useState(false);
   const uninstall = useUninstallConnector();
   const verify = useVerifyConnector();
-  const unverified = c.installed && c.installStatus !== 'connected';
+  const expired = c.installed && c.installStatus === 'expired';
+  const unverified = c.installed && c.installStatus !== 'connected' && !expired;
 
   return (
     <div className="px-4 py-3" data-testid={`connector-card-${c.slug}`}>
@@ -159,13 +160,28 @@ function ConnectorRow({ connector: c }: { connector: Connector }) {
                 {c.installed ? (
                   <>
                     <AgentUseControl connector={c} />
-                    <TooltipIconButton
-                      label="Reconnect"
-                      className="text-muted-foreground"
-                      onClick={() => setConnecting(true)}
-                    >
-                      <RefreshCw aria-hidden="true" />
-                    </TooltipIconButton>
+                    {/* An expired credential is the one state the person has
+                        to act on, so it gets a real button instead of an icon
+                        nobody hunts for — an agent telling them to "complete
+                        the sign-in prompt" needs something to point at. */}
+                    {expired ? (
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        onClick={() => setConnecting(true)}
+                        data-testid={`connector-reconnect-${c.slug}`}
+                      >
+                        Reconnect
+                      </Button>
+                    ) : (
+                      <TooltipIconButton
+                        label="Reconnect"
+                        className="text-muted-foreground"
+                        onClick={() => setConnecting(true)}
+                      >
+                        <RefreshCw aria-hidden="true" />
+                      </TooltipIconButton>
+                    )}
                     <TooltipIconButton
                       label="Disconnect"
                       className="text-muted-foreground hover:text-destructive"
@@ -205,14 +221,26 @@ function ConnectorRow({ connector: c }: { connector: Connector }) {
 
 // StatusBadge: a dot and one phrase, no fill. Green when the service confirmed
 // the credential; amber "Unverified" when the token was accepted but the
-// service couldn't be reached at connect time (Verify now re-checks).
+// service couldn't be reached at connect time (Verify now re-checks); red
+// "Session expired" when the service has since REFUSED it — a different thing
+// from unverified, and the only one the person has to act on.
 function StatusBadge({ connector: c }: { connector: Connector }) {
+  const expired = c.installStatus === 'expired';
   const ok = c.installStatus === 'connected';
+  const tone = expired
+    ? { dot: 'bg-destructive', text: 'text-destructive' }
+    : ok
+      ? { dot: 'bg-emerald-500', text: 'text-emerald-700 dark:text-emerald-400' }
+      : { dot: 'bg-amber-500', text: 'text-amber-700 dark:text-amber-400' };
   return (
-    <span className="inline-flex items-center gap-1.5 text-sm">
-      <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${ok ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-      <span className={ok ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}>
-        {ok ? `Connected${c.connectedAs ? ` as ${c.connectedAs}` : ''}` : 'Unverified'}
+    <span className="inline-flex items-center gap-1.5 text-sm" data-testid={`connector-status-${c.slug}`}>
+      <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${tone.dot}`} />
+      <span className={tone.text}>
+        {expired
+          ? 'Session expired'
+          : ok
+            ? `Connected${c.connectedAs ? ` as ${c.connectedAs}` : ''}`
+            : 'Unverified'}
       </span>
     </span>
   );
