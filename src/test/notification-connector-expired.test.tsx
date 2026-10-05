@@ -29,12 +29,14 @@ vi.mock('@/lib/attention', () => ({ requestOsAttention: () => attentionMock() })
 
 
 let dispatchSpy: ((n: NotificationPayload) => void) | null = null;
+let setBrowserSpy: ((v: boolean) => void) | null = null;
 
 function Probe() {
-  const { dispatch } = useNotifications();
+  const { dispatch, setBrowserEnabled } = useNotifications();
   useEffect(() => {
     dispatchSpy = dispatch;
-  }, [dispatch]);
+    setBrowserSpy = setBrowserEnabled;
+  }, [dispatch, setBrowserEnabled]);
   return <div data-testid="probe" />;
 }
 
@@ -77,6 +79,9 @@ function expiredFx(over: Partial<NotificationPayload> = {}): NotificationPayload
 
 beforeEach(() => {
   resetNotificationDedup();
+  // Alert prefs persist, so a test that turns them off would silently
+  // disable every test after it.
+  localStorage.clear();
   toastMock.mockClear();
   attentionMock.mockClear();
   window.history.pushState(null, '', '/');
@@ -141,6 +146,29 @@ describe('connector-expired alerts', () => {
     act(() => dispatchSpy?.(expiredFx()));
     act(() => dispatchSpy?.(expiredFx()));
     expect(toastMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays silent when the person turned alerts off', () => {
+    const { ctor } = installNotification('granted');
+    renderProbe();
+    act(() => setBrowserSpy?.(false));
+    act(() => dispatchSpy?.(expiredFx()));
+    // Their choice is respected everywhere: no banner, no toast fallback, no
+    // dock bounce, no sound.
+    expect(ctor).not.toHaveBeenCalled();
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(attentionMock).not.toHaveBeenCalled();
+    expect(approvalChimeMock).not.toHaveBeenCalled();
+    act(() => setBrowserSpy?.(true));
+  });
+
+  it('surfaces an alert that carries no deep link without navigating', () => {
+    installNotification('denied');
+    renderProbe();
+    act(() => dispatchSpy?.(expiredFx({ deepLink: '' })));
+    const [, , opts] = toastMock.mock.calls[0] as [string, string, { onActivate: () => void }];
+    act(() => opts.onActivate());
+    expect(window.location.pathname).toBe('/');
   });
 
   it('is never suppressed by what the person happens to be reading', () => {

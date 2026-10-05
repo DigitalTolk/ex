@@ -26,10 +26,15 @@ type fakeRunStore struct {
 	approvals map[string]*model.Approval // runID#approvalID
 	artifacts map[string][]*model.Artifact
 	// Fault seams for arms unreachable through the public surface.
-	onGetRun         func(runID string) // runs before every GetRun read
-	failClaim        error              // next ClaimRun returns this
-	failUpdateOnce   error              // next UpdateRun returns this, then clears
-	failAddPostsOnce error              // next AddRunPosts returns this, then clears
+	onGetRun func(runID string) // runs before every GetRun read
+	// dropApprovalOnRead deletes an approval the FIRST time it is read, which
+	// is how a test reaches awaitDecision's lookup-failure arm. Deterministic
+	// on purpose: the previous approach raced a goroutine against the engine
+	// to delete the row, which lost on a loaded CI runner and hung the suite.
+	dropApprovalOnRead bool
+	failClaim          error // next ClaimRun returns this
+	failUpdateOnce     error // next UpdateRun returns this, then clears
+	failAddPostsOnce   error // next AddRunPosts returns this, then clears
 }
 
 func newFakeRunStore() *fakeRunStore {
@@ -323,6 +328,11 @@ func (f *fakeRunStore) GetApproval(_ context.Context, runID, approvalID string) 
 	defer f.mu.Unlock()
 	a, ok := f.approvals[runID+"#"+approvalID]
 	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if f.dropApprovalOnRead {
+		f.dropApprovalOnRead = false
+		delete(f.approvals, runID+"#"+approvalID)
 		return nil, store.ErrNotFound
 	}
 	cp := *a

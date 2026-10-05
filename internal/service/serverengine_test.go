@@ -1085,9 +1085,11 @@ func askSurfaceFixture(t *testing.T) (*orchFixture, *ServerEngine, *memConnector
 // the moment the approval appears.
 const approvalWaitBudget = 30 * time.Second
 
-// approvalCtx is the context for a test that waits on an approval: long
-// enough never to fire in a healthy run, short enough that a lost race fails
-// in seconds with a readable message instead of hanging the package.
+// approvalCtx is the context for ONE wait on an approval: long enough never
+// to fire in a healthy run, short enough that a lost race fails with a
+// readable message instead of hanging the package. Call it per wait, never
+// once per test — a shared budget lets a slow earlier case starve a later
+// one, which is how this failed on CI while passing locally.
 func approvalCtx(t *testing.T) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), approvalWaitBudget)
@@ -1174,7 +1176,7 @@ func TestServerEngine_UseConnectorDeniedExpiredAndErrors(t *testing.T) {
 
 	// Denied.
 	approveWhenPending(t, fx, run.ID, Decision{Approve: false})
-	if out, isErr := use(ctx, json.RawMessage(`{"connector":"hub","reason":"r"}`)); !isErr || !strings.Contains(out, "denied") {
+	if out, isErr := use(approvalCtx(t), json.RawMessage(`{"connector":"hub","reason":"r"}`)); !isErr || !strings.Contains(out, "denied") {
 		t.Fatalf("denied: %q", out)
 	}
 
@@ -1197,14 +1199,14 @@ func TestServerEngine_UseConnectorDeniedExpiredAndErrors(t *testing.T) {
 			}
 		}
 	}()
-	if out, isErr := use(ctx, json.RawMessage(`{"connector":"hub","reason":"r"}`)); !isErr || !strings.Contains(out, "expired unanswered") {
+	if out, isErr := use(approvalCtx(t), json.RawMessage(`{"connector":"hub","reason":"r"}`)); !isErr || !strings.Contains(out, "expired unanswered") {
 		t.Fatalf("expired: %q", out)
 	}
 
 	// Approved but the registry row vanished before attach → legible failure.
 	approveWhenPending(t, fx, run.ID, Decision{Approve: true})
 	delete(st.connectors, "hub")
-	if out, isErr := use(ctx, json.RawMessage(`{"connector":"hub","reason":"r"}`)); !isErr || !strings.Contains(out, "attach failed") {
+	if out, isErr := use(approvalCtx(t), json.RawMessage(`{"connector":"hub","reason":"r"}`)); !isErr || !strings.Contains(out, "attach failed") {
 		t.Fatalf("attach failure: %q", out)
 	}
 	st.connectors["hub"] = &model.Connector{Slug: "hub", Title: "HUB", BaseURL: "https://hub.example.net", AuthKind: model.ConnectorAuthPaste, FileNames: []string{"a.yaml"}}
@@ -1216,28 +1218,13 @@ func TestServerEngine_UseConnectorDeniedExpiredAndErrors(t *testing.T) {
 		t.Fatalf("ctx done: %q", out)
 	}
 
-	// Approval row lost mid-wait → lookup failure surfaces.
-	go func() {
-		deadline := time.Now().Add(approvalWaitBudget)
-		for time.Now().Before(deadline) {
-			time.Sleep(2 * time.Millisecond)
-			fx.runs.mu.Lock()
-			var key string
-			for k, a := range fx.runs.approvals {
-				if strings.HasPrefix(k, run.ID+"#") && a.State == model.ApprovalPending {
-					key = k
-				}
-			}
-			if key != "" {
-				delete(fx.runs.approvals, key)
-			}
-			fx.runs.mu.Unlock()
-			if key != "" {
-				return
-			}
-		}
-	}()
-	if out, isErr := use(ctx, json.RawMessage(`{"connector":"hub","reason":"r"}`)); !isErr || !strings.Contains(out, "approval lookup failed") {
+	// Approval row lost mid-wait → lookup failure surfaces. The store drops it
+	// on the first read, which is deterministic: racing a goroutine against
+	// the engine to delete the row lost on a loaded runner and hung the suite.
+	fx.runs.mu.Lock()
+	fx.runs.dropApprovalOnRead = true
+	fx.runs.mu.Unlock()
+	if out, isErr := use(approvalCtx(t), json.RawMessage(`{"connector":"hub","reason":"r"}`)); !isErr || !strings.Contains(out, "approval lookup failed") {
 		t.Fatalf("lookup failure: %q", out)
 	}
 
