@@ -56,6 +56,9 @@ declare global {
       startURL: string;
       capturePattern?: string;
       apiOrigin?: string;
+      // Session-cookie services: the shell lifts this cookie out of the
+      // sign-in window instead of reading a token from the redirect.
+      captureCookie?: string;
     }) => Promise<string>;
 
     // Test-only override for lib/device.ts deviceKind(): the jsdom and

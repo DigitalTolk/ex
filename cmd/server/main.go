@@ -587,6 +587,9 @@ func main() {
 	reminderStore := store.NewRedisReminderStore(redisCache.Client())
 	reminderSvc := service.NewReminderService(reminderStore, messageStore, messageSvc)
 	reminderSvc.SetDelivery(activitySvc, notificationSvc)
+	// A connector whose credential dies tells its owner through the same
+	// desktop + mobile delivery reminders use — only they can reconnect it.
+	connectorSvc.SetExpiryNotifier(notificationSvc)
 	activityH := handler.NewActivityHandler(activitySvc, reminderSvc)
 
 	categorySvc := service.NewCategoryService(store.NewCategoryStore(db), redisPubSub)
@@ -670,6 +673,7 @@ func main() {
 		Searcher:      searcher,
 		SearchAccess:  searchAccess,
 		Reminders:     reminderSvc,
+		Connectors:    connectorSvc,
 	})
 	// Coding tasks (plan-coding-agent.md): the deterministic task layer around
 	// the dev agent — project channels, task threads, lifecycle gates. The

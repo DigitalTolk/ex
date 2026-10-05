@@ -173,33 +173,35 @@ func TestBridgeTools_BadInput(t *testing.T) {
 // bridgeMinimalInputs is one valid input per bridged tool — the error-arm
 // matrix below walks the whole table with it, which also pins the tool count.
 var bridgeMinimalInputs = map[string]string{
-	"list_channels":      `{}`,
-	"create_channel":     `{"name":"x"}`,
-	"join_channel":       `{"channelID":"c"}`,
-	"read_channel":       `{"channelID":"c"}`,
-	"read_pins":          `{"channelID":"c"}`,
-	"read_dm":            `{"userID":"u"}`,
-	"post_to_channel":    `{"channelID":"c","body":"b"}`,
-	"search_messages":    `{"query":"q"}`,
-	"add_reaction":       `{"messageID":"m","emoji":"x"}`,
-	"list_users":         `{}`,
-	"send_dm":            `{"userID":"u","body":"b"}`,
-	"propose_reply":      `{"text":"t"}`,
-	"link_message":       `{"message_id":"m"}`,
-	"set_reminder":       `{"in_minutes":5}`,
-	"list_reminders":     `{}`,
-	"cancel_reminder":    `{"reminder_id":"r"}`,
-	"list_schedules":     `{}`,
-	"create_schedule":    `{"instruction":"i","schedule":"0 9 * * *"}`,
-	"delete_schedule":    `{"schedule_id":"s"}`,
-	"pin_message":        `{"message_id":"m"}`,
-	"publish_artifact":   `{"title":"t","content":"c"}`,
-	"list_skills":        `{}`,
-	"invoke_skill":       `{"skillID":"s"}`,
-	"claim_task":         `{"label":"l"}`,
-	"update_memory":      `{"content":"c"}`,
-	"create_coding_task": `{"project":"p","title":"t","goal":"g"}`,
-	"set_state":          `{"state":"x"}`,
+	"list_channels":        `{}`,
+	"create_channel":       `{"name":"x"}`,
+	"join_channel":         `{"channelID":"c"}`,
+	"read_channel":         `{"channelID":"c"}`,
+	"read_pins":            `{"channelID":"c"}`,
+	"read_dm":              `{"userID":"u"}`,
+	"post_to_channel":      `{"channelID":"c","body":"b"}`,
+	"search_messages":      `{"query":"q"}`,
+	"add_reaction":         `{"messageID":"m","emoji":"x"}`,
+	"list_users":           `{}`,
+	"send_dm":              `{"userID":"u","body":"b"}`,
+	"propose_reply":        `{"text":"t"}`,
+	"link_message":         `{"message_id":"m"}`,
+	"reconnect_connector":  `{"connector":"marketingcrm"}`,
+	"disconnect_connector": `{"connector":"marketingcrm"}`,
+	"set_reminder":         `{"in_minutes":5}`,
+	"list_reminders":       `{}`,
+	"cancel_reminder":      `{"reminder_id":"r"}`,
+	"list_schedules":       `{}`,
+	"create_schedule":      `{"instruction":"i","schedule":"0 9 * * *"}`,
+	"delete_schedule":      `{"schedule_id":"s"}`,
+	"pin_message":          `{"message_id":"m"}`,
+	"publish_artifact":     `{"title":"t","content":"c"}`,
+	"list_skills":          `{}`,
+	"invoke_skill":         `{"skillID":"s"}`,
+	"claim_task":           `{"label":"l"}`,
+	"update_memory":        `{"content":"c"}`,
+	"create_coding_task":   `{"project":"p","title":"t","goal":"g"}`,
+	"set_state":            `{"state":"x"}`,
 }
 
 func TestBridgeTools_ErrorPropagation(t *testing.T) {
@@ -487,5 +489,30 @@ func TestBridgeTools_Schedules(t *testing.T) {
 	}
 	if out, _ := h.call(t, "list_schedules", `{}`); out != "(no scheduled orders)" {
 		t.Fatalf("list fallback: %q", out)
+	}
+}
+
+// The connector-lifecycle tools: an agent cannot renew a credential itself,
+// so the useful half is asking the invoker — and both tools must refuse an
+// empty slug before spending a request on it.
+func TestBridgeTools_ConnectorLifecycle(t *testing.T) {
+	h := newBridgeHarness(t)
+
+	h.respond(200, `{"text":"asked your invoker to reconnect CRM"}`)
+	if out, isErr := h.call(t, "reconnect_connector", `{"connector":"crm"}`); isErr ||
+		out != "asked your invoker to reconnect CRM" {
+		t.Fatalf("reconnect: err=%v %q", isErr, out)
+	}
+	h.respond(200, `{"text":"disconnected /crm"}`)
+	if out, isErr := h.call(t, "disconnect_connector", `{"connector":"crm"}`); isErr ||
+		out != "disconnected /crm" {
+		t.Fatalf("disconnect: err=%v %q", isErr, out)
+	}
+
+	for _, tool := range []string{"reconnect_connector", "disconnect_connector"} {
+		out, isErr := h.call(t, tool, `{}`)
+		if !isErr || !strings.Contains(out, "requires connector") {
+			t.Fatalf("%s with no slug: err=%v %q", tool, isErr, out)
+		}
 	}
 }

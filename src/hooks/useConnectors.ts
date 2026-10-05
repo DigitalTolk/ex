@@ -15,6 +15,7 @@ export interface Connector {
   // connect, and the redirect pattern it captures the minted token from.
   startURL?: string;
   capturePattern?: string;
+  captureCookie?: string;
   // How a pasted credential is sent ("X-Api-Key: {token}" → the form asks
   // for an API key); absent = Authorization: Bearer (an access token).
   authHeader?: string;
@@ -23,7 +24,9 @@ export interface Connector {
   credentialHint?: string;
   credentialURL?: string;
   installed: boolean;
-  installStatus?: 'connected' | 'unverified';
+  // 'expired': the service has since refused the credential — the only
+  // status the person must act on (reconnect).
+  installStatus?: 'connected' | 'unverified' | 'expired';
   connectedAs?: string;
   // May agents attach this connector themselves (use_connector)?
   agentUse?: 'ask' | 'always' | 'never';

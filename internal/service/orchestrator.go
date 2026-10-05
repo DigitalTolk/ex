@@ -3046,6 +3046,17 @@ func (b *bundleBuilder) connectorIndex() {
 			}
 		}
 	}
+	// A connector the invoker PICKED but whose credential is dead was silently
+	// withheld from this run. Say so plainly: otherwise the agent looks for a
+	// tool that should be there, finds nothing, and guesses at why.
+	if b.o.connectors != nil && len(b.run.ConnectorSlugs) > 0 {
+		if dead := b.o.connectors.ExpiredFor(b.ctx, b.run.InvokerID, b.run.ConnectorSlugs); len(dead) > 0 {
+			b.take("\n# Connector unavailable\n" + strings.Join(dead, ", ") +
+				": the session expired, so it is NOT attached to this task and its calls would fail. " +
+				"Tell your invoker, and use reconnect_connector to raise the prompt with them. " +
+				"Do not improvise the answer from elsewhere without saying you did.\n")
+		}
+	}
 	b.stats["connectorsIndexed"] = indexed
 }
 
@@ -3752,6 +3763,10 @@ func stripConnectorTokens(body string, slugs []string) string {
 type connectorRegistry interface {
 	KnownSlugs(ctx context.Context) (map[string]bool, error)
 	InstalledIndex(ctx context.Context, userID string) ([]ConnectorIndexEntry, error)
+	// ExpiredFor names picked connectors withheld from this run because their
+	// credential is dead — the bundle says so rather than letting the agent
+	// wonder where the tool went.
+	ExpiredFor(ctx context.Context, userID string, slugs []string) []string
 }
 
 // eventArchive tiers a terminal run's timeline into object storage

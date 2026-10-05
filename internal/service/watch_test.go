@@ -1143,7 +1143,10 @@ func TestOrchestrator_ScheduledOrderCarriesPinnedTools(t *testing.T) {
 }
 
 // fakeConnectorRegistry answers KnownSlugs for pin filtering.
-type fakeConnectorRegistry struct{ known map[string]bool }
+type fakeConnectorRegistry struct {
+	known   map[string]bool
+	expired []string
+}
 
 func (f fakeConnectorRegistry) KnownSlugs(context.Context) (map[string]bool, error) {
 	return f.known, nil
@@ -1151,6 +1154,10 @@ func (f fakeConnectorRegistry) KnownSlugs(context.Context) (map[string]bool, err
 
 func (f fakeConnectorRegistry) InstalledIndex(context.Context, string) ([]ConnectorIndexEntry, error) {
 	return nil, nil
+}
+
+func (f fakeConnectorRegistry) ExpiredFor(context.Context, string, []string) []string {
+	return f.expired
 }
 
 // Pin hygiene: lists are trimmed, lowercased, deduped and bounded, and a
@@ -1236,3 +1243,5 @@ func (failingRegistry) KnownSlugs(context.Context) (map[string]bool, error) {
 func (failingRegistry) InstalledIndex(context.Context, string) ([]ConnectorIndexEntry, error) {
 	return nil, nil
 }
+
+func (failingRegistry) ExpiredFor(context.Context, string, []string) []string { return nil }

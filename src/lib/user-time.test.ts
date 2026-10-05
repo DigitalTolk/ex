@@ -33,7 +33,10 @@ describe('user-time helpers', () => {
     expect(formatTimeZoneDelta('Europe/Stockholm', 'UTC')).toMatch(/ahead/);
     expect(formatTimeZoneDelta('Europe/Stockholm', 'Europe/London')).toBe('1 hr ahead');
     expect(formatTimeZoneDelta('America/New_York', 'UTC')).toMatch(/behind/);
-    expect(formatTimeZoneDelta('Australia/Adelaide', 'UTC')).toBe('9.5 hrs ahead');
+    // Darwin, not Adelaide: both are +9:30, but the Northern Territory does
+    // not observe DST, so this stays true in October. Adelaide shifts to
+    // +10:30 and failed this assertion every southern summer.
+    expect(formatTimeZoneDelta('Australia/Darwin', 'UTC')).toBe('9.5 hrs ahead');
     expect(formatTimeZoneDelta('Asia/Kolkata', 'UTC')).toBe('5.5 hrs ahead');
     expect(formatTimeZoneDelta('UTC', 'UTC')).toBeNull();
   });

@@ -352,20 +352,21 @@ func (f *hwsCovAccessStub) AllowedParentIDs(context.Context, string) ([]string, 
 // ------------------------------------------------------------------- env
 
 type hwsCovEnv struct {
-	h        *AgentRunToolHandler
-	hBare    *AgentRunToolHandler // workspace deps without search/reminders/conversations
-	run      *model.Run
-	claims   *model.TokenClaims
-	runs     *hwsCovRunStore
-	orchMsgs *hwsCovOrchMsgs
-	chans    *dataChannelStore
-	members  *dataMembershipStore
-	msgs     *dataMessageStore
-	convs    *dataConversationStore
-	remStore *hwsCovRemStore
-	searcher *hwsCovSearcher
-	access   *hwsCovAccessStub
-	pinIndex *dataParentIndexStore
+	h         *AgentRunToolHandler
+	hBare     *AgentRunToolHandler // workspace deps without search/reminders/conversations
+	run       *model.Run
+	claims    *model.TokenClaims
+	runs      *hwsCovRunStore
+	orchMsgs  *hwsCovOrchMsgs
+	chans     *dataChannelStore
+	members   *dataMembershipStore
+	msgs      *dataMessageStore
+	convs     *dataConversationStore
+	remStore  *hwsCovRemStore
+	searcher  *hwsCovSearcher
+	access    *hwsCovAccessStub
+	pinIndex  *dataParentIndexStore
+	connStore *hconnCovStore
 }
 
 func newHwsCovEnv(t *testing.T) *hwsCovEnv {
@@ -438,6 +439,18 @@ func newHwsCovEnv(t *testing.T) *hwsCovEnv {
 	searcher := &hwsCovSearcher{}
 	access := &hwsCovAccessStub{parents: []string{"hws-home"}}
 
+	connStore := hconnCovNewStore()
+	connStore.connectors["crm"] = &model.Connector{
+		Slug: "crm", Title: "CRM", BaseURL: "https://crm.example.net",
+		AuthKind: model.ConnectorAuthPaste, FileNames: []string{"a.yaml"},
+	}
+	connStore.installs[hconnCovKey("hws-inv", "crm")] = &model.ConnectorInstall{
+		UserID: "hws-inv", ConnectorSlug: "crm", Token: "tok",
+		Status: model.ConnectorStatusConnected,
+	}
+	connSvc := service.NewConnectorService(connStore)
+	_ = connSvc
+
 	h := NewAgentRunToolHandler(orch, messageSvc, nil, agentSvc)
 	h.SetWorkspace(AgentWorkspaceDeps{
 		Channels:      channelSvc,
@@ -445,26 +458,28 @@ func newHwsCovEnv(t *testing.T) *hwsCovEnv {
 		Searcher:      searcher,
 		SearchAccess:  access,
 		Reminders:     remSvc,
+		Connectors:    connSvc,
 	})
 
 	hBare := NewAgentRunToolHandler(orch, messageSvc, nil, agentSvc)
 	hBare.SetWorkspace(AgentWorkspaceDeps{Channels: channelSvc})
 
 	return &hwsCovEnv{
-		h:        h,
-		hBare:    hBare,
-		run:      run,
-		claims:   &model.TokenClaims{UserID: "hws-inv", ActorID: "hws-agent", RunID: "hws-run"},
-		runs:     runs,
-		orchMsgs: orchMsgs,
-		chans:    chans,
-		members:  members,
-		msgs:     msgs,
-		convs:    convs,
-		remStore: remStore,
-		searcher: searcher,
-		access:   access,
-		pinIndex: parentIndex,
+		h:         h,
+		hBare:     hBare,
+		run:       run,
+		claims:    &model.TokenClaims{UserID: "hws-inv", ActorID: "hws-agent", RunID: "hws-run"},
+		runs:      runs,
+		orchMsgs:  orchMsgs,
+		chans:     chans,
+		members:   members,
+		msgs:      msgs,
+		convs:     convs,
+		remStore:  remStore,
+		searcher:  searcher,
+		access:    access,
+		pinIndex:  parentIndex,
+		connStore: connStore,
 	}
 }
 
@@ -1069,6 +1084,97 @@ func TestHwsCovNotifyOwner(t *testing.T) {
 		hwsCovWant(t, rec, http.StatusOK, "Notified your creator via DM.")
 		if n := len(env.runs.events); n == 0 || env.runs.events[n-1].Type != "workspace.owner_notified" {
 			t.Fatalf("expected workspace.owner_notified audit event")
+		}
+	})
+}
+
+// The connector-lifecycle run tools. An agent cannot renew a credential, so
+// reconnect raises the prompt with the invoker; disconnect removes their
+// install. Both must refuse cleanly rather than act on a slug that is not
+// theirs — and both must 404 where the service is not wired at all.
+func TestAgentRunTool_ConnectorLifecycle(t *testing.T) {
+	env := newHwsCovEnv(t)
+
+	// Asking "can you reconnect X" is usually a guess. A working credential
+	// must be reported as working, not condemned — condemning it would
+	// withhold it from every later run until a sign-in nobody needed.
+	t.Run("a working connector is reported working", func(t *testing.T) {
+		rec := env.do(t, env.h.ReconnectConnector, http.MethodPost, "/", `{"connector":"crm"}`, "", nil)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "nothing to reconnect") {
+			t.Fatalf("live: %d %s", rec.Code, rec.Body.String())
+		}
+		if env.connStore.installs[hconnCovKey("hws-inv", "crm")].Status == model.ConnectorStatusExpired {
+			t.Fatal("a live credential must not be marked expired by an ask")
+		}
+	})
+
+	t.Run("a known-dead connector raises the prompt", func(t *testing.T) {
+		env.connStore.installs[hconnCovKey("hws-inv", "crm")].Status = model.ConnectorStatusExpired
+		rec := env.do(t, env.h.ReconnectConnector, http.MethodPost, "/", `{"connector":"crm"}`, "", nil)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "press Reconnect on CRM") {
+			t.Fatalf("expired: %d %s", rec.Code, rec.Body.String())
+		}
+		env.connStore.installs[hconnCovKey("hws-inv", "crm")].Status = model.ConnectorStatusConnected
+	})
+
+	t.Run("an unreachable service is reported as unknown, not dead", func(t *testing.T) {
+		env.connStore.connectors["crm"].VerifyURL = "http://127.0.0.1:1/me"
+		defer func() { env.connStore.connectors["crm"].VerifyURL = "" }()
+		rec := env.do(t, env.h.ReconnectConnector, http.MethodPost, "/", `{"connector":"crm"}`, "", nil)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "could not be reached") {
+			t.Fatalf("unreachable: %d %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("disconnect removes the install", func(t *testing.T) {
+		rec := env.do(t, env.h.DisconnectConnector, http.MethodPost, "/", `{"connector":"crm"}`, "", nil)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "disconnected /crm") {
+			t.Fatalf("disconnect: %d %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("a slug the invoker does not have is refused, not acted on", func(t *testing.T) {
+		for _, fn := range []http.HandlerFunc{env.h.ReconnectConnector, env.h.DisconnectConnector} {
+			if rec := env.do(t, fn, http.MethodPost, "/", `{"connector":"ghost"}`, "", nil); rec.Code != http.StatusBadRequest {
+				t.Fatalf("unknown connector: %d %s", rec.Code, rec.Body.String())
+			}
+		}
+	})
+
+	t.Run("an empty or malformed request never reaches the service", func(t *testing.T) {
+		for _, fn := range []http.HandlerFunc{env.h.ReconnectConnector, env.h.DisconnectConnector} {
+			if rec := env.do(t, fn, http.MethodPost, "/", `{"connector":"  "}`, "", nil); rec.Code != http.StatusBadRequest {
+				t.Fatalf("blank slug: %d", rec.Code)
+			}
+			if rec := env.do(t, fn, http.MethodPost, "/", `{`, "", nil); rec.Code != http.StatusBadRequest {
+				t.Fatalf("bad json: %d", rec.Code)
+			}
+		}
+	})
+
+	t.Run("a dead run reaches neither tool", func(t *testing.T) {
+		for _, fn := range []http.HandlerFunc{env.h.ReconnectConnector, env.h.DisconnectConnector} {
+			rec := env.do(t, fn, http.MethodPost, "/", `{"connector":"crm"}`, "", env.ghost())
+			if rec.Code == http.StatusOK {
+				t.Fatalf("a run that is gone must not act: %d %s", rec.Code, rec.Body.String())
+			}
+		}
+	})
+
+	t.Run("a failed removal is reported, not swallowed", func(t *testing.T) {
+		env.connStore.errDeleteInstall = errors.New("dynamo down")
+		defer func() { env.connStore.errDeleteInstall = nil }()
+		rec := env.do(t, env.h.DisconnectConnector, http.MethodPost, "/", `{"connector":"crm"}`, "", nil)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("store failure: %d %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("no connector service wired = not found", func(t *testing.T) {
+		for _, fn := range []http.HandlerFunc{env.hBare.ReconnectConnector, env.hBare.DisconnectConnector} {
+			if rec := env.do(t, fn, http.MethodPost, "/", `{"connector":"crm"}`, "", nil); rec.Code != http.StatusNotFound {
+				t.Fatalf("bare handler: %d", rec.Code)
+			}
 		}
 	})
 }

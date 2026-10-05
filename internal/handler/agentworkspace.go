@@ -56,7 +56,8 @@ type AgentWorkspaceDeps struct {
 	Conversations *service.ConversationService
 	Searcher      search.Searcher // may be nil → search returns empty
 	SearchAccess  SearchAccess
-	Reminders     *service.ReminderService // may be nil → reminder tools 404
+	Reminders     *service.ReminderService  // may be nil → reminder tools 404
+	Connectors    *service.ConnectorService // may be nil → connector tools 404
 }
 
 // SetWorkspace wires the workspace tool dependencies.
@@ -456,6 +457,92 @@ func (h *AgentRunToolHandler) SendDM(w http.ResponseWriter, r *http.Request) {
 // activity + notifications), anchored to a message in the run's thread. Give
 // either remind_at (RFC3339) or in_minutes.
 // POST /api/v1/agent/run/reminders
+// ReconnectConnector asks the INVOKER to reconnect a connector whose
+// credential died. An agent cannot reconnect anything itself — the credential
+// is the person's, and renewing it means them signing in — so this tool does
+// the one useful thing available: raise the prompt where they will see it,
+// and say plainly that it did.
+// POST /api/v1/agent/run/connectors/reconnect
+func (h *AgentRunToolHandler) ReconnectConnector(w http.ResponseWriter, r *http.Request) {
+	run, _ := h.liveRun(w, r)
+	if run == nil {
+		return
+	}
+	if h.workspace == nil || h.workspace.Connectors == nil {
+		writeError(w, http.StatusNotFound, "unavailable", "connectors not available")
+		return
+	}
+	var body struct {
+		Connector string `json:"connector"`
+	}
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
+		return
+	}
+	slug := strings.TrimSpace(body.Connector)
+	if slug == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "connector is required")
+		return
+	}
+	title, outcome, err := h.workspace.Connectors.AskReconnect(r.Context(), run.InvokerID, slug)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", toolRejection("reconnect", err,
+			"use a connector slug the invoker has installed"))
+		return
+	}
+	var text string
+	switch outcome {
+	case service.ReconnectLive:
+		text = title + " is working — nothing to reconnect. Say so instead of sending them to re-do a sign-in."
+	case service.ReconnectUnknown:
+		text = title + " could not be reached just now, so its credential is neither confirmed dead nor working. Say that rather than guessing."
+	default:
+		// Be exact about what just happened. "I sent you a sign-in prompt"
+		// invites the person to wait for a window that never opens: the
+		// notification is a POINTER, and the sign-in happens in Connectors.
+		text = title + ": flagged as expired and your invoker notified. Tell them to open Connectors " +
+			"and press Reconnect on " + title + " — the sign-in happens there, nothing opens by itself."
+	}
+	writeJSON(w, http.StatusOK, JSON{"text": text})
+}
+
+// DisconnectConnector removes the invoker's install. Reversible by
+// reconnecting, and only ever the invoker's own connector.
+// POST /api/v1/agent/run/connectors/disconnect
+func (h *AgentRunToolHandler) DisconnectConnector(w http.ResponseWriter, r *http.Request) {
+	run, _ := h.liveRun(w, r)
+	if run == nil {
+		return
+	}
+	if h.workspace == nil || h.workspace.Connectors == nil {
+		writeError(w, http.StatusNotFound, "unavailable", "connectors not available")
+		return
+	}
+	var body struct {
+		Connector string `json:"connector"`
+	}
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
+		return
+	}
+	slug := strings.TrimSpace(body.Connector)
+	if slug == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "connector is required")
+		return
+	}
+	if !h.workspace.Connectors.IsInstalled(r.Context(), run.InvokerID, slug) {
+		writeError(w, http.StatusBadRequest, "bad_request",
+			"no connector "+slug+" is connected for this person — list what they have before disconnecting")
+		return
+	}
+	if err := h.workspace.Connectors.Uninstall(r.Context(), run.InvokerID, slug); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", toolRejection("disconnect", err,
+			"use a connector slug the invoker has installed"))
+		return
+	}
+	writeJSON(w, http.StatusOK, JSON{"text": "disconnected /" + slug})
+}
+
 func (h *AgentRunToolHandler) SetReminder(w http.ResponseWriter, r *http.Request) {
 	run, claims := h.liveRun(w, r)
 	if run == nil {

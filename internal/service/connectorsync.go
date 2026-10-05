@@ -29,6 +29,7 @@ type providerRegistration struct {
 	VerifyURL      string `json:"verifyURL"`
 	StartURL       string `json:"startURL"`
 	CapturePattern string `json:"capturePattern"`
+	CaptureCookie  string `json:"captureCookie"`
 	AuthHeader     string `json:"authHeader"`
 	CredentialHint string `json:"credentialHint"`
 	CredentialURL  string `json:"credentialURL"`
@@ -173,6 +174,7 @@ func (s *ConnectorService) SyncFromProvider(ctx context.Context, callerID string
 			BaseURL: reg.BaseURL, AuthKind: reg.AuthKind,
 			TokenURL: reg.TokenURL, ClientID: reg.ClientID, VerifyURL: reg.VerifyURL,
 			StartURL: reg.StartURL, CapturePattern: reg.CapturePattern,
+			CaptureCookie:  reg.CaptureCookie,
 			AuthHeader:     reg.AuthHeader,
 			CredentialHint: reg.CredentialHint, CredentialURL: reg.CredentialURL,
 			Revision: row.Revision,

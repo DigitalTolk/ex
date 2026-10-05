@@ -389,6 +389,8 @@ func NewRouter(d *Deps) http.Handler {
 			mux.Handle("GET /api/v1/agent/run/users", middleware.WrapFunc(d.AgentRunTool.ListUsers, runMW))
 			mux.Handle("POST /api/v1/agent/run/dm", middleware.WrapFunc(d.AgentRunTool.SendDM, runMW, writeLimit))
 			mux.Handle("GET /api/v1/agent/run/dm/{userID}/messages", middleware.WrapFunc(d.AgentRunTool.ReadDM, runMW))
+			mux.Handle("POST /api/v1/agent/run/connectors/reconnect", middleware.WrapFunc(d.AgentRunTool.ReconnectConnector, runMW, writeLimit))
+			mux.Handle("POST /api/v1/agent/run/connectors/disconnect", middleware.WrapFunc(d.AgentRunTool.DisconnectConnector, runMW, writeLimit))
 			mux.Handle("POST /api/v1/agent/run/reminders", middleware.WrapFunc(d.AgentRunTool.SetReminder, runMW, writeLimit))
 			mux.Handle("GET /api/v1/agent/run/reminders", middleware.WrapFunc(d.AgentRunTool.ListReminders, runMW))
 			mux.Handle("DELETE /api/v1/agent/run/reminders/{id}", middleware.WrapFunc(d.AgentRunTool.CancelReminder, runMW, writeLimit))

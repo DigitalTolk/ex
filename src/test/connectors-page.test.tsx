@@ -804,3 +804,43 @@ describe('sso_window connectors', () => {
     expect(await screen.findByText('connection failed')).toBeInTheDocument();
   });
 });
+
+// An expired credential is the one install state the person must act on, so
+// it reads differently from "unverified" (accepted but unproven) and carries
+// a real button — an agent telling them to "press Reconnect" needs something
+// to point at, not a tooltip icon.
+describe('ConnectorsPage — expired credentials', () => {
+  it('names the expired state and offers a Reconnect button', async () => {
+    installRoutes({
+      connectors: async () => ({
+        connectors: [
+          {
+            slug: 'tolkcrm', title: 'TolkCRM', description: 'Marketing CRM',
+            baseURL: 'https://crm.example.net', authKind: 'sso_window',
+            installed: true, installStatus: 'expired',
+          },
+          {
+            slug: 'sentry', title: 'Sentry', description: 'Error tracking',
+            baseURL: 'https://sentry.example.com', authKind: 'paste',
+            installed: true, installStatus: 'unverified',
+          },
+        ],
+      }),
+    });
+    renderPage();
+
+    const crm = await findCard('tolkcrm');
+    expect(crm.getByTestId('connector-status-tolkcrm').textContent).toBe('Session expired');
+    // Not the amber "Unverified" wording, which means something else.
+    expect(crm.queryByText('Unverified')).toBeNull();
+
+    // The button opens the same connect flow the person used originally.
+    fireEvent.click(crm.getByTestId('connector-reconnect-tolkcrm'));
+    expect(crm.getByTestId('connect-form')).toBeInTheDocument();
+
+    // An unverified connector keeps the quiet icon affordance instead.
+    const sentry = await findCard('sentry');
+    expect(sentry.getByTestId('connector-status-sentry').textContent).toBe('Unverified');
+    expect(sentry.queryByTestId('connector-reconnect-sentry')).toBeNull();
+  });
+});
