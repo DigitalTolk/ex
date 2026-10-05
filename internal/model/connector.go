@@ -54,6 +54,13 @@ type Connector struct {
 	// service-minted bearer.
 	StartURL       string `json:"startURL,omitempty" dynamodbav:"startURL,omitempty"`
 	CapturePattern string `json:"capturePattern,omitempty" dynamodbav:"capturePattern,omitempty"`
+	// CaptureCookie names a session cookie the shell lifts out of the sign-in
+	// window instead of reading a token from the redirect. It is how a service
+	// that completes its Microsoft round-trip SERVER-side participates: the
+	// credential is a session, set as a cookie on the service's own origin,
+	// and it appears in no URL and no Authorization header. Pair it with an
+	// authHeader of "Cookie: <name>={token}".
+	CaptureCookie string `json:"captureCookie,omitempty" dynamodbav:"captureCookie,omitempty"`
 
 	// Revision is the provider's content hash for the ingested bundle. The
 	// periodic provider sync skips any connector whose provider revision
@@ -172,6 +179,21 @@ const (
 	ConnectorStatusConnected  = "connected"
 	ConnectorStatusUnverified = "unverified"
 )
+
+// ValidateCookieName accepts an empty name or a valid HTTP token; anything
+// else is a misconfiguration that would reach the shell's cookie lookup.
+func ValidateCookieName(name string) error {
+	n := strings.TrimSpace(name)
+	if n == "" {
+		return nil
+	}
+	if !cookieNameRe.MatchString(n) {
+		return fmt.Errorf("captureCookie %q: invalid cookie name", name)
+	}
+	return nil
+}
+
+var cookieNameRe = regexp.MustCompile(`^[!#$%&'*+\-.^_` + "`" + `|~0-9A-Za-z]+$`)
 
 // ConnectorCredentialHintMaxLen bounds CredentialHint: it is one line under a
 // form field, not documentation — the bundle is where instructions belong.

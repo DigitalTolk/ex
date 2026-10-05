@@ -1302,6 +1302,15 @@ export interface Connector {
   startURL?: string;
   capturePattern?: string;
   /**
+   * CaptureCookie names a session cookie the shell lifts out of the sign-in
+   * window instead of reading a token from the redirect. It is how a service
+   * that completes its Microsoft round-trip SERVER-side participates: the
+   * credential is a session, set as a cookie on the service's own origin,
+   * and it appears in no URL and no Authorization header. Pair it with an
+   * authHeader of "Cookie: <name>={token}".
+   */
+  captureCookie?: string;
+  /**
    * Revision is the provider's content hash for the ingested bundle. The
    * periodic provider sync skips any connector whose provider revision
    * still equals this, so an unchanged catalog costs one listing fetch.

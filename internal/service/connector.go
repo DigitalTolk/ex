@@ -134,6 +134,9 @@ type IngestInput struct {
 	// StartURL + CapturePattern drive sso_window connects (see model.Connector).
 	StartURL       string `json:"startURL,omitempty"`
 	CapturePattern string `json:"capturePattern,omitempty"`
+	// CaptureCookie: the session cookie the shell lifts out of the sign-in
+	// window (see model.Connector).
+	CaptureCookie string `json:"captureCookie,omitempty"`
 	// AuthHeader: how the credential is sent (see model.Connector.AuthHeader);
 	// empty = Authorization: Bearer.
 	AuthHeader string `json:"authHeader,omitempty"`
@@ -170,6 +173,9 @@ func (s *ConnectorService) Ingest(ctx context.Context, callerID string, in Inges
 	// they are an SSRF/phishing surface: refuse anything that isn't plain
 	// https to a routable host before it can be stored.
 	if err := model.ValidateAuthHeader(in.AuthHeader); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrConnectorInvalid, err)
+	}
+	if err := model.ValidateCookieName(in.CaptureCookie); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrConnectorInvalid, err)
 	}
 	// credentialURL is rendered as a link the user is invited to click, so it
@@ -237,6 +243,7 @@ func (s *ConnectorService) Ingest(ctx context.Context, callerID string, in Inges
 		VerifyURL:      in.VerifyURL,
 		StartURL:       in.StartURL,
 		CapturePattern: in.CapturePattern,
+		CaptureCookie:  strings.TrimSpace(in.CaptureCookie),
 		AuthHeader:     strings.TrimSpace(in.AuthHeader),
 		CredentialHint: strings.TrimSpace(in.CredentialHint),
 		CredentialURL:  strings.TrimSpace(in.CredentialURL),

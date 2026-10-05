@@ -301,6 +301,7 @@ function SSOConnectButton({
           .__EX_CONNECTOR_SSO__!({
             startURL: c.startURL as string,
             capturePattern: c.capturePattern,
+            captureCookie: c.captureCookie,
             apiOrigin: c.baseURL,
           })
           .then(onToken)

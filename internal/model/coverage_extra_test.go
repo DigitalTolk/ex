@@ -625,3 +625,16 @@ func TestSkill_IsPublishedAndVisibleTo(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateCookieName(t *testing.T) {
+	for _, ok := range []string{"", "  ", "connect.sid", "session_id", "s"} {
+		if err := ValidateCookieName(ok); err != nil {
+			t.Fatalf("ValidateCookieName(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"a b", "a=b", "a;b", "a\tb", "sid,other"} {
+		if err := ValidateCookieName(bad); err == nil {
+			t.Fatalf("ValidateCookieName(%q) = nil, want error", bad)
+		}
+	}
+}

@@ -601,6 +601,38 @@ func TestIngest_CredentialHint(t *testing.T) {
 	}
 }
 
+// A service that finishes its Microsoft sign-in server-side hands back a
+// SESSION, not a token: the shell lifts a named cookie out of the sign-in
+// window. The name reaches Electron's cookie lookup, so it is validated as an
+// HTTP token here rather than passed through.
+func TestIngest_CaptureCookie(t *testing.T) {
+	svc := NewConnectorService(newMemConnectorStore())
+	base := IngestInput{
+		Slug: "crm", Title: "CRM", BaseURL: "https://crm.example.net",
+		AuthKind: model.ConnectorAuthSSOWindow,
+		StartURL: "https://crm.example.net/api/auth/microsoft",
+		Files:    []model.ConnectorFile{{Name: "index.yml", Content: "title: CRM"}},
+	}
+
+	bad := base
+	bad.CaptureCookie = "connect.sid; HttpOnly"
+	if _, err := svc.Ingest(context.Background(), "admin", bad); !errors.Is(err, ErrConnectorInvalid) ||
+		!strings.Contains(err.Error(), "captureCookie") {
+		t.Fatalf("a cookie name that is not a token must be refused: %v", err)
+	}
+
+	good := base
+	good.CaptureCookie = "  connect.sid  "
+	good.AuthHeader = "Cookie: connect.sid={token}"
+	c, err := svc.Ingest(context.Background(), "admin", good)
+	if err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	if c.CaptureCookie != "connect.sid" {
+		t.Fatalf("captureCookie not stored trimmed: %q", c.CaptureCookie)
+	}
+}
+
 // displayName prefers a human label over a synthetic address: Metabase's API
 // keys report common_name (the key's name) and an "@api-key.invalid" email.
 func TestConnector_DisplayNameShapes(t *testing.T) {
