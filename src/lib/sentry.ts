@@ -61,7 +61,11 @@ export function initErrorReporting(): boolean {
     integrations: tracesSampleRate > 0 ? [Sentry.browserTracingIntegration()] : [],
     replaysSessionSampleRate,
     replaysOnErrorSampleRate,
-    sendDefaultPii: false,
+    // SDK v11 replaced `sendDefaultPii: false` with `dataCollection`, whose
+    // defaults are all ON — so the opt-outs must be explicit. `userInfo`
+    // gates server-side IP inference; request headers stay on because the
+    // User-Agent is how Sentry derives browser/OS context (v10 sent it too).
+    dataCollection: { userInfo: false, cookies: false },
     initialScope: { tags: { platform: detectPlatform() } },
   });
   if (replaysSessionSampleRate > 0 || replaysOnErrorSampleRate > 0) {
