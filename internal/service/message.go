@@ -569,26 +569,7 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 		s.bumpUnreadSeq(ctx, s.channelSeq, parentID, userID)
 	}
 
-	var updatedThreadRoot *model.Message
-	if parentMessageID != "" {
-		// Update thread-derived state before publishing message.new. Clients
-		// refetch /threads as soon as that event arrives; if the follow row or
-		// root reply metadata is still missing, the list can stay stale until
-		// the next cache invalidation.
-		s.followMentionedThreadUsers(ctx, msg, parentType)
-		if updated, err := s.messages.IncrementReplyMetadata(ctx, parentID, parentMessageID, msg.CreatedAt, userID); err == nil {
-			updatedThreadRoot = updated
-		} else {
-			// The reply is saved but the root's replyCount/lastReplyAt didn't
-			// advance, so the thread shows a stale count until the next refetch.
-			// Log it rather than dropping the error silently.
-			slog.Warn("thread reply metadata increment failed", "rootID", parentMessageID, "replyID", msg.ID, "error", err)
-		}
-		// Record write-time participation (reply author + root author) so
-		// /threads reads the index instead of scanning message history. Same
-		// before-message.new ordering rationale as the mention follows above.
-		s.recordThreadParticipation(ctx, msg, parentType, updatedThreadRoot)
-	}
+	updatedThreadRoot := s.applyThreadReply(ctx, msg, parentType)
 
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageNew, msg)
 
@@ -649,6 +630,9 @@ type WebhookMessageInput struct {
 	AvatarURL   string
 	IconEmoji   string
 	Attachments []model.MessageAttachment
+	// ParentMessageID makes the post a thread reply. The root must be a live
+	// top-level post by the same author (see checkWebhookThreadRoot).
+	ParentMessageID string
 }
 
 func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput) (*model.Message, error) {
@@ -676,11 +660,17 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 	if err := ValidateAttachmentCount(len(in.Attachments)); err != nil {
 		return nil, err
 	}
+	if in.ParentMessageID != "" {
+		if err := s.checkWebhookThreadRoot(ctx, parentID, in.ParentMessageID, authorID); err != nil {
+			return nil, err
+		}
+	}
 	msg := &model.Message{
 		ID:                 store.NewID(),
 		ParentID:           parentID,
 		AuthorID:           authorID,
 		Body:               in.Body,
+		ParentMessageID:    in.ParentMessageID,
 		WebhookUsername:    in.Username,
 		WebhookAvatarURL:   in.AvatarURL,
 		WebhookIconEmoji:   in.IconEmoji,
@@ -693,10 +683,13 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 	if err := s.messages.CreateMessage(ctx, msg); err != nil {
 		return nil, fmt.Errorf("message: create webhook: %w", err)
 	}
-	switch parentType {
-	case ParentChannel:
+	// Same unread/activity rule as the human send path: a thread reply is not
+	// new top-level activity, so only top-level posts take this branch.
+	switch {
+	case in.ParentMessageID != "":
+	case parentType == ParentChannel:
 		s.bumpUnreadSeq(ctx, s.channelSeq, parentID, authorID)
-	case ParentConversation:
+	case parentType == ParentConversation:
 		s.bumpUnreadSeq(ctx, s.convSeq, parentID, authorID)
 		// A bot thread receives only webhook traffic: untouched here, its
 		// updatedAt stays frozen at creation.
@@ -716,10 +709,62 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 			}
 		}
 	}
+	updatedThreadRoot := s.applyThreadReply(ctx, msg, parentType)
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageNew, msg)
-	s.notify(ctx, msg, parentType, nil) // webhook posts are always top-level, never thread replies
+	s.notify(ctx, msg, parentType, updatedThreadRoot)
 	s.indexMessage(ctx, msg, parentType)
+	if updatedThreadRoot != nil {
+		s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, updatedThreadRoot)
+	}
 	return msg, nil
+}
+
+// checkWebhookThreadRoot gates webhook thread replies. The webhook URL is an
+// unauthenticated credential, so the root must be a live top-level post by
+// the same author (the channel webhook sentinel, or the webhook's own DM bot):
+// a webhook can continue its own threads but never write into a human one.
+func (s *MessageService) checkWebhookThreadRoot(ctx context.Context, parentID, rootID, authorID string) error {
+	root, err := s.messages.GetMessage(ctx, parentID, rootID)
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("%w: root not found", ErrInvalidThreadRoot)
+	}
+	if err != nil {
+		// A lookup failure is not a bad root: tell the caller to retry.
+		return fmt.Errorf("%w: thread root: %w", ErrWebhookUnavailable, err)
+	}
+	if root.Deleted {
+		return ErrThreadDeleted
+	}
+	if root.ParentMessageID != "" {
+		return fmt.Errorf("%w: root is itself a reply", ErrInvalidThreadRoot)
+	}
+	if root.AuthorID != authorID || root.System {
+		return fmt.Errorf("%w: root was not posted by this webhook", ErrInvalidThreadRoot)
+	}
+	return nil
+}
+
+// applyThreadReply updates thread-derived state for a stored reply. It runs
+// before message.new is published: clients refetch /threads as soon as that
+// event arrives, and a missing follow row or stale root metadata would keep
+// the list stale until the next cache invalidation. Returns the updated root,
+// or nil for a top-level message or when the metadata bump failed.
+func (s *MessageService) applyThreadReply(ctx context.Context, msg *model.Message, parentType string) *model.Message {
+	if msg.ParentMessageID == "" {
+		return nil
+	}
+	s.followMentionedThreadUsers(ctx, msg, parentType)
+	root, err := s.messages.IncrementReplyMetadata(ctx, msg.ParentID, msg.ParentMessageID, msg.CreatedAt, msg.AuthorID)
+	if err != nil {
+		// The reply is saved but the root's replyCount/lastReplyAt didn't
+		// advance, so the thread shows a stale count until the next refetch.
+		slog.Warn("thread reply metadata increment failed", "rootID", msg.ParentMessageID, "replyID", msg.ID, "error", err)
+		root = nil
+	}
+	// Write-time participation (reply author + root author) lets /threads read
+	// the index instead of scanning message history.
+	s.recordThreadParticipation(ctx, msg, parentType, root)
+	return root
 }
 
 func (s *MessageService) followMentionedThreadUsers(ctx context.Context, msg *model.Message, parentType string) {
@@ -953,7 +998,8 @@ func (s *MessageService) recordThreadParticipation(ctx context.Context, msg *mod
 		ids = append(ids, root.AuthorID)
 	}
 	for _, uid := range ids {
-		if uid == "" {
+		// The webhook sentinel is not a user; it has no /threads list.
+		if uid == "" || uid == WebhookAuthorID {
 			continue
 		}
 		follow := &model.ThreadFollow{

@@ -21,3 +21,8 @@ var ErrValidation = errors.New("service: invalid input")
 // the cascade in MessageService.Delete tombstones every existing reply and
 // this guard prevents new ones. Handlers map it to 409 Conflict.
 var ErrThreadDeleted = errors.New("message: thread has been deleted")
+
+// ErrInvalidThreadRoot is returned when a webhook reply names a root it may
+// not reply under: missing, itself a reply, or not posted by that webhook.
+// The webhook handler maps it to 400.
+var ErrInvalidThreadRoot = errors.New("message: invalid thread root")

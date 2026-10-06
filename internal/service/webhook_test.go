@@ -1024,3 +1024,103 @@ func TestWebhookDM_EndToEnd_BotThreadIsVisibleToRecipient(t *testing.T) {
 		t.Errorf("recipient's thread label = %q, want the integration's name", row.DisplayName)
 	}
 }
+
+func newWebhookThreadFixture() (*IncomingWebhookService, *mockMessageStore, *mockPublisher) {
+	general := &model.Channel{ID: "ch-1", Name: "General", Slug: "general", Type: model.ChannelTypePublic}
+	other := &model.Channel{ID: "ch-2", Name: "Other", Slug: "other", Type: model.ChannelTypePublic}
+	messages := newMockMessageStore()
+	publisher := newMockPublisher()
+	msgSvc := NewMessageService(messages, nil, nil, publisher, nil)
+	webhooks := &fakeWebhookStore{items: map[string]*model.IncomingWebhook{
+		"wh": {ID: "wh", ChannelID: general.ID, LockToChannel: true, Username: "event-radar", CreatedAt: time.Now()},
+	}}
+	svc := NewIncomingWebhookService(webhooks, fakeWebhookChannels{
+		byID:   map[string]*model.Channel{general.ID: general, other.ID: other},
+		bySlug: map[string]*model.Channel{general.Slug: general, other.Slug: other},
+	}, msgSvc, nil, "")
+	return svc, messages, publisher
+}
+
+func TestIncomingWebhookService_ExecuteMessageRepliesInOwnThread(t *testing.T) {
+	ctx := context.Background()
+	svc, messages, publisher := newWebhookThreadFixture()
+
+	root, err := svc.ExecuteMessage(ctx, "wh", IncomingWebhookPayload{Text: "service api is failing"})
+	if err != nil {
+		t.Fatalf("ExecuteMessage root: %v", err)
+	}
+	if root == nil || root.ID == "" || root.ParentMessageID != "" {
+		t.Fatalf("root = %#v, want a stored top-level message", root)
+	}
+
+	reply, err := svc.ExecuteMessage(ctx, "wh", IncomingWebhookPayload{Text: "still failing", RootID: " " + root.ID + " "})
+	if err != nil {
+		t.Fatalf("ExecuteMessage reply: %v", err)
+	}
+	if reply.ParentMessageID != root.ID || reply.ParentID != root.ParentID {
+		t.Fatalf("reply = %#v, want a reply under %s", reply, root.ID)
+	}
+	stored := messages.messages[root.ParentID+"#"+root.ID]
+	if stored.ReplyCount != 1 || stored.LastReplyAt == nil {
+		t.Fatalf("root reply metadata = count %d lastReplyAt %v, want 1 and set", stored.ReplyCount, stored.LastReplyAt)
+	}
+
+	// The updated root is republished so open clients see the new reply count.
+	var edited bool
+	for _, p := range publisher.published {
+		if p.event.Type == events.EventMessageEdited && strings.Contains(string(p.event.Data), root.ID) {
+			edited = true
+		}
+	}
+	if !edited {
+		t.Fatal("thread root was not republished after the webhook reply")
+	}
+}
+
+func TestIncomingWebhookService_ExecuteMessageRejectsForeignRoots(t *testing.T) {
+	cases := []struct {
+		name string
+		root *model.Message
+		want error
+	}{
+		{name: "missing root", want: ErrInvalidThreadRoot},
+		{name: "human root", root: &model.Message{ID: "r", ParentID: "ch-1", AuthorID: "user-1"}, want: ErrInvalidThreadRoot},
+		{name: "system root", root: &model.Message{ID: "r", ParentID: "ch-1", AuthorID: WebhookAuthorID, System: true}, want: ErrInvalidThreadRoot},
+		{name: "root is a reply", root: &model.Message{ID: "r", ParentID: "ch-1", AuthorID: WebhookAuthorID, ParentMessageID: "x"}, want: ErrInvalidThreadRoot},
+		{name: "root in another channel", root: &model.Message{ID: "r", ParentID: "ch-2", AuthorID: WebhookAuthorID}, want: ErrInvalidThreadRoot},
+		{name: "deleted root", root: &model.Message{ID: "r", ParentID: "ch-1", AuthorID: WebhookAuthorID, Deleted: true}, want: ErrThreadDeleted},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			svc, messages, _ := newWebhookThreadFixture()
+			if tc.root != nil {
+				messages.messages[tc.root.ParentID+"#"+tc.root.ID] = tc.root
+			}
+			before := len(messages.messages)
+
+			_, err := svc.ExecuteMessage(ctx, "wh", IncomingWebhookPayload{Text: "reply", RootID: "r"})
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+			if len(messages.messages) != before {
+				t.Fatalf("stored messages = %d, want %d (rejected reply must not be stored)", len(messages.messages), before)
+			}
+		})
+	}
+}
+
+// A store failure while loading the root is not a bad root: it is reported
+// as retryable rather than invalid_root, and nothing is stored.
+func TestIncomingWebhookService_ExecuteMessageRootLookupFailure(t *testing.T) {
+	svc, messages, _ := newWebhookThreadFixture()
+	messages.getErr = errors.New("table throttled")
+
+	_, err := svc.ExecuteMessage(context.Background(), "wh", IncomingWebhookPayload{Text: "reply", RootID: "r"})
+	if !errors.Is(err, ErrWebhookUnavailable) || errors.Is(err, ErrInvalidThreadRoot) || !strings.Contains(err.Error(), "table throttled") {
+		t.Fatalf("err = %v, want a retryable wrapped store failure", err)
+	}
+	if len(messages.messages) != 0 {
+		t.Fatalf("stored messages = %d, want 0", len(messages.messages))
+	}
+}
