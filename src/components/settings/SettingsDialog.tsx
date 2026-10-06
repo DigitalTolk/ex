@@ -37,7 +37,7 @@ export function SettingsDialog({ open, onOpenChange, initialPage = 'profile' }: 
         mobileCloseLabel="Done"
         finalFocus={false}
         initialFocus={() => pageRef.current}
-        className="h-[min(640px,calc(100dvh-2rem))] grid-cols-[200px_minmax(0,1fr)] gap-0 overflow-hidden p-0 mobile:h-auto mobile:overflow-hidden mobile:grid-cols-1 mobile:grid-rows-[auto_minmax(0,1fr)] mobile:p-0"
+        className="h-[min(640px,calc(100dvh-2rem))] grid-cols-[200px_minmax(0,1fr)] gap-0 overflow-hidden p-0 mobile:h-auto narrow:grid-cols-1 narrow:grid-rows-[auto_minmax(0,1fr)] narrow:p-0"
         data-testid="settings-dialog"
       >
         {/* Remount per open so every page re-reads fresh server state. */}
@@ -56,12 +56,12 @@ function SettingsBody({ initialPage, pageRef }: { initialPage: SettingsPage; pag
     <SaveStatusProvider>
       <nav
         aria-label="Settings sections"
-        className="border-r bg-sidebar px-2.5 py-5 mobile:border-r-0 mobile:border-b mobile:px-3 mobile:pt-[calc(env(safe-area-inset-top)+0.75rem)] mobile:pb-2"
+        className="border-r bg-sidebar px-2.5 py-5 narrow:border-r-0 narrow:border-b narrow:px-3 narrow:pt-[calc(env(safe-area-inset-top)+0.75rem)] narrow:pb-2"
       >
-        <DialogTitle className="mx-2.5 mb-4 text-[15px] font-semibold mobile:mb-2 mobile:h-9 mobile:leading-9">
+        <DialogTitle className="mx-2.5 mb-4 text-[15px] font-semibold narrow:mb-2 narrow:h-9 narrow:leading-9">
           Settings
         </DialogTitle>
-        <div className="flex flex-col gap-0.5 mobile:flex-row mobile:overflow-x-auto">
+        <div className="flex flex-col gap-0.5 narrow:flex-row narrow:overflow-x-auto">
           {PAGES.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
@@ -86,7 +86,7 @@ function SettingsBody({ initialPage, pageRef }: { initialPage: SettingsPage; pag
         <div
           ref={pageRef}
           tabIndex={-1}
-          className="h-full overflow-y-auto px-9 pt-7 pb-14 outline-none mobile:px-4 mobile:pt-5"
+          className="h-full overflow-y-auto px-9 pt-7 pb-14 outline-none narrow:px-4 narrow:pt-5"
           data-testid={`settings-page-${page}`}
         >
           <h2 className="mb-6 pr-8 text-xl font-semibold">{current.label}</h2>

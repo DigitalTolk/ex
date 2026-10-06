@@ -27,7 +27,7 @@ export function AppearanceSettings() {
   return (
     <>
       <SettingsSection title="Theme">
-        <div className="grid grid-cols-3 gap-3 pt-3 mobile:gap-2" role="radiogroup" aria-label="Theme">
+        <div className="grid grid-cols-3 gap-3 pt-3 narrow:gap-2" role="radiogroup" aria-label="Theme">
           {THEMES.map((t) => (
             <button
               key={t.value}
@@ -95,7 +95,7 @@ function ThemePreview({ kind, selected }: { kind: Theme; selected: boolean }) {
   return (
     <div
       aria-hidden="true"
-      className={`relative h-[84px] overflow-hidden rounded-[10px] border transition-shadow mobile:h-16 ${
+      className={`relative h-[84px] overflow-hidden rounded-[10px] border transition-shadow narrow:h-16 ${
         selected
           ? 'border-transparent ring-2 ring-foreground'
           : 'group-hover:ring-2 group-hover:ring-border-strong group-focus-visible:ring-2 group-focus-visible:ring-foreground/60'

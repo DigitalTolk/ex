@@ -26,6 +26,18 @@
 @custom-variant mobile (&:where(.tier-mobile, .tier-mobile *));
 @custom-variant compact (&:where(.tier-compact, .tier-compact *));
 @custom-variant not-mobile (&:where(:not(.tier-mobile):not(.tier-mobile *)));
+/* `narrow:` = the mobile-native tier OR any viewport under 768px. For
+   surfaces (like the Settings dialog) that should switch to their phone
+   layout when a desktop window is squeezed narrow, not only on touch
+   devices. */
+@custom-variant narrow {
+  &:where(.tier-mobile, .tier-mobile *) {
+    @slot;
+  }
+  @media (width < 48rem) {
+    @slot;
+  }
+}
 
 /* macOS Electron (titleBarStyle: hiddenInset) overlays the traffic lights on
    the web content's top-left; the top bar's left column pads past them so the

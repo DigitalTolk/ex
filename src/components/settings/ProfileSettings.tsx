@@ -143,7 +143,7 @@ export function ProfileSettings() {
               : 'Managed by your sign-in provider.'
           }
         >
-          <div className="w-80 max-w-full mobile:w-full">
+          <div className="w-80 max-w-full narrow:w-full">
             <Input
               id="settings-display-name"
               value={displayName}
@@ -183,7 +183,7 @@ export function ProfileSettings() {
             value={user.email}
             readOnly
             disabled
-            className="w-80 max-w-full bg-muted mobile:w-full"
+            className="w-80 max-w-full bg-muted narrow:w-full"
           />
         </SettingsRow>
       </SettingsSection>

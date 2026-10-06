@@ -183,12 +183,12 @@ const SWITCH_CLASS = 'data-unchecked:bg-muted-foreground/30 dark:data-unchecked:
 
 function LevelSelect({ id, value, onChange }: { id: string; value: string; onChange: (v: string) => void }) {
   return (
-    <div className="relative shrink-0 mobile:w-full">
+    <div className="relative shrink-0 narrow:w-full">
       <select
         id={id}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="h-9 w-56 cursor-pointer appearance-none rounded-lg border border-border-strong bg-popover pr-8 pl-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50 mobile:w-full"
+        className="h-9 w-56 cursor-pointer appearance-none rounded-lg border border-border-strong bg-popover pr-8 pl-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50 narrow:w-full"
       >
         {DESKTOP_LEVEL_OPTIONS.map((o) => (
           <option key={o.value} value={o.value}>

@@ -52,7 +52,7 @@ export function SettingsRow({ label, hint, htmlFor, children, stacked, className
       className={`py-[18px] ${
         stacked
           ? 'flex flex-col gap-2.5'
-          : 'flex items-center justify-between gap-6 mobile:flex-wrap mobile:gap-3'
+          : 'flex items-center justify-between gap-6 narrow:flex-wrap narrow:gap-3'
       } ${className ?? ''}`}
     >
       <div className="min-w-0">
