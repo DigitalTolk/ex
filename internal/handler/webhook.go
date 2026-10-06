@@ -101,11 +101,20 @@ func (h *WebhookHandler) Execute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_payload", err.Error())
 		return
 	}
-	if err := h.svc.Execute(r.Context(), id, payload); err != nil {
+	msg, err := h.svc.ExecuteMessage(r.Context(), id, payload)
+	if err != nil {
 		// This is an UNAUTHENTICATED ingress: internal error text never goes
 		// to the caller. Fixed messages per class; the detail is logged.
 		if errors.Is(err, service.ErrWebhookDMRejected) {
 			writeError(w, http.StatusBadRequest, "unsupported_channel", "webhook cannot post to that direct-message target")
+			return
+		}
+		if errors.Is(err, service.ErrInvalidThreadRoot) {
+			writeError(w, http.StatusBadRequest, "invalid_root", "root_id must reference a top-level message posted by this webhook in the target channel")
+			return
+		}
+		if errors.Is(err, service.ErrThreadDeleted) {
+			writeError(w, http.StatusConflict, "thread_deleted", "the thread for root_id has been deleted")
 			return
 		}
 		if errors.Is(err, store.ErrNotFound) {
@@ -121,6 +130,13 @@ func (h *WebhookHandler) Execute(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Warn("webhook execute failed", "webhookID", id, "error", err)
 		writeError(w, http.StatusBadRequest, "webhook_error", "webhook request could not be processed")
+		return
+	}
+	// Mattermost-compatible callers get the plain "ok"; a caller that asks for
+	// JSON gets the message id, which it can send back as root_id to reply in
+	// this message's thread.
+	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "application/json") {
+		writeJSON(w, http.StatusOK, map[string]string{"id": msg.ID})
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -146,6 +162,7 @@ func readWebhookPayload(r *http.Request) (service.IncomingWebhookPayload, error)
 			payload.Channel = r.FormValue("channel")
 			payload.Username = r.FormValue("username")
 			payload.IconURL = r.FormValue("icon_url")
+			payload.RootID = r.FormValue("root_id")
 			return payload, nil
 		}
 		raw = strings.TrimPrefix(raw, "payload=")

@@ -616,3 +616,95 @@ func TestWebhookHandlerExecute_TransientFailureIsRetryable(t *testing.T) {
 		t.Errorf("response leaked internal error detail: %s", body)
 	}
 }
+
+func newHandlerWebhookThreadFixture() (*WebhookHandler, *handlerWebhookMessageStore) {
+	general := &model.Channel{ID: "ch-general", Name: "General", Slug: "general"}
+	channels := handlerWebhookChannels{
+		byID:   map[string]*model.Channel{general.ID: general},
+		bySlug: map[string]*model.Channel{general.Slug: general},
+	}
+	webhooks := &handlerWebhookStore{items: map[string]*model.IncomingWebhook{
+		"wh": {ID: "wh", Title: "Alerts", ChannelID: general.ID, ChannelName: general.Name, ChannelSlug: general.Slug, Username: "event-radar"},
+	}}
+	messages := &handlerWebhookMessageStore{messages: map[string]*model.Message{}}
+	msgSvc := service.NewMessageService(messages, nil, nil, nil, nil)
+	return NewWebhookHandler(service.NewIncomingWebhookService(webhooks, channels, msgSvc, nil, "")), messages
+}
+
+func executeWebhook(h *WebhookHandler, body, accept string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/hooks/wh", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	req.SetPathValue("id", "wh")
+	res := httptest.NewRecorder()
+	h.Execute(res, req)
+	return res
+}
+
+func TestWebhookHandlerExecute_JSONResponseReturnsIDForThreading(t *testing.T) {
+	h, messages := newHandlerWebhookThreadFixture()
+
+	res := executeWebhook(h, `{"text":"service api is failing"}`, "application/json")
+	if res.Code != http.StatusOK {
+		t.Fatalf("root status = %d body=%s", res.Code, res.Body.String())
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &root); err != nil || root.ID == "" {
+		t.Fatalf("root response = %q (err %v), want JSON with id", res.Body.String(), err)
+	}
+
+	res = executeWebhook(h, `{"text":"still failing","root_id":"`+root.ID+`"}`, "application/json")
+	if res.Code != http.StatusOK {
+		t.Fatalf("reply status = %d body=%s", res.Code, res.Body.String())
+	}
+	var reply struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &reply); err != nil || reply.ID == "" {
+		t.Fatalf("reply response = %q (err %v), want JSON with id", res.Body.String(), err)
+	}
+	stored := messages.messages["ch-general#"+reply.ID]
+	if stored == nil || stored.ParentMessageID != root.ID {
+		t.Fatalf("stored reply = %#v, want parentMessageID %s", stored, root.ID)
+	}
+	if messages.messages["ch-general#"+root.ID].ReplyCount != 1 {
+		t.Fatal("root reply count was not incremented")
+	}
+}
+
+// Callers that don't ask for JSON keep Mattermost's plain "ok" response.
+func TestWebhookHandlerExecute_DefaultResponseStaysOK(t *testing.T) {
+	h, _ := newHandlerWebhookThreadFixture()
+	for _, accept := range []string{"", "*/*", "text/plain"} {
+		res := executeWebhook(h, `{"text":"hello"}`, accept)
+		if res.Code != http.StatusOK || res.Body.String() != "ok" {
+			t.Fatalf("Accept %q: status = %d body = %q, want 200 ok", accept, res.Code, res.Body.String())
+		}
+	}
+}
+
+func TestWebhookHandlerExecute_RootErrors(t *testing.T) {
+	h, messages := newHandlerWebhookThreadFixture()
+	messages.messages["ch-general#human"] = &model.Message{ID: "human", ParentID: "ch-general", AuthorID: "user-1"}
+	messages.messages["ch-general#gone"] = &model.Message{ID: "gone", ParentID: "ch-general", AuthorID: service.WebhookAuthorID, Deleted: true}
+
+	cases := []struct {
+		rootID string
+		status int
+		code   string
+	}{
+		{rootID: "missing", status: http.StatusBadRequest, code: "invalid_root"},
+		{rootID: "human", status: http.StatusBadRequest, code: "invalid_root"},
+		{rootID: "gone", status: http.StatusConflict, code: "thread_deleted"},
+	}
+	for _, tc := range cases {
+		res := executeWebhook(h, `{"text":"reply","root_id":"`+tc.rootID+`"}`, "application/json")
+		if res.Code != tc.status || !strings.Contains(res.Body.String(), tc.code) {
+			t.Fatalf("root %q: status = %d body = %s, want %d %s", tc.rootID, res.Code, res.Body.String(), tc.status, tc.code)
+		}
+	}
+}

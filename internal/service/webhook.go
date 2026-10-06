@@ -67,6 +67,9 @@ type IncomingWebhookPayload struct {
 	IconURL     string                    `json:"icon_url"`
 	IconEmoji   string                    `json:"icon_emoji"`
 	Attachments []model.MessageAttachment `json:"attachments"`
+	// RootID posts the message as a reply in the thread of an earlier post
+	// by this webhook (the id ExecuteMessage returned for it).
+	RootID string `json:"root_id"`
 }
 
 type IncomingWebhookService struct {
@@ -227,13 +230,20 @@ var ErrWebhookDMRejected = errors.New("webhook: direct-message target rejected")
 var ErrWebhookUnavailable = errors.New("webhook: delivery temporarily unavailable")
 
 func (s *IncomingWebhookService) Execute(ctx context.Context, id string, payload IncomingWebhookPayload) error {
+	_, err := s.ExecuteMessage(ctx, id, payload)
+	return err
+}
+
+// ExecuteMessage delivers a webhook payload and returns the stored message,
+// so callers can thread follow-ups under it via RootID.
+func (s *IncomingWebhookService) ExecuteMessage(ctx context.Context, id string, payload IncomingWebhookPayload) (*model.Message, error) {
 	wh, err := s.store.Get(ctx, id)
 	if err != nil {
-		return fmt.Errorf("webhook: get: %w", err)
+		return nil, fmt.Errorf("webhook: get: %w", err)
 	}
 	target, err := s.targetParent(ctx, wh, payload.Channel)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	username := strings.TrimSpace(payload.Username)
 	if username == "" {
@@ -267,17 +277,17 @@ func (s *IncomingWebhookService) Execute(ctx context.Context, id string, payload
 	// participant of the conversation, and the notification fan-out excludes
 	// the author from its audience — which is precisely what leaves the
 	// recipient as the only person notified.
-	_, err = s.messages.SendWebhook(ctx, WebhookMessageInput{
-		ParentID:    target.parentID,
-		ParentType:  target.parentType,
-		AuthorID:    target.authorID,
-		Body:        s.translateMattermostMarkup(ctx, payload.Text),
-		Username:    username,
-		AvatarURL:   avatarURL,
-		IconEmoji:   iconEmoji,
-		Attachments: attachments,
+	return s.messages.SendWebhook(ctx, WebhookMessageInput{
+		ParentID:        target.parentID,
+		ParentType:      target.parentType,
+		AuthorID:        target.authorID,
+		Body:            s.translateMattermostMarkup(ctx, payload.Text),
+		Username:        username,
+		AvatarURL:       avatarURL,
+		IconEmoji:       iconEmoji,
+		Attachments:     attachments,
+		ParentMessageID: strings.TrimSpace(payload.RootID),
 	})
-	return err
 }
 
 // normalizeEmojiName strips the optional surrounding colons and
