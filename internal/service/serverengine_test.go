@@ -1095,26 +1095,80 @@ func approvalCtx(t *testing.T) context.Context {
 	return ctx
 }
 
-func approveWhenPending(t *testing.T, fx *orchFixture, runID string, d Decision) {
-	t.Helper()
+// pendingApprovals snapshots the run's pending approvals as key → approval ID.
+func pendingApprovals(fx *orchFixture, runID string) map[string]string {
+	fx.runs.mu.Lock()
+	defer fx.runs.mu.Unlock()
+	out := map[string]string{}
+	for k, a := range fx.runs.approvals {
+		if strings.HasPrefix(k, runID+"#") && a.State == model.ApprovalPending {
+			out[k] = a.ID
+		}
+	}
+	return out
+}
+
+// whenNewApprovalPending hands act the first approval that turns up pending on
+// the run AFTER the call, ignoring any already pending at that moment. A tool
+// whose context ends mid-wait strands its gate as pending, and a watcher that
+// took any pending gate would sometimes settle that stale one instead of the
+// gate the tool under test is blocked on — which then polls until
+// approvalWaitBudget runs out. Arm it before the call it should answer.
+func whenNewApprovalPending(fx *orchFixture, runID string, act func(key, id string)) {
+	stale := pendingApprovals(fx, runID)
 	go func() {
 		deadline := time.Now().Add(approvalWaitBudget)
 		for time.Now().Before(deadline) {
 			time.Sleep(2 * time.Millisecond)
-			fx.runs.mu.Lock()
-			var id string
-			for k, a := range fx.runs.approvals {
-				if strings.HasPrefix(k, runID+"#") && a.State == model.ApprovalPending {
-					id = a.ID
+			for key, id := range pendingApprovals(fx, runID) {
+				if _, old := stale[key]; !old {
+					act(key, id)
+					return
 				}
-			}
-			fx.runs.mu.Unlock()
-			if id != "" {
-				_, _ = fx.orch.DecideApproval(context.Background(), "u-alice", runID, id, d)
-				return
 			}
 		}
 	}()
+}
+
+func approveWhenPending(t *testing.T, fx *orchFixture, runID string, d Decision) {
+	t.Helper()
+	whenNewApprovalPending(fx, runID, func(_, id string) {
+		_, _ = fx.orch.DecideApproval(context.Background(), "u-alice", runID, id, d)
+	})
+}
+
+// expireWhenPending settles the next new pending approval as expired, the way
+// the expiry sweep would.
+func expireWhenPending(fx *orchFixture, runID string) {
+	whenNewApprovalPending(fx, runID, func(_, id string) {
+		_ = fx.runs.SettleApproval(context.Background(), runID, id, model.ApprovalExpired, "", "", "", time.Now())
+	})
+}
+
+func TestWhenNewApprovalPending_IgnoresStrandedGate(t *testing.T) {
+	fx := newOrchFixture(t)
+	run := fx.startRun(t)
+	stranded, err := fx.orch.RequestApproval(context.Background(), run, ApprovalRequest{Summary: "stranded"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan string, 1)
+	whenNewApprovalPending(fx, run.ID, func(_, id string) { got <- id })
+	// Give the watcher many scans while the stranded gate is the only pending
+	// one — the window in which the old helper grabbed it.
+	time.Sleep(20 * time.Millisecond)
+	fresh, err := fx.orch.RequestApproval(context.Background(), run, ApprovalRequest{Summary: "fresh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case id := <-got:
+		if id != fresh.ID {
+			t.Fatalf("watcher took %s, want the new gate %s (stranded: %s)", id, fresh.ID, stranded.ID)
+		}
+	case <-time.After(approvalWaitBudget):
+		t.Fatal("watcher never saw the new gate")
+	}
 }
 
 func TestServerEngine_UseConnectorApproveFlow(t *testing.T) {
@@ -1127,7 +1181,10 @@ func TestServerEngine_UseConnectorApproveFlow(t *testing.T) {
 
 	// Let the gate sit pending across at least one poll so the still-waiting
 	// note fires before the approval lands.
-	time.AfterFunc(25*time.Millisecond, func() { approveWhenPending(t, fx, run.ID, Decision{Approve: true}) })
+	whenNewApprovalPending(fx, run.ID, func(_, id string) {
+		time.Sleep(25 * time.Millisecond)
+		_, _ = fx.orch.DecideApproval(context.Background(), "u-alice", run.ID, id, Decision{Approve: true})
+	})
 	out, isErr := use(approvalCtx(t), json.RawMessage(`{"connector":"hub","reason":"need people data"}`))
 	if isErr || !strings.Contains(out, "attached /hub") || !strings.Contains(out, "a.yaml") {
 		t.Fatalf("approve flow: err=%v %q", isErr, out)
@@ -1179,24 +1236,7 @@ func TestServerEngine_UseConnectorDeniedExpiredAndErrors(t *testing.T) {
 	}
 
 	// Expired: settle the next pending approval as expired ourselves.
-	go func() {
-		deadline := time.Now().Add(approvalWaitBudget)
-		for time.Now().Before(deadline) {
-			time.Sleep(2 * time.Millisecond)
-			fx.runs.mu.Lock()
-			var id string
-			for k, a := range fx.runs.approvals {
-				if strings.HasPrefix(k, run.ID+"#") && a.State == model.ApprovalPending {
-					id = a.ID
-				}
-			}
-			fx.runs.mu.Unlock()
-			if id != "" {
-				_ = fx.runs.SettleApproval(context.Background(), run.ID, id, model.ApprovalExpired, "", "", "", time.Now())
-				return
-			}
-		}
-	}()
+	expireWhenPending(fx, run.ID)
 	if out, isErr := use(ctx, json.RawMessage(`{"connector":"hub","reason":"r"}`)); !isErr || !strings.Contains(out, "expired unanswered") {
 		t.Fatalf("expired: %q", out)
 	}
@@ -1216,27 +1256,13 @@ func TestServerEngine_UseConnectorDeniedExpiredAndErrors(t *testing.T) {
 		t.Fatalf("ctx done: %q", out)
 	}
 
-	// Approval row lost mid-wait → lookup failure surfaces.
-	go func() {
-		deadline := time.Now().Add(approvalWaitBudget)
-		for time.Now().Before(deadline) {
-			time.Sleep(2 * time.Millisecond)
-			fx.runs.mu.Lock()
-			var key string
-			for k, a := range fx.runs.approvals {
-				if strings.HasPrefix(k, run.ID+"#") && a.State == model.ApprovalPending {
-					key = k
-				}
-			}
-			if key != "" {
-				delete(fx.runs.approvals, key)
-			}
-			fx.runs.mu.Unlock()
-			if key != "" {
-				return
-			}
-		}
-	}()
+	// Approval row lost mid-wait → lookup failure surfaces. The cancelled call
+	// above stranded its gate as pending; the watcher must skip that one.
+	whenNewApprovalPending(fx, run.ID, func(key, _ string) {
+		fx.runs.mu.Lock()
+		delete(fx.runs.approvals, key)
+		fx.runs.mu.Unlock()
+	})
 	if out, isErr := use(ctx, json.RawMessage(`{"connector":"hub","reason":"r"}`)); !isErr || !strings.Contains(out, "approval lookup failed") {
 		t.Fatalf("lookup failure: %q", out)
 	}
@@ -1299,27 +1325,7 @@ func TestServerEngine_ApprovalTools(t *testing.T) {
 	}
 
 	// Expired: settle the pending gate as expired ourselves.
-	expireWhenPending := func() {
-		go func() {
-			deadline := time.Now().Add(approvalWaitBudget)
-			for time.Now().Before(deadline) {
-				time.Sleep(2 * time.Millisecond)
-				fx.runs.mu.Lock()
-				var id string
-				for k, a := range fx.runs.approvals {
-					if strings.HasPrefix(k, run.ID+"#") && a.State == model.ApprovalPending {
-						id = a.ID
-					}
-				}
-				fx.runs.mu.Unlock()
-				if id != "" {
-					_ = fx.runs.SettleApproval(context.Background(), run.ID, id, model.ApprovalExpired, "", "", "", time.Now())
-					return
-				}
-			}
-		}()
-	}
-	expireWhenPending()
+	expireWhenPending(fx, run.ID)
 	if out, isErr := req(ctx, json.RawMessage(`{"summary":"s"}`)); !isErr || !strings.Contains(out, "nobody decided in time") {
 		t.Fatalf("req expired: %q", out)
 	}
@@ -1345,13 +1351,13 @@ func TestServerEngine_ApprovalTools(t *testing.T) {
 	}
 
 	// Timed out.
-	expireWhenPending()
+	expireWhenPending(fx, run.ID)
 	if out, isErr := ask(ctx, json.RawMessage(`{"question":"q","options":["A","B"]}`)); !isErr || !strings.Contains(out, "no answer in time") {
 		t.Fatalf("ask expired: %q", out)
 	}
 
-	// The run ends mid-wait. These leave their gates pending, so they come
-	// after every flow that scans for a pending approval to decide.
+	// The run ends mid-wait. These strand their gates as pending, which
+	// whenNewApprovalPending skips, so later flows can still scan safely.
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 	if out, isErr := req(cancelled, json.RawMessage(`{"summary":"s"}`)); !isErr || !strings.Contains(out, "run ended") {
