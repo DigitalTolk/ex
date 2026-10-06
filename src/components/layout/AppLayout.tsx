@@ -7,6 +7,7 @@ import { usePanelWidth } from '@/hooks/usePanelWidth';
 import { useLayoutTier } from '@/hooks/useLayoutTier';
 import { SIDEBAR_WIDTH } from '@/lib/panel-width';
 import { AppTopBar } from './AppTopBar';
+import { AccountMenu } from './AccountMenu';
 import { TagSearchProvider } from '@/context/TagSearchContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
@@ -259,13 +260,16 @@ export function AppLayout({ children }: AppLayoutProps) {
 
         <div className="relative flex min-h-0 flex-1 overflow-hidden bg-background">
           <aside
-            className="relative hidden shrink-0 bg-sidebar text-sidebar-foreground lg:block border-r border-sidebar-border"
+            className="relative hidden shrink-0 flex-col bg-sidebar text-sidebar-foreground lg:flex border-r border-sidebar-border"
             style={{ width: sidebarWidth }}
             data-app-chrome="true"
             data-keyboard-surface="sidebar"
             data-testid="app-sidebar"
           >
-            <Sidebar onClose={() => undefined} />
+            <div className="min-h-0 flex-1">
+              <Sidebar onClose={() => undefined} />
+            </div>
+            <AccountMenu />
             <PanelResizeHandle edge="right" testID="sidebar-resize-handle" {...sidebarHandleProps} />
           </aside>
           {tier === 'compact' && compactSidebarOpen && (
@@ -279,24 +283,30 @@ export function AppLayout({ children }: AppLayoutProps) {
                 onClick={() => setCompactSidebarToggled(false)}
               />
               <aside
-                className="absolute inset-y-0 left-0 z-40 w-72 border-r border-border bg-sidebar text-sidebar-foreground shadow-xl"
+                className="absolute inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-border bg-sidebar text-sidebar-foreground shadow-xl"
                 data-testid="compact-sidebar"
                 data-app-chrome="true"
                 data-keyboard-surface="sidebar"
               >
-                <Sidebar onClose={() => setCompactSidebarToggled(false)} />
+                <div className="min-h-0 flex-1">
+                  <Sidebar onClose={() => setCompactSidebarToggled(false)} />
+                </div>
+                <AccountMenu />
               </aside>
             </>
           )}
           {isMobile && (
             <aside
-              className="absolute inset-0 z-0 bg-sidebar text-sidebar-foreground lg:hidden"
+              className="absolute inset-0 z-0 flex flex-col bg-sidebar text-sidebar-foreground lg:hidden"
               inert={mobileChannelsOpen ? undefined : true}
               data-testid="mobile-channel-sidebar"
               data-app-chrome="true"
               data-keyboard-surface="sidebar"
             >
-              <Sidebar onClose={closeChannels} />
+              <div className="min-h-0 flex-1">
+                <Sidebar onClose={closeChannels} />
+              </div>
+              <AccountMenu />
             </aside>
           )}
           <motion.main

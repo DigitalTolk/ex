@@ -2,10 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AppTopBar } from './AppTopBar';
+import { AccountMenu } from './AccountMenu';
 
-// Browser coverage for AppTopBar's mobile-sheet path and the native
-// "Change server" action — the existing AppTopBar.browser.test.tsx pins
+// Browser coverage for AccountMenu's mobile-sheet path and the native
+// "Change server" action — the existing AccountMenu.browser.test.tsx pins
 // useIsMobile=false and getCapacitorPlugin=null, leaving the mobile
 // branches and the serverNavigation menu entry uncovered in the browser
 // gate.
@@ -22,10 +22,10 @@ vi.mock('@/context/AuthContext', () => ({
 vi.mock('@/context/PresenceContext', () => ({
   usePresence: () => ({ online: mockOnline, isOnline: (id: string) => mockOnline.has(id) }),
 }));
-vi.mock('@/components/SearchBar', () => ({ SearchBar: () => <div aria-label="Search">search</div> }));
-vi.mock('@/components/EditProfileDialog', () => ({ EditProfileDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="edit-profile-open" /> : null) }));
+vi.mock('@/components/settings/SettingsDialog', () => ({ SettingsDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="settings-open" /> : null) }));
 vi.mock('@/components/UserStatusDialog', () => ({ UserStatusDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="status-open" /> : null) }));
 vi.mock('@/components/AboutDialog', () => ({ AboutDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="about-open" /> : null) }));
+vi.mock('@/components/emoji/CustomEmojiDialog', () => ({ CustomEmojiDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="emojis-open" /> : null) }));
 vi.mock('@/components/InviteDialog', () => ({ InviteDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="invite-open" /> : null) }));
 // Native platform with a ServerNavigation plugin → the serverNavigation
 // branch is truthy and the "Change server" action is present.
@@ -35,7 +35,7 @@ vi.mock('@/lib/capacitor', () => ({
 }));
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => true }));
 
-function renderTopBar(ui = <AppTopBar />) {
+function renderMenu(ui = <AccountMenu />) {
   // The account avatar's UserStatusIndicator resolves custom emoji through a
   // react-query hook, so the tree needs a provider.
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -46,7 +46,7 @@ function renderTopBar(ui = <AppTopBar />) {
   );
 }
 
-describe('AppTopBar (mobile + native)', () => {
+describe('AccountMenu (mobile + native)', () => {
   // base-ui's Dialog defers portal teardown until its exit animation ends;
   // on WebKit headless that animationend can be flaky, leaving the closed
   // sheet in the DOM. Disabling animations makes close() remove it
@@ -70,23 +70,23 @@ describe('AppTopBar (mobile + native)', () => {
     // wide viewports; only assert on the actual mobile projects.
     if (window.innerWidth > 767) return;
     mockOnline = new Set<string>(['u-1']);
-    const screen = await renderTopBar();
+    const screen = await renderMenu();
     // The mobile account button shows an online presence dot.
-    const account = screen.getByTestId('topbar-account').element() as HTMLElement;
+    const account = screen.getByTestId('account-menu-trigger').element() as HTMLElement;
     const dot = account.querySelector('[data-presence]') as HTMLElement;
     expect(dot.getAttribute('data-presence')).toBe('online');
     expect(dot.className).toContain('bg-online');
-    await screen.getByTestId('topbar-account').click();
+    await screen.getByTestId('account-menu-trigger').click();
     await expect.element(screen.getByTestId('mobile-account-sheet')).toBeVisible();
-    await expect.element(screen.getByText('Alice Wonder')).toBeVisible();
+    await expect.element(screen.getByTestId('mobile-account-sheet').getByText('Alice Wonder')).toBeVisible();
     // The native "Change server" action is present in the sheet.
     await expect.element(screen.getByTestId('user-menu-change-server')).toBeVisible();
   });
 
   it('runs an action and closes the sheet when a menu entry is tapped', async () => {
     if (window.innerWidth > 767) return;
-    const screen = await renderTopBar();
-    await screen.getByTestId('topbar-account').click();
+    const screen = await renderMenu();
+    await screen.getByTestId('account-menu-trigger').click();
     await screen.getByTestId('user-menu-about').click();
     // The mocked AboutDialog renders an empty div once open=true.
     await vi.waitFor(() => {
@@ -102,8 +102,8 @@ describe('AppTopBar (mobile + native)', () => {
 
   it('opens the change-server confirm dialog and triggers resetServer on confirm', async () => {
     if (window.innerWidth > 767) return;
-    const screen = await renderTopBar();
-    await screen.getByTestId('topbar-account').click();
+    const screen = await renderMenu();
+    await screen.getByTestId('account-menu-trigger').click();
     await screen.getByTestId('user-menu-change-server').click();
     // The ConfirmDialog opens; confirm fires serverNavigation.resetServer().
     await screen.getByTestId('change-server-confirm').click();
@@ -112,8 +112,8 @@ describe('AppTopBar (mobile + native)', () => {
 
   it('signs out from the mobile sheet and navigates to /login', async () => {
     if (window.innerWidth > 767) return;
-    const screen = await renderTopBar();
-    await screen.getByTestId('topbar-account').click();
+    const screen = await renderMenu();
+    await screen.getByTestId('account-menu-trigger').click();
     await screen.getByTestId('user-menu-signout').click();
     await vi.waitFor(() => expect(logout).toHaveBeenCalled());
   });

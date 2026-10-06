@@ -26,6 +26,18 @@
 @custom-variant mobile (&:where(.tier-mobile, .tier-mobile *));
 @custom-variant compact (&:where(.tier-compact, .tier-compact *));
 @custom-variant not-mobile (&:where(:not(.tier-mobile):not(.tier-mobile *)));
+/* `narrow:` = the mobile-native tier OR any viewport under 768px. For
+   surfaces (like the Settings dialog) that should switch to their phone
+   layout when a desktop window is squeezed narrow, not only on touch
+   devices. */
+@custom-variant narrow {
+  &:where(.tier-mobile, .tier-mobile *) {
+    @slot;
+  }
+  @media (width < 48rem) {
+    @slot;
+  }
+}
 
 /* macOS Electron (titleBarStyle: hiddenInset) overlays the traffic lights on
    the web content's top-left; the top bar's left column pads past them so the
@@ -180,6 +192,9 @@
   --color-sidebar-accent: #EDECE9;
   --color-sidebar-accent-foreground: #0B0B0B;
   --color-sidebar-border: #E3E3E2;
+  /* Hairline between rows inside a settings group — a step softer than
+   * `border`, so lists read as one group rather than a stack of boxes. */
+  --color-divider: #EFEEEC;
   --color-sidebar-ring: #BDBCBC;
   --color-chat-top: #FCFCFB;
   --color-chat-hover: #F5F5F5;
@@ -392,6 +407,9 @@
     --color-sidebar-accent: #2C2C2C;
     --color-sidebar-accent-foreground: #FFFFFF;
     --color-sidebar-border: #242424;
+    /* Row hairline; #2C2C2C (not the #242424 border) so it stays visible on
+       the #232323 dialog surface. */
+    --color-divider: #2C2C2C;
     --color-sidebar-ring: #A7A5A6;
     --color-chat-top: #1A1A1A;
     /* Chat message-row hover = bg/level1, mirroring the light spec (where

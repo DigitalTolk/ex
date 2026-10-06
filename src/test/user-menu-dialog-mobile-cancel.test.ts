@@ -11,12 +11,15 @@ function readComponent(path: string) {
 
 describe('user menu dialog mobile close controls', () => {
   it.each([
-    'src/components/EditProfileDialog.tsx',
     'src/components/UserStatusDialog.tsx',
     'src/components/InviteDialog.tsx',
     'src/components/AboutDialog.tsx',
   ])('%s opts into a visible mobile Cancel close button', (path) => {
     expect(readComponent(path)).toContain('mobileCloseLabel="Cancel"');
+  });
+
+  it('Settings saves as you go, so its mobile close control reads "Done"', () => {
+    expect(readComponent('src/components/settings/SettingsDialog.tsx')).toContain('mobileCloseLabel="Done"');
   });
 
   it('uses the same mobile Cancel close affordance for confirmation dialogs launched from the user menu', () => {

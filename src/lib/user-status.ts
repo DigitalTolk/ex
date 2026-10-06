@@ -14,3 +14,13 @@ export function formatStatusUntil(clearAt?: string): string {
     minute: '2-digit',
   })}`;
 }
+
+// Compact "Until 7:00 PM" label for the account menu's status row: just the
+// time when it clears today, date + time otherwise.
+export function formatStatusUntilShort(clearAt?: string, now: Date = new Date()): string {
+  if (!clearAt) return "Doesn't clear";
+  const at = new Date(clearAt);
+  const time = at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  if (at.toDateString() === now.toDateString()) return `Until ${time}`;
+  return `Until ${at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${time}`;
+}

@@ -20,6 +20,7 @@ vi.mock('@/components/NotificationPermissionBanner', () => ({
   NotificationPermissionBanner: () => null,
 }));
 
+vi.mock('./AccountMenu', () => ({ AccountMenu: () => <div data-testid="sidebar-account" /> }));
 vi.mock('./AppTopBar', () => ({
   AppTopBar: () => (
     <header data-testid="app-shell-header" data-app-chrome="true">
@@ -46,7 +47,7 @@ describe('AppLayout - mobile navigation', () => {
     const { container } = renderLayout();
 
     const aside = screen.getByTestId('sidebar').closest('aside')!;
-    expect(aside.className).toContain('lg:block');
+    expect(aside.className).toContain('lg:flex');
     expect(container.querySelector('.bg-black\\/50')).toBeNull();
   });
 });

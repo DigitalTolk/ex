@@ -40,6 +40,7 @@ vi.mock('@/components/NotificationPermissionBanner', () => ({
   NotificationPermissionBanner: () => null,
 }));
 
+vi.mock('./AccountMenu', () => ({ AccountMenu: () => <div data-testid="sidebar-account" /> }));
 vi.mock('./Sidebar', () => ({
   Sidebar: () => <div>Sidebar</div>,
 }));

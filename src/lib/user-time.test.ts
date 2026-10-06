@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   formatLastSeen,
   formatTimeZoneName,
@@ -9,6 +9,8 @@ import {
 } from './user-time';
 
 describe('user-time helpers', () => {
+  afterEach(() => vi.useRealTimers());
+
   it('formats online users as now and omits missing offline timestamps', () => {
     expect(formatLastSeen('2026-05-03T10:00:00.000Z', true)).toBe('now');
     expect(formatLastSeen(undefined, false)).toBeNull();
@@ -30,6 +32,10 @@ describe('user-time helpers', () => {
   });
 
   it('formats ahead and behind timezone deltas', () => {
+    // Offsets move with daylight saving (Adelaide is +9.5 in July, +10.5 from
+    // October), so pin "now" to a date where every zone below is stable.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-07-01T12:00:00Z'));
     expect(formatTimeZoneDelta('Europe/Stockholm', 'UTC')).toMatch(/ahead/);
     expect(formatTimeZoneDelta('Europe/Stockholm', 'Europe/London')).toBe('1 hr ahead');
     expect(formatTimeZoneDelta('America/New_York', 'UTC')).toMatch(/behind/);
