@@ -29,6 +29,17 @@ describe('UserStatusIndicator browser', () => {
     expect(document.querySelector('[data-slot="tooltip-trigger"]')).not.toBeNull();
   });
 
+  it('renders the tooltip trigger as a <span> (not a nested button) with inlineTrigger', async () => {
+    await render(
+      <button type="button">
+        <UserStatusIndicator status={activeStatus} inlineTrigger />
+      </button>,
+    );
+    const trigger = document.querySelector('[data-slot="tooltip-trigger"]');
+    expect(trigger?.tagName).toBe('SPAN');
+    expect(document.querySelectorAll('button button').length).toBe(0);
+  });
+
   it('renders nothing when there is no active status', async () => {
     await render(<UserStatusIndicator status={undefined} />);
     expect(document.querySelector('[data-slot="tooltip-trigger"]')).toBeNull();
