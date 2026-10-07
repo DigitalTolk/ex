@@ -13,6 +13,7 @@ import { sendWS } from '@/lib/ws-sender';
 import { localTimeZone } from '@/lib/user-time';
 import { isUserAttentive, suppressionWindowMs } from '@/lib/user-activity';
 import { classifyParentArrival, resolveParentKind } from '@/lib/message-arrival';
+import { isAtBottom, isReadHeld, releaseRead, setUnreadAnchor, threadReadKey } from '@/lib/read-position';
 import { slugify } from '@/lib/format';
 import { isOwnMessage } from '@/lib/message-users';
 import {
@@ -50,6 +51,7 @@ import { apiFetch } from '@/lib/api';
 import {
   bumpChannelUnread,
   bumpConversationUnread,
+  cachedUnreadCount,
   clearChannelUnreadInCache,
   clearConversationUnreadInCache,
   touchConversationActivityInCache,
@@ -168,7 +170,21 @@ export default function ChatPage() {
         isSystem: !!msg.system,
         viewingParent,
         attentive: isUserAttentive(suppressionWindowMs),
+        atBottom: isAtBottom(parentID),
+        held: isReadHeld(parentID),
       });
+      // Arriving unseen in the open chat (window away, scrolled up, or held
+      // unread): if it's the first unread, the "New messages" line starts here.
+      if (arrival === 'bump-unread' && viewingParent && parentKind && !cachedUnreadCount(queryClient, parentKind, parentID)) {
+        setUnreadAnchor(parentID, { kind: 'message', messageID: msg.id }, { replace: true });
+      }
+      // Posting reads the parent for you server-side, so your own top-level
+      // post ends a "Mark as unread" hold.
+      if (isOwnAuthor && !parentMessageID && parentKind && isReadHeld(parentID)) {
+        releaseRead(parentID);
+        if (parentKind === 'channel') clearChannelUnreadInCache(queryClient, parentID);
+        else clearConversationUnreadInCache(queryClient, parentID);
+      }
       if (parentKind === 'channel') {
         if (arrival === 'mark-read') {
           // Watching it happen — clear any badge left over from an idle
@@ -202,7 +218,10 @@ export default function ChatPage() {
       // arrive via the message.edited event the backend publishes
       // alongside message.new (driven by IncrementReplyMetadata).
       if (parentMessageID) {
-        if (isActiveThread(parentMessageID)) {
+        const threadKey = threadReadKey(parentMessageID);
+        // Posting reads the thread for you, ending a "Mark as unread" hold.
+        if (isOwnAuthor) releaseRead(threadKey);
+        if (isActiveThread(parentMessageID) && !isReadHeld(threadKey)) {
           // Reading OTHERS' replies persists the seen watermark. Your own
           // reply is marked seen server-side by the backend ("posting
           // reads the thread for you"), so skip the redundant PUT and only
@@ -449,6 +468,14 @@ export default function ChatPage() {
         }
         return;
       }
+      if (evt.unread && (evt.channelID || evt.conversationID)) {
+        // Marked unread in another tab/device: refetch the row for the
+        // server's rewound count.
+        queryClient.invalidateQueries({
+          queryKey: evt.channelID ? queryKeys.userChannels() : queryKeys.userConversations(),
+        });
+        return;
+      }
       if (evt.channelID) {
         // Bare {channelID}: the user read this channel in another tab —
         // clear the badge in place, no refetch.
@@ -492,7 +519,8 @@ export default function ChatPage() {
       const n = data as NotificationPayload | undefined;
       if (!n || !n.kind) return;
       if (n.parentMessageID) {
-        if (isActiveThread(n.parentMessageID)) {
+        // A thread marked unread stays unread even while open.
+        if (isActiveThread(n.parentMessageID) && !isReadHeld(threadReadKey(n.parentMessageID))) {
           markThreadSeen(n.parentMessageID, n.createdAt, {
             parentID: n.parentID,
             parentType: n.parentType === 'conversation' ? 'conversation' : 'channel',

@@ -318,10 +318,26 @@ export interface PresenceEvent {
 export interface UserState {
   threadNotifications: string[];
   threadSeen: Record<string, string>;
+  // Threads the user marked unread → when (their threadSeen entry was rewound
+  // to just before a reply). A local seen time from before the mark yields
+  // to the rewound one. Absent from older servers.
+  threadMarkedUnread?: Record<string, string>;
   hiddenConversations: string[];
   // Skills this user removed from their agents' discovery index — explicit
   // /skill picks still work.
   hiddenSkills: string[];
+}
+
+// Outcome of "Mark as unread": a top-level message rewinds the chat so
+// unreadCount messages are unread again; a thread reply rewinds the thread's
+// seen time to seenAt instead.
+export interface MarkUnreadResult {
+  parentID: string;
+  parentType: 'channel' | 'conversation';
+  messageID: string;
+  unreadCount: number;
+  threadRootID?: string;
+  seenAt?: string;
 }
 
 export type ActivityType = 'reaction' | 'reminder';
@@ -388,4 +404,6 @@ export type WireDriftChecks = [
   AssertAssignable<Required<Message>, wire.Message>,
   AssertAssignable<Required<MessageAttachment>, wire.MessageAttachment>,
   AssertAssignable<Required<MessageDraft>, wire.MessageDraft>,
+  AssertAssignable<Required<MarkUnreadResult>, wire.MarkUnreadResult>,
+  AssertAssignable<Required<UserState>, wire.UserState>,
 ];

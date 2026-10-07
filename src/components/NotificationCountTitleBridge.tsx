@@ -26,7 +26,7 @@ export function NotificationCountTitleBridge() {
     if (!isAuthenticated) {
       return 0;
     }
-    const seenMap = mergeSeenMaps(userState?.threadSeen, localSeenMap);
+    const seenMap = mergeSeenMaps(userState?.threadSeen, localSeenMap, userState?.threadMarkedUnread);
     return unreadThreadIDs(threads, userState?.threadNotifications ?? [], unreadThreadNotifications, seenMap).size;
   }, [isAuthenticated, localSeenMap, threads, unreadThreadNotifications, userState]);
 

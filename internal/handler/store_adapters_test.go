@@ -194,12 +194,16 @@ func TestQueryInt_NonNumeric(t *testing.T) {
 // seq incrementer + last-read setter into one service.UnreadSeqStore.
 func TestUnreadSeqAdapter(t *testing.T) {
 	ctx := context.Background()
-	var gotInc, gotParent, gotUser string
+	var gotInc, gotCur, gotParent, gotUser string
 	var gotSeq int64
 	adapter := NewUnreadSeqAdapter(
 		func(_ context.Context, parentID string) (int64, error) {
 			gotInc = parentID
 			return 7, nil
+		},
+		func(_ context.Context, parentID string) (int64, error) {
+			gotCur = parentID
+			return 6, nil
 		},
 		func(_ context.Context, parentID, userID string, seq int64) error {
 			gotParent, gotUser, gotSeq = parentID, userID, seq
@@ -209,6 +213,9 @@ func TestUnreadSeqAdapter(t *testing.T) {
 	seq, err := adapter.IncrementMessageSeq(ctx, "p-1")
 	if err != nil || seq != 7 || gotInc != "p-1" {
 		t.Fatalf("IncrementMessageSeq seq=%d err=%v inc=%q", seq, err, gotInc)
+	}
+	if cur, err := adapter.CurrentMessageSeq(ctx, "p-2"); err != nil || cur != 6 || gotCur != "p-2" {
+		t.Fatalf("CurrentMessageSeq seq=%d err=%v cur=%q", cur, err, gotCur)
 	}
 	if err := adapter.SetLastRead(ctx, "p-1", "u-9", 7); err != nil {
 		t.Fatalf("SetLastRead: %v", err)

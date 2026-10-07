@@ -7,6 +7,9 @@ import { deriveThreadMeta, isOwnMessage } from '@/lib/message-users';
 import type { Message, UserStatus } from '@/types';
 import { buildMessageListRows, nextVirtuosoState } from './MessageListRows';
 import { shouldAutoStickMessageList } from './message-list-autostick';
+import { NewBelowPill, UnreadBanner, UnreadDivider } from './UnreadMarkers';
+import { setUnreadAnchor, useUnreadAnchor, type UnreadAnchor } from '@/lib/read-position';
+import { resolveUnreadDivider, unreadFrom } from '@/lib/unread-divider';
 
 const ANCHOR_HIGHLIGHT_MS = 2200;
 const DEFAULT_MESSAGE_ROW_HEIGHT = 88;
@@ -53,7 +56,21 @@ interface MessageListProps {
   // Viewer's most-used emoji shortcodes, forwarded to each message's action
   // bar as one-tap reaction shortcuts.
   quickReactions?: string[];
+  // Read lifecycle hooks (see useReadSession): the user reached / left the
+  // live tail, and the unread banner's "Mark as read".
+  onAtBottomChange?: (atBottom: boolean) => void;
+  onMarkAllRead?: () => void;
 }
+
+// Older pages the unread banner's "Jump" will pull looking for the first
+// unread message before settling for the oldest loaded one.
+const UNREAD_JUMP_MAX_PAGES = 10;
+// Re-aims for a scroll to the "New messages" line (see scrollToDivider), and
+// how long after landing on it an older page prepending (which re-measures
+// the rows above and drifts the view) still re-aims — unless the user takes
+// over scrolling first.
+const UNREAD_SCROLL_ATTEMPTS = 3;
+const UNREAD_LAND_SETTLE_MS = 2000;
 
 export function MessageList(props: MessageListProps) {
   if (props.isLoading) return <Skeletons />;
@@ -84,6 +101,8 @@ function VirtuosoMessageList({
   anchorMsgId,
   anchorRevision,
   quickReactions,
+  onAtBottomChange,
+  onMarkAllRead,
 }: MessageListProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const scrollerRef = useRef<HTMLElement | null>(null);
@@ -136,7 +155,25 @@ function VirtuosoMessageList({
     [pages],
   );
   const threadMeta = useMemo(() => deriveThreadMeta(allMessages), [allMessages]);
-  const rows = useMemo(() => buildMessageListRows(allMessages), [allMessages]);
+
+  // The "New messages" line (lib/read-position): where this visit's unread
+  // starts. A count anchor — the unread count when the chat was opened — is
+  // resolved to a message once and then frozen, so arrivals can't shift it,
+  // and opening a chat with unread lands on the line rather than the tail.
+  const readKey = channelId ?? conversationId;
+  const parentType = channelId ? 'channel' : 'conversation';
+  const unreadAnchor = useUnreadAnchor(readKey);
+  const unreadDividerID = useMemo(
+    () => (unreadAnchor ? resolveUnreadDivider(unreadAnchor, allMessages, parentType) : null),
+    [unreadAnchor, allMessages, parentType],
+  );
+  const scrollToDividerRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!readKey || unreadAnchor?.kind !== 'count' || !unreadDividerID) return;
+    scrollToDividerRef.current = unreadDividerID;
+    setUnreadAnchor(readKey, { kind: 'message', messageID: unreadDividerID }, { replace: true });
+  }, [readKey, unreadAnchor, unreadDividerID]);
+  const rows = useMemo(() => buildMessageListRows(allMessages, unreadDividerID), [allMessages, unreadDividerID]);
 
   // `data` and `firstItemIndex` must reach Virtuoso in the SAME render
   // (its prepend contract). One useState with both fields + a sync
@@ -281,6 +318,166 @@ function VirtuosoMessageList({
     chase(SCROLL_STABILIZE_MAX_FRAMES);
   }, [canAutoStickToBottom, scrollToBottom]);
 
+  // --- Unread line visibility -------------------------------------------
+  // Where the line is relative to the viewport drives the banner (above) and
+  // the pill (below). Mounted → measured against the scroller; virtualized
+  // away → judged from Virtuoso's rendered range; not loaded at all (older
+  // than the loaded history) → above.
+  const dividerIndex = unreadDividerID ? renderRows.findIndex((r) => r.kind === 'unread') : -1;
+  const dividerStateRef = useRef({ anchored: false, dividerIndex: -1, firstItemIndex: VIRTUOSO_START_INDEX });
+  const renderedRangeRef = useRef<{ startIndex: number; endIndex: number } | null>(null);
+  const [dividerPos, setDividerPos] = useState<'above' | 'below' | null>(null);
+  const dividerPosRef = useRef<'above' | 'below' | null>(null);
+  const measureFrameRef = useRef(0);
+  const measureDivider = useCallback(() => {
+    measureFrameRef.current = 0;
+    const { anchored, dividerIndex: index, firstItemIndex } = dividerStateRef.current;
+    let pos: 'above' | 'below' | null = null;
+    const scroller = scrollerRef.current;
+    const el = scroller?.querySelector('[data-unread-divider]');
+    if (!anchored) {
+      pos = null;
+    } else if (index < 0) {
+      pos = 'above';
+    } else if (scroller && el) {
+      const line = el.getBoundingClientRect();
+      const view = scroller.getBoundingClientRect();
+      if (line.bottom < view.top) pos = 'above';
+      else if (line.top > view.bottom) pos = 'below';
+    } else if (renderedRangeRef.current) {
+      pos = firstItemIndex + index < renderedRangeRef.current.startIndex ? 'above' : 'below';
+    }
+    if (pos === dividerPosRef.current) return;
+    dividerPosRef.current = pos;
+    setDividerPos(pos);
+  }, []);
+  const scheduleDividerMeasure = useCallback(() => {
+    if (measureFrameRef.current) return;
+    measureFrameRef.current = requestAnimationFrame(measureDivider);
+  }, [measureDivider]);
+  useLayoutEffect(() => {
+    dividerStateRef.current = { anchored: !!unreadAnchor, dividerIndex, firstItemIndex: virtuosoData.firstItemIndex };
+    scheduleDividerMeasure();
+  }, [unreadAnchor, dividerIndex, virtuosoData.firstItemIndex, scheduleDividerMeasure]);
+  useEffect(
+    () => () => {
+      cancelAnimationFrame(measureFrameRef.current);
+      // Reset too: StrictMode's dev remount would otherwise leave a cancelled
+      // frame "pending" and skip every later measure.
+      measureFrameRef.current = 0;
+    },
+    [],
+  );
+
+  // The banner/pill retire once the user comes back down to the live tail
+  // after this line was drawn — they've seen everything below it. Keyed by
+  // the anchor itself, so a return to the tail before it existed doesn't
+  // count (only a return does: the list mounts at the tail).
+  const [caughtUpFor, setCaughtUpFor] = useState<UnreadAnchor | undefined>(undefined);
+  const unreadAnchorRef = useRef<UnreadAnchor | undefined>(undefined);
+  const onAtBottomChangeRef = useRef(onAtBottomChange);
+  useLayoutEffect(() => {
+    unreadAnchorRef.current = unreadAnchor;
+    onAtBottomChangeRef.current = onAtBottomChange;
+  });
+  const markAtBottom = useCallback((atBottom: boolean) => {
+    if (atBottomRef.current === atBottom) return;
+    atBottomRef.current = atBottom;
+    if (atBottom) setCaughtUpFor(unreadAnchorRef.current);
+    onAtBottomChangeRef.current?.(atBottom);
+  }, []);
+
+  // Scroll the line (or, for one older than everything loaded, the top) to
+  // the top of the viewport. Rows start at an estimated height, so the first
+  // scrollToIndex can land short: give the list two frames to settle, check,
+  // and re-aim at the line's current index. `onLanded` runs once it's there.
+  const scrollToDivider = useCallback((target: 'divider' | 'top', onLanded?: () => void) => {
+    // A programmatic scroll up must not be undone by the tail-follow.
+    autoStickSuppressedUntilRef.current = performance.now() + USER_SCROLL_AUTOSTICK_SUPPRESSION_MS;
+    let attempts = 0;
+    const check = () => {
+      const scroller = scrollerRef.current;
+      /* istanbul ignore next -- the scroller is attached before any divider can render; defensive. */
+      if (!scroller) return;
+      // 'top' needs no check; the line must be mounted and inside the view.
+      const rect = target === 'divider' ? scroller.querySelector('[data-unread-divider]')?.getBoundingClientRect() : null;
+      const view = scroller.getBoundingClientRect();
+      const onScreen = target === 'top' || (!!rect && rect.top >= view.top - 1 && rect.bottom <= view.bottom + 1);
+      attempts += 1;
+      if (!onScreen && attempts < UNREAD_SCROLL_ATTEMPTS) {
+        aim();
+        return;
+      }
+      markAtBottom(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX);
+      if (onScreen) onLanded?.();
+    };
+    const aim = () => {
+      const index = target === 'top' ? 0 : dividerStateRef.current.dividerIndex;
+      virtuosoRef.current?.scrollToIndex({ index, align: 'start' });
+      requestAnimationFrame(() => requestAnimationFrame(check));
+    };
+    aim();
+  }, [markAtBottom]);
+
+  // Drawing or moving the line (e.g. "Mark as unread") adds height above the
+  // tail; a user who was following the tail stays pinned to it.
+  const lastDividerIDRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (lastDividerIDRef.current === unreadDividerID) return;
+    lastDividerIDRef.current = unreadDividerID;
+    if (!unreadDividerID || scrollToDividerRef.current || !canAutoStickToBottom()) return;
+    requestAnimationFrame(scrollToBottom);
+  }, [unreadDividerID, canAutoStickToBottom, scrollToBottom]);
+
+  // Opening with unread: land on the line (a deep-link anchor wins). The
+  // request stands until the line is on screen and the list has settled, so
+  // an older page prepending (which shifts its index) re-runs this and
+  // re-aims; the user scrolling themselves cancels it.
+  useEffect(() => {
+    if (anchorMsgId || dividerIndex < 0 || scrollToDividerRef.current !== unreadDividerID) return;
+    const id = unreadDividerID;
+    const frame = requestAnimationFrame(() => {
+      scrollToDivider('divider', () => {
+        window.setTimeout(() => {
+          if (scrollToDividerRef.current === id) scrollToDividerRef.current = null;
+        }, UNREAD_LAND_SETTLE_MS);
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [anchorMsgId, dividerIndex, unreadDividerID, scrollToDivider]);
+
+  // "Jump" to a line older than the loaded history pages back for it.
+  const jumpPagesRef = useRef(0);
+  useEffect(() => {
+    if (!jumpPagesRef.current || isFetchingNextPage) return;
+    if (dividerIndex >= 0) {
+      jumpPagesRef.current = 0;
+      scrollToDivider('divider');
+    } else if (hasNextPage && jumpPagesRef.current < UNREAD_JUMP_MAX_PAGES) {
+      jumpPagesRef.current += 1;
+      fetchNextPage();
+    } else {
+      jumpPagesRef.current = 0;
+      scrollToDivider('top');
+    }
+  }, [dividerIndex, hasNextPage, isFetchingNextPage, fetchNextPage, scrollToDivider]);
+  const jumpToUnread = useCallback(() => {
+    if (dividerIndex >= 0) {
+      scrollToDivider('divider');
+      return;
+    }
+    jumpPagesRef.current = 1;
+    if (hasNextPage) fetchNextPage();
+    else scrollToDivider('top');
+  }, [dividerIndex, hasNextPage, fetchNextPage, scrollToDivider]);
+
+  const unreadCount = unreadDividerID
+    ? unreadFrom(allMessages, unreadDividerID, parentType)
+    : unreadAnchor?.kind === 'count'
+      ? unreadAnchor.count
+      : 0;
+  const showUnreadMarker = !!unreadAnchor && unreadCount > 0 && caughtUpFor !== unreadAnchor;
+
   const handleScrollerRef = useCallback((ref: HTMLElement | Window | null) => {
     detachScrollerRef.current?.();
     detachScrollerRef.current = null;
@@ -296,16 +493,26 @@ function VirtuosoMessageList({
       const distanceFromBottom = scroller.scrollHeight - nextScrollTop - scroller.clientHeight;
       if (nextScrollTop < previousScrollTop - 2 && distanceFromBottom > MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX) {
         autoStickSuppressedUntilRef.current = performance.now() + USER_SCROLL_AUTOSTICK_SUPPRESSION_MS;
-        atBottomRef.current = false;
+        markAtBottom(false);
       } else if (distanceFromBottom <= MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX) {
         autoStickSuppressedUntilRef.current = 0;
-        atBottomRef.current = true;
+        markAtBottom(true);
       }
       lastScrollerTopRef.current = nextScrollTop;
+      scheduleDividerMeasure();
     };
+    // The user scrolling themselves ends any pending landing on the line.
+    const onUserScroll = () => {
+      scrollToDividerRef.current = null;
+    };
+    const userScrollEvents = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
     scroller.addEventListener('scroll', onScroll, { passive: true });
-    detachScrollerRef.current = () => scroller.removeEventListener('scroll', onScroll);
-  }, []);
+    for (const type of userScrollEvents) scroller.addEventListener(type, onUserScroll, { passive: true });
+    detachScrollerRef.current = () => {
+      scroller.removeEventListener('scroll', onScroll);
+      for (const type of userScrollEvents) scroller.removeEventListener(type, onUserScroll);
+    };
+  }, [markAtBottom, scheduleDividerMeasure]);
   useEffect(() => () => {
     detachScrollerRef.current?.();
   }, []);
@@ -414,83 +621,97 @@ function VirtuosoMessageList({
   // flush-left while messages still get their MessageRow px-4,
   // making the intro visibly shifted after the first message lands.
   return (
-    <Virtuoso
-      ref={virtuosoRef}
-      data={renderRows}
-      firstItemIndex={virtuosoData.firstItemIndex}
-      initialTopMostItemIndex={
-        anchorIndex >= 0
-          ? { index: anchorIndex, align: 'center' }
-          : { index: renderRows.length - 1, align: 'end' }
-      }
-      // alignToBottom is the chat-canonical layout: when the
-      // content is shorter than the viewport, items stick to the
-      // BOTTOM of the scroller (just above the composer) instead
-      // of the default top-anchored flow. Without this, a fresh
-      // channel with one message renders the message at the top
-      // of the chat area with a tall empty gap below it — exactly
-      // what the user reported.
-      alignToBottom={true}
-      computeItemKey={(_index, row) => row.key}
-      defaultItemHeight={DEFAULT_MESSAGE_ROW_HEIGHT}
-      increaseViewportBy={{ top: MESSAGE_LIST_OVERSCAN_PX, bottom: MESSAGE_LIST_OVERSCAN_PX }}
-      atBottomThreshold={MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX}
-      // Auto-follow only when the loaded slice IS the live tail. When
-      // hasPreviousPage is true (deep-link mid-history with newer
-      // pages still unfetched), disable follow: each forward-pagination
-      // append would otherwise snap the user to the new bottom while
-      // they're trying to read, which then re-arms endReached and
-      // pulls the next page → next snap → next page, until the live
-      // tail is hit. The user reported this as "spamming" downward
-      // scroll. With hasPreviousPage=false (we're at the live tail)
-      // 'auto' still snaps for incoming WS messages when the user is
-      // at the bottom — the canonical chat behaviour.
-      followOutput={hasPreviousPage ? false : followLiveOutput}
-      scrollerRef={handleScrollerRef}
-      startReached={() => {
-        if (hasNextPage && !isFetchingNextPage) fetchNextPage();
-      }}
-      endReached={() => {
-        if (hasPreviousPage && !isFetchingPreviousPage && fetchPreviousPage) {
-          fetchPreviousPage();
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <Virtuoso
+        ref={virtuosoRef}
+        data={renderRows}
+        firstItemIndex={virtuosoData.firstItemIndex}
+        initialTopMostItemIndex={
+          anchorIndex >= 0
+            ? { index: anchorIndex, align: 'center' }
+            : { index: renderRows.length - 1, align: 'end' }
         }
-      }}
-      components={{ Header, Footer }}
-      itemContent={(_index, row) => {
-        /* istanbul ignore next -- react-virtuoso can momentarily call itemContent with an undefined row during prepend/firstItemIndex reconciliation; not deterministically reproducible. */
-        if (!row) return null;
-        return row.kind === 'day' ? (
-          <div
-            data-testid="day-divider"
-            className="flex items-center gap-3 px-4 py-2"
-            role="separator"
-          >
-            <div className="flex-1 border-t border-border" />
-            <span className="text-xs font-medium text-muted-foreground">
-              {formatDayHeading(row.date)}
-            </span>
-            <div className="flex-1 border-t border-border" />
-          </div>
-        ) : (
-          <MessageRow
-            row={row}
-            userMap={userMap}
-            userLookup={userLookup}
-            threadMeta={threadMeta}
-            currentUserId={currentUserId}
-            channelId={channelId}
-            channelSlug={channelSlug}
-            conversationId={conversationId}
-            onReplyInThread={onReplyInThread}
-            onEditMessage={onEditMessage}
-            highlighted={row.message.id === highlightedMessageId}
-            onContentHeightChange={handleContentHeightChange}
-            quickReactions={quickReactions}
-          />
-        );
-      }}
-      className="flex-1"
-    />
+        // alignToBottom is the chat-canonical layout: when the
+        // content is shorter than the viewport, items stick to the
+        // BOTTOM of the scroller (just above the composer) instead
+        // of the default top-anchored flow. Without this, a fresh
+        // channel with one message renders the message at the top
+        // of the chat area with a tall empty gap below it — exactly
+        // what the user reported.
+        alignToBottom={true}
+        computeItemKey={(_index, row) => row.key}
+        defaultItemHeight={DEFAULT_MESSAGE_ROW_HEIGHT}
+        increaseViewportBy={{ top: MESSAGE_LIST_OVERSCAN_PX, bottom: MESSAGE_LIST_OVERSCAN_PX }}
+        atBottomThreshold={MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX}
+        // Auto-follow only when the loaded slice IS the live tail. When
+        // hasPreviousPage is true (deep-link mid-history with newer
+        // pages still unfetched), disable follow: each forward-pagination
+        // append would otherwise snap the user to the new bottom while
+        // they're trying to read, which then re-arms endReached and
+        // pulls the next page → next snap → next page, until the live
+        // tail is hit. The user reported this as "spamming" downward
+        // scroll. With hasPreviousPage=false (we're at the live tail)
+        // 'auto' still snaps for incoming WS messages when the user is
+        // at the bottom — the canonical chat behaviour.
+        followOutput={hasPreviousPage ? false : followLiveOutput}
+        scrollerRef={handleScrollerRef}
+        startReached={() => {
+          if (hasNextPage && !isFetchingNextPage) fetchNextPage();
+        }}
+        endReached={() => {
+          if (hasPreviousPage && !isFetchingPreviousPage && fetchPreviousPage) {
+            fetchPreviousPage();
+          }
+        }}
+        components={{ Header, Footer }}
+        rangeChanged={(range) => {
+          renderedRangeRef.current = range;
+          scheduleDividerMeasure();
+        }}
+        // Rows mount a frame after the data changes — re-measure the line
+        // once they have.
+        itemsRendered={scheduleDividerMeasure}
+        itemContent={(_index, row) => {
+          /* istanbul ignore next -- react-virtuoso can momentarily call itemContent with an undefined row during prepend/firstItemIndex reconciliation; not deterministically reproducible. */
+          if (!row) return null;
+          if (row.kind === 'unread') return <UnreadDivider />;
+          return row.kind === 'day' ? (
+            <div
+              data-testid="day-divider"
+              className="flex items-center gap-3 px-4 py-2"
+              role="separator"
+            >
+              <div className="flex-1 border-t border-border" />
+              <span className="text-xs font-medium text-muted-foreground">
+                {formatDayHeading(row.date)}
+              </span>
+              <div className="flex-1 border-t border-border" />
+            </div>
+          ) : (
+            <MessageRow
+              row={row}
+              userMap={userMap}
+              userLookup={userLookup}
+              threadMeta={threadMeta}
+              currentUserId={currentUserId}
+              channelId={channelId}
+              channelSlug={channelSlug}
+              conversationId={conversationId}
+              onReplyInThread={onReplyInThread}
+              onEditMessage={onEditMessage}
+              highlighted={row.message.id === highlightedMessageId}
+              onContentHeightChange={handleContentHeightChange}
+              quickReactions={quickReactions}
+            />
+          );
+        }}
+        className="flex-1"
+      />
+      {showUnreadMarker && dividerPos === 'above' ? (
+        <UnreadBanner count={unreadCount} onJump={jumpToUnread} onMarkRead={() => onMarkAllRead?.()} />
+      ) : null}
+      {showUnreadMarker && dividerPos === 'below' ? <NewBelowPill count={unreadCount} onClick={scrollToBottom} /> : null}
+    </div>
   );
 }
 

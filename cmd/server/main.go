@@ -250,8 +250,8 @@ func main() {
 		// conversation). The counter lives on the parent store; the per-user
 		// last-read on the membership store for channels and the conversation
 		// store for conversations — UnreadSeqAdapter binds the two halves.
-		ChannelSeq:      handler.NewUnreadSeqAdapter(channelStore.IncrementMessageSeq, membershipStore.SetChannelLastRead),
-		ConversationSeq: handler.NewUnreadSeqAdapter(conversationStore.IncrementMessageSeq, conversationStore.SetConversationLastRead),
+		ChannelSeq:      handler.NewUnreadSeqAdapter(channelStore.IncrementMessageSeq, channelStore.CurrentMessageSeq, membershipStore.SetChannelLastRead),
+		ConversationSeq: handler.NewUnreadSeqAdapter(conversationStore.IncrementMessageSeq, conversationStore.CurrentMessageSeq, conversationStore.SetConversationLastRead),
 		ThreadFollows:   threadFollowStore,
 		UserState:       userStateStore,
 		ParentIndex:     parentIndexStore,

@@ -43,6 +43,13 @@ export interface ArrivalContext {
   // input (the suppression tier). An open route alone is never enough —
   // marking read without this was the ghost-DM bug.
   attentive: boolean;
+  // The user is parked at the live tail. Scrolled up reading history, a new
+  // message lands below the fold — it stays unread (with the "New messages"
+  // line) until they come back down. Absent = at the tail.
+  atBottom?: boolean;
+  // The user marked this chat unread and hasn't left it: nothing auto-reads
+  // it until they do.
+  held?: boolean;
 }
 
 // classifyParentArrival: what an arriving top-level message does to its
@@ -52,5 +59,6 @@ export interface ArrivalContext {
 //   ignore      — not parent-level activity at all.
 export function classifyParentArrival(ctx: ArrivalContext): ArrivalAction {
   if (ctx.isOwnAuthor || ctx.isThreadReply || ctx.isSystem) return 'ignore';
-  return ctx.viewingParent && ctx.attentive ? 'mark-read' : 'bump-unread';
+  const followingAlong = ctx.viewingParent && ctx.attentive && ctx.atBottom !== false && !ctx.held;
+  return followingAlong ? 'mark-read' : 'bump-unread';
 }

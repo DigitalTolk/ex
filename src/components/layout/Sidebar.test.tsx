@@ -1762,3 +1762,165 @@ describe('Sidebar', () => {
     expect(screen.queryByText('secret')).not.toBeInTheDocument();
   });
 });
+
+describe('Sidebar unread view', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [];
+      return undefined;
+    });
+    mockChannels = [...baseMockChannels];
+    mockConversations = [...baseMockConversations];
+    mockUser.systemRole = 'admin';
+    mockHiddenConversations.clear();
+    localStorage.clear();
+    window.history.pushState({}, '', '/');
+    setMobileMatch(false);
+  });
+
+  const unreadGroup = () => screen.queryByTestId('sidebar-group-__unread__');
+  async function toggle(user: ReturnType<typeof userEvent.setup>, testID: string) {
+    await user.click(screen.getByTestId('sidebar-unread-options'));
+    await user.click(await screen.findByTestId(testID));
+  }
+  function navigate(path: string) {
+    act(() => {
+      window.history.pushState({}, '', path);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+  }
+
+  it('is off by default, with no dot on the options icon', () => {
+    mockChannels = mockChannels.map((c) => (c.channelID === 'ch-1' ? { ...c, unread: true } : c));
+    renderSidebar();
+    expect(unreadGroup()).toBeNull();
+    expect(screen.queryByTestId('sidebar-unread-only-strip')).toBeNull();
+    expect(screen.getByTestId('sidebar-unread-options').querySelector('span')).toBeNull();
+  });
+
+  it('"Group unread at top" pulls unread chats into a non-draggable Unread section, and is remembered', async () => {
+    mockChannels = mockChannels.map((c) => (c.channelID === 'ch-1' ? { ...c, unread: true } : c));
+    mockConversations = mockConversations.map((c) => (c.conversationID === 'conv-1' ? { ...c, unreadNotifyCount: 2 } : c));
+    const user = userEvent.setup();
+    renderSidebar();
+    await toggle(user, 'sidebar-unread-section-toggle');
+
+    const group = unreadGroup()!;
+    expect(within(group).getByText('general')).toBeInTheDocument();
+    expect(within(group).getByText('Bob Jones')).toBeInTheDocument();
+    expect(within(group).queryByText('secret')).toBeNull();
+    expect(within(group).getByTestId('channel-row-ch-1')).not.toHaveClass('cursor-grab');
+    // No category affordances on it.
+    expect(screen.queryByTestId('sidebar-category-menu-__unread__')).toBeNull();
+    expect(localStorage.getItem('sidebar.unreadSection')).toBe('1');
+    expect(screen.getByTestId('sidebar-unread-options').querySelector('span')).not.toBeNull();
+
+    await toggle(user, 'sidebar-unread-section-toggle');
+    expect(unreadGroup()).toBeNull();
+    expect(localStorage.getItem('sidebar.unreadSection')).toBe('0');
+  });
+
+  it('hides an empty Unread section', () => {
+    localStorage.setItem('sidebar.unreadSection', '1');
+    renderSidebar();
+    expect(unreadGroup()).toBeNull();
+  });
+
+  it('keeps the chat being viewed in Unread while you read it, until you leave', () => {
+    localStorage.setItem('sidebar.unreadSection', '1');
+    mockChannels = mockChannels.map((c) => (c.channelID === 'ch-1' ? { ...c, unread: true } : c));
+    window.history.pushState({}, '', '/channel/general');
+    const view = renderSidebar();
+    expect(within(unreadGroup()!).getByText('general')).toBeInTheDocument();
+
+    // Opening it read it — it stays put while still open…
+    mockChannels = mockChannels.map((c) => ({ ...c, unread: false }));
+    view.rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <BrowserRouter>
+          <Sidebar onClose={vi.fn()} />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
+    expect(within(unreadGroup()!).getByText('general')).toBeInTheDocument();
+    // …and goes home once you leave.
+    navigate('/channel/ch-2');
+    expect(unreadGroup()).toBeNull();
+  });
+
+  it('a DM read on open stays too (matched by its conversation route)', () => {
+    localStorage.setItem('sidebar.unreadSection', '1');
+    mockConversations = mockConversations.map((c) => (c.conversationID === 'conv-2' ? { ...c, unread: true } : c));
+    window.history.pushState({}, '', '/conversation/conv-2');
+    renderSidebar();
+    expect(within(unreadGroup()!).getByText('Project Team')).toBeInTheDocument();
+    navigate('/activity');
+    expect(within(unreadGroup()!).getByText('Project Team')).toBeInTheDocument(); // still unread
+  });
+
+  it('"Show unread only" filters to unread chats plus the open one, with a way back', async () => {
+    mockChannels = mockChannels.map((c) => (c.channelID === 'ch-3' ? { ...c, unread: true } : c));
+    window.history.pushState({}, '', '/channel/secret');
+    const user = userEvent.setup();
+    renderSidebar();
+    await toggle(user, 'sidebar-unread-filter');
+
+    expect(screen.getByTestId('sidebar-unread-only-strip')).toHaveTextContent('Showing unread only');
+    expect(screen.getByText('My Cool Channel!')).toBeInTheDocument();
+    expect(screen.getByText('secret')).toBeInTheDocument(); // the open chat
+    expect(screen.queryByText('general')).toBeNull();
+    // Sections with nothing to show disappear.
+    expect(screen.queryByTestId('sidebar-group-__dms__')).toBeNull();
+    expect(localStorage.getItem('sidebar.unreadOnly')).toBe('1');
+
+    await user.click(screen.getByTestId('sidebar-unread-show-all'));
+    expect(screen.getByText('general')).toBeInTheDocument();
+    expect(screen.queryByTestId('sidebar-unread-only-strip')).toBeNull();
+    expect(localStorage.getItem('sidebar.unreadOnly')).toBe('0');
+  });
+
+  it("says you're all caught up when the filter leaves nothing", () => {
+    localStorage.setItem('sidebar.unreadOnly', '1');
+    renderSidebar();
+    expect(screen.getByTestId('sidebar-unread-empty')).toHaveTextContent("You're all caught up.");
+  });
+});
+
+describe('Sidebar add-category feedback', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockChannels = [...baseMockChannels];
+    mockConversations = [...baseMockConversations];
+    localStorage.clear();
+    window.history.pushState({}, '', '/');
+    setMobileMatch(false);
+  });
+
+  it('shows "Creating…" while saving, ignores a repeat Enter, and closes once it is created', async () => {
+    const created = { id: 'cat-9', name: 'Launch', position: 1 };
+    let finish: (cat: unknown) => void = () => {};
+    let saved = false;
+    mockApiFetch.mockImplementation(async (url: string, opts?: { method?: string }) => {
+      if (url === '/api/v1/sidebar/categories' && opts?.method === 'POST') {
+        return new Promise((r) => (finish = (cat) => { saved = true; r(cat); }));
+      }
+      if (url === '/api/v1/sidebar/categories') return saved ? [created] : [];
+      return undefined;
+    });
+    renderSidebar();
+    fireEvent.click(screen.getByTestId('sidebar-add-category'));
+    const input = screen.getByTestId('sidebar-new-category-input');
+    fireEvent.change(input, { target: { value: 'Launch' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(await screen.findByTestId('sidebar-new-category-pending')).toHaveTextContent('Creating…');
+    expect(input).toHaveAttribute('readonly');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    const posts = () => mockApiFetch.mock.calls.filter(([url, opts]) => url === '/api/v1/sidebar/categories' && opts?.method === 'POST');
+    expect(posts()).toHaveLength(1);
+
+    await act(async () => finish(created));
+    await waitFor(() => expect(screen.queryByTestId('sidebar-new-category-input')).toBeNull());
+    expect(screen.getByTestId('sidebar-group-cat-9')).toHaveTextContent('Launch');
+  });
+});

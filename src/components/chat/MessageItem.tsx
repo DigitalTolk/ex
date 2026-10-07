@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Bot, Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon, AlarmClock, Eye } from 'lucide-react';
+import { Bot, Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon, AlarmClock, Eye, Mail } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
@@ -22,6 +22,7 @@ import {
 import { ReminderDialog } from '@/components/chat/ReminderDialog';
 import { WatcherDialog } from '@/components/chat/WatcherDialog';
 import { useCreateReminder } from '@/hooks/useActivity';
+import { useMarkUnread } from '@/hooks/useMarkUnread';
 import { useParentWatchers, useSkills } from '@/hooks/useAgents';
 import { useConnectors } from '@/hooks/useConnectors';
 import { skillPickToken } from '@/lib/picks';
@@ -311,6 +312,7 @@ function MessageItemImpl({
   const toggleReaction = useToggleReaction();
   const setPinned = useSetPinned();
   const createReminder = useCreateReminder();
+  const markUnread = useMarkUnread();
   const [reminderDialogOpen, setReminderDialogOpen] = useState(false);
   const [watcherDialogOpen, setWatcherDialogOpen] = useState(false);
   const [reminderSeed, setReminderSeed] = useState('');
@@ -446,6 +448,14 @@ function MessageItemImpl({
     });
   }
 
+  // "Mark as unread" rewinds the chat to this message (a thread reply: the
+  // thread). Not offered on a thread's root inside the thread view, where it
+  // would rewind the whole channel instead of the thread being read.
+  const canMarkUnread = !(inThread && !message.parentMessageID);
+  function handleMarkUnread() {
+    markUnread.mutate({ parentID: message.parentID, parentType, messageID: message.id });
+  }
+
   function closeMobileActions() {
     longPress.cancel();
     setMobileActionsOpen(false);
@@ -475,6 +485,11 @@ function MessageItemImpl({
   function handleMobileTogglePin() {
     closeMobileActions();
     handleTogglePin();
+  }
+
+  function handleMobileMarkUnread() {
+    closeMobileActions();
+    handleMarkUnread();
   }
 
   function handleMobileEdit() {
@@ -756,6 +771,18 @@ function MessageItemImpl({
             {message.pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
             {message.pinned ? 'Unpin' : 'Pin'}
           </button>
+          {canMarkUnread && (
+            <button
+              type="button"
+              className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
+              onClick={handleMobileMarkUnread}
+              data-testid="mobile-mark-unread"
+              aria-label="Mark as unread"
+            >
+              <Mail className="h-4 w-4" />
+              Mark as unread
+            </button>
+          )}
           {isOwn && (
             <>
               {canEdit && (
@@ -1223,6 +1250,11 @@ function MessageItemImpl({
                   </>
                 )}
               </DropdownMenuItem>
+              {canMarkUnread && (
+                <DropdownMenuItem onClick={handleMarkUnread} data-testid="mark-unread" aria-label="Mark as unread">
+                  <Mail className="mr-2 h-4 w-4" /> Mark as unread
+                </DropdownMenuItem>
+              )}
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger data-testid="remind-me-trigger">
                   <AlarmClock className="mr-2 h-4 w-4" /> Remind me

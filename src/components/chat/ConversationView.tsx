@@ -27,7 +27,7 @@ import {
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { useNotifications } from '@/context/NotificationContext';
-import { markThreadSeen } from '@/hooks/useThreads';
+import { markThreadSeen, noteThreadReadPosition } from '@/hooks/useThreads';
 import { collectMessageUserIDs, findLastOwnMessageId } from '@/lib/message-users';
 import { useSidePanels } from '@/hooks/useSidePanels';
 import { useTagState } from '@/context/TagSearchContext';
@@ -47,7 +47,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { clearConversationUnreadInCache } from '@/lib/unread-cache';
 import type { Conversation } from '@/types';
 import type { UserMapEntry } from './MessageList';
-import { useMarkReadOnReturn } from '@/hooks/useMarkReadOnReturn';
+import { useReadSession } from '@/hooks/useReadSession';
 import { useEditingMessage } from '@/hooks/useEditingMessage';
 
 function errorStatus(err: unknown): number | null {
@@ -189,19 +189,18 @@ export function ConversationView() {
 
   useEffect(() => {
     if (!id) return;
-    markConversationRead(id);
     setActiveConversation(id);
     setActiveParent(id);
     return () => {
       setActiveConversation(null);
       setActiveParent(null);
     };
-  }, [id, setActiveConversation, setActiveParent, markConversationRead]);
+  }, [id, setActiveConversation, setActiveParent]);
 
-  // Messages that arrived while this DM's window was blurred/hidden bump the
-  // badge instead of auto-reading (ChatPage's attention gate) — returning to
-  // the window is what reads them.
-  useMarkReadOnReturn(id, markConversationRead);
+  // Opening reads the conversation but keeps a "New messages" line where you
+  // left off; after that it reads only while you follow along at the bottom
+  // (see useReadSession).
+  const readSession = useReadSession('conversation', id, markConversationRead);
 
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
   const inputRef = useRef<MessageInputHandle>(null);
@@ -248,10 +247,13 @@ export function ConversationView() {
   const urlThreadActive = !!threadParam && threadParam !== dismissedThreadParam;
   const effectiveThreadRootID = threadRootID ?? (urlThreadActive ? threadParam : null) ?? null;
 
-  // Mark URL-driven threads as seen exactly once per change.
+  // Mark URL-driven threads as seen exactly once per change — noting first
+  // where the user had read up to, for the thread's "New messages" line.
   useEffect(() => {
-    if (threadParam && id) markThreadSeen(threadParam, new Date().toISOString(), { parentID: id, parentType: 'conversation' });
-  }, [threadParam, id]);
+    if (!threadParam || !id) return;
+    noteThreadReadPosition(queryClient, threadParam);
+    markThreadSeen(threadParam, new Date().toISOString(), { parentID: id, parentType: 'conversation' });
+  }, [threadParam, id, queryClient]);
 
   // Opening a thread (via URL navigation, e.g. clicking a pinned
   // thread reply) must dismiss any other side panel — the local
@@ -434,6 +436,8 @@ export function ConversationView() {
             onEditMessage={isMobile ? setEditingMessage : undefined}
             anchorMsgId={mainAnchor}
             anchorRevision={navKey}
+            onAtBottomChange={readSession.onAtBottomChange}
+            onMarkAllRead={readSession.markAllRead}
             intro={intro ?? undefined}
           />
           {activeEditingMessage && !editReady ? (

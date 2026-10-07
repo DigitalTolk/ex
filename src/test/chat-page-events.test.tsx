@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
@@ -6,6 +6,7 @@ import ChatPage from '@/pages/ChatPage';
 import { apiFetch } from '@/lib/api';
 import { resetServerVersionForTests } from '@/hooks/useServerVersion';
 import { forceAwayUntilInput, resetUserActivityForTests } from '@/lib/user-activity';
+import { endReadSession, getUnreadAnchor, holdRead, isReadHeld, setAtBottom, threadReadKey } from '@/lib/read-position';
 
 let capturedOptions: Record<string, ((data: unknown) => void) | boolean | undefined> = {};
 const authUserMock = vi.hoisted(() => ({
@@ -1140,4 +1141,94 @@ describe('ChatPage WebSocket handlers', () => {
     const loc = await findByTestId('loc');
     expect(loc.textContent).toBe('/login');
   });
+
+  describe('unread: the "New messages" line, holds, mark-unread events', () => {
+    const seed = (unreadCount: number) => (qc: QueryClient) => {
+      qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general', unreadCount }]);
+      qc.setQueryData(['userConversations'], [{ conversationID: 'dm-1', type: 'dm', displayName: 'Me' }]);
+    };
+    const arrive = (over: Record<string, unknown>) =>
+      act(() => (capturedOptions.onMessageNew as (d: unknown) => void)(msg({ parentType: 'channel', ...over })));
+    afterEach(() => {
+      for (const key of ['ch-1', 'dm-1', threadReadKey('msg-root')]) endReadSession(key);
+    });
+
+    it('an unseen arrival in the open chat starts the line there — only if it is the first unread', () => {
+      isActiveChannel.mockReturnValue(true);
+      forceAwayUntilInput();
+      renderAt('/', seed(0));
+      arrive({ id: 'msg-first' });
+      expect(bumpChannelUnread).toHaveBeenCalled();
+      expect(getUnreadAnchor('ch-1')).toEqual({ kind: 'message', messageID: 'msg-first' });
+
+      endReadSession('ch-1');
+      renderAt('/', seed(3));
+      arrive({ id: 'msg-later' });
+      expect(getUnreadAnchor('ch-1')).toBeUndefined();
+    });
+
+    it('a chat you are not in gets a badge but no line', () => {
+      renderAt('/', seed(0));
+      arrive({ id: 'msg-elsewhere' });
+      expect(bumpChannelUnread).toHaveBeenCalled();
+      expect(getUnreadAnchor('ch-1')).toBeUndefined();
+    });
+
+    it('scrolled up, or held unread: an arrival in the open chat stays unread', () => {
+      isActiveChannel.mockReturnValue(true);
+      renderAt('/', seed(0));
+      setAtBottom('ch-1', false);
+      arrive({ id: 'msg-below' });
+      setAtBottom('ch-1', true);
+      holdRead('ch-1');
+      arrive({ id: 'msg-held' });
+      expect(bumpChannelUnread).toHaveBeenCalledTimes(2);
+      expect(apiFetch).not.toHaveBeenCalledWith('/api/v1/channels/ch-1/read', { method: 'PUT' });
+    });
+
+    it('your own post ends a hold (channel and conversation), since posting reads the chat', () => {
+      renderAt('/', seed(2));
+      holdRead('ch-1');
+      arrive({ id: 'mine-1', authorID: 'u-me' });
+      expect(isReadHeld('ch-1')).toBe(false);
+      expect(clearChannelUnreadInCache).toHaveBeenCalledWith(expect.anything(), 'ch-1');
+
+      holdRead('dm-1');
+      arrive({ id: 'mine-2', authorID: 'u-me', parentID: 'dm-1', parentType: 'conversation' });
+      expect(isReadHeld('dm-1')).toBe(false);
+      expect(clearConversationUnreadInCache).toHaveBeenCalledWith(expect.anything(), 'dm-1');
+    });
+
+    it('a thread held unread is not marked seen by arrivals; your own reply ends the hold', () => {
+      isActiveThread.mockReturnValue(true);
+      renderAt('/', seed(0));
+      holdRead(threadReadKey('msg-root'));
+      arrive({ id: 'reply-1', parentMessageID: 'msg-root' });
+      expect(apiFetch).not.toHaveBeenCalledWith('/api/v1/user-state/threads/channels/ch-1/msg-root/seen', { method: 'PUT' });
+      arrive({ id: 'reply-2', parentMessageID: 'msg-root', authorID: 'u-me' });
+      expect(isReadHeld(threadReadKey('msg-root'))).toBe(false);
+    });
+
+    it('a reply alert for a thread held unread keeps it unread', () => {
+      isActiveThread.mockReturnValue(true);
+      renderAt('/', seed(0));
+      holdRead(threadReadKey('msg-root'));
+      act(() => (capturedOptions.onNotification as (d: unknown) => void)({
+        kind: 'thread_reply', parentID: 'ch-1', parentType: 'channel', parentMessageID: 'msg-root', createdAt: '2026-05-01T10:00:01Z',
+      }));
+      expect(markThreadNotificationUnread).toHaveBeenCalledWith('msg-root');
+    });
+
+    it('marked unread on another device: the row is refetched, not cleared', () => {
+      const { qc } = renderAt('/', seed(0));
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      act(() => (capturedOptions.onUserChannelUpdated as (d: unknown) => void)({ channelID: 'ch-1', unread: true }));
+      act(() => (capturedOptions.onUserChannelUpdated as (d: unknown) => void)({ conversationID: 'dm-1', unread: true }));
+      expect(spy).toHaveBeenCalledWith({ queryKey: ['userChannels'] });
+      expect(spy).toHaveBeenCalledWith({ queryKey: ['userConversations'] });
+      expect(clearChannelUnreadInCache).not.toHaveBeenCalled();
+      expect(clearConversationUnreadInCache).not.toHaveBeenCalled();
+    });
+  });
 });
+

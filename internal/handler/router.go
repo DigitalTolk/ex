@@ -153,6 +153,7 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("POST /api/v1/channels/{id}/messages/{msgId}/reactions", middleware.WrapFunc(channelH.ToggleReaction, authMW, writeLimit))
 	mux.Handle("PUT /api/v1/channels/{id}/messages/{msgId}/pinned", middleware.WrapFunc(channelH.SetPinned, authMW))
 	mux.Handle("PUT /api/v1/channels/{id}/messages/{msgId}/no-unfurl", middleware.WrapFunc(channelH.SetNoUnfurl, authMW))
+	mux.Handle("PUT /api/v1/channels/{id}/messages/{msgId}/unread", middleware.WrapFunc(channelH.MarkUnread, authMW))
 	mux.Handle("GET /api/v1/channels/{id}/pinned", middleware.WrapFunc(channelH.ListPinned, authMW))
 	mux.Handle("GET /api/v1/channels/{id}/files", middleware.WrapFunc(channelH.ListFiles, authMW))
 
@@ -170,6 +171,7 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("POST /api/v1/conversations/{id}/messages/{msgId}/reactions", middleware.WrapFunc(convH.ToggleReaction, authMW, writeLimit))
 	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/pinned", middleware.WrapFunc(convH.SetPinned, authMW))
 	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/no-unfurl", middleware.WrapFunc(convH.SetNoUnfurl, authMW))
+	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/unread", middleware.WrapFunc(convH.MarkUnread, authMW))
 	mux.Handle("GET /api/v1/conversations/{id}/pinned", middleware.WrapFunc(convH.ListPinned, authMW))
 	mux.Handle("GET /api/v1/conversations/{id}/files", middleware.WrapFunc(convH.ListFiles, authMW))
 

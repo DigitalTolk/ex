@@ -2063,13 +2063,41 @@ export interface UserStateItem {
   parentType?: string;
   threadRootID?: string;
   seenAt?: string /* RFC3339 */;
+  /**
+   * Rewound marks a thread_seen row a mark-unread wrote: SeenAt was set back
+   * to just before a reply on purpose. An ordinary "seen" write replaces the
+   * row without it.
+   */
+  rewound?: boolean;
   updatedAt: string /* RFC3339 */;
 }
 export interface UserState {
   threadNotifications: string[];
   threadSeen: { [key: string]: string};
+  /**
+   * ThreadMarkedUnread maps a thread root to WHEN the user marked it unread
+   * (its threadSeen entry was rewound to just before a reply). Clients keep
+   * the newer of their local and the server's seen time; a rewound entry is
+   * older by design, so this tells them a local seen time from before the
+   * mark must yield to it.
+   */
+  threadMarkedUnread: { [key: string]: string};
   hiddenConversations: string[];
   hiddenSkills: string[];
+}
+/**
+ * MarkUnreadResult is the outcome of marking a message unread. A top-level
+ * message rewinds the caller's read watermark on its channel/conversation so
+ * UnreadCount messages (it and everything after it) are unread again; a
+ * thread reply rewinds the thread's seen time to just before it instead.
+ */
+export interface MarkUnreadResult {
+  parentID: string;
+  parentType: string;
+  messageID: string;
+  unreadCount: number /* int64 */;
+  threadRootID?: string;
+  seenAt?: string /* RFC3339 */;
 }
 
 //////////

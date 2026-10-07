@@ -27,7 +27,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { useNotifications } from '@/context/NotificationContext';
 import { canEditChannel, canArchiveChannel, canLeaveChannel, roleNumber } from '@/lib/roles';
-import { markThreadSeen } from '@/hooks/useThreads';
+import { markThreadSeen, noteThreadReadPosition } from '@/hooks/useThreads';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { clearChannelUnreadInCache } from '@/lib/unread-cache';
@@ -48,7 +48,7 @@ import {
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
 import type { UserMapEntry } from './MessageList';
-import { useMarkReadOnReturn } from '@/hooks/useMarkReadOnReturn';
+import { useReadSession } from '@/hooks/useReadSession';
 import { useEditingMessage } from '@/hooks/useEditingMessage';
 
 function errorStatus(err: unknown): number | null {
@@ -219,17 +219,16 @@ export function ChannelView() {
     const openedID = channel.id;
     setActiveChannel(openedID);
     setActiveParent(openedID);
-    markChannelRead(openedID);
     return () => {
       setActiveChannel(null);
       setActiveParent(null);
     };
-  }, [channel?.id, setActiveChannel, setActiveParent, markChannelRead]);
+  }, [channel?.id, setActiveChannel, setActiveParent]);
 
-  // Messages that arrived while this channel's window was blurred/hidden bump
-  // the badge instead of auto-reading (ChatPage's attention gate) — returning
-  // to the window is what reads them.
-  useMarkReadOnReturn(channel?.id, markChannelRead);
+  // Opening reads the channel but keeps a "New messages" line where you left
+  // off; after that it reads only while you follow along at the bottom (see
+  // useReadSession).
+  const readSession = useReadSession('channel', channel?.id, markChannelRead);
 
   // Reset locally-opened thread when the channel changes; deliberate
   // synchronous reset. URL-driven thread state (?thread=…) doesn't need
@@ -251,10 +250,13 @@ export function ChannelView() {
   const urlThreadActive = !!threadParam && threadParam !== dismissedThreadParam;
   const effectiveThreadRootID = threadRootID ?? (urlThreadActive ? threadParam : null) ?? null;
 
-  // Mark URL-driven threads as seen exactly once per change.
+  // Mark URL-driven threads as seen exactly once per change — noting first
+  // where the user had read up to, for the thread's "New messages" line.
   useEffect(() => {
-    if (threadParam && channel?.id) markThreadSeen(threadParam, new Date().toISOString(), { parentID: channel.id, parentType: 'channel' });
-  }, [threadParam, channel?.id]);
+    if (!threadParam || !channel?.id) return;
+    noteThreadReadPosition(queryClient, threadParam);
+    markThreadSeen(threadParam, new Date().toISOString(), { parentID: channel.id, parentType: 'channel' });
+  }, [threadParam, channel?.id, queryClient]);
 
   // Opening a thread (via URL navigation, e.g. clicking a pinned
   // thread reply) must dismiss any other side panel — the local
@@ -430,6 +432,8 @@ export function ChannelView() {
             onEditMessage={isMobile ? setEditingMessage : undefined}
             anchorMsgId={mainAnchor}
             anchorRevision={navKey}
+            onAtBottomChange={readSession.onAtBottomChange}
+            onMarkAllRead={readSession.markAllRead}
             intro={
               channel ? (
                 <ChannelIntro

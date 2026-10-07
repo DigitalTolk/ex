@@ -4,7 +4,9 @@ import { slugify } from '@/lib/format';
 import { readJSON, writeJSON } from '@/lib/storage';
 import { queryKeys, parentPath } from '@/lib/query-keys';
 import { markLocalUserStateWrite } from '@/hooks/useUserState';
-import type { Message } from '@/types';
+import { queryClient } from '@/lib/query-client';
+import { setUnreadAnchor, threadReadKey } from '@/lib/read-position';
+import type { Message, UserState } from '@/types';
 
 export interface ThreadSummary {
   parentID: string;
@@ -174,6 +176,15 @@ export function markThreadSeen(
     // The PUT's userchannel.updated {userState:true} echo must not refetch
     // /user-state in this tab (see useUserState's echo window).
     markLocalUserStateWrite();
+    // Seeing the thread ends a "Mark as unread" — the server drops the mark
+    // with this PUT, so drop it from the cached state too (the echo that
+    // would have refetched it is skipped above).
+    queryClient.setQueryData<UserState>(queryKeys.userState(), (prev) => {
+      if (!prev?.threadMarkedUnread?.[threadRootID]) return prev;
+      const marks = { ...prev.threadMarkedUnread };
+      delete marks[threadRootID];
+      return { ...prev, threadMarkedUnread: marks };
+    });
     const parentType = target.parentType === 'channel' ? 'channels' : 'conversations';
     void apiFetch<void>(
       `/api/v1/user-state/threads/${parentType}/${encodeURIComponent(target.parentID)}/${encodeURIComponent(threadRootID)}/seen`,
@@ -199,17 +210,40 @@ function seenTime(at: string | undefined): number {
 // this instead of a spread: `{...server, ...local}` let a stale local entry
 // shadow a newer server watermark, so a thread read on another device stayed
 // unread here forever (SPEC GAP-2 / I-4).
+//
+// The one exception is a thread marked unread (`markedUnread`: root → when):
+// the server's entry was rewound on purpose, so a local seen time from
+// before the mark must not outvote it — only seeing the thread again after
+// the mark does.
 export function mergeSeenMaps(
   server: Record<string, string> | undefined,
   local: Record<string, string>,
+  markedUnread: Record<string, string> = {},
 ): Record<string, string> {
   const merged: Record<string, string> = { ...(server ?? {}) };
   for (const [threadRootID, at] of Object.entries(local)) {
+    const markedAt = markedUnread[threadRootID];
+    if (markedAt && seenTime(at) <= seenTime(markedAt)) continue;
     if (seenTime(at) >= seenTime(merged[threadRootID])) {
       merged[threadRootID] = at;
     }
   }
   return merged;
+}
+
+// threadSeenAt is how far the user has read a thread — the server's and this
+// device's seen times merged exactly as every unread consumer merges them.
+export function threadSeenAt(state: UserState | undefined, threadRootID: string): string | undefined {
+  return mergeSeenMaps(state?.threadSeen, loadSeen(), state?.threadMarkedUnread)[threadRootID];
+}
+
+// noteThreadReadPosition records where a thread's "New messages" line goes —
+// the first reply after how far the user had read — just before something
+// marks the thread seen on open. The first note of a visit wins, so every
+// open path can call it; with no reply after that point there's no line.
+export function noteThreadReadPosition(qc: QueryClient, threadRootID: string): void {
+  const seenAt = threadSeenAt(qc.getQueryData<UserState>(queryKeys.userState()), threadRootID);
+  if (seenAt) setUnreadAnchor(threadReadKey(threadRootID), { kind: 'after', at: seenAt });
 }
 
 // hasUnreadActivity returns true when latestActivityAt is newer than the
