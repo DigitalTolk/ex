@@ -173,7 +173,7 @@ export function systemLine(e: TimelineEvent): { text: string; tone?: 'ok' | 'bad
     case 'skill.invoked':
       return { text: `Used skill “${str(e.payload, 'name')}”` };
     case 'run.queued_offline':
-      return { text: 'Queued — waiting for the desktop app to come online', tone: 'muted' };
+      return { text: 'Queued — waiting for ex-runner to come online', tone: 'muted' };
     case 'run.canceled':
       return { text: 'Stopped by a human', tone: 'bad' };
     case 'run.completed':

@@ -235,6 +235,12 @@ func main() {
 	userSvc := service.NewUserService(userStore, redisCache, avatarSigner, redisPubSub)
 	userSvc.SetMediaURLCache(redisCache)
 	userSvc.SetTokenStore(tokenStore)
+	// ex-runner installs: pairing, renewal, the Runners page, and the
+	// revocation check behind every runner route. Deactivation and password
+	// reset disconnect an account's runners with its sessions.
+	runnerTokenSvc := service.NewRunnerTokenService(rawTokenStore, userSvc, jwtMgr)
+	userSvc.SetRunnerRevoker(runnerTokenSvc)
+	authSvc.SetRunnerRevoker(runnerTokenSvc)
 	channelSvc := service.NewChannelService(channelStore, membershipStore, userStore, messageStore, redisCache, brokerAdapter, redisPubSub)
 	authSvc.SetChannelJoiner(channelSvc)
 	convSvc := service.NewConversationService(conversationStore, userStore, redisCache, brokerAdapter, redisPubSub)
@@ -289,7 +295,7 @@ func main() {
 	if s3Client != nil {
 		orchestrator.SetEventArchive(storage.NewEventArchive(s3Client))
 	}
-	agentH := handler.NewAgentHandler(agentSvc, orchestrator, userSvc, jwtMgr)
+	agentH := handler.NewAgentHandler(agentSvc, orchestrator, userSvc)
 	// The Run Activity Drawer is readable by anyone who can read the channel
 	// the run happened in (plan-v2 Phase 2), not just the invoker.
 	agentH.SetTimelineAccess(messageSvc)
@@ -744,6 +750,7 @@ func main() {
 		Command:      commandH,
 		Agent:        agentH,
 		AgentRunner:  handler.NewAgentRunnerHandler(agentSvc, orchestrator),
+		RunnerToken:  handler.NewRunnerTokenHandler(runnerTokenSvc),
 		AgentRunTool: agentRunToolH,
 		Context:      handler.NewContextHandler(contextSvc),
 		Connector:    connectorH,

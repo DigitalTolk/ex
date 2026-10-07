@@ -652,7 +652,7 @@ func TestOrchCov_InvokeServerExecutionUnavailable(t *testing.T) {
 	msg := &model.Message{ID: "m1", ParentID: "chan1", AuthorID: "u-alice", Body: "@[" + testGGID + "|gg] hi"}
 	fx.orch.OnMessage(ctx, msg, ParentChannel)
 	post := fx.msgs.lastPost()
-	if !strings.Contains(post, "server-side execution") {
+	if !strings.Contains(post, "server-side agents turned on") || !strings.Contains(post, "enable Bedrock") {
 		t.Fatalf("expected server-execution notice, got %q", post)
 	}
 }
@@ -681,7 +681,7 @@ func TestOrchCov_InvokeHarnessMissingSaysWhich(t *testing.T) {
 	msg := &model.Message{ID: "m1", ParentID: "chan1", AuthorID: "u-alice", Body: "@[" + testGGID + "|gg] hi"}
 	fx.orch.OnMessage(ctx, msg, ParentChannel)
 	post := fx.msgs.lastPost()
-	if !strings.Contains(post, "CLI isn't set up on the machine") || !strings.Contains(post, "Bedrock agents") {
+	if !strings.Contains(post, "CLI isn't set up on the computer running your ex-runner") || !strings.Contains(post, "Bedrock agents") {
 		t.Fatalf("expected harness-missing notice with the cloud alternative, got %q", post)
 	}
 }

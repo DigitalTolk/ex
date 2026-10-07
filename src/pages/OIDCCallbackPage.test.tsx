@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import OIDCCallbackPage from './OIDCCallbackPage';
+import { rememberReturnTo } from '@/lib/return-to';
 
 const mockNavigate = vi.fn();
 const mockSetAuth = vi.fn();
@@ -80,6 +81,20 @@ describe('OIDCCallbackPage', () => {
 
     await vi.waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith('/channel/general', { replace: true });
+    });
+  });
+
+  it('returns to the page that sent the visitor to sign in', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ accessToken: 'tok-abc' }),
+    } as Response);
+    rememberReturnTo('/runner/connect?port=43123');
+
+    renderPage();
+
+    await vi.waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/runner/connect?port=43123', { replace: true });
     });
   });
 });

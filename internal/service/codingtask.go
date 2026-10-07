@@ -725,7 +725,7 @@ func primaryBranch(t *model.CodingTask) string {
 func invokeFailureDetail(err error) string {
 	switch {
 	case errors.Is(err, ErrAgentOffline):
-		return offlineDetail(err, "dev runs on your own computer through the ex desktop app, which isn't online — open the app and stay signed in, then say retry.")
+		return offlineDetail(err, "dev runs on your own computer through ex-runner, which isn't online — start it there with `ex-runner start`, then say retry.")
 	case errors.Is(err, ErrAgentBusy):
 		return "dev is already busy in this thread."
 	}

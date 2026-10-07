@@ -798,7 +798,7 @@ func (o *Orchestrator) invoke(ctx context.Context, in invocation) error {
 	// queueing a run nothing will execute.
 	if model.HarnessIsAPI(resolved.Harness) && resolved.ExecutionMode == model.ExecutionServer {
 		if o.serverEngine == nil {
-			return fmt.Errorf("%w: server-side execution isn't available yet — set %s to run on your machine", ErrAgentOffline, agent.DisplayName)
+			return fmt.Errorf("%w: %s runs on the server, and this ex server doesn't have server-side agents turned on — an admin needs to enable Bedrock", ErrAgentOffline, agent.DisplayName)
 		}
 		run, err := o.startRun(ctx, in, resolved)
 		if err != nil {
@@ -827,7 +827,7 @@ func (o *Orchestrator) invoke(ctx context.Context, in invocation) error {
 			return o.queueOfflineRun(ctx, in, resolved)
 		}
 		if harnessMissing {
-			return fmt.Errorf("%w: the %s CLI isn't set up on the machine running your ex desktop app — install it and sign in there, or use one of the Bedrock agents, which run in the cloud", ErrAgentOffline, resolved.Harness)
+			return fmt.Errorf("%w: the %s CLI isn't set up on the computer running your ex-runner — install it, sign in, and restart ex-runner there, or use one of the Bedrock agents, which run on the server", ErrAgentOffline, resolved.Harness)
 		}
 		return ErrAgentOffline
 	}
@@ -863,7 +863,7 @@ func (o *Orchestrator) queueOfflineRun(ctx context.Context, in invocation, resol
 		"until": until,
 	})
 	body := "⏳ " + agent.DisplayName + " is queued for " + invoker.DisplayName +
-		" — it starts when their ex desktop app comes online."
+		" — it starts when their ex-runner comes online."
 	if _, err := o.messages.SendAsAgentRun(ctx, agent.ID, invoker.ID, msg.ParentID, in.parentType, body, o.replyThreadRoot(run), run.ID); err != nil {
 		slog.Warn("queue notice post failed", "runID", run.ID, "error", err)
 	}
@@ -894,13 +894,13 @@ func (o *Orchestrator) postInvokeFailure(ctx context.Context, agent, invoker *mo
 		// thread and its reply is coming. A second notice would be noise.
 		return
 	case errors.Is(cause, ErrAgentOffline):
-		// The mechanism is invisible from web/mobile, so the notice explains
-		// it: CLI agents execute on the INVOKER's computer via the desktop
-		// app; Bedrock agents run in the cloud and work from anywhere.
+		// The mechanism is invisible from any chat client, so the notice
+		// explains it: CLI agents execute on the INVOKER's computer via
+		// ex-runner; Bedrock agents run on the server and work from anywhere.
 		body = "⛔ " + agent.DisplayName + " can't run for " + invoker.DisplayName + " — " +
-			offlineDetail(cause, "this agent runs on "+invoker.DisplayName+"'s own computer through the ex desktop app, "+
-				"which isn't online right now. Open the desktop app and stay signed in — or use one of the "+
-				"Bedrock agents, which run in the cloud and work from web and mobile.")
+			offlineDetail(cause, "this agent runs on "+invoker.DisplayName+"'s own computer through ex-runner, "+
+				"which isn't online right now. Start it there with `ex-runner start` (first time: `ex-runner login`) — "+
+				"or use one of the Bedrock agents, which run on the server and need no setup.")
 	default:
 		slog.Warn("agent invoke failed", "agentID", agent.ID, "msgID", msg.ID, "error", cause)
 		body = "⛔ " + agent.DisplayName + " couldn't start on this task."
@@ -3667,9 +3667,12 @@ func failNotice(reason string) string {
 			". Nothing was answered; ask again and I'll retry."
 	case "runner_lost", "lease_expired":
 		return "❌ stopped: lost contact with the agent runner on your machine. " +
-			"Check that the desktop app is running, then ask again."
+			"Check that ex-runner is running there, then ask again."
 	case "harness_missing":
-		return "❌ stopped: the " + detail + " CLI isn't installed or isn't on PATH for the desktop app."
+		return "❌ stopped: the " + detail + " CLI isn't installed or isn't on PATH for ex-runner."
+	case "runner_stopped":
+		return "❌ stopped: ex-runner on your machine was shut down before I finished. " +
+			"Start it again with `ex-runner start`, then ask again."
 	case "token_mint_failed":
 		return "❌ stopped: couldn't get the credentials needed to start. Try again; if it repeats, re-authenticate."
 	case "spawn_failed":

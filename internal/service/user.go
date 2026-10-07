@@ -41,7 +41,8 @@ type UserService struct {
 	cache     Cache
 	avatars   AvatarSigner
 	publisher Publisher
-	tokens    TokenStore // optional: when set, deactivation invalidates refresh tokens
+	tokens    TokenStore    // optional: when set, deactivation invalidates refresh tokens
+	runners   RunnerRevoker // optional: when set, deactivation disconnects ex-runners
 	indexer   UserIndexer
 	searcher  UserSearcher
 	// urlCache memoises presigned avatar URLs so repeat fetches return
@@ -70,6 +71,9 @@ func NewUserService(users UserStore, cache Cache, avatars AvatarSigner, publishe
 // SetTokenStore wires a TokenStore so deactivating a user invalidates every
 // outstanding refresh token they hold — kicking them out of any open session.
 func (s *UserService) SetTokenStore(t TokenStore) { s.tokens = t }
+
+// SetRunnerRevoker wires ex-runner revocation into account deactivation.
+func (s *UserService) SetRunnerRevoker(r RunnerRevoker) { s.runners = r }
 
 func (s *UserService) SetIndexer(i UserIndexer) { s.indexer = i }
 
@@ -862,6 +866,11 @@ func (s *UserService) applyStatus(ctx context.Context, user *model.User, deactiv
 	if deactivated {
 		if s.tokens != nil {
 			_ = s.tokens.DeleteAllRefreshTokensForUser(ctx, user.ID)
+		}
+		// Its runners too: a deactivated account's agents must stop running
+		// on whatever machines were paired to it.
+		if s.runners != nil {
+			_ = s.runners.RevokeAllForUser(ctx, user.ID)
 		}
 		events.Publish(ctx, s.publisher, pubsub.UserChannel(user.ID), events.EventForceLogout, map[string]any{
 			"userID": user.ID,

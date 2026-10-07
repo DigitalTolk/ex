@@ -10,9 +10,9 @@ import { AgentCard } from './agents/AgentCard';
 import { NewAgentForm } from './agents/NewAgentForm';
 
 // AgentsPage: the shared workspace agents (@gg, @qib — they belong to no
-// one) with YOUR settings for them. Mentioning an agent runs it on YOUR
-// machine via the desktop app, using your local Claude Code / Codex install
-// and the prompt/pin you set here.
+// one) with YOUR settings for them. Mentioning a CLI agent runs it on YOUR
+// machine via ex-runner, using your local Claude Code / Codex install and the
+// prompt/pin you set here; Bedrock agents run on the server.
 export default function AgentsPage() {
   useDocumentTitle('Agents');
   const { data: agents, isLoading } = useAgents();

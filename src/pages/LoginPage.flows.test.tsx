@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { rememberReturnTo } from '@/lib/return-to';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BrowserRouter, MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -90,6 +91,22 @@ describe('LoginPage flows - success paths', () => {
       expect(mockSetAuth).toHaveBeenCalledWith('tok-1', expect.objectContaining({ id: 'u-1' }));
       expect(mockNavigate).toHaveBeenCalledWith('/channel/general');
     });
+  });
+
+  it('returns to the page that sent the visitor to sign in (ex-runner connect)', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ accessToken: 'tok-1' }),
+    } as Response);
+    rememberReturnTo('/runner/connect?port=43123');
+
+    const user = userEvent.setup();
+    renderLogin();
+    await user.type(screen.getByLabelText('Email'), 'a@a.com');
+    await user.type(screen.getByLabelText('Password'), 'pw12345678');
+    await user.click(screen.getByText('Sign in'));
+
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/runner/connect?port=43123'));
   });
 
   it('shows generic error when login response JSON parse fails (line 34)', async () => {

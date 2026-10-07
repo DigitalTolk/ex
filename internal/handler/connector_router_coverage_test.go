@@ -844,6 +844,7 @@ func TestHconnCovRouterAgentRoutes(t *testing.T) {
 		Agent:        &AgentHandler{},
 		AgentRunner:  &AgentRunnerHandler{},
 		AgentRunTool: runTool,
+		RunnerToken:  &RunnerTokenHandler{},
 		Connector:    &ConnectorHandler{},
 		CodingTask:   &CodingTaskHandler{},
 		Context:      &ContextHandler{},
@@ -859,14 +860,20 @@ func TestHconnCovRouterAgentRoutes(t *testing.T) {
 		// Agent SPA surface.
 		{http.MethodGet, "/api/v1/agents"},
 		{http.MethodPost, "/api/v1/agents"},
-		{http.MethodPost, "/api/v1/agents/runner-token"},
 		{http.MethodGet, "/api/v1/runs/thread"},
 		{http.MethodGet, "/api/v1/runs/r1"},
 		{http.MethodPost, "/api/v1/runs/r1/stop"},
 		{http.MethodGet, "/api/v1/skills"},
 		{http.MethodGet, "/api/v1/agents/gg/subscriptions"},
 		{http.MethodGet, "/api/v1/channels/c1/watchers"},
-		// Desktop-runner API.
+		// ex-runner pairing + the Runners page.
+		{http.MethodPost, "/api/v1/runner-tokens/grants"},
+		{http.MethodPost, "/api/v1/runner-tokens/exchange"},
+		{http.MethodGet, "/api/v1/runner-tokens"},
+		{http.MethodDelete, "/api/v1/runner-tokens/rt1"},
+		{http.MethodPost, "/api/v1/agent/runner/renew"},
+		{http.MethodPost, "/api/v1/agent/runner/revoke"},
+		// ex-runner API.
 		{http.MethodPost, "/api/v1/agent/runner/register"},
 		{http.MethodPost, "/api/v1/agent/runner/claim"},
 		{http.MethodPost, "/api/v1/agent/runner/runs/r1/events"},

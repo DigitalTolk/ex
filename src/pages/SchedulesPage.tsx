@@ -153,7 +153,7 @@ function ScheduleRow({
           <p className="mt-0.5 text-sm text-muted-foreground">{sub.instruction}</p>
           {isCLI && (
             <p className="mt-1 text-xs text-muted-foreground/80" data-testid={`schedule-row-cli-${sub.id}`}>
-              Runs on your computer — needs the ex desktop app open at that time.
+              Runs on your computer — needs your ex-runner running at that time.
             </p>
           )}
         </div>

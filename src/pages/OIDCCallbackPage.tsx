@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { setAccessToken, apiFetch } from '@/lib/api';
 import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
+import { takeReturnTo } from '@/lib/return-to';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import type { User } from '@/types';
 
@@ -63,7 +64,7 @@ export default function OIDCCallbackPage() {
         try {
           const user = await apiFetch<User>('/api/v1/users/me');
           setAuth(token, user);
-          navigate(`/channel/${GENERAL_CHANNEL_SLUG}`, { replace: true });
+          navigate(takeReturnTo(`/channel/${GENERAL_CHANNEL_SLUG}`), { replace: true });
           return;
         } catch {
           // fall through to error

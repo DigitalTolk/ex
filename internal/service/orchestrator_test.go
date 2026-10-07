@@ -1341,7 +1341,7 @@ func TestOrchestrator_OfflineAgentFailsFast(t *testing.T) {
 	if ids, _ := fx.runs.ListQueuedRuns(context.Background(), "u-alice", 10); len(ids) != 0 {
 		t.Fatalf("offline agent queued a run")
 	}
-	if !strings.Contains(fx.msgs.lastPost(), "desktop app") {
+	if !strings.Contains(fx.msgs.lastPost(), "ex-runner start") {
 		t.Fatalf("no offline notice posted, got %q", fx.msgs.lastPost())
 	}
 }
@@ -1665,7 +1665,7 @@ func TestFailNoticeCoversEveryReason(t *testing.T) {
 	// non-empty, human-readable line — including ones nobody mapped yet.
 	for _, reason := range []string{
 		"runner_error: boom", "runner_lost", "lease_expired", "harness_missing:codex",
-		"token_mint_failed", "spawn_failed: no such binary", "no_runner",
+		"token_mint_failed", "spawn_failed: no such binary", "no_runner", "runner_stopped",
 		"something_new_nobody_mapped", "",
 	} {
 		got := failNotice(reason)

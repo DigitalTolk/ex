@@ -101,7 +101,7 @@ export function ScheduleForm({
   const chosen = fixedAgent ?? agents?.find((a) => a.slug === slug);
   // Scheduled work fires whether or not anyone is at their desk, so a CLI
   // agent — which runs on the creator's own machine — can only keep the
-  // appointment when the desktop app happens to be open at that hour.
+  // appointment when its ex-runner happens to be running at that hour.
   const isCLI = !!chosen && chosen.resolved.harness !== 'bedrock';
   const agentID = chosen?.id ?? '';
   const myChannels = channels ?? [];
@@ -400,8 +400,8 @@ export function ScheduleForm({
 
       {isCLI && (
         <p className="mt-3 text-xs text-muted-foreground" data-testid="schedule-form-cli-warning">
-          @{chosen?.displayName} runs on your computer, so this fires only while your ex desktop app
-          is open. Pick a Bedrock agent for unattended work.
+          @{chosen?.displayName} runs on your computer, so this fires only while your ex-runner is
+          running. Pick a Bedrock agent for unattended work.
         </p>
       )}
 
