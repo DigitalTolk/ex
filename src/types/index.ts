@@ -333,6 +333,9 @@ export interface ActivityItem {
   messageID: string;
   parentID: string;
   parentType: 'channel' | 'conversation';
+  // Thread root when the source message is a thread reply — the deep link
+  // must open the thread, since replies never render in the main list.
+  parentMessageID?: string;
   channelSlug?: string;
   messagePreview?: string;
   // reaction-only
@@ -351,6 +354,8 @@ export interface Reminder {
   messageID: string;
   parentID: string;
   parentType: 'channel' | 'conversation';
+  // Thread root when the reminded message is a thread reply.
+  parentMessageID?: string;
   channelSlug?: string;
   messagePreview?: string;
   remindAt: string;

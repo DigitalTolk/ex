@@ -80,7 +80,7 @@ function ackDesktopDelivery(messageID: string | undefined): void {
 // NotificationKind mirrors backend service.NotificationKind. Adding a new
 // kind here is the single client-side place where a new alert flavor is
 // recognized — keep this in lockstep with the Go side.
-export type NotificationKind = 'message' | 'mention' | 'thread_reply';
+export type NotificationKind = 'message' | 'mention' | 'thread_reply' | 'reminder';
 
 // ApprovalAlert is an agent run blocked on the invoker's decision. It does NOT
 // go through `dispatch`: an approval is not a message, and reusing the message
@@ -119,6 +119,9 @@ export interface NotificationPayload {
   parentID: string;
   parentType: 'channel' | 'conversation';
   messageID?: string;
+  // Set on alerts that can recur for one message (a fired reminder): replaces
+  // messageID as the dedup/ack key. Absent → keyed by messageID.
+  alertID?: string;
   parentMessageID?: string;
   authorID?: string;
   // True for incoming-webhook posts (CI/deploy/alert bots). The authorID
@@ -308,6 +311,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
   const dispatch = useCallback((n: NotificationPayload, force = false) => {
     const now = Date.now();
+    // The alert's delivery key: dedup, the desktop ack and the backend's
+    // mobile-push fallback all key on it. Normally the messageID; an alert
+    // that can recur for one message (a reminder) carries its own alertID,
+    // so it isn't swallowed as a repeat of that message's earlier alert.
+    const key = n.alertID || n.messageID;
     // Drop a repeat of a message we've ALREADY alerted on (multi-tab fan-out /
     // a double-publish). Only a *check* here — we record the messageID as
     // alerted at the very end, and only once we actually surface sound or a
@@ -319,7 +327,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // cannot afford to lose. Notifications without a messageID (defensive) skip
     // dedup entirely. A duplicate still acks: it proves the desktop is alive and
     // already aware, so the mobile-push fallback should stand down.
-    if (n.messageID && hasSeenNotification(n.messageID, now)) {
+    if (key && hasSeenNotification(key, now)) {
       // Ack ONLY when the user is demonstrably at the device (any tab). A
       // hidden second tab hitting this path used to ack UNCONDITIONALLY —
       // with two tabs open and the user away, the second tab's dedup-hit
@@ -327,9 +335,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       // breaking the away → phone handoff. "Another session received the
       // fan-out" is not "a human saw it".
       const attentive = deviceAttentive();
-      traceNotification('dedup', n.messageID, { acked: attentive });
+      traceNotification('dedup', key, { acked: attentive });
       if (attentive) {
-        ackDesktopDelivery(n.messageID);
+        ackDesktopDelivery(key);
       }
       return;
     }
@@ -338,7 +346,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // exempt: their authorID is the webhook's creator, who explicitly
     // wants the alert, so we never self-suppress them.
     if (!n.webhook && n.authorID && currentUserIDRef.current && n.authorID === currentUserIDRef.current) {
-      traceNotification('own-author', n.messageID);
+      traceNotification('own-author', key);
       return;
     }
     // LEADER GATE: with several tabs open, every socket receives this event
@@ -353,12 +361,12 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // other tabs dispatches immediately, so single-tab sessions (and an
     // election still settling on a lone tab) never wait.
     if (!force && !isLeaderTab() && hasOtherTabs()) {
-      traceNotification('held', n.messageID);
+      traceNotification('held', key);
       const holdRetry = (attempt: number): void => {
         window.setTimeout(() => {
-          if (n.messageID && hasSeenNotification(n.messageID, Date.now())) return;
+          if (key && hasSeenNotification(key, Date.now())) return;
           if (isLeaderTab() || attempt >= 2) {
-            if (!isLeaderTab()) traceNotification('hold-fallback', n.messageID);
+            if (!isLeaderTab()) traceNotification('hold-fallback', key);
             dispatchRef.current?.(n, true);
             return;
           }
@@ -395,8 +403,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     ) {
       // Reading the thread right now — they're aware, so ack to stand the
       // mobile fallback down (no redundant push).
-      traceNotification('suppressed-thread', n.messageID, { thread: n.parentMessageID });
-      ackDesktopDelivery(n.messageID);
+      traceNotification('suppressed-thread', key, { thread: n.parentMessageID });
+      ackDesktopDelivery(key);
       return;
     }
     // ACTIVE-PARENT suppression: a regular channel/DM message is suppressed
@@ -415,8 +423,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     ) {
       // Suppressed because the user is looking right at it on desktop — they're
       // aware, so ack to stand the mobile fallback down (no redundant push).
-      traceNotification('suppressed-parent', n.messageID, { parent: n.parentID });
-      ackDesktopDelivery(n.messageID);
+      traceNotification('suppressed-parent', key, { parent: n.parentID });
+      ackDesktopDelivery(key);
       return;
     }
     const { soundEnabled, browserEnabled } = prefsRef.current;
@@ -510,8 +518,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // The ack stays tied to actually surfacing (or active-view suppression
     // above): if the desktop surfaced NOTHING, we must NOT ack — the mobile
     // fallback is then the only way the alert reaches the user.
-    if (n.messageID && delivered) {
-      recordNotification(n.messageID, now);
+    if (key && delivered) {
+      recordNotification(key, now);
       // Ack ONLY when someone was demonstrably at this device recently (real
       // input within the attention window in ANY tab, no lock/suspend/wake
       // latch — the ex window itself may be blurred or hidden; the OS banner
@@ -520,12 +528,12 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       // the mobile push down — no ack means the backend's deferred fallback
       // delivers to the phone, Slack-style.
       const attentive = deviceAttentive();
-      traceNotification('surfaced', n.messageID, { acked: attentive });
+      traceNotification('surfaced', key, { acked: attentive });
       if (attentive) {
-        ackDesktopDelivery(n.messageID);
+        ackDesktopDelivery(key);
       }
     } else {
-      traceNotification('no-surface', n.messageID, { delivered });
+      traceNotification('no-surface', key, { delivered });
     }
   }, [permissionRef, prefsRef, dispatchRef]);
 

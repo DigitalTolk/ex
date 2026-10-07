@@ -56,15 +56,21 @@ func IsNotifiable(k NotificationKind) bool {
 // WebSocket pipe as state events. It is intentionally minimal — title, body,
 // where to go on click, and a stable client-side de-dup key.
 type Notification struct {
-	Kind            NotificationKind `json:"kind"`
-	Title           string           `json:"title"`
-	Body            string           `json:"body"`
-	DeepLink        string           `json:"deepLink"`
-	ParentID        string           `json:"parentID"`   // channel/conversation ID
-	ParentType      string           `json:"parentType"` // "channel" | "conversation"
-	MessageID       string           `json:"messageID,omitempty"`
-	ParentMessageID string           `json:"parentMessageID,omitempty"`
-	AuthorID        string           `json:"authorID,omitempty"` // for client-side own-author suppression
+	Kind       NotificationKind `json:"kind"`
+	Title      string           `json:"title"`
+	Body       string           `json:"body"`
+	DeepLink   string           `json:"deepLink"`
+	ParentID   string           `json:"parentID"`   // channel/conversation ID
+	ParentType string           `json:"parentType"` // "channel" | "conversation"
+	MessageID  string           `json:"messageID,omitempty"`
+	// AlertID identifies the alert itself when one message can legitimately
+	// alert more than once — a fired reminder is a NEW alert about a message
+	// the user may already have been notified about (or reminded of before).
+	// When set it replaces MessageID as the delivery key (client dedup,
+	// desktop ack, push idempotency); otherwise those stay keyed by MessageID.
+	AlertID         string `json:"alertID,omitempty"`
+	ParentMessageID string `json:"parentMessageID,omitempty"`
+	AuthorID        string `json:"authorID,omitempty"` // for client-side own-author suppression
 	// Webhook marks a notification that originated from an incoming
 	// webhook (CI alerts, deploy bots, etc.). The "author" is the webhook,
 	// not a real sender, so the client exempts these from its own-author
@@ -78,6 +84,16 @@ type Notification struct {
 	// badge to this value — never increment locally — so replayed or
 	// duplicated events can't drift the count.
 	ParentUnreadNotifyCount int64 `json:"parentUnreadNotifyCount,omitempty"`
+}
+
+// deliveryKey is the identity the desktop ack and the mobile-push
+// idempotency key on: the AlertID when set, else the MessageID. The client
+// dedups and acks on the same key, so both sides always agree.
+func (n Notification) deliveryKey() string {
+	if n.AlertID != "" {
+		return n.AlertID
+	}
+	return n.MessageID
 }
 
 // PresenceLookup is the slice of PresenceService NotificationService cares

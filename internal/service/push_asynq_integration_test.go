@@ -172,3 +172,33 @@ func TestAsynqPush_DuplicateScheduleDedups(t *testing.T) {
 	}
 	assertNoPush(t, provider, 1200*time.Millisecond)
 }
+
+// A reminder about a message the recipient was ALREADY pushed for is a new
+// alert, not a duplicate: keyed by its AlertID it is delivered, as is a second
+// reminder on the same message — only a re-schedule of the same reminder
+// collapses. Keyed by MessageID, both were silently dropped for the whole
+// retention window.
+func TestAsynqPush_ReminderOnPushedMessageDelivers(t *testing.T) {
+	sched, provider, startWorker := newAsynqHarness(t, &stubAckStore{acked: map[string]bool{}})
+	w := startWorker()
+	defer w.Shutdown()
+
+	ctx := context.Background()
+	if err := sched.SchedulePush(ctx, "u-bob", Notification{Kind: NotificationKindMessage, MessageID: "m-r"}, 0); err != nil {
+		t.Fatalf("message push: %v", err)
+	}
+	waitForPush(t, provider, "u-bob", 5*time.Second)
+
+	for _, alertID := range []string{"r-1", "r-2"} {
+		reminder := Notification{Kind: NotificationKindReminder, MessageID: "m-r", AlertID: alertID}
+		if err := sched.SchedulePush(ctx, "u-bob", reminder, 0); err != nil {
+			t.Fatalf("reminder %s push: %v", alertID, err)
+		}
+		waitForPush(t, provider, "u-bob", 5*time.Second)
+	}
+
+	if err := sched.SchedulePush(ctx, "u-bob", Notification{Kind: NotificationKindReminder, MessageID: "m-r", AlertID: "r-1"}, 0); err != nil {
+		t.Fatalf("duplicate reminder push must be a no-op, got %v", err)
+	}
+	assertNoPush(t, provider, 1200*time.Millisecond)
+}

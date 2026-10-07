@@ -86,7 +86,7 @@ func (s *NotificationService) sendMobilePush(ctx context.Context, recipientUserI
 		// skipping the push outright, we DEFER it; the worker checks for the
 		// client's ACK at delivery time and pushes only if none arrived.
 		// Presence can be wrong in EITHER direction without losing an alert.
-		if s.ackStore == nil || notif.MessageID == "" {
+		if s.ackStore == nil || notif.deliveryKey() == "" {
 			// No ack tracking (or nothing to key on) — fall back to the old
 			// presence-only behaviour: skip the push for an online user.
 			return

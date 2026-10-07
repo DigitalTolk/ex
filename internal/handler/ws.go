@@ -527,6 +527,8 @@ func (h *WSHandler) handleInbound(ctx context.Context, userID string, raw []byte
 	case "notification.ack":
 		// The client confirms it received (and surfaced) the desktop
 		// notification, so the deferred mobile-push fallback can stand down.
+		// The frame's messageID carries the notification's delivery key —
+		// its alertID when set (reminders), else its messageID.
 		if h.notifAck != nil && msg.MessageID != "" {
 			if err := h.notifAck.MarkNotificationAcked(ctx, userID, msg.MessageID); err != nil {
 				slog.Warn("notification ack record failed", "userID", userID, "messageID", msg.MessageID, "error", err)

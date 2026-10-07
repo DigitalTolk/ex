@@ -192,6 +192,12 @@ func TestReminderService_ProcessDueFires(t *testing.T) {
 	if notif.notifs[1].Body == "" {
 		t.Fatalf("empty-preview reminder should have a fallback body")
 	}
+	// Each alert is keyed by its reminder, not the message: the user may
+	// already have been alerted about that message, and a message-keyed
+	// reminder would be deduped away on desktop and mobile.
+	if notif.notifs[0].AlertID != "r1" || notif.notifs[1].AlertID != "r2" || notif.notifs[0].MessageID != "m-1" {
+		t.Fatalf("alert identity = %+v, want AlertID per reminder and MessageID kept", notif.notifs)
+	}
 	_ = base
 }
 
@@ -203,11 +209,26 @@ func TestReminderService_ProcessDueClaimError(t *testing.T) {
 	}
 }
 
-func TestReminderDeepLink_ChannelFallback(t *testing.T) {
-	// No slug → fall back to the channel id.
-	got := reminderDeepLink(&model.Reminder{ParentType: ParentChannel, ParentID: "ch-1", MessageID: "m-1"})
-	if got != "/channel/ch-1#msg-m-1" {
-		t.Fatalf("fallback deep link = %q", got)
+// The deep link matches the client's buildChannelHref / buildConversationHref:
+// a channel by slug (id when unknown), a conversation by id, and a thread
+// reply opening its thread — a reply never renders in the main list, so a
+// link without ?thread= landed on the parent with nothing to show.
+func TestReminderDeepLink(t *testing.T) {
+	cases := []struct {
+		name string
+		r    model.Reminder
+		want string
+	}{
+		{"channel by slug", model.Reminder{ParentType: ParentChannel, ParentID: "ch-1", ChannelSlug: "general", MessageID: "m-1"}, "/channel/general#msg-m-1"},
+		{"channel slug fallback", model.Reminder{ParentType: ParentChannel, ParentID: "ch-1", MessageID: "m-1"}, "/channel/ch-1#msg-m-1"},
+		{"conversation", model.Reminder{ParentType: ParentConversation, ParentID: "dm-1", MessageID: "m-1"}, "/conversation/dm-1#msg-m-1"},
+		{"channel thread reply", model.Reminder{ParentType: ParentChannel, ParentID: "ch-1", ChannelSlug: "general", MessageID: "m-2", ParentMessageID: "m-1"}, "/channel/general?thread=m-1#msg-m-2"},
+		{"conversation thread reply", model.Reminder{ParentType: ParentConversation, ParentID: "dm-1", MessageID: "m-2", ParentMessageID: "m-1"}, "/conversation/dm-1?thread=m-1#msg-m-2"},
+	}
+	for _, c := range cases {
+		if got := reminderDeepLink(&c.r); got != c.want {
+			t.Errorf("%s: deep link = %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 

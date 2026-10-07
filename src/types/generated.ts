@@ -36,6 +36,12 @@ export interface ActivityItem {
   parentID: string;
   parentType: string; // "channel" | "conversation"
   /**
+   * ParentMessageID is the thread root when the source message is a thread
+   * reply (empty for top-level messages). Replies never render in the main
+   * list, so the deep link must open the thread to show them.
+   */
+  parentMessageID?: string;
+  /**
    * ChannelSlug is set for channel parents so the client can build a slug URL
    * without resolving the channel; empty for conversations.
    */
@@ -61,6 +67,11 @@ export interface Reminder {
   messageID: string;
   parentID: string;
   parentType: string; // "channel" | "conversation"
+  /**
+   * ParentMessageID is the thread root when the reminded message is a thread
+   * reply, taken from the stored message (never the client) at schedule time.
+   */
+  parentMessageID?: string;
   channelSlug?: string;
   messagePreview?: string;
   remindAt: string /* RFC3339 */;
