@@ -40,12 +40,6 @@ declare global {
       body: string;
       choices?: string[];
     }) => void;
-    // Desktop-shell bridge for the agent-runner token handoff: the SPA mints
-    // a runner-scoped token (POST /api/v1/agents/runner-token) and hands it
-    // to the Electron shell, which runs local agent harnesses with it.
-    // Injected by the shell's chat preload; absent in browser tabs/PWA.
-    __EX_AGENT_RUNNER__?: { provideToken: (token: string) => void };
-
     // Desktop shell one-click connector sign-in: opens the service's SSO
     // entry in an internal shell window (the user signs in with Microsoft
     // there) and resolves with the bearer the service mints — captured from

@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
 import { apiFetch, captureServerVersion, setAccessToken } from '@/lib/api';
 import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
+import { takeReturnTo } from '@/lib/return-to';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { UpdateBanner } from '@/components/UpdateBanner';
 import type { User } from '@/types';
@@ -43,7 +44,7 @@ export default function LoginPage() {
       setAccessToken(data.accessToken);
       const u = await apiFetch<User>('/api/v1/users/me');
       setAuth(data.accessToken, u);
-      navigate(`/channel/${GENERAL_CHANNEL_SLUG}`);
+      navigate(takeReturnTo(`/channel/${GENERAL_CHANNEL_SLUG}`));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {

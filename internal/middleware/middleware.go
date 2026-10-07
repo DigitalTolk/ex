@@ -94,6 +94,41 @@ func AuthScope(jwtMgr *auth.JWTManager, scope string) func(http.Handler) http.Ha
 	}
 }
 
+// RunnerTokenChecker reports whether a runner token's record still exists —
+// the per-install revocation check behind every runner request. false means
+// the install was revoked (Runners page, `ex-runner logout`, account
+// deactivation) or has expired; an error means the check itself failed.
+type RunnerTokenChecker interface {
+	RunnerTokenActive(ctx context.Context, claims *model.TokenClaims) (bool, error)
+}
+
+// AuthRunner is AuthScope(runner) plus the revocation check. A revoked token
+// is a 401 — the runner stops and asks for a fresh `ex-runner login`. A
+// failed check is a 503 instead, so a store blip makes the runner back off
+// and retry rather than give up on a credential that is probably fine. A nil
+// checker fails closed: no runner token is accepted at all.
+func AuthRunner(jwtMgr *auth.JWTManager, checker RunnerTokenChecker) func(http.Handler) http.Handler {
+	scoped := AuthScope(jwtMgr, model.TokenScopeRunner)
+	return func(next http.Handler) http.Handler {
+		return scoped(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if checker == nil {
+				http.Error(w, "invalid token", http.StatusUnauthorized)
+				return
+			}
+			active, err := checker.RunnerTokenActive(r.Context(), ClaimsFromContext(r.Context()))
+			if err != nil {
+				http.Error(w, "runner token check unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if !active {
+				http.Error(w, "runner token revoked", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		}))
+	}
+}
+
 // extractToken reads the bearer token from the Authorization header ONLY.
 // The old `?token=` query fallback (added for the WebSocket upgrade, where
 // browsers can't set headers) leaked the full access JWT into LB/proxy logs,

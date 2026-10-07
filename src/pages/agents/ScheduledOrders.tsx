@@ -29,7 +29,7 @@ export function ScheduledOrders({ agent }: { agent: AgentView }) {
   const tz = localTimeZone();
   // Scheduled work fires whether or not anyone is at their desk, so a CLI
   // agent — which runs on the creator's own machine — can only keep the
-  // appointment when the desktop app happens to be open at that hour.
+  // appointment when its ex-runner happens to be running at that hour.
   const isCLI = agent.resolved.harness !== 'bedrock';
 
   return (
@@ -49,9 +49,9 @@ export function ScheduledOrders({ agent }: { agent: AgentView }) {
           className="mb-2 rounded-md bg-amber-500/10 px-2 py-1.5 text-xs text-muted-foreground"
           data-testid={`schedule-cli-warning-${agent.slug}`}
         >
-          @{agent.displayName} runs on your own computer, so a scheduled order only fires if your ex
-          desktop app is open and signed in at that time. For orders that must run unattended, use a
-          Bedrock agent — those run in the cloud.
+          @{agent.displayName} runs on your own computer, so a scheduled order only fires if your
+          ex-runner is running at that time. For orders that must run unattended, use a Bedrock
+          agent — those run on the server.
         </p>
       )}
 

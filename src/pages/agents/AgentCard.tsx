@@ -20,7 +20,7 @@ function statusBadge(status: string, serverRun: boolean) {
     case 'needs_setup':
       return <Badge variant="destructive">CLI missing on your machine</Badge>;
     case 'offline':
-      return <Badge variant="outline">desktop app not running</Badge>;
+      return <Badge variant="outline">ex-runner not running</Badge>;
     default:
       return <Badge variant="outline">{status}</Badge>;
   }
@@ -89,7 +89,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
   const isBedrock = harness === 'bedrock';
   // The EFFECTIVE backend decides which controls make sense: with the select
   // on "default", the workspace default (resolved) is what actually runs.
-  // Server-run bedrock agents have no desktop app to be offline and no local
+  // Server-run bedrock agents have no ex-runner to be offline and no local
   // harness tools to pre-approve — those controls would be noise-shaped lies.
   const effectiveBedrock = (harness || agent.resolved.harness) === 'bedrock';
 
@@ -169,13 +169,12 @@ export function AgentCard({ agent }: { agent: AgentView }) {
           data-testid={`agent-cli-note-${agent.slug}`}
         >
           @{agent.displayName} uses the <span className="font-medium">{agent.resolved.harness} CLI</span>, so it runs
-          on <span className="font-medium">your own computer</span> — it needs the ex desktop app open and signed in,
-          with the {agent.resolved.harness} CLI installed and logged in there.
+          on <span className="font-medium">your own computer</span> through ex-runner, with the{' '}
+          {agent.resolved.harness} CLI installed and logged in there.
           {agent.status === 'needs_setup'
-            ? ' Your desktop app is online but that CLI is missing or not signed in.'
-            : ' Your desktop app is not running right now.'}{' '}
-          From the web or mobile, use the <span className="font-medium">Bedrock</span> agents instead — they run in
-          the cloud and need no desktop app.
+            ? ' Your ex-runner is online but that CLI is missing or not signed in — install it, then restart ex-runner.'
+            : ' No ex-runner of yours is online right now — start it with ex-runner start, or connect a computer under Runners in your account menu.'}{' '}
+          The <span className="font-medium">Bedrock</span> agents run on the server instead and need no setup.
         </p>
       )}
 
@@ -272,7 +271,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
               </div>
               {!effectiveBedrock && (
                 <div>
-                  <Label htmlFor={`offline-${agent.slug}`}>If your app is offline</Label>
+                  <Label htmlFor={`offline-${agent.slug}`}>If your ex-runner is offline</Label>
                   <select
                     id={`offline-${agent.slug}`}
                     className="mt-1 block rounded-md border bg-transparent p-2 text-sm"
@@ -344,7 +343,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
 
             {isBedrock && (
               <p className="text-sm text-muted-foreground">
-                Runs via AWS Bedrock ON THE SERVER — no desktop app, CLI, or personal AWS
+                Runs via AWS Bedrock ON THE SERVER — no ex-runner, CLI, or personal AWS
                 credentials involved; the backend’s own AWS role makes the model calls. Bedrock
                 agents use the chat, workspace, and connector tools — never anyone’s local shell or
                 files. Enter a Bedrock model id or inference-profile ARN above (e.g. a Claude,

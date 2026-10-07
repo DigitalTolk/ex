@@ -227,9 +227,10 @@ func (s *TokenStoreImpl) deleteAllForUserByScan(ctx context.Context, userID stri
 // batchDeleteTokenKeys deletes the given PK/SK projections in 25-item
 // BatchWriteItem chunks, draining UnprocessedItems with a bounded retry:
 // under throttling a hot partition returns deletes that were silently NOT
-// applied. This is the account-deactivation revocation path, so a dropped
-// delete leaves a live refresh token the deactivated user can keep redeeming
-// — failing to drain here is a security gap, not a UX nicety.
+// applied. This is the account-deactivation revocation path for refresh AND
+// runner tokens, so a dropped delete leaves a live credential the
+// deactivated user can keep using — failing to drain here is a security gap,
+// not a UX nicety.
 func (s *TokenStoreImpl) batchDeleteTokenKeys(ctx context.Context, items []map[string]types.AttributeValue) error {
 	for i := 0; i < len(items); i += 25 {
 		end := min(i+25, len(items))
@@ -250,13 +251,13 @@ func (s *TokenStoreImpl) batchDeleteTokenKeys(ctx context.Context, items []map[s
 		for attempt := 0; attempt < 3; attempt++ {
 			out, err := s.Client.BatchWriteItem(ctx, input)
 			if err != nil {
-				return fmt.Errorf("store: batch delete refresh tokens: %w", err)
+				return fmt.Errorf("store: batch delete tokens: %w", err)
 			}
 			if len(out.UnprocessedItems[s.Table]) == 0 {
 				break
 			}
 			if attempt == 2 {
-				return fmt.Errorf("store: batch delete refresh tokens: %d unprocessed after retries", len(out.UnprocessedItems[s.Table]))
+				return fmt.Errorf("store: batch delete tokens: %d unprocessed after retries", len(out.UnprocessedItems[s.Table]))
 			}
 			input.RequestItems = out.UnprocessedItems
 		}

@@ -173,7 +173,7 @@ describe('SchedulesPage', () => {
     renderPage();
     await screen.findByTestId('schedule-row-s-gg');
     // gg runs on the claude CLI; qib is bedrock (cloud).
-    expect(screen.getByTestId('schedule-row-cli-s-gg')).toHaveTextContent('needs the ex desktop app');
+    expect(screen.getByTestId('schedule-row-cli-s-gg')).toHaveTextContent('needs your ex-runner running');
     expect(screen.queryByTestId('schedule-row-cli-s-qib')).not.toBeInTheDocument();
   });
 

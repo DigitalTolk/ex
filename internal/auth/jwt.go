@@ -65,19 +65,20 @@ func (m *JWTManager) GenerateAccessToken(user *model.User) (string, error) {
 	return token.SignedString(m.secret)
 }
 
-// GenerateRunnerToken mints the long-lived, revocable token the desktop
-// runner authenticates with. Minted from an authenticated SPA session (never
-// via the refresh flow — see plan-v2 §3) and accepted only by the runner
-// middleware.
-func (m *JWTManager) GenerateRunnerToken(user *model.User, ttl time.Duration) (string, error) {
+// GenerateRunnerToken mints the long-lived token an ex-runner authenticates
+// with. tokenID becomes the `jti`: it names the RunnerToken row the runner
+// middleware requires to exist, which is what makes one install revocable on
+// its own. Accepted only by the runner middleware.
+func (m *JWTManager) GenerateRunnerToken(user *model.User, tokenID string, expiresAt time.Time) (string, error) {
 	now := time.Now()
 	claims := model.TokenClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        tokenID,
 			Subject:   user.ID,
 			Issuer:    jwtIssuer,
 			Audience:  jwt.ClaimStrings{jwtAudience},
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
 		UserID:      user.ID,
 		Email:       user.Email,

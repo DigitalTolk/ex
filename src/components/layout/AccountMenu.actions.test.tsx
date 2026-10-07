@@ -24,6 +24,7 @@ vi.mock('@/components/UserStatusDialog', () => ({ UserStatusDialog: ({ open }: {
 vi.mock('@/components/AboutDialog', () => ({ AboutDialog: ({ open }: { open: boolean }) => open ? <div data-testid="about-open" /> : null }));
 vi.mock('@/components/emoji/CustomEmojiDialog', () => ({ CustomEmojiDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="emojis-open" /> : null) }));
 vi.mock('@/components/InviteDialog', () => ({ InviteDialog: ({ open }: { open: boolean }) => open ? <div data-testid="invite-open" /> : null }));
+vi.mock('@/components/RunnersDialog', () => ({ RunnersDialog: ({ open }: { open: boolean }) => open ? <div data-testid="runners-open" /> : null }));
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 
 let mockNative = false;
@@ -55,6 +56,13 @@ describe('AccountMenu menu actions', () => {
     mockNative = false;
     logout.mockClear();
     resetServer.mockClear();
+  });
+
+  it('opens the runners dialog from the menu', () => {
+    renderMenu();
+    fireEvent.click(screen.getByTestId('account-menu-trigger'));
+    fireEvent.click(screen.getByTestId('user-menu-runners'));
+    expect(screen.getByTestId('runners-open')).toBeInTheDocument();
   });
 
   it('opens the status dialog from the menu', () => {

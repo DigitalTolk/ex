@@ -139,7 +139,7 @@ export function NewAgentForm({ onDone }: { onDone: () => void }) {
           </div>
           {isBedrock && (
             <p className="self-end pb-2 text-sm text-muted-foreground">
-              Runs on the server — no desktop app or personal AWS credentials needed.
+              Runs on the server — no ex-runner or personal AWS credentials needed.
             </p>
           )}
         </div>

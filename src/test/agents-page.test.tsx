@@ -270,15 +270,15 @@ describe('AgentsPage', () => {
     expect(qib.getByLabelText('Discussion rounds')).toHaveAttribute('placeholder', '8');
     expect(qib.getByLabelText('Thread follow-ups')).toHaveValue('window:30');
     expect(qib.getByLabelText('ask me before it replies')).toBeChecked();
-    // Server-run bedrock agents have no desktop app to be offline and no
+    // Server-run bedrock agents have no ex-runner to be offline and no
     // local harness tools to pre-approve — those controls must be absent.
     expect(qib.queryByLabelText('Read files')).not.toBeInTheDocument();
-    expect(qib.queryByLabelText('If your app is offline')).not.toBeInTheDocument();
+    expect(qib.queryByLabelText('If your ex-runner is offline')).not.toBeInTheDocument();
     expect(qib.getByText(/Runs via AWS Bedrock/)).toBeInTheDocument();
     expect(qib.getByText(/on the server, with your\s+access/)).toBeInTheDocument();
 
     const aa = await openCard('aa');
-    expect(aa.getByText('desktop app not running')).toBeInTheDocument();
+    expect(aa.getByText('ex-runner not running')).toBeInTheDocument();
 
     const ns = await findCard('ns');
     expect(ns.getByText('CLI missing on your machine')).toBeInTheDocument();
@@ -510,7 +510,7 @@ describe('AgentsPage', () => {
     renderPage();
 
     const aa = await openCard('aa');
-    fireEvent.change(aa.getByLabelText('If your app is offline'), { target: { value: 'queue' } });
+    fireEvent.change(aa.getByLabelText('If your ex-runner is offline'), { target: { value: 'queue' } });
     fireEvent.change(aa.getByLabelText('Discussion rounds'), { target: { value: '3' } });
     fireEvent.click(aa.getByRole('button', { name: 'Save' }));
 
@@ -680,11 +680,12 @@ describe('CLI agent explainer', () => {
   it('tells web/app users why a CLI agent is unavailable and names the cloud alternative', async () => {
     installRoutes();
     renderPage();
-    // Offline claude agent: desktop app not running.
+    // Offline claude agent: no ex-runner online.
     const aaNote = await screen.findByTestId('agent-cli-note-aa');
     expect(aaNote).toHaveTextContent('runs on your own computer');
     expect(aaNote).toHaveTextContent('claude CLI installed and logged in');
-    expect(aaNote).toHaveTextContent('Your desktop app is not running right now.');
+    expect(aaNote).toHaveTextContent('No ex-runner of yours is online right now');
+    expect(aaNote).toHaveTextContent('ex-runner start');
     expect(aaNote).toHaveTextContent('Bedrock');
     // needs_setup codex agent: app online, CLI missing.
     expect(screen.getByTestId('agent-cli-note-ns')).toHaveTextContent('missing or not signed in');
@@ -761,7 +762,7 @@ describe('scheduled orders', () => {
     expect(card.queryByTestId('schedule-form')).not.toBeInTheDocument();
   });
 
-  it('warns that a CLI agent only keeps its appointments while the desktop app runs', async () => {
+  it('warns that a CLI agent only keeps its appointments while its ex-runner runs', async () => {
     installRoutes();
     renderPage();
     const card = await openCard('gg'); // gg resolves to the claude CLI

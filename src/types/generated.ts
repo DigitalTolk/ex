@@ -889,7 +889,7 @@ export interface Attachment {
  * regular Auth middleware rejects them, so a leaked runner or run token can
  * never drive the interactive API.
  */
-export const TokenScopeRunner = "runner"; // desktop runner: register/claim/heartbeat/report
+export const TokenScopeRunner = "runner"; // ex-runner: register/claim/heartbeat/report/renew
 /**
  * Token scopes. An empty Scope is an ordinary interactive session token.
  * Scoped tokens are accepted ONLY by their dedicated middleware — the
@@ -1893,6 +1893,46 @@ export interface ChannelNotificationOverride {
   threadReplies?: boolean;
   ignoreGroupMentions?: boolean;
   followAllThreads?: boolean;
+}
+
+//////////
+// source: runnertoken.go
+
+/**
+ * RunnerToken is the server-side record behind one paired ex-runner install.
+ * The runner's JWT carries this ID as its `jti`, and the runner middleware
+ * accepts a runner JWT only while its row exists — so deleting the row
+ * revokes exactly that install, without rotating the signing secret (which
+ * would sign every user out).
+ */
+export interface RunnerToken {
+  id: string;
+  userID: string;
+  /**
+   * Label names the machine as the runner reported it at sign-in (its
+   * hostname), so the owner can tell installs apart when revoking one.
+   */
+  label: string;
+  createdAt: string /* RFC3339 */;
+  expiresAt: string /* RFC3339 */;
+}
+/**
+ * RunnerGrant is the short-lived, single-use approval a signed-in user gives
+ * in the browser while pairing an ex-runner. The browser hands its code to
+ * the runner on localhost; the runner redeems it together with the PKCE
+ * verifier only it holds, so a code that leaks (browser history, a proxy
+ * log) is useless on its own. Stored under the hash of the code, never the
+ * code itself.
+ */
+export interface RunnerGrant {
+  codeHash: string;
+  userID: string;
+  /**
+   * Challenge is the PKCE S256 challenge: base64url(sha256(verifier)).
+   */
+  challenge: string;
+  label: string;
+  expiresAt: string /* RFC3339 */;
 }
 
 //////////

@@ -298,7 +298,7 @@ describe('RunActivityDrawer timeline steps', () => {
     expect(within(drawer).getByText('Saved an item to shared context')).toBeInTheDocument();
     expect(within(drawer).getByText('Published artifact “Notes”')).toBeInTheDocument();
     expect(within(drawer).getByText('Used skill “release-notes”')).toBeInTheDocument();
-    expect(within(drawer).getByText('Queued — waiting for the desktop app to come online')).toBeInTheDocument();
+    expect(within(drawer).getByText('Queued — waiting for ex-runner to come online')).toBeInTheDocument();
     expect(within(drawer).getByText('Stopped by a human')).toBeInTheDocument();
     expect(within(drawer).getByText('Completed')).toBeInTheDocument();
     expect(within(drawer).getByText('Failed — unknown reason')).toBeInTheDocument();
