@@ -22,6 +22,7 @@ type ListProps = {
   scrollerRef?: (el: HTMLElement | null) => void;
   rangeChanged?: (range: { startIndex: number; endIndex: number }) => void;
   itemsRendered?: () => void;
+  startReached?: (index: number) => void;
 };
 const list = vi.hoisted(() => ({
   props: {} as ListProps,
@@ -374,3 +375,49 @@ describe('MessageList thread reply bars', () => {
   });
 });
 
+
+describe('MessageList opened on a linked message', () => {
+  // Virtuoso asks for older history the moment a link lands; inserting it
+  // above the message shifted the view (to the bottom, in a short chat). It
+  // waits until the person scrolls up.
+  it('keeps the older page back until the person scrolls up, then loads it once', () => {
+    const fetchNextPage = vi.fn();
+    renderList({ anchorMsgId: 'm-05', anchorRevision: 'nav-1', hasNextPage: true, fetchNextPage });
+    act(() => list.props.startReached?.(0));
+    expect(fetchNextPage).not.toHaveBeenCalled();
+    // The list moving on its own (no hand on it) doesn't count, either way.
+    scrollTo(1400);
+    scrollTo(1300);
+    expect(fetchNextPage).not.toHaveBeenCalled();
+    // The person scrolling down doesn't need it…
+    fireEvent.wheel(scroller());
+    scrollTo(1450);
+    expect(fetchNextPage).not.toHaveBeenCalled();
+    // …scrolling up loads it, once.
+    scrollTo(1350);
+    scrollTo(1250);
+    expect(fetchNextPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('opening the link again holds it again; jumping to the unread line lets go', () => {
+    const fetchNextPage = vi.fn();
+    setUnreadAnchor('ch-1', { kind: 'message', messageID: 'm-08' });
+    const view = renderList({ anchorMsgId: 'm-05', anchorRevision: 'nav-1', hasNextPage: true, fetchNextPage });
+    fireEvent.wheel(scroller());
+    view.rerenderList({ anchorRevision: 'nav-2' });
+    act(() => list.props.startReached?.(0));
+    expect(fetchNextPage).not.toHaveBeenCalled();
+    geo.lineTop = -200;
+    scrollTo(1400);
+    fireEvent.click(screen.getByTestId('unread-banner-jump'));
+    scrollTo(1300);
+    expect(fetchNextPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('without a link, older history loads as soon as it is asked for', () => {
+    const fetchNextPage = vi.fn();
+    renderList({ hasNextPage: true, fetchNextPage });
+    act(() => list.props.startReached?.(0));
+    expect(fetchNextPage).toHaveBeenCalledTimes(1);
+  });
+});

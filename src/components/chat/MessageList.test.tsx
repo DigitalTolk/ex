@@ -634,9 +634,11 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
   // (the anchor is centred and the slice is small). The previous
   // 250ms guard dropped that fire, leaving the user unable to scroll
   // back to older messages — same symptom as the newer-side bug,
-  // different end of the list. Both directions must dispatch
-  // immediately on mount.
-  it('startReached on deep-link mount immediately fetches older (no guard delay)', async () => {
+  // different end of the list. That fire is now kept rather than
+  // dropped: it waits for the person's first scroll up, because fetching
+  // on the spot inserted rows above the linked message and shifted it away
+  // (the scroll-up load is covered in MessageList.unread.test).
+  it('startReached on deep-link mount is kept for the first scroll up, not fetched on the spot', async () => {
     const fetchNextPage = vi.fn();
     const captured = await renderAndCaptureVirtuoso(
       <MessageList
@@ -649,7 +651,7 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
       />,
     );
     captured.startReached?.();
-    expect(fetchNextPage).toHaveBeenCalledTimes(1);
+    expect(fetchNextPage).not.toHaveBeenCalled();
   });
 
   it('startReached does NOT fetch when there are no older pages', async () => {

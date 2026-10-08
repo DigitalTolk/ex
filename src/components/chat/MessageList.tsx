@@ -43,6 +43,12 @@ export interface UserMapEntry {
   userStatus?: UserStatus;
 }
 
+type OlderPaging = Pick<MessageListProps, 'hasNextPage' | 'isFetchingNextPage' | 'fetchNextPage'>;
+
+function loadOlder({ hasNextPage, isFetchingNextPage, fetchNextPage }: OlderPaging) {
+  if (hasNextPage && !isFetchingNextPage) fetchNextPage();
+}
+
 interface MessageListProps {
   pages: { items: Message[] }[];
   hasNextPage: boolean;
@@ -214,6 +220,19 @@ function VirtuosoMessageList({
   // anchors — the timeout would race virtuoso's render.
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const anchorAppliedRef = useRef<string | null>(null);
+  // Held while the person hasn't scrolled since a link landed. Virtuoso asks
+  // for an older page right away (the top of the small window is within its
+  // overscan), and inserting it above the linked message shifts it by the
+  // rows' estimated height (88px each; real rows are far shorter) — the view
+  // drifted down, to the bottom in a short chat. So that page waits until the
+  // person scrolls up (see onScroll); scrolling or jumping to the unread line
+  // lets go.
+  const anchorHeldRef = useRef(!!anchorMsgId);
+  const olderWaitingRef = useRef(false);
+  const olderPagingRef = useRef<OlderPaging>({ hasNextPage, isFetchingNextPage, fetchNextPage });
+  useLayoutEffect(() => {
+    anchorHeldRef.current = !!anchorMsgId;
+  }, [anchorMsgId, anchorRevision]);
   // Scroll-to-anchor. Keyed on anchorIndex too, because the index shifts when
   // Virtuoso prepends an older page and we must re-issue scrollToIndex at the
   // corrected position; the dedup guard keeps that to exactly one scroll per
@@ -398,6 +417,7 @@ function VirtuosoMessageList({
     unreadAnchorRef.current = unreadAnchor;
     onAtBottomChangeRef.current = onAtBottomChange;
     hasPreviousPageRef.current = hasPreviousPage;
+    olderPagingRef.current = { hasNextPage, isFetchingNextPage, fetchNextPage };
   });
   const markAtBottom = useCallback((atBottom: boolean) => {
     if (atBottomRef.current === atBottom) return;
@@ -497,6 +517,7 @@ function VirtuosoMessageList({
     }
   }, [dividerIndex, hasNextPage, isFetchingNextPage, fetchNextPage, scrollToDivider]);
   const jumpToUnread = useCallback(() => {
+    anchorHeldRef.current = false;
     if (dividerIndex >= 0) {
       scrollToDivider('divider');
       return;
@@ -526,6 +547,10 @@ function VirtuosoMessageList({
       const nextScrollTop = scroller.scrollTop;
       const previousScrollTop = lastScrollerTopRef.current;
       const distanceFromBottom = scroller.scrollHeight - nextScrollTop - scroller.clientHeight;
+      if (nextScrollTop < previousScrollTop && olderWaitingRef.current && !anchorHeldRef.current) {
+        olderWaitingRef.current = false;
+        loadOlder(olderPagingRef.current);
+      }
       if (nextScrollTop < previousScrollTop - 2 && distanceFromBottom > MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX) {
         autoStickSuppressedUntilRef.current = performance.now() + USER_SCROLL_AUTOSTICK_SUPPRESSION_MS;
         markAtBottom(false);
@@ -536,9 +561,11 @@ function VirtuosoMessageList({
       lastScrollerTopRef.current = nextScrollTop;
       scheduleDividerMeasure();
     };
-    // The user scrolling themselves ends any pending landing on the line.
+    // The user scrolling themselves ends any pending landing on the line,
+    // and lets go of a linked message.
     const onUserScroll = () => {
       scrollToDividerRef.current = null;
+      anchorHeldRef.current = false;
     };
     const userScrollEvents = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
     scroller.addEventListener('scroll', onScroll, { passive: true });
@@ -691,7 +718,9 @@ function VirtuosoMessageList({
         followOutput={hasPreviousPage ? false : followLiveOutput}
         scrollerRef={handleScrollerRef}
         startReached={() => {
-          if (hasNextPage && !isFetchingNextPage) fetchNextPage();
+          // Not under a linked message the person is still on — see anchorHeldRef.
+          olderWaitingRef.current = anchorHeldRef.current;
+          if (!olderWaitingRef.current) loadOlder({ hasNextPage, isFetchingNextPage, fetchNextPage });
         }}
         endReached={() => {
           if (hasPreviousPage && !isFetchingPreviousPage && fetchPreviousPage) {
