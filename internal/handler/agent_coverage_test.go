@@ -1169,6 +1169,10 @@ func TestHagentCovCreateSubscription(t *testing.T) {
 	rec := hagentCovDo(env.h.CreateSubscription, hagentCovReq(http.MethodPost, target, "{", "u1", slug))
 	hagentCovWant(t, rec, http.StatusBadRequest)
 
+	// A watcher must name what it watches (only a scheduled order may not).
+	rec = hagentCovDo(env.h.CreateSubscription, hagentCovReq(http.MethodPost, target, `{"keywords":["ops"]}`, "u1", slug))
+	hagentCovWant(t, rec, http.StatusBadRequest)
+
 	// No access checker wired: forbidden (also walks the parentType default).
 	rec = hagentCovDo(env.h.CreateSubscription, hagentCovReq(http.MethodPost, target, `{"parentID":"p1"}`, "u1", slug))
 	hagentCovWant(t, rec, http.StatusForbidden)

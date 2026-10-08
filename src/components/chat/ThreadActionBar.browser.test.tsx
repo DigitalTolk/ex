@@ -63,6 +63,21 @@ describe('ThreadActionBar browser behaviour', () => {
     expect(document.querySelector('[data-testid="thread-action-last-reply"]')).toBeNull();
   });
 
+  it('flags a thread with unread replies, and only then', async () => {
+    await renderBar({ hasNew: true });
+    const bar = document.querySelector('[data-testid="thread-action-bar"]')!;
+    expect(bar.getAttribute('data-new')).toBe('true');
+    expect(bar.getAttribute('aria-label')).toBe('View 3 replies, new replies');
+    expect(document.querySelector('[data-testid="thread-action-new"]')?.textContent).toContain('New replies');
+  });
+
+  it('shows no marker for a read thread', async () => {
+    await renderBar();
+    const bar = document.querySelector('[data-testid="thread-action-bar"]')!;
+    expect(bar.hasAttribute('data-new')).toBe(false);
+    expect(document.querySelector('[data-testid="thread-action-new"]')).toBeNull();
+  });
+
   it('forwards the rootMessageID to onClick', async () => {
     const onClick = vi.fn();
     await renderBar({ onClick });

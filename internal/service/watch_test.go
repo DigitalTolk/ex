@@ -921,7 +921,9 @@ func TestOrchestrator_ScheduledOrderIgnoresMessages(t *testing.T) {
 		Schedule: "0 8 * * *", ScheduleTZ: "UTC", Instruction: "daily report",
 		CreatedAt: time.Now(),
 	})
-	fx.orch.OnMessage(ctx, &model.Message{ID: "m1", ParentID: "chan1", AuthorID: "u-bob", Body: "morning all"}, ParentChannel)
+	// Posted by a fixture user so the message really reaches subscription
+	// dispatch (an unknown author is dropped before it).
+	fx.orch.OnMessage(ctx, &model.Message{ID: "m1", ParentID: "chan1", AuthorID: "u-alice", Body: "morning all"}, ParentChannel)
 	if ids, _ := fx.runs.ListQueuedRuns(ctx, "u-alice", 10); len(ids) != 0 {
 		t.Fatalf("scheduled order fired on a chat message: %d runs", len(ids))
 	}
@@ -1235,4 +1237,89 @@ func (failingRegistry) KnownSlugs(context.Context) (map[string]bool, error) {
 }
 func (failingRegistry) InstalledIndex(context.Context, string) ([]ConnectorIndexEntry, error) {
 	return nil, nil
+}
+
+// A standing order whose creator has left its channel (removed, or the
+// channel archived) goes dormant: no watch, heartbeat or scheduled run — each
+// would read that channel for, and DM or alert, someone outside it — and a
+// pending backlog is dropped without asking. Rejoining resumes the order.
+func TestOrchestrator_StandingOrdersStopWhenCreatorLeaves(t *testing.T) {
+	ctx := context.Background()
+	left := fmt.Errorf("message: not a channel member: %w", ErrForbidden)
+	setup := func(t *testing.T, sub *model.AgentSubscription) *orchFixture {
+		t.Helper()
+		fx := newOrchFixture(t)
+		sub.AgentID, sub.CreatorID, sub.ParentID, sub.ParentType = testGGID, "u-alice", "chan1", ParentChannel
+		_ = fx.dir.PutAgentSubscription(ctx, sub)
+		fx.msgs.checkAccessErr = left
+		return fx
+	}
+	runs := func(fx *orchFixture) int {
+		ids, _ := fx.runs.ListQueuedRuns(ctx, "u-alice", 10)
+		return len(ids)
+	}
+
+	t.Run("watcher", func(t *testing.T) {
+		fx := setup(t, &model.AgentSubscription{ID: "w", Keywords: []string{"deploy"}})
+		post := func(id string) {
+			fx.orch.OnMessage(ctx, &model.Message{ID: id, ParentID: "chan1", AuthorID: "u-alice", Body: "deploy failed"}, ParentChannel)
+		}
+		post("m1")
+		if n := runs(fx); n != 0 {
+			t.Fatalf("watcher ran for a creator who left: %d runs", n)
+		}
+		fx.msgs.checkAccessErr = nil
+		post("m2")
+		if n := runs(fx); n != 1 {
+			t.Fatalf("watcher did not resume after rejoining: %d runs", n)
+		}
+	})
+
+	t.Run("heartbeat", func(t *testing.T) {
+		fx := setup(t, &model.AgentSubscription{ID: "h", HeartbeatMins: 30})
+		fx.orch.sweepHeartbeats(ctx, watchAllSubs(t, fx))
+		if n := runs(fx); n != 0 {
+			t.Fatalf("heartbeat ran for a creator who left: %d runs", n)
+		}
+		fx.msgs.checkAccessErr = nil
+		*fx.now = fx.now.Add(31 * time.Minute)
+		fx.orch.sweepHeartbeats(ctx, watchAllSubs(t, fx))
+		if n := runs(fx); n != 1 {
+			t.Fatalf("heartbeat did not resume after rejoining: %d runs", n)
+		}
+	})
+
+	t.Run("schedule", func(t *testing.T) {
+		fx := setup(t, &model.AgentSubscription{
+			ID: "s", Schedule: "0 8 * * *", ScheduleTZ: "UTC",
+			CreatedAt: time.Date(2026, 9, 23, 7, 0, 0, 0, time.UTC),
+		})
+		*fx.now = time.Date(2026, 9, 23, 8, 0, 30, 0, time.UTC)
+		fx.orch.sweepSchedules(ctx, watchAllSubs(t, fx))
+		if n := runs(fx); n != 0 {
+			t.Fatalf("scheduled order ran for a creator who left: %d runs", n)
+		}
+		if subs := watchAllSubs(t, fx); subs[0].PendingCatchUp {
+			t.Fatal("a skipped firing must not queue a catch-up for later")
+		}
+		fx.msgs.checkAccessErr = nil
+		*fx.now = time.Date(2026, 9, 24, 8, 0, 30, 0, time.UTC)
+		fx.orch.sweepSchedules(ctx, watchAllSubs(t, fx))
+		if n := runs(fx); n != 1 {
+			t.Fatalf("scheduled order did not resume after rejoining: %d runs", n)
+		}
+	})
+
+	t.Run("catch-up backlog", func(t *testing.T) {
+		fx := setup(t, &model.AgentSubscription{ID: "c", PendingCatchUp: true, PendingOffline: true})
+		fn := &fakeNotifier{}
+		fx.orch.SetApprovalNotifier(fn)
+		fx.orch.sweepWatchCatchUps(ctx, watchAllSubs(t, fx))
+		if n := runs(fx); n != 0 || len(fn.got) != 0 {
+			t.Fatalf("backlog for a creator who left: %d runs, %d asks", n, len(fn.got))
+		}
+		if subs := watchAllSubs(t, fx); subs[0].PendingCatchUp || subs[0].PendingOffline {
+			t.Fatalf("backlog should be dropped, got %+v", subs[0])
+		}
+	})
 }

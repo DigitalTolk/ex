@@ -21,6 +21,7 @@ import {
   shouldCommitChannelSwipe,
 } from '@/lib/channel-swipe';
 import { UpdateBanner } from '@/components/UpdateBanner';
+import { LoadingBar } from '@/components/layout/LoadingBar';
 import { NotificationPermissionBanner } from '@/components/NotificationPermissionBanner';
 
 interface AppLayoutProps {
@@ -320,6 +321,7 @@ export function AppLayout({ children }: AppLayoutProps) {
             onPan={onChannelPan}
             onPanEnd={onChannelPanEnd}
           >
+            <LoadingBar />
             {children}
           </motion.main>
         </div>

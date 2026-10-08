@@ -95,7 +95,8 @@ describe('useSendChannelMessage', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     // Reply is visible in the thread immediately.
-    expect(queryClient.getQueryData(['thread', 'channels/ch-1', 'root'])).toEqual([root, reply]);
+    // Tagged with its send's nonce, as the server would echo it.
+    expect(queryClient.getQueryData(['thread', 'channels/ch-1', 'root'])).toEqual([root, { ...reply, clientNonce: expect.any(String) }]);
     const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
     expect(keys).not.toContainEqual(['userThreads']);
     expect(keys).not.toContainEqual(['thread', 'channels/ch-1', 'root']);

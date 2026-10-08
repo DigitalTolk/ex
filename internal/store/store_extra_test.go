@@ -912,6 +912,12 @@ func TestChannelStore_IncrementMessageSeq(t *testing.T) {
 	if reloaded.MessageSeq != 3 {
 		t.Errorf("persisted MessageSeq = %d, want 3", reloaded.MessageSeq)
 	}
+	// CurrentMessageSeq reads the counter without bumping it.
+	for range 2 {
+		if cur, err := cs.CurrentMessageSeq(ctx, "ch-seq"); err != nil || cur != 3 {
+			t.Fatalf("CurrentMessageSeq = %d, %v; want 3", cur, err)
+		}
+	}
 }
 
 func TestChannelStore_IncrementMessageSeq_NotFound(t *testing.T) {
@@ -919,6 +925,9 @@ func TestChannelStore_IncrementMessageSeq_NotFound(t *testing.T) {
 	ctx := context.Background()
 	if _, err := NewChannelStore(db).IncrementMessageSeq(ctx, "ghost"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("IncrementMessageSeq missing channel: want ErrNotFound, got %v", err)
+	}
+	if _, err := NewChannelStore(db).CurrentMessageSeq(ctx, "ghost"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("CurrentMessageSeq missing channel: want ErrNotFound, got %v", err)
 	}
 }
 
@@ -999,6 +1008,9 @@ func TestConversationStore_IncrementMessageSeq(t *testing.T) {
 	if reloaded.MessageSeq != 3 {
 		t.Errorf("persisted MessageSeq = %d, want 3", reloaded.MessageSeq)
 	}
+	if cur, err := cs.CurrentMessageSeq(ctx, "conv-seq"); err != nil || cur != 3 {
+		t.Fatalf("CurrentMessageSeq = %d, %v; want 3", cur, err)
+	}
 
 	// SetConversationLastRead stamps the user-side row; ListUserConversations
 	// reads it back.
@@ -1019,6 +1031,9 @@ func TestConversationStore_IncrementMessageSeq_NotFound(t *testing.T) {
 	ctx := context.Background()
 	if _, err := NewConversationStore(db).IncrementMessageSeq(ctx, "ghost"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("IncrementMessageSeq missing conversation: want ErrNotFound, got %v", err)
+	}
+	if _, err := NewConversationStore(db).CurrentMessageSeq(ctx, "ghost"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("CurrentMessageSeq missing conversation: want ErrNotFound, got %v", err)
 	}
 }
 
@@ -1494,8 +1509,24 @@ func TestUserStateStore_SetListDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List after delete: %v", err)
 	}
-	if len(rows) != 1 || rows[0].Kind != model.UserStateThreadSeen {
+	if len(rows) != 1 || rows[0].Kind != model.UserStateThreadSeen || rows[0].Rewound {
 		t.Fatalf("rows after delete = %+v", rows)
+	}
+	// A mark-unread's rewound seen row keeps its flag through the table; an
+	// ordinary seen write over it clears the flag again.
+	rewoundAt := seenAt.Add(-time.Hour)
+	rewound := &model.UserStateItem{UserID: "u-1", Kind: model.UserStateThreadSeen, TargetID: "root-1", SeenAt: &rewoundAt, Rewound: true, UpdatedAt: seenAt}
+	if err := s.SetUserState(ctx, rewound); err != nil {
+		t.Fatalf("Set rewound: %v", err)
+	}
+	if rows, err = s.ListUserState(ctx, "u-1"); err != nil || len(rows) != 1 || !rows[0].Rewound || !rows[0].SeenAt.Equal(rewoundAt) {
+		t.Fatalf("rewound row = %+v, %v", rows, err)
+	}
+	if err := s.SetUserState(ctx, &model.UserStateItem{UserID: "u-1", Kind: model.UserStateThreadSeen, TargetID: "root-1", SeenAt: &seenAt, UpdatedAt: seenAt}); err != nil {
+		t.Fatalf("Set seen again: %v", err)
+	}
+	if rows, err = s.ListUserState(ctx, "u-1"); err != nil || len(rows) != 1 || rows[0].Rewound {
+		t.Fatalf("re-seen row = %+v, %v", rows, err)
 	}
 	if got := userStateKindFromSK("STATE#thread_seen#root-1"); got != model.UserStateThreadSeen {
 		t.Fatalf("userStateKindFromSK = %q", got)

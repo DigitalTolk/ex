@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { type ReactNode } from 'react';
-import { useDeepLinkAnchor } from './useDeepLinkAnchor';
+import { useDeepLinkAnchor, useListAnchor } from './useDeepLinkAnchor';
 
 function wrap(path: string) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -69,5 +69,19 @@ describe('useDeepLinkAnchor', () => {
     expect(result.current.mainAnchor).toBe('root-3');
     // No reply-specific anchor — the hash is just pointing at the root.
     expect(result.current.threadAnchor).toBeUndefined();
+  });
+});
+
+describe('useListAnchor', () => {
+  it('shows the latest instead of the linked window until the next navigation', () => {
+    const { result, rerender } = renderHook(
+      ({ anchor, nav }: { anchor?: string; nav?: string }) => useListAnchor(anchor, nav),
+      { initialProps: { anchor: 'm-1' as string | undefined, nav: 'k1' as string | undefined } },
+    );
+    expect(result.current.listAnchor).toBe('m-1');
+    act(() => result.current.showLatest());
+    expect(result.current.listAnchor).toBeUndefined();
+    rerender({ anchor: 'm-2', nav: 'k2' }); // a new link: honour it again
+    expect(result.current.listAnchor).toBe('m-2');
   });
 });

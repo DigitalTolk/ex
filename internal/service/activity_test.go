@@ -106,6 +106,22 @@ func TestActivityService_RecordReactionAddsForAuthor(t *testing.T) {
 	waitForCond(t, func() bool { return activityPublishedFor(pub, "author-1") }, "activity.new published to author")
 }
 
+// A reaction on a thread reply snapshots the thread root so the activity row
+// can open the thread — the reply never renders in the main list.
+func TestActivityService_RecordReactionCarriesThreadRoot(t *testing.T) {
+	store := newFakeActivityStore()
+	svc := NewActivityService(store, newMockPublisher())
+	reply := reactedMessage("author-1")
+	reply.ParentMessageID = "root-1"
+
+	svc.RecordReaction(context.Background(), reply, ParentChannel, "reactor-2", "🎉")
+
+	waitForCond(t, func() bool { return store.count("author-1") == 1 }, "reaction recorded")
+	if got := store.items["author-1"][0].ParentMessageID; got != "root-1" {
+		t.Fatalf("ParentMessageID = %q, want root-1", got)
+	}
+}
+
 type fakeChannelResolver struct {
 	ch  *model.Channel
 	err error

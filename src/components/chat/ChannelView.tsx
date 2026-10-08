@@ -23,12 +23,14 @@ import {
   useEditMessage,
   useSendChannelMessage,
 } from '@/hooks/useMessages';
+import { useComposerSchedule } from '@/hooks/useScheduledMessages';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { useNotifications } from '@/context/NotificationContext';
 import { canEditChannel, canArchiveChannel, canLeaveChannel, roleNumber } from '@/lib/roles';
-import { markThreadSeen } from '@/hooks/useThreads';
+import { markThreadSeen, noteThreadReadPosition } from '@/hooks/useThreads';
 import { apiFetch } from '@/lib/api';
+import { slugify } from '@/lib/format';
 import { queryKeys } from '@/lib/query-keys';
 import { clearChannelUnreadInCache } from '@/lib/unread-cache';
 import { NonMemberInvitePrompt } from './NonMemberInvitePrompt';
@@ -38,7 +40,7 @@ import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { collectMessageUserIDs, findLastOwnMessageId } from '@/lib/message-users';
 import { useSidePanels } from '@/hooks/useSidePanels';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useDeepLinkAnchor } from '@/hooks/useDeepLinkAnchor';
+import { useDeepLinkAnchor, useListAnchor } from '@/hooks/useDeepLinkAnchor';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import {
   useDraftAttachmentChips,
@@ -48,7 +50,7 @@ import {
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
 import type { UserMapEntry } from './MessageList';
-import { useMarkReadOnReturn } from '@/hooks/useMarkReadOnReturn';
+import { useReadSession } from '@/hooks/useReadSession';
 import { useEditingMessage } from '@/hooks/useEditingMessage';
 
 function errorStatus(err: unknown): number | null {
@@ -84,9 +86,20 @@ export function ChannelView() {
   // Opening any of those closes a tag, and opening a tag closes them.
   const { activeTag, closeTag } = useTagState();
   const { data: channel, error: channelError, isLoading: channelLoading } = useChannelBySlug(slug);
+  // The sidebar already knows the channels you're in by name, so while the
+  // channel itself is looked up its messages start loading too, and its name
+  // can stand in the header.
+  const { data: userChannels } = useUserChannels();
+  const knownChannel = useMemo(
+    () => userChannels?.find((c) => slug === slugify(c.channelName) || slug === c.channelID),
+    [userChannels, slug],
+  );
   const { data: members } = useChannelMembers(channel?.id);
   useDocumentTitle(channel ? `~${channel.name}` : null);
   const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(channel?.id);
+  // A link-opened window can be swapped for the newest messages (keeping any
+  // open thread) — see the MessageList pill.
+  const { listAnchor, showLatest } = useListAnchor(mainAnchor, navKey);
 
   const dismissedThreadParam =
     dismissed && dismissed.navKey === navKey ? dismissed.thread : null;
@@ -117,8 +130,9 @@ export function ChannelView() {
     fetchPreviousPage,
     hasPreviousPage,
     isFetchingPreviousPage,
-  } = useChannelMessages(channel?.id, mainAnchor);
-  const sendMessage = useSendChannelMessage(channel?.id);
+  } = useChannelMessages(channel?.id ?? knownChannel?.channelID, listAnchor);
+  const sendMessage = useSendChannelMessage(channel?.id, user?.id);
+  const schedule = useComposerSchedule({ parentID: channel?.id, parentType: 'channel' });
   const channelID = channel?.id;
   const draftScope = useMemo(
     () => ({ parentID: channelID, parentType: 'channel' as const }),
@@ -219,17 +233,16 @@ export function ChannelView() {
     const openedID = channel.id;
     setActiveChannel(openedID);
     setActiveParent(openedID);
-    markChannelRead(openedID);
     return () => {
       setActiveChannel(null);
       setActiveParent(null);
     };
-  }, [channel?.id, setActiveChannel, setActiveParent, markChannelRead]);
+  }, [channel?.id, setActiveChannel, setActiveParent]);
 
-  // Messages that arrived while this channel's window was blurred/hidden bump
-  // the badge instead of auto-reading (ChatPage's attention gate) — returning
-  // to the window is what reads them.
-  useMarkReadOnReturn(channel?.id, markChannelRead);
+  // Opening reads the channel but keeps a "New messages" line where you left
+  // off; after that it reads only while you follow along at the bottom (see
+  // useReadSession).
+  const readSession = useReadSession('channel', channel?.id, markChannelRead);
 
   // Reset locally-opened thread when the channel changes; deliberate
   // synchronous reset. URL-driven thread state (?thread=…) doesn't need
@@ -251,10 +264,13 @@ export function ChannelView() {
   const urlThreadActive = !!threadParam && threadParam !== dismissedThreadParam;
   const effectiveThreadRootID = threadRootID ?? (urlThreadActive ? threadParam : null) ?? null;
 
-  // Mark URL-driven threads as seen exactly once per change.
+  // Mark URL-driven threads as seen exactly once per change — noting first
+  // where the user had read up to, for the thread's "New messages" line.
   useEffect(() => {
-    if (threadParam && channel?.id) markThreadSeen(threadParam, new Date().toISOString(), { parentID: channel.id, parentType: 'channel' });
-  }, [threadParam, channel?.id]);
+    if (!threadParam || !channel?.id) return;
+    noteThreadReadPosition(queryClient, threadParam);
+    markThreadSeen(threadParam, new Date().toISOString(), { parentID: channel.id, parentType: 'channel' });
+  }, [threadParam, channel?.id, queryClient]);
 
   // Opening a thread (via URL navigation, e.g. clicking a pinned
   // thread reply) must dismiss any other side panel — the local
@@ -318,7 +334,6 @@ export function ChannelView() {
   const canArchive = canArchiveChannel(currentUserRole);
   const canLeave = canLeaveChannel(currentUserRole, channel?.slug);
 
-  const { data: userChannels } = useUserChannels();
   const muted = !!userChannels?.find((uc) => uc.channelID === channel?.id)?.muted;
   const muteChannel = useMuteChannel();
   const [notifPrefsOpen, setNotifPrefsOpen] = useState(false);
@@ -394,6 +409,7 @@ export function ChannelView() {
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <Header
           channel={channel}
+          loadingChannel={channelLoading ? { name: knownChannel?.channelName, type: knownChannel?.channelType } : undefined}
           memberCount={members?.length}
           onMembersClick={() => (showMembers ? closeMembers() : openMembers())}
           channelId={channel?.id}
@@ -416,7 +432,7 @@ export function ChannelView() {
             pages={data?.pages ?? []}
             hasNextPage={hasNextPage}
             isFetchingNextPage={isFetchingNextPage}
-            isLoading={isLoading}
+            isLoading={isLoading || channelLoading}
             fetchNextPage={fetchNextPage}
             hasPreviousPage={hasPreviousPage}
             isFetchingPreviousPage={isFetchingPreviousPage}
@@ -428,8 +444,14 @@ export function ChannelView() {
             quickReactions={quickReactions}
             onReplyInThread={openThread}
             onEditMessage={isMobile ? setEditingMessage : undefined}
-            anchorMsgId={mainAnchor}
+            anchorMsgId={listAnchor}
             anchorRevision={navKey}
+            onAtBottomChange={readSession.onAtBottomChange}
+            onMarkAllRead={readSession.markAllRead}
+            onJumpToLatest={() => {
+              readSession.prepareJumpToLatest();
+              showLatest();
+            }}
             intro={
               channel ? (
                 <ChannelIntro
@@ -454,9 +476,11 @@ export function ChannelView() {
               key={activeEditingMessage ? `edit-${activeEditingMessage.id}` : `channel-${channel?.id ?? 'loading'}`}
               ref={inputRef}
               onSend={activeEditingMessage ? handleEditMessage : handleSendMessage}
+              onSchedule={schedule.onSchedule}
+              scheduledCount={schedule.scheduledCount}
               onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
-              disabled={activeEditingMessage ? editMessage.isPending : sendMessage.isPending}
-              placeholder={activeEditingMessage ? 'Edit message...' : `Write to ~${channel?.name ?? '...'}`}
+              disabled={!!activeEditingMessage && editMessage.isPending}
+              placeholder={activeEditingMessage ? 'Edit message...' : `Write to ~${channel?.name ?? knownChannel?.channelName ?? '...'}`}
               focusKey={activeEditingMessage ? `edit-${activeEditingMessage.id}` : channel?.id}
               initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}
               initialDrafts={activeEditingMessage ? editDraftAttachments : draftAttachments}

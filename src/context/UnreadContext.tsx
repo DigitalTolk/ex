@@ -176,3 +176,9 @@ export function useUnread() {
   if (!ctx) throw new Error('useUnread must be used within UnreadProvider');
   return ctx;
 }
+
+// useOptionalUnread is useUnread for components that also render outside the
+// provider (e.g. the message list in isolation): undefined there.
+export function useOptionalUnread(): UnreadState | undefined {
+  return useContext(UnreadContext);
+}

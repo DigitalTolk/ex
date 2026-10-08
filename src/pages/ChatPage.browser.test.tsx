@@ -51,6 +51,7 @@ vi.mock('@/lib/unread-cache', () => ({
   clearChannelUnreadInCache: mockClearChannelUnreadInCache,
   clearConversationUnreadInCache: mockClearConversationUnreadInCache,
   touchConversationActivityInCache: mockTouchConversationActivity,
+  cachedUnreadCount: vi.fn(() => 0),
 }));
 
 vi.mock('@/context/UnreadContext', () => ({

@@ -28,6 +28,7 @@ vi.mock('./Sidebar', () => ({ Sidebar: () => <nav data-testid="sidebar-body">cha
 vi.mock('./AppTopBar', () => ({ AppTopBar: () => <header data-testid="app-shell-header" /> }));
 vi.mock('./AccountMenu', () => ({ AccountMenu: () => <div data-testid="sidebar-account" /> }));
 vi.mock('@/components/NotificationPermissionBanner', () => ({ NotificationPermissionBanner: () => null }));
+vi.mock('./LoadingBar', () => ({ LoadingBar: () => null }));
 vi.mock('@/components/UpdateBanner', () => ({ UpdateBanner: () => null }));
 vi.mock('@/hooks/useServerVersion', () => ({
   BUILD_DISPLAY_VERSION: 'browser-test',

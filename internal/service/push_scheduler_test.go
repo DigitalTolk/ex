@@ -110,6 +110,30 @@ func TestMobilePushTaskHandler_MalformedPayload_SkipsRetry(t *testing.T) {
 	}
 }
 
+// A reminder keys its ack by its AlertID: the desktop ack of the ORIGINAL
+// message alert (same MessageID) must not stand the reminder's push down,
+// while an ack of the reminder alert itself does.
+func TestMobilePushTaskHandler_AlertIDKeysTheAck(t *testing.T) {
+	provider := &recordingMobilePush{}
+	reminder := Notification{Kind: NotificationKindReminder, MessageID: "m1", AlertID: "r1"}
+
+	h := NewMobilePushTaskHandler(&stubAckStore{acked: map[string]bool{"u-bob:m1": true}}, provider)
+	if err := h(context.Background(), mobilePushTask(t, "u-bob", reminder)); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if len(provider.calls) != 1 {
+		t.Fatalf("message ack must not suppress the reminder push, provider calls = %d", len(provider.calls))
+	}
+
+	acked := NewMobilePushTaskHandler(&stubAckStore{acked: map[string]bool{"u-bob:r1": true}}, provider)
+	if err := acked(context.Background(), mobilePushTask(t, "u-bob", reminder)); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if len(provider.calls) != 1 {
+		t.Fatalf("an acked reminder alert must be suppressed, provider calls = %d", len(provider.calls))
+	}
+}
+
 func TestMobilePushTaskID(t *testing.T) {
 	if got := mobilePushTaskID("u-1", "m-9"); got != "push:m-9:u-1" {
 		t.Fatalf("task id = %q", got)

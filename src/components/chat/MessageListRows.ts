@@ -3,7 +3,10 @@ import type { Message } from '@/types';
 
 export type MessageListRow =
   | { kind: 'day'; key: string; date: string }
+  | { kind: 'unread'; key: string }
   | { kind: 'message'; key: string; message: Message; firstInGroup: boolean };
+
+export const UNREAD_DIVIDER_KEY = 'unread-divider';
 
 // Consecutive messages from the same author within this window collapse
 // into one visual group (Slack/Mattermost use ~5 minutes): only the first
@@ -33,7 +36,10 @@ export function isGroupedWithPrevious(prev: Message | null | undefined, msg: Mes
 // Each message row carries `firstInGroup`: false marks a compact
 // continuation of the message above it. A day divider always resets
 // grouping so the first message under a new day shows its full header.
-export function buildMessageListRows(allMessages: Message[]): MessageListRow[] {
+//
+// `unreadBeforeID` puts the "New messages" line directly above that message
+// (below its day divider), which then also starts a fresh group.
+export function buildMessageListRows(allMessages: Message[], unreadBeforeID?: string | null): MessageListRow[] {
   const out: MessageListRow[] = [];
   let lastDate = '';
   let prev: Message | null = null;
@@ -45,7 +51,13 @@ export function buildMessageListRows(allMessages: Message[]): MessageListRow[] {
       out.push({ kind: 'day', key: `day-${d}`, date: msg.createdAt });
       prev = null;
     }
-    out.push({ kind: 'message', key: msg.id, message: msg, firstInGroup: !isGroupedWithPrevious(prev, msg) });
+    if (msg.id === unreadBeforeID) {
+      out.push({ kind: 'unread', key: UNREAD_DIVIDER_KEY });
+      prev = null;
+    }
+    // Keyed by the client nonce when there is one, so an optimistic row keeps
+    // its identity when the real message replaces it (it fades in, no remount).
+    out.push({ kind: 'message', key: msg.clientNonce ?? msg.id, message: msg, firstInGroup: !isGroupedWithPrevious(prev, msg) });
     prev = msg;
   }
   return out;

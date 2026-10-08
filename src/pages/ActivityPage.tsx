@@ -49,11 +49,13 @@ export default function ActivityPage() {
     return m;
   }, [channels]);
 
+  // A thread reply links with its thread root so the thread opens on it —
+  // replies never render in the main list.
   const hrefFor = (i: ActivityItem | Reminder) => {
-    if (i.parentType !== 'channel') return buildConversationHref(i.parentID, i.messageID);
+    if (i.parentType !== 'channel') return buildConversationHref(i.parentID, i.messageID, i.parentMessageID);
     // Prefer the item's own slug snapshot, else the channel cache, else the id.
     const slug = i.channelSlug || channelSlugByID.get(i.parentID) || i.parentID;
-    return buildChannelHref(slug, i.messageID);
+    return buildChannelHref(slug, i.messageID, i.parentMessageID);
   };
 
   const pending = reminders ?? [];

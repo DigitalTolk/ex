@@ -36,6 +36,8 @@ import type { Conversation } from '@/types';
 
 // --- mocks ---------------------------------------------------------------
 
+let conversationLoading = false;
+let userConversations: { conversationID: string; displayName: string }[] | undefined = [];
 let mockConversation: Conversation = {
   id: 'conv-1',
   type: 'dm',
@@ -55,6 +57,7 @@ vi.mock('@/context/AuthContext', () => ({
 }));
 
 vi.mock('@/context/UnreadContext', () => ({
+  useOptionalUnread: () => undefined,
   useUnread: () => ({
     unreadChannels: new Set(),
     unreadChannelNotifications: new Set(),
@@ -87,8 +90,8 @@ vi.mock('@/context/PresenceContext', () => ({
 
 vi.mock('@/hooks/useConversations', () => ({
   useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
-  useConversation: () => ({ data: mockConversation }),
-  useUserConversations: () => ({ data: [] }),
+  useConversation: () => ({ data: conversationLoading ? undefined : mockConversation, isLoading: conversationLoading }),
+  useUserConversations: () => ({ data: userConversations }),
   useSearchUsers: () => ({ data: [] }),
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
 }));
@@ -138,6 +141,8 @@ function renderConversationView(id = 'conv-1') {
 describe('ConversationView - DM title', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    conversationLoading = false;
+    userConversations = [];
     mockConversation = {
       id: 'conv-1',
       type: 'dm',
@@ -158,11 +163,27 @@ describe('ConversationView - DM title', () => {
     // Before names resolve, should show fallback
     expect(screen.getByText('Direct Message')).toBeInTheDocument();
   });
+
+  it('while the conversation loads, shows the name the sidebar has for it', () => {
+    conversationLoading = true;
+    userConversations = [
+      { conversationID: 'conv-other', displayName: 'Someone' },
+      { conversationID: 'conv-1', displayName: 'Bob' },
+    ];
+    const view = renderConversationView();
+    expect(screen.getByRole('heading', { level: 1, name: 'Bob' })).toBeInTheDocument();
+    view.unmount();
+    userConversations = undefined;
+    renderConversationView();
+    expect(screen.getByRole('heading', { level: 1, name: 'Direct Message' })).toBeInTheDocument();
+  });
 });
 
 describe('ConversationView - Group title', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    conversationLoading = false;
+    userConversations = [];
     const { apiFetch } = await import('@/lib/api');
     vi.mocked(apiFetch).mockResolvedValue([
       { id: 'u-2', displayName: 'Bob' },

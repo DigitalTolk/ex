@@ -218,7 +218,7 @@ func (h *ConversationHandler) SendMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	msg, err := h.messageSvc.Send(r.Context(), userID, id, service.ParentConversation, body.Body, body.ParentMessageID, body.AttachmentIDs...)
+	msg, err := h.messageSvc.Send(withClientNonce(r), userID, id, service.ParentConversation, body.Body, body.ParentMessageID, body.AttachmentIDs...)
 	if err != nil {
 		writeServiceError(w, err, http.StatusForbidden, "send_error")
 		return

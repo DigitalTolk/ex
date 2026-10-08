@@ -284,6 +284,7 @@ type mockUnreadSeqStore struct {
 	lastReads map[string]int64 // key: parentID + "#" + userID
 	err       error
 	lastErr   error
+	curErr    error
 }
 
 func (m *mockUnreadSeqStore) IncrementMessageSeq(_ context.Context, parentID string) (int64, error) {
@@ -296,6 +297,15 @@ func (m *mockUnreadSeqStore) IncrementMessageSeq(_ context.Context, parentID str
 		m.seq = make(map[string]int64)
 	}
 	m.seq[parentID]++
+	return m.seq[parentID], nil
+}
+
+func (m *mockUnreadSeqStore) CurrentMessageSeq(_ context.Context, parentID string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.curErr != nil {
+		return 0, m.curErr
+	}
 	return m.seq[parentID], nil
 }
 
@@ -333,6 +343,13 @@ type convSeqStore struct{ s *mockConversationStore }
 
 func (a convSeqStore) IncrementMessageSeq(ctx context.Context, parentID string) (int64, error) {
 	return a.s.IncrementMessageSeq(ctx, parentID)
+}
+func (a convSeqStore) CurrentMessageSeq(ctx context.Context, parentID string) (int64, error) {
+	conv, err := a.s.GetConversation(ctx, parentID)
+	if err != nil {
+		return 0, err
+	}
+	return conv.MessageSeq, nil
 }
 func (a convSeqStore) SetLastRead(ctx context.Context, parentID, userID string, seq int64) error {
 	return a.s.SetConversationLastRead(ctx, parentID, userID, seq)

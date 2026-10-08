@@ -53,6 +53,7 @@ interface UseWebSocketOptions {
   onDraftUpdated?: WSCallback;
   onWebhookChanged?: WSCallback;
   onActivityNew?: WSCallback;
+  onScheduledMessagesChanged?: WSCallback;
   onActivityRead?: WSCallback;
   onThreadUpdated?: WSCallback;
   onForceLogout?: WSCallback;
@@ -259,6 +260,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
               break;
             case EventType.WebhookChanged:
               callbacksRef.current.onWebhookChanged?.(payload);
+              break;
+            case EventType.ScheduledMessagesChanged:
+              callbacksRef.current.onScheduledMessagesChanged?.(payload);
               break;
             case EventType.ActivityNew:
               callbacksRef.current.onActivityNew?.(payload);

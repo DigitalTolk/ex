@@ -282,10 +282,13 @@ func (s *ConversationService) CreateGroup(ctx context.Context, creatorID string,
 	return conv, nil
 }
 
-// ListUserConversationIDs returns just the conversation IDs the user can see
-// (same activation rule as ListUserConversations) without the unread and DM
-// profile enrichment — the WebSocket connect path and the presence audience
-// resolver only need topic names.
+// ListUserConversationIDs returns the IDs of every conversation the user
+// participates in, without the unread and DM profile enrichment — the
+// WebSocket connect path and the presence audience resolver only need topic
+// names. Unlike ListUserConversations it keeps conversations not yet
+// activated: a socket that (re)connects between someone creating a DM with
+// the user and sending its first message must already be on its topic, or
+// that first message — and the ones after it — never arrive live.
 func (s *ConversationService) ListUserConversationIDs(ctx context.Context, userID string) ([]string, error) {
 	convs, err := s.conversations.ListUserConversations(ctx, userID)
 	if err != nil {
@@ -293,9 +296,6 @@ func (s *ConversationService) ListUserConversationIDs(ctx context.Context, userI
 	}
 	ids := make([]string, 0, len(convs))
 	for _, c := range convs {
-		if !c.Activated && c.CreatedBy != "" && c.CreatedBy != userID {
-			continue
-		}
 		ids = append(ids, c.ConversationID)
 	}
 	return ids, nil

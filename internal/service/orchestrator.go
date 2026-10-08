@@ -594,7 +594,7 @@ func (o *Orchestrator) dispatchSubscriptions(ctx context.Context, msg *model.Mes
 			continue
 		}
 		creator, err := o.users.GetUser(ctx, sub.CreatorID)
-		if err != nil {
+		if err != nil || o.creatorLeft(ctx, sub) {
 			continue
 		}
 		started[sub.AgentID] = true
@@ -631,6 +631,17 @@ func (o *Orchestrator) markWatchPending(ctx context.Context, sub *model.AgentSub
 	if err := o.agentSvc.PutSubscription(ctx, sub); err != nil {
 		slog.Warn("watch pending mark failed", "subID", sub.ID, "error", err)
 	}
+}
+
+// creatorLeft reports whether a standing order's creator can no longer see
+// the channel/DM it is attached to — they left, were removed, or it was
+// archived. The order then stays dormant (resuming if they rejoin): running
+// it would feed that parent's messages to an agent working for someone
+// outside it, and its DMs, approval asks and catch-up alerts would point at
+// a page the creator can't open. Only a definitive denial counts — a failed
+// check runs the order as before (its own reads are membership-gated).
+func (o *Orchestrator) creatorLeft(ctx context.Context, sub *model.AgentSubscription) bool {
+	return errors.Is(o.messages.CheckAccess(ctx, sub.CreatorID, sub.ParentID, sub.ParentType), ErrForbidden)
 }
 
 // watchSpecFromSub turns a subscription's standing order into a run spec,
@@ -2427,6 +2438,13 @@ func (o *Orchestrator) sweepWatchCatchUps(ctx context.Context, subs []*model.Age
 		if err != nil {
 			continue
 		}
+		// A backlog from a parent the creator has since left is dropped, not
+		// held: nobody should be asked about it, and rejoining must not
+		// replay what they missed while out.
+		if o.creatorLeft(ctx, sub) {
+			o.clearCatchUp(ctx, sub, nil)
+			continue
+		}
 		// An OFFLINE backlog on a local CLI harness runs only with the
 		// creator's consent — their machine and tokens, possibly a big pile.
 		// Ask once (notification + in-channel card) and wait for the decide
@@ -2596,7 +2614,7 @@ func (o *Orchestrator) sweepHeartbeats(ctx context.Context, subs []*model.AgentS
 			continue
 		}
 		creator, err := o.users.GetUser(ctx, sub.CreatorID)
-		if err != nil {
+		if err != nil || o.creatorLeft(ctx, sub) {
 			continue
 		}
 		// Synthetic invocation: no invoking message (MessageID "" — state
@@ -2648,7 +2666,7 @@ func (o *Orchestrator) sweepSchedules(ctx context.Context, subs []*model.AgentSu
 			continue
 		}
 		creator, err := o.users.GetUser(ctx, sub.CreatorID)
-		if err != nil {
+		if err != nil || o.creatorLeft(ctx, sub) {
 			continue
 		}
 		// Synthetic invocation: no invoking message. Thread-scoped when the

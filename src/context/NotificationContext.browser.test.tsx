@@ -581,6 +581,37 @@ describe('NotificationContext browser', () => {
     }
   });
 
+  // A fired reminder is a NEW alert about a message the user may have been
+  // alerted about minutes ago (or reminded of before). Keyed by its alertID it
+  // surfaces — and acks under that key so the backend's push fallback for the
+  // reminder stands down — while a repeat of the same reminder still collapses.
+  it('dispatch keys a reminder by its alertID, not the message it is about', async () => {
+    const instances: FakeNote[] = [];
+    const restore = installFakeNotification(instances);
+    try {
+      await render(<NotificationProvider><Capture /></NotificationProvider>);
+      await vi.waitFor(() => expect(captured).not.toBeNull());
+      markUserActivity();
+      sendWSMock.mockClear();
+      captured!.dispatch(basePayload({ kind: 'mention', authorID: 'u-other', messageID: 'm-rem' }));
+      await vi.waitFor(() => expect(instances.length).toBe(1));
+
+      const reminder = basePayload({ kind: 'reminder', authorID: undefined, messageID: 'm-rem', alertID: 'r-1' });
+      captured!.dispatch(reminder);
+      captured!.dispatch(reminder); // the same reminder again → collapsed
+      captured!.dispatch({ ...reminder, alertID: 'r-2' }); // a second reminder on the message
+      await vi.waitFor(() => expect(instances.length).toBe(3));
+      for (const key of ['m-rem', 'r-1', 'r-2']) {
+        expect(sendWSMock).toHaveBeenCalledWith(
+          { type: 'notification.ack', messageID: key },
+          expect.objectContaining({ buffer: true }),
+        );
+      }
+    } finally {
+      restore();
+    }
+  });
+
   it('dispatch does not dedupe notifications that carry no messageID', async () => {
     const instances: FakeNote[] = [];
     const restore = installFakeNotification(instances);

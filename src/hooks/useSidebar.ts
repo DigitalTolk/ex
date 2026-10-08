@@ -82,7 +82,15 @@ export function useCreateCategory() {
         method: 'POST',
         body: JSON.stringify({ name }),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.sidebarCategories() }),
+    // Show the new category the moment the server confirms it, rather than
+    // after the refetch round trip; the refetch then reconciles in the
+    // background (not awaited, so the input closes in the same beat).
+    onSuccess: (created) => {
+      qc.setQueryData<SidebarCategory[]>(queryKeys.sidebarCategories(), (prev) =>
+        prev && !prev.some((c) => c.id === created.id) ? [...prev, created] : prev,
+      );
+      void qc.invalidateQueries({ queryKey: queryKeys.sidebarCategories() });
+    },
   });
 }
 

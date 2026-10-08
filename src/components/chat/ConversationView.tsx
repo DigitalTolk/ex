@@ -18,22 +18,23 @@ import { TypingIndicator } from './TypingIndicator';
 import { AgentActivityIndicator } from './AgentActivityIndicator';
 import { AgentApprovalCard } from './AgentApprovalCard';
 import { WatcherCatchUpCard } from './WatcherCatchUpCard';
-import { useConversation } from '@/hooks/useConversations';
+import { useConversation, useUserConversations } from '@/hooks/useConversations';
 import {
   useConversationMessages,
   useEditMessage,
   useSendConversationMessage,
 } from '@/hooks/useMessages';
+import { useComposerSchedule } from '@/hooks/useScheduledMessages';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { useNotifications } from '@/context/NotificationContext';
-import { markThreadSeen } from '@/hooks/useThreads';
+import { markThreadSeen, noteThreadReadPosition } from '@/hooks/useThreads';
 import { collectMessageUserIDs, findLastOwnMessageId } from '@/lib/message-users';
 import { useSidePanels } from '@/hooks/useSidePanels';
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useDeepLinkAnchor } from '@/hooks/useDeepLinkAnchor';
+import { useDeepLinkAnchor, useListAnchor } from '@/hooks/useDeepLinkAnchor';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useIsOnline } from '@/stores/presence';
 import {
@@ -47,7 +48,7 @@ import { queryKeys } from '@/lib/query-keys';
 import { clearConversationUnreadInCache } from '@/lib/unread-cache';
 import type { Conversation } from '@/types';
 import type { UserMapEntry } from './MessageList';
-import { useMarkReadOnReturn } from '@/hooks/useMarkReadOnReturn';
+import { useReadSession } from '@/hooks/useReadSession';
 import { useEditingMessage } from '@/hooks/useEditingMessage';
 
 function errorStatus(err: unknown): number | null {
@@ -93,7 +94,13 @@ export function ConversationView() {
   const quickReactions = useFrequentEmojis(3);
   const { setActiveParent } = useNotifications();
   const { data: conversation, error: conversationError, isLoading: conversationLoading } = useConversation(id);
+  // The sidebar's name for this chat, shown while the conversation loads.
+  const { data: userConversations } = useUserConversations();
+  const knownName = userConversations?.find((c) => c.conversationID === id)?.displayName;
   const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(id);
+  // A link-opened window can be swapped for the newest messages (keeping any
+  // open thread) — see the MessageList pill.
+  const { listAnchor, showLatest } = useListAnchor(mainAnchor, navKey);
   const {
     data,
     hasNextPage,
@@ -103,8 +110,9 @@ export function ConversationView() {
     hasPreviousPage,
     isFetchingPreviousPage,
     fetchPreviousPage,
-  } = useConversationMessages(id, mainAnchor);
-  const sendMessage = useSendConversationMessage(id);
+  } = useConversationMessages(id, listAnchor);
+  const sendMessage = useSendConversationMessage(id, user?.id);
+  const schedule = useComposerSchedule({ parentID: id, parentType: 'conversation' });
   const draftScope = useMemo(
     () => ({ parentID: id, parentType: 'conversation' as const }),
     [id],
@@ -189,19 +197,18 @@ export function ConversationView() {
 
   useEffect(() => {
     if (!id) return;
-    markConversationRead(id);
     setActiveConversation(id);
     setActiveParent(id);
     return () => {
       setActiveConversation(null);
       setActiveParent(null);
     };
-  }, [id, setActiveConversation, setActiveParent, markConversationRead]);
+  }, [id, setActiveConversation, setActiveParent]);
 
-  // Messages that arrived while this DM's window was blurred/hidden bump the
-  // badge instead of auto-reading (ChatPage's attention gate) — returning to
-  // the window is what reads them.
-  useMarkReadOnReturn(id, markConversationRead);
+  // Opening reads the conversation but keeps a "New messages" line where you
+  // left off; after that it reads only while you follow along at the bottom
+  // (see useReadSession).
+  const readSession = useReadSession('conversation', id, markConversationRead);
 
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
   const inputRef = useRef<MessageInputHandle>(null);
@@ -248,10 +255,13 @@ export function ConversationView() {
   const urlThreadActive = !!threadParam && threadParam !== dismissedThreadParam;
   const effectiveThreadRootID = threadRootID ?? (urlThreadActive ? threadParam : null) ?? null;
 
-  // Mark URL-driven threads as seen exactly once per change.
+  // Mark URL-driven threads as seen exactly once per change — noting first
+  // where the user had read up to, for the thread's "New messages" line.
   useEffect(() => {
-    if (threadParam && id) markThreadSeen(threadParam, new Date().toISOString(), { parentID: id, parentType: 'conversation' });
-  }, [threadParam, id]);
+    if (!threadParam || !id) return;
+    noteThreadReadPosition(queryClient, threadParam);
+    markThreadSeen(threadParam, new Date().toISOString(), { parentID: id, parentType: 'conversation' });
+  }, [threadParam, id, queryClient]);
 
   // Opening a thread (via URL navigation, e.g. clicking a pinned
   // thread reply) must dismiss any other side panel — the local
@@ -329,7 +339,8 @@ export function ConversationView() {
     return <ResourceErrorPage resource="conversation" status={500} />;
   }
 
-  const title = derivedTitle ?? 'Direct Message';
+  // derivedTitle is only missing while the conversation loads.
+  const title = derivedTitle ?? knownName ?? 'Direct Message';
   let dmOtherUserID: string | undefined;
   let dmOtherUserAvatar: string | undefined;
   let dmOtherUserStatus = user?.userStatus;
@@ -432,8 +443,14 @@ export function ConversationView() {
             quickReactions={quickReactions}
             onReplyInThread={openThread}
             onEditMessage={isMobile ? setEditingMessage : undefined}
-            anchorMsgId={mainAnchor}
+            anchorMsgId={listAnchor}
             anchorRevision={navKey}
+            onAtBottomChange={readSession.onAtBottomChange}
+            onMarkAllRead={readSession.markAllRead}
+            onJumpToLatest={() => {
+              readSession.prepareJumpToLatest();
+              showLatest();
+            }}
             intro={intro ?? undefined}
           />
           {activeEditingMessage && !editReady ? (
@@ -443,8 +460,10 @@ export function ConversationView() {
               key={activeEditingMessage ? `edit-${activeEditingMessage.id}` : `conversation-${id}`}
               ref={inputRef}
               onSend={activeEditingMessage ? handleEditMessage : handleSendMessage}
+              onSchedule={schedule.onSchedule}
+              scheduledCount={schedule.scheduledCount}
               onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
-              disabled={activeEditingMessage ? editMessage.isPending : sendMessage.isPending}
+              disabled={!!activeEditingMessage && editMessage.isPending}
               placeholder={activeEditingMessage ? 'Edit message...' : `Write to ${title}`}
               focusKey={activeEditingMessage ? `edit-${activeEditingMessage.id}` : id}
               initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}

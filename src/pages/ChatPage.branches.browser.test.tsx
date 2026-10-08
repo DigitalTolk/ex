@@ -39,6 +39,7 @@ vi.mock('@/lib/unread-cache', () => ({
   clearChannelUnreadInCache: vi.fn(),
   clearConversationUnreadInCache: mockClearConversationUnreadInCache,
   touchConversationActivityInCache: vi.fn(() => true),
+  cachedUnreadCount: vi.fn(() => 0),
 }));
 const isActiveConversationMock = vi.fn(() => true);
 const isActiveChannelMock = vi.fn(() => false);
@@ -117,6 +118,7 @@ vi.mock('@/hooks/useMessages', () => ({
 const mockUpsertUserThreadRow = vi.hoisted(() => vi.fn());
 vi.mock('@/hooks/useThreads', () => ({
   markThreadSeen: mockMarkThreadSeen,
+  noteThreadReadPosition: vi.fn(),
   useUserThreads: () => ({ data: [], isSuccess: true, isError: false }),
   upsertUserThreadFromRoot: vi.fn(),
   upsertUserThreadRow: (...args: unknown[]) => mockUpsertUserThreadRow(...args),

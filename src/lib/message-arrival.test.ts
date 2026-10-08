@@ -38,6 +38,9 @@ describe('classifyParentArrival', () => {
     ['route open but NOT looking (ghost-DM bug) → badge stays', { viewingParent: true, attentive: false }, 'bump-unread'],
     ['attentive but on a different parent → badge', { viewingParent: false, attentive: true }, 'bump-unread'],
     ['neither viewing nor attentive → badge', {}, 'bump-unread'],
+    ['watching but scrolled up reading history → stays unread below the fold', { viewingParent: true, attentive: true, atBottom: false }, 'bump-unread'],
+    ['watching at the tail → read', { viewingParent: true, attentive: true, atBottom: true }, 'mark-read'],
+    ['marked unread and still in the chat → stays unread', { viewingParent: true, attentive: true, held: true }, 'bump-unread'],
   ];
 
   it.each(rows)('%s', (_name, overrides, expected) => {

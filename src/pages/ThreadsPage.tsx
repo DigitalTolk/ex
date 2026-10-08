@@ -43,7 +43,7 @@ export default function ThreadsPage() {
         threads,
         userState?.threadNotifications ?? [],
         unreadThreadNotifications,
-        mergeSeenMaps(userState?.threadSeen, localSeenMap),
+        mergeSeenMaps(userState?.threadSeen, localSeenMap, userState?.threadMarkedUnread),
       ),
     [localSeenMap, threads, unreadThreadNotifications, userState],
   );

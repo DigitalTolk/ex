@@ -377,6 +377,22 @@ func TestNotificationService_MobilePush_OnlineNoMessageID_SkipsPush(t *testing.T
 	}
 }
 
+// An AlertID is a delivery key too: an online recipient's reminder still gets
+// the ack-gated deferred push rather than the presence-only skip.
+func TestNotificationService_MobilePush_OnlineAlertID_Defers(t *testing.T) {
+	svc, _, _, _, _, _ := setupNotifier(t)
+	push := &recordingMobilePush{}
+	svc.SetMobilePushScheduler(push)
+	svc.SetPresence(&stubPresence{online: map[string]bool{"u-1": true}})
+	svc.SetAckStore(&stubAckStore{acked: map[string]bool{}})
+
+	svc.NotifyDirect(context.Background(), "u-1", Notification{Kind: NotificationKindReminder, Title: "r", AlertID: "r-1"})
+
+	if len(push.calls) != 1 || push.calls[0].delay != ackFallbackDelay {
+		t.Fatalf("scheduled pushes = %+v, want one deferred by ackFallbackDelay", push.calls)
+	}
+}
+
 // A scheduler failure is logged loudly but must never block the desktop
 // publish that already happened.
 func TestNotificationService_MobilePush_ScheduleErrorDoesNotBlock(t *testing.T) {

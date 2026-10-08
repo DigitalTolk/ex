@@ -26,6 +26,10 @@ type ActivityItem struct {
 	MessageID  string       `json:"messageID"`
 	ParentID   string       `json:"parentID"`
 	ParentType string       `json:"parentType"` // "channel" | "conversation"
+	// ParentMessageID is the thread root when the source message is a thread
+	// reply (empty for top-level messages). Replies never render in the main
+	// list, so the deep link must open the thread to show them.
+	ParentMessageID string `json:"parentMessageID,omitempty"`
 	// ChannelSlug is set for channel parents so the client can build a slug URL
 	// without resolving the channel; empty for conversations.
 	ChannelSlug string `json:"channelSlug,omitempty"`
@@ -40,13 +44,16 @@ type ActivityItem struct {
 // it fires (or is cancelled), at which point it produces an ActivityReminder
 // item in the owner's activity stream plus a desktop/mobile alert.
 type Reminder struct {
-	ID             string    `json:"id"`
-	UserID         string    `json:"userID"`
-	MessageID      string    `json:"messageID"`
-	ParentID       string    `json:"parentID"`
-	ParentType     string    `json:"parentType"` // "channel" | "conversation"
-	ChannelSlug    string    `json:"channelSlug,omitempty"`
-	MessagePreview string    `json:"messagePreview,omitempty"`
-	RemindAt       time.Time `json:"remindAt"`
-	CreatedAt      time.Time `json:"createdAt"`
+	ID         string `json:"id"`
+	UserID     string `json:"userID"`
+	MessageID  string `json:"messageID"`
+	ParentID   string `json:"parentID"`
+	ParentType string `json:"parentType"` // "channel" | "conversation"
+	// ParentMessageID is the thread root when the reminded message is a thread
+	// reply, taken from the stored message (never the client) at schedule time.
+	ParentMessageID string    `json:"parentMessageID,omitempty"`
+	ChannelSlug     string    `json:"channelSlug,omitempty"`
+	MessagePreview  string    `json:"messagePreview,omitempty"`
+	RemindAt        time.Time `json:"remindAt"`
+	CreatedAt       time.Time `json:"createdAt"`
 }

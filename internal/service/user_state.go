@@ -24,6 +24,7 @@ func (s *UserStateService) List(ctx context.Context, userID string) (*model.User
 	state := &model.UserState{
 		ThreadNotifications: []string{},
 		ThreadSeen:          map[string]string{},
+		ThreadMarkedUnread:  map[string]string{},
 		HiddenConversations: []string{},
 		HiddenSkills:        []string{},
 	}
@@ -41,6 +42,9 @@ func (s *UserStateService) List(ctx context.Context, userID string) (*model.User
 		case model.UserStateThreadSeen:
 			if item.SeenAt != nil {
 				state.ThreadSeen[item.TargetID] = item.SeenAt.Format(time.RFC3339Nano)
+				if item.Rewound {
+					state.ThreadMarkedUnread[item.TargetID] = item.UpdatedAt.Format(time.RFC3339Nano)
+				}
 			}
 		case model.UserStateHiddenConversation:
 			state.HiddenConversations = append(state.HiddenConversations, item.TargetID)

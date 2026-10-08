@@ -111,6 +111,11 @@ export interface Message {
   // Skills the run USED (explicit /picks + invoke_skill calls) — rendered as
   // badges next to the "for <invoker>" tag.
   agentSkills?: string[];
+  // Echo of the sender's X-Client-Nonce (only on this client's own sends).
+  clientNonce?: string;
+  // Client-only: an optimistic row for a message still being sent, or one
+  // that failed to send (shown "Not sent" with Retry / Delete).
+  pendingState?: 'sending' | 'failed';
 }
 
 // HastNode mirrors the server-side hast tree shape. Three node
@@ -318,10 +323,26 @@ export interface PresenceEvent {
 export interface UserState {
   threadNotifications: string[];
   threadSeen: Record<string, string>;
+  // Threads the user marked unread → when (their threadSeen entry was rewound
+  // to just before a reply). A local seen time from before the mark yields
+  // to the rewound one. Absent from older servers.
+  threadMarkedUnread?: Record<string, string>;
   hiddenConversations: string[];
   // Skills this user removed from their agents' discovery index — explicit
   // /skill picks still work.
   hiddenSkills: string[];
+}
+
+// Outcome of "Mark as unread": a top-level message rewinds the chat so
+// unreadCount messages are unread again; a thread reply rewinds the thread's
+// seen time to seenAt instead.
+export interface MarkUnreadResult {
+  parentID: string;
+  parentType: 'channel' | 'conversation';
+  messageID: string;
+  unreadCount: number;
+  threadRootID?: string;
+  seenAt?: string;
 }
 
 export type ActivityType = 'reaction' | 'reminder';
@@ -333,6 +354,9 @@ export interface ActivityItem {
   messageID: string;
   parentID: string;
   parentType: 'channel' | 'conversation';
+  // Thread root when the source message is a thread reply — the deep link
+  // must open the thread, since replies never render in the main list.
+  parentMessageID?: string;
   channelSlug?: string;
   messagePreview?: string;
   // reaction-only
@@ -351,10 +375,30 @@ export interface Reminder {
   messageID: string;
   parentID: string;
   parentType: 'channel' | 'conversation';
+  // Thread root when the reminded message is a thread reply.
+  parentMessageID?: string;
   channelSlug?: string;
   messagePreview?: string;
   remindAt: string;
   createdAt: string;
+}
+
+// ScheduledMessage is a message composed now to be posted at sendAt — into a
+// channel, a conversation, or a thread (parentMessageID). "failed" keeps one
+// that couldn't be delivered, with the reason, so its text isn't lost.
+export interface ScheduledMessage {
+  id: string;
+  userID: string;
+  parentID: string;
+  parentType: 'channel' | 'conversation';
+  parentMessageID?: string;
+  body: string;
+  attachmentIDs?: string[];
+  sendAt: string;
+  state: 'pending' | 'failed';
+  failReason?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // ---- Wire-shape drift checks (compile-time only) --------------------------
@@ -383,4 +427,7 @@ export type WireDriftChecks = [
   AssertAssignable<Required<Message>, wire.Message>,
   AssertAssignable<Required<MessageAttachment>, wire.MessageAttachment>,
   AssertAssignable<Required<MessageDraft>, wire.MessageDraft>,
+  AssertAssignable<Required<MarkUnreadResult>, wire.MarkUnreadResult>,
+  AssertAssignable<Required<UserState>, wire.UserState>,
+  AssertAssignable<Required<ScheduledMessage>, wire.ScheduledMessage>,
 ];

@@ -299,6 +299,16 @@ func (s *ConversationStoreImpl) IncrementMessageSeq(ctx context.Context, convID 
 	return attrs.MessageSeq, nil
 }
 
+// CurrentMessageSeq reads the conversation's MessageSeq without bumping it —
+// the ceiling a mark-unread rewinds a participant's last-read watermark from.
+func (s *ConversationStoreImpl) CurrentMessageSeq(ctx context.Context, convID string) (int64, error) {
+	conv, err := s.GetConversation(ctx, convID)
+	if err != nil {
+		return 0, err
+	}
+	return conv.MessageSeq, nil
+}
+
 // SetConversationLastRead stamps the conversation's current MessageSeq onto the
 // user-side row; unread then derives as MessageSeq - LastReadSeq.
 func (s *ConversationStoreImpl) SetConversationLastRead(ctx context.Context, convID, userID string, seq int64) error {

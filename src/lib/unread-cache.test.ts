@@ -104,3 +104,37 @@ describe('touchConversationActivityInCache', () => {
     expect(touchConversationActivityInCache(qc, 'c-1', '2026-07-02T10:00:00Z')).toBe(false);
   });
 });
+
+describe('unread-cache: mark as unread + cached count', () => {
+  it('sets the rewound count with the plain unread indicator (no alert badge)', async () => {
+    const { setChannelUnreadCountInCache, setConversationUnreadCountInCache } = await import('./unread-cache');
+    const qc = makeQC();
+    qc.setQueryData<UserChannel[]>(queryKeys.userChannels(), [
+      { channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 1, unreadNotifyCount: 4 },
+    ]);
+    qc.setQueryData<UserConversation[]>(queryKeys.userConversations(), [
+      { conversationID: 'dm-1', type: 'dm', displayName: 'Me' } as UserConversation,
+    ]);
+    setChannelUnreadCountInCache(qc, 'ch-1', 3);
+    setConversationUnreadCountInCache(qc, 'dm-1', 0);
+    expect(qc.getQueryData<UserChannel[]>(queryKeys.userChannels())![0]).toMatchObject({ unread: true, unreadCount: 3, unreadNotifyCount: 0 });
+    expect(qc.getQueryData<UserConversation[]>(queryKeys.userConversations())![0]).toMatchObject({ unread: false, unreadCount: 0, unreadNotifyCount: 0 });
+  });
+
+  it('cachedUnreadCount answers only from a loaded row', async () => {
+    const { cachedUnreadCount } = await import('./unread-cache');
+    const qc = makeQC();
+    expect(cachedUnreadCount(qc, 'channel', 'ch-1')).toBeUndefined();
+    qc.setQueryData<UserChannel[]>(queryKeys.userChannels(), [
+      { channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 1, unreadCount: 2 },
+      { channelID: 'ch-2', channelName: 'quiet', channelType: 'public', role: 1 },
+    ]);
+    qc.setQueryData<UserConversation[]>(queryKeys.userConversations(), [
+      { conversationID: 'dm-1', type: 'dm', displayName: 'Me', unreadCount: 5 } as UserConversation,
+    ]);
+    expect(cachedUnreadCount(qc, 'channel', 'ch-1')).toBe(2);
+    expect(cachedUnreadCount(qc, 'channel', 'ch-2')).toBe(0);
+    expect(cachedUnreadCount(qc, 'channel', 'missing')).toBeUndefined();
+    expect(cachedUnreadCount(qc, 'conversation', 'dm-1')).toBe(5);
+  });
+});

@@ -50,6 +50,8 @@ type Deps struct {
 	Webhook    *WebhookHandler
 	Activity   *ActivityHandler
 	Command    *CommandHandler
+	// Scheduled messages: compose now, deliver at a chosen time.
+	ScheduledMessage *ScheduledMessageHandler
 	// Agent orchestration (plan-v2): SPA surface, desktop-runner API, and
 	// the run-scoped MCP tool API. All three nil-skippable as a unit.
 	Agent        *AgentHandler

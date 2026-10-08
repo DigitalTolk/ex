@@ -18,13 +18,28 @@ export type ConversationSidebarSort = 'recent' | 'az';
 
 export interface SidebarGroupOptions {
   conversationSort?: ConversationSidebarSort;
+  // Pull every unread channel/DM into an "Unread" section at the top
+  // (Mattermost's "group unread separately"), out of its usual section.
+  unreadSection?: boolean;
+  // Show only unread channels/DMs, in their usual sections.
+  unreadOnly?: boolean;
+  // The chat being viewed: never filtered out by unreadOnly, so opening it
+  // (which reads it) doesn't make its row vanish.
+  activeID?: string;
+  // Kept in the Unread section although now read — the chat being viewed,
+  // if it was unread when opened, until the user leaves it.
+  stickyUnreadID?: string;
+  // Chats holding an unread thread the user is in: unread here too.
+  threadUnreadIDs?: ReadonlySet<string>;
 }
 
+const UNREAD_KEY = '__unread__';
 const FAVORITES_KEY = '__favorites__';
 const CHANNELS_DEFAULT_KEY = '__channels__';
 const DMS_DEFAULT_KEY = '__dms__';
 
 export const SidebarSectionKeys = {
+  Unread: UNREAD_KEY,
   Favorites: FAVORITES_KEY,
   Channels: CHANNELS_DEFAULT_KEY,
   DirectMessages: DMS_DEFAULT_KEY,
@@ -88,7 +103,48 @@ export function groupSidebarItems(
     .map((c): SidebarItem => ({ kind: 'conversation', conversation: c }));
   sections.push({ key: DMS_DEFAULT_KEY, title: 'Direct Messages', items: dmsDefault });
 
-  return sections;
+  return applyUnreadView(sections, options);
+}
+
+// applyUnreadView layers the unread options over the grouped sections. The
+// Unread section keeps sidebar order (favorites, categories, channels, DMs).
+function applyUnreadView(sections: SidebarSection[], options: SidebarGroupOptions): SidebarSection[] {
+  const { unreadSection, unreadOnly, activeID, stickyUnreadID, threadUnreadIDs } = options;
+  if (!unreadSection && !unreadOnly) return sections;
+  const inUnread = (item: SidebarItem) => {
+    const id = sidebarItemID(item);
+    return isSidebarItemUnread(item) || id === stickyUnreadID || !!threadUnreadIDs?.has(id);
+  };
+  let out = sections;
+  if (unreadSection) {
+    const unread = out.flatMap((section) => section.items.filter(inUnread));
+    out = [
+      { key: UNREAD_KEY, title: 'Unread', items: unread },
+      ...out.map((section) => ({ ...section, items: section.items.filter((item) => !inUnread(item)) })),
+    ];
+  }
+  if (unreadOnly) {
+    out = out.map((section) => ({
+      ...section,
+      items: section.items.filter((item) => inUnread(item) || sidebarItemID(item) === activeID),
+    }));
+  }
+  return out;
+}
+
+// isSidebarItemUnread is what the Unread section and filter count as unread:
+// what the row's bold/dot/badge shows — except a muted channel, which only
+// counts once something actually alerted (a mention), like Mattermost.
+export function isSidebarItemUnread(item: SidebarItem): boolean {
+  if (item.kind === 'channel') {
+    const c = item.channel;
+    return (c.unreadNotifyCount ?? 0) > 0 || (!c.muted && !!c.unread);
+  }
+  return !!item.conversation.unread || (item.conversation.unreadNotifyCount ?? 0) > 0;
+}
+
+export function sidebarItemID(item: SidebarItem): string {
+  return item.kind === 'channel' ? item.channel.channelID : item.conversation.conversationID;
 }
 
 function compareSidebarItems(a: SidebarItem, b: SidebarItem): number {

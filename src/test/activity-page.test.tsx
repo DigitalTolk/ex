@@ -112,6 +112,29 @@ describe('ActivityPage', () => {
     expect(await screen.findByText('A message')).toBeInTheDocument();
   });
 
+  // A thread reply only renders inside its thread, so every row about one —
+  // fired reminder, reaction, pending reminder — links with ?thread= to open it.
+  it('links thread replies into their thread (channel and conversation)', async () => {
+    mockApi({
+      feed: {
+        items: [
+          { ...reactionItem, parentMessageID: 'root-1' },
+          { ...reminderItem, parentMessageID: 'root-2' },
+        ],
+        unread: 0,
+      },
+      reminders: [
+        { id: 'r1', userID: 'u-1', messageID: 'm3', parentID: 'self-dm', parentType: 'conversation', parentMessageID: 'root-3', messagePreview: 'note to self', remindAt: '2026-07-01T09:00:00Z', createdAt: '2026-06-30T09:00:00Z' },
+      ],
+    });
+    renderPage();
+    await screen.findByText('reacted to your message');
+    expect(screen.getByTestId('activity-link')).toHaveAttribute('href', '/channel/general?thread=root-1#msg-m1');
+    const reminderRow = screen.getAllByTestId('activity-item').find((el) => el.tagName === 'A');
+    expect(reminderRow).toHaveAttribute('href', '/conversation/conv-9?thread=root-2#msg-m2');
+    expect(screen.getByText('note to self').closest('a')).toHaveAttribute('href', '/conversation/self-dm?thread=root-3#msg-m3');
+  });
+
   it('lists pending reminders and cancels one', async () => {
     mockApi({
       reminders: [

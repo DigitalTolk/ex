@@ -51,6 +51,7 @@ export const queryKeys = {
   // Activity stream + reminders
   activity: () => ['activity'] as const,
   reminders: () => ['reminders'] as const,
+  scheduledMessages: () => ['scheduledMessages'] as const,
 
   // Pinned / files (parentPath is "channels/<id>" or "conversations/<id>")
   pinned: (parentPath: string) => ['pinned', parentPath] as const,

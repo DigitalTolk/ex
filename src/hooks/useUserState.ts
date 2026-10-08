@@ -29,6 +29,7 @@ export function resetUserStateSessionState() {
 const EMPTY_USER_STATE: UserState = {
   threadNotifications: [],
   threadSeen: {},
+  threadMarkedUnread: {},
   hiddenConversations: [],
   hiddenSkills: [],
 };
@@ -41,6 +42,7 @@ export function useUserState(options?: { enabled?: boolean }) {
       return {
         threadNotifications: state.threadNotifications ?? [],
         threadSeen: state.threadSeen ?? {},
+        threadMarkedUnread: state.threadMarkedUnread ?? {},
         hiddenConversations: state.hiddenConversations ?? [],
         hiddenSkills: state.hiddenSkills ?? [],
       };

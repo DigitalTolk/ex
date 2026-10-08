@@ -44,6 +44,7 @@ vi.mock('@/hooks/useThreads', () => ({
   useUserThreads: () => ({ data: [] }),
   useThreadMeta: () => undefined,
   markThreadSeen: vi.fn(),
+  noteThreadReadPosition: vi.fn(),
 }));
 
 vi.mock('@/hooks/useReactions', () => ({

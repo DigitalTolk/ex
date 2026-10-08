@@ -20,12 +20,33 @@ interface ReminderDialogProps {
   // (the dialog then closes) and rejects on failure (the dialog stays open and
   // surfaces the error) — so scheduling is never silent.
   onConfirm: (when: Date) => Promise<void>;
+  // copy rewords the dialog for another "pick a future time" use (scheduling
+  // a message); reminders use the default.
+  copy?: DateTimeDialogCopy;
 }
+
+export interface DateTimeDialogCopy {
+  title: string;
+  description: string;
+  inputLabel: string;
+  confirm: string;
+  confirming: string;
+  failed: string;
+}
+
+const REMINDER_COPY: DateTimeDialogCopy = {
+  title: 'Remind me',
+  description: 'Choose when to be reminded about this message.',
+  inputLabel: 'Reminder time',
+  confirm: 'Set reminder',
+  confirming: 'Setting…',
+  failed: "Couldn't set the reminder — please try again.",
+};
 
 // ReminderDialog is the "Custom…" reminder picker: a datetime-local input
 // seeded by the opener, validated to a strictly-future instant before the
 // caller schedules it. Mount it fresh per open so the seed re-applies.
-export function ReminderDialog({ open, onOpenChange, initialValue, onConfirm }: ReminderDialogProps) {
+export function ReminderDialog({ open, onOpenChange, initialValue, onConfirm, copy = REMINDER_COPY }: ReminderDialogProps) {
   const [value, setValue] = useState(initialValue);
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
@@ -43,7 +64,7 @@ export function ReminderDialog({ open, onOpenChange, initialValue, onConfirm }: 
       await onConfirm(when);
       onOpenChange(false);
     } catch {
-      setError("Couldn't set the reminder — please try again.");
+      setError(copy.failed);
     } finally {
       setPending(false);
     }
@@ -59,18 +80,18 @@ export function ReminderDialog({ open, onOpenChange, initialValue, onConfirm }: 
         mobileCloseLabel="Cancel"
         mobileAction={
           isMobile
-            ? { label: pending ? 'Setting…' : 'Set reminder', onClick: () => void confirm(), disabled: pending }
+            ? { label: pending ? copy.confirming : copy.confirm, onClick: () => void confirm(), disabled: pending }
             : undefined
         }
       >
         <DialogHeader>
-          <DialogTitle>Remind me</DialogTitle>
-          <DialogDescription>Choose when to be reminded about this message.</DialogDescription>
+          <DialogTitle>{copy.title}</DialogTitle>
+          <DialogDescription>{copy.description}</DialogDescription>
         </DialogHeader>
         <div className="px-1 py-2">
           <input
             type="datetime-local"
-            aria-label="Reminder time"
+            aria-label={copy.inputLabel}
             data-testid="reminder-datetime"
             className="w-full rounded-md border border-border bg-background px-3 py-2 text-base md:text-sm mobile:h-11"
             value={value}
@@ -91,7 +112,7 @@ export function ReminderDialog({ open, onOpenChange, initialValue, onConfirm }: 
               Cancel
             </Button>
             <Button onClick={confirm} disabled={pending} data-testid="reminder-confirm">
-              {pending ? 'Setting…' : 'Set reminder'}
+              {pending ? copy.confirming : copy.confirm}
             </Button>
           </DialogFooter>
         )}

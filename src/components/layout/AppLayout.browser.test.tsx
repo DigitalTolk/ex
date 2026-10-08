@@ -52,6 +52,7 @@ vi.mock('./AppTopBar', () => ({
 vi.mock('@/components/NotificationPermissionBanner', () => ({
   NotificationPermissionBanner: () => null,
 }));
+vi.mock('./LoadingBar', () => ({ LoadingBar: () => null }));
 
 vi.mock('@/hooks/useServerVersion', () => ({
   BUILD_DISPLAY_VERSION: 'browser-test',

@@ -11,6 +11,7 @@ const useAttachmentsBatchMock = vi.hoisted(() => vi.fn(() => ({ map: new Map(), 
 
 const toggleReactionMutate = vi.hoisted(() => vi.fn());
 vi.mock('@/hooks/useMessages', () => ({
+  usePendingMessageActions: () => ({ retry: vi.fn(), discard: vi.fn() }),
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: toggleReactionMutate, isPending: false }),
