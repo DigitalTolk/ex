@@ -131,4 +131,26 @@ describe('ThreadActionBar browser behaviour', () => {
     expect(avatar).not.toBeNull();
     expect(avatar!.textContent).toContain('?');
   });
+
+  it('shows the webhook root\'s name for webhook replies instead of "?"', async () => {
+    await renderBar({
+      recentReplyAuthorIDs: ['webhook', 'u-1'],
+      webhookAuthor: { displayName: 'Event Radar' },
+    });
+    const webhook = document.querySelector('[data-testid="thread-action-avatar-webhook"]');
+    expect(webhook).not.toBeNull();
+    expect(webhook!.textContent).toContain('ER');
+    expect(webhook!.textContent).not.toContain('?');
+    expect(document.querySelector('[data-testid="thread-action-avatar-u-1"]')!.textContent).toContain('A');
+  });
+
+  it('never shows "?" for the webhook sentinel, even without the root\'s identity', async () => {
+    await renderBar({
+      recentReplyAuthorIDs: ['webhook'],
+      userMap: { get: () => undefined },
+    });
+    const webhook = document.querySelector('[data-testid="thread-action-avatar-webhook"]');
+    expect(webhook!.textContent).toContain('W');
+    expect(webhook!.textContent).not.toContain('?');
+  });
 });
