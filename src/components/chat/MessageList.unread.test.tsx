@@ -21,7 +21,7 @@ type ListProps = {
   components?: { Header?: ComponentType; Footer?: ComponentType };
   scrollerRef?: (el: HTMLElement | null) => void;
   rangeChanged?: (range: { startIndex: number; endIndex: number }) => void;
-  itemsRendered?: () => void;
+  itemsRendered?: (items: unknown[]) => void;
   startReached?: (index: number) => void;
 };
 const list = vi.hoisted(() => ({
@@ -242,7 +242,7 @@ describe('MessageList unread banner + pill', () => {
     frames();
     expect(screen.getByTestId('unread-banner')).toBeInTheDocument();
     act(() => list.props.rangeChanged?.({ startIndex: first, endIndex: first + 1 }));
-    act(() => list.props.itemsRendered?.());
+    act(() => list.props.itemsRendered?.([]));
     frames();
     expect(screen.getByTestId('unread-below-pill')).toBeInTheDocument();
   });
@@ -419,5 +419,40 @@ describe('MessageList opened on a linked message', () => {
     renderList({ hasNextPage: true, fetchNextPage });
     act(() => list.props.startReached?.(0));
     expect(fetchNextPage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('MessageList cover while the first rows paint', () => {
+  // Virtuoso mounts empty and measures before painting any rows; the loading
+  // skeletons stay over it until rows are rendered, so no blank pane shows.
+  const cover = () => screen.queryByTestId('message-list-cover');
+
+  it('stays until rows are rendered, then lifts a frame later', () => {
+    renderList();
+    expect(cover()).toBeInTheDocument();
+    act(() => list.props.itemsRendered?.([]));
+    frames(2);
+    expect(cover()).toBeInTheDocument();
+    act(() => {
+      list.props.itemsRendered?.([{}]);
+      list.props.itemsRendered?.([{}]);
+    });
+    expect(cover()).toBeInTheDocument();
+    frames(1);
+    expect(cover()).toBeNull();
+  });
+
+  it('lifts on its own if rows never report, so it can never get stuck', () => {
+    renderList();
+    act(() => vi.advanceTimersByTime(1999));
+    expect(cover()).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(1));
+    expect(cover()).toBeNull();
+  });
+
+  it('pulses in step with the loading skeletons shown before it', () => {
+    renderList();
+    const set = cover()!.firstElementChild as HTMLElement;
+    expect(set.style.getPropertyValue('--pulse-delay')).toMatch(/^-\d+ms$/);
   });
 });

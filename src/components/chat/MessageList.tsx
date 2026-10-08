@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MessageItem } from './MessageItem';
@@ -22,6 +22,10 @@ import { useUnreadThreadIDs } from '@/hooks/useUnreadThreads';
 
 const ANCHOR_HIGHLIGHT_MS = 2200;
 const DEFAULT_MESSAGE_ROW_HEIGHT = 88;
+// Longest the loading skeletons may cover a list that hasn't painted rows.
+const LIST_PAINT_CAP_MS = 2000;
+// Tailwind's animate-pulse cycle.
+const SKELETON_PULSE_MS = 2000;
 // Overscan kept generous so rows ~2 screens above and below the
 // viewport stay mounted during fast scrolling. Without this, every
 // off-screen → on-screen transition tears down and rebuilds the row,
@@ -233,6 +237,9 @@ function VirtuosoMessageList({
   useLayoutEffect(() => {
     anchorHeldRef.current = !!anchorMsgId;
   }, [anchorMsgId, anchorRevision]);
+
+  // See ListCover: lifted once the first rows are rendered.
+  const coverRef = useRef<ListCoverHandle>(null);
   // Scroll-to-anchor. Keyed on anchorIndex too, because the index shifts when
   // Virtuoso prepends an older page and we must re-issue scrollToIndex at the
   // corrected position; the dedup guard keeps that to exactly one scroll per
@@ -734,7 +741,10 @@ function VirtuosoMessageList({
         }}
         // Rows mount a frame after the data changes — re-measure the line
         // once they have.
-        itemsRendered={scheduleDividerMeasure}
+        itemsRendered={(items) => {
+          scheduleDividerMeasure();
+          if (items.length > 0) coverRef.current!.reveal();
+        }}
         itemContent={(_index, row) => {
           /* istanbul ignore next -- react-virtuoso can momentarily call itemContent with an undefined row during prepend/firstItemIndex reconciliation; not deterministically reproducible. */
           if (!row) return null;
@@ -779,13 +789,52 @@ function VirtuosoMessageList({
       {hasPreviousPage && missedArrivals > 0 ? (
         <NewBelowPill count={missedArrivals} onClick={() => onJumpToLatest?.()} />
       ) : null}
+      <ListCover ref={coverRef} />
     </div>
   );
 }
 
-function Skeletons() {
+type ListCoverHandle = { reveal: () => void };
+
+// ListCover keeps the loading skeletons over a freshly mounted list until its
+// first rows are on screen: Virtuoso mounts empty and measures for a few
+// frames before painting any, which showed as a blank pane between the
+// skeletons and the messages. Its own state, so lifting it re-renders only
+// the cover, not the list; a cap makes sure it can never get stuck.
+function ListCover({ ref }: { ref: Ref<ListCoverHandle> }) {
+  const [shown, setShown] = useState(true);
+  const frameRef = useRef(0);
+  useImperativeHandle(ref, () => ({
+    reveal: () => {
+      // One frame for the first rows to settle where they belong.
+      if (!frameRef.current) frameRef.current = requestAnimationFrame(() => setShown(false));
+    },
+  }), []);
+  useEffect(() => {
+    const cap = window.setTimeout(() => setShown(false), LIST_PAINT_CAP_MS);
+    return () => {
+      window.clearTimeout(cap);
+      cancelAnimationFrame(frameRef.current);
+    };
+  }, []);
+  if (!shown) return null;
   return (
-    <div className="flex-1 p-4 space-y-4">
+    <div aria-hidden className="pointer-events-none absolute inset-0 z-10 flex flex-col bg-background" data-testid="message-list-cover">
+      <Skeletons />
+    </div>
+  );
+}
+
+// Skeletons pulse in step with any set shown before them (the delay puts each
+// set at the same point of the shared cycle), so handing over from the
+// loading set to the one covering the list never restarts the pulse.
+function Skeletons() {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    ref.current?.style.setProperty('--pulse-delay', `-${Math.round(performance.now() % SKELETON_PULSE_MS)}ms`);
+  }, []);
+  return (
+    <div ref={ref} className="flex-1 p-4 space-y-4 [&_[data-slot=skeleton]]:[animation-delay:var(--pulse-delay)]">
       {Array.from({ length: 5 }).map((_, i) => (
         <div key={i} className="flex items-start gap-3">
           <Skeleton className="h-9 w-9 rounded-full" />
