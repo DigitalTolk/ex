@@ -57,3 +57,5 @@ coverage.html
 # .vitest-attachments/, and the stale rule let a run's PNGs into a commit.
 /.vitest/
 __screenshots__/
+# Local scratch: screenshots, probe scripts and other throwaway artifacts
+/.scratch/

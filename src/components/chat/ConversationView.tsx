@@ -24,6 +24,7 @@ import {
   useEditMessage,
   useSendConversationMessage,
 } from '@/hooks/useMessages';
+import { useComposerSchedule } from '@/hooks/useScheduledMessages';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { useNotifications } from '@/context/NotificationContext';
@@ -108,6 +109,7 @@ export function ConversationView() {
     fetchPreviousPage,
   } = useConversationMessages(id, listAnchor);
   const sendMessage = useSendConversationMessage(id, user?.id);
+  const schedule = useComposerSchedule({ parentID: id, parentType: 'conversation' });
   const draftScope = useMemo(
     () => ({ parentID: id, parentType: 'conversation' as const }),
     [id],
@@ -454,6 +456,8 @@ export function ConversationView() {
               key={activeEditingMessage ? `edit-${activeEditingMessage.id}` : `conversation-${id}`}
               ref={inputRef}
               onSend={activeEditingMessage ? handleEditMessage : handleSendMessage}
+              onSchedule={schedule.onSchedule}
+              scheduledCount={schedule.scheduledCount}
               onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
               disabled={!!activeEditingMessage && editMessage.isPending}
               placeholder={activeEditingMessage ? 'Edit message...' : `Write to ${title}`}

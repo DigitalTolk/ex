@@ -306,3 +306,28 @@ func TestNewRouter_MinimalDepsBuilds(t *testing.T) {
 		t.Fatalf("/healthz = %d, want 200", rec.Code)
 	}
 }
+
+// The scheduled-message routes are registered when the handler is wired in
+// (behind auth: no token is a 401, not a 404).
+func TestRouterRegistersScheduledMessageRoutes(t *testing.T) {
+	jwtMgr := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
+	router := NewRouter(&Deps{
+		Auth: &AuthHandler{}, User: &UserHandler{}, Channel: &ChannelHandler{},
+		Conversation: &ConversationHandler{}, WS: &WSHandler{},
+		ScheduledMessage: NewScheduledMessageHandler(&fakeScheduledSvc{}),
+		JWT:              jwtMgr, AppVersion: "test", AllowOrigins: []string{"*"},
+	})
+	for _, rt := range [][2]string{
+		{http.MethodGet, "/api/v1/scheduled-messages"},
+		{http.MethodPost, "/api/v1/scheduled-messages"},
+		{http.MethodPatch, "/api/v1/scheduled-messages/s-1"},
+		{http.MethodDelete, "/api/v1/scheduled-messages/s-1"},
+		{http.MethodPost, "/api/v1/scheduled-messages/s-1/send"},
+	} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(rt[0], rt[1], nil))
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s = %d, want 401", rt[0], rt[1], rec.Code)
+		}
+	}
+}

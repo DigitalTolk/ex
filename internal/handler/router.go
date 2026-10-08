@@ -190,6 +190,13 @@ func NewRouter(d *Deps) http.Handler {
 	}
 
 	// ----------------------------------------------------------- Activity + reminders
+	if sm := d.ScheduledMessage; sm != nil {
+		mux.Handle("POST /api/v1/scheduled-messages", middleware.WrapFunc(sm.Create, authMW, writeLimit))
+		mux.Handle("GET /api/v1/scheduled-messages", middleware.WrapFunc(sm.List, authMW))
+		mux.Handle("PATCH /api/v1/scheduled-messages/{id}", middleware.WrapFunc(sm.Update, authMW))
+		mux.Handle("DELETE /api/v1/scheduled-messages/{id}", middleware.WrapFunc(sm.Delete, authMW))
+		mux.Handle("POST /api/v1/scheduled-messages/{id}/send", middleware.WrapFunc(sm.SendNow, authMW, writeLimit))
+	}
 	if activityH != nil {
 		mux.Handle("GET /api/v1/activity", middleware.WrapFunc(activityH.Feed, authMW))
 		mux.Handle("PUT /api/v1/activity/read", middleware.WrapFunc(activityH.MarkRead, authMW))

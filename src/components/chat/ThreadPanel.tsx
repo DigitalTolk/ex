@@ -20,6 +20,7 @@ import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
+import { useComposerSchedule } from '@/hooks/useScheduledMessages';
 import { markThreadSeen, noteThreadReadPosition, useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
 import { isReadHeld, keepReadSession, scheduleEndReadSession, threadReadKey, useUnreadAnchor } from '@/lib/read-position';
 import { resolveUnreadDivider } from '@/lib/unread-divider';
@@ -107,6 +108,11 @@ export function ThreadPanel({
   );
 
   const send = useSendMessage({ channelId, conversationId, authorID: currentUserId });
+  const schedule = useComposerSchedule({
+    parentID: channelId ?? conversationId,
+    parentType: channelId ? 'channel' : 'conversation',
+    parentMessageID: threadRootID,
+  });
   const { pendingInvites, channelSlug, checkMentions, clearInvites } = useNonMemberInvite(channelId, currentUserId);
   const inputRef = useRef<MessageInputHandle>(null);
   const parentID = channelId ?? conversationId;
@@ -568,6 +574,8 @@ export function ThreadPanel({
             key={activeEditingMessage ? `edit-${activeEditingMessage.id}` : `thread-${threadRootID}`}
             ref={inputRef}
             onSend={activeEditingMessage ? handleEditMessage : handleReply}
+            onSchedule={schedule.onSchedule}
+            scheduledCount={schedule.scheduledCount}
             onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
             disabled={!!activeEditingMessage && editMessage.isPending}
             placeholder={activeEditingMessage ? 'Edit message...' : 'Reply...'}

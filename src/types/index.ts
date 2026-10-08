@@ -383,6 +383,24 @@ export interface Reminder {
   createdAt: string;
 }
 
+// ScheduledMessage is a message composed now to be posted at sendAt — into a
+// channel, a conversation, or a thread (parentMessageID). "failed" keeps one
+// that couldn't be delivered, with the reason, so its text isn't lost.
+export interface ScheduledMessage {
+  id: string;
+  userID: string;
+  parentID: string;
+  parentType: 'channel' | 'conversation';
+  parentMessageID?: string;
+  body: string;
+  attachmentIDs?: string[];
+  sendAt: string;
+  state: 'pending' | 'failed';
+  failReason?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ---- Wire-shape drift checks (compile-time only) --------------------------
 // The interfaces above are the frontend's hand-written views of the backend
 // wire types; src/types/generated.ts is the tygo-generated ground truth from
@@ -411,4 +429,5 @@ export type WireDriftChecks = [
   AssertAssignable<Required<MessageDraft>, wire.MessageDraft>,
   AssertAssignable<Required<MarkUnreadResult>, wire.MarkUnreadResult>,
   AssertAssignable<Required<UserState>, wire.UserState>,
+  AssertAssignable<Required<ScheduledMessage>, wire.ScheduledMessage>,
 ];

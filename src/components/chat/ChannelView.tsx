@@ -23,6 +23,7 @@ import {
   useEditMessage,
   useSendChannelMessage,
 } from '@/hooks/useMessages';
+import { useComposerSchedule } from '@/hooks/useScheduledMessages';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { useNotifications } from '@/context/NotificationContext';
@@ -122,6 +123,7 @@ export function ChannelView() {
     isFetchingPreviousPage,
   } = useChannelMessages(channel?.id, listAnchor);
   const sendMessage = useSendChannelMessage(channel?.id, user?.id);
+  const schedule = useComposerSchedule({ parentID: channel?.id, parentType: 'channel' });
   const channelID = channel?.id;
   const draftScope = useMemo(
     () => ({ parentID: channelID, parentType: 'channel' as const }),
@@ -465,6 +467,8 @@ export function ChannelView() {
               key={activeEditingMessage ? `edit-${activeEditingMessage.id}` : `channel-${channel?.id ?? 'loading'}`}
               ref={inputRef}
               onSend={activeEditingMessage ? handleEditMessage : handleSendMessage}
+              onSchedule={schedule.onSchedule}
+              scheduledCount={schedule.scheduledCount}
               onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
               disabled={!!activeEditingMessage && editMessage.isPending}
               placeholder={activeEditingMessage ? 'Edit message...' : `Write to ~${channel?.name ?? '...'}`}

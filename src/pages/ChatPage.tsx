@@ -362,6 +362,11 @@ export default function ChatPage() {
       // stream (source of truth) so the sidebar badge + list update live.
       queryClient.invalidateQueries({ queryKey: queryKeys.activity() });
     },
+    onScheduledMessagesChanged: () => {
+      // Scheduled, edited, sent or failed on another tab/device (or by the
+      // server at send time) — refetch the Scheduled list.
+      queryClient.invalidateQueries({ queryKey: queryKeys.scheduledMessages() });
+    },
     onActivityRead: () => {
       // The feed was marked read on another device/tab — refetch so this
       // device's badge clears too instead of lingering until the next
@@ -660,6 +665,7 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
       queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
       queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.scheduledMessages() });
       queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
       // The refetched userChannels/userConversations carry authoritative server
       // unread counts — the single source — so there's nothing else to reset.

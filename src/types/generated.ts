@@ -1914,6 +1914,39 @@ export interface ChannelNotificationOverride {
 }
 
 //////////
+// source: scheduled_message.go
+
+/**
+ * ScheduledMessageState is where a scheduled message stands: waiting for its
+ * time, or a delivery that could not be made (kept so its text isn't lost).
+ */
+export type ScheduledMessageState = string;
+export const ScheduledMessagePending: ScheduledMessageState = "pending";
+export const ScheduledMessageFailed: ScheduledMessageState = "failed";
+/**
+ * ScheduledMessage is a message its author composed now to be sent at SendAt —
+ * into a channel, a conversation, or a thread (ParentMessageID). At SendAt it
+ * is posted exactly like a normal send (notifications included) and removed.
+ */
+export interface ScheduledMessage {
+  id: string;
+  userID: string;
+  parentID: string;
+  parentType: string; // "channel" | "conversation"
+  parentMessageID?: string;
+  body: string;
+  attachmentIDs?: string[];
+  sendAt: string /* RFC3339 */;
+  state: ScheduledMessageState;
+  /**
+   * FailReason says why a failed delivery couldn't be made.
+   */
+  failReason?: string;
+  createdAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
+}
+
+//////////
 // source: settings.go
 
 /**

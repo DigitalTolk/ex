@@ -588,6 +588,11 @@ func main() {
 	reminderSvc := service.NewReminderService(reminderStore, messageStore, messageSvc)
 	reminderSvc.SetDelivery(activitySvc, notificationSvc)
 	activityH := handler.NewActivityHandler(activitySvc, reminderSvc)
+	// Scheduled messages: composed now, posted at their time through the
+	// normal send path (notifications included).
+	scheduledSvc := service.NewScheduledMessageService(store.NewScheduledMessageStore(db), messageSvc, attachmentSvc, redisPubSub)
+	scheduledH := handler.NewScheduledMessageHandler(scheduledSvc)
+	scheduledH.SetDraftClearer(draftSvc) // scheduling empties the composer's draft, like a send
 
 	categorySvc := service.NewCategoryService(store.NewCategoryStore(db), redisPubSub)
 	sidebarH := handler.NewSidebarHandler(channelSvc, convSvc, categorySvc)
@@ -766,6 +771,8 @@ func main() {
 		RateLimiter:      redisCache,
 		// ACCESS_LOG_ENABLED=false → only 5xx requests reach the log.
 		DisableAccessLog: !cfg.AccessLogEnabled,
+		// Scheduled messages: compose now, deliver at a chosen time.
+		ScheduledMessage: scheduledH,
 	})
 
 	// ------------------------------------------------------------------ Server
@@ -795,7 +802,10 @@ func main() {
 	}
 	// Fire due reminders into their owners' activity streams + alerts. Claiming
 	// is atomic in Redis, so running this on every instance never double-fires.
-	go runReminderPoller(backgroundCtx, reminderSvc, 20*time.Second)
+	go runDuePoller(backgroundCtx, "reminder", reminderSvc, 20*time.Second)
+	// Post scheduled messages whose time has come. Each is claimed by exactly
+	// one instance (a conditional DynamoDB update), so every instance polls.
+	go runDuePoller(backgroundCtx, "scheduled message", scheduledSvc, 10*time.Second)
 	// Auto-roll the users/channels mapping rebuild if the live index generation is
 	// behind this binary's (a schema/analyzer bump, a fresh empty index, or a
 	// pre-versioning upgrade). Detached so boot never blocks — search stays up on
@@ -871,11 +881,16 @@ func main() {
 	slog.Info("server stopped")
 }
 
-// runReminderPoller fires due reminders on a fixed interval until the context is
-// cancelled. ProcessDue claims reminders atomically, so multiple instances each
-// running this loop never double-deliver. Panics are isolated so a single bad
-// tick can't take the process down.
-func runReminderPoller(ctx context.Context, svc *service.ReminderService, interval time.Duration) {
+// dueProcessor handles whatever has come due (reminders, scheduled messages).
+type dueProcessor interface {
+	ProcessDue(ctx context.Context) (int, error)
+}
+
+// runDuePoller runs ProcessDue on a fixed interval until the context is
+// cancelled. Each ProcessDue claims items atomically, so multiple instances
+// each running this loop never double-deliver. Panics are isolated so a
+// single bad tick can't take the process down.
+func runDuePoller(ctx context.Context, name string, svc dueProcessor, interval time.Duration) {
 	defer safe.Recover()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -885,7 +900,7 @@ func runReminderPoller(ctx context.Context, svc *service.ReminderService, interv
 			return
 		case <-ticker.C:
 			if _, err := svc.ProcessDue(ctx); err != nil {
-				slog.Warn("reminder poll failed", "error", err)
+				slog.Warn(name+" poll failed", "error", err)
 			}
 		}
 	}
