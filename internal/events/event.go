@@ -94,6 +94,16 @@ const (
 	// ThreadSummary. Ephemeral: ListUserThreads is the durable source of truth,
 	// re-read on reconnect, so replaying this would be noise.
 	EventThreadUpdated = "thread.updated"
+	// EventBrokerSubscribe / EventBrokerUnsubscribe are server-internal
+	// control frames on a user's own topic: every instance holding one of
+	// that user's sockets subscribes (or unsubscribes) them to the listed
+	// topics. They never reach a client.
+	EventBrokerSubscribe   = "broker.subscribe"
+	EventBrokerUnsubscribe = "broker.unsubscribe"
+	// EventScheduledMessagesChanged tells a user's other tabs and devices that
+	// their scheduled messages changed (scheduled, edited, sent or failed), so
+	// the Scheduled list refetches. Sent on the user's own topic; no payload.
+	EventScheduledMessagesChanged = "scheduled_messages.changed"
 )
 
 // ephemeralTypes are events that exist only for the live socket — they
@@ -130,6 +140,12 @@ var ephemeralTypes = map[string]struct{}{
 	// run.progress is a live typing-indicator-grade delta stream; the run's
 	// EVT# timeline is the durable record and run.updated carries state.
 	EventRunProgress: {},
+	// Broker control frames act on live subscriptions only.
+	EventBrokerSubscribe:   {},
+	EventBrokerUnsubscribe: {},
+	// A data-less "refetch your scheduled list" nudge; the list is re-read on
+	// reconnect anyway.
+	EventScheduledMessagesChanged: {},
 }
 
 // IsPersistent reports whether an event of this type should be appended

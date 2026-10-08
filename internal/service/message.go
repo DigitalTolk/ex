@@ -47,6 +47,9 @@ type ConversationActivator interface {
 // dependency — when unset (e.g. a narrow unit test) the bump is simply skipped.
 type UnreadSeqStore interface {
 	IncrementMessageSeq(ctx context.Context, parentID string) (int64, error)
+	// CurrentMessageSeq reads the parent's counter without bumping it — the
+	// ceiling a mark-unread rewinds the caller's watermark from.
+	CurrentMessageSeq(ctx context.Context, parentID string) (int64, error)
 	SetLastRead(ctx context.Context, parentID, userID string, seq int64) error
 }
 
@@ -493,6 +496,7 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 		ParentMessageID: parentMessageID,
 		AttachmentIDs:   attachmentIDs,
 		NoIndex:         noIndex,
+		ClientNonce:     clientNonce(ctx),
 		CreatedAt:       now,
 	}
 	// Agent path (SendAsAgent): record whose invocation this post serves.

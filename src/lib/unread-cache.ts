@@ -90,3 +90,34 @@ export function touchConversationActivityInCache(
   if (found) qc.setQueryData<UserConversation[]>(queryKeys.userConversations(), next);
   return found;
 }
+
+/**
+ * Mark as unread: the server rewound the watermark so `count` messages are
+ * unread again. No alert went out, so the numeric badge stays clear — the
+ * row shows the plain unread indicator.
+ */
+export function setChannelUnreadCountInCache(qc: QueryClient, channelID: string, count: number) {
+  patchChannel(qc, channelID, (c) => ({ ...c, unread: count > 0, unreadCount: count, unreadNotifyCount: 0 }));
+}
+
+/** Conversation twin of setChannelUnreadCountInCache. */
+export function setConversationUnreadCountInCache(qc: QueryClient, conversationID: string, count: number) {
+  patchConversation(qc, conversationID, (c) => ({ ...c, unread: count > 0, unreadCount: count, unreadNotifyCount: 0 }));
+}
+
+/**
+ * The parent's cached unread count, or undefined while its list isn't loaded
+ * or the row isn't in it — callers wait for a real answer rather than
+ * treating "not loaded" as "nothing unread".
+ */
+export function cachedUnreadCount(
+  qc: QueryClient,
+  parentType: 'channel' | 'conversation',
+  parentID: string,
+): number | undefined {
+  const row =
+    parentType === 'channel'
+      ? qc.getQueryData<UserChannel[]>(queryKeys.userChannels())?.find((c) => c.channelID === parentID)
+      : qc.getQueryData<UserConversation[]>(queryKeys.userConversations())?.find((c) => c.conversationID === parentID);
+  return row ? (row.unreadCount ?? 0) : undefined;
+}

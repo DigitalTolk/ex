@@ -65,21 +65,22 @@ func (s *ActivityService) RecordReaction(ctx context.Context, msg *model.Message
 	}
 	// Snapshot only the small fields the goroutine needs (not the whole *Message)
 	// so the closure doesn't pin the message for the store write's lifetime.
-	author, msgID, parentID, body := msg.AuthorID, msg.ID, msg.ParentID, msg.Body
+	author, msgID, parentID, threadRoot, body := msg.AuthorID, msg.ID, msg.ParentID, msg.ParentMessageID, msg.Body
 	safe.Go(func() {
 		bg, cancel := detachedContext(ctx)
 		defer cancel()
 		item := &model.ActivityItem{
-			ID:             store.NewID(),
-			Type:           model.ActivityReaction,
-			CreatedAt:      time.Now(),
-			MessageID:      msgID,
-			ParentID:       parentID,
-			ParentType:     parentType,
-			ChannelSlug:    s.resolveChannelSlug(bg, parentType, parentID),
-			MessagePreview: activityPreview(body),
-			ActorID:        actorID,
-			Emoji:          emoji,
+			ID:              store.NewID(),
+			Type:            model.ActivityReaction,
+			CreatedAt:       time.Now(),
+			MessageID:       msgID,
+			ParentID:        parentID,
+			ParentType:      parentType,
+			ParentMessageID: threadRoot,
+			ChannelSlug:     s.resolveChannelSlug(bg, parentType, parentID),
+			MessagePreview:  activityPreview(body),
+			ActorID:         actorID,
+			Emoji:           emoji,
 		}
 		s.addSync(bg, author, item)
 	})

@@ -36,6 +36,12 @@ export interface ActivityItem {
   parentID: string;
   parentType: string; // "channel" | "conversation"
   /**
+   * ParentMessageID is the thread root when the source message is a thread
+   * reply (empty for top-level messages). Replies never render in the main
+   * list, so the deep link must open the thread to show them.
+   */
+  parentMessageID?: string;
+  /**
    * ChannelSlug is set for channel parents so the client can build a slug URL
    * without resolving the channel; empty for conversations.
    */
@@ -61,6 +67,11 @@ export interface Reminder {
   messageID: string;
   parentID: string;
   parentType: string; // "channel" | "conversation"
+  /**
+   * ParentMessageID is the thread root when the reminded message is a thread
+   * reply, taken from the stored message (never the client) at schedule time.
+   */
+  parentMessageID?: string;
   channelSlug?: string;
   messagePreview?: string;
   remindAt: string /* RFC3339 */;
@@ -1816,6 +1827,13 @@ export interface Message {
    * invoker-only, this is the public trace).
    */
   agentSkills?: string[];
+  /**
+   * ClientNonce echoes the sender's client-generated tag (X-Client-Nonce) on
+   * the send response and the message.new broadcast, so the sender's client
+   * can swap its optimistic "sending" row for the real message whichever
+   * arrives first. Never persisted.
+   */
+  clientNonce?: string;
 }
 export interface MessageAttachment {
   fallback?: string;
@@ -1893,6 +1911,39 @@ export interface ChannelNotificationOverride {
   threadReplies?: boolean;
   ignoreGroupMentions?: boolean;
   followAllThreads?: boolean;
+}
+
+//////////
+// source: scheduled_message.go
+
+/**
+ * ScheduledMessageState is where a scheduled message stands: waiting for its
+ * time, or a delivery that could not be made (kept so its text isn't lost).
+ */
+export type ScheduledMessageState = string;
+export const ScheduledMessagePending: ScheduledMessageState = "pending";
+export const ScheduledMessageFailed: ScheduledMessageState = "failed";
+/**
+ * ScheduledMessage is a message its author composed now to be sent at SendAt —
+ * into a channel, a conversation, or a thread (ParentMessageID). At SendAt it
+ * is posted exactly like a normal send (notifications included) and removed.
+ */
+export interface ScheduledMessage {
+  id: string;
+  userID: string;
+  parentID: string;
+  parentType: string; // "channel" | "conversation"
+  parentMessageID?: string;
+  body: string;
+  attachmentIDs?: string[];
+  sendAt: string /* RFC3339 */;
+  state: ScheduledMessageState;
+  /**
+   * FailReason says why a failed delivery couldn't be made.
+   */
+  failReason?: string;
+  createdAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
 }
 
 //////////
@@ -2052,13 +2103,41 @@ export interface UserStateItem {
   parentType?: string;
   threadRootID?: string;
   seenAt?: string /* RFC3339 */;
+  /**
+   * Rewound marks a thread_seen row a mark-unread wrote: SeenAt was set back
+   * to just before a reply on purpose. An ordinary "seen" write replaces the
+   * row without it.
+   */
+  rewound?: boolean;
   updatedAt: string /* RFC3339 */;
 }
 export interface UserState {
   threadNotifications: string[];
   threadSeen: { [key: string]: string};
+  /**
+   * ThreadMarkedUnread maps a thread root to WHEN the user marked it unread
+   * (its threadSeen entry was rewound to just before a reply). Clients keep
+   * the newer of their local and the server's seen time; a rewound entry is
+   * older by design, so this tells them a local seen time from before the
+   * mark must yield to it.
+   */
+  threadMarkedUnread: { [key: string]: string};
   hiddenConversations: string[];
   hiddenSkills: string[];
+}
+/**
+ * MarkUnreadResult is the outcome of marking a message unread. A top-level
+ * message rewinds the caller's read watermark on its channel/conversation so
+ * UnreadCount messages (it and everything after it) are unread again; a
+ * thread reply rewinds the thread's seen time to just before it instead.
+ */
+export interface MarkUnreadResult {
+  parentID: string;
+  parentType: string;
+  messageID: string;
+  unreadCount: number /* int64 */;
+  threadRootID?: string;
+  seenAt?: string /* RFC3339 */;
 }
 
 //////////

@@ -37,6 +37,7 @@ import {
   ArrowDownAZ,
   Clock3,
   Bell,
+  Loader2,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { AI_HUB_HOME, isAiHubPath } from '@/lib/ai-hub';
@@ -52,14 +53,15 @@ import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
-import { getSeenMap, mergeSeenMaps, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, useUserThreads } from '@/hooks/useThreads';
+import { getSeenMap, mergeSeenMaps, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, unreadThreadParents, useUserThreads } from '@/hooks/useThreads';
 import { useUserState } from '@/hooks/useUserState';
 import { useDrafts } from '@/hooks/useDrafts';
 import { useActivity } from '@/hooks/useActivity';
 import { deviceKind } from '@/lib/device';
 import { usePointerDevice } from '@/hooks/usePointerDevice';
 import { useCategories, useCreateCategory, useDeleteCategory, useReorderCategories, useReorderSidebar, type SidebarMoveRequest } from '@/hooks/useSidebar';
-import { groupSidebarItems, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
+import { groupSidebarItems, isSidebarItemUnread, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
+import { SidebarUnreadControls } from '@/components/layout/SidebarUnreadControls';
 import { computeSidebarReorder, type SidebarSectionTarget } from '@/lib/sidebar-reorder';
 import type { SidebarCategory } from '@/types';
 import { ChannelRow } from './ChannelRow';
@@ -72,6 +74,9 @@ interface SidebarProps {
 }
 
 const CONVERSATION_SORT_STORAGE_KEY = 'sidebar.conversationSort';
+// Per-device unread view preferences, like the DM sort. Both default off.
+const UNREAD_SECTION_STORAGE_KEY = 'sidebar.unreadSection';
+const UNREAD_ONLY_STORAGE_KEY = 'sidebar.unreadOnly';
 function SidebarSectionsSkeleton() {
   return (
     <div className="mt-2 space-y-4 px-2" data-testid="sidebar-primary-loading" aria-hidden="true">
@@ -108,6 +113,8 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [conversationSort, setConversationSort] = useState<ConversationSidebarSort>(() =>
     localStorage.getItem(CONVERSATION_SORT_STORAGE_KEY) === 'az' ? 'az' : 'recent',
   );
+  const [unreadSection, setUnreadSection] = useState(() => localStorage.getItem(UNREAD_SECTION_STORAGE_KEY) === '1');
+  const [unreadOnly, setUnreadOnly] = useState(() => localStorage.getItem(UNREAD_ONLY_STORAGE_KEY) === '1');
   const activeDragRef = useRef<DragPayload | null>(null);
   const [isDraggingCategory, setIsDraggingCategory] = useState(false);
   const [dropIndicator, setDropIndicator] = useState<DropIndicator | null>(null);
@@ -157,22 +164,53 @@ export function Sidebar({ onClose }: SidebarProps) {
     },
     [conversations, hiddenConversations, userState?.hiddenConversations],
   );
-  const unreadThreadCount = useMemo(
+  const unreadThreads = useMemo(
     () =>
       unreadThreadIDs(
         threads ?? [],
         userState?.threadNotifications ?? [],
         unreadThreadNotifications ?? new Set(),
-        mergeSeenMaps(userState?.threadSeen, localSeenMap),
-      ).size,
-    [localSeenMap, threads, unreadThreadNotifications, userState?.threadNotifications, userState?.threadSeen],
+        mergeSeenMaps(userState?.threadSeen, localSeenMap, userState?.threadMarkedUnread),
+      ),
+    [localSeenMap, threads, unreadThreadNotifications, userState?.threadNotifications, userState?.threadSeen, userState?.threadMarkedUnread],
   );
+  const unreadThreadCount = unreadThreads.size;
   const hasThreadUpdates = unreadThreadCount > 0;
+  // A reply in a thread you're in marks its channel/DM row unread too, until
+  // that thread is read (the Threads count tracks the thread itself).
+  const threadUnreadParents = useMemo(() => unreadThreadParents(threads, unreadThreads), [threads, unreadThreads]);
   const draftCount = drafts?.length ?? 0;
 
+  // The chat being viewed. With the unread view on it stays visible even
+  // though opening it reads it, and — if it was unread when opened — stays in
+  // the Unread section until the user leaves, so rows don't jump mid-read.
+  const activeItemID = useMemo(() => {
+    const path = location.pathname;
+    const ch = channels?.find((c) => path === `/channel/${slugify(c.channelName)}` || path === `/channel/${c.channelID}`);
+    if (ch) return ch.channelID;
+    return /^\/conversation\/([^/]+)/.exec(path)?.[1];
+  }, [location.pathname, channels]);
+  const activeItemUnread = useMemo(() => {
+    if (activeItemID && threadUnreadParents.has(activeItemID)) return true;
+    const ch = channels?.find((c) => c.channelID === activeItemID);
+    if (ch) return isSidebarItemUnread({ kind: 'channel', channel: ch });
+    const conv = visibleConversations.find((c) => c.conversationID === activeItemID);
+    return !!conv && isSidebarItemUnread({ kind: 'conversation', conversation: conv });
+  }, [channels, visibleConversations, activeItemID, threadUnreadParents]);
+  const [stickyUnread, setStickyUnread] = useState<{ id?: string; unread: boolean }>({ unread: false });
+  if (stickyUnread.id !== activeItemID) setStickyUnread({ id: activeItemID, unread: activeItemUnread });
+
   const sidebarSections = useMemo(
-    () => groupSidebarItems(channels ?? [], visibleConversations, categories ?? [], { conversationSort }),
-    [channels, visibleConversations, categories, conversationSort],
+    () =>
+      groupSidebarItems(channels ?? [], visibleConversations, categories ?? [], {
+        conversationSort,
+        unreadSection,
+        unreadOnly,
+        activeID: activeItemID,
+        stickyUnreadID: stickyUnread.unread ? stickyUnread.id : undefined,
+        threadUnreadIDs: threadUnreadParents,
+      }),
+    [channels, visibleConversations, categories, conversationSort, unreadSection, unreadOnly, activeItemID, stickyUnread, threadUnreadParents],
   );
 
   // Fetch the other participant for every DM in one batch so the sidebar
@@ -199,6 +237,16 @@ export function Sidebar({ onClose }: SidebarProps) {
   function setConversationSortPreference(sort: ConversationSidebarSort) {
     setConversationSort(sort);
     localStorage.setItem(CONVERSATION_SORT_STORAGE_KEY, sort);
+  }
+
+  function setUnreadSectionPreference(on: boolean) {
+    setUnreadSection(on);
+    localStorage.setItem(UNREAD_SECTION_STORAGE_KEY, on ? '1' : '0');
+  }
+
+  function setUnreadOnlyPreference(on: boolean) {
+    setUnreadOnly(on);
+    localStorage.setItem(UNREAD_ONLY_STORAGE_KEY, on ? '1' : '0');
   }
 
   function sectionCategoryID(sectionKey: string): string {
@@ -1051,58 +1099,86 @@ export function Sidebar({ onClose }: SidebarProps) {
           />
 
           {/* "Add category" sits above the sections so the affordance is
-              obvious before users scroll into the list. */}
-          {creatingCategory ? (
-            <div className="px-2 py-1 mb-1">
-              <input
-                autoFocus
-                value={newCategoryName}
-                onChange={(e) => {
-                  setNewCategoryName(e.target.value);
-                  setCategoryCreateError('');
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    const name = newCategoryName.trim();
-                    if (!name) return;
-                    createCategory.mutate(name, {
-                      onSuccess: () => {
-                        setNewCategoryName('');
+              obvious before users scroll into the list; the unread view
+              options icon shares its row. */}
+          <div className="flex items-center gap-1">
+            <div className="min-w-0 flex-1">
+              {creatingCategory ? (
+                // Same box as the "+ Add category" button it replaces, so
+                // opening it doesn't shift the list below.
+                <div className="relative mb-1">
+                  <input
+                    autoFocus
+                    value={newCategoryName}
+                    readOnly={createCategory.isPending}
+                    aria-busy={createCategory.isPending}
+                    onChange={(e) => {
+                      setNewCategoryName(e.target.value);
+                      setCategoryCreateError('');
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const name = newCategoryName.trim();
+                        // One create per name: a second Enter while saving is ignored.
+                        if (!name || createCategory.isPending) return;
+                        createCategory.mutate(name, {
+                          onSuccess: () => {
+                            setNewCategoryName('');
+                            setCreatingCategory(false);
+                            setCategoryCreateError('');
+                          },
+                          onError: (err) => {
+                            setCategoryCreateError(err instanceof Error ? err.message : 'Could not create category');
+                          },
+                        });
+                      }
+                      if (e.key === 'Escape') {
                         setCreatingCategory(false);
                         setCategoryCreateError('');
-                      },
-                      onError: (err) => {
-                        setCategoryCreateError(err instanceof Error ? err.message : 'Could not create category');
-                      },
-                    });
-                  }
-                  if (e.key === 'Escape') {
-                    setCreatingCategory(false);
+                      }
+                    }}
+                    placeholder="Category name…"
+                    data-testid="sidebar-new-category-input"
+                    className={`w-full rounded-md bg-white/10 px-2 py-1 text-sm text-white placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-white/40 mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
+                      createCategory.isPending ? 'pr-20 text-gray-400' : ''
+                    }`}
+                  />
+                  {createCategory.isPending && (
+                    <span
+                      data-testid="sidebar-new-category-pending"
+                      role="status"
+                      className="pointer-events-none absolute inset-y-0 right-4 flex items-center gap-1 text-xs text-gray-400"
+                    >
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                      Creating…
+                    </span>
+                  )}
+                  {categoryCreateError && (
+                    <p className="mt-1 text-xs text-red-300" role="alert">
+                      {categoryCreateError}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <button
+                  onClick={() => {
                     setCategoryCreateError('');
-                  }
-                }}
-                placeholder="Category name…"
-                data-testid="sidebar-new-category-input"
-                className="w-full rounded-md bg-white/10 px-2 py-1 text-sm text-white placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-white/40 mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base"
-              />
-              {categoryCreateError && (
-                <p className="mt-1 text-xs text-red-300" role="alert">
-                  {categoryCreateError}
-                </p>
+                    setCreatingCategory(true);
+                  }}
+                  data-testid="sidebar-add-category"
+                  className="mb-1 w-full truncate whitespace-nowrap rounded-md px-2 py-1 text-left text-sm text-gray-500 hover:bg-white/5 hover:text-gray-300 mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base"
+                >
+                  + Add category
+                </button>
               )}
             </div>
-          ) : (
-            <button
-              onClick={() => {
-                setCategoryCreateError('');
-                setCreatingCategory(true);
-              }}
-              data-testid="sidebar-add-category"
-              className="mb-1 w-full rounded-md px-2 py-1 text-left text-sm text-gray-500 hover:bg-white/5 hover:text-gray-300 mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base"
-            >
-              + Add category
-            </button>
-          )}
+            <SidebarUnreadControls
+              unreadOnly={unreadOnly}
+              onUnreadOnlyChange={setUnreadOnlyPreference}
+              unreadSection={unreadSection}
+              onUnreadSectionChange={setUnreadSectionPreference}
+            />
+          </div>
 
           {/* Unified sidebar list: Favorites (mixed) → user categories
               (mixed) → Channels (uncategorised) → Direct Messages
@@ -1111,11 +1187,39 @@ export function Sidebar({ onClose }: SidebarProps) {
               DMs/groups can only appear here when favorited. */}
           {sidebarPrimaryDataReady ? (
           <nav aria-label="Channels and direct messages" data-testid="sidebar-primary-sections">
+            {unreadOnly && (
+              <div
+                data-testid="sidebar-unread-only-strip"
+                className="mt-1 flex items-center justify-between rounded-md bg-white/5 px-2 py-1 text-xs text-gray-400 mobile:px-3 mobile:py-2 mobile:text-sm"
+              >
+                <span>Showing unread only</span>
+                <button
+                  type="button"
+                  onClick={() => setUnreadOnlyPreference(false)}
+                  data-testid="sidebar-unread-show-all"
+                  className="font-medium text-gray-300 hover:text-white"
+                >
+                  Show all
+                </button>
+              </div>
+            )}
+            {unreadOnly && sidebarSections.every((section) => section.items.length === 0) && (
+              <p data-testid="sidebar-unread-empty" className="px-2 py-3 text-sm text-gray-500">
+                You're all caught up.
+              </p>
+            )}
             {sidebarSections.map((section) => {
+              const isUnreadSection = section.key === SidebarSectionKeys.Unread;
               const isFavorites = section.key === SidebarSectionKeys.Favorites;
               const isChannelsDefault = section.key === SidebarSectionKeys.Channels;
               const isDMsDefault = section.key === SidebarSectionKeys.DirectMessages;
-              const isUserCategory = !isFavorites && !isChannelsDefault && !isDMsDefault;
+              const isUserCategory = !isUnreadSection && !isFavorites && !isChannelsDefault && !isDMsDefault;
+              // The unread view hides what has nothing to show: an empty
+              // Unread section always, and any empty section while filtering.
+              if (section.items.length === 0 && (isUnreadSection || unreadOnly)) return null;
+              // Rows in the Unread section belong to other sections, so they
+              // aren't reordered from here.
+              const rowDragDisabled = dragDisabled || isUnreadSection;
               const canDropChannel = isFavorites || isUserCategory || isChannelsDefault;
               const collapsed = !!collapsedGroups[section.key];
 
@@ -1133,12 +1237,12 @@ export function Sidebar({ onClose }: SidebarProps) {
                       const ch = item.channel;
                       const isActive =
                         location.pathname === `/channel/${slugify(ch.channelName)}`;
-                      return isActive || (!ch.muted && !!ch.unread);
+                      return isActive || (!ch.muted && !!ch.unread) || threadUnreadParents.has(ch.channelID);
                     }
                     const conv = item.conversation;
                     const isActive =
                       location.pathname === `/conversation/${conv.conversationID}`;
-                    return isActive || !!conv.unread;
+                    return isActive || !!conv.unread || threadUnreadParents.has(conv.conversationID);
                   })
                 : section.items;
 
@@ -1307,15 +1411,15 @@ export function Sidebar({ onClose }: SidebarProps) {
                               sectionKey={section.key}
                               index={channelDropIndex}
                               channel={item.channel}
-                              disabled={dragDisabled}
+                              disabled={rowDragDisabled}
                             >
                               {(dragProps) => (
                                 <ChannelRow
                                   channel={item.channel}
-                                  hasUnread={!!item.channel.unread}
+                                  hasUnread={!!item.channel.unread || threadUnreadParents.has(item.channel.channelID)}
                                   notifyCount={Number(item.channel.unreadNotifyCount ?? 0)}
                                   onClose={onClose}
-                                  draggable={!dragDisabled}
+                                  draggable={!rowDragDisabled}
                                   suppressNavigation={suppressChannelNavigationID === item.channel.channelID}
                                   onSuppressNavigationConsumed={clearSuppressedChannelNavigation}
                                   {...dragProps}
@@ -1355,7 +1459,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                               {(dragProps) => (
                                 <ConversationRow
                                   conversation={conv}
-                                  hasUnread={!!conv.unread}
+                                  hasUnread={!!conv.unread || threadUnreadParents.has(conv.conversationID)}
                                   notifyCount={Number(conv.unreadNotifyCount ?? 0)}
                                   dmAvatarURL={resolvedDMAvatarURL}
                                   dmUserStatus={resolvedDMUserStatus}
@@ -1372,7 +1476,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                           ) : (
                             <ConversationRow
                               conversation={conv}
-                              hasUnread={!!conv.unread}
+                              hasUnread={!!conv.unread || threadUnreadParents.has(conv.conversationID)}
                               notifyCount={Number(conv.unreadNotifyCount ?? 0)}
                               dmAvatarURL={resolvedDMAvatarURL}
                               dmUserStatus={resolvedDMUserStatus}

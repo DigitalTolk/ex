@@ -50,6 +50,7 @@ vi.mock('@/hooks/useThreads', () => ({
   useFollowThread: () => ({ mutate: vi.fn(), isPending: false }),
   useUnfollowThread: () => ({ mutate: vi.fn(), isPending: false }),
   markThreadSeen: (...args: unknown[]) => markThreadSeenMock(...args),
+  noteThreadReadPosition: vi.fn(),
 }));
 
 vi.mock('@/hooks/useReactions', () => ({

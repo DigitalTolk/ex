@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { MessageItem } from './MessageItem';
 import { isGroupedWithPrevious } from './MessageListRows';
 import { MessageInput, type MessageInputHandle, type MessageInputValue } from './MessageInput';
@@ -19,7 +20,11 @@ import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
-import { markThreadSeen, useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
+import { useComposerSchedule } from '@/hooks/useScheduledMessages';
+import { markThreadSeen, noteThreadReadPosition, useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
+import { isReadHeld, keepReadSession, scheduleEndReadSession, threadReadKey, useUnreadAnchor } from '@/lib/read-position';
+import { resolveUnreadDivider } from '@/lib/unread-divider';
+import { UnreadDivider } from './UnreadMarkers';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { collectMessageUserIDs, isOwnMessage } from '@/lib/message-users';
 import {
@@ -102,7 +107,12 @@ export function ThreadPanel({
     [mergedUserMap],
   );
 
-  const send = useSendMessage({ channelId, conversationId });
+  const send = useSendMessage({ channelId, conversationId, authorID: currentUserId });
+  const schedule = useComposerSchedule({
+    parentID: channelId ?? conversationId,
+    parentType: channelId ? 'channel' : 'conversation',
+    parentMessageID: threadRootID,
+  });
   const { pendingInvites, channelSlug, checkMentions, clearInvites } = useNonMemberInvite(channelId, currentUserId);
   const inputRef = useRef<MessageInputHandle>(null);
   const parentID = channelId ?? conversationId;
@@ -116,10 +126,33 @@ export function ThreadPanel({
   // locally-opened threads and replies posted while you're reading.
   const latestMessageAt =
     data && data.length > 0 ? data[data.length - 1].createdAt : undefined;
+
+  // The "New messages" line (lib/read-position): before the opened thread is
+  // marked seen, note how far the user had read; the first reply after that
+  // gets the line. "Mark as unread" on a reply moves it there and holds the
+  // thread unread until the panel closes.
+  const queryClient = useQueryClient();
+  const threadKey = threadReadKey(threadRootID);
   useEffect(() => {
-    if (!parentID || !latestMessageAt) return;
+    noteThreadReadPosition(queryClient, threadRootID);
+  }, [threadRootID, queryClient]);
+  useEffect(() => {
+    keepReadSession(threadKey);
+    return () => scheduleEndReadSession(threadKey);
+  }, [threadKey]);
+  const threadAnchor = useUnreadAnchor(threadKey);
+  const threadDividerID = useMemo(
+    () =>
+      threadAnchor && data
+        ? resolveUnreadDivider(threadAnchor, data.filter((m) => m.id !== threadRootID), parentType)
+        : null,
+    [threadAnchor, data, threadRootID, parentType],
+  );
+
+  useEffect(() => {
+    if (!parentID || !latestMessageAt || isReadHeld(threadKey)) return;
     markThreadSeen(threadRootID, latestMessageAt, { parentID, parentType });
-  }, [parentID, parentType, threadRootID, latestMessageAt]);
+  }, [parentID, parentType, threadRootID, threadKey, latestMessageAt]);
   const draftScope = useMemo(
     () => ({ parentID, parentType, parentMessageID: threadRootID }),
     [parentID, parentType, threadRootID],
@@ -499,23 +532,27 @@ export function ThreadPanel({
             )}
             {data?.map((msg, index) => {
               const u = mergedUserMap[msg.authorID];
+              const firstUnread = msg.id === threadDividerID;
               return (
-                <MessageItem
-                  key={msg.id}
-                  message={msg}
-                  firstInGroup={!isGroupedWithPrevious(index > 0 ? data[index - 1] : null, msg)}
-                  authorName={u?.displayName ?? 'Unknown'}
-                  authorAvatarURL={u?.avatarURL}
-                  authorUserStatus={u?.userStatus}
-                  isOwn={isOwnMessage(msg, currentUserId)}
-                  channelId={channelId}
-                  conversationId={conversationId}
-                  currentUserId={currentUserId}
-                  userMap={userLookup}
-                  inThread
-                  quickReactions={quickReactions}
-                  onEditMessage={isMobile ? setEditingMessage : undefined}
-                />
+                <Fragment key={msg.clientNonce ?? msg.id}>
+                  {/* Inset to the replies' avatars (item px-3, inside this p-2). */}
+                  {firstUnread && <UnreadDivider inset="px-3" />}
+                  <MessageItem
+                    message={msg}
+                    firstInGroup={firstUnread || !isGroupedWithPrevious(index > 0 ? data[index - 1] : null, msg)}
+                    authorName={u?.displayName ?? 'Unknown'}
+                    authorAvatarURL={u?.avatarURL}
+                    authorUserStatus={u?.userStatus}
+                    isOwn={isOwnMessage(msg, currentUserId)}
+                    channelId={channelId}
+                    conversationId={conversationId}
+                    currentUserId={currentUserId}
+                    userMap={userLookup}
+                    inThread
+                    quickReactions={quickReactions}
+                    onEditMessage={isMobile ? setEditingMessage : undefined}
+                  />
+                </Fragment>
               );
             })}
           </div>
@@ -537,8 +574,10 @@ export function ThreadPanel({
             key={activeEditingMessage ? `edit-${activeEditingMessage.id}` : `thread-${threadRootID}`}
             ref={inputRef}
             onSend={activeEditingMessage ? handleEditMessage : handleReply}
+            onSchedule={schedule.onSchedule}
+            scheduledCount={schedule.scheduledCount}
             onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
-            disabled={activeEditingMessage ? editMessage.isPending : send.isPending}
+            disabled={!!activeEditingMessage && editMessage.isPending}
             placeholder={activeEditingMessage ? 'Edit message...' : 'Reply...'}
             focusKey={activeEditingMessage ? `edit-${activeEditingMessage.id}` : threadRootID}
             initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}

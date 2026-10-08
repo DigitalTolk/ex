@@ -14,24 +14,30 @@ import (
 // functions into one interface, and ParentIndexAdapter maps store row types
 // onto service entry types.
 
-// UnreadSeqAdapter binds a parent's message-seq incrementer and per-user
-// last-read setter into one service.UnreadSeqStore. It lets channels (counter
-// on the channel store, last-read on the membership store) and conversations
-// (both on the conversation store) share the same MessageService unread path.
+// UnreadSeqAdapter binds a parent's message-seq incrementer, current-seq
+// reader and per-user last-read setter into one service.UnreadSeqStore. It
+// lets channels (counter on the channel store, last-read on the membership
+// store) and conversations (both on the conversation store) share the same
+// MessageService unread path.
 type UnreadSeqAdapter struct {
 	incr     func(ctx context.Context, parentID string) (int64, error)
+	current  func(ctx context.Context, parentID string) (int64, error)
 	lastRead func(ctx context.Context, parentID, userID string, seq int64) error
 }
 
 func NewUnreadSeqAdapter(
 	incr func(ctx context.Context, parentID string) (int64, error),
+	current func(ctx context.Context, parentID string) (int64, error),
 	lastRead func(ctx context.Context, parentID, userID string, seq int64) error,
 ) *UnreadSeqAdapter {
-	return &UnreadSeqAdapter{incr: incr, lastRead: lastRead}
+	return &UnreadSeqAdapter{incr: incr, current: current, lastRead: lastRead}
 }
 
 func (a *UnreadSeqAdapter) IncrementMessageSeq(ctx context.Context, parentID string) (int64, error) {
 	return a.incr(ctx, parentID)
+}
+func (a *UnreadSeqAdapter) CurrentMessageSeq(ctx context.Context, parentID string) (int64, error) {
+	return a.current(ctx, parentID)
 }
 func (a *UnreadSeqAdapter) SetLastRead(ctx context.Context, parentID, userID string, seq int64) error {
 	return a.lastRead(ctx, parentID, userID, seq)

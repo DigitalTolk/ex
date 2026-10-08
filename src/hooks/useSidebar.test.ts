@@ -70,6 +70,23 @@ describe('useCreateCategory', () => {
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['sidebarCategories'] });
   });
+
+  it('shows the new category as soon as the server confirms it, once', async () => {
+    const created = { id: 'c-2', name: 'Launch', position: 1 };
+    vi.mocked(apiFetch).mockImplementation(async (url, opts) =>
+      opts?.method === 'POST' ? created : [{ id: 'c-1', name: 'Work', position: 0 }, created],
+    );
+    const { wrapper, queryClient } = createWrapperWithClient();
+    queryClient.setQueryData(['sidebarCategories'], [{ id: 'c-1', name: 'Work', position: 0 }]);
+    const setSpy = vi.spyOn(queryClient, 'setQueryData');
+    const { result } = renderHook(() => useCreateCategory(), { wrapper });
+    result.current.mutate('Launch');
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const update = setSpy.mock.calls[0][1] as (prev?: unknown[]) => unknown[] | undefined;
+    expect(update([{ id: 'c-1' }])).toEqual([{ id: 'c-1' }, created]);
+    expect(update([created])).toEqual([created]); // already there (e.g. refetched first)
+    expect(update(undefined)).toBeUndefined(); // nothing cached yet
+  });
 });
 
 describe('useUpdateCategory', () => {

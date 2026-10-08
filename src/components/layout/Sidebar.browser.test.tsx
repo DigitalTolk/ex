@@ -155,6 +155,8 @@ vi.mock('@/hooks/useThreads', () => ({
   getSeenMap: () => ({}),
   mergeSeenMaps: (server: Record<string, string> | undefined, local: Record<string, string>) => ({ ...(server ?? {}), ...local }),
   unreadThreadIDs: (threads: typeof mockThreads) => new Set(threads.map((t) => t.threadRootID)),
+  unreadThreadParents: (threads: typeof mockThreads = [], ids: Set<string>) =>
+    new Set(threads.filter((t) => ids.has(t.threadRootID)).map((t) => t.parentID)),
   useUserThreads: () => ({ data: mockThreads }),
 }));
 

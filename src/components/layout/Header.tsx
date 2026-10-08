@@ -5,6 +5,7 @@ import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { UserHoverCard } from '@/components/UserHoverCard';
 import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,6 +24,9 @@ import type { Channel, UserStatus } from '@/types';
 
 interface HeaderProps {
   channel?: Channel;
+  // While a channel is still loading: its name and type when already known
+  // (from the sidebar), otherwise a placeholder bar.
+  loadingChannel?: { name?: string; type?: Channel['type'] };
   memberCount?: number;
   title?: string;
   subtitle?: string;
@@ -56,6 +60,7 @@ interface HeaderProps {
 
 export function Header({
   channel,
+  loadingChannel,
   memberCount,
   title,
   subtitle,
@@ -246,6 +251,17 @@ export function Header({
                   </span>
                 )
               ) : null
+            )}
+          </div>
+        ) : loadingChannel ? (
+          <div className="-ml-1 flex h-7 min-w-0 items-center gap-1 px-1" data-testid="channel-title-loading" aria-busy="true">
+            {loadingChannel.name ? (
+              <>
+                <ChannelIcon type={loadingChannel.type ?? 'public'} className="h-5 w-5 shrink-0 text-muted-foreground" />
+                <h1 className="min-w-0 truncate text-lg font-semibold">{loadingChannel.name}</h1>
+              </>
+            ) : (
+              <Skeleton className="h-5 w-36" />
             )}
           </div>
         ) : (

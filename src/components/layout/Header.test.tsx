@@ -65,6 +65,19 @@ describe('Header', () => {
     expect(screen.getByText('general')).toBeInTheDocument();
   });
 
+  it('while a channel loads, shows the name it will have — or a placeholder bar', () => {
+    const { rerender } = render(<Header loadingChannel={{ name: 'launch-prep', type: 'private' }} />);
+    const title = screen.getByTestId('channel-title-loading');
+    expect(title).toHaveAttribute('aria-busy', 'true');
+    expect(within(title).getByRole('heading', { name: 'launch-prep' })).toBeInTheDocument();
+    expect(within(title).getByLabelText('Private channel')).toBeInTheDocument();
+    rerender(<Header loadingChannel={{ name: 'general' }} />);
+    expect(within(screen.getByTestId('channel-title-loading')).getByLabelText('Public channel')).toBeInTheDocument();
+    rerender(<Header loadingChannel={{}} />);
+    expect(screen.queryByRole('heading')).toBeNull();
+    expect(screen.getByTestId('channel-title-loading').querySelector('[data-slot="skeleton"]')).not.toBeNull();
+  });
+
   it('keeps right-side actions visible when the channel name is long', () => {
     render(
       <Header

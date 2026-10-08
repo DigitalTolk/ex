@@ -15,7 +15,10 @@ import {
   X,
   Save,
   Loader2,
+  Clock,
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { ScheduleSendMenu } from '@/components/chat/ScheduleSendMenu';
 import { useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import {
@@ -81,6 +84,13 @@ export interface MessageInputHandle {
 
 interface MessageInputProps {
   onSend: (value: MessageInputValue) => void;
+  // Send the composed message later instead: shows a ⌄ beside Send. Resolves
+  // once scheduled (the composer then clears like a send); rejects to keep
+  // the text.
+  onSchedule?: (value: MessageInputValue, sendAt: Date) => Promise<void>;
+  // How many messages are scheduled from this composer's chat or thread — a
+  // quiet link to them sits beside Send.
+  scheduledCount?: number;
   onCancel?: () => void;
   disabled?: boolean;
   placeholder?: string;
@@ -133,6 +143,8 @@ interface MessageInputProps {
 
 export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(function MessageInput({
   onSend,
+  onSchedule,
+  scheduledCount = 0,
   onCancel,
   disabled = false,
   placeholder = 'Type a message...',
@@ -349,6 +361,24 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     requestAnimationFrame(blurComposer);
   }, []);
 
+  // clearAfterSubmit empties the composer once its message has gone (sent or
+  // scheduled) — the chips' files now belong to that message, so they are
+  // released locally, never deleted.
+  const clearAfterSubmit = useCallback(() => {
+    drafts.forEach((d) => d.localURL && URL.revokeObjectURL(d.localURL));
+    // The local-edit claim blocks the mirror from rehydrating the just-sent
+    // server draft props while the send's cache patch catches up.
+    locallyEditedDraftRef.current = true;
+    setBody('');
+    setDrafts([]);
+    editorRef.current?.setMarkdown('');
+    if (isMobile || submitLabel) {
+      collapseMobileComposer();
+      return;
+    }
+    queueMicrotask(() => editorRef.current?.focus());
+  }, [drafts, isMobile, submitLabel, collapseMobileComposer]);
+
   const handleSend = useCallback(() => {
     if (!canSend) return;
     const trimmed = body.trim();
@@ -381,19 +411,18 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       onSend({ body: normalizeEmojiInBody(trimmed), attachmentIDs: drafts.map((d) => d.id) });
     }
     if (variant === 'inline') return; // parent unmounts the inline edit
-    drafts.forEach((d) => d.localURL && URL.revokeObjectURL(d.localURL));
-    // The local-edit claim blocks the mirror from rehydrating the just-sent
-    // server draft props while the send's cache patch catches up.
-    locallyEditedDraftRef.current = true;
-    setBody('');
-    setDrafts([]);
-    editorRef.current?.setMarkdown('');
-    if (isMobile || submitLabel) {
-      collapseMobileComposer();
-      return;
-    }
-    queueMicrotask(() => editorRef.current?.focus());
-  }, [canSend, body, drafts, onSend, variant, isMobile, submitLabel, collapseMobileComposer, commandTarget, commands, runCommand, pendingCommand]);
+    clearAfterSubmit();
+  }, [canSend, body, drafts, onSend, variant, commandTarget, commands, runCommand, pendingCommand, clearAfterSubmit]);
+
+  // handleSchedule sends the composed message later. The composer clears only
+  // once it's scheduled, so a failure keeps the text.
+  const handleSchedule = useCallback(async (sendAt: Date) => {
+    /* istanbul ignore next -- the schedule menu only renders with onSchedule and is disabled while !canSend; defensive */
+    if (!canSend || !onSchedule) return;
+    await onSchedule({ body: normalizeEmojiInBody(body.trim()), attachmentIDs: drafts.map((d) => d.id) }, sendAt);
+    clearAfterSubmit();
+  }, [canSend, onSchedule, body, drafts, clearAfterSubmit]);
+
 
   useEffect(() => {
     if (variant !== 'composer') return;
@@ -799,15 +828,57 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       {showToolbarSend && (
         <>
           <span className="ml-auto" aria-hidden />
-          <Button
-            onClick={handleSend}
-            disabled={!canSend}
-            size="icon"
-            className="h-7 w-7 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover dark:disabled:bg-brand-disabled dark:disabled:text-brand-foreground mobile:h-9 mobile:w-9 mobile:rounded-full"
-            aria-label="Send message"
-          >
-            <Send className="h-4 w-4" />
-          </Button>
+          {scheduledCount > 0 && (
+            // Quiet way back to what's queued here; never moves the layout.
+            <Link
+              to="/drafts?tab=scheduled"
+              className="mr-2 flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              data-testid="composer-scheduled-link"
+            >
+              <Clock className="h-3.5 w-3.5" aria-hidden />
+              {scheduledCount} scheduled
+            </Link>
+          )}
+          {onSchedule ? (
+            // One button, split: Send, and ⌄ to send later instead — a single
+            // shape and colour with a thin inset divider.
+            <div
+              // Nothing to send: the same colours, faded — never a lighter tint.
+              className={`flex h-7 shrink-0 items-stretch overflow-hidden rounded-md bg-foreground text-background transition-opacity dark:bg-brand dark:text-brand-foreground mobile:h-9 mobile:rounded-full ${
+                canSend ? '' : 'opacity-40'
+              }`}
+              data-testid="split-send"
+            >
+              {/* A plain button: the wrapper alone colours the control (the
+                  Button component would add its own fill to this half). */}
+              <button
+                type="button"
+                onClick={handleSend}
+                disabled={!canSend}
+                className="flex h-full w-7 items-center justify-center hover:bg-background/15 disabled:pointer-events-none mobile:w-9"
+                aria-label="Send message"
+              >
+                <Send className="h-4 w-4" />
+              </button>
+              <span aria-hidden className="my-1.5 w-px bg-current opacity-30" />
+              <ScheduleSendMenu
+                disabled={!canSend}
+                onSchedule={handleSchedule}
+                onOpenChange={handleToolbarPickerOpenChange}
+                className="flex h-full w-5 items-center justify-center hover:bg-background/15 disabled:pointer-events-none mobile:w-7"
+              />
+            </div>
+          ) : (
+            <Button
+              onClick={handleSend}
+              disabled={!canSend}
+              size="icon"
+              className="h-7 w-7 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover dark:disabled:bg-brand-disabled dark:disabled:text-brand-foreground mobile:h-9 mobile:w-9 mobile:rounded-full"
+              aria-label="Send message"
+            >
+              <Send className="h-4 w-4" />
+            </Button>
+          )}
         </>
       )}
       {isEditingMode && (

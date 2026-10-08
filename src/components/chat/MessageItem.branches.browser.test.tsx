@@ -26,6 +26,7 @@ vi.mock('@/hooks/useSwipeDismiss', () => ({
 }));
 
 vi.mock('@/hooks/useMessages', () => ({
+  usePendingMessageActions: () => ({ retry: vi.fn(), discard: vi.fn() }),
   useEditMessage: () => ({ mutate: mutateEdit, isPending: false }),
   useDeleteMessage: () => ({ mutate: mutateDelete, isPending: false }),
   useToggleReaction: () => ({ mutate: mutateReact, isPending: false }),

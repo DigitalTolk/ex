@@ -12,6 +12,7 @@ import { useNonMemberInvite } from '@/hooks/useNonMemberInvite';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
+import { useComposerSchedule } from '@/hooks/useScheduledMessages';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import type { Message } from '@/types';
 import { useInView, useLiveInView } from '@/hooks/useInView';
@@ -130,7 +131,12 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
   // useSendMessage invalidates the same ['thread', parentPath, rootID]
   // key the hook above subscribes to, so a reply lands without an
   // extra fetch from us.
-  const send = useSendMessage({ channelId, conversationId });
+  const send = useSendMessage({ channelId, conversationId, authorID: currentUserId });
+  const schedule = useComposerSchedule({
+    parentID: channelId ?? conversationId,
+    parentType: channelId ? 'channel' : 'conversation',
+    parentMessageID: summary.threadRootID,
+  });
   const editMessage = useEditMessage();
   const isMobile = useIsMobile();
   // Desktop edits inline inside the MessageItem; mobile routes them to this
@@ -360,9 +366,11 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
           key={activeEditingMessage ? `edit-${activeEditingMessage.id}` : `reply-${summary.threadRootID}`}
           ref={inputRef}
           onSend={activeEditingMessage ? handleEditMessage : handleReply}
+          onSchedule={schedule.onSchedule}
+          scheduledCount={schedule.scheduledCount}
           onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
           submitLabel={activeEditingMessage ? 'Save' : undefined}
-          disabled={activeEditingMessage ? editMessage.isPending : send.isPending}
+          disabled={!!activeEditingMessage && editMessage.isPending}
           placeholder={activeEditingMessage ? 'Edit message…' : 'Reply…'}
           initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}
           initialDrafts={activeEditingMessage ? [] : draftAttachments}

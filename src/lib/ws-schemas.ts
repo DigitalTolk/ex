@@ -142,6 +142,7 @@ const userChannelUpdatedSchema = z.object({
   notificationPrefs: z.unknown().optional(),
   categories: z.boolean().optional(),
   userState: z.boolean().optional(),
+  unread: z.boolean().optional(),
 }).passthrough();
 
 export interface UserChannelUpdatedPayload {
@@ -154,6 +155,8 @@ export interface UserChannelUpdatedPayload {
   notificationPrefs?: unknown;
   categories?: boolean;
   userState?: boolean;
+  // Marked unread (not read) elsewhere — refetch the row.
+  unread?: boolean;
 }
 export const parseUserChannelUpdated = parser(userChannelUpdatedSchema) as (
   v: unknown,

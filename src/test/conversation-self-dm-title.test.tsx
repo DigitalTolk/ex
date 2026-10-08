@@ -40,6 +40,7 @@ vi.mock('@/context/AuthContext', () => ({
 }));
 
 vi.mock('@/context/UnreadContext', () => ({
+  useOptionalUnread: () => undefined,
   useUnread: () => ({
     clearConversationUnread: vi.fn(),
     setActiveConversation: vi.fn(),
@@ -58,6 +59,7 @@ vi.mock('@/context/NotificationContext', () => ({
 
 vi.mock('@/hooks/useConversations', () => ({
   useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
+  useUserConversations: () => ({ data: [] }),
   useConversation: () => ({
     data: {
       id: 'c-self',

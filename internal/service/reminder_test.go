@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -192,6 +193,12 @@ func TestReminderService_ProcessDueFires(t *testing.T) {
 	if notif.notifs[1].Body == "" {
 		t.Fatalf("empty-preview reminder should have a fallback body")
 	}
+	// Each alert is keyed by its reminder, not the message: the user may
+	// already have been alerted about that message, and a message-keyed
+	// reminder would be deduped away on desktop and mobile.
+	if notif.notifs[0].AlertID != "r1" || notif.notifs[1].AlertID != "r2" || notif.notifs[0].MessageID != "m-1" {
+		t.Fatalf("alert identity = %+v, want AlertID per reminder and MessageID kept", notif.notifs)
+	}
 	_ = base
 }
 
@@ -203,11 +210,26 @@ func TestReminderService_ProcessDueClaimError(t *testing.T) {
 	}
 }
 
-func TestReminderDeepLink_ChannelFallback(t *testing.T) {
-	// No slug → fall back to the channel id.
-	got := reminderDeepLink(&model.Reminder{ParentType: ParentChannel, ParentID: "ch-1", MessageID: "m-1"})
-	if got != "/channel/ch-1#msg-m-1" {
-		t.Fatalf("fallback deep link = %q", got)
+// The deep link matches the client's buildChannelHref / buildConversationHref:
+// a channel by slug (id when unknown), a conversation by id, and a thread
+// reply opening its thread — a reply never renders in the main list, so a
+// link without ?thread= landed on the parent with nothing to show.
+func TestReminderDeepLink(t *testing.T) {
+	cases := []struct {
+		name string
+		r    model.Reminder
+		want string
+	}{
+		{"channel by slug", model.Reminder{ParentType: ParentChannel, ParentID: "ch-1", ChannelSlug: "general", MessageID: "m-1"}, "/channel/general#msg-m-1"},
+		{"channel slug fallback", model.Reminder{ParentType: ParentChannel, ParentID: "ch-1", MessageID: "m-1"}, "/channel/ch-1#msg-m-1"},
+		{"conversation", model.Reminder{ParentType: ParentConversation, ParentID: "dm-1", MessageID: "m-1"}, "/conversation/dm-1#msg-m-1"},
+		{"channel thread reply", model.Reminder{ParentType: ParentChannel, ParentID: "ch-1", ChannelSlug: "general", MessageID: "m-2", ParentMessageID: "m-1"}, "/channel/general?thread=m-1#msg-m-2"},
+		{"conversation thread reply", model.Reminder{ParentType: ParentConversation, ParentID: "dm-1", MessageID: "m-2", ParentMessageID: "m-1"}, "/conversation/dm-1?thread=m-1#msg-m-2"},
+	}
+	for _, c := range cases {
+		if got := reminderDeepLink(&c.r); got != c.want {
+			t.Errorf("%s: deep link = %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 
@@ -218,5 +240,36 @@ func TestReminderService_FireWithoutDelivery(t *testing.T) {
 	svc.now = func() time.Time { return time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC) }
 	if n, err := svc.ProcessDue(context.Background()); err != nil || n != 1 {
 		t.Fatalf("ProcessDue without delivery = %d, %v", n, err)
+	}
+}
+
+type perUserAccess map[string]error
+
+func (p perUserAccess) CheckAccess(_ context.Context, userID, _, _ string) error { return p[userID] }
+
+// A reminder whose owner has since left (or been removed from, or seen
+// archived) its channel is dropped: the alert would open "access denied".
+// A check that merely failed still fires — losing a reminder is worse.
+func TestReminderService_DropsReminderOwnerCanNoLongerOpen(t *testing.T) {
+	rs := &fakeReminderStore{due: []*model.Reminder{
+		{ID: "r1", UserID: "u-left", MessageID: "m-1", ParentID: "ch-1", ParentType: ParentChannel, ChannelSlug: "ops"},
+		{ID: "r2", UserID: "u-flaky", MessageID: "m-2", ParentID: "ch-1", ParentType: ParentChannel, ChannelSlug: "ops"},
+		{ID: "r3", UserID: "u-member", MessageID: "m-3", ParentID: "ch-1", ParentType: ParentChannel, ChannelSlug: "ops"},
+	}}
+	svc := NewReminderService(rs, &fakeMessageGetter{}, perUserAccess{
+		"u-left":  fmt.Errorf("message: not a channel member: %w", ErrForbidden),
+		"u-flaky": errors.New("dynamo timeout"),
+	})
+	act, notif := &spyActivityAdder{}, &spyDirectNotifier{}
+	svc.SetDelivery(act, notif)
+
+	if n, err := svc.ProcessDue(context.Background()); err != nil || n != 3 {
+		t.Fatalf("ProcessDue = %d, %v; want all 3 claimed", n, err)
+	}
+	if len(notif.notifs) != 2 || notif.notifs[0].AlertID != "r2" || notif.notifs[1].AlertID != "r3" {
+		t.Fatalf("alerts = %+v, want r2 and r3 only", notif.notifs)
+	}
+	if len(act.items) != 2 {
+		t.Fatalf("activity items = %d, want 2 (none for the dropped reminder)", len(act.items))
 	}
 }

@@ -17,6 +17,9 @@ interface ThreadActionBarProps {
   // avoids N+1 batch requests across all the thread bars on a busy
   // channel page. Falls back to the bar's own batch when omitted.
   userMap?: UserLookup;
+  // The thread has replies the user hasn't read (the same thread the
+  // sidebar dot and the Threads count point at).
+  hasNew?: boolean;
 }
 
 export function ThreadActionBar({
@@ -26,6 +29,7 @@ export function ThreadActionBar({
   lastReplyAt,
   onClick,
   userMap: providedMap,
+  hasNew = false,
 }: ThreadActionBarProps) {
   // Skip the batch entirely when the parent supplied a lookup that
   // already covers the recent authors. When some IDs are missing,
@@ -43,7 +47,8 @@ export function ThreadActionBar({
       type="button"
       onClick={() => onClick(rootMessageID)}
       data-testid="thread-action-bar"
-      aria-label={`View ${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}`}
+      data-new={hasNew ? 'true' : undefined}
+      aria-label={`View ${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}${hasNew ? ', new replies' : ''}`}
       className="mt-1.5 inline-flex max-w-full items-center gap-2 rounded-md border border-transparent py-1 pl-1 pr-2.5 text-xs hover:border-border hover:bg-muted/60"
     >
       {/* Avatar stack — overlap by negative margin so the row stays
@@ -69,6 +74,12 @@ export function ThreadActionBar({
       <span className="shrink-0 whitespace-nowrap font-semibold text-primary">
         {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
       </span>
+      {hasNew && (
+        <span data-testid="thread-action-new" className="flex shrink-0 items-center gap-1 font-semibold text-destructive">
+          <span className="h-1.5 w-1.5 rounded-full bg-destructive" aria-hidden="true" />
+          New replies
+        </span>
+      )}
       {lastReplyAt && (
         <span
           data-testid="thread-action-last-reply"

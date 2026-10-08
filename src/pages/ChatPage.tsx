@@ -13,6 +13,7 @@ import { sendWS } from '@/lib/ws-sender';
 import { localTimeZone } from '@/lib/user-time';
 import { isUserAttentive, suppressionWindowMs } from '@/lib/user-activity';
 import { classifyParentArrival, resolveParentKind } from '@/lib/message-arrival';
+import { isAtBottom, isAtLiveTail, isReadHeld, noteMissedArrival, releaseRead, setUnreadAnchor, threadReadKey } from '@/lib/read-position';
 import { slugify } from '@/lib/format';
 import { isOwnMessage } from '@/lib/message-users';
 import {
@@ -50,6 +51,7 @@ import { apiFetch } from '@/lib/api';
 import {
   bumpChannelUnread,
   bumpConversationUnread,
+  cachedUnreadCount,
   clearChannelUnreadInCache,
   clearConversationUnreadInCache,
   touchConversationActivityInCache,
@@ -162,13 +164,34 @@ export default function ChatPage() {
         parentKind === 'channel'
           ? isActiveChannel(parentID)
           : parentKind === 'conversation' && isActiveConversation(parentID);
+      const atLiveTail = isAtLiveTail(parentID);
       const arrival = classifyParentArrival({
         isOwnAuthor,
         isThreadReply: !!parentMessageID,
         isSystem: !!msg.system,
         viewingParent,
         attentive: isUserAttentive(suppressionWindowMs),
+        atBottom: isAtBottom(parentID) && atLiveTail,
+        held: isReadHeld(parentID),
       });
+      if (arrival === 'bump-unread' && viewingParent && parentKind) {
+        if (!atLiveTail) {
+          // The open list is a window of older history (opened from a link):
+          // the message can't be shown in it, so the list offers a pill.
+          noteMissedArrival(parentID);
+        } else if (!cachedUnreadCount(queryClient, parentKind, parentID)) {
+          // Arriving unseen in the open chat (window away, scrolled up, or held
+          // unread): the first unread starts the "New messages" line.
+          setUnreadAnchor(parentID, { kind: 'message', messageID: msg.id }, { replace: true });
+        }
+      }
+      // Posting reads the parent for you server-side, so your own top-level
+      // post ends a "Mark as unread" hold.
+      if (isOwnAuthor && !parentMessageID && parentKind && isReadHeld(parentID)) {
+        releaseRead(parentID);
+        if (parentKind === 'channel') clearChannelUnreadInCache(queryClient, parentID);
+        else clearConversationUnreadInCache(queryClient, parentID);
+      }
       if (parentKind === 'channel') {
         if (arrival === 'mark-read') {
           // Watching it happen — clear any badge left over from an idle
@@ -202,7 +225,10 @@ export default function ChatPage() {
       // arrive via the message.edited event the backend publishes
       // alongside message.new (driven by IncrementReplyMetadata).
       if (parentMessageID) {
-        if (isActiveThread(parentMessageID)) {
+        const threadKey = threadReadKey(parentMessageID);
+        // Posting reads the thread for you, ending a "Mark as unread" hold.
+        if (isOwnAuthor) releaseRead(threadKey);
+        if (isActiveThread(parentMessageID) && !isReadHeld(threadKey)) {
           // Reading OTHERS' replies persists the seen watermark. Your own
           // reply is marked seen server-side by the backend ("posting
           // reads the thread for you"), so skip the redundant PUT and only
@@ -336,6 +362,11 @@ export default function ChatPage() {
       // stream (source of truth) so the sidebar badge + list update live.
       queryClient.invalidateQueries({ queryKey: queryKeys.activity() });
     },
+    onScheduledMessagesChanged: () => {
+      // Scheduled, edited, sent or failed on another tab/device (or by the
+      // server at send time) — refetch the Scheduled list.
+      queryClient.invalidateQueries({ queryKey: queryKeys.scheduledMessages() });
+    },
     onActivityRead: () => {
       // The feed was marked read on another device/tab — refetch so this
       // device's badge clears too instead of lingering until the next
@@ -449,6 +480,14 @@ export default function ChatPage() {
         }
         return;
       }
+      if (evt.unread && (evt.channelID || evt.conversationID)) {
+        // Marked unread in another tab/device: refetch the row for the
+        // server's rewound count.
+        queryClient.invalidateQueries({
+          queryKey: evt.channelID ? queryKeys.userChannels() : queryKeys.userConversations(),
+        });
+        return;
+      }
       if (evt.channelID) {
         // Bare {channelID}: the user read this channel in another tab —
         // clear the badge in place, no refetch.
@@ -492,7 +531,8 @@ export default function ChatPage() {
       const n = data as NotificationPayload | undefined;
       if (!n || !n.kind) return;
       if (n.parentMessageID) {
-        if (isActiveThread(n.parentMessageID)) {
+        // A thread marked unread stays unread even while open.
+        if (isActiveThread(n.parentMessageID) && !isReadHeld(threadReadKey(n.parentMessageID))) {
           markThreadSeen(n.parentMessageID, n.createdAt, {
             parentID: n.parentID,
             parentType: n.parentType === 'conversation' ? 'conversation' : 'channel',
@@ -625,6 +665,7 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
       queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
       queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.scheduledMessages() });
       queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
       // The refetched userChannels/userConversations carry authoritative server
       // unread counts — the single source — so there's nothing else to reset.

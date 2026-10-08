@@ -213,6 +213,16 @@ func (s *ChannelStoreImpl) UpdateChannel(ctx context.Context, ch *model.Channel)
 	return nil
 }
 
+// CurrentMessageSeq reads the channel's MessageSeq without bumping it — the
+// ceiling a mark-unread rewinds a member's last-read watermark from.
+func (s *ChannelStoreImpl) CurrentMessageSeq(ctx context.Context, channelID string) (int64, error) {
+	ch, err := s.GetChannel(ctx, channelID)
+	if err != nil {
+		return 0, err
+	}
+	return ch.MessageSeq, nil
+}
+
 // IncrementMessageSeq atomically bumps the channel's MessageSeq by one and
 // returns the new value. ADD on a missing attribute treats it as 0, so the
 // first message returns 1 — no initialization needed.

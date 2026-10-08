@@ -86,6 +86,16 @@ describe('useWebSocket event coverage', () => {
     expect(onActivityNew).toHaveBeenCalled();
   });
 
+  it('routes scheduled_messages.changed to onScheduledMessagesChanged', async () => {
+    const onScheduledMessagesChanged = vi.fn();
+    renderHook(() => useWebSocket({ onScheduledMessagesChanged, enabled: true }));
+    await flushConnect();
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    ws.simulateMessage(JSON.stringify({ type: 'scheduled_messages.changed', data: '{}' }));
+    expect(onScheduledMessagesChanged).toHaveBeenCalled();
+  });
+
   it('routes activity.read to onActivityRead', async () => {
     const onActivityRead = vi.fn();
     renderHook(() => useWebSocket({ onActivityRead, enabled: true }));

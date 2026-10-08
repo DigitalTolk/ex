@@ -49,3 +49,5 @@ export const DropdownMenuSubTrigger = ({ children, ...rest }: Kids & AnyProps) =
 );
 
 export const DropdownMenuSubContent = ({ children }: Kids) => <div>{children}</div>;
+
+export const DropdownMenuSeparator = () => <hr />;

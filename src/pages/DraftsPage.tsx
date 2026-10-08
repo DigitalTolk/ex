@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Globe, Lock, MessageSquare, Trash2, Users } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Button } from '@/components/ui/button';
@@ -8,13 +8,55 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
 import { useDeleteDraft, useDrafts } from '@/hooks/useDrafts';
+import { useScheduledMessages } from '@/hooks/useScheduledMessages';
+import { ScheduledMessagesList } from '@/components/chat/ScheduledMessagesList';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { formatLongDateTime, slugify } from '@/lib/format';
 import { toPlainTextPreview } from '@/lib/message-preview';
 import type { MessageDraft } from '@/types';
 
+// DraftsPage holds messages not sent yet: unfinished drafts, and (the
+// Scheduled tab, ?tab=scheduled) messages set to send later.
 export default function DraftsPage() {
   useDocumentTitle('Drafts');
+  const [params, setParams] = useSearchParams();
+  const tab = params.get('tab') === 'scheduled' ? 'scheduled' : 'drafts';
+  const { data: scheduled } = useScheduledMessages();
+  const scheduledCount = scheduled?.length ?? 0;
+
+  return (
+    <PageContainer>
+      {/* The tabs head the page; the heading stays for screen readers. */}
+      <h1 className="sr-only">Drafts</h1>
+      <div>
+        <div role="tablist" aria-label="Drafts sections" className="flex gap-1 border-b">
+          {(['drafts', 'scheduled'] as const).map((t) => (
+            <button
+              key={t}
+              role="tab"
+              aria-selected={tab === t}
+              onClick={() => setParams(t === 'scheduled' ? { tab: 'scheduled' } : {}, { replace: true })}
+              className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium ${
+                tab === t ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {t === 'drafts' ? 'Drafts' : 'Scheduled'}
+              {t === 'scheduled' && scheduledCount > 0 && (
+                <span className="ml-1.5 rounded-full bg-muted px-1.5 text-xs tabular-nums text-muted-foreground">{scheduledCount}</span>
+              )}
+            </button>
+          ))}
+        </div>
+        <p className="mt-3 text-sm text-muted-foreground">
+          {tab === 'scheduled' ? 'Messages set to send later.' : "Messages you started but haven't sent yet."}
+        </p>
+      </div>
+      {tab === 'scheduled' ? <ScheduledMessagesList /> : <DraftsList />}
+    </PageContainer>
+  );
+}
+
+function DraftsList() {
   const { data: drafts, isLoading } = useDrafts();
   const { data: channels } = useUserChannels();
   const { data: conversations } = useUserConversations();
@@ -33,7 +75,7 @@ export default function DraftsPage() {
   const deletePreview = draftToDelete ? draftPreview(draftToDelete) : '';
 
   return (
-    <PageContainer title="Drafts" description="Messages you started but haven't sent yet.">
+    <>
       {isLoading && (
         <div className="space-y-3" data-testid="drafts-loading">
           {Array.from({ length: 3 }).map((_, i) => (
@@ -113,7 +155,7 @@ export default function DraftsPage() {
           deleteDraft.mutate(draftToDelete!);
         }}
       />
-    </PageContainer>
+    </>
   );
 }
 

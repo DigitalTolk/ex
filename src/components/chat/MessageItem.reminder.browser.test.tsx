@@ -16,6 +16,7 @@ vi.mock('@/hooks/useActivity', () => ({
 }));
 
 vi.mock('@/hooks/useMessages', () => ({
+  usePendingMessageActions: () => ({ retry: vi.fn(), discard: vi.fn() }),
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),
@@ -193,4 +194,87 @@ describe('MessageItem "Remind me"', () => {
     await userEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLButtonElement);
     await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
   });
+});
+
+// "Reminders can be set on self-DM messages the same way as anywhere else."
+// The same own message — top-level and as a thread reply — rendered in a
+// channel, a DM and a self-DM (a conversation with only yourself) offers the
+// same Remind me entry points and sends the same request, targeted at the view
+// it renders in. The self-DM is just a conversation: nothing about it is
+// special-cased.
+describe('MessageItem "Remind me" — self-DM parity', () => {
+  const views = [
+    { name: 'channel', props: { channelId: 'channel-1', channelSlug: 'general' }, parentID: 'channel-1', parentType: 'channel' },
+    { name: 'DM', props: { conversationId: 'dm-1' }, parentID: 'dm-1', parentType: 'conversation' },
+    { name: 'self-DM', props: { conversationId: 'self-dm-1' }, parentID: 'self-dm-1', parentType: 'conversation' },
+  ] as const;
+  const shapes = [
+    { name: 'top-level message', overrides: {}, inThread: false },
+    { name: 'thread reply', overrides: { parentMessageID: 'root-1' }, inThread: true },
+  ] as const;
+
+  const ownMessage = (parentID: string, overrides: Partial<Message>) =>
+    // List-API shape: no parentType on the message (only live frames carry it).
+    makeMessage({ id: 'own-1', parentID, parentType: undefined, authorID: 'me', ...overrides });
+
+  for (const view of views) {
+    for (const shape of shapes) {
+      it(`desktop presets + Custom on a ${shape.name} in a ${view.name}`, async () => {
+        if (window.innerWidth <= 767) return;
+        const screen = await renderItem(
+          <MessageItem
+            message={ownMessage(view.parentID, shape.overrides)}
+            authorName="Me"
+            isOwn
+            currentUserId="me"
+            inThread={shape.inThread}
+            {...view.props}
+          />,
+        );
+        await openMenu();
+        await userEvent.click(screen.getByTestId('remind-me-trigger'));
+        await userEvent.click(screen.getByTestId('remind-in20m'));
+        const target = { messageID: 'own-1', parentID: view.parentID, parentType: view.parentType };
+        expect(createReminderMutate).toHaveBeenCalledTimes(1);
+        expect(createReminderMutate.mock.calls[0][0]).toMatchObject(target);
+
+        await openMenu();
+        await userEvent.click(screen.getByTestId('remind-me-trigger'));
+        await userEvent.click(screen.getByTestId('remind-custom'));
+        await userEvent.fill(screen.getByTestId('reminder-datetime'), '2999-01-01T09:00');
+        await userEvent.click(screen.getByTestId('reminder-confirm'));
+        await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
+        expect(createReminderMutateAsync.mock.calls[0][0]).toMatchObject(target);
+      });
+
+      it(`mobile sheet on a ${shape.name} in a ${view.name}`, async () => {
+        if (window.innerWidth > 767) return;
+        await renderItem(
+          <MessageItem
+            message={ownMessage(view.parentID, shape.overrides)}
+            authorName="Me"
+            isOwn
+            currentUserId="me"
+            inThread={shape.inThread}
+            {...view.props}
+          />,
+        );
+        await openMobileSheet();
+        await userEvent.click(document.querySelector('[data-testid="mobile-remind"]') as HTMLButtonElement);
+        const input = await vi.waitFor(() => {
+          const el = document.querySelector('[data-testid="reminder-datetime"]') as HTMLInputElement | null;
+          expect(el).not.toBeNull();
+          return el!;
+        });
+        await userEvent.fill(input, '2999-03-03T08:00');
+        await userEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLButtonElement);
+        await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
+        expect(createReminderMutateAsync.mock.calls[0][0]).toMatchObject({
+          messageID: 'own-1',
+          parentID: view.parentID,
+          parentType: view.parentType,
+        });
+      });
+    }
+  }
 });

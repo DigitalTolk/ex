@@ -69,6 +69,11 @@ type Message struct {
 	// skill usage is visible to everyone in the thread (run logs are
 	// invoker-only, this is the public trace).
 	AgentSkills []string `json:"agentSkills,omitempty" dynamodbav:"agentSkills,omitempty"`
+	// ClientNonce echoes the sender's client-generated tag (X-Client-Nonce) on
+	// the send response and the message.new broadcast, so the sender's client
+	// can swap its optimistic "sending" row for the real message whichever
+	// arrives first. Never persisted.
+	ClientNonce string `json:"clientNonce,omitempty" dynamodbav:"-"`
 }
 
 // Tombstone clears a message's content in place for a soft delete: it flags

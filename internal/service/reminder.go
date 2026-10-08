@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
@@ -105,15 +106,18 @@ func (s *ReminderService) Schedule(ctx context.Context, userID string, in Remind
 		return nil, fmt.Errorf("reminder: message: %w", err)
 	}
 	r := &model.Reminder{
-		ID:             store.NewID(),
-		UserID:         userID,
-		MessageID:      in.MessageID,
-		ParentID:       in.ParentID,
-		ParentType:     in.ParentType,
-		ChannelSlug:    in.ChannelSlug,
-		MessagePreview: activityPreview(msg.Body),
-		RemindAt:       in.RemindAt,
-		CreatedAt:      now,
+		ID:         store.NewID(),
+		UserID:     userID,
+		MessageID:  in.MessageID,
+		ParentID:   in.ParentID,
+		ParentType: in.ParentType,
+		// The thread root comes from the stored message, not the client: a
+		// reply only renders inside its thread, so the deep link needs it.
+		ParentMessageID: msg.ParentMessageID,
+		ChannelSlug:     in.ChannelSlug,
+		MessagePreview:  activityPreview(msg.Body),
+		RemindAt:        in.RemindAt,
+		CreatedAt:       now,
 	}
 	if err := s.store.ScheduleReminder(ctx, r); err != nil {
 		return nil, err
@@ -140,7 +144,8 @@ func (s *ReminderService) Cancel(ctx context.Context, userID, id string) error {
 }
 
 // ProcessDue claims and fires every reminder due at or before now. Returns the
-// number fired. Safe to call concurrently across instances — claiming is atomic.
+// number claimed (a reminder its owner can no longer open is claimed but not
+// delivered). Safe to call concurrently across instances — claiming is atomic.
 func (s *ReminderService) ProcessDue(ctx context.Context) (int, error) {
 	fired := 0
 	for {
@@ -161,17 +166,26 @@ func (s *ReminderService) ProcessDue(ctx context.Context) (int, error) {
 // fire delivers a claimed reminder: an activity-stream entry plus a desktop +
 // mobile alert.
 func (s *ReminderService) fire(ctx context.Context, r *model.Reminder) {
+	// The owner may have left the channel, been removed from it, or seen it
+	// archived since setting this: the alert would link to a page they can
+	// no longer open. Only a definitive denial drops it — a failed check
+	// still fires, since a lost reminder is worse than a dead link.
+	if err := s.access.CheckAccess(ctx, r.UserID, r.ParentID, r.ParentType); errors.Is(err, ErrForbidden) {
+		slog.Info("reminder dropped: owner no longer has access", "userID", r.UserID, "parentID", r.ParentID)
+		return
+	}
 	now := s.now()
 	if s.activity != nil {
 		s.activity.AddItem(ctx, r.UserID, &model.ActivityItem{
-			ID:             store.NewID(),
-			Type:           model.ActivityReminder,
-			CreatedAt:      now,
-			MessageID:      r.MessageID,
-			ParentID:       r.ParentID,
-			ParentType:     r.ParentType,
-			ChannelSlug:    r.ChannelSlug,
-			MessagePreview: r.MessagePreview,
+			ID:              store.NewID(),
+			Type:            model.ActivityReminder,
+			CreatedAt:       now,
+			MessageID:       r.MessageID,
+			ParentID:        r.ParentID,
+			ParentType:      r.ParentType,
+			ParentMessageID: r.ParentMessageID,
+			ChannelSlug:     r.ChannelSlug,
+			MessagePreview:  r.MessagePreview,
 		})
 	}
 	if s.notifier != nil {
@@ -187,23 +201,31 @@ func (s *ReminderService) fire(ctx context.Context, r *model.Reminder) {
 			ParentID:   r.ParentID,
 			ParentType: r.ParentType,
 			MessageID:  r.MessageID,
-			CreatedAt:  now,
+			// Keyed by the reminder, not the message: the user may have been
+			// alerted about this message minutes ago (or reminded of it
+			// before), and a message-keyed alert would be deduped on desktop
+			// and its mobile push dropped as a duplicate.
+			AlertID:   r.ID,
+			CreatedAt: now,
 		})
 	}
 	slog.Info("reminder fired", "userID", r.UserID, "messageID", r.MessageID)
 }
 
 // reminderDeepLink builds the in-app URL the alert/activity row links to, matching
-// the client's routes: channels by slug, conversations by id, both anchored to
-// the message via the #msg- hash.
+// the client's routes (buildChannelHref / buildConversationHref): channels by
+// slug, conversations by id, a thread reply opening its thread via ?thread=,
+// all anchored to the message via the #msg- hash.
 func reminderDeepLink(r *model.Reminder) string {
-	anchor := "#msg-" + r.MessageID
-	if r.ParentType == ParentConversation {
-		return "/conversation/" + r.ParentID + anchor
+	path := "/channel/" + r.ChannelSlug
+	switch {
+	case r.ParentType == ParentConversation:
+		path = "/conversation/" + r.ParentID
+	case r.ChannelSlug == "":
+		path = "/channel/" + r.ParentID
 	}
-	target := r.ChannelSlug
-	if target == "" {
-		target = r.ParentID
+	if r.ParentMessageID != "" {
+		path += "?thread=" + url.QueryEscape(r.ParentMessageID)
 	}
-	return "/channel/" + target + anchor
+	return path + "#msg-" + r.MessageID
 }

@@ -10,6 +10,7 @@ import { apiFetch } from '@/lib/api';
 import { queryKeys, parentPath } from '@/lib/query-keys';
 import { condemnDraftForSend, removeDraftScopeFromCache } from '@/hooks/useDrafts';
 import { markLocalUserStateWrite } from '@/hooks/useUserState';
+import { useCallback } from 'react';
 import type { Message } from '@/types';
 
 export interface MessageWindow {
@@ -198,8 +199,7 @@ export function appendReplyToThreadCache(
     // fallback refetches root + replies together.
     if (!old || old.length === 0) return old;
     present = true;
-    if (old.some((m) => m.id === msg.id)) return old;
-    return [...old, msg];
+    return withSent(old, msg, 'end');
   };
   for (const path of threadScopePaths(parentID, msg.parentType)) {
     qc.setQueryData<Message[]>(queryKeys.thread(path, threadRootID), updater);
@@ -222,6 +222,103 @@ export function invalidateUnfurlsForMessage(qc: QueryClient, messageID: string) 
   });
 }
 
+// ---- Optimistic send --------------------------------------------------------
+// A sent message shows at once as a pending row (pendingState 'sending', a
+// temporary id) and is swapped for the real one when it lands. The server
+// echoes the client nonce (X-Client-Nonce) on both the send response and the
+// message.new broadcast, so whichever arrives first replaces the row and the
+// other finds it already there — no duplicate, whatever the order.
+
+export const CLIENT_NONCE_HEADER = 'X-Client-Nonce';
+
+export function newClientNonce(): string {
+  return `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function pendingMessageID(nonce: string): string {
+  return `pending-${nonce}`;
+}
+
+function maxMessageID(a: string | undefined, b: string): string {
+  return a && a > b ? a : b;
+}
+
+// withSent places msg in a list (at the newest end: 'start' for the newest-
+// first message pages, 'end' for a thread) unless it's already there. The real
+// message for an optimistic row replaces that row in place — or drops it when
+// the real one already arrived another way. Returns `items` itself when
+// nothing changes.
+function withSent(items: Message[], msg: Message, at: 'start' | 'end'): Message[] {
+  const pendingAt =
+    msg.clientNonce && !msg.pendingState
+      ? items.findIndex((m) => m.pendingState && m.clientNonce === msg.clientNonce)
+      : -1;
+  if (items.some((m) => m.id === msg.id)) {
+    return pendingAt >= 0 ? items.filter((_, i) => i !== pendingAt) : items;
+  }
+  if (pendingAt >= 0) return items.map((m, i) => (i === pendingAt ? msg : m));
+  return at === 'start' ? [msg, ...items] : [...items, msg];
+}
+
+// setPendingState marks a pending row 'sending' / 'failed', or removes it
+// (null), wherever it's cached: the live-tail pages or the thread.
+export function setPendingState(qc: QueryClient, msg: Message, state: Message['pendingState'] | null) {
+  const update = (items: Message[]) =>
+    state === null
+      ? items.filter((m) => m.id !== msg.id)
+      : items.map((m) => (m.id === msg.id ? { ...m, pendingState: state } : m));
+  if (msg.parentMessageID) {
+    for (const path of threadScopePaths(msg.parentID, msg.parentType)) {
+      qc.setQueryData<Message[]>(queryKeys.thread(path, msg.parentMessageID), (old) => (old ? update(old) : old));
+    }
+    return;
+  }
+  patchBothScopes(qc, msg.parentID, (old) => {
+    if (!old || old.pages.length === 0) return old;
+    const [head, ...rest] = old.pages;
+    return { ...old, pages: [{ ...head, items: update(head.items) }, ...rest] };
+  }, msg.parentType);
+}
+
+// placeSentMessage puts a confirmed message into its list or thread,
+// replacing its pending row. Returns false when it couldn't be placed (a
+// deep-link window or an uncached thread).
+export function placeSentMessage(qc: QueryClient, msg: Message): boolean {
+  if (msg.parentMessageID) return appendReplyToThreadCache(qc, msg.parentID, msg.parentMessageID, msg);
+  return appendMessageToCache(qc, msg.parentID, msg);
+}
+
+function sendPath(parentType: Message['parentType'], parentID: string): string {
+  return `/api/v1/${parentType === 'conversation' ? 'conversations' : 'channels'}/${encodeURIComponent(parentID)}/messages`;
+}
+
+// usePendingMessageActions: the "Not sent" row's Retry (same nonce, so a late
+// echo of the first attempt still reconciles) and Delete.
+export function usePendingMessageActions() {
+  const qc = useQueryClient();
+  const retry = useCallback(
+    (msg: Message) => {
+      setPendingState(qc, msg, 'sending');
+      void apiFetch<Message>(sendPath(msg.parentType, msg.parentID), {
+        method: 'POST',
+        headers: msg.clientNonce ? { [CLIENT_NONCE_HEADER]: msg.clientNonce } : undefined,
+        body: JSON.stringify({
+          body: msg.body,
+          parentMessageID: msg.parentMessageID ?? '',
+          attachmentIDs: msg.attachmentIDs ?? [],
+        }),
+      })
+        .then((sent) => {
+          placeSentMessage(qc, { ...sent, parentType: msg.parentType, clientNonce: sent.clientNonce ?? msg.clientNonce });
+        })
+        .catch(() => setPendingState(qc, msg, 'failed'));
+    },
+    [qc],
+  );
+  const discard = useCallback((msg: Message) => setPendingState(qc, msg, null), [qc]);
+  return { retry, discard };
+}
+
 // appendMessageToCache prepends a new message to the live-tail page. Returns
 // true when the message is now present in pages[0] (appended, or already there)
 // — false means the head is a deep-link window mid-history (hasMoreNewer) where
@@ -237,16 +334,16 @@ export function appendMessageToCache(qc: QueryClient, parentID: string, msg: Mes
     // leave the chain untouched and let the load-newer sentinel fetch.
     const head = old.pages[0];
     if (head.hasMoreNewer) return old;
-    if (head.items.some((m) => m.id === msg.id)) {
-      present = true;
-      return old;
-    }
+    present = true;
+    const items = withSent(head.items, msg, 'start');
+    if (items === head.items) return old;
     const patched: MessageWindow = {
       ...head,
-      items: [msg, ...head.items],
-      newestID: msg.id,
+      items,
+      // A pending row's id is not a server id — never let it become the
+      // newer-than cursor reconnect catch-up pages from.
+      newestID: msg.pendingState ? head.newestID : maxMessageID(head.newestID, msg.id),
     };
-    present = true;
     return { ...old, pages: [patched, ...old.pages.slice(1)] };
   }, msg.parentType);
   return present;
@@ -385,11 +482,17 @@ export interface SendMessageInput {
   body: string;
   attachmentIDs?: string[];
   parentMessageID?: string; // set when replying inside a thread
+  clientNonce?: string; // filled in by useSendMessage's mutate
 }
+
+// What actually goes to the server: mutate/mutateAsync always fill the nonce.
+type SendMessageVars = SendMessageInput & { clientNonce: string };
 
 interface SendMessageScope {
   channelId?: string;
   conversationId?: string;
+  // The sender. When known, a sent message shows at once as a pending row.
+  authorID?: string;
 }
 
 // useSendMessage is the single hook for posting a new message — to a channel,
@@ -397,15 +500,18 @@ interface SendMessageScope {
 // Pass exactly one of {channelId, conversationId}.
 export function useSendMessage(scope: SendMessageScope) {
   const queryClient = useQueryClient();
-  const { channelId, conversationId } = scope;
+  const { channelId, conversationId, authorID } = scope;
   const path = channelId
     ? `/api/v1/channels/${channelId}/messages`
     : `/api/v1/conversations/${conversationId}/messages`;
+  const parentID = channelId ?? conversationId;
+  const parentType: Message['parentType'] = channelId ? 'channel' : 'conversation';
 
-  return useMutation({
-    mutationFn: (input: SendMessageInput) =>
+  const mutation = useMutation({
+    mutationFn: (input: SendMessageVars) =>
       apiFetch<Message>(path, {
         method: 'POST',
+        headers: { [CLIENT_NONCE_HEADER]: input.clientNonce },
         body: JSON.stringify({
           body: input.body,
           parentMessageID: input.parentMessageID ?? '',
@@ -428,12 +534,36 @@ export function useSendMessage(scope: SendMessageScope) {
         parentMessageID: input.parentMessageID || undefined,
       });
       if (input.parentMessageID) markLocalUserStateWrite();
-      return { rollbackDraft };
+      // Show the message right away as pending (see "Optimistic send").
+      let pending: Message | undefined;
+      if (authorID && parentID) {
+        const row: Message = {
+          id: pendingMessageID(input.clientNonce),
+          clientNonce: input.clientNonce,
+          pendingState: 'sending',
+          parentID,
+          parentType,
+          authorID,
+          body: input.body,
+          attachmentIDs: input.attachmentIDs,
+          parentMessageID: input.parentMessageID || undefined,
+          createdAt: new Date().toISOString(),
+        };
+        if (placeSentMessage(queryClient, row)) pending = row;
+      }
+      return { rollbackDraft, pending };
     },
     // The send never happened server-side, so neither did its fold — restore
-    // the draft protocol state (basis + condemned gen) it had condemned.
-    onError: (_error, _input, ctx) => ctx?.rollbackDraft(),
-    onSuccess: (data, input) => {
+    // the draft protocol state (basis + condemned gen) it had condemned. The
+    // pending row stays, marked "Not sent", with Retry / Delete.
+    onError: (_error, _input, ctx) => {
+      ctx?.rollbackDraft();
+      if (ctx?.pending) setPendingState(queryClient, ctx.pending, 'failed');
+    },
+    onSuccess: (response, input) => {
+      // The response is this send's message even from a server that doesn't
+      // echo the nonce (mid rolling deploy): match it to its pending row.
+      const data = { ...response, clientNonce: response.clientNonce ?? input.clientNonce };
       // The scope's draft is dead (the fold clears it server-side): drop it
       // from the local cache so sidebar/Drafts update without waiting.
       removeDraftScopeFromCache(queryClient, {
@@ -461,7 +591,7 @@ export function useSendMessage(scope: SendMessageScope) {
         const path = parentPath({ channelId, conversationId });
         queryClient.setQueryData<Message[]>(
           queryKeys.thread(path, input.parentMessageID),
-          (old) => (old ? (old.some((m) => m.id === data.id) ? old : [...old, data]) : old),
+          (old) => (old ? withSent(old, data, 'end') : old),
         );
         // The /threads list is normally patched live by the participant-scoped
         // `thread.updated` event, built from the authoritative root. That
@@ -484,16 +614,32 @@ export function useSendMessage(scope: SendMessageScope) {
       }
     },
   });
+
+  // Every send gets a client nonce, so its pending row and the real message
+  // can be matched up (and a Retry reuses it).
+  const { mutate: rawMutate, mutateAsync: rawMutateAsync } = mutation;
+  const mutate = useCallback(
+    (input: SendMessageInput, options?: Parameters<typeof rawMutate>[1]) =>
+      rawMutate({ ...input, clientNonce: input.clientNonce ?? newClientNonce() }, options),
+    [rawMutate],
+  );
+  const mutateAsync = useCallback(
+    (input: SendMessageInput, options?: Parameters<typeof rawMutateAsync>[1]) =>
+      rawMutateAsync({ ...input, clientNonce: input.clientNonce ?? newClientNonce() }, options),
+    [rawMutateAsync],
+  );
+  return { ...mutation, mutate, mutateAsync };
 }
 
 // Legacy aliases — kept so existing callers and tests don't churn. Prefer
 // useSendMessage in new code.
-export function useSendChannelMessage(channelId: string | undefined) {
-  return useSendMessage({ channelId });
+// authorID (the signed-in user) lets a send show at once as a pending row.
+export function useSendChannelMessage(channelId: string | undefined, authorID?: string) {
+  return useSendMessage({ channelId, authorID });
 }
 
-export function useSendConversationMessage(conversationId: string | undefined) {
-  return useSendMessage({ conversationId });
+export function useSendConversationMessage(conversationId: string | undefined, authorID?: string) {
+  return useSendMessage({ conversationId, authorID });
 }
 
 interface MessageMutationVars {

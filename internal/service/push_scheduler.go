@@ -49,11 +49,14 @@ type mobilePushTaskPayload struct {
 	Notification    Notification `json:"notification"`
 }
 
-// mobilePushTaskID makes scheduling idempotent per (message, recipient):
-// asynq rejects a second enqueue with the same TaskID while the first task
-// is pending, scheduled, active, or retained.
-func mobilePushTaskID(recipientUserID, messageID string) string {
-	return "push:" + messageID + ":" + recipientUserID
+// mobilePushTaskID makes scheduling idempotent per (alert, recipient): asynq
+// rejects a second enqueue with the same TaskID while the first task is
+// pending, scheduled, active, or retained. deliveryKey is the notification's
+// MessageID, or its AlertID for alerts that can recur on one message (a
+// reminder keyed by message would collide with that message's own push for
+// the whole retention window and be silently dropped).
+func mobilePushTaskID(recipientUserID, deliveryKey string) string {
+	return "push:" + deliveryKey + ":" + recipientUserID
 }
 
 // AsynqPushScheduler is the production MobilePushScheduler: it enqueues
@@ -75,8 +78,8 @@ func (s *AsynqPushScheduler) SchedulePush(ctx context.Context, recipientUserID s
 		asynq.Retention(pushTaskRetention),
 		asynq.Timeout(pushTaskTimeout),
 	}
-	if n.MessageID != "" {
-		opts = append(opts, asynq.TaskID(mobilePushTaskID(recipientUserID, n.MessageID)))
+	if key := n.deliveryKey(); key != "" {
+		opts = append(opts, asynq.TaskID(mobilePushTaskID(recipientUserID, key)))
 	}
 	if delay > 0 {
 		opts = append(opts, asynq.ProcessIn(delay))
@@ -114,7 +117,7 @@ func NewMobilePushTaskHandler(ack NotificationAckStore, provider MobilePushSende
 			// A malformed payload can never succeed — archive it, don't retry.
 			return fmt.Errorf("mobile push payload unmarshal: %v: %w", err, asynq.SkipRetry)
 		}
-		if ack != nil && p.Notification.MessageID != "" && ack.WasNotificationAcked(ctx, p.RecipientUserID, p.Notification.MessageID) {
+		if key := p.Notification.deliveryKey(); ack != nil && key != "" && ack.WasNotificationAcked(ctx, p.RecipientUserID, key) {
 			// Desktop confirmed delivery — no push needed.
 			pushMetrics.ackSuppressed.Add(1)
 			return nil
