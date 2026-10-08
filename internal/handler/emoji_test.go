@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -518,6 +519,19 @@ func (s *dataAttachmentStore) SetThumbnailKeys(_ context.Context, id, thumbnailK
 	return nil
 }
 
+func (s *dataAttachmentStore) SetMultipartUploadID(_ context.Context, id, uploadID string) error {
+	if a, ok := s.byID[id]; ok {
+		a.MultipartUploadID = uploadID
+	}
+	return nil
+}
+func (s *dataAttachmentStore) SetVerifiedETag(_ context.Context, id, etag string) error {
+	if a, ok := s.byID[id]; ok {
+		a.VerifiedETag = etag
+	}
+	return nil
+}
+
 type fakeAttachmentSignerH struct{}
 
 func (fakeAttachmentSignerH) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
@@ -538,6 +552,15 @@ func (fakeAttachmentSignerH) GetObjectRange(_ context.Context, _ string, _ int64
 }
 func (fakeAttachmentSignerH) GetObject(_ context.Context, _ string) (io.ReadCloser, string, int64, time.Time, error) {
 	return io.NopCloser(strings.NewReader("body")), "text/plain", 4, time.Time{}, nil
+}
+func (fakeAttachmentSignerH) OpenObject(_ context.Context, _ string) (io.ReadCloser, string, int64, string, error) {
+	return io.NopCloser(strings.NewReader("body")), "text/plain", 4, `"body"`, nil
+}
+func (fakeAttachmentSignerH) StatObject(_ context.Context, _ string) (int64, string, string, string, error) {
+	return 4, "text/plain", `"body"`, "", nil
+}
+func (fakeAttachmentSignerH) PresignRequest(_ context.Context, method, key string, query url.Values, headers map[string]string, _ time.Duration) (string, map[string]string, error) {
+	return "https://upload/" + key + "?" + query.Encode() + "#" + method, headers, nil
 }
 
 // TestPresenceHandler_List verifies the presence handler returns the

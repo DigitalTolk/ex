@@ -26,6 +26,13 @@ vi.mock('@base-ui/react/scroll-area', () => {
   };
 });
 
+// jsdom has no canvas, so pdf.js cannot render there (and would try to load
+// a native Node canvas polyfill). The real viewer runs in the browser
+// projects (PdfPreview.browser.test.tsx); here it is an inert marker.
+vi.mock('@/components/chat/PdfPreview', () => ({
+  default: () => createElement('div', { 'data-testid': 'pdf-preview-stub' }),
+}));
+
 // Seed the version meta tag so useServerVersion's BUILD_VERSION resolves
 // to a stable, non-dev value across the suite. The hook reads this once
 // on module load — vitest setupFiles run before module imports.

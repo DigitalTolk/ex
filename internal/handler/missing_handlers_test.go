@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -342,10 +343,38 @@ func (s *fakeAttachmentStore) SetThumbnailKeys(_ context.Context, id, thumbnailK
 	return nil
 }
 
+func (s *fakeAttachmentStore) SetMultipartUploadID(_ context.Context, id, uploadID string) error {
+	if a, ok := s.byID[id]; ok {
+		a.MultipartUploadID = uploadID
+	}
+	return nil
+}
+func (s *fakeAttachmentStore) SetVerifiedETag(_ context.Context, id, etag string) error {
+	if a, ok := s.byID[id]; ok {
+		a.VerifiedETag = etag
+	}
+	return nil
+}
+
 type fakeSigner struct {
 	objects         map[string][]byte
 	objectTypes     map[string]string
 	putContentTypes map[string]string
+}
+
+func (f *fakeSigner) PresignRequest(_ context.Context, method, key string, query url.Values, headers map[string]string, _ time.Duration) (string, map[string]string, error) {
+	return "https://signed.test/" + strings.ToLower(method) + "/" + key + "?" + query.Encode(), headers, nil
+}
+
+// OpenObject / StatObject mirror GetObject, with a content-derived ETag.
+func (f *fakeSigner) OpenObject(ctx context.Context, key string) (io.ReadCloser, string, int64, string, error) {
+	body, ct, size, _, _ := f.GetObject(ctx, key)
+	data, _ := io.ReadAll(body)
+	return io.NopCloser(bytes.NewReader(data)), ct, size, fmt.Sprintf(`"%x"`, sha256.Sum256(data)), nil
+}
+func (f *fakeSigner) StatObject(ctx context.Context, key string) (int64, string, string, string, error) {
+	_, ct, size, etag, err := f.OpenObject(ctx, key)
+	return size, ct, etag, "", err
 }
 
 func (f *fakeSigner) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
@@ -468,8 +497,13 @@ func TestAttachmentHandler_CreateUploadURL_OK(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if got["uploadURL"] == "" {
-		t.Error("expected uploadURL")
+	// No upload URL any more: the client gets the object key and signs each
+	// S3 request through /upload-request.
+	if _, ok := got["uploadURL"]; ok {
+		t.Error("upload-init must not return an upload URL")
+	}
+	if got["key"] != "attachments/"+got["id"].(string) || got["multipartUploadId"] != "" {
+		t.Errorf("expected the attachment's object key and no upload to resume, got %v", got)
 	}
 	if got["alreadyExists"].(bool) {
 		t.Error("expected alreadyExists=false on new upload")
@@ -480,28 +514,97 @@ func TestAttachmentHandler_CreateUploadURL_DedupExisting(t *testing.T) {
 	h, st, jwtMgr := setupAttachmentHandler(t)
 	hash := strings.Repeat("d", 64)
 	st.byID["a-existing"] = &model.Attachment{
-		ID: "a-existing", SHA256: hash, Filename: "old.png",
-		ContentType: "image/png", Size: 200, CreatedBy: "u-att-dup",
+		ID: "a-existing", SHA256: hash, Filename: "old.png", S3Key: "attachments/a-existing",
+		ContentType: "image/png", Size: 200, CreatedBy: "u-att-dup", MultipartUploadID: "mpu-9",
 	}
 	st.byHash[hash] = st.byID["a-existing"]
 
 	user := &model.User{ID: "u-att-dup", Email: "dup@x.com", SystemRole: model.SystemRoleMember}
 	token := makeTokenForUser(jwtMgr, user)
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.CreateUploadURL))
-
-	body := `{"filename":"new.png","contentType":"image/png","size":200,"sha256":"` + hash + `"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/attachments/url", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	post := func() map[string]any {
+		t.Helper()
+		body := `{"filename":"new.png","contentType":"image/png","size":200,"sha256":"` + hash + `"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/attachments/url", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		var got map[string]any
+		_ = json.NewDecoder(rec.Body).Decode(&got)
+		return got
 	}
-	var got map[string]any
-	_ = json.NewDecoder(rec.Body).Decode(&got)
-	if !got["alreadyExists"].(bool) {
+
+	// Unfinished: hand the open multipart upload back so the client resumes it.
+	if got := post(); got["alreadyExists"].(bool) || got["id"] != "a-existing" || got["multipartUploadId"] != "mpu-9" || got["key"] != "attachments/a-existing" {
+		t.Errorf("expected resume of a-existing/mpu-9, got %v", got)
+	}
+	// Finished: nothing to upload.
+	st.byID["a-existing"].VerifiedETag = `"e"`
+	if got := post(); !got["alreadyExists"].(bool) {
 		t.Error("expected alreadyExists=true on dedupe match")
+	}
+}
+
+func TestAttachmentHandler_SignUploadRequest(t *testing.T) {
+	h, st, jwtMgr := setupAttachmentHandler(t)
+	st.byID["a-up"] = &model.Attachment{
+		ID: "a-up", SHA256: strings.Repeat("a", 64), S3Key: "attachments/a-up", Filename: "big.zip",
+		ContentType: "application/zip", Size: 200, CreatedBy: "u-up",
+	}
+	owner := makeTokenForUser(jwtMgr, &model.User{ID: "u-up", Email: "up@x.com", SystemRole: model.SystemRoleMember})
+	other := makeTokenForUser(jwtMgr, &model.User{ID: "u-other", Email: "o@x.com", SystemRole: model.SystemRoleMember})
+	mux := http.NewServeMux()
+	mux.Handle("POST /api/v1/attachments/{id}/upload-request", middleware.Auth(jwtMgr)(http.HandlerFunc(h.SignUploadRequest)))
+	call := func(token, id, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/attachments/"+id+"/upload-request", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := call(owner, "a-up", `{"method":"PUT","key":"attachments/a-up","uploadId":"mpu-1","partNumber":2}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sign part: status %d body %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		URL     string            `json:"url"`
+		Key     string            `json:"key"`
+		Headers map[string]string `json:"headers"`
+	}
+	_ = json.NewDecoder(rec.Body).Decode(&got)
+	if got.Key != "attachments/a-up" || !strings.Contains(got.URL, "partNumber=2") || !strings.Contains(got.URL, "uploadId=mpu-1") {
+		t.Fatalf("unexpected signed part request %+v", got)
+	}
+
+	for _, tc := range []struct {
+		name, token, id, body string
+		want                  int
+	}{
+		{"malformed body", owner, "a-up", `{`, http.StatusBadRequest},
+		{"foreign key", owner, "a-up", `{"method":"PUT","key":"attachments/other"}`, http.StatusBadRequest},
+		{"not the owner", other, "a-up", `{"method":"PUT","key":"attachments/a-up"}`, http.StatusForbidden},
+		{"unknown attachment", owner, "a-missing", `{"method":"PUT","key":"attachments/a-missing"}`, http.StatusNotFound},
+	} {
+		if rec := call(tc.token, tc.id, tc.body); rec.Code != tc.want {
+			t.Errorf("%s: status %d, want %d (%s)", tc.name, rec.Code, tc.want, rec.Body.String())
+		}
+	}
+	st.byID["a-up"].VerifiedETag = `"e"`
+	if rec := call(owner, "a-up", `{"method":"PUT","key":"attachments/a-up"}`); rec.Code != http.StatusConflict {
+		t.Errorf("finished upload: status %d, want 409", rec.Code)
+	}
+
+	unauth := httptest.NewRecorder()
+	h.SignUploadRequest(unauth, httptest.NewRequest(http.MethodPost, "/api/v1/attachments/a-up/upload-request", strings.NewReader(`{}`)))
+	if unauth.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous: status %d, want 401", unauth.Code)
 	}
 }
 

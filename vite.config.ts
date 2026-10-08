@@ -33,6 +33,21 @@ const vendorChunks: Array<[string, (id: string) => boolean]> = [
   ['virtual-vendor', (id) => id.includes('/node_modules/react-virtuoso/')],
 ]
 
+// pdf.js (the lazy PdfPreview) and Uppy (loaded on the first attachment
+// upload) are reachable only through dynamic imports, so they are left out of
+// the manual groups on purpose: a group also captures the shared modules its
+// members depend on (Vite's preload helper, clsx), which made the entry import
+// — and preload — all of pdf.js. Natural code splitting keeps them in their
+// lazy chunks; they must not fall into the eager catch-all `vendor` either.
+// The rest are those libraries' own dependencies, used by nothing else.
+const lazyOnlyPackages = [
+  'react-pdf', 'pdfjs-dist',
+  'es-toolkit', 'make-cancellable-promise', 'make-event-props', 'merge-refs', 'tiny-invariant', 'warning', 'loose-envify',
+  '@uppy/core', '@uppy/aws-s3', '@transloadit/prettier-bytes',
+  'preact', 'lodash', 'nanoid', 'classnames', 'mime-match', 'wildcard', 'namespace-emitter',
+  'p-queue', 'p-retry', 'p-timeout', 'eventemitter3', 'is-network-error',
+].map((pkg) => `/node_modules/${pkg}/`)
+
 // Where the dev server proxies /api and /auth. In the containerised hot-reload
 // stack (`make dev-watch`) Vite runs in its own container and reaches the Go
 // service over the compose network, so docker-compose.dev.yml injects the
@@ -54,17 +69,19 @@ function preserveDistGitignore() {
 export default defineConfig({
   plugins: [react(), tailwindcss(), preserveDistGitignore()],
   build: {
-    // Two cohesive chunks sit just over the 500 kB default after the vendor
-    // split: `editor-vendor` (the full CodeMirror 6 editor, ~181 kB gzip) and
-    // `index` (first-party app code, ~128 kB gzip). Neither splits cleanly —
-    // CodeMirror is one library and the app is loaded as a unit — and the gzip
-    // sizes are fine, so lift the warning bar to keep it meaningful (it still
-    // fires if any chunk balloons past this) rather than noisy.
-    chunkSizeWarningLimit: 600,
+    // Three cohesive chunks sit over the 500 kB default after the vendor
+    // split: `editor-vendor` (the full CodeMirror 6 editor, ~181 kB gzip),
+    // `index` (first-party app code, ~128 kB gzip) and the lazy PDF viewer
+    // (pdf.js, ~191 kB gzip, loaded only when a PDF is opened). None splits cleanly —
+    // each is one library or loaded as a unit — and the gzip sizes are fine,
+    // so lift the warning bar to keep it meaningful (it still fires if any
+    // chunk balloons past this) rather than noisy.
+    chunkSizeWarningLimit: 650,
     rollupOptions: {
       output: {
         manualChunks(id) {
           if (!id.includes('/node_modules/')) return undefined
+          if (lazyOnlyPackages.some((pkg) => id.includes(pkg))) return undefined
           return vendorChunks.find(([, match]) => match(id))?.[0] ?? 'vendor'
         },
       },
