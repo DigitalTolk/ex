@@ -28,8 +28,10 @@ func NewAttachmentHandler(svc *service.AttachmentService) *AttachmentHandler {
 
 // CreateUploadURL handles POST /api/v1/attachments/url. The client posts
 // {filename, contentType, size, sha256}; we either return an existing
-// attachment (alreadyExists=true, no upload required) or create a new
-// attachment record and return a presigned PUT URL.
+// attachment (alreadyExists=true, no upload required) or the attachment to
+// upload: its object key, plus the multipart upload to resume when a previous
+// attempt at the same file never finished. The bytes then go straight to S3
+// through requests signed by SignUploadRequest.
 func (h *AttachmentHandler) CreateUploadURL(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 	if userID == "" {
@@ -62,15 +64,58 @@ func (h *AttachmentHandler) CreateUploadURL(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{
-		"id":            res.Attachment.ID,
-		"uploadURL":     res.UploadURL,
-		"alreadyExists": res.AlreadyExists,
-		"filename":      res.Attachment.Filename,
-		"contentType":   res.Attachment.ContentType,
-		"size":          res.Attachment.Size,
-		"width":         res.Attachment.Width,
-		"height":        res.Attachment.Height,
+		"id":                res.Attachment.ID,
+		"key":               res.Attachment.S3Key,
+		"multipartUploadId": res.Attachment.MultipartUploadID,
+		"alreadyExists":     res.AlreadyExists,
+		"filename":          res.Attachment.Filename,
+		"contentType":       res.Attachment.ContentType,
+		"size":              res.Attachment.Size,
+		"width":             res.Attachment.Width,
+		"height":            res.Attachment.Height,
 	})
+}
+
+// SignUploadRequest handles POST /api/v1/attachments/{id}/upload-request. The
+// browser's uploader (Uppy) posts each S3 request it is about to make —
+// {method, key, uploadId?, partNumber?} — and gets back a presigned URL plus
+// the headers it was signed with.
+func (h *AttachmentHandler) SignUploadRequest(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	var body struct {
+		Method     string `json:"method"`
+		Key        string `json:"key"`
+		UploadID   string `json:"uploadId"`
+		PartNumber int    `json:"partNumber"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	signed, err := h.svc.SignUploadRequest(r.Context(), userID, pathParam(r, "id"), service.UploadRequest{
+		Method:     body.Method,
+		Key:        body.Key,
+		UploadID:   body.UploadID,
+		PartNumber: body.PartNumber,
+	})
+	if err != nil {
+		status := http.StatusBadRequest
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			status = http.StatusForbidden
+		case errors.Is(err, store.ErrNotFound):
+			status = http.StatusNotFound
+		case errors.Is(err, service.ErrAttachmentUploaded):
+			status = http.StatusConflict
+		}
+		writeError(w, status, "sign_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, JSON{"url": signed.URL, "key": signed.Key, "headers": signed.Headers})
 }
 
 // ProcessUpload handles POST /api/v1/attachments/{id}/process after the

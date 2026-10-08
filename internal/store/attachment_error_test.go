@@ -102,6 +102,22 @@ func TestAttachmentStore_SetThumbnailKeys_UpdateItemError(t *testing.T) {
 	}
 }
 
+func TestAttachmentStore_SetUploadState_UpdateItemError(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	a := makeAttachment("att-us", "hash-us", "x.zip")
+	if err := NewAttachmentStore(db).Create(ctx, a); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	s := NewAttachmentStore(withFault(db, func(f *faultClient) { f.failUpdateItem = true }))
+	if err := s.SetMultipartUploadID(ctx, a.ID, "mpu"); !errors.Is(err, errInjected) {
+		t.Fatalf("SetMultipartUploadID: want errInjected, got %v", err)
+	}
+	if err := s.SetVerifiedETag(ctx, a.ID, "e"); !errors.Is(err, errInjected) {
+		t.Fatalf("SetVerifiedETag: want errInjected, got %v", err)
+	}
+}
+
 func TestAttachmentStore_ListAll_ScanError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()

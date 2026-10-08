@@ -44,6 +44,11 @@ export default defineConfig({
       // Pulled in via ErrorBoundary → @/lib/sentry; pre-bundle it or Vite
       // discovers it mid-run and the dep-reload fails in-flight test files.
       '@sentry/react',
+      // Lazy-loaded by the lightbox's PDF viewer and by attachment uploads;
+      // same mid-run discovery risk.
+      'react-pdf',
+      '@uppy/core',
+      '@uppy/aws-s3',
     ],
   },
   test: {

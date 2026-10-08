@@ -1,4 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
 import { useMemo } from 'react';
 import { apiFetch } from '@/lib/api';
 import { isImageAttachment } from '@/lib/file-helpers';
@@ -7,7 +9,11 @@ import type { Attachment } from '@/types';
 
 interface UploadInitResponse {
   id: string;
-  uploadURL: string;
+  // The attachment's object key; bytes go straight to S3 under it.
+  key: string;
+  // Set when an earlier attempt at this same file left a multipart upload
+  // open: the upload resumes it instead of starting over.
+  multipartUploadId: string;
   alreadyExists: boolean;
   filename: string;
   contentType: string;
@@ -16,14 +22,20 @@ interface UploadInitResponse {
   height?: number;
 }
 
-async function sha256Hex(buf: ArrayBuffer): Promise<string> {
-  // Uint8Array-wrap: a buffer from another realm (jsdom tests; some
-  // webviews) is rejected by SubtleCrypto as "not an ArrayBuffer".
-  const digest = await crypto.subtle.digest('SHA-256', new Uint8Array(buf));
-  const bytes = new Uint8Array(digest);
-  let out = '';
-  for (let i = 0; i < bytes.length; i++) out += bytes[i].toString(16).padStart(2, '0');
-  return out;
+// HASH_CHUNK_BYTES bounds how much of a file sits in memory while it is
+// hashed. WebCrypto can only digest a whole buffer, which meant reading the
+// entire file into the tab (plus SubtleCrypto's own copy) before uploading —
+// enough to crash a webview or Electron renderer on a large attachment.
+export const HASH_CHUNK_BYTES = 4 * 1024 * 1024;
+
+// sha256File hashes a file incrementally, one slice at a time.
+export async function sha256File(file: Blob, chunkBytes = HASH_CHUNK_BYTES): Promise<string> {
+  const hasher = sha256.create();
+  for (let offset = 0; offset < file.size; offset += chunkBytes) {
+    const chunk = await file.slice(offset, offset + chunkBytes).arrayBuffer();
+    hasher.update(new Uint8Array(chunk));
+  }
+  return bytesToHex(hasher.digest());
 }
 
 // readImageDimensions returns the intrinsic pixel size of an image
@@ -63,9 +75,8 @@ export async function uploadAttachment(
   file: File,
   callbacks: UploadCallbacks = {},
 ): Promise<UploadInitResponse> {
-  const buf = await file.arrayBuffer();
   const [sha, dims] = await Promise.all([
-    sha256Hex(buf),
+    sha256File(file),
     readImageDimensions(file),
   ]);
   const init = await apiFetch<UploadInitResponse>('/api/v1/attachments/url', {
@@ -80,12 +91,9 @@ export async function uploadAttachment(
     }),
   });
   callbacks.onInit?.(init);
-  if (init.alreadyExists) {
-    await processAttachment(init.id);
-    callbacks.onProgress?.(1);
-    return init;
+  if (!init.alreadyExists) {
+    await uploadToS3(file, init, (fraction) => callbacks.onProgress?.(fraction * 0.9));
   }
-  await uploadWithProgress(init.uploadURL, file, (fraction) => callbacks.onProgress?.(fraction * 0.9));
   await processAttachment(init.id);
   callbacks.onProgress?.(1);
   return init;
@@ -97,41 +105,71 @@ async function processAttachment(id: string): Promise<void> {
   });
 }
 
-function uploadWithProgress(
-  url: string,
-  file: File,
-  onProgress?: (fraction: number) => void,
-): Promise<void> {
-  // XHR instead of fetch — fetch has no upload-progress event.
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('PUT', url, true);
-    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-    /* istanbul ignore next -- XMLHttpRequest always exposes an `upload` object per the spec, so the `&& xhr.upload` short-circuit is defensive and its false arm is unreachable. */
-    if (onProgress && xhr.upload) {
-      // Drop subsequent ticks unless the integer-percent changed —
-      // every emitted update walks the draft list in MessageInput, so
-      // for a 50 MiB upload this avoids ~hundreds of no-op renders.
-      let lastPct = -1;
-      xhr.upload.onprogress = (e) => {
-        if (!e.lengthComputable) return;
-        const pct = Math.floor((e.loaded / e.total) * 100);
-        if (pct === lastPct) return;
-        lastPct = pct;
-        onProgress(e.loaded / e.total);
-      };
-    }
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        onProgress?.(1);
-        resolve();
-      } else {
-        reject(new Error(`Upload failed: ${xhr.status}`));
-      }
-    };
-    xhr.onerror = () => reject(new Error('Upload network error'));
-    xhr.send(file);
+// Files above this go up as an S3 multipart upload: parts are retried on their
+// own, a dropped connection resumes where it stopped, and re-attaching the
+// same file after a reload resumes the open upload. Smaller files take one PUT
+// that S3 checks against the file's SHA-256 itself.
+export const MULTIPART_THRESHOLD_BYTES = 16 * 1024 * 1024;
+
+interface SignedUploadRequest {
+  url: string;
+  key: string;
+  headers: Record<string, string>;
+}
+
+// uploadToS3 sends the file straight to the bucket with Uppy's S3 plugin; the
+// server only signs each S3 request (create / part / complete / ...), never
+// sees the bytes. A remembered multipart upload that S3 no longer knows
+// (aborted, expired) falls back to a fresh upload.
+async function uploadToS3(file: File, init: UploadInitResponse, onProgress: (fraction: number) => void) {
+  if (!init.multipartUploadId) return runUppyUpload(file, init, false, onProgress);
+  try {
+    await runUppyUpload(file, init, true, onProgress);
+  } catch {
+    await runUppyUpload(file, init, false, onProgress);
+  }
+}
+
+async function runUppyUpload(file: File, init: UploadInitResponse, resume: boolean, onProgress: (fraction: number) => void) {
+  // Loaded on the first upload, not with the app.
+  const [{ default: Uppy }, { default: AwsS3 }] = await Promise.all([import('@uppy/core'), import('@uppy/aws-s3')]);
+  const uppy = new Uppy({ id: `attachment-${init.id}` });
+  uppy.use(AwsS3, {
+    shouldUseMultipart: () => file.size > MULTIPART_THRESHOLD_BYTES,
+    generateObjectKey: () => init.key,
+    signRequest: (request) =>
+      apiFetch<SignedUploadRequest>(`/api/v1/attachments/${encodeURIComponent(init.id)}/upload-request`, {
+        method: 'POST',
+        body: JSON.stringify(request),
+      }),
   });
+  // Report only integer-percent changes: every update walks the draft list in
+  // MessageInput, so a large upload would otherwise re-render hundreds of
+  // times for nothing.
+  let lastPct = -1;
+  uppy.on('upload-progress', (_file, progress) => {
+    const fraction = progress.bytesUploaded / file.size;
+    const pct = Math.floor(fraction * 100);
+    if (pct === lastPct) return;
+    lastPct = pct;
+    onProgress(fraction);
+  });
+  let uploadError: unknown;
+  uppy.on('upload-error', (_file, error) => {
+    uploadError = error;
+  });
+  try {
+    const fileID = uppy.addFile({ name: file.name, type: file.type, data: file });
+    if (resume) {
+      uppy.setFileState(fileID, { s3Multipart: { uploadId: init.multipartUploadId, key: init.key } });
+    }
+    await uppy.upload();
+    if (uploadError) throw uploadError;
+    // Uppy only reports what the progress events saw; mark the upload done.
+    onProgress(1);
+  } finally {
+    uppy.destroy();
+  }
 }
 
 export interface AttachmentAccessContext {

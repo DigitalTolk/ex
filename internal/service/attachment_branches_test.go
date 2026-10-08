@@ -7,8 +7,8 @@ import (
 	"image"
 	"image/jpeg"
 	"io"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
 )
@@ -77,14 +77,14 @@ func TestAttachment_ProcessUpload_GetByIDNotFound(t *testing.T) {
 func TestAttachment_ProcessUpload_ValidateObjectMissing(t *testing.T) {
 	storeM := newMockAttachmentStore()
 	storeM.byID["a"] = &model.Attachment{ID: "a", CreatedBy: "u1", S3Key: "attachments/a", Size: 1}
-	// signer has no object for the key → validateUploadedObject errors.
+	// signer has no object for the key → verifyObject errors.
 	svc := NewAttachmentService(storeM, &fakeAttachmentSigner{objects: map[string][]byte{}}, nil)
 	if _, err := svc.ProcessUpload(context.Background(), "u1", "a"); err == nil {
 		t.Fatal("expected validate-object error")
 	}
 }
 
-func TestAttachment_ValidateUploadedObject_SizeMismatch(t *testing.T) {
+func TestAttachment_VerifyObject_StreamedSizeMismatch(t *testing.T) {
 	storeM := newMockAttachmentStore()
 	object := makePNG(2, 2)
 	a := &model.Attachment{
@@ -93,49 +93,82 @@ func TestAttachment_ValidateUploadedObject_SizeMismatch(t *testing.T) {
 	}
 	storeM.byID[a.ID] = a
 	// GetObject reports objectSize == len(object) which already != a.Size and
-	// is caught earlier; force the read-path mismatch by making GetObject
-	// report size 0 (unknown) so the len(data) check at the end fires.
-	signer := &sizeZeroSigner{fakeAttachmentSigner: &fakeAttachmentSigner{objects: map[string][]byte{a.S3Key: object}}}
+	// is caught earlier; force the stream-path mismatch by making GetObject
+	// report size 0 (unknown) so the streamed byte count check fires.
+	signer := &sizeZeroSigner{fakeAttachmentSigner: &fakeAttachmentSigner{objects: map[string][]byte{a.S3Key: object}}, declared: a.Size}
 	svc := NewAttachmentService(storeM, signer, nil)
-	if _, err := svc.ProcessUpload(context.Background(), "u1", "a"); err == nil {
-		t.Fatal("expected size mismatch error")
+	if _, err := svc.ProcessUpload(context.Background(), "u1", "a"); err == nil || !strings.Contains(err.Error(), "size mismatch") {
+		t.Fatalf("expected size mismatch error, got %v", err)
 	}
 }
 
-// sizeZeroSigner reports an unknown (0) object size so the size guard before
-// ReadAll is skipped and the post-read length comparison runs.
+// sizeZeroSigner passes the HEAD (it reports the declared size) but streams
+// with an unknown (0) size, so the streamed byte count comparison runs.
 type sizeZeroSigner struct {
 	*fakeAttachmentSigner
+	declared int64
 }
 
-func (s *sizeZeroSigner) GetObject(ctx context.Context, key string) (io.ReadCloser, string, int64, time.Time, error) {
-	body, ct, _, mod, err := s.fakeAttachmentSigner.GetObject(ctx, key)
-	return body, ct, 0, mod, err
+func (s *sizeZeroSigner) StatObject(context.Context, string) (int64, string, string, string, error) {
+	return s.declared, "image/png", `"e"`, "", nil
 }
 
-// errBodyOnReadSigner returns a body that fails on Read so validateUploadedObject
-// exercises its io.ReadAll error branch.
+func (s *sizeZeroSigner) OpenObject(ctx context.Context, key string) (io.ReadCloser, string, int64, string, error) {
+	body, ct, _, etag, err := s.fakeAttachmentSigner.OpenObject(ctx, key)
+	return body, ct, 0, etag, err
+}
+
+// changedSigner passes the HEAD but the GET reports a different size, as if
+// the object were replaced between the two.
+type changedSigner struct{ sizeZeroSigner }
+
+func (s *changedSigner) OpenObject(ctx context.Context, key string) (io.ReadCloser, string, int64, string, error) {
+	body, ct, _, etag, err := s.fakeAttachmentSigner.OpenObject(ctx, key)
+	return body, ct, s.declared + 1, etag, err
+}
+
+func TestAttachment_VerifyObject_ObjectChangedBetweenHeadAndGet(t *testing.T) {
+	storeM := newMockAttachmentStore()
+	object := makePNG(2, 2)
+	a := &model.Attachment{
+		ID: "a", CreatedBy: "u1", S3Key: "attachments/a", ContentType: "image/png",
+		Size: int64(len(object)), SHA256: sha256Hex(object),
+	}
+	storeM.byID[a.ID] = a
+	signer := &changedSigner{sizeZeroSigner{fakeAttachmentSigner: &fakeAttachmentSigner{objects: map[string][]byte{a.S3Key: object}}, declared: a.Size}}
+	svc := NewAttachmentService(storeM, signer, nil)
+	if _, err := svc.ProcessUpload(context.Background(), "u1", "a"); err == nil || !strings.Contains(err.Error(), "size mismatch") {
+		t.Fatalf("expected size mismatch, got %v", err)
+	}
+}
+
+// errBodyOnReadSigner passes the HEAD but returns a body that fails on Read,
+// so verifyObject exercises its transport-error branch.
 type errBodyOnReadSigner struct {
 	*fakeAttachmentSigner
 	size int64
 }
 
-func (s *errBodyOnReadSigner) GetObject(_ context.Context, _ string) (io.ReadCloser, string, int64, time.Time, error) {
-	return errBody{}, "image/png", s.size, time.Time{}, nil
+func (s *errBodyOnReadSigner) StatObject(context.Context, string) (int64, string, string, string, error) {
+	return s.size, "image/png", `"e"`, "", nil
 }
 
-func TestAttachment_ValidateUploadedObject_ReadError(t *testing.T) {
+func (s *errBodyOnReadSigner) OpenObject(context.Context, string) (io.ReadCloser, string, int64, string, error) {
+	return errBody{}, "image/png", 0, `"e"`, nil
+}
+
+func TestAttachment_VerifyObject_ReadError(t *testing.T) {
 	storeM := newMockAttachmentStore()
 	a := &model.Attachment{
 		ID: "a", CreatedBy: "u1", S3Key: "attachments/a", ContentType: "image/png",
 		Size: 10, SHA256: sha256Hex([]byte("x")),
 	}
 	storeM.byID[a.ID] = a
-	// objectSize 0 (unknown) so the early size guard is skipped and ReadAll runs.
-	signer := &errBodyOnReadSigner{fakeAttachmentSigner: &fakeAttachmentSigner{objects: map[string][]byte{a.S3Key: {}}}, size: 0}
+	// The HEAD reports the declared size; the GET's body then fails mid-stream.
+	signer := &errBodyOnReadSigner{fakeAttachmentSigner: &fakeAttachmentSigner{objects: map[string][]byte{a.S3Key: {}}}, size: a.Size}
 	svc := NewAttachmentService(storeM, signer, nil)
-	if _, err := svc.ProcessUpload(context.Background(), "u1", "a"); err == nil {
-		t.Fatal("expected read-object error")
+	if _, err := svc.ProcessUpload(context.Background(), "u1", "a"); err == nil || !strings.Contains(err.Error(), "read object") {
+		t.Fatalf("expected read-object error, got %v", err)
 	}
 }
 
@@ -160,28 +193,31 @@ func TestAttachment_ValidateContentType_JPGNormalizesToJPEG(t *testing.T) {
 	}
 }
 
-func TestAttachment_GenerateThumbnails_SkipsWhenAlreadyPresent(t *testing.T) {
+func TestAttachment_ValidateForUse_UnchangedVerifiedObjectIsNotReRead(t *testing.T) {
 	object := makePNG(4, 4)
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(object))
-	if err != nil {
-		t.Fatalf("DecodeConfig: %v", err)
-	}
-	svc := NewAttachmentService(newMockAttachmentStore(), &fakeAttachmentSigner{putErr: errors.New("should not be called")}, nil)
+	storeM := newMockAttachmentStore()
 	a := &model.Attachment{
-		ID: "a", ContentType: "image/png",
-		ThumbnailS3Key: "t", SquareThumbnailS3Key: "sq",
+		ID: "a", CreatedBy: "u1", S3Key: "attachments/a", ContentType: "image/png",
+		Size: int64(len(object)), SHA256: sha256Hex(object), Width: 4, Height: 4,
+		ThumbnailS3Key: "t", SquareThumbnailS3Key: "sq", VerifiedETag: fakeETag(object),
 	}
-	// force=false and both keys present → early skip (PutObject never called).
-	if err := svc.generateThumbnails(context.Background(), a, object, cfg, false); err != nil {
+	storeM.byID[a.ID] = a
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{a.S3Key: object}, putErr: errors.New("should not be called")}
+	svc := NewAttachmentService(storeM, signer, nil)
+	// Verified, unchanged since (same ETag), thumbnails present → one HEAD:
+	// no body read, no decode, no thumbnail write.
+	if err := svc.ValidateForUse(context.Background(), "a"); err != nil {
 		t.Fatalf("expected skip, got %v", err)
+	}
+	if signer.stats != 1 || signer.opens != 0 {
+		t.Fatalf("expected exactly one HEAD and no read, got stats=%d opens=%d", signer.stats, signer.opens)
 	}
 }
 
-func TestAttachment_GenerateThumbnails_SquarePutError(t *testing.T) {
-	object := makePNG(8, 8)
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(object))
+func TestAttachment_StoreThumbnails_SquarePutError(t *testing.T) {
+	img, _, err := image.Decode(bytes.NewReader(makePNG(8, 8)))
 	if err != nil {
-		t.Fatalf("DecodeConfig: %v", err)
+		t.Fatalf("Decode: %v", err)
 	}
 	storeM := newMockAttachmentStore()
 	a := &model.Attachment{ID: "a", ContentType: "image/png", S3Key: "attachments/a"}
@@ -191,7 +227,7 @@ func TestAttachment_GenerateThumbnails_SquarePutError(t *testing.T) {
 		failOn:               2, // message thumb put succeeds, square thumb put fails
 	}
 	svc := NewAttachmentService(storeM, signer, nil)
-	if err := svc.generateThumbnails(context.Background(), a, object, cfg, true); err == nil {
+	if err := svc.storeThumbnails(context.Background(), a, img, func() {}); err == nil {
 		t.Fatal("expected square thumbnail put error")
 	}
 }
