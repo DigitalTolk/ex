@@ -6,6 +6,11 @@ interface UserLookup {
   get(id: string): { displayName: string; avatarURL?: string } | undefined;
 }
 
+// Sentinel author of channel webhook posts (service.WebhookAuthorID). It is
+// not a user, so it is never looked up; it shows the webhook root's identity.
+const WEBHOOK_AUTHOR_ID = 'webhook';
+const WEBHOOK_FALLBACK = { displayName: 'Webhook' };
+
 interface ThreadActionBarProps {
   rootMessageID: string;
   replyCount: number;
@@ -20,6 +25,10 @@ interface ThreadActionBarProps {
   // The thread has replies the user hasn't read (the same thread the
   // sidebar dot and the Threads count point at).
   hasNew?: boolean;
+  // Name and avatar of a webhook root, shown for webhook replies. The server
+  // only accepts a webhook reply under a root with the same author, so a
+  // sentinel reply always sits under a webhook root.
+  webhookAuthor?: { displayName: string; avatarURL?: string };
 }
 
 export function ThreadActionBar({
@@ -30,16 +39,20 @@ export function ThreadActionBar({
   onClick,
   userMap: providedMap,
   hasNew = false,
+  webhookAuthor,
 }: ThreadActionBarProps) {
   // Skip the batch entirely when the parent supplied a lookup that
   // already covers the recent authors. When some IDs are missing,
   // fetch them and read through the fallback for those specific IDs.
   const missing = recentReplyAuthorIDs.filter(
-    (id) => !providedMap || providedMap.get(id) === undefined,
+    (id) => id !== WEBHOOK_AUTHOR_ID && (!providedMap || providedMap.get(id) === undefined),
   );
   const fallback = useUsersBatch(missing);
   const userMap: UserLookup = {
-    get: (id) => providedMap?.get(id) ?? fallback.map.get(id),
+    get: (id) =>
+      id === WEBHOOK_AUTHOR_ID
+        ? webhookAuthor ?? WEBHOOK_FALLBACK
+        : providedMap?.get(id) ?? fallback.map.get(id),
   };
 
   return (

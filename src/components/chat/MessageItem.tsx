@@ -1191,6 +1191,9 @@ function MessageItemImpl({
                 onClick={(id) => onReplyInThread?.(id)}
                 userMap={userMap}
                 hasNew={threadHasNew}
+                webhookAuthor={
+                  isWebhook ? { displayName: displayAuthorName, avatarURL: message.webhookAvatarURL } : undefined
+                }
               />
             )}
           </>
