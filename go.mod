@@ -22,7 +22,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/hibiken/asynq v0.26.0
 	github.com/oklog/ulid/v2 v2.1.2
-	github.com/redis/go-redis/v9 v9.22.0
+	github.com/redis/go-redis/v9 v9.23.0
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/wneessen/go-mail v0.8.1
 	github.com/yuin/goldmark v1.8.6
@@ -191,7 +191,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.46.0 // indirect
 	go.opentelemetry.io/otel/trace v1.46.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
-	go.uber.org/atomic v1.11.0 // indirect
+	go.uber.org/atomic v1.12.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.28.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
