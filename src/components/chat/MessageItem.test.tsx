@@ -806,6 +806,26 @@ describe('MessageItem', () => {
     expect(emojiAvatar).toHaveTextContent('🎉');
   });
 
+  it("shows a webhook root's identity for webhook replies in the thread bar", () => {
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage({
+          authorID: 'webhook',
+          body: 'Task failed',
+          webhookUsername: 'Event Radar',
+          replyCount: 2,
+          recentReplyAuthorIDs: ['webhook'],
+        })}
+        authorName="Unknown"
+        isOwn={false}
+        currentUserId="user-1"
+      />,
+    );
+    const avatar = screen.getByTestId('thread-action-avatar-webhook');
+    expect(avatar).toHaveTextContent('ER');
+    expect(avatar).not.toHaveTextContent('?');
+  });
+
   it('omits the BOT badge for normal user messages', () => {
     renderWithProviders(
       <MessageItem
