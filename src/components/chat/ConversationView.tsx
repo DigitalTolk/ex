@@ -18,7 +18,7 @@ import { TypingIndicator } from './TypingIndicator';
 import { AgentActivityIndicator } from './AgentActivityIndicator';
 import { AgentApprovalCard } from './AgentApprovalCard';
 import { WatcherCatchUpCard } from './WatcherCatchUpCard';
-import { useConversation } from '@/hooks/useConversations';
+import { useConversation, useUserConversations } from '@/hooks/useConversations';
 import {
   useConversationMessages,
   useEditMessage,
@@ -94,6 +94,9 @@ export function ConversationView() {
   const quickReactions = useFrequentEmojis(3);
   const { setActiveParent } = useNotifications();
   const { data: conversation, error: conversationError, isLoading: conversationLoading } = useConversation(id);
+  // The sidebar's name for this chat, shown while the conversation loads.
+  const { data: userConversations } = useUserConversations();
+  const knownName = userConversations?.find((c) => c.conversationID === id)?.displayName;
   const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(id);
   // A link-opened window can be swapped for the newest messages (keeping any
   // open thread) — see the MessageList pill.
@@ -336,7 +339,8 @@ export function ConversationView() {
     return <ResourceErrorPage resource="conversation" status={500} />;
   }
 
-  const title = derivedTitle ?? 'Direct Message';
+  // derivedTitle is only missing while the conversation loads.
+  const title = derivedTitle ?? knownName ?? 'Direct Message';
   let dmOtherUserID: string | undefined;
   let dmOtherUserAvatar: string | undefined;
   let dmOtherUserStatus = user?.userStatus;

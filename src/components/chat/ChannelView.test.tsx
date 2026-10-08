@@ -27,7 +27,7 @@ vi.mock('@/components/chat/markdown/MarkdownComposer', () => ({
     </div>
   ),
 }));
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ChannelView } from './ChannelView';
@@ -52,6 +52,8 @@ const mockMembers: ChannelMembership[] = [
 ];
 
 let channelQuery: { data?: Channel; error?: Error; isLoading?: boolean };
+let userChannels: { channelID: string; channelName: string; channelType?: string }[] = [];
+const messagesFor = vi.fn();
 
 vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({
@@ -96,7 +98,7 @@ vi.mock('@/context/PresenceContext', () => ({
 vi.mock('@/hooks/useChannels', () => ({
   useChannelBySlug: () => channelQuery,
   useChannelMembers: () => ({ data: mockMembers }),
-  useUserChannels: () => ({ data: [] }),
+  useUserChannels: () => ({ data: userChannels }),
   useBrowseChannels: () => ({ data: [] }),
   useCreateChannel: () => ({ mutate: vi.fn(), isPending: false }),
   useJoinChannel: () => ({ mutate: vi.fn(), isPending: false }),
@@ -104,13 +106,16 @@ vi.mock('@/hooks/useChannels', () => ({
 }));
 
 vi.mock('@/hooks/useMessages', () => ({
-  useChannelMessages: () => ({
-    data: { pages: [{ items: [] }] },
-    hasNextPage: false,
-    isFetchingNextPage: false,
-    isLoading: false,
-    fetchNextPage: vi.fn(),
-  }),
+  useChannelMessages: (id: string | undefined, anchor?: string) => {
+    messagesFor(id, anchor);
+    return {
+      data: { pages: [{ items: [] }] },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      isLoading: false,
+      fetchNextPage: vi.fn(),
+    };
+  },
   useSendChannelMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
@@ -150,6 +155,38 @@ describe('ChannelView', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     channelQuery = { data: mockChannel, isLoading: false };
+    userChannels = [];
+  });
+
+  it('while the channel loads: skeletons, the name the sidebar knows, and its messages already on the way', async () => {
+    channelQuery = { isLoading: true };
+    userChannels = [
+      { channelID: 'ch-other', channelName: 'Other', channelType: 'public' },
+      { channelID: 'ch-1', channelName: 'General', channelType: 'private' },
+    ];
+    const { container } = renderChannelView('general');
+    // Not the empty channel it isn't.
+    expect(screen.queryByText(/no messages yet/i)).toBeNull();
+    expect(container.querySelector('[data-slot="skeleton"]')).not.toBeNull();
+    const title = screen.getByTestId('channel-title-loading');
+    expect(title).toHaveTextContent('General');
+    expect(within(title).getByLabelText('Private channel')).toBeInTheDocument();
+    expect(messagesFor).toHaveBeenLastCalledWith('ch-1', undefined);
+    await waitFor(() => expect(screen.getByText('Write to ~General')).toBeInTheDocument());
+  });
+
+  it('knows a channel linked by id; one it does not know waits for the lookup', async () => {
+    channelQuery = { isLoading: true };
+    userChannels = [{ channelID: 'ch-1', channelName: 'General', channelType: 'public' }];
+    const first = renderChannelView('ch-1');
+    expect(screen.getByTestId('channel-title-loading')).toHaveTextContent('General');
+    first.unmount();
+    messagesFor.mockClear();
+    renderChannelView('somewhere-else');
+    const title = screen.getByTestId('channel-title-loading');
+    expect(title.querySelector('[data-slot="skeleton"]')).not.toBeNull();
+    expect(messagesFor).toHaveBeenLastCalledWith(undefined, undefined);
+    await waitFor(() => expect(screen.getByText('Write to ~...')).toBeInTheDocument());
   });
 
   it('marks the channel read on open (optimistic cache patch + PUT)', async () => {

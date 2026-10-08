@@ -102,6 +102,7 @@
 @theme {
   --animate-accordion-down: accordion-down 0.2s ease-out;
   --animate-accordion-up: accordion-up 0.2s ease-out;
+  --animate-loading-bar: loading-bar 1.4s ease-in-out infinite;
 
   /* Light theme — design system tokens (warm off-whites, per the Figma
    * light-mode frames)
@@ -302,6 +303,15 @@
 
 @utility pr-safe-right {
   padding-right: env(safe-area-inset-right);
+}
+
+@keyframes loading-bar {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
 }
 
 @keyframes accordion-down {

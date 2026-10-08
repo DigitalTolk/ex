@@ -30,6 +30,7 @@ import { useNotifications } from '@/context/NotificationContext';
 import { canEditChannel, canArchiveChannel, canLeaveChannel, roleNumber } from '@/lib/roles';
 import { markThreadSeen, noteThreadReadPosition } from '@/hooks/useThreads';
 import { apiFetch } from '@/lib/api';
+import { slugify } from '@/lib/format';
 import { queryKeys } from '@/lib/query-keys';
 import { clearChannelUnreadInCache } from '@/lib/unread-cache';
 import { NonMemberInvitePrompt } from './NonMemberInvitePrompt';
@@ -85,6 +86,14 @@ export function ChannelView() {
   // Opening any of those closes a tag, and opening a tag closes them.
   const { activeTag, closeTag } = useTagState();
   const { data: channel, error: channelError, isLoading: channelLoading } = useChannelBySlug(slug);
+  // The sidebar already knows the channels you're in by name, so while the
+  // channel itself is looked up its messages start loading too, and its name
+  // can stand in the header.
+  const { data: userChannels } = useUserChannels();
+  const knownChannel = useMemo(
+    () => userChannels?.find((c) => slug === slugify(c.channelName) || slug === c.channelID),
+    [userChannels, slug],
+  );
   const { data: members } = useChannelMembers(channel?.id);
   useDocumentTitle(channel ? `~${channel.name}` : null);
   const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(channel?.id);
@@ -121,7 +130,7 @@ export function ChannelView() {
     fetchPreviousPage,
     hasPreviousPage,
     isFetchingPreviousPage,
-  } = useChannelMessages(channel?.id, listAnchor);
+  } = useChannelMessages(channel?.id ?? knownChannel?.channelID, listAnchor);
   const sendMessage = useSendChannelMessage(channel?.id, user?.id);
   const schedule = useComposerSchedule({ parentID: channel?.id, parentType: 'channel' });
   const channelID = channel?.id;
@@ -325,7 +334,6 @@ export function ChannelView() {
   const canArchive = canArchiveChannel(currentUserRole);
   const canLeave = canLeaveChannel(currentUserRole, channel?.slug);
 
-  const { data: userChannels } = useUserChannels();
   const muted = !!userChannels?.find((uc) => uc.channelID === channel?.id)?.muted;
   const muteChannel = useMuteChannel();
   const [notifPrefsOpen, setNotifPrefsOpen] = useState(false);
@@ -401,6 +409,7 @@ export function ChannelView() {
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <Header
           channel={channel}
+          loadingChannel={channelLoading ? { name: knownChannel?.channelName, type: knownChannel?.channelType } : undefined}
           memberCount={members?.length}
           onMembersClick={() => (showMembers ? closeMembers() : openMembers())}
           channelId={channel?.id}
@@ -423,7 +432,7 @@ export function ChannelView() {
             pages={data?.pages ?? []}
             hasNextPage={hasNextPage}
             isFetchingNextPage={isFetchingNextPage}
-            isLoading={isLoading}
+            isLoading={isLoading || channelLoading}
             fetchNextPage={fetchNextPage}
             hasPreviousPage={hasPreviousPage}
             isFetchingPreviousPage={isFetchingPreviousPage}
@@ -471,7 +480,7 @@ export function ChannelView() {
               scheduledCount={schedule.scheduledCount}
               onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
               disabled={!!activeEditingMessage && editMessage.isPending}
-              placeholder={activeEditingMessage ? 'Edit message...' : `Write to ~${channel?.name ?? '...'}`}
+              placeholder={activeEditingMessage ? 'Edit message...' : `Write to ~${channel?.name ?? knownChannel?.channelName ?? '...'}`}
               focusKey={activeEditingMessage ? `edit-${activeEditingMessage.id}` : channel?.id}
               initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}
               initialDrafts={activeEditingMessage ? editDraftAttachments : draftAttachments}
