@@ -319,6 +319,34 @@ make build
 make docker
 ```
 
+## Object storage (S3)
+
+Attachments upload straight from the browser to the bucket; the server only signs each S3 request. Files over 16 MiB go up as S3 multipart uploads (retried part by part, resumed after a dropped connection or a re-attach of the same file); smaller files take one PUT that S3 checks against the file's SHA-256. The production bucket needs:
+
+**CORS** — the browser calls S3 directly, reads each part's `ETag`, and sends the signed checksum header:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://ex.example.com"],
+    "AllowedMethods": ["GET", "PUT", "POST", "DELETE"],
+    "AllowedHeaders": ["content-type", "x-amz-checksum-sha256"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+**Lifecycle rule** — abandoned multipart uploads keep their parts (and their storage cost) until aborted:
+
+```json
+{ "Rules": [{ "ID": "abort-incomplete-uploads", "Status": "Enabled", "Filter": {}, "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 2 } }] }
+```
+
+**IAM** — besides `s3:GetObject`, `s3:PutObject` and `s3:DeleteObject`, the app role needs `s3:AbortMultipartUpload` and `s3:ListMultipartUploadParts` (browsers abort and resume through URLs it signs).
+
+Local MinIO (`docker compose`) already allows every origin and header.
+
 ## DynamoDB
 
 Despite the name, `DYNAMODB_TABLE` configures **a single table**, not a prefix. The app follows the [DynamoDB single-table design](https://aws.amazon.com/blogs/compute/creating-a-single-table-design-with-amazon-dynamodb/): every entity (users, channels, conversations, messages, memberships, invites, refresh tokens, settings, …) lives in one table, distinguished by composite `PK`/`SK` prefixes (`USER#`, `CHAN#`, `MSG#`, …) plus two GSIs.
