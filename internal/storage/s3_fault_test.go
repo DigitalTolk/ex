@@ -22,6 +22,7 @@ var errFault = errors.New("s3 fault")
 type faultClient struct {
 	getOut  *s3.GetObjectOutput
 	getErr  error
+	headOut *s3.HeadObjectOutput
 	headErr error
 }
 
@@ -29,7 +30,7 @@ func (f faultClient) DeleteObject(context.Context, *s3.DeleteObjectInput, ...fun
 	return nil, errFault
 }
 func (f faultClient) HeadObject(context.Context, *s3.HeadObjectInput, ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
-	return nil, f.headErr
+	return f.headOut, f.headErr
 }
 func (f faultClient) GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
 	if f.getErr != nil {

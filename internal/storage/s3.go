@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,11 +54,22 @@ type s3Presigner interface {
 	PresignPutObject(ctx context.Context, in *s3.PutObjectInput, optFns ...func(*s3.PresignOptions)) (*v4.PresignedHTTPRequest, error)
 }
 
+// requestSigner is the slice of *v4.Signer used to presign S3 requests the
+// SDK's presign client has no operation for. A seam so tests can force the
+// signing-error branch.
+type requestSigner interface {
+	PresignHTTP(ctx context.Context, credentials aws.Credentials, r *http.Request, payloadHash string, service string, region string, signingTime time.Time, optFns ...func(*v4.SignerOptions)) (string, http.Header, error)
+}
+
 // S3Client wraps an S3 client and a bucket name for object storage operations.
 type S3Client struct {
 	client    s3API
 	presigner s3Presigner
 	bucket    string
+	// signer, creds and region presign arbitrary S3 requests (PresignRequest).
+	signer requestSigner
+	creds  aws.CredentialsProvider
+	region string
 }
 
 // BrowserObjectCacheControl is attached to browser-bound object responses.
@@ -123,6 +136,9 @@ func NewS3Client(ctx context.Context, cfg S3Config) (*S3Client, error) {
 		client:    internalClient,
 		presigner: s3.NewPresignClient(publicClient),
 		bucket:    cfg.Bucket,
+		signer:    v4.NewSigner(),
+		creds:     awsCfg.Credentials,
+		region:    awsCfg.Region,
 	}, nil
 }
 
@@ -268,22 +284,95 @@ func (c *S3Client) GetObjectRange(ctx context.Context, key string, maxBytes int6
 // GetObject opens the full object body for streaming through the app. The
 // caller owns closing the returned body.
 func (c *S3Client) GetObject(ctx context.Context, key string) (io.ReadCloser, string, int64, time.Time, error) {
+	out, err := c.getObject(ctx, key)
+	if err != nil {
+		return nil, "", 0, time.Time{}, err
+	}
+	return out.Body, aws.ToString(out.ContentType), aws.ToInt64(out.ContentLength), aws.ToTime(out.LastModified), nil
+}
+
+// OpenObject is GetObject for verification: it also returns the ETag of the
+// exact version being streamed, so what gets recorded as verified is the
+// version that was read — not whatever a separate HEAD happened to see.
+func (c *S3Client) OpenObject(ctx context.Context, key string) (io.ReadCloser, string, int64, string, error) {
+	out, err := c.getObject(ctx, key)
+	if err != nil {
+		return nil, "", 0, "", err
+	}
+	return out.Body, aws.ToString(out.ContentType), aws.ToInt64(out.ContentLength), aws.ToString(out.ETag), nil
+}
+
+func (c *S3Client) getObject(ctx context.Context, key string) (*s3.GetObjectOutput, error) {
 	out, err := c.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		return nil, "", 0, time.Time{}, fmt.Errorf("s3: get object: %w", err)
+		return nil, fmt.Errorf("s3: get object: %w", err)
 	}
-	contentType := ""
-	if out.ContentType != nil {
-		contentType = *out.ContentType
+	return out, nil
+}
+
+// StatObject reports an object's size, content type and ETag without reading
+// it, plus its SHA-256 (base64) when S3 holds one for the whole object — i.e.
+// when it was uploaded with a signed x-amz-checksum-sha256. Multipart uploads
+// only carry a checksum-of-part-checksums, which is not the file's hash, so a
+// composite value is reported as empty.
+func (c *S3Client) StatObject(ctx context.Context, key string) (int64, string, string, string, error) {
+	out, err := c.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket:       aws.String(c.bucket),
+		Key:          aws.String(key),
+		ChecksumMode: types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		return 0, "", "", "", fmt.Errorf("s3: stat object: %w", err)
 	}
-	lastModified := time.Time{}
-	if out.LastModified != nil {
-		lastModified = *out.LastModified
+	checksum := aws.ToString(out.ChecksumSHA256)
+	if out.ChecksumType == types.ChecksumTypeComposite || strings.Contains(checksum, "-") {
+		checksum = ""
 	}
-	return out.Body, contentType, aws.ToInt64(out.ContentLength), lastModified, nil
+	return aws.ToInt64(out.ContentLength), aws.ToString(out.ContentType), aws.ToString(out.ETag), checksum, nil
+}
+
+// PresignRequest signs one S3 REST call for the browser to make directly
+// against the bucket. The SDK's presign client only covers single-object
+// GET/PUT/HEAD/DELETE and UploadPart; multipart create, list, complete and
+// abort need this. The object URL comes from the SDK's own presigner, so the
+// endpoint, path style and key encoding match every other URL we sign, and
+// the signature from its SigV4 signer. query holds the operation's
+// sub-resources (e.g. "uploads", or "uploadId" + "partNumber"); headers are
+// signed, so the client must send exactly the returned set.
+func (c *S3Client) PresignRequest(ctx context.Context, method, key string, query url.Values, headers map[string]string, expires time.Duration) (string, map[string]string, error) {
+	objectURL, err := c.PresignedGetURL(ctx, key, expires)
+	if err != nil {
+		return "", nil, err
+	}
+	u, err := url.Parse(objectURL)
+	if err != nil {
+		return "", nil, fmt.Errorf("s3: parse object url: %w", err)
+	}
+	q := url.Values{}
+	for k, vs := range query {
+		q[k] = vs
+	}
+	q.Set("X-Amz-Expires", strconv.Itoa(int(expires.Seconds())))
+	u.RawQuery = q.Encode()
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), nil)
+	if err != nil {
+		return "", nil, fmt.Errorf("s3: build request: %w", err)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	creds, err := c.creds.Retrieve(ctx)
+	if err != nil {
+		return "", nil, fmt.Errorf("s3: credentials: %w", err)
+	}
+	signed, _, err := c.signer.PresignHTTP(ctx, creds, req, "UNSIGNED-PAYLOAD", "s3", c.region, time.Now())
+	if err != nil {
+		return "", nil, fmt.Errorf("s3: presign %s: %w", method, err)
+	}
+	return signed, headers, nil
 }
 
 // PutObject uploads body bytes under key with the supplied contentType.

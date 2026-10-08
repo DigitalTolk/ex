@@ -33,6 +33,8 @@ class XHRMock {
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
   status = 0;
+  statusText = '';
+  responseText = '';
   openedWith: { method: string; url: string } | null = null;
   headers: Record<string, string> = {};
   sentBody: unknown = null;
@@ -42,10 +44,35 @@ class XHRMock {
   setRequestHeader(k: string, v: string) {
     this.headers[k] = v;
   }
+  getResponseHeader(name: string) {
+    return name.toLowerCase() === 'etag' ? '"etag"' : null;
+  }
+  abort() {}
   send(body: unknown) {
     this.sentBody = body;
     XHRMock.last = this;
   }
+}
+
+// Route the API by path: upload-init, the signed S3 request, processing.
+function routeUpload(id: string) {
+  vi.mocked(apiFetch).mockImplementation((path: string) => {
+    if (path === '/api/v1/attachments/url') {
+      return Promise.resolve({
+        id,
+        key: `attachments/${id}`,
+        multipartUploadId: '',
+        alreadyExists: false,
+        filename: 'x.txt',
+        contentType: 'text/plain',
+        size: 1,
+      });
+    }
+    if (path.endsWith('/upload-request')) {
+      return Promise.resolve({ url: 'http://upload/u', key: `attachments/${id}`, headers: { 'Content-Type': 'text/plain' } });
+    }
+    return Promise.resolve({ id });
+  });
 }
 
 describe('uploadAttachment', () => {
@@ -82,7 +109,8 @@ describe('uploadAttachment', () => {
     vi.mocked(apiFetch)
       .mockResolvedValueOnce({
         id: 'att-1',
-        uploadURL: 'http://upload/u',
+        key: 'attachments/att-1',
+        multipartUploadId: '',
         alreadyExists: true,
         filename: 'x.txt',
         contentType: 'text/plain',
@@ -105,77 +133,64 @@ describe('uploadAttachment', () => {
     expect(XHRMock.last).toBeNull();
   });
 
-  it('uploads via PUT and reports progress when the file is new', async () => {
-    vi.mocked(apiFetch)
-      .mockResolvedValueOnce({
-        id: 'att-2',
-        uploadURL: 'http://upload/u',
-        alreadyExists: false,
-        filename: 'x.txt',
-        contentType: 'text/plain',
-        size: 1,
-      })
-      .mockResolvedValueOnce({ id: 'att-2' });
+  it('uploads via the signed S3 request and reports progress when the file is new', async () => {
+    routeUpload('att-2');
     const onProgress = vi.fn();
-    const file = new File(['x'], 'x.txt', { type: 'text/plain' });
+    // 100 bytes, so the progress events below are half of the file.
+    const file = new File(['x'.repeat(100)], 'x.txt', { type: 'text/plain' });
     const promise = uploadAttachment(file, { onProgress });
 
     await waitFor(() => expect(XHRMock.last).not.toBeNull());
     const xhr = XHRMock.last!;
     expect(xhr.openedWith).toEqual({ method: 'PUT', url: 'http://upload/u' });
+    expect(xhr.headers['Content-Type']).toBe('text/plain');
 
     // Half-way progress
     xhr.upload.onprogress!({ lengthComputable: true, loaded: 50, total: 100 });
     // Same integer percent again — should be deduped (still no extra emit)
     xhr.upload.onprogress!({ lengthComputable: true, loaded: 50, total: 100 });
-    // Non-computable — ignored
-    xhr.upload.onprogress!({ lengthComputable: false, loaded: 0, total: 0 });
 
     xhr.status = 200;
     xhr.onload!();
 
     await promise;
     // Original upload progress reserves the final slice for server processing.
-    expect(onProgress).toHaveBeenCalledWith(0.45);
+    expect(onProgress.mock.calls.filter(([f]) => f === 0.45)).toHaveLength(1);
     expect(onProgress).toHaveBeenCalledWith(0.9);
-    expect(onProgress).toHaveBeenCalledWith(1);
-    expect(apiFetch).toHaveBeenNthCalledWith(2, '/api/v1/attachments/att-2/process', {
+    expect(onProgress).toHaveBeenLastCalledWith(1);
+    expect(apiFetch).toHaveBeenLastCalledWith('/api/v1/attachments/att-2/process', {
       method: 'POST',
     });
   });
 
-  it('rejects when the PUT returns a non-2xx status', async () => {
-    vi.mocked(apiFetch).mockResolvedValueOnce({
-      id: 'att-3',
-      uploadURL: 'http://upload/u',
-      alreadyExists: false,
-      filename: 'x.txt',
-      contentType: 'text/plain',
-      size: 1,
-    });
+  it('rejects when S3 answers with a non-2xx status', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    routeUpload('att-3');
     const file = new File(['x'], 'x.txt', { type: 'text/plain' });
     const promise = uploadAttachment(file);
     await waitFor(() => expect(XHRMock.last).not.toBeNull());
     const xhr = XHRMock.last!;
-    xhr.status = 500;
+    xhr.status = 403;
+    xhr.statusText = 'Forbidden';
+    xhr.responseText = '<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>';
     xhr.onload!();
-    await expect(promise).rejects.toThrow(/Upload failed: 500/);
+    await expect(promise).rejects.toThrow(/403/);
+    expect(apiFetch).not.toHaveBeenCalledWith('/api/v1/attachments/att-3/process', expect.anything());
+    error.mockRestore();
   });
 
-  it('rejects when the network errors out', async () => {
-    vi.mocked(apiFetch).mockResolvedValueOnce({
-      id: 'att-4',
-      uploadURL: 'http://upload/u',
-      alreadyExists: false,
-      filename: 'x.txt',
-      contentType: 'text/plain',
-      size: 1,
+  it('rejects when the upload request cannot be signed', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(apiFetch).mockImplementation((path: string) => {
+      if (path === '/api/v1/attachments/url') {
+        return Promise.resolve({ id: 'att-4', key: 'attachments/att-4', multipartUploadId: '', alreadyExists: false, filename: 'x.txt', contentType: 'text/plain', size: 1 });
+      }
+      return Promise.reject(new Error('sign_error: attachment: already uploaded'));
     });
     const file = new File(['x'], 'x.txt', { type: 'text/plain' });
-    const promise = uploadAttachment(file);
-    await waitFor(() => expect(XHRMock.last).not.toBeNull());
-    XHRMock.last!.onerror!();
-    await expect(promise).rejects.toThrow(/network error/i);
+    await expect(uploadAttachment(file)).rejects.toThrow(/already uploaded/);
+    expect(XHRMock.last).toBeNull();
+    error.mockRestore();
   });
 });
 

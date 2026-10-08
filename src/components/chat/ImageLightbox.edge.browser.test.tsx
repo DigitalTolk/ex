@@ -261,7 +261,7 @@ describe('ImageLightbox edge branches', () => {
     const onClose = vi.fn();
     await render(lightbox({
       onClose,
-      images: [{ url: 'https://cdn.test/report.pdf', filename: 'report.pdf', contentType: 'application/pdf', size: 4096 }],
+      images: [{ url: 'https://cdn.test/report.zip', filename: 'report.zip', contentType: 'application/zip', size: 4096 }],
     }));
     const stage = document.querySelector('[data-testid="image-lightbox-attachment-stage"]') as HTMLElement;
     expect(stage).not.toBeNull();

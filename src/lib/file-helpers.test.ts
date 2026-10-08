@@ -9,7 +9,7 @@ import {
   FileText,
   FileVideo,
 } from 'lucide-react';
-import { isImageURL, isImageContentType, isImageAttachment, iconForAttachment } from './file-helpers';
+import { isImageURL, isImageContentType, isImageAttachment, isPdfAttachment, iconForAttachment } from './file-helpers';
 
 describe('isImageURL', () => {
   it.each([
@@ -51,6 +51,22 @@ describe('isImageAttachment', () => {
     ['application/octet-stream', 'document.pdf', false],
   ])('%s + %s → %s', (contentType, filename, expected) => {
     expect(isImageAttachment(contentType, filename)).toBe(expected);
+  });
+});
+
+describe('isPdfAttachment', () => {
+  it.each([
+    ['application/pdf', 'spec', true],
+    ['Application/PDF', '', true],
+    ['application/octet-stream', 'Report.PDF', true],
+    ['application/octet-stream', 'report.pdf.zip', false],
+    ['image/png', 'photo.png', false],
+  ])('(%s, %s) → %s', (contentType, filename, expected) => {
+    expect(isPdfAttachment(contentType, filename)).toBe(expected);
+  });
+
+  it('defaults the filename to empty', () => {
+    expect(isPdfAttachment('text/plain')).toBe(false);
   });
 });
 

@@ -1,29 +1,40 @@
 package service
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"image"
 	"image/png"
+	"io"
+	"strings"
 	"testing"
 
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
-func TestValidateAttachmentContentType_Branches(t *testing.T) {
+// inspectBytes runs the streaming content check over an in-memory object
+// without decoding pixels.
+func inspectBytes(a *model.Attachment, objectContentType string, data []byte) (image.Config, error) {
+	cfg, _, release, err := inspectContent(context.Background(), a, objectContentType, bufio.NewReader(bytes.NewReader(data)), false)
+	release()
+	return cfg, err
+}
+
+func TestInspectContent_Branches(t *testing.T) {
 	// object content type contradicts declared → error
-	if _, err := validateAttachmentContentType(&model.Attachment{ContentType: "image/png"}, "image/jpeg", nil); err == nil {
+	if _, err := inspectBytes(&model.Attachment{ContentType: "image/png"}, "image/jpeg", nil); err == nil {
 		t.Error("expected content-type mismatch error")
 	}
 	// non-image declared → accepted as-is (no decode)
-	if _, err := validateAttachmentContentType(&model.Attachment{ContentType: "text/plain"}, "text/plain", []byte("hello")); err != nil {
+	if _, err := inspectBytes(&model.Attachment{ContentType: "text/plain"}, "text/plain", []byte("hello")); err != nil {
 		t.Errorf("non-image should be accepted, got %v", err)
 	}
 	// image declared but bytes aren't a valid image → error
-	if _, err := validateAttachmentContentType(&model.Attachment{ContentType: "image/png"}, "image/png", []byte("not an image")); err == nil {
+	if _, err := inspectBytes(&model.Attachment{ContentType: "image/png"}, "image/png", []byte("not an image")); err == nil {
 		t.Error("expected invalid-image error")
 	}
 }
@@ -66,37 +77,52 @@ func TestValidateForUse_EarlyErrors(t *testing.T) {
 	}
 }
 
-func TestValidateUploadedObject_Branches(t *testing.T) {
+func TestEnsureVerified_Branches(t *testing.T) {
 	ctx := context.Background()
 	mk := func(sig *fakeAttachmentSigner) *AttachmentService {
 		return NewAttachmentService(newMockAttachmentStore(), sig, newMockPublisher())
 	}
 
-	// nil attachment
-	if _, _, err := mk(&fakeAttachmentSigner{objects: map[string][]byte{}}).validateUploadedObject(ctx, nil); err == nil {
-		t.Error("nil attachment should error")
-	}
 	// empty S3Key
-	if _, _, err := mk(&fakeAttachmentSigner{objects: map[string][]byte{}}).validateUploadedObject(ctx, &model.Attachment{Size: 4}); err == nil {
+	if err := mk(&fakeAttachmentSigner{objects: map[string][]byte{}}).ensureVerified(ctx, &model.Attachment{Size: 4}); err == nil {
 		t.Error("empty S3Key should error")
 	}
 	// non-positive size
-	if _, _, err := mk(&fakeAttachmentSigner{objects: map[string][]byte{}}).validateUploadedObject(ctx, &model.Attachment{S3Key: "k", Size: 0}); err == nil {
+	if err := mk(&fakeAttachmentSigner{objects: map[string][]byte{}}).ensureVerified(ctx, &model.Attachment{S3Key: "k", Size: 0}); err == nil {
 		t.Error("non-positive size should error")
 	}
-	// object missing (GetObject error)
-	if _, _, err := mk(&fakeAttachmentSigner{objects: map[string][]byte{}}).validateUploadedObject(ctx, &model.Attachment{S3Key: "missing", Size: 4}); err == nil {
+	// object missing (HEAD error)
+	if err := mk(&fakeAttachmentSigner{objects: map[string][]byte{}}).ensureVerified(ctx, &model.Attachment{S3Key: "missing", Size: 4}); err == nil {
 		t.Error("missing object should error")
 	}
 	// object size mismatch: stored body length != declared size
 	data := []byte("abcd")
-	if _, _, err := mk(&fakeAttachmentSigner{objects: map[string][]byte{"k": data}}).validateUploadedObject(ctx, &model.Attachment{S3Key: "k", Size: 99}); err == nil {
+	if err := mk(&fakeAttachmentSigner{objects: map[string][]byte{"k": data}}).ensureVerified(ctx, &model.Attachment{S3Key: "k", Size: 99}); err == nil {
 		t.Error("size mismatch should error")
 	}
-	// sha256 mismatch: size matches, declared hash is wrong
-	if _, _, err := mk(&fakeAttachmentSigner{objects: map[string][]byte{"k": data}}).validateUploadedObject(ctx, &model.Attachment{S3Key: "k", Size: int64(len(data)), SHA256: "deadbeef", ContentType: "image/png"}); err == nil {
+	// sha256 mismatch: size matches, declared hash is wrong (streamed path)
+	if err := mk(&fakeAttachmentSigner{objects: map[string][]byte{"k": data}}).ensureVerified(ctx, &model.Attachment{S3Key: "k", Size: int64(len(data)), SHA256: "deadbeef", ContentType: "image/png"}); err == nil {
 		t.Error("sha256 mismatch should error")
 	}
+	// the object vanishing between HEAD and GET
+	gone := &vanishingSigner{fakeAttachmentSigner: &fakeAttachmentSigner{objects: map[string][]byte{"k": data}, objectContentType: "text/plain"}}
+	// A verified object whose verification cannot be recorded (the row is
+	// gone) fails rather than pretending it was recorded.
+	if err := mk(gone.fakeAttachmentSigner).ensureVerified(ctx, &model.Attachment{ID: "no-row", S3Key: "k", Size: int64(len(data)), SHA256: sha256Hex(data), ContentType: "text/plain"}); err == nil || !strings.Contains(err.Error(), "record verification") {
+		t.Fatalf("expected a record-verification error, got %v", err)
+	}
+	svc := NewAttachmentService(newMockAttachmentStore(), gone, newMockPublisher())
+	if err := svc.ensureVerified(ctx, &model.Attachment{S3Key: "k", Size: int64(len(data)), SHA256: sha256Hex(data), ContentType: "text/plain"}); err == nil {
+		t.Error("object missing on GET should error")
+	}
+}
+
+// vanishingSigner answers HEAD but fails the GET, as if the object were
+// deleted between the two.
+type vanishingSigner struct{ *fakeAttachmentSigner }
+
+func (v *vanishingSigner) OpenObject(context.Context, string) (io.ReadCloser, string, int64, string, error) {
+	return nil, "", 0, "", errors.New("gone")
 }
 
 func TestCanAccessAttachment_Branches(t *testing.T) {
@@ -161,40 +187,40 @@ func encodePNGBytes(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
-func TestValidateAttachmentContentType_DimensionAndFormatMismatch(t *testing.T) {
+func TestInspectContent_DimensionAndFormatMismatch(t *testing.T) {
 	data := encodePNGBytes(t, 4, 6)
 
 	// Declared width disagrees with the decoded image.
-	if _, err := validateAttachmentContentType(&model.Attachment{ContentType: "image/png", Width: 99}, "image/png", data); err == nil {
+	if _, err := inspectBytes(&model.Attachment{ContentType: "image/png", Width: 99}, "image/png", data); err == nil {
 		t.Error("expected width mismatch error")
 	}
 	// Declared height disagrees.
-	if _, err := validateAttachmentContentType(&model.Attachment{ContentType: "image/png", Height: 99}, "image/png", data); err == nil {
+	if _, err := inspectBytes(&model.Attachment{ContentType: "image/png", Height: 99}, "image/png", data); err == nil {
 		t.Error("expected height mismatch error")
 	}
 	// Declared format (jpeg) disagrees with the actual PNG payload.
-	if _, err := validateAttachmentContentType(&model.Attachment{ContentType: "image/jpeg"}, "", data); err == nil {
+	if _, err := inspectBytes(&model.Attachment{ContentType: "image/jpeg"}, "", data); err == nil {
 		t.Error("expected format mismatch error")
 	}
 	// Matching dimensions and format → accepted.
-	if _, err := validateAttachmentContentType(&model.Attachment{ContentType: "image/png", Width: 4, Height: 6}, "image/png", data); err != nil {
+	if _, err := inspectBytes(&model.Attachment{ContentType: "image/png", Width: 4, Height: 6}, "image/png", data); err != nil {
 		t.Errorf("matching image should validate, got %v", err)
 	}
 
 	// Declared image but the bytes sniff as application/octet-stream.
 	binary := []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05}
-	if _, err := validateAttachmentContentType(&model.Attachment{ContentType: "image/png"}, "image/png", binary); err == nil {
+	if _, err := inspectBytes(&model.Attachment{ContentType: "image/png"}, "image/png", binary); err == nil {
 		t.Error("expected undetectable-content-type error")
 	}
 
-	// Valid SVG declared as svg → accepted via validateSVG.
+	// Valid SVG declared as svg → accepted via the streaming validateSVG.
 	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>`)
-	if _, err := validateAttachmentContentType(&model.Attachment{ContentType: "image/svg+xml"}, "image/svg+xml", svg); err != nil {
+	if _, err := inspectBytes(&model.Attachment{ContentType: "image/svg+xml"}, "image/svg+xml", svg); err != nil {
 		t.Errorf("valid svg should validate, got %v", err)
 	}
 	// Unsafe SVG (script element) → rejected.
 	badSVG := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`)
-	if _, err := validateAttachmentContentType(&model.Attachment{ContentType: "image/svg+xml"}, "image/svg+xml", badSVG); err == nil {
+	if _, err := inspectBytes(&model.Attachment{ContentType: "image/svg+xml"}, "image/svg+xml", badSVG); err == nil {
 		t.Error("expected unsafe svg rejection")
 	}
 }

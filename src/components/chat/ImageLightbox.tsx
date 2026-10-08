@@ -1,9 +1,9 @@
-import { createElement, useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { createElement, lazy, Suspense, useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Download, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { getInitials, formatLongDateTime, formatBytes } from '@/lib/format';
-import { iconForAttachment, isImageContentType } from '@/lib/file-helpers';
+import { iconForAttachment, isImageContentType, isPdfAttachment } from '@/lib/file-helpers';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
@@ -20,6 +20,9 @@ import {
   classifyDoubleTap,
   classifySwipe,
 } from './lightbox-gestures';
+
+// pdf.js is heavy; load the viewer only when a PDF is actually opened.
+const PdfPreview = lazy(() => import('./PdfPreview'));
 
 export interface LightboxImage {
   url: string;
@@ -172,6 +175,7 @@ export function ImageLightbox({
   if (!open || typeof document === 'undefined' || !current) return null;
 
   const iconType = iconForAttachment(current.contentType, current.filename);
+  const isPdf = !isImage && isPdfAttachment(current.contentType, current.filename);
   const swipeStageStyle = swipeDrag.x !== 0 || swipeDrag.y !== 0
     ? { transform: `translate3d(${Math.round(swipeDrag.x)}px, ${Math.round(swipeDrag.y)}px, 0)`, transition: 'none' }
     : undefined;
@@ -337,6 +341,36 @@ export function ImageLightbox({
     toggleMobileDoubleTapZoom();
   }
 
+  // The download card for attachments that have no in-app preview (and for
+  // a PDF that fails to load).
+  const fileCard = (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onPointerMove={(e) => e.stopPropagation()}
+      onPointerUp={(e) => e.stopPropagation()}
+      onPointerCancel={(e) => e.stopPropagation()}
+      data-testid="image-lightbox-fileinfo"
+      className="flex flex-col items-center gap-4 rounded-lg bg-card p-8 text-card-foreground shadow-2xl"
+    >
+      {createElement(iconType, { className: 'h-20 w-20 text-muted-foreground' })}
+      <div className="text-center">
+        <p className="break-all text-sm font-semibold">{current.filename}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{formatBytes(current.size)}</p>
+      </div>
+      <a
+        href={current.downloadURL ?? current.url}
+        download={current.filename}
+        onClick={(e) => e.stopPropagation()}
+        data-testid="image-lightbox-file-download"
+        className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+      >
+        <Download className="h-4 w-4" />
+        Download
+      </a>
+    </div>
+  );
+
   return createPortal(
     <div
       ref={lightboxRef}
@@ -491,31 +525,24 @@ export function ImageLightbox({
           onPointerUp={handleLightboxPointerUp}
           onPointerCancel={handleLightboxPointerCancel}
         >
-        <div
-          onClick={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
-          onPointerMove={(e) => e.stopPropagation()}
-          onPointerUp={(e) => e.stopPropagation()}
-          onPointerCancel={(e) => e.stopPropagation()}
-          data-testid="image-lightbox-fileinfo"
-          className="flex flex-col items-center gap-4 rounded-lg bg-card p-8 text-card-foreground shadow-2xl"
-        >
-          {createElement(iconType, { className: 'h-20 w-20 text-muted-foreground' })}
-          <div className="text-center">
-            <p className="break-all text-sm font-semibold">{current.filename}</p>
-            <p className="mt-1 text-xs text-muted-foreground">{formatBytes(current.size)}</p>
-          </div>
-          <a
-            href={current.downloadURL ?? current.url}
-            download={current.filename}
+        {isPdf ? (
+          <div
             onClick={(e) => e.stopPropagation()}
-            data-testid="image-lightbox-file-download"
-            className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerMove={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            onPointerCancel={(e) => e.stopPropagation()}
+            data-testid="image-lightbox-pdf"
+            className="h-full w-full max-w-4xl"
           >
-            <Download className="h-4 w-4" />
-            Download
-          </a>
-        </div>
+            <Suspense fallback={<p className="text-center text-sm text-white/70">Loading…</p>}>
+              {/* key: a different PDF is a fresh document, not a re-render. */}
+              <PdfPreview key={current.url} url={current.url} fallback={fileCard} />
+            </Suspense>
+          </div>
+        ) : (
+          fileCard
+        )}
         </div>
       )}
     </div>,

@@ -116,3 +116,9 @@ export function iconForAttachment(contentType: string, filename = ''): LucideIco
   }
   return File;
 }
+
+// PDFs get an in-app preview; the extension covers uploads that arrived as
+// `application/octet-stream`.
+export function isPdfAttachment(contentType: string, filename = ''): boolean {
+  return contentType.toLowerCase() === 'application/pdf' || /\.pdf$/i.test(filename);
+}

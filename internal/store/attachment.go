@@ -299,3 +299,38 @@ func (s *AttachmentStoreImpl) SetThumbnailKeys(ctx context.Context, id, thumbnai
 	}
 	return nil
 }
+
+// SetMultipartUploadID records the S3 multipart upload in progress for an
+// attachment's object, so a re-attach of the same file can resume it.
+func (s *AttachmentStoreImpl) SetMultipartUploadID(ctx context.Context, id, uploadID string) error {
+	return s.setAttachmentString(ctx, id, "multipartUploadId", uploadID, "multipart upload id")
+}
+
+// SetVerifiedETag records the ETag of the object version that passed
+// verification.
+func (s *AttachmentStoreImpl) SetVerifiedETag(ctx context.Context, id, etag string) error {
+	return s.setAttachmentString(ctx, id, "verifiedEtag", etag, "verified etag")
+}
+
+// setAttachmentString sets one string attribute on an existing attachment.
+// Conditional on attribute_exists(PK) so a deletion racing with the write
+// does not recreate the row.
+func (s *AttachmentStoreImpl) setAttachmentString(ctx context.Context, id, attr, value, label string) error {
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                aws.String(s.Table),
+		Key:                      compositeKey(attachmentPK(id), metaSK()),
+		UpdateExpression:         aws.String("SET #a = :v"),
+		ConditionExpression:      aws.String("attribute_exists(PK)"),
+		ExpressionAttributeNames: map[string]string{"#a": attr},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":v": &types.AttributeValueMemberS{Value: value},
+		},
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("store: set attachment %s: %w", label, err)
+	}
+	return nil
+}

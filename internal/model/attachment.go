@@ -37,6 +37,13 @@ type Attachment struct {
 	// MessageIDs is the set of message IDs currently referencing this
 	// attachment. Maintained as a Dynamo string set; never serialized to JSON.
 	MessageIDs []string `json:"-" dynamodbav:"messageIDs,omitempty,stringset"`
+	// MultipartUploadID is the S3 multipart upload in progress for S3Key, so
+	// re-attaching the same file resumes it instead of starting over.
+	MultipartUploadID string `json:"-" dynamodbav:"multipartUploadId,omitempty"`
+	// VerifiedETag is the ETag of the object version the server verified
+	// (size, SHA-256, content type). Later uses only re-read the object when
+	// its current ETag differs.
+	VerifiedETag string `json:"-" dynamodbav:"verifiedEtag,omitempty"`
 }
 
 // IsImage returns true when the content type starts with "image/".

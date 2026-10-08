@@ -11,6 +11,7 @@ import (
 	"image"
 	"image/png"
 	"io"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,8 @@ type mockAttachmentStore struct {
 	setDimErr   error
 	setThumbErr error
 	deleteErr   error
+	// setUploadStateErr fails SetMultipartUploadID / SetVerifiedETag.
+	setUploadStateErr error
 }
 
 func newMockAttachmentStore() *mockAttachmentStore {
@@ -113,6 +116,26 @@ func (m *mockAttachmentStore) SetDimensions(_ context.Context, id string, width,
 	a.Height = height
 	return nil
 }
+func (m *mockAttachmentStore) SetMultipartUploadID(_ context.Context, id, uploadID string) error {
+	return m.setUploadState(id, func(a *model.Attachment) { a.MultipartUploadID = uploadID })
+}
+
+func (m *mockAttachmentStore) SetVerifiedETag(_ context.Context, id, etag string) error {
+	return m.setUploadState(id, func(a *model.Attachment) { a.VerifiedETag = etag })
+}
+
+func (m *mockAttachmentStore) setUploadState(id string, set func(*model.Attachment)) error {
+	if m.setUploadStateErr != nil {
+		return m.setUploadStateErr
+	}
+	a, ok := m.byID[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	set(a)
+	return nil
+}
+
 func (m *mockAttachmentStore) SetThumbnailKeys(_ context.Context, id, thumbnailKey, squareThumbnailKey string) error {
 	if m.setThumbErr != nil {
 		return m.setThumbErr
@@ -172,6 +195,21 @@ type fakeAttachmentSigner struct {
 	objects           map[string][]byte
 	objectContentType string
 	putContentTypes   map[string]string
+	// checksums[key] is the whole-object SHA-256 (base64) S3 reports for
+	// objects uploaded with a signed x-amz-checksum-sha256.
+	checksums map[string]string
+	// presigned records every PresignRequest; presignErr fails them.
+	presigned  []presignCall
+	presignErr error
+	// opens / stats count body reads vs HEADs.
+	opens, stats int
+}
+
+type presignCall struct {
+	method  string
+	key     string
+	query   url.Values
+	headers map[string]string
 }
 
 type fakeMediaCache struct {
@@ -240,6 +278,42 @@ func (s *fakeAttachmentSigner) GetObjectRange(_ context.Context, key string, _ i
 	}
 	return body, nil
 }
+func (s *fakeAttachmentSigner) PresignRequest(_ context.Context, method, key string, query url.Values, headers map[string]string, _ time.Duration) (string, map[string]string, error) {
+	if s.presignErr != nil {
+		return "", nil, s.presignErr
+	}
+	s.presigned = append(s.presigned, presignCall{method: method, key: key, query: query, headers: headers})
+	return fmt.Sprintf("https://s3.test/%s?%s", key, query.Encode()), headers, nil
+}
+
+// fakeETag derives a stable per-content ETag, like S3's MD5 ETags.
+func fakeETag(body []byte) string {
+	sum := sha256.Sum256(body)
+	return fmt.Sprintf(`"%x"`, sum[:8])
+}
+
+func (s *fakeAttachmentSigner) OpenObject(ctx context.Context, key string) (io.ReadCloser, string, int64, string, error) {
+	s.opens++
+	body, ct, size, _, err := s.GetObject(ctx, key)
+	if err != nil {
+		return nil, "", 0, "", err
+	}
+	return body, ct, size, fakeETag(s.objects[key]), nil
+}
+
+func (s *fakeAttachmentSigner) StatObject(_ context.Context, key string) (int64, string, string, string, error) {
+	s.stats++
+	body, ok := s.objects[key]
+	if !ok {
+		return 0, "", "", "", fmt.Errorf("no object %s", key)
+	}
+	contentType := s.objectContentType
+	if contentType == "" {
+		contentType = "image/png"
+	}
+	return int64(len(body)), contentType, fakeETag(body), s.checksums[key], nil
+}
+
 func (s *fakeAttachmentSigner) GetObject(_ context.Context, key string) (io.ReadCloser, string, int64, time.Time, error) {
 	if s.objects == nil {
 		return nil, "", 0, time.Time{}, fmt.Errorf("no object %s", key)
@@ -363,6 +437,8 @@ func TestAttachmentService_ProcessUpload_GeneratesMissingThumbnailsForDedupedExi
 	existing := &model.Attachment{
 		ID: "att-existing", SHA256: sha256Hex(object), S3Key: "attachments/att-existing",
 		Filename: "pic.png", ContentType: "image/png", Size: 10, CreatedBy: "u1",
+		// Verified before thumbnails existed (e.g. sent as a legacy upload).
+		VerifiedETag: fakeETag(object),
 	}
 	existing.Size = int64(len(object))
 	storeM.byID[existing.ID] = existing
@@ -498,31 +574,25 @@ func TestAttachmentService_ProcessUpload_ErrorsAndNonImage(t *testing.T) {
 	})
 }
 
-func TestAttachmentService_GenerateThumbnails_ErrorBranches(t *testing.T) {
+func TestAttachmentService_StoreThumbnails_PutErrorKeepsKeysUnset(t *testing.T) {
 	ctx := context.Background()
-	object := makePNG(4, 4)
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(object))
+	img, _, err := image.Decode(bytes.NewReader(makePNG(4, 4)))
 	if err != nil {
-		t.Fatalf("DecodeConfig: %v", err)
+		t.Fatalf("Decode: %v", err)
 	}
 	storeM := newMockAttachmentStore()
-	a := &model.Attachment{
-		ID: "a", CreatedBy: "u1", S3Key: "attachments/a", Filename: "p.png",
-		ContentType: "image/png", Size: int64(len(object)), SHA256: sha256Hex(object),
-	}
+	a := &model.Attachment{ID: "a", CreatedBy: "u1", S3Key: "attachments/a", Filename: "p.png", ContentType: "image/png"}
 	storeM.byID[a.ID] = a
 	svc := NewAttachmentService(storeM, &fakeAttachmentSigner{putErr: errors.New("put failed")}, nil)
-	if err := svc.generateThumbnails(ctx, a, object, cfg, true); err == nil {
+	released := 0
+	if err := svc.storeThumbnails(ctx, a, img, func() { released++ }); err == nil {
 		t.Fatal("expected PutObject error")
 	}
 	if a.ThumbnailS3Key != "" || a.SquareThumbnailS3Key != "" {
 		t.Fatalf("thumbnail keys should not be persisted after failed object write: %#v", a)
 	}
-	if err := svc.generateThumbnails(ctx, a, []byte("not image"), cfg, true); err == nil {
-		t.Fatal("expected decode error")
-	}
-	if err := svc.generateThumbnails(ctx, a, object, image.Config{}, true); err != nil {
-		t.Fatalf("zero config should skip thumbnails, got %v", err)
+	if released != 1 {
+		t.Fatalf("decode budget must be released before uploading, released=%d", released)
 	}
 }
 
@@ -686,11 +756,13 @@ func TestAttachmentService_CreateUploadURL_NewUpload(t *testing.T) {
 	if res.AlreadyExists {
 		t.Error("expected new upload, got already exists")
 	}
-	if res.UploadURL == "" {
-		t.Error("expected upload URL")
+	if res.Attachment.ID == "" || res.Attachment.S3Key != "attachments/"+res.Attachment.ID {
+		t.Errorf("expected a new attachment with its own object key, got %#v", res.Attachment)
 	}
-	if res.Attachment.ID == "" {
-		t.Error("expected attachment ID")
+	// Upload-init no longer hands out an upload URL: the browser asks
+	// SignUploadRequest for each S3 request instead.
+	if len(signer.presigned) != 0 {
+		t.Errorf("upload-init must not presign anything, got %v", signer.presigned)
 	}
 }
 
@@ -772,11 +844,6 @@ func TestAttachmentService_CreateUploadURL_PropagatesStorageErrors(t *testing.T)
 			}(),
 			signer: &fakeAttachmentSigner{},
 		},
-		{
-			name:   "presign",
-			store:  newMockAttachmentStore(),
-			signer: &fakeAttachmentSigner{putErr: errors.New("presign failed")},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -792,29 +859,43 @@ func TestAttachmentService_CreateUploadURL_DedupeByHash(t *testing.T) {
 	storeM := newMockAttachmentStore()
 	signer := &fakeAttachmentSigner{}
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+	ctx := context.Background()
+	params := CreateUploadParams{UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: testSHA256A, Size: 10}
 
-	// First upload
-	first, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "pic.png", ContentType: "image/png", SHA256: testSHA256A, Size: 10})
+	first, err := svc.CreateUploadURL(ctx, params)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	// Same hash from the same user dedupes without revealing another user's file.
-	second, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "other.png", ContentType: "image/png", SHA256: testSHA256A, Size: 10})
+	// The same file again before its upload finished: the same row comes back
+	// to be resumed (with the multipart upload still open), not a fresh one.
+	first.Attachment.MultipartUploadID = "mpu-1"
+	params.Filename = "other.png"
+	resumed, err := svc.CreateUploadURL(ctx, params)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if resumed.AlreadyExists || resumed.Attachment.ID != first.Attachment.ID || resumed.Attachment.MultipartUploadID != "mpu-1" {
+		t.Fatalf("unfinished upload must be resumed, got already=%v %#v", resumed.AlreadyExists, resumed.Attachment)
+	}
+
+	// Once verified, the same file dedupes outright: nothing to upload.
+	first.Attachment.VerifiedETag = `"etag"`
+	second, err := svc.CreateUploadURL(ctx, params)
 	if err != nil {
 		t.Fatalf("dedupe: %v", err)
 	}
-	if !second.AlreadyExists {
-		t.Error("expected dedup hit")
+	if !second.AlreadyExists || second.Attachment.ID != first.Attachment.ID {
+		t.Fatalf("expected dedup hit on %q, got already=%v id=%q", first.Attachment.ID, second.AlreadyExists, second.Attachment.ID)
 	}
-	if second.Attachment.ID != first.Attachment.ID {
-		t.Errorf("expected same ID, got %q want %q", second.Attachment.ID, first.Attachment.ID)
-	}
-	if second.UploadURL != "" {
-		t.Error("dedup hit should not return upload URL")
+	// Rows sent before verification was recorded count as finished too.
+	first.Attachment.VerifiedETag = ""
+	first.Attachment.MessageIDs = []string{"m1"}
+	if legacy, err := svc.CreateUploadURL(ctx, params); err != nil || !legacy.AlreadyExists {
+		t.Fatalf("sent attachment must dedupe, got %v / %v", legacy, err)
 	}
 
-	third, err := svc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u2", Filename: "other.png", ContentType: "image/png", SHA256: testSHA256A, Size: 10})
+	third, err := svc.CreateUploadURL(ctx, CreateUploadParams{UserID: "u2", Filename: "other.png", ContentType: "image/png", SHA256: testSHA256A, Size: 10})
 	if err != nil {
 		t.Fatalf("cross-user upload: %v", err)
 	}
@@ -1546,7 +1627,7 @@ func TestValidateSVG_EdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := validateSVG(tt.data); err == nil {
+			if err := validateSVG(bytes.NewReader(tt.data)); err == nil {
 				t.Fatal("expected SVG validation error")
 			}
 		})

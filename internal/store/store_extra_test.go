@@ -237,6 +237,36 @@ func TestAttachmentStore_SetDimensions(t *testing.T) {
 	}
 }
 
+func TestAttachmentStore_SetUploadState(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewAttachmentStore(db)
+	a := makeAttachment("att-up", "hash-up", "big.zip")
+	if err := s.Create(ctx, a); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := s.SetMultipartUploadID(ctx, a.ID, "mpu-1"); err != nil {
+		t.Fatalf("SetMultipartUploadID: %v", err)
+	}
+	if err := s.SetVerifiedETag(ctx, a.ID, `"etag-1"`); err != nil {
+		t.Fatalf("SetVerifiedETag: %v", err)
+	}
+	got, err := s.GetByID(ctx, a.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.MultipartUploadID != "mpu-1" || got.VerifiedETag != `"etag-1"` {
+		t.Fatalf("upload state not persisted: %#v", got)
+	}
+	// A deleted (or never-created) row is not resurrected.
+	if err := s.SetMultipartUploadID(ctx, "att-missing", "mpu"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing SetMultipartUploadID err = %v, want ErrNotFound", err)
+	}
+	if err := s.SetVerifiedETag(ctx, "att-missing", "e"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing SetVerifiedETag err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestAttachmentStore_SetThumbnailKeys(t *testing.T) {
 	db := setupDynamoDB(t)
 	s := NewAttachmentStore(db)

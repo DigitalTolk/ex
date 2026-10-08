@@ -8,9 +8,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
+	"io"
+	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -51,6 +55,18 @@ func (m *memAttachmentStore) RemoveRef(context.Context, string, string) (*model.
 }
 func (m *memAttachmentStore) Delete(context.Context, string) error                  { return nil }
 func (m *memAttachmentStore) SetDimensions(context.Context, string, int, int) error { return nil }
+func (m *memAttachmentStore) SetMultipartUploadID(_ context.Context, id, uploadID string) error {
+	if a, ok := m.items[id]; ok {
+		a.MultipartUploadID = uploadID
+	}
+	return nil
+}
+func (m *memAttachmentStore) SetVerifiedETag(_ context.Context, id, etag string) error {
+	if a, ok := m.items[id]; ok {
+		a.VerifiedETag = etag
+	}
+	return nil
+}
 func (m *memAttachmentStore) SetThumbnailKeys(_ context.Context, id, thumb, square string) error {
 	if a, ok := m.items[id]; ok {
 		a.ThumbnailS3Key = thumb
@@ -128,5 +144,103 @@ func TestAttachmentService_ValidateForUse_RejectsTamperedObject(t *testing.T) {
 	}
 	if err := svc.ValidateForUse(ctx, a.ID); err == nil {
 		t.Fatal("ValidateForUse must reject an object whose bytes don't match the record")
+	}
+}
+
+// countingS3 is the real MinIO client, counting full-object reads so a test
+// can prove which verifications never download the file.
+type countingS3 struct {
+	*S3Client
+	opens int
+}
+
+func (c *countingS3) OpenObject(ctx context.Context, key string) (io.ReadCloser, string, int64, string, error) {
+	c.opens++
+	return c.S3Client.OpenObject(ctx, key)
+}
+
+func signedBy(t *testing.T, svc *service.AttachmentService, a *model.Attachment) func(method string, query url.Values, headers map[string]string) (string, map[string]string) {
+	return func(method string, query url.Values, _ map[string]string) (string, map[string]string) {
+		t.Helper()
+		part := 0
+		if n := query.Get("partNumber"); n != "" {
+			_, _ = fmt.Sscan(n, &part)
+		}
+		signed, err := svc.SignUploadRequest(context.Background(), a.CreatedBy, a.ID, service.UploadRequest{
+			Method: method, Key: a.S3Key, UploadID: query.Get("uploadId"), PartNumber: part,
+		})
+		if err != nil {
+			t.Fatalf("SignUploadRequest %s: %v", method, err)
+		}
+		return signed.URL, signed.Headers
+	}
+}
+
+// End to end against real S3: a file uploaded in one browser PUT is verified
+// by S3's own SHA-256 check — the server never downloads it, not on process
+// and not on send.
+func TestAttachmentUpload_SinglePutIsVerifiedWithoutReading(t *testing.T) {
+	s3 := &countingS3{S3Client: newMinioS3(t, "upload-single")}
+	ctx := context.Background()
+	store := newMemAttachmentStore()
+	svc := service.NewAttachmentService(store, s3, nil)
+	payload := []byte("meeting notes, verified by S3 on arrival")
+	sum := sha256.Sum256(payload)
+	a := &model.Attachment{
+		ID: "att-single", SHA256: hex.EncodeToString(sum[:]), Size: int64(len(payload)),
+		ContentType: "text/plain", Filename: "notes.txt", S3Key: "attachments/att-single",
+		CreatedBy: "u1", CreatedAt: time.Now(),
+	}
+	_ = store.Create(ctx, a)
+
+	putURL, headers := signedBy(t, svc, a)(http.MethodPut, url.Values{}, nil)
+	if resp, body := s3Do(t, http.MethodPut, putURL, headers, payload); resp.StatusCode != http.StatusOK {
+		t.Fatalf("browser PUT: %d %s", resp.StatusCode, body)
+	}
+	if _, err := svc.ProcessUpload(ctx, "u1", a.ID); err != nil {
+		t.Fatalf("ProcessUpload: %v", err)
+	}
+	if err := svc.ValidateForUse(ctx, a.ID); err != nil {
+		t.Fatalf("ValidateForUse: %v", err)
+	}
+	if s3.opens != 0 || a.VerifiedETag == "" {
+		t.Fatalf("expected verification without any download, got %d reads (etag %q)", s3.opens, a.VerifiedETag)
+	}
+	// The object is final now: no further upload requests are signed.
+	if _, err := svc.SignUploadRequest(ctx, "u1", a.ID, service.UploadRequest{Method: http.MethodPut, Key: a.S3Key}); !errors.Is(err, service.ErrAttachmentUploaded) {
+		t.Fatalf("expected ErrAttachmentUploaded, got %v", err)
+	}
+}
+
+// End to end against real S3: a multipart upload has no whole-file SHA-256 on
+// record, so processing streams it once; the send afterwards is a HEAD.
+func TestAttachmentUpload_MultipartIsStreamedOnce(t *testing.T) {
+	s3 := &countingS3{S3Client: newMinioS3(t, "upload-multipart")}
+	ctx := context.Background()
+	store := newMemAttachmentStore()
+	svc := service.NewAttachmentService(store, s3, nil)
+	first := bytes.Repeat([]byte("z"), 5<<20)
+	last := []byte("end")
+	whole := append(append([]byte(nil), first...), last...)
+	sum := sha256.Sum256(whole)
+	a := &model.Attachment{
+		ID: "att-multi", SHA256: hex.EncodeToString(sum[:]), Size: int64(len(whole)),
+		ContentType: "application/zip", Filename: "big.zip", S3Key: "attachments/att-multi",
+		CreatedBy: "u1", CreatedAt: time.Now(),
+	}
+	_ = store.Create(ctx, a)
+
+	uploadID := browserMultipartUpload(t, signedBy(t, svc, a), [][]byte{first, last}, "application/zip")
+	if a.MultipartUploadID != uploadID {
+		t.Fatalf("multipart upload not tracked for resume: %q vs %q", a.MultipartUploadID, uploadID)
+	}
+	if _, err := svc.ProcessUpload(ctx, "u1", a.ID); err != nil {
+		t.Fatalf("ProcessUpload: %v", err)
+	}
+	if err := svc.ValidateForUse(ctx, a.ID); err != nil {
+		t.Fatalf("ValidateForUse: %v", err)
+	}
+	if s3.opens != 1 || a.VerifiedETag == "" {
+		t.Fatalf("expected exactly one streamed read, got %d (etag %q)", s3.opens, a.VerifiedETag)
 	}
 }

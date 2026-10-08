@@ -83,6 +83,11 @@ describe('MessageItem — optimistic rows keep their layout', () => {
     );
     const screen = await render(ui({ ...base, pendingState: 'failed' }));
     await expect.element(screen.getByTestId('message-failed')).toBeVisible();
+    // This checks the row at rest. A real pointer crossing it mid-check (the
+    // browser's single mouse is shared with whatever else is running) starts
+    // the legitimate hover fade-in and fails the check for the wrong reason,
+    // so the row is made unhoverable for its duration.
+    screen.container.style.pointerEvents = 'none';
     const time = () => document.querySelector<HTMLElement>('[data-testid="group-time-gutter"] time')!;
     // Retried, then sent: the hover-only time must stay at opacity 0 the
     // whole way (it used to jump to 1 and fade out — a visible flash).

@@ -2,6 +2,7 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 import { render, cleanup } from 'vitest-browser-react';
 import { ImageLightbox } from './ImageLightbox';
 import { expectPaintedAtCenter } from '@/test/browser-assertions';
+import { buildPdf, pdfObjectURL } from '@/test/pdf-fixture';
 import type { ComponentProps } from 'react';
 
 const imageURL = `data:image/svg+xml,${encodeURIComponent(
@@ -330,7 +331,7 @@ describe('ImageLightbox browser behavior', () => {
     await render(lightbox({
       onClose,
       images: [
-        { url: 'https://cdn.example.test/report.pdf', filename: 'report.pdf', contentType: 'application/pdf', size: 4096 },
+        { url: 'https://cdn.example.test/report.zip', filename: 'report.zip', contentType: 'application/zip', size: 4096 },
         { url: imageURL, filename: 'one.png', contentType: 'image/png', size: 2048 },
       ],
       onIndexChange,
@@ -361,10 +362,10 @@ describe('ImageLightbox browser behavior', () => {
       onClose,
       images: [
         {
-          url: 'https://cdn.example.test/report.pdf',
-          downloadURL: 'https://download.example.test/report.pdf',
-          filename: 'report.pdf',
-          contentType: 'application/pdf',
+          url: 'https://cdn.example.test/report.zip',
+          downloadURL: 'https://download.example.test/report.zip',
+          filename: 'report.zip',
+          contentType: 'application/zip',
           size: 4096,
         },
       ],
@@ -375,8 +376,8 @@ describe('ImageLightbox browser behavior', () => {
     expect(stage).not.toBeNull();
     expect(download).not.toBeNull();
     await expect.element(download!).toBeVisible();
-    expect(download!.href).toBe('https://download.example.test/report.pdf');
-    expect(download!.download).toBe('report.pdf');
+    expect(download!.href).toBe('https://download.example.test/report.zip');
+    expect(download!.download).toBe('report.zip');
 
     const rect = download!.getBoundingClientRect();
     download!.dispatchEvent(new PointerEvent('pointerdown', {
@@ -476,7 +477,7 @@ describe('ImageLightbox browser behavior', () => {
     await render(
       lightbox({
         onClose,
-        images: [{ url: 'https://cdn.test/spec.pdf', filename: 'spec.pdf', contentType: 'application/pdf', size: 4096 }],
+        images: [{ url: 'https://cdn.test/spec.zip', filename: 'spec.zip', contentType: 'application/zip', size: 4096 }],
       }),
     );
     const stage = document.querySelector('[data-testid="image-lightbox-attachment-stage"]') as HTMLElement;
@@ -503,5 +504,70 @@ describe('ImageLightbox browser behavior', () => {
       document.removeEventListener('pointercancel', record);
     }
     expect(seen).toEqual([]);
+  });
+
+  it('opens a PDF in the in-app viewer instead of the download card', async () => {
+    const onClose = vi.fn();
+    const onIndexChange = vi.fn();
+    const url = pdfObjectURL(buildPdf({ pages: 3 }));
+    try {
+      await render(lightbox({
+        onClose,
+        onIndexChange,
+        images: [
+          { url, downloadURL: 'https://download.example.test/spec.pdf', filename: 'spec.pdf', contentType: 'application/pdf', size: 4096 },
+          { url: imageURL, filename: 'one.png', contentType: 'image/png', size: 2048 },
+        ],
+      }));
+      // pdf.js loads off-thread; allow for full-suite CPU saturation.
+      await expect.poll(() => document.querySelector('[data-testid="image-lightbox-pdf"] .react-pdf__Page canvas'), { timeout: 15000 }).not.toBeNull();
+      expect(document.querySelector('[data-testid="image-lightbox-fileinfo"]')).toBeNull();
+      // The toolbar keeps offering the forced download.
+      const download = document.querySelector<HTMLAnchorElement>('[data-testid="image-lightbox-download"]')!;
+      expect(download.href).toBe('https://download.example.test/spec.pdf');
+
+      // Scrolling and swiping inside the document belong to the document:
+      // they never reach the stage's swipe-to-close / swipe-to-navigate.
+      const pane = document.querySelector('[data-testid="image-lightbox-pdf"]') as HTMLElement;
+      const rect = pane.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      dispatchSwipe(pane, { x: cx, y: rect.top + 40 }, { x: cx, y: rect.top + 240 });
+      dispatchSwipe(pane, { x: cx + 100, y: rect.top + 200 }, { x: cx - 100, y: rect.top + 200 });
+      pane.click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(onClose).not.toHaveBeenCalled();
+      expect(onIndexChange).not.toHaveBeenCalled();
+      // A touch the browser hands to native scrolling ends in pointercancel;
+      // that too stays inside the document.
+      const seen: string[] = [];
+      const record = (e: Event) => seen.push(e.type);
+      document.addEventListener('pointercancel', record);
+      try {
+        pane.dispatchEvent(new PointerEvent('pointercancel', { pointerId: 31, pointerType: 'touch', bubbles: true, cancelable: true }));
+      } finally {
+        document.removeEventListener('pointercancel', record);
+      }
+      expect(seen).toEqual([]);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  });
+
+  it('falls back to the download card when a PDF cannot be loaded', async () => {
+    // react-pdf reports the load failure through its dev-only warning().
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const url = URL.createObjectURL(new Blob(['not a pdf'], { type: 'application/pdf' }));
+    try {
+      await render(lightbox({
+        images: [{ url, downloadURL: 'https://download.example.test/broken.pdf', filename: 'broken.pdf', contentType: 'application/pdf', size: 9 }],
+      }));
+      await expect.poll(() => document.querySelector('[data-testid="image-lightbox-pdf"] [data-testid="image-lightbox-fileinfo"]'), { timeout: 15000 }).not.toBeNull();
+      const fileDownload = document.querySelector<HTMLAnchorElement>('[data-testid="image-lightbox-file-download"]')!;
+      expect(fileDownload.href).toBe('https://download.example.test/broken.pdf');
+      expect(error.mock.calls.flat().join(' ')).toContain('Invalid PDF');
+    } finally {
+      error.mockRestore();
+      URL.revokeObjectURL(url);
+    }
   });
 });
