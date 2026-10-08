@@ -25,11 +25,14 @@ vi.mock('@/components/SearchBar', () => ({
 const panel = () => document.querySelector('[role="dialog"][aria-label="Search"]') as HTMLElement;
 const settle = () => new Promise((r) => setTimeout(r, 450));
 
+// WebKit forbids constructing Touch objects, so dispatch a plain event
+// carrying just what the sheet reads (React reads `touches` off it).
 function touch(el: Element, type: 'touchstart' | 'touchmove' | 'touchend', y: number) {
-  const t = new Touch({ identifier: 1, target: el, clientX: 100, clientY: y });
-  el.dispatchEvent(
-    new TouchEvent(type, { bubbles: true, cancelable: true, touches: type === 'touchend' ? [] : [t], changedTouches: [t] }),
-  );
+  const ev = new Event(type, { bubbles: true, cancelable: true });
+  const touches = type === 'touchend' ? [] : [{ clientX: 100, clientY: y }];
+  Object.defineProperty(ev, 'touches', { value: touches });
+  Object.defineProperty(ev, 'changedTouches', { value: [{ clientX: 100, clientY: y }] });
+  el.dispatchEvent(ev);
 }
 
 async function mount() {
