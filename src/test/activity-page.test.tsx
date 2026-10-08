@@ -1,195 +1,30 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
 import ActivityPage from '@/pages/ActivityPage';
-import { apiFetch } from '@/lib/api';
+import { resetSidebarModeForTests, useSidebarModeStore } from '@/stores/sidebar-mode';
 
-vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
 vi.mock('@/hooks/useDocumentTitle', () => ({ useDocumentTitle: vi.fn() }));
-vi.mock('@/hooks/useEmoji', () => ({ useEmojiMap: () => ({ data: {} }) }));
-vi.mock('@/context/AuthContext', () => ({ useAuth: () => ({ user: { id: 'u-me' } }) }));
-vi.mock('@/components/UserHoverCard', () => ({
-  UserHoverCard: ({ children }: { children: React.ReactNode }) => <span data-testid="hovercard">{children}</span>,
+vi.mock('@/components/activity/ActivityPanel', () => ({
+  ActivityPanel: () => <div data-testid="activity-panel" />,
 }));
-
-function renderPage() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(
-    <QueryClientProvider client={qc}>
-      <MemoryRouter>
-        <ActivityPage />
-      </MemoryRouter>
-    </QueryClientProvider>,
-  );
-}
-
-const reactionItem = {
-  id: 'a1',
-  type: 'reaction',
-  createdAt: '2026-06-30T10:00:00Z',
-  messageID: 'm1',
-  parentID: 'ch-1',
-  parentType: 'channel',
-  messagePreview: 'the deploy is green',
-  actorID: 'u-2',
-  emoji: '🎉',
-};
-const reminderItem = {
-  id: 'a2',
-  type: 'reminder',
-  createdAt: '2026-06-30T11:00:00Z',
-  messageID: 'm2',
-  parentID: 'conv-9',
-  parentType: 'conversation',
-  messagePreview: 'follow up here',
-};
-
-function mockApi(over: { feed?: unknown; reminders?: unknown } = {}) {
-  vi.mocked(apiFetch).mockImplementation(async (path, options) => {
-    if (path === '/api/v1/activity') return over.feed ?? { items: [reactionItem, reminderItem], unread: 1 };
-    if (path === '/api/v1/reminders') return over.reminders ?? [];
-    if (path === '/api/v1/channels') return [{ channelID: 'ch-1', channelName: 'General', channelType: 'public', role: 1 }];
-    if (path === '/api/v1/users/batch') return [{ id: 'u-2', displayName: 'Bob' }];
-    if (path === '/api/v1/activity/read' && options?.method === 'PUT') return undefined;
-    if (options?.method === 'DELETE') return undefined;
-    return undefined;
-  });
-}
+const tier = vi.hoisted(() => ({ value: 'full' as 'full' | 'compact' | 'mobile' }));
+vi.mock('@/hooks/useLayoutTier', () => ({ useLayoutTier: () => tier.value }));
 
 describe('ActivityPage', () => {
-  beforeEach(() => vi.mocked(apiFetch).mockReset());
+  beforeEach(() => resetSidebarModeForTests());
 
-  it('renders reaction + reminder items and marks activity read on mount', async () => {
-    mockApi();
-    renderPage();
-    expect(await screen.findByText('reacted to your message')).toBeInTheDocument();
-    expect(await screen.findByText('Bob')).toBeInTheDocument();
-    // Emoji renders via EmojiGlyph (unicode glyph), not the raw shortcode.
-    expect(screen.getByText('🎉')).toBeInTheDocument();
-    // Reaction's preview links to the channel message by slug; the reminder row
-    // is itself the link to the conversation message.
-    expect(screen.getByTestId('activity-link')).toHaveAttribute('href', '/channel/general#msg-m1');
-    const reminderRow = screen.getAllByTestId('activity-item').find((el) => el.tagName === 'A');
-    expect(reminderRow).toHaveAttribute('href', '/conversation/conv-9#msg-m2');
-    await waitFor(() =>
-      expect(vi.mocked(apiFetch)).toHaveBeenCalledWith('/api/v1/activity/read', { method: 'PUT' }),
-    );
+  it('switches the sidebar to Activity and shows the "pick one" pane beside it', () => {
+    tier.value = 'full';
+    render(<ActivityPage />);
+    expect(useSidebarModeStore.getState().mode).toBe('activity');
+    expect(screen.getByText('Your activity')).toBeInTheDocument();
+    expect(screen.queryByTestId('activity-panel')).toBeNull();
   });
 
-  it('shows the empty state when there is no activity', async () => {
-    mockApi({ feed: { items: [], unread: 0 } });
-    renderPage();
-    expect(await screen.findByTestId('activity-empty')).toBeInTheDocument();
-  });
-
-  it('falls back to channel id, plain labels, and "Someone" when data is missing', async () => {
-    // Reaction with no slug and a channel NOT in the cache → parentID-based href;
-    // unknown actor → "Someone"; reminder with no preview → no preview line.
-    mockApi({
-      feed: {
-        items: [
-          { id: 'a1', type: 'reaction', createdAt: '2026-06-30T10:00:00Z', messageID: 'm1', parentID: 'ch-unknown', parentType: 'channel' },
-          { id: 'a2', type: 'reminder', createdAt: '2026-06-30T11:00:00Z', messageID: 'm2', parentID: 'ch-1', parentType: 'channel' },
-        ],
-        unread: 0,
-      },
-    });
-    renderPage();
-    expect(await screen.findByText('Someone')).toBeInTheDocument();
-    expect(screen.getByTestId('activity-link')).toHaveAttribute('href', '/channel/ch-unknown#msg-m1');
-    expect(screen.getByText('Reminder')).toBeInTheDocument();
-  });
-
-  it('shows a placeholder for a pending reminder with no preview', async () => {
-    mockApi({
-      feed: { items: [], unread: 0 },
-      reminders: [
-        { id: 'r1', userID: 'u-1', messageID: 'm3', parentID: 'ch-1', parentType: 'channel', remindAt: '2026-07-01T09:00:00Z', createdAt: '2026-06-30T09:00:00Z' },
-      ],
-    });
-    renderPage();
-    expect(await screen.findByText('A message')).toBeInTheDocument();
-  });
-
-  // A thread reply only renders inside its thread, so every row about one —
-  // fired reminder, reaction, pending reminder — links with ?thread= to open it.
-  it('links thread replies into their thread (channel and conversation)', async () => {
-    mockApi({
-      feed: {
-        items: [
-          { ...reactionItem, parentMessageID: 'root-1' },
-          { ...reminderItem, parentMessageID: 'root-2' },
-        ],
-        unread: 0,
-      },
-      reminders: [
-        { id: 'r1', userID: 'u-1', messageID: 'm3', parentID: 'self-dm', parentType: 'conversation', parentMessageID: 'root-3', messagePreview: 'note to self', remindAt: '2026-07-01T09:00:00Z', createdAt: '2026-06-30T09:00:00Z' },
-      ],
-    });
-    renderPage();
-    await screen.findByText('reacted to your message');
-    expect(screen.getByTestId('activity-link')).toHaveAttribute('href', '/channel/general?thread=root-1#msg-m1');
-    const reminderRow = screen.getAllByTestId('activity-item').find((el) => el.tagName === 'A');
-    expect(reminderRow).toHaveAttribute('href', '/conversation/conv-9?thread=root-2#msg-m2');
-    expect(screen.getByText('note to self').closest('a')).toHaveAttribute('href', '/conversation/self-dm?thread=root-3#msg-m3');
-  });
-
-  it('lists pending reminders and cancels one', async () => {
-    mockApi({
-      reminders: [
-        { id: 'r1', userID: 'u-1', messageID: 'm3', parentID: 'ch-1', parentType: 'channel', channelSlug: 'general', messagePreview: 'ping me', remindAt: '2026-07-01T09:00:00Z', createdAt: '2026-06-30T09:00:00Z' },
-      ],
-    });
-    renderPage();
-    expect(await screen.findByTestId('pending-reminder')).toBeInTheDocument();
-    expect(screen.getByText('ping me')).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('cancel-reminder'));
-    await waitFor(() =>
-      expect(vi.mocked(apiFetch)).toHaveBeenCalledWith('/api/v1/reminders/r1', { method: 'DELETE' }),
-    );
-  });
-
-  it('renders mentions, thread replies, DMs and channel adds with the right labels and links', async () => {
-    const base = { createdAt: '2026-06-30T10:00:00Z', parentID: 'ch-1', parentType: 'channel', channelSlug: 'general', actorID: 'u-2' };
-    mockApi({
-      feed: {
-        items: [
-          { ...base, id: 'b1', type: 'mention', mentionKind: 'user', messageID: 'm1', messagePreview: 'can you share the palette?' },
-          { ...base, id: 'b2', type: 'mention', mentionKind: 'all', messageID: 'm2' },
-          { ...base, id: 'b3', type: 'mention', mentionKind: 'here', messageID: 'm3' },
-          { ...base, id: 'b4', type: 'mention', mentionKind: 'keyword', messageID: 'm4' },
-          { ...base, id: 'b5', type: 'thread_reply', messageID: 'm5', threadRootID: 'root-1' },
-          { ...base, id: 'b6', type: 'dm', parentID: 'conv-1', parentType: 'conversation', channelSlug: undefined, messageID: 'm6' },
-          { ...base, id: 'b7', type: 'channel_added', messageID: '', parentName: 'design-review' },
-          { ...base, id: 'b8', type: 'channel_added', messageID: '', channelSlug: 'ops' },
-          { ...base, id: 'b9', type: 'channel_added', messageID: '', channelSlug: undefined, parentID: 'ch-x' },
-          { ...base, id: 'b10', type: 'mention', mentionKind: 'user', messageID: 'm10', actorID: 'webhook', actorName: 'Deploy Bot' },
-        ],
-        unread: 0,
-      },
-    });
-    renderPage();
-    expect(await screen.findAllByText('mentioned you')).toHaveLength(2);
-    for (const label of [
-      'mentioned @all',
-      'mentioned @here',
-      'used one of your keywords',
-      'replied in a thread',
-      'sent you a message',
-      'added you to #design-review',
-      'added you to #ops',
-      'added you to #a channel',
-    ]) {
-      expect(screen.getByText(label)).toBeInTheDocument();
-    }
-    // A webhook author shows its own name, without a hover card.
-    expect(screen.getByText('Deploy Bot')).toBeInTheDocument();
-    const hrefs = screen.getAllByTestId('activity-link').map((a) => a.getAttribute('href'));
-    expect(hrefs).toContain('/channel/general?thread=root-1#msg-m5');
-    expect(hrefs).toContain('/conversation/conv-1#msg-m6');
-    expect(hrefs).toContain('/channel/general');
-    expect(screen.getByText('can you share the palette?')).toBeInTheDocument();
-    expect(screen.getAllByText('Open channel')).toHaveLength(3);
+  it('is the Activity list itself when there is no persistent sidebar', () => {
+    tier.value = 'compact';
+    render(<ActivityPage />);
+    expect(screen.getByTestId('activity-panel')).toBeInTheDocument();
+    expect(screen.queryByText('Your activity')).toBeNull();
   });
 });

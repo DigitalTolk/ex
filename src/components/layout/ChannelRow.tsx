@@ -119,12 +119,12 @@ export function ChannelRow({
             a mention overrides mute server-side); merely-unread activity is a
             subtle "messages available" dot; a muted+read channel shows the
             bell. It fades out on desktop hover so the row actions (star/kebab)
-            take the space, and stays visible on touch at the VERY right edge —
-            the kebab slot, unused on mobile where a long-press opens that
-            menu — so it never overlaps the persistent star (right-10, 36px
-            wide). pointer-events-none keeps the row clickable. */}
+            take the space, and stays visible on touch. On a phone the star sits
+            flush to the right edge (the kebab is unused there — a long-press
+            opens that menu) and the badge sits just left of it.
+            pointer-events-none keeps the row clickable. */}
         {hasUnread || notifyCount > 0 ? (
-          <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 touch:opacity-100">
+          <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 touch:opacity-100 mobile:right-11">
             {notifyCount > 0 ? (
               <Badge variant="brand" className="text-[11px]" data-testid={`channel-unread-badge-${channel.channelID}`}>
                 {notifyCount > 99 ? '99+' : notifyCount}
@@ -139,7 +139,7 @@ export function ChannelRow({
           </span>
         ) : channel.muted ? (
           <BellOff
-            className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-500 transition-opacity group-hover/row:opacity-0 touch:opacity-100"
+            className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-500 transition-opacity group-hover/row:opacity-0 touch:opacity-100 mobile:right-12"
             aria-label="Muted"
           />
         ) : null}
@@ -149,7 +149,7 @@ export function ChannelRow({
         onClick={toggleFavorite}
         aria-label={isFav ? `Unfavorite ${channel.channelName}` : `Favorite ${channel.channelName}`}
         data-testid={`fav-toggle-${channel.channelID}`}
-        className={`absolute right-7 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-opacity touch:right-8 touch:h-7 touch:w-7 mobile:right-10 mobile:h-9 mobile:w-9 ${
+        className={`absolute right-7 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-opacity touch:right-8 touch:h-7 touch:w-7 mobile:right-1 mobile:h-9 mobile:w-9 ${
           isFav ? 'opacity-100 text-amber-300' : 'opacity-0 text-gray-400 hover:text-white group-hover/row:opacity-100 touch:opacity-100'
         }`}
       >

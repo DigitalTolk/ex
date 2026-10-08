@@ -127,7 +127,7 @@ export function MemberList({ members, channelId, channelSlug, currentUserId, cur
 
   return (
     <motion.div
-      className={`relative flex h-full min-h-0 w-[var(--member-list-width,20rem)] flex-col bg-background not-mobile:border-l mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:top-[var(--mobile-right-panel-top,6rem)] mobile:z-40 mobile:w-auto mobile:touch-pan-y ${settled ? '' : 'border-l'}`}
+      className={`relative flex h-full min-h-0 w-[var(--member-list-width,20rem)] flex-col bg-background not-mobile:border-l mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:top-[var(--mobile-right-panel-top,6rem)] mobile:z-40 mobile:w-auto max-md:not-mobile:absolute max-md:inset-x-0 max-md:bottom-0 max-md:top-[var(--mobile-right-panel-top,6rem)] max-md:z-40 max-md:w-auto max-md:border-l-0 mobile:touch-pan-y ${settled ? '' : 'border-l'}`}
       style={{ '--member-list-width': `${panelWidth}px` } as React.CSSProperties}
       data-mobile-right-sidebar="true"
       data-swipe-dismissing={String(dismissing)}

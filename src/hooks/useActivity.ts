@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { showToast } from '@/lib/toast';
+import { withoutItems, withRead } from '@/lib/activity-groups';
 import type { ActivityFeed, Reminder } from '@/types';
 
 const EMPTY_FEED: ActivityFeed = { items: [], unread: 0, unreadByType: {} };
@@ -100,6 +101,43 @@ export function useMarkActivityRead() {
           ? { ...old, unread: 0, unreadByType: {}, items: old.items.map((i) => ({ ...i, read: true })) }
           : old,
       );
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.activity() });
+    },
+  });
+}
+
+// useSetActivityRead marks specific items read or unread ("Mark as read" /
+// "Mark as unread", and opening a row). The cache updates first so the dot
+// and tab counts change instantly; the refetch afterwards reconciles.
+export function useSetActivityRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ ids, read }: { ids: string[]; read: boolean }) =>
+      apiFetch<void>('/api/v1/activity/items/read', { method: 'PUT', body: JSON.stringify({ ids, read }) }),
+    onMutate: async ({ ids, read }) => {
+      await qc.cancelQueries({ queryKey: queryKeys.activity() });
+      qc.setQueryData<ActivityFeed>(queryKeys.activity(), (old) => (old ? withRead(old, ids, read) : old));
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.activity() });
+    },
+  });
+}
+
+// useRemoveActivity removes items from the feed ("Remove from activity").
+export function useRemoveActivity() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (ids: string[]) =>
+      apiFetch<void>('/api/v1/activity/items/remove', { method: 'POST', body: JSON.stringify({ ids }) }),
+    onMutate: async (ids) => {
+      await qc.cancelQueries({ queryKey: queryKeys.activity() });
+      qc.setQueryData<ActivityFeed>(queryKeys.activity(), (old) => (old ? withoutItems(old, ids) : old));
+    },
+    onError: () => {
+      showToast("Couldn't remove that from Activity — please try again.");
     },
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: queryKeys.activity() });

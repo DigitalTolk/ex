@@ -162,7 +162,10 @@ describe('MessageInput browser behavior', () => {
     const editor = screen.getByLabelText('Message input').element() as HTMLElement;
     const editorRow = editor.closest('.flex.gap-2') as HTMLElement | null;
     expect(editorRow).not.toBeNull();
-    expect(Number.parseFloat(getComputedStyle(editorRow!).paddingTop)).toBeGreaterThanOrEqual(11);
+    // The row's padding eases open (a short transition) — wait for it.
+    await vi.waitFor(() => {
+      expect(Number.parseFloat(getComputedStyle(editorRow!).paddingTop)).toBeGreaterThanOrEqual(11);
+    });
   });
 
   it('drops the safe-area inset when bottomInset is false (in-list composers like /threads cards)', async () => {
@@ -240,13 +243,15 @@ describe('MessageInput browser behavior', () => {
     );
 
     if (window.innerWidth <= 767) {
-      expect(document.querySelector('[aria-label="Attach file"]')).toBeNull();
+      // The toolbar stays mounted but collapsed and inert until focus.
+      expect(document.querySelector('[aria-label="Attach file"]')?.closest('[inert]')).not.toBeNull();
       await screen.getByLabelText('Message input').click();
     }
 
     const attach = screen.getByLabelText('Attach file');
     await expect.element(attach).toBeVisible();
-    expectPaintedAtCenter(attach.element());
+    // On a phone the toolbar grows open over a short transition.
+    await vi.waitFor(() => expectPaintedAtCenter(attach.element()));
     const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
     const editor = screen.getByLabelText('Message input');
     if (window.innerWidth <= 767) {

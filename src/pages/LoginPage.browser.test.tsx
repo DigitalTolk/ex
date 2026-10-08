@@ -68,13 +68,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function mount(path = '/') {
+function mount(path = '/login') {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <Routes>
-        <Route path="/" element={<LoginPage />} />
+        <Route path="/login" element={<LoginPage />} />
         <Route path="/invite/:token" element={<LoginPage />} />
-        <Route path="/channel/:slug" element={<div data-testid="channel-landing" />} />
+        <Route path="/" element={<div data-testid="home-landing" />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -90,7 +90,7 @@ function jsonResponse(data: unknown, ok = true, status = ok ? 200 : 400): Respon
 
 describe('LoginPage (browser)', () => {
   it('renders the default sign-in mode with both SSO and guest forms', async () => {
-    const screen = await mount('/');
+    const screen = await mount('/login');
     await expect.element(screen.getByText('Welcome back')).toBeVisible();
     expect(document.body.textContent).toContain('Sign in with SSO');
     expect(document.body.textContent).toContain('Or sign in as guest');
@@ -103,14 +103,14 @@ describe('LoginPage (browser)', () => {
   });
 
   it('clicking the SSO button calls the auth login flow', async () => {
-    const screen = await mount('/');
+    const screen = await mount('/login');
     await screen.getByLabelText('Sign in with Single Sign-On').click();
     expect(loginMock).toHaveBeenCalled();
   });
 
-  it('successful guest login posts the credentials, captures server version, and navigates to general', async () => {
+  it('successful guest login posts the credentials, captures server version, and goes home', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ accessToken: 'abc' }));
-    const screen = await mount('/');
+    const screen = await mount('/login');
     const email = screen.getByLabelText('Email').element() as HTMLInputElement;
     const password = screen.getByLabelText('Password').element() as HTMLInputElement;
     setReactInputValue(email, 'a@a.com');
@@ -128,7 +128,7 @@ describe('LoginPage (browser)', () => {
 
   it('renders the server error message on a 401 guest login', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ error: { message: 'Bad password' } }, false, 401));
-    const screen = await mount('/');
+    const screen = await mount('/login');
     setReactInputValue(screen.getByLabelText('Email').element() as HTMLInputElement, 'a@a.com');
     setReactInputValue(screen.getByLabelText('Password').element() as HTMLInputElement, 'pw');
     await screen.getByRole('button', { name: 'Sign in', exact: true }).click();
@@ -144,7 +144,7 @@ describe('LoginPage (browser)', () => {
       status: 500,
       json: () => Promise.reject(new Error('parse')),
     } as Response);
-    const screen = await mount('/');
+    const screen = await mount('/login');
     setReactInputValue(screen.getByLabelText('Email').element() as HTMLInputElement, 'a@a.com');
     setReactInputValue(screen.getByLabelText('Password').element() as HTMLInputElement, 'pw');
     await screen.getByRole('button', { name: 'Sign in', exact: true }).click();
@@ -155,7 +155,7 @@ describe('LoginPage (browser)', () => {
 
   it('renders the JS Error message when fetch itself rejects', async () => {
     fetchMock.mockRejectedValueOnce(new Error('network gone'));
-    const screen = await mount('/');
+    const screen = await mount('/login');
     setReactInputValue(screen.getByLabelText('Email').element() as HTMLInputElement, 'a@a.com');
     setReactInputValue(screen.getByLabelText('Password').element() as HTMLInputElement, 'pw');
     await screen.getByRole('button', { name: 'Sign in', exact: true }).click();
@@ -164,7 +164,7 @@ describe('LoginPage (browser)', () => {
     });
   });
 
-  it('successful invite acceptance redirects to the general channel', async () => {
+  it('successful invite acceptance goes home', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ accessToken: 'tk' }));
     const screen = await mount('/invite/tok-xyz');
     setReactInputValue(screen.getByLabelText('Display Name').element() as HTMLInputElement, 'Newbie');
@@ -174,7 +174,7 @@ describe('LoginPage (browser)', () => {
       expect(fetchMock).toHaveBeenCalledWith('/auth/invite/accept', expect.objectContaining({ method: 'POST' }));
     });
     await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="channel-landing"]')).not.toBeNull();
+      expect(document.querySelector('[data-testid="home-landing"]')).not.toBeNull();
     });
   });
 
@@ -208,7 +208,7 @@ describe('LoginPage (browser)', () => {
     // `data.error` is a plain string → the `data.error?.message || data.error`
     // middle branch surfaces it directly.
     fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'Account is locked' }, false, 403));
-    const screen = await mount('/');
+    const screen = await mount('/login');
     setReactInputValue(screen.getByLabelText('Email').element() as HTMLInputElement, 'a@a.com');
     setReactInputValue(screen.getByLabelText('Password').element() as HTMLInputElement, 'pw');
     await screen.getByRole('button', { name: 'Sign in', exact: true }).click();
@@ -222,7 +222,7 @@ describe('LoginPage (browser)', () => {
     // `data.error?.message` and `data.error` are falsy, so the final
     // `|| 'Login failed'` arm provides the message.
     fetchMock.mockResolvedValueOnce(jsonResponse({ somethingElse: true }, false, 400));
-    const screen = await mount('/');
+    const screen = await mount('/login');
     setReactInputValue(screen.getByLabelText('Email').element() as HTMLInputElement, 'a@a.com');
     setReactInputValue(screen.getByLabelText('Password').element() as HTMLInputElement, 'pw');
     await screen.getByRole('button', { name: 'Sign in', exact: true }).click();
@@ -244,7 +244,7 @@ describe('LoginPage (browser)', () => {
 
   it('falls back to the default login message when a non-Error is thrown', async () => {
     fetchMock.mockRejectedValueOnce('a bare string rejection');
-    const screen = await mount('/');
+    const screen = await mount('/login');
     setReactInputValue(screen.getByLabelText('Email').element() as HTMLInputElement, 'a@a.com');
     setReactInputValue(screen.getByLabelText('Password').element() as HTMLInputElement, 'pw');
     await screen.getByRole('button', { name: 'Sign in', exact: true }).click();

@@ -1,4 +1,4 @@
-import { Menu } from 'lucide-react';
+import { ChevronLeft, Menu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { SearchBar } from '@/components/SearchBar';
 
@@ -59,15 +59,19 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
           aria-label="Open channels"
           aria-hidden={channelsButtonHidden || undefined}
           tabIndex={channelsButtonHidden ? -1 : 0}
-          className={`h-7 w-7 text-sidebar-foreground hover:bg-sidebar-accent lg:hidden ${
+          className={`h-7 w-7 mobile:h-9 mobile:w-9 mobile:-ml-1 text-sidebar-foreground hover:bg-sidebar-accent lg:hidden ${
             channelsButtonHidden ? 'invisible' : ''
           }`}
         >
-          <Menu className="h-4 w-4" />
+          {/* On a phone this goes back to the list, so it reads as a back
+              chevron; on a narrow desktop window it opens the sidebar. */}
+          <Menu className="h-4 w-4 mobile:hidden" />
+          <ChevronLeft className="h-6 w-6 not-mobile:hidden" />
         </Button>
       </div>
 
-      <div className="min-w-0 w-full">
+      {/* Phone: search lives in the bottom tab bar. */}
+      <div className="min-w-0 w-full mobile:hidden">
         <SearchBar />
       </div>
 

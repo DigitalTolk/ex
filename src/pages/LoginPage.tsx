@@ -5,7 +5,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
 import { apiFetch, captureServerVersion, setAccessToken } from '@/lib/api';
-import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { UpdateBanner } from '@/components/UpdateBanner';
 import type { User } from '@/types';
@@ -43,7 +42,7 @@ export default function LoginPage() {
       setAccessToken(data.accessToken);
       const u = await apiFetch<User>('/api/v1/users/me');
       setAuth(data.accessToken, u);
-      navigate(`/channel/${GENERAL_CHANNEL_SLUG}`);
+      navigate('/');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {
@@ -73,7 +72,7 @@ export default function LoginPage() {
       setAccessToken(data.accessToken);
       const user = await apiFetch<User>('/api/v1/users/me');
       setAuth(data.accessToken, user);
-      navigate(`/channel/${GENERAL_CHANNEL_SLUG}`);
+      navigate('/');
     } catch (err) {
       setError(
         err instanceof Error ? err.message : 'Invite acceptance failed',
@@ -84,10 +83,16 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col bg-muted/40">
+    // Fills the app root (which already clears the status bar and ends at
+    // the keyboard) and scrolls inside it, so the form is centred and a
+    // focused field can scroll above the keyboard.
+    <div className="flex h-full flex-col bg-muted/40">
       <UpdateBanner />
-      <div className="flex min-h-0 flex-1 items-center justify-center px-4">
-        <div className="w-full max-w-sm space-y-6">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4">
+        {/* Centred against the full screen, so the keyboard opening doesn't
+            re-centre (and jump) the form — the area above it just scrolls. */}
+        <div className="flex min-h-[calc(100dvh-env(safe-area-inset-top))]">
+        <div className="m-auto w-full max-w-sm space-y-6 py-6">
         <div className="text-center space-y-2">
           <h1 className="text-2xl font-bold tracking-tight">
             {isInviteMode ? 'Accept Invitation' : 'Welcome back'}
@@ -212,6 +217,7 @@ export default function LoginPage() {
             </form>
           </>
         )}
+        </div>
         </div>
       </div>
     </div>

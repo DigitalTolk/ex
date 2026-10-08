@@ -283,7 +283,7 @@ describe('ConversationRow browser behaviour', () => {
     expect(ev.defaultPrevented).toBe(true);
   });
 
-  it('mobile: the unread badge sits flush right in the kebab slot, clear of the star', async () => {
+  it('mobile: the star sits flush right and the unread badge just left of it, clear of it', async () => {
     if (window.innerWidth > 767) return;
     // Widest badge ("99+") so the geometry check covers the worst case.
     await renderRow(dm, { hasUnread: true, notifyCount: 150 });
@@ -293,10 +293,9 @@ describe('ConversationRow browser behaviour', () => {
     const b = badge.getBoundingClientRect();
     const s = star.getBoundingClientRect();
     const r = row.getBoundingClientRect();
-    // Must NOT overlap the always-visible favorite star — the badge lives in
-    // the slot the (mobile-hidden) kebab leaves at the very right edge.
-    expect(b.left).toBeGreaterThanOrEqual(s.right);
-    expect(r.right - b.right).toBeLessThanOrEqual(10);
+    // The star hugs the right edge; the badge never overlaps it.
+    expect(r.right - s.right).toBeLessThanOrEqual(6);
+    expect(b.right).toBeLessThanOrEqual(s.left);
   });
 
   it('marks the row active when the current route matches the conversation', async () => {

@@ -14,6 +14,22 @@ import {
 // widths, clamps hold at the configured bounds, widths persist across a
 // remount and the Appearance settings reset puts everything back.
 
+// The sidebar header's Home / Activity switch reads the activity feed; these
+// layout tests don't mount a QueryClient, so stand it (and the panel) in.
+vi.mock('@/components/activity/ActivityModeSwitch', () => ({
+  ActivityModeSwitch: () => <div data-testid="sidebar-mode-switch" />,
+}));
+// The phone tab bar reads the activity feed too.
+vi.mock('./MobileTabBar', () => ({
+  MobileTabBar: ({ onShowList, hidden }: { onShowList: () => void; hidden?: boolean }) => (
+    <nav data-testid="mobile-tab-bar" data-hidden={hidden ? 'true' : 'false'}>
+      <button type="button" data-testid="mobile-tab-home" onClick={onShowList}>Home</button>
+    </nav>
+  ),
+}));
+vi.mock('@/components/activity/ActivityPanel', () => ({
+  ActivityPanel: () => <div data-testid="activity-panel" />,
+}));
 vi.mock('@/components/SearchBar', () => ({ SearchBar: () => <input aria-label="Search" /> }));
 vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({
