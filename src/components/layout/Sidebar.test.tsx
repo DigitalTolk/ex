@@ -1859,6 +1859,26 @@ describe('Sidebar unread view', () => {
     expect(within(unreadGroup()!).getByText('Project Team')).toBeInTheDocument(); // still unread
   });
 
+  it('a chat holding an unread thread counts as unread — in the Unread section even while open', async () => {
+    localStorage.setItem('sidebar.unreadSection', '1');
+    window.history.pushState({}, '', '/channel/general');
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [];
+      if (url === '/api/v1/threads') {
+        return [{
+          parentID: 'ch-1', parentType: 'channel', threadRootID: 't-1', rootAuthorID: 'u-2', rootBody: 'root',
+          rootCreatedAt: '2026-05-03T10:00:00Z', replyCount: 1, latestActivityAt: '2026-05-03T10:00:00Z',
+        }];
+      }
+      if (url === '/api/v1/user-state') {
+        return { channelNotifications: [], threadNotifications: ['t-1'], threadSeen: {}, hiddenConversations: [] };
+      }
+      return undefined;
+    });
+    renderSidebar();
+    await waitFor(() => expect(within(unreadGroup()!).getByText('general')).toBeInTheDocument());
+  });
+
   it('"Show unread only" filters to unread chats plus the open one, with a way back', async () => {
     mockChannels = mockChannels.map((c) => (c.channelID === 'ch-3' ? { ...c, unread: true } : c));
     window.history.pushState({}, '', '/channel/secret');

@@ -1,18 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import {
+  clearMissedArrivals,
   clearUnreadAnchor,
   endReadSession,
   getUnreadAnchor,
   holdRead,
   isAtBottom,
+  isAtLiveTail,
   isReadHeld,
   keepReadSession,
+  noteMissedArrival,
   releaseRead,
   scheduleEndReadSession,
   setAtBottom,
+  setAtLiveTail,
   setUnreadAnchor,
   threadReadKey,
+  useMissedArrivals,
   useUnreadAnchor,
 } from './read-position';
 
@@ -77,5 +82,31 @@ describe('read-position', () => {
     expect(result.current).toEqual({ kind: 'after', at: '2026-10-07T09:00:00Z' });
     rerender({ k: undefined });
     expect(result.current).toBeUndefined();
+  });
+
+  it('counts arrivals a link-opened window could not show, until cleared or the visit ends', () => {
+    expect(isAtLiveTail('ch-1')).toBe(true);
+    setAtLiveTail('ch-1', false);
+    expect(isAtLiveTail('ch-1')).toBe(false);
+    const { result, rerender } = renderHook(({ k }: { k?: string }) => useMissedArrivals(k), {
+      initialProps: { k: 'ch-1' as string | undefined },
+    });
+    expect(result.current).toBe(0);
+    act(() => {
+      noteMissedArrival('ch-1');
+      noteMissedArrival('ch-1');
+    });
+    expect(result.current).toBe(2);
+    act(() => clearMissedArrivals('ch-1'));
+    clearMissedArrivals('ch-1'); // nothing left: no-op
+    expect(result.current).toBe(0);
+    act(() => noteMissedArrival('ch-1'));
+    act(() => endReadSession('ch-1'));
+    expect(result.current).toBe(0);
+    expect(isAtLiveTail('ch-1')).toBe(true);
+    setAtLiveTail('ch-1', true);
+    expect(isAtLiveTail('ch-1')).toBe(true);
+    rerender({ k: undefined });
+    expect(result.current).toBe(0);
   });
 });

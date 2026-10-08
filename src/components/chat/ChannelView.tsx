@@ -38,7 +38,7 @@ import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { collectMessageUserIDs, findLastOwnMessageId } from '@/lib/message-users';
 import { useSidePanels } from '@/hooks/useSidePanels';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useDeepLinkAnchor } from '@/hooks/useDeepLinkAnchor';
+import { useDeepLinkAnchor, useListAnchor } from '@/hooks/useDeepLinkAnchor';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import {
   useDraftAttachmentChips,
@@ -87,6 +87,9 @@ export function ChannelView() {
   const { data: members } = useChannelMembers(channel?.id);
   useDocumentTitle(channel ? `~${channel.name}` : null);
   const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(channel?.id);
+  // A link-opened window can be swapped for the newest messages (keeping any
+  // open thread) — see the MessageList pill.
+  const { listAnchor, showLatest } = useListAnchor(mainAnchor, navKey);
 
   const dismissedThreadParam =
     dismissed && dismissed.navKey === navKey ? dismissed.thread : null;
@@ -117,8 +120,8 @@ export function ChannelView() {
     fetchPreviousPage,
     hasPreviousPage,
     isFetchingPreviousPage,
-  } = useChannelMessages(channel?.id, mainAnchor);
-  const sendMessage = useSendChannelMessage(channel?.id);
+  } = useChannelMessages(channel?.id, listAnchor);
+  const sendMessage = useSendChannelMessage(channel?.id, user?.id);
   const channelID = channel?.id;
   const draftScope = useMemo(
     () => ({ parentID: channelID, parentType: 'channel' as const }),
@@ -430,10 +433,14 @@ export function ChannelView() {
             quickReactions={quickReactions}
             onReplyInThread={openThread}
             onEditMessage={isMobile ? setEditingMessage : undefined}
-            anchorMsgId={mainAnchor}
+            anchorMsgId={listAnchor}
             anchorRevision={navKey}
             onAtBottomChange={readSession.onAtBottomChange}
             onMarkAllRead={readSession.markAllRead}
+            onJumpToLatest={() => {
+              readSession.prepareJumpToLatest();
+              showLatest();
+            }}
             intro={
               channel ? (
                 <ChannelIntro
@@ -459,7 +466,7 @@ export function ChannelView() {
               ref={inputRef}
               onSend={activeEditingMessage ? handleEditMessage : handleSendMessage}
               onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
-              disabled={activeEditingMessage ? editMessage.isPending : sendMessage.isPending}
+              disabled={!!activeEditingMessage && editMessage.isPending}
               placeholder={activeEditingMessage ? 'Edit message...' : `Write to ~${channel?.name ?? '...'}`}
               focusKey={activeEditingMessage ? `edit-${activeEditingMessage.id}` : channel?.id}
               initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}

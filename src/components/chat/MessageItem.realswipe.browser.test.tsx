@@ -13,6 +13,7 @@ import type { Message } from '@/types';
 // (Every other MessageItem browser test mocks useSwipeDismiss — this one does not.)
 
 vi.mock('@/hooks/useMessages', () => ({
+  usePendingMessageActions: () => ({ retry: vi.fn(), discard: vi.fn() }),
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),

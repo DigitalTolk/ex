@@ -33,7 +33,7 @@ import { useSidePanels } from '@/hooks/useSidePanels';
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useDeepLinkAnchor } from '@/hooks/useDeepLinkAnchor';
+import { useDeepLinkAnchor, useListAnchor } from '@/hooks/useDeepLinkAnchor';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useIsOnline } from '@/stores/presence';
 import {
@@ -94,6 +94,9 @@ export function ConversationView() {
   const { setActiveParent } = useNotifications();
   const { data: conversation, error: conversationError, isLoading: conversationLoading } = useConversation(id);
   const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(id);
+  // A link-opened window can be swapped for the newest messages (keeping any
+  // open thread) — see the MessageList pill.
+  const { listAnchor, showLatest } = useListAnchor(mainAnchor, navKey);
   const {
     data,
     hasNextPage,
@@ -103,8 +106,8 @@ export function ConversationView() {
     hasPreviousPage,
     isFetchingPreviousPage,
     fetchPreviousPage,
-  } = useConversationMessages(id, mainAnchor);
-  const sendMessage = useSendConversationMessage(id);
+  } = useConversationMessages(id, listAnchor);
+  const sendMessage = useSendConversationMessage(id, user?.id);
   const draftScope = useMemo(
     () => ({ parentID: id, parentType: 'conversation' as const }),
     [id],
@@ -434,10 +437,14 @@ export function ConversationView() {
             quickReactions={quickReactions}
             onReplyInThread={openThread}
             onEditMessage={isMobile ? setEditingMessage : undefined}
-            anchorMsgId={mainAnchor}
+            anchorMsgId={listAnchor}
             anchorRevision={navKey}
             onAtBottomChange={readSession.onAtBottomChange}
             onMarkAllRead={readSession.markAllRead}
+            onJumpToLatest={() => {
+              readSession.prepareJumpToLatest();
+              showLatest();
+            }}
             intro={intro ?? undefined}
           />
           {activeEditingMessage && !editReady ? (
@@ -448,7 +455,7 @@ export function ConversationView() {
               ref={inputRef}
               onSend={activeEditingMessage ? handleEditMessage : handleSendMessage}
               onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
-              disabled={activeEditingMessage ? editMessage.isPending : sendMessage.isPending}
+              disabled={!!activeEditingMessage && editMessage.isPending}
               placeholder={activeEditingMessage ? 'Edit message...' : `Write to ${title}`}
               focusKey={activeEditingMessage ? `edit-${activeEditingMessage.id}` : id}
               initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}

@@ -4,7 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { createElement, forwardRef, useImperativeHandle, type ComponentType, type ReactNode, type Ref } from 'react';
 import { MessageList } from './MessageList';
-import { endReadSession, getUnreadAnchor, setUnreadAnchor } from '@/lib/read-position';
+import { endReadSession, getUnreadAnchor, isAtLiveTail, noteMissedArrival, setAtBottom, setUnreadAnchor } from '@/lib/read-position';
+import { queryKeys } from '@/lib/query-keys';
 import type { Message } from '@/types';
 
 // The "New messages" line, banner and pill. Virtuoso is replaced by a mock
@@ -107,8 +108,7 @@ const base = {
   userMap: {},
 };
 type Props = Partial<Parameters<typeof MessageList>[0]>;
-function renderList(props: Props = {}) {
-  const qc = new QueryClient();
+function renderList(props: Props = {}, qc = new QueryClient()) {
   const ui = (p: Props) => (
     <QueryClientProvider client={qc}>
       <BrowserRouter>
@@ -308,3 +308,69 @@ describe('MessageList unread Jump past the loaded history', () => {
     expect(list.scrollCalls.at(-1)).toEqual({ index: 0, align: 'start' });
   });
 });
+
+describe('MessageList window opened from a link', () => {
+  it('counts arrivals it cannot show in a pill to the newest; reaching the live tail forgets them', () => {
+    const onJumpToLatest = vi.fn();
+    // Like the read session: it records where the list stands.
+    const onAtBottomChange = vi.fn((atBottom: boolean) => setAtBottom('ch-1', atBottom));
+    const view = renderList({ hasPreviousPage: true, onJumpToLatest, onAtBottomChange });
+    frames();
+    expect(isAtLiveTail('ch-1')).toBe(false);
+    expect(onAtBottomChange).toHaveBeenCalledWith(false); // the window's end isn't the chat's
+    expect(screen.queryByTestId('unread-below-pill')).toBeNull();
+    act(() => {
+      noteMissedArrival('ch-1');
+      noteMissedArrival('ch-1');
+    });
+    fireEvent.click(screen.getByTestId('unread-below-pill'));
+    expect(onJumpToLatest).toHaveBeenCalledTimes(1);
+    view.rerenderList({ hasPreviousPage: false });
+    frames();
+    expect(isAtLiveTail('ch-1')).toBe(true);
+    expect(screen.queryByTestId('unread-below-pill')).toBeNull();
+    expect(onAtBottomChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it('a list outside any chat (no read position) tracks nothing', () => {
+    renderList({ channelId: undefined, hasPreviousPage: true });
+    frames();
+    expect(isAtLiveTail('ch-1')).toBe(true);
+  });
+
+  it('the pill is harmless without a jump handler', () => {
+    renderList({ hasPreviousPage: true });
+    frames();
+    act(() => noteMissedArrival('ch-1'));
+    fireEvent.click(screen.getByTestId('unread-below-pill'));
+    expect(screen.getByTestId('unread-below-pill')).toBeInTheDocument();
+  });
+
+  it('does not place a count line inside older history: it is resolved at the newest', () => {
+    setUnreadAnchor('ch-1', { kind: 'count', count: 3 });
+    renderList({ hasPreviousPage: true });
+    frames();
+    expect(getUnreadAnchor('ch-1')).toEqual({ kind: 'count', count: 3 });
+    expect(screen.queryByTestId('unread-divider')).toBeNull();
+  });
+});
+
+describe('MessageList thread reply bars', () => {
+  it('marks the bar of a thread with unread replies', () => {
+    const qc = new QueryClient();
+    const thread = (id: string) => ({
+      parentID: 'ch-1', parentType: 'channel', threadRootID: id, rootAuthorID: 'u-2', rootBody: '',
+      rootCreatedAt: '2026-10-07T09:00:00Z', replyCount: 2, latestActivityAt: '2026-10-07T10:00:00Z',
+    });
+    qc.setQueryData(queryKeys.userThreads(), [thread('m-05'), thread('m-06')]);
+    qc.setQueryData(queryKeys.userState(), { threadNotifications: ['m-05'] });
+    const items = pageOf(1, 10).items.map((m) =>
+      m.id === 'm-05' || m.id === 'm-06' ? { ...m, replyCount: 2, recentReplyAuthorIDs: ['u-2'] } : m,
+    );
+    renderList({ pages: [{ items }] }, qc);
+    frames();
+    const bars = screen.getAllByTestId('thread-action-bar');
+    expect(bars.map((b) => b.getAttribute('data-new'))).toEqual(['true', null]);
+  });
+});
+

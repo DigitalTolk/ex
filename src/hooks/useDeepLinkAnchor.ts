@@ -1,3 +1,4 @@
+import { useCallback, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 
 // useDeepLinkAnchor resolves the current location into a pair of
@@ -45,6 +46,19 @@ export function useDeepLinkAnchor(_parentKey: string | undefined): {
     return { mainAnchor: hashMsg, navKey: key };
   }
   return {};
+}
+
+// useListAnchor lets the user leave a link-opened window of older history for
+// the newest messages without touching the URL — an open ?thread= panel stays
+// open. The override lasts until the next navigation (navKey changes).
+export function useListAnchor(
+  mainAnchor: string | undefined,
+  navKey: string | undefined,
+): { listAnchor?: string; showLatest: () => void } {
+  const [latestFor, setLatestFor] = useState<{ nav?: string } | null>(null);
+  const showLatest = useCallback(() => setLatestFor({ nav: navKey }), [navKey]);
+  const atLatest = latestFor !== null && latestFor.nav === navKey;
+  return { listAnchor: atLatest ? undefined : mainAnchor, showLatest };
 }
 
 function parseHash(hash: string): string | undefined {

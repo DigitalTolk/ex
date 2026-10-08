@@ -111,6 +111,14 @@ describe('groupSidebarItems: unread view', () => {
     expect(ids(sections[0])).toContain('ch-unread');
   });
 
+  it('counts a chat holding an unread thread as unread', () => {
+    const sections = groupSidebarItems(channels, convs, [], {
+      unreadSection: true,
+      threadUnreadIDs: new Set(['ch-read', 'dm-read']),
+    });
+    expect(ids(sections[0])).toEqual(['ch-fav', 'ch-mention', 'ch-read', 'ch-unread', 'dm-read', 'dm-alert']);
+  });
+
   it('filters every section to unread chats, always keeping the one being viewed', () => {
     const sections = groupSidebarItems(channels, convs, [], { unreadOnly: true, activeID: 'dm-read' });
     expect(ids(sections.find((s) => s.key === SidebarSectionKeys.Channels)!)).toEqual(['ch-mention', 'ch-unread']);

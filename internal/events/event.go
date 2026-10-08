@@ -94,6 +94,12 @@ const (
 	// ThreadSummary. Ephemeral: ListUserThreads is the durable source of truth,
 	// re-read on reconnect, so replaying this would be noise.
 	EventThreadUpdated = "thread.updated"
+	// EventBrokerSubscribe / EventBrokerUnsubscribe are server-internal
+	// control frames on a user's own topic: every instance holding one of
+	// that user's sockets subscribes (or unsubscribes) them to the listed
+	// topics. They never reach a client.
+	EventBrokerSubscribe   = "broker.subscribe"
+	EventBrokerUnsubscribe = "broker.unsubscribe"
 )
 
 // ephemeralTypes are events that exist only for the live socket — they
@@ -130,6 +136,9 @@ var ephemeralTypes = map[string]struct{}{
 	// run.progress is a live typing-indicator-grade delta stream; the run's
 	// EVT# timeline is the durable record and run.updated carries state.
 	EventRunProgress: {},
+	// Broker control frames act on live subscriptions only.
+	EventBrokerSubscribe:   {},
+	EventBrokerUnsubscribe: {},
 }
 
 // IsPersistent reports whether an event of this type should be appended

@@ -40,6 +40,7 @@ vi.mock('@/context/AuthContext', () => ({
 }));
 
 vi.mock('@/context/UnreadContext', () => ({
+  useOptionalUnread: () => undefined,
   useUnread: () => ({
     clearConversationUnread: vi.fn(),
     setActiveConversation: vi.fn(),

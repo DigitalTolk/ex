@@ -111,6 +111,11 @@ export interface Message {
   // Skills the run USED (explicit /picks + invoke_skill calls) — rendered as
   // badges next to the "for <invoker>" tag.
   agentSkills?: string[];
+  // Echo of the sender's X-Client-Nonce (only on this client's own sends).
+  clientNonce?: string;
+  // Client-only: an optimistic row for a message still being sent, or one
+  // that failed to send (shown "Not sent" with Retry / Delete).
+  pendingState?: 'sending' | 'failed';
 }
 
 // HastNode mirrors the server-side hast tree shape. Three node

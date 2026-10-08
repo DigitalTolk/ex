@@ -2,7 +2,9 @@ package pubsub
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/DigitalTolk/ex/internal/events"
@@ -181,6 +183,9 @@ func (b *Broker) listen() {
 // fanning out, so the per-client Send (atomic ops) cannot stall concurrent
 // Register/Subscribe calls when many clients are subscribed.
 func (b *Broker) dispatch(msg *redis.Message) {
+	if b.applyControl(msg) {
+		return
+	}
 	b.mu.RLock()
 	users, ok := b.redisSubs[msg.Channel]
 	if !ok {
@@ -199,6 +204,54 @@ func (b *Broker) dispatch(msg *redis.Message) {
 	for _, client := range targets {
 		client.Send(data)
 	}
+}
+
+// brokerControl is the payload of a subscribe/unsubscribe control frame.
+type brokerControl struct {
+	Type string `json:"type"`
+	Data struct {
+		Topics []string `json:"topics"`
+	} `json:"data"`
+}
+
+// applyControl handles a subscribe/unsubscribe control frame published on a
+// user's own topic (see PublishSubscription) and reports whether msg was one.
+// Subscriptions are per instance — each Broker holds only its own sockets — so
+// a membership change made on one instance reaches the user's sockets on the
+// others this way; without it they kept receiving notifications (user topic)
+// but none of the new parent's messages until they reconnected.
+func (b *Broker) applyControl(msg *redis.Message) bool {
+	userID, ok := strings.CutPrefix(msg.Channel, UserChannel(""))
+	if !ok || !strings.Contains(msg.Payload, `"broker.`) {
+		return false
+	}
+	var ctl brokerControl
+	if json.Unmarshal([]byte(msg.Payload), &ctl) != nil {
+		return false
+	}
+	switch ctl.Type {
+	case events.EventBrokerSubscribe:
+		b.Subscribe(userID, ctl.Data.Topics)
+	case events.EventBrokerUnsubscribe:
+		b.Unsubscribe(userID, ctl.Data.Topics)
+	default:
+		return false
+	}
+	return true
+}
+
+// PublishSubscription subscribes (or unsubscribes) userID to topics on EVERY
+// instance holding one of their sockets: it applies the change here and
+// publishes a control frame on the user's own topic for the other instances.
+func (b *Broker) PublishSubscription(ctx context.Context, userID string, topics []string, subscribe bool) {
+	eventType := events.EventBrokerUnsubscribe
+	if subscribe {
+		b.Subscribe(userID, topics)
+		eventType = events.EventBrokerSubscribe
+	} else {
+		b.Unsubscribe(userID, topics)
+	}
+	events.Publish(ctx, b.pubsub, UserChannel(userID), eventType, map[string]any{"topics": topics})
 }
 
 // Close shuts down the broker, closing the Redis subscriber and all clients.

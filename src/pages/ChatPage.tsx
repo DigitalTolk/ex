@@ -13,7 +13,7 @@ import { sendWS } from '@/lib/ws-sender';
 import { localTimeZone } from '@/lib/user-time';
 import { isUserAttentive, suppressionWindowMs } from '@/lib/user-activity';
 import { classifyParentArrival, resolveParentKind } from '@/lib/message-arrival';
-import { isAtBottom, isReadHeld, releaseRead, setUnreadAnchor, threadReadKey } from '@/lib/read-position';
+import { isAtBottom, isAtLiveTail, isReadHeld, noteMissedArrival, releaseRead, setUnreadAnchor, threadReadKey } from '@/lib/read-position';
 import { slugify } from '@/lib/format';
 import { isOwnMessage } from '@/lib/message-users';
 import {
@@ -164,19 +164,26 @@ export default function ChatPage() {
         parentKind === 'channel'
           ? isActiveChannel(parentID)
           : parentKind === 'conversation' && isActiveConversation(parentID);
+      const atLiveTail = isAtLiveTail(parentID);
       const arrival = classifyParentArrival({
         isOwnAuthor,
         isThreadReply: !!parentMessageID,
         isSystem: !!msg.system,
         viewingParent,
         attentive: isUserAttentive(suppressionWindowMs),
-        atBottom: isAtBottom(parentID),
+        atBottom: isAtBottom(parentID) && atLiveTail,
         held: isReadHeld(parentID),
       });
-      // Arriving unseen in the open chat (window away, scrolled up, or held
-      // unread): if it's the first unread, the "New messages" line starts here.
-      if (arrival === 'bump-unread' && viewingParent && parentKind && !cachedUnreadCount(queryClient, parentKind, parentID)) {
-        setUnreadAnchor(parentID, { kind: 'message', messageID: msg.id }, { replace: true });
+      if (arrival === 'bump-unread' && viewingParent && parentKind) {
+        if (!atLiveTail) {
+          // The open list is a window of older history (opened from a link):
+          // the message can't be shown in it, so the list offers a pill.
+          noteMissedArrival(parentID);
+        } else if (!cachedUnreadCount(queryClient, parentKind, parentID)) {
+          // Arriving unseen in the open chat (window away, scrolled up, or held
+          // unread): the first unread starts the "New messages" line.
+          setUnreadAnchor(parentID, { kind: 'message', messageID: msg.id }, { replace: true });
+        }
       }
       // Posting reads the parent for you server-side, so your own top-level
       // post ends a "Mark as unread" hold.

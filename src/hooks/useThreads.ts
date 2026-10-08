@@ -279,6 +279,12 @@ export function unreadThreadIDs(
   return ids;
 }
 
+// unreadThreadParents is the set of channels/conversations holding an unread
+// thread — their sidebar rows show the unread dot until the thread is read.
+export function unreadThreadParents(threads: ThreadSummary[] = [], unreadIDs: Set<string>): Set<string> {
+  return new Set(threads.filter((t) => unreadIDs.has(t.threadRootID)).map((t) => t.parentID));
+}
+
 function activityTime(thread: ThreadSummary): number {
   const time = new Date(thread.latestActivityAt).getTime();
   return Number.isFinite(time) ? time : 0;

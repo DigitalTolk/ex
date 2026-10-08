@@ -1827,6 +1827,13 @@ export interface Message {
    * invoker-only, this is the public trace).
    */
   agentSkills?: string[];
+  /**
+   * ClientNonce echoes the sender's client-generated tag (X-Client-Nonce) on
+   * the send response and the message.new broadcast, so the sender's client
+   * can swap its optimistic "sending" row for the real message whichever
+   * arrives first. Never persisted.
+   */
+  clientNonce?: string;
 }
 export interface MessageAttachment {
   fallback?: string;

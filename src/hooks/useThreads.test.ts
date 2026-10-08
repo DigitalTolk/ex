@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
-import { mergeSeenMaps, unreadThreadIDs, upsertUserThreadRow, type ThreadSummary } from './useThreads';
+import { mergeSeenMaps, unreadThreadIDs, unreadThreadParents, upsertUserThreadRow, type ThreadSummary } from './useThreads';
 import { queryKeys } from '@/lib/query-keys';
 
 const summary = (overrides: Partial<ThreadSummary> = {}): ThreadSummary => ({
@@ -78,6 +78,18 @@ describe('mergeSeenMaps', () => {
     // Sanity: with the OLD spread semantics the stale local entry keeps it unread.
     const stale = { 't-1': '2026-07-14T12:00:01Z' };
     expect(unreadThreadIDs(threads, ['t-1'], new Set(), stale).has('t-1')).toBe(true);
+  });
+});
+
+describe('unreadThreadParents', () => {
+  it('names each chat holding an unread thread, once', () => {
+    const threads = [
+      summary({ threadRootID: 't-1', parentID: 'ch-1' }),
+      summary({ threadRootID: 't-2', parentID: 'ch-1' }),
+      summary({ threadRootID: 't-3', parentID: 'dm-1' }),
+    ];
+    expect([...unreadThreadParents(threads, new Set(['t-1', 't-2']))]).toEqual(['ch-1']);
+    expect(unreadThreadParents(undefined, new Set(['t-1'])).size).toBe(0);
   });
 });
 

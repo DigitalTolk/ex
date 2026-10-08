@@ -8,8 +8,17 @@ import type { Message, UserStatus } from '@/types';
 import { buildMessageListRows, nextVirtuosoState } from './MessageListRows';
 import { shouldAutoStickMessageList } from './message-list-autostick';
 import { NewBelowPill, UnreadBanner, UnreadDivider } from './UnreadMarkers';
-import { setUnreadAnchor, useUnreadAnchor, type UnreadAnchor } from '@/lib/read-position';
+import {
+  clearMissedArrivals,
+  isAtBottom,
+  setAtLiveTail,
+  setUnreadAnchor,
+  useMissedArrivals,
+  useUnreadAnchor,
+  type UnreadAnchor,
+} from '@/lib/read-position';
 import { resolveUnreadDivider, unreadFrom } from '@/lib/unread-divider';
+import { useUnreadThreadIDs } from '@/hooks/useUnreadThreads';
 
 const ANCHOR_HIGHLIGHT_MS = 2200;
 const DEFAULT_MESSAGE_ROW_HEIGHT = 88;
@@ -60,6 +69,8 @@ interface MessageListProps {
   // live tail, and the unread banner's "Mark as read".
   onAtBottomChange?: (atBottom: boolean) => void;
   onMarkAllRead?: () => void;
+  // Switch a link-opened window of older history to the newest messages.
+  onJumpToLatest?: () => void;
 }
 
 // Older pages the unread banner's "Jump" will pull looking for the first
@@ -103,6 +114,7 @@ function VirtuosoMessageList({
   quickReactions,
   onAtBottomChange,
   onMarkAllRead,
+  onJumpToLatest,
 }: MessageListProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const scrollerRef = useRef<HTMLElement | null>(null);
@@ -155,6 +167,7 @@ function VirtuosoMessageList({
     [pages],
   );
   const threadMeta = useMemo(() => deriveThreadMeta(allMessages), [allMessages]);
+  const unreadThreads = useUnreadThreadIDs();
 
   // The "New messages" line (lib/read-position): where this visit's unread
   // starts. A count anchor — the unread count when the chat was opened — is
@@ -162,7 +175,11 @@ function VirtuosoMessageList({
   // and opening a chat with unread lands on the line rather than the tail.
   const readKey = channelId ?? conversationId;
   const parentType = channelId ? 'channel' : 'conversation';
-  const unreadAnchor = useUnreadAnchor(readKey);
+  // A count ("the last N messages") only means something at the live tail: in
+  // a link-opened window of older history it would count back from the wrong
+  // end, so it waits (the missed-arrivals pill covers what's newer).
+  const storedAnchor = useUnreadAnchor(readKey);
+  const unreadAnchor = storedAnchor?.kind === 'count' && hasPreviousPage ? undefined : storedAnchor;
   const unreadDividerID = useMemo(
     () => (unreadAnchor ? resolveUnreadDivider(unreadAnchor, allMessages, parentType) : null),
     [unreadAnchor, allMessages, parentType],
@@ -376,16 +393,34 @@ function VirtuosoMessageList({
   const [caughtUpFor, setCaughtUpFor] = useState<UnreadAnchor | undefined>(undefined);
   const unreadAnchorRef = useRef<UnreadAnchor | undefined>(undefined);
   const onAtBottomChangeRef = useRef(onAtBottomChange);
+  const hasPreviousPageRef = useRef(hasPreviousPage);
   useLayoutEffect(() => {
     unreadAnchorRef.current = unreadAnchor;
     onAtBottomChangeRef.current = onAtBottomChange;
+    hasPreviousPageRef.current = hasPreviousPage;
   });
   const markAtBottom = useCallback((atBottom: boolean) => {
     if (atBottomRef.current === atBottom) return;
     atBottomRef.current = atBottom;
     if (atBottom) setCaughtUpFor(unreadAnchorRef.current);
-    onAtBottomChangeRef.current?.(atBottom);
+    // The bottom of a window of older history isn't the bottom of the chat.
+    onAtBottomChangeRef.current?.(atBottom && !hasPreviousPageRef.current);
   }, []);
+
+  // A window opened from a link may not reach the newest messages; arrivals
+  // it can't show are counted (ChatPage) for the pill below, and forgotten
+  // once the window reaches the live tail.
+  useEffect(() => {
+    if (!readKey) return;
+    setAtLiveTail(readKey, !hasPreviousPage);
+    if (!hasPreviousPage) clearMissedArrivals(readKey);
+    // Tell the read session if this list stands somewhere else than it last
+    // heard: a fresh list (e.g. after jumping to the newest messages) mounts
+    // at the tail without the scroll transition markAtBottom reports.
+    const atBottom = atBottomRef.current && !hasPreviousPage;
+    if (atBottom !== isAtBottom(readKey)) onAtBottomChangeRef.current?.(atBottom);
+  }, [readKey, hasPreviousPage]);
+  const missedArrivals = useMissedArrivals(readKey);
 
   // Scroll the line (or, for one older than everything loaded, the top) to
   // the top of the viewport. Rows start at an estimated height, so the first
@@ -702,6 +737,7 @@ function VirtuosoMessageList({
               highlighted={row.message.id === highlightedMessageId}
               onContentHeightChange={handleContentHeightChange}
               quickReactions={quickReactions}
+              threadHasNew={unreadThreads.has(row.message.id)}
             />
           );
         }}
@@ -711,6 +747,9 @@ function VirtuosoMessageList({
         <UnreadBanner count={unreadCount} onJump={jumpToUnread} onMarkRead={() => onMarkAllRead?.()} />
       ) : null}
       {showUnreadMarker && dividerPos === 'below' ? <NewBelowPill count={unreadCount} onClick={scrollToBottom} /> : null}
+      {hasPreviousPage && missedArrivals > 0 ? (
+        <NewBelowPill count={missedArrivals} onClick={() => onJumpToLatest?.()} />
+      ) : null}
     </div>
   );
 }
@@ -745,6 +784,7 @@ const MessageRow = memo(function MessageRow({
   highlighted,
   onContentHeightChange,
   quickReactions,
+  threadHasNew,
 }: {
   row: { kind: 'message'; key: string; message: Message; firstInGroup: boolean };
   userMap: Record<string, UserMapEntry>;
@@ -759,6 +799,7 @@ const MessageRow = memo(function MessageRow({
   highlighted?: boolean;
   onContentHeightChange?: () => void;
   quickReactions?: string[];
+  threadHasNew?: boolean;
 }) {
   const msg = row.message;
   const handleContentHeightChange = useCallback(() => {
@@ -805,6 +846,7 @@ const MessageRow = memo(function MessageRow({
         highlighted={highlighted}
         onContentHeightChange={handleContentHeightChange}
         quickReactions={quickReactions}
+        threadHasNew={threadHasNew}
       />
     </div>
   );

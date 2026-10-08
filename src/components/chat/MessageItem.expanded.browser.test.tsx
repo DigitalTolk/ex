@@ -10,6 +10,7 @@ import type { Message } from '@/types';
 // deleted messages, reactions, attachments, pinned, edited, threads.
 
 vi.mock('@/hooks/useMessages', () => ({
+  usePendingMessageActions: () => ({ retry: vi.fn(), discard: vi.fn() }),
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),

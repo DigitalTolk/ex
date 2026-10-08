@@ -130,7 +130,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
   // useSendMessage invalidates the same ['thread', parentPath, rootID]
   // key the hook above subscribes to, so a reply lands without an
   // extra fetch from us.
-  const send = useSendMessage({ channelId, conversationId });
+  const send = useSendMessage({ channelId, conversationId, authorID: currentUserId });
   const editMessage = useEditMessage();
   const isMobile = useIsMobile();
   // Desktop edits inline inside the MessageItem; mobile routes them to this
@@ -362,7 +362,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
           onSend={activeEditingMessage ? handleEditMessage : handleReply}
           onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
           submitLabel={activeEditingMessage ? 'Save' : undefined}
-          disabled={activeEditingMessage ? editMessage.isPending : send.isPending}
+          disabled={!!activeEditingMessage && editMessage.isPending}
           placeholder={activeEditingMessage ? 'Edit message…' : 'Reply…'}
           initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}
           initialDrafts={activeEditingMessage ? [] : draftAttachments}

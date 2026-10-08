@@ -55,7 +55,9 @@ export function buildMessageListRows(allMessages: Message[], unreadBeforeID?: st
       out.push({ kind: 'unread', key: UNREAD_DIVIDER_KEY });
       prev = null;
     }
-    out.push({ kind: 'message', key: msg.id, message: msg, firstInGroup: !isGroupedWithPrevious(prev, msg) });
+    // Keyed by the client nonce when there is one, so an optimistic row keeps
+    // its identity when the real message replaces it (it fades in, no remount).
+    out.push({ kind: 'message', key: msg.clientNonce ?? msg.id, message: msg, firstInGroup: !isGroupedWithPrevious(prev, msg) });
     prev = msg;
   }
   return out;

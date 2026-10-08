@@ -106,7 +106,7 @@ export function ThreadPanel({
     [mergedUserMap],
   );
 
-  const send = useSendMessage({ channelId, conversationId });
+  const send = useSendMessage({ channelId, conversationId, authorID: currentUserId });
   const { pendingInvites, channelSlug, checkMentions, clearInvites } = useNonMemberInvite(channelId, currentUserId);
   const inputRef = useRef<MessageInputHandle>(null);
   const parentID = channelId ?? conversationId;
@@ -528,8 +528,9 @@ export function ThreadPanel({
               const u = mergedUserMap[msg.authorID];
               const firstUnread = msg.id === threadDividerID;
               return (
-                <Fragment key={msg.id}>
-                  {firstUnread && <UnreadDivider />}
+                <Fragment key={msg.clientNonce ?? msg.id}>
+                  {/* Inset to the replies' avatars (item px-3, inside this p-2). */}
+                  {firstUnread && <UnreadDivider inset="px-3" />}
                   <MessageItem
                     message={msg}
                     firstInGroup={firstUnread || !isGroupedWithPrevious(index > 0 ? data[index - 1] : null, msg)}
@@ -568,7 +569,7 @@ export function ThreadPanel({
             ref={inputRef}
             onSend={activeEditingMessage ? handleEditMessage : handleReply}
             onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
-            disabled={activeEditingMessage ? editMessage.isPending : send.isPending}
+            disabled={!!activeEditingMessage && editMessage.isPending}
             placeholder={activeEditingMessage ? 'Edit message...' : 'Reply...'}
             focusKey={activeEditingMessage ? `edit-${activeEditingMessage.id}` : threadRootID}
             initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}

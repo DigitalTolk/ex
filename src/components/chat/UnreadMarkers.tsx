@@ -1,17 +1,22 @@
 import { ArrowDown, ArrowUp } from 'lucide-react';
 
-// UnreadDivider is the "New messages" line above the first unread message.
-export function UnreadDivider() {
+// UnreadDivider is the "New messages" line above the first unread message:
+// centred like the day divider, in red, and inset so it starts and ends
+// where the messages do rather than running to the edges. The default inset
+// lines it up with the main list's avatars (row px-4 + item px-3 = 28px);
+// the thread panel passes its own.
+export function UnreadDivider({ inset = 'px-7' }: { inset?: string }) {
   return (
     <div
       data-testid="unread-divider"
       data-unread-divider=""
-      className="flex items-center gap-3 px-4 py-1"
+      className={`flex items-center gap-3 py-1 ${inset}`}
       role="separator"
       aria-label="New messages"
     >
-      <div className="flex-1 border-t border-destructive/70" />
-      <span className="text-xs font-semibold text-destructive">New messages</span>
+      <div className="flex-1 border-t border-destructive/60" />
+      <span className="shrink-0 text-xs font-semibold text-destructive">New messages</span>
+      <div className="flex-1 border-t border-destructive/60" />
     </div>
   );
 }

@@ -274,22 +274,18 @@ func TestListUserConversationIDs(t *testing.T) {
 	svc := NewConversationService(convs, newMockUserStore(), nil, nil, nil)
 	convs.userConvs["u-1"] = []*model.UserConversation{
 		{UserID: "u-1", ConversationID: "c-active", Activated: true},
-		// Not yet activated and created by someone else → hidden, same rule
-		// as the full list.
-		{UserID: "u-1", ConversationID: "c-hidden", Activated: false, CreatedBy: "u-2"},
-		// Not activated but the user created it → visible.
+		// Not yet activated and created by someone else: hidden from the
+		// sidebar list, but its topic must be subscribed so the first message
+		// arrives live (a socket can connect between creation and that message).
+		{UserID: "u-1", ConversationID: "c-pending", Activated: false, CreatedBy: "u-2"},
 		{UserID: "u-1", ConversationID: "c-own", Activated: false, CreatedBy: "u-1"},
 	}
 	ids, err := svc.ListUserConversationIDs(context.Background(), "u-1")
-	if err != nil || len(ids) != 2 {
-		t.Fatalf("ids = %v (err=%v), want [c-active c-own]", ids, err)
+	if err != nil || len(ids) != 3 {
+		t.Fatalf("ids = %v (err=%v), want [c-active c-pending c-own]", ids, err)
 	}
-	seen := map[string]bool{}
-	for _, id := range ids {
-		seen[id] = true
-	}
-	if !seen["c-active"] || !seen["c-own"] || seen["c-hidden"] {
-		t.Fatalf("ids = %v", ids)
+	if visible, _ := svc.ListUserConversations(context.Background(), "u-1"); len(visible) != 2 {
+		t.Fatalf("the sidebar list still hides the pending DM, got %d rows", len(visible))
 	}
 
 	convs.listErr = errors.New("dynamo down")

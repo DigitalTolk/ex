@@ -496,6 +496,7 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 		ParentMessageID: parentMessageID,
 		AttachmentIDs:   attachmentIDs,
 		NoIndex:         noIndex,
+		ClientNonce:     clientNonce(ctx),
 		CreatedAt:       now,
 	}
 	// Agent path (SendAsAgent): record whose invocation this post serves.

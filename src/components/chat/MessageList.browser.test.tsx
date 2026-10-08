@@ -27,6 +27,7 @@ vi.mock('@/hooks/useEmoji', () => ({
 }));
 
 vi.mock('@/hooks/useMessages', () => ({
+  usePendingMessageActions: () => ({ retry: vi.fn(), discard: vi.fn() }),
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),
@@ -42,6 +43,8 @@ vi.mock('@/hooks/useActivity', () => ({
 vi.mock('@/hooks/useMarkUnread', () => ({
   useMarkUnread: () => ({ mutate: vi.fn(), isPending: false }),
 }));
+// The list reads which threads are unread from the query cache.
+vi.mock('@/hooks/useUnreadThreads', () => ({ useUnreadThreadIDs: () => new Set<string>() }));
 
 // MessageItem also queries the viewer's thread watchers and the agent roster
 // (react-query) — same deal: no QueryClientProvider here, so stub the hooks.

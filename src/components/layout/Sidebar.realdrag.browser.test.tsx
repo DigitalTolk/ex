@@ -91,6 +91,7 @@ vi.mock('@/hooks/useThreads', () => ({
   getSeenMap: () => ({}),
   mergeSeenMaps: (server: Record<string, string> | undefined, local: Record<string, string>) => ({ ...(server ?? {}), ...local }),
   unreadThreadIDs: () => new Set<string>(),
+  unreadThreadParents: () => new Set<string>(),
   useUserThreads: () => ({ data: [] }),
 }));
 vi.mock('@/hooks/useUserState', () => ({

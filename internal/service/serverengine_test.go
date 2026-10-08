@@ -621,6 +621,11 @@ func TestServerSystemRules_WatchInstruction(t *testing.T) {
 	if !strings.Contains(s, "Standing order") || !strings.Contains(s, "watch deploys") || !strings.Contains(s, "SKIP") {
 		t.Fatalf("watch rules missing: %q", s)
 	}
+	// A scheduled order has no trigger to judge: it must deliver, never SKIP.
+	s = serverSystemRules(&Assignment{AgentName: "qib", InvokerName: "Alice", Persona: "p", WatchInstruction: "post revenue", Mode: model.RunModeScheduled}, "")
+	if !strings.Contains(s, "Standing order (scheduled)") || !strings.Contains(s, "post revenue") || strings.Contains(s, "reply exactly SKIP") {
+		t.Fatalf("scheduled rules wrong: %q", s)
+	}
 }
 
 func TestOrchestrator_ClaimServerRunArms(t *testing.T) {

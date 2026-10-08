@@ -22,6 +22,7 @@ import {
 import { ReminderDialog } from '@/components/chat/ReminderDialog';
 import { WatcherDialog } from '@/components/chat/WatcherDialog';
 import { useCreateReminder } from '@/hooks/useActivity';
+import { NotSentMark } from '@/components/chat/MessageSendState';
 import { useMarkUnread } from '@/hooks/useMarkUnread';
 import { useParentWatchers, useSkills } from '@/hooks/useAgents';
 import { useConnectors } from '@/hooks/useConnectors';
@@ -108,6 +109,9 @@ interface MessageItemProps {
   // The viewer's most-used emoji (shortcodes), shown as one-tap reaction
   // shortcuts in the hover action bar. Empty/omitted → no shortcuts.
   quickReactions?: string[];
+  // This root's thread has replies the viewer hasn't read: its reply bar
+  // says so.
+  threadHasNew?: boolean;
 }
 
 function formatTime(dateStr: string): string {
@@ -115,6 +119,17 @@ function formatTime(dateStr: string): string {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+// formatShortTime is the clock alone ("10:45", no AM/PM) — what fits a
+// continuation row's avatar-wide gutter; the full time is in its tooltip.
+function formatShortTime(dateStr: string): string {
+  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' })
+    .formatToParts(new Date(dateStr))
+    .filter((part) => part.type !== 'dayPeriod')
+    .map((part) => part.value)
+    .join('')
+    .trim();
 }
 
 // One reaction chip. Tap toggles the viewer's reaction; the "who reacted"
@@ -207,6 +222,7 @@ function MessageItemImpl({
   highlighted,
   onContentHeightChange,
   quickReactions,
+  threadHasNew,
 }: MessageItemProps) {
   const isWebhook = !!message.webhookUsername;
   // Per-author presence subscription: only rows whose author actually
@@ -599,7 +615,10 @@ function MessageItemImpl({
   // small threshold or release cancels; the haptic fires inside the hook).
   // This used to be a hand-rolled copy of the same pattern — keep the one
   // implementation in the hook.
-  const mobileActionsAvailable = !isEditing && !message.deleted && !message.system;
+  // An optimistic row (still sending, or failed) has no actions yet: it isn't
+  // a real message until the server confirms it.
+  const pendingState = message.pendingState;
+  const mobileActionsAvailable = !isEditing && !message.deleted && !message.system && !pendingState;
   function openMobileActions() {
     // Opening the action bar should dismiss the keyboard if the composer had
     // focus, so the sheet isn't fighting the keyboard.
@@ -844,9 +863,12 @@ function MessageItemImpl({
         event.preventDefault();
         if (mobileActionsAvailable) openMobileActions();
       }}
-      className={`relative flex items-start gap-3 rounded-md px-2 ${firstInGroup ? 'py-1.5' : 'py-0.5'} hover:bg-chat-hover ${
-        message.pinned ? 'border-l-2 border-pinned pl-2' : ''
+      // px-3 matches the gap-3 to the text, so the avatar sits balanced:
+      // 12px either side of it inside the row (pinned: 2px border + 10px).
+      className={`relative flex items-start gap-3 rounded-md px-3 ${firstInGroup ? 'py-1.5' : 'py-0.5'} hover:bg-chat-hover ${
+        message.pinned ? 'border-l-2 border-pinned pl-2.5' : ''
       } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]`}
+      data-pending={pendingState}
     >
       {firstInGroup ? (
         <UserHoverCard
@@ -858,11 +880,10 @@ function MessageItemImpl({
           currentUserId={currentUserId}
           showInlineStatus={false}
           integrationOwnerName={integrationOwnerName}
-          // Match the continuation gutter width (w-14) so the body aligns
-          // identically on first-in-group and grouped rows; the avatar
-          // hugs the right of the wider left column so it sits close to the
-          // text, leaving the extra breathing room on the far left.
-          triggerClassName="inline-flex w-14 shrink-0 cursor-pointer items-center justify-end"
+          // The avatar's own width, matching the continuation gutter (w-9)
+          // so the body aligns identically on first-in-group and grouped
+          // rows — no dead space beside the avatar.
+          triggerClassName="inline-flex w-9 shrink-0 cursor-pointer items-center justify-center"
         >
           {message.webhookIconEmoji ? (
             <div
@@ -883,22 +904,30 @@ function MessageItemImpl({
           )}
         </UserHoverCard>
       ) : (
-        // Compact continuation: the left column matches the avatar slot
-        // (w-12) so the body aligns with first-in-group rows, and reveals
-        // the message time there on hover. Right-aligned so the time sits
-        // under the right-hugging avatar, close to the text. Wide enough to
-        // fit a readable 12px (text-xs) EU-style "15:55" on one line —
-        // wrapping would reserve a second line of height on every grouped
-        // row (even while invisible at opacity-0), bloating the list.
-        <div className="w-14 shrink-0 select-none text-right" data-testid="group-time-gutter">
-          <time
-            dateTime={message.createdAt}
-            className={`whitespace-nowrap text-xs leading-5 tabular-nums text-muted-foreground transition-opacity ${
-              hovered ? 'opacity-100' : 'opacity-0'
-            }`}
-          >
-            {formatTime(message.createdAt)}
-          </time>
+        // Compact continuation: a column the avatar's width so the body
+        // aligns with first-in-group rows, revealing the clock time ("10:45")
+        // on hover — small enough to fit it, full time in the tooltip. One
+        // text line tall (leading-5) so it never makes the row taller.
+        <div className="relative w-9 shrink-0 select-none text-center text-[11px] leading-5" data-testid="group-time-gutter">
+          <Tooltip>
+            <TooltipTrigger
+              className={`cursor-default whitespace-nowrap tabular-nums text-muted-foreground transition-opacity ${
+                // Hidden under the failed mark: kept at opacity 0 too, so it
+                // can't flash while fading back out once the mark goes.
+                pendingState === 'failed' ? 'invisible opacity-0' : hovered ? 'opacity-100' : 'opacity-0'
+              }`}
+              render={<time dateTime={message.createdAt} />}
+            >
+              {formatShortTime(message.createdAt)}
+            </TooltipTrigger>
+            <TooltipContent>{formatLongDateTime(message.createdAt)}</TooltipContent>
+          </Tooltip>
+          {pendingState === 'failed' && (
+            // Laid over the (hidden) time so the gutter keeps its exact size.
+            <span className="absolute inset-x-0 top-0 flex h-5 items-center justify-center">
+              <NotSentMark message={message} />
+            </span>
+          )}
         </div>
       )}
 
@@ -988,6 +1017,7 @@ function MessageItemImpl({
               {formatLongDateTime(message.createdAt)}
             </TooltipContent>
           </Tooltip>
+          {pendingState === 'failed' && <NotSentMark message={message} showLabel />}
           {message.editedAt && (
             <span className="text-xs text-muted-foreground">(edited)</span>
           )}
@@ -1043,7 +1073,19 @@ function MessageItemImpl({
           </p>
         ) : (
           <>
-            <div className="text-sm prose-message">
+            {pendingState === 'sending' && (
+              // Outside .prose-message: its sibling-margin rule would push
+              // the text down while sending.
+              <span role="status" className="sr-only" data-testid="message-sending">
+                Sending
+              </span>
+            )}
+            {/* Sending: the text is greyed until the server confirms it. */}
+            <div
+              className={`text-sm prose-message transition-colors duration-150 ${
+                pendingState === 'sending' ? 'text-muted-foreground' : ''
+              }`}
+            >
               <MessageBody
                 message={message}
                 emojiMap={emojiMap}
@@ -1148,13 +1190,14 @@ function MessageItemImpl({
                 lastReplyAt={message.lastReplyAt}
                 onClick={(id) => onReplyInThread?.(id)}
                 userMap={userMap}
+                hasNew={threadHasNew}
               />
             )}
           </>
         )}
       </div>
 
-      {!isEditing && !message.deleted && (
+      {!isEditing && !message.deleted && !pendingState && (
         <div
           className="absolute right-2 -top-3 flex items-center gap-0.5 rounded-md border border-border bg-background shadow-sm dark:border-border-strong transition-opacity touch:hidden"
           style={{ opacity: toolbarVisible ? 1 : 0 }}

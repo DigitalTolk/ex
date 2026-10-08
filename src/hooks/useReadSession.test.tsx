@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StrictMode, type ReactNode } from 'react';
 import { useReadSession } from './useReadSession';
 import { queryKeys } from '@/lib/query-keys';
-import { endReadSession, getUnreadAnchor, holdRead, isAtBottom, isReadHeld, setAtBottom, setUnreadAnchor } from '@/lib/read-position';
+import { endReadSession, getUnreadAnchor, holdRead, isAtBottom, isReadHeld, noteMissedArrival, setAtBottom, setUnreadAnchor, useMissedArrivals } from '@/lib/read-position';
 import type { UserChannel, UserConversation } from '@/types';
 
 function makeQC(unreadCount?: number) {
@@ -140,5 +140,28 @@ describe('useReadSession', () => {
       result.current.markAllRead();
     });
     expect(markRead).not.toHaveBeenCalled();
+  });
+
+  it('jumping to the latest forgets missed arrivals and puts the line where the unread start', () => {
+    const qc = makeQC(0);
+    const { result } = render(qc, 'ch-1');
+    const missed = renderHook(() => useMissedArrivals('ch-1'));
+    act(() => noteMissedArrival('ch-1'));
+    expect(missed.result.current).toBe(1);
+    act(() => result.current.prepareJumpToLatest());
+    expect(missed.result.current).toBe(0);
+    expect(getUnreadAnchor('ch-1')).toBeUndefined(); // nothing unread: no line
+    qc.setQueryData<UserChannel[]>(queryKeys.userChannels(), (rows) => rows!.map((c) => ({ ...c, unreadCount: 3 })));
+    setUnreadAnchor('ch-1', { kind: 'message', messageID: 'older' });
+    act(() => result.current.prepareJumpToLatest());
+    expect(getUnreadAnchor('ch-1')).toEqual({ kind: 'count', count: 3 });
+  });
+
+  it('jumping to the latest without a chat, or before its row loads, draws nothing', () => {
+    const none = render(makeQC(2), undefined);
+    act(() => none.result.current.prepareJumpToLatest());
+    const bare = render(new QueryClient(), 'ch-2');
+    act(() => bare.result.current.prepareJumpToLatest());
+    expect(getUnreadAnchor('ch-2')).toBeUndefined();
   });
 });

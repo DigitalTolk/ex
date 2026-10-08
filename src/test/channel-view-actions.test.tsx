@@ -93,6 +93,7 @@ const unreadValue = {
   isActiveThread: vi.fn(() => false),
 };
 vi.mock('@/context/UnreadContext', () => ({
+  useOptionalUnread: () => undefined,
   useUnread: () => unreadValue,
 }));
 

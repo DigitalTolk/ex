@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -239,5 +240,36 @@ func TestReminderService_FireWithoutDelivery(t *testing.T) {
 	svc.now = func() time.Time { return time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC) }
 	if n, err := svc.ProcessDue(context.Background()); err != nil || n != 1 {
 		t.Fatalf("ProcessDue without delivery = %d, %v", n, err)
+	}
+}
+
+type perUserAccess map[string]error
+
+func (p perUserAccess) CheckAccess(_ context.Context, userID, _, _ string) error { return p[userID] }
+
+// A reminder whose owner has since left (or been removed from, or seen
+// archived) its channel is dropped: the alert would open "access denied".
+// A check that merely failed still fires — losing a reminder is worse.
+func TestReminderService_DropsReminderOwnerCanNoLongerOpen(t *testing.T) {
+	rs := &fakeReminderStore{due: []*model.Reminder{
+		{ID: "r1", UserID: "u-left", MessageID: "m-1", ParentID: "ch-1", ParentType: ParentChannel, ChannelSlug: "ops"},
+		{ID: "r2", UserID: "u-flaky", MessageID: "m-2", ParentID: "ch-1", ParentType: ParentChannel, ChannelSlug: "ops"},
+		{ID: "r3", UserID: "u-member", MessageID: "m-3", ParentID: "ch-1", ParentType: ParentChannel, ChannelSlug: "ops"},
+	}}
+	svc := NewReminderService(rs, &fakeMessageGetter{}, perUserAccess{
+		"u-left":  fmt.Errorf("message: not a channel member: %w", ErrForbidden),
+		"u-flaky": errors.New("dynamo timeout"),
+	})
+	act, notif := &spyActivityAdder{}, &spyDirectNotifier{}
+	svc.SetDelivery(act, notif)
+
+	if n, err := svc.ProcessDue(context.Background()); err != nil || n != 3 {
+		t.Fatalf("ProcessDue = %d, %v; want all 3 claimed", n, err)
+	}
+	if len(notif.notifs) != 2 || notif.notifs[0].AlertID != "r2" || notif.notifs[1].AlertID != "r3" {
+		t.Fatalf("alerts = %+v, want r2 and r3 only", notif.notifs)
+	}
+	if len(act.items) != 2 {
+		t.Fatalf("activity items = %d, want 2 (none for the dropped reminder)", len(act.items))
 	}
 }

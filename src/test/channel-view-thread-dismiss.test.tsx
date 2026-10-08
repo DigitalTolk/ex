@@ -69,6 +69,7 @@ vi.mock('@/context/AuthContext', () => ({
 }));
 
 vi.mock('@/context/UnreadContext', () => ({
+  useOptionalUnread: () => undefined,
   useUnread: () => ({
     unreadChannels: new Set(),
     unreadChannelNotifications: new Set(),
@@ -125,7 +126,8 @@ vi.mock('@/hooks/useMessages', () => ({
   useSetPinned: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
-vi.mock('@/hooks/useThreads', () => ({
+vi.mock('@/hooks/useThreads', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useThreads')>()),
   useThreadMessages: () => ({ data: [], isLoading: false }),
   useUserThreads: () => ({ data: [] }),
   useFollowThread: () => ({ mutate: vi.fn(), isPending: false }),

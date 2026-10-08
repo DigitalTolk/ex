@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, act } from '@testing-library/react';
+import { render, act, renderHook } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import ChatPage from '@/pages/ChatPage';
 import { apiFetch } from '@/lib/api';
 import { resetServerVersionForTests } from '@/hooks/useServerVersion';
 import { forceAwayUntilInput, resetUserActivityForTests } from '@/lib/user-activity';
-import { endReadSession, getUnreadAnchor, holdRead, isReadHeld, setAtBottom, threadReadKey } from '@/lib/read-position';
+import { endReadSession, getUnreadAnchor, holdRead, isReadHeld, setAtBottom, setAtLiveTail, threadReadKey, useMissedArrivals } from '@/lib/read-position';
 
 let capturedOptions: Record<string, ((data: unknown) => void) | boolean | undefined> = {};
 const authUserMock = vi.hoisted(() => ({
@@ -1165,6 +1165,18 @@ describe('ChatPage WebSocket handlers', () => {
       renderAt('/', seed(3));
       arrive({ id: 'msg-later' });
       expect(getUnreadAnchor('ch-1')).toBeUndefined();
+    });
+
+    it('a list opened on older history counts the arrival for its pill instead of drawing a line', () => {
+      isActiveChannel.mockReturnValue(true);
+      renderAt('/', seed(0));
+      setAtLiveTail('ch-1', false);
+      const missed = renderHook(() => useMissedArrivals('ch-1'));
+      arrive({ id: 'msg-unseen' });
+      expect(bumpChannelUnread).toHaveBeenCalled();
+      expect(missed.result.current).toBe(1);
+      expect(getUnreadAnchor('ch-1')).toBeUndefined();
+      missed.unmount();
     });
 
     it('a chat you are not in gets a badge but no line', () => {

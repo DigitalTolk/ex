@@ -144,7 +144,8 @@ func (s *ReminderService) Cancel(ctx context.Context, userID, id string) error {
 }
 
 // ProcessDue claims and fires every reminder due at or before now. Returns the
-// number fired. Safe to call concurrently across instances — claiming is atomic.
+// number claimed (a reminder its owner can no longer open is claimed but not
+// delivered). Safe to call concurrently across instances — claiming is atomic.
 func (s *ReminderService) ProcessDue(ctx context.Context) (int, error) {
 	fired := 0
 	for {
@@ -165,6 +166,14 @@ func (s *ReminderService) ProcessDue(ctx context.Context) (int, error) {
 // fire delivers a claimed reminder: an activity-stream entry plus a desktop +
 // mobile alert.
 func (s *ReminderService) fire(ctx context.Context, r *model.Reminder) {
+	// The owner may have left the channel, been removed from it, or seen it
+	// archived since setting this: the alert would link to a page they can
+	// no longer open. Only a definitive denial drops it — a failed check
+	// still fires, since a lost reminder is worse than a dead link.
+	if err := s.access.CheckAccess(ctx, r.UserID, r.ParentID, r.ParentType); errors.Is(err, ErrForbidden) {
+		slog.Info("reminder dropped: owner no longer has access", "userID", r.UserID, "parentID", r.ParentID)
+		return
+	}
 	now := s.now()
 	if s.activity != nil {
 		s.activity.AddItem(ctx, r.UserID, &model.ActivityItem{

@@ -33,10 +33,12 @@ import {
   Route,
   Routes,
   Link,
+  useLocation,
   useNavigate,
 } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConversationView } from '@/components/chat/ConversationView';
+import { endReadSession, noteMissedArrival } from '@/lib/read-position';
 import type { Conversation } from '@/types';
 
 // Pins down the network behaviour the user has been reporting issues
@@ -70,6 +72,7 @@ vi.mock('@/context/AuthContext', () => ({
 }));
 
 vi.mock('@/context/UnreadContext', () => ({
+  useOptionalUnread: () => undefined,
   useUnread: () => ({
     unreadChannels: new Set(),
     unreadChannelNotifications: new Set(),
@@ -269,6 +272,46 @@ describe('ConversationView — SPA navigation with deep-link anchor', () => {
     // The second-wave call(s) for messages must include an around=b
     // request — not just an ?after= continuation of the first window.
     expect(secondWaveCalls.some((u) => u.includes('around=b'))).toBe(true);
+  });
+
+  it('a message arriving while a link-opened window is shown offers a jump to the newest, keeping the URL', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/conversations/conv-1/messages')) {
+        const linked = url.includes('around=');
+        return Promise.resolve({
+          items: [{ id: linked ? 'old' : 'new', parentID: 'conv-1', authorID: 'u-2', body: 'x', createdAt: '2026-01-01T00:00:00Z' }],
+          hasMoreOlder: false,
+          hasMoreNewer: linked, // the linked window stops short of the newest
+          oldestID: linked ? 'old' : 'new',
+          newestID: linked ? 'old' : 'new',
+        });
+      }
+      return Promise.resolve([]);
+    });
+    function Where() {
+      const loc = useLocation();
+      return <span data-testid="where">{loc.pathname + loc.hash}</span>;
+    }
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/conversation/conv-1#msg-old']}>
+          <Routes>
+            <Route path="/conversation/:id" element={<><ConversationView /><Where /></>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const messageCalls = () =>
+      apiFetchMock.mock.calls.map((c) => String(c[0])).filter((u) => u.startsWith('/api/v1/conversations/conv-1/messages'));
+    await waitFor(() => expect(messageCalls().some((u) => u.includes('around=old'))).toBe(true));
+    await act(async () => noteMissedArrival('conv-1'));
+    const pill = await screen.findByTestId('unread-below-pill');
+    await act(async () => pill.click());
+    await waitFor(() => expect(messageCalls().some((u) => !u.includes('around='))).toBe(true));
+    expect(screen.getByTestId('where').textContent).toBe('/conversation/conv-1#msg-old');
+    await waitFor(() => expect(screen.queryByTestId('unread-below-pill')).toBeNull());
+    endReadSession('conv-1');
   });
 
   // The "thread replies don't consume the page budget" guarantee

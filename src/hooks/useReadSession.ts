@@ -3,6 +3,7 @@ import { notifyManager, useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/query-keys';
 import { cachedUnreadCount } from '@/lib/unread-cache';
 import {
+  clearMissedArrivals,
   clearUnreadAnchor,
   isAtBottom,
   isReadHeld,
@@ -19,6 +20,9 @@ export interface ReadSession {
   onAtBottomChange: (atBottom: boolean) => void;
   // The banner's "Mark as read": clears the line and any unread hold.
   markAllRead: () => void;
+  // Before leaving a link-opened window for the newest messages: forget the
+  // missed arrivals and put the line where the unread messages start.
+  prepareJumpToLatest: () => void;
 }
 
 // useReadSession runs an open chat's read lifecycle, Slack/Mattermost style:
@@ -80,7 +84,14 @@ export function useReadSession(
     markRead(parentID);
   }, [parentID, markRead]);
 
-  return { onAtBottomChange, markAllRead };
+  const prepareJumpToLatest = useCallback(() => {
+    if (!parentID) return;
+    clearMissedArrivals(parentID);
+    const pending = cachedUnreadCount(queryClient, parentType, parentID) ?? 0;
+    if (pending > 0) setUnreadAnchor(parentID, { kind: 'count', count: pending }, { replace: true });
+  }, [parentID, parentType, queryClient]);
+
+  return { onAtBottomChange, markAllRead, prepareJumpToLatest };
 }
 
 // useListSettled: the sidebar list holding this chat's unread count has

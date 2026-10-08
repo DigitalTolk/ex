@@ -23,6 +23,8 @@ export type UnreadAnchor =
 const anchors = new Map<string, UnreadAnchor>();
 const holds = new Set<string>();
 const notAtBottom = new Set<string>();
+const notAtLiveTail = new Set<string>();
+const missed = new Map<string, number>();
 const listeners = new Set<() => void>();
 
 function emit(): void {
@@ -76,9 +78,33 @@ export function isAtBottom(key: string): boolean {
   return !notAtBottom.has(key);
 }
 
+// A list opened from a link (search, "jump to message", a thread alert) shows
+// a window of history that may not reach the newest messages. Arrivals can't
+// be shown in it, so they're counted as missed for the list's "new messages"
+// pill instead of being read.
+export function setAtLiveTail(key: string, atTail: boolean): void {
+  if (atTail) notAtLiveTail.delete(key);
+  else notAtLiveTail.add(key);
+}
+
+export function isAtLiveTail(key: string): boolean {
+  return !notAtLiveTail.has(key);
+}
+
+export function noteMissedArrival(key: string): void {
+  missed.set(key, (missed.get(key) ?? 0) + 1);
+  emit();
+}
+
+export function clearMissedArrivals(key: string): void {
+  if (missed.delete(key)) emit();
+}
+
 export function endReadSession(key: string): void {
   holds.delete(key);
   notAtBottom.delete(key);
+  notAtLiveTail.delete(key);
+  clearMissedArrivals(key);
   clearUnreadAnchor(key);
 }
 
@@ -112,4 +138,8 @@ function subscribe(listener: () => void): () => void {
 
 export function useUnreadAnchor(key: string | undefined): UnreadAnchor | undefined {
   return useSyncExternalStore(subscribe, () => (key ? anchors.get(key) : undefined));
+}
+
+export function useMissedArrivals(key: string | undefined): number {
+  return useSyncExternalStore(subscribe, () => (key ? (missed.get(key) ?? 0) : 0));
 }
