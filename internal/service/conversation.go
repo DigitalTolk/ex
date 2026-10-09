@@ -32,6 +32,7 @@ type ConversationService struct {
 	mediaCache MediaURLCache
 	broker     Broker
 	publisher  Publisher
+	activity   ActivityReadTracker
 }
 
 // NewConversationService creates a ConversationService with the given
@@ -50,6 +51,10 @@ func NewConversationService(conversations ConversationStore, users UserStore, _ 
 // SetMediaURLCache enables stable /api/v1/media URLs for transient DM avatar
 // enrichments. The URL is still derived from the authoritative user AvatarKey.
 func (s *ConversationService) SetMediaURLCache(c MediaURLCache) { s.mediaCache = c }
+
+// SetActivityTracker wires the Activity tab, so reading a conversation reads
+// its activity items. Optional.
+func (s *ConversationService) SetActivityTracker(t ActivityReadTracker) { s.activity = t }
 
 // SetUserProfileResolver lets list responses use the same cached/profile-
 // normalized user reads as the user API without changing conversation storage.
@@ -507,6 +512,9 @@ func (s *ConversationService) MarkConversationRead(ctx context.Context, userID, 
 	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
 		"conversationID": convID,
 	})
+	if s.activity != nil {
+		s.activity.MarkParentRead(ctx, userID, convID, "", time.Now())
+	}
 	return nil
 }
 

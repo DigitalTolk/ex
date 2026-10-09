@@ -9,6 +9,7 @@ import { useNotifications, type NotificationPayload } from '@/context/Notificati
 import { useTyping } from '@/context/TypingContext';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { setServerVersion } from '@/hooks/useServerVersion';
+import { applyActivityChangedEvent, applyActivityNewEvent } from '@/hooks/useActivity';
 import { sendWS } from '@/lib/ws-sender';
 import { localTimeZone } from '@/lib/user-time';
 import { isUserAttentive, suppressionWindowMs } from '@/lib/user-activity';
@@ -357,21 +358,21 @@ export default function ChatPage() {
     onWebhookChanged: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.incomingWebhooks() });
     },
-    onActivityNew: () => {
-      // A reaction hint or fired reminder landed — refetch the durable activity
-      // stream (source of truth) so the sidebar badge + list update live.
-      queryClient.invalidateQueries({ queryKey: queryKeys.activity() });
+    onActivityNew: (data: unknown) => {
+      // An item landed in the activity stream — add it from the payload so the
+      // sidebar badge + list update without refetching the whole feed.
+      applyActivityNewEvent(queryClient, data);
     },
     onScheduledMessagesChanged: () => {
       // Scheduled, edited, sent or failed on another tab/device (or by the
       // server at send time) — refetch the Scheduled list.
       queryClient.invalidateQueries({ queryKey: queryKeys.scheduledMessages() });
     },
-    onActivityRead: () => {
-      // The feed was marked read on another device/tab — refetch so this
-      // device's badge clears too instead of lingering until the next
+    onActivityRead: (data: unknown) => {
+      // Items were marked read/unread or removed (here or on another device),
+      // so every device's badge follows instead of lingering until the next
       // activity.new (SPEC GAP-3 / I-4).
-      queryClient.invalidateQueries({ queryKey: queryKeys.activity() });
+      applyActivityChangedEvent(queryClient, data);
     },
     onThreadUpdated: (data: unknown) => {
       // Participant-scoped reply metadata: the server only sends this to users

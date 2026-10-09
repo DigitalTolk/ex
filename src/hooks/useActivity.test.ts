@@ -3,11 +3,15 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement, type ReactNode } from 'react';
 import {
+  applyActivityChangedEvent,
+  applyActivityNewEvent,
   useActivity,
   useReminders,
   useCreateReminder,
   useCancelReminder,
   useMarkActivityRead,
+  useRemoveActivityItems,
+  useSetActivityItemsRead,
 } from './useActivity';
 import { queryKeys } from '@/lib/query-keys';
 import type { ActivityFeed } from '@/types';
@@ -34,10 +38,11 @@ describe('useActivity hooks', () => {
   });
 
   it('useActivity returns the feed', async () => {
-    vi.mocked(apiFetch).mockResolvedValue({ items: [{ id: 'a' }], unread: 2 });
+    vi.mocked(apiFetch).mockResolvedValue({ items: [{ id: 'a' }], unread: 2, unreadByType: { mention: 2 } });
     const { result } = renderHook(() => useActivity(), { wrapper: wrapperFor(makeClient()) });
     await waitFor(() => expect(result.current.data).toBeDefined());
     expect(result.current.data?.unread).toBe(2);
+    expect(result.current.data?.unreadByType).toEqual({ mention: 2 });
     expect(result.current.data?.items).toHaveLength(1);
   });
 
@@ -45,7 +50,7 @@ describe('useActivity hooks', () => {
     vi.mocked(apiFetch).mockResolvedValue({ nope: true });
     const { result } = renderHook(() => useActivity(), { wrapper: wrapperFor(makeClient()) });
     await waitFor(() => expect(result.current.data).toBeDefined());
-    expect(result.current.data).toEqual({ items: [], unread: 0 });
+    expect(result.current.data).toEqual({ items: [], unread: 0, unreadByType: {} });
   });
 
   it('useActivity defaults a missing unread count to 0', async () => {
@@ -53,6 +58,7 @@ describe('useActivity hooks', () => {
     const { result } = renderHook(() => useActivity(), { wrapper: wrapperFor(makeClient()) });
     await waitFor(() => expect(result.current.data).toBeDefined());
     expect(result.current.data?.unread).toBe(0);
+    expect(result.current.data?.unreadByType).toEqual({});
   });
 
   it('useReminders coerces a non-array to []', async () => {
@@ -102,10 +108,17 @@ describe('useActivity hooks', () => {
   it('useMarkActivityRead zeroes the unread count in cache', async () => {
     vi.mocked(apiFetch).mockResolvedValue(undefined);
     const client = makeClient();
-    client.setQueryData<ActivityFeed>(queryKeys.activity(), { items: [{ id: 'a' } as never], unread: 5 });
+    client.setQueryData<ActivityFeed>(queryKeys.activity(), {
+      items: [{ id: 'a', read: false } as never],
+      unread: 5,
+      unreadByType: { mention: 5 },
+    });
     const { result } = renderHook(() => useMarkActivityRead(), { wrapper: wrapperFor(client) });
     await result.current.mutateAsync();
-    expect(client.getQueryData<ActivityFeed>(queryKeys.activity())?.unread).toBe(0);
+    const feed = client.getQueryData<ActivityFeed>(queryKeys.activity());
+    expect(feed?.unread).toBe(0);
+    expect(feed?.unreadByType).toEqual({});
+    expect(feed?.items[0].read).toBe(true);
   });
 
   it('useMarkActivityRead cancels the in-flight activity fetch and reconciles so a stale read cannot clobber the zero', async () => {
@@ -113,7 +126,7 @@ describe('useActivity hooks', () => {
     const client = makeClient();
     const cancelSpy = vi.spyOn(client, 'cancelQueries');
     const invalidateSpy = vi.spyOn(client, 'invalidateQueries');
-    client.setQueryData<ActivityFeed>(queryKeys.activity(), { items: [{ id: 'a' } as never], unread: 3 });
+    client.setQueryData<ActivityFeed>(queryKeys.activity(), { items: [{ id: 'a' } as never], unread: 3, unreadByType: {} });
     const { result } = renderHook(() => useMarkActivityRead(), { wrapper: wrapperFor(client) });
     await result.current.mutateAsync();
     // In-flight GET is aborted before the optimistic zero so it can't overwrite it.
@@ -129,5 +142,120 @@ describe('useActivity hooks', () => {
     const { result } = renderHook(() => useMarkActivityRead(), { wrapper: wrapperFor(client) });
     await result.current.mutateAsync();
     expect(client.getQueryData(queryKeys.activity())).toBeUndefined();
+  });
+
+  it('useMarkActivityRead toasts when the write fails', async () => {
+    vi.mocked(apiFetch).mockRejectedValue(new Error('500'));
+    const { result } = renderHook(() => useMarkActivityRead(), { wrapper: wrapperFor(makeClient()) });
+    await expect(result.current.mutateAsync()).rejects.toThrow();
+    expect(showToast).toHaveBeenCalledWith("Couldn't update activity — please try again.");
+  });
+
+  it('useSetActivityItemsRead PUTs the ids and patches the cache optimistically', async () => {
+    let resolve: () => void = () => {};
+    vi.mocked(apiFetch).mockImplementation(() => new Promise<void>((r) => (resolve = r)) as never);
+    const client = makeClient();
+    client.setQueryData<ActivityFeed>(queryKeys.activity(), {
+      items: [{ id: 'a', type: 'mention', read: false } as never, { id: 'b', type: 'dm', read: false } as never],
+      unread: 2,
+      unreadByType: { mention: 1, dm: 1 },
+    });
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderHook(() => useSetActivityItemsRead(), { wrapper: wrapperFor(client) });
+    result.current.mutate({ ids: ['a'], read: true });
+    await waitFor(() => expect(client.getQueryData<ActivityFeed>(queryKeys.activity())?.unread).toBe(1));
+    expect(client.getQueryData<ActivityFeed>(queryKeys.activity())?.unreadByType).toEqual({ dm: 1 });
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/activity/items/read', {
+      method: 'PUT',
+      body: JSON.stringify({ ids: ['a'], read: true }),
+    });
+    resolve();
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.activity() }));
+  });
+
+  it('useSetActivityItemsRead toasts on failure and leaves an empty cache alone', async () => {
+    vi.mocked(apiFetch).mockRejectedValue(new Error('500'));
+    const client = makeClient();
+    const { result } = renderHook(() => useSetActivityItemsRead(), { wrapper: wrapperFor(client) });
+    await expect(result.current.mutateAsync({ ids: ['a'], read: false })).rejects.toThrow();
+    expect(showToast).toHaveBeenCalledWith("Couldn't update activity — please try again.");
+    expect(client.getQueryData(queryKeys.activity())).toBeUndefined();
+  });
+
+  it('useRemoveActivityItems POSTs the ids and drops them from the cache', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+    const client = makeClient();
+    client.setQueryData<ActivityFeed>(queryKeys.activity(), {
+      items: [{ id: 'a', type: 'mention', read: false } as never, { id: 'b', type: 'dm', read: true } as never],
+      unread: 1,
+      unreadByType: { mention: 1 },
+    });
+    // Keep the reconciling refetch from replacing the patched cache.
+    vi.spyOn(client, 'invalidateQueries').mockResolvedValue();
+    const { result } = renderHook(() => useRemoveActivityItems(), { wrapper: wrapperFor(client) });
+    await result.current.mutateAsync(['a']);
+    expect(apiFetch).toHaveBeenCalledWith('/api/v1/activity/items/remove', {
+      method: 'POST',
+      body: JSON.stringify({ ids: ['a'] }),
+    });
+    const feed = client.getQueryData<ActivityFeed>(queryKeys.activity());
+    expect(feed?.items.map((i) => i.id)).toEqual(['b']);
+    expect(feed?.unread).toBe(0);
+  });
+
+  it('useRemoveActivityItems toasts when the write fails', async () => {
+    vi.mocked(apiFetch).mockRejectedValue(new Error('500'));
+    const { result } = renderHook(() => useRemoveActivityItems(), { wrapper: wrapperFor(makeClient()) });
+    await expect(result.current.mutateAsync(['a'])).rejects.toThrow();
+    expect(showToast).toHaveBeenCalledWith("Couldn't update activity — please try again.");
+  });
+});
+
+describe('activity events', () => {
+  const seeded = (): ActivityFeed => ({
+    items: [{ id: 'a', type: 'mention', read: false } as never],
+    unread: 1,
+    unreadByType: { mention: 1 },
+  });
+
+  it('activity.new adds the carried item to the cached feed without refetching', () => {
+    const client = makeClient();
+    client.setQueryData(queryKeys.activity(), seeded());
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    applyActivityNewEvent(client, { item: { id: 'b', type: 'dm', read: false } });
+    const feed = client.getQueryData<ActivityFeed>(queryKeys.activity());
+    expect(feed?.items.map((i) => i.id)).toEqual(['b', 'a']);
+    expect(feed?.unread).toBe(2);
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it('activity.new refetches when there is no item, no cache, or a fetch in flight', () => {
+    const client = makeClient();
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    applyActivityNewEvent(client, { item: { id: 'b', type: 'dm' } });
+    expect(invalidate).toHaveBeenCalledTimes(1);
+
+    client.setQueryData(queryKeys.activity(), seeded());
+    applyActivityNewEvent(client, {});
+    expect(invalidate).toHaveBeenCalledTimes(2);
+
+    vi.spyOn(client, 'isFetching').mockReturnValue(1);
+    applyActivityNewEvent(client, { item: { id: 'b', type: 'dm' } });
+    expect(invalidate).toHaveBeenCalledTimes(3);
+    expect(client.getQueryData<ActivityFeed>(queryKeys.activity())?.items).toHaveLength(1);
+  });
+
+  it('activity.read applies marks and removals, and refetches for parent reads', () => {
+    const client = makeClient();
+    client.setQueryData(queryKeys.activity(), seeded());
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    applyActivityChangedEvent(client, { ids: ['a'], read: true });
+    expect(client.getQueryData<ActivityFeed>(queryKeys.activity())?.unread).toBe(0);
+    applyActivityChangedEvent(client, { removed: ['a'] });
+    expect(client.getQueryData<ActivityFeed>(queryKeys.activity())?.items).toEqual([]);
+    expect(invalidate).not.toHaveBeenCalled();
+    applyActivityChangedEvent(client, { parentID: 'dm-1' });
+    applyActivityChangedEvent(client, null);
+    expect(invalidate).toHaveBeenCalledTimes(2);
   });
 });

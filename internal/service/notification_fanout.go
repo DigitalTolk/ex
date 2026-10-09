@@ -17,6 +17,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/safe"
+	"github.com/DigitalTolk/ex/internal/store"
 	"github.com/cenkalti/backoff/v5"
 )
 
@@ -31,6 +32,7 @@ type memberSnapshot struct {
 	memberIDs []string                              // every parent member except the author
 	muted     map[string]bool                       // userID → true if muted (channels only; empty for conversations)
 	prefs     map[string]model.NotificationSettings // userID → effective settings
+	machine   map[string]bool                       // userID → true for bot/agent accounts
 	deepLink  string
 }
 
@@ -110,8 +112,8 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 				muted[uid] = true
 			}
 		}
-		prefs := s.resolvePrefs(ctx, ids, overrides)
-		return memberSnapshot{memberIDs: ids, muted: muted, prefs: prefs, deepLink: "/channel/" + parentName}
+		prefs, machine := s.resolvePrefs(ctx, ids, overrides)
+		return memberSnapshot{memberIDs: ids, muted: muted, prefs: prefs, machine: machine, deepLink: "/channel/" + parentName}
 	case ParentConversation:
 		c, err := retryAudienceLoad(ctx, func() (*model.Conversation, error) {
 			return s.conv.GetConversation(ctx, msg.ParentID)
@@ -127,8 +129,8 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 			}
 			ids = append(ids, p)
 		}
-		prefs := s.resolvePrefs(ctx, ids, nil)
-		return memberSnapshot{memberIDs: ids, muted: map[string]bool{}, prefs: prefs, deepLink: "/conversation/" + msg.ParentID}
+		prefs, machine := s.resolvePrefs(ctx, ids, nil)
+		return memberSnapshot{memberIDs: ids, muted: map[string]bool{}, prefs: prefs, machine: machine, deepLink: "/conversation/" + msg.ParentID}
 	}
 	return memberSnapshot{}
 }
@@ -136,27 +138,32 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 // resolvePrefs batch-loads each member's account-level settings and folds the
 // per-channel override (if any) on top. Missing account settings default to
 // DefaultNotificationSettings; a nil overrides map (conversations) means every
-// member resolves to their pure account baseline.
-func (s *NotificationService) resolvePrefs(ctx context.Context, ids []string, overrides map[string]*model.UserChannel) map[string]model.NotificationSettings {
+// member resolves to their pure account baseline. It also returns the set of
+// bot/agent members, read in the same batch.
+func (s *NotificationService) resolvePrefs(ctx context.Context, ids []string, overrides map[string]*model.UserChannel) (map[string]model.NotificationSettings, map[string]bool) {
 	prefs := make(map[string]model.NotificationSettings, len(ids))
-	accounts := map[string]model.NotificationSettings{}
+	machine := map[string]bool{}
+	accounts := map[string]store.NotificationAccount{}
 	if s.users != nil {
-		if got, err := s.users.NotificationSettingsFor(ctx, ids); err == nil {
+		if got, err := s.users.NotificationAccountsFor(ctx, ids); err == nil {
 			accounts = got
 		}
 	}
 	for _, uid := range ids {
 		acct, ok := accounts[uid]
 		if !ok {
-			acct = model.DefaultNotificationSettings()
+			acct.Settings = model.DefaultNotificationSettings()
+		}
+		if acct.Machine {
+			machine[uid] = true
 		}
 		var uc *model.UserChannel
 		if overrides != nil {
 			uc = overrides[uid]
 		}
-		prefs[uid] = model.ResolveNotificationPrefs(acct, uc)
+		prefs[uid] = model.ResolveNotificationPrefs(acct.Settings, uc)
 	}
-	return prefs
+	return prefs, machine
 }
 
 // NotifyForMessage emits a notification to every channel/conversation member
@@ -302,6 +309,29 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 
 	bodyLower := strings.ToLower(msg.Body)
 
+	// Activity-tab entries share everything but their id, type and mention
+	// kind; recipients get a copy of this template.
+	activityItems := make(map[string]*model.ActivityItem)
+	activityTemplate := model.ActivityItem{
+		CreatedAt:       baseNotif.CreatedAt,
+		MessageID:       msg.ID,
+		ParentID:        msg.ParentID,
+		ParentType:      parentType,
+		ParentMessageID: msg.ParentMessageID,
+		MessagePreview:  collapseSpace(baseNotif.Body), // baseNotif.Body is already previewBody'd
+		ActorID:         msg.AuthorID,
+		ActorName:       msg.WebhookUsername,
+		Webhook:         msg.WebhookUsername != "",
+	}
+	if parentType == ParentChannel {
+		// For channels the display name is the slug the deep link uses.
+		activityTemplate.ChannelSlug = parentName
+	}
+	groupKind := model.MentionKindHere
+	if mentions.All {
+		groupKind = model.MentionKindAll
+	}
+
 	// Mobile pushes collected during the loop; their presence checks resolve
 	// in one batched read afterwards.
 	type pendingPush struct {
@@ -338,6 +368,16 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			r.keyword = keywordsMatchLower(bodyLower, eff.Keywords)
 		}
 
+		if s.activity != nil && !snap.machine[uid] {
+			if typ, kind := activityFor(parentType, r, groupKind); typ != "" {
+				item := activityTemplate
+				item.ID = store.NewID()
+				item.Type = typ
+				item.MentionKind = kind
+				activityItems[uid] = &item
+			}
+		}
+
 		// DMs always notify their participants — "direct messages" is part of
 		// even the quiet "mentions, DMs & keywords" level — so they short-
 		// circuit the level machinery.
@@ -364,6 +404,10 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			threadAudience[uid] = true
 		}
 		plans = append(plans, alertPlan{uid: uid, mentioned: r.explicitMention || r.groupMention, desktop: desktop, mobile: mobile})
+	}
+
+	if s.activity != nil && len(activityItems) > 0 {
+		s.activity.RecordForRecipients(ctx, activityItems)
 	}
 
 	// Pass 2 — the per-recipient DynamoDB writes, bounded-parallel: badge
@@ -471,6 +515,36 @@ type recipientReasons struct {
 	threadParticipant bool // recipient participates in / follows the thread
 	threadReplies     bool // recipient wants thread-reply notifications
 	keyword           bool // message body matched one of the recipient's keywords
+}
+
+// activityFor decides which Activity-tab entry, if any, one recipient gets for
+// a message, returning the item type and (for mentions) the mention kind.
+// Conversation messages are always listed. A channel message is listed when it
+// would alert the recipient at the quietest level ("mentions"), whatever their
+// actual delivery levels — the Activity tab lists what was addressed to you —
+// and thread replies are listed for every thread participant whatever their
+// thread-reply notification toggle. Mutes still apply. groupKind is the
+// mention kind to use for an @all/@here mention.
+func activityFor(parentType string, r recipientReasons, groupKind model.MentionKind) (model.ActivityType, model.MentionKind) {
+	if parentType == ParentConversation && !r.explicitMention {
+		if r.threadReply {
+			return model.ActivityThreadReply, ""
+		}
+		return model.ActivityDM, ""
+	}
+	r.threadReplies = true
+	if !eligibleAtLevel(model.NotificationLevelMentions, r) {
+		return "", ""
+	}
+	switch {
+	case r.explicitMention:
+		return model.ActivityMention, model.MentionKindUser
+	case r.groupMention:
+		return model.ActivityMention, groupKind
+	case r.keyword:
+		return model.ActivityMention, model.MentionKindKeyword
+	}
+	return model.ActivityThreadReply, ""
 }
 
 // eligibleAtLevel decides whether a channel recipient should be notified at the
