@@ -45,6 +45,17 @@ const MESSAGE_LIST_OVERSCAN_PX = 2000;
 const MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX = 4;
 const USER_SCROLL_AUTOSTICK_SUPPRESSION_MS = 1200;
 
+// Virtuoso's synchronous resize corrections (see the prop below) make WebKit
+// drop every rendered row after a scroll — the list goes blank on iOS and
+// Safari — while on Chromium they are what stops the flash when a prepended
+// page measures shorter than its estimate. Chromium only.
+const SYNC_RESIZE_CORRECTIONS =
+  typeof navigator !== 'undefined' &&
+  /AppleWebKit/.test(navigator.userAgent) &&
+  !/Chrome|Chromium|CriOS|Edg/.test(navigator.userAgent)
+    ? false
+    : true;
+
 // firstItemIndex is shifted down on every prepend (older-page fetch)
 // so Virtuoso identifies prepended rows as preceding existing ones
 // rather than displacing them. Starting high enough that we won't
@@ -751,8 +762,9 @@ function VirtuosoMessageList({
         // that measures shorter than its estimate shrank the scroll height in
         // one frame and had its scroll position compensated in the next, so
         // the content flashed up and back by hundreds of px while scrolling
-        // up fast (react-virtuoso#1049).
-        skipAnimationFrameInResizeObserver
+        // up fast (react-virtuoso#1049). Not on WebKit, where it blanks the
+        // list (see SYNC_RESIZE_CORRECTIONS).
+        skipAnimationFrameInResizeObserver={SYNC_RESIZE_CORRECTIONS}
         increaseViewportBy={{ top: MESSAGE_LIST_OVERSCAN_PX, bottom: MESSAGE_LIST_OVERSCAN_PX }}
         atBottomThreshold={MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX}
         // Auto-follow only when the loaded slice IS the live tail. When

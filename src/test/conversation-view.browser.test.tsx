@@ -1,3 +1,4 @@
+import { userEvent } from 'vitest/browser';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -560,6 +561,8 @@ describe('conversation route (full route, real browser)', () => {
     });
     const screen = await renderRoute(`/conversation/${DM_ID}`);
     await expect.element(screen.getByText('hello from alice')).toBeVisible();
+    // The toolbar mounts on hover.
+    await userEvent.hover(document.querySelector('[data-message-id]') as HTMLElement);
     await vi.waitFor(() => {
       expect(document.querySelector('[aria-label="Reply in thread"]')).not.toBeNull();
     }, { timeout: 15000 });

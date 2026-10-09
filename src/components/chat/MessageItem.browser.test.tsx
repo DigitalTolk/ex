@@ -121,7 +121,7 @@ describe('MessageItem browser behavior', () => {
   it('keeps the mobile long-press action sheet above the bottom composer', async () => {
     if (window.innerWidth > 767) return;
 
-    const screen = await renderWithProviders(
+    await renderWithProviders(
       <>
         <div style={{ position: 'relative', zIndex: 0, transform: 'translateZ(0)' }}>
           <MessageItem
@@ -148,7 +148,7 @@ describe('MessageItem browser behavior', () => {
       </>,
     );
 
-    const row = screen.getByTestId('message-actions-trigger').element().closest('[data-message-id]');
+    const row = document.querySelector('[data-message-id]'); // the hover toolbar never mounts on touch
     expect(row).not.toBeNull();
     row!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
 
@@ -187,7 +187,7 @@ describe('MessageItem browser behavior', () => {
       />,
     );
 
-    const row = screen.getByTestId('message-actions-trigger').element().closest('[data-message-id]');
+    const row = document.querySelector('[data-message-id]'); // the hover toolbar never mounts on touch
     expect(row).not.toBeNull();
     row!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
 
