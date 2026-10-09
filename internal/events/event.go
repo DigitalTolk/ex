@@ -64,16 +64,18 @@ const (
 	EventReplayDone                  = "replay.done"      // server → client marker frame after a reconnect replay completes
 	EventReplayExhausted             = "replay.exhausted" // cursor too old / unknown; client must do a full refetch
 	EventWebhookChanged              = "webhook.changed"  // admin incoming-webhook list changed (created/deleted); data-less nudge to refetch
-	// EventActivityNew nudges a user's own clients that their activity stream
-	// (reaction hints + fired reminders) changed. Data-less: the durable Redis
-	// activity store is the source of truth, so the client just refetches the
-	// list. Sent to the user's personal channel (pubsub.UserChannel).
+	// EventActivityNew tells a user's own clients that an item arrived in their
+	// activity stream; data is model.ActivityNewEvent (the item and its read
+	// state). The durable Redis activity store stays the source of truth — a
+	// client may simply refetch the feed. Sent to pubsub.UserChannel.
 	EventActivityNew = "activity.new"
-	// EventActivityRead tells a user's OTHER clients that the activity read
-	// watermark advanced (they marked the feed read somewhere), so every
-	// device clears its badge instead of waiting for the next activity.new.
-	// Data-less nudge like activity.new: the Redis watermark is the source of
-	// truth and clients refetch the feed. Sent to pubsub.UserChannel.
+	// EventActivityRead tells a user's clients that items in their activity
+	// stream changed without a new one arriving — marked read or unread (all,
+	// one by one, or by reading or marking unread part of a channel,
+	// conversation or thread), removed, or re-previewed after an edit — so
+	// every device updates its list and badge. data is
+	// model.ActivityChangedEvent saying what changed; clients may refetch the
+	// feed instead. Sent to pubsub.UserChannel.
 	EventActivityRead = "activity.read"
 	// Agent run lifecycle (plan-v2 §5/§9). Published to the parent's topic so
 	// every thread viewer sees state transitions live. run.updated carries the
@@ -127,10 +129,9 @@ var ephemeralTypes = map[string]struct{}{
 	EventReplayDone:      {},
 	EventReplayExhausted: {},
 	EventNotificationNew: {},
-	// activity.new / activity.read are data-less "your activity changed"
-	// nudges; the durable Redis activity store is the source of truth and the
-	// client refetches the list on reconnect, so replaying them would be pure
-	// noise.
+	// activity.new / activity.read are "your activity changed" deltas; the
+	// durable Redis activity store is the source of truth and the client
+	// refetches the list on reconnect, so replaying them would be pure noise.
 	EventActivityNew:  {},
 	EventActivityRead: {},
 	// thread.updated is a live /threads-list patch; ListUserThreads is the

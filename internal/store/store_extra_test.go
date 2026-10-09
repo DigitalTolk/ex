@@ -1084,7 +1084,7 @@ func TestConversationStore_SetConversationLastRead_NotMember(t *testing.T) {
 	}
 }
 
-func TestUserStore_NotificationSettingsFor(t *testing.T) {
+func TestUserStore_NotificationAccountsFor(t *testing.T) {
 	db := setupDynamoDB(t)
 	us := NewUserStore(db)
 	ctx := context.Background()
@@ -1092,22 +1092,30 @@ func TestUserStore_NotificationSettingsFor(t *testing.T) {
 	custom := model.DefaultNotificationSettings()
 	custom.DesktopLevel = model.NotificationLevelAll
 	custom.Keywords = []string{"deploy"}
-	if err := us.CreateUser(ctx, &model.User{ID: "u-ns-a", Email: "ns-a@x.com", DisplayName: "A", NotificationSettings: &custom, CreatedAt: time.Now()}); err != nil {
-		t.Fatalf("create u-ns-a: %v", err)
-	}
-	if err := us.CreateUser(ctx, &model.User{ID: "u-ns-b", Email: "ns-b@x.com", DisplayName: "B", CreatedAt: time.Now()}); err != nil {
-		t.Fatalf("create u-ns-b: %v", err)
+	for _, u := range []*model.User{
+		{ID: "u-ns-a", Email: "ns-a@x.com", DisplayName: "A", NotificationSettings: &custom},
+		{ID: "u-ns-b", Email: "ns-b@x.com", DisplayName: "B"},
+		{ID: "u-ns-bot", Email: "ns-bot@x.com", DisplayName: "alerts", IsBot: true},
+		{ID: "u-ns-agent", Email: "ns-agent@x.com", DisplayName: "gg", Kind: model.UserKindAgent},
+	} {
+		u.CreatedAt = time.Now()
+		if err := us.CreateUser(ctx, u); err != nil {
+			t.Fatalf("create %s: %v", u.ID, err)
+		}
 	}
 
-	got, err := us.NotificationSettingsFor(ctx, []string{"u-ns-a", "u-ns-b", "u-ns-absent"})
+	got, err := us.NotificationAccountsFor(ctx, []string{"u-ns-a", "u-ns-b", "u-ns-bot", "u-ns-agent", "u-ns-absent"})
 	if err != nil {
-		t.Fatalf("NotificationSettingsFor: %v", err)
+		t.Fatalf("NotificationAccountsFor: %v", err)
 	}
-	if a, ok := got["u-ns-a"]; !ok || a.DesktopLevel != model.NotificationLevelAll || len(a.Keywords) != 1 || a.Keywords[0] != "deploy" {
-		t.Errorf("u-ns-a settings = %+v, want custom all+deploy", got["u-ns-a"])
+	if a, ok := got["u-ns-a"]; !ok || a.Settings.DesktopLevel != model.NotificationLevelAll || len(a.Settings.Keywords) != 1 || a.Settings.Keywords[0] != "deploy" || a.Machine {
+		t.Errorf("u-ns-a = %+v, want custom all+deploy, human", got["u-ns-a"])
 	}
-	if b, ok := got["u-ns-b"]; !ok || b.DesktopLevel != model.NotificationLevelMentions {
-		t.Errorf("u-ns-b should default to mentions, got %+v", got["u-ns-b"])
+	if b, ok := got["u-ns-b"]; !ok || b.Settings.DesktopLevel != model.NotificationLevelMentions || b.Machine {
+		t.Errorf("u-ns-b should default to mentions, human; got %+v", got["u-ns-b"])
+	}
+	if !got["u-ns-bot"].Machine || !got["u-ns-agent"].Machine {
+		t.Errorf("bot and agent accounts must be flagged machine: %+v / %+v", got["u-ns-bot"], got["u-ns-agent"])
 	}
 	if _, ok := got["u-ns-absent"]; ok {
 		t.Error("absent user should not appear in the map")
@@ -1115,8 +1123,8 @@ func TestUserStore_NotificationSettingsFor(t *testing.T) {
 
 	// Error path: a failing BatchGetItem surfaces the error.
 	fs := NewUserStore(withFault(db, func(f *faultClient) { f.failBatchGetItem = true }))
-	if _, err := fs.NotificationSettingsFor(ctx, []string{"u-ns-a"}); !errors.Is(err, errInjected) {
-		t.Fatalf("NotificationSettingsFor fault: want errInjected, got %v", err)
+	if _, err := fs.NotificationAccountsFor(ctx, []string{"u-ns-a"}); !errors.Is(err, errInjected) {
+		t.Fatalf("NotificationAccountsFor fault: want errInjected, got %v", err)
 	}
 }
 

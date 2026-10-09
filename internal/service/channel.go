@@ -39,6 +39,17 @@ type ChannelService struct {
 	publisher   Publisher
 	indexer     ChannelIndexer
 	searcher    ChannelSearcher
+	activity    ChannelActivityRecorder
+}
+
+// ChannelActivityRecorder keeps the Activity tab in step with channel
+// membership and reads: "X added you to ~channel", dropping a channel's items
+// when the user leaves it, and reading them when the user reads the channel.
+// Implemented by ActivityService.
+type ChannelActivityRecorder interface {
+	RecordChannelAdded(ctx context.Context, actorID, userID string, ch *model.Channel)
+	ParentLeft(ctx context.Context, userID, parentID string)
+	ActivityReadTracker
 }
 
 // NewChannelService creates a ChannelService with the given dependencies.
@@ -58,6 +69,10 @@ func NewChannelService(channels ChannelStore, memberships MembershipStore, users
 func (s *ChannelService) SetIndexer(i ChannelIndexer) { s.indexer = i }
 
 func (s *ChannelService) SetSearcher(sr ChannelSearcher) { s.searcher = sr }
+
+// SetActivityRecorder wires the Activity tab. Optional — without it adding a
+// member works the same but nothing lands in their activity stream.
+func (s *ChannelService) SetActivityRecorder(a ChannelActivityRecorder) { s.activity = a }
 
 func (s *ChannelService) indexChannel(ctx context.Context, ch *model.Channel) {
 	if s.indexer == nil || ch == nil {
@@ -150,13 +165,20 @@ func (s *ChannelService) addMemberWithEvents(ctx context.Context, ch *model.Chan
 
 // resolveDisplayName looks up a user's display name, falling back to "Unknown".
 func (s *ChannelService) resolveDisplayName(ctx context.Context, userID string) string {
+	name, _ := s.resolveMember(ctx, userID)
+	return name
+}
+
+// resolveMember looks up a user's display name (falling back to "Unknown") and
+// whether the account is a bot or agent.
+func (s *ChannelService) resolveMember(ctx context.Context, userID string) (displayName string, machine bool) {
 	if s.users != nil {
 		u, err := s.users.GetUser(ctx, userID)
 		if err == nil {
-			return u.DisplayName
+			return u.DisplayName, u.IsBot || u.IsAgent()
 		}
 	}
-	return "Unknown"
+	return "Unknown", false
 }
 
 // Create creates a new channel and adds the creator as the owner. Guests
@@ -451,6 +473,9 @@ func (s *ChannelService) Leave(ctx context.Context, userID, channelID string) er
 		"channelID": channelID,
 		"userID":    userID,
 	})
+	if s.activity != nil {
+		s.activity.ParentLeft(ctx, userID, channelID)
+	}
 
 	s.postSystemMessage(ctx, channelID, displayName+" left the channel")
 	return nil
@@ -568,7 +593,7 @@ func (s *ChannelService) AddMember(ctx context.Context, actorID, channelID, user
 	}
 
 	now := time.Now()
-	displayName := s.resolveDisplayName(ctx, userID)
+	displayName, machine := s.resolveMember(ctx, userID)
 	membership := &model.ChannelMembership{
 		ChannelID:   channelID,
 		UserID:      userID,
@@ -603,6 +628,10 @@ func (s *ChannelService) AddMember(ctx context.Context, actorID, channelID, user
 	})
 
 	s.postSystemMessage(ctx, channelID, displayName+" was added to the channel")
+	// A bot or agent has nobody to read its activity stream.
+	if s.activity != nil && !machine {
+		s.activity.RecordChannelAdded(ctx, actorID, userID, ch)
+	}
 	return nil
 }
 
@@ -651,6 +680,9 @@ func (s *ChannelService) RemoveMember(ctx context.Context, actorID, channelID, t
 		"channelID": channelID,
 		"userID":    targetID,
 	})
+	if s.activity != nil {
+		s.activity.ParentLeft(ctx, targetID, channelID)
+	}
 
 	s.postSystemMessage(ctx, channelID, displayName+" was removed from the channel")
 	return nil
@@ -847,6 +879,9 @@ func (s *ChannelService) MarkChannelRead(ctx context.Context, userID, channelID 
 	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
 		"channelID": channelID,
 	})
+	if s.activity != nil {
+		s.activity.MarkParentRead(ctx, userID, channelID, "", time.Now())
+	}
 	return nil
 }
 

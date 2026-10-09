@@ -100,7 +100,7 @@ type MessageService struct {
 	markdown      *MarkdownRenderer
 	channelSeq    UnreadSeqStore
 	convSeq       UnreadSeqStore
-	reactions     ReactionActivityRecorder
+	activity      MessageActivityRecorder
 	// agentDispatcher starts agent runs for @mentioned agent users. Optional
 	// seam (SetAgentDispatcher) — nil means agent mentions are inert.
 	agentDispatcher AgentDispatcher
@@ -112,11 +112,16 @@ type MessageService struct {
 	skillBadges func(ctx context.Context, runID string) []string
 }
 
-// ReactionActivityRecorder records "someone reacted to your message" hints into
-// the message author's activity stream. Implemented by ActivityService; wired
-// optionally so the message service degrades gracefully when activity is off.
-type ReactionActivityRecorder interface {
+// MessageActivityRecorder keeps the Activity tab in step with messages: it
+// records "someone reacted to your message" hints, drops the items about
+// deleted messages, refreshes previews on edit, and follows mark-unread.
+// Implemented by ActivityService; wired optionally so the message service
+// degrades gracefully when activity is off.
+type MessageActivityRecorder interface {
 	RecordReaction(ctx context.Context, msg *model.Message, parentType, actorID, emoji string)
+	MessagesDeleted(ctx context.Context, parentID, parentType string, messageIDs []string)
+	MessageEdited(ctx context.Context, msg *model.Message, parentType string)
+	ActivityReadTracker
 }
 
 // MessageServiceDeps declares the full dependency surface of MessageService
@@ -144,9 +149,9 @@ type MessageServiceDeps struct {
 	// Optional capabilities (nil degrades gracefully). AttachmentManager is
 	// NOT here: attachments and messages reference each other, so that edge
 	// is late-bound via SetAttachmentManager after both exist.
-	Notifier  MessageNotifier
-	Indexer   MessageIndexer
-	Reactions ReactionActivityRecorder
+	Notifier MessageNotifier
+	Indexer  MessageIndexer
+	Activity MessageActivityRecorder
 }
 
 // NewMessageServiceFromDeps constructs a fully-wired MessageService.
@@ -166,7 +171,7 @@ func NewMessageServiceFromDeps(d MessageServiceDeps) *MessageService {
 		activator:     d.Activator,
 		notifier:      d.Notifier,
 		indexer:       d.Indexer,
-		reactions:     d.Reactions,
+		activity:      d.Activity,
 	}
 }
 
@@ -235,8 +240,8 @@ func (s *MessageService) SetMarkdownRenderer(m *MarkdownRenderer) { s.markdown =
 // unread tracking. Optional — left unset, channel unread isn't persisted.
 func (s *MessageService) SetChannelSeqStore(c UnreadSeqStore) { s.channelSeq = c }
 
-// SetReactionRecorder wires the activity recorder used to log reaction hints.
-func (s *MessageService) SetReactionRecorder(r ReactionActivityRecorder) { s.reactions = r }
+// SetActivityRecorder wires the Activity tab (see MessageActivityRecorder).
+func (s *MessageService) SetActivityRecorder(r MessageActivityRecorder) { s.activity = r }
 
 // SetRunSkillResolver wires the orchestrator's RunSkillBadges: agent-run
 // posts get the run's used-skill names stamped on the message (nil = none).
@@ -1750,6 +1755,9 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 	}
 
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, &edited)
+	if s.activity != nil && edited.Body != msg.Body {
+		s.activity.MessageEdited(ctx, &edited, parentType)
+	}
 
 	s.indexMessage(ctx, &edited, parentType)
 
@@ -1794,8 +1802,12 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 	// cascades. Best-effort: a reply that fails to delete is logged but
 	// doesn't fail the root delete, since the root tombstone already
 	// closed the thread to new replies.
+	deleted := []string{msgID}
 	if msg.ParentMessageID == "" {
-		s.cascadeDeleteThreadReplies(ctx, parentID, parentType, msgID)
+		deleted = append(deleted, s.cascadeDeleteThreadReplies(ctx, parentID, parentType, msgID)...)
+	}
+	if s.activity != nil {
+		s.activity.MessagesDeleted(ctx, parentID, parentType, deleted)
 	}
 
 	// Sweep the agent-run activity logs for this chat: the runs it invoked and
@@ -1881,23 +1893,48 @@ func (s *MessageService) softDeleteMessage(ctx context.Context, msg *model.Messa
 }
 
 // cascadeDeleteThreadReplies soft-deletes every reply belonging to a thread
-// whose root (rootID) was just deleted. Each reply gets the same tombstone
-// treatment + deleted event as a directly-deleted message, so connected
-// clients patch the thread in real time. Best-effort per reply.
-func (s *MessageService) cascadeDeleteThreadReplies(ctx context.Context, parentID, parentType, rootID string) {
+// whose root (rootID) was just deleted, returning the ids it deleted. Each
+// reply gets the same tombstone treatment + deleted event as a
+// directly-deleted message, so connected clients patch the thread in real
+// time. Best-effort per reply.
+func (s *MessageService) cascadeDeleteThreadReplies(ctx context.Context, parentID, parentType, rootID string) []string {
 	msgs, err := s.scanParentMessages(ctx, parentID)
 	if err != nil {
 		slog.Warn("thread cascade scan failed", "rootID", rootID, "error", err)
-		return
+		return nil
 	}
+	var deleted []string
 	for _, m := range msgs {
 		if m.ParentMessageID != rootID || m.Deleted {
 			continue
 		}
 		if err := s.softDeleteMessage(ctx, m, parentID, parentType); err != nil {
 			slog.Warn("thread reply cascade delete failed", "msgID", m.ID, "rootID", rootID, "error", err)
+			continue
 		}
+		deleted = append(deleted, m.ID)
 	}
+	return deleted
+}
+
+// ParentMemberIDs lists everyone who can read a channel or conversation.
+func (s *MessageService) ParentMemberIDs(ctx context.Context, parentID, parentType string) ([]string, error) {
+	if parentType == ParentConversation {
+		conv, err := s.conversations.GetConversation(ctx, parentID)
+		if err != nil {
+			return nil, fmt.Errorf("message: get conversation: %w", err)
+		}
+		return conv.ParticipantIDs, nil
+	}
+	members, err := s.memberships.ListMembers(ctx, parentID)
+	if err != nil {
+		return nil, fmt.Errorf("message: list members: %w", err)
+	}
+	ids := make([]string, len(members))
+	for i, m := range members {
+		ids[i] = m.UserID
+	}
+	return ids, nil
 }
 
 // ToggleReaction adds the given emoji from the user to a message, or removes
@@ -1977,8 +2014,8 @@ func (s *MessageService) toggleReaction(ctx context.Context, actorID, accessorID
 	s.indexMessage(ctx, msg, parentType)
 	// Only a freshly-ADDED reaction (not an un-react) is worth an activity hint;
 	// the recorder itself drops self-reactions and bot messages.
-	if added && s.reactions != nil {
-		s.reactions.RecordReaction(ctx, msg, parentType, userID, emoji)
+	if added && s.activity != nil {
+		s.activity.RecordReaction(ctx, msg, parentType, userID, emoji)
 	}
 	s.attachRendered(msg)
 	return msg, nil

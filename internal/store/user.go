@@ -377,13 +377,21 @@ func (s *UserStoreImpl) HasUsers(ctx context.Context) (bool, error) {
 	return out.Count > 0, nil
 }
 
-// NotificationSettingsFor batch-reads the account-level notification settings
-// for the supplied users in a single fan-out (chunked BatchGetItem of 100),
-// projecting only the id + settings attributes. Users with no saved settings
-// resolve to DefaultNotificationSettings; users with no profile row at all are
-// simply absent from the returned map (the caller defaults them).
-func (s *UserStoreImpl) NotificationSettingsFor(ctx context.Context, userIDs []string) (map[string]model.NotificationSettings, error) {
-	out := make(map[string]model.NotificationSettings)
+// NotificationAccount is what the notification fan-out reads per recipient.
+type NotificationAccount struct {
+	Settings model.NotificationSettings
+	// Machine marks a bot or agent account: nobody reads its activity stream.
+	Machine bool
+}
+
+// NotificationAccountsFor batch-reads the account-level notification settings
+// and machine flags for the supplied users in a single fan-out (chunked
+// BatchGetItem of 100), projecting only the attributes it needs. Users with no
+// saved settings resolve to DefaultNotificationSettings; users with no profile
+// row at all are simply absent from the returned map (the caller defaults
+// them).
+func (s *UserStoreImpl) NotificationAccountsFor(ctx context.Context, userIDs []string) (map[string]NotificationAccount, error) {
+	out := make(map[string]NotificationAccount)
 	const batchSize = 100 // DynamoDB BatchGetItem hard limit
 	for start := 0; start < len(userIDs); start += batchSize {
 		end := min(start+batchSize, len(userIDs))
@@ -394,8 +402,8 @@ func (s *UserStoreImpl) NotificationSettingsFor(ctx context.Context, userIDs []s
 		req := map[string]types.KeysAndAttributes{
 			s.Table: {
 				Keys:                     keys,
-				ProjectionExpression:     aws.String("#id, #ns"),
-				ExpressionAttributeNames: map[string]string{"#id": "id", "#ns": "notificationSettings"},
+				ProjectionExpression:     aws.String("#id, #ns, #bot, #kind"),
+				ExpressionAttributeNames: map[string]string{"#id": "id", "#ns": "notificationSettings", "#bot": "isBot", "#kind": "kind"},
 			},
 		}
 		for {
@@ -407,6 +415,8 @@ func (s *UserStoreImpl) NotificationSettingsFor(ctx context.Context, userIDs []s
 				var row struct {
 					ID       string                      `dynamodbav:"id"`
 					Settings *model.NotificationSettings `dynamodbav:"notificationSettings"`
+					IsBot    bool                        `dynamodbav:"isBot"`
+					Kind     model.UserKind              `dynamodbav:"kind"`
 				}
 				if err := attributevalue.UnmarshalMap(item, &row); err != nil {
 					return nil, fmt.Errorf("store: unmarshal notification settings row: %w", err)
@@ -414,11 +424,11 @@ func (s *UserStoreImpl) NotificationSettingsFor(ctx context.Context, userIDs []s
 				if row.ID == "" {
 					continue
 				}
+				acct := NotificationAccount{Settings: model.DefaultNotificationSettings(), Machine: row.IsBot || row.Kind == model.UserKindAgent}
 				if row.Settings != nil {
-					out[row.ID] = *row.Settings
-				} else {
-					out[row.ID] = model.DefaultNotificationSettings()
+					acct.Settings = *row.Settings
 				}
+				out[row.ID] = acct
 			}
 			unproc, ok := res.UnprocessedKeys[s.Table]
 			if !ok || len(unproc.Keys) == 0 {

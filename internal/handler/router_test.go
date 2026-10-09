@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -328,6 +330,35 @@ func TestRouterRegistersScheduledMessageRoutes(t *testing.T) {
 		router.ServeHTTP(rec, httptest.NewRequest(rt[0], rt[1], nil))
 		if rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s %s = %d, want 401", rt[0], rt[1], rec.Code)
+		}
+	}
+}
+
+// denyWrites is a rate-limit counter that refuses the per-user write bucket
+// and allows everything else.
+type denyWrites struct{}
+
+func (denyWrites) AllowRequest(_ context.Context, key string, _ int, _ time.Duration) (bool, error) {
+	return !strings.HasPrefix(key, "rlu:write:"), nil
+}
+
+// Adding and removing channel members fans out events, system messages and
+// activity items, so both routes share the per-user write flood guard.
+func TestRouterThrottlesChannelMemberWrites(t *testing.T) {
+	jwtMgr := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
+	router := NewRouter(&Deps{
+		Auth: &AuthHandler{}, User: &UserHandler{}, Channel: &ChannelHandler{},
+		Conversation: &ConversationHandler{}, WS: &WSHandler{},
+		JWT: jwtMgr, AppVersion: "test", AllowOrigins: []string{"*"}, RateLimiter: denyWrites{},
+	})
+	for _, rt := range []struct{ method, target string }{
+		{http.MethodPost, "/api/v1/channels/ch-1/members"},
+		{http.MethodDelete, "/api/v1/channels/ch-1/members/u-2"},
+	} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, authedReq(t, jwtMgr, rt.method, rt.target, `{"userID":"u-2"}`))
+		if rec.Code != http.StatusTooManyRequests {
+			t.Errorf("%s %s = %d, want 429 from the write limiter", rt.method, rt.target, rec.Code)
 		}
 	}
 }

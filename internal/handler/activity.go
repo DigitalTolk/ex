@@ -14,8 +14,10 @@ import (
 
 // ActivityService is the activity-stream behaviour the handler needs.
 type ActivityService interface {
-	Feed(ctx context.Context, userID string) (service.ActivityFeed, error)
+	Feed(ctx context.Context, userID string) (model.ActivityFeed, error)
 	MarkSeen(ctx context.Context, userID string) error
+	SetItemsRead(ctx context.Context, userID string, ids []string, read bool) error
+	RemoveItems(ctx context.Context, userID string, ids []string) error
 }
 
 // ReminderService is the reminder behaviour the handler needs.
@@ -24,6 +26,10 @@ type ReminderService interface {
 	ListPending(ctx context.Context, userID string) ([]*model.Reminder, error)
 	Cancel(ctx context.Context, userID, id string) error
 }
+
+// activityItemsBodyBytes caps a per-item request body: room for the most ids a
+// stream can hold (26-character ULIDs) with plenty to spare.
+const activityItemsBodyBytes int64 = 64 << 10
 
 // ActivityHandler exposes the activity-stream and reminder endpoints.
 type ActivityHandler struct {
@@ -49,7 +55,10 @@ func (h *ActivityHandler) Feed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if feed.Items == nil {
-		feed.Items = []*model.ActivityItem{}
+		feed.Items = []*model.ActivityFeedItem{}
+	}
+	if feed.UnreadByType == nil {
+		feed.UnreadByType = map[model.ActivityType]int{}
 	}
 	writeJSON(w, http.StatusOK, feed)
 }
@@ -63,6 +72,55 @@ func (h *ActivityHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.activity.MarkSeen(r.Context(), userID); err != nil {
 		writeInternalError(w, r, "activity_read_error", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// SetItemsRead marks specific activity items read or unread.
+// Body: {"ids": ["..."], "read": true|false}.
+func (h *ActivityHandler) SetItemsRead(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	var body struct {
+		IDs  []string `json:"ids"`
+		Read *bool    `json:"read"`
+	}
+	if err := readJSONLimit(r, &body, activityItemsBodyBytes); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if body.Read == nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "read is required")
+		return
+	}
+	if err := h.activity.SetItemsRead(r.Context(), userID, body.IDs, *body.Read); err != nil {
+		writeAgentError(w, r, err, "activity_items_read_error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// RemoveItems deletes specific items from the caller's activity stream.
+// Body: {"ids": ["..."]}.
+func (h *ActivityHandler) RemoveItems(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+	if err := readJSONLimit(r, &body, activityItemsBodyBytes); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if err := h.activity.RemoveItems(r.Context(), userID, body.IDs); err != nil {
+		writeAgentError(w, r, err, "activity_items_remove_error")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

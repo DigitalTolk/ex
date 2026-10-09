@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"time"
+
+	"github.com/DigitalTolk/ex/internal/model"
 )
 
 // NotificationKind tags a notification with its semantic class so the client
@@ -181,6 +183,14 @@ type NotificationService struct {
 	pushSched MobilePushScheduler
 	ackStore  NotificationAckStore
 	nameCache NameCache
+	activity  ActivityRecorder
+}
+
+// ActivityRecorder receives the Activity-tab entries the fan-out decides on
+// (mentions, thread replies, DMs), one pre-built item per recipient.
+// Implemented by ActivityService.
+type ActivityRecorder interface {
+	RecordForRecipients(ctx context.Context, items map[string]*model.ActivityItem)
 }
 
 // NotificationServiceDeps declares the notifier's full dependency surface —
@@ -284,3 +294,7 @@ type NameCache interface {
 // SetNameCache wires the display-name cache. Optional — without it the notifier
 // reads names from the stores directly (the previous behaviour).
 func (s *NotificationService) SetNameCache(c NameCache) { s.nameCache = c }
+
+// SetActivityRecorder wires the Activity tab. Optional — without it messages
+// still notify but add nothing to anyone's activity stream.
+func (s *NotificationService) SetActivityRecorder(a ActivityRecorder) { s.activity = a }
