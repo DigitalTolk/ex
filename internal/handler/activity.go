@@ -14,7 +14,7 @@ import (
 
 // ActivityService is the activity-stream behaviour the handler needs.
 type ActivityService interface {
-	Feed(ctx context.Context, userID string) (service.ActivityFeed, error)
+	Feed(ctx context.Context, userID string) (model.ActivityFeed, error)
 	MarkSeen(ctx context.Context, userID string) error
 	SetItemsRead(ctx context.Context, userID string, ids []string, read bool) error
 	RemoveItems(ctx context.Context, userID string, ids []string) error
@@ -26,6 +26,10 @@ type ReminderService interface {
 	ListPending(ctx context.Context, userID string) ([]*model.Reminder, error)
 	Cancel(ctx context.Context, userID, id string) error
 }
+
+// activityItemsBodyBytes caps a per-item request body: room for the most ids a
+// stream can hold (26-character ULIDs) with plenty to spare.
+const activityItemsBodyBytes int64 = 64 << 10
 
 // ActivityHandler exposes the activity-stream and reminder endpoints.
 type ActivityHandler struct {
@@ -51,7 +55,7 @@ func (h *ActivityHandler) Feed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if feed.Items == nil {
-		feed.Items = []*model.ActivityItem{}
+		feed.Items = []*model.ActivityFeedItem{}
 	}
 	if feed.UnreadByType == nil {
 		feed.UnreadByType = map[model.ActivityType]int{}
@@ -85,7 +89,7 @@ func (h *ActivityHandler) SetItemsRead(w http.ResponseWriter, r *http.Request) {
 		IDs  []string `json:"ids"`
 		Read *bool    `json:"read"`
 	}
-	if err := readJSON(r, &body); err != nil {
+	if err := readJSONLimit(r, &body, activityItemsBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
@@ -94,7 +98,7 @@ func (h *ActivityHandler) SetItemsRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.activity.SetItemsRead(r.Context(), userID, body.IDs, *body.Read); err != nil {
-		writeActivityItemsError(w, r, "activity_items_read_error", err)
+		writeAgentError(w, r, err, "activity_items_read_error")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -111,24 +115,15 @@ func (h *ActivityHandler) RemoveItems(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		IDs []string `json:"ids"`
 	}
-	if err := readJSON(r, &body); err != nil {
+	if err := readJSONLimit(r, &body, activityItemsBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
 	if err := h.activity.RemoveItems(r.Context(), userID, body.IDs); err != nil {
-		writeActivityItemsError(w, r, "activity_items_remove_error", err)
+		writeAgentError(w, r, err, "activity_items_remove_error")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// writeActivityItemsError maps a bad id list to 400 and anything else to 500.
-func writeActivityItemsError(w http.ResponseWriter, r *http.Request, code string, err error) {
-	if errors.Is(err, service.ErrActivityIDsInvalid) {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	writeInternalError(w, r, code, err)
 }
 
 // CreateReminder schedules a "remind me about this message" reminder.

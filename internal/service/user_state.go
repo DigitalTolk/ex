@@ -14,11 +14,16 @@ import (
 type UserStateService struct {
 	store     UserStateStore
 	publisher Publisher
+	activity  ActivityReadTracker
 }
 
 func NewUserStateService(store UserStateStore, publisher Publisher) *UserStateService {
 	return &UserStateService{store: store, publisher: publisher}
 }
+
+// SetActivityTracker wires the Activity tab, so seeing a thread reads its
+// activity items. Optional.
+func (s *UserStateService) SetActivityTracker(t ActivityReadTracker) { s.activity = t }
 
 func (s *UserStateService) List(ctx context.Context, userID string) (*model.UserState, error) {
 	state := &model.UserState{
@@ -83,6 +88,9 @@ func (s *UserStateService) MarkThreadSeen(ctx context.Context, userID, parentID,
 		UpdatedAt:    now,
 	}); err != nil {
 		return err
+	}
+	if s.activity != nil {
+		s.activity.MarkParentRead(ctx, userID, parentID, threadRootID, now)
 	}
 	return s.delete(ctx, userID, model.UserStateThreadNotification, threadRootID)
 }

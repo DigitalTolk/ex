@@ -846,11 +846,14 @@ describe('ChatPage WebSocket handlers', () => {
     }).not.toThrow();
   });
 
-  it('onActivityNew refetches the activity stream', () => {
-    renderAt('/');
-    expect(() => {
-      (capturedOptions.onActivityNew as (d: unknown) => void)({});
-    }).not.toThrow();
+  it('onActivityNew adds the carried item to the activity cache instead of refetching', () => {
+    const { qc } = renderAt('/');
+    qc.setQueryData(['activity'], { items: [], unread: 0, unreadByType: {} });
+    vi.spyOn(qc, 'isFetching').mockReturnValue(0);
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onActivityNew as (d: unknown) => void)({ item: { id: 'a1', type: 'mention', read: false } });
+    expect(qc.getQueryData<{ unread: number }>(['activity'])?.unread).toBe(1);
+    expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).not.toContainEqual(['activity']);
   });
 
   it('onScheduledMessagesChanged refetches the Scheduled list', () => {
@@ -858,6 +861,14 @@ describe('ChatPage WebSocket handlers', () => {
     const spy = vi.spyOn(qc, 'invalidateQueries');
     (capturedOptions.onScheduledMessagesChanged as (d: unknown) => void)({});
     expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).toContainEqual(['scheduledMessages']);
+  });
+
+  it('onActivityRead applies a remote mark-read to the cached feed', () => {
+    const { qc } = renderAt('/');
+    qc.setQueryData(['activity'], { items: [{ id: 'a1', type: 'mention', read: false }], unread: 1, unreadByType: { mention: 1 } });
+    vi.spyOn(qc, 'isFetching').mockReturnValue(0);
+    (capturedOptions.onActivityRead as (d: unknown) => void)({ all: true });
+    expect(qc.getQueryData<{ unread: number }>(['activity'])?.unread).toBe(0);
   });
 
   it('onActivityRead refetches the activity stream so a remote mark-read clears this badge', () => {

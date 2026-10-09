@@ -1,15 +1,25 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { showToast } from '@/lib/toast';
+import {
+  addActivityItem,
+  applyActivityChange,
+  markActivityItems,
+  markAllActivityRead,
+  parseActivityChange,
+  parseActivityNew,
+  removeActivityItems,
+} from '@/lib/activity-feed';
 import { withoutItems, withRead } from '@/lib/activity-groups';
 import type { ActivityFeed, Reminder } from '@/types';
 
 const EMPTY_FEED: ActivityFeed = { items: [], unread: 0, unreadByType: {} };
 
 // useActivity loads the user's activity stream (mentions, thread replies, DMs,
-// reactions, channel adds and fired reminders) plus the unread counts. WS `activity.new` invalidates this query
-// (see ChatPage) so the badge and list stay live.
+// reactions, channel adds and fired reminders) plus the unread counts. The WS
+// activity.new / activity.read events patch this cache (see
+// applyActivityNewEvent) so the badge and list stay live without refetching.
 export function useActivity() {
   return useQuery({
     queryKey: queryKeys.activity(),
@@ -80,28 +90,81 @@ export function useCancelReminder() {
   });
 }
 
-// useMarkActivityRead clears the unread badge by advancing the server watermark,
-// and optimistically zeroes the local unread count.
-//
-// onMutate cancels any in-flight activity GET before applying the optimistic
-// zero: the page fires the read PUT and the activity GET together on mount, and
-// a GET whose response lands after the PUT but was computed before the watermark
-// advanced would otherwise clobber the zero back to a stale non-zero count (the
-// badge reappears despite the click). onSettled refetches to reconcile with the
-// now-advanced server watermark, correctly re-counting anything that arrived
-// mid-flight as still unread.
+// patchActivity applies fn to the cached feed. With no cache, a fetch in flight
+// (its response would overwrite the patch), or a change fn can't resolve
+// (null), it refetches instead — invalidating also restarts an in-flight fetch.
+function patchActivity(qc: QueryClient, fn: (feed: ActivityFeed) => ActivityFeed | null) {
+  const key = queryKeys.activity();
+  const feed = qc.getQueryData<ActivityFeed>(key);
+  const next = feed && qc.isFetching({ queryKey: key }) === 0 ? fn(feed) : null;
+  if (next) qc.setQueryData(key, next);
+  else void qc.invalidateQueries({ queryKey: key });
+}
+
+// applyActivityNewEvent adds the item an activity.new event carries.
+export function applyActivityNewEvent(qc: QueryClient, data: unknown) {
+  const item = parseActivityNew(data);
+  patchActivity(qc, (feed) => (item ? addActivityItem(feed, item) : null));
+}
+
+// applyActivityChangedEvent applies the change an activity.read event carries —
+// read/unread marks and removals from any of the user's devices, or a read of
+// part of a channel, conversation or thread (which refetches).
+export function applyActivityChangedEvent(qc: QueryClient, data: unknown) {
+  const change = parseActivityChange(data);
+  patchActivity(qc, (feed) => applyActivityChange(feed, change));
+}
+
+// optimisticActivity cancels in-flight feed reads (a response computed before
+// the write would undo the patch) and applies the patch to the cache.
+async function optimisticActivity(qc: QueryClient, fn: (feed: ActivityFeed) => ActivityFeed) {
+  await qc.cancelQueries({ queryKey: queryKeys.activity() });
+  qc.setQueryData<ActivityFeed>(queryKeys.activity(), (old) => (old ? fn(old) : old));
+}
+
+function activityWriteFailed() {
+  showToast("Couldn't update activity — please try again.");
+}
+
+// useSetActivityItemsRead marks items read or unread ("Mark as read" / "Mark as
+// unread", and opening a row). Optimistic; the refetch on settle reconciles.
+export function useSetActivityItemsRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ ids, read }: { ids: string[]; read: boolean }) =>
+      apiFetch<void>('/api/v1/activity/items/read', { method: 'PUT', body: JSON.stringify({ ids, read }) }),
+    onMutate: ({ ids, read }) => optimisticActivity(qc, (feed) => markActivityItems(feed, ids, read)),
+    onError: activityWriteFailed,
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.activity() });
+    },
+  });
+}
+
+// useRemoveActivityItems deletes items from the stream ("Remove from activity").
+export function useRemoveActivityItems() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (ids: string[]) =>
+      apiFetch<void>('/api/v1/activity/items/remove', { method: 'POST', body: JSON.stringify({ ids }) }),
+    onMutate: (ids) => optimisticActivity(qc, (feed) => removeActivityItems(feed, ids)),
+    onError: activityWriteFailed,
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.activity() });
+    },
+  });
+}
+
+// useMarkActivityRead marks every item read ("Mark all as read") by advancing
+// the server watermark, and optimistically marks the cached items read.
+// onSettled refetches to reconcile with the advanced watermark, re-counting
+// anything that arrived mid-flight as still unread.
 export function useMarkActivityRead() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => apiFetch<void>('/api/v1/activity/read', { method: 'PUT' }),
-    onMutate: async () => {
-      await qc.cancelQueries({ queryKey: queryKeys.activity() });
-      qc.setQueryData<ActivityFeed>(queryKeys.activity(), (old) =>
-        old
-          ? { ...old, unread: 0, unreadByType: {}, items: old.items.map((i) => ({ ...i, read: true })) }
-          : old,
-      );
-    },
+    onMutate: () => optimisticActivity(qc, markAllActivityRead),
+    onError: activityWriteFailed,
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: queryKeys.activity() });
     },

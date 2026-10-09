@@ -114,12 +114,11 @@ export function ActivityPanel({ onNavigate }: ActivityPanelProps) {
   }, [conversations]);
 
   const hrefFor = (i: ActivityItem | Reminder) => {
-    // Thread replies carry threadRootID; reactions and reminders on a reply
-    // carry parentMessageID. Either way the link opens the thread.
-    const threadRoot = ('threadRootID' in i ? i.threadRootID : undefined) || i.parentMessageID;
-    if (i.parentType !== 'channel') return buildConversationHref(i.parentID, i.messageID, threadRoot);
+    // A row about a thread reply links with its thread root so the thread
+    // opens on it.
+    if (i.parentType !== 'channel') return buildConversationHref(i.parentID, i.messageID, i.parentMessageID);
     const slug = i.channelSlug || channelByID.get(i.parentID)?.slug || i.parentID;
-    return buildChannelHref(slug, i.messageID, threadRoot);
+    return buildChannelHref(slug, i.messageID, i.parentMessageID);
   };
 
   const open = (row: ActivityRow) => {

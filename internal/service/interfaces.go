@@ -17,10 +17,11 @@ type UserStore interface {
 	UpdateUser(ctx context.Context, user *model.User) error
 	ListUsers(ctx context.Context, limit int, cursor string) ([]*model.User, string, error)
 	HasUsers(ctx context.Context) (bool, error)
-	// NotificationSettingsFor batch-loads account-level notification settings
-	// for a set of users so the notifier can decide per-recipient without an
-	// N+1 fan-out. Missing users default to DefaultNotificationSettings.
-	NotificationSettingsFor(ctx context.Context, userIDs []string) (map[string]model.NotificationSettings, error)
+	// NotificationAccountsFor batch-loads account-level notification settings
+	// (and machine flags) for a set of users so the notifier can decide
+	// per-recipient without an N+1 fan-out. Missing users default to
+	// DefaultNotificationSettings.
+	NotificationAccountsFor(ctx context.Context, userIDs []string) (map[string]store.NotificationAccount, error)
 }
 
 // ChannelStore defines persistence operations for channels.

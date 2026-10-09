@@ -258,11 +258,11 @@ func TestCorruptRows_BatchGetArms(t *testing.T) {
 		assertUnmarshalErr(t, err, "user GetUsersByIDs")
 	})
 
-	t.Run("user NotificationSettingsFor corrupt", func(t *testing.T) {
+	t.Run("user NotificationAccountsFor corrupt", func(t *testing.T) {
 		faulted := withFault(db, func(f *faultClient) {
 			f.transformBatchGetItem = func(out *dynamodb.BatchGetItemOutput) *dynamodb.BatchGetItemOutput {
-				// The settings row projects only id + notificationSettings, so
-				// the corruption must hit a projected field.
+				// The row projects only id, settings and the machine flags,
+				// so the corruption must hit a projected field.
 				out.Responses = map[string][]map[string]types.AttributeValue{db.Table: {{
 					"id": &types.AttributeValueMemberM{Value: map[string]types.AttributeValue{}},
 				}}}
@@ -270,8 +270,8 @@ func TestCorruptRows_BatchGetArms(t *testing.T) {
 				return out
 			}
 		})
-		_, err := NewUserStore(faulted).NotificationSettingsFor(ctx, []string{"u-1"})
-		assertUnmarshalErr(t, err, "user NotificationSettingsFor")
+		_, err := NewUserStore(faulted).NotificationAccountsFor(ctx, []string{"u-1"})
+		assertUnmarshalErr(t, err, "user NotificationAccountsFor")
 	})
 }
 
@@ -349,18 +349,18 @@ func TestBatchGetUnprocessedContinuations(t *testing.T) {
 		}
 	})
 
-	t.Run("NotificationSettingsFor drains unprocessed keys", func(t *testing.T) {
+	t.Run("NotificationAccountsFor drains unprocessed keys", func(t *testing.T) {
 		faulted := withFault(db, func(f *faultClient) { f.transformBatchGetItem = unprocOnce() })
-		got, err := NewUserStore(faulted).NotificationSettingsFor(ctx, []string{u.ID})
+		got, err := NewUserStore(faulted).NotificationAccountsFor(ctx, []string{u.ID})
 		if err != nil {
-			t.Fatalf("NotificationSettingsFor: %v", err)
+			t.Fatalf("NotificationAccountsFor: %v", err)
 		}
 		if _, ok := got[u.ID]; !ok {
 			t.Fatalf("settings map %v missing seeded user", got)
 		}
 	})
 
-	t.Run("NotificationSettingsFor skips a row with no user ID", func(t *testing.T) {
+	t.Run("NotificationAccountsFor skips a row with no user ID", func(t *testing.T) {
 		faulted := withFault(db, func(f *faultClient) {
 			f.transformBatchGetItem = func(out *dynamodb.BatchGetItemOutput) *dynamodb.BatchGetItemOutput {
 				// Well-typed row that unmarshals fine but carries no user id.
@@ -372,9 +372,9 @@ func TestBatchGetUnprocessedContinuations(t *testing.T) {
 				return out
 			}
 		})
-		got, err := NewUserStore(faulted).NotificationSettingsFor(ctx, []string{"ghost"})
+		got, err := NewUserStore(faulted).NotificationAccountsFor(ctx, []string{"ghost"})
 		if err != nil {
-			t.Fatalf("NotificationSettingsFor: %v", err)
+			t.Fatalf("NotificationAccountsFor: %v", err)
 		}
 		if len(got) != 0 {
 			t.Fatalf("got %v, want empty (id-less rows skipped)", got)

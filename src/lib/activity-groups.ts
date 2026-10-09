@@ -46,7 +46,7 @@ export interface ActivityRow {
 function groupKey(item: ActivityItem): string {
   switch (item.type) {
     case 'thread_reply':
-      return `thread:${item.parentID}:${item.threadRootID || item.messageID}`;
+      return `thread:${item.parentID}:${item.parentMessageID || item.messageID}`;
     case 'reaction':
       return `reaction:${item.messageID}:${item.emoji ?? ''}`;
     case 'dm':

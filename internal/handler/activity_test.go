@@ -18,7 +18,7 @@ import (
 )
 
 type fakeActivitySvc struct {
-	feed      service.ActivityFeed
+	feed      model.ActivityFeed
 	feedErr   error
 	seenErr   error
 	itemsErr  error
@@ -27,7 +27,7 @@ type fakeActivitySvc struct {
 	removeIDs []string
 }
 
-func (f *fakeActivitySvc) Feed(context.Context, string) (service.ActivityFeed, error) {
+func (f *fakeActivitySvc) Feed(context.Context, string) (model.ActivityFeed, error) {
 	return f.feed, f.feedErr
 }
 func (f *fakeActivitySvc) MarkSeen(context.Context, string) error { return f.seenErr }
@@ -76,13 +76,18 @@ func authedReq(t *testing.T, jwtMgr *auth.JWTManager, method, target, body strin
 }
 
 func TestActivityHandler_Feed(t *testing.T) {
-	a := &fakeActivitySvc{feed: service.ActivityFeed{Items: []*model.ActivityItem{{ID: "x"}}, Unread: 1}}
+	a := &fakeActivitySvc{feed: model.ActivityFeed{Items: []*model.ActivityFeedItem{{ActivityItem: model.ActivityItem{ID: "x"}}}, Unread: 1}}
 	h, jwt := setupActivityHandler(t, a, &fakeReminderSvc{})
 	handler := middleware.Auth(jwt)(http.HandlerFunc(h.Feed))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, authedReq(t, jwt, http.MethodGet, "/api/v1/activity", ""))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"unread":1`) {
 		t.Fatalf("Feed = %d %s", rec.Code, rec.Body.String())
+	}
+	// The read state rides on each item, flat beside the stored fields — the
+	// shape the client reads.
+	if !strings.Contains(rec.Body.String(), `"items":[{"id":"x",`) || !strings.Contains(rec.Body.String(), `"read":false}`) {
+		t.Fatalf("Feed item shape = %s", rec.Body.String())
 	}
 }
 
@@ -251,9 +256,14 @@ func TestActivityHandler_SetItemsRead(t *testing.T) {
 		t.Fatalf("missing read = %d, want 400", code)
 	}
 
-	svc.itemsErr = service.ErrActivityIDsInvalid
+	svc.itemsErr = fmt.Errorf("%w: bad ids", service.ErrValidation)
 	if code := serve(`{"ids":[],"read":true}`); code != http.StatusBadRequest {
 		t.Fatalf("invalid ids = %d, want 400", code)
+	}
+	// A body far past what a full stream's ids need is refused unread.
+	svc.itemsErr = nil
+	if code := serve(`{"ids":["` + strings.Repeat("A", int(activityItemsBodyBytes)) + `"],"read":true}`); code != http.StatusBadRequest {
+		t.Fatalf("oversized body = %d, want 400", code)
 	}
 	svc.itemsErr = errors.New("boom")
 	if code := serve(`{"ids":["a"],"read":true}`); code != http.StatusInternalServerError {
@@ -279,6 +289,13 @@ func TestActivityHandler_RemoveItems(t *testing.T) {
 	}
 	if code := serve(`not json`); code != http.StatusBadRequest {
 		t.Fatalf("bad body = %d, want 400", code)
+	}
+	if code := serve(`{"ids":["` + strings.Repeat("A", int(activityItemsBodyBytes)) + `"]}`); code != http.StatusBadRequest {
+		t.Fatalf("oversized body = %d, want 400", code)
+	}
+	svc.itemsErr = fmt.Errorf("%w: bad ids", service.ErrValidation)
+	if code := serve(`{"ids":["a"]}`); code != http.StatusBadRequest {
+		t.Fatalf("invalid ids = %d, want 400", code)
 	}
 	svc.itemsErr = errors.New("boom")
 	if code := serve(`{"ids":["a"]}`); code != http.StatusInternalServerError {

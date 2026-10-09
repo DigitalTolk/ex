@@ -52,7 +52,13 @@ func writeInternalError(w http.ResponseWriter, r *http.Request, code string, err
 
 // readJSON decodes the request body (up to 1 MB) into dest.
 func readJSON(r *http.Request, dest interface{}) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20) // 1 MB
+	return readJSONLimit(r, dest, 1<<20) // 1 MB
+}
+
+// readJSONLimit is readJSON with a route-specific body cap, for endpoints whose
+// valid bodies are far smaller than 1 MB.
+func readJSONLimit(r *http.Request, dest interface{}, limit int64) error {
+	r.Body = http.MaxBytesReader(nil, r.Body, limit)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dest); err != nil {
@@ -144,9 +150,9 @@ func serviceStatus(err error) (status int, code, message string, ok bool) {
 }
 
 // writeAgentError answers with the shared mapping, or a logged generic 500 for
-// anything unmapped — the agent/connector/context surfaces, which have no
-// legacy status contract to preserve. fallbackCode names the operation in the
-// server log.
+// anything unmapped — the agent/connector/context and activity-item surfaces,
+// which have no legacy status contract to preserve. fallbackCode names the
+// operation in the server log.
 func writeAgentError(w http.ResponseWriter, r *http.Request, err error, fallbackCode string) {
 	if status, code, message, ok := serviceStatus(err); ok {
 		writeError(w, status, code, message)
