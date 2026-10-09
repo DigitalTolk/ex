@@ -1,4 +1,3 @@
-import { userEvent } from 'vitest/browser';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -13,6 +12,17 @@ import { TagSearchProvider } from '@/context/TagSearchContext';
 import { resetServerVersionForTests } from '@/hooks/useServerVersion';
 import { dispatchEditMessage } from '@/lib/window-events';
 import type { User } from '@/types';
+
+// Hover without moving the browser's one real mouse (other files run in
+// parallel and a real pointer crossing their rows makes hover-only checks
+// flake): React derives onMouseEnter from mouseover, and a tick lets the
+// hover state flush.
+async function hoverRow(row: Element | null) {
+  row?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+  row?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 20));
+}
+
 
 // REAL browser end-to-end coverage for ConversationView — the DM/group
 // twin of ChannelView. Mounts the full chat route at /conversation/:id
@@ -562,7 +572,7 @@ describe('conversation route (full route, real browser)', () => {
     const screen = await renderRoute(`/conversation/${DM_ID}`);
     await expect.element(screen.getByText('hello from alice')).toBeVisible();
     // The toolbar mounts on hover.
-    await userEvent.hover(document.querySelector('[data-message-id]') as HTMLElement);
+    await hoverRow(document.querySelector('[data-message-id]'));
     await vi.waitFor(() => {
       expect(document.querySelector('[aria-label="Reply in thread"]')).not.toBeNull();
     }, { timeout: 15000 });

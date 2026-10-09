@@ -7,6 +7,17 @@ import { MessageItem } from './MessageItem';
 import { dispatchEditMessage } from '@/lib/window-events';
 import type { Message } from '@/types';
 
+// Hover without moving the browser's one real mouse (other files run in
+// parallel and a real pointer crossing their rows makes hover-only checks
+// flake): React derives onMouseEnter from mouseover, and a tick lets the
+// hover state flush.
+async function hoverRow(row: Element | null) {
+  row?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+  row?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 20));
+}
+
+
 // Targeted branch coverage for MessageItem — drives the desktop hover
 // toolbar/menu, inline edit submit, copy-link deep-link arms, pinned
 // menu variants, conversation-context attachments, the mobile action
@@ -121,7 +132,7 @@ describe('MessageItem desktop toolbar + menu branches', () => {
       </>,
     );
     const rowA = document.querySelector('[data-message-id="a"]') as HTMLElement;
-    await userEvent.hover(rowA); // the toolbar mounts on hover
+    await hoverRow(rowA); // the toolbar mounts on hover
     const triggerA = rowA.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement;
     // Open row A's kebab menu (a real click so Radix registers the open).
     await userEvent.click(triggerA);
@@ -187,7 +198,7 @@ describe('MessageItem desktop toolbar + menu branches', () => {
       <MessageItem message={makeMessage({ pinned: true })} authorName="Alice" isOwn channelId="channel-1" channelSlug="general" currentUserId="user-1" />,
     );
     const row = document.querySelector('[data-message-id]') as HTMLElement;
-    await userEvent.hover(row); // the toolbar mounts on hover
+    await hoverRow(row); // the toolbar mounts on hover
     (row.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement).click();
     // Pinned message → the menu item reads "Unpin".
     const unpin = await screen.getByRole('menuitem', { name: 'Unpin message' });

@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import { userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
@@ -7,6 +6,17 @@ import { MessageItem } from './MessageItem';
 import { expectPaintedAtCenter } from '@/test/browser-assertions';
 import { dispatchEditMessage } from '@/lib/window-events';
 import type { Message } from '@/types';
+
+// Hover without moving the browser's one real mouse (other files run in
+// parallel and a real pointer crossing their rows makes hover-only checks
+// flake): React derives onMouseEnter from mouseover, and a tick lets the
+// hover state flush.
+async function hoverRow(row: Element | null) {
+  row?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+  row?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 20));
+}
+
 
 const useAttachmentsBatchMock = vi.hoisted(() => vi.fn(() => ({ map: new Map(), isLoading: false })));
 
@@ -88,7 +98,7 @@ describe('MessageItem browser behavior', () => {
       />,
     );
     // The toolbar mounts on hover.
-    await userEvent.hover(document.querySelector('[data-message-id]') as HTMLElement);
+    await hoverRow(document.querySelector('[data-message-id]'));
     const btn = screen.getByRole('button', { name: 'React with :tada:' });
     await expect.element(btn).toBeInTheDocument();
     await btn.click();
@@ -292,7 +302,7 @@ describe('MessageItem browser behavior', () => {
       />,
     );
     const row = document.querySelector('[data-message-id]') as HTMLElement;
-    await userEvent.hover(row); // the toolbar mounts on hover
+    await hoverRow(row); // the toolbar mounts on hover
     // The desktop hover toolbar exposes the reply control; click the first
     // visible "Reply in thread" button.
     const replyBtn = Array.from(document.querySelectorAll('button[aria-label="Reply in thread"]'))
