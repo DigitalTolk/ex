@@ -88,10 +88,13 @@ export function ThreadActionBar({
         {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
       </span>
       {hasNew && (
-        <span data-testid="thread-action-new" className="flex shrink-0 items-center gap-1 font-semibold text-destructive">
-          <span className="h-1.5 w-1.5 rounded-full bg-destructive" aria-hidden="true" />
-          New replies
-        </span>
+        <span
+          data-testid="thread-action-new"
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-destructive"
+          role="img"
+          aria-label="New replies"
+          title="New replies"
+        />
       )}
       {lastReplyAt && (
         <span

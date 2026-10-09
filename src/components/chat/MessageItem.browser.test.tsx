@@ -7,6 +7,17 @@ import { expectPaintedAtCenter } from '@/test/browser-assertions';
 import { dispatchEditMessage } from '@/lib/window-events';
 import type { Message } from '@/types';
 
+// Hover without moving the browser's one real mouse (other files run in
+// parallel and a real pointer crossing their rows makes hover-only checks
+// flake): React derives onMouseEnter from mouseover, and a tick lets the
+// hover state flush.
+async function hoverRow(row: Element | null) {
+  row?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+  row?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 20));
+}
+
+
 const useAttachmentsBatchMock = vi.hoisted(() => vi.fn(() => ({ map: new Map(), isLoading: false })));
 
 const toggleReactionMutate = vi.hoisted(() => vi.fn());
@@ -86,6 +97,8 @@ describe('MessageItem browser behavior', () => {
         quickReactions={[':tada:', ':smile:']}
       />,
     );
+    // The toolbar mounts on hover.
+    await hoverRow(document.querySelector('[data-message-id]'));
     const btn = screen.getByRole('button', { name: 'React with :tada:' });
     await expect.element(btn).toBeInTheDocument();
     await btn.click();
@@ -118,7 +131,7 @@ describe('MessageItem browser behavior', () => {
   it('keeps the mobile long-press action sheet above the bottom composer', async () => {
     if (window.innerWidth > 767) return;
 
-    const screen = await renderWithProviders(
+    await renderWithProviders(
       <>
         <div style={{ position: 'relative', zIndex: 0, transform: 'translateZ(0)' }}>
           <MessageItem
@@ -145,7 +158,7 @@ describe('MessageItem browser behavior', () => {
       </>,
     );
 
-    const row = screen.getByTestId('message-actions-trigger').element().closest('[data-message-id]');
+    const row = document.querySelector('[data-message-id]'); // the hover toolbar never mounts on touch
     expect(row).not.toBeNull();
     row!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
 
@@ -184,7 +197,7 @@ describe('MessageItem browser behavior', () => {
       />,
     );
 
-    const row = screen.getByTestId('message-actions-trigger').element().closest('[data-message-id]');
+    const row = document.querySelector('[data-message-id]'); // the hover toolbar never mounts on touch
     expect(row).not.toBeNull();
     row!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
 
@@ -289,7 +302,7 @@ describe('MessageItem browser behavior', () => {
       />,
     );
     const row = document.querySelector('[data-message-id]') as HTMLElement;
-    row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    await hoverRow(row); // the toolbar mounts on hover
     // The desktop hover toolbar exposes the reply control; click the first
     // visible "Reply in thread" button.
     const replyBtn = Array.from(document.querySelectorAll('button[aria-label="Reply in thread"]'))

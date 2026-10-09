@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PinnedPanel } from '@/components/chat/PinnedPanel';
@@ -166,9 +166,10 @@ describe('PinnedPanel', () => {
         </BrowserRouter>
       </QueryClientProvider>,
     );
-    // Hover the pinned row so the toolbar button reveals.
+    // Hover the message row so its toolbar mounts (React derives onMouseEnter
+    // itself; a dispatched native mouseenter never reached it).
     const row = await screen.findByTestId('pinned-message-row');
-    row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    fireEvent.mouseEnter(row.querySelector('[data-message-id]')!);
     const replyBtn = await screen.findByLabelText('Reply in thread');
     replyBtn.click();
     expect(onReplyInThread).toHaveBeenCalledWith('m-pin-1');

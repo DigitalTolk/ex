@@ -78,11 +78,16 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
 
 function renderWithProviders(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const result = render(
     <QueryClientProvider client={qc}>
       <BrowserRouter>{ui}</BrowserRouter>
     </QueryClientProvider>,
   );
+  // The hover toolbar mounts on hover (MessageItem): hover the first row so
+  // the tests can reach its actions the way a pointer user does.
+  const row = result.container.querySelector('[data-message-id]');
+  if (row) fireEvent.mouseEnter(row);
+  return result;
 }
 
 function makeMessage(overrides: Partial<Message> = {}): Message {
@@ -235,10 +240,12 @@ describe('MessageItem - hover bar and avatar', () => {
     const rootA = triggerA.closest('[data-testid="dropdown-root"]') as HTMLElement;
     expect(rootA.getAttribute('data-open')).toBe('true');
 
-    // Hover the second message — A's menu must close.
+    // Hover the second message — A's menu must close (its toolbar, and
+    // the menu root with it, unmount).
     const rowB = document.querySelector('[data-message-id="msg-b"]') as HTMLElement;
     fireEvent.mouseEnter(rowB);
-    expect(rootA.getAttribute('data-open')).toBe('false');
+    expect(rootA.isConnected).toBe(false);
+    expect(document.querySelector('[data-message-id="msg-a"] [data-testid="dropdown-root"]')).toBeNull();
   });
 
   it('does not close the menu when the same message gets re-hovered', () => {
@@ -258,35 +265,56 @@ describe('MessageItem - hover bar and avatar', () => {
     expect(root.getAttribute('data-open')).toBe('true');
   });
 
-  it('toolbar starts hidden when the row is not hovered', () => {
-    renderWithProviders(
-      <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} />,
-    );
-    const toolbar = document.querySelector('[role="toolbar"][aria-label="Message actions"]') as HTMLElement;
-    expect(toolbar.getAttribute('data-actions-visible')).toBe('false');
-    expect(toolbar.style.opacity).toBe('0');
-  });
-
-  it('shows the toolbar on row mouseEnter and hides it on mouseLeave', () => {
+  it('toolbar is not mounted while the row is not hovered', () => {
+    // It carries three emoji pickers and a menu; mounting one per row at
+    // opacity 0 was the main cost of scrolling, so an unhovered row has none.
     renderWithProviders(
       <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} />,
     );
     const row = document.querySelector('[data-message-id]') as HTMLElement;
-    const toolbar = document.querySelector('[role="toolbar"][aria-label="Message actions"]') as HTMLElement;
-    fireEvent.mouseEnter(row);
-    expect(toolbar.getAttribute('data-actions-visible')).toBe('true');
-    expect(toolbar.style.opacity).toBe('1');
+    fireEvent.mouseLeave(row); // renderWithProviders hovers the row
+    expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
+  });
+
+  it('mounts the toolbar on row mouseEnter and unmounts it on mouseLeave', () => {
+    renderWithProviders(
+      <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} />,
+    );
+    const row = document.querySelector('[data-message-id]') as HTMLElement;
     fireEvent.mouseLeave(row);
-    expect(toolbar.getAttribute('data-actions-visible')).toBe('false');
-    expect(toolbar.style.opacity).toBe('0');
+    expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
+    fireEvent.mouseEnter(row);
+    const toolbar = document.querySelector('[role="toolbar"][aria-label="Message actions"]') as HTMLElement;
+    expect(toolbar.getAttribute('data-actions-visible')).toBe('true');
+    fireEvent.mouseLeave(row);
+    expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
+  });
+
+  it('focus inside the row mounts the toolbar; focus leaving the row unmounts it, moving within it does not', () => {
+    renderWithProviders(
+      <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} />,
+    );
+    const row = document.querySelector('[data-message-id]') as HTMLElement;
+    fireEvent.mouseLeave(row);
+    expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
+    fireEvent.focus(row);
+    const toolbar = document.querySelector('[role="toolbar"][aria-label="Message actions"]') as HTMLElement;
+    expect(toolbar).not.toBeNull();
+    // Focus moving to a control inside the row keeps it.
+    const inside = toolbar.querySelector('button') as HTMLElement;
+    fireEvent.blur(row, { relatedTarget: inside });
+    expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).not.toBeNull();
+    // Focus leaving the row (nowhere, or elsewhere) drops it.
+    fireEvent.blur(row, { relatedTarget: null });
+    expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
   });
 
   it('keeps the toolbar visible after clicking "..." even though the cursor may stop firing :hover', () => {
     // Bug: clicking the kebab made the toolbar vanish instantly because
     // Radix's open dropdown changes pointer-events / focus management,
     // which broke Tailwind group-hover. The fix tracks visibility in
-    // JS state (visible = hovered || actionsMenuOpen) and renders an
-    // inline opacity style — no CSS variants in the critical path.
+    // JS state (visible = hovered || actionsMenuOpen); the toolbar is
+    // mounted only while visible — no CSS variants in the critical path.
     renderWithProviders(
       <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} />,
     );
@@ -296,13 +324,11 @@ describe('MessageItem - hover bar and avatar', () => {
     const toolbar = document.querySelector('[role="toolbar"][aria-label="Message actions"]') as HTMLElement;
     expect(toolbar.getAttribute('data-actions-pinned')).toBe('true');
     expect(toolbar.getAttribute('data-actions-visible')).toBe('true');
-    expect(toolbar.style.opacity).toBe('1');
 
     // The cursor leaving the row (e.g. moving to the menu portal) must
     // NOT hide the toolbar while the menu is open.
     fireEvent.mouseLeave(row);
     expect(toolbar.getAttribute('data-actions-visible')).toBe('true');
-    expect(toolbar.style.opacity).toBe('1');
   });
 
   it('renders the kebab DropdownMenu with modal={false}', () => {
@@ -339,11 +365,10 @@ describe('MessageItem - hover bar and avatar', () => {
     expect(toolbarA.getAttribute('data-actions-visible')).toBe('true');
     expect(toolbarA.getAttribute('data-actions-pinned')).toBe('true');
 
-    // Hover B — A's menu and toolbar both clear.
+    // Hover B — A's menu closes and its toolbar unmounts.
     fireEvent.mouseEnter(rowB);
-    expect(toolbarA.getAttribute('data-actions-pinned')).toBe('false');
-    expect(toolbarA.getAttribute('data-actions-visible')).toBe('false');
-    expect(toolbarA.style.opacity).toBe('0');
+    expect(rowA.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
+    expect(toolbarA.isConnected).toBe(false);
   });
 
   it('the closed-toolbar style cannot be re-shown by hovering another message (no resurrection)', () => {
@@ -368,8 +393,8 @@ describe('MessageItem - hover bar and avatar', () => {
       fireEvent.mouseLeave(rowB);
       fireEvent.mouseEnter(rowB);
     }
-    expect(toolbarA.getAttribute('data-actions-visible')).toBe('false');
-    expect(toolbarA.style.opacity).toBe('0');
+    expect(toolbarA.isConnected).toBe(false);
+    expect(rowA.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
   });
 });
 

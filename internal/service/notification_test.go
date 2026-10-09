@@ -218,7 +218,7 @@ func TestNotificationService_NotifyForMessage_SendsMobilePushToSameRecipients(t 
 		if call.notif.DeepLink != "/channel/general" {
 			t.Errorf("DeepLink = %q", call.notif.DeepLink)
 		}
-		if call.notif.Body != "hello" {
+		if call.notif.Body != "Alice: hello" {
 			t.Errorf("Body = %q", call.notif.Body)
 		}
 	}
@@ -1279,7 +1279,7 @@ func TestNotificationService_WebhookAttachmentNoFallback_PopupNotEmpty(t *testin
 	}, ParentChannel, nil)
 
 	notif := publishedNotifications(pub)[pubsub.UserChannel("u-bob")]
-	if notif.Body != "Build #42 failed — main is red" {
+	if notif.Body != "CI Bot: Build #42 failed — main is red" {
 		t.Fatalf("notification body = %q, want the synthesized summary", notif.Body)
 	}
 }
@@ -1360,7 +1360,7 @@ func TestNotificationService_PreviewBody_LeavesGroupMentionsAlone(t *testing.T) 
 }
 
 func TestNotificationService_DisplayNameFallbacksAndTitles(t *testing.T) {
-	svc, _, _, _, chans, users := setupNotifier(t)
+	svc, _, _, conv, chans, users := setupNotifier(t)
 	ctx := context.Background()
 
 	if got := svc.parentDisplayName(ctx, "ch-missing", ParentChannel); got != "ch-missing" {
@@ -1371,7 +1371,15 @@ func TestNotificationService_DisplayNameFallbacksAndTitles(t *testing.T) {
 		t.Fatalf("channel name fallback = %q, want General", got)
 	}
 	if got := svc.parentDisplayName(ctx, "c1", ParentConversation); got != "" {
-		t.Fatalf("conversation parentDisplayName = %q, want empty", got)
+		t.Fatalf("missing conversation parentDisplayName = %q, want empty", got)
+	}
+	conv.conversations["c-group"] = &model.Conversation{ID: "c-group", Type: model.ConversationTypeGroup, Name: "Release crew"}
+	if got := svc.parentDisplayName(ctx, "c-group", ParentConversation); got != "Release crew" {
+		t.Fatalf("group conversation parentDisplayName = %q, want its name", got)
+	}
+	conv.conversations["c-dm"] = &model.Conversation{ID: "c-dm", Type: model.ConversationTypeDM}
+	if got := svc.parentDisplayName(ctx, "c-dm", ParentConversation); got != "" {
+		t.Fatalf("dm parentDisplayName = %q, want empty", got)
 	}
 
 	if got := svc.userDisplayName(ctx, "u-missing"); got != "u-missing" {
@@ -1382,14 +1390,75 @@ func TestNotificationService_DisplayNameFallbacksAndTitles(t *testing.T) {
 		t.Fatalf("email fallback userDisplayName = %q", got)
 	}
 
-	if got := titleFor(NotificationKindThreadReply, ParentConversation, "", "Alice"); got != "Alice replied" {
-		t.Fatalf("thread conversation title = %q", got)
+	// Mattermost layout: the title is the place, the body is "who: what".
+	if got := titleFor(NotificationKindThreadReply, ParentConversation, "", "Alice"); got != "Reply from Alice" {
+		t.Fatalf("thread dm title = %q", got)
 	}
-	if got := titleFor(NotificationKindMention, ParentConversation, "", "Alice"); got != "Alice mentioned you" {
-		t.Fatalf("mention conversation title = %q", got)
+	if got := titleFor(NotificationKindThreadReply, ParentConversation, "Release crew", "Alice"); got != "Reply in Release crew" {
+		t.Fatalf("thread group title = %q", got)
+	}
+	if got := titleFor(NotificationKindThreadReply, ParentChannel, "general", "Alice"); got != "Reply in ~general" {
+		t.Fatalf("thread channel title = %q", got)
+	}
+	if got := titleFor(NotificationKindMention, ParentConversation, "", "Alice"); got != "Alice" {
+		t.Fatalf("mention dm title = %q", got)
+	}
+	if got := titleFor(NotificationKindMention, ParentChannel, "general", "Alice"); got != "~general" {
+		t.Fatalf("mention channel title = %q", got)
+	}
+	if got := titleFor(NotificationKindMessage, ParentConversation, "Release crew", "Alice"); got != "Release crew" {
+		t.Fatalf("message group title = %q", got)
+	}
+	if got := titleFor(NotificationKindMessage, ParentConversation, "", "Alice"); got != "Alice" {
+		t.Fatalf("message dm title = %q", got)
+	}
+	if got := threadReplyTitle(ParentChannel, "general", "Quick update on the deploy window for tomorrow afternoon, and after"); got != "Thread in ~general: Quick update on the deploy window for tomorrow…" {
+		t.Fatalf("thread title (channel, long root) = %q", got)
+	}
+	if got := threadReplyTitle(ParentConversation, "Release crew", "short root"); got != "Thread in Release crew: short root" {
+		t.Fatalf("thread title (group) = %q", got)
+	}
+	if got := threadReplyTitle(ParentConversation, "", "short root"); got != "Thread: short root" {
+		t.Fatalf("thread title (dm) = %q", got)
+	}
+	if got := threadReplyTitle(ParentChannel, "general", ""); got != "Thread in ~general" {
+		t.Fatalf("thread title (no root) = %q", got)
+	}
+	if got := bodyFor(ParentChannel, "general", "Alice", "hi"); got != "Alice: hi" {
+		t.Fatalf("channel body = %q", got)
+	}
+	if got := bodyFor(ParentConversation, "Release crew", "Alice", "hi"); got != "Alice: hi" {
+		t.Fatalf("group body = %q", got)
+	}
+	if got := bodyFor(ParentConversation, "", "Alice", "hi"); got != "hi" {
+		t.Fatalf("dm body = %q", got)
+	}
+	if got := bodyFor(ParentChannel, "general", "Alice", ""); got != "Alice" {
+		t.Fatalf("empty body = %q", got)
 	}
 	if got := titleFor("unknown", ParentChannel, "general", "Alice"); got != "Alice" {
 		t.Fatalf("unknown title = %q", got)
+	}
+}
+
+func TestNotifyForMessage_ThreadReplyTitledByRoot(t *testing.T) {
+	svc, pub, members, _, chans, users := setupNotifier(t)
+	ctx := context.Background()
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "General", Slug: "general"}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Bob"}
+	users.users["u-bob"] = &model.User{ID: "u-bob", DisplayName: "Alice"}
+	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
+	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
+	msgs := svc.messages.(*mockMessageStore)
+	msgs.messages["ch1#root1"] = &model.Message{ID: "root1", ParentID: "ch1", AuthorID: "u-bob", Body: "Can someone confirm the deploy window for tomorrow afternoon please", CreatedAt: time.Now()}
+	// Root not handed over (nil): it is fetched.
+	svc.NotifyForMessage(ctx, &model.Message{ID: "reply1", ParentID: "ch1", ParentMessageID: "root1", AuthorID: "u-author", Body: "Yes, 4pm works for everyone on my side"}, ParentChannel, nil)
+	got := publishedNotifications(pub)[pubsub.UserChannel("u-bob")]
+	if got.Title != "Thread in ~general: Can someone confirm the deploy window for…" {
+		t.Fatalf("thread title = %q", got.Title)
+	}
+	if got.Body != "Bob: Yes, 4pm works for everyone on my side" {
+		t.Fatalf("thread body = %q", got.Body)
 	}
 }
 
@@ -1542,8 +1611,10 @@ func TestNotifyForMessage_AtAll_NotificationKeepsGroupMentionCopy(t *testing.T) 
 	if got.Kind != NotificationKindMention {
 		t.Fatalf("kind = %q, want %q", got.Kind, NotificationKindMention)
 	}
-	if !strings.Contains(got.Title, "@all") {
-		t.Errorf("@all title lost group mention: %q", got.Title)
+	// Mattermost layout: the title is the place; the group mention stays
+	// visible in the body ("who: what").
+	if got.Title != "~general" {
+		t.Errorf("@all title = %q, want the channel", got.Title)
 	}
 	if !strings.Contains(got.Body, "@all") {
 		t.Errorf("@all body lost group mention: %q", got.Body)
@@ -1632,8 +1703,8 @@ func TestNotifyForMessage_AtHere_NotificationKeepsGroupMentionCopy(t *testing.T)
 	if got.Kind != NotificationKindMention {
 		t.Fatalf("kind = %q, want %q", got.Kind, NotificationKindMention)
 	}
-	if !strings.Contains(got.Title, "@here") {
-		t.Errorf("@here title lost group mention: %q", got.Title)
+	if got.Title != "~general" {
+		t.Errorf("@here title = %q, want the channel", got.Title)
 	}
 	if !strings.Contains(got.Body, "@here") {
 		t.Errorf("@here body lost group mention: %q", got.Body)
@@ -1790,8 +1861,13 @@ func TestNotifyForMessage_MentionTitle_IncludesChannelName(t *testing.T) {
 		if err := json.Unmarshal(p.event.Data, &n); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
-		if !strings.Contains(n.Title, "mentioned you") || !strings.Contains(n.Title, "general") {
-			t.Errorf("expected mention title to include 'mentioned you' and channel name; got %q", n.Title)
+		// Mattermost layout: the title names the channel, the body carries
+		// the author and the mention itself.
+		if n.Title != "~general" {
+			t.Errorf("mention title = %q, want the channel", n.Title)
+		}
+		if !strings.Contains(n.Body, ": ") {
+			t.Errorf("mention body = %q, want \"who: what\"", n.Body)
 		}
 		return
 	}
@@ -1837,10 +1913,10 @@ func TestNotificationService_WebhookUsernameAndFallbackBody(t *testing.T) {
 		t.Fatalf("recipients = %v, want both u-author and u-bob", recipients)
 	}
 	notif := push.calls[0].notif
-	if notif.Body != "build failed" {
+	if notif.Body != "CI Bot: build failed" {
 		t.Fatalf("notification body = %q, want fallback", notif.Body)
 	}
-	if !strings.Contains(notif.Title, "CI Bot") {
+	if !strings.Contains(notif.Body, "CI Bot") {
 		t.Fatalf("notification title = %q, want webhook username", notif.Title)
 	}
 }

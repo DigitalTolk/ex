@@ -37,7 +37,7 @@ function renderItem(overrides: Partial<Message> = {}) {
     createdAt: '2026-04-26T10:30:00Z',
     ...overrides,
   };
-  return render(
+  const result = render(
     <QueryClientProvider client={qc}>
       <BrowserRouter>
         <MessageItem
@@ -51,6 +51,11 @@ function renderItem(overrides: Partial<Message> = {}) {
       </BrowserRouter>
     </QueryClientProvider>,
   );
+  // The hover toolbar mounts on hover (MessageItem): hover the first row so
+  // the tests can reach its actions the way a pointer user does.
+  const row = result.container.querySelector('[data-message-id]');
+  if (row) fireEvent.mouseEnter(row);
+  return result;
 }
 
 beforeEach(() => {

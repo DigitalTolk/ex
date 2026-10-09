@@ -6,6 +6,17 @@ import { BrowserRouter } from 'react-router-dom';
 import { MessageItem } from './MessageItem';
 import type { Message } from '@/types';
 
+// Hover without moving the browser's one real mouse (other files run in
+// parallel and a real pointer crossing their rows makes hover-only checks
+// flake): React derives onMouseEnter from mouseover, and a tick lets the
+// hover state flush.
+async function hoverRow(row: Element | null) {
+  row?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+  row?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 20));
+}
+
+
 // Unlike MessageItem.reminder.browser.test (which mocks useActivity to spy on
 // mutate), this drives the REAL useCreateReminder hook and only stubs apiFetch,
 // proving the "Remind me" flow actually issues POST /api/v1/reminders.
@@ -62,6 +73,7 @@ describe('MessageItem "Remind me" — real POST', () => {
     const screen = await renderItem(
       <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} channelId="channel-1" channelSlug="general" />,
     );
+    await hoverRow(document.querySelector('[data-message-id]')); // the toolbar mounts on hover
     await userEvent.click(document.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement);
     await userEvent.click(screen.getByTestId('remind-me-trigger'));
     await userEvent.click(screen.getByTestId('remind-in1h'));
@@ -79,6 +91,7 @@ describe('MessageItem "Remind me" — real POST', () => {
     const screen = await renderItem(
       <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} channelId="channel-1" channelSlug="general" />,
     );
+    await hoverRow(document.querySelector('[data-message-id]')); // the toolbar mounts on hover
     await userEvent.click(document.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement);
     await userEvent.click(screen.getByTestId('remind-me-trigger'));
     await userEvent.click(screen.getByTestId('remind-custom'));

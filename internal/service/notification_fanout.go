@@ -206,10 +206,33 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		deepLink = deepLink + "?thread=" + msg.ParentMessageID + "#msg-" + msg.ParentMessageID
 	}
 
+	// The message preview on its own; the banner body wraps it with the
+	// author ("who: what"), while the Activity tab shows the actor separately
+	// and keeps the bare text.
+	preview := previewBody(notificationBody(msg))
+	title := titleFor(kind, parentType, parentName, authorName)
+	body := bodyFor(parentType, parentName, authorName, preview)
+	if kind == NotificationKindThreadReply {
+		// Thread replies are titled by the thread: "<name> replied on thread
+		// <root…>", with the reply itself as the body. The root normally
+		// arrives with the call; fetch it when the metadata bump failed.
+		root := threadRoot
+		if root == nil && s.messages != nil {
+			if r, err := s.messages.GetMessage(ctx, msg.ParentID, msg.ParentMessageID); err == nil {
+				root = r
+			}
+		}
+		rootPreview := ""
+		if root != nil {
+			rootPreview = previewBody(notificationBody(root))
+		}
+		title = threadReplyTitle(parentType, parentName, rootPreview)
+		body = authorName + ": " + preview
+	}
 	baseNotif := Notification{
 		Kind:            kind,
-		Title:           titleFor(kind, parentType, parentName, authorName),
-		Body:            previewBody(notificationBody(msg)),
+		Title:           title,
+		Body:            body,
 		DeepLink:        deepLink,
 		ParentID:        msg.ParentID,
 		ParentType:      parentType,
@@ -229,7 +252,6 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	// level entirely, while @all/@here ("group" mentions) are gated by the
 	// recipient's "ignore @all/@here" preference and their mute flag.
 	mentions := ParseMentions(msg.Body)
-	mentionNotif.Title = mentionTitleFor(mentions, parentType, parentName, authorName)
 	explicitSet := make(map[string]bool)
 	for _, m := range mentions.Users {
 		if m.UserID != "" && m.UserID != msg.AuthorID {
@@ -318,7 +340,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		ParentID:        msg.ParentID,
 		ParentType:      parentType,
 		ParentMessageID: msg.ParentMessageID,
-		MessagePreview:  collapseSpace(baseNotif.Body), // baseNotif.Body is already previewBody'd
+		MessagePreview:  collapseSpace(preview),
 		ActorID:         msg.AuthorID,
 		ActorName:       msg.WebhookUsername,
 		Webhook:         msg.WebhookUsername != "",

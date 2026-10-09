@@ -3,6 +3,9 @@ import { act, renderHook } from '@testing-library/react';
 import {
   clearMissedArrivals,
   clearUnreadAnchor,
+  isUnreadSeen,
+  markUnreadSeen,
+  useUnreadSeen,
   endReadSession,
   getUnreadAnchor,
   holdRead,
@@ -108,5 +111,26 @@ describe('read-position', () => {
     expect(isAtLiveTail('ch-1')).toBe(true);
     rerender({ k: undefined });
     expect(result.current).toBe(0);
+  });
+
+  it('a seen line stays seen until the anchor moves, is cleared, or the visit ends', () => {
+    const { result, rerender } = renderHook(({ k }: { k?: string }) => useUnreadSeen(k), { initialProps: { k: 'ch-1' } });
+    expect(result.current).toBe(false);
+    act(() => markUnreadSeen('ch-1'));
+    expect(isUnreadSeen('ch-1')).toBe(true);
+    expect(result.current).toBe(true);
+    act(() => markUnreadSeen('ch-1')); // idempotent
+    expect(result.current).toBe(true);
+    // A new line (a new anchor) is unseen again.
+    act(() => setUnreadAnchor('ch-1', { kind: 'message', messageID: 'm-1' }, { replace: true }));
+    expect(isUnreadSeen('ch-1')).toBe(false);
+    act(() => markUnreadSeen('ch-1'));
+    act(() => clearUnreadAnchor('ch-1'));
+    expect(isUnreadSeen('ch-1')).toBe(false);
+    act(() => markUnreadSeen('ch-1'));
+    act(() => endReadSession('ch-1'));
+    expect(isUnreadSeen('ch-1')).toBe(false);
+    rerender({ k: undefined });
+    expect(result.current).toBe(false);
   });
 });
