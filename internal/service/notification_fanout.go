@@ -206,8 +206,12 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		deepLink = deepLink + "?thread=" + msg.ParentMessageID + "#msg-" + msg.ParentMessageID
 	}
 
+	// The message preview on its own; the banner body wraps it with the
+	// author ("who: what"), while the Activity tab shows the actor separately
+	// and keeps the bare text.
+	preview := previewBody(notificationBody(msg))
 	title := titleFor(kind, parentType, parentName, authorName)
-	body := bodyFor(parentType, parentName, authorName, previewBody(notificationBody(msg)))
+	body := bodyFor(parentType, parentName, authorName, preview)
 	if kind == NotificationKindThreadReply {
 		// Thread replies are titled by the thread: "<name> replied on thread
 		// <root…>", with the reply itself as the body. The root normally
@@ -223,7 +227,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			rootPreview = previewBody(notificationBody(root))
 		}
 		title = threadReplyTitle(parentType, parentName, rootPreview)
-		body = authorName + ": " + previewBody(notificationBody(msg))
+		body = authorName + ": " + preview
 	}
 	baseNotif := Notification{
 		Kind:            kind,
@@ -336,7 +340,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		ParentID:        msg.ParentID,
 		ParentType:      parentType,
 		ParentMessageID: msg.ParentMessageID,
-		MessagePreview:  collapseSpace(baseNotif.Body), // baseNotif.Body is already previewBody'd
+		MessagePreview:  collapseSpace(preview),
 		ActorID:         msg.AuthorID,
 		ActorName:       msg.WebhookUsername,
 		Webhook:         msg.WebhookUsername != "",
