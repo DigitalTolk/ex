@@ -199,10 +199,29 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		deepLink = deepLink + "?thread=" + msg.ParentMessageID + "#msg-" + msg.ParentMessageID
 	}
 
+	title := titleFor(kind, parentType, parentName, authorName)
+	body := bodyFor(parentType, parentName, authorName, previewBody(notificationBody(msg)))
+	if kind == NotificationKindThreadReply {
+		// Thread replies are titled by the thread: "<name> replied on thread
+		// <root…>", with the reply itself as the body. The root normally
+		// arrives with the call; fetch it when the metadata bump failed.
+		root := threadRoot
+		if root == nil && s.messages != nil {
+			if r, err := s.messages.GetMessage(ctx, msg.ParentID, msg.ParentMessageID); err == nil {
+				root = r
+			}
+		}
+		rootPreview := ""
+		if root != nil {
+			rootPreview = previewBody(notificationBody(root))
+		}
+		title = threadReplyTitle(parentType, parentName, rootPreview)
+		body = authorName + ": " + previewBody(notificationBody(msg))
+	}
 	baseNotif := Notification{
 		Kind:            kind,
-		Title:           titleFor(kind, parentType, parentName, authorName),
-		Body:            previewBody(notificationBody(msg)),
+		Title:           title,
+		Body:            body,
 		DeepLink:        deepLink,
 		ParentID:        msg.ParentID,
 		ParentType:      parentType,
@@ -222,7 +241,6 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	// level entirely, while @all/@here ("group" mentions) are gated by the
 	// recipient's "ignore @all/@here" preference and their mute flag.
 	mentions := ParseMentions(msg.Body)
-	mentionNotif.Title = mentionTitleFor(mentions, parentType, parentName, authorName)
 	explicitSet := make(map[string]bool)
 	for _, m := range mentions.Users {
 		if m.UserID != "" && m.UserID != msg.AuthorID {

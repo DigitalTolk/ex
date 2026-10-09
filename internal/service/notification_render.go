@@ -11,29 +11,6 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 )
 
-func mentionTitleFor(mentions ParsedMentions, parentType, parentName, authorName string) string {
-	if label := groupMentionLabel(mentions); label != "" {
-		if where := parentLabel(parentType, parentName); where != "" {
-			return authorName + " used " + label + " in " + where
-		}
-		return authorName + " used " + label
-	}
-	return titleFor(NotificationKindMention, parentType, parentName, authorName)
-}
-
-func groupMentionLabel(mentions ParsedMentions) string {
-	switch {
-	case mentions.All && mentions.Here:
-		return "@all/@here"
-	case mentions.All:
-		return "@all"
-	case mentions.Here:
-		return "@here"
-	default:
-		return ""
-	}
-}
-
 // parentDisplayName resolves a human-readable name for the parent (channel
 // or conversation) used in notification titles. Returns an empty string on
 // error — title formatting handles that.
@@ -116,30 +93,65 @@ func (s *NotificationService) userDisplayName(ctx context.Context, userID string
 	return name
 }
 
-// titleFor always says WHERE: a push arriving on a phone or a banner on a
-// desktop can't be placed otherwise ("Günter replied" told people nothing
-// about which chat to open).
+// titleFor and bodyFor lay a notification out the way Mattermost does, so a
+// banner reads the same in both apps: the TITLE is where it happened — "~slug"
+// for a channel, the group's name, or the sender for a 1:1 DM — prefixed with
+// "Reply in" for a thread reply; the BODY is "who: what" (just "what" in a DM,
+// whose title already names the sender). No app name in front.
 func titleFor(kind NotificationKind, parentType, parentName, authorName string) string {
-	label := parentLabel(parentType, parentName)
+	where := parentLabel(parentType, parentName)
 	switch kind {
 	case NotificationKindThreadReply:
-		if label != "" {
-			return authorName + " replied in " + label
+		if where != "" {
+			return "Reply in " + where
 		}
-		return authorName + " replied in a direct message"
-	case NotificationKindMessage:
-		if label != "" {
-			return authorName + " in " + label
+		return "Reply from " + authorName
+	case NotificationKindMessage, NotificationKindMention:
+		if where != "" {
+			return where
 		}
 		return authorName
-	case NotificationKindMention:
-		if label != "" {
-			return authorName + " mentioned you in " + label
-		}
-		return authorName + " mentioned you in a direct message"
 	default:
 		return authorName
 	}
+}
+
+// Thread replies use the same shape as every other banner — WHERE on top,
+// "who: what" below — with the thread, in its channel or group, as the place:
+//
+//	Thread in ~sandbox: <first words of the root…>
+//	<name>: <the reply>
+//
+// A 1:1 DM has no place to name, so it is just "Thread: …". The root snippet
+// is cut at a word boundary; the deep link opens the thread.
+func threadReplyTitle(parentType, parentName, rootPreview string) string {
+	const max = 48
+	root := strings.TrimSpace(rootPreview)
+	if runes := []rune(root); len(runes) > max {
+		cut := string(runes[:max])
+		if i := strings.LastIndex(cut, " "); i > max/2 {
+			cut = cut[:i]
+		}
+		root = strings.TrimRight(cut, " ,.;:") + "…"
+	}
+	title := "Thread"
+	if where := parentLabel(parentType, parentName); where != "" {
+		title += " in " + where
+	}
+	if root == "" {
+		return title
+	}
+	return title + ": " + root
+}
+
+func bodyFor(parentType, parentName, authorName, body string) string {
+	if parentLabel(parentType, parentName) == "" {
+		return body
+	}
+	if body == "" {
+		return authorName
+	}
+	return authorName + ": " + body
 }
 
 // previewBody clamps a message body to a sane length for a notification
