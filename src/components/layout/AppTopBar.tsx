@@ -1,6 +1,7 @@
 import { ChevronLeft, Menu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { SearchBar } from '@/components/SearchBar';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface AppTopBarProps {
   onOpenChannels?: () => void;
@@ -14,6 +15,7 @@ interface AppTopBarProps {
  * bottom of the sidebar (see AccountMenu).
  */
 export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarProps) {
+  const isMobile = useIsMobile();
   return (
     <header
       // Compact macOS title-bar strip on desktop (36px tall, minimal
@@ -56,10 +58,10 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
           variant="ghost"
           size="icon"
           onClick={onOpenChannels}
-          aria-label="Open channels"
+          aria-label={isMobile ? 'Back' : 'Open channels'}
           aria-hidden={channelsButtonHidden || undefined}
           tabIndex={channelsButtonHidden ? -1 : 0}
-          className={`h-7 w-7 mobile:h-9 mobile:w-9 mobile:-ml-1 text-sidebar-foreground hover:bg-sidebar-accent lg:hidden ${
+          className={`h-7 w-7 mobile:h-11 mobile:w-11 mobile:-ml-2 text-sidebar-foreground hover:bg-sidebar-accent lg:hidden ${
             channelsButtonHidden ? 'invisible' : ''
           }`}
         >

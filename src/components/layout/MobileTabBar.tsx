@@ -1,16 +1,17 @@
 import { useState, type ComponentType } from 'react';
 import { Bell, Home, Search } from 'lucide-react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { useActivity } from '@/hooks/useActivity';
+import { Badge } from '@/components/ui/badge';
+import { useActivityUnread } from '@/hooks/useActivity';
 import { setSidebarMode, useSidebarModeStore, type SidebarMode } from '@/stores/sidebar-mode';
 import { AccountMenu } from './AccountMenu';
 import { MOBILE_TAB_CLASS } from './mobile-tab';
 import { MobileSearchSheet } from './MobileSearchSheet';
 
 interface MobileTabBarProps {
-  // Brings the list (the channel drawer) into view when a conversation is
-  // open, so Home and Activity always land on their list.
-  onShowList: () => void;
+  // Brings the list (the channel drawer) into view when it isn't showing —
+  // from a conversation — so Home and Activity always land on their list.
+  // Omitted while the list already shows.
+  onShowList?: () => void;
   // Steps aside in a conversation and while the keyboard is up.
   hidden?: boolean;
 }
@@ -21,19 +22,13 @@ interface MobileTabBarProps {
 // conversation or thread the back button and composer take its place.
 export function MobileTabBar({ onShowList, hidden = false }: MobileTabBarProps) {
   const mode = useSidebarModeStore((s) => s.mode);
-  const { data: feed } = useActivity();
-  const unread = feed?.unread ?? 0;
-  const navigate = useNavigate();
-  const location = useLocation();
+  const unread = useActivityUnread();
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const choose = (next: SidebarMode) => {
     setSidebarMode(next);
-    if (location.pathname === '/activity') navigate('/');
-    else onShowList();
+    onShowList?.();
   };
-
-  // Search opens a sheet with recent searches over the current screen.
-  const [searchOpen, setSearchOpen] = useState(false);
 
   return (
     <nav
@@ -41,7 +36,7 @@ export function MobileTabBar({ onShowList, hidden = false }: MobileTabBarProps) 
       className={`shrink-0 border-t border-sidebar-border bg-sidebar pb-[env(safe-area-inset-bottom)] ${hidden ? 'hidden' : ''}`}
       data-testid="mobile-tab-bar"
     >
-      <div className="flex h-[3.75rem] items-stretch px-2 pt-3">
+      <div className="flex h-15 items-stretch px-2 pt-3">
         <Tab label="Home" icon={Home} selected={mode === 'home'} onClick={() => choose('home')} testID="mobile-tab-home" />
         <Tab
           label="Activity"
@@ -51,10 +46,20 @@ export function MobileTabBar({ onShowList, hidden = false }: MobileTabBarProps) 
           unread={unread}
           testID="mobile-tab-activity"
         />
-        <Tab label="Search" icon={Search} selected={searchOpen} onClick={() => setSearchOpen(true)} testID="mobile-tab-search" />
+        <button
+          type="button"
+          onClick={() => setSearchOpen(true)}
+          aria-haspopup="dialog"
+          aria-expanded={searchOpen}
+          className={`${MOBILE_TAB_CLASS} ${searchOpen ? 'text-sidebar-foreground' : 'text-muted-foreground'}`}
+          data-testid="mobile-tab-search"
+        >
+          <Search className="h-6 w-6" aria-hidden="true" />
+          <span>Search</span>
+        </button>
         <AccountMenu variant="tab" />
       </div>
-      {searchOpen && <MobileSearchSheet onClose={() => setSearchOpen(false)} />}
+      <MobileSearchSheet open={searchOpen} onOpenChange={setSearchOpen} />
     </nav>
   );
 }
@@ -73,7 +78,7 @@ function Tab({ label, icon: Icon, selected, onClick, unread = 0, testID }: TabPr
     <button
       type="button"
       onClick={onClick}
-      aria-current={selected ? 'page' : undefined}
+      aria-pressed={selected}
       aria-label={unread > 0 ? `${label}, ${unread} unread` : label}
       className={`${MOBILE_TAB_CLASS} ${selected ? 'text-sidebar-foreground' : 'text-muted-foreground'}`}
       data-testid={testID}
@@ -81,12 +86,9 @@ function Tab({ label, icon: Icon, selected, onClick, unread = 0, testID }: TabPr
       <span className="relative inline-flex">
         <Icon className="h-6 w-6" aria-hidden="true" />
         {unread > 0 && (
-          <span
-            className="absolute -top-1 left-3.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-brand-strong px-1 text-[11px] leading-none font-bold text-brand-foreground ring-2 ring-sidebar"
-            data-testid="mobile-tab-unread"
-          >
+          <Badge variant="brand" className="absolute -top-1 left-3.5 text-[11px] ring-2 ring-sidebar" data-testid="mobile-tab-unread">
             {unread > 99 ? '99+' : unread}
-          </span>
+          </Badge>
         )}
       </span>
       <span aria-hidden="true">{label}</span>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Clock3, Search, FileSearch, X, Loader2 } from 'lucide-react';
-import { matchPath, useLocation, useNavigate } from 'react-router-dom';
+import { Link, matchPath, useLocation, useNavigate } from 'react-router-dom';
 import { useChannelBySlug, useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations, useOpenDM } from '@/hooks/useConversations';
 import { useSearchUsers, useSearchChannels, useSearchMessages, type SearchHit } from '@/hooks/useSearch';
@@ -74,6 +74,8 @@ interface SearchBarProps {
 
 export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) {
   const sheet = variant === 'sheet';
+  // The signed-in user's recent searches; only the sheet shows (or records)
+  // them.
   const recent = useRecentSearchesStore((st) => st.queries);
   const [q, setQ] = useState('');
   // Sheet only: the message search the user ran, shown in place. Editing the
@@ -243,18 +245,8 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
       inputRef.current?.blur();
       return;
     }
-    const params = new URLSearchParams({ q: label });
-    if (sel.kind === 'in-scope') {
-      params.set('in', sel.parentId);
-      // Land directly on the tab that matches the scope so the user
-      // sees the right results immediately, skipping All tab's noise
-      // from Channels/People. Channels → "messages"; DMs/groups →
-      // "dms" (the DMs tab is filtered to parentType=conversation).
-      params.set('type', sel.scopeKind === 'channel' ? 'messages' : 'dms');
-    }
-    addRecentSearch(label);
     reset();
-    navigate(`/search?${params.toString()}`);
+    navigate(searchPageHref(label, sel.kind === 'in-scope' ? { parentId: sel.parentId, scopeKind: sel.scopeKind } : undefined));
   }
 
   // Recent searches only show in the sheet: run one in place.
@@ -288,8 +280,11 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
     inputRef.current?.focus();
   }
 
-  const showDropdown = (open || sheet) && suggestions.length > 0;
   const showMessageResults = sheet && submitted !== null && submitted.q === trimmed;
+  // While the sheet shows message results, its list keeps only the channel and
+  // people hits — and isn't rendered at all when there are none.
+  const showDropdown =
+    (open || sheet) && suggestions.length > 0 && !(showMessageResults && channelHits.length === 0 && userHits.length === 0);
   const messagesQuery = useSearchMessages(
     submitted?.q ?? '',
     showMessageResults,
@@ -446,23 +441,8 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
           )}
 
           <div role="group" aria-label="Messages">
-            {(channelHits.length > 0 || userHits.length > 0 || showMessageResults) && (
+            {!showMessageResults && (channelHits.length > 0 || userHits.length > 0) && (
               <SectionHeader>Messages</SectionHeader>
-            )}
-            {showMessageResults && (
-              // A tap on a result navigates (the card is a link); the sheet
-              // closes behind it.
-              <div className="space-y-2 pt-1" onClick={() => onDone?.()} data-testid="sheet-message-results">
-                {messagesQuery.isLoading
-                  ? [0, 1, 2].map((i) => <Skeleton key={i} className="h-16 w-full" />)
-                  : messageHits.length === 0
-                    ? (
-                      <p className="px-3 py-6 text-center text-sm text-muted-foreground" data-testid="sheet-message-empty">
-                        No messages match “{submitted?.q}”.
-                      </p>
-                    )
-                    : messageHits.map((h) => <MessageHitCard key={h.id} hit={h} />)}
-              </div>
             )}
             {!showMessageResults && suggestions.map((s) => {
               const flatIndex = items.findIndex(
@@ -523,6 +503,41 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
           </div>
         </div>
       )}
+      {showMessageResults && submitted && (
+        <section aria-label="Messages" className="mt-2" data-testid="sheet-message-section">
+          <SectionHeader>Messages</SectionHeader>
+          {/* A tap on a result that opens it (a link) closes the sheet behind
+              it; a tap anywhere else — a placeholder, the empty state, a
+              result that can't open — leaves it up. */}
+          <div
+            className="space-y-2 pt-1"
+            onClick={(e) => {
+              if ((e.target as Element).closest('a[href]')) onDone?.();
+            }}
+            data-testid="sheet-message-results"
+          >
+            {messagesQuery.isLoading
+              ? [0, 1, 2].map((i) => <Skeleton key={i} className="h-16 w-full" />)
+              : messageHits.length === 0
+                ? (
+                  <p className="px-3 py-6 text-center text-sm text-muted-foreground" data-testid="sheet-message-empty">
+                    No messages match “{submitted.q}”.
+                  </p>
+                )
+                : messageHits.map((h) => <MessageHitCard key={h.id} hit={h} />)}
+          </div>
+          {messageHits.length > 0 && (
+            <Link
+              to={searchPageHref(submitted.q, submitted.in ? { parentId: submitted.in } : undefined)}
+              onClick={() => onDone?.()}
+              className="flex min-h-11 items-center justify-center text-sm font-medium text-muted-foreground hover:text-foreground"
+              data-testid="sheet-all-results"
+            >
+              All results
+            </Link>
+          )}
+        </section>
+      )}
       {showRecent && (
         <div className="mt-2" data-testid="recent-searches">
           <div className="flex items-center justify-between">
@@ -530,7 +545,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
             <button
               type="button"
               onClick={clearRecentSearches}
-              className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+              className="min-h-11 px-3 text-xs font-medium text-muted-foreground hover:text-foreground"
               data-testid="recent-searches-clear"
             >
               Clear
@@ -559,13 +574,21 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
           ))}
         </div>
       )}
-      {sheet && !trimmed && recent.length === 0 && (
-        <p className="px-3 pt-6 text-center text-sm text-muted-foreground" data-testid="recent-searches-empty">
-          Search messages, channels and people.
-        </p>
-      )}
     </div>
   );
+}
+
+// searchPageHref links the full search page for a query, scoped to a channel or
+// conversation when one is given — landing directly on the tab that matches
+// the scope (channels → "messages"; DMs/groups → "dms", the tab filtered to
+// parentType=conversation), skipping All's noise from Channels/People.
+function searchPageHref(q: string, scope?: { parentId: string; scopeKind?: 'channel' | 'dm' | 'group' }): string {
+  const params = new URLSearchParams({ q });
+  if (scope) {
+    params.set('in', scope.parentId);
+    if (scope.scopeKind) params.set('type', scope.scopeKind === 'channel' ? 'messages' : 'dms');
+  }
+  return `/search?${params.toString()}`;
 }
 
 function SectionHeader({ children }: { children: React.ReactNode }) {

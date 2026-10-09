@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AppLayout } from './AppLayout';
-import { resetSidebarModeForTests, setSidebarMode } from '@/stores/sidebar-mode';
+import { resetSidebarModeSessionState, setSidebarMode } from '@/stores/sidebar-mode';
 import { requestOpenChannels } from '@/lib/mobile-nav';
 
 vi.mock('./Sidebar', () => ({
@@ -20,8 +20,8 @@ vi.mock('./Sidebar', () => ({
 // mobile-shell and search-shell expectations still resolve.
 // The phone tab bar reads the activity feed too.
 vi.mock('./MobileTabBar', () => ({
-  MobileTabBar: ({ onShowList, hidden }: { onShowList: () => void; hidden?: boolean }) => (
-    <nav data-testid="mobile-tab-bar" data-hidden={hidden ? 'true' : 'false'}>
+  MobileTabBar: ({ onShowList, hidden }: { onShowList?: () => void; hidden?: boolean }) => (
+    <nav data-testid="mobile-tab-bar" data-hidden={hidden ? 'true' : 'false'} data-shows-list={onShowList ? 'true' : 'false'}>
       <button type="button" data-testid="mobile-tab-home" onClick={onShowList}>Home</button>
     </nav>
   ),
@@ -84,6 +84,7 @@ function renderAt(path: string) {
         <AppLayout>
           <input aria-label="Composer" />
           <GoTo to="/channel/random" />
+          <GoTo to="/channel/general?thread=root-1#msg-m-1" />
         </AppLayout>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -109,7 +110,7 @@ const main = () => document.querySelector('[data-app-main="true"]')!;
 const root = () => document.querySelector('[data-testid="app-sidebar"]')!.parentElement as HTMLElement;
 
 beforeEach(() => {
-  resetSidebarModeForTests();
+  resetSidebarModeSessionState();
   setMobileMatch(true);
 });
 
@@ -144,12 +145,36 @@ describe('AppLayout on a phone', () => {
     expect(main()).toHaveAttribute('data-mobile-channels-open', 'false');
   });
 
-  it('keeps the top bar (for its back button) on other pages, and the tab bar on Activity', () => {
-    const { unmount } = renderAt('/threads');
+  it('keeps the top bar (for its back button) on other pages', () => {
+    renderAt('/threads');
     expect(topBarWrapper()).not.toHaveClass('hidden');
+    expect(screen.getByTestId('mobile-tab-bar')).toHaveAttribute('data-hidden', 'true');
+  });
+
+  // A pick from the search sheet inside the conversation already open behind
+  // the list (same path, new ?thread=/#msg-) used to land under the drawer.
+  it('closes the list for a navigation that stays on the same page', () => {
+    renderAt('/channel/general');
+    act(() => requestOpenChannels());
+    expect(main()).toHaveAttribute('data-mobile-channels-open', 'true');
+    fireEvent.click(screen.getByText('go /channel/general?thread=root-1#msg-m-1'));
+    expect(main()).toHaveAttribute('data-mobile-channels-open', 'false');
+  });
+
+  // On the home screen the list already shows; the tab bar must not open it
+  // again (that armed a Back-to-close for a drawer that can't close: a dead
+  // Back press, then a stale history entry).
+  it('lets the tab bar bring the list in only when it is hidden', () => {
+    const before = window.history.length;
+    const { unmount } = renderAt('/');
+    expect(screen.getByTestId('mobile-tab-bar')).toHaveAttribute('data-shows-list', 'false');
+    fireEvent.click(screen.getByTestId('mobile-tab-home'));
+    expect(window.history.length).toBe(before);
     unmount();
-    renderAt('/activity');
-    expect(screen.getByTestId('mobile-tab-bar')).toHaveAttribute('data-hidden', 'false');
+    renderAt('/channel/general');
+    act(() => requestOpenChannels());
+    // Showing now (manually opened) — nothing more to bring in.
+    expect(screen.getByTestId('mobile-tab-bar')).toHaveAttribute('data-shows-list', 'false');
   });
 
   it('navigating with the list closed leaves it closed', () => {

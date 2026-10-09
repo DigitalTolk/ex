@@ -23,6 +23,8 @@ describe('useKeyboardInset', () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    // An earlier test's last glide may have ended under different timers.
+    delete document.documentElement.dataset.keyboardSettling;
     scrollY = 0;
     scrollTo.mockReset();
     Object.defineProperty(window, 'scrollY', { configurable: true, get: () => scrollY });
@@ -48,6 +50,31 @@ describe('useKeyboardInset', () => {
     expect(screen.getByTestId('inset')).toHaveTextContent('0');
     keyboard('keyboardDidHide');
     unmount();
+  });
+
+  // The app root animates its height only while the keyboard moves — never on
+  // a window resize, which used to make the whole app trail the window edge.
+  it('marks the document as settling only while the keyboard inset changes', () => {
+    render(<Probe />);
+    const root = document.documentElement;
+    expect(root.dataset.keyboardSettling).toBeUndefined();
+    keyboard('keyboardWillShow', 300);
+    expect(root.dataset.keyboardSettling).toBe('true');
+    act(() => {
+      vi.advanceTimersByTime(250);
+    });
+    expect(root.dataset.keyboardSettling).toBeUndefined();
+    // A resize that doesn't change the inset doesn't start a glide.
+    act(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    expect(root.dataset.keyboardSettling).toBeUndefined();
+    keyboard('keyboardWillHide');
+    expect(root.dataset.keyboardSettling).toBe('true');
+    act(() => {
+      vi.advanceTimersByTime(250);
+    });
+    expect(root.dataset.keyboardSettling).toBeUndefined();
   });
 
   it('counts only what the keyboard still overlaps when the shell resized the window', () => {

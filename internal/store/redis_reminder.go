@@ -16,17 +16,30 @@ import (
 func reminderDueKey() string               { return "reminders:due" }
 func reminderUserKey(userID string) string { return "reminders:user:" + userID }
 func reminderPayloadKey(id string) string  { return "reminder:" + id }
+func reminderMessageKey(messageID string) string {
+	return "reminders:msg:" + messageID
+}
 
 // reminderPayloadBuffer is how long a reminder's payload outlives its fire time
 // before Redis reclaims it, covering a poller that is briefly down. The due-queue
 // claim deletes the payload on fire anyway; this is only a backstop.
 const reminderPayloadBuffer = 7 * 24 * time.Hour
 
+// reminderIndexTTL bounds a message index left behind by reminders that expired
+// unclaimed (cancel and claim remove their entries, and an emptied set is gone).
+// Every schedule resets it, and it outlasts any reminder — scheduling is capped
+// at a year ahead, plus reminderPayloadBuffer — so it never expires under a
+// pending one. A plain EXPIRE also keeps this working on Redis older than 7
+// (no EXPIRE NX/GT).
+const reminderIndexTTL = 400 * 24 * time.Hour
+
 // RedisReminderStore stores scheduled message reminders in Redis.
 //
 //   - reminders:due            ZSET    score=remindAt(epoch ms) → reminderID   (global due queue)
 //   - reminders:user:{userID}  ZSET    score=remindAt(epoch ms) → reminderID   (per-user index for list/cancel)
 //   - reminder:{id}            STRING  JSON(Reminder)                          (payload)
+//   - reminders:msg:{messageID} SET    reminderIDs about that message (so deleting or
+//     editing the message reaches its reminders)
 //
 // The global due queue lets a single background poller across all instances find
 // fired reminders with one ranged read; claiming is an atomic per-id ZREM so a
@@ -51,6 +64,9 @@ func (s *RedisReminderStore) ScheduleReminder(ctx context.Context, r *model.Remi
 	pipe.Set(ctx, reminderPayloadKey(r.ID), payload, ttl)
 	pipe.ZAdd(ctx, reminderDueKey(), redis.Z{Score: score, Member: r.ID})
 	pipe.ZAdd(ctx, reminderUserKey(r.UserID), redis.Z{Score: score, Member: r.ID})
+	msgKey := reminderMessageKey(r.MessageID)
+	pipe.SAdd(ctx, msgKey, r.ID)
+	pipe.Expire(ctx, msgKey, reminderIndexTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("store: schedule reminder: %w", err)
 	}
@@ -149,14 +165,135 @@ func (s *RedisReminderStore) CancelReminder(ctx context.Context, userID, id stri
 		// Not the caller's reminder — refuse without leaking its existence.
 		return false, nil
 	}
-	pipe := s.client.Pipeline()
-	pipe.Del(ctx, reminderPayloadKey(id))
-	pipe.ZRem(ctx, reminderDueKey(), id)
-	pipe.ZRem(ctx, reminderUserKey(userID), id)
-	if _, err := pipe.Exec(ctx); err != nil {
+	if err := s.removeReminders(ctx, []*model.Reminder{r}); err != nil {
 		return false, fmt.Errorf("store: cancel reminder: %w", err)
 	}
 	return true, nil
+}
+
+// removeReminders deletes reminders and every index entry naming them, in one
+// pipeline.
+func (s *RedisReminderStore) removeReminders(ctx context.Context, rs []*model.Reminder) error {
+	pipe := s.client.Pipeline()
+	for _, r := range rs {
+		pipe.Del(ctx, reminderPayloadKey(r.ID))
+		pipe.ZRem(ctx, reminderDueKey(), r.ID)
+		pipe.ZRem(ctx, reminderUserKey(r.UserID), r.ID)
+		pipe.SRem(ctx, reminderMessageKey(r.MessageID), r.ID)
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// CancelRemindersForParent cancels userID's pending reminders in one channel or
+// conversation — once they can no longer read it — and returns their ids.
+func (s *RedisReminderStore) CancelRemindersForParent(ctx context.Context, userID, parentID string) ([]string, error) {
+	pending, err := s.ListPendingReminders(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	var gone []*model.Reminder
+	for _, r := range pending {
+		if r.ParentID == parentID {
+			gone = append(gone, r)
+		}
+	}
+	if len(gone) == 0 {
+		return nil, nil
+	}
+	if err := s.removeReminders(ctx, gone); err != nil {
+		return nil, fmt.Errorf("store: cancel reminders for parent: %w", err)
+	}
+	return reminderIDs(gone), nil
+}
+
+// remindersForMessages loads the pending reminders about the given messages.
+// Index entries whose reminder has fired or expired are swept.
+func (s *RedisReminderStore) remindersForMessages(ctx context.Context, messageIDs []string) ([]*model.Reminder, error) {
+	pipe := s.client.Pipeline()
+	members := make([]*redis.StringSliceCmd, len(messageIDs))
+	for i, m := range messageIDs {
+		members[i] = pipe.SMembers(ctx, reminderMessageKey(m))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, fmt.Errorf("store: reminders for messages: %w", err)
+	}
+	var ids []string
+	owner := map[string]string{}
+	for i, cmd := range members {
+		for _, id := range cmd.Val() {
+			ids = append(ids, id)
+			owner[id] = messageIDs[i]
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	vals, err := s.client.MGet(ctx, payloadKeysFor(ids)...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("store: reminders for messages mget: %w", err)
+	}
+	var found []*model.Reminder
+	stale := s.client.Pipeline()
+	for i, v := range vals {
+		r, ok := decodeReminder(v)
+		if !ok {
+			stale.SRem(ctx, reminderMessageKey(owner[ids[i]]), ids[i])
+			continue
+		}
+		found = append(found, r)
+	}
+	// Best-effort: a stale entry left behind only costs a wasted lookup.
+	_, _ = stale.Exec(ctx)
+	return found, nil
+}
+
+// CancelRemindersForMessages cancels every pending reminder about the given
+// (deleted) messages, returning the cancelled ids per owner.
+func (s *RedisReminderStore) CancelRemindersForMessages(ctx context.Context, messageIDs []string) (map[string][]string, error) {
+	found, err := s.remindersForMessages(ctx, messageIDs)
+	if err != nil || len(found) == 0 {
+		return nil, err
+	}
+	if err := s.removeReminders(ctx, found); err != nil {
+		return nil, fmt.Errorf("store: cancel reminders for messages: %w", err)
+	}
+	return idsByOwner(found), nil
+}
+
+// UpdateReminderPreview rewrites the preview of every pending reminder about an
+// edited message, returning the updated ids per owner. A reminder that fires
+// meanwhile is left gone (XX), never resurrected without its TTL.
+func (s *RedisReminderStore) UpdateReminderPreview(ctx context.Context, messageID, preview string) (map[string][]string, error) {
+	found, err := s.remindersForMessages(ctx, []string{messageID})
+	if err != nil || len(found) == 0 {
+		return nil, err
+	}
+	pipe := s.client.Pipeline()
+	for _, r := range found {
+		r.MessagePreview = preview
+		pipe.SetArgs(ctx, reminderPayloadKey(r.ID), mustJSON(json.Marshal(r)), redis.SetArgs{Mode: "XX", KeepTTL: true})
+	}
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		return nil, fmt.Errorf("store: update reminder preview: %w", err)
+	}
+	return idsByOwner(found), nil
+}
+
+func reminderIDs(rs []*model.Reminder) []string {
+	out := make([]string, len(rs))
+	for i, r := range rs {
+		out[i] = r.ID
+	}
+	return out
+}
+
+func idsByOwner(rs []*model.Reminder) map[string][]string {
+	out := map[string][]string{}
+	for _, r := range rs {
+		out[r.UserID] = append(out[r.UserID], r.ID)
+	}
+	return out
 }
 
 // claimDueScript atomically pops up to ARGV[2] due reminder ids (score <= now)
@@ -212,6 +349,7 @@ func (s *RedisReminderStore) ClaimDueReminders(ctx context.Context, limit int) (
 			continue
 		}
 		pipe.ZRem(ctx, reminderUserKey(r.UserID), ids[i])
+		pipe.SRem(ctx, reminderMessageKey(r.MessageID), ids[i])
 		pipe.Del(ctx, reminderPayloadKey(ids[i]))
 		claimed = append(claimed, r)
 	}

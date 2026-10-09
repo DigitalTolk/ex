@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
+  activityDay,
+  activityHref,
+  activitySections,
+  activityTime,
   addActivityItem,
   applyActivityChange,
   filterActivity,
@@ -10,7 +14,8 @@ import {
   parseActivityNew,
   parseActivityTab,
   removeActivityItems,
-  tabHasUnread,
+  isWebhookItem,
+  tabUnread,
   withCounts,
 } from './activity-feed';
 import type { ActivityItem } from '@/types';
@@ -76,42 +81,102 @@ describe('activity feed helpers', () => {
     expect(parseActivityChange(null)).toEqual({});
   });
 
-  // A busy conversation or thread is one row, placed where its newest item is.
-  it('groups DM messages per conversation and replies per thread', () => {
+  // A busy conversation or thread is one row, placed where its newest item is;
+  // so is the same emoji on one message.
+  it('groups DM messages per conversation, replies per thread and reactions per emoji', () => {
     const rows = groupActivity([
-      item('d2', { type: 'dm', parentID: 'dm-1', parentType: 'conversation' }),
-      item('m1'),
-      item('t2', { type: 'thread_reply', parentMessageID: 'root-1', read: true }),
-      item('d1', { type: 'dm', parentID: 'dm-1', parentType: 'conversation', read: true }),
-      item('t1', { type: 'thread_reply', parentMessageID: 'root-1' }),
+      item('d2', { type: 'dm', parentID: 'dm-1', parentType: 'conversation', actorID: 'u-b' }),
+      item('m1', { actorID: 'u-a' }),
+      item('t2', { type: 'thread_reply', parentMessageID: 'root-1', read: true, actorID: 'u-a' }),
+      item('d1', { type: 'dm', parentID: 'dm-1', parentType: 'conversation', read: true, actorID: 'u-c' }),
+      item('t1', { type: 'thread_reply', parentMessageID: 'root-1', actorID: 'u-a' }),
       item('t9', { type: 'thread_reply', parentMessageID: 'root-9' }),
-      item('d9', { type: 'dm', parentID: 'dm-9', parentType: 'conversation' }),
-      item('r1', { type: 'thread_reply' }),
+      item('x2', { type: 'reaction', messageID: 'm-7', emoji: '🎉', actorID: 'u-a' }),
+      item('x1', { type: 'reaction', messageID: 'm-7', emoji: '🎉', actorID: 'webhook', webhook: true }),
+      item('x3', { type: 'reaction', messageID: 'm-7', emoji: '👍' }),
+      item('r1', { type: 'thread_reply', messageID: 'm-r1' }),
     ]);
     expect(rows.map((r) => r.key)).toEqual([
       'dm:dm-1',
       'item:m1',
       'thread:ch-1|root-1',
       'thread:ch-1|root-9',
-      'dm:dm-9',
-      'thread:ch-1|',
+      'reaction:m-7|🎉',
+      'reaction:m-7|👍',
+      // A reply without its root still groups with itself, never with another
+      // rootless reply.
+      'thread:ch-1|m-r1',
     ]);
     expect(rows[0].lead.id).toBe('d2');
     expect(rows[0].items.map((i) => i.id)).toEqual(['d2', 'd1']);
     expect(rows[0].unreadIDs).toEqual(['d2']);
+    expect(rows[0].actorIDs).toEqual(['u-b', 'u-c']);
     expect(rows[2].unreadIDs).toEqual(['t1']);
+    // Each actor once; a webhook is never one of the people.
+    expect(rows[2].actorIDs).toEqual(['u-a']);
+    expect(rows[4].actorIDs).toEqual(['u-a']);
   });
 
-  it('filters by tab and reports unread per tab', () => {
+  it('flags webhook items, including ones from before the flag existed', () => {
+    expect(isWebhookItem(item('a', { webhook: true }))).toBe(true);
+    expect(isWebhookItem(item('a', { actorName: 'Deploy Bot' }))).toBe(true);
+    expect(isWebhookItem(item('a'))).toBe(false);
+  });
+
+  it('filters by tab and counts unread per tab', () => {
     const items = [item('a'), item('b', { type: 'reminder' }), item('c', { type: 'dm', read: true })];
     expect(filterActivity(items, 'all')).toHaveLength(3);
     expect(filterActivity(items, 'mention').map((i) => i.id)).toEqual(['a']);
     const feed = withCounts(items);
-    expect(tabHasUnread(feed, 'all')).toBe(true);
-    expect(tabHasUnread(feed, 'mention')).toBe(true);
-    expect(tabHasUnread(feed, 'dm')).toBe(false);
+    expect(tabUnread(feed, 'all')).toBe(2);
+    expect(tabUnread(feed, 'mention')).toBe(1);
+    expect(tabUnread(feed, 'dm')).toBe(0);
     expect(parseActivityTab('dm')).toBe('dm');
     expect(parseActivityTab('bogus')).toBe('all');
     expect(parseActivityTab(null)).toBe('all');
+  });
+
+  it('buckets rows by calendar day into consecutive sections', () => {
+    const now = new Date(2026, 9, 9, 12, 0);
+    const at = (d: Date) => d.toISOString();
+    expect(activityDay(at(new Date(2026, 9, 9, 0, 5)), now)).toBe('Today');
+    expect(activityDay(at(new Date(2026, 9, 10, 9, 0)), now)).toBe('Today');
+    expect(activityDay(at(new Date(2026, 9, 8, 23, 59)), now)).toBe('Yesterday');
+    expect(activityDay(at(new Date(2026, 9, 1)), now)).toBe('Earlier');
+
+    const rows = groupActivity([
+      item('a', { createdAt: at(new Date(2026, 9, 9, 11)) }),
+      item('b', { createdAt: at(new Date(2026, 9, 9, 8)) }),
+      item('c', { createdAt: at(new Date(2026, 9, 8, 8)) }),
+      item('d', { createdAt: at(new Date(2026, 8, 1)) }),
+    ]);
+    expect(activitySections(rows, now).map((s) => [s.day, s.rows.map((r) => r.lead.id)])).toEqual([
+      ['Today', ['a', 'b']],
+      ['Yesterday', ['c']],
+      ['Earlier', ['d']],
+    ]);
+  });
+
+  it('labels a row with the clock time for recent days and the date before that, in the reader locale', () => {
+    const now = new Date(2026, 9, 9, 12, 0);
+    const today = new Date(2026, 9, 9, 9, 5);
+    const old = new Date(2026, 8, 1, 9, 5);
+    expect(activityTime(today.toISOString(), now)).toBe(
+      new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(today),
+    );
+    expect(activityTime(old.toISOString(), now)).toBe(
+      new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(old),
+    );
+  });
+
+  // A channel resolves by id first: after a rename the snapshot slug may now
+  // name a different channel.
+  it('links rows and reminders to their message, opening threads, by channel id first', () => {
+    const slugs = new Map([['ch-1', 'renamed']]);
+    expect(activityHref(item('a', { channelSlug: 'old-name' }), slugs)).toBe('/channel/renamed#msg-m-a');
+    expect(activityHref(item('a', { parentID: 'ch-9', channelSlug: 'kept' }), slugs)).toBe('/channel/kept#msg-m-a');
+    expect(activityHref(item('a', { parentID: 'ch-9' }), slugs)).toBe('/channel/ch-9#msg-m-a');
+    expect(activityHref(item('a', { parentMessageID: 'root-1' }), slugs)).toBe('/channel/renamed?thread=root-1#msg-m-a');
+    expect(activityHref(item('a', { parentID: 'dm-1', parentType: 'conversation' }), slugs)).toBe('/conversation/dm-1#msg-m-a');
   });
 });

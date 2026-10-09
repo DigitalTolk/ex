@@ -7,6 +7,7 @@ import { AppLayout } from './AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { SidePanel } from '@/components/chat/SidePanel';
 
 // Pixel tests for the compact tier: a REAL 700px-wide desktop window (the
 // Slack-next-to-ex case) must keep desktop chrome — working sidebar toggle,
@@ -114,10 +115,37 @@ describe('compact tier at a real 700px desktop viewport', () => {
     (document.querySelector('[data-testid="compact-sidebar"] [data-testid="sidebar-nav-item"]') as HTMLElement).click();
     await expect.poll(() => document.querySelector('[data-testid="compact-sidebar"]')).toBeNull();
 
-    // The persistent (lg+) aside wires a noop close — clicking its nav is
-    // inert and resurrects nothing.
-    (document.querySelector('[data-testid="app-sidebar"] [data-testid="sidebar-nav-item"]') as HTMLElement).click();
-    expect(document.querySelector('[data-testid="compact-sidebar"]')).toBeNull();
+    // The persistent sidebar is a full-tier thing: no hidden copy of the list
+    // here behind the overlay.
+    expect(document.querySelector('[data-testid="app-sidebar"]')).toBeNull();
+  });
+
+  // Under 768px a desktop window has no room beside the conversation, so a
+  // side panel covers it (inside the main area, below its header) instead of
+  // squeezing it to a sliver.
+  it('lets a side panel cover the conversation instead of squeezing it', async () => {
+    if (!isDesktopProject) return;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    active = await render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/channel/general']}>
+          <AppLayout>
+            <div className="flex min-h-0 flex-1" data-testid="conversation-row">
+              <div className="min-w-0 flex-1">conversation</div>
+              <SidePanel title="Files" ariaLabel="Files" closeLabel="Close files" onClose={() => undefined}>
+                <p>files</p>
+              </SidePanel>
+            </div>
+          </AppLayout>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const panel = document.querySelector('[aria-label="Files"]') as HTMLElement;
+    const area = document.querySelector('[data-app-main="true"]')!.parentElement as HTMLElement;
+    expect(getComputedStyle(panel).position).toBe('absolute');
+    expect(Math.abs(panel.getBoundingClientRect().width - area.getBoundingClientRect().width)).toBeLessThan(1);
+    // No resize handle where there's nothing to resize against.
+    expect(panel.querySelector('[data-testid$="resize-handle"]')?.getBoundingClientRect().width ?? 0).toBe(0);
   });
 
   it('keeps dialogs centered desktop windows, not full-screen sheets', async () => {

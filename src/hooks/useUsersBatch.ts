@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import type { User } from '@/types';
@@ -32,6 +32,9 @@ export function useUsersBatch(ids: string[]) {
     // briefly flash a fallback while the new <img> loads.
     staleTime: 5 * 60_000,
     refetchOnWindowFocus: false,
+    // A grown id set is a new query; keep showing the names already known
+    // while it loads instead of flashing every row to its fallback.
+    placeholderData: keepPreviousData,
   });
   const map = useMemo(() => {
     const m = new Map<string, User>();

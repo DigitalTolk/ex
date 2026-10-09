@@ -176,7 +176,7 @@ export function Header({
           type="button"
           onClick={requestOpenChannels}
           aria-label="Back"
-          className="inline-flex h-10 w-9 shrink-0 items-center justify-center rounded-md text-foreground active:bg-muted"
+          className="-my-1 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-foreground active:bg-muted"
           data-testid="mobile-header-back"
         >
           <ChevronLeft className="h-6 w-6" />

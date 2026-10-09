@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ActivityFilter } from '@/lib/activity-groups';
+import type { ActivityTab } from '@/lib/activity-feed';
 
 // What the left sidebar shows: the usual channel list ("home") or the
 // Activity list. Switching never navigates — opening an activity item does,
@@ -8,9 +8,10 @@ export type SidebarMode = 'home' | 'activity';
 
 interface SidebarModeState {
   mode: SidebarMode;
-  filter: ActivityFilter;
+  filter: ActivityTab;
   unreadOnly: boolean;
-  // The row last opened from the list, highlighted while you're on it.
+  // The row last opened from the list; highlighted (and kept in an "Unread
+  // only" list) while its message is the page on screen.
   selectedKey: string | null;
 }
 
@@ -22,7 +23,7 @@ export function setSidebarMode(mode: SidebarMode): void {
   useSidebarModeStore.setState({ mode });
 }
 
-export function setActivityFilter(filter: ActivityFilter): void {
+export function setActivityFilter(filter: ActivityTab): void {
   useSidebarModeStore.setState({ filter });
 }
 
@@ -34,7 +35,8 @@ export function selectActivityRow(selectedKey: string | null): void {
   useSidebarModeStore.setState({ selectedKey });
 }
 
-// Test seam: module-level state outlives a test's render.
-export function resetSidebarModeForTests(): void {
+// Back to the defaults — on logout, so the next user in this tab doesn't
+// start on the previous one's list, filter or selection.
+export function resetSidebarModeSessionState(): void {
   useSidebarModeStore.setState({ ...initial });
 }

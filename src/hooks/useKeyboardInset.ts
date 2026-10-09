@@ -1,20 +1,6 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { deviceKind } from '@/lib/device';
-
-// Same math as the composer's tooltip placement (chat/markdown/tooltipSpace),
-// kept here so the app root doesn't pull in the editor.
-function readKeyboardHeight(ev: Event): number {
-  const direct = (ev as unknown as { keyboardHeight?: unknown }).keyboardHeight;
-  if (typeof direct === 'number') return direct;
-  const detail = (ev as CustomEvent<{ keyboardHeight?: unknown }>).detail;
-  return typeof detail?.keyboardHeight === 'number' ? detail.keyboardHeight : 0;
-}
-
-// A shell that resizes the webview for the keyboard already shrank the
-// window; only the remainder overlaps.
-function keyboardOverlap(kbHeight: number, heightAtShow: number, currentHeight: number): number {
-  return Math.max(0, kbHeight - Math.max(0, heightAtShow - currentHeight));
-}
+import { keyboardOverlap, readKeyboardHeight } from '@/lib/keyboard';
 // How many px of the bottom of the screen the on-screen keyboard covers.
 //
 // iOS doesn't shrink the page for the keyboard: it PANS everything up so the
@@ -29,23 +15,32 @@ function keyboardOverlap(kbHeight: number, heightAtShow: number, currentHeight: 
 
 let inset = 0;
 const listeners = new Set<() => void>();
+let settlingTimer = 0;
 
 function setInset(next: number) {
   const rounded = Math.max(0, Math.round(next));
   if (rounded === inset) return;
   inset = rounded;
-  document.documentElement.style.setProperty('--ex-keyboard-inset', `${inset}px`);
+  const root = document.documentElement;
+  root.style.setProperty('--ex-keyboard-inset', `${inset}px`);
+  // The app root glides to its new height only while the keyboard moves
+  // (data-keyboard-settling, see index.css) — a window resize or the browser
+  // toolbar collapsing must not animate the whole app.
+  root.dataset.keyboardSettling = 'true';
+  window.clearTimeout(settlingTimer);
+  settlingTimer = window.setTimeout(() => delete root.dataset.keyboardSettling, KEYBOARD_SETTLE_MS);
   for (const l of listeners) l();
 }
 
+function subscribe(cb: () => void) {
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+  };
+}
+
 export function useKeyboardInset(): number {
-  return useSyncExternalStore(
-    (cb) => {
-      listeners.add(cb);
-      return () => listeners.delete(cb);
-    },
-    () => inset,
-  );
+  return useSyncExternalStore(subscribe, () => inset);
 }
 
 function scrollParent(el: HTMLElement): HTMLElement | null {

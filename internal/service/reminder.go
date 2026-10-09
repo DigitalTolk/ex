@@ -30,6 +30,18 @@ type ReminderStore interface {
 	CancelReminder(ctx context.Context, userID, id string) (bool, error)
 	ListPendingReminders(ctx context.Context, userID string) ([]*model.Reminder, error)
 	ClaimDueReminders(ctx context.Context, limit int) ([]*model.Reminder, error)
+	// CancelRemindersForParent / CancelRemindersForMessages /
+	// UpdateReminderPreview return the touched reminder ids (per owner for the
+	// message ones).
+	CancelRemindersForParent(ctx context.Context, userID, parentID string) ([]string, error)
+	CancelRemindersForMessages(ctx context.Context, messageIDs []string) (map[string][]string, error)
+	UpdateReminderPreview(ctx context.Context, messageID, preview string) (map[string][]string, error)
+}
+
+// ReminderChangeNotifier tells a user's clients that their pending reminders
+// changed. Implemented by ActivityService.
+type ReminderChangeNotifier interface {
+	RemindersChanged(ctx context.Context, userID string)
 }
 
 // ReminderMessageStore loads the source message so a reminder can carry a preview
@@ -70,6 +82,7 @@ type ReminderService struct {
 	access   ReminderAccessChecker
 	activity ActivityAdder
 	notifier DirectNotifier
+	changes  ReminderChangeNotifier
 	now      func() time.Time
 }
 
@@ -84,6 +97,34 @@ func NewReminderService(s ReminderStore, messages ReminderMessageStore, access R
 func (s *ReminderService) SetDelivery(activity ActivityAdder, notifier DirectNotifier) {
 	s.activity = activity
 	s.notifier = notifier
+}
+
+// SetChangeNotifier wires the "your reminders changed" event, so a reminder set
+// or cancelled on one device shows on the others.
+func (s *ReminderService) SetChangeNotifier(n ReminderChangeNotifier) { s.changes = n }
+
+func (s *ReminderService) changed(ctx context.Context, userID string) {
+	if s.changes != nil {
+		s.changes.RemindersChanged(ctx, userID)
+	}
+}
+
+// CancelForParent cancels userID's pending reminders in a channel or
+// conversation they can no longer read, returning the cancelled ids.
+func (s *ReminderService) CancelForParent(ctx context.Context, userID, parentID string) ([]string, error) {
+	return s.store.CancelRemindersForParent(ctx, userID, parentID)
+}
+
+// CancelForMessages cancels every pending reminder about deleted messages,
+// returning the cancelled ids per owner.
+func (s *ReminderService) CancelForMessages(ctx context.Context, messageIDs []string) (map[string][]string, error) {
+	return s.store.CancelRemindersForMessages(ctx, messageIDs)
+}
+
+// RefreshPreview gives every pending reminder about an edited message its new
+// preview, returning the updated ids per owner.
+func (s *ReminderService) RefreshPreview(ctx context.Context, messageID, preview string) (map[string][]string, error) {
+	return s.store.UpdateReminderPreview(ctx, messageID, preview)
 }
 
 // Schedule validates and persists a reminder for userID.
@@ -115,13 +156,14 @@ func (s *ReminderService) Schedule(ctx context.Context, userID string, in Remind
 		// reply only renders inside its thread, so the deep link needs it.
 		ParentMessageID: msg.ParentMessageID,
 		ChannelSlug:     in.ChannelSlug,
-		MessagePreview:  activityPreview(msg.Body),
+		MessagePreview:  messagePreview(msg),
 		RemindAt:        in.RemindAt,
 		CreatedAt:       now,
 	}
 	if err := s.store.ScheduleReminder(ctx, r); err != nil {
 		return nil, err
 	}
+	s.changed(ctx, userID)
 	return r, nil
 }
 
@@ -140,6 +182,7 @@ func (s *ReminderService) Cancel(ctx context.Context, userID, id string) error {
 	if !ok {
 		return store.ErrNotFound
 	}
+	s.changed(ctx, userID)
 	return nil
 }
 
@@ -173,6 +216,19 @@ func (s *ReminderService) fire(ctx context.Context, r *model.Reminder) {
 	if err := s.access.CheckAccess(ctx, r.UserID, r.ParentID, r.ParentType); errors.Is(err, ErrForbidden) {
 		slog.Info("reminder dropped: owner no longer has access", "userID", r.UserID, "parentID", r.ParentID)
 		return
+	}
+	// The message as it is now: one deleted since drops the reminder, an
+	// edited one fires with its current text. This also covers reminders the
+	// delete/edit sync never reached (set before the message index existed, or
+	// its run failed). A failed read fires with the stored preview — a lost
+	// reminder is worse than a stale one.
+	msg, err := s.messages.GetMessage(ctx, r.ParentID, r.MessageID)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && msg.Deleted) {
+		slog.Info("reminder dropped: message deleted", "userID", r.UserID, "messageID", r.MessageID)
+		return
+	}
+	if err == nil {
+		r.MessagePreview = messagePreview(msg)
 	}
 	now := s.now()
 	if s.activity != nil {

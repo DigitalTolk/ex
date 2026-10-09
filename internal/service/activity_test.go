@@ -715,3 +715,174 @@ func TestActivityService_MessageEdited(t *testing.T) {
 		t.Fatalf("store got ids=%v preview=%q", ids, preview)
 	}
 }
+
+// fakeReminderSync answers the reminder side of the activity hooks.
+type fakeReminderSync struct {
+	mu        sync.Mutex
+	cancelled []string
+	owners    map[string][]string
+	err       error
+	calls     []string
+	preview   string
+}
+
+func (f *fakeReminderSync) record(call string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, call)
+}
+
+func (f *fakeReminderSync) CancelForParent(_ context.Context, userID, parentID string) ([]string, error) {
+	f.record("parent:" + userID + ":" + parentID)
+	return f.cancelled, f.err
+}
+
+func (f *fakeReminderSync) CancelForMessages(_ context.Context, messageIDs []string) (map[string][]string, error) {
+	f.record("messages:" + strings.Join(messageIDs, ","))
+	return f.owners, f.err
+}
+
+func (f *fakeReminderSync) RefreshPreview(_ context.Context, messageID, preview string) (map[string][]string, error) {
+	f.mu.Lock()
+	f.preview = preview
+	f.mu.Unlock()
+	f.record("preview:" + messageID)
+	return f.owners, f.err
+}
+
+func (f *fakeReminderSync) called() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
+}
+
+// Losing access to a channel takes the pending reminders there too: their
+// previews are the channel's messages.
+func TestActivityService_ParentLeftCancelsReminders(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeActivityStore()
+	st.parentGone = []string{itemA}
+	rem := &fakeReminderSync{cancelled: []string{"r-1"}}
+	pub := newMockPublisher()
+	svc := NewActivityService(st, pub)
+	svc.SetReminderSync(rem)
+
+	svc.ParentLeft(ctx, "u-1", "ch-1")
+	waitForCond(t, func() bool { return len(changes(t, pub, "u-1")) == 1 }, "change published")
+	got := changes(t, pub, "u-1")[0]
+	if !got.Reminders || len(got.Removed) != 1 || got.Removed[0] != itemA {
+		t.Fatalf("activity.read = %+v, want removed items and reminders", got)
+	}
+	if calls := rem.called(); len(calls) != 1 || calls[0] != "parent:u-1:ch-1" {
+		t.Fatalf("reminder calls = %v", calls)
+	}
+}
+
+func TestActivityService_ParentLeftRemindersOnlyOrFailing(t *testing.T) {
+	ctx := context.Background()
+	// No activity items there (and the item cleanup failing) — the reminders
+	// are still cancelled, and the clients told.
+	st := newFakeActivityStore()
+	st.parentErr = errors.New("redis down")
+	pub := newMockPublisher()
+	svc := NewActivityService(st, pub)
+	svc.SetReminderSync(&fakeReminderSync{cancelled: []string{"r-1"}})
+	svc.ParentLeft(ctx, "u-1", "ch-1")
+	waitForCond(t, func() bool { return len(changes(t, pub, "u-1")) == 1 }, "reminders change published")
+	if got := changes(t, pub, "u-1")[0]; !got.Reminders || len(got.Removed) != 0 {
+		t.Fatalf("activity.read = %+v, want reminders only", got)
+	}
+
+	// A failed reminder cleanup with nothing else to say tells nobody.
+	quiet := newMockPublisher()
+	failing := &fakeReminderSync{err: errors.New("redis down")}
+	svc2 := NewActivityService(newFakeActivityStore(), quiet)
+	svc2.SetReminderSync(failing)
+	svc2.ParentLeft(ctx, "u-1", "ch-1")
+	waitForCond(t, func() bool { return len(failing.called()) == 1 }, "reminder cleanup ran")
+	time.Sleep(20 * time.Millisecond)
+	if got := changes(t, quiet, "u-1"); len(got) != 0 {
+		t.Fatalf("nothing changed, nothing to tell; got %+v", got)
+	}
+}
+
+func TestActivityService_RemindersChanged(t *testing.T) {
+	pub := newMockPublisher()
+	NewActivityService(newFakeActivityStore(), pub).RemindersChanged(context.Background(), "u-1")
+	if got := changes(t, pub, "u-1"); len(got) != 1 || !got[0].Reminders {
+		t.Fatalf("activity.read = %+v, want reminders", got)
+	}
+}
+
+// Deleting a message cancels everyone's pending reminders about it; each
+// owner is told, in the same event as their removed items when they had both.
+func TestActivityService_MessagesDeletedCancelsReminders(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeActivityStore()
+	st.touched = map[string][]string{"u-1": {itemA}}
+	rem := &fakeReminderSync{owners: map[string][]string{"u-1": {"r-1"}, "u-9": {"r-9"}}}
+	pub := newMockPublisher()
+	svc := NewActivityService(st, pub)
+	svc.SetMemberLister(&fakeMemberLister{ids: []string{"u-1", "u-2"}})
+	svc.SetReminderSync(rem)
+
+	svc.MessagesDeleted(ctx, "ch-1", ParentChannel, []string{"m-1", "m-2"})
+	waitForCond(t, func() bool { return len(changes(t, pub, "u-1")) == 1 && len(changes(t, pub, "u-9")) == 1 }, "owners told")
+	if got := changes(t, pub, "u-1")[0]; !got.Reminders || len(got.Removed) != 1 {
+		t.Fatalf("u-1 activity.read = %+v, want removed + reminders in one event", got)
+	}
+	if got := changes(t, pub, "u-9")[0]; !got.Reminders || len(got.Removed) != 0 {
+		t.Fatalf("u-9 activity.read = %+v, want reminders only", got)
+	}
+	if calls := rem.called(); len(calls) != 1 || calls[0] != "messages:m-1,m-2" {
+		t.Fatalf("reminder calls = %v", calls)
+	}
+}
+
+// Reminders are synced even where activity items aren't (no member lookup
+// wired), and a reminder failure still lets the item side through.
+func TestActivityService_MessageSyncRemindersIndependently(t *testing.T) {
+	ctx := context.Background()
+	pub := newMockPublisher()
+	svc := NewActivityService(newFakeActivityStore(), pub)
+	svc.SetReminderSync(&fakeReminderSync{owners: map[string][]string{"u-3": {"r-3"}}})
+	svc.MessagesDeleted(ctx, "ch-1", ParentChannel, []string{"m-1"})
+	waitForCond(t, func() bool { return len(changes(t, pub, "u-3")) == 1 }, "reminder owner told")
+
+	st := newFakeActivityStore()
+	st.touched = map[string][]string{"u-1": {itemA}}
+	pub2 := newMockPublisher()
+	svc2 := NewActivityService(st, pub2)
+	svc2.SetMemberLister(&fakeMemberLister{ids: []string{"u-1"}})
+	svc2.SetReminderSync(&fakeReminderSync{err: errors.New("redis down")})
+	svc2.MessagesDeleted(ctx, "ch-1", ParentChannel, []string{"m-1"})
+	waitForCond(t, func() bool { return len(changes(t, pub2, "u-1")) == 1 }, "item change still published")
+	if got := changes(t, pub2, "u-1")[0]; got.Reminders {
+		t.Fatalf("activity.read = %+v, a failed reminder sync must not claim a change", got)
+	}
+}
+
+// Text edited out of a message must not live on in a reminder's preview.
+func TestActivityService_MessageEditedRefreshesReminderPreview(t *testing.T) {
+	ctx := context.Background()
+	rem := &fakeReminderSync{owners: map[string][]string{"u-2": {"r-2"}}}
+	pub := newMockPublisher()
+	svc := NewActivityService(newFakeActivityStore(), pub)
+	svc.SetMemberLister(&fakeMemberLister{ids: []string{"u-1"}})
+	svc.SetReminderSync(rem)
+
+	svc.MessageEdited(ctx, &model.Message{ID: "m-1", ParentID: "ch-1", Body: "fixed\\n typo"}, ParentChannel)
+	waitForCond(t, func() bool { return len(changes(t, pub, "u-2")) == 1 }, "reminder owner told")
+	if got := changes(t, pub, "u-2")[0]; !got.Reminders {
+		t.Fatalf("activity.read = %+v", got)
+	}
+	rem.mu.Lock()
+	preview := rem.preview
+	rem.mu.Unlock()
+	if preview == "" || strings.Contains(preview, "\n") {
+		t.Fatalf("preview = %q, want the collapsed new text", preview)
+	}
+	if calls := rem.called(); calls[0] != "preview:m-1" {
+		t.Fatalf("reminder calls = %v", calls)
+	}
+}

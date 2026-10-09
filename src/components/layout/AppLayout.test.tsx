@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AppLayout } from './AppLayout';
-import { resetSidebarModeForTests, setSidebarMode } from '@/stores/sidebar-mode';
+import { resetSidebarModeSessionState, setSidebarMode } from '@/stores/sidebar-mode';
 
 // Mock the Sidebar to avoid pulling in all its dependencies
 vi.mock('./Sidebar', () => ({
@@ -121,7 +121,7 @@ describe('AppLayout', () => {
   beforeEach(() => {
     delete window.Capacitor;
     setMobileMatch(false);
-    resetSidebarModeForTests();
+    resetSidebarModeSessionState();
   });
 
   it('renders sidebar', () => {
@@ -186,12 +186,14 @@ describe('AppLayout', () => {
     expect(bannerBlock.nextElementSibling?.querySelector('main')).toBeInTheDocument();
   });
 
-  it('keeps the desktop sidebar as a persistent rail', () => {
+  it('keeps the desktop sidebar as a persistent rail that its own navigation never closes', () => {
     renderLayout();
 
-    const aside = screen.getByTestId('sidebar').closest('aside')!;
-    expect(aside.className).toContain('lg:flex');
+    const aside = screen.getByTestId('app-sidebar');
+    expect(aside).toContainElement(screen.getByTestId('sidebar'));
     expect(aside.className).not.toContain('fixed');
+    fireEvent.click(within(aside).getByText('Close sidebar'));
+    expect(screen.getByTestId('app-sidebar')).toBeInTheDocument();
   });
 
   it('leaves top safe-area ownership to the app viewport shell', () => {

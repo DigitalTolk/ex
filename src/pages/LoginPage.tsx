@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
 import { apiFetch, captureServerVersion, setAccessToken } from '@/lib/api';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { UpdateBanner } from '@/components/UpdateBanner';
+import { AuthPageShell } from '@/components/layout/AuthPageShell';
 import type { User } from '@/types';
 
 export default function LoginPage() {
@@ -83,16 +83,7 @@ export default function LoginPage() {
   }
 
   return (
-    // Fills the app root (which already clears the status bar and ends at
-    // the keyboard) and scrolls inside it, so the form is centred and a
-    // focused field can scroll above the keyboard.
-    <div className="flex h-full flex-col bg-muted/40">
-      <UpdateBanner />
-      <div className="min-h-0 flex-1 overflow-y-auto px-4">
-        {/* Centred against the full screen, so the keyboard opening doesn't
-            re-centre (and jump) the form — the area above it just scrolls. */}
-        <div className="flex min-h-[calc(100dvh-env(safe-area-inset-top))]">
-        <div className="m-auto w-full max-w-sm space-y-6 py-6">
+    <AuthPageShell>
         <div className="text-center space-y-2">
           <h1 className="text-2xl font-bold tracking-tight">
             {isInviteMode ? 'Accept Invitation' : 'Welcome back'}
@@ -217,10 +208,7 @@ export default function LoginPage() {
             </form>
           </>
         )}
-        </div>
-        </div>
-      </div>
-    </div>
+    </AuthPageShell>
   );
 }
 
