@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type WheelEvent } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type WheelEvent } from 'react';
 import { matchPath, useLocation } from 'react-router-dom';
 import { OPEN_CHANNELS_EVENT } from '@/lib/mobile-nav';
 import { motion, type PanInfo } from 'motion/react';
@@ -54,21 +54,26 @@ function SidebarHeader({ topStrip = false }: { topStrip?: boolean }) {
 function MobileSidebarTitle() {
   const mode = useSidebarModeStore((s) => s.mode);
   return (
-    <h2 className="shrink-0 px-4 pt-3 pb-3 text-xl font-bold" data-testid="mobile-sidebar-title">
+    <h2 className="shrink-0 px-4 pt-3 pb-3 text-xl leading-[150%] font-semibold" data-testid="mobile-sidebar-title">
       {mode === 'activity' ? 'Activity' : 'Home'}
     </h2>
   );
 }
 
-// The sidebar's list: channels and DMs, or Activity.
-function SidebarBody({ onClose }: { onClose: () => void }) {
+// The sidebar's list: channels and DMs, or Activity. Memoized (with stable
+// onClose callbacks) so layout state — a drawer drag, a sidebar resize — doesn't
+// re-render the whole list.
+const SidebarBody = memo(function SidebarBody({ onClose }: { onClose: () => void }) {
   const mode = useSidebarModeStore((s) => s.mode);
   return (
     <div className="min-h-0 flex-1">
       {mode === 'activity' ? <ActivityPanel onNavigate={onClose} /> : <Sidebar onClose={onClose} />}
     </div>
   );
-}
+});
+
+// The persistent sidebar never closes.
+const keepOpen = () => undefined;
 
 
 export function AppLayout({ children }: AppLayoutProps) {
@@ -84,11 +89,13 @@ export function AppLayout({ children }: AppLayoutProps) {
   const mainRef = useRef<HTMLElement>(null);
   const appHeaderRef = useRef<HTMLDivElement>(null);
   // Going somewhere closes a manually opened drawer — a pick from the
-  // search sheet or a deep link has to land on the page, not under the list.
-  // (Rows in the list close it themselves; this covers everything else.)
-  const [drawerPath, setDrawerPath] = useState(location.pathname);
-  if (drawerPath !== location.pathname) {
-    setDrawerPath(location.pathname);
+  // search sheet or a deep link has to land on the page, not under the list,
+  // even when it is the conversation already open behind it (same path, new
+  // ?thread= or #msg-). (Rows in the list close it themselves; this covers
+  // everything else.)
+  const [drawerLocation, setDrawerLocation] = useState(location.key);
+  if (drawerLocation !== location.key) {
+    setDrawerLocation(location.key);
     if (manualChannelsOpen) setManualChannelsOpen(false);
   }
   const mobileChannelsOpen = isMobile && (isHome || manualChannelsOpen);
@@ -115,12 +122,6 @@ export function AppLayout({ children }: AppLayoutProps) {
     setChannelDragOffset(0);
     setManualChannelsOpen(false);
   }, []);
-
-  // A conversation header's back button (phone) asks for the list.
-  useEffect(() => {
-    window.addEventListener(OPEN_CHANNELS_EVENT, openChannelsWithAnimation);
-    return () => window.removeEventListener(OPEN_CHANNELS_EVENT, openChannelsWithAnimation);
-  }, [openChannelsWithAnimation]);
 
   // Android/browser Back closes a manually-opened drawer instead of leaving
   // the page (on the home route the drawer IS the page, and it opens via
@@ -276,6 +277,15 @@ export function AppLayout({ children }: AppLayoutProps) {
   // tier-watching effect needed.
   const [compactSidebarToggled, setCompactSidebarToggled] = useState(false);
   const compactSidebarOpen = compactSidebarToggled && tier === 'compact';
+  const closeCompactSidebar = useCallback(() => setCompactSidebarToggled(false), []);
+
+  // Something asks for the list: a conversation header's back button (phone),
+  // or /activity (compact window, where the list is the overlay).
+  useEffect(() => {
+    const open = () => (tier === 'compact' ? setCompactSidebarToggled(true) : openChannelsWithAnimation());
+    window.addEventListener(OPEN_CHANNELS_EVENT, open);
+    return () => window.removeEventListener(OPEN_CHANNELS_EVENT, open);
+  }, [tier, openChannelsWithAnimation]);
   useEffect(() => {
     if (!compactSidebarOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -298,9 +308,8 @@ export function AppLayout({ children }: AppLayoutProps) {
   // bar steps aside there, and while the keyboard is up. While it shows it
   // covers the home indicator, so the surfaces above it drop their own
   // bottom safe-area padding.
-  const textFieldFocused = useTextFieldFocused();
-  const onListScreen = mobileChannelsOpen || location.pathname === '/activity';
-  const showTabBar = isMobile && onListScreen && !textFieldFocused;
+  const textFieldFocused = useTextFieldFocused(isMobile);
+  const showTabBar = mobileChannelsOpen && !textFieldFocused;
 
   return (
     <TagSearchProvider>
@@ -309,19 +318,23 @@ export function AppLayout({ children }: AppLayoutProps) {
         style={showTabBar ? ({ '--bottom-safe-inset': '0px' } as CSSProperties) : undefined}
       >
         {/* Persistent sidebar (full tier): runs the full window height, with
-            the Home / Activity switch level with the top bar. */}
-        <aside
-          className="relative hidden shrink-0 flex-col bg-sidebar text-sidebar-foreground lg:flex border-r border-sidebar-border"
-          style={{ width: sidebarWidth }}
-          data-app-chrome="true"
-          data-keyboard-surface="sidebar"
-          data-testid="app-sidebar"
-        >
-          <SidebarHeader topStrip />
-          <SidebarBody onClose={() => undefined} />
-          <AccountMenu />
-          <PanelResizeHandle edge="right" testID="sidebar-resize-handle" {...sidebarHandleProps} />
-        </aside>
+            the Home / Activity switch level with the top bar. Mounted only on
+            that tier, so narrower layouts don't keep a hidden copy of the list
+            (and its queries) alive. */}
+        {tier === 'full' && (
+          <aside
+            className="relative flex shrink-0 flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border"
+            style={{ width: sidebarWidth }}
+            data-app-chrome="true"
+            data-keyboard-surface="sidebar"
+            data-testid="app-sidebar"
+          >
+            <SidebarHeader topStrip />
+            <SidebarBody onClose={keepOpen} />
+            <AccountMenu />
+            <PanelResizeHandle edge="right" testID="sidebar-resize-handle" {...sidebarHandleProps} />
+          </aside>
+        )}
 
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           {/* Top bar over the main column — global search centred. Behaviour
@@ -366,7 +379,7 @@ export function AppLayout({ children }: AppLayoutProps) {
                   data-keyboard-surface="sidebar"
                 >
                   <SidebarHeader />
-                  <SidebarBody onClose={() => setCompactSidebarToggled(false)} />
+                  <SidebarBody onClose={closeCompactSidebar} />
                   <AccountMenu />
                 </aside>
               </>
@@ -401,7 +414,12 @@ export function AppLayout({ children }: AppLayoutProps) {
           {/* Hidden, not unmounted, while typing: the bar owns the account
               sheet and the dialogs it opens (status, settings), which have
               text fields of their own. */}
-          {isMobile && <MobileTabBar hidden={!showTabBar} onShowList={openChannelsWithAnimation} />}
+          {/* Home / Activity reveal the list only when it isn't already
+              showing — on the home screen it is, and opening it again would
+              arm a Back-to-close for a drawer that can't close. */}
+          {isMobile && (
+            <MobileTabBar hidden={!showTabBar} onShowList={mobileChannelsOpen ? undefined : openChannelsWithAnimation} />
+          )}
         </div>
       </div>
     </TagSearchProvider>

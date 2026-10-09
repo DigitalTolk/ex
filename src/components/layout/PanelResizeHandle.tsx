@@ -15,7 +15,7 @@ export function PanelResizeHandle({ edge, testID, ...handleProps }: Props) {
     <div
       {...handleProps}
       data-testid={testID}
-      className={`absolute inset-y-0 z-30 w-2 cursor-col-resize touch-none outline-none transition-colors hover:bg-primary/20 focus-visible:bg-primary/30 active:bg-primary/30 mobile:hidden max-md:hidden ${
+      className={`absolute inset-y-0 z-30 w-2 cursor-col-resize touch-none outline-none transition-colors hover:bg-primary/20 focus-visible:bg-primary/30 active:bg-primary/30 narrow:hidden ${
         edge === 'right' ? 'right-0 translate-x-1/2' : 'left-0 -translate-x-1/2'
       }`}
     />

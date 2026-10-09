@@ -547,6 +547,13 @@
   }
 }
 
+/* The app root (App.tsx) is sized to the space above the on-screen keyboard.
+   It glides with the keyboard (KEYBOARD_SETTLE_MS in useKeyboardInset) only
+   while the inset is moving; any other viewport change resizes it at once. */
+html[data-keyboard-settling] [data-app-root] {
+  transition: height 250ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
 @layer components {
   /* Rendered chat message body. Tailwind's preflight zeroes <p>
    * margins, so consecutive paragraphs would otherwise stick to each

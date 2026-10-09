@@ -20,6 +20,14 @@ type fakeReminderStore struct {
 	cancelErr error
 	listErr   error
 	claimErr  error
+
+	// The sync operations record what they were asked and answer canned.
+	parentUser, parentID string
+	messageIDs           []string
+	preview              string
+	cancelled            []string
+	owners               map[string][]string
+	syncErr              error
 }
 
 func (f *fakeReminderStore) ScheduleReminder(_ context.Context, r *model.Reminder) error {
@@ -35,6 +43,18 @@ func (f *fakeReminderStore) CancelReminder(context.Context, string, string) (boo
 func (f *fakeReminderStore) ListPendingReminders(context.Context, string) ([]*model.Reminder, error) {
 	return f.pending, f.listErr
 }
+func (f *fakeReminderStore) CancelRemindersForParent(_ context.Context, userID, parentID string) ([]string, error) {
+	f.parentUser, f.parentID = userID, parentID
+	return f.cancelled, f.syncErr
+}
+func (f *fakeReminderStore) CancelRemindersForMessages(_ context.Context, messageIDs []string) (map[string][]string, error) {
+	f.messageIDs = messageIDs
+	return f.owners, f.syncErr
+}
+func (f *fakeReminderStore) UpdateReminderPreview(_ context.Context, messageID, preview string) (map[string][]string, error) {
+	f.messageIDs, f.preview = []string{messageID}, preview
+	return f.owners, f.syncErr
+}
 func (f *fakeReminderStore) ClaimDueReminders(context.Context, int) ([]*model.Reminder, error) {
 	if f.claimErr != nil {
 		return nil, f.claimErr
@@ -49,7 +69,12 @@ type fakeMessageGetter struct {
 	err error
 }
 
-func (f *fakeMessageGetter) GetMessage(context.Context, string, string) (*model.Message, error) {
+// GetMessage answers the configured message or error; with neither, the
+// message simply exists (empty), as most fire-path tests need.
+func (f *fakeMessageGetter) GetMessage(_ context.Context, parentID, msgID string) (*model.Message, error) {
+	if f.msg == nil && f.err == nil {
+		return &model.Message{ID: msgID, ParentID: parentID}, nil
+	}
 	return f.msg, f.err
 }
 
@@ -271,5 +296,124 @@ func TestReminderService_DropsReminderOwnerCanNoLongerOpen(t *testing.T) {
 	}
 	if len(act.items) != 2 {
 		t.Fatalf("activity items = %d, want 2 (none for the dropped reminder)", len(act.items))
+	}
+}
+
+// spyReminderChanges records whose reminders were reported changed.
+type spyReminderChanges struct{ users []string }
+
+func (s *spyReminderChanges) RemindersChanged(_ context.Context, userID string) {
+	s.users = append(s.users, userID)
+}
+
+// A reminder set or cancelled on one device must show on the others, so each
+// successful change tells the owner's clients; a failed one tells nobody.
+func TestReminderService_ReportsScheduleAndCancel(t *testing.T) {
+	ctx := context.Background()
+	base := time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC)
+	in := ReminderInput{MessageID: "m-1", ParentID: "ch-1", ParentType: ParentChannel, RemindAt: base.Add(time.Hour)}
+
+	rs := &fakeReminderStore{cancelOK: true}
+	svc, _, _ := newReminderSvc(t, rs, &model.Message{ID: "m-1"}, nil)
+	changes := &spyReminderChanges{}
+	svc.SetChangeNotifier(changes)
+	if _, err := svc.Schedule(ctx, "u-1", in); err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	if err := svc.Cancel(ctx, "u-1", "r1"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if len(changes.users) != 2 || changes.users[0] != "u-1" || changes.users[1] != "u-1" {
+		t.Fatalf("changes = %v, want u-1 twice", changes.users)
+	}
+
+	rs.cancelOK = false
+	_ = svc.Cancel(ctx, "u-1", "gone")
+	rs.schedErr = errors.New("redis down")
+	_, _ = svc.Schedule(ctx, "u-1", in)
+	if len(changes.users) != 2 {
+		t.Fatalf("a failed change must not be reported, got %v", changes.users)
+	}
+}
+
+func TestReminderService_SyncDelegatesToStore(t *testing.T) {
+	ctx := context.Background()
+	rs := &fakeReminderStore{cancelled: []string{"r1"}, owners: map[string][]string{"u-2": {"r2"}}}
+	svc, _, _ := newReminderSvc(t, rs, nil, nil)
+
+	ids, err := svc.CancelForParent(ctx, "u-1", "ch-1")
+	if err != nil || len(ids) != 1 || rs.parentUser != "u-1" || rs.parentID != "ch-1" {
+		t.Fatalf("CancelForParent = %v, %v (store got %s/%s)", ids, err, rs.parentUser, rs.parentID)
+	}
+	owners, err := svc.CancelForMessages(ctx, []string{"m-1", "m-2"})
+	if err != nil || len(owners["u-2"]) != 1 || len(rs.messageIDs) != 2 {
+		t.Fatalf("CancelForMessages = %v, %v", owners, err)
+	}
+	owners, err = svc.RefreshPreview(ctx, "m-3", "new text")
+	if err != nil || len(owners) != 1 || rs.messageIDs[0] != "m-3" || rs.preview != "new text" {
+		t.Fatalf("RefreshPreview = %v, %v", owners, err)
+	}
+}
+
+type messagesByID map[string]*model.Message
+
+func (m messagesByID) GetMessage(_ context.Context, _, msgID string) (*model.Message, error) {
+	if msg, ok := m[msgID]; ok {
+		return msg, nil
+	}
+	if msgID == "m-unreadable" {
+		return nil, errors.New("dynamo timeout")
+	}
+	return nil, store.ErrNotFound
+}
+
+// A reminder fires about the message as it is now: deleted since (gone, or
+// soft-deleted) drops it, edited since fires with the new text — even when the
+// delete/edit sync never reached it. A message that can't be read fires with
+// the stored preview rather than being lost.
+func TestReminderService_FireRereadsTheMessage(t *testing.T) {
+	due := func(id, msgID string) *model.Reminder {
+		return &model.Reminder{ID: id, UserID: "u-1", MessageID: msgID, ParentID: "ch-1", ParentType: ParentChannel, MessagePreview: "stored text " + id}
+	}
+	rs := &fakeReminderStore{due: []*model.Reminder{
+		due("r-gone", "m-gone"),
+		due("r-soft", "m-soft"),
+		due("r-edited", "m-edited"),
+		due("r-unreadable", "m-unreadable"),
+	}}
+	svc := NewReminderService(rs, messagesByID{
+		"m-soft":   {ID: "m-soft", Deleted: true},
+		"m-edited": {ID: "m-edited", Body: "  the   corrected text "},
+	}, &fakeAccess{})
+	act, notif := &spyActivityAdder{}, &spyDirectNotifier{}
+	svc.SetDelivery(act, notif)
+
+	if n, err := svc.ProcessDue(context.Background()); err != nil || n != 4 {
+		t.Fatalf("ProcessDue = %d, %v; want all 4 claimed", n, err)
+	}
+	if len(notif.notifs) != 2 || notif.notifs[0].AlertID != "r-edited" || notif.notifs[1].AlertID != "r-unreadable" {
+		t.Fatalf("alerts = %+v, want r-edited and r-unreadable only", notif.notifs)
+	}
+	if notif.notifs[0].Body != "the corrected text" || act.items[0].MessagePreview != "the corrected text" {
+		t.Fatalf("edited reminder = %q / %q, want the current text", notif.notifs[0].Body, act.items[0].MessagePreview)
+	}
+	if notif.notifs[1].Body != "stored text r-unreadable" {
+		t.Fatalf("unreadable message = %q, want the stored preview", notif.notifs[1].Body)
+	}
+}
+
+// A webhook post has no body; its reminder previews the attachment summary,
+// as its activity items do.
+func TestReminderService_SchedulePreviewsWebhookAttachments(t *testing.T) {
+	base := time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC)
+	rs := &fakeReminderStore{}
+	msg := &model.Message{ID: "m-1", MessageAttachments: []model.MessageAttachment{{Fallback: "Deploy failed"}}}
+	svc, _, _ := newReminderSvc(t, rs, msg, nil)
+	in := ReminderInput{MessageID: "m-1", ParentID: "ch-1", ParentType: ParentChannel, RemindAt: base.Add(time.Hour)}
+	if _, err := svc.Schedule(context.Background(), "u-1", in); err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	if got := rs.scheduled[0].MessagePreview; got != "Deploy failed" {
+		t.Fatalf("preview = %q, want the attachment summary", got)
 	}
 }

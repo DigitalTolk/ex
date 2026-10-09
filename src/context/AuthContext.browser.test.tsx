@@ -178,6 +178,31 @@ describe('AuthContext', () => {
     expect(screen.getByTestId('state').element().textContent).toBe('(none)');
   });
 
+  // Recent searches are free text: the signed-in user reads only their own,
+  // and logging out forgets them (with the Activity sidebar state) so the next
+  // person on this device starts clean.
+  it('points recent searches at the signed-in user and forgets them, and the sidebar state, on logout', async () => {
+    const { addRecentSearch, useRecentSearchesStore } = await import('@/stores/recent-searches');
+    const { setSidebarMode, useSidebarModeStore } = await import('@/stores/sidebar-mode');
+    localStorage.setItem('ex:recent-searches:u-1', JSON.stringify(['salary review']));
+    refreshAccessTokenMock.mockResolvedValue('t-1');
+    apiFetchMock.mockResolvedValue({
+      id: 'u-1', email: 'a@x.io', displayName: 'Alice', systemRole: 'member', status: 'active',
+    });
+    globalThis.fetch = fetchMock as never;
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    const screen = await render(
+      <AuthProvider><Probe /></AuthProvider>,
+    );
+    await vi.waitFor(() => expect(useRecentSearchesStore.getState().queries).toEqual(['salary review']));
+    addRecentSearch('layoffs');
+    setSidebarMode('activity');
+    (screen.getByTestId('logout').element() as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(useRecentSearchesStore.getState()).toEqual({ userID: null, queries: [] }));
+    expect(localStorage.getItem('ex:recent-searches:u-1')).toBeNull();
+    expect(useSidebarModeStore.getState().mode).toBe('home');
+  });
+
   it('logout tolerates a fetch rejection', async () => {
     refreshAccessTokenMock.mockResolvedValue(null);
     globalThis.fetch = fetchMock as never;

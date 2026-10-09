@@ -35,6 +35,7 @@ import {
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
 import type { UserMapEntry } from './MessageList';
 import type { Message } from '@/types';
+import { RIGHT_PANEL_COVER_CLASS } from './right-panel';
 
 const ANCHOR_HIGHLIGHT_CLASSES = ['ring-1', 'ring-amber-400/50', 'rounded-md'];
 const ANCHOR_HIGHLIGHT_MS = 2200;
@@ -479,7 +480,7 @@ export function ThreadPanel({
 
   return (
     <motion.aside
-      className={`relative flex w-[var(--side-panel-width,28rem)] flex-col bg-background not-mobile:border-l mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:top-[var(--mobile-right-panel-top,6rem)] mobile:z-40 mobile:w-auto max-md:not-mobile:absolute max-md:inset-x-0 max-md:bottom-0 max-md:top-[var(--mobile-right-panel-top,6rem)] max-md:z-40 max-md:w-auto max-md:border-l-0 mobile:touch-pan-y ${settled ? '' : 'border-l'}`}
+      className={`relative flex w-[var(--side-panel-width,28rem)] flex-col bg-background not-mobile:border-l ${RIGHT_PANEL_COVER_CLASS} mobile:touch-pan-y ${settled ? '' : 'border-l'}`}
       style={{ '--side-panel-width': `${panelWidth}px` } as React.CSSProperties}
       aria-label="Thread"
       data-mobile-right-sidebar="true"

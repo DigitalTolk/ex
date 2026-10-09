@@ -11,7 +11,6 @@ import {
   parseActivityNew,
   removeActivityItems,
 } from '@/lib/activity-feed';
-import { withoutItems, withRead } from '@/lib/activity-groups';
 import type { ActivityFeed, Reminder } from '@/types';
 
 const EMPTY_FEED: ActivityFeed = { items: [], unread: 0, unreadByType: {} };
@@ -20,21 +19,29 @@ const EMPTY_FEED: ActivityFeed = { items: [], unread: 0, unreadByType: {} };
 // reactions, channel adds and fired reminders) plus the unread counts. The WS
 // activity.new / activity.read events patch this cache (see
 // applyActivityNewEvent) so the badge and list stay live without refetching.
+const activityQuery = {
+  queryKey: queryKeys.activity(),
+  queryFn: async (): Promise<ActivityFeed> => {
+    const res = await apiFetch<ActivityFeed>('/api/v1/activity');
+    // Coerce a malformed/empty response so the query never resolves undefined.
+    if (!res || !Array.isArray(res.items)) return EMPTY_FEED;
+    return {
+      items: res.items,
+      unread: typeof res.unread === 'number' ? res.unread : 0,
+      unreadByType: res.unreadByType ?? {},
+    };
+  },
+  staleTime: 10_000,
+};
+
 export function useActivity() {
-  return useQuery({
-    queryKey: queryKeys.activity(),
-    queryFn: async () => {
-      const res = await apiFetch<ActivityFeed>('/api/v1/activity');
-      // Coerce a malformed/empty response so the query never resolves undefined.
-      if (!res || !Array.isArray(res.items)) return EMPTY_FEED;
-      return {
-        items: res.items,
-        unread: typeof res.unread === 'number' ? res.unread : 0,
-        unreadByType: res.unreadByType ?? {},
-      };
-    },
-    staleTime: 10_000,
-  });
+  return useQuery(activityQuery);
+}
+
+// useActivityUnread is just the unread count, for the badges: a component
+// that shows only the count doesn't re-render when the list changes.
+export function useActivityUnread(): number {
+  return useQuery({ ...activityQuery, select: (feed) => feed.unread }).data ?? 0;
 }
 
 // useReminders loads the user's pending (not-yet-fired) reminders.
@@ -109,9 +116,15 @@ export function applyActivityNewEvent(qc: QueryClient, data: unknown) {
 
 // applyActivityChangedEvent applies the change an activity.read event carries —
 // read/unread marks and removals from any of the user's devices, or a read of
-// part of a channel, conversation or thread (which refetches).
+// part of a channel, conversation or thread (which refetches). A change to the
+// pending reminders (set or cancelled elsewhere, or gone with their message or
+// channel) reloads them; on its own it leaves the feed alone.
 export function applyActivityChangedEvent(qc: QueryClient, data: unknown) {
-  const change = parseActivityChange(data);
+  const { reminders, ...change } = parseActivityChange(data);
+  if (reminders) {
+    void qc.invalidateQueries({ queryKey: queryKeys.reminders() });
+    if (Object.keys(change).length === 0) return;
+  }
   patchActivity(qc, (feed) => applyActivityChange(feed, change));
 }
 
@@ -122,88 +135,51 @@ async function optimisticActivity(qc: QueryClient, fn: (feed: ActivityFeed) => A
   qc.setQueryData<ActivityFeed>(queryKeys.activity(), (old) => (old ? fn(old) : old));
 }
 
-function activityWriteFailed() {
-  showToast("Couldn't update activity — please try again.");
+// A failed write undoes its optimistic patch by refetching, and says so. A
+// successful one needs no refetch: the server answers every activity write
+// with an activity.read event carrying the change, which every tab (this one
+// included) applies.
+function useActivityWriteFailed() {
+  const qc = useQueryClient();
+  return () => {
+    void qc.invalidateQueries({ queryKey: queryKeys.activity() });
+    showToast("Couldn't update activity — please try again.");
+  };
 }
 
 // useSetActivityItemsRead marks items read or unread ("Mark as read" / "Mark as
-// unread", and opening a row). Optimistic; the refetch on settle reconciles.
+// unread", and opening a row).
 export function useSetActivityItemsRead() {
   const qc = useQueryClient();
+  const onError = useActivityWriteFailed();
   return useMutation({
     mutationFn: ({ ids, read }: { ids: string[]; read: boolean }) =>
       apiFetch<void>('/api/v1/activity/items/read', { method: 'PUT', body: JSON.stringify({ ids, read }) }),
     onMutate: ({ ids, read }) => optimisticActivity(qc, (feed) => markActivityItems(feed, ids, read)),
-    onError: activityWriteFailed,
-    onSettled: () => {
-      void qc.invalidateQueries({ queryKey: queryKeys.activity() });
-    },
+    onError,
   });
 }
 
 // useRemoveActivityItems deletes items from the stream ("Remove from activity").
 export function useRemoveActivityItems() {
   const qc = useQueryClient();
+  const onError = useActivityWriteFailed();
   return useMutation({
     mutationFn: (ids: string[]) =>
       apiFetch<void>('/api/v1/activity/items/remove', { method: 'POST', body: JSON.stringify({ ids }) }),
     onMutate: (ids) => optimisticActivity(qc, (feed) => removeActivityItems(feed, ids)),
-    onError: activityWriteFailed,
-    onSettled: () => {
-      void qc.invalidateQueries({ queryKey: queryKeys.activity() });
-    },
+    onError,
   });
 }
 
 // useMarkActivityRead marks every item read ("Mark all as read") by advancing
 // the server watermark, and optimistically marks the cached items read.
-// onSettled refetches to reconcile with the advanced watermark, re-counting
-// anything that arrived mid-flight as still unread.
 export function useMarkActivityRead() {
   const qc = useQueryClient();
+  const onError = useActivityWriteFailed();
   return useMutation({
     mutationFn: () => apiFetch<void>('/api/v1/activity/read', { method: 'PUT' }),
     onMutate: () => optimisticActivity(qc, markAllActivityRead),
-    onError: activityWriteFailed,
-    onSettled: () => {
-      void qc.invalidateQueries({ queryKey: queryKeys.activity() });
-    },
-  });
-}
-
-// useSetActivityRead marks specific items read or unread ("Mark as read" /
-// "Mark as unread", and opening a row). The cache updates first so the dot
-// and tab counts change instantly; the refetch afterwards reconciles.
-export function useSetActivityRead() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ ids, read }: { ids: string[]; read: boolean }) =>
-      apiFetch<void>('/api/v1/activity/items/read', { method: 'PUT', body: JSON.stringify({ ids, read }) }),
-    onMutate: async ({ ids, read }) => {
-      await qc.cancelQueries({ queryKey: queryKeys.activity() });
-      qc.setQueryData<ActivityFeed>(queryKeys.activity(), (old) => (old ? withRead(old, ids, read) : old));
-    },
-    onSettled: () => {
-      void qc.invalidateQueries({ queryKey: queryKeys.activity() });
-    },
-  });
-}
-
-// useRemoveActivity removes items from the feed ("Remove from activity").
-export function useRemoveActivity() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (ids: string[]) =>
-      apiFetch<void>('/api/v1/activity/items/remove', { method: 'POST', body: JSON.stringify({ ids }) }),
-    onMutate: async (ids) => {
-      await qc.cancelQueries({ queryKey: queryKeys.activity() });
-      qc.setQueryData<ActivityFeed>(queryKeys.activity(), (old) => (old ? withoutItems(old, ids) : old));
-    },
-    onError: () => {
-      showToast("Couldn't remove that from Activity — please try again.");
-    },
-    onSettled: () => {
-      void qc.invalidateQueries({ queryKey: queryKeys.activity() });
-    },
+    onError,
   });
 }

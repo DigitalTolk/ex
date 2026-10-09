@@ -3,7 +3,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { SearchBar } from './SearchBar';
-import { addRecentSearch, clearRecentSearches, useRecentSearchesStore } from '@/stores/recent-searches';
+import {
+  addRecentSearch,
+  loadRecentSearches,
+  resetRecentSearchesSessionState,
+  useRecentSearchesStore,
+} from '@/stores/recent-searches';
 
 const useChannelBySlugMock = vi.hoisted(() => vi.fn(() => ({ data: undefined as unknown })));
 const useSearchMessagesMock = vi.hoisted(() =>
@@ -39,10 +44,10 @@ function LocationProbe() {
   return null;
 }
 
-function renderSheet(path = '/', onDone = vi.fn()) {
+function renderSheet(path = '/', onDone = vi.fn(), variant: 'sheet' | 'bar' = 'sheet') {
   render(
     <MemoryRouter initialEntries={[path]}>
-      <SearchBar variant="sheet" onDone={onDone} leading={<span data-testid="leading" />} />
+      <SearchBar variant={variant} onDone={onDone} leading={<span data-testid="leading" />} />
       <LocationProbe />
     </MemoryRouter>,
   );
@@ -50,7 +55,10 @@ function renderSheet(path = '/', onDone = vi.fn()) {
 }
 
 beforeEach(() => {
-  act(() => clearRecentSearches());
+  act(() => {
+    resetRecentSearchesSessionState();
+    loadRecentSearches('u-1');
+  });
   useChannelBySlugMock.mockReturnValue({ data: undefined });
   useSearchMessagesMock.mockReset();
   useSearchMessagesMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
@@ -58,9 +66,10 @@ beforeEach(() => {
 });
 
 describe('SearchBar sheet variant', () => {
-  it('shows a hint with no recent searches, and the leading slot', () => {
+  it('shows just the field (no hint copy) with no recent searches, and the leading slot', () => {
     renderSheet();
-    expect(screen.getByTestId('recent-searches-empty')).toBeInTheDocument();
+    expect(screen.queryByTestId('recent-searches')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Search messages, channels and people/)).not.toBeInTheDocument();
     expect(screen.getByTestId('leading')).toBeInTheDocument();
   });
 
@@ -97,6 +106,8 @@ describe('SearchBar sheet variant', () => {
     expect(useRecentSearchesStore.getState().queries).toEqual(['release']);
     expect(lastLocation).toBe('/');
     expect(useSearchMessagesMock).toHaveBeenLastCalledWith('release', true, 20, undefined);
+    // The results are their own section, not options of the suggestion list.
+    expect(screen.getByTestId('sheet-message-results').closest('[role="listbox"]')).toBeNull();
     fireEvent.click(screen.getAllByTestId('message-hit-card')[0]);
     expect(onDone).toHaveBeenCalled();
     // Editing the text goes back to the live suggestions.
@@ -122,6 +133,49 @@ describe('SearchBar sheet variant', () => {
     fireEvent.change(input, { target: { value: 'zzz' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(screen.getByTestId('sheet-message-empty')).toHaveTextContent('No messages match “zzz”.');
+    expect(screen.queryByTestId('sheet-all-results')).not.toBeInTheDocument();
+  });
+
+  // Only opening a result closes the sheet: a tap on the empty state, a
+  // placeholder or a result that can't open used to close it with nowhere
+  // to go.
+  it('stays open for taps that do not open anything', () => {
+    const onDone = renderSheet();
+    const input = screen.getByTestId('searchbar-input');
+    fireEvent.change(input, { target: { value: 'zzz' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.click(screen.getByTestId('sheet-message-empty'));
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it('opens the full search page from All results, keeping the scope', () => {
+    useChannelBySlugMock.mockReturnValue({ data: { id: 'ch-1', name: 'general' } });
+    useSearchMessagesMock.mockReturnValue({ data: { hits: [{ id: 'm1' }] }, isLoading: false });
+    const onDone = renderSheet('/channel/general');
+    fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'deploy' } });
+    fireEvent.click(screen.getByTestId('searchbar-show-in-scope'));
+    fireEvent.click(screen.getByTestId('sheet-all-results'));
+    expect(lastLocation).toBe('/search?q=deploy&in=ch-1');
+    expect(onDone).toHaveBeenCalled();
+  });
+
+  it('opens the full search page unscoped', () => {
+    useSearchMessagesMock.mockReturnValue({ data: { hits: [{ id: 'm1' }] }, isLoading: false });
+    renderSheet();
+    fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'deploy' } });
+    fireEvent.click(screen.getByTestId('searchbar-show-results'));
+    fireEvent.click(screen.getByTestId('sheet-all-results'));
+    expect(lastLocation).toBe('/search?q=deploy');
+  });
+
+  // Only the sheet shows recent searches, so only the sheet records them.
+  it('does not record searches made from the desktop bar', () => {
+    renderSheet('/', vi.fn(), 'bar');
+    const input = screen.getByTestId('searchbar-input');
+    fireEvent.change(input, { target: { value: 'quarterly' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(lastLocation).toBe('/search?q=quarterly');
+    expect(useRecentSearchesStore.getState().queries).toEqual([]);
   });
 
   it('does not take over ⌘K or close on outside clicks', () => {

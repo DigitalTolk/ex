@@ -19,7 +19,7 @@ import ChatPage from '@/pages/ChatPage';
 import { ChannelView } from '@/components/chat/ChannelView';
 import { ConversationView } from '@/components/chat/ConversationView';
 import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
-import { KEYBOARD_SETTLE_MS, useKeyboardInsetTracker } from '@/hooks/useKeyboardInset';
+import { useKeyboardInsetTracker } from '@/hooks/useKeyboardInset';
 import { removeBootSplash } from '@/lib/boot-splash';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useServerVersion } from '@/hooks/useServerVersion';
@@ -213,11 +213,8 @@ export default function App() {
                           it's down) so the top of the app stays on screen. */}
                       <div
                         className="flex flex-col bg-sidebar pt-safe-top"
-                        style={{
-                          height: 'calc(100dvh - var(--ex-keyboard-inset, 0px))',
-                          // Glide with the keyboard instead of jumping.
-                          transition: `height ${KEYBOARD_SETTLE_MS}ms cubic-bezier(0.25, 0.1, 0.25, 1)`,
-                        }}
+                        style={{ height: 'calc(100dvh - var(--ex-keyboard-inset, 0px))' }}
+                        data-app-root="true"
                       >
                         <div className="min-h-0 flex-1 bg-background">
                           <RoutedErrorBoundary>

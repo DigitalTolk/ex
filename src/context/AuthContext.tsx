@@ -21,6 +21,8 @@ import { resetUserStateSessionState } from '@/hooks/useUserState';
 import { resetSidebarReorderSessionState } from '@/hooks/useSidebar';
 import { resetAgentRunsSessionState } from '@/stores/agent-runs';
 import { resetAgentApprovalsSessionState } from '@/stores/agent-approvals';
+import { resetSidebarModeSessionState } from '@/stores/sidebar-mode';
+import { loadRecentSearches, resetRecentSearchesSessionState } from '@/stores/recent-searches';
 import { clearMobilePushUser, identifyMobilePushUser } from '@/lib/mobile-push-identity';
 import { provideRunnerToken, resetRunnerHandoff } from '@/lib/agent-runner';
 
@@ -51,6 +53,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   const isAuthenticated = !!user;
+
+  // The device keeps recent searches per user; point the store at the one
+  // signed in.
+  const userID = user?.id;
+  useEffect(() => {
+    if (userID) loadRecentSearches(userID);
+  }, [userID]);
 
   useEffect(() => {
     // On mount, attempt to refresh the access token (the refresh token is in
@@ -115,6 +124,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // next user in this tab sees the previous user's live runs / approvals.
     resetAgentRunsSessionState();
     resetAgentApprovalsSessionState();
+    // The sidebar's Activity mode/filter/selection and the device's recent
+    // searches (free text) belong to the user who's leaving.
+    resetSidebarModeSessionState();
+    resetRecentSearchesSessionState();
   }, []);
 
   const logout = useCallback(async () => {

@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ActivityModeSwitch } from './ActivityModeSwitch';
 import { apiFetch } from '@/lib/api';
-import { resetSidebarModeForTests, setSidebarMode, useSidebarModeStore } from '@/stores/sidebar-mode';
+import { resetSidebarModeSessionState, setSidebarMode, useSidebarModeStore } from '@/stores/sidebar-mode';
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
 
@@ -36,13 +36,13 @@ function renderAt(path: string, unread: number) {
 
 describe('ActivityModeSwitch', () => {
   beforeEach(() => {
-    resetSidebarModeForTests();
+    resetSidebarModeSessionState();
     vi.mocked(apiFetch).mockReset();
   });
 
   it('starts on Home and shows the unread count on Activity', async () => {
     renderAt('/channel/general', 4);
-    expect(screen.getByTestId('sidebar-mode-home')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('sidebar-mode-home')).toHaveAttribute('aria-pressed', 'true');
     expect(await screen.findByTestId('activity-unread-badge')).toHaveTextContent('4');
   });
 
@@ -71,16 +71,20 @@ describe('ActivityModeSwitch', () => {
     renderAt('/channel/general', 0);
     fireEvent.click(screen.getByTestId('sidebar-mode-activity'));
     expect(useSidebarModeStore.getState().mode).toBe('activity');
-    expect(screen.getByTestId('sidebar-mode-activity')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('sidebar-mode-activity')).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(screen.getByTestId('sidebar-mode-home'));
     expect(useSidebarModeStore.getState().mode).toBe('home');
     expect(screen.getByTestId('where')).toHaveTextContent('/channel/general');
   });
 
-  it('goes home when leaving Activity from the Activity page', () => {
-    setSidebarMode('activity');
-    renderAt('/activity', 0);
-    fireEvent.click(screen.getByTestId('sidebar-mode-home'));
-    expect(screen.getByTestId('where')).toHaveTextContent(/^\/$/);
+  // A toggle between two lists, so it's a pair of pressed/unpressed buttons
+  // (with the unread count in the Activity button's name), not a tablist
+  // without panels.
+  it('is a pair of toggle buttons named with the unread count', async () => {
+    renderAt('/channel/general', 2);
+    expect(screen.getByRole('group', { name: 'Sidebar' })).toBeInTheDocument();
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(await screen.findByRole('button', { name: 'Activity, 2 unread' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Home' })).toHaveAttribute('aria-pressed', 'true');
   });
 });

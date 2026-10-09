@@ -3,7 +3,10 @@ import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import type { UserChannel, Channel, ChannelMembership, ChannelNotificationOverride } from '@/types';
 
-export function useUserChannels(options?: { enabled?: boolean }) {
+// select narrows what the caller subscribes to: with structural sharing, a
+// selected shape that didn't change (e.g. names and slugs on an unread bump)
+// doesn't re-render the caller.
+export function useUserChannels<T = UserChannel[]>(options?: { enabled?: boolean; select?: (rows: UserChannel[]) => T }) {
   return useQuery({
     queryKey: queryKeys.userChannels(),
     queryFn: async () => {
@@ -11,6 +14,7 @@ export function useUserChannels(options?: { enabled?: boolean }) {
       return Array.isArray(res) ? res : [];
     },
     enabled: options?.enabled ?? true,
+    select: options?.select,
   });
 }
 
