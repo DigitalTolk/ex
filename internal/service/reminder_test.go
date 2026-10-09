@@ -376,17 +376,17 @@ func TestReminderService_ParentLeftCancelsAndReports(t *testing.T) {
 	svc, _, _ := newReminderSvc(t, rs, nil, nil)
 	pub := newMockPublisher()
 	svc.SetPublisher(pub)
-	svc.ParentLeft(ctx, "u-1", "ch-1")
-	waitForCond(t, func() bool { return len(remindersChanged(pub)) == 1 }, "owner told")
-	if got := rs.recorded(); len(got) != 1 || got[0] != "parent:u-1:ch-1" {
-		t.Fatalf("store calls = %v", got)
+	svc.ParentLeft(ctx, []string{"u-1", "u-2"}, "ch-1")
+	waitForCond(t, func() bool { return len(remindersChanged(pub)) == 2 }, "both owners told")
+	if got := rs.recorded(); len(got) != 2 || got[0] != "parent:u-1:ch-1" || got[1] != "parent:u-2:ch-1" {
+		t.Fatalf("store calls = %v, want each user in turn", got)
 	}
 
 	for _, quiet := range []*fakeReminderStore{{}, {syncErr: errors.New("redis down")}} {
 		svc, _, _ := newReminderSvc(t, quiet, nil, nil)
 		pub := newMockPublisher()
 		svc.SetPublisher(pub)
-		svc.ParentLeft(ctx, "u-1", "ch-1")
+		svc.ParentLeft(ctx, []string{"u-1"}, "ch-1")
 		waitForCond(t, func() bool { return len(quiet.recorded()) == 1 }, "cleanup ran")
 		time.Sleep(20 * time.Millisecond)
 		if got := remindersChanged(pub); len(got) != 0 {
@@ -423,19 +423,22 @@ func TestReminderService_MessagesDeletedCancelsAndReports(t *testing.T) {
 }
 
 // Text edited out of a message must not live on in a reminder's preview.
+// The hook reads the message again rather than trusting the copy it was
+// handed: two quick edits whose hooks run out of order then both write the
+// latest text.
 func TestReminderService_MessageEditedRefreshesPreview(t *testing.T) {
 	ctx := context.Background()
 	rs := &fakeReminderStore{owners: []string{"u-2"}}
-	svc, _, _ := newReminderSvc(t, rs, nil, nil)
+	svc := NewReminderService(rs, messagesByID{"m-1": {ID: "m-1", Body: "  the   latest\n text "}}, &fakeAccess{})
 	pub := newMockPublisher()
 	svc.SetPublisher(pub)
-	svc.MessageEdited(ctx, &model.Message{ID: "m-1", ParentID: "ch-1", Body: "  the   corrected\n text "}, ParentChannel)
+	svc.MessageEdited(ctx, &model.Message{ID: "m-1", ParentID: "ch-1", Body: "an older edit"}, ParentChannel)
 	waitForCond(t, func() bool { return len(remindersChanged(pub)) == 1 }, "owner told")
 	rs.mu.Lock()
 	preview := rs.preview
 	rs.mu.Unlock()
-	if preview != "the corrected text" || rs.recorded()[0] != "preview:m-1" {
-		t.Fatalf("preview = %q, calls = %v", preview, rs.recorded())
+	if preview != "the latest text" || rs.recorded()[0] != "preview:m-1" {
+		t.Fatalf("preview = %q, calls = %v; want the current text, not the hook's copy", preview, rs.recorded())
 	}
 
 	failing := &fakeReminderStore{owners: []string{"u-2"}, syncErr: errors.New("redis down")}
@@ -605,5 +608,26 @@ func TestReminderService_CancelAllForUser(t *testing.T) {
 	rs.cancelAllN, rs.syncErr = 0, errors.New("redis down")
 	if err := svc.CancelAllForUser(context.Background(), "u-off"); err == nil {
 		t.Fatal("a store failure must surface")
+	}
+}
+
+// A message deleted (or unreadable) by the time the edit hook runs leaves the
+// reminders alone: the delete hook takes them, and a failed read changes
+// nothing rather than writing a stale preview.
+func TestReminderService_MessageEditedSkipsGoneOrUnreadableMessage(t *testing.T) {
+	ctx := context.Background()
+	for _, msgID := range []string{"m-gone", "m-soft", "m-unreadable"} {
+		rs := &fakeReminderStore{owners: []string{"u-2"}}
+		svc := NewReminderService(rs, messagesByID{"m-soft": {ID: "m-soft", Deleted: true}}, &fakeAccess{})
+		pub := newMockPublisher()
+		svc.SetPublisher(pub)
+		svc.MessageEdited(ctx, &model.Message{ID: msgID, ParentID: "ch-1", Body: "edited"}, ParentChannel)
+		time.Sleep(30 * time.Millisecond)
+		if got := rs.recorded(); len(got) != 0 {
+			t.Fatalf("%s: store calls = %v, want none", msgID, got)
+		}
+		if got := remindersChanged(pub); len(got) != 0 {
+			t.Fatalf("%s: reminders.changed = %v, want none", msgID, got)
+		}
 	}
 }

@@ -78,7 +78,7 @@ export function MobileSearchSheet({ open, onOpenChange }: MobileSearchSheetProps
         />
         <Drawer.Viewport
           className="fixed inset-x-0 top-0 z-50 flex items-end"
-          style={{ bottom: keyboardInset, transition: `bottom ${KEYBOARD_SETTLE_MS}ms cubic-bezier(0.25, 0.1, 0.25, 1)` }}
+          style={{ bottom: keyboardInset, transition: `bottom ${KEYBOARD_SETTLE_MS}ms var(--ex-keyboard-ease)` }}
           data-testid="mobile-search-sheet"
         >
           <Drawer.Popup

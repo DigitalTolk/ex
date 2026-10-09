@@ -419,12 +419,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           {/* Hidden, not unmounted, while typing: the bar owns the account
               sheet and the dialogs it opens (status, settings), which have
               text fields of their own. */}
-          {/* Home / Activity reveal the list only when it isn't already
-              showing — on the home screen it is, and opening it again would
-              arm a Back-to-close for a drawer that can't close. */}
-          {isMobile && (
-            <MobileTabBar hidden={!showTabBar} onShowList={mobileChannelsOpen ? undefined : openChannelsWithAnimation} />
-          )}
+          {isMobile && <MobileTabBar hidden={!showTabBar} />}
         </div>
       </div>
     </TagSearchProvider>

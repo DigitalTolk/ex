@@ -52,6 +52,9 @@ const isDesktopProject = window.innerWidth >= 1024;
 beforeEach(async () => {
   if (!isDesktopProject) return;
   await page.viewport(700, 800);
+  // The resize can reach the test frame a beat after the call returns; a
+  // test measuring before it did saw the full-width layout (flaky).
+  await expect.poll(() => window.innerWidth, { timeout: 5_000 }).toBe(700);
 });
 
 afterEach(async () => {
@@ -73,6 +76,10 @@ async function renderLayout() {
     </QueryClientProvider>,
   );
   active = result;
+  // Measure only once the compact layout is in place.
+  if (isDesktopProject) {
+    await expect.poll(() => document.documentElement.classList.contains('tier-compact'), { timeout: 5_000 }).toBe(true);
+  }
   return result;
 }
 
@@ -230,6 +237,15 @@ describe('compact tier at a real 700px desktop viewport', () => {
       await expect.poll(() => getComputedStyle(left).paddingLeft, { timeout: 5_000 }).toBe('88px');
       const toggle = document.querySelector('[aria-label="Open channels"]') as HTMLElement;
       const search = document.querySelector('input[aria-label="Search"]') as HTMLElement;
+      // The columns settle a frame or two after the padding lands under the
+      // full instrumented run (a one-shot read found the field 58px off and
+      // flaked): wait for the centred layout, then measure it.
+      await expect
+        .poll(() => {
+          const r = search.getBoundingClientRect();
+          return Math.abs((r.left + r.right) / 2 - window.innerWidth / 2);
+        }, { timeout: 5_000 })
+        .toBeLessThanOrEqual(1);
       const toggleRect = toggle.getBoundingClientRect();
       const searchRect = search.getBoundingClientRect();
       // The hamburger clears the traffic lights…

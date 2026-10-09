@@ -30,8 +30,6 @@ let nativeKeyboardHeight = 0;
 // viewport; only the un-shrunk remainder must be subtracted.
 let innerHeightAtKeyboardShow = 0;
 
-export { keyboardOverlap, readKeyboardHeight };
-
 function onNativeKeyboardShow(ev: Event): void {
   nativeKeyboardHeight = readKeyboardHeight(ev);
   innerHeightAtKeyboardShow = window.innerHeight;

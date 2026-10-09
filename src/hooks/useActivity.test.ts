@@ -162,20 +162,20 @@ describe('useActivity hooks', () => {
     expect(feed?.items[0].read).toBe(true);
   });
 
-  // The server answers every activity write with an activity.read event that
-  // every tab applies, so a successful write refetches nothing.
-  it('useMarkActivityRead cancels the in-flight activity fetch and does not refetch after succeeding', async () => {
+  // Mark-all cancels any in-flight read (it would undo the optimistic zero),
+  // then re-reads once the write lands: an item that arrived after the
+  // server's watermark must come back unread, and only the server knows which.
+  it('useMarkActivityRead cancels the in-flight fetch and re-reads after succeeding', async () => {
     vi.mocked(apiFetch).mockResolvedValue(undefined);
     const client = makeClient();
     const cancelSpy = vi.spyOn(client, 'cancelQueries');
-    const invalidateSpy = vi.spyOn(client, 'invalidateQueries');
+    const invalidateSpy = vi.spyOn(client, 'invalidateQueries').mockResolvedValue();
     client.setQueryData<ActivityFeed>(queryKeys.activity(), { items: [{ id: 'a' } as never], unread: 3, unreadByType: {} });
     const { result } = renderHook(() => useMarkActivityRead(), { wrapper: wrapperFor(client) });
     await result.current.mutateAsync();
-    // In-flight GET is aborted before the optimistic zero so it can't overwrite it.
     expect(cancelSpy).toHaveBeenCalledWith({ queryKey: queryKeys.activity() });
-    expect(invalidateSpy).not.toHaveBeenCalled();
     expect(client.getQueryData<ActivityFeed>(queryKeys.activity())?.unread).toBe(0);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.activity() });
   });
 
   it('useMarkActivityRead is a no-op on an empty cache', async () => {

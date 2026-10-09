@@ -20,9 +20,9 @@ vi.mock('./Sidebar', () => ({
 // mobile-shell and search-shell expectations still resolve.
 // The phone tab bar reads the activity feed too.
 vi.mock('./MobileTabBar', () => ({
-  MobileTabBar: ({ onShowList, hidden }: { onShowList?: () => void; hidden?: boolean }) => (
-    <nav data-testid="mobile-tab-bar" data-hidden={hidden ? 'true' : 'false'} data-shows-list={onShowList ? 'true' : 'false'}>
-      <button type="button" data-testid="mobile-tab-home" onClick={onShowList}>Home</button>
+  MobileTabBar: ({ hidden }: { hidden?: boolean }) => (
+    <nav data-testid="mobile-tab-bar" data-hidden={hidden ? 'true' : 'false'}>
+      <button type="button" data-testid="mobile-tab-home">Home</button>
     </nav>
   ),
 }));
@@ -161,20 +161,20 @@ describe('AppLayout on a phone', () => {
     expect(main()).toHaveAttribute('data-mobile-channels-open', 'false');
   });
 
-  // On the home screen the list already shows; the tab bar must not open it
-  // again (that armed a Back-to-close for a drawer that can't close: a dead
-  // Back press, then a stale history entry).
-  it('lets the tab bar bring the list in only when it is hidden', () => {
+  // The tab bar is part of the list screen: it shows with the list and steps
+  // aside in a conversation, so it only ever switches a list that is already
+  // on screen — a tab tap never opens the drawer or arms a Back-to-close.
+  it('shows the tab bar with the list and hides it in a conversation', () => {
     const before = window.history.length;
     const { unmount } = renderAt('/');
-    expect(screen.getByTestId('mobile-tab-bar')).toHaveAttribute('data-shows-list', 'false');
+    expect(screen.getByTestId('mobile-tab-bar')).toHaveAttribute('data-hidden', 'false');
     fireEvent.click(screen.getByTestId('mobile-tab-home'));
     expect(window.history.length).toBe(before);
     unmount();
     renderAt('/channel/general');
+    expect(screen.getByTestId('mobile-tab-bar')).toHaveAttribute('data-hidden', 'true');
     act(() => requestOpenChannels());
-    // Showing now (manually opened) — nothing more to bring in.
-    expect(screen.getByTestId('mobile-tab-bar')).toHaveAttribute('data-shows-list', 'false');
+    expect(screen.getByTestId('mobile-tab-bar')).toHaveAttribute('data-hidden', 'false');
   });
 
   it('navigating with the list closed leaves it closed', () => {

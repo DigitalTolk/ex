@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  activityDay,
   activityHref,
   activitySections,
   activityTime,
@@ -139,10 +138,11 @@ describe('activity feed helpers', () => {
   it('buckets rows by calendar day into consecutive sections', () => {
     const now = new Date(2026, 9, 9, 12, 0);
     const at = (d: Date) => d.toISOString();
-    expect(activityDay(at(new Date(2026, 9, 9, 0, 5)), now)).toBe('Today');
-    expect(activityDay(at(new Date(2026, 9, 10, 9, 0)), now)).toBe('Today');
-    expect(activityDay(at(new Date(2026, 9, 8, 23, 59)), now)).toBe('Yesterday');
-    expect(activityDay(at(new Date(2026, 9, 1)), now)).toBe('Earlier');
+    const dayOf = (d: Date) => activitySections(groupActivity([item('x', { createdAt: at(d) })]), now)[0].day;
+    expect(dayOf(new Date(2026, 9, 9, 0, 5))).toBe('Today');
+    expect(dayOf(new Date(2026, 9, 10, 9, 0))).toBe('Today');
+    expect(dayOf(new Date(2026, 9, 8, 23, 59))).toBe('Yesterday');
+    expect(dayOf(new Date(2026, 9, 1))).toBe('Earlier');
 
     const rows = groupActivity([
       item('a', { createdAt: at(new Date(2026, 9, 9, 11)) }),

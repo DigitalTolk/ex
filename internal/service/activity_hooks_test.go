@@ -2,8 +2,8 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -21,6 +21,7 @@ type activityHooks struct {
 	reads     []parentRead
 	deleted   [][]string
 	edited    []*model.Message
+	calls     int // ParentLeft calls (each may carry several users)
 }
 
 type channelAdd struct {
@@ -43,8 +44,11 @@ func (r *activityHooks) RecordChannelAdded(_ context.Context, actorID, userID st
 	r.added = append(r.added, channelAdd{actorID, userID, ch})
 }
 
-func (r *activityHooks) ParentLeft(_ context.Context, userID, parentID string) {
-	r.left = append(r.left, parentLeft{userID, parentID})
+func (r *activityHooks) ParentLeft(_ context.Context, userIDs []string, parentID string) {
+	r.calls++
+	for _, userID := range userIDs {
+		r.left = append(r.left, parentLeft{userID, parentID})
+	}
 }
 
 func (r *activityHooks) MarkParentRead(_ context.Context, userID, parentID, threadRootID string, position time.Time) {
@@ -93,11 +97,10 @@ func TestChannelService_MarkChannelRead_ReadsActivity(t *testing.T) {
 	recentlyNow(t, got.position)
 }
 
-// Losing access to a channel drops its items, whether the user left or was
-// removed.
-// Losing access reaches both the activity stream and the pending reminders —
-// the reminders even with no activity recorder wired.
-func TestChannelService_LeaveAndRemove_DropActivity(t *testing.T) {
+// Losing access to a channel, whether the user left or was removed, drops its
+// items and cancels their reminders there — the reminders even with no
+// activity recorder wired.
+func TestChannelService_LeaveAndRemove_DropActivityAndReminders(t *testing.T) {
 	svc, _, memberships, _, _ := setupChannelService()
 	rec, rem := &activityHooks{}, &activityHooks{}
 	svc.SetActivityRecorder(rec)
@@ -258,11 +261,9 @@ func TestMessageService_MarkThreadUnread_RewindsActivity(t *testing.T) {
 	}
 }
 
-// Deleting a thread root takes the items about the root AND every cascaded
-// reply with it, in one hand-off.
-// Deleting a message reaches its activity items and its pending reminders
-// with the same ids — the thread's replies included.
-func TestMessageService_Delete_DropsActivity(t *testing.T) {
+// Deleting a thread root takes the items and pending reminders about the root
+// AND every cascaded reply with it, in one hand-off each with the same ids.
+func TestMessageService_Delete_DropsActivityAndReminders(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	rec, rem := &activityHooks{}, &activityHooks{}
 	svc.SetActivityRecorder(rec)
@@ -319,9 +320,9 @@ func TestMessageService_Delete_FailedCascadeKeepsActivity(t *testing.T) {
 	}
 }
 
-// Editing a message's text refreshes its items' previews; an edit that only
-// touches attachments leaves them alone.
-func TestMessageService_Edit_RefreshesActivity(t *testing.T) {
+// Editing a message's text refreshes its items' and reminders' previews; an
+// edit that only touches attachments leaves them alone.
+func TestMessageService_Edit_RefreshesActivityAndReminders(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	rec, rem := &activityHooks{}, &activityHooks{}
 	svc.SetActivityRecorder(rec)

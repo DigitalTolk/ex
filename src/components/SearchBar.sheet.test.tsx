@@ -108,6 +108,10 @@ describe('SearchBar sheet variant', () => {
     expect(useSearchMessagesMock).toHaveBeenLastCalledWith('release', true, 20, undefined);
     // The results are their own section, not options of the suggestion list.
     expect(screen.getByTestId('sheet-message-results').closest('[role="listbox"]')).toBeNull();
+    // …and the only "Messages" region: the "search for…" group steps aside
+    // instead of rendering empty next to it.
+    expect(screen.queryByRole('group', { name: 'Messages' })).toBeNull();
+    expect(screen.getByRole('region', { name: 'Messages' })).toBeInTheDocument();
     fireEvent.click(screen.getAllByTestId('message-hit-card')[0]);
     expect(onDone).toHaveBeenCalled();
     // Editing the text goes back to the live suggestions.

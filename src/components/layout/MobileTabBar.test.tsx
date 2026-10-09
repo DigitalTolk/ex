@@ -16,7 +16,7 @@ vi.mock('./MobileSearchSheet', () => ({
     ) : null,
 }));
 
-function renderBar(props: { onShowList?: () => void; hidden?: boolean } = {}) {
+function renderBar(props: { hidden?: boolean } = {}) {
   return render(
     <MemoryRouter>
       <MobileTabBar {...props} />
@@ -30,9 +30,8 @@ beforeEach(() => {
 });
 
 describe('MobileTabBar', () => {
-  it('switches the list between Home and Activity and brings it into view', () => {
-    const onShowList = vi.fn();
-    renderBar({ onShowList });
+  it('switches the list between Home and Activity', () => {
+    renderBar();
     expect(screen.getByTestId('mobile-tab-home')).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(screen.getByTestId('mobile-tab-activity'));
     expect(useSidebarModeStore.getState().mode).toBe('activity');
@@ -40,16 +39,6 @@ describe('MobileTabBar', () => {
     expect(screen.getByTestId('mobile-tab-home')).toHaveAttribute('aria-pressed', 'false');
     fireEvent.click(screen.getByTestId('mobile-tab-home'));
     expect(useSidebarModeStore.getState().mode).toBe('home');
-    expect(onShowList).toHaveBeenCalledTimes(2);
-  });
-
-  // On the list screen there's nothing to bring into view: asking anyway armed
-  // a Back-to-close for a drawer that can't close (a dead Back press, then a
-  // stale history entry).
-  it('only switches the list when it already shows', () => {
-    renderBar();
-    fireEvent.click(screen.getByTestId('mobile-tab-activity'));
-    expect(useSidebarModeStore.getState().mode).toBe('activity');
   });
 
   it('shows the unread count on Activity, capped at 99+', () => {

@@ -133,6 +133,30 @@ export default function ChatPage() {
     };
   }, [user?.id, setCurrentUserID, setSelfUserID]);
 
+  // After a gap in the socket (reconnect, or a replay the server could no
+  // longer serve), refetch what the durable inbox doesn't carry: the list
+  // metadata, and everything driven by ephemeral events — the activity feed
+  // and pending reminders (activity.*, reminders.changed), the Scheduled list,
+  // and presence. resyncMessageCache is the safety net for any message-inbox
+  // gap a replay didn't cover. The refetched channel/conversation lists carry
+  // the authoritative server unread counts, so there's nothing else to reset.
+  const refreshAfterGap = () => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.scheduledMessages() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.activity() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.reminders() });
+    void resyncMessageCache(queryClient);
+    // presence.changed is ephemeral (never replayed): every transition that
+    // happened while disconnected is gone, so refetch the authoritative online
+    // set or the dots drift stale until the next full re-auth.
+    refreshPresence();
+  };
+
   useWebSocket({
     onMessageNew: (data: unknown) => {
       const msg = parseMessage(data);
@@ -660,39 +684,9 @@ export default function ChatPage() {
         deepLink,
       });
     },
-    onReconnect: () => {
-      // Refresh non-infinite peripheral lists outright. With server
-      // replay enabled, message events arrive via the durable inbox,
-      // but list metadata (channels/threads/drafts/members) isn't in
-      // the inbox so we refetch it. resyncMessageCache stays as a
-      // safety net for any inbox gap a replay didn't cover.
-      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.scheduledMessages() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
-      // The refetched userChannels/userConversations carry authoritative server
-      // unread counts — the single source — so there's nothing else to reset.
-      void resyncMessageCache(queryClient);
-      // presence.changed is ephemeral (never replayed): every transition that
-      // happened while disconnected is gone, so refetch the authoritative
-      // online set or the dots drift stale until the next full re-auth.
-      refreshPresence();
-    },
-    onReplayExhausted: () => {
-      // Server's durable inbox lost our cursor — same recovery as
-      // a plain reconnect: invalidate peripherals + tail-resync.
-      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
-      void resyncMessageCache(queryClient);
-      refreshPresence();
-    },
+    onReconnect: refreshAfterGap,
+    // The server's durable inbox lost our cursor — same recovery.
+    onReplayExhausted: refreshAfterGap,
     enabled: !!user,
   });
 

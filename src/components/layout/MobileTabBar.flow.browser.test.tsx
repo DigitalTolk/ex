@@ -33,7 +33,11 @@ function Where() {
   return <span data-testid="where">{loc.pathname + loc.search}</span>;
 }
 
-const isPhone = () => window.matchMedia('(max-width: 767px)').matches && navigator.maxTouchPoints > 0;
+// Both phone projects (chromium-mobile and webkit-iphone) pin the touch tier
+// at phone width — key on that, not on navigator.maxTouchPoints, which another
+// file's CDP touch emulation can flip mid-run and made these tests run or skip
+// depending on file order.
+const isPhone = () => window.__EX_FORCE_DEVICE__ === 'touch' && window.innerWidth < 768;
 const main = () => document.querySelector<HTMLElement>('[data-app-main="true"]')!;
 const tabBar = () => document.querySelector<HTMLElement>('[data-testid="mobile-tab-bar"]')!;
 const sheet = () => document.querySelector('[data-testid="mobile-search-panel"]');
@@ -96,7 +100,8 @@ describe('phone list screens', () => {
     const screen = await renderAt('/');
     await screen.getByRole('button', { name: 'Search' }).click();
     await vi.waitFor(() => expect(sheet()).not.toBeNull());
-    await screen.getByTestId('search-result').click();
+    // The result in the sheet — the top bar keeps its own (hidden) search on phones.
+    await screen.getByTestId('mobile-search-panel').getByTestId('search-result').click();
     await expect.element(screen.getByTestId('where')).toHaveTextContent('/channel/general?thread=root-1');
     await vi.waitFor(() => expect(sheet()).toBeNull());
     await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('false'));
@@ -112,7 +117,8 @@ describe('phone list screens', () => {
     await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'));
     await screen.getByRole('button', { name: 'Search' }).click();
     await vi.waitFor(() => expect(sheet()).not.toBeNull());
-    await screen.getByTestId('search-result').click();
+    // The result in the sheet — the top bar keeps its own (hidden) search on phones.
+    await screen.getByTestId('mobile-search-panel').getByTestId('search-result').click();
     await expect.element(screen.getByTestId('where')).toHaveTextContent('/channel/general?thread=root-1');
     await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('false'));
   });

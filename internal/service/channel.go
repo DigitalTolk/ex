@@ -49,7 +49,7 @@ type ChannelService struct {
 // Implemented by ActivityService.
 type ChannelActivityRecorder interface {
 	RecordChannelAdded(ctx context.Context, actorID, userID string, ch *model.Channel)
-	ParentLeft(ctx context.Context, userID, parentID string)
+	ParentLeft(ctx context.Context, userIDs []string, parentID string)
 	ActivityReadTracker
 }
 
@@ -57,7 +57,7 @@ type ChannelActivityRecorder interface {
 // their pending reminders there (each a copy of a message's text) go too.
 // Implemented by ReminderService.
 type ChannelReminderSync interface {
-	ParentLeft(ctx context.Context, userID, parentID string)
+	ParentLeft(ctx context.Context, userIDs []string, parentID string)
 }
 
 // NewChannelService creates a ChannelService with the given dependencies.
@@ -85,15 +85,18 @@ func (s *ChannelService) SetActivityRecorder(a ChannelActivityRecorder) { s.acti
 // SetReminderSync wires reminder cleanup into losing access to a channel.
 func (s *ChannelService) SetReminderSync(r ChannelReminderSync) { s.reminders = r }
 
-// accessLost tells the activity stream and the reminders that userID can no
-// longer read channelID — they left, were removed, or it was archived — so
+// accessLost tells the activity stream and the reminders that these users can
+// no longer read channelID — they left, were removed, or it was archived — so
 // neither keeps showing its messages.
-func (s *ChannelService) accessLost(ctx context.Context, userID, channelID string) {
+func (s *ChannelService) accessLost(ctx context.Context, userIDs []string, channelID string) {
+	if len(userIDs) == 0 {
+		return
+	}
 	if s.activity != nil {
-		s.activity.ParentLeft(ctx, userID, channelID)
+		s.activity.ParentLeft(ctx, userIDs, channelID)
 	}
 	if s.reminders != nil {
-		s.reminders.ParentLeft(ctx, userID, channelID)
+		s.reminders.ParentLeft(ctx, userIDs, channelID)
 	}
 }
 
@@ -406,14 +409,16 @@ func (s *ChannelService) Archive(ctx context.Context, actorID, channelID string)
 	// membership store is dual-write so a partial failure can be retried by
 	// re-archiving without violating any invariant.
 	if listErr == nil {
+		removed := make([]string, 0, len(members))
 		for _, m := range members {
 			if rmErr := s.memberships.RemoveMember(ctx, channelID, m.UserID); rmErr != nil {
 				slog.Warn("archive: remove member failed", "channelID", channelID, "userID", m.UserID, "error", rmErr)
 				continue
 			}
-			// Like leaving: nobody can open it any more.
-			s.accessLost(ctx, m.UserID, channelID)
+			removed = append(removed, m.UserID)
 		}
+		// Like leaving, for everyone at once: nobody can open it any more.
+		s.accessLost(ctx, removed, channelID)
 	}
 
 	s.indexChannel(ctx, ch)
@@ -499,7 +504,7 @@ func (s *ChannelService) Leave(ctx context.Context, userID, channelID string) er
 		"channelID": channelID,
 		"userID":    userID,
 	})
-	s.accessLost(ctx, userID, channelID)
+	s.accessLost(ctx, []string{userID}, channelID)
 
 	s.postSystemMessage(ctx, channelID, displayName+" left the channel")
 	return nil
@@ -704,7 +709,7 @@ func (s *ChannelService) RemoveMember(ctx context.Context, actorID, channelID, t
 		"channelID": channelID,
 		"userID":    targetID,
 	})
-	s.accessLost(ctx, targetID, channelID)
+	s.accessLost(ctx, []string{targetID}, channelID)
 
 	s.postSystemMessage(ctx, channelID, displayName+" was removed from the channel")
 	return nil

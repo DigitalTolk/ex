@@ -8,10 +8,6 @@ import { MOBILE_TAB_CLASS } from './mobile-tab';
 import { MobileSearchSheet } from './MobileSearchSheet';
 
 interface MobileTabBarProps {
-  // Brings the list (the channel drawer) into view when it isn't showing —
-  // from a conversation — so Home and Activity always land on their list.
-  // Omitted while the list already shows.
-  onShowList?: () => void;
   // Steps aside in a conversation and while the keyboard is up.
   hidden?: boolean;
 }
@@ -19,16 +15,14 @@ interface MobileTabBarProps {
 // MobileTabBar is the phone's bottom navigation: Home, Activity, Search and
 // You, where thumbs reach. It replaces the sidebar's Home / Activity switch and
 // account footer on the mobile tier. It shows on the list screens; inside a
-// conversation or thread the back button and composer take its place.
-export function MobileTabBar({ onShowList, hidden = false }: MobileTabBarProps) {
+// conversation or thread the back button and composer take its place — so
+// it only ever switches the list that is already showing.
+export function MobileTabBar({ hidden = false }: MobileTabBarProps) {
   const mode = useSidebarModeStore((s) => s.mode);
   const unread = useActivityUnread();
   const [searchOpen, setSearchOpen] = useState(false);
 
-  const choose = (next: SidebarMode) => {
-    setSidebarMode(next);
-    onShowList?.();
-  };
+  const choose = (next: SidebarMode) => setSidebarMode(next);
 
   return (
     <nav

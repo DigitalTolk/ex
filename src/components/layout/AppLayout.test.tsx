@@ -20,9 +20,9 @@ vi.mock('./Sidebar', () => ({
 // mobile-shell and search-shell expectations still resolve.
 // The phone tab bar reads the activity feed too.
 vi.mock('./MobileTabBar', () => ({
-  MobileTabBar: ({ onShowList, hidden }: { onShowList: () => void; hidden?: boolean }) => (
+  MobileTabBar: ({ hidden }: { hidden?: boolean }) => (
     <nav data-testid="mobile-tab-bar" data-hidden={hidden ? 'true' : 'false'}>
-      <button type="button" data-testid="mobile-tab-home" onClick={onShowList}>Home</button>
+      <button type="button" data-testid="mobile-tab-home">Home</button>
     </nav>
   ),
 }));

@@ -96,8 +96,10 @@ export const ActivityRowView = memo(function ActivityRowView({
   // An unread row marks read; a read one marks unread.
   const toggleRead = () => onSetRead(row, unread);
 
+  // pb-1: the list-row rhythm's 4px between rows (the virtual list can't use
+  // space-y, so each row carries its own gap).
   return (
-    <div className="pb-0.5">
+    <div className="pb-1">
       <div
         className={`group relative rounded-lg ${selected ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/60'}`}
         data-testid="activity-row"
