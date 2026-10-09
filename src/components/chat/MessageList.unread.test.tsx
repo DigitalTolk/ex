@@ -125,44 +125,28 @@ const lineIndex = () => (list.props.data as Array<{ kind: string }>).findIndex((
 const lineAbove = () => screen.getByTestId('unread-divider').closest('[data-row]')?.nextElementSibling?.textContent;
 
 describe('MessageList unread line', () => {
-  it('opening with unread: resolves the count to a message, freezes it, and lands on the line', () => {
+  it('opening with unread: resolves the count to a message, freezes it, and lands on the tail', () => {
     setUnreadAnchor('ch-1', { kind: 'count', count: 3 });
     renderList();
     frames();
     expect(getUnreadAnchor('ch-1')).toEqual({ kind: 'message', messageID: 'm-08' });
     expect(lineAbove()).toContain('message 8');
-    expect(list.scrollCalls).toContainEqual({ index: lineIndex(), align: 'start' });
+    expect(list.scrollCalls).toContainEqual({ index: 'LAST', align: 'end' });
+    expect(list.scrollCalls).not.toContainEqual({ index: lineIndex(), align: 'start' });
   });
 
-  it('re-aims while the line is still off screen, up to the attempt cap', () => {
-    geo.lineTop = 900; // below the viewport after every aim
-    geo.scrollTop = 1000; // and 500px above the tail
+  it('Jump re-aims while the line is still off screen, up to the attempt cap', () => {
+    geo.lineTop = -300; // above the viewport: the banner offers Jump
     const onAtBottomChange = vi.fn();
-    setUnreadAnchor('ch-1', { kind: 'count', count: 3 });
+    setUnreadAnchor('ch-1', { kind: 'message', messageID: 'm-04' });
     renderList({ onAtBottomChange });
-    frames(12);
+    frames();
+    geo.scrollTop = 1000; // the aims leave the list 500px above the tail
+    list.scrollCalls.length = 0;
+    fireEvent.click(screen.getByTestId('unread-banner-jump'));
+    frames(12); // the line never comes on screen (geo.lineTop stays put)
     expect(list.scrollCalls.filter((c) => c.align === 'start')).toHaveLength(3);
     expect(onAtBottomChange).toHaveBeenCalledWith(false);
-  });
-
-  it('after landing, an older page prepending re-aims during the settle window; the user scrolling cancels it', () => {
-    setUnreadAnchor('ch-1', { kind: 'count', count: 3 });
-    const view = renderList({ hasNextPage: true });
-    frames();
-    const landed = list.scrollCalls.length;
-    view.rerenderList({ pages: [pageOf(1, 10), pageOf(-4, 0)] });
-    frames();
-    expect(list.scrollCalls.length).toBeGreaterThan(landed);
-    expect(list.scrollCalls.at(-1)).toEqual({ index: lineIndex(), align: 'start' });
-
-    const reaimed = list.scrollCalls.length;
-    fireEvent.wheel(scroller());
-    view.rerenderList({ pages: [pageOf(1, 10), pageOf(-4, 0), pageOf(-9, -5)] });
-    frames();
-    expect(list.scrollCalls).toHaveLength(reaimed);
-    // The settle timer still fires, finding the request already gone.
-    act(() => vi.advanceTimersByTime(2500));
-    expect(list.scrollCalls).toHaveLength(reaimed);
   });
 
   it('the settle window ends on its own', () => {
@@ -190,6 +174,7 @@ describe('MessageList unread line', () => {
     expect(list.scrollCalls).toContainEqual({ index: 'LAST', align: 'end' });
 
     list.scrollCalls.length = 0;
+    fireEvent.wheel(scroller()); // the person takes over: ends the opening settle
     scrollTo(200); // scroll up: no longer following the tail
     act(() => setUnreadAnchor('ch-1', { kind: 'message', messageID: 'm-05' }, { replace: true }));
     frames();

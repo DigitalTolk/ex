@@ -121,8 +121,8 @@ describe('MessageItem desktop toolbar + menu branches', () => {
       </>,
     );
     const rowA = document.querySelector('[data-message-id="a"]') as HTMLElement;
+    await userEvent.hover(rowA); // the toolbar mounts on hover
     const triggerA = rowA.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement;
-    await userEvent.hover(rowA);
     // Open row A's kebab menu (a real click so Radix registers the open).
     await userEvent.click(triggerA);
     await vi.waitFor(() => {
@@ -187,7 +187,7 @@ describe('MessageItem desktop toolbar + menu branches', () => {
       <MessageItem message={makeMessage({ pinned: true })} authorName="Alice" isOwn channelId="channel-1" channelSlug="general" currentUserId="user-1" />,
     );
     const row = document.querySelector('[data-message-id]') as HTMLElement;
-    row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    await userEvent.hover(row); // the toolbar mounts on hover
     (row.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement).click();
     // Pinned message → the menu item reads "Unpin".
     const unpin = await screen.getByRole('menuitem', { name: 'Unpin message' });

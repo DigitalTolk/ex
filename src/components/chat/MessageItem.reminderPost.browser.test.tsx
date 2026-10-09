@@ -62,6 +62,7 @@ describe('MessageItem "Remind me" — real POST', () => {
     const screen = await renderItem(
       <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} channelId="channel-1" channelSlug="general" />,
     );
+    await userEvent.hover(document.querySelector('[data-message-id]') as HTMLElement); // the toolbar mounts on hover
     await userEvent.click(document.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement);
     await userEvent.click(screen.getByTestId('remind-me-trigger'));
     await userEvent.click(screen.getByTestId('remind-in1h'));
@@ -79,6 +80,7 @@ describe('MessageItem "Remind me" — real POST', () => {
     const screen = await renderItem(
       <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} channelId="channel-1" channelSlug="general" />,
     );
+    await userEvent.hover(document.querySelector('[data-message-id]') as HTMLElement); // the toolbar mounts on hover
     await userEvent.click(document.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement);
     await userEvent.click(screen.getByTestId('remind-me-trigger'));
     await userEvent.click(screen.getByTestId('remind-custom'));

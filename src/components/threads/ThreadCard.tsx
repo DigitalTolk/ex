@@ -29,6 +29,7 @@ import {
   useUnfollowThread,
   type ThreadSummary,
 } from '@/hooks/useThreads';
+import { MessageRowDataProvider } from '@/components/chat/MessageRowDataProvider';
 
 interface ThreadCardProps {
   summary: ThreadSummary;
@@ -290,6 +291,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
         className="relative"
         onFiles={(files) => void inputRef.current?.uploadFiles(files)}
       >
+        <MessageRowDataProvider parentType={summary.parentType} parentID={summary.parentID}>
         <div className="p-2">
           {isLoading && (
             <div className="space-y-2 p-2">
@@ -349,6 +351,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
               />
             ))}
         </div>
+        </MessageRowDataProvider>
 
         <NonMemberInvitePrompt
           channelId={channelId}

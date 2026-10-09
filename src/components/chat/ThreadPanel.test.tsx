@@ -45,6 +45,19 @@ vi.mock('@/hooks/useEmoji', () => ({
   useFrequentEmojis: () => ['thumbsup', 'heart', 'tada'],
 }));
 
+// The panel subscribes once to the rows' shared data (MessageRowDataProvider):
+// stub those queries so they don't consume the per-test `mockResolvedValueOnce`
+// responses meant for the thread fetch.
+vi.mock('@/hooks/useAgents', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useAgents')>()),
+  useParentWatchers: () => ({ data: [] }),
+  useSkills: () => ({ data: [] }),
+}));
+vi.mock('@/hooks/useConnectors', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useConnectors')>()),
+  useConnectors: () => ({ data: [] }),
+}));
+
 // The non-member-invite hook reads channel members + the user's channel list.
 // Stub both so they don't consume the per-test `mockResolvedValueOnce`
 // responses meant for the thread fetch. Empty members → any @mention counts
@@ -182,6 +195,9 @@ describe('ThreadPanel', () => {
 
     // useFrequentEmojis is mocked to ['thumbsup','heart','tada']; the thread
     // sidebar must surface the same popular shelf the main message list does.
+    // The toolbar mounts on hover, so hover a reply first.
+    const reply = await screen.findByText('reply one');
+    fireEvent.mouseEnter(reply.closest('[data-message-id]')!);
     await waitFor(() => {
       expect(screen.getAllByLabelText('React with thumbsup').length).toBeGreaterThan(0);
     });
@@ -482,9 +498,7 @@ describe('ThreadPanel', () => {
         currentUserId="u-1"
       />,
     );
-    await screen.findByText('editable reply');
-
-    const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
+    const row = (await screen.findByText('editable reply')).closest('[data-message-id]')!;
     act(() => {
       fireEvent.pointerDown(row, { pointerType: 'touch' });
     });

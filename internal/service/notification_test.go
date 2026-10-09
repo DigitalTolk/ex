@@ -1360,7 +1360,7 @@ func TestNotificationService_PreviewBody_LeavesGroupMentionsAlone(t *testing.T) 
 }
 
 func TestNotificationService_DisplayNameFallbacksAndTitles(t *testing.T) {
-	svc, _, _, _, chans, users := setupNotifier(t)
+	svc, _, _, conv, chans, users := setupNotifier(t)
 	ctx := context.Background()
 
 	if got := svc.parentDisplayName(ctx, "ch-missing", ParentChannel); got != "ch-missing" {
@@ -1371,7 +1371,15 @@ func TestNotificationService_DisplayNameFallbacksAndTitles(t *testing.T) {
 		t.Fatalf("channel name fallback = %q, want General", got)
 	}
 	if got := svc.parentDisplayName(ctx, "c1", ParentConversation); got != "" {
-		t.Fatalf("conversation parentDisplayName = %q, want empty", got)
+		t.Fatalf("missing conversation parentDisplayName = %q, want empty", got)
+	}
+	conv.conversations["c-group"] = &model.Conversation{ID: "c-group", Type: model.ConversationTypeGroup, Name: "Release crew"}
+	if got := svc.parentDisplayName(ctx, "c-group", ParentConversation); got != "Release crew" {
+		t.Fatalf("group conversation parentDisplayName = %q, want its name", got)
+	}
+	conv.conversations["c-dm"] = &model.Conversation{ID: "c-dm", Type: model.ConversationTypeDM}
+	if got := svc.parentDisplayName(ctx, "c-dm", ParentConversation); got != "" {
+		t.Fatalf("dm parentDisplayName = %q, want empty", got)
 	}
 
 	if got := svc.userDisplayName(ctx, "u-missing"); got != "u-missing" {
@@ -1382,11 +1390,26 @@ func TestNotificationService_DisplayNameFallbacksAndTitles(t *testing.T) {
 		t.Fatalf("email fallback userDisplayName = %q", got)
 	}
 
-	if got := titleFor(NotificationKindThreadReply, ParentConversation, "", "Alice"); got != "Alice replied" {
-		t.Fatalf("thread conversation title = %q", got)
+	if got := titleFor(NotificationKindThreadReply, ParentConversation, "", "Alice"); got != "Alice replied in a direct message" {
+		t.Fatalf("thread dm title = %q", got)
 	}
-	if got := titleFor(NotificationKindMention, ParentConversation, "", "Alice"); got != "Alice mentioned you" {
-		t.Fatalf("mention conversation title = %q", got)
+	if got := titleFor(NotificationKindThreadReply, ParentConversation, "Release crew", "Alice"); got != "Alice replied in Release crew" {
+		t.Fatalf("thread group title = %q", got)
+	}
+	if got := titleFor(NotificationKindThreadReply, ParentChannel, "general", "Alice"); got != "Alice replied in ~general" {
+		t.Fatalf("thread channel title = %q", got)
+	}
+	if got := titleFor(NotificationKindMention, ParentConversation, "", "Alice"); got != "Alice mentioned you in a direct message" {
+		t.Fatalf("mention dm title = %q", got)
+	}
+	if got := titleFor(NotificationKindMention, ParentConversation, "Release crew", "Alice"); got != "Alice mentioned you in Release crew" {
+		t.Fatalf("mention group title = %q", got)
+	}
+	if got := titleFor(NotificationKindMessage, ParentConversation, "Release crew", "Alice"); got != "Alice in Release crew" {
+		t.Fatalf("message group title = %q", got)
+	}
+	if got := titleFor(NotificationKindMessage, ParentConversation, "", "Alice"); got != "Alice" {
+		t.Fatalf("message dm title = %q", got)
 	}
 	if got := titleFor("unknown", ParentChannel, "general", "Alice"); got != "Alice" {
 		t.Fatalf("unknown title = %q", got)

@@ -1,6 +1,6 @@
 import path from "path"
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
@@ -66,8 +66,28 @@ function preserveDistGitignore() {
 }
 
 // https://vite.dev/config/
+// reactScanDev injects react-scan (https://react-scan.com) into the page on
+// the DEV SERVER ONLY (`apply: 'serve'` — never in a build): it outlines
+// components as they re-render and shows render counts/timings, so render
+// churn in the chat is visible instead of guessed. Loaded as a classic
+// script ahead of the module graph, which is what the auto build expects.
+// Opt out for a session with REACT_SCAN=0.
+function reactScanDev(): Plugin {
+  return {
+    name: 'react-scan-dev',
+    apply: 'serve',
+    transformIndexHtml(html) {
+      if (process.env.REACT_SCAN === '0') return html;
+      return html.replace(
+        '<head>',
+        '<head>\n    <script src="https://unpkg.com/react-scan/dist/auto.global.js"></script>',
+      );
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss(), preserveDistGitignore()],
+  plugins: [react(), tailwindcss(), preserveDistGitignore(), reactScanDev()],
   build: {
     // Three cohesive chunks sit over the 500 kB default after the vendor
     // split: `editor-vendor` (the full CodeMirror 6 editor, ~181 kB gzip),

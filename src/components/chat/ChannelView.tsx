@@ -110,11 +110,13 @@ export function ChannelView() {
   };
   const openMembers = () => { dismissThread(); closeTag(); panels.open('members'); };
   const closeMembers = panels.close;
-  const openThread = (id: string) => {
+  // Stable: it reaches every message row as a prop, and a fresh function per
+  // render re-rendered all mounted rows on each list change.
+  const openThread = useCallback((id: string) => {
     setThreadRootID(id);
     closeTag();
     panels.close();
-  };
+  }, [closeTag, panels]);
   const closeThread = dismissThread;
   const togglePinned = () => { dismissThread(); closeTag(); panels.toggle('pinned'); };
   const toggleFiles = () => { dismissThread(); closeTag(); panels.toggle('files'); };

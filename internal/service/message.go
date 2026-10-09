@@ -353,25 +353,20 @@ func (s *MessageService) notify(ctx context.Context, msg *model.Message, parentT
 // bumpUnreadSeq advances a parent's unread counter for a new top-level message
 // and marks the author caught up (posting reads the parent for you, so your own
 // message never shows as unread to you). The same mechanism serves channels and
-// conversations — only the store differs. Like notify and indexMessage it runs
-// detached with a cancellation-free context: the two row writes are best-effort
-// unread bookkeeping that must never add to the sender's request latency, and
-// the count only has to be durable before the recipient reloads — not before
-// the send returns. No-op when the seq store isn't wired.
+// conversations — only the store differs. It runs on the send path, before the
+// message is published: detaching it left a window after the send in which the
+// counter was bumped but the author not yet caught up, and a sidebar refetch in
+// that window showed the author's own message as unread (badge + "New
+// messages" line above their own post). No-op when the seq store isn't wired.
 func (s *MessageService) bumpUnreadSeq(ctx context.Context, store UnreadSeqStore, parentID, authorID string) {
 	if store == nil {
 		return
 	}
-	safe.Go(func() {
-		bg, cancel := detachedContext(ctx)
-		defer cancel()
-		s.writeUnreadSeq(bg, store, parentID, authorID)
-	})
+	s.writeUnreadSeq(ctx, store, parentID, authorID)
 }
 
-// writeUnreadSeq is the synchronous core of bumpUnreadSeq, split out so it can
-// be unit-tested without racing the detached goroutine. O(1) — two row writes
-// regardless of member count, unlike a per-member fan-out.
+// writeUnreadSeq does the two row writes behind bumpUnreadSeq. O(1) — two
+// row writes regardless of member count, unlike a per-member fan-out.
 func (s *MessageService) writeUnreadSeq(ctx context.Context, store UnreadSeqStore, parentID, authorID string) {
 	seq, err := store.IncrementMessageSeq(ctx, parentID)
 	if err != nil {

@@ -83,6 +83,8 @@ const ALLOWED_TAGS = new Set([
   // Client-injected (decoratePicks below), never server-emitted: a known
   // "/token" pick rendered as a pill.
   'ex-pick',
+  // Client-injected (withTrailing below): where RenderOpts.trailing goes.
+  'ex-trailing',
 ]);
 
 // normaliseTree defensively patches a tree before handing it to
@@ -167,13 +169,41 @@ export function renderHastTree(tree: HastNode, opts?: RenderOpts): ReactNode {
   if (opts?.pickTokens && opts.pickTokens.size > 0) {
     tree = decoratePicks(tree, opts.pickTokens)[0];
   }
-  const rendered = toJsxRuntime(normaliseTree(tree) as unknown as HastNodes, {
+  let normalised = normaliseTree(tree);
+  let after: ReactNode = null;
+  if (opts?.trailing) {
+    const inline = withTrailing(normalised);
+    if (inline) normalised = inline;
+    else after = opts.trailing;
+  }
+  const rendered = toJsxRuntime(normalised as unknown as HastNodes, {
     Fragment,
     jsx,
     jsxs,
     components: HAST_COMPONENTS,
   });
-  return <RenderOptsContext.Provider value={opts}>{rendered}</RenderOptsContext.Provider>;
+  return (
+    <RenderOptsContext.Provider value={opts}>
+      {rendered}
+      {after}
+    </RenderOptsContext.Provider>
+  );
+}
+
+// withTrailing appends the ex-trailing marker inside the tree's last
+// paragraph, so RenderOpts.trailing sits on the text's last line. null when
+// the body doesn't end in a (non-blank) paragraph. Copy-on-write: the tree
+// may be the cached message.rendered.
+function withTrailing(root: HastNode): HastNode | null {
+  const kids = root.children ?? [];
+  const last = kids[kids.length - 1];
+  if (!last || last.type !== 'element' || last.tagName !== 'p') return null;
+  if (last.properties?.['data-blank'] === 'true' || last.properties?.dataBlank === 'true') return null;
+  const marker: HastNode = { type: 'element', tagName: 'ex-trailing', properties: {}, children: [] };
+  return {
+    ...root,
+    children: [...kids.slice(0, -1), { ...last, children: [...(last.children ?? []), marker] }],
+  };
 }
 
 // GFM column alignment → text-align utility. Left is the default, so an
@@ -308,6 +338,10 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
     );
   }) as AnyComponent,
 
+  'ex-trailing': (() => {
+    const opts = useRenderOpts();
+    return <>{opts?.trailing}</>;
+  }) as AnyComponent,
   'ex-pick': ((props: CustomTagProps) => (
     <span
       data-testid="pick-pill"

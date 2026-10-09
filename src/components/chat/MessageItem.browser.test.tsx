@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
@@ -86,6 +87,8 @@ describe('MessageItem browser behavior', () => {
         quickReactions={[':tada:', ':smile:']}
       />,
     );
+    // The toolbar mounts on hover.
+    await userEvent.hover(document.querySelector('[data-message-id]') as HTMLElement);
     const btn = screen.getByRole('button', { name: 'React with :tada:' });
     await expect.element(btn).toBeInTheDocument();
     await btn.click();
@@ -289,7 +292,7 @@ describe('MessageItem browser behavior', () => {
       />,
     );
     const row = document.querySelector('[data-message-id]') as HTMLElement;
-    row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    await userEvent.hover(row); // the toolbar mounts on hover
     // The desktop hover toolbar exposes the reply control; click the first
     // visible "Reply in thread" button.
     const replyBtn = Array.from(document.querySelectorAll('button[aria-label="Reply in thread"]'))

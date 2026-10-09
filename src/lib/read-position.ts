@@ -21,6 +21,9 @@ export type UnreadAnchor =
   | { kind: 'after'; at: string };
 
 const anchors = new Map<string, UnreadAnchor>();
+// Lines the user has seen (they faded out): the row keeps its place so the
+// messages don't shift, but it is invisible and the banner/pill retire.
+const seen = new Set<string>();
 const holds = new Set<string>();
 const notAtBottom = new Set<string>();
 const notAtLiveTail = new Set<string>();
@@ -41,7 +44,18 @@ export function threadReadKey(threadRootID: string): string {
 export function setUnreadAnchor(key: string, anchor: UnreadAnchor, opts: { replace?: boolean } = {}): void {
   if (anchors.has(key) && !opts.replace) return;
   anchors.set(key, anchor);
+  seen.delete(key);
   emit();
+}
+
+export function markUnreadSeen(key: string): void {
+  if (seen.has(key)) return;
+  seen.add(key);
+  emit();
+}
+
+export function isUnreadSeen(key: string): boolean {
+  return seen.has(key);
 }
 
 export function getUnreadAnchor(key: string): UnreadAnchor | undefined {
@@ -49,6 +63,7 @@ export function getUnreadAnchor(key: string): UnreadAnchor | undefined {
 }
 
 export function clearUnreadAnchor(key: string): void {
+  seen.delete(key);
   if (anchors.delete(key)) emit();
 }
 
@@ -138,6 +153,10 @@ function subscribe(listener: () => void): () => void {
 
 export function useUnreadAnchor(key: string | undefined): UnreadAnchor | undefined {
   return useSyncExternalStore(subscribe, () => (key ? anchors.get(key) : undefined));
+}
+
+export function useUnreadSeen(key: string | undefined): boolean {
+  return useSyncExternalStore(subscribe, () => (key ? seen.has(key) : false));
 }
 
 export function useMissedArrivals(key: string | undefined): number {

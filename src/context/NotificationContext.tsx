@@ -450,6 +450,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           // (2026-07-10) is to keep the custom ping there even though it
           // bypasses DnD. Only the shell gets DnD-correct pings.
           silent: true,
+          // Stay until dismissed or clicked (Mattermost-style) instead of
+          // sliding away after a few seconds. Honoured on Windows/Linux/web;
+          // macOS decides banner-vs-alert per app in System Settings (the
+          // desktop build asks for Alerts via NSUserNotificationAlertStyle).
+          requireInteraction: true,
         };
         if (!window.__EX_DESKTOP__) {
           notificationOptions.icon = '/logo.svg';

@@ -89,13 +89,18 @@ function renderItem(message: Message, extra: Partial<Parameters<typeof MessageIt
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(
+  const result = render(
     <QueryClientProvider client={qc}>
       <BrowserRouter>
         <MessageItem message={message} authorName="Alice" isOwn={false} channelId="ch-1" currentUserId="u-1" {...extra} />
       </BrowserRouter>
     </QueryClientProvider>,
   );
+  // The hover toolbar mounts on hover (MessageItem): hover the first row so
+  // the tests can reach its actions the way a pointer user does.
+  const row = result.container.querySelector('[data-message-id]');
+  if (row) fireEvent.mouseEnter(row);
+  return result;
 }
 
 function longPress(el: Element) {

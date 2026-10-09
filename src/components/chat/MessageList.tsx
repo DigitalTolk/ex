@@ -3,7 +3,7 @@ import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MessageItem } from './MessageItem';
 import { formatDayHeading } from '@/lib/format';
-import { deriveThreadMeta, isOwnMessage } from '@/lib/message-users';
+import { deriveThreadMeta, isOwnMessage, type ThreadMeta } from '@/lib/message-users';
 import type { Message, UserStatus } from '@/types';
 import { buildMessageListRows, nextVirtuosoState } from './MessageListRows';
 import { shouldAutoStickMessageList } from './message-list-autostick';
@@ -11,17 +11,27 @@ import { NewBelowPill, UnreadBanner, UnreadDivider } from './UnreadMarkers';
 import {
   clearMissedArrivals,
   isAtBottom,
+  markUnreadSeen,
   setAtLiveTail,
   setUnreadAnchor,
   useMissedArrivals,
   useUnreadAnchor,
+  useUnreadSeen,
   type UnreadAnchor,
 } from '@/lib/read-position';
 import { resolveUnreadDivider, unreadFrom } from '@/lib/unread-divider';
 import { useUnreadThreadIDs } from '@/hooks/useUnreadThreads';
+import { MessageRowDataProvider } from './MessageRowDataProvider';
 
 const ANCHOR_HIGHLIGHT_MS = 2200;
-const DEFAULT_MESSAGE_ROW_HEIGHT = 88;
+// Estimate for rows Virtuoso hasn't measured yet. It books a prepended page
+// of older messages at this height and then corrects the scroll position as
+// the rows measure; every correction moves what the reader is looking at, so
+// the estimate must sit close to the real average. Measured in ~sandbox:
+// grouped rows 24px, header rows ~52px; the newest rows average 33px and
+// long runs of grouped history 26px. The old 88 booked a 50-row page ~2700px
+// too tall and the corrections showed as jitter when scrolling up fast.
+const DEFAULT_MESSAGE_ROW_HEIGHT = 30;
 // Longest the loading skeletons may cover a list that hasn't painted rows.
 const LIST_PAINT_CAP_MS = 2000;
 // Tailwind's animate-pulse cycle.
@@ -86,12 +96,13 @@ interface MessageListProps {
 // Older pages the unread banner's "Jump" will pull looking for the first
 // unread message before settling for the oldest loaded one.
 const UNREAD_JUMP_MAX_PAGES = 10;
-// Re-aims for a scroll to the "New messages" line (see scrollToDivider), and
-// how long after landing on it an older page prepending (which re-measures
-// the rows above and drifts the view) still re-aims — unless the user takes
-// over scrolling first.
+// Re-aims for a scroll to the "New messages" line (see scrollToDivider).
 const UNREAD_SCROLL_ATTEMPTS = 3;
-const UNREAD_LAND_SETTLE_MS = 2000;
+// How long after mount the list keeps re-aiming at the bottom while rows
+// settle from their estimated height to their real one (see settle effect),
+// and how many consecutive frames at the bottom count as settled.
+const INITIAL_BOTTOM_SETTLE_MS = 1500;
+const INITIAL_BOTTOM_STABLE_FRAMES = 10;
 
 export function MessageList(props: MessageListProps) {
   if (props.isLoading) return <Skeletons />;
@@ -181,8 +192,11 @@ function VirtuosoMessageList({
 
   // The "New messages" line (lib/read-position): where this visit's unread
   // starts. A count anchor — the unread count when the chat was opened — is
-  // resolved to a message once and then frozen, so arrivals can't shift it,
-  // and opening a chat with unread lands on the line rather than the tail.
+  // resolved to a message once and then frozen, so arrivals can't shift it.
+  // Opening always lands on the newest messages; a line above the viewport
+  // shows as the banner. Once the line has been seen it retires (see
+  // UnreadDivider): its row stays, invisible, so nothing shifts, and the
+  // banner and pill go with it.
   const readKey = channelId ?? conversationId;
   const parentType = channelId ? 'channel' : 'conversation';
   // A count ("the last N messages") only means something at the live tail: in
@@ -194,12 +208,14 @@ function VirtuosoMessageList({
     () => (unreadAnchor ? resolveUnreadDivider(unreadAnchor, allMessages, parentType) : null),
     [unreadAnchor, allMessages, parentType],
   );
-  const scrollToDividerRef = useRef<string | null>(null);
   useEffect(() => {
     if (!readKey || unreadAnchor?.kind !== 'count' || !unreadDividerID) return;
-    scrollToDividerRef.current = unreadDividerID;
     setUnreadAnchor(readKey, { kind: 'message', messageID: unreadDividerID }, { replace: true });
   }, [readKey, unreadAnchor, unreadDividerID]);
+  const unreadSeen = useUnreadSeen(readKey);
+  const retireDivider = useCallback(() => {
+    if (readKey) markUnreadSeen(readKey);
+  }, [readKey]);
   const rows = useMemo(() => buildMessageListRows(allMessages, unreadDividerID), [allMessages, unreadDividerID]);
 
   // `data` and `firstItemIndex` must reach Virtuoso in the SAME render
@@ -232,6 +248,9 @@ function VirtuosoMessageList({
   // person scrolls up (see onScroll); scrolling or jumping to the unread line
   // lets go.
   const anchorHeldRef = useRef(!!anchorMsgId);
+  // Set once the person scrolls themselves (wheel/touch/key); ends the
+  // initial bottom settle below.
+  const userScrolledRef = useRef(false);
   const olderWaitingRef = useRef(false);
   const olderPagingRef = useRef<OlderPaging>({ hasNextPage, isFetchingNextPage, fetchNextPage });
   useLayoutEffect(() => {
@@ -452,8 +471,8 @@ function VirtuosoMessageList({
   // Scroll the line (or, for one older than everything loaded, the top) to
   // the top of the viewport. Rows start at an estimated height, so the first
   // scrollToIndex can land short: give the list two frames to settle, check,
-  // and re-aim at the line's current index. `onLanded` runs once it's there.
-  const scrollToDivider = useCallback((target: 'divider' | 'top', onLanded?: () => void) => {
+  // and re-aim at the line's current index.
+  const scrollToDivider = useCallback((target: 'divider' | 'top') => {
     // A programmatic scroll up must not be undone by the tail-follow.
     autoStickSuppressedUntilRef.current = performance.now() + USER_SCROLL_AUTOSTICK_SUPPRESSION_MS;
     let attempts = 0;
@@ -471,7 +490,6 @@ function VirtuosoMessageList({
         return;
       }
       markAtBottom(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX);
-      if (onScreen) onLanded?.();
     };
     const aim = () => {
       const index = target === 'top' ? 0 : dividerStateRef.current.dividerIndex;
@@ -481,35 +499,49 @@ function VirtuosoMessageList({
     aim();
   }, [markAtBottom]);
 
+  // Opening at the tail: a chat whose cached history spans several pages
+  // mounts with hundreds of rows at the estimated height, and the first
+  // bottom scroll lands short as they measure (hundreds of px with 6 pages).
+  // Virtuoso's own corrections then move scrollTop and read like a user
+  // scroll-up to onScroll, which suppresses the tail-follow — so the list sat
+  // above the newest messages. Keep re-aiming at the bottom for a short
+  // window after mount; only the person scrolling themselves ends it early.
+  useEffect(() => {
+    if (anchorMsgId || hasPreviousPage) return;
+    const deadline = performance.now() + INITIAL_BOTTOM_SETTLE_MS;
+    let stableFrames = 0;
+    let raf = requestAnimationFrame(function step() {
+      if (userScrolledRef.current) return;
+      const scroller = scrollerRef.current;
+      if (scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX) {
+        stableFrames = 0;
+        scrollToBottom();
+      } else if (++stableFrames >= INITIAL_BOTTOM_STABLE_FRAMES) {
+        return;
+      }
+      if (performance.now() < deadline) raf = requestAnimationFrame(step);
+    });
+    return () => cancelAnimationFrame(raf);
+    // Mount-only: the wrapper remounts per chat session (see MessageList).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Older pages the banner's "Jump" is still pulling in (see below).
+  const jumpPagesRef = useRef(0);
+
   // Drawing or moving the line (e.g. "Mark as unread") adds height above the
-  // tail; a user who was following the tail stays pinned to it.
+  // tail; a user who was following the tail stays pinned to it. Not while a
+  // Jump is paging the line in: it is about to scroll there, and the pin
+  // would undo it.
   const lastDividerIDRef = useRef<string | null>(null);
   useEffect(() => {
     if (lastDividerIDRef.current === unreadDividerID) return;
     lastDividerIDRef.current = unreadDividerID;
-    if (!unreadDividerID || scrollToDividerRef.current || !canAutoStickToBottom()) return;
+    if (!unreadDividerID || jumpPagesRef.current || !canAutoStickToBottom()) return;
     requestAnimationFrame(scrollToBottom);
   }, [unreadDividerID, canAutoStickToBottom, scrollToBottom]);
 
-  // Opening with unread: land on the line (a deep-link anchor wins). The
-  // request stands until the line is on screen and the list has settled, so
-  // an older page prepending (which shifts its index) re-runs this and
-  // re-aims; the user scrolling themselves cancels it.
-  useEffect(() => {
-    if (anchorMsgId || dividerIndex < 0 || scrollToDividerRef.current !== unreadDividerID) return;
-    const id = unreadDividerID;
-    const frame = requestAnimationFrame(() => {
-      scrollToDivider('divider', () => {
-        window.setTimeout(() => {
-          if (scrollToDividerRef.current === id) scrollToDividerRef.current = null;
-        }, UNREAD_LAND_SETTLE_MS);
-      });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [anchorMsgId, dividerIndex, unreadDividerID, scrollToDivider]);
-
   // "Jump" to a line older than the loaded history pages back for it.
-  const jumpPagesRef = useRef(0);
   useEffect(() => {
     if (!jumpPagesRef.current || isFetchingNextPage) return;
     if (dividerIndex >= 0) {
@@ -525,6 +557,9 @@ function VirtuosoMessageList({
   }, [dividerIndex, hasNextPage, isFetchingNextPage, fetchNextPage, scrollToDivider]);
   const jumpToUnread = useCallback(() => {
     anchorHeldRef.current = false;
+    // An explicit jump is as deliberate as a scroll: it ends the opening
+    // bottom settle, which would otherwise pull the list back down.
+    userScrolledRef.current = true;
     if (dividerIndex >= 0) {
       scrollToDivider('divider');
       return;
@@ -539,7 +574,7 @@ function VirtuosoMessageList({
     : unreadAnchor?.kind === 'count'
       ? unreadAnchor.count
       : 0;
-  const showUnreadMarker = !!unreadAnchor && unreadCount > 0 && caughtUpFor !== unreadAnchor;
+  const showUnreadMarker = !!unreadAnchor && unreadCount > 0 && caughtUpFor !== unreadAnchor && !unreadSeen;
 
   const handleScrollerRef = useCallback((ref: HTMLElement | Window | null) => {
     detachScrollerRef.current?.();
@@ -568,11 +603,11 @@ function VirtuosoMessageList({
       lastScrollerTopRef.current = nextScrollTop;
       scheduleDividerMeasure();
     };
-    // The user scrolling themselves ends any pending landing on the line,
-    // and lets go of a linked message.
+    // The user scrolling themselves lets go of a linked message and ends the
+    // initial bottom settle.
     const onUserScroll = () => {
-      scrollToDividerRef.current = null;
       anchorHeldRef.current = false;
+      userScrolledRef.current = true;
     };
     const userScrollEvents = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
     scroller.addEventListener('scroll', onScroll, { passive: true });
@@ -690,6 +725,7 @@ function VirtuosoMessageList({
   // flush-left while messages still get their MessageRow px-4,
   // making the intro visibly shifted after the first message lands.
   return (
+    <MessageRowDataProvider parentType={parentType} parentID={readKey}>
     <div className="relative flex min-h-0 flex-1 flex-col">
       <Virtuoso
         ref={virtuosoRef}
@@ -710,6 +746,13 @@ function VirtuosoMessageList({
         alignToBottom={true}
         computeItemKey={(_index, row) => row.key}
         defaultItemHeight={DEFAULT_MESSAGE_ROW_HEIGHT}
+        // Apply size corrections inside the ResizeObserver callback instead
+        // of on the next animation frame. With the default, a prepended page
+        // that measures shorter than its estimate shrank the scroll height in
+        // one frame and had its scroll position compensated in the next, so
+        // the content flashed up and back by hundreds of px while scrolling
+        // up fast (react-virtuoso#1049).
+        skipAnimationFrameInResizeObserver
         increaseViewportBy={{ top: MESSAGE_LIST_OVERSCAN_PX, bottom: MESSAGE_LIST_OVERSCAN_PX }}
         atBottomThreshold={MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX}
         // Auto-follow only when the loaded slice IS the live tail. When
@@ -748,7 +791,7 @@ function VirtuosoMessageList({
         itemContent={(_index, row) => {
           /* istanbul ignore next -- react-virtuoso can momentarily call itemContent with an undefined row during prepend/firstItemIndex reconciliation; not deterministically reproducible. */
           if (!row) return null;
-          if (row.kind === 'unread') return <UnreadDivider />;
+          if (row.kind === 'unread') return <UnreadDivider onSeen={retireDivider} retired={unreadSeen} />;
           return row.kind === 'day' ? (
             <div
               data-testid="day-divider"
@@ -766,7 +809,9 @@ function VirtuosoMessageList({
               row={row}
               userMap={userMap}
               userLookup={userLookup}
-              threadMeta={threadMeta}
+              // Only this row's entry: the Map is rebuilt on every list change,
+              // and passing it made every mounted row re-render per send.
+              threadMetaEntry={threadMeta.get(row.message.id)}
               currentUserId={currentUserId}
               channelId={channelId}
               channelSlug={channelSlug}
@@ -791,6 +836,7 @@ function VirtuosoMessageList({
       ) : null}
       <ListCover ref={coverRef} />
     </div>
+    </MessageRowDataProvider>
   );
 }
 
@@ -848,26 +894,11 @@ function Skeletons() {
   );
 }
 
-const MessageRow = memo(function MessageRow({
-  row,
-  userMap,
-  userLookup,
-  threadMeta,
-  currentUserId,
-  channelId,
-  channelSlug,
-  conversationId,
-  onReplyInThread,
-  onEditMessage,
-  highlighted,
-  onContentHeightChange,
-  quickReactions,
-  threadHasNew,
-}: {
+type MessageRowProps = {
   row: { kind: 'message'; key: string; message: Message; firstInGroup: boolean };
   userMap: Record<string, UserMapEntry>;
   userLookup: { get(id: string): UserMapEntry | undefined };
-  threadMeta: ReturnType<typeof deriveThreadMeta>;
+  threadMetaEntry?: ThreadMeta;
   currentUserId?: string;
   channelId?: string;
   channelSlug?: string;
@@ -878,7 +909,52 @@ const MessageRow = memo(function MessageRow({
   onContentHeightChange?: () => void;
   quickReactions?: string[];
   threadHasNew?: boolean;
-}) {
+};
+
+// buildMessageListRows makes a fresh row object for every message on every
+// list change, so a plain memo re-rendered every mounted row (and its emoji
+// pickers) on each send — ~300ms of main-thread time per cache update in dev.
+// Compare the row by what it holds; the message object itself keeps its
+// identity across cache patches unless it changed.
+function messageRowPropsEqual(prev: MessageRowProps, next: MessageRowProps): boolean {
+  if (prev.row !== next.row) {
+    if (
+      prev.row.key !== next.row.key ||
+      prev.row.message !== next.row.message ||
+      prev.row.firstInGroup !== next.row.firstInGroup
+    ) {
+      return false;
+    }
+  }
+  if (prev.threadMetaEntry !== next.threadMetaEntry) {
+    const a = prev.threadMetaEntry;
+    const b = next.threadMetaEntry;
+    if (!a || !b || a.lastReplyAt !== b.lastReplyAt || a.authors.length !== b.authors.length) return false;
+    if (a.authors.some((id, i) => id !== b.authors[i])) return false;
+  }
+  for (const key of Object.keys(next) as (keyof MessageRowProps)[]) {
+    if (key === 'row' || key === 'threadMetaEntry') continue;
+    if (prev[key] !== next[key]) return false;
+  }
+  return true;
+}
+
+const MessageRow = memo(function MessageRow({
+  row,
+  userMap,
+  userLookup,
+  threadMetaEntry,
+  currentUserId,
+  channelId,
+  channelSlug,
+  conversationId,
+  onReplyInThread,
+  onEditMessage,
+  highlighted,
+  onContentHeightChange,
+  quickReactions,
+  threadHasNew,
+}: MessageRowProps) {
   const msg = row.message;
   const handleContentHeightChange = useCallback(() => {
     onContentHeightChange?.();
@@ -892,7 +968,7 @@ const MessageRow = memo(function MessageRow({
     );
   }
   const u = userMap[msg.authorID];
-  const derived = threadMeta.get(msg.id);
+  const derived = threadMetaEntry;
   const needsBackfill =
     derived &&
     ((msg.recentReplyAuthorIDs?.length ?? 0) === 0 || !msg.lastReplyAt);
@@ -928,4 +1004,4 @@ const MessageRow = memo(function MessageRow({
       />
     </div>
   );
-});
+}, messageRowPropsEqual);

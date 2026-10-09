@@ -13,8 +13,8 @@ import (
 
 func mentionTitleFor(mentions ParsedMentions, parentType, parentName, authorName string) string {
 	if label := groupMentionLabel(mentions); label != "" {
-		if parentType == ParentChannel {
-			return authorName + " used " + label + " in ~" + parentName
+		if where := parentLabel(parentType, parentName); where != "" {
+			return authorName + " used " + label + " in " + where
 		}
 		return authorName + " used " + label
 	}
@@ -61,8 +61,36 @@ func (s *NotificationService) parentDisplayName(ctx context.Context, parentID, p
 			s.nameCache.SetName(ctx, "chan:"+parentID, name)
 		}
 		return name
+	case ParentConversation:
+		// A group conversation has a name worth putting in the title; a 1:1
+		// DM has none and the title says "a direct message" instead.
+		if s.conv == nil {
+			return ""
+		}
+		if s.nameCache != nil {
+			if v, ok := s.nameCache.GetName(ctx, "conv:"+parentID); ok {
+				return v
+			}
+		}
+		c, err := s.conv.GetConversation(ctx, parentID)
+		if err != nil || c == nil {
+			return ""
+		}
+		if s.nameCache != nil {
+			s.nameCache.SetName(ctx, "conv:"+parentID, c.Name)
+		}
+		return c.Name
 	}
 	return ""
+}
+
+// parentLabel is how a title names where something happened: "~slug" for a
+// channel, the group's name for a named conversation, and "" for a 1:1 DM.
+func parentLabel(parentType, parentName string) string {
+	if parentType == ParentChannel {
+		return "~" + parentName
+	}
+	return parentName
 }
 
 func (s *NotificationService) userDisplayName(ctx context.Context, userID string) string {
@@ -88,23 +116,27 @@ func (s *NotificationService) userDisplayName(ctx context.Context, userID string
 	return name
 }
 
+// titleFor always says WHERE: a push arriving on a phone or a banner on a
+// desktop can't be placed otherwise ("Günter replied" told people nothing
+// about which chat to open).
 func titleFor(kind NotificationKind, parentType, parentName, authorName string) string {
+	label := parentLabel(parentType, parentName)
 	switch kind {
 	case NotificationKindThreadReply:
-		if parentType == ParentChannel {
-			return authorName + " replied in ~" + parentName
+		if label != "" {
+			return authorName + " replied in " + label
 		}
-		return authorName + " replied"
+		return authorName + " replied in a direct message"
 	case NotificationKindMessage:
-		if parentType == ParentChannel {
-			return authorName + " in ~" + parentName
+		if label != "" {
+			return authorName + " in " + label
 		}
 		return authorName
 	case NotificationKindMention:
-		if parentType == ParentChannel {
-			return authorName + " mentioned you in ~" + parentName
+		if label != "" {
+			return authorName + " mentioned you in " + label
 		}
-		return authorName + " mentioned you"
+		return authorName + " mentioned you in a direct message"
 	default:
 		return authorName
 	}

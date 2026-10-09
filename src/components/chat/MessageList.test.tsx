@@ -511,7 +511,7 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
       <MessageList {...defaultProps} pages={[{ items: [makeMessage()] }]} hasPreviousPage={false} />
     );
     expect(captured.alignToBottom).toBe(true);
-    expect(captured.defaultItemHeight).toBe(88);
+    expect(captured.defaultItemHeight).toBe(30);
     expect(captured.atBottomThreshold).toBe(4);
     // Wide overscan keeps ~2 screens of rows mounted off-viewport so
     // fast scrolling doesn't tear down and remount avatars / Giphy

@@ -24,15 +24,12 @@ import { WatcherDialog } from '@/components/chat/WatcherDialog';
 import { useCreateReminder } from '@/hooks/useActivity';
 import { NotSentMark } from '@/components/chat/MessageSendState';
 import { useMarkUnread } from '@/hooks/useMarkUnread';
-import { useParentWatchers, useSkills } from '@/hooks/useAgents';
-import { useConnectors } from '@/hooks/useConnectors';
-import { skillPickToken } from '@/lib/picks';
+import { useMessageRowData, useProvidedMessageRowData, type MessageRowData } from '@/hooks/useMessageRowData';
 import { REMINDER_PRESETS, computeReminderTime, toLocalInputValue, type ReminderPresetKey } from '@/lib/reminder-times';
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { UserHoverCard } from '@/components/UserHoverCard';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useEditMessage, useDeleteMessage, useToggleReaction, useSetPinned } from '@/hooks/useMessages';
-import { useEmojiMap } from '@/hooks/useEmoji';
 import { renderMarkdown } from '@/lib/markdown';
 import { isEmojiOnlyMessage } from '@/lib/emoji-shortcodes';
 import { recordEmojiUse } from '@/lib/emoji-frequency';
@@ -123,8 +120,11 @@ function formatTime(dateStr: string): string {
 
 // formatShortTime is the clock alone ("10:45", no AM/PM) — what fits a
 // continuation row's avatar-wide gutter; the full time is in its tooltip.
+// One formatter for the module: building one per row per render showed up in
+// the send-path profile.
+const shortTimeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
 function formatShortTime(dateStr: string): string {
-  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' })
+  return shortTimeFormat
     .formatToParts(new Date(dateStr))
     .filter((part) => part.type !== 'dayPeriod')
     .map((part) => part.value)
@@ -204,6 +204,7 @@ function ReactionChip({
 }
 
 function MessageItemImpl({
+  rowData,
   message,
   firstInGroup = true,
   authorName,
@@ -223,7 +224,7 @@ function MessageItemImpl({
   onContentHeightChange,
   quickReactions,
   threadHasNew,
-}: MessageItemProps) {
+}: MessageItemProps & { rowData: MessageRowData }) {
   const isWebhook = !!message.webhookUsername;
   // Per-author presence subscription: only rows whose author actually
   // flipped re-render on a presence event, instead of every visible row
@@ -255,12 +256,15 @@ function MessageItemImpl({
   // propagation on the row.
   const [hovered, setHovered] = useState(false);
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
+  // Keyboard users have no hover: focus inside the row (a link, a reaction,
+  // the thread bar) mounts the toolbar so the next Tab reaches it.
+  const [focusWithin, setFocusWithin] = useState(false);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
   const [mobileActionsSuppressed, setMobileActionsSuppressed] = useState(false);
   const [mobileReactionPickerOpen, setMobileReactionPickerOpen] = useState(false);
   const mobileActionsRef = useRef<HTMLDivElement>(null);
   const mobileActionsSheetRef = useRef<HTMLDivElement>(null);
-  const toolbarVisible = hovered || actionsMenuOpen;
+  const toolbarVisible = hovered || actionsMenuOpen || focusWithin;
   const canEdit = isOwn && !disableEditing;
   const startEdit = useCallback(() => {
     /* istanbul ignore next -- startEdit is only wired (edit registry + the Edit menu item) behind `canEdit`, so it is never invoked when canEdit is false; this is a defensive re-check. */
@@ -332,7 +336,7 @@ function MessageItemImpl({
   const [reminderDialogOpen, setReminderDialogOpen] = useState(false);
   const [watcherDialogOpen, setWatcherDialogOpen] = useState(false);
   const [reminderSeed, setReminderSeed] = useState('');
-  const { data: emojiMap } = useEmojiMap();
+  const { emojiMap, watchers: parentWatchers, pickTokens } = rowData;
   const { openTag } = useTagOpen();
 
   // The reminder target derives from the message itself (its parentID is always
@@ -356,10 +360,9 @@ function MessageItemImpl({
     channelSlug,
   };
 
-  // Watcher badge: the viewer's own thread-scoped watchers on THIS message.
-  // One query per parent (react-query dedupes across rows); we match by
-  // threadRootID so only the watched thread's root message is badged.
-  const { data: parentWatchers } = useParentWatchers(reminderTarget.parentType, message.parentID);
+  // Watcher badge: the viewer's own thread-scoped watchers on THIS message
+  // (one query per list, see MessageRowData); match by threadRootID so only
+  // the watched thread's root message is badged.
   const myWatchers = useMemo(
     () => (parentWatchers ?? []).filter((w) => w.threadRootID === message.id),
     [parentWatchers, message.id],
@@ -854,6 +857,10 @@ function MessageItemImpl({
         notifyMessageHovered(message.id);
       }}
       onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocusWithin(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusWithin(false);
+      }}
       {...longPress.handlers}
       onContextMenu={(event) => {
         // Without a pointing device there is no hover toolbar to reach, so a
@@ -1089,19 +1096,22 @@ function MessageItemImpl({
               <MessageBody
                 message={message}
                 emojiMap={emojiMap}
+                pickTokens={pickTokens}
                 currentUserId={currentUserId}
                 onContentHeightChange={onContentHeightChange}
                 openTag={openTag}
+                // Grouped rows have no header (that's where the header rows
+                // show "(edited)"), so the marker rides the end of the text's
+                // last line instead, Slack-style.
+                trailing={
+                  !firstInGroup && message.editedAt ? (
+                    <span data-testid="grouped-edited-marker" className="ml-1 text-xs text-muted-foreground">
+                      (edited)
+                    </span>
+                  ) : undefined
+                }
               />
             </div>
-            {/* Grouped rows have no header (that's where the header rows show
-                "(edited)"), so an edit would otherwise be invisible — surface
-                the marker under the body instead. */}
-            {!firstInGroup && message.editedAt && (
-              <span data-testid="grouped-edited-marker" className="text-xs text-muted-foreground">
-                (edited)
-              </span>
-            )}
             {(() => {
               if (message.noUnfurl) return null;
               // First URL in the body (skipping code) gets a preview
@@ -1200,7 +1210,12 @@ function MessageItemImpl({
         )}
       </div>
 
-      {!isEditing && !message.deleted && !pendingState && (
+      {/* Mounted only while shown: the toolbar carries three pickers, a menu
+          and their hooks, and mounting it for every row (at opacity 0) was the
+          largest cost of scrolling and of switching chats. The delete confirm
+          and the reminder/watcher dialogs live outside it, so closing the menu
+          doesn't unmount them. */}
+      {!isEditing && !message.deleted && !pendingState && toolbarVisible && (
         <div
           className="absolute right-2 -top-3 flex items-center gap-0.5 rounded-md border border-border bg-background shadow-sm dark:border-border-strong transition-opacity touch:hidden"
           style={{ opacity: toolbarVisible ? 1 : 0 }}
@@ -1347,8 +1362,11 @@ function MessageItemImpl({
         </div>
       )}
       {mobileActionsOverlay ? createPortal(mobileActionsOverlay, document.body) : null}
+      {/* Mounted on demand like the reminder/watcher dialogs: a dialog per
+          row was a measurable share of scrolling cost. */}
+      {deleteConfirmOpen && (
       <ConfirmDialog
-        open={deleteConfirmOpen}
+        open
         onOpenChange={setDeleteConfirmOpen}
         title="Delete message?"
         description="This message will be removed for everyone. Attachments stop being shared too. This can't be undone."
@@ -1357,6 +1375,7 @@ function MessageItemImpl({
         onConfirm={confirmDelete}
         testIDPrefix="message-delete-confirm"
       />
+      )}
       {reminderDialogOpen && (
         <ReminderDialog
           open
@@ -1391,12 +1410,27 @@ function MessageItemImpl({
   );
 }
 
+// Standalone (no MessageRowDataProvider above): fetch the shared row data
+// here, once per row, as every row used to.
+function StandaloneMessageItem(props: MessageItemProps) {
+  const parentType: 'channel' | 'conversation' = props.channelId
+    ? 'channel'
+    : props.conversationId || props.message.parentType === 'conversation'
+      ? 'conversation'
+      : 'channel';
+  const rowData = useMessageRowData(parentType, props.message.parentID);
+  return <MessageItemImpl {...props} rowData={rowData} />;
+}
+
 // Memoised so a re-render of a parent that renders many rows (notably
 // ThreadPanel, which maps MessageItem directly without an intermediate
 // memoised row) only re-renders the rows whose props actually changed. In the
 // main MessageList each row already sits behind a memoised MessageRow; this
 // guards the other call sites.
-export const MessageItem = memo(MessageItemImpl);
+export const MessageItem = memo(function MessageItem(props: MessageItemProps) {
+  const provided = useProvidedMessageRowData();
+  return provided ? <MessageItemImpl {...props} rowData={provided} /> : <StandaloneMessageItem {...props} />;
+});
 
 // MessageBody is a separately-memoized wrapper around renderMarkdown
 // so that scroll-induced re-renders of MessageItem do not call into
@@ -1408,32 +1442,26 @@ export const MessageItem = memo(MessageItemImpl);
 interface MessageBodyProps {
   message: Message;
   emojiMap: Record<string, string> | undefined;
+  // Known /pick tokens (installed connectors + workspace skills) render as
+  // pills in the SENT message too — the token stays meaningful after send
+  // instead of degrading to plain text the moment it leaves the composer.
+  pickTokens: ReadonlySet<string>;
   currentUserId?: string;
   onContentHeightChange?: () => void;
   openTag: (tag: string) => void;
+  // Rendered at the end of the body's last line (see RenderOpts.trailing).
+  trailing?: ReactNode;
 }
 
 const MessageBody = memo(function MessageBody({
   message,
   emojiMap,
+  pickTokens,
   currentUserId,
   onContentHeightChange,
   openTag,
+  trailing,
 }: MessageBodyProps) {
-  // Known /pick tokens (installed connectors + workspace skills) render as
-  // pills in the SENT message too — the token stays meaningful after send
-  // instead of degrading to plain text the moment it leaves the composer.
-  const { data: allConnectors } = useConnectors();
-  const { data: allSkills } = useSkills();
-  const pickTokens = useMemo(() => {
-    const t = new Set<string>();
-    for (const c of allConnectors ?? []) if (c.installed) t.add(c.slug);
-    for (const sk of allSkills ?? []) {
-      const tok = skillPickToken(sk.name);
-      if (tok) t.add(tok);
-    }
-    return t;
-  }, [allConnectors, allSkills]);
   // Artifact marker messages render as a compact expand/download card
   // instead of markdown — the marker is machine syntax, not prose.
   const artifactMarker = parseArtifactMarker(message.body);
@@ -1456,6 +1484,7 @@ const MessageBody = memo(function MessageBody({
         currentUserId,
         onMediaLoad: onContentHeightChange,
         onTagClick: openTag,
+        trailing,
         renderUserMention: (userId, displayName, _isSelf, pill) => (
           <UserHoverCard
             key={`mention-${userId}-${message.id}`}

@@ -65,6 +65,8 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
 }
 
 async function openMenu() {
+  // The toolbar mounts on hover (MessageItem): hover the row first.
+  await userEvent.hover(document.querySelector('[data-message-id]') as HTMLElement);
   await userEvent.click(document.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement);
 }
 
