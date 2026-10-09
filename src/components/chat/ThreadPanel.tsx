@@ -22,9 +22,10 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { useComposerSchedule } from '@/hooks/useScheduledMessages';
 import { markThreadSeen, noteThreadReadPosition, useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
-import { isReadHeld, keepReadSession, scheduleEndReadSession, threadReadKey, useUnreadAnchor } from '@/lib/read-position';
+import { isReadHeld, keepReadSession, markUnreadSeen, scheduleEndReadSession, threadReadKey, useUnreadAnchor, useUnreadSeen } from '@/lib/read-position';
 import { resolveUnreadDivider } from '@/lib/unread-divider';
 import { UnreadDivider } from './UnreadMarkers';
+import { MessageRowDataProvider } from './MessageRowDataProvider';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { collectMessageUserIDs, isOwnMessage } from '@/lib/message-users';
 import {
@@ -141,6 +142,7 @@ export function ThreadPanel({
     return () => scheduleEndReadSession(threadKey);
   }, [threadKey]);
   const threadAnchor = useUnreadAnchor(threadKey);
+  const threadLineSeen = useUnreadSeen(threadKey);
   const threadDividerID = useMemo(
     () =>
       threadAnchor && data
@@ -522,6 +524,7 @@ export function ThreadPanel({
         </div>
       </div>
       <MessageDropZone onFiles={(files) => void inputRef.current?.uploadFiles(files)}>
+        <MessageRowDataProvider parentType={parentType} parentID={parentID}>
         <div ref={scrollRef} className="flex-1 overflow-y-auto">
           <div ref={innerRef} className="p-2">
             {isLoading && (
@@ -536,7 +539,9 @@ export function ThreadPanel({
               return (
                 <Fragment key={msg.clientNonce ?? msg.id}>
                   {/* Inset to the replies' avatars (item px-3, inside this p-2). */}
-                  {firstUnread && <UnreadDivider inset="px-3" />}
+                  {firstUnread && (
+                    <UnreadDivider inset="px-3" onSeen={() => markUnreadSeen(threadKey)} retired={threadLineSeen} />
+                  )}
                   <MessageItem
                     message={msg}
                     firstInGroup={firstUnread || !isGroupedWithPrevious(index > 0 ? data[index - 1] : null, msg)}
@@ -600,6 +605,7 @@ export function ThreadPanel({
             }
           />
         )}
+        </MessageRowDataProvider>
       </MessageDropZone>
     </motion.aside>
   );

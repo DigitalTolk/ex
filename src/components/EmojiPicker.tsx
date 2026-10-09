@@ -300,6 +300,12 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
         mobileSheet
         className="flex h-[460px] w-[336px] max-w-[calc(100vw-16px)] flex-col rounded-md border bg-popover p-2 shadow-md touch:h-[50dvh] touch:w-screen touch:max-w-none touch:rounded-b-none touch:rounded-t-xl touch:border-x-0 touch:border-b-0 touch:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]"
       >
+        {/* The grid is built only while open: a closed picker sits in every
+            message row's toolbar and in the composer, and building hundreds
+            of tile elements per render for each of them was the single
+            largest cost of typing, scrolling and switching chats. */}
+        {open ? (
+        <>
         <Input
           ref={inputRef}
           value={query}
@@ -502,6 +508,8 @@ export function EmojiPicker({ onSelect, onClose, onOpenChange, trigger, triggerC
             </button>
           ))}
         </div>
+        </>
+        ) : null}
       </PopoverPortal>
     </>
   );

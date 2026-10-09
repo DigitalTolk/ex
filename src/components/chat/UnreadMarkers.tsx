@@ -1,18 +1,64 @@
+import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp } from 'lucide-react';
+
+// Once the line has been in view this long it has done its job: it fades and
+// `onSeen` retires it (the anchor is cleared, so the banner/pill go too).
+const UNREAD_DIVIDER_LINGER_MS = 3000;
+const UNREAD_DIVIDER_FADE_MS = 500;
 
 // UnreadDivider is the "New messages" line above the first unread message:
 // centred like the day divider, in red, and inset so it starts and ends
 // where the messages do rather than running to the edges. The default inset
 // lines it up with the main list's avatars (row px-4 + item px-3 = 28px);
-// the thread panel passes its own.
-export function UnreadDivider({ inset = 'px-7' }: { inset?: string }) {
+// the thread panel passes its own. With `onSeen`, the line fades out 3s
+// after it comes into view and then reports it; the owner then renders it
+// `retired` — same box, invisible — so the rows around it never move.
+export function UnreadDivider({
+  inset = 'px-7',
+  onSeen,
+  retired = false,
+}: {
+  inset?: string;
+  onSeen?: () => void;
+  retired?: boolean;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [fading, setFading] = useState(false);
+  const onSeenRef = useRef(onSeen);
+  useEffect(() => {
+    onSeenRef.current = onSeen;
+  });
+  const watches = !!onSeen && !retired;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !watches || typeof IntersectionObserver === 'undefined') return;
+    let linger = 0;
+    let fade = 0;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (!entry?.isIntersecting || linger) return;
+      observer.disconnect();
+      linger = window.setTimeout(() => {
+        setFading(true);
+        fade = window.setTimeout(() => onSeenRef.current?.(), UNREAD_DIVIDER_FADE_MS);
+      }, UNREAD_DIVIDER_LINGER_MS);
+    }, { threshold: 0.5 });
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(linger);
+      window.clearTimeout(fade);
+    };
+  }, [watches]);
   return (
     <div
+      ref={ref}
       data-testid="unread-divider"
       data-unread-divider=""
-      className={`flex items-center gap-3 py-1 ${inset}`}
+      data-retired={retired ? 'true' : undefined}
+      className={`flex items-center gap-3 py-1 transition-opacity duration-500 ${fading || retired ? 'opacity-0' : ''} ${retired ? 'invisible' : ''} ${inset}`}
       role="separator"
       aria-label="New messages"
+      aria-hidden={retired || undefined}
     >
       <div className="flex-1 border-t border-destructive/60" />
       <span className="shrink-0 text-xs font-semibold text-destructive">New messages</span>

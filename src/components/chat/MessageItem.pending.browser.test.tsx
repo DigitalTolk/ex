@@ -89,6 +89,11 @@ describe('MessageItem — optimistic rows keep their layout', () => {
     // so the row is made unhoverable for its duration.
     screen.container.style.pointerEvents = 'none';
     const time = () => document.querySelector<HTMLElement>('[data-testid="group-time-gutter"] time')!;
+    // The pointer may already have crossed the row before pointer-events was
+    // cut (another file's hover moves the same mouse): end that hover and let
+    // its fade-out finish, so what follows measures the rerenders alone.
+    document.querySelector('[data-message-id]')!.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+    await vi.waitFor(() => expect(getComputedStyle(time()).opacity).toBe('0'), { timeout: 2000 });
     // Retried, then sent: the hover-only time must stay at opacity 0 the
     // whole way (it used to jump to 1 and fade out — a visible flash).
     await screen.rerender(ui({ ...base, pendingState: 'sending' }));

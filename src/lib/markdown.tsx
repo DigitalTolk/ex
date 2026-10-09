@@ -39,6 +39,10 @@ export interface RenderOpts {
   // largeEmoji renders emoji at double size ("jumbomoji") — set when the
   // whole message is nothing but emoji, à la Slack.
   largeEmoji?: boolean;
+  // trailing is rendered at the end of the body's last line (inside its last
+  // paragraph) — a Slack-style "(edited)" note. A body that doesn't end in a
+  // paragraph (list, code block, table…) gets it after the tree instead.
+  trailing?: ReactNode;
 }
 
 // renderMarkdown is the public render entry point. ONE render pipeline:

@@ -6,6 +6,17 @@ import { BrowserRouter } from 'react-router-dom';
 import { MessageItem } from './MessageItem';
 import type { Message } from '@/types';
 
+// Hover without moving the browser's one real mouse (other files run in
+// parallel and a real pointer crossing their rows makes hover-only checks
+// flake): React derives onMouseEnter from mouseover, and a tick lets the
+// hover state flush.
+async function hoverRow(row: Element | null) {
+  row?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+  row?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 20));
+}
+
+
 // "Mark as unread" in the desktop menu and the mobile action sheet: which
 // message, which chat, and where it isn't offered.
 
@@ -69,6 +80,8 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
 }
 
 async function openMenu() {
+  // The toolbar mounts on hover (MessageItem): hover the row first.
+  await hoverRow(document.querySelector('[data-message-id]'));
   await userEvent.click(document.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement);
 }
 

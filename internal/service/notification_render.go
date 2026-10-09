@@ -11,29 +11,6 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 )
 
-func mentionTitleFor(mentions ParsedMentions, parentType, parentName, authorName string) string {
-	if label := groupMentionLabel(mentions); label != "" {
-		if parentType == ParentChannel {
-			return authorName + " used " + label + " in ~" + parentName
-		}
-		return authorName + " used " + label
-	}
-	return titleFor(NotificationKindMention, parentType, parentName, authorName)
-}
-
-func groupMentionLabel(mentions ParsedMentions) string {
-	switch {
-	case mentions.All && mentions.Here:
-		return "@all/@here"
-	case mentions.All:
-		return "@all"
-	case mentions.Here:
-		return "@here"
-	default:
-		return ""
-	}
-}
-
 // parentDisplayName resolves a human-readable name for the parent (channel
 // or conversation) used in notification titles. Returns an empty string on
 // error — title formatting handles that.
@@ -61,8 +38,36 @@ func (s *NotificationService) parentDisplayName(ctx context.Context, parentID, p
 			s.nameCache.SetName(ctx, "chan:"+parentID, name)
 		}
 		return name
+	case ParentConversation:
+		// A group conversation has a name worth putting in the title; a 1:1
+		// DM has none and the title says "a direct message" instead.
+		if s.conv == nil {
+			return ""
+		}
+		if s.nameCache != nil {
+			if v, ok := s.nameCache.GetName(ctx, "conv:"+parentID); ok {
+				return v
+			}
+		}
+		c, err := s.conv.GetConversation(ctx, parentID)
+		if err != nil || c == nil {
+			return ""
+		}
+		if s.nameCache != nil {
+			s.nameCache.SetName(ctx, "conv:"+parentID, c.Name)
+		}
+		return c.Name
 	}
 	return ""
+}
+
+// parentLabel is how a title names where something happened: "~slug" for a
+// channel, the group's name for a named conversation, and "" for a 1:1 DM.
+func parentLabel(parentType, parentName string) string {
+	if parentType == ParentChannel {
+		return "~" + parentName
+	}
+	return parentName
 }
 
 func (s *NotificationService) userDisplayName(ctx context.Context, userID string) string {
@@ -88,26 +93,65 @@ func (s *NotificationService) userDisplayName(ctx context.Context, userID string
 	return name
 }
 
+// titleFor and bodyFor lay a notification out the way Mattermost does, so a
+// banner reads the same in both apps: the TITLE is where it happened — "~slug"
+// for a channel, the group's name, or the sender for a 1:1 DM — prefixed with
+// "Reply in" for a thread reply; the BODY is "who: what" (just "what" in a DM,
+// whose title already names the sender). No app name in front.
 func titleFor(kind NotificationKind, parentType, parentName, authorName string) string {
+	where := parentLabel(parentType, parentName)
 	switch kind {
 	case NotificationKindThreadReply:
-		if parentType == ParentChannel {
-			return authorName + " replied in ~" + parentName
+		if where != "" {
+			return "Reply in " + where
 		}
-		return authorName + " replied"
-	case NotificationKindMessage:
-		if parentType == ParentChannel {
-			return authorName + " in ~" + parentName
+		return "Reply from " + authorName
+	case NotificationKindMessage, NotificationKindMention:
+		if where != "" {
+			return where
 		}
 		return authorName
-	case NotificationKindMention:
-		if parentType == ParentChannel {
-			return authorName + " mentioned you in ~" + parentName
-		}
-		return authorName + " mentioned you"
 	default:
 		return authorName
 	}
+}
+
+// Thread replies use the same shape as every other banner — WHERE on top,
+// "who: what" below — with the thread, in its channel or group, as the place:
+//
+//	Thread in ~sandbox: <first words of the root…>
+//	<name>: <the reply>
+//
+// A 1:1 DM has no place to name, so it is just "Thread: …". The root snippet
+// is cut at a word boundary; the deep link opens the thread.
+func threadReplyTitle(parentType, parentName, rootPreview string) string {
+	const max = 48
+	root := strings.TrimSpace(rootPreview)
+	if runes := []rune(root); len(runes) > max {
+		cut := string(runes[:max])
+		if i := strings.LastIndex(cut, " "); i > max/2 {
+			cut = cut[:i]
+		}
+		root = strings.TrimRight(cut, " ,.;:") + "…"
+	}
+	title := "Thread"
+	if where := parentLabel(parentType, parentName); where != "" {
+		title += " in " + where
+	}
+	if root == "" {
+		return title
+	}
+	return title + ": " + root
+}
+
+func bodyFor(parentType, parentName, authorName, body string) string {
+	if parentLabel(parentType, parentName) == "" {
+		return body
+	}
+	if body == "" {
+		return authorName
+	}
+	return authorName + ": " + body
 }
 
 // previewBody clamps a message body to a sane length for a notification

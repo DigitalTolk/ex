@@ -95,6 +95,12 @@ function useMessagesInfinite(opts: {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     staleTime: Infinity,
+    // The WS handlers patch pages surgically and keep message identities;
+    // React Query's structural sharing would undo that: a live append shifts
+    // every item of the tail page by one index, and the index-wise deep
+    // compare then copies all 50 objects — which re-rendered every row on
+    // each arrival.
+    structuralSharing: false,
     // Drop deep-link windows on unmount so re-entering the channel
     // without an anchor starts fresh from the live tail.
     gcTime: anchorMsgId ? 0 : undefined,

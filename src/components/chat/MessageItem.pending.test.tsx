@@ -28,13 +28,18 @@ function renderItem(over: Partial<Message> = {}, props: { threadHasNew?: boolean
     createdAt: '2026-10-07T10:30:00Z',
     ...over,
   };
-  return render(
+  const result = render(
     <QueryClientProvider client={qc}>
       <BrowserRouter>
         <MessageItem message={message} authorName="Alice" isOwn currentUserId="user-1" {...props} />
       </BrowserRouter>
     </QueryClientProvider>,
   );
+  // The hover toolbar mounts on hover (MessageItem): hover the row so the
+  // tests can reach its actions the way a pointer user does.
+  const row = result.container.querySelector('[data-message-id]');
+  if (row) fireEvent.mouseEnter(row);
+  return result;
 }
 
 describe('MessageItem — optimistic rows', () => {
