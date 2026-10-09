@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type WheelEvent } from 'react';
 import { matchPath, useLocation } from 'react-router-dom';
-import { OPEN_CHANNELS_EVENT } from '@/lib/mobile-nav';
+import { takeOpenChannelsRequest, useOpenChannelsRequest } from '@/lib/mobile-nav';
 import { motion, type PanInfo } from 'motion/react';
 import { Sidebar } from './Sidebar';
 import { PanelResizeHandle } from './PanelResizeHandle';
@@ -280,11 +280,16 @@ export function AppLayout({ children }: AppLayoutProps) {
   const closeCompactSidebar = useCallback(() => setCompactSidebarToggled(false), []);
 
   // Something asks for the list: a conversation header's back button (phone),
-  // or /activity (compact window, where the list is the overlay).
+  // or /activity (compact window, where the list is the overlay). A request
+  // made before this mounted is served on mount.
   useEffect(() => {
-    const open = () => (tier === 'compact' ? setCompactSidebarToggled(true) : openChannelsWithAnimation());
-    window.addEventListener(OPEN_CHANNELS_EVENT, open);
-    return () => window.removeEventListener(OPEN_CHANNELS_EVENT, open);
+    const serve = () => {
+      if (!takeOpenChannelsRequest()) return;
+      if (tier === 'compact') setCompactSidebarToggled(true);
+      else openChannelsWithAnimation();
+    };
+    serve();
+    return useOpenChannelsRequest.subscribe(serve);
   }, [tier, openChannelsWithAnimation]);
   useEffect(() => {
     if (!compactSidebarOpen) return;

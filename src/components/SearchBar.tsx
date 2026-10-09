@@ -80,7 +80,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
   const [q, setQ] = useState('');
   // Sheet only: the message search the user ran, shown in place. Editing the
   // text goes back to the live suggestions until they run it again.
-  const [submitted, setSubmitted] = useState<{ q: string; in?: string } | null>(null);
+  const [submitted, setSubmitted] = useState<{ q: string; scope?: SearchScope } | null>(null);
   const [open, setOpen] = useState(false);
   // Highlight tracks item IDENTITY, not index — null means "no explicit
   // selection", which resolves to the message-search action. Index-based
@@ -241,7 +241,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
     if (sheet) {
       // Results show right here; drop the keyboard so they have the room.
       addRecentSearch(label);
-      setSubmitted({ q: label, in: sel.kind === 'in-scope' ? sel.parentId : undefined });
+      setSubmitted({ q: label, scope: sel.kind === 'in-scope' ? { parentId: sel.parentId, scopeKind: sel.scopeKind } : undefined });
       inputRef.current?.blur();
       return;
     }
@@ -289,7 +289,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
     submitted?.q ?? '',
     showMessageResults,
     20,
-    submitted?.in ? { in: submitted.in } : undefined,
+    submitted?.scope ? { in: submitted.scope.parentId } : undefined,
   );
   const messageHits = messagesQuery.data?.hits ?? [];
   const showRecent = sheet && !trimmed && recent.length > 0;
@@ -495,7 +495,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
                     </span>
                   </span>
                   {isHighlighted && (
-                    <kbd className="rounded border bg-muted px-1.5 py-0.5 text-[10px] mobile:hidden">Enter</kbd>
+                    <kbd className="rounded border bg-muted px-1.5 py-0.5 text-xs mobile:hidden">Enter</kbd>
                   )}
                 </button>
               );
@@ -528,7 +528,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
           </div>
           {messageHits.length > 0 && (
             <Link
-              to={searchPageHref(submitted.q, submitted.in ? { parentId: submitted.in } : undefined)}
+              to={searchPageHref(submitted.q, submitted.scope)}
               onClick={() => onDone?.()}
               className="flex min-h-11 items-center justify-center text-sm font-medium text-muted-foreground hover:text-foreground"
               data-testid="sheet-all-results"
@@ -582,11 +582,16 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
 // conversation when one is given — landing directly on the tab that matches
 // the scope (channels → "messages"; DMs/groups → "dms", the tab filtered to
 // parentType=conversation), skipping All's noise from Channels/People.
-function searchPageHref(q: string, scope?: { parentId: string; scopeKind?: 'channel' | 'dm' | 'group' }): string {
+interface SearchScope {
+  parentId: string;
+  scopeKind: ScopeKind;
+}
+
+function searchPageHref(q: string, scope?: SearchScope): string {
   const params = new URLSearchParams({ q });
   if (scope) {
     params.set('in', scope.parentId);
-    if (scope.scopeKind) params.set('type', scope.scopeKind === 'channel' ? 'messages' : 'dms');
+    params.set('type', scope.scopeKind === 'channel' ? 'messages' : 'dms');
   }
   return `/search?${params.toString()}`;
 }

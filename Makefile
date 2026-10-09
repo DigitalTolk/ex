@@ -1,4 +1,4 @@
-.PHONY: dev dev-up dev-down dev-logs dev-watch dev-watch-down dev-watch-logs build frontend run seed docker clean deps check check-dist-placeholder types check-types-drift
+.PHONY: dev dev-up dev-down dev-logs dev-watch dev-watch-down dev-watch-logs build frontend run seed docker clean deps check check-dist-placeholder types check-types-drift check-claude-md
 
 # The hot-reload stack layers docker-compose.dev.yml over the base file, so
 # every dev-watch target must pass both -f flags (compose has no way to make
@@ -85,6 +85,8 @@ check-dist-placeholder:
 check:
 	@echo "=== Dist placeholder ==="
 	$(MAKE) check-dist-placeholder
+	@echo "=== CLAUDE.md content gate ==="
+	$(MAKE) check-claude-md
 	@echo "=== Go lint ==="
 	golangci-lint run ./...
 	@echo "=== Go test (with integration) ==="
@@ -134,6 +136,22 @@ types:
 # Fail when src/types/generated.ts drifts from internal/model — regenerate
 # side-effect-free (restore the committed file on mismatch so a failed check
 # leaves the tree untouched).
+# CLAUDE.md is committed guidance for coding agents and must stay strictly
+# technical (see its policy header). gitleaks scans it with its default secret
+# rules plus .gitleaks-claude-md.toml (company identifiers, personal data,
+# internal URLs/IPs/account ids, money amounts, confidentiality markers). The
+# self-test then requires every custom rule to still fire on the known-bad
+# fixture, so a rule that stops matching fails here instead of passing.
+GITLEAKS := go run github.com/zricethezav/gitleaks/v8@v8.30.1
+CLAUDE_MD_RULES := company-identifier email-address non-public-url ip-address cloud-account-identifier phone-number personal-identity-number money-amount confidentiality-marker
+check-claude-md:
+	$(GITLEAKS) dir CLAUDE.md --config .gitleaks-claude-md.toml --no-banner --redact
+	@report=$$(mktemp); \
+	$(GITLEAKS) dir scripts/testdata/claude-md-gate/violations.md --config .gitleaks-claude-md.toml \
+		--no-banner --redact --exit-code 0 --report-format json --report-path "$$report" >/dev/null 2>&1; \
+	node scripts/check-claude-md-rules.mjs "$$report" $(CLAUDE_MD_RULES); \
+	status=$$?; rm -f "$$report"; exit $$status
+
 check-types-drift:
 	@cp src/types/generated.ts /tmp/ex-generated-types-check.ts; \
 	go tool tygo generate; \

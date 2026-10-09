@@ -9,7 +9,7 @@ import { useNotifications, type NotificationPayload } from '@/context/Notificati
 import { useTyping } from '@/context/TypingContext';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { setServerVersion } from '@/hooks/useServerVersion';
-import { applyActivityChangedEvent, applyActivityNewEvent } from '@/hooks/useActivity';
+import { applyActivityChangedEvent, applyActivityNewEvent, applyRemindersChangedEvent } from '@/hooks/useActivity';
 import { sendWS } from '@/lib/ws-sender';
 import { localTimeZone } from '@/lib/user-time';
 import { isUserAttentive, suppressionWindowMs } from '@/lib/user-activity';
@@ -362,6 +362,11 @@ export default function ChatPage() {
       // An item landed in the activity stream — add it from the payload so the
       // sidebar badge + list update without refetching the whole feed.
       applyActivityNewEvent(queryClient, data);
+    },
+    onRemindersChanged: () => {
+      // A reminder was set or cancelled (here or on another device), fired, or
+      // went with its message or channel — refetch the pending list.
+      applyRemindersChangedEvent(queryClient);
     },
     onScheduledMessagesChanged: () => {
       // Scheduled, edited, sent or failed on another tab/device (or by the

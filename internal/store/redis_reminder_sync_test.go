@@ -5,10 +5,12 @@ package store
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/redis/go-redis/v9"
 )
 
 var syncNow = time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
@@ -86,9 +88,9 @@ func TestRedisReminderStore_CancelRemindersForParent(t *testing.T) {
 		syncReminder("r2", "u-1", "ch-2", "m-2", time.Hour),
 		syncReminder("r3", "u-2", "ch-1", "m-1", time.Hour),
 	)
-	ids, err := s.CancelRemindersForParent(ctx, "u-1", "ch-1")
-	if err != nil || len(ids) != 1 || ids[0] != "r1" {
-		t.Fatalf("cancelled = %v, %v", ids, err)
+	n, err := s.CancelRemindersForParent(ctx, "u-1", "ch-1")
+	if err != nil || n != 1 {
+		t.Fatalf("cancelled = %d, %v; want 1", n, err)
 	}
 	if got := pendingIDs(t, s, "u-1"); len(got) != 1 || got[0] != "r2" {
 		t.Fatalf("u-1 pending = %v", got)
@@ -102,8 +104,8 @@ func TestRedisReminderStore_CancelRemindersForParent(t *testing.T) {
 	if got := client.SMembers(ctx, reminderMessageKey("m-1")).Val(); len(got) != 1 || got[0] != "r3" {
 		t.Fatalf("m-1 index = %v", got)
 	}
-	if ids, err := s.CancelRemindersForParent(ctx, "u-1", "ch-9"); err != nil || ids != nil {
-		t.Fatalf("nothing to cancel = %v, %v", ids, err)
+	if n, err := s.CancelRemindersForParent(ctx, "u-1", "ch-9"); err != nil || n != 0 {
+		t.Fatalf("nothing to cancel = %d, %v", n, err)
 	}
 }
 
@@ -126,8 +128,8 @@ func TestRedisReminderStore_CancelRemindersForMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
-	if len(owners) != 2 || len(owners["u-1"]) != 2 || len(owners["u-2"]) != 1 {
-		t.Fatalf("owners = %v", owners)
+	if len(owners) != 2 || !slices.Contains(owners, "u-1") || !slices.Contains(owners, "u-2") {
+		t.Fatalf("owners = %v, want u-1 and u-2 once each", owners)
 	}
 	if got := pendingIDs(t, s, "u-1"); len(got) != 1 || got[0] != "r4" {
 		t.Fatalf("u-1 pending = %v", got)
@@ -155,8 +157,8 @@ func TestRedisReminderStore_UpdateReminderPreview(t *testing.T) {
 	)
 	ttlBefore := client.TTL(ctx, reminderPayloadKey("r1")).Val()
 	owners, err := s.UpdateReminderPreview(ctx, "m-1", "the corrected text")
-	if err != nil || len(owners) != 2 {
-		t.Fatalf("update = %v, %v", owners, err)
+	if err != nil || len(owners) != 2 || !slices.Contains(owners, "u-1") || !slices.Contains(owners, "u-2") {
+		t.Fatalf("update = %v, %v; want u-1 and u-2", owners, err)
 	}
 	r1, err := s.getReminder(ctx, "r1")
 	if err != nil || r1.MessagePreview != "the corrected text" || !r1.RemindAt.Equal(syncNow.Add(time.Hour)) {
@@ -227,4 +229,135 @@ func TestRedisReminderStore_SyncErrors(t *testing.T) {
 			t.Fatalf("err = %v", err)
 		}
 	})
+}
+
+// Deactivation drops every reminder the user has queued — pending, past due
+// but not yet claimed, or with an unreadable payload — leaving nothing in the
+// due queue to claim, and nobody else's reminders touched.
+func TestRedisReminderStore_CancelAllRemindersForUser(t *testing.T) {
+	s, client := setupReminderStore(t)
+	ctx := context.Background()
+	s.now = func() time.Time { return syncNow }
+	seedReminders(t, s,
+		syncReminder("r1", "u-off", "ch-1", "m-1", time.Hour),
+		syncReminder("r2", "u-off", "ch-2", "m-2", -time.Minute), // due, not yet claimed
+		syncReminder("r3", "u-off", "ch-1", "m-3", time.Hour),
+		syncReminder("r4", "u-keep", "ch-1", "m-1", time.Hour),
+	)
+	// r3's payload is unreadable: its index entries still go.
+	if err := client.Set(ctx, reminderPayloadKey("r3"), "{not json", time.Hour).Err(); err != nil {
+		t.Fatalf("corrupt payload: %v", err)
+	}
+
+	n, err := s.CancelAllRemindersForUser(ctx, "u-off")
+	if err != nil || n != 3 {
+		t.Fatalf("CancelAllRemindersForUser = %d, %v; want 3", n, err)
+	}
+	for _, id := range []string{"r1", "r2", "r3"} {
+		if client.ZScore(ctx, reminderDueKey(), id).Err() == nil {
+			t.Fatalf("%s is still in the due queue", id)
+		}
+		if client.Exists(ctx, reminderPayloadKey(id)).Val() != 0 {
+			t.Fatalf("%s payload survived", id)
+		}
+	}
+	if client.Exists(ctx, reminderUserKey("u-off")).Val() != 0 {
+		t.Fatal("the user's index survived")
+	}
+	if got := client.SMembers(ctx, reminderMessageKey("m-1")).Val(); len(got) != 1 || got[0] != "r4" {
+		t.Fatalf("m-1 index = %v, want only the other user's r4", got)
+	}
+	if got := pendingIDs(t, s, "u-keep"); len(got) != 1 {
+		t.Fatalf("u-keep pending = %v, another user's reminder must stay", got)
+	}
+	s.now = func() time.Time { return syncNow.Add(2 * time.Hour) }
+	if claimed, err := s.ClaimDueReminders(ctx, 10); err != nil || len(claimed) != 1 || claimed[0].ID != "r4" {
+		t.Fatalf("claim = %+v, %v; want only r4", claimed, err)
+	}
+	if n, err := s.CancelAllRemindersForUser(ctx, "u-off"); err != nil || n != 0 {
+		t.Fatalf("nothing left = %d, %v", n, err)
+	}
+}
+
+func TestRedisReminderStore_CancelAllRemindersForUserErrors(t *testing.T) {
+	ctx := context.Background()
+	for _, cmd := range []string{"zrange", "mget", "del"} {
+		t.Run(cmd, func(t *testing.T) {
+			s, _ := setupReminderStore(t)
+			s.now = func() time.Time { return syncNow }
+			seedReminders(t, s, syncReminder("r1", "u-off", "ch-1", "m-1", time.Hour))
+			failing := NewRedisReminderStore(storeRedisClientFailingOn(t, cmd))
+			if _, err := failing.CancelAllRemindersForUser(ctx, "u-off"); !errors.Is(err, errInjected) {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+}
+
+// replyHook lets a pipeline run, then rewrites its SET replies the way a
+// concurrent claim would: the first reminder answers nil (it fired
+// meanwhile); with failRest, every later SET fails. go-redis's Exec reports
+// the first error — that harmless nil — which used to hide the real failure.
+type replyHook struct{ failRest bool }
+
+func (replyHook) DialHook(next redis.DialHook) redis.DialHook          { return next }
+func (replyHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook { return next }
+func (h replyHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		if err := next(ctx, cmds); err != nil {
+			return err
+		}
+		sets := 0
+		for _, cmd := range cmds {
+			if cmd.Name() != "set" {
+				continue
+			}
+			sets++
+			switch {
+			case sets == 1:
+				cmd.SetErr(redis.Nil)
+			case h.failRest:
+				cmd.SetErr(errInjected)
+			}
+		}
+		if sets > 0 {
+			return redis.Nil
+		}
+		return nil
+	}
+}
+
+// A preview update reads every reply on its own: a reminder that fired
+// meanwhile (nil reply) is simply left out, but it must not hide another
+// reminder's failed write behind it.
+func TestRedisReminderStore_UpdateReminderPreviewReadsEachReply(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name     string
+		failRest bool
+	}{{"one fired meanwhile", false}, {"one fired, one failed", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := setupReminderStore(t)
+			s.now = func() time.Time { return syncNow }
+			seedReminders(t, s,
+				syncReminder("r1", "u-1", "ch-1", "m-1", time.Hour),
+				syncReminder("r2", "u-2", "ch-1", "m-1", time.Hour),
+			)
+			client := redis.NewClient(&redis.Options{Addr: sharedRedisAddr})
+			t.Cleanup(func() { _ = client.Close() })
+			client.AddHook(replyHook{failRest: tc.failRest})
+			hooked := NewRedisReminderStore(client)
+
+			owners, err := hooked.UpdateReminderPreview(ctx, "m-1", "edited")
+			if tc.failRest {
+				if !errors.Is(err, errInjected) {
+					t.Fatalf("err = %v, want the failed write reported, not hidden behind the nil reply", err)
+				}
+				return
+			}
+			if err != nil || len(owners) != 1 {
+				t.Fatalf("UpdateReminderPreview = %v, %v; want only the owner whose reminder was updated", owners, err)
+			}
+		})
+	}
 }

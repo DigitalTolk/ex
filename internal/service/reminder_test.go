@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
 )
@@ -21,13 +24,28 @@ type fakeReminderStore struct {
 	listErr   error
 	claimErr  error
 
-	// The sync operations record what they were asked and answer canned.
-	parentUser, parentID string
-	messageIDs           []string
-	preview              string
-	cancelled            []string
-	owners               map[string][]string
-	syncErr              error
+	// The sync operations record what they were asked (under mu: the hooks
+	// call them from their own goroutine) and answer canned.
+	mu            sync.Mutex
+	calls         []string
+	preview       string
+	cancelledN    int
+	owners        []string
+	syncErr       error
+	cancelAllUser string
+	cancelAllN    int
+}
+
+func (f *fakeReminderStore) record(call string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, call)
+}
+
+func (f *fakeReminderStore) recorded() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
 }
 
 func (f *fakeReminderStore) ScheduleReminder(_ context.Context, r *model.Reminder) error {
@@ -43,17 +61,24 @@ func (f *fakeReminderStore) CancelReminder(context.Context, string, string) (boo
 func (f *fakeReminderStore) ListPendingReminders(context.Context, string) ([]*model.Reminder, error) {
 	return f.pending, f.listErr
 }
-func (f *fakeReminderStore) CancelRemindersForParent(_ context.Context, userID, parentID string) ([]string, error) {
-	f.parentUser, f.parentID = userID, parentID
-	return f.cancelled, f.syncErr
+func (f *fakeReminderStore) CancelRemindersForParent(_ context.Context, userID, parentID string) (int, error) {
+	f.record("parent:" + userID + ":" + parentID)
+	return f.cancelledN, f.syncErr
 }
-func (f *fakeReminderStore) CancelRemindersForMessages(_ context.Context, messageIDs []string) (map[string][]string, error) {
-	f.messageIDs = messageIDs
+func (f *fakeReminderStore) CancelRemindersForMessages(_ context.Context, messageIDs []string) ([]string, error) {
+	f.record("messages:" + strings.Join(messageIDs, ","))
 	return f.owners, f.syncErr
 }
-func (f *fakeReminderStore) UpdateReminderPreview(_ context.Context, messageID, preview string) (map[string][]string, error) {
-	f.messageIDs, f.preview = []string{messageID}, preview
+func (f *fakeReminderStore) UpdateReminderPreview(_ context.Context, messageID, preview string) ([]string, error) {
+	f.mu.Lock()
+	f.preview = preview
+	f.mu.Unlock()
+	f.record("preview:" + messageID)
 	return f.owners, f.syncErr
+}
+func (f *fakeReminderStore) CancelAllRemindersForUser(_ context.Context, userID string) (int, error) {
+	f.cancelAllUser = userID
+	return f.cancelAllN, f.syncErr
 }
 func (f *fakeReminderStore) ClaimDueReminders(context.Context, int) ([]*model.Reminder, error) {
 	if f.claimErr != nil {
@@ -299,11 +324,17 @@ func TestReminderService_DropsReminderOwnerCanNoLongerOpen(t *testing.T) {
 	}
 }
 
-// spyReminderChanges records whose reminders were reported changed.
-type spyReminderChanges struct{ users []string }
-
-func (s *spyReminderChanges) RemindersChanged(_ context.Context, userID string) {
-	s.users = append(s.users, userID)
+// remindersChanged lists, in order, the users sent a reminders.changed nudge.
+func remindersChanged(pub *mockPublisher) []string {
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	var users []string
+	for _, p := range pub.published {
+		if p.event.Type == events.EventRemindersChanged {
+			users = append(users, strings.TrimPrefix(p.channel, "user:"))
+		}
+	}
+	return users
 }
 
 // A reminder set or cancelled on one device must show on the others, so each
@@ -315,43 +346,107 @@ func TestReminderService_ReportsScheduleAndCancel(t *testing.T) {
 
 	rs := &fakeReminderStore{cancelOK: true}
 	svc, _, _ := newReminderSvc(t, rs, &model.Message{ID: "m-1"}, nil)
-	changes := &spyReminderChanges{}
-	svc.SetChangeNotifier(changes)
+	pub := newMockPublisher()
+	svc.SetPublisher(pub)
 	if _, err := svc.Schedule(ctx, "u-1", in); err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}
 	if err := svc.Cancel(ctx, "u-1", "r1"); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	if len(changes.users) != 2 || changes.users[0] != "u-1" || changes.users[1] != "u-1" {
-		t.Fatalf("changes = %v, want u-1 twice", changes.users)
+	if got := remindersChanged(pub); len(got) != 2 || got[0] != "u-1" || got[1] != "u-1" {
+		t.Fatalf("reminders.changed to %v, want u-1 twice", got)
 	}
 
 	rs.cancelOK = false
 	_ = svc.Cancel(ctx, "u-1", "gone")
 	rs.schedErr = errors.New("redis down")
 	_, _ = svc.Schedule(ctx, "u-1", in)
-	if len(changes.users) != 2 {
-		t.Fatalf("a failed change must not be reported, got %v", changes.users)
+	if got := remindersChanged(pub); len(got) != 2 {
+		t.Fatalf("a failed change must not be reported, got %v", got)
 	}
 }
 
-func TestReminderService_SyncDelegatesToStore(t *testing.T) {
+// A reminder carries a copy of its message's text: losing the channel takes
+// it, and the owner's devices are told. Nothing cancelled, or a failed
+// cleanup, tells nobody.
+func TestReminderService_ParentLeftCancelsAndReports(t *testing.T) {
 	ctx := context.Background()
-	rs := &fakeReminderStore{cancelled: []string{"r1"}, owners: map[string][]string{"u-2": {"r2"}}}
+	rs := &fakeReminderStore{cancelledN: 2}
 	svc, _, _ := newReminderSvc(t, rs, nil, nil)
+	pub := newMockPublisher()
+	svc.SetPublisher(pub)
+	svc.ParentLeft(ctx, "u-1", "ch-1")
+	waitForCond(t, func() bool { return len(remindersChanged(pub)) == 1 }, "owner told")
+	if got := rs.recorded(); len(got) != 1 || got[0] != "parent:u-1:ch-1" {
+		t.Fatalf("store calls = %v", got)
+	}
 
-	ids, err := svc.CancelForParent(ctx, "u-1", "ch-1")
-	if err != nil || len(ids) != 1 || rs.parentUser != "u-1" || rs.parentID != "ch-1" {
-		t.Fatalf("CancelForParent = %v, %v (store got %s/%s)", ids, err, rs.parentUser, rs.parentID)
+	for _, quiet := range []*fakeReminderStore{{}, {syncErr: errors.New("redis down")}} {
+		svc, _, _ := newReminderSvc(t, quiet, nil, nil)
+		pub := newMockPublisher()
+		svc.SetPublisher(pub)
+		svc.ParentLeft(ctx, "u-1", "ch-1")
+		waitForCond(t, func() bool { return len(quiet.recorded()) == 1 }, "cleanup ran")
+		time.Sleep(20 * time.Millisecond)
+		if got := remindersChanged(pub); len(got) != 0 {
+			t.Fatalf("nothing changed, nothing to tell; got %v", got)
+		}
 	}
-	owners, err := svc.CancelForMessages(ctx, []string{"m-1", "m-2"})
-	if err != nil || len(owners["u-2"]) != 1 || len(rs.messageIDs) != 2 {
-		t.Fatalf("CancelForMessages = %v, %v", owners, err)
+}
+
+// Deleting messages takes every pending reminder about them, whoever set it;
+// each owner is told. An empty delete does nothing.
+func TestReminderService_MessagesDeletedCancelsAndReports(t *testing.T) {
+	ctx := context.Background()
+	rs := &fakeReminderStore{owners: []string{"u-1", "u-2"}}
+	svc, _, _ := newReminderSvc(t, rs, nil, nil)
+	pub := newMockPublisher()
+	svc.SetPublisher(pub)
+	svc.MessagesDeleted(ctx, "ch-1", ParentChannel, nil)
+	svc.MessagesDeleted(ctx, "ch-1", ParentChannel, []string{"m-1", "m-2"})
+	waitForCond(t, func() bool { return len(remindersChanged(pub)) == 2 }, "owners told")
+	if got := rs.recorded(); len(got) != 1 || got[0] != "messages:m-1,m-2" {
+		t.Fatalf("store calls = %v, want one cancel for both messages", got)
 	}
-	owners, err = svc.RefreshPreview(ctx, "m-3", "new text")
-	if err != nil || len(owners) != 1 || rs.messageIDs[0] != "m-3" || rs.preview != "new text" {
-		t.Fatalf("RefreshPreview = %v, %v", owners, err)
+
+	failing := &fakeReminderStore{owners: []string{"u-1"}, syncErr: errors.New("redis down")}
+	svc2, _, _ := newReminderSvc(t, failing, nil, nil)
+	pub2 := newMockPublisher()
+	svc2.SetPublisher(pub2)
+	svc2.MessagesDeleted(ctx, "ch-1", ParentChannel, []string{"m-1"})
+	waitForCond(t, func() bool { return len(failing.recorded()) == 1 }, "cleanup ran")
+	time.Sleep(20 * time.Millisecond)
+	if got := remindersChanged(pub2); len(got) != 0 {
+		t.Fatalf("a failed cleanup must not claim a change; got %v", got)
+	}
+}
+
+// Text edited out of a message must not live on in a reminder's preview.
+func TestReminderService_MessageEditedRefreshesPreview(t *testing.T) {
+	ctx := context.Background()
+	rs := &fakeReminderStore{owners: []string{"u-2"}}
+	svc, _, _ := newReminderSvc(t, rs, nil, nil)
+	pub := newMockPublisher()
+	svc.SetPublisher(pub)
+	svc.MessageEdited(ctx, &model.Message{ID: "m-1", ParentID: "ch-1", Body: "  the   corrected\n text "}, ParentChannel)
+	waitForCond(t, func() bool { return len(remindersChanged(pub)) == 1 }, "owner told")
+	rs.mu.Lock()
+	preview := rs.preview
+	rs.mu.Unlock()
+	if preview != "the corrected text" || rs.recorded()[0] != "preview:m-1" {
+		t.Fatalf("preview = %q, calls = %v", preview, rs.recorded())
+	}
+
+	failing := &fakeReminderStore{owners: []string{"u-2"}, syncErr: errors.New("redis down")}
+	svc2, _, _ := newReminderSvc(t, failing, nil, nil)
+	pub2 := newMockPublisher()
+	svc2.SetPublisher(pub2)
+	svc2.MessageEdited(ctx, &model.Message{ID: "m-1"}, ParentChannel)
+	waitForCond(t, func() bool { return len(failing.recorded()) == 1 }, "refresh ran")
+	time.Sleep(20 * time.Millisecond)
+	if got := remindersChanged(pub2); len(got) != 0 {
+		t.Fatalf("a failed refresh must not claim a change; got %v", got)
 	}
 }
 
@@ -415,5 +510,100 @@ func TestReminderService_SchedulePreviewsWebhookAttachments(t *testing.T) {
 	}
 	if got := rs.scheduled[0].MessagePreview; got != "Deploy failed" {
 		t.Fatalf("preview = %q, want the attachment summary", got)
+	}
+}
+
+// A message deleted while the reminder menu was open answers 404 — not a
+// "Reminder set" that would be dropped silently when it comes due.
+func TestReminderService_ScheduleRefusesDeletedMessage(t *testing.T) {
+	base := time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC)
+	rs := &fakeReminderStore{}
+	svc, _, _ := newReminderSvc(t, rs, &model.Message{ID: "m-1", Deleted: true}, nil)
+	in := ReminderInput{MessageID: "m-1", ParentID: "ch-1", ParentType: ParentChannel, RemindAt: base.Add(time.Hour)}
+	if _, err := svc.Schedule(context.Background(), "u-1", in); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Schedule = %v, want ErrNotFound", err)
+	}
+	if len(rs.scheduled) != 0 {
+		t.Fatalf("a reminder was stored for a deleted message: %+v", rs.scheduled)
+	}
+}
+
+type fakeOwnerLookup struct {
+	users []*model.User
+	err   error
+	asked [][]string
+}
+
+func (f *fakeOwnerLookup) GetUsersByIDs(_ context.Context, ids []string) ([]*model.User, error) {
+	f.asked = append(f.asked, ids)
+	return f.users, f.err
+}
+
+// Every owner whose reminder left the queue — fired, or dropped because the
+// message is gone — is told once that their pending list changed, so an open
+// Activity panel stops listing it as scheduled. A deactivated owner's
+// reminders are dropped without an alert, a push job, or an event, found with
+// one batched lookup.
+func TestReminderService_ProcessDueReportsOwnersAndDropsDeactivated(t *testing.T) {
+	due := func(id, user, msgID string) *model.Reminder {
+		return &model.Reminder{ID: id, UserID: user, MessageID: msgID, ParentID: "ch-1", ParentType: ParentChannel}
+	}
+	rs := &fakeReminderStore{due: []*model.Reminder{
+		due("r1", "u-1", "m-1"),
+		due("r2", "u-1", "m-2"),
+		due("r3", "u-2", "m-gone"),
+		due("r4", "u-off", "m-1"),
+	}}
+	svc := NewReminderService(rs, messagesByID{"m-1": {ID: "m-1"}, "m-2": {ID: "m-2"}}, &fakeAccess{})
+	act, notif := &spyActivityAdder{}, &spyDirectNotifier{}
+	svc.SetDelivery(act, notif)
+	pub := newMockPublisher()
+	svc.SetPublisher(pub)
+	owners := &fakeOwnerLookup{users: []*model.User{{ID: "u-1", Status: "active"}, {ID: "u-off", Status: "deactivated"}}}
+	svc.SetOwnerLookup(owners)
+
+	if n, err := svc.ProcessDue(context.Background()); err != nil || n != 4 {
+		t.Fatalf("ProcessDue = %d, %v; want all 4 claimed", n, err)
+	}
+	if len(owners.asked) != 1 || len(owners.asked[0]) != 3 {
+		t.Fatalf("owner lookups = %v, want one batched lookup of the 3 owners", owners.asked)
+	}
+	if len(notif.notifs) != 2 || notif.notifs[0].AlertID != "r1" || notif.notifs[1].AlertID != "r2" {
+		t.Fatalf("alerts = %+v, want r1 and r2 only", notif.notifs)
+	}
+	got := map[string]int{}
+	for _, u := range remindersChanged(pub) {
+		got[u]++
+	}
+	if len(got) != 2 || got["u-1"] != 1 || got["u-2"] != 1 {
+		t.Fatalf("reminders.changed to %v, want u-1 and u-2 once each and nothing for the deactivated owner", remindersChanged(pub))
+	}
+}
+
+// A failed owner lookup still fires: a lost reminder is worse than one sent
+// to an account that can't read it.
+func TestReminderService_ProcessDueOwnerLookupFailureFires(t *testing.T) {
+	rs := &fakeReminderStore{due: []*model.Reminder{{ID: "r1", UserID: "u-1", MessageID: "m-1", ParentID: "ch-1", ParentType: ParentChannel}}}
+	svc := NewReminderService(rs, &fakeMessageGetter{}, &fakeAccess{})
+	notif := &spyDirectNotifier{}
+	svc.SetDelivery(&spyActivityAdder{}, notif)
+	svc.SetOwnerLookup(&fakeOwnerLookup{err: errors.New("dynamo down")})
+	if _, err := svc.ProcessDue(context.Background()); err != nil {
+		t.Fatalf("ProcessDue: %v", err)
+	}
+	if len(notif.notifs) != 1 {
+		t.Fatalf("alerts = %+v, want the reminder fired", notif.notifs)
+	}
+}
+
+func TestReminderService_CancelAllForUser(t *testing.T) {
+	rs := &fakeReminderStore{cancelAllN: 3}
+	svc, _, _ := newReminderSvc(t, rs, nil, nil)
+	if err := svc.CancelAllForUser(context.Background(), "u-off"); err != nil || rs.cancelAllUser != "u-off" {
+		t.Fatalf("CancelAllForUser = %v (store got %q)", err, rs.cancelAllUser)
+	}
+	rs.cancelAllN, rs.syncErr = 0, errors.New("redis down")
+	if err := svc.CancelAllForUser(context.Background(), "u-off"); err == nil {
+		t.Fatal("a store failure must surface")
 	}
 }

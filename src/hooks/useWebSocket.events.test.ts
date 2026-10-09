@@ -86,6 +86,16 @@ describe('useWebSocket event coverage', () => {
     expect(onActivityNew).toHaveBeenCalled();
   });
 
+  it('routes reminders.changed to onRemindersChanged', async () => {
+    const onRemindersChanged = vi.fn();
+    renderHook(() => useWebSocket({ onRemindersChanged, enabled: true }));
+    await flushConnect();
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    ws.simulateMessage(JSON.stringify({ type: 'reminders.changed', data: '{}' }));
+    expect(onRemindersChanged).toHaveBeenCalled();
+  });
+
   it('routes scheduled_messages.changed to onScheduledMessagesChanged', async () => {
     const onScheduledMessagesChanged = vi.fn();
     renderHook(() => useWebSocket({ onScheduledMessagesChanged, enabled: true }));

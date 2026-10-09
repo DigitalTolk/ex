@@ -1,12 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
-import { OPEN_CHANNELS_EVENT, requestOpenChannels } from './mobile-nav';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { requestOpenChannels, takeOpenChannelsRequest, useOpenChannelsRequest } from './mobile-nav';
 
 describe('requestOpenChannels', () => {
-  it('fires the open-channels event on window', () => {
-    const listener = vi.fn();
-    window.addEventListener(OPEN_CHANNELS_EVENT, listener);
+  beforeEach(() => useOpenChannelsRequest.setState({ pending: false }));
+
+  // A request waits until it is taken, so one made before AppLayout listens
+  // is not lost — and it is served once.
+  it('leaves a request that is taken exactly once', () => {
+    expect(takeOpenChannelsRequest()).toBe(false);
     requestOpenChannels();
-    window.removeEventListener(OPEN_CHANNELS_EVENT, listener);
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(useOpenChannelsRequest.getState().pending).toBe(true);
+    expect(takeOpenChannelsRequest()).toBe(true);
+    expect(takeOpenChannelsRequest()).toBe(false);
   });
 });

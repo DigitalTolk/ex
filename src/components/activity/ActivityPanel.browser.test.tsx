@@ -6,7 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { ActivityPanel } from './ActivityPanel';
 import { apiFetch } from '@/lib/api';
-import { applyActivityChangedEvent } from '@/hooks/useActivity';
+import { applyRemindersChangedEvent } from '@/hooks/useActivity';
 import { resetSidebarModeSessionState, setActivityFilter, useSidebarModeStore } from '@/stores/sidebar-mode';
 import type { ActivityItem, Reminder } from '@/types';
 
@@ -479,7 +479,7 @@ describe('ActivityPanel', () => {
   });
 
   // Leaving the channel, or the message being deleted or edited, changes
-  // reminders on the server; its activity.read signal brings the list in line.
+  // reminders on the server; its reminders.changed nudge brings the list in line.
   it('drops and re-previews reminders when the server reports them changed', async () => {
     const reminder = (id: string, messagePreview: string): Reminder => ({
       id, userID: 'u', messageID: `m-${id}`, parentID: 'ch-gen', parentType: 'channel', messagePreview, remindAt: at(-DAY), createdAt: at(0),
@@ -489,7 +489,7 @@ describe('ActivityPanel', () => {
     await expect.element(screen.getByText('left channel text')).toBeVisible();
 
     mockApi({ reminders: [reminder('r2', 'after the edit')] });
-    applyActivityChangedEvent(client, { reminders: true });
+    applyRemindersChangedEvent(client);
     await expect.element(screen.getByText('after the edit')).toBeVisible();
     expect(document.body.textContent).not.toContain('left channel text');
     expect(document.body.textContent).not.toContain('before the edit');

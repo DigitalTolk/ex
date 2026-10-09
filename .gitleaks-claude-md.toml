@@ -1,0 +1,78 @@
+# Content gate for CLAUDE.md (run by `make check-claude-md`, in `make check`
+# and CI). CLAUDE.md is committed guidance for coding agents and must stay
+# strictly technical — architecture, UI/backend design decisions, testing
+# rules. It must never carry the company's business information, personal
+# data, credentials, or pointers into internal systems. See the policy at the
+# top of CLAUDE.md.
+#
+# gitleaks' default rules catch credentials and keys; the rules below catch
+# what a secret scanner doesn't look for. Each rule is exercised by the
+# known-bad fixture in scripts/testdata/claude-md-gate/, so a rule that stops
+# matching fails the gate instead of passing silently.
+
+title = "CLAUDE.md content gate"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "company-identifier"
+description = "The company's name or its abbreviations — the guide describes the code, not the business"
+regex = '''(?i)digital\s*tolk|\bdtolk\b|\btolk\w*'''
+keywords = ["tolk"]
+
+[[rules]]
+id = "email-address"
+description = "An email address (a real person's or an internal mailbox); use example.com in examples"
+regex = '''[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+'''
+keywords = ["@"]
+[[rules.allowlists]]
+regexTarget = "match"
+regexes = ['''(?i)@(?:[a-z0-9-]+\.)*example\.(?:com|org|net)$''']
+
+[[rules]]
+id = "non-public-url"
+description = "A URL that isn't localhost, example.*, or a public technical reference — internal hosts, dashboards, tickets and documents don't belong here"
+regex = '''https?://[^\s<>"'`)\]]+'''
+keywords = ["http"]
+[[rules.allowlists]]
+regexTarget = "match"
+regexes = [
+  '''^https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:[/.?#,;]|$)''',
+  '''^https?://(?:[a-z0-9-]+\.)*example\.(?:com|org|net)(?:[:/.?#,;]|$)''',
+  '''^https?://(?:www\.)?(?:github\.com|pkg\.go\.dev|go\.dev|developer\.mozilla\.org|w3\.org|react\.dev|tanstack\.com|tailwindcss\.com|base-ui\.com|vitest\.dev|playwright\.dev|redis\.io|docs\.aws\.amazon\.com|datatracker\.ietf\.org|ui\.shadcn\.com|virtuoso\.dev|motion\.dev|zustand\.docs\.pmnd\.rs)(?:[:/.?#,;]|$)''',
+]
+
+[[rules]]
+id = "ip-address"
+description = "An IPv4 address other than loopback / unspecified"
+regex = '''\b(?:\d{1,3}\.){3}\d{1,3}\b'''
+[[rules.allowlists]]
+regexTarget = "match"
+regexes = ['''^(?:127\.0\.0\.1|0\.0\.0\.0)$''']
+
+[[rules]]
+id = "cloud-account-identifier"
+description = "A cloud account id or ARN"
+regex = '''arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:\d{12}|\b\d{12}\b'''
+
+[[rules]]
+id = "phone-number"
+description = "A phone number"
+regex = '''\+\d{1,3}[\s-]?\(?\d{1,4}\)?(?:[\s-]?\d{2,4}){2,4}\b'''
+keywords = ["+"]
+
+[[rules]]
+id = "personal-identity-number"
+description = "A personal identity number (YYMMDD-NNNN / YYYYMMDD-NNNN)"
+regex = '''\b(?:19|20)?\d{6}[-+]\d{4}\b'''
+
+[[rules]]
+id = "money-amount"
+description = "A money amount — prices, revenue and costs are business information"
+regex = '''(?i)\b\d[\d.,]*\s?(?:sek|kr|eur|usd|gbp|€|\$)(?:\W|$)|[€£]\s?\d|\$\s?\d[\d.,]*\s?(?:k|m|bn)?\b'''
+
+[[rules]]
+id = "confidentiality-marker"
+description = "Text marked confidential/internal — a sign of pasted business material"
+regex = '''(?i)\b(?:confidential|internal use only|do not (?:share|distribute|forward)|under nda|trade secret|proprietary and confidential)\b'''

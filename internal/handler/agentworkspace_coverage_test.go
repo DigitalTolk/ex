@@ -296,14 +296,17 @@ func (f *hwsCovRemStore) ListPendingReminders(context.Context, string) ([]*model
 func (f *hwsCovRemStore) ClaimDueReminders(context.Context, int) ([]*model.Reminder, error) {
 	return nil, nil
 }
-func (f *hwsCovRemStore) CancelRemindersForParent(context.Context, string, string) ([]string, error) {
+func (f *hwsCovRemStore) CancelRemindersForParent(context.Context, string, string) (int, error) {
+	return 0, nil
+}
+func (f *hwsCovRemStore) CancelRemindersForMessages(context.Context, []string) ([]string, error) {
 	return nil, nil
 }
-func (f *hwsCovRemStore) CancelRemindersForMessages(context.Context, []string) (map[string][]string, error) {
+func (f *hwsCovRemStore) UpdateReminderPreview(context.Context, string, string) ([]string, error) {
 	return nil, nil
 }
-func (f *hwsCovRemStore) UpdateReminderPreview(context.Context, string, string) (map[string][]string, error) {
-	return nil, nil
+func (f *hwsCovRemStore) CancelAllRemindersForUser(context.Context, string) (int, error) {
+	return 0, nil
 }
 
 type hwsCovRemMsgs struct{ err error }
