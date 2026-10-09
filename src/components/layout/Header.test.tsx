@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import type { ReactElement } from 'react';
 import { Header } from './Header';
-import { OPEN_CHANNELS_EVENT } from '@/lib/mobile-nav';
+import { useOpenChannelsRequest } from '@/lib/mobile-nav';
 import type { Channel } from '@/types';
 
 const apiFetchMock = vi.fn();
@@ -251,12 +251,11 @@ describe('Header', () => {
 
   it('on a phone, the back button asks for the channel list; desktop has none', () => {
     setMobileMatch(true);
-    const listener = vi.fn();
-    window.addEventListener(OPEN_CHANNELS_EVENT, listener);
+    useOpenChannelsRequest.setState({ pending: false });
     const { unmount } = renderHeaderWithProviders(<Header channel={makeChannel()} />);
     fireEvent.click(screen.getByTestId('mobile-header-back'));
-    window.removeEventListener(OPEN_CHANNELS_EVENT, listener);
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(useOpenChannelsRequest.getState().pending).toBe(true);
+    useOpenChannelsRequest.setState({ pending: false });
     unmount();
     setMobileMatch(false);
     renderHeaderWithProviders(<Header channel={makeChannel()} />);

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"errors"
 	"testing"
 	"time"
@@ -94,10 +95,13 @@ func TestChannelService_MarkChannelRead_ReadsActivity(t *testing.T) {
 
 // Losing access to a channel drops its items, whether the user left or was
 // removed.
+// Losing access reaches both the activity stream and the pending reminders —
+// the reminders even with no activity recorder wired.
 func TestChannelService_LeaveAndRemove_DropActivity(t *testing.T) {
 	svc, _, memberships, _, _ := setupChannelService()
-	rec := &activityHooks{}
+	rec, rem := &activityHooks{}, &activityHooks{}
 	svc.SetActivityRecorder(rec)
+	svc.SetReminderSync(rem)
 	ctx := context.Background()
 	memberships.memberships["ch9#user-1"] = &model.ChannelMembership{ChannelID: "ch9", UserID: "user-1", Role: model.ChannelRoleMember}
 	memberships.memberships["ch9#admin-1"] = &model.ChannelMembership{ChannelID: "ch9", UserID: "admin-1", Role: model.ChannelRoleAdmin}
@@ -110,8 +114,21 @@ func TestChannelService_LeaveAndRemove_DropActivity(t *testing.T) {
 		t.Fatalf("RemoveMember: %v", err)
 	}
 	want := []parentLeft{{"user-1", "ch9"}, {"target", "ch9"}}
-	if len(rec.left) != 2 || rec.left[0] != want[0] || rec.left[1] != want[1] {
-		t.Fatalf("left = %+v, want %+v", rec.left, want)
+	for name, got := range map[string][]parentLeft{"activity": rec.left, "reminders": rem.left} {
+		if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+			t.Fatalf("%s left = %+v, want %+v", name, got, want)
+		}
+	}
+
+	remindersOnly, _, memberships2, _, _ := setupChannelService()
+	rem2 := &activityHooks{}
+	remindersOnly.SetReminderSync(rem2)
+	memberships2.memberships["ch9#user-1"] = &model.ChannelMembership{ChannelID: "ch9", UserID: "user-1", Role: model.ChannelRoleMember}
+	if err := remindersOnly.Leave(ctx, "user-1", "ch9"); err != nil {
+		t.Fatalf("Leave: %v", err)
+	}
+	if len(rem2.left) != 1 || rem2.left[0] != want[0] {
+		t.Fatalf("reminders left = %+v without an activity recorder", rem2.left)
 	}
 }
 
@@ -243,10 +260,13 @@ func TestMessageService_MarkThreadUnread_RewindsActivity(t *testing.T) {
 
 // Deleting a thread root takes the items about the root AND every cascaded
 // reply with it, in one hand-off.
+// Deleting a message reaches its activity items and its pending reminders
+// with the same ids — the thread's replies included.
 func TestMessageService_Delete_DropsActivity(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
-	rec := &activityHooks{}
+	rec, rem := &activityHooks{}, &activityHooks{}
 	svc.SetActivityRecorder(rec)
+	svc.SetReminderSync(rem)
 	ctx := context.Background()
 	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember}
 	messages.messages["ch1#root"] = &model.Message{ID: "root", ParentID: "ch1", AuthorID: "user-1", Body: "root", ReplyCount: 2}
@@ -275,6 +295,9 @@ func TestMessageService_Delete_DropsActivity(t *testing.T) {
 	if len(rec.deleted) != 2 || len(rec.deleted[1]) != 1 || rec.deleted[1][0] != "solo" {
 		t.Fatalf("deleted = %v", rec.deleted)
 	}
+	if fmt.Sprint(rem.deleted) != fmt.Sprint(rec.deleted) {
+		t.Fatalf("reminders deleted = %v, want %v", rem.deleted, rec.deleted)
+	}
 }
 
 // A reply whose tombstone write fails stays out of the cleanup: its message
@@ -300,8 +323,9 @@ func TestMessageService_Delete_FailedCascadeKeepsActivity(t *testing.T) {
 // touches attachments leaves them alone.
 func TestMessageService_Edit_RefreshesActivity(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
-	rec := &activityHooks{}
+	rec, rem := &activityHooks{}, &activityHooks{}
 	svc.SetActivityRecorder(rec)
+	svc.SetReminderSync(rem)
 	ctx := context.Background()
 	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember}
 	messages.messages["ch1#msg-1"] = &model.Message{ID: "msg-1", ParentID: "ch1", AuthorID: "user-1", Body: "original"}
@@ -315,8 +339,8 @@ func TestMessageService_Edit_RefreshesActivity(t *testing.T) {
 	if _, err := svc.Edit(ctx, "user-1", "ch1", ParentChannel, "msg-1", "updated", nil); err != nil {
 		t.Fatalf("Edit: %v", err)
 	}
-	if len(rec.edited) != 1 {
-		t.Fatalf("an edit that keeps the text must not re-preview, got %d", len(rec.edited))
+	if len(rec.edited) != 1 || len(rem.edited) != 1 || rem.edited[0].Body != "updated" {
+		t.Fatalf("an edit re-previews items and reminders once; got %d / %d", len(rec.edited), len(rem.edited))
 	}
 }
 

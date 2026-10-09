@@ -155,7 +155,9 @@ describe('SearchBar sheet variant', () => {
     fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'deploy' } });
     fireEvent.click(screen.getByTestId('searchbar-show-in-scope'));
     fireEvent.click(screen.getByTestId('sheet-all-results'));
-    expect(lastLocation).toBe('/search?q=deploy&in=ch-1');
+    // On the tab that matches the scope, as the desktop bar lands — the sheet
+    // used to drop the kind and land a channel-scoped search on All.
+    expect(lastLocation).toBe('/search?q=deploy&in=ch-1&type=messages');
     expect(onDone).toHaveBeenCalled();
   });
 

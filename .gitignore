@@ -14,7 +14,6 @@ Thumbs.db
 /.env.local
 /.env.*.local
 /AGENTS.md
-/CLAUDE.md
 /SPEC.md
 /.claude/scheduled_tasks.lock
 

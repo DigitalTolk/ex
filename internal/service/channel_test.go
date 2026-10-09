@@ -1573,3 +1573,48 @@ func TestLeave_PostsSystemMessage(t *testing.T) {
 	}
 }
 
+
+// Archiving removes everyone, so it counts as leaving for each member: their
+// activity items and pending reminders there must not keep showing a channel
+// nobody can open. A member whose removal failed keeps access, so nothing of
+// theirs is dropped.
+func TestArchive_DropsEachMembersActivityAndReminders(t *testing.T) {
+	svc, channels, memberships, _, _ := setupChannelService()
+	hooks, reminders := &activityHooks{}, &activityHooks{}
+	svc.SetActivityRecorder(hooks)
+	svc.SetReminderSync(reminders)
+	ctx := context.Background()
+	channels.channels["ch-arx"] = &model.Channel{ID: "ch-arx", Name: "to-archive", Type: model.ChannelTypePrivate}
+	memberships.memberships["ch-arx#owner"] = &model.ChannelMembership{ChannelID: "ch-arx", UserID: "owner", Role: model.ChannelRoleOwner}
+	memberships.memberships["ch-arx#m1"] = &model.ChannelMembership{ChannelID: "ch-arx", UserID: "m1", Role: model.ChannelRoleMember}
+
+	if err := svc.Archive(ctx, "owner", "ch-arx"); err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+	left := map[string]bool{}
+	for _, l := range hooks.left {
+		if l.parentID != "ch-arx" {
+			t.Fatalf("ParentLeft for %q, want ch-arx", l.parentID)
+		}
+		left[l.userID] = true
+	}
+	if len(left) != 2 || !left["owner"] || !left["m1"] {
+		t.Fatalf("ParentLeft users = %v, want owner and m1", hooks.left)
+	}
+	if len(reminders.left) != 2 {
+		t.Fatalf("reminder ParentLeft = %v, want both members", reminders.left)
+	}
+
+	failing, channels2, memberships2, _, _ := setupChannelService()
+	hooks2 := &activityHooks{}
+	failing.SetActivityRecorder(hooks2)
+	channels2.channels["ch-arx"] = &model.Channel{ID: "ch-arx", Name: "to-archive", Type: model.ChannelTypePrivate}
+	memberships2.memberships["ch-arx#owner"] = &model.ChannelMembership{ChannelID: "ch-arx", UserID: "owner", Role: model.ChannelRoleOwner}
+	memberships2.removeErr = errors.New("boom")
+	if err := failing.Archive(ctx, "owner", "ch-arx"); err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+	if len(hooks2.left) != 0 {
+		t.Fatalf("ParentLeft = %v, want none when the removal failed", hooks2.left)
+	}
+}

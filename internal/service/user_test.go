@@ -1302,3 +1302,43 @@ func TestUserService_BotsAreHiddenFromPeopleSurfaces(t *testing.T) {
 		t.Errorf("indexed %v, want only the human user", idx.indexed)
 	}
 }
+
+type spyReminderCanceller struct {
+	users []string
+	err   error
+}
+
+func (s *spyReminderCanceller) CancelAllForUser(_ context.Context, userID string) error {
+	s.users = append(s.users, userID)
+	return s.err
+}
+
+// Deactivating an account stops all its reminders at once, so none is left to
+// come due (and to be claimed, checked and dropped) for someone who can't sign
+// in. Reactivating cancels nothing; a failed cleanup doesn't fail the
+// deactivation — the due-time owner check still drops them.
+func TestUserService_Deactivate_CancelsReminders(t *testing.T) {
+	users := newMockUserStore()
+	svc := NewUserService(users, nil, nil, nil)
+	reminders := &spyReminderCanceller{}
+	svc.SetReminderCanceller(reminders)
+	users.users["u-g"] = &model.User{ID: "u-g", AuthProvider: model.AuthProviderGuest, Status: "active"}
+
+	if _, err := svc.SetStatus(context.Background(), "u-g", true); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+	if len(reminders.users) != 1 || reminders.users[0] != "u-g" {
+		t.Fatalf("cancelled = %v, want u-g", reminders.users)
+	}
+	if _, err := svc.SetStatus(context.Background(), "u-g", false); err != nil {
+		t.Fatalf("reactivate: %v", err)
+	}
+	if len(reminders.users) != 1 {
+		t.Fatalf("reactivation cancelled reminders: %v", reminders.users)
+	}
+
+	reminders.err = errors.New("redis down")
+	if out, err := svc.SetStatus(context.Background(), "u-g", true); err != nil || out.Status != "deactivated" {
+		t.Fatalf("deactivate with failing cleanup = %v, %v", out, err)
+	}
+}

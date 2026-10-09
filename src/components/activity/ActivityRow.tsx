@@ -144,7 +144,7 @@ export const ActivityRowView = memo(function ActivityRowView({
                 <span className="font-semibold">{name}</span>
                 {webhook && (
                   <span
-                    className="ml-1 inline-block rounded bg-muted px-1 align-middle text-[11px] font-semibold uppercase leading-4 tracking-wide text-muted-foreground"
+                    className="ml-1 inline-block rounded bg-muted px-1 align-middle text-xs font-semibold uppercase leading-4 tracking-wide text-muted-foreground"
                     aria-label="Bot"
                     data-testid="activity-row-bot"
                   >

@@ -227,7 +227,7 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
       <span className="relative inline-flex shrink-0">
         <Avatar className="size-7" style={presenceNotchStyle(9)}>
           <AvatarImage src={user?.avatarURL} alt="" />
-          <AvatarFallback className="bg-foreground/10 text-foreground text-[11px]">{initials}</AvatarFallback>
+          <AvatarFallback className="bg-foreground/10 text-foreground text-xs">{initials}</AvatarFallback>
         </Avatar>
         <PresenceDot online={userOnline} size={9} inset={0} />
       </span>
@@ -254,7 +254,7 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
         <span className="relative inline-flex">
           <Avatar className="size-6" style={presenceNotchStyle(8)}>
             <AvatarImage src={user?.avatarURL} alt="" />
-            <AvatarFallback className="bg-foreground/10 text-foreground text-[9px]">{initials}</AvatarFallback>
+            <AvatarFallback className="bg-foreground/10 text-foreground text-xs">{initials}</AvatarFallback>
           </Avatar>
           <PresenceDot online={userOnline} size={8} inset={0} />
         </span>

@@ -47,14 +47,6 @@ type ParentMemberLister interface {
 	ParentMemberIDs(ctx context.Context, parentID, parentType string) ([]string, error)
 }
 
-// ReminderSync keeps pending reminders in step with access and messages.
-// Implemented by ReminderService.
-type ReminderSync interface {
-	CancelForParent(ctx context.Context, userID, parentID string) ([]string, error)
-	CancelForMessages(ctx context.Context, messageIDs []string) (map[string][]string, error)
-	RefreshPreview(ctx context.Context, messageID, preview string) (map[string][]string, error)
-}
-
 // ActivityReadTracker is told how far a user has read a channel, conversation
 // or thread, so the activity items there follow it: reading a DM reads its
 // items, and marking a message unread there makes its item unread again.
@@ -70,7 +62,6 @@ type ActivityService struct {
 	publisher Publisher
 	channels  ChannelSlugResolver
 	members   ParentMemberLister
-	reminders ReminderSync
 }
 
 // NewActivityService builds an ActivityService.
@@ -86,10 +77,6 @@ func (s *ActivityService) SetChannelResolver(c ChannelSlugResolver) { s.channels
 // deletes use to find the streams holding items about the message. Without it
 // those items keep their original preview and outlive their message.
 func (s *ActivityService) SetMemberLister(m ParentMemberLister) { s.members = m }
-
-// SetReminderSync wires pending reminders into the same access and message
-// hooks, so losing a channel or a message also takes its reminders.
-func (s *ActivityService) SetReminderSync(r ReminderSync) { s.reminders = r }
 
 // RecordReaction adds a "someone reacted to your message" hint to the message
 // author's activity stream. No-op when the reactor is the author themselves, the
@@ -142,14 +129,14 @@ func (s *ActivityService) resolveChannelSlug(ctx context.Context, parentType, pa
 // collapsing whitespace afterwards keeps tabs / newline-runs / leading space out
 // of the row and lets a whitespace-only body collapse to "" so the client renders
 // its fallback label.
+func activityPreview(body string) string {
+	return collapseSpace(previewBody(body))
+}
+
 // messagePreview is the preview text a message gets on an activity item or a
 // reminder: its body, or a webhook post's attachment summary.
 func messagePreview(msg *model.Message) string {
 	return activityPreview(notificationBody(msg))
-}
-
-func activityPreview(body string) string {
-	return collapseSpace(previewBody(body))
 }
 
 // collapseSpace trims s and collapses each whitespace run to one space.
@@ -339,114 +326,68 @@ func (s *ActivityService) MarkParentRead(ctx context.Context, userID, parentID, 
 	}
 }
 
-// ParentLeft drops a channel's or conversation's items from a user's stream,
-// and cancels their pending reminders there, once they can no longer read it
-// (they left or were removed) — neither may keep showing its messages.
+// ParentLeft drops a channel's or conversation's items from a user's stream
+// once they can no longer read it (they left or were removed).
 func (s *ActivityService) ParentLeft(ctx context.Context, userID, parentID string) {
 	safe.Go(func() {
 		bg, cancel := detachedContext(ctx)
 		defer cancel()
-		var change model.ActivityChangedEvent
-		if removed, err := s.store.RemoveActivityForParent(bg, userID, parentID); err != nil {
+		removed, err := s.store.RemoveActivityForParent(bg, userID, parentID)
+		if err != nil {
 			slog.Warn("activity parent cleanup failed", "userID", userID, "parentID", parentID, "error", err)
-		} else {
-			change.Removed = removed
+			return
 		}
-		if s.reminders != nil {
-			cancelled, err := s.reminders.CancelForParent(bg, userID, parentID)
-			if err != nil {
-				slog.Warn("reminder parent cleanup failed", "userID", userID, "parentID", parentID, "error", err)
-			}
-			change.Reminders = len(cancelled) > 0
-		}
-		if len(change.Removed) > 0 || change.Reminders {
-			s.publishChanged(bg, userID, change)
+		if len(removed) > 0 {
+			s.publishChanged(bg, userID, model.ActivityChangedEvent{Removed: removed})
 		}
 	})
 }
 
-// RemindersChanged tells a user's clients their pending reminders changed (one
-// was scheduled or cancelled).
-func (s *ActivityService) RemindersChanged(ctx context.Context, userID string) {
-	s.publishChanged(ctx, userID, model.ActivityChangedEvent{Reminders: true})
-}
-
 // MessagesDeleted drops the items about deleted messages from the streams of
-// the parent's members, and cancels every pending reminder about them.
+// the parent's members.
 func (s *ActivityService) MessagesDeleted(ctx context.Context, parentID, parentType string, messageIDs []string) {
 	if len(messageIDs) == 0 {
 		return
 	}
-	s.syncMessage(ctx, parentID, parentType, messageSync{
-		items: func(bg context.Context, userIDs []string) (map[string][]string, error) {
-			return s.store.RemoveActivityForMessages(bg, userIDs, messageIDs)
-		},
-		mark: func(change *model.ActivityChangedEvent, ids []string) { change.Removed = ids },
-		reminders: func(bg context.Context) (map[string][]string, error) {
-			return s.reminders.CancelForMessages(bg, messageIDs)
-		},
-	})
+	s.forMembers(ctx, parentID, parentType, func(bg context.Context, userIDs []string) (map[string][]string, error) {
+		return s.store.RemoveActivityForMessages(bg, userIDs, messageIDs)
+	}, func(ids []string) model.ActivityChangedEvent { return model.ActivityChangedEvent{Removed: ids} })
 }
 
-// MessageEdited refreshes the preview on the items, and the pending reminders,
-// about an edited message — text edited out must not live on in either.
+// MessageEdited refreshes the preview on the items about an edited message in
+// the streams of the parent's members.
 func (s *ActivityService) MessageEdited(ctx context.Context, msg *model.Message, parentType string) {
 	msgID, parentID, preview := msg.ID, msg.ParentID, messagePreview(msg)
-	s.syncMessage(ctx, parentID, parentType, messageSync{
-		items: func(bg context.Context, userIDs []string) (map[string][]string, error) {
-			return s.store.UpdateActivityPreview(bg, userIDs, msgID, preview)
-		},
-		mark: func(change *model.ActivityChangedEvent, ids []string) { change.Updated = ids },
-		reminders: func(bg context.Context) (map[string][]string, error) {
-			return s.reminders.RefreshPreview(bg, msgID, preview)
-		},
-	})
+	s.forMembers(ctx, parentID, parentType, func(bg context.Context, userIDs []string) (map[string][]string, error) {
+		return s.store.UpdateActivityPreview(bg, userIDs, msgID, preview)
+	}, func(ids []string) model.ActivityChangedEvent { return model.ActivityChangedEvent{Updated: ids} })
 }
 
-// messageSync is one message change applied to activity items (over the
-// parent's members) and to pending reminders (over their owners).
-type messageSync struct {
-	items     func(context.Context, []string) (map[string][]string, error)
-	mark      func(*model.ActivityChangedEvent, []string)
-	reminders func(context.Context) (map[string][]string, error)
-}
-
-// syncMessage applies a message change on a detached goroutine and tells each
-// touched user what changed. A failure is logged; users whose part succeeded
-// are still told.
-func (s *ActivityService) syncMessage(ctx context.Context, parentID, parentType string, sync messageSync) {
-	if s.members == nil && s.reminders == nil {
+// forMembers runs a per-user store change over the parent's members on a
+// detached goroutine and tells each touched user what changed.
+func (s *ActivityService) forMembers(ctx context.Context, parentID, parentType string,
+	apply func(context.Context, []string) (map[string][]string, error),
+	change func([]string) model.ActivityChangedEvent,
+) {
+	if s.members == nil {
 		return
 	}
 	safe.Go(func() {
 		bg, cancel := detachedContext(ctx)
 		defer cancel()
-		byUser := map[string]model.ActivityChangedEvent{}
-		if s.members != nil {
-			if userIDs, err := s.members.ParentMemberIDs(bg, parentID, parentType); err != nil {
-				slog.Warn("activity member lookup failed", "parentID", parentID, "error", err)
-			} else {
-				touched, err := sync.items(bg, userIDs)
-				if err != nil {
-					slog.Warn("activity message sync failed", "parentID", parentID, "error", err)
-				}
-				for userID, ids := range touched {
-					change := byUser[userID]
-					sync.mark(&change, ids)
-					byUser[userID] = change
-				}
-			}
+		userIDs, err := s.members.ParentMemberIDs(bg, parentID, parentType)
+		if err != nil {
+			slog.Warn("activity member lookup failed", "parentID", parentID, "error", err)
+			return
 		}
-		if s.reminders != nil {
-			owners, err := sync.reminders(bg)
-			if err != nil {
-				slog.Warn("reminder message sync failed", "parentID", parentID, "error", err)
-			}
-			for userID := range owners {
-				change := byUser[userID]
-				change.Reminders = true
-				byUser[userID] = change
-			}
+		touched, err := apply(bg, userIDs)
+		if err != nil {
+			// Users whose change succeeded are still in touched.
+			slog.Warn("activity message sync failed", "parentID", parentID, "error", err)
+		}
+		byUser := make(map[string]model.ActivityChangedEvent, len(touched))
+		for userID, ids := range touched {
+			byUser[userID] = change(ids)
 		}
 		s.publishChangedEach(bg, byUser)
 	})

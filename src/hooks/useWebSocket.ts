@@ -54,6 +54,7 @@ interface UseWebSocketOptions {
   onWebhookChanged?: WSCallback;
   onActivityNew?: WSCallback;
   onScheduledMessagesChanged?: WSCallback;
+  onRemindersChanged?: WSCallback;
   onActivityRead?: WSCallback;
   onThreadUpdated?: WSCallback;
   onForceLogout?: WSCallback;
@@ -263,6 +264,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
               break;
             case EventType.ScheduledMessagesChanged:
               callbacksRef.current.onScheduledMessagesChanged?.(payload);
+              break;
+            case EventType.RemindersChanged:
+              callbacksRef.current.onRemindersChanged?.(payload);
               break;
             case EventType.ActivityNew:
               callbacksRef.current.onActivityNew?.(payload);

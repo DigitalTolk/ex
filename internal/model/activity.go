@@ -111,10 +111,6 @@ type ActivityNewEvent struct {
 //   - Updated: these items' previews changed (their message was edited).
 //   - ParentID (+ ThreadRootID): the user read, or marked unread, part of that
 //     channel, conversation or thread, so items there may have flipped.
-//
-// Reminders may accompany any of them (or stand alone): the user's pending
-// reminders changed — one was scheduled or cancelled, or one lost its message
-// or channel, or its preview changed with an edit.
 type ActivityChangedEvent struct {
 	All          bool     `json:"all,omitempty"`
 	IDs          []string `json:"ids,omitempty"`
@@ -123,7 +119,6 @@ type ActivityChangedEvent struct {
 	Updated      []string `json:"updated,omitempty"`
 	ParentID     string   `json:"parentID,omitempty"`
 	ThreadRootID string   `json:"threadRootID,omitempty"`
-	Reminders    bool     `json:"reminders,omitempty"`
 }
 
 // Reminder is a scheduled "remind me about this message" entry. It lives until

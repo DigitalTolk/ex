@@ -86,7 +86,7 @@ function Tab({ label, icon: Icon, selected, onClick, unread = 0, testID }: TabPr
       <span className="relative inline-flex">
         <Icon className="h-6 w-6" aria-hidden="true" />
         {unread > 0 && (
-          <Badge variant="brand" className="absolute -top-1 left-3.5 text-[11px] ring-2 ring-sidebar" data-testid="mobile-tab-unread">
+          <Badge variant="brand" className="absolute -top-1 left-3.5 ring-2 ring-sidebar" data-testid="mobile-tab-unread">
             {unread > 99 ? '99+' : unread}
           </Badge>
         )}

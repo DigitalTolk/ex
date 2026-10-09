@@ -389,8 +389,7 @@ export interface ActivityFeed {
   unreadByType: Partial<Record<ActivityType, number>>;
 }
 
-// activity.read: what changed in the stream — one group per event, plus
-// `reminders` when the pending reminders changed too (or alone).
+// activity.read: what changed in the stream — one group per event.
 export interface ActivityChangedEvent {
   all?: boolean;
   ids?: string[];
@@ -399,7 +398,6 @@ export interface ActivityChangedEvent {
   updated?: string[];
   parentID?: string;
   threadRootID?: string;
-  reminders?: boolean;
 }
 
 export interface Reminder {

@@ -2,7 +2,7 @@ import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import ActivityPage from '@/pages/ActivityPage';
-import { OPEN_CHANNELS_EVENT } from '@/lib/mobile-nav';
+import { useOpenChannelsRequest } from '@/lib/mobile-nav';
 import { resetSidebarModeSessionState, useSidebarModeStore } from '@/stores/sidebar-mode';
 
 const tier = vi.hoisted(() => ({ value: 'full' as 'full' | 'compact' | 'mobile' }));
@@ -28,12 +28,10 @@ function renderAt(path: string) {
 // sidebar, so the route points the sidebar at it and goes home — no copy-only
 // "pick one" pane, and no extra copy of the list on a phone.
 describe('ActivityPage', () => {
-  const opened = vi.fn();
+  const requested = () => useOpenChannelsRequest.getState().pending;
   beforeEach(() => {
     resetSidebarModeSessionState();
-    opened.mockClear();
-    window.addEventListener(OPEN_CHANNELS_EVENT, opened);
-    return () => window.removeEventListener(OPEN_CHANNELS_EVENT, opened);
+    useOpenChannelsRequest.setState({ pending: false });
   });
 
   it('switches the sidebar to Activity and goes home (wide window)', () => {
@@ -42,7 +40,7 @@ describe('ActivityPage', () => {
     expect(screen.getByTestId('home')).toHaveTextContent(/^\/$/);
     expect(useSidebarModeStore.getState().mode).toBe('activity');
     expect(useSidebarModeStore.getState().filter).toBe('all');
-    expect(opened).not.toHaveBeenCalled();
+    expect(requested()).toBe(false);
   });
 
   it('opens on the tab the link names', () => {
@@ -51,7 +49,7 @@ describe('ActivityPage', () => {
     expect(useSidebarModeStore.getState().filter).toBe('mention');
     expect(screen.getByTestId('home')).toBeInTheDocument();
     // On a phone home is the list screen; nothing else to open.
-    expect(opened).not.toHaveBeenCalled();
+    expect(requested()).toBe(false);
   });
 
   it('opens the sidebar overlay on a compact window, where the list is hidden', () => {
@@ -59,6 +57,6 @@ describe('ActivityPage', () => {
     renderAt('/activity?tab=bogus');
     expect(useSidebarModeStore.getState().mode).toBe('activity');
     expect(useSidebarModeStore.getState().filter).toBe('all');
-    expect(opened).toHaveBeenCalledTimes(1);
+    expect(requested()).toBe(true);
   });
 });

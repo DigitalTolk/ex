@@ -51,7 +51,7 @@ function ModeButton({ mode, label, icon: Icon, selected, unread = 0 }: ModeButto
       <span className="relative shrink-0">
         <Icon className="h-4 w-4" aria-hidden="true" />
         {!selected && unread > 0 && (
-          <Badge variant="brand" className="absolute -top-2 -right-3 text-[11px]" data-testid="activity-unread-badge">
+          <Badge variant="brand" className="absolute -top-2 -right-3" data-testid="activity-unread-badge">
             {count}
           </Badge>
         )}
@@ -65,7 +65,7 @@ function ModeButton({ mode, label, icon: Icon, selected, unread = 0 }: ModeButto
         {label}
       </span>
       {selected && unread > 0 && (
-        <Badge variant="brand" className="ml-2 text-[11px]" data-testid="activity-unread-badge">
+        <Badge variant="brand" className="ml-2" data-testid="activity-unread-badge">
           {count}
         </Badge>
       )}

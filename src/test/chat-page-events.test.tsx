@@ -856,6 +856,13 @@ describe('ChatPage WebSocket handlers', () => {
     expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).not.toContainEqual(['activity']);
   });
 
+  it('onRemindersChanged refetches the pending reminders', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onRemindersChanged as (d: unknown) => void)({});
+    expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).toContainEqual(['reminders']);
+  });
+
   it('onScheduledMessagesChanged refetches the Scheduled list', () => {
     const { qc } = renderAt('/');
     const spy = vi.spyOn(qc, 'invalidateQueries');

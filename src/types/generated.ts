@@ -143,9 +143,6 @@ export interface ActivityNewEvent {
  *   - Updated: these items' previews changed (their message was edited).
  *   - ParentID (+ ThreadRootID): the user read, or marked unread, part of that
  *     channel, conversation or thread, so items there may have flipped.
- * Reminders may accompany any of them (or stand alone): the user's pending
- * reminders changed — one was scheduled or cancelled, or one lost its message
- * or channel, or its preview changed with an edit.
  */
 export interface ActivityChangedEvent {
   all?: boolean;
@@ -155,7 +152,6 @@ export interface ActivityChangedEvent {
   updated?: string[];
   parentID?: string;
   threadRootID?: string;
-  reminders?: boolean;
 }
 /**
  * Reminder is a scheduled "remind me about this message" entry. It lives until

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { apiFetch } from '@/lib/api';
+import { ApiError, apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { showToast } from '@/lib/toast';
 import {
@@ -85,14 +85,19 @@ export function useCreateReminder() {
   });
 }
 
-// useCancelReminder cancels a pending reminder and refreshes the list.
+// useCancelReminder cancels a pending reminder and refreshes the list. A
+// reminder that already fired or was cancelled elsewhere answers 404: the
+// refresh drops it quietly. Any other failure says so.
 export function useCancelReminder() {
   const qc = useQueryClient();
+  const refresh = () => void qc.invalidateQueries({ queryKey: queryKeys.reminders() });
   return useMutation({
     mutationFn: (id: string) =>
       apiFetch<void>(`/api/v1/reminders/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: queryKeys.reminders() });
+    onSuccess: refresh,
+    onError: (err) => {
+      refresh();
+      if (!(err instanceof ApiError && err.status === 404)) showToast("Couldn't cancel the reminder — please try again.");
     },
   });
 }
@@ -116,34 +121,52 @@ export function applyActivityNewEvent(qc: QueryClient, data: unknown) {
 
 // applyActivityChangedEvent applies the change an activity.read event carries —
 // read/unread marks and removals from any of the user's devices, or a read of
-// part of a channel, conversation or thread (which refetches). A change to the
-// pending reminders (set or cancelled elsewhere, or gone with their message or
-// channel) reloads them; on its own it leaves the feed alone.
+// part of a channel, conversation or thread (which refetches).
 export function applyActivityChangedEvent(qc: QueryClient, data: unknown) {
-  const { reminders, ...change } = parseActivityChange(data);
-  if (reminders) {
-    void qc.invalidateQueries({ queryKey: queryKeys.reminders() });
-    if (Object.keys(change).length === 0) return;
-  }
+  const change = parseActivityChange(data);
   patchActivity(qc, (feed) => applyActivityChange(feed, change));
 }
 
-// optimisticActivity cancels in-flight feed reads (a response computed before
-// the write would undo the patch) and applies the patch to the cache.
-async function optimisticActivity(qc: QueryClient, fn: (feed: ActivityFeed) => ActivityFeed) {
-  await qc.cancelQueries({ queryKey: queryKeys.activity() });
-  qc.setQueryData<ActivityFeed>(queryKeys.activity(), (old) => (old ? fn(old) : old));
+// applyRemindersChangedEvent reloads the pending reminders on reminders.changed:
+// one was set or cancelled (on any device), fired, or went with its message or
+// with access to its channel.
+export function applyRemindersChangedEvent(qc: QueryClient) {
+  void qc.invalidateQueries({ queryKey: queryKeys.reminders() });
 }
 
-// A failed write undoes its optimistic patch by refetching, and says so. A
-// successful one needs no refetch: the server answers every activity write
-// with an activity.read event carrying the change, which every tab (this one
-// included) applies.
-function useActivityWriteFailed() {
+interface ActivityWriteContext {
+  // A feed read was in flight and got cancelled for this write.
+  cancelledRead: boolean;
+}
+
+// optimisticActivity applies a write's patch to the cache. An in-flight feed
+// read is cancelled first — computed before the write, its response would undo
+// the patch — and the context remembers it: something asked for that read (an
+// activity.read the cache couldn't patch, or an event that arrived while
+// fetching), so the write reads again once it lands.
+async function optimisticActivity(qc: QueryClient, fn: (feed: ActivityFeed) => ActivityFeed): Promise<ActivityWriteContext> {
+  const key = queryKeys.activity();
+  const cancelledRead = qc.isFetching({ queryKey: key }) > 0;
+  await qc.cancelQueries({ queryKey: key });
+  qc.setQueryData<ActivityFeed>(key, (old) => (old ? fn(old) : old));
+  return { cancelledRead };
+}
+
+// A successful write needs no refetch of its own: the server answers every
+// activity write with an activity.read event carrying the change, which every
+// tab (this one included) applies. It re-runs only a read it cancelled. A
+// failed write undoes its optimistic patch by refetching, and says so.
+function useActivityWriteHandlers() {
   const qc = useQueryClient();
-  return () => {
-    void qc.invalidateQueries({ queryKey: queryKeys.activity() });
-    showToast("Couldn't update activity — please try again.");
+  const refetch = () => void qc.invalidateQueries({ queryKey: queryKeys.activity() });
+  return {
+    onSuccess: (_data: unknown, _vars: unknown, ctx: ActivityWriteContext | undefined) => {
+      if (ctx?.cancelledRead) refetch();
+    },
+    onError: () => {
+      refetch();
+      showToast("Couldn't update activity — please try again.");
+    },
   };
 }
 
@@ -151,24 +174,24 @@ function useActivityWriteFailed() {
 // unread", and opening a row).
 export function useSetActivityItemsRead() {
   const qc = useQueryClient();
-  const onError = useActivityWriteFailed();
+  const handlers = useActivityWriteHandlers();
   return useMutation({
     mutationFn: ({ ids, read }: { ids: string[]; read: boolean }) =>
       apiFetch<void>('/api/v1/activity/items/read', { method: 'PUT', body: JSON.stringify({ ids, read }) }),
     onMutate: ({ ids, read }) => optimisticActivity(qc, (feed) => markActivityItems(feed, ids, read)),
-    onError,
+    ...handlers,
   });
 }
 
 // useRemoveActivityItems deletes items from the stream ("Remove from activity").
 export function useRemoveActivityItems() {
   const qc = useQueryClient();
-  const onError = useActivityWriteFailed();
+  const handlers = useActivityWriteHandlers();
   return useMutation({
     mutationFn: (ids: string[]) =>
       apiFetch<void>('/api/v1/activity/items/remove', { method: 'POST', body: JSON.stringify({ ids }) }),
     onMutate: (ids) => optimisticActivity(qc, (feed) => removeActivityItems(feed, ids)),
-    onError,
+    ...handlers,
   });
 }
 
@@ -176,10 +199,10 @@ export function useRemoveActivityItems() {
 // the server watermark, and optimistically marks the cached items read.
 export function useMarkActivityRead() {
   const qc = useQueryClient();
-  const onError = useActivityWriteFailed();
+  const handlers = useActivityWriteHandlers();
   return useMutation({
     mutationFn: () => apiFetch<void>('/api/v1/activity/read', { method: 'PUT' }),
     onMutate: () => optimisticActivity(qc, markAllActivityRead),
-    onError,
+    ...handlers,
   });
 }
