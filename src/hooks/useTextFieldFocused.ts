@@ -10,6 +10,9 @@ export function useTextFieldFocused(enabled = true): boolean {
   useEffect(() => {
     if (!enabled) return;
     const update = () => setFocused(isTextField(document.activeElement));
+    // Focus may have moved while disabled (no listeners then): start from
+    // where it is now, not from a stale value.
+    update();
     document.addEventListener('focusin', update);
     document.addEventListener('focusout', update);
     return () => {

@@ -440,67 +440,69 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
             </div>
           )}
 
-          <div role="group" aria-label="Messages">
-            {!showMessageResults && (channelHits.length > 0 || userHits.length > 0) && (
-              <SectionHeader>Messages</SectionHeader>
-            )}
-            {!showMessageResults && suggestions.map((s) => {
-              const flatIndex = items.findIndex(
-                (it) => it.kind === 'message' && it.suggestion === s,
-              );
-              const isHighlighted = flatIndex === safeHighlight;
-              const Icon = s.kind === 'in-scope' ? FileSearch : Search;
-              const scopeNoun =
-                s.kind === 'in-scope'
-                  ? s.scopeKind === 'channel'
-                    ? 'channel'
-                    : s.scopeKind === 'group'
-                      ? 'group'
-                      : 'DM'
-                  : '';
-              const text =
-                s.kind === 'in-scope'
-                  ? `Search messages in this ${scopeNoun} for: `
-                  : `Search messages for: `;
-              return (
-                <button
-                  key={s.kind === 'in-scope' ? `in-${s.scopeKind}` : 'all'}
-                  type="button"
-                  onMouseEnter={() =>
-                    setHighlightKey(`message:${s.kind === 'in-scope' ? `in-${s.scopeKind}` : 'all'}`)
-                  }
-                  onClick={() => activate(flatIndex)}
-                  data-testid={
-                    s.kind === 'in-scope'
-                      ? 'searchbar-show-in-scope'
-                      : 'searchbar-show-results'
-                  }
-                  data-scope-kind={s.kind === 'in-scope' ? s.scopeKind : undefined}
-                  aria-selected={isHighlighted}
-                  className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm mobile:py-3 mobile:text-base ${
-                    isHighlighted ? 'bg-muted' : ''
-                  }`}
-                >
-                  <span className="flex items-center gap-2 truncate">
-                    <Icon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
-                    <span className="truncate">
-                      {text}
-                      <span className="font-semibold">{s.label}</span>
-                      {s.kind === 'in-scope' && (
-                        <span className="text-muted-foreground">
-                          {' '}
-                          in <span className="font-medium">{s.parentLabel}</span>
-                        </span>
-                      )}
+          {/* While the sheet shows message results, they are their own section
+              (below) and this group of "search for…" actions steps aside. */}
+          {!showMessageResults && (
+            <div role="group" aria-label="Messages">
+              {(channelHits.length > 0 || userHits.length > 0) && <SectionHeader>Messages</SectionHeader>}
+              {suggestions.map((s) => {
+                const flatIndex = items.findIndex(
+                  (it) => it.kind === 'message' && it.suggestion === s,
+                );
+                const isHighlighted = flatIndex === safeHighlight;
+                const Icon = s.kind === 'in-scope' ? FileSearch : Search;
+                const scopeNoun =
+                  s.kind === 'in-scope'
+                    ? s.scopeKind === 'channel'
+                      ? 'channel'
+                      : s.scopeKind === 'group'
+                        ? 'group'
+                        : 'DM'
+                    : '';
+                const text =
+                  s.kind === 'in-scope'
+                    ? `Search messages in this ${scopeNoun} for: `
+                    : `Search messages for: `;
+                return (
+                  <button
+                    key={s.kind === 'in-scope' ? `in-${s.scopeKind}` : 'all'}
+                    type="button"
+                    onMouseEnter={() =>
+                      setHighlightKey(`message:${s.kind === 'in-scope' ? `in-${s.scopeKind}` : 'all'}`)
+                    }
+                    onClick={() => activate(flatIndex)}
+                    data-testid={
+                      s.kind === 'in-scope'
+                        ? 'searchbar-show-in-scope'
+                        : 'searchbar-show-results'
+                    }
+                    data-scope-kind={s.kind === 'in-scope' ? s.scopeKind : undefined}
+                    aria-selected={isHighlighted}
+                    className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm mobile:py-3 mobile:text-base ${
+                      isHighlighted ? 'bg-muted' : ''
+                    }`}
+                  >
+                    <span className="flex items-center gap-2 truncate">
+                      <Icon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                      <span className="truncate">
+                        {text}
+                        <span className="font-semibold">{s.label}</span>
+                        {s.kind === 'in-scope' && (
+                          <span className="text-muted-foreground">
+                            {' '}
+                            in <span className="font-medium">{s.parentLabel}</span>
+                          </span>
+                        )}
+                      </span>
                     </span>
-                  </span>
-                  {isHighlighted && (
-                    <kbd className="rounded border bg-muted px-1.5 py-0.5 text-xs mobile:hidden">Enter</kbd>
-                  )}
-                </button>
-              );
-            })}
-          </div>
+                    {isHighlighted && (
+                      <kbd className="rounded border bg-muted px-1.5 py-0.5 text-xs mobile:hidden">Enter</kbd>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
       {showMessageResults && submitted && (
@@ -578,15 +580,15 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
   );
 }
 
-// searchPageHref links the full search page for a query, scoped to a channel or
-// conversation when one is given — landing directly on the tab that matches
-// the scope (channels → "messages"; DMs/groups → "dms", the tab filtered to
-// parentType=conversation), skipping All's noise from Channels/People.
 interface SearchScope {
   parentId: string;
   scopeKind: ScopeKind;
 }
 
+// searchPageHref links the full search page for a query, scoped to a channel or
+// conversation when one is given — landing directly on the tab that matches
+// the scope (channels → "messages"; DMs/groups → "dms", the tab filtered to
+// parentType=conversation), skipping All's noise from Channels/People.
 function searchPageHref(q: string, scope?: SearchScope): string {
   const params = new URLSearchParams({ q });
   if (scope) {

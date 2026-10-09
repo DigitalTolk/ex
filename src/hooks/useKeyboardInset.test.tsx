@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
-import { useKeyboardInset, useKeyboardInsetTracker } from './useKeyboardInset';
+import { KEYBOARD_SETTLE_MS, useKeyboardInset, useKeyboardInsetTracker } from './useKeyboardInset';
 
 function Probe() {
   useKeyboardInsetTracker();
@@ -60,8 +60,10 @@ describe('useKeyboardInset', () => {
     expect(root.dataset.keyboardSettling).toBeUndefined();
     keyboard('keyboardWillShow', 300);
     expect(root.dataset.keyboardSettling).toBe('true');
+    // The CSS transition takes its duration from the same constant as the timer.
+    expect(root.style.getPropertyValue('--ex-keyboard-settle')).toBe(`${KEYBOARD_SETTLE_MS}ms`);
     act(() => {
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(KEYBOARD_SETTLE_MS);
     });
     expect(root.dataset.keyboardSettling).toBeUndefined();
     // A resize that doesn't change the inset doesn't start a glide.

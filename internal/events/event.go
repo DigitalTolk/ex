@@ -149,8 +149,8 @@ var ephemeralTypes = map[string]struct{}{
 	// Broker control frames act on live subscriptions only.
 	EventBrokerSubscribe:   {},
 	EventBrokerUnsubscribe: {},
-	// Data-less "refetch your list" nudges; the lists are re-read on
-	// reconnect anyway.
+	// Data-less "refetch your list" nudges; the client re-reads both lists on
+	// reconnect and on replay exhaustion (ChatPage), so a missed one heals.
 	EventScheduledMessagesChanged: {},
 	EventRemindersChanged:         {},
 }

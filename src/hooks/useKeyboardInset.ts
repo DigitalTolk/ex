@@ -25,7 +25,9 @@ function setInset(next: number) {
   root.style.setProperty('--ex-keyboard-inset', `${inset}px`);
   // The app root glides to its new height only while the keyboard moves
   // (data-keyboard-settling, see index.css) — a window resize or the browser
-  // toolbar collapsing must not animate the whole app.
+  // toolbar collapsing must not animate the whole app. The glide's duration
+  // comes from here, so the CSS transition and this timer can't drift apart.
+  root.style.setProperty('--ex-keyboard-settle', `${KEYBOARD_SETTLE_MS}ms`);
   root.dataset.keyboardSettling = 'true';
   window.clearTimeout(settlingTimer);
   settlingTimer = window.setTimeout(() => delete root.dataset.keyboardSettling, KEYBOARD_SETTLE_MS);

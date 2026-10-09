@@ -28,6 +28,11 @@ function Harness({ onDismiss, children }: { onDismiss: () => void; children?: Re
 
 const sheet = () => document.querySelector('[data-testid="popover-portal"][data-mobile-sheet="true"]') as HTMLElement | null;
 
+// A real drag ends in Motion's release animation before onDismiss runs; under
+// the full four-project run that can take well past the default 1s wait (the
+// gesture is fine — the wait ran out). Generous, never hit on a healthy run.
+const DISMISS_WAIT = { timeout: 5000 };
+
 describe('PopoverPortal mobile sheet — real swipe-to-dismiss', () => {
   it('a DOWN swipe past the threshold calls onDismiss', async () => {
     if (window.innerWidth > 767) return; // sheet + drag only on mobile
@@ -38,7 +43,7 @@ describe('PopoverPortal mobile sheet — real swipe-to-dismiss', () => {
     // A real downward drag well past DISMISS_DISTANCE (72px).
     await swipe(sheet()!, { dy: 200, steps: 8, stepMs: 18 });
 
-    await vi.waitFor(() => expect(onDismiss).toHaveBeenCalled());
+    await vi.waitFor(() => expect(onDismiss).toHaveBeenCalled(), DISMISS_WAIT);
   });
 
   it('a small DOWN swipe below the threshold does NOT dismiss', async () => {
@@ -96,7 +101,7 @@ describe('PopoverPortal mobile sheet — real swipe-to-dismiss', () => {
     expect(getComputedStyle(handle).touchAction).toBe('none');
 
     await swipe(handle, { dy: 200, steps: 8, stepMs: 18 });
-    await vi.waitFor(() => expect(onDismiss).toHaveBeenCalled());
+    await vi.waitFor(() => expect(onDismiss).toHaveBeenCalled(), DISMISS_WAIT);
   });
 
   it('a swipe on a short (non-scrollable) swipe-scroll body still dismisses', async () => {
@@ -118,6 +123,6 @@ describe('PopoverPortal mobile sheet — real swipe-to-dismiss', () => {
     const scroller = document.querySelector('[data-testid="short-scroller"]') as HTMLElement;
     await swipe(scroller, { dy: 200, steps: 8, stepMs: 18 });
 
-    await vi.waitFor(() => expect(onDismiss).toHaveBeenCalled());
+    await vi.waitFor(() => expect(onDismiss).toHaveBeenCalled(), DISMISS_WAIT);
   });
 });

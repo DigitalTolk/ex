@@ -1573,7 +1573,6 @@ func TestLeave_PostsSystemMessage(t *testing.T) {
 	}
 }
 
-
 // Archiving removes everyone, so it counts as leaving for each member: their
 // activity items and pending reminders there must not keep showing a channel
 // nobody can open. A member whose removal failed keeps access, so nothing of
@@ -1603,6 +1602,10 @@ func TestArchive_DropsEachMembersActivityAndReminders(t *testing.T) {
 	}
 	if len(reminders.left) != 2 {
 		t.Fatalf("reminder ParentLeft = %v, want both members", reminders.left)
+	}
+	// One call each, carrying everyone — not a goroutine per member.
+	if hooks.calls != 1 || reminders.calls != 1 {
+		t.Fatalf("ParentLeft calls = %d activity / %d reminders, want 1 each", hooks.calls, reminders.calls)
 	}
 
 	failing, channels2, memberships2, _, _ := setupChannelService()

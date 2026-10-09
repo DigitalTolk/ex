@@ -138,7 +138,7 @@ export function tabUnread(feed: ActivityFeed, tab: ActivityTab): number {
 
 export type ActivityDay = 'Today' | 'Yesterday' | 'Earlier';
 
-export function activityDay(createdAt: string, now: Date): ActivityDay {
+function activityDay(createdAt: string, now: Date): ActivityDay {
   const days = calendarDaysAgo(createdAt, now);
   if (days <= 0) return 'Today';
   if (days === 1) return 'Yesterday';

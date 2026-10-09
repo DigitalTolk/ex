@@ -6,9 +6,10 @@
 # top of CLAUDE.md.
 #
 # gitleaks' default rules catch credentials and keys; the rules below catch
-# what a secret scanner doesn't look for. Each rule is exercised by the
-# known-bad fixture in scripts/testdata/claude-md-gate/, so a rule that stops
-# matching fails the gate instead of passing silently.
+# what a secret scanner doesn't look for. The fixtures in
+# scripts/testdata/claude-md-gate/ keep the rules honest: every line of
+# violations.md must be caught (and every rule must fire), and clean.md — real
+# technical writing that looks a bit like a violation — must pass untouched.
 
 title = "CLAUDE.md content gate"
 
@@ -24,7 +25,9 @@ keywords = ["tolk"]
 [[rules]]
 id = "email-address"
 description = "An email address (a real person's or an internal mailbox); use example.com in examples"
-regex = '''[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+'''
+# The domain must end in a letters-only TLD, so package specs like
+# react@18.3.1 or tool@v8.30.1 are not addresses.
+regex = '''[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b'''
 keywords = ["@"]
 [[rules.allowlists]]
 regexTarget = "match"
@@ -38,9 +41,11 @@ keywords = ["http"]
 [[rules.allowlists]]
 regexTarget = "match"
 regexes = [
-  '''^https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:[/.?#,;]|$)''',
-  '''^https?://(?:[a-z0-9-]+\.)*example\.(?:com|org|net)(?:[:/.?#,;]|$)''',
-  '''^https?://(?:www\.)?(?:github\.com|pkg\.go\.dev|go\.dev|developer\.mozilla\.org|w3\.org|react\.dev|tanstack\.com|tailwindcss\.com|base-ui\.com|vitest\.dev|playwright\.dev|redis\.io|docs\.aws\.amazon\.com|datatracker\.ietf\.org|ui\.shadcn\.com|virtuoso\.dev|motion\.dev|zustand\.docs\.pmnd\.rs)(?:[:/.?#,;]|$)''',
+  # The host must END where it should (a path, query, port, punctuation, or
+  # a sentence's final period) — github.com.corp-intranet.net is not github.
+  '''^https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:[/?#,;]|\.?$)''',
+  '''^https?://(?:[a-z0-9-]+\.)*example\.(?:com|org|net)(?::\d+)?(?:[/?#,;]|\.?$)''',
+  '''^https?://(?:www\.)?(?:github\.com|pkg\.go\.dev|go\.dev|developer\.mozilla\.org|w3\.org|react\.dev|tanstack\.com|tailwindcss\.com|base-ui\.com|vitest\.dev|playwright\.dev|redis\.io|docs\.aws\.amazon\.com|datatracker\.ietf\.org|ui\.shadcn\.com|virtuoso\.dev|motion\.dev|zustand\.docs\.pmnd\.rs)(?:[/?#,;]|\.?$)''',
 ]
 
 [[rules]]
@@ -70,9 +75,14 @@ regex = '''\b(?:19|20)?\d{6}[-+]\d{4}\b'''
 [[rules]]
 id = "money-amount"
 description = "A money amount — prices, revenue and costs are business information"
-regex = '''(?i)\b\d[\d.,]*\s?(?:sek|kr|eur|usd|gbp|€|\$)(?:\W|$)|[€£]\s?\d|\$\s?\d[\d.,]*\s?(?:k|m|bn)?\b'''
+# A dollar sign counts only before a real amount ($99, $4.50) — not the
+# $1 / $2 of shell, awk and regex replacement syntax. The match includes the
+# space or bracket before it: gitleaks' default allowlist skips a match that
+# is exactly "$" + digits (template variables), which would hide "$49".
+regex = '''(?i)\b\d[\d.,]*\s?(?:sek|kr|eur|usd|gbp|€|\$)(?:\W|$)|[€£]\s?\d|(?:^|[\s(])\$\s?(?:\d{2,}|\d+[.,]\d+)'''
 
 [[rules]]
 id = "confidentiality-marker"
 description = "Text marked confidential/internal — a sign of pasted business material"
-regex = '''(?i)\b(?:confidential|internal use only|do not (?:share|distribute|forward)|under nda|trade secret|proprietary and confidential)\b'''
+# Marker phrases, not the bare word — "confidential client" is an OAuth term.
+regex = '''(?i)\b(?:(?:strictly|company) confidential\b|confidential:|confidential information\b|(?:for )?internal use only\b|do not (?:share|distribute|forward)\b|under nda\b|trade secrets?\b|proprietary and confidential\b)'''

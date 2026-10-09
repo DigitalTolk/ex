@@ -138,19 +138,29 @@ func (s *ReminderService) changed(ctx context.Context, userID string) {
 // told. A failure is logged — the due-time checks in fire still keep a
 // reminder from alerting about a message its owner can no longer see.
 
-// ParentLeft cancels userID's pending reminders in a channel or conversation
-// they can no longer read (they left, were removed, or it was archived).
-func (s *ReminderService) ParentLeft(ctx context.Context, userID, parentID string) {
-	s.detached(ctx, func(bg context.Context) {
-		n, err := s.store.CancelRemindersForParent(bg, userID, parentID)
-		if err != nil {
-			slog.Warn("reminder parent cleanup failed", "userID", userID, "parentID", parentID, "error", err)
-			return
-		}
-		if n > 0 {
-			s.changed(bg, userID)
+// ParentLeft cancels the pending reminders of users who can no longer read a
+// channel or conversation (they left, were removed, or it was archived). One
+// goroutine works through the users in turn, so archiving a large channel
+// doesn't start one per member.
+func (s *ReminderService) ParentLeft(ctx context.Context, userIDs []string, parentID string) {
+	safe.Go(func() {
+		for _, userID := range userIDs {
+			s.parentLeft(ctx, userID, parentID)
 		}
 	})
+}
+
+func (s *ReminderService) parentLeft(ctx context.Context, userID, parentID string) {
+	bg, cancel := detachedContext(ctx)
+	defer cancel()
+	n, err := s.store.CancelRemindersForParent(bg, userID, parentID)
+	if err != nil {
+		slog.Warn("reminder parent cleanup failed", "userID", userID, "parentID", parentID, "error", err)
+		return
+	}
+	if n > 0 {
+		s.changed(bg, userID)
+	}
 }
 
 // MessagesDeleted cancels every pending reminder about deleted messages,
@@ -172,11 +182,21 @@ func (s *ReminderService) MessagesDeleted(ctx context.Context, parentID, _ strin
 }
 
 // MessageEdited gives every pending reminder about an edited message its new
-// preview — text edited out must not live on in a reminder.
+// preview — text edited out must not live on in a reminder. The message is
+// read again on the hook's own goroutine, so two quick edits whose hooks run
+// out of order both write the latest text rather than the last hook winning.
+// A message that is gone by then is left to the delete hook.
 func (s *ReminderService) MessageEdited(ctx context.Context, msg *model.Message, _ string) {
-	msgID, preview := msg.ID, messagePreview(msg)
+	msgID, parentID := msg.ID, msg.ParentID
 	s.detached(ctx, func(bg context.Context) {
-		owners, err := s.store.UpdateReminderPreview(bg, msgID, preview)
+		current, err := s.messages.GetMessage(bg, parentID, msgID)
+		if err != nil || current.Deleted {
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				slog.Warn("reminder edit sync: message read failed", "messageID", msgID, "error", err)
+			}
+			return
+		}
+		owners, err := s.store.UpdateReminderPreview(bg, msgID, messagePreview(current))
 		if err != nil {
 			slog.Warn("reminder edit sync failed", "messageID", msgID, "error", err)
 			return

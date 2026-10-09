@@ -152,10 +152,11 @@ async function optimisticActivity(qc: QueryClient, fn: (feed: ActivityFeed) => A
   return { cancelledRead };
 }
 
-// A successful write needs no refetch of its own: the server answers every
-// activity write with an activity.read event carrying the change, which every
-// tab (this one included) applies. It re-runs only a read it cancelled. A
-// failed write undoes its optimistic patch by refetching, and says so.
+// A successful write needs no refetch of its own: when a write changes
+// anything, the server answers with an activity.read event carrying the
+// change, which every tab (this one included) applies. It re-runs only a read
+// it cancelled. A failed write undoes its optimistic patch by refetching, and
+// says so.
 function useActivityWriteHandlers() {
   const qc = useQueryClient();
   const refetch = () => void qc.invalidateQueries({ queryKey: queryKeys.activity() });
@@ -196,7 +197,10 @@ export function useRemoveActivityItems() {
 }
 
 // useMarkActivityRead marks every item read ("Mark all as read") by advancing
-// the server watermark, and optimistically marks the cached items read.
+// the server watermark, and optimistically marks the cached items read. Unlike
+// the per-item writes it always re-reads once it lands: the {all} echo marks
+// every cached item read, including one that arrived after the watermark was
+// taken — only the server knows which items it actually covered.
 export function useMarkActivityRead() {
   const qc = useQueryClient();
   const handlers = useActivityWriteHandlers();
@@ -204,5 +208,6 @@ export function useMarkActivityRead() {
     mutationFn: () => apiFetch<void>('/api/v1/activity/read', { method: 'PUT' }),
     onMutate: () => optimisticActivity(qc, markAllActivityRead),
     ...handlers,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.activity() }),
   });
 }

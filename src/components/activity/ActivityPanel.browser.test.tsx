@@ -51,10 +51,16 @@ interface Api {
 function mockApi({ items = [], reminders = [], pending = false }: Api) {
   const unreadByType: Record<string, number> = {};
   for (const i of items) if (!i.read) unreadByType[i.type] = (unreadByType[i.type] ?? 0) + 1;
-  const feed = { items, unread: items.filter((i) => !i.read).length, unreadByType };
+  let feed = { items, unread: items.filter((i) => !i.read).length, unreadByType };
   vi.mocked(apiFetch).mockImplementation(async (path: string) => {
     if (pending) return new Promise(() => {});
     if (path === '/api/v1/activity') return feed;
+    // Like the server, "mark all as read" changes what the next read returns —
+    // the client re-reads the feed after it.
+    if (path === '/api/v1/activity/read') {
+      feed = { items: feed.items.map((i) => ({ ...i, read: true })), unread: 0, unreadByType: {} };
+      return undefined;
+    }
     if (path === '/api/v1/reminders') return reminders;
     if (path === '/api/v1/channels') return CHANNELS;
     if (path === '/api/v1/conversations') return CONVERSATIONS;
@@ -374,6 +380,10 @@ describe('ActivityPanel', () => {
     await screen.getByTestId('activity-mark-all-read').click();
     await vi.waitFor(() => expect(calls('/api/v1/activity/read')).toHaveLength(1));
     await vi.waitFor(() => expect(rows()[0].getAttribute('data-unread')).toBe('false'));
+    // …and re-reads the feed once the write lands, so the server decides what
+    // it actually covered.
+    await vi.waitFor(() => expect(calls('/api/v1/activity').length).toBeGreaterThanOrEqual(2));
+    expect(rows()[0].getAttribute('data-unread')).toBe('false');
   });
 
   // "Mark all as read" on a tab clears that tab only — it used to advance the

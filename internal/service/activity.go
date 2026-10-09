@@ -326,21 +326,29 @@ func (s *ActivityService) MarkParentRead(ctx context.Context, userID, parentID, 
 	}
 }
 
-// ParentLeft drops a channel's or conversation's items from a user's stream
-// once they can no longer read it (they left or were removed).
-func (s *ActivityService) ParentLeft(ctx context.Context, userID, parentID string) {
+// ParentLeft drops a channel's or conversation's items from the streams of
+// users who can no longer read it (they left, were removed, or it was
+// archived). One goroutine works through the users in turn, so archiving a
+// large channel doesn't start one per member.
+func (s *ActivityService) ParentLeft(ctx context.Context, userIDs []string, parentID string) {
 	safe.Go(func() {
-		bg, cancel := detachedContext(ctx)
-		defer cancel()
-		removed, err := s.store.RemoveActivityForParent(bg, userID, parentID)
-		if err != nil {
-			slog.Warn("activity parent cleanup failed", "userID", userID, "parentID", parentID, "error", err)
-			return
-		}
-		if len(removed) > 0 {
-			s.publishChanged(bg, userID, model.ActivityChangedEvent{Removed: removed})
+		for _, userID := range userIDs {
+			s.parentLeft(ctx, userID, parentID)
 		}
 	})
+}
+
+func (s *ActivityService) parentLeft(ctx context.Context, userID, parentID string) {
+	bg, cancel := detachedContext(ctx)
+	defer cancel()
+	removed, err := s.store.RemoveActivityForParent(bg, userID, parentID)
+	if err != nil {
+		slog.Warn("activity parent cleanup failed", "userID", userID, "parentID", parentID, "error", err)
+		return
+	}
+	if len(removed) > 0 {
+		s.publishChanged(bg, userID, model.ActivityChangedEvent{Removed: removed})
+	}
 }
 
 // MessagesDeleted drops the items about deleted messages from the streams of
