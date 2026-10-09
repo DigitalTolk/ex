@@ -229,13 +229,13 @@ func TestUserStore_ServiceSurface(t *testing.T) {
 		t.Error("expected HasUsers=true")
 	}
 
-	// NotificationSettingsFor
-	settings, err := adapter.NotificationSettingsFor(ctx, []string{"u-adapt-1"})
+	// NotificationAccountsFor
+	accounts, err := adapter.NotificationAccountsFor(ctx, []string{"u-adapt-1"})
 	if err != nil {
-		t.Fatalf("NotificationSettingsFor: %v", err)
+		t.Fatalf("NotificationAccountsFor: %v", err)
 	}
-	if s, ok := settings["u-adapt-1"]; !ok || s.DesktopLevel != model.NotificationLevelMentions {
-		t.Errorf("expected default notification settings, got %+v", settings["u-adapt-1"])
+	if a, ok := accounts["u-adapt-1"]; !ok || a.Settings.DesktopLevel != model.NotificationLevelMentions || a.Machine {
+		t.Errorf("expected default notification settings for a human, got %+v", accounts["u-adapt-1"])
 	}
 }
 

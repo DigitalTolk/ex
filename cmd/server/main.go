@@ -582,10 +582,13 @@ func main() {
 	// Reaction hints land in the message author's activity stream; reminders fire
 	// into it at their due time plus a desktop/mobile alert (NotifyDirect).
 	activitySvc := service.NewActivityService(store.NewRedisActivityStore(redisCache.Client()), redisPubSub)
-	activitySvc.SetChannelResolver(channelSvc) // snapshot channel slug onto reaction activity items
-	messageSvc.SetReactionRecorder(activitySvc)
+	activitySvc.SetChannelResolver(channelSvc)       // snapshot channel slug onto reaction activity items
+	activitySvc.SetMemberLister(messageSvc)          // who holds items about an edited/deleted message
+	messageSvc.SetActivityRecorder(activitySvc)      // reactions, message edits/deletes, mark-unread
 	notificationSvc.SetActivityRecorder(activitySvc) // mentions, thread replies, DMs
-	channelSvc.SetActivityRecorder(activitySvc)      // "added you to #channel"
+	channelSvc.SetActivityRecorder(activitySvc)      // "added you to ~channel", leaving, reading
+	convSvc.SetActivityTracker(activitySvc)          // reading a conversation reads its items
+	userStateSvc.SetActivityTracker(activitySvc)     // seeing a thread reads its items
 	reminderStore := store.NewRedisReminderStore(redisCache.Client())
 	reminderSvc := service.NewReminderService(reminderStore, messageStore, messageSvc)
 	reminderSvc.SetDelivery(activitySvc, notificationSvc)
