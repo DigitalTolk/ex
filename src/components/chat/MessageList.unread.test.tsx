@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { createElement, forwardRef, useImperativeHandle, type ComponentType, type ReactNode, type Ref } from 'react';
 import { MessageList } from './MessageList';
-import { endReadSession, getUnreadAnchor, isAtLiveTail, noteMissedArrival, setAtBottom, setUnreadAnchor } from '@/lib/read-position';
+import { endReadSession, getUnreadAnchor, isAtLiveTail, noteMissedArrival, setAtBottom, setUnreadAnchor, isUnreadSeen } from '@/lib/read-position';
 import { queryKeys } from '@/lib/query-keys';
 import type { Message } from '@/types';
 
@@ -338,6 +338,58 @@ describe('MessageList window opened from a link', () => {
     frames();
     expect(getUnreadAnchor('ch-1')).toEqual({ kind: 'count', count: 3 });
     expect(screen.queryByTestId('unread-divider')).toBeNull();
+  });
+});
+
+describe('MessageList unread line retires', () => {
+  it('once the line has been seen (the divider reports it) the banner goes and the row stays, invisible', () => {
+    type IOCallback = (entries: Array<{ isIntersecting: boolean }>) => void;
+    const callbacks: IOCallback[] = [];
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(cb: IOCallback) { callbacks.push(cb); }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+      takeRecords() { return []; }
+    });
+    try {
+      setUnreadAnchor('ch-1', { kind: 'message', messageID: 'm-04' });
+      geo.lineTop = -300; // above the view: the banner is up
+      renderList();
+      frames();
+      expect(screen.getByTestId('unread-banner')).toBeInTheDocument();
+      act(() => callbacks[0]([{ isIntersecting: true }]));
+      act(() => vi.advanceTimersByTime(3500));
+      expect(isUnreadSeen('ch-1')).toBe(true);
+      expect(screen.queryByTestId('unread-banner')).toBeNull();
+      expect(screen.getByTestId('unread-divider')).toHaveAttribute('data-retired', 'true');
+      expect(lineAbove()).toContain('message 4');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('MessageList row memo and thread meta', () => {
+  it('re-renders a root only when its thread meta really changes', () => {
+    const reply = (n: number, authorID: string) => msg(n, { parentMessageID: 'm-05', authorID });
+    const withRoot = (items: Message[], replyCount: number) =>
+      items.map((m) => (m.id === 'm-05' ? { ...m, replyCount } : m));
+    const view = renderList({ pages: [{ items: withRoot(pageOf(1, 10).items, 0) }] });
+    frames();
+    expect(screen.queryByTestId('thread-action-bar')).toBeNull();
+    // A first reply: the root gains thread meta (entry appears).
+    view.rerenderList({ pages: [{ items: [reply(11, 'u-3'), ...withRoot(pageOf(1, 10).items, 1)] }] });
+    frames();
+    expect(screen.getByTestId('thread-action-bar')).toHaveTextContent('1 reply');
+    // An unrelated message: the meta Map is rebuilt with the same entry, which must not count as a change.
+    view.rerenderList({ pages: [{ items: [msg(12), reply(11, 'u-3'), ...withRoot(pageOf(1, 10).items, 1)] }] });
+    frames();
+    expect(screen.getByTestId('thread-action-bar')).toHaveTextContent('1 reply');
+    // A second reply from someone else: authors and last-reply time change.
+    view.rerenderList({ pages: [{ items: [reply(13, 'u-4'), msg(12), reply(11, 'u-3'), ...withRoot(pageOf(1, 10).items, 2)] }] });
+    frames();
+    expect(screen.getByTestId('thread-action-bar')).toHaveTextContent('2 replies');
   });
 });
 

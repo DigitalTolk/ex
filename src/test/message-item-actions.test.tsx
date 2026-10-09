@@ -286,8 +286,26 @@ describe('MessageItem - hover bar and avatar', () => {
     fireEvent.mouseEnter(row);
     const toolbar = document.querySelector('[role="toolbar"][aria-label="Message actions"]') as HTMLElement;
     expect(toolbar.getAttribute('data-actions-visible')).toBe('true');
-    expect(toolbar.style.opacity).toBe('1');
     fireEvent.mouseLeave(row);
+    expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
+  });
+
+  it('focus inside the row mounts the toolbar; focus leaving the row unmounts it, moving within it does not', () => {
+    renderWithProviders(
+      <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} />,
+    );
+    const row = document.querySelector('[data-message-id]') as HTMLElement;
+    fireEvent.mouseLeave(row);
+    expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
+    fireEvent.focus(row);
+    const toolbar = document.querySelector('[role="toolbar"][aria-label="Message actions"]') as HTMLElement;
+    expect(toolbar).not.toBeNull();
+    // Focus moving to a control inside the row keeps it.
+    const inside = toolbar.querySelector('button') as HTMLElement;
+    fireEvent.blur(row, { relatedTarget: inside });
+    expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).not.toBeNull();
+    // Focus leaving the row (nowhere, or elsewhere) drops it.
+    fireEvent.blur(row, { relatedTarget: null });
     expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
   });
 
@@ -295,8 +313,8 @@ describe('MessageItem - hover bar and avatar', () => {
     // Bug: clicking the kebab made the toolbar vanish instantly because
     // Radix's open dropdown changes pointer-events / focus management,
     // which broke Tailwind group-hover. The fix tracks visibility in
-    // JS state (visible = hovered || actionsMenuOpen) and renders an
-    // inline opacity style — no CSS variants in the critical path.
+    // JS state (visible = hovered || actionsMenuOpen); the toolbar is
+    // mounted only while visible — no CSS variants in the critical path.
     renderWithProviders(
       <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} />,
     );
@@ -306,13 +324,11 @@ describe('MessageItem - hover bar and avatar', () => {
     const toolbar = document.querySelector('[role="toolbar"][aria-label="Message actions"]') as HTMLElement;
     expect(toolbar.getAttribute('data-actions-pinned')).toBe('true');
     expect(toolbar.getAttribute('data-actions-visible')).toBe('true');
-    expect(toolbar.style.opacity).toBe('1');
 
     // The cursor leaving the row (e.g. moving to the menu portal) must
     // NOT hide the toolbar while the menu is open.
     fireEvent.mouseLeave(row);
     expect(toolbar.getAttribute('data-actions-visible')).toBe('true');
-    expect(toolbar.style.opacity).toBe('1');
   });
 
   it('renders the kebab DropdownMenu with modal={false}', () => {
