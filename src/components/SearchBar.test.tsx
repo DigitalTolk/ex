@@ -32,6 +32,8 @@ vi.mock('@/hooks/useConversations', () => ({
   useOpenDM: () => ({ openDM: openDMMock, isPending: false }),
 }));
 vi.mock('@/hooks/useSearch', () => ({
+  // The sheet variant's message search; unused by the top-bar field.
+  useSearchMessages: () => ({ data: undefined, isLoading: false }),
   useSearchUsers: (...args: unknown[]) => useSearchUsersMock(...(args as [])),
   useSearchChannels: (...args: unknown[]) => useSearchChannelsMock(...(args as [])),
 }));

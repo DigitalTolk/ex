@@ -8,7 +8,10 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/pubsub"
+	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -30,6 +33,21 @@ type ReminderStore interface {
 	CancelReminder(ctx context.Context, userID, id string) (bool, error)
 	ListPendingReminders(ctx context.Context, userID string) ([]*model.Reminder, error)
 	ClaimDueReminders(ctx context.Context, limit int) ([]*model.Reminder, error)
+	// CancelRemindersForParent returns how many it cancelled;
+	// CancelRemindersForMessages and UpdateReminderPreview return the owners
+	// whose reminders they touched.
+	CancelRemindersForParent(ctx context.Context, userID, parentID string) (int, error)
+	CancelRemindersForMessages(ctx context.Context, messageIDs []string) ([]string, error)
+	UpdateReminderPreview(ctx context.Context, messageID, preview string) ([]string, error)
+	// CancelAllRemindersForUser drops every reminder a user has queued, due or
+	// not, returning how many there were.
+	CancelAllRemindersForUser(ctx context.Context, userID string) (int, error)
+}
+
+// ReminderOwnerLookup resolves reminder owners, so a deactivated owner's
+// reminders are dropped instead of fired. Implemented by the user store.
+type ReminderOwnerLookup interface {
+	GetUsersByIDs(ctx context.Context, ids []string) ([]*model.User, error)
 }
 
 // ReminderMessageStore loads the source message so a reminder can carry a preview
@@ -70,6 +88,8 @@ type ReminderService struct {
 	access   ReminderAccessChecker
 	activity ActivityAdder
 	notifier DirectNotifier
+	events   Publisher
+	owners   ReminderOwnerLookup
 	now      func() time.Time
 }
 
@@ -84,6 +104,117 @@ func NewReminderService(s ReminderStore, messages ReminderMessageStore, access R
 func (s *ReminderService) SetDelivery(activity ActivityAdder, notifier DirectNotifier) {
 	s.activity = activity
 	s.notifier = notifier
+}
+
+// SetPublisher wires the reminders.changed event, so every tab and device
+// keeps its pending list current.
+func (s *ReminderService) SetPublisher(p Publisher) { s.events = p }
+
+// SetOwnerLookup wires the owner check that drops a deactivated user's
+// reminders when they come due — no alert, no mobile push job.
+func (s *ReminderService) SetOwnerLookup(o ReminderOwnerLookup) { s.owners = o }
+
+// CancelAllForUser stops every reminder a user has queued — on deactivation,
+// so nothing is left to come due for an account that can't sign in.
+func (s *ReminderService) CancelAllForUser(ctx context.Context, userID string) error {
+	n, err := s.store.CancelAllRemindersForUser(ctx, userID)
+	if n > 0 {
+		slog.Info("reminders cancelled for deactivated user", "userID", userID, "count", n)
+	}
+	return err
+}
+
+// changed tells userID's tabs and devices to refetch their pending reminders.
+func (s *ReminderService) changed(ctx context.Context, userID string) {
+	if s.events != nil {
+		events.Publish(ctx, s.events, pubsub.UserChannel(userID), events.EventRemindersChanged, map[string]any{})
+	}
+}
+
+// A pending reminder carries a copy of its message's text, so losing access to
+// the channel, or the message being deleted or edited, has to reach it. The
+// channel and message services call these hooks (as they call the activity
+// ones); the Redis work runs off the request path and each touched owner is
+// told. A failure is logged — the due-time checks in fire still keep a
+// reminder from alerting about a message its owner can no longer see.
+
+// ParentLeft cancels the pending reminders of users who can no longer read a
+// channel or conversation (they left, were removed, or it was archived). One
+// goroutine works through the users in turn, so archiving a large channel
+// doesn't start one per member.
+func (s *ReminderService) ParentLeft(ctx context.Context, userIDs []string, parentID string) {
+	safe.Go(func() {
+		for _, userID := range userIDs {
+			s.parentLeft(ctx, userID, parentID)
+		}
+	})
+}
+
+func (s *ReminderService) parentLeft(ctx context.Context, userID, parentID string) {
+	bg, cancel := detachedContext(ctx)
+	defer cancel()
+	n, err := s.store.CancelRemindersForParent(bg, userID, parentID)
+	if err != nil {
+		slog.Warn("reminder parent cleanup failed", "userID", userID, "parentID", parentID, "error", err)
+		return
+	}
+	if n > 0 {
+		s.changed(bg, userID)
+	}
+}
+
+// MessagesDeleted cancels every pending reminder about deleted messages,
+// whoever set it.
+func (s *ReminderService) MessagesDeleted(ctx context.Context, parentID, _ string, messageIDs []string) {
+	if len(messageIDs) == 0 {
+		return
+	}
+	s.detached(ctx, func(bg context.Context) {
+		owners, err := s.store.CancelRemindersForMessages(bg, messageIDs)
+		if err != nil {
+			slog.Warn("reminder delete sync failed", "parentID", parentID, "error", err)
+			return
+		}
+		for _, userID := range owners {
+			s.changed(bg, userID)
+		}
+	})
+}
+
+// MessageEdited gives every pending reminder about an edited message its new
+// preview — text edited out must not live on in a reminder. The message is
+// read again on the hook's own goroutine, so two quick edits whose hooks run
+// out of order both write the latest text rather than the last hook winning.
+// A message that is gone by then is left to the delete hook.
+func (s *ReminderService) MessageEdited(ctx context.Context, msg *model.Message, _ string) {
+	msgID, parentID := msg.ID, msg.ParentID
+	s.detached(ctx, func(bg context.Context) {
+		current, err := s.messages.GetMessage(bg, parentID, msgID)
+		if err != nil || current.Deleted {
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				slog.Warn("reminder edit sync: message read failed", "messageID", msgID, "error", err)
+			}
+			return
+		}
+		owners, err := s.store.UpdateReminderPreview(bg, msgID, messagePreview(current))
+		if err != nil {
+			slog.Warn("reminder edit sync failed", "messageID", msgID, "error", err)
+			return
+		}
+		for _, userID := range owners {
+			s.changed(bg, userID)
+		}
+	})
+}
+
+// detached runs fn on its own goroutine with a context that outlives the
+// request (bounded by detachedTimeout).
+func (s *ReminderService) detached(ctx context.Context, fn func(context.Context)) {
+	safe.Go(func() {
+		bg, cancel := detachedContext(ctx)
+		defer cancel()
+		fn(bg)
+	})
 }
 
 // Schedule validates and persists a reminder for userID.
@@ -105,6 +236,11 @@ func (s *ReminderService) Schedule(ctx context.Context, userID string, in Remind
 	if err != nil {
 		return nil, fmt.Errorf("reminder: message: %w", err)
 	}
+	// A message deleted while the menu was open: say so now (404) rather than
+	// confirm a reminder that would be dropped silently when it comes due.
+	if msg.Deleted {
+		return nil, fmt.Errorf("reminder: message deleted: %w", store.ErrNotFound)
+	}
 	r := &model.Reminder{
 		ID:         store.NewID(),
 		UserID:     userID,
@@ -115,13 +251,14 @@ func (s *ReminderService) Schedule(ctx context.Context, userID string, in Remind
 		// reply only renders inside its thread, so the deep link needs it.
 		ParentMessageID: msg.ParentMessageID,
 		ChannelSlug:     in.ChannelSlug,
-		MessagePreview:  activityPreview(msg.Body),
+		MessagePreview:  messagePreview(msg),
 		RemindAt:        in.RemindAt,
 		CreatedAt:       now,
 	}
 	if err := s.store.ScheduleReminder(ctx, r); err != nil {
 		return nil, err
 	}
+	s.changed(ctx, userID)
 	return r, nil
 }
 
@@ -140,27 +277,72 @@ func (s *ReminderService) Cancel(ctx context.Context, userID, id string) error {
 	if !ok {
 		return store.ErrNotFound
 	}
+	s.changed(ctx, userID)
 	return nil
 }
 
 // ProcessDue claims and fires every reminder due at or before now. Returns the
-// number claimed (a reminder its owner can no longer open is claimed but not
-// delivered). Safe to call concurrently across instances — claiming is atomic.
+// number claimed (a reminder its owner can no longer open, or whose owner was
+// deactivated, is claimed but not delivered). Safe to call concurrently across
+// instances — claiming is atomic.
+//
+// Every owner whose reminder left the queue is told their pending list
+// changed, whether it fired or was dropped — an open Activity panel would
+// otherwise keep listing it as scheduled.
 func (s *ReminderService) ProcessDue(ctx context.Context) (int, error) {
-	fired := 0
+	claimed := 0
 	for {
 		due, err := s.store.ClaimDueReminders(ctx, reminderClaimBatch)
 		if err != nil {
-			return fired, fmt.Errorf("reminder: claim due: %w", err)
+			return claimed, fmt.Errorf("reminder: claim due: %w", err)
 		}
+		deactivated := s.deactivatedOwners(ctx, due)
+		owners := map[string]bool{}
 		for _, r := range due {
+			claimed++
+			if deactivated[r.UserID] {
+				slog.Info("reminder dropped: owner deactivated", "userID", r.UserID, "reminderID", r.ID)
+				continue
+			}
 			s.fire(ctx, r)
-			fired++
+			owners[r.UserID] = true
+		}
+		for userID := range owners {
+			s.changed(ctx, userID)
 		}
 		if len(due) < reminderClaimBatch {
-			return fired, nil
+			return claimed, nil
 		}
 	}
+}
+
+// deactivatedOwners reports which of a batch's owners are deactivated, in one
+// batched lookup. A failed lookup reports none — the reminders fire, since a
+// lost reminder is worse than one sent to an account that can't read it.
+func (s *ReminderService) deactivatedOwners(ctx context.Context, due []*model.Reminder) map[string]bool {
+	if s.owners == nil || len(due) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	ids := make([]string, 0, len(due))
+	for _, r := range due {
+		if !seen[r.UserID] {
+			seen[r.UserID] = true
+			ids = append(ids, r.UserID)
+		}
+	}
+	users, err := s.owners.GetUsersByIDs(ctx, ids)
+	if err != nil {
+		slog.Warn("reminder owner lookup failed", "error", err)
+		return nil
+	}
+	out := map[string]bool{}
+	for _, u := range users {
+		if u.Status == "deactivated" {
+			out[u.ID] = true
+		}
+	}
+	return out
 }
 
 // fire delivers a claimed reminder: an activity-stream entry plus a desktop +
@@ -173,6 +355,19 @@ func (s *ReminderService) fire(ctx context.Context, r *model.Reminder) {
 	if err := s.access.CheckAccess(ctx, r.UserID, r.ParentID, r.ParentType); errors.Is(err, ErrForbidden) {
 		slog.Info("reminder dropped: owner no longer has access", "userID", r.UserID, "parentID", r.ParentID)
 		return
+	}
+	// The message as it is now: one deleted since drops the reminder, an
+	// edited one fires with its current text. This also covers reminders the
+	// delete/edit sync never reached (set before the message index existed, or
+	// its run failed). A failed read fires with the stored preview — a lost
+	// reminder is worse than a stale one.
+	msg, err := s.messages.GetMessage(ctx, r.ParentID, r.MessageID)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && msg.Deleted) {
+		slog.Info("reminder dropped: message deleted", "userID", r.UserID, "messageID", r.MessageID)
+		return
+	}
+	if err == nil {
+		r.MessagePreview = messagePreview(msg)
 	}
 	now := s.now()
 	if s.activity != nil {

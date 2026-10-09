@@ -592,6 +592,11 @@ func main() {
 	reminderStore := store.NewRedisReminderStore(redisCache.Client())
 	reminderSvc := service.NewReminderService(reminderStore, messageStore, messageSvc)
 	reminderSvc.SetDelivery(activitySvc, notificationSvc)
+	reminderSvc.SetPublisher(redisPubSub)     // reminders.changed: every device keeps its pending list current
+	channelSvc.SetReminderSync(reminderSvc)   // losing a channel takes its pending reminders
+	messageSvc.SetReminderSync(reminderSvc)   // deleting/editing a message reaches its reminders
+	reminderSvc.SetOwnerLookup(userStore)     // a deactivated owner's reminders are dropped when due, never sent
+	userSvc.SetReminderCanceller(reminderSvc) // deactivating an account stops all its reminders at once
 	activityH := handler.NewActivityHandler(activitySvc, reminderSvc)
 	// Scheduled messages: composed now, posted at their time through the
 	// normal send path (notifications included).

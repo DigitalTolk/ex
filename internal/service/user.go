@@ -49,6 +49,13 @@ type UserService struct {
 	// of re-downloading on every render that hits a fresh signature.
 	urlCache   *presignedURLCache
 	mediaCache MediaURLCache
+	reminders  ReminderCanceller
+}
+
+// ReminderCanceller stops a deactivated user's queued reminders. Implemented by
+// ReminderService.
+type ReminderCanceller interface {
+	CancelAllForUser(ctx context.Context, userID string) error
 }
 
 // NewUserService creates a UserService with the given dependencies.
@@ -76,6 +83,10 @@ func (s *UserService) SetIndexer(i UserIndexer) { s.indexer = i }
 func (s *UserService) SetSearcher(sr UserSearcher) { s.searcher = sr }
 
 func (s *UserService) SetMediaURLCache(c MediaURLCache) { s.mediaCache = c }
+
+// SetReminderCanceller wires reminder cleanup into deactivation, so an account
+// that can no longer sign in leaves no reminders queued to fire.
+func (s *UserService) SetReminderCanceller(r ReminderCanceller) { s.reminders = r }
 
 func (s *UserService) indexUser(ctx context.Context, u *model.User) {
 	indexUser(ctx, s.indexer, u)
@@ -867,6 +878,14 @@ func (s *UserService) applyStatus(ctx context.Context, user *model.User, deactiv
 			"userID": user.ID,
 			"reason": "deactivated",
 		})
+		// Nobody is left to read a reminder: stop them all now rather than
+		// claim, check and drop each one when it comes due. If this fails,
+		// the due-time owner check still drops them.
+		if s.reminders != nil {
+			if err := s.reminders.CancelAllForUser(ctx, user.ID); err != nil {
+				slog.Warn("deactivation: reminder cleanup failed", "userID", user.ID, "error", err)
+			}
+		}
 	}
 
 	events.Publish(ctx, s.publisher, pubsub.UserEvents(), events.EventUserUpdated, map[string]any{

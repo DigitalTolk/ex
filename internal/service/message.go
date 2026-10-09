@@ -101,6 +101,7 @@ type MessageService struct {
 	channelSeq    UnreadSeqStore
 	convSeq       UnreadSeqStore
 	activity      MessageActivityRecorder
+	reminders     MessageReminderSync
 	// agentDispatcher starts agent runs for @mentioned agent users. Optional
 	// seam (SetAgentDispatcher) — nil means agent mentions are inert.
 	agentDispatcher AgentDispatcher
@@ -122,6 +123,14 @@ type MessageActivityRecorder interface {
 	MessagesDeleted(ctx context.Context, parentID, parentType string, messageIDs []string)
 	MessageEdited(ctx context.Context, msg *model.Message, parentType string)
 	ActivityReadTracker
+}
+
+// MessageReminderSync keeps pending reminders (each a copy of a message's text)
+// in step with their message: a deleted message takes its reminders, an edit
+// re-previews them. Implemented by ReminderService.
+type MessageReminderSync interface {
+	MessagesDeleted(ctx context.Context, parentID, parentType string, messageIDs []string)
+	MessageEdited(ctx context.Context, msg *model.Message, parentType string)
 }
 
 // MessageServiceDeps declares the full dependency surface of MessageService
@@ -242,6 +251,9 @@ func (s *MessageService) SetChannelSeqStore(c UnreadSeqStore) { s.channelSeq = c
 
 // SetActivityRecorder wires the Activity tab (see MessageActivityRecorder).
 func (s *MessageService) SetActivityRecorder(r MessageActivityRecorder) { s.activity = r }
+
+// SetReminderSync wires reminder cleanup into message deletes and edits.
+func (s *MessageService) SetReminderSync(r MessageReminderSync) { s.reminders = r }
 
 // SetRunSkillResolver wires the orchestrator's RunSkillBadges: agent-run
 // posts get the run's used-skill names stamped on the message (nil = none).
@@ -1755,8 +1767,13 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 	}
 
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, &edited)
-	if s.activity != nil && edited.Body != msg.Body {
-		s.activity.MessageEdited(ctx, &edited, parentType)
+	if edited.Body != msg.Body {
+		if s.activity != nil {
+			s.activity.MessageEdited(ctx, &edited, parentType)
+		}
+		if s.reminders != nil {
+			s.reminders.MessageEdited(ctx, &edited, parentType)
+		}
 	}
 
 	s.indexMessage(ctx, &edited, parentType)
@@ -1808,6 +1825,9 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 	}
 	if s.activity != nil {
 		s.activity.MessagesDeleted(ctx, parentID, parentType, deleted)
+	}
+	if s.reminders != nil {
+		s.reminders.MessagesDeleted(ctx, parentID, parentType, deleted)
 	}
 
 	// Sweep the agent-run activity logs for this chat: the runs it invoked and

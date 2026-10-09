@@ -2,7 +2,6 @@ import { useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { setAccessToken, apiFetch } from '@/lib/api';
-import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import type { User } from '@/types';
 
@@ -63,7 +62,7 @@ export default function OIDCCallbackPage() {
         try {
           const user = await apiFetch<User>('/api/v1/users/me');
           setAuth(token, user);
-          navigate(`/channel/${GENERAL_CHANNEL_SLUG}`, { replace: true });
+          navigate('/', { replace: true });
           return;
         } catch {
           // fall through to error
@@ -78,7 +77,7 @@ export default function OIDCCallbackPage() {
   }, [navigate, searchParams, setAuth]);
 
   return (
-    <div className="flex min-h-dvh items-center justify-center">
+    <div className="flex h-full items-center justify-center">
       <p className="text-muted-foreground">Completing sign in...</p>
     </div>
   );

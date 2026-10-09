@@ -44,6 +44,9 @@ jobs:
       - name: Wire-type drift (tygo)
         run: make check-types-drift
 
+      - name: CLAUDE.md content gate (technical guidance only)
+        run: make check-claude-md
+
       - name: ESLint
         run: npx eslint src/
 

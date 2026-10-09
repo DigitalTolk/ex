@@ -872,7 +872,7 @@ function MessageItemImpl({
       }}
       // px-3 matches the gap-3 to the text, so the avatar sits balanced:
       // 12px either side of it inside the row (pinned: 2px border + 10px).
-      className={`relative flex items-start gap-3 rounded-md px-3 ${firstInGroup ? 'py-1.5' : 'py-0.5'} hover:bg-chat-hover ${
+      className={`relative flex items-start gap-3 rounded-md px-3 mobile:gap-2 mobile:px-1 ${firstInGroup ? 'py-1.5' : 'py-0.5'} hover:bg-chat-hover ${
         message.pinned ? 'border-l-2 border-pinned pl-2.5' : ''
       } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]`}
       data-pending={pendingState}

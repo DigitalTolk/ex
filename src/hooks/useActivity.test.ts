@@ -5,20 +5,22 @@ import { createElement, type ReactNode } from 'react';
 import {
   applyActivityChangedEvent,
   applyActivityNewEvent,
+  applyRemindersChangedEvent,
   useActivity,
   useReminders,
   useCreateReminder,
   useCancelReminder,
   useMarkActivityRead,
+  useActivityUnread,
   useRemoveActivityItems,
   useSetActivityItemsRead,
 } from './useActivity';
 import { queryKeys } from '@/lib/query-keys';
 import type { ActivityFeed } from '@/types';
 
-vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
+vi.mock('@/lib/api', async (orig) => ({ ...(await orig<object>()), apiFetch: vi.fn() }));
 vi.mock('@/lib/toast', () => ({ showToast: vi.fn() }));
-import { apiFetch } from '@/lib/api';
+import { ApiError, apiFetch } from '@/lib/api';
 import { showToast } from '@/lib/toast';
 
 function makeClient() {
@@ -105,6 +107,45 @@ describe('useActivity hooks', () => {
     expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.reminders() });
   });
 
+  // A reminder that already fired (or was cancelled on another device) answers
+  // 404: the list refreshes and drops it, quietly. Any other failure refreshes
+  // and says so — a cancel that does nothing must not be silent.
+  it('useCancelReminder refreshes the list on failure, toasting only real errors', async () => {
+    const client = makeClient();
+    const spy = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderHook(() => useCancelReminder(), { wrapper: wrapperFor(client) });
+
+    vi.mocked(apiFetch).mockRejectedValueOnce(new ApiError(404, 'reminder not found'));
+    await expect(result.current.mutateAsync('r-fired')).rejects.toThrow();
+    expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.reminders() });
+    expect(showToast).not.toHaveBeenCalled();
+
+    vi.mocked(apiFetch).mockRejectedValueOnce(new ApiError(500, 'boom'));
+    await expect(result.current.mutateAsync('r1')).rejects.toThrow();
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(showToast).toHaveBeenCalledWith("Couldn't cancel the reminder — please try again.");
+  });
+
+  // Regression: a write cancels an in-flight feed read so the stale response
+  // can't undo its patch — but something asked for that read (part of a
+  // channel was read, a message edited, an event arrived mid-fetch), so the
+  // write re-reads once it lands instead of leaving the feed stale.
+  it('re-reads the feed after a write that cancelled an in-flight read', async () => {
+    vi.mocked(apiFetch).mockResolvedValue(undefined);
+    const client = makeClient();
+    client.setQueryData<ActivityFeed>(queryKeys.activity(), { items: [{ id: 'a', read: false } as never], unread: 1, unreadByType: {} });
+    const invalidate = vi.spyOn(client, 'invalidateQueries').mockResolvedValue();
+    const fetching = vi.spyOn(client, 'isFetching').mockReturnValue(1);
+    const { result } = renderHook(() => useSetActivityItemsRead(), { wrapper: wrapperFor(client) });
+    await result.current.mutateAsync({ ids: ['a'], read: true });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.activity() });
+
+    fetching.mockReturnValue(0);
+    invalidate.mockClear();
+    await result.current.mutateAsync({ ids: ['a'], read: false });
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
   it('useMarkActivityRead zeroes the unread count in cache', async () => {
     vi.mocked(apiFetch).mockResolvedValue(undefined);
     const client = makeClient();
@@ -121,19 +162,20 @@ describe('useActivity hooks', () => {
     expect(feed?.items[0].read).toBe(true);
   });
 
-  it('useMarkActivityRead cancels the in-flight activity fetch and reconciles so a stale read cannot clobber the zero', async () => {
+  // Mark-all cancels any in-flight read (it would undo the optimistic zero),
+  // then re-reads once the write lands: an item that arrived after the
+  // server's watermark must come back unread, and only the server knows which.
+  it('useMarkActivityRead cancels the in-flight fetch and re-reads after succeeding', async () => {
     vi.mocked(apiFetch).mockResolvedValue(undefined);
     const client = makeClient();
     const cancelSpy = vi.spyOn(client, 'cancelQueries');
-    const invalidateSpy = vi.spyOn(client, 'invalidateQueries');
+    const invalidateSpy = vi.spyOn(client, 'invalidateQueries').mockResolvedValue();
     client.setQueryData<ActivityFeed>(queryKeys.activity(), { items: [{ id: 'a' } as never], unread: 3, unreadByType: {} });
     const { result } = renderHook(() => useMarkActivityRead(), { wrapper: wrapperFor(client) });
     await result.current.mutateAsync();
-    // In-flight GET is aborted before the optimistic zero so it can't overwrite it.
     expect(cancelSpy).toHaveBeenCalledWith({ queryKey: queryKeys.activity() });
-    // Then a reconciling refetch against the now-advanced server watermark.
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.activity() });
     expect(client.getQueryData<ActivityFeed>(queryKeys.activity())?.unread).toBe(0);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.activity() });
   });
 
   it('useMarkActivityRead is a no-op on an empty cache', async () => {
@@ -144,11 +186,16 @@ describe('useActivity hooks', () => {
     expect(client.getQueryData(queryKeys.activity())).toBeUndefined();
   });
 
-  it('useMarkActivityRead toasts when the write fails', async () => {
+  // A failed write must not leave its optimistic patch behind: it refetches
+  // the server's truth, and says so.
+  it('useMarkActivityRead undoes its patch and toasts when the write fails', async () => {
     vi.mocked(apiFetch).mockRejectedValue(new Error('500'));
-    const { result } = renderHook(() => useMarkActivityRead(), { wrapper: wrapperFor(makeClient()) });
+    const client = makeClient();
+    const invalidateSpy = vi.spyOn(client, 'invalidateQueries').mockResolvedValue();
+    const { result } = renderHook(() => useMarkActivityRead(), { wrapper: wrapperFor(client) });
     await expect(result.current.mutateAsync()).rejects.toThrow();
     expect(showToast).toHaveBeenCalledWith("Couldn't update activity — please try again.");
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.activity() });
   });
 
   it('useSetActivityItemsRead PUTs the ids and patches the cache optimistically', async () => {
@@ -170,7 +217,8 @@ describe('useActivity hooks', () => {
       body: JSON.stringify({ ids: ['a'], read: true }),
     });
     resolve();
-    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.activity() }));
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
   it('useSetActivityItemsRead toasts on failure and leaves an empty cache alone', async () => {
@@ -190,8 +238,6 @@ describe('useActivity hooks', () => {
       unread: 1,
       unreadByType: { mention: 1 },
     });
-    // Keep the reconciling refetch from replacing the patched cache.
-    vi.spyOn(client, 'invalidateQueries').mockResolvedValue();
     const { result } = renderHook(() => useRemoveActivityItems(), { wrapper: wrapperFor(client) });
     await result.current.mutateAsync(['a']);
     expect(apiFetch).toHaveBeenCalledWith('/api/v1/activity/items/remove', {
@@ -257,5 +303,27 @@ describe('activity events', () => {
     applyActivityChangedEvent(client, { parentID: 'dm-1' });
     applyActivityChangedEvent(client, null);
     expect(invalidate).toHaveBeenCalledTimes(2);
+  });
+
+  // Reminders set or cancelled elsewhere, fired, or gone with their message
+  // or channel must leave the pending list — without touching the feed.
+  it('reminders.changed reloads the pending reminders and leaves the feed alone', () => {
+    const client = makeClient();
+    client.setQueryData(queryKeys.activity(), seeded());
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    applyRemindersChangedEvent(client);
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.reminders() });
+  });
+});
+
+describe('useActivityUnread', () => {
+  it('is the unread count alone, 0 until the feed loads', async () => {
+    let resolve: (v: unknown) => void = () => {};
+    vi.mocked(apiFetch).mockImplementation(() => new Promise((r) => (resolve = r)) as never);
+    const { result } = renderHook(() => useActivityUnread(), { wrapper: wrapperFor(makeClient()) });
+    expect(result.current).toBe(0);
+    resolve({ items: [], unread: 7, unreadByType: {} });
+    await waitFor(() => expect(result.current).toBe(7));
   });
 });

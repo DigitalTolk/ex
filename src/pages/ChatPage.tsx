@@ -9,7 +9,7 @@ import { useNotifications, type NotificationPayload } from '@/context/Notificati
 import { useTyping } from '@/context/TypingContext';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { setServerVersion } from '@/hooks/useServerVersion';
-import { applyActivityChangedEvent, applyActivityNewEvent } from '@/hooks/useActivity';
+import { applyActivityChangedEvent, applyActivityNewEvent, applyRemindersChangedEvent } from '@/hooks/useActivity';
 import { sendWS } from '@/lib/ws-sender';
 import { localTimeZone } from '@/lib/user-time';
 import { isUserAttentive, suppressionWindowMs } from '@/lib/user-activity';
@@ -132,6 +132,30 @@ export default function ChatPage() {
       setSelfUserID(null);
     };
   }, [user?.id, setCurrentUserID, setSelfUserID]);
+
+  // After a gap in the socket (reconnect, or a replay the server could no
+  // longer serve), refetch what the durable inbox doesn't carry: the list
+  // metadata, and everything driven by ephemeral events — the activity feed
+  // and pending reminders (activity.*, reminders.changed), the Scheduled list,
+  // and presence. resyncMessageCache is the safety net for any message-inbox
+  // gap a replay didn't cover. The refetched channel/conversation lists carry
+  // the authoritative server unread counts, so there's nothing else to reset.
+  const refreshAfterGap = () => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.scheduledMessages() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.activity() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.reminders() });
+    void resyncMessageCache(queryClient);
+    // presence.changed is ephemeral (never replayed): every transition that
+    // happened while disconnected is gone, so refetch the authoritative online
+    // set or the dots drift stale until the next full re-auth.
+    refreshPresence();
+  };
 
   useWebSocket({
     onMessageNew: (data: unknown) => {
@@ -362,6 +386,11 @@ export default function ChatPage() {
       // An item landed in the activity stream — add it from the payload so the
       // sidebar badge + list update without refetching the whole feed.
       applyActivityNewEvent(queryClient, data);
+    },
+    onRemindersChanged: () => {
+      // A reminder was set or cancelled (here or on another device), fired, or
+      // went with its message or channel — refetch the pending list.
+      applyRemindersChangedEvent(queryClient);
     },
     onScheduledMessagesChanged: () => {
       // Scheduled, edited, sent or failed on another tab/device (or by the
@@ -655,39 +684,9 @@ export default function ChatPage() {
         deepLink,
       });
     },
-    onReconnect: () => {
-      // Refresh non-infinite peripheral lists outright. With server
-      // replay enabled, message events arrive via the durable inbox,
-      // but list metadata (channels/threads/drafts/members) isn't in
-      // the inbox so we refetch it. resyncMessageCache stays as a
-      // safety net for any inbox gap a replay didn't cover.
-      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.scheduledMessages() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
-      // The refetched userChannels/userConversations carry authoritative server
-      // unread counts — the single source — so there's nothing else to reset.
-      void resyncMessageCache(queryClient);
-      // presence.changed is ephemeral (never replayed): every transition that
-      // happened while disconnected is gone, so refetch the authoritative
-      // online set or the dots drift stale until the next full re-auth.
-      refreshPresence();
-    },
-    onReplayExhausted: () => {
-      // Server's durable inbox lost our cursor — same recovery as
-      // a plain reconnect: invalidate peripherals + tail-resync.
-      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
-      void resyncMessageCache(queryClient);
-      refreshPresence();
-    },
+    onReconnect: refreshAfterGap,
+    // The server's durable inbox lost our cursor — same recovery.
+    onReplayExhausted: refreshAfterGap,
     enabled: !!user,
   });
 

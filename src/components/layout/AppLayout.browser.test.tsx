@@ -8,6 +8,22 @@ import { PageContainer } from './PageContainer';
 import { SidePanel } from '@/components/chat/SidePanel';
 import { expectPaintedAtCenter } from '@/test/browser-assertions';
 
+// The sidebar header's Home / Activity switch reads the activity feed; these
+// layout tests don't mount a QueryClient, so stand it (and the panel) in.
+vi.mock('@/components/activity/ActivityModeSwitch', () => ({
+  ActivityModeSwitch: () => <div data-testid="sidebar-mode-switch" />,
+}));
+// The phone tab bar reads the activity feed too.
+vi.mock('./MobileTabBar', () => ({
+  MobileTabBar: ({ hidden }: { hidden?: boolean }) => (
+    <nav data-testid="mobile-tab-bar" data-hidden={hidden ? 'true' : 'false'}>
+      <button type="button" data-testid="mobile-tab-home">Home</button>
+    </nav>
+  ),
+}));
+vi.mock('@/components/activity/ActivityPanel', () => ({
+  ActivityPanel: () => <div data-testid="activity-panel" />,
+}));
 vi.mock('@/components/SearchBar', () => ({
   SearchBar: () => <div aria-label="Search">Search</div>,
 }));

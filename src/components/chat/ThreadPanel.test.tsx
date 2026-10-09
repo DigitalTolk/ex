@@ -249,7 +249,7 @@ describe('ThreadPanel', () => {
     );
 
     const panel = screen.getByLabelText('Thread');
-    expect(panel).toHaveClass('mobile:top-[var(--mobile-right-panel-top,6rem)]');
+    expect(panel).toHaveClass('mobile:fixed', 'narrow:not-mobile:absolute', 'narrow:top-[var(--mobile-right-panel-top,6rem)]');
     expect(panel.className).not.toContain('safe-area-inset-top');
   });
 

@@ -7,6 +7,7 @@ import { AppLayout } from './AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { SidePanel } from '@/components/chat/SidePanel';
 
 // Pixel tests for the compact tier: a REAL 700px-wide desktop window (the
 // Slack-next-to-ex case) must keep desktop chrome — working sidebar toggle,
@@ -51,6 +52,9 @@ const isDesktopProject = window.innerWidth >= 1024;
 beforeEach(async () => {
   if (!isDesktopProject) return;
   await page.viewport(700, 800);
+  // The resize can reach the test frame a beat after the call returns; a
+  // test measuring before it did saw the full-width layout (flaky).
+  await expect.poll(() => window.innerWidth, { timeout: 5_000 }).toBe(700);
 });
 
 afterEach(async () => {
@@ -72,6 +76,10 @@ async function renderLayout() {
     </QueryClientProvider>,
   );
   active = result;
+  // Measure only once the compact layout is in place.
+  if (isDesktopProject) {
+    await expect.poll(() => document.documentElement.classList.contains('tier-compact'), { timeout: 5_000 }).toBe(true);
+  }
   return result;
 }
 
@@ -114,10 +122,37 @@ describe('compact tier at a real 700px desktop viewport', () => {
     (document.querySelector('[data-testid="compact-sidebar"] [data-testid="sidebar-nav-item"]') as HTMLElement).click();
     await expect.poll(() => document.querySelector('[data-testid="compact-sidebar"]')).toBeNull();
 
-    // The persistent (lg+) aside wires a noop close — clicking its nav is
-    // inert and resurrects nothing.
-    (document.querySelector('[data-testid="app-sidebar"] [data-testid="sidebar-nav-item"]') as HTMLElement).click();
-    expect(document.querySelector('[data-testid="compact-sidebar"]')).toBeNull();
+    // The persistent sidebar is a full-tier thing: no hidden copy of the list
+    // here behind the overlay.
+    expect(document.querySelector('[data-testid="app-sidebar"]')).toBeNull();
+  });
+
+  // Under 768px a desktop window has no room beside the conversation, so a
+  // side panel covers it (inside the main area, below its header) instead of
+  // squeezing it to a sliver.
+  it('lets a side panel cover the conversation instead of squeezing it', async () => {
+    if (!isDesktopProject) return;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    active = await render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/channel/general']}>
+          <AppLayout>
+            <div className="flex min-h-0 flex-1" data-testid="conversation-row">
+              <div className="min-w-0 flex-1">conversation</div>
+              <SidePanel title="Files" ariaLabel="Files" closeLabel="Close files" onClose={() => undefined}>
+                <p>files</p>
+              </SidePanel>
+            </div>
+          </AppLayout>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const panel = document.querySelector('[aria-label="Files"]') as HTMLElement;
+    const area = document.querySelector('[data-app-main="true"]')!.parentElement as HTMLElement;
+    expect(getComputedStyle(panel).position).toBe('absolute');
+    expect(Math.abs(panel.getBoundingClientRect().width - area.getBoundingClientRect().width)).toBeLessThan(1);
+    // No resize handle where there's nothing to resize against.
+    expect(panel.querySelector('[data-testid$="resize-handle"]')?.getBoundingClientRect().width ?? 0).toBe(0);
   });
 
   it('keeps dialogs centered desktop windows, not full-screen sheets', async () => {
@@ -202,6 +237,15 @@ describe('compact tier at a real 700px desktop viewport', () => {
       await expect.poll(() => getComputedStyle(left).paddingLeft, { timeout: 5_000 }).toBe('88px');
       const toggle = document.querySelector('[aria-label="Open channels"]') as HTMLElement;
       const search = document.querySelector('input[aria-label="Search"]') as HTMLElement;
+      // The columns settle a frame or two after the padding lands under the
+      // full instrumented run (a one-shot read found the field 58px off and
+      // flaked): wait for the centred layout, then measure it.
+      await expect
+        .poll(() => {
+          const r = search.getBoundingClientRect();
+          return Math.abs((r.left + r.right) / 2 - window.innerWidth / 2);
+        }, { timeout: 5_000 })
+        .toBeLessThanOrEqual(1);
       const toggleRect = toggle.getBoundingClientRect();
       const searchRect = search.getBoundingClientRect();
       // The hamburger clears the traffic lights…

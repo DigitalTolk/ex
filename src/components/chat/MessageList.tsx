@@ -675,7 +675,7 @@ function VirtuosoMessageList({
   const Header = useMemo(() => {
     const Cmp = () => (
       <>
-        {intro && !hasNextPage ? <div className="px-4 pt-2">{intro}</div> : null}
+        {intro && !hasNextPage ? <div className="px-4 pt-2 mobile:px-3">{intro}</div> : null}
         {hasNextPage ? (
           <div
             data-testid="message-list-load-more"
@@ -709,7 +709,7 @@ function VirtuosoMessageList({
     // stays as the empty-list signal but renders below the intro.
     return (
       <div className="flex-1 overflow-y-auto">
-        {intro ? <div className="px-4 pt-4">{intro}</div> : null}
+        {intro ? <div className="px-4 pt-4 mobile:px-3">{intro}</div> : null}
         <p
           data-testid="empty-message-list"
           className="px-4 py-8 text-center text-muted-foreground"
@@ -795,7 +795,7 @@ function VirtuosoMessageList({
           return row.kind === 'day' ? (
             <div
               data-testid="day-divider"
-              className="flex items-center gap-3 px-4 py-2"
+              className="flex items-center gap-3 px-4 py-2 mobile:px-3"
               role="separator"
             >
               <div className="flex-1 border-t border-border" />
@@ -982,7 +982,7 @@ const MessageRow = memo(function MessageRow({
       }
     : msg;
   return (
-    <div className="px-4">
+    <div className="px-4 mobile:px-2">
       <MessageItem
         message={augmented}
         firstInGroup={row.firstInGroup}

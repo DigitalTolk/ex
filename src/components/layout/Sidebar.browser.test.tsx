@@ -1167,26 +1167,6 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(badge.textContent).toBe('99+');
   });
 
-  it('renders the Activity row with an unread badge clamped to 99+', async () => {
-    apiFetchMock.mockImplementation(async (path: string) =>
-      path === '/api/v1/activity' ? { items: [], unread: 150 } : null,
-    );
-    await render(<Frame />);
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="activity-unread-badge"]')?.textContent).toBe('99+');
-    });
-  });
-
-  it('renders the exact Activity unread count when under 100', async () => {
-    apiFetchMock.mockImplementation(async (path: string) =>
-      path === '/api/v1/activity' ? { items: [], unread: 5 } : null,
-    );
-    await render(<Frame />);
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="activity-unread-badge"]')?.textContent).toBe('5');
-    });
-  });
-
   it('keeps unread channels and conversations visible inside a collapsed section', async () => {
     // A favorites section holding both a channel (with a notification) and a
     // DM (unread) — collapsing it runs the collapsed-filter for both kinds.
@@ -1243,14 +1223,6 @@ describe('Sidebar browser render — rich fixtures', () => {
     const draftsLink = document.querySelector('a[href="/drafts"]') as HTMLAnchorElement;
     expect(draftsLink).not.toBeNull();
     expect(draftsLink.className).toContain('font-semibold');
-  });
-
-  it('renders the Activity nav link in its active state on the /activity route', async () => {
-    await render(<RouteFrame path="/activity" />);
-    const activityLink = document.querySelector('a[href="/activity"]') as HTMLAnchorElement;
-    expect(activityLink).not.toBeNull();
-    expect(activityLink.className).toContain('font-semibold');
-    expect(activityLink.className).toContain('bg-sidebar-accent');
   });
 
   it('shows an error message when category creation fails with a non-Error rejection', async () => {

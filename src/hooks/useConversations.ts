@@ -6,7 +6,11 @@ import { queryKeys } from '@/lib/query-keys';
 import { showToast } from '@/lib/toast';
 import type { UserConversation, Conversation, User, UserStatus } from '@/types';
 
-export function useUserConversations(options?: { enabled?: boolean }) {
+// select narrows what the caller subscribes to (see useUserChannels).
+export function useUserConversations<T = UserConversation[]>(options?: {
+  enabled?: boolean;
+  select?: (rows: UserConversation[]) => T;
+}) {
   return useQuery({
     queryKey: queryKeys.userConversations(),
     queryFn: async () => {
@@ -14,6 +18,7 @@ export function useUserConversations(options?: { enabled?: boolean }) {
       return Array.isArray(res) ? res : [];
     },
     enabled: options?.enabled ?? true,
+    select: options?.select,
   });
 }
 

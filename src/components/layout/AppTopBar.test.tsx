@@ -5,6 +5,8 @@ import { AppTopBar } from './AppTopBar';
 vi.mock('@/components/SearchBar', () => ({
   SearchBar: () => <div aria-label="Search">search</div>,
 }));
+const mobile = vi.hoisted(() => ({ value: false }));
+vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => mobile.value }));
 
 describe('AppTopBar', () => {
   it('renders only the channels button and the search — the account menu lives in the sidebar', () => {
@@ -38,5 +40,15 @@ describe('AppTopBar', () => {
     expect(button).not.toHaveClass('invisible');
     expect(button).toHaveAttribute('tabindex', '0');
     expect(button).not.toHaveAttribute('aria-hidden');
+  });
+
+  // On a phone the button goes back to the list (it shows a back chevron), so
+  // that's what it's called.
+  it('is named Back on a phone', () => {
+    mobile.value = true;
+    render(<AppTopBar onOpenChannels={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Back' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Open channels')).toBeNull();
+    mobile.value = false;
   });
 });

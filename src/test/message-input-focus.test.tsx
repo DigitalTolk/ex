@@ -162,9 +162,14 @@ describe('MessageInput focusKey', () => {
     render(<MessageInput onSend={vi.fn()} focusKey="ch-1" />);
     const editor = screen.getByLabelText('Message input');
 
-    expect(screen.queryByRole('toolbar', { name: 'Formatting' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Attach file')).not.toBeInTheDocument();
+    // The toolbar stays mounted on a phone but collapsed and inert until
+    // focus, so it can grow open instead of popping in.
+    const reveal = screen.getByTestId('composer-toolbar-reveal');
+    expect(reveal).toHaveAttribute('inert');
+    expect(reveal).toHaveClass('grid-rows-[0fr]');
     fireEvent.focus(editor);
+    expect(reveal).not.toHaveAttribute('inert');
+    expect(reveal).toHaveClass('grid-rows-[1fr]');
     const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
     const attach = screen.getByLabelText('Attach file');
 

@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AppLayout } from './AppLayout';
+import { requestOpenChannels, useOpenChannelsRequest } from '@/lib/mobile-nav';
 
 // The compact tier: a fine-pointer device below 1024px gets desktop chrome
 // with a TOGGLEABLE overlay sidebar — not the mobile drawer, and (the
@@ -72,6 +73,7 @@ function renderLayout() {
 describe('AppLayout compact tier (fine-pointer, narrow window)', () => {
   beforeEach(() => {
     window.__EX_FORCE_DEVICE__ = 'desktop';
+    useOpenChannelsRequest.setState({ pending: false });
   });
 
   afterEach(() => {
@@ -121,15 +123,35 @@ describe('AppLayout compact tier (fine-pointer, narrow window)', () => {
     expect(screen.queryByTestId('compact-sidebar')).toBeNull();
 
     open();
-    // Scope to the overlay: the (CSS-hidden) persistent sidebar also mounts
-    // its nav in jsdom, where classes don't hide anything.
     fireEvent.click(within(screen.getByTestId('compact-sidebar')).getByTestId('sidebar-nav-item'));
     expect(screen.queryByTestId('compact-sidebar')).toBeNull();
+  });
 
-    // The persistent (lg+) aside wires a noop close — clicking its nav must
-    // not throw or resurrect any overlay.
-    fireEvent.click(within(screen.getByTestId('app-sidebar')).getByTestId('sidebar-nav-item'));
-    expect(screen.queryByTestId('compact-sidebar')).toBeNull();
+  // The persistent sidebar exists only on the full tier: a hidden copy here
+  // kept a second list (and its queries) alive behind the overlay.
+  it('mounts no persistent sidebar on the compact tier', () => {
+    setViewportWidth(700);
+    renderLayout();
+    expect(screen.queryByTestId('app-sidebar')).toBeNull();
+  });
+
+  // /activity on a narrow window asks for the list, which here is the overlay.
+  it('opens the overlay when the list is requested', () => {
+    setViewportWidth(700);
+    renderLayout();
+    act(() => requestOpenChannels());
+    expect(screen.getByTestId('compact-sidebar')).toBeInTheDocument();
+  });
+
+  // Regression: on a cold load of /activity the page mounts in the same commit
+  // as the layout and asks first — a one-shot event fired before the layout
+  // listened was lost, and the overlay never opened.
+  it('opens the overlay for a request made before the layout mounted', () => {
+    setViewportWidth(700);
+    requestOpenChannels();
+    renderLayout();
+    expect(screen.getByTestId('compact-sidebar')).toBeInTheDocument();
+    expect(useOpenChannelsRequest.getState().pending).toBe(false);
   });
 
   it('growing back to a full-width window closes the overlay', () => {

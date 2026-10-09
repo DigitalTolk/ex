@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type WheelEvent } from 'react';
-import { useLocation } from 'react-router-dom';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type WheelEvent } from 'react';
+import { matchPath, useLocation } from 'react-router-dom';
+import { takeOpenChannelsRequest, useOpenChannelsRequest } from '@/lib/mobile-nav';
 import { motion, type PanInfo } from 'motion/react';
 import { Sidebar } from './Sidebar';
 import { PanelResizeHandle } from './PanelResizeHandle';
@@ -8,6 +9,11 @@ import { useLayoutTier } from '@/hooks/useLayoutTier';
 import { SIDEBAR_WIDTH } from '@/lib/panel-width';
 import { AppTopBar } from './AppTopBar';
 import { AccountMenu } from './AccountMenu';
+import { MobileTabBar } from './MobileTabBar';
+import { useTextFieldFocused } from '@/hooks/useTextFieldFocused';
+import { ActivityModeSwitch } from '@/components/activity/ActivityModeSwitch';
+import { ActivityPanel } from '@/components/activity/ActivityPanel';
+import { useSidebarModeStore } from '@/stores/sidebar-mode';
 import { TagSearchProvider } from '@/context/TagSearchContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
@@ -28,6 +34,47 @@ interface AppLayoutProps {
   children: ReactNode;
 }
 
+// The top of every sidebar surface. On the full tier the sidebar runs the
+// whole window height, but its top strip (the top bar's height) stays empty:
+// breathing room, a window-drag area, and where macOS traffic lights sit in
+// the desktop app. The Home / Activity switch comes just below it.
+function SidebarHeader({ topStrip = false }: { topStrip?: boolean }) {
+  return (
+    <div className="shrink-0" data-sidebar-header="true">
+      {topStrip && <div className="h-12 [-webkit-app-region:drag]" data-testid="sidebar-top-strip" aria-hidden="true" />}
+      <div className={`px-3 pb-3 ${topStrip ? '' : 'pt-3'}`}>
+        <ActivityModeSwitch />
+      </div>
+    </div>
+  );
+}
+
+// On a phone the Home / Activity switch moves to the bottom tab bar; the
+// drawer just names the screen it shows.
+function MobileSidebarTitle() {
+  const mode = useSidebarModeStore((s) => s.mode);
+  return (
+    <h2 className="shrink-0 px-4 pt-3 pb-3 text-xl leading-[150%] font-semibold" data-testid="mobile-sidebar-title">
+      {mode === 'activity' ? 'Activity' : 'Home'}
+    </h2>
+  );
+}
+
+// The sidebar's list: channels and DMs, or Activity. Memoized (with stable
+// onClose callbacks) so layout state — a drawer drag, a sidebar resize — doesn't
+// re-render the whole list.
+const SidebarBody = memo(function SidebarBody({ onClose }: { onClose: () => void }) {
+  const mode = useSidebarModeStore((s) => s.mode);
+  return (
+    <div className="min-h-0 flex-1">
+      {mode === 'activity' ? <ActivityPanel onNavigate={onClose} /> : <Sidebar onClose={onClose} />}
+    </div>
+  );
+});
+
+// The persistent sidebar never closes.
+const keepOpen = () => undefined;
+
 
 export function AppLayout({ children }: AppLayoutProps) {
   const location = useLocation();
@@ -41,7 +88,19 @@ export function AppLayout({ children }: AppLayoutProps) {
   const [channelDragOffset, setChannelDragOffset] = useState(0);
   const mainRef = useRef<HTMLElement>(null);
   const appHeaderRef = useRef<HTMLDivElement>(null);
+  // Going somewhere closes a manually opened drawer — a pick from the
+  // search sheet or a deep link has to land on the page, not under the list,
+  // even when it is the conversation already open behind it (same path, new
+  // ?thread= or #msg-). (Rows in the list close it themselves; this covers
+  // everything else.)
+  const [drawerLocation, setDrawerLocation] = useState(location.key);
+  if (drawerLocation !== location.key) {
+    setDrawerLocation(location.key);
+    if (manualChannelsOpen) setManualChannelsOpen(false);
+  }
   const mobileChannelsOpen = isMobile && (isHome || manualChannelsOpen);
+  const inConversation =
+    matchPath('/channel/:id', location.pathname) !== null || matchPath('/conversation/:id', location.pathname) !== null;
 
   /* v8 ignore start -- only called from the Motion pan handler, which fires only in a real browser */
   const canOpenChannelsFromGesture = useCallback((eventTarget: EventTarget | null) => {
@@ -218,6 +277,20 @@ export function AppLayout({ children }: AppLayoutProps) {
   // tier-watching effect needed.
   const [compactSidebarToggled, setCompactSidebarToggled] = useState(false);
   const compactSidebarOpen = compactSidebarToggled && tier === 'compact';
+  const closeCompactSidebar = useCallback(() => setCompactSidebarToggled(false), []);
+
+  // Something asks for the list: a conversation header's back button (phone),
+  // or /activity (compact window, where the list is the overlay). A request
+  // made before this mounted is served on mount.
+  useEffect(() => {
+    const serve = () => {
+      if (!takeOpenChannelsRequest()) return;
+      if (tier === 'compact') setCompactSidebarToggled(true);
+      else openChannelsWithAnimation();
+    };
+    serve();
+    return useOpenChannelsRequest.subscribe(serve);
+  }, [tier, openChannelsWithAnimation]);
   useEffect(() => {
     if (!compactSidebarOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -235,95 +308,118 @@ export function AppLayout({ children }: AppLayoutProps) {
     'Resize channel sidebar',
   );
 
+  // Phone: the bottom tab bar shows on the list screens (Home, Activity).
+  // A conversation or thread has its own back button and composer, so the
+  // bar steps aside there, and while the keyboard is up. While it shows it
+  // covers the home indicator, so the surfaces above it drop their own
+  // bottom safe-area padding.
+  const textFieldFocused = useTextFieldFocused(isMobile);
+  const showTabBar = mobileChannelsOpen && !textFieldFocused;
+
   return (
     <TagSearchProvider>
-      <div className="flex h-full flex-col overflow-hidden bg-sidebar">
-        {/* Branded top bar — logo on the left, global search centred,
-            theme/settings/account chips on the right. Behaviour for
-            forwarding wheel events to the page scroller is preserved. */}
-        <div
-          ref={appHeaderRef}
-          onWheel={forwardHeaderWheel}
-        >
-          <AppTopBar
-            onOpenChannels={tier === 'compact' ? () => setCompactSidebarToggled((v) => !v) : openChannelsWithAnimation}
-            channelsButtonHidden={tier === 'compact' ? false : isHome || mobileChannelsOpen}
-          />
-        </div>
-        <div
-          className="relative z-20 shrink-0 bg-sidebar"
-          data-testid="app-layout-banners"
-          data-app-chrome="true"
-        >
-          <UpdateBanner />
-          <NotificationPermissionBanner />
-        </div>
-
-        <div className="relative flex min-h-0 flex-1 overflow-hidden bg-background">
+      <div
+        className="flex h-full overflow-hidden bg-sidebar"
+        style={showTabBar ? ({ '--bottom-safe-inset': '0px' } as CSSProperties) : undefined}
+      >
+        {/* Persistent sidebar (full tier): runs the full window height, with
+            the Home / Activity switch level with the top bar. Mounted only on
+            that tier, so narrower layouts don't keep a hidden copy of the list
+            (and its queries) alive. */}
+        {tier === 'full' && (
           <aside
-            className="relative hidden shrink-0 flex-col bg-sidebar text-sidebar-foreground lg:flex border-r border-sidebar-border"
+            className="relative flex shrink-0 flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border"
             style={{ width: sidebarWidth }}
             data-app-chrome="true"
             data-keyboard-surface="sidebar"
             data-testid="app-sidebar"
           >
-            <div className="min-h-0 flex-1">
-              <Sidebar onClose={() => undefined} />
-            </div>
+            <SidebarHeader topStrip />
+            <SidebarBody onClose={keepOpen} />
             <AccountMenu />
             <PanelResizeHandle edge="right" testID="sidebar-resize-handle" {...sidebarHandleProps} />
           </aside>
-          {tier === 'compact' && compactSidebarOpen && (
-            <>
-              {/* Desktop-styled overlay: click-away backdrop + a bordered
-                  panel. Deliberately NOT the mobile drawer — no swipe, no
-                  inert page underneath, desktop row chrome. */}
-              <div
-                className="absolute inset-0 z-30 bg-black/30"
-                data-testid="compact-sidebar-backdrop"
-                onClick={() => setCompactSidebarToggled(false)}
-              />
+        )}
+
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          {/* Top bar over the main column — global search centred. Behaviour
+              for forwarding wheel events to the page scroller is preserved. */}
+          {/* Phone: no top bar on the list screens or in a conversation
+              (its header carries the back button; search is in the tab
+              bar). Other pages keep it for their back button. */}
+          <div
+            ref={appHeaderRef}
+            onWheel={forwardHeaderWheel}
+            className={isMobile && (mobileChannelsOpen || inConversation) ? 'hidden' : undefined}
+          >
+            <AppTopBar
+              onOpenChannels={tier === 'compact' ? () => setCompactSidebarToggled((v) => !v) : openChannelsWithAnimation}
+              channelsButtonHidden={tier === 'compact' ? false : isHome || mobileChannelsOpen}
+            />
+          </div>
+          <div
+            className="relative z-20 shrink-0 bg-sidebar"
+            data-testid="app-layout-banners"
+            data-app-chrome="true"
+          >
+            <UpdateBanner />
+            <NotificationPermissionBanner />
+          </div>
+
+          <div className="relative flex min-h-0 flex-1 overflow-hidden bg-background">
+            {tier === 'compact' && compactSidebarOpen && (
+              <>
+                {/* Desktop-styled overlay: click-away backdrop + a bordered
+                    panel. Deliberately NOT the mobile drawer — no swipe, no
+                    inert page underneath, desktop row chrome. */}
+                <div
+                  className="absolute inset-0 z-30 bg-black/30"
+                  data-testid="compact-sidebar-backdrop"
+                  onClick={() => setCompactSidebarToggled(false)}
+                />
+                <aside
+                  className="absolute inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-border bg-sidebar text-sidebar-foreground shadow-xl"
+                  data-testid="compact-sidebar"
+                  data-app-chrome="true"
+                  data-keyboard-surface="sidebar"
+                >
+                  <SidebarHeader />
+                  <SidebarBody onClose={closeCompactSidebar} />
+                  <AccountMenu />
+                </aside>
+              </>
+            )}
+            {isMobile && (
               <aside
-                className="absolute inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-border bg-sidebar text-sidebar-foreground shadow-xl"
-                data-testid="compact-sidebar"
+                className="absolute inset-0 z-0 flex flex-col bg-sidebar text-sidebar-foreground lg:hidden"
+                inert={mobileChannelsOpen ? undefined : true}
+                data-testid="mobile-channel-sidebar"
                 data-app-chrome="true"
                 data-keyboard-surface="sidebar"
               >
-                <div className="min-h-0 flex-1">
-                  <Sidebar onClose={() => setCompactSidebarToggled(false)} />
-                </div>
-                <AccountMenu />
+                <MobileSidebarTitle />
+                <SidebarBody onClose={closeChannels} />
               </aside>
-            </>
-          )}
-          {isMobile && (
-            <aside
-              className="absolute inset-0 z-0 flex flex-col bg-sidebar text-sidebar-foreground lg:hidden"
-              inert={mobileChannelsOpen ? undefined : true}
-              data-testid="mobile-channel-sidebar"
-              data-app-chrome="true"
-              data-keyboard-surface="sidebar"
+            )}
+            <motion.main
+              ref={setMainNode}
+              className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background mobile:relative mobile:z-10 mobile:touch-pan-y mobile:transform-gpu mobile:transition-transform mobile:duration-200 mobile:ease-out"
+              data-app-main="true"
+              style={mainDragStyle}
+              data-channel-dragging={mobileShellActive ? 'true' : 'false'}
+              data-mobile-channels-open={mobileChannelsOpen ? 'true' : 'false'}
+              onPanStart={onChannelPanStart}
+              onPan={onChannelPan}
+              onPanEnd={onChannelPanEnd}
             >
-              <div className="min-h-0 flex-1">
-                <Sidebar onClose={closeChannels} />
-              </div>
-              <AccountMenu />
-            </aside>
-          )}
-          <motion.main
-            ref={setMainNode}
-            className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background mobile:relative mobile:z-10 mobile:touch-pan-y mobile:transform-gpu mobile:transition-transform mobile:duration-200 mobile:ease-out"
-            data-app-main="true"
-            style={mainDragStyle}
-            data-channel-dragging={mobileShellActive ? 'true' : 'false'}
-            data-mobile-channels-open={mobileChannelsOpen ? 'true' : 'false'}
-            onPanStart={onChannelPanStart}
-            onPan={onChannelPan}
-            onPanEnd={onChannelPanEnd}
-          >
-            <LoadingBar />
-            {children}
-          </motion.main>
+              <LoadingBar />
+              {children}
+            </motion.main>
+          </div>
+          {/* Hidden, not unmounted, while typing: the bar owns the account
+              sheet and the dialogs it opens (status, settings), which have
+              text fields of their own. */}
+          {isMobile && <MobileTabBar hidden={!showTabBar} />}
         </div>
       </div>
     </TagSearchProvider>

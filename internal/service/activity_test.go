@@ -609,7 +609,7 @@ func TestActivityService_ParentLeft(t *testing.T) {
 	pub := newMockPublisher()
 	svc := NewActivityService(store, pub)
 
-	svc.ParentLeft(ctx, "u-1", "ch-1")
+	svc.ParentLeft(ctx, []string{"u-1"}, "ch-1")
 	waitForCond(t, func() bool { return len(changes(t, pub, "u-1")) == 1 }, "removal published")
 	if got := changes(t, pub, "u-1")[0]; len(got.Removed) != 1 || got.Removed[0] != itemA {
 		t.Fatalf("activity.read = %+v", got)
@@ -631,7 +631,7 @@ func TestActivityService_ParentLeftNothingOrError(t *testing.T) {
 		store := newFakeActivityStore()
 		setup(store)
 		pub := newMockPublisher()
-		NewActivityService(store, pub).ParentLeft(ctx, "u-1", "ch-1")
+		NewActivityService(store, pub).ParentLeft(ctx, []string{"u-1"}, "ch-1")
 		waitForCond(t, func() bool {
 			store.mu.Lock()
 			defer store.mu.Unlock()
@@ -714,4 +714,16 @@ func TestActivityService_MessageEdited(t *testing.T) {
 	if ids[0] != "m-1" || preview != "fixed typo" {
 		t.Fatalf("store got ids=%v preview=%q", ids, preview)
 	}
+}
+
+// Archiving hands over every member at once; one goroutine works through them
+// and each user still hears about their own removed items.
+func TestActivityService_ParentLeftManyUsers(t *testing.T) {
+	store := newFakeActivityStore()
+	store.parentGone = []string{itemA}
+	pub := newMockPublisher()
+	NewActivityService(store, pub).ParentLeft(context.Background(), []string{"u-1", "u-2", "u-3"}, "ch-1")
+	waitForCond(t, func() bool {
+		return len(changes(t, pub, "u-1")) == 1 && len(changes(t, pub, "u-2")) == 1 && len(changes(t, pub, "u-3")) == 1
+	}, "every user told")
 }

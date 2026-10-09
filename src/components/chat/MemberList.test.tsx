@@ -69,10 +69,13 @@ describe('MemberList', () => {
     const panel = scrollArea.parentElement!;
     expect(panel).toHaveClass(
       'w-[var(--member-list-width,20rem)]',
+      // Covers the conversation below the header: fixed on a phone, inside
+      // the main area on a desktop window under 768px (`narrow:`).
       'mobile:fixed',
-      'mobile:inset-x-0',
-      'mobile:top-[var(--mobile-right-panel-top,6rem)]',
-      'mobile:w-auto',
+      'narrow:not-mobile:absolute',
+      'narrow:inset-x-0',
+      'narrow:top-[var(--mobile-right-panel-top,6rem)]',
+      'narrow:w-auto',
     );
     expect(panel.className).not.toContain('safe-area-inset-top');
     expect(scrollArea).toHaveClass('min-h-0', 'flex-1');

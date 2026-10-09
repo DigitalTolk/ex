@@ -70,7 +70,7 @@ describe('OIDCCallbackPage', () => {
     });
   });
 
-  it('navigates to /channel/general when token refresh succeeds', async () => {
+  it('navigates home when token refresh succeeds', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ accessToken: 'tok-abc' }),
@@ -79,7 +79,7 @@ describe('OIDCCallbackPage', () => {
     renderPage();
 
     await vi.waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith('/channel/general', { replace: true });
+      expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true });
     });
   });
 });

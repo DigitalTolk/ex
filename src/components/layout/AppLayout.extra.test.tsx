@@ -46,8 +46,7 @@ describe('AppLayout - mobile navigation', () => {
   it('does not use a temporary sidebar overlay on mobile', () => {
     const { container } = renderLayout();
 
-    const aside = screen.getByTestId('sidebar').closest('aside')!;
-    expect(aside.className).toContain('lg:flex');
+    expect(screen.getByTestId('app-sidebar')).toContainElement(screen.getByTestId('sidebar'));
     expect(container.querySelector('.bg-black\\/50')).toBeNull();
   });
 });

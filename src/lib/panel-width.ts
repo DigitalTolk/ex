@@ -17,7 +17,7 @@ export interface PanelWidthConfig {
 export const SIDEBAR_WIDTH: PanelWidthConfig = {
   key: 'ex.layout.sidebarWidth',
   defaultWidth: 288, // Tailwind w-72 — the historical fixed width
-  min: 208,
+  min: 256, // narrowest that fits the Activity filter tabs with the longest label (Reactions) open
   max: 400,
 };
 

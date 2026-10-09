@@ -1,4 +1,6 @@
-import type { ActivityChangedEvent, ActivityFeed, ActivityItem, ActivityType } from '@/types';
+import { calendarDaysAgo } from '@/lib/format';
+import { buildChannelHref, buildConversationHref } from '@/lib/message-deeplink';
+import type { ActivityChangedEvent, ActivityFeed, ActivityItem, ActivityType, Reminder } from '@/types';
 
 // withCounts rebuilds a feed from its items, deriving the unread totals from
 // the rows themselves so a patched cache can never disagree with its own list.
@@ -57,21 +59,38 @@ export function parseActivityChange(data: unknown): ActivityChangedEvent {
   return data && typeof data === 'object' ? (data as ActivityChangedEvent) : {};
 }
 
-// ActivityRow is one row of the Activity page: a single item, or every item of
-// one conversation (DM messages) or one thread (replies), newest first.
+// isWebhookItem reports an item whose actor is an incoming webhook: its name
+// is whatever the webhook chose, so it renders as a bot, never as a person.
+// (Items written before the webhook flag existed carry only actorName.)
+export function isWebhookItem(item: ActivityItem): boolean {
+  return Boolean(item.webhook || item.actorName);
+}
+
+// ActivityRow is one row of the Activity list: a single item, or several that
+// belong together — every message of one DM, the replies in one thread, the
+// same emoji on one message — newest first. Acting on the row acts on all of
+// its items.
 export interface ActivityRow {
   key: string;
   items: ActivityItem[];
+  // The newest item: its text, time and link represent the row.
   lead: ActivityItem;
   unreadIDs: string[];
+  // The people who acted, newest first, each once (webhook posts excluded).
+  actorIDs: string[];
 }
 
-// DM messages group per conversation and thread replies per thread, so a busy
-// conversation is one row instead of one per message.
 function rowKey(i: ActivityItem): string {
-  if (i.type === 'dm') return `dm:${i.parentID}`;
-  if (i.type === 'thread_reply') return `thread:${i.parentID}|${i.parentMessageID ?? ''}`;
-  return `item:${i.id}`;
+  switch (i.type) {
+    case 'dm':
+      return `dm:${i.parentID}`;
+    case 'thread_reply':
+      return `thread:${i.parentID}|${i.parentMessageID || i.messageID}`;
+    case 'reaction':
+      return `reaction:${i.messageID}|${i.emoji ?? ''}`;
+    default:
+      return `item:${i.id}`;
+  }
 }
 
 // groupActivity folds newest-first items into rows, each placed where its
@@ -83,23 +102,24 @@ export function groupActivity(items: ActivityItem[]): ActivityRow[] {
     const key = rowKey(item);
     let row = byKey.get(key);
     if (!row) {
-      row = { key, items: [], lead: item, unreadIDs: [] };
+      row = { key, items: [], lead: item, unreadIDs: [], actorIDs: [] };
       byKey.set(key, row);
       rows.push(row);
     }
     row.items.push(item);
     if (!item.read) row.unreadIDs.push(item.id);
+    if (item.actorID && !isWebhookItem(item) && !row.actorIDs.includes(item.actorID)) row.actorIDs.push(item.actorID);
   }
   return rows;
 }
 
-export type ActivityTab = 'all' | 'mention' | 'thread_reply' | 'dm' | 'reaction';
+export type ActivityTab = 'all' | 'dm' | 'mention' | 'thread_reply' | 'reaction';
 
 export const ACTIVITY_TABS: { id: ActivityTab; label: string }[] = [
   { id: 'all', label: 'All' },
+  { id: 'dm', label: 'DMs' },
   { id: 'mention', label: 'Mentions' },
   { id: 'thread_reply', label: 'Threads' },
-  { id: 'dm', label: 'DMs' },
   { id: 'reaction', label: 'Reactions' },
 ];
 
@@ -112,6 +132,48 @@ export function filterActivity(items: ActivityItem[], tab: ActivityTab): Activit
   return tab === 'all' ? items : items.filter((i) => i.type === tab);
 }
 
-export function tabHasUnread(feed: ActivityFeed, tab: ActivityTab): boolean {
-  return (tab === 'all' ? feed.unread : (feed.unreadByType[tab] ?? 0)) > 0;
+export function tabUnread(feed: ActivityFeed, tab: ActivityTab): number {
+  return tab === 'all' ? feed.unread : (feed.unreadByType[tab] ?? 0);
+}
+
+export type ActivityDay = 'Today' | 'Yesterday' | 'Earlier';
+
+function activityDay(createdAt: string, now: Date): ActivityDay {
+  const days = calendarDaysAgo(createdAt, now);
+  if (days <= 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  return 'Earlier';
+}
+
+// activitySections splits rows into consecutive day groups, for the list's
+// day headings.
+export function activitySections(rows: ActivityRow[], now: Date = new Date()): { day: ActivityDay; rows: ActivityRow[] }[] {
+  const sections: { day: ActivityDay; rows: ActivityRow[] }[] = [];
+  for (const row of rows) {
+    const day = activityDay(row.lead.createdAt, now);
+    const last = sections[sections.length - 1];
+    if (last && last.day === day) last.rows.push(row);
+    else sections.push({ day, rows: [row] });
+  }
+  return sections;
+}
+
+const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+const dateFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
+
+// activityTime is a row's short time label, in the reader's locale: the clock
+// time for today and yesterday (the day headings say which), the date before
+// that.
+export function activityTime(createdAt: string, now: Date = new Date()): string {
+  const d = new Date(createdAt);
+  return activityDay(createdAt, now) === 'Earlier' ? dateFormat.format(d) : timeFormat.format(d);
+}
+
+// activityHref links an activity row or a reminder to its message, opening its
+// thread when it is a reply. A channel resolves by id first, so a renamed
+// channel never falls back to a stale slug that may now name another channel.
+export function activityHref(i: ActivityItem | Reminder, slugByChannelID: Map<string, string>): string {
+  if (i.parentType !== 'channel') return buildConversationHref(i.parentID, i.messageID, i.parentMessageID);
+  const slug = slugByChannelID.get(i.parentID) || i.channelSlug || i.parentID;
+  return buildChannelHref(slug, i.messageID, i.parentMessageID);
 }

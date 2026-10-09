@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, FileSearch, X, Loader2 } from 'lucide-react';
-import { matchPath, useLocation, useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Clock3, Search, FileSearch, X, Loader2 } from 'lucide-react';
+import { Link, matchPath, useLocation, useNavigate } from 'react-router-dom';
 import { useChannelBySlug, useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations, useOpenDM } from '@/hooks/useConversations';
-import { useSearchUsers, useSearchChannels, type SearchHit } from '@/hooks/useSearch';
+import { useSearchUsers, useSearchChannels, useSearchMessages, type SearchHit } from '@/hooks/useSearch';
+import { MessageHitCard } from '@/components/search/MessageHitCard';
+import { Skeleton } from '@/components/ui/skeleton';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { usePresence } from '@/context/PresenceContext';
@@ -12,6 +14,7 @@ import { ChannelIcon } from '@/components/ChannelIcon';
 import { UserPickerRow } from '@/components/UserPickerRow';
 import { isApplePlatform, searchShortcutLabel } from '@/lib/platform';
 import type { UserStatus } from '@/types';
+import { addRecentSearch, clearRecentSearches, removeRecentSearch, useRecentSearchesStore } from '@/stores/recent-searches';
 
 // ⌘K on Apple platforms, Ctrl K elsewhere. The keydown handler matches the
 // SAME platform chord as this hint — on Apple only Cmd+K (a bare Ctrl+K is
@@ -59,8 +62,25 @@ function itemKey(it: Item): string {
   return `${it.kind}:${it.hit.id}`;
 }
 
-export function SearchBar() {
+interface SearchBarProps {
+  // 'bar' (default): the top-bar field with a dropdown. 'sheet': the mobile
+  // search sheet — results and recent searches render inline below the field.
+  variant?: 'bar' | 'sheet';
+  // Called after a pick navigates away (the sheet closes then).
+  onDone?: () => void;
+  // Rendered before the field (the sheet's back button).
+  leading?: ReactNode;
+}
+
+export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) {
+  const sheet = variant === 'sheet';
+  // The signed-in user's recent searches; only the sheet shows (or records)
+  // them.
+  const recent = useRecentSearchesStore((st) => st.queries);
   const [q, setQ] = useState('');
+  // Sheet only: the message search the user ran, shown in place. Editing the
+  // text goes back to the live suggestions until they run it again.
+  const [submitted, setSubmitted] = useState<{ q: string; scope?: SearchScope } | null>(null);
   const [open, setOpen] = useState(false);
   // Highlight tracks item IDENTITY, not index — null means "no explicit
   // selection", which resolves to the message-search action. Index-based
@@ -167,7 +187,7 @@ export function SearchBar() {
   }, [channelHits, userHits, suggestions]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || sheet) return;
     function onDoc(e: MouseEvent) {
       /* istanbul ignore next -- containerRef is always attached while the dropdown is open; defensive null guard */
       if (!containerRef.current) return;
@@ -175,7 +195,7 @@ export function SearchBar() {
     }
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
-  }, [open]);
+  }, [open, sheet]);
 
   // Global ⌘K (Apple) / Ctrl+K (elsewhere) — focus and open the search from
   // anywhere in the app, even while typing in the composer. Strictly the
@@ -183,6 +203,7 @@ export function SearchBar() {
   // and key-repeat are ignored so native text-editing bindings and other
   // shortcuts are never hijacked. Cleaned up on unmount.
   useEffect(() => {
+    if (sheet) return;
     function onKey(e: KeyboardEvent) {
       const apple = isApplePlatform(navigator.userAgent);
       const chord = apple ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
@@ -194,7 +215,7 @@ export function SearchBar() {
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, []);
+  }, [sheet]);
 
   // Resolve the highlight identity to today's index. A vanished selection
   // (the list shrank or changed) and "no explicit selection" both fall back
@@ -210,23 +231,29 @@ export function SearchBar() {
     inputRef.current?.blur();
     setQ('');
     setHighlightKey(null);
+    onDone?.();
   }
 
   function submitSuggestion(sel: Suggestion) {
     const label = sel.label.trim();
     /* istanbul ignore next -- suggestions are built only from non-empty trimmed input (and Enter is gated on the visible dropdown), so a message item always carries a label; defensive */
     if (!label) return;
-    const params = new URLSearchParams({ q: label });
-    if (sel.kind === 'in-scope') {
-      params.set('in', sel.parentId);
-      // Land directly on the tab that matches the scope so the user
-      // sees the right results immediately, skipping All tab's noise
-      // from Channels/People. Channels → "messages"; DMs/groups →
-      // "dms" (the DMs tab is filtered to parentType=conversation).
-      params.set('type', sel.scopeKind === 'channel' ? 'messages' : 'dms');
+    if (sheet) {
+      // Results show right here; drop the keyboard so they have the room.
+      addRecentSearch(label);
+      setSubmitted({ q: label, scope: sel.kind === 'in-scope' ? { parentId: sel.parentId, scopeKind: sel.scopeKind } : undefined });
+      inputRef.current?.blur();
+      return;
     }
     reset();
-    navigate(`/search?${params.toString()}`);
+    navigate(searchPageHref(label, sel.kind === 'in-scope' ? { parentId: sel.parentId, scopeKind: sel.scopeKind } : undefined));
+  }
+
+  // Recent searches only show in the sheet: run one in place.
+  function runRecent(query: string) {
+    addRecentSearch(query);
+    setQ(query);
+    setSubmitted({ q: query });
   }
 
   function activate(idx = safeHighlight) {
@@ -253,7 +280,19 @@ export function SearchBar() {
     inputRef.current?.focus();
   }
 
-  const showDropdown = open && suggestions.length > 0;
+  const showMessageResults = sheet && submitted !== null && submitted.q === trimmed;
+  // While the sheet shows message results, its list keeps only the channel and
+  // people hits — and isn't rendered at all when there are none.
+  const showDropdown =
+    (open || sheet) && suggestions.length > 0 && !(showMessageResults && channelHits.length === 0 && userHits.length === 0);
+  const messagesQuery = useSearchMessages(
+    submitted?.q ?? '',
+    showMessageResults,
+    20,
+    submitted?.scope ? { in: submitted.scope.parentId } : undefined,
+  );
+  const messageHits = messagesQuery.data?.hits ?? [];
+  const showRecent = sheet && !trimmed && recent.length > 0;
 
   return (
     <div ref={containerRef} className="relative w-full" data-testid="searchbar">
@@ -263,8 +302,9 @@ export function SearchBar() {
           desktop for a Slack-like focus-expand; the growth is symmetric
           so the centred grid column stays centred, and it's gated to
           md+ so mobile layout is untouched. */}
-      <div className="rounded-md transition-all duration-150 focus-within:shadow-lg md:focus-within:-mx-2">
-        <div className="flex h-8 items-center gap-2 rounded-md border border-border bg-background dark:bg-muted px-3 text-foreground transition-colors focus-within:border-ring hover:border-border-strong mobile:h-11">
+      <div className={sheet ? 'flex items-center gap-1' : 'rounded-md transition-all duration-150 focus-within:shadow-lg md:focus-within:-mx-2'}>
+        {leading}
+        <div className="flex min-w-0 flex-1 h-8 items-center gap-2 rounded-md border border-border bg-background dark:bg-muted px-3 text-foreground transition-colors focus-within:border-ring hover:border-border-strong mobile:h-11">
           <Search className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
           <input
             ref={inputRef}
@@ -277,7 +317,9 @@ export function SearchBar() {
               // survive the query changing under it.
               setHighlightKey(null);
             }}
-            onFocus={() => setOpen(true)}
+            onFocus={() => {
+              setOpen(true);
+            }}
             onKeyDown={(e) => {
               // Enter and the arrows act only on the VISIBLE dropdown — a
               // hidden item list (empty/cleared input) must never be
@@ -338,7 +380,11 @@ export function SearchBar() {
           // Match the focus-expanded input width: the input row widens by -mx-2
           // on md+ while focused, and the dropdown only ever shows while focused,
           // so mirror that same negative margin here so their edges line up.
-          className="absolute left-0 right-0 top-full z-40 mt-1 max-h-[70dvh] overflow-y-auto rounded-md border bg-popover text-popover-foreground shadow-lg md:-mx-2"
+          className={
+            sheet
+              ? 'mt-2 text-foreground'
+              : 'absolute left-0 right-0 top-full z-40 mt-1 max-h-[70dvh] overflow-y-auto rounded-md border bg-popover text-popover-foreground shadow-lg md:-mx-2'
+          }
         >
           {channelHits.length > 0 && (
             <div role="group" aria-label="Channels">
@@ -394,71 +440,162 @@ export function SearchBar() {
             </div>
           )}
 
-          <div role="group" aria-label="Messages">
-            {(channelHits.length > 0 || userHits.length > 0) && (
-              <SectionHeader>Messages</SectionHeader>
-            )}
-            {suggestions.map((s) => {
-              const flatIndex = items.findIndex(
-                (it) => it.kind === 'message' && it.suggestion === s,
-              );
-              const isHighlighted = flatIndex === safeHighlight;
-              const Icon = s.kind === 'in-scope' ? FileSearch : Search;
-              const scopeNoun =
-                s.kind === 'in-scope'
-                  ? s.scopeKind === 'channel'
-                    ? 'channel'
-                    : s.scopeKind === 'group'
-                      ? 'group'
-                      : 'DM'
-                  : '';
-              const text =
-                s.kind === 'in-scope'
-                  ? `Search messages in this ${scopeNoun} for: `
-                  : `Search messages for: `;
-              return (
-                <button
-                  key={s.kind === 'in-scope' ? `in-${s.scopeKind}` : 'all'}
-                  type="button"
-                  onMouseEnter={() =>
-                    setHighlightKey(`message:${s.kind === 'in-scope' ? `in-${s.scopeKind}` : 'all'}`)
-                  }
-                  onClick={() => activate(flatIndex)}
-                  data-testid={
-                    s.kind === 'in-scope'
-                      ? 'searchbar-show-in-scope'
-                      : 'searchbar-show-results'
-                  }
-                  data-scope-kind={s.kind === 'in-scope' ? s.scopeKind : undefined}
-                  aria-selected={isHighlighted}
-                  className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm mobile:py-3 mobile:text-base ${
-                    isHighlighted ? 'bg-muted' : ''
-                  }`}
-                >
-                  <span className="flex items-center gap-2 truncate">
-                    <Icon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
-                    <span className="truncate">
-                      {text}
-                      <span className="font-semibold">{s.label}</span>
-                      {s.kind === 'in-scope' && (
-                        <span className="text-muted-foreground">
-                          {' '}
-                          in <span className="font-medium">{s.parentLabel}</span>
-                        </span>
-                      )}
+          {/* While the sheet shows message results, they are their own section
+              (below) and this group of "search for…" actions steps aside. */}
+          {!showMessageResults && (
+            <div role="group" aria-label="Messages">
+              {(channelHits.length > 0 || userHits.length > 0) && <SectionHeader>Messages</SectionHeader>}
+              {suggestions.map((s) => {
+                const flatIndex = items.findIndex(
+                  (it) => it.kind === 'message' && it.suggestion === s,
+                );
+                const isHighlighted = flatIndex === safeHighlight;
+                const Icon = s.kind === 'in-scope' ? FileSearch : Search;
+                const scopeNoun =
+                  s.kind === 'in-scope'
+                    ? s.scopeKind === 'channel'
+                      ? 'channel'
+                      : s.scopeKind === 'group'
+                        ? 'group'
+                        : 'DM'
+                    : '';
+                const text =
+                  s.kind === 'in-scope'
+                    ? `Search messages in this ${scopeNoun} for: `
+                    : `Search messages for: `;
+                return (
+                  <button
+                    key={s.kind === 'in-scope' ? `in-${s.scopeKind}` : 'all'}
+                    type="button"
+                    onMouseEnter={() =>
+                      setHighlightKey(`message:${s.kind === 'in-scope' ? `in-${s.scopeKind}` : 'all'}`)
+                    }
+                    onClick={() => activate(flatIndex)}
+                    data-testid={
+                      s.kind === 'in-scope'
+                        ? 'searchbar-show-in-scope'
+                        : 'searchbar-show-results'
+                    }
+                    data-scope-kind={s.kind === 'in-scope' ? s.scopeKind : undefined}
+                    aria-selected={isHighlighted}
+                    className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm mobile:py-3 mobile:text-base ${
+                      isHighlighted ? 'bg-muted' : ''
+                    }`}
+                  >
+                    <span className="flex items-center gap-2 truncate">
+                      <Icon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                      <span className="truncate">
+                        {text}
+                        <span className="font-semibold">{s.label}</span>
+                        {s.kind === 'in-scope' && (
+                          <span className="text-muted-foreground">
+                            {' '}
+                            in <span className="font-medium">{s.parentLabel}</span>
+                          </span>
+                        )}
+                      </span>
                     </span>
-                  </span>
-                  {isHighlighted && (
-                    <kbd className="rounded border bg-muted px-1.5 py-0.5 text-[10px]">Enter</kbd>
-                  )}
-                </button>
-              );
-            })}
+                    {isHighlighted && (
+                      <kbd className="rounded border bg-muted px-1.5 py-0.5 text-xs mobile:hidden">Enter</kbd>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+      {showMessageResults && submitted && (
+        <section aria-label="Messages" className="mt-2" data-testid="sheet-message-section">
+          <SectionHeader>Messages</SectionHeader>
+          {/* A tap on a result that opens it (a link) closes the sheet behind
+              it; a tap anywhere else — a placeholder, the empty state, a
+              result that can't open — leaves it up. */}
+          <div
+            className="space-y-2 pt-1"
+            onClick={(e) => {
+              if ((e.target as Element).closest('a[href]')) onDone?.();
+            }}
+            data-testid="sheet-message-results"
+          >
+            {messagesQuery.isLoading
+              ? [0, 1, 2].map((i) => <Skeleton key={i} className="h-16 w-full" />)
+              : messageHits.length === 0
+                ? (
+                  <p className="px-3 py-6 text-center text-sm text-muted-foreground" data-testid="sheet-message-empty">
+                    No messages match “{submitted.q}”.
+                  </p>
+                )
+                : messageHits.map((h) => <MessageHitCard key={h.id} hit={h} />)}
           </div>
+          {messageHits.length > 0 && (
+            <Link
+              to={searchPageHref(submitted.q, submitted.scope)}
+              onClick={() => onDone?.()}
+              className="flex min-h-11 items-center justify-center text-sm font-medium text-muted-foreground hover:text-foreground"
+              data-testid="sheet-all-results"
+            >
+              All results
+            </Link>
+          )}
+        </section>
+      )}
+      {showRecent && (
+        <div className="mt-2" data-testid="recent-searches">
+          <div className="flex items-center justify-between">
+            <SectionHeader>Recent searches</SectionHeader>
+            <button
+              type="button"
+              onClick={clearRecentSearches}
+              className="min-h-11 px-3 text-xs font-medium text-muted-foreground hover:text-foreground"
+              data-testid="recent-searches-clear"
+            >
+              Clear
+            </button>
+          </div>
+          {recent.map((query) => (
+            <div key={query} className="flex items-center">
+              <button
+                type="button"
+                onClick={() => runRecent(query)}
+                className="flex min-h-12 min-w-0 flex-1 items-center gap-3 px-3 text-left text-base"
+                data-testid="recent-search"
+              >
+                <Clock3 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span className="truncate">{query}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => removeRecentSearch(query)}
+                aria-label={`Remove ${query} from recent searches`}
+                className="inline-flex h-11 w-11 shrink-0 items-center justify-center text-muted-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
         </div>
       )}
     </div>
   );
+}
+
+interface SearchScope {
+  parentId: string;
+  scopeKind: ScopeKind;
+}
+
+// searchPageHref links the full search page for a query, scoped to a channel or
+// conversation when one is given — landing directly on the tab that matches
+// the scope (channels → "messages"; DMs/groups → "dms", the tab filtered to
+// parentType=conversation), skipping All's noise from Channels/People.
+function searchPageHref(q: string, scope?: SearchScope): string {
+  const params = new URLSearchParams({ q });
+  if (scope) {
+    params.set('in', scope.parentId);
+    params.set('type', scope.scopeKind === 'channel' ? 'messages' : 'dms');
+  }
+  return `/search?${params.toString()}`;
 }
 
 function SectionHeader({ children }: { children: React.ReactNode }) {
