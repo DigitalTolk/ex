@@ -1572,3 +1572,4 @@ func TestLeave_PostsSystemMessage(t *testing.T) {
 		t.Error("expected message.new event for system leave message")
 	}
 }
+

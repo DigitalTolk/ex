@@ -18,15 +18,27 @@ import (
 )
 
 type fakeActivitySvc struct {
-	feed    service.ActivityFeed
-	feedErr error
-	seenErr error
+	feed      model.ActivityFeed
+	feedErr   error
+	seenErr   error
+	itemsErr  error
+	gotIDs    []string
+	gotRead   bool
+	removeIDs []string
 }
 
-func (f *fakeActivitySvc) Feed(context.Context, string) (service.ActivityFeed, error) {
+func (f *fakeActivitySvc) Feed(context.Context, string) (model.ActivityFeed, error) {
 	return f.feed, f.feedErr
 }
 func (f *fakeActivitySvc) MarkSeen(context.Context, string) error { return f.seenErr }
+func (f *fakeActivitySvc) SetItemsRead(_ context.Context, _ string, ids []string, read bool) error {
+	f.gotIDs, f.gotRead = ids, read
+	return f.itemsErr
+}
+func (f *fakeActivitySvc) RemoveItems(_ context.Context, _ string, ids []string) error {
+	f.removeIDs = ids
+	return f.itemsErr
+}
 
 type fakeReminderSvc struct {
 	scheduled *model.Reminder
@@ -64,13 +76,18 @@ func authedReq(t *testing.T, jwtMgr *auth.JWTManager, method, target, body strin
 }
 
 func TestActivityHandler_Feed(t *testing.T) {
-	a := &fakeActivitySvc{feed: service.ActivityFeed{Items: []*model.ActivityItem{{ID: "x"}}, Unread: 1}}
+	a := &fakeActivitySvc{feed: model.ActivityFeed{Items: []*model.ActivityFeedItem{{ActivityItem: model.ActivityItem{ID: "x"}}}, Unread: 1}}
 	h, jwt := setupActivityHandler(t, a, &fakeReminderSvc{})
 	handler := middleware.Auth(jwt)(http.HandlerFunc(h.Feed))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, authedReq(t, jwt, http.MethodGet, "/api/v1/activity", ""))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"unread":1`) {
 		t.Fatalf("Feed = %d %s", rec.Code, rec.Body.String())
+	}
+	// The read state rides on each item, flat beside the stored fields — the
+	// shape the client reads.
+	if !strings.Contains(rec.Body.String(), `"items":[{"id":"x",`) || !strings.Contains(rec.Body.String(), `"read":false}`) {
+		t.Fatalf("Feed item shape = %s", rec.Body.String())
 	}
 }
 
@@ -213,5 +230,86 @@ func TestActivityHandler_CancelReminder(t *testing.T) {
 	handlerErr.ServeHTTP(recErr, authedReq(t, jwtErr, http.MethodDelete, "/api/v1/reminders/r1", ""))
 	if recErr.Code != http.StatusInternalServerError {
 		t.Fatalf("Cancel error = %d", recErr.Code)
+	}
+}
+
+func TestActivityHandler_SetItemsRead(t *testing.T) {
+	svc := &fakeActivitySvc{}
+	h, jwt := setupActivityHandler(t, svc, &fakeReminderSvc{})
+	handler := middleware.Auth(jwt)(http.HandlerFunc(h.SetItemsRead))
+	serve := func(body string) int {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, authedReq(t, jwt, http.MethodPut, "/api/v1/activity/items/read", body))
+		return rec.Code
+	}
+
+	if code := serve(`{"ids":["a","b"],"read":false}`); code != http.StatusNoContent {
+		t.Fatalf("SetItemsRead = %d", code)
+	}
+	if len(svc.gotIDs) != 2 || svc.gotRead {
+		t.Fatalf("service got ids=%v read=%v", svc.gotIDs, svc.gotRead)
+	}
+	if code := serve(`not json`); code != http.StatusBadRequest {
+		t.Fatalf("bad body = %d, want 400", code)
+	}
+	if code := serve(`{"ids":["a"]}`); code != http.StatusBadRequest {
+		t.Fatalf("missing read = %d, want 400", code)
+	}
+
+	svc.itemsErr = fmt.Errorf("%w: bad ids", service.ErrValidation)
+	if code := serve(`{"ids":[],"read":true}`); code != http.StatusBadRequest {
+		t.Fatalf("invalid ids = %d, want 400", code)
+	}
+	// A body far past what a full stream's ids need is refused unread.
+	svc.itemsErr = nil
+	if code := serve(`{"ids":["` + strings.Repeat("A", int(activityItemsBodyBytes)) + `"],"read":true}`); code != http.StatusBadRequest {
+		t.Fatalf("oversized body = %d, want 400", code)
+	}
+	svc.itemsErr = errors.New("boom")
+	if code := serve(`{"ids":["a"],"read":true}`); code != http.StatusInternalServerError {
+		t.Fatalf("service error = %d, want 500", code)
+	}
+}
+
+func TestActivityHandler_RemoveItems(t *testing.T) {
+	svc := &fakeActivitySvc{}
+	h, jwt := setupActivityHandler(t, svc, &fakeReminderSvc{})
+	handler := middleware.Auth(jwt)(http.HandlerFunc(h.RemoveItems))
+	serve := func(body string) int {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, authedReq(t, jwt, http.MethodPost, "/api/v1/activity/items/remove", body))
+		return rec.Code
+	}
+
+	if code := serve(`{"ids":["a"]}`); code != http.StatusNoContent {
+		t.Fatalf("RemoveItems = %d", code)
+	}
+	if len(svc.removeIDs) != 1 || svc.removeIDs[0] != "a" {
+		t.Fatalf("service got %v", svc.removeIDs)
+	}
+	if code := serve(`not json`); code != http.StatusBadRequest {
+		t.Fatalf("bad body = %d, want 400", code)
+	}
+	if code := serve(`{"ids":["` + strings.Repeat("A", int(activityItemsBodyBytes)) + `"]}`); code != http.StatusBadRequest {
+		t.Fatalf("oversized body = %d, want 400", code)
+	}
+	svc.itemsErr = fmt.Errorf("%w: bad ids", service.ErrValidation)
+	if code := serve(`{"ids":["a"]}`); code != http.StatusBadRequest {
+		t.Fatalf("invalid ids = %d, want 400", code)
+	}
+	svc.itemsErr = errors.New("boom")
+	if code := serve(`{"ids":["a"]}`); code != http.StatusInternalServerError {
+		t.Fatalf("service error = %d, want 500", code)
+	}
+}
+
+func TestActivityHandler_ItemsUnauthorized(t *testing.T) {
+	h, _ := setupActivityHandler(t, &fakeActivitySvc{}, &fakeReminderSvc{})
+	for name, fn := range map[string]http.HandlerFunc{"SetItemsRead": h.SetItemsRead, "RemoveItems": h.RemoveItems} {
+		rec := httptest.NewRecorder()
+		fn(rec, httptest.NewRequest(http.MethodPut, "/api/v1/activity/items", strings.NewReader(`{}`)))
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s without a user = %d, want 401", name, rec.Code)
+		}
 	}
 }

@@ -988,7 +988,8 @@ export function Sidebar({ onClose }: SidebarProps) {
         {/* Bottom padding clears the home indicator on notched phones (the
             drawer is a full-height mobile surface with no bottom chrome). */}
         <div className="w-full min-w-0 space-y-1 p-2 mobile:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
-          {/* Activity sits at the very top — reaction hints + fired reminders. */}
+          {/* Activity sits at the very top — mentions, replies, DMs, reactions,
+              channel adds and fired reminders; the badge counts unread items. */}
           <NavLink
             to="/activity"
             onClick={onClose}
