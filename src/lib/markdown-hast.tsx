@@ -195,14 +195,16 @@ export function renderHastTree(tree: HastNode, opts?: RenderOpts): ReactNode {
 // the body doesn't end in a (non-blank) paragraph. Copy-on-write: the tree
 // may be the cached message.rendered.
 function withTrailing(root: HastNode): HastNode | null {
-  const kids = root.children ?? [];
+  // normaliseTree has already run: every root/element node carries a
+  // children array, so these are plain reads, not fallbacks.
+  const kids = root.children as HastNode[];
   const last = kids[kids.length - 1];
   if (!last || last.type !== 'element' || last.tagName !== 'p') return null;
   if (last.properties?.['data-blank'] === 'true' || last.properties?.dataBlank === 'true') return null;
   const marker: HastNode = { type: 'element', tagName: 'ex-trailing', properties: {}, children: [] };
   return {
     ...root,
-    children: [...kids.slice(0, -1), { ...last, children: [...(last.children ?? []), marker] }],
+    children: [...kids.slice(0, -1), { ...last, children: [...(last.children as HastNode[]), marker] }],
   };
 }
 
