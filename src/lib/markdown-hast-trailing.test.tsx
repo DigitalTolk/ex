@@ -35,6 +35,16 @@ describe('renderHastTree trailing', () => {
     }
   });
 
+  it('tolerates a root or paragraph that arrives without a children list', () => {
+    const bare = render(<>{renderHastTree({ type: 'root' } as HastNode, { trailing: <em data-testid="t">(edited)</em> })}</>);
+    expect(bare.container.querySelector('[data-testid="t"]')).not.toBeNull();
+    bare.unmount();
+    const bareP = render(
+      <>{renderHastTree({ type: 'root', children: [{ type: 'element', tagName: 'p', properties: {} } as HastNode] }, { trailing: <em data-testid="t">(edited)</em> })}</>,
+    );
+    expect(bareP.container.querySelector('p [data-testid="t"]')).not.toBeNull();
+  });
+
   it('is absent without a trailing node, and an empty root gets it after', () => {
     const { container } = render(<>{renderHastTree(root(el('p', [text('x')])))}</>);
     expect(container.querySelectorAll('[data-testid="t"]')).toHaveLength(0);

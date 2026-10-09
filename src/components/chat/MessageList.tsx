@@ -214,6 +214,7 @@ function VirtuosoMessageList({
   }, [readKey, unreadAnchor, unreadDividerID]);
   const unreadSeen = useUnreadSeen(readKey);
   const retireDivider = useCallback(() => {
+    /* istanbul ignore else -- the line only renders for an anchored (hence keyed) chat; the else is unreachable */
     if (readKey) markUnreadSeen(readKey);
   }, [readKey]);
   const rows = useMemo(() => buildMessageListRows(allMessages, unreadDividerID), [allMessages, unreadDividerID]);

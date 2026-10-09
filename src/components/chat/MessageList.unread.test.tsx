@@ -390,6 +390,19 @@ describe('MessageList row memo and thread meta', () => {
     view.rerenderList({ pages: [{ items: [reply(13, 'u-4'), msg(12), reply(11, 'u-3'), ...withRoot(pageOf(1, 10).items, 2)] }] });
     frames();
     expect(screen.getByTestId('thread-action-bar')).toHaveTextContent('2 replies');
+    // An older reply from a third person: the last-reply time stays, the author count changes.
+    const older = msg(14, { parentMessageID: 'm-05', authorID: 'u-5', createdAt: '2026-10-07T09:12:30Z' });
+    view.rerenderList({ pages: [{ items: [reply(13, 'u-4'), msg(12), older, reply(11, 'u-3'), ...withRoot(pageOf(1, 10).items, 3)] }] });
+    frames();
+    expect(screen.getByTestId('thread-action-bar')).toHaveTextContent('3 replies');
+    // Same count and time, a different author in the stack.
+    view.rerenderList({ pages: [{ items: [reply(13, 'u-4'), msg(12), older, reply(11, 'u-6'), ...withRoot(pageOf(1, 10).items, 3)] }] });
+    frames();
+    expect(screen.getByTestId('thread-action-bar')).toHaveTextContent('3 replies');
+    // All replies gone: the entry disappears.
+    view.rerenderList({ pages: [{ items: [msg(12), ...withRoot(pageOf(1, 10).items, 0)] }] });
+    frames();
+    expect(screen.queryByTestId('thread-action-bar')).toBeNull();
   });
 });
 
