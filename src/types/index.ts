@@ -371,12 +371,12 @@ export interface ActivityItem {
   actorID?: string;
   // Shown instead of resolving actorID (incoming-webhook messages).
   actorName?: string;
+  // The actor is an incoming webhook: render actorName as a bot.
+  webhook?: boolean;
   // reaction-only
   emoji?: string;
   // channel_added: the channel's name when the item was recorded.
   parentName?: string;
-  // Thread root for thread replies (and mentions made inside a thread).
-  threadRootID?: string;
   // mention-only
   mentionKind?: MentionKind;
   read?: boolean;
@@ -386,7 +386,18 @@ export interface ActivityFeed {
   items: ActivityItem[];
   unread: number;
   // Unread items per type, for the Activity tab dots.
-  unreadByType?: Partial<Record<ActivityType, number>>;
+  unreadByType: Partial<Record<ActivityType, number>>;
+}
+
+// activity.read: what changed in the stream — one group per event.
+export interface ActivityChangedEvent {
+  all?: boolean;
+  ids?: string[];
+  read?: boolean;
+  removed?: string[];
+  updated?: string[];
+  parentID?: string;
+  threadRootID?: string;
 }
 
 export interface Reminder {
@@ -450,4 +461,6 @@ export type WireDriftChecks = [
   AssertAssignable<Required<MarkUnreadResult>, wire.MarkUnreadResult>,
   AssertAssignable<Required<UserState>, wire.UserState>,
   AssertAssignable<Required<ScheduledMessage>, wire.ScheduledMessage>,
+  AssertAssignable<Required<ActivityItem>, wire.ActivityFeedItem>,
+  AssertAssignable<Required<ActivityChangedEvent>, wire.ActivityChangedEvent>,
 ];

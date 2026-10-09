@@ -123,11 +123,11 @@ describe('ActivityPanel', () => {
         item({ id: 'ma', type: 'mention', mentionKind: 'all', parentID: 'ch-gen' }),
         item({ id: 'mh', type: 'mention', mentionKind: 'here', parentID: 'ch-unknown', parentName: 'ops' }),
         item({ id: 'mk', type: 'mention', mentionKind: 'keyword', parentID: 'ch-unknown', channelSlug: 'support' }),
-        item({ id: 't1', type: 'thread_reply', threadRootID: 'root', actorID: 'u-kirill' }),
-        item({ id: 't2', type: 'thread_reply', threadRootID: 'root', actorID: 'u-ali' }),
-        item({ id: 't3', type: 'thread_reply', threadRootID: 'root2', actorID: 'u-kirill' }),
-        item({ id: 't4', type: 'thread_reply', threadRootID: 'root2', actorID: 'u-ali' }),
-        item({ id: 't5', type: 'thread_reply', threadRootID: 'root2', actorID: 'u-gunter' }),
+        item({ id: 't1', type: 'thread_reply', parentMessageID: 'root', actorID: 'u-kirill' }),
+        item({ id: 't2', type: 'thread_reply', parentMessageID: 'root', actorID: 'u-ali' }),
+        item({ id: 't3', type: 'thread_reply', parentMessageID: 'root2', actorID: 'u-kirill' }),
+        item({ id: 't4', type: 'thread_reply', parentMessageID: 'root2', actorID: 'u-ali' }),
+        item({ id: 't5', type: 'thread_reply', parentMessageID: 'root2', actorID: 'u-gunter' }),
         item({ id: 'r1', type: 'reaction', emoji: '🚀', messageID: 'mine' }),
         item({ id: 'r2', type: 'reaction', messageID: 'mine2' }),
         item({ id: 'd1', type: 'dm', parentID: 'conv-faisal', parentType: 'conversation', actorID: 'u-faisal' }),
@@ -178,8 +178,8 @@ describe('ActivityPanel', () => {
     const onNavigate = vi.fn();
     mockApi({
       items: [
-        item({ id: 't1', type: 'thread_reply', threadRootID: 'root' }),
-        item({ id: 't2', type: 'thread_reply', threadRootID: 'root', read: true }),
+        item({ id: 't1', type: 'thread_reply', parentMessageID: 'root' }),
+        item({ id: 't2', type: 'thread_reply', parentMessageID: 'root', read: true }),
         item({ id: 'd1', type: 'dm', parentID: 'conv-faisal', parentType: 'conversation', read: true }),
         item({ id: 'nm', type: 'mention', parentID: 'ch-gen', channelSlug: undefined }),
         item({ id: 'raw', type: 'mention', parentID: 'ch-nowhere', channelSlug: undefined }),

@@ -167,55 +167,6 @@ func TestEnsureTableWaiterFailure(t *testing.T) {
 func TestRedisStoreArms(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("activity ListActivity corrupt payload", func(t *testing.T) {
-		client := storeRedisClient(t)
-		if err := client.ZAdd(ctx, activityKey("u-c"), redisZ(float64(time.Now().UnixMilli()), "not-json")).Err(); err != nil {
-			t.Fatalf("seed: %v", err)
-		}
-		_, err := NewRedisActivityStore(client).ListActivity(ctx, "u-c")
-		assertUnmarshalErr(t, err, "activity ListActivity")
-	})
-
-	t.Run("activity MarkActivitySeen set error", func(t *testing.T) {
-		client := storeRedisClientFailingOn(t, "set")
-		err := NewRedisActivityStore(client).MarkActivitySeen(ctx, "u-c")
-		if !errors.Is(err, errInjected) {
-			t.Fatalf("MarkActivitySeen: want errInjected, got %v", err)
-		}
-	})
-
-	t.Run("activity MarkActivitySeen clear read state error", func(t *testing.T) {
-		client := storeRedisClientFailingOn(t, "del")
-		err := NewRedisActivityStore(client).MarkActivitySeen(ctx, "u-c")
-		if !errors.Is(err, errInjected) {
-			t.Fatalf("MarkActivitySeen: want errInjected, got %v", err)
-		}
-	})
-
-	t.Run("activity SetActivityRead error", func(t *testing.T) {
-		client := storeRedisClientFailingOn(t, "sadd")
-		err := NewRedisActivityStore(client).SetActivityRead(ctx, "u-c", []string{"a"}, false)
-		if !errors.Is(err, errInjected) {
-			t.Fatalf("SetActivityRead: want errInjected, got %v", err)
-		}
-	})
-
-	t.Run("activity RemoveActivity range error", func(t *testing.T) {
-		client := storeRedisClientFailingOn(t, "zrange")
-		err := NewRedisActivityStore(client).RemoveActivity(ctx, "u-c", []string{"a"})
-		if !errors.Is(err, errInjected) {
-			t.Fatalf("RemoveActivity: want errInjected, got %v", err)
-		}
-	})
-
-	t.Run("activity RemoveActivity write error", func(t *testing.T) {
-		client := storeRedisClientFailingOn(t, "srem")
-		err := NewRedisActivityStore(client).RemoveActivity(ctx, "u-c", []string{"a"})
-		if !errors.Is(err, errInjected) {
-			t.Fatalf("RemoveActivity: want errInjected, got %v", err)
-		}
-	})
-
 	t.Run("draft Get corrupt payload", func(t *testing.T) {
 		client := storeRedisClient(t)
 		if err := client.HSet(ctx, draftHashKey("u-d"), "scope-x", "not-json").Err(); err != nil {

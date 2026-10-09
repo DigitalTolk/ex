@@ -85,15 +85,15 @@ func (m *mockUserStore) HasUsers(_ context.Context) (bool, error) {
 	return m.hasUsersVal, nil
 }
 
-func (m *mockUserStore) NotificationSettingsFor(_ context.Context, userIDs []string) (map[string]model.NotificationSettings, error) {
-	out := make(map[string]model.NotificationSettings)
+func (m *mockUserStore) NotificationAccountsFor(_ context.Context, userIDs []string) (map[string]store.NotificationAccount, error) {
+	out := make(map[string]store.NotificationAccount)
 	for _, uid := range userIDs {
 		if u, ok := m.users[uid]; ok {
+			acct := store.NotificationAccount{Settings: model.DefaultNotificationSettings()}
 			if u.NotificationSettings != nil {
-				out[uid] = *u.NotificationSettings
-			} else {
-				out[uid] = model.DefaultNotificationSettings()
+				acct.Settings = *u.NotificationSettings
 			}
+			out[uid] = acct
 		}
 	}
 	return out, nil

@@ -103,21 +103,21 @@ func (m *mockUserStore) HasUsers(_ context.Context) (bool, error) {
 	return m.hasUsersVal, nil
 }
 
-func (m *mockUserStore) NotificationSettingsFor(_ context.Context, userIDs []string) (map[string]model.NotificationSettings, error) {
+func (m *mockUserStore) NotificationAccountsFor(_ context.Context, userIDs []string) (map[string]store.NotificationAccount, error) {
 	if m.notifErr != nil {
 		return nil, m.notifErr
 	}
-	out := make(map[string]model.NotificationSettings)
+	out := make(map[string]store.NotificationAccount)
 	for _, uid := range userIDs {
 		u, ok := m.users[uid]
 		if !ok {
 			continue
 		}
+		acct := store.NotificationAccount{Settings: model.DefaultNotificationSettings(), Machine: u.IsBot || u.IsAgent()}
 		if u.NotificationSettings != nil {
-			out[uid] = *u.NotificationSettings
-		} else {
-			out[uid] = model.DefaultNotificationSettings()
+			acct.Settings = *u.NotificationSettings
 		}
+		out[uid] = acct
 	}
 	return out, nil
 }

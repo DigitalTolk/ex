@@ -33,7 +33,7 @@ func TestActivityFor(t *testing.T) {
 		parentType string
 		r          recipientReasons
 		wantType   model.ActivityType
-		wantKind   string
+		wantKind   model.MentionKind
 	}{
 		{"explicit mention wins even when muted", ParentChannel, recipientReasons{explicitMention: true, muted: true}, model.ActivityMention, model.MentionKindUser},
 		{"explicit mention in a DM", ParentConversation, recipientReasons{explicitMention: true}, model.ActivityMention, model.MentionKindUser},
@@ -43,8 +43,13 @@ func TestActivityFor(t *testing.T) {
 		{"group mention", ParentChannel, recipientReasons{groupMention: true}, model.ActivityMention, model.MentionKindAll},
 		{"keyword", ParentChannel, recipientReasons{keyword: true}, model.ActivityMention, model.MentionKindKeyword},
 		{"followed thread reply", ParentChannel, recipientReasons{threadReply: true, threadParticipant: true, threadReplies: true}, model.ActivityThreadReply, ""},
-		{"thread reply with replies turned off", ParentChannel, recipientReasons{threadReply: true, threadParticipant: true}, "", ""},
+		// The Activity tab lists replies in your threads whatever the
+		// thread-reply notification toggle says; mutes still apply.
+		{"thread reply with replies notifications off", ParentChannel, recipientReasons{threadReply: true, threadParticipant: true}, model.ActivityThreadReply, ""},
+		{"thread reply in a muted channel", ParentChannel, recipientReasons{threadReply: true, threadParticipant: true, muted: true}, "", ""},
 		{"thread reply to a bystander", ParentChannel, recipientReasons{threadReply: true, threadReplies: true}, "", ""},
+		{"keyword in a thread reply to a bystander", ParentChannel, recipientReasons{threadReply: true, keyword: true}, model.ActivityMention, model.MentionKindKeyword},
+		{"group mention in a thread reply", ParentChannel, recipientReasons{threadReply: true, groupMention: true}, model.ActivityMention, model.MentionKindAll},
 		{"plain channel message", ParentChannel, recipientReasons{}, "", ""},
 	}
 	for _, tc := range cases {
@@ -147,5 +152,53 @@ func TestNotificationService_NoActivityForPlainChannelMessage(t *testing.T) {
 
 	if rec.calls != 0 {
 		t.Fatalf("a plain channel message must not reach the Activity tab, got %d calls", rec.calls)
+	}
+}
+
+// A webhook post's items are flagged as a bot's, and a thread reply's items
+// carry the thread root (parentMessageID) so the row can open the thread.
+func TestNotificationService_ActivityCarriesWebhookAndThreadRoot(t *testing.T) {
+	svc, _, members, _, chans, users := setupNotifier(t)
+	rec := &recordingActivity{}
+	svc.SetActivityRecorder(rec)
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "alerts", Slug: "alerts", Type: model.ChannelTypePublic}
+	users.users["u-bob"] = &model.User{ID: "u-bob", DisplayName: "Bob"}
+	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
+
+	svc.NotifyForMessage(context.Background(), &model.Message{
+		ID: "m1", ParentID: "ch1", AuthorID: WebhookAuthorID, WebhookUsername: "pagerduty",
+		ParentMessageID: "root-1", Body: "@[u-bob|Bob] disk full",
+	}, ParentChannel, nil)
+
+	got := rec.items["u-bob"]
+	if got == nil || !got.Webhook || got.ActorName != "pagerduty" || got.ParentMessageID != "root-1" {
+		t.Fatalf("item = %+v, want a webhook item carrying the thread root", got)
+	}
+	if got.MessagePreview != "@Bob disk full" {
+		t.Fatalf("preview = %q", got.MessagePreview)
+	}
+}
+
+// Bots and agents in the audience still get their notification decision, but
+// no activity item: nobody reads a machine's stream.
+func TestNotificationService_NoActivityForMachineMembers(t *testing.T) {
+	svc, _, members, _, chans, users := setupNotifier(t)
+	rec := &recordingActivity{}
+	svc.SetActivityRecorder(rec)
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "General", Slug: "general", Type: model.ChannelTypePublic}
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	users.users["u-bob"] = &model.User{ID: "u-bob", DisplayName: "Bob"}
+	users.users["agent-1"] = &model.User{ID: "agent-1", DisplayName: "gg", Kind: model.UserKindAgent}
+	users.users["bot-1"] = &model.User{ID: "bot-1", DisplayName: "alerts", IsBot: true}
+	for _, uid := range []string{"u-author", "u-bob", "agent-1", "bot-1"} {
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+
+	svc.NotifyForMessage(context.Background(), &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "@all heads up"}, ParentChannel, nil)
+
+	if len(rec.items) != 1 || rec.items["u-bob"] == nil {
+		t.Fatalf("items = %v, want only the human member", rec.items)
 	}
 }

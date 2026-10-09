@@ -48,10 +48,10 @@ describe('activity filters', () => {
 describe('groupActivity', () => {
   it('folds replies in one thread, same-emoji reactions and one DM into single rows', () => {
     const rows = groupActivity([
-      item({ id: 'a', type: 'thread_reply', threadRootID: 'root', actorID: 'u-1' }),
+      item({ id: 'a', type: 'thread_reply', parentMessageID: 'root', actorID: 'u-1' }),
       item({ id: 'b', type: 'mention', actorID: 'u-2' }),
-      item({ id: 'c', type: 'thread_reply', threadRootID: 'root', actorID: 'u-3', read: true }),
-      item({ id: 'd', type: 'thread_reply', threadRootID: 'root', actorID: 'u-1' }),
+      item({ id: 'c', type: 'thread_reply', parentMessageID: 'root', actorID: 'u-3', read: true }),
+      item({ id: 'd', type: 'thread_reply', parentMessageID: 'root', actorID: 'u-1' }),
       item({ id: 'e', type: 'reaction', messageID: 'm-x', emoji: '🚀', actorID: 'u-4' }),
       item({ id: 'f', type: 'reaction', messageID: 'm-x', emoji: '🚀', actorID: 'u-5' }),
       item({ id: 'g', type: 'reaction', messageID: 'm-x', emoji: '👍', actorID: 'u-5' }),

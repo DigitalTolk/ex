@@ -67,6 +67,9 @@ func (s *MessageService) MarkUnread(ctx context.Context, userID, parentID, paren
 	if err := seqStore.SetLastRead(ctx, parentID, userID, max(current-unread, 0)); err != nil {
 		return nil, fmt.Errorf("message: mark unread: set last read: %w", err)
 	}
+	if s.activity != nil {
+		s.activity.MarkParentRead(ctx, userID, parentID, "", msg.CreatedAt.Add(-time.Millisecond))
+	}
 	// `unread` (not a bare {channelID}, which means "read elsewhere — clear
 	// the badge") tells the other tabs to refetch the row.
 	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
@@ -101,6 +104,9 @@ func (s *MessageService) markThreadUnread(ctx context.Context, userID, parentID,
 		if err := s.userState.SetUserState(ctx, item); err != nil {
 			return nil, fmt.Errorf("message: mark thread unread: %w", err)
 		}
+	}
+	if s.activity != nil {
+		s.activity.MarkParentRead(ctx, userID, parentID, root, seenAt)
 	}
 	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
 		"userState": true,
