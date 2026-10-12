@@ -176,12 +176,18 @@ describe('ConversationRow browser behaviour', () => {
     await expect.element(screen.getByTestId('conversation-row-cv-2')).toBeVisible();
   });
 
-  it('shows the availability dot for unread without alerts', async () => {
-    // Two-tier unread: quiet unread (e.g. a muted DM's chatter, or an
-    // alerted count that hasn't synced) is the dot — numbers are alerts.
+  it('plain unread only emboldens the name: no dot, no badge', async () => {
     const screen = await renderRow(dm, { hasUnread: true, notifyCount: 0 });
-    await expect.element(screen.getByTestId('conversation-unread-dot-cv-1')).toBeVisible();
+    await expect.element(screen.getByTestId('conversation-row-cv-1')).toBeVisible();
+    expect(document.querySelector('[data-testid="conversation-unread-dot-cv-1"]')).toBeNull();
     expect(document.querySelector('[data-testid="conversation-unread-badge-cv-1"]')).toBeNull();
+  });
+
+  it('shows a dot when replies in a thread the user is in are unread', async () => {
+    await renderRow(dm, { hasUnread: true, threadUnread: true, notifyCount: 0 });
+    const dot = document.querySelector('[data-testid="conversation-unread-dot-cv-1"]') as HTMLElement;
+    expect(dot.getAttribute('aria-label')).toBe('Unread thread replies');
+    expect(dot.className).toContain('bg-brand');
   });
 
   it('renders the exact alerted count when under 100', async () => {

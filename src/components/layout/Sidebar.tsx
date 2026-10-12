@@ -1389,6 +1389,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                                 <ChannelRow
                                   channel={item.channel}
                                   hasUnread={!!item.channel.unread || threadUnreadParents.has(item.channel.channelID)}
+                                  threadUnread={threadUnreadParents.has(item.channel.channelID)}
                                   notifyCount={Number(item.channel.unreadNotifyCount ?? 0)}
                                   onClose={onClose}
                                   draggable={!rowDragDisabled}
@@ -1432,6 +1433,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                                 <ConversationRow
                                   conversation={conv}
                                   hasUnread={!!conv.unread || threadUnreadParents.has(conv.conversationID)}
+                                  threadUnread={threadUnreadParents.has(conv.conversationID)}
                                   notifyCount={Number(conv.unreadNotifyCount ?? 0)}
                                   dmAvatarURL={resolvedDMAvatarURL}
                                   dmUserStatus={resolvedDMUserStatus}
@@ -1449,6 +1451,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                             <ConversationRow
                               conversation={conv}
                               hasUnread={!!conv.unread || threadUnreadParents.has(conv.conversationID)}
+                              threadUnread={threadUnreadParents.has(conv.conversationID)}
                               notifyCount={Number(conv.unreadNotifyCount ?? 0)}
                               dmAvatarURL={resolvedDMAvatarURL}
                               dmUserStatus={resolvedDMUserStatus}

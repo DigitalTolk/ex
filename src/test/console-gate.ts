@@ -17,10 +17,14 @@ const allowedWarnings = [
 // error events that vitest-browser reports through console.error; they are not
 // real failures, so we allow exactly these known messages (and nothing else).
 const RESIZE_OBSERVER_NOISE = /ResizeObserver loop (completed with undelivered notifications|limit exceeded)/;
+// Uppy reports a failed upload asynchronously; a test that drops a file into
+// the composer has moved on by the time the mocked S3 answers 404, so the
+// message lands in whichever test runs next. Not a failure of that test.
+const UPPY_S3_NOISE = /\[Uppy\].*S3 returned 404/;
 const allowedErrors = [
   (args: unknown[]) => args.some((a) => {
     const text = a instanceof Error ? a.message : typeof a === 'string' ? a : '';
-    return RESIZE_OBSERVER_NOISE.test(text);
+    return RESIZE_OBSERVER_NOISE.test(text) || UPPY_S3_NOISE.test(text);
   }),
 ];
 

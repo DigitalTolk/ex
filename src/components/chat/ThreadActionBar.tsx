@@ -84,15 +84,16 @@ export function ThreadActionBar({
           );
         })}
       </span>
-      <span className="shrink-0 whitespace-nowrap font-semibold text-primary">
+      {/* New replies colour the count itself, Slack-style, instead of adding a
+          marker next to it. */}
+      <span
+        className={`shrink-0 whitespace-nowrap font-semibold ${hasNew ? 'text-destructive' : 'text-primary'}`}
+        data-testid={hasNew ? 'thread-action-new' : undefined}
+        aria-label={hasNew ? 'New replies' : undefined}
+        title={hasNew ? 'New replies' : undefined}
+      >
         {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
       </span>
-      {hasNew && (
-        <span data-testid="thread-action-new" className="flex shrink-0 items-center gap-1 font-semibold text-destructive">
-          <span className="h-1.5 w-1.5 rounded-full bg-destructive" aria-hidden="true" />
-          New replies
-        </span>
-      )}
       {lastReplyAt && (
         <span
           data-testid="thread-action-last-reply"

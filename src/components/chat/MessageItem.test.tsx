@@ -36,11 +36,16 @@ vi.mock('@/components/ui/dropdown-menu');
 
 function renderWithProviders(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const result = render(
     <QueryClientProvider client={qc}>
       <BrowserRouter>{ui}</BrowserRouter>
     </QueryClientProvider>,
   );
+  // The hover toolbar mounts on hover (MessageItem): hover the row so the
+  // tests can reach its actions the way a pointer user does.
+  const row = result.container.querySelector('[data-message-id]');
+  if (row) fireEvent.mouseEnter(row);
+  return result;
 }
 
 function makeMessage(overrides: Partial<Message> = {}): Message {
@@ -399,6 +404,10 @@ describe('MessageItem', () => {
         currentUserId="user-1"
       />,
     );
+    // The chip's tooltip mounts lazily on first hover and swaps the chip
+    // element; a browser hit-tests the click afresh, user-event does not,
+    // so hover first and click the chip as it then is.
+    await user.hover(screen.getByRole('listitem'));
     await user.click(screen.getByRole('listitem'));
     expect(mockReactMutate).toHaveBeenCalledWith({
       messageId: 'msg-1',

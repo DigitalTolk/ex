@@ -6,6 +6,37 @@ import { BrowserRouter } from 'react-router-dom';
 import { MessageItem } from './MessageItem';
 import type { Message } from '@/types';
 
+// The picker's calendar opens on the seed's month; tomorrow is always on it
+// (as an outside day at a month's end), so pick that and check the day.
+function tomorrow(): Date {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return d;
+}
+function isoDay(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+async function pickTomorrow() {
+  const day = await vi.waitFor(() => {
+    const el = document.querySelector(`[data-testid="reminder-day-${isoDay(tomorrow())}"]`) as HTMLButtonElement | null;
+    expect(el).not.toBeNull();
+    return el!;
+  });
+  await userEvent.click(day);
+}
+
+
+// Hover without moving the browser's one real mouse (other files run in
+// parallel and a real pointer crossing their rows makes hover-only checks
+// flake): React derives onMouseEnter from mouseover, and a tick lets the
+// hover state flush.
+async function hoverRow(row: Element | null) {
+  row?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+  row?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 20));
+}
+
+
 // Browser-only surface: the desktop "Remind me" submenu (base-ui Submenu needs a
 // real browser) and its channel/conversation target computation + custom dialog.
 
@@ -65,6 +96,8 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
 }
 
 async function openMenu() {
+  // The toolbar mounts on hover (MessageItem): hover the row first.
+  await hoverRow(document.querySelector('[data-message-id]'));
   await userEvent.click(document.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement);
 }
 
@@ -152,11 +185,11 @@ describe('MessageItem "Remind me"', () => {
     await openMenu();
     await userEvent.click(screen.getByTestId('remind-me-trigger'));
     await userEvent.click(screen.getByTestId('remind-custom'));
-    const input = screen.getByTestId('reminder-datetime');
-    await userEvent.fill(input, '2999-01-01T09:00');
+        await pickTomorrow();
+    await userEvent.fill(document.querySelector('[data-testid="reminder-time"]') as HTMLInputElement, '09:00');
     await userEvent.click(screen.getByTestId('reminder-confirm'));
     await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
-    expect((createReminderMutateAsync.mock.calls[0][0].remindAt as string).startsWith("2999")).toBe(true);
+    expect(new Date(createReminderMutateAsync.mock.calls[0][0].remindAt as string).getDate()).toBe(tomorrow().getDate());
   });
 
   it('mobile action sheet shows a single Remind me item (no inline preset list) that opens the dialog', async () => {
@@ -173,7 +206,7 @@ describe('MessageItem "Remind me"', () => {
     expect(remind).not.toBeNull();
     // Tapping it opens the separate date-selector popup right away.
     await userEvent.click(remind);
-    await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-datetime"]')).not.toBeNull());
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-dialog"]')).not.toBeNull());
   });
 
   it('schedules a reminder from the mobile action sheet via the date-selector popup', async () => {
@@ -183,12 +216,8 @@ describe('MessageItem "Remind me"', () => {
     );
     await openMobileSheet();
     await userEvent.click(document.querySelector('[data-testid="mobile-remind"]') as HTMLButtonElement);
-    const input = await vi.waitFor(() => {
-      const el = document.querySelector('[data-testid="reminder-datetime"]') as HTMLInputElement | null;
-      expect(el).not.toBeNull();
-      return el!;
-    });
-    await userEvent.fill(input, '2999-03-03T08:00');
+        await pickTomorrow();
+    await userEvent.fill(document.querySelector('[data-testid="reminder-time"]') as HTMLInputElement, '08:00');
     // On mobile the confirm lives in the dialog's top-right header (the iOS
     // date wheel covers a bottom footer).
     await userEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLButtonElement);
@@ -241,7 +270,8 @@ describe('MessageItem "Remind me" — self-DM parity', () => {
         await openMenu();
         await userEvent.click(screen.getByTestId('remind-me-trigger'));
         await userEvent.click(screen.getByTestId('remind-custom'));
-        await userEvent.fill(screen.getByTestId('reminder-datetime'), '2999-01-01T09:00');
+        await pickTomorrow();
+        await userEvent.fill(screen.getByTestId('reminder-time'), '09:00');
         await userEvent.click(screen.getByTestId('reminder-confirm'));
         await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
         expect(createReminderMutateAsync.mock.calls[0][0]).toMatchObject(target);
@@ -261,12 +291,8 @@ describe('MessageItem "Remind me" — self-DM parity', () => {
         );
         await openMobileSheet();
         await userEvent.click(document.querySelector('[data-testid="mobile-remind"]') as HTMLButtonElement);
-        const input = await vi.waitFor(() => {
-          const el = document.querySelector('[data-testid="reminder-datetime"]') as HTMLInputElement | null;
-          expect(el).not.toBeNull();
-          return el!;
-        });
-        await userEvent.fill(input, '2999-03-03T08:00');
+                await pickTomorrow();
+        await userEvent.fill(document.querySelector('[data-testid="reminder-time"]') as HTMLInputElement, '08:00');
         await userEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLButtonElement);
         await vi.waitFor(() => expect(createReminderMutateAsync).toHaveBeenCalledTimes(1));
         expect(createReminderMutateAsync.mock.calls[0][0]).toMatchObject({

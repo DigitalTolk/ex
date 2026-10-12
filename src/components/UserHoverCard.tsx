@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -34,7 +34,11 @@ interface UserHoverCardProps {
   children: ReactNode;
 }
 
-export function UserHoverCard({
+// The popover's subtree — the user fetch, the DM mutation, the router hook
+// and the derived fields — lives in UserHoverCardContent and mounts only while
+// the card is open. Three cards mount per message row (avatar, name, mention
+// pills), so a closed card must cost no more than its trigger span.
+function UserHoverCardImpl({
   userId,
   displayName,
   avatarURL,
@@ -48,45 +52,16 @@ export function UserHoverCard({
 }: UserHoverCardProps) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLSpanElement>(null);
-  const navigate = useNavigate();
   // Mention hovers know only userId; author hovers pass `online` and
   // `avatarURL` from their userMap. Fall back to the per-user presence
   // selector (re-renders only when THIS user's flag flips) and the lazy
   // /users fetch so both paths render identical chrome.
   const storeOnline = useIsOnline(userId);
   const effectiveOnline = online ?? storeOnline;
-
-  const startDM = useMutation({
-    mutationFn: () =>
-      apiFetch<Conversation>('/api/v1/conversations', {
-        method: 'POST',
-        body: JSON.stringify({ type: 'dm', participantIDs: [userId] }),
-      }),
-    onSuccess: (conv) => {
-      navigate(`/conversation/${conv.id}`);
-      setOpen(false);
-    },
-  });
-
-  // Fetch user details lazily on first open. Non-admin viewers receive a
-  // limited payload (status, displayName, avatarURL); admins get the full
-  // record including authProvider — both paths are sufficient to render
-  // the inactive badge correctly.
-  const { data: userDetails } = useQuery<Partial<User>>({
-    queryKey: queryKeys.user(userId),
-    queryFn: () => apiFetch<Partial<User>>(`/api/v1/users/${userId}`),
-    enabled: open && !integrationOwnerName,
-    staleTime: 30_000,
-  });
-  const inactive = userDetails?.status === 'deactivated';
-  const effectiveAvatar = avatarURL ?? userDetails?.avatarURL;
-  const effectiveStatus = userStatus ?? userDetails?.userStatus;
-  const lastSeen = formatLastSeen(userDetails?.lastSeenAt, effectiveOnline);
-  const effectiveTimeZone = isValidTimeZone(userDetails?.timeZone) ? userDetails.timeZone : undefined;
-  const timeZoneDelta = formatTimeZoneDelta(effectiveTimeZone);
-  const timeZoneName = formatTimeZoneName(effectiveTimeZone);
-
-  const isSelf = currentUserId === userId;
+  // The status the open card fetched, so the inline indicator keeps showing
+  // it after the card closes (as it did when the fetch lived up here).
+  const [fetchedStatus, setFetchedStatus] = useState<UserStatus | undefined>(undefined);
+  const inlineStatus = userStatus ?? fetchedStatus;
 
   return (
     <>
@@ -100,7 +75,7 @@ export function UserHoverCard({
         }}
       >
         {children}
-        {showInlineStatus && !integrationOwnerName && <UserStatusIndicator status={effectiveStatus} />}
+        {showInlineStatus && !integrationOwnerName && <UserStatusIndicator status={inlineStatus} />}
       </span>
       <PopoverPortal
         open={open}
@@ -114,7 +89,8 @@ export function UserHoverCard({
         mobileSheet
         className="w-72 rounded-md border bg-popover p-3 shadow-lg touch:w-screen touch:max-w-none touch:rounded-b-none touch:rounded-t-xl touch:border-b-0 touch:pb-[calc(env(safe-area-inset-bottom)+0.75rem)] touch:pl-[max(0.75rem,env(safe-area-inset-left))] touch:pr-[max(0.75rem,env(safe-area-inset-right))]"
       >
-        {integrationOwnerName ? (
+        {open ? (
+          integrationOwnerName ? (
           <div data-testid="hover-card-integration">
             <div className="flex items-start gap-3">
               <Avatar className="h-12 w-12">
@@ -132,7 +108,78 @@ export function UserHoverCard({
               This post was created by an integration from @{integrationOwnerName}.
             </p>
           </div>
-        ) : (
+          ) : (
+            <UserHoverCardContent
+              userId={userId}
+              displayName={displayName}
+              avatarURL={avatarURL}
+              userStatus={userStatus}
+              effectiveOnline={effectiveOnline}
+              isSelf={currentUserId === userId}
+              onClose={() => setOpen(false)}
+              onStatus={setFetchedStatus}
+            />
+          )
+        ) : null}
+      </PopoverPortal>
+    </>
+  );
+}
+
+export const UserHoverCard = memo(UserHoverCardImpl);
+
+function UserHoverCardContent({
+  userId,
+  displayName,
+  avatarURL,
+  userStatus,
+  effectiveOnline,
+  isSelf,
+  onClose,
+  onStatus,
+}: {
+  userId: string;
+  displayName: string;
+  avatarURL?: string;
+  userStatus?: UserStatus;
+  effectiveOnline: boolean;
+  isSelf: boolean;
+  onClose: () => void;
+  onStatus: (status: UserStatus | undefined) => void;
+}) {
+  const navigate = useNavigate();
+  const startDM = useMutation({
+    mutationFn: () =>
+      apiFetch<Conversation>('/api/v1/conversations', {
+        method: 'POST',
+        body: JSON.stringify({ type: 'dm', participantIDs: [userId] }),
+      }),
+    onSuccess: (conv) => {
+      navigate(`/conversation/${conv.id}`);
+      onClose();
+    },
+  });
+
+  // Non-admin viewers receive a limited payload (status, displayName,
+  // avatarURL); admins get the full record including authProvider — both
+  // paths are sufficient to render the inactive badge correctly.
+  const { data: userDetails } = useQuery<Partial<User>>({
+    queryKey: queryKeys.user(userId),
+    queryFn: () => apiFetch<Partial<User>>(`/api/v1/users/${userId}`),
+    staleTime: 30_000,
+  });
+  const inactive = userDetails?.status === 'deactivated';
+  const effectiveAvatar = avatarURL ?? userDetails?.avatarURL;
+  const effectiveStatus = userStatus ?? userDetails?.userStatus;
+  useEffect(() => {
+    onStatus(userDetails?.userStatus);
+  }, [userDetails?.userStatus, onStatus]);
+  const lastSeen = formatLastSeen(userDetails?.lastSeenAt, effectiveOnline);
+  const effectiveTimeZone = isValidTimeZone(userDetails?.timeZone) ? userDetails.timeZone : undefined;
+  const timeZoneDelta = formatTimeZoneDelta(effectiveTimeZone);
+  const timeZoneName = formatTimeZoneName(effectiveTimeZone);
+
+  return (
         <div>
           <div data-testid="hover-card-header" className="flex items-start gap-3">
             <div className="relative">
@@ -240,8 +287,5 @@ export function UserHoverCard({
             </Button>
           )}
         </div>
-        )}
-      </PopoverPortal>
-    </>
   );
 }

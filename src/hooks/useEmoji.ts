@@ -66,9 +66,12 @@ export function useFrequentEmojis(limit?: number) {
     return () => window.removeEventListener(EMOJI_FREQUENCY_CHANGED_EVENT, onChanged);
   }, [qc]);
   // Exclude work-pack emojis BEFORE the limit so the top-N still fills with N
-  // genuine everyday reactions.
-  const list = (data ?? []).filter((shortcode) => !workPackShortcodes.has(shortcode));
-  return limit ? list.slice(0, limit) : list;
+  // genuine everyday reactions. Memoized: the result is a prop of every
+  // message row, and a fresh array per render re-rendered them all.
+  return useMemo(() => {
+    const list = (data ?? []).filter((shortcode) => !workPackShortcodes.has(shortcode));
+    return limit ? list.slice(0, limit) : list;
+  }, [data, workPackShortcodes, limit]);
 }
 
 export function useUploadEmoji() {

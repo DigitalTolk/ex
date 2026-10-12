@@ -6,6 +6,37 @@ import { BrowserRouter } from 'react-router-dom';
 import { MessageItem } from './MessageItem';
 import type { Message } from '@/types';
 
+// The picker's calendar opens on the seed's month; tomorrow is always on it
+// (as an outside day at a month's end), so pick that and check the day.
+function tomorrow(): Date {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return d;
+}
+function isoDay(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+async function pickTomorrow() {
+  const day = await vi.waitFor(() => {
+    const el = document.querySelector(`[data-testid="reminder-day-${isoDay(tomorrow())}"]`) as HTMLButtonElement | null;
+    expect(el).not.toBeNull();
+    return el!;
+  });
+  await userEvent.click(day);
+}
+
+
+// Hover without moving the browser's one real mouse (other files run in
+// parallel and a real pointer crossing their rows makes hover-only checks
+// flake): React derives onMouseEnter from mouseover, and a tick lets the
+// hover state flush.
+async function hoverRow(row: Element | null) {
+  row?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+  row?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 20));
+}
+
+
 // Unlike MessageItem.reminder.browser.test (which mocks useActivity to spy on
 // mutate), this drives the REAL useCreateReminder hook and only stubs apiFetch,
 // proving the "Remind me" flow actually issues POST /api/v1/reminders.
@@ -62,6 +93,7 @@ describe('MessageItem "Remind me" — real POST', () => {
     const screen = await renderItem(
       <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} channelId="channel-1" channelSlug="general" />,
     );
+    await hoverRow(document.querySelector('[data-message-id]')); // the toolbar mounts on hover
     await userEvent.click(document.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement);
     await userEvent.click(screen.getByTestId('remind-me-trigger'));
     await userEvent.click(screen.getByTestId('remind-in1h'));
@@ -79,15 +111,17 @@ describe('MessageItem "Remind me" — real POST', () => {
     const screen = await renderItem(
       <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} channelId="channel-1" channelSlug="general" />,
     );
+    await hoverRow(document.querySelector('[data-message-id]')); // the toolbar mounts on hover
     await userEvent.click(document.querySelector('[data-testid="message-actions-trigger"]') as HTMLButtonElement);
     await userEvent.click(screen.getByTestId('remind-me-trigger'));
     await userEvent.click(screen.getByTestId('remind-custom'));
-    await userEvent.fill(screen.getByTestId('reminder-datetime'), '2999-01-01T09:00');
+    await pickTomorrow();
+    await userEvent.fill(screen.getByTestId('reminder-time'), '09:00');
     await userEvent.click(screen.getByTestId('reminder-confirm'));
 
     await vi.waitFor(() => expect(reminderPosts().length).toBe(1));
     const sent = JSON.parse(reminderPosts()[0][1].body);
-    expect(sent.remindAt.startsWith('2999')).toBe(true);
+    expect(new Date(sent.remindAt).getDate()).toBe(tomorrow().getDate());
   });
 
   it('a mobile-sheet reminder issues POST /api/v1/reminders via the date-selector popup', async () => {
@@ -99,16 +133,12 @@ describe('MessageItem "Remind me" — real POST', () => {
     row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
     await vi.waitFor(() => expect(document.querySelector('[data-testid="mobile-message-actions"]')).not.toBeNull(), { timeout: 2000 });
     await userEvent.click(document.querySelector('[data-testid="mobile-remind"]') as HTMLButtonElement);
-    const input = await vi.waitFor(() => {
-      const el = document.querySelector('[data-testid="reminder-datetime"]') as HTMLInputElement | null;
-      expect(el).not.toBeNull();
-      return el!;
-    });
-    await userEvent.fill(input, '2999-01-01T09:00');
+    await pickTomorrow();
+    await userEvent.fill(document.querySelector('[data-testid="reminder-time"]') as HTMLInputElement, '09:00');
     // On mobile the confirm lives in the dialog's top-right header (the iOS
     // date wheel covers a bottom footer).
     await userEvent.click(document.querySelector('[data-slot="dialog-mobile-action"]') as HTMLButtonElement);
-    await vi.waitFor(() => expect(reminderPosts().length).toBe(1));
+    await vi.waitFor(() => expect(reminderPosts().length).toBe(1), { timeout: 3000 });
     expect(reminderPosts()[0][1].method).toBe('POST');
   });
 });

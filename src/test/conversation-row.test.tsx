@@ -255,13 +255,17 @@ describe('ConversationRow', () => {
     expect(screen.queryByTestId('conversation-unread-badge-c-1')).toBeNull();
   });
 
-  it('shows the availability dot for unread without alerts', () => {
-    // Two-tier unread: DM messages normally alert (so DMs usually show the
-    // number), but a muted DM's quiet unread — or a not-yet-synced alerted
-    // count — reads as the availability dot, never a phantom number.
+  it('plain unread without alerts only emboldens the name', () => {
+    // DM messages normally alert (so DMs usually show the number); quiet
+    // unread, such as a muted DM's chatter, just makes the name bold.
     renderRow(sampleConv, { hasUnread: true, notifyCount: 0 });
     expect(screen.queryByTestId('conversation-unread-badge-c-1')).toBeNull();
-    expect(screen.getByTestId('conversation-unread-dot-c-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('conversation-unread-dot-c-1')).toBeNull();
+  });
+
+  it('shows a dot for unread replies in a thread the user is in', () => {
+    renderRow(sampleConv, { hasUnread: true, threadUnread: true, notifyCount: 0 });
+    expect(screen.getByTestId('conversation-unread-dot-c-1')).toHaveAttribute('aria-label', 'Unread thread replies');
   });
 
   it('shows a numeric badge counting the alerting messages (capped at 99+)', () => {

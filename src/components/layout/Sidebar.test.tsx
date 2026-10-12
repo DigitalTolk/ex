@@ -1769,12 +1769,14 @@ describe('Sidebar unread view', () => {
     });
   }
 
-  it('is off by default, with no dot on the options icon', () => {
+  it('is off by default, with the options icon unlit', () => {
     mockChannels = mockChannels.map((c) => (c.channelID === 'ch-1' ? { ...c, unread: true } : c));
     renderSidebar();
     expect(unreadGroup()).toBeNull();
     expect(screen.queryByTestId('sidebar-unread-only-strip')).toBeNull();
-    expect(screen.getByTestId('sidebar-unread-options').querySelector('span')).toBeNull();
+    const options = screen.getByTestId('sidebar-unread-options');
+    expect(options).toHaveAttribute('data-active', 'false');
+    expect(options).toHaveAttribute('title', 'Unread view options');
   });
 
   it('"Group unread at top" pulls unread chats into a non-draggable Unread section, and is remembered', async () => {
@@ -1792,7 +1794,11 @@ describe('Sidebar unread view', () => {
     // No category affordances on it.
     expect(screen.queryByTestId('sidebar-category-menu-__unread__')).toBeNull();
     expect(localStorage.getItem('sidebar.unreadSection')).toBe('1');
-    expect(screen.getByTestId('sidebar-unread-options').querySelector('span')).not.toBeNull();
+    // The icon lights up and its tooltip names what is on; no red dot.
+    const options = screen.getByTestId('sidebar-unread-options');
+    expect(options).toHaveAttribute('data-active', 'true');
+    expect(options).toHaveAttribute('title', 'Unread view: grouped at top');
+    expect(options.querySelector('span')).toBeNull();
 
     await toggle(user, 'sidebar-unread-section-toggle');
     expect(unreadGroup()).toBeNull();
@@ -1871,6 +1877,7 @@ describe('Sidebar unread view', () => {
     // Sections with nothing to show disappear.
     expect(screen.queryByTestId('sidebar-group-__dms__')).toBeNull();
     expect(localStorage.getItem('sidebar.unreadOnly')).toBe('1');
+    expect(screen.getByTestId('sidebar-unread-options')).toHaveAttribute('title', 'Unread view: unread only');
 
     await user.click(screen.getByTestId('sidebar-unread-show-all'));
     expect(screen.getByText('general')).toBeInTheDocument();

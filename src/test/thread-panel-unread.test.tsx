@@ -49,7 +49,7 @@ vi.mock('@/hooks/useThreads', () => ({
 }));
 
 import { ThreadPanel } from '@/components/chat/ThreadPanel';
-import { endReadSession, holdRead, keepReadSession, setUnreadAnchor, threadReadKey } from '@/lib/read-position';
+import { endReadSession, holdRead, isUnreadSeen, keepReadSession, setUnreadAnchor, threadReadKey } from '@/lib/read-position';
 
 // The thread's "New messages" line and "Mark as unread" hold.
 function renderPanel() {
@@ -91,6 +91,33 @@ describe('ThreadPanel unread', () => {
     expect(markThreadSeenMock).toHaveBeenCalledWith('root-1', at(3), { parentID: 'ch-1', parentType: 'channel' });
     const line = screen.getByTestId('unread-divider');
     expect(line.nextElementSibling?.textContent).toContain('second reply');
+  });
+
+  it('once the line has been seen it retires in place: same box, invisible, and the thread remembers', () => {
+    type IOCallback = (entries: Array<{ isIntersecting: boolean }>) => void;
+    const callbacks: IOCallback[] = [];
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(cb: IOCallback) { callbacks.push(cb); }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+      takeRecords() { return []; }
+    });
+    vi.useFakeTimers();
+    try {
+      setUnreadAnchor(key, { kind: 'after', at: at(2) });
+      renderPanel();
+      const line = screen.getByTestId('unread-divider');
+      expect(line).not.toHaveAttribute('data-retired');
+      act(() => callbacks[0]([{ isIntersecting: true }]));
+      act(() => vi.advanceTimersByTime(3500));
+      expect(isUnreadSeen(key)).toBe(true);
+      expect(screen.getByTestId('unread-divider')).toHaveAttribute('data-retired', 'true');
+      expect(screen.getByTestId('unread-divider').nextElementSibling?.textContent).toContain('second reply');
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('never puts the line on the root', () => {

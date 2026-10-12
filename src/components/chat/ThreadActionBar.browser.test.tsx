@@ -68,7 +68,8 @@ describe('ThreadActionBar browser behaviour', () => {
     const bar = document.querySelector('[data-testid="thread-action-bar"]')!;
     expect(bar.getAttribute('data-new')).toBe('true');
     expect(bar.getAttribute('aria-label')).toBe('View 3 replies, new replies');
-    expect(document.querySelector('[data-testid="thread-action-new"]')?.textContent).toContain('New replies');
+    // The flag is a dot: the words live in its accessible label only.
+    expect(document.querySelector('[data-testid="thread-action-new"]')?.getAttribute('aria-label')).toBe('New replies');
   });
 
   it('shows no marker for a read thread', async () => {

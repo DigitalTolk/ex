@@ -34,7 +34,7 @@ import { useSidePanels } from '@/hooks/useSidePanels';
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useDeepLinkAnchor, useListAnchor } from '@/hooks/useDeepLinkAnchor';
+import { useDeepLinkAnchor, useListAnchor, forgetDeepLinkInAddress } from '@/hooks/useDeepLinkAnchor';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useIsOnline } from '@/stores/presence';
 import {
@@ -226,15 +226,20 @@ export function ConversationView() {
   const dismissThread = () => {
     setThreadRootID(null);
     const urlThread = searchParams.get('thread');
-    if (urlThread) setDismissed({ navKey, thread: urlThread });
+    if (urlThread) {
+      setDismissed({ navKey, thread: urlThread });
+      forgetDeepLinkInAddress();
+    }
   };
   const openMembers = () => { dismissThread(); closeTag(); panels.open('members'); };
   const closeMembers = panels.close;
-  const openThread = (rid: string) => {
+  // Stable: it reaches every message row as a prop, and a fresh function per
+  // render re-rendered all mounted rows on each list change.
+  const openThread = useCallback((rid: string) => {
     setThreadRootID(rid);
     closeTag();
     panels.close();
-  };
+  }, [closeTag, panels]);
   const closeThread = dismissThread;
   const togglePinned = () => { dismissThread(); closeTag(); panels.toggle('pinned'); };
   const toggleFiles = () => { dismissThread(); closeTag(); panels.toggle('files'); };

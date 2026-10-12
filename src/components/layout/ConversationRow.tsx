@@ -22,6 +22,8 @@ import { type CSSProperties } from 'react';
 interface Props {
   conversation: UserConversation;
   hasUnread: boolean;
+  // Replies in threads the user is in are unread: the row shows a dot.
+  threadUnread?: boolean;
   // Alerted-unread count (see ChannelRow) — the numeric badge. DM messages
   // always alert unless the conversation is muted, so this usually tracks
   // the plain unread count; merely-unread shows the availability dot.
@@ -50,6 +52,7 @@ interface Props {
 export function ConversationRow({
   conversation,
   hasUnread,
+  threadUnread = false,
   notifyCount = 0,
   dmAvatarURL,
   dmUserStatus,
@@ -150,14 +153,14 @@ export function ConversationRow({
             <UserStatusIndicator status={dmUserStatus} className="h-4 w-4" />
           </>
         )}
-        {/* Two-tier unread, mirroring ChannelRow: the brand-pink NUMBER counts
-            only messages that alerted this user (DMs alert on every message
-            unless muted); merely-unread activity is the availability dot.
-            Absolutely positioned (flush to the edge, never reflows); fades on
-            desktop hover so the row actions take its place, stays on touch at
-            the VERY right edge (the kebab slot, unused on mobile) clear of
-            the persistent star. */}
-        {(hasUnread || notifyCount > 0) && (
+        {/* Three tiers, mirroring ChannelRow: the brand-pink NUMBER counts
+            messages that alerted this user (DMs alert on every message
+            unless muted); a dot means unread replies in a thread the user is
+            in; plain new messages only embolden the name. Absolutely
+            positioned (flush to the edge, never reflows); fades on desktop
+            hover so the row actions take its place, stays on touch. On a
+            phone the star sits flush right and the badge just left of it. */}
+        {(notifyCount > 0 || threadUnread) && (
           <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 touch:opacity-100 mobile:right-11">
             {notifyCount > 0 ? (
               <Badge variant="brand" className="text-[11px]" data-testid={`conversation-unread-badge-${conversation.conversationID}`}>
@@ -165,7 +168,7 @@ export function ConversationRow({
               </Badge>
             ) : (
               <span
-                aria-label="Unread"
+                aria-label="Unread thread replies"
                 data-testid={`conversation-unread-dot-${conversation.conversationID}`}
                 className="h-2 w-2 rounded-full bg-brand"
               />
@@ -173,14 +176,17 @@ export function ConversationRow({
           </span>
         )}
       </NavLink>
-      {/* Star — visible on hover; persistent yellow when favorited.
-          Positioned to match ChannelRow's right-7 / right-1 layout. */}
+      {/* Star — visible on hover; a favorite keeps a quiet grey filled star
+          that lifts on row hover (see ChannelRow). Positioned to match
+          ChannelRow's right-7 / right-1 layout. */}
       <button
         onClick={toggleFavorite}
         aria-label={isFav ? `Unfavorite ${conversation.displayName}` : `Favorite ${conversation.displayName}`}
         data-testid={`conv-fav-toggle-${conversation.conversationID}`}
         className={`absolute right-7 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-opacity touch:right-8 touch:h-7 touch:w-7 mobile:right-1 mobile:h-9 mobile:w-9 ${
-          isFav ? 'opacity-100 text-amber-300' : 'opacity-0 text-gray-400 hover:text-white group-hover/row:opacity-100 touch:opacity-100'
+          isFav
+            ? 'opacity-100 text-gray-500 hover:text-white group-hover/row:text-gray-400'
+            : 'opacity-0 text-gray-400 hover:text-white group-hover/row:opacity-100 touch:opacity-100'
         }`}
       >
         <Star className="h-3.5 w-3.5" fill={isFav ? 'currentColor' : 'none'} />

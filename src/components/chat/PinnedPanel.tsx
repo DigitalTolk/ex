@@ -9,6 +9,7 @@ import { MessageItem } from './MessageItem';
 import { SidePanel } from './SidePanel';
 import type { Message } from '@/types';
 import type { UserMapEntry } from './MessageList';
+import { MessageRowDataProvider } from './MessageRowDataProvider';
 
 interface PinnedPanelProps {
   channelId?: string;
@@ -85,6 +86,8 @@ export function PinnedPanel({
             Nothing pinned yet. Pin a message to keep it handy.
           </p>
         )}
+        {(data?.length ?? 0) > 0 && (
+        <MessageRowDataProvider parentType={channelId ? 'channel' : 'conversation'} parentID={channelId ?? conversationId}>
         {data?.map((msg) => {
           const u = userMap[msg.authorID];
           // Wrapping the row in a real <button> would be invalid HTML
@@ -129,6 +132,8 @@ export function PinnedPanel({
             </div>
           );
         })}
+        </MessageRowDataProvider>
+        )}
       </div>
     </SidePanel>
   );

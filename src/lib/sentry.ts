@@ -66,6 +66,10 @@ export function initErrorReporting(): boolean {
     // gates server-side IP inference; request headers stay on because the
     // User-Agent is how Sentry derives browser/OS context (v10 sent it too).
     dataCollection: { userInfo: false, cookies: false },
+    // The message list applies Virtuoso's size corrections synchronously
+    // inside ResizeObserver callbacks (see MessageList), which the browser
+    // reports as this benign loop notice. Not an error worth an event.
+    ignoreErrors: [/ResizeObserver loop/],
     initialScope: { tags: { platform: detectPlatform() } },
   });
   if (replaysSessionSampleRate > 0 || replaysOnErrorSampleRate > 0) {

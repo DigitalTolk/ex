@@ -28,13 +28,18 @@ function renderItem(over: Partial<Message> = {}, props: { threadHasNew?: boolean
     createdAt: '2026-10-07T10:30:00Z',
     ...over,
   };
-  return render(
+  const result = render(
     <QueryClientProvider client={qc}>
       <BrowserRouter>
         <MessageItem message={message} authorName="Alice" isOwn currentUserId="user-1" {...props} />
       </BrowserRouter>
     </QueryClientProvider>,
   );
+  // The hover toolbar mounts on hover (MessageItem): hover the row so the
+  // tests can reach its actions the way a pointer user does.
+  const row = result.container.querySelector('[data-message-id]');
+  if (row) fireEvent.mouseEnter(row);
+  return result;
 }
 
 describe('MessageItem — optimistic rows', () => {
@@ -95,9 +100,15 @@ describe('MessageItem — optimistic rows', () => {
       </QueryClientProvider>,
     );
     const time = screen.getByTestId('group-time-gutter').querySelector('time')!;
-    expect(time.className).toContain('opacity-0');
-    fireEvent.mouseEnter(container.querySelector('[data-message-id]')!);
-    expect(time.className).toContain('opacity-100');
+    // Revealed by CSS off the row's data-hovered flag, which the toolbar's
+    // hover gate sets without re-rendering the row.
+    expect(time.className).toContain('group-data-[hovered=true]:opacity-100');
+    const row = container.querySelector('[data-message-id]') as HTMLElement;
+    expect(row.dataset.hovered).toBeUndefined();
+    fireEvent.mouseEnter(row);
+    expect(row.dataset.hovered).toBe('true');
+    fireEvent.mouseLeave(row);
+    expect(row.dataset.hovered).toBeUndefined();
   });
 
   it('a confirmed message has its actions and no mark', () => {
