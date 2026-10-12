@@ -7,9 +7,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { ReminderDialog, type DateTimeDialogCopy } from '@/components/chat/ReminderDialog';
+import { ReminderDialog, type DateTimeDialogCopy, type QuickPick } from '@/components/chat/ReminderDialog';
 import { SCHEDULE_PRESETS, scheduleTimeFor } from '@/lib/schedule-times';
-import { toLocalInputValue } from '@/lib/reminder-times';
+import { computeReminderTime, toLocalInputValue } from '@/lib/reminder-times';
 
 const SCHEDULE_COPY: DateTimeDialogCopy = {
   title: 'Schedule message',
@@ -18,7 +18,15 @@ const SCHEDULE_COPY: DateTimeDialogCopy = {
   confirm: 'Schedule',
   confirming: 'Scheduling…',
   failed: "Couldn't schedule the message — please try again.",
+  previewVerb: 'Sends',
 };
+
+// The picker's quick picks: the menu's two mornings plus the short hops.
+const SCHEDULE_QUICK_PICKS: QuickPick[] = [
+  { key: 'in1h', label: 'In 1 hour', at: (now) => computeReminderTime('in1h', now) },
+  { key: 'in3h', label: 'In 3 hours', at: (now) => computeReminderTime('in3h', now) },
+  ...SCHEDULE_PRESETS.map((preset) => ({ key: preset.key, label: preset.label, at: (now: Date) => scheduleTimeFor(preset.key, now) })),
+];
 
 interface ScheduleSendMenuProps {
   disabled: boolean;
@@ -34,7 +42,8 @@ interface ScheduleSendMenuProps {
 // ScheduleSendMenu is the small ⌄ beside Send: send this message later
 // instead — tomorrow morning, next Monday morning, or at a custom time.
 export function ScheduleSendMenu({ disabled, onSchedule, onOpenChange, className }: ScheduleSendMenuProps) {
-  // The custom-time dialog's seed, set when it's opened (one hour from now).
+  // The custom-time dialog's seed, set when it's opened: tomorrow morning,
+  // the most common pick, so the fields start somewhere useful.
   const [customSeed, setCustomSeed] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const changeOpen = (next: boolean) => {
@@ -71,7 +80,7 @@ export function ScheduleSendMenu({ disabled, onSchedule, onOpenChange, className
           ))}
           <DropdownMenuSeparator />
           <DropdownMenuItem
-            onClick={() => setCustomSeed(toLocalInputValue(new Date(Date.now() + 60 * 60 * 1000)))}
+            onClick={() => setCustomSeed(toLocalInputValue(scheduleTimeFor('tomorrow', new Date())))}
             aria-label="Pick a custom time"
           >
             <Clock className="mr-2 h-4 w-4" />
@@ -87,6 +96,7 @@ export function ScheduleSendMenu({ disabled, onSchedule, onOpenChange, className
           initialValue={customSeed}
           onConfirm={onSchedule}
           copy={SCHEDULE_COPY}
+          quickPicks={SCHEDULE_QUICK_PICKS}
         />
       )}
     </>

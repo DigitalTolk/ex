@@ -847,9 +847,14 @@ describe('Sidebar browser render — rich fixtures', () => {
     // the NUMBER box is reserved for alerting messages.
     mockChannels = makeChannels().map((c) => (c.channelID === 'ch-general' ? { ...c, unread: true } : c));
     mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
+    // The rich fixture carries unread threads, which would earn the dot on
+    // their own; this case is about plain messages.
+    mockThreads = [];
     await render(<Frame />);
     expect(document.querySelector('[data-testid="channel-unread-badge-ch-general"]')).toBeNull();
-    expect(document.querySelector('[data-testid="channel-unread-dot-ch-general"]')).not.toBeNull();
+    // Plain unread only emboldens the name; the dot is for thread replies.
+    expect(document.querySelector('[data-testid="channel-unread-dot-ch-general"]')).toBeNull();
+    expect((document.querySelector('[data-testid="channel-row-ch-general"] a') as HTMLElement).className).toContain('font-bold');
   });
 
   it('shows the server-computed alerted count on cold load (no live events)', async () => {

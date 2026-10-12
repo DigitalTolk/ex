@@ -452,8 +452,9 @@ describe('MessageList coverage — own-message auto-stick guards', () => {
     );
     await vi.waitFor(() => expect(document.querySelector('[data-message-id="dk-3"]')).not.toBeNull(), { timeout: 3000 });
     await screen.getByTestId('prepend').click();
-    await animationFrames(3);
-    expect(document.querySelector('[data-message-id="dk-3"]')).not.toBeNull();
+    // Size corrections run inside the ResizeObserver callback, so right after a
+    // programmatic scroll the list can be empty for a few frames: wait for it.
+    await vi.waitFor(() => expect(document.querySelector('[data-message-id="dk-3"]')).not.toBeNull(), { timeout: 3000 });
   });
 
   it('disables follow-output while a deep-link anchor is active (followLiveOutput false arm)', async () => {
@@ -483,8 +484,7 @@ describe('MessageList coverage — own-message auto-stick guards', () => {
     // yet the anchor still forces the false arm.
     scroller!.scrollTop = scroller!.scrollHeight;
     scroller!.dispatchEvent(new Event('scroll', { bubbles: true }));
-    await animationFrames(3);
-    expect(document.querySelector('[data-message-id="fo-10"]')).not.toBeNull();
+    await vi.waitFor(() => expect(document.querySelector('[data-message-id="fo-10"]')).not.toBeNull(), { timeout: 3000 });
   });
 
   // retry: the assertions observe a TRANSIENT 2200ms flash; under full-suite

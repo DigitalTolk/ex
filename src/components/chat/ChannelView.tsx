@@ -40,7 +40,7 @@ import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { collectMessageUserIDs, findLastOwnMessageId } from '@/lib/message-users';
 import { useSidePanels } from '@/hooks/useSidePanels';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useDeepLinkAnchor, useListAnchor } from '@/hooks/useDeepLinkAnchor';
+import { useDeepLinkAnchor, useListAnchor, forgetDeepLinkInAddress } from '@/hooks/useDeepLinkAnchor';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import {
   useDraftAttachmentChips,
@@ -106,7 +106,10 @@ export function ChannelView() {
   const dismissThread = () => {
     setThreadRootID(null);
     const urlThread = searchParams.get('thread');
-    if (urlThread) setDismissed({ navKey, thread: urlThread });
+    if (urlThread) {
+      setDismissed({ navKey, thread: urlThread });
+      forgetDeepLinkInAddress();
+    }
   };
   const openMembers = () => { dismissThread(); closeTag(); panels.open('members'); };
   const closeMembers = panels.close;

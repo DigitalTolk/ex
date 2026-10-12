@@ -232,12 +232,35 @@ describe('ThreadPanel real-scroll coverage', () => {
     el.scrollTop = el.scrollHeight; // ensure at-bottom
     el.dispatchEvent(new Event('scroll'));
     await frame();
-    // Fire a load event from one of the row images → the capture-phase load
-    // listener re-pins to the bottom (lines 326-330).
+    // Grow one row (as a decoded image would), then fire the image's load
+    // event → the capture-phase load listener sees the taller content and
+    // re-pins to the bottom. The mock rows have a fixed height, so the row
+    // itself grows here rather than the image.
     const img = document.querySelector('[data-testid="img-R0"]') as HTMLImageElement;
+    (img.parentElement as HTMLElement).style.height = '300px';
     img.dispatchEvent(new Event('load', { bubbles: false }));
     await frame();
     expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThan(40);
+  });
+
+  it('ignores an <img> load that does not change the content height', async () => {
+    const { ui, panel } = mount();
+    const result = await render(ui(panel({})));
+    active = result;
+    await vi.waitFor(() => expect(scroller().scrollHeight).toBeGreaterThan(scroller().clientHeight), { timeout: 3000 });
+    await frame();
+    const el = scroller();
+    // A few lines up from the bottom: still "at bottom" for the follow logic,
+    // but the reader has moved. The hover toolbar's custom-emoji images load
+    // without growing the content, and that must not pull them back down.
+    el.scrollTop = el.scrollHeight - el.clientHeight - 60;
+    el.dispatchEvent(new Event('scroll'));
+    await frame();
+    const before = el.scrollTop;
+    const img = document.querySelector('[data-testid="img-R0"]') as HTMLImageElement;
+    img.dispatchEvent(new Event('load', { bubbles: false }));
+    await frame();
+    expect(el.scrollTop).toBe(before);
   });
 
   it('ignores non-IMG load events in the delegated handler', async () => {

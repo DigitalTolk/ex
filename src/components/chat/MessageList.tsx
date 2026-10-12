@@ -3,6 +3,7 @@ import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MessageItem } from './MessageItem';
 import { formatDayHeading } from '@/lib/format';
+import { attachScrollHoverPause } from '@/lib/scroll-hover-pause';
 import { deriveThreadMeta, isOwnMessage, type ThreadMeta } from '@/lib/message-users';
 import type { Message, UserStatus } from '@/types';
 import { buildMessageListRows, nextVirtuosoState } from './MessageListRows';
@@ -613,9 +614,11 @@ function VirtuosoMessageList({
     const userScrollEvents = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
     scroller.addEventListener('scroll', onScroll, { passive: true });
     for (const type of userScrollEvents) scroller.addEventListener(type, onUserScroll, { passive: true });
+    const detachHoverPause = attachScrollHoverPause(scroller);
     detachScrollerRef.current = () => {
       scroller.removeEventListener('scroll', onScroll);
       for (const type of userScrollEvents) scroller.removeEventListener(type, onUserScroll);
+      detachHoverPause();
     };
   }, [markAtBottom, scheduleDividerMeasure]);
   useEffect(() => () => {
@@ -747,12 +750,18 @@ function VirtuosoMessageList({
         alignToBottom={true}
         computeItemKey={(_index, row) => row.key}
         defaultItemHeight={DEFAULT_MESSAGE_ROW_HEIGHT}
-        // Deliberately NOT skipAnimationFrameInResizeObserver: it removes the
-        // one-frame flash when a prepended page measures shorter than its
-        // estimate (react-virtuoso#1049), but it also made Virtuoso drop every
-        // rendered row after a scroll — always on WebKit, under load on
-        // Chromium (CI). The realistic row estimate above does most of the
-        // de-jitter work on its own.
+        // Apply size corrections inside the ResizeObserver callback instead
+        // of on the next animation frame. By default every row that measures
+        // differently from its estimate — each one of a prepended page, every
+        // media row mounting above the viewport while scrolling up — is
+        // painted once shifted by the error and snapped back a frame later:
+        // the jitter in image- and link-heavy history (react-virtuoso#1049).
+        // The price: the browser logs the benign "ResizeObserver loop
+        // completed with undelivered notifications" (ignored in sentry.ts),
+        // and after a large programmatic scroll the list is empty for 2
+        // frames (5 on WebKit) before it catches up — tests must wait for
+        // rows rather than count frames.
+        skipAnimationFrameInResizeObserver
         increaseViewportBy={{ top: MESSAGE_LIST_OVERSCAN_PX, bottom: MESSAGE_LIST_OVERSCAN_PX }}
         atBottomThreshold={MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX}
         // Auto-follow only when the loaded slice IS the live tail. When

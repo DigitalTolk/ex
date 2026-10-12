@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent, type MouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Bot, Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon, AlarmClock, Eye, Mail } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -71,6 +71,111 @@ type MessageHoverListener = (activeMessageID: string) => void;
 const messageHoverListeners = new Set<MessageHoverListener>();
 function notifyMessageHovered(id: string) {
   for (const cb of messageHoverListeners) cb(id);
+}
+
+// The toolbar is the only part of a row that follows the pointer, so hover
+// and focus-within live in this little store and only RowHoverGate (around
+// the toolbar) subscribes to it: the row itself never re-renders for a hover.
+// A row render re-runs every tooltip, hover card and reaction chip in it, a
+// dozen components, and that used to happen for every row the pointer
+// crossed. The row still uses React's onMouseEnter/onMouseLeave, which treat
+// a portal (the emoji picker, a tooltip) as inside the row, so moving the
+// pointer into a picker keeps the toolbar mounted. `data-hovered` on the row
+// drives the CSS-only hover reveals (a grouped row's clock time); tracked in
+// JS rather than Tailwind group-hover because an open dropdown changes
+// pointer-events and focus and breaks CSS :hover on the row.
+interface RowHoverState {
+  hovered: boolean;
+  focusWithin: boolean;
+}
+// Focus inside a row pins its toolbar so a keyboard user can Tab to it. But a
+// mouse click focuses buttons too (Chrome), so clicking a quick reaction kept
+// that row's toolbar up after the pointer moved on and the next row hovered
+// showed a second one. Only keyboard-driven focus pins: the last input kind
+// is tracked the way browsers decide :focus-visible.
+let keyboardInput = false;
+let inputTracked = false;
+function trackInputKind() {
+  if (inputTracked) return;
+  inputTracked = true;
+  window.addEventListener('keydown', () => {
+    keyboardInput = true;
+  }, true);
+  window.addEventListener('pointerdown', () => {
+    keyboardInput = false;
+  }, true);
+}
+// The handlers read the row element off the event (currentTarget), so the
+// store needs no refs and the row never writes one during render.
+function createRowHoverStore() {
+  trackInputKind();
+  let state: RowHoverState = { hovered: false, focusWithin: false };
+  // The row last entered, so a hover ended from elsewhere (another row took
+  // the pointer while this one's menu was open) can drop its flag too.
+  let row: HTMLDivElement | null = null;
+  const listeners = new Set<() => void>();
+  const update = (next: Partial<RowHoverState>) => {
+    state = { ...state, ...next };
+    for (const cb of listeners) cb();
+  };
+  return {
+    subscribe: (cb: () => void) => {
+      listeners.add(cb);
+      return () => {
+        listeners.delete(cb);
+      };
+    },
+    get: () => state,
+    enter: (event: MouseEvent<HTMLDivElement>) => {
+      row = event.currentTarget;
+      row.dataset.hovered = 'true';
+      update({ hovered: true });
+      notifyMessageHovered(String(row.dataset.messageId));
+    },
+    leave: () => {
+      if (row) delete row.dataset.hovered;
+      update({ hovered: false });
+    },
+    focus: () => {
+      if (keyboardInput) update({ focusWithin: true });
+    },
+    blur: (event: FocusEvent<HTMLDivElement>) => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) update({ focusWithin: false });
+    },
+  };
+}
+type RowHoverStore = ReturnType<typeof createRowHoverStore>;
+
+function RowHoverGate({
+  store,
+  messageId,
+  pinned,
+  disabled,
+  children,
+}: {
+  store: RowHoverStore;
+  messageId: string;
+  // An open "..." menu keeps the toolbar even once the pointer has left.
+  pinned: boolean;
+  // Editing, deleted and pending rows have no toolbar.
+  disabled: boolean;
+  children: () => ReactNode;
+}) {
+  const { hovered, focusWithin } = useSyncExternalStore(store.subscribe, store.get);
+  // Another row taking the pointer ends this one's hover, whether or not
+  // the browser delivered a mouseleave here (an open menu can swallow it).
+  useEffect(() => {
+    if (!hovered && !pinned) return;
+    const onHover = (activeID: string) => {
+      if (activeID !== messageId) store.leave();
+    };
+    messageHoverListeners.add(onHover);
+    return () => {
+      messageHoverListeners.delete(onHover);
+    };
+  }, [hovered, pinned, messageId, store]);
+  if (disabled || !(hovered || focusWithin || pinned)) return null;
+  return <>{children()}</>;
 }
 
 interface MessageItemProps {
@@ -251,20 +356,20 @@ function MessageItemImpl({
   const pointerDevice = usePointerDevice();
   const touchOnly = isTouch && !pointerDevice;
   const [isEditing, setIsEditing] = useState(false);
-  // Visibility tracked in JS (not Tailwind group-hover) because Radix's
-  // open dropdown changes pointer-events/focus and breaks CSS :hover
-  // propagation on the row.
-  const [hovered, setHovered] = useState(false);
+  // Hover and focus-within live in the row's hover store (read only by the
+  // toolbar's RowHoverGate); the "..." menu's open state is the row's, as
+  // the menu items are its.
+  const [hoverStore] = useState(() => createRowHoverStore());
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
-  // Keyboard users have no hover: focus inside the row (a link, a reaction,
-  // the thread bar) mounts the toolbar so the next Tab reaches it.
-  const [focusWithin, setFocusWithin] = useState(false);
+  // The toolbar's add-reaction picker is a portal: while it is open the
+  // toolbar must stay mounted whatever the pointer does, or the picker goes
+  // with it.
+  const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
   const [mobileActionsSuppressed, setMobileActionsSuppressed] = useState(false);
   const [mobileReactionPickerOpen, setMobileReactionPickerOpen] = useState(false);
   const mobileActionsRef = useRef<HTMLDivElement>(null);
   const mobileActionsSheetRef = useRef<HTMLDivElement>(null);
-  const toolbarVisible = hovered || actionsMenuOpen || focusWithin;
   const canEdit = isOwn && !disableEditing;
   const startEdit = useCallback(() => {
     /* istanbul ignore next -- startEdit is only wired (edit registry + the Edit menu item) behind `canEdit`, so it is never invoked when canEdit is false; this is a defensive re-check. */
@@ -280,10 +385,7 @@ function MessageItemImpl({
     if (!actionsMenuOpen) return;
     const ownID = message.id;
     const onHover = (activeID: string) => {
-      if (activeID !== ownID) {
-        setActionsMenuOpen(false);
-        setHovered(false);
-      }
+      if (activeID !== ownID) setActionsMenuOpen(false);
     };
     messageHoverListeners.add(onHover);
     return () => {
@@ -852,15 +954,10 @@ function MessageItemImpl({
     <div
       id={`msg-${message.id}`}
       data-message-id={message.id}
-      onMouseEnter={() => {
-        setHovered(true);
-        notifyMessageHovered(message.id);
-      }}
-      onMouseLeave={() => setHovered(false)}
-      onFocus={() => setFocusWithin(true)}
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusWithin(false);
-      }}
+      onMouseEnter={hoverStore.enter}
+      onMouseLeave={hoverStore.leave}
+      onFocus={hoverStore.focus}
+      onBlur={hoverStore.blur}
       {...longPress.handlers}
       onContextMenu={(event) => {
         // Without a pointing device there is no hover toolbar to reach, so a
@@ -872,7 +969,7 @@ function MessageItemImpl({
       }}
       // px-3 matches the gap-3 to the text, so the avatar sits balanced:
       // 12px either side of it inside the row (pinned: 2px border + 10px).
-      className={`relative flex items-start gap-3 rounded-md px-3 ${firstInGroup ? 'py-1.5' : 'py-0.5'} hover:bg-chat-hover ${
+      className={`group relative flex items-start gap-3 rounded-md px-3 ${firstInGroup ? 'py-1.5' : 'py-0.5'} hover:bg-chat-hover ${
         message.pinned ? 'border-l-2 border-pinned pl-2.5' : ''
       } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]`}
       data-pending={pendingState}
@@ -921,7 +1018,7 @@ function MessageItemImpl({
               className={`cursor-default whitespace-nowrap tabular-nums text-muted-foreground transition-opacity ${
                 // Hidden under the failed mark: kept at opacity 0 too, so it
                 // can't flash while fading back out once the mark goes.
-                pendingState === 'failed' ? 'invisible opacity-0' : hovered ? 'opacity-100' : 'opacity-0'
+                pendingState === 'failed' ? 'invisible opacity-0' : 'opacity-0 group-data-[hovered=true]:opacity-100'
               }`}
               render={<time dateTime={message.createdAt} />}
             >
@@ -1215,7 +1312,13 @@ function MessageItemImpl({
           largest cost of scrolling and of switching chats. The delete confirm
           and the reminder/watcher dialogs live outside it, so closing the menu
           doesn't unmount them. */}
-      {!isEditing && !message.deleted && !pendingState && toolbarVisible && (
+      <RowHoverGate
+        store={hoverStore}
+        messageId={message.id}
+        pinned={actionsMenuOpen || reactionPickerOpen}
+        disabled={isEditing || !!message.deleted || !!pendingState}
+      >
+        {() => (
         <div
           className="absolute right-2 -top-3 flex items-center gap-0.5 rounded-md border border-border bg-background shadow-sm dark:border-border-strong touch:hidden"
           data-actions-pinned={actionsMenuOpen ? 'true' : 'false'}
@@ -1242,6 +1345,7 @@ function MessageItemImpl({
           ))}
           <EmojiPicker
             onSelect={handleReact}
+            onOpenChange={setReactionPickerOpen}
             trigger={
               <Button size="icon" variant="ghost" className="h-7 w-7" aria-label="Add reaction">
                 <SmilePlus className="h-4 w-4" />
@@ -1359,7 +1463,8 @@ function MessageItemImpl({
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-      )}
+        )}
+      </RowHoverGate>
       {mobileActionsOverlay ? createPortal(mobileActionsOverlay, document.body) : null}
       {/* Mounted on demand like the reminder/watcher dialogs: a dialog per
           row was a measurable share of scrolling cost. */}

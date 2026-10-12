@@ -297,6 +297,8 @@ describe('MessageItem - hover bar and avatar', () => {
     const row = document.querySelector('[data-message-id]') as HTMLElement;
     fireEvent.mouseLeave(row);
     expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
+    // Keyboard focus (Tab) pins the toolbar.
+    fireEvent.keyDown(window, { key: 'Tab' });
     fireEvent.focus(row);
     const toolbar = document.querySelector('[role="toolbar"][aria-label="Message actions"]') as HTMLElement;
     expect(toolbar).not.toBeNull();
@@ -306,6 +308,37 @@ describe('MessageItem - hover bar and avatar', () => {
     expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).not.toBeNull();
     // Focus leaving the row (nowhere, or elsewhere) drops it.
     fireEvent.blur(row, { relatedTarget: null });
+    expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
+  });
+
+  it('focus that came from a pointer click does not pin the toolbar', () => {
+    // Clicking a quick reaction focuses the button; once the pointer leaves
+    // the row the toolbar must go with it, or the next row hovered shows two.
+    renderWithProviders(
+      <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} currentUserId="user-1" />,
+    );
+    const row = document.querySelector('[data-message-id]') as HTMLElement;
+    const button = document.querySelector('[role="toolbar"] button') as HTMLElement;
+    fireEvent.pointerDown(button);
+    fireEvent.focus(button);
+    fireEvent.mouseLeave(row);
+    expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
+  });
+
+  it('keeps the toolbar while the pointer moves between elements inside the row', () => {
+    renderWithProviders(
+      <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} currentUserId="user-1" />,
+    );
+    const row = document.querySelector('[data-message-id]') as HTMLElement;
+    fireEvent.mouseEnter(row);
+    const inside = document.querySelector('[role="toolbar"] button') as HTMLElement;
+    // mouseout/mouseover whose relatedTarget is still inside the row: the
+    // pointer only crossed a child boundary, not the row's, so React fires
+    // no mouseleave and the toolbar stays.
+    fireEvent.mouseOut(row, { relatedTarget: inside });
+    fireEvent.mouseOver(inside, { relatedTarget: row });
+    expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).not.toBeNull();
+    fireEvent.mouseOut(row, { relatedTarget: null });
     expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
   });
 
