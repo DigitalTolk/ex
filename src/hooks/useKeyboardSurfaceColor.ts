@@ -1,8 +1,7 @@
 import { useEffect } from 'react';
+import { TEXT_FIELD_SELECTOR } from '@/lib/keyboard';
 
 const KEYBOARD_VAR = '--ex-keyboard-background';
-const FIELD_SELECTOR =
-  'input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="textbox"]';
 
 // ex-mobile paints the strip between a focused field and the OS keyboard by
 // probing `--ex-keyboard-background` from a fixed root location, NOT from the
@@ -20,7 +19,7 @@ export function useKeyboardSurfaceColor() {
     const root = document.documentElement;
     const sync = () => {
       const el = document.activeElement;
-      if (el instanceof Element && el.matches(FIELD_SELECTOR)) {
+      if (el instanceof Element && el.matches(TEXT_FIELD_SELECTOR)) {
         const color = getComputedStyle(el).getPropertyValue(KEYBOARD_VAR).trim();
         if (color) {
           root.style.setProperty(KEYBOARD_VAR, color);

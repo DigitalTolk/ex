@@ -308,7 +308,7 @@ describe('MessageInput', () => {
 
     const editor = await screen.findByLabelText('Message input');
     const composerShell = editor.closest('[data-composer-focused]')!;
-    expect(composerShell).toHaveClass('mobile:pb-[max(0.25rem,env(safe-area-inset-bottom))]');
+    expect(composerShell).toHaveClass('mobile:pb-[max(0.25rem,var(--bottom-safe-inset,env(safe-area-inset-bottom)))]');
     expect(composerShell).toHaveClass('mobile:px-4');
     expect(composerShell).not.toHaveClass('mobile:pb-[calc(0.75rem+env(safe-area-inset-bottom))]');
 
@@ -320,7 +320,7 @@ describe('MessageInput', () => {
     // Once the keyboard is up, drop the safe-area inset — env(safe-area-inset-bottom)
     // does not zero out under iOS keyboards and would leave a wasted gap.
     expect(composerShell).toHaveClass('mobile:pb-1');
-    expect(composerShell).not.toHaveClass('mobile:pb-[max(0.25rem,env(safe-area-inset-bottom))]');
+    expect(composerShell).not.toHaveClass('mobile:pb-[max(0.25rem,var(--bottom-safe-inset,env(safe-area-inset-bottom)))]');
     expect(composerShell).toHaveClass('mobile:px-2');
 
     // Inner row gets extra top padding on mobile so the editor text

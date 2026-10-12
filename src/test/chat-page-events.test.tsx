@@ -682,20 +682,30 @@ describe('ChatPage WebSocket handlers', () => {
     expect(out?.pages[0].items[0].body).toBe('edited');
   });
 
-  it('onReconnect refreshes peripheral lists', () => {
+  // After a socket gap — a reconnect, or a replay the server could no longer
+  // serve — everything not in the durable inbox is refetched. That includes
+  // what ephemeral events keep current: the activity feed and pending
+  // reminders (a reminder set, cancelled or fired on another device while
+  // disconnected used to linger), the Scheduled list, and presence.
+  it.each(['onReconnect', 'onReplayExhausted'])('%s refreshes everything the inbox does not replay', (handler) => {
     const { qc } = renderAt('/');
     const spy = vi.spyOn(qc, 'invalidateQueries');
-    (capturedOptions.onReconnect as () => void)();
+    presenceRefreshMock.mockClear();
+    (capturedOptions[handler] as () => void)();
     const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
-    expect(calls).toContainEqual(['userChannels']);
-    expect(calls).toContainEqual(['userConversations']);
-    expect(calls).toContainEqual(['userThreads']);
-    expect(calls).toContainEqual(['userState']);
-    expect(calls).toContainEqual(['channelMembers']);
-    // The refetched userChannels/userConversations carry authoritative server
-    // unread counts — the single source — so there's nothing else to reset.
-    // presence.changed is ephemeral (never replayed): the reconnect must also
-    // refetch the authoritative online set or dots drift stale.
+    for (const key of [
+      ['userChannels'],
+      ['userConversations'],
+      ['userThreads'],
+      ['userState'],
+      ['drafts'],
+      ['scheduledMessages'],
+      ['channelMembers'],
+      ['activity'],
+      ['reminders'],
+    ]) {
+      expect(calls).toContainEqual(key);
+    }
     expect(presenceRefreshMock).toHaveBeenCalled();
   });
 
@@ -854,6 +864,13 @@ describe('ChatPage WebSocket handlers', () => {
     (capturedOptions.onActivityNew as (d: unknown) => void)({ item: { id: 'a1', type: 'mention', read: false } });
     expect(qc.getQueryData<{ unread: number }>(['activity'])?.unread).toBe(1);
     expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).not.toContainEqual(['activity']);
+  });
+
+  it('onRemindersChanged refetches the pending reminders', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onRemindersChanged as (d: unknown) => void)({});
+    expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).toContainEqual(['reminders']);
   });
 
   it('onScheduledMessagesChanged refetches the Scheduled list', () => {

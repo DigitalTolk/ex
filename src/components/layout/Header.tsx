@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { Users, ChevronDown, LogOut, Archive, Pencil, Bell, BellOff, Pin, Paperclip, SlidersHorizontal } from 'lucide-react';
+import { Users, ChevronDown, ChevronLeft, LogOut, Archive, Pencil, Bell, BellOff, Pin, Paperclip, SlidersHorizontal } from 'lucide-react';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/dialog';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { requestOpenChannels } from '@/lib/mobile-nav';
 import type { Channel, UserStatus } from '@/types';
 
 interface HeaderProps {
@@ -167,7 +168,20 @@ export function Header({
 
   return (
     <div ref={headerShellRef} className="shrink-0 border-b bg-background" data-testid="channel-header-shell">
-    <header className="flex shrink-0 items-center gap-3 px-4 py-3">
+    <header className="flex shrink-0 items-center gap-3 px-4 py-3 mobile:gap-1 mobile:pl-1">
+      {/* Phone: the back button lives here, so the screen has no separate
+          top bar — the header is the top edge. */}
+      {isMobile && (
+        <button
+          type="button"
+          onClick={requestOpenChannels}
+          aria-label="Back"
+          className="-my-1 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-foreground active:bg-muted"
+          data-testid="mobile-header-back"
+        >
+          <ChevronLeft className="h-6 w-6" />
+        </button>
+      )}
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {channel ? (
           <div className="flex min-w-0 flex-1 items-center gap-2" data-testid="channel-title-stack">

@@ -8,6 +8,7 @@ import {
   useState,
   type FocusEvent,
   type MouseEvent,
+  type PointerEvent,
   type ReactElement,
 } from "react"
 import { flushSync } from "react-dom"
@@ -39,18 +40,27 @@ function TooltipProvider({
 // element, and the primitive mounts on that first contact. The hover is then
 // handed to the freshly mounted trigger (see TooltipTrigger), so the tooltip
 // still opens from that same hover, with the usual delay.
-type Handoff = "pointer" | "focus"
+// A pointer handoff remembers the pointer's type: the replay below must
+// speak as that pointer, never as a mouse by default. A finger's tap also
+// fires mouseenter, and a replayed "mouse" pointerover would be read by the
+// app's pointer-device detection as a real mouse, dropping every touch
+// affordance (the hover toolbar appeared on taps, long-press menus went).
+type Handoff = { kind: "pointer"; pointerType: string } | { kind: "focus" }
 interface LazyTooltipContext {
   armed: boolean
+  // The pointer type seen on the inert trigger (pointerenter fires before
+  // the mouseenter that arms), so a pointer handoff knows what it was.
+  notePointer: (pointerType: string) => void
   // Mount the primitive, remembering how the contact happened so the real
   // trigger can resume it; takeHandoff hands that out once.
-  arm: (handoff?: Handoff) => void
+  arm: (handoff?: Handoff["kind"]) => void
   takeHandoff: () => Handoff | null
 }
 // Outside a Tooltip (never the case in the app) a trigger behaves as armed.
-// (The two no-op functions only run for a trigger rendered outside Tooltip.)
+// (The no-op functions only run for a trigger rendered outside Tooltip.)
 const LazyContext = createContext<LazyTooltipContext>({
   armed: true,
+  notePointer: /* istanbul ignore next */ () => {},
   arm: /* istanbul ignore next */ () => {},
   takeHandoff: /* istanbul ignore next */ () => null,
 })
@@ -59,15 +69,19 @@ function Tooltip({ children, ...props }: TooltipPrimitive.Root.Props) {
   // A controlled or default-open tooltip has nothing to defer.
   const [armed, setArmed] = useState(props.open !== undefined || props.defaultOpen === true)
   const handoffRef = useRef<Handoff | null>(null)
+  const pointerTypeRef = useRef("mouse")
   const [ctx] = useState<LazyTooltipContext>(() => ({
     armed: false,
-    arm: (handoff) => {
-      handoffRef.current = handoff ?? null
+    notePointer: (pointerType) => {
+      pointerTypeRef.current = pointerType
+    },
+    arm: (kind) => {
+      handoffRef.current = kind === "pointer" ? { kind, pointerType: pointerTypeRef.current } : kind === "focus" ? { kind } : null
       // From an event (a handoff), synchronously, so the primitive's element
       // is in place before the next event: a press that started on the inert
       // element and ended on the real one would otherwise never become a
       // click. From an effect (no handoff) React forbids flushing.
-      if (handoff) flushSync(() => setArmed(true))
+      if (kind) flushSync(() => setArmed(true))
       else setArmed(true)
     },
     takeHandoff: () => {
@@ -112,11 +126,15 @@ function TooltipTrigger({ render, className, children, ...props }: TooltipPrimit
     const handoff = lazy.takeHandoff()
     if (!handoff) return
     queueMicrotask(() => {
-      if (handoff === "focus") {
+      if (handoff.kind === "focus") {
         el.focus()
         return
       }
-      el.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }))
+      // Tooltips are for mouse-like pointers only (the primitive ignores
+      // touch, long-press shows the same information), so a touch contact
+      // mounts the primitive and stops there.
+      if (handoff.pointerType !== "mouse" && handoff.pointerType !== "pen") return
+      el.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: handoff.pointerType }))
       el.dispatchEvent(new MouseEvent("mouseenter"))
       el.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }))
     })
@@ -139,6 +157,10 @@ function TooltipTrigger({ render, className, children, ...props }: TooltipPrimit
         ...props,
         "data-slot": "tooltip-trigger",
         className: cn(own.className as string | undefined, className as string | undefined),
+        onPointerEnter: (event: PointerEvent) => {
+          ;(own.onPointerEnter as ((e: PointerEvent) => void) | undefined)?.(event)
+          lazy.notePointer(event.pointerType)
+        },
         onMouseEnter: (event: MouseEvent) => {
           ;(own.onMouseEnter as ((e: MouseEvent) => void) | undefined)?.(event)
           lazy.arm("pointer")

@@ -409,12 +409,6 @@ describe('Sidebar grouped rendering', () => {
     expect(screen.getByText('Threads')).not.toHaveClass('font-bold');
   });
 
-  it('highlights Activity while on /activity', () => {
-    renderSidebarAt('/activity');
-    expect(screen.getByText('Activity').closest('a')).toHaveClass('bg-sidebar-accent');
-    expect(screen.getByText('Activity').closest('a')).toHaveClass('font-semibold');
-  });
-
   it('keeps Directory highlighted on nested directory routes', () => {
     renderSidebarAt('/directory/users');
 

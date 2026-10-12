@@ -236,6 +236,14 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     isEditingMode ||
     hasComposerContent;
   const showToolbarSend = showToolbar && !isEditingMode && (!isMobile || variant === 'composer');
+  // Phone: the toolbar's reveal box is always there so it can grow open, but
+  // the toolbar itself (a dozen buttons and pickers) is not built until the
+  // first focus. An idle composer then costs nothing to re-render; after
+  // that first open it stays mounted so closing and reopening still slide.
+  // (Adjusted during render, the way React derives state from a prop
+  // change: it only ever flips to true, once.)
+  const [toolbarEverShown, setToolbarEverShown] = useState(false);
+  if (showToolbar && !toolbarEverShown) setToolbarEverShown(true);
 
   useEffect(() => {
     // No client timestamp rides along anymore: the server orders saves vs
@@ -925,7 +933,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               // when the composer is idle.
               editorFocused || !bottomInset
                 ? 'mobile:pb-1'
-                : 'mobile:pb-[max(0.25rem,env(safe-area-inset-bottom))]'
+                : 'mobile:pb-[max(0.25rem,var(--bottom-safe-inset,env(safe-area-inset-bottom)))]'
             } ${
               // Wider tiers keep the p-3 gutter but clear the iPad home
               // indicator (the inset is 0 on desktop, so max() is a no-op).
@@ -1006,7 +1014,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
         )}
 
         <div
-          className={`flex gap-2 px-3 py-2 ${
+          className={`flex gap-2 px-3 py-2 mobile:transition-[padding] mobile:duration-200 mobile:ease-out ${
             compactMobileComposer
               // Compact mobile composer (idle): row sized to match
               // the 36px send button so the input text vertically
@@ -1076,7 +1084,21 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             );
           })()}
         </div>
-          {showToolbar && renderToolbar('bottom')}
+          {variant === 'composer' && isMobile ? (
+            // Phone: the toolbar is always mounted and grows open from the
+            // bottom when the composer is focused, instead of popping in.
+            <div
+              className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none ${
+                showToolbar ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+              }`}
+              inert={showToolbar ? undefined : true}
+              data-testid="composer-toolbar-reveal"
+            >
+              <div className="min-h-0 overflow-hidden">{toolbarEverShown && renderToolbar('bottom')}</div>
+            </div>
+          ) : (
+            showToolbar && renderToolbar('bottom')
+          )}
         </div>
       </div>
       <input

@@ -41,6 +41,7 @@ import { showToast } from '@/lib/toast';
 import type { User } from '@/types';
 import { AboutDialog } from '@/components/AboutDialog';
 import { InviteDialog } from '@/components/InviteDialog';
+import { MOBILE_TAB_CLASS } from './mobile-tab';
 
 interface MenuAction {
   key: string;
@@ -49,6 +50,9 @@ interface MenuAction {
   onSelect: () => void;
   testID?: string;
   separatorBefore?: boolean;
+  // Opens a dialog over the account sheet rather than leaving it: closing
+  // that dialog (Done) lands back on the sheet.
+  overSheet?: boolean;
 }
 
 /**
@@ -58,7 +62,13 @@ interface MenuAction {
  * sign-out — as an upward dropdown on desktop and a full-screen sheet on
  * mobile. Both surfaces render the same `menuActions` list.
  */
-export function AccountMenu() {
+interface AccountMenuProps {
+  // 'footer' (default): the avatar + name row at the bottom of the sidebar.
+  // 'tab': the "You" button in the mobile bottom tab bar — same sheet.
+  variant?: 'footer' | 'tab';
+}
+
+export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
   const { user, logout, setAuth } = useAuth();
   const { online } = usePresence();
   const navigate = useNavigate();
@@ -111,6 +121,7 @@ export function AccountMenu() {
       icon: <Settings className="h-4 w-4" />,
       label: 'Settings',
       onSelect: () => setSettingsOpen(true),
+      overSheet: true,
       testID: 'user-menu-settings',
     },
     // While a status is active the status row at the top of the menu takes
@@ -122,6 +133,7 @@ export function AccountMenu() {
             icon: <CalendarClock className="h-4 w-4" />,
             label: 'Set status',
             onSelect: () => setStatusOpen(true),
+      overSheet: true,
             testID: 'user-menu-set-status',
           } satisfies MenuAction,
         ]
@@ -133,6 +145,7 @@ export function AccountMenu() {
             icon: <UserPlus className="h-4 w-4" />,
             label: 'Invite people',
             onSelect: () => setInviteOpen(true),
+      overSheet: true,
             testID: 'user-menu-invite',
           } satisfies MenuAction,
         ]
@@ -144,6 +157,7 @@ export function AccountMenu() {
             icon: <Smile className="h-4 w-4" />,
             label: 'Custom emojis',
             onSelect: () => setEmojisOpen(true),
+      overSheet: true,
             testID: 'user-menu-emojis',
           } satisfies MenuAction,
         ]
@@ -182,6 +196,7 @@ export function AccountMenu() {
       icon: <Info className="h-4 w-4" />,
       label: 'About Server',
       onSelect: () => setAboutOpen(true),
+      overSheet: true,
       testID: 'user-menu-about',
       separatorBefore: true,
     },
@@ -201,7 +216,7 @@ export function AccountMenu() {
     // lock teardown run ahead of the navigation, which on mobile webviews
     // could swallow it. Committing the navigation first avoids that race.
     action.onSelect();
-    setMobileMenuOpen(false);
+    if (!action.overSheet) setMobileMenuOpen(false);
   }
 
   const triggerClass =
@@ -212,7 +227,7 @@ export function AccountMenu() {
       <span className="relative inline-flex shrink-0">
         <Avatar className="size-7" style={presenceNotchStyle(9)}>
           <AvatarImage src={user?.avatarURL} alt="" />
-          <AvatarFallback className="bg-foreground/10 text-foreground text-[11px]">{initials}</AvatarFallback>
+          <AvatarFallback className="bg-foreground/10 text-foreground text-xs">{initials}</AvatarFallback>
         </Avatar>
         <PresenceDot online={userOnline} size={9} inset={0} />
       </span>
@@ -227,8 +242,29 @@ export function AccountMenu() {
     </>
   );
 
+  const trigger =
+    variant === 'tab' ? (
+      <button
+        type="button"
+        onClick={() => setMobileMenuOpen(true)}
+        aria-label="You"
+        data-testid="mobile-tab-you"
+        className={`${MOBILE_TAB_CLASS} ${mobileMenuOpen ? 'text-sidebar-foreground' : 'text-muted-foreground'}`}
+      >
+        <span className="relative inline-flex">
+          <Avatar className="size-6" style={presenceNotchStyle(8)}>
+            <AvatarImage src={user?.avatarURL} alt="" />
+            <AvatarFallback className="bg-foreground/10 text-foreground text-xs">{initials}</AvatarFallback>
+          </Avatar>
+          <PresenceDot online={userOnline} size={8} inset={0} />
+        </span>
+        <span>You</span>
+      </button>
+    ) : null;
+
   return (
     <>
+      {trigger ?? (
       <div
         className="shrink-0 border-t border-sidebar-border p-2 mobile:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]"
         data-testid="sidebar-account"
@@ -294,10 +330,11 @@ export function AccountMenu() {
           </DropdownMenu>
         )}
       </div>
+      )}
 
       {/* Mobile-only full-screen account sheet — same actions as the dropdown. */}
       <Dialog open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
-        <DialogContent className="not-mobile:hidden" mobileCloseLabel="Close" data-testid="mobile-account-sheet">
+        <DialogContent className="not-mobile:hidden mobile:content-start" mobileCloseLabel="Close" data-testid="mobile-account-sheet">
           <DialogHeader>
             <DialogTitle>Account</DialogTitle>
           </DialogHeader>
@@ -318,10 +355,7 @@ export function AccountMenu() {
             <div className="flex items-center gap-1 rounded-lg border px-1" data-testid="mobile-status-row">
               <button
                 type="button"
-                onClick={() => {
-                  setStatusOpen(true);
-                  setMobileMenuOpen(false);
-                }}
+                onClick={() => setStatusOpen(true)}
                 className="flex min-h-12 min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-2 text-left hover:bg-muted"
                 data-testid="mobile-status"
               >

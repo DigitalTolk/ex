@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import type { ReactElement } from 'react';
 import { Header } from './Header';
+import { useOpenChannelsRequest } from '@/lib/mobile-nav';
 import type { Channel } from '@/types';
 
 const apiFetchMock = vi.fn();
@@ -246,6 +247,19 @@ describe('Header', () => {
       />,
     );
     expect(screen.getByText('Active now')).toBeInTheDocument();
+  });
+
+  it('on a phone, the back button asks for the channel list; desktop has none', () => {
+    setMobileMatch(true);
+    useOpenChannelsRequest.setState({ pending: false });
+    const { unmount } = renderHeaderWithProviders(<Header channel={makeChannel()} />);
+    fireEvent.click(screen.getByTestId('mobile-header-back'));
+    expect(useOpenChannelsRequest.getState().pending).toBe(true);
+    useOpenChannelsRequest.setState({ pending: false });
+    unmount();
+    setMobileMatch(false);
+    renderHeaderWithProviders(<Header channel={makeChannel()} />);
+    expect(screen.queryByTestId('mobile-header-back')).not.toBeInTheDocument();
   });
 
   it('cancels the mobile description editor when the dialog is dismissed', async () => {

@@ -88,7 +88,7 @@ describe('LoginPage flows - success paths', () => {
       expect(mockSetAccessToken).toHaveBeenCalledWith('tok-1');
       expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/users/me');
       expect(mockSetAuth).toHaveBeenCalledWith('tok-1', expect.objectContaining({ id: 'u-1' }));
-      expect(mockNavigate).toHaveBeenCalledWith('/channel/general');
+      expect(mockNavigate).toHaveBeenCalledWith('/');
     });
   });
 
@@ -142,7 +142,7 @@ describe('LoginPage flows - success paths', () => {
       );
       expect(mockSetAccessToken).toHaveBeenCalledWith('tok-inv');
       expect(mockSetAuth).toHaveBeenCalledWith('tok-inv', expect.any(Object));
-      expect(mockNavigate).toHaveBeenCalledWith('/channel/general');
+      expect(mockNavigate).toHaveBeenCalledWith('/');
     });
   });
 

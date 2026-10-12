@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { captureServerVersion } from '@/lib/api';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { UpdateBanner } from '@/components/UpdateBanner';
+import { AuthPageShell } from '@/components/layout/AuthPageShell';
 
 /**
  * Password recovery for guest (local password) accounts, in two modes driven
@@ -81,10 +81,7 @@ export default function ResetPasswordPage() {
   const heading = isRedeemMode ? 'Choose a new password' : 'Reset your password';
 
   return (
-    <div className="flex min-h-dvh flex-col bg-muted/40">
-      <UpdateBanner />
-      <div className="flex min-h-0 flex-1 items-center justify-center px-4">
-        <div className="w-full max-w-sm space-y-6">
+    <AuthPageShell>
           <div className="text-center space-y-2">
             <h1 className="text-2xl font-bold tracking-tight">{heading}</h1>
             <p className="text-muted-foreground">
@@ -182,8 +179,6 @@ export default function ResetPasswordPage() {
               </Link>
             </div>
           )}
-        </div>
-      </div>
-    </div>
+    </AuthPageShell>
   );
 }

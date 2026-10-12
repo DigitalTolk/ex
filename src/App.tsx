@@ -19,6 +19,7 @@ import ChatPage from '@/pages/ChatPage';
 import { ChannelView } from '@/components/chat/ChannelView';
 import { ConversationView } from '@/components/chat/ConversationView';
 import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
+import { useKeyboardInsetTracker } from '@/hooks/useKeyboardInset';
 import { removeBootSplash } from '@/lib/boot-splash';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useServerVersion } from '@/hooks/useServerVersion';
@@ -73,7 +74,7 @@ function AuthLoadingScreen() {
 
   return (
     <div
-      className="flex min-h-dvh flex-col items-center justify-center gap-3 bg-sidebar dark:bg-sidebar"
+      className="flex h-full flex-col items-center justify-center gap-3 bg-sidebar dark:bg-sidebar"
       role="status"
       aria-label="Loading chat"
       data-testid="app-auth-loading"
@@ -115,6 +116,11 @@ function ChatHomeRoute() {
   const isMobile = useIsMobile();
   if (!isMobile) return <Navigate to={`/channel/${GENERAL_CHANNEL_SLUG}`} replace />;
   return <div className="hidden" data-testid="mobile-channel-home" aria-hidden="true" />;
+}
+
+function KeyboardInsetTracker() {
+  useKeyboardInsetTracker();
+  return null;
 }
 
 function ServerVersionBootstrap() {
@@ -200,9 +206,16 @@ export default function App() {
                   <TypingProvider>
                     <TooltipProvider>
                       <ServerVersionBootstrap />
+                      <KeyboardInsetTracker />
                       <NotificationCountTitleBridge />
                       <Toaster />
-                      <div className="flex h-dvh flex-col bg-sidebar pt-safe-top">
+                      {/* Sized to the space above the on-screen keyboard (0 when
+                          it's down) so the top of the app stays on screen. */}
+                      <div
+                        className="flex flex-col bg-sidebar pt-safe-top"
+                        style={{ height: 'calc(100dvh - var(--ex-keyboard-inset, 0px))' }}
+                        data-app-root="true"
+                      >
                         <div className="min-h-0 flex-1 bg-background">
                           <RoutedErrorBoundary>
                             {/* Fallback for lazy route chunks. Inside the

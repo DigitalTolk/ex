@@ -150,13 +150,20 @@ export function formatRelative(input: Date | string | number, now: Date = new Da
   return `${diffYear} year${diffYear === 1 ? '' : 's'} ago`;
 }
 
+// calendarDaysAgo counts local calendar days between input and now: 0 for
+// today, 1 for yesterday (whatever the hour), negative for the future.
+export function calendarDaysAgo(input: Date | string | number, now: Date): number {
+  const d = input instanceof Date ? input : new Date(input);
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  return Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
+}
+
 // formatDayHeading renders a calendar-day divider label: "Today", "Yesterday",
 // or a date like "Mar 26th, 2026" once we cross a year boundary, "Mar 26th"
 // within the current year. Used by the day-grouping divider in message lists.
 export function formatDayHeading(input: Date | string | number, now: Date = new Date()): string {
   const d = input instanceof Date ? input : new Date(input);
-  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
+  const diffDays = calendarDaysAgo(d, now);
   if (diffDays === 0) return 'Today';
   if (diffDays === 1) return 'Yesterday';
   const month = MONTHS_SHORT[d.getMonth()];

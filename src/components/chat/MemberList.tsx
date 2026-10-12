@@ -21,6 +21,7 @@ import { PanelResizeHandle } from '@/components/layout/PanelResizeHandle';
 import type { ChannelMembership, UserStatus } from '@/types';
 import type { UserMapEntry } from './MessageList';
 import { SearchInput } from '@/components/ui/search-input';
+import { RIGHT_PANEL_COVER_CLASS } from './right-panel';
 
 interface MemberListProps {
   members: ChannelMembership[];
@@ -127,7 +128,7 @@ export function MemberList({ members, channelId, channelSlug, currentUserId, cur
 
   return (
     <motion.div
-      className={`relative flex h-full min-h-0 w-[var(--member-list-width,20rem)] flex-col bg-background not-mobile:border-l mobile:fixed mobile:inset-x-0 mobile:bottom-0 mobile:top-[var(--mobile-right-panel-top,6rem)] mobile:z-40 mobile:w-auto mobile:touch-pan-y ${settled ? '' : 'border-l'}`}
+      className={`relative flex h-full min-h-0 w-[var(--member-list-width,20rem)] flex-col bg-background not-mobile:border-l ${RIGHT_PANEL_COVER_CLASS} mobile:touch-pan-y ${settled ? '' : 'border-l'}`}
       style={{ '--member-list-width': `${panelWidth}px` } as React.CSSProperties}
       data-mobile-right-sidebar="true"
       data-swipe-dismissing={String(dismissing)}

@@ -83,7 +83,7 @@ describe('AccountMenu (mobile + native)', () => {
     await expect.element(screen.getByTestId('user-menu-change-server')).toBeVisible();
   });
 
-  it('runs an action and closes the sheet when a menu entry is tapped', async () => {
+  it('opens a dialog over the sheet when a menu entry is tapped', async () => {
     if (window.innerWidth > 767) return;
     const screen = await renderMenu();
     await screen.getByTestId('account-menu-trigger').click();
@@ -92,12 +92,8 @@ describe('AccountMenu (mobile + native)', () => {
     await vi.waitFor(() => {
       expect(document.querySelector('[data-testid="about-open"]')).not.toBeNull();
     });
-    // runActionAndCloseSheet closed the sheet. Allow generous time — the
-    // dialog lingers in the DOM through its exit animation, which can run
-    // long on webkit under the full-suite load (otherwise this flakes).
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="mobile-account-sheet"]')).toBeNull();
-    }, { timeout: 5000 });
+    // The sheet stays underneath, so closing the dialog lands back on it.
+    expect(document.querySelector('[data-testid="mobile-account-sheet"]')).not.toBeNull();
   });
 
   it('opens the change-server confirm dialog and triggers resetServer on confirm', async () => {

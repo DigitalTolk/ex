@@ -200,6 +200,27 @@ describe('AccountMenu', () => {
     expect(logout).toHaveBeenCalled();
   });
 
+  describe('as the tab bar\'s You tab', () => {
+    it('renders a You tab instead of the footer and opens the sheet, highlighted while open', () => {
+      mockIsMobile = true;
+      mockOnline = new Set<string>(['u-1']);
+      renderMenu(<AccountMenu variant="tab" />);
+      expect(screen.queryByTestId('sidebar-account')).not.toBeInTheDocument();
+      const tab = screen.getByTestId('mobile-tab-you');
+      expect(tab).toHaveClass('text-muted-foreground');
+      fireEvent.click(tab);
+      expect(screen.getByTestId('mobile-account-sheet')).toBeInTheDocument();
+      expect(tab).toHaveClass('text-sidebar-foreground');
+    });
+
+    it('falls back to "??" with no signed-in user', () => {
+      mockIsMobile = true;
+      mockUserNull = true;
+      renderMenu(<AccountMenu variant="tab" />);
+      expect(within(screen.getByTestId('mobile-tab-you')).getByText('??')).toBeInTheDocument();
+    });
+  });
+
   describe('mobile account sheet', () => {
     beforeEach(() => {
       mockIsMobile = true;
@@ -218,11 +239,18 @@ describe('AccountMenu', () => {
       expect(screen.getByTestId('user-menu-signout')).toBeInTheDocument();
     });
 
-    it('closes the sheet and runs the action when a menu item is tapped', () => {
+    it('opens a dialog over the sheet, so closing it lands back on the sheet', () => {
       renderMenu();
       fireEvent.click(screen.getByTestId('account-menu-trigger'));
       fireEvent.click(screen.getByTestId('user-menu-about'));
       expect(screen.getByTestId('about-open')).toBeInTheDocument();
+      expect(screen.getByTestId('mobile-account-sheet')).toBeInTheDocument();
+    });
+
+    it('closes the sheet when a menu item leaves it (navigation)', () => {
+      renderMenu();
+      fireEvent.click(screen.getByTestId('account-menu-trigger'));
+      fireEvent.click(screen.getByTestId('user-menu-admin'));
       expect(screen.queryByTestId('mobile-account-sheet')).not.toBeInTheDocument();
     });
 
