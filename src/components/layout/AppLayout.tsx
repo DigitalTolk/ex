@@ -371,14 +371,18 @@ export function AppLayout({ children }: AppLayoutProps) {
               <>
                 {/* Desktop-styled overlay: click-away backdrop + a bordered
                     panel. Deliberately NOT the mobile drawer — no swipe, no
-                    inert page underneath, desktop row chrome. */}
+                    inert page underneath, desktop row chrome. Both sit above
+                    z-40: under 768px a thread/members panel covers the main
+                    area at z-40 (RIGHT_PANEL_COVER_CLASS) and comes later in
+                    the DOM, so at the same level it would paint over the
+                    sidebar the hamburger just opened. */}
                 <div
-                  className="absolute inset-0 z-30 bg-black/30"
+                  className="absolute inset-0 z-50 bg-black/30"
                   data-testid="compact-sidebar-backdrop"
                   onClick={() => setCompactSidebarToggled(false)}
                 />
                 <aside
-                  className="absolute inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-border bg-sidebar text-sidebar-foreground shadow-xl"
+                  className="absolute inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-border bg-sidebar text-sidebar-foreground shadow-xl"
                   data-testid="compact-sidebar"
                   data-app-chrome="true"
                   data-keyboard-surface="sidebar"

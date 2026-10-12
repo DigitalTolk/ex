@@ -153,6 +153,17 @@ describe('compact tier at a real 700px desktop viewport', () => {
     expect(Math.abs(panel.getBoundingClientRect().width - area.getBoundingClientRect().width)).toBeLessThan(1);
     // No resize handle where there's nothing to resize against.
     expect(panel.querySelector('[data-testid$="resize-handle"]')?.getBoundingClientRect().width ?? 0).toBe(0);
+
+    // The hamburger sidebar must open ABOVE the covering panel: both were
+    // z-40 and the panel came later in the DOM, so the sidebar painted
+    // underneath it and could not be used.
+    (document.querySelector('[aria-label="Open channels"]') as HTMLElement).click();
+    await expect.poll(() => document.querySelector('[data-testid="compact-sidebar"]')).not.toBeNull();
+    const sidebar = document.querySelector('[data-testid="compact-sidebar"]') as HTMLElement;
+    const r = sidebar.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    expect(sidebar.contains(hit)).toBe(true);
+    expect(panel.contains(hit)).toBe(false);
   });
 
   it('keeps dialogs centered desktop windows, not full-screen sheets', async () => {
