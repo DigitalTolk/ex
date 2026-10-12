@@ -17,9 +17,7 @@ import { type CSSProperties } from 'react';
 interface Props {
   channel: UserChannel;
   hasUnread: boolean;
-  // Replies in threads the user is in are unread. With no new channel
-  // messages the dot takes the link blue; with both it is split, pink and
-  // blue, so the two can be told apart at a glance.
+  // Replies in threads the user is in are unread: the row shows a dot.
   threadUnread?: boolean;
   // Unread messages that actually ALERTED this user (mentions, keywords,
   // "all messages" level — the server's notification decision). Only this
@@ -57,7 +55,6 @@ export function ChannelRow({
   const { menuOpen, setMenuOpen, rowHandlers, suppressNavClick } = useRowLongPressMenu();
 
   const isFav = !!channel.favorite;
-  const unreadKind = threadUnread ? (channel.unread ? 'both' : 'thread') : 'messages';
 
   function toggleFavorite(e: React.MouseEvent) {
     e.preventDefault();
@@ -119,18 +116,18 @@ export function ChannelRow({
           {channel.channelName}
         </span>
         {/* Right-edge status, absolutely positioned so it sits flush to the edge
-            and NEVER reflows. Two-tier unread, aligned with the notification
-            rules: the brand-pink NUMBERED badge counts only messages that
-            actually ALERTED this user (so it shows even in a muted channel —
-            a mention overrides mute server-side); merely-unread activity is a
-            subtle "messages available" dot, brand pink for new channel
-            messages and the theme's link blue when only a thread the user is in has new
-            replies; a muted+read channel shows the bell. It fades out on desktop hover so the row actions (star/kebab)
-            take the space, and stays visible on touch at the VERY right edge —
-            the kebab slot, unused on mobile where a long-press opens that
-            menu — so it never overlaps the persistent star (right-10, 36px
-            wide). pointer-events-none keeps the row clickable. */}
-        {hasUnread || notifyCount > 0 ? (
+            and NEVER reflows. Three tiers, loudest first: the brand-pink
+            NUMBER counts messages that actually ALERTED this user (mentions,
+            keywords; it shows even in a muted channel, a mention overrides
+            mute server-side); a dot means replies in a thread the user is in;
+            plain new messages only embolden the name (see the NavLink
+            classes); a muted channel with nothing louder shows the bell. It
+            fades out on desktop hover so the row actions (star/kebab) take
+            the space, and stays visible on touch at the VERY right edge — the
+            kebab slot, unused on mobile where a long-press opens that menu —
+            so it never overlaps the persistent star (right-10, 36px wide).
+            pointer-events-none keeps the row clickable. */}
+        {notifyCount > 0 || threadUnread ? (
           <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 touch:opacity-100">
             {notifyCount > 0 ? (
               <Badge variant="brand" className="text-[11px]" data-testid={`channel-unread-badge-${channel.channelID}`}>
@@ -138,16 +135,9 @@ export function ChannelRow({
               </Badge>
             ) : (
               <span
-                aria-label={unreadKind === 'both' ? 'Unread messages and thread replies' : unreadKind === 'thread' ? 'Unread thread replies' : 'Unread'}
+                aria-label="Unread thread replies"
                 data-testid={`channel-unread-dot-${channel.channelID}`}
-                data-unread-kind={unreadKind}
-                className={`h-2 w-2 rounded-full ${
-                  unreadKind === 'both'
-                    ? 'bg-[linear-gradient(90deg,var(--color-brand)_50%,var(--color-link)_50%)]'
-                    : unreadKind === 'thread'
-                      ? 'bg-link'
-                      : 'bg-brand'
-                }`}
+                className="h-2 w-2 rounded-full bg-brand"
               />
             )}
           </span>

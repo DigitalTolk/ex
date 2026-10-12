@@ -22,8 +22,7 @@ import { type CSSProperties } from 'react';
 interface Props {
   conversation: UserConversation;
   hasUnread: boolean;
-  // Thread replies are unread (see ChannelRow): link blue alone, or a
-  // pink/blue split when there are new messages too.
+  // Replies in threads the user is in are unread: the row shows a dot.
   threadUnread?: boolean;
   // Alerted-unread count (see ChannelRow) — the numeric badge. DM messages
   // always alert unless the conversation is muted, so this usually tracks
@@ -77,7 +76,6 @@ export function ConversationRow({
   const { menuOpen, setMenuOpen, rowHandlers, suppressNavClick } = useRowLongPressMenu();
 
   const isFav = !!conversation.favorite;
-  const unreadKind = threadUnread ? (conversation.unread ? 'both' : 'thread') : 'messages';
   const isGroup = conversation.type === 'group';
   const participantCount = isGroup ? (conversation.participantIDs?.length ?? 0) : 0;
 
@@ -155,14 +153,15 @@ export function ConversationRow({
             <UserStatusIndicator status={dmUserStatus} className="h-4 w-4" />
           </>
         )}
-        {/* Two-tier unread, mirroring ChannelRow: the brand-pink NUMBER counts
-            only messages that alerted this user (DMs alert on every message
-            unless muted); merely-unread activity is the availability dot.
-            Absolutely positioned (flush to the edge, never reflows); fades on
-            desktop hover so the row actions take its place, stays on touch at
-            the VERY right edge (the kebab slot, unused on mobile) clear of
-            the persistent star. */}
-        {(hasUnread || notifyCount > 0) && (
+        {/* Three tiers, mirroring ChannelRow: the brand-pink NUMBER counts
+            messages that alerted this user (DMs alert on every message
+            unless muted); a dot means unread replies in a thread the user is
+            in; plain new messages only embolden the name. Absolutely
+            positioned (flush to the edge, never reflows); fades on desktop
+            hover so the row actions take its place, stays on touch at the
+            VERY right edge (the kebab slot, unused on mobile) clear of the
+            persistent star. */}
+        {(notifyCount > 0 || threadUnread) && (
           <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 touch:opacity-100">
             {notifyCount > 0 ? (
               <Badge variant="brand" className="text-[11px]" data-testid={`conversation-unread-badge-${conversation.conversationID}`}>
@@ -170,16 +169,9 @@ export function ConversationRow({
               </Badge>
             ) : (
               <span
-                aria-label={unreadKind === 'both' ? 'Unread messages and thread replies' : unreadKind === 'thread' ? 'Unread thread replies' : 'Unread'}
+                aria-label="Unread thread replies"
                 data-testid={`conversation-unread-dot-${conversation.conversationID}`}
-                data-unread-kind={unreadKind}
-                className={`h-2 w-2 rounded-full ${
-                  unreadKind === 'both'
-                    ? 'bg-[linear-gradient(90deg,var(--color-brand)_50%,var(--color-link)_50%)]'
-                    : unreadKind === 'thread'
-                      ? 'bg-link'
-                      : 'bg-brand'
-                }`}
+                className="h-2 w-2 rounded-full bg-brand"
               />
             )}
           </span>

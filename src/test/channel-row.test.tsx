@@ -230,13 +230,19 @@ describe('ChannelRow', () => {
     expect(screen.queryByTestId('channel-unread-badge-ch-1')).toBeNull();
   });
 
-  it('shows the availability dot (not a number) for unread without alerts', () => {
-    // Two-tier unread, aligned with the notification rules: plain unread
-    // activity that never alerted this user is a subtle "messages
-    // available" dot — the number is reserved for alerts.
+  it('plain unread without alerts only emboldens the name', () => {
+    // Three tiers: the number is for alerts, the dot for thread replies, and
+    // plain new messages just make the name bold.
     renderRow(makeChannel({ channelID: 'ch-1' }), true, { notifyCount: 0 });
     expect(screen.queryByTestId('channel-unread-badge-ch-1')).toBeNull();
-    expect(screen.getByTestId('channel-unread-dot-ch-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('channel-unread-dot-ch-1')).toBeNull();
+    expect(screen.getByTestId('channel-row-ch-1').querySelector('a')).toHaveClass('font-bold');
+  });
+
+  it('shows a dot for unread replies in a thread the user is in', () => {
+    renderRow(makeChannel({ channelID: 'ch-1' }), true, { threadUnread: true, notifyCount: 0 });
+    expect(screen.getByTestId('channel-unread-dot-ch-1')).toHaveAttribute('aria-label', 'Unread thread replies');
+    expect(screen.queryByTestId('channel-unread-badge-ch-1')).toBeNull();
   });
 
   it('shows a numeric badge counting only alerting messages', () => {
@@ -251,12 +257,13 @@ describe('ChannelRow', () => {
     expect(screen.getByTestId('channel-unread-badge-ch-1')).toHaveTextContent('99+');
   });
 
-  it('shows a subtle dot (not a count badge) for muted channels with quiet unread', () => {
-    // Muted chatter never alerts (server-side), so no number — the dot keeps
-    // the activity visible without the loud count.
+  it('a muted channel with quiet unread keeps the bell and no count', () => {
+    // Muted chatter never alerts (server-side), so no number; the bell stays
+    // so the mute is visible, and the name carries the unread.
     renderRow(makeChannel({ channelID: 'ch-1', muted: true }), true, { notifyCount: 0 });
     expect(screen.queryByTestId('channel-unread-badge-ch-1')).toBeNull();
-    expect(screen.getByTestId('channel-unread-dot-ch-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('channel-unread-dot-ch-1')).toBeNull();
+    expect(screen.getByLabelText('Muted')).toBeInTheDocument();
   });
 
   it('shows the numeric badge in a muted channel when a mention alerted', () => {
