@@ -3,6 +3,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useId,
   useRef,
   useState,
   type FocusEvent,
@@ -93,9 +94,10 @@ function Tooltip({ children, ...props }: TooltipPrimitive.Root.Props) {
 
 function TooltipTrigger({ render, className, children, ...props }: TooltipPrimitive.Trigger.Props) {
   const lazy = useContext(LazyContext)
-  // The primitive's element, once mounted; state rather than a ref so the
-  // replay effect below runs when it appears.
-  const [node, setNode] = useState<HTMLElement | null>(null)
+  // The primitive's trigger gets a known id, so the replay below can find
+  // its element in the document once it has mounted.
+  const ownId = useId()
+  const id = props.id ?? ownId
   // Replay the contact on the element the primitive just mounted: its
   // trigger reads the pointer type from pointerenter, listens for mouseenter
   // itself, and with the provider's delay opens only once the pointer has
@@ -105,9 +107,7 @@ function TooltipTrigger({ render, className, children, ...props }: TooltipPrimit
   // microtask from there, because an instant open flushes synchronously and
   // React refuses that from inside a lifecycle.
   useEffect(() => {
-    const el = node
-    // The element lands in state a render after the primitive mounts; the
-    // handoff must not be taken before then.
+    const el = lazy.armed ? document.getElementById(id) : null
     if (!el) return
     const handoff = lazy.takeHandoff()
     if (!handoff) return
@@ -120,7 +120,7 @@ function TooltipTrigger({ render, className, children, ...props }: TooltipPrimit
       el.dispatchEvent(new MouseEvent("mouseenter"))
       el.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }))
     })
-  }, [lazy, node])
+  }, [lazy, id])
   // A render *function* cannot be cloned into an inert element: arm at once.
   const needsArming = !lazy.armed && typeof render === "function"
   useEffect(() => {
@@ -154,7 +154,7 @@ function TooltipTrigger({ render, className, children, ...props }: TooltipPrimit
   return (
     <TooltipPrimitive.Trigger
       data-slot="tooltip-trigger"
-      ref={setNode}
+      id={id}
       render={render}
       className={className}
       {...props}
