@@ -404,6 +404,10 @@ describe('MessageItem', () => {
         currentUserId="user-1"
       />,
     );
+    // The chip's tooltip mounts lazily on first hover and swaps the chip
+    // element; a browser hit-tests the click afresh, user-event does not,
+    // so hover first and click the chip as it then is.
+    await user.hover(screen.getByRole('listitem'));
     await user.click(screen.getByRole('listitem'));
     expect(mockReactMutate).toHaveBeenCalledWith({
       messageId: 'msg-1',

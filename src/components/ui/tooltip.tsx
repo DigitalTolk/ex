@@ -1,3 +1,16 @@
+import {
+  cloneElement,
+  createContext,
+  isValidElement,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type FocusEvent,
+  type MouseEvent,
+  type ReactElement,
+} from "react"
+import { flushSync } from "react-dom"
 import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip"
 
 import { cn } from "@/lib/utils"
@@ -18,12 +31,134 @@ function TooltipProvider({
   )
 }
 
-function Tooltip({ ...props }: TooltipPrimitive.Root.Props) {
-  return <TooltipPrimitive.Root data-slot="tooltip" {...props} />
+// Lazy mounting. A message row carries several tooltips (timestamp, every
+// reaction chip, status dots) and the primitive's root + trigger + content
+// cost more to mount than the rest of the row; on a fast scroll that showed
+// up as the largest share of each new row. So until the pointer (or keyboard
+// focus) first reaches the trigger, Tooltip renders only the trigger's own
+// element, and the primitive mounts on that first contact. The hover is then
+// handed to the freshly mounted trigger (see TooltipTrigger), so the tooltip
+// still opens from that same hover, with the usual delay.
+type Handoff = "pointer" | "focus"
+interface LazyTooltipContext {
+  armed: boolean
+  // Mount the primitive, remembering how the contact happened so the real
+  // trigger can resume it; takeHandoff hands that out once.
+  arm: (handoff?: Handoff) => void
+  takeHandoff: () => Handoff | null
+}
+// Outside a Tooltip (never the case in the app) a trigger behaves as armed.
+const LazyContext = createContext<LazyTooltipContext>({
+  armed: true,
+  /* istanbul ignore next -- only reachable for a trigger rendered outside Tooltip */
+  arm: () => {},
+  /* istanbul ignore next -- as above */
+  takeHandoff: () => null,
+})
+
+function Tooltip({ children, ...props }: TooltipPrimitive.Root.Props) {
+  // A controlled or default-open tooltip has nothing to defer.
+  const [armed, setArmed] = useState(props.open !== undefined || props.defaultOpen === true)
+  const handoffRef = useRef<Handoff | null>(null)
+  const [ctx] = useState<LazyTooltipContext>(() => ({
+    armed: false,
+    arm: (handoff) => {
+      handoffRef.current = handoff ?? null
+      // From an event (a handoff), synchronously, so the primitive's element
+      // is in place before the next event: a press that started on the inert
+      // element and ended on the real one would otherwise never become a
+      // click. From an effect (no handoff) React forbids flushing.
+      if (handoff) flushSync(() => setArmed(true))
+      else setArmed(true)
+    },
+    takeHandoff: () => {
+      const handoff = handoffRef.current
+      handoffRef.current = null
+      return handoff
+    },
+  }))
+  const value = armed === ctx.armed ? ctx : { ...ctx, armed }
+  return (
+    <LazyContext.Provider value={value}>
+      {armed ? (
+        <TooltipPrimitive.Root data-slot="tooltip" {...props}>
+          {children}
+        </TooltipPrimitive.Root>
+      ) : (
+        // Root children may be a render function (the payload API); the
+        // app never uses it, and a function cannot be shown inert.
+        typeof children === "function" ? null : children
+      )}
+    </LazyContext.Provider>
+  )
 }
 
-function TooltipTrigger({ ...props }: TooltipPrimitive.Trigger.Props) {
-  return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />
+function TooltipTrigger({ render, className, children, ...props }: TooltipPrimitive.Trigger.Props) {
+  const lazy = useContext(LazyContext)
+  const ref = useRef<HTMLElement | null>(null)
+  // Replay the contact on the element the primitive just mounted: its
+  // trigger reads the pointer type from pointerenter, listens for mouseenter
+  // itself, and with the provider's delay opens only once the pointer has
+  // rested after a mousemove, so send all three. Focus is simply moved back.
+  // A passive effect, because the primitive attaches its listeners in its
+  // own passive effect, which runs first (child before parent); and a
+  // microtask from there, because an instant open flushes synchronously and
+  // React refuses that from inside a lifecycle.
+  useEffect(() => {
+    const el = ref.current
+    const handoff = lazy.takeHandoff()
+    if (!el || !handoff) return
+    queueMicrotask(() => {
+      if (handoff === "focus") {
+        el.focus()
+        return
+      }
+      el.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }))
+      el.dispatchEvent(new MouseEvent("mouseenter"))
+      el.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }))
+    })
+  }, [lazy])
+  // A render *function* cannot be cloned into an inert element: arm at once.
+  const needsArming = !lazy.armed && typeof render === "function"
+  useEffect(() => {
+    if (needsArming) lazy.arm()
+  }, [lazy, needsArming])
+
+  if (!lazy.armed) {
+    if (typeof render === "function") return null
+    const el = (render ?? <button type="button" />) as ReactElement<Record<string, unknown>>
+    const own = isValidElement(el) ? el.props : {}
+    return cloneElement(
+      el,
+      {
+        ...props,
+        "data-slot": "tooltip-trigger",
+        className: cn(own.className as string | undefined, className as string | undefined),
+        onMouseEnter: (event: MouseEvent) => {
+          ;(own.onMouseEnter as ((e: MouseEvent) => void) | undefined)?.(event)
+          lazy.arm("pointer")
+        },
+        onFocus: (event: FocusEvent) => {
+          ;(own.onFocus as ((e: FocusEvent) => void) | undefined)?.(event)
+          lazy.arm("focus")
+        },
+      },
+      children,
+    )
+  }
+  return (
+    <TooltipPrimitive.Trigger
+      data-slot="tooltip-trigger"
+      ref={(node: HTMLElement | null) => {
+        ref.current = node
+      }}
+      render={render}
+      className={className}
+      {...props}
+    >
+      {children}
+    </TooltipPrimitive.Trigger>
+  )
 }
 
 function TooltipContent({
@@ -39,6 +174,8 @@ function TooltipContent({
     TooltipPrimitive.Positioner.Props,
     "align" | "alignOffset" | "side" | "sideOffset"
   >) {
+  const lazy = useContext(LazyContext)
+  if (!lazy.armed) return null
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Positioner

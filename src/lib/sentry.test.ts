@@ -69,6 +69,7 @@ describe('sentry error reporting', () => {
       replaysSessionSampleRate: 0,
       replaysOnErrorSampleRate: 0,
       dataCollection: { userInfo: false, cookies: false },
+      ignoreErrors: [/ResizeObserver loop/],
       initialScope: { tags: { platform: 'web' } },
     });
     // Nothing sampled → neither heavy integration is constructed or loaded.

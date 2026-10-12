@@ -13,10 +13,14 @@ export function countsTowardUnread(m: Message, parentType: 'channel' | 'conversa
 // resolveUnreadDivider finds the first unread message in `messages`
 // (chronological) for an anchor, or null when it isn't among the loaded ones
 // (older than the oldest loaded page, or not arrived yet).
+// currentUserID: a reader's own messages are never "new" to them. It matters
+// for the time anchor (threads): after the seen time was noted, the reader's
+// own reply is the first thing newer than it, and the line sat above it.
 export function resolveUnreadDivider(
   anchor: UnreadAnchor,
   messages: Message[],
   parentType: 'channel' | 'conversation',
+  currentUserID?: string,
 ): string | null {
   switch (anchor.kind) {
     case 'message':
@@ -32,7 +36,7 @@ export function resolveUnreadDivider(
     }
     case 'after': {
       const at = new Date(anchor.at).getTime();
-      const first = messages.find((m) => new Date(m.createdAt).getTime() > at);
+      const first = messages.find((m) => m.authorID !== currentUserID && new Date(m.createdAt).getTime() > at);
       return first ? first.id : null;
     }
   }

@@ -182,6 +182,22 @@ describe('ConversationRow browser behaviour', () => {
     const screen = await renderRow(dm, { hasUnread: true, notifyCount: 0 });
     await expect.element(screen.getByTestId('conversation-unread-dot-cv-1')).toBeVisible();
     expect(document.querySelector('[data-testid="conversation-unread-badge-cv-1"]')).toBeNull();
+    expect((document.querySelector('[data-testid="conversation-unread-dot-cv-1"]') as HTMLElement).getAttribute('data-unread-kind')).toBe('messages');
+  });
+
+  it('colours the dot link blue when only thread replies are unread', async () => {
+    await renderRow(dm, { hasUnread: true, threadUnread: true, notifyCount: 0 });
+    const dot = document.querySelector('[data-testid="conversation-unread-dot-cv-1"]') as HTMLElement;
+    expect(dot.getAttribute('data-unread-kind')).toBe('thread');
+    expect(dot.getAttribute('aria-label')).toBe('Unread thread replies');
+    expect(dot.className).toContain('bg-link');
+  });
+
+  it('splits the dot when both new messages and thread replies are unread', async () => {
+    await renderRow({ ...dm, unread: true }, { hasUnread: true, threadUnread: true, notifyCount: 0 });
+    const dot = document.querySelector('[data-testid="conversation-unread-dot-cv-1"]') as HTMLElement;
+    expect(dot.getAttribute('data-unread-kind')).toBe('both');
+    expect(dot.className).toContain('--color-link');
   });
 
   it('renders the exact alerted count when under 100', async () => {

@@ -22,6 +22,9 @@ import { type CSSProperties } from 'react';
 interface Props {
   conversation: UserConversation;
   hasUnread: boolean;
+  // Thread replies are unread (see ChannelRow): link blue alone, or a
+  // pink/blue split when there are new messages too.
+  threadUnread?: boolean;
   // Alerted-unread count (see ChannelRow) — the numeric badge. DM messages
   // always alert unless the conversation is muted, so this usually tracks
   // the plain unread count; merely-unread shows the availability dot.
@@ -50,6 +53,7 @@ interface Props {
 export function ConversationRow({
   conversation,
   hasUnread,
+  threadUnread = false,
   notifyCount = 0,
   dmAvatarURL,
   dmUserStatus,
@@ -73,6 +77,7 @@ export function ConversationRow({
   const { menuOpen, setMenuOpen, rowHandlers, suppressNavClick } = useRowLongPressMenu();
 
   const isFav = !!conversation.favorite;
+  const unreadKind = threadUnread ? (conversation.unread ? 'both' : 'thread') : 'messages';
   const isGroup = conversation.type === 'group';
   const participantCount = isGroup ? (conversation.participantIDs?.length ?? 0) : 0;
 
@@ -165,22 +170,32 @@ export function ConversationRow({
               </Badge>
             ) : (
               <span
-                aria-label="Unread"
+                aria-label={unreadKind === 'both' ? 'Unread messages and thread replies' : unreadKind === 'thread' ? 'Unread thread replies' : 'Unread'}
                 data-testid={`conversation-unread-dot-${conversation.conversationID}`}
-                className="h-2 w-2 rounded-full bg-brand"
+                data-unread-kind={unreadKind}
+                className={`h-2 w-2 rounded-full ${
+                  unreadKind === 'both'
+                    ? 'bg-[linear-gradient(90deg,var(--color-brand)_50%,var(--color-link)_50%)]'
+                    : unreadKind === 'thread'
+                      ? 'bg-link'
+                      : 'bg-brand'
+                }`}
               />
             )}
           </span>
         )}
       </NavLink>
-      {/* Star — visible on hover; persistent yellow when favorited.
-          Positioned to match ChannelRow's right-7 / right-1 layout. */}
+      {/* Star — visible on hover; a favorite keeps a quiet grey filled star
+          that lifts on row hover (see ChannelRow). Positioned to match
+          ChannelRow's right-7 / right-1 layout. */}
       <button
         onClick={toggleFavorite}
         aria-label={isFav ? `Unfavorite ${conversation.displayName}` : `Favorite ${conversation.displayName}`}
         data-testid={`conv-fav-toggle-${conversation.conversationID}`}
         className={`absolute right-7 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-opacity touch:right-8 touch:h-7 touch:w-7 mobile:right-10 mobile:h-9 mobile:w-9 ${
-          isFav ? 'opacity-100 text-amber-300' : 'opacity-0 text-gray-400 hover:text-white group-hover/row:opacity-100 touch:opacity-100'
+          isFav
+            ? 'opacity-100 text-gray-500 hover:text-white group-hover/row:text-gray-400'
+            : 'opacity-0 text-gray-400 hover:text-white group-hover/row:opacity-100 touch:opacity-100'
         }`}
       >
         <Star className="h-3.5 w-3.5" fill={isFav ? 'currentColor' : 'none'} />

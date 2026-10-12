@@ -23,6 +23,7 @@ import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/u
 import { useComposerSchedule } from '@/hooks/useScheduledMessages';
 import { markThreadSeen, noteThreadReadPosition, useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
 import { isReadHeld, keepReadSession, markUnreadSeen, scheduleEndReadSession, threadReadKey, useUnreadAnchor, useUnreadSeen } from '@/lib/read-position';
+import { attachScrollHoverPause } from '@/lib/scroll-hover-pause';
 import { resolveUnreadDivider } from '@/lib/unread-divider';
 import { UnreadDivider } from './UnreadMarkers';
 import { MessageRowDataProvider } from './MessageRowDataProvider';
@@ -146,9 +147,9 @@ export function ThreadPanel({
   const threadDividerID = useMemo(
     () =>
       threadAnchor && data
-        ? resolveUnreadDivider(threadAnchor, data.filter((m) => m.id !== threadRootID), parentType)
+        ? resolveUnreadDivider(threadAnchor, data.filter((m) => m.id !== threadRootID), parentType, currentUserId)
         : null,
-    [threadAnchor, data, threadRootID, parentType],
+    [threadAnchor, data, threadRootID, parentType, currentUserId],
   );
 
   useEffect(() => {
@@ -230,6 +231,12 @@ export function ThreadPanel({
   // sentinel and would never report real content shifts).
   const innerRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useAtBottomRef(scrollRef);
+  useEffect(() => {
+    const el = scrollRef.current;
+    /* istanbul ignore next -- the scroller renders with the panel, so it is set by the time effects run; defensive. */
+    if (!el) return;
+    return attachScrollHoverPause(el);
+  }, []);
 
   // userHasScrolledRef is shared with the anchor effect below. Once
   // the user takes control of the scroll, the bottom-stick RO can
@@ -410,14 +417,30 @@ export function ThreadPanel({
     /* istanbul ignore next -- scrollRef and innerRef are both attached once the panel renders, so this guard never short-circuits in practice; defensive. */
     if (!el || !inner) return;
     if (anchorMsgId) return;
+    // Only a load that grew the content re-pins. The hover toolbar's
+    // custom-emoji quick reactions are <img>s too, and they load without
+    // changing the content height (the toolbar is absolutely positioned);
+    // re-pinning on those yanked a reader who had scrolled a few lines up
+    // from the bottom back down, as soon as the pointer crossed a row.
+    let lastHeight = el.scrollHeight;
+    const onScroll = () => {
+      lastHeight = el.scrollHeight;
+    };
     const onLoad = (e: Event) => {
       const target = e.target as HTMLElement | null;
       if (!target || target.tagName !== 'IMG') return;
       if (!wasAtBottomRef.current) return;
-      el.scrollTop = el.scrollHeight;
+      const height = el.scrollHeight;
+      if (height <= lastHeight) return;
+      lastHeight = height;
+      el.scrollTop = height;
     };
+    el.addEventListener('scroll', onScroll, { passive: true });
     inner.addEventListener('load', onLoad, true);
-    return () => inner.removeEventListener('load', onLoad, true);
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      inner.removeEventListener('load', onLoad, true);
+    };
   }, [anchorMsgId, wasAtBottomRef]);
 
   const handleDraftChange = useCallback(

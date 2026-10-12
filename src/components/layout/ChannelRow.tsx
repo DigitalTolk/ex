@@ -17,6 +17,10 @@ import { type CSSProperties } from 'react';
 interface Props {
   channel: UserChannel;
   hasUnread: boolean;
+  // Replies in threads the user is in are unread. With no new channel
+  // messages the dot takes the link blue; with both it is split, pink and
+  // blue, so the two can be told apart at a glance.
+  threadUnread?: boolean;
   // Unread messages that actually ALERTED this user (mentions, keywords,
   // "all messages" level — the server's notification decision). Only this
   // drives the numeric badge; plain unread shows the availability dot.
@@ -36,6 +40,7 @@ interface Props {
 export function ChannelRow({
   channel,
   hasUnread,
+  threadUnread = false,
   notifyCount = 0,
   onClose,
   draggable,
@@ -52,6 +57,7 @@ export function ChannelRow({
   const { menuOpen, setMenuOpen, rowHandlers, suppressNavClick } = useRowLongPressMenu();
 
   const isFav = !!channel.favorite;
+  const unreadKind = threadUnread ? (channel.unread ? 'both' : 'thread') : 'messages';
 
   function toggleFavorite(e: React.MouseEvent) {
     e.preventDefault();
@@ -117,8 +123,9 @@ export function ChannelRow({
             rules: the brand-pink NUMBERED badge counts only messages that
             actually ALERTED this user (so it shows even in a muted channel —
             a mention overrides mute server-side); merely-unread activity is a
-            subtle "messages available" dot; a muted+read channel shows the
-            bell. It fades out on desktop hover so the row actions (star/kebab)
+            subtle "messages available" dot, brand pink for new channel
+            messages and the theme's link blue when only a thread the user is in has new
+            replies; a muted+read channel shows the bell. It fades out on desktop hover so the row actions (star/kebab)
             take the space, and stays visible on touch at the VERY right edge —
             the kebab slot, unused on mobile where a long-press opens that
             menu — so it never overlaps the persistent star (right-10, 36px
@@ -131,9 +138,16 @@ export function ChannelRow({
               </Badge>
             ) : (
               <span
-                aria-label="Unread"
+                aria-label={unreadKind === 'both' ? 'Unread messages and thread replies' : unreadKind === 'thread' ? 'Unread thread replies' : 'Unread'}
                 data-testid={`channel-unread-dot-${channel.channelID}`}
-                className="h-2 w-2 rounded-full bg-brand"
+                data-unread-kind={unreadKind}
+                className={`h-2 w-2 rounded-full ${
+                  unreadKind === 'both'
+                    ? 'bg-[linear-gradient(90deg,var(--color-brand)_50%,var(--color-link)_50%)]'
+                    : unreadKind === 'thread'
+                      ? 'bg-link'
+                      : 'bg-brand'
+                }`}
               />
             )}
           </span>
@@ -144,13 +158,18 @@ export function ChannelRow({
           />
         ) : null}
       </NavLink>
-      {/* Star — visible on hover; persistent yellow when favorited. Always visible on touch screens. */}
+      {/* Star — visible on hover. A favorite keeps a filled star, but in the
+          same quiet grey as the muted bell, so the Starred section is not a
+          column of colour; it lifts a little as the row is hovered. Always
+          visible on touch screens. */}
       <button
         onClick={toggleFavorite}
         aria-label={isFav ? `Unfavorite ${channel.channelName}` : `Favorite ${channel.channelName}`}
         data-testid={`fav-toggle-${channel.channelID}`}
         className={`absolute right-7 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-opacity touch:right-8 touch:h-7 touch:w-7 mobile:right-10 mobile:h-9 mobile:w-9 ${
-          isFav ? 'opacity-100 text-amber-300' : 'opacity-0 text-gray-400 hover:text-white group-hover/row:opacity-100 touch:opacity-100'
+          isFav
+            ? 'opacity-100 text-gray-500 hover:text-white group-hover/row:text-gray-400'
+            : 'opacity-0 text-gray-400 hover:text-white group-hover/row:opacity-100 touch:opacity-100'
         }`}
       >
         <Star className="h-3.5 w-3.5" fill={isFav ? 'currentColor' : 'none'} />

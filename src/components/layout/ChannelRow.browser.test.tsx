@@ -145,6 +145,33 @@ describe('ChannelRow browser behaviour', () => {
     // Two-tier unread: plain activity is the dot; numbers are alerts only.
     await expect.element(screen.getByTestId('channel-unread-dot-ch-1')).toBeVisible();
     expect(document.querySelector('[data-testid="channel-unread-badge-ch-1"]')).toBeNull();
+    // New channel messages keep the brand-pink dot.
+    expect((document.querySelector('[data-testid="channel-unread-dot-ch-1"]') as HTMLElement).getAttribute('data-unread-kind')).toBe('messages');
+  });
+
+  it('colours the dot link blue when only thread replies are unread', async () => {
+    await render(
+      <MemoryRouter>
+        <ChannelRow channel={baseChannel} hasUnread threadUnread notifyCount={0} onClose={() => {}} />
+      </MemoryRouter>,
+    );
+    const dot = document.querySelector('[data-testid="channel-unread-dot-ch-1"]') as HTMLElement;
+    expect(dot.getAttribute('data-unread-kind')).toBe('thread');
+    expect(dot.getAttribute('aria-label')).toBe('Unread thread replies');
+    expect(dot.className).toContain('bg-link');
+  });
+
+  it('splits the dot pink and blue when both new messages and thread replies are unread', async () => {
+    await render(
+      <MemoryRouter>
+        <ChannelRow channel={{ ...baseChannel, unread: true }} hasUnread threadUnread notifyCount={0} onClose={() => {}} />
+      </MemoryRouter>,
+    );
+    const dot = document.querySelector('[data-testid="channel-unread-dot-ch-1"]') as HTMLElement;
+    expect(dot.getAttribute('data-unread-kind')).toBe('both');
+    expect(dot.getAttribute('aria-label')).toBe('Unread messages and thread replies');
+    expect(dot.className).toContain('--color-brand');
+    expect(dot.className).toContain('--color-link');
   });
 
   it('shows a subtle dot (not a badge) for a muted channel with quiet unread', async () => {

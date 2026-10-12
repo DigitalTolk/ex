@@ -512,6 +512,14 @@
  * regress to white-on-white text.
  */
 @layer utilities {
+  /* While a chat list scrolls (lib/scroll-hover-pause sets the flag) its
+     rows are not hit-testable, so none of them mounts a hover toolbar as it
+     passes under the pointer. The flag drops 150ms after the last scroll
+     event and the browser then hovers the row under the pointer as usual. */
+  [data-scrolling="true"] [data-message-id] {
+    pointer-events: none;
+  }
+
   html:not(.dark) [data-app-chrome="true"] .text-white,
   html:not(.dark) [data-app-chrome="true"] .text-gray-200,
   html:not(.dark) [data-app-chrome="true"] .text-gray-300 {

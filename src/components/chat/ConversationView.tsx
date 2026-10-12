@@ -34,7 +34,7 @@ import { useSidePanels } from '@/hooks/useSidePanels';
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useDeepLinkAnchor, useListAnchor } from '@/hooks/useDeepLinkAnchor';
+import { useDeepLinkAnchor, useListAnchor, forgetDeepLinkInAddress } from '@/hooks/useDeepLinkAnchor';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useIsOnline } from '@/stores/presence';
 import {
@@ -226,7 +226,10 @@ export function ConversationView() {
   const dismissThread = () => {
     setThreadRootID(null);
     const urlThread = searchParams.get('thread');
-    if (urlThread) setDismissed({ navKey, thread: urlThread });
+    if (urlThread) {
+      setDismissed({ navKey, thread: urlThread });
+      forgetDeepLinkInAddress();
+    }
   };
   const openMembers = () => { dismissThread(); closeTag(); panels.open('members'); };
   const closeMembers = panels.close;

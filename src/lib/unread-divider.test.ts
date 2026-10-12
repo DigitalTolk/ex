@@ -40,6 +40,14 @@ describe('resolveUnreadDivider', () => {
     expect(resolveUnreadDivider({ kind: 'after', at: '2026-10-07T09:00:02Z' }, messages, 'channel')).toBe('m3');
     expect(resolveUnreadDivider({ kind: 'after', at: '2026-10-07T10:00:00Z' }, messages, 'channel')).toBeNull();
   });
+
+  it('threads: the reader\'s own replies are never the first new one', () => {
+    const replies = [msg('m1'), msg('m3', { authorID: 'me' }), msg('m4')];
+    // Only my own reply is newer than the seen time: no line.
+    expect(resolveUnreadDivider({ kind: 'after', at: '2026-10-07T09:00:02Z' }, replies.slice(0, 2), 'conversation', 'me')).toBeNull();
+    // Someone else replied after mine: the line sits above theirs.
+    expect(resolveUnreadDivider({ kind: 'after', at: '2026-10-07T09:00:02Z' }, replies, 'conversation', 'me')).toBe('m4');
+  });
 });
 
 describe('unreadFrom', () => {
