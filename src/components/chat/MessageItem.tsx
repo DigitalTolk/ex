@@ -130,7 +130,7 @@ function createRowHoverStore() {
       row = event.currentTarget;
       row.dataset.hovered = 'true';
       update({ hovered: true });
-      notifyMessageHovered(row.dataset.messageId ?? '');
+      notifyMessageHovered(String(row.dataset.messageId));
     },
     leave: () => {
       if (row) delete row.dataset.hovered;

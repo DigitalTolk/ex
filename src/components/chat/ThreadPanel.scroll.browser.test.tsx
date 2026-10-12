@@ -232,10 +232,12 @@ describe('ThreadPanel real-scroll coverage', () => {
     el.scrollTop = el.scrollHeight; // ensure at-bottom
     el.dispatchEvent(new Event('scroll'));
     await frame();
-    // Grow one row's image, then fire its load event → the capture-phase
-    // load listener sees the taller content and re-pins to the bottom.
+    // Grow one row (as a decoded image would), then fire the image's load
+    // event → the capture-phase load listener sees the taller content and
+    // re-pins to the bottom. The mock rows have a fixed height, so the row
+    // itself grows here rather than the image.
     const img = document.querySelector('[data-testid="img-R0"]') as HTMLImageElement;
-    img.style.height = '200px';
+    (img.parentElement as HTMLElement).style.height = '300px';
     img.dispatchEvent(new Event('load', { bubbles: false }));
     await frame();
     expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThan(40);

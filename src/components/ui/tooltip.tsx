@@ -1,7 +1,6 @@
 import {
   cloneElement,
   createContext,
-  isValidElement,
   useContext,
   useEffect,
   useRef,
@@ -48,12 +47,11 @@ interface LazyTooltipContext {
   takeHandoff: () => Handoff | null
 }
 // Outside a Tooltip (never the case in the app) a trigger behaves as armed.
+// (The two no-op functions only run for a trigger rendered outside Tooltip.)
 const LazyContext = createContext<LazyTooltipContext>({
   armed: true,
-  /* istanbul ignore next -- only reachable for a trigger rendered outside Tooltip */
-  arm: () => {},
-  /* istanbul ignore next -- as above */
-  takeHandoff: () => null,
+  arm: /* istanbul ignore next */ () => {},
+  takeHandoff: /* istanbul ignore next */ () => null,
 })
 
 function Tooltip({ children, ...props }: TooltipPrimitive.Root.Props) {
@@ -95,7 +93,9 @@ function Tooltip({ children, ...props }: TooltipPrimitive.Root.Props) {
 
 function TooltipTrigger({ render, className, children, ...props }: TooltipPrimitive.Trigger.Props) {
   const lazy = useContext(LazyContext)
-  const ref = useRef<HTMLElement | null>(null)
+  // The primitive's element, once mounted; state rather than a ref so the
+  // replay effect below runs when it appears.
+  const [node, setNode] = useState<HTMLElement | null>(null)
   // Replay the contact on the element the primitive just mounted: its
   // trigger reads the pointer type from pointerenter, listens for mouseenter
   // itself, and with the provider's delay opens only once the pointer has
@@ -105,9 +105,12 @@ function TooltipTrigger({ render, className, children, ...props }: TooltipPrimit
   // microtask from there, because an instant open flushes synchronously and
   // React refuses that from inside a lifecycle.
   useEffect(() => {
-    const el = ref.current
+    const el = node
+    // The element lands in state a render after the primitive mounts; the
+    // handoff must not be taken before then.
+    if (!el) return
     const handoff = lazy.takeHandoff()
-    if (!el || !handoff) return
+    if (!handoff) return
     queueMicrotask(() => {
       if (handoff === "focus") {
         el.focus()
@@ -117,7 +120,7 @@ function TooltipTrigger({ render, className, children, ...props }: TooltipPrimit
       el.dispatchEvent(new MouseEvent("mouseenter"))
       el.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }))
     })
-  }, [lazy])
+  }, [lazy, node])
   // A render *function* cannot be cloned into an inert element: arm at once.
   const needsArming = !lazy.armed && typeof render === "function"
   useEffect(() => {
@@ -126,8 +129,10 @@ function TooltipTrigger({ render, className, children, ...props }: TooltipPrimit
 
   if (!lazy.armed) {
     if (typeof render === "function") return null
+    // render is an element here (functions arm above, undefined gets a
+    // button), so its props are always there to merge.
     const el = (render ?? <button type="button" />) as ReactElement<Record<string, unknown>>
-    const own = isValidElement(el) ? el.props : {}
+    const own = el.props
     return cloneElement(
       el,
       {
@@ -149,9 +154,7 @@ function TooltipTrigger({ render, className, children, ...props }: TooltipPrimit
   return (
     <TooltipPrimitive.Trigger
       data-slot="tooltip-trigger"
-      ref={(node: HTMLElement | null) => {
-        ref.current = node
-      }}
+      ref={setNode}
       render={render}
       className={className}
       {...props}
