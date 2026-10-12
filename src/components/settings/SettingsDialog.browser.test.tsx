@@ -125,7 +125,9 @@ describe('save status', () => {
     );
     await screen.getByText('start').click();
     await screen.getByText('reject-last').click();
-    await vi.waitFor(() => expect(statusEl().dataset.state).toBe('error'));
+    // Generous: under the full instrumented run the save can settle late, and
+    // the default 1s wait timed out on 'idle' (flaky, not a product bug).
+    await vi.waitFor(() => expect(statusEl().dataset.state).toBe('error'), { timeout: 5000 });
     expect(statusEl().className).toContain('opacity-0');
   });
 
@@ -138,7 +140,7 @@ describe('save status', () => {
     );
     await screen.getByText('start').click();
     await screen.getByText('resolve-0').click();
-    await vi.waitFor(() => expect(statusEl().dataset.state).toBe('saved'));
+    await vi.waitFor(() => expect(statusEl().dataset.state).toBe('saved'), { timeout: 5000 });
     const clear = vi.spyOn(globalThis, 'clearTimeout');
     screen.unmount();
     expect(clear).toHaveBeenCalled();

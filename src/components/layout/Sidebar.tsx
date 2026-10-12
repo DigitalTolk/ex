@@ -36,7 +36,6 @@ import {
   Trash2,
   ArrowDownAZ,
   Clock3,
-  Bell,
   Loader2,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -56,7 +55,6 @@ import { useUserConversations } from '@/hooks/useConversations';
 import { getSeenMap, mergeSeenMaps, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, unreadThreadParents, useUserThreads } from '@/hooks/useThreads';
 import { useUserState } from '@/hooks/useUserState';
 import { useDrafts } from '@/hooks/useDrafts';
-import { useActivity } from '@/hooks/useActivity';
 import { deviceKind } from '@/lib/device';
 import { usePointerDevice } from '@/hooks/usePointerDevice';
 import { useCategories, useCreateCategory, useDeleteCategory, useReorderCategories, useReorderSidebar, type SidebarMoveRequest } from '@/hooks/useSidebar';
@@ -100,8 +98,6 @@ export function Sidebar({ onClose }: SidebarProps) {
   const { data: threads } = useUserThreads();
   const { data: userState } = useUserState();
   const { data: drafts } = useDrafts();
-  const { data: activityFeed } = useActivity();
-  const activityUnread = activityFeed?.unread ?? 0;
   const { data: categories } = useCategories();
   const sidebarPrimaryDataReady =
     conversations !== undefined || conversationsQuery.isError;
@@ -987,36 +983,11 @@ export function Sidebar({ onClose }: SidebarProps) {
       >
         {/* Bottom padding clears the home indicator on notched phones (the
             drawer is a full-height mobile surface with no bottom chrome). */}
-        <div className="w-full min-w-0 space-y-1 p-2 mobile:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
-          {/* Activity sits at the very top — mentions, replies, DMs, reactions,
-              channel adds and fired reminders; the badge counts unread items. */}
-          <NavLink
-            to="/activity"
-            onClick={onClose}
-            className={({ isActive }) =>
-              `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
-                isActive
-                  ? 'bg-sidebar-accent text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
-                  : 'text-gray-300 hover:bg-white/10 hover:text-white'
-              }`
-            }
-          >
-            <Bell className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span className={activityUnread > 0 ? 'font-bold text-white' : ''}>Activity</span>
-            {activityUnread > 0 && (
-              <Badge
-                variant="brand"
-                className="ml-auto text-[11px]"
-                data-testid="activity-unread-badge"
-              >
-                {activityUnread > 99 ? '99+' : activityUnread}
-              </Badge>
-            )}
-          </NavLink>
-
-          {/* Threads next — matches the design ordering. Same row
-              geometry (px-2 py-1) as channel rows below so the eye
-              doesn't catch on a height bump. */}
+        <div className="w-full min-w-0 space-y-1 p-2 mobile:pb-[calc(var(--bottom-safe-inset,env(safe-area-inset-bottom))+0.5rem)]">
+          {/* Threads first (Activity has its own sidebar mode — see the
+              Home / Activity switch above). Same row geometry (px-2 py-1)
+              as channel rows below so the eye doesn't catch on a height
+              bump. */}
           <NavLink
             to="/threads"
             onClick={onClose}

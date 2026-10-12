@@ -106,6 +106,11 @@ const (
 	// their scheduled messages changed (scheduled, edited, sent or failed), so
 	// the Scheduled list refetches. Sent on the user's own topic; no payload.
 	EventScheduledMessagesChanged = "scheduled_messages.changed"
+	// EventRemindersChanged tells a user's tabs and devices that their pending
+	// reminders changed — one was set or cancelled, fired, or went with its
+	// message or with their access to its channel — so the Scheduled
+	// reminders list refetches. Sent on the user's own topic; no payload.
+	EventRemindersChanged = "reminders.changed"
 )
 
 // ephemeralTypes are events that exist only for the live socket — they
@@ -144,9 +149,10 @@ var ephemeralTypes = map[string]struct{}{
 	// Broker control frames act on live subscriptions only.
 	EventBrokerSubscribe:   {},
 	EventBrokerUnsubscribe: {},
-	// A data-less "refetch your scheduled list" nudge; the list is re-read on
-	// reconnect anyway.
+	// Data-less "refetch your list" nudges; the client re-reads both lists on
+	// reconnect and on replay exhaustion (ChatPage), so a missed one heals.
 	EventScheduledMessagesChanged: {},
+	EventRemindersChanged:         {},
 }
 
 // IsPersistent reports whether an event of this type should be appended

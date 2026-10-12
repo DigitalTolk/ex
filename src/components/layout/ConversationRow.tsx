@@ -158,11 +158,10 @@ export function ConversationRow({
             unless muted); a dot means unread replies in a thread the user is
             in; plain new messages only embolden the name. Absolutely
             positioned (flush to the edge, never reflows); fades on desktop
-            hover so the row actions take its place, stays on touch at the
-            VERY right edge (the kebab slot, unused on mobile) clear of the
-            persistent star. */}
+            hover so the row actions take its place, stays on touch. On a
+            phone the star sits flush right and the badge just left of it. */}
         {(notifyCount > 0 || threadUnread) && (
-          <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 touch:opacity-100">
+          <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 touch:opacity-100 mobile:right-11">
             {notifyCount > 0 ? (
               <Badge variant="brand" className="text-[11px]" data-testid={`conversation-unread-badge-${conversation.conversationID}`}>
                 {notifyCount > 99 ? '99+' : notifyCount}
@@ -184,7 +183,7 @@ export function ConversationRow({
         onClick={toggleFavorite}
         aria-label={isFav ? `Unfavorite ${conversation.displayName}` : `Favorite ${conversation.displayName}`}
         data-testid={`conv-fav-toggle-${conversation.conversationID}`}
-        className={`absolute right-7 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-opacity touch:right-8 touch:h-7 touch:w-7 mobile:right-10 mobile:h-9 mobile:w-9 ${
+        className={`absolute right-7 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-opacity touch:right-8 touch:h-7 touch:w-7 mobile:right-1 mobile:h-9 mobile:w-9 ${
           isFav
             ? 'opacity-100 text-gray-500 hover:text-white group-hover/row:text-gray-400'
             : 'opacity-0 text-gray-400 hover:text-white group-hover/row:opacity-100 touch:opacity-100'

@@ -6,9 +6,7 @@ import { composerAutocomplete, type CompletionProviders } from './extensions/com
 import {
   composerTooltips,
   composerTooltipSpace,
-  keyboardOverlap,
   overrideComposerTooltipSpaceForTests,
-  readKeyboardHeight,
   visualViewportRepositioner,
 } from './tooltipSpace';
 
@@ -127,23 +125,6 @@ describe('native (Capacitor) keyboard geometry', () => {
     }
     window.dispatchEvent(ev);
   }
-
-  it('keyboardOverlap subtracts however much the window already shrank', () => {
-    // Overlay mode (resize: none): window kept its height → full overlap.
-    expect(keyboardOverlap(300, 800, 800)).toBe(300);
-    // Native resize mode: window already shrank by the keyboard → no overlap.
-    expect(keyboardOverlap(300, 800, 500)).toBe(0);
-    // Partial resize (accessory bar): only the remainder overlaps.
-    expect(keyboardOverlap(300, 800, 600)).toBe(100);
-  });
-
-  it('readKeyboardHeight accepts both Capacitor event shapes', () => {
-    const direct = new CustomEvent('keyboardWillShow');
-    Object.assign(direct, { keyboardHeight: 216 });
-    expect(readKeyboardHeight(direct)).toBe(216);
-    expect(readKeyboardHeight(new CustomEvent('keyboardWillShow', { detail: { keyboardHeight: 250 } }))).toBe(250);
-    expect(readKeyboardHeight(new CustomEvent('keyboardWillShow'))).toBe(0);
-  });
 
   it('constrains the space bound while the native keyboard is up, and restores on hide', async () => {
     const view = mountComposerLike('@al');

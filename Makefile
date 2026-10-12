@@ -1,4 +1,4 @@
-.PHONY: dev dev-up dev-down dev-logs dev-watch dev-watch-down dev-watch-logs build frontend run seed docker clean deps check check-dist-placeholder types check-types-drift
+.PHONY: dev dev-up dev-down dev-logs dev-watch dev-watch-down dev-watch-logs build frontend run seed docker clean deps check check-dist-placeholder types check-types-drift check-claude-md
 
 # The hot-reload stack layers docker-compose.dev.yml over the base file, so
 # every dev-watch target must pass both -f flags (compose has no way to make
@@ -85,6 +85,8 @@ check-dist-placeholder:
 check:
 	@echo "=== Dist placeholder ==="
 	$(MAKE) check-dist-placeholder
+	@echo "=== CLAUDE.md content gate ==="
+	$(MAKE) check-claude-md
 	@echo "=== Go lint ==="
 	golangci-lint run ./...
 	@echo "=== Go test (with integration) ==="
@@ -130,6 +132,23 @@ check:
 # Regenerate the TypeScript mirror of the Go wire types (internal/model).
 types:
 	go tool tygo generate
+
+# CLAUDE.md is committed guidance for coding agents and must stay strictly
+# technical (see its policy header). gitleaks scans it with its default secret
+# rules plus .gitleaks-claude-md.toml (company identifiers, personal data,
+# internal URLs/IPs/account ids, money amounts, confidentiality markers). The
+# fixtures keep the rules honest: every known violation must be caught and
+# every rule must fire, and the known-good fixture must pass untouched.
+GITLEAKS := go run github.com/zricethezav/gitleaks/v8@v8.30.1
+CLAUDE_MD_GATE := --config .gitleaks-claude-md.toml --no-banner --redact
+check-claude-md:
+	$(GITLEAKS) dir CLAUDE.md $(CLAUDE_MD_GATE)
+	$(GITLEAKS) dir scripts/testdata/claude-md-gate/clean.md $(CLAUDE_MD_GATE)
+	@report=$$(mktemp); \
+	$(GITLEAKS) dir scripts/testdata/claude-md-gate/violations.md $(CLAUDE_MD_GATE) \
+		--exit-code 0 --report-format json --report-path "$$report" >/dev/null 2>&1; \
+	node scripts/check-claude-md-rules.mjs .gitleaks-claude-md.toml "$$report" scripts/testdata/claude-md-gate/violations.md; \
+	status=$$?; rm -f "$$report"; exit $$status
 
 # Fail when src/types/generated.ts drifts from internal/model — regenerate
 # side-effect-free (restore the committed file on mismatch so a failed check

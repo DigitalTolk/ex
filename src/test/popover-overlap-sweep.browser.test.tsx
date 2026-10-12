@@ -74,6 +74,8 @@ vi.mock('@/hooks/useUnfurl', () => ({ useUnfurl: () => ({ data: undefined, isLoa
 // SearchBar data hooks — enough hits to render both result sections plus the
 // message actions, so the dropdown carries realistic text density.
 vi.mock('@/hooks/useSearch', () => ({
+  // The sheet variant's message search; unused by the top-bar field.
+  useSearchMessages: () => ({ data: undefined, isLoading: false }),
   useSearchUsers: () => ({
     data: {
       hits: [

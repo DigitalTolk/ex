@@ -3,6 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AppLayout } from './AppLayout';
+import { resetSidebarModeSessionState, setSidebarMode } from '@/stores/sidebar-mode';
 
 // Mock the Sidebar to avoid pulling in all its dependencies
 vi.mock('./Sidebar', () => ({
@@ -17,6 +18,20 @@ vi.mock('./Sidebar', () => ({
 // providers for AppLayout's own structural assertions. The mock keeps
 // the open-channels button and a search input so the existing
 // mobile-shell and search-shell expectations still resolve.
+// The phone tab bar reads the activity feed too.
+vi.mock('./MobileTabBar', () => ({
+  MobileTabBar: ({ hidden }: { hidden?: boolean }) => (
+    <nav data-testid="mobile-tab-bar" data-hidden={hidden ? 'true' : 'false'}>
+      <button type="button" data-testid="mobile-tab-home">Home</button>
+    </nav>
+  ),
+}));
+vi.mock('@/components/activity/ActivityPanel', () => ({
+  ActivityPanel: () => <div data-testid="activity-panel" />,
+}));
+vi.mock('@/components/activity/ActivityModeSwitch', () => ({
+  ActivityModeSwitch: () => <div data-testid="sidebar-mode-switch" />,
+}));
 vi.mock('./AccountMenu', () => ({ AccountMenu: () => <div data-testid="sidebar-account" /> }));
 vi.mock('./AppTopBar', () => ({
   AppTopBar: ({ onOpenChannels, channelsButtonHidden }: { onOpenChannels?: () => void; channelsButtonHidden?: boolean }) => (
@@ -106,11 +121,29 @@ describe('AppLayout', () => {
   beforeEach(() => {
     delete window.Capacitor;
     setMobileMatch(false);
+    resetSidebarModeSessionState();
   });
 
   it('renders sidebar', () => {
     renderLayout();
     expect(screen.getByTestId('sidebar')).toBeInTheDocument();
+  });
+
+  it('puts the Home / Activity switch at the top of the sidebar', () => {
+    renderLayout();
+    const aside = screen.getByTestId('app-sidebar');
+    expect(within(aside).getByTestId('sidebar-mode-switch')).toBeInTheDocument();
+    // The sidebar runs the full height: it sits beside the top bar's column,
+    // not under it.
+    expect(aside.contains(screen.getByTestId('app-shell-header'))).toBe(false);
+    expect(aside.parentElement?.contains(screen.getByTestId('app-shell-header'))).toBe(true);
+  });
+
+  it('lists Activity instead of channels when the sidebar is on Activity', () => {
+    setSidebarMode('activity');
+    renderLayout();
+    expect(within(screen.getByTestId('app-sidebar')).getByTestId('activity-panel')).toBeInTheDocument();
+    expect(within(screen.getByTestId('app-sidebar')).queryByTestId('sidebar')).toBeNull();
   });
 
   it('renders children', () => {
@@ -153,12 +186,14 @@ describe('AppLayout', () => {
     expect(bannerBlock.nextElementSibling?.querySelector('main')).toBeInTheDocument();
   });
 
-  it('keeps the desktop sidebar as a persistent rail', () => {
+  it('keeps the desktop sidebar as a persistent rail that its own navigation never closes', () => {
     renderLayout();
 
-    const aside = screen.getByTestId('sidebar').closest('aside')!;
-    expect(aside.className).toContain('lg:flex');
+    const aside = screen.getByTestId('app-sidebar');
+    expect(aside).toContainElement(screen.getByTestId('sidebar'));
     expect(aside.className).not.toContain('fixed');
+    fireEvent.click(within(aside).getByText('Close sidebar'));
+    expect(screen.getByTestId('app-sidebar')).toBeInTheDocument();
   });
 
   it('leaves top safe-area ownership to the app viewport shell', () => {

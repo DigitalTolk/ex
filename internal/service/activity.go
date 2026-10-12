@@ -133,6 +133,12 @@ func activityPreview(body string) string {
 	return collapseSpace(previewBody(body))
 }
 
+// messagePreview is the preview text a message gets on an activity item or a
+// reminder: its body, or a webhook post's attachment summary.
+func messagePreview(msg *model.Message) string {
+	return activityPreview(notificationBody(msg))
+}
+
 // collapseSpace trims s and collapses each whitespace run to one space.
 func collapseSpace(s string) string {
 	return strings.Join(strings.Fields(s), " ")
@@ -320,21 +326,29 @@ func (s *ActivityService) MarkParentRead(ctx context.Context, userID, parentID, 
 	}
 }
 
-// ParentLeft drops a channel's or conversation's items from a user's stream
-// once they can no longer read it (they left or were removed).
-func (s *ActivityService) ParentLeft(ctx context.Context, userID, parentID string) {
+// ParentLeft drops a channel's or conversation's items from the streams of
+// users who can no longer read it (they left, were removed, or it was
+// archived). One goroutine works through the users in turn, so archiving a
+// large channel doesn't start one per member.
+func (s *ActivityService) ParentLeft(ctx context.Context, userIDs []string, parentID string) {
 	safe.Go(func() {
-		bg, cancel := detachedContext(ctx)
-		defer cancel()
-		removed, err := s.store.RemoveActivityForParent(bg, userID, parentID)
-		if err != nil {
-			slog.Warn("activity parent cleanup failed", "userID", userID, "parentID", parentID, "error", err)
-			return
-		}
-		if len(removed) > 0 {
-			s.publishChanged(bg, userID, model.ActivityChangedEvent{Removed: removed})
+		for _, userID := range userIDs {
+			s.parentLeft(ctx, userID, parentID)
 		}
 	})
+}
+
+func (s *ActivityService) parentLeft(ctx context.Context, userID, parentID string) {
+	bg, cancel := detachedContext(ctx)
+	defer cancel()
+	removed, err := s.store.RemoveActivityForParent(bg, userID, parentID)
+	if err != nil {
+		slog.Warn("activity parent cleanup failed", "userID", userID, "parentID", parentID, "error", err)
+		return
+	}
+	if len(removed) > 0 {
+		s.publishChanged(bg, userID, model.ActivityChangedEvent{Removed: removed})
+	}
 }
 
 // MessagesDeleted drops the items about deleted messages from the streams of
@@ -351,7 +365,7 @@ func (s *ActivityService) MessagesDeleted(ctx context.Context, parentID, parentT
 // MessageEdited refreshes the preview on the items about an edited message in
 // the streams of the parent's members.
 func (s *ActivityService) MessageEdited(ctx context.Context, msg *model.Message, parentType string) {
-	msgID, parentID, preview := msg.ID, msg.ParentID, activityPreview(notificationBody(msg))
+	msgID, parentID, preview := msg.ID, msg.ParentID, messagePreview(msg)
 	s.forMembers(ctx, parentID, parentType, func(bg context.Context, userIDs []string) (map[string][]string, error) {
 		return s.store.UpdateActivityPreview(bg, userIDs, msgID, preview)
 	}, func(ids []string) model.ActivityChangedEvent { return model.ActivityChangedEvent{Updated: ids} })
