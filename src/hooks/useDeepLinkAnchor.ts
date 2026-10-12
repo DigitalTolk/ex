@@ -51,12 +51,30 @@ export function useDeepLinkAnchor(_parentKey: string | undefined): {
 // useListAnchor lets the user leave a link-opened window of older history for
 // the newest messages without touching the URL — an open ?thread= panel stays
 // open. The override lasts until the next navigation (navKey changes).
+// Once the reader has moved on from a deep link (closed the thread it opened,
+// or jumped to the latest messages) the link must not come back on the next
+// reload — a reconnect reload or a dev-server restart used to reopen the same
+// reminder message. The address is rewritten in place, without a router
+// navigation: a navigation would mint a new location key, which the views use
+// to scope what the reader dismissed (see ChannelView), so the router keeps
+// its current location and only the bar changes.
+export function forgetDeepLinkInAddress(): void {
+  /* istanbul ignore next -- SSR guard */
+  if (typeof window === 'undefined') return;
+  const { pathname, search, hash } = window.location;
+  if (!search && !hash) return;
+  window.history.replaceState(window.history.state, '', pathname);
+}
+
 export function useListAnchor(
   mainAnchor: string | undefined,
   navKey: string | undefined,
 ): { listAnchor?: string; showLatest: () => void } {
   const [latestFor, setLatestFor] = useState<{ nav?: string } | null>(null);
-  const showLatest = useCallback(() => setLatestFor({ nav: navKey }), [navKey]);
+  const showLatest = useCallback(() => {
+    setLatestFor({ nav: navKey });
+    forgetDeepLinkInAddress();
+  }, [navKey]);
   const atLatest = latestFor !== null && latestFor.nav === navKey;
   return { listAnchor: atLatest ? undefined : mainAnchor, showLatest };
 }
