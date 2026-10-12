@@ -236,6 +236,14 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     isEditingMode ||
     hasComposerContent;
   const showToolbarSend = showToolbar && !isEditingMode && (!isMobile || variant === 'composer');
+  // Phone: the toolbar's reveal box is always there so it can grow open, but
+  // the toolbar itself (a dozen buttons and pickers) is not built until the
+  // first focus. An idle composer then costs nothing to re-render; after
+  // that first open it stays mounted so closing and reopening still slide.
+  // (Adjusted during render, the way React derives state from a prop
+  // change: it only ever flips to true, once.)
+  const [toolbarEverShown, setToolbarEverShown] = useState(false);
+  if (showToolbar && !toolbarEverShown) setToolbarEverShown(true);
 
   useEffect(() => {
     // No client timestamp rides along anymore: the server orders saves vs
@@ -1086,7 +1094,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               inert={showToolbar ? undefined : true}
               data-testid="composer-toolbar-reveal"
             >
-              <div className="min-h-0 overflow-hidden">{renderToolbar('bottom')}</div>
+              <div className="min-h-0 overflow-hidden">{toolbarEverShown && renderToolbar('bottom')}</div>
             </div>
           ) : (
             showToolbar && renderToolbar('bottom')

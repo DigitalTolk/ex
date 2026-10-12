@@ -15,6 +15,7 @@ import {
   useSetActivityItemsRead,
 } from '@/hooks/useActivity';
 import { useUserChannels } from '@/hooks/useChannels';
+import { useCalendarDay } from '@/hooks/useCalendarDay';
 import { useUserConversations } from '@/hooks/useConversations';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useEmojiMap } from '@/hooks/useEmoji';
@@ -105,7 +106,10 @@ export const ActivityPanel = memo(function ActivityPanel({ onNavigate }: Activit
     () => (unreadOnly ? tabRows.filter((r) => r.unreadIDs.length > 0 || r.key === activeKey) : tabRows),
     [tabRows, unreadOnly, activeKey],
   );
-  const sections = useMemo(() => activitySections(rows), [rows]);
+  // Day headings and times follow the calendar day, so an open panel rolls
+  // over at midnight.
+  const today = useCalendarDay();
+  const sections = useMemo(() => activitySections(rows, today), [rows, today]);
   const groupCounts = useMemo(() => sections.map((s) => s.rows.length), [sections]);
   // The virtual list keys its day headings and rows as one run.
   const listKeys = useMemo(() => sections.flatMap((s) => [`day:${s.day}`, ...s.rows.map((r) => r.key)]), [sections]);
@@ -236,6 +240,7 @@ export const ActivityPanel = memo(function ActivityPanel({ onNavigate }: Activit
                       onOpen={onOpen}
                       onSetRead={onSetRead}
                       onRemove={onRemove}
+                      today={today}
                     />
                   );
                 }}

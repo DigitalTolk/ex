@@ -262,9 +262,29 @@ func (s *ReminderService) Schedule(ctx context.Context, userID string, in Remind
 	return r, nil
 }
 
-// ListPending returns the user's not-yet-fired reminders.
+// ListPending returns the user's not-yet-fired reminders, minus any whose
+// chat the user can no longer open. Leaving a channel cancels its reminders,
+// but that cleanup is best-effort (see ParentLeft), so the list applies the
+// same access rule the firing path does rather than trust it. A lookup
+// failure keeps the reminder, like fire: never hide an alert over a blip.
 func (s *ReminderService) ListPending(ctx context.Context, userID string) ([]*model.Reminder, error) {
-	return s.store.ListPendingReminders(ctx, userID)
+	all, err := s.store.ListPendingReminders(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	// One check per chat, not per reminder.
+	forbidden := map[string]bool{}
+	visible := all[:0]
+	for _, r := range all {
+		key := r.ParentType + ":" + r.ParentID
+		if _, seen := forbidden[key]; !seen {
+			forbidden[key] = errors.Is(s.access.CheckAccess(ctx, userID, r.ParentID, r.ParentType), ErrForbidden)
+		}
+		if !forbidden[key] {
+			visible = append(visible, r)
+		}
+	}
+	return visible, nil
 }
 
 // Cancel removes a pending reminder. Returns store.ErrNotFound when there is no

@@ -51,6 +51,9 @@ interface ActivityRowViewProps {
   onOpen: (row: ActivityRow) => void;
   onSetRead: (row: ActivityRow, read: boolean) => void;
   onRemove: (row: ActivityRow) => void;
+  // Local midnight today, from the panel, so the time label rolls over with
+  // the day headings. Absent, the clock is read.
+  today?: Date;
 }
 
 const TYPE_ICON = {
@@ -75,6 +78,7 @@ export const ActivityRowView = memo(function ActivityRowView({
   onOpen,
   onSetRead,
   onRemove,
+  today,
 }: ActivityRowViewProps) {
   const item = row.lead;
   const unread = row.unreadIDs.length > 0;
@@ -163,7 +167,7 @@ export const ActivityRowView = memo(function ActivityRowView({
               <span
                 className={`shrink-0 text-xs text-muted-foreground ${menuOpen ? 'invisible' : 'group-hover:invisible group-has-focus-visible:invisible'}`}
               >
-                {activityTime(item.createdAt)}
+                {activityTime(item.createdAt, today)}
               </span>
             </span>
             <span className="mt-px flex items-center gap-1 text-xs text-muted-foreground">

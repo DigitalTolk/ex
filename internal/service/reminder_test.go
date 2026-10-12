@@ -189,6 +189,51 @@ func TestReminderService_ScheduleHappyAndStoreError(t *testing.T) {
 	}
 }
 
+// The pending list hides reminders for chats the user can no longer open —
+// one access check per chat — and keeps them when the check itself fails.
+func TestReminderService_ListPendingFollowsAccess(t *testing.T) {
+	ctx := context.Background()
+	pending := []*model.Reminder{
+		{ID: "r1", ParentID: "ch-gone", ParentType: ParentChannel},
+		{ID: "r2", ParentID: "ch-gone", ParentType: ParentChannel},
+		{ID: "r3", ParentID: "c-ok", ParentType: ParentConversation},
+	}
+	counting := &countingAccess{forbidden: map[string]bool{"ch-gone": true}}
+	svc := NewReminderService(&fakeReminderStore{pending: pending}, &fakeMessageGetter{}, counting)
+	list, err := svc.ListPending(ctx, "u-1")
+	if err != nil || len(list) != 1 || list[0].ID != "r3" {
+		t.Fatalf("ListPending = %v, %v; want only r3", list, err)
+	}
+	if counting.calls != 2 {
+		t.Fatalf("access checks = %d, want one per chat (2)", counting.calls)
+	}
+
+	// A failing lookup is not a denial: the reminder stays listed.
+	flaky := NewReminderService(&fakeReminderStore{pending: pending[2:]}, &fakeMessageGetter{}, &fakeAccess{err: errors.New("dynamo timeout")})
+	if list, err := flaky.ListPending(ctx, "u-1"); err != nil || len(list) != 1 {
+		t.Fatalf("ListPending with lookup error = %v, %v; want the reminder kept", list, err)
+	}
+
+	// A store error still propagates.
+	if _, err := NewReminderService(&fakeReminderStore{listErr: errors.New("redis down")}, &fakeMessageGetter{}, &fakeAccess{}).ListPending(ctx, "u-1"); err == nil {
+		t.Fatal("store error should propagate")
+	}
+}
+
+// countingAccess forbids the listed parents and counts calls.
+type countingAccess struct {
+	forbidden map[string]bool
+	calls     int
+}
+
+func (c *countingAccess) CheckAccess(_ context.Context, _, parentID, _ string) error {
+	c.calls++
+	if c.forbidden[parentID] {
+		return ErrForbidden
+	}
+	return nil
+}
+
 func TestReminderService_CancelAndList(t *testing.T) {
 	ctx := context.Background()
 	okStore := &fakeReminderStore{cancelOK: true, pending: []*model.Reminder{{ID: "r1"}}}

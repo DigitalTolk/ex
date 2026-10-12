@@ -147,7 +147,7 @@ function activityDay(createdAt: string, now: Date): ActivityDay {
 
 // activitySections splits rows into consecutive day groups, for the list's
 // day headings.
-export function activitySections(rows: ActivityRow[], now: Date = new Date()): { day: ActivityDay; rows: ActivityRow[] }[] {
+export function activitySections(rows: ActivityRow[], now: Date): { day: ActivityDay; rows: ActivityRow[] }[] {
   const sections: { day: ActivityDay; rows: ActivityRow[] }[] = [];
   for (const row of rows) {
     const day = activityDay(row.lead.createdAt, now);

@@ -58,8 +58,10 @@ function scrollParent(el: HTMLElement): HTMLElement | null {
 export const KEYBOARD_SETTLE_MS = 250;
 
 // While true the app is gliding to its keyboard-up (or -down) size; scroll
-// events from that glide are ours, not iOS panning again.
+// events from that glide are ours, not iOS panning again. One timer: a new
+// settle restarts it, so an overlapping glide cannot clear the flag early.
 let settling = false;
+let settleTimer: number | undefined;
 
 // iOS reveals a focused field by panning the whole page up. Instead of
 // snapping it back (a visible jump), glide the page back to the top while the
@@ -69,7 +71,9 @@ let settling = false;
 function settle() {
   settling = true;
   if (window.scrollY > 0) window.scrollTo({ top: 0, behavior: 'smooth' });
-  window.setTimeout(() => {
+  window.clearTimeout(settleTimer);
+  settleTimer = window.setTimeout(() => {
+    settleTimer = undefined;
     settling = false;
     if (window.scrollY > 0) window.scrollTo({ top: 0, behavior: 'smooth' });
     const field = document.activeElement;
@@ -128,6 +132,9 @@ export function useKeyboardInsetTracker(): void {
       window.removeEventListener('resize', recompute);
       window.removeEventListener('scroll', onScroll);
       vv?.removeEventListener('resize', recompute);
+      window.clearTimeout(settleTimer);
+      settleTimer = undefined;
+      settling = false;
       setInset(0);
     };
   }, []);
