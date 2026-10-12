@@ -20,11 +20,20 @@ describe('ScheduleSendMenu', () => {
     render(<ScheduleSendMenu disabled={false} onSchedule={onSchedule} />);
     fireEvent.click(screen.getByLabelText('Pick a custom time'));
     expect(screen.getByText('Choose when to send this message.')).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Send time'), { target: { value: '2099-01-02T08:30' } });
+    // Every quick pick fills the fields with a future instant.
+    for (const key of ['in1h', 'in3h', 'nextweek', 'tomorrow']) {
+      fireEvent.click(screen.getByTestId(`reminder-quick-${key}`));
+      expect(screen.getByTestId('reminder-preview')).toHaveTextContent(/^Sends /);
+    }
+    // Tomorrow morning is now set; type a different time for it.
+    fireEvent.change(screen.getByTestId('reminder-time'), { target: { value: '8:30' } });
+    expect(screen.getByTestId('reminder-preview')).toHaveTextContent(/^Sends Tomorrow at 8:30/);
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
     });
-    expect(onSchedule).toHaveBeenCalledWith(new Date('2099-01-02T08:30'));
+    const when = onSchedule.mock.calls[0][0] as Date;
+    expect([when.getHours(), when.getMinutes()]).toEqual([8, 30]);
+    expect(when.getTime()).toBeGreaterThan(Date.now());
     // Closing the picker forgets it.
     fireEvent.click(screen.getByLabelText('Pick a custom time'));
     fireEvent.click(screen.getByTestId('reminder-cancel'));
