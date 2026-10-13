@@ -41,7 +41,7 @@ function ModeButton({ mode, label, icon: Icon, selected, unread = 0 }: ModeButto
       // flex-grow animates: the selected button widens to fit its label while
       // the other settles to an icon-sized pill.
       style={{ flexGrow: selected ? 1 : 0 }}
-      className={`relative flex h-8 min-w-0 basis-9 items-center justify-start overflow-hidden rounded-md px-2.5 text-sm font-medium outline-none transition-[flex-grow,background-color,color,box-shadow] duration-300 ease-out focus-visible:ring-2 focus-visible:ring-ring/50 motion-reduce:transition-none ${
+      className={`relative flex h-8 min-w-0 basis-9 items-center justify-start rounded-md px-2.5 text-sm font-medium outline-none transition-[flex-grow,background-color,color,box-shadow] duration-300 ease-out focus-visible:ring-2 focus-visible:ring-ring/50 motion-reduce:transition-none ${
         selected
           ? 'bg-background text-sidebar-foreground shadow-xs dark:bg-sidebar-accent'
           : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'

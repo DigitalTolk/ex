@@ -8,7 +8,7 @@ vi.mock('./capacitor', () => ({
   getCapacitorPlugin: () => mockPlugin,
 }));
 
-import { triggerMessageActionHaptic } from './haptics';
+import { triggerMessageActionHaptic, triggerReactionHaptic } from './haptics';
 
 function setVibrate(fn: ((p: number) => boolean) | undefined) {
   Object.defineProperty(navigator, 'vibrate', { value: fn, configurable: true, writable: true });
@@ -65,5 +65,30 @@ describe('triggerMessageActionHaptic', () => {
     // vibrate (the native path already returned).
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(vibrate).not.toHaveBeenCalled();
+  });
+});
+
+describe('triggerReactionHaptic', () => {
+  beforeEach(() => {
+    mockNative = false;
+    mockPlugin = null;
+  });
+  afterEach(() => {
+    setVibrate(undefined);
+  });
+
+  it('is a lighter native tick than the long press', () => {
+    mockNative = true;
+    const impact = vi.fn().mockResolvedValue(undefined);
+    mockPlugin = { impact };
+    triggerReactionHaptic();
+    expect(impact).toHaveBeenCalledWith({ style: 'LIGHT' });
+  });
+
+  it('is a shorter vibration on the web', () => {
+    const vibrate = vi.fn().mockReturnValue(true);
+    setVibrate(vibrate);
+    triggerReactionHaptic();
+    expect(vibrate).toHaveBeenCalledWith(5);
   });
 });

@@ -67,7 +67,7 @@ export function ChannelView() {
   const queryClient = useQueryClient();
   const { setActiveChannel, setActiveThread } = useUnread();
   const { setActiveParent } = useNotifications();
-  const quickReactions = useFrequentEmojis(3);
+  const quickReactions = useFrequentEmojis(6);
   const inputRef = useRef<MessageInputHandle>(null);
   const isMobile = useIsMobile();
   const [threadRootID, setThreadRootID] = useState<string | null>(null);

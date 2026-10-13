@@ -37,6 +37,11 @@ let sawMouseInput = false;
 const pointerDeviceListeners = new Set<() => void>();
 
 export function hasPointerDevice(): boolean {
+  // A pointer changes the interaction style only at tablet width or wider.
+  // A phone keeps its long-press affordances with a mouse attached: the
+  // iPhone simulator hands the Mac's cursor to the page as a real mouse, and
+  // a phone with a pointer paired for accessibility still wants the phone UI.
+  if (currentLayoutTier() === 'mobile') return false;
   return window.__EX_POINTER_DEVICE__ === true || sawMouseInput;
 }
 
@@ -151,7 +156,12 @@ export function startLayoutTierTracking(): () => void {
   applyLayoutTierClasses();
   if (tracking) return () => undefined;
   tracking = true;
-  const onResize = () => applyLayoutTierClasses();
+  // A resize can cross the phone/tablet line, which flips whether an
+  // attached pointer counts (hasPointerDevice), so the hooks hear about it.
+  const onResize = () => {
+    applyLayoutTierClasses();
+    notifyPointerDevice();
+  };
   const restamp = () => applyLayoutTierClasses();
   const unsubscribePointer = subscribePointerDevice(restamp);
   window.addEventListener('resize', onResize);

@@ -204,6 +204,39 @@ describe('hasPointerDevice', () => {
     }
   });
 
+  it('ignores an attached pointer in the phone tier, and honours it again past tablet width', () => {
+    // jsdom pins a touch device at 1024px (the full tier); shrink to a phone.
+    const originalWidth = window.innerWidth;
+    const setWidth = (width: number) => Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+    const root = document.documentElement;
+    const stop = startLayoutTierTracking();
+    const onChange = vi.fn();
+    const unsubscribe = subscribePointerDevice(onChange);
+    try {
+      setWidth(390);
+      window.dispatchEvent(new Event('resize'));
+      reportPointer(true);
+      expect(hasPointerDevice()).toBe(false);
+      expect(onChange).not.toHaveBeenCalled();
+      expect(root.classList.contains('device-touch')).toBe(true);
+      // The simulator's (or a paired) mouse hovering the page changes nothing either.
+      mouseInput();
+      expect(hasPointerDevice()).toBe(false);
+      expect(root.classList.contains('device-touch')).toBe(true);
+
+      // Rotating or resizing into the tablet tier brings the pointer back.
+      setWidth(1024);
+      window.dispatchEvent(new Event('resize'));
+      expect(hasPointerDevice()).toBe(true);
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(root.classList.contains('device-touch')).toBe(false);
+    } finally {
+      unsubscribe();
+      stop();
+      setWidth(originalWidth);
+    }
+  });
+
   it('takes the touch class off the root when a pointer arrives, and puts it back when it goes', () => {
     const root = document.documentElement;
     const stop = startLayoutTierTracking();
