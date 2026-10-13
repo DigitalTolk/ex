@@ -219,8 +219,9 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
     if (!action.overSheet) setMobileMenuOpen(false);
   }
 
+  // A raised card, so the account stands out from the sidebar behind it.
   const triggerClass =
-    'flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-sidebar-foreground outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring/40 data-[popup-open]:bg-sidebar-accent mobile:h-12';
+    'flex w-full min-w-0 items-center gap-2.5 rounded-lg border border-border-strong/40 bg-background px-2 py-1.5 text-left text-sidebar-foreground shadow-xs outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring/40 data-[popup-open]:bg-sidebar-accent dark:bg-sidebar-accent dark:hover:bg-sidebar-accent/70 mobile:h-12';
 
   const triggerContent = (
     <>
@@ -232,7 +233,7 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
         <PresenceDot online={userOnline} size={9} inset={0} />
       </span>
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
-        <span className="min-w-0 truncate text-sm font-medium">{user?.displayName}</span>
+        <span className="min-w-0 truncate text-sm font-semibold">{user?.displayName}</span>
         {/* Active custom status (emoji) sits right after the name. */}
         {/* Hover shows the same status card as in chat. The trigger renders as
             a <span> because it sits inside the menu-trigger button. */}

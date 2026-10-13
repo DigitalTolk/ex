@@ -6,6 +6,9 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 interface AppTopBarProps {
   onOpenChannels?: () => void;
   channelsButtonHidden?: boolean;
+  // Width of the persistent sidebar to the bar's left. The search centres on
+  // the whole window, not just the bar, so the bar pads its right side by it.
+  centreOffset?: number;
 }
 
 /**
@@ -14,7 +17,7 @@ interface AppTopBarProps {
  * in the AppLayout's swipe handler hierarchy. The account menu lives at the
  * bottom of the sidebar (see AccountMenu).
  */
-export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarProps) {
+export function AppTopBar({ onOpenChannels, channelsButtonHidden, centreOffset = 0 }: AppTopBarProps) {
   const isMobile = useIsMobile();
   return (
     <header
@@ -39,6 +42,7 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
       // and the grid shifts the field off-centre rather than burying the
       // toggle when side minimums no longer fit.
       className="grid h-12 mobile:h-14 w-full shrink-0 grid-cols-[1fr_minmax(0,36rem)_1fr] compact:grid-cols-[1fr_minmax(0,17rem)_1fr] items-center gap-2 border-b border-border bg-chat-top px-2 mobile:px-3 text-sidebar-foreground [-webkit-app-region:drag] [&_button,&_a,&_input]:[-webkit-app-region:no-drag]"
+      style={centreOffset > 0 ? { paddingRight: `calc(${centreOffset}px + 0.5rem)` } : undefined}
       data-testid="app-shell-header"
       data-app-chrome="true"
       // The global search field lives on this sidebar-coloured strip, so the

@@ -1,6 +1,5 @@
 import type { ComponentType } from 'react';
 import { Bell, Home } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
 import { useActivityUnread } from '@/hooks/useActivity';
 import { setSidebarMode, useSidebarModeStore, type SidebarMode } from '@/stores/sidebar-mode';
 
@@ -8,8 +7,8 @@ import { setSidebarMode, useSidebarModeStore, type SidebarMode } from '@/stores/
 // It swaps what the sidebar lists; it doesn't change the page.
 //
 // The selected side grows to show its label; the other shrinks to its icon,
-// so the pill keeps plenty of space. The unread count rides on Activity —
-// beside the label when selected, on the bell when not.
+// so the pill keeps plenty of space. Unread activity shows as a dot on the
+// bell — just that something is new, never a count.
 export function ActivityModeSwitch() {
   const mode = useSidebarModeStore((s) => s.mode);
   const unread = useActivityUnread();
@@ -30,12 +29,11 @@ interface ModeButtonProps {
 }
 
 function ModeButton({ mode, label, icon: Icon, selected, unread = 0 }: ModeButtonProps) {
-  const count = unread > 99 ? '99+' : String(unread);
   return (
     <button
       type="button"
       aria-pressed={selected}
-      aria-label={unread > 0 ? `${label}, ${unread} unread` : label}
+      aria-label={unread > 0 ? `${label}, unread` : label}
       title={selected ? undefined : label}
       onClick={() => setSidebarMode(mode)}
       // flex-grow animates: the selected button widens to fit its label while
@@ -50,10 +48,12 @@ function ModeButton({ mode, label, icon: Icon, selected, unread = 0 }: ModeButto
     >
       <span className="relative shrink-0">
         <Icon className="h-4 w-4" aria-hidden="true" />
-        {!selected && unread > 0 && (
-          <Badge variant="brand" className="absolute -top-2 -right-3" data-testid="activity-unread-badge">
-            {count}
-          </Badge>
+        {unread > 0 && (
+          <span
+            className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-brand ring-2 ring-sidebar"
+            aria-hidden="true"
+            data-testid="activity-unread-dot"
+          />
         )}
       </span>
       <span
@@ -64,11 +64,6 @@ function ModeButton({ mode, label, icon: Icon, selected, unread = 0 }: ModeButto
       >
         {label}
       </span>
-      {selected && unread > 0 && (
-        <Badge variant="brand" className="ml-2" data-testid="activity-unread-badge">
-          {count}
-        </Badge>
-      )}
     </button>
   );
 }

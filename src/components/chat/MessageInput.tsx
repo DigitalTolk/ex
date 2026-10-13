@@ -1005,7 +1005,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             {aboveInput}
           </div>
         )}
-        <div className="rounded-2xl border md:border-2 border-border bg-typing-field mobile:overflow-hidden mobile:rounded-[1.75rem]" data-message-composer>
+        <div className="rounded-2xl border border-border-strong/50 bg-typing-field shadow-sm transition-colors focus-within:border-border-strong mobile:overflow-hidden mobile:rounded-[1.75rem]" data-message-composer>
         {drafts.length > 0 && (
           <div className="flex flex-wrap gap-1.5 border-b p-2" aria-label="Draft attachments">
             {drafts.map((d) => (

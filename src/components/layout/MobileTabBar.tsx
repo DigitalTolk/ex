@@ -1,6 +1,5 @@
 import { useState, type ComponentType } from 'react';
 import { Bell, Home, Search } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
 import { useActivityUnread } from '@/hooks/useActivity';
 import { setSidebarMode, useSidebarModeStore, type SidebarMode } from '@/stores/sidebar-mode';
 import { AccountMenu } from './AccountMenu';
@@ -73,16 +72,18 @@ function Tab({ label, icon: Icon, selected, onClick, unread = 0, testID }: TabPr
       type="button"
       onClick={onClick}
       aria-pressed={selected}
-      aria-label={unread > 0 ? `${label}, ${unread} unread` : label}
+      aria-label={unread > 0 ? `${label}, unread` : label}
       className={`${MOBILE_TAB_CLASS} ${selected ? 'text-sidebar-foreground' : 'text-muted-foreground'}`}
       data-testid={testID}
     >
       <span className="relative inline-flex">
         <Icon className="h-6 w-6" aria-hidden="true" />
         {unread > 0 && (
-          <Badge variant="brand" className="absolute -top-1 left-3.5 ring-2 ring-sidebar" data-testid="mobile-tab-unread">
-            {unread > 99 ? '99+' : unread}
-          </Badge>
+          <span
+            className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-brand ring-2 ring-sidebar"
+            aria-hidden="true"
+            data-testid="mobile-tab-unread"
+          />
         )}
       </span>
       <span aria-hidden="true">{label}</span>
