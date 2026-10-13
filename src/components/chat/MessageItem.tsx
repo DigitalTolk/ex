@@ -973,9 +973,16 @@ function MessageItemImpl({
       data-pending={pendingState}
     >
       {/* Grouped rows have no header, so their time (on hover) and the
-          not-sent mark sit just outside the column, to the left of the text. */}
+          not-sent mark sit just outside the column, to the left of the text.
+          A thread (side panel or card) has no room outside, so there — and on
+          a phone — they tuck inside the row, at its right edge. */}
       {!firstInGroup && (
-        <div className="absolute right-full top-0.5 mr-1 w-12 select-none text-right text-xs leading-5 mobile:right-1 mobile:mr-0 mobile:w-auto" data-testid="group-time-gutter">
+        <div
+          className={`absolute top-0.5 select-none text-right text-xs leading-5 ${
+            inThread ? 'right-1 w-auto' : 'right-full mr-1 w-12 mobile:right-1 mobile:mr-0 mobile:w-auto'
+          }`}
+          data-testid="group-time-gutter"
+        >
           <Tooltip>
             <TooltipTrigger
               className={`cursor-default whitespace-nowrap tabular-nums text-muted-foreground transition-opacity ${

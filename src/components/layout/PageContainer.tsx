@@ -9,14 +9,13 @@ interface PageContainerProps {
   children: ReactNode;
 }
 
-// PageContainer is the shared shell for full-width content pages
-// (Directory, Threads, New conversation, Admin). All four used to set
-// their own max-width caps and padding; this component keeps the shape
-// consistent and uses the full content width.
+// PageContainer is the shared shell for content pages (Threads, Drafts,
+// Search, Directory, Admin, the AI hub). Their content sits in the same
+// centred column as a conversation's messages, so every tab reads alike.
 export function PageContainer({ title, description, actions, children }: PageContainerProps) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto" data-page-scroll="true" data-testid="page-container">
-      <div className="space-y-6 p-4 sm:p-6">
+      <div className="mx-auto w-full max-w-4xl space-y-6 p-4 sm:p-6">
         {title && (
           <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
