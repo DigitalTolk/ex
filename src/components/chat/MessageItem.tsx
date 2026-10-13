@@ -967,52 +967,15 @@ function MessageItemImpl({
         event.preventDefault();
         if (mobileActionsAvailable) openMobileActions();
       }}
-      // px-3 matches the gap-3 to the text, so the avatar sits balanced:
-      // 12px either side of it inside the row (pinned: 2px border + 10px).
-      className={`group relative flex items-start gap-3 rounded-md px-3 mobile:gap-2 mobile:px-1 ${firstInGroup ? 'py-1.5' : 'py-0.5'} hover:bg-chat-hover ${
+      className={`group relative rounded-md px-3 mobile:px-2 ${firstInGroup ? 'py-1.5' : 'py-0.5'} hover:bg-chat-hover ${
         message.pinned ? 'border-l-2 border-pinned pl-2.5' : ''
       } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]`}
       data-pending={pendingState}
     >
-      {firstInGroup ? (
-        <UserHoverCard
-          userId={message.authorID}
-          displayName={displayAuthorName}
-          avatarURL={displayAuthorAvatarURL}
-          userStatus={authorUserStatus}
-          online={authorOnline}
-          currentUserId={currentUserId}
-          showInlineStatus={false}
-          integrationOwnerName={integrationOwnerName}
-          // The avatar's own width, matching the continuation gutter (w-9)
-          // so the body aligns identically on first-in-group and grouped
-          // rows — no dead space beside the avatar.
-          triggerClassName="inline-flex w-9 shrink-0 cursor-pointer items-center justify-center"
-        >
-          {message.webhookIconEmoji ? (
-            <div
-              className="mt-0.5 flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted"
-              aria-label={`:${message.webhookIconEmoji}:`}
-              data-testid="webhook-emoji-avatar"
-            >
-              <EmojiGlyph emoji={`:${message.webhookIconEmoji}:`} customMap={emojiMap} size="lg" />
-            </div>
-          ) : (
-            <UserAvatar
-              displayName={displayAuthorName}
-              avatarURL={displayAuthorAvatarURL}
-              online={authorOnline}
-              className="mt-0.5 h-9 w-9 cursor-pointer"
-              dotSize={10}
-            />
-          )}
-        </UserHoverCard>
-      ) : (
-        // Compact continuation: a column the avatar's width so the body
-        // aligns with first-in-group rows, revealing the clock time ("10:45")
-        // on hover — small enough to fit it, full time in the tooltip. One
-        // text line tall (leading-5) so it never makes the row taller.
-        <div className="relative w-9 shrink-0 select-none text-center text-[11px] leading-5" data-testid="group-time-gutter">
+      {/* Grouped rows have no header, so their time (on hover) and the
+          not-sent mark sit just outside the column, to the left of the text. */}
+      {!firstInGroup && (
+        <div className="absolute right-full top-0.5 mr-1 w-12 select-none text-right text-xs leading-5 mobile:right-1 mobile:mr-0 mobile:w-auto" data-testid="group-time-gutter">
           <Tooltip>
             <TooltipTrigger
               className={`cursor-default whitespace-nowrap tabular-nums text-muted-foreground transition-opacity ${
@@ -1028,16 +991,46 @@ function MessageItemImpl({
           </Tooltip>
           {pendingState === 'failed' && (
             // Laid over the (hidden) time so the gutter keeps its exact size.
-            <span className="absolute inset-x-0 top-0 flex h-5 items-center justify-center">
+            <span className="absolute inset-y-0 right-0 flex h-5 items-center">
               <NotSentMark message={message} />
             </span>
           )}
         </div>
       )}
-
-      <div className="flex-1 min-w-0">
+      <div className="min-w-0">
         {firstInGroup && (
-        <div className="flex items-baseline gap-2">
+        // The avatar sits beside the name; the message text starts under it,
+        // at the avatar's left edge — no avatar column beside the text.
+        <div className="mb-1 flex items-center gap-2">
+          <UserHoverCard
+            userId={message.authorID}
+            displayName={displayAuthorName}
+            avatarURL={displayAuthorAvatarURL}
+            userStatus={authorUserStatus}
+            online={authorOnline}
+            currentUserId={currentUserId}
+            showInlineStatus={false}
+            integrationOwnerName={integrationOwnerName}
+            triggerClassName="inline-flex shrink-0 cursor-pointer items-center"
+          >
+          {message.webhookIconEmoji ? (
+            <div
+              className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted"
+              aria-label={`:${message.webhookIconEmoji}:`}
+              data-testid="webhook-emoji-avatar"
+            >
+              <EmojiGlyph emoji={`:${message.webhookIconEmoji}:`} customMap={emojiMap} />
+            </div>
+          ) : (
+            <UserAvatar
+              displayName={displayAuthorName}
+              avatarURL={displayAuthorAvatarURL}
+              online={authorOnline}
+              className="h-7 w-7 cursor-pointer"
+              dotSize={8}
+            />
+          )}
+          </UserHoverCard>
           <UserHoverCard
             userId={message.authorID}
             displayName={displayAuthorName}
