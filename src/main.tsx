@@ -4,6 +4,7 @@ import './index.css'
 import App from './App.tsx'
 import { initErrorReporting } from '@/lib/sentry'
 import { startLayoutTierTracking } from '@/lib/device'
+import { startInputModalityTracking } from '@/lib/input-modality'
 import { initTabCoordinator } from '@/lib/tab-leader'
 import { initDesktopPresence } from '@/lib/desktop-presence'
 
@@ -15,6 +16,10 @@ initErrorReporting()
 // before the first paint so the tier-scoped Tailwind variants apply from the
 // very first frame — no mobile-chrome flash on a narrow desktop window.
 startLayoutTierTracking()
+
+// Escape closes things without leaving a keyboard focus ring on what was
+// clicked (lib/input-modality).
+startInputModalityTracking()
 
 // Cross-tab coordination (leader election): with several tabs open, only the
 // elected leader surfaces/acks notifications, deciding with whole-device

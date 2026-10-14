@@ -246,7 +246,7 @@ export function Header({
                   value={descDraft}
                   onChange={e => setDescDraft(e.target.value)}
                   onBlur={saveDescription}
-                  onKeyDown={e => { if (e.key === 'Enter') saveDescription(); if (e.key === 'Escape') cancelDescriptionEdit(); }}
+                  onKeyDown={e => { if (e.key === 'Enter') saveDescription(); if (e.key === 'Escape') { e.preventDefault(); cancelDescriptionEdit(); } }}
                   placeholder="Add a description..."
                   autoFocus
                 />

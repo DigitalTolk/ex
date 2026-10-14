@@ -325,6 +325,7 @@ describe('upsertUserThreadFromRoot / userThreadInCache', () => {
   it('adds my own thread root and reports it in-cache', () => {
     const qc = new QueryClient();
     expect(userThreadInCache(qc, 'root-1')).toBe(false);
+    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), []);
     upsertUserThreadFromRoot(qc, rootMsg(), 'me');
     const list = qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads());
     expect(list).toHaveLength(1);
@@ -347,7 +348,14 @@ describe('upsertUserThreadFromRoot / userThreadInCache', () => {
 
   it('does not add a thread I neither authored nor already track', () => {
     const qc = new QueryClient();
+    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), []);
     upsertUserThreadFromRoot(qc, rootMsg({ authorID: 'other' }), 'me');
+    expect(qc.getQueryData(queryKeys.userThreads())).toEqual([]);
+  });
+
+  it('leaves an unloaded list for the fetch, even for my own thread', () => {
+    const qc = new QueryClient();
+    upsertUserThreadFromRoot(qc, rootMsg(), 'me');
     expect(qc.getQueryData(queryKeys.userThreads())).toBeUndefined();
   });
 
@@ -366,6 +374,7 @@ describe('upsertUserThreadFromRoot / userThreadInCache', () => {
 
   it('carries the conversation parentType and falls back to createdAt when lastReplyAt is absent', () => {
     const qc = new QueryClient();
+    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), []);
     upsertUserThreadFromRoot(
       qc,
       rootMsg({ parentType: 'conversation', parentID: 'cv-1', lastReplyAt: undefined }),
@@ -388,6 +397,7 @@ describe('upsertUserThreadFromRoot / userThreadInCache', () => {
 describe('upsertUserThreadRow', () => {
   it('inserts a new row unconditionally (participant-scoped — no author gate)', () => {
     const qc = new QueryClient();
+    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), []);
     // A thread the viewer did NOT author and isn't tracking yet — this is
     // exactly what the author-gated upsertUserThreadFromRoot skips.
     upsertUserThreadRow(qc, threadSummary({ threadRootID: 't-9', rootAuthorID: 'someone-else' }));

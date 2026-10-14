@@ -222,6 +222,22 @@ describe('ThreadPanel', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('closes on Escape', () => {
+    mockApiFetch.mockResolvedValueOnce([]);
+    const onClose = vi.fn();
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={onClose}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps more mobile spacing between follow and close controls', () => {
     mockApiFetch.mockResolvedValueOnce([]);
     renderWithProviders(

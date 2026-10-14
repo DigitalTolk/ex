@@ -110,6 +110,13 @@ describe('MemberList', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('closes on Escape', () => {
+    const onClose = vi.fn();
+    renderWithProviders(<MemberList members={[makeMember()]} onClose={onClose} />);
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('shows singular "member" for count of 1', () => {
     renderWithProviders(<MemberList members={[makeMember()]} />);
 

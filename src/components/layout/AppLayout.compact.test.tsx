@@ -117,9 +117,9 @@ describe('AppLayout compact tier (fine-pointer, narrow window)', () => {
 
     open();
     // Unrelated keys leave it open; Escape closes.
-    fireEvent.keyDown(window, { key: 'Enter' });
+    fireEvent.keyDown(document.body, { key: 'Enter' });
     expect(screen.getByTestId('compact-sidebar')).toBeInTheDocument();
-    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.keyDown(document.body, { key: 'Escape' });
     expect(screen.queryByTestId('compact-sidebar')).toBeNull();
 
     open();

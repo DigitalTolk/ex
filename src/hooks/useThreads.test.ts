@@ -18,11 +18,21 @@ const summary = (overrides: Partial<ThreadSummary> = {}): ThreadSummary => ({
 describe('upsertUserThreadRow (jsdom)', () => {
   it('inserts a new row and updates an existing one, sorting newest activity first', () => {
     const qc = new QueryClient();
+    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), []);
     upsertUserThreadRow(qc, summary({ threadRootID: 't-1', latestActivityAt: '2026-01-01T00:00:00Z' }));
     upsertUserThreadRow(qc, summary({ threadRootID: 't-2', latestActivityAt: '2026-01-03T00:00:00Z' }));
     upsertUserThreadRow(qc, summary({ threadRootID: 't-1', replyCount: 9, latestActivityAt: '2026-01-04T00:00:00Z' }));
     const list = qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads());
     expect(list?.map((t) => [t.threadRootID, t.replyCount])).toEqual([['t-1', 9], ['t-2', 1]]);
+  });
+
+  // A one-row list made from a single event would pass for the whole list
+  // until it went stale, so /threads opened on it would miss every other
+  // thread. With nothing loaded the next fetch reads the server's.
+  it('leaves an unloaded list for the fetch', () => {
+    const qc = new QueryClient();
+    upsertUserThreadRow(qc, summary({ threadRootID: 't-1' }));
+    expect(qc.getQueryData(queryKeys.userThreads())).toBeUndefined();
   });
 
   it('is a no-op when threadRootID is empty', () => {

@@ -38,7 +38,7 @@ function renderItem(over: Partial<Message> = {}, props: { threadHasNew?: boolean
   // The hover toolbar mounts on hover (MessageItem): hover the row so the
   // tests can reach its actions the way a pointer user does.
   const row = result.container.querySelector('[data-message-id]');
-  if (row) fireEvent.mouseEnter(row);
+  if (row) fireEvent.pointerEnter(row, { pointerType: 'mouse' });
   return result;
 }
 
@@ -105,9 +105,9 @@ describe('MessageItem — optimistic rows', () => {
     expect(time.className).toContain('group-data-[hovered=true]:opacity-100');
     const row = container.querySelector('[data-message-id]') as HTMLElement;
     expect(row.dataset.hovered).toBeUndefined();
-    fireEvent.mouseEnter(row);
+    fireEvent.pointerEnter(row, { pointerType: 'mouse' });
     expect(row.dataset.hovered).toBe('true');
-    fireEvent.mouseLeave(row);
+    fireEvent.pointerLeave(row, { pointerType: 'mouse' });
     expect(row.dataset.hovered).toBeUndefined();
   });
 

@@ -36,25 +36,32 @@ describe('useKeyboardInset', () => {
     vi.restoreAllMocks();
   });
 
+  const appHeight = () => document.documentElement.style.getPropertyValue('--ex-app-height');
+
   it('follows the native keyboard height and resets when it hides', () => {
+    vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(800);
     const { unmount } = render(<Probe />);
     expect(screen.getByTestId('inset')).toHaveTextContent('0');
+    expect(appHeight()).toBe('');
     keyboard('keyboardWillShow', 320);
     expect(screen.getByTestId('inset')).toHaveTextContent('320');
-    expect(document.documentElement.style.getPropertyValue('--ex-keyboard-inset')).toBe('320px');
+    // The root gets exactly what's left above the keyboard, in px.
+    expect(appHeight()).toBe('480px');
     keyboard('keyboardDidShow', 320, true);
     expect(screen.getByTestId('inset')).toHaveTextContent('320');
     keyboard('keyboardWillHide');
     expect(screen.getByTestId('inset')).toHaveTextContent('0');
+    expect(appHeight()).toBe('');
     keyboard('keyboardDidShow');
     expect(screen.getByTestId('inset')).toHaveTextContent('0');
     keyboard('keyboardDidHide');
     unmount();
   });
 
-  // The app root animates its height only while the keyboard moves — never on
-  // a window resize, which used to make the whole app trail the window edge.
-  it('marks the document as settling only while the keyboard inset changes', () => {
+  // The app root animates its height only while the keyboard comes or goes —
+  // never on a window resize, which used to make the whole app trail the
+  // window edge, nor on the suggestion bar changing height while typing.
+  it('marks the document as settling only while the keyboard comes or goes', () => {
     render(<Probe />);
     const root = document.documentElement;
     expect(root.dataset.keyboardSettling).toBeUndefined();
@@ -66,10 +73,13 @@ describe('useKeyboardInset', () => {
       vi.advanceTimersByTime(KEYBOARD_SETTLE_MS);
     });
     expect(root.dataset.keyboardSettling).toBeUndefined();
-    // A resize that doesn't change the inset doesn't start a glide.
+    // A resize that doesn't change the inset doesn't start a glide, and nor
+    // does a keyboard that changes height while it stays up.
     act(() => {
       window.dispatchEvent(new Event('resize'));
     });
+    expect(root.dataset.keyboardSettling).toBeUndefined();
+    keyboard('keyboardDidShow', 340);
     expect(root.dataset.keyboardSettling).toBeUndefined();
     keyboard('keyboardWillHide');
     expect(root.dataset.keyboardSettling).toBe('true');
@@ -88,6 +98,7 @@ describe('useKeyboardInset', () => {
       window.dispatchEvent(new Event('resize'));
     });
     expect(screen.getByTestId('inset')).toHaveTextContent('100');
+    expect(appHeight()).toBe('500px');
   });
 
   it('eases a panned page back to the top and brings the field into view in its scroller', () => {
@@ -117,7 +128,8 @@ describe('useKeyboardInset', () => {
     });
     expect(scrollTo).toHaveBeenCalledTimes(2);
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', behavior: 'smooth' });
-    // A later pan (iOS again) settles again; at the top, nothing to do.
+    // The keyboard's pan landing late (iOS again) settles again; at the top,
+    // nothing to do.
     act(() => {
       window.dispatchEvent(new Event('scroll'));
     });
@@ -128,6 +140,78 @@ describe('useKeyboardInset', () => {
       window.dispatchEvent(new Event('scroll'));
     });
     expect(scrollTo).toHaveBeenCalledTimes(3);
+  });
+
+  // The reported bug: on iOS every character typed made the composer jump.
+  // While typing, iOS pans the page a little to keep the caret in view, and
+  // each pan was answered with a smooth scroll back to the top (and, in a
+  // scroller such as a /threads card, a scroll of the field into view) —
+  // which moved the caret, so the next character panned again.
+  it('never scrolls the page back while typing once the keyboard is up', () => {
+    render(
+      <div style={{ overflowY: 'auto' }} data-testid="scroller">
+        <input aria-label="composer" />
+      </div>,
+    );
+    const scroller = screen.getByTestId('scroller');
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 900 });
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 400 });
+    const field = screen.getByLabelText('composer');
+    const scrollIntoView = vi.fn();
+    field.scrollIntoView = scrollIntoView;
+    field.focus();
+    render(<Probe />);
+    keyboard('keyboardWillShow', 300);
+    act(() => {
+      vi.advanceTimersByTime(2000); // the keyboard is up and has settled
+    });
+    scrollTo.mockClear();
+    scrollIntoView.mockClear();
+
+    // Each keystroke: iOS pans to reveal the caret.
+    for (let key = 0; key < 5; key++) {
+      scrollY = 12 * (key + 1);
+      act(() => {
+        window.dispatchEvent(new Event('scroll'));
+        vi.advanceTimersByTime(100);
+      });
+    }
+
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  // Sized from the very viewport the keyboard is measured against: a root
+  // even a few px taller than what's visible puts the caret under the
+  // keyboard, and iOS pans for it on every keystroke.
+  it('sizes the root to exactly what a mobile browser shows above the keyboard', () => {
+    const vv = Object.assign(new EventTarget(), { height: 500, scale: 1 });
+    Object.defineProperty(window, 'visualViewport', { configurable: true, value: vv });
+    vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(800);
+    try {
+      const { unmount } = render(<Probe />);
+      act(() => {
+        vv.dispatchEvent(new Event('resize'));
+      });
+      expect(appHeight()).toBe('500px');
+      act(() => {
+        vi.advanceTimersByTime(KEYBOARD_SETTLE_MS);
+      });
+      // The suggestion bar coming up while typing: the root follows at once,
+      // without a glide or a scroll.
+      scrollTo.mockClear();
+      vv.height = 460;
+      act(() => {
+        vv.dispatchEvent(new Event('resize'));
+      });
+      expect(appHeight()).toBe('460px');
+      expect(document.documentElement.dataset.keyboardSettling).toBeUndefined();
+      expect(scrollTo).not.toHaveBeenCalled();
+      unmount();
+      expect(appHeight()).toBe('');
+    } finally {
+      Object.defineProperty(window, 'visualViewport', { configurable: true, value: undefined });
+    }
   });
 
   it('leaves a field without a scroller alone', () => {

@@ -111,9 +111,9 @@ describe('compact tier at a real 700px desktop viewport', () => {
     // Reopen: unrelated keys keep it open, Escape dismisses.
     toggle.click();
     await expect.poll(() => document.querySelector('[data-testid="compact-sidebar"]')).not.toBeNull();
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     expect(document.querySelector('[data-testid="compact-sidebar"]')).not.toBeNull();
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await expect.poll(() => document.querySelector('[data-testid="compact-sidebar"]')).toBeNull();
 
     // Reopen and close through the sidebar's own navigation callback.

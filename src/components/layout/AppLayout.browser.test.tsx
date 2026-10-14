@@ -7,6 +7,7 @@ import { Header } from './Header';
 import { PageContainer } from './PageContainer';
 import { SidePanel } from '@/components/chat/SidePanel';
 import { expectPaintedAtCenter } from '@/test/browser-assertions';
+import { swipe } from '@/test/gestures';
 
 // The sidebar header's Home / Activity switch reads the activity feed; these
 // layout tests don't mount a QueryClient, so stand it (and the panel) in.
@@ -97,11 +98,11 @@ function LayoutHarness({ children }: { children: ReactNode }) {
   );
 }
 
-// Motion's pan gesture is pointer-based: it binds `pointerdown` on the
-// element and `pointermove`/`pointerup` on the window, throttling the
-// offset updates through requestAnimationFrame. We drive the real gesture
-// by dispatching genuine PointerEvents and letting frames settle — the
-// decision logic itself is unit-tested in lib/channel-swipe.test.
+// The channel swipe (@use-gesture/react, via useAxisSwipe) listens for
+// `pointerdown` on the surface and follows `pointermove`/`pointerup` on the
+// window. These helpers hold a gesture open so a test can look at it
+// mid-swipe; `swipe()` (test/gestures) drives a whole one with real timing.
+// The release decision itself is unit-tested in lib/swipe.test.
 function pointer(target: EventTarget, type: string, x: number, y: number) {
   const event = new PointerEvent(type, {
     bubbles: true,
@@ -109,6 +110,8 @@ function pointer(target: EventTarget, type: string, x: number, y: number) {
     pointerId: 1,
     pointerType: 'touch',
     isPrimary: true,
+    // A finger on the screen holds the primary "button".
+    buttons: type === 'pointerup' ? 0 : 1,
     clientX: x,
     clientY: y,
   });
@@ -117,7 +120,7 @@ function pointer(target: EventTarget, type: string, x: number, y: number) {
 }
 
 // Begin a pan at (x, y) on `element`, then drag through the given points
-// (dispatched on the window, where Motion listens for moves).
+// (dispatched on the window, where the swipe follows moves).
 function panMove(element: Element, start: [number, number], ...points: Array<[number, number]>) {
   pointer(element, 'pointerdown', start[0], start[1]);
   for (const [x, y] of points) pointer(window, 'pointermove', x, y);
@@ -172,32 +175,6 @@ describe('AppLayout browser behavior', () => {
     expectPaintedAtCenter(banner!, '[data-testid="update-banner"]');
   });
 
-  it('blurs the focused composer when mobile channel-sidebar swipe begins', async () => {
-    if (window.innerWidth > 767) return;
-
-    await render(
-      <LayoutHarness>
-        <input aria-label="Message input" />
-      </LayoutHarness>,
-    );
-
-    const input = document.querySelector('input[aria-label="Message input"]') as HTMLInputElement | null;
-    const main = document.querySelector('[data-app-main="true"]') as HTMLElement | null;
-    expect(input).not.toBeNull();
-    expect(main).not.toBeNull();
-
-    input!.focus();
-    expect(document.activeElement).toBe(input);
-
-    panMove(main!, [12, 220], [60, 224], [92, 226]);
-
-    await vi.waitFor(() => {
-      expect(document.activeElement).not.toBe(input);
-      expect(main!.dataset.channelDragging).toBe('true');
-    });
-    panEnd([92, 226]);
-  });
-
   it('closes a manually-opened channel drawer via the sidebar close callback', async () => {
     if (window.innerWidth > 767) return;
 
@@ -222,83 +199,6 @@ describe('AppLayout browser behavior', () => {
     await vi.waitFor(() => {
       expect(main!.dataset.mobileChannelsOpen).not.toBe('true');
     });
-  });
-
-  it('never opens the channel drawer from a swipe that starts on a right panel', async () => {
-    if (window.innerWidth > 767) return;
-
-    await render(
-      <LayoutHarness>
-        {/* Stands in for MemberList/SidePanel: the mobile right-panel marker. */}
-        <div data-mobile-right-sidebar="true" style={{ position: 'fixed', inset: 0 }}>
-          <div data-testid="panel-body" style={{ height: 300 }} />
-        </div>
-      </LayoutHarness>,
-    );
-
-    const main = document.querySelector('[data-app-main="true"]') as HTMLElement | null;
-    const panelBody = document.querySelector('[data-testid="panel-body"]') as HTMLElement | null;
-    expect(main).not.toBeNull();
-    expect(panelBody).not.toBeNull();
-
-    // The edge swipe starts ON the panel: the gesture guard must refuse to
-    // arm the drawer (a pan inside a right panel is that panel's gesture).
-    // Moves are dispatched on the panel itself (not window) so the pan-start
-    // event's target is the panel element, as it is under a real finger.
-    pointer(panelBody!, 'pointerdown', 12, 220);
-    pointer(panelBody!, 'pointermove', 60, 224);
-    pointer(panelBody!, 'pointermove', 92, 226);
-    await new Promise((r) => setTimeout(r, 80));
-    expect(main!.dataset.channelDragging).not.toBe('true');
-    panEnd([92, 226]);
-  });
-
-  it('allows vertical scrolling gestures on the mobile main content', async () => {
-    if (window.innerWidth > 767) return;
-
-    await render(
-      <LayoutHarness>
-        <PageContainer title="Threads">
-          <div style={{ height: 1600 }}>Scrollable thread content</div>
-        </PageContainer>
-      </LayoutHarness>,
-    );
-
-    const main = document.querySelector('[data-app-main="true"]') as HTMLElement | null;
-    const scroller = document.querySelector('[data-page-scroll="true"]') as HTMLElement | null;
-    expect(main).not.toBeNull();
-    expect(scroller).not.toBeNull();
-
-    // A predominantly vertical pan never latches (absY >= absX), so the
-    // channel drawer stays put and native scrolling is left to the browser.
-    panMove(main!, [120, 420], [122, 340], [122, 260]);
-    await new Promise((r) => setTimeout(r, 40));
-    expect(main!.dataset.channelDragging).toBe('false');
-    panEnd([122, 260]);
-  });
-
-  it('blocks page scrolling only after an intentional mobile edge swipe starts opening channels', async () => {
-    if (window.innerWidth > 767) return;
-
-    await render(
-      <LayoutHarness>
-        <PageContainer title="Threads">
-          <div style={{ height: 1600 }}>Scrollable thread content</div>
-        </PageContainer>
-      </LayoutHarness>,
-    );
-
-    const main = document.querySelector('[data-app-main="true"]') as HTMLElement | null;
-    expect(main).not.toBeNull();
-
-    // An intentional left-edge horizontal pan latches "open" and starts
-    // dragging the drawer in, which flips the channel-dragging flag.
-    panMove(main!, [12, 420], [60, 422], [96, 424]);
-
-    await vi.waitFor(() => {
-      expect(main!.dataset.channelDragging).toBe('true');
-    });
-    panEnd([96, 424]);
   });
 
   it('places mobile right panels below the measured channel header, including taller headers', async () => {
@@ -338,8 +238,8 @@ describe('AppLayout browser behavior', () => {
     expectPaintedAtCenter(panel!, '[aria-label="Pinned messages"]');
   });
 
-  // Coverage extension — exercises sidebar open/close + remaining swipe
-  // gate branches that the visual tests above don't reach.
+  // Coverage extension — exercises sidebar open/close branches that the
+  // visual tests above don't reach.
 
   it('clicking the mobile menu button opens the channels sidebar', async () => {
     if (window.innerWidth > 767) return;
@@ -394,83 +294,6 @@ describe('AppLayout browser behavior', () => {
     expect(document.body.textContent).toContain('Sidebar');
   });
 
-  it('aborts the channel-open swipe when a right-side sheet is open', async () => {
-    if (window.innerWidth > 767) return;
-    await render(
-      <MemoryRouter initialEntries={['/threads']}>
-        <div data-mobile-right-sidebar="true" style={{ position: 'fixed', inset: 0, zIndex: 50 }}>
-          Right Sheet
-        </div>
-        <div style={{ height: 500 }}>
-          <AppLayout>
-            <PageContainer title="Threads">
-              <div>Thread content</div>
-            </PageContainer>
-          </AppLayout>
-        </div>
-      </MemoryRouter>,
-    );
-    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
-    // A right-side sheet is open, so the edge-from-left open swipe is refused.
-    panMove(main, [12, 420], [60, 422], [100, 424]);
-    await new Promise((r) => setTimeout(r, 40));
-    expect(main.dataset.channelDragging).toBe('false');
-    panEnd([100, 424]);
-  });
-
-  it('commits opening the drawer on a long edge swipe and tracks the live transform', async () => {
-    if (window.innerWidth > 767) return;
-    await render(
-      <MemoryRouter initialEntries={['/threads']}>
-        <div style={{ height: 500 }}>
-          <AppLayout>
-            <PageContainer title="Threads"><div>Thread content</div></PageContainer>
-          </AppLayout>
-        </div>
-      </MemoryRouter>,
-    );
-    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
-    panMove(main, [12, 300], [70, 304], [170, 306]);
-    // Mid-drag: the main element carries a live translate3d(calc(...)) transform
-    // (mainDragStyle's channelDragOffset !== 0 branch).
-    await vi.waitFor(() => {
-      expect(main.dataset.channelDragging).toBe('true');
-      expect(main.style.transform).toContain('calc');
-    });
-    // A >80px travel commits the open.
-    panEnd([170, 306]);
-    await vi.waitFor(() => {
-      expect(main.dataset.mobileChannelsOpen).toBe('true');
-    });
-  });
-
-  it('commits closing the drawer on a leftward swipe when channels are open', async () => {
-    if (window.innerWidth > 767) return;
-    await render(
-      <MemoryRouter initialEntries={['/threads']}>
-        <div style={{ height: 500 }}>
-          <AppLayout>
-            <PageContainer title="Threads"><div>Thread content</div></PageContainer>
-          </AppLayout>
-        </div>
-      </MemoryRouter>,
-    );
-    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
-    // Open via the menu button first (non-home route, so it can also close).
-    (document.querySelector('button[aria-label="Open channels"]') as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(main.dataset.mobileChannelsOpen).toBe('true'));
-    // Swipe left past the threshold to close. Confirm the close intent
-    // latches mid-drag (negative blend onto the 100vw resting position)
-    // before releasing past the commit threshold.
-    panMove(main, [200, 300], [120, 304], [40, 306]);
-    await vi.waitFor(() => {
-      expect(main.style.transform).toContain('100vw');
-      expect(main.style.transform).toMatch(/-\s*\d+px/);
-    });
-    panEnd([40, 306]);
-    await vi.waitFor(() => expect(main.dataset.mobileChannelsOpen).toBe('false'));
-  });
-
   it('forwards wheel events over the app header to the page scroller (desktop)', async () => {
     if (window.innerWidth <= 767) return;
     await render(
@@ -491,118 +314,6 @@ describe('AppLayout browser behavior', () => {
     await vi.waitFor(() => expect(scroller.scrollTop).toBeGreaterThan(before));
   });
 
-  it('drag offset clears after a touchend that did not cross the open threshold', async () => {
-    if (window.innerWidth > 767) return;
-    await render(
-      <MemoryRouter initialEntries={['/threads']}>
-        <div style={{ height: 500 }}>
-          <AppLayout>
-            <PageContainer title="Threads">
-              <div>Thread content</div>
-            </PageContainer>
-          </AppLayout>
-        </div>
-      </MemoryRouter>,
-    );
-    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
-    panMove(main, [12, 420], [30, 422], [40, 424]); // 28px — below the 80px threshold
-    panEnd([40, 424]);
-    await new Promise((r) => setTimeout(r, 40));
-    expect(main.dataset.channelDragging).toBe('false');
-  });
-
-  // ---- Additional branch coverage ----
-
-  it('a vertical drag past the axis-lock hands off to native scroll (absY >= absX)', async () => {
-    if (window.innerWidth > 767) return;
-    await render(
-      <LayoutHarness>
-        <PageContainer title="Threads">
-          <div style={{ height: 1600 }}>Scrollable thread content</div>
-        </PageContainer>
-      </LayoutHarness>,
-    );
-    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
-    // absX = 20 (>= axis-lock 12) but absY = 60 >= absX → vertical wins, no latch.
-    panMove(main, [120, 400], [130, 430], [140, 460]);
-    await new Promise((r) => setTimeout(r, 40));
-    expect(main.dataset.channelDragging).toBe('false');
-    panEnd([140, 460]);
-  });
-
-  it('aborts the open swipe when the gesture starts on an element inside a right-side sheet', async () => {
-    if (window.innerWidth > 767) return;
-    await render(
-      <MemoryRouter initialEntries={['/threads']}>
-        <div style={{ height: 500 }}>
-          <AppLayout>
-            <PageContainer title="Threads">
-              {/* The sheet lives INSIDE the swipeable main so the gesture's
-                  event target is itself within the right sidebar — exercises
-                  the eventTarget.closest('[data-mobile-right-sidebar]') arm. */}
-              <div data-mobile-right-sidebar="true" data-testid="inner-sheet" style={{ height: 200 }}>
-                Inner sheet
-              </div>
-            </PageContainer>
-          </AppLayout>
-        </div>
-      </MemoryRouter>,
-    );
-    const sheet = document.querySelector('[data-testid="inner-sheet"]') as HTMLElement;
-    // The pointerdown originates on an element inside the right sidebar, so
-    // canOpenChannelsFromGesture refuses via the eventTarget.closest() arm.
-    panMove(sheet, [12, 300], [60, 302], [100, 304]);
-    await new Promise((r) => setTimeout(r, 40));
-    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
-    expect(main.dataset.channelDragging).toBe('false');
-    panEnd([100, 304]);
-  });
-
-  it('clears the drag offset when a latched swipe ends without crossing the threshold (committed but short)', async () => {
-    if (window.innerWidth > 767) return;
-    await render(
-      <MemoryRouter initialEntries={['/threads']}>
-        <div style={{ height: 500 }}>
-          <AppLayout>
-            <PageContainer title="Threads"><div>Thread content</div></PageContainer>
-          </AppLayout>
-        </div>
-      </MemoryRouter>,
-    );
-    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
-    // Latch open (edge start, absX>=12, horizontal), then end with total
-    // travel below the 80px pixel threshold and low velocity → no commit.
-    panMove(main, [10, 300], [25, 301], [40, 302]);
-    await vi.waitFor(() => expect(main.dataset.channelDragging).toBe('true'));
-    panEnd([40, 302]);
-    await vi.waitFor(() => {
-      expect(main.dataset.channelDragging).toBe('false');
-      expect(main.dataset.mobileChannelsOpen).toBe('false');
-    });
-  });
-
-  it('a tiny swipe that never latches clears the offset on release (uncommitted touchend)', async () => {
-    if (window.innerWidth > 767) return;
-    await render(
-      <MemoryRouter initialEntries={['/threads']}>
-        <div style={{ height: 500 }}>
-          <AppLayout>
-            <PageContainer title="Threads"><div>Thread content</div></PageContainer>
-          </AppLayout>
-        </div>
-      </MemoryRouter>,
-    );
-    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
-    // A 6px move never crosses the 12px axis-lock, so swipeCommittedRef
-    // stays null → onChannelPanEnd takes the !committed branch and resets
-    // the offset to 0.
-    panMove(main, [100, 300], [103, 301], [106, 301]);
-    panEnd([106, 301]);
-    await new Promise((r) => setTimeout(r, 40));
-    expect(main.dataset.channelDragging).toBe('false');
-    expect(main.dataset.mobileChannelsOpen).toBe('false');
-  });
-
   it('forwards a header wheel to nothing when the page has no scroll container', async () => {
     if (window.innerWidth <= 767) return;
     await render(
@@ -619,72 +330,6 @@ describe('AppLayout browser behavior', () => {
     headerInner.dispatchEvent(ev);
     await new Promise((r) => setTimeout(r, 20));
     expect(ev.defaultPrevented).toBe(false);
-  });
-
-  it('renders the live closing transform (negative offset) while dragging an open drawer left', async () => {
-    if (window.innerWidth > 767) return;
-    await render(
-      <MemoryRouter initialEntries={['/threads']}>
-        <div style={{ height: 500 }}>
-          <AppLayout>
-            <PageContainer title="Threads"><div>Thread content</div></PageContainer>
-          </AppLayout>
-        </div>
-      </MemoryRouter>,
-    );
-    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
-    // Open the drawer first.
-    (document.querySelector('button[aria-label="Open channels"]') as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(main.dataset.mobileChannelsOpen).toBe('true'));
-    // Drag left to start closing → channelDragOffset is negative, so
-    // mainDragStyle uses restingX=100vw and the '-' sign branch.
-    panMove(main, [300, 300], [260, 302], [230, 304]);
-    await vi.waitFor(() => {
-      // restingX=100vw (open) blended with a negative drag offset. The
-      // browser re-serializes the calc(), so assert on its parts.
-      expect(main.style.transform).toContain('100vw');
-      expect(main.style.transform).toMatch(/-\s*\d+px/);
-    });
-    panEnd([230, 304]);
-  });
-
-  it('clamps the live open offset to a positive translate while latched', async () => {
-    if (window.innerWidth > 767) return;
-    await render(
-      <MemoryRouter initialEntries={['/threads']}>
-        <div style={{ height: 500 }}>
-          <AppLayout>
-            <PageContainer title="Threads"><div>Thread content</div></PageContainer>
-          </AppLayout>
-        </div>
-      </MemoryRouter>,
-    );
-    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
-    // Latch open from the edge; mid-drag the transform blends a positive
-    // offset onto the closed resting position (0px). The browser collapses
-    // calc(0px + Npx) to calc(Npx), so assert on the positive pixel value.
-    panMove(main, [10, 300], [40, 301], [70, 302]);
-    await vi.waitFor(() => {
-      expect(main.dataset.channelDragging).toBe('true');
-      expect(main.style.transform).toMatch(/calc\(\s*\d+px\s*\)/);
-      expect(main.style.transform).not.toContain('-');
-    });
-    panEnd([70, 302]);
-  });
-
-  it('on desktop the swipe handler short-circuits because the layout is not mobile', async () => {
-    if (window.innerWidth <= 767) return;
-    await render(
-      <LayoutHarness>
-        <PageContainer title="Threads"><div>Thread content</div></PageContainer>
-      </LayoutHarness>,
-    );
-    const main = document.querySelector('[data-app-main="true"]') as HTMLElement;
-    // Motion's onPan fires, but isMobile is false → onChannelPan early-returns.
-    panMove(main, [12, 300], [60, 302], [120, 304]);
-    await new Promise((r) => setTimeout(r, 40));
-    expect(main.dataset.channelDragging).toBe('false');
-    panEnd([120, 304]);
   });
 
   it('header wheel over a non-scrollable page is a no-op (no scroller to forward to)', async () => {
@@ -760,5 +405,199 @@ describe('AppLayout browser behavior', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(scroller.scrollTop).toBe(before);
     outside.remove();
+  });
+});
+
+// The phone's conversation lies over the channel list: swipe it aside, from
+// anywhere, to reveal the list; swipe the list away to slide it back.
+describe('AppLayout channel swipe (phone)', () => {
+  function renderAt(path: string, children: ReactNode = <PageContainer title="Threads"><div>Thread content</div></PageContainer>) {
+    return render(
+      <MemoryRouter initialEntries={[path]}>
+        <div style={{ height: 500 }}>
+          <AppLayout>{children}</AppLayout>
+        </div>
+      </MemoryRouter>,
+    );
+  }
+  const main = () => document.querySelector('[data-app-main="true"]') as HTMLElement;
+  const list = () => document.querySelector('[data-testid="mobile-channel-sidebar"]') as HTMLElement;
+  // How far the conversation is slid aside, from Motion's translateX.
+  const slidX = () => new DOMMatrix(getComputedStyle(main()).transform).m41;
+  const atRest = (x: number) => Math.abs(slidX() - x) < 1;
+  // A slide is a spring: under a loaded test machine its frames come slowly.
+  const settlesAt = (x: number) => vi.waitFor(() => expect(atRest(x)).toBe(true), { timeout: 5000 });
+
+  it('follows the finger from mid-screen and blurs the focused composer', async () => {
+    if (window.innerWidth > 767) return;
+    await renderAt('/threads', <input aria-label="Message input" />);
+    const input = document.querySelector('input[aria-label="Message input"]') as HTMLInputElement;
+    input.focus();
+
+    panMove(main(), [150, 220], [160, 221], [210, 224], [250, 226]);
+
+    await vi.waitFor(() => {
+      expect(document.activeElement).not.toBe(input);
+      expect(main().dataset.channelDragging).toBe('true');
+      // 100px of finger travel, less the few pixels it takes to recognise
+      // a sideways swipe.
+      expect(slidX()).toBeGreaterThan(80);
+      expect(slidX()).toBeLessThanOrEqual(100);
+    });
+    panEnd([250, 226]);
+  });
+
+  it('opens the list on a long swipe', async () => {
+    if (window.innerWidth > 767) return;
+    await renderAt('/threads');
+    await swipe(main(), { dx: 260, steps: 8, stepMs: 20 });
+    await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'));
+    await settlesAt(window.innerWidth);
+    expect(list()).not.toHaveAttribute('inert');
+  });
+
+  // The reported bug: a slow swipe sprang back however far it went.
+  it('opens the list on a SLOW swipe that comes to rest past the commit distance', async () => {
+    if (window.innerWidth > 767) return;
+    await renderAt('/threads');
+    await swipe(main(), { dx: 180, steps: 24, stepMs: 40, settle: true });
+    await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'));
+  });
+
+  it('slides back from a short, slow swipe', async () => {
+    if (window.innerWidth > 767) return;
+    await renderAt('/threads');
+    await swipe(main(), { dx: 60, steps: 6, stepMs: 30, settle: true });
+    await settlesAt(0);
+    expect(main().dataset.mobileChannelsOpen).toBe('false');
+    expect(main().dataset.channelDragging).toBe('false');
+  });
+
+  it('slides back when the browser takes the touch over', async () => {
+    if (window.innerWidth > 767) return;
+    await renderAt('/threads');
+    await swipe(main(), { dx: 260, steps: 8, stepMs: 20, cancel: true });
+    await settlesAt(0);
+    expect(main().dataset.mobileChannelsOpen).toBe('false');
+  });
+
+  it('leaves a vertical drag, and a tiny wobble, to the page', async () => {
+    if (window.innerWidth > 767) return;
+    await renderAt('/threads', (
+      <PageContainer title="Threads">
+        <div style={{ height: 1600 }}>Scrollable thread content</div>
+      </PageContainer>
+    ));
+    panMove(main(), [120, 400], [130, 430], [140, 460]);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(main().dataset.channelDragging).toBe('false');
+    panEnd([140, 460]);
+
+    panMove(main(), [100, 300], [103, 301], [106, 301]);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(main().dataset.channelDragging).toBe('false');
+    panEnd([106, 301]);
+    expect(main().dataset.mobileChannelsOpen).toBe('false');
+  });
+
+  // A right-hand panel covers the conversation: a sideways swipe there is
+  // that panel's, and while one is open nothing else swipes the list in.
+  it('never opens the list while a right-hand panel is open', async () => {
+    if (window.innerWidth > 767) return;
+    await renderAt('/threads', (
+      <>
+        <div data-testid="content" style={{ height: 100 }}>Header</div>
+        <div data-mobile-right-sidebar="true" data-swipe-surface="x" data-testid="panel" style={{ height: 300 }}>
+          Panel
+        </div>
+      </>
+    ));
+    for (const start of ['panel', 'content']) {
+      const el = document.querySelector(`[data-testid="${start}"]`) as HTMLElement;
+      const { top } = el.getBoundingClientRect();
+      panMove(el, [120, top + 20], [160, top + 22], [220, top + 24]);
+      await new Promise((r) => setTimeout(r, 40));
+      expect(main().dataset.channelDragging).toBe('false');
+      panEnd([220, top + 24]);
+    }
+  });
+
+  it('slides the conversation back when the list is swiped away', async () => {
+    if (window.innerWidth > 767) return;
+    await renderAt('/threads');
+    (document.querySelector('button[aria-label="Open channels"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'));
+    await settlesAt(window.innerWidth);
+
+    // Mid-swipe the conversation comes in from the right with the finger.
+    panMove(list(), [300, 300], [290, 301], [200, 304], [100, 306]);
+    await vi.waitFor(() => {
+      expect(main().dataset.channelDragging).toBe('true');
+      expect(slidX()).toBeLessThan(window.innerWidth - 150);
+    });
+    panEnd([100, 306]);
+    await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('false'));
+    await settlesAt(0);
+  });
+
+  it('keeps the list when a swipe of it falls short', async () => {
+    if (window.innerWidth > 767) return;
+    await renderAt('/threads');
+    (document.querySelector('button[aria-label="Open channels"]') as HTMLButtonElement).click();
+    await settlesAt(window.innerWidth);
+
+    await swipe(list(), { dx: -50, steps: 5, stepMs: 30, settle: true });
+    await settlesAt(window.innerWidth);
+    expect(main().dataset.mobileChannelsOpen).toBe('true');
+  });
+
+  // Home has no conversation behind the list to slide back.
+  it('does not swipe the Home list away', async () => {
+    if (window.innerWidth > 767) return;
+    await renderAt('/');
+    await swipe(list(), { dx: -260, steps: 8, stepMs: 20 });
+    await new Promise((r) => setTimeout(r, 40));
+    expect(main().dataset.mobileChannelsOpen).toBe('true');
+    expect(atRest(window.innerWidth)).toBe(true);
+  });
+
+  // Rotating the phone changes the width the open list slides the
+  // conversation by — at once, even mid-slide; a closed list keeps it in
+  // place.
+  it('keeps the conversation where the list leaves it across a rotation', async () => {
+    if (window.innerWidth > 767) return;
+    const width = window.innerWidth;
+    const original = Object.getOwnPropertyDescriptor(window, 'innerWidth');
+    const rotate = (w: number) => {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: w });
+      window.dispatchEvent(new Event('resize'));
+    };
+    await renderAt('/threads');
+    try {
+      rotate(width + 100);
+      await settlesAt(0);
+
+      // Opening slides the conversation aside; a rotation on the way ends
+      // the slide at the new width.
+      (document.querySelector('button[aria-label="Open channels"]') as HTMLButtonElement).click();
+      await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'));
+      rotate(width + 200);
+      await settlesAt(width + 200);
+    } finally {
+      if (original) Object.defineProperty(window, 'innerWidth', original);
+      else delete (window as { innerWidth?: number }).innerWidth;
+      window.dispatchEvent(new Event('resize'));
+    }
+  });
+
+  it('is not a swipe surface on desktop', async () => {
+    if (window.innerWidth <= 767) return;
+    await renderAt('/threads');
+    expect(main()).not.toHaveAttribute('data-swipe-surface');
+    panMove(main(), [120, 300], [160, 302], [220, 304]);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(main().dataset.channelDragging).toBe('false');
+    expect(main().style.transform).toBe('');
+    panEnd([220, 304]);
   });
 });

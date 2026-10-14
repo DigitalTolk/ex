@@ -4,6 +4,7 @@ import {
   currentLayoutTier,
   deviceKind,
   hasPointerDevice,
+  isHoverPointer,
   isElectronMac,
   layoutTierFor,
   POINTER_DEVICE_EVENT,
@@ -234,6 +235,28 @@ describe('hasPointerDevice', () => {
       unsubscribe();
       stop();
       setWidth(originalWidth);
+    }
+  });
+
+  // Every hover affordance asks isHoverPointer: a mouse or pen hovers, a
+  // finger never does, and on the phone tier nothing does.
+  it('isHoverPointer: mouse and pen hover, touch does not, the phone tier never', () => {
+    const originalWidth = window.innerWidth;
+    const setWidth = (width: number) => Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+    const stop = startLayoutTierTracking();
+    try {
+      expect(isHoverPointer('mouse')).toBe(true);
+      expect(isHoverPointer('pen')).toBe(true);
+      expect(isHoverPointer('touch')).toBe(false);
+      expect(isHoverPointer('')).toBe(false);
+      setWidth(390);
+      window.dispatchEvent(new Event('resize'));
+      expect(isHoverPointer('mouse')).toBe(false);
+      expect(isHoverPointer('pen')).toBe(false);
+    } finally {
+      setWidth(originalWidth);
+      window.dispatchEvent(new Event('resize'));
+      stop();
     }
   });
 

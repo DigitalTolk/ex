@@ -16,9 +16,9 @@ export interface PanelWidthConfig {
 // the right panel mirrors the thread composer's comfortable minimum.
 export const SIDEBAR_WIDTH: PanelWidthConfig = {
   key: 'ex.layout.sidebarWidth',
-  defaultWidth: 288, // Tailwind w-72 — the historical fixed width
+  defaultWidth: 400, // the old maximum: room for long channel names and the Activity tabs
   min: 256, // narrowest that fits the Activity filter tabs with the longest label (Reactions) open
-  max: 400,
+  max: 448,
 };
 
 export const SIDE_PANEL_WIDTH: PanelWidthConfig = {

@@ -72,17 +72,21 @@ describe('Tooltip primitive defaults', () => {
     expect(document.activeElement).toBe(real);
   });
 
-  it('a touch contact mounts the primitive without replaying a mouse, so touch affordances stay', async () => {
+  it('a tap never arms the tooltip, so nothing opens and no mouse is faked', async () => {
     const onPointerEnter = vi.fn();
     const screen = await render(
       <TooltipProvider delay={0}>
         {/* The test browser's one real pointer rests wherever an earlier test
-            left it; park it top-left, with the trigger pinned bottom-right,
+            left it; park it top-left, with the triggers pinned bottom-right,
             so nothing mounts under it and hovers by accident. */}
         <div data-testid="park" style={{ position: 'fixed', left: 0, top: 0, width: 8, height: 8 }} />
         <Tooltip>
           <TooltipTrigger render={<span data-testid="touch-trigger" onPointerEnter={onPointerEnter} style={{ position: 'fixed', right: 0, bottom: 0 }} />}>tap me</TooltipTrigger>
           <TooltipContent>Touch body</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger render={<span data-testid="late-trigger" style={{ position: 'fixed', right: 0, bottom: 40 }} />}>tap me too</TooltipTrigger>
+          <TooltipContent>Late body</TooltipContent>
         </Tooltip>
       </TooltipProvider>,
     );
@@ -92,18 +96,27 @@ describe('Tooltip primitive defaults', () => {
     const mouseOvers: string[] = [];
     const spy = (e: Event) => { if ((e as globalThis.PointerEvent).pointerType === 'mouse') mouseOvers.push(e.type); };
     window.addEventListener('pointerover', spy, true);
-    const trigger = document.querySelector('[data-testid="touch-trigger"]') as HTMLElement;
-    // What a tap does on a phone: a touch pointerover, then the synthesized mouseover.
-    trigger.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, pointerType: 'touch' }));
-    trigger.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 150));
-    expect(onPointerEnter).toHaveBeenCalled();
-    // Armed (the primitive's trigger carries its id) but nothing opened and
-    // no mouse was faked.
-    expect((document.querySelector('[data-testid="touch-trigger"]') as HTMLElement).hasAttribute('id')).toBe(true);
-    expect(document.querySelector('[data-slot="tooltip-content"]')).toBeNull();
-    expect(mouseOvers).toEqual([]);
-    window.removeEventListener('pointerover', spy, true);
+    try {
+      const trigger = document.querySelector('[data-testid="touch-trigger"]') as HTMLElement;
+      // What a tap does on a phone: a touch pointerover, then the replayed mouseover.
+      trigger.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, pointerType: 'touch' }));
+      trigger.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      // A tap whose pointer events missed the trigger (rows ignore pointers
+      // while the list scrolls; a row can mount under the finger) reaches it
+      // only as the replayed mouseover.
+      const late = document.querySelector('[data-testid="late-trigger"]') as HTMLElement;
+      late.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 150));
+      expect(onPointerEnter).toHaveBeenCalled();
+      // Still inert (the primitive's trigger would carry its id), nothing
+      // opened and no mouse was faked.
+      expect((document.querySelector('[data-testid="touch-trigger"]') as HTMLElement).hasAttribute('id')).toBe(false);
+      expect((document.querySelector('[data-testid="late-trigger"]') as HTMLElement).hasAttribute('id')).toBe(false);
+      expect(document.querySelector('[data-slot="tooltip-content"]')).toBeNull();
+      expect(mouseOvers).toEqual([]);
+    } finally {
+      window.removeEventListener('pointerover', spy, true);
+    }
   });
 
   it('renders a default button trigger while inert', async () => {

@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { MessageItem } from './MessageItem';
 import type { Message } from '@/types';
+import { hoverRow } from '@/test/hover';
 
 // The picker's calendar opens on the seed's month; tomorrow is always on it
 // (as an outside day at a month's end), so pick that and check the day.
@@ -23,17 +24,6 @@ async function pickTomorrow() {
     return el!;
   });
   await userEvent.click(day);
-}
-
-
-// Hover without moving the browser's one real mouse (other files run in
-// parallel and a real pointer crossing their rows makes hover-only checks
-// flake): React derives onMouseEnter from mouseover, and a tick lets the
-// hover state flush.
-async function hoverRow(row: Element | null) {
-  row?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
-  row?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-  await new Promise((r) => setTimeout(r, 20));
 }
 
 
