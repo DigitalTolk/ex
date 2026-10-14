@@ -983,7 +983,9 @@ export function Sidebar({ onClose }: SidebarProps) {
       >
         {/* Bottom padding clears the home indicator on notched phones (the
             drawer is a full-height mobile surface with no bottom chrome). */}
-        <div className="w-full min-w-0 space-y-1 p-2 mobile:pb-[calc(var(--bottom-safe-inset,env(safe-area-inset-bottom))+0.5rem)]">
+        {/* The extra top padding is the gap under the Home / Activity switch,
+            kept inside the scroller so rows scroll right up to the switch. */}
+        <div className="w-full min-w-0 space-y-1 p-2 pt-5 mobile:pt-2 mobile:pb-[calc(var(--bottom-safe-inset,env(safe-area-inset-bottom))+0.5rem)]">
           {/* Threads first (Activity has its own sidebar mode — see the
               Home / Activity switch above). Same row geometry (px-2 py-1)
               as channel rows below so the eye doesn't catch on a height

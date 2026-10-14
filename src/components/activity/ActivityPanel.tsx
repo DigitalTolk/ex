@@ -166,7 +166,7 @@ export const ActivityPanel = memo(function ActivityPanel({ onNavigate }: Activit
 
   return (
     <div className="flex h-full min-h-0 flex-col text-sidebar-foreground" data-testid="activity-panel">
-      <div className="relative z-10 shrink-0 px-2">
+      <div className="relative z-10 shrink-0 px-2 pt-3 mobile:pt-0">
         {/* Once scrolled, the rows fade softly under the filters. */}
         <div
           className={`${SCROLL_FADE_TOP} top-full ${scrolled ? 'opacity-100' : 'opacity-0'}`}

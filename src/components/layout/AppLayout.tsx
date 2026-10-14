@@ -43,7 +43,9 @@ function SidebarHeader({ topStrip = false }: { topStrip?: boolean }) {
   return (
     <div className="shrink-0" data-sidebar-header="true">
       {topStrip && <div className="h-12 [-webkit-app-region:drag]" data-testid="sidebar-top-strip" aria-hidden="true" />}
-      <div className={`px-3 pb-3 ${topStrip ? '' : 'pt-3'}`}>
+      {/* No bottom padding: the list below scrolls right up to the switch
+          (fading under it), and carries the gap at rest itself. */}
+      <div className={`px-3 ${topStrip ? '' : 'pt-3'}`}>
         <ActivityModeSwitch />
       </div>
     </div>
