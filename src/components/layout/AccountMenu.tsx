@@ -1,3 +1,4 @@
+import { SCROLL_FADE_BOTTOM } from '@/lib/scroll-fade';
 import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -271,7 +272,7 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
       >
         {/* The list fades and softly blurs as it scrolls under the account. */}
         <div
-          className="pointer-events-none absolute inset-x-0 bottom-full h-8 bg-gradient-to-t from-sidebar to-transparent backdrop-blur-[2px] [mask-image:linear-gradient(to_top,black,transparent)]"
+          className={`${SCROLL_FADE_BOTTOM} bottom-full`}
           aria-hidden="true"
           data-testid="sidebar-account-fade"
         />

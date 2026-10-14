@@ -1,3 +1,4 @@
+import { SCROLL_FADE_TOP, scrolledOffTop } from '@/lib/scroll-fade';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type WheelEvent } from 'react';
 import { matchPath, useLocation } from 'react-router-dom';
 import { takeOpenChannelsRequest, useOpenChannelsRequest } from '@/lib/mobile-nav';
@@ -65,9 +66,25 @@ function MobileSidebarTitle() {
 // re-render the whole list.
 const SidebarBody = memo(function SidebarBody({ onClose }: { onClose: () => void }) {
   const mode = useSidebarModeStore((s) => s.mode);
+  const [scrolled, setScrolled] = useState(false);
+  // Switching lists starts the new one at its top, unfaded.
+  const [shownMode, setShownMode] = useState(mode);
+  if (shownMode !== mode) {
+    setShownMode(mode);
+    setScrolled(false);
+  }
   return (
-    <div className="min-h-0 flex-1">
+    <div className="relative min-h-0 flex-1" onScrollCapture={(e) => setScrolled(scrolledOffTop(e))}>
       {mode === 'activity' ? <ActivityPanel onNavigate={onClose} /> : <Sidebar onClose={onClose} />}
+      {/* Once scrolled, channels fade softly under the header. (Activity
+          fades below its own filters instead.) */}
+      {mode === 'home' && (
+        <div
+          className={`${SCROLL_FADE_TOP} top-0 ${scrolled ? 'opacity-100' : 'opacity-0'}`}
+          aria-hidden="true"
+          data-testid="sidebar-top-fade"
+        />
+      )}
     </div>
   );
 });
