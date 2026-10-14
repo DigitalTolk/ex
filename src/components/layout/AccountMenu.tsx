@@ -303,8 +303,9 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
               className="w-[calc(var(--anchor-width)-1rem)] min-w-60"
               // The same soft fade-and-blur as above the account strip, here
               // over the open menu's top edge. It tucks under the menu's
-              // rounded top so no sliver of the list shows between them.
-              positionerClassName="before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:-mb-3 before:h-13 before:bg-gradient-to-t before:from-sidebar before:to-transparent before:backdrop-blur-[2px] before:[mask-image:linear-gradient(to_top,black,transparent)] before:content-['']"
+              // rounded top (painted behind it) so no sliver of the list shows
+              // between them.
+              positionerClassName="before:pointer-events-none before:absolute before:-z-10 before:inset-x-0 before:bottom-full before:-mb-3 before:h-13 before:bg-gradient-to-t before:from-sidebar before:to-transparent before:backdrop-blur-[2px] before:[mask-image:linear-gradient(to_top,black,transparent)] before:content-['']"
             >
               {status && (
                 <>
