@@ -219,10 +219,8 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
     if (!action.overSheet) setMobileMenuOpen(false);
   }
 
-  // The whole strip under the divider is the button, so hover fills it edge
-  // to edge.
   const triggerClass =
-    'flex w-full min-w-0 items-center gap-2.5 px-4 py-3 text-left text-sidebar-foreground outline-none hover:bg-sidebar-accent focus-visible:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40 data-[popup-open]:bg-sidebar-accent mobile:h-14';
+    'flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-sidebar-foreground outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring/40 data-[popup-open]:bg-sidebar-accent mobile:h-12';
 
   const triggerContent = (
     <>
@@ -268,7 +266,7 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
     <>
       {trigger ?? (
       <div
-        className="relative shrink-0 border-t border-sidebar-border mobile:pb-[env(safe-area-inset-bottom)]"
+        className="relative shrink-0 border-t border-sidebar-border p-2 mobile:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]"
         data-testid="sidebar-account"
       >
         {/* The list fades and softly blurs as it scrolls under the account. */}
@@ -296,11 +294,10 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
               side="top"
               align="start"
               sideOffset={6}
-              // Inset 8px from both sidebar edges, so it scales with the
-              // sidebar and never spills past it; the floor is the
-              // narrowest sidebar (256px) less those insets.
-              alignOffset={8}
-              className="w-[calc(var(--anchor-width)-1rem)] min-w-60"
+              // As wide as the account row (the sidebar less its 8px
+              // insets), so it scales with the sidebar and never spills past
+              // it; the floor is the narrowest sidebar (256px) less those.
+              className="min-w-60"
               // The same soft fade-and-blur as above the account strip, here
               // over the open menu's top edge. It tucks under the menu's
               // rounded top (painted behind it) so no sliver of the list shows
