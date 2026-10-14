@@ -301,6 +301,9 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
               // narrowest sidebar (256px) less those insets.
               alignOffset={8}
               className="w-[calc(var(--anchor-width)-1rem)] min-w-60"
+              // The same soft fade-and-blur as above the account strip, here
+              // over the open menu's top edge.
+              positionerClassName="before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:mb-1 before:h-10 before:bg-gradient-to-t before:from-sidebar before:to-transparent before:backdrop-blur-[2px] before:[mask-image:linear-gradient(to_top,black,transparent)] before:content-['']"
             >
               {status && (
                 <>
