@@ -236,7 +236,11 @@ describe('MessageItem', () => {
       />,
     );
 
-    // Edit/Delete are now inside a dropdown — open the "More actions" menu first
+    // Edit/Delete are now inside a dropdown — open the "More actions" menu first.
+    // The toolbar buttons carry lazy tooltips that mount their primitive on the
+    // first hover (replacing the element), so hover first and click the element
+    // that remains — the way a pointer reaches it.
+    await user.hover(screen.getByLabelText('More actions'));
     await user.click(screen.getByLabelText('More actions'));
     expect(screen.getByText('Edit')).toBeInTheDocument();
     expect(screen.getByText('Delete')).toBeInTheDocument();
@@ -434,6 +438,8 @@ describe('MessageItem', () => {
         currentUserId="user-1"
       />,
     );
+    // Hover first: the lazy tooltip remounts the button on first hover.
+    await user.hover(screen.getByLabelText('Add reaction'));
     await user.click(screen.getByLabelText('Add reaction'));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     // Picker opens on the first category; search to surface the generated
