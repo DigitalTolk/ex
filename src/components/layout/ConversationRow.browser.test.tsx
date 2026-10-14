@@ -183,13 +183,6 @@ describe('ConversationRow browser behaviour', () => {
     expect(document.querySelector('[data-testid="conversation-unread-badge-cv-1"]')).toBeNull();
   });
 
-  it('shows a dot when replies in a thread the user is in are unread', async () => {
-    await renderRow(dm, { hasUnread: true, threadUnread: true, notifyCount: 0 });
-    const dot = document.querySelector('[data-testid="conversation-unread-dot-cv-1"]') as HTMLElement;
-    expect(dot.getAttribute('aria-label')).toBe('Unread thread replies');
-    expect(dot.className).toContain('bg-brand');
-  });
-
   it('renders the exact alerted count when under 100', async () => {
     const screen = await renderRow(dm, { hasUnread: true, notifyCount: 5 });
     await expect.element(screen.getByTestId('conversation-unread-badge-cv-1')).toHaveTextContent('5');

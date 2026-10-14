@@ -120,7 +120,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
     [messages],
   );
   const { map: userMap } = useUsersBatch(userIDs);
-  const quickReactions = useFrequentEmojis(3);
+  const quickReactions = useFrequentEmojis(6);
   const unfollowThread = useUnfollowThread();
 
   // The "previous" message for the first visible reply: the root when the

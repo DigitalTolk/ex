@@ -2,6 +2,8 @@ import { useState, type ComponentType } from 'react';
 import { Bell, Home, Search } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { useActivityUnread } from '@/hooks/useActivity';
+import { useReactionFlash } from '@/stores/reaction-flash';
+import { ReactionFlashIcon } from '@/components/activity/ReactionFlashIcon';
 import { setSidebarMode, useSidebarModeStore, type SidebarMode } from '@/stores/sidebar-mode';
 import { AccountMenu } from './AccountMenu';
 import { MOBILE_TAB_CLASS } from './mobile-tab';
@@ -68,6 +70,9 @@ interface TabProps {
 }
 
 function Tab({ label, icon: Icon, selected, onClick, unread = 0, testID }: TabProps) {
+  // The Activity bell becomes the emoji for a moment when a reaction lands.
+  const flash = useReactionFlash();
+  const flashing = testID === 'mobile-tab-activity' && flash;
   return (
     <button
       type="button"
@@ -78,7 +83,7 @@ function Tab({ label, icon: Icon, selected, onClick, unread = 0, testID }: TabPr
       data-testid={testID}
     >
       <span className="relative inline-flex">
-        <Icon className="h-6 w-6" aria-hidden="true" />
+        {flashing ? <ReactionFlashIcon flash={flash} className="h-6 w-6" /> : <Icon className="h-6 w-6" aria-hidden="true" />}
         {unread > 0 && (
           <Badge variant="brand" className="absolute -top-1 left-3.5 ring-2 ring-sidebar" data-testid="mobile-tab-unread">
             {unread > 99 ? '99+' : unread}

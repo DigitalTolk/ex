@@ -91,7 +91,7 @@ export function ConversationView() {
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const { setActiveConversation, setActiveThread } = useUnread();
-  const quickReactions = useFrequentEmojis(3);
+  const quickReactions = useFrequentEmojis(6);
   const { setActiveParent } = useNotifications();
   const { data: conversation, error: conversationError, isLoading: conversationLoading } = useConversation(id);
   // The sidebar's name for this chat, shown while the conversation loads.

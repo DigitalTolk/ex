@@ -18,7 +18,6 @@ interface Props {
   channel: UserChannel;
   hasUnread: boolean;
   // Replies in threads the user is in are unread: the row shows a dot.
-  threadUnread?: boolean;
   // Unread messages that actually ALERTED this user (mentions, keywords,
   // "all messages" level — the server's notification decision). Only this
   // drives the numeric badge; plain unread shows the availability dot.
@@ -38,7 +37,6 @@ interface Props {
 export function ChannelRow({
   channel,
   hasUnread,
-  threadUnread = false,
   notifyCount = 0,
   onClose,
   draggable,
@@ -127,19 +125,11 @@ export function ChannelRow({
             flush to the right edge (the kebab is unused there — a long-press
             opens that menu) and the badge sits just left of it.
             pointer-events-none keeps the row clickable. */}
-        {notifyCount > 0 || threadUnread ? (
+        {notifyCount > 0 ? (
           <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 touch:opacity-100 mobile:right-11">
-            {notifyCount > 0 ? (
-              <Badge variant="brand" className="text-[11px]" data-testid={`channel-unread-badge-${channel.channelID}`}>
-                {notifyCount > 99 ? '99+' : notifyCount}
-              </Badge>
-            ) : (
-              <span
-                aria-label="Unread thread replies"
-                data-testid={`channel-unread-dot-${channel.channelID}`}
-                className="h-2 w-2 rounded-full bg-brand"
-              />
-            )}
+            <Badge variant="brand" className="text-[11px]" data-testid={`channel-unread-badge-${channel.channelID}`}>
+              {notifyCount > 99 ? '99+' : notifyCount}
+            </Badge>
           </span>
         ) : channel.muted ? (
           <BellOff

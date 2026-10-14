@@ -16,7 +16,9 @@ import {
   useSetActivityItemsRead,
 } from './useActivity';
 import { queryKeys } from '@/lib/query-keys';
+import { getReactionFlash, resetReactionFlashForTests } from '@/stores/reaction-flash';
 import type { ActivityFeed } from '@/types';
+import { badgeUnread } from '@/lib/activity-feed';
 
 vi.mock('@/lib/api', async (orig) => ({ ...(await orig<object>()), apiFetch: vi.fn() }));
 vi.mock('@/lib/toast', () => ({ showToast: vi.fn() }));
@@ -275,6 +277,24 @@ describe('activity events', () => {
     expect(invalidate).not.toHaveBeenCalled();
   });
 
+  it('activity.new with a reaction flashes the bell and adds the item without counting it', () => {
+    resetReactionFlashForTests();
+    const client = makeClient();
+    client.setQueryData(queryKeys.activity(), seeded());
+    applyActivityNewEvent(client, { item: { id: 'r', type: 'reaction', emoji: ':tada:', read: false } });
+    expect(getReactionFlash()?.emoji).toBe(':tada:');
+    const feed = client.getQueryData<ActivityFeed>(queryKeys.activity());
+    expect(feed?.items.map((i) => i.id)).toEqual(['r', 'a']);
+    expect(feed?.unread).toBe(2);
+    // The badge leaves the reaction out.
+    expect(badgeUnread(feed!)).toBe(1);
+    // A reaction event without an emoji is added quietly.
+    resetReactionFlashForTests();
+    applyActivityNewEvent(client, { item: { id: 'r2', type: 'reaction', read: false } });
+    expect(getReactionFlash()).toBeNull();
+    resetReactionFlashForTests();
+  });
+
   it('activity.new refetches when there is no item, no cache, or a fetch in flight', () => {
     const client = makeClient();
     const invalidate = vi.spyOn(client, 'invalidateQueries');
@@ -325,5 +345,11 @@ describe('useActivityUnread', () => {
     expect(result.current).toBe(0);
     resolve({ items: [], unread: 7, unreadByType: {} });
     await waitFor(() => expect(result.current).toBe(7));
+  });
+
+  it('leaves reactions out of the count', async () => {
+    vi.mocked(apiFetch).mockResolvedValue({ items: [], unread: 5, unreadByType: { reaction: 2, mention: 3 } } as never);
+    const { result } = renderHook(() => useActivityUnread(), { wrapper: wrapperFor(makeClient()) });
+    await waitFor(() => expect(result.current).toBe(3));
   });
 });

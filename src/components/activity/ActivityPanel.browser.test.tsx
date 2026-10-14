@@ -334,7 +334,8 @@ describe('ActivityPanel', () => {
     const screen = await renderPanel();
     await vi.waitFor(() => expect(rows()).toHaveLength(3));
     expect(document.querySelector('[data-testid="activity-filter-dm-dot"]')).not.toBeNull();
-    expect(document.querySelector('[data-testid="activity-filter-reaction-dot"]')).not.toBeNull();
+    // Reactions never dot: they flash on the bell as they land.
+    expect(document.querySelector('[data-testid="activity-filter-reaction-dot"]')).toBeNull();
     expect(document.querySelector('[data-testid="activity-filter-mention-dot"]')).toBeNull();
     expect(document.querySelector('[data-testid="activity-filter-all-dot"]')).toBeNull();
     // The dot is announced through the tab's name.
@@ -505,6 +506,19 @@ describe('ActivityPanel', () => {
     expect(document.body.textContent).not.toContain('before the edit');
     // The feed itself was left alone.
     expect(calls('/api/v1/activity')).toHaveLength(1);
+  });
+
+  it('"Remind me about this" on a row opens the reminder dialog, which closes on cancel', async () => {
+    mockApi({ items: [item({ id: 'a', type: 'mention' })] });
+    const screen = await renderPanel();
+    await vi.waitFor(() => expect(rows()).toHaveLength(1));
+    screen.getByTestId('activity-row-more').first().element().click();
+    await screen.getByTestId('activity-menu-remind').click();
+    await expect.element(screen.getByTestId('reminder-dialog')).toBeVisible();
+    // Escape rather than the Cancel button: on a phone the dialog is a tall
+    // sheet and the button can sit below the fold.
+    await userEvent.keyboard('{Escape}');
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-dialog"]')).toBeNull());
   });
 
   it('opens a reminder without a navigate callback', async () => {

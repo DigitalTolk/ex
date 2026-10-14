@@ -83,7 +83,7 @@ export function ThreadPanel({
   // Most-used emoji shelf for the message action bar — same source the
   // channel/conversation message lists use, so the thread sidebar shows
   // (and live-reorders) the same popular reactions.
-  const quickReactions = useFrequentEmojis(3);
+  const quickReactions = useFrequentEmojis(6);
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const activeEditingMessage = isMobile ? editingMessage : null;
 

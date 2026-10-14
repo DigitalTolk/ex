@@ -239,9 +239,9 @@ describe('ChannelRow', () => {
     expect(screen.getByTestId('channel-row-ch-1').querySelector('a')).toHaveClass('font-bold');
   });
 
-  it('shows a dot for unread replies in a thread the user is in', () => {
-    renderRow(makeChannel({ channelID: 'ch-1' }), true, { threadUnread: true, notifyCount: 0 });
-    expect(screen.getByTestId('channel-unread-dot-ch-1')).toHaveAttribute('aria-label', 'Unread thread replies');
+  it('shows nothing but the bold name for plain unread: thread replies belong to Threads and Activity', () => {
+    renderRow(makeChannel({ channelID: 'ch-1' }), true, { notifyCount: 0 });
+    expect(screen.queryByTestId('channel-unread-dot-ch-1')).toBeNull();
     expect(screen.queryByTestId('channel-unread-badge-ch-1')).toBeNull();
   });
 

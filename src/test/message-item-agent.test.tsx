@@ -99,7 +99,10 @@ function renderItem(message: Message, extra: Partial<Parameters<typeof MessageIt
   // The hover toolbar mounts on hover (MessageItem): hover the first row so
   // the tests can reach its actions the way a pointer user does.
   const row = result.container.querySelector('[data-message-id]');
-  if (row) fireEvent.mouseEnter(row);
+  if (row) {
+    fireEvent.pointerOver(row, { pointerType: 'mouse' });
+    fireEvent.mouseEnter(row);
+  }
   return result;
 }
 
