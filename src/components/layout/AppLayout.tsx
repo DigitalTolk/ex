@@ -355,7 +355,6 @@ export function AppLayout({ children }: AppLayoutProps) {
             <AppTopBar
               onOpenChannels={tier === 'compact' ? () => setCompactSidebarToggled((v) => !v) : openChannelsWithAnimation}
               channelsButtonHidden={tier === 'compact' ? false : isHome || mobileChannelsOpen}
-              centreOffset={tier === 'full' ? sidebarWidth : 0}
             />
           </div>
           <div
