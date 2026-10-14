@@ -100,11 +100,15 @@ describe('resizable sidebar (desktop)', () => {
     expect(sidebarRect().width).toBe(SIDEBAR_WIDTH.defaultWidth);
 
     const handle = document.querySelector('[data-testid="sidebar-resize-handle"]')!;
-    dragHandle(handle, 288, 348);
+    // The default sits near the top of the range, so drag it narrower.
+    dragHandle(handle, 400, 340);
     // Continuous pointer events batch their state flush — poll the layout.
-    await expect.poll(() => sidebarRect().width).toBe(SIDEBAR_WIDTH.defaultWidth + 60);
+    await expect.poll(() => sidebarRect().width).toBe(SIDEBAR_WIDTH.defaultWidth - 60);
     // Persisted for the next session.
-    expect(localStorage.getItem(SIDEBAR_WIDTH.key)).toBe(String(SIDEBAR_WIDTH.defaultWidth + 60));
+    expect(localStorage.getItem(SIDEBAR_WIDTH.key)).toBe(String(SIDEBAR_WIDTH.defaultWidth - 60));
+    // And still a little room to grow past the default.
+    dragHandle(handle, 340, 440);
+    await expect.poll(() => sidebarRect().width).toBe(SIDEBAR_WIDTH.defaultWidth + 40);
   });
 
   it('clamps at both bounds', async () => {

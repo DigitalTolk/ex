@@ -5,6 +5,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { MessageItem } from './MessageItem';
 import type { Message } from '@/types';
 import { usePresenceStore } from '@/stores/presence';
+import { applyLayoutTierClasses } from '@/lib/device';
 
 const mockEditMutate = vi.fn();
 const mockDeleteMutate = vi.fn();
@@ -44,12 +45,9 @@ function renderWithProviders(ui: React.ReactElement) {
   // The hover toolbar mounts on hover (MessageItem): hover the row so the
   // tests can reach its actions the way a pointer user does.
   const row = result.container.querySelector('[data-message-id]');
-  // A real mouse hover is a pointerover first, then mouseenter; the row only
-  // treats the latter as a hover after a mouse (not a finger) was seen.
-  if (row) {
-    fireEvent.pointerOver(row, { pointerType: 'mouse' });
-    fireEvent.mouseEnter(row);
-  }
+  // A hover is a mouse pointer entering the row (its pointer event's type
+  // says it is a mouse, not a finger).
+  if (row) fireEvent.pointerEnter(row, { pointerType: 'mouse' });
   return result;
 }
 
@@ -674,22 +672,56 @@ describe('MessageItem', () => {
         );
         const row = container.querySelector('[data-message-id]') as HTMLElement;
         // renderWithProviders hovers the row; put the pointer back outside.
-        fireEvent.mouseLeave(row);
+        fireEvent.pointerLeave(row, { pointerType: 'mouse' });
         expect(screen.queryByTestId('message-actions-trigger')).not.toBeInTheDocument();
 
         // A tap: the touch pointer arrives, then the browser replays mouseenter.
-        fireEvent.pointerOver(row, { pointerType: 'touch' });
+        fireEvent.pointerEnter(row, { pointerType: 'touch' });
         fireEvent.mouseEnter(row);
         expect(screen.queryByTestId('message-actions-trigger')).not.toBeInTheDocument();
         expect(row.dataset.hovered).toBeUndefined();
+        fireEvent.pointerLeave(row, { pointerType: 'touch' });
+
+        // A replayed mouseenter with no pointer event before it on this row
+        // (the touch landed while the list scrolled and rows ignored it, or
+        // the row mounted under the finger) is no hover either.
+        fireEvent.mouseEnter(row);
+        expect(row.dataset.hovered).toBeUndefined();
 
         // The trackpad itself still hovers.
-        fireEvent.pointerOver(row, { pointerType: 'mouse' });
-        fireEvent.mouseEnter(row);
+        fireEvent.pointerEnter(row, { pointerType: 'mouse' });
         expect(screen.getByTestId('message-actions-trigger')).toBeInTheDocument();
         expect(row.dataset.hovered).toBe('true');
       } finally {
         delete window.__EX_POINTER_DEVICE__;
+      }
+    });
+
+    // A phone keeps its touch UI with a pointer attached: the iPhone
+    // simulator hands the Mac's cursor to the page as a real mouse, and its
+    // clicks must not light the row up the way a desktop hover does.
+    it('never hovers a row on the phone tier, even for a mouse pointer', () => {
+      const originalWidth = window.innerWidth;
+      const setWidth = (width: number) => Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+      setWidth(390);
+      applyLayoutTierClasses();
+      try {
+        const { container } = renderWithProviders(
+          <MessageItem
+            message={makeMessage()}
+            authorName="Alice"
+            isOwn={false}
+            channelId="channel-1"
+            currentUserId="user-1"
+          />,
+        );
+        const row = container.querySelector('[data-message-id]') as HTMLElement;
+        fireEvent.pointerEnter(row, { pointerType: 'mouse' });
+        expect(row.dataset.hovered).toBeUndefined();
+        expect(screen.queryByTestId('message-actions-trigger')).not.toBeInTheDocument();
+      } finally {
+        setWidth(originalWidth);
+        applyLayoutTierClasses();
       }
     });
 

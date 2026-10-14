@@ -4,8 +4,11 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/pubsub"
 )
 
 // recordingActivity captures what the fan-out hands to the Activity tab.
@@ -200,5 +203,84 @@ func TestNotificationService_NoActivityForMachineMembers(t *testing.T) {
 
 	if len(rec.items) != 1 || rec.items["u-bob"] == nil {
 		t.Fatalf("items = %v, want only the human member", rec.items)
+	}
+}
+
+// An item is dated by its message, not by the fan-out: a user who read the
+// thread or DM right as the message arrived has read past it, however late
+// the asynchronous fan-out writes the item.
+func TestNotificationService_ActivityDatedByMessage(t *testing.T) {
+	svc, _, _, conv, _, users := setupNotifier(t)
+	rec := &recordingActivity{}
+	svc.SetActivityRecorder(rec)
+
+	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	conv.conversations["c1"] = &model.Conversation{ID: "c1", Type: model.ConversationTypeDM, ParticipantIDs: []string{"u-author", "u-other"}}
+	sent := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+
+	svc.NotifyForMessage(context.Background(), &model.Message{ID: "m1", ParentID: "c1", AuthorID: "u-author", Body: "quick call?", CreatedAt: sent}, ParentConversation, nil)
+
+	if got := rec.items["u-other"]; got == nil || !got.CreatedAt.Equal(sent) {
+		t.Fatalf("item = %+v, want it dated %v", got, sent)
+	}
+}
+
+// A reply in a thread you're in is listed in Activity even with thread-reply
+// notifications off, so it must also make the thread unread in /threads:
+// both views answer "what's new" from the same decision.
+func TestNotificationService_ThreadUnreadFollowsActivity(t *testing.T) {
+	svc, pub, members, _, chans, users, msgs, _ := setupNotifierWithMessagesAndFollows(t)
+	ctx := context.Background()
+	rec := &recordingActivity{}
+	svc.SetActivityRecorder(rec)
+	stateStore := newMockUserStateStore()
+	svc.SetUserStateService(NewUserStateService(stateStore, nil))
+
+	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "general", Slug: "general", Type: model.ChannelTypePublic}
+	quiet := model.DefaultNotificationSettings()
+	quiet.ThreadReplies = false
+	users.users["u-root"] = userWith("u-root", quiet)
+	users.users["u-replier"] = userWith("u-replier", model.DefaultNotificationSettings())
+	users.users["u-bystander"] = userWith("u-bystander", model.DefaultNotificationSettings())
+	// A bot in the thread with replies off: not alerted, and nobody reads a
+	// machine's Activity, so nothing marks its thread either.
+	bot := userWith("bot-1", quiet)
+	bot.IsBot = true
+	users.users["bot-1"] = bot
+	for _, uid := range []string{"u-root", "u-replier", "u-bystander", "bot-1"} {
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
+	msgs.messages["ch1#m-root"] = &model.Message{ID: "m-root", ParentID: "ch1", AuthorID: "u-root", Body: "ask", CreatedAt: time.Now()}
+	msgs.messages["ch1#m-bot"] = &model.Message{ID: "m-bot", ParentID: "ch1", ParentMessageID: "m-root", AuthorID: "bot-1", Body: "ack", CreatedAt: time.Now()}
+
+	root := &model.Message{ID: "m-root", ParentID: "ch1", AuthorID: "u-root", Body: "ask", ReplyCount: 2, CreatedAt: time.Now()}
+	svc.NotifyForMessage(ctx, &model.Message{
+		ID: "m-r1", ParentID: "ch1", AuthorID: "u-replier", ParentMessageID: "m-root", Body: "reply", CreatedAt: time.Now(),
+	}, ParentChannel, root)
+
+	if got := rec.items["u-root"]; got == nil || got.Type != model.ActivityThreadReply {
+		t.Fatalf("root author item = %+v, want a thread reply", got)
+	}
+	if _, ok := stateStore.rows[stateStore.key("u-root", model.UserStateThreadNotification, "m-root")]; !ok {
+		t.Fatal("the root author's thread must be unread in /threads too")
+	}
+	for _, uid := range []string{"u-bystander", "bot-1"} {
+		if _, ok := stateStore.rows[stateStore.key(uid, model.UserStateThreadNotification, "m-root")]; ok {
+			t.Fatalf("%s is not in the thread's Activity and must get no marker", uid)
+		}
+	}
+	// No alert went out (thread replies are off), but the root author's
+	// /threads list still patches live.
+	if kinds := publishedKinds(pub); kinds[pubsub.UserChannel("u-root")] != "" {
+		t.Fatalf("root author was alerted: %v", kinds)
+	}
+	updated := false
+	for _, p := range pub.published {
+		if p.channel == pubsub.UserChannel("u-root") && p.event.Type == events.EventThreadUpdated {
+			updated = true
+		}
+	}
+	if !updated {
+		t.Fatal("expected a thread.updated patch for the root author")
 	}
 }

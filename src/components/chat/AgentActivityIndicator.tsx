@@ -37,7 +37,10 @@ export function AgentActivityIndicator({ parentID, userMap }: Props) {
       }
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setExpanded(false);
+      if (e.key !== 'Escape') return;
+      // The popover is on top: the key is its (a panel beside it stays open).
+      e.preventDefault();
+      setExpanded(false);
     };
     document.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);

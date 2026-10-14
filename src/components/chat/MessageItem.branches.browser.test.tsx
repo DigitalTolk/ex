@@ -6,17 +6,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { MessageItem } from './MessageItem';
 import { dispatchEditMessage } from '@/lib/window-events';
 import type { Message } from '@/types';
-
-// Hover without moving the browser's one real mouse (other files run in
-// parallel and a real pointer crossing their rows makes hover-only checks
-// flake): React derives onMouseEnter from mouseover, and a tick lets the
-// hover state flush.
-async function hoverRow(row: Element | null) {
-  row?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
-  row?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-  await new Promise((r) => setTimeout(r, 20));
-}
-
+import { hoverRow } from '@/test/hover';
 
 // Targeted branch coverage for MessageItem — drives the desktop hover
 // toolbar/menu, inline edit submit, copy-link deep-link arms, pinned

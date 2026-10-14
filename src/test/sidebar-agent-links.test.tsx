@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -41,6 +41,9 @@ vi.mock('@/hooks/useConversations', () => ({
   useSearchUsers: () => ({ data: [] }),
 }));
 
+const isMobileRef = vi.hoisted(() => ({ value: false }));
+vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => isMobileRef.value }));
+
 vi.mock('@/lib/api', () => ({
   apiFetch: vi.fn(),
   getAccessToken: () => null,
@@ -81,5 +84,20 @@ describe('Sidebar — Agents hub entry', () => {
     const ai = screen.getByRole('link', { name: 'Agents' });
     expect(ai.className).not.toContain('font-semibold');
     expect(ai).not.toHaveAttribute('aria-current');
+  });
+
+  // The hub isn't built for a phone yet: the entry is gone there, the other
+  // top-level pages stay.
+  describe('on a phone', () => {
+    afterEach(() => {
+      isMobileRef.value = false;
+    });
+
+    it('has no Agents entry', () => {
+      isMobileRef.value = true;
+      renderAt('/activity');
+      expect(screen.queryByRole('link', { name: 'Agents' })).not.toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Drafts' })).toBeInTheDocument();
+    });
   });
 });

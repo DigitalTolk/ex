@@ -84,3 +84,30 @@ func TestNotification_MarkThreadNotification_NoUserState(t *testing.T) {
 	// msg with empty ParentMessageID → early return.
 	svc.markThreadNotification(context.Background(), "u1", &model.Message{}, ParentChannel)
 }
+
+// A group conversation's title name: no store or an unknown parent type gives
+// no name; the name cache serves a hit and is filled on a miss.
+func TestNotification_ParentDisplayName_ConversationNames(t *testing.T) {
+	ctx := context.Background()
+	if got := (&NotificationService{}).parentDisplayName(ctx, "c1", ParentConversation); got != "" {
+		t.Fatalf("no conversation store: got %q, want empty", got)
+	}
+	if got := (&NotificationService{}).parentDisplayName(ctx, "x1", "thread"); got != "" {
+		t.Fatalf("unknown parent type: got %q, want empty", got)
+	}
+
+	svc, _, _, conv, _, _ := setupNotifier(t)
+	nc := &stubNameCache{hits: map[string]string{"conv:c-cached": "Cached crew"}, sets: map[string]string{}}
+	svc.SetNameCache(nc)
+	conv.conversations["c-group"] = &model.Conversation{ID: "c-group", Type: model.ConversationTypeGroup, Name: "Release crew"}
+
+	if got := svc.parentDisplayName(ctx, "c-cached", ParentConversation); got != "Cached crew" {
+		t.Fatalf("cached conversation name = %q, want Cached crew", got)
+	}
+	if got := svc.parentDisplayName(ctx, "c-group", ParentConversation); got != "Release crew" {
+		t.Fatalf("conversation name = %q, want Release crew", got)
+	}
+	if nc.sets["conv:c-group"] != "Release crew" {
+		t.Fatalf("conversation name not cached after a miss: %v", nc.sets)
+	}
+}

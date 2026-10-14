@@ -61,13 +61,15 @@ export function upsertUserThreadFromRoot(
 ): void {
   const replyCount = root.replyCount ?? 0;
   if (root.parentMessageID || replyCount < 1) return;
-  qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), (old) => {
-    const list = old ?? [];
+  qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), (list) => {
+    // No list loaded (never fetched, or dropped while nothing showed it): a
+    // one-row list would pass for the whole one, so leave it to the fetch.
+    if (!list) return list;
     const idx = list.findIndex((t) => t.threadRootID === root.id);
     const mine = !!currentUserId && root.authorID === currentUserId;
     // Can't confirm participation for a thread we don't already track and didn't
     // author — leave it to the refetch fallback rather than guess.
-    if (idx < 0 && !mine) return old;
+    if (idx < 0 && !mine) return list;
     const summary: ThreadSummary = {
       parentID: root.parentID,
       parentType: root.parentType === 'conversation' ? 'conversation' : 'channel',
@@ -93,8 +95,9 @@ export function upsertUserThreadFromRoot(
 // didn't author used to wait on an eventually-consistent ListUserThreads refetch.
 export function upsertUserThreadRow(qc: QueryClient, summary: ThreadSummary): void {
   if (!summary.threadRootID) return;
-  qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), (old) => {
-    const list = old ?? [];
+  qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), (list) => {
+    // As above: patch a loaded list, never stand in for one.
+    if (!list) return list;
     const idx = list.findIndex((t) => t.threadRootID === summary.threadRootID);
     const next = idx >= 0 ? [...list.slice(0, idx), summary, ...list.slice(idx + 1)] : [summary, ...list];
     return next.sort((a, b) => b.latestActivityAt.localeCompare(a.latestActivityAt));

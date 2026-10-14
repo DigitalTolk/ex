@@ -520,6 +520,19 @@
     pointer-events: none;
   }
 
+  /* A sideways swipe surface (lib/swipe) keeps its content scrolling
+     vertically while the swipe takes the sideways moves. The browser leaves a
+     move to the page only where touch-action rules panning that way out, and
+     each scroll container starts that rule afresh — so the vertical scrollers
+     inside a surface restate pan-y. Without it a slow swipe over a message
+     list was claimed by the browser a few pixels in and sprang back.
+     Sideways scrollers (code blocks, tables) are left alone and keep their
+     own pan. */
+  [data-swipe-surface="x"],
+  [data-swipe-surface="x"] :is(.overflow-y-auto, .overflow-y-scroll, [data-virtuoso-scroller], [data-slot="scroll-area-viewport"]) {
+    touch-action: pan-y;
+  }
+
   html:not(.dark) [data-app-chrome="true"] .text-white,
   html:not(.dark) [data-app-chrome="true"] .text-gray-200,
   html:not(.dark) [data-app-chrome="true"] .text-gray-300 {
@@ -539,15 +552,19 @@
     background-color: var(--color-sidebar-accent);
   }
 
-  html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/10:hover,
-  html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/5:hover,
-  html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/20:hover {
-    background-color: var(--color-sidebar-accent);
-  }
+  /* Gated like Tailwind's own hover: variant: a phone keeps :hover on the
+     last element tapped, which lit a tapped sidebar row as if hovered. */
+  @media (hover: hover) {
+    html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/10:hover,
+    html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/5:hover,
+    html:not(.dark) [data-app-chrome="true"] .hover\:bg-white\/20:hover {
+      background-color: var(--color-sidebar-accent);
+    }
 
-  html:not(.dark) [data-app-chrome="true"] .hover\:text-white:hover,
-  html:not(.dark) [data-app-chrome="true"] .hover\:text-gray-300:hover {
-    color: var(--color-sidebar-foreground);
+    html:not(.dark) [data-app-chrome="true"] .hover\:text-white:hover,
+    html:not(.dark) [data-app-chrome="true"] .hover\:text-gray-300:hover {
+      color: var(--color-sidebar-foreground);
+    }
   }
 
   html:not(.dark) [data-app-chrome="true"] .bg-white\/10 {

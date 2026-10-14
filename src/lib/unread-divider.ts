@@ -1,4 +1,5 @@
 import type { UnreadAnchor } from '@/lib/read-position';
+import { isOwnMessage } from '@/lib/message-users';
 import type { Message } from '@/types';
 
 // Which messages advanced the parent's unread counter — the client mirror of
@@ -10,12 +11,21 @@ export function countsTowardUnread(m: Message, parentType: 'channel' | 'conversa
   return parentType !== 'channel' || !m.system;
 }
 
+// isNewTo: a reader's own messages are never "new" to them. The server never
+// counts them (posting marks the author caught up), so the line, the banner
+// and the pill skip them too.
+function isNewTo(m: Message, parentType: 'channel' | 'conversation', currentUserID: string | undefined): boolean {
+  return countsTowardUnread(m, parentType) && !isOwnMessage(m, currentUserID);
+}
+
 // resolveUnreadDivider finds the first unread message in `messages`
 // (chronological) for an anchor, or null when it isn't among the loaded ones
-// (older than the oldest loaded page, or not arrived yet).
-// currentUserID: a reader's own messages are never "new" to them. It matters
-// for the time anchor (threads): after the seen time was noted, the reader's
-// own reply is the first thing newer than it, and the line sat above it.
+// (older than the oldest loaded page, or not arrived yet). A count — the
+// server's unread count when the chat opened — counts back over the messages
+// that count towards it: other people's. Counting the reader's own posts too
+// put the line above a post they made after opening. A thread's time anchor
+// likewise skips the reader's own replies: after the seen time was noted, a
+// reply of theirs is the first thing newer than it.
 export function resolveUnreadDivider(
   anchor: UnreadAnchor,
   messages: Message[],
@@ -28,7 +38,7 @@ export function resolveUnreadDivider(
     case 'count': {
       let seen = 0;
       for (let i = messages.length - 1; i >= 0; i--) {
-        if (!countsTowardUnread(messages[i], parentType)) continue;
+        if (!isNewTo(messages[i], parentType, currentUserID)) continue;
         seen++;
         if (seen === anchor.count) return messages[i].id;
       }
@@ -36,16 +46,21 @@ export function resolveUnreadDivider(
     }
     case 'after': {
       const at = new Date(anchor.at).getTime();
-      const first = messages.find((m) => m.authorID !== currentUserID && new Date(m.createdAt).getTime() > at);
+      const first = messages.find((m) => !isOwnMessage(m, currentUserID) && new Date(m.createdAt).getTime() > at);
       return first ? first.id : null;
     }
   }
 }
 
-// unreadFrom counts the counted messages from `messageID` to the end — the
-// banner's "N new messages".
-export function unreadFrom(messages: Message[], messageID: string, parentType: 'channel' | 'conversation'): number {
+// unreadFrom counts the new messages from `messageID` to the end — the
+// banner's and pill's "N new messages" — leaving out the reader's own.
+export function unreadFrom(
+  messages: Message[],
+  messageID: string,
+  parentType: 'channel' | 'conversation',
+  currentUserID?: string,
+): number {
   const start = messages.findIndex((m) => m.id === messageID);
   if (start < 0) return 0;
-  return messages.slice(start).filter((m) => countsTowardUnread(m, parentType)).length;
+  return messages.slice(start).filter((m) => isNewTo(m, parentType, currentUserID)).length;
 }

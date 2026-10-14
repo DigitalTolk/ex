@@ -36,6 +36,18 @@ describe('resolveUnreadDivider', () => {
     expect(resolveUnreadDivider({ kind: 'count', count: 9 }, messages, 'channel')).toBeNull();
   });
 
+  // The server never counts the reader's own posts as unread; a post they
+  // made after opening the chat must not take a place in the count, or the
+  // line lands on it.
+  it('counts back over other people\'s messages only', () => {
+    const withMine = [msg('m1'), msg('m2'), msg('m3', { authorID: 'me' })];
+    expect(resolveUnreadDivider({ kind: 'count', count: 1 }, withMine, 'channel', 'me')).toBe('m2');
+    expect(resolveUnreadDivider({ kind: 'count', count: 2 }, withMine, 'channel', 'me')).toBe('m1');
+    // A webhook post its creator set up is not the reader's own.
+    const hook = [msg('m1', { authorID: 'me', webhookUsername: 'ci' })];
+    expect(resolveUnreadDivider({ kind: 'count', count: 1 }, hook, 'channel', 'me')).toBe('m1');
+  });
+
   it('threads: the first reply after the seen time, null when nothing is newer', () => {
     expect(resolveUnreadDivider({ kind: 'after', at: '2026-10-07T09:00:02Z' }, messages, 'channel')).toBe('m3');
     expect(resolveUnreadDivider({ kind: 'after', at: '2026-10-07T10:00:00Z' }, messages, 'channel')).toBeNull();
@@ -56,5 +68,11 @@ describe('unreadFrom', () => {
     expect(unreadFrom(messages, 'm1', 'channel')).toBe(2);
     expect(unreadFrom(messages, 'm1', 'conversation')).toBe(3);
     expect(unreadFrom(messages, 'nope', 'channel')).toBe(0);
+  });
+
+  it('leaves the reader\'s own posts out of "N new messages"', () => {
+    const messages = [msg('m1'), msg('m2', { authorID: 'me' }), msg('m3'), msg('m4', { authorID: 'me' })];
+    expect(unreadFrom(messages, 'm1', 'channel', 'me')).toBe(2);
+    expect(unreadFrom(messages, 'm1', 'channel')).toBe(4);
   });
 });

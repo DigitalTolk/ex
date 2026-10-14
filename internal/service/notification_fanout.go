@@ -334,8 +334,16 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	// Activity-tab entries share everything but their id, type and mention
 	// kind; recipients get a copy of this template.
 	activityItems := make(map[string]*model.ActivityItem)
+	// An item is dated by its message, not by this fan-out: its read state
+	// compares that date with how far the user has read the parent or
+	// thread, and a user watching the thread when the reply arrived has read
+	// past the message even though this asynchronous write lands later.
+	activityCreatedAt := msg.CreatedAt
+	if activityCreatedAt.IsZero() {
+		activityCreatedAt = baseNotif.CreatedAt
+	}
 	activityTemplate := model.ActivityItem{
-		CreatedAt:       baseNotif.CreatedAt,
+		CreatedAt:       activityCreatedAt,
 		MessageID:       msg.ID,
 		ParentID:        msg.ParentID,
 		ParentType:      parentType,
@@ -370,6 +378,11 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		mobile    bool
 	}
 	var plans []alertPlan
+	// Thread replies: everyone the reply makes the thread unread for. That is
+	// every alerted recipient plus everyone the reply is listed for in
+	// Activity, alerted or not (thread-reply notifications off), so the
+	// Threads view and the Activity tab always agree on what is unread.
+	var threadUnread []string
 	for _, uid := range snap.memberIDs {
 		eff := snap.prefs[uid]
 		r := recipientReasons{
@@ -390,13 +403,17 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			r.keyword = keywordsMatchLower(bodyLower, eff.Keywords)
 		}
 
-		if s.activity != nil && !snap.machine[uid] {
+		listed := false
+		if !snap.machine[uid] {
 			if typ, kind := activityFor(parentType, r, groupKind); typ != "" {
-				item := activityTemplate
-				item.ID = store.NewID()
-				item.Type = typ
-				item.MentionKind = kind
-				activityItems[uid] = &item
+				listed = true
+				if s.activity != nil {
+					item := activityTemplate
+					item.ID = store.NewID()
+					item.Type = typ
+					item.MentionKind = kind
+					activityItems[uid] = &item
+				}
 			}
 		}
 
@@ -415,15 +432,15 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 				mobile = eligibleAtLevel(model.NotificationLevelMentions, r)
 			}
 		}
-		if !desktop && !mobile {
-			continue
-		}
-
-		// This recipient is being alerted about the thread reply, so a
-		// notification row will surface the thread in their /threads list —
-		// include them in the live thread.updated patch below.
-		if isThreadReply && threadAudience != nil {
+		alerted := desktop || mobile
+		// A notification row will surface the thread in this recipient's
+		// /threads list — include them in the live thread.updated patch below.
+		if isThreadReply && (alerted || listed) {
+			threadUnread = append(threadUnread, uid)
 			threadAudience[uid] = true
+		}
+		if !alerted {
+			continue
 		}
 		plans = append(plans, alertPlan{uid: uid, mentioned: r.explicitMention || r.groupMention, desktop: desktop, mobile: mobile})
 	}
@@ -448,28 +465,33 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	// event was missed.
 	counts := make([]int64, len(plans))
 	haveCount := make([]bool, len(plans))
-	if len(plans) > 0 {
-		var wg sync.WaitGroup
-		sem := make(chan struct{}, notifyWriteConcurrency)
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, notifyWriteConcurrency)
+	write := func(fn func()) {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			defer safe.Recover()
+			fn()
+		}()
+	}
+	if isThreadReply {
+		for _, uid := range threadUnread {
+			write(func() { s.markThreadNotification(ctx, uid, msg, parentType) })
+		}
+	} else {
 		for i := range plans {
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(i int) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				defer safe.Recover()
-				if isThreadReply {
-					s.markThreadNotification(ctx, plans[i].uid, msg, parentType)
-					return
-				}
+			write(func() {
 				if n, ok := s.bumpNotifyCount(ctx, parentType, msg.ParentID, plans[i].uid); ok {
 					counts[i] = n
 					haveCount[i] = true
 				}
-			}(i)
+			})
 		}
-		wg.Wait()
 	}
+	wg.Wait()
 
 	// Pass 3 — build each recipient's payload and fan out: desktop publishes
 	// collected into ONE pipelined batch (they used to be one PUBLISH

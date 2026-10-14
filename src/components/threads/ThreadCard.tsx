@@ -256,7 +256,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
         {unread && (
           <span
             data-testid="thread-card-unread"
-            className="rounded-full bg-brand-strong px-2 py-0.5 text-[11px] font-semibold text-brand-foreground"
+            className="rounded-full bg-brand-strong px-2 py-0.5 text-xs font-semibold text-brand-foreground"
           >
             Unread
           </span>

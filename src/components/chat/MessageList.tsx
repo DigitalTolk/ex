@@ -206,8 +206,8 @@ function VirtuosoMessageList({
   const storedAnchor = useUnreadAnchor(readKey);
   const unreadAnchor = storedAnchor?.kind === 'count' && hasPreviousPage ? undefined : storedAnchor;
   const unreadDividerID = useMemo(
-    () => (unreadAnchor ? resolveUnreadDivider(unreadAnchor, allMessages, parentType) : null),
-    [unreadAnchor, allMessages, parentType],
+    () => (unreadAnchor ? resolveUnreadDivider(unreadAnchor, allMessages, parentType, currentUserId) : null),
+    [unreadAnchor, allMessages, parentType, currentUserId],
   );
   useEffect(() => {
     if (!readKey || unreadAnchor?.kind !== 'count' || !unreadDividerID) return;
@@ -572,7 +572,7 @@ function VirtuosoMessageList({
   }, [dividerIndex, hasNextPage, fetchNextPage, scrollToDivider]);
 
   const unreadCount = unreadDividerID
-    ? unreadFrom(allMessages, unreadDividerID, parentType)
+    ? unreadFrom(allMessages, unreadDividerID, parentType, currentUserId)
     : unreadAnchor?.kind === 'count'
       ? unreadAnchor.count
       : 0;

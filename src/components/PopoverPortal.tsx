@@ -98,7 +98,10 @@ export function PopoverPortal({
       onDismiss?.();
     }
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onDismiss?.();
+      if (e.key !== 'Escape') return;
+      // The popover is on top: the key is its (a panel under it stays open).
+      e.preventDefault();
+      onDismiss?.();
     }
     document.addEventListener('pointerdown', onDown);
     document.addEventListener('keydown', onKey);

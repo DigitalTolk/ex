@@ -341,6 +341,25 @@ describe('MessageList window opened from a link', () => {
   });
 });
 
+// A reader's own posts are never new to them: the server leaves them out of
+// the unread count, so the line and the "N new messages" counts do too.
+describe('MessageList unread line and the reader\'s own posts', () => {
+  it('never puts the line above, or counts, a post of the reader\'s', () => {
+    // Two unread from someone else, then the reader posted twice.
+    const items = [
+      msg(12, { authorID: 'u-1' }),
+      msg(11, { authorID: 'u-1' }),
+      ...pageOf(1, 10).items,
+    ];
+    setUnreadAnchor('ch-1', { kind: 'count', count: 2 });
+    geo.lineTop = -300; // above the view: the banner is up
+    renderList({ pages: [{ items }] });
+    frames();
+    expect(lineAbove()).toContain('message 9');
+    expect(screen.getByTestId('unread-banner')).toHaveTextContent('2 new messages');
+  });
+});
+
 describe('MessageList unread line retires', () => {
   it('once the line has been seen (the divider reports it) the banner goes and the row stays, invisible', () => {
     type IOCallback = (entries: Array<{ isIntersecting: boolean }>) => void;
@@ -353,19 +372,29 @@ describe('MessageList unread line retires', () => {
       takeRecords() { return []; }
     });
     try {
+      // The reader is at this window (jsdom's never has focus).
+      vi.spyOn(document, 'hasFocus').mockReturnValue(true);
       setUnreadAnchor('ch-1', { kind: 'message', messageID: 'm-04' });
       geo.lineTop = -300; // above the view: the banner is up
       renderList();
       frames();
       expect(screen.getByTestId('unread-banner')).toBeInTheDocument();
       act(() => callbacks[0]([{ isIntersecting: true }]));
+      // Seen; it stays put while the reader is here, and retires once they
+      // switch to another window.
       act(() => vi.advanceTimersByTime(3500));
+      expect(isUnreadSeen('ch-1')).toBe(false);
+      act(() => {
+        window.dispatchEvent(new Event('blur'));
+      });
+      act(() => vi.advanceTimersByTime(500));
       expect(isUnreadSeen('ch-1')).toBe(true);
       expect(screen.queryByTestId('unread-banner')).toBeNull();
       expect(screen.getByTestId('unread-divider')).toHaveAttribute('data-retired', 'true');
       expect(lineAbove()).toContain('message 4');
     } finally {
       vi.unstubAllGlobals();
+      vi.restoreAllMocks();
     }
   });
 });

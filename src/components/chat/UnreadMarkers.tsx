@@ -1,18 +1,27 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp } from 'lucide-react';
 
-// Once the line has been in view this long it has done its job: it fades and
-// `onSeen` retires it (the anchor is cleared, so the banner/pill go too).
-const UNREAD_DIVIDER_LINGER_MS = 3000;
+// The line stays until the reader has had it in front of them: it retires
+// when they leave the window after seeing it (another app, another tab), or
+// once it has been on screen this long. Retiring fades it, then `onSeen`
+// clears the anchor (the banner/pill go too).
+export const UNREAD_DIVIDER_LINGER_MS = 30 * 60 * 1000;
 const UNREAD_DIVIDER_FADE_MS = 500;
+
+// Whether the reader is looking at this window at all.
+function windowLooked(): boolean {
+  return document.visibilityState === 'visible' && document.hasFocus();
+}
 
 // UnreadDivider is the "New messages" line above the first unread message:
 // centred like the day divider, in red, and inset so it starts and ends
 // where the messages do rather than running to the edges. The default inset
 // lines it up with the main list's avatars (row px-4 + item px-3 = 28px);
-// the thread panel passes its own. With `onSeen`, the line fades out 3s
-// after it comes into view and then reports it; the owner then renders it
-// `retired` — same box, invisible — so the rows around it never move.
+// the thread panel passes its own. With `onSeen`, the line is "seen" once it
+// is on screen while the window is in front; from then it fades out when the
+// reader leaves the window or after UNREAD_DIVIDER_LINGER_MS, and reports it.
+// The owner then renders it `retired` — same box, invisible — so the rows
+// around it never move.
 export function UnreadDivider({
   inset = 'px-7',
   onSeen,
@@ -32,19 +41,48 @@ export function UnreadDivider({
   useEffect(() => {
     const el = ref.current;
     if (!el || !watches || typeof IntersectionObserver === 'undefined') return;
+    let onScreen = false;
+    let seen = false;
     let linger = 0;
     let fade = 0;
+    const retire = () => {
+      stopWatchingLeave();
+      window.clearTimeout(linger);
+      setFading(true);
+      fade = window.setTimeout(() => onSeenRef.current?.(), UNREAD_DIVIDER_FADE_MS);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') retire();
+    };
+    const stopWatchingLeave = () => {
+      window.removeEventListener('blur', retire);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+    // Seen: on screen with the window in front. Until then a window the
+    // reader comes back to can still make it seen.
+    const noteSeen = () => {
+      if (seen || !onScreen || !windowLooked()) return;
+      seen = true;
+      window.removeEventListener('focus', noteSeen);
+      document.removeEventListener('visibilitychange', noteSeen);
+      linger = window.setTimeout(retire, UNREAD_DIVIDER_LINGER_MS);
+      window.addEventListener('blur', retire);
+      document.addEventListener('visibilitychange', onVisibility);
+    };
     const observer = new IntersectionObserver(([entry]) => {
-      if (!entry?.isIntersecting || linger) return;
+      if (!entry?.isIntersecting) return;
       observer.disconnect();
-      linger = window.setTimeout(() => {
-        setFading(true);
-        fade = window.setTimeout(() => onSeenRef.current?.(), UNREAD_DIVIDER_FADE_MS);
-      }, UNREAD_DIVIDER_LINGER_MS);
+      onScreen = true;
+      noteSeen();
     }, { threshold: 0.5 });
     observer.observe(el);
+    window.addEventListener('focus', noteSeen);
+    document.addEventListener('visibilitychange', noteSeen);
     return () => {
       observer.disconnect();
+      window.removeEventListener('focus', noteSeen);
+      document.removeEventListener('visibilitychange', noteSeen);
+      stopWatchingLeave();
       window.clearTimeout(linger);
       window.clearTimeout(fade);
     };

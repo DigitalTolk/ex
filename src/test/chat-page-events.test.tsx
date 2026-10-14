@@ -400,7 +400,9 @@ describe('ChatPage WebSocket handlers', () => {
   });
 
   it('onThreadUpdated patches a thread the viewer did not author into /threads (participant-scoped)', () => {
-    const { qc } = renderAt('/');
+    const { qc } = renderAt('/', (client) => {
+      client.setQueryData(['userThreads'], []);
+    });
     const spy = vi.spyOn(qc, 'invalidateQueries');
     (capturedOptions.onThreadUpdated as (d: unknown) => void)({
       parentID: 'ch-1',
@@ -426,7 +428,9 @@ describe('ChatPage WebSocket handlers', () => {
   });
 
   it('onMessageEdited for my thread root patches it into /threads live (no refetch)', () => {
-    const { qc } = renderAt('/');
+    const { qc } = renderAt('/', (client) => {
+      client.setQueryData(['userThreads'], []);
+    });
     const spy = vi.spyOn(qc, 'invalidateQueries');
     // A root I authored gains a reply → replyCount bump arrives as message.edited.
     (capturedOptions.onMessageEdited as (d: unknown) => void)(

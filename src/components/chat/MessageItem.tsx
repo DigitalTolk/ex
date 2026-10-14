@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent, type MouseEvent, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent, type PointerEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Bot, Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon, AlarmClock, Eye, Mail } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -54,7 +54,8 @@ import { TaskCard } from '@/components/chat/TaskCard';
 import { parseArtifactMarker } from '@/lib/artifact-marker';
 import { parseTaskMarker } from '@/lib/task-marker';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { deviceKind } from '@/lib/device';
+import { deviceKind, isHoverPointer } from '@/lib/device';
+import { isKeyboardModality, startInputModalityTracking } from '@/lib/input-modality';
 import { usePointerDevice } from '@/hooks/usePointerDevice';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
@@ -121,12 +122,15 @@ function SheetTile({
 // the toolbar) subscribes to it: the row itself never re-renders for a hover.
 // A row render re-runs every tooltip, hover card and reaction chip in it, a
 // dozen components, and that used to happen for every row the pointer
-// crossed. The row still uses React's onMouseEnter/onMouseLeave, which treat
+// crossed. The row uses React's onPointerEnter/onPointerLeave, which treat
 // a portal (the emoji picker, a tooltip) as inside the row, so moving the
-// pointer into a picker keeps the toolbar mounted. `data-hovered` on the row
-// drives the CSS-only hover reveals (a grouped row's clock time); tracked in
-// JS rather than Tailwind group-hover because an open dropdown changes
-// pointer-events and focus and breaks CSS :hover on the row.
+// pointer into a picker keeps the toolbar mounted. Pointer events, not mouse
+// events: a finger's tap makes the browser replay mouse events, and only the
+// pointer event's own type tells a tap from a hover (isHoverPointer).
+// `data-hovered` on the row drives the CSS-only hover reveals (a grouped
+// row's clock time); tracked in JS rather than Tailwind group-hover because
+// an open dropdown changes pointer-events and focus and breaks CSS :hover on
+// the row.
 interface RowHoverState {
   hovered: boolean;
   focusWithin: boolean;
@@ -134,38 +138,13 @@ interface RowHoverState {
 // Focus inside a row pins its toolbar so a keyboard user can Tab to it. But a
 // mouse click focuses buttons too (Chrome), so clicking a quick reaction kept
 // that row's toolbar up after the pointer moved on and the next row hovered
-// showed a second one. Only keyboard-driven focus pins: the last input kind
-// is tracked the way browsers decide :focus-visible.
-let keyboardInput = false;
-// A finger tap makes the browser replay mouse events (mouseenter among them)
-// for compatibility. With a trackpad attached to an iPad the hover toolbar is
-// on, and that replay used to pop it up on every tap, over the long-press
-// sheet the tap was meant for. The pointer events that precede the replay say
-// what is really pointing, so a hover counts only after a mouse or pen. The
-// latch is window-wide, not per row: a row cannot be trusted to see the
-// touch itself (rows drop pointer-events while the list scrolls, and a
-// virtualised row can mount under a finger already down).
-let touchPointer = false;
-let inputTracked = false;
-function trackInputKind() {
-  if (inputTracked) return;
-  inputTracked = true;
-  window.addEventListener('keydown', () => {
-    keyboardInput = true;
-  }, true);
-  const notePointer = (event: Event) => {
-    touchPointer = (event as globalThis.PointerEvent).pointerType === 'touch';
-  };
-  window.addEventListener('pointerdown', (event) => {
-    keyboardInput = false;
-    notePointer(event);
-  }, true);
-  window.addEventListener('pointerover', notePointer, true);
-}
+// showed a second one. Only keyboard-driven focus pins (lib/input-modality,
+// where Escape doesn't count: closing a menu opened by a click must not pin
+// the row's toolbar open around the button focus returns to).
 // The handlers read the row element off the event (currentTarget), so the
 // store needs no refs and the row never writes one during render.
 function createRowHoverStore() {
-  trackInputKind();
+  startInputModalityTracking();
   let state: RowHoverState = { hovered: false, focusWithin: false };
   // The row last entered, so a hover ended from elsewhere (another row took
   // the pointer while this one's menu was open) can drop its flag too.
@@ -183,8 +162,8 @@ function createRowHoverStore() {
       };
     },
     get: () => state,
-    enter: (event: MouseEvent<HTMLDivElement>) => {
-      if (touchPointer) return;
+    enter: (event: PointerEvent<HTMLDivElement>) => {
+      if (!isHoverPointer(event.pointerType)) return;
       row = event.currentTarget;
       row.dataset.hovered = 'true';
       update({ hovered: true });
@@ -195,7 +174,7 @@ function createRowHoverStore() {
       update({ hovered: false });
     },
     focus: () => {
-      if (keyboardInput) update({ focusWithin: true });
+      if (isKeyboardModality()) update({ focusWithin: true });
     },
     blur: (event: FocusEvent<HTMLDivElement>) => {
       if (!event.currentTarget.contains(event.relatedTarget as Node | null)) update({ focusWithin: false });
@@ -1022,11 +1001,14 @@ function MessageItemImpl({
     <div
       id={`msg-${message.id}`}
       data-message-id={message.id}
-      onMouseEnter={hoverStore.enter}
-      onMouseLeave={hoverStore.leave}
+      onPointerEnter={hoverStore.enter}
       onFocus={hoverStore.focus}
       onBlur={hoverStore.blur}
       {...longPress.handlers}
+      onPointerLeave={() => {
+        longPress.cancel();
+        hoverStore.leave();
+      }}
       onContextMenu={(event) => {
         // Without a pointing device there is no hover toolbar to reach, so a
         // secondary click (an iPad keyboard case, or Android's long-press

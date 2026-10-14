@@ -142,6 +142,8 @@ export function ImageLightbox({
     if (!open) return;
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
+        // The lightbox is on top: the key is its (a panel under it stays open).
+        e.preventDefault();
         handleClose();
         // Esc is a keyboard interaction, which flips :focus-visible on
         // for whatever element holds focus next — usually the

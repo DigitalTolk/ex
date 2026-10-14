@@ -50,6 +50,17 @@ export function hasPointerDevice(): boolean {
   return window.__EX_POINTER_DEVICE__ === true || sawMouseInput;
 }
 
+// isHoverPointer decides whether a pointer entering an element is a hover —
+// the one test every hover affordance (row toolbar, tooltips) goes through.
+// It reads the pointer event's own type: a finger's tap makes the browser
+// replay mouse events (mouseover, mouseenter) for old pages, but never
+// pointer events, so a pointer event says what is really pointing. And the
+// phone keeps its touch UI with a mouse attached (see phoneTier above).
+export function isHoverPointer(pointerType: string): boolean {
+  if (phoneTier) return false;
+  return pointerType === 'mouse' || pointerType === 'pen';
+}
+
 // The shell sets its global BEFORE dispatching the event, so "did this change?"
 // cannot be answered by reading the global around the update — track what the
 // listeners were last told instead.

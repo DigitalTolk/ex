@@ -7,6 +7,7 @@ import { usePanelWidth } from '@/hooks/usePanelWidth';
 import { SIDE_PANEL_WIDTH } from '@/lib/panel-width';
 import { PanelResizeHandle } from '@/components/layout/PanelResizeHandle';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
+import { useEscapeClose } from '@/hooks/useEscapeClose';
 import { RIGHT_PANEL_COVER_CLASS } from './right-panel';
 
 interface SidePanelProps {
@@ -24,6 +25,8 @@ export function SidePanel({ title, ariaLabel, closeLabel, onClose, children }: S
   const { dismissing, settled, motionProps } = useSwipeDismiss('right', onClose);
   // Mounted-while-open panel: Back on mobile closes it instead of navigating.
   useMobileBackClose(true, onClose);
+  // And Escape, once nothing above it takes the key.
+  useEscapeClose(onClose);
   // Desktop rail is resizable from its left edge; the width is shared with
   // the thread panel (one persisted "right panel" width) and resettable from
   // profile settings.

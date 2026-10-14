@@ -15,6 +15,7 @@ import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { canAddMembers, canRemoveMember, roleNumber, ChannelRole } from '@/lib/roles';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
+import { useEscapeClose } from '@/hooks/useEscapeClose';
 import { usePanelWidth } from '@/hooks/usePanelWidth';
 import { MEMBER_LIST_WIDTH } from '@/lib/panel-width';
 import { PanelResizeHandle } from '@/components/layout/PanelResizeHandle';
@@ -118,6 +119,8 @@ export function MemberList({ members, channelId, channelSlug, currentUserId, cur
   // Mounted-while-open panel: Back on mobile closes it instead of navigating
   // (no-op when the caller renders it without a close handler).
   useMobileBackClose(true, onClose);
+  // And Escape, once nothing above it takes the key.
+  useEscapeClose(onClose);
   // Desktop rail is resizable from its left edge, like the side/thread
   // panels; the width persists and resets from profile settings.
   const { width: panelWidth, handleProps: panelHandleProps } = usePanelWidth(

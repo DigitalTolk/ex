@@ -329,6 +329,8 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
                 e.preventDefault();
                 if (showDropdown && items.length > 0) activate();
               } else if (e.key === 'Escape') {
+                // Leaving the search is all this Escape does.
+                e.preventDefault();
                 setOpen(false);
                 inputRef.current?.blur();
               } else if (e.key === 'ArrowDown') {

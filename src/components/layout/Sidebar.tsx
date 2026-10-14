@@ -57,6 +57,7 @@ import { useUserState } from '@/hooks/useUserState';
 import { useDrafts } from '@/hooks/useDrafts';
 import { deviceKind } from '@/lib/device';
 import { usePointerDevice } from '@/hooks/usePointerDevice';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { useCategories, useCreateCategory, useDeleteCategory, useReorderCategories, useReorderSidebar, type SidebarMoveRequest } from '@/hooks/useSidebar';
 import { groupSidebarItems, isSidebarItemUnread, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
 import { SidebarUnreadControls } from '@/components/layout/SidebarUnreadControls';
@@ -134,6 +135,8 @@ export function Sidebar({ onClose }: SidebarProps) {
   // The AI hub entry is one link for three routes, so its active state is
   // ours to compute — NavLink would only match /agents.
   const aiHubActive = isAiHubPath(location.pathname);
+  // The AI hub isn't built for a phone yet, so the entry stays off there.
+  const isMobile = useIsMobile();
   // Drag-to-reorder needs a mouse or trackpad. Without one — a phone, or an
   // iPad on its own — a hold on a row opens its menu (useRowLongPressMenu) and
   // iPadOS would start a native drag lift from that same hold.
@@ -1039,19 +1042,21 @@ export function Sidebar({ onClose }: SidebarProps) {
 
           {/* One entry for the whole AI hub — Agents, Skills and Connectors
               are tabs inside it (AiHubLayout). Lit for all three routes. */}
-          <Link
-            to={AI_HUB_HOME}
-            onClick={onClose}
-            aria-current={aiHubActive ? 'page' : undefined}
-            className={`relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
-              aiHubActive
-                ? 'bg-sidebar-accent text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
-                : 'text-gray-300 hover:bg-white/10 hover:text-white'
-            }`}
-          >
-            <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>Agents</span>
-          </Link>
+          {!isMobile && (
+            <Link
+              to={AI_HUB_HOME}
+              onClick={onClose}
+              aria-current={aiHubActive ? 'page' : undefined}
+              className={`relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
+                aiHubActive
+                  ? 'bg-sidebar-accent text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
+                  : 'text-gray-300 hover:bg-white/10 hover:text-white'
+              }`}
+            >
+              <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>Agents</span>
+            </Link>
+          )}
 
           {/* Visual break between top-level pages and the channel/DM list. */}
           <div
@@ -1095,6 +1100,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                         });
                       }
                       if (e.key === 'Escape') {
+                        e.preventDefault();
                         setCreatingCategory(false);
                         setCategoryCreateError('');
                       }

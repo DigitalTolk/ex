@@ -16,6 +16,7 @@ import { usePanelWidth } from '@/hooks/usePanelWidth';
 import { SIDE_PANEL_WIDTH } from '@/lib/panel-width';
 import { PanelResizeHandle } from '@/components/layout/PanelResizeHandle';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
+import { useEscapeClose } from '@/hooks/useEscapeClose';
 import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -79,6 +80,8 @@ export function ThreadPanel({
   );
   // Mounted-while-open panel: Back on mobile closes it instead of navigating.
   useMobileBackClose(true, onClose);
+  // And Escape, once nothing above it takes the key.
+  useEscapeClose(onClose);
   const isMobile = useIsMobile();
   // Most-used emoji shelf for the message action bar — same source the
   // channel/conversation message lists use, so the thread sidebar shows
