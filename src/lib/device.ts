@@ -36,12 +36,17 @@ export type DeviceKind = 'touch' | 'desktop';
 let sawMouseInput = false;
 const pointerDeviceListeners = new Set<() => void>();
 
+// A pointer changes the interaction style only at tablet width or wider. A
+// phone keeps its long-press affordances with a mouse attached: the iPhone
+// simulator hands the Mac's cursor to the page as a real mouse, and a phone
+// with a pointer paired for accessibility still wants the phone UI. The tier
+// is stamped by the tracker (boot, resize) rather than read here: this runs
+// as the snapshot behind usePointerDevice, in every message row's render,
+// and the tier check behind it is a matchMedia call.
+let phoneTier = false;
+
 export function hasPointerDevice(): boolean {
-  // A pointer changes the interaction style only at tablet width or wider.
-  // A phone keeps its long-press affordances with a mouse attached: the
-  // iPhone simulator hands the Mac's cursor to the page as a real mouse, and
-  // a phone with a pointer paired for accessibility still wants the phone UI.
-  if (currentLayoutTier() === 'mobile') return false;
+  if (phoneTier) return false;
   return window.__EX_POINTER_DEVICE__ === true || sawMouseInput;
 }
 
@@ -85,6 +90,7 @@ function onNativePointerReport(event: Event) {
 export function resetPointerDeviceForTests() {
   sawMouseInput = false;
   notifiedPointerDevice = false;
+  phoneTier = false;
   delete window.__EX_POINTER_DEVICE__;
 }
 
@@ -140,6 +146,7 @@ const TIER_CLASSES: Record<LayoutTier, string> = {
 export function applyLayoutTierClasses(): LayoutTier {
   const root = document.documentElement;
   const tier = currentLayoutTier();
+  phoneTier = tier === 'mobile';
   for (const cls of Object.values(TIER_CLASSES)) root.classList.remove(cls);
   root.classList.add(TIER_CLASSES[tier]);
   // `device-touch` (the `touch:` variant) means touch is the ONLY way to point
