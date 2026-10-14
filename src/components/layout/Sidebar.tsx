@@ -1234,7 +1234,9 @@ export function Sidebar({ onClose }: SidebarProps) {
                 dropIndicator.beforeCategoryID === (isChannelsDefault ? CATEGORY_DROP_END : section.key);
 
               return (
-                <div key={section.key} className="relative mt-2" data-testid={`sidebar-group-${section.key}`}>
+                // Sections breathe: a clear gap above each heading sets the groups
+                // apart, while rows inside a group keep the tight row rhythm.
+                <div key={section.key} className="relative mt-5 mobile:mt-3" data-testid={`sidebar-group-${section.key}`}>
                   {categoryGap && <DropGap sectionKey={section.key} testId={`sidebar-drop-gap-cat-${section.key}`} />}
                   {(isFavorites || isUserCategory || isChannelsDefault) && (
                     <PragmaticCategoryDropHitbox
@@ -1274,7 +1276,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                       }}
                       aria-expanded={!collapsed}
                       data-testid={`sidebar-group-toggle-${section.key}`}
-                      className="flex flex-1 items-center gap-1 rounded-md px-2 py-1 text-sm font-semibold text-gray-400 hover:bg-white/5 mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base"
+                      className="flex flex-1 items-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-gray-400 hover:bg-white/5 mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base"
                     >
                       <ChevronDown
                         className={`h-3 w-3 transition-transform ${collapsed ? '-rotate-90' : ''}`}
@@ -1362,7 +1364,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                       </DropdownMenu>
                     )}
                   </PragmaticCategoryHeader>
-                  <div className="space-y-1">
+                  <div className="mt-1 space-y-1">
                     {visibleItems.map((item, index) => {
                       if (item.kind === 'channel') {
                         const channelDropIndex = section.key === SidebarSectionKeys.Favorites
