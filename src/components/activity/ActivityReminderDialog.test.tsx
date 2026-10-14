@@ -60,9 +60,18 @@ describe('ActivityReminderDialog', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
-  it('closes when the dialog is dismissed, and treats a DM as a conversation', () => {
+  it('treats a DM as a conversation, and closes on cancel', async () => {
     const onClose = renderDialog(newActivityReminder(groupActivity([{ ...item, parentType: 'conversation', parentID: 'cv-1' }])[0]));
-    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    fireEvent.click(screen.getByTestId('reminder-quick-in1h'));
+    fireEvent.click(screen.getByTestId('reminder-confirm'));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalled());
+    const body = JSON.parse(vi.mocked(apiFetch).mock.calls[0][1]!.body as string);
+    expect(body).toMatchObject({ parentID: 'cv-1', parentType: 'conversation' });
+    expect(body.channelSlug).toBeUndefined();
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+
+    onClose.mockClear();
+    fireEvent.click(screen.getByTestId('reminder-cancel'));
     expect(onClose).toHaveBeenCalled();
   });
 });

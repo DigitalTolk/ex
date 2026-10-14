@@ -126,6 +126,19 @@ describe('ActivityHoverPreview', () => {
     await waitFor(() => expect(screen.queryByTestId('activity-preview')).toBeNull());
   });
 
+  it('"Remind me about this" from a row closes the card and opens the reminder dialog, which closes on cancel', async () => {
+    renderSwitch();
+    hover();
+    const card = await preview();
+    await waitFor(() => expect(within(card).getAllByTestId('activity-row')).toHaveLength(3));
+    fireEvent.click(within(card).getAllByTestId('activity-row-more')[0]);
+    fireEvent.click(await screen.findByTestId('activity-menu-remind'));
+    expect(await screen.findByTestId('reminder-dialog')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId('activity-preview')).toBeNull());
+    fireEvent.click(screen.getByTestId('reminder-cancel'));
+    await waitFor(() => expect(screen.queryByTestId('reminder-dialog')).toBeNull());
+  });
+
   it('shows the skeleton while the feed is still loading', async () => {
     vi.mocked(apiFetch).mockImplementation(async (url: string) => {
       if (url.startsWith('/api/v1/activity')) return new Promise(() => {}) as never;

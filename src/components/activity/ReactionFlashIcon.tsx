@@ -5,7 +5,7 @@ import type { ReactionFlash } from '@/stores/reaction-flash';
 // The Activity bell's stand-in while a reaction flashes: the emoji itself,
 // popping in. Mounted only for the flash, so the custom-emoji map is read
 // only then.
-export function ReactionFlashIcon({ flash, className = '' }: { flash: ReactionFlash; className?: string }) {
+export function ReactionFlashIcon({ flash, className }: { flash: ReactionFlash; className: string }) {
   const { data: emojiMap } = useEmojiMap();
   return (
     <span

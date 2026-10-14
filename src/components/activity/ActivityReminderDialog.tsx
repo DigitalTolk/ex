@@ -31,9 +31,8 @@ export function ActivityReminderDialog({ reminder, channelSlug, onClose }: Activ
     <ReminderDialog
       key={reminder.row.key}
       open
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
+      // Only ever rendered open, so any change is a close.
+      onOpenChange={onClose}
       initialValue={reminder.seed}
       onConfirm={confirm}
     />

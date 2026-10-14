@@ -81,6 +81,14 @@ describe('useActivityRowData actions', () => {
     await waitFor(() => expect(showToast).toHaveBeenCalledWith(expect.stringContaining("Couldn't turn off")));
   });
 
+  it('unfollows a DM thread by its message when the row names no root', async () => {
+    const { result } = await ready();
+    act(() => result.current.onMuteThread(result.current.allRows[2]));
+    await waitFor(() =>
+      expect(apiFetch).toHaveBeenCalledWith('/api/v1/threads/conversations/cv-1/m-1/follow', expect.objectContaining({ method: 'DELETE' })),
+    );
+  });
+
   it('names the slug for a channel row and nothing for a DM', async () => {
     const { result } = await ready();
     expect(result.current.slugFor(result.current.allRows[0])).toBe('general-chat');

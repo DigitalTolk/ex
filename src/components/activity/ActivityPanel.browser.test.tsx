@@ -508,6 +508,19 @@ describe('ActivityPanel', () => {
     expect(calls('/api/v1/activity')).toHaveLength(1);
   });
 
+  it('"Remind me about this" on a row opens the reminder dialog, which closes on cancel', async () => {
+    mockApi({ items: [item({ id: 'a', type: 'mention' })] });
+    const screen = await renderPanel();
+    await vi.waitFor(() => expect(rows()).toHaveLength(1));
+    screen.getByTestId('activity-row-more').first().element().click();
+    await screen.getByTestId('activity-menu-remind').click();
+    await expect.element(screen.getByTestId('reminder-dialog')).toBeVisible();
+    // Escape rather than the Cancel button: on a phone the dialog is a tall
+    // sheet and the button can sit below the fold.
+    await userEvent.keyboard('{Escape}');
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-dialog"]')).toBeNull());
+  });
+
   it('opens a reminder without a navigate callback', async () => {
     mockApi({
       reminders: [{ id: 'r1', userID: 'u', messageID: 'm1', parentID: 'ch-gen', parentType: 'channel', remindAt: at(-DAY), createdAt: at(0) }],
