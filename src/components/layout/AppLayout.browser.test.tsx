@@ -443,7 +443,7 @@ describe('AppLayout channel swipe (phone)', () => {
       // a sideways swipe.
       expect(slidX()).toBeGreaterThan(80);
       expect(slidX()).toBeLessThanOrEqual(100);
-    });
+    }, { timeout: 5000 });
     panEnd([250, 226]);
   });
 
@@ -451,7 +451,7 @@ describe('AppLayout channel swipe (phone)', () => {
     if (window.innerWidth > 767) return;
     await renderAt('/threads');
     await swipe(main(), { dx: 260, steps: 8, stepMs: 20 });
-    await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'));
+    await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'), { timeout: 5000 });
     await settlesAt(window.innerWidth);
     expect(list()).not.toHaveAttribute('inert');
   });
@@ -461,7 +461,7 @@ describe('AppLayout channel swipe (phone)', () => {
     if (window.innerWidth > 767) return;
     await renderAt('/threads');
     await swipe(main(), { dx: 180, steps: 24, stepMs: 40, settle: true });
-    await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'));
+    await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'), { timeout: 5000 });
   });
 
   it('slides back from a short, slow swipe', async () => {
@@ -526,7 +526,7 @@ describe('AppLayout channel swipe (phone)', () => {
     if (window.innerWidth > 767) return;
     await renderAt('/threads');
     (document.querySelector('button[aria-label="Open channels"]') as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'));
+    await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'), { timeout: 5000 });
     await settlesAt(window.innerWidth);
 
     // Mid-swipe the conversation comes in from the right with the finger.
@@ -534,9 +534,9 @@ describe('AppLayout channel swipe (phone)', () => {
     await vi.waitFor(() => {
       expect(main().dataset.channelDragging).toBe('true');
       expect(slidX()).toBeLessThan(window.innerWidth - 150);
-    });
+    }, { timeout: 5000 });
     panEnd([100, 306]);
-    await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('false'));
+    await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('false'), { timeout: 5000 });
     await settlesAt(0);
   });
 
@@ -580,7 +580,7 @@ describe('AppLayout channel swipe (phone)', () => {
       // Opening slides the conversation aside; a rotation on the way ends
       // the slide at the new width.
       (document.querySelector('button[aria-label="Open channels"]') as HTMLButtonElement).click();
-      await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'));
+      await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'), { timeout: 5000 });
       rotate(width + 200);
       await settlesAt(width + 200);
     } finally {

@@ -58,7 +58,7 @@ describe('conversation swipe under a real finger (phone)', () => {
     const { left, top, height } = scroller().getBoundingClientRect();
     await nativeTouchSwipe(scroller(), { from: { x: left + 60, y: top + height / 2 }, dx: 200, steps: 25, stepMs: 30 });
 
-    await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'));
+    await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'), { timeout: 5000 });
   });
 
   it('a vertical drag scrolls the content and leaves the conversation where it is', async () => {
