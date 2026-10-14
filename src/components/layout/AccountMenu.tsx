@@ -292,7 +292,16 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
             <DropdownMenuTrigger aria-label="Account menu" data-testid="account-menu-trigger" className={triggerClass}>
               {triggerContent}
             </DropdownMenuTrigger>
-            <DropdownMenuContent side="top" align="start" sideOffset={6} className="min-w-56">
+            <DropdownMenuContent
+              side="top"
+              align="start"
+              sideOffset={6}
+              // Inset 8px from both sidebar edges, so it scales with the
+              // sidebar and never spills past it; the floor is the
+              // narrowest sidebar (256px) less those insets.
+              alignOffset={8}
+              className="w-[calc(var(--anchor-width)-1rem)] min-w-60"
+            >
               {status && (
                 <>
                   <div className="flex items-center gap-0.5" data-testid="user-menu-status-row">
