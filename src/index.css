@@ -573,8 +573,8 @@
 }
 
 /* The app root (App.tsx) is sized to the space above the on-screen keyboard.
-   It glides with the keyboard only while the inset is moving; any other
-   viewport change resizes it at once. The glide's curve is defined here (the
+   It glides only while the keyboard comes or goes; any other viewport change
+   (a window resize, the suggestion bar while typing) resizes it at once. The glide's curve is defined here (the
    search sheet follows it too); its duration, --ex-keyboard-settle, is set by
    useKeyboardInset from KEYBOARD_SETTLE_MS along with data-keyboard-settling. */
 :root {

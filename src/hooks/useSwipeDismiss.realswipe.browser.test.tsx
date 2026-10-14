@@ -52,7 +52,7 @@ const atRest = () => {
 };
 async function renderSettled(direction: 'right' | 'down', onDismiss: () => void) {
   await render(<Harness direction={direction} onDismiss={onDismiss} />);
-  await vi.waitFor(() => expect(atRest()).toBe(true));
+  await vi.waitFor(() => expect(atRest()).toBe(true), { timeout: 5000 });
 }
 
 beforeEach(() => {
@@ -66,7 +66,8 @@ describe('useSwipeDismiss real swipe', () => {
 
     await swipe(sheet(), { dy: 200, steps: 8, stepMs: 20 });
 
-    await vi.waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+    // onDismiss fires once the exit spring has run.
+    await vi.waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1), { timeout: 5000 });
   });
 
   it('a small DOWN swipe released at rest springs back and does NOT dismiss', async () => {
@@ -77,7 +78,7 @@ describe('useSwipeDismiss real swipe', () => {
     // distance, so the sheet springs back.
     await swipe(sheet(), { dy: 40, steps: 5, stepMs: 24, settle: true });
 
-    await vi.waitFor(() => expect(atRest()).toBe(true));
+    await vi.waitFor(() => expect(atRest()).toBe(true), { timeout: 5000 });
     expect(onDismiss).not.toHaveBeenCalled();
   });
 
@@ -89,7 +90,8 @@ describe('useSwipeDismiss real swipe', () => {
 
     await swipe(sheet(), { dx: 200, steps: 20, stepMs: 40, settle: true });
 
-    await vi.waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+    // onDismiss fires once the exit spring has run.
+    await vi.waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1), { timeout: 5000 });
   });
 
   // The browser took the touch over (a native pan): nothing was decided, so
@@ -100,7 +102,7 @@ describe('useSwipeDismiss real swipe', () => {
 
     await swipe(sheet(), { dx: 200, steps: 8, stepMs: 20, cancel: true });
 
-    await vi.waitFor(() => expect(atRest()).toBe(true));
+    await vi.waitFor(() => expect(atRest()).toBe(true), { timeout: 5000 });
     expect(onDismiss).not.toHaveBeenCalled();
   });
 
@@ -116,7 +118,7 @@ describe('useSwipeDismiss real swipe', () => {
 
     await swipe(sheet(), { dx: -(window.innerWidth + 100), steps: 8, stepMs: 20, settle: true });
 
-    await vi.waitFor(() => expect(atRest()).toBe(true));
+    await vi.waitFor(() => expect(atRest()).toBe(true), { timeout: 5000 });
     expect(onDismiss).not.toHaveBeenCalled();
   });
 });

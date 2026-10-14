@@ -120,7 +120,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   const [channelSwiping, setChannelSwiping] = useState(false);
   useLayoutEffect(() => {
     if (!isMobile) {
-      mainX.set(0);
+      mainX.jump(0);
       return;
     }
     const velocity = releaseVelocityRef.current;
@@ -128,10 +128,11 @@ export function AppLayout({ children }: AppLayoutProps) {
     const controls = animate(mainX, mobileChannelsOpen ? window.innerWidth : 0, { ...SWIPE_SPRING, velocity });
     return () => controls.stop();
   }, [isMobile, mobileChannelsOpen, mainX]);
-  // Rotating the phone moves where an open list leaves the conversation.
+  // Rotating the phone moves where an open list leaves the conversation —
+  // at once, ending any slide still on its way to the old width.
   useEffect(() => {
     if (!isMobile) return;
-    const onResize = () => mainX.set(mobileChannelsOpen ? window.innerWidth : 0);
+    const onResize = () => mainX.jump(mobileChannelsOpen ? window.innerWidth : 0);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, [isMobile, mobileChannelsOpen, mainX]);

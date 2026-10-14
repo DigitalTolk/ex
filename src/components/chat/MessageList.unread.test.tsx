@@ -160,6 +160,30 @@ describe('MessageList unread line', () => {
     expect(list.scrollCalls).toHaveLength(settled);
   });
 
+  // Rows still measuring can keep the list short of the tail on every frame;
+  // the re-aiming still stops once its window has passed. Driven by the
+  // clock, not by how long the test happens to take.
+  it('the settle window ends on time even when the list never settles', () => {
+    let clock = 0;
+    const now = vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    try {
+      renderList();
+      // The list never reaches the tail: every aim falls short.
+      Object.defineProperty(scroller(), 'scrollTop', { configurable: true, get: () => 0, set: () => undefined });
+      frames(20);
+      const aiming = list.scrollCalls.length;
+      expect(aiming).toBeGreaterThan(10);
+      clock = 2000; // past the settle window
+      frames(20);
+      expect(list.scrollCalls.length).toBeLessThanOrEqual(aiming + 1);
+      const stopped = list.scrollCalls.length;
+      frames(20);
+      expect(list.scrollCalls).toHaveLength(stopped);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it('a deep-link anchor wins over landing on the line', () => {
     setUnreadAnchor('ch-1', { kind: 'count', count: 3 });
     renderList({ anchorMsgId: 'm-02' });

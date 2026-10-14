@@ -425,6 +425,8 @@ describe('AppLayout channel swipe (phone)', () => {
   // How far the conversation is slid aside, from Motion's translateX.
   const slidX = () => new DOMMatrix(getComputedStyle(main()).transform).m41;
   const atRest = (x: number) => Math.abs(slidX() - x) < 1;
+  // A slide is a spring: under a loaded test machine its frames come slowly.
+  const settlesAt = (x: number) => vi.waitFor(() => expect(atRest(x)).toBe(true), { timeout: 5000 });
 
   it('follows the finger from mid-screen and blurs the focused composer', async () => {
     if (window.innerWidth > 767) return;
@@ -450,7 +452,7 @@ describe('AppLayout channel swipe (phone)', () => {
     await renderAt('/threads');
     await swipe(main(), { dx: 260, steps: 8, stepMs: 20 });
     await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'));
-    await vi.waitFor(() => expect(atRest(window.innerWidth)).toBe(true));
+    await settlesAt(window.innerWidth);
     expect(list()).not.toHaveAttribute('inert');
   });
 
@@ -466,7 +468,7 @@ describe('AppLayout channel swipe (phone)', () => {
     if (window.innerWidth > 767) return;
     await renderAt('/threads');
     await swipe(main(), { dx: 60, steps: 6, stepMs: 30, settle: true });
-    await vi.waitFor(() => expect(atRest(0)).toBe(true));
+    await settlesAt(0);
     expect(main().dataset.mobileChannelsOpen).toBe('false');
     expect(main().dataset.channelDragging).toBe('false');
   });
@@ -475,7 +477,7 @@ describe('AppLayout channel swipe (phone)', () => {
     if (window.innerWidth > 767) return;
     await renderAt('/threads');
     await swipe(main(), { dx: 260, steps: 8, stepMs: 20, cancel: true });
-    await vi.waitFor(() => expect(atRest(0)).toBe(true));
+    await settlesAt(0);
     expect(main().dataset.mobileChannelsOpen).toBe('false');
   });
 
@@ -525,7 +527,7 @@ describe('AppLayout channel swipe (phone)', () => {
     await renderAt('/threads');
     (document.querySelector('button[aria-label="Open channels"]') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'));
-    await vi.waitFor(() => expect(atRest(window.innerWidth)).toBe(true));
+    await settlesAt(window.innerWidth);
 
     // Mid-swipe the conversation comes in from the right with the finger.
     panMove(list(), [300, 300], [290, 301], [200, 304], [100, 306]);
@@ -535,17 +537,17 @@ describe('AppLayout channel swipe (phone)', () => {
     });
     panEnd([100, 306]);
     await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('false'));
-    await vi.waitFor(() => expect(atRest(0)).toBe(true));
+    await settlesAt(0);
   });
 
   it('keeps the list when a swipe of it falls short', async () => {
     if (window.innerWidth > 767) return;
     await renderAt('/threads');
     (document.querySelector('button[aria-label="Open channels"]') as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(atRest(window.innerWidth)).toBe(true));
+    await settlesAt(window.innerWidth);
 
     await swipe(list(), { dx: -50, steps: 5, stepMs: 30, settle: true });
-    await vi.waitFor(() => expect(atRest(window.innerWidth)).toBe(true));
+    await settlesAt(window.innerWidth);
     expect(main().dataset.mobileChannelsOpen).toBe('true');
   });
 
@@ -557,6 +559,35 @@ describe('AppLayout channel swipe (phone)', () => {
     await new Promise((r) => setTimeout(r, 40));
     expect(main().dataset.mobileChannelsOpen).toBe('true');
     expect(atRest(window.innerWidth)).toBe(true);
+  });
+
+  // Rotating the phone changes the width the open list slides the
+  // conversation by — at once, even mid-slide; a closed list keeps it in
+  // place.
+  it('keeps the conversation where the list leaves it across a rotation', async () => {
+    if (window.innerWidth > 767) return;
+    const width = window.innerWidth;
+    const original = Object.getOwnPropertyDescriptor(window, 'innerWidth');
+    const rotate = (w: number) => {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: w });
+      window.dispatchEvent(new Event('resize'));
+    };
+    await renderAt('/threads');
+    try {
+      rotate(width + 100);
+      await settlesAt(0);
+
+      // Opening slides the conversation aside; a rotation on the way ends
+      // the slide at the new width.
+      (document.querySelector('button[aria-label="Open channels"]') as HTMLButtonElement).click();
+      await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'));
+      rotate(width + 200);
+      await settlesAt(width + 200);
+    } finally {
+      if (original) Object.defineProperty(window, 'innerWidth', original);
+      else delete (window as { innerWidth?: number }).innerWidth;
+      window.dispatchEvent(new Event('resize'));
+    }
   });
 
   it('is not a swipe surface on desktop', async () => {

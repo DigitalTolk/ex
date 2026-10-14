@@ -44,7 +44,7 @@ export function useAxisSwipe({ enabled, axis, value, range, canStart, onStart, o
   // Where the value would be with the finger back at its starting point.
   const originRef = useRef(0);
   const bind = useDrag(
-    ({ first, active, last, movement, velocity, direction, event }) => {
+    ({ first, last, movement, velocity, direction, event }) => {
       if (first) {
         value.stop();
         originRef.current = value.get() - movement[i];
@@ -52,10 +52,8 @@ export function useAxisSwipe({ enabled, axis, value, range, canStart, onStart, o
       }
       const [min, max] = range();
       const position = Math.min(max, Math.max(min, originRef.current + movement[i]));
-      if (active) {
-        value.set(position);
-        return;
-      }
+      // use-gesture calls this for each move of a taken gesture, then once
+      // for the release.
       if (last) {
         onRelease({
           value: position,
@@ -63,7 +61,9 @@ export function useAxisSwipe({ enabled, axis, value, range, canStart, onStart, o
           velocity: direction[i] * velocity[i] * 1000,
           aborted: event.type === 'pointercancel',
         });
+        return;
       }
+      value.set(position);
     },
     {
       enabled,
