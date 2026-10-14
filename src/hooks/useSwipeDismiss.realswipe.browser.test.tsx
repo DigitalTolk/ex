@@ -106,13 +106,15 @@ describe('useSwipeDismiss real swipe', () => {
 
   // A finger that lands while the panel is still sliding in catches it where
   // it is and pulls it the rest of the way (no further than its resting
-  // place); let go there, it stays.
+  // place); let go there, it stays. Where it is caught depends on the frame
+  // and on the viewport (it slides in from a whole window-width away), so
+  // the pull is longer than any of that.
   it('catches a panel mid-slide-in and pulls it in', async () => {
     const onDismiss = vi.fn();
     await render(<Harness direction="right" onDismiss={onDismiss} />);
     await nextFrame();
 
-    await swipe(sheet(), { dx: -400, steps: 8, stepMs: 20, settle: true });
+    await swipe(sheet(), { dx: -(window.innerWidth + 100), steps: 8, stepMs: 20, settle: true });
 
     await vi.waitFor(() => expect(atRest()).toBe(true));
     expect(onDismiss).not.toHaveBeenCalled();
