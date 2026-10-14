@@ -1159,7 +1159,7 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(document.body.textContent).toContain('Headless');
   });
 
-  it('clamps the Threads unread badge to "99+" when there are more than 99 unread threads', async () => {
+  it('marks Threads bold, with no count, when threads have unread replies', async () => {
     mockThreads = Array.from({ length: 120 }, (_, i) => ({
       parentID: 'ch-general',
       parentType: 'channel' as const,
@@ -1167,9 +1167,9 @@ describe('Sidebar browser render — rich fixtures', () => {
       lastReplyAt: '2026-05-11T11:00:00Z',
     }));
     await render(<Frame />);
-    const badge = document.querySelector('[data-testid="threads-unread-badge"]') as HTMLElement;
-    expect(badge).not.toBeNull();
-    expect(badge.textContent).toBe('99+');
+    const label = document.querySelector('[data-testid="threads-nav-label"]') as HTMLElement;
+    expect(label.className).toContain('font-bold');
+    expect(document.querySelector('[data-testid="threads-unread-badge"]')).toBeNull();
   });
 
   it('keeps unread channels and conversations visible inside a collapsed section', async () => {

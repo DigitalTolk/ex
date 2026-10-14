@@ -334,7 +334,8 @@ describe('ActivityPanel', () => {
     const screen = await renderPanel();
     await vi.waitFor(() => expect(rows()).toHaveLength(3));
     expect(document.querySelector('[data-testid="activity-filter-dm-dot"]')).not.toBeNull();
-    expect(document.querySelector('[data-testid="activity-filter-reaction-dot"]')).not.toBeNull();
+    // Reactions never dot: they flash on the bell as they land.
+    expect(document.querySelector('[data-testid="activity-filter-reaction-dot"]')).toBeNull();
     expect(document.querySelector('[data-testid="activity-filter-mention-dot"]')).toBeNull();
     expect(document.querySelector('[data-testid="activity-filter-all-dot"]')).toBeNull();
     // The dot is announced through the tab's name.

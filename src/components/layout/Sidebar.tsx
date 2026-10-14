@@ -52,7 +52,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
-import { getSeenMap, mergeSeenMaps, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, unreadThreadParents, useUserThreads } from '@/hooks/useThreads';
+import { getSeenMap, mergeSeenMaps, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, useUserThreads } from '@/hooks/useThreads';
 import { useUserState } from '@/hooks/useUserState';
 import { useDrafts } from '@/hooks/useDrafts';
 import { deviceKind } from '@/lib/device';
@@ -170,11 +170,10 @@ export function Sidebar({ onClose }: SidebarProps) {
       ),
     [localSeenMap, threads, unreadThreadNotifications, userState?.threadNotifications, userState?.threadSeen, userState?.threadMarkedUnread],
   );
-  const unreadThreadCount = unreadThreads.size;
-  const hasThreadUpdates = unreadThreadCount > 0;
-  // A reply in a thread you're in marks its channel/DM row unread too, until
-  // that thread is read (the Threads count tracks the thread itself).
-  const threadUnreadParents = useMemo(() => unreadThreadParents(threads, unreadThreads), [threads, unreadThreads]);
+  // Thread replies live in Threads (bold when any thread you follow has
+  // unread replies) and in Activity; a channel or DM row never marks itself
+  // for them, the way Slack keeps threads out of the channel list.
+  const hasThreadUpdates = unreadThreads.size > 0;
   const draftCount = drafts?.length ?? 0;
 
   // The chat being viewed. With the unread view on it stays visible even
@@ -187,12 +186,11 @@ export function Sidebar({ onClose }: SidebarProps) {
     return /^\/conversation\/([^/]+)/.exec(path)?.[1];
   }, [location.pathname, channels]);
   const activeItemUnread = useMemo(() => {
-    if (activeItemID && threadUnreadParents.has(activeItemID)) return true;
     const ch = channels?.find((c) => c.channelID === activeItemID);
     if (ch) return isSidebarItemUnread({ kind: 'channel', channel: ch });
     const conv = visibleConversations.find((c) => c.conversationID === activeItemID);
     return !!conv && isSidebarItemUnread({ kind: 'conversation', conversation: conv });
-  }, [channels, visibleConversations, activeItemID, threadUnreadParents]);
+  }, [channels, visibleConversations, activeItemID]);
   const [stickyUnread, setStickyUnread] = useState<{ id?: string; unread: boolean }>({ unread: false });
   if (stickyUnread.id !== activeItemID) setStickyUnread({ id: activeItemID, unread: activeItemUnread });
 
@@ -204,9 +202,8 @@ export function Sidebar({ onClose }: SidebarProps) {
         unreadOnly,
         activeID: activeItemID,
         stickyUnreadID: stickyUnread.unread ? stickyUnread.id : undefined,
-        threadUnreadIDs: threadUnreadParents,
       }),
-    [channels, visibleConversations, categories, conversationSort, unreadSection, unreadOnly, activeItemID, stickyUnread, threadUnreadParents],
+    [channels, visibleConversations, categories, conversationSort, unreadSection, unreadOnly, activeItemID, stickyUnread],
   );
 
   // Fetch the other participant for every DM in one batch so the sidebar
@@ -1000,16 +997,9 @@ export function Sidebar({ onClose }: SidebarProps) {
             }
           >
             <MessagesSquare className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span className={hasThreadUpdates ? 'font-bold text-white' : ''}>Threads</span>
-            {hasThreadUpdates && (
-              <Badge
-                variant="brand"
-                className="ml-auto text-[11px]"
-                data-testid="threads-unread-badge"
-              >
-                {unreadThreadCount > 99 ? '99+' : unreadThreadCount}
-              </Badge>
-            )}
+            <span className={hasThreadUpdates ? 'font-bold text-white' : ''} data-testid="threads-nav-label">
+              Threads
+            </span>
           </NavLink>
 
           <NavLink
@@ -1209,12 +1199,12 @@ export function Sidebar({ onClose }: SidebarProps) {
                       const ch = item.channel;
                       const isActive =
                         location.pathname === `/channel/${slugify(ch.channelName)}`;
-                      return isActive || (!ch.muted && !!ch.unread) || threadUnreadParents.has(ch.channelID);
+                      return isActive || (!ch.muted && !!ch.unread);
                     }
                     const conv = item.conversation;
                     const isActive =
                       location.pathname === `/conversation/${conv.conversationID}`;
-                    return isActive || !!conv.unread || threadUnreadParents.has(conv.conversationID);
+                    return isActive || !!conv.unread;
                   })
                 : section.items;
 
@@ -1388,8 +1378,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                               {(dragProps) => (
                                 <ChannelRow
                                   channel={item.channel}
-                                  hasUnread={!!item.channel.unread || threadUnreadParents.has(item.channel.channelID)}
-                                  threadUnread={threadUnreadParents.has(item.channel.channelID)}
+                                  hasUnread={!!item.channel.unread}
                                   notifyCount={Number(item.channel.unreadNotifyCount ?? 0)}
                                   onClose={onClose}
                                   draggable={!rowDragDisabled}
@@ -1432,8 +1421,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                               {(dragProps) => (
                                 <ConversationRow
                                   conversation={conv}
-                                  hasUnread={!!conv.unread || threadUnreadParents.has(conv.conversationID)}
-                                  threadUnread={threadUnreadParents.has(conv.conversationID)}
+                                  hasUnread={!!conv.unread}
                                   notifyCount={Number(conv.unreadNotifyCount ?? 0)}
                                   dmAvatarURL={resolvedDMAvatarURL}
                                   dmUserStatus={resolvedDMUserStatus}
@@ -1450,8 +1438,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                           ) : (
                             <ConversationRow
                               conversation={conv}
-                              hasUnread={!!conv.unread || threadUnreadParents.has(conv.conversationID)}
-                              threadUnread={threadUnreadParents.has(conv.conversationID)}
+                              hasUnread={!!conv.unread}
                               notifyCount={Number(conv.unreadNotifyCount ?? 0)}
                               dmAvatarURL={resolvedDMAvatarURL}
                               dmUserStatus={resolvedDMUserStatus}

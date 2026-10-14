@@ -23,7 +23,6 @@ interface Props {
   conversation: UserConversation;
   hasUnread: boolean;
   // Replies in threads the user is in are unread: the row shows a dot.
-  threadUnread?: boolean;
   // Alerted-unread count (see ChannelRow) — the numeric badge. DM messages
   // always alert unless the conversation is muted, so this usually tracks
   // the plain unread count; merely-unread shows the availability dot.
@@ -52,7 +51,6 @@ interface Props {
 export function ConversationRow({
   conversation,
   hasUnread,
-  threadUnread = false,
   notifyCount = 0,
   dmAvatarURL,
   dmUserStatus,
@@ -160,19 +158,11 @@ export function ConversationRow({
             positioned (flush to the edge, never reflows); fades on desktop
             hover so the row actions take its place, stays on touch. On a
             phone the star sits flush right and the badge just left of it. */}
-        {(notifyCount > 0 || threadUnread) && (
+        {notifyCount > 0 && (
           <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 touch:opacity-100 mobile:right-11">
-            {notifyCount > 0 ? (
-              <Badge variant="brand" className="text-[11px]" data-testid={`conversation-unread-badge-${conversation.conversationID}`}>
-                {notifyCount > 99 ? '99+' : notifyCount}
-              </Badge>
-            ) : (
-              <span
-                aria-label="Unread thread replies"
-                data-testid={`conversation-unread-dot-${conversation.conversationID}`}
-                className="h-2 w-2 rounded-full bg-brand"
-              />
-            )}
+            <Badge variant="brand" className="text-[11px]" data-testid={`conversation-unread-badge-${conversation.conversationID}`}>
+              {notifyCount > 99 ? '99+' : notifyCount}
+            </Badge>
           </span>
         )}
       </NavLink>

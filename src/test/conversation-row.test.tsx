@@ -263,11 +263,6 @@ describe('ConversationRow', () => {
     expect(screen.queryByTestId('conversation-unread-dot-c-1')).toBeNull();
   });
 
-  it('shows a dot for unread replies in a thread the user is in', () => {
-    renderRow(sampleConv, { hasUnread: true, threadUnread: true, notifyCount: 0 });
-    expect(screen.getByTestId('conversation-unread-dot-c-1')).toHaveAttribute('aria-label', 'Unread thread replies');
-  });
-
   it('shows a numeric badge counting the alerting messages (capped at 99+)', () => {
     renderRow(sampleConv, { hasUnread: true, notifyCount: 4 });
     expect(screen.getByTestId('conversation-unread-badge-c-1')).toHaveTextContent('4');

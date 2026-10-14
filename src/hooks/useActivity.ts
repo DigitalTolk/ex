@@ -2,9 +2,11 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tansta
 import { ApiError, apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { showToast } from '@/lib/toast';
+import { flashReaction } from '@/stores/reaction-flash';
 import {
   addActivityItem,
   applyActivityChange,
+  badgeUnread,
   markActivityItems,
   markAllActivityRead,
   parseActivityChange,
@@ -41,7 +43,7 @@ export function useActivity() {
 // useActivityUnread is just the unread count, for the badges: a component
 // that shows only the count doesn't re-render when the list changes.
 export function useActivityUnread(): number {
-  return useQuery({ ...activityQuery, select: (feed) => feed.unread }).data ?? 0;
+  return useQuery({ ...activityQuery, select: badgeUnread }).data ?? 0;
 }
 
 // useReminders loads the user's pending (not-yet-fired) reminders.
@@ -116,6 +118,8 @@ function patchActivity(qc: QueryClient, fn: (feed: ActivityFeed) => ActivityFeed
 // applyActivityNewEvent adds the item an activity.new event carries.
 export function applyActivityNewEvent(qc: QueryClient, data: unknown) {
   const item = parseActivityNew(data);
+  // A reaction is announced on the bell as a flash rather than a count.
+  if (item?.type === 'reaction' && item.emoji) flashReaction(item.emoji);
   patchActivity(qc, (feed) => (item ? addActivityItem(feed, item) : null));
 }
 

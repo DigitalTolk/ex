@@ -29,8 +29,6 @@ export interface SidebarGroupOptions {
   // Kept in the Unread section although now read — the chat being viewed,
   // if it was unread when opened, until the user leaves it.
   stickyUnreadID?: string;
-  // Chats holding an unread thread the user is in: unread here too.
-  threadUnreadIDs?: ReadonlySet<string>;
 }
 
 const UNREAD_KEY = '__unread__';
@@ -109,11 +107,11 @@ export function groupSidebarItems(
 // applyUnreadView layers the unread options over the grouped sections. The
 // Unread section keeps sidebar order (favorites, categories, channels, DMs).
 function applyUnreadView(sections: SidebarSection[], options: SidebarGroupOptions): SidebarSection[] {
-  const { unreadSection, unreadOnly, activeID, stickyUnreadID, threadUnreadIDs } = options;
+  const { unreadSection, unreadOnly, activeID, stickyUnreadID } = options;
   if (!unreadSection && !unreadOnly) return sections;
   const inUnread = (item: SidebarItem) => {
     const id = sidebarItemID(item);
-    return isSidebarItemUnread(item) || id === stickyUnreadID || !!threadUnreadIDs?.has(id);
+    return isSidebarItemUnread(item) || id === stickyUnreadID;
   };
   let out = sections;
   if (unreadSection) {

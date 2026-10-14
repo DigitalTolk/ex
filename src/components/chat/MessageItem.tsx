@@ -1415,33 +1415,50 @@ function MessageItemImpl({
             onSelect={handleReact}
             onOpenChange={setReactionPickerOpen}
             trigger={
-              <Button size="icon" variant="ghost" className="h-7 w-7" aria-label="Add reaction">
-                <SmilePlus className="h-4 w-4" />
-              </Button>
+              <Tooltip>
+                <TooltipTrigger render={<Button size="icon" variant="ghost" className="h-7 w-7" aria-label="Add reaction" />}>
+                  <SmilePlus className="h-4 w-4" />
+                </TooltipTrigger>
+                <TooltipContent>Add reaction</TooltipContent>
+              </Tooltip>
             }
           />
           {!inThread && (
-            <Button
-              size="icon"
-              variant="ghost"
-              className="h-7 w-7"
-              aria-label="Reply in thread"
-              onClick={() => onReplyInThread?.(message.id)}
-            >
-              <MessageSquareReply className="h-3.5 w-3.5" />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7"
+                    aria-label="Reply in thread"
+                    onClick={() => onReplyInThread?.(message.id)}
+                  />
+                }
+              >
+                <MessageSquareReply className="h-3.5 w-3.5" />
+              </TooltipTrigger>
+              <TooltipContent>Reply in thread</TooltipContent>
+            </Tooltip>
           )}
           {/* modal={false} so other rows still receive mouseEnter while
               this menu is open — needed by the close-on-hover listener
               and the row's own :hover state. */}
           <DropdownMenu modal={false} open={actionsMenuOpen} onOpenChange={setActionsMenuOpen}>
-            <DropdownMenuTrigger
-              className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-accent"
-              aria-label="More actions"
-              data-testid="message-actions-trigger"
-            >
-              <MoreHorizontal className="h-3.5 w-3.5" />
-            </DropdownMenuTrigger>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <DropdownMenuTrigger
+                    className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-accent"
+                    aria-label="More actions"
+                    data-testid="message-actions-trigger"
+                  />
+                }
+              >
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </TooltipTrigger>
+              <TooltipContent>More actions</TooltipContent>
+            </Tooltip>
             <DropdownMenuContent align="end" className="w-44">
               {activityTarget && (
                 <DropdownMenuItem

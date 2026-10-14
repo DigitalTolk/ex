@@ -21,12 +21,15 @@ vi.mock('@/hooks/useEmoji', () => ({
 // Controlled-open dropdown mock: forwards `open` and `onOpenChange` so
 // tests can drive the menu's open state and observe whether the host
 // component (MessageItem) closes it on mouseLeave.
+const MenuMockContext = React.createContext<{ onOpenChange?: (v: boolean) => void }>({});
 vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenuSub: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenuSubTrigger: ({ children, ...rest }: { children: React.ReactNode; [k: string]: unknown }) => (
     <button {...rest}>{children}</button>
   ),
   DropdownMenuSubContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  // The trigger reads the menu's open handler from context, as the real one
+  // does, so a wrapper between the two (the trigger's tooltip) is fine.
   DropdownMenu: ({
     children,
     open,
@@ -43,29 +46,13 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
       data-open={open ? 'true' : 'false'}
       data-modal={modal === false ? 'false' : 'true'}
     >
-      {React.Children.map(children, (child) => {
-        if (!React.isValidElement(child)) return child;
-        return React.cloneElement(child as React.ReactElement<Record<string, unknown>>, {
-          'data-open': open,
-          'data-on-open-change': onOpenChange,
-        });
-      })}
+      <MenuMockContext.Provider value={{ onOpenChange }}>{children}</MenuMockContext.Provider>
     </div>
   ),
-  DropdownMenuTrigger: ({
-    children,
-    ...props
-  }: { children: React.ReactNode; [k: string]: unknown } & {
-    'data-on-open-change'?: (v: boolean) => void;
-  }) => {
-    const { 'data-on-open-change': onOpenChange, ...rest } = props as Record<string, unknown> & {
-      'data-on-open-change'?: (v: boolean) => void;
-    };
+  DropdownMenuTrigger: ({ children, ...props }: { children: React.ReactNode; [k: string]: unknown }) => {
+    const { onOpenChange } = React.useContext(MenuMockContext);
     return (
-      <button
-        {...rest}
-        onClick={() => onOpenChange?.(true)}
-      >
+      <button {...props} onClick={() => onOpenChange?.(true)}>
         {children}
       </button>
     );

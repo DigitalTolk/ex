@@ -7,44 +7,17 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { TooltipIconButton } from '@/components/ui/tooltip-icon-button';
-import {
-  useActivity,
-  useMarkActivityRead,
-  useReminders,
-  useRemoveActivityItems,
-  useSetActivityItemsRead,
-} from '@/hooks/useActivity';
-import { useUserChannels } from '@/hooks/useChannels';
+import { useMarkActivityRead, useReminders } from '@/hooks/useActivity';
+import { useActivityRowData } from '@/hooks/useActivityRowData';
 import { useCalendarDay } from '@/hooks/useCalendarDay';
-import { useUserConversations } from '@/hooks/useConversations';
-import { useUsersBatch } from '@/hooks/useUsersBatch';
-import { useEmojiMap } from '@/hooks/useEmoji';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { slugify } from '@/lib/format';
-import {
-  ACTIVITY_TABS,
-  activityHref,
-  activitySections,
-  filterActivity,
-  groupActivity,
-  isWebhookItem,
-  tabUnread,
-  type ActivityRow,
-  type ActivityTab,
-} from '@/lib/activity-feed';
-import { selectActivityRow, setActivityUnreadOnly, useSidebarModeStore } from '@/stores/sidebar-mode';
-import type { Reminder, UserChannel, UserConversation } from '@/types';
+import { ACTIVITY_TABS, activitySections, filterActivity, groupActivity, tabUnread, type ActivityRow, type ActivityTab } from '@/lib/activity-feed';
+import { setActivityUnreadOnly, useSidebarModeStore } from '@/stores/sidebar-mode';
 import { ActivityFilterTabs } from './ActivityFilterTabs';
-import { ActivityRowView, type ActivityChannelInfo, type ActivityConversationInfo } from './ActivityRow';
+import { ActivityRowView } from './ActivityRow';
+import { ActivityReminderDialog } from './ActivityReminderDialog';
+import { newActivityReminder, type ActivityReminder } from '@/lib/activity-reminder';
 import { PendingReminders } from './PendingReminders';
-
-// Only what the rows show, so an unread bump on a channel or DM (a new list
-// array every message) doesn't re-render the panel: structural sharing keeps
-// these selections' references while names and types are unchanged.
-const selectChannels = (rows: UserChannel[]) =>
-  rows.map((c) => ({ id: c.channelID, name: c.channelName, private: c.channelType === 'private' }));
-const selectConversations = (rows: UserConversation[]) =>
-  rows.map((c) => ({ id: c.conversationID, name: c.displayName, group: c.type === 'group' }));
 
 function pathOf(href: string): string {
   return href.split(/[?#]/)[0];
@@ -60,44 +33,42 @@ interface ActivityPanelProps {
 // switch, mark-all-read for the tab, and the rows grouped by day. Opening a
 // row shows the message in its channel, DM or thread and marks the row read.
 export const ActivityPanel = memo(function ActivityPanel({ onNavigate }: ActivityPanelProps) {
-  const { data: feed, isLoading, isError, refetch } = useActivity();
+  const {
+    feed,
+    isLoading,
+    isError,
+    refetch,
+    items,
+    allRows,
+    hrefFor,
+    slugFor,
+    users,
+    emojiMap,
+    channelByID,
+    conversationByID,
+    setRead,
+    openRow,
+    onSetRead,
+    onRemove,
+    onClearBefore,
+    onCopyLink,
+    onMuteThread,
+  } = useActivityRowData();
+  // "Remind me about this" from a row's menu; the dialog outlives the menu.
+  const [reminder, setReminder] = useState<ActivityReminder | null>(null);
+  const onRemind = useCallback((row: ActivityRow) => setReminder(newActivityReminder(row)), []);
   const { data: reminders } = useReminders();
-  const { data: channels } = useUserChannels({ select: selectChannels });
-  const { data: conversations } = useUserConversations({ select: selectConversations });
-  const { data: emojiMap } = useEmojiMap();
   const filter = useSidebarModeStore((s) => s.filter);
   const unreadOnly = useSidebarModeStore((s) => s.unreadOnly);
   const selectedKey = useSidebarModeStore((s) => s.selectedKey);
   const markAllRead = useMarkActivityRead();
-  const setItemsRead = useSetActivityItemsRead();
-  const removeItems = useRemoveActivityItems();
   const location = useLocation();
   const isMobile = useIsMobile();
 
-  const channelByID = useMemo(() => {
-    const m = new Map<string, ActivityChannelInfo>();
-    for (const c of channels ?? []) m.set(c.id, c);
-    return m;
-  }, [channels]);
-  const slugByChannelID = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const c of channels ?? []) m.set(c.id, slugify(c.name));
-    return m;
-  }, [channels]);
-  const conversationByID = useMemo(() => {
-    const m = new Map<string, ActivityConversationInfo>();
-    for (const c of conversations ?? []) m.set(c.id, c);
-    return m;
-  }, [conversations]);
-
-  const items = useMemo(() => feed?.items ?? [], [feed]);
-  const allRows = useMemo(() => groupActivity(items), [items]);
   const tabRows = useMemo(
     () => (filter === 'all' ? allRows : groupActivity(filterActivity(items, filter))),
     [allRows, items, filter],
   );
-  const hrefFor = useCallback((i: Reminder | ActivityRow['lead']) => activityHref(i, slugByChannelID), [slugByChannelID]);
-
   // The opened row stays highlighted — and listed under "Unread only" — while
   // its message is the page on screen; going anywhere else lets it go.
   const selectedRow = tabRows.find((r) => r.key === selectedKey);
@@ -114,36 +85,19 @@ export const ActivityPanel = memo(function ActivityPanel({ onNavigate }: Activit
   // The virtual list keys its day headings and rows as one run.
   const listKeys = useMemo(() => sections.flatMap((s) => [`day:${s.day}`, ...s.rows.map((r) => r.key)]), [sections]);
 
-  // Names for the people the rows name (each row names its newest actor).
-  const actorIDs = useMemo(
-    () => allRows.flatMap((r) => (r.lead.actorID && !isWebhookItem(r.lead) ? [r.lead.actorID] : [])),
-    [allRows],
-  );
-  const { map: users } = useUsersBatch(actorIDs);
-
   const unreadByTab = useMemo(() => {
     const out = {} as Record<ActivityTab, number>;
     for (const t of ACTIVITY_TABS) out[t.id] = feed ? tabUnread(feed, t.id) : 0;
     return out;
   }, [feed]);
 
-  const setRead = setItemsRead.mutate;
-  const remove = removeItems.mutate;
   const onOpen = useCallback(
     (row: ActivityRow) => {
-      selectActivityRow(row.key);
-      if (row.unreadIDs.length > 0) setRead({ ids: row.unreadIDs, read: true });
+      openRow(row);
       onNavigate?.();
     },
-    [setRead, onNavigate],
+    [openRow, onNavigate],
   );
-  // Marking a row unread marks its newest item, so the row reads unread
-  // without counting every message in a busy conversation again.
-  const onSetRead = useCallback(
-    (row: ActivityRow, read: boolean) => setRead({ ids: read ? row.unreadIDs : [row.lead.id], read }),
-    [setRead],
-  );
-  const onRemove = useCallback((row: ActivityRow) => remove(row.items.map((i) => i.id)), [remove]);
 
   // "Mark all as read" covers the tab on screen: All advances the read
   // watermark; another tab marks just its own unread items, leaving the rest
@@ -241,6 +195,10 @@ export const ActivityPanel = memo(function ActivityPanel({ onNavigate }: Activit
                       onSetRead={onSetRead}
                       onRemove={onRemove}
                       today={today}
+                      onRemind={onRemind}
+                      onCopyLink={onCopyLink}
+                      onMuteThread={onMuteThread}
+                      onClearBefore={onClearBefore}
                     />
                   );
                 }}
@@ -249,6 +207,7 @@ export const ActivityPanel = memo(function ActivityPanel({ onNavigate }: Activit
           </div>
         </div>
       </ScrollArea>
+      <ActivityReminderDialog reminder={reminder} channelSlug={reminder ? slugFor(reminder.row) : undefined} onClose={() => setReminder(null)} />
     </div>
   );
 });
