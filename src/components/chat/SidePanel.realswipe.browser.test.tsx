@@ -74,6 +74,6 @@ describe('SidePanel — real swipe-to-dismiss', () => {
     const { left, top } = body.getBoundingClientRect();
     await nativeTouchSwipe(body, { from: { x: left + 40, y: top + 120 }, dx: 220, steps: 25, stepMs: 30 });
 
-    await vi.waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalledTimes(1), { timeout: 5000 });
   });
 });

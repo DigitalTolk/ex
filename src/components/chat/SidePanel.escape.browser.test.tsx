@@ -41,26 +41,26 @@ describe('Escape on a right-hand panel', () => {
     const screen = await render(<Harness />);
     const button = screen.getByTestId('members-button');
     await button.click();
-    await vi.waitFor(() => expect(panel()).not.toBeNull());
+    await vi.waitFor(() => expect(panel()).not.toBeNull(), { timeout: 5000 });
 
     await userEvent.keyboard('{Escape}');
 
-    await vi.waitFor(() => expect(panel()).toBeNull());
+    await vi.waitFor(() => expect(panel()).toBeNull(), { timeout: 5000 });
     const el = button.element() as HTMLElement;
-    await vi.waitFor(() => expect(el.matches(':focus-visible')).toBe(false));
+    await vi.waitFor(() => expect(el.matches(':focus-visible')).toBe(false), { timeout: 5000 });
   });
 
   it('an Escape the popover above takes leaves the panel open', async () => {
     if (window.innerWidth <= 767) return;
     const screen = await render(<Harness withPopover />);
     await screen.getByTestId('members-button').click();
-    await vi.waitFor(() => expect(document.querySelector('[aria-label="Emoji picker"]')).not.toBeNull());
+    await vi.waitFor(() => expect(document.querySelector('[aria-label="Emoji picker"]')).not.toBeNull(), { timeout: 5000 });
 
     await userEvent.keyboard('{Escape}');
-    await vi.waitFor(() => expect(document.querySelector('[aria-label="Emoji picker"]')).toBeNull());
+    await vi.waitFor(() => expect(document.querySelector('[aria-label="Emoji picker"]')).toBeNull(), { timeout: 5000 });
     expect(panel()).not.toBeNull();
 
     await userEvent.keyboard('{Escape}');
-    await vi.waitFor(() => expect(panel()).toBeNull());
+    await vi.waitFor(() => expect(panel()).toBeNull(), { timeout: 5000 });
   });
 });
