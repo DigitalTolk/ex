@@ -244,6 +244,7 @@ describe('AgentsPage', () => {
     fireEvent.click(gg.getByRole('button', { name: 'Advanced' }));
     expect(gg.getByLabelText('Model')).toHaveAttribute('placeholder', 'harness default');
     expect(gg.getByLabelText('Discussion rounds')).toHaveAttribute('placeholder', '12');
+    expect(gg.getByLabelText('Token budget')).toHaveAttribute('placeholder', '200000');
     expect(gg.getByLabelText('Thread follow-ups')).toHaveValue('');
     expect(gg.queryByLabelText('ask me before it replies')).not.toBeInTheDocument();
     // Collapsing again hides it (the chevron flips).
@@ -530,6 +531,34 @@ describe('AgentsPage', () => {
     );
   });
 
+  it('saves a token budget next to the chain rounds', async () => {
+    let patchBody: unknown;
+    installRoutes({
+      mutate: (path, init) => {
+        if (path === '/api/v1/agents/aa/prefs' && init?.method === 'PATCH') {
+          patchBody = JSON.parse(init.body!);
+          return Promise.resolve({});
+        }
+        return undefined;
+      },
+    });
+    renderPage();
+
+    const aa = await openCard('aa');
+    // Below the floor the field clamps; the default sits in the placeholder.
+    fireEvent.change(aa.getByLabelText('Token budget'), { target: { value: '5' } });
+    expect(aa.getByLabelText('Token budget')).toHaveValue('10000');
+    fireEvent.change(aa.getByLabelText('Token budget'), { target: { value: '500000' } });
+    fireEvent.change(aa.getByLabelText('Discussion rounds'), { target: { value: '3' } });
+    fireEvent.click(aa.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(patchBody).toEqual(
+        expect.objectContaining({ limits: { maxChainRounds: 3, maxTokens: 500000 } }),
+      ),
+    );
+  });
+
   it('switching a default card to bedrock reveals the bedrock controls (server-only)', async () => {
     installRoutes();
     renderPage();
@@ -540,7 +569,7 @@ describe('AgentsPage', () => {
     expect(gg.getByLabelText('Model')).toHaveAttribute('placeholder', 'eu.anthropic.claude-opus-5');
     // Bedrock is server-only: no Runs-on choice exists, and the copy says so.
     expect(gg.queryByLabelText('Runs on')).not.toBeInTheDocument();
-    expect(gg.getByText(/Runs via AWS Bedrock ON THE SERVER/)).toBeInTheDocument();
+    expect(gg.getByText(/Runs via AWS Bedrock on the server/)).toBeInTheDocument();
   });
 
   it('shows the follow-up ask checkbox once a window is chosen', async () => {

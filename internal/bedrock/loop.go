@@ -45,12 +45,14 @@ type Usage struct {
 
 // Config is one loop invocation.
 type Config struct {
-	ModelID   string
-	System    string
-	Prompt    string
-	MaxIters  int   // ≤0 → itersCeiling
-	MaxTokens int32 // per-response cap; ≤0 → defaultMaxTokens
-	Tools     []Tool
+	ModelID string
+	System  string
+	Prompt  string
+	// Attachments ride the first user message as image/document blocks.
+	Attachments []Attachment
+	MaxIters    int   // ≤0 → itersCeiling
+	MaxTokens   int32 // per-response cap; ≤0 → defaultMaxTokens
+	Tools       []Tool
 	// OnEvent observes loop progress ("text", "tool_call", "tool_result") for
 	// run timelines. Optional. Must not block.
 	OnEvent func(kind string, payload map[string]any)
@@ -106,7 +108,7 @@ func Run(ctx context.Context, client Client, cfg Config) (string, Usage, error) 
 
 	msgs := []types.Message{{
 		Role:    types.ConversationRoleUser,
-		Content: []types.ContentBlock{&types.ContentBlockMemberText{Value: cfg.Prompt}},
+		Content: append([]types.ContentBlock{&types.ContentBlockMemberText{Value: cfg.Prompt}}, attachmentBlocks(cfg.Attachments)...),
 	}}
 	var usage Usage
 	var lastText string

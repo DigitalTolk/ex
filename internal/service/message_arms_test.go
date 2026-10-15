@@ -34,7 +34,7 @@ func TestSendRollbackDeleteFailureIsNonFatal(t *testing.T) {
 	// reports the bind error (the message row is orphaned, logged at WARN).
 	svc, messages, memberships, _, _ := setupMessageService()
 	seedMembership(memberships, "ch1", "user-1")
-	refs := &fakeAttachmentRefMgr{addErr: errors.New("bind boom")}
+	refs := &fakeAttachmentRefMgr{addErr: errors.New("bind boom"), owners: map[string]string{"att-1": "user-1"}}
 	svc.SetAttachmentManager(refs)
 	messages.deleteErr = errors.New("delete boom")
 

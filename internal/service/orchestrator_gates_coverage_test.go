@@ -115,7 +115,7 @@ type ogateCovMsgs struct {
 	sendErr error
 }
 
-func (m *ogateCovMsgs) SendAsAgentRun(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string) (*model.Message, error) {
+func (m *ogateCovMsgs) SendAsAgentRun(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string, attachmentIDs ...string) (*model.Message, error) {
 	if m.sendErr != nil {
 		return nil, m.sendErr
 	}

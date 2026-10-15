@@ -150,6 +150,8 @@ type completeBody struct {
 	RunnerID  string         `json:"runnerID"`
 	FinalText string         `json:"finalText"`
 	Usage     map[string]any `json:"usage"`
+	// AttachmentIDs are files this run uploaded, to ride the final-answer post.
+	AttachmentIDs []string `json:"attachmentIDs"`
 }
 
 // Complete finalizes a run.
@@ -161,7 +163,7 @@ func (h *AgentRunnerHandler) Complete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "runnerID required")
 		return
 	}
-	if err := h.orch.CompleteRun(r.Context(), ownerID, body.RunnerID, r.PathValue("id"), body.FinalText, body.Usage); err != nil {
+	if err := h.orch.CompleteRun(r.Context(), ownerID, body.RunnerID, r.PathValue("id"), body.FinalText, body.Usage, body.AttachmentIDs...); err != nil {
 		h.writeRunError(w, r, err)
 		return
 	}
@@ -249,6 +251,9 @@ type AgentRunToolHandler struct {
 	// search); nil until SetWorkspace — the router only registers the
 	// workspace routes when set.
 	workspace *AgentWorkspaceDeps
+	// attachments enables the run-scoped file endpoints and attachments on
+	// posts; nil until SetAttachments.
+	attachments *service.AttachmentService
 
 	// baseURL is the workspace's public origin (BASE_URL), used to build
 	// clickable message permalinks for the link_message tool. Empty disables
@@ -311,8 +316,9 @@ func NewAgentRunToolHandler(orch *service.Orchestrator, messages *service.Messag
 }
 
 type postMessageBody struct {
-	Body           string `json:"body"`
-	IdempotencyKey string `json:"idempotencyKey"`
+	Body           string   `json:"body"`
+	IdempotencyKey string   `json:"idempotencyKey"`
+	AttachmentIDs  []string `json:"attachmentIDs"`
 }
 
 // PostMessage posts into the run's thread as the agent, capped per run.
@@ -323,7 +329,7 @@ func (h *AgentRunToolHandler) PostMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var body postMessageBody
-	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || strings.TrimSpace(body.Body) == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || (strings.TrimSpace(body.Body) == "" && len(body.AttachmentIDs) == 0) {
 		writeError(w, http.StatusBadRequest, "bad_request", "body required")
 		return
 	}
@@ -337,6 +343,10 @@ func (h *AgentRunToolHandler) PostMessage(w http.ResponseWriter, r *http.Request
 	}
 	if run.Spend.Posts >= run.Limits.MaxPosts {
 		writeError(w, http.StatusTooManyRequests, "post_cap", "per-run post cap reached")
+		return
+	}
+	files, ok := h.runPostAttachments(w, r, claims, body.AttachmentIDs)
+	if !ok {
 		return
 	}
 	// Claim the idempotency key BEFORE posting, with a placeholder: a
@@ -357,7 +367,7 @@ func (h *AgentRunToolHandler) PostMessage(w http.ResponseWriter, r *http.Request
 	// Models write plain "@qib"; rewrite to real mention markup so it renders
 	// as a chip AND can hand the turn to that agent (chain below).
 	text := h.orch.LinkifyMentions(r.Context(), run, body.Body)
-	msg, err := h.messages.SendAsAgentRun(r.Context(), claims.ActorID, claims.UserID, run.ParentID, run.ParentType, text, threadRoot, claims.RunID)
+	msg, err := h.messages.SendAsAgentRun(r.Context(), claims.ActorID, claims.UserID, run.ParentID, run.ParentType, text, threadRoot, claims.RunID, files...)
 	if err != nil {
 		if idemKey != "" {
 			h.forgetPost(idemKey) // the post never happened; let a retry through

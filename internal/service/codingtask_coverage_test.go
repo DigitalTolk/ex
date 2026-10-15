@@ -142,7 +142,7 @@ type ctaskCovMsgs struct {
 	accessErr          error
 }
 
-func (m *ctaskCovMsgs) SendAsAgentRun(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string) (*model.Message, error) {
+func (m *ctaskCovMsgs) SendAsAgentRun(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string, _ ...string) (*model.Message, error) {
 	if m.sendErr != nil && (m.failSendContaining == "" || strings.Contains(body, m.failSendContaining)) {
 		return nil, m.sendErr
 	}

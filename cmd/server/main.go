@@ -421,6 +421,11 @@ func main() {
 	attachmentSvc.SetMediaURLCache(redisCache)
 	attachmentSvc.SetAccessChecker(messageSvc)
 	messageSvc.SetAttachmentManager(attachmentSvc)
+	// Agent runs see the files on the messages they answer (transcript
+	// markers, Bedrock content blocks, runner downloads) and may post their
+	// own files back.
+	orchestrator.SetAttachments(attachmentSvc)
+	agentRunToolH.SetAttachments(attachmentSvc)
 	notificationSvc := service.NewNotificationServiceFromDeps(service.NotificationServiceDeps{
 		Publisher:     redisPubSub,
 		Memberships:   membershipStore,

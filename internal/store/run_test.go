@@ -470,11 +470,18 @@ func TestRunStore_AtomicCounters(t *testing.T) {
 	if posted.Spend.Posts != 1 || posted.Spend.Turns != 2 {
 		t.Fatalf("post bump clobbered the ledger: %+v", posted.Spend)
 	}
+	uploaded, err := s.AddRunUploads(ctx, run.ID, 2)
+	if err != nil {
+		t.Fatalf("add uploads: %v", err)
+	}
+	if uploaded.Spend.Uploads != 2 || uploaded.Spend.Posts != 1 || uploaded.Spend.Turns != 2 {
+		t.Fatalf("upload bump clobbered the ledger: %+v", uploaded.Spend)
+	}
 	again, err := s.AddRunSpend(ctx, run.ID, "r-1", RunSpendDelta{Turns: 1, LastRunnerSeq: 9})
 	if err != nil {
 		t.Fatalf("add spend 2: %v", err)
 	}
-	if again.Spend.Turns != 3 || again.Spend.Posts != 1 {
+	if again.Spend.Turns != 3 || again.Spend.Posts != 1 || again.Spend.Uploads != 2 {
 		t.Fatalf("second batch did not accumulate: %+v", again.Spend)
 	}
 
@@ -493,6 +500,9 @@ func TestRunStore_AtomicCounters(t *testing.T) {
 	if _, err := s.AddRunPosts(ctx, run.ID, 1); !errors.Is(err, ErrStaleRun) {
 		t.Fatalf("terminal post bump: want ErrStaleRun, got %v", err)
 	}
+	if _, err := s.AddRunUploads(ctx, run.ID, 1); !errors.Is(err, ErrStaleRun) {
+		t.Fatalf("terminal upload bump: want ErrStaleRun, got %v", err)
+	}
 }
 
 func TestRunStore_AtomicCountersErrorArms(t *testing.T) {
@@ -506,6 +516,9 @@ func TestRunStore_AtomicCountersErrorArms(t *testing.T) {
 		}
 		if _, err := s.AddRunPosts(ctx, "run-e", 1); !errors.Is(err, errInjected) {
 			t.Fatalf("AddRunPosts: want errInjected, got %v", err)
+		}
+		if _, err := s.AddRunUploads(ctx, "run-e", 1); !errors.Is(err, errInjected) {
+			t.Fatalf("AddRunUploads: want errInjected, got %v", err)
 		}
 	})
 	t.Run("corrupt returned row", func(t *testing.T) {

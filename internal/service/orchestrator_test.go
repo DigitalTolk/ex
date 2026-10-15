@@ -150,6 +150,26 @@ func (f *fakeRunStore) AddRunPosts(_ context.Context, runID string, delta int) (
 	return &cp, nil
 }
 
+func (f *fakeRunStore) AddRunUploads(_ context.Context, runID string, delta int) (*model.Run, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.failAddPostsOnce; err != nil {
+		f.failAddPostsOnce = nil
+		return nil, err
+	}
+	cur, ok := f.runs[runID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if cur.State.Terminal() {
+		return nil, store.ErrStaleRun
+	}
+	cur.Spend.Uploads += delta
+	cur.UpdatedAt = time.Now()
+	cp := *cur
+	return &cp, nil
+}
+
 func (f *fakeRunStore) RenewRunLease(_ context.Context, runID, runnerID string, lease time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -716,9 +736,11 @@ type fakeOrchMessages struct {
 	checkAccessErr error
 	// failSendOnce fails the next SendAsAgentRun (server-tool error arms).
 	failSendOnce error
+	// postFiles are the attachment ids of the matching posts entry.
+	postFiles [][]string
 }
 
-func (f *fakeOrchMessages) SendAsAgentRun(_ context.Context, _, _, parentID, parentType, body, _, _ string) (*model.Message, error) {
+func (f *fakeOrchMessages) SendAsAgentRun(_ context.Context, _, _, parentID, parentType, body, _, _ string, attachmentIDs ...string) (*model.Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.failSendOnce; err != nil {
@@ -727,6 +749,7 @@ func (f *fakeOrchMessages) SendAsAgentRun(_ context.Context, _, _, parentID, par
 	}
 	f.posts = append(f.posts, body)
 	f.postDest = append(f.postDest, parentType+"|"+parentID)
+	f.postFiles = append(f.postFiles, attachmentIDs)
 	return &model.Message{ID: "m-posted", Body: body}, nil
 }
 
@@ -977,6 +1000,22 @@ func TestOrchestrator_TokenBudgetAborts(t *testing.T) {
 	got, _ := fx.runs.GetRun(context.Background(), run.ID)
 	if got.State != model.RunStateFailed {
 		t.Fatalf("run not failed on token budget: %+v", got)
+	}
+	// The thread learns the numbers and the way out, not just "token budget".
+	notice := fx.msgs.lastPost()
+	if !strings.Contains(notice, "200,001 of 200,000 tokens used") || !strings.Contains(notice, "Token budget") {
+		t.Fatalf("notice = %q", notice)
+	}
+}
+
+func TestHumanCountAndLimitNotice(t *testing.T) {
+	for n, want := range map[int64]string{0: "0", 12: "12", 999: "999", 1000: "1,000", 1234567: "1,234,567", -5: "-5"} {
+		if got := humanCount(n); got != want {
+			t.Errorf("humanCount(%d) = %q, want %q", n, got, want)
+		}
+	}
+	if got := limitNotice(&model.Run{}, "deadline"); got != "⛔ stopped: hit its time limit for this task." {
+		t.Fatalf("deadline notice = %q", got)
 	}
 }
 

@@ -430,6 +430,11 @@ export interface RunSpend {
   inputTokens: number /* int64 */;
   outputTokens: number /* int64 */;
   posts: number /* int */;
+  /**
+   * Uploads counts files the run stored for its own posts; capped per run
+   * (UploadsPerRun) so a runaway agent can't fill the bucket.
+   */
+  uploads?: number /* int */;
 }
 /**
  * Run is one bounded agent task: invoked by a human mention, executed by the
@@ -453,6 +458,15 @@ export interface Run {
   state: RunState;
   mode: string; // "direct" at Phase 1
   prompt: string;
+  /**
+   * AttachmentIDs are the files on the invoking message, in message order.
+   * They are the run's INPUT files: the engine hands them to the model
+   * (Bedrock content blocks, or downloads on the runner) and the run-scoped
+   * attachment endpoint serves exactly these without a further message
+   * lookup. Access is still the invoker's — the message they came from is
+   * one the invoker could read when the run started.
+   */
+  attachmentIDs?: string[];
   /**
    * Round is the agent-to-agent handoff depth: 0 = human-invoked; an agent
    * whose reply @mentions another agent starts that agent at Round+1. The
@@ -693,6 +707,16 @@ export const ArtifactMaxBytes = 64 * 1024;
  * Artifact bounds.
  */
 export const ArtifactsPerRun = 5;
+/**
+ * UploadsPerRun caps the files one run may store for its posts, and
+ * UploadMaxBytes caps each one. Generous for a report with a few
+ * screenshots; far below what a loop could do with the bucket.
+ */
+export const UploadsPerRun = 20;
+/**
+ * Artifact bounds.
+ */
+export const UploadMaxBytes = 10 << 20;
 /**
  * Raw API responses (auto-captured connector_call bodies) get their own,
  * larger budget — they exist so a human can audit what the agent actually

@@ -630,10 +630,20 @@ type fakeAttachmentRefMgr struct {
 	validateErr error
 	addErr      error
 	removeErr   error
+	// owners maps attachment ID → uploader; unknown IDs report owner "" (so a
+	// test that never sets owners exercises the forbidden arm). refs maps
+	// attachment ID → messages carrying it.
+	owners   map[string]string
+	refs     map[string][]string
+	ownerErr error
 }
 
 func (f *fakeAttachmentRefMgr) ValidateForUse(_ context.Context, _ string) error {
 	return f.validateErr
+}
+
+func (f *fakeAttachmentRefMgr) AttachmentOwner(_ context.Context, id string) (string, []string, error) {
+	return f.owners[id], f.refs[id], f.ownerErr
 }
 
 func (f *fakeAttachmentRefMgr) AddRef(_ context.Context, attachmentID, _ string) error {
@@ -749,7 +759,7 @@ func TestMessageService_releaseAttachments_NoOpWhenNilOrEmpty(t *testing.T) {
 func TestMessageService_Edit_AttachmentDiff(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	ctx := context.Background()
-	refs := &fakeAttachmentRefMgr{}
+	refs := &fakeAttachmentRefMgr{owners: map[string]string{"b": "user-1", "c": "user-1"}}
 	svc.SetAttachmentManager(refs)
 
 	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{
@@ -787,7 +797,7 @@ func TestMessageService_Edit_AttachmentDiff(t *testing.T) {
 func TestMessageService_Edit_ReturnsWhenAttachmentBindFails(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	ctx := context.Background()
-	refs := &fakeAttachmentRefMgr{addErr: errors.New("bind failed")}
+	refs := &fakeAttachmentRefMgr{addErr: errors.New("bind failed"), owners: map[string]string{"att-1": "user-1"}}
 	svc.SetAttachmentManager(refs)
 
 	memberships.memberships["ch1#user-1"] = &model.ChannelMembership{
@@ -838,7 +848,7 @@ func TestMessageService_Send_RollsBackWhenAttachmentBindFails(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	ctx := context.Background()
 	memberships.memberships["ch1#u1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u1", Role: model.ChannelRoleMember}
-	refs := &fakeAttachmentRefMgr{addErr: errors.New("bind failed")}
+	refs := &fakeAttachmentRefMgr{addErr: errors.New("bind failed"), owners: map[string]string{"att-1": "u1"}}
 	svc.SetAttachmentManager(refs)
 
 	if _, err := svc.Send(ctx, "u1", "ch1", ParentChannel, "body", "", "att-1"); err == nil {

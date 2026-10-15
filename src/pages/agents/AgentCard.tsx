@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Bot, Check, ChevronDown, ChevronRight } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -11,6 +11,7 @@ import {
 } from '@/hooks/useAgents';
 import { ScheduledOrders } from './ScheduledOrders';
 import { WatchedChannels } from './WatchedChannels';
+import { InfoTip } from '@/components/ui/info-tip';
 import { NativeSelect } from '@/components/ui/native-select';
 import { wholeNumberField } from '@/lib/numeric-field';
 
@@ -49,6 +50,11 @@ export function AgentCard({ agent }: { agent: AgentView }) {
   const [chainRounds, setChainRounds] = useState(
     agent.prefs.limits?.maxChainRounds ? String(agent.prefs.limits.maxChainRounds) : '',
   );
+  // Token budget per task: attachments and long threads spend it, and the
+  // stop notice names this field when a run runs out.
+  const [tokenBudget, setTokenBudget] = useState(
+    agent.prefs.limits?.maxTokens ? String(agent.prefs.limits.maxTokens) : '',
+  );
   // Follow-up select folds mode+minutes into one value: "" (off), "window:N",
   // "always" — decoded back into the two pref fields on save.
   const initialFollowUp =
@@ -82,6 +88,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
         agent.prefs.offlinePolicy,
         agent.prefs.followUpMode,
         agent.prefs.limits?.maxChainRounds ? 'rounds' : '',
+        agent.prefs.limits?.maxTokens ? 'tokens' : '',
         (agent.prefs.autoAllow ?? []).length > 0 ? 'allow' : '',
       ].filter(Boolean).length,
     [agent.prefs],
@@ -104,7 +111,8 @@ export function AgentCard({ agent }: { agent: AgentView }) {
     followUpAsk !== (agent.prefs.followUpAsk ?? false) ||
     [...autoAllow].sort().join(',') !== initialAutoAllow ||
     chainRounds !==
-      (agent.prefs.limits?.maxChainRounds ? String(agent.prefs.limits.maxChainRounds) : '');
+      (agent.prefs.limits?.maxChainRounds ? String(agent.prefs.limits.maxChainRounds) : '') ||
+    tokenBudget !== (agent.prefs.limits?.maxTokens ? String(agent.prefs.limits.maxTokens) : '');
 
   const save = () => {
     update.mutate(
@@ -124,7 +132,10 @@ export function AgentCard({ agent }: { agent: AgentView }) {
           autoAllow,
           // Whole-struct semantics server-side: a number sets the override,
           // an empty struct resets to inherit.
-          limits: chainRounds ? { maxChainRounds: Number(chainRounds) } : {},
+          limits: {
+            ...(chainRounds ? { maxChainRounds: Number(chainRounds) } : {}),
+            ...(tokenBudget ? { maxTokens: Number(tokenBudget) } : {}),
+          },
         },
       },
       {
@@ -182,7 +193,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
       )}
 
       {open && (
-      <div className="space-y-2.5 border-t p-3">
+      <div className="space-y-3 border-t p-3">
         <div>
           <div className="flex items-baseline justify-between gap-2">
             <Label htmlFor={`persona-${agent.slug}`}>Prompt for @{agent.displayName}</Label>
@@ -229,13 +240,20 @@ export function AgentCard({ agent }: { agent: AgentView }) {
         </div>
 
         {showAdvanced && (
-          <div className="space-y-3 rounded-md border bg-muted/20 p-3">
-            <div className="flex flex-wrap items-end gap-3">
-              <div>
-                <Label htmlFor={`harness-${agent.slug}`}>Backend</Label>
+          <div className="space-y-4 rounded-lg border p-4" data-testid={`agent-advanced-${agent.slug}`}>
+            <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
+              <Field
+                label="Backend"
+                htmlFor={`harness-${agent.slug}`}
+                info={
+                  isBedrock
+                    ? 'Runs via AWS Bedrock on the server — no desktop app, CLI or personal AWS credentials. Bedrock agents use chat, workspace and connector tools, never anyone’s local shell or files.'
+                    : 'Which engine answers when you mention it.'
+                }
+              >
                 <NativeSelect
                   id={`harness-${agent.slug}`}
-                  className="mt-1"
+                  className="w-full"
                   value={harness}
                   onChange={(e) => setHarness(e.target.value)}
                 >
@@ -244,12 +262,19 @@ export function AgentCard({ agent }: { agent: AgentView }) {
                   <option value="codex">Codex (CLI)</option>
                   <option value="bedrock">AWS Bedrock (API)</option>
                 </NativeSelect>
-              </div>
-              <div>
-                <Label htmlFor={`model-${agent.slug}`}>Model</Label>
+              </Field>
+              <Field
+                label="Model"
+                htmlFor={`model-${agent.slug}`}
+                info={
+                  isBedrock
+                    ? 'A Bedrock model id or inference-profile ARN.'
+                    : 'Leave empty for the backend’s default model.'
+                }
+              >
                 <Input
                   id={`model-${agent.slug}`}
-                  className={isBedrock ? 'mt-1 w-80' : 'mt-1 w-56'}
+                  className="w-full"
                   value={model}
                   placeholder={
                     isBedrock
@@ -258,40 +283,45 @@ export function AgentCard({ agent }: { agent: AgentView }) {
                   }
                   onChange={(e) => setModel(e.target.value)}
                 />
-              </div>
-              <div>
-                <Label htmlFor={`rounds-${agent.slug}`}>Discussion rounds</Label>
+              </Field>
+              <Field
+                label="Token budget"
+                htmlFor={`tokens-${agent.slug}`}
+                info="Tokens one task may spend. Attached files and long threads count. A run that hits it stops and says so. Empty uses the default shown."
+              >
+                <Input
+                  id={`tokens-${agent.slug}`}
+                  className="w-full"
+                  inputMode="numeric"
+                  value={tokenBudget}
+                  placeholder={String(agent.resolved.limits.maxTokens ?? 200000)}
+                  onChange={(e) => setTokenBudget(wholeNumberField(e.target.value, 10000, 10000000))}
+                />
+              </Field>
+              <Field
+                label="Discussion rounds"
+                htmlFor={`rounds-${agent.slug}`}
+                info="How many times agents may hand the turn to each other in one conversation."
+              >
                 <Input
                   id={`rounds-${agent.slug}`}
-                  className="mt-1 w-28"
+                  className="w-full"
                   inputMode="numeric"
                   value={chainRounds}
                   placeholder={String(agent.resolved.limits.maxChainRounds ?? 12)}
                   onChange={(e) => setChainRounds(wholeNumberField(e.target.value, 1, 50))}
                 />
-              </div>
-              {!effectiveBedrock && (
-                <div>
-                  <Label htmlFor={`offline-${agent.slug}`}>If your app is offline</Label>
-                  <NativeSelect
-                    id={`offline-${agent.slug}`}
-                    className="mt-1"
-                    value={offlinePolicy}
-                    onChange={(e) => setOfflinePolicy(e.target.value)}
-                  >
-                    <option value="">fail fast (default)</option>
-                    <option value="queue">queue up to 1 hour</option>
-                  </NativeSelect>
-                </div>
-              )}
-              <div>
-                <Label htmlFor={`followup-${agent.slug}`}>Thread follow-ups</Label>
+              </Field>
+              <Field
+                label="Thread follow-ups"
+                htmlFor={`followup-${agent.slug}`}
+                info="After it replies in a thread, your un-tagged replies there keep re-invoking it."
+              >
                 <NativeSelect
                   id={`followup-${agent.slug}`}
-                  className="mt-1"
+                  className="w-full"
                   value={followUp}
                   onChange={(e) => setFollowUp(e.target.value)}
-                  title="After it replies in a thread, your un-tagged replies there keep re-invoking it (on your quota)."
                 >
                   <option value="">off — mentions only</option>
                   <option value="window:10">for 10 min after it replies</option>
@@ -299,33 +329,52 @@ export function AgentCard({ agent }: { agent: AgentView }) {
                   <option value="window:60">for 1 hour after it replies</option>
                   <option value="always">always follow its threads</option>
                 </NativeSelect>
-              </div>
-              {followUp !== '' && (
-                <label
-                  className="flex items-center gap-1.5 pb-2 text-sm text-muted-foreground"
-                  htmlFor={`followup-ask-${agent.slug}`}
+                {followUp !== '' && (
+                  <label className="mt-2 flex items-center gap-2 text-sm" htmlFor={`followup-ask-${agent.slug}`}>
+                    <input
+                      id={`followup-ask-${agent.slug}`}
+                      type="checkbox"
+                      checked={followUpAsk}
+                      onChange={(e) => setFollowUpAsk(e.target.checked)}
+                    />
+                    ask me before it replies
+                  </label>
+                )}
+              </Field>
+              {!effectiveBedrock && (
+                <Field
+                  label="If your app is offline"
+                  htmlFor={`offline-${agent.slug}`}
+                  info="What happens to a mention while your desktop app is closed."
                 >
-                  <input
-                    id={`followup-ask-${agent.slug}`}
-                    type="checkbox"
-                    checked={followUpAsk}
-                    onChange={(e) => setFollowUpAsk(e.target.checked)}
-                  />
-                  ask me before it replies
-                </label>
+                  <NativeSelect
+                    id={`offline-${agent.slug}`}
+                    className="w-full"
+                    value={offlinePolicy}
+                    onChange={(e) => setOfflinePolicy(e.target.value)}
+                  >
+                    <option value="">fail fast (default)</option>
+                    <option value="queue">queue up to 1 hour</option>
+                  </NativeSelect>
+                </Field>
               )}
             </div>
 
             {!effectiveBedrock && (
-              <fieldset>
-                <legend className="text-sm font-medium">Don’t ask me to approve</legend>
-                <p className="mb-1 text-sm text-muted-foreground">
-                  Pre-approve harness tool classes for @{agent.displayName} on your machine. Everything
-                  else still shows an approval card; inside a coding task the workspace profile applies too.
-                </p>
-                <div className="flex flex-wrap gap-x-4 gap-y-1">
+              <div>
+                <div className="flex items-center gap-1.5 text-sm font-medium">
+                  Don’t ask me to approve
+                  <InfoTip label="Don’t ask me to approve">
+                    Skip the approval card for these on your machine. Everything else still asks.
+                  </InfoTip>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label="Pre-approved tools">
                   {AUTO_ALLOW_CLASSES.map((c) => (
-                    <label key={c.id} className="flex items-center gap-1.5 text-sm" title={c.hint}>
+                    <label
+                      key={c.id}
+                      className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-sm hover:bg-accent/40 has-[:checked]:border-foreground/40 has-[:checked]:bg-accent/60"
+                      title={c.hint}
+                    >
                       <input
                         type="checkbox"
                         checked={autoAllow.includes(c.id)}
@@ -339,17 +388,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
                     </label>
                   ))}
                 </div>
-              </fieldset>
-            )}
-
-            {isBedrock && (
-              <p className="text-sm text-muted-foreground">
-                Runs via AWS Bedrock ON THE SERVER — no desktop app, CLI, or personal AWS
-                credentials involved; the backend’s own AWS role makes the model calls. Bedrock
-                agents use the chat, workspace, and connector tools — never anyone’s local shell or
-                files. Enter a Bedrock model id or inference-profile ARN above (e.g. a Claude,
-                Llama, or Mistral model).
-              </p>
+              </div>
             )}
           </div>
         )}
@@ -371,3 +410,17 @@ export function AgentCard({ agent }: { agent: AgentView }) {
 // WatchedChannels: this agent watches channels FOR YOU — matching human
 // messages (or periodic check-ins) invoke it un-mentioned, on your machine
 // and quota.
+
+// Field is one setting: its label with an (i) carrying the explanation, then
+// the control. No inline captions, so the panel stays one line per setting.
+function Field({ label, htmlFor, info, children }: { label: string; htmlFor: string; info: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <div className="flex items-center gap-1.5">
+        <Label htmlFor={htmlFor}>{label}</Label>
+        <InfoTip label={label}>{info}</InfoTip>
+      </div>
+      <div className="mt-1.5">{children}</div>
+    </div>
+  );
+}

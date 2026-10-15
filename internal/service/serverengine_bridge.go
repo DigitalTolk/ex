@@ -107,6 +107,10 @@ func obj(props map[string]any, required ...string) map[string]any {
 	return s
 }
 func str(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
+
+func strList(desc string) map[string]any {
+	return map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": desc}
+}
 func num(desc string) map[string]any { return map[string]any{"type": "number", "description": desc} }
 
 // bridgeTools is the transcription of the runner's portable workspace tools.
@@ -264,14 +268,14 @@ func bridgeTools(api *runAPI) []bedrock.Tool {
 		{
 			Name:        "post_to_channel",
 			Description: "Post a message to another channel (counts against your post cap; watch modes that bar public posts bar this too).",
-			Schema:      obj(in{"channelID": str("Channel id."), "body": str("Message body (markdown)."), "thread_root": str("Optional [m:<id>] to reply into a thread.")}, "channelID", "body"),
+			Schema:      obj(in{"channelID": str("Channel id."), "body": str("Message body (markdown)."), "thread_root": str("Optional [m:<id>] to reply into a thread."), "attachmentIDs": strList("Files to attach: ids from create_file (this run's own files only).")}, "channelID", "body"),
 			Call: func(ctx context.Context, raw json.RawMessage) (string, bool) {
 				v := parse(raw)
 				id, body := s(v, "channelID"), s(v, "body")
 				if id == "" || body == "" {
 					return "post_to_channel requires channelID and body", true
 				}
-				payload := in{"body": body}
+				payload := in{"body": body, "attachmentIDs": v["attachmentIDs"]}
 				if tr := s(v, "thread_root"); tr != "" {
 					payload["thread_root"] = tr
 				}
@@ -350,14 +354,14 @@ func bridgeTools(api *runAPI) []bedrock.Tool {
 			Description: "Send a direct message as the agent, on your invoker's behalf (counts against the post cap). " +
 				"userID must be a real id — call list_users first and pass the id it returns; a name, an @mention or " +
 				"a guessed id fails. DMing people beyond what was asked: request_approval first.",
-			Schema: obj(in{"userID": str("Recipient user id."), "body": str("Message body.")}, "userID", "body"),
+			Schema: obj(in{"userID": str("Recipient user id."), "body": str("Message body."), "attachmentIDs": strList("Files to attach: ids from create_file (this run's own files only).")}, "userID", "body"),
 			Call: func(ctx context.Context, raw json.RawMessage) (string, bool) {
 				v := parse(raw)
 				uid, body := s(v, "userID"), s(v, "body")
 				if uid == "" || body == "" {
 					return "send_dm requires userID and body", true
 				}
-				status, data := api.call(ctx, "POST", "/api/v1/agent/run/dm", in{"userID": uid, "body": body})
+				status, data := api.call(ctx, "POST", "/api/v1/agent/run/dm", in{"userID": uid, "body": body, "attachmentIDs": v["attachmentIDs"]})
 				if status < 200 || status >= 300 {
 					return describeRunFailure(status, data), true
 				}
