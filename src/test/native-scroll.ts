@@ -93,6 +93,8 @@ export interface NativeTouchSwipeOptions {
   /** Number of touchmoves, and the wait between them: a slow swipe is many, spread out. */
   steps?: number;
   stepMs?: number;
+  /** A second leg after the first, from where it ended: a swipe that changes course. */
+  then?: { dx: number; dy: number; steps: number };
 }
 
 /**
@@ -103,7 +105,7 @@ export interface NativeTouchSwipeOptions {
  */
 export async function nativeTouchSwipe(
   el: Element,
-  { dx = 0, dy = 0, from, steps = 20, stepMs = 30 }: NativeTouchSwipeOptions,
+  { dx = 0, dy = 0, from, steps = 20, stepMs = 30, then }: NativeTouchSwipeOptions,
 ): Promise<void> {
   const client = cdp() as unknown as CdpClient;
   const rect = el.getBoundingClientRect();
@@ -116,14 +118,19 @@ export async function nativeTouchSwipe(
       touchPoints: type === 'touchEnd' ? [] : [{ x: Math.round(point.x), y: Math.round(point.y), id: 1 }],
     });
   };
+  const legs = [{ from: origin, dx, dy, steps }];
+  if (then) legs.push({ from: { x: origin.x + dx, y: origin.y + dy }, ...then });
   await touch('touchStart', origin.x, origin.y);
-  for (let i = 1; i <= steps; i++) {
-    await new Promise((resolve) => setTimeout(resolve, stepMs));
-    await touch('touchMove', origin.x + (dx * i) / steps, origin.y + (dy * i) / steps);
+  for (const leg of legs) {
+    for (let i = 1; i <= leg.steps; i++) {
+      await new Promise((resolve) => setTimeout(resolve, stepMs));
+      await touch('touchMove', leg.from.x + (leg.dx * i) / leg.steps, leg.from.y + (leg.dy * i) / leg.steps);
+    }
   }
+  const last = legs[legs.length - 1];
   // Come to rest before lifting: a slow, deliberate release.
   await new Promise((resolve) => setTimeout(resolve, 120));
-  await touch('touchEnd', origin.x + dx, origin.y + dy);
+  await touch('touchEnd', last.from.x + last.dx, last.from.y + last.dy);
   await new Promise((resolve) => setTimeout(resolve, 400));
 }
 

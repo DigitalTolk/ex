@@ -7,7 +7,13 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { ActivityPanel } from './ActivityPanel';
 import { apiFetch } from '@/lib/api';
 import { applyRemindersChangedEvent } from '@/hooks/useActivity';
-import { resetSidebarModeSessionState, setActivityFilter, useSidebarModeStore } from '@/stores/sidebar-mode';
+import {
+  SIDEBAR_MODE_STORAGE_KEY,
+  resetSidebarModeSessionState,
+  setActivityFilter,
+  setActivityUnreadOnly,
+  useSidebarModeStore,
+} from '@/stores/sidebar-mode';
 import type { ActivityItem, Reminder } from '@/types';
 
 vi.mock('@/lib/api', async (orig) => ({ ...(await orig<object>()), apiFetch: vi.fn() }));
@@ -127,6 +133,8 @@ const open = (i: number) => rows()[i].querySelector<HTMLElement>('[data-testid="
 describe('ActivityPanel', () => {
   beforeEach(() => {
     resetSidebarModeSessionState();
+    // A device preference, kept in localStorage: off for every test.
+    setActivityUnreadOnly(false);
     vi.mocked(apiFetch).mockReset();
   });
   afterEach(() => cleanup());
@@ -356,6 +364,8 @@ describe('ActivityPanel', () => {
     await vi.waitFor(() => expect(rows()).toHaveLength(1));
     await screen.getByTestId('activity-unread-only').click();
     await expect.element(screen.getByTestId('activity-empty')).toHaveTextContent('No unread activity');
+    // Remembered on this device for the next session.
+    expect(JSON.parse(localStorage.getItem(SIDEBAR_MODE_STORAGE_KEY) ?? '{}').state).toEqual({ unreadOnly: true });
   });
 
   // The row you opened stays listed under "Unread only" while it's the page

@@ -553,6 +553,9 @@ func (fakeAttachmentSignerH) GetObjectRange(_ context.Context, _ string, _ int64
 func (fakeAttachmentSignerH) GetObject(_ context.Context, _ string) (io.ReadCloser, string, int64, time.Time, error) {
 	return io.NopCloser(strings.NewReader("body")), "text/plain", 4, time.Time{}, nil
 }
+func (fakeAttachmentSignerH) OpenObjectRange(_ context.Context, _, _ string) (io.ReadCloser, string, int64, string, time.Time, error) {
+	return io.NopCloser(strings.NewReader("body")), "text/plain", 4, "", time.Time{}, nil
+}
 func (fakeAttachmentSignerH) OpenObject(_ context.Context, _ string) (io.ReadCloser, string, int64, string, error) {
 	return io.NopCloser(strings.NewReader("body")), "text/plain", 4, `"body"`, nil
 }

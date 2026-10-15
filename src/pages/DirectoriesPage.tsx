@@ -315,7 +315,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                 <Badge
                   variant={u.systemRole === 'admin' ? 'default' : 'secondary'}
                   data-testid={`role-pill-${u.id}`}
-                  className="absolute bottom-2 left-2 bg-background/85 text-[11px] text-foreground shadow-sm backdrop-blur"
+                  className="absolute bottom-2 left-2 bg-background/85 text-xs text-foreground shadow-sm"
                 >
                   {capitalize(u.systemRole)}
                 </Badge>

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -400,6 +401,39 @@ func (f *fakeSigner) PutObject(_ context.Context, key, contentType string, body 
 func (f *fakeSigner) GetObjectRange(_ context.Context, _ string, _ int64) ([]byte, error) {
 	return nil, nil
 }
+
+// OpenObjectRange serves byteRange of the object the way S3 does: a part with
+// its Content-Range, or ErrRangeNotSatisfiable past the end.
+func (f *fakeSigner) OpenObjectRange(ctx context.Context, key, byteRange string) (io.ReadCloser, string, int64, string, time.Time, error) {
+	body, contentType, size, lastModified, err := f.GetObject(ctx, key)
+	if err != nil || byteRange == "" {
+		return body, contentType, size, "", lastModified, err
+	}
+	return rangeOf(body, contentType, lastModified, byteRange)
+}
+
+func rangeOf(body io.ReadCloser, contentType string, lastModified time.Time, byteRange string) (io.ReadCloser, string, int64, string, time.Time, error) {
+	all, _ := io.ReadAll(body)
+	spec := strings.TrimPrefix(byteRange, "bytes=")
+	from, to, _ := strings.Cut(spec, "-")
+	start, end := 0, len(all)-1
+	if from == "" {
+		n, _ := strconv.Atoi(to)
+		start = max(0, len(all)-n)
+	} else {
+		start, _ = strconv.Atoi(from)
+		if to != "" {
+			end, _ = strconv.Atoi(to)
+			end = min(end, len(all)-1)
+		}
+	}
+	if start >= len(all) {
+		return nil, "", 0, "", time.Time{}, storage.ErrRangeNotSatisfiable
+	}
+	part := all[start : end+1]
+	return io.NopCloser(bytes.NewReader(part)), contentType, int64(len(part)), fmt.Sprintf("bytes %d-%d/%d", start, end, len(all)), lastModified, nil
+}
+
 func (f *fakeSigner) GetObject(_ context.Context, key string) (io.ReadCloser, string, int64, time.Time, error) {
 	if f.objects != nil {
 		if body, ok := f.objects[key]; ok {
@@ -976,6 +1010,94 @@ func TestIsInlineUnsafeContentType(t *testing.T) {
 		if got := isInlineUnsafeContentType(ct); got != want {
 			t.Errorf("isInlineUnsafeContentType(%q) = %v, want %v", ct, got, want)
 		}
+	}
+}
+
+// mediaToken stores an attachment whose object is body and returns its media
+// token.
+func mediaToken(t *testing.T, body string) (*AttachmentHandler, string) {
+	t.Helper()
+	st := newFakeAttachmentStore()
+	signer := &fakeSigner{objects: map[string][]byte{"attachments/a-video": []byte(body)}, objectTypes: map[string]string{"attachments/a-video": "video/mp4"}}
+	svc := service.NewAttachmentService(st, signer, nil)
+	svc.SetMediaURLCache(newFakeMediaCacheH())
+	att := &model.Attachment{
+		ID: "a-video", SHA256: "sha-video", S3Key: "attachments/a-video",
+		Filename: "clip.mp4", ContentType: "video/mp4", Size: int64(len(body)), CreatedBy: "u1",
+	}
+	if err := st.Create(context.Background(), att); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	resolved, err := svc.Get(context.Background(), att.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	parts := strings.Split(resolved.URL, "/")
+	return NewAttachmentHandler(svc), parts[len(parts)-2]
+}
+
+func getMedia(h *AttachmentHandler, token string, headers map[string]string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/"+token+"/clip.mp4", nil)
+	req.SetPathValue("token", token)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	h.Media(rec, req)
+	return rec
+}
+
+// A video player seeks by asking for byte ranges (and Safari plays nothing
+// without them): the media route answers one with that part.
+func TestAttachmentHandler_Media_ByteRanges(t *testing.T) {
+	h, token := mediaToken(t, "0123456789")
+	cases := []struct {
+		rng, body, contentRange string
+	}{
+		{"bytes=2-5", "2345", "bytes 2-5/10"},
+		{"bytes=7-", "789", "bytes 7-9/10"},
+		{"bytes=-3", "789", "bytes 7-9/10"},
+	}
+	for _, tc := range cases {
+		rec := getMedia(h, token, map[string]string{"Range": tc.rng})
+		if rec.Code != http.StatusPartialContent || rec.Body.String() != tc.body {
+			t.Fatalf("%s: status %d body %q, want 206 %q", tc.rng, rec.Code, rec.Body.String(), tc.body)
+		}
+		if got := rec.Header().Get("Content-Range"); got != tc.contentRange {
+			t.Fatalf("%s: Content-Range = %q, want %q", tc.rng, got, tc.contentRange)
+		}
+		if got := rec.Header().Get("Content-Length"); got != fmt.Sprint(len(tc.body)) {
+			t.Fatalf("%s: Content-Length = %q", tc.rng, got)
+		}
+	}
+	// The whole object says ranges are welcome.
+	rec := getMedia(h, token, nil)
+	if rec.Code != http.StatusOK || rec.Body.String() != "0123456789" || rec.Header().Get("Accept-Ranges") != "bytes" {
+		t.Fatalf("full: status %d body %q accept-ranges %q", rec.Code, rec.Body.String(), rec.Header().Get("Accept-Ranges"))
+	}
+}
+
+// What the route doesn't serve as a range gets the whole object, which is
+// always a valid answer: several ranges, a malformed one, an If-Range.
+func TestAttachmentHandler_Media_UnservedRangesGetTheWholeObject(t *testing.T) {
+	h, token := mediaToken(t, "0123456789")
+	for _, headers := range []map[string]string{
+		{"Range": "bytes=0-1,4-5"},
+		{"Range": "items=0-1"},
+		{"Range": "bytes=0-1", "If-Range": "Wed, 21 Oct 2015 07:28:00 GMT"},
+	} {
+		rec := getMedia(h, token, headers)
+		if rec.Code != http.StatusOK || rec.Body.String() != "0123456789" || rec.Header().Get("Content-Range") != "" {
+			t.Fatalf("%v: status %d body %q", headers, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestAttachmentHandler_Media_RangePastTheEnd(t *testing.T) {
+	h, token := mediaToken(t, "0123456789")
+	rec := getMedia(h, token, map[string]string{"Range": "bytes=50-"})
+	if rec.Code != http.StatusRequestedRangeNotSatisfiable {
+		t.Fatalf("status = %d, want 416", rec.Code)
 	}
 }
 
@@ -2361,8 +2483,8 @@ func TestParentIndexAdapter_Delegates(t *testing.T) {
 // PUT without one.
 type typelessSigner struct{ fakeSigner }
 
-func (s *typelessSigner) GetObject(_ context.Context, _ string) (io.ReadCloser, string, int64, time.Time, error) {
-	return io.NopCloser(strings.NewReader("body")), "", 4, time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC), nil
+func (s *typelessSigner) OpenObjectRange(_ context.Context, _, _ string) (io.ReadCloser, string, int64, string, time.Time, error) {
+	return io.NopCloser(strings.NewReader("body")), "", 4, "", time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC), nil
 }
 
 func TestAttachmentHandler_Media_EmptyContentTypeServesOctetStream(t *testing.T) {

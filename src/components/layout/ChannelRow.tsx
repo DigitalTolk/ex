@@ -12,7 +12,7 @@ import { slugify } from '@/lib/format';
 import { useFavoriteChannel, useSetCategory, useCategories } from '@/hooks/useSidebar';
 import { useRowLongPressMenu } from '@/hooks/useRowLongPressMenu';
 import type { UserChannel, SidebarCategory } from '@/types';
-import { type CSSProperties } from 'react';
+import { memo, type CSSProperties } from 'react';
 
 interface Props {
   channel: UserChannel;
@@ -34,7 +34,7 @@ interface Props {
 // per-row interactions: the star (favorite toggle) and the kebab menu
 // for moving the channel between existing categories. Creating a new
 // category lives in the sidebar header so the row menu stays terse.
-export function ChannelRow({
+export const ChannelRow = memo(function ChannelRow({
   channel,
   hasUnread,
   notifyCount = 0,
@@ -185,4 +185,4 @@ export function ChannelRow({
       </DropdownMenu>
     </div>
   );
-}
+});

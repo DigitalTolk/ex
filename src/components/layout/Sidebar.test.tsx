@@ -23,6 +23,20 @@ function lastCategoryMoveBody(id: string): { afterID: string } | undefined {
   return call ? JSON.parse((call[1] as { body: string }).body) : undefined;
 }
 
+// Every sidebar row (channel or DM) runs this hook once per render: counting
+// its calls counts row renders.
+const rowRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock('@/hooks/useRowLongPressMenu', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks/useRowLongPressMenu')>();
+  return {
+    ...actual,
+    useRowLongPressMenu: () => {
+      rowRenders.count += 1;
+      return actual.useRowLongPressMenu();
+    },
+  };
+});
+
 vi.mock('@/lib/api', () => ({
   // Answer the server-owned move endpoints with their (empty) response
   // shapes whenever a test's mockImplementation doesn't — the hooks read
@@ -1159,6 +1173,26 @@ describe('Sidebar', () => {
     expect(mockApiFetch).not.toHaveBeenCalledWith('/api/v1/sidebar/move', expect.anything());
   });
 
+  // Opening a chat re-renders the list (it marks the open row); the rows
+  // themselves re-render only when their own data changes. Re-rendering every
+  // row on each navigation was a large part of what opening a chat cost on a
+  // phone, right while the list slid away.
+  it('opening a chat does not re-render the rows', async () => {
+    renderSidebar();
+    const row = await screen.findByTestId('channel-row-ch-2');
+    const rows = document.querySelectorAll('[data-testid^="channel-row-"], [data-testid^="conversation-row-"]').length;
+    expect(rows).toBeGreaterThan(3);
+    // Let the rows' own queries (the category list) settle first.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    const before = rowRenders.count;
+    fireEvent.click(within(row).getAllByRole('link')[0]);
+    await waitFor(() => expect(window.location.pathname).not.toBe('/'));
+    await waitFor(() => expect(row.querySelector('a[aria-current="page"]')).not.toBeNull());
+    expect(rowRenders.count - before).toBe(0);
+  });
+
   it('ignores a favorited conversation dragged over a channel row outside Favorites', async () => {
     // conv-1 is favorited, so its row is draggable. Dropping it onto a channel
     // in the regular channels section must be rejected — resolveDropPayload
@@ -1175,7 +1209,10 @@ describe('Sidebar', () => {
     fireDragOver(target, dataTransfer, 5);
     fireDrop(target, dataTransfer, 5);
 
-    await new Promise((r) => setTimeout(r, 0));
+    // The rows are memoized: each takes its own query updates, after this.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
     expect(mockApiFetch).not.toHaveBeenCalledWith('/api/v1/sidebar/move', expect.anything());
   });
 

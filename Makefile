@@ -49,7 +49,7 @@ dev-watch-logs:
 
 # Build production binary (includes embedded frontend)
 build: frontend
-	go build -o bin/ex ./cmd/server
+	go build -tags=nodynamic -o bin/ex ./cmd/server
 
 # Build frontend assets
 frontend:

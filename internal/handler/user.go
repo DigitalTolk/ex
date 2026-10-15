@@ -76,6 +76,10 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, err := h.userSvc.Update(r.Context(), userID, body.DisplayName, body.AvatarKey, body.EmojiSkinTone)
+	if errors.Is(err, service.ErrValidation) {
+		writeError(w, http.StatusBadRequest, "invalid_profile", err.Error())
+		return
+	}
 	if err != nil {
 		writeInternalError(w, r, "update_error", err)
 		return
@@ -412,7 +416,7 @@ func (h *UserHandler) CreateAvatarUploadURL(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid_type", "only JPEG, PNG, or WebP images allowed")
 		return
 	}
-	if body.Size <= 0 || body.Size > 2*1024*1024 {
+	if body.Size <= 0 || body.Size > service.MaxAvatarBytes {
 		writeError(w, http.StatusBadRequest, "invalid_size", "avatar size is required and too large")
 		return
 	}

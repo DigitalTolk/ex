@@ -10,6 +10,7 @@ import { useUpdateWorkspaceSettings, useWorkspaceSettings } from '@/hooks/useSet
 import { isAdmin } from '@/lib/roles';
 import { bytesToMib, mibToBytes } from '@/lib/format';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { wholeNumberField } from '@/lib/numeric-field';
 
 export default function AdminPage() {
   useDocumentTitle('Admin');
@@ -106,10 +107,9 @@ export default function AdminPage() {
             <Label htmlFor="max-mb">Max file size (MB)</Label>
             <Input
               id="max-mb"
-              type="number"
-              min={1}
+              inputMode="numeric"
               value={maxMB}
-              onChange={(e) => setMaxMB(e.target.value)}
+              onChange={(e) => setMaxMB(wholeNumberField(e.target.value, 1))}
               className="max-w-xs"
               disabled={isLoading}
             />

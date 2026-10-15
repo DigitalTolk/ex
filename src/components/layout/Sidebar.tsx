@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useState, useMemo, useRef } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useState, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { monitorForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
@@ -890,7 +890,10 @@ export function Sidebar({ onClose }: SidebarProps) {
     suppressNavigationResetRef.current = window.setTimeout(clearSuppressedChannelNavigation, 750);
   }
 
-  function clearSuppressedChannelNavigation() {
+  // Stable, like every callback the rows get: the rows are memoized, so a
+  // navigation (which re-renders this list) re-renders only the rows whose
+  // own data changed.
+  const clearSuppressedChannelNavigation = useCallback(() => {
     /* v8 ignore next -- the consumed callback fires right after a drop scheduled the reset timeout, so the ref is set; the null arm is defensive */
     /* istanbul ignore next -- the consumed callback fires right after a drop scheduled the reset timeout, so the ref is set; the null arm is defensive */
     if (suppressNavigationResetRef.current !== null) {
@@ -898,7 +901,7 @@ export function Sidebar({ onClose }: SidebarProps) {
       suppressNavigationResetRef.current = null;
     }
     setSuppressChannelNavigationID(null);
-  }
+  }, []);
 
   // A drop schedules the 750ms suppress-navigation reset above; clear it on
   // unmount so the timer never fires into a torn-down tree (it crashed test

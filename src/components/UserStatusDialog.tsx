@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ChevronDown, Loader2, X } from 'lucide-react';
+import { Loader2, X } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,6 +12,7 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { apiFetch, getAccessToken } from '@/lib/api';
 import { inputValueForDate, pad, partsInTimeZone } from '@/lib/datetime-input';
 import type { User } from '@/types';
+import { NativeSelect } from '@/components/ui/native-select';
 
 interface UserStatusDialogProps {
   open: boolean;
@@ -212,8 +213,7 @@ function UserStatusDialogContent({
         )}
         <div className="space-y-2">
           <Label htmlFor="status-preset">Predefined status</Label>
-          <div className="relative">
-            <select
+          <NativeSelect
               id="status-preset"
               value={preset}
               onChange={(e) => {
@@ -225,15 +225,12 @@ function UserStatusDialogContent({
                 setText(selected.text);
                 setClearAfter(selected.clearAfter);
               }}
-              className="h-9 w-full appearance-none rounded-md border border-input bg-background px-3 pr-9 text-base md:text-sm mobile:h-11 mobile:px-4 mobile:pr-10"
             >
               <option value={CUSTOM_PRESET}>Custom status</option>
               {PRESETS.map((p) => (
                 <option key={p.text} value={p.text}>{p.text}</option>
               ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          </div>
+          </NativeSelect>
         </div>
 
         <div className="grid grid-cols-[auto_1fr] items-end gap-3">
@@ -268,24 +265,20 @@ function UserStatusDialogContent({
 
         <div className="space-y-2">
           <Label htmlFor="clear-after">Remove status after</Label>
-          <div className="relative">
-            <select
+          <NativeSelect
               id="clear-after"
               value={clearAfter}
               onChange={(e) => {
                 setClearAfter(e.target.value as ClearAfter);
                 setPreset(CUSTOM_PRESET);
               }}
-              className="h-9 w-full appearance-none rounded-md border border-input bg-background px-3 pr-9 text-base md:text-sm mobile:h-11 mobile:px-4 mobile:pr-10"
             >
               <option value="never">Don't clear</option>
               <option value="today">Today</option>
               <option value="30m">30 minutes</option>
               <option value="1h">1 hour</option>
               <option value="custom">Custom time</option>
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          </div>
+          </NativeSelect>
         </div>
         <div className="h-11">
           <Input

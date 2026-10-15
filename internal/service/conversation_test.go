@@ -167,8 +167,8 @@ func TestConversationService_SetCategory_ClearsFavoritePosition(t *testing.T) {
 	}
 }
 
-func TestConversationService_SetCategory_RejectsUserCategory(t *testing.T) {
-	svc, conversations, _, _, _ := setupConversationService()
+func TestConversationService_SetCategory_IntoUserCategory(t *testing.T) {
+	svc, conversations, _, _, publisher := setupConversationService()
 	ctx := context.Background()
 	conversations.conversations["c-cat"] = &model.Conversation{
 		ID:             "c-cat",
@@ -178,8 +178,15 @@ func TestConversationService_SetCategory_RejectsUserCategory(t *testing.T) {
 	conversations.userConvs["u-1"] = []*model.UserConversation{
 		{UserID: "u-1", ConversationID: "c-cat"},
 	}
-	if err := svc.SetCategory(ctx, "u-1", "c-cat", "cat-eng", nil); err == nil {
-		t.Fatal("expected user category rejection")
+	if err := svc.SetCategory(ctx, "u-1", "c-cat", "cat-eng", nil); err != nil {
+		t.Fatalf("SetCategory: %v", err)
+	}
+	if got := conversations.userConvs["u-1"][0].CategoryID; got != "cat-eng" {
+		t.Errorf("categoryID = %q, want cat-eng", got)
+	}
+	// The user's other tabs move the row too.
+	if len(publisher.published) != 1 || publisher.published[0].event.Type != "userchannel.updated" {
+		t.Fatalf("expected one userchannel.updated; got %+v", publisher.published)
 	}
 }
 

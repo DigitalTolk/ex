@@ -28,7 +28,7 @@ import (
 	"sync"
 	"time"
 
-	nativewebp "github.com/HugoSmits86/nativewebp"
+	"github.com/gen2brain/webp"
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/sync/semaphore"
 
@@ -65,6 +65,7 @@ type AttachmentSigner interface {
 	DeleteObject(ctx context.Context, key string) error
 	GetObjectRange(ctx context.Context, key string, maxBytes int64) ([]byte, error)
 	GetObject(ctx context.Context, key string) (io.ReadCloser, string, int64, time.Time, error)
+	OpenObjectRange(ctx context.Context, key, byteRange string) (io.ReadCloser, string, int64, string, time.Time, error)
 	OpenObject(ctx context.Context, key string) (io.ReadCloser, string, int64, string, error)
 	StatObject(ctx context.Context, key string) (int64, string, string, string, error)
 	PutObject(ctx context.Context, key, contentType string, body []byte) error
@@ -575,8 +576,10 @@ func (s *AttachmentService) ensureThumbnailsForRead(ctx context.Context, a *mode
 	_ = s.ensureVerified(ctx, a)
 }
 
-func (s *AttachmentService) OpenMedia(ctx context.Context, token string) (*MediaObject, error) {
-	return OpenStableMedia(ctx, s.mediaCache, s.signer, token)
+// OpenMedia opens the attachment behind a media token: all of it, or the one
+// byte range in byteRange (an HTTP Range value).
+func (s *AttachmentService) OpenMedia(ctx context.Context, token, byteRange string) (*MediaObject, error) {
+	return OpenStableMedia(ctx, s.mediaCache, s.signer, token, byteRange)
 }
 
 // scheduleDimensionsBackfill kicks off a one-shot goroutine that
@@ -901,6 +904,17 @@ func (s *AttachmentService) ensureVerified(ctx context.Context, a *model.Attachm
 		if checksum != sha256Base64(a.SHA256) {
 			return errors.New("attachment: sha256 mismatch")
 		}
+		// A file that claims to be a PDF or a video is read as far as it
+		// takes to see what it is.
+		if kind := claimedKindOf(a); kind != nil {
+			head, err := s.signer.GetObjectRange(ctx, a.S3Key, sniffHeadBytes)
+			if err != nil {
+				return fmt.Errorf("attachment: read object: %w", err)
+			}
+			if err := kind.check(a.Filename, head); err != nil {
+				return err
+			}
+		}
 		return s.recordVerified(ctx, a, etag)
 	}
 	// A changed (or never verified) object gets fresh thumbnails.
@@ -1004,6 +1018,12 @@ func inspectContent(ctx context.Context, a *model.Attachment, objectContentType 
 	}
 	declared := normalizeContentType(a.ContentType)
 	if !strings.HasPrefix(declared, "image/") {
+		if kind := claimedKindOf(a); kind != nil {
+			// Peek's error is irrelevant: a short file is judged by what it
+			// has, and a transport failure resurfaces on the next read.
+			head, _ := r.Peek(sniffHeadBytes)
+			return cfg, nil, noop, kind.check(a.Filename, head)
+		}
 		return cfg, nil, noop, nil
 	}
 	if declared == "image/svg+xml" {
@@ -1093,9 +1113,14 @@ const (
 	thumbnailModeSquare
 )
 
-// webpEncode is a seam over nativewebp.Encode so tests can exercise the
+// lossyWebP is how the server encodes the pictures it makes (thumbnails,
+// avatars). Lossless would keep every pixel of a picture that is already a
+// scaled copy, at 4-9x the bytes.
+var lossyWebP = webp.Options{Quality: 80}
+
+// webpEncode is a seam over webp.Encode so tests can exercise the
 // encode-failure panic arm; a real failure here is a programmer fault.
-var webpEncode = nativewebp.Encode
+var webpEncode = webp.Encode
 
 func encodeWebPThumbnail(src image.Image, mode thumbnailMode) ([]byte, error) {
 	if src == nil {
@@ -1132,7 +1157,7 @@ func encodeWebPThumbnail(src image.Image, mode thumbnailMode) ([]byte, error) {
 	xdraw.CatmullRom.Scale(dst, dst.Bounds(), drawSrc, srcRect, stddraw.Over, nil)
 
 	var out bytes.Buffer
-	if err := webpEncode(&out, dst, nil); err != nil {
+	if err := webpEncode(&out, dst, lossyWebP); err != nil {
 		// dst is a freshly allocated *image.NRGBA with positive, bounded
 		// dimensions — an encode failure is a programmer/encoder fault, not
 		// a runtime condition.

@@ -25,6 +25,7 @@ import {
   type Cadence,
 } from '@/lib/schedule';
 import { showToast } from '@/lib/toast';
+import { NativeSelect } from '@/components/ui/native-select';
 
 // The destination is ONE control with three kinds of answer: a new channel
 // (the default — a recurring report deserves its own home), a DM, or an
@@ -209,7 +210,8 @@ export function ScheduleForm({
       <div className="flex flex-wrap items-center gap-x-1.5 gap-y-2 text-sm">
         <Clock className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
         <span className="text-muted-foreground">Every</span>
-        <select
+        <NativeSelect
+          size="sm"
           id={id('cadence')}
           aria-label="Repeats"
           className={inline}
@@ -219,9 +221,10 @@ export function ScheduleForm({
           <option value="weekdays">weekday</option>
           <option value="daily">day</option>
           <option value="weekly">week on</option>
-        </select>
+        </NativeSelect>
         {cadence === 'weekly' && (
-          <select
+          <NativeSelect
+          size="sm"
             id={id('weekday')}
             aria-label="On"
             className={inline}
@@ -233,7 +236,7 @@ export function ScheduleForm({
                 {name}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         )}
         <span className="text-muted-foreground">at</span>
         <Input
@@ -244,7 +247,8 @@ export function ScheduleForm({
           value={time}
           onChange={(e) => setTime(e.target.value)}
         />
-        <select
+        <NativeSelect
+          size="sm"
           id={id('tz')}
           aria-label="Timezone"
           className={inline + ' max-w-48'}
@@ -257,7 +261,7 @@ export function ScheduleForm({
               {z.replaceAll('_', ' ')}
             </option>
           ))}
-        </select>
+        </NativeSelect>
       </div>
 
       {/* The instruction is the substance — it gets the room. */}
@@ -276,7 +280,8 @@ export function ScheduleForm({
         {fixedAgent ? (
           <span className="font-medium">@{fixedAgent.displayName}</span>
         ) : (
-          <select
+          <NativeSelect
+          size="sm"
             id={id('agent')}
             aria-label="Agent"
             className={inline}
@@ -289,7 +294,7 @@ export function ScheduleForm({
                 @{a.displayName}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         )}
         <span className="text-muted-foreground">posts to</span>
         {editing ? (

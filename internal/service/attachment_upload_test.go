@@ -148,10 +148,11 @@ func TestSignUploadRequest_Rejections(t *testing.T) {
 }
 
 // A non-image uploaded in one signed PUT was hash-checked by S3 on arrival,
-// so processing it reads nothing: one HEAD proves size, type and SHA-256.
+// so processing it never reads it through: one HEAD proves size, type and
+// SHA-256, and a PDF's first bytes prove it is one.
 func TestProcessUpload_S3ChecksummedFileIsVerifiedWithoutReading(t *testing.T) {
 	svc, storeM, signer, a := uploadFixture(t)
-	body := []byte("%PDF")
+	body := []byte("%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
 	a.SHA256 = sha256Hex(body)
 	a.Size = int64(len(body))
 	signer.objects[a.S3Key] = body
@@ -161,8 +162,8 @@ func TestProcessUpload_S3ChecksummedFileIsVerifiedWithoutReading(t *testing.T) {
 	if _, err := svc.ProcessUpload(context.Background(), "u1", a.ID); err != nil {
 		t.Fatalf("ProcessUpload: %v", err)
 	}
-	if signer.opens != 0 || signer.stats != 1 {
-		t.Fatalf("expected a single HEAD and no read, got stats=%d opens=%d", signer.stats, signer.opens)
+	if signer.opens != 0 || signer.stats != 1 || signer.rangeReads != 1 {
+		t.Fatalf("expected a single HEAD, a peek and no read, got stats=%d peeks=%d opens=%d", signer.stats, signer.rangeReads, signer.opens)
 	}
 	if storeM.byID[a.ID].VerifiedETag != fakeETag(body) {
 		t.Fatalf("verified version not recorded: %#v", storeM.byID[a.ID])
@@ -223,5 +224,89 @@ func TestValidateForUse_ReplacedObjectIsReVerified(t *testing.T) {
 	}
 	if signer.putContentTypes[a.ThumbnailS3Key] != "image/webp" {
 		t.Fatalf("changed image must get fresh thumbnails, puts=%v", signer.putContentTypes)
+	}
+}
+
+// isoMedia is the head of an ISO media file (MP4 and kin): an ftyp box with
+// the given major brand.
+func isoMedia(brand string) []byte {
+	head := []byte{0, 0, 0, 0x18, 'f', 't', 'y', 'p'}
+	head = append(head, brand...)
+	head = append(head, 0, 0, 0, 0)
+	head = append(head, "isommp41"...)
+	return append(head, make([]byte, 64)...)
+}
+
+// A file that claims to be a PDF or an MP4 — by its declared type or by its
+// extension — opens in the app's own viewer, so its bytes must be one.
+func TestProcessUpload_ClaimedPDFOrVideoMustBeOne(t *testing.T) {
+	cases := []struct {
+		name, filename, contentType string
+		body                        []byte
+		ok                          bool
+	}{
+		{"a PDF", "spec.pdf", "application/pdf", []byte("%PDF-1.4\n1 0 obj\n"), true},
+		{"a renamed text file", "spec.pdf", "application/pdf", []byte("just some text"), false},
+		{"a PDF by its extension only", "spec.pdf", "application/octet-stream", []byte("<html><script>"), false},
+		{"an MP4", "clip.mp4", "video/mp4", isoMedia("isom"), true},
+		{"an M4V", "clip.m4v", "video/x-m4v", isoMedia("M4V "), true},
+		{"a photo renamed .mp4", "clip.mp4", "video/mp4", isoMedia("heic"), false},
+		{"audio renamed .mp4", "clip.mp4", "video/mp4", isoMedia("M4A "), false},
+		{"a PNG called .mp4", "clip.mp4", "video/mp4", makePNG(2, 2), false},
+		{"an MP4 by its extension only", "clip.mp4", "application/octet-stream", isoMedia("mp42"), true},
+		{"a file that claims nothing", "notes.txt", "text/plain", []byte("%PDF-1.4"), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _, signer, a := uploadFixture(t)
+			a.Filename, a.ContentType = tc.filename, tc.contentType
+			a.SHA256, a.Size = sha256Hex(tc.body), int64(len(tc.body))
+			signer.objects[a.S3Key] = tc.body
+			signer.objectContentType = tc.contentType
+			signer.checksums = map[string]string{a.S3Key: sha256Base64(a.SHA256)}
+			_, err := svc.ProcessUpload(context.Background(), "u1", a.ID)
+			if tc.ok && err != nil {
+				t.Fatalf("ProcessUpload: %v", err)
+			}
+			if !tc.ok && (err == nil || !strings.Contains(err.Error(), tc.filename+" is not")) {
+				t.Fatalf("expected a content rejection, got %v", err)
+			}
+		})
+	}
+}
+
+// A file too large for one request (multipart, so S3 holds no hash of it) is
+// streamed through once; its head is checked on the way.
+func TestProcessUpload_StreamedClaimedVideoIsChecked(t *testing.T) {
+	for _, tc := range []struct {
+		body []byte
+		ok   bool
+	}{{isoMedia("mp42"), true}, {[]byte("PK\x03\x04 a zip"), false}} {
+		svc, _, signer, a := uploadFixture(t)
+		a.Filename, a.ContentType = "clip.mp4", "video/mp4"
+		a.SHA256, a.Size = sha256Hex(tc.body), int64(len(tc.body))
+		signer.objects[a.S3Key] = tc.body
+		signer.objectContentType = "video/mp4"
+		_, err := svc.ProcessUpload(context.Background(), "u1", a.ID)
+		if (err == nil) != tc.ok {
+			t.Fatalf("ok=%v: got %v", tc.ok, err)
+		}
+		if signer.opens != 1 {
+			t.Fatalf("expected one streamed read, got %d", signer.opens)
+		}
+	}
+}
+
+// A peek that fails fails the check: an unread file isn't vouched for.
+func TestProcessUpload_ClaimedFileUnreadable(t *testing.T) {
+	svc, _, signer, a := uploadFixture(t)
+	body := []byte("%PDF-1.4")
+	a.SHA256, a.Size = sha256Hex(body), int64(len(body))
+	signer.objects[a.S3Key] = body
+	signer.objectContentType = "application/pdf"
+	signer.checksums = map[string]string{a.S3Key: sha256Base64(a.SHA256)}
+	signer.rangeErr = errors.New("s3 down")
+	if _, err := svc.ProcessUpload(context.Background(), "u1", a.ID); err == nil || !strings.Contains(err.Error(), "read object") {
+		t.Fatalf("expected a read error, got %v", err)
 	}
 }

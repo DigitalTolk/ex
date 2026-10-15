@@ -122,3 +122,11 @@ export function iconForAttachment(contentType: string, filename = ''): LucideIco
 export function isPdfAttachment(contentType: string, filename = ''): boolean {
   return contentType.toLowerCase() === 'application/pdf' || /\.pdf$/i.test(filename);
 }
+
+// MP4s play in-app. As with PDFs, the extension covers uploads that arrived
+// as `application/octet-stream`; the server checks that a file claiming to be
+// an MP4, either way, really is one.
+export function isVideoAttachment(contentType: string, filename = ''): boolean {
+  const type = contentType.toLowerCase();
+  return type === 'video/mp4' || type === 'video/x-m4v' || /\.(mp4|m4v)$/i.test(filename);
+}

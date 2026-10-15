@@ -1,7 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type WheelEvent } from 'react';
 import { matchPath, useLocation } from 'react-router-dom';
 import { takeOpenChannelsRequest, useOpenChannelsRequest } from '@/lib/mobile-nav';
-import { animate, motion, useMotionValue } from 'motion/react';
 import { Sidebar } from './Sidebar';
 import { PanelResizeHandle } from './PanelResizeHandle';
 import { usePanelWidth } from '@/hooks/usePanelWidth';
@@ -21,7 +20,8 @@ import { useDismissKeyboardOnScroll } from '@/hooks/useDismissKeyboardOnScroll';
 import { useKeyboardSurfaceColor } from '@/hooks/useKeyboardSurfaceColor';
 import { blurActiveInput } from '@/lib/blur-input';
 import { useAxisSwipe, type AxisSwipeRelease } from '@/hooks/useAxisSwipe';
-import { SWIPE_SPRING, SWIPE_SURFACE_ATTR, shouldCommitSwipe, swipeStartsOn } from '@/lib/swipe';
+import { useSlide } from '@/hooks/useSlide';
+import { SWIPE_SURFACE_ATTR, shouldCommitSwipe, swipeStartsOn } from '@/lib/swipe';
 import { UpdateBanner } from '@/components/UpdateBanner';
 import { LoadingBar } from '@/components/layout/LoadingBar';
 import { NotificationPermissionBanner } from '@/components/NotificationPermissionBanner';
@@ -89,11 +89,17 @@ export function AppLayout({ children }: AppLayoutProps) {
   // ?thread= or #msg-). (Rows in the list close it themselves; this covers
   // everything else.)
   const [drawerLocation, setDrawerLocation] = useState(location.key);
+  // A pick from the list on the home screen slides the conversation in at
+  // once. Its navigation renders as a transition, the whole new page, and
+  // the slide used to wait for that; now the page renders under the slide.
+  // The route it goes to takes over from there.
+  const [leavingHome, setLeavingHome] = useState(false);
   if (drawerLocation !== location.key) {
     setDrawerLocation(location.key);
     if (manualChannelsOpen) setManualChannelsOpen(false);
+    if (leavingHome) setLeavingHome(false);
   }
-  const mobileChannelsOpen = isMobile && (isHome || manualChannelsOpen);
+  const mobileChannelsOpen = isMobile && ((isHome && !leavingHome) || manualChannelsOpen);
   const inConversation =
     matchPath('/channel/:id', location.pathname) !== null || matchPath('/conversation/:id', location.pathname) !== null;
 
@@ -105,37 +111,43 @@ export function AppLayout({ children }: AppLayoutProps) {
     setManualChannelsOpen(false);
   }, []);
 
+  // A row in the list was picked: it navigates, and the list makes way.
+  const leaveChannels = useCallback(() => {
+    setManualChannelsOpen(false);
+    setLeavingHome(true);
+  }, []);
+
   // Android/browser Back closes a manually-opened drawer instead of leaving
   // the page (on the home route the drawer IS the page, and it opens via
   // isHome — not manualChannelsOpen — so this never arms there).
   useMobileBackClose(manualChannelsOpen, closeChannels);
 
-  // Phone: the conversation lies over the channel list. mainX is how far it
-  // is slid aside: 0 covers the list, the viewport's width reveals it. A
+  // Phone: the conversation lies over the channel list. mainSlide is how far
+  // it is slid aside: 0 covers the list, the viewport's width reveals it. A
   // swipe moves it with the finger; anything else that opens or closes the
   // list (a back button, a row, a route) slides it there, carrying the speed
-  // of the swipe that committed it.
-  const mainX = useMotionValue(isMobile && mobileChannelsOpen ? window.innerWidth : 0);
+  // of the swipe that committed it — on the compositor (hooks/useSlide), so
+  // the page that opens can render while it slides.
+  const mainSlide = useSlide(mainRef, isMobile && mobileChannelsOpen ? window.innerWidth : 0);
   const releaseVelocityRef = useRef(0);
   const [channelSwiping, setChannelSwiping] = useState(false);
   useLayoutEffect(() => {
     if (!isMobile) {
-      mainX.jump(0);
+      mainSlide.set(0);
       return;
     }
     const velocity = releaseVelocityRef.current;
     releaseVelocityRef.current = 0;
-    const controls = animate(mainX, mobileChannelsOpen ? window.innerWidth : 0, { ...SWIPE_SPRING, velocity });
-    return () => controls.stop();
-  }, [isMobile, mobileChannelsOpen, mainX]);
+    mainSlide.slideTo(mobileChannelsOpen ? window.innerWidth : 0, velocity);
+  }, [isMobile, mobileChannelsOpen, mainSlide]);
   // Rotating the phone moves where an open list leaves the conversation —
   // at once, ending any slide still on its way to the old width.
   useEffect(() => {
     if (!isMobile) return;
-    const onResize = () => mainX.jump(mobileChannelsOpen ? window.innerWidth : 0);
+    const onResize = () => mainSlide.set(mobileChannelsOpen ? window.innerWidth : 0);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, [isMobile, mobileChannelsOpen, mainX]);
+  }, [isMobile, mobileChannelsOpen, mainSlide]);
 
   // Settle a released swipe of the conversation: one that was sliding it
   // aside to reveal the list, or back over it. Commit it into the drawer
@@ -151,14 +163,14 @@ export function AppLayout({ children }: AppLayoutProps) {
       setManualChannelsOpen(revealing);
       return;
     }
-    animate(mainX, revealing ? 0 : travel, { ...SWIPE_SPRING, velocity });
+    mainSlide.slideTo(revealing ? 0 : travel, velocity);
   };
   // Swipe the conversation aside, from anywhere on it, to reveal the list.
   // Not while a right-hand panel covers it: that panel swipes itself away.
   const revealListSwipe = useAxisSwipe({
     enabled: isMobile && !mobileChannelsOpen,
     axis: 'x',
-    value: mainX,
+    value: mainSlide,
     range: () => [0, window.innerWidth],
     canStart: (target, surface) =>
       swipeStartsOn(target, surface) && !document.querySelector('[data-mobile-right-sidebar="true"]'),
@@ -172,7 +184,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   const returnToConversationSwipe = useAxisSwipe({
     enabled: isMobile && manualChannelsOpen && !isHome,
     axis: 'x',
-    value: mainX,
+    value: mainSlide,
     range: () => [0, window.innerWidth],
     canStart: swipeStartsOn,
     onStart: () => setChannelSwiping(true),
@@ -285,20 +297,17 @@ export function AppLayout({ children }: AppLayoutProps) {
     'Resize channel sidebar',
   );
 
-  // Phone: the bottom tab bar shows on the list screens (Home, Activity).
-  // A conversation or thread has its own back button and composer, so the
-  // bar steps aside there, and while the keyboard is up. While it shows it
-  // covers the home indicator, so the surfaces above it drop their own
-  // bottom safe-area padding.
+  // Phone: the bottom tab bar belongs to the list screen (Home, Activity),
+  // at its foot. A conversation slides in over it, the way a pushed screen
+  // covers the tab bar in a native app — so opening or leaving the list
+  // never resizes the conversation or the list mid-slide. It steps aside
+  // while the keyboard is up. While it shows it covers the home indicator,
+  // so the list above it drops its own bottom safe-area padding.
   const textFieldFocused = useTextFieldFocused(isMobile);
-  const showTabBar = mobileChannelsOpen && !textFieldFocused;
 
   return (
     <TagSearchProvider>
-      <div
-        className="flex h-full overflow-hidden bg-sidebar"
-        style={showTabBar ? ({ '--bottom-safe-inset': '0px' } as CSSProperties) : undefined}
-      >
+      <div className="flex h-full overflow-hidden bg-sidebar">
         {/* Persistent sidebar (full tier): runs the full window height, with
             the Home / Activity switch level with the top bar. Mounted only on
             that tier, so narrower layouts don't keep a hidden copy of the list
@@ -327,7 +336,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           <div
             ref={appHeaderRef}
             onWheel={forwardHeaderWheel}
-            className={isMobile && (mobileChannelsOpen || inConversation) ? 'hidden' : undefined}
+            className={isMobile && (mobileChannelsOpen || inConversation || leavingHome) ? 'hidden' : undefined}
           >
             <AppTopBar
               onOpenChannels={tier === 'compact' ? () => setCompactSidebarToggled((v) => !v) : openChannelsWithAnimation}
@@ -373,6 +382,7 @@ export function AppLayout({ children }: AppLayoutProps) {
             {isMobile && (
               <aside
                 className="absolute inset-0 z-0 flex flex-col bg-sidebar text-sidebar-foreground touch-pan-y lg:hidden"
+                style={textFieldFocused ? undefined : ({ '--bottom-safe-inset': '0px' } as CSSProperties)}
                 inert={mobileChannelsOpen ? undefined : true}
                 data-testid="mobile-channel-sidebar"
                 data-app-chrome="true"
@@ -381,17 +391,20 @@ export function AppLayout({ children }: AppLayoutProps) {
                 {...returnToConversationSwipe}
               >
                 <MobileSidebarTitle />
-                <SidebarBody onClose={closeChannels} />
+                <SidebarBody onClose={leaveChannels} />
+                {/* Hidden, not unmounted, while typing: the bar owns the
+                    account sheet and the dialogs it opens (status,
+                    settings), which have text fields of their own. */}
+                <MobileTabBar hidden={textFieldFocused} />
               </aside>
             )}
             {/* Phone: will-change keeps main the containing block of the
                 fixed right-hand panels (Header measures their top from it)
-                even at rest, where Motion writes no transform at all. */}
-            <motion.main
+                even at rest, where it has no transform at all. */}
+            <main
               ref={setMainNode}
               className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background mobile:relative mobile:z-10 mobile:touch-pan-y mobile:will-change-transform"
               data-app-main="true"
-              style={isMobile ? { x: mainX } : undefined}
               data-channel-dragging={mobileShellActive ? 'true' : 'false'}
               data-mobile-channels-open={mobileChannelsOpen ? 'true' : 'false'}
               {...(isMobile ? { [SWIPE_SURFACE_ATTR]: 'x' } : {})}
@@ -399,12 +412,8 @@ export function AppLayout({ children }: AppLayoutProps) {
             >
               <LoadingBar />
               {children}
-            </motion.main>
+            </main>
           </div>
-          {/* Hidden, not unmounted, while typing: the bar owns the account
-              sheet and the dialogs it opens (status, settings), which have
-              text fields of their own. */}
-          {isMobile && <MobileTabBar hidden={!showTabBar} />}
         </div>
       </div>
     </TagSearchProvider>

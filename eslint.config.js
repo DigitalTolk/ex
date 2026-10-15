@@ -27,6 +27,25 @@ export default defineConfig([
     },
   },
   {
+    // One <select> for the whole app, styled like Input: hand-styled ones
+    // never lined up with the text fields next to them.
+    files: ['src/**/*.tsx'],
+    ignores: ['src/components/ui/native-select.tsx', 'src/**/*.test.tsx'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "JSXOpeningElement[name.name='select']",
+          message: 'Use NativeSelect from @/components/ui/native-select.',
+        },
+        {
+          selector: "JSXAttribute[name.name='type'][value.value='number']",
+          message: 'No <input type="number">: use a text field with inputMode="numeric" (see lib/numeric-field).',
+        },
+      ],
+    },
+  },
+  {
     files: ['src/components/ui/**'],
     rules: {
       'react-refresh/only-export-components': 'off',

@@ -6,6 +6,9 @@ interface PageContainerProps {
   description?: ReactNode;
   // Right-aligned slot in the header — actions, filters, etc.
   actions?: ReactNode;
+  // On a phone the content runs edge to edge (a list of full-width
+  // sections); the header keeps its inset.
+  flush?: boolean;
   children: ReactNode;
 }
 
@@ -13,12 +16,14 @@ interface PageContainerProps {
 // (Directory, Threads, New conversation, Admin). All four used to set
 // their own max-width caps and padding; this component keeps the shape
 // consistent and uses the full content width.
-export function PageContainer({ title, description, actions, children }: PageContainerProps) {
+export function PageContainer({ title, description, actions, flush = false, children }: PageContainerProps) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto" data-page-scroll="true" data-testid="page-container">
-      <div className="space-y-6 p-4 sm:p-6">
+      <div className={`space-y-6 p-4 sm:p-6 ${flush ? 'mobile:space-y-3 mobile:px-0' : ''}`}>
         {title && (
-          <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <header
+            className={`flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between ${flush ? 'mobile:px-4' : ''}`}
+          >
             <div className="min-w-0">
               <h1 className="text-xl font-bold">{title}</h1>
               {description && (

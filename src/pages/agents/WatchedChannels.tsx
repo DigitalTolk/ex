@@ -10,6 +10,7 @@ import {
 } from '@/hooks/useAgents';
 import { useUserChannels } from '@/hooks/useChannels';
 import { showToast } from '@/lib/toast';
+import { NativeSelect } from '@/components/ui/native-select';
 
 export function WatchedChannels({ agent }: { agent: AgentView }) {
   const { data: subs } = useAgentSubscriptions(agent.slug);
@@ -87,9 +88,8 @@ export function WatchedChannels({ agent }: { agent: AgentView }) {
         </ul>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        <select
+        <NativeSelect
           aria-label="Channel to watch"
-          className="rounded-md border bg-transparent p-1.5 text-sm"
           value={channelID}
           onChange={(e) => setChannelID(e.target.value)}
         >
@@ -99,16 +99,15 @@ export function WatchedChannels({ agent }: { agent: AgentView }) {
               ~{c.channelName}
             </option>
           ))}
-        </select>
+        </NativeSelect>
         <Input
           className="h-8 w-48 text-sm"
           placeholder="keywords, comma-separated"
           value={keywords}
           onChange={(e) => setKeywords(e.target.value)}
         />
-        <select
+        <NativeSelect
           aria-label="Check-in interval"
-          className="rounded-md border bg-transparent p-1.5 text-sm"
           value={heartbeat}
           onChange={(e) => setHeartbeat(e.target.value)}
         >
@@ -116,7 +115,7 @@ export function WatchedChannels({ agent }: { agent: AgentView }) {
           <option value="30">check in every 30m</option>
           <option value="60">check in hourly</option>
           <option value="240">check in every 4h</option>
-        </select>
+        </NativeSelect>
         <Button size="sm" variant="outline" disabled={!channelID || create.isPending} onClick={add}>
           Watch
         </Button>

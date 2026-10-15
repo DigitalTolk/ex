@@ -17,13 +17,16 @@
 //	draft-cleanup          delete orphaned DynamoDB DRAFT# rows (drafts now live in Redis)
 //	evt-ttl                set the idle TTL on legacy durable inbox streams (Redis)
 //	search-reindex         recreate ex_users/ex_channels with the autocomplete mapping + reindex (OpenSearch)
+//	avatar-resize          shrink avatars stored before uploads were resized (S3 + Redis)
+//	thumbnail-webp         re-encode lossless WebP message thumbnails as lossy WebP (S3)
 //
 // Required environment variables (same as the `ex` server):
 //   - AWS_REGION
 //   - DYNAMODB_TABLE
 //   - DYNAMODB_ENDPOINT (only for DynamoDB Local)
-//   - REDIS_URL (only for the evt-ttl subcommand)
 //   - OPENSEARCH_URL (only for the search-reindex subcommand)
+//   - S3_* (only for avatar-resize and thumbnail-webp) and REDIS_URL (only for
+//     evt-ttl and avatar-resize)
 package main
 
 import (
@@ -63,6 +66,8 @@ func commands() map[string]command {
 		"draft-cleanup":         {"delete orphaned DynamoDB DRAFT# rows (drafts now live in Redis)", runDraftCleanup},
 		"evt-ttl":               {"set the idle TTL on legacy durable inbox streams (Redis)", runEvtTTL},
 		"search-reindex":        {"recreate ex_users/ex_channels with the autocomplete mapping + reindex from DynamoDB (OpenSearch)", runSearchReindex},
+		"avatar-resize":         {"shrink avatars stored before uploads were resized (S3 + Redis)", runAvatarResize},
+		"thumbnail-webp":        {"re-encode lossless WebP message thumbnails as lossy WebP (S3)", runThumbnailWebP},
 	}
 }
 

@@ -124,11 +124,19 @@ func TestUserService_UpdateAvatarKey_RegeneratesURLAfterRefresh(t *testing.T) {
 	}
 
 	svc := NewUserService(users, c, fakeAvatarSigner{}, nil)
+	objects := newFakeAvatarObjects()
+	svc.SetAvatarObjects(objects)
 
-	// Upload sets the new key.
-	newKey := "avatars/u1/new-upload"
-	if _, err := svc.Update(context.Background(), "u1", nil, &newKey, nil); err != nil {
+	// Upload sets the new key: the server's shrunk copy of the upload.
+	upload := "avatars/u1/new-upload"
+	objects.objects[upload] = encodePNG(t, halves(40, 40, 255))
+	updated, err := svc.Update(context.Background(), "u1", nil, &upload, nil)
+	if err != nil {
 		t.Fatalf("Update: %v", err)
+	}
+	newKey := updated.AvatarKey
+	if newKey == upload {
+		t.Fatal("the profile points at the unprocessed upload")
 	}
 
 	// Simulate hard refresh: cache was invalidated by Update; first GetByID

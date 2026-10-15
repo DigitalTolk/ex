@@ -422,7 +422,7 @@ describe('AppLayout channel swipe (phone)', () => {
   }
   const main = () => document.querySelector('[data-app-main="true"]') as HTMLElement;
   const list = () => document.querySelector('[data-testid="mobile-channel-sidebar"]') as HTMLElement;
-  // How far the conversation is slid aside, from Motion's translateX.
+  // How far the conversation is slid aside.
   const slidX = () => new DOMMatrix(getComputedStyle(main()).transform).m41;
   const atRest = (x: number) => Math.abs(slidX() - x) < 1;
   // A slide is a spring: under a loaded test machine its frames come slowly.
@@ -445,6 +445,21 @@ describe('AppLayout channel swipe (phone)', () => {
       expect(slidX()).toBeLessThanOrEqual(100);
     }, { timeout: 5000 });
     panEnd([250, 226]);
+  });
+
+  // The slide is the browser's to run — a Web Animation of the transform,
+  // played on its compositor — so the page that opens can render while it
+  // slides. Driven from JS frame by frame, it froze for as long as that took.
+  it('slides as a Web Animation of the transform, which a busy page cannot stall', async () => {
+    if (window.innerWidth > 767) return;
+    await renderAt('/threads');
+    (document.querySelector('button[aria-label="Open channels"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'), { timeout: 5000 });
+    const sliding = main()
+      .getAnimations()
+      .some((a) => (a.effect as KeyframeEffect).getKeyframes().some((k) => typeof k.transform === 'string'));
+    expect(sliding).toBe(true);
+    await settlesAt(window.innerWidth);
   });
 
   it('opens the list on a long swipe', async () => {

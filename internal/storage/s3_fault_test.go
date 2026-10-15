@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,3 +146,50 @@ func TestS3Client_GetObjectRange_BodyReadError(t *testing.T) {
 type errReader struct{}
 
 func (errReader) Read([]byte) (int, error) { return 0, errors.New("read boom") }
+
+// rangeClient records the GetObject request and answers it.
+type rangeClient struct {
+	faultClient
+	in  *s3.GetObjectInput
+	out *s3.GetObjectOutput
+}
+
+func (r *rangeClient) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	r.in = in
+	return r.out, nil
+}
+
+func TestS3Client_OpenObjectRange(t *testing.T) {
+	modified := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	rc := &rangeClient{out: &s3.GetObjectOutput{
+		Body:          io.NopCloser(strings.NewReader("2345")),
+		ContentType:   aws.String("video/mp4"),
+		ContentLength: aws.Int64(4),
+		ContentRange:  aws.String("bytes 2-5/10"),
+		LastModified:  aws.Time(modified),
+	}}
+	c := &S3Client{client: rc, bucket: "b"}
+	body, ct, n, cr, lm, err := c.OpenObjectRange(context.Background(), "k", "bytes=2-5")
+	if err != nil {
+		t.Fatalf("OpenObjectRange: %v", err)
+	}
+	_ = body.Close()
+	if aws.ToString(rc.in.Range) != "bytes=2-5" || ct != "video/mp4" || n != 4 || cr != "bytes 2-5/10" || !lm.Equal(modified) {
+		t.Fatalf("range %q → %q %d %q %v", aws.ToString(rc.in.Range), ct, n, cr, lm)
+	}
+	// No range asks S3 for the whole object.
+	if _, _, _, _, _, err := c.OpenObjectRange(context.Background(), "k", ""); err != nil || rc.in.Range != nil {
+		t.Fatalf("whole object: range %v err %v", rc.in.Range, err)
+	}
+}
+
+func TestS3Client_OpenObjectRange_Errors(t *testing.T) {
+	c := &S3Client{client: faultClient{getErr: apiErr{code: "InvalidRange"}}, bucket: "b"}
+	if _, _, _, _, _, err := c.OpenObjectRange(context.Background(), "k", "bytes=50-"); !errors.Is(err, ErrRangeNotSatisfiable) {
+		t.Fatalf("InvalidRange: err = %v", err)
+	}
+	c = &S3Client{client: faultClient{getErr: errFault}, bucket: "b"}
+	if _, _, _, _, _, err := c.OpenObjectRange(context.Background(), "k", ""); !errors.Is(err, errFault) {
+		t.Fatalf("fault: err = %v", err)
+	}
+}
