@@ -65,9 +65,12 @@ func TestReencodeThumbnail_RewritesALosslessThumbnailInPlace(t *testing.T) {
 		t.Fatalf("alpha = %d, want 200", left.A)
 	}
 
-	// Run again: already lossy, nothing to do.
+	// Run again: already lossy, nothing to do — and nothing downloaded.
 	if changed, err := ReencodeThumbnail(context.Background(), objects, key, false); err != nil || changed {
 		t.Fatalf("second run = %v, %v", changed, err)
+	}
+	if objects.fullReads != 1 {
+		t.Fatalf("downloads = %d, want only the first run's", objects.fullReads)
 	}
 }
 
@@ -80,6 +83,9 @@ func TestReencodeThumbnail_DryRunOnlyReports(t *testing.T) {
 	}
 	if !bytes.Equal(objects.objects["k"], before) {
 		t.Fatal("a dry run wrote")
+	}
+	if objects.fullReads != 0 {
+		t.Fatal("a dry run downloaded the thumbnail; its first bytes say enough")
 	}
 }
 
@@ -104,6 +110,27 @@ func TestReencodeThumbnail_LeavesAnythingElseAlone(t *testing.T) {
 			t.Fatalf("%s: %v, %v", key, changed, err)
 		}
 	}
+	if objects.fullReads != 0 {
+		t.Fatal("downloaded a thumbnail with nothing to do")
+	}
+}
+
+func TestReencodeThumbnail_LeavesAThumbnailRewrittenSinceItsHeaderWasRead(t *testing.T) {
+	objects := newFakeAvatarObjects()
+	objects.objects["k"] = losslessWebP(t, photoLike(64, 64, 255))
+	var lossy bytes.Buffer
+	if err := webp.Encode(&lossy, photoLike(64, 64, 255), lossyWebP); err != nil {
+		t.Fatal(err)
+	}
+	// Another run gets there between this one's peek and its download.
+	objects.afterRange = func() { objects.objects["k"] = lossy.Bytes() }
+
+	if changed, err := ReencodeThumbnail(context.Background(), objects, "k", false); err != nil || changed {
+		t.Fatalf("ReencodeThumbnail = %v, %v", changed, err)
+	}
+	if !bytes.Equal(objects.objects["k"], lossy.Bytes()) {
+		t.Fatal("re-encoded an already lossy thumbnail")
+	}
 }
 
 func TestReencodeThumbnail_Failures(t *testing.T) {
@@ -113,10 +140,13 @@ func TestReencodeThumbnail_Failures(t *testing.T) {
 		setup func(*fakeAvatarObjects)
 		want  error
 	}{
+		{"peek fails", func(o *fakeAvatarObjects) { o.rangeErr = boom }, boom},
 		{"read fails", func(o *fakeAvatarObjects) { o.getErr = boom }, boom},
 		{"body fails", func(o *fakeAvatarObjects) { o.readErr = boom }, boom},
 		{"write fails", func(o *fakeAvatarObjects) { o.putErr = boom }, boom},
-		{"too big", func(o *fakeAvatarObjects) { o.objects["k"] = make([]byte, maxThumbnailBytes+1) }, nil},
+		{"too big", func(o *fakeAvatarObjects) {
+			o.objects["k"] = append(bytes.Clone(o.objects["k"]), make([]byte, maxThumbnailBytes)...)
+		}, nil},
 		{"corrupt", func(o *fakeAvatarObjects) { o.objects["k"] = append([]byte("RIFF\x00\x00\x00\x00WEBPVP8L"), "garbage"...) }, nil},
 	}
 	for _, tc := range cases {

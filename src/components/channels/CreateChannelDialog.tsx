@@ -14,6 +14,8 @@ import { Switch } from '@/components/ui/switch';
 import { useCreateChannel } from '@/hooks/useChannels';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useAutoFocusTextInput } from '@/hooks/useHardwareKeyboard';
+import { ApiError } from '@/lib/api';
+import { channelName, channelNameDraft } from '@/lib/channel-name';
 import {
   MAX_CHANNEL_DESCRIPTION_LEN,
   MAX_CHANNEL_NAME_LEN,
@@ -31,48 +33,77 @@ export function CreateChannelDialog({
   open,
   onOpenChange,
 }: CreateChannelDialogProps) {
+  // `name` is what the field shows: a draft that may end in a hyphen, or,
+  // mid-composition, raw text. `finalName` is the channel it stands for.
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  // The last name the server answered "already exists" for.
+  const [takenName, setTakenName] = useState<string | null>(null);
   const createChannel = useCreateChannel();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const autoFocusTextInput = useAutoFocusTextInput();
+  const locale = navigator.language;
 
-  // Validation runs on every keystroke. We DON'T render the error while
-  // the field is empty (would scream at the user before they've typed)
-  // — the required-field UX takes over via the Submit-disabled gate.
-  const nameError = useMemo(() => {
-    if (name.length === 0) return null;
-    return validateChannelName(name);
-  }, [name]);
+  const finalName = channelName(name, locale);
+  const nameError =
+    finalName === takenName
+      ? `~${finalName} already exists`
+      : (validateChannelName(finalName)?.message ?? null);
 
   const descriptionError = useMemo(
     () => validateChannelDescription(description),
     [description],
   );
 
-  const nameLen = countCodepoints(name);
   const descLen = countCodepoints(description);
+
+  // Rewrites the field into a channel name. Giving a controlled input a
+  // different value moves its caret to the end, so the caret is put back
+  // after what the text before it became.
+  function rewriteName(input: HTMLInputElement) {
+    const typed = input.value;
+    const draft = channelNameDraft(typed, locale);
+    if (draft !== typed) {
+      // A text input always has a selection; only other input types have none.
+      const caret = channelNameDraft(typed.slice(0, input.selectionStart!), locale).length;
+      input.value = draft;
+      input.setSelectionRange(caret, caret);
+    }
+    setName(draft);
+  }
+
+  function handleNameChange(e: React.ChangeEvent<HTMLInputElement>) {
+    // Mid-composition (a dead key, an IME) a rewrite would break the
+    // character being composed; compositionend rewrites it.
+    if ((e.nativeEvent as InputEvent).isComposing) {
+      setName(e.currentTarget.value);
+      return;
+    }
+    rewriteName(e.currentTarget);
+  }
 
   function reset() {
     setName('');
     setDescription('');
     setIsPrivate(false);
     setSubmitError('');
+    setTakenName(null);
   }
 
   // Shared by the desktop form submit and the mobile top-bar Create button
   // (which lives outside the <form>, in the dialog's mobile header).
   function submit() {
     setSubmitError('');
-    if (!name.trim()) return;
-    if (nameError || descriptionError) return;
+    if (!finalName || nameError || descriptionError) return;
 
+    const submitted = finalName;
+    setName(submitted);
     createChannel.mutate(
       {
-        name: name.trim(),
+        name: submitted,
         description: description.trim() || undefined,
         type: isPrivate ? 'private' : 'public',
       },
@@ -83,9 +114,10 @@ export function CreateChannelDialog({
           navigate(`/channel/${channel.slug}`);
         },
         onError: (err: unknown) => {
-          // Surface backend-side validation messages too — the frontend
-          // pre-check is permissive enough that this is mostly belt-and-
-          // braces (server is authoritative).
+          if (err instanceof ApiError && err.status === 409) {
+            setTakenName(submitted);
+            return;
+          }
           setSubmitError(err instanceof Error ? err.message : 'Failed to create channel');
         },
       },
@@ -98,7 +130,7 @@ export function CreateChannelDialog({
   }
 
   const canSubmit =
-    !!name.trim() &&
+    !!finalName &&
     !nameError &&
     !descriptionError &&
     !createChannel.isPending;
@@ -129,35 +161,51 @@ export function CreateChannelDialog({
               <span
                 data-testid="channel-name-counter"
                 className={`text-xs tabular-nums ${
-                  nameLen > MAX_CHANNEL_NAME_LEN ? 'text-destructive' : 'text-muted-foreground'
+                  finalName.length > MAX_CHANNEL_NAME_LEN ? 'text-destructive' : 'text-muted-foreground'
                 }`}
               >
-                {nameLen}/{MAX_CHANNEL_NAME_LEN}
+                {finalName.length}/{MAX_CHANNEL_NAME_LEN}
               </span>
             </div>
-            <Input
-              id="channel-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. marketing"
-              required
-              autoFocus={autoFocusTextInput}
-              aria-invalid={nameError ? 'true' : 'false'}
-              aria-describedby="channel-name-help"
-            />
+            <div className="relative">
+              {/* The channel prefix, right-aligned in a box exactly as wide
+                  as the field's left padding, so it hugs the first letter
+                  whatever the font's glyph width. The padding is restated
+                  at mobile: because the field's base mobile:px-4 outranks
+                  a plain pl-5 below 768px (see SearchInput). */}
+              <span
+                aria-hidden
+                data-testid="channel-name-prefix"
+                className="pointer-events-none absolute inset-y-0 left-0 flex w-5 items-center justify-end text-base text-muted-foreground not-mobile:text-sm mobile:w-7"
+              >
+                ~
+              </span>
+              <Input
+                id="channel-name"
+                value={name}
+                onChange={handleNameChange}
+                onCompositionEnd={(e) => rewriteName(e.currentTarget)}
+                onBlur={() => setName(finalName)}
+                className="pl-5 mobile:pl-7"
+                required
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                autoFocus={autoFocusTextInput}
+                aria-invalid={nameError ? 'true' : 'false'}
+                aria-describedby="channel-name-help"
+              />
+            </div>
             {/* Reserved fixed-height slot — keeps the modal from jumping
-                vertically as the validation message appears/disappears.
-                The help text and the error share the slot. */}
+                vertically as the validation message appears/disappears. */}
             <p
               id="channel-name-help"
               data-testid="channel-name-help"
-              className={`min-h-[1.25rem] text-xs ${
-                nameError ? 'text-destructive' : 'text-muted-foreground'
-              }`}
+              role={nameError ? 'alert' : undefined}
+              className="min-h-[1.25rem] text-xs text-destructive"
             >
-              {nameError
-                ? nameError.message
-                : 'Lowercase letters, digits and hyphens — like a URL slug.'}
+              {nameError ?? ' '}
             </p>
           </div>
 
@@ -180,7 +228,6 @@ export function CreateChannelDialog({
               id="channel-desc"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="What is this channel about?"
               aria-invalid={descriptionError ? 'true' : 'false'}
               aria-describedby="channel-desc-help"
             />
@@ -191,17 +238,12 @@ export function CreateChannelDialog({
                 descriptionError ? 'text-destructive' : 'text-muted-foreground'
               }`}
             >
-              {descriptionError ?? '\u00A0'}
+              {descriptionError ?? ' '}
             </p>
           </div>
 
           <div className="flex items-center justify-between">
-            <div>
-              <Label htmlFor="channel-private">Make private</Label>
-              <p className="text-xs text-muted-foreground">
-                Only invited members can see this channel
-              </p>
-            </div>
+            <Label htmlFor="channel-private">Make private</Label>
             <Switch
               id="channel-private"
               checked={isPrivate}
@@ -218,7 +260,7 @@ export function CreateChannelDialog({
               submitError ? 'text-destructive' : ''
             }`}
           >
-            {submitError || '\u00A0'}
+            {submitError || ' '}
           </p>
 
           {/* On mobile the Cancel/Create controls move to the dialog's

@@ -56,32 +56,46 @@ export interface NativeScrollOptions {
  * Whether anything scrolls is the browser's decision, exactly as on a phone —
  * which is the entire point: assert on the resulting `scrollTop`.
  */
+// Runs `gesture` with CDP touch emulation on, and turns it off again after
+// unless something else had turned it on. Left on, it makes the page report
+// `(hover: none)` and a coarse pointer — so Tailwind's `hover:` styles stop
+// applying — for every test file that runs later in the same browser: the
+// desktop project's real-hover tests (MemberList remove, the message toolbar)
+// failed whenever one of these gestures happened to run before them.
+async function withTouchEmulation(client: CdpClient, gesture: () => Promise<void>): Promise<void> {
+  const alreadyTouch = navigator.maxTouchPoints > 0;
+  await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  try {
+    await gesture();
+  } finally {
+    if (!alreadyTouch) await client.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+  }
+}
+
 export async function nativeTouchScroll(el: Element, { dy, from }: NativeScrollOptions): Promise<void> {
   const client = cdp() as unknown as CdpClient;
   const rect = el.getBoundingClientRect();
   const origin = from ?? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
   const point = toPagePoint(origin.x, origin.y);
-  // Touch emulation stays ON afterwards — the chromium-mobile project's
-  // Playwright context is itself touch-enabled, and flipping the override
-  // off behind its back would strip that.
-  await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
-  try {
-    // Input synthesis targets the focused/foreground page; CI window
-    // managers don't always grant that. Best-effort.
-    await client.send('Page.bringToFront');
-  } catch {
-    // Page domain unavailable on this session — proceed.
-  }
-  await client.send('Input.synthesizeScrollGesture', {
-    x: Math.round(point.x),
-    y: Math.round(point.y),
-    xDistance: 0,
-    yDistance: Math.round(dy * point.scale),
-    gestureSourceType: 'touch',
-    speed: 800,
+  await withTouchEmulation(client, async () => {
+    try {
+      // Input synthesis targets the focused/foreground page; CI window
+      // managers don't always grant that. Best-effort.
+      await client.send('Page.bringToFront');
+    } catch {
+      // Page domain unavailable on this session — proceed.
+    }
+    await client.send('Input.synthesizeScrollGesture', {
+      x: Math.round(point.x),
+      y: Math.round(point.y),
+      xDistance: 0,
+      yDistance: Math.round(dy * point.scale),
+      gestureSourceType: 'touch',
+      speed: 800,
+    });
+    // Let momentum/settling finish before the caller reads scrollTop.
+    await new Promise((resolve) => setTimeout(resolve, 400));
   });
-  // Let momentum/settling finish before the caller reads scrollTop.
-  await new Promise((resolve) => setTimeout(resolve, 400));
 }
 
 export interface NativeTouchSwipeOptions {
@@ -110,7 +124,6 @@ export async function nativeTouchSwipe(
   const client = cdp() as unknown as CdpClient;
   const rect = el.getBoundingClientRect();
   const origin = from ?? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-  await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
   const touch = (type: string, x: number, y: number) => {
     const point = toPagePoint(x, y);
     return client.send('Input.dispatchTouchEvent', {
@@ -120,18 +133,20 @@ export async function nativeTouchSwipe(
   };
   const legs = [{ from: origin, dx, dy, steps }];
   if (then) legs.push({ from: { x: origin.x + dx, y: origin.y + dy }, ...then });
-  await touch('touchStart', origin.x, origin.y);
-  for (const leg of legs) {
-    for (let i = 1; i <= leg.steps; i++) {
-      await new Promise((resolve) => setTimeout(resolve, stepMs));
-      await touch('touchMove', leg.from.x + (leg.dx * i) / leg.steps, leg.from.y + (leg.dy * i) / leg.steps);
+  await withTouchEmulation(client, async () => {
+    await touch('touchStart', origin.x, origin.y);
+    for (const leg of legs) {
+      for (let i = 1; i <= leg.steps; i++) {
+        await new Promise((resolve) => setTimeout(resolve, stepMs));
+        await touch('touchMove', leg.from.x + (leg.dx * i) / leg.steps, leg.from.y + (leg.dy * i) / leg.steps);
+      }
     }
-  }
-  const last = legs[legs.length - 1];
-  // Come to rest before lifting: a slow, deliberate release.
-  await new Promise((resolve) => setTimeout(resolve, 120));
-  await touch('touchEnd', last.from.x + last.dx, last.from.y + last.dy);
-  await new Promise((resolve) => setTimeout(resolve, 400));
+    const last = legs[legs.length - 1];
+    // Come to rest before lifting: a slow, deliberate release.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    await touch('touchEnd', last.from.x + last.dx, last.from.y + last.dy);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  });
 }
 
 // Whether THIS environment's CDP input synthesis produces real compositor

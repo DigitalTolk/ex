@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ApiError } from '@/lib/api';
 import { CreateChannelDialog } from './CreateChannelDialog';
 
 const mockMutate = vi.fn();
@@ -128,17 +129,95 @@ describe('CreateChannelDialog', () => {
     expect(screen.getByText('Creating...')).toBeInTheDocument();
   });
 
-  it('shows the backend duplicate-name message without raw JSON', async () => {
+  it('says the name is taken under the name field when the server answers 409', async () => {
     const user = userEvent.setup();
     mockMutate.mockImplementation((_vars, opts) => {
-      opts.onError(new Error('channel: a channel with this name already exists'));
+      opts.onError(new ApiError(409, 'channel: a channel with this name already exists: service: already exists'));
+    });
+    renderDialog(true);
+
+    const name = screen.getByLabelText('Name');
+    await user.type(name, 'Marketing');
+    await user.click(screen.getByText('Create Channel'));
+
+    expect(screen.getByTestId('channel-name-help')).toHaveTextContent('~marketing already exists');
+    expect(screen.getByRole('alert')).toBe(screen.getByTestId('channel-name-help'));
+    expect(name).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByTestId('channel-submit-error')).not.toHaveTextContent('channel:');
+    expect(screen.getByRole('button', { name: 'Create Channel' })).toBeDisabled();
+
+    // Another name clears it; going back to the taken one brings it back.
+    await user.type(name, '-2');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Create Channel' })).toBeEnabled();
+    await user.type(name, '{Backspace}{Backspace}');
+    expect(screen.getByRole('alert')).toHaveTextContent('~marketing already exists');
+  });
+
+  it('shows any other server refusal in the bottom slot', async () => {
+    const user = userEvent.setup();
+    mockMutate.mockImplementation((_vars, opts) => {
+      opts.onError(new ApiError(403, 'channel: guests cannot create channels'));
     });
     renderDialog(true);
 
     await user.type(screen.getByLabelText('Name'), 'marketing');
     await user.click(screen.getByText('Create Channel'));
 
-    expect(screen.getByRole('alert')).toHaveTextContent('channel: a channel with this name already exists');
-    expect(screen.getByRole('alert')).not.toHaveTextContent('{"error"');
+    expect(screen.getByRole('alert')).toBe(screen.getByTestId('channel-submit-error'));
+    expect(screen.getByRole('alert')).toHaveTextContent('channel: guests cannot create channels');
+    expect(screen.getByTestId('channel-name-help')).not.toHaveTextContent('already exists');
+  });
+
+  it('turns a typed title into the channel name as it is typed', async () => {
+    const user = userEvent.setup();
+    renderDialog(true);
+
+    const name = screen.getByLabelText('Name') as HTMLInputElement;
+    await user.type(name, 'Marketing ');
+    expect(name.value).toBe('marketing-');
+    await user.type(name, 'Team & Sales!');
+    expect(name.value).toBe('marketing-team-and-sales-');
+    expect(screen.getByTestId('channel-name-counter')).toHaveTextContent('24/32');
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    await user.click(screen.getByText('Create Channel'));
+    expect(mockMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'marketing-team-and-sales' }),
+      expect.anything(),
+    );
+    expect(name.value).toBe('marketing-team-and-sales');
+  });
+
+  it('drops the trailing hyphen when the field is left', async () => {
+    const user = userEvent.setup();
+    renderDialog(true);
+
+    const name = screen.getByLabelText('Name') as HTMLInputElement;
+    await user.type(name, 'design ');
+    expect(name.value).toBe('design-');
+    await user.tab();
+    expect(name.value).toBe('design');
+  });
+
+  it('cannot create a channel from text that has no channel name in it', async () => {
+    const user = userEvent.setup();
+    renderDialog(true);
+
+    const name = screen.getByLabelText('Name') as HTMLInputElement;
+    await user.type(name, '!? ');
+    expect(name.value).toBe('');
+    expect(screen.getByRole('button', { name: 'Create Channel' })).toBeDisabled();
+  });
+
+  it('does not submit while the description is over its limit', async () => {
+    const user = userEvent.setup();
+    renderDialog(true);
+
+    await user.type(screen.getByLabelText('Name'), 'general');
+    await user.click(screen.getByLabelText(/Description/));
+    await user.paste('a'.repeat(256));
+    fireEvent.submit(document.querySelector('form')!);
+    expect(mockMutate).not.toHaveBeenCalled();
   });
 });

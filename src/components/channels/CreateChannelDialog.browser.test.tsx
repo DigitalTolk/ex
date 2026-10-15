@@ -1,17 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
+import { userEvent } from 'vitest/browser';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ApiError } from '@/lib/api';
 import { CreateChannelDialog } from './CreateChannelDialog';
 
 // Browser coverage for CreateChannelDialog — mount and form interactions.
 
 // Drives mutate to either resolve (onSuccess) or fail (onError) so the
 // dialog's success/navigate and error paths are both exercised.
-let mutateMode: 'success' | 'error' | 'noop' = 'noop';
+let mutateMode: 'success' | 'error' | 'conflict' | 'noop' = 'noop';
 const createChannelMutate = vi.fn((_vars: unknown, opts?: { onSuccess?: (c: { slug: string }) => void; onError?: (e: unknown) => void }) => {
   if (mutateMode === 'success') opts?.onSuccess?.({ slug: 'new-channel' });
   else if (mutateMode === 'error') opts?.onError?.(new Error('Channel name already taken'));
+  else if (mutateMode === 'conflict') opts?.onError?.(new ApiError(409, 'channel: a channel with this name already exists'));
 });
 const pendingRef = { value: false };
 vi.mock('@/hooks/useChannels', () => ({
@@ -57,24 +60,105 @@ describe('CreateChannelDialog browser', () => {
     expect(document.body.textContent).not.toMatch(/Create a channel|New channel/i);
   });
 
-  it('renders the form when open and validates names while typing', async () => {
+  it('rewrites what is typed into a channel name, keystroke by keystroke', async () => {
     await render(
       <Wrap>
         <CreateChannelDialog open={true} onOpenChange={vi.fn()} />
       </Wrap>,
     );
-    await vi.waitFor(() => {
-      const name = document.querySelector('input[type="text"], input:not([type])') as HTMLInputElement | null;
-      expect(name).not.toBeNull();
-    });
-    const name = document.querySelector('input[type="text"], input:not([type])') as HTMLInputElement;
-    setReactInputValue(name, 'New Channel!');
-    await new Promise((r) => setTimeout(r, 30));
-    // Invalid name (contains '!') surfaces an error message somewhere.
-    // We only need to exercise the path; assertion on specific text is
-    // brittle.
-    setReactInputValue(name, 'new-channel');
-    await new Promise((r) => setTimeout(r, 30));
+    const name = document.getElementById('channel-name') as HTMLInputElement;
+    await userEvent.click(name);
+    await userEvent.keyboard('Marketing Team');
+    await vi.waitFor(() => expect(name.value).toBe('marketing-team'));
+    expect(document.querySelector('[data-testid="channel-name-counter"]')!.textContent).toBe('14/32');
+    expect(submitButton().disabled).toBe(false);
+  });
+
+  it('keeps the caret where it was when a rewrite lands mid-name', async () => {
+    await render(
+      <Wrap>
+        <CreateChannelDialog open={true} onOpenChange={vi.fn()} />
+      </Wrap>,
+    );
+    const name = document.getElementById('channel-name') as HTMLInputElement;
+    await userEvent.click(name);
+    await userEvent.keyboard('marketingteam');
+    name.setSelectionRange(9, 9);
+    await userEvent.keyboard(' ');
+    await vi.waitFor(() => expect(name.value).toBe('marketing-team'));
+    expect(name.selectionStart).toBe(10);
+    await userEvent.keyboard('X');
+    await vi.waitFor(() => expect(name.value).toBe('marketing-xteam'));
+    expect(name.selectionStart).toBe(11);
+  });
+
+  it('leaves a character being composed alone until the composition ends', async () => {
+    await render(
+      <Wrap>
+        <CreateChannelDialog open={true} onOpenChange={vi.fn()} />
+      </Wrap>,
+    );
+    const name = document.getElementById('channel-name') as HTMLInputElement;
+    name.focus();
+    const compose = (value: string) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, value);
+      name.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }));
+    };
+    // A dead key: the accent shows on its own first, then joins the letter.
+    name.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    compose('Caf´');
+    await vi.waitFor(() => expect(name.value).toBe('Caf´'));
+    compose('Café');
+    await vi.waitFor(() => expect(name.value).toBe('Café'));
+    // Nothing flags the half-typed text meanwhile.
+    expect(document.querySelector('[data-testid="channel-name-help"]')!.getAttribute('role')).toBeNull();
+    name.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'é' }));
+    await vi.waitFor(() => expect(name.value).toBe('cafe'));
+    expect(name.selectionStart).toBe(4);
+  });
+
+  it('puts the ~ prefix right before the first letter, on every tier', async () => {
+    await render(
+      <Wrap>
+        <CreateChannelDialog open={true} onOpenChange={vi.fn()} />
+      </Wrap>,
+    );
+    const name = document.getElementById('channel-name') as HTMLInputElement;
+    const prefix = document.querySelector('[data-testid="channel-name-prefix"]') as HTMLElement;
+    const box = name.getBoundingClientRect();
+    const style = getComputedStyle(name);
+    const textStart = box.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft);
+    // The glyph itself, not the box it is aligned in.
+    const range = document.createRange();
+    range.selectNodeContents(prefix);
+    const glyph = range.getBoundingClientRect();
+    expect(glyph.width).toBeGreaterThan(0);
+    expect(glyph.left).toBeGreaterThanOrEqual(box.left + parseFloat(style.borderLeftWidth));
+    expect(glyph.right).toBeLessThanOrEqual(textStart);
+    expect(textStart - glyph.right).toBeLessThan(4);
+    // Same type size as the text it prefixes, centred in the field.
+    expect(getComputedStyle(prefix).fontSize).toBe(style.fontSize);
+    expect(Math.abs((glyph.top + glyph.bottom) / 2 - (box.top + box.bottom) / 2)).toBeLessThan(3);
+  });
+
+  it('says the name is taken under the field when the server answers 409', async () => {
+    mutateMode = 'conflict';
+    try {
+      const screen = await render(
+        <Wrap>
+          <CreateChannelDialog open onOpenChange={vi.fn()} />
+        </Wrap>,
+      );
+      const name = document.getElementById('channel-name') as HTMLInputElement;
+      await userEvent.click(name);
+      await userEvent.keyboard('General');
+      submitButton().click();
+      await expect.element(screen.getByRole('alert')).toHaveTextContent('~general already exists');
+      expect(name.getAttribute('aria-invalid')).toBe('true');
+      expect(submitButton().disabled).toBe(true);
+    } finally {
+      mutateMode = 'noop';
+    }
   });
 
   it('toggling the private switch flips the channel type', async () => {
@@ -182,8 +266,8 @@ describe('CreateChannelDialog browser', () => {
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     await new Promise((r) => setTimeout(r, 20));
     expect(createChannelMutate).not.toHaveBeenCalled();
-    // Submit with an invalid name → `if (nameError || descriptionError) return`.
-    setReactInputValue(document.getElementById('channel-name') as HTMLInputElement, 'Bad Name!');
+    // Submit with an over-long name → `if (!finalName || nameError || ...) return`.
+    setReactInputValue(document.getElementById('channel-name') as HTMLInputElement, 'a'.repeat(40));
     await new Promise((r) => setTimeout(r, 20));
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     await new Promise((r) => setTimeout(r, 20));

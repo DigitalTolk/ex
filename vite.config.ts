@@ -31,6 +31,9 @@ const vendorChunks: Array<[string, (id: string) => boolean]> = [
     id.includes('/node_modules/clsx/')
   )],
   ['virtual-vendor', (id) => id.includes('/node_modules/react-virtuoso/')],
+  // Channel-name slugs; the transliteration tables alone would push the
+  // catch-all `vendor` chunk past the warning limit.
+  ['slug-vendor', (id) => id.includes('/node_modules/@sindresorhus/') || id.includes('/node_modules/escape-string-regexp/')],
 ]
 
 // pdf.js (the lazy PdfPreview) and Uppy (loaded on the first attachment
