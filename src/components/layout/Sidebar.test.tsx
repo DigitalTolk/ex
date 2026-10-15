@@ -834,6 +834,24 @@ describe('Sidebar', () => {
     expect(screen.queryByText('Project Team')).not.toBeInTheDocument();
   });
 
+  // An open section stands apart with a wide gap above its heading (and the
+  // next one's); collapsed headings in a row pack tight.
+  it('spaces open sections widely and packs collapsed ones', () => {
+    renderSidebar();
+    const group = (key: string) => screen.getByTestId(`sidebar-group-${key}`);
+    expect(group('__channels__')).toHaveClass('mt-5');
+    expect(group('__dms__')).toHaveClass('mt-5');
+    // DMs collapsed right after an open Channels: still set apart from it.
+    fireEvent.click(screen.getByTestId('sidebar-group-toggle-__dms__'));
+    expect(group('__dms__')).toHaveClass('mt-5');
+    // Both collapsed: the DMs heading packs up under the Channels heading.
+    fireEvent.click(screen.getByTestId('sidebar-group-toggle-__channels__'));
+    expect(group('__dms__')).toHaveClass('mt-2');
+    // Reopen DMs: an open section always gets its gap.
+    fireEvent.click(screen.getByTestId('sidebar-group-toggle-__dms__'));
+    expect(group('__dms__')).toHaveClass('mt-5');
+  });
+
   it('marks the Threads link active on the /threads route', () => {
     window.history.pushState({}, '', '/threads');
     renderSidebar();

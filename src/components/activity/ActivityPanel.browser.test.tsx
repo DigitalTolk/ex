@@ -323,7 +323,7 @@ describe('ActivityPanel', () => {
     await expect.element(screen.getByRole('heading', { name: 'Earlier' })).toBeVisible();
   });
 
-  it('filters by tab (arrow keys too), shows a dot on tabs with unread items, and hides read rows on request', async () => {
+  it('filters by tab (arrow keys too), marks tabs with unread items (Reactions bold, others a dot), and hides read rows on request', async () => {
     mockApi({
       items: [
         item({ id: 'dm', type: 'dm', parentID: 'conv-faisal', parentType: 'conversation' }),
@@ -334,7 +334,12 @@ describe('ActivityPanel', () => {
     const screen = await renderPanel();
     await vi.waitFor(() => expect(rows()).toHaveLength(3));
     expect(document.querySelector('[data-testid="activity-filter-dm-dot"]')).not.toBeNull();
-    expect(document.querySelector('[data-testid="activity-filter-reaction-dot"]')).not.toBeNull();
+    // New reactions don't get a dot: the Reactions tab turns bold and tinted.
+    expect(document.querySelector('[data-testid="activity-filter-reaction-dot"]')).toBeNull();
+    const reactionTab = screen.getByTestId('activity-filter-reaction').element();
+    expect(reactionTab).toHaveAttribute('data-highlight', 'true');
+    expect(Number(getComputedStyle(reactionTab).fontWeight)).toBeGreaterThanOrEqual(600);
+    expect(screen.getByTestId('activity-filter-dm').element()).not.toHaveAttribute('data-highlight');
     expect(document.querySelector('[data-testid="activity-filter-mention-dot"]')).toBeNull();
     expect(document.querySelector('[data-testid="activity-filter-all-dot"]')).toBeNull();
     // The dot is announced through the tab's name.

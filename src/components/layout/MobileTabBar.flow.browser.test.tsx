@@ -86,8 +86,10 @@ describe('phone list screens', () => {
     const screen = await renderAt('/');
     const before = window.history.length;
     await expect.element(screen.getByTestId('channel-list')).toBeVisible();
-    await expect.element(screen.getByTestId('mobile-tab-unread')).toHaveTextContent('1');
-    await screen.getByRole('button', { name: 'Activity, 1 unread' }).click();
+    // A dot, never a count.
+    await expect.element(screen.getByTestId('mobile-tab-unread')).toBeVisible();
+    expect(screen.getByTestId('mobile-tab-unread').element()).toBeEmptyDOMElement();
+    await screen.getByRole('button', { name: 'Activity, unread' }).click();
     await expect.element(screen.getByTestId('mobile-sidebar-title')).toHaveTextContent('Activity');
     await expect.element(screen.getByText('standup moved')).toBeVisible();
     await screen.getByRole('button', { name: 'Home' }).click();

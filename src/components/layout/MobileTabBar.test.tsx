@@ -41,15 +41,15 @@ describe('MobileTabBar', () => {
     expect(useSidebarModeStore.getState().mode).toBe('home');
   });
 
-  it('shows the unread count on Activity, capped at 99+', () => {
+  it('marks unread activity with a dot, never a count', () => {
     unread.value = 4;
     const { unmount } = renderBar();
-    expect(screen.getByTestId('mobile-tab-unread')).toHaveTextContent('4');
-    expect(screen.getByTestId('mobile-tab-activity')).toHaveAccessibleName('Activity, 4 unread');
+    expect(screen.getByTestId('mobile-tab-unread')).toBeEmptyDOMElement();
+    expect(screen.getByTestId('mobile-tab-activity')).toHaveAccessibleName('Activity, unread');
     unmount();
     unread.value = 150;
     renderBar();
-    expect(screen.getByTestId('mobile-tab-unread')).toHaveTextContent('99+');
+    expect(screen.getByTestId('mobile-tab-unread')).toBeEmptyDOMElement();
   });
 
   it('has no badge with nothing unread', () => {

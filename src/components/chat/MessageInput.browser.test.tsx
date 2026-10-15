@@ -117,9 +117,9 @@ describe('MessageInput browser behavior', () => {
       // old rounded-lg, but still well short of the mobile pill (≥24).
       expect(radius).toBeGreaterThanOrEqual(14);
       expect(radius).toBeLessThanOrEqual(18);
-      // Spec border width is 2px (the screenshot measured #E9E9E9 over 2px),
-      // not the default 1px.
-      expect(Number.parseFloat(getComputedStyle(composer!).borderTopWidth)).toBeGreaterThanOrEqual(2);
+      // A 1px outline in the strong border colour (contrast comes from the
+      // colour, not the width).
+      expect(Number.parseFloat(getComputedStyle(composer!).borderTopWidth)).toBe(1);
       expect(screen.getByLabelText('Link').element()).toBeVisible();
       const send = screen.getByLabelText('Send message').element();
       const sendRect = send.getBoundingClientRect();

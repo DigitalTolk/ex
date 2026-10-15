@@ -40,31 +40,31 @@ describe('ActivityModeSwitch', () => {
     vi.mocked(apiFetch).mockReset();
   });
 
-  it('starts on Home and shows the unread count on Activity', async () => {
+  it('starts on Home and marks unread activity with a dot, never a count', async () => {
     renderAt('/channel/general', 4);
     expect(screen.getByTestId('sidebar-mode-home')).toHaveAttribute('aria-pressed', 'true');
-    expect(await screen.findByTestId('activity-unread-badge')).toHaveTextContent('4');
+    const dot = await screen.findByTestId('activity-unread-dot');
+    expect(dot).toBeEmptyDOMElement();
+    expect(screen.getByTestId('sidebar-mode-activity')).not.toHaveTextContent('4');
   });
 
-  it('caps the count at 99+ and hides it when nothing is unread', async () => {
+  it('hides the dot when nothing is unread', async () => {
     const { unmount } = renderAt('/', 150);
-    expect(await screen.findByTestId('activity-unread-badge')).toHaveTextContent('99+');
+    expect(await screen.findByTestId('activity-unread-dot')).toBeInTheDocument();
     unmount();
     renderAt('/', 0);
     await vi.waitFor(() => expect(apiFetch).toHaveBeenCalled());
-    expect(screen.queryByTestId('activity-unread-badge')).toBeNull();
+    expect(screen.queryByTestId('activity-unread-dot')).toBeNull();
   });
 
-  it('puts the count beside the label when Activity is selected, and none at zero', async () => {
+  it('keeps the dot on the bell while Activity is selected, and none at zero', async () => {
     setSidebarMode('activity');
     const { unmount } = renderAt('/channel/general', 3);
-    const badge = await screen.findByTestId('activity-unread-badge');
-    expect(badge).toHaveTextContent('3');
-    expect(badge).toHaveClass('ml-2');
+    expect(await screen.findByTestId('activity-unread-dot')).toBeInTheDocument();
     unmount();
     renderAt('/channel/general', 0);
     await vi.waitFor(() => expect(apiFetch).toHaveBeenCalled());
-    expect(screen.queryByTestId('activity-unread-badge')).toBeNull();
+    expect(screen.queryByTestId('activity-unread-dot')).toBeNull();
   });
 
   it('switches the sidebar without leaving the page', () => {
@@ -78,13 +78,13 @@ describe('ActivityModeSwitch', () => {
   });
 
   // A toggle between two lists, so it's a pair of pressed/unpressed buttons
-  // (with the unread count in the Activity button's name), not a tablist
-  // without panels.
-  it('is a pair of toggle buttons named with the unread count', async () => {
+  // (with "unread" in the Activity button's name), not a tablist without
+  // panels.
+  it('is a pair of toggle buttons, Activity named as unread', async () => {
     renderAt('/channel/general', 2);
     expect(screen.getByRole('group', { name: 'Sidebar' })).toBeInTheDocument();
     expect(screen.queryByRole('tablist')).toBeNull();
-    expect(await screen.findByRole('button', { name: 'Activity, 2 unread' })).toHaveAttribute('aria-pressed', 'false');
+    expect(await screen.findByRole('button', { name: 'Activity, unread' })).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('button', { name: 'Home' })).toHaveAttribute('aria-pressed', 'true');
   });
 });

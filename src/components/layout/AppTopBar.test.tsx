@@ -52,3 +52,26 @@ describe('AppTopBar', () => {
     mobile.value = false;
   });
 });
+
+// On a phone the page's name shares the back button's row instead of taking
+// a row of its own below it.
+describe('AppTopBar page title (phone)', () => {
+  it('shows the page title beside Back on a phone, and nothing without one or on desktop', async () => {
+    const { usePageTitleStore } = await import('@/stores/page-title');
+    mobile.value = true;
+    usePageTitleStore.setState({ title: 'Directory' });
+    const { unmount } = render(<AppTopBar onOpenChannels={vi.fn()} />);
+    expect(screen.getByTestId('mobile-page-title')).toHaveTextContent('Directory');
+    unmount();
+    usePageTitleStore.setState({ title: null });
+    const second = render(<AppTopBar onOpenChannels={vi.fn()} />);
+    expect(screen.queryByTestId('mobile-page-title')).toBeNull();
+    second.unmount();
+    mobile.value = false;
+    usePageTitleStore.setState({ title: 'Directory' });
+    const third = render(<AppTopBar onOpenChannels={vi.fn()} />);
+    expect(screen.queryByTestId('mobile-page-title')).toBeNull();
+    third.unmount();
+    usePageTitleStore.setState({ title: null });
+  });
+});
