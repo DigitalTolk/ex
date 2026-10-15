@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { CalendarClock, ChevronDown, Clock } from 'lucide-react';
 import { Popover } from '@base-ui/react/popover';
+import { blurActiveInput } from '@/lib/blur-input';
 import { triggerMessageActionHaptic } from '@/lib/haptics';
 import {
   DropdownMenu,
@@ -114,6 +115,7 @@ export function ScheduleSendMenu({ disabled, onSchedule, onOpenChange, className
             aria-label={hold.label}
             aria-description="Press and hold to schedule"
             data-testid="schedule-send-hold"
+            data-keeps-keyboard=""
             className={`select-none [-webkit-touch-callout:none] ${className ?? ''}`}
           >
             {hold.children}
@@ -128,6 +130,7 @@ export function ScheduleSendMenu({ disabled, onSchedule, onOpenChange, className
                 onMouseDown={(e) => e.preventDefault()}
                 className="w-56 origin-(--transform-origin) rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-none transition-[opacity,transform] duration-150 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0"
                 data-testid="schedule-send-hold-menu"
+                data-keeps-keyboard=""
               >
                 <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Schedule message</div>
                 {SCHEDULE_PRESETS.map((preset) => (
@@ -136,6 +139,8 @@ export function ScheduleSendMenu({ disabled, onSchedule, onOpenChange, className
                     label={`Send ${preset.label}`}
                     onSelect={() => {
                       changeOpen(false);
+                      // Done composing: the keyboard goes down with the choice.
+                      blurActiveInput();
                       schedulePreset(preset.key);
                     }}
                   >
