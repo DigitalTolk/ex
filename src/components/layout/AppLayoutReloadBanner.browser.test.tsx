@@ -184,16 +184,24 @@ describe('AppLayout reload banner browser behavior', () => {
           headers: { 'X-EX-App-Version': newerVersion },
         });
       }
-      if (url.includes('/api/v1/channels')) return apiJSON([]);
-      if (url.includes('/api/v1/conversations')) return apiJSON([]);
-      if (url.includes('/api/v1/sidebar/categories')) return apiJSON([]);
-      if (url.includes('/api/v1/drafts')) return apiJSON([]);
+      // One server, one version on every response. The client keeps the
+      // version of whichever response came LAST, so a fixture that answered
+      // the other requests with the current build undid the 500's newer
+      // version whenever one of them finished after it — on a slow run, the
+      // banner never showed.
+      if (url.includes('/api/v1/channels')) return apiJSON([], newerVersion);
+      if (url.includes('/api/v1/conversations')) return apiJSON([], newerVersion);
+      if (url.includes('/api/v1/sidebar/categories')) return apiJSON([], newerVersion);
+      if (url.includes('/api/v1/drafts')) return apiJSON([], newerVersion);
       if (url.includes('/api/v1/user-state')) {
-        return apiJSON({ channelNotifications: [], threadNotifications: [], threadSeen: {}, hiddenConversations: [] });
+        return apiJSON(
+          { channelNotifications: [], threadNotifications: [], threadSeen: {}, hiddenConversations: [] },
+          newerVersion,
+        );
       }
-      if (url.includes('/api/v1/threads')) return apiJSON([]);
+      if (url.includes('/api/v1/threads')) return apiJSON([], newerVersion);
       if (url.includes('/api/v1/version')) return apiJSON({ version: newerVersion }, newerVersion);
-      return apiJSON([]);
+      return apiJSON([], newerVersion);
     }) as typeof fetch;
 
     try {
@@ -280,7 +288,7 @@ describe('AppLayout reload banner browser behavior', () => {
     }
   });
 
-  it('shows the reload banner on the mobile auth error surface when login reports a newer app version', { retry: 2 }, async () => {
+  it('shows the reload banner on the mobile auth error surface when login reports a newer app version', async () => {
     resetServerVersionForTests();
     const newerVersion = `newer-than-${BUILD_VERSION}`;
     const originalFetch = globalThis.fetch;
@@ -295,8 +303,11 @@ describe('AppLayout reload banner browser behavior', () => {
           },
         });
       }
-      if (url.includes('/api/v1/version')) return apiJSON({ version: BUILD_VERSION });
-      return apiJSON({});
+      // The same server answers the version check (see the chat-route test:
+      // the last response's version wins, so a version check answering the
+      // current build after the login undid it).
+      if (url.includes('/api/v1/version')) return apiJSON({ version: newerVersion }, newerVersion);
+      return apiJSON({}, newerVersion);
     }) as typeof fetch;
 
     try {

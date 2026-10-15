@@ -28,6 +28,14 @@ describe('channelName', () => {
     expect(channelName('Zürich', 'del')).toBe('zurich');
   });
 
+  // Chromium on a Linux with a POSIX locale reports navigator.language as
+  // "en-US@posix"; the library threw on it, and the dialog that calls this
+  // renders in the sidebar, so the whole chat view crashed.
+  it('treats a language tag that is not valid as no locale', () => {
+    expect(channelName('Försäljning', 'en-US@posix')).toBe('forsaljning');
+    expect(channelNameDraft('Marketing ', 'en-US@posix')).toBe('marketing-');
+  });
+
   it('follows the other rules of the locale', () => {
     expect(channelName('Ålands Øl', 'en')).toBe('alands-ol');
     expect(channelName('Ålands Øl', 'da')).toBe('aalands-oel');

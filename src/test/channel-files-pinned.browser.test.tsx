@@ -1142,10 +1142,14 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
     const original = globalThis.fetch;
     const inner = installFetchStub({ files: [], pinned: [], attachments: {} });
     const base = globalThis.fetch;
+    let uploadHeld = false;
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       // Hold the upload-init open so the optimistic chip stays visible.
-      if (url.includes('/api/v1/attachments/url')) return new Promise<Response>(() => undefined);
+      if (url.includes('/api/v1/attachments/url')) {
+        uploadHeld = true;
+        return new Promise<Response>(() => undefined);
+      }
       return base(input, init);
     }) as typeof fetch;
     teardown = () => { globalThis.fetch = original; inner(); };
@@ -1170,6 +1174,11 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain('dropped.png');
     }, { timeout: 15000 });
+    // The upload hashes and measures the file before it asks to upload it.
+    // Ending the test before that request is held let it reach the NEXT
+    // test's fetch stub, which let the upload go on to S3 — and Uppy logged
+    // the 404 there, failing that test on its console.
+    await vi.waitFor(() => expect(uploadHeld).toBe(true), { timeout: 15000 });
   });
 
   it('falls back to "Unknown" for a batch user with a blank display name (userMap arm)', async () => {

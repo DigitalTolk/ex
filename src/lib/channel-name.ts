@@ -16,15 +16,29 @@ const dropUmlautDots: [string, string][] = [
   ['ü', 'u'], ['Ü', 'U'],
 ];
 
+// The browser's language is not always a valid BCP-47 tag (Chromium on a
+// Linux with a POSIX locale reports "en-US@posix"), and the library
+// lowercases with it — which throws on an invalid tag, and the create-channel
+// dialog renders in the sidebar. An invalid tag counts as no locale.
+function validLocale(locale: string | undefined): string | undefined {
+  if (!locale) return undefined;
+  try {
+    return Intl.getCanonicalLocales(locale)[0];
+  } catch {
+    return undefined;
+  }
+}
+
 // channelName is the name `typed` stands for, transliterated for `locale`
 // (a BCP-47 tag, normally the browser's language).
 export function channelName(typed: string, locale?: string): string {
+  const tag = validLocale(locale);
   return slugify(typed, {
     // What someone types is lowercased letter by letter, so decamelizing
     // would only ever split a pasted "JavaScript" into "java-script".
     decamelize: false,
-    locale,
-    customReplacements: /^de(-|$)/i.test(locale ?? '') ? [] : dropUmlautDots,
+    locale: tag,
+    customReplacements: /^de(-|$)/i.test(tag ?? '') ? [] : dropUmlautDots,
   });
 }
 
