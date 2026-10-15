@@ -121,7 +121,7 @@ export function UnreadBanner({ count, onJump, onMarkRead }: UnreadBannerProps) {
   return (
     <div
       data-testid="unread-banner"
-      className="absolute inset-x-3 top-2 z-10 flex items-center gap-2 rounded-md border border-border bg-background/95 px-3 py-1.5 text-sm shadow-sm backdrop-blur"
+      className="absolute inset-x-3 top-2 z-10 flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-sm shadow-sm"
     >
       <button
         type="button"

@@ -112,12 +112,11 @@ export default function ThreadsPage() {
     userConvs?.find((c) => c.conversationID === id)?.displayName ?? 'Conversation';
 
   return (
-    <PageContainer
-      title="Threads"
-      description="Conversations you've started or replied to."
-    >
+    // On a phone the threads run edge to edge, one after another: no cards
+    // around them taking width from the messages.
+    <PageContainer title="Threads" flush>
       {isLoading && (
-        <div className="space-y-3" data-testid="threads-loading">
+        <div className="space-y-3 mobile:px-4" data-testid="threads-loading">
           {Array.from({ length: 3 }).map((_, i) => (
             <Skeleton key={i} className="h-40 w-full" />
           ))}
@@ -129,11 +128,11 @@ export default function ThreadsPage() {
           className="py-12 text-center text-muted-foreground"
           data-testid="threads-empty"
         >
-          No threads yet — reply to a message to start one.
+          No threads
         </p>
       )}
 
-      <div className="space-y-4">
+      <div className="space-y-4 mobile:space-y-0">
         {!isLoading &&
           visibleThreads.map((t) => {
             const where =

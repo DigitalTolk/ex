@@ -21,7 +21,7 @@ func TestStableMediaURL_SetError(t *testing.T) {
 }
 
 func TestOpenStableMedia_NilDeps(t *testing.T) {
-	if _, err := OpenStableMedia(context.Background(), nil, nil, "tok"); err == nil {
+	if _, err := OpenStableMedia(context.Background(), nil, nil, "tok", ""); err == nil {
 		t.Fatal("expected error/not-found for nil deps")
 	}
 }

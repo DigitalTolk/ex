@@ -33,7 +33,7 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
         {langLabel && (
           <span
             data-testid="code-language"
-            className="hidden select-none rounded border bg-background/80 px-1.5 py-0.5 text-[10px] font-sans uppercase leading-none tracking-wide text-muted-foreground backdrop-blur md:inline-block"
+            className="hidden select-none rounded border bg-background px-1.5 py-0.5 text-xs font-sans uppercase leading-none tracking-wide text-muted-foreground md:inline-block"
           >
             {langLabel}
           </span>
@@ -50,7 +50,10 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
           // opacity-0 ALONE still hit-tests, leaving an invisible tap target
           // that silently copied on stray taps, so mobile also needs
           // pointer-events-none (same treatment as the sidebar row kebabs).
-          className="bg-background/80 text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 touch:opacity-100 mobile:pointer-events-none mobile:opacity-0"
+          // An opaque face, never a backdrop blur: every code block on screen
+          // would be its own blurred layer, re-sampled on each frame of a
+          // scroll or a slide — what made long chats crash phones.
+          className="bg-background text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 touch:opacity-100 mobile:pointer-events-none mobile:opacity-0"
         />
       </div>
       <div className="flex">

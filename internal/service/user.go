@@ -47,9 +47,10 @@ type UserService struct {
 	// urlCache memoises presigned avatar URLs so repeat fetches return
 	// the same URL — the browser then reuses its cached image instead
 	// of re-downloading on every render that hits a fresh signature.
-	urlCache   *presignedURLCache
-	mediaCache MediaURLCache
-	reminders  ReminderCanceller
+	urlCache      *presignedURLCache
+	mediaCache    MediaURLCache
+	reminders     ReminderCanceller
+	avatarObjects AvatarObjects
 }
 
 // ReminderCanceller stops a deactivated user's queued reminders. Implemented by
@@ -83,6 +84,10 @@ func (s *UserService) SetIndexer(i UserIndexer) { s.indexer = i }
 func (s *UserService) SetSearcher(sr UserSearcher) { s.searcher = sr }
 
 func (s *UserService) SetMediaURLCache(c MediaURLCache) { s.mediaCache = c }
+
+// SetAvatarObjects wires the storage uploaded avatars are read from and their
+// shrunk copies written to. Without it a new avatar cannot be set.
+func (s *UserService) SetAvatarObjects(o AvatarObjects) { s.avatarObjects = o }
 
 // SetReminderCanceller wires reminder cleanup into deactivation, so an account
 // that can no longer sign in leaves no reminders queued to fire.
@@ -387,15 +392,8 @@ func (s *UserService) Update(ctx context.Context, userID string, displayName, av
 		}
 		user.DisplayName = name
 	}
-	if avatarKey != nil {
-		if *avatarKey != "" && !strings.HasPrefix(*avatarKey, "avatars/"+userID+"/") {
-			return nil, errors.New("user: avatar key is not owned by this user")
-		}
-		// New key → drop any cached presigned URL for the previous key
-		// so an avatar swap shows up immediately rather than after the
-		// cache window elapses.
-		s.urlCache.invalidate(user.AvatarKey)
-		user.AvatarKey = *avatarKey
+	if avatarKey != nil && *avatarKey != "" && !strings.HasPrefix(*avatarKey, "avatars/"+userID+"/") {
+		return nil, errors.New("user: avatar key is not owned by this user")
 	}
 	if emojiSkinTone != nil {
 		switch *emojiSkinTone {
@@ -405,14 +403,33 @@ func (s *UserService) Update(ctx context.Context, userID string, displayName, av
 			return nil, errors.New("user: emoji skin tone must be empty, light, medium_light, medium, medium_dark, or dark")
 		}
 	}
+	// The avatar goes last: storing it removes the upload, so every other
+	// field must already have passed.
+	if avatarKey != nil && *avatarKey != user.AvatarKey {
+		key := *avatarKey
+		if key != "" {
+			if key, err = s.storeUploadedAvatar(ctx, userID, key); err != nil {
+				return nil, err
+			}
+		}
+		// New key → drop any cached presigned URL for the previous key
+		// so an avatar swap shows up immediately rather than after the
+		// cache window elapses.
+		s.urlCache.invalidate(user.AvatarKey)
+		user.AvatarKey = key
+	}
 	user.UpdatedAt = time.Now()
+	return s.saveProfile(ctx, user)
+}
 
+// saveProfile writes a changed profile and tells everyone about it.
+func (s *UserService) saveProfile(ctx context.Context, user *model.User) (*model.User, error) {
 	if err := s.users.UpdateUser(ctx, user); err != nil {
 		return nil, fmt.Errorf("user: update: %w", err)
 	}
 
 	if s.cache != nil {
-		_ = s.cache.Delete(ctx, "user:"+userID)
+		_ = s.cache.Delete(ctx, "user:"+user.ID)
 	}
 	s.resolveAvatar(ctx, user)
 

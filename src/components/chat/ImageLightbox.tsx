@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Download, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { getInitials, formatLongDateTime, formatBytes } from '@/lib/format';
-import { iconForAttachment, isImageContentType, isPdfAttachment } from '@/lib/file-helpers';
+import { iconForAttachment, isImageContentType, isPdfAttachment, isVideoAttachment } from '@/lib/file-helpers';
+import { VideoPreview } from './VideoPreview';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
@@ -178,6 +179,7 @@ export function ImageLightbox({
 
   const iconType = iconForAttachment(current.contentType, current.filename);
   const isPdf = !isImage && isPdfAttachment(current.contentType, current.filename);
+  const isVideo = !isImage && !isPdf && isVideoAttachment(current.contentType, current.filename);
   const swipeStageStyle = swipeDrag.x !== 0 || swipeDrag.y !== 0
     ? { transform: `translate3d(${Math.round(swipeDrag.x)}px, ${Math.round(swipeDrag.y)}px, 0)`, transition: 'none' }
     : undefined;
@@ -541,6 +543,21 @@ export function ImageLightbox({
               {/* key: a different PDF is a fresh document, not a re-render. */}
               <PdfPreview key={current.url} url={current.url} fallback={fileCard} />
             </Suspense>
+          </div>
+        ) : isVideo ? (
+          <div
+            // The player's own controls (play, scrub, fullscreen) take the
+            // pointer, not the stage's swipe-to-close.
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerMove={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            onPointerCancel={(e) => e.stopPropagation()}
+            data-testid="image-lightbox-video"
+            className="flex h-full w-full max-w-5xl items-center justify-center"
+          >
+            {/* key: a different video is a fresh player. */}
+            <VideoPreview key={current.url} url={current.url} fallback={fileCard} />
           </div>
         ) : (
           fileCard

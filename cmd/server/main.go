@@ -235,6 +235,9 @@ func main() {
 	userSvc := service.NewUserService(userStore, redisCache, avatarSigner, redisPubSub)
 	userSvc.SetMediaURLCache(redisCache)
 	userSvc.SetTokenStore(tokenStore)
+	if s3Client != nil {
+		userSvc.SetAvatarObjects(s3Client)
+	}
 	channelSvc := service.NewChannelService(channelStore, membershipStore, userStore, messageStore, redisCache, brokerAdapter, redisPubSub)
 	authSvc.SetChannelJoiner(channelSvc)
 	convSvc := service.NewConversationService(conversationStore, userStore, redisCache, brokerAdapter, redisPubSub)

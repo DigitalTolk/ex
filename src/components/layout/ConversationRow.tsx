@@ -11,13 +11,14 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { firstNamesOnly } from '@/lib/format';
 import {
+  useCategories,
   useFavoriteConversation,
   useSetConversationCategory,
 } from '@/hooks/useSidebar';
 import { useRowLongPressMenu } from '@/hooks/useRowLongPressMenu';
 import { useIsOnline } from '@/stores/presence';
-import type { UserConversation, UserStatus } from '@/types';
-import { type CSSProperties } from 'react';
+import type { SidebarCategory, UserConversation, UserStatus } from '@/types';
+import { memo, type CSSProperties } from 'react';
 
 interface Props {
   conversation: UserConversation;
@@ -48,7 +49,7 @@ interface Props {
 // menu for moving between categories. Closing the conversation lives in
 // the same kebab so a DM row keeps the exact button layout (star + …)
 // every other sidebar row uses.
-export function ConversationRow({
+export const ConversationRow = memo(function ConversationRow({
   conversation,
   hasUnread,
   notifyCount = 0,
@@ -69,6 +70,7 @@ export function ConversationRow({
   const dmOnline = dmUserID ? partnerOnline : undefined;
   const favorite = useFavoriteConversation();
   const setCategory = useSetConversationCategory();
+  const { data: categories } = useCategories();
   // Mobile long-press opens the (otherwise hidden) row menu; shared with
   // the other sidebar row type so the behavior can't drift.
   const { menuOpen, setMenuOpen, rowHandlers, suppressNavClick } = useRowLongPressMenu();
@@ -77,17 +79,30 @@ export function ConversationRow({
   const isGroup = conversation.type === 'group';
   const participantCount = isGroup ? (conversation.participantIDs?.length ?? 0) : 0;
 
+  // Like a channel: starring takes it out of its category; unstarring drops
+  // its Favorites position and returns it to the category it kept (a drag
+  // into Favorites keeps one), or to Direct Messages once that is deleted.
   function toggleFavorite(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
     if (isFav) {
+      const kept = (categories ?? []).some((c) => c.id === conversation.categoryID);
       setCategory.mutate({
         conversationID: conversation.conversationID,
-        categoryID: conversation.categoryID ?? '',
+        categoryID: kept ? conversation.categoryID! : '',
         sidebarPosition: 0,
       });
+    } else if (conversation.categoryID) {
+      setCategory.mutate({ conversationID: conversation.conversationID, categoryID: '' });
     }
     favorite.mutate({ conversationID: conversation.conversationID, favorite: !isFav });
+  }
+
+  function moveToCategory(categoryID: string) {
+    if (isFav) {
+      favorite.mutate({ conversationID: conversation.conversationID, favorite: false });
+    }
+    setCategory.mutate({ conversationID: conversation.conversationID, categoryID });
   }
 
   return (
@@ -181,8 +196,7 @@ export function ConversationRow({
       >
         <Star className="h-3.5 w-3.5" fill={isFav ? 'currentColor' : 'none'} />
       </button>
-      {/* Kebab — close only. Category placement is intentionally channel-only;
-          DMs/groups move to Favorites through the star. Desktop: revealed on row
+      {/* Kebab — move to a category, or close. Desktop: revealed on row
           hover. Mobile: the trigger is NOT a tap target (a long-press on the row
           opens it) but stays mounted + hidden so Radix can anchor the menu. */}
       <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
@@ -195,6 +209,21 @@ export function ConversationRow({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">
           <DropdownMenuItem
+            onClick={() => moveToCategory('')}
+            disabled={!conversation.categoryID && !isFav}
+          >
+            Move to Direct Messages
+          </DropdownMenuItem>
+          {(categories ?? []).map((c: SidebarCategory) => (
+            <DropdownMenuItem
+              key={c.id}
+              onClick={() => moveToCategory(c.id)}
+              disabled={conversation.categoryID === c.id && !isFav}
+            >
+              Move to {c.name}
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuItem
             onClick={() => onHide(conversation.conversationID)}
             data-testid={`conv-close-${conversation.conversationID}`}
           >
@@ -204,4 +233,4 @@ export function ConversationRow({
       </DropdownMenu>
     </div>
   );
-}
+});

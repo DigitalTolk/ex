@@ -607,7 +607,8 @@ func TestSidebarHandler_SetConversationFavorite_NoServiceWired(t *testing.T) {
 	}
 }
 
-func TestSidebarHandler_SetConversationCategory_UserCategoryRejected(t *testing.T) {
+// People go into the user's own categories, like channels.
+func TestSidebarHandler_SetConversationCategory_IntoUserCategory(t *testing.T) {
 	env := setupSidebarHandler(t)
 	user := &model.User{ID: "u-cv", Email: "cv@x.com", SystemRole: model.SystemRoleMember}
 	env.addParticipant("c-1", user.ID)
@@ -615,8 +616,23 @@ func TestSidebarHandler_SetConversationCategory_UserCategoryRejected(t *testing.
 
 	rec, req, mw := authedRequest(t, env, user, http.MethodPut, "/api/v1/conversations/c-1/category", `{"categoryID":"cat-1"}`, "id", "c-1")
 	mw(http.HandlerFunc(env.handler.SetConversationCategory)).ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+	if got := env.conversations.userConvs[user.ID][0].CategoryID; got != "cat-1" {
+		t.Errorf("categoryID = %q, want cat-1", got)
+	}
+}
+
+func TestSidebarHandler_SetConversationCategory_StoreErrorOnCategoryList(t *testing.T) {
+	env := setupSidebarHandler(t)
+	env.categories.listErr = errors.New("boom")
+	user := &model.User{ID: "u-cv", SystemRole: model.SystemRoleMember}
+	env.addParticipant("c-1", user.ID)
+	rec, req, mw := authedRequest(t, env, user, http.MethodPut, "/api/v1/conversations/c-1/category", `{"categoryID":"cat-1"}`, "id", "c-1")
+	mw(http.HandlerFunc(env.handler.SetConversationCategory)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
 

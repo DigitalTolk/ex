@@ -6,7 +6,6 @@ require (
 	github.com/DataDog/dd-trace-go/contrib/aws/aws-sdk-go-v2/v2 v2.11.1
 	github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.11.1
 	github.com/DataDog/dd-trace-go/contrib/redis/go-redis.v9/v2 v2.11.1
-	github.com/HugoSmits86/nativewebp v1.3.0
 	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/config v1.33.9
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.9
@@ -19,6 +18,9 @@ require (
 	github.com/aws/smithy-go v1.28.5
 	github.com/coder/websocket v1.8.15
 	github.com/coreos/go-oidc/v3 v3.21.0
+	github.com/disintegration/imaging v1.6.2
+	github.com/gabriel-vasile/mimetype v1.4.15
+	github.com/gen2brain/webp v0.6.4
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/hibiken/asynq v0.26.0
 	github.com/oklog/ulid/v2 v2.1.2

@@ -1,6 +1,5 @@
-import { useRef, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react';
 import { useDrag } from '@use-gesture/react';
-import type { MotionValue } from 'motion/react';
 
 // A sideways (or, for sheets, downward) swipe that moves `value` with the
 // finger, 1:1, inside `range`, and reports the release. @use-gesture/react
@@ -12,8 +11,14 @@ import type { MotionValue } from 'motion/react';
 //
 // The browser only leaves a move along `axis` to the page where touch-action
 // rules out panning that way: an `x` surface and the vertical scrollers in it
-// are pan-y (index.css). If the browser takes a touch over anyway (a native
-// pan of a code block), the release is reported as aborted.
+// are pan-y (index.css). That decides who owns a touch only as it starts,
+// though: iOS still turns a sideways drag that drifts up or down into a
+// scroll of the list under it, which takes the touch from the swipe. So once
+// the swipe has taken a touch, its moves are the swipe's — the scroll the
+// browser would start from them is cancelled (holdTouch). Until then, and for
+// a touch that goes the other way, scrolling stays native. If the browser
+// takes a touch over anyway (a native pan of a code block), the release is
+// reported as aborted.
 
 export interface AxisSwipeRelease {
   // Where the finger left the value, inside the range.
@@ -24,10 +29,19 @@ export interface AxisSwipeRelease {
   aborted: boolean;
 }
 
+// What a swipe moves: a Motion value, or anything read, set and stopped the
+// same way (hooks/useSlide).
+export interface SwipeValue {
+  get(): number;
+  set(value: number): void;
+  // Ends any animation of the value, leaving it where it is.
+  stop(): void;
+}
+
 export interface AxisSwipeOptions {
   enabled: boolean;
   axis: 'x' | 'y';
-  value: MotionValue<number>;
+  value: SwipeValue;
   range: () => readonly [number, number];
   // Whether a touch that starts on `target` may become this swipe.
   canStart: (target: EventTarget | null, surface: Element) => boolean;
@@ -39,13 +53,45 @@ export interface AxisSwipeOptions {
 // finger's wobble, short of where the browser starts a native scroll.
 const AXIS_LOCK_PX = 8;
 
+// holdTouch keeps the page from scrolling under a touch for as long as
+// `taken()` says the swipe has it. It lets go when the last finger lifts (or
+// when the returned stop is called), then calls `done`. A move is the browser's to scroll unless a touchmove
+// listener cancels it, so this listens from the moment the finger lands
+// (not from when the swipe takes the touch, which is too late for the
+// browser to pick the listener up for this touch) and cancels only the
+// moves that come after. use-gesture's own preventScroll also starts a drag
+// on a press held still, which a scrolling list can't have.
+function holdTouch(taken: () => boolean, done: () => void): () => void {
+  const hold = (event: TouchEvent) => {
+    if (taken() && event.cancelable) event.preventDefault();
+  };
+  const stop = () => {
+    window.removeEventListener('touchmove', hold);
+    window.removeEventListener('touchend', end);
+    window.removeEventListener('touchcancel', end);
+    done();
+  };
+  const end = (event: TouchEvent) => {
+    if (event.touches.length === 0) stop();
+  };
+  window.addEventListener('touchmove', hold, { passive: false });
+  window.addEventListener('touchend', end);
+  window.addEventListener('touchcancel', end);
+  return stop;
+}
+
 export function useAxisSwipe({ enabled, axis, value, range, canStart, onStart, onRelease }: AxisSwipeOptions) {
   const i = axis === 'x' ? 0 : 1;
   // Where the value would be with the finger back at its starting point.
   const originRef = useRef(0);
+  // Whether this swipe has the current touch, and how to stop holding it.
+  const takenRef = useRef(false);
+  const stopHoldRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => stopHoldRef.current?.(), []);
   const bind = useDrag(
     ({ first, last, movement, velocity, direction, event }) => {
       if (first) {
+        takenRef.current = true;
         value.stop();
         originRef.current = value.get() - movement[i];
         onStart?.();
@@ -55,6 +101,7 @@ export function useAxisSwipe({ enabled, axis, value, range, canStart, onStart, o
       // use-gesture calls this for each move of a taken gesture, then once
       // for the release.
       if (last) {
+        takenRef.current = false;
         onRelease({
           value: position,
           // use-gesture reports speed (px/ms) and direction separately.
@@ -79,7 +126,19 @@ export function useAxisSwipe({ enabled, axis, value, range, canStart, onStart, o
   const { onPointerDown } = bind();
   return {
     onPointerDown: (event: ReactPointerEvent<Element>) => {
-      if (canStart(event.target, event.currentTarget)) onPointerDown?.(event);
+      if (!canStart(event.target, event.currentTarget)) return;
+      if (event.pointerType === 'touch' && !stopHoldRef.current) {
+        // A touch that ends without a release (the surface turned the swipe
+        // off under it) must not leave the next one held.
+        stopHoldRef.current = holdTouch(
+          () => takenRef.current,
+          () => {
+            stopHoldRef.current = null;
+            takenRef.current = false;
+          },
+        );
+      }
+      onPointerDown?.(event);
     },
   };
 }

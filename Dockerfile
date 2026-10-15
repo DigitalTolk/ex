@@ -46,13 +46,17 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     VERSION="${VERSION:-dev}" && \
     VERSION="$(printf '%s' "$VERSION" | cut -c1-12)" && \
     CGO_ENABLED=0 GOOS=linux go run github.com/DataDog/orchestrion go build \
+      -tags=nodynamic \
       -ldflags="-X github.com/DigitalTolk/ex/internal/handler.BuildVersion=${VERSION}" \
       -o /ex ./cmd/server
 
 # Stage 3: Runtime
 # distroless/static-debian13 already ships ca-certificates and tzdata and
 # runs as the unprivileged `nonroot` user (uid 65532). The static binary
-# (CGO_ENABLED=0) is the only thing we add.
+# (CGO_ENABLED=0) is the only thing we add. It has to stay static: there is no
+# libc here. `-tags=nodynamic` keeps github.com/gen2brain/webp on its built-in
+# codec — without it the library links libc to look for a system libwebp, and
+# the binary would not start (internal/service/webp_static_build_test.go).
 FROM gcr.io/distroless/static-debian13:nonroot
 # Install to /usr/local/bin (the conventional FHS home for a locally-built
 # binary) rather than dropping it at the filesystem root. distroless sets a

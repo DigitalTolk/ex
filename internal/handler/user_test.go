@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -346,6 +348,53 @@ func TestUpdateMe_InvalidEmojiSkinTone(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	}
+}
+
+// avatarUploads is an object store holding uploaded avatars.
+type avatarUploads map[string][]byte
+
+func (a avatarUploads) GetObject(_ context.Context, key string) (io.ReadCloser, string, int64, time.Time, error) {
+	return io.NopCloser(bytes.NewReader(a[key])), "", int64(len(a[key])), time.Time{}, nil
+}
+
+func (a avatarUploads) PutObject(_ context.Context, key, _ string, body []byte) error {
+	a[key] = body
+	return nil
+}
+
+func (a avatarUploads) DeleteObject(_ context.Context, key string) error {
+	delete(a, key)
+	return nil
+}
+
+func TestUpdateMe_AvatarThatIsNotAnImageIsABadRequest(t *testing.T) {
+	userStore := newMockUserStore()
+	userSvc := service.NewUserService(userStore, &mockCache{}, nil, nil)
+	uploads := avatarUploads{"avatars/av-1/up": []byte("%PDF-1.7 renamed to me.jpg")}
+	userSvc.SetAvatarObjects(uploads)
+	jwtMgr := auth.NewJWTManager("test-user-handler-secret", 15*time.Minute, 720*time.Hour)
+	h := NewUserHandler(userSvc, nil)
+
+	user := &model.User{ID: "av-1", Email: "av@example.com", DisplayName: "Av", SystemRole: model.SystemRoleMember, Status: "active"}
+	userStore.users[user.ID] = user
+	userStore.emailIndex[user.Email] = user
+
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.UpdateMe))
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/users/me", strings.NewReader(`{"avatarKey":"avatars/av-1/up"}`))
+	req.Header.Set("Authorization", "Bearer "+makeTokenForUser(jwtMgr, user))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Only JPEG, PNG, or WebP images are allowed") {
+		t.Fatalf("body = %s, want the uploader's message", rec.Body.String())
+	}
+	if user.AvatarKey != "" || len(uploads) != 0 {
+		t.Fatalf("avatar = %q, %d objects left", user.AvatarKey, len(uploads))
 	}
 }
 

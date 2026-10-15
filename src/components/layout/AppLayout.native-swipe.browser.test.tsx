@@ -61,6 +61,27 @@ describe('conversation swipe under a real finger (phone)', () => {
     await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'), { timeout: 5000 });
   });
 
+  // The thumb arcs: a swipe that starts sideways often heads up or down on
+  // its way. Once the swipe has the touch the content must not scroll — that
+  // scroll took the touch from the swipe and sprang the conversation back.
+  it('a sideways swipe that drifts up keeps sliding and never scrolls the content', async () => {
+    if (window.innerWidth > 767) return;
+    const canDrive = await touchScrollWorks();
+    await renderConversation();
+    if (!canDrive) return;
+
+    const { left, top, height } = scroller().getBoundingClientRect();
+    await nativeTouchSwipe(scroller(), {
+      from: { x: left + 40, y: top + height / 2 },
+      dx: 40,
+      steps: 5,
+      then: { dx: 140, dy: -180, steps: 20 },
+    });
+
+    await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('true'), { timeout: 5000 });
+    expect(scroller().scrollTop).toBe(0);
+  });
+
   it('a vertical drag scrolls the content and leaves the conversation where it is', async () => {
     if (window.innerWidth > 767) return;
     const canDrive = await touchScrollWorks();

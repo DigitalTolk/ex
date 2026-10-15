@@ -15,8 +15,6 @@ import (
 	"strings"
 	"time"
 
-	_ "golang.org/x/image/webp"
-
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"

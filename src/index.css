@@ -533,6 +533,25 @@
     touch-action: pan-y;
   }
 
+  /* On a touch screen nothing in a swipe surface is the platform's to drag:
+     a finger landing on an avatar, an image or a link would otherwise be
+     offered to the native drag of that element instead of to the swipe. */
+  .device-touch [data-swipe-surface] :is(img, a) {
+    -webkit-user-drag: none;
+  }
+
+  /* On a touch screen the app's text is not selectable: a long press opens
+     a menu (a message, a sidebar row) and never selects a date line or a
+     label. Fields stay selectable — that is where text is edited. */
+  .device-touch {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .device-touch :is(input, textarea, [contenteditable]:not([contenteditable="false"])) {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
   html:not(.dark) [data-app-chrome="true"] .text-white,
   html:not(.dark) [data-app-chrome="true"] .text-gray-200,
   html:not(.dark) [data-app-chrome="true"] .text-gray-300 {

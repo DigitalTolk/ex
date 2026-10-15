@@ -238,8 +238,11 @@ func TestUserService_Update(t *testing.T) {
 	users.users[user.ID] = user
 	users.emailIndex[user.Email] = user
 
+	objects := newFakeAvatarObjects()
+	svc.SetAvatarObjects(objects)
 	newName := "New Name"
 	newKey := "avatars/u5/some-id"
+	objects.objects[newKey] = encodePNG(t, halves(40, 40, 255))
 	updated, err := svc.Update(context.Background(), "u5", &newName, &newKey, nil)
 	if err != nil {
 		t.Fatalf("Update: %v", err)
@@ -247,8 +250,12 @@ func TestUserService_Update(t *testing.T) {
 	if updated.DisplayName != newName {
 		t.Errorf("DisplayName = %q, want %q", updated.DisplayName, newName)
 	}
-	if updated.AvatarKey != newKey {
-		t.Errorf("AvatarKey = %q, want %q", updated.AvatarKey, newKey)
+	// The profile points at the server's shrunk copy, never the upload.
+	if updated.AvatarKey == newKey || !strings.HasPrefix(updated.AvatarKey, "avatars/u5/") {
+		t.Errorf("AvatarKey = %q, want a new key under avatars/u5/", updated.AvatarKey)
+	}
+	if _, ok := objects.objects[updated.AvatarKey]; !ok {
+		t.Errorf("no object stored at %q", updated.AvatarKey)
 	}
 }
 
@@ -339,13 +346,17 @@ func TestUserService_Update_OIDCUserSameDisplayNameAllowed(t *testing.T) {
 	users.users[user.ID] = user
 	users.emailIndex[user.Email] = user
 
+	objects := newFakeAvatarObjects()
+	svc.SetAvatarObjects(objects)
 	same := "Upstream Name"
 	newKey := "avatars/u-sso2/new"
-	if _, err := svc.Update(context.Background(), "u-sso2", &same, &newKey, nil); err != nil {
+	objects.objects[newKey] = encodePNG(t, halves(40, 40, 255))
+	updated, err := svc.Update(context.Background(), "u-sso2", &same, &newKey, nil)
+	if err != nil {
 		t.Fatalf("Update with unchanged name should succeed: %v", err)
 	}
-	if user.AvatarKey != newKey {
-		t.Errorf("AvatarKey not updated: %q", user.AvatarKey)
+	if updated.AvatarKey == "avatars/u-sso2/old" || updated.AvatarKey == newKey {
+		t.Errorf("AvatarKey not updated to the shrunk copy: %q", updated.AvatarKey)
 	}
 }
 

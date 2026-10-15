@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
+import { userEvent } from 'vitest/browser';
 import { MessageList } from './MessageList';
 import type { Attachment, Message } from '@/types';
 import { act, useState, type ReactNode } from 'react';
@@ -326,6 +327,50 @@ describe('MessageList browser behavior', () => {
     await vi.waitFor(() => {
       expect(document.querySelector('[data-message-id="m-5"]')).not.toBeNull();
     }, { timeout: 3000 });
+  });
+
+  // On a touch screen a press on the day line selected it ("Today" lit up
+  // with selection handles); nothing outside a field is selectable there.
+  it('on a touch screen the day line cannot be selected, while a field still can', async () => {
+    const messages = Array.from({ length: 6 }, (_, index) => msg(index));
+    const screen = await render(
+      <div style={{ height: 420, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <MessageList
+          pages={[{ items: [...messages].reverse() }]}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          isLoading={false}
+          fetchNextPage={vi.fn()}
+          hasPreviousPage={false}
+          isFetchingPreviousPage={false}
+          fetchPreviousPage={vi.fn()}
+          currentUserId="u-1"
+          channelId="ch-1"
+          channelSlug="general"
+          userMap={{ 'u-1': { displayName: 'Alice' }, 'u-2': { displayName: 'Bob' } }}
+        />
+        <div contentEditable suppressContentEditableWarning data-testid="field">
+          Composer words
+        </div>
+      </div>,
+    );
+    const root = document.documentElement;
+    const wasTouch = root.classList.contains('device-touch');
+    root.classList.add('device-touch');
+    try {
+      await vi.waitFor(() => expect(document.querySelector('[data-testid="day-divider"] span')).not.toBeNull(), {
+        timeout: 5000,
+      });
+      const label = document.querySelector('[data-testid="day-divider"] span') as HTMLElement;
+      await userEvent.dblClick(label);
+      expect(window.getSelection()?.toString() ?? '').toBe('');
+
+      await userEvent.dblClick(screen.getByTestId('field'));
+      expect(window.getSelection()?.toString().trim()).not.toBe('');
+    } finally {
+      if (!wasTouch) root.classList.remove('device-touch');
+      window.getSelection()?.removeAllRanges();
+    }
   });
 });
 

@@ -63,6 +63,13 @@ describe('AdminPage', () => {
       expect(maxInput.value).toBe('50');
       expect(extInput.value).toBe('png, jpg');
     });
+    // A text field (never type=number) that keeps only a whole number.
+    expect(maxInput.type).toBe('text');
+    expect(maxInput.inputMode).toBe('numeric');
+    fireEvent.change(maxInput, { target: { value: '25 MB' } });
+    expect(maxInput.value).toBe('25');
+    fireEvent.change(maxInput, { target: { value: '0' } });
+    expect(maxInput.value).toBe('1');
   });
 
   it('places the single save settings action in the page header', async () => {

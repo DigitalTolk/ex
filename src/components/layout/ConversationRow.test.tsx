@@ -11,6 +11,7 @@ vi.mock('@/hooks/useSidebar', () => ({
   resetSidebarReorderSessionState: vi.fn(),
   useFavoriteConversation: () => ({ mutate: vi.fn() }),
   useSetConversationCategory: () => ({ mutate: vi.fn() }),
+  useCategories: () => ({ data: [] }),
 }));
 // Force the mobile branch so the long-press → controlled-menu path is exercised.
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => true }));
