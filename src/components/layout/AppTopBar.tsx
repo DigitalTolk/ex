@@ -2,6 +2,7 @@ import { ChevronLeft, Menu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { SearchBar } from '@/components/SearchBar';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { usePageTitleStore } from '@/stores/page-title';
 
 interface AppTopBarProps {
   onOpenChannels?: () => void;
@@ -16,6 +17,7 @@ interface AppTopBarProps {
  */
 export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarProps) {
   const isMobile = useIsMobile();
+  const pageTitle = usePageTitleStore((s) => s.title);
   return (
     <header
       // Compact macOS title-bar strip on desktop (36px tall, minimal
@@ -38,7 +40,7 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
       // as the safety net for windows squeezed to the column's minimum,
       // and the grid shifts the field off-centre rather than burying the
       // toggle when side minimums no longer fit.
-      className="grid h-12 mobile:h-14 w-full shrink-0 grid-cols-[1fr_minmax(0,36rem)_1fr] compact:grid-cols-[1fr_minmax(0,17rem)_1fr] items-center gap-2 border-b border-border bg-chat-top px-2 mobile:px-3 text-sidebar-foreground [-webkit-app-region:drag] [&_button,&_a,&_input]:[-webkit-app-region:no-drag]"
+      className="grid h-12 mobile:flex mobile:h-14 w-full shrink-0 grid-cols-[1fr_minmax(0,36rem)_1fr] compact:grid-cols-[1fr_minmax(0,17rem)_1fr] items-center gap-2 border-b border-border bg-chat-top px-2 mobile:px-3 text-sidebar-foreground [-webkit-app-region:drag] [&_button,&_a,&_input]:[-webkit-app-region:no-drag]"
       data-testid="app-shell-header"
       data-app-chrome="true"
       // The global search field lives on this sidebar-coloured strip, so the
@@ -72,10 +74,21 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
         </Button>
       </div>
 
-      {/* Phone: search lives in the bottom tab bar. */}
+      {/* Phone: search lives in the bottom tab bar; the page's name takes
+          its place, in the same row as the back button. (The page keeps its
+          own heading for screen readers.) */}
       <div className="min-w-0 w-full mobile:hidden">
         <SearchBar />
       </div>
+      {isMobile && pageTitle && (
+        <p
+          className="min-w-0 flex-1 truncate text-xl leading-[150%] font-semibold text-foreground"
+          aria-hidden="true"
+          data-testid="mobile-page-title"
+        >
+          {pageTitle}
+        </p>
+      )}
 
       {/* Empty right column: balances the left one so the search stays centred. */}
       <div aria-hidden="true" />
