@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   AtSign,
   Bell,
+  CornerDownRight,
   Bot,
   Check,
   CircleDot,
@@ -10,6 +11,7 @@ import {
   MessageSquare,
   MessagesSquare,
   MoreHorizontal,
+  Smile,
   User as UserIcon,
   UserPlus,
   Users,
@@ -64,6 +66,17 @@ const TYPE_ICON = {
   reminder: Clock3,
 } as const;
 
+// Each kind of activity names itself at the top of its row, so a mention, a
+// thread reply and a DM read differently at a glance.
+const TYPE_LABEL: Record<string, string> = {
+  mention: 'Mention',
+  thread_reply: 'Thread reply',
+  dm: 'Direct message',
+  reaction: 'Reaction',
+  channel_added: 'Added to channel',
+  reminder: 'Reminder',
+};
+
 // ActivityRowView is one Activity row: a link to its message (opening it marks
 // the row read), with Mark read/unread and Remove in a hover toolbar on a
 // pointer device and on a long press on touch.
@@ -88,6 +101,8 @@ export const ActivityRowView = memo(function ActivityRowView({
   const others = row.actorIDs.filter((id) => id !== item.actorID).length;
   // A type this client doesn't know yet still gets an icon.
   const TypeIcon = TYPE_ICON[item.type as keyof typeof TYPE_ICON] ?? AtSign;
+  // The kind label's icon; a reaction's emoji already shows on the avatar.
+  const KindIcon = item.type === 'reaction' ? Smile : TypeIcon;
   const { menuOpen, setMenuOpen, rowHandlers, suppressNavClick } = useRowLongPressMenu();
 
   const open = (event: MouseEvent) => {
@@ -145,24 +160,37 @@ export const ActivityRowView = memo(function ActivityRowView({
             </span>
           </span>
           <span className="min-w-0 flex-1">
-            <span className="flex items-baseline gap-2">
-              <span className={`min-w-0 flex-1 text-sm ${unread ? 'text-sidebar-foreground' : 'text-sidebar-foreground/85'}`}>
-                <span className="font-semibold">{name}</span>
-                {webhook && (
-                  <span
-                    className="ml-1 inline-block rounded bg-muted px-1 align-middle text-xs font-semibold uppercase leading-4 tracking-wide text-muted-foreground"
-                    aria-label="Bot"
-                    data-testid="activity-row-bot"
-                  >
-                    BOT
-                  </span>
-                )}
-                {others > 0 && (
-                  <>
-                    {' '}and <span className="font-semibold">{others} {others === 1 ? 'other' : 'others'}</span>
-                  </>
-                )}{' '}
-                {rowLabel(row, emojiMap)}
+            {/* What it is and where: the kind (icon + label) and the channel
+                or conversation it happened in, which leads the row. */}
+            <span className="flex items-center gap-2">
+              <span className="flex min-w-0 flex-1 items-center gap-1.5 text-xs">
+                <span
+                  className="inline-flex shrink-0 items-center gap-1 rounded-full bg-sidebar-accent px-1.5 py-0.5 font-medium text-sidebar-foreground"
+                  data-testid="activity-row-kind"
+                >
+                  <KindIcon className="h-3 w-3" aria-hidden="true" />
+                  {TYPE_LABEL[item.type] ?? 'Activity'}
+                </span>
+                <span className="flex min-w-0 items-center gap-1 font-semibold text-sidebar-foreground" data-testid="activity-row-where">
+                  {item.parentType === 'conversation' ? (
+                    conversation?.group ? (
+                      <>
+                        <Users className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                        <span className="truncate">{conversation.name}</span>
+                      </>
+                    ) : item.type === 'dm' ? null : (
+                      <>
+                        <UserIcon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                        <span className="truncate">Direct message</span>
+                      </>
+                    )
+                  ) : (
+                    <>
+                      {channel && <ChannelIcon type={channel.private ? 'private' : 'public'} className="h-3.5 w-3.5 shrink-0" ariaLabel="" />}
+                      <span className="truncate">{channel?.name || item.parentName || item.channelSlug || 'channel'}</span>
+                    </>
+                  )}
+                </span>
               </span>
               <span
                 className={`shrink-0 text-xs text-muted-foreground ${menuOpen ? 'invisible' : 'group-hover:invisible group-has-focus-visible:invisible'}`}
@@ -170,29 +198,38 @@ export const ActivityRowView = memo(function ActivityRowView({
                 {activityTime(item.createdAt, today)}
               </span>
             </span>
-            <span className="mt-px flex items-center gap-1 text-xs text-muted-foreground">
-              {item.parentType === 'conversation' ? (
-                conversation?.group ? (
-                  <>
-                    <Users className="h-3 w-3" aria-hidden="true" />
-                    {conversation.name}
-                  </>
-                ) : (
-                  <>
-                    <UserIcon className="h-3 w-3" aria-hidden="true" />
-                    Direct message
-                  </>
-                )
-              ) : (
-                <>
-                  {channel && <ChannelIcon type={channel.private ? 'private' : 'public'} className="h-3 w-3" ariaLabel="" />}
-                  {channel?.name || item.parentName || item.channelSlug || 'channel'}
-                </>
+            <span className={`mt-1 block text-sm ${unread ? 'text-sidebar-foreground' : 'text-sidebar-foreground/85'}`}>
+              <span className="font-semibold">{name}</span>
+              {webhook && (
+                <span
+                  className="ml-1 inline-block rounded bg-muted px-1 align-middle text-xs font-semibold uppercase leading-4 tracking-wide text-muted-foreground"
+                  aria-label="Bot"
+                  data-testid="activity-row-bot"
+                >
+                  BOT
+                </span>
               )}
+              {others > 0 && (
+                <>
+                  {' '}and <span className="font-semibold">{others} {others === 1 ? 'other' : 'others'}</span>
+                </>
+              )}{' '}
+              {rowLabel(row, emojiMap)}
             </span>
             {item.messagePreview && (
-              <span className={`mt-0.5 line-clamp-2 text-sm ${unread ? 'text-sidebar-foreground/90' : 'text-muted-foreground'}`}>
-                {item.messagePreview}
+              // The message itself, shaped by kind: a mention is quoted (a bar
+              // down its side), a thread reply hangs off a reply arrow, a DM
+              // reads as plain text.
+              <span
+                className={`mt-1 flex gap-1.5 text-sm ${unread ? 'text-sidebar-foreground/90' : 'text-muted-foreground'} ${
+                  item.type === 'mention' ? 'border-l-2 border-sidebar-foreground/40 pl-2' : ''
+                }`}
+                data-testid="activity-row-preview"
+              >
+                {item.type === 'thread_reply' && (
+                  <CornerDownRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                )}
+                <span className="line-clamp-2 min-w-0">{item.messagePreview}</span>
               </span>
             )}
           </span>
