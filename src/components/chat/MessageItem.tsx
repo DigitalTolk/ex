@@ -288,8 +288,13 @@ function ReactionChip({
             onPointerUp={longPress.handlers.onPointerUp}
             onPointerLeave={longPress.handlers.onPointerLeave}
             onPointerCancel={longPress.handlers.onPointerCancel}
-            className={`flex items-center gap-1 rounded-full border px-1.5 py-0 text-sm hover:bg-muted mobile:px-2 mobile:py-0.5 ${
-              reactedByMe ? 'border-primary bg-primary/10' : 'bg-background'
+            // A filled chip with a firm outline, so it stands off the
+            // message (and a hovered row) instead of melting into it; your
+            // own reaction stays the strongest, outlined in the accent.
+            className={`flex items-center gap-1 rounded-full border px-1.5 py-0 text-sm text-foreground transition-colors mobile:px-2 mobile:py-0.5 ${
+              reactedByMe
+                ? 'border-primary bg-primary/15 hover:bg-primary/20'
+                : 'border-border-strong/60 bg-muted hover:border-border-strong'
             }`}
             aria-label={ariaLabel}
             aria-pressed={reactedByMe}
