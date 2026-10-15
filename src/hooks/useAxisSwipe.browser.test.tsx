@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { motion, useMotionValue } from 'motion/react';
 import { useAxisSwipe, type AxisSwipeRelease } from './useAxisSwipe';
 import { SWIPE_SURFACE_ATTR, swipeStartsOn } from '@/lib/swipe';
@@ -206,6 +206,52 @@ describe('useAxisSwipe — a taken touch does not scroll the page', () => {
 
     await screen.rerender(<Two showFirst={false} />);
     expect(touchMoveCancelled()).toBe(true);
+  });
+
+  // The reported bug: after sending a message, the thread panel (or the
+  // conversation) could no longer be swiped, until it was closed with its back
+  // arrow. Sending swaps the Send button the finger is on for another; on iOS
+  // the lift still goes to the removed button, which no ancestor hears, so
+  // the press never ended for the swipe and every later touch was ignored.
+  it('is not left dead by a press whose element is removed before the finger lifts', async () => {
+    function Composer() {
+      const [sent, setSent] = useState(false);
+      return sent ? null : (
+        <button type="button" data-testid="send" onClick={() => setSent(true)}>
+          Send
+        </button>
+      );
+    }
+    const onRelease = vi.fn();
+    const screen = await render(
+      <Surface onRelease={onRelease}>
+        <Composer />
+      </Surface>,
+    );
+    const surface = screen.getByTestId('surface').element() as HTMLElement;
+    const send = screen.getByTestId('send').element() as HTMLElement;
+    const { left, top } = send.getBoundingClientRect();
+    const press = pointerId++;
+    send.dispatchEvent(pointer('pointerdown', left + 5, top + 5, press));
+    send.click();
+    await raf();
+    expect(send.isConnected).toBe(false);
+    // Another finger lifting off the same button is not this press ending.
+    send.dispatchEvent(pointer('pointerup', left + 5, top + 5, pointerId++));
+    // As WebKit sends the lift: to the element pressed, gone now.
+    send.dispatchEvent(pointer('pointerup', left + 5, top + 5, press));
+    send.dispatchEvent(touchEvent('touchend', 0));
+
+    const box = surface.getBoundingClientRect();
+    const at = { x: box.left + 40, y: box.top + 150 };
+    const id = pointerId++;
+    surface.dispatchEvent(pointer('pointerdown', at.x, at.y, id));
+    await move(at, 200, 0, id, 8);
+    // The swipe follows the finger, and holds its touch again.
+    expect(touchMoveCancelled()).toBe(true);
+    // A lift on an element still on the page reaches the window by itself.
+    surface.dispatchEvent(pointer('pointerup', at.x + 200, at.y, id));
+    expect(onRelease).toHaveBeenCalledTimes(1);
   });
 
   it('holds nothing for a mouse, which never scrolls by dragging', async () => {

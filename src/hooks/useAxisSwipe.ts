@@ -81,24 +81,65 @@ function useHeldMoveCanceller(enabled: boolean) {
   }, [enabled]);
 }
 
-// holdTouch has the moves of the touch that just landed cancelled for as long
-// as `taken()` says the swipe has it, which is only once the swipe has taken
-// it: until then, and for a touch that goes the other way, scrolling stays
-// native. It lets go when the last finger lifts (or when the returned stop is
-// called), then calls `done`.
-function holdTouch(taken: () => boolean, done: () => void): () => void {
+// A press ends where it began: on iOS a finger's lift (touchend, pointerup)
+// goes to the element the finger landed on, even when that element has left
+// the page by then — and a removed element's events reach none of its old
+// ancestors, the window included. The Send button is one: sending empties
+// and collapses the composer, which swaps that button for another while the
+// finger may still be on it. use-gesture, listening on the window, never
+// heard that press end, kept it as a finger still down, and ignored every
+// touch after it: the surface (a thread panel, the conversation) swiped no
+// more until it was closed some other way. So a press also listens on the
+// element it landed on, and the end of a press whose element is gone is
+// passed on to the window.
+function relayEndOfRemovedPress(pressed: EventTarget, pointerId: number) {
+  const relay = (ended: Event) => {
+    const event = ended as PointerEvent;
+    if (event.pointerId !== pointerId) return;
+    pressed.removeEventListener('pointerup', relay);
+    pressed.removeEventListener('pointercancel', relay);
+    // Still on the page: the event goes on to the window by itself.
+    if ((pressed as Node).isConnected) return;
+    window.dispatchEvent(
+      new PointerEvent(event.type, {
+        pointerId: event.pointerId,
+        pointerType: event.pointerType,
+        isPrimary: event.isPrimary,
+        button: event.button,
+        buttons: event.buttons,
+        clientX: event.clientX,
+        clientY: event.clientY,
+      }),
+    );
+  };
+  pressed.addEventListener('pointerup', relay);
+  pressed.addEventListener('pointercancel', relay);
+}
+
+// holdTouch has the moves of the touch that just landed (on `pressed`)
+// cancelled for as long as `taken()` says the swipe has it, which is only once
+// the swipe has taken it: until then, and for a touch that goes the other way,
+// scrolling stays native. It lets go when the last finger lifts (or when the
+// returned stop is called), then calls `done`. The lift is heard on the
+// element pressed too, for the one that has left the page by then (see
+// relayEndOfRemovedPress).
+function holdTouch(pressed: EventTarget, taken: () => boolean, done: () => void): () => void {
   heldTouch = taken;
   const stop = () => {
     if (heldTouch === taken) heldTouch = null;
-    window.removeEventListener('touchend', end);
-    window.removeEventListener('touchcancel', end);
+    for (const target of [window, pressed]) {
+      target.removeEventListener('touchend', end);
+      target.removeEventListener('touchcancel', end);
+    }
     done();
   };
-  const end = (event: TouchEvent) => {
-    if (event.touches.length === 0) stop();
+  const end = (event: Event) => {
+    if ((event as TouchEvent).touches.length === 0) stop();
   };
-  window.addEventListener('touchend', end);
-  window.addEventListener('touchcancel', end);
+  for (const target of [window, pressed]) {
+    target.addEventListener('touchend', end);
+    target.addEventListener('touchcancel', end);
+  }
   return stop;
 }
 
@@ -150,10 +191,12 @@ export function useAxisSwipe({ enabled, axis, value, range, canStart, onStart, o
   return {
     onPointerDown: (event: ReactPointerEvent<Element>) => {
       if (!canStart(event.target, event.currentTarget)) return;
+      if (event.pointerType === 'touch') relayEndOfRemovedPress(event.target, event.pointerId);
       if (event.pointerType === 'touch' && !stopHoldRef.current) {
         // A touch that ends without a release (the surface turned the swipe
         // off under it) must not leave the next one held.
         stopHoldRef.current = holdTouch(
+          event.target,
           () => takenRef.current,
           () => {
             stopHoldRef.current = null;
