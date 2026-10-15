@@ -847,7 +847,19 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               {scheduledCount} scheduled
             </Link>
           )}
-          {onSchedule ? (
+          {onSchedule && isMobile ? (
+            // Phone: one round Send — tap sends, press and hold for the
+            // schedule options (no ⌄ beside it).
+            <ScheduleSendMenu
+              disabled={!canSend}
+              onSchedule={handleSchedule}
+              onOpenChange={handleToolbarPickerOpenChange}
+              hold={{ onSend: handleSend, label: 'Send message', children: <Send className="h-4 w-4" /> }}
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-opacity disabled:pointer-events-none dark:bg-brand dark:text-brand-foreground ${
+                canSend ? '' : 'opacity-40'
+              }`}
+            />
+          ) : onSchedule ? (
             // One button, split: Send, and ⌄ to send later instead — a single
             // shape and colour with a thin inset divider.
             <div
