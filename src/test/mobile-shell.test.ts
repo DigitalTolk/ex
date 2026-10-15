@@ -26,6 +26,14 @@ describe('mobile shell invariants', () => {
     expect(layout).not.toContain('pt-[env(safe-area-inset-top)]');
   });
 
+  // An animated root raced the scroll that undoes iOS's keyboard pan, and the
+  // composer bounced up and down whenever it was tapped (useKeyboardInset).
+  it('never animates the app root, which follows the keyboard at once', () => {
+    const css = readProjectFile('src/index.css');
+    expect(css).not.toMatch(/\[data-app-root\][^{]*\{[^}]*transition/);
+    expect(css).not.toContain('keyboard-settling');
+  });
+
   it('keeps mobile text inputs at 16px to avoid iOS focus zoom', () => {
     const css = readProjectFile('src/index.css');
 

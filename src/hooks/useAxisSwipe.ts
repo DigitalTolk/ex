@@ -15,7 +15,7 @@ import { useDrag } from '@use-gesture/react';
 // though: iOS still turns a sideways drag that drifts up or down into a
 // scroll of the list under it, which takes the touch from the swipe. So once
 // the swipe has taken a touch, its moves are the swipe's — the scroll the
-// browser would start from them is cancelled (holdTouch). Until then, and for
+// browser would start from them is cancelled (cancelHeldMove). Until then, and for
 // a touch that goes the other way, scrolling stays native. If the browser
 // takes a touch over anyway (a native pan of a code block), the release is
 // reported as aborted.
@@ -53,20 +53,43 @@ export interface AxisSwipeOptions {
 // finger's wobble, short of where the browser starts a native scroll.
 const AXIS_LOCK_PX = 8;
 
-// holdTouch keeps the page from scrolling under a touch for as long as
-// `taken()` says the swipe has it. It lets go when the last finger lifts (or
-// when the returned stop is called), then calls `done`. A move is the browser's to scroll unless a touchmove
-// listener cancels it, so this listens from the moment the finger lands
-// (not from when the swipe takes the touch, which is too late for the
-// browser to pick the listener up for this touch) and cancels only the
-// moves that come after. use-gesture's own preventScroll also starts a drag
-// on a press held still, which a scrolling list can't have.
+// Whether the swipe following the current touch has taken it, while one is.
+let heldTouch: (() => boolean) | null = null;
+
+// Cancels the moves of a touch a swipe has taken, so the page doesn't scroll
+// under it. A move is the browser's to scroll unless a touchmove listener
+// cancels it — and the browser decides whether it waits for the page's
+// listeners before scrolling as the touch STARTS, from the listeners there
+// are at that moment. So this one is there for as long as any swipe is
+// enabled, before a finger lands. Added at the touch's pointerdown instead
+// (as it once was), it came too late for that touch: iOS treated its moves as
+// uncancellable, turned a swipe that drifted up or down into a scroll, and
+// the scroll took the touch from the swipe. use-gesture's own preventScroll
+// also starts a drag on a press held still, which a scrolling list can't have.
+const cancelHeldMove = (event: TouchEvent) => {
+  if (heldTouch?.() && event.cancelable) event.preventDefault();
+};
+let enabledSwipes = 0;
+
+function useHeldMoveCanceller(enabled: boolean) {
+  useEffect(() => {
+    if (!enabled) return;
+    if (enabledSwipes++ === 0) window.addEventListener('touchmove', cancelHeldMove, { passive: false });
+    return () => {
+      if (--enabledSwipes === 0) window.removeEventListener('touchmove', cancelHeldMove);
+    };
+  }, [enabled]);
+}
+
+// holdTouch has the moves of the touch that just landed cancelled for as long
+// as `taken()` says the swipe has it, which is only once the swipe has taken
+// it: until then, and for a touch that goes the other way, scrolling stays
+// native. It lets go when the last finger lifts (or when the returned stop is
+// called), then calls `done`.
 function holdTouch(taken: () => boolean, done: () => void): () => void {
-  const hold = (event: TouchEvent) => {
-    if (taken() && event.cancelable) event.preventDefault();
-  };
+  heldTouch = taken;
   const stop = () => {
-    window.removeEventListener('touchmove', hold);
+    if (heldTouch === taken) heldTouch = null;
     window.removeEventListener('touchend', end);
     window.removeEventListener('touchcancel', end);
     done();
@@ -74,7 +97,6 @@ function holdTouch(taken: () => boolean, done: () => void): () => void {
   const end = (event: TouchEvent) => {
     if (event.touches.length === 0) stop();
   };
-  window.addEventListener('touchmove', hold, { passive: false });
   window.addEventListener('touchend', end);
   window.addEventListener('touchcancel', end);
   return stop;
@@ -88,6 +110,7 @@ export function useAxisSwipe({ enabled, axis, value, range, canStart, onStart, o
   const takenRef = useRef(false);
   const stopHoldRef = useRef<(() => void) | null>(null);
   useEffect(() => () => stopHoldRef.current?.(), []);
+  useHeldMoveCanceller(enabled);
   const bind = useDrag(
     ({ first, last, movement, velocity, direction, event }) => {
       if (first) {
