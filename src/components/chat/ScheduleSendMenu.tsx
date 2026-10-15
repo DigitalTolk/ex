@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { CalendarClock, ChevronDown, Clock } from 'lucide-react';
+import { Popover } from '@base-ui/react/popover';
 import { triggerMessageActionHaptic } from '@/lib/haptics';
 import {
   DropdownMenu,
@@ -81,16 +82,27 @@ export function ScheduleSendMenu({ disabled, onSchedule, onOpenChange, className
     }
     hold?.onSend();
   };
+  const schedulePreset = (key: (typeof SCHEDULE_PRESETS)[number]['key']) =>
+    void onSchedule(scheduleTimeFor(key, new Date())).catch(() => undefined);
+  const openCustom = () => setCustomSeed(toLocalInputValue(scheduleTimeFor('tomorrow', new Date())));
+
   return (
     <>
-      <DropdownMenu
-        modal={false}
-        open={open}
-        // In hold mode the menu opens only from the hold timer.
-        onOpenChange={(next) => (hold && next ? undefined : changeOpen(next))}
-      >
-        {hold ? (
-          <DropdownMenuTrigger
+      {hold ? (
+        // Phone: a popover rather than a menu — a menu pulls focus into
+        // itself, which drops the keyboard. This one never takes focus (and
+        // its options keep it on press), so the keyboard stays up.
+        <Popover.Root
+          open={open}
+          // Only the hold opens it; taps on Send (including the one that
+          // ends the hold) never toggle it. Outside presses and Escape close.
+          onOpenChange={(next, details) => {
+            if (next || details.reason === 'trigger-press') return;
+            changeOpen(false);
+          }}
+        >
+          <Popover.Trigger
+            nativeButton
             onPointerDown={startHold}
             onPointerUp={cancelHold}
             onPointerLeave={cancelHold}
@@ -105,8 +117,49 @@ export function ScheduleSendMenu({ disabled, onSchedule, onOpenChange, className
             className={`select-none [-webkit-touch-callout:none] ${className ?? ''}`}
           >
             {hold.children}
-          </DropdownMenuTrigger>
-        ) : (
+          </Popover.Trigger>
+          <Popover.Portal>
+            <Popover.Positioner side="top" align="end" sideOffset={8} className="isolate z-50">
+              <Popover.Popup
+                initialFocus={false}
+                finalFocus={false}
+                // Pressing an option must not move focus off the editor.
+                onPointerDown={(e) => e.preventDefault()}
+                onMouseDown={(e) => e.preventDefault()}
+                className="w-56 origin-(--transform-origin) rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-none transition-[opacity,transform] duration-150 data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0"
+                data-testid="schedule-send-hold-menu"
+              >
+                <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Schedule message</div>
+                {SCHEDULE_PRESETS.map((preset) => (
+                  <HoldOption
+                    key={preset.key}
+                    label={`Send ${preset.label}`}
+                    onSelect={() => {
+                      changeOpen(false);
+                      schedulePreset(preset.key);
+                    }}
+                  >
+                    <CalendarClock className="mr-2 h-4 w-4" />
+                    {preset.label}
+                  </HoldOption>
+                ))}
+                <div className="-mx-1 my-1 h-px bg-border" />
+                <HoldOption
+                  label="Pick a custom time"
+                  onSelect={() => {
+                    changeOpen(false);
+                    openCustom();
+                  }}
+                >
+                  <Clock className="mr-2 h-4 w-4" />
+                  Custom time…
+                </HoldOption>
+              </Popover.Popup>
+            </Popover.Positioner>
+          </Popover.Portal>
+        </Popover.Root>
+      ) : (
+        <DropdownMenu modal={false} open={open} onOpenChange={changeOpen}>
           <DropdownMenuTrigger
             // Opened on click: the composer toolbar cancels pointerdown to keep
             // the editor focused, which also swallows the press the menu would
@@ -120,29 +173,22 @@ export function ScheduleSendMenu({ disabled, onSchedule, onOpenChange, className
           >
             <ChevronDown className="h-3.5 w-3.5" />
           </DropdownMenuTrigger>
-        )}
-        <DropdownMenuContent align="end" side={hold ? 'top' : 'bottom'} className="w-56">
-          <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Schedule message</div>
-          {SCHEDULE_PRESETS.map((preset) => (
-            <DropdownMenuItem
-              key={preset.key}
-              onClick={() => void onSchedule(scheduleTimeFor(preset.key, new Date())).catch(() => undefined)}
-              aria-label={`Send ${preset.label}`}
-            >
-              <CalendarClock className="mr-2 h-4 w-4" />
-              {preset.label}
+          <DropdownMenuContent align="end" className="w-56">
+            <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Schedule message</div>
+            {SCHEDULE_PRESETS.map((preset) => (
+              <DropdownMenuItem key={preset.key} onClick={() => schedulePreset(preset.key)} aria-label={`Send ${preset.label}`}>
+                <CalendarClock className="mr-2 h-4 w-4" />
+                {preset.label}
+              </DropdownMenuItem>
+            ))}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={openCustom} aria-label="Pick a custom time">
+              <Clock className="mr-2 h-4 w-4" />
+              Custom time…
             </DropdownMenuItem>
-          ))}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            onClick={() => setCustomSeed(toLocalInputValue(scheduleTimeFor('tomorrow', new Date())))}
-            aria-label="Pick a custom time"
-          >
-            <Clock className="mr-2 h-4 w-4" />
-            Custom time…
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
       {customSeed !== null && (
         <ReminderDialog
           open
@@ -155,5 +201,20 @@ export function ScheduleSendMenu({ disabled, onSchedule, onOpenChange, className
         />
       )}
     </>
+  );
+}
+
+// One option in the phone's hold-to-schedule popover: a plain button, finger
+// sized, styled like a menu item.
+function HoldOption({ label, onSelect, children }: { label: string; onSelect: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-label={label}
+      className="flex h-11 w-full items-center rounded-md px-2 text-left text-base active:bg-accent active:text-accent-foreground"
+    >
+      {children}
+    </button>
   );
 }

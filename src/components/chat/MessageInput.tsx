@@ -850,10 +850,11 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           {onSchedule && isMobile ? (
             // Phone: one round Send — tap sends, press and hold for the
             // schedule options (no ⌄ beside it).
+            // (No picker-open hook: that drops the keyboard for full-screen
+            // pickers, and this one keeps it up.)
             <ScheduleSendMenu
               disabled={!canSend}
               onSchedule={handleSchedule}
-              onOpenChange={handleToolbarPickerOpenChange}
               hold={{ onSend: handleSend, label: 'Send message', children: <Send className="h-4 w-4" /> }}
               className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-opacity disabled:pointer-events-none dark:bg-brand dark:text-brand-foreground ${
                 canSend ? '' : 'opacity-40'
