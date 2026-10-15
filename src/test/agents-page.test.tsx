@@ -85,7 +85,7 @@ function agentFixtures(): AgentView[] {
       displayName: 'ww',
       slug: 'ww',
       status: 'paused',
-      prefs: { userID: 'u-1', slug: 'ww', followUpMode: 'window', followUpMins: 0 },
+      prefs: { userID: 'u-1', slug: 'ww', followUpMode: 'window', followUpMins: 0, limits: { maxTokens: 300000 } },
       resolved: { harness: 'codex', model: 'codex-large', persona: 'Default ww persona', limits: {}, maxConcurrentRuns: 1 },
     },
   ];
@@ -289,6 +289,9 @@ describe('AgentsPage', () => {
     expect(ww.getByText('paused')).toBeInTheDocument();
     expect(ww.getByLabelText('Thread follow-ups')).toHaveValue('window:10');
     expect(ww.getByLabelText('Model')).toHaveAttribute('placeholder', 'codex-large');
+    // A saved token budget shows as the value and counts as a customization.
+    expect(ww.getByLabelText('Token budget')).toHaveValue('300000');
+    expect(ww.getByText('2 customized')).toBeInTheDocument();
 
     // Subscriptions render before the channels list resolves: parentID is the
     // fallback name until the lookup succeeds.
@@ -557,6 +560,26 @@ describe('AgentsPage', () => {
         expect.objectContaining({ limits: { maxChainRounds: 3, maxTokens: 500000 } }),
       ),
     );
+  });
+
+  it('clearing a saved token budget saves it back to the default', async () => {
+    let patchBody: unknown;
+    installRoutes({
+      mutate: (path, init) => {
+        if (path === '/api/v1/agents/ww/prefs' && init?.method === 'PATCH') {
+          patchBody = JSON.parse(init.body!);
+          return Promise.resolve({});
+        }
+        return undefined;
+      },
+    });
+    renderPage();
+
+    const ww = await openCard('ww');
+    expect(ww.getByRole('button', { name: 'Save' })).toBeDisabled();
+    fireEvent.change(ww.getByLabelText('Token budget'), { target: { value: '' } });
+    fireEvent.click(ww.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patchBody).toEqual(expect.objectContaining({ limits: {} })));
   });
 
   it('switching a default card to bedrock reveals the bedrock controls (server-only)', async () => {
