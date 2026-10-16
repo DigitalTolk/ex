@@ -65,19 +65,15 @@ describe('CreateChannelDialog - validation', () => {
     vi.clearAllMocks();
   });
 
-  it('disables submit and shows the slug rule when the name has a space or capital', async () => {
+  it('accepts a name typed with spaces and capitals as its channel-name form', async () => {
     const user = userEvent.setup();
     renderDialog(true);
 
     await user.type(screen.getByLabelText('Name'), 'Has Space');
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('has-space');
     const submit = screen.getByRole('button', { name: 'Create Channel' }) as HTMLButtonElement;
-    expect(submit.disabled).toBe(true);
-    // The error replaces the help text, but the slot's height is fixed
-    // so the modal doesn't shift when the message swaps in.
-    const help = screen.getByTestId('channel-name-help');
-    expect(help.textContent).toMatch(/lowercase letters/i);
-    expect(help.className).toMatch(/text-destructive/);
-    expect(help.className).toMatch(/min-h-/);
+    expect(submit.disabled).toBe(false);
+    expect(screen.getByTestId('channel-name-help').textContent).toBe('\u00A0');
   });
 
   it('disables submit and flags too-long when the name exceeds 32 chars', async () => {
@@ -112,7 +108,7 @@ describe('CreateChannelDialog - validation', () => {
     // Bypass user.type's per-keystroke cost on a 256-char string by
     // setting the value directly via fireEvent — the validation is
     // computed off the React state populated by onChange.
-    desc.focus();
+    await user.click(desc);
     await user.paste('a'.repeat(256));
     expect(screen.getByTestId('channel-desc-help').textContent).toMatch(/255/);
     expect(

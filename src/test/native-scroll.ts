@@ -56,15 +56,21 @@ export interface NativeScrollOptions {
  * Whether anything scrolls is the browser's decision, exactly as on a phone —
  * which is the entire point: assert on the resulting `scrollTop`.
  */
+// No CDP touch emulation (Emulation.setTouchEmulationEnabled): the input
+// synthesised below reaches the page as real touch and pointerType "touch"
+// events without it, on macOS and Linux alike. Turning it on makes the page
+// report `(hover: none)` and a coarse pointer, so Tailwind's `hover:` styles
+// stop applying, and on Linux turning it off again does NOT bring hover back:
+// headless Chromium then re-detects the machine's input devices, and a CI
+// container has none. Every test file after a gesture in that browser lost
+// hover — the real-hover tests (MemberList remove, the message toolbar)
+// failed or passed depending on file order.
+
 export async function nativeTouchScroll(el: Element, { dy, from }: NativeScrollOptions): Promise<void> {
   const client = cdp() as unknown as CdpClient;
   const rect = el.getBoundingClientRect();
   const origin = from ?? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
   const point = toPagePoint(origin.x, origin.y);
-  // Touch emulation stays ON afterwards — the chromium-mobile project's
-  // Playwright context is itself touch-enabled, and flipping the override
-  // off behind its back would strip that.
-  await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
   try {
     // Input synthesis targets the focused/foreground page; CI window
     // managers don't always grant that. Best-effort.
@@ -110,7 +116,6 @@ export async function nativeTouchSwipe(
   const client = cdp() as unknown as CdpClient;
   const rect = el.getBoundingClientRect();
   const origin = from ?? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-  await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
   const touch = (type: string, x: number, y: number) => {
     const point = toPagePoint(x, y);
     return client.send('Input.dispatchTouchEvent', {

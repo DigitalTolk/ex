@@ -18,7 +18,7 @@
 //	evt-ttl                set the idle TTL on legacy durable inbox streams (Redis)
 //	search-reindex         recreate ex_users/ex_channels with the autocomplete mapping + reindex (OpenSearch)
 //	avatar-resize          shrink avatars stored before uploads were resized (S3 + Redis)
-//	thumbnail-webp         re-encode lossless WebP message thumbnails as lossy WebP (S3)
+//	thumbnail-webp         re-encode lossless WebP message thumbnails as lossy WebP (S3) [--workers=16]
 //
 // Required environment variables (same as the `ex` server):
 //   - AWS_REGION
@@ -67,7 +67,7 @@ func commands() map[string]command {
 		"evt-ttl":               {"set the idle TTL on legacy durable inbox streams (Redis)", runEvtTTL},
 		"search-reindex":        {"recreate ex_users/ex_channels with the autocomplete mapping + reindex from DynamoDB (OpenSearch)", runSearchReindex},
 		"avatar-resize":         {"shrink avatars stored before uploads were resized (S3 + Redis)", runAvatarResize},
-		"thumbnail-webp":        {"re-encode lossless WebP message thumbnails as lossy WebP (S3)", runThumbnailWebP},
+		"thumbnail-webp":        {"re-encode lossless WebP message thumbnails as lossy WebP (S3) [--workers=16]", runThumbnailWebP},
 	}
 }
 

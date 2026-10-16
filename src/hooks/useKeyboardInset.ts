@@ -17,16 +17,22 @@ import { keyboardOverlap, readKeyboardHeight } from '@/lib/keyboard';
 // the caret in view, never something to undo — undoing it (smoothly, back to
 // the top) made the composer jump with every character typed.
 //
+// At once, not animated: the root used to glide to its new height while a
+// smooth scroll undid the pan, two animations on different curves, and the
+// composer bounced up and down between them (and the message list, resized
+// on every frame of the glide, re-stuck to its bottom on every frame).
+// Resized and un-panned in the same frame, the composer stays exactly where
+// the pan put it, on the keyboard, and only the top of the app moves.
+//
 // Two sources: the Capacitor shell reports the native keyboard height
 // (WKWebView's visualViewport ignores the keyboard), and mobile Safari
 // shrinks the visualViewport.
 
 let inset = 0;
 const listeners = new Set<() => void>();
-let glideTimer = 0;
 
-// How long the app's root takes to follow the keyboard — about the length
-// of the iOS keyboard's own slide, so the two move together.
+// About the length of the iOS keyboard's own slide: what a surface that
+// follows the keyboard on its own (the search sheet) takes to do so.
 export const KEYBOARD_SETTLE_MS = 250;
 
 // After the keyboard comes up, how long its pan may still land (iOS can pan
@@ -43,17 +49,6 @@ function apply(covered: number, visible: number): boolean {
   if (next === inset) return false;
   const wasUp = inset > 0;
   inset = next;
-  // The app root glides to its new height only while the keyboard comes or
-  // goes (data-keyboard-settling, see index.css) — a window resize, the
-  // browser toolbar, or the suggestion bar changing height while typing must
-  // not animate the whole app. The glide's duration comes from here, so the
-  // CSS transition and this timer can't drift apart.
-  if (wasUp !== inset > 0) {
-    root.style.setProperty('--ex-keyboard-settle', `${KEYBOARD_SETTLE_MS}ms`);
-    root.dataset.keyboardSettling = 'true';
-    window.clearTimeout(glideTimer);
-    glideTimer = window.setTimeout(() => delete root.dataset.keyboardSettling, KEYBOARD_SETTLE_MS);
-  }
   for (const l of listeners) l();
   return !wasUp && inset > 0;
 }
@@ -77,33 +72,21 @@ function scrollParent(el: HTMLElement): HTMLElement | null {
   return null;
 }
 
-// While true the app is gliding to its keyboard-up size; scroll events from
-// that glide are ours, not iOS panning again. One timer: a new settle
-// restarts it, so an overlapping glide cannot clear the flag early.
-let settling = false;
-let settleTimer: number | undefined;
 // Until when a pan still counts as the keyboard's (see LATE_PAN_MS).
 let keyboardPanUntil = 0;
 
 // iOS reveals a focused field by panning the whole page up as the keyboard
-// comes. Instead of snapping it back (a visible jump), glide the page back to
-// the top while the root shrinks over the same time, then glide the field
-// into view inside its own scroller (a thread card, a login form, a dialog)
-// if the keyboard still covers it. The chat composer sits at the bottom of
-// the root, so it simply rides up.
+// comes. The root has just been sized to the space above the keyboard, so
+// the pan is undone at once: the chat composer, at the bottom of the root,
+// lands exactly where the pan had put it. A field in a scroller of its own (a
+// thread card, a login form, a dialog) is then brought into view if the
+// keyboard still covers it.
 function settle() {
-  settling = true;
-  if (window.scrollY > 0) window.scrollTo({ top: 0, behavior: 'smooth' });
-  window.clearTimeout(settleTimer);
-  settleTimer = window.setTimeout(() => {
-    settleTimer = undefined;
-    settling = false;
-    if (window.scrollY > 0) window.scrollTo({ top: 0, behavior: 'smooth' });
-    const field = document.activeElement;
-    if (inset > 0 && field instanceof HTMLElement && field !== document.body && scrollParent(field)) {
-      field.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }
-  }, KEYBOARD_SETTLE_MS + 30);
+  if (window.scrollY !== 0) window.scrollTo({ top: 0, behavior: 'instant' });
+  const field = document.activeElement;
+  if (inset > 0 && field instanceof HTMLElement && field !== document.body && scrollParent(field)) {
+    field.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+  }
 }
 
 // Mounted once, at the app root.
@@ -142,7 +125,7 @@ export function useKeyboardInsetTracker(): void {
     // that one too. A pan after that is iOS keeping the caret in view while
     // typing: left alone.
     const onScroll = () => {
-      if (inset > 0 && !settling && window.scrollY !== 0 && performance.now() < keyboardPanUntil) settle();
+      if (inset > 0 && window.scrollY !== 0 && performance.now() < keyboardPanUntil) settle();
     };
 
     window.addEventListener('keyboardWillShow', onShow);
@@ -160,9 +143,6 @@ export function useKeyboardInsetTracker(): void {
       window.removeEventListener('resize', recompute);
       window.removeEventListener('scroll', onScroll);
       vv?.removeEventListener('resize', recompute);
-      window.clearTimeout(settleTimer);
-      settleTimer = undefined;
-      settling = false;
       keyboardPanUntil = 0;
       apply(0, window.innerHeight);
     };

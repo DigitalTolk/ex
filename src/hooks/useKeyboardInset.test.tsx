@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
-import { KEYBOARD_SETTLE_MS, useKeyboardInset, useKeyboardInsetTracker } from './useKeyboardInset';
+import { useKeyboardInset, useKeyboardInsetTracker } from './useKeyboardInset';
 
 function Probe() {
   useKeyboardInsetTracker();
@@ -23,8 +23,6 @@ describe('useKeyboardInset', () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
-    // An earlier test's last glide may have ended under different timers.
-    delete document.documentElement.dataset.keyboardSettling;
     scrollY = 0;
     scrollTo.mockReset();
     Object.defineProperty(window, 'scrollY', { configurable: true, get: () => scrollY });
@@ -58,34 +56,36 @@ describe('useKeyboardInset', () => {
     unmount();
   });
 
-  // The app root animates its height only while the keyboard comes or goes —
-  // never on a window resize, which used to make the whole app trail the
-  // window edge, nor on the suggestion bar changing height while typing.
-  it('marks the document as settling only while the keyboard comes or goes', () => {
+  // The reported bug: tapping into the composer made it jump up and down.
+  // The root glided to its keyboard-up height while a smooth scroll undid
+  // iOS's pan — two animations on different curves — and the composer, at
+  // the bottom of the root, bounced between them until both settled.
+  it('resizes the root and undoes the pan in the same frame, never animated', () => {
+    vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(800);
     render(<Probe />);
+    scrollY = 300; // iOS's pan to reveal the composer
+    let heightWhenUnpanned = '';
+    scrollTo.mockImplementation(() => {
+      heightWhenUnpanned = appHeight();
+      scrollY = 0;
+    });
+    keyboard('keyboardWillShow', 300);
+
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'instant' });
+    expect(heightWhenUnpanned).toBe('500px');
     const root = document.documentElement;
     expect(root.dataset.keyboardSettling).toBeUndefined();
-    keyboard('keyboardWillShow', 300);
-    expect(root.dataset.keyboardSettling).toBe('true');
-    // The CSS transition takes its duration from the same constant as the timer.
-    expect(root.style.getPropertyValue('--ex-keyboard-settle')).toBe(`${KEYBOARD_SETTLE_MS}ms`);
+    expect(root.style.getPropertyValue('--ex-keyboard-settle')).toBe('');
     act(() => {
-      vi.advanceTimersByTime(KEYBOARD_SETTLE_MS);
+      vi.advanceTimersByTime(1000);
+      window.dispatchEvent(new Event('scroll'));
     });
-    expect(root.dataset.keyboardSettling).toBeUndefined();
-    // A resize that doesn't change the inset doesn't start a glide, and nor
-    // does a keyboard that changes height while it stays up.
-    act(() => {
-      window.dispatchEvent(new Event('resize'));
-    });
-    expect(root.dataset.keyboardSettling).toBeUndefined();
-    keyboard('keyboardDidShow', 340);
-    expect(root.dataset.keyboardSettling).toBeUndefined();
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+
+    // Going down is the same: at once.
     keyboard('keyboardWillHide');
-    expect(root.dataset.keyboardSettling).toBe('true');
-    act(() => {
-      vi.advanceTimersByTime(250);
-    });
+    expect(appHeight()).toBe('');
     expect(root.dataset.keyboardSettling).toBeUndefined();
   });
 
@@ -101,7 +101,7 @@ describe('useKeyboardInset', () => {
     expect(appHeight()).toBe('500px');
   });
 
-  it('eases a panned page back to the top and brings the field into view in its scroller', () => {
+  it('undoes the pan at once and brings the field into view in its scroller', () => {
     render(
       <div style={{ overflowY: 'auto' }} data-testid="scroller">
         <input aria-label="field" />
@@ -117,29 +117,19 @@ describe('useKeyboardInset', () => {
     render(<Probe />);
     scrollY = 120;
     keyboard('keyboardWillShow', 300);
-    expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
-    // Scroll events during the glide are ours.
+    expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'instant' });
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', behavior: 'instant' });
+    // The keyboard's pan landing late (iOS again) is undone too; at the top,
+    // there is nothing to do.
     act(() => {
       window.dispatchEvent(new Event('scroll'));
-    });
-    expect(scrollTo).toHaveBeenCalledTimes(1);
-    act(() => {
-      vi.advanceTimersByTime(300);
     });
     expect(scrollTo).toHaveBeenCalledTimes(2);
-    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', behavior: 'smooth' });
-    // The keyboard's pan landing late (iOS again) settles again; at the top,
-    // nothing to do.
-    act(() => {
-      window.dispatchEvent(new Event('scroll'));
-    });
-    expect(scrollTo).toHaveBeenCalledTimes(3);
     scrollY = 0;
     act(() => {
-      vi.advanceTimersByTime(300);
       window.dispatchEvent(new Event('scroll'));
     });
-    expect(scrollTo).toHaveBeenCalledTimes(3);
+    expect(scrollTo).toHaveBeenCalledTimes(2);
   });
 
   // The reported bug: on iOS every character typed made the composer jump.
@@ -194,18 +184,14 @@ describe('useKeyboardInset', () => {
         vv.dispatchEvent(new Event('resize'));
       });
       expect(appHeight()).toBe('500px');
-      act(() => {
-        vi.advanceTimersByTime(KEYBOARD_SETTLE_MS);
-      });
-      // The suggestion bar coming up while typing: the root follows at once,
-      // without a glide or a scroll.
+      // The suggestion bar coming up while typing: the root follows, without
+      // a scroll.
       scrollTo.mockClear();
       vv.height = 460;
       act(() => {
         vv.dispatchEvent(new Event('resize'));
       });
       expect(appHeight()).toBe('460px');
-      expect(document.documentElement.dataset.keyboardSettling).toBeUndefined();
       expect(scrollTo).not.toHaveBeenCalled();
       unmount();
       expect(appHeight()).toBe('');
