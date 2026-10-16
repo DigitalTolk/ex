@@ -4,6 +4,8 @@ import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { useAttachmentLightbox } from '@/hooks/useAttachmentLightbox';
 import { iconForAttachment, isImageAttachment, scaleToThumbnail } from '@/lib/file-helpers';
 import { formatBytes } from '@/lib/format';
+import { canPreviewHtml } from '@/lib/html-attachment';
+import { HtmlPreviewButton } from './HtmlPreviewButton';
 import type { Attachment } from '@/types';
 
 interface MessageAttachmentsProps {
@@ -142,7 +144,8 @@ function ThumbnailButton({ att, onOpen, onLoad }: { att: Attachment; onOpen: () 
 // AttachmentRow is the compact box used whenever a message has multiple
 // attachments or a non-image attachment. Clicking the box opens the
 // lightbox; the download icon is its own action so users don't have to
-// open then download.
+// open then download. HTML files (design mockups) also get a Preview
+// action that renders them in a sandboxed frame — only on that click.
 function AttachmentRow({ att, onOpen }: { att: Attachment; onOpen: () => void }) {
   const isImage = att.squareThumbnailURL && isImageAttachment(att.contentType, att.filename);
   const iconType = iconForAttachment(att.contentType, att.filename);
@@ -178,6 +181,13 @@ function AttachmentRow({ att, onOpen }: { att: Attachment; onOpen: () => void })
           <p className="text-xs text-muted-foreground">{formatBytes(att.size)}</p>
         </div>
       </button>
+      {canPreviewHtml(att) && (
+        <HtmlPreviewButton
+          attachment={att}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+          iconClassName="h-3.5 w-3.5"
+        />
+      )}
       {att.url && (
         <a
           href={att.downloadURL ?? att.url}

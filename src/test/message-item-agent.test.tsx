@@ -126,6 +126,21 @@ afterEach(() => {
 });
 
 describe('MessageItem agent affordances', () => {
+  it("shows a design agent's compare button and note suggestion, never the hidden markers", () => {
+    renderItem(
+      makeMessage({
+        agentInvokerID: 'u-1',
+        body: 'v2 — tiles\n<!-- ex:before acme/REF -->\n<!-- ex:design-note acme | Radius is 4px -->',
+        // Agent posts always arrive server-rendered; the server drops HTML
+        // comments, so the markers never reach the rendered tree.
+        rendered: { type: 'root', children: [{ type: 'element', tagName: 'p', children: [{ type: 'text', value: 'v2 — tiles' }] }] },
+      }),
+    );
+    expect(screen.getByRole('button', { name: 'Compare with the real page' })).toBeInTheDocument();
+    expect(screen.getByTestId('design-note-suggestion')).toHaveTextContent('Radius is 4px');
+    expect(screen.queryByText(/ex:before/)).not.toBeInTheDocument();
+  });
+
   it('shows who invoked an agent post and opens the run drawer from the badge for the invoker', () => {
     const userMap = new Map([['u-1', { displayName: 'Me' }]]);
     renderItem(makeMessage({ agentInvokerID: 'u-1', agentRunID: 'run-7' }), { userMap });

@@ -6,6 +6,8 @@ import { queryKeys, parentPath } from '@/lib/query-keys';
 import { useAttachmentLightbox } from '@/hooks/useAttachmentLightbox';
 import { iconForAttachment, isImageContentType } from '@/lib/file-helpers';
 import { formatBytes, formatRelative } from '@/lib/format';
+import { canPreviewHtml } from '@/lib/html-attachment';
+import { HtmlPreviewButton } from './HtmlPreviewButton';
 import { SidePanel } from './SidePanel';
 import { attachmentURLForFile } from './files-panel-url';
 import type { Attachment } from '@/types';
@@ -175,6 +177,13 @@ export function FilesPanel({
                     </p>
                   </div>
                 </button>
+                {a && canPreviewHtml(a) && (
+                  <HtmlPreviewButton
+                    attachment={a}
+                    className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground mobile:p-2.5"
+                    iconClassName="h-4 w-4"
+                  />
+                )}
                 {a?.url && (
                   <a
                     href={a.downloadURL ?? a.url}

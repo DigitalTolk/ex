@@ -40,12 +40,6 @@ declare global {
       body: string;
       choices?: string[];
     }) => void;
-    // Desktop-shell bridge for the agent-runner token handoff: the SPA mints
-    // a runner-scoped token (POST /api/v1/agents/runner-token) and hands it
-    // to the Electron shell, which runs local agent harnesses with it.
-    // Injected by the shell's chat preload; absent in browser tabs/PWA.
-    __EX_AGENT_RUNNER__?: { provideToken: (token: string) => void };
-
     // Desktop shell one-click connector sign-in: opens the service's SSO
     // entry in an internal shell window (the user signs in with Microsoft
     // there) and resolves with the bearer the service mints — captured from
@@ -57,6 +51,15 @@ declare global {
       capturePattern?: string;
       apiOrigin?: string;
     }) => Promise<string>;
+    // Desktop shell control over ex-runner on this computer (the Runners
+    // tab): call(op, arg) installs, connects, starts and stops it; subscribe
+    // pushes its state. Read through @/lib/desktop-runner, never directly —
+    // the state comes from another program and is validated there. Absent in
+    // browsers; the Mac App Store build answers `supported: false`.
+    __EX_RUNNER__?: {
+      call: (op: string, arg?: unknown) => Promise<unknown>;
+      subscribe: (listener: (state: unknown) => void) => () => void;
+    };
 
     // Test-only override for lib/device.ts deviceKind(): the jsdom and
     // browser setups pin it so width-driven tests keep their historical

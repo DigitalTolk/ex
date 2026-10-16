@@ -5,7 +5,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -197,5 +199,31 @@ func TestSettingsService_Update_ClearsCacheSoNextReadSeesNewValues(t *testing.T)
 	}
 	if len(got.AllowedExtensions) != 1 || got.AllowedExtensions[0] != "jpg" {
 		t.Errorf("expected only jpg after update; got %v", got.AllowedExtensions)
+	}
+}
+
+// Saving the settings tells every client to refetch them — the Runners tab
+// they gate appears or goes away without a reload. A failed save says nothing.
+func TestSettingsService_Update_PublishesSettingsUpdated(t *testing.T) {
+	st := &fakeSettingsStore{}
+	svc := NewSettingsService(st)
+	pub := newMockPublisher()
+	svc.SetPublisher(pub)
+
+	out, err := svc.Update(context.Background(), &model.WorkspaceSettings{RunnersInApp: true})
+	if err != nil || !out.RunnersInApp || !st.stored.RunnersInApp {
+		t.Fatalf("Update = %+v, %v (stored %+v)", out, err, st.stored)
+	}
+	if len(pub.published) != 1 || pub.published[0].channel != pubsub.GlobalChannelEvents() ||
+		pub.published[0].event.Type != events.EventSettingsUpdated {
+		t.Fatalf("published = %+v", pub.published)
+	}
+
+	st.putErr = errors.New("boom")
+	if _, err := svc.Update(context.Background(), &model.WorkspaceSettings{}); err == nil {
+		t.Fatal("want the store error")
+	}
+	if len(pub.published) != 1 {
+		t.Fatalf("a failed save published: %+v", pub.published)
 	}
 }

@@ -300,6 +300,10 @@ type Orchestrator struct {
 	// keeps every run a plain chat run.
 	tasks orchestratorTasks
 
+	// projects resolves /project picks and renders the design-references
+	// layer (plan-projects-design.md). Optional: nil = no projects in runs.
+	projects projectResolver
+
 	// toolAlertAt throttles permission-gateway approval alerts per run.
 	toolAlertAt sync.Map // runID -> time.Time
 
@@ -816,7 +820,7 @@ func (o *Orchestrator) invoke(ctx context.Context, in invocation) error {
 	// queueing a run nothing will execute.
 	if model.HarnessIsAPI(resolved.Harness) && resolved.ExecutionMode == model.ExecutionServer {
 		if o.serverEngine == nil {
-			return fmt.Errorf("%w: server-side execution isn't available yet — set %s to run on your machine", ErrAgentOffline, agent.DisplayName)
+			return fmt.Errorf("%w: %s runs on the server, and this ex server doesn't have server-side agents turned on — an admin needs to enable Bedrock", ErrAgentOffline, agent.DisplayName)
 		}
 		run, err := o.startRun(ctx, in, resolved)
 		if err != nil {
@@ -845,7 +849,7 @@ func (o *Orchestrator) invoke(ctx context.Context, in invocation) error {
 			return o.queueOfflineRun(ctx, in, resolved)
 		}
 		if harnessMissing {
-			return fmt.Errorf("%w: the %s CLI isn't set up on the machine running your ex desktop app — install it and sign in there, or use one of the Bedrock agents, which run in the cloud", ErrAgentOffline, resolved.Harness)
+			return fmt.Errorf("%w: the %s CLI isn't set up on the computer running your ex-runner — install it, sign in, and restart ex-runner there, or use one of the Bedrock agents, which run on the server", ErrAgentOffline, resolved.Harness)
 		}
 		return ErrAgentOffline
 	}
@@ -881,7 +885,7 @@ func (o *Orchestrator) queueOfflineRun(ctx context.Context, in invocation, resol
 		"until": until,
 	})
 	body := "⏳ " + agent.DisplayName + " is queued for " + invoker.DisplayName +
-		" — it starts when their ex desktop app comes online."
+		" — it starts when their ex-runner comes online."
 	if _, err := o.messages.SendAsAgentRun(ctx, agent.ID, invoker.ID, msg.ParentID, in.parentType, body, o.replyThreadRoot(run), run.ID); err != nil {
 		slog.Warn("queue notice post failed", "runID", run.ID, "error", err)
 	}
@@ -912,13 +916,13 @@ func (o *Orchestrator) postInvokeFailure(ctx context.Context, agent, invoker *mo
 		// thread and its reply is coming. A second notice would be noise.
 		return
 	case errors.Is(cause, ErrAgentOffline):
-		// The mechanism is invisible from web/mobile, so the notice explains
-		// it: CLI agents execute on the INVOKER's computer via the desktop
-		// app; Bedrock agents run in the cloud and work from anywhere.
+		// The mechanism is invisible from any chat client, so the notice
+		// explains it: CLI agents execute on the INVOKER's computer via
+		// ex-runner; Bedrock agents run on the server and work from anywhere.
 		body = "⛔ " + agent.DisplayName + " can't run for " + invoker.DisplayName + " — " +
-			offlineDetail(cause, "this agent runs on "+invoker.DisplayName+"'s own computer through the ex desktop app, "+
-				"which isn't online right now. Open the desktop app and stay signed in — or use one of the "+
-				"Bedrock agents, which run in the cloud and work from web and mobile.")
+			offlineDetail(cause, "this agent runs on "+invoker.DisplayName+"'s own computer through ex-runner, "+
+				"which isn't online right now. Start it there with `ex-runner start` (first time: `ex-runner login`) — "+
+				"or use one of the Bedrock agents, which run on the server and need no setup.")
 	default:
 		slog.Warn("agent invoke failed", "agentID", agent.ID, "msgID", msg.ID, "error", cause)
 		body = "⛔ " + agent.DisplayName + " couldn't start on this task."
@@ -956,14 +960,24 @@ func (o *Orchestrator) startRun(ctx context.Context, in invocation, resolved *mo
 	// Thread follow-ups inherit the thread's picks — in channels and DMs alike.
 	connectorSlugs := o.resolveConnectorPicks(ctx, invoker.ID, msg, parentType)
 	pickedSkillIDs, skillTokens := o.resolveSkillPicks(ctx, invoker.ID, msg, parentType)
+	// A /project pick names a product for its design references. For the
+	// design agent the token is the project, not a same-named connector.
+	projectKey, projectToken := "", ""
+	if invoker.SystemRole != model.SystemRoleGuest { // guests can't read projects, so no agent reads them for one
+		projectKey, projectToken = o.resolveProjectPick(ctx, invoker.ID, agent, msg, parentType)
+	}
+	connectorSlugs = withoutSlug(connectorSlugs, projectToken)
 	// A standing order pins its tools up front instead of naming them in a
 	// message it never sends.
 	if in.spec != nil {
 		connectorSlugs = o.knownConnectorSlugs(ctx, append(connectorSlugs, in.spec.ConnectorSlugs...))
 		pickedSkillIDs = o.visibleSkillIDs(ctx, invoker.ID, append(pickedSkillIDs, in.spec.SkillIDs...))
 	}
-	prompt := clipText(stripConnectorTokens(stripMentionMarkup(msg.Body),
-		append(append([]string{}, connectorSlugs...), skillTokens...)), maxPromptChars)
+	stripTokens := append(append([]string{}, connectorSlugs...), skillTokens...)
+	if projectToken != "" {
+		stripTokens = append(stripTokens, projectToken)
+	}
+	prompt := clipText(stripConnectorTokens(stripMentionMarkup(msg.Body), stripTokens), maxPromptChars)
 	// Coding-task binding: an explicit bind (routed/kickoff/sign-off runs), or
 	// implicit — any run of the task's agent inside a task thread IS a task
 	// run (mentions and follow-ups included), so it gets the workspace, the
@@ -1014,6 +1028,8 @@ func (o *Orchestrator) startRun(ctx context.Context, in invocation, resolved *mo
 		WatchInstruction: watchInstruction,
 		ActionMode:       actionMode,
 		ConnectorSlugs:   connectorSlugs,
+		ProjectKey:       projectKey,
+		RequiresFeatures: requiredRunnerFeatures(agent),
 		Harness:          resolved.Harness,
 		Model:            resolved.Model,
 		ExecutionMode:    resolved.ExecutionMode,
@@ -1469,12 +1485,23 @@ func (o *Orchestrator) sharedAgents(ctx context.Context) []*model.User {
 // harness the runner actually has, up to max. Returns immediately when work
 // exists; otherwise parks until wakeup or the wait budget lapses.
 func (o *Orchestrator) Claim(ctx context.Context, ownerID, runnerID string, harnesses []string, max int, wait time.Duration) ([]Assignment, error) {
+	return o.ClaimWithFeatures(ctx, ownerID, runnerID, harnesses, nil, max, wait)
+}
+
+// ClaimWithFeatures is Claim for a runner that advertises features
+// (model.RunnerFeature*): a run requiring a feature the runner lacks is left
+// for another runner of the same owner.
+func (o *Orchestrator) ClaimWithFeatures(ctx context.Context, ownerID, runnerID string, harnesses, features []string, max int, wait time.Duration) ([]Assignment, error) {
 	if max <= 0 {
 		max = 1
 	}
 	has := make(map[string]bool, len(harnesses))
 	for _, h := range harnesses {
 		has[h] = true
+	}
+	feats := make(map[string]bool, len(features))
+	for _, f := range features {
+		feats[f] = true
 	}
 	deadline := o.now().Add(wait)
 	// ONE timer for the whole poll, reset per tick. time.After allocates a
@@ -1483,7 +1510,7 @@ func (o *Orchestrator) Claim(ctx context.Context, ownerID, runnerID string, harn
 	tick := time.NewTimer(claimPollInterval)
 	defer tick.Stop()
 	for {
-		assignments, err := o.claimOnce(ctx, ownerID, runnerID, has, max)
+		assignments, err := o.claimOnce(ctx, ownerID, runnerID, has, feats, max)
 		if err != nil {
 			return nil, err
 		}
@@ -1551,7 +1578,7 @@ func (o *Orchestrator) claimNames(ctx context.Context, run *model.Run) (agentNam
 	return agentName, invokerName
 }
 
-func (o *Orchestrator) claimOnce(ctx context.Context, ownerID, runnerID string, has map[string]bool, max int) ([]Assignment, error) {
+func (o *Orchestrator) claimOnce(ctx context.Context, ownerID, runnerID string, has, feats map[string]bool, max int) ([]Assignment, error) {
 	ids, err := o.runs.ListQueuedRuns(ctx, ownerID, max*2)
 	if err != nil {
 		return nil, err
@@ -1582,6 +1609,9 @@ func (o *Orchestrator) claimOnce(ctx context.Context, ownerID, runnerID string, 
 		}
 		if !has[run.Harness] {
 			continue // another runner (or a future install) may take it
+		}
+		if !hasFeatures(feats, run.RequiresFeatures) {
+			continue // e.g. a design run on an old built-in runner without file tools
 		}
 		// Coding-task runs are pinned to the machine that holds the checkout;
 		// another live runner of the same owner must leave them alone. A dead
@@ -2326,6 +2356,16 @@ func (o *Orchestrator) Timeline(ctx context.Context, callerID, runID string) (*m
 	}
 	kept, dropped := clipTimeline(evts)
 	return run, kept, dropped, nil
+}
+
+// RegisterRunner records a runner coming online and nudges its owner's
+// clients, so the Runners page shows that computer as online at once.
+func (o *Orchestrator) RegisterRunner(ctx context.Context, reg *model.RunnerRegistration) error {
+	if _, err := o.Heartbeat(ctx, reg, nil); err != nil {
+		return err
+	}
+	events.Publish(ctx, o.pub, pubsub.UserChannel(reg.OwnerID), events.EventRunnersChanged, map[string]any{})
+	return nil
 }
 
 // Heartbeat refreshes the runner registration and extends leases for the
@@ -3262,6 +3302,7 @@ func (o *Orchestrator) buildBundle(ctx context.Context, run *model.Run) (string,
 	b.toolCraft()
 	b.memory()
 	b.coRoster()
+	b.design()
 	b.skills()
 	b.connectorIndex()
 	b.projects()
@@ -3705,9 +3746,12 @@ func failNotice(reason string) string {
 			". Nothing was answered; ask again and I'll retry."
 	case "runner_lost", "lease_expired":
 		return "❌ stopped: lost contact with the agent runner on your machine. " +
-			"Check that the desktop app is running, then ask again."
+			"Check that ex-runner is running there, then ask again."
 	case "harness_missing":
-		return "❌ stopped: the " + detail + " CLI isn't installed or isn't on PATH for the desktop app."
+		return "❌ stopped: the " + detail + " CLI isn't installed or isn't on PATH for ex-runner."
+	case "runner_stopped":
+		return "❌ stopped: ex-runner on your machine was shut down before I finished. " +
+			"Start it again with `ex-runner start`, then ask again."
 	case "token_mint_failed":
 		return "❌ stopped: couldn't get the credentials needed to start. Try again; if it repeats, re-authenticate."
 	case "spawn_failed":

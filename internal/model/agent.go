@@ -170,8 +170,12 @@ type AgentTemplate struct {
 	SkillIDs          []string    `json:"skillIDs,omitempty" dynamodbav:"skillIDs,omitempty"`
 	Limits            AgentLimits `json:"limits" dynamodbav:"limits"`
 	MaxConcurrentRuns int         `json:"maxConcurrentRuns" dynamodbav:"maxConcurrentRuns"`
-	CreatedAt         time.Time   `json:"createdAt" dynamodbav:"createdAt"`
-	UpdatedAt         time.Time   `json:"updatedAt" dynamodbav:"updatedAt"`
+	// FollowUpMode is the template's default for thread follow-ups when the
+	// invoker has no pref of their own ("" = off). The design agent defaults
+	// to "always": tweaking a mockup is replying in its thread.
+	FollowUpMode string    `json:"followUpMode,omitempty" dynamodbav:"followUpMode,omitempty"`
+	CreatedAt    time.Time `json:"createdAt" dynamodbav:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
 }
 
 // AgentConfig marks a user row as one of the shared agent users. It carries
@@ -352,6 +356,14 @@ type Run struct {
 	// the user's explicit pick of which external services this run may use.
 	// The runner only syncs docs + injects credentials for these.
 	ConnectorSlugs []string `json:"connectorSlugs,omitempty" dynamodbav:"connectorSlugs,omitempty"`
+	// ProjectKey: the product whose design references ride this run (a
+	// /project pick, inherited in a thread, or name-matched for the design
+	// agent). Empty for most runs.
+	ProjectKey string `json:"projectKey,omitempty" dynamodbav:"projectKey,omitempty"`
+	// RequiresFeatures: runner features this run needs (RunnerFeature*). A
+	// runner that doesn't advertise every one of them never claims the run —
+	// e.g. design runs need file fetch/post, which old built-in runners lack.
+	RequiresFeatures []string `json:"requiresFeatures,omitempty" dynamodbav:"requiresFeatures,omitempty"`
 	// TaskID binds the run to a coding task (RunModeTask): its thread root is
 	// the task card, its budget is uncapped, and the runner prepares the
 	// project workspace before the harness starts.
@@ -740,6 +752,14 @@ type RunnerHarness struct {
 
 // RunnerRegistration is a live runner process on one of the owner's
 // machines. Rows carry a DynamoDB TTL so dead runners self-reap.
+// Runner features a run may require (Run.RequiresFeatures) and a runner
+// advertises at claim time.
+const (
+	// RunnerFeatureFiles: the runner can fetch run attachments and post files
+	// (fetch_attachment, post_message attachments).
+	RunnerFeatureFiles = "files"
+)
+
 type RunnerRegistration struct {
 	RunnerID       string          `json:"runnerID" dynamodbav:"runnerID"`
 	OwnerID        string          `json:"ownerID" dynamodbav:"ownerID"`
@@ -748,4 +768,10 @@ type RunnerRegistration struct {
 	Harnesses      []RunnerHarness `json:"harnesses" dynamodbav:"harnesses"`
 	LeaseExpiresAt time.Time       `json:"leaseExpiresAt" dynamodbav:"leaseExpiresAt"`
 	CreatedAt      time.Time       `json:"createdAt" dynamodbav:"createdAt"`
+	// TokenID is the paired install this process signed in with (the
+	// runner JWT's jti = RunnerToken.ID): how the Runners page knows which
+	// of the owner's computers is online.
+	TokenID string `json:"tokenID,omitempty" dynamodbav:"tokenID,omitempty"`
+	// Version is the ex-runner build, when the runner reports it.
+	Version string `json:"version,omitempty" dynamodbav:"version,omitempty"`
 }

@@ -40,7 +40,15 @@ func (h *AgentRunToolHandler) DownloadAttachment(w http.ResponseWriter, r *http.
 	if messageID == "" {
 		messageID = run.MessageID
 	}
-	body, a, err := h.attachments.OpenForUser(r.Context(), claims.UserID, r.PathValue("id"), run.ParentID, run.ParentType, messageID)
+	id := r.PathValue("id")
+	body, a, err := h.attachments.OpenForUser(r.Context(), claims.UserID, id, run.ParentID, run.ParentType, messageID)
+	source := "message"
+	// A run about a project may also read that project's reference
+	// screenshots — they live on the Projects page, not in any message.
+	if errors.Is(err, store.ErrNotFound) && h.orch.RunMayReadScreen(r.Context(), run, id) {
+		body, a, err = h.attachments.OpenByID(r.Context(), id)
+		source = "project_screen"
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "attachment not found")
@@ -50,6 +58,10 @@ func (h *AgentRunToolHandler) DownloadAttachment(w http.ResponseWriter, r *http.
 		return
 	}
 	defer func() { _ = body.Close() }()
+	// The drawer's "files it took in" list: what the agent actually read.
+	h.orch.RecordWorkspaceAction(r.Context(), run, "file_fetched", map[string]any{
+		"attachmentID": a.ID, "filename": a.Filename, "size": a.Size, "source": source,
+	})
 	w.Header().Set("Content-Type", a.ContentType)
 	w.Header().Set("Content-Length", strconv.FormatInt(a.Size, 10))
 	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(a.Filename))

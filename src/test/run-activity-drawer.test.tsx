@@ -280,6 +280,24 @@ describe('RunActivityDrawer', () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('');
   });
 
+  it('lists the files the run was given, looked at and posted', async () => {
+    installTimeline({
+      run: runFx(),
+      events: [],
+      users: usersFx,
+      files: [
+        { id: 'f-1', role: 'fetched', source: 'project_screen', runID: 'run-1', filename: 'home.png', contentType: 'image/png', size: 10, url: '/m/1' },
+        { id: 'f-2', role: 'posted', runID: 'run-1', filename: 'v1.html', contentType: 'text/html', size: 20, url: '/m/2' },
+      ],
+    });
+    act(() => openRunDrawer('run-1'));
+    renderDrawer();
+    const drawer = await screen.findByTestId('run-activity-drawer');
+    const files = await within(drawer).findByTestId('run-files');
+    expect(within(files).getByRole('button', { name: 'View home.png' })).toBeInTheDocument();
+    expect(within(files).getByRole('button', { name: 'Preview v1.html' })).toBeInTheDocument();
+  });
+
   it('shows the first-turn token split when a prompt estimate and usage exist', async () => {
     installTimeline({
       run: runFx(),

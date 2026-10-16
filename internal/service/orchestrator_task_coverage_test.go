@@ -182,7 +182,7 @@ func TestOtaskCov_DispatchTaskInvokeFailurePosted(t *testing.T) {
 	if runs := fx.runsByMode(model.RunModeTask); len(runs) != 0 {
 		t.Fatalf("offline requester must queue nothing, got %d runs", len(runs))
 	}
-	if post := fx.msgs.lastPost(); !strings.Contains(post, "desktop") {
+	if post := fx.msgs.lastPost(); !strings.Contains(post, "ex-runner") {
 		t.Fatalf("invoke failure must be posted in-thread, got %q", post)
 	}
 }

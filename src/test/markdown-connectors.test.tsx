@@ -1,13 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { act, render, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { CompletionContext } from '@codemirror/autocomplete';
+import { CompletionContext, currentCompletions, startCompletion } from '@codemirror/autocomplete';
 import { EditorState, type Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { cursorCharLeft } from '@codemirror/commands';
 import { slashCommandSource } from '@/components/chat/markdown/extensions/slashCommands';
 import { connectorPills } from '@/components/chat/markdown/extensions/mentionPills';
 import { MarkdownComposer } from '@/components/chat/markdown/MarkdownComposer';
+import { MarkdownEditor } from '@/components/chat/markdown/MarkdownEditor';
 import type { MentionCompletion } from '@/components/chat/markdown/extensions/optionRender';
 
 vi.mock('@/hooks/useConversations', async (orig) => ({
@@ -27,9 +28,18 @@ vi.mock('@/hooks/useEmoji', async (orig) => ({
 vi.mock('@/context/PresenceContext', () => ({
   usePresence: () => ({ online: new Set<string>() }),
 }));
+let mockAuth: { user: { systemRole: string } } | null = null;
 vi.mock('@/context/AuthContext', async (orig) => ({
   ...(await orig<typeof import('@/context/AuthContext')>()),
-  useOptionalAuth: () => null,
+  useOptionalAuth: () => mockAuth,
+}));
+const projectsEnabled = vi.hoisted(() => [] as (boolean | undefined)[]);
+vi.mock('@/hooks/useProjects', async (orig) => ({
+  ...(await orig<typeof import('@/hooks/useProjects')>()),
+  useProjects: (opts: { enabled?: boolean } = {}) => {
+    projectsEnabled.push(opts.enabled);
+    return { data: opts.enabled ? [{ key: 'acme-portal', name: 'Acme Portal' }] : undefined };
+  },
 }));
 vi.mock('@/hooks/useConnectors', async (orig) => ({
   ...(await orig<typeof import('@/hooks/useConnectors')>()),
@@ -64,6 +74,7 @@ const providers = {
     { name: 'trello', description: 'Trello — boards' },
   ],
   skills: () => [{ name: 'weekly-report', description: 'Weekly Report — digest' }],
+  projects: () => [{ name: 'acme-portal', description: 'Acme Portal — project design references' }],
 };
 
 describe('slashCommandSource', () => {
@@ -87,10 +98,19 @@ describe('slashCommandSource', () => {
       '/gitlab',
       '/trello',
       '/weekly-report',
+      '/acme-portal',
     ]);
 
     const midMessage = slashCommandSource(providers)(ctx('check /'));
-    expect(midMessage?.options.map((o) => o.label)).toEqual(['/gitlab', '/trello', '/weekly-report']);
+    expect(midMessage?.options.map((o) => o.label)).toEqual(['/gitlab', '/trello', '/weekly-report', '/acme-portal']);
+
+    const projectOnly = slashCommandSource(providers)(ctx('@design /acm'));
+    expect(projectOnly?.options.map((o) => o.label)).toEqual(['/acme-portal']);
+    const pick = projectOnly?.options[0] as MentionCompletion;
+    const pv = new EditorView({ state: EditorState.create({ doc: '@design /acm' }) });
+    (pick.apply as (v: EditorView, c: unknown, f: number, t: number) => void)(pv, pick, 8, 12);
+    expect(pv.state.doc.toString()).toBe('@design /acme-portal ');
+    pv.destroy();
 
     const skillsOnly = slashCommandSource(providers)(ctx('do the /week'));
     expect(skillsOnly?.options.map((o) => o.label)).toEqual(['/weekly-report']);
@@ -180,5 +200,74 @@ describe('MarkdownComposer connector wiring', () => {
       container.querySelectorAll('.cm-mention-pill[data-mention-kind="connector"]'),
     ).map((el) => el.textContent);
     expect(labels).toEqual(['/gitlab']);
+  });
+});
+
+describe('MarkdownComposer project wiring', () => {
+  function mountComposer(body: string) {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={qc}>
+        <MarkdownComposer ariaLabel="Composer" initialBody={body} />
+      </QueryClientProvider>,
+    );
+  }
+  const pills = (c: HTMLElement) =>
+    Array.from(c.querySelectorAll('.cm-mention-pill[data-mention-kind="connector"]')).map((el) => el.textContent);
+
+  it('offers projects to members and renders their picks as pills', () => {
+    mockAuth = { user: { systemRole: 'member' } };
+    projectsEnabled.length = 0;
+    const { container } = mountComposer('@design /acme-portal and /gitlab');
+    expect(projectsEnabled.at(-1)).toBe(true);
+    expect(pills(container)).toEqual(['/acme-portal', '/gitlab']);
+  });
+
+  it('lists projects in the live "/" menu', async () => {
+    mockAuth = { user: { systemRole: 'member' } };
+    const { container } = mountComposer('');
+    const view = EditorView.findFromDOM(container.querySelector('.cm-editor') as HTMLElement)!;
+    act(() => {
+      view.dispatch({ changes: { from: 0, insert: '/acm' }, selection: { anchor: 4 } });
+      startCompletion(view);
+    });
+    await waitFor(() => expect(currentCompletions(view.state).map((c) => c.label)).toEqual(['/acme-portal']));
+  });
+
+  it('never asks for projects as a guest or signed out', () => {
+    mockAuth = { user: { systemRole: 'guest' } };
+    projectsEnabled.length = 0;
+    const { container } = mountComposer('/acme-portal');
+    expect(projectsEnabled.at(-1)).toBe(false);
+    expect(pills(container)).toEqual([]);
+    mockAuth = null;
+    mountComposer('x');
+    expect(projectsEnabled.at(-1)).toBe(false);
+  });
+});
+
+describe('MarkdownEditor without a projects provider', () => {
+  async function openMenu(el: React.ReactElement) {
+    const { container } = render(el);
+    const view = EditorView.findFromDOM(container.querySelector('.cm-editor') as HTMLElement)!;
+    act(() => {
+      view.dispatch({ changes: { from: 0, insert: '/' }, selection: { anchor: 1 } });
+      startCompletion(view);
+    });
+    return view;
+  }
+
+  it('offers no project picks when none are provided', async () => {
+    const view = await openMenu(
+      <MarkdownEditor ariaLabel="E" completionProviders={{ ...providers, projects: undefined } as never} />,
+    );
+    await waitFor(() => expect(currentCompletions(view.state).map((c) => c.label)).toContain('/gitlab'));
+    expect(currentCompletions(view.state).map((c) => c.label)).not.toContain('/acme-portal');
+  });
+
+  it('opens no menu at all without providers', async () => {
+    const view = await openMenu(<MarkdownEditor ariaLabel="E" />);
+    await act(async () => {});
+    expect(currentCompletions(view.state)).toEqual([]);
   });
 });

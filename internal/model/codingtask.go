@@ -26,14 +26,91 @@ type CodingProject struct {
 	Key   string        `json:"key" dynamodbav:"key"`   // slug, e.g. "cliffhub"
 	Name  string        `json:"name" dynamodbav:"name"` // display, e.g. "CliffHub"
 	Repos []ProjectRepo `json:"repos" dynamodbav:"repos"`
+	// Design references (plan-projects-design.md): what the design agent
+	// copies from so mockups look like THIS product. All optional — a
+	// project learned by a coding task starts with none.
+	AppURL      string        `json:"appURL,omitempty" dynamodbav:"appURL,omitempty"`
+	Description string        `json:"description,omitempty" dynamodbav:"description,omitempty"`
+	DesignNotes string        `json:"designNotes,omitempty" dynamodbav:"designNotes,omitempty"`
+	Links       []ProjectLink `json:"links,omitempty" dynamodbav:"links,omitempty"`
+	// UILibrary names the product's component stack ("shadcn/ui (Radix),
+	// Tailwind v4, Tabler icons") — the design agent draws anything the
+	// screens don't show the way that library renders it.
+	UILibrary string `json:"uiLibrary,omitempty" dynamodbav:"uiLibrary,omitempty"`
 	// No channel here on purpose: a project has one channel PER REQUESTER,
 	// derived from (project key, requester id) — see service.ProjectChannelID.
 	// Rows written before 2026-09-21 carry a channelID attribute for the old
 	// shared channel; it is ignored on read.
 	CreatedBy string    `json:"createdBy" dynamodbav:"createdBy"`
+	UpdatedBy string    `json:"updatedBy,omitempty" dynamodbav:"updatedBy,omitempty"`
 	CreatedAt time.Time `json:"createdAt" dynamodbav:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
 }
+
+// ProjectLink is a labelled reference link on a project (Figma, style guide,
+// Storybook, …).
+type ProjectLink struct {
+	Label string `json:"label" dynamodbav:"label"`
+	URL   string `json:"url" dynamodbav:"url"`
+}
+
+// Project design-reference bounds.
+const (
+	ProjectDescriptionMaxLen = 2000
+	ProjectDesignNotesMaxLen = 8000
+	ProjectLinksMax          = 10
+	ProjectScreensMax        = 60
+	ScreenPageMaxLen         = 80
+	ScreenDescriptionMaxLen  = 300
+	ScreenFieldMaxLen        = 120
+	// ScreenImageMaxBytes caps a reference screenshot; agents load these
+	// into their context, so huge images only cost tokens.
+	ScreenImageMaxBytes    = 8 << 20
+	ProjectUILibraryMaxLen = 300
+	// ProjectThemeMaxBytes caps an uploaded theme stylesheet (globals.css).
+	ProjectThemeMaxBytes = 256 << 10
+)
+
+// ProjectTheme is a project's main stylesheet (e.g. globals.css), kept in its
+// own row so project lists stay small. Agents never see the raw file — only
+// its condensed tokens (variables, fonts, imports).
+type ProjectTheme struct {
+	ProjectKey string    `json:"projectKey" dynamodbav:"projectKey"`
+	Filename   string    `json:"filename" dynamodbav:"filename"`
+	CSS        string    `json:"css" dynamodbav:"css"`
+	UpdatedBy  string    `json:"updatedBy" dynamodbav:"updatedBy"`
+	UpdatedAt  time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
+}
+
+// ProjectScreen is one screenshot of a real page of a project — the design
+// agent's reference for "what this product looks like". The image is an
+// ordinary attachment; the screen holds a reference on it (see
+// ScreenAttachmentRef) so the attachment GC keeps it alive.
+type ProjectScreen struct {
+	ID           string    `json:"id" dynamodbav:"id"`
+	ProjectKey   string    `json:"projectKey" dynamodbav:"projectKey"`
+	Page         string    `json:"page" dynamodbav:"page"`               // "Booking detail"
+	Description  string    `json:"description" dynamodbav:"description"` // what the page is for / shows
+	Viewport     string    `json:"viewport" dynamodbav:"viewport"`       // ScreenViewport*
+	State        string    `json:"state,omitempty" dynamodbav:"state,omitempty"`
+	SeenBy       string    `json:"seenBy,omitempty" dynamodbav:"seenBy,omitempty"`
+	Route        string    `json:"route,omitempty" dynamodbav:"route,omitempty"`
+	AttachmentID string    `json:"attachmentID" dynamodbav:"attachmentID"`
+	UploadedBy   string    `json:"uploadedBy" dynamodbav:"uploadedBy"`
+	CreatedAt    time.Time `json:"createdAt" dynamodbav:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
+}
+
+// Screen viewports.
+const (
+	ScreenViewportDesktop = "desktop"
+	ScreenViewportMobile  = "mobile"
+)
+
+// ScreenAttachmentRef is the pseudo message ID a screen holds in its
+// attachment's reference set: the attachment is deleted only when no message
+// AND no screen references it any more.
+func ScreenAttachmentRef(screenID string) string { return "screen#" + screenID }
 
 // ProjectRepo is one GitLab repository of a project with its role in the
 // product — the role is what tells the agent where UI work belongs.

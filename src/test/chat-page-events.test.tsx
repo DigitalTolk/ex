@@ -860,6 +860,23 @@ describe('ChatPage WebSocket handlers', () => {
     }).not.toThrow();
   });
 
+  it('onProjectChanged refreshes the projects list and every open project', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onProjectChanged as (d: unknown) => void)({});
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['projects'] });
+  });
+
+  it('onSettingsUpdated and onRunnersChanged refetch what they change', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onSettingsUpdated as (d: unknown) => void)({});
+    (capturedOptions.onRunnersChanged as (d: unknown) => void)({});
+    const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(keys).toContainEqual(['workspace-settings']);
+    expect(keys).toContainEqual(['runner-tokens']);
+  });
+
   it('onActivityNew adds the carried item to the activity cache instead of refetching', () => {
     const { qc } = renderAt('/');
     qc.setQueryData(['activity'], { items: [], unread: 0, unreadByType: {} });

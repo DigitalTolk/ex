@@ -16,6 +16,11 @@ type WorkspaceSettings struct {
 	// composer. GIPHY requires client-side API/media requests, so this
 	// browser key is sent to authenticated clients that can use the picker.
 	GiphyAPIKey string `json:"giphyAPIKey,omitempty" dynamodbav:"giphyAPIKey,omitempty"`
+	// RunnersInApp turns on the Runners tab in the AI hub, where people set
+	// up, start and disconnect ex-runner (the desktop app can install and run
+	// it for them). Off by default: until an admin turns it on, runners are
+	// set up from the command line and the account menu's Runners dialog.
+	RunnersInApp bool `json:"runnersInApp" dynamodbav:"runnersInApp"`
 }
 
 // DefaultMaxUploadBytes is the fallback ceiling when the workspace hasn't

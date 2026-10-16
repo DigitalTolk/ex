@@ -4,19 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"time"
 
-	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/store"
 )
-
-// runnerTokenTTL is the lifetime of a desktop-runner token. Long-lived by
-// design (the runner is a background process), revocable by rotating the JWT
-// secret at MVP; per-token revocation is a Phase-4 item.
-const runnerTokenTTL = 30 * 24 * time.Hour
 
 // timelineAccessChecker verifies parent membership (the message-service
 // check). Once it also widened timeline reads to channel members; run LOGS
@@ -27,18 +20,29 @@ type timelineAccessChecker interface {
 }
 
 // AgentHandler serves the SPA-facing agent surface: the shared agents with
-// the caller's own preferences, runner-token minting, and run timelines.
+// the caller's own preferences, and run timelines. Runner pairing lives on
+// RunnerTokenHandler.
 type AgentHandler struct {
 	agents *service.AgentService
 	orch   *service.Orchestrator
 	users  *service.UserService
-	jwt    *auth.JWTManager
 	access timelineAccessChecker
+	// files resolves the drawer's file list (inputs, fetched, posted) to
+	// viewable URLs. Optional: nil = timelines carry no files.
+	files runFileLoader
 }
 
+// runFileLoader is the AttachmentService slice the drawer's file list needs.
+type runFileLoader interface {
+	LoadForPreview(ctx context.Context, ids []string) []*model.Attachment
+}
+
+// SetRunFiles wires the attachment loader for the drawer's file list.
+func (h *AgentHandler) SetRunFiles(l runFileLoader) { h.files = l }
+
 // NewAgentHandler wires the handler.
-func NewAgentHandler(agents *service.AgentService, orch *service.Orchestrator, users *service.UserService, jwt *auth.JWTManager) *AgentHandler {
-	return &AgentHandler{agents: agents, orch: orch, users: users, jwt: jwt}
+func NewAgentHandler(agents *service.AgentService, orch *service.Orchestrator, users *service.UserService) *AgentHandler {
+	return &AgentHandler{agents: agents, orch: orch, users: users}
 }
 
 // SetTimelineAccess wires the parent-membership checker used by watch
@@ -265,32 +269,6 @@ func (h *AgentHandler) UpdatePrefs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, v)
 }
 
-// MintRunnerToken issues the desktop runner's long-lived token. Minted from
-// an authenticated interactive session only (the SPA hands it down over IPC;
-// plan-v2 §3 — never via the refresh flow).
-// POST /api/v1/agents/runner-token
-func (h *AgentHandler) MintRunnerToken(w http.ResponseWriter, r *http.Request) {
-	callerID := middleware.UserIDFromContext(r.Context())
-	user, err := h.users.GetByID(r.Context(), callerID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "user lookup failed")
-		return
-	}
-	if user.IsAgent() {
-		writeError(w, http.StatusForbidden, "forbidden", "agents cannot mint runner tokens")
-		return
-	}
-	token, err := h.jwt.GenerateRunnerToken(user, runnerTokenTTL)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "token mint failed")
-		return
-	}
-	writeJSON(w, http.StatusOK, JSON{
-		"token":     token,
-		"expiresAt": time.Now().Add(runnerTokenTTL),
-	})
-}
-
 // Timeline returns a run and its full event list for the Activity Drawer.
 // GET /api/v1/runs/{id}
 func (h *AgentHandler) Timeline(w http.ResponseWriter, r *http.Request) {
@@ -321,6 +299,7 @@ func (h *AgentHandler) Timeline(w http.ResponseWriter, r *http.Request) {
 	threadSpend := h.orch.ThreadSpend(r.Context(), run)
 	writeJSON(w, http.StatusOK, JSON{
 		"run": run, "events": evts, "users": users, "artifacts": artifacts, "threadSpend": threadSpend,
+		"files": h.runFiles(r.Context(), []*model.Run{run}, evts),
 		// A turn-uncapped task run can produce thousands of events; the newest
 		// are returned and this says how many older ones were left out.
 		"eventsOmitted": evtsDropped,
@@ -386,6 +365,7 @@ func (h *AgentHandler) ThreadTimeline(w http.ResponseWriter, r *http.Request) {
 	latest := runs[len(runs)-1]
 	writeJSON(w, http.StatusOK, JSON{
 		"run": latest, "runs": runs, "events": evts, "users": users, "artifacts": artifacts, "messages": msgs,
+		"files":         h.runFiles(r.Context(), runs, evts),
 		"eventsOmitted": evtsDropped,
 		// Totalled from the runs already in hand — this used to re-run the same
 		// hundred-run listing just to add one line.

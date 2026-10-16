@@ -38,18 +38,26 @@ type runnerRegisterBody struct {
 	RunnerID  string                `json:"runnerID"`
 	Host      string                `json:"host"`
 	OS        string                `json:"os"`
+	Version   string                `json:"version"`
 	Harnesses []model.RunnerHarness `json:"harnesses"`
 }
 
-func (b *runnerRegisterBody) registration(ownerID string) *model.RunnerRegistration {
-	return &model.RunnerRegistration{
+// registration is the row a register or heartbeat writes. The install it
+// belongs to comes from the runner token (its jti), never from the body.
+func (b *runnerRegisterBody) registration(r *http.Request) *model.RunnerRegistration {
+	reg := &model.RunnerRegistration{
 		RunnerID:  b.RunnerID,
-		OwnerID:   ownerID,
+		OwnerID:   middleware.UserIDFromContext(r.Context()),
 		Host:      b.Host,
 		OS:        b.OS,
+		Version:   strings.TrimSpace(b.Version),
 		Harnesses: b.Harnesses,
 		CreatedAt: time.Now(),
 	}
+	if claims := middleware.ClaimsFromContext(r.Context()); claims != nil {
+		reg.TokenID = claims.ID
+	}
+	return reg
 }
 
 // Register announces a runner. The shared agents (gg/qib) exist workspace-
@@ -57,13 +65,12 @@ func (b *runnerRegisterBody) registration(ownerID string) *model.RunnerRegistrat
 // runs execute on the invoker's own machine.
 // POST /api/v1/agent/runner/register
 func (h *AgentRunnerHandler) Register(w http.ResponseWriter, r *http.Request) {
-	ownerID := middleware.UserIDFromContext(r.Context())
 	var body runnerRegisterBody
 	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.RunnerID == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "runnerID required")
 		return
 	}
-	if _, err := h.orch.Heartbeat(r.Context(), body.registration(ownerID), nil); err != nil {
+	if err := h.orch.RegisterRunner(r.Context(), body.registration(r)); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "registration failed")
 		return
 	}
@@ -82,8 +89,11 @@ func (h *AgentRunnerHandler) Register(w http.ResponseWriter, r *http.Request) {
 type claimBody struct {
 	RunnerID  string   `json:"runnerID"`
 	Harnesses []string `json:"harnesses"`
-	Max       int      `json:"max"`
-	WaitSec   int      `json:"waitSec"`
+	// Features the runner supports (model.RunnerFeature*); runs requiring
+	// one it lacks stay queued for a runner that has it.
+	Features []string `json:"features"`
+	Max      int      `json:"max"`
+	WaitSec  int      `json:"waitSec"`
 }
 
 // Claim long-polls for work. 200 with assignments, or 204 when the wait
@@ -105,7 +115,7 @@ func (h *AgentRunnerHandler) Claim(w http.ResponseWriter, r *http.Request) {
 	if body.Max > maxClaimBatch {
 		body.Max = maxClaimBatch
 	}
-	assignments, err := h.orch.Claim(r.Context(), ownerID, body.RunnerID, body.Harnesses, body.Max, wait)
+	assignments, err := h.orch.ClaimWithFeatures(r.Context(), ownerID, body.RunnerID, body.Harnesses, body.Features, body.Max, wait)
 	if err != nil {
 		if errors.Is(err, r.Context().Err()) {
 			return // client went away mid-poll
@@ -204,13 +214,12 @@ type heartbeatBody struct {
 // runner must kill (terminal server-side).
 // POST /api/v1/agent/runner/heartbeat
 func (h *AgentRunnerHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
-	ownerID := middleware.UserIDFromContext(r.Context())
 	var body heartbeatBody
 	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.RunnerID == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "runnerID required")
 		return
 	}
-	kill, err := h.orch.Heartbeat(r.Context(), body.registration(ownerID), body.ActiveRunIDs)
+	kill, err := h.orch.Heartbeat(r.Context(), body.registration(r), body.ActiveRunIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "heartbeat failed")
 		return

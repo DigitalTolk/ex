@@ -52,11 +52,14 @@ type Deps struct {
 	Command    *CommandHandler
 	// Scheduled messages: compose now, deliver at a chosen time.
 	ScheduledMessage *ScheduledMessageHandler
-	// Agent orchestration (plan-v2): SPA surface, desktop-runner API, and
-	// the run-scoped MCP tool API. All three nil-skippable as a unit.
+	// Agent orchestration (plan-v2): SPA surface, ex-runner API, and the
+	// run-scoped MCP tool API. All three nil-skippable as a unit.
 	Agent        *AgentHandler
 	AgentRunner  *AgentRunnerHandler
 	AgentRunTool *AgentRunToolHandler
+	// ex-runner pairing, renewal and the Runners page. Also the revocation
+	// check behind every runner route: nil means NO runner token is accepted.
+	RunnerToken *RunnerTokenHandler
 	// Shared context (CTX#, plan-v2 §8): the human curation surface.
 	Context *ContextHandler
 	// Connectors: external-service API docs + per-user credentials.
@@ -64,6 +67,8 @@ type Deps struct {
 	// Coding tasks (plan-coding-agent.md): run-scoped task tools + the human
 	// task-card surface. Registered only when AgentRunTool is also set.
 	CodingTask *CodingTaskHandler
+	// Project serves the Projects page (products + design references).
+	Project *ProjectHandler
 
 	// SPA/static.
 	FrontendFS fs.FS
