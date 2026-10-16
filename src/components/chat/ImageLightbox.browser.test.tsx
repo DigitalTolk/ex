@@ -580,13 +580,15 @@ describe('ImageLightbox browser behavior', () => {
         onClose,
         onIndexChange,
         images: [
-          { url, downloadURL: 'https://download.example.test/clip.mp4', filename: 'clip.mp4', contentType: 'video/mp4', size: 4096 },
+          { url, downloadURL: 'https://download.example.test/clip.mp4', thumbnailURL: imageURL, filename: 'clip.mp4', contentType: 'video/mp4', size: 4096 },
           { url: imageURL, filename: 'one.png', contentType: 'image/png', size: 2048 },
         ],
       }));
       const player = document.querySelector<HTMLVideoElement>('[data-testid="image-lightbox-video-player"]')!;
       expect(player).not.toBeNull();
       expect(player.src).toBe(url);
+      // Its frame, kept at upload, shows until it plays.
+      expect(player.getAttribute('poster')).toBe(imageURL);
       expect(player.controls).toBe(true);
       // Inline on a phone, and nothing plays (or downloads in full) until asked.
       expect(player.playsInline).toBe(true);

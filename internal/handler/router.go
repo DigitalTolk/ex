@@ -243,6 +243,7 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/attachments/url", middleware.WrapFunc(attachmentH.CreateUploadURL, authMW))
 		mux.Handle("POST /api/v1/attachments/{id}/upload-request", middleware.WrapFunc(attachmentH.SignUploadRequest, authMW))
 		mux.Handle("POST /api/v1/attachments/{id}/process", middleware.WrapFunc(attachmentH.ProcessUpload, authMW))
+		mux.Handle("POST /api/v1/attachments/{id}/poster", middleware.WrapFunc(attachmentH.SetPoster, authMW, writeLimit))
 		mux.Handle("GET /api/v1/attachments", middleware.WrapFunc(attachmentH.List, authMW))
 		mux.Handle("GET /api/v1/attachments/{id}", middleware.WrapFunc(attachmentH.Get, authMW))
 		mux.Handle("DELETE /api/v1/attachments/{id}", middleware.WrapFunc(attachmentH.Delete, authMW))

@@ -98,6 +98,46 @@ describe('MessageAttachments browser', () => {
     expect(img.getAttribute('width')).toBeNull();
   });
 
+  it('shows a video with a poster as its frame, at its size, with a play button', async () => {
+    const video = att({
+      id: 'v-1', filename: 'clip.mp4', contentType: 'video/mp4',
+      thumbnailURL: 'https://thumbs/v-1', width: 1280, height: 720,
+    });
+    batch = { map: mapOf(video), isLoading: false };
+    await mount(<MessageAttachments ids={['v-1']} {...base()} />);
+    const thumb = document.querySelector('[data-testid="message-image-thumb"]') as HTMLButtonElement;
+    expect(thumb.getAttribute('aria-label')).toBe('Play video clip.mp4');
+    const img = thumb.querySelector('img') as HTMLImageElement;
+    expect(img.getAttribute('src')).toBe('https://thumbs/v-1');
+    // The box is reserved before the poster loads.
+    expect(Number(img.getAttribute('width'))).toBeGreaterThan(0);
+    expect(Number(img.getAttribute('height')) / Number(img.getAttribute('width'))).toBeCloseTo(720 / 1280, 1);
+    expect(thumb.querySelector('[data-testid="message-video-play"]')).not.toBeNull();
+    thumb.click();
+    expect(openSpy).toHaveBeenCalledWith('v-1');
+  });
+
+  it('keeps a video without a poster as a file card', async () => {
+    batch = { map: mapOf(att({ id: 'v-1', filename: 'clip.mp4', contentType: 'video/mp4' })), isLoading: false };
+    await mount(<MessageAttachments ids={['v-1']} {...base()} />);
+    expect(document.querySelector('[data-testid="message-image-thumb"]')).toBeNull();
+    expect(document.querySelector('[data-testid="message-attachment-box"]')).not.toBeNull();
+  });
+
+  it('marks a video\'s square thumb among several attachments as playable', async () => {
+    batch = {
+      map: mapOf(
+        att({ id: 'v-1', filename: 'clip.mp4', contentType: 'video/mp4', squareThumbnailURL: 'https://thumbs/v-1-sq' }),
+        att({ id: 'i-1', filename: 'photo.png', contentType: 'image/png', squareThumbnailURL: 'https://thumbs/i-1-sq' }),
+      ),
+      isLoading: false,
+    };
+    await mount(<MessageAttachments ids={['v-1', 'i-1']} {...base()} />);
+    const thumbs = document.querySelectorAll('[data-testid="message-attachment-thumb"]');
+    expect(thumbs).toHaveLength(2);
+    expect(document.querySelectorAll('[data-testid="message-attachment-video-play"]')).toHaveLength(1);
+  });
+
   it('renders multiple attachments as compact rows with image preview + download links', async () => {
     const image = att({ id: 'img3', filename: 'photo.jpg', contentType: 'image/jpeg', squareThumbnailURL: 'https://files/photo-sq.jpg' });
     const pdf = att({ id: 'doc', filename: 'report.pdf', contentType: 'application/pdf' });

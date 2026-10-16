@@ -20,7 +20,7 @@ import {
   useUnreadSeen,
   type UnreadAnchor,
 } from '@/lib/read-position';
-import { resolveUnreadDivider, unreadFrom } from '@/lib/unread-divider';
+import { isNewTo, resolveUnreadDivider, unreadFrom } from '@/lib/unread-divider';
 import { useUnreadThreadIDs } from '@/hooks/useUnreadThreads';
 import { MessageRowDataProvider } from './MessageRowDataProvider';
 
@@ -571,9 +571,15 @@ function VirtuosoMessageList({
     else scrollToDivider('top');
   }, [dividerIndex, hasNextPage, fetchNextPage, scrollToDivider]);
 
+  // Until the line is placed, a count anchor shows its count — unless all of
+  // the history is loaded and none of it is new to the reader. Then the count
+  // was wrong (it counted the reader's own message: a fresh DM opened on
+  // "1 new message" with nothing to jump to), and there is nothing to show.
+  const countHasUnread =
+    hasNextPage || allMessages.some((m) => isNewTo(m, parentType, currentUserId));
   const unreadCount = unreadDividerID
     ? unreadFrom(allMessages, unreadDividerID, parentType, currentUserId)
-    : unreadAnchor?.kind === 'count'
+    : unreadAnchor?.kind === 'count' && countHasUnread
       ? unreadAnchor.count
       : 0;
   const showUnreadMarker = !!unreadAnchor && unreadCount > 0 && caughtUpFor !== unreadAnchor && !unreadSeen;

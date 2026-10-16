@@ -163,11 +163,17 @@ func (s *ConversationStoreImpl) ListUserConversations(ctx context.Context, userI
 	)
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 
+	// Consistent: unread is this row's LastReadSeq against the parent's
+	// MessageSeq, and a send writes both just before its events reach the
+	// author's other views. An eventually consistent read right after can
+	// see the new MessageSeq with the old LastReadSeq — the author's own
+	// message counted as unread (a fresh DM opened on "1 new message").
 	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+		ConsistentRead:            aws.Bool(true),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: list user conversations: %w", err)
@@ -454,7 +460,9 @@ func (s *ConversationStoreImpl) GetConversationsByIDs(ctx context.Context, ids [
 		for _, id := range ids[start:end] {
 			keys = append(keys, compositeKey(convPK(id), metaSK()))
 		}
-		req := map[string]types.KeysAndAttributes{s.Table: {Keys: keys}}
+		// Consistent, for the MessageSeq behind each row's unread count (see
+		// ListUserConversations).
+		req := map[string]types.KeysAndAttributes{s.Table: {Keys: keys, ConsistentRead: aws.Bool(true)}}
 		for {
 			res, err := s.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
 			if err != nil {
