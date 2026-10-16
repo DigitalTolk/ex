@@ -1,4 +1,4 @@
-import { Bot, Cable, CalendarClock, Sparkles } from 'lucide-react';
+import { Bot, Cable, CalendarClock, FolderKanban, Sparkles } from 'lucide-react';
 
 // The AI hub: the agent-feature pages the sidebar lists as ONE entry
 // ("Agents") and AiHubLayout renders as tabs. Shared here so the sidebar's
@@ -8,6 +8,7 @@ export const AI_HUB_TABS = [
   { to: '/skills', label: 'Skills', Icon: Sparkles },
   { to: '/schedules', label: 'Schedules', Icon: CalendarClock },
   { to: '/connectors', label: 'Connectors', Icon: Cable },
+  { to: '/projects', label: 'Projects', Icon: FolderKanban },
 ] as const;
 
 // AI_HUB_HOME is where the sidebar entry lands.

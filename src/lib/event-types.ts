@@ -31,6 +31,7 @@ export const EventType = {
   ReplayDone: 'replay.done',
   ReplayExhausted: 'replay.exhausted',
   WebhookChanged: 'webhook.changed',
+  ProjectChanged: 'project.changed',
   ActivityNew: 'activity.new',
   ActivityRead: 'activity.read',
   ScheduledMessagesChanged: 'scheduled_messages.changed',

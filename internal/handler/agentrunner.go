@@ -82,8 +82,11 @@ func (h *AgentRunnerHandler) Register(w http.ResponseWriter, r *http.Request) {
 type claimBody struct {
 	RunnerID  string   `json:"runnerID"`
 	Harnesses []string `json:"harnesses"`
-	Max       int      `json:"max"`
-	WaitSec   int      `json:"waitSec"`
+	// Features the runner supports (model.RunnerFeature*); runs requiring
+	// one it lacks stay queued for a runner that has it.
+	Features []string `json:"features"`
+	Max      int      `json:"max"`
+	WaitSec  int      `json:"waitSec"`
 }
 
 // Claim long-polls for work. 200 with assignments, or 204 when the wait
@@ -105,7 +108,7 @@ func (h *AgentRunnerHandler) Claim(w http.ResponseWriter, r *http.Request) {
 	if body.Max > maxClaimBatch {
 		body.Max = maxClaimBatch
 	}
-	assignments, err := h.orch.Claim(r.Context(), ownerID, body.RunnerID, body.Harnesses, body.Max, wait)
+	assignments, err := h.orch.ClaimWithFeatures(r.Context(), ownerID, body.RunnerID, body.Harnesses, body.Features, body.Max, wait)
 	if err != nil {
 		if errors.Is(err, r.Context().Err()) {
 			return // client went away mid-poll

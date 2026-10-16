@@ -482,6 +482,24 @@ func (s *AttachmentService) OpenForUser(ctx context.Context, userID, id, parentI
 	return body, a, nil
 }
 
+// OpenByID streams an attachment's bytes with NO access check — for callers
+// that authorized the read themselves (a run fetching one of its project's
+// reference screenshots). The caller closes the body.
+func (s *AttachmentService) OpenByID(ctx context.Context, id string) (io.ReadCloser, *model.Attachment, error) {
+	a, err := s.attachments.GetByID(ctx, id)
+	if err != nil {
+		return nil, nil, fmt.Errorf("attachment: get: %w", err)
+	}
+	if s.signer == nil || a.S3Key == "" {
+		return nil, nil, errors.New("attachment: storage not configured")
+	}
+	body, _, _, _, err := s.signer.OpenObject(ctx, a.S3Key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("attachment: open object: %w", err)
+	}
+	return body, a, nil
+}
+
 // AttachmentOwner reports who uploaded an attachment and which messages
 // reference it — the message service's send-time ownership check.
 func (s *AttachmentService) AttachmentOwner(ctx context.Context, id string) (createdBy string, messageIDs []string, err error) {

@@ -300,6 +300,10 @@ type Orchestrator struct {
 	// keeps every run a plain chat run.
 	tasks orchestratorTasks
 
+	// projects resolves /project picks and renders the design-references
+	// layer (plan-projects-design.md). Optional: nil = no projects in runs.
+	projects projectResolver
+
 	// toolAlertAt throttles permission-gateway approval alerts per run.
 	toolAlertAt sync.Map // runID -> time.Time
 
@@ -956,14 +960,24 @@ func (o *Orchestrator) startRun(ctx context.Context, in invocation, resolved *mo
 	// Thread follow-ups inherit the thread's picks — in channels and DMs alike.
 	connectorSlugs := o.resolveConnectorPicks(ctx, invoker.ID, msg, parentType)
 	pickedSkillIDs, skillTokens := o.resolveSkillPicks(ctx, invoker.ID, msg, parentType)
+	// A /project pick names a product for its design references. For the
+	// design agent the token is the project, not a same-named connector.
+	projectKey, projectToken := "", ""
+	if invoker.SystemRole != model.SystemRoleGuest { // guests can't read projects, so no agent reads them for one
+		projectKey, projectToken = o.resolveProjectPick(ctx, invoker.ID, agent, msg, parentType)
+	}
+	connectorSlugs = withoutSlug(connectorSlugs, projectToken)
 	// A standing order pins its tools up front instead of naming them in a
 	// message it never sends.
 	if in.spec != nil {
 		connectorSlugs = o.knownConnectorSlugs(ctx, append(connectorSlugs, in.spec.ConnectorSlugs...))
 		pickedSkillIDs = o.visibleSkillIDs(ctx, invoker.ID, append(pickedSkillIDs, in.spec.SkillIDs...))
 	}
-	prompt := clipText(stripConnectorTokens(stripMentionMarkup(msg.Body),
-		append(append([]string{}, connectorSlugs...), skillTokens...)), maxPromptChars)
+	stripTokens := append(append([]string{}, connectorSlugs...), skillTokens...)
+	if projectToken != "" {
+		stripTokens = append(stripTokens, projectToken)
+	}
+	prompt := clipText(stripConnectorTokens(stripMentionMarkup(msg.Body), stripTokens), maxPromptChars)
 	// Coding-task binding: an explicit bind (routed/kickoff/sign-off runs), or
 	// implicit — any run of the task's agent inside a task thread IS a task
 	// run (mentions and follow-ups included), so it gets the workspace, the
@@ -1014,6 +1028,8 @@ func (o *Orchestrator) startRun(ctx context.Context, in invocation, resolved *mo
 		WatchInstruction: watchInstruction,
 		ActionMode:       actionMode,
 		ConnectorSlugs:   connectorSlugs,
+		ProjectKey:       projectKey,
+		RequiresFeatures: requiredRunnerFeatures(agent),
 		Harness:          resolved.Harness,
 		Model:            resolved.Model,
 		ExecutionMode:    resolved.ExecutionMode,
@@ -1469,12 +1485,23 @@ func (o *Orchestrator) sharedAgents(ctx context.Context) []*model.User {
 // harness the runner actually has, up to max. Returns immediately when work
 // exists; otherwise parks until wakeup or the wait budget lapses.
 func (o *Orchestrator) Claim(ctx context.Context, ownerID, runnerID string, harnesses []string, max int, wait time.Duration) ([]Assignment, error) {
+	return o.ClaimWithFeatures(ctx, ownerID, runnerID, harnesses, nil, max, wait)
+}
+
+// ClaimWithFeatures is Claim for a runner that advertises features
+// (model.RunnerFeature*): a run requiring a feature the runner lacks is left
+// for another runner of the same owner.
+func (o *Orchestrator) ClaimWithFeatures(ctx context.Context, ownerID, runnerID string, harnesses, features []string, max int, wait time.Duration) ([]Assignment, error) {
 	if max <= 0 {
 		max = 1
 	}
 	has := make(map[string]bool, len(harnesses))
 	for _, h := range harnesses {
 		has[h] = true
+	}
+	feats := make(map[string]bool, len(features))
+	for _, f := range features {
+		feats[f] = true
 	}
 	deadline := o.now().Add(wait)
 	// ONE timer for the whole poll, reset per tick. time.After allocates a
@@ -1483,7 +1510,7 @@ func (o *Orchestrator) Claim(ctx context.Context, ownerID, runnerID string, harn
 	tick := time.NewTimer(claimPollInterval)
 	defer tick.Stop()
 	for {
-		assignments, err := o.claimOnce(ctx, ownerID, runnerID, has, max)
+		assignments, err := o.claimOnce(ctx, ownerID, runnerID, has, feats, max)
 		if err != nil {
 			return nil, err
 		}
@@ -1551,7 +1578,7 @@ func (o *Orchestrator) claimNames(ctx context.Context, run *model.Run) (agentNam
 	return agentName, invokerName
 }
 
-func (o *Orchestrator) claimOnce(ctx context.Context, ownerID, runnerID string, has map[string]bool, max int) ([]Assignment, error) {
+func (o *Orchestrator) claimOnce(ctx context.Context, ownerID, runnerID string, has, feats map[string]bool, max int) ([]Assignment, error) {
 	ids, err := o.runs.ListQueuedRuns(ctx, ownerID, max*2)
 	if err != nil {
 		return nil, err
@@ -1582,6 +1609,9 @@ func (o *Orchestrator) claimOnce(ctx context.Context, ownerID, runnerID string, 
 		}
 		if !has[run.Harness] {
 			continue // another runner (or a future install) may take it
+		}
+		if !hasFeatures(feats, run.RequiresFeatures) {
+			continue // e.g. a design run on an old built-in runner without file tools
 		}
 		// Coding-task runs are pinned to the machine that holds the checkout;
 		// another live runner of the same owner must leave them alone. A dead
@@ -3262,6 +3292,7 @@ func (o *Orchestrator) buildBundle(ctx context.Context, run *model.Run) (string,
 	b.toolCraft()
 	b.memory()
 	b.coRoster()
+	b.design()
 	b.skills()
 	b.connectorIndex()
 	b.projects()

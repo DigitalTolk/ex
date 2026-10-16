@@ -396,6 +396,17 @@ func NewRouter(d *Deps) http.Handler {
 			mux.Handle("GET /api/v1/channels/{id}/coding-tasks", middleware.WrapFunc(d.CodingTask.ListByChannel, authMW))
 			mux.Handle("GET /api/v1/coding-projects", middleware.WrapFunc(d.CodingTask.ListProjects, authMW))
 		}
+		if d.Project != nil {
+			// Projects page (plan-projects-design.md).
+			mux.Handle("GET /api/v1/projects", middleware.WrapFunc(d.Project.List, authMW))
+			mux.Handle("POST /api/v1/projects", middleware.WrapFunc(d.Project.Create, authMW, writeLimit))
+			mux.Handle("GET /api/v1/projects/{key}", middleware.WrapFunc(d.Project.Get, authMW))
+			mux.Handle("PATCH /api/v1/projects/{key}", middleware.WrapFunc(d.Project.Update, authMW, writeLimit))
+			mux.Handle("DELETE /api/v1/projects/{key}", middleware.WrapFunc(d.Project.Delete, authMW, writeLimit))
+			mux.Handle("POST /api/v1/projects/{key}/screens", middleware.WrapFunc(d.Project.AddScreen, authMW, writeLimit))
+			mux.Handle("PATCH /api/v1/projects/{key}/screens/{id}", middleware.WrapFunc(d.Project.UpdateScreen, authMW, writeLimit))
+			mux.Handle("DELETE /api/v1/projects/{key}/screens/{id}", middleware.WrapFunc(d.Project.DeleteScreen, authMW, writeLimit))
+		}
 		if d.AgentRunTool.workspace != nil {
 			// Ex-wide tools: everything the INVOKER could do, done as the agent.
 			mux.Handle("GET /api/v1/agent/run/channels", middleware.WrapFunc(d.AgentRunTool.ListChannels, runMW))

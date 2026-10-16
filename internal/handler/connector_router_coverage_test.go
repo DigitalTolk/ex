@@ -846,6 +846,7 @@ func TestHconnCovRouterAgentRoutes(t *testing.T) {
 		AgentRunTool: runTool,
 		Connector:    &ConnectorHandler{},
 		CodingTask:   &CodingTaskHandler{},
+		Project:      &ProjectHandler{},
 		Context:      &ContextHandler{},
 		JWT:          jwtMgr,
 		AppVersion:   "hconncov",
@@ -892,6 +893,15 @@ func TestHconnCovRouterAgentRoutes(t *testing.T) {
 		{http.MethodPost, "/api/v1/coding-tasks/t1/signoff"},
 		{http.MethodGet, "/api/v1/channels/c1/coding-tasks"},
 		{http.MethodGet, "/api/v1/coding-projects"},
+		// Projects page (products + design references).
+		{http.MethodGet, "/api/v1/projects"},
+		{http.MethodPost, "/api/v1/projects"},
+		{http.MethodGet, "/api/v1/projects/p1"},
+		{http.MethodPatch, "/api/v1/projects/p1"},
+		{http.MethodDelete, "/api/v1/projects/p1"},
+		{http.MethodPost, "/api/v1/projects/p1/screens"},
+		{http.MethodPatch, "/api/v1/projects/p1/screens/s1"},
+		{http.MethodDelete, "/api/v1/projects/p1/screens/s1"},
 		// Ex-wide workspace tools (registered because workspace is set).
 		{http.MethodGet, "/api/v1/agent/run/channels"},
 		{http.MethodPost, "/api/v1/agent/run/channels/c1/join"},

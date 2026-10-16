@@ -24,6 +24,7 @@ import { PanelResizeHandle } from '@/components/layout/PanelResizeHandle';
 import { usePanelWidth } from '@/hooks/usePanelWidth';
 import { ApiError, apiFetch } from '@/lib/api';
 import { RUN_DRAWER_WIDTH } from '@/lib/panel-width';
+import { RunFiles } from './RunFiles';
 import { closeRunDrawer, useRunDrawerStore } from '@/stores/run-drawer';
 import {
   TERMINAL,
@@ -508,6 +509,8 @@ export function RunActivityDrawer() {
                 </div>
               )}
             </div>
+
+            <RunFiles files={data?.files ?? []} />
 
             {(data?.artifacts?.filter((a) => a.kind !== 'api_response').length ?? 0) > 0 && (
               <div className="mb-3">

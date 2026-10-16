@@ -860,6 +860,13 @@ describe('ChatPage WebSocket handlers', () => {
     }).not.toThrow();
   });
 
+  it('onProjectChanged refreshes the projects list and every open project', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onProjectChanged as (d: unknown) => void)({});
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['projects'] });
+  });
+
   it('onActivityNew adds the carried item to the activity cache instead of refetching', () => {
     const { qc } = renderAt('/');
     qc.setQueryData(['activity'], { items: [], unread: 0, unreadByType: {} });

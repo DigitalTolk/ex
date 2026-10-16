@@ -97,8 +97,11 @@ const DIALOG_SIZE: Record<DialogSize, string> = {
   xl: "sm:max-w-xl",
   "2xl": "sm:max-w-2xl",
   "3xl": "sm:max-w-3xl",
+  // Near full-window viewers (images, previews): wide as the window allows,
+  // capped so huge monitors don't stretch a screenshot past readability.
+  full: "sm:max-w-[min(1600px,calc(100%-4rem))]",
 }
-type DialogSize = "sm" | "md" | "lg" | "xl" | "2xl" | "3xl"
+type DialogSize = "sm" | "md" | "lg" | "xl" | "2xl" | "3xl" | "full"
 
 function DialogContent({
   className,

@@ -40,6 +40,8 @@ const DraftsPage = lazy(() => import('@/pages/DraftsPage'));
 const AgentsPage = lazy(() => import('@/pages/AgentsPage'));
 const SkillsPage = lazy(() => import('@/pages/SkillsPage'));
 const ConnectorsPage = lazy(() => import('@/pages/ConnectorsPage'));
+const ProjectsPage = lazy(() => import('@/pages/ProjectsPage'));
+const ProjectDetailPage = lazy(() => import('@/pages/ProjectDetailPage'));
 const AdminAgentsPage = lazy(() => import('@/pages/AdminAgentsPage'));
 const SchedulesPage = lazy(() => import('@/pages/SchedulesPage'));
 // Tiny layout shell — not worth its own chunk, and it must be there before
@@ -168,6 +170,8 @@ function AppRoutes() {
           <Route path="skills" element={<SkillsPage />} />
           <Route path="connectors" element={<ConnectorsPage />} />
           <Route path="schedules" element={<SchedulesPage />} />
+          <Route path="projects" element={<ProjectsPage />} />
+          <Route path="projects/:key" element={<ProjectDetailPage />} />
         </Route>
         {/* The admin area: one user-menu entry, tabs over its pages. Each
             keeps its own URL, so /admin and /admin/agents deep-link. */}

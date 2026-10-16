@@ -19,6 +19,8 @@ vi.mock('@/pages/AgentsPage', () => ({ default: () => <div data-testid="stub-Age
 vi.mock('@/pages/SkillsPage', () => ({ default: () => <div data-testid="stub-SkillsPage" /> }));
 vi.mock('@/pages/ConnectorsPage', () => ({ default: () => <div data-testid="stub-ConnectorsPage" /> }));
 vi.mock('@/pages/SchedulesPage', () => ({ default: () => <div data-testid="stub-SchedulesPage" /> }));
+vi.mock('@/pages/ProjectsPage', () => ({ default: () => <div data-testid="stub-ProjectsPage" /> }));
+vi.mock('@/pages/ProjectDetailPage', () => ({ default: () => <div data-testid="stub-ProjectDetailPage" /> }));
 vi.mock('@/pages/AdminAgentsPage', () => ({ default: () => <div data-testid="stub-AdminAgentsPage" /> }));
 
 describe('App — agent feature lazy routes', () => {
@@ -65,6 +67,8 @@ describe('App — agent feature lazy routes', () => {
     ['/skills', 'stub-SkillsPage'],
     ['/connectors', 'stub-ConnectorsPage'],
     ['/schedules', 'stub-SchedulesPage'],
+    ['/projects', 'stub-ProjectsPage'],
+    ['/projects/acme', 'stub-ProjectDetailPage'],
   ])('resolves the %s chunk', async (path, stub) => {
     window.history.pushState({}, '', path);
     const view = render(<App />);

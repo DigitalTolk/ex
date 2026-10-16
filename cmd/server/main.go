@@ -425,6 +425,7 @@ func main() {
 	// markers, Bedrock content blocks, runner downloads) and may post their
 	// own files back.
 	orchestrator.SetAttachments(attachmentSvc)
+	agentH.SetRunFiles(attachmentSvc)
 	agentRunToolH.SetAttachments(attachmentSvc)
 	notificationSvc := service.NewNotificationServiceFromDeps(service.NotificationServiceDeps{
 		Publisher:     redisPubSub,
@@ -703,6 +704,13 @@ func main() {
 	codingTaskSvc := service.NewCodingTaskService(taskStore, channelSvc, messageSvc, userStore, agentSvc, orchestrator)
 	codingTaskSvc.SetBaseURL(cfg.BaseURL)
 	codingTaskH := handler.NewCodingTaskHandler(codingTaskSvc, orchestrator)
+	// Projects page + design references (plan-projects-design.md): the same
+	// project rows coding tasks learn, plus screenshots the design agent
+	// copies from.
+	projectSvc := service.NewProjectService(taskStore, attachmentSvc)
+	projectSvc.SetPublisher(redisPubSub)
+	orchestrator.SetProjects(projectSvc)
+	projectH := handler.NewProjectHandler(projectSvc)
 	if searchClient != nil {
 		ids := newIDSearcher(searcher)
 		userSvc.SetSearcher(ids)
@@ -771,6 +779,7 @@ func main() {
 		Context:      handler.NewContextHandler(contextSvc),
 		Connector:    connectorH,
 		CodingTask:   codingTaskH,
+		Project:      projectH,
 		JWT:          jwtMgr,
 		FrontendFS:   frontendDist,
 		AppVersion:   appVersion,

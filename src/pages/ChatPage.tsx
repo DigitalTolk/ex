@@ -382,6 +382,11 @@ export default function ChatPage() {
     onWebhookChanged: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.incomingWebhooks() });
     },
+    onProjectChanged: () => {
+      // A project or its design references changed (any member, any device):
+      // the list and every open project detail refetch.
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects() });
+    },
     onActivityNew: (data: unknown) => {
       // An item landed in the activity stream — add it from the payload so the
       // sidebar badge + list update without refetching the whole feed.

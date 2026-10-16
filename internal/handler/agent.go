@@ -34,7 +34,18 @@ type AgentHandler struct {
 	users  *service.UserService
 	jwt    *auth.JWTManager
 	access timelineAccessChecker
+	// files resolves the drawer's file list (inputs, fetched, posted) to
+	// viewable URLs. Optional: nil = timelines carry no files.
+	files runFileLoader
 }
+
+// runFileLoader is the AttachmentService slice the drawer's file list needs.
+type runFileLoader interface {
+	LoadForPreview(ctx context.Context, ids []string) []*model.Attachment
+}
+
+// SetRunFiles wires the attachment loader for the drawer's file list.
+func (h *AgentHandler) SetRunFiles(l runFileLoader) { h.files = l }
 
 // NewAgentHandler wires the handler.
 func NewAgentHandler(agents *service.AgentService, orch *service.Orchestrator, users *service.UserService, jwt *auth.JWTManager) *AgentHandler {
@@ -321,6 +332,7 @@ func (h *AgentHandler) Timeline(w http.ResponseWriter, r *http.Request) {
 	threadSpend := h.orch.ThreadSpend(r.Context(), run)
 	writeJSON(w, http.StatusOK, JSON{
 		"run": run, "events": evts, "users": users, "artifacts": artifacts, "threadSpend": threadSpend,
+		"files": h.runFiles(r.Context(), []*model.Run{run}, evts),
 		// A turn-uncapped task run can produce thousands of events; the newest
 		// are returned and this says how many older ones were left out.
 		"eventsOmitted": evtsDropped,
@@ -386,6 +398,7 @@ func (h *AgentHandler) ThreadTimeline(w http.ResponseWriter, r *http.Request) {
 	latest := runs[len(runs)-1]
 	writeJSON(w, http.StatusOK, JSON{
 		"run": latest, "runs": runs, "events": evts, "users": users, "artifacts": artifacts, "messages": msgs,
+		"files":         h.runFiles(r.Context(), runs, evts),
 		"eventsOmitted": evtsDropped,
 		// Totalled from the runs already in hand — this used to re-run the same
 		// hundred-run listing just to add one line.

@@ -55,6 +55,24 @@ export interface ThreadSpend {
   posts: number;
 }
 
+// RunFile is one file a run was given (the invoking message's attachments),
+// fetched (thread files, project reference screenshots) or posted — the
+// drawer's "what did it look at, what did it make" list.
+export interface RunFile {
+  id: string;
+  role: 'given' | 'fetched' | 'posted';
+  source?: string; // fetched: "message" | "project_screen"
+  runID: string;
+  filename: string;
+  contentType: string;
+  size: number;
+  url?: string;
+  downloadURL?: string;
+  thumbnailURL?: string;
+  width?: number;
+  height?: number;
+}
+
 export interface TimelineResponse {
   run: TimelineRun;
   // Thread mode: every run under the root, oldest first (run = the latest),
@@ -65,6 +83,7 @@ export interface TimelineResponse {
   users: Record<string, string>;
   artifacts?: RunArtifact[];
   threadSpend?: ThreadSpend;
+  files?: RunFile[];
 }
 
 export const TERMINAL = new Set(['completed', 'failed', 'canceled']);
@@ -180,6 +199,13 @@ export function systemLine(e: TimelineEvent): { text: string; tone?: 'ok' | 'bad
       return { text: 'Completed', tone: 'ok' };
     case 'run.failed':
       return { text: `Failed — ${str(e.payload, 'reason') || 'unknown reason'}`, tone: 'bad' };
+    case 'workspace.file_fetched':
+      return {
+        text: `Looked at ${str(e.payload, 'filename')}${str(e.payload, 'source') === 'project_screen' ? ' (project reference screen)' : ''}`,
+        tone: 'muted',
+      };
+    case 'workspace.file_uploaded':
+      return { text: `Uploaded ${str(e.payload, 'filename')}`, tone: 'muted' };
     case 'workspace.task_created':
       return { text: `Opened coding task in ${str(e.payload, 'project')}` };
     case 'workspace.task_state':

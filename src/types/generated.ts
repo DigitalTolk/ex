@@ -303,6 +303,12 @@ export interface AgentTemplate {
   skillIDs?: string[];
   limits: AgentLimits;
   maxConcurrentRuns: number /* int */;
+  /**
+   * FollowUpMode is the template's default for thread follow-ups when the
+   * invoker has no pref of their own ("" = off). The design agent defaults
+   * to "always": tweaking a mockup is replying in its thread.
+   */
+  followUpMode?: string;
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
 }
@@ -514,6 +520,18 @@ export interface Run {
    * The runner only syncs docs + injects credentials for these.
    */
   connectorSlugs?: string[];
+  /**
+   * ProjectKey: the product whose design references ride this run (a
+   * /project pick, inherited in a thread, or name-matched for the design
+   * agent). Empty for most runs.
+   */
+  projectKey?: string;
+  /**
+   * RequiresFeatures: runner features this run needs (RunnerFeature*). A
+   * runner that doesn't advertise every one of them never claims the run —
+   * e.g. design runs need file fetch/post, which old built-in runners lack.
+   */
+  requiresFeatures?: string[];
   /**
    * TaskID binds the run to a coding task (RunModeTask): its thread root is
    * the task card, its budget is uncapped, and the runner prepares the
@@ -966,7 +984,14 @@ export interface RunnerHarness {
 /**
  * RunnerRegistration is a live runner process on one of the owner's
  * machines. Rows carry a DynamoDB TTL so dead runners self-reap.
+ * Runner features a run may require (Run.RequiresFeatures) and a runner
+ * advertises at claim time.
  */
+/**
+ * RunnerFeatureFiles: the runner can fetch run attachments and post files
+ * (fetch_attachment, post_message attachments).
+ */
+export const RunnerFeatureFiles = "files";
 export interface RunnerRegistration {
   runnerID: string;
   ownerID: string;
@@ -1117,15 +1142,120 @@ export interface CodingProject {
   name: string; // display, e.g. "CliffHub"
   repos: ProjectRepo[];
   /**
+   * Design references (plan-projects-design.md): what the design agent
+   * copies from so mockups look like THIS product. All optional — a
+   * project learned by a coding task starts with none.
+   */
+  appURL?: string;
+  description?: string;
+  designNotes?: string;
+  links?: ProjectLink[];
+  /**
+   * UILibrary names the product's component stack ("shadcn/ui (Radix),
+   * Tailwind v4, Tabler icons") — the design agent draws anything the
+   * screens don't show the way that library renders it.
+   */
+  uiLibrary?: string;
+  /**
    * No channel here on purpose: a project has one channel PER REQUESTER,
    * derived from (project key, requester id) — see service.ProjectChannelID.
    * Rows written before 2026-09-21 carry a channelID attribute for the old
    * shared channel; it is ignored on read.
    */
   createdBy: string;
+  updatedBy?: string;
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
 }
+/**
+ * ProjectLink is a labelled reference link on a project (Figma, style guide,
+ * Storybook, …).
+ */
+export interface ProjectLink {
+  label: string;
+  url: string;
+}
+/**
+ * Project design-reference bounds.
+ */
+export const ProjectDescriptionMaxLen = 2000;
+/**
+ * Project design-reference bounds.
+ */
+export const ProjectDesignNotesMaxLen = 8000;
+/**
+ * Project design-reference bounds.
+ */
+export const ProjectLinksMax = 10;
+/**
+ * Project design-reference bounds.
+ */
+export const ProjectScreensMax = 60;
+/**
+ * Project design-reference bounds.
+ */
+export const ScreenPageMaxLen = 80;
+/**
+ * Project design-reference bounds.
+ */
+export const ScreenDescriptionMaxLen = 300;
+/**
+ * Project design-reference bounds.
+ */
+export const ScreenFieldMaxLen = 120;
+/**
+ * ScreenImageMaxBytes caps a reference screenshot; agents load these
+ * into their context, so huge images only cost tokens.
+ */
+export const ScreenImageMaxBytes = 8 << 20;
+/**
+ * Project design-reference bounds.
+ */
+export const ProjectUILibraryMaxLen = 300;
+/**
+ * ProjectThemeMaxBytes caps an uploaded theme stylesheet (globals.css).
+ */
+export const ProjectThemeMaxBytes = 256 << 10;
+/**
+ * ProjectTheme is a project's main stylesheet (e.g. globals.css), kept in its
+ * own row so project lists stay small. Agents never see the raw file — only
+ * its condensed tokens (variables, fonts, imports).
+ */
+export interface ProjectTheme {
+  projectKey: string;
+  filename: string;
+  css: string;
+  updatedBy: string;
+  updatedAt: string /* RFC3339 */;
+}
+/**
+ * ProjectScreen is one screenshot of a real page of a project — the design
+ * agent's reference for "what this product looks like". The image is an
+ * ordinary attachment; the screen holds a reference on it (see
+ * ScreenAttachmentRef) so the attachment GC keeps it alive.
+ */
+export interface ProjectScreen {
+  id: string;
+  projectKey: string;
+  page: string; // "Booking detail"
+  description: string; // what the page is for / shows
+  viewport: string; // ScreenViewport*
+  state?: string;
+  seenBy?: string;
+  route?: string;
+  attachmentID: string;
+  uploadedBy: string;
+  createdAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
+}
+/**
+ * Screen viewports.
+ */
+export const ScreenViewportDesktop = "desktop";
+/**
+ * Screen viewports.
+ */
+export const ScreenViewportMobile = "mobile";
 /**
  * ProjectRepo is one GitLab repository of a project with its role in the
  * product — the role is what tells the agent where UI work belongs.

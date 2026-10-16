@@ -308,3 +308,153 @@ func (s *TaskStore) ListProjects(ctx context.Context) ([]*model.CodingProject, e
 	}
 	return out, nil
 }
+
+// DeleteProject removes a project's META row. Its screens are deleted by the
+// caller first (each holds an attachment reference to release).
+func (s *TaskStore) DeleteProject(ctx context.Context, key string) error {
+	if _, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(s.Table),
+		Key:       compositeKey(projectPK(key), metaSK()),
+	}); err != nil {
+		return fmt.Errorf("store: delete project: %w", err)
+	}
+	return nil
+}
+
+// ------------------------------------------------------------- screens
+
+// Reference screens live under their project: CODEPROJECT#<key>/SCREEN#<id>,
+// so one query returns a project's whole gallery.
+
+type screenItem struct {
+	PK string `dynamodbav:"PK"`
+	SK string `dynamodbav:"SK"`
+	model.ProjectScreen
+}
+
+func screenSK(id string) string { return "SCREEN#" + id }
+
+// PutScreen creates or replaces one reference screen.
+func (s *TaskStore) PutScreen(ctx context.Context, sc *model.ProjectScreen) error {
+	if sc.ProjectKey == "" || sc.ID == "" {
+		return errors.New("store: screen project key and id required")
+	}
+	av := mustAttrs(attributevalue.MarshalMap(screenItem{PK: projectPK(sc.ProjectKey), SK: screenSK(sc.ID), ProjectScreen: *sc}))
+	if _, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(s.Table),
+		Item:      av,
+	}); err != nil {
+		return fmt.Errorf("store: put screen: %w", err)
+	}
+	return nil
+}
+
+// GetScreen fetches one screen of a project.
+func (s *TaskStore) GetScreen(ctx context.Context, projectKey, id string) (*model.ProjectScreen, error) {
+	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(s.Table),
+		Key:       compositeKey(projectPK(projectKey), screenSK(id)),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: get screen: %w", err)
+	}
+	if out.Item == nil {
+		return nil, ErrNotFound
+	}
+	var it screenItem
+	if err := attributevalue.UnmarshalMap(out.Item, &it); err != nil {
+		return nil, fmt.Errorf("store: unmarshal screen: %w", err)
+	}
+	return &it.ProjectScreen, nil
+}
+
+// ListScreens returns a project's reference screens (unordered; callers sort).
+func (s *TaskStore) ListScreens(ctx context.Context, projectKey string) ([]*model.ProjectScreen, error) {
+	keyCond := expression.Key("PK").Equal(expression.Value(projectPK(projectKey))).
+		And(expression.Key("SK").BeginsWith("SCREEN#"))
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
+	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(s.Table),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: list screens: %w", err)
+	}
+	out := make([]*model.ProjectScreen, 0, len(items))
+	for _, raw := range items {
+		var it screenItem
+		if err := attributevalue.UnmarshalMap(raw, &it); err != nil {
+			return nil, fmt.Errorf("store: unmarshal screen: %w", err)
+		}
+		out = append(out, &it.ProjectScreen)
+	}
+	return out, nil
+}
+
+// DeleteScreen removes one screen row.
+func (s *TaskStore) DeleteScreen(ctx context.Context, projectKey, id string) error {
+	if _, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(s.Table),
+		Key:       compositeKey(projectPK(projectKey), screenSK(id)),
+	}); err != nil {
+		return fmt.Errorf("store: delete screen: %w", err)
+	}
+	return nil
+}
+
+// ------------------------------------------------------------- theme
+
+// A project's theme stylesheet: CODEPROJECT#<key>/THEME (no GSI, so it never
+// rides the project list).
+
+type themeItem struct {
+	PK string `dynamodbav:"PK"`
+	SK string `dynamodbav:"SK"`
+	model.ProjectTheme
+}
+
+func themeSK() string { return "THEME" }
+
+// PutProjectTheme creates or replaces a project's theme stylesheet.
+func (s *TaskStore) PutProjectTheme(ctx context.Context, t *model.ProjectTheme) error {
+	if t.ProjectKey == "" {
+		return errors.New("store: theme project key required")
+	}
+	av := mustAttrs(attributevalue.MarshalMap(themeItem{PK: projectPK(t.ProjectKey), SK: themeSK(), ProjectTheme: *t}))
+	if _, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(s.Table), Item: av}); err != nil {
+		return fmt.Errorf("store: put theme: %w", err)
+	}
+	return nil
+}
+
+// GetProjectTheme fetches a project's theme stylesheet.
+func (s *TaskStore) GetProjectTheme(ctx context.Context, projectKey string) (*model.ProjectTheme, error) {
+	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(s.Table),
+		Key:       compositeKey(projectPK(projectKey), themeSK()),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: get theme: %w", err)
+	}
+	if out.Item == nil {
+		return nil, ErrNotFound
+	}
+	var it themeItem
+	if err := attributevalue.UnmarshalMap(out.Item, &it); err != nil {
+		return nil, fmt.Errorf("store: unmarshal theme: %w", err)
+	}
+	return &it.ProjectTheme, nil
+}
+
+// DeleteProjectTheme removes a project's theme stylesheet (absent is fine).
+func (s *TaskStore) DeleteProjectTheme(ctx context.Context, projectKey string) error {
+	if _, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(s.Table),
+		Key:       compositeKey(projectPK(projectKey), themeSK()),
+	}); err != nil {
+		return fmt.Errorf("store: delete theme: %w", err)
+	}
+	return nil
+}
