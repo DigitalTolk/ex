@@ -133,6 +133,21 @@ describe('ChatPage', () => {
     expect(screen.getByTestId('app-layout')).toBeInTheDocument();
   });
 
+  it('asks the desktop app for its ex-runner state only inside the desktop app', async () => {
+    renderChatPage();
+    expect(window.__EX_RUNNER__).toBeUndefined();
+
+    const call = vi.fn(async () => ({ supported: true }));
+    window.__EX_RUNNER__ = { call, subscribe: () => () => {} };
+    try {
+      renderChatPage();
+      // The autostart check reads the runner's state once at launch.
+      await waitFor(() => expect(call).toHaveBeenCalledWith('getState', undefined));
+    } finally {
+      delete window.__EX_RUNNER__;
+    }
+  });
+
   it('does not gate desktop rendering on sidebar query data', () => {
     setMobileViewport(false);
 

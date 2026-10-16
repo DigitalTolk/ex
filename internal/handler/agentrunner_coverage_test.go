@@ -350,6 +350,7 @@ func (s *hrunnerCovRunStore) ListArtifacts(_ context.Context, runID string) ([]*
 
 type hrunnerCovDir struct {
 	mu         sync.Mutex
+	lastRunner *model.RunnerRegistration
 	templates  []*model.AgentTemplate
 	skills     map[string]*model.Skill
 	taskClaims []*model.TaskClaim
@@ -393,9 +394,12 @@ func (d *hrunnerCovDir) GetAgentPrefs(context.Context, string, string) (*model.U
 	return nil, store.ErrNotFound
 }
 
-func (d *hrunnerCovDir) PutRunner(context.Context, *model.RunnerRegistration) error {
+func (d *hrunnerCovDir) PutRunner(_ context.Context, reg *model.RunnerRegistration) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.putRunnerErr == nil {
+		d.lastRunner = reg
+	}
 	return d.putRunnerErr
 }
 
@@ -979,6 +983,34 @@ func TestHrunnerCovRegister(t *testing.T) {
 			t.Errorf("agents = %v, want one entry", got["agents"])
 		}
 	})
+}
+
+// The install a runner process belongs to comes from its token (the jti),
+// never from the body; its version comes from the body. Register and
+// heartbeat both write them, since a heartbeat rewrites the whole row.
+func TestHrunnerCovRegistrationCarriesItsInstall(t *testing.T) {
+	claims := &model.TokenClaims{UserID: hrunnerCovInvoker}
+	claims.ID = "rt-7"
+	body := `{"runnerID":"r1","host":"mac","os":"darwin","version":" 0.0.3 ","tokenID":"forged","harnesses":[]}`
+	for name, call := range map[string]func(fx *hrunnerCovFix) http.HandlerFunc{
+		"register":  func(fx *hrunnerCovFix) http.HandlerFunc { return fx.runnerH.Register },
+		"heartbeat": func(fx *hrunnerCovFix) http.HandlerFunc { return fx.runnerH.Heartbeat },
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx := hrunnerCovNewFix(t)
+			hrunnerCovWantStatus(t, hrunnerCovDo(t, call(fx), http.MethodPost, body, claims, nil), http.StatusOK)
+			got := fx.dir.lastRunner
+			if got == nil || got.TokenID != "rt-7" || got.Version != "0.0.3" || got.OwnerID != hrunnerCovInvoker {
+				t.Fatalf("saved registration = %+v", got)
+			}
+		})
+	}
+	// Without claims (never routed that way) the row simply has no install.
+	fx := hrunnerCovNewFix(t)
+	hrunnerCovWantStatus(t, hrunnerCovDo(t, fx.runnerH.Heartbeat, http.MethodPost, `{"runnerID":"r1"}`, nil, nil), http.StatusOK)
+	if fx.dir.lastRunner == nil || fx.dir.lastRunner.TokenID != "" {
+		t.Fatalf("saved registration = %+v", fx.dir.lastRunner)
+	}
 }
 
 // --------------------------------------------------------------------- Claim

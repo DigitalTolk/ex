@@ -22,6 +22,7 @@ vi.mock('@/pages/SchedulesPage', () => ({ default: () => <div data-testid="stub-
 vi.mock('@/pages/ProjectsPage', () => ({ default: () => <div data-testid="stub-ProjectsPage" /> }));
 vi.mock('@/pages/ProjectDetailPage', () => ({ default: () => <div data-testid="stub-ProjectDetailPage" /> }));
 vi.mock('@/pages/AdminAgentsPage', () => ({ default: () => <div data-testid="stub-AdminAgentsPage" /> }));
+vi.mock('@/pages/RunnerConnectPage', () => ({ default: () => <div data-testid="stub-RunnerConnectPage" /> }));
 
 describe('App — agent feature lazy routes', () => {
   beforeEach(() => {
@@ -76,6 +77,15 @@ describe('App — agent feature lazy routes', () => {
     // Every hub page renders inside the AI hub layout's tab strip.
     expect(screen.getByRole('navigation', { name: 'AI sections' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Skills' })).toHaveAttribute('href', '/skills');
+    view.unmount();
+  });
+
+  // ex-runner's approval page sits outside the chat shell and handles its
+  // own sign-in, so it resolves through a top-level route.
+  it('resolves the /runner/connect chunk outside the chat shell', async () => {
+    window.history.pushState({}, '', '/runner/connect?port=43123');
+    const view = render(<App />);
+    expect(await screen.findByTestId('stub-RunnerConnectPage', {}, { timeout: 15000 })).toBeInTheDocument();
     view.unmount();
   });
 

@@ -1,5 +1,6 @@
 import { PageContainer } from '@/components/layout/PageContainer';
 import { AgentsAdminPanel } from '@/components/admin/AgentsAdminPanel';
+import { RunnersInAppCard } from '@/components/admin/RunnersInAppCard';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 
 // The Agents tab of the admin area: the WORKSPACE DEFAULT for each shared
@@ -12,9 +13,10 @@ export default function AdminAgentsPage() {
   return (
     <PageContainer
       title="Agents"
-      description="Defaults every member inherits unless they set their own."
+      description="Defaults every member inherits unless they set their own, and where agents may run."
     >
       <AgentsAdminPanel />
+      <RunnersInAppCard />
     </PageContainer>
   );
 }

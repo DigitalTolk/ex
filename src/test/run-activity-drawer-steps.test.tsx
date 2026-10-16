@@ -304,7 +304,7 @@ describe('RunActivityDrawer timeline steps', () => {
     expect(within(drawer).getByText('Looked at home.png (project reference screen)')).toBeInTheDocument();
     expect(within(drawer).getByText('Looked at v1.html')).toBeInTheDocument();
     expect(within(drawer).getByText('Uploaded v2.png')).toBeInTheDocument();
-    expect(within(drawer).getByText('Queued — waiting for the desktop app to come online')).toBeInTheDocument();
+    expect(within(drawer).getByText('Queued — waiting for ex-runner to come online')).toBeInTheDocument();
     expect(within(drawer).getByText('Stopped by a human')).toBeInTheDocument();
     expect(within(drawer).getByText('Completed')).toBeInTheDocument();
     expect(within(drawer).getByText('Failed — unknown reason')).toBeInTheDocument();

@@ -768,4 +768,10 @@ type RunnerRegistration struct {
 	Harnesses      []RunnerHarness `json:"harnesses" dynamodbav:"harnesses"`
 	LeaseExpiresAt time.Time       `json:"leaseExpiresAt" dynamodbav:"leaseExpiresAt"`
 	CreatedAt      time.Time       `json:"createdAt" dynamodbav:"createdAt"`
+	// TokenID is the paired install this process signed in with (the
+	// runner JWT's jti = RunnerToken.ID): how the Runners page knows which
+	// of the owner's computers is online.
+	TokenID string `json:"tokenID,omitempty" dynamodbav:"tokenID,omitempty"`
+	// Version is the ex-runner build, when the runner reports it.
+	Version string `json:"version,omitempty" dynamodbav:"version,omitempty"`
 }

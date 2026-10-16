@@ -55,6 +55,9 @@ const SearchResultsPage = lazy(() => import('@/pages/SearchResultsPage'));
 // Password recovery is a cold path (guest accounts only, rarely hit) — keep
 // it out of the boot bundle even though it sits next to the login flow.
 const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
+// Reached only from `ex-runner login`; handles its own sign-in redirect.
+const RunnerConnectPage = lazy(() => import('@/pages/RunnerConnectPage'));
+const RunnersPage = lazy(() => import('@/pages/RunnersPage'));
 const NotFoundPage = lazy(() =>
   import('@/pages/NotFoundPage').then((m) => ({ default: m.NotFoundPage })),
 );
@@ -145,6 +148,7 @@ function AppRoutes() {
       <Route path="/forgot-password" element={<ResetPasswordPage />} />
       <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
       <Route path="/oidc/callback" element={<OIDCCallbackPage />} />
+      <Route path="/runner/connect" element={<RunnerConnectPage />} />
       <Route
         path="/"
         element={
@@ -172,6 +176,7 @@ function AppRoutes() {
           <Route path="schedules" element={<SchedulesPage />} />
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="projects/:key" element={<ProjectDetailPage />} />
+          <Route path="runners" element={<RunnersPage />} />
         </Route>
         {/* The admin area: one user-menu entry, tabs over its pages. Each
             keeps its own URL, so /admin and /admin/agents deep-link. */}

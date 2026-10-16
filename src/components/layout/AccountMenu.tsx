@@ -4,6 +4,7 @@ import {
   CalendarClock,
   ChevronsUpDown,
   Info,
+  Laptop,
   LogOut,
   ServerCog,
   Settings,
@@ -42,6 +43,7 @@ import type { User } from '@/types';
 import { AboutDialog } from '@/components/AboutDialog';
 import { InviteDialog } from '@/components/InviteDialog';
 import { MOBILE_TAB_CLASS } from './mobile-tab';
+import { RunnersDialog } from '@/components/RunnersDialog';
 
 interface MenuAction {
   key: string;
@@ -58,7 +60,7 @@ interface MenuAction {
 /**
  * Account footer pinned to the bottom of the sidebar (avatar, name, chevron),
  * like the Claude app. It opens the menu of every user-facing action —
- * Settings, status, invites, custom emojis (a pop-up), admin, change server, about and
+ * Settings, runners, status, invites, custom emojis (a pop-up), admin, change server, about and
  * sign-out — as an upward dropdown on desktop and a full-screen sheet on
  * mobile. Both surfaces render the same `menuActions` list.
  */
@@ -78,6 +80,7 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
   const [statusOpen, setStatusOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [runnersOpen, setRunnersOpen] = useState(false);
   const [changeServerOpen, setChangeServerOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -123,6 +126,13 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
       onSelect: () => setSettingsOpen(true),
       overSheet: true,
       testID: 'user-menu-settings',
+    },
+    {
+      key: 'runners',
+      icon: <Laptop className="h-4 w-4" />,
+      label: 'Runners',
+      onSelect: () => setRunnersOpen(true),
+      testID: 'user-menu-runners',
     },
     // While a status is active the status row at the top of the menu takes
     // this entry's place (click it to edit, ✕ to clear).
@@ -407,6 +417,7 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
         onOpenChange={setStatusOpen}
       />
       <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} />
+      <RunnersDialog open={runnersOpen} onOpenChange={setRunnersOpen} />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
       <ConfirmDialog
         open={changeServerOpen}

@@ -223,6 +223,9 @@ export interface WorkspaceSettings {
   // directly from the client, not proxied through this app.
   giphyAPIKey?: string;
   giphyEnabled?: boolean;
+  // The Runners tab in the AI hub (set up, start and disconnect ex-runner
+  // from the app). Off until an admin turns it on.
+  runnersInApp?: boolean;
 }
 
 export interface IncomingWebhook {

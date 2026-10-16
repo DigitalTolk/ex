@@ -157,6 +157,17 @@ type settingsResponse struct {
 	AllowedExtensions []string `json:"allowedExtensions"`
 	GiphyAPIKey       string   `json:"giphyAPIKey,omitempty"`
 	GiphyEnabled      bool     `json:"giphyEnabled"`
+	RunnersInApp      bool     `json:"runnersInApp"`
+}
+
+func newSettingsResponse(ws *model.WorkspaceSettings) settingsResponse {
+	return settingsResponse{
+		MaxUploadBytes:    ws.MaxUploadBytes,
+		AllowedExtensions: ws.AllowedExtensions,
+		GiphyAPIKey:       ws.GiphyAPIKey,
+		GiphyEnabled:      ws.GiphyAPIKey != "",
+		RunnersInApp:      ws.RunnersInApp,
+	}
 }
 
 // GetSettings returns the effective workspace settings (with defaults
@@ -169,14 +180,7 @@ func (h *AdminHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return
 	}
-	ws := h.settings.Effective(r.Context())
-	resp := settingsResponse{
-		MaxUploadBytes:    ws.MaxUploadBytes,
-		AllowedExtensions: ws.AllowedExtensions,
-		GiphyEnabled:      ws.GiphyAPIKey != "",
-	}
-	resp.GiphyAPIKey = ws.GiphyAPIKey
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, newSettingsResponse(h.settings.Effective(r.Context())))
 }
 
 // PushStats returns this instance's mobile-push pipeline counters
@@ -294,25 +298,34 @@ func (h *AdminHandler) StartSearchMappingRebuild(w http.ResponseWriter, r *http.
 
 func nowUnix() int64 { return time.Now().Unix() }
 
+// updateSettingsBody is the PUT body: the settings, with the on/off
+// switches optional so an older client's save never flips one.
+type updateSettingsBody struct {
+	model.WorkspaceSettings
+	RunnersInApp *bool `json:"runnersInApp"`
+}
+
 // UpdateSettings replaces the workspace settings. Admin-only.
 func (h *AdminHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
 	}
-	var body model.WorkspaceSettings
+	var body updateSettingsBody
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
-	out, err := h.settings.Update(r.Context(), &body)
+	ws := body.WorkspaceSettings
+	// A client that predates a switch leaves it out: keep its current value
+	// rather than silently turning it off.
+	ws.RunnersInApp = h.settings.Effective(r.Context()).RunnersInApp
+	if body.RunnersInApp != nil {
+		ws.RunnersInApp = *body.RunnersInApp
+	}
+	out, err := h.settings.Update(r.Context(), &ws)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "update_error", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, settingsResponse{
-		MaxUploadBytes:    out.MaxUploadBytes,
-		AllowedExtensions: out.AllowedExtensions,
-		GiphyAPIKey:       out.GiphyAPIKey,
-		GiphyEnabled:      out.GiphyAPIKey != "",
-	})
+	writeJSON(w, http.StatusOK, newSettingsResponse(out))
 }

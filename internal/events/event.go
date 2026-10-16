@@ -65,6 +65,13 @@ const (
 	EventReplayExhausted             = "replay.exhausted" // cursor too old / unknown; client must do a full refetch
 	EventWebhookChanged              = "webhook.changed"  // admin incoming-webhook list changed (created/deleted); data-less nudge to refetch
 	EventProjectChanged              = "project.changed"  // a project or its design references changed; data-less nudge to refetch
+	// EventSettingsUpdated tells every client the workspace settings changed
+	// (an admin saved them); data-less nudge to refetch them.
+	EventSettingsUpdated = "settings.updated"
+	// EventRunnersChanged tells a user's own clients their runners changed:
+	// a computer was connected or disconnected, or a runner came online.
+	// Data-less nudge to refetch the Runners list.
+	EventRunnersChanged = "runners.changed"
 	// EventActivityNew tells a user's own clients that an item arrived in their
 	// activity stream; data is model.ActivityNewEvent (the item and its read
 	// state). The durable Redis activity store stays the source of truth — a

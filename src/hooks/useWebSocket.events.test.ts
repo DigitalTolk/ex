@@ -86,6 +86,19 @@ describe('useWebSocket event coverage', () => {
     expect(onProjectChanged).toHaveBeenCalled();
   });
 
+  it.each([
+    ['settings.updated', 'onSettingsUpdated'],
+    ['runners.changed', 'onRunnersChanged'],
+  ] as const)('routes %s to %s', async (type, callback) => {
+    const cb = vi.fn();
+    renderHook(() => useWebSocket({ [callback]: cb, enabled: true }));
+    await flushConnect();
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    ws.simulateMessage(JSON.stringify({ id: `${type}-1`, type, data: '{}' }));
+    expect(cb).toHaveBeenCalled();
+  });
+
   it('routes activity.new to onActivityNew', async () => {
     const onActivityNew = vi.fn();
     renderHook(() => useWebSocket({ onActivityNew, enabled: true }));

@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -659,7 +661,7 @@ func TestOrchCov_InvokeServerExecutionUnavailable(t *testing.T) {
 	msg := &model.Message{ID: "m1", ParentID: "chan1", AuthorID: "u-alice", Body: "@[" + testGGID + "|gg] hi"}
 	fx.orch.OnMessage(ctx, msg, ParentChannel)
 	post := fx.msgs.lastPost()
-	if !strings.Contains(post, "server-side execution") {
+	if !strings.Contains(post, "server-side agents turned on") || !strings.Contains(post, "enable Bedrock") {
 		t.Fatalf("expected server-execution notice, got %q", post)
 	}
 }
@@ -688,7 +690,7 @@ func TestOrchCov_InvokeHarnessMissingSaysWhich(t *testing.T) {
 	msg := &model.Message{ID: "m1", ParentID: "chan1", AuthorID: "u-alice", Body: "@[" + testGGID + "|gg] hi"}
 	fx.orch.OnMessage(ctx, msg, ParentChannel)
 	post := fx.msgs.lastPost()
-	if !strings.Contains(post, "CLI isn't set up on the machine") || !strings.Contains(post, "Bedrock agents") {
+	if !strings.Contains(post, "CLI isn't set up on the computer running your ex-runner") || !strings.Contains(post, "Bedrock agents") {
 		t.Fatalf("expected harness-missing notice with the cloud alternative, got %q", post)
 	}
 }
@@ -2601,5 +2603,47 @@ func TestOrchCov_ListSchedulesAndSlugForAgent(t *testing.T) {
 	}
 	if _, err := svc.SlugForAgent(ctx, testGGID); !errors.Is(err, errOrchCov) {
 		t.Fatalf("template failure (slug): %v", err)
+	}
+}
+
+// A runner coming online is saved like a heartbeat and nudges its owner's
+// clients (the Runners page flips that computer to online). A failed save
+// says nothing.
+func TestOrchCov_RegisterRunnerNotifiesOwner(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+	pub := newMockPublisher()
+	fx.orch.pub = pub
+	reg := &model.RunnerRegistration{RunnerID: "r9", OwnerID: "u-alice", TokenID: "rt-1", Version: "0.0.3",
+		Harnesses: []model.RunnerHarness{{Name: model.HarnessClaude}}}
+
+	fx.dir.failPutRunner = errOrchCov
+	if err := fx.orch.RegisterRunner(ctx, reg); !errors.Is(err, errOrchCov) {
+		t.Fatalf("put runner failure: %v", err)
+	}
+	if len(pub.published) != 0 {
+		t.Fatalf("a failed register published: %+v", pub.published)
+	}
+	fx.dir.failPutRunner = nil
+
+	if err := fx.orch.RegisterRunner(ctx, reg); err != nil {
+		t.Fatalf("RegisterRunner: %v", err)
+	}
+	if len(pub.published) != 1 || pub.published[0].channel != pubsub.UserChannel("u-alice") ||
+		pub.published[0].event.Type != events.EventRunnersChanged {
+		t.Fatalf("published = %+v", pub.published)
+	}
+	live, err := fx.orch.agentSvc.LiveRunners(ctx, "u-alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range live {
+		if r.RunnerID == "r9" && r.TokenID == "rt-1" && r.Version == "0.0.3" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("registration not saved with its install: %+v", live)
 	}
 }

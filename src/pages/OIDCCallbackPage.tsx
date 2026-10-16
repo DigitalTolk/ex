@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { setAccessToken, apiFetch } from '@/lib/api';
+import { takeReturnTo } from '@/lib/return-to';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import type { User } from '@/types';
 
@@ -62,7 +63,7 @@ export default function OIDCCallbackPage() {
         try {
           const user = await apiFetch<User>('/api/v1/users/me');
           setAuth(token, user);
-          navigate('/', { replace: true });
+          navigate(takeReturnTo('/'), { replace: true });
           return;
         } catch {
           // fall through to error
