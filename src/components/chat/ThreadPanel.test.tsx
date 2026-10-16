@@ -197,6 +197,7 @@ describe('ThreadPanel', () => {
     // sidebar must surface the same popular shelf the main message list does.
     // The toolbar mounts on hover, so hover a reply first.
     const reply = await screen.findByText('reply one');
+    fireEvent.pointerOver(reply.closest('[data-message-id]')!, { pointerType: 'mouse' });
     fireEvent.mouseEnter(reply.closest('[data-message-id]')!);
     await waitFor(() => {
       expect(screen.getAllByLabelText('React with thumbsup').length).toBeGreaterThan(0);
@@ -219,6 +220,22 @@ describe('ThreadPanel', () => {
     );
     fireEvent.click(screen.getByLabelText('Close thread'));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('closes on Escape', () => {
+    mockApiFetch.mockResolvedValueOnce([]);
+    const onClose = vi.fn();
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={onClose}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('keeps more mobile spacing between follow and close controls', () => {

@@ -209,11 +209,12 @@ export default function App() {
                       <KeyboardInsetTracker />
                       <NotificationCountTitleBridge />
                       <Toaster />
-                      {/* Sized to the space above the on-screen keyboard (0 when
-                          it's down) so the top of the app stays on screen. */}
+                      {/* Sized to the space above the on-screen keyboard (the
+                          whole viewport when it's down) so the top of the app
+                          stays on screen — see useKeyboardInset. */}
                       <div
                         className="flex flex-col bg-sidebar pt-safe-top"
-                        style={{ height: 'calc(100dvh - var(--ex-keyboard-inset, 0px))' }}
+                        style={{ height: 'var(--ex-app-height, 100dvh)' }}
                         data-app-root="true"
                       >
                         <div className="min-h-0 flex-1 bg-background">

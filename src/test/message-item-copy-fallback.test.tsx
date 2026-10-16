@@ -57,7 +57,7 @@ function renderItem(overrides: Partial<Message> = {}, props: Partial<React.Compo
   // The hover toolbar mounts on hover (MessageItem): hover the first row so
   // the tests can reach its actions the way a pointer user does.
   const row = result.container.querySelector('[data-message-id]');
-  if (row) fireEvent.mouseEnter(row);
+  if (row) fireEvent.pointerEnter(row, { pointerType: 'mouse' });
   return result;
 }
 

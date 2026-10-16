@@ -84,6 +84,56 @@ export async function nativeTouchScroll(el: Element, { dy, from }: NativeScrollO
   await new Promise((resolve) => setTimeout(resolve, 400));
 }
 
+export interface NativeTouchSwipeOptions {
+  /** Finger travel in px. */
+  dx?: number;
+  dy?: number;
+  /** Gesture origin in viewport coordinates. Defaults to the element's centre. */
+  from?: { x: number; y: number };
+  /** Number of touchmoves, and the wait between them: a slow swipe is many, spread out. */
+  steps?: number;
+  stepMs?: number;
+  /** A second leg after the first, from where it ended: a swipe that changes course. */
+  then?: { dx: number; dy: number; steps: number };
+}
+
+/**
+ * Drive a genuine one-finger swipe, move by move, through the browser's own
+ * input pipeline: the page sees the touch and pointer events a phone sends,
+ * and the browser decides — from touch-action, as on a phone — whether the
+ * move is a native pan (and cancels the page's pointer) or the page's.
+ */
+export async function nativeTouchSwipe(
+  el: Element,
+  { dx = 0, dy = 0, from, steps = 20, stepMs = 30, then }: NativeTouchSwipeOptions,
+): Promise<void> {
+  const client = cdp() as unknown as CdpClient;
+  const rect = el.getBoundingClientRect();
+  const origin = from ?? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  await client.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  const touch = (type: string, x: number, y: number) => {
+    const point = toPagePoint(x, y);
+    return client.send('Input.dispatchTouchEvent', {
+      type,
+      touchPoints: type === 'touchEnd' ? [] : [{ x: Math.round(point.x), y: Math.round(point.y), id: 1 }],
+    });
+  };
+  const legs = [{ from: origin, dx, dy, steps }];
+  if (then) legs.push({ from: { x: origin.x + dx, y: origin.y + dy }, ...then });
+  await touch('touchStart', origin.x, origin.y);
+  for (const leg of legs) {
+    for (let i = 1; i <= leg.steps; i++) {
+      await new Promise((resolve) => setTimeout(resolve, stepMs));
+      await touch('touchMove', leg.from.x + (leg.dx * i) / leg.steps, leg.from.y + (leg.dy * i) / leg.steps);
+    }
+  }
+  const last = legs[legs.length - 1];
+  // Come to rest before lifting: a slow, deliberate release.
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  await touch('touchEnd', last.from.x + last.dx, last.from.y + last.dy);
+  await new Promise((resolve) => setTimeout(resolve, 400));
+}
+
 // Whether THIS environment's CDP input synthesis produces real compositor
 // scrolling — probed once per test file against a plain overflow div with no
 // app code involved. Chromium's headless shell on some CI hosts accepts

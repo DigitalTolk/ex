@@ -107,7 +107,10 @@ describe('phone list screens', () => {
     await expect.element(screen.getByTestId('where')).toHaveTextContent('/channel/general?thread=root-1');
     await vi.waitFor(() => expect(sheet()).toBeNull());
     await vi.waitFor(() => expect(main().dataset.mobileChannelsOpen).toBe('false'));
-    expect(tabBar()).toHaveClass('hidden');
+    // The tab bar went with the list, under the conversation.
+    const list = document.querySelector('[data-testid="mobile-channel-sidebar"]');
+    expect(list).toContainElement(tabBar());
+    expect(list).toHaveAttribute('inert');
   });
 
   // The list brought up over the open conversation (its header's back

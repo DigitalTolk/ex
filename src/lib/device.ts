@@ -36,8 +36,29 @@ export type DeviceKind = 'touch' | 'desktop';
 let sawMouseInput = false;
 const pointerDeviceListeners = new Set<() => void>();
 
+// A pointer changes the interaction style only at tablet width or wider. A
+// phone keeps its long-press affordances with a mouse attached: the iPhone
+// simulator hands the Mac's cursor to the page as a real mouse, and a phone
+// with a pointer paired for accessibility still wants the phone UI. The tier
+// is stamped by the tracker (boot, resize) rather than read here: this runs
+// as the snapshot behind usePointerDevice, in every message row's render,
+// and the tier check behind it is a matchMedia call.
+let phoneTier = false;
+
 export function hasPointerDevice(): boolean {
+  if (phoneTier) return false;
   return window.__EX_POINTER_DEVICE__ === true || sawMouseInput;
+}
+
+// isHoverPointer decides whether a pointer entering an element is a hover —
+// the one test every hover affordance (row toolbar, tooltips) goes through.
+// It reads the pointer event's own type: a finger's tap makes the browser
+// replay mouse events (mouseover, mouseenter) for old pages, but never
+// pointer events, so a pointer event says what is really pointing. And the
+// phone keeps its touch UI with a mouse attached (see phoneTier above).
+export function isHoverPointer(pointerType: string): boolean {
+  if (phoneTier) return false;
+  return pointerType === 'mouse' || pointerType === 'pen';
 }
 
 // The shell sets its global BEFORE dispatching the event, so "did this change?"
@@ -80,6 +101,7 @@ function onNativePointerReport(event: Event) {
 export function resetPointerDeviceForTests() {
   sawMouseInput = false;
   notifiedPointerDevice = false;
+  phoneTier = false;
   delete window.__EX_POINTER_DEVICE__;
 }
 
@@ -135,6 +157,7 @@ const TIER_CLASSES: Record<LayoutTier, string> = {
 export function applyLayoutTierClasses(): LayoutTier {
   const root = document.documentElement;
   const tier = currentLayoutTier();
+  phoneTier = tier === 'mobile';
   for (const cls of Object.values(TIER_CLASSES)) root.classList.remove(cls);
   root.classList.add(TIER_CLASSES[tier]);
   // `device-touch` (the `touch:` variant) means touch is the ONLY way to point
@@ -151,7 +174,12 @@ export function startLayoutTierTracking(): () => void {
   applyLayoutTierClasses();
   if (tracking) return () => undefined;
   tracking = true;
-  const onResize = () => applyLayoutTierClasses();
+  // A resize can cross the phone/tablet line, which flips whether an
+  // attached pointer counts (hasPointerDevice), so the hooks hear about it.
+  const onResize = () => {
+    applyLayoutTierClasses();
+    notifyPointerDevice();
+  };
   const restamp = () => applyLayoutTierClasses();
   const unsubscribePointer = subscribePointerDevice(restamp);
   window.addEventListener('resize', onResize);

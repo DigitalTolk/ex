@@ -92,10 +92,16 @@ export function PopoverPortal({
       /* istanbul ignore next -- the popover is rendered (open) whenever this listener is active, so contentRef.current is non-null; the ?.-null arm is defensive */
       if (contentRef.current?.contains(target)) return;
       if (triggerRef.current?.contains(target)) return;
+      // A menu opened from a control inside the popover is portaled beside
+      // it, not into it: a press on one of its items is still "inside".
+      if (target instanceof Element && target.closest('[role="menu"]')) return;
       onDismiss?.();
     }
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onDismiss?.();
+      if (e.key !== 'Escape') return;
+      // The popover is on top: the key is its (a panel under it stays open).
+      e.preventDefault();
+      onDismiss?.();
     }
     document.addEventListener('pointerdown', onDown);
     document.addEventListener('keydown', onKey);

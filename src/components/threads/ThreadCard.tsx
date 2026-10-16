@@ -120,7 +120,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
     [messages],
   );
   const { map: userMap } = useUsersBatch(userIDs);
-  const quickReactions = useFrequentEmojis(3);
+  const quickReactions = useFrequentEmojis(6);
   const unfollowThread = useUnfollowThread();
 
   // The "previous" message for the first visible reply: the root when the
@@ -228,13 +228,15 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
         // the pink "Unread" badge below — never a `primary` wash/border/ring,
         // which in dark mode is white and floods the card with a glaring
         // light accent.
-        'rounded-lg border bg-card overflow-clip ' +
+        // On a phone there is no card: the thread spans the screen, and a
+        // rule under it separates it from the next.
+        'rounded-lg border bg-card overflow-clip mobile:rounded-none mobile:border-0 mobile:border-b mobile:shadow-none ' +
         (unread ? 'border-border-strong shadow-sm' : '')
       }
     >
       {/* Title — same shape as a channel/conversation header. Clicking
           opens the thread in its parent view. */}
-      <header className="flex items-center gap-2 border-b px-4 py-2.5">
+      <header className="flex items-center gap-2 border-b px-4 py-2.5 mobile:border-b-0 mobile:pb-0">
         {summary.parentType === 'channel' ? (
           <Globe className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
         ) : (
@@ -256,7 +258,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
         {unread && (
           <span
             data-testid="thread-card-unread"
-            className="rounded-full bg-brand-strong px-2 py-0.5 text-[11px] font-semibold text-brand-foreground"
+            className="rounded-full bg-brand-strong px-2 py-0.5 text-xs font-semibold text-brand-foreground"
           >
             Unread
           </span>
@@ -292,7 +294,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
         onFiles={(files) => void inputRef.current?.uploadFiles(files)}
       >
         <MessageRowDataProvider parentType={summary.parentType} parentID={summary.parentID}>
-        <div className="p-2">
+        <div className="p-2 mobile:px-3 mobile:py-1">
           {isLoading && (
             <div className="space-y-2 p-2">
               <Skeleton className="h-12 w-full" />

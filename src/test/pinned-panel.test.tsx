@@ -169,7 +169,7 @@ describe('PinnedPanel', () => {
     // Hover the message row so its toolbar mounts (React derives onMouseEnter
     // itself; a dispatched native mouseenter never reached it).
     const row = await screen.findByTestId('pinned-message-row');
-    fireEvent.mouseEnter(row.querySelector('[data-message-id]')!);
+    fireEvent.pointerEnter(row.querySelector('[data-message-id]')!, { pointerType: 'mouse' });
     const replyBtn = await screen.findByLabelText('Reply in thread');
     replyBtn.click();
     expect(onReplyInThread).toHaveBeenCalledWith('m-pin-1');

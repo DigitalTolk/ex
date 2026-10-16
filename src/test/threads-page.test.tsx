@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { Link, MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { queryKeys } from '@/lib/query-keys';
 import ThreadsPage from '@/pages/ThreadsPage';
 import { markThreadSeen, resetSeenCache, sortThreadsByUnreadThenActivity, unreadThreadIDs, type ThreadSummary } from '@/hooks/useThreads';
 
@@ -131,6 +132,62 @@ describe('ThreadsPage', () => {
     const titles = screen.getAllByTestId('thread-card-title').map((el) => el.textContent);
     expect(titles).toContain('~general');
     expect(titles).toContain('Bob');
+  });
+
+  it('freezes the list per visit: a live change waits until Threads is opened again', async () => {
+    apiFetchMock.mockResolvedValueOnce(sample);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/threads']}>
+          <Routes>
+            <Route
+              path="/threads"
+              element={
+                <>
+                  <Link to="/threads" data-testid="threads-nav">Threads</Link>
+                  <ThreadsPage />
+                </>
+              }
+            />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getAllByTestId('thread-card')).toHaveLength(2));
+    const order = () => screen.getAllByTestId('thread-card').map((el) => el.getAttribute('data-thread-root-id'));
+    expect(order()).toEqual(['msg-root-1', 'msg-root-2']);
+
+    // A reply lands in the older thread and a new thread becomes ours: the
+    // cache moves on, the page does not.
+    act(() => {
+      qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), [
+        { ...sample[1], replyCount: 2, latestActivityAt: '2026-04-27T09:00:00Z' },
+        sample[0],
+        { ...sample[0], threadRootID: 'msg-root-3', latestActivityAt: '2026-04-27T10:00:00Z' },
+      ]);
+    });
+    // React Query notifies observers on a tick: let it, then check nothing moved.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(order()).toEqual(['msg-root-1', 'msg-root-2']);
+
+    // A thread you unfollow does leave at once: there is nothing to keep.
+    act(() => {
+      qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), [
+        sample[0],
+        { ...sample[0], threadRootID: 'msg-root-3', latestActivityAt: '2026-04-27T10:00:00Z' },
+      ]);
+    });
+    await waitFor(() => expect(order()).toEqual(['msg-root-1']));
+
+    // Opening Threads again (the sidebar link, even while here) reloads it.
+    act(() => {
+      screen.getByTestId('threads-nav').click();
+    });
+    await waitFor(() => expect(screen.getAllByTestId('thread-card')).toHaveLength(2));
+    expect(order()).toContain('msg-root-3');
   });
 
   it('builds correct deep-links for channel vs conversation threads', async () => {

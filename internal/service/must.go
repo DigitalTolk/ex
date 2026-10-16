@@ -16,6 +16,14 @@ func mustThumb(b []byte, err error) []byte {
 	return b
 }
 
+// mustEncode checks an image encode into a bytes.Buffer of an image the
+// caller just built — a failure would be a programmer error.
+func mustEncode(err error) {
+	if err != nil {
+		panic(fmt.Sprintf("service: encode of an in-memory image failed: %v", err))
+	}
+}
+
 // mustJSONBody unwraps json.Marshal of request structs composed solely of
 // strings and string maps/slices.
 func mustJSONBody(b []byte, err error) []byte {

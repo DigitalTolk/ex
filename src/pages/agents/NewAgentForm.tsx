@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useCreateAgent } from '@/hooks/useAgents';
+import { NativeSelect } from '@/components/ui/native-select';
 
 // starterPersona is a REAL, editable starting prompt — not a ghost
 // placeholder. New agents begin from working words the creator tweaks
@@ -114,16 +115,16 @@ export function NewAgentForm({ onDone }: { onDone: () => void }) {
         <div className="flex flex-wrap gap-3 rounded-md border bg-muted/20 p-3">
           <div>
             <Label htmlFor="new-agent-harness">Backend</Label>
-            <select
+            <NativeSelect
               id="new-agent-harness"
-              className="mt-1 block rounded-md border bg-transparent p-2 text-sm"
+              className="mt-1"
               value={harness}
               onChange={(e) => setHarness(e.target.value)}
             >
               <option value="claude">Claude Code (CLI)</option>
               <option value="codex">Codex (CLI)</option>
               <option value="bedrock">AWS Bedrock (API)</option>
-            </select>
+            </NativeSelect>
           </div>
           <div>
             <Label htmlFor="new-agent-model">Model</Label>

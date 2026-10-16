@@ -238,6 +238,19 @@ describe('ProfileSettings', () => {
     expect(patchCalls()).toHaveLength(0);
   });
 
+  it("shows the server's reason when it refuses the uploaded photo", async () => {
+    vi.mocked(apiFetch).mockReset();
+    vi.mocked(apiFetch)
+      .mockResolvedValueOnce({ uploadURL: 'https://s3/put', key: 'avatars/u-1/up' } as never)
+      .mockRejectedValueOnce(new Error('Image dimensions are too large'));
+    const screen = await render(<ProfileSettings />);
+    await userEvent.upload(fileInput(), pngFile());
+    await expect.element(screen.getByRole('alert')).toHaveTextContent('Image dimensions are too large');
+    expect(patchCalls()).toEqual([{ avatarKey: 'avatars/u-1/up' }]);
+    expect(authState.setAuth).not.toHaveBeenCalled();
+    await expect.element(screen.getByTestId('settings-upload-avatar')).toBeEnabled();
+  });
+
   it('falls back to a generic message when the upload rejects with a non-Error', async () => {
     vi.mocked(apiFetch).mockReset();
     vi.mocked(apiFetch).mockRejectedValueOnce('weird');

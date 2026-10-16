@@ -23,6 +23,20 @@ function lastCategoryMoveBody(id: string): { afterID: string } | undefined {
   return call ? JSON.parse((call[1] as { body: string }).body) : undefined;
 }
 
+// Every sidebar row (channel or DM) runs this hook once per render: counting
+// its calls counts row renders.
+const rowRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock('@/hooks/useRowLongPressMenu', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks/useRowLongPressMenu')>();
+  return {
+    ...actual,
+    useRowLongPressMenu: () => {
+      rowRenders.count += 1;
+      return actual.useRowLongPressMenu();
+    },
+  };
+});
+
 vi.mock('@/lib/api', () => ({
   // Answer the server-owned move endpoints with their (empty) response
   // shapes whenever a test's mockImplementation doesn't — the hooks read
@@ -896,7 +910,7 @@ describe('Sidebar', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
   });
 
-  it('caps the threads badge at "99+" when more than 99 threads are unread', async () => {
+  it('marks Threads bold, with no count, when threads have unread replies', async () => {
     const manyThreads = Array.from({ length: 120 }, (_, i) => ({
       parentID: 'ch-1',
       parentType: 'channel' as const,
@@ -922,8 +936,10 @@ describe('Sidebar', () => {
       return undefined;
     });
     renderSidebar();
-    const badge = await screen.findByTestId('threads-unread-badge');
-    expect(badge).toHaveTextContent('99+');
+    // No count on Threads: unread threads make the entry bold, nothing more.
+    const label = await screen.findByTestId('threads-nav-label');
+    await waitFor(() => expect(label).toHaveClass('font-bold'));
+    expect(screen.queryByTestId('threads-unread-badge')).toBeNull();
   });
 
   it('caps the drafts badge at "99+" when there are more than 99 drafts', async () => {
@@ -1175,6 +1191,26 @@ describe('Sidebar', () => {
     expect(mockApiFetch).not.toHaveBeenCalledWith('/api/v1/sidebar/move', expect.anything());
   });
 
+  // Opening a chat re-renders the list (it marks the open row); the rows
+  // themselves re-render only when their own data changes. Re-rendering every
+  // row on each navigation was a large part of what opening a chat cost on a
+  // phone, right while the list slid away.
+  it('opening a chat does not re-render the rows', async () => {
+    renderSidebar();
+    const row = await screen.findByTestId('channel-row-ch-2');
+    const rows = document.querySelectorAll('[data-testid^="channel-row-"], [data-testid^="conversation-row-"]').length;
+    expect(rows).toBeGreaterThan(3);
+    // Let the rows' own queries (the category list) settle first.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    const before = rowRenders.count;
+    fireEvent.click(within(row).getAllByRole('link')[0]);
+    await waitFor(() => expect(window.location.pathname).not.toBe('/'));
+    await waitFor(() => expect(row.querySelector('a[aria-current="page"]')).not.toBeNull());
+    expect(rowRenders.count - before).toBe(0);
+  });
+
   it('ignores a favorited conversation dragged over a channel row outside Favorites', async () => {
     // conv-1 is favorited, so its row is draggable. Dropping it onto a channel
     // in the regular channels section must be rejected — resolveDropPayload
@@ -1191,7 +1227,10 @@ describe('Sidebar', () => {
     fireDragOver(target, dataTransfer, 5);
     fireDrop(target, dataTransfer, 5);
 
-    await new Promise((r) => setTimeout(r, 0));
+    // The rows are memoized: each takes its own query updates, after this.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
     expect(mockApiFetch).not.toHaveBeenCalledWith('/api/v1/sidebar/move', expect.anything());
   });
 
@@ -1861,25 +1900,6 @@ describe('Sidebar unread view', () => {
     expect(within(unreadGroup()!).getByText('Project Team')).toBeInTheDocument(); // still unread
   });
 
-  it('a chat holding an unread thread counts as unread — in the Unread section even while open', async () => {
-    localStorage.setItem('sidebar.unreadSection', '1');
-    window.history.pushState({}, '', '/channel/general');
-    mockApiFetch.mockImplementation(async (url: string) => {
-      if (url === '/api/v1/sidebar/categories') return [];
-      if (url === '/api/v1/threads') {
-        return [{
-          parentID: 'ch-1', parentType: 'channel', threadRootID: 't-1', rootAuthorID: 'u-2', rootBody: 'root',
-          rootCreatedAt: '2026-05-03T10:00:00Z', replyCount: 1, latestActivityAt: '2026-05-03T10:00:00Z',
-        }];
-      }
-      if (url === '/api/v1/user-state') {
-        return { channelNotifications: [], threadNotifications: ['t-1'], threadSeen: {}, hiddenConversations: [] };
-      }
-      return undefined;
-    });
-    renderSidebar();
-    await waitFor(() => expect(within(unreadGroup()!).getByText('general')).toBeInTheDocument());
-  });
 
   it('"Show unread only" filters to unread chats plus the open one, with a way back', async () => {
     mockChannels = mockChannels.map((c) => (c.channelID === 'ch-3' ? { ...c, unread: true } : c));

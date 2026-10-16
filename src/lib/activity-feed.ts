@@ -36,6 +36,13 @@ export function addActivityItem(feed: ActivityFeed, item: ActivityItem): Activit
   return withCounts([item, ...feed.items]);
 }
 
+// badgeUnread is what the Activity bell shows: every unread item except
+// reactions. A reaction flashes on the bell as it lands (stores/reaction-flash)
+// and stays in the list, but never sits there as a number.
+export function badgeUnread(feed: Pick<ActivityFeed, 'unread' | 'unreadByType'>): number {
+  return Math.max(0, feed.unread - (feed.unreadByType.reaction ?? 0));
+}
+
 // applyActivityChange applies an activity.read change to the feed. It returns
 // null when only the server can say what changed — reading part of a channel,
 // conversation or thread flips items by message time, and an edit's new

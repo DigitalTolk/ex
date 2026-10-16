@@ -104,19 +104,29 @@ describe('ThreadPanel unread', () => {
       takeRecords() { return []; }
     });
     vi.useFakeTimers();
+    // The reader is at this window (jsdom's never has focus).
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
     try {
       setUnreadAnchor(key, { kind: 'after', at: at(2) });
       renderPanel();
       const line = screen.getByTestId('unread-divider');
       expect(line).not.toHaveAttribute('data-retired');
       act(() => callbacks[0]([{ isIntersecting: true }]));
+      // Seen; it stays while the reader is here and retires once they
+      // switch to another window.
       act(() => vi.advanceTimersByTime(3500));
+      expect(isUnreadSeen(key)).toBe(false);
+      act(() => {
+        window.dispatchEvent(new Event('blur'));
+      });
+      act(() => vi.advanceTimersByTime(500));
       expect(isUnreadSeen(key)).toBe(true);
       expect(screen.getByTestId('unread-divider')).toHaveAttribute('data-retired', 'true');
       expect(screen.getByTestId('unread-divider').nextElementSibling?.textContent).toContain('second reply');
     } finally {
       vi.useRealTimers();
       vi.unstubAllGlobals();
+      vi.restoreAllMocks();
     }
   });
 

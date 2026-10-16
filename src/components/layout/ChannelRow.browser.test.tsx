@@ -148,18 +148,6 @@ describe('ChannelRow browser behaviour', () => {
     expect((document.querySelector('[data-testid="channel-row-ch-1"] a') as HTMLElement).className).toContain('font-bold');
   });
 
-  it('shows a dot when replies in a thread the user is in are unread', async () => {
-    await render(
-      <MemoryRouter>
-        <ChannelRow channel={baseChannel} hasUnread threadUnread notifyCount={0} onClose={() => {}} />
-      </MemoryRouter>,
-    );
-    const dot = document.querySelector('[data-testid="channel-unread-dot-ch-1"]') as HTMLElement;
-    expect(dot.getAttribute('aria-label')).toBe('Unread thread replies');
-    expect(dot.className).toContain('bg-brand');
-    expect(document.querySelector('[data-testid="channel-unread-badge-ch-1"]')).toBeNull();
-  });
-
   it('a muted channel with quiet unread keeps the bell: no dot, no badge', async () => {
     const screen = await render(
       <MemoryRouter>
@@ -338,15 +326,4 @@ describe('ChannelRow browser behaviour', () => {
     expect(b.right).toBeLessThanOrEqual(s.left);
   });
 
-  it('mobile: the thread dot also sits clear of the star', async () => {
-    if (window.innerWidth > 767) return;
-    await render(
-      <MemoryRouter>
-        <ChannelRow channel={{ ...baseChannel, muted: true }} hasUnread threadUnread onClose={() => {}} />
-      </MemoryRouter>,
-    );
-    const dot = document.querySelector('[data-testid="channel-unread-dot-ch-1"]') as HTMLElement;
-    const star = document.querySelector('[data-testid="fav-toggle-ch-1"]') as HTMLElement;
-    expect(dot.getBoundingClientRect().right).toBeLessThanOrEqual(star.getBoundingClientRect().left);
-  });
 });

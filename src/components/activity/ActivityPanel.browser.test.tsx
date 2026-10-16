@@ -7,7 +7,13 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { ActivityPanel } from './ActivityPanel';
 import { apiFetch } from '@/lib/api';
 import { applyRemindersChangedEvent } from '@/hooks/useActivity';
-import { resetSidebarModeSessionState, setActivityFilter, useSidebarModeStore } from '@/stores/sidebar-mode';
+import {
+  SIDEBAR_MODE_STORAGE_KEY,
+  resetSidebarModeSessionState,
+  setActivityFilter,
+  setActivityUnreadOnly,
+  useSidebarModeStore,
+} from '@/stores/sidebar-mode';
 import type { ActivityItem, Reminder } from '@/types';
 
 vi.mock('@/lib/api', async (orig) => ({ ...(await orig<object>()), apiFetch: vi.fn() }));
@@ -127,6 +133,8 @@ const open = (i: number) => rows()[i].querySelector<HTMLElement>('[data-testid="
 describe('ActivityPanel', () => {
   beforeEach(() => {
     resetSidebarModeSessionState();
+    // A device preference, kept in localStorage: off for every test.
+    setActivityUnreadOnly(false);
     vi.mocked(apiFetch).mockReset();
   });
   afterEach(() => cleanup());
@@ -334,7 +342,8 @@ describe('ActivityPanel', () => {
     const screen = await renderPanel();
     await vi.waitFor(() => expect(rows()).toHaveLength(3));
     expect(document.querySelector('[data-testid="activity-filter-dm-dot"]')).not.toBeNull();
-    // New reactions don't get a dot: the Reactions tab turns bold and tinted.
+    // Reactions never dot (they flash on the bell as they land); new ones
+    // turn the Reactions tab bold and tinted instead.
     expect(document.querySelector('[data-testid="activity-filter-reaction-dot"]')).toBeNull();
     const reactionTab = screen.getByTestId('activity-filter-reaction').element();
     expect(reactionTab).toHaveAttribute('data-highlight', 'true');
@@ -360,6 +369,8 @@ describe('ActivityPanel', () => {
     await vi.waitFor(() => expect(rows()).toHaveLength(1));
     await screen.getByTestId('activity-unread-only').click();
     await expect.element(screen.getByTestId('activity-empty')).toHaveTextContent('No unread activity');
+    // Remembered on this device for the next session.
+    expect(JSON.parse(localStorage.getItem(SIDEBAR_MODE_STORAGE_KEY) ?? '{}').state).toEqual({ unreadOnly: true });
   });
 
   // The row you opened stays listed under "Unread only" while it's the page
@@ -510,6 +521,19 @@ describe('ActivityPanel', () => {
     expect(document.body.textContent).not.toContain('before the edit');
     // The feed itself was left alone.
     expect(calls('/api/v1/activity')).toHaveLength(1);
+  });
+
+  it('"Remind me about this" on a row opens the reminder dialog, which closes on cancel', async () => {
+    mockApi({ items: [item({ id: 'a', type: 'mention' })] });
+    const screen = await renderPanel();
+    await vi.waitFor(() => expect(rows()).toHaveLength(1));
+    screen.getByTestId('activity-row-more').first().element().click();
+    await screen.getByTestId('activity-menu-remind').click();
+    await expect.element(screen.getByTestId('reminder-dialog')).toBeVisible();
+    // Escape rather than the Cancel button: on a phone the dialog is a tall
+    // sheet and the button can sit below the fold.
+    await userEvent.keyboard('{Escape}');
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="reminder-dialog"]')).toBeNull());
   });
 
   it('opens a reminder without a navigate callback', async () => {

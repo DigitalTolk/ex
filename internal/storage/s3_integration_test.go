@@ -119,6 +119,43 @@ func TestS3Client_PutGetRoundTrip_RealObjectStore(t *testing.T) {
 	}
 }
 
+// A video player's byte ranges, answered by a real object store: the part
+// with its Content-Range, the whole object without one, and a range past the
+// end as ErrRangeNotSatisfiable (S3's InvalidRange).
+func TestS3Client_OpenObjectRange_RealObjectStore(t *testing.T) {
+	c := newMinioS3(t, "byte-ranges")
+	ctx := context.Background()
+	key := "attachments/it-range"
+	if err := c.PutObject(ctx, key, "video/mp4", []byte("0123456789")); err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+	read := func(byteRange string) (string, int64, string) {
+		t.Helper()
+		body, ct, length, contentRange, _, err := c.OpenObjectRange(ctx, key, byteRange)
+		if err != nil {
+			t.Fatalf("OpenObjectRange(%q): %v", byteRange, err)
+		}
+		defer func() { _ = body.Close() }()
+		got, _ := io.ReadAll(body)
+		if ct != "video/mp4" {
+			t.Errorf("content-type = %q, want video/mp4", ct)
+		}
+		return string(got), length, contentRange
+	}
+	if got, n, cr := read(""); got != "0123456789" || n != 10 || cr != "" {
+		t.Fatalf("whole object = %q (%d, %q)", got, n, cr)
+	}
+	if got, n, cr := read("bytes=2-5"); got != "2345" || n != 4 || cr != "bytes 2-5/10" {
+		t.Fatalf("range = %q (%d, %q)", got, n, cr)
+	}
+	if got, _, cr := read("bytes=-3"); got != "789" || cr != "bytes 7-9/10" {
+		t.Fatalf("suffix range = %q (%q)", got, cr)
+	}
+	if _, _, _, _, _, err := c.OpenObjectRange(ctx, key, "bytes=50-"); err != ErrRangeNotSatisfiable {
+		t.Fatalf("range past the end: err = %v, want ErrRangeNotSatisfiable", err)
+	}
+}
+
 func TestS3Client_PresignedPutThenGet_OverRealHTTP(t *testing.T) {
 	c := newMinioS3(t, "presign")
 	ctx := context.Background()

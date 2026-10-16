@@ -77,9 +77,10 @@ function renderLayout(children: React.ReactNode = <div>Main content</div>) {
   );
 }
 
-// Motion's pan gesture is pointer-based: pointerdown on the element, then
-// pointermove/up on the window. These helpers drive it so the channel
-// drag-to-open logic in onChannelPan/onChannelPanEnd runs.
+// Pointer sequences over the swipe surfaces (pointerdown on the element,
+// moves/up on the window). The swipe itself is driven for real in
+// AppLayout.browser.test ("channel swipe"); here they pin what a press does
+// to the layout state.
 function pointerMoveWindow(x: number, y: number) {
   fireEvent.pointerMove(window, { pointerId: 1, clientX: x, clientY: y });
 }

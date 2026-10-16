@@ -71,6 +71,16 @@ function lastPut() {
   return all[all.length - 1];
 }
 
+// Flip the away-detection switch with the keyboard (focus, Space) — a user
+// gesture, as the permission request needs. A tap there is unreliable in the
+// iPhone WebKit project: the settings page scrolls inside the test frame, and
+// that engine's emulated tap then lands nowhere.
+async function clickAwaySwitch(screen: Awaited<ReturnType<typeof render>>) {
+  const toggle = screen.getByRole('switch', { name: "Send to phone when I'm away" });
+  (toggle.element() as HTMLElement).focus();
+  await userEvent.keyboard(' ');
+}
+
 describe('NotificationsSettings (autosave)', () => {
   beforeEach(() => {
     patchUser.mockClear();
@@ -259,14 +269,14 @@ describe('NotificationsSettings (autosave)', () => {
 
   it('enabling away detection requests permission from the toggle gesture and persists the grant', async () => {
     const screen = await render(<NotificationsSettings />);
-    await screen.getByRole('switch', { name: "Send to phone when I'm away" }).click();
+    await clickAwaySwitch(screen);
     await vi.waitFor(() => expect(notif.setIdleDetectionEnabled).toHaveBeenCalledWith(true));
   });
 
   it('a denied idle-detection permission leaves the feature off and explains why', async () => {
     idleDetector.permission = false;
     const screen = await render(<NotificationsSettings />);
-    await screen.getByRole('switch', { name: "Send to phone when I'm away" }).click();
+    await clickAwaySwitch(screen);
     await vi.waitFor(() => expect(notif.setIdleDetectionEnabled).toHaveBeenCalledWith(false));
     await expect.element(screen.getByTestId('idle-detection-status')).toMatchTextContent(/not granted/i);
   });
@@ -274,7 +284,7 @@ describe('NotificationsSettings (autosave)', () => {
   it('disabling away detection never re-prompts for permission', async () => {
     notif.prefs = { soundEnabled: true, browserEnabled: true, idleDetectionEnabled: true };
     const screen = await render(<NotificationsSettings />);
-    await screen.getByRole('switch', { name: "Send to phone when I'm away" }).click();
+    await clickAwaySwitch(screen);
     expect(notif.setIdleDetectionEnabled).toHaveBeenCalledWith(false);
     expect(idleDetector.request).not.toHaveBeenCalled();
   });

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useState, useMemo, useRef } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useState, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { monitorForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
@@ -52,11 +52,12 @@ import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
-import { getSeenMap, mergeSeenMaps, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, unreadThreadParents, useUserThreads } from '@/hooks/useThreads';
+import { getSeenMap, mergeSeenMaps, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, useUserThreads } from '@/hooks/useThreads';
 import { useUserState } from '@/hooks/useUserState';
 import { useDrafts } from '@/hooks/useDrafts';
 import { deviceKind } from '@/lib/device';
 import { usePointerDevice } from '@/hooks/usePointerDevice';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { useCategories, useCreateCategory, useDeleteCategory, useReorderCategories, useReorderSidebar, type SidebarMoveRequest } from '@/hooks/useSidebar';
 import { groupSidebarItems, isSidebarItemUnread, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
 import { SidebarUnreadControls } from '@/components/layout/SidebarUnreadControls';
@@ -134,6 +135,8 @@ export function Sidebar({ onClose }: SidebarProps) {
   // The AI hub entry is one link for three routes, so its active state is
   // ours to compute — NavLink would only match /agents.
   const aiHubActive = isAiHubPath(location.pathname);
+  // The AI hub isn't built for a phone yet, so the entry stays off there.
+  const isMobile = useIsMobile();
   // Drag-to-reorder needs a mouse or trackpad. Without one — a phone, or an
   // iPad on its own — a hold on a row opens its menu (useRowLongPressMenu) and
   // iPadOS would start a native drag lift from that same hold.
@@ -170,11 +173,10 @@ export function Sidebar({ onClose }: SidebarProps) {
       ),
     [localSeenMap, threads, unreadThreadNotifications, userState?.threadNotifications, userState?.threadSeen, userState?.threadMarkedUnread],
   );
-  const unreadThreadCount = unreadThreads.size;
-  const hasThreadUpdates = unreadThreadCount > 0;
-  // A reply in a thread you're in marks its channel/DM row unread too, until
-  // that thread is read (the Threads count tracks the thread itself).
-  const threadUnreadParents = useMemo(() => unreadThreadParents(threads, unreadThreads), [threads, unreadThreads]);
+  // Thread replies live in Threads (bold when any thread you follow has
+  // unread replies) and in Activity; a channel or DM row never marks itself
+  // for them, the way Slack keeps threads out of the channel list.
+  const hasThreadUpdates = unreadThreads.size > 0;
   const draftCount = drafts?.length ?? 0;
 
   // The chat being viewed. With the unread view on it stays visible even
@@ -187,12 +189,11 @@ export function Sidebar({ onClose }: SidebarProps) {
     return /^\/conversation\/([^/]+)/.exec(path)?.[1];
   }, [location.pathname, channels]);
   const activeItemUnread = useMemo(() => {
-    if (activeItemID && threadUnreadParents.has(activeItemID)) return true;
     const ch = channels?.find((c) => c.channelID === activeItemID);
     if (ch) return isSidebarItemUnread({ kind: 'channel', channel: ch });
     const conv = visibleConversations.find((c) => c.conversationID === activeItemID);
     return !!conv && isSidebarItemUnread({ kind: 'conversation', conversation: conv });
-  }, [channels, visibleConversations, activeItemID, threadUnreadParents]);
+  }, [channels, visibleConversations, activeItemID]);
   const [stickyUnread, setStickyUnread] = useState<{ id?: string; unread: boolean }>({ unread: false });
   if (stickyUnread.id !== activeItemID) setStickyUnread({ id: activeItemID, unread: activeItemUnread });
 
@@ -204,9 +205,8 @@ export function Sidebar({ onClose }: SidebarProps) {
         unreadOnly,
         activeID: activeItemID,
         stickyUnreadID: stickyUnread.unread ? stickyUnread.id : undefined,
-        threadUnreadIDs: threadUnreadParents,
       }),
-    [channels, visibleConversations, categories, conversationSort, unreadSection, unreadOnly, activeItemID, stickyUnread, threadUnreadParents],
+    [channels, visibleConversations, categories, conversationSort, unreadSection, unreadOnly, activeItemID, stickyUnread],
   );
 
   // Fetch the other participant for every DM in one batch so the sidebar
@@ -890,7 +890,10 @@ export function Sidebar({ onClose }: SidebarProps) {
     suppressNavigationResetRef.current = window.setTimeout(clearSuppressedChannelNavigation, 750);
   }
 
-  function clearSuppressedChannelNavigation() {
+  // Stable, like every callback the rows get: the rows are memoized, so a
+  // navigation (which re-renders this list) re-renders only the rows whose
+  // own data changed.
+  const clearSuppressedChannelNavigation = useCallback(() => {
     /* v8 ignore next -- the consumed callback fires right after a drop scheduled the reset timeout, so the ref is set; the null arm is defensive */
     /* istanbul ignore next -- the consumed callback fires right after a drop scheduled the reset timeout, so the ref is set; the null arm is defensive */
     if (suppressNavigationResetRef.current !== null) {
@@ -898,7 +901,7 @@ export function Sidebar({ onClose }: SidebarProps) {
       suppressNavigationResetRef.current = null;
     }
     setSuppressChannelNavigationID(null);
-  }
+  }, []);
 
   // A drop schedules the 750ms suppress-navigation reset above; clear it on
   // unmount so the timer never fires into a torn-down tree (it crashed test
@@ -1015,16 +1018,9 @@ export function Sidebar({ onClose }: SidebarProps) {
             }
           >
             <MessagesSquare className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span className={hasThreadUpdates ? 'font-bold text-white' : ''}>Threads</span>
-            {hasThreadUpdates && (
-              <Badge
-                variant="brand"
-                className="ml-auto text-[11px]"
-                data-testid="threads-unread-badge"
-              >
-                {unreadThreadCount > 99 ? '99+' : unreadThreadCount}
-              </Badge>
-            )}
+            <span className={hasThreadUpdates ? 'font-bold text-white' : ''} data-testid="threads-nav-label">
+              Threads
+            </span>
           </NavLink>
 
           <NavLink
@@ -1064,19 +1060,21 @@ export function Sidebar({ onClose }: SidebarProps) {
 
           {/* One entry for the whole AI hub — Agents, Skills and Connectors
               are tabs inside it (AiHubLayout). Lit for all three routes. */}
-          <Link
-            to={AI_HUB_HOME}
-            onClick={onClose}
-            aria-current={aiHubActive ? 'page' : undefined}
-            className={`relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
-              aiHubActive
-                ? 'bg-sidebar-accent text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
-                : 'text-gray-300 hover:bg-white/10 hover:text-white'
-            }`}
-          >
-            <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>Agents</span>
-          </Link>
+          {!isMobile && (
+            <Link
+              to={AI_HUB_HOME}
+              onClick={onClose}
+              aria-current={aiHubActive ? 'page' : undefined}
+              className={`relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
+                aiHubActive
+                  ? 'bg-sidebar-accent text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
+                  : 'text-gray-300 hover:bg-white/10 hover:text-white'
+              }`}
+            >
+              <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>Agents</span>
+            </Link>
+          )}
 
           {/* Visual break between top-level pages and the channel/DM list. */}
           <div
@@ -1120,6 +1118,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                         });
                       }
                       if (e.key === 'Escape') {
+                        e.preventDefault();
                         setCreatingCategory(false);
                         setCategoryCreateError('');
                       }
@@ -1228,12 +1227,12 @@ export function Sidebar({ onClose }: SidebarProps) {
                       const ch = item.channel;
                       const isActive =
                         location.pathname === `/channel/${slugify(ch.channelName)}`;
-                      return isActive || (!ch.muted && !!ch.unread) || threadUnreadParents.has(ch.channelID);
+                      return isActive || (!ch.muted && !!ch.unread);
                     }
                     const conv = item.conversation;
                     const isActive =
                       location.pathname === `/conversation/${conv.conversationID}`;
-                    return isActive || !!conv.unread || threadUnreadParents.has(conv.conversationID);
+                    return isActive || !!conv.unread;
                   })
                 : section.items;
 
@@ -1411,8 +1410,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                               {(dragProps) => (
                                 <ChannelRow
                                   channel={item.channel}
-                                  hasUnread={!!item.channel.unread || threadUnreadParents.has(item.channel.channelID)}
-                                  threadUnread={threadUnreadParents.has(item.channel.channelID)}
+                                  hasUnread={!!item.channel.unread}
                                   notifyCount={Number(item.channel.unreadNotifyCount ?? 0)}
                                   onClose={onClose}
                                   draggable={!rowDragDisabled}
@@ -1455,8 +1453,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                               {(dragProps) => (
                                 <ConversationRow
                                   conversation={conv}
-                                  hasUnread={!!conv.unread || threadUnreadParents.has(conv.conversationID)}
-                                  threadUnread={threadUnreadParents.has(conv.conversationID)}
+                                  hasUnread={!!conv.unread}
                                   notifyCount={Number(conv.unreadNotifyCount ?? 0)}
                                   dmAvatarURL={resolvedDMAvatarURL}
                                   dmUserStatus={resolvedDMUserStatus}
@@ -1473,8 +1470,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                           ) : (
                             <ConversationRow
                               conversation={conv}
-                              hasUnread={!!conv.unread || threadUnreadParents.has(conv.conversationID)}
-                              threadUnread={threadUnreadParents.has(conv.conversationID)}
+                              hasUnread={!!conv.unread}
                               notifyCount={Number(conv.unreadNotifyCount ?? 0)}
                               dmAvatarURL={resolvedDMAvatarURL}
                               dmUserStatus={resolvedDMUserStatus}

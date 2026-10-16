@@ -4,6 +4,7 @@ import {
   currentLayoutTier,
   deviceKind,
   hasPointerDevice,
+  isHoverPointer,
   isElectronMac,
   layoutTierFor,
   POINTER_DEVICE_EVENT,
@@ -200,6 +201,61 @@ describe('hasPointerDevice', () => {
       expect(onChange).toHaveBeenCalledTimes(1);
     } finally {
       unsubscribe();
+      stop();
+    }
+  });
+
+  it('ignores an attached pointer in the phone tier, and honours it again past tablet width', () => {
+    // jsdom pins a touch device at 1024px (the full tier); shrink to a phone.
+    const originalWidth = window.innerWidth;
+    const setWidth = (width: number) => Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+    const root = document.documentElement;
+    const stop = startLayoutTierTracking();
+    const onChange = vi.fn();
+    const unsubscribe = subscribePointerDevice(onChange);
+    try {
+      setWidth(390);
+      window.dispatchEvent(new Event('resize'));
+      reportPointer(true);
+      expect(hasPointerDevice()).toBe(false);
+      expect(onChange).not.toHaveBeenCalled();
+      expect(root.classList.contains('device-touch')).toBe(true);
+      // The simulator's (or a paired) mouse hovering the page changes nothing either.
+      mouseInput();
+      expect(hasPointerDevice()).toBe(false);
+      expect(root.classList.contains('device-touch')).toBe(true);
+
+      // Rotating or resizing into the tablet tier brings the pointer back.
+      setWidth(1024);
+      window.dispatchEvent(new Event('resize'));
+      expect(hasPointerDevice()).toBe(true);
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(root.classList.contains('device-touch')).toBe(false);
+    } finally {
+      unsubscribe();
+      stop();
+      setWidth(originalWidth);
+    }
+  });
+
+  // Every hover affordance asks isHoverPointer: a mouse or pen hovers, a
+  // finger never does, and on the phone tier nothing does.
+  it('isHoverPointer: mouse and pen hover, touch does not, the phone tier never', () => {
+    const originalWidth = window.innerWidth;
+    const setWidth = (width: number) => Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+    const stop = startLayoutTierTracking();
+    try {
+      expect(isHoverPointer('mouse')).toBe(true);
+      expect(isHoverPointer('pen')).toBe(true);
+      expect(isHoverPointer('touch')).toBe(false);
+      expect(isHoverPointer('')).toBe(false);
+      setWidth(390);
+      window.dispatchEvent(new Event('resize'));
+      expect(isHoverPointer('mouse')).toBe(false);
+      expect(isHoverPointer('pen')).toBe(false);
+    } finally {
+      setWidth(originalWidth);
+      window.dispatchEvent(new Event('resize'));
       stop();
     }
   });

@@ -1,13 +1,17 @@
 import { memo, type MouseEvent } from 'react';
 import { Link } from 'react-router-dom';
 import {
+  AlarmClock,
   AtSign,
   Bell,
+  BellOff,
   CornerDownRight,
   Bot,
   Check,
   CircleDot,
   Clock3,
+  Eraser,
+  Link as LinkIcon,
   MessageSquare,
   MessagesSquare,
   MoreHorizontal,
@@ -20,11 +24,13 @@ import {
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { UserAvatar } from '@/components/UserAvatar';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { TooltipIconButton } from '@/components/ui/tooltip-icon-button';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useRowLongPressMenu } from '@/hooks/useRowLongPressMenu';
@@ -56,6 +62,15 @@ interface ActivityRowViewProps {
   // Local midnight today, from the panel, so the time label rolls over with
   // the day headings. Absent, the clock is read.
   today?: Date;
+  // The row's "..." menu opened or closed. The bell's hover card listens, to
+  // stay open while a menu it hosts is up.
+  onMenuOpenChange?: (open: boolean) => void;
+  // The menu's further actions, each shown only when a host provides it.
+  onRemind?: (row: ActivityRow) => void;
+  onCopyLink?: (row: ActivityRow) => void;
+  // Thread-reply rows only: stop following the thread.
+  onMuteThread?: (row: ActivityRow) => void;
+  onClearBefore?: (row: ActivityRow) => void;
 }
 
 const TYPE_ICON = {
@@ -92,6 +107,11 @@ export const ActivityRowView = memo(function ActivityRowView({
   onSetRead,
   onRemove,
   today,
+  onMenuOpenChange,
+  onRemind,
+  onCopyLink,
+  onMuteThread,
+  onClearBefore,
 }: ActivityRowViewProps) {
   const item = row.lead;
   const unread = row.unreadIDs.length > 0;
@@ -104,6 +124,10 @@ export const ActivityRowView = memo(function ActivityRowView({
   // The kind label's icon; a reaction's emoji already shows on the avatar.
   const KindIcon = item.type === 'reaction' ? Smile : TypeIcon;
   const { menuOpen, setMenuOpen, rowHandlers, suppressNavClick } = useRowLongPressMenu();
+  const changeMenu = (open: boolean) => {
+    setMenuOpen(open);
+    onMenuOpenChange?.(open);
+  };
 
   const open = (event: MouseEvent) => {
     if (suppressNavClick()) {
@@ -248,19 +272,51 @@ export const ActivityRowView = memo(function ActivityRowView({
           <TooltipIconButton label={unread ? 'Mark as read' : 'Mark as unread'} onClick={toggleRead} testId="activity-row-toggle-read">
             {unread ? <Check className="h-3.5 w-3.5" /> : <CircleDot className="h-3.5 w-3.5" />}
           </TooltipIconButton>
-          <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen} modal={false}>
-            <DropdownMenuTrigger
-              aria-label="More actions"
-              data-testid="activity-row-more"
-              className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
-            >
-              <MoreHorizontal className="h-3.5 w-3.5" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-48">
+          <DropdownMenu open={menuOpen} onOpenChange={changeMenu} modal={false}>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <DropdownMenuTrigger
+                    aria-label="More actions"
+                    data-testid="activity-row-more"
+                    className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                  />
+                }
+              >
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </TooltipTrigger>
+              <TooltipContent>More actions</TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="end" className="min-w-60">
               <DropdownMenuItem onClick={toggleRead} data-testid="activity-menu-toggle-read">
                 {unread ? <Check className="h-4 w-4" /> : <CircleDot className="h-4 w-4" />}
                 {unread ? 'Mark as read' : 'Mark as unread'}
               </DropdownMenuItem>
+              {onRemind && (
+                <DropdownMenuItem onClick={() => onRemind(row)} data-testid="activity-menu-remind">
+                  <AlarmClock className="h-4 w-4" />
+                  Remind me about this
+                </DropdownMenuItem>
+              )}
+              {onMuteThread && item.type === 'thread_reply' && (
+                <DropdownMenuItem onClick={() => onMuteThread(row)} data-testid="activity-menu-mute-thread">
+                  <BellOff className="h-4 w-4" />
+                  Stop following thread
+                </DropdownMenuItem>
+              )}
+              {onCopyLink && (
+                <DropdownMenuItem onClick={() => onCopyLink(row)} data-testid="activity-menu-copy-link">
+                  <LinkIcon className="h-4 w-4" />
+                  Copy link
+                </DropdownMenuItem>
+              )}
+              {(onClearBefore || onRemind || onCopyLink) && <DropdownMenuSeparator />}
+              {onClearBefore && (
+                <DropdownMenuItem onClick={() => onClearBefore(row)} data-testid="activity-menu-clear-before">
+                  <Eraser className="h-4 w-4" />
+                  Clear all before this
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onClick={() => onRemove(row)} data-testid="activity-menu-remove">
                 <X className="h-4 w-4" />
                 Remove from activity

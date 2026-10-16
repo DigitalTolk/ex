@@ -1,10 +1,11 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { MessageItem } from './MessageItem';
 import type { Message } from '@/types';
 import { usePresenceStore } from '@/stores/presence';
+import { applyLayoutTierClasses } from '@/lib/device';
 
 const mockEditMutate = vi.fn();
 const mockDeleteMutate = vi.fn();
@@ -44,7 +45,9 @@ function renderWithProviders(ui: React.ReactElement) {
   // The hover toolbar mounts on hover (MessageItem): hover the row so the
   // tests can reach its actions the way a pointer user does.
   const row = result.container.querySelector('[data-message-id]');
-  if (row) fireEvent.mouseEnter(row);
+  // A hover is a mouse pointer entering the row (its pointer event's type
+  // says it is a mouse, not a finger).
+  if (row) fireEvent.pointerEnter(row, { pointerType: 'mouse' });
   return result;
 }
 
@@ -231,7 +234,11 @@ describe('MessageItem', () => {
       />,
     );
 
-    // Edit/Delete are now inside a dropdown — open the "More actions" menu first
+    // Edit/Delete are now inside a dropdown — open the "More actions" menu first.
+    // The toolbar buttons carry lazy tooltips that mount their primitive on the
+    // first hover (replacing the element), so hover first and click the element
+    // that remains — the way a pointer reaches it.
+    await user.hover(screen.getByLabelText('More actions'));
     await user.click(screen.getByLabelText('More actions'));
     expect(screen.getByText('Edit')).toBeInTheDocument();
     expect(screen.getByText('Delete')).toBeInTheDocument();
@@ -429,12 +436,14 @@ describe('MessageItem', () => {
         currentUserId="user-1"
       />,
     );
+    // Hover first: the lazy tooltip remounts the button on first hover.
+    await user.hover(screen.getByLabelText('Add reaction'));
     await user.click(screen.getByLabelText('Add reaction'));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     // Picker opens on the first category; search to surface the generated
     // activity shortcode.
     await user.type(screen.getByLabelText('Search emojis'), 'tada');
-    await user.click(screen.getByLabelText('React with :tada:'));
+    await user.click(within(screen.getByRole('dialog', { name: /Emoji picker/i })).getByLabelText('React with :tada:'));
     expect(mockReactMutate).toHaveBeenCalledWith({
       messageId: 'msg-1',
       emoji: ':tada:',
@@ -475,10 +484,13 @@ describe('MessageItem', () => {
     const contextMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
     overlay.dispatchEvent(contextMenu);
     expect(contextMenu.defaultPrevented).toBe(true);
-    expect(within(sheet).getByRole('button', { name: 'Reply in thread' })).toHaveClass('h-12', 'w-full');
+    // Reply is the leading tile of the action row, not a full-width bar.
+    expect(within(sheet).getByRole('button', { name: 'Reply in thread' })).toHaveClass('flex-1', 'h-20');
+    expect(within(sheet).getByLabelText('Copy message text')).toHaveClass('flex-1');
+    expect(within(sheet).getByLabelText('Remind me about this message')).toHaveClass('flex-1');
     const reaction = within(sheet).getByLabelText('Add reaction');
     expect(reaction).toBeInTheDocument();
-    expect(reaction.parentElement).toHaveClass('block', 'w-full');
+    expect(reaction).toHaveClass('rounded-full');
     expect(within(sheet).getByLabelText('Pin message')).toBeInTheDocument();
     expect(within(sheet).getByText('Edit')).toBeInTheDocument();
     expect(within(sheet).getByText('Delete')).toBeInTheDocument();
@@ -646,6 +658,73 @@ describe('MessageItem', () => {
       expect(portal.style.top).toBe('');
     });
 
+    it('keeps the hover toolbar closed on a finger tap once a trackpad is attached', () => {
+      window.__EX_POINTER_DEVICE__ = true;
+      try {
+        const { container } = renderWithProviders(
+          <MessageItem
+            message={makeMessage()}
+            authorName="Alice"
+            isOwn={false}
+            channelId="channel-1"
+            currentUserId="user-1"
+          />,
+        );
+        const row = container.querySelector('[data-message-id]') as HTMLElement;
+        // renderWithProviders hovers the row; put the pointer back outside.
+        fireEvent.pointerLeave(row, { pointerType: 'mouse' });
+        expect(screen.queryByTestId('message-actions-trigger')).not.toBeInTheDocument();
+
+        // A tap: the touch pointer arrives, then the browser replays mouseenter.
+        fireEvent.pointerEnter(row, { pointerType: 'touch' });
+        fireEvent.mouseEnter(row);
+        expect(screen.queryByTestId('message-actions-trigger')).not.toBeInTheDocument();
+        expect(row.dataset.hovered).toBeUndefined();
+        fireEvent.pointerLeave(row, { pointerType: 'touch' });
+
+        // A replayed mouseenter with no pointer event before it on this row
+        // (the touch landed while the list scrolled and rows ignored it, or
+        // the row mounted under the finger) is no hover either.
+        fireEvent.mouseEnter(row);
+        expect(row.dataset.hovered).toBeUndefined();
+
+        // The trackpad itself still hovers.
+        fireEvent.pointerEnter(row, { pointerType: 'mouse' });
+        expect(screen.getByTestId('message-actions-trigger')).toBeInTheDocument();
+        expect(row.dataset.hovered).toBe('true');
+      } finally {
+        delete window.__EX_POINTER_DEVICE__;
+      }
+    });
+
+    // A phone keeps its touch UI with a pointer attached: the iPhone
+    // simulator hands the Mac's cursor to the page as a real mouse, and its
+    // clicks must not light the row up the way a desktop hover does.
+    it('never hovers a row on the phone tier, even for a mouse pointer', () => {
+      const originalWidth = window.innerWidth;
+      const setWidth = (width: number) => Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+      setWidth(390);
+      applyLayoutTierClasses();
+      try {
+        const { container } = renderWithProviders(
+          <MessageItem
+            message={makeMessage()}
+            authorName="Alice"
+            isOwn={false}
+            channelId="channel-1"
+            currentUserId="user-1"
+          />,
+        );
+        const row = container.querySelector('[data-message-id]') as HTMLElement;
+        fireEvent.pointerEnter(row, { pointerType: 'mouse' });
+        expect(row.dataset.hovered).toBeUndefined();
+        expect(screen.queryByTestId('message-actions-trigger')).not.toBeInTheDocument();
+      } finally {
+        setWidth(originalWidth);
+        applyLayoutTierClasses();
+      }
+    });
+
     it('leaves the secondary click alone once a trackpad is attached (the hover toolbar is back)', () => {
       window.__EX_POINTER_DEVICE__ = true;
       renderWithProviders(
@@ -697,6 +776,42 @@ describe('MessageItem', () => {
     });
   });
 
+  it('reacts from the sheet\'s one-tap row and closes it', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    setMobileMatch(true);
+    mockReactMutate.mockClear();
+    renderWithProviders(
+      <MessageItem
+        message={makeMessage()}
+        authorName="Alice"
+        isOwn={false}
+        channelId="channel-1"
+        currentUserId="user-1"
+      />,
+    );
+    const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
+    act(() => {
+      fireEvent.pointerDown(row, { pointerType: 'touch' });
+    });
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 430));
+    });
+    // No history: the stock set fills the row.
+    const quick = within(screen.getByTestId('mobile-quick-reactions')).getAllByRole('button');
+    expect(quick.map((button) => button.getAttribute('aria-label'))).toEqual([
+      'React with :thumbsup:',
+      'React with :white_check_mark:',
+      'React with :eyes:',
+      'React with :tada:',
+      'React with :heart:',
+      'React with :joy:',
+    ]);
+    await user.click(quick[0]);
+
+    expect(mockReactMutate).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'msg-1', emoji: ':thumbsup:' }));
+    await waitFor(() => expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument());
+  });
+
   it('closes mobile reaction overlays after picking an emoji', async () => {
     const user = (await import('@testing-library/user-event')).default.setup();
     setMobileMatch(true);
@@ -726,7 +841,7 @@ describe('MessageItem', () => {
     expect(document.body.style.touchAction).toBe('');
     expect(document.body.style.overscrollBehavior).toBe('');
     await user.type(screen.getByLabelText('Search emojis'), 'tada');
-    await user.click(screen.getByLabelText('React with :tada:'));
+    await user.click(within(screen.getByRole('dialog', { name: /Emoji picker/i })).getByLabelText('React with :tada:'));
 
     expect(mockReactMutate).toHaveBeenCalledWith({
       messageId: 'msg-1',

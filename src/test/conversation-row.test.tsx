@@ -206,10 +206,66 @@ describe('ConversationRow', () => {
     expect(onHide).toHaveBeenCalledWith(sampleConv.conversationID);
   });
 
-  it('does not offer category movement in the conversation row menu', () => {
+  // People go into categories like channels do.
+  function withCategories() {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/sidebar/categories')) {
+        return Promise.resolve([
+          { id: 'cat-1', name: 'Team', position: 1000 },
+          { id: 'cat-2', name: 'Clients', position: 2000 },
+        ]);
+      }
+      return Promise.resolve({});
+    });
+  }
+  const categoryPut = (categoryID: string) =>
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      `/api/v1/conversations/${sampleConv.conversationID}/category`,
+      expect.objectContaining({ method: 'PUT', body: JSON.stringify({ categoryID }) }),
+    );
+
+  it('moves the conversation into one of your categories from its menu', async () => {
+    withCategories();
     renderRow(sampleConv);
-    expect(screen.queryByText('Move to Direct Messages')).not.toBeInTheDocument();
-    expect(screen.queryByText(/^Move to /)).not.toBeInTheDocument();
+    // Already in Direct Messages.
+    expect(screen.getByText('Move to Direct Messages')).toBeDisabled();
+    fireEvent.click(await screen.findByText('Move to Team'));
+    await waitFor(() => categoryPut('cat-1'));
+  });
+
+  it('moves it back to Direct Messages, and not to the category it is in', async () => {
+    withCategories();
+    renderRow({ ...sampleConv, categoryID: 'cat-1' });
+    expect(await screen.findByText('Move to Team')).toBeDisabled();
+    expect(screen.getByText('Move to Clients')).toBeEnabled();
+    fireEvent.click(screen.getByText('Move to Direct Messages'));
+    await waitFor(() => categoryPut(''));
+  });
+
+  it('moving a favorite into a category takes it out of Favorites', async () => {
+    withCategories();
+    renderRow({ ...sampleConv, favorite: true });
+    fireEvent.click(await screen.findByText('Move to Team'));
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        `/api/v1/conversations/${sampleConv.conversationID}/favorite`,
+        expect.objectContaining({ method: 'PUT', body: JSON.stringify({ favorite: false }) }),
+      );
+      categoryPut('cat-1');
+    });
+  });
+
+  it('favoriting a conversation in a category takes it out of the category', async () => {
+    withCategories();
+    renderRow({ ...sampleConv, categoryID: 'cat-1' });
+    fireEvent.click(screen.getByTestId(`conv-fav-toggle-${sampleConv.conversationID}`));
+    await waitFor(() => {
+      categoryPut('');
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        `/api/v1/conversations/${sampleConv.conversationID}/favorite`,
+        expect.objectContaining({ method: 'PUT', body: JSON.stringify({ favorite: true }) }),
+      );
+    });
   });
 
   it('does not offer a "New category" option in the row menu', () => {
@@ -261,11 +317,6 @@ describe('ConversationRow', () => {
     renderRow(sampleConv, { hasUnread: true, notifyCount: 0 });
     expect(screen.queryByTestId('conversation-unread-badge-c-1')).toBeNull();
     expect(screen.queryByTestId('conversation-unread-dot-c-1')).toBeNull();
-  });
-
-  it('shows a dot for unread replies in a thread the user is in', () => {
-    renderRow(sampleConv, { hasUnread: true, threadUnread: true, notifyCount: 0 });
-    expect(screen.getByTestId('conversation-unread-dot-c-1')).toHaveAttribute('aria-label', 'Unread thread replies');
   });
 
   it('shows a numeric badge counting the alerting messages (capped at 99+)', () => {

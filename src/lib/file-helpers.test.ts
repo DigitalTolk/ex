@@ -9,7 +9,7 @@ import {
   FileText,
   FileVideo,
 } from 'lucide-react';
-import { isImageURL, isImageContentType, isImageAttachment, isPdfAttachment, iconForAttachment } from './file-helpers';
+import { isImageURL, isImageContentType, isImageAttachment, isPdfAttachment, isVideoAttachment, iconForAttachment } from './file-helpers';
 
 describe('isImageURL', () => {
   it.each([
@@ -51,6 +51,21 @@ describe('isImageAttachment', () => {
     ['application/octet-stream', 'document.pdf', false],
   ])('%s + %s → %s', (contentType, filename, expected) => {
     expect(isImageAttachment(contentType, filename)).toBe(expected);
+  });
+});
+
+describe('isVideoAttachment', () => {
+  it('plays MP4s, by content type or extension', () => {
+    expect(isVideoAttachment('video/mp4')).toBe(true);
+    expect(isVideoAttachment('VIDEO/X-M4V')).toBe(true);
+    expect(isVideoAttachment('application/octet-stream', 'clip.MP4')).toBe(true);
+    expect(isVideoAttachment('', 'clip.m4v')).toBe(true);
+  });
+
+  it('leaves other files to the download card', () => {
+    expect(isVideoAttachment('video/quicktime', 'clip.mov')).toBe(false);
+    expect(isVideoAttachment('application/pdf', 'spec.pdf')).toBe(false);
+    expect(isVideoAttachment('video/webm')).toBe(false);
   });
 });
 

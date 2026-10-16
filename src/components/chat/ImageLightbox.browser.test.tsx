@@ -570,4 +570,73 @@ describe('ImageLightbox browser behavior', () => {
       URL.revokeObjectURL(url);
     }
   });
+
+  it('plays an MP4 in the lightbox instead of the download card', async () => {
+    const onClose = vi.fn();
+    const onIndexChange = vi.fn();
+    const url = URL.createObjectURL(new Blob(['not decoded here'], { type: 'video/mp4' }));
+    try {
+      await render(lightbox({
+        onClose,
+        onIndexChange,
+        images: [
+          { url, downloadURL: 'https://download.example.test/clip.mp4', filename: 'clip.mp4', contentType: 'video/mp4', size: 4096 },
+          { url: imageURL, filename: 'one.png', contentType: 'image/png', size: 2048 },
+        ],
+      }));
+      const player = document.querySelector<HTMLVideoElement>('[data-testid="image-lightbox-video-player"]')!;
+      expect(player).not.toBeNull();
+      expect(player.src).toBe(url);
+      expect(player.controls).toBe(true);
+      // Inline on a phone, and nothing plays (or downloads in full) until asked.
+      expect(player.playsInline).toBe(true);
+      expect(player.autoplay).toBe(false);
+      expect(player.preload).toBe('metadata');
+      // The toolbar keeps offering the forced download.
+      expect(document.querySelector<HTMLAnchorElement>('[data-testid="image-lightbox-download"]')!.href).toBe(
+        'https://download.example.test/clip.mp4',
+      );
+
+      // The player's controls — play, scrub, fullscreen — own the pointer:
+      // nothing reaches the stage's swipe-to-close / swipe-to-navigate.
+      const pane = document.querySelector('[data-testid="image-lightbox-video"]') as HTMLElement;
+      const rect = pane.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      dispatchSwipe(pane, { x: cx, y: rect.top + 40 }, { x: cx, y: rect.top + 240 });
+      dispatchSwipe(pane, { x: cx + 100, y: rect.top + 200 }, { x: cx - 100, y: rect.top + 200 });
+      pane.click();
+      const seen: string[] = [];
+      const record = (e: Event) => seen.push(e.type);
+      document.addEventListener('pointercancel', record);
+      try {
+        pane.dispatchEvent(new PointerEvent('pointercancel', { pointerId: 41, pointerType: 'touch', bubbles: true, cancelable: true }));
+      } finally {
+        document.removeEventListener('pointercancel', record);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(seen).toEqual([]);
+      expect(onClose).not.toHaveBeenCalled();
+      expect(onIndexChange).not.toHaveBeenCalled();
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  });
+
+  it('falls back to the download card for a video the browser cannot play', async () => {
+    const url = URL.createObjectURL(new Blob(['not a video'], { type: 'video/mp4' }));
+    try {
+      await render(lightbox({
+        images: [{ url, downloadURL: 'https://download.example.test/broken.mp4', filename: 'broken.mp4', contentType: 'application/octet-stream', size: 11 }],
+      }));
+      expect(document.querySelector('[data-testid="image-lightbox-video-player"]')).not.toBeNull();
+      // Loading fails: the player makes way for the download card.
+      await expect.poll(() => document.querySelector('[data-testid="image-lightbox-video"] [data-testid="image-lightbox-fileinfo"]'), { timeout: 15000 }).not.toBeNull();
+      expect(document.querySelector('[data-testid="image-lightbox-video-player"]')).toBeNull();
+      expect(document.querySelector<HTMLAnchorElement>('[data-testid="image-lightbox-file-download"]')!.href).toBe(
+        'https://download.example.test/broken.mp4',
+      );
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  });
 });

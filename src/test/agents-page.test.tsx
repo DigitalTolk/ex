@@ -266,7 +266,7 @@ describe('AgentsPage', () => {
     expect(qib.getByText(/customized/)).toBeInTheDocument();
     expect(qib.getByLabelText('Prompt for @qib')).toHaveValue('My qib persona');
     expect(qib.getByLabelText('Model')).toHaveAttribute('placeholder', 'anthropic.claude-3-5');
-    expect(qib.getByLabelText('Discussion rounds')).toHaveValue(5);
+    expect(qib.getByLabelText('Discussion rounds')).toHaveValue('5');
     expect(qib.getByLabelText('Discussion rounds')).toHaveAttribute('placeholder', '8');
     expect(qib.getByLabelText('Thread follow-ups')).toHaveValue('window:30');
     expect(qib.getByLabelText('ask me before it replies')).toBeChecked();

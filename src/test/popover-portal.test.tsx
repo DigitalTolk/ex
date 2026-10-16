@@ -186,6 +186,26 @@ describe('PopoverPortal', () => {
     expect(onDismiss).toHaveBeenCalled();
   });
 
+  it('does not dismiss for a press inside a menu opened from the popover', () => {
+    const onDismiss = vi.fn();
+    render(
+      <div>
+        <Harness
+          open
+          onDismiss={onDismiss}
+          triggerRect={{ top: 100, bottom: 120, left: 100, right: 200 }}
+        />
+        <div role="menu">
+          <button data-testid="menu-item">Mark as read</button>
+        </div>
+      </div>,
+    );
+    act(() => {
+      fireEvent.pointerDown(screen.getByTestId('menu-item'));
+    });
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
   it('flips data-popover-measured to "true" only after compute() runs (no top-left flash)', () => {
     // The bug: the popover briefly rendered at (0,0) — the seeded
     // initial state — before the position effect committed. The fix

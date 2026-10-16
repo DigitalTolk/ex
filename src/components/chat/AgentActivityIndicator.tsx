@@ -37,7 +37,10 @@ export function AgentActivityIndicator({ parentID, userMap }: Props) {
       }
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setExpanded(false);
+      if (e.key !== 'Escape') return;
+      // The popover is on top: the key is its (a panel beside it stays open).
+      e.preventDefault();
+      setExpanded(false);
     };
     document.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
@@ -107,7 +110,7 @@ export function AgentActivityIndicator({ parentID, userMap }: Props) {
         onClick={() => (single ? openRunDrawer(runs[0].runID) : setExpanded((v) => !v))}
         aria-expanded={single ? undefined : expanded}
         title={single ? 'Open run activity' : undefined}
-        className="flex max-w-md cursor-pointer items-center gap-1.5 rounded-full border bg-background/95 px-2.5 py-1 text-xs shadow-sm backdrop-blur hover:bg-accent"
+        className="flex max-w-md cursor-pointer items-center gap-1.5 rounded-full border bg-background px-2.5 py-1 text-xs shadow-sm hover:bg-accent"
       >
         <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />
         {single ? (

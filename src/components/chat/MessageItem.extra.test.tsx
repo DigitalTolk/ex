@@ -60,7 +60,10 @@ function renderWithProviders(ui: React.ReactElement) {
   // The hover toolbar mounts on hover (MessageItem): hover the row so the
   // tests can reach its actions the way a pointer user does.
   const row = result.container.querySelector('[data-message-id]');
-  if (row) fireEvent.mouseEnter(row);
+  if (row) {
+    fireEvent.pointerOver(row, { pointerType: 'mouse' });
+    fireEvent.mouseEnter(row);
+  }
   return result;
 }
 
@@ -207,8 +210,10 @@ describe('MessageItem - mobile actions', () => {
     await openMobileActions();
 
     const sheet = screen.getByTestId('mobile-message-actions');
+    // Six one-tap reactions lead, then the round button into the full picker.
+    expect(within(screen.getByTestId('mobile-quick-reactions')).getAllByRole('button')).toHaveLength(6);
     const reaction = within(sheet).getByRole('button', { name: /Add reaction/i });
-    expect(reaction).toHaveClass('w-full', 'gap-3');
+    expect(reaction).toHaveClass('rounded-full');
     expect(reaction.querySelector('svg')).toBe(reaction.firstElementChild);
     await userEvent.click(reaction);
 

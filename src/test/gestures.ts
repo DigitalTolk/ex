@@ -2,23 +2,21 @@ import { act } from 'react';
 
 // Real pointer-gesture driver for the browser (Playwright) test suite.
 //
-// Motion's drag gesture (motion/react → framer-motion) is pointer-event based:
-//   • `pointerdown` is listened for on the ELEMENT (VisualElementDragControls.addListeners).
-//   • Once down, a PanSession attaches `pointermove` / `pointerup` / `pointercancel`
-//     on the CONTEXT WINDOW (not the element) — so moves/up must be dispatched on `window`.
-//   • The pan reads coordinates from `event.pageX` / `event.pageY` (event-info.mjs),
-//     NOT clientX/clientY — so we pin pageX/pageY on every synthetic event.
-//   • `isPrimaryPointer` must hold: for touch/pen `isPrimary !== false`; for mouse `button <= 0`.
-//   • A pan only STARTS once the offset from the down-point exceeds 3px (distanceThreshold),
-//     and with `dragDirectionLock` the first past-10px move only LOCKS the axis, so several
-//     moves are needed before the axis value actually tracks the finger.
-//   • Velocity is derived from a timestamped history whose timestamps come from Motion's
-//     frame clock — so moves must be spread across frames (we await rAF + a delay per step)
-//     for a non-zero, realistic velocity. A trailing "settle" (a delayed no-move sample)
-//     drives velocity back to ~0 to exercise the below-threshold spring-back path.
+// The app's swipes are recognised by @use-gesture/react (hooks/useAxisSwipe):
+//   • `pointerdown` is listened for on the ELEMENT (React's onPointerDown).
+//   • Once down, moves and the release are followed on the WINDOW (pointer
+//     capture is off), so moves/up must be dispatched on `window`.
+//   • Coordinates come from clientX/clientY; pageX/pageY are pinned too for
+//     anything else reading them.
+//   • The swipe only claims a gesture once it has gone clearly along its axis
+//     (8px), so several moves are needed before the surface follows.
+//   • Velocity comes from the event timestamps, so moves are spread across
+//     frames (we await rAF + a delay per step). A trailing "settle" (a delayed
+//     no-move sample) brings the release velocity back to ~0, for a slow
+//     deliberate release.
 //
-// Everything is wrapped in React's `act()` so the state updates Motion drives
-// (onDragStart/onDrag/onDragEnd → setState) are flushed and warning-free.
+// Everything is wrapped in React's `act()` so the state updates the release
+// drives are flushed and warning-free.
 
 const raf = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -65,9 +63,8 @@ function pointerEvent(
     width: 1,
     height: 1,
   });
-  // Motion reads pageX/pageY (not clientX/clientY). These are read-only derived
-  // properties on a constructed event and are unreliable across engines, so we
-  // pin them explicitly to guarantee the pan sees the coordinates we intend.
+  // pageX/pageY are read-only derived properties on a constructed event and
+  // unreliable across engines, so pin them to the coordinates we intend.
   Object.defineProperty(ev, 'pageX', { get: () => x });
   Object.defineProperty(ev, 'pageY', { get: () => y });
   return ev;
@@ -80,7 +77,7 @@ export interface SwipeOptions {
   dy?: number;
   /** Number of intermediate pointermove samples. More steps = smoother/faster velocity. */
   steps?: number;
-  /** Delay (ms) between samples — spreads them across Motion frames so velocity is real. */
+  /** Delay (ms) between samples — spreads them across frames so velocity is real. */
   stepMs?: number;
   /** Origin of the gesture; defaults to the element's center. */
   from?: { x: number; y: number };
@@ -91,27 +88,32 @@ export interface SwipeOptions {
    * otherwise trip the velocity threshold even for a short distance).
    */
   settle?: boolean;
+  /**
+   * End with a pointercancel instead of a pointerup: the browser took the
+   * touch over (a native pan) before the finger lifted.
+   */
+  cancel?: boolean;
 }
 
 /**
- * Drive a REAL Motion drag by dispatching a native pointer sequence:
- * pointerdown on `el`, N pointermoves on `window`, pointerup on `window`.
- * Returns after Motion's post-render onDragEnd has had a chance to run.
+ * Drive a REAL swipe by dispatching a native pointer sequence: pointerdown on
+ * `el`, N pointermoves on `window`, pointerup (or pointercancel) on `window`.
+ * Returns once the release has been handled.
  */
 export async function swipe(el: Element, opts: SwipeOptions = {}): Promise<void> {
-  const { dx = 0, dy = 0, steps = 6, stepMs = 24, from, settle = false } = opts;
+  const { dx = 0, dy = 0, steps = 6, stepMs = 24, from, settle = false, cancel = false } = opts;
   const rect = el.getBoundingClientRect();
   const startX = from?.x ?? rect.left + rect.width / 2;
   const startY = from?.y ?? rect.top + rect.height / 2;
   const pointerId = nextPointerId++;
 
   await withAct(async () => {
-    // Press on the element — this is what arms the PanSession.
+    // Press on the element — this is what arms the swipe.
     el.dispatchEvent(pointerEvent('pointerdown', startX, startY, pointerId));
     await raf();
 
-    // Walk toward the target, one sample per frame, so Motion's frame clock
-    // advances between samples and builds a velocity history.
+    // Walk toward the target, one sample per frame, so the samples carry a
+    // real velocity.
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
       const x = startX + dx * t;
@@ -125,16 +127,16 @@ export async function swipe(el: Element, opts: SwipeOptions = {}): Promise<void>
     const endY = startY + dy;
 
     if (settle) {
-      // Let the recent movement age out of the 100ms velocity window, then take
-      // one more sample at the SAME point → release velocity computes to ~0.
+      // Pause, then take one more sample at the SAME point → the release
+      // velocity computes to ~0.
       await sleep(140);
       await raf();
       window.dispatchEvent(pointerEvent('pointermove', endX, endY, pointerId));
       await raf();
     }
 
-    window.dispatchEvent(pointerEvent('pointerup', endX, endY, pointerId));
-    // onDragEnd is scheduled via frame.postRender — wait a couple frames for it.
+    window.dispatchEvent(pointerEvent(cancel ? 'pointercancel' : 'pointerup', endX, endY, pointerId));
+    // Let the release's state updates and first animation frame land.
     await raf();
     await raf();
   });

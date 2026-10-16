@@ -1,8 +1,7 @@
 import { SCROLL_FADE_TOP, scrolledOffTop } from '@/lib/scroll-fade';
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type WheelEvent } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type WheelEvent } from 'react';
 import { matchPath, useLocation } from 'react-router-dom';
 import { takeOpenChannelsRequest, useOpenChannelsRequest } from '@/lib/mobile-nav';
-import { motion, type PanInfo } from 'motion/react';
 import { Sidebar } from './Sidebar';
 import { PanelResizeHandle } from './PanelResizeHandle';
 import { usePanelWidth } from '@/hooks/usePanelWidth';
@@ -21,12 +20,9 @@ import { useMobileBackClose } from '@/hooks/useMobileBackClose';
 import { useDismissKeyboardOnScroll } from '@/hooks/useDismissKeyboardOnScroll';
 import { useKeyboardSurfaceColor } from '@/hooks/useKeyboardSurfaceColor';
 import { blurActiveInput } from '@/lib/blur-input';
-import {
-  channelDragTransform,
-  clampChannelOffset,
-  latchChannelSwipe,
-  shouldCommitChannelSwipe,
-} from '@/lib/channel-swipe';
+import { useAxisSwipe, type AxisSwipeRelease } from '@/hooks/useAxisSwipe';
+import { useSlide } from '@/hooks/useSlide';
+import { SWIPE_SURFACE_ATTR, shouldCommitSwipe, swipeStartsOn } from '@/lib/swipe';
 import { UpdateBanner } from '@/components/UpdateBanner';
 import { LoadingBar } from '@/components/layout/LoadingBar';
 import { NotificationPermissionBanner } from '@/components/NotificationPermissionBanner';
@@ -76,7 +72,9 @@ const SidebarBody = memo(function SidebarBody({ onClose }: { onClose: () => void
     setScrolled(false);
   }
   return (
-    <div className="relative min-h-0 flex-1" onScrollCapture={(e) => setScrolled(scrolledOffTop(e))}>
+    // isolate: the fades' z-index stays inside the list, never above the
+    // phone tab bar or other chrome.
+    <div className="relative isolate min-h-0 flex-1" onScrollCapture={(e) => setScrolled(scrolledOffTop(e))}>
       {mode === 'activity' ? <ActivityPanel onNavigate={onClose} /> : <Sidebar onClose={onClose} />}
       {/* Once scrolled, channels fade softly under the header. (Activity
           fades below its own filters instead.) */}
@@ -104,7 +102,6 @@ export function AppLayout({ children }: AppLayoutProps) {
   // Mobile: keep the native keyboard strip matching the focused surface.
   useKeyboardSurfaceColor();
   const [manualChannelsOpen, setManualChannelsOpen] = useState(false);
-  const [channelDragOffset, setChannelDragOffset] = useState(0);
   const mainRef = useRef<HTMLElement>(null);
   const appHeaderRef = useRef<HTMLDivElement>(null);
   // Going somewhere closes a manually opened drawer — a pick from the
@@ -113,33 +110,32 @@ export function AppLayout({ children }: AppLayoutProps) {
   // ?thread= or #msg-). (Rows in the list close it themselves; this covers
   // everything else.)
   const [drawerLocation, setDrawerLocation] = useState(location.key);
+  // A pick from the list on the home screen slides the conversation in at
+  // once. Its navigation renders as a transition, the whole new page, and
+  // the slide used to wait for that; now the page renders under the slide.
+  // The route it goes to takes over from there.
+  const [leavingHome, setLeavingHome] = useState(false);
   if (drawerLocation !== location.key) {
     setDrawerLocation(location.key);
     if (manualChannelsOpen) setManualChannelsOpen(false);
+    if (leavingHome) setLeavingHome(false);
   }
-  const mobileChannelsOpen = isMobile && (isHome || manualChannelsOpen);
+  const mobileChannelsOpen = isMobile && ((isHome && !leavingHome) || manualChannelsOpen);
   const inConversation =
     matchPath('/channel/:id', location.pathname) !== null || matchPath('/conversation/:id', location.pathname) !== null;
 
-  /* v8 ignore start -- only called from the Motion pan handler, which fires only in a real browser */
-  const canOpenChannelsFromGesture = useCallback((eventTarget: EventTarget | null) => {
-    /* istanbul ignore next -- only called when !mobileChannelsOpen; on the home route mobileChannelsOpen is always true on mobile, so isHome is never true here */
-    if (isHome) return false;
-    if (eventTarget instanceof Element && eventTarget.closest('[data-mobile-right-sidebar="true"]')) return false;
-    if (document.querySelector('[data-mobile-right-sidebar="true"]')) return false;
-    return true;
-  }, [isHome]);
-  /* v8 ignore stop */
-  /* istanbul ignore next -- same dead defensive arm as the v8 ignore above */
-
   const openChannelsWithAnimation = useCallback(() => {
-    setChannelDragOffset(0);
     setManualChannelsOpen(true);
   }, []);
 
   const closeChannels = useCallback(() => {
-    setChannelDragOffset(0);
     setManualChannelsOpen(false);
+  }, []);
+
+  // A row in the list was picked: it navigates, and the list makes way.
+  const leaveChannels = useCallback(() => {
+    setManualChannelsOpen(false);
+    setLeavingHome(true);
   }, []);
 
   // Android/browser Back closes a manually-opened drawer instead of leaving
@@ -147,78 +143,79 @@ export function AppLayout({ children }: AppLayoutProps) {
   // isHome — not manualChannelsOpen — so this never arms there).
   useMobileBackClose(manualChannelsOpen, closeChannels);
 
-  // Per-swipe "committed" latch. Once a gesture has crossed the axis
-  // lock (clearly horizontal), we keep tracking finger movement even
-  // if the user wobbles vertically — the previous implementation
-  // reset the offset to 0 on every wobble, causing the "drag glitches
-  // / impossible to close mid-flick" symptom the user reported.
-  const swipeCommittedRef = useRef<'open' | 'close' | null>(null);
+  // Phone: the conversation lies over the channel list. mainSlide is how far
+  // it is slid aside: 0 covers the list, the viewport's width reveals it. A
+  // swipe moves it with the finger; anything else that opens or closes the
+  // list (a back button, a row, a route) slides it there, carrying the speed
+  // of the swipe that committed it — on the compositor (hooks/useSlide), so
+  // the page that opens can render while it slides.
+  const mainSlide = useSlide(mainRef, isMobile && mobileChannelsOpen ? window.innerWidth : 0);
+  const releaseVelocityRef = useRef(0);
+  const [channelSwiping, setChannelSwiping] = useState(false);
+  useLayoutEffect(() => {
+    if (!isMobile) {
+      mainSlide.set(0);
+      return;
+    }
+    const velocity = releaseVelocityRef.current;
+    releaseVelocityRef.current = 0;
+    mainSlide.slideTo(mobileChannelsOpen ? window.innerWidth : 0, velocity);
+  }, [isMobile, mobileChannelsOpen, mainSlide]);
+  // Rotating the phone moves where an open list leaves the conversation —
+  // at once, ending any slide still on its way to the old width.
+  useEffect(() => {
+    if (!isMobile) return;
+    const onResize = () => mainSlide.set(mobileChannelsOpen ? window.innerWidth : 0);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [isMobile, mobileChannelsOpen, mainSlide]);
 
-  // Motion pan-gesture replacement for the old react-swipeable channel
-  // drag-to-open. The decision logic lives in lib/channel-swipe (unit
-  // tested); these handlers are thin Motion wiring. Motion's pan needs a
-  // real browser, so the handler bodies are coverage-ignored — the logic
-  // they call is covered in channel-swipe.test.
-  /* v8 ignore start -- Motion's pointer-based pan gesture only fires in a real browser, not jsdom; the decision logic is unit-tested in channel-swipe.test */
-  /* istanbul ignore next -- Motion's pointer-based pan gesture only fires in a real browser, not jsdom; the decision logic is unit-tested in channel-swipe.test */
-  const onChannelPanStart = useCallback(() => {
-    swipeCommittedRef.current = null;
-  }, []);
-
-  const onChannelPan = useCallback(
-    /* istanbul ignore next -- driven by Motion pan; logic covered in channel-swipe.test */
-    (event: PointerEvent, info: PanInfo) => {
-      if (!isMobile) return;
-      const startX = info.point.x - info.offset.x;
-      if (swipeCommittedRef.current === null) {
-        const intent = latchChannelSwipe({
-          absX: Math.abs(info.offset.x),
-          absY: Math.abs(info.offset.y),
-          deltaX: info.offset.x,
-          startX,
-          mobileChannelsOpen,
-          canOpen: canOpenChannelsFromGesture(event.target as EventTarget | null),
-        });
-        if (!intent) return;
-        swipeCommittedRef.current = intent;
-        blurActiveInput();
-      }
-      const viewportWidth = typeof window === 'undefined' ? Infinity : window.innerWidth;
-      setChannelDragOffset(clampChannelOffset(swipeCommittedRef.current, info.offset.x, viewportWidth));
+  // Settle a released swipe of the conversation: one that was sliding it
+  // aside to reveal the list, or back over it. Commit it into the drawer
+  // state, or slide back to where it started.
+  const settleChannelSwipe = (revealing: boolean, { value, velocity, aborted }: AxisSwipeRelease) => {
+    setChannelSwiping(false);
+    const travel = window.innerWidth;
+    // Progress and speed towards where the swipe was going.
+    const distance = revealing ? value : travel - value;
+    const speed = revealing ? velocity : -velocity;
+    if (!aborted && shouldCommitSwipe({ distance, velocity: speed, travel })) {
+      releaseVelocityRef.current = velocity;
+      setManualChannelsOpen(revealing);
+      return;
+    }
+    mainSlide.slideTo(revealing ? 0 : travel, velocity);
+  };
+  // Swipe the conversation aside, from anywhere on it, to reveal the list.
+  // Not while a right-hand panel covers it: that panel swipes itself away.
+  const revealListSwipe = useAxisSwipe({
+    enabled: isMobile && !mobileChannelsOpen,
+    axis: 'x',
+    value: mainSlide,
+    range: () => [0, window.innerWidth],
+    canStart: (target, surface) =>
+      swipeStartsOn(target, surface) && !document.querySelector('[data-mobile-right-sidebar="true"]'),
+    onStart: () => {
+      setChannelSwiping(true);
+      blurActiveInput();
     },
-    [isMobile, mobileChannelsOpen, canOpenChannelsFromGesture],
-  );
-
-  const onChannelPanEnd = useCallback(
-    /* istanbul ignore next -- driven by Motion pan; logic covered in channel-swipe.test */
-    (_event: PointerEvent, info: PanInfo) => {
-      const committed = swipeCommittedRef.current;
-      swipeCommittedRef.current = null;
-      if (!committed) {
-        setChannelDragOffset(0);
-        return;
-      }
-      // react-swipeable velocity was px/ms; Motion's is px/s.
-      const commit = shouldCommitChannelSwipe({
-        absX: Math.abs(info.offset.x),
-        velocityPxPerMs: Math.abs(info.velocity.x) / 1000,
-      });
-      if (commit && committed === 'open' && info.offset.x > 0) {
-        setManualChannelsOpen(true);
-      } else if (commit && committed === 'close' && info.offset.x < 0) {
-        setManualChannelsOpen(false);
-      }
-      setChannelDragOffset(0);
-    },
-    [],
-  );
-  /* v8 ignore stop */
-  /* istanbul ignore next -- same dead defensive arm as the v8 ignore above */
+    onRelease: (release) => settleChannelSwipe(true, release),
+  });
+  // Swipe the list away to slide the conversation behind it back.
+  const returnToConversationSwipe = useAxisSwipe({
+    enabled: isMobile && manualChannelsOpen && !isHome,
+    axis: 'x',
+    value: mainSlide,
+    range: () => [0, window.innerWidth],
+    canStart: swipeStartsOn,
+    onStart: () => setChannelSwiping(true),
+    onRelease: (release) => settleChannelSwipe(false, release),
+  });
 
   const setMainNode = useCallback((node: HTMLElement | null) => {
     mainRef.current = node;
   }, []);
-  const mobileShellActive = isMobile && (mobileChannelsOpen || channelDragOffset !== 0);
+  const mobileShellActive = isMobile && (mobileChannelsOpen || channelSwiping);
   /* v8 ignore start -- synthetic wheel support differs between jsdom and browsers; browser tests cover visibility around this surface. */
   /* istanbul ignore next -- synthetic wheel support differs between jsdom and browsers; browser tests cover visibility around this surface. */
   const forwardHeaderWheel = useCallback((event: WheelEvent<HTMLElement>) => {
@@ -275,15 +272,6 @@ export function AppLayout({ children }: AppLayoutProps) {
   }, []);
   /* v8 ignore stop */
   /* istanbul ignore next -- same dead defensive arm as the v8 ignore above */
-  const mainDragStyle: CSSProperties | undefined = useMemo(() => {
-    if (!isMobile) return undefined;
-    const transform = channelDragTransform(channelDragOffset, mobileChannelsOpen);
-    // The live-drag offset is only ever non-zero during a Motion pan, so
-    // the transition:'none' arm isn't reachable in jsdom.
-    /* istanbul ignore next -- driven by Motion pan; channelDragTransform is unit-tested in channel-swipe.test */
-    return channelDragOffset !== 0 ? { transform, transition: 'none' } : { transform };
-  }, [channelDragOffset, isMobile, mobileChannelsOpen]);
-
   // Compact tier (narrow desktop window / tablet band): the persistent
   // sidebar doesn't fit, so the top-bar toggle opens a desktop-styled overlay
   // sidebar instead of the mobile drawer — no gestures, no sheets, Escape and
@@ -313,10 +301,13 @@ export function AppLayout({ children }: AppLayoutProps) {
   useEffect(() => {
     if (!compactSidebarOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setCompactSidebarToggled(false);
+      if (e.key !== 'Escape') return;
+      // The overlay is on top: the key is its (a right-hand panel stays open).
+      e.preventDefault();
+      setCompactSidebarToggled(false);
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
   }, [compactSidebarOpen]);
 
   // Resizable persistent sidebar (desktop): dragged width persists across
@@ -327,20 +318,17 @@ export function AppLayout({ children }: AppLayoutProps) {
     'Resize channel sidebar',
   );
 
-  // Phone: the bottom tab bar shows on the list screens (Home, Activity).
-  // A conversation or thread has its own back button and composer, so the
-  // bar steps aside there, and while the keyboard is up. While it shows it
-  // covers the home indicator, so the surfaces above it drop their own
-  // bottom safe-area padding.
+  // Phone: the bottom tab bar belongs to the list screen (Home, Activity),
+  // at its foot. A conversation slides in over it, the way a pushed screen
+  // covers the tab bar in a native app — so opening or leaving the list
+  // never resizes the conversation or the list mid-slide. It steps aside
+  // while the keyboard is up. While it shows it covers the home indicator,
+  // so the list above it drops its own bottom safe-area padding.
   const textFieldFocused = useTextFieldFocused(isMobile);
-  const showTabBar = mobileChannelsOpen && !textFieldFocused;
 
   return (
     <TagSearchProvider>
-      <div
-        className="flex h-full overflow-hidden bg-sidebar"
-        style={showTabBar ? ({ '--bottom-safe-inset': '0px' } as CSSProperties) : undefined}
-      >
+      <div className="flex h-full overflow-hidden bg-sidebar">
         {/* Persistent sidebar (full tier): runs the full window height, with
             the Home / Activity switch level with the top bar. Mounted only on
             that tier, so narrower layouts don't keep a hidden copy of the list
@@ -369,7 +357,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           <div
             ref={appHeaderRef}
             onWheel={forwardHeaderWheel}
-            className={isMobile && (mobileChannelsOpen || inConversation) ? 'hidden' : undefined}
+            className={isMobile && (mobileChannelsOpen || inConversation || leavingHome) ? 'hidden' : undefined}
           >
             <AppTopBar
               onOpenChannels={tier === 'compact' ? () => setCompactSidebarToggled((v) => !v) : openChannelsWithAnimation}
@@ -414,35 +402,39 @@ export function AppLayout({ children }: AppLayoutProps) {
             )}
             {isMobile && (
               <aside
-                className="absolute inset-0 z-0 flex flex-col bg-sidebar text-sidebar-foreground lg:hidden"
+                className="absolute inset-0 z-0 flex flex-col bg-sidebar text-sidebar-foreground touch-pan-y lg:hidden"
+                style={textFieldFocused ? undefined : ({ '--bottom-safe-inset': '0px' } as CSSProperties)}
                 inert={mobileChannelsOpen ? undefined : true}
                 data-testid="mobile-channel-sidebar"
                 data-app-chrome="true"
                 data-keyboard-surface="sidebar"
+                {...{ [SWIPE_SURFACE_ATTR]: 'x' }}
+                {...returnToConversationSwipe}
               >
                 <MobileSidebarTitle />
-                <SidebarBody onClose={closeChannels} />
+                <SidebarBody onClose={leaveChannels} />
+                {/* Hidden, not unmounted, while typing: the bar owns the
+                    account sheet and the dialogs it opens (status,
+                    settings), which have text fields of their own. */}
+                <MobileTabBar hidden={textFieldFocused} />
               </aside>
             )}
-            <motion.main
+            {/* Phone: will-change keeps main the containing block of the
+                fixed right-hand panels (Header measures their top from it)
+                even at rest, where it has no transform at all. */}
+            <main
               ref={setMainNode}
-              className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background mobile:relative mobile:z-10 mobile:touch-pan-y mobile:transform-gpu mobile:transition-transform mobile:duration-200 mobile:ease-out"
+              className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background mobile:relative mobile:z-10 mobile:touch-pan-y mobile:will-change-transform"
               data-app-main="true"
-              style={mainDragStyle}
               data-channel-dragging={mobileShellActive ? 'true' : 'false'}
               data-mobile-channels-open={mobileChannelsOpen ? 'true' : 'false'}
-              onPanStart={onChannelPanStart}
-              onPan={onChannelPan}
-              onPanEnd={onChannelPanEnd}
+              {...(isMobile ? { [SWIPE_SURFACE_ATTR]: 'x' } : {})}
+              {...revealListSwipe}
             >
               <LoadingBar />
               {children}
-            </motion.main>
+            </main>
           </div>
-          {/* Hidden, not unmounted, while typing: the bar owns the account
-              sheet and the dialogs it opens (status, settings), which have
-              text fields of their own. */}
-          {isMobile && <MobileTabBar hidden={!showTabBar} />}
         </div>
       </div>
     </TagSearchProvider>

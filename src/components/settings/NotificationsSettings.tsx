@@ -14,6 +14,7 @@ import { getNotificationTrace } from '@/lib/notification-trace';
 import type { MobileNotificationLevel, NotificationLevel, NotificationSettings, User } from '@/types';
 import { SettingsRow, SettingsSection } from './settings-ui';
 import { useSaveTracker } from './save-status';
+import { NativeSelect } from '@/components/ui/native-select';
 
 // withKeyword appends a trimmed keyword unless it's blank or a case-insensitive
 // duplicate.
@@ -183,24 +184,18 @@ const SWITCH_CLASS = 'data-unchecked:bg-muted-foreground/30 dark:data-unchecked:
 
 function LevelSelect({ id, value, onChange }: { id: string; value: string; onChange: (v: string) => void }) {
   return (
-    <div className="relative shrink-0 narrow:w-full">
-      <select
-        id={id}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-9 w-56 cursor-pointer appearance-none rounded-lg border border-border-strong bg-popover pr-8 pl-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50 narrow:w-full"
-      >
-        {DESKTOP_LEVEL_OPTIONS.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-      <ChevronDown
-        className="pointer-events-none absolute top-1/2 right-2.5 h-4 w-4 -translate-y-1/2 text-muted-foreground"
-        aria-hidden="true"
-      />
-    </div>
+    <NativeSelect
+      id={id}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-56 shrink-0 narrow:w-full"
+    >
+      {DESKTOP_LEVEL_OPTIONS.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </NativeSelect>
   );
 }
 
@@ -373,7 +368,7 @@ function DeviceSection() {
         </SettingsRow>
       )}
       {idleStatus && (
-        <p className="py-3 text-[13px] text-muted-foreground" role="status" data-testid="idle-detection-status">
+        <p className="py-3 text-sm text-muted-foreground" role="status" data-testid="idle-detection-status">
           {idleStatus}
         </p>
       )}

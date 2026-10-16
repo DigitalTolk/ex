@@ -1,6 +1,9 @@
-import type { ComponentType } from 'react';
+import type { ComponentType, PointerEvent as ReactPointerEvent, RefObject } from 'react';
 import { Bell, Home } from 'lucide-react';
 import { useActivityUnread } from '@/hooks/useActivity';
+import { useReactionFlash } from '@/stores/reaction-flash';
+import { ReactionFlashIcon } from './ReactionFlashIcon';
+import { ActivityHoverPreview } from './ActivityHoverPreview';
 import { setSidebarMode, useSidebarModeStore, type SidebarMode } from '@/stores/sidebar-mode';
 
 // ActivityModeSwitch is the Home / Activity toggle at the top of the sidebar.
@@ -15,7 +18,21 @@ export function ActivityModeSwitch() {
   return (
     <div role="group" aria-label="Sidebar" className="flex w-full gap-1 rounded-lg bg-sidebar-accent/60 p-1" data-testid="sidebar-mode-switch">
       <ModeButton mode="home" label="Home" icon={Home} selected={mode === 'home'} />
-      <ModeButton mode="activity" label="Activity" icon={Bell} selected={mode === 'activity'} unread={unread} />
+      <ActivityHoverPreview>
+        {(trigger) => (
+          <ModeButton
+            mode="activity"
+            label="Activity"
+            icon={Bell}
+            selected={mode === 'activity'}
+            unread={unread}
+            buttonRef={trigger.ref}
+            onPointerEnter={trigger.onPointerEnter}
+            onPointerLeave={trigger.onPointerLeave}
+            onPreviewClose={trigger.onClick}
+          />
+        )}
+      </ActivityHoverPreview>
     </div>
   );
 }
@@ -26,20 +43,35 @@ interface ModeButtonProps {
   icon: ComponentType<{ className?: string }>;
   selected: boolean;
   unread?: number;
+  // The Activity bell's hover preview: it anchors to the button and listens
+  // for the pointer resting on it.
+  buttonRef?: RefObject<HTMLButtonElement | null>;
+  onPointerEnter?: (event: ReactPointerEvent<HTMLElement>) => void;
+  onPointerLeave?: () => void;
+  onPreviewClose?: () => void;
 }
 
-function ModeButton({ mode, label, icon: Icon, selected, unread = 0 }: ModeButtonProps) {
+function ModeButton({ mode, label, icon: Icon, selected, unread = 0, buttonRef, onPointerEnter, onPointerLeave, onPreviewClose }: ModeButtonProps) {
+  // The Activity bell becomes the emoji for a moment when a reaction lands.
+  const flash = useReactionFlash();
+  const flashing = mode === 'activity' && flash;
   return (
     <button
       type="button"
       aria-pressed={selected}
       aria-label={unread > 0 ? `${label}, unread` : label}
       title={selected ? undefined : label}
-      onClick={() => setSidebarMode(mode)}
+      ref={buttonRef}
+      onPointerEnter={onPointerEnter}
+      onPointerLeave={onPointerLeave}
+      onClick={() => {
+        onPreviewClose?.();
+        setSidebarMode(mode);
+      }}
       // flex-grow animates: the selected button widens to fit its label while
       // the other settles to an icon-sized pill.
       style={{ flexGrow: selected ? 1 : 0 }}
-      className={`relative flex h-8 min-w-0 basis-9 items-center justify-start overflow-hidden rounded-md px-2.5 text-sm font-medium outline-none transition-[flex-grow,background-color,color,box-shadow] duration-300 ease-out focus-visible:ring-2 focus-visible:ring-ring/50 motion-reduce:transition-none ${
+      className={`relative flex h-8 min-w-0 basis-9 items-center justify-start rounded-md px-2.5 text-sm font-medium outline-none transition-[flex-grow,background-color,color,box-shadow] duration-300 ease-out focus-visible:ring-2 focus-visible:ring-ring/50 motion-reduce:transition-none ${
         selected
           ? 'bg-background text-sidebar-foreground shadow-xs dark:bg-sidebar-accent'
           : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'
@@ -47,7 +79,7 @@ function ModeButton({ mode, label, icon: Icon, selected, unread = 0 }: ModeButto
       data-testid={`sidebar-mode-${mode}`}
     >
       <span className="relative shrink-0">
-        <Icon className="h-4 w-4" aria-hidden="true" />
+        {flashing ? <ReactionFlashIcon flash={flash} className="h-4 w-4" /> : <Icon className="h-4 w-4" aria-hidden="true" />}
         {unread > 0 && (
           <span
             className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-brand ring-2 ring-sidebar"

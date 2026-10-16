@@ -18,7 +18,7 @@ const ACCENTS: Record<NoticeAccent, { card: string; header: string }> = {
 // noticeStackClass lays out a column of notice cards above the composer.
 export const noticeStackClass = 'pointer-events-auto mb-1 ml-1 flex w-fit max-w-xl flex-col gap-2';
 
-// NoticeCard is one card: an accent-tinted border over a blurred background,
+// NoticeCard is one card: an accent-tinted border over an opaque background,
 // with a header strip in the same accent.
 export function NoticeCard({
   accent,
@@ -35,7 +35,7 @@ export function NoticeCard({
   return (
     <div
       data-testid={testID}
-      className={`w-full overflow-hidden rounded-xl border ${a.card} bg-background/95 shadow-lg backdrop-blur`}
+      className={`w-full overflow-hidden rounded-xl border ${a.card} bg-background shadow-lg`}
     >
       <div className={`flex items-center gap-2 border-b ${a.header} px-3 py-2`}>{header}</div>
       <div className="px-3 py-2.5">{children}</div>

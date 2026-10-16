@@ -49,9 +49,10 @@ export function ActivityFilterTabs({ filter, unread }: ActivityFilterTabsProps) 
           // from; a closing one shrinks toward the new tab.
           const anchor = active ? (last.from < i ? 'left' : 'right') : index > i ? 'right' : 'left';
           const Icon = TAB_ICON[t.id];
-          const hasUnread = t.id !== 'all' && unread[t.id] > 0;
-          // New reactions don't earn a dot: the tab turns bold and highlighted.
-          const highlight = hasUnread && t.id === 'reaction';
+          // Reactions never dot: they flash on the bell as they land. New
+          // ones turn the Reactions tab bold and highlighted instead.
+          const hasUnread = t.id !== 'all' && t.id !== 'reaction' && unread[t.id] > 0;
+          const highlight = t.id === 'reaction' && unread[t.id] > 0;
           return (
             <Tabs.Tab
               key={t.id}

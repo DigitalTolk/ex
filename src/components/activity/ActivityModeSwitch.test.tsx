@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ActivityModeSwitch } from './ActivityModeSwitch';
 import { apiFetch } from '@/lib/api';
 import { resetSidebarModeSessionState, setSidebarMode, useSidebarModeStore } from '@/stores/sidebar-mode';
+import { flashReaction, REACTION_FLASH_MS, resetReactionFlashForTests } from '@/stores/reaction-flash';
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
+vi.mock('@/hooks/useEmoji', () => ({ useEmojiMap: () => ({ data: {} }) }));
 
 function Where() {
   return <span data-testid="where">{useLocation().pathname}</span>;
@@ -65,6 +67,24 @@ describe('ActivityModeSwitch', () => {
     renderAt('/channel/general', 0);
     await vi.waitFor(() => expect(apiFetch).toHaveBeenCalled());
     expect(screen.queryByTestId('activity-unread-dot')).toBeNull();
+  });
+
+  it('flashes a reaction in place of the bell, then brings the bell back', async () => {
+    vi.useFakeTimers();
+    resetReactionFlashForTests();
+    try {
+      renderAt('/channel/general', 0);
+      expect(screen.queryByTestId('activity-reaction-flash')).toBeNull();
+      act(() => flashReaction(':tada:'));
+      expect(screen.getByTestId('activity-reaction-flash')).toHaveAttribute('aria-label', 'Reaction :tada:');
+      act(() => {
+        vi.advanceTimersByTime(REACTION_FLASH_MS);
+      });
+      expect(screen.queryByTestId('activity-reaction-flash')).toBeNull();
+    } finally {
+      resetReactionFlashForTests();
+      vi.useRealTimers();
+    }
   });
 
   it('switches the sidebar without leaving the page', () => {

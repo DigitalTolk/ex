@@ -11,6 +11,8 @@ import {
 } from '@/hooks/useAgents';
 import { ScheduledOrders } from './ScheduledOrders';
 import { WatchedChannels } from './WatchedChannels';
+import { NativeSelect } from '@/components/ui/native-select';
+import { wholeNumberField } from '@/lib/numeric-field';
 
 function statusBadge(status: string, serverRun: boolean) {
   switch (status) {
@@ -231,9 +233,9 @@ export function AgentCard({ agent }: { agent: AgentView }) {
             <div className="flex flex-wrap items-end gap-3">
               <div>
                 <Label htmlFor={`harness-${agent.slug}`}>Backend</Label>
-                <select
+                <NativeSelect
                   id={`harness-${agent.slug}`}
-                  className="mt-1 block rounded-md border bg-transparent p-2 text-sm"
+                  className="mt-1"
                   value={harness}
                   onChange={(e) => setHarness(e.target.value)}
                 >
@@ -241,7 +243,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
                   <option value="claude">Claude Code (CLI)</option>
                   <option value="codex">Codex (CLI)</option>
                   <option value="bedrock">AWS Bedrock (API)</option>
-                </select>
+                </NativeSelect>
               </div>
               <div>
                 <Label htmlFor={`model-${agent.slug}`}>Model</Label>
@@ -262,33 +264,31 @@ export function AgentCard({ agent }: { agent: AgentView }) {
                 <Input
                   id={`rounds-${agent.slug}`}
                   className="mt-1 w-28"
-                  type="number"
-                  min={1}
-                  max={50}
+                  inputMode="numeric"
                   value={chainRounds}
                   placeholder={String(agent.resolved.limits.maxChainRounds ?? 12)}
-                  onChange={(e) => setChainRounds(e.target.value)}
+                  onChange={(e) => setChainRounds(wholeNumberField(e.target.value, 1, 50))}
                 />
               </div>
               {!effectiveBedrock && (
                 <div>
                   <Label htmlFor={`offline-${agent.slug}`}>If your app is offline</Label>
-                  <select
+                  <NativeSelect
                     id={`offline-${agent.slug}`}
-                    className="mt-1 block rounded-md border bg-transparent p-2 text-sm"
+                    className="mt-1"
                     value={offlinePolicy}
                     onChange={(e) => setOfflinePolicy(e.target.value)}
                   >
                     <option value="">fail fast (default)</option>
                     <option value="queue">queue up to 1 hour</option>
-                  </select>
+                  </NativeSelect>
                 </div>
               )}
               <div>
                 <Label htmlFor={`followup-${agent.slug}`}>Thread follow-ups</Label>
-                <select
+                <NativeSelect
                   id={`followup-${agent.slug}`}
-                  className="mt-1 block rounded-md border bg-transparent p-2 text-sm"
+                  className="mt-1"
                   value={followUp}
                   onChange={(e) => setFollowUp(e.target.value)}
                   title="After it replies in a thread, your un-tagged replies there keep re-invoking it (on your quota)."
@@ -298,7 +298,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
                   <option value="window:30">for 30 min after it replies</option>
                   <option value="window:60">for 1 hour after it replies</option>
                   <option value="always">always follow its threads</option>
-                </select>
+                </NativeSelect>
               </div>
               {followUp !== '' && (
                 <label

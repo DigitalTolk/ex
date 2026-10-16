@@ -20,13 +20,16 @@ vi.mock('@/hooks/useEmoji', () => ({
 
 // Controlled-open dropdown mock: forwards `open` and `onOpenChange` so
 // tests can drive the menu's open state and observe whether the host
-// component (MessageItem) closes it on mouseLeave.
+// component (MessageItem) closes it on pointerLeave.
+const MenuMockContext = React.createContext<{ onOpenChange?: (v: boolean) => void }>({});
 vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenuSub: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenuSubTrigger: ({ children, ...rest }: { children: React.ReactNode; [k: string]: unknown }) => (
     <button {...rest}>{children}</button>
   ),
   DropdownMenuSubContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  // The trigger reads the menu's open handler from context, as the real one
+  // does, so a wrapper between the two (the trigger's tooltip) is fine.
   DropdownMenu: ({
     children,
     open,
@@ -43,29 +46,13 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
       data-open={open ? 'true' : 'false'}
       data-modal={modal === false ? 'false' : 'true'}
     >
-      {React.Children.map(children, (child) => {
-        if (!React.isValidElement(child)) return child;
-        return React.cloneElement(child as React.ReactElement<Record<string, unknown>>, {
-          'data-open': open,
-          'data-on-open-change': onOpenChange,
-        });
-      })}
+      <MenuMockContext.Provider value={{ onOpenChange }}>{children}</MenuMockContext.Provider>
     </div>
   ),
-  DropdownMenuTrigger: ({
-    children,
-    ...props
-  }: { children: React.ReactNode; [k: string]: unknown } & {
-    'data-on-open-change'?: (v: boolean) => void;
-  }) => {
-    const { 'data-on-open-change': onOpenChange, ...rest } = props as Record<string, unknown> & {
-      'data-on-open-change'?: (v: boolean) => void;
-    };
+  DropdownMenuTrigger: ({ children, ...props }: { children: React.ReactNode; [k: string]: unknown }) => {
+    const { onOpenChange } = React.useContext(MenuMockContext);
     return (
-      <button
-        {...rest}
-        onClick={() => onOpenChange?.(true)}
-      >
+      <button {...props} onClick={() => onOpenChange?.(true)}>
         {children}
       </button>
     );
@@ -86,7 +73,7 @@ function renderWithProviders(ui: React.ReactElement) {
   // The hover toolbar mounts on hover (MessageItem): hover the first row so
   // the tests can reach its actions the way a pointer user does.
   const row = result.container.querySelector('[data-message-id]');
-  if (row) fireEvent.mouseEnter(row);
+  if (row) fireEvent.pointerEnter(row, { pointerType: 'mouse' });
   return result;
 }
 
@@ -227,7 +214,7 @@ describe('MessageItem - hover bar and avatar', () => {
     // Bug: clicking "..." opened the menu and pinned the toolbar, but
     // moving the mouse to a different message left the toolbar stuck on
     // the original row because the dropdown was still open. The fix
-    // listens for mouseEnter on every row and closes any other open
+    // listens for pointerEnter on every row and closes any other open
     // menu — so hovering message B drops message A's menu instantly.
     renderWithProviders(
       <>
@@ -243,7 +230,7 @@ describe('MessageItem - hover bar and avatar', () => {
     // Hover the second message — A's menu must close (its toolbar, and
     // the menu root with it, unmount).
     const rowB = document.querySelector('[data-message-id="msg-b"]') as HTMLElement;
-    fireEvent.mouseEnter(rowB);
+    fireEvent.pointerEnter(rowB, { pointerType: 'mouse' });
     expect(rootA.isConnected).toBe(false);
     expect(document.querySelector('[data-message-id="msg-a"] [data-testid="dropdown-root"]')).toBeNull();
   });
@@ -261,7 +248,7 @@ describe('MessageItem - hover bar and avatar', () => {
     expect(root.getAttribute('data-open')).toBe('true');
 
     const row = trigger.closest('[data-message-id]') as HTMLElement;
-    fireEvent.mouseEnter(row);
+    fireEvent.pointerEnter(row, { pointerType: 'mouse' });
     expect(root.getAttribute('data-open')).toBe('true');
   });
 
@@ -272,21 +259,21 @@ describe('MessageItem - hover bar and avatar', () => {
       <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} />,
     );
     const row = document.querySelector('[data-message-id]') as HTMLElement;
-    fireEvent.mouseLeave(row); // renderWithProviders hovers the row
+    fireEvent.pointerLeave(row, { pointerType: 'mouse' }); // renderWithProviders hovers the row
     expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
   });
 
-  it('mounts the toolbar on row mouseEnter and unmounts it on mouseLeave', () => {
+  it('mounts the toolbar on row pointerEnter and unmounts it on pointerLeave', () => {
     renderWithProviders(
       <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} />,
     );
     const row = document.querySelector('[data-message-id]') as HTMLElement;
-    fireEvent.mouseLeave(row);
+    fireEvent.pointerLeave(row, { pointerType: 'mouse' });
     expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
-    fireEvent.mouseEnter(row);
+    fireEvent.pointerEnter(row, { pointerType: 'mouse' });
     const toolbar = document.querySelector('[role="toolbar"][aria-label="Message actions"]') as HTMLElement;
     expect(toolbar.getAttribute('data-actions-visible')).toBe('true');
-    fireEvent.mouseLeave(row);
+    fireEvent.pointerLeave(row, { pointerType: 'mouse' });
     expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
   });
 
@@ -295,7 +282,7 @@ describe('MessageItem - hover bar and avatar', () => {
       <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} />,
     );
     const row = document.querySelector('[data-message-id]') as HTMLElement;
-    fireEvent.mouseLeave(row);
+    fireEvent.pointerLeave(row, { pointerType: 'mouse' });
     expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
     // Keyboard focus (Tab) pins the toolbar.
     fireEvent.keyDown(window, { key: 'Tab' });
@@ -321,7 +308,7 @@ describe('MessageItem - hover bar and avatar', () => {
     const button = document.querySelector('[role="toolbar"] button') as HTMLElement;
     fireEvent.pointerDown(button);
     fireEvent.focus(button);
-    fireEvent.mouseLeave(row);
+    fireEvent.pointerLeave(row, { pointerType: 'mouse' });
     expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
   });
 
@@ -330,15 +317,15 @@ describe('MessageItem - hover bar and avatar', () => {
       <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} currentUserId="user-1" />,
     );
     const row = document.querySelector('[data-message-id]') as HTMLElement;
-    fireEvent.mouseEnter(row);
+    fireEvent.pointerEnter(row, { pointerType: 'mouse' });
     const inside = document.querySelector('[role="toolbar"] button') as HTMLElement;
-    // mouseout/mouseover whose relatedTarget is still inside the row: the
+    // pointerout/pointerover whose relatedTarget is still inside the row: the
     // pointer only crossed a child boundary, not the row's, so React fires
-    // no mouseleave and the toolbar stays.
-    fireEvent.mouseOut(row, { relatedTarget: inside });
-    fireEvent.mouseOver(inside, { relatedTarget: row });
+    // no pointerleave and the toolbar stays.
+    fireEvent.pointerOut(row, { relatedTarget: inside, pointerType: 'mouse' });
+    fireEvent.pointerOver(inside, { relatedTarget: row, pointerType: 'mouse' });
     expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).not.toBeNull();
-    fireEvent.mouseOut(row, { relatedTarget: null });
+    fireEvent.pointerOut(row, { relatedTarget: null, pointerType: 'mouse' });
     expect(document.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
   });
 
@@ -352,7 +339,7 @@ describe('MessageItem - hover bar and avatar', () => {
       <MessageItem message={makeMessage()} authorName="Alice" isOwn={false} />,
     );
     const row = document.querySelector('[data-message-id]') as HTMLElement;
-    fireEvent.mouseEnter(row);
+    fireEvent.pointerEnter(row, { pointerType: 'mouse' });
     fireEvent.click(screen.getByTestId('message-actions-trigger'));
     const toolbar = document.querySelector('[role="toolbar"][aria-label="Message actions"]') as HTMLElement;
     expect(toolbar.getAttribute('data-actions-pinned')).toBe('true');
@@ -360,7 +347,7 @@ describe('MessageItem - hover bar and avatar', () => {
 
     // The cursor leaving the row (e.g. moving to the menu portal) must
     // NOT hide the toolbar while the menu is open.
-    fireEvent.mouseLeave(row);
+    fireEvent.pointerLeave(row, { pointerType: 'mouse' });
     expect(toolbar.getAttribute('data-actions-visible')).toBe('true');
   });
 
@@ -368,7 +355,7 @@ describe('MessageItem - hover bar and avatar', () => {
     // Regression: with modal={true} (the default), Radix shields the
     // rest of the page with pointer-events:none while the menu is
     // open, which (a) breaks the row's own hover state, and (b)
-    // prevents mouseEnter from firing on other message rows —
+    // prevents pointerEnter from firing on other message rows —
     // defeating the singleton listener that's supposed to close the
     // menu when the user hovers elsewhere.
     renderWithProviders(
@@ -393,13 +380,13 @@ describe('MessageItem - hover bar and avatar', () => {
     const toolbarA = rowA.querySelector('[role="toolbar"][aria-label="Message actions"]') as HTMLElement;
     const triggerA = rowA.querySelector('[data-testid="message-actions-trigger"]') as HTMLElement;
 
-    fireEvent.mouseEnter(rowA);
+    fireEvent.pointerEnter(rowA, { pointerType: 'mouse' });
     fireEvent.click(triggerA);
     expect(toolbarA.getAttribute('data-actions-visible')).toBe('true');
     expect(toolbarA.getAttribute('data-actions-pinned')).toBe('true');
 
     // Hover B — A's menu closes and its toolbar unmounts.
-    fireEvent.mouseEnter(rowB);
+    fireEvent.pointerEnter(rowB, { pointerType: 'mouse' });
     expect(rowA.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();
     expect(toolbarA.isConnected).toBe(false);
   });
@@ -418,13 +405,13 @@ describe('MessageItem - hover bar and avatar', () => {
     const rowB = document.querySelector('[data-message-id="msg-b"]') as HTMLElement;
     const toolbarA = rowA.querySelector('[role="toolbar"][aria-label="Message actions"]') as HTMLElement;
 
-    fireEvent.mouseEnter(rowA);
+    fireEvent.pointerEnter(rowA, { pointerType: 'mouse' });
     fireEvent.click(rowA.querySelector('[data-testid="message-actions-trigger"]')!);
-    fireEvent.mouseEnter(rowB);
+    fireEvent.pointerEnter(rowB, { pointerType: 'mouse' });
     // Multiple hovers / leaves on B should never resurrect A's toolbar.
     for (let i = 0; i < 3; i++) {
-      fireEvent.mouseLeave(rowB);
-      fireEvent.mouseEnter(rowB);
+      fireEvent.pointerLeave(rowB, { pointerType: 'mouse' });
+      fireEvent.pointerEnter(rowB, { pointerType: 'mouse' });
     }
     expect(toolbarA.isConnected).toBe(false);
     expect(rowA.querySelector('[role="toolbar"][aria-label="Message actions"]')).toBeNull();

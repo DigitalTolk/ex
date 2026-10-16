@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	nativewebp "github.com/HugoSmits86/nativewebp"
+	"github.com/gen2brain/webp"
 
 	"github.com/DigitalTolk/ex/internal/model"
 )
@@ -239,7 +239,16 @@ func TestMustHelpersPanic(t *testing.T) {
 		}()
 		mustJSONBody(nil, errors.New("boom"))
 	})
+	t.Run("mustEncode", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("mustEncode must panic on error")
+			}
+		}()
+		mustEncode(errors.New("boom"))
+	})
 	t.Run("passthrough", func(t *testing.T) {
+		mustEncode(nil)
 		if got := string(mustThumb([]byte("t"), nil)); got != "t" {
 			t.Fatalf("mustThumb = %q", got)
 		}
@@ -251,7 +260,7 @@ func TestMustHelpersPanic(t *testing.T) {
 
 func TestEncodeWebPThumbnailPanicsOnEncoderFault(t *testing.T) {
 	orig := webpEncode
-	webpEncode = func(io.Writer, image.Image, *nativewebp.Options) error { return errors.New("encoder fault") }
+	webpEncode = func(io.Writer, image.Image, ...webp.Options) error { return errors.New("encoder fault") }
 	defer func() { webpEncode = orig }()
 	defer func() {
 		if recover() == nil {

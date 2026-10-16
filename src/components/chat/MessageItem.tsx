@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent, type MouseEvent, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent, type PointerEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Bot, Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon, AlarmClock, Eye, Mail } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -33,6 +33,8 @@ import { useEditMessage, useDeleteMessage, useToggleReaction, useSetPinned } fro
 import { renderMarkdown } from '@/lib/markdown';
 import { isEmojiOnlyMessage } from '@/lib/emoji-shortcodes';
 import { recordEmojiUse } from '@/lib/emoji-frequency';
+import { padQuickReactions } from '@/lib/quick-reactions';
+import { triggerReactionHaptic } from '@/lib/haptics';
 import { blurActiveInput } from '@/lib/blur-input';
 import { showToast } from '@/lib/toast';
 import { useLongPress } from '@/hooks/useLongPress';
@@ -52,7 +54,8 @@ import { TaskCard } from '@/components/chat/TaskCard';
 import { parseArtifactMarker } from '@/lib/artifact-marker';
 import { parseTaskMarker } from '@/lib/task-marker';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { deviceKind } from '@/lib/device';
+import { deviceKind, isHoverPointer } from '@/lib/device';
+import { isKeyboardModality, startInputModalityTracking } from '@/lib/input-modality';
 import { usePointerDevice } from '@/hooks/usePointerDevice';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
@@ -73,17 +76,61 @@ function notifyMessageHovered(id: string) {
   for (const cb of messageHoverListeners) cb(id);
 }
 
+// The sheet's sections settle in one after another, a beat apart, so the
+// eye lands on the reactions first. Short enough never to feel like waiting.
+function sheetSection(index: number) {
+  return {
+    initial: { opacity: 0, y: 8 },
+    animate: { opacity: 1, y: 0 },
+    transition: { duration: 0.18, delay: 0.04 * index },
+  };
+}
+
+// SheetTile is one of the long-press sheet's everyday actions: an icon over
+// a short label, four to a row, so the sheet stays under half the screen.
+function SheetTile({
+  icon: Icon,
+  label,
+  ariaLabel,
+  onClick,
+  testId,
+}: {
+  icon: typeof Copy;
+  label: string;
+  ariaLabel: string;
+  onClick: () => void;
+  testId?: string;
+}) {
+  return (
+    <button
+      type="button"
+      className="flex h-20 min-w-0 flex-1 flex-col items-center justify-center gap-1.5 rounded-2xl bg-muted text-xs font-medium transition-transform active:scale-95"
+      onClick={onClick}
+      aria-label={ariaLabel}
+      data-testid={testId}
+    >
+      <span className="flex h-9 w-9 items-center justify-center rounded-full bg-background shadow-xs">
+        <Icon className="h-4 w-4" />
+      </span>
+      {label}
+    </button>
+  );
+}
+
 // The toolbar is the only part of a row that follows the pointer, so hover
 // and focus-within live in this little store and only RowHoverGate (around
 // the toolbar) subscribes to it: the row itself never re-renders for a hover.
 // A row render re-runs every tooltip, hover card and reaction chip in it, a
 // dozen components, and that used to happen for every row the pointer
-// crossed. The row still uses React's onMouseEnter/onMouseLeave, which treat
+// crossed. The row uses React's onPointerEnter/onPointerLeave, which treat
 // a portal (the emoji picker, a tooltip) as inside the row, so moving the
-// pointer into a picker keeps the toolbar mounted. `data-hovered` on the row
-// drives the CSS-only hover reveals (a grouped row's clock time); tracked in
-// JS rather than Tailwind group-hover because an open dropdown changes
-// pointer-events and focus and breaks CSS :hover on the row.
+// pointer into a picker keeps the toolbar mounted. Pointer events, not mouse
+// events: a finger's tap makes the browser replay mouse events, and only the
+// pointer event's own type tells a tap from a hover (isHoverPointer).
+// `data-hovered` on the row drives the CSS-only hover reveals (a grouped
+// row's clock time); tracked in JS rather than Tailwind group-hover because
+// an open dropdown changes pointer-events and focus and breaks CSS :hover on
+// the row.
 interface RowHoverState {
   hovered: boolean;
   focusWithin: boolean;
@@ -91,24 +138,13 @@ interface RowHoverState {
 // Focus inside a row pins its toolbar so a keyboard user can Tab to it. But a
 // mouse click focuses buttons too (Chrome), so clicking a quick reaction kept
 // that row's toolbar up after the pointer moved on and the next row hovered
-// showed a second one. Only keyboard-driven focus pins: the last input kind
-// is tracked the way browsers decide :focus-visible.
-let keyboardInput = false;
-let inputTracked = false;
-function trackInputKind() {
-  if (inputTracked) return;
-  inputTracked = true;
-  window.addEventListener('keydown', () => {
-    keyboardInput = true;
-  }, true);
-  window.addEventListener('pointerdown', () => {
-    keyboardInput = false;
-  }, true);
-}
+// showed a second one. Only keyboard-driven focus pins (lib/input-modality,
+// where Escape doesn't count: closing a menu opened by a click must not pin
+// the row's toolbar open around the button focus returns to).
 // The handlers read the row element off the event (currentTarget), so the
 // store needs no refs and the row never writes one during render.
 function createRowHoverStore() {
-  trackInputKind();
+  startInputModalityTracking();
   let state: RowHoverState = { hovered: false, focusWithin: false };
   // The row last entered, so a hover ended from elsewhere (another row took
   // the pointer while this one's menu was open) can drop its flag too.
@@ -126,7 +162,8 @@ function createRowHoverStore() {
       };
     },
     get: () => state,
-    enter: (event: MouseEvent<HTMLDivElement>) => {
+    enter: (event: PointerEvent<HTMLDivElement>) => {
+      if (!isHoverPointer(event.pointerType)) return;
       row = event.currentTarget;
       row.dataset.hovered = 'true';
       update({ hovered: true });
@@ -137,7 +174,7 @@ function createRowHoverStore() {
       update({ hovered: false });
     },
     focus: () => {
-      if (keyboardInput) update({ focusWithin: true });
+      if (isKeyboardModality()) update({ focusWithin: true });
     },
     blur: (event: FocusEvent<HTMLDivElement>) => {
       if (!event.currentTarget.contains(event.relatedTarget as Node | null)) update({ focusWithin: false });
@@ -818,49 +855,93 @@ function MessageItemImpl({
         </div>
         <div
           data-swipe-scroll="true"
-          className="min-h-0 flex-1 overflow-y-auto p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] pt-0"
+          className="min-h-0 flex-1 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-1"
         >
-        {!inThread && (
-          <Button
-            type="button"
-            className="mb-2 h-12 w-full justify-start gap-3 text-base mobile:h-14"
-            onClick={handleMobileReply}
-            aria-label="Reply in thread"
+        {/* One-tap reactions first: the most-used emojis, then the full picker. */}
+        <motion.div className="mb-3 flex items-center gap-2" {...sheetSection(0)}>
+          <div
+            className="flex min-w-0 flex-1 items-center justify-between rounded-full bg-muted p-1"
+            data-testid="mobile-quick-reactions"
           >
-            <MessageSquareReply className="h-5 w-5" />
-            Reply in thread
-          </Button>
-        )}
-        <EmojiPicker
-          onSelect={(emoji) => {
-            handleReact(emoji);
-            closeMobileActions();
-          }}
-          onOpenChange={(open) => {
-            setMobileReactionPickerOpen(open);
-            if (open) {
-              setMobileActionsSuppressed(true);
-            } else {
+            {padQuickReactions(quickReactions).map((emoji) => (
+              <button
+                key={`sheet-quick-${emoji}`}
+                type="button"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-transform active:scale-90 active:bg-background"
+                aria-label={`React with ${emoji}`}
+                onClick={() => {
+                  triggerReactionHaptic();
+                  void recordEmojiUse(emoji);
+                  handleReact(emoji);
+                  closeMobileActions();
+                }}
+              >
+                <EmojiGlyph emoji={emoji} customMap={emojiMap} size="md" />
+              </button>
+            ))}
+          </div>
+          <EmojiPicker
+            onSelect={(emoji) => {
+              handleReact(emoji);
               closeMobileActions();
+            }}
+            onOpenChange={(open) => {
+              setMobileReactionPickerOpen(open);
+              if (open) {
+                setMobileActionsSuppressed(true);
+              } else {
+                closeMobileActions();
+              }
+            }}
+            triggerClassName="shrink-0"
+            trigger={
+              <button
+                type="button"
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-muted transition-transform active:scale-90"
+                aria-label="Add reaction"
+              >
+                <SmilePlus className="h-5 w-5" />
+              </button>
             }
-          }}
-          triggerClassName="block w-full"
-          trigger={
-            <button
+          />
+        </motion.div>
+        {/* The everyday actions as tiles, Reply leading as the CTA. */}
+        <motion.div
+          className={`mb-3 grid gap-2 ${inThread ? 'grid-cols-3' : 'grid-cols-4'}`}
+          data-testid="mobile-primary-actions"
+          {...sheetSection(1)}
+        >
+          {!inThread && (
+            <Button
               type="button"
-              className="mb-2 flex h-12 w-full items-center gap-3 rounded-lg border px-3 text-left mobile:h-14"
-              aria-label="Add reaction"
+              className="h-20 min-w-0 flex-1 flex-col gap-1.5 rounded-2xl px-1 text-xs font-medium transition-transform active:scale-95 mobile:h-20 mobile:px-1 mobile:text-xs"
+              onClick={handleMobileReply}
+              aria-label="Reply in thread"
             >
-              <SmilePlus className="h-4 w-4" />
-              <span className="text-sm font-medium">Reaction</span>
-            </button>
-          }
-        />
-        <div className="flex flex-col rounded-lg border">
+              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15">
+                <MessageSquareReply className="h-4 w-4" />
+              </span>
+              Reply
+            </Button>
+          )}
+          <SheetTile icon={Copy} label="Copy text" ariaLabel="Copy message text" onClick={handleMobileCopyText} />
+          {/* No "copied" swap on mobile — the sheet closes on tap, so the
+              label change would never be visible. */}
+          <SheetTile icon={LinkIcon} label="Copy link" ariaLabel="Copy link to message" onClick={handleMobileCopyLink} />
+          <SheetTile
+            icon={AlarmClock}
+            label="Remind me"
+            ariaLabel="Remind me about this message"
+            onClick={handleMobileRemindCustom}
+            testId="mobile-remind"
+          />
+        </motion.div>
+        {/* Everything else as a short list. */}
+        <motion.div className="flex flex-col divide-y divide-border/60 rounded-2xl bg-muted" {...sheetSection(2)}>
           {activityTarget && (
             <button
               type="button"
-              className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
+              className="flex items-center gap-3 px-4 py-3 text-left text-sm"
               onClick={() => {
                 setMobileActionsOpen(false);
                 openActivity();
@@ -873,27 +954,7 @@ function MessageItemImpl({
           )}
           <button
             type="button"
-            className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
-            onClick={handleMobileCopyText}
-            aria-label="Copy message text"
-          >
-            <Copy className="h-4 w-4" />
-            Copy text
-          </button>
-          <button
-            type="button"
-            className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
-            onClick={handleMobileCopyLink}
-            aria-label="Copy link to message"
-          >
-            <LinkIcon className="h-4 w-4" />
-            {/* No "copied" swap on mobile — the sheet closes on tap, so the
-                label change would never be visible. */}
-            Copy link
-          </button>
-          <button
-            type="button"
-            className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
+            className="flex items-center gap-3 px-4 py-3 text-left text-sm"
             onClick={handleMobileTogglePin}
             aria-label={message.pinned ? 'Unpin message' : 'Pin message'}
           >
@@ -903,7 +964,7 @@ function MessageItemImpl({
           {canMarkUnread && (
             <button
               type="button"
-              className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
+              className="flex items-center gap-3 px-4 py-3 text-left text-sm"
               onClick={handleMobileMarkUnread}
               data-testid="mobile-mark-unread"
               aria-label="Mark as unread"
@@ -917,7 +978,7 @@ function MessageItemImpl({
               {canEdit && (
                 <button
                   type="button"
-                  className="flex items-center gap-3 border-b px-3 py-4 text-left text-base"
+                  className="flex items-center gap-3 px-4 py-3 text-left text-sm"
                   onClick={handleMobileEdit}
                 >
                   <Pencil className="h-4 w-4" />
@@ -926,7 +987,7 @@ function MessageItemImpl({
               )}
               <button
                 type="button"
-                className="flex items-center gap-3 px-3 py-4 text-left text-base text-destructive"
+                className="flex items-center gap-3 px-4 py-3 text-left text-sm text-destructive"
                 onClick={handleMobileDelete}
               >
                 <Trash2 className="h-4 w-4" />
@@ -934,21 +995,7 @@ function MessageItemImpl({
               </button>
             </>
           )}
-        </div>
-        {/* Single "Remind me" row. Tapping it closes the sheet and opens the
-            ReminderDialog (a separate popup with the date/time selector) — the
-            old inline preset list made this sheet tall enough to cover the
-            whole screen on mobile. */}
-        <button
-          type="button"
-          className="mt-2 flex w-full items-center gap-3 rounded-lg border px-3 py-4 text-left text-base"
-          onClick={handleMobileRemindCustom}
-          data-testid="mobile-remind"
-          aria-label="Remind me about this message"
-        >
-          <AlarmClock className="h-4 w-4" />
-          Remind me
-        </button>
+        </motion.div>
         </div>
       </motion.div>
       )}
@@ -959,11 +1006,14 @@ function MessageItemImpl({
     <div
       id={`msg-${message.id}`}
       data-message-id={message.id}
-      onMouseEnter={hoverStore.enter}
-      onMouseLeave={hoverStore.leave}
+      onPointerEnter={hoverStore.enter}
       onFocus={hoverStore.focus}
       onBlur={hoverStore.blur}
       {...longPress.handlers}
+      onPointerLeave={() => {
+        longPress.cancel();
+        hoverStore.leave();
+      }}
       onContextMenu={(event) => {
         // Without a pointing device there is no hover toolbar to reach, so a
         // secondary click (an iPad keyboard case, or Android's long-press
@@ -1352,33 +1402,50 @@ function MessageItemImpl({
             onSelect={handleReact}
             onOpenChange={setReactionPickerOpen}
             trigger={
-              <Button size="icon" variant="ghost" className="h-7 w-7" aria-label="Add reaction">
-                <SmilePlus className="h-4 w-4" />
-              </Button>
+              <Tooltip>
+                <TooltipTrigger render={<Button size="icon" variant="ghost" className="h-7 w-7" aria-label="Add reaction" />}>
+                  <SmilePlus className="h-4 w-4" />
+                </TooltipTrigger>
+                <TooltipContent>Add reaction</TooltipContent>
+              </Tooltip>
             }
           />
           {!inThread && (
-            <Button
-              size="icon"
-              variant="ghost"
-              className="h-7 w-7"
-              aria-label="Reply in thread"
-              onClick={() => onReplyInThread?.(message.id)}
-            >
-              <MessageSquareReply className="h-3.5 w-3.5" />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7"
+                    aria-label="Reply in thread"
+                    onClick={() => onReplyInThread?.(message.id)}
+                  />
+                }
+              >
+                <MessageSquareReply className="h-3.5 w-3.5" />
+              </TooltipTrigger>
+              <TooltipContent>Reply in thread</TooltipContent>
+            </Tooltip>
           )}
           {/* modal={false} so other rows still receive mouseEnter while
               this menu is open — needed by the close-on-hover listener
               and the row's own :hover state. */}
           <DropdownMenu modal={false} open={actionsMenuOpen} onOpenChange={setActionsMenuOpen}>
-            <DropdownMenuTrigger
-              className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-accent"
-              aria-label="More actions"
-              data-testid="message-actions-trigger"
-            >
-              <MoreHorizontal className="h-3.5 w-3.5" />
-            </DropdownMenuTrigger>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <DropdownMenuTrigger
+                    className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-accent"
+                    aria-label="More actions"
+                    data-testid="message-actions-trigger"
+                  />
+                }
+              >
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </TooltipTrigger>
+              <TooltipContent>More actions</TooltipContent>
+            </Tooltip>
             <DropdownMenuContent align="end" className="w-44">
               {activityTarget && (
                 <DropdownMenuItem

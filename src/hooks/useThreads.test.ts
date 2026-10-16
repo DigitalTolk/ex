@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
-import { mergeSeenMaps, unreadThreadIDs, unreadThreadParents, upsertUserThreadRow, type ThreadSummary } from './useThreads';
+import { mergeSeenMaps, unreadThreadIDs, upsertUserThreadRow, type ThreadSummary } from './useThreads';
 import { queryKeys } from '@/lib/query-keys';
 
 const summary = (overrides: Partial<ThreadSummary> = {}): ThreadSummary => ({
@@ -18,11 +18,21 @@ const summary = (overrides: Partial<ThreadSummary> = {}): ThreadSummary => ({
 describe('upsertUserThreadRow (jsdom)', () => {
   it('inserts a new row and updates an existing one, sorting newest activity first', () => {
     const qc = new QueryClient();
+    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), []);
     upsertUserThreadRow(qc, summary({ threadRootID: 't-1', latestActivityAt: '2026-01-01T00:00:00Z' }));
     upsertUserThreadRow(qc, summary({ threadRootID: 't-2', latestActivityAt: '2026-01-03T00:00:00Z' }));
     upsertUserThreadRow(qc, summary({ threadRootID: 't-1', replyCount: 9, latestActivityAt: '2026-01-04T00:00:00Z' }));
     const list = qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads());
     expect(list?.map((t) => [t.threadRootID, t.replyCount])).toEqual([['t-1', 9], ['t-2', 1]]);
+  });
+
+  // A one-row list made from a single event would pass for the whole list
+  // until it went stale, so /threads opened on it would miss every other
+  // thread. With nothing loaded the next fetch reads the server's.
+  it('leaves an unloaded list for the fetch', () => {
+    const qc = new QueryClient();
+    upsertUserThreadRow(qc, summary({ threadRootID: 't-1' }));
+    expect(qc.getQueryData(queryKeys.userThreads())).toBeUndefined();
   });
 
   it('is a no-op when threadRootID is empty', () => {
@@ -78,18 +88,6 @@ describe('mergeSeenMaps', () => {
     // Sanity: with the OLD spread semantics the stale local entry keeps it unread.
     const stale = { 't-1': '2026-07-14T12:00:01Z' };
     expect(unreadThreadIDs(threads, ['t-1'], new Set(), stale).has('t-1')).toBe(true);
-  });
-});
-
-describe('unreadThreadParents', () => {
-  it('names each chat holding an unread thread, once', () => {
-    const threads = [
-      summary({ threadRootID: 't-1', parentID: 'ch-1' }),
-      summary({ threadRootID: 't-2', parentID: 'ch-1' }),
-      summary({ threadRootID: 't-3', parentID: 'dm-1' }),
-    ];
-    expect([...unreadThreadParents(threads, new Set(['t-1', 't-2']))]).toEqual(['ch-1']);
-    expect(unreadThreadParents(undefined, new Set(['t-1'])).size).toBe(0);
   });
 });
 

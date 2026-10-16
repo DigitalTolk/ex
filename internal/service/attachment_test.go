@@ -194,7 +194,11 @@ type fakeAttachmentSigner struct {
 	// this nil and GetObjectRange errors out.
 	objects           map[string][]byte
 	objectContentType string
-	putContentTypes   map[string]string
+	// rangeReads counts GetObjectRange calls: peeks at an object's head;
+	// rangeErr fails them.
+	rangeReads      int
+	rangeErr        error
+	putContentTypes map[string]string
 	// checksums[key] is the whole-object SHA-256 (base64) S3 reports for
 	// objects uploaded with a signed x-amz-checksum-sha256.
 	checksums map[string]string
@@ -269,6 +273,10 @@ func (s *fakeAttachmentSigner) PutObject(_ context.Context, key, contentType str
 	return nil
 }
 func (s *fakeAttachmentSigner) GetObjectRange(_ context.Context, key string, _ int64) ([]byte, error) {
+	s.rangeReads++
+	if s.rangeErr != nil {
+		return nil, s.rangeErr
+	}
 	if s.objects == nil {
 		return nil, fmt.Errorf("no object %s", key)
 	}
@@ -327,6 +335,20 @@ func (s *fakeAttachmentSigner) GetObject(_ context.Context, key string) (io.Read
 		contentType = "image/png"
 	}
 	return io.NopCloser(bytes.NewReader(body)), contentType, int64(len(body)), time.Date(2026, 5, 2, 10, 0, 0, 0, time.UTC), nil
+}
+
+func (s *fakeAttachmentSigner) OpenObjectRange(ctx context.Context, key, byteRange string) (io.ReadCloser, string, int64, string, time.Time, error) {
+	body, contentType, size, lastModified, err := s.GetObject(ctx, key)
+	if err != nil || byteRange == "" {
+		return body, contentType, size, "", lastModified, err
+	}
+	all, _ := io.ReadAll(body)
+	var start, end int
+	if _, err := fmt.Sscanf(byteRange, "bytes=%d-%d", &start, &end); err != nil {
+		return nil, "", 0, "", time.Time{}, err
+	}
+	part := all[start : end+1]
+	return io.NopCloser(bytes.NewReader(part)), contentType, int64(len(part)), fmt.Sprintf("bytes %d-%d/%d", start, end, len(all)), lastModified, nil
 }
 
 func TestAttachmentService_CreateUploadURL_PersistsClientReportedDimensions(t *testing.T) {
@@ -428,6 +450,10 @@ func TestAttachmentService_ProcessUpload_GeneratesWebPThumbnailsAndTrustsServerD
 	}
 	if len(signer.objects[processed.ThumbnailS3Key]) == 0 || len(signer.objects[processed.SquareThumbnailS3Key]) == 0 {
 		t.Fatal("expected thumbnail objects to be written")
+	}
+	// Lossy: a lossless thumbnail of a photo is 4-9x the bytes.
+	if !isLossyWebP(signer.objects[processed.ThumbnailS3Key]) || !isLossyWebP(signer.objects[processed.SquareThumbnailS3Key]) {
+		t.Fatal("thumbnails are not lossy WebP")
 	}
 }
 
@@ -1361,7 +1387,7 @@ func TestAttachmentService_OpenMedia_StreamsCachedToken(t *testing.T) {
 	parts := strings.Split(got.URL, "/")
 	token := parts[len(parts)-2]
 
-	media, err := svc.OpenMedia(context.Background(), token)
+	media, err := svc.OpenMedia(context.Background(), token, "")
 	if err != nil {
 		t.Fatalf("OpenMedia: %v", err)
 	}
@@ -1373,7 +1399,7 @@ func TestAttachmentService_OpenMedia_StreamsCachedToken(t *testing.T) {
 	if media.ContentType != "image/png" || media.Filename != "cat.png" || media.Size != 3 {
 		t.Fatalf("media metadata mismatch: %+v", media)
 	}
-	if _, err := svc.OpenMedia(context.Background(), "missing"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := svc.OpenMedia(context.Background(), "missing", ""); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("missing token err = %v, want ErrNotFound", err)
 	}
 }

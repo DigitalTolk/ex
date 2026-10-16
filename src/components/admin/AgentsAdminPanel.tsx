@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
+import { NativeSelect } from '@/components/ui/native-select';
 import {
   useAgentOverrides,
   useAgents,
@@ -123,16 +124,16 @@ function AgentTemplateRow({ agent }: { agent: AgentView }) {
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <Label htmlFor={`admin-harness-${agent.slug}`}>Backend</Label>
-              <select
+              <NativeSelect
                 id={`admin-harness-${agent.slug}`}
                 value={harness}
                 onChange={(e) => setHarness(e.target.value)}
-                className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                className="mt-1"
               >
                 <option value="claude">Claude Code (each person’s machine)</option>
                 <option value="codex">Codex (each person’s machine)</option>
                 <option value="bedrock">AWS Bedrock (server)</option>
-              </select>
+              </NativeSelect>
             </div>
             <div>
               <Label htmlFor={`admin-model-${agent.slug}`}>Model</Label>

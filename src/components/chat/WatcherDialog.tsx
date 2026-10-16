@@ -19,6 +19,7 @@ import {
   type WatchActionMode,
 } from '@/hooks/useAgents';
 import { showToast } from '@/lib/toast';
+import { NativeSelect } from '@/components/ui/native-select';
 
 // An existing watcher being managed: agent + thread are fixed; only the
 // instruction and action mode are editable. agentName is for display.
@@ -195,9 +196,8 @@ export function WatcherDialog({ open, onOpenChange, parentID, parentType, thread
             editCount > 1 ? (
               <label className="block">
                 <span className="mb-1 block text-xs font-medium text-muted-foreground">Watcher</span>
-                <select
+                <NativeSelect
                   aria-label="Which watcher"
-                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm mobile:h-11"
                   value={selectedID}
                   onChange={(e) => selectWatcher(e.target.value)}
                 >
@@ -206,7 +206,7 @@ export function WatcherDialog({ open, onOpenChange, parentID, parentType, thread
                       {w.agentName}
                     </option>
                   ))}
-                </select>
+                </NativeSelect>
               </label>
             ) : (
               <div className="text-xs text-muted-foreground">
@@ -216,9 +216,8 @@ export function WatcherDialog({ open, onOpenChange, parentID, parentType, thread
           ) : (
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-muted-foreground">Agent</span>
-              <select
+              <NativeSelect
                 aria-label="Watcher agent"
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm mobile:h-11"
                 value={effectiveSlug}
                 onChange={(e) => setSlug(e.target.value)}
               >
@@ -228,7 +227,7 @@ export function WatcherDialog({ open, onOpenChange, parentID, parentType, thread
                     {a.displayName}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </label>
           )}
 
@@ -248,9 +247,8 @@ export function WatcherDialog({ open, onOpenChange, parentID, parentType, thread
 
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-muted-foreground">What it may do</span>
-            <select
+            <NativeSelect
               aria-label="Action mode"
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm mobile:h-11"
               value={actionMode}
               onChange={(e) => setActionMode(e.target.value as WatchActionMode)}
             >
@@ -259,7 +257,7 @@ export function WatcherDialog({ open, onOpenChange, parentID, parentType, thread
                   {m.label}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
             <span className="mt-1 block text-xs text-muted-foreground">{modeHint}</span>
           </label>
 

@@ -1,48 +1,47 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import type { PanInfo } from 'motion/react';
 import { useSwipeDismiss } from './useSwipeDismiss';
+import type { AxisSwipeOptions, AxisSwipeRelease } from './useAxisSwipe';
 
 const mobileRef = { value: true };
 vi.mock('./useIsMobile', () => ({ useIsMobile: () => mobileRef.value }));
 
-// Observe imperative drag starts without disturbing the rest of motion/react
-// (the enter/exit animations in these tests run the real engine).
-const dragControlsMock = vi.hoisted(() => ({ start: vi.fn() }));
-vi.mock('motion/react', async (orig) => ({
-  ...(await orig<typeof import('motion/react')>()),
-  useDragControls: () => dragControlsMock,
+// The gesture itself (a finger recognised by @use-gesture/react) is driven
+// for real in useSwipeDismiss.realswipe.browser.test; here the hook's own
+// decisions are checked against the options it hands the gesture: where a
+// swipe may start, and what each release does. The enter/exit animations
+// run the real Motion engine.
+const swipeRef = vi.hoisted(() => ({ options: null as AxisSwipeOptions | null }));
+vi.mock('./useAxisSwipe', () => ({
+  useAxisSwipe: (options: AxisSwipeOptions) => {
+    swipeRef.options = options;
+    return options.enabled ? { onPointerDown: vi.fn() } : {};
+  },
 }));
 
 beforeEach(() => {
   mobileRef.value = true;
-  dragControlsMock.start.mockReset();
+  swipeRef.options = null;
 });
 
-function pan(x: number, y: number, vx = 0, vy = 0): PanInfo {
-  return {
-    point: { x: 0, y: 0 },
-    delta: { x: 0, y: 0 },
-    offset: { x, y },
-    velocity: { x: vx, y: vy },
-  };
-}
+const swipe = () => swipeRef.options!;
+const release = (r: Partial<AxisSwipeRelease>) =>
+  act(() => swipe().onRelease({ value: 0, velocity: 0, aborted: false, ...r }));
 
 type MotionValue = { set: (v: number) => void; get: () => number };
 type MotionProps = ReturnType<typeof useSwipeDismiss>['motionProps'] & {
-  drag?: 'x' | 'y' | false;
-  onDragEnd?: (e: PointerEvent, info: PanInfo) => void;
-  onPointerDown?: (e: React.PointerEvent) => void;
-  style?: { x?: MotionValue; y?: MotionValue };
+  'data-swipe-surface'?: string;
+  style?: { x?: MotionValue; y?: MotionValue; touchAction?: string };
 };
 
 describe('useSwipeDismiss', () => {
-  it('returns no drag props on desktop', () => {
+  it('returns no swipe props on desktop', () => {
     mobileRef.value = false;
     const { result } = renderHook(() => useSwipeDismiss('right', vi.fn()));
     expect(result.current.dismissing).toBe(false);
     expect(result.current.settled).toBe(true);
     expect(result.current.motionProps).toEqual({});
+    expect(swipe().enabled).toBe(false);
   });
 
   it('is unsettled while the panel is off its resting position and settled at rest', () => {
@@ -60,173 +59,153 @@ describe('useSwipeDismiss', () => {
     expect(result.current.settled).toBe(true);
   });
 
-  it('arms horizontal drag and dismisses past the distance threshold', async () => {
+  it('makes a side panel a sideways swipe surface over its own x transform', () => {
+    const { result } = renderHook(() => useSwipeDismiss('right', vi.fn()));
+    const props = result.current.motionProps as MotionProps;
+    expect(props['data-swipe-surface']).toBe('x');
+    expect(swipe().axis).toBe('x');
+    expect(swipe().value).toBe(props.style!.x);
+    expect(swipe().range()).toEqual([0, window.innerWidth]);
+  });
+
+  it('keeps a sheet pan-y so its body scrolls natively, and swipes it down', () => {
+    const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
+    const props = result.current.motionProps as MotionProps;
+    expect(props['data-swipe-surface']).toBe('y');
+    expect(props.style?.touchAction).toBe('pan-y');
+    expect(swipe().axis).toBe('y');
+    expect(swipe().value).toBe(props.style!.y);
+    expect(swipe().range()).toEqual([0, window.innerHeight]);
+  });
+
+  it('dismisses on a release past the commit distance, exactly once', async () => {
     const onDismiss = vi.fn();
     const { result } = renderHook(() => useSwipeDismiss('right', onDismiss));
-    const props = result.current.motionProps as MotionProps;
-    expect(props.drag).toBe('x');
 
-    act(() => props.onDragEnd?.(new Event('pointerup') as PointerEvent, pan(120, 0)));
+    release({ value: 220 });
     expect(result.current.dismissing).toBe(true);
 
-    // A drag-end landing while the exit animation is still running is
-    // swallowed (the dismissingRef latch) — onDismiss fires exactly once.
-    act(() => props.onDragEnd?.(new Event('pointerup') as PointerEvent, pan(120, 0)));
+    // A release landing while the exit animation is still running is
+    // swallowed (the dismissing latch) — onDismiss fires exactly once.
+    release({ value: 220 });
     await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
     await new Promise((r) => setTimeout(r, 60));
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it('springs back and does not dismiss below the threshold', () => {
+  it('dismisses a short swipe released with a flick', async () => {
+    const onDismiss = vi.fn();
+    renderHook(() => useSwipeDismiss('down', onDismiss));
+    release({ value: 30, velocity: 900 });
+    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+  });
+
+  it('springs back from a short release, and from one the browser took over', async () => {
     const onDismiss = vi.fn();
     const { result } = renderHook(() => useSwipeDismiss('right', onDismiss));
-    const props = result.current.motionProps as MotionProps;
-    act(() => props.onDragEnd?.(new Event('pointerup') as PointerEvent, pan(40, 0)));
+    const x = (result.current.motionProps as MotionProps).style!.x!;
+    await waitFor(() => expect(x.get()).toBeLessThan(1));
+
+    act(() => x.set(40));
+    release({ value: 40 });
     expect(result.current.dismissing).toBe(false);
+    await waitFor(() => expect(x.get()).toBeLessThan(1));
+
+    act(() => x.set(260));
+    release({ value: 260, velocity: 800, aborted: true });
+    expect(result.current.dismissing).toBe(false);
+    await waitFor(() => expect(x.get()).toBeLessThan(1));
     expect(onDismiss).not.toHaveBeenCalled();
   });
 
-  it('dismisses on a fast flick even below the distance threshold', async () => {
-    const onDismiss = vi.fn();
-    const { result } = renderHook(() => useSwipeDismiss('down', onDismiss));
-    const props = result.current.motionProps as MotionProps;
-    expect(props.drag).toBe('y');
-    act(() => props.onDragEnd?.(new Event('pointerup') as PointerEvent, pan(0, 30, 0, 800)));
-    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
-  });
+  describe('where a swipe may start', () => {
+    // jsdom reports 0 for both metrics, so the "can this actually scroll?"
+    // question has to be stubbed explicitly.
+    function sizeAs(el: HTMLElement, { scrollHeight, clientHeight }: { scrollHeight: number; clientHeight: number }) {
+      Object.defineProperty(el, 'scrollHeight', { value: scrollHeight, configurable: true });
+      Object.defineProperty(el, 'clientHeight', { value: clientHeight, configurable: true });
+    }
 
-  it('dismisses a horizontal drag on a fast flick below the distance threshold', async () => {
-    const onDismiss = vi.fn();
-    const { result } = renderHook(() => useSwipeDismiss('right', onDismiss));
-    const props = result.current.motionProps as MotionProps;
-    act(() => props.onDragEnd?.(new Event('pointerup') as PointerEvent, pan(20, 0, 800, 0)));
-    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
-  });
+    function sheetWith(...children: HTMLElement[]) {
+      const root = document.createElement('div');
+      root.setAttribute('data-swipe-surface', 'y');
+      for (const child of children) root.appendChild(child);
+      return root;
+    }
 
-  it('never hands Motion the vertical pointerdown (no touch-action override on the sheet)', () => {
-    const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
-    const props = result.current.motionProps as MotionProps & {
-      dragListener?: boolean;
-      style?: { touchAction?: string };
-    };
-    // dragListener:false is what keeps Motion from forcing touch-action:pan-x
-    // onto the whole sheet (which WebKit honors subtree-wide, freezing the
-    // emoji grid); the explicit pan-y keeps native panning available.
-    expect(props.drag).toBe('y');
-    expect(props.dragListener).toBe(false);
-    expect(props.style?.touchAction).toBe('pan-y');
-  });
+    function scrollBody(canScroll: boolean) {
+      const scroller = document.createElement('div');
+      scroller.setAttribute('data-swipe-scroll', 'true');
+      sizeAs(scroller, canScroll ? { scrollHeight: 900, clientHeight: 200 } : { scrollHeight: 100, clientHeight: 200 });
+      return scroller;
+    }
 
-  // jsdom reports 0 for both metrics, so the "can this actually scroll?"
-  // question has to be stubbed explicitly.
-  function sizeAs(el: HTMLElement, { scrollHeight, clientHeight }: { scrollHeight: number; clientHeight: number }) {
-    Object.defineProperty(el, 'scrollHeight', { value: scrollHeight, configurable: true });
-    Object.defineProperty(el, 'clientHeight', { value: clientHeight, configurable: true });
-  }
+    function startsOn(target: EventTarget, root: Element) {
+      renderHook(() => useSwipeDismiss('down', vi.fn()));
+      return swipe().canStart(target, root);
+    }
 
-  function sheetWith(body: HTMLElement) {
-    const root = document.createElement('div');
-    root.appendChild(body);
-    return root;
-  }
+    it('a side panel swipes from anywhere on it but its text fields', () => {
+      renderHook(() => useSwipeDismiss('right', vi.fn()));
+      const panel = document.createElement('aside');
+      panel.setAttribute('data-swipe-surface', 'x');
+      const row = document.createElement('div');
+      const field = document.createElement('textarea');
+      panel.append(row, field);
+      expect(swipe().canStart(row, panel)).toBe(true);
+      expect(swipe().canStart(field, panel)).toBe(false);
+    });
 
-  function pointerDownOn(
-    props: MotionProps,
-    target: EventTarget | null,
-    currentTarget: EventTarget | null,
-  ) {
-    act(() => props.onPointerDown?.({ target, currentTarget } as unknown as React.PointerEvent));
-  }
+    it('starts from the explicit grab handle even over a scrollable body', () => {
+      const scroller = scrollBody(true);
+      const handle = document.createElement('div');
+      handle.setAttribute('data-sheet-drag', 'true');
+      scroller.appendChild(handle);
+      expect(startsOn(handle, sheetWith(scroller))).toBe(true);
+    });
 
-  it('starts the vertical drag from the explicit grab handle even over a scrollable body', () => {
-    const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
-    const scroller = document.createElement('div');
-    scroller.setAttribute('data-swipe-scroll', 'true');
-    sizeAs(scroller, { scrollHeight: 900, clientHeight: 200 });
-    const handle = document.createElement('div');
-    handle.setAttribute('data-sheet-drag', 'true');
-    scroller.appendChild(handle);
-    pointerDownOn(result.current.motionProps as MotionProps, handle, sheetWith(scroller));
-    expect(dragControlsMock.start).toHaveBeenCalledTimes(1);
-  });
+    it('leaves the gesture to native scroll when the scroll body can scroll', () => {
+      const scroller = scrollBody(true);
+      const child = document.createElement('div');
+      scroller.appendChild(child);
+      expect(startsOn(child, sheetWith(scroller))).toBe(false);
+    });
 
-  it('leaves the gesture to native scroll when the scroll body can scroll', () => {
-    const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
-    const scroller = document.createElement('div');
-    scroller.setAttribute('data-swipe-scroll', 'true');
-    sizeAs(scroller, { scrollHeight: 900, clientHeight: 200 });
-    const child = document.createElement('div');
-    scroller.appendChild(child);
-    pointerDownOn(result.current.motionProps as MotionProps, child, sheetWith(scroller));
-    expect(dragControlsMock.start).not.toHaveBeenCalled();
-  });
+    it('starts from a swipe-scroll body that has no room to scroll', () => {
+      const scroller = scrollBody(false);
+      const child = document.createElement('div');
+      scroller.appendChild(child);
+      expect(startsOn(child, sheetWith(scroller))).toBe(true);
+    });
 
-  it('starts the drag from a swipe-scroll body that has no room to scroll', () => {
-    const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
-    const scroller = document.createElement('div');
-    scroller.setAttribute('data-swipe-scroll', 'true');
-    sizeAs(scroller, { scrollHeight: 100, clientHeight: 200 });
-    const child = document.createElement('div');
-    scroller.appendChild(child);
-    pointerDownOn(result.current.motionProps as MotionProps, child, sheetWith(scroller));
-    expect(dragControlsMock.start).toHaveBeenCalledTimes(1);
-  });
+    // The picker-won't-scroll regression: chrome that sits OUTSIDE the scroll
+    // body (a shelf, a section label, the search row) must not claim a
+    // vertical gesture while there is still something on screen to scroll.
+    it('declines unmarked chrome while the sheet has something to scroll', () => {
+      const chrome = document.createElement('div');
+      expect(startsOn(chrome, sheetWith(scrollBody(true), chrome))).toBe(false);
+    });
 
-  // The picker-won't-scroll regression: chrome that sits OUTSIDE the scroll
-  // body (a shelf, a section label, the search row) must not claim a vertical
-  // gesture while there is still something on screen to scroll — the drag is
-  // pinned upward, so claiming it means the finger moves and nothing happens.
-  it('declines a drag from unmarked chrome while the sheet has something to scroll', () => {
-    const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
-    const scroller = document.createElement('div');
-    scroller.setAttribute('data-swipe-scroll', 'true');
-    sizeAs(scroller, { scrollHeight: 900, clientHeight: 200 });
-    const root = sheetWith(scroller);
-    const chrome = document.createElement('div');
-    root.appendChild(chrome);
-    pointerDownOn(result.current.motionProps as MotionProps, chrome, root);
-    expect(dragControlsMock.start).not.toHaveBeenCalled();
-  });
+    it('starts from unmarked chrome when nothing in the sheet can scroll', () => {
+      const chrome = document.createElement('div');
+      expect(startsOn(chrome, sheetWith(scrollBody(false), chrome))).toBe(true);
+    });
 
-  it('starts the drag from unmarked chrome when nothing in the sheet can scroll', () => {
-    const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
-    const scroller = document.createElement('div');
-    scroller.setAttribute('data-swipe-scroll', 'true');
-    sizeAs(scroller, { scrollHeight: 100, clientHeight: 200 });
-    const root = sheetWith(scroller);
-    const chrome = document.createElement('div');
-    root.appendChild(chrome);
-    pointerDownOn(result.current.motionProps as MotionProps, chrome, root);
-    expect(dragControlsMock.start).toHaveBeenCalledTimes(1);
-  });
+    it('starts from chrome in a sheet with no scroll body at all', () => {
+      const chrome = document.createElement('div');
+      expect(startsOn(chrome, sheetWith(chrome))).toBe(true);
+    });
 
-  it('starts the drag from chrome in a sheet with no scroll body at all', () => {
-    const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
-    const root = document.createElement('div');
-    const chrome = document.createElement('div');
-    root.appendChild(chrome);
-    pointerDownOn(result.current.motionProps as MotionProps, chrome, root);
-    expect(dragControlsMock.start).toHaveBeenCalledTimes(1);
-  });
-
-  it('ignores a pointerdown whose target is not an element', () => {
-    const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
-    pointerDownOn(result.current.motionProps as MotionProps, document, document.createElement('div'));
-    expect(dragControlsMock.start).not.toHaveBeenCalled();
-  });
-
-  it('falls back to starting the drag when the sheet root is not an element', () => {
-    const { result } = renderHook(() => useSwipeDismiss('down', vi.fn()));
-    pointerDownOn(result.current.motionProps as MotionProps, document.createElement('div'), null);
-    expect(dragControlsMock.start).toHaveBeenCalledTimes(1);
+    it('ignores a touch whose target is not an element', () => {
+      expect(startsOn(document, sheetWith())).toBe(false);
+    });
   });
 
   // Regression: on a host that stays mounted while the panel toggles (a
   // message's action sheet on an always-mounted MessageItem), a swipe-dismiss
-  // left `offset` off-screen and the drag latch armed. Reopening rendered the
+  // left `offset` off-screen and the dismiss latch armed. Reopening rendered the
   // sheet translated off-screen and undraggable — it "wouldn't pop up". The
-  // `open` param must re-initialise the gesture on each open. This exercises the
-  // REAL hook (not the component mocks), which is why the bug slipped through.
+  // `open` param must re-initialise the gesture on each open.
   it('re-initialises on reopen so a swipe-dismissed panel returns to rest and is draggable again', async () => {
     const onDismiss = vi.fn();
     const { result, rerender } = renderHook(
@@ -236,9 +215,9 @@ describe('useSwipeDismiss', () => {
     const y = () => (result.current.motionProps as MotionProps).style!.y!;
     await waitFor(() => expect(y().get()).toBeLessThan(1)); // enter settles to rest
 
-    // Swipe past the threshold → animates off-screen, then onComplete fires
-    // onDismiss and clears the latch.
-    act(() => (result.current.motionProps as MotionProps).onDragEnd?.(new Event('pointerup') as PointerEvent, pan(0, 120)));
+    // Swipe past the commit distance → animates off-screen, then onComplete
+    // fires onDismiss and clears the latch.
+    release({ value: 300 });
     expect(result.current.dismissing).toBe(true);
     await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
 
@@ -250,9 +229,8 @@ describe('useSwipeDismiss', () => {
     await waitFor(() => expect(y().get()).toBeLessThan(1));
     expect(result.current.dismissing).toBe(false);
 
-    // Draggable again: a second dismiss fires onDismiss (before the fix the
-    // latched dismissingRef made onDragEnd a no-op, so this never fired twice).
-    act(() => (result.current.motionProps as MotionProps).onDragEnd?.(new Event('pointerup') as PointerEvent, pan(0, 120)));
+    // Swipeable again: a second dismiss fires onDismiss.
+    release({ value: 300 });
     await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(2));
   });
 });

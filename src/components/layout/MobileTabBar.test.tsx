@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { MobileTabBar } from './MobileTabBar';
 import { resetSidebarModeSessionState, useSidebarModeStore } from '@/stores/sidebar-mode';
+import { flashReaction, REACTION_FLASH_MS, resetReactionFlashForTests } from '@/stores/reaction-flash';
 
 const unread = vi.hoisted(() => ({ value: 0 }));
 vi.mock('@/hooks/useActivity', () => ({ useActivityUnread: () => unread.value }));
+vi.mock('@/hooks/useEmoji', () => ({ useEmojiMap: () => ({ data: {} }) }));
 vi.mock('./AccountMenu', () => ({ AccountMenu: () => <button type="button" data-testid="mobile-tab-you">You</button> }));
 vi.mock('./MobileSearchSheet', () => ({
   MobileSearchSheet: ({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) =>
@@ -30,6 +32,24 @@ beforeEach(() => {
 });
 
 describe('MobileTabBar', () => {
+  it('flashes a reaction on the Activity tab in place of the bell', () => {
+    vi.useFakeTimers();
+    resetReactionFlashForTests();
+    try {
+      renderBar();
+      act(() => flashReaction(':eyes:'));
+      const flash = screen.getByTestId('activity-reaction-flash');
+      expect(screen.getByTestId('mobile-tab-activity').contains(flash)).toBe(true);
+      act(() => {
+        vi.advanceTimersByTime(REACTION_FLASH_MS);
+      });
+      expect(screen.queryByTestId('activity-reaction-flash')).toBeNull();
+    } finally {
+      resetReactionFlashForTests();
+      vi.useRealTimers();
+    }
+  });
+
   it('switches the list between Home and Activity', () => {
     renderBar();
     expect(screen.getByTestId('mobile-tab-home')).toHaveAttribute('aria-pressed', 'true');

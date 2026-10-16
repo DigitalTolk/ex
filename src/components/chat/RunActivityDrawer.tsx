@@ -327,7 +327,10 @@ export function RunActivityDrawer() {
   useEffect(() => {
     if (!isOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeRunDrawer();
+      if (e.key !== 'Escape') return;
+      // The drawer is on top: the key is its (a panel under it stays open).
+      e.preventDefault();
+      closeRunDrawer();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);

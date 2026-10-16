@@ -14,6 +14,7 @@ import {
   useUpdateIncomingWebhook,
 } from '@/hooks/useWebhooks';
 import type { IncomingWebhook } from '@/types';
+import { NativeSelect } from '@/components/ui/native-select';
 
 const EMPTY_FORM = {
   title: '',
@@ -103,18 +104,13 @@ export function IncomingWebhooksPanel() {
         </div>
         <div className="space-y-2">
           <Label htmlFor="webhook-channel">Channel</Label>
-          <select
-            id="webhook-channel"
-            value={selectedChannelID}
-            onChange={(e) => set('channelID', e.target.value)}
-            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm mobile:text-base mobile:h-11"
-          >
+          <NativeSelect id="webhook-channel" value={selectedChannelID} onChange={(e) => set('channelID', e.target.value)}>
             {channelOptions.map((ch) => (
               <option key={ch.id} value={ch.id}>
                 {ch.name}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </div>
         <div className="space-y-2 md:col-span-2">
           <Label htmlFor="webhook-description">Description</Label>

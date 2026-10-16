@@ -5,9 +5,17 @@ import { keyboardOverlap, readKeyboardHeight } from '@/lib/keyboard';
 //
 // iOS doesn't shrink the page for the keyboard: it PANS everything up so the
 // focused field shows, which pushed the channel header (and the whole top of
-// the app) off the screen. The app instead sizes its root to the space above
-// the keyboard — `--ex-keyboard-inset` on <html> — and undoes any pan, so the
-// header stays pinned to the top and the composer sits right on the keyboard.
+// the app) off the screen. The app instead sizes its root to exactly the
+// space left above the keyboard — `--ex-app-height` on <html>, in px — and
+// undoes the pan that comes with the keyboard, so the header stays pinned to
+// the top and the composer sits right on the keyboard.
+//
+// Exactly, and in px measured from the same viewport the keyboard is
+// measured against: a root even a few px taller than what's visible leaves
+// the caret under the keyboard, and iOS pans again to reveal it on every
+// keystroke. And only once per keyboard: a pan while typing is iOS keeping
+// the caret in view, never something to undo — undoing it (smoothly, back to
+// the top) made the composer jump with every character typed.
 //
 // Two sources: the Capacitor shell reports the native keyboard height
 // (WKWebView's visualViewport ignores the keyboard), and mobile Safari
@@ -15,23 +23,39 @@ import { keyboardOverlap, readKeyboardHeight } from '@/lib/keyboard';
 
 let inset = 0;
 const listeners = new Set<() => void>();
-let settlingTimer = 0;
+let glideTimer = 0;
 
-function setInset(next: number) {
-  const rounded = Math.max(0, Math.round(next));
-  if (rounded === inset) return;
-  inset = rounded;
+// How long the app's root takes to follow the keyboard — about the length
+// of the iOS keyboard's own slide, so the two move together.
+export const KEYBOARD_SETTLE_MS = 250;
+
+// After the keyboard comes up, how long its pan may still land (iOS can pan
+// after the keyboard has reported in). Later pans are the caret's.
+const LATE_PAN_MS = 1000;
+
+// apply records what the keyboard covers and sizes the app root to what's
+// left above it (`visible`, px). It returns whether the keyboard came up.
+function apply(covered: number, visible: number): boolean {
   const root = document.documentElement;
-  root.style.setProperty('--ex-keyboard-inset', `${inset}px`);
-  // The app root glides to its new height only while the keyboard moves
-  // (data-keyboard-settling, see index.css) — a window resize or the browser
-  // toolbar collapsing must not animate the whole app. The glide's duration
-  // comes from here, so the CSS transition and this timer can't drift apart.
-  root.style.setProperty('--ex-keyboard-settle', `${KEYBOARD_SETTLE_MS}ms`);
-  root.dataset.keyboardSettling = 'true';
-  window.clearTimeout(settlingTimer);
-  settlingTimer = window.setTimeout(() => delete root.dataset.keyboardSettling, KEYBOARD_SETTLE_MS);
+  const next = Math.max(0, Math.round(covered));
+  if (next > 0) root.style.setProperty('--ex-app-height', `${Math.round(visible)}px`);
+  else root.style.removeProperty('--ex-app-height');
+  if (next === inset) return false;
+  const wasUp = inset > 0;
+  inset = next;
+  // The app root glides to its new height only while the keyboard comes or
+  // goes (data-keyboard-settling, see index.css) — a window resize, the
+  // browser toolbar, or the suggestion bar changing height while typing must
+  // not animate the whole app. The glide's duration comes from here, so the
+  // CSS transition and this timer can't drift apart.
+  if (wasUp !== inset > 0) {
+    root.style.setProperty('--ex-keyboard-settle', `${KEYBOARD_SETTLE_MS}ms`);
+    root.dataset.keyboardSettling = 'true';
+    window.clearTimeout(glideTimer);
+    glideTimer = window.setTimeout(() => delete root.dataset.keyboardSettling, KEYBOARD_SETTLE_MS);
+  }
   for (const l of listeners) l();
+  return !wasUp && inset > 0;
 }
 
 function subscribe(cb: () => void) {
@@ -53,21 +77,20 @@ function scrollParent(el: HTMLElement): HTMLElement | null {
   return null;
 }
 
-// How long the app's root takes to follow the keyboard — about the length
-// of the iOS keyboard's own slide, so the two move together.
-export const KEYBOARD_SETTLE_MS = 250;
-
-// While true the app is gliding to its keyboard-up (or -down) size; scroll
-// events from that glide are ours, not iOS panning again. One timer: a new
-// settle restarts it, so an overlapping glide cannot clear the flag early.
+// While true the app is gliding to its keyboard-up size; scroll events from
+// that glide are ours, not iOS panning again. One timer: a new settle
+// restarts it, so an overlapping glide cannot clear the flag early.
 let settling = false;
 let settleTimer: number | undefined;
+// Until when a pan still counts as the keyboard's (see LATE_PAN_MS).
+let keyboardPanUntil = 0;
 
-// iOS reveals a focused field by panning the whole page up. Instead of
-// snapping it back (a visible jump), glide the page back to the top while the
-// root shrinks over the same time, then glide the field into view inside its
-// own scroller (a login form, a dialog) if the keyboard still covers it. The
-// chat composer sits at the bottom of the root, so it simply rides up.
+// iOS reveals a focused field by panning the whole page up as the keyboard
+// comes. Instead of snapping it back (a visible jump), glide the page back to
+// the top while the root shrinks over the same time, then glide the field
+// into view inside its own scroller (a thread card, a login form, a dialog)
+// if the keyboard still covers it. The chat composer sits at the bottom of
+// the root, so it simply rides up.
 function settle() {
   settling = true;
   if (window.scrollY > 0) window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -91,16 +114,19 @@ export function useKeyboardInsetTracker(): void {
     const vv = window.visualViewport;
 
     const recompute = () => {
-      const native = nativeHeight > 0 ? keyboardOverlap(nativeHeight, innerAtShow, window.innerHeight) : 0;
+      const layout = window.innerHeight;
+      const native = nativeHeight > 0 ? keyboardOverlap(nativeHeight, innerAtShow, layout) : 0;
       // Pinch-zoom also shrinks the visualViewport; only a touch device at
       // 1x is the keyboard.
       const browser =
         vv && deviceKind() === 'touch' && Math.abs(vv.scale - 1) < 0.01
-          ? Math.max(0, window.innerHeight - vv.height)
+          ? Math.max(0, layout - vv.height)
           : 0;
-      const before = inset;
-      setInset(Math.max(native, browser));
-      if (inset !== before) settle();
+      const covered = Math.max(native, browser);
+      if (apply(covered, layout - covered)) {
+        keyboardPanUntil = performance.now() + LATE_PAN_MS;
+        settle();
+      }
     };
     const onShow = (ev: Event) => {
       nativeHeight = readKeyboardHeight(ev);
@@ -112,9 +138,11 @@ export function useKeyboardInsetTracker(): void {
       innerAtShow = 0;
       recompute();
     };
-    // The pan can land after the keyboard reports in; keep the page at the top.
+    // The keyboard's own pan can land after the keyboard reports in; undo
+    // that one too. A pan after that is iOS keeping the caret in view while
+    // typing: left alone.
     const onScroll = () => {
-      if (inset > 0 && !settling && window.scrollY !== 0) settle();
+      if (inset > 0 && !settling && window.scrollY !== 0 && performance.now() < keyboardPanUntil) settle();
     };
 
     window.addEventListener('keyboardWillShow', onShow);
@@ -135,7 +163,8 @@ export function useKeyboardInsetTracker(): void {
       window.clearTimeout(settleTimer);
       settleTimer = undefined;
       settling = false;
-      setInset(0);
+      keyboardPanUntil = 0;
+      apply(0, window.innerHeight);
     };
   }, []);
 }

@@ -12,17 +12,7 @@ import { TagSearchProvider } from '@/context/TagSearchContext';
 import { resetServerVersionForTests } from '@/hooks/useServerVersion';
 import { dispatchEditMessage } from '@/lib/window-events';
 import type { User } from '@/types';
-
-// Hover without moving the browser's one real mouse (other files run in
-// parallel and a real pointer crossing their rows makes hover-only checks
-// flake): React derives onMouseEnter from mouseover, and a tick lets the
-// hover state flush.
-async function hoverRow(row: Element | null) {
-  row?.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
-  row?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-  await new Promise((r) => setTimeout(r, 20));
-}
-
+import { hoverRow } from '@/test/hover';
 
 // REAL browser end-to-end coverage for ConversationView — the DM/group
 // twin of ChannelView. Mounts the full chat route at /conversation/:id

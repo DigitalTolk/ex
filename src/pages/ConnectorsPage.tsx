@@ -20,6 +20,7 @@ import {
 } from '@/hooks/useConnectors';
 import { connectorInitials, connectorTint, credentialNoun, summarizeError, tokenHelp } from '@/lib/connector-ui';
 import { showToast } from '@/lib/toast';
+import { NativeSelect } from '@/components/ui/native-select';
 
 // ConnectorsPage: external services agents can call on the user's behalf.
 // Connecting = linking YOUR account (one-click sign-in, a pasted bearer token,
@@ -258,8 +259,9 @@ function AgentUseControl({ connector: c }: { connector: Connector }) {
       <span className="whitespace-nowrap">
         Agents<span className="sr-only"> may use this</span>:
       </span>
-      <select
-        className="h-6 min-w-0 rounded-md border-0 bg-transparent px-1 text-sm font-medium text-foreground/80 hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      <NativeSelect
+        size="sm"
+        variant="ghost"
         value={c.agentUse ?? 'ask'}
         disabled={update.isPending}
         onChange={(e) =>
@@ -269,7 +271,7 @@ function AgentUseControl({ connector: c }: { connector: Connector }) {
         <option value="ask">Ask me first</option>
         <option value="always">Always allow</option>
         <option value="never">Only when I pick it</option>
-      </select>
+      </NativeSelect>
     </label>
   );
 }

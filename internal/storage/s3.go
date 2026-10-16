@@ -291,6 +291,32 @@ func (c *S3Client) GetObject(ctx context.Context, key string) (io.ReadCloser, st
 	return out.Body, aws.ToString(out.ContentType), aws.ToInt64(out.ContentLength), aws.ToTime(out.LastModified), nil
 }
 
+// ErrRangeNotSatisfiable is a byte range that starts past the end of the
+// object.
+var ErrRangeNotSatisfiable = errors.New("s3: range not satisfiable")
+
+// OpenObjectRange opens the object for streaming — all of it when byteRange
+// is empty, else the one range it names (an HTTP Range value such as
+// "bytes=0-1023"), which S3 answers as a partial response. contentRange is
+// then S3's Content-Range ("bytes 0-1023/52345") and length the size of the
+// part. A video player asks for ranges to seek, and Safari won't play a
+// video without them. The caller owns closing the returned body.
+func (c *S3Client) OpenObjectRange(ctx context.Context, key, byteRange string) (body io.ReadCloser, contentType string, length int64, contentRange string, lastModified time.Time, err error) {
+	in := &s3.GetObjectInput{Bucket: aws.String(c.bucket), Key: aws.String(key)}
+	if byteRange != "" {
+		in.Range = aws.String(byteRange)
+	}
+	out, err := c.client.GetObject(ctx, in)
+	if err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "InvalidRange" {
+			return nil, "", 0, "", time.Time{}, ErrRangeNotSatisfiable
+		}
+		return nil, "", 0, "", time.Time{}, fmt.Errorf("s3: get object: %w", err)
+	}
+	return out.Body, aws.ToString(out.ContentType), aws.ToInt64(out.ContentLength), aws.ToString(out.ContentRange), aws.ToTime(out.LastModified), nil
+}
+
 // OpenObject is GetObject for verification: it also returns the ETag of the
 // exact version being streamed, so what gets recorded as verified is the
 // version that was read — not whatever a separate HEAD happened to see.

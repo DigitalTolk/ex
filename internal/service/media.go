@@ -22,8 +22,10 @@ type MediaURLCache interface {
 	Set(ctx context.Context, key string, val interface{}, ttl time.Duration) error
 }
 
+// MediaObjectStore opens an object, or the one byte range of it a player asked
+// for (see storage.S3Client.OpenObjectRange).
 type MediaObjectStore interface {
-	GetObject(ctx context.Context, key string) (io.ReadCloser, string, int64, time.Time, error)
+	OpenObjectRange(ctx context.Context, key, byteRange string) (io.ReadCloser, string, int64, string, time.Time, error)
 }
 
 type mediaRecord struct {
@@ -78,14 +80,19 @@ func randomMediaToken() (string, error) {
 }
 
 type MediaObject struct {
-	Body         io.ReadCloser
-	ContentType  string
-	Filename     string
-	Size         int64
+	Body        io.ReadCloser
+	ContentType string
+	Filename    string
+	// Size is the length of Body: the whole object, or the range asked for.
+	Size int64
+	// ContentRange is set when Body is a range ("bytes 0-1023/52345").
+	ContentRange string
 	LastModified time.Time
 }
 
-func OpenStableMedia(ctx context.Context, c MediaURLCache, objects MediaObjectStore, token string) (*MediaObject, error) {
+// OpenStableMedia opens the object behind a media token — all of it, or the
+// one byte range in byteRange (an HTTP Range value).
+func OpenStableMedia(ctx context.Context, c MediaURLCache, objects MediaObjectStore, token, byteRange string) (*MediaObject, error) {
 	if c == nil || objects == nil {
 		return nil, store.ErrNotFound
 	}
@@ -96,14 +103,14 @@ func OpenStableMedia(ctx context.Context, c MediaURLCache, objects MediaObjectSt
 		}
 		return nil, fmt.Errorf("media: token: %w", err)
 	}
-	body, contentType, size, lastModified, err := objects.GetObject(ctx, rec.S3Key)
+	body, contentType, size, contentRange, lastModified, err := objects.OpenObjectRange(ctx, rec.S3Key, byteRange)
 	if err != nil {
 		return nil, fmt.Errorf("media: object: %w", err)
 	}
 	if contentType == "" {
 		contentType = rec.ContentType
 	}
-	if size <= 0 {
+	if size <= 0 && contentRange == "" {
 		size = rec.Size
 	}
 	return &MediaObject{
@@ -111,6 +118,7 @@ func OpenStableMedia(ctx context.Context, c MediaURLCache, objects MediaObjectSt
 		ContentType:  contentType,
 		Filename:     rec.Filename,
 		Size:         size,
+		ContentRange: contentRange,
 		LastModified: lastModified,
 	}, nil
 }

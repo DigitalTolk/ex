@@ -15,6 +15,7 @@ vi.mock('@/hooks/useSidebar', () => ({
   resetSidebarReorderSessionState: vi.fn(),
   useFavoriteConversation: () => ({ mutate: favoriteMutate, isPending: false }),
   useSetConversationCategory: () => ({ mutate: setCategoryMutate, isPending: false }),
+  useCategories: () => ({ data: [{ id: 'cat-9', name: 'Nine', position: 1000 }] }),
 }));
 
 vi.mock('@/hooks/useEmoji', () => ({
@@ -183,13 +184,6 @@ describe('ConversationRow browser behaviour', () => {
     expect(document.querySelector('[data-testid="conversation-unread-badge-cv-1"]')).toBeNull();
   });
 
-  it('shows a dot when replies in a thread the user is in are unread', async () => {
-    await renderRow(dm, { hasUnread: true, threadUnread: true, notifyCount: 0 });
-    const dot = document.querySelector('[data-testid="conversation-unread-dot-cv-1"]') as HTMLElement;
-    expect(dot.getAttribute('aria-label')).toBe('Unread thread replies');
-    expect(dot.className).toContain('bg-brand');
-  });
-
   it('renders the exact alerted count when under 100', async () => {
     const screen = await renderRow(dm, { hasUnread: true, notifyCount: 5 });
     await expect.element(screen.getByTestId('conversation-unread-badge-cv-1')).toHaveTextContent('5');
@@ -211,8 +205,7 @@ describe('ConversationRow browser behaviour', () => {
   });
 
   it('un-favoriting a categorized conversation resets its position within that category', async () => {
-    // favorite=true with a categoryID exercises the `categoryID ?? ""`
-    // truthy arm when toggling the star off.
+    // A favorite that kept its category goes back into it.
     await renderRow({ ...dm, favorite: true, categoryID: 'cat-9' });
     const star = document.querySelector('[data-testid="conv-fav-toggle-cv-1"]') as HTMLButtonElement;
     star.click();
@@ -223,8 +216,20 @@ describe('ConversationRow browser behaviour', () => {
     });
   });
 
+  // A category deleted while the conversation sat in Favorites isn't sent
+  // back (the server would refuse it): Direct Messages instead.
+  it('un-favoriting one whose category was deleted returns it to Direct Messages', async () => {
+    await renderRow({ ...dm, favorite: true, categoryID: 'cat-gone' });
+    const star = document.querySelector('[data-testid="conv-fav-toggle-cv-1"]') as HTMLButtonElement;
+    star.click();
+    expect(setCategoryMutate).toHaveBeenCalledWith({
+      conversationID: 'cv-1',
+      categoryID: '',
+      sidebarPosition: 0,
+    });
+  });
+
   it('un-favoriting a conversation with no categoryID falls back to "" (?? arm)', async () => {
-    // categoryID undefined → the `conversation.categoryID ?? ""` nullish arm.
     await renderRow({ ...dm, favorite: true, categoryID: undefined });
     const star = document.querySelector('[data-testid="conv-fav-toggle-cv-1"]') as HTMLButtonElement;
     star.click();

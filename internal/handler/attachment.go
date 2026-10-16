@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -224,10 +225,17 @@ func (h *AttachmentHandler) Media(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_token", "media token is required")
 		return
 	}
-	media, err := h.svc.OpenMedia(r.Context(), token)
+	// A video player seeks by asking for byte ranges, and Safari won't play
+	// a video at all unless the server answers them.
+	w.Header().Set("Accept-Ranges", "bytes")
+	media, err := h.svc.OpenMedia(r.Context(), token, requestedByteRange(r))
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "media URL expired or not found")
+			return
+		}
+		if errors.Is(err, storage.ErrRangeNotSatisfiable) {
+			writeError(w, http.StatusRequestedRangeNotSatisfiable, "invalid_range", "range not satisfiable")
 			return
 		}
 		writeError(w, http.StatusBadGateway, "media_error", err.Error())
@@ -261,8 +269,30 @@ func (h *AttachmentHandler) Media(w http.ResponseWriter, r *http.Request) {
 	if media.Size > 0 {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", media.Size))
 	}
-	w.WriteHeader(http.StatusOK)
+	status := http.StatusOK
+	if media.ContentRange != "" {
+		w.Header().Set("Content-Range", media.ContentRange)
+		status = http.StatusPartialContent
+	}
+	w.WriteHeader(status)
 	_, _ = io.Copy(w, media.Body)
+}
+
+// singleByteRange is the one form of Range header the media route serves: a
+// single byte range ("bytes=0-1023", "bytes=1024-", "bytes=-500"), which is
+// what a video player sends.
+var singleByteRange = regexp.MustCompile(`^bytes=(\d+-\d*|-\d+)$`)
+
+// requestedByteRange returns the request's Range header when it is a single
+// byte range the media route serves, else "" for the whole object. Several
+// ranges in one request, or a Range conditional on If-Range, get the whole
+// object — always a valid answer to a range request.
+func requestedByteRange(r *http.Request) string {
+	value := strings.TrimSpace(r.Header.Get("Range"))
+	if r.Header.Get("If-Range") != "" || !singleByteRange.MatchString(value) {
+		return ""
+	}
+	return value
 }
 
 // isInlineUnsafeContentType reports whether a content type can carry executable
