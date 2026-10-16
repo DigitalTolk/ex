@@ -14,7 +14,8 @@ func TestJwtCov_RunnerAndRunTokens(t *testing.T) {
 	user := &model.User{ID: "u-1", Email: "u1@example.com", DisplayName: "U One", SystemRole: model.SystemRoleMember}
 
 	t.Run("runner token", func(t *testing.T) {
-		tok, err := m.GenerateRunnerToken(user, 30*time.Minute)
+		exp := time.Now().Add(30 * time.Minute)
+		tok, err := m.GenerateRunnerToken(user, "rt-1", exp)
 		if err != nil {
 			t.Fatalf("mint: %v", err)
 		}
@@ -24,6 +25,10 @@ func TestJwtCov_RunnerAndRunTokens(t *testing.T) {
 		}
 		if claims.Scope != model.TokenScopeRunner || claims.UserID != "u-1" || claims.Email != user.Email {
 			t.Fatalf("claims mismatch: %+v", claims)
+		}
+		// The jti names the revocable RunnerToken row; the expiry is the row's.
+		if claims.ID != "rt-1" || claims.ExpiresAt.Time.Sub(exp).Abs() > time.Second {
+			t.Fatalf("jti/expiry not bound to the token record: %+v", claims)
 		}
 	})
 

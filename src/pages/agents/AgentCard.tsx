@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Bot, Check, ChevronDown, ChevronRight } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -23,7 +24,7 @@ function statusBadge(status: string, serverRun: boolean) {
     case 'needs_setup':
       return <Badge variant="destructive">CLI missing on your machine</Badge>;
     case 'offline':
-      return <Badge variant="outline">desktop app not running</Badge>;
+      return <Badge variant="outline">ex-runner not running</Badge>;
     default:
       return <Badge variant="outline">{status}</Badge>;
   }
@@ -37,7 +38,9 @@ function statusBadge(status: string, serverRun: boolean) {
 // sentence", not "write from scratch". An edit that lands back on the default
 // is stored as inherit, so future default improvements keep flowing to users
 // who never really diverged.
-export function AgentCard({ agent }: { agent: AgentView }) {
+// runnersTab: the workspace has the Runners tab, so an offline hint can link
+// there (read once by the page, not per card).
+export function AgentCard({ agent, runnersTab }: { agent: AgentView; runnersTab: boolean }) {
   const [open, setOpen] = useState(false);
   const update = useUpdateAgentPrefs();
   const defaultPersona = agent.defaultPersona ?? agent.resolved.persona ?? '';
@@ -98,7 +101,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
   const isBedrock = harness === 'bedrock';
   // The EFFECTIVE backend decides which controls make sense: with the select
   // on "default", the workspace default (resolved) is what actually runs.
-  // Server-run bedrock agents have no desktop app to be offline and no local
+  // Server-run bedrock agents have no ex-runner to be offline and no local
   // harness tools to pre-approve — those controls would be noise-shaped lies.
   const effectiveBedrock = (harness || agent.resolved.harness) === 'bedrock';
 
@@ -182,13 +185,22 @@ export function AgentCard({ agent }: { agent: AgentView }) {
           data-testid={`agent-cli-note-${agent.slug}`}
         >
           @{agent.displayName} uses the <span className="font-medium">{agent.resolved.harness} CLI</span>, so it runs
-          on <span className="font-medium">your own computer</span> — it needs the ex desktop app open and signed in,
-          with the {agent.resolved.harness} CLI installed and logged in there.
-          {agent.status === 'needs_setup'
-            ? ' Your desktop app is online but that CLI is missing or not signed in.'
-            : ' Your desktop app is not running right now.'}{' '}
-          From the web or mobile, use the <span className="font-medium">Bedrock</span> agents instead — they run in
-          the cloud and need no desktop app.
+          on <span className="font-medium">your own computer</span> through ex-runner, with the{' '}
+          {agent.resolved.harness} CLI installed and logged in there.
+          {agent.status === 'needs_setup' ? (
+            ' Your ex-runner is online but that CLI is missing or not signed in — install it, then restart ex-runner.'
+          ) : runnersTab ? (
+            <>
+              {' No ex-runner of yours is online right now — '}
+              <Link className="underline" to="/runners" data-testid={`agent-runners-link-${agent.slug}`}>
+                set one up or start it on the Runners tab
+              </Link>
+              .
+            </>
+          ) : (
+            ' No ex-runner of yours is online right now — start it with ex-runner start, or connect a computer under Runners in your account menu.'
+          )}{' '}
+          The <span className="font-medium">Bedrock</span> agents run on the server instead and need no setup.
         </p>
       )}
 
@@ -247,7 +259,7 @@ export function AgentCard({ agent }: { agent: AgentView }) {
                 htmlFor={`harness-${agent.slug}`}
                 info={
                   isBedrock
-                    ? 'Runs via AWS Bedrock on the server — no desktop app, CLI or personal AWS credentials. Bedrock agents use chat, workspace and connector tools, never anyone’s local shell or files.'
+                    ? 'Runs via AWS Bedrock on the server — no ex-runner, CLI or personal AWS credentials. Bedrock agents use chat, workspace and connector tools, never anyone’s local shell or files.'
                     : 'Which engine answers when you mention it.'
                 }
               >
@@ -343,9 +355,9 @@ export function AgentCard({ agent }: { agent: AgentView }) {
               </Field>
               {!effectiveBedrock && (
                 <Field
-                  label="If your app is offline"
+                  label="If your ex-runner is offline"
                   htmlFor={`offline-${agent.slug}`}
-                  info="What happens to a mention while your desktop app is closed."
+                  info="What happens to a mention while no ex-runner of yours is online."
                 >
                   <NativeSelect
                     id={`offline-${agent.slug}`}

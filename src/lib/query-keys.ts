@@ -12,6 +12,7 @@ export const queryKeys = {
 
   // Workspace
   workspaceSettings: () => ['workspace-settings'] as const,
+  runnerTokens: () => ['runner-tokens'] as const,
   emojis: () => ['emojis'] as const,
   frequentEmojis: () => ['emojis', 'frequent'] as const,
   sidebarCategories: () => ['sidebarCategories'] as const,

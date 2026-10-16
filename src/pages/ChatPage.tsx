@@ -48,6 +48,8 @@ import {
 } from '@/stores/agent-runs';
 import { onRunApproval as onAgentRunApproval } from '@/stores/agent-approvals';
 import { RunActivityDrawer } from '@/components/chat/RunActivityDrawer';
+import { DesktopRunnerAutostart } from '@/components/runners/DesktopRunnerAutostart';
+import { hasDesktopRunner } from '@/lib/desktop-runner';
 import { apiFetch } from '@/lib/api';
 import {
   bumpChannelUnread,
@@ -387,6 +389,15 @@ export default function ChatPage() {
       // the list and every open project detail refetch.
       queryClient.invalidateQueries({ queryKey: queryKeys.projects() });
     },
+    onSettingsUpdated: () => {
+      // An admin saved the workspace settings — refetch what they gate (the
+      // Runners tab appears or goes away without a reload).
+      queryClient.invalidateQueries({ queryKey: queryKeys.workspaceSettings() });
+    },
+    onRunnersChanged: () => {
+      // One of my computers was connected or disconnected, or came online.
+      queryClient.invalidateQueries({ queryKey: queryKeys.runnerTokens() });
+    },
     onActivityNew: (data: unknown) => {
       // An item landed in the activity stream — add it from the payload so the
       // sidebar badge + list update without refetching the whole feed.
@@ -703,6 +714,7 @@ export default function ChatPage() {
       {/* Run Activity Drawer: mounted once at the chat root; opened from the
           agent activity chip via the run-drawer store. */}
       <RunActivityDrawer />
+      {hasDesktopRunner() && <DesktopRunnerAutostart />}
     </AppLayout>
   );
 }
