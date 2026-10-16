@@ -25,6 +25,10 @@ export function useDismissKeyboardOnScroll() {
       // is part of typing, and blurring here dropped the keyboard AND closed
       // the popup (CM closes tooltips on blur) mid-autocomplete.
       if (e.target instanceof Element && e.target.closest('.cm-tooltip')) return;
+      // Controls that act on what's being typed (holding Send for its
+      // schedule options, picking one) keep the keyboard: a finger that
+      // wobbles while held there isn't a scroll.
+      if (e.target instanceof Element && e.target.closest('[data-keeps-keyboard]')) return;
       active.blur();
     };
     document.addEventListener('touchmove', onTouchMove, { passive: true });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from '@/context/AuthContext';
@@ -54,6 +54,28 @@ describe('LoginPage', () => {
     expect(
       screen.getByRole('button', { name: /sign in$/i }),
     ).toBeInTheDocument();
+  });
+
+  // Typing a password lights the submit button up in the brand pink.
+  it('turns Sign in pink once a password is typed, and back when cleared', async () => {
+    renderLoginPage();
+    const password = await screen.findByLabelText(/password/i);
+    const signIn = screen.getByRole('button', { name: /sign in$/i });
+    expect(signIn).not.toHaveClass('bg-brand');
+    expect(signIn).not.toHaveAttribute('data-ready');
+    fireEvent.change(password, { target: { value: 'x' } });
+    expect(signIn).toHaveClass('bg-brand');
+    expect(signIn).toHaveAttribute('data-ready', 'true');
+    fireEvent.change(password, { target: { value: '' } });
+    expect(signIn).not.toHaveClass('bg-brand');
+  });
+
+  it('turns Create Account pink once a password is typed on an invite', async () => {
+    renderLoginPage('/invite/abc123');
+    const create = await screen.findByRole('button', { name: /create account/i });
+    expect(create).not.toHaveClass('bg-brand');
+    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'secret' } });
+    expect(create).toHaveClass('bg-brand');
   });
 
   it('shows invite form when token param is present', async () => {

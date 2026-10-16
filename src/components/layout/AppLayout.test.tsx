@@ -1,5 +1,5 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AppLayout } from './AppLayout';
@@ -145,6 +145,28 @@ describe('AppLayout', () => {
     renderLayout();
     expect(within(screen.getByTestId('app-sidebar')).getByTestId('activity-panel')).toBeInTheDocument();
     expect(within(screen.getByTestId('app-sidebar')).queryByTestId('sidebar')).toBeNull();
+  });
+
+  // The channel list fades softly under the header once it scrolls off the
+  // top — never at rest, and a switch of list starts the new one unfaded.
+  it('fades the channel list under the header only once scrolled', () => {
+    renderLayout();
+    const aside = screen.getByTestId('app-sidebar');
+    const fade = within(aside).getByTestId('sidebar-top-fade');
+    expect(fade).toHaveClass('opacity-0');
+    const scroller = within(aside).getByTestId('sidebar');
+    Object.defineProperty(scroller, 'scrollTop', { value: 40, configurable: true });
+    fireEvent.scroll(scroller);
+    expect(fade).toHaveClass('opacity-100');
+    Object.defineProperty(scroller, 'scrollTop', { value: 0, configurable: true });
+    fireEvent.scroll(scroller);
+    expect(fade).toHaveClass('opacity-0');
+    Object.defineProperty(scroller, 'scrollTop', { value: 40, configurable: true });
+    fireEvent.scroll(scroller);
+    act(() => setSidebarMode('activity'));
+    expect(within(aside).queryByTestId('sidebar-top-fade')).toBeNull();
+    act(() => setSidebarMode('home'));
+    expect(within(aside).getByTestId('sidebar-top-fade')).toHaveClass('opacity-0');
   });
 
   it('renders children', () => {

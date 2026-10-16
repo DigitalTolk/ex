@@ -81,3 +81,65 @@ describe('ActivityRowView', () => {
     expect(screen.getByTestId('where')).toHaveTextContent(/^\/$/);
   });
 });
+
+// Each kind names itself and leads with where it happened, and its message is
+// shaped by kind, so mentions, thread replies and DMs read apart at a glance.
+describe('ActivityRowView kinds', () => {
+  function renderKind(overrides: Partial<ActivityItem>, extra: { conversation?: { name: string; group: boolean } } = {}) {
+    const row = groupActivity([{ ...item, messagePreview: 'hello there', ...overrides }])[0];
+    return render(
+      <MemoryRouter>
+        <ActivityRowView
+          row={row}
+          href="/x"
+          selected={false}
+          actor={undefined}
+          emojiMap={undefined}
+          channel={{ name: 'general', private: false }}
+          conversation={extra.conversation}
+          onOpen={vi.fn()}
+          onSetRead={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+  }
+
+  it('a mention is labelled, placed in its channel, and quoted', () => {
+    const { unmount } = renderKind({ type: 'mention' });
+    expect(screen.getByTestId('activity-row-kind')).toHaveTextContent('Mention');
+    expect(screen.getByTestId('activity-row-where')).toHaveTextContent('general');
+    const preview = screen.getByTestId('activity-row-preview');
+    expect(preview).toHaveClass('border-l-2');
+    expect(preview.querySelector('svg')).toBeNull();
+    unmount();
+  });
+
+  it('a thread reply hangs off a reply arrow, unquoted', () => {
+    renderKind({ type: 'thread_reply' });
+    expect(screen.getByTestId('activity-row-kind')).toHaveTextContent('Thread reply');
+    const preview = screen.getByTestId('activity-row-preview');
+    expect(preview).not.toHaveClass('border-l-2');
+    expect(preview.querySelector('svg')).not.toBeNull();
+  });
+
+  it('a DM names itself once (no repeated "Direct message" place); a group names the group', () => {
+    const { unmount } = renderKind({ type: 'dm', parentType: 'conversation', parentID: 'c-1' });
+    expect(screen.getByTestId('activity-row-kind')).toHaveTextContent('Direct message');
+    expect(screen.getByTestId('activity-row-where')).toBeEmptyDOMElement();
+    unmount();
+    renderKind({ type: 'mention', parentType: 'conversation', parentID: 'c-2' }, { conversation: { name: 'Team trip', group: true } });
+    expect(screen.getByTestId('activity-row-where')).toHaveTextContent('Team trip');
+  });
+
+  it('a mention in a 1:1 DM says so; reactions and unknown kinds still get a label', () => {
+    const { unmount } = renderKind({ type: 'mention', parentType: 'conversation', parentID: 'c-1' });
+    expect(screen.getByTestId('activity-row-where')).toHaveTextContent('Direct message');
+    unmount();
+    const r = renderKind({ type: 'reaction', emoji: '👍' });
+    expect(screen.getByTestId('activity-row-kind')).toHaveTextContent('Reaction');
+    r.unmount();
+    renderKind({ type: 'something_new' as ActivityItem['type'] });
+    expect(screen.getByTestId('activity-row-kind')).toHaveTextContent('Activity');
+  });
+});

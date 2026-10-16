@@ -127,7 +127,7 @@ function DialogContent({
           // internally, so a tall dialog on a short window stays fully reachable
           // instead of overflowing off-screen. Mobile resets to full-screen
           // (max-h-none + inset-0) and scrolls the whole sheet.
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] max-h-[calc(100dvh-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none mobile:inset-0 mobile:max-h-none mobile:max-w-none mobile:translate-x-0 mobile:translate-y-0 mobile:overflow-y-auto mobile:rounded-none mobile:p-[calc(env(safe-area-inset-top)+1rem)_1rem_calc(env(safe-area-inset-bottom)+1rem)] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] max-h-[calc(100dvh-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none mobile:inset-0 mobile:max-h-none mobile:max-w-none mobile:translate-x-0 mobile:translate-y-0 mobile:overflow-y-auto mobile:rounded-none mobile:p-[calc(env(safe-area-inset-top)+0.5rem)_1rem_calc(env(safe-area-inset-bottom)+1rem)] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           DIALOG_SIZE[size],
           hasMobileBar && "mobile:[&_[data-slot=dialog-header]]:pr-20",
           mobileCloseLabel && effectiveAction && "mobile:[&_[data-slot=dialog-header]]:pr-40",
@@ -241,7 +241,10 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
     <DialogPrimitive.Title
       data-slot="dialog-title"
       className={cn(
-        "font-heading text-base leading-none font-medium",
+        // On a phone a dialog is a full screen, so its title is the screen's
+        // heading: the same size as every other screen heading, and level
+        // with the Close / Done button in the top row.
+        "font-heading text-base leading-none font-medium mobile:text-xl mobile:leading-9 mobile:font-semibold",
         className
       )}
       {...props}

@@ -12,7 +12,7 @@ export default function AiHubLayout() {
     <div className="flex min-h-0 flex-1 flex-col" data-testid="ai-hub">
       <nav
         aria-label="AI sections"
-        className="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-4 pt-2 sm:px-6"
+        className="mx-auto flex w-full max-w-4xl shrink-0 gap-1 overflow-x-auto border-b border-border px-4 pt-2 sm:px-6"
       >
         {AI_HUB_TABS.map(({ to, label, Icon }) => (
           <NavLink

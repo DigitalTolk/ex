@@ -1,3 +1,4 @@
+import { SCROLL_FADE_TOP, scrolledOffTop } from '@/lib/scroll-fade';
 import { memo, useCallback, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { GroupedVirtuoso } from 'react-virtuoso';
@@ -115,10 +116,17 @@ export const ActivityPanel = memo(function ActivityPanel({ onNavigate }: Activit
   }, []);
 
   const pending = filter === 'all' ? (reminders ?? []) : [];
+  const [scrolled, setScrolled] = useState(false);
 
   return (
     <div className="flex h-full min-h-0 flex-col text-sidebar-foreground" data-testid="activity-panel">
-      <div className="shrink-0 px-2">
+      <div className="relative z-10 shrink-0 px-2 pt-3 mobile:pt-0">
+        {/* Once scrolled, the rows fade softly under the filters. */}
+        <div
+          className={`${SCROLL_FADE_TOP} top-full ${scrolled ? 'opacity-100' : 'opacity-0'}`}
+          aria-hidden="true"
+          data-testid="activity-top-fade"
+        />
         <ActivityFilterTabs filter={filter} unread={unreadByTab} />
         <div className="flex items-center justify-between pt-3 pb-2 pl-1">
           <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground mobile:min-h-11 mobile:gap-3 mobile:pr-4">
@@ -142,7 +150,11 @@ export const ActivityPanel = memo(function ActivityPanel({ onNavigate }: Activit
         </div>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1" data-testid="activity-scroll-area">
+      <ScrollArea
+        className="min-h-0 flex-1"
+        onScrollCapture={(e) => setScrolled(scrolledOffTop(e))}
+        data-testid="activity-scroll-area"
+      >
         <div className="px-2 pb-3">
           {pending.length > 0 && <PendingReminders reminders={pending} hrefFor={hrefFor} onNavigate={onNavigate} />}
 

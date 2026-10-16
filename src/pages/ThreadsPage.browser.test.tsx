@@ -114,10 +114,11 @@ describe('Threads page layout', () => {
     // One right after the other.
     const [first, second] = cards().map((card) => card.getBoundingClientRect());
     expect(second.top).toBe(first.bottom);
-    // The page title keeps its inset.
+    // The page title moves up beside the back button in the top bar; the page
+    // keeps its heading for screen readers only.
     const title = document.querySelector('h1')!;
     expect(title.textContent).toBe('Threads');
-    expect(title.getBoundingClientRect().left).toBeGreaterThanOrEqual(16);
+    expect(title.getBoundingClientRect().width).toBeLessThanOrEqual(1);
   });
 
   it('in a wider window keeps each thread in its card', async () => {

@@ -1,3 +1,4 @@
+import { SCROLL_FADE_TOP, scrolledOffTop } from '@/lib/scroll-fade';
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type WheelEvent } from 'react';
 import { matchPath, useLocation } from 'react-router-dom';
 import { takeOpenChannelsRequest, useOpenChannelsRequest } from '@/lib/mobile-nav';
@@ -38,7 +39,9 @@ function SidebarHeader({ topStrip = false }: { topStrip?: boolean }) {
   return (
     <div className="shrink-0" data-sidebar-header="true">
       {topStrip && <div className="h-12 [-webkit-app-region:drag]" data-testid="sidebar-top-strip" aria-hidden="true" />}
-      <div className={`px-3 pb-3 ${topStrip ? '' : 'pt-3'}`}>
+      {/* No bottom padding: the list below scrolls right up to the switch
+          (fading under it), and carries the gap at rest itself. */}
+      <div className={`px-3 ${topStrip ? '' : 'pt-3'}`}>
         <ActivityModeSwitch />
       </div>
     </div>
@@ -61,9 +64,27 @@ function MobileSidebarTitle() {
 // re-render the whole list.
 const SidebarBody = memo(function SidebarBody({ onClose }: { onClose: () => void }) {
   const mode = useSidebarModeStore((s) => s.mode);
+  const [scrolled, setScrolled] = useState(false);
+  // Switching lists starts the new one at its top, unfaded.
+  const [shownMode, setShownMode] = useState(mode);
+  if (shownMode !== mode) {
+    setShownMode(mode);
+    setScrolled(false);
+  }
   return (
-    <div className="min-h-0 flex-1">
+    // isolate: the fades' z-index stays inside the list, never above the
+    // phone tab bar or other chrome.
+    <div className="relative isolate min-h-0 flex-1" onScrollCapture={(e) => setScrolled(scrolledOffTop(e))}>
       {mode === 'activity' ? <ActivityPanel onNavigate={onClose} /> : <Sidebar onClose={onClose} />}
+      {/* Once scrolled, channels fade softly under the header. (Activity
+          fades below its own filters instead.) */}
+      {mode === 'home' && (
+        <div
+          className={`${SCROLL_FADE_TOP} top-0 ${scrolled ? 'opacity-100' : 'opacity-0'}`}
+          aria-hidden="true"
+          data-testid="sidebar-top-fade"
+        />
+      )}
     </div>
   );
 });
