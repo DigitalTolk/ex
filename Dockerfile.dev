@@ -3,7 +3,7 @@
 # Development-only image: runs the Go server under air (hot reload).
 # Source changes arrive via `docker compose watch` sync (see
 # docker-compose.dev.yml) and air recompiles/restarts in-container.
-FROM golang:1.26-trixie
+FROM golang:1.27-trixie
 
 # Base compose passes VERSION; the dev build doesn't bake it in (the dev
 # server reports "dev"), consume it so the build doesn't warn.
