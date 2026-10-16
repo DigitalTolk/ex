@@ -3,9 +3,9 @@ module github.com/DigitalTolk/ex
 go 1.26.4
 
 require (
-	github.com/DataDog/dd-trace-go/contrib/aws/aws-sdk-go-v2/v2 v2.11.1
-	github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.11.1
-	github.com/DataDog/dd-trace-go/contrib/redis/go-redis.v9/v2 v2.11.1
+	github.com/DataDog/dd-trace-go/contrib/aws/aws-sdk-go-v2/v2 v2.11.2
+	github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.11.2
+	github.com/DataDog/dd-trace-go/contrib/redis/go-redis.v9/v2 v2.11.2
 	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/config v1.33.9
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.9
@@ -30,7 +30,7 @@ require (
 	github.com/yuin/goldmark v1.8.6
 	golang.org/x/crypto v0.58.0
 	golang.org/x/image v0.47.0
-	golang.org/x/net v0.60.0
+	golang.org/x/net v0.61.0
 	golang.org/x/oauth2 v0.37.0
 )
 
@@ -71,11 +71,11 @@ require (
 	github.com/DataDog/datadog-agent/pkg/trace/stats v0.82.3 // indirect
 	github.com/DataDog/datadog-agent/pkg/trace/traceutil v0.82.3 // indirect
 	github.com/DataDog/datadog-go/v5 v5.9.1 // indirect
-	github.com/DataDog/dd-trace-go/v2 v2.11.1
+	github.com/DataDog/dd-trace-go/v2 v2.11.2
 	github.com/DataDog/go-runtime-metrics-internal v0.0.4-0.20260217080614-b0f4edc38a6d // indirect
 	github.com/DataDog/go-sqllexer v0.2.4 // indirect
 	github.com/DataDog/go-tuf v1.1.1-0.5.2 // indirect
-	github.com/DataDog/orchestrion v1.13.1
+	github.com/DataDog/orchestrion v1.14.0
 	github.com/DataDog/sketches-go v1.4.8 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/antithesishq/antithesis-sdk-go v0.8.0 // indirect
