@@ -353,14 +353,29 @@ describe('MessageInput coverage flows (browser)', () => {
 
   it('flushes the draft with keepalive when the page is torn down (pagehide)', async () => {
     const onDraftChange = vi.fn();
+    // Capture the composer's own pagehide listener and call it directly. A
+    // real `window.dispatchEvent(new Event('pagehide'))` also reaches the
+    // vitest browser runner (>= 5.0.4), which takes a pagehide with no reload
+    // after it for a broken iframe and aborts the rest of the file — and,
+    // under full-suite load, every file left in that browser instance.
+    const addListener = vi.spyOn(window, 'addEventListener');
     await renderWithProviders(
       <MessageInput onSend={vi.fn()} initialBody="teardown draft" onDraftChange={onDraftChange} />,
     );
     await settle();
+    const pageHideHandlers = addListener.mock.calls
+      .filter(([type]) => type === 'pagehide')
+      .map(([, handler]) => handler);
+    addListener.mockRestore();
+    expect(pageHideHandlers.length).toBeGreaterThan(0);
     onDraftChange.mockClear();
     // pagehide → flushDraft({ keepalive: true }): the save must ride a
     // keepalive fetch because the page is dying.
-    window.dispatchEvent(new Event('pagehide'));
+    const pageHide = new Event('pagehide');
+    for (const handler of pageHideHandlers) {
+      if (typeof handler === 'function') handler.call(window, pageHide);
+      else handler?.handleEvent(pageHide);
+    }
     expect(onDraftChange).toHaveBeenCalledWith(
       expect.objectContaining({ body: 'teardown draft' }),
       { notify: true, keepalive: true },
