@@ -35,6 +35,10 @@ type fakeAvatarObjects struct {
 	readErr   error
 	putErr    error
 	deleteErr error
+	rangeErr  error
+	// fullReads counts GetObject calls; afterRange runs after each ranged read.
+	fullReads  int
+	afterRange func()
 }
 
 func newFakeAvatarObjects() *fakeAvatarObjects {
@@ -45,9 +49,27 @@ type failingBody struct{ err error }
 
 func (b failingBody) Read([]byte) (int, error) { return 0, b.err }
 
+func (f *fakeAvatarObjects) GetObjectRange(_ context.Context, key string, maxBytes int64) ([]byte, error) {
+	f.mu.Lock()
+	data, ok := f.objects[key]
+	err := f.rangeErr
+	f.mu.Unlock()
+	if f.afterRange != nil {
+		defer f.afterRange()
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errors.New("NoSuchKey")
+	}
+	return bytes.Clone(data[:min(int64(len(data)), maxBytes)]), nil
+}
+
 func (f *fakeAvatarObjects) GetObject(_ context.Context, key string) (io.ReadCloser, string, int64, time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.fullReads++
 	if f.getErr != nil {
 		return nil, "", 0, time.Time{}, f.getErr
 	}
@@ -468,6 +490,54 @@ func TestShrinkAvatar(t *testing.T) {
 		}
 		if users.users["u1"].AvatarKey != "avatars/u1/old" || len(objects.objects) != 1 {
 			t.Fatal("rewrote an avatar that fits")
+		}
+	})
+
+	// Regression: the backfill reported a 3974×5973 camera photo (~285 MB to
+	// decode) as "too large" — over the server's share of its decode budget —
+	// and left exactly the kind of avatar it exists to shrink.
+	t.Run("a raised decode limit takes an avatar the server would refuse", func(t *testing.T) {
+		svc, _, objects, _, _ := avatarService(t)
+		objects.objects["avatars/u1/old"] = pngHeader(3974, 5973)
+		if _, err := svc.ShrinkAvatar(ctx, "u1", true); !errors.Is(err, errAvatarPixels) {
+			t.Fatalf("server limit: err = %v, want %v", err, errAvatarPixels)
+		}
+		svc.SetAvatarDecodeLimit(1 << 30)
+		if changed, err := svc.ShrinkAvatar(ctx, "u1", true); err != nil || !changed {
+			t.Fatalf("raised limit: ShrinkAvatar = %v, %v", changed, err)
+		}
+		// A limit is a limit: below the photo's cost it is refused again.
+		objects.objects["avatars/u1/old"] = encodePNG(t, halves(2400, 1600, 255))
+		svc.SetAvatarDecodeLimit(avatarDecodeCost(image.Config{Width: 2400, Height: 1600}) - 1)
+		if _, err := svc.ShrinkAvatar(ctx, "u1", false); !errors.Is(err, errAvatarPixels) {
+			t.Fatalf("lowered limit: err = %v, want %v", err, errAvatarPixels)
+		}
+	})
+
+	t.Run("a raised decode limit decodes from a budget of its own", func(t *testing.T) {
+		// Hold all of the shared budget: a decode drawing on it would wait,
+		// and a limit above it could never be granted from it at all.
+		if !imageDecodeBudget.TryAcquire(maxImageDecodeBytes) {
+			t.Fatal("decode budget unexpectedly busy")
+		}
+		defer imageDecodeBudget.Release(maxImageDecodeBytes)
+		within := func(d time.Duration) context.Context {
+			c, cancel := context.WithTimeout(ctx, d)
+			t.Cleanup(cancel)
+			return c
+		}
+
+		svc, users, objects, _, _ := avatarService(t)
+		objects.objects["avatars/u1/old"] = encodePNG(t, halves(2400, 1600, 255))
+		if _, err := svc.ShrinkAvatar(within(50*time.Millisecond), "u1", false); err == nil || !strings.Contains(err.Error(), "wait for avatar decode") {
+			t.Fatalf("server budget: err = %v, want a wait for the shared budget", err)
+		}
+		svc.SetAvatarDecodeLimit(1 << 30)
+		if changed, err := svc.ShrinkAvatar(within(time.Minute), "u1", false); err != nil || !changed {
+			t.Fatalf("own budget: ShrinkAvatar = %v, %v", changed, err)
+		}
+		if users.users["u1"].AvatarKey == "avatars/u1/old" {
+			t.Fatal("the avatar was not replaced")
 		}
 	})
 

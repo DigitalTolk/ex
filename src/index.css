@@ -591,17 +591,11 @@
   }
 }
 
-/* The app root (App.tsx) is sized to the space above the on-screen keyboard.
-   It glides only while the keyboard comes or goes; any other viewport change
-   (a window resize, the suggestion bar while typing) resizes it at once. The glide's curve is defined here (the
-   search sheet follows it too); its duration, --ex-keyboard-settle, is set by
-   useKeyboardInset from KEYBOARD_SETTLE_MS along with data-keyboard-settling. */
+/* The curve of the iOS keyboard's slide, for a surface that follows the
+   keyboard on its own (the search sheet, over KEYBOARD_SETTLE_MS). The app
+   root is NOT animated: it is resized at once (see useKeyboardInset). */
 :root {
   --ex-keyboard-ease: cubic-bezier(0.25, 0.1, 0.25, 1);
-}
-
-html[data-keyboard-settling] [data-app-root] {
-  transition: height var(--ex-keyboard-settle) var(--ex-keyboard-ease);
 }
 
 @layer components {

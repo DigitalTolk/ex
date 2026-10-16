@@ -16,6 +16,12 @@ import (
 // arPageSize bounds how many user rows we pull per List call.
 const arPageSize = 100
 
+// arDecodeLimit is how much memory decoding one avatar may take here, ~89
+// megapixels. The server stops at ~22 (its share of a budget every upload in
+// flight draws from), which refuses some of the full-size camera photos this
+// backfill exists to shrink; it decodes one avatar at a time.
+const arDecodeLimit = 1 << 30
+
 // avatarShrinker is the slice of service.UserService the backfill drives.
 type avatarShrinker interface {
 	ShrinkAvatar(ctx context.Context, userID string, dryRun bool) (bool, error)
@@ -64,8 +70,9 @@ func runAvatarResize(ctx context.Context, db *store.DB, args []string) int {
 	svc := service.NewUserService(users, redisCache, s3Client, redisPubSub)
 	svc.SetMediaURLCache(redisCache)
 	svc.SetAvatarObjects(s3Client)
+	svc.SetAvatarDecodeLimit(arDecodeLimit)
 
-	slog.Info("starting avatar-resize", "mode", mode, "maxSide", service.MaxAvatarSide)
+	slog.Info("starting avatar-resize", "mode", mode, "maxSide", service.MaxAvatarSide, "decodeLimitMiB", arDecodeLimit>>20)
 	return avatarResize(ctx, users, svc, dryRun, verbose, mode)
 }
 

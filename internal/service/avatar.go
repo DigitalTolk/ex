@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/disintegration/imaging"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/DigitalTolk/ex/internal/store"
 )
@@ -59,6 +60,25 @@ func avatarDecodeCost(cfg image.Config) int64 {
 	return imageDecodeCost(cfg.Width, cfg.Height) + int64(cfg.Width)*int64(cfg.Height)*4
 }
 
+// avatarDecoding is how much memory decoding one avatar may take, and the
+// budget concurrent decodes draw it from.
+type avatarDecoding struct {
+	limit  int64
+	budget *semaphore.Weighted
+}
+
+// serverAvatarDecoding is the server's: avatars share the per-picture limit
+// and the budget of message pictures, which decode in the same process.
+var serverAvatarDecoding = avatarDecoding{limit: maxImageDecodeBytes, budget: imageDecodeBudget}
+
+// SetAvatarDecodeLimit lets a process that shrinks one avatar at a time (the
+// avatar-resize backfill) decode bigger pictures than the server accepts. The
+// server's limit is its share of a budget every upload in flight draws from;
+// this limit gets a budget of its own.
+func (s *UserService) SetAvatarDecodeLimit(limit int64) {
+	s.avatarDecoding = avatarDecoding{limit: limit, budget: semaphore.NewWeighted(limit)}
+}
+
 // readAvatar reads a stored avatar, refusing one over MaxAvatarBytes (a
 // presigned PUT does not bind the size its caller declared).
 func (s *UserService) readAvatar(ctx context.Context, key string) ([]byte, error) {
@@ -77,8 +97,9 @@ func (s *UserService) readAvatar(ctx context.Context, key string) ([]byte, error
 	return data, nil
 }
 
-// avatarConfig reads an avatar's format and dimensions without decoding it.
-func avatarConfig(data []byte) (image.Config, error) {
+// avatarConfig reads an avatar's format and dimensions without decoding it,
+// refusing one whose decode would take more than limit.
+func avatarConfig(data []byte, limit int64) (image.Config, error) {
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
 		return cfg, errAvatarFormat
@@ -88,7 +109,7 @@ func avatarConfig(data []byte) (image.Config, error) {
 	default:
 		return cfg, errAvatarFormat
 	}
-	if avatarDecodeCost(cfg) > maxImageDecodeBytes {
+	if avatarDecodeCost(cfg) > limit {
 		return cfg, errAvatarPixels
 	}
 	return cfg, nil
@@ -98,16 +119,16 @@ func avatarConfig(data []byte) (image.Config, error) {
 // per its EXIF orientation, shrunk to fit MaxAvatarSide, and re-encoded as
 // lossy WebP, which also drops its metadata (a phone photo's says where it
 // was taken).
-func shrinkAvatar(ctx context.Context, data []byte) ([]byte, error) {
-	cfg, err := avatarConfig(data)
+func shrinkAvatar(ctx context.Context, data []byte, decoding avatarDecoding) ([]byte, error) {
+	cfg, err := avatarConfig(data, decoding.limit)
 	if err != nil {
 		return nil, err
 	}
 	cost := avatarDecodeCost(cfg)
-	if err := imageDecodeBudget.Acquire(ctx, cost); err != nil {
+	if err := decoding.budget.Acquire(ctx, cost); err != nil {
 		return nil, fmt.Errorf("user: wait for avatar decode: %w", err)
 	}
-	defer imageDecodeBudget.Release(cost)
+	defer decoding.budget.Release(cost)
 	img, err := imaging.Decode(bytes.NewReader(data), imaging.AutoOrientation(true))
 	if err != nil {
 		return nil, errAvatarFormat
@@ -120,7 +141,7 @@ func shrinkAvatar(ctx context.Context, data []byte) ([]byte, error) {
 // keepAvatar stores a shrunk copy of an avatar file under a new key and
 // returns that key.
 func (s *UserService) keepAvatar(ctx context.Context, userID string, data []byte) (string, error) {
-	encoded, err := shrinkAvatar(ctx, data)
+	encoded, err := shrinkAvatar(ctx, data, s.avatarDecoding)
 	if err != nil {
 		return "", err
 	}
@@ -170,7 +191,7 @@ func (s *UserService) ShrinkAvatar(ctx context.Context, userID string, dryRun bo
 	if err != nil {
 		return false, err
 	}
-	cfg, err := avatarConfig(data)
+	cfg, err := avatarConfig(data, s.avatarDecoding.limit)
 	if err != nil {
 		return false, err
 	}

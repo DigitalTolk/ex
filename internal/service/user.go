@@ -51,6 +51,8 @@ type UserService struct {
 	mediaCache    MediaURLCache
 	reminders     ReminderCanceller
 	avatarObjects AvatarObjects
+	// avatarDecoding bounds the memory an avatar decode may take.
+	avatarDecoding avatarDecoding
 }
 
 // ReminderCanceller stops a deactivated user's queued reminders. Implemented by
@@ -71,7 +73,8 @@ func NewUserService(users UserStore, cache Cache, avatars AvatarSigner, publishe
 		// The cache constructor caps this to a short safety window so
 		// temporary AWS security tokens embedded in presigned URLs never
 		// linger for hours after expiry.
-		urlCache: newPresignedURLCache(20 * time.Hour),
+		urlCache:       newPresignedURLCache(20 * time.Hour),
+		avatarDecoding: serverAvatarDecoding,
 	}
 }
 
