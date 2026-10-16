@@ -241,7 +241,8 @@ type postChannelBody struct {
 	Body string `json:"body"`
 	// ThreadRoot replies inside a specific thread (a message ID) instead of at
 	// the top level — e.g. answering a question that was asked in a thread.
-	ThreadRoot string `json:"thread_root"`
+	ThreadRoot    string   `json:"thread_root"`
+	AttachmentIDs []string `json:"attachmentIDs"`
 }
 
 // PostToChannel posts as the agent into ANOTHER channel the invoker is in.
@@ -253,7 +254,7 @@ func (h *AgentRunToolHandler) PostToChannel(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var body postChannelBody
-	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || strings.TrimSpace(body.Body) == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || (strings.TrimSpace(body.Body) == "" && len(body.AttachmentIDs) == 0) {
 		writeError(w, http.StatusBadRequest, "bad_request", "body required")
 		return
 	}
@@ -268,9 +269,13 @@ func (h *AgentRunToolHandler) PostToChannel(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusTooManyRequests, "post_cap", "per-run post cap reached")
 		return
 	}
+	files, ok := h.runPostAttachments(w, r, claims, body.AttachmentIDs)
+	if !ok {
+		return
+	}
 	channelID := r.PathValue("id")
 	text := h.orch.LinkifyMentions(r.Context(), run, body.Body)
-	msg, err := h.messages.SendAsAgentRun(r.Context(), claims.ActorID, claims.UserID, channelID, service.ParentChannel, text, body.ThreadRoot, claims.RunID)
+	msg, err := h.messages.SendAsAgentRun(r.Context(), claims.ActorID, claims.UserID, channelID, service.ParentChannel, text, body.ThreadRoot, claims.RunID, files...)
 	if err != nil {
 		writeError(w, http.StatusForbidden, "forbidden", "post rejected — is the invoker a member of that channel?")
 		return
@@ -403,8 +408,9 @@ func (h *AgentRunToolHandler) ListUsers(w http.ResponseWriter, r *http.Request) 
 }
 
 type sendDMBody struct {
-	UserID string `json:"userID"`
-	Body   string `json:"body"`
+	UserID        string   `json:"userID"`
+	Body          string   `json:"body"`
+	AttachmentIDs []string `json:"attachmentIDs"`
 }
 
 // SendDM opens (or reuses) the DM between the INVOKER and the target, and
@@ -416,7 +422,7 @@ func (h *AgentRunToolHandler) SendDM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body sendDMBody
-	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.UserID == "" || strings.TrimSpace(body.Body) == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.UserID == "" || (strings.TrimSpace(body.Body) == "" && len(body.AttachmentIDs) == 0) {
 		writeError(w, http.StatusBadRequest, "bad_request", "userID and body required")
 		return
 	}
@@ -428,6 +434,10 @@ func (h *AgentRunToolHandler) SendDM(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, "post_cap", "per-run post cap reached")
 		return
 	}
+	files, ok := h.runPostAttachments(w, r, claims, body.AttachmentIDs)
+	if !ok {
+		return
+	}
 	target := userRef(body.UserID)
 	conv, err := h.workspace.Conversations.GetOrCreateDM(r.Context(), claims.UserID, target)
 	if err != nil {
@@ -435,7 +445,7 @@ func (h *AgentRunToolHandler) SendDM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	text := h.orch.LinkifyMentions(r.Context(), run, body.Body)
-	msg, err := h.messages.SendAsAgentRun(r.Context(), claims.ActorID, claims.UserID, conv.ID, service.ParentConversation, text, "", claims.RunID)
+	msg, err := h.messages.SendAsAgentRun(r.Context(), claims.ActorID, claims.UserID, conv.ID, service.ParentConversation, text, "", claims.RunID, files...)
 	if err != nil {
 		writeError(w, http.StatusForbidden, "forbidden", toolRejection("DM rejected", err, ""))
 		return

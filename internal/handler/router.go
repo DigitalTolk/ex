@@ -360,6 +360,12 @@ func NewRouter(d *Deps) http.Handler {
 		// Agent posts share the per-user write limit so a runaway agent can't
 		// out-post a human (keyed by the invoker's user id from the token).
 		mux.Handle("POST /api/v1/agent/run/messages", middleware.WrapFunc(d.AgentRunTool.PostMessage, runMW, writeLimit))
+		if d.AgentRunTool.attachments != nil {
+			// Files: the invoking message's attachments down to the runner,
+			// and the agent's own files up for its posts.
+			mux.Handle("GET /api/v1/agent/run/attachments/{id}", middleware.WrapFunc(d.AgentRunTool.DownloadAttachment, runMW))
+			mux.Handle("POST /api/v1/agent/run/attachments", middleware.WrapFunc(d.AgentRunTool.UploadAttachment, runMW, writeLimit))
+		}
 		mux.Handle("GET /api/v1/agent/run/thread", middleware.WrapFunc(d.AgentRunTool.GetThread, runMW))
 		mux.Handle("GET /api/v1/agent/run/context", middleware.WrapFunc(d.AgentRunTool.GetContext, runMW))
 		mux.Handle("POST /api/v1/agent/run/context", middleware.WrapFunc(d.AgentRunTool.WriteContext, runMW, writeLimit))

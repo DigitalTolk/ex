@@ -85,7 +85,7 @@ function agentFixtures(): AgentView[] {
       displayName: 'ww',
       slug: 'ww',
       status: 'paused',
-      prefs: { userID: 'u-1', slug: 'ww', followUpMode: 'window', followUpMins: 0 },
+      prefs: { userID: 'u-1', slug: 'ww', followUpMode: 'window', followUpMins: 0, limits: { maxTokens: 300000 } },
       resolved: { harness: 'codex', model: 'codex-large', persona: 'Default ww persona', limits: {}, maxConcurrentRuns: 1 },
     },
   ];
@@ -244,6 +244,7 @@ describe('AgentsPage', () => {
     fireEvent.click(gg.getByRole('button', { name: 'Advanced' }));
     expect(gg.getByLabelText('Model')).toHaveAttribute('placeholder', 'harness default');
     expect(gg.getByLabelText('Discussion rounds')).toHaveAttribute('placeholder', '12');
+    expect(gg.getByLabelText('Token budget')).toHaveAttribute('placeholder', '200000');
     expect(gg.getByLabelText('Thread follow-ups')).toHaveValue('');
     expect(gg.queryByLabelText('ask me before it replies')).not.toBeInTheDocument();
     // Collapsing again hides it (the chevron flips).
@@ -288,6 +289,9 @@ describe('AgentsPage', () => {
     expect(ww.getByText('paused')).toBeInTheDocument();
     expect(ww.getByLabelText('Thread follow-ups')).toHaveValue('window:10');
     expect(ww.getByLabelText('Model')).toHaveAttribute('placeholder', 'codex-large');
+    // A saved token budget shows as the value and counts as a customization.
+    expect(ww.getByLabelText('Token budget')).toHaveValue('300000');
+    expect(ww.getByText('2 customized')).toBeInTheDocument();
 
     // Subscriptions render before the channels list resolves: parentID is the
     // fallback name until the lookup succeeds.
@@ -530,6 +534,54 @@ describe('AgentsPage', () => {
     );
   });
 
+  it('saves a token budget next to the chain rounds', async () => {
+    let patchBody: unknown;
+    installRoutes({
+      mutate: (path, init) => {
+        if (path === '/api/v1/agents/aa/prefs' && init?.method === 'PATCH') {
+          patchBody = JSON.parse(init.body!);
+          return Promise.resolve({});
+        }
+        return undefined;
+      },
+    });
+    renderPage();
+
+    const aa = await openCard('aa');
+    // Below the floor the field clamps; the default sits in the placeholder.
+    fireEvent.change(aa.getByLabelText('Token budget'), { target: { value: '5' } });
+    expect(aa.getByLabelText('Token budget')).toHaveValue('10000');
+    fireEvent.change(aa.getByLabelText('Token budget'), { target: { value: '500000' } });
+    fireEvent.change(aa.getByLabelText('Discussion rounds'), { target: { value: '3' } });
+    fireEvent.click(aa.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(patchBody).toEqual(
+        expect.objectContaining({ limits: { maxChainRounds: 3, maxTokens: 500000 } }),
+      ),
+    );
+  });
+
+  it('clearing a saved token budget saves it back to the default', async () => {
+    let patchBody: unknown;
+    installRoutes({
+      mutate: (path, init) => {
+        if (path === '/api/v1/agents/ww/prefs' && init?.method === 'PATCH') {
+          patchBody = JSON.parse(init.body!);
+          return Promise.resolve({});
+        }
+        return undefined;
+      },
+    });
+    renderPage();
+
+    const ww = await openCard('ww');
+    expect(ww.getByRole('button', { name: 'Save' })).toBeDisabled();
+    fireEvent.change(ww.getByLabelText('Token budget'), { target: { value: '' } });
+    fireEvent.click(ww.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patchBody).toEqual(expect.objectContaining({ limits: {} })));
+  });
+
   it('switching a default card to bedrock reveals the bedrock controls (server-only)', async () => {
     installRoutes();
     renderPage();
@@ -540,7 +592,7 @@ describe('AgentsPage', () => {
     expect(gg.getByLabelText('Model')).toHaveAttribute('placeholder', 'eu.anthropic.claude-opus-5');
     // Bedrock is server-only: no Runs-on choice exists, and the copy says so.
     expect(gg.queryByLabelText('Runs on')).not.toBeInTheDocument();
-    expect(gg.getByText(/Runs via AWS Bedrock ON THE SERVER/)).toBeInTheDocument();
+    expect(gg.getByText(/Runs via AWS Bedrock on the server/)).toBeInTheDocument();
   });
 
   it('shows the follow-up ask checkbox once a window is chosen', async () => {

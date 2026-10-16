@@ -238,6 +238,14 @@ func (s *RunStore) AddRunPosts(ctx context.Context, runID string, delta int) (*m
 	return s.updateRunReturning(ctx, runID, upd, runNotTerminal(), "add run posts")
 }
 
+// AddRunUploads increments the run's upload counter atomically (see
+// AddRunPosts for why a whole-row rewrite would not do).
+func (s *RunStore) AddRunUploads(ctx context.Context, runID string, delta int) (*model.Run, error) {
+	upd := expression.Add(expression.Name("spend.uploads"), expression.Value(delta)).
+		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC()))
+	return s.updateRunReturning(ctx, runID, upd, runNotTerminal(), "add run uploads")
+}
+
 // updateRunReturning runs one conditional partial update and returns the whole
 // row as committed. A failed condition means the run went terminal or moved to
 // another runner — ErrStaleRun, the signal every caller already understands.

@@ -415,6 +415,22 @@ func (s *hagentCovRunStore) AddRunPosts(_ context.Context, runID string, delta i
 	return &cp, nil
 }
 
+func (s *hagentCovRunStore) AddRunUploads(_ context.Context, runID string, delta int) (*model.Run, error) {
+	if err := s.trip("AddRunUploads"); err != nil {
+		return nil, err
+	}
+	run, ok := s.runs[runID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if run.State.Terminal() {
+		return nil, store.ErrStaleRun
+	}
+	run.Spend.Uploads += delta
+	cp := *run
+	return &cp, nil
+}
+
 func (s *hagentCovRunStore) RenewRunLease(_ context.Context, _, _ string, _ time.Time) error {
 	return s.trip("RenewRunLease")
 }
@@ -542,7 +558,7 @@ type hagentCovMessages struct {
 	checkAccessErr error
 }
 
-func (m *hagentCovMessages) SendAsAgentRun(_ context.Context, _, _, _, _, _, _, _ string) (*model.Message, error) {
+func (m *hagentCovMessages) SendAsAgentRun(_ context.Context, _, _, _, _, _, _, _ string, _ ...string) (*model.Message, error) {
 	return &model.Message{ID: "m-agent"}, nil
 }
 

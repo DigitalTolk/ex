@@ -58,6 +58,9 @@ type UnreadSeqStore interface {
 // stub it without dragging in storage.
 type AttachmentRefManager interface {
 	ValidateForUse(ctx context.Context, attachmentID string) error
+	// AttachmentOwner reports who uploaded the file and which messages carry
+	// it, for the send-time ownership rule (see validateAttachmentsForUse).
+	AttachmentOwner(ctx context.Context, attachmentID string) (createdBy string, messageIDs []string, err error)
 	AddRef(ctx context.Context, attachmentID, messageID string) error
 	RemoveRef(ctx context.Context, attachmentID, messageID string) error
 }
@@ -435,8 +438,8 @@ func (s *MessageService) SendAsAgent(ctx context.Context, agentID, invokerID, pa
 
 // SendAsAgentRun is SendAsAgent carrying the producing run's ID, so the
 // message links back to its run drawer ("Show activity").
-func (s *MessageService) SendAsAgentRun(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string) (*model.Message, error) {
-	return s.sendRun(ctx, agentID, invokerID, parentID, parentType, body, parentMessageID, false, runID)
+func (s *MessageService) SendAsAgentRun(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string, attachmentIDs ...string) (*model.Message, error) {
+	return s.sendRun(ctx, agentID, invokerID, parentID, parentType, body, parentMessageID, false, runID, attachmentIDs...)
 }
 
 // SendNoIndex is Send for machine-posted ephemera (e.g. the /mstmeetings join
@@ -480,7 +483,7 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 	if err := ValidateAttachmentCount(len(attachmentIDs)); err != nil {
 		return nil, err
 	}
-	if err := s.validateAttachmentsForUse(ctx, attachmentIDs); err != nil {
+	if err := s.validateAttachmentsForUse(ctx, authorID, parentID, attachmentIDs); err != nil {
 		return nil, err
 	}
 
@@ -1719,7 +1722,7 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 	// pointlessly re-download + re-decode the object (and fail for non-image or
 	// otherwise un-re-validatable attachments), which surfaced as a 403 on any
 	// edit of a message that carries an attachment.
-	if err := s.validateAttachmentsForUse(ctx, added); err != nil {
+	if err := s.validateAttachmentsForUse(ctx, userID, parentID, added); err != nil {
 		return nil, err
 	}
 	if err := s.bindAttachments(ctx, msgID, added); err != nil {
@@ -2159,7 +2162,13 @@ func (s *MessageService) checkAccess(ctx context.Context, userID, parentID, pare
 	return nil
 }
 
-func (s *MessageService) validateAttachmentsForUse(ctx context.Context, ids []string) error {
+// validateAttachmentsForUse checks every attachment a send or edit names: the
+// object must be a verified upload (ValidateForUse), and the author must be
+// entitled to it — they uploaded it, or it already sits on a message in this
+// same chat (a re-share of something they can see). Without the second rule
+// an attachment ID alone was a capability: naming someone else's private
+// upload in your own message bound it to a chat you can read.
+func (s *MessageService) validateAttachmentsForUse(ctx context.Context, authorID, parentID string, ids []string) error {
 	if len(ids) == 0 || s.attachments == nil {
 		return nil
 	}
@@ -2172,8 +2181,34 @@ func (s *MessageService) validateAttachmentsForUse(ctx context.Context, ids []st
 		if err := s.attachments.ValidateForUse(ctx, id); err != nil {
 			return fmt.Errorf("message: invalid attachment %q: %w", id, err)
 		}
+		createdBy, refs, err := s.attachments.AttachmentOwner(ctx, id)
+		if err != nil {
+			return fmt.Errorf("message: attachment %q owner: %w", id, err)
+		}
+		if createdBy == authorID || s.referencedIn(ctx, parentID, refs) {
+			continue
+		}
+		return fmt.Errorf("message: attachment %q was uploaded by someone else: %w", id, ErrForbidden)
 	}
 	return nil
+}
+
+// maxOwnershipRefs bounds how many of an attachment's messages are checked
+// for the re-share rule; a file on more chats than that is public enough.
+const maxOwnershipRefs = 10
+
+// referencedIn reports whether any of the messages carrying an attachment
+// lives in parentID.
+func (s *MessageService) referencedIn(ctx context.Context, parentID string, refs []string) bool {
+	if len(refs) > maxOwnershipRefs {
+		refs = refs[:maxOwnershipRefs]
+	}
+	for _, mid := range refs {
+		if _, err := s.messages.GetMessage(ctx, parentID, mid); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *MessageService) bindAttachments(ctx context.Context, msgID string, ids []string) error {

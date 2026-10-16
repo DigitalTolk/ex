@@ -49,13 +49,13 @@ type hrunnerCovRunStore struct {
 	approvals map[string]*model.Approval
 	artifacts []*model.Artifact
 
-	listQueuedErr   error
-	getRunErr       error
-	getRunErrAfter  int // -1 = disabled; otherwise error once this many GetRun calls succeeded
-	getRunCalls     int
-	updateErr       error
-	putApprovalErr  error
-	putArtifactErr  error
+	listQueuedErr    error
+	getRunErr        error
+	getRunErrAfter   int // -1 = disabled; otherwise error once this many GetRun calls succeeded
+	getRunCalls      int
+	updateErr        error
+	putApprovalErr   error
+	putArtifactErr   error
 	listArtifactsErr error
 }
 
@@ -160,6 +160,24 @@ func (s *hrunnerCovRunStore) AddRunPosts(_ context.Context, runID string, delta 
 		return nil, store.ErrStaleRun
 	}
 	run.Spend.Posts += delta
+	cp := *run
+	return &cp, nil
+}
+
+func (s *hrunnerCovRunStore) AddRunUploads(_ context.Context, runID string, delta int) (*model.Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.updateErr != nil {
+		return nil, s.updateErr
+	}
+	run, ok := s.runs[runID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if run.State.Terminal() {
+		return nil, store.ErrStaleRun
+	}
+	run.Spend.Uploads += delta
 	cp := *run
 	return &cp, nil
 }
@@ -351,8 +369,10 @@ func hrunnerCovNewDir() *hrunnerCovDir {
 	return &hrunnerCovDir{skills: make(map[string]*model.Skill)}
 }
 
-func (d *hrunnerCovDir) PutTemplate(context.Context, *model.AgentTemplate) error           { return nil }
-func (d *hrunnerCovDir) CreateTemplateIfAbsent(context.Context, *model.AgentTemplate) error { return nil }
+func (d *hrunnerCovDir) PutTemplate(context.Context, *model.AgentTemplate) error { return nil }
+func (d *hrunnerCovDir) CreateTemplateIfAbsent(context.Context, *model.AgentTemplate) error {
+	return nil
+}
 func (d *hrunnerCovDir) GetTemplate(context.Context, string) (*model.AgentTemplate, error) {
 	return nil, store.ErrNotFound
 }
@@ -366,9 +386,9 @@ func (d *hrunnerCovDir) ListTemplates(context.Context) ([]*model.AgentTemplate, 
 	return append([]*model.AgentTemplate(nil), d.templates...), nil
 }
 
-func (d *hrunnerCovDir) CreateAgentUser(context.Context, *model.User) error       { return nil }
+func (d *hrunnerCovDir) CreateAgentUser(context.Context, *model.User) error         { return nil }
 func (d *hrunnerCovDir) PutAgentPrefs(context.Context, *model.UserAgentPrefs) error { return nil }
-func (d *hrunnerCovDir) DeleteAgentPrefs(context.Context, string, string) error { return nil }
+func (d *hrunnerCovDir) DeleteAgentPrefs(context.Context, string, string) error     { return nil }
 func (d *hrunnerCovDir) GetAgentPrefs(context.Context, string, string) (*model.UserAgentPrefs, error) {
 	return nil, store.ErrNotFound
 }
@@ -451,6 +471,7 @@ func (d *hrunnerCovDir) ListSubscriptionsByParent(ctx context.Context, parentID 
 	}
 	return out, nil
 }
+
 // ListSubscriptionsByCreator mirrors the store's creator index; the fake
 // filters its own rows.
 func (d *hrunnerCovDir) ListSubscriptionsByCreator(ctx context.Context, creatorID, agentID string) ([]*model.AgentSubscription, error) {
@@ -553,12 +574,12 @@ func (f *hrunnerCovUsers) GetUsersByIDs(_ context.Context, ids []string) ([]*mod
 // ---------------------------------------------- orchestrator messages fake
 
 type hrunnerCovOrchMsgs struct {
-	mu   sync.Mutex
-	sent []string
+	mu             sync.Mutex
+	sent           []string
 	checkAccessErr error
 }
 
-func (f *hrunnerCovOrchMsgs) SendAsAgentRun(_ context.Context, agentID, _, parentID, parentType, body, parentMessageID, runID string) (*model.Message, error) {
+func (f *hrunnerCovOrchMsgs) SendAsAgentRun(_ context.Context, agentID, _, parentID, parentType, body, parentMessageID, runID string, _ ...string) (*model.Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sent = append(f.sent, body)
@@ -572,6 +593,7 @@ func (f *hrunnerCovOrchMsgs) SendAsAgentRun(_ context.Context, agentID, _, paren
 func (f *hrunnerCovOrchMsgs) SetMachineReaction(context.Context, string, string, string, string, string) error {
 	return nil
 }
+
 // CheckAccess is the membership rule behind run reads; the fakes allow
 // everything unless a test flips checkAccessErr.
 func (f *hrunnerCovOrchMsgs) CheckAccess(context.Context, string, string, string) error {
@@ -638,11 +660,12 @@ func (s *hrunnerCovMsgStore) GetMessage(_ context.Context, parentID, msgID strin
 	return nil, store.ErrNotFound
 }
 
-func (s *hrunnerCovMsgStore) UpdateMessage(context.Context, *model.Message) error  { return nil }
-func (s *hrunnerCovMsgStore) DeleteMessage(context.Context, string, string) error  { return nil }
+func (s *hrunnerCovMsgStore) UpdateMessage(context.Context, *model.Message) error { return nil }
+func (s *hrunnerCovMsgStore) DeleteMessage(context.Context, string, string) error { return nil }
 func (s *hrunnerCovMsgStore) ListMessages(context.Context, string, string, int) ([]*model.Message, bool, error) {
 	return nil, false, nil
 }
+
 // ListThreadRepliesNewest mirrors the store's bounded read: the newest
 // `limit` replies, oldest-first.
 func (s *hrunnerCovMsgStore) ListThreadRepliesNewest(ctx context.Context, threadRootID string, limit int) ([]*model.Message, error) {

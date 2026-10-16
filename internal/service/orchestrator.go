@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"regexp"
 	"sort"
@@ -120,6 +121,8 @@ type Assignment struct {
 	Prompt           string   `json:"prompt"`
 	ContextBundle    string   `json:"contextBundle"`
 	ConnectorSlugs   []string `json:"connectorSlugs,omitempty"`
+	// Attachments are the invoking message's files (see Run.AttachmentIDs).
+	Attachments []RunAttachment `json:"attachments,omitempty"`
 	// Task is set on coding-task runs (RunModeTask): the workspace manager
 	// prepares the project checkout from it before the harness starts.
 	Task *model.TaskSpec `json:"task,omitempty"`
@@ -146,6 +149,7 @@ type orchestratorRunStore interface {
 	UpdateRun(ctx context.Context, run *model.Run, expectState model.RunState) error
 	AddRunSpend(ctx context.Context, runID, runnerID string, d store.RunSpendDelta) (*model.Run, error)
 	AddRunPosts(ctx context.Context, runID string, delta int) (*model.Run, error)
+	AddRunUploads(ctx context.Context, runID string, delta int) (*model.Run, error)
 	RenewRunLease(ctx context.Context, runID, runnerID string, lease time.Time) error
 	ListQueuedRuns(ctx context.Context, ownerID string, limit int) ([]string, error)
 	ClaimRun(ctx context.Context, run *model.Run, runnerID string, lease time.Time) error
@@ -170,7 +174,7 @@ type orchestratorRunStore interface {
 // agent-authored posts, machine state reactions, and thread reads for the
 // context bundle.
 type orchestratorMessages interface {
-	SendAsAgentRun(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string) (*model.Message, error)
+	SendAsAgentRun(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string, attachmentIDs ...string) (*model.Message, error)
 	SetMachineReaction(ctx context.Context, actorID, parentID, parentType, msgID, state string) error
 	ListThreadMessages(ctx context.Context, userID, parentID, parentType, threadRootID string) ([]*model.Message, error)
 	// ThreadWindowMessages is the BOUNDED thread read the context window uses.
@@ -226,6 +230,9 @@ type Orchestrator struct {
 	messages orchestratorMessages
 	pub      Publisher
 	tokens   runTokenMinter
+	// attachments is optional (nil = runs see no files): metadata for the
+	// transcript and the assignment, bytes for the server engine.
+	attachments runAttachments
 
 	now func() time.Time // test seam
 
@@ -1000,6 +1007,7 @@ func (o *Orchestrator) startRun(ctx context.Context, in invocation, resolved *mo
 		TaskID:           taskID,
 		AutoAllow:        resolved.AutoAllow,
 		Prompt:           prompt,
+		AttachmentIDs:    msg.AttachmentIDs,
 		Round:            in.round,
 		CoInvoked:        in.co,
 		AskFirst:         mode == model.RunModeFollowUp && resolved.FollowUpAsk,
@@ -1646,6 +1654,7 @@ func (o *Orchestrator) claimOnce(ctx context.Context, ownerID, runnerID string, 
 			Prompt:           run.Prompt,
 			ContextBundle:    bundle,
 			ConnectorSlugs:   run.ConnectorSlugs,
+			Attachments:      o.runAttachmentList(ctx, run),
 			Task:             taskSpec,
 			AutoAllow:        run.AutoAllow,
 			Limits:           run.Limits,
@@ -1729,6 +1738,7 @@ func (o *Orchestrator) claimServerRun(ctx context.Context, runID string) (*Assig
 		Prompt:           run.Prompt,
 		ContextBundle:    bundle,
 		ConnectorSlugs:   run.ConnectorSlugs,
+		Attachments:      o.runAttachmentList(ctx, run),
 		AutoAllow:        run.AutoAllow,
 		Limits:           run.Limits,
 		MCPToken:         token,
@@ -1996,7 +2006,7 @@ func (o *Orchestrator) finishLimit(ctx context.Context, run *model.Run, prevStat
 	o.finishTerminal(ctx, run, "", "run.failed", map[string]any{"reason": which}, "")
 	threadRoot := o.replyThreadRoot(run)
 	if _, err := o.messages.SendAsAgentRun(ctx, run.AgentID, run.InvokerID, run.ParentID, run.ParentType,
-		"⛔ stopped: hit its "+limitLabel(which)+" for this task.", threadRoot, run.ID); err != nil {
+		limitNotice(run, which), threadRoot, run.ID); err != nil {
 		slog.Warn("limit notice post failed", "runID", run.ID, "error", err)
 	}
 	o.afterTerminal(ctx, run)
@@ -2006,7 +2016,7 @@ func (o *Orchestrator) finishLimit(ctx context.Context, run *model.Run, prevStat
 // CompleteRun finalizes a successful run. If the agent never posted during
 // the run, the final text is posted on its behalf so the answer always
 // lands in the thread.
-func (o *Orchestrator) CompleteRun(ctx context.Context, ownerID, runnerID, runID, finalText string, usage map[string]any) error {
+func (o *Orchestrator) CompleteRun(ctx context.Context, ownerID, runnerID, runID, finalText string, usage map[string]any, attachmentIDs ...string) error {
 	run, err := o.runForRunner(ctx, ownerID, runnerID, runID, false)
 	if err != nil {
 		return err
@@ -2020,6 +2030,8 @@ func (o *Orchestrator) CompleteRun(ctx context.Context, ownerID, runnerID, runID
 		}
 		return err
 	}
+	// Files the run stored for its final answer (foreign ids are dropped).
+	files := o.runOwnedAttachments(ctx, run, attachmentIDs)
 	if gatedWatch := model.WatchModePostsPrivately(run.ActionMode) || run.ActionMode == model.WatchActionReply; gatedWatch {
 		// DETERMINISTIC watcher delivery. In notify/draft/reply modes the agent
 		// has no communication tools — its final text is the whole deliverable,
@@ -2028,11 +2040,11 @@ func (o *Orchestrator) CompleteRun(ctx context.Context, ownerID, runnerID, runID
 		// exactly what silently dropped answers before). An empty answer or the
 		// SKIP sentinel means "activity didn't match — deliver nothing".
 		o.deliverWatchResult(ctx, run, finalText)
-	} else if run.Spend.Posts == 0 && strings.TrimSpace(finalText) != "" {
+	} else if run.Spend.Posts == 0 && (strings.TrimSpace(finalText) != "" || len(files) > 0) {
 		// Autonomous watchers and ordinary runs: if the agent never posted, its
 		// final answer is posted publicly so it always lands in the thread.
 		body := o.LinkifyMentions(ctx, run, finalText)
-		if msg, err := o.messages.SendAsAgentRun(ctx, run.AgentID, run.InvokerID, run.ParentID, run.ParentType, body, o.replyThreadRoot(run), run.ID); err != nil {
+		if msg, err := o.messages.SendAsAgentRun(ctx, run.AgentID, run.InvokerID, run.ParentID, run.ParentType, body, o.replyThreadRoot(run), run.ID, files...); err != nil {
 			slog.Warn("final answer post failed", "runID", run.ID, "error", err)
 		} else {
 			// The fallback post can hand the turn to another agent too.
@@ -2044,7 +2056,7 @@ func (o *Orchestrator) CompleteRun(ctx context.Context, ownerID, runnerID, runID
 	// gone, its timeline would be unreachable. Drop a one-line marker so the
 	// activity drawer stays one click away. Ambient modes (watch/heartbeat/
 	// follow-up) end silently by design and are left alone.
-	if run.Spend.Posts == 0 && strings.TrimSpace(finalText) == "" && (run.Mode == model.RunModeDirect || run.Mode == model.RunModeTask) {
+	if run.Spend.Posts == 0 && strings.TrimSpace(finalText) == "" && len(files) == 0 && (run.Mode == model.RunModeDirect || run.Mode == model.RunModeTask) {
 		note := fmt.Sprintf("✅ finished without posting a reply (%d turns) — open Show activity for the log.", run.Spend.Turns)
 		if _, err := o.messages.SendAsAgentRun(ctx, run.AgentID, run.InvokerID, run.ParentID, run.ParentType, note, o.replyThreadRoot(run), run.ID); err != nil {
 			slog.Debug("silent-completion notice failed", "runID", run.ID, "error", err)
@@ -3393,9 +3405,17 @@ func (o *Orchestrator) Window(ctx context.Context, accessorID, parentID, parentT
 // every message a tool hands the model carries the same labels and markers.
 func (o *Orchestrator) RenderMessages(ctx context.Context, msgs []*model.Message) string {
 	names := o.actorNames(ctx, msgs)
+	var attachmentIDs []string
+	for _, m := range msgs {
+		if !m.Deleted {
+			attachmentIDs = append(attachmentIDs, m.AttachmentIDs...)
+		}
+	}
+	files := o.attachmentIndex(ctx, attachmentIDs)
 	var b strings.Builder
 	for _, m := range msgs {
-		if m.Deleted || m.Body == "" {
+		// A file-only message is a message too — it used to vanish here.
+		if m.Deleted || (m.Body == "" && len(m.AttachmentIDs) == 0) {
 			continue
 		}
 		// Agent-authored lines carry the INVOKER in the name — agents are
@@ -3414,7 +3434,7 @@ func (o *Orchestrator) RenderMessages(ctx context.Context, msgs []*model.Message
 		if m.ReplyCount > 0 {
 			suffix = fmt.Sprintf(" [thread: %d replies]", m.ReplyCount)
 		}
-		fmt.Fprintf(&b, "[m:%s] %s %s: %s%s\n", m.ID, label, m.CreatedAt.Format("15:04"), defangThreadBody(m.Body), suffix)
+		fmt.Fprintf(&b, "[m:%s] %s %s: %s%s%s\n", m.ID, label, m.CreatedAt.Format("15:04"), defangThreadBody(m.Body), filesMarker(m, files), suffix)
 	}
 	return b.String()
 }
@@ -3702,6 +3722,37 @@ func failNotice(reason string) string {
 	return "❌ stopped before finishing: " + head + suffix + "."
 }
 
+// limitNotice is the one line the thread sees when a run hits a bound. The
+// token budget gets the numbers and the way out: attachments (a long PDF, a
+// few screenshots) can spend a large share of it in one turn, and the budget
+// is a per-user setting on the agent ("Token budget"), so the person who hit
+// it can raise it and simply ask again.
+func limitNotice(run *model.Run, which string) string {
+	if which == "token_budget" {
+		used := run.Spend.InputTokens + run.Spend.OutputTokens
+		return fmt.Sprintf("⛔ stopped: this task went over its token budget (%s of %s tokens used). "+
+			"Attached files and long threads count towards it. Raise “Token budget” under Advanced in your settings for this agent, then ask again.",
+			humanCount(used), humanCount(run.Limits.MaxTokens))
+	}
+	return "⛔ stopped: hit its " + limitLabel(which) + " for this task."
+}
+
+// humanCount renders 1234567 as "1,234,567".
+func humanCount(n int64) string {
+	s := fmt.Sprintf("%d", n)
+	if n < 0 {
+		return s
+	}
+	var b strings.Builder
+	for i, r := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 func limitLabel(which string) string {
 	switch which {
 	case "turn_limit":
@@ -3910,6 +3961,155 @@ func (o *Orchestrator) AttachConnector(ctx context.Context, runID, slug, reason 
 
 // SetConnectorRegistry enables /connector pick validation on new runs.
 func (o *Orchestrator) SetConnectorRegistry(r connectorRegistry) { o.connectors = r }
+
+// runAttachments is the attachment surface runs need: metadata for the
+// transcript and the assignment, bytes for the server engine (the runner
+// fetches its bytes over the run-scoped HTTP endpoint instead).
+type runAttachments interface {
+	GetMany(ctx context.Context, ids []string) ([]*model.Attachment, error)
+	OpenForUser(ctx context.Context, userID, id, parentID, parentType, messageID string) (io.ReadCloser, *model.Attachment, error)
+	UploadForAgent(ctx context.Context, p AgentUploadParams) (*model.Attachment, error)
+}
+
+// SetAttachments wires the attachment service. Optional — without it runs are
+// text-only, exactly as before files reached agents.
+func (o *Orchestrator) SetAttachments(a runAttachments) { o.attachments = a }
+
+// RunAttachment describes one input file of a run for the runner: enough to
+// show the model what was attached and to fetch the bytes by ID.
+type RunAttachment struct {
+	ID          string `json:"id"`
+	MessageID   string `json:"messageID"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"contentType"`
+	Size        int64  `json:"size"`
+}
+
+// runAttachmentList resolves the invoking message's files, in message order,
+// for the assignment. Rows that no longer exist are simply absent.
+func (o *Orchestrator) runAttachmentList(ctx context.Context, run *model.Run) []RunAttachment {
+	index := o.attachmentIndex(ctx, run.AttachmentIDs)
+	var out []RunAttachment
+	for _, id := range run.AttachmentIDs {
+		a, ok := index[id]
+		if !ok {
+			continue
+		}
+		out = append(out, RunAttachment{ID: a.ID, MessageID: run.MessageID, Filename: displayFilename(a.Filename), ContentType: a.ContentType, Size: a.Size})
+	}
+	return out
+}
+
+// attachmentIndex loads attachment rows by ID in one batch; nil when there is
+// nothing to load or no attachment service is wired.
+func (o *Orchestrator) attachmentIndex(ctx context.Context, ids []string) map[string]*model.Attachment {
+	if o.attachments == nil || len(ids) == 0 {
+		return nil
+	}
+	rows, err := o.attachments.GetMany(ctx, ids)
+	if err != nil {
+		slog.Warn("bundle: attachment lookup failed", "error", err)
+		return nil
+	}
+	index := make(map[string]*model.Attachment, len(rows))
+	for _, a := range rows {
+		index[a.ID] = a
+	}
+	return index
+}
+
+// runOwnedAttachments keeps only the IDs this run uploaded itself: files are
+// bound to the run that stored them (CreatedBy is the shared agent user), so
+// one invoker's output can never be attached into another invoker's thread,
+// and a model that echoes an att:<id> from the transcript cannot re-post
+// someone else's file as its own.
+func (o *Orchestrator) runOwnedAttachments(ctx context.Context, run *model.Run, ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	if len(ids) > MaxAttachmentsPerMessage {
+		ids = ids[:MaxAttachmentsPerMessage]
+	}
+	index := o.attachmentIndex(ctx, ids)
+	var out []string
+	for _, id := range ids {
+		if a, ok := index[id]; ok && a.RunID == run.ID && a.CreatedBy == run.AgentID {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// ErrUploadCap is returned once a run has stored its share of files.
+var ErrUploadCap = errors.New("orchestrator: per-run upload cap reached")
+
+// RecordAgentUpload counts one stored file against the run's upload cap and
+// returns how many more it may store. The counter is bumped atomically BEFORE
+// the check so two concurrent uploads cannot both squeeze under the cap.
+func (o *Orchestrator) RecordAgentUpload(ctx context.Context, runID string) (remaining int, err error) {
+	run, err := o.runs.AddRunUploads(ctx, runID, 1)
+	if err != nil {
+		if errors.Is(err, store.ErrStaleRun) {
+			return 0, ErrRunClosed
+		}
+		return 0, err
+	}
+	if run.Spend.Uploads > model.UploadsPerRun {
+		return 0, ErrUploadCap
+	}
+	return model.UploadsPerRun - run.Spend.Uploads, nil
+}
+
+// displayFilename renders an untrusted file name as one short printable line
+// for the transcript: control characters and the marker's own brackets go,
+// and it is clipped.
+func displayFilename(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f || r == '[' || r == ']' {
+			r = ' '
+		}
+		b.WriteRune(r)
+	}
+	out := strings.TrimSpace(b.String())
+	if len(out) > 80 {
+		out = out[:80] + "…"
+	}
+	if out == "" {
+		return "file"
+	}
+	return out
+}
+
+// humanSize renders a byte count the way the file list does ("12 KB").
+func humanSize(n int64) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/float64(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%d KB", n/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+// filesMarker renders a message's attachments for the transcript. Each file
+// carries its att:<id> so the model can ask for its bytes (fetch_attachment on
+// the runner); the name is display text, never a path.
+func filesMarker(m *model.Message, index map[string]*model.Attachment) string {
+	if len(m.AttachmentIDs) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(m.AttachmentIDs))
+	for _, id := range m.AttachmentIDs {
+		if a, ok := index[id]; ok {
+			parts = append(parts, fmt.Sprintf("%s (%s, %s) att:%s", displayFilename(a.Filename), a.ContentType, humanSize(a.Size), id))
+		} else {
+			parts = append(parts, "att:"+id)
+		}
+	}
+	return " [files: " + strings.Join(parts, "; ") + "]"
+}
 
 // resolveConnectorPicks parses the message's /slug candidates and keeps only
 // registered connectors. No registry (tests, minimal deployments) → no picks.

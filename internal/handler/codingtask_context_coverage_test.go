@@ -426,6 +426,19 @@ func (f *htaskCovRunStore) AddRunPosts(_ context.Context, runID string, delta in
 	return &cp, nil
 }
 
+func (f *htaskCovRunStore) AddRunUploads(_ context.Context, runID string, delta int) (*model.Run, error) {
+	run, ok := f.runs[runID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if run.State.Terminal() {
+		return nil, store.ErrStaleRun
+	}
+	run.Spend.Uploads += delta
+	cp := *run
+	return &cp, nil
+}
+
 func (f *htaskCovRunStore) RenewRunLease(context.Context, string, string, time.Time) error {
 	return nil
 }
@@ -617,7 +630,7 @@ type htaskCovMessages struct {
 	accessErr error
 }
 
-func (f *htaskCovMessages) SendAsAgentRun(_ context.Context, agentID, _, parentID, parentType, body, parentMessageID, runID string) (*model.Message, error) {
+func (f *htaskCovMessages) SendAsAgentRun(_ context.Context, agentID, _, parentID, parentType, body, parentMessageID, runID string, _ ...string) (*model.Message, error) {
 	f.seq++
 	m := &model.Message{
 		ID: fmt.Sprintf("htaskcov-msg-%d", f.seq), ParentID: parentID, ParentType: parentType,

@@ -266,7 +266,7 @@ func newFakeTaskMessages() *fakeTaskMessages {
 	return &fakeTaskMessages{rewrites: map[string]string{}, pinned: map[string]bool{}}
 }
 
-func (f *fakeTaskMessages) SendAsAgentRun(_ context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string) (*model.Message, error) {
+func (f *fakeTaskMessages) SendAsAgentRun(_ context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string, _ ...string) (*model.Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq++

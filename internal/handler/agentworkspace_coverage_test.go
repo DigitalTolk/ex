@@ -100,6 +100,22 @@ func (f *hwsCovRunStore) AddRunPosts(_ context.Context, runID string, delta int)
 	return &cp, nil
 }
 
+func (f *hwsCovRunStore) AddRunUploads(_ context.Context, runID string, delta int) (*model.Run, error) {
+	if f.updateErr != nil {
+		return nil, f.updateErr
+	}
+	run, ok := f.runs[runID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if run.State.Terminal() {
+		return nil, store.ErrStaleRun
+	}
+	run.Spend.Uploads += delta
+	cp := *run
+	return &cp, nil
+}
+
 func (f *hwsCovRunStore) RenewRunLease(context.Context, string, string, time.Time) error {
 	return nil
 }
@@ -159,7 +175,7 @@ type hwsCovOrchMsgs struct {
 	lastThreadRoot string
 }
 
-func (f *hwsCovOrchMsgs) SendAsAgentRun(context.Context, string, string, string, string, string, string, string) (*model.Message, error) {
+func (f *hwsCovOrchMsgs) SendAsAgentRun(context.Context, string, string, string, string, string, string, string, ...string) (*model.Message, error) {
 	return &model.Message{ID: "hws-orch-msg"}, nil
 }
 func (f *hwsCovOrchMsgs) SetMachineReaction(context.Context, string, string, string, string, string) error {
@@ -713,6 +729,11 @@ func TestHwsCovReadDM(t *testing.T) {
 }
 
 func TestHwsCovPostToChannel(t *testing.T) {
+	t.Run("file-only post needs attachments enabled", func(t *testing.T) {
+		env := newHwsCovEnv(t)
+		rec := env.do(t, env.h.PostToChannel, http.MethodPost, "/", `{"attachmentIDs":["a1"]}`, "hws-home", nil)
+		hwsCovWant(t, rec, http.StatusBadRequest, "not enabled")
+	})
 	t.Run("bad body", func(t *testing.T) {
 		env := newHwsCovEnv(t)
 		rec := env.do(t, env.h.PostToChannel, http.MethodPost, "/", `{"body":"  "}`, "hws-home", nil)
@@ -871,6 +892,11 @@ func TestHwsCovListUsers(t *testing.T) {
 }
 
 func TestHwsCovSendDM(t *testing.T) {
+	t.Run("file-only DM needs attachments enabled", func(t *testing.T) {
+		env := newHwsCovEnv(t)
+		rec := env.do(t, env.h.SendDM, http.MethodPost, "/", `{"userID":"hws-bob","attachmentIDs":["a1"]}`, "", nil)
+		hwsCovWant(t, rec, http.StatusBadRequest, "not enabled")
+	})
 	// list_users answers "[u:<id>] Name", and models pass back the id exactly
 	// as they were shown it. Before this was absorbed, a run that had looked
 	// the person up correctly still failed with "could not open the DM" —

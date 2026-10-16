@@ -44,6 +44,11 @@ type Attachment struct {
 	// (size, SHA-256, content type). Later uses only re-read the object when
 	// its current ETag differs.
 	VerifiedETag string `json:"-" dynamodbav:"verifiedEtag,omitempty"`
+	// RunID is set on files an agent run uploaded through the run-scoped
+	// API. Only that run may attach them to its posts: CreatedBy is the agent
+	// user, which is shared, so the run binding is what keeps one invoker's
+	// output out of another invoker's thread.
+	RunID string `json:"-" dynamodbav:"runID,omitempty"`
 }
 
 // IsImage returns true when the content type starts with "image/".

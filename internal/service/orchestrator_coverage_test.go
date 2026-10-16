@@ -77,6 +77,13 @@ func (s *orchCovRunStore) AddRunPosts(ctx context.Context, runID string, delta i
 	return s.fakeRunStore.AddRunPosts(ctx, runID, delta)
 }
 
+func (s *orchCovRunStore) AddRunUploads(ctx context.Context, runID string, delta int) (*model.Run, error) {
+	if s.failAddPosts != nil {
+		return nil, s.failAddPosts
+	}
+	return s.fakeRunStore.AddRunUploads(ctx, runID, delta)
+}
+
 func (s *orchCovRunStore) ListQueuedRuns(ctx context.Context, ownerID string, limit int) ([]string, error) {
 	if s.failListQueued != nil {
 		return nil, s.failListQueued
@@ -157,7 +164,7 @@ type orchCovMsgs struct {
 	checkAccessErr error
 }
 
-func (m *orchCovMsgs) SendAsAgentRun(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string) (*model.Message, error) {
+func (m *orchCovMsgs) SendAsAgentRun(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string, attachmentIDs ...string) (*model.Message, error) {
 	if m.failSend != nil {
 		return nil, m.failSend
 	}
