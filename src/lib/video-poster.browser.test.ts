@@ -19,11 +19,33 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// Whether this browser paints a paused video's frame after a seek. WebKit on
+// Linux (the CI image's headless GStreamer build) does not: whatever it is
+// asked, it keeps drawing the first frame, and playback never advances. The
+// colour checks run only where a seeked frame can be seen at all.
+async function seekedFrameShows(): Promise<boolean> {
+  const video = document.createElement('video');
+  video.muted = true;
+  video.src = URL.createObjectURL(clipWebm());
+  await new Promise((resolve) => video.addEventListener('loadeddata', resolve, { once: true }));
+  const seeked = new Promise((resolve) => video.addEventListener('seeked', resolve, { once: true }));
+  video.currentTime = 0.5;
+  await seeked;
+  const canvas = document.createElement('canvas');
+  canvas.width = CLIP_WIDTH;
+  canvas.height = CLIP_HEIGHT;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(video, 0, 0);
+  URL.revokeObjectURL(video.src);
+  return ctx.getImageData(10, 18, 1, 1).data[0] > 180;
+}
+
 describe('readVideoPoster', () => {
   it('takes a frame from past the start, at the video\'s own size', async () => {
     const poster = await readVideoPoster(clipWebm());
     expect(poster).toMatchObject({ width: CLIP_WIDTH, height: CLIP_HEIGHT });
     expect(poster!.poster.type).toBe('image/jpeg');
+    if (!(await seekedFrameShows())) return;
     // The clip opens on black; the poster is the picture after it.
     const left = await pixel(poster!.poster, 10, 18);
     const right = await pixel(poster!.poster, 54, 18);
