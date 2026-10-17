@@ -60,10 +60,15 @@ export function readVideoPoster(file: Blob): Promise<VideoPoster | null> {
         canvas.height = Math.round(height * scale);
         canvas.getContext('2d')!.drawImage(video, 0, 0, canvas.width, canvas.height);
         canvas.toBlob(
-          (poster) =>
-            /* v8 ignore next -- toBlob yields null only for a zero-size canvas or a missing encoder; this canvas is at least 1x1 and every browser encodes JPEG */
-            /* istanbul ignore next -- toBlob yields null only for a zero-size canvas or a missing encoder; this canvas is at least 1x1 and every browser encodes JPEG */
-            finish(poster ? { width, height, poster } : null),
+          (poster) => {
+            /* v8 ignore next 4 -- toBlob yields null only for a zero-size canvas or a missing encoder; this canvas is at least 1x1 and every browser encodes JPEG */
+            /* istanbul ignore if -- toBlob yields null only for a zero-size canvas or a missing encoder; this canvas is at least 1x1 and every browser encodes JPEG */
+            if (!poster) {
+              finish(null);
+              return;
+            }
+            finish({ width, height, poster });
+          },
           'image/jpeg',
           0.85,
         );
