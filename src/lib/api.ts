@@ -106,6 +106,30 @@ export async function refreshAccessToken(): Promise<string | null> {
   return refreshPromise;
 }
 
+// How long a request may take before it is given up on. Browser fetch has no
+// timeout of its own: a request sent over a connection the phone's network
+// dropped while the app was in the background (a half-open TCP connection
+// after iOS suspended it) never settles, and whatever waits on it waits for
+// ever — the phone's chat stayed gray until the app was killed. A read is
+// safe to give up on and send again (React Query retries it); a write waits
+// past the server's own 30s request deadline, so a slow one isn't cut off.
+export const READ_TIMEOUT_MS = 20_000;
+export const WRITE_TIMEOUT_MS = 35_000;
+
+// requestSignal bounds one request by its timeout, and by the caller's own
+// signal when there is one.
+function requestSignal(method: string | undefined, caller: AbortSignal | null | undefined): AbortSignal {
+  const read = !method || method.toUpperCase() === 'GET';
+  const timeout = AbortSignal.timeout(read ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS);
+  if (!caller) return timeout;
+  const both = new AbortController();
+  for (const signal of [caller, timeout]) {
+    if (signal.aborted) both.abort(signal.reason);
+    else signal.addEventListener('abort', () => both.abort(signal.reason), { once: true });
+  }
+  return both.signal;
+}
+
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
@@ -128,6 +152,7 @@ export async function apiFetch<T>(
     ...options,
     headers,
     credentials: 'include',
+    signal: requestSignal(options.method, options.signal),
   });
   captureServerVersion(res);
 
@@ -144,6 +169,7 @@ export async function apiFetch<T>(
         ...options,
         headers,
         credentials: 'include',
+        signal: requestSignal(options.method, options.signal),
       });
       captureServerVersion(retry);
       if (!retry.ok) {

@@ -323,7 +323,9 @@ describe('MessageInput slash commands', () => {
       expect(screen.queryByTestId('command-pending')).toBeNull();
     });
     await user.type(editor, '/mstmeetings');
-    await user.keyboard('{Enter}');
+    // Through the button, for the reason given above: a loaded runner can lose
+    // the Enter keystroke to CodeMirror's focus handling (it did, in a full run).
+    await user.click(screen.getByRole('button', { name: 'Send message' }));
     expect(runCommandMock).toHaveBeenCalledTimes(2);
   });
 

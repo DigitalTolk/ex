@@ -181,11 +181,17 @@ func (s *MembershipStoreImpl) ListUserChannels(ctx context.Context, userID strin
 	)
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 
+	// Consistent: unread is this row's LastReadSeq against the parent's
+	// MessageSeq, and a send writes both just before its events reach the
+	// author's other views. An eventually consistent read right after can
+	// see the new MessageSeq with the old LastReadSeq — the author's own
+	// message counted as unread (see ConversationStoreImpl.ListUserConversations).
 	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+		ConsistentRead:            aws.Bool(true),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: list user channels: %w", err)

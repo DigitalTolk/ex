@@ -384,6 +384,27 @@ describe('MessageList unread line and the reader\'s own posts', () => {
   });
 });
 
+describe('MessageList unread count that only counted the reader', () => {
+  // The reported bug: a DM the reader had just created, with only their own
+  // first message in it, opened on "1 new message" — Jump went nowhere. A
+  // list read right after the send had counted that message as unread.
+  it('shows no banner when all of the history is loaded and none of it is new to them', () => {
+    setUnreadAnchor('ch-1', { kind: 'count', count: 1 });
+    geo.lineTop = -300;
+    renderList({ pages: [{ items: [msg(1, { authorID: 'u-1' })] }] });
+    frames();
+    expect(screen.queryByTestId('unread-banner')).toBeNull();
+    expect(screen.queryByTestId('unread-divider')).toBeNull();
+  });
+
+  it('still offers the count while older history, where the line may be, is unloaded', () => {
+    setUnreadAnchor('ch-1', { kind: 'count', count: 1 });
+    renderList({ pages: [{ items: [msg(1, { authorID: 'u-1' })] }], hasNextPage: true });
+    frames();
+    expect(screen.getByTestId('unread-banner')).toHaveTextContent('1 new message');
+  });
+});
+
 describe('MessageList unread line retires', () => {
   it('once the line has been seen (the divider reports it) the banner goes and the row stays, invisible', () => {
     type IOCallback = (entries: Array<{ isIntersecting: boolean }>) => void;

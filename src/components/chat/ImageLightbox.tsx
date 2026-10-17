@@ -28,6 +28,8 @@ const PdfPreview = lazy(() => import('./PdfPreview'));
 export interface LightboxImage {
   url: string;
   downloadURL?: string;
+  // A video's poster (its frame, kept at upload).
+  thumbnailURL?: string;
   filename: string;
   contentType: string;
   size: number;
@@ -557,7 +559,7 @@ export function ImageLightbox({
             className="flex h-full w-full max-w-5xl items-center justify-center"
           >
             {/* key: a different video is a fresh player. */}
-            <VideoPreview key={current.url} url={current.url} fallback={fileCard} />
+            <VideoPreview key={current.url} url={current.url} poster={current.thumbnailURL} fallback={fileCard} />
           </div>
         ) : (
           fileCard

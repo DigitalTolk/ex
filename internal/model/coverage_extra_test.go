@@ -625,3 +625,9 @@ func TestSkill_IsPublishedAndVisibleTo(t *testing.T) {
 		}
 	}
 }
+
+func TestScreenAttachmentRefIsAPseudoMessageID(t *testing.T) {
+	if got := ScreenAttachmentRef("s-1"); got != "screen#s-1" {
+		t.Fatalf("ScreenAttachmentRef = %q", got)
+	}
+}
