@@ -113,7 +113,8 @@ describe('UserHoverCard — click-to-open + DM action', () => {
 
     expect(dialog).toHaveClass(
       'touch:border-b-0',
-      'touch:pb-[calc(env(safe-area-inset-bottom)+0.75rem)]',
+      // The home indicator's inset, which the sheet zeroes while the keyboard covers it.
+      'touch:pb-[calc(var(--sheet-safe-bottom,env(safe-area-inset-bottom))+0.75rem)]',
       'touch:pl-[max(0.75rem,env(safe-area-inset-left))]',
       'touch:pr-[max(0.75rem,env(safe-area-inset-right))]',
     );

@@ -11,7 +11,6 @@ import {
   ListOrdered,
   Link as LinkIcon,
   Smile,
-  ImagePlay,
   X,
   Save,
   Loader2,
@@ -820,7 +819,16 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           onSelect={insertGiphyGIF}
           onOpenChange={handleToolbarPickerOpenChange}
           trigger={
-            <ToolbarBtn label="GIF"><ImagePlay className="h-3.5 w-3.5" /></ToolbarBtn>
+            // The word, not a picture: no icon reads as "GIF" at this size.
+            <ToolbarBtn label="GIF">
+              <span
+                className="rounded-sm border border-current px-0.5 text-xs font-semibold leading-4"
+                aria-hidden="true"
+                data-testid="composer-gif-label"
+              >
+                GIF
+              </span>
+            </ToolbarBtn>
           }
         />
       )}

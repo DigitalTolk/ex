@@ -8,6 +8,7 @@ import { deriveThreadMeta, isOwnMessage, type ThreadMeta } from '@/lib/message-u
 import type { Message, UserStatus } from '@/types';
 import { buildMessageListRows, nextVirtuosoState } from './MessageListRows';
 import { shouldAutoStickMessageList } from './message-list-autostick';
+import { keepBottomEdge } from '@/lib/keep-bottom-edge';
 import { NewBelowPill, UnreadBanner, UnreadDivider } from './UnreadMarkers';
 import {
   clearMissedArrivals,
@@ -621,10 +622,17 @@ function VirtuosoMessageList({
     scroller.addEventListener('scroll', onScroll, { passive: true });
     for (const type of userScrollEvents) scroller.addEventListener(type, onUserScroll, { passive: true });
     const detachHoverPause = attachScrollHoverPause(scroller);
+    // Virtuoso's own follow keeps the newest message in view only within
+    // MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX of the very end: a reader a few px
+    // short of it, or a few messages up, had the newest messages slide under
+    // the composer when the keyboard came up, and scrolling down to them
+    // dismissed the keyboard (hooks/useDismissKeyboardOnScroll).
+    const detachBottomEdge = keepBottomEdge(scroller);
     detachScrollerRef.current = () => {
       scroller.removeEventListener('scroll', onScroll);
       for (const type of userScrollEvents) scroller.removeEventListener(type, onUserScroll);
       detachHoverPause();
+      detachBottomEdge();
     };
   }, [markAtBottom, scheduleDividerMeasure]);
   useEffect(() => () => {
