@@ -1169,9 +1169,9 @@ func TestArchive_RejectsGeneralChannel(t *testing.T) {
 	}
 }
 
-// Bug #10: ListUserChannels must filter out channels that have been archived,
-// since the per-user UserChannel records don't carry the archive flag.
-func TestListUserChannels_FiltersArchived(t *testing.T) {
+// ListUserChannels keeps archived channels (they are read-only, not hidden)
+// and stamps the archived flag onto each row so the sidebar can group them.
+func TestListUserChannels_IncludesArchivedFlagged(t *testing.T) {
 	svc, channels, memberships, _, _ := setupChannelService()
 	ctx := context.Background()
 
@@ -1198,11 +1198,14 @@ func TestListUserChannels_FiltersArchived(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListUserChannels: %v", err)
 	}
-	if len(result) != 1 {
-		t.Fatalf("len(result) = %d, want 1 (archived filtered)", len(result))
+	if len(result) != 2 {
+		t.Fatalf("len(result) = %d, want 2 (archived kept)", len(result))
 	}
-	if result[0].ChannelID != "active-ch" {
-		t.Errorf("got channel %q, want %q", result[0].ChannelID, "active-ch")
+	if result[0].ChannelID != "active-ch" || result[0].Archived {
+		t.Errorf("active row = %+v, want active-ch not archived", result[0])
+	}
+	if result[1].ChannelID != "archived-ch" || !result[1].Archived {
+		t.Errorf("archived row = %+v, want archived-ch flagged archived", result[1])
 	}
 }
 
@@ -1359,12 +1362,10 @@ func TestRemoveMember_PublishesUserEvent(t *testing.T) {
 	}
 }
 
-// Archive must remove every membership for the channel — both the channel-
-// side row (so the member list of the archived channel comes back empty)
-// and the user-side row (so it disappears from owner and member sidebars
-// alike). Regression: archive previously only flipped the Archived flag,
-// leaving stale memberships behind.
-func TestArchive_RemovesAllMemberships(t *testing.T) {
+// Archive is non-destructive: the channel is flagged read-only and every
+// membership — channel-side and user-side — survives, so members keep reading
+// its history.
+func TestArchive_KeepsAllMemberships(t *testing.T) {
 	svc, channels, memberships, _, _ := setupChannelService()
 	ctx := context.Background()
 
@@ -1387,27 +1388,22 @@ func TestArchive_RemovesAllMemberships(t *testing.T) {
 		t.Fatalf("Archive: %v", err)
 	}
 
-	// Channel is marked archived.
 	if !channels.channels["ch-arx"].Archived {
 		t.Error("expected channel to be archived")
 	}
-	// Member-side rows are gone — listing returns nothing.
-	if got, _ := memberships.ListMembers(ctx, "ch-arx"); len(got) != 0 {
-		t.Errorf("expected zero members after archive; got %d", len(got))
+	if got, _ := memberships.ListMembers(ctx, "ch-arx"); len(got) != 3 {
+		t.Errorf("members after archive = %d, want 3", len(got))
 	}
-	// And the per-user keys are wiped — none of the three users still has
-	// the membership row.
 	for _, key := range []string{"ch-arx#owner", "ch-arx#m1", "ch-arx#m2"} {
-		if _, ok := memberships.memberships[key]; ok {
-			t.Errorf("membership %s persisted after archive", key)
+		if _, ok := memberships.memberships[key]; !ok {
+			t.Errorf("membership %s removed by archive", key)
 		}
 	}
 }
 
-// After archive, no user — including the owner — should see the channel
-// returned from ListUserChannels. Owner-side persistence was a leftover
-// from when archive was reversible; the new behaviour is destructive.
-func TestArchive_HidesChannelFromOwnerSidebar(t *testing.T) {
+// After archive the channel stays in its members' sidebar data, flagged
+// archived, so the client can move it to the Archived section.
+func TestArchive_StaysInSidebarFlagged(t *testing.T) {
 	svc, channels, memberships, _, _ := setupChannelService()
 	ctx := context.Background()
 
@@ -1427,15 +1423,12 @@ func TestArchive_HidesChannelFromOwnerSidebar(t *testing.T) {
 		t.Fatalf("Archive: %v", err)
 	}
 
-	// Sidebar query must not include the archived channel for the owner.
 	out, err := svc.ListUserChannels(ctx, "owner-2")
 	if err != nil {
 		t.Fatalf("ListUserChannels: %v", err)
 	}
-	for _, uc := range out {
-		if uc.ChannelID == "ch-arx-2" {
-			t.Error("owner still sees archived channel in sidebar")
-		}
+	if len(out) != 1 || out[0].ChannelID != "ch-arx-2" || !out[0].Archived {
+		t.Fatalf("sidebar rows = %+v, want ch-arx-2 flagged archived", out)
 	}
 }
 
@@ -1511,9 +1504,8 @@ func TestLeave_PublishesUserEvent(t *testing.T) {
 	}
 }
 
-// Owner of an archived channel must still see the channel in their list,
-// while non-owners do not.
-func TestListUserChannels_OwnerSeesArchived(t *testing.T) {
+// Every member of an archived channel — not only its owner — still sees it.
+func TestListUserChannels_AllMembersSeeArchived(t *testing.T) {
 	svc, channels, memberships, _, _ := setupChannelService()
 	ctx := context.Background()
 
@@ -1528,20 +1520,14 @@ func TestListUserChannels_OwnerSeesArchived(t *testing.T) {
 		{UserID: "member-u", ChannelID: "arch-1", ChannelName: "archived-by-owner", Role: model.ChannelRoleMember},
 	}
 
-	ownerList, err := svc.ListUserChannels(ctx, "owner-u")
-	if err != nil {
-		t.Fatalf("ListUserChannels owner: %v", err)
-	}
-	if len(ownerList) != 1 {
-		t.Fatalf("owner list len = %d, want 1 (owner sees archived)", len(ownerList))
-	}
-
-	memberList, err := svc.ListUserChannels(ctx, "member-u")
-	if err != nil {
-		t.Fatalf("ListUserChannels member: %v", err)
-	}
-	if len(memberList) != 0 {
-		t.Errorf("member list len = %d, want 0 (member shouldn't see archived)", len(memberList))
+	for _, user := range []string{"owner-u", "member-u"} {
+		list, err := svc.ListUserChannels(ctx, user)
+		if err != nil {
+			t.Fatalf("ListUserChannels %s: %v", user, err)
+		}
+		if len(list) != 1 || !list[0].Archived {
+			t.Fatalf("%s list = %+v, want the archived channel flagged", user, list)
+		}
 	}
 }
 
@@ -1573,11 +1559,9 @@ func TestLeave_PostsSystemMessage(t *testing.T) {
 	}
 }
 
-// Archiving removes everyone, so it counts as leaving for each member: their
-// activity items and pending reminders there must not keep showing a channel
-// nobody can open. A member whose removal failed keeps access, so nothing of
-// theirs is dropped.
-func TestArchive_DropsEachMembersActivityAndReminders(t *testing.T) {
+// Archiving is not a loss of access: members keep reading the channel, so
+// their activity items and pending reminders there stay.
+func TestArchive_KeepsMembersActivityAndReminders(t *testing.T) {
 	svc, channels, memberships, _, _ := setupChannelService()
 	hooks, reminders := &activityHooks{}, &activityHooks{}
 	svc.SetActivityRecorder(hooks)
@@ -1590,34 +1574,7 @@ func TestArchive_DropsEachMembersActivityAndReminders(t *testing.T) {
 	if err := svc.Archive(ctx, "owner", "ch-arx"); err != nil {
 		t.Fatalf("Archive: %v", err)
 	}
-	left := map[string]bool{}
-	for _, l := range hooks.left {
-		if l.parentID != "ch-arx" {
-			t.Fatalf("ParentLeft for %q, want ch-arx", l.parentID)
-		}
-		left[l.userID] = true
-	}
-	if len(left) != 2 || !left["owner"] || !left["m1"] {
-		t.Fatalf("ParentLeft users = %v, want owner and m1", hooks.left)
-	}
-	if len(reminders.left) != 2 {
-		t.Fatalf("reminder ParentLeft = %v, want both members", reminders.left)
-	}
-	// One call each, carrying everyone — not a goroutine per member.
-	if hooks.calls != 1 || reminders.calls != 1 {
-		t.Fatalf("ParentLeft calls = %d activity / %d reminders, want 1 each", hooks.calls, reminders.calls)
-	}
-
-	failing, channels2, memberships2, _, _ := setupChannelService()
-	hooks2 := &activityHooks{}
-	failing.SetActivityRecorder(hooks2)
-	channels2.channels["ch-arx"] = &model.Channel{ID: "ch-arx", Name: "to-archive", Type: model.ChannelTypePrivate}
-	memberships2.memberships["ch-arx#owner"] = &model.ChannelMembership{ChannelID: "ch-arx", UserID: "owner", Role: model.ChannelRoleOwner}
-	memberships2.removeErr = errors.New("boom")
-	if err := failing.Archive(ctx, "owner", "ch-arx"); err != nil {
-		t.Fatalf("Archive: %v", err)
-	}
-	if len(hooks2.left) != 0 {
-		t.Fatalf("ParentLeft = %v, want none when the removal failed", hooks2.left)
+	if hooks.calls != 0 || reminders.calls != 0 {
+		t.Fatalf("ParentLeft calls = %d activity / %d reminders, want none", hooks.calls, reminders.calls)
 	}
 }

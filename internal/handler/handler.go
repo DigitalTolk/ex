@@ -115,6 +115,8 @@ func serviceStatus(err error) (status int, code, message string, ok bool) {
 		return http.StatusBadRequest, "bad_request", err.Error(), true
 	case errors.Is(err, service.ErrForbidden):
 		return http.StatusForbidden, "forbidden", "no access", true
+	case errors.Is(err, service.ErrChannelArchived):
+		return http.StatusConflict, "channel_archived", "this channel is archived and read-only", true
 	case errors.Is(err, service.ErrNoRunAccess):
 		return http.StatusForbidden, "forbidden", "no access to this run", true
 	case errors.Is(err, service.ErrContextFull):

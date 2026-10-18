@@ -115,6 +115,9 @@ func (s *IncomingWebhookService) Create(ctx context.Context, actorID string, in 
 	if err != nil {
 		return nil, fmt.Errorf("webhook: channel: %w", err)
 	}
+	if ch.Archived {
+		return nil, fmt.Errorf("webhook: %w", ErrChannelArchived)
+	}
 	now := time.Now()
 	id, err := randomWebhookID()
 	if err != nil {
@@ -169,6 +172,9 @@ func (s *IncomingWebhookService) Update(ctx context.Context, id string, in *mode
 	ch, err := s.channels.GetByID(ctx, in.ChannelID)
 	if err != nil {
 		return nil, fmt.Errorf("webhook: channel: %w", err)
+	}
+	if ch.Archived {
+		return nil, fmt.Errorf("webhook: %w", ErrChannelArchived)
 	}
 	existing.Title = strings.TrimSpace(in.Title)
 	existing.Description = strings.TrimSpace(in.Description)
@@ -328,6 +334,9 @@ func (s *IncomingWebhookService) targetChannel(ctx context.Context, wh *model.In
 		ch, err := s.channels.GetByID(ctx, wh.ChannelID)
 		if err != nil {
 			return nil, err
+		}
+		if ch.Archived {
+			return nil, ErrChannelArchived
 		}
 		// Re-check the creator can still post: a webhook bound to a private
 		// channel must stop posting once its creator loses access to that

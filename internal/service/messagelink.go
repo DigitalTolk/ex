@@ -127,13 +127,14 @@ func (s *MessageLinkService) Preview(ctx context.Context, viewerID, rawURL strin
 		// permalinks use the channel ID (`/channel/<ulid>?thread=…`), so resolve
 		// either form.
 		ch := s.resolveChannel(ctx, ref.ref)
-		if ch == nil || ch.Archived {
+		if ch == nil {
 			return nil, true
 		}
 		// Public channels are visible to everyone in the workspace (even
 		// before joining); private channels require membership so we never
-		// leak their content.
-		if ch.Type != model.ChannelTypePublic {
+		// leak their content. An archived channel can no longer be joined,
+		// so only its members still see into it.
+		if ch.Type != model.ChannelTypePublic || ch.Archived {
 			if _, err := s.memberships.GetMembership(ctx, ch.ID, viewerID); err != nil {
 				return nil, true
 			}

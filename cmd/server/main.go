@@ -267,6 +267,7 @@ func main() {
 		ParentIndex:     parentIndexStore,
 		Markdown:        service.NewMarkdownRenderer(),
 		Activator:       convSvc,
+		Channels:        channelStore,
 	})
 	// ---------------------------------------------------------- Agent runs
 	// Agents-as-users + the run orchestrator (plan-v2). Additive: agents ride

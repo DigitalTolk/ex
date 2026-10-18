@@ -111,9 +111,18 @@ type MessageService struct {
 	// runLogPurger deletes agent-run activity logs when their chat is deleted.
 	// Optional seam (SetRunLogPurger) — nil leaves run logs untouched.
 	runLogPurger RunLogPurger
+	// channels reports whether a channel parent is archived (read-only).
+	// Optional seam (SetChannelReader) — nil skips the archived check.
+	channels ChannelReader
 	// skillBadges names the skills a run used, stamped on its agent posts.
 	// Optional seam (SetRunSkillResolver) — nil means no badges.
 	skillBadges func(ctx context.Context, runID string) []string
+}
+
+// ChannelReader is the slice of the channel store the message service needs:
+// whether a channel parent is archived, which makes it read-only.
+type ChannelReader interface {
+	GetChannel(ctx context.Context, id string) (*model.Channel, error)
 }
 
 // MessageActivityRecorder keeps the Activity tab in step with messages: it
@@ -157,6 +166,7 @@ type MessageServiceDeps struct {
 	ParentIndex     ParentPinFileIndexStore
 	Markdown        *MarkdownRenderer
 	Activator       ConversationActivator
+	Channels        ChannelReader
 
 	// Optional capabilities (nil degrades gracefully). AttachmentManager is
 	// NOT here: attachments and messages reference each other, so that edge
@@ -181,6 +191,7 @@ func NewMessageServiceFromDeps(d MessageServiceDeps) *MessageService {
 		parentIndex:   d.ParentIndex,
 		markdown:      d.Markdown,
 		activator:     d.Activator,
+		channels:      d.Channels,
 		notifier:      d.Notifier,
 		indexer:       d.Indexer,
 		activity:      d.Activity,
@@ -208,6 +219,9 @@ func NewMessageService(
 // SetActivator wires the conversation activator. Called from main wiring after
 // both services are constructed to avoid a constructor cycle.
 func (s *MessageService) SetActivator(a ConversationActivator) { s.activator = a }
+
+// SetChannelReader enables the archived-channel (read-only) check on writes.
+func (s *MessageService) SetChannelReader(c ChannelReader) { s.channels = c }
 
 // SetConversationSeqStore wires the conversation message-counter (the same
 // seq-based unread mechanism channels use). Optional — left unset, conversation
@@ -288,6 +302,12 @@ func (s *MessageService) attachRendered(msgs ...*model.Message) {
 
 func (s *MessageService) CheckAccess(ctx context.Context, userID, parentID, parentType string) error {
 	return s.checkAccess(ctx, userID, parentID, parentType)
+}
+
+// CheckWriteAccess is CheckAccess for writes: the parent must also accept new
+// content (an archived channel is read-only).
+func (s *MessageService) CheckWriteAccess(ctx context.Context, userID, parentID, parentType string) error {
+	return s.checkWriteAccess(ctx, userID, parentID, parentType)
 }
 
 func (s *MessageService) CanAccessMessageAttachment(ctx context.Context, userID, parentID, parentType, messageID, attachmentID string) error {
@@ -470,7 +490,7 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 			return nil, err
 		}
 		sendConv = conv
-	} else if err := s.checkAccess(ctx, accessorID, parentID, parentType); err != nil {
+	} else if err := s.checkWriteAccess(ctx, accessorID, parentID, parentType); err != nil {
 		return nil, err
 	}
 
@@ -669,6 +689,9 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 	}
 	if parentID == "" {
 		return nil, errors.New("message: parent required")
+	}
+	if err := s.checkWritable(ctx, parentID, parentType); err != nil {
+		return nil, err
 	}
 	if in.Body == "" && len(in.Attachments) == 0 {
 		return nil, errors.New("message: body or attachments required")
@@ -1651,7 +1674,7 @@ func (s *MessageService) listTopLevelAfter(ctx context.Context, parentID, after 
 // existing attachments are preserved; if non-nil (even an empty slice) the
 // attachments are replaced wholesale and add/remove refs are reconciled.
 func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType, msgID, newBody string, attachmentIDs []string) (*model.Message, error) {
-	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+	if err := s.checkWriteAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, err
 	}
 
@@ -1791,7 +1814,7 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 // Deleted=true so clients render a "(Message deleted)" placeholder.
 // The author or a channel admin (for channel messages) may delete.
 func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentType, msgID string) error {
-	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+	if err := s.checkWriteAccess(ctx, userID, parentID, parentType); err != nil {
 		return err
 	}
 
@@ -1979,7 +2002,7 @@ func (s *MessageService) ToggleReactionAsAgent(ctx context.Context, agentID, inv
 // whose membership authorizes it. Equal everywhere except the agent path.
 func (s *MessageService) toggleReaction(ctx context.Context, actorID, accessorID, parentID, parentType, msgID, emoji string) (*model.Message, error) {
 	userID := actorID
-	if err := s.checkAccess(ctx, accessorID, parentID, parentType); err != nil {
+	if err := s.checkWriteAccess(ctx, accessorID, parentID, parentType); err != nil {
 		return nil, err
 	}
 	if emoji == "" {
@@ -2048,7 +2071,7 @@ func (s *MessageService) toggleReaction(ctx context.Context, actorID, accessorID
 // channel/conversation may pin or unpin — pin authorship is captured on
 // the message itself and serves as the audit trail.
 func (s *MessageService) SetPinned(ctx context.Context, userID, parentID, parentType, msgID string, pinned bool) (*model.Message, error) {
-	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+	if err := s.checkWriteAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, err
 	}
 	msg, err := s.messages.GetMessage(ctx, parentID, msgID)
@@ -2097,7 +2120,7 @@ func (s *MessageService) SetPinned(ctx context.Context, userID, parentID, parent
 // Only the author may dismiss — the unfurl is content the author
 // effectively chose to show, so they own the dismissal.
 func (s *MessageService) SetNoUnfurl(ctx context.Context, userID, parentID, parentType, msgID string, noUnfurl bool) (*model.Message, error) {
-	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+	if err := s.checkWriteAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, err
 	}
 	msg, err := s.messages.GetMessage(ctx, parentID, msgID)
@@ -2136,6 +2159,33 @@ func (s *MessageService) conversationAccess(ctx context.Context, userID, parentI
 		}
 	}
 	return nil, fmt.Errorf("message: not a conversation participant: %w", ErrForbidden)
+}
+
+// checkWriteAccess is checkAccess plus "the parent accepts new content". Kept
+// separate from checkAccess on purpose: reads, reminders and agent standing
+// orders rely on checkAccess meaning "can read", and an archived channel stays
+// readable.
+func (s *MessageService) checkWriteAccess(ctx context.Context, userID, parentID, parentType string) error {
+	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+		return err
+	}
+	return s.checkWritable(ctx, parentID, parentType)
+}
+
+// checkWritable rejects writes into an archived channel. Conversations are
+// never archived.
+func (s *MessageService) checkWritable(ctx context.Context, parentID, parentType string) error {
+	if parentType != ParentChannel || s.channels == nil {
+		return nil
+	}
+	ch, err := s.channels.GetChannel(ctx, parentID)
+	if err != nil {
+		return fmt.Errorf("message: get channel: %w", err)
+	}
+	if ch.Archived {
+		return ErrChannelArchived
+	}
+	return nil
 }
 
 func (s *MessageService) checkAccess(ctx context.Context, userID, parentID, parentType string) error {
