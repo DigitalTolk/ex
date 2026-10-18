@@ -49,6 +49,7 @@ describe('roles — capability gates', () => {
     expect(canEditChannel('member')).toBe(false);
     expect(canArchiveChannel('owner')).toBe(true);
     expect(canArchiveChannel('admin')).toBe(false);
+    expect(canArchiveChannel('admin', 'admin')).toBe(true);
   });
 
   it('canLeaveChannel blocks owners and the #general channel', () => {

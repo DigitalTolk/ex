@@ -5,6 +5,7 @@ import {
   isOwner,
   canEditChannel,
   canArchiveChannel,
+  canUnarchiveChannel,
   canLeaveChannel,
   canAddMembers,
   canManageMembers,
@@ -45,9 +46,14 @@ describe('channel role predicates', () => {
     expect(canEditChannel('owner')).toBe(true);
     expect(canEditChannel('member')).toBe(false);
   });
-  it('canArchiveChannel: owner only', () => {
+  it('canArchiveChannel / canUnarchiveChannel: owner or system admin', () => {
     expect(canArchiveChannel('owner')).toBe(true);
     expect(canArchiveChannel('admin')).toBe(false);
+    expect(canArchiveChannel('member', 'admin')).toBe(true);
+    expect(canArchiveChannel('member', 'member')).toBe(false);
+    expect(canUnarchiveChannel('owner')).toBe(true);
+    expect(canUnarchiveChannel(null, 'admin')).toBe(true);
+    expect(canUnarchiveChannel('admin', 'member')).toBe(false);
   });
   it('canLeaveChannel: not general, not owner, must be a member', () => {
     expect(canLeaveChannel('member')).toBe(true);

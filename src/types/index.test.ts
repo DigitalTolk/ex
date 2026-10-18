@@ -79,6 +79,9 @@ describe('type interfaces compile and can be used at runtime', () => {
     };
     expect(uc.channelName).toBe('general');
     expect(uc.lastReadMsgID).toBeUndefined();
+    expect(uc.archived).toBeUndefined();
+    const archived: UserChannel = { ...uc, archived: true };
+    expect(archived.archived).toBe(true);
   });
 
   it('UserConversation shape is valid', () => {

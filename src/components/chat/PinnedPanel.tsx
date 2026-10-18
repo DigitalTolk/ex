@@ -23,6 +23,8 @@ interface PinnedPanelProps {
   // (ChannelView / ConversationView) wire this to their openThread()
   // helper, which already closes other side panels.
   onReplyInThread?: (messageID: string) => void;
+  // Archived channel: pinned messages are shown read-only.
+  readOnly?: boolean;
 }
 
 export function PinnedPanel({
@@ -33,6 +35,7 @@ export function PinnedPanel({
   userMap,
   currentUserId,
   onReplyInThread,
+  readOnly,
 }: PinnedPanelProps) {
   const path = parentPath({ channelId, conversationId });
   const navigate = useNavigate();
@@ -128,6 +131,7 @@ export function PinnedPanel({
                 currentUserId={currentUserId}
                 userMap={userLookup}
                 onReplyInThread={onReplyInThread}
+                readOnly={readOnly}
               />
             </div>
           );

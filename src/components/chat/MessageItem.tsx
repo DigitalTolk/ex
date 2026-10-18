@@ -236,6 +236,10 @@ interface MessageItemProps {
   currentUserId?: string;
   inThread?: boolean;
   disableEditing?: boolean;
+  // Read-only parent (an archived channel): the row offers only actions that
+  // don't change the chat — copy, mark unread, remind — and shows reactions
+  // without letting them toggle.
+  readOnly?: boolean;
   onReplyInThread?: (messageID: string) => void;
   onEditMessage?: (message: Message) => void;
   // Optional pre-resolved user lookup. When supplied, ThreadActionBar
@@ -287,6 +291,7 @@ function ReactionChip({
   reactorsText,
   isTouch,
   onToggle,
+  disabled,
   tooltipContent,
   children,
 }: {
@@ -296,6 +301,9 @@ function ReactionChip({
   reactorsText: string;
   isTouch: boolean;
   onToggle: () => void;
+  // Read-only (archived channel): the chip still shows who reacted but
+  // doesn't toggle.
+  disabled?: boolean;
   tooltipContent: ReactNode;
   children: ReactNode;
 }) {
@@ -314,7 +322,7 @@ function ReactionChip({
             onClick={() => {
               // The release of a long-press fires a click; swallow it so
               // peeking at the reactor list doesn't also toggle the reaction.
-              if (longPress.shouldSuppressClick()) return;
+              if (disabled || longPress.shouldSuppressClick()) return;
               onToggle();
             }}
             onPointerDown={(e) => {
@@ -337,6 +345,7 @@ function ReactionChip({
             }`}
             aria-label={ariaLabel}
             aria-pressed={reactedByMe}
+            aria-disabled={disabled || undefined}
           />
         }
       >
@@ -366,6 +375,7 @@ function MessageItemImpl({
   currentUserId,
   inThread,
   disableEditing,
+  readOnly,
   onReplyInThread,
   onEditMessage,
   userMap,
@@ -414,7 +424,9 @@ function MessageItemImpl({
   const [mobileReactionPickerOpen, setMobileReactionPickerOpen] = useState(false);
   const mobileActionsRef = useRef<HTMLDivElement>(null);
   const mobileActionsSheetRef = useRef<HTMLDivElement>(null);
-  const canEdit = isOwn && !disableEditing;
+  const canEdit = isOwn && !disableEditing && !readOnly;
+  // Delete, pin and watch change the chat; an archived one is read-only.
+  const canModify = !readOnly;
   const startEdit = useCallback(() => {
     /* istanbul ignore next -- startEdit is only wired (edit registry + the Edit menu item) behind `canEdit`, so it is never invoked when canEdit is false; this is a defensive re-check. */
     if (!canEdit) return;
@@ -860,6 +872,7 @@ function MessageItemImpl({
           className="min-h-0 flex-1 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-1"
         >
         {/* One-tap reactions first: the most-used emojis, then the full picker. */}
+        {canModify && (
         <motion.div className="mb-3 flex items-center gap-2" {...sheetSection(0)}>
           <div
             className="flex min-w-0 flex-1 items-center justify-between rounded-full bg-muted p-1"
@@ -907,13 +920,14 @@ function MessageItemImpl({
             }
           />
         </motion.div>
+        )}
         {/* The everyday actions as tiles, Reply leading as the CTA. */}
         <motion.div
-          className={`mb-3 grid gap-2 ${inThread ? 'grid-cols-3' : 'grid-cols-4'}`}
+          className={`mb-3 grid gap-2 ${inThread || !canModify ? 'grid-cols-3' : 'grid-cols-4'}`}
           data-testid="mobile-primary-actions"
           {...sheetSection(1)}
         >
-          {!inThread && (
+          {!inThread && canModify && (
             <Button
               type="button"
               className="h-20 min-w-0 flex-1 flex-col gap-1.5 rounded-2xl px-1 text-xs font-medium transition-transform active:scale-95 mobile:h-20 mobile:px-1 mobile:text-xs"
@@ -954,15 +968,17 @@ function MessageItemImpl({
               Show activity
             </button>
           )}
-          <button
-            type="button"
-            className="flex items-center gap-3 px-4 py-3 text-left text-sm"
-            onClick={handleMobileTogglePin}
-            aria-label={message.pinned ? 'Unpin message' : 'Pin message'}
-          >
-            {message.pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
-            {message.pinned ? 'Unpin' : 'Pin'}
-          </button>
+          {canModify && (
+            <button
+              type="button"
+              className="flex items-center gap-3 px-4 py-3 text-left text-sm"
+              onClick={handleMobileTogglePin}
+              aria-label={message.pinned ? 'Unpin message' : 'Pin message'}
+            >
+              {message.pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
+              {message.pinned ? 'Unpin' : 'Pin'}
+            </button>
+          )}
           {canMarkUnread && (
             <button
               type="button"
@@ -975,7 +991,7 @@ function MessageItemImpl({
               Mark as unread
             </button>
           )}
-          {isOwn && (
+          {isOwn && canModify && (
             <>
               {canEdit && (
                 <button
@@ -1323,6 +1339,7 @@ function MessageItemImpl({
                       ariaLabel={`${renderReactionLabel(emoji)} ${users.length}, ${reactedByMe ? 'reacted' : 'react'}`}
                       reactorsText={`${formatReactors(users)} reacted with ${renderReactionLabel(emoji)}`}
                       isTouch={isTouch}
+                      disabled={!canModify}
                       onToggle={() => handleReact(emoji)}
                       tooltipContent={
                         <>
@@ -1340,6 +1357,7 @@ function MessageItemImpl({
                     </ReactionChip>
                   );
                 })}
+                {canModify && (
                 <EmojiPicker
                   onSelect={handleReact}
                   triggerClassName="inline-flex items-center self-stretch"
@@ -1354,6 +1372,7 @@ function MessageItemImpl({
                     </Button>
                   }
                 />
+                )}
               </div>
             )}
             {!inThread && message.replyCount !== undefined && message.replyCount > 0 && (
@@ -1393,7 +1412,7 @@ function MessageItemImpl({
           role="toolbar"
           aria-label="Message actions"
         >
-          {(quickReactions ?? []).slice(0, 3).map((emoji) => (
+          {canModify && (quickReactions ?? []).slice(0, 3).map((emoji) => (
             <Button
               key={`quick-${emoji}`}
               size="icon"
@@ -1410,6 +1429,7 @@ function MessageItemImpl({
               <EmojiGlyph emoji={emoji} customMap={emojiMap} size="md" />
             </Button>
           ))}
+          {canModify && (
           <EmojiPicker
             onSelect={handleReact}
             onOpenChange={setReactionPickerOpen}
@@ -1422,7 +1442,8 @@ function MessageItemImpl({
               </Tooltip>
             }
           />
-          {!inThread && (
+          )}
+          {!inThread && canModify && (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1484,6 +1505,7 @@ function MessageItemImpl({
                 <Copy className="mr-2 h-4 w-4" />
                 Copy text
               </DropdownMenuItem>
+              {canModify && (
               <DropdownMenuItem
                 onClick={handleTogglePin}
                 aria-label={message.pinned ? 'Unpin message' : 'Pin message'}
@@ -1498,6 +1520,7 @@ function MessageItemImpl({
                   </>
                 )}
               </DropdownMenuItem>
+              )}
               {canMarkUnread && (
                 <DropdownMenuItem onClick={handleMarkUnread} data-testid="mark-unread" aria-label="Mark as unread">
                   <Mail className="mr-2 h-4 w-4" /> Mark as unread
@@ -1522,6 +1545,7 @@ function MessageItemImpl({
                   </DropdownMenuItem>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
+              {canModify && (
               <DropdownMenuItem
                 onClick={() => setWatcherDialogOpen(true)}
                 data-testid="watch-thread"
@@ -1529,7 +1553,8 @@ function MessageItemImpl({
               >
                 <Eye className="mr-2 h-4 w-4" /> Watch thread…
               </DropdownMenuItem>
-              {isOwn && (
+              )}
+              {isOwn && canModify && (
                 <>
                   {canEdit && (
                     <DropdownMenuItem onClick={startEdit}>

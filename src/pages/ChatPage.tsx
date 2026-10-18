@@ -188,6 +188,17 @@ export default function ChatPage() {
     refreshPresence();
   };
 
+  // A channel was archived or unarchived: refetch it (by ID and by slug, so
+  // whichever view is open picks up the read-only flag) and the sidebar list.
+  const refreshArchivedState = (data: unknown) => {
+    const evt = parseChannelID(data);
+    if (!evt) return;
+    queryClient.invalidateQueries({ queryKey: queryKeys.channel(evt.channelID) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.browseChannels() });
+  };
+
   useWebSocket({
     onMessageNew: (data: unknown) => {
       const msg = parseMessage(data);
@@ -362,19 +373,12 @@ export default function ChatPage() {
       // Refresh conversation list in sidebar
       queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
     },
-    onChannelArchived: (data: unknown) => {
-      const evt = parseChannelID(data);
-      if (!evt) return;
-      // Look up the slug from the cached userChannels list before
-      // invalidating so we can match the URL (which uses slug, not ID).
-      const userChannels = queryClient.getQueryData<{ channelID: string; channelName: string }[]>(queryKeys.userChannels());
-      const open = userChannels?.find((c) => c.channelID === evt.channelID);
-      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.browseChannels() });
-      if (open && window.location.pathname.endsWith(`/channel/${slugify(open.channelName)}`)) {
-        navigate('/', { replace: true });
-      }
-    },
+    // Archiving no longer removes anyone: the channel turns read-only (or,
+    // unarchived, writable again) in place. Refetch it and the sidebar list —
+    // the open view swaps its composer for the archived notice; nobody is
+    // navigated away.
+    onChannelArchived: (data: unknown) => refreshArchivedState(data),
+    onChannelUnarchived: (data: unknown) => refreshArchivedState(data),
     onChannelRemoved: (data: unknown) => {
       const evt = parseChannelID(data);
       if (!evt) return;
