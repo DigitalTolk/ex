@@ -8,6 +8,7 @@ import { deriveThreadMeta, isOwnMessage, type ThreadMeta } from '@/lib/message-u
 import type { Message, UserStatus } from '@/types';
 import { buildMessageListRows, nextVirtuosoState } from './MessageListRows';
 import { shouldAutoStickMessageList } from './message-list-autostick';
+import { keepBottomEdge } from '@/lib/keep-bottom-edge';
 import { NewBelowPill, UnreadBanner, UnreadDivider } from './UnreadMarkers';
 import {
   clearMissedArrivals,
@@ -20,7 +21,7 @@ import {
   useUnreadSeen,
   type UnreadAnchor,
 } from '@/lib/read-position';
-import { resolveUnreadDivider, unreadFrom } from '@/lib/unread-divider';
+import { isNewTo, resolveUnreadDivider, unreadFrom } from '@/lib/unread-divider';
 import { useUnreadThreadIDs } from '@/hooks/useUnreadThreads';
 import { MessageRowDataProvider } from './MessageRowDataProvider';
 
@@ -571,9 +572,15 @@ function VirtuosoMessageList({
     else scrollToDivider('top');
   }, [dividerIndex, hasNextPage, fetchNextPage, scrollToDivider]);
 
+  // Until the line is placed, a count anchor shows its count — unless all of
+  // the history is loaded and none of it is new to the reader. Then the count
+  // was wrong (it counted the reader's own message: a fresh DM opened on
+  // "1 new message" with nothing to jump to), and there is nothing to show.
+  const countHasUnread =
+    hasNextPage || allMessages.some((m) => isNewTo(m, parentType, currentUserId));
   const unreadCount = unreadDividerID
     ? unreadFrom(allMessages, unreadDividerID, parentType, currentUserId)
-    : unreadAnchor?.kind === 'count'
+    : unreadAnchor?.kind === 'count' && countHasUnread
       ? unreadAnchor.count
       : 0;
   const showUnreadMarker = !!unreadAnchor && unreadCount > 0 && caughtUpFor !== unreadAnchor && !unreadSeen;
@@ -615,10 +622,17 @@ function VirtuosoMessageList({
     scroller.addEventListener('scroll', onScroll, { passive: true });
     for (const type of userScrollEvents) scroller.addEventListener(type, onUserScroll, { passive: true });
     const detachHoverPause = attachScrollHoverPause(scroller);
+    // Virtuoso's own follow keeps the newest message in view only within
+    // MESSAGE_LIST_AT_BOTTOM_THRESHOLD_PX of the very end: a reader a few px
+    // short of it, or a few messages up, had the newest messages slide under
+    // the composer when the keyboard came up, and scrolling down to them
+    // dismissed the keyboard (hooks/useDismissKeyboardOnScroll).
+    const detachBottomEdge = keepBottomEdge(scroller);
     detachScrollerRef.current = () => {
       scroller.removeEventListener('scroll', onScroll);
       for (const type of userScrollEvents) scroller.removeEventListener(type, onUserScroll);
       detachHoverPause();
+      detachBottomEdge();
     };
   }, [markAtBottom, scheduleDividerMeasure]);
   useEffect(() => () => {

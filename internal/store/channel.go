@@ -364,7 +364,9 @@ func (s *ChannelStoreImpl) GetChannelsByIDs(ctx context.Context, ids []string) (
 		for _, id := range ids[start:end] {
 			keys = append(keys, compositeKey(channelPK(id), metaSK()))
 		}
-		req := map[string]types.KeysAndAttributes{s.Table: {Keys: keys}}
+		// Consistent, for the MessageSeq behind each row's unread count (see
+		// ConversationStoreImpl.ListUserConversations).
+		req := map[string]types.KeysAndAttributes{s.Table: {Keys: keys, ConsistentRead: aws.Bool(true)}}
 		for {
 			res, err := s.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
 			if err != nil {

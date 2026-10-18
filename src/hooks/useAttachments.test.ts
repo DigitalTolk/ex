@@ -6,8 +6,12 @@ import { createElement, type ReactNode } from 'react';
 vi.mock('@/lib/api', () => ({
   apiFetch: vi.fn(),
 }));
+vi.mock('@/lib/video-poster', () => ({
+  readVideoPoster: vi.fn(),
+}));
 
 import { apiFetch } from '@/lib/api';
+import { readVideoPoster } from '@/lib/video-poster';
 import {
   uploadAttachment,
   useAttachment,
@@ -191,6 +195,56 @@ describe('uploadAttachment', () => {
     await expect(uploadAttachment(file)).rejects.toThrow(/already uploaded/);
     expect(XHRMock.last).toBeNull();
     error.mockRestore();
+  });
+});
+
+describe('uploadAttachment — a video\'s poster', () => {
+  const poster = new Blob(['jpeg'], { type: 'image/jpeg' });
+  // An upload of a file the server already has (no S3 leg to stub), routed by path.
+  function routeVideo(posterResult: Promise<unknown> = Promise.resolve({})) {
+    vi.mocked(apiFetch).mockImplementation((path: string) => {
+      if (path === '/api/v1/attachments/url') {
+        return Promise.resolve({ id: 'v-1', key: 'attachments/v-1', multipartUploadId: '', alreadyExists: true, filename: 'clip.mp4', contentType: 'video/mp4', size: 4 });
+      }
+      if (path.endsWith('/poster')) return posterResult;
+      return Promise.resolve({ id: 'v-1' });
+    });
+  }
+  const paths = () => vi.mocked(apiFetch).mock.calls.map(([path]) => path);
+  const initBody = () => JSON.parse(String(vi.mocked(apiFetch).mock.calls[0][1]?.body));
+
+  beforeEach(() => {
+    vi.mocked(apiFetch).mockReset();
+    vi.mocked(readVideoPoster).mockReset();
+  });
+
+  it('sends the video\'s size with the upload, and its frame before processing', async () => {
+    vi.mocked(readVideoPoster).mockResolvedValue({ width: 1280, height: 720, poster });
+    routeVideo();
+    await uploadAttachment(new File(['clip'], 'clip.mp4', { type: 'video/mp4' }));
+    expect(initBody()).toMatchObject({ width: 1280, height: 720 });
+    expect(paths()).toEqual(['/api/v1/attachments/url', '/api/v1/attachments/v-1/poster', '/api/v1/attachments/v-1/process']);
+    expect(vi.mocked(apiFetch).mock.calls[1][1]).toEqual({ method: 'POST', body: poster });
+  });
+
+  it('still finishes the upload when the frame cannot be kept', async () => {
+    vi.mocked(readVideoPoster).mockResolvedValue({ width: 1280, height: 720, poster });
+    routeVideo(Promise.reject(new Error('409')));
+    await expect(uploadAttachment(new File(['clip'], 'clip.mp4', { type: 'video/mp4' }))).resolves.toMatchObject({ id: 'v-1' });
+    expect(paths()).toContain('/api/v1/attachments/v-1/process');
+  });
+
+  it('sends no frame for a video the browser could not draw, and never tries one for other files', async () => {
+    vi.mocked(readVideoPoster).mockResolvedValue(null);
+    routeVideo();
+    await uploadAttachment(new File(['clip'], 'clip.mp4', { type: 'video/mp4' }));
+    expect(paths()).not.toContain('/api/v1/attachments/v-1/poster');
+    expect(initBody().width).toBeUndefined();
+
+    vi.mocked(readVideoPoster).mockClear();
+    routeVideo();
+    await uploadAttachment(new File(['x'], 'notes.txt', { type: 'text/plain' }));
+    expect(readVideoPoster).not.toHaveBeenCalled();
   });
 });
 

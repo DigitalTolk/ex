@@ -2400,6 +2400,9 @@ func TestOrchCov_ClampAndPayloadHelpers(t *testing.T) {
 	if got := payloadInt64(map[string]any{"v": "x"}, "v"); got != 0 {
 		t.Fatalf("bogus payload: %d", got)
 	}
+	if got := limitLabel("token_budget"); got != "token budget" {
+		t.Fatalf("token budget label: %q", got)
+	}
 	if got := limitLabel("something_else"); got != "something_else" {
 		t.Fatalf("limit label passthrough: %q", got)
 	}

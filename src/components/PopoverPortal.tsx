@@ -8,6 +8,7 @@ import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
+import { KEYBOARD_SETTLE_MS, useKeyboardInset } from '@/hooks/useKeyboardInset';
 
 interface PopoverPortalProps {
   open: boolean;
@@ -50,6 +51,7 @@ export function PopoverPortal({
 }: PopoverPortalProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
+  const keyboardInset = useKeyboardInset();
   const pointerDevice = usePointerDevice();
   // Sheet wherever touch is the only pointer — phones AND a tablet running the
   // desktop layout. Anchoring to a trigger assumes a trigger that is still on
@@ -142,14 +144,24 @@ export function PopoverPortal({
               position: 'fixed',
               left: 0,
               right: 0,
-              bottom: 0,
+              // On the on-screen keyboard, not under it: a picker's search
+              // field raises the keyboard, and the results must stay in
+              // sight above it. The app undoes iOS's own pan for the keyboard
+              // (hooks/useKeyboardInset), so nothing else lifts the sheet.
+              bottom: keyboardInset,
+              transition: `bottom ${KEYBOARD_SETTLE_MS}ms var(--ex-keyboard-ease)`,
               zIndex: 1000,
               // Full width on a phone; on a tablet capped and centred so it
               // matches the message action sheet instead of spanning 1024px+.
               width: '100%',
               maxWidth: 'min(100vw, 32rem)',
               marginInline: 'auto',
-              maxHeight: '50dvh',
+              maxHeight: keyboardInset > 0
+                ? `min(50dvh, calc(100dvh - ${keyboardInset}px - env(safe-area-inset-top, 0px)))`
+                : '50dvh',
+              // The home indicator's inset, which the sheet's content pads
+              // for; iOS keeps reporting it while the keyboard covers it.
+              ['--sheet-safe-bottom' as string]: keyboardInset > 0 ? '0px' : 'env(safe-area-inset-bottom, 0px)',
               overflow: 'hidden',
               overscrollBehaviorY: 'contain',
               touchAction: 'pan-y',

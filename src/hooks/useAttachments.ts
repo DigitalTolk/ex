@@ -3,7 +3,8 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { useMemo } from 'react';
 import { apiFetch } from '@/lib/api';
-import { isImageAttachment } from '@/lib/file-helpers';
+import { isImageAttachment, isVideoAttachment } from '@/lib/file-helpers';
+import { readVideoPoster } from '@/lib/video-poster';
 import { queryKeys } from '@/lib/query-keys';
 import type { Attachment } from '@/types';
 
@@ -75,9 +76,11 @@ export async function uploadAttachment(
   file: File,
   callbacks: UploadCallbacks = {},
 ): Promise<UploadInitResponse> {
-  const [sha, dims] = await Promise.all([
+  const [sha, dims, poster] = await Promise.all([
     sha256File(file),
     readImageDimensions(file),
+    // A video's frame stands in for it in the message list (lib/video-poster).
+    isVideoAttachment(file.type, file.name) ? readVideoPoster(file) : null,
   ]);
   const init = await apiFetch<UploadInitResponse>('/api/v1/attachments/url', {
     method: 'POST',
@@ -86,17 +89,30 @@ export async function uploadAttachment(
       contentType: file.type || 'application/octet-stream',
       size: file.size,
       sha256: sha,
-      width: dims.width,
-      height: dims.height,
+      width: dims.width ?? poster?.width,
+      height: dims.height ?? poster?.height,
     }),
   });
   callbacks.onInit?.(init);
   if (!init.alreadyExists) {
     await uploadToS3(file, init, (fraction) => callbacks.onProgress?.(fraction * 0.9));
   }
+  if (poster) await uploadPoster(init.id, poster.poster);
   await processAttachment(init.id);
   callbacks.onProgress?.(1);
   return init;
+}
+
+// uploadPoster hands the server a video's frame to keep as its thumbnails.
+// Best effort: a video without a poster is still a video — it shows as a file
+// card — and one that has a poster already (the same file uploaded before)
+// keeps it.
+async function uploadPoster(id: string, poster: Blob): Promise<void> {
+  try {
+    await apiFetch(`/api/v1/attachments/${encodeURIComponent(id)}/poster`, { method: 'POST', body: poster });
+  } catch {
+    // Nothing to do: see above.
+  }
 }
 
 async function processAttachment(id: string): Promise<void> {

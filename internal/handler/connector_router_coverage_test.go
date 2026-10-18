@@ -834,7 +834,7 @@ func TestHconnCovPresenceAlwaysOnline(t *testing.T) {
 // auth middlewares is expected).
 func TestHconnCovRouterAgentRoutes(t *testing.T) {
 	jwtMgr := auth.NewJWTManager("hconncov-router-secret", 15*time.Minute, 24*time.Hour)
-	runTool := &AgentRunToolHandler{workspace: &AgentWorkspaceDeps{}}
+	runTool := &AgentRunToolHandler{workspace: &AgentWorkspaceDeps{}, attachments: &service.AttachmentService{}}
 	router := NewRouter(&Deps{
 		Auth:         &AuthHandler{},
 		User:         &UserHandler{},
@@ -892,6 +892,9 @@ func TestHconnCovRouterAgentRoutes(t *testing.T) {
 		{http.MethodPost, "/api/v1/agent/run/messages"},
 		{http.MethodGet, "/api/v1/agent/run/thread"},
 		{http.MethodPost, "/api/v1/agent/run/approvals"},
+		// Run-scoped files (registered because attachments are set).
+		{http.MethodGet, "/api/v1/agent/run/attachments/a1"},
+		{http.MethodPost, "/api/v1/agent/run/attachments"},
 		{http.MethodGet, "/api/v1/agent/run/skills"},
 		// Coding tasks: run tools + human surface.
 		{http.MethodPost, "/api/v1/agent/run/coding-task"},

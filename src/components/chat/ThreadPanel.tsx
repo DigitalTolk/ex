@@ -25,6 +25,7 @@ import { useComposerSchedule } from '@/hooks/useScheduledMessages';
 import { markThreadSeen, noteThreadReadPosition, useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
 import { isReadHeld, keepReadSession, markUnreadSeen, scheduleEndReadSession, threadReadKey, useUnreadAnchor, useUnreadSeen } from '@/lib/read-position';
 import { attachScrollHoverPause } from '@/lib/scroll-hover-pause';
+import { keepBottomEdge } from '@/lib/keep-bottom-edge';
 import { resolveUnreadDivider } from '@/lib/unread-divider';
 import { UnreadDivider } from './UnreadMarkers';
 import { MessageRowDataProvider } from './MessageRowDataProvider';
@@ -239,7 +240,13 @@ export function ThreadPanel({
     const el = scrollRef.current;
     /* istanbul ignore next -- the scroller renders with the panel, so it is set by the time effects run; defensive. */
     if (!el) return;
-    return attachScrollHoverPause(el);
+    const detachHoverPause = attachScrollHoverPause(el);
+    // The keyboard and the reply composer take their height from below.
+    const detachBottomEdge = keepBottomEdge(el);
+    return () => {
+      detachHoverPause();
+      detachBottomEdge();
+    };
   }, []);
 
   // userHasScrolledRef is shared with the anchor effect below. Once

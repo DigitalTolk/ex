@@ -772,7 +772,7 @@ describe('MessageInput desktop flows (browser)', () => {
     uploadAttachmentMock.mockReset();
   });
 
-  it('renders the GIF picker trigger when GIPHY is enabled', async () => {
+  it('renders the GIF picker trigger, labelled GIF, when GIPHY is enabled', async () => {
     // The GiphyPicker (and thus the `giphyEnabled &&` branch) only renders
     // when both the flag and an API key are present.
     settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: true, giphyAPIKey: 'gk-test' };
@@ -783,6 +783,18 @@ describe('MessageInput desktop flows (browser)', () => {
         await screen.getByLabelText('Message input').click();
       }
       await expect.element(screen.getByLabelText('GIF')).toBeVisible();
+      // Says "GIF" in so many words (it was a play-button picture nobody read
+      // as GIFs), whole, inside its button, at the type scale's 12px floor.
+      const button = screen.getByLabelText('GIF').element();
+      const label = button.querySelector('[data-testid="composer-gif-label"]') as HTMLElement;
+      expect(label.textContent).toBe('GIF');
+      expect(button.querySelector('svg')).toBeNull();
+      expect(getComputedStyle(label).fontSize).toBe('12px');
+      const inner = label.getBoundingClientRect();
+      const outer = button.getBoundingClientRect();
+      expect(inner.left).toBeGreaterThanOrEqual(outer.left);
+      expect(inner.right).toBeLessThanOrEqual(outer.right);
+      expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth);
     } finally {
       settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false, giphyAPIKey: '' };
     }

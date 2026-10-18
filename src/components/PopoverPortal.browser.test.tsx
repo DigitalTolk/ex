@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { useRef } from 'react';
 import { render } from 'vitest-browser-react';
 import { PopoverPortal } from './PopoverPortal';
+import { fireKeyboard, keyboardSettled } from '@/test/keyboard';
+import { KeyboardInsetTracker } from '@/test/KeyboardInsetTracker';
 
 // useSwipeDismiss is mocked so the swipe-down dismiss callback can be
 // fired directly and both arms of data-swipe-dismissing exercised. The
@@ -130,5 +132,60 @@ describe('PopoverPortal browser', () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
     await new Promise((r) => setTimeout(r, 30));
     expect(onDismiss).not.toHaveBeenCalled();
+  });
+});
+
+// A sheet's content often raises the keyboard (the emoji and GIF pickers'
+// search fields): the sheet sits on the keyboard, so what the field finds
+// stays in sight. It used to stay at the bottom of the screen, under it.
+describe.runIf(window.innerWidth < 768)('PopoverPortal sheet with the keyboard up', () => {
+  const KEYBOARD_PX = 300;
+  const sheet = () => document.querySelector('[data-testid="popover-portal"]') as HTMLElement;
+
+  it('sits on the keyboard, and back at the bottom once it goes', async () => {
+    await render(
+      <>
+        <KeyboardInsetTracker />
+        <Harness open={true} mobileSheet={true} />
+      </>,
+    );
+    await vi.waitFor(() => expect(sheet()).not.toBeNull());
+    expect(Math.round(sheet().getBoundingClientRect().bottom)).toBe(window.innerHeight);
+    try {
+      fireKeyboard('keyboardWillShow', KEYBOARD_PX);
+      await keyboardSettled();
+      const box = sheet().getBoundingClientRect();
+      expect(Math.round(box.bottom)).toBe(window.innerHeight - KEYBOARD_PX);
+      expect(box.top).toBeGreaterThanOrEqual(0);
+      // The home indicator is under the keyboard: no room kept for it.
+      expect(sheet().style.getPropertyValue('--sheet-safe-bottom')).toBe('0px');
+    } finally {
+      fireKeyboard('keyboardWillHide');
+    }
+    await keyboardSettled();
+    expect(Math.round(sheet().getBoundingClientRect().bottom)).toBe(window.innerHeight);
+    expect(sheet().style.getPropertyValue('--sheet-safe-bottom')).toContain('safe-area-inset-bottom');
+  });
+
+  it('is no taller than the space above the keyboard', async () => {
+    await render(
+      <>
+        <KeyboardInsetTracker />
+        <Harness open={true} mobileSheet={true} />
+      </>,
+    );
+    await vi.waitFor(() => expect(sheet()).not.toBeNull());
+    // A keyboard leaving less than half the screen (a landscape phone).
+    const keyboard = Math.round(window.innerHeight * 0.7);
+    try {
+      fireKeyboard('keyboardWillShow', keyboard);
+      await keyboardSettled();
+      sheet().style.height = '100dvh';
+      const box = sheet().getBoundingClientRect();
+      expect(box.top).toBeGreaterThanOrEqual(-1);
+      expect(Math.round(box.bottom)).toBe(window.innerHeight - keyboard);
+    } finally {
+      fireKeyboard('keyboardWillHide');
+    }
   });
 });

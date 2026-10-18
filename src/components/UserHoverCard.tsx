@@ -87,7 +87,7 @@ function UserHoverCardImpl({
         preferredAlign="start"
         role="tooltip"
         mobileSheet
-        className="w-72 rounded-md border bg-popover p-3 shadow-lg touch:w-screen touch:max-w-none touch:rounded-b-none touch:rounded-t-xl touch:border-b-0 touch:pb-[calc(env(safe-area-inset-bottom)+0.75rem)] touch:pl-[max(0.75rem,env(safe-area-inset-left))] touch:pr-[max(0.75rem,env(safe-area-inset-right))]"
+        className="w-72 rounded-md border bg-popover p-3 shadow-lg touch:w-screen touch:max-w-none touch:rounded-b-none touch:rounded-t-xl touch:border-b-0 touch:pb-[calc(var(--sheet-safe-bottom,env(safe-area-inset-bottom))+0.75rem)] touch:pl-[max(0.75rem,env(safe-area-inset-left))] touch:pr-[max(0.75rem,env(safe-area-inset-right))]"
       >
         {open ? (
           integrationOwnerName ? (

@@ -6,7 +6,9 @@ import {
   clearAccessToken,
   getAccessToken,
   refreshAccessToken,
+  READ_TIMEOUT_MS,
   setAccessToken,
+  WRITE_TIMEOUT_MS,
 } from './api';
 import { AUTH_INVALID_EVENT } from './auth-events';
 
@@ -306,5 +308,78 @@ describe('api.ts extended browser coverage', () => {
     expect(err.status).toBe(418);
     expect(err.name).toBe('ApiError');
     expect(err.message).toBe('I am a teapot');
+  });
+});
+
+// The reported bug: the phone app sometimes stayed gray after its logo until it
+// was killed. Browser fetch has no timeout, and a request sent over a
+// connection the network dropped while the app was suspended never settles —
+// so the chat's first lists never loaded. Every request is now bounded.
+describe('apiFetch timeouts', () => {
+  // A fetch that settles only when its signal aborts, like one on a dead
+  // connection.
+  const hangingFetch = () =>
+    vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        // As fetch does: a signal already aborted rejects at once.
+        if (init?.signal?.aborted) reject(init.signal.reason);
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+      }),
+    );
+
+  let timeout: ReturnType<typeof vi.spyOn>;
+  let timers: Array<{ ms: number; controller: AbortController }>;
+  beforeEach(() => {
+    clearAccessToken();
+    timers = [];
+    timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      const controller = new AbortController();
+      timers.push({ ms, controller });
+      return controller.signal;
+    });
+  });
+  afterEach(() => {
+    timeout.mockRestore();
+    globalThis.fetch = originalFetch;
+  });
+
+  it('gives up on a read that never answers, so it can be sent again', async () => {
+    globalThis.fetch = hangingFetch() as typeof fetch;
+    const pending = apiFetch('/api/v1/channels');
+    expect(timers.map((t) => t.ms)).toEqual([READ_TIMEOUT_MS]);
+    timers[0].controller.abort(new DOMException('timed out', 'TimeoutError'));
+    await expect(pending).rejects.toMatchObject({ name: 'TimeoutError' });
+  });
+
+  it('gives a write until past the server\'s own deadline', async () => {
+    globalThis.fetch = hangingFetch() as typeof fetch;
+    const pending = apiFetch('/api/v1/channels', { method: 'POST', body: '{}' });
+    expect(timers.map((t) => t.ms)).toEqual([WRITE_TIMEOUT_MS]);
+    expect(WRITE_TIMEOUT_MS).toBeGreaterThan(30_000);
+    timers[0].controller.abort(new DOMException('timed out', 'TimeoutError'));
+    await expect(pending).rejects.toMatchObject({ name: 'TimeoutError' });
+  });
+
+  it('still stops when the caller cancels, whichever comes first', async () => {
+    globalThis.fetch = hangingFetch() as typeof fetch;
+    const caller = new AbortController();
+    const pending = apiFetch('/api/v1/channels', { signal: caller.signal });
+    caller.abort(new DOMException('cancelled', 'AbortError'));
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+
+    // A caller that has already given up never starts a live request.
+    const gone = new AbortController();
+    gone.abort(new DOMException('cancelled', 'AbortError'));
+    await expect(apiFetch('/api/v1/channels', { signal: gone.signal })).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('bounds the request sent again after a refreshed session too', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 401, headers: new Headers(), text: () => Promise.resolve('') } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve({ accessToken: 't' }) } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve({ ok: 1 }) } as Response);
+    globalThis.fetch = fetchMock as typeof fetch;
+    await expect(apiFetch('/api/v1/channels')).resolves.toEqual({ ok: 1 });
+    expect(fetchMock.mock.calls[2][1]?.signal).toBeInstanceOf(AbortSignal);
   });
 });

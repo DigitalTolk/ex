@@ -3,6 +3,8 @@ import { render } from 'vitest-browser-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { swipe } from '@/test/gestures';
 import { EmojiPicker } from './EmojiPicker';
+import { fireKeyboard, keyboardSettled } from '@/test/keyboard';
+import { KeyboardInsetTracker } from '@/test/KeyboardInsetTracker';
 
 // Browser coverage for EmojiPicker — exercises trigger, search,
 // category switching, and skin-tone selection paths.
@@ -235,6 +237,35 @@ describe('EmojiPicker browser', () => {
     expect(getComputedStyle(tablist).touchAction).toBe('none');
     await swipe(tablist, { dy: 200, steps: 8, stepMs: 18 });
     await vi.waitFor(() => expect(onOpenChange).toHaveBeenLastCalledWith(false), { timeout: 3000 });
+  });
+
+  // Searching raises the keyboard; the emoji it finds stay in sight above it.
+  it('keeps the emoji above the keyboard while searching on a phone', async () => {
+    if (window.innerWidth > 767) return;
+    const KEYBOARD_PX = 300;
+    const onOpenChange = vi.fn();
+    const screen = await render(
+      <Wrap>
+        <KeyboardInsetTracker />
+        <EmojiPicker onSelect={vi.fn()} onOpenChange={onOpenChange} />
+      </Wrap>,
+    );
+    await screen.getByLabelText('Open emoji picker').click();
+    await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(true));
+    try {
+      (screen.getByLabelText('Search emojis').element() as HTMLInputElement).focus();
+      fireKeyboard('keyboardWillShow', KEYBOARD_PX);
+      await keyboardSettled();
+      const keyboardTop = window.innerHeight - KEYBOARD_PX;
+      expect(screen.getByLabelText('Search emojis').element().getBoundingClientRect().top).toBeGreaterThanOrEqual(0);
+      const grid = document.querySelector('[data-swipe-scroll="true"]') as HTMLElement;
+      const box = grid.getBoundingClientRect();
+      expect(box.bottom).toBeLessThanOrEqual(keyboardTop + 1);
+      // A useful stretch of emoji, not a sliver.
+      expect(box.height).toBeGreaterThan(150);
+    } finally {
+      fireKeyboard('keyboardWillHide');
+    }
   });
 
   it('reopens and toggles closed via the same trigger (desktop only)', async () => {

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { GiphyPicker } from './GiphyPicker';
+import { fireKeyboard, keyboardSettled } from '@/test/keyboard';
+import { KeyboardInsetTracker } from '@/test/KeyboardInsetTracker';
 
 vi.mock('@giphy/js-fetch-api', () => ({
   GiphyFetch: class GiphyFetch {
@@ -77,6 +79,34 @@ describe('GiphyPicker browser behavior', () => {
     await vi.waitFor(() => {
       expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 'gif-1' }));
     });
+  });
+
+  // Searching raises the keyboard; the GIFs it finds stay in sight above it.
+  it('keeps the results above the keyboard while searching on a phone', async () => {
+    if (window.innerWidth > 767) return;
+    const KEYBOARD_PX = 300;
+    const screen = await render(
+      <>
+        <KeyboardInsetTracker />
+        <GiphyPicker apiKey="test-key" onSelect={vi.fn()} trigger={<button type="button">Open GIFs</button>} />
+      </>,
+    );
+    await screen.getByText('Open GIFs').click();
+    await expect.element(screen.getByTestId('mock-giphy-results')).toBeVisible();
+    try {
+      (screen.getByLabelText('Search GIFs').element() as HTMLInputElement).focus();
+      fireKeyboard('keyboardWillShow', KEYBOARD_PX);
+      await keyboardSettled();
+      const keyboardTop = window.innerHeight - KEYBOARD_PX;
+      const search = screen.getByLabelText('Search GIFs').element().getBoundingClientRect();
+      const results = screen.getByTestId('giphy-grid').element().getBoundingClientRect();
+      expect(search.top).toBeGreaterThanOrEqual(0);
+      expect(results.bottom).toBeLessThanOrEqual(keyboardTop + 1);
+      // A useful stretch of results, not a sliver.
+      expect(results.bottom - Math.max(results.top, search.bottom)).toBeGreaterThan(150);
+    } finally {
+      fireKeyboard('keyboardWillHide');
+    }
   });
 
   it('auto-focuses the search box and accepts a search term on desktop', async () => {
