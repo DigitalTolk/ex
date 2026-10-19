@@ -76,7 +76,7 @@ arm of the helper directly. `template.Must` is the precedent.
 
 Gate: [`github.com/vladopajic/go-test-coverage`](https://github.com/vladopajic/go-test-coverage),
 configured in `.testcoverage.yml` (threshold **100**), run from the `Makefile`
-and CI over `go test -tags=integration -coverprofile=coverage.out ./internal/...`.
+and CI over `go test -tags=integration -coverprofile=coverage.out ./internal/... ./pkg/...`.
 Only `cmd/server/main.go` (process entrypoint / DI wiring) is excluded.
 
 There are **zero `// coverage-ignore` annotations** in the tree, and new ones

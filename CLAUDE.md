@@ -30,7 +30,7 @@ This single command runs everything in order:
 1. Dist placeholder check (`dist/.gitignore` must exist for the `//go:embed`)
 2. `make check-claude-md` (CLAUDE.md content gate — see the policy at the top)
 3. `golangci-lint run ./...` (backend lint)
-4. `go test -tags=integration -coverprofile=coverage.out ./internal/...` (backend tests with testcontainers), then `go test ./cmd/...`
+4. `go test -tags=integration -coverprofile=coverage.out ./internal/... ./pkg/...` (backend tests with testcontainers), then `go test ./cmd/...`
 5. Backend coverage gate (go-test-coverage over `coverage.out`, see `.testcoverage.yml`)
 6. `make check-types-drift` (tygo: `src/types/generated.ts` must match `internal/model`)
 7. `npx tsc -b --noEmit` (frontend type-check)
@@ -69,7 +69,7 @@ When a test flakes:
 
 | Suite | Gate | Metric |
 | --- | --- | --- |
-| Backend | = 100% | statement (go-test-coverage over `./internal/...`; zero `// coverage-ignore` annotations allowed — see COVERAGE.md for the seam / must-helper / dead-guard-deletion playbook) |
+| Backend | = 100% | statement (go-test-coverage over `./internal/...` and `./pkg/...`; zero `// coverage-ignore` annotations allowed — see COVERAGE.md for the seam / must-helper / dead-guard-deletion playbook) |
 | Frontend (merged) | = 100% | statements + branches + functions + lines (`vitest.config.ts` root `thresholds` over the MERGED istanbul report of all `test.projects`: jsdom + chromium-desktop + chromium-mobile + webkit-iphone) |
 
 Each gate fails `make check` **and** the GitHub Actions CI run: the backend gate is go-test-coverage (`.testcoverage.yml`) in `Makefile` + a dedicated CI step; the frontend gate is enforced by vitest's own `thresholds` (non-zero exit) on the single `npx vitest run --coverage` invocation. The Makefile additionally re-checks all four metrics from `coverage/coverage-summary.json`.
@@ -151,6 +151,7 @@ If you can't prove a change keeps every opted-in alert at 100% delivery (desktop
 - Service layer owns business logic and RBAC; handlers are thin HTTP adapters
 - **Password reset is GUEST-ONLY, and the check keys on `AuthProvider`, never `SystemRole`.** Only accounts with `AuthProvider == guest` hold a local bcrypt password; an OIDC user's credential lives in the identity provider, so minting *or* redeeming a reset for one is refused (an SSO user demoted to the guest *role* is still SSO-only). The guard runs at BOTH ends — at mint and again at redemption — because an account can be converted while a ticket is outstanding. Tickets are single-use (Redis `GETDEL`), stored under the token's SHA-256 rather than the token, TTL-bounded, and redeeming one revokes every refresh token for that account. The self-service `/auth/password/forgot` endpoint answers 204 for *every* input (unknown address, SSO address, malformed, store or mail outage) — it must never become an account-enumeration oracle, which is why its handler has a single error arm and a fixed message.
 - **Transactional email (`internal/email`) is optional and never load-bearing.** With no transport configured the app boots and every flow still works: invites and admin-initiated resets return their link so it can be relayed by hand, and the UI states whether the mail was actually sent. Never make a flow depend on delivery — mail is not part of the notification-reliability contract below. Two transports (`EMAIL_PROVIDER=smtp|ses`) share ONE message-construction path (`build`), so they can never drift; SES sends that rendered MIME as a raw message. **Message assembly and the SMTP conversation belong to `github.com/wneessen/go-mail`, and SES to the AWS SDK — do not hand-roll MIME, header encoding, or protocol handling here.** Delivery is proven end-to-end against a real Mailpit server (`mailpit_integration_test.go`), not just a scripted fake.
+- **`pkg/importer` (history import) never touches `internal/service`.** It writes users, channels, conversations, memberships, messages, threads, attachments and pins straight through `internal/store` / `internal/storage` / `internal/search` / `internal/cache`, so an import can never publish WebSocket events, notify, push, bump alerted-unread badges or start agent runs. Imported history is written already read (`FinalizeParent` advances `MessageSeq` and every member's `LastReadSeq` together). Callers supply deterministic IDs — message IDs are ULIDs whose time is the original creation time — so every call is idempotent. Shared derivations live in store (`DeriveDMConversationID`, `DeriveGroupConversationID`) and shared input rules in `internal/limits`, so the importer and the service layer can't drift.
 - Adapters in `internal/handler/store_adapters.go` bridge store and service interfaces
 - WebSocket (`nhooyr.io/websocket`) for real-time via Redis pub/sub fan-out across server instances
 - WebSocket endpoint: `POST /api/v1/ws/ticket` mints a one-time ticket, then `GET /api/v1/ws?ticket=<ticket>` connects (no JWT in the URL) — sends JSON `{"type":"...","data":"..."}`
