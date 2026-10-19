@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { userEvent } from 'vitest/browser';
 import { MessageList } from './MessageList';
+import { endReadSession, setUnreadAnchor } from '@/lib/read-position';
 import type { Attachment, Message } from '@/types';
 import { act, useState, type ReactNode } from 'react';
 
@@ -375,6 +376,88 @@ describe('MessageList browser behavior', () => {
       expect(bottomEdge(scrollerOf())).toBe('m-29');
       await resize(screen, 'up');
       expect(bottomEdge(scrollerOf())).toBe('m-29');
+    });
+  });
+
+  // A grouped message (same author, no header) shows its time, and the
+  // not-sent mark, beside the text. Outside the centred column when the list
+  // has room for it there; inside the row otherwise. It used to sit outside
+  // whatever the width, and a narrow list (a thread panel open beside it, a
+  // squeezed window) cut it off at its left edge.
+  // The "New messages" line runs where the messages do: in their centred
+  // column, not across the whole width of a wide window.
+  it('draws the unread line within the centred message column', async () => {
+    setUnreadAnchor('ch-1', { kind: 'message', messageID: 'm-3' });
+    try {
+      const all = Array.from({ length: 6 }, (_, i) => msg(i, { authorID: 'u-2' }));
+      await render(
+        <div style={{ height: 500, width: 1400, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <MessageList
+            pages={[{ items: [...all].reverse() }]}
+            hasNextPage={false}
+            isFetchingNextPage={false}
+            isLoading={false}
+            fetchNextPage={vi.fn()}
+            hasPreviousPage={false}
+            isFetchingPreviousPage={false}
+            fetchPreviousPage={vi.fn()}
+            currentUserId="u-1"
+            channelId="ch-1"
+            channelSlug="general"
+            userMap={{ 'u-1': { displayName: 'Alice' }, 'u-2': { displayName: 'Bob' } }}
+          />
+        </div>,
+      );
+      await vi.waitFor(() => expect(laidOutElement('[data-unread-divider]')).not.toBeNull(), { timeout: 3000 });
+      const line = laidOutElement('[data-unread-divider]')!.getBoundingClientRect();
+      const message = laidOutElement('[data-message-id="m-3"]')!.getBoundingClientRect();
+      // The message row sits inside the column's 16px side padding.
+      expect(line.left).toBeGreaterThanOrEqual(message.left - 17);
+      expect(line.right).toBeLessThanOrEqual(message.right + 17);
+    } finally {
+      endReadSession('ch-1');
+    }
+  });
+
+  describe("a grouped message's time", () => {
+    async function renderAt(width: number) {
+      const all = Array.from({ length: 6 }, (_, i) => msg(i, { authorID: 'u-1' }));
+      await render(
+        <div style={{ height: 500, width, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <MessageList
+            pages={[{ items: [...all].reverse() }]}
+            hasNextPage={false}
+            isFetchingNextPage={false}
+            isLoading={false}
+            fetchNextPage={vi.fn()}
+            hasPreviousPage={false}
+            isFetchingPreviousPage={false}
+            fetchPreviousPage={vi.fn()}
+            currentUserId="u-1"
+            channelId="ch-1"
+            channelSlug="general"
+            userMap={{ 'u-1': { displayName: 'Alice' } }}
+          />
+        </div>,
+      );
+      await vi.waitFor(() => expect(laidOutElement('[data-message-id="m-5"] [data-testid="group-time-gutter"]')).not.toBeNull(), { timeout: 3000 });
+      const row = laidOutElement('[data-message-id="m-5"]')!.getBoundingClientRect();
+      const gutter = laidOutElement('[data-message-id="m-5"] [data-testid="group-time-gutter"]')!.getBoundingClientRect();
+      const list = laidOutElement('[data-testid="virtuoso-scroller"]')!.getBoundingClientRect();
+      return { row, gutter, list };
+    }
+
+    it('sits inside the row when the list is too narrow to hold it outside the column', async () => {
+      const { row, gutter, list } = await renderAt(700);
+      expect(gutter.left).toBeGreaterThanOrEqual(list.left);
+      expect(gutter.left).toBeGreaterThanOrEqual(row.left);
+      expect(gutter.right).toBeLessThanOrEqual(row.right + 1);
+    });
+
+    it('sits just outside the column, left of the text, when the list has room', async () => {
+      const { row, gutter, list } = await renderAt(1200);
+      expect(gutter.right).toBeLessThanOrEqual(row.left + 1);
+      expect(gutter.left).toBeGreaterThanOrEqual(list.left);
     });
   });
 

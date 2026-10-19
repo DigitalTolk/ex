@@ -56,26 +56,28 @@ describe('LoginPage', () => {
     ).toBeInTheDocument();
   });
 
-  // Typing a password lights the submit button up in the brand pink.
-  it('turns Sign in pink once a password is typed, and back when cleared', async () => {
+  // Typing a password makes Sign in the primary button: near-black, and pink
+  // only in dark mode, like every primary button (CLAUDE.md design system).
+  it('turns Sign in into the primary button once a password is typed, and back when cleared', async () => {
     renderLoginPage();
     const password = await screen.findByLabelText(/password/i);
     const signIn = screen.getByRole('button', { name: /sign in$/i });
-    expect(signIn).not.toHaveClass('bg-brand');
+    expect(signIn).toHaveClass('bg-secondary');
     expect(signIn).not.toHaveAttribute('data-ready');
     fireEvent.change(password, { target: { value: 'x' } });
-    expect(signIn).toHaveClass('bg-brand');
+    expect(signIn).toHaveClass('bg-primary');
+    expect(signIn).not.toHaveClass('bg-brand');
     expect(signIn).toHaveAttribute('data-ready', 'true');
     fireEvent.change(password, { target: { value: '' } });
-    expect(signIn).not.toHaveClass('bg-brand');
+    expect(signIn).toHaveClass('bg-secondary');
   });
 
-  it('turns Create Account pink once a password is typed on an invite', async () => {
+  it('keeps Create Account the primary button, never pink in light mode', async () => {
     renderLoginPage('/invite/abc123');
     const create = await screen.findByRole('button', { name: /create account/i });
-    expect(create).not.toHaveClass('bg-brand');
     fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'secret' } });
-    expect(create).toHaveClass('bg-brand');
+    expect(create).toHaveClass('bg-primary');
+    expect(create).not.toHaveClass('bg-brand');
   });
 
   it('shows invite form when token param is present', async () => {

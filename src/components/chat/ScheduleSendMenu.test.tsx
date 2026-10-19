@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { ScheduleSendMenu } from './ScheduleSendMenu';
+import { SCHEDULE_PRESETS } from '@/lib/schedule-times';
 
 vi.mock('@/components/ui/dropdown-menu');
 
@@ -131,10 +132,33 @@ describe('ScheduleSendMenu (hold mode)', () => {
     editor.remove();
   });
 
+  // A finger that starts on Send and slides off into a scroll is not a hold.
+  it('a press that moves before the hold completes never opens the options', async () => {
+    const { button, onOpenChange, editor } = renderHold();
+    fireEvent.pointerDown(button, { clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(button, { clientX: 10, clientY: 40 });
+    await wait(HOLD_WAIT);
+    expect(screen.queryByTestId('schedule-send-hold-menu')).toBeNull();
+    expect(onOpenChange).not.toHaveBeenCalled();
+    editor.remove();
+  });
+
+  it('a press cut short by the composer going away opens nothing later', async () => {
+    const { button, onOpenChange, editor, unmount } = renderHold();
+    fireEvent.pointerDown(button);
+    unmount();
+    await wait(HOLD_WAIT);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    editor.remove();
+  });
+
   it('a failed schedule is swallowed (the composer keeps its text)', async () => {
     const { button, onSchedule, editor } = renderHold(vi.fn().mockRejectedValue(new Error('nope')));
     await hold(button);
-    fireEvent.click(await screen.findByLabelText(/^Send Monday at/));
+    // The label is the app's own, in the runtime's locale ("Monday", "Mon",
+    // "måndag" …), never a hard-coded English one.
+    const nextWeek = SCHEDULE_PRESETS.find((p) => p.key === 'nextweek')!.label;
+    fireEvent.click(await screen.findByLabelText(`Send ${nextWeek}`));
     await act(async () => {});
     expect(onSchedule).toHaveBeenCalledTimes(1);
     editor.remove();

@@ -17,11 +17,6 @@ export default function LoginPage() {
   const { login, setAuth } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  // The submit button lights up in the brand pink once a password is typed —
-  // the cue that the form is ready to go.
-  const readyClass = password
-    ? 'bg-brand text-brand-foreground hover:bg-brand-hover dark:bg-brand dark:hover:bg-brand-hover'
-    : '';
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -139,9 +134,8 @@ export default function LoginPage() {
             </div>
             <Button
               type="submit"
-              className={`w-full transition-colors ${readyClass}`}
+              className="w-full"
               disabled={isSubmitting}
-              data-ready={password ? 'true' : undefined}
             >
               {isSubmitting ? 'Setting up...' : 'Create Account'}
             </Button>
@@ -196,8 +190,11 @@ export default function LoginPage() {
               </div>
               <Button
                 type="submit"
-                variant="secondary"
-                className={`w-full transition-colors ${readyClass}`}
+                // Becomes the primary button once a password is typed — the
+                // cue that the form is ready to go (near-black, pink in dark
+                // mode, like every primary button).
+                variant={password ? 'default' : 'secondary'}
+                className="w-full transition-colors"
                 disabled={isSubmitting}
                 data-ready={password ? 'true' : undefined}
               >

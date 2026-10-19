@@ -83,7 +83,7 @@ const TYPE_ICON = {
 
 // Each kind of activity names itself at the top of its row, so a mention, a
 // thread reply and a DM read differently at a glance.
-const TYPE_LABEL: Record<string, string> = {
+const TYPE_LABEL: Record<keyof typeof TYPE_ICON | 'reaction', string> = {
   mention: 'Mention',
   thread_reply: 'Thread reply',
   dm: 'Direct message',
@@ -193,7 +193,7 @@ export const ActivityRowView = memo(function ActivityRowView({
                   data-testid="activity-row-kind"
                 >
                   <KindIcon className="h-3 w-3" aria-hidden="true" />
-                  {TYPE_LABEL[item.type] ?? 'Activity'}
+                  {TYPE_LABEL[item.type as keyof typeof TYPE_LABEL] ?? 'Activity'}
                 </span>
                 <span className="flex min-w-0 items-center gap-1 font-semibold text-sidebar-foreground" data-testid="activity-row-where">
                   {item.parentType === 'conversation' ? (

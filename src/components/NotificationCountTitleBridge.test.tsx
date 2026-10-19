@@ -20,6 +20,15 @@ const mockState = vi.hoisted(() => ({
   threadSeen: {} as Record<string, string>,
   channels: [] as { channelID: string; muted?: boolean; unreadCount?: number; unreadNotifyCount?: number }[],
   conversations: [] as { conversationID: string; unreadCount?: number; unreadNotifyCount?: number }[],
+  activityOnly: 0,
+  activityEnabled: [] as boolean[],
+}));
+
+vi.mock('@/hooks/useActivity', () => ({
+  useActivityOnlyUnread: (enabled: boolean) => {
+    mockState.activityEnabled.push(enabled);
+    return mockState.activityOnly;
+  },
 }));
 
 vi.mock('@/context/AuthContext', () => ({
@@ -85,12 +94,29 @@ describe('NotificationCountTitleBridge', () => {
     mockState.threadSeen = {};
     mockState.channels = [];
     mockState.conversations = [];
+    mockState.activityOnly = 0;
+    mockState.activityEnabled = [];
   });
 
   afterEach(() => {
     act(() => {
       setDocumentNotificationCount(0);
     });
+  });
+
+  // The Activity bell showed 1 (being added to a channel) while the title and
+  // the app icon showed nothing: that kind of activity is in no message count.
+  it('counts unread activity that is no message or thread', async () => {
+    mockState.conversations = [{ conversationID: 'conv-1', unreadNotifyCount: 2 }];
+    mockState.activityOnly = 1;
+    render(
+      <>
+        <NotificationCountTitleBridge />
+        <TitleConsumer />
+      </>,
+    );
+    await waitFor(() => expect(document.title).toBe('(3) Threads · ex'));
+    expect(mockState.activityEnabled.at(-1)).toBe(true);
   });
 
   it('sums channel + DM alerted counts and the thread count into the title', async () => {

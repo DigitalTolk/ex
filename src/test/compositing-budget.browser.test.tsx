@@ -5,6 +5,7 @@ import { CodeBlock } from '@/components/chat/CodeBlock';
 import { UnreadBanner } from '@/components/chat/UnreadMarkers';
 import { NoticeCard } from '@/components/chat/NoticeCardChrome';
 import { LoadingBar } from '@/components/layout/LoadingBar';
+import { SCROLL_FADE_BOTTOM, SCROLL_FADE_TOP } from '@/lib/scroll-fade';
 
 // What a phone's GPU is asked to keep. A backdrop blur makes its element a
 // layer of its own that re-samples everything behind it on every frame of a
@@ -33,6 +34,18 @@ describe('compositing budget of a conversation', () => {
       </div>,
     );
     await vi.waitFor(() => expect(document.querySelectorAll('[data-testid="code-copy-button"]')).toHaveLength(5));
+    expect(blurred()).toEqual([]);
+  });
+
+  // The sidebar's lists fade under the header, the Activity filters and the
+  // account strip — fades that stay mounted (at opacity 0) while unscrolled.
+  it("the sidebar's scroll fades blur nothing", async () => {
+    await render(
+      <div style={{ position: 'relative', width: 336, height: 400 }}>
+        <div className={`${SCROLL_FADE_TOP} top-0`} />
+        <div className={`${SCROLL_FADE_BOTTOM} bottom-0`} />
+      </div>,
+    );
     expect(blurred()).toEqual([]);
   });
 

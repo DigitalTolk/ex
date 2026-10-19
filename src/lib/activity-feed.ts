@@ -43,6 +43,15 @@ export function badgeUnread(feed: Pick<ActivityFeed, 'unread' | 'unreadByType'>)
   return Math.max(0, feed.unread - (feed.unreadByType.reaction ?? 0));
 }
 
+// activityOnlyUnread counts the unread activity no other unread count holds:
+// being added to a channel, and a reminder that came due. A mention, a DM or a
+// thread reply is also an unread message or thread, already counted where
+// those are (the tab title and app icon add them up) — counting it here too
+// would count it twice.
+export function activityOnlyUnread(feed: Pick<ActivityFeed, 'unreadByType'>): number {
+  return (feed.unreadByType.channel_added ?? 0) + (feed.unreadByType.reminder ?? 0);
+}
+
 // applyActivityChange applies an activity.read change to the feed. It returns
 // null when only the server can say what changed — reading part of a channel,
 // conversation or thread flips items by message time, and an edit's new

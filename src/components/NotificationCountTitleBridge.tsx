@@ -6,6 +6,7 @@ import { getSeenMap, mergeSeenMaps, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, 
 import { useUserState } from '@/hooks/useUserState';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
+import { useActivityOnlyUnread } from '@/hooks/useActivity';
 
 export function NotificationCountTitleBridge() {
   const { isAuthenticated } = useAuth();
@@ -48,7 +49,12 @@ export function NotificationCountTitleBridge() {
     return total;
   }, [channels, conversations]);
 
-  const count = isAuthenticated ? messageTotal + unreadThreads : 0;
+  // And the unread activity that is no message or thread — being added to a
+  // channel, a reminder that came due — so the Activity bell's number is in
+  // the title and on the app icon too.
+  const activityOnly = useActivityOnlyUnread(isAuthenticated);
+
+  const count = isAuthenticated ? messageTotal + unreadThreads + activityOnly : 0;
 
   useEffect(() => {
     setDocumentNotificationCount(count);

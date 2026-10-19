@@ -1,4 +1,3 @@
-import { SCROLL_FADE_TOP, scrolledOffTop } from '@/lib/scroll-fade';
 import { memo, useCallback, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { GroupedVirtuoso } from 'react-virtuoso';
@@ -19,6 +18,7 @@ import { ActivityRowView } from './ActivityRow';
 import { ActivityReminderDialog } from './ActivityReminderDialog';
 import { newActivityReminder, type ActivityReminder } from '@/lib/activity-reminder';
 import { PendingReminders } from './PendingReminders';
+import { SCROLL_FADE_TOP, trackScrolledOffTop } from '@/lib/scroll-fade';
 
 function pathOf(href: string): string {
   return href.split(/[?#]/)[0];
@@ -152,7 +152,7 @@ export const ActivityPanel = memo(function ActivityPanel({ onNavigate }: Activit
 
       <ScrollArea
         className="min-h-0 flex-1"
-        onScrollCapture={(e) => setScrolled(scrolledOffTop(e))}
+        onScrollCapture={trackScrolledOffTop(setScrolled)}
         data-testid="activity-scroll-area"
       >
         <div className="px-2 pb-3">

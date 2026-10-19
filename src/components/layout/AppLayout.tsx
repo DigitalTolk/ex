@@ -1,4 +1,3 @@
-import { SCROLL_FADE_TOP, scrolledOffTop } from '@/lib/scroll-fade';
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type WheelEvent } from 'react';
 import { matchPath, useLocation } from 'react-router-dom';
 import { takeOpenChannelsRequest, useOpenChannelsRequest } from '@/lib/mobile-nav';
@@ -26,6 +25,7 @@ import { SWIPE_SURFACE_ATTR, shouldCommitSwipe, swipeStartsOn } from '@/lib/swip
 import { UpdateBanner } from '@/components/UpdateBanner';
 import { LoadingBar } from '@/components/layout/LoadingBar';
 import { NotificationPermissionBanner } from '@/components/NotificationPermissionBanner';
+import { SCROLL_FADE_TOP, trackScrolledOffTop } from '@/lib/scroll-fade';
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -74,7 +74,7 @@ const SidebarBody = memo(function SidebarBody({ onClose }: { onClose: () => void
   return (
     // isolate: the fades' z-index stays inside the list, never above the
     // phone tab bar or other chrome.
-    <div className="relative isolate min-h-0 flex-1" onScrollCapture={(e) => setScrolled(scrolledOffTop(e))}>
+    <div className="relative isolate min-h-0 flex-1" onScrollCapture={trackScrolledOffTop(setScrolled)}>
       {mode === 'activity' ? <ActivityPanel onNavigate={onClose} /> : <Sidebar onClose={onClose} />}
       {/* Once scrolled, channels fade softly under the header. (Activity
           fades below its own filters instead.) */}

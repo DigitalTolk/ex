@@ -7,7 +7,7 @@ import { useActivityRowData } from '@/hooks/useActivityRowData';
 import { useCalendarDay } from '@/hooks/useCalendarDay';
 import { currentLayoutTier } from '@/lib/device';
 import type { ActivityRow } from '@/lib/activity-feed';
-import { setSidebarMode, useSidebarModeStore } from '@/stores/sidebar-mode';
+import { setActivityUnreadOnly, setSidebarMode, useSidebarModeStore } from '@/stores/sidebar-mode';
 import { ActivityRowView } from './ActivityRow';
 import { ActivityReminderDialog } from './ActivityReminderDialog';
 import { newActivityReminder, type ActivityReminder } from '@/lib/activity-reminder';
@@ -113,7 +113,9 @@ function ActivityPreviewContent({ onPointerEnter, onPointerLeave, onClose, onRem
   const { feed, isLoading, allRows, hrefFor, slugFor, users, emojiMap, channelByID, conversationByID, openRow, onSetRead, onRemove, onClearBefore, onCopyLink, onMuteThread } =
     useActivityRowData();
   const remind = useCallback((row: ActivityRow) => onRemind(row, slugFor(row)), [onRemind, slugFor]);
-  const [unreadOnly, setUnreadOnly] = useState(false);
+  // The same Unreads setting as the Activity sidebar's (stores/sidebar-mode):
+  // turning it on here filters there too, and the other way round.
+  const unreadOnly = useSidebarModeStore((st) => st.unreadOnly);
   const today = useCalendarDay();
   // A row's "..." menu is portaled outside the card, so the pointer "leaves"
   // the card on its way to a menu item. While a menu is open the card stays;
@@ -149,7 +151,7 @@ function ActivityPreviewContent({ onPointerEnter, onPointerLeave, onClose, onRem
         <h2 className="text-sm font-semibold">Activity</h2>
         <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
           Unreads
-          <Switch size="sm" checked={unreadOnly} onCheckedChange={setUnreadOnly} data-testid="activity-preview-unreads" />
+          <Switch size="sm" checked={unreadOnly} onCheckedChange={setActivityUnreadOnly} data-testid="activity-preview-unreads" />
         </label>
       </div>
       <div className="max-h-96 overflow-y-auto px-1 py-1">

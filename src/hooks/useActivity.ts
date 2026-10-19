@@ -5,6 +5,7 @@ import { showToast } from '@/lib/toast';
 import { flashReaction } from '@/stores/reaction-flash';
 import {
   addActivityItem,
+  activityOnlyUnread,
   applyActivityChange,
   badgeUnread,
   markActivityItems,
@@ -44,6 +45,13 @@ export function useActivity() {
 // that shows only the count doesn't re-render when the list changes.
 export function useActivityUnread(): number {
   return useQuery({ ...activityQuery, select: badgeUnread }).data ?? 0;
+}
+
+// useActivityOnlyUnread is the unread activity that is in no message or
+// thread count (lib/activity-feed activityOnlyUnread), for the tab title and
+// app icon. `enabled` keeps it from asking before the user is signed in.
+export function useActivityOnlyUnread(enabled: boolean): number {
+  return useQuery({ ...activityQuery, enabled, select: activityOnlyUnread }).data ?? 0;
 }
 
 // useReminders loads the user's pending (not-yet-fired) reminders.

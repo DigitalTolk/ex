@@ -92,6 +92,21 @@ describe('AccountMenu (browser)', () => {
     await expect.element(screen.getByText('AW')).toBeVisible();
   });
 
+  // The fade over the open menu's top edge is a gradient: a backdrop blur
+  // there would be one more GPU layer (src/test/compositing-budget).
+  it('fades the list above the open menu without blurring it', async () => {
+    const screen = await renderMenu();
+    await screen.getByTestId('account-menu-trigger').click();
+    const popup = await vi.waitFor(() => {
+      const el = document.querySelector('[role="menu"]');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    const fade = getComputedStyle(popup.parentElement!, '::before');
+    expect(fade.backgroundImage).toContain('gradient');
+    expect([fade.backdropFilter || 'none', fade.getPropertyValue('-webkit-backdrop-filter') || 'none']).toEqual(['none', 'none']);
+  });
+
   it('exposes admin-only menu items (Invite, Emoji manager) for an admin', async () => {
     const screen = await renderMenu();
     await screen.getByTestId('account-menu-trigger').click();

@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ActivityModeSwitch } from './ActivityModeSwitch';
 import { apiFetch } from '@/lib/api';
-import { resetSidebarModeSessionState, setSidebarMode, useSidebarModeStore } from '@/stores/sidebar-mode';
+import { resetSidebarModeSessionState, setActivityUnreadOnly, setSidebarMode, useSidebarModeStore } from '@/stores/sidebar-mode';
 import { PREVIEW_CLOSE_DELAY_MS } from './ActivityHoverPreview';
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
@@ -88,6 +88,21 @@ describe('ActivityHoverPreview', () => {
     fireEvent.click(screen.getByTestId('activity-preview-unreads'));
     await waitFor(() => expect(within(card).getAllByTestId('activity-row')).toHaveLength(1));
     expect(within(card).getByText('can you check?')).toBeInTheDocument();
+  });
+
+  // One Unreads setting for the card and the Activity sidebar: it used to be
+  // the card's own, so the two disagreed as soon as either was switched.
+  it('shares its Unreads setting with the Activity sidebar', async () => {
+    act(() => setActivityUnreadOnly(true));
+    renderSwitch();
+    hover();
+    const card = await preview();
+    const toggle = screen.getByTestId('activity-preview-unreads');
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await waitFor(() => expect(within(card).getAllByTestId('activity-row')).toHaveLength(1));
+    fireEvent.click(toggle);
+    expect(useSidebarModeStore.getState().unreadOnly).toBe(false);
+    await waitFor(() => expect(within(card).getAllByTestId('activity-row')).toHaveLength(3));
   });
 
   it('opening a row reads it and closes the card; Open Activity switches the sidebar', async () => {

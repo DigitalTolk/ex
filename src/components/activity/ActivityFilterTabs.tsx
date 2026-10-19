@@ -83,6 +83,8 @@ export function ActivityFilterTabs({ filter, unread }: ActivityFilterTabsProps) 
               >
                 <span className="overflow-hidden whitespace-nowrap">{t.label}</span>
               </span>
+              {/* The underline sits on the list's bottom border: the tab's 4px
+                  margin (my-1) plus the 1px border, so -bottom-1.25 (5px). */}
               <span
                 className={`pointer-events-none absolute inset-x-1 -bottom-1.25 h-0.5 mobile:-bottom-px rounded-full bg-sidebar-foreground transition-transform duration-300 ${EASE} motion-reduce:transition-none ${
                   active ? 'scale-x-100' : 'scale-x-0'

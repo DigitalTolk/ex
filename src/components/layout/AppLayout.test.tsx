@@ -155,6 +155,9 @@ describe('AppLayout', () => {
     const fade = within(aside).getByTestId('sidebar-top-fade');
     expect(fade).toHaveClass('opacity-0');
     const scroller = within(aside).getByTestId('sidebar');
+    // A list longer than its view (jsdom lays nothing out).
+    Object.defineProperty(scroller, 'scrollHeight', { value: 900, configurable: true });
+    Object.defineProperty(scroller, 'clientHeight', { value: 300, configurable: true });
     Object.defineProperty(scroller, 'scrollTop', { value: 40, configurable: true });
     fireEvent.scroll(scroller);
     expect(fade).toHaveClass('opacity-100');

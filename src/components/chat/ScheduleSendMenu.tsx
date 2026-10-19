@@ -1,8 +1,8 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useState, type ComponentType, type ReactNode } from 'react';
 import { CalendarClock, ChevronDown, Clock } from 'lucide-react';
 import { Popover } from '@base-ui/react/popover';
 import { blurActiveInput } from '@/lib/blur-input';
-import { triggerMessageActionHaptic } from '@/lib/haptics';
+import { useLongPress } from '@/hooks/useLongPress';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,6 +13,9 @@ import {
 import { ReminderDialog, type DateTimeDialogCopy, type QuickPick } from '@/components/chat/ReminderDialog';
 import { SCHEDULE_PRESETS, scheduleTimeFor } from '@/lib/schedule-times';
 import { computeReminderTime, toLocalInputValue } from '@/lib/reminder-times';
+
+// The last option in both the desktop menu and the phone popover.
+const CUSTOM = { label: 'Custom time…', ariaLabel: 'Pick a custom time' };
 
 const SCHEDULE_COPY: DateTimeDialogCopy = {
   title: 'Schedule message',
@@ -46,9 +49,6 @@ interface ScheduleSendMenuProps {
   hold?: { onSend: () => void; label: string; children: ReactNode };
 }
 
-// How long a press on Send must last before it opens the schedule options.
-const HOLD_MS = 450;
-
 // ScheduleSendMenu is the small ⌄ beside Send (or, on a phone, a press and
 // hold on Send itself): send this message later instead — tomorrow morning,
 // next Monday morning, or at a custom time.
@@ -61,30 +61,21 @@ export function ScheduleSendMenu({ disabled, onSchedule, onOpenChange, className
     setOpen(next);
     onOpenChange?.(next);
   };
-  // Hold-to-open (phone): only the hold opens the menu, never a tap — the
-  // trigger's own press-to-open is refused, and the tap that ends a hold
-  // doesn't also send.
-  const holdTimer = useRef<number | undefined>(undefined);
-  const held = useRef(false);
-  const cancelHold = () => window.clearTimeout(holdTimer.current);
-  const startHold = () => {
-    held.current = false;
-    cancelHold();
-    holdTimer.current = window.setTimeout(() => {
-      held.current = true;
-      triggerMessageActionHaptic();
-      changeOpen(true);
-    }, HOLD_MS);
-  };
+  // Hold-to-open (phone), with the app's one long-press (useLongPress): a
+  // press held still opens the options, a finger that moves is a scroll, and
+  // the click that ends a hold is swallowed instead of also sending.
+  const longPress = useLongPress({ onLongPress: () => changeOpen(true), enabled: !!hold && !disabled });
   const tapSend = () => {
-    if (held.current) {
-      held.current = false;
-      return;
-    }
+    if (longPress.shouldSuppressClick()) return;
     hold?.onSend();
   };
-  const schedulePreset = (key: (typeof SCHEDULE_PRESETS)[number]['key']) =>
-    void onSchedule(scheduleTimeFor(key, new Date())).catch(() => undefined);
+  // The options, the same in the desktop menu and the phone popover.
+  const presets = SCHEDULE_PRESETS.map((preset) => ({
+    key: preset.key,
+    label: preset.label,
+    ariaLabel: `Send ${preset.label}`,
+    pick: () => void onSchedule(scheduleTimeFor(preset.key, new Date())).catch(() => undefined),
+  }));
   const openCustom = () => setCustomSeed(toLocalInputValue(scheduleTimeFor('tomorrow', new Date())));
 
   return (
@@ -104,10 +95,7 @@ export function ScheduleSendMenu({ disabled, onSchedule, onOpenChange, className
         >
           <Popover.Trigger
             nativeButton
-            onPointerDown={startHold}
-            onPointerUp={cancelHold}
-            onPointerLeave={cancelHold}
-            onPointerCancel={cancelHold}
+            {...longPress.handlers}
             // No text-selection callout or context menu under a held finger.
             onContextMenu={(e) => e.preventDefault()}
             onClick={tapSend}
@@ -133,31 +121,31 @@ export function ScheduleSendMenu({ disabled, onSchedule, onOpenChange, className
                 data-keeps-keyboard=""
               >
                 <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Schedule message</div>
-                {SCHEDULE_PRESETS.map((preset) => (
+                {presets.map((preset) => (
                   <HoldOption
                     key={preset.key}
-                    label={`Send ${preset.label}`}
+                    label={preset.ariaLabel}
+                    icon={CalendarClock}
                     onSelect={() => {
                       changeOpen(false);
                       // Done composing: the keyboard goes down with the choice.
                       blurActiveInput();
-                      schedulePreset(preset.key);
+                      preset.pick();
                     }}
                   >
-                    <CalendarClock className="mr-2 h-4 w-4" />
                     {preset.label}
                   </HoldOption>
                 ))}
                 <div className="-mx-1 my-1 h-px bg-border" />
                 <HoldOption
-                  label="Pick a custom time"
+                  label={CUSTOM.ariaLabel}
+                  icon={Clock}
                   onSelect={() => {
                     changeOpen(false);
                     openCustom();
                   }}
                 >
-                  <Clock className="mr-2 h-4 w-4" />
-                  Custom time…
+                  {CUSTOM.label}
                 </HoldOption>
               </Popover.Popup>
             </Popover.Positioner>
@@ -180,16 +168,16 @@ export function ScheduleSendMenu({ disabled, onSchedule, onOpenChange, className
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
             <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Schedule message</div>
-            {SCHEDULE_PRESETS.map((preset) => (
-              <DropdownMenuItem key={preset.key} onClick={() => schedulePreset(preset.key)} aria-label={`Send ${preset.label}`}>
+            {presets.map((preset) => (
+              <DropdownMenuItem key={preset.key} onClick={preset.pick} aria-label={preset.ariaLabel}>
                 <CalendarClock className="mr-2 h-4 w-4" />
                 {preset.label}
               </DropdownMenuItem>
             ))}
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={openCustom} aria-label="Pick a custom time">
+            <DropdownMenuItem onClick={openCustom} aria-label={CUSTOM.ariaLabel}>
               <Clock className="mr-2 h-4 w-4" />
-              Custom time…
+              {CUSTOM.label}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -211,7 +199,17 @@ export function ScheduleSendMenu({ disabled, onSchedule, onOpenChange, className
 
 // One option in the phone's hold-to-schedule popover: a plain button, finger
 // sized, styled like a menu item.
-function HoldOption({ label, onSelect, children }: { label: string; onSelect: () => void; children: ReactNode }) {
+function HoldOption({
+  label,
+  icon: Icon,
+  onSelect,
+  children,
+}: {
+  label: string;
+  icon: ComponentType<{ className?: string }>;
+  onSelect: () => void;
+  children: ReactNode;
+}) {
   return (
     <button
       type="button"
@@ -219,6 +217,7 @@ function HoldOption({ label, onSelect, children }: { label: string; onSelect: ()
       aria-label={label}
       className="flex h-11 w-full items-center rounded-md px-2 text-left text-base active:bg-accent active:text-accent-foreground"
     >
+      <Icon className="mr-2 h-4 w-4" />
       {children}
     </button>
   );

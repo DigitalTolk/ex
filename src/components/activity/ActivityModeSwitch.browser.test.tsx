@@ -8,7 +8,7 @@ import { resetSidebarModeSessionState } from '@/stores/sidebar-mode';
 
 vi.mock('@/lib/api', async (orig) => ({ ...(await orig<object>()), apiFetch: vi.fn() }));
 
-describe('ActivityModeSwitch unread dot', () => {
+describe('ActivityModeSwitch unread badge', () => {
   beforeEach(() => {
     resetSidebarModeSessionState();
     vi.mocked(apiFetch).mockReset();
@@ -18,7 +18,7 @@ describe('ActivityModeSwitch unread dot', () => {
     cleanup();
   });
 
-  it('sits on the bell, inside the pill and unclipped, with no count', async () => {
+  it('hangs off the bell without being clipped by the pill', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const screen = await render(
       <QueryClientProvider client={qc}>
@@ -29,18 +29,17 @@ describe('ActivityModeSwitch unread dot', () => {
         </MemoryRouter>
       </QueryClientProvider>,
     );
-    const dot = screen.getByTestId('activity-unread-dot');
-    await expect.element(dot).toBeVisible();
-    expect(dot.element()).toBeEmptyDOMElement();
+    const badge = screen.getByTestId('activity-unread-badge');
+    await expect.element(badge).toHaveTextContent('1');
 
-    // The dot sits on the bell, inside the icon-sized Activity pill. Hit-test
-    // its centre: a clipped dot would hand the point to the button instead.
+    // The badge pokes out past the right edge of the icon-sized Activity pill.
+    // Hit-test its far corner: a clipped badge would hand the point to the
+    // button (or whatever lies behind it) instead.
     const button = screen.getByTestId('sidebar-mode-activity').element();
-    const rect = dot.element().getBoundingClientRect();
+    const rect = badge.element().getBoundingClientRect();
     const pill = button.getBoundingClientRect();
-    expect(rect.right).toBeLessThanOrEqual(pill.right);
-    expect(rect.top).toBeGreaterThanOrEqual(pill.top);
-    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-    expect(dot.element().contains(hit)).toBe(true);
+    expect(rect.right).toBeGreaterThan(pill.right);
+    const hit = document.elementFromPoint(rect.right - 1, rect.top + rect.height / 2);
+    expect(badge.element().contains(hit)).toBe(true);
   });
 });

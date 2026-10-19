@@ -1,4 +1,3 @@
-import { SCROLL_FADE_BOTTOM } from '@/lib/scroll-fade';
 import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -45,6 +44,7 @@ import { AboutDialog } from '@/components/AboutDialog';
 import { InviteDialog } from '@/components/InviteDialog';
 import { MOBILE_TAB_CLASS } from './mobile-tab';
 import { RunnersDialog } from '@/components/RunnersDialog';
+import { SCROLL_FADE_BOTTOM } from '@/lib/scroll-fade';
 
 interface MenuAction {
   key: string;
@@ -280,7 +280,7 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
         className="relative shrink-0 border-t border-sidebar-border p-2 mobile:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]"
         data-testid="sidebar-account"
       >
-        {/* The list fades and softly blurs as it scrolls under the account. */}
+        {/* The list fades as it scrolls under the account. */}
         <div
           className={`${SCROLL_FADE_BOTTOM} bottom-full`}
           aria-hidden="true"
@@ -309,11 +309,11 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
               // insets), so it scales with the sidebar and never spills past
               // it; the floor is the narrowest sidebar (256px) less those.
               className="min-w-60"
-              // The same soft fade-and-blur as above the account strip, here
-              // over the open menu's top edge. It tucks under the menu's
+              // The same soft fade as above the account strip, here over the
+              // open menu's top edge. It tucks under the menu's
               // rounded top (painted behind it) so no sliver of the list shows
               // between them.
-              positionerClassName="before:pointer-events-none before:absolute before:-z-10 before:inset-x-0 before:bottom-full before:-mb-3 before:h-13 before:bg-gradient-to-t before:from-sidebar before:to-transparent before:backdrop-blur-[2px] before:[mask-image:linear-gradient(to_top,black,transparent)] before:content-['']"
+              positionerClassName="before:pointer-events-none before:absolute before:-z-10 before:inset-x-0 before:bottom-full before:-mb-3 before:h-13 before:bg-gradient-to-t before:from-sidebar before:to-transparent before:[mask-image:linear-gradient(to_top,black,transparent)] before:content-['']"
             >
               {status && (
                 <>

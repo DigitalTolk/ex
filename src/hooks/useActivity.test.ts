@@ -12,13 +12,14 @@ import {
   useCancelReminder,
   useMarkActivityRead,
   useActivityUnread,
+  useActivityOnlyUnread,
   useRemoveActivityItems,
   useSetActivityItemsRead,
 } from './useActivity';
 import { queryKeys } from '@/lib/query-keys';
 import { getReactionFlash, resetReactionFlashForTests } from '@/stores/reaction-flash';
 import type { ActivityFeed } from '@/types';
-import { badgeUnread } from '@/lib/activity-feed';
+import { activityOnlyUnread, badgeUnread } from '@/lib/activity-feed';
 
 vi.mock('@/lib/api', async (orig) => ({ ...(await orig<object>()), apiFetch: vi.fn() }));
 vi.mock('@/lib/toast', () => ({ showToast: vi.fn() }));
@@ -334,6 +335,26 @@ describe('activity events', () => {
     applyRemindersChangedEvent(client);
     expect(invalidate).toHaveBeenCalledTimes(1);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.reminders() });
+  });
+});
+
+describe('useActivityOnlyUnread', () => {
+  it('counts channel adds and due reminders only, 0 until the feed loads', async () => {
+    let resolve: (v: unknown) => void = () => {};
+    vi.mocked(apiFetch).mockImplementation(() => new Promise((r) => (resolve = r)) as never);
+    const { result } = renderHook(() => useActivityOnlyUnread(true), { wrapper: wrapperFor(makeClient()) });
+    expect(result.current).toBe(0);
+    resolve({ items: [], unread: 9, unreadByType: { mention: 3, dm: 2, thread_reply: 1, reaction: 1, channel_added: 1, reminder: 1 } });
+    await waitFor(() => expect(result.current).toBe(2));
+  });
+
+  it('asks nothing before sign-in', () => {
+    renderHook(() => useActivityOnlyUnread(false), { wrapper: wrapperFor(makeClient()) });
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
+  it('is 0 for a feed with none of those kinds', () => {
+    expect(activityOnlyUnread({ unreadByType: { mention: 4 } })).toBe(0);
   });
 });
 
