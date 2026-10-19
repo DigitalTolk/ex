@@ -25,7 +25,7 @@ export default function DraftsPage() {
   const scheduledCount = scheduled?.length ?? 0;
 
   return (
-    <PageContainer>
+    <PageContainer mobileTitle="Drafts">
       {/* The tabs head the page; the heading stays for screen readers. */}
       <h1 className="sr-only">Drafts</h1>
       <div>

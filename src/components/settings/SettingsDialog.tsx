@@ -56,9 +56,9 @@ function SettingsBody({ initialPage, pageRef }: { initialPage: SettingsPage; pag
     <SaveStatusProvider>
       <nav
         aria-label="Settings sections"
-        className="border-r bg-sidebar px-2.5 py-5 narrow:border-r-0 narrow:border-b narrow:px-3 narrow:pt-[calc(env(safe-area-inset-top)+0.75rem)] narrow:pb-2"
+        className="border-r bg-sidebar px-2.5 py-5 narrow:border-r-0 narrow:border-b narrow:px-3 narrow:pt-[calc(env(safe-area-inset-top)+0.5rem)] narrow:pb-2"
       >
-        <DialogTitle className="mx-2.5 mb-4 text-[15px] font-semibold narrow:mb-2 narrow:h-9 narrow:leading-9">
+        <DialogTitle className="mx-2.5 mb-4 text-base leading-6 font-semibold narrow:mb-2 narrow:h-9 narrow:text-xl narrow:leading-9">
           Settings
         </DialogTitle>
         <div className="flex flex-col gap-0.5 narrow:flex-row narrow:overflow-x-auto">

@@ -354,7 +354,8 @@ export type ActivityType =
   | 'mention'
   | 'thread_reply'
   | 'dm'
-  | 'channel_added';
+  | 'channel_added'
+  | 'channel_message';
 
 export type MentionKind = 'user' | 'all' | 'here' | 'keyword';
 

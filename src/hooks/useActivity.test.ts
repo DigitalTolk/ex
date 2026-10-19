@@ -347,6 +347,11 @@ describe('useActivityUnread', () => {
     await waitFor(() => expect(result.current).toBe(7));
   });
 
+  it('asks nothing until enabled (before sign-in)', () => {
+    renderHook(() => useActivityUnread(false), { wrapper: wrapperFor(makeClient()) });
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
   it('leaves reactions out of the count', async () => {
     vi.mocked(apiFetch).mockResolvedValue({ items: [], unread: 5, unreadByType: { reaction: 2, mention: 3 } } as never);
     const { result } = renderHook(() => useActivityUnread(), { wrapper: wrapperFor(makeClient()) });

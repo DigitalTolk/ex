@@ -115,6 +115,7 @@ Non-negotiable consequences, each of which has been a real shipped bug:
 - **Read-marking requires attention, never mere route-openness.** The gate lives in ChatPage's `message.new` handler (`isUserAttentive(suppressionWindowMs)`); the return-half lives in `useMarkReadOnReturn` (views re-read on window focus). Do not "simplify" either away.
 - **Which window has focus is irrelevant to the phone decision.** Focus separates "looking at ex" from "looking at something else" — never "at the desk" from "gone".
 - **Duplicates beat silence, in every trade-off.**
+- **One number.** The tab title — and so a desktop or phone app's icon — shows the Activity bell's count (`NotificationCountTitleBridge` → `useActivityUnread`). That holds only because every alert has an Activity row: the fan-out lists an alert that is no mention, keyword, DM or thread reply (a channel at "All messages") as a `channel_message` item, read by opening its channel. Never add an alert path that leaves no Activity row.
 
 This is a reliability contract about the *pipeline*, *not* a claim that any message class is special. **Whether** to notify is decided purely by the recipient's preferences — and that includes webhooks: **webhook posts are level-gated exactly like regular messages** (they alert via an "all messages" level, a keyword match, or an @-mention in the body; mute suppresses; the webhook creator is a normal recipient since the `webhook` sentinel authors the post). Not every webhook is an incident. A channel that carries real alerts opts in via a per-channel **"All messages"** override or keywords — do not reintroduce a server- or client-side "webhooks always notify" special case (the old `forceAll` flag was exactly that and was removed 2026-07-02).
 
@@ -210,7 +211,7 @@ If a new value is genuinely required, add it to `index.css` first and reference 
 | Background base | `--color-background` / `bg-background` | `#FFFFFF` | Main chat surface |
 | Sidebar / chat hover | `--color-sidebar` / `bg-sidebar`, `--color-muted` / `bg-muted` | `#F5F5F5` | bg/level1 |
 | Chat top bar | `--color-card` / `bg-card` | `#FFFFFF` | bg/level2 |
-| Typing field | `--color-typing-field` | `#FBFBFB` | bg/level3 |
+| Typing field | `--color-typing-field` | `#FFFFFF` | The composer: a 1px `border-border-strong/50` outline (full strength on focus) and `shadow-sm`, not a tinted fill |
 | Text primary | `--color-foreground` / `text-foreground` | `#231F20` |  |
 | Text secondary | `--color-secondary-foreground` | `#4F4C4D` | Body lower-emphasis |
 | Text muted | `--color-muted-foreground` / `text-muted-foreground` | `#7B7979` |  |
@@ -232,6 +233,7 @@ If a new value is genuinely required, add it to `index.css` first and reference 
 | Sidebar | `#2C2829` | bg/level1 |
 | Chat top bar (`--color-chat-top`) | `#353132` | bg/level2 |
 | bg/level3 | `#3F3A3B` |  |
+| Typing field (`--color-typing-field`) | `#212121` | One step above base so the composer reads as a field; same 1px outline as light |
 | **Cards / panels** (`--color-card` / `bg-card`) | `#231F20` (base) | Thread cards (and their messages), admin/drafts/directory/search panels. Anchored to **base** so card-backed surfaces never read lighter than the chat — a message inside a thread card must match the same message in its channel. Borders delineate them. **Do not** raise this to level2; that was the "everything looks washed-out light" regression. |
 | **Floating surfaces** (`--color-popover`) | `#2C2829` (level1) | Menus, dialogs, hover cards, tooltips — one subtle step above base, never level2. |
 | Text primary | `#FFFFFF` |  |

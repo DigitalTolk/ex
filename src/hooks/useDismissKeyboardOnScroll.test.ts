@@ -102,3 +102,20 @@ describe('useDismissKeyboardOnScroll', () => {
     }
   });
 });
+
+describe('useDismissKeyboardOnScroll — controls that keep the keyboard', () => {
+  // Holding Send for its schedule options: a finger wobbling on it (or on
+  // the options) isn't a scroll.
+  it('leaves the keyboard up for a move over a data-keeps-keyboard control', () => {
+    const input = document.createElement('input');
+    const send = document.createElement('button');
+    send.setAttribute('data-keeps-keyboard', '');
+    const icon = document.createElement('span');
+    send.appendChild(icon);
+    document.body.append(input, send);
+    renderHook(() => useDismissKeyboardOnScroll());
+    input.focus();
+    fireTouchMove(icon);
+    expect(document.activeElement).toBe(input);
+  });
+});

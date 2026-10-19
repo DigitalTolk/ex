@@ -34,7 +34,7 @@ const item: ActivityItem = {
   read: false,
 };
 
-function renderRow(onOpen = vi.fn()) {
+function renderRow(onOpen = vi.fn(), rowItems: ActivityItem | ActivityItem[] = item) {
   render(
     <MemoryRouter initialEntries={['/']}>
       <Routes>
@@ -43,7 +43,7 @@ function renderRow(onOpen = vi.fn()) {
           element={
             <>
               <ActivityRowView
-                row={groupActivity([item])[0]}
+                row={groupActivity(Array.isArray(rowItems) ? rowItems : [rowItems])[0]}
                 href="/channel/general#msg-m-1"
                 selected={false}
                 actor={undefined}
@@ -65,6 +65,25 @@ function renderRow(onOpen = vi.fn()) {
 }
 
 describe('ActivityRowView', () => {
+  it('reads an alert-channel message as posted, under its kind', () => {
+    renderRow(vi.fn(), { ...item, id: 'cm', type: 'channel_message' });
+    expect(screen.getByTestId('activity-row-kind')).toHaveTextContent('Message');
+    expect(screen.getByText(/posted a message/)).toBeInTheDocument();
+  });
+
+  it("counts an alert channel's messages on its one row", () => {
+    renderRow(vi.fn(), [
+      { ...item, id: 'cm-2', type: 'channel_message', messageID: 'm-2' },
+      { ...item, id: 'cm-1', type: 'channel_message', messageID: 'm-1' },
+    ]);
+    expect(screen.getByText(/posted 2 messages/)).toBeInTheDocument();
+  });
+
+  it('offers the read/unread toggle on a message row, in the toolbar and the menu', () => {
+    renderRow();
+    expect(screen.getAllByRole('button', { name: 'Mark as read' })).toHaveLength(2);
+  });
+
   it('opens the message on a tap', () => {
     longPress.suppress = false;
     const onOpen = renderRow();
@@ -79,5 +98,67 @@ describe('ActivityRowView', () => {
     fireEvent.click(screen.getByTestId('activity-row-open'));
     expect(onOpen).not.toHaveBeenCalled();
     expect(screen.getByTestId('where')).toHaveTextContent(/^\/$/);
+  });
+});
+
+// Each kind names itself and leads with where it happened, and its message is
+// shaped by kind, so mentions, thread replies and DMs read apart at a glance.
+describe('ActivityRowView kinds', () => {
+  function renderKind(overrides: Partial<ActivityItem>, extra: { conversation?: { name: string; group: boolean } } = {}) {
+    const row = groupActivity([{ ...item, messagePreview: 'hello there', ...overrides }])[0];
+    return render(
+      <MemoryRouter>
+        <ActivityRowView
+          row={row}
+          href="/x"
+          selected={false}
+          actor={undefined}
+          emojiMap={undefined}
+          channel={{ name: 'general', private: false }}
+          conversation={extra.conversation}
+          onOpen={vi.fn()}
+          onSetRead={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+  }
+
+  it('a mention is labelled, placed in its channel, and quoted', () => {
+    const { unmount } = renderKind({ type: 'mention' });
+    expect(screen.getByTestId('activity-row-kind')).toHaveTextContent('Mention');
+    expect(screen.getByTestId('activity-row-where')).toHaveTextContent('general');
+    const preview = screen.getByTestId('activity-row-preview');
+    expect(preview).toHaveClass('border-l-2');
+    expect(preview.querySelector('svg')).toBeNull();
+    unmount();
+  });
+
+  it('a thread reply hangs off a reply arrow, unquoted', () => {
+    renderKind({ type: 'thread_reply' });
+    expect(screen.getByTestId('activity-row-kind')).toHaveTextContent('Thread reply');
+    const preview = screen.getByTestId('activity-row-preview');
+    expect(preview).not.toHaveClass('border-l-2');
+    expect(preview.querySelector('svg')).not.toBeNull();
+  });
+
+  it('a DM names itself once (no repeated "Direct message" place); a group names the group', () => {
+    const { unmount } = renderKind({ type: 'dm', parentType: 'conversation', parentID: 'c-1' });
+    expect(screen.getByTestId('activity-row-kind')).toHaveTextContent('Direct message');
+    expect(screen.getByTestId('activity-row-where')).toBeEmptyDOMElement();
+    unmount();
+    renderKind({ type: 'mention', parentType: 'conversation', parentID: 'c-2' }, { conversation: { name: 'Team trip', group: true } });
+    expect(screen.getByTestId('activity-row-where')).toHaveTextContent('Team trip');
+  });
+
+  it('a mention in a 1:1 DM says so; reactions and unknown kinds still get a label', () => {
+    const { unmount } = renderKind({ type: 'mention', parentType: 'conversation', parentID: 'c-1' });
+    expect(screen.getByTestId('activity-row-where')).toHaveTextContent('Direct message');
+    unmount();
+    const r = renderKind({ type: 'reaction', emoji: '👍' });
+    expect(screen.getByTestId('activity-row-kind')).toHaveTextContent('Reaction');
+    r.unmount();
+    renderKind({ type: 'something_new' as ActivityItem['type'] });
+    expect(screen.getByTestId('activity-row-kind')).toHaveTextContent('Activity');
   });
 });

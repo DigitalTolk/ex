@@ -25,6 +25,7 @@ import { SWIPE_SURFACE_ATTR, shouldCommitSwipe, swipeStartsOn } from '@/lib/swip
 import { UpdateBanner } from '@/components/UpdateBanner';
 import { LoadingBar } from '@/components/layout/LoadingBar';
 import { NotificationPermissionBanner } from '@/components/NotificationPermissionBanner';
+import { SCROLL_FADE_TOP, trackScrolledOffTop } from '@/lib/scroll-fade';
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -38,7 +39,9 @@ function SidebarHeader({ topStrip = false }: { topStrip?: boolean }) {
   return (
     <div className="shrink-0" data-sidebar-header="true">
       {topStrip && <div className="h-12 [-webkit-app-region:drag]" data-testid="sidebar-top-strip" aria-hidden="true" />}
-      <div className={`px-3 pb-3 ${topStrip ? '' : 'pt-3'}`}>
+      {/* No bottom padding: the list below scrolls right up to the switch
+          (fading under it), and carries the gap at rest itself. */}
+      <div className={`px-3 ${topStrip ? '' : 'pt-3'}`}>
         <ActivityModeSwitch />
       </div>
     </div>
@@ -61,9 +64,27 @@ function MobileSidebarTitle() {
 // re-render the whole list.
 const SidebarBody = memo(function SidebarBody({ onClose }: { onClose: () => void }) {
   const mode = useSidebarModeStore((s) => s.mode);
+  const [scrolled, setScrolled] = useState(false);
+  // Switching lists starts the new one at its top, unfaded.
+  const [shownMode, setShownMode] = useState(mode);
+  if (shownMode !== mode) {
+    setShownMode(mode);
+    setScrolled(false);
+  }
   return (
-    <div className="min-h-0 flex-1">
+    // isolate: the fades' z-index stays inside the list, never above the
+    // phone tab bar or other chrome.
+    <div className="relative isolate min-h-0 flex-1" onScrollCapture={trackScrolledOffTop(setScrolled)}>
       {mode === 'activity' ? <ActivityPanel onNavigate={onClose} /> : <Sidebar onClose={onClose} />}
+      {/* Once scrolled, channels fade softly under the header. (Activity
+          fades below its own filters instead.) */}
+      {mode === 'home' && (
+        <div
+          className={`${SCROLL_FADE_TOP} top-0 ${scrolled ? 'opacity-100' : 'opacity-0'}`}
+          aria-hidden="true"
+          data-testid="sidebar-top-fade"
+        />
+      )}
     </div>
   );
 });

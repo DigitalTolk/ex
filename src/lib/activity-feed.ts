@@ -95,6 +95,9 @@ function rowKey(i: ActivityItem): string {
       return `thread:${i.parentID}|${i.parentMessageID || i.messageID}`;
     case 'reaction':
       return `reaction:${i.messageID}|${i.emoji ?? ''}`;
+    case 'channel_message':
+      // An alert channel's messages are one row per channel, like a DM's.
+      return `channel:${i.parentID}`;
     default:
       return `item:${i.id}`;
   }
@@ -135,12 +138,26 @@ export function parseActivityTab(value: string | null): ActivityTab {
 }
 
 // Reminders and channel adds list under All only.
+// The kinds each tab lists. Mentions is the inbox: it also takes reminders,
+// being added to a channel and alert-channel messages — kinds without a tab
+// of their own, which otherwise only showed under All, buried among reactions
+// and replies.
+const TAB_TYPES: Record<Exclude<ActivityTab, 'all'>, readonly ActivityType[]> = {
+  dm: ['dm'],
+  mention: ['mention', 'reminder', 'channel_added', 'channel_message'],
+  thread_reply: ['thread_reply'],
+  reaction: ['reaction'],
+};
+
 export function filterActivity(items: ActivityItem[], tab: ActivityTab): ActivityItem[] {
-  return tab === 'all' ? items : items.filter((i) => i.type === tab);
+  if (tab === 'all') return items;
+  const types = TAB_TYPES[tab];
+  return items.filter((i) => types.includes(i.type));
 }
 
 export function tabUnread(feed: ActivityFeed, tab: ActivityTab): number {
-  return tab === 'all' ? feed.unread : (feed.unreadByType[tab] ?? 0);
+  if (tab === 'all') return feed.unread;
+  return TAB_TYPES[tab].reduce((sum, type) => sum + (feed.unreadByType[type] ?? 0), 0);
 }
 
 export type ActivityDay = 'Today' | 'Yesterday' | 'Earlier';

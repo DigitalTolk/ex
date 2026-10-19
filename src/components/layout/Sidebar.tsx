@@ -977,6 +977,19 @@ export function Sidebar({ onClose }: SidebarProps) {
     });
   }, []);
 
+  // Which section headings get the wide gap above them: an open section's,
+  // and the one after an open section. Collapsed headings in a row pack
+  // tight. Hidden sections (as the list below skips them) don't count.
+  const spacedSections = new Set<string>();
+  let prevOpen = false;
+  for (const section of sidebarSections) {
+    const hidden = section.items.length === 0 && (section.key === SidebarSectionKeys.Unread || unreadOnly);
+    if (hidden) continue;
+    const open = !collapsedGroups[section.key];
+    if (open || prevOpen) spacedSections.add(section.key);
+    prevOpen = open;
+  }
+
   return (
     <div className="flex h-full w-full min-w-0 flex-col text-gray-300 touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]">
       <ScrollArea
@@ -986,7 +999,9 @@ export function Sidebar({ onClose }: SidebarProps) {
       >
         {/* Bottom padding clears the home indicator on notched phones (the
             drawer is a full-height mobile surface with no bottom chrome). */}
-        <div className="w-full min-w-0 space-y-1 p-2 mobile:pb-[calc(var(--bottom-safe-inset,env(safe-area-inset-bottom))+0.5rem)]">
+        {/* The extra top padding is the gap under the Home / Activity switch,
+            kept inside the scroller so rows scroll right up to the switch. */}
+        <div className="w-full min-w-0 space-y-1 p-2 pt-5 mobile:pt-2 mobile:pb-[calc(var(--bottom-safe-inset,env(safe-area-inset-bottom))+0.5rem)]">
           {/* Threads first (Activity has its own sidebar mode — see the
               Home / Activity switch above). Same row geometry (px-2 py-1)
               as channel rows below so the eye doesn't catch on a height
@@ -1193,6 +1208,10 @@ export function Sidebar({ onClose }: SidebarProps) {
               const rowDragDisabled = dragDisabled || isUnreadSection;
               const canDropChannel = isFavorites || isUserCategory || isChannelsDefault;
               const collapsed = !!collapsedGroups[section.key];
+              // An open section stands apart: a wide gap above its heading
+              // and above the next heading. Collapsed headings in a row pack
+              // tight, like a menu.
+              const spaced = spacedSections.has(section.key);
 
               // When collapsed, still surface:
               //   - items with new activity (unless muted) so the user
@@ -1231,7 +1250,11 @@ export function Sidebar({ onClose }: SidebarProps) {
                 dropIndicator.beforeCategoryID === (isChannelsDefault ? CATEGORY_DROP_END : section.key);
 
               return (
-                <div key={section.key} className="relative mt-2" data-testid={`sidebar-group-${section.key}`}>
+                <div
+                  key={section.key}
+                  className={`relative ${spaced ? 'mt-5 mobile:mt-3' : 'mt-2'}`}
+                  data-testid={`sidebar-group-${section.key}`}
+                >
                   {categoryGap && <DropGap sectionKey={section.key} testId={`sidebar-drop-gap-cat-${section.key}`} />}
                   {(isFavorites || isUserCategory || isChannelsDefault) && (
                     <PragmaticCategoryDropHitbox
@@ -1271,7 +1294,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                       }}
                       aria-expanded={!collapsed}
                       data-testid={`sidebar-group-toggle-${section.key}`}
-                      className="flex flex-1 items-center gap-1 rounded-md px-2 py-1 text-sm font-semibold text-gray-400 hover:bg-white/5 mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base"
+                      className="flex flex-1 items-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-gray-400 hover:bg-white/5 mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base"
                     >
                       <ChevronDown
                         className={`h-3 w-3 transition-transform ${collapsed ? '-rotate-90' : ''}`}
@@ -1359,7 +1382,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                       </DropdownMenu>
                     )}
                   </PragmaticCategoryHeader>
-                  <div className="space-y-1">
+                  <div className="mt-1 space-y-1">
                     {visibleItems.map((item, index) => {
                       if (item.kind === 'channel') {
                         const channelDropIndex = section.key === SidebarSectionKeys.Favorites

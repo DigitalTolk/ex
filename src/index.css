@@ -199,7 +199,7 @@
   --color-sidebar-ring: #BDBCBC;
   --color-chat-top: #FCFCFB;
   --color-chat-hover: #F5F5F5;
-  --color-typing-field: #FCFCFB;
+  --color-typing-field: #FFFFFF;
 
   /* Radius scale — radius-* utilities expand to these values
    * (radius-none 0, xs 2, sm 4, md 6, lg 8, 2xl 16, capsule 999). */
@@ -425,8 +425,8 @@
     /* Chat message-row hover = bg/level1, mirroring the light spec (where
        "chat hover" is level1 #F5F5F5). */
     --color-chat-hover: #232323;
-    /* Composer / typing field sits on bg/base, outlined by borders/subtle. */
-    --color-typing-field: #1A1A1A;
+    /* Composer / typing field sits a step above bg/base so it reads as a field. */
+    --color-typing-field: #212121;
   }
 }
 

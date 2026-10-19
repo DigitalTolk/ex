@@ -190,9 +190,13 @@ export default function LoginPage() {
               </div>
               <Button
                 type="submit"
-                variant="secondary"
-                className="w-full"
+                // Becomes the primary button once a password is typed — the
+                // cue that the form is ready to go (near-black, pink in dark
+                // mode, like every primary button).
+                variant={password ? 'default' : 'secondary'}
+                className="w-full transition-colors"
                 disabled={isSubmitting}
+                data-ready={password ? 'true' : undefined}
               >
                 {isSubmitting ? 'Signing in...' : 'Sign in'}
               </Button>

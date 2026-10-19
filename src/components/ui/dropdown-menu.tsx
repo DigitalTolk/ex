@@ -18,16 +18,21 @@ function DropdownMenuContent({
   side = "bottom",
   sideOffset = 4,
   className,
+  positionerClassName,
   ...props
 }: MenuPrimitive.Popup.Props &
   Pick<
     MenuPrimitive.Positioner.Props,
     "align" | "alignOffset" | "side" | "sideOffset"
-  >) {
+  > & {
+    // Extra classes for the positioner around the popup — for decoration
+    // that must sit outside the popup's own (scroll-clipped) box.
+    positionerClassName?: string
+  }) {
   return (
     <MenuPrimitive.Portal>
       <MenuPrimitive.Positioner
-        className="isolate z-[1050] outline-none"
+        className={cn("isolate z-[1050] outline-none", positionerClassName)}
         align={align}
         alignOffset={alignOffset}
         side={side}

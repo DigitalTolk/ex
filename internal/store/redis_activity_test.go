@@ -406,6 +406,50 @@ func TestRedisActivityStore_ChannelAddedDedupes(t *testing.T) {
 	}
 }
 
+// Being added to a channel is acknowledged by opening that channel: reading
+// it (up to now) reads the item, as reading a channel reads its mentions.
+func TestRedisActivityStore_ChannelAddedIsReadByOpeningTheChannel(t *testing.T) {
+	s, _, clock := setupActivityStore(t)
+	ctx := context.Background()
+	added := &model.ActivityItem{ID: itemID(1), Type: model.ActivityChannelAdded, CreatedAt: clock.at, ParentID: "ch-1", ParentType: "channel"}
+	if addOne(t, s, "u-1", added) {
+		t.Fatal("a channel add must arrive unread")
+	}
+	clock.tick()
+	changed, err := s.MarkActivityParentRead(ctx, "u-1", ActivityParentKey("ch-1", ""), clock.at)
+	if err != nil {
+		t.Fatalf("MarkActivityParentRead: %v", err)
+	}
+	if !changed {
+		t.Fatal("reading the channel must report the channel add as changed")
+	}
+	if got := list(t, s, "u-1"); len(got) != 1 || !got[0].Read {
+		t.Fatalf("opening the channel must read the channel add, got %+v", got)
+	}
+}
+
+// An alerting channel message (an "All messages" alert feed) sits with the
+// conversational items, so a busy alert channel can't push a mention out, and
+// reading its channel reads it.
+func TestRedisActivityStore_ChannelMessageFollowsTheChannel(t *testing.T) {
+	s, client, clock := setupActivityStore(t)
+	ctx := context.Background()
+	msg := &model.ActivityItem{ID: itemID(1), Type: model.ActivityChannelMessage, CreatedAt: clock.at, MessageID: "m-1", ParentID: "ch-1", ParentType: "channel"}
+	if addOne(t, s, "u-1", msg) {
+		t.Fatal("an alerting channel message must arrive unread")
+	}
+	if err := client.ZScore(ctx, keysFor("u-1").chat, itemID(1)).Err(); err != nil {
+		t.Fatalf("a channel message must sit in the conversational bucket: %v", err)
+	}
+	clock.tick()
+	if _, err := s.MarkActivityParentRead(ctx, "u-1", ActivityParentKey("ch-1", ""), clock.at); err != nil {
+		t.Fatalf("MarkActivityParentRead: %v", err)
+	}
+	if got := list(t, s, "u-1"); len(got) != 1 || !got[0].Read {
+		t.Fatalf("reading the channel must read the channel message, got %+v", got)
+	}
+}
+
 func TestRedisActivityStore_RemoveActivity(t *testing.T) {
 	s, client, _ := setupActivityStore(t)
 	ctx := context.Background()

@@ -867,7 +867,20 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               {scheduledCount} scheduled
             </Link>
           )}
-          {onSchedule ? (
+          {onSchedule && isMobile ? (
+            // Phone: one round Send — tap sends, press and hold for the
+            // schedule options (no ⌄ beside it).
+            // (No picker-open hook: that drops the keyboard for full-screen
+            // pickers, and this one keeps it up.)
+            <ScheduleSendMenu
+              disabled={!canSend}
+              onSchedule={handleSchedule}
+              hold={{ onSend: handleSend, label: 'Send message', children: <Send className="h-4 w-4" /> }}
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-opacity disabled:pointer-events-none dark:bg-brand dark:text-brand-foreground ${
+                canSend ? '' : 'opacity-40'
+              }`}
+            />
+          ) : onSchedule ? (
             // One button, split: Send, and ⌄ to send later instead — a single
             // shape and colour with a thin inset divider.
             <div
@@ -945,7 +958,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       className={
         variant === 'inline'
           ? 'p-0'
-          : `relative bg-background p-3 mobile:pt-1.5 ${
+          // Centred column, lined up with the messages above (MessageList).
+          : `relative mx-auto w-full max-w-4xl bg-background p-3 mobile:pt-1.5 ${
               // env(safe-area-inset-bottom) on iOS does not reset to 0 when
               // the keyboard is up, leaving a wasted ~34px gap between the
               // composer and the keyboard. Drop the inset while focused
@@ -1024,7 +1038,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             {aboveInput}
           </div>
         )}
-        <div className="rounded-2xl border md:border-2 border-border bg-typing-field mobile:overflow-hidden mobile:rounded-[1.75rem]" data-message-composer>
+        <div className="rounded-2xl border border-border-strong/50 bg-typing-field shadow-sm transition-colors focus-within:border-border-strong mobile:overflow-hidden mobile:rounded-[1.75rem]" data-message-composer>
         {drafts.length > 0 && (
           <div className="flex flex-wrap gap-1.5 border-b p-2" aria-label="Draft attachments">
             {drafts.map((d) => (

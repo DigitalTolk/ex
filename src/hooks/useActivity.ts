@@ -42,8 +42,10 @@ export function useActivity() {
 
 // useActivityUnread is just the unread count, for the badges: a component
 // that shows only the count doesn't re-render when the list changes.
-export function useActivityUnread(): number {
-  return useQuery({ ...activityQuery, select: badgeUnread }).data ?? 0;
+// `enabled` keeps a caller that renders before sign-in (the tab title) from
+// asking for the feed too early.
+export function useActivityUnread(enabled = true): number {
+  return useQuery({ ...activityQuery, enabled, select: badgeUnread }).data ?? 0;
 }
 
 // useReminders loads the user's pending (not-yet-fired) reminders.
