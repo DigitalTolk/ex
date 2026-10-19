@@ -69,7 +69,7 @@ type taskChannels interface {
 // taskMessages is the message surface: agent-authored posts, the pinned
 // task card and its in-place rewrites.
 type taskMessages interface {
-	SendAsAgentRun(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string) (*model.Message, error)
+	SendAsAgentRun(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string, attachmentIDs ...string) (*model.Message, error)
 	RewriteAgentMessage(ctx context.Context, agentID, parentID, parentType, msgID, body string) (*model.Message, error)
 	SetPinned(ctx context.Context, userID, parentID, parentType, msgID string, pinned bool) (*model.Message, error)
 	CheckAccess(ctx context.Context, userID, parentID, parentType string) error
@@ -725,7 +725,7 @@ func primaryBranch(t *model.CodingTask) string {
 func invokeFailureDetail(err error) string {
 	switch {
 	case errors.Is(err, ErrAgentOffline):
-		return offlineDetail(err, "dev runs on your own computer through the ex desktop app, which isn't online — open the app and stay signed in, then say retry.")
+		return offlineDetail(err, "dev runs on your own computer through ex-runner, which isn't online — start it there with `ex-runner start`, then say retry.")
 	case errors.Is(err, ErrAgentBusy):
 		return "dev is already busy in this thread."
 	}

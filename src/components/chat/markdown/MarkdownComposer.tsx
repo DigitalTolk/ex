@@ -11,6 +11,7 @@ import type { CompletionProviders } from './extensions/completions';
 import type { SlashCommand } from './extensions/slashCommands';
 import { useConnectors } from '@/hooks/useConnectors';
 import { useSkills } from '@/hooks/useAgents';
+import { useProjects } from '@/hooks/useProjects';
 import { skillPickToken } from '@/lib/picks';
 
 export type { WysiwygEditorHandle, ActiveFormat };
@@ -76,6 +77,14 @@ export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function 
     [allSkills],
   );
 
+  // …and PROJECTS (members only — guests can't read them): "/booking-portal"
+  // tells the design agent which product's screenshots and notes to copy.
+  const { data: allProjects } = useProjects({ enabled: !!auth?.user && auth.user.systemRole !== 'guest' });
+  const projectPicks = useMemo(
+    () => (allProjects ?? []).map((p) => ({ name: p.key, description: `${p.name} — project design references` })),
+    [allProjects],
+  );
+
   // Partition the @-mention list by channel membership only when we actually
   // know the roster — otherwise a mid-load empty set would mislabel everyone.
   const memberIds = useMemo<Set<string> | null>(
@@ -102,8 +111,20 @@ export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function 
       commands: slashCommands,
       connectors: () => installedConnectors,
       skills: () => skillPicks,
+      projects: () => projectPicks,
     }),
-    [users, online, memberIds, channels, customEmojis, skinTone, slashCommands, installedConnectors, skillPicks],
+    [
+      users,
+      online,
+      memberIds,
+      channels,
+      customEmojis,
+      skinTone,
+      slashCommands,
+      installedConnectors,
+      skillPicks,
+      projectPicks,
+    ],
   );
 
   return (

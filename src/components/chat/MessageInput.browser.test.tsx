@@ -6,6 +6,7 @@ import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { expectPaintedAtCenter } from '@/test/browser-assertions';
 import { setWSSender } from '@/lib/ws-sender';
 import { dispatchFocusComposer } from '@/lib/window-events';
+import { EditorView } from '@codemirror/view';
 
 const uploadAttachmentMock = vi.hoisted(() => vi.fn());
 const deleteDraftMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -494,6 +495,72 @@ describe('MessageInput browser behavior', () => {
     expect(onSend.mock.calls[0][0]).toMatchObject({ body: 'edited body' });
   });
 
+  // A keystroke's re-render can still be pending when Enter or a tap on Send
+  // arrives: a busy browser handles input before other work. Sending the last
+  // render's text dropped the last characters typed, and a Save took a changed
+  // edit for an unchanged one and closed without saving it (seen as a CI
+  // flake). Here the text changes and the press comes in the same task, so
+  // React has had no chance to re-render in between.
+  describe('sends what the editor holds, even before React re-renders', () => {
+    async function mountedEditor() {
+      await vi.waitFor(() => expect(document.querySelector('.cm-editor')).not.toBeNull());
+      return EditorView.findFromDOM(document.querySelector('.cm-editor') as HTMLElement)!;
+    }
+    const append = (view: EditorView, text: string) =>
+      view.dispatch({ changes: { from: view.state.doc.length, insert: text } });
+
+    it('on a tap on Send', async () => {
+      const onSend = vi.fn();
+      const screen = await renderWithProviders(<MessageInput onSend={onSend} initialBody="hello" />);
+      const view = await mountedEditor();
+      const send = screen.getByRole('button', { name: 'Send message' }).element() as HTMLButtonElement;
+      append(view, ' world');
+      send.click();
+      expect(onSend).toHaveBeenCalledTimes(1);
+      expect(onSend.mock.calls[0][0]).toMatchObject({ body: 'hello world' });
+    });
+
+    // Enter sends with a keyboard; on a phone it starts a new line.
+    it.runIf(window.innerWidth > 767)('on Enter', async () => {
+      const onSend = vi.fn();
+      await renderWithProviders(<MessageInput onSend={onSend} initialBody="hello" />);
+      const view = await mountedEditor();
+      append(view, ' world');
+      view.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      expect(onSend).toHaveBeenCalledTimes(1);
+      expect(onSend.mock.calls[0][0]).toMatchObject({ body: 'hello world' });
+    });
+
+    it('on Save, for an edit cleared of its text that keeps its attachment', async () => {
+      const onSend = vi.fn();
+      const screen = await renderWithProviders(
+        <MessageInput
+          onSend={onSend}
+          onCancel={vi.fn()}
+          submitLabel="Save"
+          initialBody="text to clear"
+          initialDrafts={[{ id: 'att-1', filename: 'keeper.png', contentType: 'image/png', size: 100 }]}
+        />,
+      );
+      const view = await mountedEditor();
+      const save = screen.getByRole('button', { name: 'Save' }).element() as HTMLButtonElement;
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: '' } });
+      save.click();
+      expect(onSend).toHaveBeenCalledTimes(1);
+      expect(onSend.mock.calls[0][0]).toMatchObject({ body: '', attachmentIDs: ['att-1'] });
+    });
+
+    it('and nothing for a composer emptied before the tap', async () => {
+      const onSend = vi.fn();
+      const screen = await renderWithProviders(<MessageInput onSend={onSend} initialBody="hello" />);
+      const view = await mountedEditor();
+      const send = screen.getByRole('button', { name: 'Send message' }).element() as HTMLButtonElement;
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: '   ' } });
+      send.click();
+      expect(onSend).not.toHaveBeenCalled();
+    });
+  });
+
   it('renders draft attachment chips supplied via initialDrafts', async () => {
     const drafts = [
       { id: 'att-1', filename: 'a.png', contentType: 'image/png', size: 100 },
@@ -772,7 +839,7 @@ describe('MessageInput desktop flows (browser)', () => {
     uploadAttachmentMock.mockReset();
   });
 
-  it('renders the GIF picker trigger when GIPHY is enabled', async () => {
+  it('renders the GIF picker trigger, labelled GIF, when GIPHY is enabled', async () => {
     // The GiphyPicker (and thus the `giphyEnabled &&` branch) only renders
     // when both the flag and an API key are present.
     settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: true, giphyAPIKey: 'gk-test' };
@@ -783,6 +850,18 @@ describe('MessageInput desktop flows (browser)', () => {
         await screen.getByLabelText('Message input').click();
       }
       await expect.element(screen.getByLabelText('GIF')).toBeVisible();
+      // Says "GIF" in so many words (it was a play-button picture nobody read
+      // as GIFs), whole, inside its button, at the type scale's 12px floor.
+      const button = screen.getByLabelText('GIF').element();
+      const label = button.querySelector('[data-testid="composer-gif-label"]') as HTMLElement;
+      expect(label.textContent).toBe('GIF');
+      expect(button.querySelector('svg')).toBeNull();
+      expect(getComputedStyle(label).fontSize).toBe('12px');
+      const inner = label.getBoundingClientRect();
+      const outer = button.getBoundingClientRect();
+      expect(inner.left).toBeGreaterThanOrEqual(outer.left);
+      expect(inner.right).toBeLessThanOrEqual(outer.right);
+      expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth);
     } finally {
       settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false, giphyAPIKey: '' };
     }

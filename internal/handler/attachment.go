@@ -147,6 +147,27 @@ func (h *AttachmentHandler) ProcessUpload(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, a)
 }
 
+// SetPoster handles POST /api/v1/attachments/{id}/poster: the uploader's
+// browser sends a frame of the video it just uploaded (the request body, an
+// image), kept as the video's thumbnails.
+func (h *AttachmentHandler) SetPoster(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	a, err := h.svc.SetVideoPoster(r.Context(), userID, pathParam(r, "id"), r.Body)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "attachment not found")
+		return
+	}
+	if err != nil {
+		writeServiceError(w, err, http.StatusInternalServerError, "poster_error")
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
+}
+
 // List handles GET /api/v1/attachments?ids=a,b,c and returns metadata + freshly
 // signed URLs for each requested ID. Missing IDs are silently skipped — the
 // caller compares returned IDs to detect them. Used by message renderers to

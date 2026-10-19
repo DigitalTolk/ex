@@ -238,6 +238,13 @@ func main() {
 	if s3Client != nil {
 		userSvc.SetAvatarObjects(s3Client)
 	}
+	// ex-runner installs: pairing, renewal, the Runners page, and the
+	// revocation check behind every runner route. Deactivation and password
+	// reset disconnect an account's runners with its sessions.
+	runnerTokenSvc := service.NewRunnerTokenService(rawTokenStore, userSvc, jwtMgr)
+	runnerTokenSvc.SetPublisher(redisPubSub)
+	userSvc.SetRunnerRevoker(runnerTokenSvc)
+	authSvc.SetRunnerRevoker(runnerTokenSvc)
 	channelSvc := service.NewChannelService(channelStore, membershipStore, userStore, messageStore, redisCache, brokerAdapter, redisPubSub)
 	authSvc.SetChannelJoiner(channelSvc)
 	convSvc := service.NewConversationService(conversationStore, userStore, redisCache, brokerAdapter, redisPubSub)
@@ -268,6 +275,9 @@ func main() {
 	agentStore := store.NewAgentStore(db)
 	runStore := store.NewRunStore(db)
 	agentSvc := service.NewAgentService(agentStore, userStore)
+	// The Runners list joins each paired install with its live runner.
+	runnerTokenH := handler.NewRunnerTokenHandler(runnerTokenSvc)
+	runnerTokenH.SetLiveRunners(agentSvc)
 	// Agent prefs are partitioned by user, so the admin panel's "how many
 	// people have their own settings" and its reset both walk the roster.
 	agentSvc.SetUserLister(userStore)
@@ -292,7 +302,7 @@ func main() {
 	if s3Client != nil {
 		orchestrator.SetEventArchive(storage.NewEventArchive(s3Client))
 	}
-	agentH := handler.NewAgentHandler(agentSvc, orchestrator, userSvc, jwtMgr)
+	agentH := handler.NewAgentHandler(agentSvc, orchestrator, userSvc)
 	// The Run Activity Drawer is readable by anyone who can read the channel
 	// the run happened in (plan-v2 Phase 2), not just the invoker.
 	agentH.SetTimelineAccess(messageSvc)
@@ -421,6 +431,12 @@ func main() {
 	attachmentSvc.SetMediaURLCache(redisCache)
 	attachmentSvc.SetAccessChecker(messageSvc)
 	messageSvc.SetAttachmentManager(attachmentSvc)
+	// Agent runs see the files on the messages they answer (transcript
+	// markers, Bedrock content blocks, runner downloads) and may post their
+	// own files back.
+	orchestrator.SetAttachments(attachmentSvc)
+	agentH.SetRunFiles(attachmentSvc)
+	agentRunToolH.SetAttachments(attachmentSvc)
 	notificationSvc := service.NewNotificationServiceFromDeps(service.NotificationServiceDeps{
 		Publisher:     redisPubSub,
 		Memberships:   membershipStore,
@@ -480,6 +496,7 @@ func main() {
 	messageSvc.SetNotifier(notificationSvc)
 	orchestrator.SetApprovalNotifier(notificationSvc)
 	settingsSvc := service.NewSettingsService(store.NewSettingsStore(db))
+	settingsSvc.SetPublisher(redisPubSub)
 	attachmentSvc.SetUploadLimits(settingsSvc)
 	unfurlSvc := service.NewUnfurlService(redisCache)
 	if s3Client != nil {
@@ -698,6 +715,13 @@ func main() {
 	codingTaskSvc := service.NewCodingTaskService(taskStore, channelSvc, messageSvc, userStore, agentSvc, orchestrator)
 	codingTaskSvc.SetBaseURL(cfg.BaseURL)
 	codingTaskH := handler.NewCodingTaskHandler(codingTaskSvc, orchestrator)
+	// Projects page + design references (plan-projects-design.md): the same
+	// project rows coding tasks learn, plus screenshots the design agent
+	// copies from.
+	projectSvc := service.NewProjectService(taskStore, attachmentSvc)
+	projectSvc.SetPublisher(redisPubSub)
+	orchestrator.SetProjects(projectSvc)
+	projectH := handler.NewProjectHandler(projectSvc)
 	if searchClient != nil {
 		ids := newIDSearcher(searcher)
 		userSvc.SetSearcher(ids)
@@ -762,10 +786,12 @@ func main() {
 		Command:      commandH,
 		Agent:        agentH,
 		AgentRunner:  handler.NewAgentRunnerHandler(agentSvc, orchestrator),
+		RunnerToken:  runnerTokenH,
 		AgentRunTool: agentRunToolH,
 		Context:      handler.NewContextHandler(contextSvc),
 		Connector:    connectorH,
 		CodingTask:   codingTaskH,
+		Project:      projectH,
 		JWT:          jwtMgr,
 		FrontendFS:   frontendDist,
 		AppVersion:   appVersion,

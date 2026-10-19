@@ -6,19 +6,24 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useAuth } from '@/context/AuthContext';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useAgents, type AgentView } from '@/hooks/useAgents';
+import { useWorkspaceSettings } from '@/hooks/useSettings';
 import { AgentCard } from './agents/AgentCard';
 import { NewAgentForm } from './agents/NewAgentForm';
 
 // AgentsPage: the shared workspace agents (@gg, @qib — they belong to no
-// one) with YOUR settings for them. Mentioning an agent runs it on YOUR
-// machine via the desktop app, using your local Claude Code / Codex install
-// and the prompt/pin you set here.
+// one) with YOUR settings for them. Mentioning a CLI agent runs it on YOUR
+// machine via ex-runner, using your local Claude Code / Codex install and the
+// prompt/pin you set here; Bedrock agents run on the server.
 export default function AgentsPage() {
   useDocumentTitle('Agents');
   const { data: agents, isLoading } = useAgents();
   const { user } = useAuth();
   const isAdmin = user?.systemRole === 'admin';
   const [creating, setCreating] = useState(false);
+  // Read once here, not per card: whether offline hints can point at the
+  // Runners tab.
+  const { data: settings } = useWorkspaceSettings();
+  const runnersTab = settings?.runnersInApp === true;
 
   return (
     <PageContainer
@@ -65,6 +70,7 @@ export default function AgentsPage() {
           <AgentCard
             key={agentCardKey(agent)}
             agent={agent}
+            runnersTab={runnersTab}
           />
         ))}
       </div>

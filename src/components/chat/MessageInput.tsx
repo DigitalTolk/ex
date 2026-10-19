@@ -11,7 +11,6 @@ import {
   ListOrdered,
   Link as LinkIcon,
   Smile,
-  ImagePlay,
   X,
   Save,
   Loader2,
@@ -349,12 +348,22 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const bodyOverLimit = bodyCodepoints > MAX_MESSAGE_BODY_CHARS;
   const attachmentsOverLimit = drafts.length > MAX_ATTACHMENTS_PER_MESSAGE;
 
-  const canSend =
-    (body.trim() !== '' || drafts.length > 0) &&
-    !disabled &&
-    !isUploading &&
-    !bodyOverLimit &&
-    !attachmentsOverLimit;
+  const sendable = useCallback(
+    (text: string) =>
+      (text.trim() !== '' || drafts.length > 0) &&
+      !disabled &&
+      !isUploading &&
+      countCodepoints(text) <= MAX_MESSAGE_BODY_CHARS &&
+      !attachmentsOverLimit,
+    [drafts.length, disabled, isUploading, attachmentsOverLimit],
+  );
+  const canSend = sendable(body);
+  // What the editor holds now, for sending. `body` is the last render's copy:
+  // the re-render a keystroke schedules can still be pending when Enter or a
+  // tap on Send arrives (a busy browser handles input first), and sending it
+  // dropped the last characters typed — or made a Save see a changed edit as
+  // unchanged and close without saving it.
+  const currentBody = useCallback(() => editorRef.current?.getMarkdown() ?? body, [body]);
 
   const collapseMobileComposer = useCallback(() => {
     setToolbarPickerOpen(false);
@@ -388,8 +397,9 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   }, [drafts, isMobile, submitLabel, collapseMobileComposer]);
 
   const handleSend = useCallback(() => {
-    if (!canSend) return;
-    const trimmed = body.trim();
+    const text = currentBody();
+    if (!sendable(text)) return;
+    const trimmed = text.trim();
     // A message that is exactly a registered slash command (no attachments)
     // executes instead of posting; anything else — including unknown
     // "/words" — sends as a normal message.
@@ -420,16 +430,17 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     }
     if (variant === 'inline') return; // parent unmounts the inline edit
     clearAfterSubmit();
-  }, [canSend, body, drafts, onSend, variant, commandTarget, commands, runCommand, pendingCommand, clearAfterSubmit]);
+  }, [sendable, currentBody, drafts, onSend, variant, commandTarget, commands, runCommand, pendingCommand, clearAfterSubmit]);
 
   // handleSchedule sends the composed message later. The composer clears only
   // once it's scheduled, so a failure keeps the text.
   const handleSchedule = useCallback(async (sendAt: Date) => {
+    const text = currentBody();
     /* istanbul ignore next -- the schedule menu only renders with onSchedule and is disabled while !canSend; defensive */
-    if (!canSend || !onSchedule) return;
-    await onSchedule({ body: normalizeEmojiInBody(body.trim()), attachmentIDs: drafts.map((d) => d.id) }, sendAt);
+    if (!sendable(text) || !onSchedule) return;
+    await onSchedule({ body: normalizeEmojiInBody(text.trim()), attachmentIDs: drafts.map((d) => d.id) }, sendAt);
     clearAfterSubmit();
-  }, [canSend, onSchedule, body, drafts, clearAfterSubmit]);
+  }, [sendable, currentBody, onSchedule, drafts, clearAfterSubmit]);
 
 
   useEffect(() => {
@@ -820,7 +831,16 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           onSelect={insertGiphyGIF}
           onOpenChange={handleToolbarPickerOpenChange}
           trigger={
-            <ToolbarBtn label="GIF"><ImagePlay className="h-3.5 w-3.5" /></ToolbarBtn>
+            // The word, not a picture: no icon reads as "GIF" at this size.
+            <ToolbarBtn label="GIF">
+              <span
+                className="rounded-sm border border-current px-0.5 text-xs font-semibold leading-4"
+                aria-hidden="true"
+                data-testid="composer-gif-label"
+              >
+                GIF
+              </span>
+            </ToolbarBtn>
           }
         />
       )}

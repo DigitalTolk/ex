@@ -2523,3 +2523,41 @@ func TestAttachmentHandler_Media_EmptyContentTypeServesOctetStream(t *testing.T)
 		t.Fatalf("Content-Type = %q, want application/octet-stream", got)
 	}
 }
+
+// The Runners switch is off until an admin turns it on, is readable by every
+// member (it gates their AI hub tab), and survives a save from a client that
+// predates it — only a body that names it changes it.
+func TestAdminHandler_RunnersInAppSwitch(t *testing.T) {
+	h, jwtMgr := setupAdminHandler(t)
+	admin := makeTokenForUser(jwtMgr, &model.User{ID: "u-adm", Email: "adm@x.com", SystemRole: model.SystemRoleAdmin})
+	member := makeTokenForUser(jwtMgr, &model.User{ID: "u-mem", Email: "mem@x.com", SystemRole: model.SystemRoleMember})
+	call := func(fn http.HandlerFunc, method, token, body string) map[string]any {
+		t.Helper()
+		req := httptest.NewRequest(method, "/api/v1/admin/settings", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		middleware.Auth(jwtMgr)(fn).ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d (%s)", method, rec.Code, rec.Body.String())
+		}
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return out
+	}
+	if got := call(h.GetSettings, http.MethodGet, member, ""); got["runnersInApp"] != false {
+		t.Fatalf("default = %v, want off", got["runnersInApp"])
+	}
+	if got := call(h.UpdateSettings, http.MethodPut, admin, `{"maxUploadBytes":1024,"runnersInApp":true}`); got["runnersInApp"] != true {
+		t.Fatalf("turn on = %v", got["runnersInApp"])
+	}
+	// An older client's save leaves it alone.
+	if got := call(h.UpdateSettings, http.MethodPut, admin, `{"maxUploadBytes":2048}`); got["runnersInApp"] != true || got["maxUploadBytes"] != float64(2048) {
+		t.Fatalf("save without the switch = %v", got)
+	}
+	if got := call(h.GetSettings, http.MethodGet, member, ""); got["runnersInApp"] != true {
+		t.Fatalf("members read %v", got["runnersInApp"])
+	}
+	if got := call(h.UpdateSettings, http.MethodPut, admin, `{"runnersInApp":false}`); got["runnersInApp"] != false {
+		t.Fatalf("turn off = %v", got["runnersInApp"])
+	}
+}

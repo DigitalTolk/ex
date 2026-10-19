@@ -457,6 +457,72 @@ func (s *AttachmentService) GetForUser(ctx context.Context, userID, id, parentID
 	return a, nil
 }
 
+// OpenForUser streams an attachment's bytes under the same access rule as
+// GetForUser — for an agent run reading a file from a message its invoker can
+// see. The caller closes the body.
+func (s *AttachmentService) OpenForUser(ctx context.Context, userID, id, parentID, parentType, messageID string) (io.ReadCloser, *model.Attachment, error) {
+	a, err := s.attachments.GetByID(ctx, id)
+	if err != nil {
+		return nil, nil, fmt.Errorf("attachment: get: %w", err)
+	}
+	allowed, err := s.canAccessAttachment(ctx, userID, a, parentID, parentType, messageID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !allowed {
+		return nil, nil, store.ErrNotFound
+	}
+	if s.signer == nil || a.S3Key == "" {
+		return nil, nil, errors.New("attachment: storage not configured")
+	}
+	body, _, _, _, err := s.signer.OpenObject(ctx, a.S3Key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("attachment: open object: %w", err)
+	}
+	return body, a, nil
+}
+
+// OpenByID streams an attachment's bytes with NO access check — for callers
+// that authorized the read themselves (a run fetching one of its project's
+// reference screenshots). The caller closes the body.
+func (s *AttachmentService) OpenByID(ctx context.Context, id string) (io.ReadCloser, *model.Attachment, error) {
+	a, err := s.attachments.GetByID(ctx, id)
+	if err != nil {
+		return nil, nil, fmt.Errorf("attachment: get: %w", err)
+	}
+	if s.signer == nil || a.S3Key == "" {
+		return nil, nil, errors.New("attachment: storage not configured")
+	}
+	body, _, _, _, err := s.signer.OpenObject(ctx, a.S3Key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("attachment: open object: %w", err)
+	}
+	return body, a, nil
+}
+
+// AttachmentOwner reports who uploaded an attachment and which messages
+// reference it — the message service's send-time ownership check.
+func (s *AttachmentService) AttachmentOwner(ctx context.Context, id string) (createdBy string, messageIDs []string, err error) {
+	a, err := s.attachments.GetByID(ctx, id)
+	if err != nil {
+		return "", nil, fmt.Errorf("attachment: get owner: %w", err)
+	}
+	return a.CreatedBy, a.MessageIDs, nil
+}
+
+// ForRunPost returns the attachment if this run stored it (see
+// model.Attachment.RunID) — the only files a run may put on its posts.
+func (s *AttachmentService) ForRunPost(ctx context.Context, id, runID, agentID string) (*model.Attachment, error) {
+	a, err := s.attachments.GetByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("attachment: get for run post: %w", err)
+	}
+	if runID == "" || a.RunID != runID || a.CreatedBy != agentID {
+		return nil, fmt.Errorf("attachment %q was not uploaded by this run: %w", id, ErrForbidden)
+	}
+	return a, nil
+}
+
 // canAccessAttachment reports whether userID may read a. A returned error
 // means the access check could not run (transient store failure) — it is NOT
 // a verdict, and callers must fail their read rather than treat it as a

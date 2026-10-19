@@ -1,9 +1,11 @@
 import { createElement, useEffect, useMemo } from 'react';
-import { Download } from 'lucide-react';
+import { Download, Play } from 'lucide-react';
 import { useAttachmentsBatch } from '@/hooks/useAttachments';
 import { useAttachmentLightbox } from '@/hooks/useAttachmentLightbox';
-import { iconForAttachment, isImageAttachment, scaleToThumbnail } from '@/lib/file-helpers';
+import { iconForAttachment, isImageAttachment, isVideoAttachment, scaleToThumbnail } from '@/lib/file-helpers';
 import { formatBytes } from '@/lib/format';
+import { canPreviewHtml } from '@/lib/html-attachment';
+import { HtmlPreviewButton } from './HtmlPreviewButton';
 import type { Attachment } from '@/types';
 
 interface MessageAttachmentsProps {
@@ -61,14 +63,16 @@ export function MessageAttachments({
 
   if (ids.length === 0) return null;
 
-  // Big inline thumbnail only when this message has exactly one image
-  // attachment. Anything else (multiple files, mixed types, lone PDFs)
-  // renders as compact attachment boxes — easier to scan and uniform.
+  // Big inline thumbnail only when this message has exactly one image — or
+  // one video with a poster (its frame, kept at upload). Anything else
+  // (multiple files, mixed types, lone PDFs) renders as compact attachment
+  // boxes — easier to scan and uniform.
   const onlyAttachment = ids.length === 1 ? map.get(ids[0]) : null;
   const showThumb =
     onlyAttachment &&
     onlyAttachment.thumbnailURL &&
-    isImageAttachment(onlyAttachment.contentType, onlyAttachment.filename);
+    (isImageAttachment(onlyAttachment.contentType, onlyAttachment.filename) ||
+      isVideoAttachment(onlyAttachment.contentType, onlyAttachment.filename));
 
   return (
     <>
@@ -117,12 +121,13 @@ function ThumbnailButton({ att, onOpen, onLoad }: { att: Attachment; onOpen: () 
   // the lighter thumbnail.
   const isGif = att.contentType === 'image/gif';
   const src = isGif ? (att.url ?? att.thumbnailURL) : att.thumbnailURL;
+  const isVideo = isVideoAttachment(att.contentType, att.filename);
   return (
     <button
       type="button"
       onClick={onOpen}
-      className="block max-w-xs overflow-hidden rounded-md border outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/50 max-md:max-w-full"
-      aria-label={`Open image ${att.filename}`}
+      className="relative block max-w-xs overflow-hidden rounded-md border outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring/50 max-md:max-w-full"
+      aria-label={`${isVideo ? 'Play video' : 'Open image'} ${att.filename}`}
       data-testid="message-image-thumb"
     >
       {src && (
@@ -135,6 +140,17 @@ function ThumbnailButton({ att, onOpen, onLoad }: { att: Attachment; onOpen: () 
           onLoad={onLoad}
         />
       )}
+      {isVideo && (
+        <span
+          className="absolute inset-0 flex items-center justify-center"
+          data-testid="message-video-play"
+          aria-hidden
+        >
+          <span className="flex h-12 w-12 items-center justify-center rounded-full bg-black/55 text-white">
+            <Play className="h-5 w-5 translate-x-px fill-current" />
+          </span>
+        </span>
+      )}
     </button>
   );
 }
@@ -142,9 +158,11 @@ function ThumbnailButton({ att, onOpen, onLoad }: { att: Attachment; onOpen: () 
 // AttachmentRow is the compact box used whenever a message has multiple
 // attachments or a non-image attachment. Clicking the box opens the
 // lightbox; the download icon is its own action so users don't have to
-// open then download.
+// open then download. HTML files (design mockups) also get a Preview
+// action that renders them in a sandboxed frame — only on that click.
 function AttachmentRow({ att, onOpen }: { att: Attachment; onOpen: () => void }) {
-  const isImage = att.squareThumbnailURL && isImageAttachment(att.contentType, att.filename);
+  const isVideo = isVideoAttachment(att.contentType, att.filename);
+  const isImage = att.squareThumbnailURL && (isVideo || isImageAttachment(att.contentType, att.filename));
   const iconType = iconForAttachment(att.contentType, att.filename);
   return (
     <div className="flex h-12 w-64 max-w-full items-center gap-1 rounded-md border bg-background pr-1 max-md:w-full">
@@ -160,13 +178,24 @@ function AttachmentRow({ att, onOpen }: { att: Attachment; onOpen: () => void })
         data-testid="message-attachment-box"
       >
         {isImage ? (
-          <img
-            src={att.squareThumbnailURL}
-            alt=""
-            data-testid="message-attachment-thumb"
-            className="h-8 w-8 shrink-0 rounded-sm object-cover"
-            loading="lazy"
-          />
+          <span className="relative h-8 w-8 shrink-0">
+            <img
+              src={att.squareThumbnailURL}
+              alt=""
+              data-testid="message-attachment-thumb"
+              className="h-8 w-8 rounded-sm object-cover"
+              loading="lazy"
+            />
+            {isVideo && (
+              <span
+                className="absolute inset-0 flex items-center justify-center rounded-sm bg-black/30 text-white"
+                data-testid="message-attachment-video-play"
+                aria-hidden
+              >
+                <Play className="h-3 w-3 fill-current" />
+              </span>
+            )}
+          </span>
         ) : (
           createElement(iconType, {
             className: 'h-4 w-4 shrink-0 text-muted-foreground',
@@ -178,6 +207,13 @@ function AttachmentRow({ att, onOpen }: { att: Attachment; onOpen: () => void })
           <p className="text-xs text-muted-foreground">{formatBytes(att.size)}</p>
         </div>
       </button>
+      {canPreviewHtml(att) && (
+        <HtmlPreviewButton
+          attachment={att}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+          iconClassName="h-3.5 w-3.5"
+        />
+      )}
       {att.url && (
         <a
           href={att.downloadURL ?? att.url}

@@ -11,7 +11,7 @@ import (
 // regular Auth middleware rejects them, so a leaked runner or run token can
 // never drive the interactive API.
 const (
-	TokenScopeRunner = "runner" // desktop runner: register/claim/heartbeat/report
+	TokenScopeRunner = "runner" // ex-runner: register/claim/heartbeat/report/renew
 	TokenScopeRun    = "run"    // one run's MCP tool calls, invoker-scoped
 )
 

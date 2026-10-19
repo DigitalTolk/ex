@@ -243,6 +243,7 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/attachments/url", middleware.WrapFunc(attachmentH.CreateUploadURL, authMW))
 		mux.Handle("POST /api/v1/attachments/{id}/upload-request", middleware.WrapFunc(attachmentH.SignUploadRequest, authMW))
 		mux.Handle("POST /api/v1/attachments/{id}/process", middleware.WrapFunc(attachmentH.ProcessUpload, authMW))
+		mux.Handle("POST /api/v1/attachments/{id}/poster", middleware.WrapFunc(attachmentH.SetPoster, authMW, writeLimit))
 		mux.Handle("GET /api/v1/attachments", middleware.WrapFunc(attachmentH.List, authMW))
 		mux.Handle("GET /api/v1/attachments/{id}", middleware.WrapFunc(attachmentH.Get, authMW))
 		mux.Handle("DELETE /api/v1/attachments/{id}", middleware.WrapFunc(attachmentH.Delete, authMW))
@@ -299,9 +300,12 @@ func NewRouter(d *Deps) http.Handler {
 
 	// ------------------------------------------------------------------ Agents
 	// Three token audiences, three middlewares: interactive sessions for the
-	// SPA surface, runner-scoped tokens for the desktop runner, run-scoped
-	// tokens for one run's MCP tool calls. Each middleware accepts exactly
-	// its own scope, so a leaked machine token can't reach the wrong API.
+	// SPA surface, runner-scoped tokens for ex-runner, run-scoped tokens for
+	// one run's MCP tool calls. Each middleware accepts exactly its own scope,
+	// so a leaked machine token can't reach the wrong API. Runner tokens are
+	// also checked against their RunnerToken row on every request — that is
+	// what lets one install be revoked on its own.
+	runnerMW := middleware.AuthRunner(jwtMgr, d.RunnerToken.Checker())
 	if d.Agent != nil {
 		mux.Handle("GET /api/v1/agents", middleware.WrapFunc(d.Agent.List, authMW))
 		mux.Handle("POST /api/v1/agents", middleware.WrapFunc(d.Agent.CreateAgent, authMW, middleware.RequireSystemRole(model.SystemRoleAdmin), writeLimit))
@@ -309,10 +313,6 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("PATCH /api/v1/agents/{slug}/prefs", middleware.WrapFunc(d.Agent.UpdatePrefs, authMW))
 		mux.Handle("GET /api/v1/agents/{slug}/overrides", middleware.WrapFunc(d.Agent.CountOverrides, authMW, middleware.RequireSystemRole(model.SystemRoleAdmin)))
 		mux.Handle("DELETE /api/v1/agents/{slug}/overrides", middleware.WrapFunc(d.Agent.ResetOverrides, authMW, middleware.RequireSystemRole(model.SystemRoleAdmin), writeLimit))
-		// Rate-limited like every other write: minting is cheap for the caller
-		// and signs a long-lived credential, so it must not be the one POST a
-		// client can hammer freely.
-		mux.Handle("POST /api/v1/agents/runner-token", middleware.WrapFunc(d.Agent.MintRunnerToken, authMW, writeLimit))
 		mux.Handle("GET /api/v1/runs/thread", middleware.WrapFunc(d.Agent.ThreadTimeline, authMW))
 		mux.Handle("GET /api/v1/runs/{id}", middleware.WrapFunc(d.Agent.Timeline, authMW))
 		mux.Handle("GET /api/v1/runs/{id}/artifacts/{artifactID}", middleware.WrapFunc(d.Agent.GetArtifact, authMW))
@@ -330,8 +330,19 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("PATCH /api/v1/skills/{id}", middleware.WrapFunc(d.Agent.UpdateSkill, authMW, writeLimit))
 		mux.Handle("DELETE /api/v1/skills/{id}", middleware.WrapFunc(d.Agent.DeleteSkill, authMW, writeLimit))
 	}
+	if d.RunnerToken != nil {
+		// Pairing: the signed-in browser approves, the CLI redeems. The
+		// exchange is public (the CLI has no session yet), so it is
+		// throttled per IP like the other credential endpoints; a code is
+		// single-use and worthless without its PKCE verifier anyway.
+		mux.Handle("POST /api/v1/runner-tokens/grants", middleware.WrapFunc(d.RunnerToken.CreateGrant, authMW, writeLimit))
+		mux.Handle("POST /api/v1/runner-tokens/exchange", middleware.WrapFunc(d.RunnerToken.Exchange, authLimit))
+		mux.Handle("GET /api/v1/runner-tokens", middleware.WrapFunc(d.RunnerToken.List, authMW))
+		mux.Handle("DELETE /api/v1/runner-tokens/{id}", middleware.WrapFunc(d.RunnerToken.Revoke, authMW, writeLimit))
+		mux.Handle("POST /api/v1/agent/runner/renew", middleware.WrapFunc(d.RunnerToken.Renew, runnerMW))
+		mux.Handle("POST /api/v1/agent/runner/revoke", middleware.WrapFunc(d.RunnerToken.RevokeSelf, runnerMW))
+	}
 	if d.AgentRunner != nil {
-		runnerMW := middleware.AuthScope(jwtMgr, model.TokenScopeRunner)
 		mux.Handle("POST /api/v1/agent/runner/register", middleware.WrapFunc(d.AgentRunner.Register, runnerMW))
 		mux.Handle("POST /api/v1/agent/runner/claim", middleware.WrapFunc(d.AgentRunner.Claim, runnerMW))
 		mux.Handle("POST /api/v1/agent/runner/heartbeat", middleware.WrapFunc(d.AgentRunner.Heartbeat, runnerMW))
@@ -360,6 +371,12 @@ func NewRouter(d *Deps) http.Handler {
 		// Agent posts share the per-user write limit so a runaway agent can't
 		// out-post a human (keyed by the invoker's user id from the token).
 		mux.Handle("POST /api/v1/agent/run/messages", middleware.WrapFunc(d.AgentRunTool.PostMessage, runMW, writeLimit))
+		if d.AgentRunTool.attachments != nil {
+			// Files: the invoking message's attachments down to the runner,
+			// and the agent's own files up for its posts.
+			mux.Handle("GET /api/v1/agent/run/attachments/{id}", middleware.WrapFunc(d.AgentRunTool.DownloadAttachment, runMW))
+			mux.Handle("POST /api/v1/agent/run/attachments", middleware.WrapFunc(d.AgentRunTool.UploadAttachment, runMW, writeLimit))
+		}
 		mux.Handle("GET /api/v1/agent/run/thread", middleware.WrapFunc(d.AgentRunTool.GetThread, runMW))
 		mux.Handle("GET /api/v1/agent/run/context", middleware.WrapFunc(d.AgentRunTool.GetContext, runMW))
 		mux.Handle("POST /api/v1/agent/run/context", middleware.WrapFunc(d.AgentRunTool.WriteContext, runMW, writeLimit))
@@ -389,6 +406,17 @@ func NewRouter(d *Deps) http.Handler {
 			mux.Handle("PATCH /api/v1/coding-tasks/{id}", middleware.WrapFunc(d.CodingTask.SetSteering, authMW, writeLimit))
 			mux.Handle("GET /api/v1/channels/{id}/coding-tasks", middleware.WrapFunc(d.CodingTask.ListByChannel, authMW))
 			mux.Handle("GET /api/v1/coding-projects", middleware.WrapFunc(d.CodingTask.ListProjects, authMW))
+		}
+		if d.Project != nil {
+			// Projects page (plan-projects-design.md).
+			mux.Handle("GET /api/v1/projects", middleware.WrapFunc(d.Project.List, authMW))
+			mux.Handle("POST /api/v1/projects", middleware.WrapFunc(d.Project.Create, authMW, writeLimit))
+			mux.Handle("GET /api/v1/projects/{key}", middleware.WrapFunc(d.Project.Get, authMW))
+			mux.Handle("PATCH /api/v1/projects/{key}", middleware.WrapFunc(d.Project.Update, authMW, writeLimit))
+			mux.Handle("DELETE /api/v1/projects/{key}", middleware.WrapFunc(d.Project.Delete, authMW, writeLimit))
+			mux.Handle("POST /api/v1/projects/{key}/screens", middleware.WrapFunc(d.Project.AddScreen, authMW, writeLimit))
+			mux.Handle("PATCH /api/v1/projects/{key}/screens/{id}", middleware.WrapFunc(d.Project.UpdateScreen, authMW, writeLimit))
+			mux.Handle("DELETE /api/v1/projects/{key}/screens/{id}", middleware.WrapFunc(d.Project.DeleteScreen, authMW, writeLimit))
 		}
 		if d.AgentRunTool.workspace != nil {
 			// Ex-wide tools: everything the INVOKER could do, done as the agent.

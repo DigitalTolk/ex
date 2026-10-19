@@ -185,6 +185,57 @@ describe('ThreadPanel real-scroll coverage', () => {
     expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThan(40);
   });
 
+  // The phone's keyboard (the app is sized to the space above it) and the
+  // reply composer take their height from below the replies. The panel only
+  // followed its replies growing, so the newest reply slid under the
+  // composer, and scrolling down to it dismissed the keyboard.
+  describe('when the panel is resized from below (the keyboard)', () => {
+    function setPanelHeight(px: number) {
+      document.getElementById('tp-scroll-style')!.textContent =
+        `aside[aria-label="Thread"]{height:${px}px!important;max-height:${px}px!important}` +
+        '*{animation:none!important;transition:none!important}';
+    }
+    // How far a reply's bottom is above the view's (negative: cut off).
+    function gapOf(id: string) {
+      const row = document.querySelector(`[data-message-id="${id}"]`)!;
+      // `|| 0`: a sub-pixel gap rounds to -0, which toBe(0) refuses.
+      return Math.round(scroller().getBoundingClientRect().bottom - row.getBoundingClientRect().bottom) || 0;
+    }
+    async function open() {
+      const { ui, panel } = mount();
+      active = await render(ui(panel({})));
+      await vi.waitFor(() => expect(scroller().scrollHeight).toBeGreaterThan(scroller().clientHeight), { timeout: 3000 });
+      await frame();
+    }
+
+    it('keeps the newest reply right above the composer', async () => {
+      await open();
+      const gap = gapOf('R19');
+      setPanelHeight(180);
+      await frame();
+      await frame();
+      expect(gapOf('R19')).toBe(gap);
+      // The keyboard going away again.
+      setPanelHeight(300);
+      await frame();
+      await frame();
+      expect(gapOf('R19')).toBe(gap);
+    });
+
+    it('keeps a reader a few replies up on what was at the bottom of the view', async () => {
+      await open();
+      const el = scroller();
+      el.scrollTop -= 200;
+      el.dispatchEvent(new Event('scroll', { bubbles: true }));
+      await frame();
+      const gap = gapOf('R16');
+      setPanelHeight(180);
+      await frame();
+      await frame();
+      expect(gapOf('R16')).toBe(gap);
+    });
+  });
+
   it('follows a new reply added to an already-open thread while at the bottom', async () => {
     const { ui, panel } = mount();
     threadMessagesState = { data: manyReplies(20), isLoading: false };

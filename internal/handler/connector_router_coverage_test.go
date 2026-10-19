@@ -834,7 +834,7 @@ func TestHconnCovPresenceAlwaysOnline(t *testing.T) {
 // auth middlewares is expected).
 func TestHconnCovRouterAgentRoutes(t *testing.T) {
 	jwtMgr := auth.NewJWTManager("hconncov-router-secret", 15*time.Minute, 24*time.Hour)
-	runTool := &AgentRunToolHandler{workspace: &AgentWorkspaceDeps{}}
+	runTool := &AgentRunToolHandler{workspace: &AgentWorkspaceDeps{}, attachments: &service.AttachmentService{}}
 	router := NewRouter(&Deps{
 		Auth:         &AuthHandler{},
 		User:         &UserHandler{},
@@ -844,8 +844,10 @@ func TestHconnCovRouterAgentRoutes(t *testing.T) {
 		Agent:        &AgentHandler{},
 		AgentRunner:  &AgentRunnerHandler{},
 		AgentRunTool: runTool,
+		RunnerToken:  &RunnerTokenHandler{},
 		Connector:    &ConnectorHandler{},
 		CodingTask:   &CodingTaskHandler{},
+		Project:      &ProjectHandler{},
 		Context:      &ContextHandler{},
 		JWT:          jwtMgr,
 		AppVersion:   "hconncov",
@@ -859,14 +861,20 @@ func TestHconnCovRouterAgentRoutes(t *testing.T) {
 		// Agent SPA surface.
 		{http.MethodGet, "/api/v1/agents"},
 		{http.MethodPost, "/api/v1/agents"},
-		{http.MethodPost, "/api/v1/agents/runner-token"},
 		{http.MethodGet, "/api/v1/runs/thread"},
 		{http.MethodGet, "/api/v1/runs/r1"},
 		{http.MethodPost, "/api/v1/runs/r1/stop"},
 		{http.MethodGet, "/api/v1/skills"},
 		{http.MethodGet, "/api/v1/agents/gg/subscriptions"},
 		{http.MethodGet, "/api/v1/channels/c1/watchers"},
-		// Desktop-runner API.
+		// ex-runner pairing + the Runners page.
+		{http.MethodPost, "/api/v1/runner-tokens/grants"},
+		{http.MethodPost, "/api/v1/runner-tokens/exchange"},
+		{http.MethodGet, "/api/v1/runner-tokens"},
+		{http.MethodDelete, "/api/v1/runner-tokens/rt1"},
+		{http.MethodPost, "/api/v1/agent/runner/renew"},
+		{http.MethodPost, "/api/v1/agent/runner/revoke"},
+		// ex-runner API.
 		{http.MethodPost, "/api/v1/agent/runner/register"},
 		{http.MethodPost, "/api/v1/agent/runner/claim"},
 		{http.MethodPost, "/api/v1/agent/runner/runs/r1/events"},
@@ -884,6 +892,9 @@ func TestHconnCovRouterAgentRoutes(t *testing.T) {
 		{http.MethodPost, "/api/v1/agent/run/messages"},
 		{http.MethodGet, "/api/v1/agent/run/thread"},
 		{http.MethodPost, "/api/v1/agent/run/approvals"},
+		// Run-scoped files (registered because attachments are set).
+		{http.MethodGet, "/api/v1/agent/run/attachments/a1"},
+		{http.MethodPost, "/api/v1/agent/run/attachments"},
 		{http.MethodGet, "/api/v1/agent/run/skills"},
 		// Coding tasks: run tools + human surface.
 		{http.MethodPost, "/api/v1/agent/run/coding-task"},
@@ -892,6 +903,15 @@ func TestHconnCovRouterAgentRoutes(t *testing.T) {
 		{http.MethodPost, "/api/v1/coding-tasks/t1/signoff"},
 		{http.MethodGet, "/api/v1/channels/c1/coding-tasks"},
 		{http.MethodGet, "/api/v1/coding-projects"},
+		// Projects page (products + design references).
+		{http.MethodGet, "/api/v1/projects"},
+		{http.MethodPost, "/api/v1/projects"},
+		{http.MethodGet, "/api/v1/projects/p1"},
+		{http.MethodPatch, "/api/v1/projects/p1"},
+		{http.MethodDelete, "/api/v1/projects/p1"},
+		{http.MethodPost, "/api/v1/projects/p1/screens"},
+		{http.MethodPatch, "/api/v1/projects/p1/screens/s1"},
+		{http.MethodDelete, "/api/v1/projects/p1/screens/s1"},
 		// Ex-wide workspace tools (registered because workspace is set).
 		{http.MethodGet, "/api/v1/agent/run/channels"},
 		{http.MethodPost, "/api/v1/agent/run/channels/c1/join"},

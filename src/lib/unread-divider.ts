@@ -14,7 +14,7 @@ export function countsTowardUnread(m: Message, parentType: 'channel' | 'conversa
 // isNewTo: a reader's own messages are never "new" to them. The server never
 // counts them (posting marks the author caught up), so the line, the banner
 // and the pill skip them too.
-function isNewTo(m: Message, parentType: 'channel' | 'conversation', currentUserID: string | undefined): boolean {
+export function isNewTo(m: Message, parentType: 'channel' | 'conversation', currentUserID: string | undefined): boolean {
   return countsTowardUnread(m, parentType) && !isOwnMessage(m, currentUserID);
 }
 

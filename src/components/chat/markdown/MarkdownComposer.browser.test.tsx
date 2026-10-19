@@ -49,11 +49,16 @@ vi.mock('@/hooks/useEmoji', () => ({
   useEmojiMap: () => ({ data: { partyparrot: 'https://emoji.test/parrot.gif' } }),
 }));
 
-// The composer's "/" typeahead lists installed connectors via react-query;
-// this suite renders without a QueryClientProvider, so stub the hook.
+// The composer's "/" typeahead lists installed connectors and projects via
+// react-query; this suite renders without a QueryClientProvider, so stub the
+// hooks.
 vi.mock('@/hooks/useConnectors', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useConnectors')>()),
   useConnectors: () => ({ data: [] }),
+}));
+vi.mock('@/hooks/useProjects', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useProjects')>()),
+  useProjects: () => ({ data: [] }),
 }));
 vi.mock('@/hooks/useAgents', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useAgents')>()),

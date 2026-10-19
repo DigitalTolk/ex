@@ -431,10 +431,19 @@ describe('edge arms', () => {
     initTabCoordinator({ type: 'simulate' });
     const ch = getTabChannelForTests() as { close: () => Promise<void> };
     const el = getTabElectorForTests() as { die: () => Promise<void> };
-    vi.spyOn(el, 'die').mockRejectedValue(new Error('torn'));
-    vi.spyOn(ch, 'close').mockRejectedValue(new Error('torn'));
-    await resetTabCoordinatorForTests(); // die() + close() reject — swallowed
-    expect(isLeaderTab()).toBe(true); // back to the inert single-tab baseline
+    const die = vi.spyOn(el, 'die').mockRejectedValue(new Error('torn'));
+    const close = vi.spyOn(ch, 'close').mockRejectedValue(new Error('torn'));
+    try {
+      await resetTabCoordinatorForTests(); // die() + close() reject — swallowed
+      expect(isLeaderTab()).toBe(true); // back to the inert single-tab baseline
+    } finally {
+      // The stubs kept the real elector alive, and as leader it outvoted
+      // every later "lone tab" election in this file (seen in a shuffled run).
+      die.mockRestore();
+      close.mockRestore();
+      await el.die();
+      await ch.close();
+    }
   });
 
   it('reset also survives bc returning undefined from close/die (double-teardown shape)', async () => {

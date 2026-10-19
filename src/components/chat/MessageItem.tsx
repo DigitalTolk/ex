@@ -53,6 +53,8 @@ import { ArtifactCard } from '@/components/chat/ArtifactCard';
 import { TaskCard } from '@/components/chat/TaskCard';
 import { parseArtifactMarker } from '@/lib/artifact-marker';
 import { parseTaskMarker } from '@/lib/task-marker';
+import { hasDesignMarkers } from '@/lib/design-markers';
+import { DesignMarkers } from '@/components/projects/DesignMarkers';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { deviceKind, isHoverPointer } from '@/lib/device';
 import { isKeyboardModality, startInputModalityTracking } from '@/lib/input-modality';
@@ -1297,6 +1299,15 @@ function MessageItemImpl({
                 }
                 postedAt={message.createdAt}
                 onContentHeightChange={onContentHeightChange}
+              />
+            )}
+            {hasDesignMarkers(message.body) && (
+              <DesignMarkers
+                body={message.body}
+                attachmentIDs={message.attachmentIDs}
+                channelId={channelId}
+                conversationId={conversationId}
+                messageID={message.id}
               />
             )}
             <MessageRichAttachments attachments={message.messageAttachments} onContentHeightChange={onContentHeightChange} />

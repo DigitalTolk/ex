@@ -142,7 +142,7 @@ type ctaskCovMsgs struct {
 	accessErr          error
 }
 
-func (m *ctaskCovMsgs) SendAsAgentRun(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string) (*model.Message, error) {
+func (m *ctaskCovMsgs) SendAsAgentRun(ctx context.Context, agentID, invokerID, parentID, parentType, body, parentMessageID, runID string, _ ...string) (*model.Message, error) {
 	if m.sendErr != nil && (m.failSendContaining == "" || strings.Contains(body, m.failSendContaining)) {
 		return nil, m.sendErr
 	}
@@ -234,7 +234,7 @@ func TestCtaskCovTaskURLAndPureHelpers(t *testing.T) {
 	if got := invokeFailureDetail(fmt.Errorf("%w: gg isn't reachable", ErrAgentOffline)); got != "gg isn't reachable." {
 		t.Fatalf("offline detail = %q", got)
 	}
-	if got := invokeFailureDetail(ErrAgentOffline); got != "dev runs on your own computer through the ex desktop app, which isn't online — open the app and stay signed in, then say retry." {
+	if got := invokeFailureDetail(ErrAgentOffline); got != "dev runs on your own computer through ex-runner, which isn't online — start it there with `ex-runner start`, then say retry." {
 		t.Fatalf("bare offline detail = %q", got)
 	}
 	if got := invokeFailureDetail(ErrAgentBusy); got != "dev is already busy in this thread." {

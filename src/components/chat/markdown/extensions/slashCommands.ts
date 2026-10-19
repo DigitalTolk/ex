@@ -27,6 +27,9 @@ export interface SlashCommandProviders {
   // Workspace skills — "/weekly-report" attaches that skill's instructions to
   // the agent run this message invokes. Inline, like connector picks.
   skills?: () => SlashCommand[];
+  // Projects — "/booking-portal" names the product whose design references
+  // (screenshots + notes) the design agent copies. Inline, like the others.
+  projects?: () => SlashCommand[];
 }
 
 // Grouped-menu headers (same chrome as the @-mention popup's
@@ -47,6 +50,7 @@ function mkSection(name: string, rank: number): CompletionSection {
 const SECTION_COMMANDS = mkSection('Commands', 0);
 const SECTION_CONNECTORS = mkSection('Connectors', 1);
 const SECTION_SKILLS = mkSection('Skills', 2);
+const SECTION_PROJECTS = mkSection('Projects', 3);
 
 // Replace the matched range with the full command; the send handler runs it.
 function applyCommand(text: string) {
@@ -106,6 +110,17 @@ export function slashCommandSource(providers: SlashCommandProviders): Completion
         section: SECTION_SKILLS,
         apply: applyCommand(`/${s.name} `),
         meta: { kind: 'command', name: s.name, description: s.description },
+      });
+    }
+    for (const p of providers.projects?.() ?? []) {
+      if (!p.name.toLowerCase().startsWith(query)) continue;
+      options.push({
+        label: `/${p.name}`,
+        detail: p.description,
+        type: 'keyword',
+        section: SECTION_PROJECTS,
+        apply: applyCommand(`/${p.name} `),
+        meta: { kind: 'command', name: p.name, description: p.description },
       });
     }
     if (options.length === 0) return null;

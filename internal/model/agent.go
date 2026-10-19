@@ -170,8 +170,12 @@ type AgentTemplate struct {
 	SkillIDs          []string    `json:"skillIDs,omitempty" dynamodbav:"skillIDs,omitempty"`
 	Limits            AgentLimits `json:"limits" dynamodbav:"limits"`
 	MaxConcurrentRuns int         `json:"maxConcurrentRuns" dynamodbav:"maxConcurrentRuns"`
-	CreatedAt         time.Time   `json:"createdAt" dynamodbav:"createdAt"`
-	UpdatedAt         time.Time   `json:"updatedAt" dynamodbav:"updatedAt"`
+	// FollowUpMode is the template's default for thread follow-ups when the
+	// invoker has no pref of their own ("" = off). The design agent defaults
+	// to "always": tweaking a mockup is replying in its thread.
+	FollowUpMode string    `json:"followUpMode,omitempty" dynamodbav:"followUpMode,omitempty"`
+	CreatedAt    time.Time `json:"createdAt" dynamodbav:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
 }
 
 // AgentConfig marks a user row as one of the shared agent users. It carries
@@ -285,6 +289,9 @@ type RunSpend struct {
 	InputTokens  int64 `json:"inputTokens" dynamodbav:"inputTokens"`
 	OutputTokens int64 `json:"outputTokens" dynamodbav:"outputTokens"`
 	Posts        int   `json:"posts" dynamodbav:"posts"`
+	// Uploads counts files the run stored for its own posts; capped per run
+	// (UploadsPerRun) so a runaway agent can't fill the bucket.
+	Uploads int `json:"uploads,omitempty" dynamodbav:"uploads,omitempty"`
 }
 
 // Run is one bounded agent task: invoked by a human mention, executed by the
@@ -306,6 +313,13 @@ type Run struct {
 	State  RunState `json:"state" dynamodbav:"state"`
 	Mode   string   `json:"mode" dynamodbav:"mode"` // "direct" at Phase 1
 	Prompt string   `json:"prompt" dynamodbav:"prompt"`
+	// AttachmentIDs are the files on the invoking message, in message order.
+	// They are the run's INPUT files: the engine hands them to the model
+	// (Bedrock content blocks, or downloads on the runner) and the run-scoped
+	// attachment endpoint serves exactly these without a further message
+	// lookup. Access is still the invoker's — the message they came from is
+	// one the invoker could read when the run started.
+	AttachmentIDs []string `json:"attachmentIDs,omitempty" dynamodbav:"attachmentIDs,omitempty"`
 
 	// Round is the agent-to-agent handoff depth: 0 = human-invoked; an agent
 	// whose reply @mentions another agent starts that agent at Round+1. The
@@ -342,6 +356,14 @@ type Run struct {
 	// the user's explicit pick of which external services this run may use.
 	// The runner only syncs docs + injects credentials for these.
 	ConnectorSlugs []string `json:"connectorSlugs,omitempty" dynamodbav:"connectorSlugs,omitempty"`
+	// ProjectKey: the product whose design references ride this run (a
+	// /project pick, inherited in a thread, or name-matched for the design
+	// agent). Empty for most runs.
+	ProjectKey string `json:"projectKey,omitempty" dynamodbav:"projectKey,omitempty"`
+	// RequiresFeatures: runner features this run needs (RunnerFeature*). A
+	// runner that doesn't advertise every one of them never claims the run —
+	// e.g. design runs need file fetch/post, which old built-in runners lack.
+	RequiresFeatures []string `json:"requiresFeatures,omitempty" dynamodbav:"requiresFeatures,omitempty"`
 	// TaskID binds the run to a coding task (RunModeTask): its thread root is
 	// the task card, its budget is uncapped, and the runner prepares the
 	// project workspace before the harness starts.
@@ -509,6 +531,11 @@ type Artifact struct {
 const (
 	ArtifactMaxBytes = 64 * 1024
 	ArtifactsPerRun  = 5
+	// UploadsPerRun caps the files one run may store for its posts, and
+	// UploadMaxBytes caps each one. Generous for a report with a few
+	// screenshots; far below what a loop could do with the bucket.
+	UploadsPerRun  = 20
+	UploadMaxBytes = 10 << 20
 	// Raw API responses (auto-captured connector_call bodies) get their own,
 	// larger budget — they exist so a human can audit what the agent actually
 	// saw, and a research-y run makes a dozen calls.
@@ -725,6 +752,14 @@ type RunnerHarness struct {
 
 // RunnerRegistration is a live runner process on one of the owner's
 // machines. Rows carry a DynamoDB TTL so dead runners self-reap.
+// Runner features a run may require (Run.RequiresFeatures) and a runner
+// advertises at claim time.
+const (
+	// RunnerFeatureFiles: the runner can fetch run attachments and post files
+	// (fetch_attachment, post_message attachments).
+	RunnerFeatureFiles = "files"
+)
+
 type RunnerRegistration struct {
 	RunnerID       string          `json:"runnerID" dynamodbav:"runnerID"`
 	OwnerID        string          `json:"ownerID" dynamodbav:"ownerID"`
@@ -733,4 +768,10 @@ type RunnerRegistration struct {
 	Harnesses      []RunnerHarness `json:"harnesses" dynamodbav:"harnesses"`
 	LeaseExpiresAt time.Time       `json:"leaseExpiresAt" dynamodbav:"leaseExpiresAt"`
 	CreatedAt      time.Time       `json:"createdAt" dynamodbav:"createdAt"`
+	// TokenID is the paired install this process signed in with (the
+	// runner JWT's jti = RunnerToken.ID): how the Runners page knows which
+	// of the owner's computers is online.
+	TokenID string `json:"tokenID,omitempty" dynamodbav:"tokenID,omitempty"`
+	// Version is the ex-runner build, when the runner reports it.
+	Version string `json:"version,omitempty" dynamodbav:"version,omitempty"`
 }

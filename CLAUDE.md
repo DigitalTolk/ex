@@ -52,6 +52,17 @@ Common patterns:
 - For ref-only deps that ESLint flags, list the refs in the dep array — refs are stable so it's a no-op behaviorally and silences the warning.
 - For `vi.fn().mockImplementation(...)` of a constructor, use a `function` (not arrow) so `[[Construct]]` works and vitest doesn't warn.
 
+### No flaky tests (HARD GATE)
+
+**A test that fails only sometimes is a failing test.**
+
+When a test flakes:
+- Reproduce it first. A failure seen only in CI is load: run the file side by side with itself. One that depends on what ran before it shows up with `--sequence.shuffle --sequence.seed=<n>`.
+- Look for a product race before touching the test. A flake is often the app mishandling input that arrives early — sending the last render's `body` instead of the editor's current text dropped the last characters typed, and only a busy CI runner was fast enough to show it.
+- Wait for what the user would see, never for time: `findBy*` / `expect.element` / `waitFor` on the state that proves the app handled the input. No fixed sleeps or frame counts to "let it settle".
+- Nothing carries over between tests: each test sets up what it relies on — the real mouse position (`parkMouse` in `@/test/hover`), a lazy chunk's first render, module-level singletons, localStorage. The setup files reset the zustand stores, storage, module state, phone width and page focus before each test; anything else a test changes, it restores.
+- Never retry a flake away, raise one test's timeout to outlast it, or skip it. The shared waiting budget is already sized for a loaded machine (5s: RTL `asyncUtilTimeout` in `src/test/setup.ts`, `expect.poll` in `vitest.config.ts`); a wait that needs more than that is waiting for the wrong thing.
+
 ### Coverage — 100% everywhere (HARD GATE)
 
 **The backend AND the merged frontend gate must stay at 100%.** This is non-negotiable. The metric differs per gate (Go has no branch-coverage metric):

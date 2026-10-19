@@ -327,4 +327,136 @@ func TestTaskStore_CorruptRows(t *testing.T) {
 		_, err := NewTaskStore(withFault(db, corruptQ)).ListProjects(ctx)
 		assertUnmarshalErr(t, err, "ListProjects")
 	})
+	t.Run("GetScreen", func(t *testing.T) {
+		faulted := withFault(db, func(f *faultClient) { f.transformGetItem = corruptGetItem })
+		_, err := NewTaskStore(faulted).GetScreen(ctx, "p-x", "s-x")
+		assertUnmarshalErr(t, err, "GetScreen")
+	})
+	t.Run("ListScreens", func(t *testing.T) {
+		_, err := NewTaskStore(withFault(db, corruptQ)).ListScreens(ctx, "p-x")
+		assertUnmarshalErr(t, err, "ListScreens")
+	})
 }
+
+func TestTaskStore_ProjectScreens(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewTaskStore(db)
+	if err := s.CreateProject(ctx, mkCodingProjectFixture("acme")); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	if err := s.PutScreen(ctx, &model.ProjectScreen{ID: "sc1"}); err == nil {
+		t.Fatal("screen without project key: want error")
+	}
+	for _, id := range []string{"sc1", "sc2"} {
+		if err := s.PutScreen(ctx, &model.ProjectScreen{ID: id, ProjectKey: "acme", Page: "Home " + id, AttachmentID: "att-" + id}); err != nil {
+			t.Fatalf("put %s: %v", id, err)
+		}
+	}
+	got, err := s.GetScreen(ctx, "acme", "sc1")
+	if err != nil || got.Page != "Home sc1" || got.AttachmentID != "att-sc1" {
+		t.Fatalf("get: %+v %v", got, err)
+	}
+	if _, err := s.GetScreen(ctx, "acme", "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("get missing: %v", err)
+	}
+	list, err := s.ListScreens(ctx, "acme")
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list: %d %v", len(list), err)
+	}
+	// Screens share the project's partition but never show up as projects.
+	if all, _ := s.ListProjects(ctx); len(all) != 1 {
+		t.Fatalf("screens leaked into the project list: %d", len(all))
+	}
+	if p, err := s.GetProject(ctx, "acme"); err != nil || p.Key != "acme" {
+		t.Fatalf("project META still readable: %+v %v", p, err)
+	}
+	if err := s.DeleteScreen(ctx, "acme", "sc1"); err != nil {
+		t.Fatalf("delete screen: %v", err)
+	}
+	if list, _ := s.ListScreens(ctx, "acme"); len(list) != 1 {
+		t.Fatalf("after delete: %d", len(list))
+	}
+	if err := s.DeleteProject(ctx, "acme"); err != nil {
+		t.Fatalf("delete project: %v", err)
+	}
+	if _, err := s.GetProject(ctx, "acme"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("project gone: %v", err)
+	}
+}
+
+func TestTaskStore_ProjectScreens_SDKErrors(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	sc := &model.ProjectScreen{ID: "sc1", ProjectKey: "acme"}
+	put := NewTaskStore(withFault(db, func(f *faultClient) { f.failPutItem = true }))
+	if err := put.PutScreen(ctx, sc); !errors.Is(err, errInjected) {
+		t.Fatalf("PutScreen: %v", err)
+	}
+	get := NewTaskStore(withFault(db, func(f *faultClient) { f.failGetItem = true }))
+	if _, err := get.GetScreen(ctx, "acme", "sc1"); !errors.Is(err, errInjected) {
+		t.Fatalf("GetScreen: %v", err)
+	}
+	query := NewTaskStore(withFault(db, func(f *faultClient) { f.failQuery = true }))
+	if _, err := query.ListScreens(ctx, "acme"); !errors.Is(err, errInjected) {
+		t.Fatalf("ListScreens: %v", err)
+	}
+	del := NewTaskStore(withFault(db, func(f *faultClient) { f.failDeleteItem = true }))
+	if err := del.DeleteScreen(ctx, "acme", "sc1"); !errors.Is(err, errInjected) {
+		t.Fatalf("DeleteScreen: %v", err)
+	}
+	if err := del.DeleteProject(ctx, "acme"); !errors.Is(err, errInjected) {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+}
+
+func TestTaskStore_ProjectTheme(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewTaskStore(db)
+	if err := s.PutProjectTheme(ctx, &model.ProjectTheme{}); err == nil {
+		t.Fatal("theme without project key: want error")
+	}
+	if _, err := s.GetProjectTheme(ctx, "acme"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("absent theme: %v", err)
+	}
+	if err := s.PutProjectTheme(ctx, &model.ProjectTheme{ProjectKey: "acme", Filename: "globals.css", CSS: ":root{--a:1}", UpdatedBy: "u-1"}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	got, err := s.GetProjectTheme(ctx, "acme")
+	if err != nil || got.Filename != "globals.css" || got.CSS != ":root{--a:1}" {
+		t.Fatalf("get: %+v %v", got, err)
+	}
+	if err := s.CreateProject(ctx, mkCodingProjectFixture("acme")); err != nil {
+		t.Fatal(err)
+	}
+	if all, _ := s.ListProjects(ctx); len(all) != 1 {
+		t.Fatalf("the theme row must not list as a project: %d", len(all))
+	}
+	if list, _ := s.ListScreens(ctx, "acme"); len(list) != 0 {
+		t.Fatalf("the theme row must not list as a screen: %d", len(list))
+	}
+	if err := s.DeleteProjectTheme(ctx, "acme"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := s.GetProjectTheme(ctx, "acme"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted theme: %v", err)
+	}
+
+	put := NewTaskStore(withFault(db, func(f *faultClient) { f.failPutItem = true }))
+	if err := put.PutProjectTheme(ctx, &model.ProjectTheme{ProjectKey: "acme"}); !errors.Is(err, errInjected) {
+		t.Fatalf("put failure: %v", err)
+	}
+	get := NewTaskStore(withFault(db, func(f *faultClient) { f.failGetItem = true }))
+	if _, err := get.GetProjectTheme(ctx, "acme"); !errors.Is(err, errInjected) {
+		t.Fatalf("get failure: %v", err)
+	}
+	del := NewTaskStore(withFault(db, func(f *faultClient) { f.failDeleteItem = true }))
+	if err := del.DeleteProjectTheme(ctx, "acme"); !errors.Is(err, errInjected) {
+		t.Fatalf("delete failure: %v", err)
+	}
+	corrupt := NewTaskStore(withFault(db, func(f *faultClient) { f.transformGetItem = corruptGetItem }))
+	_, err = corrupt.GetProjectTheme(ctx, "acme")
+	assertUnmarshalErr(t, err, "GetProjectTheme")
+}
+

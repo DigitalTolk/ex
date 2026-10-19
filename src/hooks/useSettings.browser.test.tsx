@@ -36,7 +36,8 @@ describe('useWorkspaceSettings', () => {
     const screen = await renderHook(() => useWorkspaceSettings());
     await new Promise((r) => setTimeout(r, 150));
     const parsed = JSON.parse(screen.getByTestId('probe').element().getAttribute('data-data') || '{}');
-    expect(parsed).toEqual({ maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false });
+    // Runners in the app is off until an admin turns it on.
+    expect(parsed).toEqual({ maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false, runnersInApp: false });
   });
 
   it('returns the API settings when present', async () => {

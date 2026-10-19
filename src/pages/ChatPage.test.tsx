@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import ChatPage from './ChatPage';
+import ChatPage, { CHAT_LOADING_RETRY_MS } from './ChatPage';
 
 // Mock AppLayout to just render children
 vi.mock('@/components/layout/AppLayout', () => ({
@@ -133,6 +133,21 @@ describe('ChatPage', () => {
     expect(screen.getByTestId('app-layout')).toBeInTheDocument();
   });
 
+  it('asks the desktop app for its ex-runner state only inside the desktop app', async () => {
+    renderChatPage();
+    expect(window.__EX_RUNNER__).toBeUndefined();
+
+    const call = vi.fn(async () => ({ supported: true }));
+    window.__EX_RUNNER__ = { call, subscribe: () => () => {} };
+    try {
+      renderChatPage();
+      // The autostart check reads the runner's state once at launch.
+      await waitFor(() => expect(call).toHaveBeenCalledWith('getState', undefined));
+    } finally {
+      delete window.__EX_RUNNER__;
+    }
+  });
+
   it('does not gate desktop rendering on sidebar query data', () => {
     setMobileViewport(false);
 
@@ -150,6 +165,48 @@ describe('ChatPage', () => {
 
     expect(screen.getByTestId('mobile-chat-loading')).toBeInTheDocument();
     expect(screen.getByTestId('app-layout')).toBeInTheDocument();
+  });
+
+  // The reported bug: the phone app sometimes stayed gray after its logo,
+  // until it was killed. The loading pane was an empty gray div with nothing
+  // to do. It now says it is connecting, and soon offers to send again
+  // whatever is still stuck.
+  it('says it is connecting, and offers Retry for requests still stuck', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      setMobileViewport(true);
+      // Every startup list loads except the conversations, whose request hangs.
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path === '/api/v1/conversations') return new Promise<Response>(() => undefined);
+        if (path === '/api/v1/user-state') {
+          return Promise.resolve(responseJSON({ channelNotifications: [], threadNotifications: [], threadSeen: {}, hiddenConversations: [] }));
+        }
+        return Promise.resolve(responseJSON([]));
+      });
+      globalThis.fetch = fetchMock as typeof fetch;
+      renderChatPage();
+
+      const loading = screen.getByTestId('mobile-chat-loading');
+      expect(loading).toHaveTextContent('Connecting…');
+      expect(screen.queryByTestId('mobile-chat-loading-retry')).toBeNull();
+      await act(async () => {
+        vi.advanceTimersByTime(CHAT_LOADING_RETRY_MS);
+      });
+
+      const sent = (path: string) => fetchMock.mock.calls.filter(([input]) => String(input) === path).length;
+      const before = { conversations: sent('/api/v1/conversations'), channels: sent('/api/v1/channels') };
+      await act(async () => {
+        screen.getByTestId('mobile-chat-loading-retry').click();
+        // React Query schedules its fetches on a timer.
+        vi.advanceTimersByTime(10);
+      });
+      // Only the stuck one goes out again.
+      expect(sent('/api/v1/conversations')).toBe(before.conversations + 1);
+      expect(sent('/api/v1/channels')).toBe(before.channels);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('renders the mobile chat shell after initial sidebar data has loaded', async () => {

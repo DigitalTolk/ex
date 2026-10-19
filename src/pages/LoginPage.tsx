@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
 import { apiFetch, captureServerVersion, setAccessToken } from '@/lib/api';
+import { takeReturnTo } from '@/lib/return-to';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { AuthPageShell } from '@/components/layout/AuthPageShell';
 import type { User } from '@/types';
@@ -47,7 +48,7 @@ export default function LoginPage() {
       setAccessToken(data.accessToken);
       const u = await apiFetch<User>('/api/v1/users/me');
       setAuth(data.accessToken, u);
-      navigate('/');
+      navigate(takeReturnTo('/'));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {

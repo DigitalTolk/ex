@@ -10,6 +10,9 @@ vi.mock('@/hooks/useWebSocket', () => ({
 
 describe('App', () => {
   beforeEach(() => {
+    // jsdom keeps the URL between tests, and a test that ends on /login would
+    // skip the next one's boot screen: each starts at a protected path.
+    window.history.replaceState({}, '', '/');
     // AuthProvider calls fetch('/auth/token/refresh') on mount
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
@@ -67,13 +70,13 @@ describe('App', () => {
     // Regression for the blank-screen-on-open bug: a boot restore request
     // that never settles used to render a completely empty page forever.
     vi.useFakeTimers();
+    const hanging: Array<(reason: Error) => void> = [];
     try {
       globalThis.fetch = vi.fn(
-        () => new Promise(() => {}), // request never settles
+        // The request never settles (and, unlike a real one, ignores its
+        // abort signal) until the test ends.
+        () => new Promise((_resolve, reject) => hanging.push(reject)),
       ) as unknown as typeof fetch;
-      // Earlier tests in this file leave jsdom parked on /login; the boot
-      // screen only exists behind ProtectedRoute at a protected path.
-      window.history.replaceState({}, '', '/');
       render(<App />);
 
       const loading = screen.getByTestId('app-auth-loading');
@@ -88,6 +91,11 @@ describe('App', () => {
       expect(screen.getByTestId('app-auth-loading-slow')).toBeInTheDocument();
       expect(screen.getByRole('link', { name: 'Go to sign-in' })).toHaveAttribute('href', '/login');
     } finally {
+      // The refresh is single-flight across the module: left hanging, every
+      // later test in this file waited on it (seen in a shuffled run).
+      await act(async () => {
+        for (const reject of hanging) reject(new TypeError('Failed to fetch'));
+      });
       vi.useRealTimers();
     }
   });

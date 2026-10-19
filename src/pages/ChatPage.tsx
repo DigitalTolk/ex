@@ -1,4 +1,6 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -48,6 +50,8 @@ import {
 } from '@/stores/agent-runs';
 import { onRunApproval as onAgentRunApproval } from '@/stores/agent-approvals';
 import { RunActivityDrawer } from '@/components/chat/RunActivityDrawer';
+import { DesktopRunnerAutostart } from '@/components/runners/DesktopRunnerAutostart';
+import { hasDesktopRunner } from '@/lib/desktop-runner';
 import { apiFetch } from '@/lib/api';
 import {
   bumpChannelUnread,
@@ -67,13 +71,35 @@ import { shouldRefetchUserStateForRemoteUpdate, useUserState } from '@/hooks/use
 import { markThreadSeen, upsertUserThreadFromRoot, upsertUserThreadRow, userThreadInCache, useUserThreads } from '@/hooks/useThreads';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
-function MobileChatLoadingPage() {
+// How long the phone's chat waits for its first lists before offering Retry.
+export const CHAT_LOADING_RETRY_MS = 5_000;
+
+// The phone's chat while its first lists load. This used to be an empty gray
+// pane: a request that never settled (sent over a connection the network
+// dropped while the app was suspended) left it gray until the app was killed.
+// Requests are bounded now (lib/api) and retried, and this says so — with a
+// Retry that sends whatever is still stuck again.
+function MobileChatLoadingPage({ onRetry }: { onRetry: () => void }) {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setSlow(true), CHAT_LOADING_RETRY_MS);
+    return () => clearTimeout(timer);
+  }, []);
   return (
     <div
-      className="h-full min-h-0 flex-1 bg-sidebar"
+      className="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-sidebar"
+      role="status"
       aria-label="Loading chat"
       data-testid="mobile-chat-loading"
-    />
+    >
+      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden="true" />
+      <p className="text-sm text-muted-foreground">Connecting…</p>
+      {slow && (
+        <Button variant="outline" size="sm" onClick={onRetry} data-testid="mobile-chat-loading-retry">
+          Retry
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -83,6 +109,7 @@ function queryReady(query: { isSuccess: boolean; isError: boolean; isPlaceholder
 
 function MobileChatReadyGate({ children }: { children: ReactNode }) {
   const isMobile = useIsMobile();
+  const queryClient = useQueryClient();
   const channels = useUserChannels({ enabled: isMobile });
   const conversations = useUserConversations({ enabled: isMobile });
   const categories = useCategories({ enabled: isMobile });
@@ -90,11 +117,15 @@ function MobileChatReadyGate({ children }: { children: ReactNode }) {
   const userState = useUserState({ enabled: isMobile });
   const threads = useUserThreads({ enabled: isMobile });
 
-  if (
-    isMobile &&
-    ![channels, conversations, categories, drafts, userState, threads].every(queryReady)
-  ) {
-    return <MobileChatLoadingPage />;
+  if (isMobile && ![channels, conversations, categories, drafts, userState, threads].every(queryReady)) {
+    // Send whatever is still out again. A reset drops the stuck request and
+    // starts over (a refetch would only re-join a first load in flight).
+    const retry = () => {
+      for (const query of queryClient.getQueryCache().findAll({ type: 'active', fetchStatus: 'fetching' })) {
+        void queryClient.resetQueries({ queryKey: query.queryKey, exact: true });
+      }
+    };
+    return <MobileChatLoadingPage onRetry={retry} />;
   }
 
   return <>{children}</>;
@@ -381,6 +412,20 @@ export default function ChatPage() {
     },
     onWebhookChanged: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.incomingWebhooks() });
+    },
+    onProjectChanged: () => {
+      // A project or its design references changed (any member, any device):
+      // the list and every open project detail refetch.
+      queryClient.invalidateQueries({ queryKey: queryKeys.projects() });
+    },
+    onSettingsUpdated: () => {
+      // An admin saved the workspace settings — refetch what they gate (the
+      // Runners tab appears or goes away without a reload).
+      queryClient.invalidateQueries({ queryKey: queryKeys.workspaceSettings() });
+    },
+    onRunnersChanged: () => {
+      // One of my computers was connected or disconnected, or came online.
+      queryClient.invalidateQueries({ queryKey: queryKeys.runnerTokens() });
     },
     onActivityNew: (data: unknown) => {
       // An item landed in the activity stream — add it from the payload so the
@@ -698,6 +743,7 @@ export default function ChatPage() {
       {/* Run Activity Drawer: mounted once at the chat root; opened from the
           agent activity chip via the run-drawer store. */}
       <RunActivityDrawer />
+      {hasDesktopRunner() && <DesktopRunnerAutostart />}
     </AppLayout>
   );
 }

@@ -281,6 +281,9 @@ describe('RunActivityDrawer timeline steps', () => {
       ev('workspace.task_state', { from: 'open', to: 'review', note: 'MR up' }, 1600),
       ev('workspace.task_state', { from: 'review', to: 'done' }, 1700),
       ev('workspace.branch_pushed', undefined, 1800),
+      ev('workspace.file_fetched', { filename: 'home.png', source: 'project_screen' }, 1810),
+      ev('workspace.file_fetched', { filename: 'v1.html', source: 'message' }, 1820),
+      ev('workspace.file_uploaded', { filename: 'v2.png' }, 1830),
       ev('totally.unknown', undefined, 1900),
     ]);
     expect(within(drawer).getByText('Run invoked')).toBeInTheDocument();
@@ -298,7 +301,10 @@ describe('RunActivityDrawer timeline steps', () => {
     expect(within(drawer).getByText('Saved an item to shared context')).toBeInTheDocument();
     expect(within(drawer).getByText('Published artifact “Notes”')).toBeInTheDocument();
     expect(within(drawer).getByText('Used skill “release-notes”')).toBeInTheDocument();
-    expect(within(drawer).getByText('Queued — waiting for the desktop app to come online')).toBeInTheDocument();
+    expect(within(drawer).getByText('Looked at home.png (project reference screen)')).toBeInTheDocument();
+    expect(within(drawer).getByText('Looked at v1.html')).toBeInTheDocument();
+    expect(within(drawer).getByText('Uploaded v2.png')).toBeInTheDocument();
+    expect(within(drawer).getByText('Queued — waiting for ex-runner to come online')).toBeInTheDocument();
     expect(within(drawer).getByText('Stopped by a human')).toBeInTheDocument();
     expect(within(drawer).getByText('Completed')).toBeInTheDocument();
     expect(within(drawer).getByText('Failed — unknown reason')).toBeInTheDocument();

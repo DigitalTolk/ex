@@ -303,6 +303,12 @@ export interface AgentTemplate {
   skillIDs?: string[];
   limits: AgentLimits;
   maxConcurrentRuns: number /* int */;
+  /**
+   * FollowUpMode is the template's default for thread follow-ups when the
+   * invoker has no pref of their own ("" = off). The design agent defaults
+   * to "always": tweaking a mockup is replying in its thread.
+   */
+  followUpMode?: string;
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
 }
@@ -430,6 +436,11 @@ export interface RunSpend {
   inputTokens: number /* int64 */;
   outputTokens: number /* int64 */;
   posts: number /* int */;
+  /**
+   * Uploads counts files the run stored for its own posts; capped per run
+   * (UploadsPerRun) so a runaway agent can't fill the bucket.
+   */
+  uploads?: number /* int */;
 }
 /**
  * Run is one bounded agent task: invoked by a human mention, executed by the
@@ -453,6 +464,15 @@ export interface Run {
   state: RunState;
   mode: string; // "direct" at Phase 1
   prompt: string;
+  /**
+   * AttachmentIDs are the files on the invoking message, in message order.
+   * They are the run's INPUT files: the engine hands them to the model
+   * (Bedrock content blocks, or downloads on the runner) and the run-scoped
+   * attachment endpoint serves exactly these without a further message
+   * lookup. Access is still the invoker's — the message they came from is
+   * one the invoker could read when the run started.
+   */
+  attachmentIDs?: string[];
   /**
    * Round is the agent-to-agent handoff depth: 0 = human-invoked; an agent
    * whose reply @mentions another agent starts that agent at Round+1. The
@@ -500,6 +520,18 @@ export interface Run {
    * The runner only syncs docs + injects credentials for these.
    */
   connectorSlugs?: string[];
+  /**
+   * ProjectKey: the product whose design references ride this run (a
+   * /project pick, inherited in a thread, or name-matched for the design
+   * agent). Empty for most runs.
+   */
+  projectKey?: string;
+  /**
+   * RequiresFeatures: runner features this run needs (RunnerFeature*). A
+   * runner that doesn't advertise every one of them never claims the run —
+   * e.g. design runs need file fetch/post, which old built-in runners lack.
+   */
+  requiresFeatures?: string[];
   /**
    * TaskID binds the run to a coding task (RunModeTask): its thread root is
    * the task card, its budget is uncapped, and the runner prepares the
@@ -693,6 +725,16 @@ export const ArtifactMaxBytes = 64 * 1024;
  * Artifact bounds.
  */
 export const ArtifactsPerRun = 5;
+/**
+ * UploadsPerRun caps the files one run may store for its posts, and
+ * UploadMaxBytes caps each one. Generous for a report with a few
+ * screenshots; far below what a loop could do with the bucket.
+ */
+export const UploadsPerRun = 20;
+/**
+ * Artifact bounds.
+ */
+export const UploadMaxBytes = 10 << 20;
 /**
  * Raw API responses (auto-captured connector_call bodies) get their own,
  * larger budget — they exist so a human can audit what the agent actually
@@ -942,7 +984,14 @@ export interface RunnerHarness {
 /**
  * RunnerRegistration is a live runner process on one of the owner's
  * machines. Rows carry a DynamoDB TTL so dead runners self-reap.
+ * Runner features a run may require (Run.RequiresFeatures) and a runner
+ * advertises at claim time.
  */
+/**
+ * RunnerFeatureFiles: the runner can fetch run attachments and post files
+ * (fetch_attachment, post_message attachments).
+ */
+export const RunnerFeatureFiles = "files";
 export interface RunnerRegistration {
   runnerID: string;
   ownerID: string;
@@ -951,6 +1000,16 @@ export interface RunnerRegistration {
   harnesses: RunnerHarness[];
   leaseExpiresAt: string /* RFC3339 */;
   createdAt: string /* RFC3339 */;
+  /**
+   * TokenID is the paired install this process signed in with (the
+   * runner JWT's jti = RunnerToken.ID): how the Runners page knows which
+   * of the owner's computers is online.
+   */
+  tokenID?: string;
+  /**
+   * Version is the ex-runner build, when the runner reports it.
+   */
+  version?: string;
 }
 
 //////////
@@ -997,7 +1056,7 @@ export interface Attachment {
  * regular Auth middleware rejects them, so a leaked runner or run token can
  * never drive the interactive API.
  */
-export const TokenScopeRunner = "runner"; // desktop runner: register/claim/heartbeat/report
+export const TokenScopeRunner = "runner"; // ex-runner: register/claim/heartbeat/report/renew
 /**
  * Token scopes. An empty Scope is an ordinary interactive session token.
  * Scoped tokens are accepted ONLY by their dedicated middleware — the
@@ -1093,15 +1152,120 @@ export interface CodingProject {
   name: string; // display, e.g. "CliffHub"
   repos: ProjectRepo[];
   /**
+   * Design references (plan-projects-design.md): what the design agent
+   * copies from so mockups look like THIS product. All optional — a
+   * project learned by a coding task starts with none.
+   */
+  appURL?: string;
+  description?: string;
+  designNotes?: string;
+  links?: ProjectLink[];
+  /**
+   * UILibrary names the product's component stack ("shadcn/ui (Radix),
+   * Tailwind v4, Tabler icons") — the design agent draws anything the
+   * screens don't show the way that library renders it.
+   */
+  uiLibrary?: string;
+  /**
    * No channel here on purpose: a project has one channel PER REQUESTER,
    * derived from (project key, requester id) — see service.ProjectChannelID.
    * Rows written before 2026-09-21 carry a channelID attribute for the old
    * shared channel; it is ignored on read.
    */
   createdBy: string;
+  updatedBy?: string;
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
 }
+/**
+ * ProjectLink is a labelled reference link on a project (Figma, style guide,
+ * Storybook, …).
+ */
+export interface ProjectLink {
+  label: string;
+  url: string;
+}
+/**
+ * Project design-reference bounds.
+ */
+export const ProjectDescriptionMaxLen = 2000;
+/**
+ * Project design-reference bounds.
+ */
+export const ProjectDesignNotesMaxLen = 8000;
+/**
+ * Project design-reference bounds.
+ */
+export const ProjectLinksMax = 10;
+/**
+ * Project design-reference bounds.
+ */
+export const ProjectScreensMax = 60;
+/**
+ * Project design-reference bounds.
+ */
+export const ScreenPageMaxLen = 80;
+/**
+ * Project design-reference bounds.
+ */
+export const ScreenDescriptionMaxLen = 300;
+/**
+ * Project design-reference bounds.
+ */
+export const ScreenFieldMaxLen = 120;
+/**
+ * ScreenImageMaxBytes caps a reference screenshot; agents load these
+ * into their context, so huge images only cost tokens.
+ */
+export const ScreenImageMaxBytes = 8 << 20;
+/**
+ * Project design-reference bounds.
+ */
+export const ProjectUILibraryMaxLen = 300;
+/**
+ * ProjectThemeMaxBytes caps an uploaded theme stylesheet (globals.css).
+ */
+export const ProjectThemeMaxBytes = 256 << 10;
+/**
+ * ProjectTheme is a project's main stylesheet (e.g. globals.css), kept in its
+ * own row so project lists stay small. Agents never see the raw file — only
+ * its condensed tokens (variables, fonts, imports).
+ */
+export interface ProjectTheme {
+  projectKey: string;
+  filename: string;
+  css: string;
+  updatedBy: string;
+  updatedAt: string /* RFC3339 */;
+}
+/**
+ * ProjectScreen is one screenshot of a real page of a project — the design
+ * agent's reference for "what this product looks like". The image is an
+ * ordinary attachment; the screen holds a reference on it (see
+ * ScreenAttachmentRef) so the attachment GC keeps it alive.
+ */
+export interface ProjectScreen {
+  id: string;
+  projectKey: string;
+  page: string; // "Booking detail"
+  description: string; // what the page is for / shows
+  viewport: string; // ScreenViewport*
+  state?: string;
+  seenBy?: string;
+  route?: string;
+  attachmentID: string;
+  uploadedBy: string;
+  createdAt: string /* RFC3339 */;
+  updatedAt: string /* RFC3339 */;
+}
+/**
+ * Screen viewports.
+ */
+export const ScreenViewportDesktop = "desktop";
+/**
+ * Screen viewports.
+ */
+export const ScreenViewportMobile = "mobile";
 /**
  * ProjectRepo is one GitLab repository of a project with its role in the
  * product — the role is what tells the agent where UI work belongs.
@@ -2011,6 +2175,46 @@ export interface ChannelNotificationOverride {
 }
 
 //////////
+// source: runnertoken.go
+
+/**
+ * RunnerToken is the server-side record behind one paired ex-runner install.
+ * The runner's JWT carries this ID as its `jti`, and the runner middleware
+ * accepts a runner JWT only while its row exists — so deleting the row
+ * revokes exactly that install, without rotating the signing secret (which
+ * would sign every user out).
+ */
+export interface RunnerToken {
+  id: string;
+  userID: string;
+  /**
+   * Label names the machine as the runner reported it at sign-in (its
+   * hostname), so the owner can tell installs apart when revoking one.
+   */
+  label: string;
+  createdAt: string /* RFC3339 */;
+  expiresAt: string /* RFC3339 */;
+}
+/**
+ * RunnerGrant is the short-lived, single-use approval a signed-in user gives
+ * in the browser while pairing an ex-runner. The browser hands its code to
+ * the runner on localhost; the runner redeems it together with the PKCE
+ * verifier only it holds, so a code that leaks (browser history, a proxy
+ * log) is useless on its own. Stored under the hash of the code, never the
+ * code itself.
+ */
+export interface RunnerGrant {
+  codeHash: string;
+  userID: string;
+  /**
+   * Challenge is the PKCE S256 challenge: base64url(sha256(verifier)).
+   */
+  challenge: string;
+  label: string;
+  expiresAt: string /* RFC3339 */;
+}
+
+//////////
 // source: scheduled_message.go
 
 /**
@@ -2070,6 +2274,13 @@ export interface WorkspaceSettings {
    * browser key is sent to authenticated clients that can use the picker.
    */
   giphyAPIKey?: string;
+  /**
+   * RunnersInApp turns on the Runners tab in the AI hub, where people set
+   * up, start and disconnect ex-runner (the desktop app can install and run
+   * it for them). Off by default: until an admin turns it on, runners are
+   * set up from the command line and the account menu's Runners dialog.
+   */
+  runnersInApp: boolean;
 }
 /**
  * DefaultMaxUploadBytes is the fallback ceiling when the workspace hasn't

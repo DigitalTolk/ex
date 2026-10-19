@@ -1,20 +1,24 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { AI_HUB_TABS } from '@/lib/ai-hub';
+import { useWorkspaceSettings } from '@/hooks/useSettings';
+import { visibleAiHubTabs } from '@/lib/ai-hub';
 
 // AiHubLayout is the pathless layout route behind the sidebar's single
 // "Agents" entry: a tab strip for the agent-feature pages (Agents, Skills,
-// Schedules, Connectors) above whichever page the URL names. The pages themselves and
+// Schedules, Connectors, and Runners once an admin turns it on) above
+// whichever page the URL names. The pages themselves and
 // their routes are untouched, so /skills and /connectors deep links, the
 // permalinks in chat and the connector callback flows all keep working — the
 // sidebar just stops listing them one by one.
 export default function AiHubLayout() {
+  const { data: settings } = useWorkspaceSettings();
+  const tabs = visibleAiHubTabs(settings?.runnersInApp === true);
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="ai-hub">
       <nav
         aria-label="AI sections"
         className="mx-auto flex w-full max-w-4xl shrink-0 gap-1 overflow-x-auto border-b border-border px-4 pt-2 sm:px-6"
       >
-        {AI_HUB_TABS.map(({ to, label, Icon }) => (
+        {tabs.map(({ to, label, Icon }) => (
           <NavLink
             key={to}
             to={to}

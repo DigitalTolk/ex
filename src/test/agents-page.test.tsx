@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import AgentsPage from '@/pages/AgentsPage';
 import type { AgentView, AgentSubscription } from '@/hooks/useAgents';
 import type { UserChannel } from '@/types';
@@ -85,7 +86,7 @@ function agentFixtures(): AgentView[] {
       displayName: 'ww',
       slug: 'ww',
       status: 'paused',
-      prefs: { userID: 'u-1', slug: 'ww', followUpMode: 'window', followUpMins: 0 },
+      prefs: { userID: 'u-1', slug: 'ww', followUpMode: 'window', followUpMins: 0, limits: { maxTokens: 300000 } },
       resolved: { harness: 'codex', model: 'codex-large', persona: 'Default ww persona', limits: {}, maxConcurrentRuns: 1 },
     },
   ];
@@ -244,6 +245,7 @@ describe('AgentsPage', () => {
     fireEvent.click(gg.getByRole('button', { name: 'Advanced' }));
     expect(gg.getByLabelText('Model')).toHaveAttribute('placeholder', 'harness default');
     expect(gg.getByLabelText('Discussion rounds')).toHaveAttribute('placeholder', '12');
+    expect(gg.getByLabelText('Token budget')).toHaveAttribute('placeholder', '200000');
     expect(gg.getByLabelText('Thread follow-ups')).toHaveValue('');
     expect(gg.queryByLabelText('ask me before it replies')).not.toBeInTheDocument();
     // Collapsing again hides it (the chevron flips).
@@ -270,15 +272,15 @@ describe('AgentsPage', () => {
     expect(qib.getByLabelText('Discussion rounds')).toHaveAttribute('placeholder', '8');
     expect(qib.getByLabelText('Thread follow-ups')).toHaveValue('window:30');
     expect(qib.getByLabelText('ask me before it replies')).toBeChecked();
-    // Server-run bedrock agents have no desktop app to be offline and no
+    // Server-run bedrock agents have no ex-runner to be offline and no
     // local harness tools to pre-approve — those controls must be absent.
     expect(qib.queryByLabelText('Read files')).not.toBeInTheDocument();
-    expect(qib.queryByLabelText('If your app is offline')).not.toBeInTheDocument();
+    expect(qib.queryByLabelText('If your ex-runner is offline')).not.toBeInTheDocument();
     expect(qib.getByText(/Runs via AWS Bedrock/)).toBeInTheDocument();
     expect(qib.getByText(/on the server, with your\s+access/)).toBeInTheDocument();
 
     const aa = await openCard('aa');
-    expect(aa.getByText('desktop app not running')).toBeInTheDocument();
+    expect(aa.getByText('ex-runner not running')).toBeInTheDocument();
 
     const ns = await findCard('ns');
     expect(ns.getByText('CLI missing on your machine')).toBeInTheDocument();
@@ -288,6 +290,9 @@ describe('AgentsPage', () => {
     expect(ww.getByText('paused')).toBeInTheDocument();
     expect(ww.getByLabelText('Thread follow-ups')).toHaveValue('window:10');
     expect(ww.getByLabelText('Model')).toHaveAttribute('placeholder', 'codex-large');
+    // A saved token budget shows as the value and counts as a customization.
+    expect(ww.getByLabelText('Token budget')).toHaveValue('300000');
+    expect(ww.getByText('2 customized')).toBeInTheDocument();
 
     // Subscriptions render before the channels list resolves: parentID is the
     // fallback name until the lookup succeeds.
@@ -510,7 +515,7 @@ describe('AgentsPage', () => {
     renderPage();
 
     const aa = await openCard('aa');
-    fireEvent.change(aa.getByLabelText('If your app is offline'), { target: { value: 'queue' } });
+    fireEvent.change(aa.getByLabelText('If your ex-runner is offline'), { target: { value: 'queue' } });
     fireEvent.change(aa.getByLabelText('Discussion rounds'), { target: { value: '3' } });
     fireEvent.click(aa.getByRole('button', { name: 'Save' }));
 
@@ -530,6 +535,54 @@ describe('AgentsPage', () => {
     );
   });
 
+  it('saves a token budget next to the chain rounds', async () => {
+    let patchBody: unknown;
+    installRoutes({
+      mutate: (path, init) => {
+        if (path === '/api/v1/agents/aa/prefs' && init?.method === 'PATCH') {
+          patchBody = JSON.parse(init.body!);
+          return Promise.resolve({});
+        }
+        return undefined;
+      },
+    });
+    renderPage();
+
+    const aa = await openCard('aa');
+    // Below the floor the field clamps; the default sits in the placeholder.
+    fireEvent.change(aa.getByLabelText('Token budget'), { target: { value: '5' } });
+    expect(aa.getByLabelText('Token budget')).toHaveValue('10000');
+    fireEvent.change(aa.getByLabelText('Token budget'), { target: { value: '500000' } });
+    fireEvent.change(aa.getByLabelText('Discussion rounds'), { target: { value: '3' } });
+    fireEvent.click(aa.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(patchBody).toEqual(
+        expect.objectContaining({ limits: { maxChainRounds: 3, maxTokens: 500000 } }),
+      ),
+    );
+  });
+
+  it('clearing a saved token budget saves it back to the default', async () => {
+    let patchBody: unknown;
+    installRoutes({
+      mutate: (path, init) => {
+        if (path === '/api/v1/agents/ww/prefs' && init?.method === 'PATCH') {
+          patchBody = JSON.parse(init.body!);
+          return Promise.resolve({});
+        }
+        return undefined;
+      },
+    });
+    renderPage();
+
+    const ww = await openCard('ww');
+    expect(ww.getByRole('button', { name: 'Save' })).toBeDisabled();
+    fireEvent.change(ww.getByLabelText('Token budget'), { target: { value: '' } });
+    fireEvent.click(ww.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patchBody).toEqual(expect.objectContaining({ limits: {} })));
+  });
+
   it('switching a default card to bedrock reveals the bedrock controls (server-only)', async () => {
     installRoutes();
     renderPage();
@@ -540,7 +593,7 @@ describe('AgentsPage', () => {
     expect(gg.getByLabelText('Model')).toHaveAttribute('placeholder', 'eu.anthropic.claude-opus-5');
     // Bedrock is server-only: no Runs-on choice exists, and the copy says so.
     expect(gg.queryByLabelText('Runs on')).not.toBeInTheDocument();
-    expect(gg.getByText(/Runs via AWS Bedrock ON THE SERVER/)).toBeInTheDocument();
+    expect(gg.getByText(/Runs via AWS Bedrock on the server/)).toBeInTheDocument();
   });
 
   it('shows the follow-up ask checkbox once a window is chosen', async () => {
@@ -680,11 +733,12 @@ describe('CLI agent explainer', () => {
   it('tells web/app users why a CLI agent is unavailable and names the cloud alternative', async () => {
     installRoutes();
     renderPage();
-    // Offline claude agent: desktop app not running.
+    // Offline claude agent: no ex-runner online.
     const aaNote = await screen.findByTestId('agent-cli-note-aa');
     expect(aaNote).toHaveTextContent('runs on your own computer');
     expect(aaNote).toHaveTextContent('claude CLI installed and logged in');
-    expect(aaNote).toHaveTextContent('Your desktop app is not running right now.');
+    expect(aaNote).toHaveTextContent('No ex-runner of yours is online right now');
+    expect(aaNote).toHaveTextContent('ex-runner start');
     expect(aaNote).toHaveTextContent('Bedrock');
     // needs_setup codex agent: app online, CLI missing.
     expect(screen.getByTestId('agent-cli-note-ns')).toHaveTextContent('missing or not signed in');
@@ -761,7 +815,7 @@ describe('scheduled orders', () => {
     expect(card.queryByTestId('schedule-form')).not.toBeInTheDocument();
   });
 
-  it('warns that a CLI agent only keeps its appointments while the desktop app runs', async () => {
+  it('warns that a CLI agent only keeps its appointments while its ex-runner runs', async () => {
     installRoutes();
     renderPage();
     const card = await openCard('gg'); // gg resolves to the claude CLI
@@ -882,5 +936,25 @@ describe('scheduled orders', () => {
     await card.findByTestId('agent-schedule-s3');
     fireEvent.click(card.getByLabelText(/Delete scheduled order/));
     await waitFor(() => expect(showToast).toHaveBeenCalledWith("Couldn't delete that order — try again."));
+  });
+
+  it('points an offline CLI agent at the Runners tab once the workspace has it', async () => {
+    installRoutes({
+      mutate: (path) =>
+        path === '/api/v1/admin/settings'
+          ? Promise.resolve({ maxUploadBytes: 0, allowedExtensions: [], runnersInApp: true })
+          : undefined,
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <AgentsPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByTestId('agent-runners-link-aa')).toHaveAttribute('href', '/runners');
+    // needs_setup keeps its own advice: the runner is online, the CLI isn't.
+    expect(screen.queryByTestId('agent-runners-link-ns')).toBeNull();
   });
 });

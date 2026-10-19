@@ -55,6 +55,10 @@ export default defineConfig({
     ],
   },
   test: {
+    // How long expect.poll / expect.element keep retrying (browser tests),
+    // for the same reason as asyncUtilTimeout in src/test/setup.ts: 1s is a
+    // quiet machine's budget, not a loaded one's.
+    expect: { poll: { timeout: 5000 } },
     // Cap the worker pool: the browser project's three Playwright instances
     // run alongside the jsdom pool in the merged run, and an uncapped pool
     // oversubscribes the machine badly enough to flake timing-sensitive

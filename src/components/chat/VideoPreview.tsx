@@ -3,13 +3,15 @@ import { useState, type ReactNode } from 'react';
 // An MP4 attachment, played in the lightbox with the platform's own controls.
 // Nothing plays until it is asked to; only the metadata loads up front, and
 // the server answers the byte ranges a player seeks with. A file the browser
-// can't play (a codec it lacks) shows `fallback`, the download card.
-export function VideoPreview({ url, fallback }: { url: string; fallback: ReactNode }) {
+// can't play (a codec it lacks) shows `fallback`, the download card. A video
+// uploaded with a poster (its frame, kept at upload) shows that until it plays.
+export function VideoPreview({ url, poster, fallback }: { url: string; poster?: string; fallback: ReactNode }) {
   const [failed, setFailed] = useState(false);
   if (failed) return <>{fallback}</>;
   return (
     <video
       src={url}
+      poster={poster}
       controls
       playsInline
       preload="metadata"

@@ -1,4 +1,7 @@
 import '@testing-library/jest-dom/vitest';
+// The pure entry: the main one registers RTL's auto-cleanup, and registered
+// here (before the store resets below) it would unmount after them.
+import { configure } from '@testing-library/react/pure';
 import { vi } from 'vitest';
 import { createElement, type ReactNode } from 'react';
 import { APP_VERSION_META, BUILD_VERSION_META } from '@/lib/version-meta';
@@ -6,6 +9,20 @@ import './console-gate';
 import { resetPointerDeviceForTests } from '@/lib/device';
 import { resetPresenceStoreForTests } from '@/stores/presence';
 import { resetTypingStoreForTests } from '@/stores/typing';
+import { resetAllStores } from './store-reset';
+import { resetAppStateForTests } from './app-state-reset';
+
+// How long findBy*/waitFor keep looking before they fail. The 1s default is
+// a quiet machine's: under the full suite's load an element due after one
+// promise could take longer, and the test failed though nothing was wrong. A
+// broken test still fails, later.
+configure({ asyncUtilTimeout: 5000 });
+
+// Every zustand store starts each test at its initial state (./store-reset).
+vi.mock('zustand', async (importOriginal) => {
+  const { withStoreResets } = await import('./store-reset');
+  return withStoreResets(await importOriginal<typeof import('zustand')>());
+});
 
 // @base-ui/react/scroll-area uses ResizeObserver inside Root and emits
 // async state updates that show up in tests as "An update to
@@ -193,14 +210,28 @@ if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
     }),
   });
 }
+// The no-phone default, restored after each test: many tests switch to a
+// phone width and don't switch back (see the afterEach below).
+const defaultMatchMedia = window.matchMedia;
 
 // The presence/typing zustand stores are module-global (per-user/-bucket
 // selector subscriptions for hot paths) — without a reset, one test's
 // state leaks into the next test in the same file. Reset after every
 // test so suites keep the isolation they had with provider-local state.
-afterEach(() => {
+afterEach(async () => {
+  await resetAppStateForTests();
   resetPresenceStoreForTests();
   resetTypingStoreForTests();
   // Same reason: an attached mouse/trackpad is a module-global latch.
   resetPointerDeviceForTests();
+  // And everything else a test can leave for the next one in its file: app
+  // stores, storage, a phone width, and the page's visibility and focus
+  // (tests override those on document itself, over jsdom's own getters).
+  resetAllStores();
+  localStorage.clear();
+  sessionStorage.clear();
+  Object.defineProperty(window, 'matchMedia', { configurable: true, writable: true, value: defaultMatchMedia });
+  Reflect.deleteProperty(document, 'visibilityState');
+  Reflect.deleteProperty(document, 'hidden');
+  Reflect.deleteProperty(document, 'hasFocus');
 });

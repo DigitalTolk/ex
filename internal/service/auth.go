@@ -58,6 +58,9 @@ type AuthService struct {
 	// resets stores single-use password-reset tickets (guest accounts only).
 	// Nil when unwired — see password_reset.go.
 	resets PasswordResetStore
+	// runners, when set, disconnects the account's ex-runners on password
+	// reset, alongside the refresh tokens.
+	runners RunnerRevoker
 	// mailer delivers transactional email (invites, password resets). Nil
 	// when SMTP is unconfigured: links are still minted and returned to the
 	// caller, they just aren't delivered.

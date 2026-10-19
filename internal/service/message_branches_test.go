@@ -96,7 +96,7 @@ func TestMessage_Send_FileIndexSkipsEmptyAttachmentID(t *testing.T) {
 	grantChannelMember(memberships, "ch1", "u1")
 	idx := newMockParentIndex()
 	svc.SetParentIndex(idx)
-	refs := &fakeAttachmentRefMgr{}
+	refs := &fakeAttachmentRefMgr{owners: map[string]string{"a1": "u1"}}
 	svc.SetAttachmentManager(refs)
 	// One empty and one real attachment ID: the empty one is skipped in the
 	// file-index loop.
@@ -159,7 +159,7 @@ func TestMessage_Edit_DedupesAttachmentIDs(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	grantChannelMember(memberships, "ch1", "u1")
 	seedMsg(messages, "ch1", "m1", "u1")
-	svc.SetAttachmentManager(&fakeAttachmentRefMgr{})
+	svc.SetAttachmentManager(&fakeAttachmentRefMgr{owners: map[string]string{"a1": "u1"}})
 	// Duplicate and empty IDs are cleaned down to one.
 	edited, err := svc.Edit(context.Background(), "u1", "ch1", ParentChannel, "m1", "ok", []string{"a1", "", "a1"})
 	if err != nil {

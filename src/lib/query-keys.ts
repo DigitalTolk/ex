@@ -12,6 +12,7 @@ export const queryKeys = {
 
   // Workspace
   workspaceSettings: () => ['workspace-settings'] as const,
+  runnerTokens: () => ['runner-tokens'] as const,
   emojis: () => ['emojis'] as const,
   frequentEmojis: () => ['emojis', 'frequent'] as const,
   sidebarCategories: () => ['sidebarCategories'] as const,
@@ -75,6 +76,10 @@ export const queryKeys = {
   adminSearchStatus: () => ['admin-search-status'] as const,
   adminEmailStatus: () => ['admin-email-status'] as const,
   incomingWebhooks: () => ['incoming-webhooks'] as const,
+  // Projects page (products + design references). project(key) nests under
+  // projects() so one invalidation refreshes the list and every open detail.
+  projects: () => ['projects'] as const,
+  project: (key: string) => ['projects', key] as const,
 };
 
 // parentPath builds the slash-separated key segment that thread,

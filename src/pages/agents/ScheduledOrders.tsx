@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { CalendarClock, Pencil, Plus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { InfoTip } from '@/components/ui/info-tip';
 import {
   useAgentSubscriptions,
   useDeleteAgentSubscription,
@@ -29,29 +30,29 @@ export function ScheduledOrders({ agent }: { agent: AgentView }) {
   const tz = localTimeZone();
   // Scheduled work fires whether or not anyone is at their desk, so a CLI
   // agent — which runs on the creator's own machine — can only keep the
-  // appointment when the desktop app happens to be open at that hour.
+  // appointment when its ex-runner happens to be running at that hour.
   const isCLI = agent.resolved.harness !== 'bedrock';
 
   return (
-    <div className="border-t pt-3">
-      <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
+    <div className="rounded-lg border p-4">
+      <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
         <CalendarClock className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
         Scheduled orders
+        <InfoTip label="Scheduled orders">
+          @{agent.displayName} does these on a clock, without being asked — “every weekday at 08:00,
+          summarise yesterday’s support tickets”. Each result lands where you choose: a private DM,
+          or a channel{tz ? ` · times default to ${tz}` : ''}.
+        </InfoTip>
       </div>
-      <p className="mb-2 text-xs text-muted-foreground">
-        @{agent.displayName} does these on a clock, without being asked — “every weekday at 08:00,
-        summarise yesterday’s support tickets”. Each result lands where you choose: a private DM,
-        or a channel{tz ? ` · times default to ${tz}` : ''}.
-      </p>
 
       {isCLI && scheduled.length > 0 && (
         <p
           className="mb-2 rounded-md bg-amber-500/10 px-2 py-1.5 text-xs text-muted-foreground"
           data-testid={`schedule-cli-warning-${agent.slug}`}
         >
-          @{agent.displayName} runs on your own computer, so a scheduled order only fires if your ex
-          desktop app is open and signed in at that time. For orders that must run unattended, use a
-          Bedrock agent — those run in the cloud.
+          @{agent.displayName} runs on your own computer, so a scheduled order only fires if your
+          ex-runner is running at that time. For orders that must run unattended, use a Bedrock
+          agent — those run on the server.
         </p>
       )}
 

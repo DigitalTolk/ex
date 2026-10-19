@@ -81,6 +81,19 @@ async function clickAwaySwitch(screen: Awaited<ReturnType<typeof render>>) {
   await userEvent.keyboard(' ');
 }
 
+// The page as SettingsDialog shows it: in its padded scroll pane. Rendered
+// flush with the screen edge, a switch's enlarged tap target stuck out past it
+// and made the page pan sideways; once something scrolled it, WebKit's taps
+// landed beside their targets for the rest of the file, so a test passed or
+// failed depending on which ran before it.
+function renderSettings() {
+  return render(
+    <div className="h-full overflow-y-auto px-9 pt-7 pb-14 narrow:px-4 narrow:pt-5">
+      <NotificationsSettings />
+    </div>,
+  );
+}
+
 describe('NotificationsSettings (autosave)', () => {
   beforeEach(() => {
     patchUser.mockClear();
@@ -105,7 +118,7 @@ describe('NotificationsSettings (autosave)', () => {
   afterEach(() => cleanup());
 
   it('renders the saved settings grouped into sections', async () => {
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await expect.element(screen.getByText('Notify me about')).toBeVisible();
     await expect.element(screen.getByText('Threads & mentions')).toBeVisible();
     await expect.element(screen.getByText('On this device')).toBeVisible();
@@ -119,7 +132,7 @@ describe('NotificationsSettings (autosave)', () => {
   });
 
   it('saves the desktop level as soon as it changes', async () => {
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await screen.getByLabelText('Desktop').selectOptions('all');
     await vi.waitFor(() => expect(lastPut()?.desktopLevel).toBe('all'));
     expect(lastPut().keywords).toEqual(['deploy']);
@@ -128,7 +141,7 @@ describe('NotificationsSettings (autosave)', () => {
   });
 
   it('turning on different mobile settings copies the desktop level and reveals the picker', async () => {
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await screen.getByRole('switch', { name: 'Different settings on mobile' }).click();
     await vi.waitFor(() => expect(lastPut()?.mobileLevel).toBe('mentions'));
     const mobile = screen.getByLabelText('Mobile');
@@ -141,7 +154,7 @@ describe('NotificationsSettings (autosave)', () => {
 
   it('turning different mobile settings off goes back to "same as desktop"', async () => {
     authState.user.notificationSettings = { ...SAVED, mobileLevel: 'all' };
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await expect.element(screen.getByLabelText('Mobile')).toHaveValue('all');
     await screen.getByRole('switch', { name: 'Different settings on mobile' }).click();
     await vi.waitFor(() => expect(lastPut()?.mobileLevel).toBe('default'));
@@ -149,7 +162,7 @@ describe('NotificationsSettings (autosave)', () => {
   });
 
   it('saves each thread & mention toggle', async () => {
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await screen.getByRole('switch', { name: 'Replies to threads I follow' }).click();
     await vi.waitFor(() => expect(lastPut()?.threadReplies).toBe(false));
     await screen.getByRole('switch', { name: 'Follow all threads' }).click();
@@ -169,7 +182,7 @@ describe('NotificationsSettings (autosave)', () => {
       await gate;
       return { notificationSettings: JSON.parse(String(init?.body)) } as never;
     });
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await screen.getByRole('switch', { name: 'Follow all threads' }).click();
     await screen.getByRole('switch', { name: 'Ignore @all and @here' }).click();
     // The second request waits for the first.
@@ -180,7 +193,7 @@ describe('NotificationsSettings (autosave)', () => {
   });
 
   it('adds keywords with Enter, comma and blur, ignoring blank + duplicate entries', async () => {
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     const input = screen.getByLabelText('Keywords');
     await input.click();
     await userEvent.type(input, 'alpha');
@@ -202,7 +215,7 @@ describe('NotificationsSettings (autosave)', () => {
   });
 
   it('removes a keyword from its chip', async () => {
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await screen.getByRole('button', { name: 'Remove keyword deploy' }).click();
     await expect.element(screen.getByText('deploy')).not.toBeInTheDocument();
     await vi.waitFor(() => expect(lastPut()?.keywords).toEqual([]));
@@ -210,7 +223,7 @@ describe('NotificationsSettings (autosave)', () => {
 
   it('falls back to the request body when the response omits settings', async () => {
     vi.mocked(apiFetch).mockResolvedValue({} as never);
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await screen.getByRole('switch', { name: 'Follow all threads' }).click();
     await vi.waitFor(() => expect(patchUser).toHaveBeenCalled());
     expect((patchUser.mock.calls[0][0] as { notificationSettings: { followAllThreads: boolean } }).notificationSettings.followAllThreads).toBe(true);
@@ -218,7 +231,7 @@ describe('NotificationsSettings (autosave)', () => {
 
   it('shows the error when a save fails, and clears it on the next change', async () => {
     vi.mocked(apiFetch).mockRejectedValueOnce(new Error('boom'));
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await screen.getByRole('switch', { name: 'Follow all threads' }).click();
     await expect.element(screen.getByRole('alert')).toHaveTextContent('boom');
     await screen.getByRole('switch', { name: 'Ignore @all and @here' }).click();
@@ -227,14 +240,14 @@ describe('NotificationsSettings (autosave)', () => {
 
   it('falls back to a generic error for a non-Error rejection', async () => {
     vi.mocked(apiFetch).mockRejectedValueOnce('weird');
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await screen.getByRole('switch', { name: 'Follow all threads' }).click();
     await expect.element(screen.getByRole('alert')).toHaveTextContent('Failed to save notification settings');
   });
 
   it('falls back to defaults when the user has no saved settings', async () => {
     authState.user.notificationSettings = undefined;
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await expect.element(screen.getByLabelText('Desktop')).toHaveValue('mentions');
     expect(document.querySelectorAll('[data-testid="keyword-chip"]').length).toBe(0);
   });
@@ -243,13 +256,13 @@ describe('NotificationsSettings (autosave)', () => {
     const { keywords: _omit, ...rest } = SAVED;
     void _omit;
     authState.user.notificationSettings = rest;
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await expect.element(screen.getByText('Keywords')).toBeVisible();
     expect(document.querySelectorAll('[data-testid="keyword-chip"]').length).toBe(0);
   });
 
   it('device toggles update the local prefs', async () => {
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await screen.getByRole('switch', { name: 'Show popups' }).click();
     expect(notif.setBrowserEnabled).toHaveBeenCalledWith(false);
     // Turning popups off never asks for permission.
@@ -261,21 +274,21 @@ describe('NotificationsSettings (autosave)', () => {
   it('turning popups on asks for permission when it has not been requested', async () => {
     notif.permission = 'default';
     notif.prefs = { soundEnabled: true, browserEnabled: false, idleDetectionEnabled: false };
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await screen.getByRole('switch', { name: 'Show popups' }).click();
     expect(notif.setBrowserEnabled).toHaveBeenCalledWith(true);
     expect(notif.requestPermission).toHaveBeenCalled();
   });
 
   it('enabling away detection requests permission from the toggle gesture and persists the grant', async () => {
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await clickAwaySwitch(screen);
     await vi.waitFor(() => expect(notif.setIdleDetectionEnabled).toHaveBeenCalledWith(true));
   });
 
   it('a denied idle-detection permission leaves the feature off and explains why', async () => {
     idleDetector.permission = false;
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await clickAwaySwitch(screen);
     await vi.waitFor(() => expect(notif.setIdleDetectionEnabled).toHaveBeenCalledWith(false));
     await expect.element(screen.getByTestId('idle-detection-status')).toMatchTextContent(/not granted/i);
@@ -283,7 +296,7 @@ describe('NotificationsSettings (autosave)', () => {
 
   it('disabling away detection never re-prompts for permission', async () => {
     notif.prefs = { soundEnabled: true, browserEnabled: true, idleDetectionEnabled: true };
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await clickAwaySwitch(screen);
     expect(notif.setIdleDetectionEnabled).toHaveBeenCalledWith(false);
     expect(idleDetector.request).not.toHaveBeenCalled();
@@ -291,13 +304,13 @@ describe('NotificationsSettings (autosave)', () => {
 
   it('hides the away-detection toggle when the browser has no IdleDetector', async () => {
     idleDetector.supported = false;
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await expect.element(screen.getByRole('switch', { name: 'Play a sound' })).toBeVisible();
     expect(screen.container.textContent).not.toContain("Send to phone when I'm away");
   });
 
   it('keeps troubleshooting collapsed until opened', async () => {
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     const details = screen.getByTestId('notification-trace');
     await expect.element(screen.getByTestId('send-test-notification')).not.toBeVisible();
     await details.getByText('Troubleshooting').click();
@@ -311,13 +324,13 @@ describe('NotificationsSettings (autosave)', () => {
     ['default', 'Not requested yet'],
   ])('labels browser permission "%s" as "%s"', async (perm, label) => {
     notif.permission = perm;
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await screen.getByTestId('notification-trace').getByText('Troubleshooting').click();
     await expect.element(screen.getByTestId('notification-permission')).toHaveTextContent(label);
   });
 
   it('sends a test notification through the dispatch path with a unique id', async () => {
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await screen.getByTestId('notification-trace').getByText('Troubleshooting').click();
     await screen.getByTestId('send-test-notification').click();
     expect(notif.dispatch).toHaveBeenCalledTimes(1);
@@ -337,7 +350,7 @@ describe('NotificationsSettings (autosave)', () => {
     notif.permission = perm;
     notif.requestPermission.mockResolvedValue(requested);
     notif.prefs = { soundEnabled: true, browserEnabled: popups, idleDetectionEnabled: false };
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     await screen.getByTestId('notification-trace').getByText('Troubleshooting').click();
     await screen.getByTestId('send-test-notification').click();
     if (perm === 'default') expect(notif.requestPermission).toHaveBeenCalled();
@@ -345,7 +358,7 @@ describe('NotificationsSettings (autosave)', () => {
   });
 
   it('diagnostics show the placeholder when nothing was processed, and entries when it was', async () => {
-    const screen = await render(<NotificationsSettings />);
+    const screen = await renderSettings();
     const details = screen.getByTestId('notification-trace');
     await details.getByText('Troubleshooting').click();
     await expect.element(details).toMatchTextContent(/No notifications processed/);

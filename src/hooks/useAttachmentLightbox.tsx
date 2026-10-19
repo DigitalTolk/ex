@@ -54,6 +54,7 @@ export function useAttachmentLightbox<K>({
       items.push({
         url: a.url ?? '',
         downloadURL: a.downloadURL,
+        thumbnailURL: a.thumbnailURL,
         filename: a.filename,
         contentType: a.contentType,
         size: a.size,

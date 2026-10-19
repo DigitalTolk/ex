@@ -7,7 +7,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -22,9 +24,15 @@ type SettingsStore interface {
 // effective settings in memory. Writes invalidate the cache.
 type SettingsService struct {
 	store SettingsStore
+	pub   Publisher
 	mu    sync.RWMutex
 	cache *model.WorkspaceSettings
 }
+
+// SetPublisher makes Update tell every client the settings changed, so
+// what they gate (the Runners tab) appears or goes away without a reload.
+// Optional: nil publishes nothing.
+func (s *SettingsService) SetPublisher(p Publisher) { s.pub = p }
 
 // NewSettingsService builds a SettingsService.
 func NewSettingsService(s SettingsStore) *SettingsService {
@@ -90,6 +98,7 @@ func (s *SettingsService) Update(ctx context.Context, ws *model.WorkspaceSetting
 	s.mu.Lock()
 	s.cache = ws
 	s.mu.Unlock()
+	events.Publish(ctx, s.pub, pubsub.GlobalChannelEvents(), events.EventSettingsUpdated, map[string]any{})
 	c := *ws
 	return s.applyDefaults(&c), nil
 }

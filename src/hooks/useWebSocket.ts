@@ -52,6 +52,9 @@ interface UseWebSocketOptions {
   onNotificationSettingsUpdated?: WSCallback;
   onDraftUpdated?: WSCallback;
   onWebhookChanged?: WSCallback;
+  onProjectChanged?: WSCallback;
+  onSettingsUpdated?: WSCallback;
+  onRunnersChanged?: WSCallback;
   onActivityNew?: WSCallback;
   onScheduledMessagesChanged?: WSCallback;
   onRemindersChanged?: WSCallback;
@@ -261,6 +264,15 @@ export function useWebSocket(options: UseWebSocketOptions) {
               break;
             case EventType.WebhookChanged:
               callbacksRef.current.onWebhookChanged?.(payload);
+              break;
+            case EventType.ProjectChanged:
+              callbacksRef.current.onProjectChanged?.(payload);
+              break;
+            case EventType.SettingsUpdated:
+              callbacksRef.current.onSettingsUpdated?.(payload);
+              break;
+            case EventType.RunnersChanged:
+              callbacksRef.current.onRunnersChanged?.(payload);
               break;
             case EventType.ScheduledMessagesChanged:
               callbacksRef.current.onScheduledMessagesChanged?.(payload);

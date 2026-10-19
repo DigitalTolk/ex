@@ -224,6 +224,24 @@ describe('FilesPanel', () => {
     expect(link.getAttribute('download')).toBe('plan.txt');
   });
 
+  it('offers Preview beside Download for an HTML file, and only for it', async () => {
+    setupAPI({
+      files: [
+        { attachmentID: 'a-1', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-05-01T12:00:00Z' },
+        { attachmentID: 'a-2', messageID: 'm-2', authorID: 'u-1', createdAt: '2026-05-01T12:00:00Z' },
+      ],
+      attachments: {
+        'a-1': { id: 'a-1', filename: 'mockup.html', contentType: 'text/html', size: 2048, url: '/api/v1/media/t1/mockup.html' },
+        'a-2': { id: 'a-2', filename: 'plan.txt', contentType: 'text/plain', size: 1, url: 'https://cdn/plan.txt' },
+      },
+    });
+    renderPanel();
+    const preview = await screen.findByRole('button', { name: 'Preview mockup.html' });
+    expect(preview.nextElementSibling).toHaveAttribute('data-testid', 'files-row-download');
+    await waitFor(() => expect(screen.getAllByTestId('files-row-download')).toHaveLength(2));
+    expect(screen.getAllByTestId('html-preview-open')).toHaveLength(1);
+  });
+
   it('does not render the download link until the attachment metadata resolves', async () => {
     setupAPI({
       files: [{ attachmentID: 'missing', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-05-01T12:00:00Z' }],

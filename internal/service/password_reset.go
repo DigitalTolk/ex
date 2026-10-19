@@ -70,6 +70,9 @@ type PasswordResetTicket struct {
 // failing at the Redis call.
 func (s *AuthService) SetPasswordResetStore(st PasswordResetStore) { s.resets = st }
 
+// SetRunnerRevoker wires ex-runner revocation into password reset. Optional.
+func (s *AuthService) SetRunnerRevoker(r RunnerRevoker) { s.runners = r }
+
 // SetMailer wires transactional email and the public base URL used to build
 // links inside it. Optional: with no mailer, invites and resets still mint
 // their links (the admin copies them by hand) — they just aren't delivered.
@@ -189,6 +192,13 @@ func (s *AuthService) ResetPassword(ctx context.Context, token, password string)
 	// user already completed.
 	if err := s.tokens.DeleteAllRefreshTokensForUser(ctx, user.ID); err != nil {
 		slog.Error("password reset: revoking existing sessions failed", "userID", user.ID, "error", err)
+	}
+	// Same reasoning for paired ex-runners: whoever held the old password
+	// may have paired a machine to run agents as this account.
+	if s.runners != nil {
+		if err := s.runners.RevokeAllForUser(ctx, user.ID); err != nil {
+			slog.Error("password reset: disconnecting runners failed", "userID", user.ID, "error", err)
+		}
 	}
 	return nil
 }

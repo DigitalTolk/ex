@@ -38,18 +38,26 @@ type runnerRegisterBody struct {
 	RunnerID  string                `json:"runnerID"`
 	Host      string                `json:"host"`
 	OS        string                `json:"os"`
+	Version   string                `json:"version"`
 	Harnesses []model.RunnerHarness `json:"harnesses"`
 }
 
-func (b *runnerRegisterBody) registration(ownerID string) *model.RunnerRegistration {
-	return &model.RunnerRegistration{
+// registration is the row a register or heartbeat writes. The install it
+// belongs to comes from the runner token (its jti), never from the body.
+func (b *runnerRegisterBody) registration(r *http.Request) *model.RunnerRegistration {
+	reg := &model.RunnerRegistration{
 		RunnerID:  b.RunnerID,
-		OwnerID:   ownerID,
+		OwnerID:   middleware.UserIDFromContext(r.Context()),
 		Host:      b.Host,
 		OS:        b.OS,
+		Version:   strings.TrimSpace(b.Version),
 		Harnesses: b.Harnesses,
 		CreatedAt: time.Now(),
 	}
+	if claims := middleware.ClaimsFromContext(r.Context()); claims != nil {
+		reg.TokenID = claims.ID
+	}
+	return reg
 }
 
 // Register announces a runner. The shared agents (gg/qib) exist workspace-
@@ -57,13 +65,12 @@ func (b *runnerRegisterBody) registration(ownerID string) *model.RunnerRegistrat
 // runs execute on the invoker's own machine.
 // POST /api/v1/agent/runner/register
 func (h *AgentRunnerHandler) Register(w http.ResponseWriter, r *http.Request) {
-	ownerID := middleware.UserIDFromContext(r.Context())
 	var body runnerRegisterBody
 	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.RunnerID == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "runnerID required")
 		return
 	}
-	if _, err := h.orch.Heartbeat(r.Context(), body.registration(ownerID), nil); err != nil {
+	if err := h.orch.RegisterRunner(r.Context(), body.registration(r)); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "registration failed")
 		return
 	}
@@ -82,8 +89,11 @@ func (h *AgentRunnerHandler) Register(w http.ResponseWriter, r *http.Request) {
 type claimBody struct {
 	RunnerID  string   `json:"runnerID"`
 	Harnesses []string `json:"harnesses"`
-	Max       int      `json:"max"`
-	WaitSec   int      `json:"waitSec"`
+	// Features the runner supports (model.RunnerFeature*); runs requiring
+	// one it lacks stay queued for a runner that has it.
+	Features []string `json:"features"`
+	Max      int      `json:"max"`
+	WaitSec  int      `json:"waitSec"`
 }
 
 // Claim long-polls for work. 200 with assignments, or 204 when the wait
@@ -105,7 +115,7 @@ func (h *AgentRunnerHandler) Claim(w http.ResponseWriter, r *http.Request) {
 	if body.Max > maxClaimBatch {
 		body.Max = maxClaimBatch
 	}
-	assignments, err := h.orch.Claim(r.Context(), ownerID, body.RunnerID, body.Harnesses, body.Max, wait)
+	assignments, err := h.orch.ClaimWithFeatures(r.Context(), ownerID, body.RunnerID, body.Harnesses, body.Features, body.Max, wait)
 	if err != nil {
 		if errors.Is(err, r.Context().Err()) {
 			return // client went away mid-poll
@@ -150,6 +160,8 @@ type completeBody struct {
 	RunnerID  string         `json:"runnerID"`
 	FinalText string         `json:"finalText"`
 	Usage     map[string]any `json:"usage"`
+	// AttachmentIDs are files this run uploaded, to ride the final-answer post.
+	AttachmentIDs []string `json:"attachmentIDs"`
 }
 
 // Complete finalizes a run.
@@ -161,7 +173,7 @@ func (h *AgentRunnerHandler) Complete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "runnerID required")
 		return
 	}
-	if err := h.orch.CompleteRun(r.Context(), ownerID, body.RunnerID, r.PathValue("id"), body.FinalText, body.Usage); err != nil {
+	if err := h.orch.CompleteRun(r.Context(), ownerID, body.RunnerID, r.PathValue("id"), body.FinalText, body.Usage, body.AttachmentIDs...); err != nil {
 		h.writeRunError(w, r, err)
 		return
 	}
@@ -202,13 +214,12 @@ type heartbeatBody struct {
 // runner must kill (terminal server-side).
 // POST /api/v1/agent/runner/heartbeat
 func (h *AgentRunnerHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
-	ownerID := middleware.UserIDFromContext(r.Context())
 	var body heartbeatBody
 	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || body.RunnerID == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "runnerID required")
 		return
 	}
-	kill, err := h.orch.Heartbeat(r.Context(), body.registration(ownerID), body.ActiveRunIDs)
+	kill, err := h.orch.Heartbeat(r.Context(), body.registration(r), body.ActiveRunIDs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "heartbeat failed")
 		return
@@ -249,6 +260,9 @@ type AgentRunToolHandler struct {
 	// search); nil until SetWorkspace — the router only registers the
 	// workspace routes when set.
 	workspace *AgentWorkspaceDeps
+	// attachments enables the run-scoped file endpoints and attachments on
+	// posts; nil until SetAttachments.
+	attachments *service.AttachmentService
 
 	// baseURL is the workspace's public origin (BASE_URL), used to build
 	// clickable message permalinks for the link_message tool. Empty disables
@@ -311,8 +325,9 @@ func NewAgentRunToolHandler(orch *service.Orchestrator, messages *service.Messag
 }
 
 type postMessageBody struct {
-	Body           string `json:"body"`
-	IdempotencyKey string `json:"idempotencyKey"`
+	Body           string   `json:"body"`
+	IdempotencyKey string   `json:"idempotencyKey"`
+	AttachmentIDs  []string `json:"attachmentIDs"`
 }
 
 // PostMessage posts into the run's thread as the agent, capped per run.
@@ -323,7 +338,7 @@ func (h *AgentRunToolHandler) PostMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var body postMessageBody
-	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || strings.TrimSpace(body.Body) == "" {
+	if err := readAgentJSON(r, &body, maxAgentBodyBytes); err != nil || (strings.TrimSpace(body.Body) == "" && len(body.AttachmentIDs) == 0) {
 		writeError(w, http.StatusBadRequest, "bad_request", "body required")
 		return
 	}
@@ -337,6 +352,10 @@ func (h *AgentRunToolHandler) PostMessage(w http.ResponseWriter, r *http.Request
 	}
 	if run.Spend.Posts >= run.Limits.MaxPosts {
 		writeError(w, http.StatusTooManyRequests, "post_cap", "per-run post cap reached")
+		return
+	}
+	files, ok := h.runPostAttachments(w, r, claims, body.AttachmentIDs)
+	if !ok {
 		return
 	}
 	// Claim the idempotency key BEFORE posting, with a placeholder: a
@@ -357,7 +376,7 @@ func (h *AgentRunToolHandler) PostMessage(w http.ResponseWriter, r *http.Request
 	// Models write plain "@qib"; rewrite to real mention markup so it renders
 	// as a chip AND can hand the turn to that agent (chain below).
 	text := h.orch.LinkifyMentions(r.Context(), run, body.Body)
-	msg, err := h.messages.SendAsAgentRun(r.Context(), claims.ActorID, claims.UserID, run.ParentID, run.ParentType, text, threadRoot, claims.RunID)
+	msg, err := h.messages.SendAsAgentRun(r.Context(), claims.ActorID, claims.UserID, run.ParentID, run.ParentType, text, threadRoot, claims.RunID, files...)
 	if err != nil {
 		if idemKey != "" {
 			h.forgetPost(idemKey) // the post never happened; let a retry through

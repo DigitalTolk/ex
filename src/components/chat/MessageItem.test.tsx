@@ -76,8 +76,14 @@ function setMobileMatch(matches: boolean) {
   });
 }
 
+// The setup file's matchMedia (no phone width). Several tests switch to a
+// phone and don't switch back; without this reset a desktop test shuffled
+// after one of them rendered the phone layout.
+const desktopMatchMedia = window.matchMedia;
+
 describe('MessageItem', () => {
   beforeEach(() => {
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: desktopMatchMedia });
     delete window.Capacitor;
     useAttachmentsBatchMock.mockReset();
     useAttachmentsBatchMock.mockReturnValue({ map: new Map(), isLoading: false });

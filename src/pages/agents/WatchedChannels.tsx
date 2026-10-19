@@ -10,6 +10,7 @@ import {
 } from '@/hooks/useAgents';
 import { useUserChannels } from '@/hooks/useChannels';
 import { showToast } from '@/lib/toast';
+import { InfoTip } from '@/components/ui/info-tip';
 import { NativeSelect } from '@/components/ui/native-select';
 
 export function WatchedChannels({ agent }: { agent: AgentView }) {
@@ -47,16 +48,16 @@ export function WatchedChannels({ agent }: { agent: AgentView }) {
   };
 
   return (
-    <div className="border-t pt-3">
-      <div className="mb-1.5 flex items-center gap-1.5 text-sm font-medium">
+    <div className="rounded-lg border p-4">
+      <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
         <Eye className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
         Watched channels
+        <InfoTip label="Watched channels">
+          @{agent.displayName} reacts to matching messages in these channels without being mentioned —{' '}
+          {agent.resolved.harness === 'bedrock' ? 'on the server' : 'on your machine'}, with your
+          access. No keywords means every message; check-ins post only when something needs attention.
+        </InfoTip>
       </div>
-      <p className="mb-2 text-sm text-muted-foreground">
-        @{agent.displayName} reacts to matching messages in these channels without being mentioned —{' '}
-        {agent.resolved.harness === 'bedrock' ? 'on the server' : 'on your machine'}, with your
-        access. Keywords empty = every message; check-ins post only when something needs attention.
-      </p>
       {(subs?.length ?? 0) > 0 && (
         <ul className="mb-2 space-y-1">
           {subs?.map((sub) => (
@@ -87,9 +88,10 @@ export function WatchedChannels({ agent }: { agent: AgentView }) {
           ))}
         </ul>
       )}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
         <NativeSelect
           aria-label="Channel to watch"
+          className="w-full"
           value={channelID}
           onChange={(e) => setChannelID(e.target.value)}
         >
@@ -101,13 +103,15 @@ export function WatchedChannels({ agent }: { agent: AgentView }) {
           ))}
         </NativeSelect>
         <Input
-          className="h-8 w-48 text-sm"
+          className="w-full"
+          aria-label="Keywords"
           placeholder="keywords, comma-separated"
           value={keywords}
           onChange={(e) => setKeywords(e.target.value)}
         />
         <NativeSelect
           aria-label="Check-in interval"
+          className="w-full"
           value={heartbeat}
           onChange={(e) => setHeartbeat(e.target.value)}
         >
@@ -116,7 +120,7 @@ export function WatchedChannels({ agent }: { agent: AgentView }) {
           <option value="60">check in hourly</option>
           <option value="240">check in every 4h</option>
         </NativeSelect>
-        <Button size="sm" variant="outline" disabled={!channelID || create.isPending} onClick={add}>
+        <Button variant="outline" disabled={!channelID || create.isPending} onClick={add}>
           Watch
         </Button>
       </div>

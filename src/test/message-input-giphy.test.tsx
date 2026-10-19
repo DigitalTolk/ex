@@ -209,6 +209,10 @@ describe('MessageInput — Giphy integration', () => {
     fireEvent.focus(editor);
     fireEvent.click(screen.getByLabelText('GIF'));
     const search = await screen.findByLabelText('Search GIFs', {}, { timeout: 10000 });
+    // The grid is lazy: the first render anywhere in the file suspends once,
+    // and its fetch must settle inside act whichever test that is.
+    await screen.findByTestId('grid-stub');
+    await act(async () => {});
 
     fireEvent.blur(editor);
     fireEvent.pointerDown(search, { pointerType: 'touch' });

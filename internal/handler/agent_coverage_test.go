@@ -8,7 +8,6 @@ package handler
 
 import (
 	"context"
-	"crypto"
 	"encoding/json"
 	"errors"
 	"io"
@@ -24,7 +23,6 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/store"
-	"github.com/golang-jwt/jwt/v5"
 )
 
 var errHagentCov = errors.New("hagentCov: boom")
@@ -415,6 +413,22 @@ func (s *hagentCovRunStore) AddRunPosts(_ context.Context, runID string, delta i
 	return &cp, nil
 }
 
+func (s *hagentCovRunStore) AddRunUploads(_ context.Context, runID string, delta int) (*model.Run, error) {
+	if err := s.trip("AddRunUploads"); err != nil {
+		return nil, err
+	}
+	run, ok := s.runs[runID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if run.State.Terminal() {
+		return nil, store.ErrStaleRun
+	}
+	run.Spend.Uploads += delta
+	cp := *run
+	return &cp, nil
+}
+
 func (s *hagentCovRunStore) RenewRunLease(_ context.Context, _, _ string, _ time.Time) error {
 	return s.trip("RenewRunLease")
 }
@@ -542,7 +556,7 @@ type hagentCovMessages struct {
 	checkAccessErr error
 }
 
-func (m *hagentCovMessages) SendAsAgentRun(_ context.Context, _, _, _, _, _, _, _ string) (*model.Message, error) {
+func (m *hagentCovMessages) SendAsAgentRun(_ context.Context, _, _, _, _, _, _, _ string, _ ...string) (*model.Message, error) {
 	return &model.Message{ID: "m-agent"}, nil
 }
 
@@ -624,7 +638,7 @@ func hagentCovNewEnv() *hagentCovEnv {
 	userSvc := service.NewUserService(users, &mockCache{}, nil, nil)
 	jwtMgr := auth.NewJWTManager("hagent-cov-secret", 15*time.Minute, 720*time.Hour)
 	orch := service.NewOrchestrator(runs, agentSvc, &hagentCovOrchUsers{users: users}, msgs, hagentCovPub{}, jwtMgr)
-	h := NewAgentHandler(agentSvc, orch, userSvc, jwtMgr)
+	h := NewAgentHandler(agentSvc, orch, userSvc)
 	return &hagentCovEnv{dir: dir, runs: runs, users: users, msgs: msgs, agentID: agentID, h: h, svc: agentSvc}
 }
 
@@ -874,34 +888,6 @@ func TestHagentCovUpdatePrefs(t *testing.T) {
 	body := hagentCovJSON(t, rec)
 	if body["slug"] != "gg" {
 		t.Fatalf("slug = %v, want gg", body["slug"])
-	}
-}
-
-func TestHagentCovMintRunnerToken(t *testing.T) {
-	env := hagentCovNewEnv()
-
-	// Caller lookup fails.
-	rec := hagentCovDo(env.h.MintRunnerToken, hagentCovReq(http.MethodPost, "/api/v1/agents/runner-token", "", "ghost", nil))
-	hagentCovWant(t, rec, http.StatusInternalServerError)
-
-	// Agents may not mint runner tokens.
-	rec = hagentCovDo(env.h.MintRunnerToken, hagentCovReq(http.MethodPost, "/api/v1/agents/runner-token", "", env.agentID, nil))
-	hagentCovWant(t, rec, http.StatusForbidden)
-
-	// Signing fails: the JWT manager reads the package-level HS256 method at
-	// call time, so an unavailable hash makes SignedString error. Swapped for
-	// exactly one request (this package's non-integration tests run
-	// sequentially), then restored.
-	realHS256 := jwt.SigningMethodHS256
-	jwt.SigningMethodHS256 = &jwt.SigningMethodHMAC{Name: "HS256", Hash: crypto.Hash(0)}
-	rec = hagentCovDo(env.h.MintRunnerToken, hagentCovReq(http.MethodPost, "/api/v1/agents/runner-token", "", "u1", nil))
-	jwt.SigningMethodHS256 = realHS256
-	hagentCovWant(t, rec, http.StatusInternalServerError)
-
-	rec = hagentCovDo(env.h.MintRunnerToken, hagentCovReq(http.MethodPost, "/api/v1/agents/runner-token", "", "u1", nil))
-	hagentCovWant(t, rec, http.StatusOK)
-	if tok, _ := hagentCovJSON(t, rec)["token"].(string); tok == "" {
-		t.Fatalf("empty token in body: %s", rec.Body.String())
 	}
 }
 
