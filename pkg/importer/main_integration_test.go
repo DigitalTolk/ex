@@ -173,6 +173,13 @@ func (f *faultDynamo) BatchGetItem(ctx context.Context, in *dynamodb.BatchGetIte
 	return f.DynamoAPI.BatchGetItem(ctx, in, o...)
 }
 
+func (f *faultDynamo) BatchWriteItem(ctx context.Context, in *dynamodb.BatchWriteItemInput, o ...func(*dynamodb.Options)) (*dynamodb.BatchWriteItemOutput, error) {
+	if f.hit("BatchWriteItem") {
+		return nil, errFault
+	}
+	return f.DynamoAPI.BatchWriteItem(ctx, in, o...)
+}
+
 func (f *faultDynamo) TransactWriteItems(ctx context.Context, in *dynamodb.TransactWriteItemsInput, o ...func(*dynamodb.Options)) (*dynamodb.TransactWriteItemsOutput, error) {
 	if f.hit("TransactWriteItems") {
 		return nil, errFault

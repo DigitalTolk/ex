@@ -96,10 +96,14 @@ func validParentType(parentType string) error {
 
 // PutMessages inserts the messages that don't exist yet into a parent.
 // Messages already present (by ID) are skipped untouched — use UpdateMessage
-// or TombstoneMessage to change them. For each inserted message the thread
-// index, attachment references, the parent's file index and pin index are
-// written before the message row, so a crash midway leaves nothing a re-run
-// won't complete. Every spec is validated before anything is written.
+// or TombstoneMessage to change them. Every spec is validated before anything
+// is written. The new messages' side rows (attachment references, the parent's
+// file and pin index) are written first and the message rows (with the thread
+// index) last, in batches, so a crash midway leaves nothing a re-run won't
+// complete.
+//
+// The message rows are written unconditionally after the existence check, so
+// calls for the same parent must not run concurrently (see the package doc).
 func (im *Importer) PutMessages(ctx context.Context, parentID, parentType string, specs []MessageSpec) (PutResult, error) {
 	var res PutResult
 	if err := validParentType(parentType); err != nil {
@@ -127,24 +131,26 @@ func (im *Importer) PutMessages(ctx context.Context, parentID, parentType string
 	for _, m := range existing {
 		have[m.ID] = true
 	}
-	roots := map[string]bool{}
+	var fresh []*model.Message
 	for _, spec := range specs {
 		if have[spec.ID] {
 			res.Existing++
 			continue
 		}
 		have[spec.ID] = true // duplicates within one call
-		msg := toMessage(parentID, spec)
-		if err := im.writeIndexes(ctx, msg); err != nil {
-			return res, err
-		}
-		if err := im.messages.CreateMessage(ctx, msg); err != nil {
-			if errors.Is(err, store.ErrAlreadyExists) {
-				res.Existing++
-				continue
-			}
-			return res, fmt.Errorf("importer: create message %s: %w", spec.ID, err)
-		}
+		fresh = append(fresh, toMessage(parentID, spec))
+	}
+	if len(fresh) == 0 {
+		return res, nil
+	}
+	if err := im.writeIndexes(ctx, parentID, fresh); err != nil {
+		return res, err
+	}
+	if err := im.messages.PutNewMessages(ctx, fresh); err != nil {
+		return res, fmt.Errorf("importer: put messages: %w", err)
+	}
+	roots := map[string]bool{}
+	for _, msg := range fresh {
 		res.Inserted++
 		if msg.ParentMessageID == "" && !msg.System {
 			res.TopLevelInserted++
@@ -189,21 +195,26 @@ func toMessage(parentID string, s MessageSpec) *model.Message {
 	return m
 }
 
-// writeIndexes writes the rows that hang off a message: attachment
-// references, the parent's file index and the pin index. All are idempotent.
-func (im *Importer) writeIndexes(ctx context.Context, m *model.Message) error {
-	for _, aid := range m.AttachmentIDs {
-		if err := im.attachments.AddRef(ctx, aid, m.ID); err != nil {
-			return fmt.Errorf("importer: attachment %s of message %s: %w", aid, m.ID, err)
+// writeIndexes writes the side rows of new messages: one reference per
+// attachment (an update, so one call each) and the parent's file and pin
+// index rows in batches. All are idempotent.
+func (im *Importer) writeIndexes(ctx context.Context, parentID string, msgs []*model.Message) error {
+	var files []store.FileIndexEntry
+	var pins []store.PinIndexEntry
+	for _, m := range msgs {
+		for _, aid := range m.AttachmentIDs {
+			if err := im.attachments.AddRef(ctx, aid, m.ID); err != nil {
+				return fmt.Errorf("importer: attachment %s of message %s: %w", aid, m.ID, err)
+			}
+			files = append(files, store.FileIndexEntry{ParentID: parentID, AttachmentID: aid, MessageID: m.ID,
+				AuthorID: m.AuthorID, CreatedAt: m.CreatedAt})
 		}
-		if err := im.parentIndex.SetFileIndex(ctx, m.ParentID, aid, m.ID, m.AuthorID, m.CreatedAt); err != nil {
-			return fmt.Errorf("importer: file index: %w", err)
+		if m.Pinned {
+			pins = append(pins, store.PinIndexEntry{ParentID: parentID, MessageID: m.ID, PinnedBy: m.PinnedBy, PinnedAt: *m.PinnedAt})
 		}
 	}
-	if m.Pinned {
-		if err := im.parentIndex.SetPinIndex(ctx, m.ParentID, m.ID, m.PinnedBy, *m.PinnedAt); err != nil {
-			return fmt.Errorf("importer: pin index: %w", err)
-		}
+	if err := im.parentIndex.SetIndexRows(ctx, pins, files); err != nil {
+		return fmt.Errorf("importer: index rows: %w", err)
 	}
 	return nil
 }

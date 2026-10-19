@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/search"
 	"github.com/DigitalTolk/ex/internal/store"
+	"golang.org/x/sync/errgroup"
 )
 
 // FinalizeSpec describes what PutMessages added to one parent.
@@ -38,6 +40,10 @@ type FinalizeResult struct {
 // recentAuthorsCap mirrors the size of the thread avatar stack.
 const recentAuthorsCap = 3
 
+// finalizeConcurrency bounds how many threads of one parent are finalized at
+// once.
+const finalizeConcurrency = 8
+
 // FinalizeParent brings a parent's derived state in line with imported
 // messages (thread replies are read through ex's thread index, which is
 // eventually consistent — finalize once the parent's writes are done):
@@ -57,17 +63,26 @@ func (im *Importer) FinalizeParent(ctx context.Context, spec FinalizeSpec) (Fina
 	if err := validParentType(spec.ParentType); err != nil {
 		return res, err
 	}
+	// Threads are independent: finalize them concurrently, bounded.
+	var mu sync.Mutex
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(finalizeConcurrency)
 	for _, rootID := range spec.ThreadRootIDs {
-		updated, follows, err := im.finalizeThread(ctx, spec.ParentID, spec.ParentType, rootID)
-		if err != nil {
-			return res, err
-		}
-		if updated {
-			res.ThreadsUpdated++
-		} else {
-			res.ThreadsMissingRoot++
-		}
-		res.FollowsWritten += follows
+		g.Go(func() error {
+			updated, follows, err := im.finalizeThread(gctx, spec.ParentID, spec.ParentType, rootID)
+			mu.Lock()
+			defer mu.Unlock()
+			if updated {
+				res.ThreadsUpdated++
+			} else if err == nil {
+				res.ThreadsMissingRoot++
+			}
+			res.FollowsWritten += follows
+			return err
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return res, err
 	}
 	if spec.ParentType == ParentChannel {
 		return res, im.finalizeChannel(ctx, spec)

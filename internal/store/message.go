@@ -94,6 +94,22 @@ func (s *MessageStoreImpl) CreateMessage(ctx context.Context, msg *model.Message
 	return nil
 }
 
+// PutNewMessages writes many message rows (thread index included) with
+// BatchWriteItem, 25 per call. Unlike CreateMessage it is UNCONDITIONAL: it
+// overwrites a row with the same key. Only call it for messages a single writer
+// for the parent has just checked do not exist (the bulk history importer's
+// contract); IDs must be unique within the call.
+func (s *MessageStoreImpl) PutNewMessages(ctx context.Context, msgs []*model.Message) error {
+	items := make([]map[string]types.AttributeValue, len(msgs))
+	for i, m := range msgs {
+		items[i] = mustAttrs(attributevalue.MarshalMap(newMessageItem(m.ParentID, m)))
+	}
+	if err := s.putAll(ctx, items); err != nil {
+		return fmt.Errorf("store: put messages: %w", err)
+	}
+	return nil
+}
+
 func (s *MessageStoreImpl) GetMessage(ctx context.Context, parentID, msgID string) (*model.Message, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.Table),

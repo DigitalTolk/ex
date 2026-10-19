@@ -136,26 +136,30 @@ func TestPutMessagesErrors(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("unknown attachment: %v", err)
 	}
-	_, err = e.faulty(failOn("PutItem", 1)).PutMessages(ctx, "c1", ParentChannel, []MessageSpec{withFile}) // file index
+	_, err = e.faulty(failOn("UpdateItem", 1)).PutMessages(ctx, "c1", ParentChannel, []MessageSpec{withFile}) // attachment ref
 	wantErr(t, err, errFault)
-	_, err = e.faulty(failOn("PutItem", 1)).PutMessages(ctx, "c1", ParentChannel, []MessageSpec{pinned}) // pin index
+	_, err = e.faulty(failOn("BatchWriteItem", 1)).PutMessages(ctx, "c1", ParentChannel, []MessageSpec{pinned}) // pin/file index rows
 	wantErr(t, err, errFault)
-	_, err = e.faulty(failOn("PutItem", 1)).PutMessages(ctx, "c1", ParentChannel, []MessageSpec{plain}) // message row
+	_, err = e.faulty(failOn("BatchWriteItem", 1)).PutMessages(ctx, "c1", ParentChannel, []MessageSpec{plain}) // message rows (no side rows)
 	wantErr(t, err, errFault)
 
-	// Lost race: the row appears between the existence check and the write.
-	ms := store.NewMessageStore(e.db)
-	racer := &faultDynamo{DynamoAPI: e.db.Client}
-	racer.fail = func(op string, n int) bool {
-		if op == "PutItem" && n == 1 {
-			mustNoErr(t, ms.CreateMessage(ctx, toMessage("c1", plain)))
-		}
-		return false
+	// Side rows are written before message rows: a failed message write
+	// leaves the pin index, and the re-run completes the message.
+	_, err = e.faulty(failOn("BatchWriteItem", 2)).PutMessages(ctx, "c1", ParentChannel, []MessageSpec{pinned})
+	wantErr(t, err, errFault)
+	pins, _ := store.NewParentIndexStore(e.db).ListPinIndex(ctx, "c1")
+	if len(pins) != 1 {
+		t.Fatalf("pin index after failed message write = %d", len(pins))
 	}
-	im, _ := New(Deps{DB: &store.DB{Client: racer, Table: e.db.Table}})
-	res, err := im.PutMessages(ctx, "c1", ParentChannel, []MessageSpec{plain})
-	if err != nil || res.Existing != 1 || res.Inserted != 0 {
-		t.Fatalf("race = %+v %v", res, err)
+	res, err := e.im.PutMessages(ctx, "c1", ParentChannel, []MessageSpec{pinned, plain})
+	if err != nil || res.Inserted != 2 {
+		t.Fatalf("re-run = %+v %v", res, err)
+	}
+	// Nothing new: no writes at all.
+	quiet := &faultDynamo{DynamoAPI: e.db.Client, fail: failOn("BatchWriteItem", 0)}
+	im, _ := New(Deps{DB: &store.DB{Client: quiet, Table: e.db.Table}})
+	if res, err := im.PutMessages(ctx, "c1", ParentChannel, []MessageSpec{plain}); err != nil || res.Existing != 1 {
+		t.Fatalf("all existing = %+v %v", res, err)
 	}
 }
 

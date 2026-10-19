@@ -16,7 +16,9 @@
 // conversations before their members and messages; attachments before the
 // messages that carry them; messages of a parent before FinalizeParent and
 // IndexParent for that parent. Calls for different parents are independent
-// and may run concurrently; calls for the same parent should be serialized.
+// and may run concurrently; calls for the same parent must be serialized
+// (PutMessages writes message rows in batches, unconditionally, right after
+// its existence check).
 package importer
 
 import (

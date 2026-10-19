@@ -110,6 +110,53 @@ func (s *ParentIndexStoreImpl) SetPinIndex(ctx context.Context, parentID, msgID,
 	return nil
 }
 
+// PinIndexEntry and FileIndexEntry describe one pin / file index row for
+// SetIndexRows.
+type PinIndexEntry struct {
+	ParentID, MessageID, PinnedBy string
+	PinnedAt                      time.Time
+}
+
+type FileIndexEntry struct {
+	ParentID, AttachmentID, MessageID, AuthorID string
+	CreatedAt                                   time.Time
+}
+
+// SetIndexRows writes many pin and file index rows in BatchWriteItem calls.
+// Rows are overwritten like SetPinIndex/SetFileIndex; when the same file
+// appears more than once, the last entry wins (as sequential SetFileIndex
+// calls would).
+func (s *ParentIndexStoreImpl) SetIndexRows(ctx context.Context, pins []PinIndexEntry, files []FileIndexEntry) error {
+	var items []map[string]types.AttributeValue
+	for _, p := range pins {
+		items = append(items, mustAttrs(attributevalue.MarshalMap(PinIndexRow{
+			PK: parentPK(p.ParentID), SK: pinSK(p.MessageID), ParentID: p.ParentID, MessageID: p.MessageID,
+			PinnedBy: p.PinnedBy, PinnedAt: p.PinnedAt,
+		})))
+	}
+	pos := map[string]int{} // PK|SK → index in items (BatchWriteItem rejects duplicate keys)
+	for _, f := range files {
+		if f.AttachmentID == "" {
+			return errors.New("store: set index rows: empty attachmentID")
+		}
+		row := mustAttrs(attributevalue.MarshalMap(FileIndexRow{
+			PK: parentPK(f.ParentID), SK: fileSK(f.AttachmentID), ParentID: f.ParentID, AttachmentID: f.AttachmentID,
+			MessageID: f.MessageID, AuthorID: f.AuthorID, CreatedAt: f.CreatedAt,
+		}))
+		key := parentPK(f.ParentID) + "|" + fileSK(f.AttachmentID)
+		if i, ok := pos[key]; ok {
+			items[i] = row
+			continue
+		}
+		pos[key] = len(items)
+		items = append(items, row)
+	}
+	if err := s.putAll(ctx, items); err != nil {
+		return fmt.Errorf("store: set index rows: %w", err)
+	}
+	return nil
+}
+
 func (s *ParentIndexStoreImpl) DeletePinIndex(ctx context.Context, parentID, msgID string) error {
 	if _, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(s.Table),
