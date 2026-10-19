@@ -1,10 +1,8 @@
 // State the app keeps at module level, outside React and the zustand stores
 // (./store-reset) — the activity clock, the thread scope, the tab election,
 // the notification trace — back to its start after every test, so a test
-// cannot pass or fail on what the one before it left behind. Found by running
-// the suite in shuffled orders (the flake gate, scripts/check-flaky.mjs): a
-// test that marked the user away left the next one's notification
-// unsuppressed.
+// cannot pass or fail on what the one before it left behind (a test that
+// marked the user away left the next one's notification unsuppressed).
 //
 // Imported lazily, after the test: a setup-time import would load the real
 // modules before a test file's vi.mock could replace them. A module a test

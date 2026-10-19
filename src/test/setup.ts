@@ -13,9 +13,9 @@ import { resetAllStores } from './store-reset';
 import { resetAppStateForTests } from './app-state-reset';
 
 // How long findBy*/waitFor keep looking before they fail. The 1s default is
-// a quiet machine's: under the full suite's load (and the flake gate's side-
-// by-side rounds) an element due after one promise could take longer, and the
-// test failed though nothing was wrong. A broken test still fails, later.
+// a quiet machine's: under the full suite's load an element due after one
+// promise could take longer, and the test failed though nothing was wrong. A
+// broken test still fails, later.
 configure({ asyncUtilTimeout: 5000 });
 
 // Every zustand store starts each test at its initial state (./store-reset).

@@ -19,13 +19,6 @@ import path from 'path';
 // partition to police, only the union gate plus the universe check
 // (scripts/check-coverage-universe.mjs) that ensures every non-excluded
 // src file actually appears in the report.
-// The browsers' time zone follows TZ, as jsdom's does (WebKit ignores the
-// variable itself). Unset, each uses the machine's. The flake gate
-// (scripts/check-flaky.mjs) runs rounds in zones chosen so local time is late
-// evening in one and just past midnight in another: a test that only passes
-// at some hours of the day fails there, not one night in CI.
-const timezoneId = process.env.TZ || undefined;
-
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   optimizeDeps: {
@@ -151,7 +144,6 @@ export default defineConfig({
               launchOptions: {
                 headless: true,
               },
-              contextOptions: { timezoneId },
             }),
             instances: [
               {
@@ -173,7 +165,6 @@ export default defineConfig({
                     headless: true,
                   },
                   contextOptions: {
-                    timezoneId,
                     deviceScaleFactor: 3,
                     hasTouch: true,
                     isMobile: true,
