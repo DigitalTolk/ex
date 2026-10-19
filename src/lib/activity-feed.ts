@@ -43,15 +43,6 @@ export function badgeUnread(feed: Pick<ActivityFeed, 'unread' | 'unreadByType'>)
   return Math.max(0, feed.unread - (feed.unreadByType.reaction ?? 0));
 }
 
-// activityOnlyUnread counts the unread activity no other unread count holds:
-// being added to a channel, and a reminder that came due. A mention, a DM or a
-// thread reply is also an unread message or thread, already counted where
-// those are (the tab title and app icon add them up) — counting it here too
-// would count it twice.
-export function activityOnlyUnread(feed: Pick<ActivityFeed, 'unreadByType'>): number {
-  return (feed.unreadByType.channel_added ?? 0) + (feed.unreadByType.reminder ?? 0);
-}
-
 // applyActivityChange applies an activity.read change to the feed. It returns
 // null when only the server can say what changed — reading part of a channel,
 // conversation or thread flips items by message time, and an edit's new
@@ -104,6 +95,9 @@ function rowKey(i: ActivityItem): string {
       return `thread:${i.parentID}|${i.parentMessageID || i.messageID}`;
     case 'reaction':
       return `reaction:${i.messageID}|${i.emoji ?? ''}`;
+    case 'channel_message':
+      // An alert channel's messages are one row per channel, like a DM's.
+      return `channel:${i.parentID}`;
     default:
       return `item:${i.id}`;
   }
@@ -144,12 +138,26 @@ export function parseActivityTab(value: string | null): ActivityTab {
 }
 
 // Reminders and channel adds list under All only.
+// The kinds each tab lists. Mentions is the inbox: it also takes reminders,
+// being added to a channel and alert-channel messages — kinds without a tab
+// of their own, which otherwise only showed under All, buried among reactions
+// and replies.
+const TAB_TYPES: Record<Exclude<ActivityTab, 'all'>, readonly ActivityType[]> = {
+  dm: ['dm'],
+  mention: ['mention', 'reminder', 'channel_added', 'channel_message'],
+  thread_reply: ['thread_reply'],
+  reaction: ['reaction'],
+};
+
 export function filterActivity(items: ActivityItem[], tab: ActivityTab): ActivityItem[] {
-  return tab === 'all' ? items : items.filter((i) => i.type === tab);
+  if (tab === 'all') return items;
+  const types = TAB_TYPES[tab];
+  return items.filter((i) => types.includes(i.type));
 }
 
 export function tabUnread(feed: ActivityFeed, tab: ActivityTab): number {
-  return tab === 'all' ? feed.unread : (feed.unreadByType[tab] ?? 0);
+  if (tab === 'all') return feed.unread;
+  return TAB_TYPES[tab].reduce((sum, type) => sum + (feed.unreadByType[type] ?? 0), 0);
 }
 
 export type ActivityDay = 'Today' | 'Yesterday' | 'Earlier';

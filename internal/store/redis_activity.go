@@ -15,9 +15,9 @@ import (
 )
 
 // Stream caps. Addressed items (mentions, reactions, reminders, channel adds)
-// and conversational items (DM messages, thread replies) are capped
-// separately, so a busy DM can never push a mention or a fired reminder out of
-// the stream.
+// and conversational items (DM messages, thread replies, alerting channel
+// messages) are capped separately, so a busy DM or alert channel can never
+// push a mention or a fired reminder out of the stream.
 const (
 	activityMaxFeedItems = 500
 	activityMaxChatItems = 300
@@ -88,7 +88,7 @@ if now == 0 then
 end
 
 local function bucketOf(t)
-  if t == 'dm' or t == 'thread_reply' then return chat end
+  if t == 'dm' or t == 'thread_reply' or t == 'channel_message' then return chat end
   return feed
 end
 
@@ -448,10 +448,15 @@ func ActivityParentKey(parentID, threadRootID string) string {
 }
 
 // followsParent reports whether an item's read state follows its parent's
-// read position: mentions, DM messages and thread replies are messages the
-// user can read in place. Reactions, reminders and channel adds aren't.
+// read position: mentions, DM messages, thread replies and alerting channel
+// messages are messages the user can read in place, and being added to a
+// channel is acknowledged by
+// opening that channel (which reads it up to now) — before, only finding the
+// row in Activity cleared it, and its count lingered. Reactions and reminders
+// aren't.
 func followsParent(t model.ActivityType) bool {
-	return t == model.ActivityMention || t == model.ActivityDM || t == model.ActivityThreadReply
+	return t == model.ActivityMention || t == model.ActivityDM || t == model.ActivityThreadReply ||
+		t == model.ActivityChannelAdded || t == model.ActivityChannelMessage
 }
 
 func itemParentKey(item *model.ActivityItem) string {

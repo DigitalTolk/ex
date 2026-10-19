@@ -116,19 +116,41 @@ describe('activity feed helpers', () => {
     expect(rows[4].actorIDs).toEqual(['u-a']);
   });
 
+  // An alert channel's messages are one row per channel, like a DM's: a busy
+  // alert feed is one row that counts up, not a wall of rows.
+  it("groups an alert channel's messages into one row per channel", () => {
+    const rows = groupActivity([
+      item('a', { type: 'channel_message', parentID: 'ch-1' }),
+      item('b', { type: 'channel_message', parentID: 'ch-2' }),
+      item('c', { type: 'channel_message', parentID: 'ch-1' }),
+    ]);
+    expect(rows.map((r) => r.items.map((i) => i.id))).toEqual([['a', 'c'], ['b']]);
+  });
+
   it('flags webhook items, including ones from before the flag existed', () => {
     expect(isWebhookItem(item('a', { webhook: true }))).toBe(true);
     expect(isWebhookItem(item('a', { actorName: 'Deploy Bot' }))).toBe(true);
     expect(isWebhookItem(item('a'))).toBe(false);
   });
 
+  // Mentions is the inbox: it also lists reminders, being added to a channel
+  // and alert-channel messages — kinds without a tab of their own, which
+  // otherwise only showed under All, buried among reactions and replies.
   it('filters by tab and counts unread per tab', () => {
-    const items = [item('a'), item('b', { type: 'reminder' }), item('c', { type: 'dm', read: true })];
-    expect(filterActivity(items, 'all')).toHaveLength(3);
-    expect(filterActivity(items, 'mention').map((i) => i.id)).toEqual(['a']);
+    const items = [
+      item('a'),
+      item('b', { type: 'reminder' }),
+      item('c', { type: 'dm', read: true }),
+      item('d', { type: 'channel_added' }),
+      item('e', { type: 'reaction' }),
+      item('f', { type: 'channel_message' }),
+    ];
+    expect(filterActivity(items, 'all')).toHaveLength(6);
+    expect(filterActivity(items, 'mention').map((i) => i.id)).toEqual(['a', 'b', 'd', 'f']);
+    expect(filterActivity(items, 'reaction').map((i) => i.id)).toEqual(['e']);
     const feed = withCounts(items);
-    expect(tabUnread(feed, 'all')).toBe(2);
-    expect(tabUnread(feed, 'mention')).toBe(1);
+    expect(tabUnread(feed, 'all')).toBe(5);
+    expect(tabUnread(feed, 'mention')).toBe(4);
     expect(tabUnread(feed, 'dm')).toBe(0);
     expect(parseActivityTab('dm')).toBe('dm');
     expect(parseActivityTab('bogus')).toBe('all');

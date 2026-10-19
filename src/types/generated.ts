@@ -43,6 +43,13 @@ export const ActivityDM: ActivityType = "dm";
  */
 export const ActivityChannelAdded: ActivityType = "channel_added";
 /**
+ * ActivityChannelMessage records a channel message that alerted the user
+ * through nothing more specific than the channel's "All messages" level
+ * (an alert feed): every alert has its Activity row, so the bell, the tab
+ * title and the app icon count the same things.
+ */
+export const ActivityChannelMessage: ActivityType = "channel_message";
+/**
  * MentionKind says how an ActivityMention item addressed the user.
  */
 export type MentionKind = string;

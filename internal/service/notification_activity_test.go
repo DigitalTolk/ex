@@ -140,21 +140,37 @@ func TestNotificationService_RecordsDMActivity(t *testing.T) {
 	}
 }
 
-func TestNotificationService_NoActivityForPlainChannelMessage(t *testing.T) {
+// A message that alerts someone only through "All messages" (an alert feed) is
+// in their Activity too, as a channel message: every alert has its row, so the
+// bell, the tab title and the app icon count the same things. Someone at the
+// default (mentions) level isn't alerted, and gets nothing.
+func TestNotificationService_AlertingChannelMessageReachesActivity(t *testing.T) {
 	svc, _, members, _, chans, users := setupNotifier(t)
 	rec := &recordingActivity{}
 	svc.SetActivityRecorder(rec)
 
 	chans.channels["ch1"] = &model.Channel{ID: "ch1", Name: "General", Slug: "general", Type: model.ChannelTypePublic}
 	users.users["u-author"] = &model.User{ID: "u-author", DisplayName: "Alice"}
+	users.users["u-carol"] = &model.User{ID: "u-carol", DisplayName: "Carol"}
 	seedAllLevel(users, "u-bob") // notified about everything, but nothing is addressed to them
-	members.memberships["ch1#u-author"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-author"}
-	members.memberships["ch1#u-bob"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u-bob"}
+	for _, uid := range []string{"u-author", "u-bob", "u-carol"} {
+		members.memberships["ch1#"+uid] = &model.ChannelMembership{ChannelID: "ch1", UserID: uid}
+	}
 
-	svc.NotifyForMessage(context.Background(), &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "hello"}, ParentChannel, nil)
+	svc.NotifyForMessage(context.Background(), &model.Message{ID: "m1", ParentID: "ch1", AuthorID: "u-author", Body: "disk at 95%"}, ParentChannel, nil)
 
-	if rec.calls != 0 {
-		t.Fatalf("a plain channel message must not reach the Activity tab, got %d calls", rec.calls)
+	bob := rec.items["u-bob"]
+	if bob == nil || bob.Type != model.ActivityChannelMessage || bob.MentionKind != "" {
+		t.Fatalf("bob item = %+v, want a channel message", bob)
+	}
+	if bob.MessageID != "m1" || bob.ParentID != "ch1" || bob.ChannelSlug != "general" || bob.MessagePreview == "" {
+		t.Fatalf("item context not copied from the message: %+v", bob)
+	}
+	if _, ok := rec.items["u-carol"]; ok {
+		t.Fatal("a recipient the message didn't alert must not get an item")
+	}
+	if _, ok := rec.items["u-author"]; ok {
+		t.Fatal("the author must not get an item for their own message")
 	}
 }
 

@@ -433,6 +433,19 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			}
 		}
 		alerted := desktop || mobile
+		// An alert that is nothing more specific — no mention, keyword or
+		// followed thread, only the channel's "All messages" level — is listed
+		// in Activity too, as a channel message: every alert has its row, and
+		// the bell, the tab title and the app icon count the same things.
+		if alerted && !listed && !snap.machine[uid] {
+			listed = true
+			if s.activity != nil {
+				item := activityTemplate
+				item.ID = store.NewID()
+				item.Type = model.ActivityChannelMessage
+				activityItems[uid] = &item
+			}
+		}
 		// A notification row will surface the thread in this recipient's
 		// /threads list — include them in the live thread.updated patch below.
 		if isThreadReply && (alerted || listed) {

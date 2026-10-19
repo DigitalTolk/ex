@@ -34,7 +34,7 @@ const item: ActivityItem = {
   read: false,
 };
 
-function renderRow(onOpen = vi.fn()) {
+function renderRow(onOpen = vi.fn(), rowItems: ActivityItem | ActivityItem[] = item) {
   render(
     <MemoryRouter initialEntries={['/']}>
       <Routes>
@@ -43,7 +43,7 @@ function renderRow(onOpen = vi.fn()) {
           element={
             <>
               <ActivityRowView
-                row={groupActivity([item])[0]}
+                row={groupActivity(Array.isArray(rowItems) ? rowItems : [rowItems])[0]}
                 href="/channel/general#msg-m-1"
                 selected={false}
                 actor={undefined}
@@ -65,6 +65,25 @@ function renderRow(onOpen = vi.fn()) {
 }
 
 describe('ActivityRowView', () => {
+  it('reads an alert-channel message as posted, under its kind', () => {
+    renderRow(vi.fn(), { ...item, id: 'cm', type: 'channel_message' });
+    expect(screen.getByTestId('activity-row-kind')).toHaveTextContent('Message');
+    expect(screen.getByText(/posted a message/)).toBeInTheDocument();
+  });
+
+  it("counts an alert channel's messages on its one row", () => {
+    renderRow(vi.fn(), [
+      { ...item, id: 'cm-2', type: 'channel_message', messageID: 'm-2' },
+      { ...item, id: 'cm-1', type: 'channel_message', messageID: 'm-1' },
+    ]);
+    expect(screen.getByText(/posted 2 messages/)).toBeInTheDocument();
+  });
+
+  it('offers the read/unread toggle on a message row, in the toolbar and the menu', () => {
+    renderRow();
+    expect(screen.getAllByRole('button', { name: 'Mark as read' })).toHaveLength(2);
+  });
+
   it('opens the message on a tap', () => {
     longPress.suppress = false;
     const onOpen = renderRow();

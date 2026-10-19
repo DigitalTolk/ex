@@ -13,6 +13,7 @@ import {
   Eraser,
   Link as LinkIcon,
   MessageSquare,
+  MessageSquareText,
   MessagesSquare,
   MoreHorizontal,
   Smile,
@@ -79,6 +80,7 @@ const TYPE_ICON = {
   dm: MessageSquare,
   channel_added: UserPlus,
   reminder: Clock3,
+  channel_message: MessageSquareText,
 } as const;
 
 // Each kind of activity names itself at the top of its row, so a mention, a
@@ -90,6 +92,7 @@ const TYPE_LABEL: Record<keyof typeof TYPE_ICON | 'reaction', string> = {
   reaction: 'Reaction',
   channel_added: 'Added to channel',
   reminder: 'Reminder',
+  channel_message: 'Message',
 };
 
 // ActivityRowView is one Activity row: a link to its message (opening it marks
@@ -345,6 +348,8 @@ function rowLabel(row: ActivityRow, emojiMap: Record<string, string> | undefined
       return row.items.length > 1 ? `sent you ${row.items.length} messages` : 'sent you a message';
     case 'channel_added':
       return `added you to ~${item.parentName || item.channelSlug || 'a channel'}`;
+    case 'channel_message':
+      return row.items.length > 1 ? `posted ${row.items.length} messages` : 'posted a message';
     case 'mention':
       if (item.mentionKind === 'all') return 'mentioned @all';
       if (item.mentionKind === 'here') return 'mentioned @here';

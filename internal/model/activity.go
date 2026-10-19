@@ -25,6 +25,11 @@ const (
 	// ActivityChannelAdded records that someone else added the user to a
 	// channel.
 	ActivityChannelAdded ActivityType = "channel_added"
+	// ActivityChannelMessage records a channel message that alerted the user
+	// through nothing more specific than the channel's "All messages" level
+	// (an alert feed): every alert has its Activity row, so the bell, the tab
+	// title and the app icon count the same things.
+	ActivityChannelMessage ActivityType = "channel_message"
 )
 
 // MentionKind says how an ActivityMention item addressed the user.
