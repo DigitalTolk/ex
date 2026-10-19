@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/DigitalTolk/ex/internal/limits"
 	"log/slog"
 	"net/mail"
 	"strings"
@@ -82,7 +83,7 @@ func (s *AuthService) SetGuestLoginAnyRole(v bool) { s.guestLoginAnyRole = v }
 const (
 	minGuestPasswordLen = 8
 	maxGuestPasswordLen = 1024
-	maxDisplayNameLen   = 80
+	maxDisplayNameLen   = limits.MaxDisplayNameChars
 	desktopAuthCodeTTL  = 2 * time.Minute
 )
 

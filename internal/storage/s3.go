@@ -3,6 +3,9 @@ package storage
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -417,4 +420,30 @@ func (c *S3Client) PutObject(ctx context.Context, key, contentType string, body 
 		return fmt.Errorf("s3: put object: %w", err)
 	}
 	return nil
+}
+
+// PutChecksummedObject uploads a fully-known object in one PUT together with
+// its SHA-256 (hex). S3 verifies the payload against the checksum and stores
+// it as the object's checksum — the same shape a browser upload bound to
+// x-amz-checksum-sha256 produces, so attachment verification treats both
+// alike. body must be seekable (the SDK signs and may retry the payload).
+// Returns the object's ETag.
+func (c *S3Client) PutChecksummedObject(ctx context.Context, key, contentType string, body io.ReadSeeker, size int64, sha256Hex string) (string, error) {
+	sum, err := hex.DecodeString(sha256Hex)
+	if err != nil || len(sum) != sha256.Size {
+		return "", fmt.Errorf("s3: put object: invalid sha256 %q", sha256Hex)
+	}
+	out, err := c.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:         aws.String(c.bucket),
+		Key:            aws.String(key),
+		CacheControl:   aws.String(BrowserObjectCacheControl),
+		ContentType:    aws.String(contentType),
+		ContentLength:  aws.Int64(size),
+		ChecksumSHA256: aws.String(base64.StdEncoding.EncodeToString(sum)),
+		Body:           body,
+	})
+	if err != nil {
+		return "", fmt.Errorf("s3: put object: %w", err)
+	}
+	return aws.ToString(out.ETag), nil
 }

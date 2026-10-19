@@ -165,6 +165,23 @@ func (c *RedisCache) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+// DeleteUsers drops the cached records of the given users in one round-trip,
+// so the next read reloads them from the store. Used after users are written
+// outside the service layer (e.g. a history import). No-op for an empty list.
+func (c *RedisCache) DeleteUsers(ctx context.Context, userIDs []string) error {
+	if len(userIDs) == 0 {
+		return nil
+	}
+	keys := make([]string, len(userIDs))
+	for i, id := range userIDs {
+		keys[i] = userKeyPrefix + id
+	}
+	if err := c.client.Del(ctx, keys...).Err(); err != nil {
+		return fmt.Errorf("cache delete users: %w", err)
+	}
+	return nil
+}
+
 // releaseLockScript is a token-fenced compare-and-delete: it removes the lock
 // ONLY when the caller's token still owns it, so a caller whose lock already
 // expired (and was legitimately re-taken by another instance) never deletes the

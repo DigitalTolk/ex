@@ -169,3 +169,25 @@ func TestArePresenceOnline_RealRedis(t *testing.T) {
 		t.Fatalf("ArePresenceOnline pipeline failure = %v, want errInjected", err)
 	}
 }
+
+func TestDeleteUsers_RealRedis(t *testing.T) {
+	c := newRealCache(t)
+	ctx := context.Background()
+	if err := c.SetUsers(ctx, []*model.User{{ID: "du-1", DisplayName: "A"}, {ID: "du-2", DisplayName: "B"}, {ID: "du-3", DisplayName: "C"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DeleteUsers(ctx, []string{"du-1", "du-2"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.GetUsers(ctx, []string{"du-1", "du-2", "du-3"})
+	if err != nil || len(got) != 1 || got["du-3"] == nil {
+		t.Fatalf("remaining cached users = %v, %v", got, err)
+	}
+	if err := c.DeleteUsers(ctx, nil); err != nil {
+		t.Fatalf("empty list: %v", err)
+	}
+	_ = c.client.Close()
+	if err := c.DeleteUsers(ctx, []string{"du-3"}); err == nil {
+		t.Fatal("closed client: want error")
+	}
+}

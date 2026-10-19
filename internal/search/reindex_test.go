@@ -66,7 +66,7 @@ func (f *fakeBulk) Bulk(_ context.Context, index string, entries []BulkEntry) er
 
 // testReindexer wires a Reindexer with an in-memory status store (DynamoDB
 // stand-in) and a fixed clock so Start/Status/persist run without real infra.
-func testReindexer(src reindexSources, w bulkWriter) *Reindexer {
+func testReindexer(src reindexSources, w BulkWriter) *Reindexer {
 	return &Reindexer{src: src, w: w, status: newFakeStore(), now: fixedNow(1700000000)}
 }
 

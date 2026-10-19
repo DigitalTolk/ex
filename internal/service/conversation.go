@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -621,24 +620,18 @@ func (s *ConversationService) GetByID(ctx context.Context, userID, convID string
 }
 
 // dmConversationID deterministically derives a ULID-formatted conversation ID
-// from two user IDs so all entity IDs share the same format.
+// from two user IDs so all entity IDs share the same format. The derivation
+// lives in store so every writer (this service, the history importer) agrees.
 func dmConversationID(a, b string) string {
-	if a > b {
-		a, b = b, a
-	}
-	return store.DeriveID(a + ":" + b)
+	return store.DeriveDMConversationID(a, b)
 }
 
 // groupConversationID derives a deterministic group ID from its
-// participant set so two attempts to chat with the same constellation
-// land on the same conversation. participants must already be the
-// canonical set (creator included, deduped) — see normalizeParticipantSet.
-// The hash is order-independent: we sort before joining.
+// participant set — see store.DeriveGroupConversationID. participants must
+// already be the canonical set (creator included, deduped); see
+// normalizeParticipantSet.
 func groupConversationID(participants []string) string {
-	sorted := make([]string, len(participants))
-	copy(sorted, participants)
-	sort.Strings(sorted)
-	return store.DeriveID("group:" + strings.Join(sorted, ":"))
+	return store.DeriveGroupConversationID(participants)
 }
 
 // fetchParticipantNames concurrently resolves the supplied user IDs to
