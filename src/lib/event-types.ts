@@ -12,6 +12,7 @@ export const EventType = {
   ConversationNew: 'conversation.new',
   ChannelNew: 'channel.new',
   ChannelArchived: 'channel.archived',
+  ChannelUnarchived: 'channel.unarchived',
   ChannelRemoved: 'channel.removed',
   MembersChanged: 'members.changed',
   EmojiAdded: 'emoji.added',

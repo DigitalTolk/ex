@@ -26,3 +26,9 @@ var ErrThreadDeleted = errors.New("message: thread has been deleted")
 // not reply under: missing, itself a reply, or not posted by that webhook.
 // The webhook handler maps it to 400.
 var ErrInvalidThreadRoot = errors.New("message: invalid thread root")
+
+// ErrChannelArchived is returned for a write (post, reply, edit, delete,
+// reaction, pin, rename, new member, webhook post) into an archived channel.
+// An archived channel keeps its members and history but is read-only until an
+// owner unarchives it. Handlers map it to 409 Conflict.
+var ErrChannelArchived = errors.New("channel: channel is archived")

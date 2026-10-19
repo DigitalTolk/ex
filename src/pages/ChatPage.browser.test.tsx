@@ -226,6 +226,7 @@ describe('ChatPage WS router (browser)', () => {
       'onMembersChanged',
       'onConversationNew',
       'onChannelArchived',
+      'onChannelUnarchived',
       'onChannelUpdated',
       'onChannelNew',
       'onChannelRemoved',

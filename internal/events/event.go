@@ -41,6 +41,7 @@ const (
 	EventConversationNew    = "conversation.new"
 	EventChannelNew         = "channel.new"
 	EventChannelArchived    = "channel.archived"
+	EventChannelUnarchived  = "channel.unarchived"
 	EventChannelRemoved     = "channel.removed" // user was removed from a channel — sent to that user's personal channel
 	EventMembersChanged     = "members.changed"
 	EventEmojiAdded         = "emoji.added"

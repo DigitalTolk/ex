@@ -86,12 +86,10 @@ func (s *ChannelService) SetActivityRecorder(a ChannelActivityRecorder) { s.acti
 func (s *ChannelService) SetReminderSync(r ChannelReminderSync) { s.reminders = r }
 
 // accessLost tells the activity stream and the reminders that these users can
-// no longer read channelID — they left, were removed, or it was archived — so
-// neither keeps showing its messages.
+// no longer read channelID — they left or were removed — so neither keeps
+// showing its messages. Archiving is not a loss of access: members keep
+// reading an archived channel.
 func (s *ChannelService) accessLost(ctx context.Context, userIDs []string, channelID string) {
-	if len(userIDs) == 0 {
-		return
-	}
 	if s.activity != nil {
 		s.activity.ParentLeft(ctx, userIDs, channelID)
 	}
@@ -113,8 +111,14 @@ func (s *ChannelService) indexChannel(ctx context.Context, ch *model.Channel) {
 // message.new event so connected clients render it inline. Errors are
 // swallowed: the user's underlying action (join/leave) has already succeeded,
 // and we don't want the audit message to fail it.
+//
+// An archived channel is frozen: membership changes there still update the
+// member list and emit their events, but add no message to its history.
 func (s *ChannelService) postSystemMessage(ctx context.Context, channelID, body string) {
 	if s.messages == nil {
+		return
+	}
+	if ch, err := s.channels.GetChannel(ctx, channelID); err == nil && ch.Archived {
 		return
 	}
 	msg := &model.Message{
@@ -317,14 +321,12 @@ func (s *ChannelService) GetByID(ctx context.Context, id string) (*model.Channel
 
 // GetVisibleByID returns a channel only if the actor has access to its chat
 // surface. Public discovery uses BrowsePublic; direct /channel/:id rendering is
-// scoped to joined channels, with system admins allowed through.
+// scoped to joined channels. An archived channel stays readable for its
+// members (it is read-only, not hidden); a non-member cannot join it.
 func (s *ChannelService) GetVisibleByID(ctx context.Context, actorID, id string) (*model.Channel, error) {
 	ch, err := s.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
-	}
-	if ch.Archived {
-		return nil, ErrForbidden
 	}
 	if err := s.grantVisibleAccess(ctx, actorID, ch); err != nil {
 		return nil, err
@@ -342,6 +344,9 @@ func (s *ChannelService) Update(ctx context.Context, actorID, channelID string, 
 	ch, err := s.channels.GetChannel(ctx, channelID)
 	if err != nil {
 		return nil, fmt.Errorf("channel: get: %w", err)
+	}
+	if ch.Archived {
+		return nil, ErrChannelArchived
 	}
 
 	if name != nil {
@@ -373,11 +378,10 @@ func (s *ChannelService) Update(ctx context.Context, actorID, channelID string, 
 	return ch, nil
 }
 
-// Archive marks a channel as archived AND removes every membership row,
-// channel-side and user-side. Archive is destructive: the channel
-// disappears from every sidebar (owner included) and its member list
-// becomes empty. The Channel record itself is kept (with Archived=true)
-// so historical messages continue to resolve their parent.
+// Archive makes a channel read-only. Members keep their memberships and can
+// still read its history, search it and leave it, but nobody can post, react,
+// edit, rename it or add members until it is unarchived. Directory, browse and
+// channel search stop listing it.
 //
 // Only the owner or a system admin may archive. The well-known #general
 // channel cannot be archived.
@@ -385,61 +389,47 @@ func (s *ChannelService) Archive(ctx context.Context, actorID, channelID string)
 	if channelID == generalChannelID {
 		return errors.New("channel: cannot archive the general channel")
 	}
+	return s.setArchived(ctx, actorID, channelID, true, events.EventChannelArchived)
+}
+
+// Unarchive makes an archived channel writable again. Owner or system admin.
+func (s *ChannelService) Unarchive(ctx context.Context, actorID, channelID string) error {
+	return s.setArchived(ctx, actorID, channelID, false, events.EventChannelUnarchived)
+}
+
+// setArchived flips the archived flag, reindexes the channel (search filters
+// archived channels) and tells the channel topic plus every member's user
+// topic, so open views and sidebars switch between writable and read-only live.
+func (s *ChannelService) setArchived(ctx context.Context, actorID, channelID string, archived bool, event string) error {
 	if err := s.checkPermission(ctx, actorID, channelID, model.ChannelRoleOwner); err != nil {
 		return err
 	}
-
 	ch, err := s.channels.GetChannel(ctx, channelID)
 	if err != nil {
 		return fmt.Errorf("channel: get: %w", err)
 	}
-
-	// Snapshot members before mutating anything so we can both remove their
-	// rows and target their personal pubsub channels for the event.
-	members, listErr := s.memberships.ListMembers(ctx, channelID)
-
-	ch.Archived = true
+	if ch.Archived == archived {
+		return nil
+	}
+	ch.Archived = archived
 	ch.UpdatedAt = time.Now()
 	if err := s.channels.UpdateChannel(ctx, ch); err != nil {
-		return fmt.Errorf("channel: archive: %w", err)
+		return fmt.Errorf("channel: set archived: %w", err)
 	}
-
-	// Wipe memberships (both sides). Failures here are logged but do not
-	// abort the archive — the channel is already flagged archived and the
-	// membership store is dual-write so a partial failure can be retried by
-	// re-archiving without violating any invariant.
-	if listErr == nil {
-		removed := make([]string, 0, len(members))
-		for _, m := range members {
-			if rmErr := s.memberships.RemoveMember(ctx, channelID, m.UserID); rmErr != nil {
-				slog.Warn("archive: remove member failed", "channelID", channelID, "userID", m.UserID, "error", rmErr)
-				continue
-			}
-			removed = append(removed, m.UserID)
-		}
-		// Like leaving, for everyone at once: nobody can open it any more.
-		s.accessLost(ctx, removed, channelID)
-	}
-
 	s.indexChannel(ctx, ch)
 
-	if s.publisher == nil {
-		return nil
+	payload := map[string]any{"channelID": channelID}
+	topics := []string{pubsub.ChannelName(channelID)}
+	members, err := s.memberships.ListMembers(ctx, channelID)
+	if err != nil {
+		// The flag is already stored; open views still hear it on the channel
+		// topic, and every sidebar re-reads it on its next refetch.
+		slog.Warn("channel archive: list members failed", "channelID", channelID, "error", err)
 	}
-	if listErr != nil {
-		events.Publish(ctx, s.publisher, pubsub.ChannelName(channelID), events.EventChannelArchived, map[string]any{
-			"channelID": channelID,
-		})
-		return nil
-	}
-	channels := make([]string, 0, len(members)+1)
-	channels = append(channels, pubsub.ChannelName(channelID))
 	for _, m := range members {
-		channels = append(channels, pubsub.UserChannel(m.UserID))
+		topics = append(topics, pubsub.UserChannel(m.UserID))
 	}
-	events.PublishMany(ctx, s.publisher, channels, events.EventChannelArchived, map[string]any{
-		"channelID": channelID,
-	})
+	events.PublishMany(ctx, s.publisher, topics, event, payload)
 	return nil
 }
 
@@ -455,7 +445,7 @@ func (s *ChannelService) Join(ctx context.Context, userID, channelID string) err
 		return errors.New("channel: can only self-join public channels")
 	}
 	if ch.Archived {
-		return errors.New("channel: channel is archived")
+		return ErrChannelArchived
 	}
 	if s.users != nil {
 		if u, err := s.users.GetUser(ctx, userID); err == nil && u != nil {
@@ -619,6 +609,9 @@ func (s *ChannelService) AddMember(ctx context.Context, actorID, channelID, user
 	ch, err := s.channels.GetChannel(ctx, channelID)
 	if err != nil {
 		return fmt.Errorf("channel: get: %w", err)
+	}
+	if ch.Archived {
+		return ErrChannelArchived
 	}
 
 	now := time.Now()
@@ -806,10 +799,11 @@ func (s *ChannelService) ListUserChannelIDs(ctx context.Context, userID string) 
 	return ids, nil
 }
 
-// ListUserChannels returns all non-archived channels a user belongs to,
-// plus any archived channels where the user is the owner. The per-channel
-// archive flag isn't denormalized onto UserChannel, so the META rows are
-// batch-read (one BatchGetItem) — this runs on the sidebar list.
+// ListUserChannels returns every channel a user belongs to, archived ones
+// included (they are read-only, not hidden; the sidebar groups them apart).
+// The archive flag isn't denormalized onto UserChannel, so the META rows are
+// batch-read (one BatchGetItem) — this runs on the sidebar list — and the
+// flag is stamped onto each row at read time.
 func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([]*model.UserChannel, error) {
 	channels, err := s.memberships.ListUserChannels(ctx, userID)
 	if err != nil {
@@ -839,9 +833,7 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 				if ch == nil {
 					continue // channel row missing: drop like the fan-out did
 				}
-				if ch.Archived && uc.Role != model.ChannelRoleOwner {
-					continue
-				}
+				uc.Archived = ch.Archived
 				// Exact unread: messages added since this user last read.
 				// O(1) from the seq pair; survives reload and reconnect.
 				if n := ch.MessageSeq - uc.LastReadSeq; n > 0 {
@@ -867,9 +859,8 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 			if err != nil || ch == nil {
 				return
 			}
-			if !ch.Archived || uc.Role == model.ChannelRoleOwner {
-				keep[i] = true
-			}
+			keep[i] = true
+			uc.Archived = ch.Archived
 			// Exact unread: messages added since this user last read. O(1) from
 			// the seq pair — no per-channel count query. Survives reload and
 			// reconnect because both numbers are persisted.
@@ -1083,9 +1074,6 @@ func (s *ChannelService) GetVisibleBySlug(ctx context.Context, actorID, slug str
 	ch, err := s.GetBySlug(ctx, slug)
 	if err != nil {
 		return nil, err
-	}
-	if ch.Archived {
-		return nil, ErrForbidden
 	}
 	if err := s.grantVisibleAccess(ctx, actorID, ch); err != nil {
 		return nil, err

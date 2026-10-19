@@ -117,6 +117,10 @@ func (h *WebhookHandler) Execute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "thread_deleted", "the thread for root_id has been deleted")
 			return
 		}
+		if errors.Is(err, service.ErrChannelArchived) {
+			writeError(w, http.StatusConflict, "channel_archived", "the target channel is archived and read-only")
+			return
+		}
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "webhook or channel not found")
 			return

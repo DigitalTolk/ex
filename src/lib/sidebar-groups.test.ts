@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { UserChannel, UserConversation, SidebarCategory } from '@/types';
-import { groupSidebarItems, isSidebarItemUnread, sidebarItemID, SidebarSectionKeys, type SidebarItem } from './sidebar-groups';
+import { archivedSidebarChannels, groupSidebarItems, isSidebarItemUnread, sidebarItemID, SidebarSectionKeys, type SidebarItem } from './sidebar-groups';
 
 function conv(over: Partial<UserConversation>): UserConversation {
   return {
@@ -128,5 +128,35 @@ describe('groupSidebarItems: unread view', () => {
     expect(isSidebarItemUnread({ kind: 'conversation', conversation: conv({ unread: true }) })).toBe(true);
     expect(isSidebarItemUnread({ kind: 'conversation', conversation: conv({}) })).toBe(false);
     expect(isSidebarItemUnread({ kind: 'channel', channel: ch({ unread: true, muted: true }) })).toBe(false);
+  });
+});
+
+describe('archived channels', () => {
+  const ch = (over: Partial<UserChannel>): UserChannel =>
+    ({ channelID: 'x', channelName: 'x', channelType: 'public', role: 1, ...over }) as UserChannel;
+
+  it('groupSidebarItems leaves archived channels out of every section, even favorites/categories/unread', () => {
+    const sections = groupSidebarItems(
+      [
+        ch({ channelID: 'live', channelName: 'live' }),
+        ch({ channelID: 'old-fav', channelName: 'old-fav', archived: true, favorite: true }),
+        ch({ channelID: 'old-cat', channelName: 'old-cat', archived: true, categoryID: 'cat' }),
+        ch({ channelID: 'old-unread', channelName: 'old-unread', archived: true, unread: true }),
+      ],
+      [],
+      [cat({ id: 'cat' })],
+      { unreadSection: true },
+    );
+    const ids = sections.flatMap((s) => s.items.map(sidebarItemID));
+    expect(ids).toEqual(['live']);
+  });
+
+  it('archivedSidebarChannels returns only archived channels, A-Z', () => {
+    const out = archivedSidebarChannels([
+      ch({ channelID: 'b', channelName: 'Beta', archived: true }),
+      ch({ channelID: 'live', channelName: 'live' }),
+      ch({ channelID: 'a', channelName: 'alpha', archived: true }),
+    ]);
+    expect(out.map((c) => c.channelID)).toEqual(['a', 'b']);
   });
 });

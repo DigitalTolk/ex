@@ -141,7 +141,7 @@ func (f *fakeScheduledSender) Send(_ context.Context, userID, parentID, _, body,
 	return &model.Message{ID: fmt.Sprintf("m-%d", len(f.sent)), AuthorID: userID, ParentID: parentID, Body: body, ParentMessageID: parentMessageID}, nil
 }
 
-func (f *fakeScheduledSender) CheckAccess(context.Context, string, string, string) error {
+func (f *fakeScheduledSender) CheckWriteAccess(context.Context, string, string, string) error {
 	return f.accessErr
 }
 
@@ -482,6 +482,7 @@ func TestScheduledFailReason(t *testing.T) {
 	for err, final := range map[error]bool{
 		ErrForbidden:                       true,
 		ErrThreadDeleted:                   true,
+		ErrChannelArchived:                 true,
 		store.ErrNotFound:                  true,
 		ErrMessageTooLong:                  true,
 		ErrTooManyAttachments:              true,

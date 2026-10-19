@@ -380,14 +380,13 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
     expect(() => lastHandlers().onMessageEdited?.(msg())).not.toThrow();
   });
 
-  it('onChannelArchived navigates home when the archived channel is the open one', async () => {
+  it('onChannelArchived keeps the archived channel open (it turns read-only in place)', async () => {
     history.replaceState({}, '', '/channel/general');
     try {
       await renderChatPage();
-      // window.location.pathname ends with /channel/<slug of "general"> → the
-      // navigate('/', {replace:true}) branch fires.
       lastHandlers().onChannelArchived?.({ channelID: 'ch-99' });
-      await vi.waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/', { replace: true }));
+      lastHandlers().onChannelUnarchived?.({ channelID: 'ch-99' });
+      expect(navigateMock).not.toHaveBeenCalledWith('/', { replace: true });
     } finally {
       history.replaceState({}, '', '/');
     }

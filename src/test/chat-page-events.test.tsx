@@ -765,22 +765,39 @@ describe('ChatPage WebSocket handlers', () => {
     }).not.toThrow();
   });
 
-  it('onChannelArchived navigates away when the archived channel is currently open', () => {
-    // The handler reads window.location.pathname (not the MemoryRouter
-    // path), so we have to override the browser-level location for jsdom.
+  it('onChannelArchived keeps the open channel and refetches it read-only', () => {
     const orig = window.location;
     Object.defineProperty(window, 'location', {
       value: { ...orig, pathname: '/channel/general' },
       configurable: true,
     });
+    let invalidate: ReturnType<typeof vi.spyOn> | undefined;
     const { getByTestId } = renderAt('/channel/general', (qc) => {
       qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
+      invalidate = vi.spyOn(qc, 'invalidateQueries');
     });
     act(() => {
       (capturedOptions.onChannelArchived as (d: unknown) => void)({ channelID: 'ch-1' });
     });
-    expect(getByTestId('loc').textContent).toBe('/');
+    expect(getByTestId('loc').textContent).toBe('/channel/general');
+    const keys = invalidate!.mock.calls.map((c) => JSON.stringify((c[0] as { queryKey: unknown }).queryKey));
+    expect(keys).toEqual(expect.arrayContaining(['["channel","ch-1"]', '["channelBySlug"]', '["userChannels"]']));
     Object.defineProperty(window, 'location', { value: orig, configurable: true });
+  });
+
+  it('onChannelUnarchived refetches the channel; ignores a missing channelID', () => {
+    let invalidate: ReturnType<typeof vi.spyOn> | undefined;
+    renderAt('/', (qc) => {
+      invalidate = vi.spyOn(qc, 'invalidateQueries');
+    });
+    act(() => {
+      (capturedOptions.onChannelUnarchived as (d: unknown) => void)({});
+    });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['channel', 'ch-2'] });
+    act(() => {
+      (capturedOptions.onChannelUnarchived as (d: unknown) => void)({ channelID: 'ch-2' });
+    });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['channel', 'ch-2'] });
   });
 
   it('onChannelArchived without an open channel does not navigate', () => {

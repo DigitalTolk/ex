@@ -360,6 +360,61 @@ describe('Sidebar', () => {
     });
   });
 
+  it('lists archived channels in a folded Archived section at the bottom, outside the other sections', async () => {
+    mockChannels = [
+      ...baseMockChannels,
+      { channelID: 'ch-old', channelName: 'old-project', channelType: 'public', role: 1, archived: true, favorite: true, unread: true, unreadNotifyCount: 3 },
+    ];
+    renderSidebar();
+
+    const group = screen.getByTestId('sidebar-group-archived');
+    const toggle = screen.getByTestId('sidebar-group-toggle-archived');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    // Folded: the row is hidden, and it is in no other section (not even
+    // Favorites, although favorited).
+    expect(screen.queryByTestId('channel-row-ch-old')).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const row = within(group).getByTestId('channel-row-ch-old');
+    expect(row).toBeInTheDocument();
+    // Never shows unread state.
+    expect(within(group).queryByText('3')).toBeNull();
+
+    fireEvent.keyDown(toggle, { key: 'Enter' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.keyDown(toggle, { key: ' ' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.keyDown(toggle, { key: 'a' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('keeps the archived channel being viewed visible while the section is folded', () => {
+    mockChannels = [
+      ...baseMockChannels,
+      { channelID: 'ch-old', channelName: 'old-project', channelType: 'public', role: 1, archived: true },
+    ];
+    window.history.pushState({}, '', '/channel/old-project');
+    renderSidebar();
+    expect(screen.getByTestId('sidebar-group-toggle-archived')).toHaveAttribute('aria-expanded', 'false');
+    expect(within(screen.getByTestId('sidebar-group-archived')).getByTestId('channel-row-ch-old')).toBeInTheDocument();
+  });
+
+  it('hides the Archived section in the unread-only view and when nothing is archived', () => {
+    renderSidebar();
+    expect(screen.queryByTestId('sidebar-group-archived')).toBeNull();
+  });
+
+  it('hides the Archived section while showing unread only', () => {
+    mockChannels = [
+      ...baseMockChannels,
+      { channelID: 'ch-old', channelName: 'old-project', channelType: 'public', role: 1, archived: true },
+    ];
+    localStorage.setItem('sidebar.unreadOnly', '1');
+    renderSidebar();
+    expect(screen.queryByTestId('sidebar-group-archived')).toBeNull();
+  });
+
   it('renders channel list', () => {
     renderSidebar();
     expect(screen.getByText('general')).toBeInTheDocument();

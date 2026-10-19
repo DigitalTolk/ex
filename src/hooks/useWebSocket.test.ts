@@ -426,6 +426,23 @@ describe('useWebSocket', () => {
     expect(onChannelArchived).toHaveBeenCalledWith({ channelID: 'ch-2' });
   });
 
+  it('calls onChannelUnarchived when receiving a channel.unarchived event', async () => {
+    const onChannelUnarchived = vi.fn();
+    renderHook(() =>
+      useWebSocket({ onChannelUnarchived, enabled: true }),
+    );
+    await flushConnect();
+
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    ws.simulateMessage(JSON.stringify({
+      type: 'channel.unarchived',
+      data: JSON.stringify({ channelID: 'ch-3' }),
+    }));
+
+    expect(onChannelUnarchived).toHaveBeenCalledWith({ channelID: 'ch-3' });
+  });
+
   it('cleans up on unmount', async () => {
     const { unmount } = renderHook(() =>
       useWebSocket({ enabled: true }),

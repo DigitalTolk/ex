@@ -27,7 +27,8 @@ import { useComposerSchedule } from '@/hooks/useScheduledMessages';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { useNotifications } from '@/context/NotificationContext';
-import { canEditChannel, canArchiveChannel, canLeaveChannel, roleNumber } from '@/lib/roles';
+import { canEditChannel, canArchiveChannel, canUnarchiveChannel, canLeaveChannel, roleNumber } from '@/lib/roles';
+import { ArchivedChannelNotice } from '@/components/chat/ArchivedChannelNotice';
 import { markThreadSeen, noteThreadReadPosition } from '@/hooks/useThreads';
 import { apiFetch } from '@/lib/api';
 import { slugify } from '@/lib/format';
@@ -335,8 +336,12 @@ export function ChannelView() {
   }, [members, usersData]);
 
   const currentUserRole = members?.find(m => m.userID === user?.id)?.role;
-  const canEdit = canEditChannel(currentUserRole);
-  const canArchive = canArchiveChannel(currentUserRole);
+  // An archived channel is read-only: no editing, posting or new members.
+  const archived = !!channel?.archived;
+  const canEdit = canEditChannel(currentUserRole) && !archived;
+  const canArchive = canArchiveChannel(currentUserRole, user?.systemRole);
+  const canUnarchive = canUnarchiveChannel(currentUserRole, user?.systemRole);
+  const [unarchiving, setUnarchiving] = useState(false);
   const canLeave = canLeaveChannel(currentUserRole, channel?.slug);
 
   const muted = !!userChannels?.find((uc) => uc.channelID === channel?.id)?.muted;
@@ -352,8 +357,22 @@ export function ChannelView() {
     /* istanbul ignore next -- only wired to the header menu, which renders only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
     if (!channel?.id) return;
     await apiFetch(`/api/v1/channels/${channel.id}`, { method: 'DELETE' });
+    // Stay on the channel: it turns read-only in place.
     queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
-    navigate('/');
+    queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug(slug) });
+  }
+
+  async function handleUnarchive() {
+    /* istanbul ignore next -- only wired to the header menu and the archived notice, which render only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
+    if (!channel?.id) return;
+    setUnarchiving(true);
+    try {
+      await apiFetch(`/api/v1/channels/${channel.id}/unarchive`, { method: 'POST' });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug(slug) });
+    } finally {
+      setUnarchiving(false);
+    }
   }
 
   async function handleLeave() {
@@ -422,6 +441,8 @@ export function ChannelView() {
           onDescriptionSave={handleDescriptionSave}
           canArchive={canArchive}
           onArchive={handleArchive}
+          canUnarchive={canUnarchive}
+          onUnarchive={handleUnarchive}
           canLeave={canLeave}
           onLeave={handleLeave}
           muted={muted}
@@ -432,7 +453,7 @@ export function ChannelView() {
           onFilesClick={toggleFiles}
           filesActive={showFiles}
         />
-        <MessageDropZone onFiles={(files) => void inputRef.current?.uploadFiles(files)}>
+        <MessageDropZone onFiles={(files) => void inputRef.current?.uploadFiles(files)} disabled={archived}>
           <MessageList
             pages={data?.pages ?? []}
             hasNextPage={hasNextPage}
@@ -447,6 +468,7 @@ export function ChannelView() {
             channelSlug={channel?.slug}
             userMap={userMap}
             quickReactions={quickReactions}
+            readOnly={archived}
             onReplyInThread={openThread}
             onEditMessage={isMobile ? setEditingMessage : undefined}
             anchorMsgId={listAnchor}
@@ -466,7 +488,7 @@ export function ChannelView() {
               ) : undefined
             }
           />
-          {channel && !activeEditingMessage && pendingInvites.length > 0 && (
+          {channel && !archived && !activeEditingMessage && pendingInvites.length > 0 && (
             <NonMemberInvitePrompt
               channelId={channel.id}
               channelName={channel.slug}
@@ -474,7 +496,9 @@ export function ChannelView() {
               onDismiss={clearInvites}
             />
           )}
-          {activeEditingMessage && !editReady ? (
+          {archived ? (
+            <ArchivedChannelNotice onUnarchive={canUnarchive ? handleUnarchive : undefined} unarchiving={unarchiving} />
+          ) : activeEditingMessage && !editReady ? (
             <div className="border-t p-3 text-sm text-muted-foreground">Loading message editor…</div>
           ) : (
             <MessageInput
@@ -520,6 +544,7 @@ export function ChannelView() {
             effectiveThreadRootID === threadParam ? threadAnchor : undefined
           }
           anchorRevision={navKey}
+          readOnly={archived}
         />
       ) : activeTag ? (
         <TagSearchPanel />
@@ -531,6 +556,7 @@ export function ChannelView() {
           userMap={userMap}
           currentUserId={user?.id}
           onReplyInThread={openThread}
+          readOnly={archived}
         />
       ) : showFiles ? (
         <FilesPanel
@@ -548,6 +574,7 @@ export function ChannelView() {
           currentUserRole={roleNumber(currentUserRole)}
           userMap={userMap}
           onClose={closeMembers}
+          readOnly={archived}
         />
       ) : null}
       {notifPrefsDialog}

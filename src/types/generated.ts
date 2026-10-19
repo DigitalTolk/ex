@@ -1898,6 +1898,11 @@ export interface UserChannel {
   unread?: boolean;
   unreadCount?: number /* int */;
   /**
+   * Archived mirrors the channel's archived (read-only) flag, stamped at
+   * read time by ListUserChannels; the sidebar groups archived channels.
+   */
+  archived?: boolean;
+  /**
    * UnreadNotifyCount counts unread messages that actually ALERTED this
    * user per their notification rules (mentions, keywords, "all messages"
    * level; mute suppresses) — the sidebar's numeric badge. Plain unread

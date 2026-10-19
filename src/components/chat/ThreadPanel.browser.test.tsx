@@ -120,6 +120,7 @@ function renderPanel(
   userMap: Record<string, { displayName: string; avatarURL?: string; userStatus?: { emoji: string; text: string } }> = {
     'u-1': { displayName: 'Alice' },
   },
+  readOnly = false,
 ) {
   apiFetchMock.mockReset();
   apiFetchMock.mockImplementation(() => Promise.resolve(null));
@@ -134,6 +135,7 @@ function renderPanel(
           onClose={onClose}
           userMap={userMap}
           currentUserId="u-1"
+          readOnly={readOnly}
         />
       </BrowserRouter>
     </QueryClientProvider>,
@@ -237,6 +239,13 @@ describe('ThreadPanel browser behaviour', () => {
       { ...reply(), body: '', deleted: true },
     ]);
     await expect.element(screen.getByText('This thread has been deleted.')).toBeVisible();
+    expect(document.querySelector('[contenteditable="true"]')).toBeNull();
+  });
+
+  it('read-only (archived channel): the replies stay readable but there is no composer', async () => {
+    const screen = await renderPanel([rootMsg(), reply()], vi.fn(), { 'u-1': { displayName: 'Alice' } }, true);
+    await expect.element(screen.getByText('a reply')).toBeVisible();
+    await expect.element(screen.getByTestId('thread-archived-notice')).toHaveTextContent('This channel is archived. Its history is read-only.');
     expect(document.querySelector('[contenteditable="true"]')).toBeNull();
   });
 

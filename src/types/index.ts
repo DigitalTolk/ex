@@ -261,6 +261,9 @@ export interface UserChannel {
   // only the availability dot. Server-maintained; notification.new events
   // carry the authoritative new value.
   unreadNotifyCount?: number;
+  // Read-only: the channel is archived. Listed in the sidebar's Archived
+  // section, history readable, nobody can post.
+  archived?: boolean;
   muted?: boolean;
   favorite?: boolean;
   categoryID?: string;
