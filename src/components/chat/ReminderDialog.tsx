@@ -183,8 +183,12 @@ export function ReminderDialog({
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
             <Calendar
               mode="single"
+              // A tap on the chosen day keeps it chosen. Unrequired, it cleared
+              // the date: late in the evening the seed is already tomorrow,
+              // and tapping tomorrow left "Pick a date." on Set.
+              required
               selected={dateOf(fields.date)}
-              onSelect={(day) => update({ ...fields, date: day ? isoDate(day) : '' })}
+              onSelect={(day) => update({ ...fields, date: isoDate(day) })}
               month={month}
               onMonthChange={setMonth}
               className="rounded-md border border-border"

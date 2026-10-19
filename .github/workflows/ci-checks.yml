@@ -90,11 +90,14 @@ jobs:
           github-token: ${{ github.token }}
 
   test-frontend:
-    # ONE frontend job: the jsdom + browser vitest projects run together so
-    # the 100% coverage gate applies to the MERGED report (the per-suite
-    # split no longer exists). Runs in the playwright container because the
-    # browser projects need its browsers; jsdom runs fine there too.
-    name: Frontend
+    # The jsdom + browser vitest projects, split across four runners. One
+    # runner running all ~1000 files (jsdom plus three Playwright browsers)
+    # was saturated, and tests that pass on an idle machine timed out or
+    # raced under that load. Each shard writes a blob report; the merge job
+    # below applies the 100% gate to the MERGED coverage, so a shard's own
+    # (partial) coverage is not gated. Runs in the playwright container
+    # because the browser projects need its browsers.
+    name: Frontend (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     container:
       # Tag must track the playwright-core version in package-lock.json —
@@ -102,14 +105,53 @@ jobs:
       # fails with "Executable doesn't exist".
       image: ghcr.io/digitaltolk/docker-builder-playwright:1.61.1
     needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
 
       - name: Frontend deps
         run: npm ci
 
-      - name: Run vitest (all projects) with merged coverage
-        run: npx vitest run --coverage
+      - name: Run vitest shard
+        # Thresholds off (the merge job gates), console output fails the
+        # shard, and a shard whose browser died runs once more.
+        run: node scripts/test-frontend.mjs --shards 4 --only ${{ matrix.shard }}
+
+      - name: Upload blob report
+        uses: actions/upload-artifact@v7
+        with:
+          name: vitest-blob-${{ matrix.shard }}
+          path: .vitest/blob/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  frontend-coverage:
+    # Merges the shards' reports into the one coverage report the 100% gate
+    # (vitest.config.ts thresholds) and the universe check apply to.
+    name: Frontend coverage
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/digitaltolk/docker-builder-playwright:1.61.1
+    needs: test-frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Frontend deps
+        run: npm ci
+
+      - name: Download blob reports
+        uses: actions/download-artifact@v8
+        with:
+          pattern: vitest-blob-*
+          path: .vitest/blob
+          merge-multiple: true
+
+      - name: Merge reports with coverage (100% gate)
+        run: npx vitest --mergeReports --coverage
 
       - name: Coverage universe (no file silently ungraded)
         run: node scripts/check-coverage-universe.mjs
@@ -123,12 +165,34 @@ jobs:
           base-path: .
           github-token: ${{ github.token }}
 
+  flake-gate:
+    # The frontend tests a pull request touches, run several times over in a
+    # shuffled order with runs side by side (scripts/check-flaky.mjs, also the
+    # last step of `make check`): a test that passes once but fails under
+    # load or in another order is stopped before it reaches main.
+    name: Flake gate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/digitaltolk/docker-builder-playwright:1.61.1
+    needs: lint
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Frontend deps
+        run: npm ci
+
+      - name: Touched tests, shuffled, under load
+        run: node scripts/check-flaky.mjs --base origin/${{ github.base_ref }}
+
   coverage-finish:
     # Tells Coveralls that all parallel coverage uploads are done so it can
     # combine them into a single report.
     name: Coverage
     runs-on: ubuntu-latest
-    needs: [test-backend, test-frontend]
+    needs: [test-backend, frontend-coverage]
     if: always()
     steps:
       - name: Coveralls Finished

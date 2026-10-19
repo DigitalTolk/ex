@@ -5,7 +5,16 @@ import { APP_VERSION_META, BUILD_VERSION_META } from '@/lib/version-meta';
 import './console-gate';
 import { resetPresenceStoreForTests } from '@/stores/presence';
 import { resetTypingStoreForTests } from '@/stores/typing';
-import { afterEach } from 'vitest';
+import { afterEach, beforeEach, vi } from 'vitest';
+import { resetAllStores } from './store-reset';
+import { parkMouse } from './hover';
+import { resetAppStateForTests } from './app-state-reset';
+
+// Every zustand store starts each test at its initial state (./store-reset).
+vi.mock('zustand', async (importOriginal) => {
+  const { withStoreResets } = await import('./store-reset');
+  return withStoreResets(await importOriginal<typeof import('zustand')>());
+});
 
 if (typeof document !== 'undefined') {
   if (!document.querySelector(`meta[name="${APP_VERSION_META}"]`)) {
@@ -55,4 +64,20 @@ afterEach(() => {
   // A test that attaches a mouse/trackpad must not leak it into the next one.
   // (Set directly rather than through lib/device — see the import note above.)
   delete window.__EX_POINTER_DEVICE__;
+});
+
+// Everything else a test can leave for the next one, cleared before each
+// test — not after: vitest-browser-react unmounts the previous test in its
+// own beforeEach (registered first, by the import at the top), so by now the
+// page is empty, where an afterEach still had the test's dialogs open (the
+// mouse could not be moved past a modal backdrop). Every file in a browser
+// project shares the page, so this also clears what the previous FILE left.
+beforeEach(async () => {
+  resetAllStores();
+  localStorage.clear();
+  sessionStorage.clear();
+  await resetAppStateForTests();
+  // The real mouse stays wherever a test left it, and this test's content
+  // would render under it hovered (a hover-coloured button, a row's toolbar).
+  await parkMouse();
 });

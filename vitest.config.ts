@@ -19,6 +19,13 @@ import path from 'path';
 // partition to police, only the union gate plus the universe check
 // (scripts/check-coverage-universe.mjs) that ensures every non-excluded
 // src file actually appears in the report.
+// The browsers' time zone follows TZ, as jsdom's does (WebKit ignores the
+// variable itself). Unset, each uses the machine's. The flake gate
+// (scripts/check-flaky.mjs) runs rounds in zones chosen so local time is late
+// evening in one and just past midnight in another: a test that only passes
+// at some hours of the day fails there, not one night in CI.
+const timezoneId = process.env.TZ || undefined;
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   optimizeDeps: {
@@ -52,6 +59,10 @@ export default defineConfig({
     ],
   },
   test: {
+    // How long expect.poll / expect.element keep retrying (browser tests),
+    // for the same reason as asyncUtilTimeout in src/test/setup.ts: 1s is a
+    // quiet machine's budget, not a loaded one's.
+    expect: { poll: { timeout: 5000 } },
     // Cap the worker pool: the browser project's three Playwright instances
     // run alongside the jsdom pool in the merged run, and an uncapped pool
     // oversubscribes the machine badly enough to flake timing-sensitive
@@ -140,6 +151,7 @@ export default defineConfig({
               launchOptions: {
                 headless: true,
               },
+              contextOptions: { timezoneId },
             }),
             instances: [
               {
@@ -161,6 +173,7 @@ export default defineConfig({
                     headless: true,
                   },
                   contextOptions: {
+                    timezoneId,
                     deviceScaleFactor: 3,
                     hasTouch: true,
                     isMobile: true,

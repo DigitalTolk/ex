@@ -1,0 +1,44 @@
+name: Flake hunt
+
+# The whole frontend suite every night in a shuffled order, at local times
+# just before and just past midnight. It finds a test that only passes in the
+# order, or at the hour, the regular CI run happens to use. The pull-request
+# flake gate (scripts/check-flaky.mjs) covers the tests a change touches; this
+# covers the rest of the suite. A failure here is a flaky test: fix its cause
+# (see CLAUDE.md, "No flaky tests") with the seed and zone the run prints.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  hunt:
+    name: Shuffled at ${{ matrix.hour }}:00 local (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    container:
+      # Same image as the Frontend job in ci-checks.yml (tracks playwright-core).
+      image: ghcr.io/digitaltolk/docker-builder-playwright:1.61.1
+    strategy:
+      fail-fast: false
+      matrix:
+        hour: [23, 0]
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Frontend deps
+        run: npm ci
+
+      - name: Put local time at ${{ matrix.hour }}:00
+        run: echo "TZ=$(node scripts/local-hour-zone.mjs ${{ matrix.hour }})" >> "$GITHUB_ENV"
+
+      - name: Run the shard shuffled
+        run: npx vitest run --shard=${{ matrix.shard }}/4 --sequence.shuffle --sequence.seed=${{ github.run_id }}
+
+      - name: How to reproduce
+        if: failure()
+        run: echo "TZ=$TZ npx vitest run --shard=${{ matrix.shard }}/4 --sequence.shuffle --sequence.seed=${{ github.run_id }}"

@@ -1,4 +1,4 @@
-.PHONY: dev dev-up dev-down dev-logs dev-watch dev-watch-down dev-watch-logs build frontend run seed docker clean deps check check-dist-placeholder types check-types-drift check-claude-md
+.PHONY: dev dev-up dev-down dev-logs dev-watch dev-watch-down dev-watch-logs build frontend run seed docker clean deps check check-dist-placeholder types check-types-drift check-claude-md check-flaky
 
 # The hot-reload stack layers docker-compose.dev.yml over the base file, so
 # every dev-watch target must pass both -f flags (compose has no way to make
@@ -105,22 +105,8 @@ check:
 	npx tsc -b --noEmit
 	@echo "=== Frontend lint ==="
 	npx eslint src/
-	@echo "=== Frontend test (jsdom + browser projects, merged coverage) ==="
-	@tmp=$$(mktemp); \
-		npx vitest run --coverage > "$$tmp" 2>&1; \
-		status=$$?; \
-		cat "$$tmp"; \
-		if [ $$status -ne 0 ]; then \
-			rm -f "$$tmp"; \
-			exit $$status; \
-		fi; \
-		if grep -E '^(stderr|stdout) \|' "$$tmp" >/dev/null; then \
-			echo "vitest emitted console output; keep tests quiet before passing make check" >&2; \
-			grep -n -E '^(stderr|stdout) \|' "$$tmp" >&2; \
-			rm -f "$$tmp"; \
-			exit 1; \
-		fi; \
-		rm -f "$$tmp"
+	@echo "=== Frontend test (jsdom + browser projects, $(FRONTEND_SHARDS) shards, merged coverage) ==="
+	node scripts/test-frontend.mjs --shards $(FRONTEND_SHARDS)
 	@node scripts/check-coverage-universe.mjs
 	@summary=coverage/coverage-summary.json; \
 		if [ ! -f "$$summary" ]; then \
@@ -128,6 +114,24 @@ check:
 			exit 1; \
 		fi; \
 		node -e "const s=require('./$$summary').total; const bad=['statements','branches','functions','lines'].filter(m=>s[m].pct<100); for (const m of ['statements','branches','functions','lines']) console.log('frontend '+m+' coverage (merged): '+s[m].pct+'%'); if (bad.length) { console.error('frontend merged coverage below 100% for: '+bad.join(', ')); process.exit(1); }" 
+	@echo "=== Flake gate (touched frontend tests, shuffled, under load) ==="
+	$(MAKE) check-flaky
+
+# The frontend suite runs as FRONTEND_SHARDS shards one after another, then a
+# merge applies the 100% coverage gate to the combined report — as CI does
+# across runners (scripts/test-frontend.mjs). One run of every file at once
+# (jsdom plus three Playwright browsers) saturated the machine: slower
+# overall, and under that load WebKit sometimes failed to load a test page and
+# dropped the rest of its files.
+FRONTEND_SHARDS ?= 4
+
+# The frontend tests a change touches, run several times over in a shuffled
+# order with runs side by side (scripts/check-flaky.mjs). A test that passes
+# once on a quiet machine but fails under CI's load or in another order is
+# caught before it lands. FLAKY_BASE: the ref changes are measured from.
+FLAKY_BASE ?= main
+check-flaky:
+	node scripts/check-flaky.mjs --base $(FLAKY_BASE) $(FLAKY_ARGS)
 
 # Regenerate the TypeScript mirror of the Go wire types (internal/model).
 types:

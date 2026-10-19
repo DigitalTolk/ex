@@ -175,7 +175,8 @@ describe.skipIf(window.__EX_FORCE_DEVICE__ === 'desktop')('the phone chat with t
   // The newest message's bottom, measured from the composer's top.
   function lastAboveComposer() {
     const composer = laidOut('[data-composer-focused]')!.getBoundingClientRect();
-    return Math.round(composer.top - laidOut(`[data-message-id="${LAST_ID}"]`)!.getBoundingClientRect().bottom);
+    // `|| 0`: a sub-pixel overlap rounds to -0, which toBe(0) refuses.
+    return Math.round(composer.top - laidOut(`[data-message-id="${LAST_ID}"]`)!.getBoundingClientRect().bottom) || 0;
   }
   async function raiseKeyboard() {
     laidOut('[data-message-composer] [contenteditable="true"]')!.focus();

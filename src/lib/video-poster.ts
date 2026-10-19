@@ -38,40 +38,41 @@ export function readVideoPoster(file: Blob): Promise<VideoPoster | null> {
     video.playsInline = true;
     video.preload = 'auto';
     video.addEventListener('error', () => finish(null));
+    const capture = () => {
+      const { videoWidth: width, videoHeight: height } = video;
+      if (!width || !height) {
+        finish(null);
+        return;
+      }
+      const scale = Math.min(1, POSTER_MAX_SIDE / Math.max(width, height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(width * scale);
+      canvas.height = Math.round(height * scale);
+      canvas.getContext('2d')!.drawImage(video, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(
+        (poster) => {
+          /* v8 ignore next 4 -- toBlob yields null only for a zero-size canvas or a missing encoder; this canvas is at least 1x1 and every browser encodes JPEG */
+          /* istanbul ignore if -- toBlob yields null only for a zero-size canvas or a missing encoder; this canvas is at least 1x1 and every browser encodes JPEG */
+          if (!poster) {
+            finish(null);
+            return;
+          }
+          finish({ width, height, poster });
+        },
+        'image/jpeg',
+        0.85,
+      );
+    };
     video.addEventListener(
       'loadeddata',
       () => {
+        // Drawn once the frame the seek lands on is on screen: `seeked` can
+        // come before it is painted, and a busy Chromium then drew the clip's
+        // black opening as the poster. Without the frame callback, `seeked`.
+        if (typeof video.requestVideoFrameCallback === 'function') video.requestVideoFrameCallback(capture);
+        else video.addEventListener('seeked', capture, { once: true });
         // A clip with no known length (a live recording) reports Infinity.
         video.currentTime = Math.min(POSTER_AT_SECONDS, video.duration / 2);
-      },
-      { once: true },
-    );
-    video.addEventListener(
-      'seeked',
-      () => {
-        const { videoWidth: width, videoHeight: height } = video;
-        if (!width || !height) {
-          finish(null);
-          return;
-        }
-        const scale = Math.min(1, POSTER_MAX_SIDE / Math.max(width, height));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(width * scale);
-        canvas.height = Math.round(height * scale);
-        canvas.getContext('2d')!.drawImage(video, 0, 0, canvas.width, canvas.height);
-        canvas.toBlob(
-          (poster) => {
-            /* v8 ignore next 4 -- toBlob yields null only for a zero-size canvas or a missing encoder; this canvas is at least 1x1 and every browser encodes JPEG */
-            /* istanbul ignore if -- toBlob yields null only for a zero-size canvas or a missing encoder; this canvas is at least 1x1 and every browser encodes JPEG */
-            if (!poster) {
-              finish(null);
-              return;
-            }
-            finish({ width, height, poster });
-          },
-          'image/jpeg',
-          0.85,
-        );
       },
       { once: true },
     );

@@ -35,7 +35,8 @@ This single command runs everything in order:
 6. `make check-types-drift` (tygo: `src/types/generated.ts` must match `internal/model`)
 7. `npx tsc -b --noEmit` (frontend type-check)
 8. `npx eslint src/` (frontend lint)
-9. `npx vitest run --coverage` (ALL frontend projects — jsdom + the three browser instances — with one merged coverage gate), then `scripts/check-coverage-universe.mjs`
+9. The frontend suite (ALL projects — jsdom + the three browser instances) as four shards one after another, merged by `npx vitest --mergeReports --coverage` into one coverage gate (`scripts/test-frontend.mjs`), then `scripts/check-coverage-universe.mjs`
+10. `make check-flaky` (flake gate: the frontend tests the change touches, shuffled, several rounds side by side — see "No flaky tests")
 
 All must pass. Do not skip any. Fix lint errors in code you changed.
 
@@ -52,6 +53,17 @@ Common patterns:
 - For ref-only deps that ESLint flags, list the refs in the dep array — refs are stable so it's a no-op behaviorally and silences the warning.
 - For `vi.fn().mockImplementation(...)` of a constructor, use a `function` (not arrow) so `[[Construct]]` works and vitest doesn't warn.
 
+### No flaky tests (HARD GATE)
+
+**A test that fails only sometimes is a failing test.** The frontend suite runs in four shards — on four CI runners, one after another in `make check` — because one run of every file at once (jsdom plus three Playwright browsers) saturated the machine and timing-sensitive tests failed under that load, and the flake gate — `make check-flaky` (`scripts/check-flaky.mjs`), the last step of `make check` and the Flake gate job on pull requests — runs every frontend test a change touches several rounds over, in a shuffled order (`--sequence.shuffle`), two runs side by side for load. It must pass. A failing round prints the seed that reproduces it.
+
+When a test flakes:
+- Reproduce it first: the printed seed, or `node scripts/check-flaky.mjs --rounds 8 <file>`. A failure seen only in CI is load: run the file side by side with itself.
+- Look for a product race before touching the test. A flake is often the app mishandling input that arrives early — sending the last render's `body` instead of the editor's current text dropped the last characters typed, and only a busy CI runner was fast enough to show it.
+- Wait for what the user would see, never for time: `findBy*` / `expect.element` / `waitFor` on the state that proves the app handled the input. No fixed sleeps or frame counts to "let it settle".
+- Nothing carries over between tests: each test sets up what it relies on — the real mouse position (`parkMouse` in `@/test/hover`), a lazy chunk's first render, module-level singletons, localStorage. The shuffled order exposes a test that only passed because an earlier one ran first.
+- Never retry a flake away, raise one test's timeout to outlast it, or skip it. The one rerun there is: a shard whose browser died (the page closed or never became ready — no verdict on any of its tests) runs once more, and the log says so. The shared waiting budget is already sized for a loaded machine (5s: RTL `asyncUtilTimeout` in `src/test/setup.ts`, `expect.poll` in `vitest.config.ts`); a wait that needs more than that is waiting for the wrong thing.
+
 ### Coverage — 100% everywhere (HARD GATE)
 
 **The backend AND the merged frontend gate must stay at 100%.** This is non-negotiable. The metric differs per gate (Go has no branch-coverage metric):
@@ -61,7 +73,7 @@ Common patterns:
 | Backend | = 100% | statement (go-test-coverage over `./internal/...`; zero `// coverage-ignore` annotations allowed — see COVERAGE.md for the seam / must-helper / dead-guard-deletion playbook) |
 | Frontend (merged) | = 100% | statements + branches + functions + lines (`vitest.config.ts` root `thresholds` over the MERGED istanbul report of all `test.projects`: jsdom + chromium-desktop + chromium-mobile + webkit-iphone) |
 
-Each gate fails `make check` **and** the GitHub Actions CI run: the backend gate is go-test-coverage (`.testcoverage.yml`) in `Makefile` + a dedicated CI step; the frontend gate is enforced by vitest's own `thresholds` (non-zero exit) on the single `npx vitest run --coverage` invocation. The Makefile additionally re-checks all four metrics from `coverage/coverage-summary.json`.
+Each gate fails `make check` **and** the GitHub Actions CI run: the backend gate is go-test-coverage (`.testcoverage.yml`) in `Makefile` + a dedicated CI step; the frontend gate is enforced by vitest's own `thresholds` (non-zero exit) on the merged shard reports (`npx vitest --mergeReports --coverage`), in `make check` and in CI alike; the shards themselves are not gated. The Makefile additionally re-checks all four metrics from `coverage/coverage-summary.json`.
 
 **No file may go silently ungraded.** Coverage is one merged universe: a file only needs 100% from the UNION of jsdom + browser hits, and `scripts/check-coverage-universe.mjs` (a `make check` + CI step) fails when any non-excluded `src/` runtime file is absent from the merged lcov (i.e. no test in any project loads it). The only sanctioned exclusions live in the config's coverage `exclude` list (entry shim, type-only modules, the tygo-generated mirror), each with a reason — do not grow that list casually. Ignore annotations must carry BOTH `/* v8 ignore */` and `/* istanbul ignore */` twins (the provider is istanbul today; the dual form keeps them provider-portable) with a WHY.
 

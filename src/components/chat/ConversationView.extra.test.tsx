@@ -33,13 +33,14 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Conversation } from '@/types';
 
-let mockConversation: Conversation = {
+const groupConversation: Conversation = {
   id: 'conv-2',
   type: 'group',
   name: '',
   participantIDs: ['u-1', 'u-2', 'u-3'],
   createdAt: '2026-01-01T00:00:00Z',
 };
+let mockConversation: Conversation = groupConversation;
 
 vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({
@@ -134,6 +135,8 @@ function renderConversationView(id = 'conv-2') {
 describe('ConversationView - extra coverage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // A test swaps in another conversation; the rest expect this one.
+    mockConversation = groupConversation;
   });
 
   it('renders fallback when no id in route', () => {
