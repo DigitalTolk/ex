@@ -216,6 +216,14 @@ describe('playNotificationPing', () => {
 });
 
 describe('NotificationContext.dispatch — sound regression', () => {
+  // The doMock below outlives the test unless undone: run first (a shuffled
+  // order), it handed every later loadModule() the stub instead of the real
+  // module.
+  afterEach(() => {
+    vi.doUnmock('@/lib/notification-sound');
+    vi.resetModules();
+  });
+
   // Regression coverage: the in-app dispatcher must call playNotificationPing
   // whenever soundEnabled is true. This caught a bug where adding the toast
   // path obscured the sound call site; we want a failing test the moment a

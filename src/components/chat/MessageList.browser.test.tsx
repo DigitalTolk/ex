@@ -315,7 +315,8 @@ describe('MessageList browser behavior', () => {
     function gapOf(scroller: HTMLElement, id: string) {
       const row = laidOutElement(`[data-message-id="${id}"]`);
       if (!row) return null;
-      return Math.round(scroller.getBoundingClientRect().bottom - row.getBoundingClientRect().bottom);
+      // `|| 0`: a sub-pixel gap rounds to -0, which toBe(0) refuses.
+      return Math.round(scroller.getBoundingClientRect().bottom - row.getBoundingClientRect().bottom) || 0;
     }
     // The last message wholly in view.
     function bottomEdge(scroller: HTMLElement) {

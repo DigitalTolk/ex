@@ -28,9 +28,10 @@ async function seekedFrameShows(): Promise<boolean> {
   video.muted = true;
   video.src = URL.createObjectURL(clipWebm());
   await new Promise((resolve) => video.addEventListener('loadeddata', resolve, { once: true }));
-  const seeked = new Promise((resolve) => video.addEventListener('seeked', resolve, { once: true }));
+  // Like readVideoPoster: once the seeked frame is painted, not on `seeked`.
+  const painted = new Promise((resolve) => video.requestVideoFrameCallback(() => resolve(undefined)));
   video.currentTime = 0.5;
-  await seeked;
+  await painted;
   const canvas = document.createElement('canvas');
   canvas.width = CLIP_WIDTH;
   canvas.height = CLIP_HEIGHT;
@@ -53,6 +54,44 @@ describe('readVideoPoster', () => {
     expect(left.b).toBeLessThan(80);
     expect(right.b).toBeGreaterThan(180);
     expect(right.r).toBeLessThan(80);
+  });
+
+  // `seeked` can come before the frame it landed on is painted; drawn then, a
+  // busy Chromium made the poster the clip's black opening.
+  it('waits for the seeked frame to be painted, not only for `seeked`', async () => {
+    const create = document.createElement.bind(document);
+    let video: HTMLVideoElement | undefined;
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string, options?: ElementCreationOptions) => {
+      const el = create(tag, options);
+      if (tag === 'video') video = el as HTMLVideoElement;
+      return el;
+    });
+    let paint: (() => void) | undefined;
+    vi.spyOn(HTMLVideoElement.prototype, 'requestVideoFrameCallback').mockImplementation((callback) => {
+      paint = () => callback(performance.now(), {} as VideoFrameCallbackMetadata);
+      return 1;
+    });
+    let answered = false;
+    const pending = readVideoPoster(clipWebm()).then((poster) => {
+      answered = true;
+      return poster;
+    });
+    await vi.waitFor(() => expect(video).toBeDefined());
+    await new Promise((resolve) => video!.addEventListener('seeked', resolve, { once: true }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(answered).toBe(false);
+    paint!();
+    await expect(pending).resolves.toMatchObject({ width: CLIP_WIDTH, height: CLIP_HEIGHT });
+  });
+
+  it('draws on `seeked` in a browser without frame callbacks', async () => {
+    const own = Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'requestVideoFrameCallback')!;
+    Object.defineProperty(HTMLVideoElement.prototype, 'requestVideoFrameCallback', { configurable: true, value: undefined });
+    try {
+      await expect(readVideoPoster(clipWebm())).resolves.toMatchObject({ width: CLIP_WIDTH, height: CLIP_HEIGHT });
+    } finally {
+      Object.defineProperty(HTMLVideoElement.prototype, 'requestVideoFrameCallback', own);
+    }
   });
 
   it('has none for a file the browser cannot decode', async () => {

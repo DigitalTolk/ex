@@ -521,6 +521,8 @@ describe('NotificationProvider', () => {
     // channel messages: no need to ping the channel you're staring at.
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
     renderProbe();
+    // Looking at it: the window has focus (jsdom reports none by itself).
+    act(() => window.dispatchEvent(new Event('focus')));
     act(() => {
       setActiveSpy!('ch-1');
       dispatchSpy!(channelMessagePayload);
@@ -1017,6 +1019,8 @@ describe('NotificationProvider', () => {
   it('acks when suppressed because the user is already viewing the channel', () => {
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
     renderProbe();
+    // Looking at it: the window has focus (jsdom reports none by itself).
+    act(() => window.dispatchEvent(new Event('focus')));
     act(() => {
       setActiveSpy!('ch-1');
       dispatchSpy!({ ...channelMessagePayload, messageID: 'm-view' });
@@ -1046,6 +1050,8 @@ describe('NotificationProvider', () => {
     // dedup set and a later copy that should alert is silently swallowed.
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
     renderProbe();
+    // Looking at it: the window has focus (jsdom reports none by itself).
+    act(() => window.dispatchEvent(new Event('focus')));
     const payload = { ...channelMessagePayload, messageID: 'm-incident' };
     act(() => {
       setActiveSpy!('ch-1'); // looking right at the channel → first copy suppressed

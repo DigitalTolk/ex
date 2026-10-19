@@ -198,7 +198,8 @@ describe('ThreadPanel real-scroll coverage', () => {
     // How far a reply's bottom is above the view's (negative: cut off).
     function gapOf(id: string) {
       const row = document.querySelector(`[data-message-id="${id}"]`)!;
-      return Math.round(scroller().getBoundingClientRect().bottom - row.getBoundingClientRect().bottom);
+      // `|| 0`: a sub-pixel gap rounds to -0, which toBe(0) refuses.
+      return Math.round(scroller().getBoundingClientRect().bottom - row.getBoundingClientRect().bottom) || 0;
     }
     async function open() {
       const { ui, panel } = mount();

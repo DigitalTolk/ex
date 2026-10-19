@@ -89,12 +89,18 @@ describe('ReminderDialog', () => {
     expect((screen.getByTestId('reminder-time') as HTMLInputElement).value).toBe('soon');
   });
 
-  it('clicking the chosen day again clears the date, and the month can be paged', () => {
+  // Late in the evening the seed is already tomorrow, so tapping tomorrow is
+  // tapping the chosen day. That used to clear the date and Set answered
+  // "Pick a date." (and the reminder tests failed every night after 23:00).
+  it('tapping the chosen day again keeps it chosen, and the month can be paged', async () => {
     const { onConfirm } = setup('2999-01-01T09:00');
     fireEvent.click(screen.getByTestId('reminder-day-2999-01-01'));
+    expect(screen.getByTestId('reminder-day-2999-01-01')).toHaveAttribute('data-selected-single', 'true');
     fireEvent.click(screen.getByTestId('reminder-confirm'));
-    expect(screen.getByTestId('reminder-error')).toHaveTextContent('Pick a date');
-    expect(onConfirm).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('reminder-error')).toBeNull();
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+    const when = onConfirm.mock.calls[0][0] as Date;
+    expect([when.getFullYear(), when.getMonth(), when.getDate(), when.getHours()]).toEqual([2999, 0, 1, 9]);
     fireEvent.click(screen.getByRole('button', { name: /next month/i }));
     expect(screen.getByTestId('reminder-day-2999-02-15')).toBeInTheDocument();
   });
