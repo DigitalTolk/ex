@@ -105,19 +105,7 @@ func (im *Importer) finalizeThread(ctx context.Context, parentID, parentType, ro
 	if len(replies) == 0 {
 		return true, 0, nil
 	}
-	sort.Slice(replies, func(i, j int) bool { return replies[i].ID > replies[j].ID }) // newest first
-	authors := make([]string, 0, recentAuthorsCap)
-	participants := []string{root.AuthorID}
-	seen := map[string]bool{root.AuthorID: true}
-	for _, r := range replies {
-		if len(authors) < recentAuthorsCap && !slices.Contains(authors, r.AuthorID) {
-			authors = append(authors, r.AuthorID)
-		}
-		if !seen[r.AuthorID] {
-			seen[r.AuthorID] = true
-			participants = append(participants, r.AuthorID)
-		}
-	}
+	authors, participants := summarizeThread(root.AuthorID, replies)
 	if err := im.messages.SetReplyMetadata(ctx, parentID, rootID, len(replies), replies[0].CreatedAt, authors); err != nil {
 		return false, 0, fmt.Errorf("importer: set reply metadata: %w", err)
 	}
@@ -134,6 +122,25 @@ func (im *Importer) finalizeThread(ctx context.Context, parentID, parentType, ro
 		follows++
 	}
 	return true, follows, nil
+}
+
+// summarizeThread sorts replies newest first and returns the recent reply
+// authors (the avatar stack) and every participant (root author first).
+func summarizeThread(rootAuthorID string, replies []*model.Message) (authors, participants []string) {
+	sort.Slice(replies, func(i, j int) bool { return replies[i].ID > replies[j].ID })
+	authors = make([]string, 0, recentAuthorsCap)
+	participants = []string{rootAuthorID}
+	seen := map[string]bool{rootAuthorID: true}
+	for _, r := range replies {
+		if len(authors) < recentAuthorsCap && !slices.Contains(authors, r.AuthorID) {
+			authors = append(authors, r.AuthorID)
+		}
+		if !seen[r.AuthorID] {
+			seen[r.AuthorID] = true
+			participants = append(participants, r.AuthorID)
+		}
+	}
+	return authors, participants
 }
 
 func (im *Importer) finalizeChannel(ctx context.Context, spec FinalizeSpec) error {

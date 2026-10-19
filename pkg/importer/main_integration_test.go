@@ -243,10 +243,13 @@ func (e *env) racing(before func()) *Importer {
 // --- fakes for the non-DynamoDB collaborators ---
 
 type fakeObjects struct {
-	mu      sync.Mutex
-	objects map[string][]byte
-	sums    map[string]string
-	err     error
+	mu          sync.Mutex
+	objects     map[string][]byte
+	sums        map[string]string
+	err         error
+	headErr     error
+	deleteErr   error
+	deletedKeys []string
 }
 
 func (f *fakeObjects) PutChecksummedObject(_ context.Context, key, _ string, body io.ReadSeeker, size int64, sha string) (string, error) {
@@ -264,6 +267,27 @@ func (f *fakeObjects) PutChecksummedObject(_ context.Context, key, _ string, bod
 	}
 	f.objects[key], f.sums[key] = buf, sha
 	return `"etag-` + key + `"`, nil
+}
+
+func (f *fakeObjects) HeadObject(_ context.Context, key string) (bool, error) {
+	if f.headErr != nil {
+		return false, f.headErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.objects[key]
+	return ok, nil
+}
+
+func (f *fakeObjects) DeleteObject(_ context.Context, key string) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.objects, key)
+	f.deletedKeys = append(f.deletedKeys, key)
+	return nil
 }
 
 type fakeSearch struct {

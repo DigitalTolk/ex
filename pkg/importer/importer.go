@@ -58,9 +58,12 @@ type Options struct {
 	TempDir string
 }
 
-// ObjectStore is the object storage the importer uploads attachments to.
+// ObjectStore is the object storage holding attachment bodies: uploads,
+// existence checks (validation) and deletes (rollback).
 type ObjectStore interface {
 	PutChecksummedObject(ctx context.Context, key, contentType string, body io.ReadSeeker, size int64, sha256Hex string) (string, error)
+	HeadObject(ctx context.Context, key string) (bool, error)
+	DeleteObject(ctx context.Context, key string) error
 }
 
 // SearchIndex is the search integration: per-document upserts for users and
