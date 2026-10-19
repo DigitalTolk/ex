@@ -294,10 +294,14 @@ func (s *UserStoreImpl) ListUsers(ctx context.Context, limit int, lastKey string
 	}
 
 	if lastKey != "" {
+		// lastKey is the last item's GSI2SK ("<createdAt>#<userID>"); the
+		// start key must also carry that item's real table key, or DynamoDB
+		// cannot position after it and restarts from the first page.
+		lastID := lastKey[strings.LastIndex(lastKey, "#")+1:]
 		input.ExclusiveStartKey = map[string]types.AttributeValue{
 			"GSI2PK": &types.AttributeValueMemberS{Value: allUsersGSI2PK()},
 			"GSI2SK": &types.AttributeValueMemberS{Value: lastKey},
-			"PK":     &types.AttributeValueMemberS{Value: userPK(lastKey)},
+			"PK":     &types.AttributeValueMemberS{Value: userPK(lastID)},
 			"SK":     &types.AttributeValueMemberS{Value: profileSK()},
 		}
 	}
