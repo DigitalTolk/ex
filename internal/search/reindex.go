@@ -40,8 +40,8 @@ type reindexSources interface {
 	ListMessages(ctx context.Context, parentID string) ([]*model.Message, error)
 }
 
-// bulkWriter is the slice of Client used by the reindexer.
-type bulkWriter interface {
+// BulkWriter is the slice of Client used by the reindexer and bulk indexing.
+type BulkWriter interface {
 	Bulk(ctx context.Context, index string, entries []BulkEntry) error
 }
 
@@ -167,7 +167,7 @@ func rebuildIndex(ctx context.Context, rc IndexRebuilder, name string, list func
 // observable via Status() so the admin UI can show progress.
 type Reindexer struct {
 	src         reindexSources
-	w           bulkWriter
+	w           BulkWriter
 	attachments AttachmentResolver
 	status      StatusStore
 	now         func() int64
@@ -391,19 +391,34 @@ type fileBucket struct {
 }
 
 func (r *Reindexer) bulkMessages(ctx context.Context, msgs []*model.Message, parentType string, files map[string]*fileBucket) error {
+	entries := messageEntries(ctx, msgs, parentType, r.attachments, files)
+	if len(entries) == 0 {
+		return nil
+	}
+	if err := r.w.Bulk(ctx, IndexMessages, entries); err != nil {
+		return fmt.Errorf("reindex: bulk messages: %w", err)
+	}
+	r.mu.Lock()
+	r.progress.Messages += len(entries)
+	r.mu.Unlock()
+	r.persist(ctx, false)
+	return nil
+}
+
+// messageEntries builds the message documents for msgs and accumulates the
+// files they reference into files. Same exclusions as LiveIndexer.IndexMessage
+// — a bulk write must not resurrect docs the live path never creates.
+func messageEntries(ctx context.Context, msgs []*model.Message, parentType string, atts AttachmentResolver, files map[string]*fileBucket) []BulkEntry {
 	entries := make([]BulkEntry, 0, len(msgs))
 	for _, m := range msgs {
-		// Same exclusions as LiveIndexer.IndexMessage — a reindex must not
-		// resurrect docs the live path never creates.
 		if m == nil || m.System || m.NoIndex {
 			continue
 		}
 		entries = append(entries, BulkEntry{ID: m.ID, Doc: messageDoc(m, parentType)})
-		if r.attachments == nil || len(m.AttachmentIDs) == 0 || files == nil {
+		if atts == nil || len(m.AttachmentIDs) == 0 || files == nil {
 			continue
 		}
-		atts := r.attachments.ResolveAttachments(ctx, m.AttachmentIDs)
-		for _, a := range atts {
+		for _, a := range atts.ResolveAttachments(ctx, m.AttachmentIDs) {
 			if a == nil {
 				continue
 			}
@@ -423,23 +438,26 @@ func (r *Reindexer) bulkMessages(ctx context.Context, msgs []*model.Message, par
 			}
 		}
 	}
-	if len(entries) == 0 {
-		return nil
-	}
-	if err := r.w.Bulk(ctx, IndexMessages, entries); err != nil {
-		return fmt.Errorf("reindex: bulk messages: %w", err)
-	}
-	r.mu.Lock()
-	r.progress.Messages += len(entries)
-	r.mu.Unlock()
-	r.persist(ctx, false)
-	return nil
+	return entries
 }
 
 func (r *Reindexer) bulkFiles(ctx context.Context, files map[string]*fileBucket) error {
 	if len(files) == 0 {
 		return nil
 	}
+	entries := fileEntries(files)
+	if err := r.w.Bulk(ctx, IndexFiles, entries); err != nil {
+		return fmt.Errorf("reindex: bulk files: %w", err)
+	}
+	r.mu.Lock()
+	r.progress.Files = len(entries)
+	r.mu.Unlock()
+	r.persist(ctx, false)
+	return nil
+}
+
+// fileEntries renders the accumulated file buckets as file documents.
+func fileEntries(files map[string]*fileBucket) []BulkEntry {
 	entries := make([]BulkEntry, 0, len(files))
 	for id, b := range files {
 		entries = append(entries, BulkEntry{
@@ -457,12 +475,27 @@ func (r *Reindexer) bulkFiles(ctx context.Context, files map[string]*fileBucket)
 			},
 		})
 	}
-	if err := r.w.Bulk(ctx, IndexFiles, entries); err != nil {
-		return fmt.Errorf("reindex: bulk files: %w", err)
+	return entries
+}
+
+// IndexParentMessages bulk-indexes one parent's messages and the files they
+// reference, with exactly the documents a full reindex writes — for data
+// written straight to the store (a history import) rather than through the
+// live indexer. A file document lists only the references found in msgs.
+// Returns how many message and file documents were written.
+func IndexParentMessages(ctx context.Context, w BulkWriter, msgs []*model.Message, parentType string, atts AttachmentResolver) (int, int, error) {
+	files := make(map[string]*fileBucket)
+	entries := messageEntries(ctx, msgs, parentType, atts, files)
+	if len(entries) > 0 {
+		if err := w.Bulk(ctx, IndexMessages, entries); err != nil {
+			return 0, 0, fmt.Errorf("search: bulk messages: %w", err)
+		}
 	}
-	r.mu.Lock()
-	r.progress.Files = len(entries)
-	r.mu.Unlock()
-	r.persist(ctx, false)
-	return nil
+	if len(files) == 0 {
+		return len(entries), 0, nil
+	}
+	if err := w.Bulk(ctx, IndexFiles, fileEntries(files)); err != nil {
+		return len(entries), 0, fmt.Errorf("search: bulk files: %w", err)
+	}
+	return len(entries), len(files), nil
 }

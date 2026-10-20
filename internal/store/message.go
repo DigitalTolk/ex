@@ -94,6 +94,22 @@ func (s *MessageStoreImpl) CreateMessage(ctx context.Context, msg *model.Message
 	return nil
 }
 
+// PutNewMessages writes many message rows (thread index included) with
+// BatchWriteItem, 25 per call. Unlike CreateMessage it is UNCONDITIONAL: it
+// overwrites a row with the same key. Only call it for messages a single writer
+// for the parent has just checked do not exist (the bulk history importer's
+// contract); IDs must be unique within the call.
+func (s *MessageStoreImpl) PutNewMessages(ctx context.Context, msgs []*model.Message) error {
+	items := make([]map[string]types.AttributeValue, len(msgs))
+	for i, m := range msgs {
+		items[i] = mustAttrs(attributevalue.MarshalMap(newMessageItem(m.ParentID, m)))
+	}
+	if err := s.putAll(ctx, items); err != nil {
+		return fmt.Errorf("store: put messages: %w", err)
+	}
+	return nil
+}
+
 func (s *MessageStoreImpl) GetMessage(ctx context.Context, parentID, msgID string) (*model.Message, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.Table),
@@ -461,6 +477,33 @@ func (s *MessageStoreImpl) IncrementReplyMetadata(ctx context.Context, parentID,
 		return nil, fmt.Errorf("store: unmarshal updated message: %w", err)
 	}
 	return &item.Message, nil
+}
+
+// SetReplyMetadata overwrites a thread root's reply metadata with values
+// computed from its full reply set — used when replies are written in bulk
+// rather than one at a time through IncrementReplyMetadata. ErrNotFound if the
+// root is missing.
+func (s *MessageStoreImpl) SetReplyMetadata(ctx context.Context, parentID, msgID string, replyCount int, lastReplyAt time.Time, recentAuthorIDs []string) error {
+	upd := expression.
+		Set(expression.Name("replyCount"), expression.Value(replyCount)).
+		Set(expression.Name("lastReplyAt"), expression.Value(lastReplyAt)).
+		Set(expression.Name("recentReplyAuthorIDs"), expression.Value(recentAuthorIDs))
+	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).WithCondition(expression.Name("PK").AttributeExists()).Build())
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(s.Table),
+		Key:                       compositeKey(parentPK(parentID), msgSK(msgID)),
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("store: set reply metadata: %w", err)
+	}
+	return nil
 }
 
 func (s *MessageStoreImpl) DeleteMessage(ctx context.Context, parentID, msgID string) error {

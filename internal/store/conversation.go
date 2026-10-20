@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
@@ -67,6 +68,17 @@ func DeriveDMConversationID(userID1, userID2 string) string {
 	ids := []string{userID1, userID2}
 	sort.Strings(ids)
 	return DeriveID(ids[0] + ":" + ids[1])
+}
+
+// DeriveGroupConversationID derives a deterministic group conversation ID from
+// its participant set (order-independent: the IDs are sorted first), so two
+// attempts to chat with the same constellation land on one conversation.
+// Callers pass the canonical set (creator included, deduped).
+func DeriveGroupConversationID(participants []string) string {
+	sorted := make([]string, len(participants))
+	copy(sorted, participants)
+	sort.Strings(sorted)
+	return DeriveID("group:" + strings.Join(sorted, ":"))
 }
 
 func (s *ConversationStoreImpl) CreateConversation(ctx context.Context, conv *model.Conversation, members []*model.UserConversation) error {
@@ -277,7 +289,13 @@ func (s *ConversationStoreImpl) TouchConversation(ctx context.Context, convID st
 // returns the new value (ADD treats a missing attribute as 0). Mirrors
 // ChannelStore.IncrementMessageSeq — the shared per-parent unread counter.
 func (s *ConversationStoreImpl) IncrementMessageSeq(ctx context.Context, convID string) (int64, error) {
-	upd := expression.Add(expression.Name("messageSeq"), expression.Value(1))
+	return s.AddMessageSeq(ctx, convID, 1)
+}
+
+// AddMessageSeq atomically adds n to the conversation's MessageSeq and returns
+// the new value (see ChannelStore.AddMessageSeq).
+func (s *ConversationStoreImpl) AddMessageSeq(ctx context.Context, convID string, n int64) (int64, error) {
+	upd := expression.Add(expression.Name("messageSeq"), expression.Value(n))
 	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).Build())
 
 	out, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
@@ -293,7 +311,7 @@ func (s *ConversationStoreImpl) IncrementMessageSeq(ctx context.Context, convID 
 		if isConditionCheckFailed(err) {
 			return 0, ErrNotFound
 		}
-		return 0, fmt.Errorf("store: increment conversation message seq: %w", err)
+		return 0, fmt.Errorf("store: add conversation message seq: %w", err)
 	}
 
 	var attrs struct {
@@ -323,6 +341,12 @@ func (s *ConversationStoreImpl) SetConversationLastRead(ctx context.Context, con
 	upd := expression.Set(expression.Name("lastReadSeq"), expression.Value(seq)).
 		Set(expression.Name("unreadNotifyCount"), expression.Value(0))
 	return s.updateUserConversation(ctx, convID, userID, upd, "lastReadSeq")
+}
+
+// AddConversationLastRead mirrors MembershipStore.AddChannelLastRead for a
+// participant's DM/group row.
+func (s *ConversationStoreImpl) AddConversationLastRead(ctx context.Context, convID, userID string, n int64) error {
+	return s.updateUserConversation(ctx, convID, userID, expression.Add(expression.Name("lastReadSeq"), expression.Value(n)), "lastReadSeq")
 }
 
 // IncrementNotifyCount mirrors the channel-side method for DM/group rows:

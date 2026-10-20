@@ -364,6 +364,14 @@ func (s *MembershipStoreImpl) SetChannelLastRead(ctx context.Context, channelID,
 	return s.updateUserChannel(ctx, channelID, userID, upd, "lastReadSeq")
 }
 
+// AddChannelLastRead atomically advances the user's read watermark by n. Paired
+// with ChannelStore.AddMessageSeq(n) it records n new messages as already read
+// without disturbing any existing unread count. ErrNotFound when the user is
+// not a member.
+func (s *MembershipStoreImpl) AddChannelLastRead(ctx context.Context, channelID, userID string, n int64) error {
+	return s.updateUserChannel(ctx, channelID, userID, expression.Add(expression.Name("lastReadSeq"), expression.Value(n)), "lastReadSeq")
+}
+
 // IncrementNotifyCount bumps the user's alerted-unread badge for the channel
 // by one and returns the new value — the notifier calls this once per
 // recipient it actually alerted, and the returned count rides the

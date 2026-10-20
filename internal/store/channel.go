@@ -227,7 +227,14 @@ func (s *ChannelStoreImpl) CurrentMessageSeq(ctx context.Context, channelID stri
 // returns the new value. ADD on a missing attribute treats it as 0, so the
 // first message returns 1 — no initialization needed.
 func (s *ChannelStoreImpl) IncrementMessageSeq(ctx context.Context, channelID string) (int64, error) {
-	upd := expression.Add(expression.Name("messageSeq"), expression.Value(1))
+	return s.AddMessageSeq(ctx, channelID, 1)
+}
+
+// AddMessageSeq atomically adds n to the channel's MessageSeq and returns the
+// new value — IncrementMessageSeq for one message, or a bulk import of n
+// top-level messages at once.
+func (s *ChannelStoreImpl) AddMessageSeq(ctx context.Context, channelID string, n int64) (int64, error) {
+	upd := expression.Add(expression.Name("messageSeq"), expression.Value(n))
 	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).Build())
 
 	out, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
@@ -243,7 +250,7 @@ func (s *ChannelStoreImpl) IncrementMessageSeq(ctx context.Context, channelID st
 		if isConditionCheckFailed(err) {
 			return 0, ErrNotFound
 		}
-		return 0, fmt.Errorf("store: increment message seq: %w", err)
+		return 0, fmt.Errorf("store: add message seq: %w", err)
 	}
 
 	var attrs struct {

@@ -1,9 +1,9 @@
 # Backend coverage gate (replaces the awk total-check in the Makefile).
 #
 # Uses github.com/vladopajic/go-test-coverage. The profile is produced by
-# `go test -tags=integration -coverprofile=coverage.out ./internal/...`.
+# `go test -tags=integration -coverprofile=coverage.out ./internal/... ./pkg/...`.
 #
-# The gate is 100%: every statement in ./internal/... is exercised by tests.
+# The gate is 100%: every statement in ./internal/... and ./pkg/... is exercised by tests.
 # There are NO `// coverage-ignore` annotations left — statically-impossible
 # error arms are either covered through fault-injection seams (see
 # internal/store/fault_test.go, the cmdFailHook Redis hooks, the randRead /

@@ -70,7 +70,7 @@ jobs:
 
       - name: Run go test with coverage (testcontainers)
         run: |
-          go test -tags=integration -coverprofile=coverage.out -covermode=atomic ./internal/...
+          go test -tags=integration -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/...
           go tool cover -func=coverage.out | tail -1
 
       - name: Enforce backend coverage gate (= 100% statements)
