@@ -692,7 +692,7 @@ function VirtuosoMessageList({
   const Header = useMemo(() => {
     const Cmp = () => (
       <>
-        {intro && !hasNextPage ? <div className="mx-auto w-full max-w-4xl px-4 pt-2 mobile:px-3">{intro}</div> : null}
+        {intro && !hasNextPage ? <div className="px-4 pt-2 mobile:px-3">{intro}</div> : null}
         {hasNextPage ? (
           <div
             data-testid="message-list-load-more"
@@ -726,7 +726,7 @@ function VirtuosoMessageList({
     // stays as the empty-list signal but renders below the intro.
     return (
       <div className="flex-1 overflow-y-auto">
-        {intro ? <div className="mx-auto w-full max-w-4xl px-4 pt-4 mobile:px-3">{intro}</div> : null}
+        {intro ? <div className="px-4 pt-4 mobile:px-3">{intro}</div> : null}
         <p
           data-testid="empty-message-list"
           className="px-4 py-8 text-center text-muted-foreground"
@@ -814,19 +814,11 @@ function VirtuosoMessageList({
         itemContent={(_index, row) => {
           /* istanbul ignore next -- react-virtuoso can momentarily call itemContent with an undefined row during prepend/firstItemIndex reconciliation; not deterministically reproducible. */
           if (!row) return null;
-          if (row.kind === 'unread') {
-            // In the messages' centred column, so the line starts and ends
-            // where they do.
-            return (
-              <div className="mx-auto w-full max-w-4xl">
-                <UnreadDivider onSeen={retireDivider} retired={unreadSeen} />
-              </div>
-            );
-          }
+          if (row.kind === 'unread') return <UnreadDivider onSeen={retireDivider} retired={unreadSeen} />;
           return row.kind === 'day' ? (
             <div
               data-testid="day-divider"
-              className="mx-auto flex w-full max-w-4xl items-center gap-3 px-4 py-2 mobile:px-3"
+              className="flex items-center gap-3 px-4 py-2 mobile:px-3"
               role="separator"
             >
               <div className="flex-1 border-t border-border" />
@@ -1013,32 +1005,26 @@ const MessageRow = memo(function MessageRow({
       }
     : msg;
   return (
-    // Messages sit in a centred column of limited width, lined up with the
-    // message box below (MessageInput). The full-width @container lets a
-    // grouped message put its time outside that column only when the list
-    // has room for it there (MessageItem).
-    <div className="@container">
-      <div className="mx-auto w-full max-w-4xl px-4 mobile:px-2">
-        <MessageItem
-          message={augmented}
-          firstInGroup={row.firstInGroup}
-          authorName={u?.displayName ?? 'Unknown'}
-          authorAvatarURL={u?.avatarURL}
-          authorUserStatus={u?.userStatus}
-          isOwn={isOwnMessage(msg, currentUserId)}
-          channelId={channelId}
-          channelSlug={channelSlug}
-          conversationId={conversationId}
-          currentUserId={currentUserId}
-          onReplyInThread={onReplyInThread}
-          onEditMessage={onEditMessage}
-          userMap={userLookup}
-          highlighted={highlighted}
-          onContentHeightChange={handleContentHeightChange}
-          quickReactions={quickReactions}
-          threadHasNew={threadHasNew}
-        />
-      </div>
+    <div className="px-4 mobile:px-2">
+      <MessageItem
+        message={augmented}
+        firstInGroup={row.firstInGroup}
+        authorName={u?.displayName ?? 'Unknown'}
+        authorAvatarURL={u?.avatarURL}
+        authorUserStatus={u?.userStatus}
+        isOwn={isOwnMessage(msg, currentUserId)}
+        channelId={channelId}
+        channelSlug={channelSlug}
+        conversationId={conversationId}
+        currentUserId={currentUserId}
+        onReplyInThread={onReplyInThread}
+        onEditMessage={onEditMessage}
+        userMap={userLookup}
+        highlighted={highlighted}
+        onContentHeightChange={handleContentHeightChange}
+        quickReactions={quickReactions}
+        threadHasNew={threadHasNew}
+      />
     </div>
   );
 }, messageRowPropsEqual);

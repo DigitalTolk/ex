@@ -26,7 +26,7 @@ export default function AdminLayout() {
     <div className="flex min-h-0 flex-1 flex-col" data-testid="admin-hub">
       <nav
         aria-label="Admin sections"
-        className="mx-auto flex w-full max-w-4xl shrink-0 gap-1 overflow-x-auto border-b border-border px-4 pt-2 sm:px-6"
+        className="flex shrink-0 gap-1 overflow-x-auto border-b border-border px-4 pt-2 sm:px-6"
       >
         {ADMIN_TABS.map(({ to, label, Icon, end }) => (
           <NavLink

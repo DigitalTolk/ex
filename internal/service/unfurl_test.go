@@ -390,6 +390,34 @@ func (f *fakeImageStore) GetObject(_ context.Context, key string) (io.ReadCloser
 	return io.NopCloser(bytes.NewReader(body)), f.puttypes[key], int64(len(body)), time.Time{}, nil
 }
 
+// Every request names the fetcher as ex-chat, with where it comes from — the
+// page and the preview image alike.
+func TestUnfurlService_NamesItselfToSites(t *testing.T) {
+	var agents []string
+	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		agents = append(agents, r.UserAgent())
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("\x89PNG\r\n\x1a\nfake-png-bytes"))
+	}))
+	defer imgSrv.Close()
+	pageSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		agents = append(agents, r.UserAgent())
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<meta property="og:title" content="t"><meta property="og:image" content="` + imgSrv.URL + `/social.png">`))
+	}))
+	defer pageSrv.Close()
+
+	svc := newLoopbackUnfurlService(nil)
+	svc.SetImageStore(newFakeImageStore())
+	if _, err := svc.fetchAndScrape(context.Background(), pageSrv.URL); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	want := "ex-chat/1 (+https://github.com/DigitalTolk/ex)"
+	if len(agents) != 2 || agents[0] != want || agents[1] != want {
+		t.Fatalf("user agents = %q, want the page and the image fetched as %q", agents, want)
+	}
+}
+
 // TestUnfurlService_ImageProxiedToS3_HitsCache verifies the dedupe path:
 // the second unfurl for the same upstream image must HEAD-hit and skip
 // the upload, while still re-presigning the URL each time.

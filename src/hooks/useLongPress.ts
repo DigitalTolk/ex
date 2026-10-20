@@ -9,10 +9,15 @@ interface UseLongPressOptions {
   // `enabled: isMobile === false` so the pointer plumbing never competes with
   // the native HTML5 drag used for sidebar reordering.
   enabled?: boolean;
-  // Hold duration before the press counts as "long". MessageItem passes 420ms;
-  // the row default is a touch longer so a deliberate press is required.
+  // Hold duration before the press counts as "long". Messages pass
+  // MESSAGE_LONG_PRESS_MS; sidebar rows and reactions use the default.
   delayMs?: number;
 }
+
+// How long a finger must rest on a message before its action sheet opens:
+// longer than the 500ms iOS long-press, so a slow tap or the start of a
+// scroll never opens it by accident — the sheet is for a deliberate hold.
+export const MESSAGE_LONG_PRESS_MS = 600;
 
 // A press that drifts more than this many px is treated as a scroll/drag, not a
 // long-press, and cancels the pending timer.

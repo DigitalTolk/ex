@@ -191,7 +191,7 @@ describe('MessageItem browser behavior', () => {
     expect(row).not.toBeNull();
     row!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
 
-    // 2s, not 1s: the sheet opens only after the 420ms long-press timer,
+    // 2s, not 1s: the sheet opens only after the MESSAGE_LONG_PRESS_MS hold,
     // and webkit under full-suite CPU load can eat the rest of a 1s window
     // (same rationale as the entrance-animation wait above).
     await vi.waitFor(() => {

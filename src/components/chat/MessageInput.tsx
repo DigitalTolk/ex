@@ -958,8 +958,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       className={
         variant === 'inline'
           ? 'p-0'
-          // Centred column, lined up with the messages above (MessageList).
-          : `relative mx-auto w-full max-w-4xl bg-background p-3 mobile:pt-1.5 ${
+          : `relative bg-background p-3 mobile:pt-1.5 ${
               // env(safe-area-inset-bottom) on iOS does not reset to 0 when
               // the keyboard is up, leaving a wasted ~34px gap between the
               // composer and the keyboard. Drop the inset while focused

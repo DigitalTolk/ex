@@ -7,6 +7,7 @@ import { MessageItem } from './MessageItem';
 import { dispatchEditMessage } from '@/lib/window-events';
 import type { Message } from '@/types';
 import { hoverRow } from '@/test/hover';
+import { MESSAGE_LONG_PRESS_MS } from '@/hooks/useLongPress';
 
 // Targeted branch coverage for MessageItem — drives the desktop hover
 // toolbar/menu, inline edit submit, copy-link deep-link arms, pinned
@@ -633,7 +634,7 @@ describe('MessageItem misc branches', () => {
     // runs with a non-null timer ref (the clearTimeout arm).
     row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch', clientX: 10, clientY: 10 }));
     row.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'touch', clientX: 40, clientY: 40 }));
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, MESSAGE_LONG_PRESS_MS + 100));
     // The action sheet never opened because the press was cancelled.
     expect(document.querySelector('[data-testid="mobile-message-actions"]')).toBeNull();
   });

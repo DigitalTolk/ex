@@ -2,7 +2,6 @@ import { useState } from 'react';
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -44,7 +43,6 @@ interface ReminderDialogProps {
 
 export interface DateTimeDialogCopy {
   title: string;
-  description: string;
   inputLabel: string;
   confirm: string;
   confirming: string;
@@ -55,7 +53,6 @@ export interface DateTimeDialogCopy {
 
 const REMINDER_COPY: DateTimeDialogCopy = {
   title: 'Remind me',
-  description: 'Choose when to be reminded about this message.',
   inputLabel: 'Reminder time',
   confirm: 'Set reminder',
   confirming: 'Setting…',
@@ -164,7 +161,6 @@ export function ReminderDialog({
       >
         <DialogHeader>
           <DialogTitle>{copy.title}</DialogTitle>
-          <DialogDescription>{copy.description}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3 px-1 py-2">
           <div className="flex flex-wrap gap-1.5" role="group" aria-label="Quick picks">
@@ -191,7 +187,8 @@ export function ReminderDialog({
               onSelect={(day) => update({ ...fields, date: isoDate(day) })}
               month={month}
               onMonthChange={setMonth}
-              className="rounded-md border border-border"
+              // A phone stacks it over the time field, as wide as the field.
+              className="rounded-md border border-border max-sm:w-full"
               components={{
                 DayButton: (props) => <CalendarDayButton {...props} data-testid={`reminder-day-${isoDate(props.day.date)}`} />,
               }}
@@ -219,7 +216,7 @@ export function ReminderDialog({
                   }
                 }}
               />
-              <TimePicker value={clock} onChange={setTime} hourCycle={HOUR_CYCLE} className="min-h-0 flex-1 max-sm:h-44" testIdPrefix="reminder" />
+              <TimePicker value={clock} onChange={setTime} hourCycle={HOUR_CYCLE} className="min-h-0 max-sm:h-44 sm:flex-1" testIdPrefix="reminder" />
             </div>
           </div>
           {preview && (
