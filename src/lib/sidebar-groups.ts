@@ -53,13 +53,17 @@ export const SidebarSectionKeys = {
 // A favorited item appears ONLY in Favorites — never duplicated under
 // its category. Stale categoryIDs (deleted category) fall through to
 // the appropriate default section, which the delete flow relies on.
+//
+// Archived (read-only) channels are left out entirely — the sidebar lists
+// them apart, see archivedSidebarChannels.
 export function groupSidebarItems(
-  channels: UserChannel[],
+  allChannels: UserChannel[],
   conversations: UserConversation[],
   categories: SidebarCategory[],
   options: SidebarGroupOptions = {},
 ): SidebarSection[] {
   const sections: SidebarSection[] = [];
+  const channels = allChannels.filter((c) => !c.archived);
   const conversationSort = options.conversationSort ?? 'recent';
   const sortedChannels = [...channels].sort(compareChannels);
   const sortedConversations = [...conversations].sort((a, b) =>
@@ -102,6 +106,15 @@ export function groupSidebarItems(
   sections.push({ key: DMS_DEFAULT_KEY, title: 'Direct Messages', items: dmsDefault });
 
   return applyUnreadView(sections, options);
+}
+
+// archivedSidebarChannels returns the archived (read-only) channels, A-Z,
+// for the sidebar's separate Archived section. They never count as unread,
+// sit outside favorites/categories, and are not drag-and-drop targets.
+export function archivedSidebarChannels(channels: UserChannel[]): UserChannel[] {
+  return channels
+    .filter((c) => c.archived)
+    .sort((a, b) => a.channelName.localeCompare(b.channelName, undefined, { sensitivity: 'base' }));
 }
 
 // applyUnreadView layers the unread options over the grouped sections. The

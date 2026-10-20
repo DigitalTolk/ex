@@ -268,6 +268,34 @@ func (h *ChannelHandler) Archive(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// Unarchive makes an archived channel writable again.
+func (h *ChannelHandler) Unarchive(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	id := pathParam(r, "id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "channel ID is required")
+		return
+	}
+
+	if err := h.channelSvc.Unarchive(r.Context(), userID, id); err != nil {
+		writeError(w, http.StatusForbidden, "unarchive_error", err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeChannelWriteError answers a rejected channel write: 409
+// channel_archived when the channel is archived (read-only), otherwise the
+// route's established status and code.
+func writeChannelWriteError(w http.ResponseWriter, err error, status int, code string) {
+	if errors.Is(err, service.ErrChannelArchived) {
+		writeError(w, http.StatusConflict, "channel_archived", err.Error())
+		return
+	}
+	writeError(w, status, code, err.Error())
+}
+
 // Join adds the authenticated user to a public channel.
 func (h *ChannelHandler) Join(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
@@ -278,7 +306,7 @@ func (h *ChannelHandler) Join(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.channelSvc.Join(r.Context(), userID, id); err != nil {
-		writeError(w, http.StatusBadRequest, "join_error", err.Error())
+		writeChannelWriteError(w, err, http.StatusBadRequest, "join_error")
 		return
 	}
 
@@ -420,7 +448,7 @@ func (h *ChannelHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 
 	role := model.ParseChannelRole(body.Role)
 	if err := h.channelSvc.AddMember(r.Context(), userID, id, body.UserID, role); err != nil {
-		writeError(w, http.StatusForbidden, "add_member_error", err.Error())
+		writeChannelWriteError(w, err, http.StatusForbidden, "add_member_error")
 		return
 	}
 
@@ -625,7 +653,7 @@ func (h *ChannelHandler) SetPinned(w http.ResponseWriter, r *http.Request) {
 	}
 	msg, err := h.messageSvc.SetPinned(r.Context(), userID, id, service.ParentChannel, msgID, body.Pinned)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "pin_error", err.Error())
+		writeChannelWriteError(w, err, http.StatusForbidden, "pin_error")
 		return
 	}
 	writeJSON(w, http.StatusOK, msg)
@@ -650,7 +678,7 @@ func (h *ChannelHandler) SetNoUnfurl(w http.ResponseWriter, r *http.Request) {
 	}
 	msg, err := h.messageSvc.SetNoUnfurl(r.Context(), userID, id, service.ParentChannel, msgID, body.NoUnfurl)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "no_unfurl_error", err.Error())
+		writeChannelWriteError(w, err, http.StatusForbidden, "no_unfurl_error")
 		return
 	}
 	writeJSON(w, http.StatusOK, msg)
@@ -700,7 +728,7 @@ func (h *ChannelHandler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.messageSvc.Delete(r.Context(), userID, id, service.ParentChannel, msgID); err != nil {
-		writeError(w, http.StatusForbidden, "delete_error", err.Error())
+		writeChannelWriteError(w, err, http.StatusForbidden, "delete_error")
 		return
 	}
 

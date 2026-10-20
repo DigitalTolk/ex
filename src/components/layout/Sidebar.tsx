@@ -59,7 +59,7 @@ import { deviceKind } from '@/lib/device';
 import { usePointerDevice } from '@/hooks/usePointerDevice';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useCategories, useCreateCategory, useDeleteCategory, useReorderCategories, useReorderSidebar, type SidebarMoveRequest } from '@/hooks/useSidebar';
-import { groupSidebarItems, isSidebarItemUnread, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
+import { archivedSidebarChannels, groupSidebarItems, isSidebarItemUnread, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
 import { SidebarUnreadControls } from '@/components/layout/SidebarUnreadControls';
 import { computeSidebarReorder, type SidebarSectionTarget } from '@/lib/sidebar-reorder';
 import type { SidebarCategory } from '@/types';
@@ -107,6 +107,9 @@ export function Sidebar({ onClose }: SidebarProps) {
   const reorderSidebar = useReorderSidebar();
   const reorderCategories = useReorderCategories();
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  // The Archived section starts folded: archived channels are history, not
+  // where work happens.
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const [conversationSort, setConversationSort] = useState<ConversationSidebarSort>(() =>
     localStorage.getItem(CONVERSATION_SORT_STORAGE_KEY) === 'az' ? 'az' : 'recent',
   );
@@ -208,6 +211,8 @@ export function Sidebar({ onClose }: SidebarProps) {
       }),
     [channels, visibleConversations, categories, conversationSort, unreadSection, unreadOnly, activeItemID, stickyUnread],
   );
+
+  const archivedChannels = useMemo(() => archivedSidebarChannels(channels ?? []), [channels]);
 
   // Fetch the other participant for every DM in one batch so the sidebar
   // can render real avatars instead of just initials. Group DMs use a
@@ -1497,6 +1502,36 @@ export function Sidebar({ onClose }: SidebarProps) {
                 </div>
               );
             })}
+            {archivedChannels.length > 0 && !unreadOnly && (
+              <div className="relative mt-2" data-testid="sidebar-group-archived">
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setArchivedOpen((open) => !open)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      setArchivedOpen((open) => !open);
+                    }
+                  }}
+                  aria-expanded={archivedOpen}
+                  data-testid="sidebar-group-toggle-archived"
+                  className="flex flex-1 items-center gap-1 rounded-md px-2 py-1 text-sm font-semibold text-gray-400 hover:bg-white/5 mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base"
+                >
+                  <ChevronDown className={`h-3 w-3 transition-transform ${archivedOpen ? '' : '-rotate-90'}`} />
+                  <span className="truncate">Archived</span>
+                </div>
+                <div className="space-y-1 opacity-60">
+                  {archivedChannels
+                    // Folded, it still shows the archived channel being viewed
+                    // so the open row doesn't vanish from under the user.
+                    .filter((ch) => archivedOpen || location.pathname === `/channel/${slugify(ch.channelName)}`)
+                    .map((ch) => (
+                      <ChannelRow key={`archived-${ch.channelID}`} channel={ch} hasUnread={false} onClose={onClose} />
+                    ))}
+                </div>
+              </div>
+            )}
           </nav>
           ) : (
             <SidebarSectionsSkeleton />

@@ -31,6 +31,9 @@ type UserChannel struct {
 	// UserConversation.Unread).
 	Unread      bool `json:"unread,omitempty" dynamodbav:"-"`
 	UnreadCount int  `json:"unreadCount,omitempty" dynamodbav:"-"`
+	// Archived mirrors the channel's archived (read-only) flag, stamped at
+	// read time by ListUserChannels; the sidebar groups archived channels.
+	Archived bool `json:"archived,omitempty" dynamodbav:"-"`
 	// UnreadNotifyCount counts unread messages that actually ALERTED this
 	// user per their notification rules (mentions, keywords, "all messages"
 	// level; mute suppresses) — the sidebar's numeric badge. Plain unread

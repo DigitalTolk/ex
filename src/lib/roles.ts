@@ -33,9 +33,14 @@ export function canEditChannel(role: ChannelRoleLike): boolean {
   return roleNumber(role) >= ChannelRole.Admin;
 }
 
-// Only owners can archive.
-export function canArchiveChannel(role: ChannelRoleLike): boolean {
-  return isOwner(role);
+// Owners archive and unarchive a channel; so can system admins (the server
+// grants them every owner action).
+export function canArchiveChannel(role: ChannelRoleLike, systemRole?: string): boolean {
+  return isOwner(role) || systemRole === SystemRole.Admin;
+}
+
+export function canUnarchiveChannel(role: ChannelRoleLike, systemRole?: string): boolean {
+  return canArchiveChannel(role, systemRole);
 }
 
 // Slug of the workspace-wide #general channel. Server-derived but stable;

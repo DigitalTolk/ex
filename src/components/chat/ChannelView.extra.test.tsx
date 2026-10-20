@@ -27,7 +27,7 @@ vi.mock('@/components/chat/markdown/MarkdownComposer', () => ({
     </div>
   ),
 }));
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -182,6 +182,7 @@ describe('ChannelView - actions', () => {
     mockMembers = [
       { channelID: 'ch-1', userID: 'u-1', role: 'owner', displayName: 'Alice', joinedAt: '2026-01-01T00:00:00Z' },
     ];
+    mockChannel.archived = false;
     setDefaultApi();
   });
 
@@ -210,7 +211,7 @@ describe('ChannelView - actions', () => {
     );
   });
 
-  it('owner can archive channel — archives via apiFetch DELETE and navigates', async () => {
+  it('owner can archive channel — archives via apiFetch DELETE and stays on the channel', async () => {
     renderChannelView();
 
     // Click "Archive channel" item directly
@@ -228,9 +229,42 @@ describe('ChannelView - actions', () => {
         expect.objectContaining({ method: 'DELETE' }),
       );
     });
+    // Archiving keeps the channel readable: no navigation away.
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('archived channel: read-only notice replaces the composer; the owner unarchives from it', async () => {
+    mockChannel.archived = true;
+    renderChannelView();
+
+    expect(screen.getByTestId('channel-archived-notice')).toHaveTextContent('This channel is archived. Its history is read-only.');
+    expect(screen.queryByLabelText('Message input')).not.toBeInTheDocument();
+    // The header offers Unarchive instead of Archive, and no description edit.
+    const items = await screen.findAllByTestId('dropdown-item');
+    expect(items.some((b) => b.textContent?.includes('Archive channel'))).toBe(false);
+    expect(items.some((b) => b.textContent?.includes('Edit description'))).toBe(false);
+    expect(items.some((b) => b.textContent?.includes('Unarchive channel'))).toBe(true);
+
+    const unarchive = within(screen.getByTestId('channel-archived-notice')).getByRole('button', { name: /Unarchive/ });
+    fireEvent.click(unarchive);
     await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith('/');
+      expect(mockApiFetch).toHaveBeenCalledWith(
+        '/api/v1/channels/ch-1/unarchive',
+        expect.objectContaining({ method: 'POST' }),
+      );
     });
+    await waitFor(() => expect(unarchive).not.toBeDisabled());
+  });
+
+  it('archived channel: a plain member sees the notice without an Unarchive button', () => {
+    mockChannel.archived = true;
+    mockMembers = [
+      { channelID: 'ch-1', userID: 'u-1', role: 'member', displayName: 'Alice', joinedAt: '2026-01-01T00:00:00Z' },
+    ];
+    renderChannelView();
+    const notice = screen.getByTestId('channel-archived-notice');
+    expect(notice).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Unarchive/ })).not.toBeInTheDocument();
   });
 
   it('member can leave non-general channel — POSTs to /leave and navigates', async () => {

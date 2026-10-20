@@ -58,6 +58,8 @@ interface ThreadPanelProps {
   anchorMsgId?: string;
   // Per-navigation revision token; same role as in MessageList.
   anchorRevision?: string;
+  // The thread's channel is archived: read the replies, but no new ones.
+  readOnly?: boolean;
 }
 
 export function ThreadPanel({
@@ -69,6 +71,7 @@ export function ThreadPanel({
   currentUserId,
   anchorMsgId,
   anchorRevision,
+  readOnly,
 }: ThreadPanelProps) {
   const { data, isLoading } = useThreadMessages({ channelId, conversationId, threadRootID });
   const { dismissing, settled, motionProps } = useSwipeDismiss('right', onClose);
@@ -557,7 +560,7 @@ export function ThreadPanel({
           </Button>
         </div>
       </div>
-      <MessageDropZone onFiles={(files) => void inputRef.current?.uploadFiles(files)}>
+      <MessageDropZone onFiles={(files) => void inputRef.current?.uploadFiles(files)} disabled={readOnly}>
         <MessageRowDataProvider parentType={parentType} parentID={parentID}>
         <div ref={scrollRef} className="flex-1 overflow-y-auto">
           <div ref={innerRef} className="p-2">
@@ -588,6 +591,7 @@ export function ThreadPanel({
                     currentUserId={currentUserId}
                     userMap={userLookup}
                     inThread
+                    readOnly={readOnly}
                     quickReactions={quickReactions}
                     onEditMessage={isMobile ? setEditingMessage : undefined}
                   />
@@ -605,6 +609,10 @@ export function ThreadPanel({
         {rootDeleted ? (
           <div className="border-t p-3 text-sm text-muted-foreground" role="status">
             This thread has been deleted.
+          </div>
+        ) : readOnly ? (
+          <div className="border-t p-3 text-sm text-muted-foreground" role="status" data-testid="thread-archived-notice">
+            This channel is archived. Its history is read-only.
           </div>
         ) : activeEditingMessage && !editReady ? (
           <div className="border-t p-3 text-sm text-muted-foreground">Loading message editor...</div>

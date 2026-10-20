@@ -87,6 +87,8 @@ interface MessageListProps {
   // Viewer's most-used emoji shortcodes, forwarded to each message's action
   // bar as one-tap reaction shortcuts.
   quickReactions?: string[];
+  // Read-only chat (an archived channel): rows offer no write actions.
+  readOnly?: boolean;
   // Read lifecycle hooks (see useReadSession): the user reached / left the
   // live tail, and the unread banner's "Mark as read".
   onAtBottomChange?: (atBottom: boolean) => void;
@@ -135,6 +137,7 @@ function VirtuosoMessageList({
   anchorMsgId,
   anchorRevision,
   quickReactions,
+  readOnly,
   onAtBottomChange,
   onMarkAllRead,
   onJumpToLatest,
@@ -844,6 +847,7 @@ function VirtuosoMessageList({
               highlighted={row.message.id === highlightedMessageId}
               onContentHeightChange={handleContentHeightChange}
               quickReactions={quickReactions}
+              readOnly={readOnly}
               threadHasNew={unreadThreads.has(row.message.id)}
             />
           );
@@ -931,6 +935,7 @@ type MessageRowProps = {
   highlighted?: boolean;
   onContentHeightChange?: () => void;
   quickReactions?: string[];
+  readOnly?: boolean;
   threadHasNew?: boolean;
 };
 
@@ -976,6 +981,7 @@ const MessageRow = memo(function MessageRow({
   highlighted,
   onContentHeightChange,
   quickReactions,
+  readOnly,
   threadHasNew,
 }: MessageRowProps) {
   const msg = row.message;
@@ -1023,6 +1029,7 @@ const MessageRow = memo(function MessageRow({
         highlighted={highlighted}
         onContentHeightChange={handleContentHeightChange}
         quickReactions={quickReactions}
+        readOnly={readOnly}
         threadHasNew={threadHasNew}
       />
     </div>

@@ -43,7 +43,9 @@ var ErrScheduledBusy = errors.New("scheduled message: already being sent")
 // normal send path (access, validation, notifications).
 type ScheduledMessageSender interface {
 	Send(ctx context.Context, userID, parentID, parentType, body, parentMessageID string, attachmentIDs ...string) (*model.Message, error)
-	CheckAccess(ctx context.Context, userID, parentID, parentType string) error
+	// CheckWriteAccess: the author may post there now (member, and the
+	// channel is not archived).
+	CheckWriteAccess(ctx context.Context, userID, parentID, parentType string) error
 }
 
 // DraftAttachmentReleaser frees an attachment no message will use (a deleted
@@ -95,7 +97,7 @@ func (s *ScheduledMessageService) Schedule(ctx context.Context, userID string, i
 	if err := validateScheduledContent(in.Body, in.AttachmentIDs); err != nil {
 		return nil, err
 	}
-	if err := s.sender.CheckAccess(ctx, userID, in.ParentID, in.ParentType); err != nil {
+	if err := s.sender.CheckWriteAccess(ctx, userID, in.ParentID, in.ParentType); err != nil {
 		return nil, err
 	}
 	now := s.now()
@@ -294,6 +296,8 @@ func scheduledFailReason(err error) (string, bool) {
 		return "You no longer have access to this conversation.", true
 	case errors.Is(err, ErrThreadDeleted):
 		return "The thread was deleted.", true
+	case errors.Is(err, ErrChannelArchived):
+		return "The channel was archived and is read-only.", true
 	case errors.Is(err, store.ErrNotFound):
 		return "The conversation or thread no longer exists.", true
 	case errors.Is(err, ErrMessageTooLong), errors.Is(err, ErrTooManyAttachments), errors.Is(err, ErrValidation):

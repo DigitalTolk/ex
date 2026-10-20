@@ -583,6 +583,49 @@ describe('Header', () => {
     expect(await screen.findByText('Archive channel?')).toBeInTheDocument();
   });
 
+  it('archived channel: offers Unarchive instead of Archive (desktop dropdown)', async () => {
+    const user = userEvent.setup();
+    const onUnarchive = vi.fn();
+    renderHeaderWithProviders(
+      <Header
+        channel={makeChannel({ archived: true })}
+        canArchive
+        canUnarchive
+        onArchive={vi.fn()}
+        onUnarchive={onUnarchive}
+      />,
+    );
+    await user.click(screen.getByText('general').closest('button')!);
+    expect(screen.queryByRole('menuitem', { name: 'Archive channel' })).toBeNull();
+    await user.click(await screen.findByRole('menuitem', { name: 'Unarchive channel' }));
+    expect(onUnarchive).toHaveBeenCalledTimes(1);
+  });
+
+  it('archived channel: the inline mobile menu offers Unarchive', async () => {
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    const onUnarchive = vi.fn();
+    renderHeaderWithProviders(
+      <Header channel={makeChannel({ archived: true })} canArchive canUnarchive onUnarchive={onUnarchive} />,
+    );
+    await user.click(screen.getByText('general').closest('button')!);
+    const menu = within(document.getElementById('mobile-channel-menu')!);
+    expect(menu.queryByText('Archive channel')).toBeNull();
+    await user.click(menu.getByText('Unarchive channel'));
+    expect(onUnarchive).toHaveBeenCalledTimes(1);
+    expect(document.getElementById('mobile-channel-menu')).toBeNull();
+  });
+
+  it('archive confirmation explains that history stays readable', async () => {
+    const user = userEvent.setup();
+    renderHeaderWithProviders(<Header channel={makeChannel()} canArchive onArchive={vi.fn()} />);
+    await user.click(screen.getByText('general').closest('button')!);
+    await user.click(await screen.findByRole('menuitem', { name: 'Archive channel' }));
+    expect(
+      await screen.findByText('Members keep read access to its history, but nobody can post. An owner can unarchive it later.'),
+    ).toBeInTheDocument();
+  });
+
   it('renders a DM header with avatar, status indicator, and subtitle', () => {
     renderHeaderWithProviders(
       <Header

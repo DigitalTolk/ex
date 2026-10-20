@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { Users, ChevronDown, ChevronLeft, LogOut, Archive, Pencil, Bell, BellOff, Pin, Paperclip, SlidersHorizontal } from 'lucide-react';
+import { Users, ChevronDown, ChevronLeft, LogOut, Archive, ArchiveRestore, Pencil, Bell, BellOff, Pin, Paperclip, SlidersHorizontal } from 'lucide-react';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
@@ -48,6 +48,9 @@ interface HeaderProps {
   onDescriptionSave?: (desc: string) => void;
   canArchive?: boolean;
   onArchive?: () => void;
+  // An archived channel offers Unarchive in place of Archive.
+  canUnarchive?: boolean;
+  onUnarchive?: () => void;
   canLeave?: boolean;
   onLeave?: () => void;
   muted?: boolean;
@@ -76,6 +79,8 @@ export function Header({
   onDescriptionSave,
   canArchive,
   onArchive,
+  canUnarchive,
+  onUnarchive,
   canLeave,
   onLeave,
   muted,
@@ -166,6 +171,15 @@ export function Header({
     setMobileChannelMenuOpen(false);
   }
 
+  function unarchiveChannel() {
+    onUnarchive?.();
+    setMobileChannelMenuOpen(false);
+  }
+
+  const archived = !!channel?.archived;
+  const showArchive = !!canArchive && !archived;
+  const showUnarchive = !!canUnarchive && archived;
+
   return (
     <div ref={headerShellRef} className="shrink-0 border-b bg-background" data-testid="channel-header-shell">
     <header className="flex shrink-0 items-center gap-3 px-4 py-3 mobile:gap-1 mobile:pl-1">
@@ -229,12 +243,17 @@ export function Header({
                     <LogOut className="mr-2 h-4 w-4" /> Leave channel
                   </DropdownMenuItem>
                 )}
-                {canArchive && (
+                {showArchive && (
                   <DropdownMenuItem
                     onClick={confirmArchive}
                     className="text-destructive"
                   >
                     <Archive className="mr-2 h-4 w-4" /> Archive channel
+                  </DropdownMenuItem>
+                )}
+                {showUnarchive && (
+                  <DropdownMenuItem onClick={unarchiveChannel}>
+                    <ArchiveRestore className="mr-2 h-4 w-4" /> Unarchive channel
                   </DropdownMenuItem>
                 )}
               </DropdownMenuContent>
@@ -454,13 +473,22 @@ export function Header({
               <LogOut className="mr-2 h-4 w-4" /> Leave channel
             </button>
           )}
-          {canArchive && (
+          {showArchive && (
             <button
               type="button"
               className="flex h-12 w-full items-center rounded-md px-3 text-left text-destructive hover:bg-muted"
               onClick={confirmArchive}
             >
               <Archive className="mr-2 h-4 w-4" /> Archive channel
+            </button>
+          )}
+          {showUnarchive && (
+            <button
+              type="button"
+              className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-muted"
+              onClick={unarchiveChannel}
+            >
+              <ArchiveRestore className="mr-2 h-4 w-4" /> Unarchive channel
             </button>
           )}
         </div>
@@ -473,7 +501,7 @@ export function Header({
         open={archiveConfirmOpen}
         onOpenChange={setArchiveConfirmOpen}
         title="Archive channel?"
-        description="This will hide the channel for all members. This cannot be undone."
+        description="Members keep read access to its history, but nobody can post. An owner can unarchive it later."
         confirmLabel="Archive"
         destructive
         onConfirm={() => onArchive?.()}

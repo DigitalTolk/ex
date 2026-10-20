@@ -264,6 +264,19 @@ describe('MemberList', () => {
     expect(screen.queryByLabelText('Remove Other Person')).not.toBeInTheDocument();
   });
 
+  it('read-only (archived channel): no add-member input, even for an admin', () => {
+    renderWithProviders(
+      <MemberList
+        channelId="ch-1"
+        currentUserId="me"
+        currentUserRole={3}
+        readOnly
+        members={[makeMember({ userID: 'other', role: 'member', displayName: 'Other Person' })]}
+      />,
+    );
+    expect(screen.queryByLabelText('Add member')).not.toBeInTheDocument();
+  });
+
   it('shows "Members" heading', () => {
     renderWithProviders(<MemberList members={[makeMember()]} />);
 

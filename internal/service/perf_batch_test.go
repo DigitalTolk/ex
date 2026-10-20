@@ -501,9 +501,13 @@ func TestChannelListUserChannels_BatchedMetaRead(t *testing.T) {
 	for _, uc := range got {
 		ids = append(ids, uc.ChannelID)
 	}
-	// Archived non-owner and missing-META rows drop; archived-owner stays.
-	if len(ids) != 2 || ids[0] != "ch-live" || ids[1] != "ch-own" {
-		t.Fatalf("kept = %v, want [ch-live ch-own]", ids)
+	// Missing-META rows drop; archived channels stay for every member,
+	// flagged so the sidebar can group them.
+	if len(ids) != 3 || ids[0] != "ch-live" || ids[1] != "ch-arch" || ids[2] != "ch-own" {
+		t.Fatalf("kept = %v, want [ch-live ch-arch ch-own]", ids)
+	}
+	if got[0].Archived || !got[1].Archived || !got[2].Archived {
+		t.Fatalf("archived flags = %v/%v/%v, want false/true/true", got[0].Archived, got[1].Archived, got[2].Archived)
 	}
 	if !got[0].Unread || got[0].UnreadCount != 5 {
 		t.Fatalf("unread = %+v, want 5", got[0])
@@ -512,8 +516,8 @@ func TestChannelListUserChannels_BatchedMetaRead(t *testing.T) {
 	// Batch failure → the per-channel fallback still serves the list.
 	channels.batchErr = errors.New("dynamo down")
 	got, err = svc.ListUserChannels(context.Background(), "u-1")
-	if err != nil || len(got) != 2 {
-		t.Fatalf("fallback = %v (err=%v), want 2 rows", got, err)
+	if err != nil || len(got) != 3 || !got[1].Archived {
+		t.Fatalf("fallback = %v (err=%v), want 3 rows with ch-arch flagged", got, err)
 	}
 }
 
