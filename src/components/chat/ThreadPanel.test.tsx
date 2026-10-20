@@ -7,6 +7,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { ThreadPanel } from './ThreadPanel';
 import { TypingProvider, useTyping } from '@/context/TypingContext';
 import type { Message } from '@/types';
+import { MESSAGE_LONG_PRESS_MS } from '@/hooks/useLongPress';
 
 const mockApiFetch = vi.fn();
 vi.mock('@/lib/api', () => ({
@@ -520,7 +521,7 @@ describe('ThreadPanel', () => {
       fireEvent.pointerDown(row, { pointerType: 'touch' });
     });
     await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 430));
+      await new Promise((resolve) => window.setTimeout(resolve, MESSAGE_LONG_PRESS_MS + 10));
     });
     await userEvent.click(screen.getByText('Edit'));
 

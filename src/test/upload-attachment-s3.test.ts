@@ -6,7 +6,7 @@ vi.mock('@/lib/api', () => ({
   apiFetch: apiFetchMock,
 }));
 
-import { MULTIPART_THRESHOLD_BYTES, uploadAttachment } from '@/hooks/useAttachments';
+import { MULTIPART_THRESHOLD_BYTES, signUploadRequest, uploadAttachment } from '@/hooks/useAttachments';
 
 // The real Uppy S3 plugin runs against this fake bucket, so the test covers
 // the actual request sequence the browser makes: what it asks the server to
@@ -233,5 +233,32 @@ describe('uploadAttachment → S3', () => {
     await expect(uploadAttachment(new File(['x'], 'a.pdf', { type: 'application/pdf' }))).rejects.toThrow();
     expect(processCalls()).toHaveLength(0);
     error.mockRestore();
+  });
+});
+
+// The server signs exactly {method, key, uploadId?, partNumber?} and refuses
+// any other field. Uppy's own request object grows between releases (6.3 added
+// `contentType` to the single PUT; `expiresIn` is in its type), so only those
+// four go over the wire — otherwise an Uppy upgrade breaks every upload.
+describe('signUploadRequest', () => {
+  beforeEach(() => {
+    apiFetchMock.mockReset();
+    apiFetchMock.mockResolvedValue({ url: 'https://s3.test/k', key: 'k', headers: {} });
+  });
+
+  it('sends the server only the fields it signs', async () => {
+    // Uppy 6.3's single PUT, plus the `expiresIn` its type allows.
+    const uppyPut = { method: 'PUT', key: 'attachments/att-1', contentType: 'application/pdf', expiresIn: 900 };
+    await signUploadRequest('att-1', uppyPut);
+    await signUploadRequest('att-1', { method: 'PUT', key: 'attachments/att-1', uploadId: 'mpu-1', partNumber: 2 });
+
+    expect(apiFetchMock.mock.calls.map(([path]) => path)).toEqual([
+      '/api/v1/attachments/att-1/upload-request',
+      '/api/v1/attachments/att-1/upload-request',
+    ]);
+    expect(signCalls()).toEqual([
+      { method: 'PUT', key: 'attachments/att-1' },
+      { method: 'PUT', key: 'attachments/att-1', uploadId: 'mpu-1', partNumber: 2 },
+    ]);
   });
 });

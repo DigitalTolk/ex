@@ -6,6 +6,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { MessageItem } from './MessageItem';
 import { WINDOW_EVENTS } from '@/lib/window-events';
 import type { Message } from '@/types';
+import { MESSAGE_LONG_PRESS_MS } from '@/hooks/useLongPress';
 
 const mockEditMutate = vi.fn();
 const mockDeleteMutate = vi.fn();
@@ -106,7 +107,7 @@ async function openMobileActions(message: Message = makeMessage()) {
   const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
   fireEvent.pointerDown(row, { pointerType: 'touch', clientX: 20, clientY: 20 });
   act(() => {
-    vi.advanceTimersByTime(430);
+    vi.advanceTimersByTime(MESSAGE_LONG_PRESS_MS + 10);
   });
   expect(screen.getByTestId('mobile-message-actions')).toBeInTheDocument();
   vi.useRealTimers();
@@ -231,6 +232,25 @@ describe('MessageItem - mobile actions', () => {
     await waitFor(() => expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument());
   });
 
+  // The hold is deliberate: longer than the 500ms iOS long-press, so a slow
+  // tap or the start of a scroll never opens the sheet by accident.
+  it('opens the mobile action sheet only after a deliberate hold', () => {
+    vi.useFakeTimers();
+    setMobileMatch(true);
+    renderWithProviders(<MessageItem message={makeMessage()} authorName="Alice" isOwn={true} channelId="ch-1" />);
+    const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
+    fireEvent.pointerDown(row, { pointerType: 'touch', clientX: 20, clientY: 20 });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(MESSAGE_LONG_PRESS_MS - 500 + 10);
+    });
+    expect(screen.getByTestId('mobile-message-actions')).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
   it('does not open the mobile action sheet from a short tap', () => {
     vi.useFakeTimers();
     setMobileMatch(true);
@@ -246,7 +266,7 @@ describe('MessageItem - mobile actions', () => {
 
     fireEvent.pointerDown(row, { pointerType: 'touch', clientX: 20, clientY: 20 });
     fireEvent.pointerUp(window);
-    vi.advanceTimersByTime(430);
+    vi.advanceTimersByTime(MESSAGE_LONG_PRESS_MS + 10);
 
     expect(screen.queryByTestId('mobile-message-actions')).not.toBeInTheDocument();
     vi.useRealTimers();

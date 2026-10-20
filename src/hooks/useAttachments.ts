@@ -133,6 +133,24 @@ interface SignedUploadRequest {
   headers: Record<string, string>;
 }
 
+// What the server signs (SignUploadRequest), and all it accepts: it refuses
+// unknown fields. Uppy's own request object grows between releases (6.3 added
+// `contentType` to the single PUT), so only these go over the wire. The
+// server signs the Content-Type it verified, never one the browser claims.
+interface UploadSignRequest {
+  method: string;
+  key: string;
+  uploadId?: string;
+  partNumber?: number;
+}
+
+export function signUploadRequest(id: string, { method, key, uploadId, partNumber }: UploadSignRequest) {
+  return apiFetch<SignedUploadRequest>(`/api/v1/attachments/${encodeURIComponent(id)}/upload-request`, {
+    method: 'POST',
+    body: JSON.stringify({ method, key, uploadId, partNumber }),
+  });
+}
+
 // uploadToS3 sends the file straight to the bucket with Uppy's S3 plugin; the
 // server only signs each S3 request (create / part / complete / ...), never
 // sees the bytes. A remembered multipart upload that S3 no longer knows
@@ -153,11 +171,7 @@ async function runUppyUpload(file: File, init: UploadInitResponse, resume: boole
   uppy.use(AwsS3, {
     shouldUseMultipart: () => file.size > MULTIPART_THRESHOLD_BYTES,
     generateObjectKey: () => init.key,
-    signRequest: (request) =>
-      apiFetch<SignedUploadRequest>(`/api/v1/attachments/${encodeURIComponent(init.id)}/upload-request`, {
-        method: 'POST',
-        body: JSON.stringify(request),
-      }),
+    signRequest: (request) => signUploadRequest(init.id, request),
   });
   // Report only integer-percent changes: every update walks the draft list in
   // MessageInput, so a large upload would otherwise re-render hundreds of

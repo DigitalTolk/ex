@@ -111,7 +111,10 @@ const (
 	unfurlBodyMax     = 256 * 1024
 	unfurlTimeout     = 5 * time.Second
 	unfurlMaxRedirect = 3
-	unfurlUserAgent   = "exbot/1 (+link preview)"
+	// unfurlUserAgent names the fetcher to the sites it reads, in the usual
+	// crawler form (name/version, then a URL to learn about it), so a site's
+	// operator can see what is asking and where it comes from.
+	unfurlUserAgent = "ex-chat/1 (+https://github.com/DigitalTolk/ex)"
 	// unfurlImageMax caps the size of an upstream preview image. 2 MiB
 	// is comfortably above any legitimate OG image (typical: 50–500 KiB)
 	// and well below anything that would burn S3 storage cost.

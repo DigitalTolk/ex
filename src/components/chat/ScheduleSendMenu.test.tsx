@@ -20,7 +20,7 @@ describe('ScheduleSendMenu', () => {
     const onSchedule = vi.fn().mockResolvedValue(undefined);
     render(<ScheduleSendMenu disabled={false} onSchedule={onSchedule} />);
     fireEvent.click(screen.getByLabelText('Pick a custom time'));
-    expect(screen.getByText('Choose when to send this message.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Schedule message' })).toBeInTheDocument();
     // Every quick pick fills the fields with a future instant.
     for (const key of ['in1h', 'in3h', 'nextweek', 'tomorrow']) {
       fireEvent.click(screen.getByTestId(`reminder-quick-${key}`));
@@ -38,7 +38,7 @@ describe('ScheduleSendMenu', () => {
     // Closing the picker forgets it.
     fireEvent.click(screen.getByLabelText('Pick a custom time'));
     fireEvent.click(screen.getByTestId('reminder-cancel'));
-    expect(screen.queryByText('Choose when to send this message.')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Schedule message' })).toBeNull();
   });
 });
 
@@ -168,7 +168,7 @@ describe('ScheduleSendMenu (hold mode)', () => {
     const { button, editor, onOpenChange } = renderHold();
     await hold(button);
     fireEvent.click(await screen.findByLabelText('Pick a custom time'));
-    expect(screen.getByText('Choose when to send this message.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Schedule message' })).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('reminder-cancel'));
     await hold(button);
     await screen.findByTestId('schedule-send-hold-menu');

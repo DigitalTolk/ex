@@ -56,8 +56,10 @@ function Calendar({
           defaultClassNames.weekday
         ),
         week: cn("mt-2 flex w-full", defaultClassNames.week),
+        // Square days, but on a phone, where the calendar spans the screen,
+        // rows keep a 44px tap height instead of growing with its width.
         day: cn(
-          "group/day relative aspect-square h-full w-full rounded-(--cell-radius) p-0 text-center select-none",
+          "group/day relative aspect-square h-full w-full rounded-(--cell-radius) p-0 text-center select-none max-sm:aspect-auto max-sm:h-11",
           defaultClassNames.day
         ),
         today: cn(
@@ -105,7 +107,7 @@ function CalendarDayButton({ className, day, modifiers, ...props }: React.Compon
       data-day={day.date.toLocaleDateString()}
       data-selected-single={modifiers.selected}
       className={cn(
-        "relative isolate z-10 flex aspect-square size-auto w-full min-w-(--cell-size) flex-col gap-1 border-0 leading-none font-normal group-data-[focused=true]/day:relative group-data-[focused=true]/day:z-10 group-data-[focused=true]/day:border-ring group-data-[focused=true]/day:ring-[3px] group-data-[focused=true]/day:ring-ring/50 data-[selected-single=true]:bg-primary data-[selected-single=true]:text-primary-foreground dark:hover:text-foreground [&>span]:text-xs [&>span]:opacity-70",
+        "relative isolate z-10 flex aspect-square size-auto w-full min-w-(--cell-size) flex-col max-sm:aspect-auto max-sm:h-full gap-1 border-0 leading-none font-normal group-data-[focused=true]/day:relative group-data-[focused=true]/day:z-10 group-data-[focused=true]/day:border-ring group-data-[focused=true]/day:ring-[3px] group-data-[focused=true]/day:ring-ring/50 data-[selected-single=true]:bg-primary data-[selected-single=true]:text-primary-foreground dark:hover:text-foreground [&>span]:text-xs [&>span]:opacity-70",
         defaultClassNames.day,
         className
       )}
