@@ -447,18 +447,18 @@ describe('MessageList browser behavior', () => {
       return { row, gutter, list };
     }
 
-    it('sits inside the row when the list is too narrow to hold it outside the column', async () => {
-      const { row, gutter, list } = await renderAt(700);
-      expect(gutter.left).toBeGreaterThanOrEqual(list.left);
-      expect(gutter.left).toBeGreaterThanOrEqual(row.left);
-      expect(gutter.right).toBeLessThanOrEqual(row.right + 1);
-    });
-
-    it('sits just outside the column, left of the text, when the list has room', async () => {
-      const { row, gutter, list } = await renderAt(1200);
-      expect(gutter.right).toBeLessThanOrEqual(row.left + 1);
-      expect(gutter.left).toBeGreaterThanOrEqual(list.left);
-    });
+    // The avatar sits in a column beside the message, and a grouped row keeps
+    // a matching column for its time: inside the row, left of the text, at
+    // any list width.
+    for (const width of [700, 1200]) {
+      it(`sits in the avatar column, inside the row and left of the text, at ${width}px`, async () => {
+        const { row, gutter, list } = await renderAt(width);
+        const text = laidOutElement('[data-message-id="m-5"] [data-testid="group-time-gutter"]')!.nextElementSibling!.getBoundingClientRect();
+        expect(gutter.left).toBeGreaterThanOrEqual(list.left);
+        expect(gutter.left).toBeGreaterThanOrEqual(row.left);
+        expect(gutter.right).toBeLessThanOrEqual(text.left + 1);
+      });
+    }
   });
 
   it('auto-sticks to the bottom when the local user appends a new message', async () => {

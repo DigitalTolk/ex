@@ -1020,9 +1020,7 @@ const MessageRow = memo(function MessageRow({
     : msg;
   return (
     // Messages sit in a centred column of limited width, lined up with the
-    // message box below (MessageInput). The full-width @container lets a
-    // grouped message put its time outside that column only when the list
-    // has room for it there (MessageItem).
+    // message box below (MessageInput).
     <div className="@container">
       <div className="mx-auto w-full max-w-4xl px-4 mobile:px-2">
         <MessageItem
