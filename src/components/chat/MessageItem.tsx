@@ -1058,13 +1058,13 @@ function MessageItemImpl({
           showInlineStatus={false}
           integrationOwnerName={integrationOwnerName}
           // The avatar's own width, matching the grouped rows' time column
-          // (w-10) so the text lines up on every row. It rides a little above
+          // (w-9) so the text lines up on every row. It rides a little above
           // the name line (-mt-1) rather than top-aligning with it.
-          triggerClassName="inline-flex w-10 shrink-0 cursor-pointer items-center justify-center"
+          triggerClassName="inline-flex w-9 shrink-0 cursor-pointer items-center justify-center"
         >
           {message.webhookIconEmoji ? (
             <div
-              className="-mt-1 flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted"
+              className="-mt-1 flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted"
               aria-label={`:${message.webhookIconEmoji}:`}
               data-testid="webhook-emoji-avatar"
             >
@@ -1075,8 +1075,9 @@ function MessageItemImpl({
               displayName={displayAuthorName}
               avatarURL={displayAuthorAvatarURL}
               online={authorOnline}
-              className="-mt-1 h-10 w-10 cursor-pointer"
-              dotSize={11}
+              className="-mt-1 h-9 w-9 cursor-pointer"
+              dotSize={10}
+              initialsClassName="text-sm font-medium"
             />
           )}
         </UserHoverCard>
@@ -1084,7 +1085,7 @@ function MessageItemImpl({
         // Grouped rows: a column the avatar's width, so the text lines up with
         // the first row, showing the clock time on hover (full time in the
         // tooltip). One text line tall, so it never makes the row taller.
-        <div className="relative w-10 shrink-0 select-none text-center text-xs leading-5" data-testid="group-time-gutter">
+        <div className="relative w-9 shrink-0 select-none text-center text-xs leading-5" data-testid="group-time-gutter">
           <Tooltip>
             <TooltipTrigger
               className={`cursor-default whitespace-nowrap tabular-nums text-muted-foreground transition-opacity ${
