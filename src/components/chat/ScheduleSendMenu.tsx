@@ -19,7 +19,6 @@ const CUSTOM = { label: 'Custom time…', ariaLabel: 'Pick a custom time' };
 
 const SCHEDULE_COPY: DateTimeDialogCopy = {
   title: 'Schedule message',
-  description: 'Choose when to send this message.',
   inputLabel: 'Send time',
   confirm: 'Schedule',
   confirming: 'Scheduling…',

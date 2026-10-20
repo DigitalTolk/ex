@@ -6,6 +6,7 @@ import { MessageItem } from './MessageItem';
 import type { Message } from '@/types';
 import { usePresenceStore } from '@/stores/presence';
 import { applyLayoutTierClasses } from '@/lib/device';
+import { MESSAGE_LONG_PRESS_MS } from '@/hooks/useLongPress';
 
 const mockEditMutate = vi.fn();
 const mockDeleteMutate = vi.fn();
@@ -480,7 +481,7 @@ describe('MessageItem', () => {
       fireEvent.pointerDown(row, { pointerType: 'touch' });
     });
     await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 430));
+      await new Promise((resolve) => window.setTimeout(resolve, MESSAGE_LONG_PRESS_MS + 10));
     });
     const sheet = screen.getByTestId('mobile-message-actions');
     const overlay = sheet.parentElement!;
@@ -524,7 +525,7 @@ describe('MessageItem', () => {
         fireEvent.pointerDown(row, { pointerType: 'touch' });
       });
       await act(async () => {
-        await new Promise((resolve) => window.setTimeout(resolve, 430));
+        await new Promise((resolve) => window.setTimeout(resolve, MESSAGE_LONG_PRESS_MS + 10));
       });
 
       const sheet = screen.getByTestId('mobile-message-actions');
@@ -581,7 +582,7 @@ describe('MessageItem', () => {
         fireEvent.pointerDown(row, { pointerType: 'touch' });
       });
       await act(async () => {
-        await new Promise((resolve) => window.setTimeout(resolve, 430));
+        await new Promise((resolve) => window.setTimeout(resolve, MESSAGE_LONG_PRESS_MS + 10));
       });
 
       const sheet = screen.getByTestId('mobile-message-actions');
@@ -653,7 +654,7 @@ describe('MessageItem', () => {
         fireEvent.pointerDown(row, { pointerType: 'touch' });
       });
       await act(async () => {
-        await new Promise((resolve) => window.setTimeout(resolve, 430));
+        await new Promise((resolve) => window.setTimeout(resolve, MESSAGE_LONG_PRESS_MS + 10));
       });
 
       await user.click(within(screen.getByTestId('mobile-message-actions')).getByLabelText('Add reaction'));
@@ -800,7 +801,7 @@ describe('MessageItem', () => {
       fireEvent.pointerDown(row, { pointerType: 'touch' });
     });
     await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 430));
+      await new Promise((resolve) => window.setTimeout(resolve, MESSAGE_LONG_PRESS_MS + 10));
     });
     // No history: the stock set fills the row.
     const quick = within(screen.getByTestId('mobile-quick-reactions')).getAllByRole('button');
@@ -836,7 +837,7 @@ describe('MessageItem', () => {
       fireEvent.pointerDown(row, { pointerType: 'touch' });
     });
     await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 430));
+      await new Promise((resolve) => window.setTimeout(resolve, MESSAGE_LONG_PRESS_MS + 10));
     });
     expect(document.body.style.overflow).toBe('hidden');
     expect(document.body.style.touchAction).toBe('');

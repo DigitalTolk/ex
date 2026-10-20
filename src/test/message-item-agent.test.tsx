@@ -6,6 +6,7 @@ import { MessageItem } from '@/components/chat/MessageItem';
 import { closeRunDrawer, useRunDrawerStore } from '@/stores/run-drawer';
 import type { AgentSubscription, AgentView } from '@/hooks/useAgents';
 import type { Message } from '@/types';
+import { MESSAGE_LONG_PRESS_MS } from '@/hooks/useLongPress';
 
 vi.mock('@/components/ui/dropdown-menu');
 
@@ -110,7 +111,7 @@ function longPress(el: Element) {
   vi.useFakeTimers();
   fireEvent.pointerDown(el, { clientX: 10, clientY: 10, pointerType: 'touch' });
   act(() => {
-    vi.advanceTimersByTime(500);
+    vi.advanceTimersByTime(MESSAGE_LONG_PRESS_MS + 10);
   });
   vi.useRealTimers();
 }

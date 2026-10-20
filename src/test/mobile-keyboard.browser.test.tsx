@@ -189,6 +189,15 @@ describe.skipIf(window.__EX_FORCE_DEVICE__ === 'desktop')('the phone chat with t
     expect(composer.bottom).toBeLessThanOrEqual(window.innerHeight - KEYBOARD_PX + 1);
   }
 
+  async function lowerKeyboard() {
+    (document.activeElement as HTMLElement).blur();
+    fireKeyboard('keyboardWillHide');
+    // The composer's toolbar closes over 200ms.
+    await keyboardSettled();
+    await frames(3);
+    expect(laidOut('[data-composer-focused="false"]')).not.toBeNull();
+  }
+
   it('keeps the newest message right above the composer', async () => {
     await openChat();
     expect(lastAboveComposer()).toBe(0);
@@ -206,5 +215,22 @@ describe.skipIf(window.__EX_FORCE_DEVICE__ === 'desktop')('the phone chat with t
     expect(lastAboveComposer()).toBe(-12);
     await raiseKeyboard();
     expect(lastAboveComposer()).toBe(-12);
+  });
+
+  // Tapping into the composer and out again leaves the list as it was. With
+  // less below the view than the keyboard's height, lowering the keyboard
+  // used to pull the reader to the end: the taller view can't stand past the
+  // content, so the browser had moved it there first.
+  it('puts a reader a little way up back where they were when the keyboard goes down', async () => {
+    const scroller = await openChat();
+    scroller.dispatchEvent(new Event('touchstart', { bubbles: true }));
+    scroller.scrollTop -= 200;
+    scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+    await frames(3);
+    expect(lastAboveComposer()).toBe(-200);
+    await raiseKeyboard();
+    expect(lastAboveComposer()).toBe(-200);
+    await lowerKeyboard();
+    expect(lastAboveComposer()).toBe(-200);
   });
 });

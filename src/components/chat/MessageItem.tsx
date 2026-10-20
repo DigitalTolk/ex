@@ -37,7 +37,7 @@ import { padQuickReactions } from '@/lib/quick-reactions';
 import { triggerReactionHaptic } from '@/lib/haptics';
 import { blurActiveInput } from '@/lib/blur-input';
 import { showToast } from '@/lib/toast';
-import { useLongPress } from '@/hooks/useLongPress';
+import { MESSAGE_LONG_PRESS_MS, useLongPress } from '@/hooks/useLongPress';
 import { buildChannelHref, buildConversationHref } from '@/lib/message-deeplink';
 import { useTagOpen } from '@/context/TagSearchContext';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
@@ -772,7 +772,7 @@ function MessageItemImpl({
   }
 
   // Touch long-press opens the mobile action sheet via the SHARED
-  // useLongPress gesture (420ms hold; touch/pen only; scroll drift past the
+  // useLongPress gesture (MESSAGE_LONG_PRESS_MS hold; touch/pen only; scroll drift past the
   // small threshold or release cancels; the haptic fires inside the hook).
   // This used to be a hand-rolled copy of the same pattern — keep the one
   // implementation in the hook.
@@ -790,7 +790,7 @@ function MessageItemImpl({
   }
   const longPress = useLongPress({
     enabled: mobileActionsAvailable,
-    delayMs: 420,
+    delayMs: MESSAGE_LONG_PRESS_MS,
     onLongPress: openMobileActions,
   });
   useTransientOverlayCleanup(mobileActionsOpen, { rootRef: mobileActionsRef, lockScroll: true });

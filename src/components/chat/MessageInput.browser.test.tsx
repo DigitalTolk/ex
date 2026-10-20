@@ -851,17 +851,20 @@ describe('MessageInput desktop flows (browser)', () => {
       }
       await expect.element(screen.getByLabelText('GIF')).toBeVisible();
       // Says "GIF" in so many words (it was a play-button picture nobody read
-      // as GIFs), whole, inside its button, at the type scale's 12px floor.
+      // as GIFs), whole, inside its button, sized as an icon rather than text.
       const button = screen.getByLabelText('GIF').element();
       const label = button.querySelector('[data-testid="composer-gif-label"]') as HTMLElement;
       expect(label.textContent).toBe('GIF');
       expect(button.querySelector('svg')).toBeNull();
-      expect(getComputedStyle(label).fontSize).toBe('12px');
+      expect(getComputedStyle(label).fontSize).toBe('10px');
       const inner = label.getBoundingClientRect();
       const outer = button.getBoundingClientRect();
       expect(inner.left).toBeGreaterThanOrEqual(outer.left);
       expect(inner.right).toBeLessThanOrEqual(outer.right);
       expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth);
+      // No bigger than the icons beside it: as tall as the emoji icon.
+      const icon = screen.getByLabelText('Emoji').element().querySelector('svg')!.getBoundingClientRect();
+      expect(Math.round(inner.height)).toBeLessThanOrEqual(Math.round(icon.height));
     } finally {
       settingsState.current = { maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false, giphyAPIKey: '' };
     }

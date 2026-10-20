@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { MessageItem } from './MessageItem';
 import type { Message } from '@/types';
+import { MESSAGE_LONG_PRESS_MS } from '@/hooks/useLongPress';
 
 const mockEditMutate = vi.fn();
 const mockDeleteMutate = vi.fn();
@@ -141,7 +142,7 @@ describe('MessageItem - read-only (archived channel)', () => {
     const row = screen.getByTestId('message-actions-trigger').closest('[data-message-id]')!;
     fireEvent.pointerDown(row, { pointerType: 'touch', clientX: 20, clientY: 20 });
     act(() => {
-      vi.advanceTimersByTime(430);
+      vi.advanceTimersByTime(MESSAGE_LONG_PRESS_MS + 10);
     });
     const sheet = screen.getByTestId('mobile-message-actions');
     expect(sheet).toBeInTheDocument();
