@@ -379,10 +379,14 @@ describe('MessageList browser behavior', () => {
     });
   });
 
-  // Messages, and the "New messages" line between them, use the list's whole
-  // width, as in Slack: a narrower centred column (tried, and reverted) left
-  // wide windows half empty and confused people.
-  it('uses the whole width of a wide list for messages and the unread line', async () => {
+  // A grouped message (same author, no header) shows its time, and the
+  // not-sent mark, beside the text. Outside the centred column when the list
+  // has room for it there; inside the row otherwise. It used to sit outside
+  // whatever the width, and a narrow list (a thread panel open beside it, a
+  // squeezed window) cut it off at its left edge.
+  // The "New messages" line runs where the messages do: in their centred
+  // column, not across the whole width of a wide window.
+  it('draws the unread line within the centred message column', async () => {
     setUnreadAnchor('ch-1', { kind: 'message', messageID: 'm-3' });
     try {
       const all = Array.from({ length: 6 }, (_, i) => msg(i, { authorID: 'u-2' }));
@@ -405,24 +409,16 @@ describe('MessageList browser behavior', () => {
         </div>,
       );
       await vi.waitFor(() => expect(laidOutElement('[data-unread-divider]')).not.toBeNull(), { timeout: 3000 });
-      const scroller = laidOutElement('[data-testid="virtuoso-scroller"]')!;
-      const left = scroller.getBoundingClientRect().left;
-      const right = left + scroller.clientWidth;
-      // Within the rows' 16px side padding of both edges.
-      for (const el of [laidOutElement('[data-unread-divider]')!, laidOutElement('[data-message-id="m-3"]')!]) {
-        const box = el.getBoundingClientRect();
-        expect(box.left - left).toBeLessThanOrEqual(17);
-        expect(right - box.right).toBeLessThanOrEqual(17);
-      }
+      const line = laidOutElement('[data-unread-divider]')!.getBoundingClientRect();
+      const message = laidOutElement('[data-message-id="m-3"]')!.getBoundingClientRect();
+      // The message row sits inside the column's 16px side padding.
+      expect(line.left).toBeGreaterThanOrEqual(message.left - 17);
+      expect(line.right).toBeLessThanOrEqual(message.right + 17);
     } finally {
       endReadSession('ch-1');
     }
   });
 
-  // A grouped message (same author, no header) shows its time, and the
-  // not-sent mark, in the avatar column beside its text — inside the list at
-  // any width. (Placed left of the row instead, a narrow list cut it off at
-  // its left edge.)
   describe("a grouped message's time", () => {
     async function renderAt(width: number) {
       const all = Array.from({ length: 6 }, (_, i) => msg(i, { authorID: 'u-1' }));
@@ -451,11 +447,17 @@ describe('MessageList browser behavior', () => {
       return { row, gutter, list };
     }
 
-    it.each([700, 1200])('sits in the avatar column, left of the text, in a %ipx list', async (width) => {
-      const { row, gutter, list } = await renderAt(width);
-      const text = laidOutElement('[data-message-id="m-5"] [data-testid="group-time-gutter"] + div')!.getBoundingClientRect();
-      expect(gutter.left).toBeGreaterThanOrEqual(Math.max(list.left, row.left));
-      expect(gutter.right).toBeLessThanOrEqual(text.left);
+    it('sits inside the row when the list is too narrow to hold it outside the column', async () => {
+      const { row, gutter, list } = await renderAt(700);
+      expect(gutter.left).toBeGreaterThanOrEqual(list.left);
+      expect(gutter.left).toBeGreaterThanOrEqual(row.left);
+      expect(gutter.right).toBeLessThanOrEqual(row.right + 1);
+    });
+
+    it('sits just outside the column, left of the text, when the list has room', async () => {
+      const { row, gutter, list } = await renderAt(1200);
+      expect(gutter.right).toBeLessThanOrEqual(row.left + 1);
+      expect(gutter.left).toBeGreaterThanOrEqual(list.left);
     });
   });
 

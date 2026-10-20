@@ -832,9 +832,12 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           onOpenChange={handleToolbarPickerOpenChange}
           trigger={
             // The word, not a picture: no icon reads as "GIF" at this size.
+            // Sized as an icon, not as text: as tall as the icons beside it
+            // (a 12px line in a 1px border), below the 12px text floor on
+            // purpose, and no heavier than their strokes.
             <ToolbarBtn label="GIF">
               <span
-                className="rounded-sm border border-current px-0.5 text-xs font-semibold leading-4"
+                className="rounded-sm border border-current px-0.5 text-[10px] font-medium leading-3"
                 aria-hidden="true"
                 data-testid="composer-gif-label"
               >
@@ -958,7 +961,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       className={
         variant === 'inline'
           ? 'p-0'
-          : `relative bg-background p-3 mobile:pt-1.5 ${
+          // Centred column, lined up with the messages above (MessageList).
+          : `relative mx-auto w-full max-w-4xl bg-background p-3 mobile:pt-1.5 ${
               // env(safe-area-inset-bottom) on iOS does not reset to 0 when
               // the keyboard is up, leaving a wasted ~34px gap between the
               // composer and the keyboard. Drop the inset while focused
