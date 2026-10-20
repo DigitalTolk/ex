@@ -1040,7 +1040,7 @@ function MessageItemImpl({
         event.preventDefault();
         if (mobileActionsAvailable) openMobileActions();
       }}
-      className={`group relative rounded-md px-3 mobile:px-2 ${firstInGroup ? 'py-1.5' : 'py-0.5'} hover:bg-chat-hover ${
+      className={`group relative rounded-md px-3 mobile:px-2 ${firstInGroup ? 'pt-3 pb-2' : 'py-0.5'} hover:bg-chat-hover ${
         message.pinned ? 'border-l-2 border-pinned pl-2.5' : ''
       } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]`}
       data-pending={pendingState}
