@@ -16,6 +16,12 @@ interface UserAvatarProps {
   // Presence dot diameter in px — numeric so the avatar's notch mask and
   // the dot stay in lockstep. Default reads well at the h-7 avatar size.
   dotSize?: number;
+  // Text size for the initials when there's no picture (default 12px, the
+  // text floor).
+  initialsClassName?: string;
+  // How many initials to show. Below 28px two wide letters at 12px don't fit
+  // the circle, so those avatars show one.
+  maxInitials?: 1 | 2;
 }
 
 // Avatar with an inline presence dot. Memoized + direct `<img>` so
@@ -32,6 +38,8 @@ export const UserAvatar = memo(function UserAvatar({
   online,
   className = 'h-7 w-7',
   dotSize = 8,
+  initialsClassName = 'text-xs',
+  maxInitials = 2,
 }: UserAvatarProps) {
   const [imageBroken, setImageBroken] = useState(false);
   const showImage = !!avatarURL && !imageBroken;
@@ -63,9 +71,9 @@ export const UserAvatar = memo(function UserAvatar({
         ) : (
           <span
             data-slot="avatar-fallback"
-            className="flex size-full items-center justify-center rounded-full bg-primary/10 text-[10px]"
+            className={cn('flex size-full items-center justify-center rounded-full bg-primary/10', initialsClassName)}
           >
-            {getInitials(displayName || '??')}
+            {getInitials(displayName || '??').slice(0, maxInitials)}
           </span>
         )}
       </span>

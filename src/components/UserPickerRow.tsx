@@ -66,7 +66,7 @@ export function UserPickerRow({
         highlighted ? 'bg-muted' : added ? '' : 'hover:bg-muted/50'
       } ${added ? 'cursor-default opacity-60' : ''}`}
     >
-      <UserAvatar displayName={displayName} avatarURL={avatarURL} online={online} className="h-6 w-6 shrink-0" dotSize={8} />
+      <UserAvatar displayName={displayName} avatarURL={avatarURL} online={online} className="h-6 w-6 shrink-0" dotSize={8} maxInitials={1} />
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         <span className="truncate font-medium">{displayName}</span>
         {you && <span className="shrink-0 text-xs text-muted-foreground">(you)</span>}

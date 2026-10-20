@@ -161,6 +161,7 @@ export const ConversationRow = memo(function ConversationRow({
               online={dmOnline}
               className="h-5 w-5"
               dotSize={6}
+              maxInitials={1}
             />
             <span className="truncate">{conversation.displayName}</span>
             <UserStatusIndicator status={dmUserStatus} className="h-4 w-4" />

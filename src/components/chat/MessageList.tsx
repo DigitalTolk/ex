@@ -1020,32 +1020,28 @@ const MessageRow = memo(function MessageRow({
     : msg;
   return (
     // Messages sit in a centred column of limited width, lined up with the
-    // message box below (MessageInput). The full-width @container lets a
-    // grouped message put its time outside that column only when the list
-    // has room for it there (MessageItem).
-    <div className="@container">
-      <div className="mx-auto w-full max-w-4xl px-4 mobile:px-2">
-        <MessageItem
-          message={augmented}
-          firstInGroup={row.firstInGroup}
-          authorName={u?.displayName ?? 'Unknown'}
-          authorAvatarURL={u?.avatarURL}
-          authorUserStatus={u?.userStatus}
-          isOwn={isOwnMessage(msg, currentUserId)}
-          channelId={channelId}
-          channelSlug={channelSlug}
-          conversationId={conversationId}
-          currentUserId={currentUserId}
-          onReplyInThread={onReplyInThread}
-          onEditMessage={onEditMessage}
-          userMap={userLookup}
-          highlighted={highlighted}
-          onContentHeightChange={handleContentHeightChange}
-          quickReactions={quickReactions}
-          readOnly={readOnly}
-          threadHasNew={threadHasNew}
-        />
-      </div>
+    // message box below (MessageInput).
+    <div className="mx-auto w-full max-w-4xl px-4 mobile:px-2">
+      <MessageItem
+        message={augmented}
+        firstInGroup={row.firstInGroup}
+        authorName={u?.displayName ?? 'Unknown'}
+        authorAvatarURL={u?.avatarURL}
+        authorUserStatus={u?.userStatus}
+        isOwn={isOwnMessage(msg, currentUserId)}
+        channelId={channelId}
+        channelSlug={channelSlug}
+        conversationId={conversationId}
+        currentUserId={currentUserId}
+        onReplyInThread={onReplyInThread}
+        onEditMessage={onEditMessage}
+        userMap={userLookup}
+        highlighted={highlighted}
+        onContentHeightChange={handleContentHeightChange}
+        quickReactions={quickReactions}
+        readOnly={readOnly}
+        threadHasNew={threadHasNew}
+      />
     </div>
   );
 }, messageRowPropsEqual);

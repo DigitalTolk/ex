@@ -1040,23 +1040,55 @@ function MessageItemImpl({
         event.preventDefault();
         if (mobileActionsAvailable) openMobileActions();
       }}
-      className={`group relative rounded-md px-3 mobile:px-2 ${firstInGroup ? 'py-1.5' : 'py-0.5'} hover:bg-chat-hover ${
+      // The avatar sits in a column beside the message; gap-3 to the text,
+      // matched by px-3 so it sits balanced inside the row. A new group's
+      // extra room goes above it only, so every line of one author is the
+      // same distance apart, and every new author the same distance from
+      // the lines before, however many there were.
+      className={`group relative flex items-start gap-3 rounded-md px-3 mobile:gap-2 mobile:px-2 ${firstInGroup ? 'pt-3 pb-0.5' : 'py-0.5'} hover:bg-chat-hover ${
         message.pinned ? 'border-l-2 border-pinned pl-2.5' : ''
       } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]`}
       data-pending={pendingState}
     >
-      {/* Grouped rows have no header, so their time (on hover) and the
-          not-sent mark sit just outside the column, to the left of the text —
-          when the message list is wide enough to hold them there (61rem: the
-          centred 56rem column plus this 3.25rem gutter either side, see
-          MessageList's @container). Narrower — a squeezed window, a thread
-          panel open beside it, a phone, a thread — they tuck inside the row,
-          at its right edge, instead of being cut off at the list's edge. */}
-      {!firstInGroup && (
-        <div
-          className="absolute top-0.5 right-1 select-none text-right text-xs leading-5 @min-[61rem]:right-full @min-[61rem]:mr-1 @min-[61rem]:w-12"
-          data-testid="group-time-gutter"
+      {firstInGroup ? (
+        <UserHoverCard
+          userId={message.authorID}
+          displayName={displayAuthorName}
+          avatarURL={displayAuthorAvatarURL}
+          userStatus={authorUserStatus}
+          online={authorOnline}
+          currentUserId={currentUserId}
+          showInlineStatus={false}
+          integrationOwnerName={integrationOwnerName}
+          // The avatar's own width, matching the grouped rows' time column
+          // (w-9) so the text lines up on every row; its top is level with
+          // the name line's.
+          triggerClassName="inline-flex w-9 shrink-0 cursor-pointer items-center justify-center"
         >
+          {message.webhookIconEmoji ? (
+            <div
+              className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted"
+              aria-label={`:${message.webhookIconEmoji}:`}
+              data-testid="webhook-emoji-avatar"
+            >
+              <EmojiGlyph emoji={`:${message.webhookIconEmoji}:`} customMap={emojiMap} size="lg" />
+            </div>
+          ) : (
+            <UserAvatar
+              displayName={displayAuthorName}
+              avatarURL={displayAuthorAvatarURL}
+              online={authorOnline}
+              className="h-9 w-9 cursor-pointer"
+              dotSize={10}
+              initialsClassName="text-sm font-medium"
+            />
+          )}
+        </UserHoverCard>
+      ) : (
+        // Grouped rows: a column the avatar's width, so the text lines up with
+        // the first row, showing the clock time on hover (full time in the
+        // tooltip). One text line tall, so it never makes the row taller.
+        <div className="relative w-9 shrink-0 select-none text-center text-xs leading-5" data-testid="group-time-gutter">
           <Tooltip>
             <TooltipTrigger
               className={`cursor-default whitespace-nowrap tabular-nums text-muted-foreground transition-opacity ${
@@ -1072,46 +1104,15 @@ function MessageItemImpl({
           </Tooltip>
           {pendingState === 'failed' && (
             // Laid over the (hidden) time so the gutter keeps its exact size.
-            <span className="absolute inset-y-0 right-0 flex h-5 items-center">
+            <span className="absolute inset-x-0 top-0 flex h-5 items-center justify-center">
               <NotSentMark message={message} />
             </span>
           )}
         </div>
       )}
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1" data-testid="message-text-column">
         {firstInGroup && (
-        // The avatar sits beside the name; the message text starts under it,
-        // at the avatar's left edge — no avatar column beside the text.
-        <div className="mb-1 flex items-center gap-2">
-          <UserHoverCard
-            userId={message.authorID}
-            displayName={displayAuthorName}
-            avatarURL={displayAuthorAvatarURL}
-            userStatus={authorUserStatus}
-            online={authorOnline}
-            currentUserId={currentUserId}
-            showInlineStatus={false}
-            integrationOwnerName={integrationOwnerName}
-            triggerClassName="inline-flex shrink-0 cursor-pointer items-center"
-          >
-          {message.webhookIconEmoji ? (
-            <div
-              className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted"
-              aria-label={`:${message.webhookIconEmoji}:`}
-              data-testid="webhook-emoji-avatar"
-            >
-              <EmojiGlyph emoji={`:${message.webhookIconEmoji}:`} customMap={emojiMap} />
-            </div>
-          ) : (
-            <UserAvatar
-              displayName={displayAuthorName}
-              avatarURL={displayAuthorAvatarURL}
-              online={authorOnline}
-              className="h-7 w-7 cursor-pointer"
-              dotSize={8}
-            />
-          )}
-          </UserHoverCard>
+        <div className="flex items-baseline gap-2">
           <UserHoverCard
             userId={message.authorID}
             displayName={displayAuthorName}

@@ -324,7 +324,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
               type="button"
               onClick={() => setExpanded(true)}
               data-testid="thread-card-expand"
-              className="my-1 ml-3 block text-xs font-medium text-link transition-colors hover:text-link/80"
+              className="my-1 ml-15 block text-xs font-medium text-link mobile:ml-13 transition-colors hover:text-link/80"
             >
               {/* hiddenCount is always ≥ 8 here: the toggle only shows when the
                   thread exceeds FULL_RENDER_CAP (10), so replies − TAIL_LENGTH ≥ 8.
