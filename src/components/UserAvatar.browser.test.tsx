@@ -35,4 +35,27 @@ describe('UserAvatar (browser)', () => {
     // The <img> load fails → the component flips to the initials fallback.
     await expect.element(screen.getByText('AL')).toBeVisible();
   });
+
+  // Initials never drop below the 12px text floor, and stay well inside the
+  // circle at every avatar size the app uses. Below 28px two wide letters at
+  // 12px don't fit, so those avatars show one. "Mary Williams" is the widest
+  // pair (MW).
+  it.each([
+    { where: 'sidebar DM row', className: 'h-5 w-5', maxInitials: 1, shown: 'M' },
+    { where: 'user picker row', className: 'h-6 w-6 shrink-0', maxInitials: 1, shown: 'M' },
+    { where: 'header (default size)', className: undefined, maxInitials: undefined, shown: 'MW' },
+    { where: 'Activity row', className: 'h-8 w-8', maxInitials: undefined, shown: 'MW' },
+    { where: 'message', className: 'h-9 w-9', maxInitials: undefined, shown: 'MW', initialsClassName: 'text-sm font-medium' },
+  ] as const)('initials fit a $where avatar at 12px or more', async ({ className, maxInitials, shown, ...rest }) => {
+    const initialsClassName = 'initialsClassName' in rest ? rest.initialsClassName : undefined;
+    const screen = await render(
+      <UserAvatar displayName="Mary Williams" className={className} maxInitials={maxInitials} initialsClassName={initialsClassName} />,
+    );
+    const fallback = screen.container.querySelector('[data-slot="avatar-fallback"]') as HTMLElement;
+    expect(fallback.textContent).toBe(shown);
+    expect(parseFloat(getComputedStyle(fallback).fontSize)).toBeGreaterThanOrEqual(12);
+    const range = document.createRange();
+    range.selectNodeContents(fallback);
+    expect(range.getBoundingClientRect().width).toBeLessThanOrEqual(fallback.getBoundingClientRect().width * 0.8);
+  });
 });

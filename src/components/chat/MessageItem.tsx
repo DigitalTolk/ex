@@ -1041,8 +1041,11 @@ function MessageItemImpl({
         if (mobileActionsAvailable) openMobileActions();
       }}
       // The avatar sits in a column beside the message; gap-3 to the text,
-      // matched by px-3 so it sits balanced inside the row.
-      className={`group relative flex items-start gap-3 rounded-md px-3 mobile:gap-2 mobile:px-2 ${firstInGroup ? 'pt-3 pb-2' : 'py-0.5'} hover:bg-chat-hover ${
+      // matched by px-3 so it sits balanced inside the row. A new group's
+      // extra room goes above it only, so every line of one author is the
+      // same distance apart, and every new author the same distance from
+      // the lines before, however many there were.
+      className={`group relative flex items-start gap-3 rounded-md px-3 mobile:gap-2 mobile:px-2 ${firstInGroup ? 'pt-3 pb-0.5' : 'py-0.5'} hover:bg-chat-hover ${
         message.pinned ? 'border-l-2 border-pinned pl-2.5' : ''
       } ${highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : ''} touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]`}
       data-pending={pendingState}
@@ -1058,13 +1061,13 @@ function MessageItemImpl({
           showInlineStatus={false}
           integrationOwnerName={integrationOwnerName}
           // The avatar's own width, matching the grouped rows' time column
-          // (w-9) so the text lines up on every row. It rides a little above
-          // the name line (-mt-1) rather than top-aligning with it.
+          // (w-9) so the text lines up on every row; its top is level with
+          // the name line's.
           triggerClassName="inline-flex w-9 shrink-0 cursor-pointer items-center justify-center"
         >
           {message.webhookIconEmoji ? (
             <div
-              className="-mt-1 flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted"
+              className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-muted"
               aria-label={`:${message.webhookIconEmoji}:`}
               data-testid="webhook-emoji-avatar"
             >
@@ -1075,7 +1078,7 @@ function MessageItemImpl({
               displayName={displayAuthorName}
               avatarURL={displayAuthorAvatarURL}
               online={authorOnline}
-              className="-mt-1 h-9 w-9 cursor-pointer"
+              className="h-9 w-9 cursor-pointer"
               dotSize={10}
               initialsClassName="text-sm font-medium"
             />
@@ -1107,7 +1110,7 @@ function MessageItemImpl({
           )}
         </div>
       )}
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1" data-testid="message-text-column">
         {firstInGroup && (
         <div className="flex items-baseline gap-2">
           <UserHoverCard

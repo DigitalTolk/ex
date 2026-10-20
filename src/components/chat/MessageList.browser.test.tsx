@@ -461,6 +461,68 @@ describe('MessageList browser behavior', () => {
     }
   });
 
+  // Where each message sits: one text edge for every row, the avatar level
+  // with its author's name, and an even rhythm — the same gap between lines
+  // of one author, the same gap before every new author.
+  describe('message layout', () => {
+    // Alice ×3, Bob ×1, Alice ×1, Bob ×2: groups of several and of one.
+    const authors = ['u-1', 'u-1', 'u-1', 'u-2', 'u-1', 'u-2', 'u-2'];
+    async function renderGroups() {
+      const all = authors.map((authorID, i) => msg(i, { authorID }));
+      await render(
+        <div style={{ height: 700, width: 1000, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <MessageList
+            pages={[{ items: [...all].reverse() }]}
+            hasNextPage={false}
+            isFetchingNextPage={false}
+            isLoading={false}
+            fetchNextPage={vi.fn()}
+            hasPreviousPage={false}
+            isFetchingPreviousPage={false}
+            fetchPreviousPage={vi.fn()}
+            currentUserId="u-9"
+            channelId="ch-1"
+            channelSlug="general"
+            userMap={{ 'u-1': { displayName: 'Alice' }, 'u-2': { displayName: 'Bob' } }}
+          />
+        </div>,
+      );
+      await vi.waitFor(() => expect(laidOutElement(`[data-message-id="m-${authors.length - 1}"]`)).not.toBeNull(), { timeout: 3000 });
+    }
+    const textColumn = (i: number) =>
+      laidOutElement(`[data-message-id="m-${i}"] [data-testid="message-text-column"]`)!.getBoundingClientRect();
+
+    it('starts every message\'s text at the same edge, first in its group or not', async () => {
+      await renderGroups();
+      const lefts = authors.map((_, i) => Math.round(textColumn(i).left));
+      expect(new Set(lefts).size).toBe(1);
+    });
+
+    it('puts the avatar level with its author\'s name line', async () => {
+      await renderGroups();
+      for (const i of [0, 3, 4, 5]) {
+        const column = laidOutElement(`[data-message-id="m-${i}"] [data-testid="message-text-column"]`)!;
+        const nameLine = column.firstElementChild!.getBoundingClientRect();
+        const avatar = laidOutElement(`[data-message-id="m-${i}"] [data-slot="avatar-fallback"]`)!.getBoundingClientRect();
+        expect(Math.round(avatar.top)).toBe(Math.round(nameLine.top));
+      }
+    });
+
+    it('spaces lines of one author evenly, and every new author the same', async () => {
+      await renderGroups();
+      const sameAuthor: number[] = [];
+      const newAuthor: number[] = [];
+      for (let i = 0; i < authors.length - 1; i++) {
+        const gap = Math.round(textColumn(i + 1).top - textColumn(i).bottom);
+        (authors[i] === authors[i + 1] ? sameAuthor : newAuthor).push(gap);
+      }
+      expect(new Set(sameAuthor).size).toBe(1);
+      expect(new Set(newAuthor).size).toBe(1);
+      // A new author stands apart from the lines of the one before.
+      expect(newAuthor[0]).toBeGreaterThan(sameAuthor[0]);
+    });
+  });
+
   it('auto-sticks to the bottom when the local user appends a new message', async () => {
     function Harness() {
       const [extra, setExtra] = useState<Message[]>([]);
