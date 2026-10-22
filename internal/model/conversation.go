@@ -25,4 +25,9 @@ type Conversation struct {
 	// model.Channel.MessageSeq). Paired with each member's
 	// UserConversation.LastReadSeq it yields exact unread counts.
 	MessageSeq int64 `json:"messageSeq,omitempty" dynamodbav:"messageSeq,omitempty"`
+	// ConvertedToChannelID: the group became this private channel, which
+	// keeps the conversation's ID and history. The conversation stays only
+	// as a pointer to it.
+	ConvertedToChannelID string     `json:"convertedToChannelID,omitempty" dynamodbav:"convertedToChannelID,omitempty"`
+	ConvertedAt          *time.Time `json:"convertedAt,omitempty" dynamodbav:"convertedAt,omitempty"`
 }

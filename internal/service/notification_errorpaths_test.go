@@ -28,12 +28,12 @@ func TestNotification_LoadMemberSnapshot_UnknownParentType(t *testing.T) {
 func TestNotification_ResolveThreadRecipients_NilMessagesAndNoParentMsg(t *testing.T) {
 	// messages nil → nil.
 	svc := &NotificationService{}
-	if got := svc.resolveThreadRecipients(context.Background(), &model.Message{ParentMessageID: "root"}, memberSnapshot{}); got != nil {
+	if got, _ := svc.resolveThreadRecipients(context.Background(), &model.Message{ParentMessageID: "root"}, memberSnapshot{}); got != nil {
 		t.Fatalf("expected nil with nil messages, got %v", got)
 	}
 	// messages present but no ParentMessageID → nil.
 	svc2, _, _, _, _, _ := setupNotifier(t)
-	if got := svc2.resolveThreadRecipients(context.Background(), &model.Message{}, memberSnapshot{}); got != nil {
+	if got, _ := svc2.resolveThreadRecipients(context.Background(), &model.Message{}, memberSnapshot{}); got != nil {
 		t.Fatalf("expected nil with empty ParentMessageID, got %v", got)
 	}
 }
@@ -41,7 +41,7 @@ func TestNotification_ResolveThreadRecipients_NilMessagesAndNoParentMsg(t *testi
 func TestNotification_ResolveThreadRecipients_ListThreadRepliesError(t *testing.T) {
 	svc, _, _, _, _, msgs := setupNotifierWithMessages(t)
 	msgs.threadReplyErr = errors.New("boom")
-	got := svc.resolveThreadRecipients(context.Background(), &model.Message{ParentID: "ch1", ParentMessageID: "root1"}, memberSnapshot{})
+	got, _ := svc.resolveThreadRecipients(context.Background(), &model.Message{ParentID: "ch1", ParentMessageID: "root1"}, memberSnapshot{})
 	if got != nil {
 		t.Fatalf("expected nil on ListThreadReplies error, got %v", got)
 	}

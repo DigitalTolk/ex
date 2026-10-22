@@ -28,21 +28,31 @@ func (s *NotificationService) publishThreadUpdate(ctx context.Context, msg *mode
 	if root.LastReplyAt != nil {
 		latest = *root.LastReplyAt
 	}
-	summary := &ThreadSummary{
-		ParentID:         msg.ParentID,
-		ParentType:       parentType,
-		ThreadRootID:     root.ID,
-		RootAuthorID:     root.AuthorID,
-		RootBody:         root.Body,
-		RootCreatedAt:    root.CreatedAt,
-		ReplyCount:       root.ReplyCount,
-		LatestActivityAt: latest,
+	// audience maps each recipient to whether they follow the thread: an
+	// alert can list a thread for someone who doesn't (a keyword, or an
+	// @here past their unfollow), and their row must say so.
+	for _, following := range []bool{true, false} {
+		channels := make([]string, 0, len(audience))
+		for uid, f := range audience {
+			if f == following {
+				channels = append(channels, pubsub.UserChannel(uid))
+			}
+		}
+		if len(channels) == 0 {
+			continue
+		}
+		events.PublishMany(ctx, s.publisher, channels, events.EventThreadUpdated, &ThreadSummary{
+			ParentID:         msg.ParentID,
+			ParentType:       parentType,
+			ThreadRootID:     root.ID,
+			RootAuthorID:     root.AuthorID,
+			RootBody:         root.Body,
+			RootCreatedAt:    root.CreatedAt,
+			ReplyCount:       root.ReplyCount,
+			LatestActivityAt: latest,
+			Following:        following,
+		})
 	}
-	channels := make([]string, 0, len(audience))
-	for uid := range audience {
-		channels = append(channels, pubsub.UserChannel(uid))
-	}
-	events.PublishMany(ctx, s.publisher, channels, events.EventThreadUpdated, summary)
 }
 
 func (s *NotificationService) markThreadNotification(ctx context.Context, userID string, msg *model.Message, parentType string) {
@@ -57,12 +67,14 @@ func (s *NotificationService) markThreadNotification(ctx context.Context, userID
 // resolveThreadRecipients returns the user IDs that should receive a
 // thread-reply notification: the thread root's author plus everyone
 // who has already replied in this thread. The current message's author
-// is excluded; duplicates are removed.
-func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *model.Message, snap memberSnapshot) []string {
-	if s.messages == nil || msg.ParentMessageID == "" {
-		return nil
-	}
+// is excluded; duplicates are removed. It also returns who unfollowed the
+// thread: nothing implicit (a DM, follow-all, their own earlier replies)
+// puts them back.
+func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *model.Message, snap memberSnapshot) ([]string, map[string]bool) {
 	unfollowed := make(map[string]bool)
+	if s.messages == nil || msg.ParentMessageID == "" {
+		return nil, unfollowed
+	}
 	explicitFollowers := make([]string, 0)
 	if s.follows != nil {
 		follows, err := s.follows.ListThreadFollows(ctx, msg.ParentID, msg.ParentMessageID)
@@ -81,7 +93,7 @@ func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *
 	// messages, and resolve the root author with a direct GetMessage.
 	replies, err := s.messages.ListThreadReplies(ctx, msg.ParentMessageID)
 	if err != nil {
-		return nil
+		return nil, unfollowed
 	}
 	repliers := make([]string, 0)
 	seen := make(map[string]bool)
@@ -118,7 +130,7 @@ func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *
 		add(&repliers, uid)
 	}
 	if rootAuthor == "" {
-		return repliers
+		return repliers, unfollowed
 	}
-	return append([]string{rootAuthor}, repliers...)
+	return append([]string{rootAuthor}, repliers...), unfollowed
 }

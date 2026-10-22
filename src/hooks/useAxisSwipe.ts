@@ -91,29 +91,58 @@ function useHeldMoveCanceller(enabled: boolean) {
 // touch after it: the surface (a thread panel, the conversation) swiped no
 // more until it was closed some other way. So a press also listens on the
 // element it landed on, and the end of a press whose element is gone is
-// passed on to the window.
-function relayEndOfRemovedPress(pressed: EventTarget, pointerId: number) {
-  const relay = (ended: Event) => {
-    const event = ended as PointerEvent;
-    if (event.pointerId !== pointerId) return;
+// passed on to the window. And whatever happened to the pointer's own end
+// (a lift that came as a touchend alone, an element turned disabled under
+// the finger), the last finger leaving the screen ends the press too.
+function endPressOnWindow(pressed: EventTarget, down: ReactPointerEvent<Element>) {
+  const { pointerId, pointerType, isPrimary } = down;
+  const send = (type: string, init: PointerEventInit) =>
+    window.dispatchEvent(new PointerEvent(type, { pointerId, pointerType, isPrimary, ...init }));
+  const touchTargets = [window, pressed];
+  const done = () => {
+    window.removeEventListener('pointerup', heard, true);
+    window.removeEventListener('pointercancel', heard, true);
     pressed.removeEventListener('pointerup', relay);
     pressed.removeEventListener('pointercancel', relay);
-    // Still on the page: the event goes on to the window by itself.
-    if ((pressed as Node).isConnected) return;
-    window.dispatchEvent(
-      new PointerEvent(event.type, {
-        pointerId: event.pointerId,
-        pointerType: event.pointerType,
-        isPrimary: event.isPrimary,
-        button: event.button,
-        buttons: event.buttons,
-        clientX: event.clientX,
-        clientY: event.clientY,
-      }),
-    );
+    for (const target of touchTargets) {
+      target.removeEventListener('touchend', lifted);
+      target.removeEventListener('touchcancel', lifted);
+    }
   };
+  // The window has the press's end: by itself, or passed on below.
+  const heard = (event: Event) => {
+    if ((event as PointerEvent).pointerId === pointerId) done();
+  };
+  const relay = (ended: Event) => {
+    const event = ended as PointerEvent;
+    // Still on the page: the event goes on to the window by itself.
+    if (event.pointerId !== pointerId || (pressed as Node).isConnected) return;
+    send(event.type, {
+      button: event.button,
+      buttons: event.buttons,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+  };
+  const lifted = (ended: Event) => {
+    const event = ended as TouchEvent;
+    if (event.touches.length > 0) return;
+    const touch = event.changedTouches?.[0];
+    send(event.type === 'touchcancel' ? 'pointercancel' : 'pointerup', {
+      button: 0,
+      buttons: 0,
+      clientX: touch?.clientX ?? down.clientX,
+      clientY: touch?.clientY ?? down.clientY,
+    });
+  };
+  window.addEventListener('pointerup', heard, true);
+  window.addEventListener('pointercancel', heard, true);
   pressed.addEventListener('pointerup', relay);
   pressed.addEventListener('pointercancel', relay);
+  for (const target of touchTargets) {
+    target.addEventListener('touchend', lifted);
+    target.addEventListener('touchcancel', lifted);
+  }
 }
 
 // holdTouch has the moves of the touch that just landed (on `pressed`)
@@ -122,7 +151,7 @@ function relayEndOfRemovedPress(pressed: EventTarget, pointerId: number) {
 // scrolling stays native. It lets go when the last finger lifts (or when the
 // returned stop is called), then calls `done`. The lift is heard on the
 // element pressed too, for the one that has left the page by then (see
-// relayEndOfRemovedPress).
+// endPressOnWindow).
 function holdTouch(pressed: EventTarget, taken: () => boolean, done: () => void): () => void {
   heldTouch = taken;
   const stop = () => {
@@ -191,7 +220,9 @@ export function useAxisSwipe({ enabled, axis, value, range, canStart, onStart, o
   return {
     onPointerDown: (event: ReactPointerEvent<Element>) => {
       if (!canStart(event.target, event.currentTarget)) return;
-      if (event.pointerType === 'touch') relayEndOfRemovedPress(event.target, event.pointerId);
+      // A mouse button's release goes to whatever is under it, so it always
+      // reaches the window; a finger's or a pen's goes to where it landed.
+      if (event.pointerType !== 'mouse') endPressOnWindow(event.target, event);
       if (event.pointerType === 'touch' && !stopHoldRef.current) {
         // A touch that ends without a release (the surface turned the swipe
         // off under it) must not leave the next one held.

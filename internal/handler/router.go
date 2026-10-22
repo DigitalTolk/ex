@@ -165,6 +165,7 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("GET /api/v1/conversations", middleware.WrapFunc(convH.List, authMW))
 	mux.Handle("GET /api/v1/conversations/{id}", middleware.WrapFunc(convH.Get, authMW))
 	mux.Handle("PUT /api/v1/conversations/{id}/read", middleware.WrapFunc(convH.MarkRead, authMW))
+	mux.Handle("POST /api/v1/conversations/{id}/convert", middleware.WrapFunc(channelH.ConvertConversation, authMW, writeLimit))
 
 	mux.Handle("GET /api/v1/conversations/{id}/messages", middleware.WrapFunc(convH.ListMessages, authMW))
 	mux.Handle("POST /api/v1/conversations/{id}/messages", middleware.WrapFunc(convH.SendMessage, authMW, writeLimit))

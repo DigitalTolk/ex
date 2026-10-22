@@ -55,11 +55,22 @@ function useSearchQuery(
   const filterOnly = !!(opts?.from || opts?.in);
   return useQuery({
     queryKey: queryKeys.search(index, trimmed, limit, opts ?? {}, nonce ?? 0),
-    queryFn: async () => (await apiFetch<SearchResult>(buildURL(index, trimmed, limit, opts))) ?? null,
+    // The signal cancels a search the next keystroke overtook, so a slow
+    // backend isn't left working through every one of them.
+    queryFn: async ({ signal }) => withSources(await apiFetch<SearchResult>(buildURL(index, trimmed, limit, opts), { signal })),
     enabled: enabled && (trimmed.length >= MIN_QUERY_CHARS || filterOnly),
     placeholderData: keepPreviousData,
     staleTime: 30_000,
+    // A search that timed out says so at once; sending it again doubled the
+    // wait. The reader can try again.
+    retry: false,
   });
+}
+
+// Every hit has a _source to read, even one the index returned without.
+function withSources(res: SearchResult | undefined): SearchResult | null {
+  if (!res) return null;
+  return { ...res, hits: (res.hits ?? []).map((hit) => (hit._source ? hit : { ...hit, _source: {} })) };
 }
 
 export function useSearchUsers(q: string, enabled: boolean, limit = 5) {

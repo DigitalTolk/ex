@@ -184,22 +184,36 @@ func normalizeParticipantSet(creatorID string, ids []string) []string {
 // The lookup is a single GetItem keyed by a deterministic group ID
 // derived from the sorted participant set (groupConversationID), so
 // the cost is constant regardless of how many groups the creator is in.
+//
+// A group these people had that became a channel keeps its ID (the channel
+// has it now), so their next group goes at the next ID along.
 func (s *ConversationService) GetOrCreateGroup(ctx context.Context, creatorID string, participantIDs []string, name string) (*model.Conversation, error) {
 	canonical := normalizeParticipantSet(creatorID, participantIDs)
 	id := groupConversationID(canonical)
-
-	if conv, err := s.conversations.GetConversation(ctx, id); err == nil && conv != nil {
-		return conv, nil
-	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return nil, fmt.Errorf("conversation: get group: %w", err)
+	for {
+		conv, err := s.conversations.GetConversation(ctx, id)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return nil, fmt.Errorf("conversation: get group: %w", err)
+		}
+		if err != nil {
+			return s.createGroup(ctx, creatorID, participantIDs, id, name)
+		}
+		if conv.ConvertedToChannelID == "" {
+			return conv, nil
+		}
+		id = store.NextGroupConversationID(id)
 	}
-
-	return s.CreateGroup(ctx, creatorID, participantIDs, name)
 }
 
 // CreateGroup creates a new group conversation with the given participants.
 // A group requires the creator plus at least one other unique participant.
 func (s *ConversationService) CreateGroup(ctx context.Context, creatorID string, participantIDs []string, name string) (*model.Conversation, error) {
+	return s.createGroup(ctx, creatorID, participantIDs, "", name)
+}
+
+// createGroup creates the group at convID — its participant set's derived
+// ID when empty.
+func (s *ConversationService) createGroup(ctx context.Context, creatorID string, participantIDs []string, convID, name string) (*model.Conversation, error) {
 	participantIDs = normalizeParticipantSet(creatorID, participantIDs)
 
 	otherCount := 0
@@ -225,7 +239,9 @@ func (s *ConversationService) CreateGroup(ctx context.Context, creatorID string,
 	// concurrent calls with the same constellation collide on the
 	// store's attribute_not_exists guard rather than spawning duplicate
 	// groups, and GetOrCreateGroup can find this row with one GetItem.
-	convID := groupConversationID(participantIDs)
+	if convID == "" {
+		convID = groupConversationID(participantIDs)
+	}
 	conv := &model.Conversation{
 		ID:             convID,
 		Type:           model.ConversationTypeGroup,

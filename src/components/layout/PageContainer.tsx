@@ -9,8 +9,8 @@ interface PageContainerProps {
   description?: ReactNode;
   // Right-aligned slot in the header — actions, filters, etc.
   actions?: ReactNode;
-  // On a phone the content runs edge to edge (a list of full-width
-  // sections); the header keeps its inset.
+  // On a phone the content runs edge to edge from the top bar down (a list
+  // of full-width sections); the header keeps its inset.
   flush?: boolean;
   children: ReactNode;
 }
@@ -23,16 +23,17 @@ export function PageContainer({ title, mobileTitle, description, actions, flush 
   usePageTitle(title ?? mobileTitle);
   return (
     <div className="min-h-0 flex-1 overflow-y-auto" data-page-scroll="true" data-testid="page-container">
-      <div className={`mx-auto w-full max-w-4xl space-y-6 p-4 sm:p-6 ${flush ? 'mobile:space-y-3 mobile:px-0' : ''}`}>
+      <div className={`mx-auto w-full max-w-4xl space-y-6 p-4 sm:p-6 ${flush ? 'mobile:space-y-3 mobile:px-0 mobile:pt-0' : ''}`}>
         {title && (
+          // Phone: the title is in the top bar (still read here) and there is
+          // no description, so a header without actions takes no room.
           <header
-            className={`flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between ${flush ? 'mobile:px-4' : ''}`}
+            className={`flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between ${flush ? 'mobile:px-4' : ''} ${actions ? '' : 'mobile:sr-only'}`}
           >
             <div className="min-w-0">
-              {/* Phone: shown in the top bar instead (still read here). */}
               <h1 className="text-xl leading-[150%] font-semibold mobile:sr-only">{title}</h1>
               {description && (
-                <p className="mt-1 text-sm text-muted-foreground mobile:mt-0">{description}</p>
+                <p className="mt-1 text-sm text-muted-foreground mobile:hidden">{description}</p>
               )}
             </div>
             {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}

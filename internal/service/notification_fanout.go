@@ -279,21 +279,28 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	// "follow all threads". A bystander who never opened the thread and didn't
 	// opt into follow-all is not pinged for unrelated thread chatter.
 	//
-	// threadAudience is the SUPERSET whose /threads list shows this thread:
-	// the participants above plus the reply author (re-participating by
-	// posting, even past an earlier unfollow) plus anyone THIS reply's
-	// notifications pull in (a mention/keyword recipient gains a
-	// notification row via markThreadNotification, which surfaces the
-	// thread in their /threads list). They all receive the live
-	// thread.updated patch. Residual gap, deliberate: a bystander pulled in
-	// by an EARLIER reply's notification who stays quiet gets no live bump
-	// for later un-notifying replies (their row is already "unread"; finding
-	// them would need a per-thread reverse index over user notification
-	// state) — their list heals on the next ListUserThreads read.
+	// threadAudience is the SUPERSET whose /threads list shows this thread,
+	// each mapped to whether they follow it: the participants above plus
+	// the reply author plus anyone THIS reply's notifications pull in (a
+	// mention/keyword recipient gains a notification row via
+	// markThreadNotification, which surfaces the thread in their /threads
+	// list). They all receive the live thread.updated patch. Residual gap,
+	// deliberate: a bystander pulled in by an EARLIER reply's notification
+	// who stays quiet gets no live bump for later un-notifying replies
+	// (their row is already "unread"; finding them would need a per-thread
+	// reverse index over user notification state) — their list heals on the
+	// next ListUserThreads read.
+	//
+	// An unfollow sticks: only an explicit follow, replying (the author's
+	// row is re-followed by recordThreadParticipation) or an @-mention
+	// (which re-follows) brings the thread back. Not a DM's implicit
+	// participation, not follow-all, not anyone else's reply.
 	threadParticipants := make(map[string]bool)
 	var threadAudience map[string]bool
+	unfollowed := map[string]bool{}
 	if isThreadReply {
-		recipients := s.resolveThreadRecipients(ctx, msg, snap)
+		var recipients []string
+		recipients, unfollowed = s.resolveThreadRecipients(ctx, msg, snap)
 		threadAudience = make(map[string]bool, len(recipients)+1)
 		for _, uid := range recipients {
 			threadAudience[uid] = true
@@ -303,7 +310,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 				threadParticipants[uid] = true
 			}
 			for uid, eff := range snap.prefs {
-				if eff.FollowAllThreads {
+				if eff.FollowAllThreads && !unfollowed[uid] {
 					threadParticipants[uid] = true
 					threadAudience[uid] = true
 				}
@@ -385,12 +392,16 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	var threadUnread []string
 	for _, uid := range snap.memberIDs {
 		eff := snap.prefs[uid]
+		// DMs always notify their participants — "direct messages" is part
+		// of even the quiet "mentions, DMs & keywords" level — except for a
+		// thread they unfollowed, which goes by the levels like a channel's.
+		dm := parentType == ParentConversation && !unfollowed[uid]
 		r := recipientReasons{
 			explicitMention:   explicitSet[uid],
 			groupMention:      groupSet[uid] && !eff.IgnoreGroupMentions,
 			muted:             snap.muted[uid],
 			threadReply:       isThreadReply,
-			threadParticipant: parentType == ParentConversation || threadParticipants[uid],
+			threadParticipant: dm || threadParticipants[uid],
 			threadReplies:     eff.ThreadReplies,
 		}
 		// The keyword scan is the one per-recipient cost that walks the whole
@@ -417,11 +428,8 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			}
 		}
 
-		// DMs always notify their participants — "direct messages" is part of
-		// even the quiet "mentions, DMs & keywords" level — so they short-
-		// circuit the level machinery.
-		desktop := parentType == ParentConversation || eligibleAtLevel(eff.DesktopLevel, r)
-		mobile := parentType == ParentConversation
+		desktop := dm || eligibleAtLevel(eff.DesktopLevel, r)
+		mobile := dm
 		if !mobile {
 			switch eff.MobileLevel {
 			case model.MobileNotificationDefault:
@@ -450,7 +458,9 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		// /threads list — include them in the live thread.updated patch below.
 		if isThreadReply && (alerted || listed) {
 			threadUnread = append(threadUnread, uid)
-			threadAudience[uid] = true
+			if !threadAudience[uid] {
+				threadAudience[uid] = r.explicitMention || r.threadParticipant
+			}
 		}
 		if !alerted {
 			continue
@@ -576,14 +586,16 @@ type recipientReasons struct {
 
 // activityFor decides which Activity-tab entry, if any, one recipient gets for
 // a message, returning the item type and (for mentions) the mention kind.
-// Conversation messages are always listed. A channel message is listed when it
+// Conversation messages are always listed, except replies in a thread the
+// recipient unfollowed, which go by the channel rules. A channel message is listed when it
 // would alert the recipient at the quietest level ("mentions"), whatever their
 // actual delivery levels — the Activity tab lists what was addressed to you —
 // and thread replies are listed for every thread participant whatever their
 // thread-reply notification toggle. Mutes still apply. groupKind is the
 // mention kind to use for an @all/@here mention.
 func activityFor(parentType string, r recipientReasons, groupKind model.MentionKind) (model.ActivityType, model.MentionKind) {
-	if parentType == ParentConversation && !r.explicitMention {
+	// A DM thread its participant unfollowed is listed like a channel's.
+	if parentType == ParentConversation && !r.explicitMention && (!r.threadReply || r.threadParticipant) {
 		if r.threadReply {
 			return model.ActivityThreadReply, ""
 		}
@@ -606,7 +618,7 @@ func activityFor(parentType string, r recipientReasons, groupKind model.MentionK
 
 // eligibleAtLevel decides whether a channel recipient should be notified at the
 // given notification level. Conversations are handled by the caller (always
-// notified) and never reach here.
+// notified); only a reply in a DM thread its recipient unfollowed reaches here.
 func eligibleAtLevel(level model.NotificationLevel, r recipientReasons) bool {
 	if r.explicitMention {
 		return true

@@ -17,6 +17,9 @@ export interface ThreadSummary {
   rootCreatedAt: string;
   replyCount: number;
   latestActivityAt: string;
+  // False: listed because an alert pulled it in (a keyword, an @here), not
+  // followed.
+  following?: boolean;
 }
 
 interface ThreadFollowTarget {
@@ -48,17 +51,13 @@ export function userThreadInCache(qc: QueryClient, threadRootID: string): boolea
 
 // upsertUserThreadFromRoot patches the /threads list directly from a thread
 // root's `message.edited` payload (published alongside every reply), so a
-// new/updated thread appears live without the race-prone ListUserThreads refetch
-// that read stale (eventually-consistent) DynamoDB state. Only threads the viewer
-// provably participates in are ADDED: their own message's thread
-// (rootAuthorID === currentUserId) or one already in the list. Others are left to
-// the refetch fallback so /threads is never polluted with channel threads the
-// viewer isn't in. No-op for non-roots or roots with no replies.
-export function upsertUserThreadFromRoot(
-  qc: QueryClient,
-  root: Message,
-  currentUserId: string | undefined,
-): void {
+// thread already listed updates live without the race-prone ListUserThreads
+// refetch that read stale (eventually-consistent) DynamoDB state. It never ADDS
+// a thread: this event reaches everyone in the channel, followers or not (the
+// root's author included, who may have unfollowed it). New rows come from the
+// participant-scoped thread.updated (upsertUserThreadRow). No-op for non-roots
+// or roots with no replies.
+export function upsertUserThreadFromRoot(qc: QueryClient, root: Message): void {
   const replyCount = root.replyCount ?? 0;
   if (root.parentMessageID || replyCount < 1) return;
   qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), (list) => {
@@ -66,11 +65,9 @@ export function upsertUserThreadFromRoot(
     // one-row list would pass for the whole one, so leave it to the fetch.
     if (!list) return list;
     const idx = list.findIndex((t) => t.threadRootID === root.id);
-    const mine = !!currentUserId && root.authorID === currentUserId;
-    // Can't confirm participation for a thread we don't already track and didn't
-    // author — leave it to the refetch fallback rather than guess.
-    if (idx < 0 && !mine) return list;
+    if (idx < 0) return list;
     const summary: ThreadSummary = {
+      ...list[idx],
       parentID: root.parentID,
       parentType: root.parentType === 'conversation' ? 'conversation' : 'channel',
       threadRootID: root.id,
@@ -80,7 +77,7 @@ export function upsertUserThreadFromRoot(
       replyCount,
       latestActivityAt: root.lastReplyAt ?? root.createdAt,
     };
-    const next = idx >= 0 ? [...list.slice(0, idx), summary, ...list.slice(idx + 1)] : [summary, ...list];
+    const next = [...list.slice(0, idx), summary, ...list.slice(idx + 1)];
     // Newest activity first, matching the server ordering.
     return next.sort((a, b) => b.latestActivityAt.localeCompare(a.latestActivityAt));
   });

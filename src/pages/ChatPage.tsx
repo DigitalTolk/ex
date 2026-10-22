@@ -40,6 +40,7 @@ import {
   parsePresence,
   parseServerVersion,
   parseThreadUpdated,
+  parseConversationConverted,
   parseTyping,
   parseUserChannelUpdated,
   parseUserUpdated,
@@ -68,6 +69,7 @@ import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
 import { shouldRefetchSidebarForRemoteUpdate, useCategories } from '@/hooks/useSidebar';
 import { shouldRefetchUserStateForRemoteUpdate, useUserState } from '@/hooks/useUserState';
+import { followConvertedConversation } from '@/hooks/useConvertConversation';
 import { markThreadSeen, upsertUserThreadFromRoot, upsertUserThreadRow, userThreadInCache, useUserThreads } from '@/hooks/useThreads';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
@@ -343,7 +345,7 @@ export default function ChatPage() {
       // A thread root's replyCount/lastReplyAt bump (published alongside every
       // reply) patches the /threads list directly — this is what keeps /threads
       // live without a refetch, avoiding the read-after-write race.
-      upsertUserThreadFromRoot(queryClient, msg, user?.id);
+      upsertUserThreadFromRoot(queryClient, msg);
       // Link-preview cards pointing at this message (in other channels)
       // are now stale — refetch them so the edited body/attachments show.
       invalidateUnfurlsForMessage(queryClient, id);
@@ -372,6 +374,10 @@ export default function ChatPage() {
     onConversationNew: () => {
       // Refresh conversation list in sidebar
       queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+    },
+    onConversationConverted: (data: unknown) => {
+      const evt = parseConversationConverted(data);
+      if (evt) followConvertedConversation(queryClient, evt, navigate);
     },
     // Archiving no longer removes anyone: the channel turns read-only (or,
     // unarchived, writable again) in place. Refetch it and the sidebar list —
@@ -516,6 +522,13 @@ export default function ChatPage() {
         if (!touchConversationActivityInCache(queryClient, evt.conversationID, evt.updatedAt)) {
           queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
         }
+        return;
+      }
+      if (evt.threads) {
+        // A thread was followed or unfollowed elsewhere: its list and its
+        // unread alert changed.
+        queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
+        queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
         return;
       }
       if (evt.userState) {

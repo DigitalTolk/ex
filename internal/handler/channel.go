@@ -60,6 +60,37 @@ func (h *ChannelHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, ch)
 }
 
+// ConvertConversation turns a group message into a private channel:
+// POST /api/v1/conversations/{id}/convert {"name": "..."} → the channel.
+func (h *ChannelHandler) ConvertConversation(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if body.Name == "" {
+		writeError(w, http.StatusBadRequest, "invalid_body", "name is required")
+		return
+	}
+	ch, err := h.channelSvc.ConvertGroupConversation(r.Context(), userID, r.PathValue("id"), body.Name)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, store.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		writeServiceError(w, err, status, "convert_error")
+		return
+	}
+	writeJSON(w, http.StatusCreated, ch)
+}
+
 // isValidationError reports whether err is one of the named validation
 // errors from service/limits.go.
 func isValidationError(err error) bool {

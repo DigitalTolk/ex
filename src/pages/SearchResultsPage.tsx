@@ -16,6 +16,8 @@ import {
   useSearchFiles,
   type SearchHit,
 } from '@/hooks/useSearch';
+import { searchFailure } from '@/lib/search-failure';
+import { Button } from '@/components/ui/button';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { usePresence } from '@/context/PresenceContext';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
@@ -93,6 +95,10 @@ export default function SearchResultsPage() {
 
   const totalHits = userHits.length + channelHits.length + msgHits.length + fileHits.length;
   const isLoading = users.isLoading || channels.isLoading || messages.isLoading || files.isLoading;
+  const searches = [users, channels, messages, files];
+  const failed = searches.filter((s) => s.isError);
+  // Still showing the last search's results while this one runs.
+  const stale = searches.some((s) => s.isPlaceholderData);
 
   const { data: fromUserList = [] } = useUsersBatch(from ? [from] : []);
   const fromUser = fromUserList[0];
@@ -210,14 +216,23 @@ export default function SearchResultsPage() {
         </div>
       )}
 
-      {!isLoading && totalHits === 0 && (
+      {failed.length > 0 && (
+        <div role="alert" className="flex items-center gap-3 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <span className="min-w-0 flex-1">{searchFailure(failed[0].error)}</span>
+          <Button type="button" variant="outline" size="sm" onClick={() => failed.forEach((s) => void s.refetch())}>
+            Try again
+          </Button>
+        </div>
+      )}
+
+      {!isLoading && failed.length === 0 && totalHits === 0 && (
         <p className="py-12 text-center text-muted-foreground">
           No results for <span className="font-semibold">{q}</span>.
         </p>
       )}
 
       {!isLoading && (
-        <div className="space-y-6">
+        <div className={`space-y-6 transition-opacity ${stale ? 'opacity-60' : ''}`} aria-busy={stale || undefined} data-testid="search-results">
           {(tab === 'all' || tab === 'messages' || tab === 'dms') && msgHits.length > 0 && (
             <Section title={tab === 'dms' ? 'DMs' : 'Messages'} icon={<MessageSquare className="h-4 w-4" />}>
               <ul className="space-y-2">

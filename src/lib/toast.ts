@@ -20,6 +20,9 @@ export interface ToastDetail {
   // Notification API. Default toasts stay bottom-center near the action that
   // produced them.
   kind?: 'notification';
+  // Notification banners with the same group (one conversation or thread)
+  // share one banner: the newest message, and how many arrived.
+  group?: string;
 }
 
 // showToast surfaces a transient message. Defaults to the error variant since the
@@ -27,7 +30,7 @@ export interface ToastDetail {
 export function showToast(
   message: string,
   variant: ToastVariant = 'error',
-  opts?: Pick<ToastDetail, 'title' | 'onActivate' | 'kind'>,
+  opts?: Pick<ToastDetail, 'title' | 'onActivate' | 'kind' | 'group'>,
 ): void {
   window.dispatchEvent(
     new CustomEvent<ToastDetail>(TOAST_EVENT, { detail: { message, variant, ...opts } }),

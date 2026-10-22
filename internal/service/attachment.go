@@ -28,7 +28,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/disintegration/imaging"
 	"github.com/gen2brain/webp"
+	"github.com/rwcarlsen/goexif/exif"
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/sync/semaphore"
 
@@ -689,6 +691,7 @@ func (s *AttachmentService) scheduleDimensionsBackfill(id, s3Key string) {
 		if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
 			return
 		}
+		cfg = upright(cfg, exifOrientation(buf))
 		_ = s.attachments.SetDimensions(ctx, id, cfg.Width, cfg.Height)
 	}()
 }
@@ -1106,11 +1109,19 @@ func inspectContent(ctx context.Context, a *model.Attachment, objectContentType 
 	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
 		return cfg, nil, noop, errors.New("attachment: invalid image")
 	}
-	if a.Width > 0 && a.Width != cfg.Width {
-		return cfg, nil, noop, fmt.Errorf("attachment: image width mismatch: got %d want %d", cfg.Width, a.Width)
-	}
-	if a.Height > 0 && a.Height != cfg.Height {
-		return cfg, nil, noop, fmt.Errorf("attachment: image height mismatch: got %d want %d", cfg.Height, a.Height)
+	// A phone stores a portrait photo's pixels sideways and says so in its
+	// EXIF orientation; it is shown upright, and the browser measured it so.
+	// From here on the image's size is the size it is shown at.
+	orientation := exifOrientation(header.Bytes())
+	stored := cfg
+	cfg = upright(cfg, orientation)
+	if a.Width != stored.Width || a.Height != stored.Height {
+		if a.Width > 0 && a.Width != cfg.Width {
+			return cfg, nil, noop, fmt.Errorf("attachment: image width mismatch: got %d want %d", cfg.Width, a.Width)
+		}
+		if a.Height > 0 && a.Height != cfg.Height {
+			return cfg, nil, noop, fmt.Errorf("attachment: image height mismatch: got %d want %d", cfg.Height, a.Height)
+		}
 	}
 	expectedFormat := strings.TrimPrefix(declared, "image/")
 	if expectedFormat == "jpg" {
@@ -1120,6 +1131,10 @@ func inspectContent(ctx context.Context, a *model.Attachment, objectContentType 
 		return cfg, nil, noop, fmt.Errorf("attachment: image format %q does not match declared %q", format, declared)
 	}
 	cost := imageDecodeCost(cfg.Width, cfg.Height)
+	if orientation != 1 {
+		// Turning it upright is a second copy of the pixels.
+		cost *= 2
+	}
 	if !decode || cost > maxImageDecodeBytes {
 		return cfg, nil, noop, nil
 	}
@@ -1133,7 +1148,56 @@ func inspectContent(ctx context.Context, a *model.Attachment, objectContentType 
 		release()
 		return cfg, nil, noop, fmt.Errorf("attachment: decode image for thumbnails: %w", err)
 	}
-	return cfg, img, release, nil
+	return cfg, orient(img, orientation), release, nil
+}
+
+// exifOrientation reads an image's EXIF orientation (1–8) from the start of
+// its file: 1, as stored, when it has none.
+func exifOrientation(header []byte) int {
+	x, err := exif.Decode(bytes.NewReader(header))
+	if err != nil {
+		return 1
+	}
+	tag, err := x.Get(exif.Orientation)
+	if err != nil {
+		return 1
+	}
+	o, err := tag.Int(0)
+	if err != nil || o < 1 || o > 8 {
+		return 1
+	}
+	return o
+}
+
+// upright is an image's size as shown: orientations 5–8 turn it a quarter,
+// swapping its width and height.
+func upright(cfg image.Config, orientation int) image.Config {
+	if orientation >= 5 {
+		cfg.Width, cfg.Height = cfg.Height, cfg.Width
+	}
+	return cfg
+}
+
+// orient turns decoded pixels the way their EXIF orientation says they are
+// shown, so a thumbnail (which carries no EXIF) stands upright too.
+func orient(img image.Image, orientation int) image.Image {
+	switch orientation {
+	case 2:
+		return imaging.FlipH(img)
+	case 3:
+		return imaging.Rotate180(img)
+	case 4:
+		return imaging.FlipV(img)
+	case 5:
+		return imaging.Transpose(img)
+	case 6:
+		return imaging.Rotate270(img)
+	case 7:
+		return imaging.Transverse(img)
+	case 8:
+		return imaging.Rotate90(img)
+	}
+	return img
 }
 
 // storeThumbnails encodes both thumbnails, hands the decoded image's budget

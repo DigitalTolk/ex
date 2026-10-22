@@ -53,6 +53,19 @@ describe('SettingsDialog', () => {
     await vi.waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('settings-page-notifications').element()));
   });
 
+  // On a phone the title shares the top row with Done.
+  it.skipIf(window.__EX_FORCE_DEVICE__ === 'desktop')('puts the title level with the Done button on a phone', async () => {
+    const screen = await render(<SettingsDialog open onOpenChange={vi.fn()} />);
+    await expect.element(screen.getByText('profile-body')).toBeVisible();
+    const middle = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return r.top + r.height / 2;
+    };
+    const title = document.querySelector('[data-slot="dialog-title"]')!;
+    const done = screen.getByRole('button', { name: 'Done' }).element();
+    expect(Math.abs(middle(title) - middle(done))).toBeLessThanOrEqual(0.5);
+  });
+
   it('closes from the close button', async () => {
     const onOpenChange = vi.fn();
     const screen = await render(<SettingsDialog open onOpenChange={onOpenChange} />);

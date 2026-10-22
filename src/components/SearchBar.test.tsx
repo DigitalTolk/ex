@@ -634,4 +634,94 @@ describe('SearchBar', () => {
       expect(screen.getByTestId('searchbar-show-in-scope').getAttribute('data-scope-kind')).toBe('group');
     });
   });
+
+  // People and channels that didn't come back say so, and can be asked for
+  // again; the message search below still works.
+  it('says when people and channels could not be searched, and tries again', () => {
+    const refetchUsers = vi.fn();
+    const refetchChannels = vi.fn();
+    useSearchUsersMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new DOMException('signal timed out', 'TimeoutError'),
+      refetch: refetchUsers,
+    } as never);
+    useSearchChannelsMock.mockReturnValue({ data: { hits: [] }, isLoading: false, isError: false, refetch: refetchChannels } as never);
+    renderBar();
+    fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'hello' } });
+    expect(screen.getByTestId('searchbar-failed')).toHaveTextContent('Search timed out');
+    expect(screen.getByRole('group', { name: 'Messages' })).toHaveTextContent('hello');
+    // Pressing it leaves the focus in the field.
+    expect(fireEvent.mouseDown(screen.getByRole('button', { name: 'Try again' }))).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(refetchUsers).toHaveBeenCalledTimes(1);
+    expect(refetchChannels).not.toHaveBeenCalled();
+  });
+
+  it('retries the channel search when that is the one that failed', () => {
+    const refetchChannels = vi.fn();
+    useSearchChannelsMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error('internal server error'),
+      refetch: refetchChannels,
+    } as never);
+    renderBar();
+    fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'hello' } });
+    expect(screen.getByTestId('searchbar-failed')).toHaveTextContent('Search failed');
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(refetchChannels).toHaveBeenCalledTimes(1);
+  });
+
+  it('says nothing about a failure once the text is too short to search', () => {
+    useSearchUsersMock.mockReturnValue({ data: undefined, isLoading: false, isError: true, error: new Error('x'), refetch: vi.fn() } as never);
+    renderBar();
+    fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'h' } });
+    expect(screen.queryByTestId('searchbar-failed')).toBeNull();
+  });
+
+  // Several people typed: the group messages they're all in.
+  describe('group messages', () => {
+    const group = (id: string, displayName: string, participantIDs: string[]) => ({
+      userID: 'me', conversationID: id, type: 'group', displayName, participantIDs, activated: true, joinedAt: '2026-01-01T00:00:00Z',
+    });
+
+    it('finds the group with everyone named, and opens it', () => {
+      useUserConversationsMock.mockReturnValue({
+        data: [
+          group('g-ab', 'Alice Example, Bob Builder', ['me', 'alice', 'bob']),
+          group('g-ac', 'Alice Example, Carol', ['me', 'alice', 'carol']),
+          { ...group('dm-a', 'Alice Example', ['me', 'alice']), type: 'dm' },
+        ],
+      });
+      renderBar();
+      fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'ali bob' } });
+      const section = screen.getByRole('group', { name: 'Group messages' });
+      expect(section).toHaveTextContent('Alice Example, Bob Builder');
+      expect(section).not.toHaveTextContent('Carol');
+      fireEvent.click(screen.getByTestId('searchbar-group-g-ab'));
+      expect(lastLocation.pathname).toBe('/conversation/g-ab');
+      expect((screen.getByTestId('searchbar-input') as HTMLInputElement).value).toBe('');
+    });
+
+    it('opens the highlighted group with Enter', () => {
+      useUserConversationsMock.mockReturnValue({ data: [group('g-ab', 'Alice Example, Bob Builder', ['me', 'alice', 'bob'])] });
+      renderBar();
+      const input = screen.getByTestId('searchbar-input');
+      fireEvent.change(input, { target: { value: 'alice bob' } });
+      fireEvent.mouseEnter(screen.getByTestId('searchbar-group-g-ab'));
+      expect(screen.getByTestId('searchbar-group-g-ab')).toHaveAttribute('aria-selected', 'true');
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(lastLocation.pathname).toBe('/conversation/g-ab');
+    });
+
+    it('shows no groups for a single letter', () => {
+      useUserConversationsMock.mockReturnValue({ data: [group('g-ab', 'Alice Example, Bob Builder', ['me', 'alice', 'bob'])] });
+      renderBar();
+      fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'a' } });
+      expect(screen.queryByRole('group', { name: 'Group messages' })).toBeNull();
+    });
+  });
 });

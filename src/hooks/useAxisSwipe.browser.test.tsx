@@ -254,6 +254,99 @@ describe('useAxisSwipe — a taken touch does not scroll the page', () => {
     expect(onRelease).toHaveBeenCalledTimes(1);
   });
 
+  // The same press, ended other ways a lift can come: as a touchend alone
+  // (no pointer event for an element gone), or from a pen.
+  function SendThenSwipe({ onRelease }: { onRelease: (release: AxisSwipeRelease) => void }) {
+    const [sent, setSent] = useState(false);
+    return (
+      <Surface onRelease={onRelease}>
+        {!sent && (
+          <button type="button" data-testid="send" onClick={() => setSent(true)}>
+            Send
+          </button>
+        )}
+      </Surface>
+    );
+  }
+
+  async function swipesAfterSending(endPress: (send: HTMLElement, press: number, at: { x: number; y: number }) => void, pointerType = 'touch') {
+    const onRelease = vi.fn();
+    const screen = await render(<SendThenSwipe onRelease={onRelease} />);
+    const surface = screen.getByTestId('surface').element() as HTMLElement;
+    const send = screen.getByTestId('send').element() as HTMLElement;
+    const { left, top } = send.getBoundingClientRect();
+    const press = pointerId++;
+    send.dispatchEvent(pointer('pointerdown', left + 5, top + 5, press, pointerType));
+    send.click();
+    await raf();
+    expect(send.isConnected).toBe(false);
+    endPress(send, press, { x: left + 5, y: top + 5 });
+
+    const box = surface.getBoundingClientRect();
+    const at = { x: box.left + 40, y: box.top + 150 };
+    const id = pointerId++;
+    surface.dispatchEvent(pointer('pointerdown', at.x, at.y, id));
+    await move(at, 200, 0, id, 8);
+    surface.dispatchEvent(pointer('pointerup', at.x + 200, at.y, id));
+    window.dispatchEvent(touchEvent('touchend', 0));
+    expect(onRelease).toHaveBeenCalledTimes(1);
+  }
+
+  it('is not left dead by a removed element whose lift comes as a touch alone', async () => {
+    await swipesAfterSending((send) => send.dispatchEvent(touchEvent('touchend', 0)));
+  });
+
+  it('is not left dead by a pen lifted off a removed element', async () => {
+    await swipesAfterSending(
+      (send, press, at) => send.dispatchEvent(pointer('pointerup', at.x, at.y, press, 'pen')),
+      'pen',
+    );
+  });
+
+  // A press on an element still on the page whose pointer end never came
+  // (an element turned disabled under the finger): the finger leaving the
+  // screen ends it.
+  it('ends a press whose finger lifted without a pointer event', async () => {
+    const { el, at, onRelease } = await mount();
+    const stale = pointerId++;
+    el.dispatchEvent(pointer('pointerdown', at.x, at.y, stale));
+    el.dispatchEvent(touchEvent('touchend', 0));
+    const id = pointerId++;
+    el.dispatchEvent(pointer('pointerdown', at.x, at.y, id));
+    await move(at, 200, 0, id, 8);
+    el.dispatchEvent(pointer('pointerup', at.x + 200, at.y, id));
+    expect(onRelease).toHaveBeenCalledTimes(1);
+    // The real end coming late changes nothing.
+    window.dispatchEvent(pointer('pointerup', at.x, at.y, stale));
+    expect(onRelease).toHaveBeenCalledTimes(1);
+  });
+
+  // A cancelled touch cancels the press, where the finger was.
+  it('cancels a press whose touch was cancelled without a pointer event', async () => {
+    const { el, at, onRelease } = await mount();
+    const id = pointerId++;
+    el.dispatchEvent(pointer('pointerdown', at.x, at.y, id));
+    await move(at, 120, 0, id, 4);
+    const cancelled = new Event('touchcancel', { bubbles: true });
+    Object.defineProperty(cancelled, 'touches', { value: { length: 0 } });
+    Object.defineProperty(cancelled, 'changedTouches', { value: [{ clientX: at.x + 120, clientY: at.y }] });
+    el.dispatchEvent(cancelled);
+    expect(onRelease).toHaveBeenCalledTimes(1);
+    expect(onRelease.mock.calls[0][0].aborted).toBe(true);
+  });
+
+  // Another finger still down: the press isn't over yet.
+  it('keeps a press open while another finger is still down', async () => {
+    const { el, at, onRelease } = await mount();
+    const id = pointerId++;
+    el.dispatchEvent(pointer('pointerdown', at.x, at.y, id));
+    await move(at, 100, 0, id, 4);
+    el.dispatchEvent(touchEvent('touchend', 1));
+    expect(onRelease).not.toHaveBeenCalled();
+    window.dispatchEvent(pointer('pointerup', at.x + 100, at.y, id));
+    expect(onRelease).toHaveBeenCalledTimes(1);
+  });
+
   it('holds nothing for a mouse, which never scrolls by dragging', async () => {
     const { el, at, onRelease } = await mount();
     const id = pointerId++;

@@ -58,7 +58,9 @@ function SettingsBody({ initialPage, pageRef }: { initialPage: SettingsPage; pag
         aria-label="Settings sections"
         className="border-r bg-sidebar px-2.5 py-5 narrow:border-r-0 narrow:border-b narrow:px-3 narrow:pt-[calc(env(safe-area-inset-top)+0.5rem)] narrow:pb-2"
       >
-        <DialogTitle className="mx-2.5 mb-4 text-base leading-6 font-semibold narrow:mb-2 narrow:h-9 narrow:text-xl narrow:leading-9">
+        {/* Narrow, the title shares the top row with the Close button: its
+            line is that button's height, so the two sit level. */}
+        <DialogTitle className="mx-2.5 mb-4 text-base leading-6 font-semibold narrow:mb-2 narrow:text-xl narrow:not-mobile:h-7 narrow:not-mobile:leading-7 mobile:h-11 mobile:leading-11">
           Settings
         </DialogTitle>
         <div className="flex flex-col gap-0.5 narrow:flex-row narrow:overflow-x-auto">

@@ -10,6 +10,7 @@ export const EventType = {
   MemberLeft: 'member.left',
   ChannelUpdated: 'channel.updated',
   ConversationNew: 'conversation.new',
+  ConversationConverted: 'conversation.converted',
   ChannelNew: 'channel.new',
   ChannelArchived: 'channel.archived',
   ChannelUnarchived: 'channel.unarchived',

@@ -544,12 +544,13 @@ func TestRecordThreadParticipation(t *testing.T) {
 	root := &model.Message{ID: "root-1", ParentID: "ch-1", AuthorID: "u-root"}
 	svc.recordThreadParticipation(ctx, reply, ParentChannel, root)
 
-	// Both the reply author and the root author become participants.
-	if len(follows.ifAbsentKeys) != 2 {
-		t.Fatalf("writes = %v, want reply + root author", follows.ifAbsentKeys)
-	}
-	if _, ok := follows.follows[threadFollowMockKey("u-replier", "ch-1", "root-1")]; !ok {
+	// Both the reply author and the root author become participants: the
+	// author by replying, the root author only if they have no row yet.
+	if f := follows.follows[threadFollowMockKey("u-replier", "ch-1", "root-1")]; f == nil || !f.Following {
 		t.Fatal("reply author not recorded")
+	}
+	if len(follows.ifAbsentKeys) != 1 || follows.ifAbsentKeys[0] != threadFollowMockKey("u-root", "ch-1", "root-1") {
+		t.Fatalf("conditional writes = %v, want only the root author", follows.ifAbsentKeys)
 	}
 	if _, ok := follows.follows[threadFollowMockKey("u-root", "ch-1", "root-1")]; !ok {
 		t.Fatal("root author not recorded")
@@ -557,21 +558,28 @@ func TestRecordThreadParticipation(t *testing.T) {
 
 	// Self-reply: one write, not two.
 	follows.ifAbsentKeys = nil
+	calls := follows.setCalls
 	selfRoot := &model.Message{ID: "root-2", ParentID: "ch-1", AuthorID: "u-replier"}
 	selfReply := &model.Message{ID: "r-2", ParentID: "ch-1", ParentMessageID: "root-2", AuthorID: "u-replier"}
 	svc.recordThreadParticipation(ctx, selfReply, ParentChannel, selfRoot)
-	if len(follows.ifAbsentKeys) != 1 {
-		t.Fatalf("self-reply writes = %v, want 1", follows.ifAbsentKeys)
+	if len(follows.ifAbsentKeys) != 0 || follows.setCalls != calls+1 {
+		t.Fatalf("self-reply writes = %d + %v, want 1", follows.setCalls-calls, follows.ifAbsentKeys)
 	}
 
-	// A deliberate unfollow is never clobbered: the conditional write keeps it.
+	// Replying follows the thread again, past an earlier unfollow…
 	follows.follows[threadFollowMockKey("u-out", "ch-1", "root-1")] = &model.ThreadFollow{
 		UserID: "u-out", ParentID: "ch-1", ThreadRootID: "root-1", Following: false,
 	}
 	outReply := &model.Message{ID: "r-3", ParentID: "ch-1", ParentMessageID: "root-1", AuthorID: "u-out"}
 	svc.recordThreadParticipation(ctx, outReply, ParentChannel, nil)
-	if follows.follows[threadFollowMockKey("u-out", "ch-1", "root-1")].Following {
-		t.Fatal("conditional write clobbered an unfollow")
+	if !follows.follows[threadFollowMockKey("u-out", "ch-1", "root-1")].Following {
+		t.Fatal("replying did not follow the thread again")
+	}
+	// …but someone else's reply never clobbers the root author's unfollow.
+	follows.follows[threadFollowMockKey("u-root", "ch-1", "root-1")].Following = false
+	svc.recordThreadParticipation(ctx, reply, ParentChannel, root)
+	if follows.follows[threadFollowMockKey("u-root", "ch-1", "root-1")].Following {
+		t.Fatal("a reply clobbered the root author's unfollow")
 	}
 
 	// Top-level messages and unavailable roots are tolerated.
@@ -580,8 +588,9 @@ func TestRecordThreadParticipation(t *testing.T) {
 	// An authorless reply (defensive: webhook/system shapes) writes only the
 	// root author's row.
 	follows.ifAbsentKeys = nil
+	calls = follows.setCalls
 	svc.recordThreadParticipation(ctx, &model.Message{ID: "r-anon", ParentID: "ch-1", ParentMessageID: "root-1", AuthorID: ""}, ParentChannel, root)
-	if len(follows.ifAbsentKeys) != 1 || follows.ifAbsentKeys[0] != threadFollowMockKey("u-root", "ch-1", "root-1") {
+	if len(follows.ifAbsentKeys) != 1 || follows.ifAbsentKeys[0] != threadFollowMockKey("u-root", "ch-1", "root-1") || follows.setCalls != calls {
 		t.Fatalf("authorless writes = %v, want only the root author", follows.ifAbsentKeys)
 	}
 	// Write failures are logged, never surfaced.

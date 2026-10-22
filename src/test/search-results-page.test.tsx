@@ -503,4 +503,115 @@ describe('SearchResultsPage', () => {
     fireEvent.click(screen.getByLabelText(/Clear From: Alice/i));
     await waitFor(() => expect(screen.queryByText(/From: Alice/i)).toBeNull());
   });
+
+  // A search that doesn't come back says so, instead of looking like one
+  // that found nothing — and is not sent a second time on its own.
+  describe('a search that fails', () => {
+    const timedOut = () => Promise.reject(new DOMException('signal timed out', 'TimeoutError'));
+    function wrapWithAppRetry() {
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, retryDelay: 0 } } });
+      return render(
+        <QueryClientProvider client={qc}>
+          <MemoryRouter initialEntries={['/search?q=engineering']}>
+            <SearchResultsPage />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    }
+
+    it('says it timed out, once, and finds the results when tried again', async () => {
+      apiFetchMock.mockImplementation((url: string) => (url.startsWith('/api/v1/search/') ? timedOut() : Promise.resolve([])));
+      wrapWithAppRetry();
+      expect(await screen.findByRole('alert')).toHaveTextContent('Search timed out');
+      expect(screen.queryByText(/No results for/)).toBeNull();
+      const searches = apiFetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/v1/search/'));
+      expect(searches).toHaveLength(4);
+
+      apiFetchMock.mockImplementation((url: string) =>
+        Promise.resolve(
+          url.startsWith('/api/v1/search/channels')
+            ? { total: 1, hits: [{ id: 'c-1', score: 1, _source: { name: 'engineering', type: 'public' } }] }
+            : url.startsWith('/api/v1/search/')
+              ? { total: 0, hits: [] }
+              : [],
+        ),
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+      await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+      await waitFor(() => expect(screen.getByRole('tab', { name: /Channels/ })).toHaveTextContent('1'));
+    });
+
+    it('says it failed for any other error', async () => {
+      apiFetchMock.mockImplementation((url: string) =>
+        url.startsWith('/api/v1/search/messages') ? Promise.reject(new Error('internal server error')) : Promise.resolve({ total: 0, hits: [] }),
+      );
+      wrap();
+      expect(await screen.findByRole('alert')).toHaveTextContent('Search failed');
+    });
+
+    it('cancels a search the next one overtook', async () => {
+      const signals: AbortSignal[] = [];
+      apiFetchMock.mockImplementation((url: string, init?: RequestInit) => {
+        if (!String(url).startsWith('/api/v1/search/messages')) return Promise.resolve({ total: 0, hits: [] });
+        signals.push(init!.signal!);
+        return new Promise(() => undefined);
+      });
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const { rerender } = render(
+        <QueryClientProvider client={qc}>
+          <MemoryRouter key="a" initialEntries={['/search?q=engineering']}>
+            <SearchResultsPage />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(signals).toHaveLength(1));
+      rerender(
+        <QueryClientProvider client={qc}>
+          <MemoryRouter key="b" initialEntries={['/search?q=engineers']}>
+            <SearchResultsPage />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(signals).toHaveLength(2));
+      await waitFor(() => expect(signals[0].aborted).toBe(true));
+      expect(signals[1].aborted).toBe(false);
+    });
+
+    it('reads a hit the index returned without its source', async () => {
+      apiFetchMock.mockImplementation((url: string) =>
+        Promise.resolve(
+          url.startsWith('/api/v1/search/messages')
+            ? { total: 1, hits: [{ id: 'm-1', score: 1, _source: null }] }
+            : url.startsWith('/api/v1/search/')
+              ? { total: 0, hits: [] }
+              : [],
+        ),
+      );
+      wrap();
+      await waitFor(() => expect(screen.getByRole('tab', { name: /Messages/ })).toHaveTextContent('1'));
+    });
+  });
+
+  // While a changed search runs, the last results stay, dimmed.
+  it('dims the last results while a changed search runs', async () => {
+    let hold = false;
+    apiFetchMock.mockImplementation((url: string) => {
+      if (hold && url.includes('sort=newest')) return new Promise(() => undefined);
+      return Promise.resolve(
+        url.startsWith('/api/v1/search/messages')
+          ? { total: 1, hits: [{ id: 'm-1', score: 1, _source: { body: 'engineering notes', parentId: 'c-1', authorId: 'u-1', createdAt: '2026-04-28T12:00:00Z' } }] }
+          : url.startsWith('/api/v1/search/')
+            ? { total: 0, hits: [] }
+            : [],
+      );
+    });
+    wrap();
+    const results = await screen.findByTestId('search-results');
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Messages/ })).toHaveTextContent('1'));
+    expect(results).not.toHaveAttribute('aria-busy');
+    hold = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Newest first' }));
+    await waitFor(() => expect(screen.getByTestId('search-results')).toHaveAttribute('aria-busy', 'true'));
+    expect(screen.getByTestId('search-results')).toHaveClass('opacity-60');
+  });
 });

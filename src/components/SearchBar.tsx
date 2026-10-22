@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Clock3, Search, FileSearch, X, Loader2 } from 'lucide-react';
+import { Clock3, Search, FileSearch, X, Loader2, Users } from 'lucide-react';
 import { Link, matchPath, useLocation, useNavigate } from 'react-router-dom';
 import { useChannelBySlug, useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations, useOpenDM } from '@/hooks/useConversations';
 import { useSearchUsers, useSearchChannels, useSearchMessages, type SearchHit } from '@/hooks/useSearch';
+import { searchFailure } from '@/lib/search-failure';
+import { groupsMatching } from '@/lib/conversation-match';
 import { MessageHitCard } from '@/components/search/MessageHitCard';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
@@ -13,7 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { UserPickerRow } from '@/components/UserPickerRow';
 import { isApplePlatform, searchShortcutLabel } from '@/lib/platform';
-import type { UserStatus } from '@/types';
+import type { UserConversation, UserStatus } from '@/types';
 import { addRecentSearch, clearRecentSearches, removeRecentSearch, useRecentSearchesStore } from '@/stores/recent-searches';
 
 // ⌘K on Apple platforms, Ctrl K elsewhere. The keydown handler matches the
@@ -41,6 +43,7 @@ type Suggestion =
 type Item =
   | { kind: 'channel'; hit: SearchHit }
   | { kind: 'user'; hit: SearchHit }
+  | { kind: 'group'; conversation: UserConversation }
   | { kind: 'message'; suggestion: Suggestion };
 
 const MIN_SEARCH_CHARS = 2;
@@ -52,6 +55,8 @@ const MIN_SEARCH_CHARS = 2;
 // route). Keyboard nav (ArrowUp/Down + Enter), Escape closes.
 //  • Channel row  → navigate to /channel/:slug
 //  • Person row   → open/create a DM, navigate to /conversation/:id
+//  • Group row    → the group message with those people (several names
+//                   typed find the group they're all in)
 //  • Message row  → navigate to /search?q=… (unchanged message flow)
 // itemKey gives every dropdown row a stable identity so the highlight can
 // survive the item list changing under it (async hits arriving/reordering).
@@ -59,6 +64,7 @@ function itemKey(it: Item): string {
   if (it.kind === 'message') {
     return `message:${it.suggestion.kind === 'in-scope' ? `in-${it.suggestion.scopeKind}` : 'all'}`;
   }
+  if (it.kind === 'group') return `group:${it.conversation.conversationID}`;
   return `${it.kind}:${it.hit.id}`;
 }
 
@@ -140,7 +146,14 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
   // above carries the custom status emoji. Both are the "status icon" a person
   // row shows here and on the full /search page.
   const { online } = usePresence();
+  // Your group messages with the people named, from the list you already
+  // have: "alice bob" finds the group with both.
+  const groupHits = useMemo(
+    () => (trimmed.length >= MIN_SEARCH_CHARS ? groupsMatching(userConversations ?? [], trimmed) : []),
+    [trimmed, userConversations],
+  );
   const searching = searchEnabled && (usersQuery.isLoading || channelsQuery.isLoading);
+  const failedQuery = hitsEnabled ? [usersQuery, channelsQuery].find((query) => query.isError) : undefined;
 
   // Channel search now surfaces PUBLIC channels the user hasn't joined (opening
   // one auto-joins them), so a hit isn't necessarily a channel they're in. The
@@ -182,9 +195,10 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
     const arr: Item[] = [];
     for (const h of channelHits) arr.push({ kind: 'channel', hit: h });
     for (const h of userHits) arr.push({ kind: 'user', hit: h });
+    for (const c of groupHits) arr.push({ kind: 'group', conversation: c });
     for (const s of suggestions) arr.push({ kind: 'message', suggestion: s });
     return arr;
-  }, [channelHits, userHits, suggestions]);
+  }, [channelHits, userHits, groupHits, suggestions]);
 
   useEffect(() => {
     if (!open || sheet) return;
@@ -270,6 +284,9 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
       // and the open dropdown (plus useOpenDM's error toast) so the user
       // can retry instead of facing a silently cleared search box.
       openDM(item.hit.id, { onSuccess: reset });
+    } else if (item.kind === 'group') {
+      reset();
+      navigate(`/conversation/${item.conversation.conversationID}`);
     } else {
       submitSuggestion(item.suggestion);
     }
@@ -284,7 +301,9 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
   // While the sheet shows message results, its list keeps only the channel and
   // people hits — and isn't rendered at all when there are none.
   const showDropdown =
-    (open || sheet) && suggestions.length > 0 && !(showMessageResults && channelHits.length === 0 && userHits.length === 0);
+    (open || sheet) &&
+    suggestions.length > 0 &&
+    !(showMessageResults && channelHits.length === 0 && userHits.length === 0 && groupHits.length === 0);
   const messagesQuery = useSearchMessages(
     submitted?.q ?? '',
     showMessageResults,
@@ -382,10 +401,12 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
           // Match the focus-expanded input width: the input row widens by -mx-2
           // on md+ while focused, and the dropdown only ever shows while focused,
           // so mirror that same negative margin here so their edges line up.
+          // It opens out of the top bar, which drags the desktop window; the
+          // dropdown itself is for picking and scrolling, not for dragging.
           className={
             sheet
               ? 'mt-2 text-foreground'
-              : 'absolute left-0 right-0 top-full z-40 mt-1 max-h-[70dvh] overflow-y-auto rounded-md border bg-popover text-popover-foreground shadow-lg md:-mx-2'
+              : 'absolute left-0 right-0 top-full z-40 mt-1 max-h-[70dvh] overflow-y-auto rounded-md border bg-popover text-popover-foreground shadow-lg md:-mx-2 [-webkit-app-region:no-drag]'
           }
         >
           {channelHits.length > 0 && (
@@ -432,7 +453,48 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
             </div>
           )}
 
-          {searching && channelHits.length === 0 && userHits.length === 0 && (
+          {groupHits.length > 0 && (
+            <div role="group" aria-label="Group messages">
+              <SectionHeader>Group messages</SectionHeader>
+              {groupHits.map((conversation) => {
+                const flatIndex = items.findIndex(
+                  (it) => it.kind === 'group' && it.conversation.conversationID === conversation.conversationID,
+                );
+                return (
+                  <GroupRow
+                    key={conversation.conversationID}
+                    conversation={conversation}
+                    highlighted={flatIndex === safeHighlight}
+                    onHover={() => setHighlightKey(`group:${conversation.conversationID}`)}
+                    onSelect={() => activate(flatIndex)}
+                  />
+                );
+              })}
+            </div>
+          )}
+
+          {failedQuery && (
+            <div
+              role="alert"
+              data-testid="searchbar-failed"
+              className="flex items-center gap-2 px-3 py-2 text-sm text-destructive"
+            >
+              <span className="min-w-0 flex-1">{searchFailure(failedQuery.error)}</span>
+              <button
+                type="button"
+                className="rounded px-1.5 font-medium underline-offset-2 hover:underline"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  if (usersQuery.isError) void usersQuery.refetch();
+                  if (channelsQuery.isError) void channelsQuery.refetch();
+                }}
+              >
+                Try again
+              </button>
+            </div>
+          )}
+
+          {searching && channelHits.length === 0 && userHits.length === 0 && groupHits.length === 0 && (
             <div
               data-testid="searchbar-loading"
               className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground"
@@ -446,7 +508,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
               (below) and this group of "search for…" actions steps aside. */}
           {!showMessageResults && (
             <div role="group" aria-label="Messages">
-              {(channelHits.length > 0 || userHits.length > 0) && <SectionHeader>Messages</SectionHeader>}
+              {(channelHits.length > 0 || userHits.length > 0 || groupHits.length > 0) && <SectionHeader>Messages</SectionHeader>}
               {suggestions.map((s) => {
                 const flatIndex = items.findIndex(
                   (it) => it.kind === 'message' && it.suggestion === s,
@@ -613,6 +675,34 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
 // aren't (clicking the row navigates and auto-joins them, Slack-style); joined
 // channels carry no badge to keep the common case uncluttered. The hint is
 // never pink — it's a plain outline Badge per the design system.
+function GroupRow({
+  conversation,
+  highlighted,
+  onHover,
+  onSelect,
+}: {
+  conversation: UserConversation;
+  highlighted: boolean;
+  onHover: () => void;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid={`searchbar-group-${conversation.conversationID}`}
+      onMouseEnter={onHover}
+      onClick={onSelect}
+      aria-selected={highlighted}
+      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm mobile:py-3 mobile:text-base ${
+        highlighted ? 'bg-muted' : ''
+      }`}
+    >
+      <Users className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <span className="flex-1 truncate font-medium">{conversation.displayName}</span>
+    </button>
+  );
+}
+
 function ChannelRow({
   hit,
   joined,

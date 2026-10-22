@@ -1059,6 +1059,7 @@ type mockThreadFollowStore struct {
 	setManyCalls    int
 	setManyMaxBatch int
 	setManyErr      error
+	setErr          error
 }
 
 func newMockThreadFollowStore() *mockThreadFollowStore {
@@ -1071,6 +1072,9 @@ func threadFollowMockKey(userID, parentID, threadRootID string) string {
 
 func (m *mockThreadFollowStore) SetThreadFollow(_ context.Context, follow *model.ThreadFollow) error {
 	m.setCalls++
+	if m.setErr != nil {
+		return m.setErr
+	}
 	cp := *follow
 	m.follows[threadFollowMockKey(follow.UserID, follow.ParentID, follow.ThreadRootID)] = &cp
 	return nil

@@ -592,6 +592,8 @@ func main() {
 	commandH := handler.NewCommandHandler(commandSvc)
 	threadH := handler.NewThreadHandler(messageSvc)
 	draftSvc := service.NewDraftService(store.NewRedisDraftStore(redisCache.Client()), messageStore, membershipStore, conversationStore, redisPubSub)
+	// A group message becoming a private channel, its drafts going along.
+	channelSvc.SetConversationConverter(conversationStore, draftSvc)
 	// Fold draft-clear into message send: a successful send clears the scope's
 	// draft server-side, so the client makes no separate clear request.
 	channelH.SetDraftClearer(draftSvc)

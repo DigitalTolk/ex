@@ -41,6 +41,9 @@ type ChannelService struct {
 	searcher    ChannelSearcher
 	activity    ChannelActivityRecorder
 	reminders   ChannelReminderSync
+	conversions ConversationConverter
+	// convertedDrafts moves a converted group's drafts to its channel.
+	convertedDrafts ConversationDraftMover
 }
 
 // ChannelActivityRecorder keeps the Activity tab in step with channel

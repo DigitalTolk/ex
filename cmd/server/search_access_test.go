@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -12,20 +13,28 @@ import (
 type fakeSearchMemberships struct {
 	calls int
 	chans map[string][]*model.UserChannel
+	err   error
 }
 
 func (f *fakeSearchMemberships) ListUserChannels(_ context.Context, userID string) ([]*model.UserChannel, error) {
 	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
 	return append([]*model.UserChannel(nil), f.chans[userID]...), nil
 }
 
 type fakeSearchConversations struct {
 	calls int
 	convs map[string][]*model.UserConversation
+	err   error
 }
 
 func (f *fakeSearchConversations) ListUserConversations(_ context.Context, userID string) ([]*model.UserConversation, error) {
 	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
 	return append([]*model.UserConversation(nil), f.convs[userID]...), nil
 }
 
@@ -104,5 +113,41 @@ func TestSearchAccess_EmptyUserDoesNotQueryStores(t *testing.T) {
 	}
 	if memberships.calls != 0 || conversations.calls != 0 {
 		t.Fatalf("stores were queried for empty user")
+	}
+}
+
+// A lookup that fails — a slow search the client gave up on cancels it — is
+// an error, and is not remembered: an empty set would hide every result for
+// the cache's lifetime, and channel search would read it as "no scoping".
+func TestSearchAccess_FailedLookupIsAnErrorNotCached(t *testing.T) {
+	for _, fail := range []string{"channels", "conversations"} {
+		t.Run(fail, func(t *testing.T) {
+			memberships := &fakeSearchMemberships{chans: map[string][]*model.UserChannel{"u1": {{ChannelID: "ch-1"}}}}
+			conversations := &fakeSearchConversations{convs: map[string][]*model.UserConversation{"u1": {{ConversationID: "dm-1"}}}}
+			if fail == "channels" {
+				memberships.err = context.Canceled
+			} else {
+				conversations.err = context.Canceled
+			}
+			access := newSearchAccess(memberships, conversations)
+			if ids, err := access.AllowedParentIDs(context.Background(), "u1"); !errors.Is(err, context.Canceled) || ids != nil {
+				t.Fatalf("AllowedParentIDs = %v, %v; want the lookup's error", ids, err)
+			}
+			memberships.err, conversations.err = nil, nil
+			ids, err := access.AllowedParentIDs(context.Background(), "u1")
+			if err != nil || !reflect.DeepEqual(ids, []string{"ch-1", "dm-1"}) {
+				t.Fatalf("after recovery = %v, %v; want a fresh lookup", ids, err)
+			}
+		})
+	}
+}
+
+// Someone with no channels or conversations gets an empty set, never nil
+// (nil means unscoped to channel search).
+func TestSearchAccess_NoMembershipsIsEmptyNotNil(t *testing.T) {
+	access := newSearchAccess(&fakeSearchMemberships{}, &fakeSearchConversations{})
+	ids, err := access.AllowedParentIDs(context.Background(), "u1")
+	if err != nil || ids == nil || len(ids) != 0 {
+		t.Fatalf("AllowedParentIDs = %#v, %v; want an empty, non-nil set", ids, err)
 	}
 }

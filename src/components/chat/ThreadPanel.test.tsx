@@ -318,6 +318,41 @@ describe('ThreadPanel', () => {
     });
   });
 
+  // An alert can list a thread in /threads that you don't follow.
+  it('shows Follow for a thread listed in /threads but not followed', async () => {
+    mockApiFetch.mockImplementation((url: string) => {
+      if (url === '/api/v1/threads') {
+        return Promise.resolve([
+          {
+            parentID: 'ch-1',
+            parentType: 'channel',
+            threadRootID: 'm-1',
+            rootAuthorID: 'u-2',
+            rootBody: 'root',
+            rootCreatedAt: '2026-04-24T10:00:00Z',
+            replyCount: 1,
+            latestActivityAt: '2026-04-24T10:30:00Z',
+            following: false,
+          },
+        ]);
+      }
+      if (url.includes('/messages/m-1/thread')) return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+    renderWithProviders(
+      <ThreadPanel
+        channelId="ch-1"
+        threadRootID="m-1"
+        onClose={vi.fn()}
+        userMap={userMap}
+        currentUserId="u-1"
+      />,
+    );
+    await waitFor(() => expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/threads'));
+    expect(await screen.findByLabelText('Follow thread')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Unfollow thread')).toBeNull();
+  });
+
   it('shows Unfollow when the thread is already in /threads and calls the unfollow endpoint', async () => {
     mockApiFetch.mockImplementation((url: string) => {
       if (url === '/api/v1/threads') {

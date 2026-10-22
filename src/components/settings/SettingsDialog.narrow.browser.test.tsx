@@ -40,7 +40,15 @@ describe.runIf(isDesktopProject)('SettingsDialog in a narrow desktop window', ()
     const dialog = screen.getByTestId('settings-dialog').element().getBoundingClientRect();
     const body = screen.getByTestId('settings-page-profile').element().getBoundingClientRect();
     expect(Math.round(body.width)).toBe(Math.round(dialog.width));
-    // Still a desktop dialog: the X closes it (no phone "Done" bar).
+    // Still a desktop dialog: the X closes it (no phone "Done" bar), level
+    // with the title in the top row.
     await expect.element(screen.getByRole('button', { name: 'Close' })).toBeVisible();
+    const middle = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return r.top + r.height / 2;
+    };
+    const title = document.querySelector('[data-slot="dialog-title"]')!;
+    const close = screen.getByRole('button', { name: 'Close' }).element();
+    expect(Math.abs(middle(title) - middle(close))).toBeLessThanOrEqual(0.5);
   });
 });

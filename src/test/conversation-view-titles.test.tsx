@@ -29,7 +29,7 @@ vi.mock('@/components/chat/markdown/MarkdownComposer', () => ({
 }));
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConversationView } from '@/components/chat/ConversationView';
 import type { Conversation } from '@/types';
@@ -37,6 +37,7 @@ import type { Conversation } from '@/types';
 // --- mocks ---------------------------------------------------------------
 
 let conversationLoading = false;
+let authRole = 'member';
 let userConversations: { conversationID: string; displayName: string }[] | undefined = [];
 let mockConversation: Conversation = {
   id: 'conv-1',
@@ -47,7 +48,7 @@ let mockConversation: Conversation = {
 
 vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({
-    user: { id: 'u-1', displayName: 'Alice', email: 'a@a.com', systemRole: 'member', status: 'active' },
+    user: { id: 'u-1', displayName: 'Alice', email: 'a@a.com', systemRole: authRole, status: 'active' },
     isAuthenticated: true,
     isLoading: false,
     login: vi.fn(),
@@ -251,5 +252,59 @@ describe('ConversationView - Group title', () => {
     renderConversationView();
     // The conversation has a name, so it should be used as the title
     expect(screen.getByText('My Group')).toBeInTheDocument();
+  });
+});
+
+describe('ConversationView - becoming a private channel', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    conversationLoading = false;
+    authRole = 'member';
+    mockConversation = {
+      id: 'conv-1',
+      type: 'group',
+      participantIDs: ['u-1', 'u-2', 'u-3'],
+      createdAt: '2026-01-01T00:00:00Z',
+    };
+  });
+
+  it('opens the dialog from the group\'s title', async () => {
+    const user = userEvent.setup();
+    renderConversationView();
+    await user.click(screen.getByTestId('conversation-title-menu'));
+    await user.click(await screen.findByText('Convert to private channel'));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('Convert to private channel');
+  });
+
+  it('offers nothing to a guest, or in a DM', () => {
+    authRole = 'guest';
+    const view = renderConversationView();
+    expect(screen.queryByTestId('conversation-title-menu')).toBeNull();
+    view.unmount();
+    authRole = 'member';
+    mockConversation = { ...mockConversation, type: 'dm', participantIDs: ['u-1', 'u-2'] };
+    renderConversationView();
+    expect(screen.queryByTestId('conversation-title-menu')).toBeNull();
+  });
+
+  // A link to the group lands in the channel it became, at the same place.
+  it('goes on to the channel a group became', async () => {
+    mockConversation = { ...mockConversation, convertedToChannelID: 'conv-1' };
+    function ChannelRoute() {
+      const location = useLocation();
+      return <p data-testid="channel-route">{location.pathname + location.search + location.hash}</p>;
+    }
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/conversation/conv-1?thread=r-1#msg-m-1']}>
+          <Routes>
+            <Route path="/conversation/:id" element={<ConversationView />} />
+            <Route path="/channel/:id" element={<ChannelRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByTestId('channel-route')).toHaveTextContent('/channel/conv-1?thread=r-1#msg-m-1');
   });
 });

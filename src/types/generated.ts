@@ -1797,6 +1797,13 @@ export interface Conversation {
    * UserConversation.LastReadSeq it yields exact unread counts.
    */
   messageSeq?: number /* int64 */;
+  /**
+   * ConvertedToChannelID: the group became this private channel, which
+   * keeps the conversation's ID and history. The conversation stays only
+   * as a pointer to it.
+   */
+  convertedToChannelID?: string;
+  convertedAt?: string /* RFC3339 */;
 }
 
 //////////

@@ -8,6 +8,7 @@ import { EmojiPicker } from '@/components/EmojiPicker';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { useAuth } from '@/context/AuthContext';
+import { useEmojiMap } from '@/hooks/useEmoji';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { apiFetch, getAccessToken } from '@/lib/api';
 import { inputValueForDate, pad, partsInTimeZone } from '@/lib/datetime-input';
@@ -137,6 +138,7 @@ function UserStatusDialogContent({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const isMobile = useIsMobile();
+  const { data: emojiMap = {} } = useEmojiMap();
   const userTimeZone = user?.timeZone || localTimeZone();
 
   const previewStatus = useMemo(
@@ -242,8 +244,8 @@ function UserStatusDialogContent({
                 setPreset(CUSTOM_PRESET);
               }}
               trigger={(
-                <Button type="button" variant="outline" size="icon" aria-label="Choose status emoji">
-                  <EmojiGlyph emoji={emoji} />
+                <Button type="button" variant="outline" size="icon" aria-label="Choose status emoji" className="overflow-hidden">
+                  <EmojiGlyph emoji={emoji} customMap={emojiMap} />
                 </Button>
               )}
             />

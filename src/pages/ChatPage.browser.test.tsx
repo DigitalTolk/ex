@@ -230,6 +230,7 @@ describe('ChatPage WS router (browser)', () => {
       'onChannelUpdated',
       'onChannelNew',
       'onChannelRemoved',
+      'onConversationConverted',
       'onPresenceChanged',
       'onEmojiAdded',
       'onEmojiRemoved',
@@ -348,6 +349,14 @@ describe('ChatPage WS router (browser)', () => {
     expect(() => lastHandlers().onChannelRemoved?.({})).not.toThrow();
   });
 
+  it('onConversationConverted takes the group off the list, and ignores a bad payload', async () => {
+    const { qc } = await renderChatPage();
+    lastHandlers().onConversationConverted?.({});
+    expect(qc.getQueryData(['userConversations'])).toEqual([{ conversationID: 'conv-1' }]);
+    lastHandlers().onConversationConverted?.({ conversationID: 'conv-1', channelID: 'conv-1', slug: 'ops' });
+    expect(qc.getQueryData(['userConversations'])).toEqual([]);
+  });
+
   it('onPresenceChanged never throws', async () => {
     await renderChatPage();
     expect(() => lastHandlers().onPresenceChanged?.({ userID: 'u-1', online: true })).not.toThrow();
@@ -439,6 +448,14 @@ describe('ChatPage WS router (browser)', () => {
       lastHandlers().onUserChannelUpdated?.({ userState: true });
       const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
       expect(keys).toEqual([['userState']]);
+    });
+
+    it('a thread followed or unfollowed elsewhere refetches the thread list and its alerts', async () => {
+      const { qc } = await renderChatPage();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      lastHandlers().onUserChannelUpdated?.({ threads: true });
+      const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+      expect(keys).toEqual([['userThreads'], ['userState']]);
     });
 
     it('the echo of THIS tab\'s own user-state write does not refetch at all', async () => {

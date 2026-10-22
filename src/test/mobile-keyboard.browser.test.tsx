@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
+import { userEvent } from 'vitest/browser';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ChatPage from '@/pages/ChatPage';
@@ -85,6 +86,17 @@ function installFetch(): () => void {
     if (url.includes('/api/v1/presence')) return json({ online: [ALICE_ID] });
     if (/\/conversations\/[^/?]+\/read$/.test(url)) return new Response(null, { status: 204 });
     if (/\/conversations\/[^/?]+\/(pinned|files)$/.test(url)) return json([]);
+    if (/\/conversations\/[^/?]+\/messages$/.test(url) && method === 'POST') {
+      const { body } = JSON.parse(String(init?.body)) as { body: string };
+      return json({
+        id: 'm-sent',
+        parentID: DM_ID,
+        parentType: 'conversation',
+        authorID: ME_ID,
+        body,
+        createdAt: new Date(Date.UTC(2026, 4, 1, 11, 0)).toISOString(),
+      });
+    }
     if (/\/conversations\/[^/?]+\/messages(\?|$)/.test(url)) {
       // Newest first, as the API pages them.
       return json({ items: [...messages].reverse(), hasMoreOlder: false, hasMoreNewer: false, oldestID: 'm-0', newestID: LAST_ID });
@@ -232,5 +244,23 @@ describe.skipIf(window.__EX_FORCE_DEVICE__ === 'desktop')('the phone chat with t
     expect(lastAboveComposer()).toBe(-200);
     await lowerKeyboard();
     expect(lastAboveComposer()).toBe(-200);
+  });
+
+  // Sending closes the composer and the keyboard goes down: the message just
+  // sent shows right above the composer, not the one before it.
+  it('shows the message just sent once the keyboard is down', async () => {
+    await openChat();
+    await raiseKeyboard();
+    await userEvent.keyboard('A new message');
+    laidOut('[data-testid="schedule-send-hold"]')!.click();
+    fireKeyboard('keyboardWillHide');
+    await keyboardSettled();
+    await frames(3);
+    const sent = Array.from(document.querySelectorAll<HTMLElement>('[data-message-id]')).find((el) =>
+      el.textContent?.includes('A new message'),
+    );
+    expect(sent).toBeDefined();
+    const composer = laidOut('[data-composer-focused]')!.getBoundingClientRect();
+    expect(Math.round(composer.top - sent!.getBoundingClientRect().bottom) || 0).toBe(0);
   });
 });
