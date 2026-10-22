@@ -137,6 +137,66 @@ describe('AppTopBar Back and Forward', () => {
     expect(screen.queryByRole('button', { name: 'Forward' })).toBeNull();
   });
 
+  // jsdom is not a Mac: Alt+← and Alt+→.
+  const press = (key: string, init: KeyboardEventInit = {}) => {
+    const e = new KeyboardEvent('keydown', { key, code: key, altKey: true, bubbles: true, cancelable: true, ...init });
+    act(() => {
+      document.body.dispatchEvent(e);
+    });
+    return e;
+  };
+
+  it('goes back and forward from the keyboard, each only when there is somewhere to go', () => {
+    const nav = installNavigation();
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+    const forward = vi.spyOn(window.history, 'forward').mockImplementation(() => {});
+    render(<AppTopBar />);
+    expect(screen.getByRole('button', { name: 'Back' })).toHaveAttribute('aria-keyshortcuts', 'Alt+ArrowLeft');
+    expect(screen.getByRole('button', { name: 'Forward' })).toHaveAttribute('aria-keyshortcuts', 'Alt+ArrowRight');
+
+    // Nowhere to go: the browser's own shortcut is left to run.
+    expect(press('ArrowLeft').defaultPrevented).toBe(false);
+    expect(press('ArrowRight').defaultPrevented).toBe(false);
+    expect(back).not.toHaveBeenCalled();
+    expect(forward).not.toHaveBeenCalled();
+
+    act(() => nav.move(true, true));
+    expect(press('ArrowLeft').defaultPrevented).toBe(true);
+    expect(back).toHaveBeenCalledTimes(1);
+    expect(press('ArrowRight').defaultPrevented).toBe(true);
+    expect(forward).toHaveBeenCalledTimes(1);
+    // Other keys are not theirs.
+    expect(press('ArrowUp').defaultPrevented).toBe(false);
+    expect(press('ArrowLeft', { altKey: false }).defaultPrevented).toBe(false);
+    expect(back).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a key press something else took, or one composing text', () => {
+    const nav = installNavigation();
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+    render(<AppTopBar />);
+    act(() => nav.move(true, false));
+    const taken = (e: KeyboardEvent) => e.preventDefault();
+    document.body.addEventListener('keydown', taken);
+    press('ArrowLeft');
+    document.body.removeEventListener('keydown', taken);
+    press('ArrowLeft', { isComposing: true });
+    expect(back).not.toHaveBeenCalled();
+  });
+
+  it('stops listening to the keyboard when the bar goes away, and never listens without the buttons', () => {
+    const nav = installNavigation();
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+    const { unmount } = render(<AppTopBar />);
+    act(() => nav.move(true, false));
+    unmount();
+    press('ArrowLeft');
+    Reflect.deleteProperty(window, 'navigation');
+    render(<AppTopBar />);
+    press('ArrowLeft');
+    expect(back).not.toHaveBeenCalled();
+  });
+
   // A phone has its own back button in that corner.
   it('shows none on a phone', () => {
     installNavigation();
