@@ -427,17 +427,25 @@ describe('ChatPage WebSocket handlers', () => {
     expect(qc.getQueryData(['userThreads'])).toBeUndefined();
   });
 
-  it('onMessageEdited for my thread root patches it into /threads live (no refetch)', () => {
+  // The root's echo reaches the whole channel, so it updates a thread already
+  // listed and adds none — not even my own, which I may have unfollowed (a
+  // new row comes with thread.updated, sent to followers only).
+  it('onMessageEdited for a thread root patches its listed row live (no refetch), and adds none', () => {
     const { qc } = renderAt('/', (client) => {
-      client.setQueryData(['userThreads'], []);
+      client.setQueryData(['userThreads'], [
+        { parentID: 'ch-1', parentType: 'channel', threadRootID: 'msg-root', rootAuthorID: 'u-other', rootBody: 'hi', rootCreatedAt: '2026-05-01T09:00:00Z', replyCount: 1, latestActivityAt: '2026-05-01T09:30:00Z' },
+      ]);
     });
     const spy = vi.spyOn(qc, 'invalidateQueries');
-    // A root I authored gains a reply → replyCount bump arrives as message.edited.
     (capturedOptions.onMessageEdited as (d: unknown) => void)(
-      msg({ id: 'msg-root', authorID: 'u-me', parentType: 'channel', replyCount: 1, lastReplyAt: '2026-05-01T10:00:00Z' }),
+      msg({ id: 'msg-root', authorID: 'u-other', parentType: 'channel', replyCount: 2, lastReplyAt: '2026-05-01T10:00:00Z' }),
+    );
+    (capturedOptions.onMessageEdited as (d: unknown) => void)(
+      msg({ id: 'msg-mine', authorID: 'u-me', parentType: 'channel', replyCount: 1, lastReplyAt: '2026-05-01T10:00:00Z' }),
     );
     const threads = qc.getQueryData(['userThreads']) as Array<{ threadRootID: string; replyCount: number }>;
-    expect(threads?.[0]).toMatchObject({ threadRootID: 'msg-root', replyCount: 1 });
+    expect(threads).toHaveLength(1);
+    expect(threads[0]).toMatchObject({ threadRootID: 'msg-root', replyCount: 2 });
     // Patched, not refetched.
     expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).not.toContainEqual(['userThreads']);
   });

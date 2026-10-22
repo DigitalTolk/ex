@@ -205,6 +205,8 @@ export interface Conversation {
   activated?: boolean;
   createdAt: string;
   updatedAt?: string;
+  // The group became this private channel (same ID and history).
+  convertedToChannelID?: string;
 }
 
 export interface ChannelMembership {

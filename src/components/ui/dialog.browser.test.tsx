@@ -89,3 +89,51 @@ describe('useDialogMobileAction outside a dialog', () => {
     expect(document.querySelector('[data-testid="orphan"]')).not.toBeNull();
   });
 });
+
+// On a phone a dialog is a full screen with its title in the top row and its
+// Close (or Cancel / Save) buttons on the right of it: the two sit level.
+describe.skipIf(window.__EX_FORCE_DEVICE__ === 'desktop')('a phone dialog\'s top row', () => {
+  let killAnims: HTMLStyleElement | null = null;
+  beforeEach(() => {
+    killAnims = document.createElement('style');
+    killAnims.textContent = '*,*::before,*::after{animation:none!important;transition:none!important}';
+    document.head.appendChild(killAnims);
+  });
+  afterEach(async () => {
+    for (const m of mounted.splice(0)) await m.unmount();
+    killAnims?.remove();
+    killAnims = null;
+  });
+
+  const middle = (el: Element) => {
+    const r = el.getBoundingClientRect();
+    return r.top + r.height / 2;
+  };
+
+  it.each([
+    ['a Close button', {}, ['dialog-close']],
+    ['a Cancel button', { mobileCloseLabel: 'Cancel' }, ['dialog-mobile-close']],
+    [
+      'Cancel and Save buttons',
+      { mobileCloseLabel: 'Cancel', mobileAction: { label: 'Save', onClick: () => undefined } },
+      ['dialog-mobile-close', 'dialog-mobile-action'],
+    ],
+  ] as const)('puts the title level with %s', async (_name, props, slots) => {
+    await mount(
+      <Dialog open>
+        <DialogContent {...props}>
+          <DialogHeader>
+            <DialogTitle>Set status</DialogTitle>
+          </DialogHeader>
+          <p>Body</p>
+        </DialogContent>
+      </Dialog>,
+    );
+    const title = document.querySelector('[data-slot="dialog-title"]')!;
+    await expect.poll(() => title.getBoundingClientRect().height).toBeGreaterThan(0);
+    for (const slot of slots) {
+      const button = document.querySelector(`[data-slot="${slot}"]`)!;
+      expect(Math.abs(middle(title) - middle(button))).toBeLessThanOrEqual(0.5);
+    }
+  });
+});

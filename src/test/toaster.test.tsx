@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 import { Toaster } from '@/components/Toaster';
 import { showToast } from '@/lib/toast';
 
@@ -95,5 +95,123 @@ describe('Toaster', () => {
     expect((banner.parentElement as HTMLElement).className).toContain('top-');
     expect((plain.parentElement as HTMLElement).className).toContain('bottom-');
     expect(plain.className).toContain('bg-card');
+  });
+
+  describe('notification banners', () => {
+    const banner = (message: string, group: string, onActivate = vi.fn()) =>
+      showToast(message, 'success', { title: 'Alice in ~general', kind: 'notification', group, onActivate });
+
+    it('shows one banner per conversation: the newest message and how many arrived', () => {
+      render(<Toaster />);
+      act(() => {
+        banner('first', 'ch-1:');
+        banner('second', 'ch-1:');
+        banner('third', 'ch-1:');
+        banner('elsewhere', 'ch-2:');
+      });
+      const all = screen.getAllByTestId('toast');
+      expect(all).toHaveLength(2);
+      expect(all[0]).toHaveTextContent('third');
+      expect(all[0]).not.toHaveTextContent('first');
+      expect(all[0]).toHaveTextContent('3 messages');
+      expect(all[1]).toHaveTextContent('elsewhere');
+      expect(all[1].querySelector('[data-testid="toast-count"]')).toBeNull();
+    });
+
+    it('keeps a busy conversation\'s banner up while messages keep arriving', () => {
+      render(<Toaster />);
+      act(() => banner('first', 'ch-1:'));
+      act(() => vi.advanceTimersByTime(3000));
+      act(() => banner('second', 'ch-1:'));
+      act(() => vi.advanceTimersByTime(3000));
+      expect(screen.getByTestId('toast')).toHaveTextContent('second');
+      act(() => vi.advanceTimersByTime(1000));
+      expect(screen.queryByTestId('toast')).toBeNull();
+      // Gone, it starts over: the next message is a banner of its own.
+      act(() => banner('later', 'ch-1:'));
+      expect(screen.getByTestId('toast')).toHaveTextContent('later');
+      expect(screen.queryByTestId('toast-count')).toBeNull();
+    });
+
+    it('opens the newest message when tapped', () => {
+      const first = vi.fn();
+      const newest = vi.fn();
+      render(<Toaster />);
+      act(() => {
+        banner('first', 'ch-1:', first);
+        banner('second', 'ch-1:', newest);
+      });
+      act(() => screen.getByTestId('toast-open').click());
+      expect(newest).toHaveBeenCalledTimes(1);
+      expect(first).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('toast')).toBeNull();
+    });
+
+    it('closes without opening anything', () => {
+      const onActivate = vi.fn();
+      render(<Toaster />);
+      act(() => {
+        banner('first', 'ch-1:', onActivate);
+        banner('other', 'ch-2:');
+      });
+      act(() => screen.getAllByRole('button', { name: 'Dismiss' })[0].click());
+      expect(onActivate).not.toHaveBeenCalled();
+      expect(screen.getAllByTestId('toast')).toHaveLength(1);
+      expect(screen.getByTestId('toast')).toHaveTextContent('other');
+      // Its timer went with it: nothing else is put away early.
+      act(() => vi.advanceTimersByTime(3999));
+      expect(screen.getByTestId('toast')).toHaveTextContent('other');
+    });
+
+    it('closes a banner that has nothing to open', () => {
+      render(<Toaster />);
+      act(() => showToast('approve the deploy', 'success', { title: 'Agent', kind: 'notification' }));
+      expect(screen.queryByTestId('toast-open')).toBeNull();
+      expect(screen.getByTestId('toast')).toHaveTextContent('approve the deploy');
+      act(() => screen.getByRole('button', { name: 'Dismiss' }).click());
+      expect(screen.queryByTestId('toast')).toBeNull();
+    });
+
+    it('updates a conversation\'s banner in place among others', () => {
+      render(<Toaster />);
+      act(() => {
+        banner('other', 'ch-2:');
+        banner('first', 'ch-1:');
+        banner('second', 'ch-1:');
+      });
+      const all = screen.getAllByTestId('toast');
+      expect(all.map((t) => t.textContent)).toEqual([
+        expect.stringContaining('other'),
+        expect.stringContaining('second'),
+      ]);
+    });
+
+    // A banner under a finger stays until the finger lifts, then has its
+    // full time again; a message arriving meanwhile doesn't put it away.
+    it('waits while it is held', () => {
+      render(<Toaster />);
+      act(() => banner('first', 'ch-1:'));
+      fireEvent.pointerDown(screen.getByTestId('toast'));
+      act(() => vi.advanceTimersByTime(5000));
+      act(() => banner('second', 'ch-1:'));
+      act(() => vi.advanceTimersByTime(5000));
+      expect(screen.getByTestId('toast')).toHaveTextContent('second');
+      act(() => {
+        fireEvent.pointerUp(window);
+      });
+      act(() => vi.advanceTimersByTime(3999));
+      expect(screen.getByTestId('toast')).toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.queryByTestId('toast')).toBeNull();
+    });
+
+    it('keeps ungrouped banners apart', () => {
+      render(<Toaster />);
+      act(() => {
+        showToast('one', 'success', { kind: 'notification' });
+        showToast('two', 'success', { kind: 'notification' });
+      });
+      expect(screen.getAllByTestId('toast')).toHaveLength(2);
+    });
   });
 });

@@ -293,6 +293,36 @@ describe('Header', () => {
     expect(onNotificationPrefsClick).toHaveBeenCalledTimes(1);
   });
 
+  // A group message's title opens a menu to make it a private channel.
+  it('offers to make a group a private channel from its title', async () => {
+    const user = userEvent.setup();
+    const onConvertToChannel = vi.fn();
+    renderHeaderWithProviders(<Header title="Alice, Bob" memberCount={3} onConvertToChannel={onConvertToChannel} />);
+    await user.click(screen.getByTestId('conversation-title-menu'));
+    await user.click(await screen.findByText('Convert to private channel'));
+    expect(onConvertToChannel).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers it on a phone from the menu under the title', async () => {
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    const onConvertToChannel = vi.fn();
+    renderHeaderWithProviders(<Header title="Alice, Bob" onConvertToChannel={onConvertToChannel} />);
+    const trigger = screen.getByTestId('conversation-title-menu');
+    expect(trigger).toHaveAttribute('aria-controls', 'mobile-channel-menu');
+    await user.click(trigger);
+    const menu = within(document.getElementById('mobile-channel-menu')!);
+    await user.click(menu.getByText('Convert to private channel'));
+    expect(onConvertToChannel).toHaveBeenCalledTimes(1);
+    expect(document.getElementById('mobile-channel-menu')).toBeNull();
+  });
+
+  it('keeps a title with nothing to offer plain', () => {
+    renderHeaderWithProviders(<Header title="Alice, Bob" />);
+    expect(screen.queryByTestId('conversation-title-menu')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Alice, Bob' })).toBeInTheDocument();
+  });
+
   it('keeps the desktop channel description in the title row', () => {
     render(
       <Header

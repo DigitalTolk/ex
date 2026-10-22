@@ -26,6 +26,7 @@ import { markThreadSeen, noteThreadReadPosition, useFollowThread, useThreadMessa
 import { isReadHeld, keepReadSession, markUnreadSeen, scheduleEndReadSession, threadReadKey, useUnreadAnchor, useUnreadSeen } from '@/lib/read-position';
 import { attachScrollHoverPause } from '@/lib/scroll-hover-pause';
 import { keepBottomEdge } from '@/lib/keep-bottom-edge';
+import { isFollowedThread } from '@/lib/thread-follow';
 import { resolveUnreadDivider } from '@/lib/unread-divider';
 import { UnreadDivider } from './UnreadMarkers';
 import { MessageRowDataProvider } from './MessageRowDataProvider';
@@ -169,8 +170,8 @@ export function ThreadPanel({
     [parentID, parentType, threadRootID],
   );
   const { data: userThreads } = useUserThreads();
-  const isFollowing = !!userThreads?.some(
-    (t) => t.parentID === parentID && t.parentType === parentType && t.threadRootID === threadRootID,
+  const isFollowing = isFollowedThread(
+    userThreads?.find((t) => t.parentID === parentID && t.parentType === parentType && t.threadRootID === threadRootID),
   );
   const followThread = useFollowThread();
   const unfollowThread = useUnfollowThread();

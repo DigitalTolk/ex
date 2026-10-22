@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X } from 'lucide-react';
+import { User as UserIcon, Users, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
-import { useCreateConversation, useSearchUsers } from '@/hooks/useConversations';
+import { useCreateConversation, useSearchUsers, useUserConversations } from '@/hooks/useConversations';
+import { conversationsWith } from '@/lib/conversation-match';
 import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 import { usePresence } from '@/context/PresenceContext';
@@ -30,6 +31,13 @@ export default function NewConversationPage() {
   const { data: searchResults } = useSearchUsers(query);
   const { online } = usePresence();
   const createConversation = useCreateConversation();
+  // The DMs and group messages you already have with everyone picked, the
+  // one with exactly them first.
+  const { data: conversations } = useUserConversations();
+  const existing = useMemo(
+    () => conversationsWith(conversations ?? [], picked.map((p) => p.id), user?.id),
+    [conversations, picked, user?.id],
+  );
 
   // Filter out already-picked users from the suggestion list.
   const suggestions = (searchResults ?? []).filter(
@@ -240,11 +248,37 @@ export default function NewConversationPage() {
           composer the same way an empty chat would. We don't render
           fake messages; just a neutral hint. */}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
-          {picked.length === 0
-            ? 'Type a name above to find someone, then send a message to start the chat.'
-            : 'No messages yet. Send the first one below to start the conversation.'}
-        </div>
+        {existing.length > 0 ? (
+          <section className="space-y-1 p-4" aria-labelledby="existing-conversations">
+            <h2 id="existing-conversations" className="px-2 pb-1 text-xs font-semibold text-muted-foreground">
+              Existing conversations
+            </h2>
+            <ul>
+              {existing.map(({ conversation }) => {
+                const Icon = conversation.type === 'group' ? Users : UserIcon;
+                return (
+                  <li key={conversation.conversationID}>
+                    <button
+                      type="button"
+                      data-testid={`existing-conversation-${conversation.conversationID}`}
+                      onClick={() => navigate(`/conversation/${conversation.conversationID}`)}
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-muted mobile:py-3 mobile:text-base"
+                    >
+                      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      <span className="min-w-0 flex-1 truncate font-medium">{conversation.displayName}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ) : (
+          <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
+            {picked.length === 0
+              ? 'Type a name above to find someone, then send a message to start the chat.'
+              : 'No messages yet. Send the first one below to start the conversation.'}
+          </div>
+        )}
       </div>
 
       {/* Footer / composer area — error sits inline above the composer

@@ -49,12 +49,21 @@ function SidebarHeader({ topStrip = false }: { topStrip?: boolean }) {
 }
 
 // On a phone the Home / Activity switch moves to the bottom tab bar; the
-// drawer just names the screen it shows.
+// drawer just names the screen it shows. Home's list starts at the top of the
+// screen instead, its name only read out.
 function MobileSidebarTitle() {
   const mode = useSidebarModeStore((s) => s.mode);
+  if (mode !== 'activity') {
+    return (
+      <>
+        <h2 className="sr-only" data-testid="mobile-sidebar-title">Home</h2>
+        <div className="h-2 shrink-0" aria-hidden="true" />
+      </>
+    );
+  }
   return (
     <h2 className="shrink-0 px-4 pt-3 pb-3 text-xl leading-[150%] font-semibold" data-testid="mobile-sidebar-title">
-      {mode === 'activity' ? 'Activity' : 'Home'}
+      Activity
     </h2>
   );
 }

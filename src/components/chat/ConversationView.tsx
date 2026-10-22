@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { Navigate, useLocation, useParams, useSearchParams } from 'react-router-dom';
+import { ConvertToChannelDialog } from '@/components/channels/ConvertToChannelDialog';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useFrequentEmojis } from '@/hooks/useEmoji';
@@ -87,6 +88,8 @@ function deriveConversationTitle(
 
 export function ConversationView() {
   const { id } = useParams<{ id: string }>();
+  const location = useLocation();
+  const [convertOpen, setConvertOpen] = useState(false);
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
@@ -333,6 +336,12 @@ export function ConversationView() {
     );
   }
 
+  // The group became a private channel: it carries on there, at the same
+  // message or thread.
+  if (conversation?.convertedToChannelID) {
+    return <Navigate replace to={`/channel/${conversation.convertedToChannelID}${location.search}${location.hash}`} />;
+  }
+
   const conversationErrorStatus = errorStatus(conversationError);
   if (conversationErrorStatus === 404) {
     return <NotFoundPage resource="conversation" />;
@@ -431,7 +440,15 @@ export function ConversationView() {
           pinnedActive={showPinned}
           onFilesClick={toggleFiles}
           filesActive={showFiles}
+          // Anyone in a group may make it a private channel; guests can't
+          // create channels.
+          onConvertToChannel={
+            conversation?.type === 'group' && user?.systemRole !== 'guest' ? () => setConvertOpen(true) : undefined
+          }
         />
+        {conversation?.type === 'group' && (
+          <ConvertToChannelDialog conversationID={conversation.id} open={convertOpen} onOpenChange={setConvertOpen} />
+        )}
         <MessageDropZone onFiles={(files) => void inputRef.current?.uploadFiles(files)}>
           <MessageList
             pages={data?.pages ?? []}

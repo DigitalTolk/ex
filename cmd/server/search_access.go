@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -50,7 +52,10 @@ func newSearchAccess(memberships userChannelLister, conversations userConversati
 // AllowedParentIDs returns the user's channel + conversation IDs from
 // DynamoDB. Two point queries run concurrently; results are cached per-user
 // for allowedParentIDsTTL so debounced search bursts do not fan out into one
-// DynamoDB round-trip pair per keystroke.
+// DynamoDB round-trip pair per keystroke. A failed lookup (a slow request the
+// client gave up on cancels it) is an error, never cached: a partial or empty
+// set would hide results for the TTL, and channel search reads a nil set as
+// "no scoping" — every private channel.
 func (a *searchAccess) AllowedParentIDs(ctx context.Context, userID string) ([]string, error) {
 	if userID == "" {
 		return nil, nil
@@ -62,16 +67,20 @@ func (a *searchAccess) AllowedParentIDs(ctx context.Context, userID string) ([]s
 		wg         sync.WaitGroup
 		channelIDs []string
 		convIDs    []string
+		channelErr error
+		convErr    error
 	)
 	if a.memberships != nil {
 		wg.Add(1)
 		safe.Go(func() {
 			defer wg.Done()
-			if chans, err := a.memberships.ListUserChannels(ctx, userID); err == nil {
-				channelIDs = make([]string, 0, len(chans))
-				for _, c := range chans {
-					channelIDs = append(channelIDs, c.ChannelID)
-				}
+			chans, err := a.memberships.ListUserChannels(ctx, userID)
+			if err != nil {
+				channelErr = fmt.Errorf("search access: list channels: %w", err)
+				return
+			}
+			for _, c := range chans {
+				channelIDs = append(channelIDs, c.ChannelID)
 			}
 		})
 	}
@@ -79,16 +88,22 @@ func (a *searchAccess) AllowedParentIDs(ctx context.Context, userID string) ([]s
 		wg.Add(1)
 		safe.Go(func() {
 			defer wg.Done()
-			if convs, err := a.conversations.ListUserConversations(ctx, userID); err == nil {
-				convIDs = make([]string, 0, len(convs))
-				for _, c := range convs {
-					convIDs = append(convIDs, c.ConversationID)
-				}
+			convs, err := a.conversations.ListUserConversations(ctx, userID)
+			if err != nil {
+				convErr = fmt.Errorf("search access: list conversations: %w", err)
+				return
+			}
+			for _, c := range convs {
+				convIDs = append(convIDs, c.ConversationID)
 			}
 		})
 	}
 	wg.Wait()
-	out := append(channelIDs, convIDs...)
+	if err := errors.Join(channelErr, convErr); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(channelIDs)+len(convIDs))
+	out = append(append(out, channelIDs...), convIDs...)
 	a.put(userID, out)
 	return out, nil
 }

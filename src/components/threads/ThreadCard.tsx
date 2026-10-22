@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { BellOff, Globe, MessageSquare } from 'lucide-react';
+import { Bell, BellOff, Globe, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MessageItem } from '@/components/chat/MessageItem';
 import { isGroupedWithPrevious } from '@/components/chat/MessageListRows';
@@ -23,8 +23,10 @@ import {
 } from '@/hooks/useDrafts';
 import { collectMessageUserIDs } from '@/lib/message-users';
 import { addInViewThread, removeInViewThread } from '@/lib/thread-scope';
+import { isFollowedThread } from '@/lib/thread-follow';
 import {
   markThreadSeen,
+  useFollowThread,
   useThreadMessages,
   useUnfollowThread,
   type ThreadSummary,
@@ -121,7 +123,10 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
   );
   const { map: userMap } = useUsersBatch(userIDs);
   const quickReactions = useFrequentEmojis(6);
+  const followThread = useFollowThread();
   const unfollowThread = useUnfollowThread();
+  // Listed but not followed: an alert (a keyword, an @here) pulled it in.
+  const following = isFollowedThread(summary);
 
   // The "previous" message for the first visible reply: the root when the
   // thread is shown in full, or null when the middle is collapsed (the real
@@ -268,16 +273,16 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
           variant="ghost"
           size="sm"
           className="ml-auto h-7 gap-1 px-2 text-xs"
-          disabled={unfollowThread.isPending}
-          onClick={() => unfollowThread.mutate({
+          disabled={unfollowThread.isPending || followThread.isPending}
+          onClick={() => (following ? unfollowThread : followThread).mutate({
             parentID: summary.parentID,
             parentType: summary.parentType,
             threadRootID: summary.threadRootID,
           })}
-          aria-label="Unfollow thread"
+          aria-label={following ? 'Unfollow thread' : 'Follow thread'}
         >
-          <BellOff className="h-3.5 w-3.5" />
-          Unfollow
+          {following ? <BellOff className="h-3.5 w-3.5" /> : <Bell className="h-3.5 w-3.5" />}
+          {following ? 'Unfollow' : 'Follow'}
         </Button>
         <span
           // shrink-0 + nowrap: on a narrow mobile header the flex squeeze

@@ -640,9 +640,10 @@ describe('NotificationContext browser', () => {
 
   it('webview (no Notification API): surfaces an in-app toast whose tap deep-links', async () => {
     const restore = removeNotificationAPI();
-    const toasts: Array<{ message: string; title?: string; kind?: string; onActivate?: () => void }> = [];
+    type Detail = { message: string; title?: string; kind?: string; group?: string; onActivate?: () => void };
+    const toasts: Detail[] = [];
     const onToast = (e: Event) => {
-      toasts.push((e as CustomEvent<{ message: string; title?: string; kind?: string; onActivate?: () => void }>).detail);
+      toasts.push((e as CustomEvent<Detail>).detail);
     };
     window.addEventListener('app:toast', onToast);
     try {
@@ -657,10 +658,15 @@ describe('NotificationContext browser', () => {
       // Notification deliveries render as the top inverted banner, not a
       // regular bottom toast (they must not blend into the app).
       expect(toasts[0].kind).toBe('notification');
+      // One banner per conversation, and per thread for replies.
+      expect(toasts[0].group).toBe('conv-9:');
       // The toast counts as delivery → a duplicate of the same message is deduped.
       captured!.dispatch(basePayload({ parentType: 'conversation', parentID: 'conv-9', authorID: 'u-other', messageID: 'm-webview-1' }));
       await new Promise((r) => setTimeout(r, 30));
       expect(toasts.length).toBe(1);
+      captured!.dispatch(basePayload({ parentType: 'conversation', parentID: 'conv-9', parentMessageID: 'root-1', authorID: 'u-other', messageID: 'm-webview-3' }));
+      await vi.waitFor(() => expect(toasts.length).toBe(2));
+      expect(toasts[1].group).toBe('conv-9:root-1');
       // Tapping the toast deep-links like a popup click would.
       const before = window.location.pathname;
       toasts[0].onActivate?.();

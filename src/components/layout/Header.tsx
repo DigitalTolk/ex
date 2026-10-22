@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { Users, ChevronDown, ChevronLeft, LogOut, Archive, ArchiveRestore, Pencil, Bell, BellOff, Pin, Paperclip, SlidersHorizontal } from 'lucide-react';
+import { Users, ChevronDown, ChevronLeft, LogOut, Archive, ArchiveRestore, Pencil, Bell, BellOff, Pin, Paperclip, SlidersHorizontal, Lock } from 'lucide-react';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
@@ -60,6 +60,8 @@ interface HeaderProps {
   pinnedActive?: boolean;
   onFilesClick?: () => void;
   filesActive?: boolean;
+  // A group message: its title opens a menu to make it a private channel.
+  onConvertToChannel?: () => void;
 }
 
 export function Header({
@@ -90,6 +92,7 @@ export function Header({
   pinnedActive,
   onFilesClick,
   filesActive,
+  onConvertToChannel,
 }: HeaderProps) {
   const displayTitle = channel?.name ?? title ?? '';
 
@@ -343,7 +346,29 @@ export function Header({
                 )}
                 <div className="min-w-0">
                   <div className="flex min-w-0 items-center gap-1.5">
-                    <h1 className="min-w-0 truncate text-lg font-semibold">{displayTitle}</h1>
+                    {onConvertToChannel ? (
+                      <DropdownMenu modal={false}>
+                        <DropdownMenuTrigger
+                          className="-ml-1 flex min-w-0 max-w-full items-center gap-1 rounded-md px-1 hover:bg-muted/50"
+                          onClick={() => {
+                            if (isMobile) setMobileChannelMenuOpen((open) => !open);
+                          }}
+                          aria-expanded={isMobile ? mobileChannelMenuOpen : undefined}
+                          aria-controls={isMobile ? 'mobile-channel-menu' : undefined}
+                          data-testid="conversation-title-menu"
+                        >
+                          <h1 className="min-w-0 truncate text-lg font-semibold">{displayTitle}</h1>
+                          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start" className="w-60 mobile:hidden">
+                          <DropdownMenuItem onClick={onConvertToChannel}>
+                            <Lock className="mr-2 h-4 w-4" /> Convert to private channel
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    ) : (
+                      <h1 className="min-w-0 truncate text-lg font-semibold">{displayTitle}</h1>
+                    )}
                     {userStatus && <UserStatusIndicator status={userStatus} />}
                   </div>
                   {subtitle && (
@@ -432,6 +457,21 @@ export function Header({
         )}
       </div>
     </header>
+
+      {!channel && onConvertToChannel && mobileChannelMenuOpen && (
+        <div id="mobile-channel-menu" className="border-t px-2 py-2 text-base not-mobile:hidden" data-testid="mobile-channel-menu">
+          <button
+            type="button"
+            className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-muted"
+            onClick={() => {
+              setMobileChannelMenuOpen(false);
+              onConvertToChannel();
+            }}
+          >
+            <Lock className="mr-2 h-4 w-4" /> Convert to private channel
+          </button>
+        </div>
+      )}
 
       {channel && mobileChannelMenuOpen && (
         <div id="mobile-channel-menu" className="border-t px-2 py-2 text-base not-mobile:hidden" data-testid="mobile-channel-menu">

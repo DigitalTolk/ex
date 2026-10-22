@@ -47,9 +47,10 @@ vi.mock('@/context/AuthContext', () => ({
   useOptionalAuth: () => authState,
 }));
 
+const emojiMapRef = vi.hoisted(() => ({ value: {} as Record<string, string> }));
 vi.mock('@/hooks/useEmoji', () => ({
   useEmojis: () => ({ data: [] }),
-  useEmojiMap: () => ({ data: {} }),
+  useEmojiMap: () => ({ data: emojiMapRef.value }),
 }));
 
 function Wrap({ children }: { children: React.ReactNode }) {
@@ -97,6 +98,7 @@ describe('UserStatusDialog browser', () => {
     authState.user.userStatus = undefined;
     tokenRef.value = 'token';
     authState.setAuth.mockClear();
+    emojiMapRef.value = {};
   });
 
   it('renders nothing when there is no signed-in user', async () => {
@@ -327,5 +329,38 @@ describe('UserStatusDialog browser', () => {
     // Second clear succeeds → DELETE.
     await screen.getByRole('button', { name: 'Clear status' }).click();
     await vi.waitFor(() => expect(patchCall('DELETE')).toBeDefined());
+  });
+
+  it('shows a custom status emoji as its image, inside the emoji button', async () => {
+    const pixel = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>');
+    emojiMapRef.value = { company_logo_loop: pixel };
+    authState.user.userStatus = { emoji: ':company_logo_loop:', text: 'Shipping', clearAt: '' };
+    const screen = await mount(<Wrap><UserStatusDialog open onOpenChange={vi.fn()} /></Wrap>);
+    const button = screen.getByRole('button', { name: 'Choose status emoji' });
+    await expect.element(button.getByRole('img', { name: ':company_logo_loop:' })).toBeVisible();
+    expect(button.element().textContent).not.toContain(':company_logo_loop:');
+  });
+
+  it('shows the status emoji while the custom emojis are still loading', async () => {
+    emojiMapRef.value = undefined as unknown as Record<string, string>;
+    authState.user.userStatus = { emoji: ':palm_tree:', text: 'On Vacation', clearAt: '' };
+    const screen = await mount(<Wrap><UserStatusDialog open onOpenChange={vi.fn()} /></Wrap>);
+    await expect.element(screen.getByRole('button', { name: 'Choose status emoji' })).toBeVisible();
+  });
+
+  it('keeps an emoji it cannot show inside the emoji button', async () => {
+    authState.user.userStatus = { emoji: ':company_logo_loop:', text: 'Shipping', clearAt: '' };
+    const screen = await mount(<Wrap><UserStatusDialog open onOpenChange={vi.fn()} /></Wrap>);
+    const button = screen.getByRole('button', { name: 'Choose status emoji' }).element() as HTMLElement;
+    await vi.waitFor(() => expect(button.textContent).toContain(':company_logo_loop:'));
+    const box = button.getBoundingClientRect();
+    const glyph = button.firstElementChild!;
+    const range = document.createRange();
+    range.selectNodeContents(glyph);
+    const text = range.getBoundingClientRect();
+    // The shortcode is wider than the button: it may be clipped, never spill
+    // over the label or the text field beside it.
+    expect(text.width).toBeGreaterThan(box.width);
+    expect(getComputedStyle(button).overflow).toBe('hidden');
   });
 });

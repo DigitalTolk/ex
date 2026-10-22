@@ -509,6 +509,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         showToast(n.body || n.title, 'success', {
           title: n.body ? n.title : undefined,
           kind: 'notification',
+          // One banner per conversation (or thread), however many arrive.
+          group: `${n.parentID}:${n.parentMessageID ?? ''}`,
           onActivate: () => {
             if (n.deepLink) navigateInApp(n.deepLink);
           },

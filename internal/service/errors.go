@@ -1,6 +1,9 @@
 package service
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // ErrForbidden marks a request for an existing resource that the caller is not
 // allowed to access. Handlers use it to distinguish 403 from true 404.
@@ -32,3 +35,7 @@ var ErrInvalidThreadRoot = errors.New("message: invalid thread root")
 // An archived channel keeps its members and history but is read-only until an
 // owner unarchives it. Handlers map it to 409 Conflict.
 var ErrChannelArchived = errors.New("channel: channel is archived")
+
+// ErrConversationConverted: the group message is a private channel now (the
+// same ID). It is used as that channel; the conversation itself is no more.
+var ErrConversationConverted = fmt.Errorf("message: this conversation is a channel now: %w", ErrForbidden)

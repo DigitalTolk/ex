@@ -74,6 +74,7 @@ const threadUpdatedSchema = z.object({
   rootCreatedAt: z.string().min(1),
   replyCount: z.number(),
   latestActivityAt: z.string().min(1),
+  following: z.boolean().optional(),
 }).passthrough();
 
 function parser<T>(schema: z.ZodType<T>): (v: unknown) => T | null {
@@ -92,6 +93,14 @@ export interface ChannelIDPayload {
   channelID: string;
 }
 export const parseChannelID = parser(channelIDSchema);
+
+// A group message became a private channel (same ID).
+const conversationConvertedSchema = z.object({
+  conversationID: z.string().min(1),
+  channelID: z.string().min(1),
+  slug: z.string().min(1),
+}).passthrough();
+export const parseConversationConverted = parser(conversationConvertedSchema);
 export const parseMembersChanged = parseChannelID;
 
 export interface PresencePayload {
@@ -143,6 +152,7 @@ const userChannelUpdatedSchema = z.object({
   categories: z.boolean().optional(),
   userState: z.boolean().optional(),
   unread: z.boolean().optional(),
+  threads: z.boolean().optional(),
 }).passthrough();
 
 export interface UserChannelUpdatedPayload {
@@ -155,6 +165,8 @@ export interface UserChannelUpdatedPayload {
   notificationPrefs?: unknown;
   categories?: boolean;
   userState?: boolean;
+  // A thread was followed or unfollowed on another tab or device.
+  threads?: boolean;
   // Marked unread (not read) elsewhere — refetch the row.
   unread?: boolean;
 }
@@ -171,5 +183,6 @@ export interface ThreadUpdatedPayload {
   rootCreatedAt: string;
   replyCount: number;
   latestActivityAt: string;
+  following?: boolean;
 }
 export const parseThreadUpdated = parser(threadUpdatedSchema) as (v: unknown) => ThreadUpdatedPayload | null;

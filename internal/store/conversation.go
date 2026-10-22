@@ -81,6 +81,12 @@ func DeriveGroupConversationID(participants []string) string {
 	return DeriveID("group:" + strings.Join(sorted, ":"))
 }
 
+// NextGroupConversationID is where the same people's group goes once the one
+// at prev became a channel (which keeps prev).
+func NextGroupConversationID(prev string) string {
+	return DeriveID("group-next:" + prev)
+}
+
 func (s *ConversationStoreImpl) CreateConversation(ctx context.Context, conv *model.Conversation, members []*model.UserConversation) error {
 	// Build transact items: conversation META + member items on CONV side + user-side items.
 	txItems := make([]types.TransactWriteItem, 0, 1+len(conv.ParticipantIDs)+len(members))
@@ -460,6 +466,10 @@ func (s *ConversationStoreImpl) ListAllConversations(ctx context.Context) ([]*mo
 			var ci conversationItem
 			if err := attributevalue.UnmarshalMap(item, &ci); err != nil {
 				return nil, fmt.Errorf("store: unmarshal conversation: %w", err)
+			}
+			// A group that became a channel is listed with the channels.
+			if ci.ConvertedToChannelID != "" {
+				continue
 			}
 			convs = append(convs, &ci.Conversation)
 		}

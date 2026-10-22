@@ -301,13 +301,22 @@ func (s *MessageService) attachRendered(msgs ...*model.Message) {
 }
 
 func (s *MessageService) CheckAccess(ctx context.Context, userID, parentID, parentType string) error {
-	return s.checkAccess(ctx, userID, parentID, parentType)
+	err := s.checkAccess(ctx, userID, parentID, parentType)
+	if errors.Is(err, ErrConversationConverted) {
+		// A reminder or standing order for a group that became a channel.
+		return s.checkAccess(ctx, userID, parentID, ParentChannel)
+	}
+	return err
 }
 
 // CheckWriteAccess is CheckAccess for writes: the parent must also accept new
 // content (an archived channel is read-only).
 func (s *MessageService) CheckWriteAccess(ctx context.Context, userID, parentID, parentType string) error {
-	return s.checkWriteAccess(ctx, userID, parentID, parentType)
+	err := s.checkWriteAccess(ctx, userID, parentID, parentType)
+	if errors.Is(err, ErrConversationConverted) {
+		return s.checkWriteAccess(ctx, userID, parentID, ParentChannel)
+	}
+	return err
 }
 
 func (s *MessageService) CanAccessMessageAttachment(ctx context.Context, userID, parentID, parentType, messageID, attachmentID string) error {
@@ -486,12 +495,21 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 	var sendConv *model.Conversation
 	if parentType == ParentConversation {
 		conv, err := s.conversationAccess(ctx, accessorID, parentID)
-		if err != nil {
+		switch {
+		case errors.Is(err, ErrConversationConverted):
+			// Set up for the group before it became a channel (a scheduled
+			// message, an agent's reply): it goes to the channel.
+			parentType = ParentChannel
+		case err != nil:
+			return nil, err
+		default:
+			sendConv = conv
+		}
+	}
+	if sendConv == nil {
+		if err := s.checkWriteAccess(ctx, accessorID, parentID, parentType); err != nil {
 			return nil, err
 		}
-		sendConv = conv
-	} else if err := s.checkWriteAccess(ctx, accessorID, parentID, parentType); err != nil {
-		return nil, err
 	}
 
 	if body == "" && len(attachmentIDs) == 0 {
@@ -978,6 +996,9 @@ type ThreadSummary struct {
 	RootCreatedAt    time.Time `json:"rootCreatedAt"`
 	ReplyCount       int       `json:"replyCount"`
 	LatestActivityAt time.Time `json:"latestActivityAt"`
+	// False for a thread listed only because an alert pulled it in (a
+	// keyword, an @here) for someone who doesn't follow it.
+	Following bool `json:"following"`
 }
 
 func threadFollowKey(parentID, threadRootID string) string {
@@ -986,7 +1007,9 @@ func threadFollowKey(parentID, threadRootID string) string {
 
 // SetThreadFollow records whether userID follows threadRootID. Following=true
 // adds a thread to /threads without requiring the user to reply. Following=false
-// suppresses implicit participation from authored roots/replies.
+// suppresses implicit participation from authored roots/replies, and takes the
+// thread off /threads at once (its unread alert goes with it). The user's other
+// tabs and devices refresh their lists.
 func (s *MessageService) SetThreadFollow(ctx context.Context, userID, parentID, parentType, threadRootID string, following bool) error {
 	if parentType != ParentChannel && parentType != ParentConversation {
 		return errors.New("thread: invalid parent type")
@@ -1004,14 +1027,25 @@ func (s *MessageService) SetThreadFollow(ctx context.Context, userID, parentID, 
 	if root.ParentMessageID != "" {
 		return errors.New("thread: root must be a top-level message")
 	}
-	return s.threadFollows.SetThreadFollow(ctx, &model.ThreadFollow{
+	if err := s.threadFollows.SetThreadFollow(ctx, &model.ThreadFollow{
 		UserID:       userID,
 		ParentID:     parentID,
 		ParentType:   parentType,
 		ThreadRootID: threadRootID,
 		Following:    following,
 		UpdatedAt:    time.Now(),
+	}); err != nil {
+		return err
+	}
+	if !following && s.userState != nil {
+		if err := s.userState.DeleteUserState(ctx, userID, model.UserStateThreadNotification, threadRootID); err != nil {
+			slog.Warn("unfollow: clear thread alert failed", "userID", userID, "threadRootID", threadRootID, "error", err)
+		}
+	}
+	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
+		"threads": true,
 	})
+	return nil
 }
 
 // threadParticipationIndex is the optional write-time /threads index the
@@ -1026,8 +1060,9 @@ type threadParticipationIndex interface {
 // recordThreadParticipation keeps the /threads index warm at write time: a
 // reply makes both its author and the thread's root author participants, so
 // their /threads lists no longer need to rediscover that by scanning message
-// history. Conditional writes — a deliberate unfollow is never clobbered by
-// an implicit re-follow. Best-effort: a failed write is logged and the lazy
+// history. Replying follows the thread again, past an earlier unfollow; the
+// root author's row is conditional — someone else's reply never clobbers a
+// deliberate unfollow. Best-effort: a failed write is logged and the lazy
 // seed path remains the safety net for pre-index history.
 func (s *MessageService) recordThreadParticipation(ctx context.Context, msg *model.Message, parentType string, root *model.Message) {
 	idx, ok := s.threadFollows.(threadParticipationIndex)
@@ -1052,7 +1087,11 @@ func (s *MessageService) recordThreadParticipation(ctx context.Context, msg *mod
 			Following:    true,
 			UpdatedAt:    now,
 		}
-		if err := idx.SetThreadFollowIfAbsent(ctx, follow); err != nil {
+		write := idx.SetThreadFollowIfAbsent
+		if uid == msg.AuthorID {
+			write = s.threadFollows.SetThreadFollow
+		}
+		if err := write(ctx, follow); err != nil {
 			slog.Warn("thread participation record failed", "userID", uid, "rootID", msg.ParentMessageID, "error", err)
 		}
 	}
@@ -1190,11 +1229,23 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 				delete(participated, rootID)
 			}
 		}
+		// Participation follows a thread; so does being in a DM, short of
+		// an explicit unfollow. An alert alone lists it without following.
+		following := make(map[string]bool, len(participated))
+		for rootID := range participated {
+			following[rootID] = true
+		}
 		for key := range notificationThreads {
 			if !strings.HasPrefix(key, p.id+"#") {
 				continue
 			}
-			participated[strings.TrimPrefix(key, p.id+"#")] = true
+			rootID := strings.TrimPrefix(key, p.id+"#")
+			participated[rootID] = true
+			if f, explicit := followOverrides[key]; explicit {
+				following[rootID] = f
+			} else if p.typ == ParentConversation {
+				following[rootID] = true
+			}
 		}
 		// Build summaries.
 		for rootID := range participated {
@@ -1222,6 +1273,7 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 				RootCreatedAt:    root.CreatedAt,
 				ReplyCount:       root.ReplyCount,
 				LatestActivityAt: latest,
+				Following:        following[rootID],
 			})
 		}
 	}
@@ -1247,26 +1299,31 @@ type batchMessageStore interface {
 // read per parent. The root row carries everything a summary needs
 // (ReplyCount, LastReplyAt) because IncrementReplyMetadata maintains it.
 func (s *MessageService) listUserThreadsFromIndex(ctx context.Context, parentTypes map[string]string, follows []*model.ThreadFollow, notificationThreads map[string]bool) ([]*ThreadSummary, error) {
-	roots := make(map[string]map[string]bool) // parentID → thread root IDs
-	add := func(parentID, rootID string) {
+	// parentID → thread root ID → whether the user follows it.
+	roots := make(map[string]map[string]bool)
+	add := func(parentID, rootID string, following bool) {
 		if parentTypes[parentID] == "" || rootID == "" {
 			return
 		}
 		if roots[parentID] == nil {
 			roots[parentID] = make(map[string]bool)
 		}
-		roots[parentID][rootID] = true
+		roots[parentID][rootID] = roots[parentID][rootID] || following
 	}
+	unfollowed := make(map[string]bool)
 	for _, f := range follows {
 		if f.Following {
-			add(f.ParentID, f.ThreadRootID)
+			add(f.ParentID, f.ThreadRootID, true)
+		} else {
+			unfollowed[threadFollowKey(f.ParentID, f.ThreadRootID)] = true
 		}
 	}
 	// Notification pulls surface a thread even when unfollowed — same
-	// precedence as the legacy scan.
+	// precedence as the legacy scan. A DM participant follows its threads
+	// unless they unfollowed; anyone else is pulled in without following.
 	for key := range notificationThreads {
 		if parentID, rootID, ok := strings.Cut(key, "#"); ok {
-			add(parentID, rootID)
+			add(parentID, rootID, parentTypes[parentID] == ParentConversation && !unfollowed[key])
 		}
 	}
 
@@ -1304,6 +1361,7 @@ func (s *MessageService) listUserThreadsFromIndex(ctx context.Context, parentTyp
 				RootCreatedAt:    root.CreatedAt,
 				ReplyCount:       root.ReplyCount,
 				LatestActivityAt: latest,
+				Following:        set[root.ID],
 			})
 		}
 	}
@@ -1328,6 +1386,10 @@ func (s *MessageService) seedThreadIndex(ctx context.Context, userID string, sum
 	rows := make([]*model.ThreadFollow, 0, len(summaries))
 	for _, sum := range summaries {
 		if _, has := followOverrides[threadFollowKey(sum.ParentID, sum.ThreadRootID)]; has {
+			continue
+		}
+		// Listed by an alert alone: not a follow to make permanent.
+		if !sum.Following {
 			continue
 		}
 		rows = append(rows, &model.ThreadFollow{
@@ -2152,6 +2214,9 @@ func (s *MessageService) conversationAccess(ctx context.Context, userID, parentI
 	conv, err := s.conversations.GetConversation(ctx, parentID)
 	if err != nil {
 		return nil, fmt.Errorf("message: get conversation: %w", err)
+	}
+	if conv.ConvertedToChannelID != "" {
+		return nil, ErrConversationConverted
 	}
 	for _, id := range conv.ParticipantIDs {
 		if id == userID {

@@ -95,6 +95,18 @@ describe('phone list screens', () => {
     expect(window.history.length).toBe(before);
   });
 
+  // Home has no title row: the list starts at the top of the screen (the
+  // tab bar already says where you are). Its name is still read out.
+  it('starts the Home list at the top of the screen', async () => {
+    if (!isPhone()) return;
+    const screen = await renderAt('/');
+    await expect.element(screen.getByTestId('channel-list')).toBeVisible();
+    await expect.element(screen.getByRole('heading', { name: 'Home' })).toBeInTheDocument();
+    const screenTop = screen.getByTestId('mobile-channel-sidebar').element().getBoundingClientRect().top;
+    const listTop = screen.getByTestId('channel-list').element().getBoundingClientRect().top;
+    expect(Math.round(listTop - screenTop)).toBe(8);
+  });
+
   it('opens a search result from the sheet: the sheet and the list both make way for it', async () => {
     if (!isPhone()) return;
     const screen = await renderAt('/');

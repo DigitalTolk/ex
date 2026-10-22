@@ -322,64 +322,62 @@ function rootMsg(overrides: Partial<Message> = {}): Message {
 }
 
 describe('upsertUserThreadFromRoot / userThreadInCache', () => {
-  it('adds my own thread root and reports it in-cache', () => {
+  const row = (overrides: Partial<ThreadSummary> = {}): ThreadSummary => ({
+    parentID: 'ch-1', parentType: 'channel', threadRootID: 'root-1', rootAuthorID: 'me', rootBody: 'r1',
+    rootCreatedAt: '2026-05-01T08:00:00Z', replyCount: 1, latestActivityAt: '2026-05-01T08:30:00Z', ...overrides,
+  });
+
+  // The root's echo reaches everyone in the channel, so it can't say who
+  // follows the thread — the author of the root may have unfollowed it. New
+  // rows come from thread.updated, which goes to followers only.
+  it('never adds a thread, not even my own', () => {
     const qc = new QueryClient();
     expect(userThreadInCache(qc, 'root-1')).toBe(false);
     qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), []);
-    upsertUserThreadFromRoot(qc, rootMsg(), 'me');
-    const list = qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads());
-    expect(list).toHaveLength(1);
-    expect(list?.[0]).toMatchObject({ threadRootID: 'root-1', replyCount: 1, rootBody: 'root body', latestActivityAt: '2026-05-01T10:00:00Z' });
-    expect(userThreadInCache(qc, 'root-1')).toBe(true);
+    upsertUserThreadFromRoot(qc, rootMsg());
+    upsertUserThreadFromRoot(qc, rootMsg({ authorID: 'other' }));
+    expect(qc.getQueryData(queryKeys.userThreads())).toEqual([]);
+    expect(userThreadInCache(qc, 'root-1')).toBe(false);
   });
 
   it('updates an existing thread and re-sorts newest-first', () => {
     const qc = new QueryClient();
     qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), [
-      { parentID: 'ch-1', parentType: 'channel', threadRootID: 'root-1', rootAuthorID: 'other', rootBody: 'r1', rootCreatedAt: '2026-05-01T08:00:00Z', replyCount: 1, latestActivityAt: '2026-05-01T08:30:00Z' },
-      { parentID: 'ch-1', parentType: 'channel', threadRootID: 'root-2', rootAuthorID: 'other', rootBody: 'r2', rootCreatedAt: '2026-05-01T09:00:00Z', replyCount: 2, latestActivityAt: '2026-05-01T09:30:00Z' },
+      row({ rootAuthorID: 'other' }),
+      row({ threadRootID: 'root-2', rootAuthorID: 'other', rootBody: 'r2', replyCount: 2, latestActivityAt: '2026-05-01T09:30:00Z' }),
     ]);
-    // root-1 gets a newer reply — not mine, but already in the list, so it updates.
-    upsertUserThreadFromRoot(qc, rootMsg({ id: 'root-1', authorID: 'other', replyCount: 2, lastReplyAt: '2026-05-01T11:00:00Z' }), 'me');
+    upsertUserThreadFromRoot(qc, rootMsg({ id: 'root-1', authorID: 'other', replyCount: 2, lastReplyAt: '2026-05-01T11:00:00Z' }));
     const list = qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads());
     expect(list?.map((t) => t.threadRootID)).toEqual(['root-1', 'root-2']); // root-1 now newest
-    expect(list?.[0].replyCount).toBe(2);
+    expect(list?.[0]).toMatchObject({ replyCount: 2, rootBody: 'root body', latestActivityAt: '2026-05-01T11:00:00Z' });
+    expect(userThreadInCache(qc, 'root-1')).toBe(true);
   });
 
-  it('does not add a thread I neither authored nor already track', () => {
+  it('keeps whether I follow the thread', () => {
     const qc = new QueryClient();
-    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), []);
-    upsertUserThreadFromRoot(qc, rootMsg({ authorID: 'other' }), 'me');
-    expect(qc.getQueryData(queryKeys.userThreads())).toEqual([]);
+    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), [row({ following: false })]);
+    upsertUserThreadFromRoot(qc, rootMsg({ replyCount: 2 }));
+    expect(qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads())?.[0]).toMatchObject({ replyCount: 2, following: false });
   });
 
-  it('leaves an unloaded list for the fetch, even for my own thread', () => {
+  it('leaves an unloaded list for the fetch', () => {
     const qc = new QueryClient();
-    upsertUserThreadFromRoot(qc, rootMsg(), 'me');
+    upsertUserThreadFromRoot(qc, rootMsg());
     expect(qc.getQueryData(queryKeys.userThreads())).toBeUndefined();
   });
 
   it('is a no-op for a non-root (has parentMessageID) or a root with no replies', () => {
     const qc = new QueryClient();
-    upsertUserThreadFromRoot(qc, rootMsg({ parentMessageID: 'root-x' }), 'me');
-    upsertUserThreadFromRoot(qc, rootMsg({ replyCount: 0 }), 'me');
-    expect(qc.getQueryData(queryKeys.userThreads())).toBeUndefined();
-  });
-
-  it('skips when there is no current user', () => {
-    const qc = new QueryClient();
-    upsertUserThreadFromRoot(qc, rootMsg(), undefined);
-    expect(qc.getQueryData(queryKeys.userThreads())).toBeUndefined();
+    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), [row()]);
+    upsertUserThreadFromRoot(qc, rootMsg({ parentMessageID: 'root-x', replyCount: 5 }));
+    upsertUserThreadFromRoot(qc, rootMsg({ replyCount: 0 }));
+    expect(qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads())?.[0].replyCount).toBe(1);
   });
 
   it('carries the conversation parentType and falls back to createdAt when lastReplyAt is absent', () => {
     const qc = new QueryClient();
-    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), []);
-    upsertUserThreadFromRoot(
-      qc,
-      rootMsg({ parentType: 'conversation', parentID: 'cv-1', lastReplyAt: undefined }),
-      'me',
-    );
+    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), [row({ parentType: 'conversation', parentID: 'cv-1' })]);
+    upsertUserThreadFromRoot(qc, rootMsg({ parentType: 'conversation', parentID: 'cv-1', lastReplyAt: undefined }));
     const list = qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads());
     expect(list?.[0]).toMatchObject({
       parentType: 'conversation',

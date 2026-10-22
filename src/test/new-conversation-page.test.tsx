@@ -7,8 +7,10 @@ import NewConversationPage from '@/pages/NewConversationPage';
 const mockCreate = vi.fn();
 const apiFetchMock = vi.fn();
 
+const userConversations = vi.hoisted(() => ({ value: [] as unknown[] | undefined }));
 vi.mock('@/hooks/useConversations', () => ({
   useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
+  useUserConversations: () => ({ data: userConversations.value }),
   useSearchUsers: (q: string) => ({
     // Mirror the real hook: `data` is undefined (not []) while the query is
     // disabled/unresolved — the page must coerce it.
@@ -400,5 +402,39 @@ describe('NewConversationPage', () => {
     const wrapper = input.parentElement!;
     fireEvent.click(wrapper);
     expect(document.activeElement).toBe(input);
+  });
+
+  // With people picked, the conversations you already have with them are a
+  // click away, the one with exactly them first.
+  it('lists the conversations you already have with the people picked', async () => {
+    userConversations.value = [
+      { conversationID: 'g-ab', type: 'group', displayName: 'Alice, Bob', participantIDs: ['u-me', 'u-1', 'u-2'] },
+      { conversationID: 'dm-a', type: 'dm', displayName: 'Alice', participantIDs: ['u-me', 'u-1'] },
+      { conversationID: 'dm-c', type: 'dm', displayName: 'Carol', participantIDs: ['u-me', 'u-3'] },
+    ];
+    try {
+      renderPage();
+      expect(screen.queryByText('Existing conversations')).toBeNull();
+      fireEvent.change(screen.getByTestId('recipients-input'), { target: { value: 'Al' } });
+      fireEvent.mouseDown(await screen.findByText('Alice'));
+      const rows = screen.getAllByTestId(/^existing-conversation-/).map((el) => el.textContent);
+      expect(rows).toEqual(['Alice', 'Alice, Bob']);
+      fireEvent.click(screen.getByTestId('existing-conversation-g-ab'));
+      expect(await screen.findByTestId('conv-page')).toBeInTheDocument();
+    } finally {
+      userConversations.value = [];
+    }
+  });
+
+  it('lists nothing while your conversations are still loading', async () => {
+    userConversations.value = undefined;
+    try {
+      renderPage();
+      fireEvent.change(screen.getByTestId('recipients-input'), { target: { value: 'Al' } });
+      fireEvent.mouseDown(await screen.findByText('Alice'));
+      expect(screen.queryByText('Existing conversations')).toBeNull();
+    } finally {
+      userConversations.value = [];
+    }
   });
 });

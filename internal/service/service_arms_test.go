@@ -331,7 +331,7 @@ func TestResolveThreadRecipientsSkipsTheMessageItself(t *testing.T) {
 	// own author entry must not feed back into the recipient set.
 	msgs.messages["ch1#r1"] = &model.Message{ID: "r1", ParentID: "ch1", ParentMessageID: "root1", AuthorID: "u-author", Body: "reply", CreatedAt: time.Now()}
 
-	got := svc.resolveThreadRecipients(context.Background(),
+	got, _ := svc.resolveThreadRecipients(context.Background(),
 		&model.Message{ID: "r1", ParentID: "ch1", ParentMessageID: "root1", AuthorID: "u-author"},
 		memberSnapshot{memberIDs: []string{"u-root", "u-author"}})
 	if len(got) != 1 || got[0] != "u-root" {

@@ -491,6 +491,26 @@ describe('ThreadCard', () => {
     });
   });
 
+  // An alert (a keyword, an @here) can list a thread you don't follow: its
+  // card offers to follow it instead.
+  it('follows a thread an alert listed', async () => {
+    apiFetchMock.mockImplementation((url: string) => {
+      if (url.includes('/messages/msg-root/thread')) {
+        return Promise.resolve([makeMessage('msg-root')]);
+      }
+      return Promise.resolve(undefined);
+    });
+    renderCard({ ...makeSummary(), following: false });
+    expect(screen.queryByLabelText('Unfollow thread')).toBeNull();
+    fireEvent.click(await screen.findByLabelText('Follow thread'));
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        '/api/v1/threads/channels/ch-1/msg-root/follow',
+        expect.objectContaining({ method: 'PUT' }),
+      );
+    });
+  });
+
   it('shows unread state in the header', async () => {
     apiFetchMock.mockImplementation((url: string) => {
       if (url.includes('/messages/msg-root/thread')) {

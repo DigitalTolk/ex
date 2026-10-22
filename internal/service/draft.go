@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -190,6 +191,40 @@ func (s *DraftService) DeleteForScope(ctx context.Context, userID, parentID, par
 	}
 	s.publishUpdated(ctx, userID, id)
 	return nil
+}
+
+// MoveConversationDrafts moves these users' drafts in a group message that
+// became a private channel (the same ID) to the channel, thread drafts
+// included, so what they were writing is in the channel's composer. Their
+// other tabs and devices hear of both drafts. Best-effort per draft: one that
+// can't be moved stays where it was, still listed on the Drafts page.
+func (s *DraftService) MoveConversationDrafts(ctx context.Context, userIDs []string, conversationID string) {
+	for _, userID := range userIDs {
+		drafts, err := s.drafts.List(ctx, userID)
+		if err != nil {
+			slog.Warn("draft: list for conversion failed", "userID", userID, "conversationID", conversationID, "error", err)
+			continue
+		}
+		for _, d := range drafts {
+			if d.ParentID != conversationID || d.ParentType != ParentConversation {
+				continue
+			}
+			moved := *d
+			moved.ID = draftID(userID, ParentChannel, conversationID, d.ParentMessageID)
+			moved.ParentType = ParentChannel
+			moved.Gen = store.NewID()
+			res, err := s.drafts.Upsert(ctx, &moved, "")
+			if err != nil || !res.OK {
+				slog.Warn("draft: move to channel failed", "userID", userID, "draftID", d.ID, "error", err)
+				continue
+			}
+			if err := s.drafts.DeleteUnconditional(ctx, userID, d.ID); err != nil {
+				slog.Warn("draft: remove moved draft failed", "userID", userID, "draftID", d.ID, "error", err)
+			}
+			s.publishUpdated(ctx, userID, d.ID)
+			s.publishUpdated(ctx, userID, moved.ID)
+		}
+	}
 }
 
 func (s *DraftService) checkAccess(ctx context.Context, userID, parentID, parentType string) error {

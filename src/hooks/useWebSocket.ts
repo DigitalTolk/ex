@@ -36,6 +36,7 @@ interface UseWebSocketOptions {
   onMessageDeleted?: WSCallback;
   onMembersChanged?: WSCallback;
   onConversationNew?: WSCallback;
+  onConversationConverted?: WSCallback;
   onChannelArchived?: WSCallback;
   onChannelUnarchived?: WSCallback;
   onChannelUpdated?: WSCallback;
@@ -217,6 +218,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
               break;
             case EventType.ConversationNew:
               callbacksRef.current.onConversationNew?.(payload);
+              break;
+            case EventType.ConversationConverted:
+              callbacksRef.current.onConversationConverted?.(payload);
               break;
             case EventType.ChannelArchived:
               callbacksRef.current.onChannelArchived?.(payload);

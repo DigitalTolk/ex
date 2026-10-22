@@ -39,6 +39,14 @@
   }
 }
 
+/* Desktop app: the window is dragged by the top bar, behind the search field,
+   and by the box above Home in the sidebar. Whatever opens over them — a
+   dialog, a menu, a notification banner, each rendered outside the app's
+   root — is not part of the window's frame, and stays clickable. */
+body > :not(#root) {
+  -webkit-app-region: no-drag;
+}
+
 /* macOS Electron (titleBarStyle: hiddenInset) overlays the traffic lights on
    the web content's top-left; the top bar's left column pads past them so the
    compact-tier sidebar toggle is never buried underneath. */

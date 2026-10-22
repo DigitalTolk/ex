@@ -409,6 +409,23 @@ describe('useWebSocket', () => {
     expect(onConversationNew).toHaveBeenCalledWith({ conversationID: 'conv-1' });
   });
 
+  it('calls onConversationConverted when a group becomes a private channel', async () => {
+    const onConversationConverted = vi.fn();
+    renderHook(() =>
+      useWebSocket({ onConversationConverted, enabled: true }),
+    );
+    await flushConnect();
+
+    const ws = MockWebSocket.instances[0];
+    ws.simulateOpen();
+    ws.simulateMessage(JSON.stringify({
+      type: 'conversation.converted',
+      data: JSON.stringify({ conversationID: 'g-1', channelID: 'g-1', slug: 'ops' }),
+    }));
+
+    expect(onConversationConverted).toHaveBeenCalledWith({ conversationID: 'g-1', channelID: 'g-1', slug: 'ops' });
+  });
+
   it('calls onChannelArchived when receiving a channel.archived event', async () => {
     const onChannelArchived = vi.fn();
     renderHook(() =>

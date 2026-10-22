@@ -249,8 +249,9 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
       className={cn(
         // On a phone a dialog is a full screen, so its title is the screen's
         // heading: the same size as every other screen heading, and level
-        // with the Close / Done button in the top row.
-        "font-heading text-base leading-none font-medium mobile:text-xl mobile:leading-9 mobile:font-semibold",
+        // with the Close / Done button in the top row (a 44px touch target,
+        // so the title's line is 44px too).
+        "font-heading text-base leading-none font-medium mobile:text-xl mobile:leading-11 mobile:font-semibold",
         className
       )}
       {...props}
