@@ -14,6 +14,7 @@ export function TooltipIconButton({
   className,
   pressed,
   testId,
+  shortcut,
 }: {
   label: string;
   children: ReactNode;
@@ -23,6 +24,8 @@ export function TooltipIconButton({
   // For icon TOGGLES: exposes the on/off state as aria-pressed.
   pressed?: boolean;
   testId?: string;
+  // A keyboard shortcut for the same action, shown in the tooltip.
+  shortcut?: { label: string; aria: string };
 }) {
   return (
     <Tooltip>
@@ -35,6 +38,7 @@ export function TooltipIconButton({
             className={className}
             aria-label={label}
             aria-pressed={pressed}
+            aria-keyshortcuts={shortcut?.aria}
             data-testid={testId}
             disabled={disabled}
             onClick={onClick}
@@ -43,7 +47,14 @@ export function TooltipIconButton({
       >
         {children}
       </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
+      <TooltipContent>
+        {label}
+        {shortcut && (
+          <kbd data-slot="kbd" className="font-sans text-muted-foreground">
+            {shortcut.label}
+          </kbd>
+        )}
+      </TooltipContent>
     </Tooltip>
   );
 }

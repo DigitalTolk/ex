@@ -12,6 +12,8 @@ import { emojiGlyphs } from './extensions/emojiGlyphs';
 import { composerAutocomplete, type CompletionProviders } from './extensions/completions';
 import { applyMark, applyBlock, getActiveFormats } from './extensions/commands';
 import { composerTooltips, visualViewportRepositioner } from './tooltipSpace';
+import { withoutHistoryKeys } from '@/lib/history-shortcut';
+import { isApplePlatform } from '@/lib/platform';
 
 export type { WysiwygEditorHandle, ActiveFormat };
 
@@ -230,7 +232,8 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
               },
             },
             ...historyKeymap,
-            ...defaultKeymap,
+            // Back and Forward's keys are theirs here too.
+            ...withoutHistoryKeys(defaultKeymap, isApplePlatform(navigator.userAgent)),
           ]),
           EditorView.domEventHandlers({
             paste: (event) => {

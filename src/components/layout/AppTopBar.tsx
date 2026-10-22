@@ -1,9 +1,12 @@
+import { useEffect } from 'react';
 import { ArrowLeft, ArrowRight, ChevronLeft, Menu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TooltipIconButton } from '@/components/ui/tooltip-icon-button';
 import { SearchBar } from '@/components/SearchBar';
 import { useHistoryTraversal } from '@/hooks/useHistoryTraversal';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { historyShortcuts, historyStepFor, type HistoryStep } from '@/lib/history-shortcut';
+import { isApplePlatform } from '@/lib/platform';
 import { usePageTitleStore } from '@/stores/page-title';
 
 interface AppTopBarProps {
@@ -105,19 +108,42 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
   );
 }
 
-const HISTORY_BUTTON_CLASS = 'size-7 text-sidebar-foreground hover:bg-sidebar-accent';
+// Disabled, an arrow only dims (no dark-mode chip: it would read as pressed).
+const HISTORY_BUTTON_CLASS = 'size-7 text-sidebar-foreground hover:bg-sidebar-accent dark:disabled:bg-transparent';
 
-// The tab's history, Slack-style. Hidden where the browser can't say whether
-// there is anywhere to go.
+const APPLE = isApplePlatform(navigator.userAgent);
+const SHORTCUTS = historyShortcuts(APPLE);
+
+function step(to: HistoryStep) {
+  if (to === 'back') window.history.back();
+  else window.history.forward();
+}
+
+// The tab's history, Slack-style, from these buttons or the keyboard. Hidden
+// where the browser can't say whether there is anywhere to go.
 function HistoryButtons() {
   const { supported, canGoBack, canGoForward } = useHistoryTraversal();
+  useEffect(() => {
+    if (!supported) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.isComposing) return;
+      const to = historyStepFor(e, APPLE);
+      // Nowhere to go: the browser's own shortcut, if it has one, still runs.
+      if (to === null || !(to === 'back' ? canGoBack : canGoForward)) return;
+      e.preventDefault();
+      step(to);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [supported, canGoBack, canGoForward]);
   if (!supported) return null;
   return (
     <>
       <TooltipIconButton
         label="Back"
+        shortcut={SHORTCUTS.back}
         disabled={!canGoBack}
-        onClick={() => window.history.back()}
+        onClick={() => step('back')}
         className={HISTORY_BUTTON_CLASS}
         testId="history-back"
       >
@@ -125,8 +151,9 @@ function HistoryButtons() {
       </TooltipIconButton>
       <TooltipIconButton
         label="Forward"
+        shortcut={SHORTCUTS.forward}
         disabled={!canGoForward}
-        onClick={() => window.history.forward()}
+        onClick={() => step('forward')}
         className={HISTORY_BUTTON_CLASS}
         testId="history-forward"
       >

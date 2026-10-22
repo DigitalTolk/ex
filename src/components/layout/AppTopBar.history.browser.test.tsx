@@ -3,7 +3,10 @@ import { render } from 'vitest-browser-react';
 import { page } from 'vitest/browser';
 import { BrowserRouter, Link, useLocation } from 'react-router-dom';
 import { AppLayout } from './AppLayout';
+import { EditorView } from '@codemirror/view';
+import { MarkdownEditor } from '@/components/chat/markdown/MarkdownEditor';
 import { SIDEBAR_WIDTH } from '@/lib/panel-width';
+import { isApplePlatform } from '@/lib/platform';
 
 // Back and Forward in the top bar, Slack-style: through the tab's real
 // history, beside the sidebar, with the search field still centred.
@@ -47,6 +50,7 @@ function Page() {
     <div>
       <p data-testid="path">{pathname}</p>
       <Link to="/channel/b">to b</Link>
+      <MarkdownEditor ariaLabel="Message input" initialBody="    hello" />
     </div>
   );
 }
@@ -103,6 +107,63 @@ describe('Back and Forward in the top bar', () => {
     await forward.click();
     await expect.element(path).toHaveTextContent('/channel/b');
     await expect.element(forward).toBeDisabled();
+  });
+
+  // ⌘[ / ⌘] on a Mac, Alt+← / Alt+→ elsewhere — from the page, and from the
+  // message box, whose editor uses the same keys for itself otherwise.
+  // (Dispatched, not typed: a real ⌘[ would also be the test browser's own.)
+  it('go back and forward from the keyboard, also from the message box', async () => {
+    if (!isDesktopProject) return;
+    const apple = isApplePlatform(navigator.userAgent);
+    const chord = (to: 'back' | 'forward'): KeyboardEventInit =>
+      apple
+        ? { key: to === 'back' ? '[' : ']', code: to === 'back' ? 'BracketLeft' : 'BracketRight', metaKey: true }
+        : { key: to === 'back' ? 'ArrowLeft' : 'ArrowRight', code: to === 'back' ? 'ArrowLeft' : 'ArrowRight', altKey: true };
+    const press = (target: Element, to: 'back' | 'forward') =>
+      target.dispatchEvent(new KeyboardEvent('keydown', { ...chord(to), bubbles: true, cancelable: true }));
+    await renderLayout();
+    const path = page.getByTestId('path');
+    await page.getByRole('link', { name: 'to b' }).click();
+    await expect.element(path).toHaveTextContent('/channel/b');
+
+    press(document.body, 'back');
+    await expect.element(path).toHaveTextContent('/channel/a');
+    press(document.body, 'forward');
+    await expect.element(path).toHaveTextContent('/channel/b');
+
+    const editor = page.getByRole('textbox', { name: 'Message input' });
+    await editor.click();
+    press(editor.element(), 'back');
+    await expect.element(path).toHaveTextContent('/channel/a');
+    // Not indented, nor anything else, on the way.
+    expect(EditorView.findFromDOM(editor.element() as HTMLElement)!.state.doc.toString()).toBe('    hello');
+    press(editor.element(), 'forward');
+    await expect.element(path).toHaveTextContent('/channel/b');
+  });
+
+  it('show their shortcuts on hover', async () => {
+    if (!isDesktopProject) return;
+    await renderLayout();
+    const back = page.getByRole('button', { name: 'Back' });
+    await page.getByRole('link', { name: 'to b' }).click();
+    await expect.element(back).toBeEnabled();
+    await back.hover();
+    const label = isApplePlatform(navigator.userAgent) ? '⌘[' : 'Alt ←';
+    await expect.element(page.getByText(label, { exact: true })).toBeVisible();
+  });
+
+  // Not the dark theme's disabled-button chip, which would read as pressed.
+  it('only dim an arrow with nowhere to go, in the dark theme too', async () => {
+    if (!isDesktopProject) return;
+    document.documentElement.classList.add('dark');
+    try {
+      await renderLayout();
+      const forward = page.getByRole('button', { name: 'Forward' });
+      await expect.element(forward).toBeDisabled();
+      expect(getComputedStyle(forward.element()).backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    } finally {
+      document.documentElement.classList.remove('dark');
+    }
   });
 
   // A notification click pushes its page itself, outside the router.
