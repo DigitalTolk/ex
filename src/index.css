@@ -47,13 +47,27 @@ body > :not(#root) {
   -webkit-app-region: no-drag;
 }
 
+/* The top bar's side columns are never narrower than its left-hand controls
+   (AppTopBar), so the search field between them stays centred: Back and
+   Forward, plus the sidebar toggle on the compact tier. */
+:root {
+  --top-bar-side: calc(2 * 1.75rem + 0.25rem);
+}
+.tier-compact {
+  --top-bar-side: calc(3 * 1.75rem + 2 * 0.25rem);
+}
+
 /* macOS Electron (titleBarStyle: hiddenInset) overlays the traffic lights on
-   the web content's top-left; the top bar's left column pads past them so the
-   compact-tier sidebar toggle is never buried underneath. */
-.electron-mac [data-topbar-left='true'] {
+   the web content's top-left; without the sidebar beside it, the top bar's
+   left column pads past them so its controls are never buried underneath.
+   (On the full tier the bar starts beside the sidebar, clear of them.) */
+.electron-mac:not(.tier-full) [data-topbar-left='true'] {
   /* Clear the macOS traffic-light cluster with margin — 4.5rem tucked the
      compact-tier hamburger partly under the rightmost button. */
   padding-left: 5.5rem;
+}
+.electron-mac.tier-compact {
+  --top-bar-side: calc(5.5rem + 3 * 1.75rem + 2 * 0.25rem);
 }
 @custom-variant data-open {
   &:where([data-state="open"]),

@@ -1,6 +1,8 @@
-import { ChevronLeft, Menu } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ChevronLeft, Menu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { TooltipIconButton } from '@/components/ui/tooltip-icon-button';
 import { SearchBar } from '@/components/SearchBar';
+import { useHistoryTraversal } from '@/hooks/useHistoryTraversal';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { usePageTitleStore } from '@/stores/page-title';
 
@@ -11,9 +13,10 @@ interface AppTopBarProps {
 
 /**
  * Slim app-wide top bar — the global SearchBar centred between two equal side
- * columns. The mobile menu button (left) opens the channels drawer; it stays
- * in the AppLayout's swipe handler hierarchy. The account menu lives at the
- * bottom of the sidebar (see AccountMenu).
+ * columns. Back and Forward sit at the left, beside the sidebar. The mobile
+ * menu button (left) opens the channels drawer; it stays in the AppLayout's
+ * swipe handler hierarchy. The account menu lives at the bottom of the
+ * sidebar (see AccountMenu).
  */
 export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarProps) {
   const isMobile = useIsMobile();
@@ -28,7 +31,7 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
       // strip is draggable-as-a-titlebar on native via Capacitor
       // (carve-outs cover the interactive children).
       // Equal 1fr side columns keep the search field centred in the
-      // viewport regardless of how wide the left (channels) control is — on EVERY tier. On the COMPACT tier
+      // viewport regardless of how wide the left controls are — on EVERY tier. On the COMPACT tier
       // (narrow desktop window) the field stays centred but its column
       // caps at 17rem instead of 36rem, and the hamburger docks against
       // the field's LEFT edge (justify-end on the left column) instead of
@@ -47,7 +50,13 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
       // mobile keyboard background must match the sidebar, not the chat.
       data-keyboard-surface="sidebar"
     >
-      <div className="flex items-center compact:justify-end" data-topbar-left="true">
+      {/* Both side columns are held at least as wide as the controls on the
+          left (--top-bar-side, index.css), so the search stays centred. */}
+      <div
+        className="flex items-center gap-1 compact:justify-end not-mobile:min-w-(--top-bar-side)"
+        data-topbar-left="true"
+      >
+        {!isMobile && <HistoryButtons />}
         {/* The hamburger shows whenever the channel sidebar isn't already
             open (mobile drawer closed, or tablet md–lg which has no
             permanent sidebar). When it should be hidden — drawer open, or
@@ -91,7 +100,38 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
       )}
 
       {/* Empty right column: balances the left one so the search stays centred. */}
-      <div aria-hidden="true" />
+      <div aria-hidden="true" className="not-mobile:min-w-(--top-bar-side)" />
     </header>
+  );
+}
+
+const HISTORY_BUTTON_CLASS = 'size-7 text-sidebar-foreground hover:bg-sidebar-accent';
+
+// The tab's history, Slack-style. Hidden where the browser can't say whether
+// there is anywhere to go.
+function HistoryButtons() {
+  const { supported, canGoBack, canGoForward } = useHistoryTraversal();
+  if (!supported) return null;
+  return (
+    <>
+      <TooltipIconButton
+        label="Back"
+        disabled={!canGoBack}
+        onClick={() => window.history.back()}
+        className={HISTORY_BUTTON_CLASS}
+        testId="history-back"
+      >
+        <ArrowLeft className="size-4" />
+      </TooltipIconButton>
+      <TooltipIconButton
+        label="Forward"
+        disabled={!canGoForward}
+        onClick={() => window.history.forward()}
+        className={HISTORY_BUTTON_CLASS}
+        testId="history-forward"
+      >
+        <ArrowRight className="size-4" />
+      </TooltipIconButton>
+    </>
   );
 }
