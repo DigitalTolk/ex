@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { AppTopBar } from './AppTopBar';
 
 vi.mock('@/components/SearchBar', () => ({
@@ -73,5 +73,78 @@ describe('AppTopBar page title (phone)', () => {
     expect(screen.queryByTestId('mobile-page-title')).toBeNull();
     third.unmount();
     usePageTitleStore.setState({ title: null });
+  });
+});
+
+// jsdom has no Navigation API; a stand-in reports what the browser would.
+class FakeNavigation extends EventTarget {
+  canGoBack = false;
+  canGoForward = false;
+  move(back: boolean, forward: boolean) {
+    this.canGoBack = back;
+    this.canGoForward = forward;
+    this.dispatchEvent(new Event('currententrychange'));
+  }
+}
+
+describe('AppTopBar Back and Forward', () => {
+  afterEach(() => {
+    Reflect.deleteProperty(window, 'navigation');
+    vi.restoreAllMocks();
+  });
+
+  function installNavigation(): FakeNavigation {
+    const nav = new FakeNavigation();
+    Object.defineProperty(window, 'navigation', { value: nav, configurable: true });
+    return nav;
+  }
+
+  it('goes back and forward through the history, each only when there is somewhere to go', () => {
+    const nav = installNavigation();
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+    const forward = vi.spyOn(window.history, 'forward').mockImplementation(() => {});
+    render(<AppTopBar />);
+    const backButton = screen.getByRole('button', { name: 'Back' });
+    const forwardButton = screen.getByRole('button', { name: 'Forward' });
+    expect(backButton).toBeDisabled();
+    expect(forwardButton).toBeDisabled();
+
+    act(() => nav.move(true, false));
+    expect(backButton).toBeEnabled();
+    expect(forwardButton).toBeDisabled();
+    fireEvent.click(backButton);
+    expect(back).toHaveBeenCalledTimes(1);
+
+    act(() => nav.move(false, true));
+    expect(backButton).toBeDisabled();
+    expect(forwardButton).toBeEnabled();
+    fireEvent.click(forwardButton);
+    expect(forward).toHaveBeenCalledTimes(1);
+  });
+
+  // They come before the sidebar toggle, which stays against the search.
+  it('puts them first in the left column', () => {
+    installNavigation();
+    render(<AppTopBar />);
+    const left = screen.getByTestId('app-shell-header').querySelector('[data-topbar-left="true"]')!;
+    const names = [...left.querySelectorAll('button')].map((b) => b.getAttribute('aria-label'));
+    expect(names).toEqual(['Back', 'Forward', 'Open channels']);
+  });
+
+  it('shows none where the browser cannot say where history goes', () => {
+    render(<AppTopBar />);
+    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Forward' })).toBeNull();
+  });
+
+  // A phone has its own back button in that corner.
+  it('shows none on a phone', () => {
+    installNavigation();
+    mobile.value = true;
+    render(<AppTopBar onOpenChannels={vi.fn()} />);
+    expect(screen.queryByTestId('history-back')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Forward' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Back' })).toBeInTheDocument();
+    mobile.value = false;
   });
 });
