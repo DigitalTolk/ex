@@ -503,37 +503,14 @@ func (s *RunStore) DeleteRunEvents(ctx context.Context, runID string) error {
 	return s.batchDeleteKeys(ctx, items, "delete run events")
 }
 
-// batchDeleteKeys deletes the PK/SK pairs of already-fetched rows in batches of
-// 25, retrying UnprocessedItems: under throttling DynamoDB returns deletes it
-// silently did NOT apply, and a dropped delete here would leave orphan rows
-// behind an archived timeline.
+// batchDeleteKeys deletes the PK/SK pairs of already-fetched rows through
+// deleteAll (25-item chunks, UnprocessedItems drained on the shared backed-off
+// schedule): under throttling DynamoDB returns deletes it silently did NOT
+// apply, and a dropped delete here would leave orphan rows behind an archived
+// timeline.
 func (s *RunStore) batchDeleteKeys(ctx context.Context, items []map[string]types.AttributeValue, what string) error {
-	for i := 0; i < len(items); i += 25 {
-		end := min(i+25, len(items))
-		batch := make([]types.WriteRequest, 0, end-i)
-		for _, item := range items[i:end] {
-			batch = append(batch, types.WriteRequest{
-				DeleteRequest: &types.DeleteRequest{
-					Key: map[string]types.AttributeValue{"PK": item["PK"], "SK": item["SK"]},
-				},
-			})
-		}
-		input := &dynamodb.BatchWriteItemInput{
-			RequestItems: map[string][]types.WriteRequest{s.Table: batch},
-		}
-		for attempt := 0; attempt < 3; attempt++ {
-			out, err := s.Client.BatchWriteItem(ctx, input)
-			if err != nil {
-				return fmt.Errorf("store: %s: %w", what, err)
-			}
-			if len(out.UnprocessedItems[s.Table]) == 0 {
-				break
-			}
-			if attempt == 2 {
-				return fmt.Errorf("store: %s: %d unprocessed after retries", what, len(out.UnprocessedItems[s.Table]))
-			}
-			input.RequestItems = out.UnprocessedItems
-		}
+	if err := s.deleteAll(ctx, primaryKeys(items)); err != nil {
+		return fmt.Errorf("store: %s: %w", what, err)
 	}
 	return nil
 }

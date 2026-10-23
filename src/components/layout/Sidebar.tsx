@@ -1,45 +1,26 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useState, useMemo, useRef } from 'react';
-import { flushSync } from 'react-dom';
-import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { monitorForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
-import {
-  extractClosestEdge,
-  type Edge,
-} from '@atlaskit/pragmatic-drag-and-drop-hitbox/closest-edge';
+import { Fragment, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   PragmaticCategoryDropHitbox,
   PragmaticCategoryHeader,
   PragmaticChannelRow,
   PragmaticConversationRow,
   PragmaticSection,
+  SidebarDropGap,
 } from './sidebar-dnd';
-import {
-  CATEGORY_DROP_END,
-  debugElapsedMs,
-  sidebarDndDebug,
-  type ChannelDropArea,
-  type DragPayload,
-  type DropIndicator,
-  type DropPayload,
-  type ResolvedDrop,
-} from './sidebar-dnd-core';
-import { useUsersBatch } from '@/hooks/useUsersBatch';
-import { slugify } from '@/lib/format';
+import { CATEGORY_DROP_END } from './sidebar-dnd-core';
+import { dropCount } from './sidebar-drop-resolution';
+import { useSidebarDrag } from './useSidebarDrag';
+import { foldedSectionItems, isSectionHidden, spacedSectionKeys, useSidebarSections } from './useSidebarSections';
+import { dmPartnerID, useDMPartners } from './useDMPartners';
 import {
   Plus,
   ChevronDown,
-  BookUser,
-  MessagesSquare,
-  Bot,
-  FilePenLine,
   MoreVertical,
   Trash2,
   ArrowDownAZ,
   Clock3,
-  Loader2,
 } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
-import { AI_HUB_HOME, isAiHubPath } from '@/lib/ai-hub';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -50,32 +31,22 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { isGuest } from '@/lib/roles';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
-import { useUserChannels } from '@/hooks/useChannels';
-import { useUserConversations } from '@/hooks/useConversations';
-import { getSeenMap, mergeSeenMaps, THREAD_SEEN_CHANGED_EVENT, unreadThreadIDs, useUserThreads } from '@/hooks/useThreads';
-import { useUserState } from '@/hooks/useUserState';
-import { useDrafts } from '@/hooks/useDrafts';
 import { deviceKind } from '@/lib/device';
 import { usePointerDevice } from '@/hooks/usePointerDevice';
-import { useIsMobile } from '@/hooks/useIsMobile';
-import { useCategories, useCreateCategory, useDeleteCategory, useReorderCategories, useReorderSidebar, type SidebarMoveRequest } from '@/hooks/useSidebar';
-import { archivedSidebarChannels, groupSidebarItems, isSidebarItemUnread, SidebarSectionKeys, type SidebarItem, type ConversationSidebarSort } from '@/lib/sidebar-groups';
+import { useSidebarViewPreferences } from '@/hooks/useSidebarViewPreferences';
+import { SidebarSectionKeys } from '@/lib/sidebar-groups';
 import { SidebarUnreadControls } from '@/components/layout/SidebarUnreadControls';
-import { computeSidebarReorder, type SidebarSectionTarget } from '@/lib/sidebar-reorder';
-import type { SidebarCategory } from '@/types';
 import { ChannelRow } from './ChannelRow';
 import { ConversationRow } from './ConversationRow';
+import { SidebarPageLinks } from './SidebarPageLinks';
+import { DeleteCategoryDialog, SidebarAddCategory } from './SidebarCategoryControls';
+import { SidebarArchivedSection } from './SidebarArchivedSection';
 import { CreateChannelDialog } from '@/components/channels/CreateChannelDialog';
-import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 
 interface SidebarProps {
   onClose: () => void;
 }
 
-const CONVERSATION_SORT_STORAGE_KEY = 'sidebar.conversationSort';
-// Per-device unread view preferences, like the DM sort. Both default off.
-const UNREAD_SECTION_STORAGE_KEY = 'sidebar.unreadSection';
-const UNREAD_ONLY_STORAGE_KEY = 'sidebar.unreadOnly';
 function SidebarSectionsSkeleton() {
   return (
     <div className="mt-2 space-y-4 px-2" data-testid="sidebar-primary-loading" aria-hidden="true">
@@ -92,908 +63,35 @@ function SidebarSectionsSkeleton() {
 
 export function Sidebar({ onClose }: SidebarProps) {
   const { user } = useAuth();
-  const { unreadThreadNotifications, hiddenConversations, hideConversation } = useUnread();
-  const { data: channels } = useUserChannels();
-  const conversationsQuery = useUserConversations();
-  const { data: conversations } = conversationsQuery;
-  const { data: threads } = useUserThreads();
-  const { data: userState } = useUserState();
-  const { data: drafts } = useDrafts();
-  const { data: categories } = useCategories();
-  const sidebarPrimaryDataReady =
-    conversations !== undefined || conversationsQuery.isError;
-  const createCategory = useCreateCategory();
-  const deleteCategory = useDeleteCategory();
-  const reorderSidebar = useReorderSidebar();
-  const reorderCategories = useReorderCategories();
+  const { hideConversation } = useUnread();
+  const view = useSidebarViewPreferences();
+  const { unreadSection, unreadOnly } = view;
+  const { ready, sections: sidebarSections, archivedChannels, visibleConversations, categories } = useSidebarSections(view);
+  const dmUserMap = useDMPartners(visibleConversations, user?.id);
+  const { isDraggingCategory, dropIndicator, suppressedNavigationID, clearSuppressedNavigation } = useSidebarDrag(
+    sidebarSections,
+    categories,
+  );
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   // The Archived section starts folded: archived channels are history, not
   // where work happens.
   const [archivedOpen, setArchivedOpen] = useState(false);
-  const [conversationSort, setConversationSort] = useState<ConversationSidebarSort>(() =>
-    localStorage.getItem(CONVERSATION_SORT_STORAGE_KEY) === 'az' ? 'az' : 'recent',
-  );
-  const [unreadSection, setUnreadSection] = useState(() => localStorage.getItem(UNREAD_SECTION_STORAGE_KEY) === '1');
-  const [unreadOnly, setUnreadOnly] = useState(() => localStorage.getItem(UNREAD_ONLY_STORAGE_KEY) === '1');
-  const activeDragRef = useRef<DragPayload | null>(null);
-  const [isDraggingCategory, setIsDraggingCategory] = useState(false);
-  const [dropIndicator, setDropIndicator] = useState<DropIndicator | null>(null);
-  const visibleDropIndicatorRef = useRef<DropIndicator | null>(null);
-  const resolvedDropRef = useRef<ResolvedDrop | null>(null);
-  const categoryDragStartedAtRef = useRef<number | null>(null);
-  const categoryDropSequenceRef = useRef(0);
-  const lastCategoryDebugKeyRef = useRef<string | null>(null);
-  const lastCategoryMonitorDragLogAtRef = useRef(0);
-  const channelDragStartedAtRef = useRef<number | null>(null);
-  const channelDropSequenceRef = useRef(0);
-  const lastChannelDebugKeyRef = useRef<string | null>(null);
-  const lastChannelMonitorDragLogAtRef = useRef(0);
-  const [suppressChannelNavigationID, setSuppressChannelNavigationID] = useState<string | null>(null);
-  const suppressNavigationResetRef = useRef<number | null>(null);
-  const [creatingCategory, setCreatingCategory] = useState(false);
-  const [newCategoryName, setNewCategoryName] = useState('');
-  const [categoryCreateError, setCategoryCreateError] = useState('');
   const navigate = useNavigate();
-  const location = useLocation();
-  // The AI hub entry is one link for three routes, so its active state is
-  // ours to compute — NavLink would only match /agents.
-  const aiHubActive = isAiHubPath(location.pathname);
-  // The AI hub isn't built for a phone yet, so the entry stays off there.
-  const isMobile = useIsMobile();
+  const { pathname } = useLocation();
   // Drag-to-reorder needs a mouse or trackpad. Without one — a phone, or an
   // iPad on its own — a hold on a row opens its menu (useRowLongPressMenu) and
   // iPadOS would start a native drag lift from that same hold.
   const pointerDevice = usePointerDevice();
   const dragDisabled = deviceKind() === 'touch' && !pointerDevice;
-  const directoryActive = location.pathname === '/directory' || location.pathname.startsWith('/directory/');
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
-  // null = closed; otherwise the section being deleted. Modal confirm
-  // replaces window.confirm so the prompt fits the rest of the app's
-  // visual language (and is mockable in tests).
+  // null = closed; otherwise the section being deleted.
   const [categoryToDelete, setCategoryToDelete] = useState<{ id: string; title: string } | null>(null);
-  const [localSeenMap, setLocalSeenMap] = useState(() => getSeenMap());
-
-  useEffect(() => {
-    const handleSeenChange = () => setLocalSeenMap(getSeenMap());
-    window.addEventListener(THREAD_SEEN_CHANGED_EVENT, handleSeenChange);
-    return () => window.removeEventListener(THREAD_SEEN_CHANGED_EVENT, handleSeenChange);
-  }, []);
-
-  const visibleConversations = useMemo(
-    () => {
-      const hidden = new Set([...(userState?.hiddenConversations ?? []), ...hiddenConversations]);
-      return conversations?.filter((c) => !hidden.has(c.conversationID)) ?? [];
-    },
-    [conversations, hiddenConversations, userState?.hiddenConversations],
-  );
-  const unreadThreads = useMemo(
-    () =>
-      unreadThreadIDs(
-        threads ?? [],
-        userState?.threadNotifications ?? [],
-        unreadThreadNotifications ?? new Set(),
-        mergeSeenMaps(userState?.threadSeen, localSeenMap, userState?.threadMarkedUnread),
-      ),
-    [localSeenMap, threads, unreadThreadNotifications, userState?.threadNotifications, userState?.threadSeen, userState?.threadMarkedUnread],
-  );
-  // Thread replies live in Threads (bold when any thread you follow has
-  // unread replies) and in Activity; a channel or DM row never marks itself
-  // for them, the way Slack keeps threads out of the channel list.
-  const hasThreadUpdates = unreadThreads.size > 0;
-  const draftCount = drafts?.length ?? 0;
-
-  // The chat being viewed. With the unread view on it stays visible even
-  // though opening it reads it, and — if it was unread when opened — stays in
-  // the Unread section until the user leaves, so rows don't jump mid-read.
-  const activeItemID = useMemo(() => {
-    const path = location.pathname;
-    const ch = channels?.find((c) => path === `/channel/${slugify(c.channelName)}` || path === `/channel/${c.channelID}`);
-    if (ch) return ch.channelID;
-    return /^\/conversation\/([^/]+)/.exec(path)?.[1];
-  }, [location.pathname, channels]);
-  const activeItemUnread = useMemo(() => {
-    const ch = channels?.find((c) => c.channelID === activeItemID);
-    if (ch) return isSidebarItemUnread({ kind: 'channel', channel: ch });
-    const conv = visibleConversations.find((c) => c.conversationID === activeItemID);
-    return !!conv && isSidebarItemUnread({ kind: 'conversation', conversation: conv });
-  }, [channels, visibleConversations, activeItemID]);
-  const [stickyUnread, setStickyUnread] = useState<{ id?: string; unread: boolean }>({ unread: false });
-  if (stickyUnread.id !== activeItemID) setStickyUnread({ id: activeItemID, unread: activeItemUnread });
-
-  const sidebarSections = useMemo(
-    () =>
-      groupSidebarItems(channels ?? [], visibleConversations, categories ?? [], {
-        conversationSort,
-        unreadSection,
-        unreadOnly,
-        activeID: activeItemID,
-        stickyUnreadID: stickyUnread.unread ? stickyUnread.id : undefined,
-      }),
-    [channels, visibleConversations, categories, conversationSort, unreadSection, unreadOnly, activeItemID, stickyUnread],
-  );
-
-  const archivedChannels = useMemo(() => archivedSidebarChannels(channels ?? []), [channels]);
-
-  // Fetch the other participant for every DM in one batch so the sidebar
-  // can render real avatars instead of just initials. Group DMs use a
-  // participant-count badge instead and don't need user lookups.
-  const dmOtherUserIDs = useMemo(() => {
-    const ids: string[] = [];
-    const seen = new Set<string>();
-    /* v8 ignore next -- visibleConversations is always an array (defaults to []); the ?? [] fallback is defensive */
-    /* istanbul ignore next -- visibleConversations is always an array (defaults to []); the ?? [] fallback arm is dead */
-    for (const c of visibleConversations ?? []) {
-      if (c.type !== 'dm') continue;
-      if (c.profileResolved) continue;
-      const other = (c.participantIDs ?? []).find((p) => p !== user?.id) ?? c.participantIDs?.[0];
-      if (other && !seen.has(other)) {
-        seen.add(other);
-        ids.push(other);
-      }
-    }
-    return ids;
-  }, [visibleConversations, user?.id]);
-  const { map: dmUserMap } = useUsersBatch(dmOtherUserIDs);
-
-  function setConversationSortPreference(sort: ConversationSidebarSort) {
-    setConversationSort(sort);
-    localStorage.setItem(CONVERSATION_SORT_STORAGE_KEY, sort);
-  }
-
-  function setUnreadSectionPreference(on: boolean) {
-    setUnreadSection(on);
-    localStorage.setItem(UNREAD_SECTION_STORAGE_KEY, on ? '1' : '0');
-  }
-
-  function setUnreadOnlyPreference(on: boolean) {
-    setUnreadOnly(on);
-    localStorage.setItem(UNREAD_ONLY_STORAGE_KEY, on ? '1' : '0');
-  }
-
-  function sectionCategoryID(sectionKey: string): string {
-    return sectionKey === SidebarSectionKeys.Channels ? '' : sectionKey;
-  }
-
-  // sectionDropTarget maps a section to the (categoryID, favorite) it imposes
-  // on items dropped into it. Favorites keeps each item's existing category
-  // (keepCategory) and forces favorite=true; a user category forces its own id
-  // and favorite=false; the default Channels/DMs sections force category="" and
-  // favorite=false.
-  function sectionDropTarget(sectionKey: string): SidebarSectionTarget {
-    if (sectionKey === SidebarSectionKeys.Favorites) {
-      return { categoryID: '', favorite: true, keepCategory: true };
-    }
-    return { categoryID: sectionCategoryID(sectionKey), favorite: false };
-  }
-
-  // persistReorder reports the drop as an EVENT: "dragged X into this section,
-  // right after item A" (the item rendered directly above the release slot).
-  // The SERVER resolves the anchor against the canonical layout and computes
-  // every resulting position itself — this client never sends position numbers
-  // (positions computed from a stale local list were exactly how drops landed
-  // one slot off). computeSidebarReorder still runs, but only to paint the
-  // optimistic preview; the server's response replaces it as the truth.
-  function persistReorder(
-    items: SidebarItem[],
-    dragged: { id: string; kind: 'channel' | 'conversation'; favorite: boolean },
-    targetIndex: number,
-    target: SidebarSectionTarget,
-  ) {
-    const updates = computeSidebarReorder(items, { id: dragged.id, kind: dragged.kind }, targetIndex, target);
-    /* v8 ignore next 4 -- a no-op drop (section already densely ordered and the item released at its own slot) yields zero updates; that empty-result path is unit-tested directly in sidebar-reorder.test.ts, but the mocked-mutation drag harness can't re-densify the cache to reproduce it here */
-    /* istanbul ignore next -- empty-updates no-op path; covered by sidebar-reorder.test.ts, unreachable via the mocked-mutation drag harness */
-    if (updates.length === 0) {
-      clearDropTarget();
-      return;
-    }
-    // Resolve the anchor from the RENDERED list — the same index math the
-    // optimistic preview uses, so the reported event is exactly what the
-    // user saw themselves do.
-    const rowID = (it: SidebarItem) => (it.kind === 'channel' ? it.channel.channelID : it.conversation.conversationID);
-    const currentIndex = items.findIndex((it) => rowID(it) === dragged.id);
-    const withoutDragged = items.filter((it) => rowID(it) !== dragged.id);
-    const rawIndex = currentIndex >= 0 && currentIndex < targetIndex ? targetIndex - 1 : targetIndex;
-    const clampedIndex = Math.max(0, Math.min(rawIndex, withoutDragged.length));
-    const anchor = clampedIndex > 0 ? withoutDragged[clampedIndex - 1] : null;
-    const move: SidebarMoveRequest = {
-      itemType: dragged.kind,
-      itemID: dragged.id,
-      ...(target.favorite
-        ? { section: 'favorites' as const }
-        : target.categoryID
-          ? { section: 'category' as const, categoryID: target.categoryID }
-          : { section: 'channels' as const }),
-      afterType: anchor?.kind ?? '',
-      afterID: anchor ? rowID(anchor) : '',
-    };
-    sidebarDndDebug('reorder scheduled', {
-      sequence: channelDropSequenceRef.current,
-      draggedID: dragged.id,
-      move,
-      updates,
-      order: channelOrderDebugSnapshot(),
-    });
-    reorderSidebar.mutate({ move, updates });
-    clearDropTarget();
-  }
-
-  function dropChannelInto(sectionKey: string, items: SidebarItem[], targetIndex: number) {
-    /* v8 ignore next -- only called when the active drag is a channel (see applyResolvedDrop), so the : null arm is dead */
-    /* istanbul ignore next -- only called when the active drag is a channel (see applyResolvedDrop), so the : null arm is dead */
-    const currentDraggedChannel = activeDragRef.current?.type === 'channel' ? activeDragRef.current.channel : null;
-    /* v8 ignore start -- currentDraggedChannel is always set here, and a resolved channel drop never targets the DM section (canAcceptChannelDrop excludes it); both guards are defensive */
-    /* istanbul ignore next -- currentDraggedChannel is always set here; the no-active-channel guard is dead defensive code */
-    if (!currentDraggedChannel) return;
-    /* istanbul ignore next -- a resolved channel drop never targets the DM section (canAcceptChannelDrop excludes it); this guard is dead defensive code */
-    if (sectionKey === SidebarSectionKeys.DirectMessages) return;
-    /* v8 ignore stop */
-    persistReorder(
-      items,
-      { id: currentDraggedChannel.channelID, kind: 'channel', favorite: !!currentDraggedChannel.favorite },
-      targetIndex,
-      sectionDropTarget(sectionKey),
-    );
-  }
-
-  function dropConversationInto(sectionKey: string, items: SidebarItem[], targetIndex: number) {
-    /* v8 ignore start -- only called for a conversation drag resolved onto Favorites, so currentDraggedConversation is set and sectionKey is Favorites; both guards (and the : null arm) are defensive */
-    /* istanbul ignore next -- only called for a conversation drag, so the : null arm is dead defensive code */
-    const currentDraggedConversation = activeDragRef.current?.type === 'conversation' ? activeDragRef.current.conversation : null;
-    /* istanbul ignore next -- currentDraggedConversation is always set here; the guard is dead defensive code */
-    if (!currentDraggedConversation) return;
-    /* istanbul ignore next -- only called for a drop resolved onto Favorites; the non-Favorites guard is dead defensive code */
-    if (sectionKey !== SidebarSectionKeys.Favorites) return;
-    /* v8 ignore stop */
-    persistReorder(
-      items,
-      { id: currentDraggedConversation.conversationID, kind: 'conversation', favorite: !!currentDraggedConversation.favorite },
-      targetIndex,
-      sectionDropTarget(sectionKey),
-    );
-  }
-
-  function channelCount(items: SidebarItem[]): number {
-    return items.filter((item) => item.kind === 'channel').length;
-  }
-
-  function dropCount(sectionKey: string, items: SidebarItem[]): number {
-    return sectionKey === SidebarSectionKeys.Favorites ? items.length : channelCount(items);
-  }
-
-  function showChannelDropIndicator(sectionKey: string, index: number, area: ChannelDropArea) {
-    resolvedDropRef.current = { kind: 'channel', sectionKey, index, area };
-    setDropIndicator((prev) => {
-      if (
-        prev?.kind === 'channel' &&
-        prev.sectionKey === sectionKey &&
-        prev.index === index &&
-        prev.area === area
-      ) {
-        return prev;
-      }
-      return { kind: 'channel', sectionKey, index, area };
-    });
-  }
-
-  function showCategoryDropIndicator(beforeCategoryID: string, position: number) {
-    resolvedDropRef.current = { kind: 'category', beforeCategoryID, position };
-    setDropIndicator((prev) => {
-      if (
-        prev?.kind === 'category' &&
-        prev.beforeCategoryID === beforeCategoryID &&
-        prev.position === position
-      ) {
-        return prev;
-      }
-      return { kind: 'category', beforeCategoryID, position };
-    });
-  }
-
-  function clearDropTarget() {
-    resolvedDropRef.current = null;
-    setDropIndicator(null);
-  }
-
-  function sortedCategoriesWithoutDragged(): SidebarCategory[] {
-    /* v8 ignore start -- only runs during a category drag with categories loaded and distinct positions: the ?? [] fallback, the non-category ternary arm, and the equal-position localeCompare tiebreak are all defensive */
-    /* istanbul ignore next -- categories are always loaded during a category drag, and the active drag is always a category here; the ?? [] fallback, the : null ternary arm, and the equal-position localeCompare tiebreak are all dead defensive code */
-    return [...(categories ?? [])]
-      .filter((category) => category.id !== (activeDragRef.current?.type === 'category' ? activeDragRef.current.categoryID : null))
-      .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
-    /* v8 ignore stop */
-    /* istanbul ignore next -- same dead defensive arm as the v8 ignore above */
-  }
-
-  function categoryOrderDebugSnapshot(): Array<{ id: string; name: string; position: number }> {
-    /* v8 ignore start -- debug-only snapshot; the ?? [] fallback and the equal-position localeCompare tiebreak are defensive */
-    /* istanbul ignore next -- debug-only snapshot; categories are always loaded with distinct positions, so the ?? [] fallback and the equal-position localeCompare tiebreak are dead defensive code */
-    return [...(categories ?? [])]
-      .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name))
-      .map((category) => ({ id: category.id, name: category.name, position: category.position }));
-    /* v8 ignore stop */
-    /* istanbul ignore next -- same dead defensive arm as the v8 ignore above */
-  }
-
-  function channelOrderDebugSnapshot(sectionKey?: string) {
-    return sidebarSections
-      .filter((section) => sectionKey === undefined || section.key === sectionKey)
-      .map((section) => ({
-        sectionKey: section.key,
-        title: section.title,
-        // Include BOTH channels and conversations, in flat render order. The old
-        // snapshot filtered to channels only, which hid favorited DMs — and since
-        // Favorites is a flat position-sorted mix of channels AND DMs, that made a
-        // drop's "reorder scheduled" numbers impossible to reconcile against the
-        // log (the DM rows were invisible). Show every item so the order is whole.
-        items: section.items.map((item, index) =>
-          item.kind === 'channel'
-            ? {
-                index,
-                kind: 'channel' as const,
-                id: item.channel.channelID,
-                name: item.channel.channelName,
-                sidebarPosition: item.channel.sidebarPosition ?? null,
-                favorite: !!item.channel.favorite,
-              }
-            : {
-                index,
-                kind: 'conversation' as const,
-                id: item.conversation.conversationID,
-                name: item.conversation.displayName,
-                sidebarPosition: item.conversation.sidebarPosition ?? null,
-                favorite: !!item.conversation.favorite,
-              },
-        ),
-      }));
-  }
-
-  function orderedCategoriesAfterDrop(draggedCategoryID: string, beforeCategoryID: string): SidebarCategory[] {
-    const withoutDragged = sortedCategoriesWithoutDragged();
-    const draggedCategory = categories?.find((category) => category.id === draggedCategoryID);
-    /* v8 ignore next -- the dragged category is always present in the cache during a drag; defensive guard */
-    /* istanbul ignore next -- the dragged category is always present in the cache during a drag; defensive guard */
-    if (!draggedCategory) return withoutDragged;
-    const beforeIndex = beforeCategoryID === CATEGORY_DROP_END
-      ? withoutDragged.length
-      : withoutDragged.findIndex((category) => category.id === beforeCategoryID);
-    /* v8 ignore next -- beforeCategoryID is always a real, non-dragged category (or CATEGORY_DROP_END handled above), so findIndex never returns -1 here; the <0 arm is defensive */
-    /* istanbul ignore next -- beforeCategoryID is always a real non-dragged category (or CATEGORY_DROP_END handled above), so findIndex never returns -1; the <0 arm is dead */
-    const insertIndex = beforeIndex < 0 ? withoutDragged.length : beforeIndex;
-    return [
-      ...withoutDragged.slice(0, insertIndex),
-      draggedCategory,
-      ...withoutDragged.slice(insertIndex),
-    ];
-  }
-
-  function normalizeCategoryDropSlot(beforeCategoryID: string, draggedCategoryID: string): string {
-    /* v8 ignore next -- the resolve path never produces beforeCategoryID === draggedCategoryID (self-targeting is filtered upstream), so the nextCategoryTarget arm is defensive */
-    /* istanbul ignore next -- the resolve path never produces beforeCategoryID === draggedCategoryID (self-targeting is filtered upstream), so the nextCategoryTarget arm is defensive */
-    return beforeCategoryID === draggedCategoryID ? nextCategoryTarget(draggedCategoryID) : beforeCategoryID;
-  }
-
-  function moveCategoryBefore(beforeCategoryID: string) {
-    /* v8 ignore next -- only called for a category drop (see applyResolvedDrop), so the : null arm is dead */
-    /* istanbul ignore next -- only called for a category drop (see applyResolvedDrop), so the : null arm is dead */
-    const draggedCategoryID = activeDragRef.current?.type === 'category' ? activeDragRef.current.categoryID : null;
-    const sequence = categoryDropSequenceRef.current;
-    /* v8 ignore start -- draggedCategoryID is always set here and the dragged category is always in the cache during a drag; both guards are defensive */
-    /* istanbul ignore next -- draggedCategoryID is always set here during a category drop; this guard is dead defensive code */
-    if (!draggedCategoryID) {
-      sidebarDndDebug('category-drop ignored: no active category', {
-        sequence,
-        beforeCategoryID,
-        activeDrag: activeDragRef.current,
-      });
-      return;
-    }
-    const normalizedBeforeCategoryID = normalizeCategoryDropSlot(beforeCategoryID, draggedCategoryID);
-    const draggedCategory = categories?.find((category) => category.id === draggedCategoryID);
-    /* istanbul ignore next -- the dragged category is always in the cache during a drag; this guard is dead defensive code */
-    if (!draggedCategory) {
-      sidebarDndDebug('category-drop ignored: dragged category missing from cache', {
-        sequence,
-        draggedCategoryID,
-        beforeCategoryID: normalizedBeforeCategoryID,
-        order: categoryOrderDebugSnapshot(),
-      });
-      return;
-    }
-    /* v8 ignore stop */
-    /* istanbul ignore next -- same dead defensive arm as the v8 ignore above */
-
-    const nextOrder = orderedCategoriesAfterDrop(draggedCategoryID, normalizedBeforeCategoryID);
-    // The event the server needs: which category the dragged one lands AFTER
-    // in the order the user just previewed ("" = the very top). The server
-    // renumbers everything itself; nextOrder only paints the optimistic state.
-    const draggedIndex = nextOrder.findIndex((category) => category.id === draggedCategoryID);
-    const afterID = draggedIndex > 0 ? nextOrder[draggedIndex - 1].id : '';
-    sidebarDndDebug('category-reorder scheduled', {
-      sequence,
-      draggedCategoryID,
-      beforeCategoryID: normalizedBeforeCategoryID,
-      afterID,
-      order: nextOrder.map((category) => category.id),
-      previousOrder: categoryOrderDebugSnapshot(),
-    });
-    reorderCategories.mutate({ categories: nextOrder, movedID: draggedCategoryID, afterID });
-    setDropIndicator(null);
-  }
 
   function toggleGroupCollapsed(sectionKey: string) {
     setCollapsedGroups((prev) => ({ ...prev, [sectionKey]: !prev[sectionKey] }));
   }
 
-
-  function applyResolvedDrop(drop: ResolvedDrop | null) {
-    if (!drop) return;
-    if (drop.kind === 'channel') {
-      const section = sidebarSections.find((candidate) => candidate.key === drop.sectionKey);
-      /* v8 ignore next -- the drop was resolved from an existing section, so it is always found; defensive guard */
-      /* istanbul ignore next -- the drop was resolved from an existing section, so it is always found; defensive guard */
-      if (!section) return;
-      if (activeDragRef.current?.type === 'channel') {
-        dropChannelInto(drop.sectionKey, section.items, drop.index);
-        return;
-      }
-      /* v8 ignore next -- a channel-kind drop only originates from a channel or conversation drag; after the channel branch returns, the active drag is always a conversation, so the false arm is dead */
-      /* istanbul ignore next -- after the channel branch returns, a channel-kind drop's active drag is always a conversation, so the false arm is dead */
-      if (activeDragRef.current?.type === 'conversation') {
-        dropConversationInto(drop.sectionKey, section.items, drop.index);
-      }
-      return;
-    }
-    /* v8 ignore next -- a category-kind drop only originates from a category drag; the early-return arm is dead */
-    /* istanbul ignore next -- a category-kind drop only originates from a category drag; the early-return arm is dead */
-    if (activeDragRef.current?.type !== 'category') return;
-    moveCategoryBefore(drop.beforeCategoryID);
-  }
-
-  function canAcceptChannelDrop(sectionKey: string): boolean {
-    return sectionKey !== SidebarSectionKeys.DirectMessages;
-  }
-
-  function previousChannelDrop(sectionKey: string): ResolvedDrop | null {
-    const sectionIndex = sidebarSections.findIndex((section) => section.key === sectionKey);
-    if (sectionIndex < 1) return null;
-    for (let index = sectionIndex - 1; index >= 0; index -= 1) {
-      const section = sidebarSections[index];
-      /* v8 ignore next -- sections preceding any drop target are always channel-accepting (DM is the last section), so the false arm is defensive */
-      /* istanbul ignore next -- sections preceding any drop target are always channel-accepting (DM is the last section), so the false arm is dead */
-      if (canAcceptChannelDrop(section.key)) {
-        // Land at the section's TRUE end — dropCount, not channelCount. Favorites
-        // is a flat, position-sorted list that mixes channels AND favorited DMs
-        // (sidebar-groups favItems .sort), so its end is items.length; counting
-        // only channels lands the drop one slot short of the last item whenever a
-        // favorited DM sits below the channels. This mirrors the section-tail drop
-        // target (PragmaticSection below) and the push-aside preview, which both
-        // already use dropCount — the two "end of section" resolvers must agree or
-        // the drop lands where the preview didn't show.
-        return { kind: 'channel', sectionKey: section.key, index: dropCount(section.key, section.items), area: 'end' };
-      }
-    }
-    /* v8 ignore next -- unreachable: sectionIndex<1 returns above, and every section that CAN precede a drop target accepts channel drops (only DMs — always last — don't), so the loop always returns on its first iteration */
-    /* istanbul ignore next -- unreachable post-loop return; see the loop's canAcceptChannelDrop guard */
-    return null;
-  }
-
-  function channelDropFromSectionHeader(sectionKey: string, edge: Edge | null): ResolvedDrop {
-    if (edge === 'top') {
-      const previousDrop = previousChannelDrop(sectionKey);
-      if (previousDrop) return previousDrop;
-    }
-    return { kind: 'channel', sectionKey, index: 0, area: 'lead' };
-  }
-
-  function channelDropAreaForIndex(sectionKey: string, index: number): ChannelDropArea {
-    const section = sidebarSections.find((candidate) => candidate.key === sectionKey);
-    /* v8 ignore next -- always called with a sectionKey from an existing payload, so the section is found; defensive guard */
-    /* istanbul ignore next -- always called with a sectionKey from an existing payload, so the section is found; defensive guard */
-    if (!section) return 'row';
-    return index >= dropCount(sectionKey, section.items) ? 'end' : 'row';
-  }
-
-  function resolveDropPayload(payload: DropPayload | undefined): ResolvedDrop | null {
-    /* v8 ignore next -- callers always pass a defined payload from a live drop target; the !payload guard is defensive */
-    /* istanbul ignore next -- callers always pass a defined payload from a live drop target; the !payload guard is defensive */
-    if (!payload) return null;
-    const currentDrag = activeDragRef.current;
-    if (payload.type === 'channel-target') {
-      const edge = extractClosestEdge(payload);
-      if (currentDrag?.type === 'category') {
-        return null;
-      }
-      if (currentDrag?.type === 'conversation' && payload.sectionKey !== SidebarSectionKeys.Favorites) return null;
-      /* v8 ignore next -- a category drag already returned above, so the drag here is always a channel or conversation; the neither-type guard is defensive */
-      /* istanbul ignore next -- a category drag already returned above, so the drag here is always a channel or conversation; the neither-type guard is dead */
-      if (currentDrag?.type !== 'channel' && currentDrag?.type !== 'conversation') return null;
-      const index = edge === 'bottom' ? payload.index + 1 : payload.index;
-      const area = edge === 'bottom'
-        ? channelDropAreaForIndex(payload.sectionKey, index)
-        : payload.area;
-      return { kind: 'channel', sectionKey: payload.sectionKey, index, area };
-    }
-    /* v8 ignore next -- DropPayload has only two variants; channel-target returned above, so this is always a section-header-target (the false arm is unreachable) */
-    /* istanbul ignore next -- DropPayload has only two variants; channel-target returned above, so this is always a section-header-target (the false arm is unreachable) */
-    if (payload.type === 'section-header-target') {
-      if (currentDrag?.type === 'channel') {
-        return channelDropFromSectionHeader(payload.sectionKey, extractClosestEdge(payload));
-      }
-      if (currentDrag?.type === 'conversation' && payload.sectionKey === SidebarSectionKeys.Favorites) {
-        return channelDropFromSectionHeader(payload.sectionKey, extractClosestEdge(payload));
-      }
-      if (
-        currentDrag?.type === 'category' &&
-        payload.sectionKey !== SidebarSectionKeys.Favorites
-      ) {
-        const edge = extractClosestEdge(payload);
-        const rawBeforeCategoryID = edge === 'bottom' ? nextCategoryTarget(payload.categoryID) : payload.categoryID;
-        const beforeCategoryID = normalizeCategoryDropSlot(rawBeforeCategoryID, currentDrag.categoryID);
-        return {
-          kind: 'category',
-          beforeCategoryID,
-          position: (orderedCategoriesAfterDrop(currentDrag.categoryID, beforeCategoryID).findIndex((category) => category.id === currentDrag.categoryID) + 1) * 1000,
-        };
-      }
-    }
-    return null;
-  }
-
-  function nextCategoryTarget(categoryID: string): string {
-    /* v8 ignore next -- only runs mid category drag with categories loaded and distinct positions; the ?? [] fallback and the equal-position localeCompare tiebreak are defensive */
-    /* istanbul ignore next -- only runs mid category drag with categories loaded and distinct positions; the ?? [] fallback and the equal-position localeCompare tiebreak are dead defensive code */
-    const ordered = [...(categories ?? [])].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
-    const index = ordered.findIndex((category) => category.id === categoryID);
-    return ordered[index + 1]?.id ?? CATEGORY_DROP_END;
-  }
-
-  function currentDropPayload(location: { dropTargets: Array<{ data: Record<string | symbol, unknown> }> }): DropPayload | undefined {
-    return location.dropTargets[0]?.data as DropPayload | undefined;
-  }
-
-  function describeDropPayload(payload: DropPayload | undefined) {
-    if (!payload) return null;
-    const edge = extractClosestEdge(payload);
-    if (payload.type === 'channel-target') {
-      return {
-        type: payload.type,
-        sectionKey: payload.sectionKey,
-        index: payload.index,
-        area: payload.area,
-        edge,
-      };
-    }
-    return {
-      type: payload.type,
-      sectionKey: payload.sectionKey,
-      categoryID: payload.categoryID,
-      edge,
-    };
-  }
-
-  function describeResolvedDrop(drop: ResolvedDrop | null) {
-    if (!drop) return null;
-    if (drop.kind === 'channel') {
-      return {
-        kind: drop.kind,
-        sectionKey: drop.sectionKey,
-        index: drop.index,
-        area: drop.area,
-      };
-    }
-    return {
-      kind: drop.kind,
-      beforeCategoryID: drop.beforeCategoryID,
-      position: drop.position,
-    };
-  }
-
-  function logCategoryResolution(payload: DropPayload | undefined, resolvedDrop: ResolvedDrop | null) {
-    if (activeDragRef.current?.type !== 'category') return;
-    const key = JSON.stringify({
-      payload: describeDropPayload(payload),
-      resolved: describeResolvedDrop(resolvedDrop),
-    });
-    if (lastCategoryDebugKeyRef.current === key) return;
-    lastCategoryDebugKeyRef.current = key;
-    sidebarDndDebug('category-target resolved', {
-      sequence: categoryDropSequenceRef.current,
-      draggedCategoryID: activeDragRef.current.categoryID,
-      payload: describeDropPayload(payload),
-      resolved: describeResolvedDrop(resolvedDrop),
-      previousResolved: describeResolvedDrop(resolvedDropRef.current),
-      order: categoryOrderDebugSnapshot(),
-      elapsedMs: debugElapsedMs(categoryDragStartedAtRef.current),
-    });
-  }
-
-  function logCategoryMonitorEvent(event: string, payload: DropPayload | undefined, force = false) {
-    if (activeDragRef.current?.type !== 'category') return;
-    if (event === 'drag') return;
-    const now = performance.now();
-    /* v8 ignore next -- debug-only throttle; tests fire events within the 250ms window so the !force / >=250ms arms are not exercised */
-    /* istanbul ignore next -- debug-only throttle; every monitor caller passes force=true within the 250ms window, so the !force / >=250ms arms are dead */
-    if (!force && now - lastCategoryMonitorDragLogAtRef.current < 250) return;
-    lastCategoryMonitorDragLogAtRef.current = now;
-    sidebarDndDebug(`category-monitor ${event}`, {
-      sequence: categoryDropSequenceRef.current,
-      draggedCategoryID: activeDragRef.current.categoryID,
-      payload: describeDropPayload(payload),
-      resolved: describeResolvedDrop(resolvedDropRef.current),
-      elapsedMs: debugElapsedMs(categoryDragStartedAtRef.current),
-    });
-  }
-
-  function logChannelResolution(
-    payload: DropPayload | undefined,
-    resolvedDrop: ResolvedDrop | null,
-    effectiveDrop: ResolvedDrop | null,
-  ) {
-    if (activeDragRef.current?.type !== 'channel') return;
-    const key = JSON.stringify({
-      payload: describeDropPayload(payload),
-      resolved: describeResolvedDrop(resolvedDrop),
-      effective: describeResolvedDrop(effectiveDrop),
-    });
-    if (lastChannelDebugKeyRef.current === key) return;
-    lastChannelDebugKeyRef.current = key;
-    /* v8 ignore next 4 -- debug-only; during a channel drag effectiveDrop is always a channel-kind drop, so the nested payload-based fallback arms are dead */
-    /* istanbul ignore next -- debug-only; during a channel drag effectiveDrop is always a channel-kind drop, so the nested payload-based fallback arms are dead */
-    const sectionKey = effectiveDrop?.kind === 'channel'
-      ? effectiveDrop.sectionKey
-      : payload?.type === 'channel-target' || payload?.type === 'section-header-target'
-        ? payload.sectionKey
-        : undefined;
-    sidebarDndDebug('channel-target resolved', {
-      sequence: channelDropSequenceRef.current,
-      draggedChannelID: activeDragRef.current.channel.channelID,
-      payload: describeDropPayload(payload),
-      resolved: describeResolvedDrop(resolvedDrop),
-      previousResolved: describeResolvedDrop(resolvedDropRef.current),
-      effectiveResolved: describeResolvedDrop(effectiveDrop),
-      keptPrevious: !resolvedDrop && effectiveDrop?.kind === 'channel',
-      order: channelOrderDebugSnapshot(sectionKey),
-      elapsedMs: debugElapsedMs(channelDragStartedAtRef.current),
-    });
-  }
-
-  function logChannelMonitorEvent(event: string, payload: DropPayload | undefined, force = false) {
-    if (activeDragRef.current?.type !== 'channel') return;
-    if (event === 'drag') return;
-    const now = performance.now();
-    /* v8 ignore next -- debug-only throttle; tests fire events within the 250ms window so the !force / >=250ms arms are not exercised */
-    /* istanbul ignore next -- debug-only throttle; every monitor caller passes force=true within the 250ms window, so the !force / >=250ms arms are dead */
-    if (!force && now - lastChannelMonitorDragLogAtRef.current < 250) return;
-    lastChannelMonitorDragLogAtRef.current = now;
-    sidebarDndDebug(`channel-monitor ${event}`, {
-      sequence: channelDropSequenceRef.current,
-      draggedChannelID: activeDragRef.current.channel.channelID,
-      payload: describeDropPayload(payload),
-      resolved: describeResolvedDrop(resolvedDropRef.current),
-      elapsedMs: debugElapsedMs(channelDragStartedAtRef.current),
-    });
-  }
-
-  function handleDragStart(payload: DragPayload | null) {
-    if (suppressNavigationResetRef.current !== null) {
-      window.clearTimeout(suppressNavigationResetRef.current);
-      suppressNavigationResetRef.current = null;
-    }
-    activeDragRef.current = payload;
-    flushSync(() => {
-      setIsDraggingCategory(payload?.type === 'category');
-    });
-    if (payload?.type === 'category') {
-      categoryDropSequenceRef.current += 1;
-      categoryDragStartedAtRef.current = performance.now();
-      lastCategoryMonitorDragLogAtRef.current = 0;
-      lastCategoryDebugKeyRef.current = null;
-      sidebarDndDebug('category-drag start', {
-        sequence: categoryDropSequenceRef.current,
-        categoryID: payload.categoryID,
-        order: categoryOrderDebugSnapshot(),
-      });
-    }
-    if (payload?.type === 'channel') {
-      channelDropSequenceRef.current += 1;
-      channelDragStartedAtRef.current = performance.now();
-      lastChannelMonitorDragLogAtRef.current = 0;
-      lastChannelDebugKeyRef.current = null;
-      sidebarDndDebug('channel-drag start', {
-        sequence: channelDropSequenceRef.current,
-        channelID: payload.channel.channelID,
-        channelName: payload.channel.channelName,
-        categoryID: payload.channel.categoryID ?? '',
-        favorite: !!payload.channel.favorite,
-      });
-    }
-    setSuppressChannelNavigationID(
-      payload?.type === 'channel'
-        ? payload.channel.channelID
-        : payload?.type === 'conversation'
-          ? payload.conversation.conversationID
-          : null,
-    );
-    clearDropTarget();
-  }
-
-  function updateResolvedDrop(payload: DropPayload | undefined) {
-    const resolvedDrop = resolveDropPayload(payload);
-    logCategoryResolution(payload, resolvedDrop);
-    const previousChannelDrop = activeDragRef.current?.type === 'channel' && resolvedDropRef.current?.kind === 'channel'
-      ? resolvedDropRef.current
-      : null;
-    const effectiveChannelDrop = resolvedDrop ?? previousChannelDrop;
-    logChannelResolution(payload, resolvedDrop, effectiveChannelDrop);
-    if (!resolvedDrop) {
-      if (
-        activeDragRef.current?.type === 'category' &&
-        resolvedDropRef.current?.kind === 'category'
-      ) {
-        return;
-      }
-      if (
-        activeDragRef.current?.type === 'channel' &&
-        resolvedDropRef.current?.kind === 'channel'
-      ) {
-        return;
-      }
-      clearDropTarget();
-      return;
-    }
-    resolvedDropRef.current = resolvedDrop;
-    if (resolvedDrop.kind === 'channel') {
-      showChannelDropIndicator(resolvedDrop.sectionKey, resolvedDrop.index, resolvedDrop.area);
-      return;
-    }
-    showCategoryDropIndicator(resolvedDrop.beforeCategoryID, resolvedDrop.position);
-  }
-
-  function handleDrop(payload: DropPayload | undefined) {
-    // Prefer resolvedDropRef — it's written SYNCHRONOUSLY the moment an indicator
-    // resolves (showChannelDropIndicator), so it's always the latest slot. The
-    // visibleDropIndicatorRef mirror is synced by a useLayoutEffect and therefore
-    // LAGS by a commit; releasing right after the final move (e.g. dragging out
-    // of the preview's range and letting go before React commits) read that stale
-    // ref and dropped one slot too high, not where the preview showed. Fall back
-    // to the mirror, then to a fresh resolve of the raw drop payload.
-    const resolvedDrop = activeDragRef.current
-      ? (resolvedDropRef.current ?? visibleDropIndicatorRef.current ?? resolveDropPayload(payload))
-      : resolveDropPayload(payload);
-    if (activeDragRef.current?.type === 'channel') {
-      sidebarDndDebug('channel-drop received', {
-        sequence: channelDropSequenceRef.current,
-        draggedChannelID: activeDragRef.current.channel.channelID,
-        payload: describeDropPayload(payload),
-        resolved: describeResolvedDrop(resolvedDrop),
-        elapsedMs: debugElapsedMs(channelDragStartedAtRef.current),
-      });
-    }
-    if (activeDragRef.current?.type === 'category') {
-      sidebarDndDebug('category-drop received', {
-        sequence: categoryDropSequenceRef.current,
-        draggedCategoryID: activeDragRef.current.categoryID,
-        payload: describeDropPayload(payload),
-        resolved: describeResolvedDrop(resolvedDrop),
-        order: categoryOrderDebugSnapshot(),
-        elapsedMs: debugElapsedMs(categoryDragStartedAtRef.current),
-      });
-    }
-    applyResolvedDrop(resolvedDrop);
-    activeDragRef.current = null;
-    setIsDraggingCategory(false);
-    categoryDragStartedAtRef.current = null;
-    lastCategoryDebugKeyRef.current = null;
-    channelDragStartedAtRef.current = null;
-    lastChannelDebugKeyRef.current = null;
-    clearDropTarget();
-    // Reuses clearSuppressedChannelNavigation as the callback (clearTimeout on
-    // the already-fired id is a no-op) instead of a dedicated closure: the
-    // unmount cleanup below can cancel this timer before it ever fires in a
-    // test run, and a function literal that only executes when the suite
-    // happens to outlast 750ms is a coverage coin-flip (bit CI 2026-07-14).
-    suppressNavigationResetRef.current = window.setTimeout(clearSuppressedChannelNavigation, 750);
-  }
-
-  // Stable, like every callback the rows get: the rows are memoized, so a
-  // navigation (which re-renders this list) re-renders only the rows whose
-  // own data changed.
-  const clearSuppressedChannelNavigation = useCallback(() => {
-    /* v8 ignore next -- the consumed callback fires right after a drop scheduled the reset timeout, so the ref is set; the null arm is defensive */
-    /* istanbul ignore next -- the consumed callback fires right after a drop scheduled the reset timeout, so the ref is set; the null arm is defensive */
-    if (suppressNavigationResetRef.current !== null) {
-      window.clearTimeout(suppressNavigationResetRef.current);
-      suppressNavigationResetRef.current = null;
-    }
-    setSuppressChannelNavigationID(null);
-  }, []);
-
-  // A drop schedules the 750ms suppress-navigation reset above; clear it on
-  // unmount so the timer never fires into a torn-down tree (it crashed test
-  // teardown with "window is not defined" when a suite ended within 750ms of
-  // a drop).
-  useEffect(
-    () => () => {
-      if (suppressNavigationResetRef.current !== null) {
-        window.clearTimeout(suppressNavigationResetRef.current);
-      }
-    },
-    [],
-  );
-
-  // Live "push-aside" preview: while a channel/DM/category is dragged, open a
-  // row-height gap at the slot it would land in (WYSIWYG), so the rows/sections
-  // below shift down and it's obvious where a drop will go. It's driven by the
-  // same `dropIndicator` the drop itself uses, so preview == landing spot.
-  // Explicit h-8 (≈ the desktop row box) — drag is desktop-only — keeps the
-  // shift from reflowing; pointer-events-none so it never steals the live drop
-  // hitbox. Categories pass their own testId so the two gaps stay distinct.
-  function DropGap({ sectionKey, testId }: { sectionKey: string; testId?: string }) {
-    return (
-      <div
-        data-testid={testId ?? `sidebar-drop-gap-${sectionKey}`}
-        aria-hidden="true"
-        className="pointer-events-none h-8 rounded-md border border-dashed border-white/25 bg-white/5"
-      />
-    );
-  }
-
-  const handleDragStartRef = useRef(handleDragStart);
-  const updateResolvedDropRef = useRef(updateResolvedDrop);
-  const handleDropRef = useRef(handleDrop);
-  const logCategoryMonitorEventRef = useRef(logCategoryMonitorEvent);
-  const logChannelMonitorEventRef = useRef(logChannelMonitorEvent);
-
-  useLayoutEffect(() => {
-    visibleDropIndicatorRef.current = dropIndicator;
-  }, [dropIndicator]);
-
-  useLayoutEffect(() => {
-    handleDragStartRef.current = handleDragStart;
-    updateResolvedDropRef.current = updateResolvedDrop;
-    handleDropRef.current = handleDrop;
-    logCategoryMonitorEventRef.current = logCategoryMonitorEvent;
-    logChannelMonitorEventRef.current = logChannelMonitorEvent;
-  });
-
-  useEffect(() => {
-    return monitorForElements({
-      onDragStart: ({ source }) => {
-        handleDragStartRef.current(source.data as DragPayload);
-      },
-      onDropTargetChange: ({ location }) => {
-        const payload = currentDropPayload(location.current);
-        logCategoryMonitorEventRef.current('dropTargetChange', payload, true);
-        logChannelMonitorEventRef.current('dropTargetChange', payload, true);
-        updateResolvedDropRef.current(payload);
-      },
-      onDrag: ({ location }) => {
-        const payload = currentDropPayload(location.current);
-        logCategoryMonitorEventRef.current('drag', payload);
-        logChannelMonitorEventRef.current('drag', payload);
-        updateResolvedDropRef.current(payload);
-      },
-      onDrop: ({ location }) => {
-        const payload = currentDropPayload(location.current);
-        logCategoryMonitorEventRef.current('drop', payload, true);
-        logChannelMonitorEventRef.current('drop', payload, true);
-        handleDropRef.current(payload);
-      },
-    });
-  }, []);
-
-  // Which section headings get the wide gap above them: an open section's,
-  // and the one after an open section. Collapsed headings in a row pack
-  // tight. Hidden sections (as the list below skips them) don't count.
-  const spacedSections = new Set<string>();
-  let prevOpen = false;
-  for (const section of sidebarSections) {
-    const hidden = section.items.length === 0 && (section.key === SidebarSectionKeys.Unread || unreadOnly);
-    if (hidden) continue;
-    const open = !collapsedGroups[section.key];
-    if (open || prevOpen) spacedSections.add(section.key);
-    prevOpen = open;
-  }
+  const spacedSections = spacedSectionKeys(sidebarSections, collapsedGroups, unreadOnly);
 
   return (
     <div className="flex h-full w-full min-w-0 flex-col text-gray-300 touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]">
@@ -1008,78 +106,8 @@ export function Sidebar({ onClose }: SidebarProps) {
             kept inside the scroller so rows scroll right up to the switch. */}
         <div className="w-full min-w-0 space-y-1 p-2 pt-5 mobile:pt-2 mobile:pb-[calc(var(--bottom-safe-inset,env(safe-area-inset-bottom))+0.5rem)]">
           {/* Threads first (Activity has its own sidebar mode — see the
-              Home / Activity switch above). Same row geometry (px-2 py-1)
-              as channel rows below so the eye doesn't catch on a height
-              bump. */}
-          <NavLink
-            to="/threads"
-            onClick={onClose}
-            className={({ isActive }) =>
-              `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
-                isActive
-                  ? 'bg-sidebar-accent text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
-                  : 'text-gray-300 hover:bg-white/10 hover:text-white'
-              }`
-            }
-          >
-            <MessagesSquare className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span className={hasThreadUpdates ? 'font-bold text-white' : ''} data-testid="threads-nav-label">
-              Threads
-            </span>
-          </NavLink>
-
-          <NavLink
-            to="/directory/channels"
-            onClick={onClose}
-            className={() =>
-              `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
-                directoryActive
-                  ? 'bg-sidebar-accent text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
-                  : 'text-gray-300 hover:bg-white/10 hover:text-white'
-              }`
-            }
-          >
-            <BookUser className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>Directory</span>
-          </NavLink>
-
-          <NavLink
-            to="/drafts"
-            onClick={onClose}
-            className={({ isActive }) =>
-              `relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
-                isActive
-                  ? 'bg-sidebar-accent text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
-                  : 'text-gray-300 hover:bg-white/10 hover:text-white'
-              }`
-            }
-          >
-            <FilePenLine className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>Drafts</span>
-            {draftCount > 0 && (
-              <Badge variant="brand" className="ml-auto text-[11px]">
-                {draftCount > 99 ? '99+' : draftCount}
-              </Badge>
-            )}
-          </NavLink>
-
-          {/* One entry for the whole AI hub — Agents, Skills and Connectors
-              are tabs inside it (AiHubLayout). Lit for all three routes. */}
-          {!isMobile && (
-            <Link
-              to={AI_HUB_HOME}
-              onClick={onClose}
-              aria-current={aiHubActive ? 'page' : undefined}
-              className={`relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
-                aiHubActive
-                  ? 'bg-sidebar-accent text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
-                  : 'text-gray-300 hover:bg-white/10 hover:text-white'
-              }`}
-            >
-              <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <span>Agents</span>
-            </Link>
-          )}
+              Home / Activity switch above). */}
+          <SidebarPageLinks onClose={onClose} />
 
           {/* Visual break between top-level pages and the channel/DM list. */}
           <div
@@ -1093,81 +121,13 @@ export function Sidebar({ onClose }: SidebarProps) {
               options icon shares its row. */}
           <div className="flex items-center gap-1">
             <div className="min-w-0 flex-1">
-              {creatingCategory ? (
-                // Same box as the "+ Add category" button it replaces, so
-                // opening it doesn't shift the list below.
-                <div className="relative mb-1">
-                  <input
-                    autoFocus
-                    value={newCategoryName}
-                    readOnly={createCategory.isPending}
-                    aria-busy={createCategory.isPending}
-                    onChange={(e) => {
-                      setNewCategoryName(e.target.value);
-                      setCategoryCreateError('');
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        const name = newCategoryName.trim();
-                        // One create per name: a second Enter while saving is ignored.
-                        if (!name || createCategory.isPending) return;
-                        createCategory.mutate(name, {
-                          onSuccess: () => {
-                            setNewCategoryName('');
-                            setCreatingCategory(false);
-                            setCategoryCreateError('');
-                          },
-                          onError: (err) => {
-                            setCategoryCreateError(err instanceof Error ? err.message : 'Could not create category');
-                          },
-                        });
-                      }
-                      if (e.key === 'Escape') {
-                        e.preventDefault();
-                        setCreatingCategory(false);
-                        setCategoryCreateError('');
-                      }
-                    }}
-                    placeholder="Category name…"
-                    data-testid="sidebar-new-category-input"
-                    className={`w-full rounded-md bg-white/10 px-2 py-1 text-sm text-white placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-white/40 mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base ${
-                      createCategory.isPending ? 'pr-20 text-gray-400' : ''
-                    }`}
-                  />
-                  {createCategory.isPending && (
-                    <span
-                      data-testid="sidebar-new-category-pending"
-                      role="status"
-                      className="pointer-events-none absolute inset-y-0 right-4 flex items-center gap-1 text-xs text-gray-400"
-                    >
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                      Creating…
-                    </span>
-                  )}
-                  {categoryCreateError && (
-                    <p className="mt-1 text-xs text-red-300" role="alert">
-                      {categoryCreateError}
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <button
-                  onClick={() => {
-                    setCategoryCreateError('');
-                    setCreatingCategory(true);
-                  }}
-                  data-testid="sidebar-add-category"
-                  className="mb-1 w-full truncate whitespace-nowrap rounded-md px-2 py-1 text-left text-sm text-gray-500 hover:bg-white/5 hover:text-gray-300 mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base"
-                >
-                  + Add category
-                </button>
-              )}
+              <SidebarAddCategory />
             </div>
             <SidebarUnreadControls
               unreadOnly={unreadOnly}
-              onUnreadOnlyChange={setUnreadOnlyPreference}
+              onUnreadOnlyChange={view.setUnreadOnly}
               unreadSection={unreadSection}
-              onUnreadSectionChange={setUnreadSectionPreference}
+              onUnreadSectionChange={view.setUnreadSection}
             />
           </div>
 
@@ -1176,7 +136,7 @@ export function Sidebar({ onClose }: SidebarProps) {
               (always rendered as the bottom section; its "+" routes to
               /conversations/new). User-defined categories contain channels;
               DMs/groups can only appear here when favorited. */}
-          {sidebarPrimaryDataReady ? (
+          {ready ? (
           <nav aria-label="Channels and direct messages" data-testid="sidebar-primary-sections">
             {unreadOnly && (
               <div
@@ -1186,7 +146,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                 <span>Showing unread only</span>
                 <button
                   type="button"
-                  onClick={() => setUnreadOnlyPreference(false)}
+                  onClick={() => view.setUnreadOnly(false)}
                   data-testid="sidebar-unread-show-all"
                   className="font-medium text-gray-300 hover:text-white"
                 >
@@ -1205,9 +165,7 @@ export function Sidebar({ onClose }: SidebarProps) {
               const isChannelsDefault = section.key === SidebarSectionKeys.Channels;
               const isDMsDefault = section.key === SidebarSectionKeys.DirectMessages;
               const isUserCategory = !isUnreadSection && !isFavorites && !isChannelsDefault && !isDMsDefault;
-              // The unread view hides what has nothing to show: an empty
-              // Unread section always, and any empty section while filtering.
-              if (section.items.length === 0 && (isUnreadSection || unreadOnly)) return null;
+              if (isSectionHidden(section, unreadOnly)) return null;
               // Rows in the Unread section belong to other sections, so they
               // aren't reordered from here.
               const rowDragDisabled = dragDisabled || isUnreadSection;
@@ -1217,29 +175,7 @@ export function Sidebar({ onClose }: SidebarProps) {
               // and above the next heading. Collapsed headings in a row pack
               // tight, like a menu.
               const spaced = spacedSections.has(section.key);
-
-              // When collapsed, still surface:
-              //   - items with new activity (unless muted) so the user
-              //     doesn't miss messages hidden behind a folded category;
-              //   - the channel/conversation the user is currently viewing,
-              //     so navigating away from it (or scrolling up) doesn't
-              //     make the row vanish out from under them. Once they
-              //     switch focus elsewhere, the row hides again on the
-              //     next render — exactly as the bug report asked for.
-              const visibleItems = collapsed
-                ? section.items.filter((item) => {
-                    if (item.kind === 'channel') {
-                      const ch = item.channel;
-                      const isActive =
-                        location.pathname === `/channel/${slugify(ch.channelName)}`;
-                      return isActive || (!ch.muted && !!ch.unread);
-                    }
-                    const conv = item.conversation;
-                    const isActive =
-                      location.pathname === `/conversation/${conv.conversationID}`;
-                    return isActive || !!conv.unread;
-                  })
-                : section.items;
+              const visibleItems = collapsed ? foldedSectionItems(section.items, pathname) : section.items;
 
               // The live channel/DM drop target that falls in THIS section (null
               // otherwise) — drives the push-aside gap below.
@@ -1260,7 +196,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                   className={`relative ${spaced ? 'mt-5 mobile:mt-3' : 'mt-2'}`}
                   data-testid={`sidebar-group-${section.key}`}
                 >
-                  {categoryGap && <DropGap sectionKey={section.key} testId={`sidebar-drop-gap-cat-${section.key}`} />}
+                  {categoryGap && <SidebarDropGap sectionKey={section.key} testId={`sidebar-drop-gap-cat-${section.key}`} />}
                   {(isFavorites || isUserCategory || isChannelsDefault) && (
                     <PragmaticCategoryDropHitbox
                       active={!dragDisabled && isDraggingCategory}
@@ -1353,11 +289,11 @@ export function Sidebar({ onClose }: SidebarProps) {
                             <MoreVertical className="h-3.5 w-3.5" />
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-52">
-                            <DropdownMenuItem onClick={() => setConversationSortPreference('recent')}>
+                            <DropdownMenuItem onClick={() => view.setConversationSort('recent')}>
                               <Clock3 className="mr-2 h-4 w-4" />
                               Recent activity
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setConversationSortPreference('az')}>
+                            <DropdownMenuItem onClick={() => view.setConversationSort('az')}>
                               <ArrowDownAZ className="mr-2 h-4 w-4" />
                               A-Z
                             </DropdownMenuItem>
@@ -1405,7 +341,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                           // SIDEBAR_DRAGGING_COLLAPSE can fully remove its slot on
                           // pick-up (margin included).
                           <Fragment key={`ch-${item.channel.channelID}`}>
-                            {showGap && <DropGap sectionKey={section.key} />}
+                            {showGap && <SidebarDropGap sectionKey={section.key} />}
                             <PragmaticChannelRow
                               sectionKey={section.key}
                               index={channelDropIndex}
@@ -1419,8 +355,8 @@ export function Sidebar({ onClose }: SidebarProps) {
                                   notifyCount={Number(item.channel.unreadNotifyCount ?? 0)}
                                   onClose={onClose}
                                   draggable={!rowDragDisabled}
-                                  suppressNavigation={suppressChannelNavigationID === item.channel.channelID}
-                                  onSuppressNavigationConsumed={clearSuppressedChannelNavigation}
+                                  suppressNavigation={suppressedNavigationID === item.channel.channelID}
+                                  onSuppressNavigationConsumed={clearSuppressedNavigation}
                                   {...dragProps}
                                 />
                               )}
@@ -1430,10 +366,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                       }
                       const conv = item.conversation;
                       const conversationDropIndex = section.key === SidebarSectionKeys.Favorites ? index : -1;
-                      const isGroup = conv.type === 'group';
-                      const otherID = !isGroup
-                        ? ((conv.participantIDs ?? []).find((p) => p !== user?.id) ?? conv.participantIDs?.[0])
-                        : undefined;
+                      const otherID = conv.type !== 'group' ? dmPartnerID(conv, user?.id) : undefined;
                       const dmAvatarURL = otherID ? dmUserMap.get(otherID)?.avatarURL : undefined;
                       const dmUserStatus = otherID ? dmUserMap.get(otherID)?.userStatus : undefined;
                       const resolvedDMAvatarURL = conv.avatarURL ?? dmAvatarURL;
@@ -1447,7 +380,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                         // element is the direct `space-y-1` child so a favorited
                         // DM's slot collapses fully on pick-up.
                         <Fragment key={`conv-${conv.conversationID}`}>
-                          {showConvGap && <DropGap sectionKey={section.key} />}
+                          {showConvGap && <SidebarDropGap sectionKey={section.key} />}
                           {section.key === SidebarSectionKeys.Favorites ? (
                             <PragmaticConversationRow
                               sectionKey={section.key}
@@ -1466,8 +399,8 @@ export function Sidebar({ onClose }: SidebarProps) {
                                   onClose={onClose}
                                   onHide={hideConversation}
                                   draggable={!dragDisabled}
-                                  suppressNavigation={suppressChannelNavigationID === conv.conversationID}
-                                  onSuppressNavigationConsumed={clearSuppressedChannelNavigation}
+                                  suppressNavigation={suppressedNavigationID === conv.conversationID}
+                                  onSuppressNavigationConsumed={clearSuppressedNavigation}
                                   {...dragProps}
                                 />
                               )}
@@ -1488,7 +421,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                       );
                     })}
                     {/* Tail gap: drop resolves past the last row (area 'end'). */}
-                    {channelGap != null && channelGap.area === 'end' && <DropGap sectionKey={section.key} />}
+                    {channelGap != null && channelGap.area === 'end' && <SidebarDropGap sectionKey={section.key} />}
                   </div>
                   <PragmaticSection
                     data={{ type: 'channel-target', sectionKey: section.key, index: dropCount(section.key, visibleItems), area: 'end' }}
@@ -1503,34 +436,12 @@ export function Sidebar({ onClose }: SidebarProps) {
               );
             })}
             {archivedChannels.length > 0 && !unreadOnly && (
-              <div className="relative mt-2" data-testid="sidebar-group-archived">
-                <div
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => setArchivedOpen((open) => !open)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      setArchivedOpen((open) => !open);
-                    }
-                  }}
-                  aria-expanded={archivedOpen}
-                  data-testid="sidebar-group-toggle-archived"
-                  className="flex flex-1 items-center gap-1 rounded-md px-2 py-1 text-sm font-semibold text-gray-400 hover:bg-white/5 mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base"
-                >
-                  <ChevronDown className={`h-3 w-3 transition-transform ${archivedOpen ? '' : '-rotate-90'}`} />
-                  <span className="truncate">Archived</span>
-                </div>
-                <div className="space-y-1 opacity-60">
-                  {archivedChannels
-                    // Folded, it still shows the archived channel being viewed
-                    // so the open row doesn't vanish from under the user.
-                    .filter((ch) => archivedOpen || location.pathname === `/channel/${slugify(ch.channelName)}`)
-                    .map((ch) => (
-                      <ChannelRow key={`archived-${ch.channelID}`} channel={ch} hasUnread={false} onClose={onClose} />
-                    ))}
-                </div>
-              </div>
+              <SidebarArchivedSection
+                channels={archivedChannels}
+                open={archivedOpen}
+                onToggle={() => setArchivedOpen((open) => !open)}
+                onClose={onClose}
+              />
             )}
           </nav>
           ) : (
@@ -1544,28 +455,7 @@ export function Sidebar({ onClose }: SidebarProps) {
         open={createChannelOpen}
         onOpenChange={setCreateChannelOpen}
       />
-      <ConfirmDialog
-        open={categoryToDelete !== null}
-        onOpenChange={(o) => {
-          /* v8 ignore next -- controlled dialog (open={categoryToDelete !== null}); onOpenChange only fires with o=false on dismiss, so the o=true arm is unreachable */
-          /* istanbul ignore next -- controlled dialog; onOpenChange only fires with o=false on dismiss, so the o=true arm is unreachable */
-          if (!o) setCategoryToDelete(null);
-        }}
-        title="Delete category?"
-        description={
-          categoryToDelete
-            ? `"${categoryToDelete.title}" will be removed. Channels and DMs in it return to their default sections.`
-            : undefined
-        }
-        confirmLabel="Delete category"
-        destructive
-        onConfirm={() => {
-          /* v8 ignore next -- onConfirm only fires while the dialog is open, i.e. categoryToDelete is non-null; the null arm is unreachable */
-          /* istanbul ignore next -- onConfirm only fires while the dialog is open, i.e. categoryToDelete is non-null; the null arm is unreachable */
-          if (categoryToDelete) deleteCategory.mutate(categoryToDelete.id);
-        }}
-        testIDPrefix="delete-category"
-      />
+      <DeleteCategoryDialog category={categoryToDelete} onClose={() => setCategoryToDelete(null)} />
     </div>
   );
 }

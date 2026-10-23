@@ -66,7 +66,7 @@ func TestMessage_DeleteFromIndex_LogsError(t *testing.T) {
 func TestMessage_AttachRendered_SkipsNil(t *testing.T) {
 	svc, _, _, _, _ := setupMessageService()
 	// A nil entry must be skipped without panicking.
-	svc.attachRendered(nil, &model.Message{Body: "hi"})
+	svc.attachRendered(context.Background(), nil, &model.Message{Body: "hi"})
 }
 
 func TestMessage_Send_EmptyBodyNoAttachments(t *testing.T) {

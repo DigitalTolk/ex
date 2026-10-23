@@ -3,21 +3,26 @@ package service
 import (
 	"errors"
 	"fmt"
+
+	"github.com/DigitalTolk/ex/internal/apperr"
 )
 
 // ErrForbidden marks a request for an existing resource that the caller is not
 // allowed to access. Handlers use it to distinguish 403 from true 404.
-var ErrForbidden = errors.New("service: forbidden")
+var ErrForbidden = apperr.ErrForbidden
 
 // ErrAlreadyExists marks a uniqueness conflict (duplicate name/slug/emoji).
-// Wraps the store-layer sentinel where the conflict is a storage-uniqueness
-// rule, and is minted directly for service-level uniqueness checks — handlers
-// map it to 409 via errors.Is instead of the old error-string matching.
-var ErrAlreadyExists = errors.New("service: already exists")
+// It is the store's sentinel too (both are apperr.ErrAlreadyExists): a
+// storage-uniqueness conflict and a service-level one are the same kind, and
+// handlers map it to 409 via errors.Is.
+var ErrAlreadyExists = apperr.ErrAlreadyExists
 
 // ErrValidation marks caller input that fails a service-level bound (size,
 // required field). Handlers map it to 400.
-var ErrValidation = errors.New("service: invalid input")
+var ErrValidation = apperr.ErrValidation
+
+// ErrNotFound is the shared not-found kind (the store raises it).
+var ErrNotFound = apperr.ErrNotFound
 
 // ErrThreadDeleted is returned when a reply is attempted on a thread whose
 // root message has been soft-deleted. A deleted thread is closed for good —

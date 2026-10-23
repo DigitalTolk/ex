@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { RunProgressPayload, RunUpdatedPayload } from '@/lib/ws-schemas';
 
 // Live agent-run activity, per parent (channel/conversation). Fed by
 // run.updated (lifecycle: add on non-terminal, remove on terminal) and
@@ -128,17 +129,9 @@ function sweep(): void {
   }
 }
 
-// onRunUpdated ingests a run.updated frame (the full run snapshot).
-export function onRunUpdated(data: unknown): void {
-  const run = data as {
-    id?: string;
-    agentID?: string;
-    invokerID?: string;
-    parentID?: string;
-    threadRootID?: string;
-    state?: string;
-  } | null;
-  if (!run?.id || !run.parentID || !run.agentID || !run.state) return;
+// onRunUpdated ingests a run.updated frame (the run snapshot), as its schema
+// parses it (lib/ws-schemas).
+export function onRunUpdated(run: RunUpdatedPayload): void {
   if (TERMINAL_STATES.has(run.state)) {
     // "Show activity" on the agent's message is the door to a finished run's
     // drawer — the composer chip tracks LIVE work only.
@@ -161,18 +154,7 @@ export function onRunUpdated(data: unknown): void {
 }
 
 // onRunProgress ingests a run.progress beat (ephemeral activity).
-export function onRunProgress(data: unknown): void {
-  const p = data as {
-    runID?: string;
-    agentID?: string;
-    invokerID?: string;
-    parentID?: string;
-    threadRootID?: string;
-    kind?: string;
-    text?: string;
-    tool?: string;
-  } | null;
-  if (!p?.runID || !p.parentID || !p.agentID) return;
+export function onRunProgress(p: RunProgressPayload): void {
   // Ignore a beat for a run that already terminated — a terminal run.updated
   // won and the chip is gone; don't resurrect it from an out-of-order beat.
   if (terminated.has(p.runID)) return;

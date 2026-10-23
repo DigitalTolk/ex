@@ -3,9 +3,9 @@ import { ArrowLeft, ArrowRight, ChevronLeft, Menu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TooltipIconButton } from '@/components/ui/tooltip-icon-button';
 import { SearchBar } from '@/components/SearchBar';
-import { useHistoryTraversal } from '@/hooks/useHistoryTraversal';
+import { navigationApi, useHistoryTraversal } from '@/hooks/useHistoryTraversal';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { historyShortcuts, historyStepFor, type HistoryStep } from '@/lib/history-shortcut';
+import { claimHistoryKeys, historyShortcuts, historyStepFor, type HistoryStep } from '@/lib/history-shortcut';
 import { isApplePlatform } from '@/lib/platform';
 import { usePageTitleStore } from '@/stores/page-title';
 
@@ -109,41 +109,63 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
 }
 
 // Disabled, an arrow only dims (no dark-mode chip: it would read as pressed).
-const HISTORY_BUTTON_CLASS = 'size-7 text-sidebar-foreground hover:bg-sidebar-accent dark:disabled:bg-transparent';
+// rounded-lg like the sidebar toggle beside them.
+const HISTORY_BUTTON_CLASS = 'rounded-lg text-sidebar-foreground hover:bg-sidebar-accent dark:disabled:bg-transparent';
 
 const APPLE = isApplePlatform(navigator.userAgent);
 const SHORTCUTS = historyShortcuts(APPLE);
 
-function step(to: HistoryStep) {
-  if (to === 'back') window.history.back();
-  else window.history.forward();
+// Through the Navigation API — the same history canGoBack/canGoForward
+// describe. window.history would walk the tab's joint session history, which
+// also holds the entries of frames on the page (an HTML preview's).
+function traverse(nav: Navigation, to: HistoryStep) {
+  const { committed, finished } = to === 'back' ? nav.back() : nav.forward();
+  // A traversal that is refused or overtaken rejects both; nothing to report.
+  void Promise.allSettled([committed, finished]);
 }
 
 // The tab's history, Slack-style, from these buttons or the keyboard. Hidden
 // where the browser can't say whether there is anywhere to go.
 function HistoryButtons() {
-  const { supported, canGoBack, canGoForward } = useHistoryTraversal();
+  const { canGoBack, canGoForward } = useHistoryTraversal();
+  // One listener for the bar's lifetime, reading where history can go at the
+  // moment of the key press.
   useEffect(() => {
-    if (!supported) return;
+    const nav = navigationApi();
+    if (!nav) return;
+    const canStep = (to: HistoryStep) => (to === 'back' ? nav.canGoBack : nav.canGoForward);
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.isComposing) return;
       const to = historyStepFor(e, APPLE);
+      if (to === null) return;
+      // A held chord steps once: its repeats would queue step after step
+      // and, past the first page, hand the rest to the browser's own Back.
+      if (e.repeat) {
+        e.preventDefault();
+        return;
+      }
       // Nowhere to go: the browser's own shortcut, if it has one, still runs.
-      if (to === null || !(to === 'back' ? canGoBack : canGoForward)) return;
+      if (!canStep(to)) return;
       e.preventDefault();
-      step(to);
+      traverse(nav, to);
     };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [supported, canGoBack, canGoForward]);
-  if (!supported) return null;
+    const release = claimHistoryKeys(canStep);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      release();
+    };
+  }, []);
+  const nav = navigationApi();
+  if (!nav) return null;
   return (
     <>
       <TooltipIconButton
         label="Back"
         shortcut={SHORTCUTS.back}
         disabled={!canGoBack}
-        onClick={() => step('back')}
+        onClick={() => traverse(nav, 'back')}
+        size="icon-sm"
         className={HISTORY_BUTTON_CLASS}
         testId="history-back"
       >
@@ -153,7 +175,8 @@ function HistoryButtons() {
         label="Forward"
         shortcut={SHORTCUTS.forward}
         disabled={!canGoForward}
-        onClick={() => step('forward')}
+        onClick={() => traverse(nav, 'forward')}
+        size="icon-sm"
         className={HISTORY_BUTTON_CLASS}
         testId="history-forward"
       >

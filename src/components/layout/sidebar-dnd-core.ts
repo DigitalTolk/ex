@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react';
 import type { UserChannel, UserConversation } from '@/types';
+import { readString } from '@/lib/storage';
 
 // Sidebar drag-and-drop core: payload/target types, drag-state constants,
 // and the opt-in debug logging shared by the Pragmatic wrapper components
@@ -42,21 +43,15 @@ export type DropPayload =
   | { type: 'section-header-target'; sectionKey: string; categoryID: string };
 
 export function sidebarDndDebugEnabled(): boolean {
-  try {
-    return (
-      localStorage.getItem(SIDEBAR_DND_DEBUG_STORAGE_KEY) === '1' ||
-      window.location.search.includes('sidebarDndDebug=1')
-    );
-  } catch {
-    return false;
-  }
+  return (
+    readString(SIDEBAR_DND_DEBUG_STORAGE_KEY) === '1' ||
+    window.location.search.includes('sidebarDndDebug=1')
+  );
 }
 
-export function sidebarDndDebug(event: string, details?: Record<string, unknown>) {
+export function sidebarDndDebug(event: string, details: Record<string, unknown>) {
   if (!sidebarDndDebugEnabled()) return;
-  /* v8 ignore next -- debug-only logging; every call site passes a details object, so the ?? {} fallback is defensive */
-  /* istanbul ignore next -- every call site passes a details object, so the ?? {} fallback arm is dead defensive code */
-  console.debug(`[sidebar-dnd] ${event}`, details ?? {});
+  console.debug(`[sidebar-dnd] ${event}`, details);
 }
 
 // debugElapsedMs reports how long the current drag has been active for the

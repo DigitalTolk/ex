@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   MEMBER_LIST_WIDTH,
   PANEL_WIDTHS_RESET_EVENT,
+  RUN_DRAWER_WIDTH,
   SIDEBAR_WIDTH,
   SIDE_PANEL_WIDTH,
   clampPanelWidth,
@@ -68,6 +69,17 @@ describe('panel-width', () => {
     resetPanelWidths();
     savePanelWidth(MEMBER_LIST_WIDTH, 400);
     expect(hasCustomPanelWidths()).toBe(true);
+  });
+
+  // Regression: Reset cleared the run drawer's width but the "customized"
+  // check never looked at it, so resizing only the run drawer left Reset
+  // disabled.
+  it('hasCustomPanelWidths sees a resized run drawer', () => {
+    savePanelWidth(RUN_DRAWER_WIDTH, 700);
+    expect(hasCustomPanelWidths()).toBe(true);
+    resetPanelWidths();
+    expect(localStorage.getItem(RUN_DRAWER_WIDTH.key)).toBeNull();
+    expect(hasCustomPanelWidths()).toBe(false);
   });
 
   it('storage failures degrade to defaults instead of throwing', () => {

@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/agents"
 	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/middleware"
@@ -513,6 +514,10 @@ func (s *hagentCovRunStore) SettleApproval(_ context.Context, _, _, _, _, _, _ s
 	return s.trip("SettleApproval")
 }
 
+func (s *hagentCovRunStore) ConsumeApproval(context.Context, string, string, time.Time) error {
+	return s.trip("ConsumeApproval")
+}
+
 func (s *hagentCovRunStore) ListApprovals(_ context.Context, _ string) ([]*model.Approval, error) {
 	return nil, s.trip("ListApprovals")
 }
@@ -604,6 +609,10 @@ func (a *hagentCovAccess) CheckAccess(_ context.Context, _, _, _ string) error {
 	return a.err
 }
 
+func (a *hagentCovAccess) MessageAttachmentIDs(context.Context, string, string, string, string) (map[string]bool, error) {
+	return nil, a.err
+}
+
 // ------------------------------------------------------------------ harness
 
 type hagentCovEnv struct {
@@ -613,7 +622,7 @@ type hagentCovEnv struct {
 	msgs    *hagentCovMessages
 	agentID string
 	h       *AgentHandler
-	svc     *service.AgentService
+	svc     *agents.AgentService
 }
 
 // hagentCovNewEnv builds a handler over real services with one seeded shared
@@ -622,7 +631,7 @@ func hagentCovNewEnv() *hagentCovEnv {
 	users := newMockUserStore()
 	users.users["u1"] = &model.User{ID: "u1", Email: "u1@example.com", DisplayName: "User One", SystemRole: model.SystemRoleMember, Status: "active"}
 	users.users["u2"] = &model.User{ID: "u2", Email: "u2@example.com", DisplayName: "User Two", SystemRole: model.SystemRoleMember, Status: "active"}
-	agentID := service.AgentUserID("gg")
+	agentID := agents.AgentUserID("gg")
 	users.users[agentID] = &model.User{
 		ID: agentID, DisplayName: "gg", SystemRole: model.SystemRoleMember, Status: "active",
 		Kind: model.UserKindAgent, AgentConfig: &model.AgentConfig{TemplateSlug: "gg"},
@@ -634,10 +643,10 @@ func hagentCovNewEnv() *hagentCovEnv {
 	}
 	runs := hagentCovNewRunStore()
 	msgs := &hagentCovMessages{}
-	agentSvc := service.NewAgentService(dir, users)
+	agentSvc := agents.NewAgentService(dir, users)
 	userSvc := service.NewUserService(users, &mockCache{}, nil, nil)
 	jwtMgr := auth.NewJWTManager("hagent-cov-secret", 15*time.Minute, 720*time.Hour)
-	orch := service.NewOrchestrator(runs, agentSvc, &hagentCovOrchUsers{users: users}, msgs, hagentCovPub{}, jwtMgr)
+	orch := agents.NewOrchestrator(runs, agentSvc, &hagentCovOrchUsers{users: users}, msgs, hagentCovPub{}, jwtMgr)
 	h := NewAgentHandler(agentSvc, orch, userSvc)
 	return &hagentCovEnv{dir: dir, runs: runs, users: users, msgs: msgs, agentID: agentID, h: h, svc: agentSvc}
 }
@@ -1117,7 +1126,7 @@ func TestHagentCovListSubscriptions(t *testing.T) {
 	env := hagentCovNewEnv()
 
 	rec := hagentCovDo(env.h.ListSubscriptions, hagentCovReq(http.MethodGet, "/api/v1/agents/nope/subscriptions", "", "u1", map[string]string{"slug": "nope"}))
-	hagentCovWant(t, rec, http.StatusInternalServerError)
+	hagentCovWant(t, rec, http.StatusNotFound) // an unknown agent is a 404, not a server error
 
 	env.dir.subs["p1"] = []*model.AgentSubscription{{ID: "s1", AgentID: env.agentID, CreatorID: "u1", ParentID: "p1", ParentType: "channel"}}
 	rec = hagentCovDo(env.h.ListSubscriptions, hagentCovReq(http.MethodGet, "/api/v1/agents/gg/subscriptions", "", "u1", map[string]string{"slug": "gg"}))

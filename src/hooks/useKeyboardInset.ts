@@ -1,4 +1,5 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect } from 'react';
+import { create } from 'zustand';
 import { isIOSApp } from '@/lib/capacitor';
 import { deviceKind } from '@/lib/device';
 import { keyboardOverlap, readKeyboardHeight } from '@/lib/keyboard';
@@ -29,8 +30,16 @@ import { keyboardOverlap, readKeyboardHeight } from '@/lib/keyboard';
 // (WKWebView's visualViewport ignores the keyboard), and mobile Safari
 // shrinks the visualViewport.
 
-let inset = 0;
-const listeners = new Set<() => void>();
+interface KeyboardInsetState {
+  // px of the screen the keyboard covers; 0 while it is down.
+  inset: number;
+  // Until when (performance.now()) a pan still counts as the keyboard's (see
+  // LATE_PAN_MS).
+  panUntil: number;
+}
+
+const useKeyboardInsetStore = create<KeyboardInsetState>(() => ({ inset: 0, panUntil: 0 }));
+const keyboardState = () => useKeyboardInsetStore.getState();
 
 // About the length of the iOS keyboard's own slide: what a surface that
 // follows the keyboard on its own (the search sheet) takes to do so.
@@ -50,23 +59,15 @@ function apply(covered: number, visible: number): KeyboardChange {
   const next = Math.max(0, Math.round(covered));
   if (next > 0) root.style.setProperty('--ex-app-height', `${Math.round(visible)}px`);
   else root.style.removeProperty('--ex-app-height');
+  const { inset } = keyboardState();
   if (next === inset) return null;
-  const wasUp = inset > 0;
-  inset = next;
-  for (const l of listeners) l();
-  if (inset === 0) return null;
-  return wasUp ? 'resized' : 'shown';
-}
-
-function subscribe(cb: () => void) {
-  listeners.add(cb);
-  return () => {
-    listeners.delete(cb);
-  };
+  useKeyboardInsetStore.setState({ inset: next });
+  if (next === 0) return null;
+  return inset > 0 ? 'resized' : 'shown';
 }
 
 export function useKeyboardInset(): number {
-  return useSyncExternalStore(subscribe, () => inset);
+  return useKeyboardInsetStore((s) => s.inset);
 }
 
 function scrollParent(el: HTMLElement): HTMLElement | null {
@@ -77,9 +78,6 @@ function scrollParent(el: HTMLElement): HTMLElement | null {
   return null;
 }
 
-// Until when a pan still counts as the keyboard's (see LATE_PAN_MS).
-let keyboardPanUntil = 0;
-
 // iOS reveals a focused field by panning the whole page up as the keyboard
 // comes. The root has just been sized to the space above the keyboard, so
 // the pan is undone at once: the chat composer, at the bottom of the root,
@@ -89,7 +87,7 @@ let keyboardPanUntil = 0;
 function settle() {
   if (window.scrollY !== 0) window.scrollTo({ top: 0, behavior: 'instant' });
   const field = document.activeElement;
-  if (inset > 0 && field instanceof HTMLElement && field !== document.body && scrollParent(field)) {
+  if (keyboardState().inset > 0 && field instanceof HTMLElement && field !== document.body && scrollParent(field)) {
     field.scrollIntoView({ block: 'nearest', behavior: 'instant' });
   }
 }
@@ -113,7 +111,7 @@ export function useKeyboardInsetTracker(): void {
       const covered = Math.max(native, browser);
       const change = apply(covered, layout - covered);
       if (change === 'shown') {
-        keyboardPanUntil = performance.now() + LATE_PAN_MS;
+        useKeyboardInsetStore.setState({ panUntil: performance.now() + LATE_PAN_MS });
         settle();
       } else if (change === 'resized' && window.scrollY !== 0 && isIOSApp()) {
         // In the iOS app a strip above the keyboard (predictions, the edit
@@ -140,7 +138,8 @@ export function useKeyboardInsetTracker(): void {
     // that one too. A pan after that is iOS keeping the caret in view while
     // typing: left alone.
     const onScroll = () => {
-      if (inset > 0 && window.scrollY !== 0 && performance.now() < keyboardPanUntil) settle();
+      const { inset, panUntil } = keyboardState();
+      if (inset > 0 && window.scrollY !== 0 && performance.now() < panUntil) settle();
     };
 
     window.addEventListener('keyboardWillShow', onShow);
@@ -158,7 +157,7 @@ export function useKeyboardInsetTracker(): void {
       window.removeEventListener('resize', recompute);
       window.removeEventListener('scroll', onScroll);
       vv?.removeEventListener('resize', recompute);
-      keyboardPanUntil = 0;
+      useKeyboardInsetStore.setState({ panUntil: 0 });
       apply(0, window.innerHeight);
     };
   }, []);

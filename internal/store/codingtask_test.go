@@ -459,4 +459,3 @@ func TestTaskStore_ProjectTheme(t *testing.T) {
 	_, err = corrupt.GetProjectTheme(ctx, "acme")
 	assertUnmarshalErr(t, err, "GetProjectTheme")
 }
-

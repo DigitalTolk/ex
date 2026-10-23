@@ -12,6 +12,7 @@ import { useEmojiMap } from '@/hooks/useEmoji';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { apiFetch, getAccessToken } from '@/lib/api';
 import { inputValueForDate, pad, partsInTimeZone } from '@/lib/datetime-input';
+import { localTimeZone } from '@/lib/user-time';
 import type { User } from '@/types';
 import { NativeSelect } from '@/components/ui/native-select';
 
@@ -81,12 +82,6 @@ function clearAfterSecondsFor(mode: ClearAfter, customUntil: string, timeZone: s
   if (!clearAt) return undefined;
   const seconds = Math.ceil((new Date(clearAt).getTime() - Date.now()) / 1000);
   return seconds > 0 ? seconds : undefined;
-}
-
-function localTimeZone(): string {
-  /* v8 ignore next -- resolvedOptions().timeZone is always set in a real runtime; the || '' fallback is defensive */
-  /* istanbul ignore next -- resolvedOptions().timeZone is always set in a real runtime; the || '' fallback is defensive */
-  return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
 }
 
 function initialStateFor(user: User | null) {

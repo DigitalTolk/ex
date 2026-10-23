@@ -69,6 +69,9 @@ func (handlerEmojiSigner) PresignedGetURL(_ context.Context, key string, _ time.
 	return "https://fresh.test/" + key, nil
 }
 
+func (handlerEmojiSigner) PutObject(context.Context, string, string, []byte) error { return nil }
+func (handlerEmojiSigner) DeleteObject(context.Context, string) error              { return nil }
+
 func (handlerEmojiSigner) GetObject(_ context.Context, _ string) (io.ReadCloser, string, int64, time.Time, error) {
 	data := "GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x00\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"
 	return io.NopCloser(strings.NewReader(data)), "image/gif", int64(len(data)), time.Now(), nil
@@ -113,8 +116,9 @@ func TestEmojiHandler_Create_Success(t *testing.T) {
 	if _, exists := store.items["fire"]; !exists {
 		t.Error("emoji not stored")
 	}
-	if got := store.items["fire"].ImageURL; !strings.Contains(got, "uploads/u1/fire.png") {
-		t.Fatalf("ImageURL = %q, want server-derived URL from imageKey", got)
+	// Served from the server's own copy of the upload (see EmojiService.Create).
+	if kept := store.items["fire"]; !strings.HasPrefix(kept.ImageKey, "emojis/") || kept.ImageURL != "https://fresh.test/"+kept.ImageKey {
+		t.Fatalf("ImageKey = %q, ImageURL = %q, want the server-derived URL of the kept copy", kept.ImageKey, kept.ImageURL)
 	}
 	if store.items["fire"].GettingWorkDone {
 		t.Error("flag must default to false when the body omits it")
@@ -161,8 +165,8 @@ func TestEmojiHandler_Create_GettingWorkDoneRejectsNonAdmin(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d, want 400 (member cannot pin to the shelf); body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403 (member cannot pin to the shelf); body=%s", rec.Code, rec.Body.String())
 	}
 	if _, exists := store.items["shipit"]; exists {
 		t.Error("rejected upload must not be stored")
@@ -227,8 +231,9 @@ func TestEmojiHandler_Create_GuestForbidden(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status=%d, want 400", rec.Code)
+	// A refusal, not bad input: 403 (it used to be a 400).
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status=%d, want 403", rec.Code)
 	}
 }
 
@@ -535,6 +540,9 @@ func (s *dataAttachmentStore) SetVerifiedETag(_ context.Context, id, etag string
 type fakeAttachmentSignerH struct{}
 
 func (fakeAttachmentSignerH) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
+	return "https://signed/" + key, nil
+}
+func (fakeAttachmentSignerH) PresignedInlineURL(_ context.Context, key, _, _ string, _ time.Duration) (string, error) {
 	return "https://signed/" + key, nil
 }
 func (fakeAttachmentSignerH) PresignedDownloadURL(_ context.Context, key, _ string, _ time.Duration) (string, error) {

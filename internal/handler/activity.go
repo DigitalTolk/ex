@@ -2,14 +2,12 @@ package handler
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
-	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // ActivityService is the activity-stream behaviour the handler needs.
@@ -51,7 +49,7 @@ func (h *ActivityHandler) Feed(w http.ResponseWriter, r *http.Request) {
 	}
 	feed, err := h.activity.Feed(r.Context(), userID)
 	if err != nil {
-		writeInternalError(w, r, "activity_feed_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	if feed.Items == nil {
@@ -71,7 +69,7 @@ func (h *ActivityHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.activity.MarkSeen(r.Context(), userID); err != nil {
-		writeInternalError(w, r, "activity_read_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -98,7 +96,7 @@ func (h *ActivityHandler) SetItemsRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.activity.SetItemsRead(r.Context(), userID, body.IDs, *body.Read); err != nil {
-		writeAgentError(w, r, err, "activity_items_read_error")
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -120,7 +118,7 @@ func (h *ActivityHandler) RemoveItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.activity.RemoveItems(r.Context(), userID, body.IDs); err != nil {
-		writeAgentError(w, r, err, "activity_items_remove_error")
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -152,7 +150,7 @@ func (h *ActivityHandler) CreateReminder(w http.ResponseWriter, r *http.Request)
 		RemindAt:    body.RemindAt,
 	})
 	if err != nil {
-		writeReminderError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, reminder)
@@ -167,7 +165,7 @@ func (h *ActivityHandler) ListReminders(w http.ResponseWriter, r *http.Request) 
 	}
 	reminders, err := h.reminder.ListPending(r.Context(), userID)
 	if err != nil {
-		writeInternalError(w, r, "reminders_list_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	if reminders == nil {
@@ -184,41 +182,8 @@ func (h *ActivityHandler) CancelReminder(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := h.reminder.Cancel(r.Context(), userID, pathParam(r, "id")); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "reminder not found")
-			return
-		}
-		writeInternalError(w, r, "reminder_cancel_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// writeReminderError maps reminder validation failures to 4xx, falling back to a
-// generic 500 for anything unexpected.
-func writeReminderError(w http.ResponseWriter, r *http.Request, err error) {
-	switch {
-	case errors.Is(err, service.ErrReminderTimeInvalid):
-		writeError(w, http.StatusBadRequest, "invalid_time", err.Error())
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", "message not found")
-	case isReminderValidation(err):
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-	case isReminderAccessError(err):
-		writeError(w, http.StatusForbidden, "forbidden", "you do not have access to this message")
-	default:
-		writeInternalError(w, r, "reminder_create_error", err)
-	}
-}
-
-func isReminderValidation(err error) bool {
-	msg := err.Error()
-	return msg == "reminder: message and parent required" || msg == "reminder: invalid parent type"
-}
-
-// isReminderAccessError matches the membership-denied errors CheckAccess returns
-// so scheduling a reminder for an inaccessible message is a 403, not a 500.
-// Denials carry service.ErrForbidden — no fragile string matching.
-func isReminderAccessError(err error) bool {
-	return errors.Is(err, service.ErrForbidden)
 }

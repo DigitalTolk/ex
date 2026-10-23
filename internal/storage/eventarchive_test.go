@@ -52,6 +52,10 @@ func (m *memS3) PutObject(_ context.Context, in *s3.PutObjectInput, _ ...func(*s
 	return &s3.PutObjectOutput{}, nil
 }
 
+func (m *memS3) AbortMultipartUpload(context.Context, *s3.AbortMultipartUploadInput, ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error) {
+	return &s3.AbortMultipartUploadOutput{}, nil
+}
+
 func TestEventArchive_RoundTrip(t *testing.T) {
 	arch := NewEventArchive(&S3Client{client: &memS3{}, bucket: "b"})
 	events := []*model.RunEvent{

@@ -3,12 +3,13 @@ import { render } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import ChatPage from '@/pages/ChatPage';
+import { eventCallbacks, expectInvalidPayloadReported, type CapturedWSOptions } from '@/test/ws-frames';
 
 let capturedOptions: Record<string, ((data: unknown) => void) | boolean | undefined> = {};
 
 vi.mock('@/hooks/useWebSocket', () => ({
   useWebSocket: (opts: Record<string, ((data: unknown) => void) | boolean | undefined>) => {
-    capturedOptions = opts;
+    capturedOptions = eventCallbacks(opts as unknown as CapturedWSOptions) as typeof capturedOptions;
   },
 }));
 
@@ -70,7 +71,7 @@ vi.mock('@/hooks/useConversations', () => ({
     return { data: opts?.select && rows ? opts.select(rows) : rows };
   },
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
-  useSearchUsers: () => ({ data: [] }),
+  useUserLookup: () => ({ data: [] }),
 }));
 
 vi.mock('@/lib/api', () => ({
@@ -159,9 +160,12 @@ describe('ChatPage - channel removed/archived', () => {
   it('exposes onNotification handler that tolerates unknown payloads', () => {
     renderAt('/');
     expect(typeof capturedOptions.onNotification).toBe('function');
-    expect(() => {
+    // Not a notification at all: reported loudly, never silently dropped.
+    expectInvalidPayloadReported(['notification.new', 'notification.new'], () => {
       (capturedOptions.onNotification as (data: unknown) => void)(undefined);
       (capturedOptions.onNotification as (data: unknown) => void)({});
+    });
+    expect(() => {
       (capturedOptions.onNotification as (data: unknown) => void)({
         kind: 'message',
         title: 't',

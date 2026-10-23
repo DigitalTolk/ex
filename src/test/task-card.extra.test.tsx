@@ -44,13 +44,13 @@ function installTask(t: Record<string, unknown> | null, over: { mutate?: (path: 
   });
 }
 
-function renderCard(m: TaskMarker = mk(), currentUserId?: string) {
+function renderCard(m: TaskMarker = mk(), currentUserId?: string, messageId = 'm-1') {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={qc}>
-      <TaskCard marker={m} currentUserId={currentUserId} />
+      <TaskCard marker={m} messageId={messageId} currentUserId={currentUserId} />
     </QueryClientProvider>,
   );
 }
@@ -110,6 +110,46 @@ describe('TaskCard', () => {
     expect(screen.getByText('Use: alice/secret')).toBeInTheDocument();
     expect(screen.getByText('Wear a helmet')).toBeInTheDocument();
     expect(screen.getByText('Old flow unchanged')).toBeInTheDocument();
+  });
+
+  it('never links a ticket, MR or test URL that is not plain http(s)', async () => {
+    installTask(
+      task({
+        ticket: { connector: 'jira', id: 'EX-15', url: 'ms-msdt:/id PCWDiagnostic' },
+        repos: [{ path: 'group/repo-a', role: 'primary', branch: 'task/x', mrURL: 'smb://attacker.example/share' }],
+        testPlan: { url: 'file:///etc/passwd', steps: ['Open the app'] },
+      }),
+    );
+    const { container } = renderCard(mk({ state: 'awaiting_user_test' }), 'u-2');
+    expect(await screen.findByTestId('task-goal')).toBeInTheDocument();
+    // The ticket degrades to the unlinked chip; MR and test links are absent.
+    expect(screen.getByTestId('task-ticket').tagName).toBe('SPAN');
+    expect(screen.queryByTitle('Merge request for repo-a')).toBeNull();
+    expect(screen.queryByText(/open & test/)).toBeNull();
+    expect(container.querySelector('a')).toBeNull();
+  });
+
+  it('ignores the live task behind a marker copied into some other message', async () => {
+    // Anyone can type "[task:t-1|…]": only the task's own thread root gets its
+    // live details, links and actions. Both cards share one query, so the
+    // real card showing its goal proves the data reached the copy too.
+    installTask(task({ ticket: { connector: 'jira', id: 'EX-12', url: 'https://jira/EX-12' } }));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <TaskCard marker={mk({ state: 'awaiting_user_test' })} messageId="m-1" currentUserId="u-1" />
+        <TaskCard marker={mk({ state: 'awaiting_user_test', title: 'Typed title' })} messageId="m-elsewhere" currentUserId="u-1" />
+      </QueryClientProvider>,
+    );
+    const [real, copy] = screen.getAllByTestId('task-card');
+    expect(await within(real).findByTestId('task-goal')).toHaveTextContent('Make it green.');
+    expect(within(real).getByTestId('task-signoff')).toBeInTheDocument();
+    // The copy keeps the marker's own text and none of the real task.
+    expect(within(copy).getByText('Typed title')).toBeInTheDocument();
+    expect(within(copy).queryByTestId('task-goal')).toBeNull();
+    expect(within(copy).queryByTestId('task-ticket')).toBeNull();
+    expect(within(copy).queryByTestId('task-signoff')).toBeNull();
+    expect(within(copy).queryByText('Ex Chat')).toBeNull();
   });
 
   it('titles a linked ticket with a generic system name when the connector is unknown', async () => {

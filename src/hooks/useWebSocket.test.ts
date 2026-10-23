@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { useWebSocket } from './useWebSocket';
 import { sendWS } from '@/lib/ws-sender';
+import { wireMessage, withHandlers } from '@/test/ws-frames';
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
 
@@ -83,7 +84,7 @@ afterEach(() => {
 describe('useWebSocket', () => {
   it('connects with the correct URL', async () => {
     renderHook(() =>
-      useWebSocket({ enabled: true }),
+      useWebSocket(withHandlers({ enabled: true })),
     );
     await flushConnect();
 
@@ -94,7 +95,7 @@ describe('useWebSocket', () => {
 
   it('does not connect when disabled', async () => {
     renderHook(() =>
-      useWebSocket({ enabled: false }),
+      useWebSocket(withHandlers({ enabled: false })),
     );
     await flushConnect();
 
@@ -108,7 +109,7 @@ describe('useWebSocket', () => {
       value: { protocol: 'https:', host: original.host },
     });
     try {
-      renderHook(() => useWebSocket({ enabled: true }));
+      renderHook(() => useWebSocket(withHandlers({ enabled: true })));
       await flushConnect();
       expect(MockWebSocket.instances[0].url.startsWith('wss://')).toBe(true);
     } finally {
@@ -120,7 +121,7 @@ describe('useWebSocket', () => {
     // onopen exposes the live socket's send via setWSSender — typing pings
     // and notification acks route through this without prop-drilling. The
     // installed sender must write to the socket that just opened.
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
 
     const ws = MockWebSocket.instances[0];
@@ -133,7 +134,7 @@ describe('useWebSocket', () => {
   it('calls onMessageNew when receiving a message.new event', async () => {
     const onMessageNew = vi.fn();
     renderHook(() =>
-      useWebSocket({ onMessageNew, enabled: true }),
+      useWebSocket(withHandlers({ onMessageNew, enabled: true })),
     );
     await flushConnect();
 
@@ -141,16 +142,16 @@ describe('useWebSocket', () => {
     ws.simulateOpen();
     ws.simulateMessage(JSON.stringify({
       type: 'message.new',
-      data: JSON.stringify({ id: '1', body: 'hello' }),
+      data: JSON.stringify(wireMessage({ id: '1', body: 'hello' })),
     }));
 
-    expect(onMessageNew).toHaveBeenCalledWith({ id: '1', body: 'hello' });
+    expect(onMessageNew).toHaveBeenCalledWith(wireMessage({ id: '1', body: 'hello' }));
   });
 
   it('calls onMessageEdited when receiving a message.edited event', async () => {
     const onMessageEdited = vi.fn();
     renderHook(() =>
-      useWebSocket({ onMessageEdited, enabled: true }),
+      useWebSocket(withHandlers({ onMessageEdited, enabled: true })),
     );
     await flushConnect();
 
@@ -158,16 +159,16 @@ describe('useWebSocket', () => {
     ws.simulateOpen();
     ws.simulateMessage(JSON.stringify({
       type: 'message.edited',
-      data: JSON.stringify({ id: '2', body: 'edited' }),
+      data: JSON.stringify(wireMessage({ id: '2', body: 'edited' })),
     }));
 
-    expect(onMessageEdited).toHaveBeenCalledWith({ id: '2', body: 'edited' });
+    expect(onMessageEdited).toHaveBeenCalledWith(wireMessage({ id: '2', body: 'edited' }));
   });
 
   it('calls onMessageDeleted when receiving a message.deleted event', async () => {
     const onMessageDeleted = vi.fn();
     renderHook(() =>
-      useWebSocket({ onMessageDeleted, enabled: true }),
+      useWebSocket(withHandlers({ onMessageDeleted, enabled: true })),
     );
     await flushConnect();
 
@@ -175,16 +176,16 @@ describe('useWebSocket', () => {
     ws.simulateOpen();
     ws.simulateMessage(JSON.stringify({
       type: 'message.deleted',
-      data: JSON.stringify({ id: '3' }),
+      data: JSON.stringify({ id: '3', parentID: 'ch-1' }),
     }));
 
-    expect(onMessageDeleted).toHaveBeenCalledWith({ id: '3' });
+    expect(onMessageDeleted).toHaveBeenCalledWith({ id: '3', parentID: 'ch-1' });
   });
 
   it('evicts the oldest seen event id once the dedup window overflows', async () => {
     const onMessageNew = vi.fn();
     renderHook(() =>
-      useWebSocket({ onMessageNew, enabled: true }),
+      useWebSocket(withHandlers({ onMessageNew, enabled: true })),
     );
     await flushConnect();
 
@@ -196,7 +197,7 @@ describe('useWebSocket', () => {
       ws.simulateMessage(JSON.stringify({
         type: 'message.new',
         id: `evt-${i}`,
-        data: JSON.stringify({ id: String(i), body: 'x' }),
+        data: JSON.stringify(wireMessage({ id: String(i), body: 'x' })),
       }));
     }
     expect(onMessageNew).toHaveBeenCalledTimes(513);
@@ -205,7 +206,7 @@ describe('useWebSocket', () => {
     ws.simulateMessage(JSON.stringify({
       type: 'message.new',
       id: 'evt-0',
-      data: JSON.stringify({ id: '0', body: 'again' }),
+      data: JSON.stringify(wireMessage({ id: '0', body: 'again' })),
     }));
     expect(onMessageNew).toHaveBeenCalledTimes(514);
   });
@@ -216,7 +217,7 @@ describe('useWebSocket', () => {
     const onMessageNew = vi.fn().mockImplementationOnce(() => {
       throw new Error('cache patch boom');
     });
-    renderHook(() => useWebSocket({ onMessageNew, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onMessageNew, enabled: true })));
     await flushConnect();
 
     const ws = MockWebSocket.instances[0];
@@ -224,7 +225,7 @@ describe('useWebSocket', () => {
     const frame = JSON.stringify({
       type: 'message.new',
       id: 'evt-throw',
-      data: JSON.stringify({ id: 'x', body: 'hi' }),
+      data: JSON.stringify(wireMessage({ id: 'x', body: 'hi' })),
     });
 
     // Handler throws → the event must NOT be recorded as seen.
@@ -240,24 +241,27 @@ describe('useWebSocket', () => {
 
   it('handles data as object (not double-encoded string)', async () => {
     const onMessageNew = vi.fn();
+    const onDraftUpdated = vi.fn();
     renderHook(() =>
-      useWebSocket({ onMessageNew, enabled: true }),
+      useWebSocket(withHandlers({ onMessageNew, onDraftUpdated, enabled: true })),
     );
     await flushConnect();
 
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
+    ws.simulateMessage(JSON.stringify({ type: 'message.new', data: wireMessage({ id: 'obj' }) }));
+    expect(onMessageNew).toHaveBeenCalledWith(wireMessage({ id: 'obj' }));
     // When data is falsy/missing, falls back to msg itself
     ws.simulateMessage(JSON.stringify({
-      type: 'message.new',
+      type: 'draft.updated',
     }));
 
-    expect(onMessageNew).toHaveBeenCalledWith({ type: 'message.new' });
+    expect(onDraftUpdated).toHaveBeenCalledWith({ type: 'draft.updated' });
   });
 
   it('keeps reconnecting after every close on the jittered backoff', async () => {
     renderHook(() =>
-      useWebSocket({ enabled: true }),
+      useWebSocket(withHandlers({ enabled: true })),
     );
     await flushConnect();
 
@@ -288,7 +292,7 @@ describe('useWebSocket', () => {
     // the connect attempt must bail out silently — no new socket and no
     // reschedule (a terminal auth rejection is handled by apiFetch's global
     // logout, which flips `enabled` and tears the hook down).
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
 
     expect(MockWebSocket.instances).toHaveLength(1);
@@ -320,7 +324,7 @@ describe('useWebSocket', () => {
     // A network-level mint failure (offline, server restarting) must book a
     // backoff retry — the old flow silently stalled with a dead socket.
     apiFetchMock.mockRejectedValue(new Error('network'));
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
 
     // The initial mint failed → no socket, but a retry is pending.
@@ -348,7 +352,7 @@ describe('useWebSocket', () => {
 
   it('resets the backoff curve after a successful open', async () => {
     renderHook(() =>
-      useWebSocket({ enabled: true }),
+      useWebSocket(withHandlers({ enabled: true })),
     );
     await flushConnect();
 
@@ -378,7 +382,7 @@ describe('useWebSocket', () => {
   it('calls onMembersChanged when receiving a members.changed event', async () => {
     const onMembersChanged = vi.fn();
     renderHook(() =>
-      useWebSocket({ onMembersChanged, enabled: true }),
+      useWebSocket(withHandlers({ onMembersChanged, enabled: true })),
     );
     await flushConnect();
 
@@ -395,7 +399,7 @@ describe('useWebSocket', () => {
   it('calls onConversationNew when receiving a conversation.new event', async () => {
     const onConversationNew = vi.fn();
     renderHook(() =>
-      useWebSocket({ onConversationNew, enabled: true }),
+      useWebSocket(withHandlers({ onConversationNew, enabled: true })),
     );
     await flushConnect();
 
@@ -412,7 +416,7 @@ describe('useWebSocket', () => {
   it('calls onConversationConverted when a group becomes a private channel', async () => {
     const onConversationConverted = vi.fn();
     renderHook(() =>
-      useWebSocket({ onConversationConverted, enabled: true }),
+      useWebSocket(withHandlers({ onConversationConverted, enabled: true })),
     );
     await flushConnect();
 
@@ -429,7 +433,7 @@ describe('useWebSocket', () => {
   it('calls onChannelArchived when receiving a channel.archived event', async () => {
     const onChannelArchived = vi.fn();
     renderHook(() =>
-      useWebSocket({ onChannelArchived, enabled: true }),
+      useWebSocket(withHandlers({ onChannelArchived, enabled: true })),
     );
     await flushConnect();
 
@@ -446,7 +450,7 @@ describe('useWebSocket', () => {
   it('calls onChannelUnarchived when receiving a channel.unarchived event', async () => {
     const onChannelUnarchived = vi.fn();
     renderHook(() =>
-      useWebSocket({ onChannelUnarchived, enabled: true }),
+      useWebSocket(withHandlers({ onChannelUnarchived, enabled: true })),
     );
     await flushConnect();
 
@@ -462,7 +466,7 @@ describe('useWebSocket', () => {
 
   it('cleans up on unmount', async () => {
     const { unmount } = renderHook(() =>
-      useWebSocket({ enabled: true }),
+      useWebSocket(withHandlers({ enabled: true })),
     );
     await flushConnect();
 
@@ -476,7 +480,7 @@ describe('useWebSocket', () => {
   // must be sent as `since=…` on the next reconnect so the server
   // can replay anything missed during the disconnect.
   it('sends the last event id as ?since on reconnect', async () => {
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
 
     const ws = MockWebSocket.instances[0];
@@ -484,7 +488,7 @@ describe('useWebSocket', () => {
     ws.simulateMessage(JSON.stringify({
       id: '01ID0000000000000000000099',
       type: 'message.new',
-      data: JSON.stringify({ id: 'm1' }),
+      data: JSON.stringify(wireMessage({ id: 'm1' })),
     }));
     ws.simulateClose();
 
@@ -502,7 +506,7 @@ describe('useWebSocket', () => {
   // (e.g. raced in from another instance) must not move the cursor backwards,
   // or the next reconnect would replay the in-between window and re-deliver.
   it('does not regress the reconnect cursor on an out-of-order frame', async () => {
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
 
     const ws = MockWebSocket.instances[0];
@@ -510,13 +514,13 @@ describe('useWebSocket', () => {
     ws.simulateMessage(JSON.stringify({
       id: '01ID0000000000000000000099',
       type: 'message.new',
-      data: JSON.stringify({ id: 'm1' }),
+      data: JSON.stringify(wireMessage({ id: 'm1' })),
     }));
     // A later frame carrying a smaller id (clock skew / cross-instance order).
     ws.simulateMessage(JSON.stringify({
       id: '01ID0000000000000000000042',
       type: 'message.new',
-      data: JSON.stringify({ id: 'm2' }),
+      data: JSON.stringify(wireMessage({ id: 'm2' })),
     }));
     ws.simulateClose();
 
@@ -535,7 +539,7 @@ describe('useWebSocket', () => {
   // it must not advance the cursor — even with a higher ULID than a durable
   // message — or a reconnect would skip replaying messages between them.
   it('does not advance the reconnect cursor for an ephemeral frame', async () => {
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
 
     const ws = MockWebSocket.instances[0];
@@ -543,7 +547,7 @@ describe('useWebSocket', () => {
     ws.simulateMessage(JSON.stringify({
       id: '01ID0000000000000000000099',
       type: 'message.new',
-      data: JSON.stringify({ id: 'm1' }),
+      data: JSON.stringify(wireMessage({ id: 'm1' })),
     }));
     ws.simulateMessage(JSON.stringify({
       id: '01ID0000000000000000000150',
@@ -565,7 +569,7 @@ describe('useWebSocket', () => {
   // First connect (no prior cursor) must not send a since param —
   // the server interprets that as "fresh, no replay needed".
   it('omits ?since on a fresh first connect', async () => {
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
     expect(MockWebSocket.instances[0].url).not.toContain('since=');
   });
@@ -576,7 +580,7 @@ describe('useWebSocket', () => {
   // apply mutations on every reconnect.
   it('deduplicates events by id across replay + live', async () => {
     const onMessageNew = vi.fn();
-    renderHook(() => useWebSocket({ onMessageNew, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onMessageNew, enabled: true })));
     await flushConnect();
 
     const ws = MockWebSocket.instances[0];
@@ -584,7 +588,7 @@ describe('useWebSocket', () => {
     const frame = JSON.stringify({
       id: '01ID0000000000000000000050',
       type: 'message.new',
-      data: JSON.stringify({ id: 'm1' }),
+      data: JSON.stringify(wireMessage({ id: 'm1' })),
     });
     ws.simulateMessage(frame);
     ws.simulateMessage(frame);
@@ -599,7 +603,7 @@ describe('useWebSocket', () => {
   it('fires onReplayExhausted and resets cursor on replay.exhausted', async () => {
     const onReplayExhausted = vi.fn();
     renderHook(() =>
-      useWebSocket({ onReplayExhausted, enabled: true }),
+      useWebSocket(withHandlers({ onReplayExhausted, enabled: true })),
     );
     await flushConnect();
 
@@ -609,7 +613,7 @@ describe('useWebSocket', () => {
     ws.simulateMessage(JSON.stringify({
       id: '01ID0000000000000000000077',
       type: 'message.new',
-      data: JSON.stringify({ id: 'm1' }),
+      data: JSON.stringify(wireMessage({ id: 'm1' })),
     }));
     // Now server says that cursor is exhausted.
     ws.simulateMessage(JSON.stringify({
@@ -637,7 +641,7 @@ describe('useWebSocket', () => {
   // anything published right after the marker.
   it('ignores replay.done as a no-op marker', async () => {
     const onMessageNew = vi.fn();
-    renderHook(() => useWebSocket({ onMessageNew, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onMessageNew, enabled: true })));
     await flushConnect();
 
     const ws = MockWebSocket.instances[0];
@@ -655,7 +659,7 @@ describe('useWebSocket', () => {
   // the standard onclose backoff path (the mock does not auto-fire onclose, so
   // we assert the close was requested).
   it('closes the socket when the underlying connection errors', async () => {
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
 
     const ws = MockWebSocket.instances[0];
@@ -672,7 +676,7 @@ describe('useWebSocket', () => {
   // open resets the backoff curve, observable as the next drop still
   // reconnecting within the 30s cap.
   it('runs a full connect → backoff → reconnect → reset lifecycle preserving the replay cursor', async () => {
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
 
     // Step 1: initial connect + a durable message.new advances lastEventId.
@@ -681,7 +685,7 @@ describe('useWebSocket', () => {
     ws0.simulateMessage(JSON.stringify({
       id: '01ID0000000000000000000100',
       type: 'message.new',
-      data: JSON.stringify({ id: 'm1' }),
+      data: JSON.stringify(wireMessage({ id: 'm1' })),
     }));
 
     // Step 2: the socket keeps dropping without ever re-opening → each close

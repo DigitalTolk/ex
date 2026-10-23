@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import { wsLiveQueryOptions } from '@/lib/query-client';
 import type { SidebarReorderUpdate } from '@/lib/sidebar-reorder';
 import type { SidebarCategory, UserChannel, UserConversation } from '@/types';
 
@@ -70,7 +71,7 @@ export function useCategories(options?: { enabled?: boolean }) {
       return Array.isArray(res) ? res : [];
     },
     enabled: options?.enabled ?? true,
-    staleTime: 30_000,
+    ...wsLiveQueryOptions,
   });
 }
 

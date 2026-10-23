@@ -640,14 +640,6 @@ export function useSendMessage(scope: SendMessageScope) {
 // Legacy aliases — kept so existing callers and tests don't churn. Prefer
 // useSendMessage in new code.
 // authorID (the signed-in user) lets a send show at once as a pending row.
-export function useSendChannelMessage(channelId: string | undefined, authorID?: string) {
-  return useSendMessage({ channelId, authorID });
-}
-
-export function useSendConversationMessage(conversationId: string | undefined, authorID?: string) {
-  return useSendMessage({ conversationId, authorID });
-}
-
 interface MessageMutationVars {
   messageId: string;
   channelId?: string;

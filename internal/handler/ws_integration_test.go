@@ -733,8 +733,7 @@ func TestWSHandler_Connect_SessionDeadlineClosesSocket(t *testing.T) {
 		t.Fatalf("mint: %v", err)
 	}
 
-	headerAuth := func(next http.Handler) http.Handler { return next } // unused: ticket path
-	srv := httptest.NewServer(h.UpgradeAuth(headerAuth)(http.HandlerFunc(h.Connect)))
+	srv := httptest.NewServer(h.UpgradeAuth(http.HandlerFunc(h.Connect)))
 	defer srv.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -795,7 +794,7 @@ func TestWSHandler_Connect_BrokerCloseEndsConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ws dial: %v", err)
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
 
 	// Let the handshake land so the write loop is parked in its select.
 	if _, _, err := conn.Read(ctx); err != nil {

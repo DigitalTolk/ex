@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { useWebSocket } from './useWebSocket';
+import { wireMessage, withHandlers } from '@/test/ws-frames';
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
 
@@ -74,7 +75,7 @@ afterEach(() => {
 describe('useWebSocket - extra coverage', () => {
   it('calls onChannelUpdated for channel.updated events', async () => {
     const onChannelUpdated = vi.fn();
-    renderHook(() => useWebSocket({ onChannelUpdated, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onChannelUpdated, enabled: true })));
     await flushConnect();
 
     const ws = MockWebSocket.instances[0];
@@ -89,7 +90,7 @@ describe('useWebSocket - extra coverage', () => {
 
   it('calls onChannelNew for channel.new events', async () => {
     const onChannelNew = vi.fn();
-    renderHook(() => useWebSocket({ onChannelNew, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onChannelNew, enabled: true })));
     await flushConnect();
 
     const ws = MockWebSocket.instances[0];
@@ -103,7 +104,7 @@ describe('useWebSocket - extra coverage', () => {
 
   it('calls onChannelRemoved for channel.removed events', async () => {
     const onChannelRemoved = vi.fn();
-    renderHook(() => useWebSocket({ onChannelRemoved, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onChannelRemoved, enabled: true })));
     await flushConnect();
 
     const ws = MockWebSocket.instances[0];
@@ -116,7 +117,7 @@ describe('useWebSocket - extra coverage', () => {
   });
 
   it('calls ws.close() on error event', async () => {
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
 
     const ws = MockWebSocket.instances[0];
@@ -127,7 +128,7 @@ describe('useWebSocket - extra coverage', () => {
 
   it('ignores malformed JSON in messages', async () => {
     const onMessageNew = vi.fn();
-    renderHook(() => useWebSocket({ onMessageNew, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onMessageNew, enabled: true })));
     await flushConnect();
 
     const ws = MockWebSocket.instances[0];
@@ -138,7 +139,7 @@ describe('useWebSocket - extra coverage', () => {
 
   it('does not reconnect on close when component disabled before close fires', async () => {
     const { rerender } = renderHook(
-      ({ enabled }: { enabled: boolean }) => useWebSocket({ enabled }),
+      ({ enabled }: { enabled: boolean }) => useWebSocket(withHandlers({ enabled })),
       { initialProps: { enabled: true } },
     );
     await flushConnect();
@@ -162,7 +163,7 @@ describe('useWebSocket - extra coverage', () => {
     const getTokenMock = vi.mocked(mod.getAccessToken);
     getTokenMock.mockReturnValueOnce(null as unknown as string);
 
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
 
     // No token → connect bails before even minting a ticket.
@@ -171,22 +172,22 @@ describe('useWebSocket - extra coverage', () => {
   });
 
   it.each([
-    ['presence.changed', 'onPresenceChanged', { userId: 'u-1', online: true }],
-    ['emoji.added', 'onEmojiAdded', { name: ':party:' }],
+    ['presence.changed', 'onPresenceChanged', { userID: 'u-1', online: true }],
+    ['emoji.added', 'onEmojiAdded', { name: ':party:', imageURL: '/e/party.png', createdBy: 'u-1', createdAt: '2026-01-01T00:00:00Z' }],
     ['emoji.removed', 'onEmojiRemoved', { name: ':party:' }],
     ['user.updated', 'onUserUpdated', { id: 'u-1', displayName: 'New' }],
     ['userchannel.updated', 'onUserChannelUpdated', { channelID: 'ch-1', sidebarPosition: 1000 }],
     ['sidebar.updated', 'onSidebarUpdated', { userID: 'u-1' }],
-    ['attachment.deleted', 'onAttachmentDeleted', { attachmentID: 'a-1' }],
+    ['attachment.deleted', 'onAttachmentDeleted', { id: 'a-1' }],
     ['channel.muted', 'onChannelMuted', { channelID: 'ch-1', muted: true }],
-    ['notification.new', 'onNotification', { id: 'n-1' }],
+    ['notification.new', 'onNotification', { kind: 'message', parentID: 'ch-1', parentType: 'channel', title: 't', body: 'b', deepLink: '/x' }],
     ['auth.force_logout', 'onForceLogout', { reason: 'admin-revoked' }],
     ['server.version', 'onServerVersion', { version: '1.2.3' }],
     ['ping', 'onPing', { ts: 123 }],
-    ['typing', 'onTyping', { userId: 'u-1' }],
+    ['typing', 'onTyping', { userID: 'u-1', parentID: 'ch-1' }],
   ] as const)('routes %s events to %s', async (type, cbName, payload) => {
     const cb = vi.fn();
-    renderHook(() => useWebSocket({ [cbName]: cb, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ [cbName]: cb, enabled: true })));
     await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -198,20 +199,31 @@ describe('useWebSocket - extra coverage', () => {
     const first = vi.fn();
     const second = vi.fn();
     const { rerender } = renderHook(
-      ({ cb }: { cb: typeof first }) => useWebSocket({ onMessageNew: cb, enabled: true }),
+      ({ cb }: { cb: typeof first }) => useWebSocket(withHandlers({ onMessageNew: cb, enabled: true })),
       { initialProps: { cb: first } },
     );
     await flushConnect();
     rerender({ cb: second });
     const ws = MockWebSocket.instances[0];
-    ws.simulateMessage(JSON.stringify({ type: 'message.new', data: JSON.stringify({ id: '1' }) }));
+    ws.simulateMessage(JSON.stringify({ type: 'message.new', data: JSON.stringify(wireMessage({ id: '1' })) }));
     expect(first).not.toHaveBeenCalled();
-    expect(second).toHaveBeenCalledWith({ id: '1' });
+    expect(second).toHaveBeenCalledWith(wireMessage({ id: '1' }));
+  });
+
+  it('ignores a frame with no event type, and still dedups it by id', async () => {
+    const cb = vi.fn();
+    renderHook(() => useWebSocket(withHandlers({ onDraftUpdated: cb, enabled: true })));
+    await flushConnect();
+    const ws = MockWebSocket.instances[0];
+    ws.simulateMessage(JSON.stringify({ id: 'typeless-1', data: '{}' }));
+    ws.simulateMessage(JSON.stringify({ id: 'typeless-1', type: 'draft.updated', data: '{}' }));
+    // Nothing handled the typeless frame, and its id now dedups the second.
+    expect(cb).not.toHaveBeenCalled();
   });
 
   it('ignores unknown event types', async () => {
     const cb = vi.fn();
-    renderHook(() => useWebSocket({ onMessageNew: cb, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onMessageNew: cb, enabled: true })));
     await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateMessage(JSON.stringify({ type: 'pong', data: '{}' }));
@@ -220,7 +232,7 @@ describe('useWebSocket - extra coverage', () => {
 
   it('does NOT call onReconnect on the first successful open', async () => {
     const onReconnect = vi.fn();
-    renderHook(() => useWebSocket({ onReconnect, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onReconnect, enabled: true })));
     await flushConnect();
     MockWebSocket.instances[0].simulateOpen();
     expect(onReconnect).not.toHaveBeenCalled();
@@ -228,7 +240,7 @@ describe('useWebSocket - extra coverage', () => {
 
   it('calls onReconnect when the socket re-opens after a close', async () => {
     const onReconnect = vi.fn();
-    renderHook(() => useWebSocket({ onReconnect, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onReconnect, enabled: true })));
     await flushConnect();
     const first = MockWebSocket.instances[0];
     first.simulateOpen();

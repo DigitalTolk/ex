@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/agents"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/search"
@@ -154,6 +155,15 @@ func (f *hwsCovRunStore) GetApproval(context.Context, string, string) (*model.Ap
 }
 func (f *hwsCovRunStore) SettleApproval(_ context.Context, _, _, _, _, _, _ string, _ time.Time) error {
 	return nil
+}
+func (f *hwsCovRunStore) ConsumeApproval(_ context.Context, runID, approvalID string, at time.Time) error {
+	for _, a := range f.approvals[runID] {
+		if a.ID == approvalID && a.State == model.ApprovalApproved && a.ConsumedAt == nil {
+			a.ConsumedAt = &at
+			return nil
+		}
+	}
+	return store.ErrStaleApproval
 }
 func (f *hwsCovRunStore) ListApprovals(_ context.Context, runID string) ([]*model.Approval, error) {
 	if f.apprErr != nil {
@@ -414,8 +424,8 @@ func newHwsCovEnv(t *testing.T) *hwsCovEnv {
 	runs.runs[run.ID] = run
 
 	orchMsgs := &hwsCovOrchMsgs{}
-	agentSvc := service.NewAgentService(hwsCovAgentDir{}, hwsCovAgentUsers{})
-	orch := service.NewOrchestrator(runs, agentSvc, hwsCovOrchUsers{}, orchMsgs, nil, nil)
+	agentSvc := agents.NewAgentService(hwsCovAgentDir{}, hwsCovAgentUsers{})
+	orch := agents.NewOrchestrator(runs, agentSvc, hwsCovOrchUsers{}, orchMsgs, nil, nil)
 
 	chans := newDataChannelStore()
 	members := newDataMembershipStore()
@@ -575,7 +585,7 @@ func TestHwsCovListChannels(t *testing.T) {
 		env := newHwsCovEnv(t)
 		env.members.listUserChannelsErr = errors.New("boom")
 		rec := env.do(t, env.h.ListChannels, http.MethodGet, "/", "", "", nil)
-		hwsCovWant(t, rec, http.StatusInternalServerError, "channel list failed")
+		hwsCovWant(t, rec, http.StatusInternalServerError, "internal server error") // internal text never leaks
 	})
 	t.Run("happy with a channel", func(t *testing.T) {
 		env := newHwsCovEnv(t)
@@ -617,7 +627,8 @@ func TestHwsCovCreateChannel(t *testing.T) {
 	t.Run("service rejects", func(t *testing.T) {
 		env := newHwsCovEnv(t)
 		rec := env.do(t, env.h.CreateChannel, http.MethodPost, "/", `{"name":"Bad Name!"}`, "", nil)
-		hwsCovWant(t, rec, http.StatusForbidden, "forbidden")
+		// A bad name is the caller's to fix: 400 with the rule, not a 403.
+		hwsCovWant(t, rec, http.StatusBadRequest, "lowercase letters")
 	})
 }
 
@@ -625,7 +636,7 @@ func TestHwsCovJoinChannel(t *testing.T) {
 	t.Run("join rejected", func(t *testing.T) {
 		env := newHwsCovEnv(t)
 		rec := env.do(t, env.h.JoinChannel, http.MethodPost, "/", "", "hws-ghost-chan", nil)
-		hwsCovWant(t, rec, http.StatusForbidden, "forbidden")
+		hwsCovWant(t, rec, http.StatusNotFound, "not_found") // no such channel
 	})
 	t.Run("happy", func(t *testing.T) {
 		env := newHwsCovEnv(t)
@@ -642,7 +653,8 @@ func TestHwsCovReadChannel(t *testing.T) {
 		env := newHwsCovEnv(t)
 		env.orchMsgs.listErr = errors.New("boom")
 		rec := env.do(t, env.h.ReadChannel, http.MethodGet, "/", "", "hws-home", nil)
-		hwsCovWant(t, rec, http.StatusForbidden, "cannot read this channel")
+		// A store failure is the server's (retryable), not a refusal.
+		hwsCovWant(t, rec, http.StatusInternalServerError, "internal server error")
 	})
 	t.Run("happy with clamp", func(t *testing.T) {
 		env := newHwsCovEnv(t)
@@ -691,7 +703,7 @@ func TestHwsCovReadPins(t *testing.T) {
 		env := newHwsCovEnv(t)
 		env.pinIndex.listPinErr = errors.New("boom")
 		rec := env.do(t, env.h.ReadPins, http.MethodGet, "/", "", "hws-home", nil)
-		hwsCovWant(t, rec, http.StatusForbidden, "cannot read this channel")
+		hwsCovWant(t, rec, http.StatusInternalServerError, "internal server error")
 	})
 	t.Run("non-member channel refused", func(t *testing.T) {
 		env := newHwsCovEnv(t)
@@ -714,7 +726,7 @@ func TestHwsCovReadDM(t *testing.T) {
 		env := newHwsCovEnv(t)
 		env.orchMsgs.listErr = errors.New("boom")
 		rec := env.do(t, env.h.ReadDM, http.MethodGet, "/", "", "hws-bob", nil)
-		hwsCovWant(t, rec, http.StatusForbidden, "cannot read this conversation")
+		hwsCovWant(t, rec, http.StatusInternalServerError, "internal server error")
 	})
 	t.Run("unknown user cannot open a DM", func(t *testing.T) {
 		env := newHwsCovEnv(t)
@@ -723,8 +735,8 @@ func TestHwsCovReadDM(t *testing.T) {
 		// message IS the model's only signal, and a model given no reason
 		// invents one (a live run blamed "workspace/permission restrictions"
 		// and a "deactivated" account, neither of which this path produces).
-		hwsCovWant(t, rec, http.StatusBadRequest, "hws-ghost-user")
-		hwsCovWant(t, rec, http.StatusBadRequest, "list_users")
+		hwsCovWant(t, rec, http.StatusNotFound, "hws-ghost-user")
+		hwsCovWant(t, rec, http.StatusNotFound, "list_users")
 	})
 }
 
@@ -750,7 +762,7 @@ func TestHwsCovPostToChannel(t *testing.T) {
 		env.run.ActionMode = model.WatchActionReply
 		env.runs.apprErr = errors.New("boom")
 		rec := env.do(t, env.h.PostToChannel, http.MethodPost, "/", `{"body":"hi"}`, "hws-home", nil)
-		hwsCovWant(t, rec, http.StatusInternalServerError, "approval check failed")
+		hwsCovWant(t, rec, http.StatusInternalServerError, "internal server error") // internal text never leaks
 	})
 	t.Run("reply mode unapproved", func(t *testing.T) {
 		env := newHwsCovEnv(t)
@@ -807,13 +819,13 @@ func TestHwsCovSearchWorkspace(t *testing.T) {
 		env := newHwsCovEnv(t)
 		env.access.err = errors.New("boom")
 		rec := env.do(t, env.h.SearchWorkspace, http.MethodGet, "/?q=hello", "", "", nil)
-		hwsCovWant(t, rec, http.StatusInternalServerError, "access resolution failed")
+		hwsCovWant(t, rec, http.StatusInternalServerError, "internal server error") // internal text never leaks
 	})
 	t.Run("search error", func(t *testing.T) {
 		env := newHwsCovEnv(t)
 		env.searcher.msgErr = errors.New("boom")
 		rec := env.do(t, env.h.SearchWorkspace, http.MethodGet, "/?q=hello", "", "", nil)
-		hwsCovWant(t, rec, http.StatusInternalServerError, "search failed")
+		hwsCovWant(t, rec, http.StatusInternalServerError, "internal server error") // internal text never leaks
 	})
 	t.Run("happy with truncated hit", func(t *testing.T) {
 		env := newHwsCovEnv(t)
@@ -876,7 +888,7 @@ func TestHwsCovListUsers(t *testing.T) {
 		env := newHwsCovEnv(t)
 		env.searcher.usersErr = errors.New("boom")
 		rec := env.do(t, env.h.ListUsers, http.MethodGet, "/?q=z", "", "", nil)
-		hwsCovWant(t, rec, http.StatusInternalServerError, "user search failed")
+		hwsCovWant(t, rec, http.StatusInternalServerError, "internal server error") // internal text never leaks
 	})
 	t.Run("happy", func(t *testing.T) {
 		env := newHwsCovEnv(t)
@@ -933,13 +945,13 @@ func TestHwsCovSendDM(t *testing.T) {
 		env := newHwsCovEnv(t)
 		env.convs.getErr = errors.New("boom")
 		rec := env.do(t, env.h.SendDM, http.MethodPost, "/", `{"userID":"hws-bob","body":"hi"}`, "", nil)
-		hwsCovWant(t, rec, http.StatusBadRequest, "could not open the DM")
+		hwsCovWant(t, rec, http.StatusInternalServerError, "internal server error")
 	})
 	t.Run("send rejected", func(t *testing.T) {
 		env := newHwsCovEnv(t)
 		long := strings.Repeat("a", 16385)
 		rec := env.do(t, env.h.SendDM, http.MethodPost, "/", `{"userID":"hws-bob","body":"`+long+`"}`, "", nil)
-		hwsCovWant(t, rec, http.StatusForbidden, "DM rejected")
+		hwsCovWant(t, rec, http.StatusBadRequest, "DM rejected: message: body exceeds maximum length")
 	})
 	t.Run("record post fails", func(t *testing.T) {
 		env := newHwsCovEnv(t)
@@ -982,7 +994,7 @@ func TestHwsCovSetReminder(t *testing.T) {
 		env := newHwsCovEnv(t)
 		rec := env.do(t, env.h.SetReminder, http.MethodPost, "/",
 			`{"message_id":"m9","remind_at":"2020-01-01T00:00:00Z"}`, "", nil)
-		hwsCovWant(t, rec, http.StatusBadRequest, "reminder_error")
+		hwsCovWant(t, rec, http.StatusBadRequest, "invalid_time")
 	})
 	t.Run("happy remind_at", func(t *testing.T) {
 		env := newHwsCovEnv(t)
@@ -1014,7 +1026,7 @@ func TestHwsCovListReminders(t *testing.T) {
 		env := newHwsCovEnv(t)
 		env.remStore.listErr = errors.New("boom")
 		rec := env.do(t, env.h.ListReminders, http.MethodGet, "/", "", "", nil)
-		hwsCovWant(t, rec, http.StatusInternalServerError, "reminder list failed")
+		hwsCovWant(t, rec, http.StatusInternalServerError, "internal server error") // internal text never leaks
 	})
 	t.Run("happy", func(t *testing.T) {
 		env := newHwsCovEnv(t)
@@ -1059,7 +1071,7 @@ func TestHwsCovPinMessage(t *testing.T) {
 	t.Run("pin rejected", func(t *testing.T) {
 		env := newHwsCovEnv(t)
 		rec := env.do(t, env.h.PinMessage, http.MethodPost, "/", `{"message_id":"hws-ghost-msg"}`, "", nil)
-		hwsCovWant(t, rec, http.StatusForbidden, "pin rejected")
+		hwsCovWant(t, rec, http.StatusNotFound, "pin rejected: not found — the message must be")
 	})
 	t.Run("happy pin", func(t *testing.T) {
 		env := newHwsCovEnv(t)
@@ -1093,13 +1105,13 @@ func TestHwsCovNotifyOwner(t *testing.T) {
 		env := newHwsCovEnv(t)
 		env.convs.getErr = errors.New("boom")
 		rec := env.do(t, env.h.NotifyOwner, http.MethodPost, "/", `{"body":"hi"}`, "", nil)
-		hwsCovWant(t, rec, http.StatusInternalServerError, "could not open the owner DM")
+		hwsCovWant(t, rec, http.StatusInternalServerError, "internal server error")
 	})
 	t.Run("send rejected", func(t *testing.T) {
 		env := newHwsCovEnv(t)
 		long := strings.Repeat("a", 16385)
 		rec := env.do(t, env.h.NotifyOwner, http.MethodPost, "/", `{"body":"`+long+`"}`, "", nil)
-		hwsCovWant(t, rec, http.StatusForbidden, "notify rejected")
+		hwsCovWant(t, rec, http.StatusBadRequest, "notify rejected: message: body exceeds maximum length")
 	})
 	t.Run("happy", func(t *testing.T) {
 		env := newHwsCovEnv(t)

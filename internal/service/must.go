@@ -24,6 +24,15 @@ func mustEncode(err error) {
 	}
 }
 
+// mustLRU unwraps a golang-lru constructor, which fails only for a
+// non-positive size — every caller passes a positive constant.
+func mustLRU[T any](c T, err error) T {
+	if err != nil {
+		panic(fmt.Sprintf("service: LRU cache construction failed: %v", err))
+	}
+	return c
+}
+
 // mustJSONBody unwraps json.Marshal of request structs composed solely of
 // strings and string maps/slices.
 func mustJSONBody(b []byte, err error) []byte {

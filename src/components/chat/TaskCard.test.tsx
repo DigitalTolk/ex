@@ -16,12 +16,31 @@ function renderCard(currentUserId?: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <TaskCard marker={marker} currentUserId={currentUserId} />
+      <TaskCard marker={marker} messageId="m" currentUserId={currentUserId} />
     </QueryClientProvider>,
   );
 }
 
 describe('TaskCard', () => {
+  // No emojis in the UI: every task kind gets a lucide icon in its pill.
+  it.each([
+    ['bug', 'lucide-bug'],
+    ['feature', 'lucide-sparkles'],
+    ['chore', 'lucide-brush'],
+  ])('flags a %s task with an icon, not an emoji', (kind, iconClass) => {
+    apiFetch.mockReturnValueOnce(new Promise(() => {}));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <TaskCard marker={{ ...marker, kind }} messageId="m" />
+      </QueryClientProvider>,
+    );
+    const pill = screen.getByTitle(`Task kind: ${kind}`);
+    expect(pill).toHaveTextContent(kind);
+    expect(pill.textContent).not.toMatch(/\p{Extended_Pictographic}/u);
+    expect(pill.querySelector(`svg.${iconClass}`)).not.toBeNull();
+  });
+
   it('renders a legacy task (null repos / test plan) without crashing', async () => {
     apiFetch.mockResolvedValueOnce({
       task: {

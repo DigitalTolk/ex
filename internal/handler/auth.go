@@ -2,7 +2,6 @@ package handler
 
 import (
 	"crypto/subtle"
-	"errors"
 	"net/http"
 	"net/url"
 	"time"
@@ -10,7 +9,6 @@ import (
 	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/service"
-	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // AuthHandler exposes HTTP endpoints for authentication flows.
@@ -30,7 +28,7 @@ func NewAuthHandler(authSvc *service.AuthService, jwt *auth.JWTManager) *AuthHan
 func (h *AuthHandler) OIDCLogin(w http.ResponseWriter, r *http.Request) {
 	authURL, state, nonce, err := h.authSvc.HandleOIDCLogin()
 	if err != nil {
-		writeInternalError(w, r, "oidc_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -109,29 +107,26 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accessToken, refreshToken, _, err := h.authSvc.HandleOIDCCallback(r.Context(), code, queryState, nonce)
+	_, refreshToken, _, err := h.authSvc.HandleOIDCCallback(r.Context(), code, queryState, nonce)
 	if err != nil {
-		writeInternalError(w, r, "callback_error", err)
+		// A refusal by the identity policy is a fixed 403 sign_in_refused;
+		// anything else is internal.
+		writeServiceError(w, r, err)
 		return
 	}
 
-	// Default redirect: the SPA lives outside /auth/ to avoid the namespace
-	// the router 404s for unknown /auth/** paths.
-	finalRedirect := oidcCallbackRedirect(accessToken)
-	setCallbackRefreshCookie := true
+	// No URL ever carries a credential. A browser lands on the bare SPA
+	// route (outside /auth/, which the router 404s for unknown paths) with
+	// the refresh cookie set here, and the SPA signs in by refreshing — it
+	// ignores any token a URL offers, so a crafted link can't sign a victim
+	// into someone else's account. An app shell gets a one-time desktop_code
+	// it redeems itself at /auth/desktop/complete.
 	if redirectCookie, err := r.Cookie("oauth_redirect"); err == nil && isAllowedOIDCRedirect(redirectCookie.Value) {
-		target := redirectWithQuery(redirectCookie.Value, url.Values{"token": []string{accessToken}})
-		parsed, _ := url.Parse(redirectCookie.Value)
-		if shouldUseDesktopAuthCode(parsed) {
-			code, err := h.authSvc.CreateDesktopAuthSession(r.Context(), accessToken, refreshToken)
-			if err != nil {
-				writeInternalError(w, r, "desktop_auth_error", err)
-				return
-			}
-			target = redirectWithQuery(redirectCookie.Value, url.Values{"desktop_code": []string{code}})
-			setCallbackRefreshCookie = false
+		code, err := h.authSvc.CreateDesktopAuthSession(r.Context(), refreshToken)
+		if err != nil {
+			writeServiceError(w, r, err)
+			return
 		}
-		finalRedirect = target
 		http.SetCookie(w, &http.Cookie{
 			Name:     "oauth_redirect",
 			Value:    "",
@@ -141,24 +136,39 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 			Secure:   true,
 			SameSite: http.SameSiteLaxMode,
 		})
+		http.Redirect(w, r, redirectWithQuery(redirectCookie.Value, url.Values{"desktop_code": []string{code}}), http.StatusFound)
+		return
 	}
 
-	if setCallbackRefreshCookie {
-		h.setRefreshCookie(w, refreshToken, h.jwt.RefreshTTL())
-	}
-
-	http.Redirect(w, r, finalRedirect, http.StatusFound)
+	h.setRefreshCookie(w, refreshToken, h.jwt.RefreshTTL())
+	http.Redirect(w, r, oidcCallbackPath, http.StatusFound)
 }
 
+// oidcCallbackPath is the SPA route that completes a sign-in from the
+// refresh cookie.
+const oidcCallbackPath = "/oidc/callback"
+
+// DesktopComplete redeems a one-time desktop_code: it sets the refresh cookie
+// first-party and lands the app on the SPA callback. Only a navigation the
+// app itself starts may redeem a code — Electron's loadURL and WKWebView's
+// load(URLRequest) send Sec-Fetch-Site: none (a client without fetch
+// metadata sends nothing). A link to this URL — posted in a message
+// (same-origin) or on another site — would otherwise plant the code minter's
+// session in whoever clicks it, so any other value is refused before the
+// code is touched.
 func (h *AuthHandler) DesktopComplete(w http.ResponseWriter, r *http.Request) {
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "none" {
+		writeError(w, http.StatusForbidden, "desktop_auth_error", "this sign-in link can only be opened by the app")
+		return
+	}
 	session, err := h.authSvc.ConsumeDesktopAuthSession(r.Context(), r.URL.Query().Get("code"))
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "desktop_auth_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 
 	h.setRefreshCookie(w, session.RefreshToken, h.jwt.RefreshTTL())
-	http.Redirect(w, r, oidcCallbackRedirect(session.AccessToken), http.StatusFound)
+	http.Redirect(w, r, oidcCallbackPath, http.StatusFound)
 }
 
 // isAllowedOIDCRedirect permits localhost (dev), tauri:// (desktop WebView),
@@ -181,18 +191,6 @@ func isAllowedOIDCRedirect(u string) bool {
 	default:
 		return false
 	}
-}
-
-func shouldUseDesktopAuthCode(parsed *url.URL) bool {
-	if parsed == nil {
-		return false
-	}
-	return (parsed.Hostname() == "localhost" && parsed.Scheme == "http") ||
-		(parsed.Scheme == "ex" && parsed.Host == "mobile")
-}
-
-func oidcCallbackRedirect(accessToken string) string {
-	return redirectWithQuery("/oidc/callback", url.Values{"token": []string{accessToken}})
 }
 
 func redirectWithQuery(raw string, query url.Values) string {
@@ -225,7 +223,12 @@ func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 
 	accessToken, newRefresh, err := h.authSvc.RefreshAccessToken(r.Context(), rawToken)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "refresh_error", err.Error())
+		// A refused session is a 4xx — 401 for a dead session, 403 for a
+		// deactivated account — and the client signs out; anything else is the
+		// server's fault and a 5xx, so the client retries instead of dropping a
+		// session that is probably fine. Never the error's text: the caller is
+		// unauthenticated, and every mapped auth row has a fixed message.
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -271,7 +274,7 @@ func (h *AuthHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 
 	invite, err := h.authSvc.CreateInvite(r.Context(), userID, body.Email, body.ChannelIDs)
 	if err != nil {
-		writeInternalError(w, r, "invite_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -296,7 +299,9 @@ func (h *AuthHandler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 
 	accessToken, refreshToken, user, err := h.authSvc.AcceptInvite(r.Context(), body.Token, body.DisplayName, body.Password)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invite_error", err.Error())
+		// Unauthenticated caller: fixed messages for the failures they can
+		// act on, a generic 500 (detail logged) for everything else.
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -324,7 +329,7 @@ func (h *AuthHandler) GuestLogin(w http.ResponseWriter, r *http.Request) {
 
 	accessToken, refreshToken, user, err := h.authSvc.GuestLogin(r.Context(), body.Email, body.Password)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "auth_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -354,16 +359,7 @@ func (h *AuthHandler) AdminResetUserPassword(w http.ResponseWriter, r *http.Requ
 
 	ticket, err := h.authSvc.CreatePasswordResetForUser(r.Context(), targetID)
 	if err != nil {
-		switch {
-		case errors.Is(err, store.ErrNotFound):
-			writeError(w, http.StatusNotFound, "not_found", "user not found")
-		case errors.Is(err, service.ErrPasswordResetUnsupported):
-			writeError(w, http.StatusConflict, "sso_account", err.Error())
-		case errors.Is(err, service.ErrPasswordResetUnavailable):
-			writeError(w, http.StatusServiceUnavailable, "reset_unavailable", err.Error())
-		default:
-			writeInternalError(w, r, "reset_error", err)
-		}
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -415,18 +411,7 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.authSvc.ResetPassword(r.Context(), body.Token, body.Password); err != nil {
-		switch {
-		case errors.Is(err, service.ErrPasswordResetInvalid), errors.Is(err, service.ErrPasswordResetUnsupported):
-			writeError(w, http.StatusBadRequest, "invalid_token", err.Error())
-		case errors.Is(err, service.ErrPasswordResetUnavailable):
-			writeError(w, http.StatusServiceUnavailable, "reset_unavailable", err.Error())
-		case errors.Is(err, store.ErrNotFound):
-			// The ticket outlived its account (deleted between mint and use).
-			writeError(w, http.StatusBadRequest, "invalid_token", service.ErrPasswordResetInvalid.Error())
-		default:
-			// A too-short password is the only other user-caused failure.
-			writeError(w, http.StatusBadRequest, "invalid_password", err.Error())
-		}
+		writeServiceError(w, r, err)
 		return
 	}
 

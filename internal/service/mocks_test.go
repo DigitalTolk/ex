@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -85,6 +87,67 @@ func (m *mockUserStore) UpdateUser(_ context.Context, u *model.User) error {
 	return nil
 }
 
+func (m *mockUserStore) PatchUser(_ context.Context, id string, p store.UserPatch) error {
+	if m.updateErr != nil {
+		return m.updateErr
+	}
+	u, ok := m.users[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	return applyUserPatchForTest(u, p)
+}
+
+// applyUserPatchForTest mirrors store.UserStoreImpl.PatchUser on an in-memory
+// user: nil fields are untouched, ExpectOIDCSubject is a compare-and-swap.
+func applyUserPatchForTest(u *model.User, p store.UserPatch) error {
+	if p.ExpectOIDCSubject != nil && u.OIDCSubject != *p.ExpectOIDCSubject {
+		return store.ErrIdentityBound
+	}
+	if p.DisplayName != nil {
+		u.DisplayName = *p.DisplayName
+	}
+	if p.TimeZone != nil {
+		u.TimeZone = *p.TimeZone
+	}
+	if p.SystemRole != nil {
+		u.SystemRole = *p.SystemRole
+	}
+	if p.Status != nil {
+		u.Status = *p.Status
+	}
+	if p.AuthProvider != nil {
+		u.AuthProvider = *p.AuthProvider
+	}
+	if p.PasswordHash != nil {
+		u.PasswordHash = *p.PasswordHash
+	}
+	if p.LastSeenAt != nil {
+		t := *p.LastSeenAt
+		u.LastSeenAt = &t
+	}
+	if p.MSObjectID != nil {
+		u.MSObjectID = *p.MSObjectID
+	}
+	if p.OIDCIssuer != nil {
+		u.OIDCIssuer = *p.OIDCIssuer
+	}
+	if p.OIDCSubject != nil {
+		u.OIDCSubject = *p.OIDCSubject
+	}
+	if p.DeactivatedBy != nil {
+		u.DeactivatedBy = *p.DeactivatedBy
+	}
+	if p.Directory != nil {
+		u.Phone = p.Directory.Phone
+		u.Manager = p.Directory.Manager
+	}
+	if !p.UpdatedAt.IsZero() {
+		u.UpdatedAt = p.UpdatedAt
+	}
+	return nil
+}
+
 func (m *mockUserStore) ListUsers(_ context.Context, _ int, _ string) ([]*model.User, string, error) {
 	if m.listErr != nil {
 		return nil, "", m.listErr
@@ -131,6 +194,10 @@ type mockTokenStore struct {
 	getErrHash map[string]error // per-hash Get failures
 	deleteErr  error
 	rotateErr  error
+	// familyErr fails DeleteRefreshTokenFamily; deleteAllErr fails only
+	// DeleteAllRefreshTokensForUser.
+	familyErr    error
+	deleteAllErr error
 }
 
 func newMockTokenStore() *mockTokenStore {
@@ -181,7 +248,22 @@ func (m *mockTokenStore) DeleteRefreshToken(_ context.Context, hash string) erro
 	return nil
 }
 
+func (m *mockTokenStore) DeleteRefreshTokenFamily(_ context.Context, userID, familyID string) error {
+	if m.familyErr != nil {
+		return m.familyErr
+	}
+	for hash, rt := range m.tokens {
+		if rt.UserID == userID && rt.FamilyID == familyID {
+			delete(m.tokens, hash)
+		}
+	}
+	return nil
+}
+
 func (m *mockTokenStore) DeleteAllRefreshTokensForUser(_ context.Context, userID string) error {
+	if m.deleteAllErr != nil {
+		return m.deleteAllErr
+	}
 	if m.deleteErr != nil {
 		return m.deleteErr
 	}
@@ -252,6 +334,7 @@ type mockMembershipStore struct {
 	lastReadSeqs      map[string]int64 // key: channelID + "#" + userID
 	setLastReadErr    error
 	addedUserChannels map[string]*model.UserChannel // key: channelID + "#" + userID
+	listMembersCalls  atomic.Int64                  // ListMembers reads (audience cache tests)
 }
 
 func newMockMembershipStore() *mockMembershipStore {
@@ -418,6 +501,7 @@ func (m *mockMembershipStore) UpdateMemberRole(_ context.Context, channelID, use
 }
 
 func (m *mockMembershipStore) ListMembers(_ context.Context, channelID string) ([]*model.ChannelMembership, error) {
+	m.listMembersCalls.Add(1)
 	if m.listMembersErr != nil {
 		return nil, m.listMembersErr
 	}
@@ -664,6 +748,9 @@ func (m *mockCache) Delete(_ context.Context, key string) error {
 		return m.deleteErr
 	}
 	delete(m.users, key)
+	// RedisCache keys cached users as "user:<id>"; mirror that so an
+	// eviction is visible to GetUser.
+	delete(m.users, strings.TrimPrefix(key, "user:"))
 	delete(m.values, key)
 	return nil
 }
@@ -777,7 +864,7 @@ type mockConversationStore struct {
 	userConvs     map[string][]*model.UserConversation // userID -> conversations
 	createErr     error
 	getErr        error
-	getCalls      int // GetConversation invocations (send-path dedupe tests)
+	getCalls      atomic.Int64 // GetConversation invocations (send-path dedupe tests)
 	listErr       error
 	touchErr      error
 	activateErr   error
@@ -805,7 +892,7 @@ func (m *mockConversationStore) CreateConversation(_ context.Context, conv *mode
 }
 
 func (m *mockConversationStore) GetConversation(_ context.Context, id string) (*model.Conversation, error) {
-	m.getCalls++
+	m.getCalls.Add(1)
 	if m.getErr != nil {
 		return nil, m.getErr
 	}
@@ -901,7 +988,10 @@ func (m *mockConversationStore) SetCategory(_ context.Context, convID, userID, c
 
 // --- Mock MessageStore ---
 
+// mockMessageStore is mutex-guarded: ListAround and ListUserThreads read
+// pages concurrently, and the notify path reads from detached goroutines.
 type mockMessageStore struct {
+	mu             sync.Mutex
 	messages       map[string]*model.Message // key: parentID + "#" + msgID
 	createErr      error
 	getErr         error
@@ -911,10 +1001,14 @@ type mockMessageStore struct {
 	deleteErr      error
 	listErr        error
 	listAfterErr   error
-	listCalls      int   // ListMessages invocations (thread-index tests assert the fast path skips scans)
-	listHasMore    bool  // when true, ListMessages always reports more pages
-	threadReplyErr error // when set, ListThreadReplies returns this error
-	noThreadIndex  bool  // when true, ListThreadReplies returns nothing (simulates an un-backfilled thread → scan fallback)
+	listCalls      atomic.Int64 // ListMessages invocations (thread-index tests assert the fast path skips scans)
+	listHasMore    bool         // when true, ListMessages always reports more pages
+	threadReplyErr error        // when set, ListThreadReplies returns this error
+	noThreadIndex  bool         // when true, ListThreadReplies returns nothing (simulates an un-backfilled thread → scan fallback)
+	// Read counters for the cost tests (atomic: the notify path reads from
+	// detached goroutines).
+	getMessageCalls  atomic.Int64
+	threadReplyCalls atomic.Int64
 }
 
 func newMockMessageStore() *mockMessageStore {
@@ -922,6 +1016,8 @@ func newMockMessageStore() *mockMessageStore {
 }
 
 func (m *mockMessageStore) CreateMessage(_ context.Context, msg *model.Message) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.createErr != nil {
 		return m.createErr
 	}
@@ -931,6 +1027,9 @@ func (m *mockMessageStore) CreateMessage(_ context.Context, msg *model.Message) 
 }
 
 func (m *mockMessageStore) GetMessage(_ context.Context, parentID, msgID string) (*model.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.getMessageCalls.Add(1)
 	if m.getErr != nil {
 		return nil, m.getErr
 	}
@@ -943,6 +1042,8 @@ func (m *mockMessageStore) GetMessage(_ context.Context, parentID, msgID string)
 }
 
 func (m *mockMessageStore) UpdateMessage(_ context.Context, msg *model.Message) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.updateErr != nil {
 		return m.updateErr
 	}
@@ -958,6 +1059,8 @@ func (m *mockMessageStore) UpdateMessage(_ context.Context, msg *model.Message) 
 }
 
 func (m *mockMessageStore) DeleteMessage(_ context.Context, parentID, msgID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.deleteErr != nil {
 		return m.deleteErr
 	}
@@ -967,7 +1070,9 @@ func (m *mockMessageStore) DeleteMessage(_ context.Context, parentID, msgID stri
 }
 
 func (m *mockMessageStore) ListMessages(_ context.Context, parentID string, _ string, _ int) ([]*model.Message, bool, error) {
-	m.listCalls++
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.listCalls.Add(1)
 	if m.listErr != nil {
 		return nil, false, m.listErr
 	}
@@ -994,6 +1099,9 @@ func (m *mockMessageStore) ListThreadRepliesNewest(ctx context.Context, threadRo
 }
 
 func (m *mockMessageStore) ListThreadReplies(_ context.Context, threadRootID string) ([]*model.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.threadReplyCalls.Add(1)
 	if m.threadReplyErr != nil {
 		return nil, m.threadReplyErr
 	}
@@ -1026,6 +1134,8 @@ func (m *mockMessageStore) ListMessagesAround(ctx context.Context, parentID, _ s
 }
 
 func (m *mockMessageStore) IncrementReplyMetadata(_ context.Context, parentID, msgID string, replyTime time.Time, replyAuthorID string) (*model.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.updateErr != nil {
 		return nil, m.updateErr
 	}
@@ -1060,6 +1170,7 @@ type mockThreadFollowStore struct {
 	setManyMaxBatch int
 	setManyErr      error
 	setErr          error
+	listErr         error // ListThreadFollows failure
 }
 
 func newMockThreadFollowStore() *mockThreadFollowStore {
@@ -1117,6 +1228,9 @@ func (m *mockThreadFollowStore) ListUserThreadFollows(_ context.Context, userID 
 }
 
 func (m *mockThreadFollowStore) ListThreadFollows(_ context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error) {
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
 	out := make([]*model.ThreadFollow, 0)
 	for _, f := range m.follows {
 		if f.ParentID != parentID || f.ThreadRootID != threadRootID {

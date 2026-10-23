@@ -4,8 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement, type ReactNode } from 'react';
 import {
   useConversationMessages,
-  useSendChannelMessage,
-  useSendConversationMessage,
+  useSendMessage,
   useEditMessage,
   useDeleteMessage,
 } from './useMessages';
@@ -51,14 +50,14 @@ describe('useConversationMessages', () => {
   });
 });
 
-describe('useSendChannelMessage', () => {
+describe('useSendMessage (channel)', () => {
   beforeEach(() => vi.mocked(apiFetch).mockReset());
 
   it('posts message to channel endpoint', async () => {
     const msg = { id: 'msg-new', parentID: 'ch-1', authorID: 'u-1', body: 'hello', createdAt: '' };
     vi.mocked(apiFetch).mockResolvedValue(msg);
 
-    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useSendMessage({ channelId: 'ch-1' }), { wrapper: createWrapper() });
     result.current.mutate({ body: 'hello', attachmentIDs: [] });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     const calls = vi.mocked(apiFetch).mock.calls as Array<[string, { method?: string; body?: string }?]>;
@@ -90,7 +89,7 @@ describe('useSendChannelMessage', () => {
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(QueryClientProvider, { client: queryClient }, children);
 
-    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    const { result } = renderHook(() => useSendMessage({ channelId: 'ch-1' }), { wrapper });
     result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -110,7 +109,7 @@ describe('useSendChannelMessage', () => {
     queryClient.setQueryData(['thread', 'channels/ch-1', 'root'], [reply]);
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(QueryClientProvider, { client: queryClient }, children);
-    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    const { result } = renderHook(() => useSendMessage({ channelId: 'ch-1' }), { wrapper });
     result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(queryClient.getQueryData(['thread', 'channels/ch-1', 'root'])).toEqual([reply]);
@@ -122,7 +121,7 @@ describe('useSendChannelMessage', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(QueryClientProvider, { client: queryClient }, children);
-    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    const { result } = renderHook(() => useSendMessage({ channelId: 'ch-1' }), { wrapper });
     result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     // No thread cache existed → nothing created (avoids a partial one-item list).
@@ -142,7 +141,7 @@ describe('useSendChannelMessage', () => {
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(QueryClientProvider, { client: queryClient }, children);
 
-    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    const { result } = renderHook(() => useSendMessage({ channelId: 'ch-1' }), { wrapper });
     result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -159,7 +158,7 @@ describe('useSendChannelMessage', () => {
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(QueryClientProvider, { client: queryClient }, children);
 
-    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    const { result } = renderHook(() => useSendMessage({ channelId: 'ch-1' }), { wrapper });
     result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -176,7 +175,7 @@ describe('useSendChannelMessage', () => {
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(QueryClientProvider, { client: queryClient }, children);
 
-    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    const { result } = renderHook(() => useSendMessage({ channelId: 'ch-1' }), { wrapper });
     result.current.mutate({ body: 'hi', attachmentIDs: [] });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -196,7 +195,7 @@ describe('useSendChannelMessage', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(QueryClientProvider, { client: queryClient }, children);
-    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    const { result } = renderHook(() => useSendMessage({ channelId: 'ch-1' }), { wrapper });
     try {
       result.current.mutate({ body: 'hi', attachmentIDs: [] });
       expect(shouldRefetchDraftsForRemoteUpdate()).toBe(false);
@@ -217,7 +216,7 @@ describe('useSendMessage user-state echo window', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(QueryClientProvider, { client: queryClient }, children);
-    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    const { result } = renderHook(() => useSendMessage({ channelId: 'ch-1' }), { wrapper });
     try {
       expect(shouldRefetchUserStateForRemoteUpdate()).toBe(true);
       result.current.mutate({ body: 'top level', attachmentIDs: [] });
@@ -234,7 +233,7 @@ describe('useSendMessage user-state echo window', () => {
   });
 });
 
-describe('useSendChannelMessage draft lifecycle', () => {
+describe('useSendMessage (channel) draft lifecycle', () => {
   beforeEach(() => {
     vi.mocked(apiFetch).mockReset();
     resetDraftSessionState();
@@ -251,7 +250,7 @@ describe('useSendChannelMessage draft lifecycle', () => {
 
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(QueryClientProvider, { client: qc }, children);
-    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    const { result } = renderHook(() => useSendMessage({ channelId: 'ch-1' }), { wrapper });
     result.current.mutate({ body: 'hello', attachmentIDs: [] });
 
     // Condemned at MUTATE time — before the server answers.
@@ -269,7 +268,7 @@ describe('useSendChannelMessage draft lifecycle', () => {
 
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(QueryClientProvider, { client: qc }, children);
-    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper });
+    const { result } = renderHook(() => useSendMessage({ channelId: 'ch-1' }), { wrapper });
     result.current.mutate({ body: 'hello', attachmentIDs: [] });
     expect(draftBasisFor(scope)).toBe('');
 
@@ -285,7 +284,7 @@ describe('useSendChannelMessage draft lifecycle', () => {
     adoptDraftBasis(threadScope, 'g-thread');
     vi.mocked(apiFetch).mockResolvedValue({ id: 'r-1', parentID: 'ch-1', parentMessageID: 'root-1', authorID: 'u-1', body: 'r', createdAt: '' });
 
-    const { result } = renderHook(() => useSendChannelMessage('ch-1'), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useSendMessage({ channelId: 'ch-1' }), { wrapper: createWrapper() });
     result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root-1' });
     expect(draftBasisFor(threadScope)).toBe('');
     expect(draftBasisFor(channelScope)).toBe('g-main');
@@ -293,14 +292,14 @@ describe('useSendChannelMessage draft lifecycle', () => {
   });
 });
 
-describe('useSendConversationMessage', () => {
+describe('useSendMessage (conversation)', () => {
   beforeEach(() => vi.mocked(apiFetch).mockReset());
 
   it('posts message to conversation endpoint', async () => {
     const msg = { id: 'msg-new', parentID: 'conv-1', authorID: 'u-1', body: 'hi there', createdAt: '' };
     vi.mocked(apiFetch).mockResolvedValue(msg);
 
-    const { result } = renderHook(() => useSendConversationMessage('conv-1'), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useSendMessage({ conversationId: 'conv-1' }), { wrapper: createWrapper() });
     result.current.mutate({ body: 'hi there', attachmentIDs: [] });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     const calls = vi.mocked(apiFetch).mock.calls as Array<[string, { method?: string; body?: string }?]>;

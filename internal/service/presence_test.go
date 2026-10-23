@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -156,6 +157,58 @@ func TestPresenceService_Connect_PipelinesViaPublishMany(t *testing.T) {
 	}
 	if pub.single != 0 {
 		t.Errorf("batch path must not also call Publish per topic, got %d", pub.single)
+	}
+}
+
+// multicastPub implements events.MulticastPublisher (and the other publish
+// shapes, so a fall-through to them is visible).
+type multicastPub struct {
+	multicast [][]string
+	evt       *events.Event
+	other     int
+}
+
+func (m *multicastPub) Publish(context.Context, string, *events.Event) error {
+	m.other++
+	return nil
+}
+
+func (m *multicastPub) PublishMany(context.Context, []string, *events.Event) error {
+	m.other++
+	return nil
+}
+
+func (m *multicastPub) PublishMulticast(_ context.Context, topics []string, evt *events.Event) error {
+	m.multicast = append(m.multicast, topics)
+	m.evt = evt
+	return nil
+}
+
+// A presence change goes to every channel and DM the subject is in; someone
+// sharing k of them used to receive k copies. It is now ONE multicast over
+// all audience topics, which the broker delivers once per connection.
+func TestPresenceService_FanOutReachesEachConnectionOnce(t *testing.T) {
+	pub := &multicastPub{}
+	svc := NewPresenceService(nil, pub)
+	svc.SetPresenceAudienceResolver(func(context.Context, string) []string {
+		return []string{pubsub.ChannelName("c1"), pubsub.ConversationName("d1")}
+	})
+
+	if !svc.OnConnect(context.Background(), "u1", "c1") {
+		t.Fatal("first connect should report the transition")
+	}
+	if len(pub.multicast) != 1 || len(pub.multicast[0]) != 2 {
+		t.Fatalf("expected one multicast over both audience topics, got %v", pub.multicast)
+	}
+	if pub.other != 0 {
+		t.Fatalf("presence also went out per topic (%d publishes) — duplicate copies", pub.other)
+	}
+	if pub.evt.Type != events.EventPresenceChanged {
+		t.Fatalf("event type = %q, want %q", pub.evt.Type, events.EventPresenceChanged)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(pub.evt.Data, &data); err != nil || data["userID"] != "u1" || data["online"] != true {
+		t.Fatalf("presence payload = %s (%v), want userID u1 online", pub.evt.Data, err)
 	}
 }
 

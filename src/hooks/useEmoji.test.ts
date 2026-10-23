@@ -8,7 +8,18 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { apiFetch } from '@/lib/api';
-import { useEmojis, useEmojiMap, useFrequentEmojis, useUploadEmoji, useDeleteEmoji } from './useEmoji';
+import {
+  applyEmojiAddedEvent,
+  applyEmojiRemovedEvent,
+  invalidateEmojis,
+  useEmojis,
+  useEmojiMap,
+  useFrequentEmojis,
+  useUploadEmoji,
+  useDeleteEmoji,
+} from './useEmoji';
+import { queryKeys } from '@/lib/query-keys';
+import type { CustomEmoji } from '@/types';
 import { EMOJI_FREQUENCY_CHANGED_EVENT } from '@/lib/emoji-frequency';
 import { act } from '@testing-library/react';
 
@@ -97,6 +108,81 @@ describe('useEmojiMap', () => {
       parrot: 'https://cdn/parrot.gif',
       cat: 'https://cdn/cat.png',
     });
+  });
+});
+
+describe('useEmojiMap re-renders', () => {
+  it('derives the map once per list change, not on every consumer render', () => {
+    // Every message row reads the map; an inline select re-built it from the
+    // whole list on each render of each row.
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    let nameReads = 0;
+    const emoji = (name: string, imageURL: string) => {
+      const e = { imageURL, createdBy: 'u-1', createdAt: '2026-01-01T00:00:00Z' } as CustomEmoji;
+      Object.defineProperty(e, 'name', {
+        enumerable: true,
+        get() {
+          nameReads++;
+          return name;
+        },
+      });
+      return e;
+    };
+    qc.setQueryData(queryKeys.emojis(), [emoji('parrot', 'https://cdn/parrot.gif'), emoji('cat', 'https://cdn/cat.png')]);
+    const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client: qc }, children);
+    const { result, rerender } = renderHook(() => useEmojiMap(), { wrapper });
+    const first = result.current.data;
+    expect(first).toEqual({ parrot: 'https://cdn/parrot.gif', cat: 'https://cdn/cat.png' });
+
+    nameReads = 0;
+    for (let i = 0; i < 5; i++) rerender();
+    expect(nameReads).toBe(0);
+    expect(result.current.data).toBe(first);
+  });
+});
+
+describe('emoji events', () => {
+  const party: CustomEmoji = { name: 'party', imageURL: '/e/party.png', createdBy: 'u-1', createdAt: '2026-01-01T00:00:00Z' };
+  const shipit: CustomEmoji = { name: 'shipit', imageURL: '/e/shipit.png', createdBy: 'u-2', createdAt: '2026-01-02T00:00:00Z' };
+
+  it('patches an added emoji into the cached list without a refetch', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(queryKeys.emojis(), [party]);
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    applyEmojiAddedEvent(qc, shipit);
+    expect(qc.getQueryData(queryKeys.emojis())).toEqual([party, shipit]);
+    // The uploader's own tab gets the echo too: re-adding replaces, never duplicates.
+    applyEmojiAddedEvent(qc, { ...shipit, imageURL: '/e/shipit-2.png' });
+    expect(qc.getQueryData(queryKeys.emojis())).toEqual([party, { ...shipit, imageURL: '/e/shipit-2.png' }]);
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it('removes a deleted emoji and refreshes only the quick-reaction shelf', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(queryKeys.emojis(), [party, shipit]);
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    applyEmojiRemovedEvent(qc, 'party');
+    expect(qc.getQueryData(queryKeys.emojis())).toEqual([shipit]);
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.frequentEmojis(), exact: true });
+  });
+
+  it('leaves a list that was never loaded alone', () => {
+    const qc = new QueryClient();
+    applyEmojiAddedEvent(qc, shipit);
+    applyEmojiRemovedEvent(qc, 'party');
+    expect(qc.getQueryData(queryKeys.emojis())).toBeUndefined();
+  });
+
+  // The fallback for an emoji event whose payload fails its schema.
+  it('invalidateEmojis refetches the catalogue and leaves the cached list as it is', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(queryKeys.emojis(), [party]);
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    invalidateEmojis(qc);
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.emojis() });
+    expect(qc.getQueryData(queryKeys.emojis())).toEqual([party]);
   });
 });
 

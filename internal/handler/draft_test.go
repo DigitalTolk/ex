@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -473,69 +472,4 @@ func TestDraftHandler_ErrorBranches(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("failed delete status = %d, want 500; body=%s", rec.Code, rec.Body.String())
 	}
-}
-
-// syncDraftClearer drives clearSentDraft's retry loop deterministically: it
-// signals done on every attempt and fails until failures is exhausted.
-type syncDraftClearer struct {
-	mu       sync.Mutex
-	failures int
-	calls    int
-	done     chan struct{}
-}
-
-func (c *syncDraftClearer) DeleteForScope(context.Context, string, string, string, string) error {
-	c.mu.Lock()
-	c.calls++
-	fail := c.failures > 0
-	if fail {
-		c.failures--
-	}
-	c.mu.Unlock()
-	c.done <- struct{}{}
-	if fail {
-		return errors.New("draft store down")
-	}
-	return nil
-}
-
-func (c *syncDraftClearer) waitForCalls(t *testing.T, n int) {
-	t.Helper()
-	for i := range n {
-		select {
-		case <-c.done:
-		case <-time.After(2 * time.Second):
-			t.Fatalf("timed out waiting for clear attempt %d/%d", i+1, n)
-		}
-	}
-}
-
-func TestClearSentDraft_NilClearerIsNoop(t *testing.T) {
-	// Must not panic or spawn anything.
-	clearSentDraft(context.Background(), nil, "u-1", "ch-1", service.ParentChannel, "")
-}
-
-func TestClearSentDraft_RetriesTransientFailure(t *testing.T) {
-	stubClearSentDraftRetries(t, []time.Duration{time.Millisecond}, time.Second)
-	c := &syncDraftClearer{failures: 1, done: make(chan struct{}, 4)}
-	clearSentDraft(context.Background(), c, "u-1", "ch-1", service.ParentChannel, "")
-	// First attempt fails, the retry succeeds — the invariant self-heals.
-	c.waitForCalls(t, 2)
-}
-
-func TestClearSentDraft_ExhaustedRetriesAreLoud(t *testing.T) {
-	stubClearSentDraftRetries(t, []time.Duration{time.Millisecond}, time.Second)
-	c := &syncDraftClearer{failures: 10, done: make(chan struct{}, 4)}
-	clearSentDraft(context.Background(), c, "u-1", "ch-1", service.ParentChannel, "")
-	// Initial attempt + one retry, then gives up (logged at ERROR).
-	c.waitForCalls(t, 2)
-}
-
-func TestClearSentDraft_DeadlineAbandons(t *testing.T) {
-	// Zero timeout: the context is already done when the retry wait starts,
-	// so the worker abandons instead of sleeping out the schedule.
-	stubClearSentDraftRetries(t, []time.Duration{time.Hour}, 0)
-	c := &syncDraftClearer{failures: 10, done: make(chan struct{}, 4)}
-	clearSentDraft(context.Background(), c, "u-1", "ch-1", service.ParentChannel, "")
-	c.waitForCalls(t, 1)
 }

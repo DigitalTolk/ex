@@ -4,14 +4,23 @@ import { useSyncExternalStore } from 'react';
 // browser itself keeps it (the Navigation API), so entries pushed outside the
 // router (a notification click) count too. Browsers without the API report
 // nothing; their own Back and Forward still work.
-function navigationApi(): Navigation | undefined {
+export function navigationApi(): Navigation | undefined {
   return 'navigation' in window ? window.navigation : undefined;
 }
 
 function subscribe(onChange: () => void): () => void {
   const nav = navigationApi();
+  // A page restored from the back/forward cache fires no currententrychange,
+  // though where it can go may have changed while it was away.
+  const onPageShow = (e: PageTransitionEvent) => {
+    if (e.persisted) onChange();
+  };
   nav?.addEventListener('currententrychange', onChange);
-  return () => nav?.removeEventListener('currententrychange', onChange);
+  window.addEventListener('pageshow', onPageShow);
+  return () => {
+    nav?.removeEventListener('currententrychange', onChange);
+    window.removeEventListener('pageshow', onPageShow);
+  };
 }
 
 export interface HistoryTraversal {

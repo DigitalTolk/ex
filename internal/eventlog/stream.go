@@ -2,8 +2,10 @@
 // inbox for real-time events.
 //
 // Each user has an inbox stream `evt:<userID>`. When an event is
-// published, the broker resolves its recipients and appends the
-// serialized event to each recipient's stream. On a WebSocket
+// published, the broker resolves its recipients, stores the serialized
+// event ONCE under `evtp:<eventID>`, and appends only the event ID to each
+// recipient's stream (a full copy per recipient made one post to a
+// 1000-member channel write megabytes). On a WebSocket
 // reconnect, the client sends the last event ID it processed and the
 // server replays everything strictly newer than that cursor, then
 // switches to live delivery. Streams are trimmed with MAXLEN ~ N to
@@ -47,15 +49,30 @@ func streamKey(userID string) string {
 	return "evt:" + userID
 }
 
-// payloadField is the single XADD field name used for the event JSON
-// blob. Streams require at least one field; we keep just one so the
-// stream is a simple log of opaque bytes.
+// payloadField is the XADD field that carried the full event JSON in every
+// recipient's stream. Nothing writes it any more — payloads are stored once
+// under payloadKey — but entries written before that change still carry it,
+// and Replay keeps reading them.
 const payloadField = "e"
 
-// idField carries the event's ULID alongside the payload so replay reads the
-// cursor without unmarshaling the whole envelope. Entries older than this
-// field fall back to the envelope JSON.
+// idField carries the event's ULID. A stream entry is now just this field: a
+// pointer to the payload stored under payloadKey(id). Entries older than the
+// pointer format also hold payloadField; the oldest hold only payloadField and
+// fall back to the envelope JSON for the ID.
 const idField = "i"
+
+// payloadTTL bounds how long a stored payload stays resolvable. It matches the
+// stream's idle TTL: a client away longer than a day replays any pointer whose
+// payload has lapsed as a gap, which reports Exhausted and sends it down the
+// full-refetch path — the same outcome as its stream lapsing.
+const payloadTTL = streamTTL
+
+// payloadKey is where one event's serialized payload lives, shared by every
+// recipient stream that points at it. "evtp:" never matches the "evt:*"
+// stream SCAN in BackfillTTL.
+func payloadKey(eventID string) string {
+	return "evtp:" + eventID
+}
 
 // Stream wraps a Redis client for per-user inbox operations.
 type Stream struct {
@@ -72,9 +89,9 @@ func NewStream(client *redis.Client, maxLen int64) *Stream {
 	return &Stream{client: client, maxLen: maxLen}
 }
 
-// Append writes the serialized event to the given user's inbox stream
-// with approximate MAXLEN trimming. Events with no ID are rejected —
-// the ID is what clients use as the replay cursor and dedup key.
+// Append writes the event to one user's inbox (see AppendMany). Events with
+// no ID are rejected — the ID is what clients use as the replay cursor and
+// dedup key.
 func (s *Stream) Append(ctx context.Context, userID string, eventID string, payload []byte) error {
 	if s == nil || s.client == nil {
 		return nil
@@ -82,41 +99,20 @@ func (s *Stream) Append(ctx context.Context, userID string, eventID string, payl
 	if userID == "" {
 		return errors.New("eventlog: empty userID")
 	}
-	if eventID == "" {
-		return errors.New("eventlog: empty eventID")
-	}
-	// XADD + EXPIRE in one round-trip so the stream's idle TTL is refreshed on
-	// every append (an active user never lets it lapse).
-	pipe := s.client.Pipeline()
-	pipe.XAdd(ctx, &redis.XAddArgs{
-		Stream: streamKey(userID),
-		MaxLen: s.maxLen,
-		Approx: true,
-		// We don't need the per-entry stream ID externally — the
-		// event's own ULID is the cursor. Let Redis pick the entry ID.
-		ID: "*",
-		Values: map[string]any{
-			payloadField: payload,
-			// The cursor ULID rides as its own field so replay can read it
-			// without JSON-scanning the (potentially large) envelope.
-			idField: eventID,
-		},
-	})
-	pipe.Expire(ctx, streamKey(userID), streamTTL)
-	if _, err := pipe.Exec(ctx); err != nil {
-		return fmt.Errorf("eventlog: xadd: %w", err)
-	}
-	return nil
+	return s.AppendMany(ctx, []string{userID}, eventID, payload)
 }
 
-// AppendMany pipelines the same event into many users' inbox streams in a
-// SINGLE Redis round-trip, instead of one XADD (and one goroutine) per
-// recipient — the previous fan-out did O(recipients) separate round-trips on
-// every persistent event (including every reaction/edit). A pipeline error is
-// returned for the caller to retry: partial success leaves MID-STREAM HOLES
-// the replay cursor cannot detect (a `replay.done` after a hole silently
-// loses the event), so a persistent failure must be followed by Drop — an
-// empty stream forces the exhausted → full-refetch path instead.
+// AppendMany stores the event payload ONCE (payloadKey, payloadTTL) and
+// appends a pointer — just the event ID — to every recipient's inbox stream,
+// all in a SINGLE pipelined round-trip. The payload SET is queued first, so
+// it lands before any pointer that refers to it.
+//
+// A pipeline error is returned for the caller to retry: partial success
+// leaves MID-STREAM HOLES the replay cursor cannot detect (a `replay.done`
+// after a hole silently loses the event), so a persistent failure must be
+// followed by Drop — an empty stream forces the exhausted → full-refetch path
+// instead. A pointer whose payload write was the part that failed replays as
+// a gap (Exhausted), never as a silent skip.
 func (s *Stream) AppendMany(ctx context.Context, userIDs []string, eventID string, payload []byte) error {
 	if s == nil || s.client == nil {
 		return nil
@@ -124,26 +120,30 @@ func (s *Stream) AppendMany(ctx context.Context, userIDs []string, eventID strin
 	if eventID == "" {
 		return errors.New("eventlog: empty eventID")
 	}
-	pipe := s.client.Pipeline()
-	queued := 0
+	recipients := make([]string, 0, len(userIDs))
 	for _, uid := range userIDs {
-		if uid == "" {
-			continue
+		if uid != "" {
+			recipients = append(recipients, uid)
 		}
+	}
+	if len(recipients) == 0 {
+		return nil
+	}
+	pipe := s.client.Pipeline()
+	pipe.Set(ctx, payloadKey(eventID), payload, payloadTTL)
+	for _, uid := range recipients {
 		pipe.XAdd(ctx, &redis.XAddArgs{
 			Stream: streamKey(uid),
 			MaxLen: s.maxLen,
 			Approx: true,
+			// The entry's Redis ID is not used — the event's own ULID is the
+			// cursor — so let Redis pick it.
 			ID:     "*",
-			Values: map[string]any{payloadField: payload, idField: eventID},
+			Values: map[string]any{idField: eventID},
 		})
-		// Refresh the idle TTL on every recipient's stream too, so a user who
+		// Refresh the idle TTL on every recipient's stream, so a user who
 		// only ever receives (never authors) still keeps a live buffer.
 		pipe.Expire(ctx, streamKey(uid), streamTTL)
-		queued++
-	}
-	if queued == 0 {
-		return nil
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("eventlog: pipeline xadd: %w", err)
@@ -250,8 +250,18 @@ type Entry struct {
 
 // ReplayResult is the outcome of a replay request.
 type ReplayResult struct {
-	Entries   []Entry
-	Exhausted bool // since cursor predates the oldest retained entry — caller should full-refetch
+	Entries []Entry
+	// Exhausted means the replay cannot be proven complete — the cursor
+	// predates the oldest retained entry, or an entry's payload could no
+	// longer be resolved — so the caller must full-refetch.
+	Exhausted bool
+}
+
+// streamEntry is one decoded stream record. ref marks a pointer entry whose
+// payload still has to be fetched from payloadKey(ID).
+type streamEntry struct {
+	Entry
+	ref bool
 }
 
 // Replay returns all entries in the user's inbox strictly newer than
@@ -275,9 +285,9 @@ func (s *Stream) Replay(ctx context.Context, userID string, since string) (Repla
 		return res, nil
 	}
 	// Walk the full stream — MAXLEN bounds this to ~2000 entries per
-	// user. We read newest-first via XRevRange so a long-disconnected
-	// client whose cursor is at the very end can early-exit after a
-	// single entry comparison rather than scanning the whole stream.
+	// user, and pointer entries are just IDs, so the read is small; only
+	// the payloads of entries newer than the cursor are fetched afterwards.
+	// We read newest-first via XRevRange so the scan stops at the cursor.
 	entries, err := s.client.XRevRangeN(ctx, streamKey(userID), "+", "-", s.maxLen+1).Result()
 	if err != nil {
 		return res, fmt.Errorf("eventlog: xrevrange: %w", err)
@@ -290,8 +300,9 @@ func (s *Stream) Replay(ctx context.Context, userID string, since string) (Repla
 		// believing an empty replay means "nothing happened".
 		return ReplayResult{Exhausted: true}, nil
 	}
-	// Collect candidates strictly newer than `since`, oldest-first.
-	out := make([]Entry, 0, len(entries))
+	// Collect candidates strictly newer than `since`, newest-first.
+	candidates := make([]streamEntry, 0, len(entries))
+	foundCursor := false
 	for _, e := range entries {
 		entry, ok := parseStreamEntry(e.Values)
 		if !ok {
@@ -299,56 +310,100 @@ func (s *Stream) Replay(ctx context.Context, userID string, since string) (Repla
 		}
 		if entry.ID <= since {
 			// We hit the cursor — everything older is already seen.
-			// Reverse the buffer so callers receive oldest-first.
-			reverse(out)
-			return ReplayResult{Entries: out}, nil
+			foundCursor = true
+			break
 		}
-		out = append(out, entry)
+		candidates = append(candidates, entry)
 	}
-	// If we got here without seeing `since`, the cursor predates the
-	// oldest retained entry — the stream has been trimmed past it.
-	// Tell the caller to fall back to a full refetch instead of
-	// believing a partial replay is complete.
-	reverse(out)
-	return ReplayResult{Entries: out, Exhausted: true}, nil
+	reverse(candidates) // callers receive oldest-first
+	out, gap, err := s.resolvePayloads(ctx, candidates)
+	if err != nil {
+		return res, err
+	}
+	// Not seeing `since` means the cursor predates the oldest retained entry
+	// (the stream was trimmed past it); a gap means a pointer's payload is
+	// gone. Either way the replay is not provably complete, so the caller
+	// falls back to a full refetch instead of believing it caught up.
+	return ReplayResult{Entries: out, Exhausted: !foundCursor || gap}, nil
 }
 
-// parseStreamEntry turns one XREVRANGE entry's values map into an Entry.
-// Each stream entry stores the full event envelope under payloadField and —
-// since the perf pass — the cursor ULID as its own idField, so replay avoids
-// JSON-scanning every (potentially large) envelope per reconnect. Entries
-// appended before the idField existed fall back to extracting the embedded
-// ID from the envelope. Returns ok=false for entries Replay must skip: no
-// payload field, a payload that is not a string (the map is typed any;
-// go-redis always delivers bulk strings, but the shape alone doesn't
-// guarantee it), malformed envelope JSON, or an envelope with no ID.
-func parseStreamEntry(values map[string]any) (Entry, bool) {
-	payloadAny, ok := values[payloadField]
-	if !ok {
-		return Entry{}, false
+// resolvePayloads fills in the payload of every pointer entry with ONE MGET,
+// keeping the oldest-first order. An entry whose payload is gone is left out
+// and reported as a gap — dropping it silently would make a replay that
+// skipped an event look complete.
+func (s *Stream) resolvePayloads(ctx context.Context, candidates []streamEntry) ([]Entry, bool, error) {
+	var keys []string
+	for _, c := range candidates {
+		if c.ref {
+			keys = append(keys, payloadKey(c.ID))
+		}
+	}
+	var payloads []any
+	if len(keys) > 0 {
+		var err error
+		if payloads, err = s.client.MGet(ctx, keys...).Result(); err != nil {
+			return nil, false, fmt.Errorf("eventlog: mget payloads: %w", err)
+		}
+	}
+	out := make([]Entry, 0, len(candidates))
+	gap := false
+	next := 0
+	for _, c := range candidates {
+		if !c.ref {
+			out = append(out, c.Entry)
+			continue
+		}
+		// MGET answers nil for a missing key and a string otherwise.
+		payload, ok := payloads[next].(string)
+		next++
+		if !ok {
+			gap = true
+			continue
+		}
+		out = append(out, Entry{ID: c.ID, Payload: []byte(payload)})
+	}
+	return out, gap, nil
+}
+
+// parseStreamEntry decodes one XREVRANGE entry's values map. Three shapes
+// exist:
+//   - pointer (current): only idField; the payload lives under payloadKey.
+//   - full payload with idField: written before payloads were stored once.
+//   - full payload only: the oldest entries; the ID comes from the envelope.
+//
+// Returns ok=false for entries Replay must skip: a pointer with no usable ID,
+// a payload that is not a string (the map is typed any; go-redis always
+// delivers bulk strings, but the shape alone doesn't guarantee it), malformed
+// envelope JSON, or an envelope with no ID.
+func parseStreamEntry(values map[string]any) (streamEntry, bool) {
+	id, _ := values[idField].(string)
+	payloadAny, inline := values[payloadField]
+	if !inline {
+		if id == "" {
+			return streamEntry{}, false
+		}
+		return streamEntry{Entry: Entry{ID: id}, ref: true}, true
 	}
 	payloadStr, ok := payloadAny.(string)
 	if !ok {
-		return Entry{}, false
+		return streamEntry{}, false
 	}
-	if idAny, ok := values[idField]; ok {
-		if id, ok := idAny.(string); ok && id != "" {
-			return Entry{ID: id, Payload: []byte(payloadStr)}, true
-		}
+	if id != "" {
+		return streamEntry{Entry: Entry{ID: id, Payload: []byte(payloadStr)}}, true
 	}
 	var env struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal([]byte(payloadStr), &env); err != nil {
-		return Entry{}, false
+		return streamEntry{}, false
 	}
 	if env.ID == "" {
-		return Entry{}, false
+		return streamEntry{}, false
 	}
-	return Entry{ID: env.ID, Payload: []byte(payloadStr)}, true
+	return streamEntry{Entry: Entry{ID: env.ID, Payload: []byte(payloadStr)}}, true
 }
 
-func reverse(a []Entry) {
+func reverse(a []streamEntry) {
 	for i, j := 0, len(a)-1; i < j; i, j = i+1, j-1 {
 		a[i], a[j] = a[j], a[i]
 	}

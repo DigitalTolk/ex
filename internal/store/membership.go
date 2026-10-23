@@ -145,6 +145,18 @@ func (s *MembershipStoreImpl) GetMembership(ctx context.Context, channelID, user
 }
 
 func (s *MembershipStoreImpl) ListMembers(ctx context.Context, channelID string) ([]*model.ChannelMembership, error) {
+	return s.listMembers(ctx, channelID, false)
+}
+
+// ListMembersConsistent is ListMembers with a strongly consistent read. The
+// notification audience cache fills from it: an eventually consistent read
+// right after a join can miss the new member, and a cached copy would keep
+// them out of every alert until the channel next changes.
+func (s *MembershipStoreImpl) ListMembersConsistent(ctx context.Context, channelID string) ([]*model.ChannelMembership, error) {
+	return s.listMembers(ctx, channelID, true)
+}
+
+func (s *MembershipStoreImpl) listMembers(ctx context.Context, channelID string, consistent bool) ([]*model.ChannelMembership, error) {
 	keyCond := expression.KeyAnd(
 		expression.Key("PK").Equal(expression.Value(channelPK(channelID))),
 		expression.Key("SK").BeginsWith("MEMBER#"),
@@ -159,6 +171,7 @@ func (s *MembershipStoreImpl) ListMembers(ctx context.Context, channelID string)
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+		ConsistentRead:            aws.Bool(consistent),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: list channel members: %w", err)
@@ -218,52 +231,34 @@ func (s *MembershipStoreImpl) ListUserChannels(ctx context.Context, userID strin
 // A user with no row (or one whose override attributes are absent) simply
 // won't appear / will appear with nil override pointers — both resolve to
 // "inherit account defaults" downstream.
+//
+// The read is strongly consistent: the notification audience cache keeps what
+// it reads, so a mute or override written a moment earlier must be seen.
 func (s *MembershipStoreImpl) UserChannelNotifPrefs(ctx context.Context, channelID string, userIDs []string) (map[string]*model.UserChannel, error) {
-	prefs := make(map[string]*model.UserChannel)
-	const batchSize = 100 // DynamoDB BatchGetItem hard limit
-	for start := 0; start < len(userIDs); start += batchSize {
-		end := min(start+batchSize, len(userIDs))
-		keys := make([]map[string]types.AttributeValue, 0, end-start)
-		for _, uid := range userIDs[start:end] {
-			keys = append(keys, compositeKey(userPK(uid), chanSK(channelID)))
-		}
-		req := map[string]types.KeysAndAttributes{
-			s.Table: {
-				Keys:                 keys,
-				ProjectionExpression: aws.String("#uid, #muted, #d, #m, #t, #i, #f"),
-				ExpressionAttributeNames: map[string]string{
-					"#uid":   "userID",
-					"#muted": "muted",
-					"#d":     "notifDesktopLevel",
-					"#m":     "notifMobileLevel",
-					"#t":     "notifThreadReplies",
-					"#i":     "notifIgnoreGroupMentions",
-					"#f":     "notifFollowAllThreads",
-				},
-			},
-		}
-		// Drain UnprocessedKeys (BatchGetItem may return a partial result under
-		// throttling) before moving to the next chunk.
-		for {
-			out, err := s.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
-			if err != nil {
-				return nil, fmt.Errorf("store: batch get notif prefs: %w", err)
-			}
-			for _, item := range out.Responses[s.Table] {
-				var uc model.UserChannel
-				if err := attributevalue.UnmarshalMap(item, &uc); err != nil {
-					return nil, fmt.Errorf("store: unmarshal notif pref row: %w", err)
-				}
-				if uc.UserID != "" {
-					row := uc
-					prefs[uc.UserID] = &row
-				}
-			}
-			unproc, ok := out.UnprocessedKeys[s.Table]
-			if !ok || len(unproc.Keys) == 0 {
-				break
-			}
-			req = map[string]types.KeysAndAttributes{s.Table: unproc}
+	keys := make([]map[string]types.AttributeValue, len(userIDs))
+	for i, uid := range userIDs {
+		keys[i] = compositeKey(userPK(uid), chanSK(channelID))
+	}
+	rows, err := batchGetOf[model.UserChannel](ctx, s.DB, keys, types.KeysAndAttributes{
+		ConsistentRead:       aws.Bool(true),
+		ProjectionExpression: aws.String("#uid, #muted, #d, #m, #t, #i, #f"),
+		ExpressionAttributeNames: map[string]string{
+			"#uid":   "userID",
+			"#muted": "muted",
+			"#d":     "notifDesktopLevel",
+			"#m":     "notifMobileLevel",
+			"#t":     "notifThreadReplies",
+			"#i":     "notifIgnoreGroupMentions",
+			"#f":     "notifFollowAllThreads",
+		},
+	}, "notif prefs")
+	if err != nil {
+		return nil, err
+	}
+	prefs := make(map[string]*model.UserChannel, len(rows))
+	for i := range rows {
+		if uc := &rows[i]; uc.UserID != "" {
+			prefs[uc.UserID] = uc
 		}
 	}
 	return prefs, nil

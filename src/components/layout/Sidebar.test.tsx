@@ -1545,6 +1545,28 @@ describe('Sidebar', () => {
     }
   });
 
+  it('renders and keeps its view options working when localStorage is blocked', async () => {
+    const getSpy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage denied');
+    });
+    const setSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage denied');
+    });
+    try {
+      mockChannels = mockChannels.map((c) => (c.channelID === 'ch-1' ? { ...c, unread: true } : c));
+      const user = userEvent.setup();
+      renderSidebar();
+      expect(await screen.findByTestId('channel-row-ch-1')).toBeInTheDocument();
+      // The preference still applies for this session, it just isn't saved.
+      await user.click(screen.getByTestId('sidebar-unread-options'));
+      await user.click(await screen.findByTestId('sidebar-unread-section-toggle'));
+      expect(await screen.findByTestId('sidebar-group-__unread__')).toBeInTheDocument();
+    } finally {
+      getSpy.mockRestore();
+      setSpy.mockRestore();
+    }
+  });
+
   it('drags categories before each other and renumbers their positions', async () => {
     mockApiFetch.mockImplementation(async (url: string) => {
       if (url === '/api/v1/sidebar/categories') {

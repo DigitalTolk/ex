@@ -297,10 +297,17 @@ describe('api.ts extended browser coverage', () => {
     expect(await b).toBe('shared');
   });
 
-  it('captureServerVersion sets the version when the header is present', async () => {
-    captureServerVersion(buildResponse({ headers: { 'X-EX-App-Version': 'v1.2.3' } }));
-    // Just ensure no throw + the helper was reached.
-    expect(true).toBe(true);
+  it('captureServerVersion reports the version when the header is present', async () => {
+    const reported: string[] = [];
+    const onReport = (event: Event) => reported.push((event as CustomEvent<string>).detail);
+    window.addEventListener('ex:server-version-reported', onReport);
+    try {
+      captureServerVersion(buildResponse({ headers: { 'X-EX-App-Version': 'v1.2.3' } }));
+      captureServerVersion(buildResponse({ headers: {} }));
+    } finally {
+      window.removeEventListener('ex:server-version-reported', onReport);
+    }
+    expect(reported).toEqual(['v1.2.3']);
   });
 
   it('ApiError exposes the HTTP status', () => {

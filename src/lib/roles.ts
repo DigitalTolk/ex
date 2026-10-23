@@ -1,7 +1,7 @@
-// Channel role helpers. Backend serializes role either as the numeric enum
-// (1=Member, 2=Admin, 3=Owner) on UserChannel, or as the string form
-// ("owner"|"admin"|"member") on ChannelMembership. The helpers below accept
-// either shape so call sites don't need to know which payload they're holding.
+// Channel role helpers. The backend serializes a role as the numeric enum
+// (1=Member, 2=Admin, 3=Owner) on both UserChannel and ChannelMembership; the
+// helpers also accept the string form ("owner"|"admin"|"member") the UI
+// spells roles in, so call sites don't need to know which they're holding.
 
 export const ChannelRole = {
   Member: 1,

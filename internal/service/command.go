@@ -52,7 +52,13 @@ type Command interface {
 type CommandService struct {
 	order  []CommandInfo
 	byName map[string]Command
+	drafts SentDraftClearer
 }
+
+// SetDraftClearer folds the draft clear into a command run: the composer held
+// "/mstmeetings" as a draft until it ran, so a successful run clears it like
+// a message send. Optional — nil leaves drafts to the client.
+func (s *CommandService) SetDraftClearer(c SentDraftClearer) { s.drafts = c }
 
 // NewCommandService creates an empty registry.
 func NewCommandService() *CommandService {
@@ -85,5 +91,10 @@ func (s *CommandService) Run(ctx context.Context, name string, req CommandReques
 	if req.ParentType != ParentChannel && req.ParentType != ParentConversation {
 		return nil, fmt.Errorf("command: unknown parent type %q: %w", req.ParentType, ErrForbidden)
 	}
-	return cmd.Run(ctx, req)
+	msg, err := cmd.Run(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	clearSentDraft(ctx, s.drafts, draftScope{userID: req.UserID, parentID: req.ParentID, parentType: req.ParentType})
+	return msg, nil
 }

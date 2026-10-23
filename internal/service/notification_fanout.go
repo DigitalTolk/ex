@@ -34,12 +34,12 @@ type memberSnapshot struct {
 	prefs     map[string]model.NotificationSettings // userID → effective settings
 	machine   map[string]bool                       // userID → true for bot/agent accounts
 	deepLink  string
+	// loaded is true once the audience was actually resolved (possibly
+	// empty); false means the read failed and the message notified nobody,
+	// so the durable safety net must try again.
+	loaded bool
 }
 
-// loadMemberSnapshot resolves the audience for a single message. Empty
-// memberIDs is a valid result (e.g., empty channel) and signals "nobody
-// to notify by default" — a direct @-mention can still reach a muted
-// member via the mentions path.
 // logAudienceLoadFailed reports an audience-resolution failure at ERROR. Losing
 // the audience loses the ENTIRE recipient set for a message — no desktop alert
 // AND no mobile fallback — which for an incident channel is a missed alert, so
@@ -68,6 +68,10 @@ func retryAudienceLoad[T any](ctx context.Context, load func() (T, error)) (T, e
 		backoff.WithMaxTries(uint(audienceRetryMaxRetries)+1))
 }
 
+// loadMemberSnapshot resolves the audience for a single message. Empty
+// memberIDs is a valid result (e.g., empty channel) and signals "nobody
+// to notify by default" — a direct @-mention can still reach a muted
+// member via the mentions path.
 func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model.Message, parentType, parentName string) memberSnapshot {
 	// The author never notifies themselves. For a webhook posting into a
 	// CHANNEL the author is the "webhook" sentinel, which matches no member,
@@ -80,40 +84,30 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 	excludeID := msg.AuthorID
 	switch parentType {
 	case ParentChannel:
-		members, err := retryAudienceLoad(ctx, func() ([]*model.ChannelMembership, error) {
-			return s.members.ListMembers(ctx, msg.ParentID)
-		})
+		// Members, their per-channel overrides (incl. mute) and their account
+		// settings, through the generation-checked cache when wired. Losing the
+		// member list loses the whole audience; a lost override read degrades
+		// to "no overrides" (a minor over-notification, never a dropped member).
+		aud, err := s.loadChannelAudience(ctx, msg.ParentID)
 		if err != nil {
-			// (Unlike the per-member overrides/prefs below, which degrade
-			// gracefully — a lost override is a minor over-notification — losing
-			// the member list loses the whole audience.)
 			logAudienceLoadFailed(msg, parentType, err)
 			return memberSnapshot{}
 		}
-		ids := make([]string, 0, len(members))
-		for _, m := range members {
-			if m.UserID == excludeID {
+		ids := make([]string, 0, len(aud.memberIDs))
+		for _, uid := range aud.memberIDs {
+			if uid == excludeID {
 				continue
 			}
-			ids = append(ids, m.UserID)
-		}
-		// One batched read of the members' per-channel overrides (incl. mute)
-		// rather than a ListUserChannels query per member (O(members) queries
-		// on every channel message). On failure, fall back to "no overrides" —
-		// a missed mute/override is a minor over-notification, not a
-		// correctness bug.
-		overrides, err := s.members.UserChannelNotifPrefs(ctx, msg.ParentID, ids)
-		if err != nil {
-			overrides = map[string]*model.UserChannel{}
+			ids = append(ids, uid)
 		}
 		muted := make(map[string]bool, len(ids))
-		for uid, uc := range overrides {
+		for uid, uc := range aud.overrides {
 			if uc != nil && uc.Muted {
 				muted[uid] = true
 			}
 		}
-		prefs, machine := s.resolvePrefs(ctx, ids, overrides)
-		return memberSnapshot{memberIDs: ids, muted: muted, prefs: prefs, machine: machine, deepLink: "/channel/" + parentName}
+		prefs, machine := resolvePrefs(ids, aud.accounts, aud.overrides)
+		return memberSnapshot{memberIDs: ids, muted: muted, prefs: prefs, machine: machine, deepLink: "/channel/" + parentName, loaded: true}
 	case ParentConversation:
 		c, err := retryAudienceLoad(ctx, func() (*model.Conversation, error) {
 			return s.conv.GetConversation(ctx, msg.ParentID)
@@ -129,26 +123,20 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 			}
 			ids = append(ids, p)
 		}
-		prefs, machine := s.resolvePrefs(ctx, ids, nil)
-		return memberSnapshot{memberIDs: ids, muted: map[string]bool{}, prefs: prefs, machine: machine, deepLink: "/conversation/" + msg.ParentID}
+		prefs, machine := resolvePrefs(ids, s.accountsFor(ctx, ids), nil)
+		return memberSnapshot{memberIDs: ids, muted: map[string]bool{}, prefs: prefs, machine: machine, deepLink: "/conversation/" + msg.ParentID, loaded: true}
 	}
 	return memberSnapshot{}
 }
 
-// resolvePrefs batch-loads each member's account-level settings and folds the
-// per-channel override (if any) on top. Missing account settings default to
+// resolvePrefs folds each member's per-channel override (if any) onto their
+// account-level settings. Missing account settings default to
 // DefaultNotificationSettings; a nil overrides map (conversations) means every
 // member resolves to their pure account baseline. It also returns the set of
-// bot/agent members, read in the same batch.
-func (s *NotificationService) resolvePrefs(ctx context.Context, ids []string, overrides map[string]*model.UserChannel) (map[string]model.NotificationSettings, map[string]bool) {
+// bot/agent members.
+func resolvePrefs(ids []string, accounts map[string]store.NotificationAccount, overrides map[string]*model.UserChannel) (map[string]model.NotificationSettings, map[string]bool) {
 	prefs := make(map[string]model.NotificationSettings, len(ids))
 	machine := map[string]bool{}
-	accounts := map[string]store.NotificationAccount{}
-	if s.users != nil {
-		if got, err := s.users.NotificationAccountsFor(ctx, ids); err == nil {
-			accounts = got
-		}
-	}
 	for _, uid := range ids {
 		acct, ok := accounts[uid]
 		if !ok {
@@ -157,11 +145,7 @@ func (s *NotificationService) resolvePrefs(ctx context.Context, ids []string, ov
 		if acct.Machine {
 			machine[uid] = true
 		}
-		var uc *model.UserChannel
-		if overrides != nil {
-			uc = overrides[uid]
-		}
-		prefs[uid] = model.ResolveNotificationPrefs(acct.Settings, uc)
+		prefs[uid] = model.ResolveNotificationPrefs(acct.Settings, overrides[uid])
 	}
 	return prefs, machine
 }
@@ -184,6 +168,30 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	if msg == nil || msg.System {
 		return
 	}
+	s.notifyAndMark(ctx, msg, parentType, threadRoot)
+}
+
+// notifyAndMark runs the fan-out and, when it completed, records the
+// "notified" marker the durable safety net checks. It reports completion: a
+// fan-out whose audience could not be read alerted nobody and is left
+// unmarked, so the safety net runs it again.
+func (s *NotificationService) notifyAndMark(ctx context.Context, msg *model.Message, parentType string, threadRoot *model.Message) bool {
+	if !s.fanOut(ctx, msg, parentType, threadRoot) {
+		return false
+	}
+	if s.marker != nil {
+		if err := s.marker.MarkNotified(context.WithoutCancel(ctx), msg.ID); err != nil {
+			// The alerts went out; the safety net will run once more
+			// (a duplicate, never a loss).
+			slog.WarnContext(ctx, "notified marker write failed; the safety net will repeat this fan-out", "messageID", msg.ID, "error", err)
+		}
+	}
+	return true
+}
+
+// fanOut is NotifyForMessage's body; it reports whether the audience was
+// resolved (see memberSnapshot.loaded).
+func (s *NotificationService) fanOut(ctx context.Context, msg *model.Message, parentType string, threadRoot *model.Message) bool {
 	kind := NotificationKindMessage
 	if msg.ParentMessageID != "" {
 		kind = NotificationKindThreadReply
@@ -206,27 +214,35 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		deepLink = deepLink + "?thread=" + msg.ParentMessageID + "#msg-" + msg.ParentMessageID
 	}
 
-	// The message preview on its own; the banner body wraps it with the
-	// author ("who: what"), while the Activity tab shows the actor separately
-	// and keeps the bare text.
-	preview := previewBody(notificationBody(msg))
-	title := titleFor(kind, parentType, parentName, authorName)
-	body := bodyFor(parentType, parentName, authorName, preview)
+	// The thread root, read at most once per reply: it titles the alert and
+	// scopes the participants. It normally arrives with the call; it is
+	// fetched only when the metadata bump failed.
+	var root *model.Message
+	text, rootText := notificationBody(msg), ""
 	if kind == NotificationKindThreadReply {
-		// Thread replies are titled by the thread: "<name> replied on thread
-		// <root…>", with the reply itself as the body. The root normally
-		// arrives with the call; fetch it when the metadata bump failed.
-		root := threadRoot
+		root = threadRoot
 		if root == nil && s.messages != nil {
 			if r, err := s.messages.GetMessage(ctx, msg.ParentID, msg.ParentMessageID); err == nil {
 				root = r
 			}
 		}
-		rootPreview := ""
 		if root != nil {
-			rootPreview = previewBody(notificationBody(root))
+			rootText = notificationBody(root)
 		}
-		title = threadReplyTitle(parentType, parentName, rootPreview)
+	}
+	// Every mention the alert shows, in the message and its thread root,
+	// named by its ID's current name — one lookup for both.
+	names := lookupMentionNames(ctx, s.mentions, text, rootText)
+	// The message preview on its own; the banner body wraps it with the
+	// author ("who: what"), while the Activity tab shows the actor separately
+	// and keeps the bare text.
+	preview := previewBody(text, names)
+	title := titleFor(kind, parentType, parentName, authorName)
+	body := bodyFor(parentType, parentName, authorName, preview)
+	if kind == NotificationKindThreadReply {
+		// Thread replies are titled by the thread: "<name> replied on thread
+		// <root…>", with the reply itself as the body.
+		title = threadReplyTitle(parentType, parentName, previewBody(rootText, names))
 		body = authorName + ": " + preview
 	}
 	baseNotif := Notification{
@@ -300,7 +316,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	unfollowed := map[string]bool{}
 	if isThreadReply {
 		var recipients []string
-		recipients, unfollowed = s.resolveThreadRecipients(ctx, msg, snap)
+		recipients, unfollowed = s.resolveThreadRecipients(ctx, msg, snap, root)
 		threadAudience = make(map[string]bool, len(recipients)+1)
 		for _, uid := range recipients {
 			threadAudience[uid] = true
@@ -331,7 +347,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 		// author's own reply unread on their other devices.
 		if s.userState != nil && msg.AuthorID != "" && msg.WebhookUsername == "" {
 			if err := s.userState.MarkThreadSeen(ctx, msg.AuthorID, msg.ParentID, parentType, msg.ParentMessageID); err != nil {
-				slog.Warn("author thread-seen mark failed", "threadRootID", msg.ParentMessageID, "userID", msg.AuthorID, "error", err)
+				slog.WarnContext(ctx, "author thread-seen mark failed", "threadRootID", msg.ParentMessageID, "userID", msg.AuthorID, "error", err)
 			}
 		}
 	}
@@ -556,9 +572,13 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 			ids[i] = p.uid
 		}
 		online := s.onlineSet(ids)
+		// Bounded-parallel, like the writes above: each schedule is an asynq
+		// enqueue (a Redis round trip), and a big "all messages" channel used
+		// to pay them one after another.
 		for _, p := range mobilePending {
-			s.sendMobilePush(ctx, p.uid, p.notif, online[p.uid])
+			write(func() { s.sendMobilePush(ctx, p.uid, p.notif, online[p.uid]) })
 		}
+		wg.Wait()
 	}
 
 	// Live-patch every audience member's /threads list from the
@@ -569,6 +589,7 @@ func (s *NotificationService) NotifyForMessage(ctx context.Context, msg *model.M
 	if isThreadReply && threadRoot != nil && len(threadAudience) > 0 {
 		s.publishThreadUpdate(ctx, msg, parentType, threadRoot, threadAudience)
 	}
+	return snap.loaded
 }
 
 // recipientReasons captures, for one recipient and one message, the precomputed

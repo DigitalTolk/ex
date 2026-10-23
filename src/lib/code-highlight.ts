@@ -3,6 +3,10 @@
 // returns a hast tree the message renderer hydrates with React. A code
 // block only highlights when its fence carries a language we recognise
 // (```php, ```ts, …); unknown/absent languages fall back to plain text.
+//
+// Loaded lazily (lib/code-highlight-loader), so the grammars stay out of the
+// boot bundle. What a fence token means is answered synchronously by
+// lib/code-fence: the gutter and label are needed at a block's first render.
 import { createLowlight } from 'lowlight';
 import type { HLJSApi, Language, LanguageFn } from 'highlight.js';
 import bash from 'highlight.js/lib/languages/bash';
@@ -27,6 +31,9 @@ import typescript from 'highlight.js/lib/languages/typescript';
 import xml from 'highlight.js/lib/languages/xml';
 import yaml from 'highlight.js/lib/languages/yaml';
 import type { Root } from 'hast';
+import { normalizeHighlightLanguage } from '@/lib/code-fence';
+
+export { codeFenceLabel, normalizeHighlightLanguage, supportedHighlightLanguage } from '@/lib/code-fence';
 
 // highlight.js ships no HCL/Terraform grammar, so register a compact one: block
 // types + literals as keywords, #, // and /* */ comments, strings, numbers,
@@ -49,66 +56,23 @@ const hcl: LanguageFn = (hljs: HLJSApi): Language => ({
   ],
 });
 
-const lowlight = createLowlight({
+// Exported for the test that keeps lib/code-fence's list of names in step.
+export const grammars: Record<string, LanguageFn> = {
   bash, c, cpp, csharp, css, go, hcl, ini, java, javascript, json, kotlin,
   markdown, php, python, ruby, rust, sql, swift, typescript, xml, yaml,
-});
-
-// Common fence aliases → the registered grammar name.
-const ALIASES: Record<string, string> = {
-  'c++': 'cpp',
-  'c#': 'csharp',
-  js: 'javascript',
-  ts: 'typescript',
-  py: 'python',
-  rb: 'ruby',
-  sh: 'bash',
-  shell: 'bash',
-  zsh: 'bash',
-  html: 'xml',
-  xhtml: 'xml',
-  htm: 'xml',
-  yml: 'yaml',
-  golang: 'go',
-  md: 'markdown',
-  kt: 'kotlin',
-  terraform: 'hcl',
-  tf: 'hcl',
-  toml: 'ini',
 };
 
-export function normalizeHighlightLanguage(language?: string): string | undefined {
-  if (!language) return undefined;
-  const lower = language.trim().toLowerCase();
-  if (!lower) return undefined;
-  return ALIASES[lower] ?? lower;
-}
+const lowlight = createLowlight(grammars);
 
-// supportedHighlightLanguage validates a fence language against the registered
-// grammar set and returns its canonical name, or undefined when the language is
-// absent or unknown. Callers MUST NOT trust the raw fence token (it's arbitrary
-// user input that would otherwise leak into a class/label) — an unknown language
-// falls back to a plain block.
-export function supportedHighlightLanguage(language?: string): string | undefined {
-  const lang = normalizeHighlightLanguage(language);
-  if (!lang || !lowlight.registered(lang)) return undefined;
-  return lang;
-}
-
-// codeFenceLabel is what to show/attribute for a fence: the author's token when
-// it names a supported language, "plain" when it's present-but-unsupported, or
-// undefined when no language was given. Shared by both code-block renderers so
-// messages and previews label identically.
-export function codeFenceLabel(language?: string): string | undefined {
-  if (!language) return undefined;
-  return supportedHighlightLanguage(language) ? language : 'plain';
+export function isRegisteredHighlightLanguage(name: string): boolean {
+  return lowlight.registered(name);
 }
 
 // highlightToHast returns a hast tree of highlighted spans, or null when the
 // language is unknown/unsupported (so the caller renders plain text).
 export function highlightToHast(code: string, language?: string): Root | null {
-  const lang = supportedHighlightLanguage(language);
-  if (!lang) return null;
+  const lang = normalizeHighlightLanguage(language);
+  if (!lang || !lowlight.registered(lang)) return null;
   try {
     return lowlight.highlight(lang, code);
   } catch {

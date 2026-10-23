@@ -324,7 +324,23 @@ func TestOneSignalPushSender_DefaultsAPIURLAndClient(t *testing.T) {
 		t.Errorf("apiURL = %q, want default", sender.apiURL)
 	}
 	if sender.client == nil {
-		t.Error("expected default http client")
+		t.Fatal("expected default http client")
+	}
+	// Every push goes to the same provider host, so the per-host idle pool is
+	// the whole pool: net/http's default of 2 made a notification burst open
+	// (and TLS-handshake) a fresh connection per push beyond the second.
+	tr, ok := sender.client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("default client transport = %T, want a tuned *http.Transport", sender.client.Transport)
+	}
+	if tr.MaxIdleConnsPerHost != oneSignalMaxIdleConnsPerHost || tr.MaxIdleConns < oneSignalMaxIdleConnsPerHost {
+		t.Fatalf("idle pool = %d per host / %d total, want %d per host", tr.MaxIdleConnsPerHost, tr.MaxIdleConns, oneSignalMaxIdleConnsPerHost)
+	}
+	if tr.Proxy == nil || !tr.ForceAttemptHTTP2 || tr.TLSHandshakeTimeout == 0 || tr.IdleConnTimeout == 0 {
+		t.Fatalf("tuned transport must keep net/http's defaults (proxy, HTTP/2, timeouts): %+v", tr)
+	}
+	if sender.client.Timeout != 5*time.Second {
+		t.Fatalf("client timeout = %v, want 5s", sender.client.Timeout)
 	}
 }
 

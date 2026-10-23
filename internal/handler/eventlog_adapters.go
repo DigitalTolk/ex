@@ -8,7 +8,7 @@ import (
 
 // ListMembersFunc abstracts the membership store's channel-member
 // listing so the eventlog adapter doesn't depend on a concrete store
-// type. main.go passes the bound method; tests pass a closure.
+// type. internal/app passes the bound method; tests pass a closure.
 type ListMembersFunc func(ctx context.Context, channelID string) ([]*model.ChannelMembership, error)
 
 // GetConversationFunc abstracts the conversation store's get-by-ID

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/DigitalTolk/ex/internal/agents"
 	"github.com/DigitalTolk/ex/internal/model"
-	"github.com/DigitalTolk/ex/internal/service"
 )
 
 type fakeRunFileLoader struct{ byID map[string]*model.Attachment }
@@ -21,24 +21,34 @@ func (f fakeRunFileLoader) LoadForPreview(_ context.Context, ids []string) []*mo
 }
 
 // The drawer's file list: what a run was given, fetched and posted, in that
-// order, deduped per role, and only files still in storage.
+// order, deduped per role, and only files still in storage (and still within
+// the run's reach — see runfiles_review_test.go for the access rules).
 func TestRunFiles(t *testing.T) {
 	h := &AgentHandler{}
 	if got := h.runFiles(context.Background(), nil, nil); len(got) != 0 {
 		t.Fatalf("no loader: %v", got)
 	}
-	img := func(id, name string) *model.Attachment {
-		return &model.Attachment{ID: id, Filename: name, ContentType: "image/png", Size: 3, URL: "/m/" + id, ThumbnailURL: "/t/" + id, Width: 4, Height: 3}
+	fx := hrunnerCovNewFix(t)
+	pst := newHProjectStore()
+	pst.screens["sc1"] = &model.ProjectScreen{ID: "sc1", ProjectKey: "acme", AttachmentID: "screen"}
+	fx.orch.SetProjects(agents.NewProjectService(pst, &hProjectAtts{}))
+	h = &AgentHandler{orch: fx.orch, access: &fileAccess{byMsg: map[string][]string{"m-in": {"in"}, "m-html": {"html"}}}}
+	img := func(id, name string, msgIDs ...string) *model.Attachment {
+		return &model.Attachment{ID: id, Filename: name, ContentType: "image/png", Size: 3, URL: "/m/" + id, ThumbnailURL: "/t/" + id, Width: 4, Height: 3, MessageIDs: msgIDs}
 	}
 	h.SetRunFiles(fakeRunFileLoader{byID: map[string]*model.Attachment{
-		"in": img("in", "request.png"), "screen": img("screen", "home.png"), "html": {ID: "html", Filename: "v1.html", ContentType: "text/html", Size: 9, URL: "/m/html"},
-		"out": img("out", "v2.png"),
+		"in": img("in", "request.png", "m-in"), "screen": img("screen", "home.png"),
+		"html": {ID: "html", Filename: "v1.html", ContentType: "text/html", Size: 9, URL: "/m/html", MessageIDs: []string{"m-html"}},
+		"out":  {ID: "out", Filename: "v2.png", ContentType: "image/png", URL: "/m/out", RunID: "r2", CreatedBy: "a-gg"},
 	}})
-	runs := []*model.Run{{ID: "r1", AttachmentIDs: []string{"in", "gone"}}, {ID: "r2", AttachmentIDs: []string{"in"}}}
+	runs := []*model.Run{
+		{ID: "r1", AgentID: "a-gg", MessageID: "m-in", AttachmentIDs: []string{"in", "gone"}},
+		{ID: "r2", AgentID: "a-gg", MessageID: "m-in", ProjectKey: "acme", AttachmentIDs: []string{"in"}},
+	}
 	evts := []*model.RunEvent{
 		{RunID: "r2", Type: "workspace.file_fetched", Payload: map[string]any{"attachmentID": "screen", "source": "project_screen"}},
 		{RunID: "r2", Type: "workspace.file_fetched", Payload: map[string]any{"attachmentID": "screen", "source": "project_screen"}},
-		{RunID: "r2", Type: "workspace.file_fetched", Payload: map[string]any{"attachmentID": "html", "source": "message"}},
+		{RunID: "r2", Type: "workspace.file_fetched", Payload: map[string]any{"attachmentID": "html", "source": "message", "messageID": "m-html"}},
 		{RunID: "r2", Type: "workspace.file_uploaded", Payload: map[string]any{"attachmentID": "out"}},
 		{RunID: "r2", Type: "workspace.file_uploaded", Payload: map[string]any{}},
 		{RunID: "r2", Type: "tool", Payload: map[string]any{"attachmentID": "ignored"}},
@@ -89,11 +99,11 @@ func TestRunFiles_FromToolCalls(t *testing.T) {
 	fx := hrunnerCovNewFix(t)
 	pst := newHProjectStore()
 	pst.screens["sc1"] = &model.ProjectScreen{ID: "sc1", ProjectKey: "acme", AttachmentID: "screen"}
-	fx.orch.SetProjects(service.NewProjectService(pst, &hProjectAtts{}))
-	h := &AgentHandler{orch: fx.orch}
+	fx.orch.SetProjects(agents.NewProjectService(pst, &hProjectAtts{}))
+	h := &AgentHandler{orch: fx.orch, access: &fileAccess{byMsg: map[string][]string{"m-v1": {"v1"}}}}
 	h.SetRunFiles(fakeRunFileLoader{byID: map[string]*model.Attachment{
 		"screen": {ID: "screen", Filename: "home.png", ContentType: "image/png"},
-		"v1":     {ID: "v1", Filename: "v1.html", ContentType: "text/html"},
+		"v1":     {ID: "v1", Filename: "v1.html", ContentType: "text/html", MessageIDs: []string{"m-v1"}},
 	}})
 	run := &model.Run{ID: "r1", ProjectKey: "acme"}
 	tool := func(id string) *model.RunEvent {

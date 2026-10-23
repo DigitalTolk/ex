@@ -103,6 +103,10 @@ vi.mock('@/hooks/useChannels', async (orig) => ({
   useCreateChannel: () => ({ mutate: vi.fn(), isPending: false }),
   useJoinChannel: () => ({ mutate: vi.fn(), isPending: false }),
   useMuteChannel: () => ({ mutate: vi.fn(), isPending: false }),
+  useArchiveChannel: () => ({ mutate: vi.fn(), isPending: false }),
+  useUnarchiveChannel: () => ({ mutate: vi.fn(), isPending: false }),
+  useLeaveChannel: () => ({ mutate: vi.fn(), isPending: false }),
+  useUpdateChannelDescription: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 // Counts renders of the chat view's header, memoized like the real one: it
@@ -129,7 +133,7 @@ vi.mock('@/hooks/useMessages', () => ({
       fetchNextPage: vi.fn(),
     };
   },
-  useSendChannelMessage: () => ({ mutate: vi.fn(), isPending: false }),
+  useSendMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),

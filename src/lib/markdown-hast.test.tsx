@@ -53,6 +53,78 @@ describe('renderHastTree', () => {
     expect(container.textContent).toContain('click');
   });
 
+  it('renders a link to the sign-in routes as plain text, no anchor', () => {
+    for (const href of ['/auth/desktop/complete?code=X', '../auth/oidc/login', `${window.location.origin}/auth/logout`]) {
+      const view = render(<>{renderHastTree(linkTree(href))}</>);
+      expect(view.container.querySelector('a')).toBeNull();
+      expect(view.container.textContent).toContain('click');
+      view.unmount();
+    }
+  });
+
+  it('renders a same-origin bare URL to the sign-in routes as plain text', () => {
+    const href = `${window.location.origin}/auth/desktop/complete?code=X`;
+    const tree: HastNode = {
+      type: 'root',
+      children: [{ type: 'element', tagName: 'ex-bare-url', properties: { 'data-href': href } }],
+    };
+    const { container } = render(<>{renderHastTree(tree)}</>);
+    expect(container.querySelector('a')).toBeNull();
+    expect(container.textContent).toBe(href);
+  });
+
+  it('keeps a channel mention inside /channel/ whatever its slug says', () => {
+    const tree: HastNode = {
+      type: 'root',
+      children: [
+        {
+          type: 'element',
+          tagName: 'ex-mention-channel',
+          properties: { 'data-channel-id': 'c-1', 'data-slug': '../../auth/desktop/complete?code=X' },
+        },
+      ],
+    };
+    const { container } = render(<>{renderHastTree(tree)}</>);
+    const pill = container.querySelector('a');
+    expect(pill).toHaveAttribute('href', '/channel/..%2F..%2Fauth%2Fdesktop%2Fcomplete%3Fcode%3DX');
+    expect(new URL(pill!.getAttribute('href')!, window.location.origin).pathname).toMatch(/^\/channel\/[^/]+$/);
+  });
+
+  it('drops nodes of any type the server never emits (mdx JSX would bypass the tag allowlist)', () => {
+    const tree = {
+      type: 'root',
+      children: [
+        {
+          type: 'element',
+          tagName: 'p',
+          children: [
+            { type: 'text', value: 'kept' },
+            { type: 'mdxJsxTextElement', name: 'img', attributes: [{ type: 'mdxJsxAttribute', name: 'src', value: 'x' }], children: [] },
+          ],
+        },
+        { type: 'mdxJsxFlowElement', name: 'script', attributes: [], children: [{ type: 'text', value: 'alert(1)' }] },
+        { type: 'comment', value: 'c' },
+      ],
+    } as unknown as HastNode;
+    const { container } = render(<>{renderHastTree(tree)}</>);
+    expect(container.innerHTML).toBe('<p class="whitespace-pre-wrap break-words">kept</p>');
+  });
+
+  it('renders nothing for a tree whose root is of an unknown type', () => {
+    const tree = { type: 'mdxJsxFlowElement', name: 'script', attributes: [], children: [] } as unknown as HastNode;
+    const { container } = render(<>{renderHastTree(tree)}</>);
+    expect(container.innerHTML).toBe('');
+  });
+
+  it('unwraps an element that carries no tag name', () => {
+    const tree: HastNode = {
+      type: 'root',
+      children: [{ type: 'element', children: [{ type: 'text', value: 'inner' }] }],
+    };
+    const { container } = render(<>{renderHastTree(tree)}</>);
+    expect(container.innerHTML).toBe('inner');
+  });
+
   it('renders a hast table with thead/tbody, a scroll wrapper, and per-column alignment', () => {
     const cell = (tag: string, value: string, align?: string): HastNode => ({
       type: 'element',

@@ -48,7 +48,7 @@ export function AttachmentChip({ att, onRemove }: AttachmentChipProps) {
             className="pointer-events-none absolute inset-0 flex items-center justify-center bg-background/40"
             aria-hidden
           >
-            <span className="text-[10px] font-semibold text-foreground tabular-nums">
+            <span className="text-xs font-semibold text-foreground tabular-nums">
               {Math.round(pct * 100)}%
             </span>
           </div>

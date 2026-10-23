@@ -80,7 +80,7 @@ func (s *MSDirectoryService) LookupProfile(ctx context.Context, email, objectID 
 	manager, err := s.graph.GetUserManager(ctx, profile.ID)
 	if err != nil {
 		if !errors.Is(err, msgraph.ErrNotFound) {
-			slog.Warn("directory: manager lookup failed; syncing phone only", "error", err)
+			slog.WarnContext(ctx, "directory: manager lookup failed; syncing phone only", "error", err)
 		}
 		return dp, nil
 	}
@@ -105,7 +105,7 @@ func (s *MSDirectoryService) managerRef(ctx context.Context, manager *msgraph.Us
 			case !errors.Is(err, store.ErrNotFound):
 				// Resolution is a nicety (it turns the name into a link);
 				// a store hiccup must not drop the manager data itself.
-				slog.Warn("directory: manager user resolution failed", "error", err)
+				slog.WarnContext(ctx, "directory: manager user resolution failed", "error", err)
 			}
 		}
 	}

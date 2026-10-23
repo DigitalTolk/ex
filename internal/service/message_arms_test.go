@@ -23,7 +23,7 @@ func TestAttachRenderedSkipsNilMessages(t *testing.T) {
 	svc, _, _, _, _ := setupMessageService()
 	svc.SetMarkdownRenderer(NewMarkdownRenderer())
 	msg := &model.Message{ID: "m-1", Body: "**hi**"}
-	svc.attachRendered(nil, msg) // the nil entry must be skipped, not crash
+	svc.attachRendered(context.Background(), nil, msg) // the nil entry must be skipped, not crash
 	if msg.Rendered == nil {
 		t.Fatal("expected the non-nil message to be rendered")
 	}

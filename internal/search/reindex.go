@@ -287,7 +287,7 @@ func (r *Reindexer) persist(ctx context.Context, force bool) {
 	}
 	r.mu.Unlock()
 	if err := r.status.PutSearchStatus(ctx, searchJobReindex, p); err != nil {
-		slog.Warn("reindex: persist status failed", "error", err)
+		slog.WarnContext(ctx, "reindex: persist status failed", "error", err)
 	}
 }
 

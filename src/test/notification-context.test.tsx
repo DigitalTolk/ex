@@ -10,6 +10,7 @@ import {
 import { resetNotificationDedup } from '@/lib/notification-dedup';
 import { markUserActivity, setHardAway } from '@/lib/user-activity';
 import { addInViewThread, resetThreadScopeForTests, setPanelThread } from '@/lib/thread-scope';
+import { setActiveParent } from '@/stores/active-parent';
 
 const playMock = vi.fn();
 const approvalChimeMock = vi.fn();
@@ -73,17 +74,18 @@ let permissionSpy: string | null = null;
 let notifyApprovalSpy: ((a: ApprovalAlert) => void) | null = null;
 
 function Probe() {
-  const { dispatch, notifyApproval, setActiveParent, setCurrentUserID, setSoundEnabled, setBrowserEnabled, setIdleDetectionEnabled, permission } = useNotifications();
+  const { dispatch, notifyApproval, setCurrentUserID, setSoundEnabled, setBrowserEnabled, setIdleDetectionEnabled, permission } = useNotifications();
   useEffect(() => {
     dispatchSpy = dispatch;
     notifyApprovalSpy = notifyApproval;
-    setActiveSpy = setActiveParent;
+    // The open parent lives in stores/active-parent (useParentChat sets it).
+    setActiveSpy = (id) => setActiveParent(id ? { kind: id.startsWith('dm-') ? 'conversation' : 'channel', id } : null);
     setUserSpy = setCurrentUserID;
     setSoundSpy = setSoundEnabled;
     setBrowserSpy = setBrowserEnabled;
     setIdleSpy = setIdleDetectionEnabled;
     permissionSpy = permission;
-  }, [dispatch, notifyApproval, setActiveParent, setCurrentUserID, setSoundEnabled, setBrowserEnabled, setIdleDetectionEnabled, permission]);
+  }, [dispatch, notifyApproval, setCurrentUserID, setSoundEnabled, setBrowserEnabled, setIdleDetectionEnabled, permission]);
   return <div data-testid="probe">{permission}</div>;
 }
 

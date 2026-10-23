@@ -120,32 +120,18 @@ func (s *ConversationStoreImpl) memberMoves(channelID string, members []Converte
 // read position, badge and sidebar placement), keyed by user. A user without
 // a row is absent.
 func (s *ConversationStoreImpl) GetUserConversations(ctx context.Context, convID string, userIDs []string) (map[string]*model.UserConversation, error) {
-	out := make(map[string]*model.UserConversation, len(userIDs))
-	const batchSize = 100
-	for start := 0; start < len(userIDs); start += batchSize {
-		keys := make([]map[string]types.AttributeValue, 0, batchSize)
-		for _, uid := range userIDs[start:min(start+batchSize, len(userIDs))] {
-			keys = append(keys, compositeKey(userPK(uid), convSK(convID)))
-		}
-		req := map[string]types.KeysAndAttributes{s.Table: {Keys: keys, ConsistentRead: aws.Bool(true)}}
-		for {
-			res, err := s.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
-			if err != nil {
-				return nil, fmt.Errorf("store: batch get user conversations: %w", err)
-			}
-			for _, item := range res.Responses[s.Table] {
-				var rec userConversationItem
-				if err := attributevalue.UnmarshalMap(item, &rec); err != nil {
-					return nil, fmt.Errorf("store: unmarshal user conversation: %w", err)
-				}
-				uc := rec.UserConversation
-				out[uc.UserID] = &uc
-			}
-			if len(res.UnprocessedKeys) == 0 {
-				break
-			}
-			req = res.UnprocessedKeys
-		}
+	keys := make([]map[string]types.AttributeValue, len(userIDs))
+	for i, uid := range userIDs {
+		keys[i] = compositeKey(userPK(uid), convSK(convID))
+	}
+	rows, err := batchGetOf[userConversationItem](ctx, s.DB, keys, types.KeysAndAttributes{ConsistentRead: aws.Bool(true)}, "user conversations")
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]*model.UserConversation, len(rows))
+	for i := range rows {
+		uc := &rows[i].UserConversation
+		out[uc.UserID] = uc
 	}
 	return out, nil
 }

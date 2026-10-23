@@ -17,9 +17,26 @@ import {
 
 // The sidebar's Pragmatic drag-and-drop wrapper components: they register
 // draggables/drop targets and expose render-prop refs/styles to the visual
-// rows. Extracted from Sidebar.tsx so the list component owns only list
-// composition and drop RESOLUTION (monitor wiring + computeSidebarReorder),
-// which stays there — it is inseparable from the section data it reorders.
+// rows. Drop RESOLUTION (monitor wiring + the reorder a drop reports) lives in
+// useSidebarDrag and sidebar-drop-resolution, against the rendered sections.
+
+// SidebarDropGap is the live "push-aside" preview: while a channel/DM/category
+// is dragged, a row-height gap opens at the slot it would land in (WYSIWYG),
+// so the rows/sections below shift down and it's obvious where a drop will go.
+// It's driven by the same drop indicator the drop itself uses, so preview ==
+// landing spot. Explicit h-8 (≈ the desktop row box) — drag is desktop-only —
+// keeps the shift from reflowing; pointer-events-none so it never steals the
+// live drop hitbox. Categories pass their own testId so the two gaps stay
+// distinct.
+export function SidebarDropGap({ sectionKey, testId }: { sectionKey: string; testId?: string }) {
+  return (
+    <div
+      data-testid={testId ?? `sidebar-drop-gap-${sectionKey}`}
+      aria-hidden="true"
+      className="pointer-events-none h-8 rounded-md border border-dashed border-white/25 bg-white/5"
+    />
+  );
+}
 
 export function PragmaticCategoryHeader({
   id,

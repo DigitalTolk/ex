@@ -2,8 +2,10 @@ package pubsub
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/events"
 )
@@ -31,25 +33,27 @@ func TestNewRedisPubSubPingError(t *testing.T) {
 	}
 }
 
-// appendToInboxes defends itself even when reached directly: without full
-// durability wiring, or with a nil/ephemeral event, it must return without
-// touching the resolver or inbox (Publish pre-filters these today, but the
-// guards keep the fan-out safe if a future caller doesn't).
-func TestAppendToInboxesGuards(t *testing.T) {
+// The inbox fan-out entry point defends itself even when reached directly:
+// without full durability wiring, or with a nil/ephemeral event, it must
+// return without touching the resolver or inbox (or starting a goroutine).
+func TestFanOutAsyncGuards(t *testing.T) {
 	ctx := context.Background()
 	evt, err := events.NewEvent(events.EventMessageNew, map[string]string{"text": "hi"})
 	if err != nil {
 		t.Fatalf("NewEvent: %v", err)
 	}
+	topics := []string{"chan:c1"}
 
 	t.Run("no durability wiring", func(t *testing.T) {
-		ps := &RedisPubSub{}                         // neither resolver nor inbox configured
-		ps.appendToInboxes(ctx, "chan:c1", evt, nil) // must be a no-op, not a panic
+		ps := &RedisPubSub{}                  // neither resolver nor inbox configured
+		ps.fanOutAsync(ctx, topics, evt, nil) // must be a no-op, not a panic
+		ps.WaitForInboxFanOut()
 	})
 
 	t.Run("resolver without inbox", func(t *testing.T) {
 		ps := &RedisPubSub{resolver: &fakeResolver{m: map[string][]string{"chan:c1": {"u1"}}}}
-		ps.appendToInboxes(ctx, "chan:c1", evt, nil)
+		ps.fanOutAsync(ctx, topics, evt, nil)
+		ps.WaitForInboxFanOut()
 	})
 
 	t.Run("nil event", func(t *testing.T) {
@@ -58,7 +62,8 @@ func TestAppendToInboxesGuards(t *testing.T) {
 			resolver: &fakeResolver{m: map[string][]string{"chan:c1": {"u1"}}},
 			inbox:    inbox,
 		}
-		ps.appendToInboxes(ctx, "chan:c1", nil, nil)
+		ps.fanOutAsync(ctx, topics, nil, nil)
+		ps.WaitForInboxFanOut()
 		if got := len(inbox.seen()); got != 0 {
 			t.Errorf("inbox saw %d appends for a nil event, want 0", got)
 		}
@@ -74,9 +79,37 @@ func TestAppendToInboxesGuards(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewEvent: %v", err)
 		}
-		ps.appendToInboxes(ctx, "chan:c1", eph, nil)
+		ps.fanOutAsync(ctx, topics, eph, nil)
+		ps.WaitForInboxFanOut()
 		if got := len(inbox.seen()); got != 0 {
 			t.Errorf("inbox saw %d appends for an ephemeral event, want 0", got)
 		}
 	})
+}
+
+// The retry wait returns as soon as the context is done — and the wait
+// error is what ends the retry loop, not another append attempt.
+func TestSleepCtx(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := sleepCtx(ctx, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("sleepCtx on a cancelled context = %v, want context.Canceled", err)
+	}
+	if err := sleepCtx(context.Background(), time.Nanosecond); err != nil {
+		t.Fatalf("sleepCtx after the full wait = %v, want nil", err)
+	}
+}
+
+// mustJSON passes through a successful marshal and panics on the
+// impossible error arm instead of publishing a corrupt frame.
+func TestMustJSON(t *testing.T) {
+	if got := string(mustJSON([]byte(`{}`), nil)); got != `{}` {
+		t.Fatalf("mustJSON = %q", got)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("mustJSON must panic on a marshal error")
+		}
+	}()
+	mustJSON(nil, errors.New("boom"))
 }

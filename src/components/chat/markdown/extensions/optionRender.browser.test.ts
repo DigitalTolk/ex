@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { renderMentionOption, type MentionCompletion } from './optionRender';
 
 function render(meta: MentionCompletion['meta']): HTMLElement | null {
@@ -74,6 +74,26 @@ describe('renderMentionOption', () => {
   it('renders a private channel with the lock icon', () => {
     const row = render({ kind: 'channel', slug: 'secret', isPrivate: true })!;
     expect(row.querySelector('.cm-option-icon rect')).not.toBeNull(); // lock has a rect
+  });
+
+  // The page reports every string written into an HTML sink (Trusted Types,
+  // report-only): the icons are built as SVG elements, never as markup.
+  it('builds the channel icons without writing markup into the DOM', () => {
+    const innerHTML = vi.spyOn(Element.prototype, 'innerHTML', 'set');
+    try {
+      for (const isPrivate of [false, true]) {
+        const svg = render({ kind: 'channel', slug: 'c', isPrivate })!.querySelector('.cm-option-icon > svg')!;
+        expect(svg.namespaceURI).toBe('http://www.w3.org/2000/svg');
+        expect(svg.getAttribute('viewBox')).toBe('0 0 24 24');
+        expect(svg.getAttribute('stroke')).toBe('currentColor');
+        expect(svg.getAttribute('stroke-linecap')).toBe('round');
+        for (const shape of svg.children) expect(shape.namespaceURI).toBe('http://www.w3.org/2000/svg');
+        expect(svg.children).toHaveLength(isPrivate ? 2 : 4);
+      }
+      expect(innerHTML).not.toHaveBeenCalled();
+    } finally {
+      innerHTML.mockRestore();
+    }
   });
 
   it('renders a standard emoji as a large glyph first', () => {

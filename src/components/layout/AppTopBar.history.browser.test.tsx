@@ -7,6 +7,7 @@ import { EditorView } from '@codemirror/view';
 import { MarkdownEditor } from '@/components/chat/markdown/MarkdownEditor';
 import { SIDEBAR_WIDTH } from '@/lib/panel-width';
 import { isApplePlatform } from '@/lib/platform';
+import { navigateInApp } from '@/lib/navigate-in-app';
 
 // Back and Forward in the top bar, Slack-style: through the tab's real
 // history, beside the sidebar, with the search field still centred.
@@ -37,8 +38,7 @@ vi.mock('@/components/UpdateBanner', () => ({ UpdateBanner: () => null }));
 vi.mock('@/hooks/useServerVersion', () => ({
   BUILD_DISPLAY_VERSION: 'browser-test',
   BUILD_VERSION: 'browser-test',
-  setServerVersion: vi.fn(),
-  resetServerVersionForTests: vi.fn(),
+  reportServerVersion: vi.fn(),
   useServerVersion: () => ({ outdated: false }),
 }));
 
@@ -60,8 +60,14 @@ let start = '';
 
 beforeEach(() => {
   start = window.location.pathname + window.location.search;
-  // A fresh entry on top: nothing to go forward to.
+  // A fresh entry on top of the tester page: somewhere to go back to, nothing
+  // to go forward to. Every test below starts from exactly that.
   window.history.pushState(null, '', '/channel/a');
+  if (isDesktopProject) {
+    expect(window.navigation).toBeDefined();
+    expect(window.navigation.canGoBack).toBe(true);
+    expect(window.navigation.canGoForward).toBe(false);
+  }
 });
 
 afterEach(async () => {
@@ -149,7 +155,35 @@ describe('Back and Forward in the top bar', () => {
     await expect.element(back).toBeEnabled();
     await back.hover();
     const label = isApplePlatform(navigator.userAgent) ? '⌘[' : 'Alt ←';
-    await expect.element(page.getByText(label, { exact: true })).toBeVisible();
+    const shortcut = page.getByText(label, { exact: true });
+    await expect.element(shortcut).toBeVisible();
+    // The label and its shortcut sit in evenly padded text, not a lopsided
+    // key-chip box.
+    const tip = getComputedStyle(shortcut.element().closest('[data-slot="tooltip-content"]')!);
+    expect(tip.paddingRight).toBe(tip.paddingLeft);
+  });
+
+  // Where there is nowhere to go, the message box keeps the keys: ⌘] indents
+  // on a Mac, Alt+→ moves by syntax elsewhere — and the browser never sees
+  // them (its own ⌘] / Alt+→ could leave the app).
+  it('leave the message box its keys where there is nowhere to go', async () => {
+    if (!isDesktopProject) return;
+    const apple = isApplePlatform(navigator.userAgent);
+    await renderLayout();
+    const editor = page.getByRole('textbox', { name: 'Message input' });
+    await editor.click();
+    const view = EditorView.findFromDOM(editor.element() as HTMLElement)!;
+    view.dispatch({ selection: { anchor: 0 } });
+    const e = new KeyboardEvent('keydown', {
+      ...(apple ? { key: ']', code: 'BracketRight', metaKey: true } : { key: 'ArrowRight', code: 'ArrowRight', altKey: true }),
+      bubbles: true,
+      cancelable: true,
+    });
+    editor.element().dispatchEvent(e);
+    expect(e.defaultPrevented).toBe(true);
+    if (apple) expect(view.state.doc.toString()).not.toBe('    hello');
+    else expect(view.state.selection.main.head).toBeGreaterThan(0);
+    await expect.element(page.getByTestId('path')).toHaveTextContent('/channel/a');
   });
 
   // Not the dark theme's disabled-button chip, which would read as pressed.
@@ -171,8 +205,8 @@ describe('Back and Forward in the top bar', () => {
     if (!isDesktopProject) return;
     await renderLayout();
     const path = page.getByTestId('path');
-    window.history.pushState(null, '', '/channel/c');
-    window.dispatchEvent(new PopStateEvent('popstate'));
+    await expect.element(path).toHaveTextContent('/channel/a');
+    navigateInApp('/channel/c');
     await expect.element(path).toHaveTextContent('/channel/c');
     await expect.element(page.getByRole('button', { name: 'Forward' })).toBeDisabled();
 

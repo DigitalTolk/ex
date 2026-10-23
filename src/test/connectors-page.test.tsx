@@ -283,6 +283,29 @@ describe('ConnectorsPage', () => {
     expect(mform.queryByRole('link', { name: 'Open the token page' })).toBeNull();
   });
 
+  it('never links a token page that is not plain http(s)', async () => {
+    // A GitLab connector registered with a non-http base URL: the derived
+    // token page would be "null/-/…", a relative link into this app.
+    installRoutes({
+      connectors: async () => ({
+        connectors: [
+          {
+            slug: 'gitlab', title: 'GitLab', description: 'repos', baseURL: 'smb://gitlab.example.net/share',
+            authKind: 'paste', installed: false,
+          },
+        ],
+      }),
+    });
+    renderPage();
+    const gl = await findCard('gitlab');
+    fireEvent.click(gl.getByRole('button', { name: 'Connect' }));
+    const form = within(gl.getByTestId('connect-form'));
+    const hint = form.getByTestId('conn-token-help-gitlab');
+    expect(hint.textContent).toContain('Preferences');
+    expect(hint.textContent?.endsWith(' ')).toBe(false);
+    expect(form.queryByRole('link', { name: 'Open the token page' })).toBeNull();
+  });
+
   it('shows loading skeletons while connectors load', () => {
     installRoutes({ connectors: () => new Promise(() => {}) });
     renderPage();

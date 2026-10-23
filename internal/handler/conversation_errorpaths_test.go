@@ -83,7 +83,8 @@ func TestConvHandler_Create_DedupesParticipants(t *testing.T) {
 	// Duplicate + empty participant IDs exercise the dedupe `continue`.
 	body := `{"type":"dm","participantIDs":["conv-user-1","x","x",""]}`
 	rec := serveAuthed(jwtMgr, h.Create, authedConvReq(jwtMgr, http.MethodPost, "/api/v1/conversations", body))
-	if rec.Code != http.StatusCreated && rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 201 or 400; body %s", rec.Code, rec.Body.String())
+	// "x" names no user: 404 (an unknown participant used to read 400).
+	if rec.Code != http.StatusCreated && rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 201 or 404; body %s", rec.Code, rec.Body.String())
 	}
 }

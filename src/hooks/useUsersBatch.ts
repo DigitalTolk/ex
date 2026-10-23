@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { keepPreviousData, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { hashKey, keepPreviousData, useQuery, useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import type { User } from '@/types';
@@ -11,8 +11,8 @@ const usersBatchMax = 100;
 const usersStaleMs = 5 * 60_000;
 
 // freshUsers collects the users other batches already hold and that are still
-// fresh — not invalidated (a user.updated invalidates every batch) and inside
-// the stale time.
+// fresh — not invalidated and inside the stale time. (A user.updated patches
+// the batches in place — lib/user-cache — so they stay reusable.)
 function freshUsers(qc: QueryClient): Map<string, User> {
   const known = new Map<string, User>();
   for (const q of qc.getQueryCache().findAll({ queryKey: queryKeys.usersBatch() })) {
@@ -21,6 +21,20 @@ function freshUsers(qc: QueryClient): Map<string, User> {
     for (const u of q.state.data as User[]) known.set(u.id, u);
   }
   return known;
+}
+
+// A set that grows by one id is a new query holding everyone so far; the
+// smaller sets it grew from stayed cached until garbage-collected — a channel
+// gaining an author per arrival kept a batch per arrival. Once the grown set
+// has what they held, an unobserved subset goes (one another view still
+// shows stays).
+function dropSupersededBatches(qc: QueryClient, current: QueryKey, ids: readonly string[]) {
+  const covered = new Set(ids);
+  const currentHash = hashKey(current);
+  for (const q of qc.getQueryCache().findAll({ queryKey: queryKeys.usersBatch() })) {
+    if (q.queryHash === currentHash || q.getObserversCount() > 0) continue;
+    if ((q.queryKey[1] as readonly string[]).every((id) => covered.has(id))) qc.getQueryCache().remove(q);
+  }
 }
 
 // Resolves a set of user IDs to user records via /users/batch — one request
@@ -36,7 +50,7 @@ export function useUsersBatch(ids: string[]) {
   const sortedIDs = useMemo(() => [...new Set(ids)].sort(), [ids]);
   const query = useQuery({
     queryKey: queryKeys.usersBatch(sortedIDs),
-    queryFn: async () => {
+    queryFn: async ({ queryKey }) => {
       const known = freshUsers(qc);
       const missing = sortedIDs.filter((id) => !known.has(id));
       const chunks: string[][] = [];
@@ -50,6 +64,7 @@ export function useUsersBatch(ids: string[]) {
         const u = known.get(id);
         return u ? [u] : [];
       });
+      dropSupersededBatches(qc, queryKey, sortedIDs);
       return [...reused, ...pages.flatMap((res) => (Array.isArray(res) ? res : []))];
     },
     enabled: sortedIDs.length > 0,

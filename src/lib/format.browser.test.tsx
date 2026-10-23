@@ -8,7 +8,6 @@ import {
   formatBytes,
   bytesToMib,
   mibToBytes,
-  ordinalSuffix,
   formatLongDate,
   formatLongDateTime,
   formatRelative,
@@ -103,16 +102,16 @@ describe('format — byte helpers', () => {
 });
 
 describe('format — ordinal and dates', () => {
-  it('ordinalSuffix handles the 11/12/13 exceptions and the standard 1/2/3/4-suffixes', () => {
-    expect(ordinalSuffix(1)).toBe('st');
-    expect(ordinalSuffix(2)).toBe('nd');
-    expect(ordinalSuffix(3)).toBe('rd');
-    expect(ordinalSuffix(4)).toBe('th');
-    expect(ordinalSuffix(11)).toBe('th');
-    expect(ordinalSuffix(12)).toBe('th');
-    expect(ordinalSuffix(13)).toBe('th');
-    expect(ordinalSuffix(21)).toBe('st');
-    expect(ordinalSuffix(112)).toBe('th');
+  it('ordinal days handle the 11/12/13 exceptions and the standard 1/2/3/4-suffixes', () => {
+    const day = (d: number) => formatLongDate(new Date(2026, 0, d));
+    expect(day(1)).toBe('January 1st, 2026');
+    expect(day(2)).toBe('January 2nd, 2026');
+    expect(day(3)).toBe('January 3rd, 2026');
+    expect(day(4)).toBe('January 4th, 2026');
+    expect(day(11)).toBe('January 11th, 2026');
+    expect(day(12)).toBe('January 12th, 2026');
+    expect(day(13)).toBe('January 13th, 2026');
+    expect(day(21)).toBe('January 21st, 2026');
   });
 
   it('formatLongDate renders "Month Nth, YYYY"', () => {

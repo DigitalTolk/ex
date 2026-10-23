@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -226,7 +227,7 @@ func TestMustJSONPanicsOnImpossibleFailure(t *testing.T) {
 			t.Fatal("expected panic from an unmarshalable value")
 		}
 	}()
-	_ = mustJSON(json.Marshal(make(chan int)))
+	_ = mustJSON(json.Marshal(math.NaN())) // NaN has no JSON form
 }
 
 func TestClaimDueRemindersArms(t *testing.T) {

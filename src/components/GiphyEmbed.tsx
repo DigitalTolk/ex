@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { GiphyFetch } from '@giphy/js-fetch-api';
+import { useEffect, useState, type ReactNode } from 'react';
+import type { GiphyFetch } from '@giphy/js-fetch-api';
 import type IGif from '@giphy/js-types/dist/gif';
 import { useWorkspaceSettings } from '@/hooks/useSettings';
+import { externalHref } from '@/lib/url-safety';
 
 interface GiphyEmbedProps {
   id?: string;
@@ -67,7 +68,7 @@ function GiphyFrame({
         href={giphyURL}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground hover:text-foreground"
+        className="text-xs font-medium uppercase tracking-wide text-muted-foreground hover:text-foreground"
       >
         Powered by GIPHY
       </a>
@@ -77,7 +78,8 @@ function GiphyFrame({
 
 function pickRendition(gif: IGif): GiphyMedia {
   const original = gif.images.original;
-  const giphyURL = gif.url || 'https://giphy.com';
+  // The attribution link is the GIF's page on GIPHY, as GIPHY's API reports it.
+  const giphyURL = externalHref(gif.url) ?? 'https://giphy.com';
   if (gif.is_sticker && original.webp) {
     return {
       kind: 'image',
@@ -127,7 +129,24 @@ function readCachedGiphyMedia(id: string): GiphyMedia | null {
   return entry.media ?? null;
 }
 
-function fetchGiphyMedia(gf: GiphyFetch, id: string): Promise<GiphyMedia> {
+// The Giphy SDK loads the first time an embed asks Giphy for a GIF. This
+// component sits on every message's render path, and the SDK used to come
+// with it — in a vendor chunk preloaded at boot, for sessions that may never
+// show a GIF. One client per key; a failed load or construction is dropped so
+// the next embed tries again.
+const giphyClients = new Map<string, Promise<GiphyFetch>>();
+
+function giphyClient(apiKey: string): Promise<GiphyFetch> {
+  let client = giphyClients.get(apiKey);
+  if (!client) {
+    client = import('@giphy/js-fetch-api').then(({ GiphyFetch }) => new GiphyFetch(apiKey));
+    giphyClients.set(apiKey, client);
+    client.catch(() => giphyClients.delete(apiKey));
+  }
+  return client;
+}
+
+function fetchGiphyMedia(apiKey: string, id: string): Promise<GiphyMedia> {
   const cached = giphyMemoryCache.get(id);
   if (cached && cached.expiresAt > Date.now()) {
     /* istanbul ignore next -- fetchGiphyMedia is only reached after readCachedGiphyMedia returned null (no valid media), so a cached entry here only ever holds an in-flight promise; the media branch is dead */
@@ -136,7 +155,7 @@ function fetchGiphyMedia(gf: GiphyFetch, id: string): Promise<GiphyMedia> {
     if (cached.promise) return cached.promise;
   }
 
-  const promise = gf.gif(id).then((res) => {
+  const promise = giphyClient(apiKey).then((gf) => gf.gif(id)).then((res) => {
     const media = pickRendition(res.data);
     giphyMemoryCache.set(id, {
       media,
@@ -206,7 +225,6 @@ function GiphyEmbedFromSettings({
 
 function GiphyEmbedMedia({ id, apiKey, width, height, onMediaLoad }: GiphyEmbedProps & { apiKey: string }) {
   const trimmedKey = apiKey.trim();
-  const gf = useMemo(() => (trimmedKey ? new GiphyFetch(trimmedKey) : null), [trimmedKey]);
   // The id is attacker-authored (from `giphy:<id>` in a message) and the Giphy
   // SDK path-interpolates it into the request URL, so reject anything that
   // isn't a plain Giphy slug before it can shape the fetch path.
@@ -223,7 +241,7 @@ function GiphyEmbedMedia({ id, apiKey, width, height, onMediaLoad }: GiphyEmbedP
   }));
 
   useEffect(() => {
-    if (!gf || !id || !idIsSafe) return;
+    if (!trimmedKey || !id || !idIsSafe) return;
     let alive = true;
     const cached = readCachedGiphyMedia(id);
     if (cached) {
@@ -235,7 +253,7 @@ function GiphyEmbedMedia({ id, apiKey, width, height, onMediaLoad }: GiphyEmbedP
         alive = false;
       };
     }
-    fetchGiphyMedia(gf, id)
+    fetchGiphyMedia(trimmedKey, id)
       .then((media) => {
         if (alive) setResult({ requestKey, media, failed: false });
       })
@@ -245,7 +263,7 @@ function GiphyEmbedMedia({ id, apiKey, width, height, onMediaLoad }: GiphyEmbedP
     return () => {
       alive = false;
     };
-  }, [gf, id, idIsSafe, requestKey]);
+  }, [trimmedKey, id, idIsSafe, requestKey]);
 
   const media = result.requestKey === requestKey ? result.media : null;
   const failed = result.requestKey === requestKey && result.failed;

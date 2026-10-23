@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
@@ -173,7 +174,7 @@ func TestActivityHandler_CreateReminderErrorMapping(t *testing.T) {
 	}{
 		{"invalid time", service.ErrReminderTimeInvalid, http.StatusBadRequest},
 		{"not found", store.ErrNotFound, http.StatusNotFound},
-		{"validation", errors.New("reminder: invalid parent type"), http.StatusBadRequest},
+		{"validation", apperr.Invalid("reminder: invalid parent type"), http.StatusBadRequest},
 		{"access", fmt.Errorf("message: not a channel member: %w", service.ErrForbidden), http.StatusForbidden},
 		{"generic", errors.New("kaboom"), http.StatusInternalServerError},
 	}

@@ -2,10 +2,11 @@ package middleware
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"log/slog"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -27,16 +28,21 @@ func Auth(jwtMgr *auth.JWTManager) func(http.Handler) http.Handler {
 	return AuthWithUserStatus(jwtMgr, nil)
 }
 
-// authUserStore is deliberately status-only: the deactivation check runs on
+// authUserStore is deliberately narrow (status + role): the lookup runs on
 // every authenticated request, and a full user fetch (GetByID) drags avatar
 // URL resolution — extra Redis round trips for fields this middleware
 // discards.
 type authUserStore interface {
-	UserStatus(ctx context.Context, id string) (string, error)
+	UserAccess(ctx context.Context, id string) (status string, role model.SystemRole, err error)
 }
 
 // AuthWithUserStatus validates a JWT and, when a user store is supplied,
-// rejects tokens for accounts that have since been deactivated.
+// rejects tokens for accounts that have since been deactivated and replaces
+// the token's role claim with the STORED role. An access token lives 15
+// minutes; without this, an admin demoted (or a member promoted) in the
+// meantime kept the old powers until it expired — every role gate
+// (RequireSystemRole, the handlers' requireAdmin and guest checks) reads the
+// claims this puts in context.
 func AuthWithUserStatus(jwtMgr *auth.JWTManager, users authUserStore) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -59,10 +65,15 @@ func AuthWithUserStatus(jwtMgr *auth.JWTManager, users authUserStore) func(http.
 				return
 			}
 			if users != nil {
-				status, err := users.UserStatus(r.Context(), claims.UserID)
+				status, role, err := users.UserAccess(r.Context(), claims.UserID)
 				if err != nil || status == "deactivated" {
 					http.Error(w, "account deactivated", http.StatusUnauthorized)
 					return
+				}
+				if role != claims.SystemRole {
+					fresh := *claims
+					fresh.SystemRole = role
+					claims = &fresh
 				}
 			}
 
@@ -76,6 +87,15 @@ func AuthWithUserStatus(jwtMgr *auth.JWTManager, users authUserStore) func(http.
 // scope. Session tokens (empty scope) and other scopes are rejected: the
 // runner API takes runner tokens only, the run-tool API run tokens only.
 func AuthScope(jwtMgr *auth.JWTManager, scope string) func(http.Handler) http.Handler {
+	return AuthScopeWithUserStatus(jwtMgr, scope, nil)
+}
+
+// AuthScopeWithUserStatus is AuthScope plus the deactivation check the
+// session middleware already makes: a machine token acts with its user's
+// access (a run token's UserID is the run's INVOKER), so it must stop working
+// the moment that account is deactivated, not when the token expires. An
+// unreadable status fails closed. A nil store skips the check.
+func AuthScopeWithUserStatus(jwtMgr *auth.JWTManager, scope string, users authUserStore) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tokenStr := extractToken(r)
@@ -87,6 +107,13 @@ func AuthScope(jwtMgr *auth.JWTManager, scope string) func(http.Handler) http.Ha
 			if err != nil || claims.Scope != scope {
 				http.Error(w, "invalid token", http.StatusUnauthorized)
 				return
+			}
+			if users != nil {
+				status, _, err := users.UserAccess(r.Context(), claims.UserID)
+				if err != nil || status == "deactivated" {
+					http.Error(w, "account deactivated", http.StatusUnauthorized)
+					return
+				}
 			}
 			ctx := context.WithValue(r.Context(), claimsKey, claims)
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -262,13 +289,49 @@ func Logging(logAll bool) func(http.Handler) http.Handler {
 
 			slog.Info("request",
 				"method", r.Method,
-				"path", r.URL.Path,
+				"path", RedactPath(r.URL.Path),
 				"status", rw.statusCode,
 				"duration", time.Since(start).String(),
 				"requestID", RequestIDFromContext(r.Context()),
 			)
 		})
 	}
+}
+
+// RedactPath masks credentials that ride in a URL path before the path reaches
+// a log line: an incoming webhook's URL (/hooks/{id}) is that webhook's only
+// credential, and a media URL's token is a bearer capability for the file.
+func RedactPath(path string) string {
+	switch {
+	case strings.HasPrefix(path, "/hooks/"):
+		return "/hooks/[redacted]"
+	case strings.HasPrefix(path, mediaPathPrefix):
+		return redactToken(mediaPathPrefix, strings.TrimPrefix(path, mediaPathPrefix))
+	case strings.HasPrefix(path, htmlPreviewPathPrefix):
+		return redactToken(htmlPreviewPathPrefix, strings.TrimPrefix(path, htmlPreviewPathPrefix))
+	}
+	return path
+}
+
+// redactToken masks the token segment of a "<prefix><token>/<file>" path.
+func redactToken(prefix, rest string) string {
+	if _, file, ok := strings.Cut(rest, "/"); ok {
+		return prefix + "[redacted]/" + file
+	}
+	return prefix + "[redacted]"
+}
+
+const (
+	mediaPathPrefix = "/api/v1/media/"
+	// The HTML-attachment preview serves the same media tokens.
+	htmlPreviewPathPrefix = "/api/v1/html-preview/"
+)
+
+// SecretFingerprint is a short, non-reversible stand-in for a secret
+// identifier in logs (e.g. a webhook ID), stable enough to correlate lines.
+func SecretFingerprint(secret string) string {
+	sum := sha256.Sum256([]byte(secret))
+	return "sha256:" + hex.EncodeToString(sum[:6])
 }
 
 // RequestID is middleware that generates a unique request ID, stores it in context,
@@ -287,19 +350,27 @@ func RequestID(next http.Handler) http.Handler {
 }
 
 // securityHeaderCSP is intentionally permissive on the resource directives
-// (img/style/font/connect/frame) so the SPA's Google Fonts, S3 images, Giphy
-// embeds, and the wss WebSocket keep working, while the high-value directives
-// are locked down: framing is forbidden (clickjacking), and object/base are
-// neutered. script-src keeps 'unsafe-inline' only because index.html ships an
-// inline theme bootstrap script; everything else is constrained to self/https.
+// (img/style/font/connect) so the SPA's Google Fonts, S3 images, Giphy media,
+// and the wss WebSocket keep working, while the high-value directives are
+// locked down: being framed is forbidden (clickjacking), and object/base are
+// neutered.
+//
+// script-src has no 'unsafe-inline': the SPA's own inline scripts (index.html's
+// boot blocks) are allowed by hash through CSPOptions.ScriptSrc. Nothing else
+// on the page is inline — the HTML-attachment preview is its own
+// network-loaded document with its own policy, not a srcdoc that would
+// inherit this one.
+//
+// frame-src is 'none' unless CSPOptions.FramePath names the one route the
+// page may frame (the preview); see frameSources.
 const securityHeaderCSP = "default-src 'self'; " +
-	"script-src 'self' 'unsafe-inline'; " +
+	"script-src 'self'; " +
 	"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
 	"font-src 'self' https://fonts.gstatic.com; " +
 	"img-src 'self' https: data: blob:; " +
 	"media-src 'self' https: blob:; " +
 	"connect-src 'self' https: wss:; " +
-	"frame-src 'self' https:; " +
+	"frame-src 'none'; " +
 	"object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
 
 // SecurityHeaders sets defense-in-depth response headers on every response:
@@ -317,14 +388,59 @@ func SecurityHeaders(next http.Handler) http.Handler {
 // object stores, but a plain-http endpoint (local MinIO) must be allow-listed
 // explicitly or the browser refuses the upload with a CSP violation.
 func SecurityHeadersWith(extraConnectSrc ...string) func(http.Handler) http.Handler {
+	return SecurityHeadersWithOptions(CSPOptions{ConnectSrc: extraConnectSrc})
+}
+
+// CSPOptions are the per-deployment additions to the base policy. The zero
+// value serves securityHeaderCSP unchanged.
+type CSPOptions struct {
+	// ConnectSrc is appended to connect-src (see SecurityHeadersWith).
+	ConnectSrc []string
+	// ScriptSrc is appended to script-src: the hashes of the served page's
+	// inline scripts, and e.g. Sentry's CDN, which serves the lazily loaded
+	// Session Replay bundle when a deployment samples it.
+	ScriptSrc []string
+	// WorkerSrc, when set, adds a worker-src of 'self' plus these sources
+	// (Session Replay compresses in a blob: worker). 'self' stays because
+	// pdf.js runs its worker from the app's own origin; without WorkerSrc
+	// the directive is omitted and workers fall back to script-src.
+	WorkerSrc []string
+	// FramePath is the one same-origin path prefix the page may frame (the
+	// HTML-attachment preview route). Empty keeps frame-src 'none'.
+	FramePath string
+	// FrameHosts are the deployment's public hosts (host[:port]) that
+	// FramePath is allowed under, besides the host each request names.
+	FrameHosts []string
+}
+
+// trustedTypesReportOnly asks the browser to report — not block — any string
+// written into an HTML or script DOM sink (innerHTML, script.src, …). No
+// first-party code does; a report means a library or a regression does.
+const trustedTypesReportOnly = "require-trusted-types-for 'script'"
+
+// SecurityHeadersWithOptions is SecurityHeaders with the given additions to
+// the CSP.
+func SecurityHeadersWithOptions(o CSPOptions) func(http.Handler) http.Handler {
 	csp := securityHeaderCSP
-	if len(extraConnectSrc) > 0 {
-		csp = strings.Replace(csp, "connect-src 'self'", "connect-src 'self' "+strings.Join(extraConnectSrc, " "), 1)
+	if len(o.ConnectSrc) > 0 {
+		csp = strings.Replace(csp, "connect-src 'self'", "connect-src 'self' "+strings.Join(o.ConnectSrc, " "), 1)
 	}
+	if len(o.ScriptSrc) > 0 {
+		csp = strings.Replace(csp, "script-src 'self'", "script-src 'self' "+strings.Join(o.ScriptSrc, " "), 1)
+	}
+	if len(o.WorkerSrc) > 0 {
+		csp += "; worker-src 'self' " + strings.Join(o.WorkerSrc, " ")
+	}
+	// frame-src is the one directive that can depend on the request (its
+	// Host); everything around it is fixed.
+	const noFrames = "frame-src 'none'"
+	beforeFrames, afterFrames, _ := strings.Cut(csp, noFrames)
+	frames := newFrameSources(o.FramePath, o.FrameHosts)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h := w.Header()
-			h.Set("Content-Security-Policy", csp)
+			h.Set("Content-Security-Policy", beforeFrames+"frame-src "+frames.forHost(r.Host)+afterFrames)
+			h.Set("Content-Security-Policy-Report-Only", trustedTypesReportOnly)
 			h.Set("X-Frame-Options", "DENY")
 			h.Set("X-Content-Type-Options", "nosniff")
 			h.Set("Referrer-Policy", "no-referrer")
@@ -340,49 +456,6 @@ func RequestIDFromContext(ctx context.Context) string {
 	return id
 }
 
-// RateLimitCounter is the minimal Redis-backed counter the RateLimit middleware
-// needs: AllowRequest atomically increments the per-key counter for the current
-// window and reports whether the request is within the limit.
-type RateLimitCounter interface {
-	AllowRequest(ctx context.Context, key string, limit int, window time.Duration) (bool, error)
-}
-
-// rateLimitByKey is the shared core for the rate-limit middlewares: it derives a
-// bucket key per request via keyFn and rejects (HTTP 429) once that key exceeds
-// `limit` per `window`. Fails OPEN — a counter error allows the request, so an
-// infra blip can never lock everyone out. A nil counter disables limiting.
-func rateLimitByKey(counter RateLimitCounter, keyFn func(*http.Request) string, limit int, window time.Duration) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		if counter == nil {
-			return next
-		}
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			allowed, err := counter.AllowRequest(r.Context(), keyFn(r), limit, window)
-			if err != nil {
-				slog.Warn("rate limit check failed; allowing request", "error", err)
-				next.ServeHTTP(w, r)
-				return
-			}
-			if !allowed {
-				w.Header().Set("Retry-After", strconv.Itoa(int(window.Seconds())))
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusTooManyRequests)
-				_, _ = w.Write([]byte(`{"error":"rate_limited","message":"too many requests, please slow down"}`))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-// RateLimit rejects more than `limit` requests per `window` from a single client
-// IP per route.
-func RateLimit(counter RateLimitCounter, limit int, window time.Duration) func(http.Handler) http.Handler {
-	return rateLimitByKey(counter, func(r *http.Request) string {
-		return "rl:" + r.URL.Path + ":" + clientIP(r)
-	}, limit, window)
-}
-
 // trustedProxyCount is how many reverse proxies sit in front of the app and
 // append to X-Forwarded-For. Each proxy appends the address it received the
 // connection FROM to the RIGHT, so the client-controllable (spoofable) portion
@@ -393,7 +466,7 @@ func RateLimit(counter RateLimitCounter, limit int, window time.Duration) func(h
 var trustedProxyCount = 1
 
 // SetTrustedProxyCount configures how many trusted proxies prepend to
-// X-Forwarded-For. Called from main wiring with the deployment's topology.
+// X-Forwarded-For. Called from the app wiring (internal/app) with the deployment's topology.
 func SetTrustedProxyCount(n int) {
 	if n < 0 {
 		n = 0
@@ -405,11 +478,14 @@ func SetTrustedProxyCount(n int) {
 // black-holed dependency (DynamoDB/OpenSearch have no default per-call deadline)
 // can't pin a handler goroutine indefinitely — the deadline propagates through
 // r.Context() to every downstream call. Long-lived connections (the WebSocket
-// upgrade) are exempt, or the socket would be torn down after the deadline.
-func RequestTimeout(d time.Duration) func(http.Handler) http.Handler {
+// upgrade) are exempt, or the socket would be torn down after the deadline, and
+// so is every path under one of streamingPrefixes: a download or a video read
+// legitimately outlasts any fixed budget (a 30s cap truncated them mid-body).
+// Those routes bound a stalled client with ProgressDeadline instead.
+func RequestTimeout(d time.Duration, streamingPrefixes ...string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if d <= 0 || strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			if d <= 0 || strings.EqualFold(r.Header.Get("Upgrade"), "websocket") || hasAnyPrefix(r.URL.Path, streamingPrefixes) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -418,22 +494,6 @@ func RequestTimeout(d time.Duration) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
-}
-
-// RateLimitPerUser is like RateLimit but keys on the authenticated user ID
-// (falling back to client IP when unauthenticated), so a single account can't
-// flood write endpoints — message sends fan out notifications to every member,
-// so an unbounded write rate is an amplification vector. Shares one bucket
-// across every route it wraps (keyed by user, not path). Fails OPEN like
-// RateLimit. Must run AFTER the auth middleware so the user ID is in context.
-func RateLimitPerUser(counter RateLimitCounter, limit int, window time.Duration) func(http.Handler) http.Handler {
-	return rateLimitByKey(counter, func(r *http.Request) string {
-		id := UserIDFromContext(r.Context())
-		if id == "" {
-			id = clientIP(r)
-		}
-		return "rlu:write:" + id
-	}, limit, window)
 }
 
 // clientIP extracts the real client IP for rate-limit keying. With trusted

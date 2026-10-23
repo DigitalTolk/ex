@@ -1,101 +1,87 @@
-import { createContext, useContext, useEffect, useMemo, useCallback, useRef, type ReactNode } from 'react';
-import { useLatestRef } from '@/hooks/useLatestRef';
-import { ExponentialBackoff, handleAll, retry } from 'cockatiel';
+import { useEffect, type ReactNode } from 'react';
+import { useQuery, type QueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 import { usePresenceStore } from '@/stores/presence';
+
+// Presence lives in the zustand store (@/stores/presence): hot paths subscribe
+// per user (useIsOnline), so a presence.changed re-renders only the rows whose
+// user flipped. This provider owns the backfill of the authoritative online
+// set: a query, run once signed in and again whenever it is invalidated —
+// ChatPage does after a socket gap, since presence.changed is ephemeral
+// (never replayed) and every transition during a disconnect is otherwise lost.
+
+export const presenceQueryKey = ['presence'] as const;
+
+// The backfill is retried (three attempts in all, jittered exponential
+// backoff): it used to be one-shot, so a single failed request at boot left
+// EVERY presence dot dark for the session. Held in a mutable holder so tests
+// can use a zero delay instead of sleeping out the production curve.
+export const presenceRetry = {
+  delay: (failures: number) => Math.min(5_000, 500 * 2 ** failures) * (0.5 + Math.random() / 2),
+};
+
+async function fetchOnline(): Promise<string[]> {
+  const data = await apiFetch<{ online?: string[] }>('/api/v1/presence');
+  return data?.online ?? [];
+}
+
+// refreshPresence refetches the authoritative online set. It supersedes a
+// fetch still in flight — the first load included, which a plain refetch
+// would only join — so a slow older response can never overwrite a newer one.
+export function refreshPresence(qc: QueryClient): void {
+  void qc
+    .cancelQueries({ queryKey: presenceQueryKey })
+    .then(() => qc.invalidateQueries({ queryKey: presenceQueryKey }));
+}
+
+export function PresenceProvider({ children }: { children: ReactNode }) {
+  const { isAuthenticated, user } = useAuth();
+  const selfID = user?.id;
+  const { data, dataUpdatedAt, errorUpdatedAt } = useQuery({
+    queryKey: presenceQueryKey,
+    queryFn: fetchOnline,
+    enabled: isAuthenticated,
+    retry: 2,
+    retryDelay: (failures) => presenceRetry.delay(failures),
+    // Kept current by presence.changed between fetches: refetched on each
+    // sign-in and on invalidation, never on focus or a timer.
+    staleTime: 0,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+
+  // Each completed fetch replaces the set. The current user is always seeded
+  // as online — they obviously are while the app runs, and a publish race
+  // can otherwise drop their own presence event before the WS subscribes.
+  useEffect(() => {
+    if (!dataUpdatedAt) return;
+    const next = new Set(data);
+    if (selfID) next.add(selfID);
+    usePresenceStore.getState().replaceOnline(next);
+  }, [data, dataUpdatedAt, selfID]);
+
+  // Even when every retry fails, seed self so the user's own dot is right;
+  // live presence.changed events keep updating the set.
+  useEffect(() => {
+    if (errorUpdatedAt && selfID) usePresenceStore.getState().setUserOnline(selfID, true);
+  }, [errorUpdatedAt, selfID]);
+
+  return <>{children}</>;
+}
 
 interface PresenceState {
   online: Set<string>;
   isOnline: (userId: string) => boolean;
   setUserOnline: (userId: string, online: boolean) => void;
-  // refreshPresence refetches the authoritative online set. Called on WS
-  // reconnect: presence.changed is ephemeral (never replayed), so every
-  // transition that happened during a disconnect is otherwise lost until the
-  // next full re-auth — online dots drifted stale after any network blip.
-  refreshPresence: () => void;
 }
 
-const PresenceContext = createContext<PresenceState | undefined>(undefined);
+const setUserOnline = (userId: string, online: boolean) => usePresenceStore.getState().setUserOnline(userId, online);
 
-// The backfill read is retried (jittered exponential backoff): it used to be
-// one-shot, so a single failed request at boot left EVERY presence dot dark
-// for the entire session. Held in a mutable holder so tests can swap in a
-// zero-backoff policy instead of sleeping out the production curve.
-export const presenceRetry = {
-  policy: retry(handleAll, {
-    maxAttempts: 3,
-    backoff: new ExponentialBackoff({ initialDelay: 500, maxDelay: 5_000 }),
-  }),
-};
-
-export function PresenceProvider({ children }: { children: ReactNode }) {
-  // State lives in the zustand store (per-user selectors for hot paths);
-  // this provider owns the lifecycle and re-exposes the context API.
+// usePresence subscribes to the WHOLE online set — every presence change
+// anywhere re-renders the caller. For one user's dot use useIsOnline; for a
+// value read in a handler, usePresenceStore.getState().online.
+export function usePresence(): PresenceState {
   const online = usePresenceStore((s) => s.online);
-  const { isAuthenticated, user } = useAuth();
-  // Monotonic token so a slow in-flight backfill can never clobber the
-  // result of a NEWER refresh (reconnects can fire while one is running).
-  const fetchSeqRef = useRef(0);
-  const userIDRef = useLatestRef(user?.id);
-
-  const refreshPresence = useCallback(() => {
-    const seq = ++fetchSeqRef.current;
-    presenceRetry.policy
-      .execute(() => apiFetch<{ online: string[] }>('/api/v1/presence'))
-      .then((data) => {
-        if (seq !== fetchSeqRef.current) return;
-        const next = new Set(data?.online ?? []);
-        // The current user is always seeded as online — they are obviously
-        // online if the app is running, and a publish race can otherwise
-        // drop their own presence event before the WS subscribes.
-        if (userIDRef.current) next.add(userIDRef.current);
-        usePresenceStore.getState().replaceOnline(next);
-      })
-      .catch(() => {
-        if (seq !== fetchSeqRef.current) return;
-        // Even when every retry fails, seed self so the user's own dot is
-        // correct; live presence.changed events keep updating the set.
-        const selfID = userIDRef.current;
-        if (selfID) usePresenceStore.getState().setUserOnline(selfID, true);
-      });
-    // userIDRef is a stable ref — listed to satisfy exhaustive-deps.
-  }, [userIDRef]);
-
-  // Backfill the initial set of online user IDs once authenticated.
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    refreshPresence();
-  }, [isAuthenticated, refreshPresence]);
-
-  const isOnline = useCallback((userId: string) => online.has(userId), [online]);
-
-  const setUserOnline = useCallback((userId: string, isOnlineNow: boolean) => {
-    usePresenceStore.getState().setUserOnline(userId, isOnlineNow);
-  }, []);
-
-  // Memoized so a presence event only re-renders consumers via the `online`
-  // set itself — an unmemoized literal re-rendered EVERY usePresence
-  // consumer (all avatars/dots) on each provider render.
-  const value = useMemo(
-    () => ({ online, isOnline, setUserOnline, refreshPresence }),
-    [online, isOnline, setUserOnline, refreshPresence],
-  );
-
-  return <PresenceContext.Provider value={value}>{children}</PresenceContext.Provider>;
-}
-
-// Safe defaults for when usePresence is read outside a provider — used by
-// UserHoverCard, which is rendered in many test contexts that don't bother
-// to wrap in PresenceProvider. Throwing here would force every unrelated
-// layout test to bring up the full presence stack.
-const noopPresence: PresenceState = {
-  online: new Set<string>(),
-  isOnline: () => false,
-  setUserOnline: () => undefined,
-  refreshPresence: () => undefined,
-};
-
-export function usePresence() {
-  return useContext(PresenceContext) ?? noopPresence;
+  return { online, isOnline: (userId) => online.has(userId), setUserOnline };
 }

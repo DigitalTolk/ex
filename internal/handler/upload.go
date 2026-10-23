@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -47,9 +48,17 @@ type uploadSigner interface {
 	PresignedGetURL(ctx context.Context, key string, expires time.Duration) (string, error)
 }
 
+// boundUploadSigner is the slice the generic upload endpoint uses: a PUT
+// bound to its declared size, and a preview URL whose response type is
+// pinned rather than taken from what the uploader stored.
+type boundUploadSigner interface {
+	PresignedSizedPutURL(ctx context.Context, key, contentType string, size int64, expires time.Duration) (string, error)
+	PresignedInlineURL(ctx context.Context, key, contentType, filename string, expires time.Duration) (string, error)
+}
+
 // UploadHandler exposes generic file-upload endpoints backed by S3 presigned URLs.
 type UploadHandler struct {
-	s3 uploadSigner
+	s3 boundUploadSigner
 }
 
 // NewUploadHandler creates an UploadHandler.
@@ -89,8 +98,10 @@ func (h *UploadHandler) CreateUploadURL(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid_body", "filename and contentType required")
 		return
 	}
-	contentType := strings.ToLower(strings.TrimSpace(strings.Split(body.ContentType, ";")[0]))
-	if !strings.HasPrefix(contentType, "image/") || contentType == "image/svg+xml" {
+	// ONE parsed media type: "image/png, text/html" starts with image/ but a
+	// browser renders it as HTML.
+	mediaType, _, err := mime.ParseMediaType(body.ContentType)
+	if err != nil || !strings.HasPrefix(mediaType, "image/") || mediaType == "image/svg+xml" {
 		writeError(w, http.StatusBadRequest, "invalid_type", "only raster image uploads are allowed")
 		return
 	}
@@ -100,14 +111,17 @@ func (h *UploadHandler) CreateUploadURL(w http.ResponseWriter, r *http.Request) 
 	}
 
 	key := "uploads/" + userID + "/" + store.NewID() + "/" + sanitizeUploadFilename(body.Filename)
-	uploadURL, err := h.s3.PresignedPutURL(r.Context(), key, body.ContentType, 10*time.Minute)
+	// The PUT URL stays usable for its whole lifetime, so it binds the size
+	// declared here: S3 refuses a body of any other length. The type signed
+	// is the one the browser sends verbatim.
+	uploadURL, err := h.s3.PresignedSizedPutURL(r.Context(), key, body.ContentType, body.Size, 10*time.Minute)
 	if err != nil {
-		writeInternalError(w, r, "presign_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
-	fileURL, err := h.s3.PresignedGetURL(r.Context(), key, 7*24*time.Hour)
+	fileURL, err := h.s3.PresignedInlineURL(r.Context(), key, mediaType, "", 7*24*time.Hour)
 	if err != nil {
-		writeInternalError(w, r, "presign_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 

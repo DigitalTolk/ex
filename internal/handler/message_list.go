@@ -30,7 +30,7 @@ func listMessages(
 		after := clampInt(queryInt(r, "after_count", limit/2), 0, service.MaxMessageListLimit)
 		msgs, hasMoreOlder, hasMoreNewer, err := svc.ListAround(r.Context(), userID, parentID, parentType, around, before, after)
 		if err != nil {
-			writeError(w, http.StatusForbidden, "list_error", err.Error())
+			writeServiceError(w, r, err)
 			return
 		}
 		writeMessageWindow(w, msgs, hasMoreOlder, hasMoreNewer)
@@ -40,7 +40,7 @@ func listMessages(
 	if after := queryParam(r, "after", ""); after != "" {
 		msgs, hasMore, err := svc.ListAfter(r.Context(), userID, parentID, parentType, after, limit)
 		if err != nil {
-			writeError(w, http.StatusForbidden, "list_error", err.Error())
+			writeServiceError(w, r, err)
 			return
 		}
 		writeMessageWindow(w, msgs, false, hasMore)
@@ -50,7 +50,7 @@ func listMessages(
 	cursor := queryParam(r, "cursor", "")
 	msgs, hasMore, err := svc.List(r.Context(), userID, parentID, parentType, cursor, limit)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "list_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeMessageWindow(w, msgs, hasMore, false)

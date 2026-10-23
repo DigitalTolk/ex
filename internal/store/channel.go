@@ -363,36 +363,19 @@ func (s *ChannelStoreImpl) ListAllChannels(ctx context.Context) ([]*model.Channe
 // made the sidebar list (and every WebSocket connect, which reloads it) cost
 // a DynamoDB read per membership. Missing IDs are absent from the result.
 func (s *ChannelStoreImpl) GetChannelsByIDs(ctx context.Context, ids []string) ([]*model.Channel, error) {
-	out := make([]*model.Channel, 0, len(ids))
-	const batchSize = 100
-	for start := 0; start < len(ids); start += batchSize {
-		end := min(start+batchSize, len(ids))
-		keys := make([]map[string]types.AttributeValue, 0, end-start)
-		for _, id := range ids[start:end] {
-			keys = append(keys, compositeKey(channelPK(id), metaSK()))
-		}
-		// Consistent, for the MessageSeq behind each row's unread count (see
-		// ConversationStoreImpl.ListUserConversations).
-		req := map[string]types.KeysAndAttributes{s.Table: {Keys: keys, ConsistentRead: aws.Bool(true)}}
-		for {
-			res, err := s.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
-			if err != nil {
-				return nil, fmt.Errorf("store: batch get channels: %w", err)
-			}
-			for _, item := range res.Responses[s.Table] {
-				var rec channelItem
-				if err := attributevalue.UnmarshalMap(item, &rec); err != nil {
-					return nil, fmt.Errorf("store: unmarshal channel: %w", err)
-				}
-				ch := rec.Channel
-				out = append(out, &ch)
-			}
-			// DynamoDB may return unprocessed keys under throttling — drain them.
-			if len(res.UnprocessedKeys) == 0 {
-				break
-			}
-			req = res.UnprocessedKeys
-		}
+	keys := make([]map[string]types.AttributeValue, len(ids))
+	for i, id := range ids {
+		keys[i] = compositeKey(channelPK(id), metaSK())
+	}
+	// Consistent, for the MessageSeq behind each row's unread count (see
+	// ConversationStoreImpl.ListUserConversations).
+	rows, err := batchGetOf[channelItem](ctx, s.DB, keys, types.KeysAndAttributes{ConsistentRead: aws.Bool(true)}, "channels")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.Channel, len(rows))
+	for i := range rows {
+		out[i] = &rows[i].Channel
 	}
 	return out, nil
 }

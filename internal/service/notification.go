@@ -7,30 +7,18 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 )
 
-// NotificationKind tags a notification with its semantic class so the client
-// can apply different sounds, copy, and grouping rules without a large
-// payload-shape switch on the receiver. Adding a new kind here is the
-// single place a new notification flavor is registered.
-type NotificationKind string
+// NotificationKind and its values live in internal/model with the
+// Notification payload (so tygo mirrors them for the client); the service
+// keeps its historical names as aliases.
+type NotificationKind = model.NotificationKind
 
 const (
-	NotificationKindMessage     NotificationKind = "message"
-	NotificationKindMention     NotificationKind = "mention"
-	NotificationKindThreadReply NotificationKind = "thread_reply"
-	// NotificationKindReminder is a self-set "remind me about this message"
-	// alert firing at its scheduled time. Always notifiable — the user
-	// explicitly asked to be alerted, so no gating applies.
-	NotificationKindReminder NotificationKind = "reminder"
-	// NotificationKindApproval fires when an agent the user invoked needs their
-	// decision (request_approval / ask_user). It blocks the run until answered,
-	// so it's always notifiable and the client renders it distinctly (it's an
-	// action the user must take, not just something to read).
-	NotificationKindApproval NotificationKind = "approval"
-	// NotificationKindCatchUp fires when a watcher accumulated an OFFLINE
-	// backlog on a local CLI harness and needs the creator's go-ahead to
-	// process it (their machine, their tokens). Always notifiable — it waits
-	// for a decision.
-	NotificationKindCatchUp NotificationKind = "catchup"
+	NotificationKindMessage     = model.NotificationKindMessage
+	NotificationKindMention     = model.NotificationKindMention
+	NotificationKindThreadReply = model.NotificationKindThreadReply
+	NotificationKindReminder    = model.NotificationKindReminder
+	NotificationKindApproval    = model.NotificationKindApproval
+	NotificationKindCatchUp     = model.NotificationKindCatchUp
 )
 
 // notifiableKinds is the registry of kinds that should actually fire a
@@ -54,49 +42,8 @@ func IsNotifiable(k NotificationKind) bool {
 	return ok
 }
 
-// Notification is the user-facing alert payload delivered over the same
-// WebSocket pipe as state events. It is intentionally minimal — title, body,
-// where to go on click, and a stable client-side de-dup key.
-type Notification struct {
-	Kind       NotificationKind `json:"kind"`
-	Title      string           `json:"title"`
-	Body       string           `json:"body"`
-	DeepLink   string           `json:"deepLink"`
-	ParentID   string           `json:"parentID"`   // channel/conversation ID
-	ParentType string           `json:"parentType"` // "channel" | "conversation"
-	MessageID  string           `json:"messageID,omitempty"`
-	// AlertID identifies the alert itself when one message can legitimately
-	// alert more than once — a fired reminder is a NEW alert about a message
-	// the user may already have been notified about (or reminded of before).
-	// When set it replaces MessageID as the delivery key (client dedup,
-	// desktop ack, push idempotency); otherwise those stay keyed by MessageID.
-	AlertID         string `json:"alertID,omitempty"`
-	ParentMessageID string `json:"parentMessageID,omitempty"`
-	AuthorID        string `json:"authorID,omitempty"` // for client-side own-author suppression
-	// Webhook marks a notification that originated from an incoming
-	// webhook (CI alerts, deploy bots, etc.). The "author" is the webhook,
-	// not a real sender, so the client exempts these from its own-author
-	// echo suppression. Whether to notify at all is decided server-side by
-	// the recipient's notification level, exactly like a regular message.
-	Webhook   bool      `json:"webhook,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-	// ParentUnreadNotifyCount is the recipient's authoritative alerted-unread
-	// badge for the parent AFTER this notification (top-level messages only;
-	// thread replies never touch parent counters). Clients SET their sidebar
-	// badge to this value — never increment locally — so replayed or
-	// duplicated events can't drift the count.
-	ParentUnreadNotifyCount int64 `json:"parentUnreadNotifyCount,omitempty"`
-}
-
-// deliveryKey is the identity the desktop ack and the mobile-push
-// idempotency key on: the AlertID when set, else the MessageID. The client
-// dedups and acks on the same key, so both sides always agree.
-func (n Notification) deliveryKey() string {
-	if n.AlertID != "" {
-		return n.AlertID
-	}
-	return n.MessageID
-}
+// Notification is the notification.new payload (model.Notification).
+type Notification = model.Notification
 
 // PresenceLookup is the slice of PresenceService NotificationService cares
 // about. Defined as an interface so the dependency is explicit and tests
@@ -184,6 +131,12 @@ type NotificationService struct {
 	ackStore  NotificationAckStore
 	nameCache NameCache
 	activity  ActivityRecorder
+	// audience is the generation-checked audience cache (SetAudienceCache).
+	audience *AudienceCache
+	// marker records completed fan-outs for the safety net (SetNotifyMarker).
+	marker NotifyMarker
+	// mentions names mentioned users/channels in alert text (SetMentionResolver).
+	mentions MentionResolver
 }
 
 // ActivityRecorder receives the Activity-tab entries the fan-out decides on
@@ -298,3 +251,8 @@ func (s *NotificationService) SetNameCache(c NameCache) { s.nameCache = c }
 // SetActivityRecorder wires the Activity tab. Optional — without it messages
 // still notify but add nothing to anyone's activity stream.
 func (s *NotificationService) SetActivityRecorder(a ActivityRecorder) { s.activity = a }
+
+// SetMentionResolver makes alert text (popup, push, Activity row) name each
+// mentioned user and channel by its current name, looked up by ID. Optional —
+// without it mentions read as the poster typed them.
+func (s *NotificationService) SetMentionResolver(r MentionResolver) { s.mentions = r }

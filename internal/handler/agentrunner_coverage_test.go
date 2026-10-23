@@ -4,8 +4,8 @@ package handler
 //
 // Everything here is self-contained: hrunnerCov-prefixed fakes implement the
 // store surfaces the real services need, so the handlers run against real
-// *service.Orchestrator / *service.AgentService / *service.MessageService /
-// *service.ContextService instances, exactly as wired in production.
+// *agents.Orchestrator / *agents.AgentService / *service.MessageService /
+// *agents.ContextService instances, exactly as wired in production.
 
 import (
 	"context"
@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/agents"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
@@ -36,7 +37,7 @@ const (
 	hrunnerCovRunner  = "hrc-runner-1"
 )
 
-var hrunnerCovAgentID = service.AgentUserID("gg")
+var hrunnerCovAgentID = agents.AgentUserID("gg")
 
 // ------------------------------------------------------------ run store fake
 
@@ -305,6 +306,17 @@ func (s *hrunnerCovRunStore) SettleApproval(_ context.Context, runID, approvalID
 		return store.ErrNotFound
 	}
 	a.State, a.DecidedBy, a.Choice, a.Note, a.DecidedAt = state, decidedBy, choice, note, &decidedAt
+	return nil
+}
+
+func (s *hrunnerCovRunStore) ConsumeApproval(_ context.Context, runID, approvalID string, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.approvals[runID+"#"+approvalID]
+	if !ok || a.State != model.ApprovalApproved || a.ConsumedAt != nil {
+		return store.ErrStaleApproval
+	}
+	a.ConsumedAt = &at
 	return nil
 }
 
@@ -813,7 +825,7 @@ type hrunnerCovFix struct {
 	omsgs   *hrunnerCovOrchMsgs
 	msgs    *hrunnerCovMsgStore
 	ctxst   *hrunnerCovCtxStore
-	orch    *service.Orchestrator
+	orch    *agents.Orchestrator
 	runnerH *AgentRunnerHandler
 	toolH   *AgentRunToolHandler
 }
@@ -830,8 +842,8 @@ func hrunnerCovNewFix(t *testing.T) *hrunnerCovFix {
 	dir.templates = []*model.AgentTemplate{{Slug: "gg", DisplayName: "gg", Harness: model.HarnessClaude}}
 	runs := hrunnerCovNewRunStore()
 	omsgs := &hrunnerCovOrchMsgs{}
-	agentSvc := service.NewAgentService(dir, users)
-	orch := service.NewOrchestrator(runs, agentSvc, users, omsgs, hrunnerCovPub{}, hrunnerCovMinter{})
+	agentSvc := agents.NewAgentService(dir, users)
+	orch := agents.NewOrchestrator(runs, agentSvc, users, omsgs, hrunnerCovPub{}, hrunnerCovMinter{})
 
 	msgs := &hrunnerCovMsgStore{byKey: map[string]*model.Message{
 		hrunnerCovChan + "#" + hrunnerCovRoot: {ID: hrunnerCovRoot, ParentID: hrunnerCovChan, AuthorID: hrunnerCovInvoker, Body: "root"},
@@ -842,7 +854,7 @@ func hrunnerCovNewFix(t *testing.T) *hrunnerCovFix {
 	}}
 	msgSvc := service.NewMessageService(msgs, members, convs, nil, hrunnerCovBroker{})
 	ctxst := &hrunnerCovCtxStore{}
-	ctxSvc := service.NewContextService(ctxst, msgSvc)
+	ctxSvc := agents.NewContextService(ctxst, msgSvc)
 
 	return &hrunnerCovFix{
 		runs: runs, dir: dir, users: users, omsgs: omsgs, msgs: msgs, ctxst: ctxst, orch: orch,

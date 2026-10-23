@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { canPreviewHtml, HTML_PREVIEW_MAX_BYTES, isHtmlAttachment } from './html-attachment';
+import { canPreviewHtml, HTML_PREVIEW_MAX_BYTES, htmlPreviewURL, isHtmlAttachment } from './html-attachment';
+
+describe('htmlPreviewURL', () => {
+  it('serves the same media token from the preview route, grant included', () => {
+    expect(htmlPreviewURL('/api/v1/media/tok/mockup.html')).toBe('/api/v1/html-preview/tok/mockup.html');
+    expect(htmlPreviewURL('/api/v1/media/tok/My%20Mockup.html?g=abc.def')).toBe('/api/v1/html-preview/tok/My%20Mockup.html?g=abc.def');
+  });
+
+  it('has no preview for a URL that is not one of our media URLs', () => {
+    // A presigned object-store URL (the media cache was down) cannot carry
+    // the preview's own policy.
+    expect(htmlPreviewURL('https://bucket.s3.example.com/attachments/a?X-Amz-Signature=x')).toBeNull();
+    expect(htmlPreviewURL('https://evil.test/api/v1/media/tok/mockup.html')).toBeNull();
+    expect(htmlPreviewURL('/api/v1/media/tok')).toBeNull();
+    expect(htmlPreviewURL('/api/v1/media/tok/a.html#frag')).toBeNull();
+  });
+});
 
 describe('isHtmlAttachment / canPreviewHtml', () => {
   it('recognises HTML by content type or extension', () => {
@@ -25,6 +41,7 @@ describe('isHtmlAttachment / canPreviewHtml', () => {
   it('is download-only when oversized, unresolved, or not HTML', () => {
     expect(canPreviewHtml({ ...html, size: HTML_PREVIEW_MAX_BYTES + 1 })).toBe(false);
     expect(canPreviewHtml({ ...html, url: undefined })).toBe(false);
+    expect(canPreviewHtml({ ...html, url: 'https://bucket.s3.example.com/attachments/a' })).toBe(false);
     expect(canPreviewHtml({ ...html, contentType: 'application/pdf', filename: 'a.pdf' })).toBe(false);
   });
 });

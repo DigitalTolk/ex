@@ -41,9 +41,17 @@ export function keepBottomEdge(scroller: HTMLElement): () => void {
     note();
   });
   observer.observe(scroller);
-  scroller.addEventListener('scroll', note, { passive: true });
+  // A scroll while the view has a height the observer has yet to hear of is
+  // the browser pulling a taller view back inside the content, not the
+  // reader: it can come first when the new height was laid out from another
+  // ResizeObserver (a virtualized list measuring its rows), which puts this
+  // one off to the next frame. The observer goes by where the view stood.
+  const onScroll = () => {
+    if (scroller.clientHeight === viewHeight) note();
+  };
+  scroller.addEventListener('scroll', onScroll, { passive: true });
   return () => {
     observer.disconnect();
-    scroller.removeEventListener('scroll', note);
+    scroller.removeEventListener('scroll', onScroll);
   };
 }

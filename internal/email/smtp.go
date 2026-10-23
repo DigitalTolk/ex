@@ -20,15 +20,45 @@ type SMTPSender struct {
 	from   string
 }
 
+// TLSPolicy selects how a plain-port SMTP connection treats STARTTLS.
+type TLSPolicy string
+
+const (
+	// TLSMandatory requires STARTTLS: a relay that does not offer it (or an
+	// on-path attacker stripping it from the EHLO reply) fails the send
+	// before any envelope, body, or credential crosses the wire. The
+	// default outside development.
+	TLSMandatory TLSPolicy = "mandatory"
+	// TLSOpportunistic upgrades when the relay offers STARTTLS and falls
+	// back to plaintext otherwise — for a trusted local relay or a dev
+	// container such as Mailpit. The default in development.
+	TLSOpportunistic TLSPolicy = "opportunistic"
+	// TLSNone never upgrades, even when STARTTLS is offered.
+	TLSNone TLSPolicy = "none"
+)
+
+// mailPolicy maps a TLSPolicy onto go-mail's policy enum.
+func (p TLSPolicy) mailPolicy() (mail.TLSPolicy, error) {
+	switch p {
+	case TLSMandatory:
+		return mail.TLSMandatory, nil
+	case TLSOpportunistic:
+		return mail.TLSOpportunistic, nil
+	case TLSNone:
+		return mail.NoTLS, nil
+	default:
+		return 0, fmt.Errorf("email: invalid SMTP TLS policy %q: must be %q, %q or %q",
+			string(p), TLSMandatory, TLSOpportunistic, TLSNone)
+	}
+}
+
 // NewSMTPSender builds a sender from raw config values. An empty host yields
 // ErrNotConfigured so the caller can wire a nil Sender and run without mail.
 //
 // Port selects the transport the way relays conventionally do: 465 is SMTPS
-// (TLS from the first byte), anything else starts in the clear and upgrades
-// via STARTTLS when the server advertises it. TLS is opportunistic rather
-// than mandatory so a trusted local relay (or a dev container such as
-// Mailpit) still works — matching what the port already implies.
-func NewSMTPSender(host, port, username, password, from string) (*SMTPSender, error) {
+// (TLS from the first byte, whatever the policy), anything else starts in
+// the clear and applies policy to the STARTTLS upgrade.
+func NewSMTPSender(host, port, username, password, from string, policy TLSPolicy) (*SMTPSender, error) {
 	if host == "" {
 		return nil, ErrNotConfigured
 	}
@@ -39,11 +69,15 @@ func NewSMTPSender(host, port, username, password, from string) (*SMTPSender, er
 	if err != nil {
 		return nil, fmt.Errorf("email: invalid SMTP port %q: %w", port, err)
 	}
+	tlsPolicy, err := policy.mailPolicy()
+	if err != nil {
+		return nil, err
+	}
 
 	opts := []mail.Option{
 		mail.WithPort(portNum),
 		mail.WithTimeout(smtpTimeout),
-		mail.WithTLSPolicy(mail.TLSOpportunistic),
+		mail.WithTLSPolicy(tlsPolicy),
 	}
 	if portNum == 465 {
 		opts = append(opts, mail.WithSSL())

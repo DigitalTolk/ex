@@ -63,6 +63,19 @@ type User struct {
 	// clients.
 	MSObjectID string `json:"-" dynamodbav:"msObjectID,omitempty"`
 
+	// OIDCIssuer + OIDCSubject bind the account to ONE identity-provider
+	// identity, recorded at the first SSO login. The email claim is mutable
+	// (renames, recycled addresses), so a later login whose issuer/subject
+	// differ from the bound pair is refused rather than handed this account.
+	// Internal only — never serialized to clients.
+	OIDCIssuer  string `json:"-" dynamodbav:"oidcIssuer,omitempty"`
+	OIDCSubject string `json:"-" dynamodbav:"oidcSubject,omitempty"`
+
+	// DeactivatedBy records who deactivated the account: DeactivatedByAdmin
+	// or DeactivatedByDirectory. The directory sweep only reactivates what
+	// the directory itself deactivated — it must never undo an admin's call.
+	DeactivatedBy string `json:"-" dynamodbav:"deactivatedBy,omitempty"`
+
 	// Kind discriminates humans ("") from agent instances ("agent"). Agents
 	// are the same kind of thing as a human user — member lists, mentions,
 	// presence and authorship all resolve through the same user id — with
@@ -71,6 +84,12 @@ type User struct {
 	// AgentConfig is set only when Kind == UserKindAgent.
 	AgentConfig *AgentConfig `json:"agentConfig,omitempty" dynamodbav:"agentConfig,omitempty"`
 }
+
+// Who deactivated an account (User.DeactivatedBy).
+const (
+	DeactivatedByAdmin     = "admin"
+	DeactivatedByDirectory = "directory"
+)
 
 // IsAgent reports whether the user is an agent instance.
 func (u *User) IsAgent() bool { return u != nil && u.Kind == UserKindAgent }

@@ -37,12 +37,18 @@ type captureInbox struct {
 	failed    atomic.Int32
 	dropped   [][]string
 	dropErr   error
+	// dropCtxErrs records ctx.Err() of every Drop call: the poison step must
+	// run on a live context even when the fan-out's own deadline ran out.
+	dropCtxErrs []error
+	// batches records the recipient list of every successful AppendMany.
+	batches [][]string
 }
 
-func (c *captureInbox) Drop(_ context.Context, userIDs []string) error {
+func (c *captureInbox) Drop(ctx context.Context, userIDs []string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.dropped = append(c.dropped, append([]string(nil), userIDs...))
+	c.dropCtxErrs = append(c.dropCtxErrs, ctx.Err())
 	return c.dropErr
 }
 
@@ -75,6 +81,7 @@ func (c *captureInbox) AppendMany(_ context.Context, userIDs []string, eventID s
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.batches = append(c.batches, append([]string(nil), userIDs...))
 	for _, uid := range userIDs {
 		cp := make([]byte, len(payload))
 		copy(cp, payload)

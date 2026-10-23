@@ -1,8 +1,7 @@
 // Reminder preset times. Pure date math so it's trivially unit-testable and
 // stays consistent between the message action menu and any other caller.
 
-import { inputValueForDate } from '@/lib/datetime-input';
-import { localTimeZone } from '@/lib/user-time';
+import { format } from 'date-fns';
 
 export type ReminderPresetKey = 'in20m' | 'in1h' | 'in3h' | 'tomorrow' | 'nextweek';
 
@@ -31,10 +30,9 @@ function atMorning(d: Date): Date {
 }
 
 // toLocalInputValue formats a Date as the `YYYY-MM-DDTHH:mm` string a
-// datetime-local input expects, in the user's local timezone. Thin wrapper over
-// the shared datetime-input helper, fixed to the browser's own zone.
+// datetime-local input expects, in the browser's own zone.
 export function toLocalInputValue(d: Date): string {
-  return inputValueForDate(d, localTimeZone());
+  return format(d, "yyyy-MM-dd'T'HH:mm");
 }
 
 // computeReminderTime returns the absolute fire time for a preset relative to

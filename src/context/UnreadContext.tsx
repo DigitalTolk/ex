@@ -3,6 +3,7 @@ import { readJSON, writeJSON } from '@/lib/storage';
 import { apiFetch } from '@/lib/api';
 import { THREAD_SEEN_CHANGED_EVENT } from '@/hooks/useThreads';
 import { isThreadInView, setPanelThread } from '@/lib/thread-scope';
+import { isActiveParent } from '@/stores/active-parent';
 
 interface UnreadState {
   // Thread-unread is the only unread state that still lives in the client: thread
@@ -17,9 +18,8 @@ interface UnreadState {
   hideConversation: (id: string) => void;
   unhideConversation: (id: string) => void;
   // Active scope: marking unread is suppressed when the user is currently
-  // looking at the channel or conversation (read it as you go instead).
-  setActiveChannel: (id: string | null) => void;
-  setActiveConversation: (id: string | null) => void;
+  // looking at the channel or conversation (read it as you go instead). The
+  // open parent itself lives in stores/active-parent (useParentChat sets it).
   isActiveChannel: (id: string) => boolean;
   isActiveConversation: (id: string) => boolean;
   // Active thread: the thread root currently shown in the open ThreadPanel,
@@ -52,10 +52,8 @@ function persistHiddenConversations(set: Set<string>) {
 export function UnreadProvider({ children }: { children: ReactNode }) {
   const [unreadThreadNotifications, setUnreadThreadNotifications] = useState<Set<string>>(new Set());
   const [hiddenConversations, setHiddenConversations] = useState<Set<string>>(loadHiddenConversations);
-  // Refs (not state) so updates from onMessageNew callbacks see the latest
-  // active scope without re-creating the WS handlers on every navigation.
-  const activeChannelRef = useRef<string | null>(null);
-  const activeConvRef = useRef<string | null>(null);
+  // A ref (not state) so updates from onMessageNew callbacks see the latest
+  // active thread without re-creating the WS handlers on every navigation.
   const activeThreadRef = useRef<string | null>(null);
 
   const markThreadNotificationUnread = useCallback((id: string) => {
@@ -87,14 +85,8 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const setActiveChannel = useCallback((id: string | null) => {
-    activeChannelRef.current = id;
-  }, []);
-  const setActiveConversation = useCallback((id: string | null) => {
-    activeConvRef.current = id;
-  }, []);
-  const isActiveChannel = useCallback((id: string) => activeChannelRef.current === id, []);
-  const isActiveConversation = useCallback((id: string) => activeConvRef.current === id, []);
+  const isActiveChannel = useCallback((id: string) => isActiveParent('channel', id), []);
+  const isActiveConversation = useCallback((id: string) => isActiveParent('conversation', id), []);
   const setActiveThread = useCallback((id: string | null) => {
     activeThreadRef.current = id;
     // Share the open panel's thread with @/lib/thread-scope so notification
@@ -146,8 +138,6 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
       markThreadNotificationUnread,
       hideConversation,
       unhideConversation,
-      setActiveChannel,
-      setActiveConversation,
       isActiveChannel,
       isActiveConversation,
       setActiveThread,
@@ -159,8 +149,6 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
       markThreadNotificationUnread,
       hideConversation,
       unhideConversation,
-      setActiveChannel,
-      setActiveConversation,
       isActiveChannel,
       isActiveConversation,
       setActiveThread,

@@ -172,6 +172,13 @@ func (s *dataUserStoreForConv) UpdateUser(_ context.Context, u *model.User) erro
 	s.emailIndex[u.Email] = u
 	return nil
 }
+func (s *dataUserStoreForConv) PatchUser(_ context.Context, id string, p store.UserPatch) error {
+	u, ok := s.users[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	return applyUserPatchForTest(u, p)
+}
 func (s *dataUserStoreForConv) ListUsers(_ context.Context, _ int, _ string) ([]*model.User, string, error) {
 	return nil, "", nil
 }
@@ -308,8 +315,10 @@ func TestConversationHandler_GetThread_Forbidden(t *testing.T) {
 	req.SetPathValue("msgId", "m1")
 	rec := httptest.NewRecorder()
 	env.handler.GetThread(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status=%d, want 403; body=%s", rec.Code, rec.Body.String())
+	// The conversation does not exist: 404 (it answered 403 when every chat
+	// error fell back to the route's status).
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -365,8 +374,10 @@ func TestConversationHandler_SetNoUnfurl_Forbidden(t *testing.T) {
 	req.SetPathValue("msgId", "m1")
 	rec := httptest.NewRecorder()
 	env.handler.SetNoUnfurl(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status=%d, want 403; body=%s", rec.Code, rec.Body.String())
+	// The conversation does not exist: 404 (it answered 403 when every chat
+	// error fell back to the route's status).
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -388,8 +399,10 @@ func TestConversationHandler_ListFiles_Forbidden(t *testing.T) {
 	req.SetPathValue("id", "c-missing")
 	rec := httptest.NewRecorder()
 	env.handler.ListFiles(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status=%d, want 403; body=%s", rec.Code, rec.Body.String())
+	// The conversation does not exist: 404 (it answered 403 when every chat
+	// error fell back to the route's status).
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -814,14 +827,14 @@ func TestConvHandlerFull_CreateDM_ServiceError(t *testing.T) {
 	token := makeTokenForUser(env.jwtMgr, user)
 	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.Create))
 
-	// DM with a participant that doesn't exist → service rejects → dm_error.
+	// DM with a participant that doesn't exist → 404 (it used to be a 400).
 	body := `{"type":"dm","participantIDs":["u-ghost"]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/conversations", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusNotFound {
 		t.Fatalf("dm service-error status = %d; body: %s", rec.Code, rec.Body.String())
 	}
 }
@@ -947,7 +960,7 @@ func TestConvHandlerFull_SendMessage_ClearsDraftByScope(t *testing.T) {
 		ID: "conv-msg", Type: model.ConversationTypeDM, ParticipantIDs: []string{"u-sender", "u-receiver"},
 	}
 	fake := &fakeDraftClearer{done: make(chan struct{}, 1)}
-	env.handler.SetDraftClearer(fake)
+	env.handler.messageSvc.SetDraftClearer(fake) // the send owns the fold
 	user := &model.User{ID: "u-sender", Email: "sender@test.com", SystemRole: model.SystemRoleMember}
 	token := makeTokenForUser(env.jwtMgr, user)
 	h := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.SendMessage))
@@ -1224,8 +1237,10 @@ func TestConversationHandler_DeleteMessage_Forbidden(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	// The conversation does not exist: 404 (these answered 403 when every
+	// chat error fell back to the route's status).
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 

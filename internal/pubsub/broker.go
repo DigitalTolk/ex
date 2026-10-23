@@ -3,7 +3,10 @@ package pubsub
 import (
 	"context"
 	"encoding/json"
+	"iter"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 
@@ -15,29 +18,66 @@ import (
 // Multiple concurrent clients per user are supported so multiple tabs/devices
 // don't flap presence on reconnect — redis subscriptions are torn down only
 // when the user's last client disconnects.
+//
+// Locking: mu guards the maps and is only ever held for in-memory work, so
+// live delivery (dispatch) and socket registration never wait on Redis.
+// subMu serializes subscription CHANGES — the refcount update together with
+// the SUBSCRIBE / UNSUBSCRIBE it implies — so those commands reach Redis in
+// exactly the order the refcounts changed: a last member's UNSUBSCRIBE can
+// never land after a new member's SUBSCRIBE of the same channel and leave
+// them deaf to it, and a Subscribe returns only once its SUBSCRIBE (or the
+// one it piggybacks on) has been issued. Lock order: subMu, then mu.
 type Broker struct {
-	clients   map[string]map[*events.Client]struct{} // userID → set of clients
-	userSubs  map[string]map[string]bool             // userID → set of redis channels
-	redisSubs map[string]map[string]bool             // redis channel → set of userIDs
+	clients   map[string][]*events.Client // userID → live clients, oldest first
+	userSubs  map[string]map[string]bool  // userID → set of redis channels
+	redisSubs map[string]map[string]bool  // redis channel → set of userIDs
 	mu        sync.RWMutex
+	subMu     sync.Mutex
+
+	// maxClientsPerUser caps one user's concurrent sockets on this instance
+	// (0 = no cap); see RegisterClient.
+	maxClientsPerUser int
 
 	pubsub     *RedisPubSub
-	subscriber *redis.PubSub
+	subscriber redisSubscriber
 	ctx        context.Context
 	cancel     context.CancelFunc
 }
 
-// NewBroker creates a new Broker backed by the given RedisPubSub.
+// DefaultMaxClientsPerUser is the per-user, per-instance socket cap: far above
+// real multi-tab, multi-device use, low enough that one credential cannot pin
+// an unbounded number of sockets (goroutines, buffers, subscriptions) on an
+// instance.
+const DefaultMaxClientsPerUser = 32
+
+// redisSubscriber is the part of *redis.PubSub the broker drives, as an
+// interface so a test can hold a SUBSCRIBE "on the wire".
+type redisSubscriber interface {
+	Subscribe(ctx context.Context, channels ...string) error
+	Unsubscribe(ctx context.Context, channels ...string) error
+	Channel(opts ...redis.ChannelOption) <-chan *redis.Message
+	Close() error
+}
+
+// NewBroker creates a new Broker backed by the given RedisPubSub. Every broker
+// listens on the instance-wide MulticastTopic from the start (go-redis
+// re-subscribes it after a reconnect), so a PublishMulticast reaches every
+// instance.
 func NewBroker(redisPubSub *RedisPubSub) *Broker {
+	return newBroker(redisPubSub, redisPubSub.Client().Subscribe(context.Background(), MulticastTopic()))
+}
+
+func newBroker(redisPubSub *RedisPubSub, sub redisSubscriber) *Broker {
 	ctx, cancel := context.WithCancel(context.Background())
 	b := &Broker{
-		clients:    make(map[string]map[*events.Client]struct{}),
-		userSubs:   make(map[string]map[string]bool),
-		redisSubs:  make(map[string]map[string]bool),
-		pubsub:     redisPubSub,
-		subscriber: redisPubSub.Client().Subscribe(ctx),
-		ctx:        ctx,
-		cancel:     cancel,
+		clients:           make(map[string][]*events.Client),
+		userSubs:          make(map[string]map[string]bool),
+		redisSubs:         make(map[string]map[string]bool),
+		maxClientsPerUser: DefaultMaxClientsPerUser,
+		pubsub:            redisPubSub,
+		subscriber:        sub,
+		ctx:               ctx,
+		cancel:            cancel,
 	}
 	go b.listen()
 	return b
@@ -45,15 +85,29 @@ func NewBroker(redisPubSub *RedisPubSub) *Broker {
 
 // RegisterClient creates and tracks a new event client for the given user.
 // Pass the returned client back to UnregisterClient to deregister it.
+//
+// Past maxClientsPerUser the user's OLDEST socket is closed: its connection
+// loop ends and that tab reconnects (and replays) on its own. Refusing the new
+// socket instead would starve the device the user just opened or reconnected —
+// the one most likely in front of them — of alerts, while a stale or half-open
+// socket kept its slot until the pong timeout. Either way the deferred mobile
+// push still covers an alert no socket acknowledges.
 func (b *Broker) RegisterClient(userID string) *events.Client {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	client := events.NewClient(userID)
-	if b.clients[userID] == nil {
-		b.clients[userID] = make(map[*events.Client]struct{})
+	b.mu.Lock()
+	set := append(b.clients[userID], client)
+	var evicted []*events.Client
+	limit := b.maxClientsPerUser
+	if limit > 0 && len(set) > limit {
+		evicted = set[:len(set)-limit]
+		set = slices.Clone(set[len(set)-limit:])
 	}
-	b.clients[userID][client] = struct{}{}
+	b.clients[userID] = set
+	b.mu.Unlock()
+	for _, c := range evicted {
+		slog.Warn("broker: per-user socket cap reached, closing the oldest socket", "userID", userID, "cap", limit)
+		c.Close()
+	}
 	return client
 }
 
@@ -62,52 +116,51 @@ func (b *Broker) RegisterClient(userID string) *events.Client {
 // a refreshing tab doesn't briefly drop the user's whole subscription set.
 func (b *Broker) UnregisterClient(userID string, client *events.Client) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	set, ok := b.clients[userID]
-	if !ok {
-		return
-	}
-	if _, present := set[client]; present {
+	set, known := b.clients[userID]
+	if i := slices.Index(set, client); i >= 0 {
 		client.Close()
-		delete(set, client)
+		set = slices.Delete(set, i, i+1)
 	}
 	if len(set) > 0 {
+		b.clients[userID] = set
+		b.mu.Unlock()
 		return
 	}
 	delete(b.clients, userID)
+	b.mu.Unlock()
+	if known {
+		b.dropUserSubscriptions(userID)
+	}
+}
 
+// dropUserSubscriptions tears down the subscriptions of a user whose last
+// socket just left — unless a new socket of theirs registered in the
+// meantime, which keeps them.
+func (b *Broker) dropUserSubscriptions(userID string) {
+	b.subMu.Lock()
+	defer b.subMu.Unlock()
+	b.mu.Lock()
+	if len(b.clients[userID]) > 0 {
+		b.mu.Unlock()
+		return
+	}
 	channels := b.userSubs[userID]
 	delete(b.userSubs, userID)
-
-	var toUnsub []string
-	for ch := range channels {
-		if users, exists := b.redisSubs[ch]; exists {
-			delete(users, userID)
-			if len(users) == 0 {
-				delete(b.redisSubs, ch)
-				toUnsub = append(toUnsub, ch)
-			}
-		}
-	}
-
-	if len(toUnsub) > 0 {
-		if err := b.subscriber.Unsubscribe(b.ctx, toUnsub...); err != nil {
-			slog.Error("redis unsubscribe", "error", err, "channels", toUnsub)
-		}
-	}
+	toUnsub := b.releaseLocked(userID, maps.Keys(channels))
+	b.mu.Unlock()
+	b.redisUnsubscribe(toUnsub)
 }
 
 // Subscribe adds Redis channel subscriptions for the given user. New Redis
 // subscriptions are created only for channels that have no local subscribers yet.
 func (b *Broker) Subscribe(userID string, channels []string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.subMu.Lock()
+	defer b.subMu.Unlock()
 
+	b.mu.Lock()
 	if _, ok := b.userSubs[userID]; !ok {
 		b.userSubs[userID] = make(map[string]bool)
 	}
-
 	var toSub []string
 	for _, ch := range channels {
 		b.userSubs[userID][ch] = true
@@ -118,6 +171,7 @@ func (b *Broker) Subscribe(userID string, channels []string) {
 		}
 		b.redisSubs[ch][userID] = true
 	}
+	b.mu.Unlock()
 
 	if len(toSub) > 0 {
 		if err := b.subscriber.Subscribe(b.ctx, toSub...); err != nil {
@@ -129,35 +183,52 @@ func (b *Broker) Subscribe(userID string, channels []string) {
 // Unsubscribe removes Redis channel subscriptions for the given user.
 // Redis channels with no remaining local subscribers are unsubscribed.
 func (b *Broker) Unsubscribe(userID string, channels []string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.subMu.Lock()
+	defer b.subMu.Unlock()
 
+	b.mu.Lock()
 	subs, ok := b.userSubs[userID]
 	if !ok {
+		b.mu.Unlock()
 		return
 	}
-
-	var toUnsub []string
 	for _, ch := range channels {
 		delete(subs, ch)
+	}
+	if len(subs) == 0 {
+		delete(b.userSubs, userID)
+	}
+	toUnsub := b.releaseLocked(userID, slices.Values(channels))
+	b.mu.Unlock()
 
+	b.redisUnsubscribe(toUnsub)
+}
+
+// releaseLocked drops userID from each channel's local subscriber set and
+// returns the channels nobody on this instance listens to any more. Caller
+// holds mu (and subMu, to issue the UNSUBSCRIBE in order).
+func (b *Broker) releaseLocked(userID string, channels iter.Seq[string]) []string {
+	var gone []string
+	for ch := range channels {
 		if users, exists := b.redisSubs[ch]; exists {
 			delete(users, userID)
 			if len(users) == 0 {
 				delete(b.redisSubs, ch)
-				toUnsub = append(toUnsub, ch)
+				gone = append(gone, ch)
 			}
 		}
 	}
+	return gone
+}
 
-	if len(subs) == 0 {
-		delete(b.userSubs, userID)
+// redisUnsubscribe issues the UNSUBSCRIBE for channels that lost their last
+// local subscriber. Caller holds subMu but NOT mu.
+func (b *Broker) redisUnsubscribe(channels []string) {
+	if len(channels) == 0 {
+		return
 	}
-
-	if len(toUnsub) > 0 {
-		if err := b.subscriber.Unsubscribe(b.ctx, toUnsub...); err != nil {
-			slog.Error("redis unsubscribe", "error", err, "channels", toUnsub)
-		}
+	if err := b.subscriber.Unsubscribe(b.ctx, channels...); err != nil {
+		slog.Error("redis unsubscribe", "error", err, "channels", channels)
 	}
 }
 
@@ -183,6 +254,10 @@ func (b *Broker) listen() {
 // fanning out, so the per-client Send (atomic ops) cannot stall concurrent
 // Register/Subscribe calls when many clients are subscribed.
 func (b *Broker) dispatch(msg *redis.Message) {
+	if msg.Channel == MulticastTopic() {
+		b.dispatchMulticast(msg.Payload)
+		return
+	}
 	if b.applyControl(msg) {
 		return
 	}
@@ -194,15 +269,40 @@ func (b *Broker) dispatch(msg *redis.Message) {
 	}
 	targets := make([]*events.Client, 0, len(users))
 	for userID := range users {
-		for client := range b.clients[userID] {
-			targets = append(targets, client)
-		}
+		targets = append(targets, b.clients[userID]...)
 	}
 	b.mu.RUnlock()
 
 	data := []byte(msg.Payload)
 	for _, client := range targets {
 		client.Send(data)
+	}
+}
+
+// dispatchMulticast delivers a PublishMulticast frame: every local socket
+// subscribed to ANY of its topics receives the event exactly once, however
+// many of those topics it shares.
+func (b *Broker) dispatchMulticast(payload string) {
+	var env multicastEnvelope
+	if err := json.Unmarshal([]byte(payload), &env); err != nil || len(env.Event) == 0 {
+		slog.Error("broker: dropping malformed multicast frame", "error", err)
+		return
+	}
+	b.mu.RLock()
+	seen := make(map[string]bool)
+	var targets []*events.Client
+	for _, topic := range env.Topics {
+		for userID := range b.redisSubs[topic] {
+			if !seen[userID] {
+				seen[userID] = true
+				targets = append(targets, b.clients[userID]...)
+			}
+		}
+	}
+	b.mu.RUnlock()
+
+	for _, client := range targets {
+		client.Send(env.Event)
 	}
 }
 
@@ -258,12 +358,11 @@ func (b *Broker) PublishSubscription(ctx context.Context, userID string, topics 
 func (b *Broker) Close() error {
 	b.cancel()
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	for _, set := range b.clients {
-		for client := range set {
+		for _, client := range set {
 			client.Close()
 		}
 	}
+	b.mu.Unlock()
 	return b.subscriber.Close()
 }

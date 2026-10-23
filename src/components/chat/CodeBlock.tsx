@@ -1,7 +1,6 @@
-import { useMemo, type ReactNode } from 'react';
-import { toJsxRuntime } from 'hast-util-to-jsx-runtime';
-import { Fragment, jsx, jsxs } from 'react/jsx-runtime';
-import { highlightToHast, codeFenceLabel } from '@/lib/code-highlight';
+import { useEffect, useSyncExternalStore } from 'react';
+import { codeFenceLabel, supportedHighlightLanguage } from '@/lib/code-fence';
+import { getHighlighter, highlightedCode, loadHighlighter, subscribeHighlighter } from '@/lib/code-highlight-loader';
 import { CopyButton } from '@/components/ui/copy-button';
 
 interface CodeBlockProps {
@@ -12,20 +11,31 @@ interface CodeBlockProps {
 // CodeBlock renders a fenced code block in a message: syntax-highlighted when
 // the fence names a known language (with a line-number gutter), plain
 // otherwise, and always with a "copy code" button.
+//
+// The highlighter loads lazily (lib/code-highlight-loader). A supported block
+// renders at its final size from the first paint — gutter, label and the
+// same text in the same box — and the colours arrive later without moving
+// anything, so the virtualized chat list measures the row once (CLAUDE.md:
+// explicit dimensions for chat-list content).
 export function CodeBlock({ code, language }: CodeBlockProps) {
-  const tree = useMemo(() => highlightToHast(code, language), [code, language]);
   // Validate the fence token against the supported set: a supported language
   // keeps its label, but an unknown one degrades to "plain" rather than leaking
   // an arbitrary token into the label/attribute.
   const langLabel = codeFenceLabel(language);
+  const lang = supportedHighlightLanguage(language);
+  const highlighter = useSyncExternalStore(subscribeHighlighter, getHighlighter);
+  useEffect(() => {
+    if (lang) loadHighlighter();
+  }, [lang]);
   // Fences usually carry a trailing newline; drop one so the gutter doesn't
   // show a phantom final line.
   const display = code.replace(/\n$/, '');
   const lineCount = display.split('\n').length;
-  const highlighted = tree !== null;
-  const rendered: ReactNode = highlighted
-    ? toJsxRuntime(tree, { Fragment, jsx, jsxs })
-    : display;
+  const highlighted = lang !== undefined;
+  // highlightedCode caches per (language, code), so a re-render or a remount
+  // reuses the tokens instead of running the grammar again.
+  const tokens = lang && highlighter ? highlightedCode(highlighter, display, lang) : null;
+  const rendered = tokens ?? display;
 
   return (
     <div className="group relative my-0 overflow-hidden rounded-md bg-muted text-xs font-mono">

@@ -3,8 +3,11 @@ package eventlog
 import (
 	"context"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/hashicorp/golang-lru/v2/expirable"
+	"golang.org/x/sync/singleflight"
 )
 
 // MemberLister is the subset of MembershipStore needed to resolve
@@ -32,76 +35,56 @@ type Resolver struct {
 	// Optional short-TTL cache of topic → recipient IDs. The inbox fan-out
 	// otherwise re-queries DynamoDB membership on EVERY persistent event
 	// (message.new, every reaction/edit, member changes). Off by default
-	// (ttl 0); enabled in production via SetCacheTTL. Bounded staleness means a
+	// (nil); enabled in production via SetCacheTTL. Bounded staleness means a
 	// just-joined member's inbox recipiency is fresh within ttl — and live
 	// delivery (the broker subscription) is already correct on join, so this
 	// only affects reconnect replay during the brief window.
-	mu    sync.Mutex
-	cache map[string]cachedRecipients
-	ttl   time.Duration
-	now   func() time.Time
+	cache atomic.Pointer[expirable.LRU[string, []string]]
+	// lookups collapses concurrent misses for one topic into one store query,
+	// so a burst of events on a busy channel can't stampede DynamoDB.
+	lookups singleflight.Group
 }
 
-type cachedRecipients struct {
-	ids       []string
-	expiresAt time.Time
-}
-
-// recipientCacheMaxEntries bounds the cache: a channel that publishes once and
-// goes dormant would otherwise retain its recipient slice forever (it's never
-// re-resolved to refresh/expire it). At the cap we sweep expired entries — the
-// short TTL means most are stale — keeping retention ~the active topic set.
+// recipientCacheMaxEntries bounds the cache: the least recently resolved
+// topic is evicted at the cap, and expired entries are swept in the
+// background, so a channel that publishes once and goes dormant doesn't keep
+// its recipient slice forever.
 const recipientCacheMaxEntries = 4096
 
 // SetCacheTTL enables (ttl>0) or disables (ttl<=0) the recipient cache.
 func (r *Resolver) SetCacheTTL(ttl time.Duration) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.ttl = ttl
-	r.cache = nil
-}
-
-func (r *Resolver) clock() time.Time {
-	if r.now != nil {
-		return r.now()
+	if ttl <= 0 {
+		r.cache.Store(nil)
+		return
 	}
-	return time.Now()
+	r.cache.Store(expirable.NewLRU[string, []string](recipientCacheMaxEntries, nil, ttl))
 }
 
 // cachedResolve returns a cached recipient list for topic when caching is on
 // and the entry is fresh; otherwise it calls fetch, caches the result, and
-// returns it.
+// returns it. With the cache on, concurrent misses for a topic share one
+// fetch (run with the first caller's context — the publisher's fan-out
+// context, which is already detached from any request and bounded).
 func (r *Resolver) cachedResolve(topic string, fetch func() ([]string, error)) ([]string, error) {
-	r.mu.Lock()
-	if r.ttl > 0 {
-		if e, ok := r.cache[topic]; ok && r.clock().Before(e.expiresAt) {
-			r.mu.Unlock()
-			return e.ids, nil
-		}
+	cache := r.cache.Load()
+	if cache == nil {
+		return fetch()
 	}
-	r.mu.Unlock()
-
-	ids, err := fetch()
+	if ids, ok := cache.Get(topic); ok {
+		return ids, nil
+	}
+	ids, err, _ := r.lookups.Do(topic, func() (any, error) {
+		ids, err := fetch()
+		if err != nil {
+			return nil, err
+		}
+		cache.Add(topic, ids)
+		return ids, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	if r.ttl > 0 {
-		now := r.clock()
-		r.mu.Lock()
-		if r.cache == nil {
-			r.cache = make(map[string]cachedRecipients)
-		}
-		if len(r.cache) >= recipientCacheMaxEntries {
-			for k, e := range r.cache {
-				if !now.Before(e.expiresAt) {
-					delete(r.cache, k)
-				}
-			}
-		}
-		r.cache[topic] = cachedRecipients{ids: ids, expiresAt: now.Add(r.ttl)}
-		r.mu.Unlock()
-	}
-	return ids, nil
+	return ids.([]string), nil
 }
 
 // NewResolver builds a Resolver. Either dependency may be nil — the

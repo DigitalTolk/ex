@@ -127,10 +127,11 @@ func TestThreadFollowStore_SetMany_RetriesOnUnprocessed(t *testing.T) {
 func TestThreadFollowStore_SetMany_ExhaustsRetries(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
+	fastRetries(t, 3)
 	uc := &unprocessedClient{DynamoAPI: db.Client, table: db.Table, remaining: 99}
 	s := NewThreadFollowStore(&DB{Client: uc, Table: db.Table})
 	err := s.SetThreadFollowMany(ctx, []*model.ThreadFollow{makeThreadFollow("u-tf-x", "ch-tf", "root-x")})
-	if err == nil || !strings.Contains(err.Error(), "unprocessed after retries") {
-		t.Fatalf("SetMany exhausted: want 'unprocessed after retries' error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "unprocessed after 3 attempts") {
+		t.Fatalf("SetMany exhausted: want 'unprocessed after 3 attempts' error, got %v", err)
 	}
 }

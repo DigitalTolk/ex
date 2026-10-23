@@ -44,9 +44,9 @@ type faultClient struct {
 	// failPutItemFromCall (1-based) fails PutItem only from the N-th call on —
 	// PutConnector writes the files BEFORE the manifest row, so reaching the
 	// meta-put arm needs the earlier file puts to succeed.
-	failPutItemFromCall int
-	putItemCalls        int
-	failUpdateTimeToLive      bool
+	failPutItemFromCall  int
+	putItemCalls         int
+	failUpdateTimeToLive bool
 
 	// transform*, when set, rewrite the REAL output before returning — used to
 	// feed type-corrupted items (unmarshal error arms), truncated pages and

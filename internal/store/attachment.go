@@ -135,34 +135,17 @@ func (s *AttachmentStoreImpl) GetByID(ctx context.Context, id string) (*model.At
 // BatchGetItem calls instead of a GetItem per ID (message previews, batch
 // endpoints). Missing IDs are absent from the result; order not guaranteed.
 func (s *AttachmentStoreImpl) GetAttachmentsByIDs(ctx context.Context, ids []string) ([]*model.Attachment, error) {
-	out := make([]*model.Attachment, 0, len(ids))
-	const batchSize = 100
-	for start := 0; start < len(ids); start += batchSize {
-		end := min(start+batchSize, len(ids))
-		keys := make([]map[string]types.AttributeValue, 0, end-start)
-		for _, id := range ids[start:end] {
-			keys = append(keys, compositeKey(attachmentPK(id), metaSK()))
-		}
-		req := map[string]types.KeysAndAttributes{s.Table: {Keys: keys}}
-		for {
-			res, err := s.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
-			if err != nil {
-				return nil, fmt.Errorf("store: batch get attachments: %w", err)
-			}
-			for _, item := range res.Responses[s.Table] {
-				var rec attachmentItem
-				if err := attributevalue.UnmarshalMap(item, &rec); err != nil {
-					return nil, fmt.Errorf("store: unmarshal attachment: %w", err)
-				}
-				a := rec.Attachment
-				out = append(out, &a)
-			}
-			// DynamoDB may return unprocessed keys under throttling — drain them.
-			if len(res.UnprocessedKeys) == 0 {
-				break
-			}
-			req = res.UnprocessedKeys
-		}
+	keys := make([]map[string]types.AttributeValue, len(ids))
+	for i, id := range ids {
+		keys[i] = compositeKey(attachmentPK(id), metaSK())
+	}
+	rows, err := batchGetOf[attachmentItem](ctx, s.DB, keys, types.KeysAndAttributes{}, "attachments")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.Attachment, len(rows))
+	for i := range rows {
+		out[i] = &rows[i].Attachment
 	}
 	return out, nil
 }

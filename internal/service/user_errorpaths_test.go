@@ -41,12 +41,17 @@ func TestUser_SetStatus_GetError(t *testing.T) {
 	}
 }
 
+// Behaviour change: SSO accounts can be deactivated by an admin too (the
+// guest-only guard left them unrevocable).
 func TestUser_SetStatus_NonGuest(t *testing.T) {
 	svc, users := newUserSvc()
 	users.users["u1"] = &model.User{ID: "u1", AuthProvider: model.AuthProviderGuest}
 	users.users["u2"] = &model.User{ID: "u2", AuthProvider: "oidc"}
-	if _, err := svc.SetStatus(context.Background(), "u2", true); err == nil {
-		t.Fatal("expected only-guest error")
+	if _, err := svc.SetStatus(context.Background(), "u2", true); err != nil {
+		t.Fatalf("SSO deactivation: %v", err)
+	}
+	if users.users["u2"].Status != "deactivated" || users.users["u2"].DeactivatedBy != model.DeactivatedByAdmin {
+		t.Fatalf("u2 = %+v, want deactivated by admin", users.users["u2"])
 	}
 }
 

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { User as UserIcon, Users, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
-import { useCreateConversation, useSearchUsers, useUserConversations } from '@/hooks/useConversations';
+import { useCreateConversation, useUserLookup, useUserConversations } from '@/hooks/useConversations';
 import { conversationsWith } from '@/lib/conversation-match';
 import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
@@ -28,7 +28,7 @@ export default function NewConversationPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const autoFocusTextInput = useAutoFocusTextInput();
-  const { data: searchResults } = useSearchUsers(query);
+  const { data: searchResults } = useUserLookup(query);
   const { online } = usePresence();
   const createConversation = useCreateConversation();
   // The DMs and group messages you already have with everyone picked, the

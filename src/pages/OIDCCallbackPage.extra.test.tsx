@@ -1,19 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 const mockNavigate = vi.fn();
 const mockSetAuth = vi.fn();
 
-let mockSearchParams = new URLSearchParams();
-
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual('react-router-dom');
   return {
     ...actual,
     useNavigate: () => mockNavigate,
-    useSearchParams: () => [mockSearchParams],
   };
 });
 
@@ -29,37 +26,40 @@ vi.mock('@/context/AuthContext', () => ({
 }));
 
 const mockApiFetch = vi.fn();
-const mockSetAccessToken = vi.fn();
+const mockRefresh = vi.fn();
 vi.mock('@/lib/api', () => ({
-  setAccessToken: (...args: unknown[]) => mockSetAccessToken(...args),
+  refreshAccessToken: () => mockRefresh(),
   apiFetch: (...args: unknown[]) => mockApiFetch(...args),
 }));
 
-const originalFetch = globalThis.fetch;
 const originalLocation = window.location;
 
 import OIDCCallbackPage from './OIDCCallbackPage';
 
-function renderPage() {
+function renderPage(entry: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[entry]}>
         <OIDCCallbackPage />
       </MemoryRouter>
     </QueryClientProvider>,
   );
 }
 
-describe('OIDCCallbackPage - extra coverage', () => {
+// Behaviour change (login CSRF): the page used to sign in with a token from
+// its URL (#token, #access_token, ?token, ?access_token) and to forward
+// ?desktop_code= to /auth/desktop/complete — so a crafted link could sign the
+// clicker into the attacker's account. Every one of those is now ignored:
+// the refresh cookie is the only way in.
+describe('OIDCCallbackPage - URL credentials are ignored', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSearchParams = new URLSearchParams();
     mockApiFetch.mockResolvedValue({ id: 'u-1', displayName: 'T', email: 't@t.com', systemRole: 'member', status: 'active' });
+    mockRefresh.mockResolvedValue(null);
   });
 
   afterEach(() => {
-    globalThis.fetch = originalFetch;
     Object.defineProperty(window, 'location', {
       configurable: true,
       writable: true,
@@ -67,89 +67,55 @@ describe('OIDCCallbackPage - extra coverage', () => {
     });
   });
 
-  it('reads token from URL hash fragment', async () => {
-    Object.defineProperty(window, 'location', {
-      configurable: true,
-      writable: true,
-      value: { ...originalLocation, hash: '#token=hashtok' },
-    });
-
-    renderPage();
-
-    await vi.waitFor(() => {
-      expect(mockSetAccessToken).toHaveBeenCalledWith('hashtok');
-      expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true });
-    });
-  });
-
-  it('reads access_token from URL hash fragment as fallback', async () => {
-    Object.defineProperty(window, 'location', {
-      configurable: true,
-      writable: true,
-      value: { ...originalLocation, hash: '#access_token=at-123' },
-    });
-
-    renderPage();
-
-    await vi.waitFor(() => {
-      expect(mockSetAccessToken).toHaveBeenCalledWith('at-123');
-    });
-  });
-
-  it('reads token from URL search params', async () => {
-    mockSearchParams = new URLSearchParams('token=qstok');
-
-    renderPage();
-
-    await vi.waitFor(() => {
-      expect(mockSetAccessToken).toHaveBeenCalledWith('qstok');
-    });
-  });
-
-  it('redirects to /login when /api/v1/users/me throws after token is set', async () => {
-    mockSearchParams = new URLSearchParams('token=abc');
-    mockApiFetch.mockRejectedValue(new Error('me failed'));
-
-    renderPage();
-
-    await vi.waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true });
-    });
-  });
-
-  it('redirects to /login when refresh fetch throws', async () => {
-    globalThis.fetch = vi.fn().mockRejectedValue(new Error('network'));
-
-    renderPage();
-
-    await vi.waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true });
-    });
-  });
-
-  it('completes a native/desktop deep-link handoff via /auth/desktop/complete', async () => {
+  it.each([
+    ['#token=attacker', '/oidc/callback'],
+    ['#access_token=attacker', '/oidc/callback'],
+    ['', '/oidc/callback?token=attacker'],
+    ['', '/oidc/callback?access_token=attacker'],
+    ['', '/oidc/callback?desktop_code=attacker-code'],
+  ])('hash %j / url %j does not sign in', async (hash, entry) => {
     const replaceMock = vi.fn();
     Object.defineProperty(window, 'location', {
       configurable: true,
       writable: true,
-      value: { ...originalLocation, hash: '', replace: replaceMock },
+      value: { ...originalLocation, hash, replace: replaceMock },
     });
-    mockSearchParams = new URLSearchParams('desktop_code=oneshot-123');
-    globalThis.fetch = vi.fn();
 
-    renderPage();
+    renderPage(entry);
 
-    // Full-page navigation to the server completer (the redirect response
-    // sets the refresh cookie) — no refresh probe, no SPA navigation.
-    await vi.waitFor(() => {
-      expect(replaceMock).toHaveBeenCalledWith('/auth/desktop/complete?code=oneshot-123');
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true });
     });
-    expect(globalThis.fetch).not.toHaveBeenCalled();
-    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+    expect(mockSetAuth).not.toHaveBeenCalled();
+    expect(mockApiFetch).not.toHaveBeenCalled();
+    expect(replaceMock).not.toHaveBeenCalled();
   });
 
-  it('shows the "Completing sign in..." spinner text', () => {
-    renderPage();
-    expect(screen.getByText('Completing sign in...')).toBeInTheDocument();
+  it('a URL token never overrides the session the cookie holds', async () => {
+    mockRefresh.mockResolvedValue('cookie-token');
+    renderPage('/oidc/callback?token=attacker');
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true });
+    });
+    expect(mockSetAuth).toHaveBeenCalledWith('cookie-token', expect.objectContaining({ id: 'u-1' }));
+  });
+
+  it('redirects to /login when /api/v1/users/me fails after refreshing', async () => {
+    mockRefresh.mockResolvedValue('cookie-token');
+    mockApiFetch.mockRejectedValue(new Error('me failed'));
+    renderPage('/oidc/callback');
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true });
+    });
+    expect(mockSetAuth).not.toHaveBeenCalled();
+  });
+
+  it('redirects to /login when the refresh itself fails', async () => {
+    mockRefresh.mockRejectedValue(new Error('network'));
+    renderPage('/oidc/callback');
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true });
+    });
   });
 });

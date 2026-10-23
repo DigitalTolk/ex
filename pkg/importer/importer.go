@@ -79,15 +79,26 @@ type UserCache interface {
 	DeleteUsers(ctx context.Context, userIDs []string) error
 }
 
+// AudienceInvalidator moves the notification audience generations of the
+// channels whose memberships an import changed (cache.RedisCache is one), so
+// every running ex instance alerts the new audience from its very next message
+// instead of a member list it cached before the import.
+type AudienceInvalidator interface {
+	ChannelAudiencesChanged(ctx context.Context, channelIDs ...string) error
+}
+
 // Deps are the importer's collaborators. DB is required; Objects is required
-// for PutAttachment; Search, Indexer and Cache are optional.
+// for PutAttachment; Search, Indexer, Cache and Audiences are optional.
+// Without Audiences, running ex instances may keep alerting a channel's
+// pre-import members for as long as they cache an audience (two minutes).
 type Deps struct {
-	DB      *store.DB
-	Objects ObjectStore
-	Search  SearchIndex
-	Indexer search.Indexer
-	Cache   UserCache
-	TempDir string
+	DB        *store.DB
+	Objects   ObjectStore
+	Search    SearchIndex
+	Indexer   search.Indexer
+	Cache     UserCache
+	Audiences AudienceInvalidator
+	TempDir   string
 	// closer releases connections opened by Open.
 	closer func() error
 }
@@ -103,12 +114,13 @@ type Importer struct {
 	parentIndex   *store.ParentIndexStoreImpl
 	follows       *store.ThreadFollowStoreImpl
 
-	objects ObjectStore
-	search  SearchIndex
-	indexer search.Indexer
-	cache   UserCache
-	tempDir string
-	closer  func() error
+	objects   ObjectStore
+	search    SearchIndex
+	indexer   search.Indexer
+	cache     UserCache
+	audiences AudienceInvalidator
+	tempDir   string
+	closer    func() error
 }
 
 // ErrNoObjectStore is returned by PutAttachment when no object store is set.
@@ -136,6 +148,7 @@ func New(d Deps) (*Importer, error) {
 		search:        d.Search,
 		indexer:       indexer,
 		cache:         d.Cache,
+		audiences:     d.Audiences,
 		tempDir:       d.TempDir,
 		closer:        d.closer,
 	}, nil
@@ -181,6 +194,7 @@ func Open(ctx context.Context, o Options) (*Importer, error) {
 			return nil, fmt.Errorf("importer: redis: %w", err)
 		}
 		d.Cache = c
+		d.Audiences = c
 		d.closer = c.Client().Close
 	}
 	return New(d)

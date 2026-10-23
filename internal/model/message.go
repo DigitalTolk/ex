@@ -53,6 +53,10 @@ type Message struct {
 	WebhookAvatarURL   string              `json:"webhookAvatarURL,omitempty" dynamodbav:"webhookAvatarURL,omitempty"`
 	WebhookIconEmoji   string              `json:"webhookIconEmoji,omitempty" dynamodbav:"webhookIconEmoji,omitempty"` // emoji name (no colons) from icon_emoji; rendered as the avatar
 	MessageAttachments []MessageAttachment `json:"messageAttachments,omitempty" dynamodbav:"messageAttachments,omitempty"`
+	// WebhookID is the incoming webhook that posted the message. Channel
+	// webhooks all author as the shared "webhook" sentinel, so this is what
+	// lets a webhook continue only ITS OWN threads. Internal only.
+	WebhookID string `json:"-" dynamodbav:"webhookID,omitempty"`
 	// AgentInvokerID attributes an agent-authored message to the human whose
 	// invocation produced it. Agents are shared ("gg" belongs to no one), so
 	// a reader — human or another agent's context bundle — needs this to say

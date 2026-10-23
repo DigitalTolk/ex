@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { parseMessage } from '@/lib/ws-schemas';
+import { parseMessage } from '@/test/ws-frames';
 import { renderMarkdown } from '@/lib/markdown';
 import type { Message } from '@/types';
 

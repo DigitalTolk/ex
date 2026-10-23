@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"hash"
 	"image"
-	stddraw "image/draw"
+
 	// Register decoders for the formats the upload pipeline accepts.
 	// image.DecodeConfig dispatches by format magic bytes; without
 	// these blank imports it returns ErrFormat for everything but
@@ -21,6 +21,8 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
+	"log/slog"
+	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -30,10 +32,10 @@ import (
 
 	"github.com/disintegration/imaging"
 	"github.com/gen2brain/webp"
-	"github.com/rwcarlsen/goexif/exif"
-	xdraw "golang.org/x/image/draw"
+	"github.com/hashicorp/golang-lru/v2/expirable"
 	"golang.org/x/sync/semaphore"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
@@ -62,6 +64,7 @@ type AttachmentStore interface {
 // downloading the full payload.
 type AttachmentSigner interface {
 	PresignedGetURL(ctx context.Context, key string, expires time.Duration) (string, error)
+	PresignedInlineURL(ctx context.Context, key, contentType, filename string, expires time.Duration) (string, error)
 	PresignedDownloadURL(ctx context.Context, key, filename string, expires time.Duration) (string, error)
 	PresignRequest(ctx context.Context, method, key string, query url.Values, headers map[string]string, expires time.Duration) (string, map[string]string, error)
 	DeleteObject(ctx context.Context, key string) error
@@ -98,7 +101,27 @@ type AttachmentService struct {
 	inFlightBackfills map[string]struct{}
 	mediaCache        MediaURLCache
 	accessChecker     AttachmentAccessChecker
+	// Thumbnail backfills for images that have none (see
+	// ensureThumbnailsForRead): the ones running, a bound on how many may,
+	// and the attachments whose last attempt failed.
+	thumbnailBackfillMu       sync.Mutex
+	thumbnailBackfills        map[string]struct{}
+	thumbnailBackfillSlots    chan struct{}
+	thumbnailBackfillFailures *expirable.LRU[string, struct{}]
+	// afterThumbnailBackfill observes each finished backfill (tests only).
+	afterThumbnailBackfill func(id string, err error)
+	// mediaGrantKey signs scoped media URLs; mediaAccess caches the access
+	// checks the media route runs for them (see media_grant.go).
+	mediaGrantKey []byte
+	mediaAccess   *expirable.LRU[string, bool]
 }
+
+const (
+	maxThumbnailBackfills        = 4
+	thumbnailBackfillTimeout     = 2 * time.Minute
+	thumbnailBackfillRetryAfter  = time.Hour
+	thumbnailBackfillFailureSize = 10000
+)
 
 // NewAttachmentService constructs an AttachmentService.
 func NewAttachmentService(attachments AttachmentStore, signer AttachmentSigner, publisher Publisher) *AttachmentService {
@@ -110,6 +133,13 @@ func NewAttachmentService(attachments AttachmentStore, signer AttachmentSigner, 
 		// temporary AWS security tokens embedded in presigned URLs never
 		// linger for hours after expiry.
 		urlCache: newPresignedURLCache(20 * time.Hour),
+
+		thumbnailBackfills:        map[string]struct{}{},
+		thumbnailBackfillSlots:    make(chan struct{}, maxThumbnailBackfills),
+		thumbnailBackfillFailures: expirable.NewLRU[string, struct{}](thumbnailBackfillFailureSize, nil, thumbnailBackfillRetryAfter),
+
+		mediaGrantKey: newMediaGrantKey(),
+		mediaAccess:   newMediaAccessCache(),
 	}
 }
 
@@ -178,26 +208,34 @@ type CreateUploadParams struct {
 // URL the client uploads to.
 func (s *AttachmentService) CreateUploadURL(ctx context.Context, p CreateUploadParams) (*CreateUploadResult, error) {
 	if p.UserID == "" {
-		return nil, errors.New("attachment: userID required")
+		return nil, apperr.Invalid("attachment: userID required")
 	}
 	if p.Filename == "" || p.ContentType == "" || p.SHA256 == "" {
-		return nil, errors.New("attachment: filename, contentType, sha256 required")
+		return nil, apperr.Invalid("attachment: filename, contentType, sha256 required")
 	}
 	if !validSHA256Hex(p.SHA256) {
-		return nil, errors.New("attachment: invalid sha256")
+		return nil, apperr.Invalid("attachment: invalid sha256")
 	}
+	// Stored and signed as ONE parsed media type: a browser reads a
+	// Content-Type as a comma list and renders the last type it knows, so
+	// "image/png, text/html" would come back as HTML.
+	mediaType, params, err := mime.ParseMediaType(p.ContentType)
+	if err != nil {
+		return nil, apperr.Invalid("attachment: invalid content type")
+	}
+	p.ContentType = mime.FormatMediaType(mediaType, params)
 	if p.Width < 0 || p.Height < 0 || p.Width > maxAttachmentDimensionPx || p.Height > maxAttachmentDimensionPx {
-		return nil, errors.New("attachment: invalid dimensions")
+		return nil, apperr.Invalid("attachment: invalid dimensions")
 	}
 	if s.signer == nil {
 		return nil, errors.New("attachment: storage not configured")
 	}
 	if s.limits != nil {
 		if !s.limits.AllowsExtension(ctx, p.Filename) {
-			return nil, errors.New("attachment: file extension not allowed by workspace settings")
+			return nil, apperr.Invalid("attachment: file extension not allowed by workspace settings")
 		}
 		if !s.limits.AllowsSize(ctx, p.Size) {
-			return nil, errors.New("attachment: file exceeds the workspace upload size limit")
+			return nil, apperr.Invalid("attachment: file exceeds the workspace upload size limit")
 		}
 	}
 
@@ -205,6 +243,9 @@ func (s *AttachmentService) CreateUploadURL(ctx context.Context, p CreateUploadP
 		// A finished upload is reused outright. An unfinished one (the user
 		// re-attached a file whose upload never completed) comes back to be
 		// resumed: same row, same object key, same multipart upload.
+		if !attachmentUploaded(existing) {
+			s.settleUnfinishedUpload(ctx, existing)
+		}
 		return &CreateUploadResult{Attachment: existing, AlreadyExists: attachmentUploaded(existing)}, nil
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, fmt.Errorf("attachment: lookup hash: %w", err)
@@ -229,6 +270,24 @@ func (s *AttachmentService) CreateUploadURL(ctx context.Context, p CreateUploadP
 	return &CreateUploadResult{Attachment: a}, nil
 }
 
+// settleUnfinishedUpload looks at what an unfinished attachment's key holds
+// before the client uploads to it again. The key is write-once (writeOnce), so
+// an earlier attempt whose bytes landed without the client hearing back would
+// otherwise have every retry refused: a stored object that verifies makes the
+// attachment final, and one that does not is removed so the upload can start
+// over. Nothing stored (or a failed look) leaves the upload to resume.
+func (s *AttachmentService) settleUnfinishedUpload(ctx context.Context, a *model.Attachment) {
+	if _, _, _, _, err := s.signer.StatObject(ctx, a.S3Key); err != nil {
+		return
+	}
+	if err := s.ensureVerified(ctx, a); err == nil {
+		return
+	}
+	if err := s.signer.DeleteObject(ctx, a.S3Key); err != nil {
+		slog.WarnContext(ctx, "attachment: remove unverifiable upload", "attachmentID", a.ID, "error", err)
+	}
+}
+
 // attachmentUploaded reports whether an attachment's object is final: verified
 // by the server, or already sent in a message (rows from before verification
 // was recorded). A final object is immutable — nothing may upload to it again.
@@ -243,6 +302,33 @@ var ErrAttachmentUploaded = errors.New("attachment: already uploaded")
 // uploadRequestTTL bounds each signed upload request. Uppy asks for a fresh
 // signature per request (per part), so it only has to outlive one part.
 const uploadRequestTTL = 15 * time.Minute
+
+// writeOnce is the If-None-Match value signed into every request that writes
+// an attachment's object (the single PUT, the multipart complete): S3 refuses
+// it once the key holds anything. A signed request stays valid for
+// uploadRequestTTL, so without it a request signed before verification could
+// replace the verified bytes afterwards — and the media route serves
+// whatever the key holds.
+const writeOnce = "*"
+
+// multipartAborter is the optional capability of the signer to abort a
+// multipart upload server-side (storage.S3Client has it).
+type multipartAborter interface {
+	AbortMultipartUpload(ctx context.Context, key, uploadID string) error
+}
+
+// abortMultipartUpload discards an open multipart upload, best effort: the
+// conditional complete is what keeps a final object final; this just stops
+// an abandoned upload from completing into an empty key.
+func (s *AttachmentService) abortMultipartUpload(ctx context.Context, a *model.Attachment, uploadID string) {
+	aborter, ok := s.signer.(multipartAborter)
+	if !ok {
+		return
+	}
+	if err := aborter.AbortMultipartUpload(ctx, a.S3Key, uploadID); err != nil {
+		slog.WarnContext(ctx, "attachment: abort multipart upload", "attachmentID", a.ID, "error", err)
+	}
+}
 
 // maxMultipartParts is S3's limit on parts per multipart upload.
 const maxMultipartParts = 10000
@@ -284,7 +370,7 @@ func (s *AttachmentService) SignUploadRequest(ctx context.Context, userID, attac
 		return nil, ErrAttachmentUploaded
 	}
 	if req.Key != a.S3Key {
-		return nil, errors.New("attachment: upload key does not belong to this attachment")
+		return nil, apperr.Invalid("attachment: upload key does not belong to this attachment")
 	}
 	query := url.Values{}
 	headers := map[string]string{}
@@ -294,22 +380,27 @@ func (s *AttachmentService) SignUploadRequest(ctx context.Context, userID, attac
 		// declared SHA-256, so verifying a non-image needs no read-back.
 		headers["Content-Type"] = a.ContentType
 		headers["x-amz-checksum-sha256"] = sha256Base64(a.SHA256)
+		headers["If-None-Match"] = writeOnce
 	case req.UploadID == "" && req.Method == http.MethodPost:
 		query.Set("uploads", "")
 		headers["Content-Type"] = a.ContentType
 	case req.UploadID == "":
-		return nil, fmt.Errorf("attachment: unsupported upload request %s", req.Method)
+		return nil, apperr.Invalid("attachment: unsupported upload request %s", req.Method)
 	case req.Method == http.MethodPut:
 		if req.PartNumber < 1 || req.PartNumber > maxMultipartParts {
-			return nil, fmt.Errorf("attachment: invalid part number %d", req.PartNumber)
+			return nil, apperr.Invalid("attachment: invalid part number %d", req.PartNumber)
 		}
 		query.Set("partNumber", strconv.Itoa(req.PartNumber))
 		query.Set("uploadId", req.UploadID)
-	case req.Method == http.MethodGet, req.Method == http.MethodPost, req.Method == http.MethodDelete:
-		// List parts (resume), complete, abort.
+	case req.Method == http.MethodPost:
+		// Complete: writes the object, so it is conditional like the PUT.
+		query.Set("uploadId", req.UploadID)
+		headers["If-None-Match"] = writeOnce
+	case req.Method == http.MethodGet, req.Method == http.MethodDelete:
+		// List parts (resume), abort.
 		query.Set("uploadId", req.UploadID)
 	default:
-		return nil, fmt.Errorf("attachment: unsupported upload request %s", req.Method)
+		return nil, apperr.Invalid("attachment: unsupported upload request %s", req.Method)
 	}
 	if err := s.trackMultipartUpload(ctx, a, req); err != nil {
 		return nil, err
@@ -335,6 +426,11 @@ func (s *AttachmentService) trackMultipartUpload(ctx context.Context, a *model.A
 	}
 	if next == a.MultipartUploadID {
 		return nil
+	}
+	if next != "" && a.MultipartUploadID != "" {
+		// The client moved on to a new upload: one open upload per
+		// attachment, so nothing signed for the old one completes later.
+		s.abortMultipartUpload(ctx, a, a.MultipartUploadID)
 	}
 	if err := s.attachments.SetMultipartUploadID(ctx, a.ID, next); err != nil {
 		return fmt.Errorf("attachment: track multipart upload: %w", err)
@@ -382,16 +478,17 @@ func (s *AttachmentService) Get(ctx context.Context, id string) (*model.Attachme
 	if err != nil {
 		return nil, fmt.Errorf("attachment: get: %w", err)
 	}
-	s.finishRead(ctx, a)
+	s.finishRead(ctx, a, nil)
 	return a, nil
 }
 
 // finishRead applies the shared read-side enrichment: thumbnail assurance,
-// presigned/media URLs and the legacy image-dimension backfill.
-func (s *AttachmentService) finishRead(ctx context.Context, a *model.Attachment) {
+// presigned/media URLs and the legacy image-dimension backfill. grant, when
+// set, scopes the media URLs to the user reading (see MediaGrant).
+func (s *AttachmentService) finishRead(ctx context.Context, a *model.Attachment, grant *MediaGrant) {
 	s.ensureThumbnailsForRead(ctx, a)
 	if s.signer != nil && a.S3Key != "" {
-		s.resolveAttachmentURLs(ctx, a)
+		s.resolveAttachmentURLs(ctx, a, grant)
 	}
 	if a.IsImage() && a.Width == 0 && a.Height == 0 && a.S3Key != "" && s.signer != nil {
 		s.scheduleDimensionsBackfill(a.ID, a.S3Key)
@@ -434,7 +531,7 @@ func (s *AttachmentService) LoadForPreview(ctx context.Context, ids []string) []
 		if a == nil {
 			continue
 		}
-		s.finishRead(ctx, a)
+		s.finishRead(ctx, a, nil)
 		out = append(out, a)
 	}
 	return out
@@ -455,7 +552,7 @@ func (s *AttachmentService) GetForUser(ctx context.Context, userID, id, parentID
 	if !allowed {
 		return nil, store.ErrNotFound
 	}
-	s.finishRead(ctx, a)
+	s.finishRead(ctx, a, &MediaGrant{UserID: userID, ParentID: parentID, ParentType: parentType, MessageID: messageID})
 	return a, nil
 }
 
@@ -555,16 +652,19 @@ func (s *AttachmentService) canAccessAttachment(ctx context.Context, userID stri
 	}
 }
 
-func (s *AttachmentService) resolveAttachmentURLs(ctx context.Context, a *model.Attachment) {
+func (s *AttachmentService) resolveAttachmentURLs(ctx context.Context, a *model.Attachment, grant *MediaGrant) {
 	if s.mediaCache != nil {
-		if mediaURL, err := s.mediaURL(ctx, a); err == nil {
+		if mediaURL, err := s.mediaURLForObject(ctx, "attachment", a.ID, a.S3Key, a.Filename, a.ContentType, a.Size, grant); err == nil {
 			a.URL = mediaURL
 		}
 	}
 	if a.URL == "" {
-		if url, err := s.urlCache.getOrSign(ctx, presignedKey{op: "get", key: a.S3Key},
+		// Straight from S3, which would answer with whatever type the
+		// uploader declared: the URL pins the type served and forces a
+		// download for scriptable ones.
+		if url, err := s.urlCache.getOrSign(ctx, presignedKey{op: "inline", key: a.S3Key, extra: a.ContentType},
 			func(ctx context.Context) (string, error) {
-				return s.signer.PresignedGetURL(ctx, a.S3Key, AttachmentURLTTL)
+				return s.signer.PresignedInlineURL(ctx, a.S3Key, a.ContentType, a.Filename, AttachmentURLTTL)
 			}); err == nil {
 			a.URL = url
 		}
@@ -577,7 +677,7 @@ func (s *AttachmentService) resolveAttachmentURLs(ctx context.Context, a *model.
 	}
 	if a.ThumbnailS3Key != "" {
 		if s.mediaCache != nil {
-			if mediaURL, err := s.mediaURLForObject(ctx, "attachment-thumb", a.ID, a.ThumbnailS3Key, thumbnailFilename(a.Filename), "image/webp", 0); err == nil {
+			if mediaURL, err := s.mediaURLForObject(ctx, "attachment-thumb", a.ID, a.ThumbnailS3Key, thumbnailFilename(a.Filename), "image/webp", 0, grant); err == nil {
 				a.ThumbnailURL = mediaURL
 			}
 		}
@@ -592,7 +692,7 @@ func (s *AttachmentService) resolveAttachmentURLs(ctx context.Context, a *model.
 	}
 	if a.SquareThumbnailS3Key != "" {
 		if s.mediaCache != nil {
-			if mediaURL, err := s.mediaURLForObject(ctx, "attachment-square-thumb", a.ID, a.SquareThumbnailS3Key, squareThumbnailFilename(a.Filename), "image/webp", 0); err == nil {
+			if mediaURL, err := s.mediaURLForObject(ctx, "attachment-square-thumb", a.ID, a.SquareThumbnailS3Key, squareThumbnailFilename(a.Filename), "image/webp", 0, grant); err == nil {
 				a.SquareThumbnailURL = mediaURL
 			}
 		}
@@ -607,11 +707,12 @@ func (s *AttachmentService) resolveAttachmentURLs(ctx context.Context, a *model.
 	}
 }
 
-func (s *AttachmentService) mediaURL(ctx context.Context, a *model.Attachment) (string, error) {
-	return s.mediaURLForObject(ctx, "attachment", a.ID, a.S3Key, a.Filename, a.ContentType, a.Size)
-}
-
-func (s *AttachmentService) mediaURLForObject(ctx context.Context, namespace, id, s3Key, filename, contentType string, size int64) (string, error) {
+// mediaURLForObject is the stable media URL of one of an attachment's
+// objects: scoped to the user in grant, or a plain capability without one.
+func (s *AttachmentService) mediaURLForObject(ctx context.Context, namespace, id, s3Key, filename, contentType string, size int64, grant *MediaGrant) (string, error) {
+	if grant != nil {
+		return s.scopedMediaURL(ctx, namespace, id, s3Key, filename, contentType, size, *grant)
+	}
 	return StableMediaURL(ctx, s.mediaCache, namespace, id, s3Key, filename, contentType, size)
 }
 
@@ -629,25 +730,68 @@ func squareThumbnailFilename(filename string) string {
 	return filename + ".square.webp"
 }
 
-func (s *AttachmentService) ensureThumbnailsForRead(ctx context.Context, a *model.Attachment) {
+// ensureThumbnailsForRead schedules thumbnails for an image that has none (an
+// upload from before thumbnails existed) and reports whether it did. It never
+// verifies on the read itself: that streams and hashes the whole object, and
+// doing it inline cost a full download on every read of such an image by
+// every viewer. The work runs in the background, one attempt per attachment
+// at a time, at most maxThumbnailBackfills at once, and an attempt that
+// fails is remembered for thumbnailBackfillRetryAfter instead of repeated.
+func (s *AttachmentService) ensureThumbnailsForRead(_ context.Context, a *model.Attachment) bool {
 	if s.signer == nil || a == nil || a.S3Key == "" || a.Size <= 0 || a.SHA256 == "" {
-		return
+		return false
 	}
 	if !attachmentNeedsThumbnails(a.ContentType) || (a.ThumbnailS3Key != "" && a.SquareThumbnailS3Key != "") {
-		return
+		return false
 	}
 	// An image already known to exceed the decode budget never gets
-	// thumbnails; re-streaming it on every read would only rediscover that.
-	if imageDecodeCost(a.Width, a.Height) > maxImageDecodeBytes {
-		return
+	// thumbnails; re-streaming it would only rediscover that.
+	if imageDecodeCost(a.Width, a.Height) > maxImageDecodeBytes || s.thumbnailBackfillFailures.Contains(a.ID) {
+		return false
 	}
-	_ = s.ensureVerified(ctx, a)
+	s.thumbnailBackfillMu.Lock()
+	defer s.thumbnailBackfillMu.Unlock()
+	if _, busy := s.thumbnailBackfills[a.ID]; busy {
+		return false
+	}
+	select {
+	case s.thumbnailBackfillSlots <- struct{}{}:
+	default:
+		return false
+	}
+	s.thumbnailBackfills[a.ID] = struct{}{}
+	// A copy: the caller goes on to sign URLs on (and serialize) its own.
+	row := *a
+	go s.backfillThumbnails(&row)
+	return true
+}
+
+func (s *AttachmentService) backfillThumbnails(a *model.Attachment) {
+	defer safe.Recover()
+	defer func() {
+		s.thumbnailBackfillMu.Lock()
+		delete(s.thumbnailBackfills, a.ID)
+		s.thumbnailBackfillMu.Unlock()
+		<-s.thumbnailBackfillSlots
+	}()
+	// Not the request's context: the read that scheduled this has returned.
+	ctx, cancel := context.WithTimeout(context.Background(), thumbnailBackfillTimeout)
+	defer cancel()
+	err := s.ensureVerified(ctx, a)
+	if err != nil {
+		s.thumbnailBackfillFailures.Add(a.ID, struct{}{})
+	}
+	if s.afterThumbnailBackfill != nil {
+		s.afterThumbnailBackfill(a.ID, err)
+	}
 }
 
 // OpenMedia opens the attachment behind a media token: all of it, or the one
 // byte range in byteRange (an HTTP Range value).
-func (s *AttachmentService) OpenMedia(ctx context.Context, token, byteRange string) (*MediaObject, error) {
-	return OpenStableMedia(ctx, s.mediaCache, s.signer, token, byteRange)
+func (s *AttachmentService) OpenMedia(ctx context.Context, token, grant, byteRange string) (*MediaObject, error) {
+	return openStableMedia(ctx, s.mediaCache, s.signer, token, byteRange, func(rec mediaRecord) error {
+		return s.authorizeMedia(ctx, rec, token, grant)
+	})
 }
 
 // scheduleDimensionsBackfill kicks off a one-shot goroutine that
@@ -687,13 +831,39 @@ func (s *AttachmentService) scheduleDimensionsBackfill(id, s3Key string) {
 		if err != nil || len(buf) == 0 {
 			return
 		}
-		cfg, _, err := image.DecodeConfig(bytes.NewReader(buf))
+		cfg, format, err := image.DecodeConfig(bytes.NewReader(buf))
 		if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
 			return
 		}
-		cfg = upright(cfg, exifOrientation(buf))
+		cfg = s.uprightSize(ctx, s3Key, format, cfg)
 		_ = s.attachments.SetDimensions(ctx, id, cfg.Width, cfg.Height)
 	}()
+}
+
+// uprightSize is the size a stored image is shown at. Only a JPEG can be
+// stored turned (EXIF orientation), and only decoding it says which way, so a
+// JPEG that fits the decode budget is decoded upright; anything else — or a
+// JPEG that cannot be decoded now — keeps the stored size.
+func (s *AttachmentService) uprightSize(ctx context.Context, s3Key, format string, stored image.Config) image.Config {
+	cost := imageDecodeCostFor(format, stored.Width, stored.Height)
+	if format != "jpeg" || cost > maxImageDecodeBytes {
+		return stored
+	}
+	if err := imageDecodeBudget.Acquire(ctx, cost); err != nil {
+		return stored
+	}
+	defer imageDecodeBudget.Release(cost)
+	body, _, _, _, err := s.signer.GetObject(ctx, s3Key)
+	if err != nil {
+		return stored
+	}
+	defer func() { _ = body.Close() }()
+	img, err := imaging.Decode(body, imaging.AutoOrientation(true))
+	if err != nil {
+		return stored
+	}
+	stored.Width, stored.Height = img.Bounds().Dx(), img.Bounds().Dy()
+	return stored
 }
 
 // GetMany resolves a list of attachment IDs in parallel. Missing IDs are
@@ -741,7 +911,7 @@ func (s *AttachmentService) GetManyForUser(ctx context.Context, userID string, i
 		return nil, nil
 	}
 	if len(ids) > MaxAttachmentBatchIDs {
-		return nil, fmt.Errorf("attachment: too many IDs")
+		return nil, apperr.Invalid("attachment: too many IDs")
 	}
 	// Resolve the message's referenced-attachment set once for the whole
 	// batch. nil = capability unavailable → per-item checks below.
@@ -786,7 +956,7 @@ func (s *AttachmentService) GetManyForUser(ctx context.Context, userID string, i
 					errs[i] = store.ErrNotFound
 					return
 				}
-				s.finishRead(ctx, a)
+				s.finishRead(ctx, a, &MediaGrant{UserID: userID, ParentID: parentID, ParentType: parentType, MessageID: messageID})
 				results[i] = a
 				return
 			}
@@ -831,7 +1001,7 @@ func (s *AttachmentService) AddRef(ctx context.Context, attachmentID, messageID 
 // message attachment.
 func (s *AttachmentService) ValidateForUse(ctx context.Context, attachmentID string) error {
 	if attachmentID == "" {
-		return errors.New("attachment: id required")
+		return apperr.Invalid("attachment: id required")
 	}
 	a, err := s.attachments.GetByID(ctx, attachmentID)
 	if err != nil {
@@ -872,10 +1042,10 @@ func (s *AttachmentService) syncImageDimensions(ctx context.Context, a *model.At
 // same path as a final guard in case a client skips this endpoint.
 func (s *AttachmentService) ProcessUpload(ctx context.Context, userID, attachmentID string) (*model.Attachment, error) {
 	if userID == "" {
-		return nil, errors.New("attachment: userID required")
+		return nil, apperr.Invalid("attachment: userID required")
 	}
 	if attachmentID == "" {
-		return nil, errors.New("attachment: id required")
+		return nil, apperr.Invalid("attachment: id required")
 	}
 	a, err := s.attachments.GetByID(ctx, attachmentID)
 	if err != nil {
@@ -891,7 +1061,7 @@ func (s *AttachmentService) ProcessUpload(ctx context.Context, userID, attachmen
 		return nil, err
 	}
 	if s.signer != nil && a.S3Key != "" {
-		s.resolveAttachmentURLs(ctx, a)
+		s.resolveAttachmentURLs(ctx, a, nil)
 	}
 	return a, nil
 }
@@ -960,7 +1130,7 @@ func (s *AttachmentService) ensureVerified(ctx context.Context, a *model.Attachm
 		return fmt.Errorf("attachment: object missing: %w", err)
 	}
 	if size != a.Size {
-		return fmt.Errorf("attachment: object size mismatch: got %d want %d", size, a.Size)
+		return apperr.Invalid("attachment: object size mismatch: got %d want %d", size, a.Size)
 	}
 	thumbsMissing := attachmentNeedsThumbnails(a.ContentType) && (a.ThumbnailS3Key == "" || a.SquareThumbnailS3Key == "")
 	if a.VerifiedETag != "" && etag == a.VerifiedETag && !thumbsMissing {
@@ -971,7 +1141,7 @@ func (s *AttachmentService) ensureVerified(ctx context.Context, a *model.Attachm
 			return err
 		}
 		if checksum != sha256Base64(a.SHA256) {
-			return errors.New("attachment: sha256 mismatch")
+			return apperr.Invalid("attachment: sha256 mismatch")
 		}
 		// A file that claims to be a PDF or a video is read as far as it
 		// takes to see what it is.
@@ -1002,6 +1172,15 @@ func (s *AttachmentService) recordVerified(ctx context.Context, a *model.Attachm
 		return fmt.Errorf("attachment: record verification: %w", err)
 	}
 	a.VerifiedETag = etag
+	// The object is final: whatever upload the server still tracks for it
+	// (completed, or one staged next to a single PUT) has nothing left to do.
+	if a.MultipartUploadID != "" {
+		s.abortMultipartUpload(ctx, a, a.MultipartUploadID)
+		if err := s.attachments.SetMultipartUploadID(ctx, a.ID, ""); err != nil {
+			return fmt.Errorf("attachment: forget multipart upload: %w", err)
+		}
+		a.MultipartUploadID = ""
+	}
 	return nil
 }
 
@@ -1023,7 +1202,7 @@ func (s *AttachmentService) verifyObject(ctx context.Context, a *model.Attachmen
 	}
 	defer func() { _ = body.Close() }()
 	if objectSize > 0 && objectSize != a.Size {
-		return "", fmt.Errorf("attachment: object size mismatch: got %d want %d", objectSize, a.Size)
+		return "", apperr.Invalid("attachment: object size mismatch: got %d want %d", objectSize, a.Size)
 	}
 
 	stream := &hashingReader{r: io.LimitReader(body, a.Size+1), h: sha256.New()}
@@ -1040,10 +1219,10 @@ func (s *AttachmentService) verifyObject(ctx context.Context, a *model.Attachmen
 		return "", fmt.Errorf("attachment: read object: %w", stream.err)
 	}
 	if stream.n != a.Size {
-		return "", fmt.Errorf("attachment: object size mismatch: got %d want %d", stream.n, a.Size)
+		return "", apperr.Invalid("attachment: object size mismatch: got %d want %d", stream.n, a.Size)
 	}
 	if !strings.EqualFold(hex.EncodeToString(stream.h.Sum(nil)), a.SHA256) {
-		return "", errors.New("attachment: sha256 mismatch")
+		return "", apperr.Invalid("attachment: sha256 mismatch")
 	}
 	if contentErr != nil {
 		return "", contentErr
@@ -1069,7 +1248,7 @@ func checkObjectContentType(declared, objectContentType string) error {
 	declared = normalizeContentType(declared)
 	objectContentType = normalizeContentType(objectContentType)
 	if objectContentType != "" && declared != "" && objectContentType != declared && declared != "application/octet-stream" {
-		return fmt.Errorf("attachment: object content type %q does not match declared %q", objectContentType, declared)
+		return apperr.Invalid("attachment: object content type %q does not match declared %q", objectContentType, declared)
 	}
 	return nil
 }
@@ -1102,39 +1281,31 @@ func inspectContent(ctx context.Context, a *model.Attachment, objectContentType 
 	// has, and a transport failure resurfaces on the next read.
 	sniff, _ := r.Peek(512)
 	if http.DetectContentType(sniff) == "application/octet-stream" {
-		return cfg, nil, noop, errors.New("attachment: could not detect image content type")
+		return cfg, nil, noop, apperr.Invalid("attachment: could not detect image content type")
 	}
 	var header bytes.Buffer
 	cfg, format, err := image.DecodeConfig(io.TeeReader(io.LimitReader(r, maxImageHeaderBytes), &header))
 	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
-		return cfg, nil, noop, errors.New("attachment: invalid image")
+		return cfg, nil, noop, apperr.Invalid("attachment: invalid image")
 	}
 	// A phone stores a portrait photo's pixels sideways and says so in its
 	// EXIF orientation; it is shown upright, and the browser measured it so.
-	// From here on the image's size is the size it is shown at.
-	orientation := exifOrientation(header.Bytes())
-	stored := cfg
-	cfg = upright(cfg, orientation)
-	if a.Width != stored.Width || a.Height != stored.Height {
-		if a.Width > 0 && a.Width != cfg.Width {
-			return cfg, nil, noop, fmt.Errorf("attachment: image width mismatch: got %d want %d", cfg.Width, a.Width)
-		}
-		if a.Height > 0 && a.Height != cfg.Height {
-			return cfg, nil, noop, fmt.Errorf("attachment: image height mismatch: got %d want %d", cfg.Height, a.Height)
-		}
+	// DecodeConfig reports the stored size, so a claim matching either
+	// orientation of it is this photo — and the claim, the size the client
+	// saw, is the one kept. Decoding below replaces it with the upright pixels'
+	// own size.
+	cfg, ok := claimedSize(a, cfg)
+	if !ok {
+		return cfg, nil, noop, apperr.Invalid("attachment: image size mismatch: got %dx%d want %dx%d", cfg.Width, cfg.Height, a.Width, a.Height)
 	}
 	expectedFormat := strings.TrimPrefix(declared, "image/")
 	if expectedFormat == "jpg" {
 		expectedFormat = "jpeg"
 	}
 	if format != expectedFormat {
-		return cfg, nil, noop, fmt.Errorf("attachment: image format %q does not match declared %q", format, declared)
+		return cfg, nil, noop, apperr.Invalid("attachment: image format %q does not match declared %q", format, declared)
 	}
-	cost := imageDecodeCost(cfg.Width, cfg.Height)
-	if orientation != 1 {
-		// Turning it upright is a second copy of the pixels.
-		cost *= 2
-	}
+	cost := imageDecodeCostFor(format, cfg.Width, cfg.Height)
 	if !decode || cost > maxImageDecodeBytes {
 		return cfg, nil, noop, nil
 	}
@@ -1143,61 +1314,40 @@ func inspectContent(ctx context.Context, a *model.Attachment, objectContentType 
 	}
 	release := sync.OnceFunc(func() { imageDecodeBudget.Release(cost) })
 	// DecodeConfig consumed the header from r; replay it ahead of the rest.
-	img, _, err := image.Decode(io.MultiReader(&header, r))
+	img, err := imaging.Decode(io.MultiReader(&header, r), imaging.AutoOrientation(true))
 	if err != nil {
 		release()
 		return cfg, nil, noop, fmt.Errorf("attachment: decode image for thumbnails: %w", err)
 	}
-	return cfg, orient(img, orientation), release, nil
+	b := img.Bounds()
+	return image.Config{ColorModel: cfg.ColorModel, Width: b.Dx(), Height: b.Dy()}, img, release, nil
 }
 
-// exifOrientation reads an image's EXIF orientation (1–8) from the start of
-// its file: 1, as stored, when it has none.
-func exifOrientation(header []byte) int {
-	x, err := exif.Decode(bytes.NewReader(header))
-	if err != nil {
-		return 1
+// claimedSize checks the client's claimed size (0 = not measured) against an
+// image's stored size: it fits when every measured side matches the stored
+// size, or the stored size turned a quarter. It returns the size to keep: the
+// claim, with any unmeasured side taken from the orientation it matched.
+func claimedSize(a *model.Attachment, stored image.Config) (image.Config, bool) {
+	fits := func(w, h int) bool { return (a.Width == 0 || a.Width == w) && (a.Height == 0 || a.Height == h) }
+	switch {
+	case fits(stored.Width, stored.Height):
+		return stored, true
+	case fits(stored.Height, stored.Width):
+		stored.Width, stored.Height = stored.Height, stored.Width
+		return stored, true
 	}
-	tag, err := x.Get(exif.Orientation)
-	if err != nil {
-		return 1
-	}
-	o, err := tag.Int(0)
-	if err != nil || o < 1 || o > 8 {
-		return 1
-	}
-	return o
+	return stored, false
 }
 
-// upright is an image's size as shown: orientations 5–8 turn it a quarter,
-// swapping its width and height.
-func upright(cfg image.Config, orientation int) image.Config {
-	if orientation >= 5 {
-		cfg.Width, cfg.Height = cfg.Height, cfg.Width
+// imageDecodeCostFor is the decode budget an image of format needs: its
+// decoded frame plus, for a JPEG, the upright NRGBA copy auto-orientation may
+// make of it (whether it will is only known once decoding has started).
+func imageDecodeCostFor(format string, width, height int) int64 {
+	cost := imageDecodeCost(width, height)
+	if format == "jpeg" {
+		cost += int64(width) * int64(height) * 4
 	}
-	return cfg
-}
-
-// orient turns decoded pixels the way their EXIF orientation says they are
-// shown, so a thumbnail (which carries no EXIF) stands upright too.
-func orient(img image.Image, orientation int) image.Image {
-	switch orientation {
-	case 2:
-		return imaging.FlipH(img)
-	case 3:
-		return imaging.Rotate180(img)
-	case 4:
-		return imaging.FlipV(img)
-	case 5:
-		return imaging.Transpose(img)
-	case 6:
-		return imaging.Rotate270(img)
-	case 7:
-		return imaging.Transverse(img)
-	case 8:
-		return imaging.Rotate90(img)
-	}
-	return img
+	return cost
 }
 
 // storeThumbnails encodes both thumbnails, hands the decoded image's budget
@@ -1256,35 +1406,19 @@ func encodeWebPThumbnail(src image.Image, mode thumbnailMode) ([]byte, error) {
 	if src == nil {
 		return nil, errors.New("missing image")
 	}
-	srcBounds := src.Bounds()
-	srcWidth := srcBounds.Dx()
-	srcHeight := srcBounds.Dy()
-	if srcWidth <= 0 || srcHeight <= 0 {
+	if b := src.Bounds(); b.Dx() <= 0 || b.Dy() <= 0 {
 		return nil, errors.New("invalid image dimensions")
 	}
 
-	drawSrc := src
-	srcRect := srcBounds
-	var dstWidth int
-	var dstHeight int
+	// One resizer for every picture the server makes (avatars too): imaging's
+	// Lanczos. The message thumbnail fits the box and is never enlarged; the
+	// square one is the centre crop, scaled to size.
+	var dst *image.NRGBA
 	if mode == thumbnailModeSquare {
-		side := min(srcWidth, srcHeight)
-		x0 := srcBounds.Min.X + (srcWidth-side)/2
-		y0 := srcBounds.Min.Y + (srcHeight-side)/2
-		srcRect = image.Rect(x0, y0, x0+side, y0+side)
-		dstWidth = squareThumbnailSize
-		dstHeight = squareThumbnailSize
+		dst = imaging.Fill(src, squareThumbnailSize, squareThumbnailSize, imaging.Center, imaging.Lanczos)
 	} else {
-		scale := min(1, min(
-			float64(messageThumbnailMaxWidth)/float64(srcWidth),
-			float64(messageThumbnailMaxHeight)/float64(srcHeight),
-		))
-		dstWidth = max(1, int(float64(srcWidth)*scale+0.5))
-		dstHeight = max(1, int(float64(srcHeight)*scale+0.5))
+		dst = imaging.Fit(src, messageThumbnailMaxWidth, messageThumbnailMaxHeight, imaging.Lanczos)
 	}
-	dst := image.NewNRGBA(image.Rect(0, 0, dstWidth, dstHeight))
-	stddraw.Draw(dst, dst.Bounds(), image.Transparent, image.Point{}, stddraw.Src)
-	xdraw.CatmullRom.Scale(dst, dst.Bounds(), drawSrc, srcRect, stddraw.Over, nil)
 
 	var out bytes.Buffer
 	if err := webpEncode(&out, dst, lossyWebP); err != nil {
@@ -1305,7 +1439,7 @@ func validateSVG(r io.Reader) error {
 			break
 		}
 		if err != nil {
-			return errors.New("attachment: invalid svg")
+			return apperr.Invalid("attachment: invalid svg")
 		}
 		start, ok := tok.(xml.StartElement)
 		if !ok {
@@ -1314,23 +1448,23 @@ func validateSVG(r io.Reader) error {
 		name := strings.ToLower(start.Name.Local)
 		if !sawRoot {
 			if name != "svg" {
-				return errors.New("attachment: invalid svg root")
+				return apperr.Invalid("attachment: invalid svg root")
 			}
 			sawRoot = true
 		}
 		if name == "script" || name == "foreignobject" {
-			return errors.New("attachment: unsafe svg")
+			return apperr.Invalid("attachment: unsafe svg")
 		}
 		for _, attr := range start.Attr {
 			attrName := strings.ToLower(attr.Name.Local)
 			attrValue := strings.ToLower(strings.TrimSpace(attr.Value))
 			if strings.HasPrefix(attrName, "on") || ((attrName == "href" || attrName == "src") && strings.HasPrefix(attrValue, "javascript:")) {
-				return errors.New("attachment: unsafe svg")
+				return apperr.Invalid("attachment: unsafe svg")
 			}
 		}
 	}
 	if !sawRoot {
-		return errors.New("attachment: invalid svg")
+		return apperr.Invalid("attachment: invalid svg")
 	}
 	return nil
 }
@@ -1370,10 +1504,10 @@ func (s *AttachmentService) DeleteDraft(ctx context.Context, userID, attachmentI
 		return fmt.Errorf("attachment: get for delete: %w", err)
 	}
 	if a.CreatedBy != userID {
-		return errors.New("attachment: not authorized")
+		return apperr.Forbidden("attachment: not authorized")
 	}
 	if len(a.MessageIDs) > 0 {
-		return errors.New("attachment: still referenced by sent messages")
+		return apperr.Conflict("attachment: still referenced by sent messages")
 	}
 	s.deleteAttachmentObjects(ctx, a)
 	if err := s.attachments.Delete(ctx, attachmentID); err != nil {

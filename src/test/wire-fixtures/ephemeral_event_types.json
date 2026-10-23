@@ -1,0 +1,18 @@
+[
+  "activity.new",
+  "activity.read",
+  "auth.force_logout",
+  "broker.subscribe",
+  "broker.unsubscribe",
+  "notification.new",
+  "ping",
+  "presence.changed",
+  "reminders.changed",
+  "replay.done",
+  "replay.exhausted",
+  "run.progress",
+  "scheduled_messages.changed",
+  "server.version",
+  "thread.updated",
+  "typing"
+]

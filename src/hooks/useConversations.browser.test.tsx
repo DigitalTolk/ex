@@ -7,10 +7,9 @@ import {
   useConversation,
   useCreateConversation,
   useOpenDM,
-  useSearchUsers,
+  useUserLookup,
   useAllUsers,
 } from './useConversations';
-import { TOAST_EVENT } from '@/lib/toast';
 
 // Browser-gate coverage for the conversation/user React Query hooks. None had
 // a browser test; they were only covered transitively.
@@ -18,6 +17,10 @@ import { TOAST_EVENT } from '@/lib/toast';
 const apiFetchMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api', () => ({
   apiFetch: (...args: unknown[]) => apiFetchMock(...args),
+}));
+const showToastMock = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/toast', () => ({
+  showToast: (...args: unknown[]) => showToastMock(...args),
 }));
 
 // vitest-browser-react's cleanup() is not awaited on WebKit, so a prior probe
@@ -100,22 +103,22 @@ describe('useConversations queries', () => {
     expect(screen.getByTestId('probe').element().getAttribute('data-data')).toBe('null');
   });
 
-  it('useSearchUsers coerces a non-array response to []', async () => {
+  it('useUserLookup coerces a non-array response to []', async () => {
     apiFetchMock.mockResolvedValue(undefined);
-    const screen = await renderHook(() => useSearchUsers('alice'));
+    const screen = await renderHook(() => useUserLookup('alice'));
     await new Promise((r) => setTimeout(r, 100));
     expect(screen.getByTestId('probe').element().getAttribute('data-data')).toBe('[]');
   });
 
-  it('useSearchUsers stays disabled under 2 chars', async () => {
-    await renderHook(() => useSearchUsers('a'));
+  it('useUserLookup stays disabled under 2 chars', async () => {
+    await renderHook(() => useUserLookup('a'));
     await new Promise((r) => setTimeout(r, 50));
     expect(apiFetchMock).not.toHaveBeenCalled();
   });
 
-  it('useSearchUsers fetches /users?q= at >= 2 chars', async () => {
+  it('useUserLookup fetches /users?q= at >= 2 chars', async () => {
     apiFetchMock.mockResolvedValue([{ id: 'u-1', email: 'a@x', displayName: 'A' }]);
-    const screen = await renderHook(() => useSearchUsers('al'));
+    const screen = await renderHook(() => useUserLookup('al'));
     await new Promise((r) => setTimeout(r, 100));
     expect(screen.getByTestId('probe').element().getAttribute('data-call')).toContain('/api/v1/users?q=al');
   });
@@ -173,20 +176,14 @@ describe('useOpenDM', () => {
   it('on failure shows an error toast, stays put, and leaves caller state alone', async () => {
     apiFetchMock.mockRejectedValue(new Error('nope'));
     const callerOnSuccess = vi.fn();
-    const toasts: string[] = [];
-    const onToast = (e: Event) => toasts.push((e as CustomEvent<{ message: string }>).detail.message);
-    window.addEventListener(TOAST_EVENT, onToast);
-    try {
-      const screen = await renderOpenDM(callerOnSuccess);
-      (screen.getByTestId('open-dm').element() as HTMLButtonElement).click();
-      await vi.waitFor(() => {
-        expect(toasts).toEqual(['Could not open the conversation — please try again.']);
-      });
-      expect(screen.getByTestId('path').element().textContent).toBe('/');
-      expect(callerOnSuccess).not.toHaveBeenCalled();
-    } finally {
-      window.removeEventListener(TOAST_EVENT, onToast);
-    }
+    showToastMock.mockClear();
+    const screen = await renderOpenDM(callerOnSuccess);
+    (screen.getByTestId('open-dm').element() as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(showToastMock.mock.calls.map((call) => call[0])).toEqual(['Could not open the conversation — please try again.']);
+    });
+    expect(screen.getByTestId('path').element().textContent).toBe('/');
+    expect(callerOnSuccess).not.toHaveBeenCalled();
   });
 });
 

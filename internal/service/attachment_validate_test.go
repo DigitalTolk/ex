@@ -230,34 +230,50 @@ func TestEnsureThumbnailsForRead_Branches(t *testing.T) {
 	object := makePNG(40, 20)
 
 	// Happy path: a legacy image with no dimensions/thumbnails gets both
-	// backfilled on read.
+	// backfilled, in the background.
 	storeM := newMockAttachmentStore()
 	signer := &fakeAttachmentSigner{objects: map[string][]byte{}, putContentTypes: map[string]string{}}
 	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+	done := make(chan error, 1)
+	svc.afterThumbnailBackfill = func(_ string, err error) { done <- err }
 	a := &model.Attachment{ID: "a1", S3Key: "attachments/a1", SHA256: sha256Hex(object), Size: int64(len(object)), ContentType: "image/png"}
 	signer.objects[a.S3Key] = object
 	storeM.byID[a.ID] = a
-	svc.ensureThumbnailsForRead(ctx, a)
-	if a.Width != 40 || a.Height != 20 {
-		t.Fatalf("dimensions not backfilled: %dx%d", a.Width, a.Height)
+	if !svc.ensureThumbnailsForRead(ctx, a) {
+		t.Fatal("a legacy image was not scheduled")
 	}
-	if a.ThumbnailS3Key == "" || a.SquareThumbnailS3Key == "" {
-		t.Fatal("thumbnails not generated on read")
+	if err := waitBackfill(t, done); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	stored := storeM.byID[a.ID]
+	if stored.Width != 40 || stored.Height != 20 {
+		t.Fatalf("dimensions not backfilled: %dx%d", stored.Width, stored.Height)
+	}
+	if stored.ThumbnailS3Key == "" || stored.SquareThumbnailS3Key == "" {
+		t.Fatal("thumbnails not generated")
 	}
 
 	// Guard: nil signer → no-op.
-	NewAttachmentService(newMockAttachmentStore(), nil, newMockPublisher()).
-		ensureThumbnailsForRead(ctx, &model.Attachment{ID: "x", S3Key: "k", Size: 1, SHA256: "h", ContentType: "image/png"})
+	if NewAttachmentService(newMockAttachmentStore(), nil, newMockPublisher()).
+		ensureThumbnailsForRead(ctx, &model.Attachment{ID: "x", S3Key: "k", Size: 1, SHA256: "h", ContentType: "image/png"}) {
+		t.Error("nil signer: scheduled")
+	}
 
 	// Guard: incomplete metadata (no SHA256) → no-op.
-	svc.ensureThumbnailsForRead(ctx, &model.Attachment{ID: "y", S3Key: "k", Size: 1, ContentType: "image/png"})
+	if svc.ensureThumbnailsForRead(ctx, &model.Attachment{ID: "y", S3Key: "k", Size: 1, ContentType: "image/png"}) {
+		t.Error("no SHA256: scheduled")
+	}
 
 	// Guard: non-image content type → no-op.
-	svc.ensureThumbnailsForRead(ctx, &model.Attachment{ID: "z", S3Key: "k", Size: 1, SHA256: "h", ContentType: "application/pdf"})
+	if svc.ensureThumbnailsForRead(ctx, &model.Attachment{ID: "z", S3Key: "k", Size: 1, SHA256: "h", ContentType: "application/pdf"}) {
+		t.Error("non-image: scheduled")
+	}
 
 	// Guard: already has both thumbnail keys → no-op.
-	svc.ensureThumbnailsForRead(ctx, &model.Attachment{
+	if svc.ensureThumbnailsForRead(ctx, &model.Attachment{
 		ID: "w", S3Key: "k", Size: 1, SHA256: "h", ContentType: "image/png",
 		ThumbnailS3Key: "t", SquareThumbnailS3Key: "s",
-	})
+	}) {
+		t.Error("thumbnails present: scheduled")
+	}
 }

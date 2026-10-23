@@ -6,10 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/search"
-	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // SearchAccess resolves the parent IDs (channels + conversations) the
@@ -53,7 +53,7 @@ type SearchHandler struct {
 // NewSearchHandler builds a handler. Any dependency may be nil: a nil
 // searcher/access degrades to empty responses, a nil resolver skips
 // ghost filtering. The resolvers are constructor arguments — not
-// setters — so cmd/server can't silently forget to wire them.
+// setters — so internal/app can't silently forget to wire them.
 func NewSearchHandler(s search.Searcher, a SearchAccess, users UserResolver, channels ChannelResolver) *SearchHandler {
 	return &SearchHandler{searcher: s, access: a, users: users, channels: channels}
 }
@@ -68,7 +68,7 @@ func (h *SearchHandler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r, "limit", 10)
 	res, err := h.searcher.Users(r.Context(), q, limit)
 	if err != nil {
-		writeInternalError(w, r, "search_failed", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, h.dropGhostUsers(r.Context(), res))
@@ -93,7 +93,7 @@ func (h *SearchHandler) dropGhostUsers(ctx context.Context, res *search.SearchRe
 	}
 	users, err := h.users.GetBatch(ctx, ids)
 	if err != nil {
-		slog.Error("search: ghost-user filter failed — serving unfiltered hits", "error", err)
+		slog.ErrorContext(ctx, "search: ghost-user filter failed — serving unfiltered hits", "error", err)
 		return res
 	}
 	live := make(map[string]bool, len(users))
@@ -127,14 +127,14 @@ func (h *SearchHandler) dropGhostChannels(ctx context.Context, res *search.Searc
 		switch {
 		case err == nil && ch != nil:
 			kept = append(kept, hit)
-		case err != nil && !errors.Is(err, store.ErrNotFound):
+		case err != nil && !errors.Is(err, apperr.ErrNotFound):
 			degraded = true
 			kept = append(kept, hit)
 		}
 		// confirmed not-found → ghost, dropped
 	}
 	if degraded {
-		slog.Error("search: ghost-channel filter degraded — serving some hits unverified")
+		slog.ErrorContext(ctx, "search: ghost-channel filter degraded — serving some hits unverified")
 	}
 	return &search.SearchResult{Total: len(kept), Hits: kept, Aggs: res.Aggs}
 }
@@ -157,22 +157,57 @@ func (h *SearchHandler) SearchChannels(w http.ResponseWriter, r *http.Request) {
 	}
 	ids, err := h.access.AllowedParentIDs(r.Context(), userID)
 	if err != nil {
-		writeInternalError(w, r, "access_failed", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	allowed = ids
 	q := queryParam(r, "q", "")
 	limit := queryInt(r, "limit", 10)
+	// Public channels are discoverable by workspace members (Slack-style),
+	// never by guests: a guest sees only the channels they belong to. The
+	// searcher always admits public channels, so a guest's query fetches the
+	// widest page and keeps only their own.
+	guest := callerIsGuest(r)
+	fetch := limit
+	if guest {
+		fetch = guestChannelSearchFetch
+	}
 	res, err := h.searcher.Channels(r.Context(), search.ChannelQuery{
 		Q:                 q,
 		AllowedChannelIDs: allowed,
-		Limit:             limit,
+		Limit:             fetch,
 	})
 	if err != nil {
-		writeInternalError(w, r, "search_failed", err)
+		writeServiceError(w, r, err)
 		return
 	}
+	if guest {
+		res = onlyChannels(res, allowed, limit)
+	}
 	writeJSON(w, http.StatusOK, h.dropGhostChannels(r.Context(), res))
+}
+
+// guestChannelSearchFetch is the page a guest's channel search fetches
+// before dropping the public channels they aren't in (the searcher's cap).
+const guestChannelSearchFetch = 100
+
+// onlyChannels keeps the hits whose ID is in allowed, at most limit of them
+// (a non-positive limit keeps the searcher's default page of 20).
+func onlyChannels(res *search.SearchResult, allowed []string, limit int) *search.SearchResult {
+	if limit <= 0 {
+		limit = 20
+	}
+	in := make(map[string]bool, len(allowed))
+	for _, id := range allowed {
+		in[id] = true
+	}
+	kept := make([]search.SearchHit, 0, min(len(res.Hits), limit))
+	for _, hit := range res.Hits {
+		if in[hit.ID] && len(kept) < limit {
+			kept = append(kept, hit)
+		}
+	}
+	return &search.SearchResult{Total: len(kept), Hits: kept, Aggs: res.Aggs}
 }
 
 // SearchMessages handles GET /api/v1/search/messages
@@ -204,7 +239,7 @@ func (h *SearchHandler) searchOver(w http.ResponseWriter, r *http.Request, files
 	if h.access != nil {
 		ids, err := h.access.AllowedParentIDs(r.Context(), userID)
 		if err != nil {
-			writeInternalError(w, r, "access_failed", err)
+			writeServiceError(w, r, err)
 			return
 		}
 		allowed = ids
@@ -227,7 +262,7 @@ func (h *SearchHandler) searchOver(w http.ResponseWriter, r *http.Request, files
 		res, err = h.searcher.Messages(r.Context(), opts)
 	}
 	if err != nil {
-		writeInternalError(w, r, "search_failed", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)

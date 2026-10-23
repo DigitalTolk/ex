@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -123,16 +122,37 @@ func (f *fakeWebhookBots) EnsureBotUser(_ context.Context, botID, displayName st
 	return &model.User{ID: botID, DisplayName: displayName, IsBot: true}, nil
 }
 
+// fakeWebhookUsers is a tiny directory: ID and email point reads, and a
+// search "index" that offers every user as a candidate (picking the match is
+// matchWebhookUser's job). err fails the search.
 type fakeWebhookUsers struct {
 	users []*model.User
 	err   error
 }
 
-func (f fakeWebhookUsers) List(context.Context, int, string) ([]*model.User, string, error) {
-	if f.err != nil {
-		return nil, "", f.err
+func (f fakeWebhookUsers) GetByID(_ context.Context, id string) (*model.User, error) {
+	for _, u := range f.users {
+		if u != nil && u.ID == id {
+			return u, nil
+		}
 	}
-	return f.users, "", nil
+	return nil, store.ErrNotFound
+}
+
+func (f fakeWebhookUsers) GetByEmail(_ context.Context, email string) (*model.User, error) {
+	for _, u := range f.users {
+		if u != nil && strings.EqualFold(u.Email, email) {
+			return u, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
+func (f fakeWebhookUsers) Search(_ context.Context, _ string, limit int) ([]*model.User, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.users[:min(limit, len(f.users))], nil
 }
 
 func TestIncomingWebhookService_CreateAndExecuteMattermostPayload(t *testing.T) {
@@ -347,16 +367,16 @@ func TestIncomingWebhookService_MentionTranslationFallbacks(t *testing.T) {
 		bySlug: map[string]*model.Channel{ch.Slug: ch},
 	}, nil, nil, "")
 
-	if got := svc.translateMattermostMarkup(ctx, "<#missing|lost> @channel @unknown ~missing"); got != "~lost @all @unknown ~missing" {
+	if got := svc.newRefs().translate(ctx, "<#missing|lost> @channel @unknown ~missing"); got != "~lost @all @unknown ~missing" {
 		t.Fatalf("fallback translation = %q", got)
 	}
-	if got := svc.translateMattermostMarkup(ctx, "<plain-token>"); got != "plain-token" {
+	if got := svc.newRefs().translate(ctx, "<plain-token>"); got != "plain-token" {
 		t.Fatalf("plain angle token = %q", got)
 	}
-	if mention, ok := (&IncomingWebhookService{}).channelMention(ctx, "general"); ok || mention != "" {
+	if mention, ok := (&IncomingWebhookService{}).newRefs().channelMention(ctx, "general"); ok || mention != "" {
 		t.Fatalf("channelMention without resolver = %q %v", mention, ok)
 	}
-	if mention, ok := svc.channelMention(ctx, ""); ok || mention != "" {
+	if mention, ok := svc.newRefs().channelMention(ctx, ""); ok || mention != "" {
 		t.Fatalf("blank channelMention = %q %v", mention, ok)
 	}
 
@@ -364,7 +384,7 @@ func TestIncomingWebhookService_MentionTranslationFallbacks(t *testing.T) {
 		{ID: "no-name", Email: "noname@example.com"},
 		{ID: "id-only"},
 	}})
-	if got := svc.translateMattermostMarkup(ctx, "@noname <@id-only>"); got != "@[no-name|noname@example.com] @[id-only|id-only]" {
+	if got := svc.newRefs().translate(ctx, "@noname <@id-only>"); got != "@[no-name|noname@example.com] @[id-only|id-only]" {
 		t.Fatalf("fallback user names = %q", got)
 	}
 }
@@ -386,9 +406,10 @@ func TestIncomingWebhookService_DirectMessageResolutionErrors(t *testing.T) {
 	}
 	svc.SetDMResolver(&fakeWebhookDMResolver{})
 	svc.SetBotProvisioner(&fakeWebhookBots{})
+	// A failed search is transient (retry), not "no such user".
 	svc.SetUserResolver(fakeWebhookUsers{err: assertWebhookErr("users down")})
-	if _, err := svc.targetParent(ctx, wh, "@bob"); err == nil || !strings.Contains(err.Error(), "list users") {
-		t.Fatalf("list users err = %v", err)
+	if _, err := svc.targetParent(ctx, wh, "@bob"); !errors.Is(err, ErrWebhookUnavailable) || !strings.Contains(err.Error(), "search users") {
+		t.Fatalf("search users err = %v", err)
 	}
 	svc.SetUserResolver(fakeWebhookUsers{users: []*model.User{nil, &model.User{ID: "u-1", DisplayName: "Alice", Email: "alice@example.com"}}})
 	if _, err := svc.targetParent(ctx, wh, "@bob"); err == nil {
@@ -529,27 +550,6 @@ func (f fakeWebhookMemberships) GetMembership(_ context.Context, channelID, user
 		return &model.ChannelMembership{ChannelID: channelID, UserID: userID}, nil
 	}
 	return nil, store.ErrNotFound
-}
-
-// pagingWebhookUsers serves users one page at a time, encoding the next
-// page index in the cursor so findWebhookTargetUser must walk every page.
-type pagingWebhookUsers struct {
-	pages [][]*model.User
-}
-
-func (p *pagingWebhookUsers) List(_ context.Context, _ int, cursor string) ([]*model.User, string, error) {
-	idx := 0
-	if cursor != "" {
-		_, _ = fmt.Sscanf(cursor, "%d", &idx)
-	}
-	if idx >= len(p.pages) {
-		return nil, "", nil
-	}
-	next := ""
-	if idx+1 < len(p.pages) {
-		next = fmt.Sprintf("%d", idx+1)
-	}
-	return p.pages[idx], next, nil
 }
 
 func TestIncomingWebhookService_PrivateChannelOverrideMembership(t *testing.T) {
@@ -939,25 +939,6 @@ func TestIsDMTarget(t *testing.T) {
 	}
 }
 
-// The directory walk is the last resort in findWebhookTargetUser, after the
-// email and search-index lookups miss. It must follow the cursor rather than
-// giving up on the first page.
-func TestIncomingWebhookService_DirectMessageTargetOnALaterPage(t *testing.T) {
-	svc, messages, _ := botDMFixture(t, dmWebhook(), nil)
-	svc.SetUserResolver(&pagingWebhookUsers{pages: [][]*model.User{
-		{{ID: "u-creator", DisplayName: "Cara", Email: "cara@example.com"}},
-		{{ID: "x", DisplayName: "Decoy"}},
-		{{ID: "bob-1", DisplayName: "Bob Smith", Email: "bob@example.com"}},
-	}})
-
-	if err := svc.Execute(context.Background(), "wh", IncomingWebhookPayload{Text: "hi", Channel: "@Bob Smith"}); err != nil {
-		t.Fatalf("paged DM: %v", err)
-	}
-	if got, want := onlyStoredMessage(t, messages).ParentID, WebhookBotUserID("wh")+"__bob-1"; got != want {
-		t.Errorf("conversation = %q, want %q", got, want)
-	}
-}
-
 // End-to-end across the real UserService, ConversationService and
 // MessageService. Mocks cannot show this: routing DMs through a per-webhook bot
 // means every thread is newly created, and a new conversation is born
@@ -976,7 +957,9 @@ func TestWebhookDM_EndToEnd_BotThreadIsVisibleToRecipient(t *testing.T) {
 	convSvc := NewConversationService(conversations, users, newMockCache(), newMockBroker(), publisher)
 
 	messages := newMockMessageStore()
-	msgSvc := NewMessageService(messages, nil, nil, publisher, nil)
+	// Production wiring: the message service reads the conversation it posts
+	// into, and hands that row to the activator.
+	msgSvc := NewMessageService(messages, nil, conversations, publisher, nil)
 	msgSvc.SetActivator(convSvc)
 
 	ch := &model.Channel{ID: "ch-1", Name: "General", Slug: "general"}

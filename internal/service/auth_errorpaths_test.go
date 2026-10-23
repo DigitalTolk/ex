@@ -43,13 +43,14 @@ func TestCreateDesktopAuthSession_RandError(t *testing.T) {
 	orig := randRead
 	randRead = func([]byte) (int, error) { return 0, errors.New("no entropy") }
 	defer func() { randRead = orig }()
-	if _, err := env.svc.CreateDesktopAuthSession(context.Background(), "a", "r"); err == nil {
+	if _, err := env.svc.CreateDesktopAuthSession(context.Background(), "r"); err == nil {
 		t.Fatal("expected rand error")
 	}
 }
 
 func TestCreateInvite_RandError(t *testing.T) {
 	env := setupAuthService()
+	seedAdmin(env, "inviter")
 	orig := randRead
 	randRead = func([]byte) (int, error) { return 0, errors.New("no entropy") }
 	defer func() { randRead = orig }()

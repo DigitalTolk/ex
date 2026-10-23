@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -73,6 +74,31 @@ const (
 	defaultOneSignalRetryInterval = 250 * time.Millisecond
 )
 
+// oneSignalMaxIdleConnsPerHost sizes the idle pool of the default client.
+// Every push goes to the one provider host, so the per-host limit IS the pool:
+// net/http's default of 2 made a fan-out burst (an @here in a big channel)
+// open — and TLS-handshake — a fresh connection for every push beyond the
+// second, then throw it away.
+const oneSignalMaxIdleConnsPerHost = 64
+
+// newOneSignalTransport is net/http's default transport with the idle pool
+// sized for bursts to a single host.
+func newOneSignalTransport() *http.Transport {
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          oneSignalMaxIdleConnsPerHost,
+		MaxIdleConnsPerHost:   oneSignalMaxIdleConnsPerHost,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+}
+
 type OneSignalConfig struct {
 	AppID      string
 	APIKey     string
@@ -113,7 +139,7 @@ func NewOneSignalPushSender(cfg OneSignalConfig) (*OneSignalPushSender, error) {
 	}
 	client := cfg.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 5 * time.Second}
+		client = &http.Client{Timeout: 5 * time.Second, Transport: newOneSignalTransport()}
 	}
 	retries := uint64(defaultOneSignalRetries)
 	if cfg.MaxRetries > 0 {

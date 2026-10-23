@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { useWebSocket } from './useWebSocket';
+import { wireMessage, withHandlers } from '@/test/ws-frames';
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
 
@@ -48,7 +49,7 @@ afterEach(() => { vi.restoreAllMocks(); });
 describe('useWebSocket event coverage', () => {
   it('routes draft.updated to onDraftUpdated', async () => {
     const onDraftUpdated = vi.fn();
-    renderHook(() => useWebSocket({ onDraftUpdated, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onDraftUpdated, enabled: true })));
     await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -58,17 +59,17 @@ describe('useWebSocket event coverage', () => {
 
   it('routes notification.settings_updated to onNotificationSettingsUpdated', async () => {
     const onNotificationSettingsUpdated = vi.fn();
-    renderHook(() => useWebSocket({ onNotificationSettingsUpdated, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onNotificationSettingsUpdated, enabled: true })));
     await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
-    ws.simulateMessage(JSON.stringify({ id: 'ns1', type: 'notification.settings_updated', data: JSON.stringify({ settings: { desktopLevel: 'all' } }) }));
+    ws.simulateMessage(JSON.stringify({ id: 'ns1', type: 'notification.settings_updated', data: JSON.stringify({ settings: { desktopLevel: 'all', mobileLevel: 'default', threadReplies: true, ignoreGroupMentions: false, followAllThreads: false } }) }));
     expect(onNotificationSettingsUpdated).toHaveBeenCalled();
   });
 
   it('routes webhook.changed to onWebhookChanged', async () => {
     const onWebhookChanged = vi.fn();
-    renderHook(() => useWebSocket({ onWebhookChanged, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onWebhookChanged, enabled: true })));
     await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -78,7 +79,7 @@ describe('useWebSocket event coverage', () => {
 
   it('routes project.changed to onProjectChanged', async () => {
     const onProjectChanged = vi.fn();
-    renderHook(() => useWebSocket({ onProjectChanged, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onProjectChanged, enabled: true })));
     await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -91,7 +92,7 @@ describe('useWebSocket event coverage', () => {
     ['runners.changed', 'onRunnersChanged'],
   ] as const)('routes %s to %s', async (type, callback) => {
     const cb = vi.fn();
-    renderHook(() => useWebSocket({ [callback]: cb, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ [callback]: cb, enabled: true })));
     await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -101,17 +102,17 @@ describe('useWebSocket event coverage', () => {
 
   it('routes activity.new to onActivityNew', async () => {
     const onActivityNew = vi.fn();
-    renderHook(() => useWebSocket({ onActivityNew, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onActivityNew, enabled: true })));
     await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
-    ws.simulateMessage(JSON.stringify({ id: 'act1', type: 'activity.new', data: '{}' }));
+    ws.simulateMessage(JSON.stringify({ id: 'act1', type: 'activity.new', data: JSON.stringify({ item: { id: 'a1', type: 'mention', createdAt: '2026-01-01T00:00:00Z', messageID: 'm-1', parentID: 'ch-1', parentType: 'channel' } }) }));
     expect(onActivityNew).toHaveBeenCalled();
   });
 
   it('routes reminders.changed to onRemindersChanged', async () => {
     const onRemindersChanged = vi.fn();
-    renderHook(() => useWebSocket({ onRemindersChanged, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onRemindersChanged, enabled: true })));
     await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -121,7 +122,7 @@ describe('useWebSocket event coverage', () => {
 
   it('routes scheduled_messages.changed to onScheduledMessagesChanged', async () => {
     const onScheduledMessagesChanged = vi.fn();
-    renderHook(() => useWebSocket({ onScheduledMessagesChanged, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onScheduledMessagesChanged, enabled: true })));
     await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -131,7 +132,7 @@ describe('useWebSocket event coverage', () => {
 
   it('routes activity.read to onActivityRead', async () => {
     const onActivityRead = vi.fn();
-    renderHook(() => useWebSocket({ onActivityRead, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onActivityRead, enabled: true })));
     await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
@@ -141,36 +142,36 @@ describe('useWebSocket event coverage', () => {
 
   it('routes thread.updated to onThreadUpdated', async () => {
     const onThreadUpdated = vi.fn();
-    renderHook(() => useWebSocket({ onThreadUpdated, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onThreadUpdated, enabled: true })));
     await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
-    ws.simulateMessage(JSON.stringify({ id: 'th1', type: 'thread.updated', data: '{"threadRootID":"root-1"}' }));
+    ws.simulateMessage(JSON.stringify({ id: 'th1', type: 'thread.updated', data: JSON.stringify({ parentID: 'ch-1', parentType: 'channel', threadRootID: 'root-1', rootAuthorID: 'u-1', rootBody: 'q', rootCreatedAt: '2026-01-01T00:00:00Z', replyCount: 1, latestActivityAt: '2026-01-01T00:01:00Z' }) }));
     expect(onThreadUpdated).toHaveBeenCalledWith(expect.objectContaining({ threadRootID: 'root-1' }));
   });
 
   it('evicts the oldest id once the dedup buffer exceeds capacity', async () => {
     const onMessageNew = vi.fn();
-    renderHook(() => useWebSocket({ onMessageNew, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onMessageNew, enabled: true })));
     await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
     for (let i = 1; i <= 513; i++) {
-      ws.simulateMessage(JSON.stringify({ id: String(i), type: 'message.new', data: JSON.stringify({ id: String(i) }) }));
+      ws.simulateMessage(JSON.stringify({ id: String(i), type: 'message.new', data: JSON.stringify(wireMessage({ id: String(i) })) }));
     }
     const before = onMessageNew.mock.calls.length;
     // id "1" was evicted (capacity 512), so re-delivery fires again.
-    ws.simulateMessage(JSON.stringify({ id: '1', type: 'message.new', data: JSON.stringify({ id: '1' }) }));
+    ws.simulateMessage(JSON.stringify({ id: '1', type: 'message.new', data: JSON.stringify(wireMessage({ id: '1' })) }));
     expect(onMessageNew.mock.calls.length).toBe(before + 1);
   });
 
   it('does not dedup messages that arrive without an envelope id', async () => {
     const onMessageNew = vi.fn();
-    renderHook(() => useWebSocket({ onMessageNew, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onMessageNew, enabled: true })));
     await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
-    const msg = JSON.stringify({ type: 'message.new', data: JSON.stringify({ id: 'a' }) });
+    const msg = JSON.stringify({ type: 'message.new', data: JSON.stringify(wireMessage({ id: 'a' })) });
     ws.simulateMessage(msg);
     ws.simulateMessage(msg);
     // No id => never recorded as seen => delivered twice.
@@ -180,7 +181,7 @@ describe('useWebSocket event coverage', () => {
   it('does not open a socket when no access token is available', async () => {
     const api = await import('@/lib/api');
     (api.getAccessToken as unknown as { mockReturnValueOnce: (v: string) => void }).mockReturnValueOnce('');
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
     // No token → connect bails before even minting a ticket.
     expect(apiFetchMock).not.toHaveBeenCalled();

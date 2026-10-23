@@ -1,4 +1,4 @@
-import { pad } from '@/lib/datetime-input';
+import { differenceInCalendarDays, format as formatDate, formatDistanceStrict, isSameYear, isValid } from 'date-fns';
 
 export function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -91,90 +91,68 @@ export function mibToBytes(mib: number): number {
   return Math.floor(mib * MIB);
 }
 
-const MONTHS_SHORT = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-] as const;
+// Date wording below is English on purpose (the app's copy is English);
+// date-fns does the calendar math, ordinals and pluralisation.
+type DateInput = Date | string | number;
 
-const MONTHS_LONG = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-] as const;
-
-// ordinalSuffix returns "st", "nd", "rd", or "th" for the given day.
-// 11–13 are exceptions ("th") even though they end in 1/2/3.
-export function ordinalSuffix(day: number): string {
-  const mod100 = day % 100;
-  if (mod100 >= 11 && mod100 <= 13) return 'th';
-  switch (day % 10) {
-    case 1: return 'st';
-    case 2: return 'nd';
-    case 3: return 'rd';
-    default: return 'th';
-  }
+// date-fns throws on a date that doesn't parse; one bad timestamp must not
+// take the message list down, so it formats to nothing instead.
+function format(input: DateInput, pattern: string): string {
+  const d = new Date(input);
+  return isValid(d) ? formatDate(d, pattern) : '';
 }
 
 // formatLongDate renders a date like "August 3rd, 2016" — used in
 // channel-creation and similar long-form intro copy.
-export function formatLongDate(input: Date | string | number): string {
-  const d = input instanceof Date ? input : new Date(input);
-  const month = MONTHS_LONG[d.getMonth()];
-  const day = d.getDate();
-  return `${month} ${day}${ordinalSuffix(day)}, ${d.getFullYear()}`;
+export function formatLongDate(input: DateInput): string {
+  return format(input, 'MMMM do, yyyy');
 }
 
 // formatLongDateTime renders a timestamp like "Mar 26th at 18:33:01" — used
 // in tooltips and any place a precise but human-readable timestamp is needed.
-export function formatLongDateTime(input: Date | string | number): string {
-  const d = input instanceof Date ? input : new Date(input);
-  const month = MONTHS_SHORT[d.getMonth()];
-  const day = d.getDate();
-  return `${month} ${day}${ordinalSuffix(day)} at ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+export function formatLongDateTime(input: DateInput): string {
+  return format(input, "MMM do 'at' HH:mm:ss");
 }
+
+// The unit a relative time is worded in is picked on the ROUNDED amount, so
+// a gap just short of a boundary reads "1 hour ago", never "60 minutes ago".
+const RELATIVE_UNITS = [
+  { unit: 'minute', minutes: 1, below: 60 },
+  { unit: 'hour', minutes: 60, below: 24 },
+  { unit: 'day', minutes: 1440, below: 30 },
+  { unit: 'month', minutes: 43_200, below: 12 },
+] as const;
 
 // formatRelative renders a "time ago" style label — "just now", "2 hours ago",
 // "3 days ago" — for tooltips where a precise timestamp would be too noisy.
-export function formatRelative(input: Date | string | number, now: Date = new Date()): string {
-  const d = input instanceof Date ? input : new Date(input);
-  const diffSec = Math.round((now.getTime() - d.getTime()) / 1000);
-  if (diffSec < 45) return 'just now';
-  const diffMin = Math.round(diffSec / 60);
-  if (diffMin < 60) return `${diffMin} minute${diffMin === 1 ? '' : 's'} ago`;
-  const diffHour = Math.round(diffMin / 60);
-  if (diffHour < 24) return `${diffHour} hour${diffHour === 1 ? '' : 's'} ago`;
-  const diffDay = Math.round(diffHour / 24);
-  if (diffDay < 30) return `${diffDay} day${diffDay === 1 ? '' : 's'} ago`;
-  const diffMonth = Math.round(diffDay / 30);
-  if (diffMonth < 12) return `${diffMonth} month${diffMonth === 1 ? '' : 's'} ago`;
-  const diffYear = Math.round(diffMonth / 12);
-  return `${diffYear} year${diffYear === 1 ? '' : 's'} ago`;
+export function formatRelative(input: DateInput, now: Date = new Date()): string {
+  const minutes = (now.getTime() - new Date(input).getTime()) / 60_000;
+  if (Number.isNaN(minutes)) return '';
+  if (Math.round(minutes * 60) < 45) return 'just now';
+  const unit = RELATIVE_UNITS.find((u) => Math.round(minutes / u.minutes) < u.below)?.unit ?? 'year';
+  return formatDistanceStrict(input, now, { addSuffix: true, roundingMethod: 'round', unit });
 }
 
 // calendarDaysAgo counts local calendar days between input and now: 0 for
 // today, 1 for yesterday (whatever the hour), negative for the future.
-export function calendarDaysAgo(input: Date | string | number, now: Date): number {
-  const d = input instanceof Date ? input : new Date(input);
-  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  return Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
+export function calendarDaysAgo(input: DateInput, now: Date): number {
+  return differenceInCalendarDays(now, input);
 }
 
 // formatDayHeading renders a calendar-day divider label: "Today", "Yesterday",
 // or a date like "Mar 26th, 2026" once we cross a year boundary, "Mar 26th"
 // within the current year. Used by the day-grouping divider in message lists.
-export function formatDayHeading(input: Date | string | number, now: Date = new Date()): string {
-  const d = input instanceof Date ? input : new Date(input);
-  const diffDays = calendarDaysAgo(d, now);
+export function formatDayHeading(input: DateInput, now: Date = new Date()): string {
+  const diffDays = calendarDaysAgo(input, now);
+  if (Number.isNaN(diffDays)) return '';
   if (diffDays === 0) return 'Today';
   if (diffDays === 1) return 'Yesterday';
-  const month = MONTHS_SHORT[d.getMonth()];
-  const day = d.getDate();
-  const base = `${month} ${day}${ordinalSuffix(day)}`;
-  return d.getFullYear() === now.getFullYear() ? base : `${base}, ${d.getFullYear()}`;
+  return format(input, isSameYear(input, now) ? 'MMM do' : 'MMM do, yyyy');
 }
 
 // dayKey returns a YYYY-MM-DD string in local time, suitable for grouping
-// a list of timestamped items into calendar days.
-export function dayKey(input: Date | string | number): string {
-  const d = input instanceof Date ? input : new Date(input);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+// a list of timestamped items into calendar days (and as the value a date
+// input takes).
+export function dayKey(input: DateInput): string {
+  return format(input, 'yyyy-MM-dd') || 'NaN-NaN-NaN';
 }

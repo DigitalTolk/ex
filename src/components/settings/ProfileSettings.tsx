@@ -110,7 +110,7 @@ export function ProfileSettings() {
           </Avatar>
           <div>
             <div className="font-medium">Photo</div>
-            <p className="mt-0.5 text-[13px] text-muted-foreground">JPEG, PNG or WebP, up to 2 MB.</p>
+            <p className="mt-0.5 text-sm text-muted-foreground">JPEG, PNG or WebP, up to 2 MB.</p>
             <Button
               type="button"
               variant="outline"

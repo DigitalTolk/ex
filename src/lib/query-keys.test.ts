@@ -45,6 +45,25 @@ describe('queryKeys factory', () => {
     expect(queryKeys.channelMembers()).toEqual(['channelMembers']);
     expect(queryKeys.channelMembers('ch-1')).toEqual(['channelMembers', 'ch-1']);
   });
+
+  it('user lists take an optional query; no arg matches every query', () => {
+    expect(queryKeys.searchUsers()).toEqual(['searchUsers']);
+    expect(queryKeys.searchUsers('al')).toEqual(['searchUsers', 'al']);
+    expect(queryKeys.usersDirectory()).toEqual(['users-directory']);
+    expect(queryKeys.usersDirectory('')).toEqual(['users-directory', '']);
+  });
+
+  it('agent keys: parentWatchers() matches every parent', () => {
+    expect(queryKeys.agents()).toEqual(['agents']);
+    expect(queryKeys.skills()).toEqual(['skills']);
+    expect(queryKeys.agentSubscriptions('gg')).toEqual(['agent-subs', 'gg']);
+    expect(queryKeys.agentOverrides('gg')).toEqual(['agent-overrides', 'gg']);
+    expect(queryKeys.parentWatchers()).toEqual(['parent-watchers']);
+    expect(queryKeys.parentWatchers({ type: 'channel', id: 'ch-1' })).toEqual(['parent-watchers', 'channel', 'ch-1']);
+    expect(queryKeys.codingTask('t-1')).toEqual(['coding-task', 't-1']);
+    expect(queryKeys.runTimeline()).toEqual(['run-timeline']);
+    expect(queryKeys.runTimeline({ runID: 'r-1', parentID: null, rootID: null })).toEqual(['run-timeline', 'r-1', null, null]);
+  });
 });
 
 describe('parentPath', () => {

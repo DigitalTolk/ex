@@ -3,18 +3,12 @@ package search
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 )
 
 func TestClient_Search_DecodesAggregationBuckets(t *testing.T) {
@@ -104,10 +98,30 @@ func TestNewClient_EmptyURL(t *testing.T) {
 	}
 }
 
+// A trailing slash on the configured URL must not leak into request paths
+// ("//ex_users/_doc/u-1" is a different route).
 func TestNewClient_TrimsTrailingSlash(t *testing.T) {
-	c := NewClient("http://example.test/")
-	if c == nil || c.baseURL != "http://example.test" {
-		t.Errorf("baseURL = %q, want %q", c.baseURL, "http://example.test")
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL + "/")
+	if err := c.IndexDoc(context.Background(), IndexUsers, "u-1", map[string]any{"id": "u-1"}); err != nil {
+		t.Fatalf("IndexDoc: %v", err)
+	}
+	if gotPath != "/"+IndexUsers+"/_doc/u-1" {
+		t.Errorf("path = %q, want %q", gotPath, "/"+IndexUsers+"/_doc/u-1")
+	}
+}
+
+// A nil client (search not configured) is a no-op everywhere, including
+// index setup at boot.
+func TestClient_EnsureIndices_NilClientIsNoop(t *testing.T) {
+	var c *Client
+	if err := c.EnsureIndices(context.Background()); err != nil {
+		t.Fatalf("nil-client EnsureIndices = %v, want nil", err)
 	}
 }
 
@@ -274,7 +288,7 @@ func TestClient_Bulk_ParsesPerItemErrors(t *testing.T) {
 
 func TestClient_Bulk_HappyPath(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"errors":false,"items":[]}`))
+		_, _ = w.Write([]byte(`{"errors":false,"items":[{"index":{"_id":"1","status":201,"result":"created"}}]}`))
 	}))
 	defer srv.Close()
 	c := NewClient(srv.URL)
@@ -287,6 +301,7 @@ func TestClient_Bulk_HappyPath(t *testing.T) {
 }
 
 func TestClient_Bulk_5xx(t *testing.T) {
+	noRetryDelay(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
@@ -298,133 +313,120 @@ func TestClient_Bulk_5xx(t *testing.T) {
 	}
 }
 
-// shrinkBulk lowers maxBulkBytes for one test.
+// shrinkBulk lowers bulkFlushBytes for one test.
 func shrinkBulk(t *testing.T, n int) {
 	t.Helper()
-	old := maxBulkBytes
-	maxBulkBytes = n
-	t.Cleanup(func() { maxBulkBytes = old })
+	old := bulkFlushBytes
+	bulkFlushBytes = n
+	t.Cleanup(func() { bulkFlushBytes = old })
 }
 
-// Bulk splits its entries so no request body exceeds maxBulkBytes; every
-// entry is sent exactly once, and an entry larger than the cap goes alone.
+func created(string) int { return http.StatusCreated }
+
+// Regression: one _bulk request for all of a parent's messages went over
+// OpenSearch's request size limit and failed with 413. A request stops
+// growing once it reaches bulkFlushBytes, and every entry is sent once.
 func TestClient_Bulk_SplitsBySize(t *testing.T) {
 	shrinkBulk(t, 300)
-	var bodies []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		bodies = append(bodies, string(body))
-		_, _ = w.Write([]byte(`{"errors":false,"items":[]}`))
-	}))
+	b := &bulkCluster{respond: func(_ int, ids []string) string { return bulkResponse(ids, created) }}
+	srv := httptest.NewServer(b.handler(t))
 	defer srv.Close()
 	var entries []BulkEntry
 	for i := 0; i < 10; i++ {
 		entries = append(entries, BulkEntry{ID: fmt.Sprintf("m%d", i), Doc: map[string]any{"body": strings.Repeat("x", 50)}})
 	}
-	entries = append(entries, BulkEntry{ID: "huge", Doc: map[string]any{"body": strings.Repeat("y", 500)}})
-	c := NewClient(srv.URL)
-	if err := c.Bulk(context.Background(), IndexMessages, entries); err != nil {
+	if err := NewClient(srv.URL).Bulk(context.Background(), IndexMessages, entries); err != nil {
 		t.Fatalf("Bulk: %v", err)
 	}
+	bodies := b.rawBodies()
 	if len(bodies) < 3 {
 		t.Fatalf("requests = %d, want the entries split over several", len(bodies))
 	}
-	ids := map[string]int{}
-	for _, b := range bodies {
-		if len(b) > maxBulkBytes && strings.Count(b, "\n") != 2 {
-			t.Errorf("request of %d bytes over the cap carries more than one entry", len(b))
+	for _, body := range bodies {
+		// Everything before the request's last entry (action + document line)
+		// was under the cap, or the request would have gone out sooner.
+		lines := strings.SplitAfter(body, "\n")
+		if before := len(strings.Join(lines[:len(lines)-3], "")); before >= bulkFlushBytes {
+			t.Errorf("request kept growing past the cap: %d bytes before its last entry", before)
 		}
-		for _, e := range entries {
-			if strings.Contains(b, `"_id":"`+e.ID+`"`) {
-				ids[e.ID]++
-			}
+	}
+	sent := map[string]int{}
+	for _, ids := range b.calls() {
+		for _, id := range ids {
+			sent[id]++
 		}
 	}
 	for _, e := range entries {
-		if ids[e.ID] != 1 {
-			t.Errorf("entry %s sent %d times, want 1", e.ID, ids[e.ID])
+		if sent[e.ID] != 1 {
+			t.Errorf("entry %s sent %d times, want 1", e.ID, sent[e.ID])
 		}
 	}
 }
 
 // Per-item errors in one request don't stop the next; they are reported
-// once everything has been sent. A failed request stops the rest.
-func TestClient_Bulk_SplitErrors(t *testing.T) {
+// once everything has been sent.
+func TestClient_Bulk_SplitItemErrors(t *testing.T) {
 	shrinkBulk(t, 100)
+	b := &bulkCluster{respond: func(n int, ids []string) string {
+		return bulkResponse(ids, func(string) int {
+			if n == 1 {
+				return http.StatusBadRequest
+			}
+			return http.StatusCreated
+		})
+	}}
+	srv := httptest.NewServer(b.handler(t))
+	defer srv.Close()
 	entries := []BulkEntry{
 		{ID: "a", Doc: map[string]any{"body": strings.Repeat("x", 60)}},
 		{ID: "b", Doc: map[string]any{"body": strings.Repeat("x", 60)}},
 	}
-	for _, tc := range []struct {
-		name      string
-		first     func(w http.ResponseWriter)
-		wantCalls int
-		wantErr   string
-	}{
-		{"per-item", func(w http.ResponseWriter) { _, _ = w.Write([]byte(`{"errors":true}`)) }, 2, "per-item errors"},
-		{"request", func(w http.ResponseWriter) { w.WriteHeader(http.StatusRequestEntityTooLarge) }, 1, "413"},
-	} {
-		calls := 0
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			calls++
-			if calls == 1 {
-				tc.first(w)
-				return
-			}
-			_, _ = w.Write([]byte(`{"errors":false}`))
-		}))
-		err := NewClient(srv.URL).Bulk(context.Background(), IndexMessages, entries)
-		srv.Close()
-		if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.wantErr)
-		}
-		if calls != tc.wantCalls {
-			t.Errorf("%s: requests = %d, want %d", tc.name, calls, tc.wantCalls)
-		}
+	err := NewClient(srv.URL).Bulk(context.Background(), IndexMessages, entries)
+	if err == nil || !strings.Contains(err.Error(), "1 of 2 items failed") {
+		t.Errorf("err = %v, want the first request's failed item reported", err)
+	}
+	if got := len(b.calls()); got != 2 {
+		t.Errorf("requests = %d, want 2", got)
 	}
 }
 
-// A 429 (OpenSearch shedding load) is retried until it succeeds or the
-// retries run out; the context cancels the wait.
-func TestClient_Bulk_Retries429(t *testing.T) {
-	old := bulkRetryDelays
-	bulkRetryDelays = []time.Duration{0, 0}
-	t.Cleanup(func() { bulkRetryDelays = old })
-	entries := []BulkEntry{{ID: "a", Doc: 1}}
+// Regression: a whole _bulk request OpenSearch answered with 429 (shedding
+// load) failed the parent's indexing. Once the transport's own retries are
+// spent, the request is resubmitted on bulkRetryDelays until it goes through
+// or they run out.
+func TestClient_Bulk_RetriesThrottledRequest(t *testing.T) {
+	noRetryDelay(t)
+	tries := maxRetries + 1 // per round: the request and the transport's retries
+	structured := `{"error":{"type":"too_many_requests","reason":"slow down"},"status":429}`
 	for _, tc := range []struct {
 		name      string
+		body      string
 		throttled int
 		wantCalls int
 		wantErr   bool
 	}{
-		{"recovers", 2, 3, false},
-		{"gives up", 5, 3, true},
+		{"recovers", structured, tries, tries + 1, false},
+		{"recovers from a plain 429", `{"message":"Too Many Requests"}`, tries, tries + 1, false},
+		{"gives up", structured, 1000, tries * (len(bulkRetryDelays) + 1), true},
 	} {
-		calls := 0
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			calls++
-			if calls <= tc.throttled {
-				w.WriteHeader(http.StatusTooManyRequests)
-				return
-			}
-			_, _ = w.Write([]byte(`{"errors":false}`))
-		}))
-		err := NewClient(srv.URL).Bulk(context.Background(), IndexMessages, entries)
-		srv.Close()
-		if (err != nil) != tc.wantErr || calls != tc.wantCalls {
-			t.Errorf("%s: err = %v, requests = %d; want error %v, %d requests", tc.name, err, calls, tc.wantErr, tc.wantCalls)
+		b := &bulkCluster{
+			respond: func(_ int, ids []string) string { return bulkResponse(ids, created) },
+			throttle: func(n int) string {
+				if n <= tc.throttled {
+					return tc.body
+				}
+				return ""
+			},
 		}
-	}
-
-	bulkRetryDelays = []time.Duration{time.Hour}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusTooManyRequests)
-	}))
-	defer srv.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	if err := NewClient(srv.URL).Bulk(ctx, IndexMessages, entries); !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("cancelled wait: err = %v, want deadline exceeded", err)
+		srv := httptest.NewServer(b.handler(t))
+		err := NewClient(srv.URL).Bulk(context.Background(), IndexMessages, entriesFor("a"))
+		srv.Close()
+		if (err != nil) != tc.wantErr || (err != nil && !strings.Contains(err.Error(), "429")) {
+			t.Errorf("%s: err = %v, want error %v", tc.name, err, tc.wantErr)
+		}
+		if got := len(b.calls()); got != tc.wantCalls {
+			t.Errorf("%s: requests = %d, want %d", tc.name, got, tc.wantCalls)
+		}
 	}
 }
 
@@ -624,27 +626,20 @@ func TestNewAWSClient_EmptyURLReturnsNil(t *testing.T) {
 	}
 }
 
-// awsSignedClient builds a Client whose transport is the SigV4 signer
-// pointed at srv, using static test credentials so the test is fully
+// awsSignedClient builds a SigV4-signing Client pointed at srv through the
+// real NewAWSClient path, with static test credentials so the test is fully
 // hermetic (no env-var lookup, no IMDS calls).
-func awsSignedClient(srv *httptest.Server, service string) *Client {
-	creds := credentials.NewStaticCredentialsProvider("AKIATESTACCESS", "secretkeydonotuse", "")
-	return &Client{
-		baseURL: strings.TrimRight(srv.URL, "/"),
-		http: &http.Client{
-			Timeout: 5 * time.Second,
-			Transport: &sigV4Transport{
-				inner:   http.DefaultTransport,
-				signer:  v4.NewSigner(),
-				creds:   aws.CredentialsProvider(creds),
-				region:  "us-east-1",
-				service: service,
-			},
-		},
+func awsSignedClient(t *testing.T, srv *httptest.Server, service string) *Client {
+	t.Helper()
+	fakeAWSConfig(t, staticCreds())
+	c, err := NewAWSClient(context.Background(), srv.URL, AWSSigning{Region: "us-east-1", Service: service})
+	if err != nil {
+		t.Fatalf("NewAWSClient: %v", err)
 	}
+	return c
 }
 
-func TestSigV4Transport_AddsAuthorizationAndPayloadHeaders(t *testing.T) {
+func TestSigV4_AddsAuthorizationAndPayloadHeaders(t *testing.T) {
 	var captured *http.Request
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		captured = r.Clone(context.Background())
@@ -652,7 +647,7 @@ func TestSigV4Transport_AddsAuthorizationAndPayloadHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := awsSignedClient(srv, "es")
+	c := awsSignedClient(t, srv, "es")
 	if _, err := c.Search(context.Background(), IndexUsers, map[string]any{"query": map[string]any{"match_all": map[string]any{}}}); err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -673,16 +668,17 @@ func TestSigV4Transport_AddsAuthorizationAndPayloadHeaders(t *testing.T) {
 	if captured.Header.Get("X-Amz-Date") == "" {
 		t.Error("X-Amz-Date header missing")
 	}
-	if got := captured.Header.Get("X-Amz-Content-Sha256"); got == "" {
-		t.Error("X-Amz-Content-Sha256 header missing — body must be hashed for SigV4")
+	if got := captured.Header.Get("X-Amz-Content-Sha256"); got == "" || got == emptySHA256 {
+		t.Errorf("X-Amz-Content-Sha256 = %q — the request body must be hashed for SigV4", got)
 	}
 }
 
-func TestSigV4Transport_GETUsesEmptyPayloadHash(t *testing.T) {
-	// SigV4 of GET (no body) hashes the empty string. Confirm we send
-	// that exact constant — drift here would invalidate every signed
-	// HEAD/GET call (EnsureIndices, GetDoc, IndexStats, ClusterHealth).
-	const wantEmptyHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+// SigV4 of a body-less request hashes the empty string. Drift here would
+// invalidate every signed HEAD/GET call (EnsureIndices, GetDoc, IndexStats,
+// ClusterHealth).
+const emptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+func TestSigV4_GETUsesEmptyPayloadHash(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.Header.Get("X-Amz-Content-Sha256")
@@ -691,19 +687,19 @@ func TestSigV4Transport_GETUsesEmptyPayloadHash(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := awsSignedClient(srv, "es")
+	c := awsSignedClient(t, srv, "es")
 	if _, err := c.ClusterHealth(context.Background()); err != nil {
 		t.Fatalf("ClusterHealth: %v", err)
 	}
-	if got != wantEmptyHash {
-		t.Errorf("X-Amz-Content-Sha256 = %q, want %q", got, wantEmptyHash)
+	if got != emptySHA256 {
+		t.Errorf("X-Amz-Content-Sha256 = %q, want %q", got, emptySHA256)
 	}
 }
 
-func TestSigV4Transport_BodyArrivesIntactAfterSigning(t *testing.T) {
+func TestSigV4_BodyArrivesIntactAfterSigning(t *testing.T) {
 	// Signing reads the body to compute the SHA256, then must reseat
-	// it — otherwise the downstream RoundTripper sends a request with
-	// no body and the cluster rejects with a 400.
+	// it — otherwise the request goes out with no body and the cluster
+	// rejects it with a 400.
 	var receivedBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -712,7 +708,7 @@ func TestSigV4Transport_BodyArrivesIntactAfterSigning(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := awsSignedClient(srv, "es")
+	c := awsSignedClient(t, srv, "es")
 	doc := map[string]any{"id": "u-1", "displayName": "Alice"}
 	if err := c.IndexDoc(context.Background(), IndexUsers, "u-1", doc); err != nil {
 		t.Fatalf("IndexDoc: %v", err)
@@ -726,39 +722,24 @@ func TestSigV4Transport_BodyArrivesIntactAfterSigning(t *testing.T) {
 	}
 }
 
-func TestSigV4Transport_DefaultsServiceToES(t *testing.T) {
-	c, err := NewAWSClient(context.Background(), "https://example.test", AWSSigning{Region: "us-east-1"})
-	if err != nil {
-		t.Fatalf("NewAWSClient: %v", err)
-	}
-	if c == nil {
-		t.Fatal("expected client, got nil")
-	}
-	transport, ok := c.http.Transport.(*sigV4Transport)
-	if !ok {
-		t.Fatalf("transport = %T, want *sigV4Transport", c.http.Transport)
-	}
-	if transport.service != "es" {
-		t.Errorf("default service = %q, want es", transport.service)
-	}
-	if transport.region != "us-east-1" {
-		t.Errorf("region = %q", transport.region)
-	}
-}
-
-func TestSigV4Transport_HonoursAOSSService(t *testing.T) {
-	var got string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got = r.Header.Get("Authorization")
-		_, _ = w.Write([]byte(`{}`))
-	}))
-	defer srv.Close()
-
-	c := awsSignedClient(srv, "aoss")
+func TestSigV4_DefaultsServiceToES(t *testing.T) {
+	srv, authz := headerRecorder(t)
+	c := awsSignedClient(t, srv, "")
 	if _, err := c.ClusterHealth(context.Background()); err != nil {
 		t.Fatalf("ClusterHealth: %v", err)
 	}
-	if !strings.Contains(got, "/us-east-1/aoss/aws4_request") {
-		t.Errorf("Authorization scope = %q, want aoss service in scope", got)
+	if !strings.Contains(*authz, "/us-east-1/es/aws4_request") {
+		t.Errorf("Authorization scope = %q, want the default es service", *authz)
+	}
+}
+
+func TestSigV4_HonoursAOSSService(t *testing.T) {
+	srv, authz := headerRecorder(t)
+	c := awsSignedClient(t, srv, "aoss")
+	if _, err := c.ClusterHealth(context.Background()); err != nil {
+		t.Fatalf("ClusterHealth: %v", err)
+	}
+	if !strings.Contains(*authz, "/us-east-1/aoss/aws4_request") {
+		t.Errorf("Authorization scope = %q, want aoss service in scope", *authz)
 	}
 }

@@ -6,12 +6,21 @@ import { useQueryClient } from '@tanstack/react-query';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useUnread } from '@/context/UnreadContext';
 import { useAuth } from '@/context/AuthContext';
-import { usePresence } from '@/context/PresenceContext';
-import { useNotifications, type NotificationPayload } from '@/context/NotificationContext';
-import { useTyping } from '@/context/TypingContext';
+import { refreshPresence } from '@/context/PresenceContext';
+import { usePresenceStore } from '@/stores/presence';
+import { useNotifications } from '@/context/NotificationContext';
+import { clearTyping, recordTyping, setSelfUserID } from '@/stores/typing';
 import { useWebSocket } from '@/hooks/useWebSocket';
-import { setServerVersion } from '@/hooks/useServerVersion';
-import { applyActivityChangedEvent, applyActivityNewEvent, applyRemindersChangedEvent } from '@/hooks/useActivity';
+import { applyServerVersionEvent } from '@/hooks/useServerVersion';
+import {
+  applyActivityChangedEvent,
+  applyActivityNewEvent,
+  applyRemindersChangedEvent,
+  refetchActivity,
+} from '@/hooks/useActivity';
+import { applyEmojiAddedEvent, applyEmojiRemovedEvent, invalidateEmojis } from '@/hooks/useEmoji';
+import { EventType } from '@/lib/event-types';
+import type { WSEventHandlers } from '@/lib/ws-events';
 import { sendWS } from '@/lib/ws-sender';
 import { localTimeZone } from '@/lib/user-time';
 import { isUserAttentive, suppressionWindowMs } from '@/lib/user-activity';
@@ -30,21 +39,7 @@ import {
   updateMessageInCache,
 } from '@/hooks/useMessages';
 import { queryKeys } from '@/lib/query-keys';
-import type { NotificationSettings } from '@/types';
-import {
-  parseAttachmentDeleted,
-  parseChannelID,
-  parseMembersChanged,
-  parseMessage,
-  parseMessageDeleted,
-  parsePresence,
-  parseServerVersion,
-  parseThreadUpdated,
-  parseConversationConverted,
-  parseTyping,
-  parseUserChannelUpdated,
-  parseUserUpdated,
-} from '@/lib/ws-schemas';
+import { applyUserUpdatedEvent } from '@/lib/user-cache';
 import {
   onRunProgress as onAgentRunProgress,
   onRunUpdated as onAgentRunUpdated,
@@ -53,7 +48,7 @@ import { onRunApproval as onAgentRunApproval } from '@/stores/agent-approvals';
 import { RunActivityDrawer } from '@/components/chat/RunActivityDrawer';
 import { DesktopRunnerAutostart } from '@/components/runners/DesktopRunnerAutostart';
 import { hasDesktopRunner } from '@/lib/desktop-runner';
-import { apiFetch } from '@/lib/api';
+import { markParentRead } from '@/lib/mark-read';
 import {
   bumpChannelUnread,
   bumpConversationUnread,
@@ -142,9 +137,10 @@ export default function ChatPage() {
     unhideConversation,
   } = useUnread();
   const { user, logout, patchUser } = useAuth();
-  const { setUserOnline, refreshPresence } = usePresence();
+  // Presence and typing are written straight to their stores: reading them
+  // through usePresence()/useTyping() subscribed this root — and with it the
+  // whole layout — to every presence and typing event in the workspace.
   const { dispatch: dispatchNotification, notifyApproval, setCurrentUserID } = useNotifications();
-  const { recordTyping, clearTyping, setSelfUserID } = useTyping();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
@@ -164,7 +160,7 @@ export default function ChatPage() {
       setCurrentUserID(null);
       setSelfUserID(null);
     };
-  }, [user?.id, setCurrentUserID, setSelfUserID]);
+  }, [user?.id, setCurrentUserID]);
 
   // After a gap in the socket (reconnect, or a replay the server could no
   // longer serve), refetch what the durable inbox doesn't carry: the list
@@ -183,28 +179,39 @@ export default function ChatPage() {
     queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
     queryClient.invalidateQueries({ queryKey: queryKeys.activity() });
     queryClient.invalidateQueries({ queryKey: queryKeys.reminders() });
+    // These never go stale on a timer (wsLiveQueryOptions), so a missed
+    // category change or thread reply is only caught here.
+    queryClient.invalidateQueries({ queryKey: queryKeys.sidebarCategories() });
+    queryClient.invalidateQueries({ queryKey: ['thread'] });
     void resyncMessageCache(queryClient);
     // presence.changed is ephemeral (never replayed): every transition that
     // happened while disconnected is gone, so refetch the authoritative online
     // set or the dots drift stale until the next full re-auth.
-    refreshPresence();
+    refreshPresence(queryClient);
   };
 
   // A channel was archived or unarchived: refetch it (by ID and by slug, so
   // whichever view is open picks up the read-only flag) and the sidebar list.
-  const refreshArchivedState = (data: unknown) => {
-    const evt = parseChannelID(data);
-    if (!evt) return;
-    queryClient.invalidateQueries({ queryKey: queryKeys.channel(evt.channelID) });
+  const refreshArchivedState = ({ channelID }: { channelID: string }) => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.channel(channelID) });
     queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug() });
     queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
     queryClient.invalidateQueries({ queryKey: queryKeys.browseChannels() });
   };
 
-  useWebSocket({
-    onMessageNew: (data: unknown) => {
-      const msg = parseMessage(data);
-      if (!msg) return;
+  // userchannel.updated payload we can't read: the old blanket refresh is the
+  // safe floor.
+  const refreshUserChannelState = () => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.sidebarCategories() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
+  };
+
+  // One handler per event (lib/ws-events): useWebSocket validates each frame's
+  // payload against its event's schema and hands the parsed value here.
+  const handlers: WSEventHandlers = {
+    [EventType.MessageNew]: (msg) => {
       const { parentID, parentMessageID, authorID } = msg;
       // The author has finished typing the moment their message lands;
       // drop them from the indicator immediately rather than waiting
@@ -218,11 +225,10 @@ export default function ChatPage() {
         userChannels.some((channel) => channel.channelID === parentID),
         userConversations.some((conv) => conv.conversationID === parentID),
       );
-      // A webhook message carries its creator's userID as authorID, but it is
-      // not "your own message": the bot posted it, not you. Mirror the backend
-      // notification path (which excludes the author only for non-webhook
-      // messages) so a webhook YOU created still bumps your unread indicator —
-      // otherwise it would fire a desktop alert but leave the badge unset.
+      // A webhook post is authored by the `webhook` sentinel (legacy rows: by
+      // its creator) and is never "your own message", even for the webhook's
+      // creator — so it bumps their unread indicator like the desktop alert
+      // the backend sends them.
       const isOwnAuthor = isOwnMessage(msg, user?.id);
       // What this message does to its parent's unread state is a pure rule
       // (lib/message-arrival, mirrored from CLAUDE.md's truth table): only a
@@ -261,26 +267,15 @@ export default function ChatPage() {
         if (parentKind === 'channel') clearChannelUnreadInCache(queryClient, parentID);
         else clearConversationUnreadInCache(queryClient, parentID);
       }
-      if (parentKind === 'channel') {
-        if (arrival === 'mark-read') {
-          // Watching it happen — clear any badge left over from an idle
-          // spell and keep the server caught up for reloads.
-          clearChannelUnreadInCache(queryClient, parentID);
-          void apiFetch<void>(`/api/v1/channels/${encodeURIComponent(parentID)}/read`, { method: 'PUT' })
-            .catch(() => undefined);
-        } else if (arrival === 'bump-unread') {
-          // Patch the unread count straight into the list cache (single
-          // source) — no session delta to reconcile.
-          bumpChannelUnread(queryClient, parentID);
-        }
-      } else if (parentKind === 'conversation') {
-        if (arrival === 'mark-read') {
-          clearConversationUnreadInCache(queryClient, parentID);
-          void apiFetch<void>(`/api/v1/conversations/${encodeURIComponent(parentID)}/read`, { method: 'PUT' })
-            .catch(() => undefined);
-        } else if (arrival === 'bump-unread') {
-          bumpConversationUnread(queryClient, parentID);
-        }
+      if (parentKind && arrival === 'mark-read') {
+        // Watching it happen — clear any badge left over from an idle
+        // spell and keep the server caught up for reloads.
+        void markParentRead(queryClient, { kind: parentKind, id: parentID });
+      } else if (arrival === 'bump-unread') {
+        // Patch the unread count straight into the list cache (single
+        // source) — no session delta to reconcile.
+        if (parentKind === 'channel') bumpChannelUnread(queryClient, parentID);
+        else if (parentKind === 'conversation') bumpConversationUnread(queryClient, parentID);
       }
       if (parentKind === 'conversation') {
         if (isOwnAuthor || !isActiveConversation(parentID)) {
@@ -323,18 +318,16 @@ export default function ChatPage() {
           invalidateThreadBothScopes(queryClient, parentID, parentMessageID, msg.parentType);
         }
         // NOTE: /threads is patched from the root's message.edited event
-        // (upsertUserThreadFromRoot in onMessageEdited), NOT invalidated here —
-        // an invalidate would refetch ListUserThreads, whose eventually-consistent
-        // DynamoDB read can race the just-written thread state and clobber the
-        // patch. The notification handler refetches only for threads we can't
-        // patch (non-member participants).
+        // (upsertUserThreadFromRoot in the message.edited handler), NOT
+        // invalidated here — an invalidate would refetch ListUserThreads, whose
+        // eventually-consistent DynamoDB read can race the just-written thread
+        // state and clobber the patch. The notification handler refetches only
+        // for threads we can't patch (non-member participants).
       } else {
         appendMessageToCache(queryClient, parentID, msg);
       }
     },
-    onMessageEdited: (data: unknown) => {
-      const msg = parseMessage(data);
-      if (!msg) return;
+    [EventType.MessageEdited]: (msg) => {
       const { parentID, parentMessageID, id } = msg;
       updateMessageInCache(queryClient, parentID, msg);
       // Patch the thread cache in place instead of invalidating it, so a
@@ -350,9 +343,7 @@ export default function ChatPage() {
       // are now stale — refetch them so the edited body/attachments show.
       invalidateUnfurlsForMessage(queryClient, id);
     },
-    onMessageDeleted: (data: unknown) => {
-      const msg = parseMessageDeleted(data);
-      if (!msg) return;
+    [EventType.MessageDeleted]: (msg) => {
       const { parentID, parentMessageID, id } = msg;
       markMessageDeletedInCache(queryClient, parentID, id, parentMessageID, msg);
       invalidateThreadBothScopes(queryClient, parentID, parentMessageID || id, msg.parentType);
@@ -361,37 +352,30 @@ export default function ChatPage() {
       // a deletion can change either, so refresh the list too.
       queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
     },
-    onMembersChanged: (data: unknown) => {
-      const evt = parseMembersChanged(data);
-      if (!evt) return;
-      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(evt.channelID) });
+    [EventType.MembersChanged]: ({ channelID }) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(channelID) });
       queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
       // The "X was added/removed" system message arrives via message.new
       // and is appended via appendMessageToCache. Invalidating the
       // message list here would walk forward from pages[0] and truncate
       // a deep-linked page chain.
     },
-    onConversationNew: () => {
+    [EventType.ConversationNew]: () => {
       // Refresh conversation list in sidebar
       queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
     },
-    onConversationConverted: (data: unknown) => {
-      const evt = parseConversationConverted(data);
-      if (evt) followConvertedConversation(queryClient, evt, navigate);
-    },
+    [EventType.ConversationConverted]: (evt) => followConvertedConversation(queryClient, evt, navigate),
     // Archiving no longer removes anyone: the channel turns read-only (or,
     // unarchived, writable again) in place. Refetch it and the sidebar list —
     // the open view swaps its composer for the archived notice; nobody is
     // navigated away.
-    onChannelArchived: (data: unknown) => refreshArchivedState(data),
-    onChannelUnarchived: (data: unknown) => refreshArchivedState(data),
-    onChannelRemoved: (data: unknown) => {
-      const evt = parseChannelID(data);
-      if (!evt) return;
+    [EventType.ChannelArchived]: refreshArchivedState,
+    [EventType.ChannelUnarchived]: refreshArchivedState,
+    [EventType.ChannelRemoved]: ({ channelID }) => {
       const userChannels = queryClient.getQueryData<{ channelID: string; channelName: string }[]>(queryKeys.userChannels());
-      const open = userChannels?.find((c) => c.channelID === evt.channelID);
+      const open = userChannels?.find((c) => c.channelID === channelID);
       queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(evt.channelID) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(channelID) });
       // The directory's BrowsePublic results are guest-scoped (only joined
       // channels), so a kicked-out guest must refetch to drop the channel
       // they no longer belong to from the listing.
@@ -400,83 +384,65 @@ export default function ChatPage() {
         navigate('/', { replace: true });
       }
     },
-    onChannelUpdated: (data: unknown) => {
-      if (!parseChannelID(data)) return;
+    [EventType.ChannelUpdated]: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug() });
       queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
     },
-    onChannelNew: () => {
+    [EventType.ChannelNew]: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.browseChannels() });
       queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
     },
-    onPresenceChanged: (data: unknown) => {
-      const evt = parsePresence(data);
-      if (!evt) return;
-      setUserOnline(evt.userID, evt.online);
+    [EventType.PresenceChanged]: ({ userID, online }) => {
+      usePresenceStore.getState().setUserOnline(userID, online);
     },
-    onEmojiAdded: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.emojis() });
-    },
-    onEmojiRemoved: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.emojis() });
-    },
-    onWebhookChanged: () => {
+    // Patched from the payload: a refetch per client per catalogue change,
+    // and a fresh emoji map that re-hydrated every mounted message body.
+    [EventType.EmojiAdded]: (emoji) => applyEmojiAddedEvent(queryClient, emoji),
+    [EventType.EmojiRemoved]: ({ name }) => applyEmojiRemovedEvent(queryClient, name),
+    [EventType.WebhookChanged]: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.incomingWebhooks() });
     },
-    onProjectChanged: () => {
+    [EventType.ProjectChanged]: () => {
       // A project or its design references changed (any member, any device):
       // the list and every open project detail refetch.
       queryClient.invalidateQueries({ queryKey: queryKeys.projects() });
     },
-    onSettingsUpdated: () => {
+    [EventType.SettingsUpdated]: () => {
       // An admin saved the workspace settings — refetch what they gate (the
       // Runners tab appears or goes away without a reload).
       queryClient.invalidateQueries({ queryKey: queryKeys.workspaceSettings() });
     },
-    onRunnersChanged: () => {
+    [EventType.RunnersChanged]: () => {
       // One of my computers was connected or disconnected, or came online.
       queryClient.invalidateQueries({ queryKey: queryKeys.runnerTokens() });
     },
-    onActivityNew: (data: unknown) => {
-      // An item landed in the activity stream — add it from the payload so the
-      // sidebar badge + list update without refetching the whole feed.
-      applyActivityNewEvent(queryClient, data);
-    },
-    onRemindersChanged: () => {
-      // A reminder was set or cancelled (here or on another device), fired, or
-      // went with its message or channel — refetch the pending list.
-      applyRemindersChangedEvent(queryClient);
-    },
-    onScheduledMessagesChanged: () => {
+    // An item landed in the activity stream — add it from the payload so the
+    // sidebar badge + list update without refetching the whole feed.
+    [EventType.ActivityNew]: ({ item }) => applyActivityNewEvent(queryClient, item),
+    // A reminder was set or cancelled (here or on another device), fired, or
+    // went with its message or channel — refetch the pending list.
+    [EventType.RemindersChanged]: () => applyRemindersChangedEvent(queryClient),
+    [EventType.ScheduledMessagesChanged]: () => {
       // Scheduled, edited, sent or failed on another tab/device (or by the
       // server at send time) — refetch the Scheduled list.
       queryClient.invalidateQueries({ queryKey: queryKeys.scheduledMessages() });
     },
-    onActivityRead: (data: unknown) => {
-      // Items were marked read/unread or removed (here or on another device),
-      // so every device's badge follows instead of lingering until the next
-      // activity.new (SPEC GAP-3 / I-4).
-      applyActivityChangedEvent(queryClient, data);
-    },
-    onThreadUpdated: (data: unknown) => {
-      // Participant-scoped reply metadata: the server only sends this to users
-      // who belong in the thread, so patch the /threads row directly from the
-      // payload — no participation guess, no eventually-consistent refetch. This
-      // covers threads the viewer didn't author (which the message.edited-driven
-      // upsertUserThreadFromRoot deliberately skips) and the sender's own tabs.
-      const evt = parseThreadUpdated(data);
-      if (!evt) return;
-      upsertUserThreadRow(queryClient, evt);
-    },
-    onUserUpdated: (data: unknown) => {
-      const updated = parseUserUpdated(data);
-      if (!updated) return;
-      queryClient.invalidateQueries({ queryKey: queryKeys.user(updated.id) });
+    // Items were marked read/unread or removed (here or on another device),
+    // so every device's badge follows instead of lingering until the next
+    // activity.new (SPEC GAP-3 / I-4).
+    [EventType.ActivityRead]: (change) => applyActivityChangedEvent(queryClient, change),
+    // Participant-scoped reply metadata: the server only sends this to users
+    // who belong in the thread, so patch the /threads row directly from the
+    // payload — no participation guess, no eventually-consistent refetch. This
+    // covers threads the viewer didn't author (which the message.edited-driven
+    // upsertUserThreadFromRoot deliberately skips) and the sender's own tabs.
+    [EventType.ThreadUpdated]: (summary) => upsertUserThreadRow(queryClient, summary),
+    [EventType.UserUpdated]: (updated) => {
       const currentUser = user;
       if (currentUser && updated.id === currentUser.id) {
         patchUser({
           ...(Object.prototype.hasOwnProperty.call(updated, 'userStatus')
-            ? { userStatus: updated.userStatus === null ? undefined : updated.userStatus as typeof currentUser.userStatus }
+            ? { userStatus: updated.userStatus ?? undefined }
             : {}),
           ...(updated.timeZone !== undefined ? { timeZone: updated.timeZone } : {}),
           ...(updated.lastSeenAt !== undefined ? { lastSeenAt: updated.lastSeenAt } : {}),
@@ -484,37 +450,17 @@ export default function ChatPage() {
           ...(updated.manager !== undefined ? { manager: updated.manager ?? undefined } : {}),
         });
       }
-      // Avatar/displayName changed for some user — invalidate user batches and
-      // member lists so all open views refresh stale presigned avatar URLs.
-      queryClient.invalidateQueries({ queryKey: queryKeys.usersBatch() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.allUsers() });
-      queryClient.invalidateQueries({ queryKey: ['searchUsers'] });
-      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
-      // The Directory page's Members tab fetches users into local
-      // useState (not React Query), so cache invalidation isn't enough
-      // — broadcast a DOM event the page listens to and refetches on.
-      window.dispatchEvent(new CustomEvent('ex:user-updated'));
+      // Every cached copy of the user (profile, batches, roster, searches,
+      // the directory, member lists, DM rows) takes the changed fields in
+      // place; see lib/user-cache.
+      applyUserUpdatedEvent(queryClient, updated, currentUser?.id);
     },
-    onUserChannelUpdated: (data: unknown) => {
+    [EventType.UserChannelUpdated]: (evt) => {
       // userchannel.updated multiplexes several per-user sidebar changes;
       // dispatch on the payload instead of blanket-invalidating four
       // queries. That blanket refetch ran on EVERY conversation send (the
       // backend fans an activity touch to all participants, including the
       // author), so each sent DM cost four extra list fetches.
-      const evt = parseUserChannelUpdated(data);
-      const blanketRefresh = () => {
-        queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
-        queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
-        queryClient.invalidateQueries({ queryKey: queryKeys.sidebarCategories() });
-        queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
-      };
-      if (!evt) {
-        // Unparseable/legacy payload — the old blanket refresh is the safe floor.
-        blanketRefresh();
-        return;
-      }
       if (evt.conversationID && evt.updatedAt !== undefined) {
         // Top-level message activity: bump the row's updatedAt in place so
         // the sidebar re-sorts. A missing row (just-activated conversation
@@ -590,9 +536,9 @@ export default function ChatPage() {
         clearConversationUnreadInCache(queryClient, evt.conversationID);
         return;
       }
-      blanketRefresh();
+      refreshUserChannelState();
     },
-    onSidebarUpdated: () => {
+    [EventType.SidebarUpdated]: () => {
       // A server-side sidebar reorder committed (the move endpoint). The
       // ACTING tab already holds the truth from the move response and armed
       // the echo-ignore window — other tabs/devices refetch both lists so
@@ -601,33 +547,24 @@ export default function ChatPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
       queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
     },
-    onAttachmentDeleted: (data: unknown) => {
-      const evt = parseAttachmentDeleted(data);
-      if (!evt) return;
-      queryClient.invalidateQueries({ queryKey: queryKeys.attachment(evt.id) });
+    [EventType.AttachmentDeleted]: ({ id }) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.attachment(id) });
     },
-    onChannelMuted: () => {
+    [EventType.ChannelMuted]: () => {
       // Either tab toggled mute — refetch the user's channel list so the
       // sidebar bell-slash indicator stays in sync across browser tabs.
       queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
     },
-    onNotificationSettingsUpdated: (data: unknown) => {
-      // Account-level notification settings changed (another tab/device).
-      // Patch the in-memory user so every open settings surface reflects it.
-      const evt = data as { settings?: NotificationSettings } | undefined;
-      if (evt?.settings) {
-        patchUser({ notificationSettings: evt.settings });
-      }
-    },
-    onNotification: (data: unknown) => {
-      const n = data as NotificationPayload | undefined;
-      if (!n || !n.kind) return;
+    // Account-level notification settings changed (another tab/device).
+    // Patch the in-memory user so every open settings surface reflects it.
+    [EventType.NotificationSettingsUpdated]: ({ settings }) => patchUser({ notificationSettings: settings }),
+    [EventType.NotificationNew]: (n) => {
       if (n.parentMessageID) {
         // A thread marked unread stays unread even while open.
         if (isActiveThread(n.parentMessageID) && !isReadHeld(threadReadKey(n.parentMessageID))) {
           markThreadSeen(n.parentMessageID, n.createdAt, {
             parentID: n.parentID,
-            parentType: n.parentType === 'conversation' ? 'conversation' : 'channel',
+            parentType: n.parentType,
           });
         } else {
           markThreadNotificationUnread(n.parentMessageID);
@@ -656,68 +593,44 @@ export default function ChatPage() {
       }
       dispatchNotification(n);
     },
-    onDraftUpdated: () => {
+    [EventType.DraftUpdated]: () => {
       if (!shouldRefetchDraftsForRemoteUpdate()) return;
       queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
     },
-    onServerVersion: (data: unknown) => {
-      const evt = parseServerVersion(data);
-      if (!evt) return;
-      setServerVersion(evt.version);
-    },
-    onPing: () => {
+    [EventType.ServerVersion]: ({ version }) => applyServerVersionEvent(queryClient, version),
+    [EventType.Ping]: () => {
       const detected = localTimeZone();
       if (!detected || detected === reportedTimeZoneRef.current) return;
       reportedTimeZoneRef.current = detected;
       sendWS({ type: 'timezone.update', timeZone: detected });
     },
-    onForceLogout: () => {
+    [EventType.ForceLogout]: () => {
       // Server tells us this session must end (admin disabled the account
       // mid-session). Wipe local auth state and bounce to /login so the
       // user sees the same screen they'd hit after a normal logout —
       // refresh tokens were already wiped server-side.
       void logout().finally(() => navigate('/login', { replace: true }));
     },
-    onTyping: (data: unknown) => {
-      const evt = parseTyping(data);
-      if (!evt) return;
-      // parentMessageID present → typing inside a thread reply composer.
-      // Routed into typingByThread; ThreadPanel reads that bucket so the
-      // indicator surfaces in the side panel rather than the main list.
-      recordTyping(evt.parentID, evt.userID, evt.parentMessageID ?? '');
-    },
+    // parentMessageID present → typing inside a thread reply composer.
+    // Routed into typingByThread; ThreadPanel reads that bucket so the
+    // indicator surfaces in the side panel rather than the main list.
+    [EventType.Typing]: ({ parentID, userID, parentMessageID }) => recordTyping(parentID, userID, parentMessageID ?? ''),
     // Live agent-run activity for the channel's activity bar. run.updated is
     // the lifecycle (add on active, remove on terminal); run.progress is the
     // "what is it doing" beat. Both land in the agent-runs store; the
     // AgentActivityIndicator subscribes per parent.
-    onRunUpdated: (data: unknown) => {
-      onAgentRunUpdated(data);
-    },
-    onRunProgress: (data: unknown) => {
-      onAgentRunProgress(data);
-    },
+    [EventType.RunUpdated]: onAgentRunUpdated,
+    [EventType.RunProgress]: onAgentRunProgress,
     // Blocking approval requests (plan-v2 §7): the card above the composer
     // for the invoker; requests appear pending, settle frames remove them.
-    onRunApproval: (data: unknown) => {
-      onAgentRunApproval(data);
+    [EventType.RunApproval]: (a) => {
+      onAgentRunApproval(a);
       // The run.approval frame is the authoritative signal for a blocking gate,
       // so the desktop alert is derived from it rather than from the parallel
       // notification.new (whose identity is the invoking message, which every
       // gate in a run shares). Only a fresh PENDING gate addressed to this user
       // alerts — settle/expiry frames just clear the card.
-      const a = data as {
-        approvalID?: string;
-        runID?: string;
-        invokerID?: string;
-        agentName?: string;
-        parentID?: string;
-        parentType?: string;
-        messageID?: string;
-        summary?: string;
-        options?: string[];
-        state?: string;
-      } | null;
-      if (!a?.approvalID || !a.parentID || a.state !== 'pending') return;
+      if (a.state !== 'pending') return;
       if (!user?.id || a.invokerID !== user.id) return;
       const parentType = a.parentType === 'conversation' ? 'conversation' : 'channel';
       // Channel routes are by SLUG, so resolve it from the cached channel list
@@ -733,6 +646,7 @@ export default function ChatPage() {
         const ch = chans?.find((c) => c.channelID === a.parentID);
         if (ch) deepLink = `/channel/${slugify(ch.channelName)}`;
       }
+      const options = a.options ?? undefined;
       notifyApproval({
         approvalID: a.approvalID,
         runID: a.runID ?? '',
@@ -740,11 +654,24 @@ export default function ChatPage() {
         parentType,
         agentName: a.agentName || undefined,
         summary: a.summary ?? '',
-        asksChoice: Array.isArray(a.options) && a.options.length > 0,
-        options: Array.isArray(a.options) ? a.options : undefined,
+        asksChoice: !!options && options.length > 0,
+        options,
         messageID: a.messageID,
         deepLink,
       });
+    },
+  };
+
+  useWebSocket({
+    handlers,
+    // A payload that fails its schema is reported by ws-events; these refetch
+    // what it would have patched, so nothing stays stale.
+    invalidPayloadFallbacks: {
+      [EventType.UserChannelUpdated]: refreshUserChannelState,
+      [EventType.EmojiAdded]: () => invalidateEmojis(queryClient),
+      [EventType.EmojiRemoved]: () => invalidateEmojis(queryClient),
+      [EventType.ActivityNew]: () => refetchActivity(queryClient),
+      [EventType.ActivityRead]: () => refetchActivity(queryClient),
     },
     onReconnect: refreshAfterGap,
     // The server's durable inbox lost our cursor — same recovery.

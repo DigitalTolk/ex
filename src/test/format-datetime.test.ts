@@ -1,25 +1,36 @@
 import { describe, it, expect } from 'vitest';
-import { ordinalSuffix, formatLongDateTime, formatDayHeading, formatRelative, firstNamesOnly, extractURLs, dayKey } from '@/lib/format';
+import { calendarDaysAgo, formatLongDate, formatLongDateTime, formatDayHeading, formatRelative, firstNamesOnly, extractURLs, dayKey } from '@/lib/format';
 
-describe('ordinalSuffix', () => {
+// Ordinals come from the date formatter; pin the English suffix rules on
+// every surface that prints one.
+describe('ordinal day suffixes', () => {
+  const heading = (day: number) => formatDayHeading(new Date(2026, 2, day, 12), new Date(2026, 3, 26));
+
   it('handles 1, 2, 3, 4 correctly', () => {
-    expect(ordinalSuffix(1)).toBe('st');
-    expect(ordinalSuffix(2)).toBe('nd');
-    expect(ordinalSuffix(3)).toBe('rd');
-    expect(ordinalSuffix(4)).toBe('th');
+    expect(heading(1)).toBe('Mar 1st');
+    expect(heading(2)).toBe('Mar 2nd');
+    expect(heading(3)).toBe('Mar 3rd');
+    expect(heading(4)).toBe('Mar 4th');
   });
 
   it('handles the 11/12/13 exception block', () => {
-    expect(ordinalSuffix(11)).toBe('th');
-    expect(ordinalSuffix(12)).toBe('th');
-    expect(ordinalSuffix(13)).toBe('th');
+    expect(heading(11)).toBe('Mar 11th');
+    expect(heading(12)).toBe('Mar 12th');
+    expect(heading(13)).toBe('Mar 13th');
   });
 
   it('handles 21st, 22nd, 23rd at month-end', () => {
-    expect(ordinalSuffix(21)).toBe('st');
-    expect(ordinalSuffix(22)).toBe('nd');
-    expect(ordinalSuffix(23)).toBe('rd');
-    expect(ordinalSuffix(31)).toBe('st');
+    expect(heading(21)).toBe('Mar 21st');
+    expect(heading(22)).toBe('Mar 22nd');
+    expect(heading(23)).toBe('Mar 23rd');
+    expect(heading(31)).toBe('Mar 31st');
+  });
+
+  it('uses the same suffixes in long dates and timestamps', () => {
+    expect(formatLongDate(new Date(2016, 7, 3))).toBe('August 3rd, 2016');
+    expect(formatLongDate(new Date(2016, 7, 12))).toBe('August 12th, 2016');
+    expect(formatLongDate(new Date(2016, 7, 22))).toBe('August 22nd, 2016');
+    expect(formatLongDateTime(new Date(2026, 4, 11, 8, 0, 0))).toBe('May 11th at 08:00:00');
   });
 });
 
@@ -91,6 +102,31 @@ describe('formatRelative', () => {
 
   it('returns years-ago for older timestamps', () => {
     expect(formatRelative(new Date(now.getTime() - 400 * 86_400_000), now)).toBe('1 year ago');
+  });
+
+  // Rounding never produces "60 minutes ago" / "24 hours ago" / "30 days
+  // ago": a gap that rounds up to the next unit is worded in that unit.
+  it('rounds into the next unit instead of printing a full unit of the smaller one', () => {
+    expect(formatRelative(new Date(now.getTime() - 44_000), now)).toBe('just now');
+    expect(formatRelative(new Date(now.getTime() - 50_000), now)).toBe('1 minute ago');
+    expect(formatRelative(new Date(now.getTime() - (59 * 60_000 + 50_000)), now)).toBe('1 hour ago');
+    expect(formatRelative(new Date(now.getTime() - (23 * 3_600_000 + 50 * 60_000)), now)).toBe('1 day ago');
+    expect(formatRelative(new Date(now.getTime() - 29.7 * 86_400_000), now)).toBe('1 month ago');
+    expect(formatRelative(new Date(now.getTime() - 359 * 86_400_000), now)).toBe('1 year ago');
+  });
+
+  it('treats a timestamp in the future as just now', () => {
+    expect(formatRelative(new Date(now.getTime() + 3_600_000), now)).toBe('just now');
+  });
+});
+
+describe('calendarDaysAgo', () => {
+  it('counts calendar days, not 24-hour spans', () => {
+    const now = new Date(2026, 3, 26, 0, 30);
+    expect(calendarDaysAgo(new Date(2026, 3, 25, 23, 59), now)).toBe(1);
+    expect(calendarDaysAgo(new Date(2026, 3, 26, 0, 1), now)).toBe(0);
+    expect(calendarDaysAgo(new Date(2026, 3, 20, 12), now)).toBe(6);
+    expect(calendarDaysAgo('2026-04-27T12:00:00', now)).toBe(-1);
   });
 });
 
@@ -170,5 +206,23 @@ describe('extractURLs', () => {
     // is undefined; the guard must not throw on `body.length`.
     expect(extractURLs(undefined as unknown as string)).toEqual([]);
     expect(extractURLs('')).toEqual([]);
+  });
+});
+
+// A timestamp that doesn't parse must not take the message list down: the
+// date formatter throws on an invalid date, the old hand-written code didn't.
+describe('unparseable timestamps', () => {
+  const bad = '2026-10-07T09:-4:00Z';
+  it('format to nothing instead of throwing', () => {
+    expect(formatLongDate(bad)).toBe('');
+    expect(formatLongDateTime(bad)).toBe('');
+    expect(formatRelative(bad)).toBe('');
+    expect(formatDayHeading(bad)).toBe('');
+    expect(Number.isNaN(calendarDaysAgo(bad, new Date()))).toBe(true);
+  });
+
+  it('group together, apart from every real day', () => {
+    expect(dayKey(bad)).toBe(dayKey('not a date'));
+    expect(dayKey(bad)).not.toBe(dayKey(new Date(2026, 9, 7)));
   });
 });

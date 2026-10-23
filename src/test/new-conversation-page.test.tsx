@@ -11,7 +11,7 @@ const userConversations = vi.hoisted(() => ({ value: [] as unknown[] | undefined
 vi.mock('@/hooks/useConversations', () => ({
   useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useUserConversations: () => ({ data: userConversations.value }),
-  useSearchUsers: (q: string) => ({
+  useUserLookup: (q: string) => ({
     // Mirror the real hook: `data` is undefined (not []) while the query is
     // disabled/unresolved — the page must coerce it.
     data:

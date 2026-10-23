@@ -74,7 +74,7 @@ vi.mock('./LoadingBar', () => ({ LoadingBar: () => null }));
 vi.mock('@/hooks/useServerVersion', () => ({
   BUILD_DISPLAY_VERSION: 'browser-test',
   BUILD_VERSION: 'browser-test',
-  setServerVersion: vi.fn(),
+  reportServerVersion: vi.fn(),
   useServerVersion: () => ({ outdated: true }),
 }));
 

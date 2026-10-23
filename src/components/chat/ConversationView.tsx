@@ -6,7 +6,7 @@ import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { Header } from '@/components/layout/Header';
 import { MessageList } from './MessageList';
-import { MessageInput, type MessageInputHandle, type MessageInputValue } from './MessageInput';
+import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
 import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
@@ -20,17 +20,12 @@ import { AgentActivityIndicator } from './AgentActivityIndicator';
 import { AgentApprovalCard } from './AgentApprovalCard';
 import { WatcherCatchUpCard } from './WatcherCatchUpCard';
 import { useConversation, useUserConversations } from '@/hooks/useConversations';
-import {
-  useConversationMessages,
-  useEditMessage,
-  useSendConversationMessage,
-} from '@/hooks/useMessages';
-import { useComposerSchedule } from '@/hooks/useScheduledMessages';
+import { useConversationMessages } from '@/hooks/useMessages';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
-import { useNotifications } from '@/context/NotificationContext';
 import { markThreadSeen, noteThreadReadPosition } from '@/hooks/useThreads';
-import { collectMessageUserIDs, findLastOwnMessageId } from '@/lib/message-users';
+import { findLastOwnMessageId } from '@/lib/message-users';
+import { useMessagePageUserIDs } from '@/hooks/useMessagePageUserIDs';
 import { useSidePanels } from '@/hooks/useSidePanels';
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
@@ -38,22 +33,14 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useDeepLinkAnchor, useListAnchor, forgetDeepLinkInAddress } from '@/hooks/useDeepLinkAnchor';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useIsOnline } from '@/stores/presence';
-import {
-  useDraftAttachmentChips,
-  useDraftForScope,
-  useSaveDraft,
-} from '@/hooks/useDrafts';
 import { firstName } from '@/lib/format';
-import { apiFetch } from '@/lib/api';
-import { queryKeys } from '@/lib/query-keys';
-import { clearConversationUnreadInCache } from '@/lib/unread-cache';
 import type { Conversation, UserConversation } from '@/types';
 import { useEventCallback } from '@/hooks/useEventCallback';
 import { useEqualValue } from '@/hooks/useEqualValue';
 import { sameUserMap } from '@/lib/user-map-equal';
 import type { UserMapEntry } from './MessageList';
-import { useReadSession } from '@/hooks/useReadSession';
-import { useEditingMessage } from '@/hooks/useEditingMessage';
+import { useParentChat } from '@/hooks/useParentChat';
+import { ChannelRole } from '@/lib/roles';
 
 function errorStatus(err: unknown): number | null {
   return typeof err === 'object' && err !== null && 'status' in err
@@ -96,9 +83,8 @@ export function ConversationView() {
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
-  const { setActiveConversation, setActiveThread } = useUnread();
+  const { setActiveThread } = useUnread();
   const quickReactions = useFrequentEmojis(6);
-  const { setActiveParent } = useNotifications();
   const { data: conversation, error: conversationError, isLoading: conversationLoading } = useConversation(id);
   // The sidebar's name for this chat, shown while the conversation loads.
   // Only that name, not the whole list: any chat's unread change rewrites the
@@ -122,104 +108,19 @@ export function ConversationView() {
     isFetchingPreviousPage,
     fetchPreviousPage,
   } = useConversationMessages(id, listAnchor);
-  const sendMessage = useSendConversationMessage(id, user?.id);
-  const schedule = useComposerSchedule({ parentID: id, parentType: 'conversation' });
-  const draftScope = useMemo(
-    () => ({ parentID: id, parentType: 'conversation' as const }),
-    [id],
-  );
-  const { data: draft } = useDraftForScope(draftScope);
-  const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
   const isMobile = useIsMobile();
+  // The composer, the read session and the active parent (see useParentChat).
   const {
-    editingMessage,
-    setEditingMessage,
-    activeEditingMessage,
-    editDraftAttachments,
-    editReady,
-  } = useEditingMessage(id, 'conversation');
-  const editMessage = useEditMessage();
-  const saveDraft = useSaveDraft();
-  const saveDraftMutate = saveDraft.mutate;
-  const handleDraftChange = useCallback(
-    (value: MessageInputValue, options?: { notify?: boolean; keepalive?: boolean }) => {
-      /* istanbul ignore next -- the composer (this callback's only caller) is rendered only after the `if (!id)` early-return, so the guard can never fire; defensive. */
-      if (!id) return;
-      saveDraftMutate({
-        parentID: id,
-        parentType: 'conversation',
-        body: value.body,
-        attachmentIDs: value.attachmentIDs,
-        // Keystroke saves persist silently; the focus-loss flush (notify)
-        // is what surfaces the draft in the sidebar.
-        silent: !options?.notify,
-        keepalive: options?.keepalive,
-      });
-    },
-    [id, saveDraftMutate],
-  );
-  const handleSendMessage = useCallback(
-    (value: { body: string; attachmentIDs: string[] }) => {
-      // Draft lifecycle (condemn at mutate, cache patch-out on success,
-      // rollback on error) is owned by useSendMessage.
-      sendMessage.mutate(value);
-    },
-    [sendMessage],
-  );
-  const handleEditMessage = useCallback(
-    (value: { body: string; attachmentIDs: string[] }) => {
-      /* istanbul ignore next -- handleEditMessage is only wired as the composer's onSend while activeEditingMessage (hence editingMessage) is set, so it is never invoked with a null editingMessage. */
-      if (!editingMessage) return;
-      const currentAttachmentIDs = editingMessage.attachmentIDs ?? [];
-      const same =
-        value.body === editingMessage.body &&
-        value.attachmentIDs.length === currentAttachmentIDs.length &&
-        value.attachmentIDs.every((attID, idx) => attID === currentAttachmentIDs[idx]);
-      if (same || (!value.body.trim() && value.attachmentIDs.length === 0)) {
-        setEditingMessage(null);
-        return;
-      }
-      editMessage.mutate(
-        {
-          messageId: editingMessage.id,
-          body: value.body,
-          attachmentIDs: value.attachmentIDs,
-          conversationId: id,
-        },
-        { onSuccess: () => setEditingMessage(null) },
-      );
-    },
-    [editMessage, editingMessage, id, setEditingMessage],
-  );
-
-  // Drop the badge instantly in the list cache, then persist the read so it
-  // stays cleared on a reload (the refetch confirms the server count is 0).
-  const markConversationRead = useCallback(
-    (openedID: string) => {
-      clearConversationUnreadInCache(queryClient, openedID);
-      void apiFetch<void>(`/api/v1/conversations/${openedID}/read`, { method: 'PUT' })
-        .catch(() => undefined)
-        .finally(() => {
-          queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
-        });
-    },
-    [queryClient],
-  );
-
-  useEffect(() => {
-    if (!id) return;
-    setActiveConversation(id);
-    setActiveParent(id);
-    return () => {
-      setActiveConversation(null);
-      setActiveParent(null);
-    };
-  }, [id, setActiveConversation, setActiveParent]);
-
-  // Opening reads the conversation but keeps a "New messages" line where you
-  // left off; after that it reads only while you follow along at the bottom
-  // (see useReadSession).
-  const readSession = useReadSession('conversation', id, markConversationRead);
+    schedule,
+    draft,
+    draftAttachments,
+    editing: { setEditingMessage, activeEditingMessage, editDraftAttachments, editReady },
+    editMessage,
+    handleDraftChange,
+    handleSendMessage,
+    handleEditMessage,
+    readSession,
+  } = useParentChat({ kind: 'conversation', id, userID: user?.id });
 
   const [threadRootID, setThreadRootID] = useState<string | null>(null);
   const inputRef = useRef<MessageInputHandle>(null);
@@ -261,10 +162,6 @@ export function ConversationView() {
   // Reset locally-opened thread when the conversation changes.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setThreadRootID(null), [id]);
-  // setEditingMessage is a useState setter re-exported through
-  // useEditingMessage — stable, so listing it is a behavioral no-op that
-  // satisfies exhaustive-deps (the lint can't see through the hook).
-  useEffect(() => setEditingMessage(null), [id, setEditingMessage]);
 
   // The displayed thread is the local one if set, otherwise the URL-
   // driven one — unless the user has dismissed it.
@@ -294,14 +191,8 @@ export function ConversationView() {
     return () => setActiveThread(null);
   }, [effectiveThreadRootID, setActiveThread]);
 
-  const userIDs = useMemo(() => {
-    const ids = new Set<string>();
-    conversation?.participantIDs?.forEach((pid) => ids.add(pid));
-    for (const page of data?.pages ?? []) {
-      for (const id of collectMessageUserIDs(page.items)) ids.add(id);
-    }
-    return Array.from(ids);
-  }, [conversation?.participantIDs, data]);
+  // Walked per page, and only the page an event changed (useMessagePageUserIDs).
+  const userIDs = useMessagePageUserIDs(data?.pages, conversation?.participantIDs);
 
   const { data: usersData } = useUsersBatch(userIDs);
 
@@ -436,7 +327,7 @@ export function ConversationView() {
     userID: pid,
     displayName: userMap[pid]?.displayName ?? 'Unknown',
     channelID: '',
-    role: 'member' as const,
+    role: ChannelRole.Member,
     joinedAt: '',
   }));
 

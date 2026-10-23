@@ -40,8 +40,7 @@ vi.mock('@/components/UpdateBanner', () => ({ UpdateBanner: () => null }));
 vi.mock('@/hooks/useServerVersion', () => ({
   BUILD_DISPLAY_VERSION: 'browser-test',
   BUILD_VERSION: 'browser-test',
-  setServerVersion: vi.fn(),
-  resetServerVersionForTests: vi.fn(),
+  reportServerVersion: vi.fn(),
   useServerVersion: () => ({ outdated: false }),
 }));
 

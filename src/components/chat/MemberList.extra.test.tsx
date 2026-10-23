@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -53,7 +53,10 @@ describe('MemberList - invite & remove', () => {
 
     const input = screen.getByLabelText('Add member');
     await user.type(input, 'new');
-    vi.advanceTimersByTime(500);
+    // The debounce fires a state update: inside act.
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
 
     await waitFor(() => {
       expect(screen.getByText('New One')).toBeInTheDocument();
@@ -66,7 +69,10 @@ describe('MemberList - invite & remove', () => {
     renderList();
 
     await user.type(screen.getByLabelText('Add member'), 'fa');
-    vi.advanceTimersByTime(500);
+    // The debounce fires a state update: inside act.
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
 
     await waitFor(() => {
       expect(screen.getByText('No users found')).toBeInTheDocument();
@@ -83,7 +89,10 @@ describe('MemberList - invite & remove', () => {
     renderList();
 
     await user.type(screen.getByLabelText('Add member'), 'new');
-    vi.advanceTimersByTime(500);
+    // The debounce fires a state update: inside act.
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
 
     await screen.findByText('New One');
     fireEvent.click(screen.getByTestId('member-add-user-u-99'));
@@ -112,7 +121,10 @@ describe('MemberList - invite & remove', () => {
     renderList();
 
     await user.type(screen.getByLabelText('Add member'), 'bo');
-    vi.advanceTimersByTime(500);
+    // The debounce fires a state update: inside act.
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
 
     expect(await screen.findByTestId('member-add-user-u-2-added')).toHaveAccessibleName('Already added');
     const row = screen.getByTestId('member-add-user-u-2');

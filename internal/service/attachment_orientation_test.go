@@ -49,8 +49,23 @@ func TestInspectContent_PhotoTakenUpright(t *testing.T) {
 		t.Fatalf("size = %dx%d, want it as shown, 20x30", cfg.Width, cfg.Height)
 	}
 	// As stored, from a client that didn't turn it: still the same photo.
-	if cfg, err := inspectBytes(jpegAttachment(30, 20), "image/jpeg", photo); err != nil || cfg.Width != 20 || cfg.Height != 30 {
-		t.Fatalf("stored size = %v, %v; want accepted as 20x30", cfg, err)
+	// Without decoding, the server has no orientation of its own to go by,
+	// so it keeps the size the client measured.
+	if cfg, err := inspectBytes(jpegAttachment(30, 20), "image/jpeg", photo); err != nil || cfg.Width != 30 || cfg.Height != 20 {
+		t.Fatalf("stored size = %v, %v; want accepted as claimed, 30x20", cfg, err)
+	}
+	// Decoded (for thumbnails), the upright pixels are the truth.
+	cfg, img, release, err := inspectContent(context.Background(), jpegAttachment(30, 20), "image/jpeg", bufio.NewReader(bytes.NewReader(photo)), true)
+	release()
+	if err != nil || img == nil || cfg.Width != 20 || cfg.Height != 30 {
+		t.Fatalf("decoded size = %v, %v; want the upright 20x30", cfg, err)
+	}
+	// A partial claim (one side unknown) matches either orientation too.
+	if cfg, err := inspectBytes(jpegAttachment(20, 0), "image/jpeg", photo); err != nil || cfg.Width != 20 || cfg.Height != 30 {
+		t.Fatalf("partial upright claim = %v, %v; want 20x30", cfg, err)
+	}
+	if cfg, err := inspectBytes(jpegAttachment(0, 0), "image/jpeg", photo); err != nil || cfg.Width != 30 || cfg.Height != 20 {
+		t.Fatalf("no claim = %v, %v; want the stored 30x20", cfg, err)
 	}
 	// Any other size is not this photo.
 	if _, err := inspectBytes(jpegAttachment(25, 30), "image/jpeg", photo); err == nil {
@@ -79,62 +94,92 @@ func TestInspectContent_DecodesThePhotoUpright(t *testing.T) {
 	}
 }
 
-func TestOrient(t *testing.T) {
-	// A 3×2 image with one marked pixel at (0,0).
-	src := image.NewNRGBA(image.Rect(0, 0, 3, 2))
-	src.Set(0, 0, color.NRGBA{255, 0, 0, 255})
+// Every EXIF orientation decodes the way it is shown: sized upright, with the
+// stored top-left corner where the turn puts it. An out-of-range value is
+// ignored (shown as stored).
+func TestInspectContent_DecodesEveryOrientationUpright(t *testing.T) {
+	type corner int
+	const (
+		topLeft corner = iota
+		topRight
+		bottomRight
+		bottomLeft
+	)
 	for _, tc := range []struct {
-		orientation int
+		orientation uint16
 		w, h        int
-		marked      image.Point
+		red         corner
 	}{
-		{1, 3, 2, image.Pt(0, 0)},
-		{2, 3, 2, image.Pt(2, 0)},
-		{3, 3, 2, image.Pt(2, 1)},
-		{4, 3, 2, image.Pt(0, 1)},
-		{5, 2, 3, image.Pt(0, 0)},
-		{6, 2, 3, image.Pt(1, 0)},
-		{7, 2, 3, image.Pt(1, 2)},
-		{8, 2, 3, image.Pt(0, 2)},
+		{1, 30, 20, topLeft},
+		{2, 30, 20, topRight},
+		{3, 30, 20, bottomRight},
+		{4, 30, 20, bottomLeft},
+		{5, 20, 30, topLeft},
+		{6, 20, 30, topRight},
+		{7, 20, 30, bottomRight},
+		{8, 20, 30, bottomLeft},
+		{9, 30, 20, topLeft},
 	} {
-		got := orient(src, tc.orientation)
-		if got.Bounds().Dx() != tc.w || got.Bounds().Dy() != tc.h {
-			t.Errorf("orientation %d: %v, want %dx%d", tc.orientation, got.Bounds(), tc.w, tc.h)
+		_, img, release, err := inspectContent(context.Background(), &model.Attachment{ContentType: "image/jpeg"}, "image/jpeg", bufio.NewReader(bytes.NewReader(sidewaysPhoto(t, tc.orientation))), true)
+		release()
+		if err != nil {
+			t.Fatalf("orientation %d: %v", tc.orientation, err)
+		}
+		if img.Bounds().Dx() != tc.w || img.Bounds().Dy() != tc.h {
+			t.Errorf("orientation %d: decoded %v, want %dx%d", tc.orientation, img.Bounds(), tc.w, tc.h)
 			continue
 		}
-		if r, _, _, _ := got.At(tc.marked.X, tc.marked.Y).RGBA(); r>>8 != 255 {
-			t.Errorf("orientation %d: marked pixel not at %v", tc.orientation, tc.marked)
-		}
-		if c := upright(image.Config{Width: 3, Height: 2}, tc.orientation); c.Width != tc.w || c.Height != tc.h {
-			t.Errorf("orientation %d: upright size %dx%d", tc.orientation, c.Width, c.Height)
+		at := map[corner]image.Point{
+			topLeft: image.Pt(2, 2), topRight: image.Pt(tc.w-3, 2),
+			bottomRight: image.Pt(tc.w-3, tc.h-3), bottomLeft: image.Pt(2, tc.h-3),
+		}[tc.red]
+		if r, g, _, _ := img.At(at.X, at.Y).RGBA(); r>>8 < 200 || g>>8 > 60 {
+			t.Errorf("orientation %d: the red corner is not at %v", tc.orientation, at)
 		}
 	}
 }
 
-func TestExifOrientation(t *testing.T) {
-	if got := exifOrientation(sidewaysPhoto(t, 8)); got != 8 {
-		t.Errorf("orientation = %d, want 8", got)
+// Auto-orientation copies a JPEG's pixels once more to turn them, so the
+// decode budget reserves that copy up front: the orientation is only known
+// once decoding has started.
+func TestImageDecodeCostFor_ReservesARotationForJPEG(t *testing.T) {
+	if got, want := imageDecodeCostFor("jpeg", 10, 20), int64(10*20*(decodeBytesPerPixel+4)); got != want {
+		t.Errorf("jpeg cost = %d, want %d", got, want)
 	}
-	// No EXIF, no orientation tag, a value out of range: as stored.
-	if got := exifOrientation(makePNG(4, 4)); got != 1 {
-		t.Errorf("PNG = %d", got)
+	if got, want := imageDecodeCostFor("png", 10, 20), imageDecodeCost(10, 20); got != want {
+		t.Errorf("png cost = %d, want %d", got, want)
 	}
-	if got := exifOrientation(sidewaysPhoto(t, 9)); got != 1 {
-		t.Errorf("out of range = %d", got)
+}
+
+// When a JPEG cannot be decoded upright right now, the backfill keeps the size
+// it read from the file's header rather than nothing.
+func TestUprightSize_KeepsTheStoredSizeWhenItCannotDecode(t *testing.T) {
+	stored := image.Config{Width: 30, Height: 20}
+	photo := sidewaysPhoto(t, 6)
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{"good": photo, "garbage": []byte("not a jpeg")}}
+	svc := NewAttachmentService(newMockAttachmentStore(), signer, newMockPublisher())
+	ctx := context.Background()
+
+	if got := svc.uprightSize(ctx, "good", "jpeg", stored); got.Width != 20 || got.Height != 30 {
+		t.Fatalf("decodable photo: %dx%d, want upright 20x30", got.Width, got.Height)
 	}
-	noTag := sidewaysPhoto(t, 6)
-	// Turn the one IFD entry's tag (0x0112, Orientation) into another one.
-	i := bytes.Index(noTag, []byte{0x01, 0x12, 0, 3})
-	noTag[i], noTag[i+1] = 0x01, 0x0e
-	if got := exifOrientation(noTag); got != 1 {
-		t.Errorf("no orientation tag = %d", got)
+	if got := svc.uprightSize(ctx, "good", "jpeg", image.Config{Width: 1 << 15, Height: 1 << 15}); got.Width != 1<<15 {
+		t.Fatalf("over the decode budget: %v, want the stored size", got)
 	}
-	wrongType := sidewaysPhoto(t, 6)
-	// Make the Orientation entry an ASCII string: no integer to read.
-	j := bytes.Index(wrongType, []byte{0x01, 0x12, 0, 3})
-	wrongType[j+3] = 2
-	if got := exifOrientation(wrongType); got != 1 {
-		t.Errorf("non-integer orientation = %d", got)
+	if got := svc.uprightSize(ctx, "missing", "jpeg", stored); got != stored {
+		t.Fatalf("unreadable object: %v, want the stored size", got)
+	}
+	if got := svc.uprightSize(ctx, "garbage", "jpeg", stored); got != stored {
+		t.Fatalf("undecodable object: %v, want the stored size", got)
+	}
+	if !imageDecodeBudget.TryAcquire(maxImageDecodeBytes) {
+		t.Fatal("decode budget busy")
+	}
+	defer imageDecodeBudget.Release(maxImageDecodeBytes)
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if got := svc.uprightSize(cancelled, "good", "jpeg", stored); got != stored {
+		t.Fatalf("no decode budget: %v, want the stored size", got)
 	}
 }
 
@@ -155,12 +200,12 @@ func TestAttachmentService_BackfillsAPhotoUpright(t *testing.T) {
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if stored := storeM.byID["photo"]; stored.Width != 0 {
+		if stored := storeM.stored("photo"); stored.Width != 0 {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if stored := storeM.byID["photo"]; stored.Width != 20 || stored.Height != 30 {
+	if stored := storeM.stored("photo"); stored.Width != 20 || stored.Height != 30 {
 		t.Fatalf("backfilled %dx%d, want 20x30", stored.Width, stored.Height)
 	}
 }

@@ -108,7 +108,7 @@ vi.mock('@/hooks/useConversations', () => ({
     const rows = [] as never[];
     return { data: opts?.select && rows ? opts.select(rows) : rows };
   },
-  useSearchUsers: () => ({ data: [] }),
+  useUserLookup: () => ({ data: [] }),
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 

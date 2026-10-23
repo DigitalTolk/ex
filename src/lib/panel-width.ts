@@ -3,6 +3,8 @@
 // bounds and the reset broadcast so the drag hooks, the panels and the
 // profile-settings reset button can never drift apart.
 
+import { readString, removeKey, writeString } from '@/lib/storage';
+
 export interface PanelWidthConfig {
   /** localStorage key holding the persisted width (px). */
   key: string;
@@ -47,6 +49,10 @@ export const RUN_DRAWER_WIDTH: PanelWidthConfig = {
   max: 1024,
 };
 
+// Every resizable panel. Reset and the "customized" check both walk this one
+// list, so a new panel can't be cleared by one and missed by the other.
+const PANELS: readonly PanelWidthConfig[] = [SIDEBAR_WIDTH, SIDE_PANEL_WIDTH, MEMBER_LIST_WIDTH, RUN_DRAWER_WIDTH];
+
 // Fired on window whenever the widths are reset (profile settings button),
 // so live panels snap back without a reload.
 export const PANEL_WIDTHS_RESET_EVENT = 'ex:panel-widths-reset';
@@ -57,44 +63,26 @@ export function clampPanelWidth(cfg: PanelWidthConfig, width: number): number {
 }
 
 export function loadPanelWidth(cfg: PanelWidthConfig): number {
-  try {
-    const raw = window.localStorage.getItem(cfg.key);
-    if (raw == null) return cfg.defaultWidth;
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed)) return cfg.defaultWidth;
-    return clampPanelWidth(cfg, parsed);
-  } catch {
-    // Storage unavailable (private mode restrictions) — fall back silently.
-    return cfg.defaultWidth;
-  }
+  // readString swallows blocked storage (private mode) and returns null.
+  const raw = readString(cfg.key);
+  if (raw == null) return cfg.defaultWidth;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return cfg.defaultWidth;
+  return clampPanelWidth(cfg, parsed);
 }
 
 export function savePanelWidth(cfg: PanelWidthConfig, width: number): void {
-  try {
-    window.localStorage.setItem(cfg.key, String(clampPanelWidth(cfg, width)));
-  } catch {
-    // Best-effort: an unsaved width just means the next session uses the default.
-  }
+  // Best-effort: an unsaved width just means the next session uses the default.
+  writeString(cfg.key, String(clampPanelWidth(cfg, width)));
 }
 
 /** Clears every persisted panel width and notifies live panels. */
 export function resetPanelWidths(): void {
-  try {
-    window.localStorage.removeItem(SIDEBAR_WIDTH.key);
-    window.localStorage.removeItem(SIDE_PANEL_WIDTH.key);
-    window.localStorage.removeItem(MEMBER_LIST_WIDTH.key);
-    window.localStorage.removeItem(RUN_DRAWER_WIDTH.key);
-  } catch {
-    // Nothing stored anywhere reachable — the event alone resets live state.
-  }
+  for (const cfg of PANELS) removeKey(cfg.key);
   window.dispatchEvent(new Event(PANEL_WIDTHS_RESET_EVENT));
 }
 
 /** True when any panel width differs from its default (drives the reset row). */
 export function hasCustomPanelWidths(): boolean {
-  return (
-    loadPanelWidth(SIDEBAR_WIDTH) !== SIDEBAR_WIDTH.defaultWidth ||
-    loadPanelWidth(SIDE_PANEL_WIDTH) !== SIDE_PANEL_WIDTH.defaultWidth ||
-    loadPanelWidth(MEMBER_LIST_WIDTH) !== MEMBER_LIST_WIDTH.defaultWidth
-  );
+  return PANELS.some((cfg) => loadPanelWidth(cfg) !== cfg.defaultWidth);
 }

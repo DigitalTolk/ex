@@ -1,15 +1,14 @@
 package handler
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/DigitalTolk/ex/internal/agents"
 	"github.com/DigitalTolk/ex/internal/cron"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
-	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // Scheduled orders as agent tools: an agent lists, creates and removes its
@@ -22,6 +21,11 @@ import (
 // create or remove orders. Letting a watcher, heartbeat or scheduled run do
 // it would let a standing order spawn (or cancel) others on its own.
 func scheduleChangeAllowed(run *model.Run) bool {
+	// A hand-off chained from a watcher (direct mode, but acting on someone
+	// else's words) is not "someone asking directly" either.
+	if run.UntrustedTrigger {
+		return false
+	}
 	switch run.Mode {
 	case model.RunModeDirect, model.RunModeFollowUp, "":
 		return true
@@ -55,7 +59,7 @@ func (h *AgentRunToolHandler) ListSchedules(w http.ResponseWriter, r *http.Reque
 	}
 	entries, err := h.agents.ListSchedules(r.Context(), claims.UserID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "schedule list failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	var b strings.Builder
@@ -105,7 +109,7 @@ func (h *AgentRunToolHandler) CreateSchedule(w http.ResponseWriter, r *http.Requ
 	}
 	self, err := h.agents.SlugForAgent(r.Context(), run.AgentID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "could not resolve this agent")
+		writeServiceError(w, r, err)
 		return
 	}
 	slug := strings.TrimPrefix(strings.TrimSpace(body.Agent), "@")
@@ -130,7 +134,7 @@ func (h *AgentRunToolHandler) CreateSchedule(w http.ResponseWriter, r *http.Requ
 	default:
 		parentID, parentType, mode = trimMarker(dest, "ch"), service.ParentChannel, model.WatchActionAutonomous
 		if err := h.messages.CheckAccess(r.Context(), claims.UserID, parentID, parentType); err != nil {
-			writeError(w, http.StatusForbidden, "forbidden", "the invoker isn't in that channel — list_channels shows where they are")
+			writeServiceError(w, r, toolRejection("the invoker isn't in that channel", err, "list_channels shows where they are"))
 			return
 		}
 	}
@@ -143,7 +147,7 @@ func (h *AgentRunToolHandler) CreateSchedule(w http.ResponseWriter, r *http.Requ
 	for _, c := range body.Connectors {
 		connectors = append(connectors, strings.TrimPrefix(strings.TrimSpace(c), "/"))
 	}
-	sub, err := h.agents.CreateSubscription(r.Context(), claims.UserID, slug, parentID, parentType, nil, 0, service.WatchInput{
+	sub, err := h.agents.CreateSubscription(r.Context(), claims.UserID, slug, parentID, parentType, nil, 0, agents.WatchInput{
 		Instruction:    body.Instruction,
 		ActionMode:     mode,
 		Schedule:       body.Schedule,
@@ -151,16 +155,8 @@ func (h *AgentRunToolHandler) CreateSchedule(w http.ResponseWriter, r *http.Requ
 		ConnectorSlugs: connectors,
 		SkillIDs:       skills,
 	})
-	switch {
-	case err == nil:
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", "no agent @"+slug)
-		return
-	case errors.Is(err, service.ErrValidation):
-		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-		return
-	default:
-		writeError(w, http.StatusInternalServerError, "internal", "could not save the scheduled order")
+	if err != nil {
+		writeServiceError(w, r, err)
 		return
 	}
 	h.orch.RecordWorkspaceAction(r.Context(), run, "schedule_created", map[string]any{
@@ -184,7 +180,7 @@ func (h *AgentRunToolHandler) DeleteSchedule(w http.ResponseWriter, r *http.Requ
 	id := trimMarker(r.PathValue("id"), "sch")
 	entries, err := h.agents.ListSchedules(r.Context(), claims.UserID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "schedule list failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	for _, e := range entries {
@@ -192,7 +188,7 @@ func (h *AgentRunToolHandler) DeleteSchedule(w http.ResponseWriter, r *http.Requ
 			continue
 		}
 		if err := h.agents.DeleteSubscription(r.Context(), claims.UserID, e.Sub.ParentID, id); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal", "could not remove the scheduled order")
+			writeServiceError(w, r, err)
 			return
 		}
 		h.orch.RecordWorkspaceAction(r.Context(), run, "schedule_deleted", map[string]any{"subscriptionID": id, "agent": e.Slug})

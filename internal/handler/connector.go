@@ -6,9 +6,10 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/DigitalTolk/ex/internal/agents"
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
-	"github.com/DigitalTolk/ex/internal/service"
 )
 
 // liveRunGetter is the orchestrator slice used to read a run's connector
@@ -16,7 +17,7 @@ import (
 type liveRunGetter interface {
 	GetLiveRun(ctx context.Context, runID string) (*model.Run, error)
 	AttachConnector(ctx context.Context, runID, slug, reason string) error
-	RequestApproval(ctx context.Context, run *model.Run, req service.ApprovalRequest) (*model.Approval, error)
+	RequestApproval(ctx context.Context, run *model.Run, req agents.ApprovalRequest) (*model.Approval, error)
 	ApprovalGranted(ctx context.Context, runID, approvalID, purpose string) (*model.Approval, bool)
 }
 
@@ -24,11 +25,11 @@ type liveRunGetter interface {
 // ingest (admin), install/uninstall (per-user credential), and the
 // runner-facing payload that ships docs + tokens to the invoker's machine.
 type ConnectorHandler struct {
-	connectors *service.ConnectorService
+	connectors *agents.ConnectorService
 	runs       liveRunGetter
 }
 
-func NewConnectorHandler(c *service.ConnectorService, runs liveRunGetter) *ConnectorHandler {
+func NewConnectorHandler(c *agents.ConnectorService, runs liveRunGetter) *ConnectorHandler {
 	return &ConnectorHandler{connectors: c, runs: runs}
 }
 
@@ -37,7 +38,7 @@ func (h *ConnectorHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	rows, err := h.connectors.ListForUser(r.Context(), claims.UserID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "failed to list connectors")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"connectors": rows})
@@ -46,14 +47,14 @@ func (h *ConnectorHandler) List(w http.ResponseWriter, r *http.Request) {
 // Ingest registers or replaces a connector (route is admin-gated).
 func (h *ConnectorHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
-	var in service.IngestInput
+	var in agents.IngestInput
 	if err := readAgentJSON(r, &in, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
 	c, err := h.connectors.Ingest(r.Context(), claims.UserID, in)
 	if err != nil {
-		writeAgentError(w, r, err, "internal")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, JSON{"connector": c})
@@ -67,13 +68,7 @@ func (h *ConnectorHandler) Sync(w http.ResponseWriter, r *http.Request) {
 	// registration-only changes, which carry no revision bump.
 	res, err := h.connectors.SyncFromProvider(r.Context(), claims.UserID, true)
 	if err != nil {
-		if errors.Is(err, service.ErrConnectorInvalid) {
-			writeError(w, http.StatusServiceUnavailable, "no_provider", "no connector provider configured")
-			return
-		}
-		// 424, not 502 — a 502 body would be swallowed by the Cloudflare
-		// proxy in front of stg/prd (see serviceStatus in handler.go).
-		writeError(w, http.StatusFailedDependency, "provider_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"synced": res.Synced, "skipped": res.Skipped})
@@ -85,20 +80,16 @@ func (h *ConnectorHandler) Sync(w http.ResponseWriter, r *http.Request) {
 func (h *ConnectorHandler) Install(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	slug := r.PathValue("slug")
-	var in service.InstallInput
+	var in agents.InstallInput
 	if err := readAgentJSON(r, &in, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
 	inst, err := h.connectors.Install(r.Context(), claims.UserID, slug, in)
 	if err != nil {
-		// The 2FA challenge is the one non-error error here: it carries an
-		// access code the client must echo back, so it keeps its own shape.
-		if errors.Is(err, service.ErrTwoFactorRequired) {
-			writeError2FA(w, service.TwoFactorAccessCode(err))
-			return
-		}
-		writeAgentError(w, r, err, "internal")
+		// Includes the 2FA challenge: it carries an access code the client
+		// must echo back (writeServiceError keeps its shape).
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"install": inst})
@@ -108,7 +99,7 @@ func (h *ConnectorHandler) Install(w http.ResponseWriter, r *http.Request) {
 func (h *ConnectorHandler) Uninstall(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if err := h.connectors.Uninstall(r.Context(), claims.UserID, r.PathValue("slug")); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "failed to uninstall")
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -126,7 +117,7 @@ func (h *ConnectorHandler) UpdateInstall(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := h.connectors.SetAgentUse(r.Context(), claims.UserID, r.PathValue("slug"), body.AgentUse); err != nil {
-		writeAgentError(w, r, err, "internal")
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -138,7 +129,7 @@ func (h *ConnectorHandler) VerifyInstall(w http.ResponseWriter, r *http.Request)
 	claims := middleware.ClaimsFromContext(r.Context())
 	inst, err := h.connectors.VerifyInstall(r.Context(), claims.UserID, r.PathValue("slug"))
 	if err != nil {
-		writeAgentError(w, r, err, "internal")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"install": inst})
@@ -146,14 +137,15 @@ func (h *ConnectorHandler) VerifyInstall(w http.ResponseWriter, r *http.Request)
 
 // UseConnector is the agent-initiated attach (the use_connector tool).
 // Run-token scoped. Policy comes from the INVOKER's install:
-//   never  → refused outright
-//   always → attached immediately
-//   ask    → first call raises the approval card HERE and returns
-//            {status:"ask", approvalID}; the runner waits for the decision and
-//            calls again with that id, which is verified by PURPOSE before
-//            attaching. The server owning both ends is what makes the check
-//            sound: the model neither writes the card's text nor picks which
-//            approval counts.
+//
+//	never  → refused outright
+//	always → attached immediately
+//	ask    → first call raises the approval card HERE and returns
+//	         {status:"ask", approvalID}; the runner waits for the decision and
+//	         calls again with that id, which is verified by PURPOSE before
+//	         attaching. The server owning both ends is what makes the check
+//	         sound: the model neither writes the card's text nor picks which
+//	         approval counts.
 func (h *ConnectorHandler) UseConnector(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	var body struct {
@@ -167,21 +159,38 @@ func (h *ConnectorHandler) UseConnector(w http.ResponseWriter, r *http.Request) 
 	}
 	run, err := h.runs.GetLiveRun(r.Context(), claims.RunID)
 	if err != nil {
-		writeError(w, http.StatusConflict, "run_closed", "this run is no longer live")
+		writeServiceError(w, r, err)
 		return
 	}
 	policy, title, err := h.connectors.AgentUsePolicy(r.Context(), run.InvokerID, body.Connector)
-	if err != nil {
+	if errors.Is(err, apperr.ErrNotFound) {
 		writeJSON(w, http.StatusOK, JSON{"status": "denied",
 			"message": "the invoker has not installed this connector — tell them to install it on the Connectors page"})
 		return
 	}
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
 	attach := func() {
 		if err := h.runs.AttachConnector(r.Context(), claims.RunID, body.Connector, body.Reason); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal", "failed to attach connector")
+			writeServiceError(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, JSON{"status": "attached", "title": title})
+	}
+	// Already attached (a retried call after the approval was spent): say so
+	// rather than asking for — or refusing — the same connector twice.
+	for _, s := range run.ConnectorSlugs {
+		if s == body.Connector {
+			writeJSON(w, http.StatusOK, JSON{"status": "attached", "title": title})
+			return
+		}
+	}
+	// A run acting on someone else's words never attaches a credential on
+	// its own: even an "always" connector goes through the invoker's card.
+	if policy == model.ConnectorAgentUseAlways && run.UntrustedTrigger {
+		policy = model.ConnectorAgentUseAsk
 	}
 	switch policy {
 	case model.ConnectorAgentUseNever:
@@ -191,12 +200,12 @@ func (h *ConnectorHandler) UseConnector(w http.ResponseWriter, r *http.Request) 
 		attach()
 	default: // ask
 		purpose := model.ApprovalPurposeConnector(body.Connector)
-		if body.ApprovalID == "" {
+		ask := func() {
 			summary := "Use the " + title + " connector (" + body.Connector + ") for this task"
 			if reason := strings.TrimSpace(body.Reason); reason != "" {
 				summary += ": " + reason
 			}
-			a, err := h.runs.RequestApproval(r.Context(), run, service.ApprovalRequest{
+			a, err := h.runs.RequestApproval(r.Context(), run, agents.ApprovalRequest{
 				Summary: summary, Purpose: purpose,
 			})
 			if err != nil {
@@ -207,9 +216,18 @@ func (h *ConnectorHandler) UseConnector(w http.ResponseWriter, r *http.Request) 
 			}
 			writeJSON(w, http.StatusOK, JSON{"status": "ask", "title": title,
 				"approvalID": a.ID, "summary": a.Summary, "deadline": a.Deadline})
+		}
+		if body.ApprovalID == "" {
+			ask()
 			return
 		}
-		if _, ok := h.runs.ApprovalGranted(r.Context(), claims.RunID, body.ApprovalID, purpose); !ok {
+		if a, ok := h.runs.ApprovalGranted(r.Context(), claims.RunID, body.ApprovalID, purpose); !ok {
+			// A card the agent raised itself proves nothing about THIS
+			// connector: ask again with the server's own card.
+			if agents.LegacyApproval(a) {
+				ask()
+				return
+			}
 			writeJSON(w, http.StatusOK, JSON{"status": "denied",
 				"message": "the invoker did not approve using this connector"})
 			return
@@ -235,11 +253,11 @@ func (h *ConnectorHandler) RunnerConnectors(w http.ResponseWriter, r *http.Reque
 	}
 	rows, err := h.connectors.ForRunner(r.Context(), claims.UserID, picks)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "failed to load connectors")
+		writeServiceError(w, r, err)
 		return
 	}
 	if rows == nil {
-		rows = []service.RunnerConnector{}
+		rows = []agents.RunnerConnector{}
 	}
 	writeJSON(w, http.StatusOK, JSON{"connectors": rows})
 }

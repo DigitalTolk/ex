@@ -3,6 +3,7 @@ import { useEffect, useMemo } from 'react';
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
 import { ApiError, apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import { wsLiveQueryOptions } from '@/lib/query-client';
 import type { MessageDraft } from '@/types';
 import { useAttachmentsBatch } from './useAttachments';
 
@@ -185,7 +186,7 @@ export function useDrafts(options?: { enabled?: boolean }) {
       return Array.isArray(res) ? res.filter((draft) => !condemnedDraftGens.has(draft.gen)) : [];
     },
     enabled: options?.enabled ?? true,
-    staleTime: 15_000,
+    ...wsLiveQueryOptions,
   });
 }
 

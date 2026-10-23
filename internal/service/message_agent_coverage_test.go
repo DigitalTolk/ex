@@ -26,6 +26,7 @@ type msgagCovDispatchCall struct {
 	hasDeadline bool
 	msgID       string
 	parentType  string
+	conv        *model.Conversation
 }
 
 type msgagCovDispatcher struct {
@@ -38,7 +39,7 @@ func msgagCovNewDispatcher() *msgagCovDispatcher {
 	return &msgagCovDispatcher{done: make(chan struct{}, 4)}
 }
 
-func (d *msgagCovDispatcher) OnMessage(ctx context.Context, msg *model.Message, parentType string) {
+func (d *msgagCovDispatcher) OnMessage(ctx context.Context, msg *model.Message, parentType string, conv *model.Conversation) {
 	_, hasDeadline := ctx.Deadline()
 	d.mu.Lock()
 	d.calls = append(d.calls, msgagCovDispatchCall{
@@ -46,6 +47,7 @@ func (d *msgagCovDispatcher) OnMessage(ctx context.Context, msg *model.Message, 
 		hasDeadline: hasDeadline,
 		msgID:       msg.ID,
 		parentType:  parentType,
+		conv:        conv,
 	})
 	d.mu.Unlock()
 	d.done <- struct{}{}
@@ -112,18 +114,18 @@ func TestMsgagCovDispatchAgentsInertCases(t *testing.T) {
 	msg := &model.Message{ID: "m1", ParentID: "ch1", Body: "hi @agent"}
 
 	// Nil dispatcher: nothing to do, returns synchronously.
-	svc.dispatchAgents(ctx, msg, ParentChannel)
+	svc.dispatchAgents(ctx, msg, ParentChannel, nil)
 
 	dispatcher := msgagCovNewDispatcher()
 	svc.SetAgentDispatcher(dispatcher)
 
 	// Nil message and system messages are inert even with a dispatcher.
-	svc.dispatchAgents(ctx, nil, ParentChannel)
-	svc.dispatchAgents(ctx, &model.Message{ID: "sys", ParentID: "ch1", System: true}, ParentChannel)
+	svc.dispatchAgents(ctx, nil, ParentChannel, nil)
+	svc.dispatchAgents(ctx, &model.Message{ID: "sys", ParentID: "ch1", System: true}, ParentChannel, nil)
 
 	// A real message dispatches; use it to flush and prove the inert calls
 	// never reached the dispatcher.
-	svc.dispatchAgents(ctx, msg, ParentChannel)
+	svc.dispatchAgents(ctx, msg, ParentChannel, nil)
 	msgagCovWait(t, dispatcher.done)
 
 	calls := dispatcher.snapshot()
@@ -143,7 +145,7 @@ func TestMsgagCovDispatchAgentsSurvivesCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // request context already gone before dispatch
 
-	svc.dispatchAgents(ctx, &model.Message{ID: "m2", ParentID: "dm1"}, ParentConversation)
+	svc.dispatchAgents(ctx, &model.Message{ID: "m2", ParentID: "dm1"}, ParentConversation, nil)
 	msgagCovWait(t, dispatcher.done)
 
 	calls := dispatcher.snapshot()
