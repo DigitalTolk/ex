@@ -141,6 +141,7 @@ describe('PopoverPortal browser', () => {
 describe.runIf(window.innerWidth < 768)('PopoverPortal sheet with the keyboard up', () => {
   const KEYBOARD_PX = 300;
   const sheet = () => document.querySelector('[data-testid="popover-portal"]') as HTMLElement;
+  const bottomAt = (y: number) => Math.round(sheet().getBoundingClientRect().bottom) === y;
 
   it('sits on the keyboard, and back at the bottom once it goes', async () => {
     await render(
@@ -153,7 +154,7 @@ describe.runIf(window.innerWidth < 768)('PopoverPortal sheet with the keyboard u
     expect(Math.round(sheet().getBoundingClientRect().bottom)).toBe(window.innerHeight);
     try {
       fireKeyboard('keyboardWillShow', KEYBOARD_PX);
-      await keyboardSettled();
+      await keyboardSettled(() => bottomAt(window.innerHeight - KEYBOARD_PX));
       const box = sheet().getBoundingClientRect();
       expect(Math.round(box.bottom)).toBe(window.innerHeight - KEYBOARD_PX);
       expect(box.top).toBeGreaterThanOrEqual(0);
@@ -162,7 +163,7 @@ describe.runIf(window.innerWidth < 768)('PopoverPortal sheet with the keyboard u
     } finally {
       fireKeyboard('keyboardWillHide');
     }
-    await keyboardSettled();
+    await keyboardSettled(() => bottomAt(window.innerHeight));
     expect(Math.round(sheet().getBoundingClientRect().bottom)).toBe(window.innerHeight);
     expect(sheet().style.getPropertyValue('--sheet-safe-bottom')).toContain('safe-area-inset-bottom');
   });
@@ -179,7 +180,7 @@ describe.runIf(window.innerWidth < 768)('PopoverPortal sheet with the keyboard u
     const keyboard = Math.round(window.innerHeight * 0.7);
     try {
       fireKeyboard('keyboardWillShow', keyboard);
-      await keyboardSettled();
+      await keyboardSettled(() => bottomAt(window.innerHeight - keyboard));
       sheet().style.height = '100dvh';
       const box = sheet().getBoundingClientRect();
       expect(box.top).toBeGreaterThanOrEqual(-1);
