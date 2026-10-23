@@ -70,6 +70,20 @@ describe('GiphyEmbed', () => {
     );
   });
 
+  it('falls back to giphy.com for an attribution URL that is not plain http(s)', async () => {
+    giphyFetchMocks.gif.mockResolvedValue({
+      data: {
+        id: 'g-2',
+        title: 'odd link',
+        url: 'smb://attacker.example/share',
+        is_sticker: false,
+        images: { original: { url: 'https://media.giphy.com/g-2.gif', width: 300, height: 200 } },
+      },
+    });
+    render(<GiphyEmbed id="g-2" apiKey="browser-key" />);
+    expect(await screen.findByRole('link', { name: /powered by giphy/i })).toHaveAttribute('href', 'https://giphy.com');
+  });
+
   it('uses WEBP for sticker media when Giphy returns one', async () => {
     giphyFetchMocks.gif.mockResolvedValue({
       data: {

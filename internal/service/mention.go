@@ -35,6 +35,12 @@ func (m ParsedMentions) Empty() bool {
 // normalising names before serialisation.
 var userMentionPattern = regexp.MustCompile(`@\[([^|\]]+)\|([^\]]+)\]`)
 
+// PlainMentions rewrites "@[id|Name]" user mentions to plain "@Name", for
+// text read by something that is not a renderer (an agent's task brief).
+func PlainMentions(body string) string {
+	return userMentionPattern.ReplaceAllString(body, "@$2")
+}
+
 // groupMentionPattern matches the literal "@all" / "@here" group mentions
 // only when they stand alone — i.e. surrounded by whitespace or string
 // boundary or punctuation. This avoids matching strings like "email@all-

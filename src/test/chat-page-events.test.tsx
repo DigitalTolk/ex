@@ -4,9 +4,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import ChatPage from '@/pages/ChatPage';
 import { apiFetch } from '@/lib/api';
-import { resetServerVersionForTests } from '@/hooks/useServerVersion';
 import { forceAwayUntilInput, resetUserActivityForTests } from '@/lib/user-activity';
+import { usePresenceStore } from '@/stores/presence';
 import { endReadSession, getUnreadAnchor, holdRead, isReadHeld, setAtBottom, setAtLiveTail, threadReadKey, useMissedArrivals } from '@/lib/read-position';
+import { eventCallbacks, expectInvalidPayloadReported, type CapturedWSOptions } from '@/test/ws-frames';
 
 let capturedOptions: Record<string, ((data: unknown) => void) | boolean | undefined> = {};
 const authUserMock = vi.hoisted(() => ({
@@ -24,7 +25,7 @@ const localTimeZoneMock = vi.hoisted(() => vi.fn(() => 'Europe/Stockholm'));
 
 vi.mock('@/hooks/useWebSocket', () => ({
   useWebSocket: (opts: Record<string, ((data: unknown) => void) | boolean | undefined>) => {
-    capturedOptions = opts;
+    capturedOptions = eventCallbacks(opts as unknown as CapturedWSOptions) as typeof capturedOptions;
   },
 }));
 
@@ -80,15 +81,9 @@ vi.mock('@/context/UnreadContext', () => ({
   }),
 }));
 
-const setUserOnline = vi.fn();
 const presenceRefreshMock = vi.fn();
 vi.mock('@/context/PresenceContext', () => ({
-  usePresence: () => ({
-    online: new Set<string>(),
-    isOnline: () => false,
-    setUserOnline,
-    refreshPresence: presenceRefreshMock,
-  }),
+  refreshPresence: (...args: unknown[]) => presenceRefreshMock(...args),
   PresenceProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
@@ -114,7 +109,7 @@ vi.mock('@/hooks/useConversations', () => ({
   useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useUserConversations: () => ({ data: [] }),
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
-  useSearchUsers: () => ({ data: [] }),
+  useUserLookup: () => ({ data: [] }),
 }));
 
 vi.mock('@/lib/api', () => ({
@@ -168,7 +163,6 @@ describe('ChatPage WebSocket handlers', () => {
     // The attention model is a module singleton — a hard-away latched by one
     // test must not leak into the next.
     resetUserActivityForTests();
-    act(() => resetServerVersionForTests());
     capturedOptions = {};
     authUserMock.current = {
       id: 'u-me',
@@ -191,7 +185,6 @@ describe('ChatPage WebSocket handlers', () => {
     unhideConversation.mockReset();
     vi.mocked(apiFetch).mockReset();
     vi.mocked(apiFetch).mockResolvedValue(undefined);
-    setUserOnline.mockReset();
     presenceRefreshMock.mockReset();
     dispatchNotification.mockReset();
     setCurrentUserID.mockReset();
@@ -362,7 +355,7 @@ describe('ChatPage WebSocket handlers', () => {
 
   it('onMessageNew without a valid Message payload is a no-op', () => {
     renderAt('/');
-    (capturedOptions.onMessageNew as (d: unknown) => void)({});
+    expectInvalidPayloadReported('message.new', () => (capturedOptions.onMessageNew as (d: unknown) => void)({}));
     expect(bumpChannelUnread).not.toHaveBeenCalled();
   });
 
@@ -423,7 +416,9 @@ describe('ChatPage WebSocket handlers', () => {
 
   it('onThreadUpdated ignores a malformed payload', () => {
     const { qc } = renderAt('/');
-    (capturedOptions.onThreadUpdated as (d: unknown) => void)({ threadRootID: '' });
+    expectInvalidPayloadReported('thread.updated', () =>
+      (capturedOptions.onThreadUpdated as (d: unknown) => void)({ threadRootID: '' }),
+    );
     expect(qc.getQueryData(['userThreads'])).toBeUndefined();
   });
 
@@ -715,15 +710,20 @@ describe('ChatPage WebSocket handlers', () => {
       ['channelMembers'],
       ['activity'],
       ['reminders'],
+      // Kept current only by events, never by a timer (wsLiveQueryOptions):
+      // the sidebar's categories and every cached thread.
+      ['sidebarCategories'],
+      ['thread'],
     ]) {
       expect(calls).toContainEqual(key);
     }
-    expect(presenceRefreshMock).toHaveBeenCalled();
+    expect(presenceRefreshMock).toHaveBeenCalledWith(qc);
   });
 
   it('onMessageEdited / onMessageDeleted gracefully ignore missing parentID and invalidate when present', () => {
     renderAt('/');
-    expect(() => {
+    // None of these is a whole message: each is reported, none is handled.
+    expectInvalidPayloadReported(['message.edited', 'message.deleted', 'message.edited', 'message.edited'], () => {
       (capturedOptions.onMessageEdited as (d: unknown) => void)({});
       (capturedOptions.onMessageDeleted as (d: unknown) => void)({});
       (capturedOptions.onMessageEdited as (d: unknown) => void)({
@@ -734,19 +734,20 @@ describe('ChatPage WebSocket handlers', () => {
         parentID: 'ch-1',
         id: 'm-r',
       });
+    });
+    // A compact delete ({id, parentID}) is a whole message.deleted.
+    expect(() =>
       (capturedOptions.onMessageDeleted as (d: unknown) => void)({
         parentID: 'ch-1',
         id: 'm-r',
-      });
-    }).not.toThrow();
+      }),
+    ).not.toThrow();
   });
 
   it('onMembersChanged refreshes member + channel lists; ignores missing channelID', () => {
     renderAt('/');
-    expect(() => {
-      (capturedOptions.onMembersChanged as (d: unknown) => void)({});
-      (capturedOptions.onMembersChanged as (d: unknown) => void)({ channelID: 'ch-1' });
-    }).not.toThrow();
+    expectInvalidPayloadReported('members.changed', () => (capturedOptions.onMembersChanged as (d: unknown) => void)({}));
+    expect(() => (capturedOptions.onMembersChanged as (d: unknown) => void)({ channelID: 'ch-1' })).not.toThrow();
   });
 
   it('onMembersChanged refreshes membership but does NOT invalidate the message list', () => {
@@ -798,9 +799,11 @@ describe('ChatPage WebSocket handlers', () => {
     renderAt('/', (qc) => {
       invalidate = vi.spyOn(qc, 'invalidateQueries');
     });
-    act(() => {
-      (capturedOptions.onChannelUnarchived as (d: unknown) => void)({});
-    });
+    expectInvalidPayloadReported('channel.unarchived', () =>
+      act(() => {
+        (capturedOptions.onChannelUnarchived as (d: unknown) => void)({});
+      }),
+    );
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['channel', 'ch-2'] });
     act(() => {
       (capturedOptions.onChannelUnarchived as (d: unknown) => void)({ channelID: 'ch-2' });
@@ -834,24 +837,18 @@ describe('ChatPage WebSocket handlers', () => {
 
   it('onChannelArchived ignores missing channelID', () => {
     renderAt('/');
-    expect(() => {
-      (capturedOptions.onChannelArchived as (d: unknown) => void)({});
-    }).not.toThrow();
+    expectInvalidPayloadReported('channel.archived', () => (capturedOptions.onChannelArchived as (d: unknown) => void)({}));
   });
 
   it('onChannelRemoved ignores missing channelID', () => {
     renderAt('/');
-    expect(() => {
-      (capturedOptions.onChannelRemoved as (d: unknown) => void)({});
-    }).not.toThrow();
+    expectInvalidPayloadReported('channel.removed', () => (capturedOptions.onChannelRemoved as (d: unknown) => void)({}));
   });
 
   it('onChannelUpdated invalidates channel-by-slug + user channels', () => {
     renderAt('/');
-    expect(() => {
-      (capturedOptions.onChannelUpdated as (d: unknown) => void)({ channelID: 'ch-1' });
-      (capturedOptions.onChannelUpdated as (d: unknown) => void)({});
-    }).not.toThrow();
+    expect(() => (capturedOptions.onChannelUpdated as (d: unknown) => void)({ channelID: 'ch-1' })).not.toThrow();
+    expectInvalidPayloadReported('channel.updated', () => (capturedOptions.onChannelUpdated as (d: unknown) => void)({}));
   });
 
   it('onChannelNew invalidates browse + user channels', () => {
@@ -863,19 +860,27 @@ describe('ChatPage WebSocket handlers', () => {
 
   it('onPresenceChanged updates presence; ignores missing userID', () => {
     renderAt('/');
-    (capturedOptions.onPresenceChanged as (d: unknown) => void)({ userID: 'u-x', online: true });
-    expect(setUserOnline).toHaveBeenCalledWith('u-x', true);
-    setUserOnline.mockClear();
-    (capturedOptions.onPresenceChanged as (d: unknown) => void)({});
-    expect(setUserOnline).not.toHaveBeenCalled();
+    act(() => (capturedOptions.onPresenceChanged as (d: unknown) => void)({ userID: 'u-x', online: true }));
+    expect(usePresenceStore.getState().online.has('u-x')).toBe(true);
+    const set = usePresenceStore.getState().online;
+    expectInvalidPayloadReported('presence.changed', () =>
+      act(() => (capturedOptions.onPresenceChanged as (d: unknown) => void)({})),
+    );
+    expect(usePresenceStore.getState().online).toBe(set);
+    act(() => (capturedOptions.onPresenceChanged as (d: unknown) => void)({ userID: 'u-x', online: false }));
+    expect(usePresenceStore.getState().online.has('u-x')).toBe(false);
   });
 
-  it('onEmojiAdded / onEmojiRemoved invalidate the emojis cache', () => {
-    renderAt('/');
-    expect(() => {
-      (capturedOptions.onEmojiAdded as (d: unknown) => void)({});
-      (capturedOptions.onEmojiRemoved as (d: unknown) => void)({});
-    }).not.toThrow();
+  it('onEmojiAdded / onEmojiRemoved patch the emoji list from the payload instead of refetching it', () => {
+    const party = { name: 'party', imageURL: '/e/party.png', createdBy: 'u-1', createdAt: '2026-01-01T00:00:00Z' };
+    const shipit = { name: 'shipit', imageURL: '/e/shipit.png', createdBy: 'u-2', createdAt: '2026-01-02T00:00:00Z' };
+    const { qc } = renderAt('/', (seed) => seed.setQueryData(['emojis'], [party]));
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    (capturedOptions.onEmojiAdded as (d: unknown) => void)(shipit);
+    expect(qc.getQueryData(['emojis'])).toEqual([party, shipit]);
+    (capturedOptions.onEmojiRemoved as (d: unknown) => void)({ name: 'party' });
+    expect(qc.getQueryData(['emojis'])).toEqual([shipit]);
+    expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).not.toContainEqual(['emojis']);
   });
 
   it('onWebhookChanged invalidates the incoming-webhooks cache', () => {
@@ -907,7 +912,17 @@ describe('ChatPage WebSocket handlers', () => {
     qc.setQueryData(['activity'], { items: [], unread: 0, unreadByType: {} });
     vi.spyOn(qc, 'isFetching').mockReturnValue(0);
     const spy = vi.spyOn(qc, 'invalidateQueries');
-    (capturedOptions.onActivityNew as (d: unknown) => void)({ item: { id: 'a1', type: 'mention', read: false } });
+    (capturedOptions.onActivityNew as (d: unknown) => void)({
+      item: {
+        id: 'a1',
+        type: 'mention',
+        createdAt: '2026-05-01T09:00:00Z',
+        messageID: 'm-1',
+        parentID: 'ch-1',
+        parentType: 'channel',
+        read: false,
+      },
+    });
     expect(qc.getQueryData<{ unread: number }>(['activity'])?.unread).toBe(1);
     expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).not.toContainEqual(['activity']);
   });
@@ -944,11 +959,132 @@ describe('ChatPage WebSocket handlers', () => {
     expect(calls).toContainEqual(['activity']);
   });
 
-  it('onUserUpdated invalidates user-batch + member + channel + conversation caches', () => {
-    renderAt('/');
-    expect(() => {
-      (capturedOptions.onUserUpdated as (d: unknown) => void)({});
-    }).not.toThrow();
+  it('onUserUpdated ignores a payload without a user id', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    expectInvalidPayloadReported('user.updated', () => (capturedOptions.onUserUpdated as (d: unknown) => void)({}));
+    expect(spy).not.toHaveBeenCalled();
+    expect(patchUserMock).not.toHaveBeenCalled();
+  });
+
+  // user.updated fires for every status set/clear (and the expired-status
+  // sweeper), profile save and directory sync. It used to invalidate every
+  // user-shaped cache — 6-8 refetches per client per event, a users batch
+  // refetching all its ids. The payload is patched in instead.
+  describe('onUserUpdated patches the payload into the cached copies', () => {
+    const bob = { id: 'u-2', email: 'b@b.c', displayName: 'Bob', systemRole: 'member', status: 'active' };
+    const cara = { id: 'u-3', email: 'c@c.c', displayName: 'Cara', systemRole: 'member', status: 'active' };
+    function seed(qc: QueryClient) {
+      qc.setQueryData(['user', 'u-2'], { ...bob });
+      qc.setQueryData(['users-batch', ['u-2', 'u-3']], [bob, cara]);
+      qc.setQueryData(['users-batch', ['u-3']], [cara]);
+      qc.setQueryData(['allUsers'], [bob, cara]);
+      qc.setQueryData(['searchUsers', 'bo'], [{ id: 'u-2', email: 'b@b.c', displayName: 'Bob' }]);
+      qc.setQueryData(['users-directory', ''], [bob, cara]);
+      qc.setQueryData(['channelMembers', 'ch-1'], [
+        { channelID: 'ch-1', userID: 'u-2', role: 'member', displayName: 'Bob', joinedAt: '2026-01-01T00:00:00Z' },
+        { channelID: 'ch-1', userID: 'u-3', role: 'member', displayName: 'Cara', joinedAt: '2026-01-01T00:00:00Z' },
+      ]);
+      qc.setQueryData(['channelMembers', 'ch-2'], [
+        { channelID: 'ch-2', userID: 'u-3', role: 'member', displayName: 'Cara', joinedAt: '2026-01-01T00:00:00Z' },
+      ]);
+      qc.setQueryData(['userConversations'], [
+        { conversationID: 'dm-bob', type: 'dm', displayName: 'Bob', participantIDs: ['u-me', 'u-2'] },
+        { conversationID: 'dm-cara', type: 'dm', displayName: 'Cara', participantIDs: ['u-me', 'u-3'] },
+        { conversationID: 'grp', type: 'group', displayName: 'Bob, Cara', participantIDs: ['u-me', 'u-2', 'u-3'] },
+        // A row the server sent without its participants.
+        { conversationID: 'dm-legacy', type: 'dm', displayName: 'Someone' },
+      ]);
+      // Lists still loading have nothing to patch.
+      void qc.prefetchQuery({ queryKey: ['users-batch', ['u-9']], queryFn: () => new Promise(() => undefined) });
+      void qc.prefetchQuery({ queryKey: ['channelMembers', 'ch-9'], queryFn: () => new Promise(() => undefined) });
+    }
+    const status = { emoji: ':palm_tree:', text: 'On holiday' };
+
+    it('a status change reaches every copy of the user without a single request', () => {
+      const { qc } = renderAt('/', seed);
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      const untouchedBatch = qc.getQueryData(['users-batch', ['u-3']]);
+      (capturedOptions.onUserUpdated as (d: unknown) => void)({ id: 'u-2', userStatus: status, timeZone: 'Europe/Berlin' });
+
+      expect(spy).not.toHaveBeenCalled();
+      expect(qc.getQueryData(['user', 'u-2'])).toMatchObject({ userStatus: status, timeZone: 'Europe/Berlin' });
+      expect(qc.getQueryData<{ id: string; userStatus?: unknown }[]>(['users-batch', ['u-2', 'u-3']])?.[0]).toMatchObject({ userStatus: status });
+      expect(qc.getQueryData(['users-batch', ['u-3']])).toBe(untouchedBatch);
+      expect(qc.getQueryData<{ userStatus?: unknown }[]>(['allUsers'])?.[0].userStatus).toEqual(status);
+      expect(qc.getQueryData<{ userStatus?: unknown }[]>(['searchUsers', 'bo'])?.[0].userStatus).toEqual(status);
+      expect(qc.getQueryData<{ userStatus?: unknown }[]>(['users-directory', ''])?.[0].userStatus).toEqual(status);
+      const convs = qc.getQueryData<{ conversationID: string; userStatus?: unknown }[]>(['userConversations'])!;
+      expect(convs.find((c) => c.conversationID === 'dm-bob')?.userStatus).toEqual(status);
+      expect(convs.find((c) => c.conversationID === 'dm-cara')?.userStatus).toBeUndefined();
+
+      // The sweeper clearing it again.
+      (capturedOptions.onUserUpdated as (d: unknown) => void)({ id: 'u-2', userStatus: null, timeZone: 'Europe/Berlin' });
+      expect(qc.getQueryData<{ userStatus?: unknown }>(['user', 'u-2'])?.userStatus).toBeUndefined();
+      expect(qc.getQueryData<{ conversationID: string; userStatus?: unknown }[]>(['userConversations'])?.[0].userStatus).toBeUndefined();
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('a rename or new avatar patches the lists and refetches only the conversations showing the user', () => {
+      const { qc } = renderAt('/', seed);
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      const otherChannel = qc.getQueryData(['channelMembers', 'ch-2']);
+      (capturedOptions.onUserUpdated as (d: unknown) => void)({ id: 'u-2', displayName: 'Bobby', avatarURL: '/media/bobby.webp' });
+
+      expect(qc.getQueryData<{ displayName: string; avatarURL?: string }[]>(['users-batch', ['u-2', 'u-3']])?.[0]).toMatchObject({
+        displayName: 'Bobby',
+        avatarURL: '/media/bobby.webp',
+      });
+      expect(qc.getQueryData<{ displayName: string }[]>(['allUsers'])?.[0].displayName).toBe('Bobby');
+      expect(qc.getQueryData<{ displayName: string }[]>(['channelMembers', 'ch-1'])?.map((m) => m.displayName)).toEqual(['Bobby', 'Cara']);
+      expect(qc.getQueryData(['channelMembers', 'ch-2'])).toBe(otherChannel);
+      expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).toEqual([['userConversations']]);
+
+      // An avatar removed ("") falls back to the initials.
+      (capturedOptions.onUserUpdated as (d: unknown) => void)({ id: 'u-2', avatarURL: '' });
+      expect(qc.getQueryData<{ avatarURL?: string }>(['user', 'u-2'])?.avatarURL).toBeUndefined();
+    });
+
+    it('a time-zone change touches no conversation row', () => {
+      const { qc } = renderAt('/', seed);
+      const convs = qc.getQueryData(['userConversations']);
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      (capturedOptions.onUserUpdated as (d: unknown) => void)({ id: 'u-2', timeZone: 'Asia/Tokyo' });
+      expect(qc.getQueryData(['userConversations'])).toBe(convs);
+      expect(qc.getQueryData<{ timeZone?: string }>(['user', 'u-2'])?.timeZone).toBe('Asia/Tokyo');
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('a profile change for someone in no cached conversation refetches nothing', () => {
+      const { qc } = renderAt('/', seed);
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      (capturedOptions.onUserUpdated as (d: unknown) => void)({ id: 'u-7', displayName: 'Dee', status: 'deactivated', lastSeenAt: '2026-05-03T10:00:00.000Z' });
+      expect(spy).not.toHaveBeenCalled();
+      expect(qc.getQueryData(['user', 'u-7'])).toBeUndefined();
+    });
+
+    it('a status change for someone with no DM, or with no conversations loaded, changes no conversation', () => {
+      const { qc } = renderAt('/', seed);
+      const convs = qc.getQueryData(['userConversations']);
+      (capturedOptions.onUserUpdated as (d: unknown) => void)({ id: 'u-me', userStatus: status });
+      expect(qc.getQueryData(['userConversations'])).toBe(convs);
+      qc.removeQueries({ queryKey: ['userConversations'] });
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      (capturedOptions.onUserUpdated as (d: unknown) => void)({ id: 'u-2', displayName: 'Bobby' });
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('no longer broadcasts the old ex:user-updated window event', () => {
+      renderAt('/', seed);
+      const listener = vi.fn();
+      window.addEventListener('ex:user-updated', listener);
+      try {
+        (capturedOptions.onUserUpdated as (d: unknown) => void)({ id: 'u-2', displayName: 'Bobby' });
+      } finally {
+        window.removeEventListener('ex:user-updated', listener);
+      }
+      expect(listener).not.toHaveBeenCalled();
+    });
   });
 
   it('onUserUpdated patches the authenticated user so status clears across tabs', () => {
@@ -1001,7 +1137,13 @@ describe('ChatPage WebSocket handlers', () => {
 
   it('onNotificationSettingsUpdated ignores a payload without settings', () => {
     renderAt('/');
-    (capturedOptions.onNotificationSettingsUpdated as (d: unknown) => void)({});
+    expectInvalidPayloadReported('notification.settings_updated', () =>
+      (capturedOptions.onNotificationSettingsUpdated as (d: unknown) => void)({}),
+    );
+    // Nor partial settings: they would replace the user's whole settings.
+    expectInvalidPayloadReported('notification.settings_updated', () =>
+      (capturedOptions.onNotificationSettingsUpdated as (d: unknown) => void)({ settings: { desktopLevel: 'all' } }),
+    );
     expect(patchUserMock).not.toHaveBeenCalled();
   });
 
@@ -1038,10 +1180,67 @@ describe('ChatPage WebSocket handlers', () => {
 
   it('onAttachmentDeleted invalidates the per-attachment cache; ignores missing id', () => {
     renderAt('/');
-    expect(() => {
-      (capturedOptions.onAttachmentDeleted as (d: unknown) => void)({});
-      (capturedOptions.onAttachmentDeleted as (d: unknown) => void)({ id: 'a-1' });
-    }).not.toThrow();
+    expectInvalidPayloadReported('attachment.deleted', () => (capturedOptions.onAttachmentDeleted as (d: unknown) => void)({}));
+    expect(() => (capturedOptions.onAttachmentDeleted as (d: unknown) => void)({ id: 'a-1' })).not.toThrow();
+  });
+
+  // The delivery contract: a notification.new the backend sent is an alert
+  // the user must get, so a payload with fields the client doesn't expect —
+  // extra, missing or mistyped ones it doesn't need — still dispatches.
+  it('onNotification dispatches a payload with unexpected, extra and missing optional fields', () => {
+    renderAt('/');
+    (capturedOptions.onNotification as (d: unknown) => void)({
+      kind: 'catchup',
+      parentID: 'ch-1',
+      title: 7,
+      messageID: { not: 'a string' },
+      parentUnreadNotifyCount: 'three',
+      someFutureField: ['x'],
+    });
+    expect(dispatchNotification).toHaveBeenCalledTimes(1);
+    expect(dispatchNotification).toHaveBeenCalledWith({
+      kind: 'catchup',
+      parentID: 'ch-1',
+      parentType: 'channel',
+      title: '',
+      body: '',
+      deepLink: '',
+      someFutureField: ['x'],
+    });
+  });
+
+  it('onNotification reports a payload it cannot route instead of dropping it quietly', () => {
+    renderAt('/');
+    expectInvalidPayloadReported('notification.new', () =>
+      (capturedOptions.onNotification as (d: unknown) => void)({ title: 'no kind, no parent' }),
+    );
+    expect(dispatchNotification).not.toHaveBeenCalled();
+  });
+
+  it('refetches what an unreadable userchannel, emoji or activity frame would have patched', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    expectInvalidPayloadReported(
+      ['userchannel.updated', 'emoji.added', 'emoji.removed', 'activity.new', 'activity.read'],
+      () => {
+        (capturedOptions.onUserChannelUpdated as (d: unknown) => void)({ channelID: 42 });
+        (capturedOptions.onEmojiAdded as (d: unknown) => void)({ name: 'no-image' });
+        (capturedOptions.onEmojiRemoved as (d: unknown) => void)({});
+        (capturedOptions.onActivityNew as (d: unknown) => void)({ item: { id: 'a1' } });
+        (capturedOptions.onActivityRead as (d: unknown) => void)({ ids: 'a1' });
+      },
+    );
+    const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(keys).toEqual([
+      ['userChannels'],
+      ['userConversations'],
+      ['sidebarCategories'],
+      ['userState'],
+      ['emojis'],
+      ['emojis'],
+      ['activity'],
+      ['activity'],
+    ]);
   });
 
   it('onNotification dispatches the payload to NotificationContext', () => {

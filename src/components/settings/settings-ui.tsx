@@ -19,7 +19,7 @@ export function SettingsSection({
 }) {
   return (
     <section className="mb-10 last:mb-0">
-      {title && <h3 className="mb-1 text-[13px] font-semibold">{title}</h3>}
+      {title && <h3 className="mb-1 text-sm font-semibold">{title}</h3>}
       <div className="[&>*+*]:border-t [&>*+*]:border-divider">{children}</div>
       {footer}
     </section>
@@ -57,7 +57,7 @@ export function SettingsRow({ label, hint, htmlFor, children, stacked, className
     >
       <div className="min-w-0">
         {labelEl}
-        {hint && <p className="mt-0.5 text-[13px] leading-snug text-muted-foreground">{hint}</p>}
+        {hint && <p className="mt-0.5 text-sm leading-snug text-muted-foreground">{hint}</p>}
       </div>
       {children}
     </div>
@@ -107,7 +107,7 @@ export function SaveIndicator() {
       aria-live="polite"
       data-testid="settings-save-status"
       data-state={state}
-      className={`pointer-events-none absolute right-5 bottom-4 inline-flex items-center gap-1.5 rounded-full border bg-popover px-3 py-1 text-[13px] text-muted-foreground transition-opacity duration-200 mobile:bottom-[calc(env(safe-area-inset-bottom)+1rem)] ${
+      className={`pointer-events-none absolute right-5 bottom-4 inline-flex items-center gap-1.5 rounded-full border bg-popover px-3 py-1 text-sm text-muted-foreground transition-opacity duration-200 mobile:bottom-[calc(env(safe-area-inset-bottom)+1rem)] ${
         visible ? 'opacity-100' : 'opacity-0'
       }`}
     >

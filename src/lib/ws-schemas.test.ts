@@ -11,7 +11,8 @@ import {
   parseTyping,
   parseUserChannelUpdated,
   parseUserUpdated,
-} from './ws-schemas';
+  payloadParser,
+} from '@/test/ws-frames';
 
 describe('parseMessage', () => {
   const valid = {
@@ -201,5 +202,84 @@ describe('parseUserChannelUpdated', () => {
     expect(parseUserChannelUpdated('nope')).toBeNull();
     expect(parseUserChannelUpdated({ channelID: 42 })).toBeNull();
     expect(parseUserChannelUpdated({ channelID: '' })).toBeNull();
+  });
+});
+
+describe('activity, emoji, settings and agent-run payloads', () => {
+  const parseActivityNew = payloadParser('activity.new');
+  const parseActivityRead = payloadParser('activity.read');
+  const parseEmojiAdded = payloadParser('emoji.added');
+  const parseEmojiRemoved = payloadParser('emoji.removed');
+  const parseSettings = payloadParser('notification.settings_updated');
+  const parseRunUpdated = payloadParser('run.updated');
+  const parseRunProgress = payloadParser('run.progress');
+  const parseRunApproval = payloadParser('run.approval');
+  const item = {
+    id: 'a',
+    type: 'mention',
+    createdAt: '2026-10-08T10:00:00Z',
+    messageID: 'm-a',
+    parentID: 'ch-1',
+    parentType: 'channel',
+    read: false,
+  };
+
+  it('activity.new needs a whole item', () => {
+    expect(parseActivityNew({ item })?.item.id).toBe('a');
+    expect(parseActivityNew({ item: { id: 'a', type: 'mention' } })).toBeNull();
+    expect(parseActivityNew({ item: { ...item, type: 'bogus' } })).toBeNull();
+    expect(parseActivityNew({})).toBeNull();
+    expect(parseActivityNew(null)).toBeNull();
+  });
+
+  it('activity.read takes any one change group, and rejects what is not one', () => {
+    expect(parseActivityRead({ all: true })).toEqual({ all: true });
+    expect(parseActivityRead({})).toEqual({});
+    expect(parseActivityRead({ ids: 'a' })).toBeNull();
+    expect(parseActivityRead('nope')).toBeNull();
+    expect(parseActivityRead(null)).toBeNull();
+  });
+
+  it('emoji.added needs a name and image; emoji.removed a name', () => {
+    expect(parseEmojiAdded({ name: 'party', imageURL: '/e/party.png' })).toEqual({
+      name: 'party',
+      imageURL: '/e/party.png',
+      createdBy: '',
+      createdAt: '',
+    });
+    expect(parseEmojiAdded({ name: 'nameless-url' })).toBeNull();
+    expect(parseEmojiAdded({ name: '', imageURL: '/e/x.png' })).toBeNull();
+    expect(parseEmojiRemoved({ name: 'party' })).toEqual({ name: 'party' });
+    expect(parseEmojiRemoved({})).toBeNull();
+  });
+
+  it('notification.settings_updated needs the whole settings object', () => {
+    const settings = {
+      desktopLevel: 'all',
+      mobileLevel: 'default',
+      threadReplies: true,
+      ignoreGroupMentions: false,
+      followAllThreads: false,
+    };
+    expect(parseSettings({ userID: 'u-1', settings })?.settings).toEqual(settings);
+    expect(parseSettings({ settings: { desktopLevel: 'all' } })).toBeNull();
+    expect(parseSettings({ settings: { ...settings, desktopLevel: 'loud' } })).toBeNull();
+  });
+
+  it('run frames need the run, its agent and its parent', () => {
+    expect(parseRunUpdated({ id: 'r1', agentID: 'a', parentID: 'ch-1', state: 'running', round: 2 })).toMatchObject({
+      id: 'r1',
+      round: 2,
+    });
+    expect(parseRunUpdated({ id: 'r1', agentID: 'a', parentID: 'ch-1' })).toBeNull();
+    expect(parseRunProgress({ runID: 'r1', agentID: 'a', parentID: 'ch-1', kind: 'text', text: 'hi' })?.text).toBe('hi');
+    expect(parseRunProgress({ runID: 'r1', parentID: 'ch-1' })).toBeNull();
+  });
+
+  it('run.approval needs its id and parent, and takes a nil options slice', () => {
+    expect(parseRunApproval({ approvalID: 'ap-1', parentID: 'ch-1', options: null })?.options).toBeNull();
+    expect(parseRunApproval({ approvalID: 'ap-1', parentID: 'ch-1', options: ['a', 'b'] })?.options).toEqual(['a', 'b']);
+    expect(parseRunApproval({ approvalID: 'ap-1' })).toBeNull();
+    expect(parseRunApproval({ parentID: 'ch-1' })).toBeNull();
   });
 });

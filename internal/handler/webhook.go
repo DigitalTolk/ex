@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,7 +11,6 @@ import (
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
-	"github.com/DigitalTolk/ex/internal/store"
 )
 
 type WebhookHandler struct {
@@ -34,7 +32,7 @@ func (h *WebhookHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := h.svc.List(r.Context())
 	if err != nil {
-		writeInternalError(w, r, "list_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	out := make([]webhookResponse, 0, len(items))
@@ -55,7 +53,7 @@ func (h *WebhookHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	wh, err := h.svc.Create(r.Context(), middleware.UserIDFromContext(r.Context()), &body)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "create_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, webhookResponse{IncomingWebhook: wh, URL: h.svc.URL(wh)})
@@ -72,11 +70,7 @@ func (h *WebhookHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	wh, err := h.svc.Update(r.Context(), pathParam(r, "id"), &body)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "webhook not found")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "update_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, webhookResponse{IncomingWebhook: wh, URL: h.svc.URL(wh)})
@@ -88,7 +82,7 @@ func (h *WebhookHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	id := pathParam(r, "id")
 	if err := h.svc.Delete(r.Context(), id); err != nil {
-		writeError(w, http.StatusBadRequest, "delete_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -104,36 +98,11 @@ func (h *WebhookHandler) Execute(w http.ResponseWriter, r *http.Request) {
 	msg, err := h.svc.ExecuteMessage(r.Context(), id, payload)
 	if err != nil {
 		// This is an UNAUTHENTICATED ingress: internal error text never goes
-		// to the caller. Fixed messages per class; the detail is logged.
-		if errors.Is(err, service.ErrWebhookDMRejected) {
-			writeError(w, http.StatusBadRequest, "unsupported_channel", "webhook cannot post to that direct-message target")
-			return
-		}
-		if errors.Is(err, service.ErrInvalidThreadRoot) {
-			writeError(w, http.StatusBadRequest, "invalid_root", "root_id must reference a top-level message posted by this webhook in the target channel")
-			return
-		}
-		if errors.Is(err, service.ErrThreadDeleted) {
-			writeError(w, http.StatusConflict, "thread_deleted", "the thread for root_id has been deleted")
-			return
-		}
-		if errors.Is(err, service.ErrChannelArchived) {
-			writeError(w, http.StatusConflict, "channel_archived", "the target channel is archived and read-only")
-			return
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "webhook or channel not found")
-			return
-		}
-		// Transient infrastructure failure: tell the caller to retry rather
-		// than letting a throttled store look like a malformed payload.
-		if errors.Is(err, service.ErrWebhookUnavailable) {
-			slog.Warn("webhook execute unavailable", "webhookID", id, "error", err)
-			writeError(w, http.StatusServiceUnavailable, "unavailable", "webhook delivery temporarily unavailable, retry shortly")
-			return
-		}
-		slog.Warn("webhook execute failed", "webhookID", id, "error", err)
-		writeError(w, http.StatusBadRequest, "webhook_error", "webhook request could not be processed")
+		// to the caller — the table answers with fixed or user-facing texts
+		// only (a retryable 503 for a throttled store), a generic 500 for the
+		// rest. The log names the webhook by fingerprint: its id is the secret.
+		slog.WarnContext(r.Context(), "webhook execute failed", "webhook", middleware.SecretFingerprint(id), "error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	// Mattermost-compatible callers get the plain "ok"; a caller that asks for

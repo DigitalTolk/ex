@@ -15,6 +15,7 @@ export function TooltipIconButton({
   pressed,
   testId,
   shortcut,
+  size = 'icon-xs',
 }: {
   label: string;
   children: ReactNode;
@@ -26,6 +27,7 @@ export function TooltipIconButton({
   testId?: string;
   // A keyboard shortcut for the same action, shown in the tooltip.
   shortcut?: { label: string; aria: string };
+  size?: 'icon-xs' | 'icon-sm';
 }) {
   return (
     <Tooltip>
@@ -34,7 +36,7 @@ export function TooltipIconButton({
           <Button
             type="button"
             variant="ghost"
-            size="icon-xs"
+            size={size}
             className={className}
             aria-label={label}
             aria-pressed={pressed}
@@ -50,7 +52,9 @@ export function TooltipIconButton({
       <TooltipContent>
         {label}
         {shortcut && (
-          <kbd data-slot="kbd" className="font-sans text-muted-foreground">
+          // Plain muted text after the label: no data-slot="kbd", which
+          // would take the tooltip's padding for a key chip this isn't.
+          <kbd className="font-sans text-muted-foreground">
             {shortcut.label}
           </kbd>
         )}

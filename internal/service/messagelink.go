@@ -11,7 +11,7 @@ import (
 
 // Narrow read-only surfaces the message-link resolver needs. Defined as
 // interfaces so the resolver is unit-testable with simple fakes; the concrete
-// impls are the existing store adapters / services wired in main.go.
+// impls are the existing store adapters / services wired in internal/app.
 type messageLinkChannels interface {
 	GetChannelBySlug(ctx context.Context, slug string) (*model.Channel, error)
 	GetChannel(ctx context.Context, id string) (*model.Channel, error)
@@ -130,11 +130,12 @@ func (s *MessageLinkService) Preview(ctx context.Context, viewerID, rawURL strin
 		if ch == nil {
 			return nil, true
 		}
-		// Public channels are visible to everyone in the workspace (even
+		// Public channels are visible to every workspace MEMBER (even
 		// before joining); private channels require membership so we never
 		// leak their content. An archived channel can no longer be joined,
-		// so only its members still see into it.
-		if ch.Type != model.ChannelTypePublic || ch.Archived {
+		// so only its members still see into it. Guests see only the
+		// channels they were invited to — public ones included.
+		if ch.Type != model.ChannelTypePublic || ch.Archived || s.viewerMayBeGuest(ctx, viewerID) {
 			if _, err := s.memberships.GetMembership(ctx, ch.ID, viewerID); err != nil {
 				return nil, true
 			}
@@ -142,7 +143,22 @@ func (s *MessageLinkService) Preview(ctx context.Context, viewerID, rawURL strin
 		parentID, label = ch.ID, "~"+ch.Slug
 	default: // "conversation"
 		conv, err := s.conversations.GetConversation(ctx, ref.ref)
-		if err != nil || conv == nil || !containsString(conv.ParticipantIDs, viewerID) {
+		if err != nil || conv == nil {
+			return nil, true
+		}
+		if conv.ConvertedToChannelID != "" {
+			// A group that became a private channel: its frozen participant
+			// list no longer says who may read it — the channel's members do.
+			// Someone removed from the channel must not keep reading through
+			// the old conversation link.
+			ch := s.convertedChannelFor(ctx, viewerID, conv)
+			if ch == nil {
+				return nil, true
+			}
+			parentID, label = ch.ID, "~"+ch.Slug
+			break
+		}
+		if !containsString(conv.ParticipantIDs, viewerID) {
 			return nil, true
 		}
 		parentID, label = conv.ID, conversationLabel(conv)
@@ -175,6 +191,14 @@ func (s *MessageLinkService) Preview(ctx context.Context, viewerID, rawURL strin
 	preview.Image, preview.ImageWidth, preview.ImageHeight = s.resolveImage(msg, atts)
 	preview.Attachments = s.resolveAttachmentList(atts)
 	return preview, true
+}
+
+// viewerMayBeGuest reports whether the viewer must be treated as a guest:
+// they are one, or their role can't be read (fail closed — the cost is a
+// missing preview, never a leaked message).
+func (s *MessageLinkService) viewerMayBeGuest(ctx context.Context, viewerID string) bool {
+	u, err := s.users.GetByID(ctx, viewerID)
+	return err != nil || u.SystemRole == model.SystemRoleGuest
 }
 
 // resolveAttachmentList returns the message's non-image uploaded file
@@ -221,6 +245,20 @@ func (s *MessageLinkService) resolveAttachmentList(atts []*model.Attachment) []U
 		return nil
 	}
 	return out
+}
+
+// convertedChannelFor returns the private channel a converted group became,
+// or nil unless viewerID is a member of it (or it can't be read). A converted
+// group is always a private channel, so membership is the whole rule.
+func (s *MessageLinkService) convertedChannelFor(ctx context.Context, viewerID string, conv *model.Conversation) *model.Channel {
+	ch, err := s.channels.GetChannel(ctx, conv.ConvertedToChannelID)
+	if err != nil {
+		return nil
+	}
+	if _, err := s.memberships.GetMembership(ctx, ch.ID, viewerID); err != nil {
+		return nil
+	}
+	return ch
 }
 
 // resolveChannel looks up a channel-link ref as a slug first, then by ID — the

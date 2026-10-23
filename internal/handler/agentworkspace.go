@@ -1,18 +1,17 @@
 package handler
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/search"
 	"github.com/DigitalTolk/ex/internal/service"
-	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // A tool error is the model's ONLY signal about what went wrong, and a model
@@ -25,21 +24,12 @@ import (
 // dmOpenFailure explains a GetOrCreateDM failure. The invoker always exists
 // (the run belongs to them), so a not-found is the RECIPIENT's id — which is
 // what happens when an agent guesses an id instead of resolving one.
-func dmOpenFailure(err error, userID string) string {
-	if errors.Is(err, store.ErrNotFound) {
-		return fmt.Sprintf("no user with id %q — resolve the person with list_users and pass the id it returns", userID)
+func dmOpenFailure(err error, userID string) error {
+	hint := ""
+	if errors.Is(err, apperr.ErrNotFound) {
+		hint = fmt.Sprintf("no user with id %q — resolve the person with list_users and pass the id it returns", userID)
 	}
-	return "could not open the DM: " + err.Error()
-}
-
-// toolRejection keeps the underlying reason instead of discarding it. `hint`
-// names the usual cause when there is one; pass "" when there isn't.
-func toolRejection(what string, err error, hint string) string {
-	msg := what + ": " + err.Error()
-	if hint != "" {
-		msg += " — " + hint
-	}
-	return msg
+	return toolRejection("could not open the DM", err, hint)
 }
 
 // Workspace tool surface (Phase 3+): agents can act across Ex — list/create/
@@ -90,12 +80,12 @@ func userRef(ref string) string {
 func (h *AgentRunToolHandler) ListChannels(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if _, err := h.orch.GetLiveRun(r.Context(), claims.RunID); err != nil {
-		h.writeToolError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	channels, err := h.workspace.Channels.ListUserChannels(r.Context(), claims.UserID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "channel list failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	var b strings.Builder
@@ -131,13 +121,13 @@ func (h *AgentRunToolHandler) CreateChannel(w http.ResponseWriter, r *http.Reque
 	if body.Private {
 		chanType = model.ChannelTypePrivate
 	}
+	if !gateAction(w, r, h.orch, run, "create_channel", "create the "+string(chanType)+" channel ~"+clipLine(body.Name)+" as you",
+		map[string]any{"name": body.Name, "description": body.Description, "private": body.Private}) {
+		return
+	}
 	ch, err := h.workspace.Channels.Create(r.Context(), claims.UserID, body.Name, chanType, body.Description)
 	if err != nil {
-		if errors.Is(err, service.ErrAlreadyExists) {
-			writeError(w, http.StatusConflict, "exists", "a channel with this name already exists")
-			return
-		}
-		writeError(w, http.StatusForbidden, "forbidden", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	h.orch.RecordWorkspaceAction(r.Context(), run, "channel_created", map[string]any{
@@ -154,8 +144,12 @@ func (h *AgentRunToolHandler) JoinChannel(w http.ResponseWriter, r *http.Request
 		return
 	}
 	channelID := r.PathValue("id")
+	if !gateAction(w, r, h.orch, run, "join_channel", "join you to the channel [ch:"+channelID+"]",
+		map[string]any{"channelID": channelID}) {
+		return
+	}
 	if err := h.workspace.Channels.Join(r.Context(), claims.UserID, channelID); err != nil {
-		writeError(w, http.StatusForbidden, "forbidden", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	h.orch.RecordWorkspaceAction(r.Context(), run, "channel_joined", map[string]any{"channelID": channelID})
@@ -171,7 +165,7 @@ func (h *AgentRunToolHandler) JoinChannel(w http.ResponseWriter, r *http.Request
 func (h *AgentRunToolHandler) ReadChannel(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if _, err := h.orch.GetLiveRun(r.Context(), claims.RunID); err != nil {
-		h.writeToolError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	h.windowText(w, r, claims.UserID, r.PathValue("id"), service.ParentChannel, "the invoker cannot read this channel")
@@ -188,14 +182,14 @@ func (h *AgentRunToolHandler) windowText(w http.ResponseWriter, r *http.Request,
 	if thread != "" {
 		root, err := h.messages.ResolveThreadRoot(r.Context(), userID, parentID, parentType, thread)
 		if err != nil {
-			writeError(w, http.StatusForbidden, "forbidden", denied)
+			writeServiceError(w, r, toolRejection(denied, err, ""))
 			return
 		}
 		thread = root
 	}
 	text, err := h.orch.Window(r.Context(), userID, parentID, parentType, thread, limit)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "forbidden", denied)
+		writeServiceError(w, r, toolRejection(denied, err, ""))
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"text": text})
@@ -207,12 +201,12 @@ func (h *AgentRunToolHandler) windowText(w http.ResponseWriter, r *http.Request,
 func (h *AgentRunToolHandler) ReadPins(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if _, err := h.orch.GetLiveRun(r.Context(), claims.RunID); err != nil {
-		h.writeToolError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	msgs, err := h.messages.ListPinned(r.Context(), claims.UserID, r.PathValue("id"), service.ParentChannel)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "forbidden", "the invoker cannot read this channel")
+		writeServiceError(w, r, toolRejection("the invoker cannot read this channel", err, ""))
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"text": h.orch.RenderMessages(r.Context(), msgs)})
@@ -223,15 +217,20 @@ func (h *AgentRunToolHandler) ReadPins(w http.ResponseWriter, r *http.Request) {
 // app. Supports the same thread narrowing as ReadChannel.
 // GET /api/v1/agent/run/dm/{userID}/messages?limit=&thread=
 func (h *AgentRunToolHandler) ReadDM(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.ClaimsFromContext(r.Context())
-	if _, err := h.orch.GetLiveRun(r.Context(), claims.RunID); err != nil {
-		h.writeToolError(w, r, err)
+	run, claims := h.liveRun(w, r)
+	if run == nil {
 		return
 	}
 	target := userRef(r.PathValue("userID"))
+	// The invoker's private conversations are exactly what an injected
+	// instruction would want to read out into a thread.
+	if !gateAction(w, r, h.orch, run, "read_dm", "read your private DMs with [u:"+target+"]",
+		map[string]any{"userID": target, "thread": r.URL.Query().Get("thread")}) {
+		return
+	}
 	conv, err := h.workspace.Conversations.GetOrCreateDM(r.Context(), claims.UserID, target)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", dmOpenFailure(err, target))
+		writeServiceError(w, r, dmOpenFailure(err, target))
 		return
 	}
 	h.windowText(w, r, claims.UserID, conv.ID, service.ParentConversation, "the invoker cannot read this conversation")
@@ -262,9 +261,6 @@ func (h *AgentRunToolHandler) PostToChannel(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusForbidden, "notify_only", "this watcher can't post publicly — use notify_owner")
 		return
 	}
-	if !h.replyApprovalOK(w, r.Context(), run) {
-		return
-	}
 	if run.Spend.Posts >= run.Limits.MaxPosts {
 		writeError(w, http.StatusTooManyRequests, "post_cap", "per-run post cap reached")
 		return
@@ -274,10 +270,17 @@ func (h *AgentRunToolHandler) PostToChannel(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	channelID := r.PathValue("id")
+	if !gateAction(w, r, h.orch, run, "post_to_channel", "post in [ch:"+channelID+"]: “"+clipLine(body.Body)+"”",
+		map[string]any{"channelID": channelID, "threadRoot": body.ThreadRoot, "body": body.Body, "attachmentIDs": files}) {
+		return
+	}
+	if !h.replyApprovalOK(w, r, run) {
+		return
+	}
 	text := h.orch.LinkifyMentions(r.Context(), run, body.Body)
 	msg, err := h.messages.SendAsAgentRun(r.Context(), claims.ActorID, claims.UserID, channelID, service.ParentChannel, text, body.ThreadRoot, claims.RunID, files...)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "forbidden", "post rejected — is the invoker a member of that channel?")
+		writeServiceError(w, r, toolRejection("post rejected", err, "is the invoker a member of that channel?"))
 		return
 	}
 	remaining, err := h.orch.RecordAgentPost(r.Context(), claims.RunID)
@@ -295,7 +298,7 @@ func (h *AgentRunToolHandler) PostToChannel(w http.ResponseWriter, r *http.Reque
 func (h *AgentRunToolHandler) SearchWorkspace(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if _, err := h.orch.GetLiveRun(r.Context(), claims.RunID); err != nil {
-		h.writeToolError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	q := strings.TrimSpace(queryParam(r, "q", ""))
@@ -309,7 +312,7 @@ func (h *AgentRunToolHandler) SearchWorkspace(w http.ResponseWriter, r *http.Req
 	}
 	allowed, err := h.workspace.SearchAccess.AllowedParentIDs(r.Context(), claims.UserID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "access resolution failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	limit := clampInt(queryInt(r, "limit", 10), 1, 20)
@@ -317,7 +320,7 @@ func (h *AgentRunToolHandler) SearchWorkspace(w http.ResponseWriter, r *http.Req
 		Q: q, AllowedParentIDs: allowed, Limit: limit,
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "search failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	var b strings.Builder
@@ -365,13 +368,12 @@ func (h *AgentRunToolHandler) React(w http.ResponseWriter, r *http.Request) {
 			parentType = service.ParentChannel
 		}
 	}
+	if !gateAction(w, r, h.orch, run, "add_reaction", "react "+clipLine(body.Emoji)+" to [m:"+msgID+"]",
+		map[string]any{"messageID": msgID, "emoji": body.Emoji, "parentID": parentID, "parentType": parentType}) {
+		return
+	}
 	if _, err := h.messages.ToggleReactionAsAgent(r.Context(), claims.ActorID, claims.UserID, parentID, parentType, msgID, body.Emoji); err != nil {
-		if errors.Is(err, service.ErrReservedEmoji) {
-			writeError(w, http.StatusBadRequest, "reserved_emoji", "that emoji is reserved for run states")
-			return
-		}
-		writeError(w, http.StatusForbidden, "forbidden",
-			toolRejection("reaction rejected", err, "check the message id and that the invoker can see that channel"))
+		writeServiceError(w, r, toolRejection("reaction rejected", err, "check the message id and that the invoker can see that channel"))
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"ok": true})
@@ -383,7 +385,7 @@ func (h *AgentRunToolHandler) React(w http.ResponseWriter, r *http.Request) {
 func (h *AgentRunToolHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if _, err := h.orch.GetLiveRun(r.Context(), claims.RunID); err != nil {
-		h.writeToolError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	if h.workspace.Searcher == nil {
@@ -393,7 +395,7 @@ func (h *AgentRunToolHandler) ListUsers(w http.ResponseWriter, r *http.Request) 
 	q := queryParam(r, "q", "")
 	res, err := h.workspace.Searcher.Users(r.Context(), q, 20)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "user search failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	var b strings.Builder
@@ -439,15 +441,26 @@ func (h *AgentRunToolHandler) SendDM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target := userRef(body.UserID)
+	// A DM is a message to someone, from the invoker's account: a run acting
+	// on someone else's words may message only the invoker without asking.
+	if target != claims.UserID && !gateAction(w, r, h.orch, run, "send_dm", "DM [u:"+target+"] from your account: “"+clipLine(body.Body)+"”",
+		map[string]any{"userID": target, "body": body.Body, "attachmentIDs": files}) {
+		return
+	}
+	// A reply-mode watcher's every outbound message is gated, DMs included —
+	// a DM used to be the way around the reply approval.
+	if !h.replyApprovalOK(w, r, run) {
+		return
+	}
 	conv, err := h.workspace.Conversations.GetOrCreateDM(r.Context(), claims.UserID, target)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", dmOpenFailure(err, target))
+		writeServiceError(w, r, dmOpenFailure(err, target))
 		return
 	}
 	text := h.orch.LinkifyMentions(r.Context(), run, body.Body)
 	msg, err := h.messages.SendAsAgentRun(r.Context(), claims.ActorID, claims.UserID, conv.ID, service.ParentConversation, text, "", claims.RunID, files...)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "forbidden", toolRejection("DM rejected", err, ""))
+		writeServiceError(w, r, toolRejection("DM rejected", err, ""))
 		return
 	}
 	remaining, err := h.orch.RecordAgentPost(r.Context(), claims.RunID)
@@ -504,6 +517,10 @@ func (h *AgentRunToolHandler) SetReminder(w http.ResponseWriter, r *http.Request
 	if msgID == "" {
 		msgID = run.MessageID
 	}
+	if !gateAction(w, r, h.orch, run, "set_reminder", "remind you about [m:"+msgID+"] at "+remindAt.UTC().Format(time.RFC3339),
+		map[string]any{"messageID": msgID, "remindAt": remindAt.UTC().Format(time.RFC3339)}) {
+		return
+	}
 	rem, err := h.workspace.Reminders.Schedule(r.Context(), claims.UserID, service.ReminderInput{
 		MessageID:  msgID,
 		ParentID:   run.ParentID,
@@ -511,7 +528,7 @@ func (h *AgentRunToolHandler) SetReminder(w http.ResponseWriter, r *http.Request
 		RemindAt:   remindAt,
 	})
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "reminder_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	h.orch.RecordWorkspaceAction(r.Context(), run, "reminder_set", map[string]any{
@@ -525,7 +542,7 @@ func (h *AgentRunToolHandler) SetReminder(w http.ResponseWriter, r *http.Request
 func (h *AgentRunToolHandler) ListReminders(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if _, err := h.orch.GetLiveRun(r.Context(), claims.RunID); err != nil {
-		h.writeToolError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	if h.workspace == nil || h.workspace.Reminders == nil {
@@ -534,7 +551,7 @@ func (h *AgentRunToolHandler) ListReminders(w http.ResponseWriter, r *http.Reque
 	}
 	rems, err := h.workspace.Reminders.ListPending(r.Context(), claims.UserID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "reminder list failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	var b strings.Builder
@@ -559,8 +576,11 @@ func (h *AgentRunToolHandler) CancelReminder(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	id := r.PathValue("id")
+	if !gateAction(w, r, h.orch, run, "cancel_reminder", "cancel your reminder [rem:"+id+"]", map[string]any{"reminderID": id}) {
+		return
+	}
 	if err := h.workspace.Reminders.Cancel(r.Context(), claims.UserID, id); err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "no such pending reminder")
+		writeServiceError(w, r, toolRejection("no such pending reminder", err, ""))
 		return
 	}
 	h.orch.RecordWorkspaceAction(r.Context(), run, "reminder_canceled", map[string]any{"reminderID": id})
@@ -590,9 +610,16 @@ func (h *AgentRunToolHandler) PinMessage(w http.ResponseWriter, r *http.Request)
 	if body.Pinned != nil {
 		pinned = *body.Pinned
 	}
+	verbing := "pin"
+	if !pinned {
+		verbing = "unpin"
+	}
+	if !gateAction(w, r, h.orch, run, "pin_message", verbing+" [m:"+msgID+"] in this chat",
+		map[string]any{"messageID": msgID, "pinned": pinned}) {
+		return
+	}
 	if _, err := h.messages.SetPinned(r.Context(), claims.UserID, run.ParentID, run.ParentType, msgID, pinned); err != nil {
-		writeError(w, http.StatusForbidden, "forbidden",
-			toolRejection("pin rejected", err, "the message must be in this run's own channel or DM"))
+		writeServiceError(w, r, toolRejection("pin rejected", err, "the message must be in this run's own channel or DM"))
 		return
 	}
 	action := "message_pinned"
@@ -631,13 +658,13 @@ func (h *AgentRunToolHandler) NotifyOwner(w http.ResponseWriter, r *http.Request
 	// The DM between the creator (invoker) and this agent.
 	conv, err := h.workspace.Conversations.GetOrCreateDM(r.Context(), claims.UserID, claims.ActorID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "could not open the owner DM: "+err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	text := h.orch.LinkifyMentions(r.Context(), run, body.Body)
 	msg, err := h.messages.SendAsAgentRun(r.Context(), claims.ActorID, claims.UserID, conv.ID, service.ParentConversation, text, "", claims.RunID)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "forbidden", toolRejection("notify rejected", err, ""))
+		writeServiceError(w, r, toolRejection("notify rejected", err, ""))
 		return
 	}
 	h.orch.RecordWorkspaceAction(r.Context(), run, "owner_notified", map[string]any{
@@ -647,18 +674,22 @@ func (h *AgentRunToolHandler) NotifyOwner(w http.ResponseWriter, r *http.Request
 }
 
 // replyApprovalOK enforces the reply-watcher approval gate SERVER-SIDE: a
-// reply-mode run may post publicly only after an approval for it was granted.
-// Returns false (and writes the error) when it hasn't been. Other modes pass.
-func (h *AgentRunToolHandler) replyApprovalOK(w http.ResponseWriter, ctx context.Context, run *model.Run) bool {
+// reply-mode run may send a message (post, channel post, DM) only after an
+// approval for it was granted — and each message spends one approval, so a
+// single "yes" no longer unlocks every post up to the run's cap. Returns false
+// (and writes the error) when there is none left. Other modes pass. Callers
+// run it LAST, right before sending, so a refusal for another reason never
+// spends the approval.
+func (h *AgentRunToolHandler) replyApprovalOK(w http.ResponseWriter, r *http.Request, run *model.Run) bool {
 	if run.ActionMode != model.WatchActionReply {
 		return true
 	}
 	// A DELIBERATE approval only. This used to accept any approved approval on
 	// the run, so a permission-gateway click ("allow reading main.go") licensed
 	// a public post in a channel — exactly the thing reply mode exists to gate.
-	approved, err := h.orch.HasDeliberateApproval(ctx, run.ID)
+	approved, err := h.orch.ConsumeDeliberateApproval(r.Context(), run.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "approval check failed")
+		writeServiceError(w, r, err)
 		return false
 	}
 	if !approved {

@@ -231,8 +231,14 @@ func serverTLSConfig(t *testing.T) *tls.Config {
 // newSender points a sender at the fake server, trusting its throwaway cert.
 func newSender(t *testing.T, s *fakeSMTP, username, password string) *SMTPSender {
 	t.Helper()
+	return newSenderWithPolicy(t, s, username, password, TLSMandatory)
+}
+
+// newSenderWithPolicy is newSender with an explicit STARTTLS policy.
+func newSenderWithPolicy(t *testing.T, s *fakeSMTP, username, password string, policy TLSPolicy) *SMTPSender {
+	t.Helper()
 	host, port := s.addr()
-	sender, err := NewSMTPSender(host, port, username, password, "Ex <noreply@ex.example.com>")
+	sender, err := NewSMTPSender(host, port, username, password, "Ex <noreply@ex.example.com>", policy)
 	if err != nil {
 		t.Fatalf("NewSMTPSender: %v", err)
 	}
@@ -305,7 +311,7 @@ func TestSMTPSender_SendOverSTARTTLS(t *testing.T) {
 func TestSMTPSender_SendOverImplicitTLS(t *testing.T) {
 	server := newFakeSMTP(t, func(s *fakeSMTP) { s.requireTLS = true })
 	host, port := server.addr()
-	sender, err := NewSMTPSender(host, port, "", "", "noreply@ex.example.com")
+	sender, err := NewSMTPSender(host, port, "", "", "noreply@ex.example.com", TLSMandatory)
 	if err != nil {
 		t.Fatalf("NewSMTPSender: %v", err)
 	}
@@ -326,11 +332,12 @@ func TestSMTPSender_SendOverImplicitTLS(t *testing.T) {
 	}
 }
 
-// A server that offers no STARTTLS still gets the message: TLS is
-// opportunistic, so a trusted local relay is a legitimate deployment.
+// A server that offers no STARTTLS still gets the message under the
+// OPPORTUNISTIC policy, so a trusted local relay is a legitimate deployment
+// when an operator opts into it.
 func TestSMTPSender_SendWithoutSTARTTLS(t *testing.T) {
 	server := newFakeSMTP(t, func(s *fakeSMTP) { s.noSTARTTLS = true })
-	sender := newSender(t, server, "", "")
+	sender := newSenderWithPolicy(t, server, "", "", TLSOpportunistic)
 
 	if err := sender.Send(context.Background(), testMessage()); err != nil {
 		t.Fatalf("Send = %v", err)
@@ -340,6 +347,42 @@ func TestSMTPSender_SendWithoutSTARTTLS(t *testing.T) {
 	}
 	if server.authSeen {
 		t.Error("AUTH was attempted with no credentials configured")
+	}
+}
+
+// The MANDATORY policy (the production default) refuses a relay that offers
+// no STARTTLS: nothing — no envelope, no body, no credentials — crosses the
+// wire in the clear. This is the downgrade an on-path attacker gets by
+// stripping the STARTTLS capability from the EHLO reply.
+func TestSMTPSender_MandatoryTLSRefusesPlaintextRelay(t *testing.T) {
+	server := newFakeSMTP(t, func(s *fakeSMTP) { s.noSTARTTLS = true })
+	sender := newSenderWithPolicy(t, server, "user", "pass", TLSMandatory)
+
+	if err := sender.Send(context.Background(), testMessage()); err == nil {
+		t.Fatal("Send succeeded over plaintext despite the mandatory TLS policy")
+	}
+	if server.authSeen {
+		t.Error("credentials were presented over an unencrypted connection")
+	}
+	if got := server.lastMessage(); got != "" {
+		t.Errorf("message was delivered in the clear:\n%s", got)
+	}
+}
+
+// The NONE policy never upgrades, even when the relay offers STARTTLS (a
+// relay on a trusted network whose certificate nothing can verify).
+func TestSMTPSender_NoTLSPolicySkipsSTARTTLS(t *testing.T) {
+	server := newFakeSMTP(t, nil)
+	sender := newSenderWithPolicy(t, server, "", "", TLSNone)
+
+	if err := sender.Send(context.Background(), testMessage()); err != nil {
+		t.Fatalf("Send = %v", err)
+	}
+	if server.tlsSeen {
+		t.Error("STARTTLS was used although the policy is none")
+	}
+	if server.lastMessage() == "" {
+		t.Error("no message received")
 	}
 }
 
@@ -401,7 +444,7 @@ func TestSMTPSender_DialFailure(t *testing.T) {
 	host, port := server.addr()
 	// Close the listener so nothing is accepting on that port.
 	_ = server.listener.Close()
-	sender, err := NewSMTPSender(host, port, "", "", "noreply@ex.example.com")
+	sender, err := NewSMTPSender(host, port, "", "", "noreply@ex.example.com", TLSMandatory)
 	if err != nil {
 		t.Fatalf("NewSMTPSender: %v", err)
 	}
@@ -425,45 +468,52 @@ func TestSMTPSender_InvalidRecipient(t *testing.T) {
 
 func TestNewSMTPSender(t *testing.T) {
 	t.Run("no host is opt-out, not an error to shout about", func(t *testing.T) {
-		_, err := NewSMTPSender("", "587", "", "", "noreply@example.com")
+		_, err := NewSMTPSender("", "587", "", "", "noreply@example.com", TLSMandatory)
 		if !errors.Is(err, ErrNotConfigured) {
 			t.Fatalf("err = %v, want ErrNotConfigured", err)
 		}
 	})
 
 	t.Run("malformed from address fails fast", func(t *testing.T) {
-		if _, err := NewSMTPSender("smtp.example.com", "587", "", "", "not an address"); err == nil {
+		if _, err := NewSMTPSender("smtp.example.com", "587", "", "", "not an address", TLSMandatory); err == nil {
 			t.Fatal("expected a malformed SMTP_FROM to be rejected at construction")
 		}
 	})
 
 	t.Run("non-numeric port", func(t *testing.T) {
-		if _, err := NewSMTPSender("smtp.example.com", "not-a-port", "", "", "noreply@example.com"); err == nil {
+		if _, err := NewSMTPSender("smtp.example.com", "not-a-port", "", "", "noreply@example.com", TLSMandatory); err == nil {
 			t.Fatal("expected a non-numeric port to be rejected")
 		}
 	})
 
 	t.Run("out-of-range port", func(t *testing.T) {
-		_, err := NewSMTPSender("smtp.example.com", "70000", "", "", "noreply@example.com")
+		_, err := NewSMTPSender("smtp.example.com", "70000", "", "", "noreply@example.com", TLSMandatory)
 		if err == nil || !strings.Contains(err.Error(), "smtp client") {
 			t.Fatalf("err = %v, want the client construction to reject the port", err)
 		}
 	})
 
 	t.Run("empty port defaults to 587", func(t *testing.T) {
-		if _, err := NewSMTPSender("smtp.example.com", "", "", "", "noreply@example.com"); err != nil {
+		if _, err := NewSMTPSender("smtp.example.com", "", "", "", "noreply@example.com", TLSMandatory); err != nil {
 			t.Fatalf("NewSMTPSender: %v", err)
 		}
 	})
 
 	t.Run("port 465 selects implicit TLS", func(t *testing.T) {
-		if _, err := NewSMTPSender("smtp.example.com", "465", "", "", "noreply@example.com"); err != nil {
+		if _, err := NewSMTPSender("smtp.example.com", "465", "", "", "noreply@example.com", TLSMandatory); err != nil {
 			t.Fatalf("NewSMTPSender: %v", err)
 		}
 	})
 
+	t.Run("unknown TLS policy", func(t *testing.T) {
+		_, err := NewSMTPSender("smtp.example.com", "587", "", "", "noreply@example.com", TLSPolicy("sometimes"))
+		if err == nil || !strings.Contains(err.Error(), "invalid SMTP TLS policy") {
+			t.Fatalf("err = %v, want an invalid-policy error", err)
+		}
+	})
+
 	t.Run("an empty host wins over a bad port", func(t *testing.T) {
-		if _, err := NewSMTPSender("", "nonsense", "", "", "noreply@example.com"); !errors.Is(err, ErrNotConfigured) {
+		if _, err := NewSMTPSender("", "nonsense", "", "", "noreply@example.com", TLSMandatory); !errors.Is(err, ErrNotConfigured) {
 			t.Fatalf("err = %v, want ErrNotConfigured", err)
 		}
 	})

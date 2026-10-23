@@ -10,7 +10,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { ReminderDialog, type DateTimeDialogCopy, type QuickPick } from '@/components/chat/ReminderDialog';
+import { LazyReminderDialog as ReminderDialog } from '@/components/chat/LazyReminderDialog';
+import type { DateTimeDialogCopy, QuickPick } from '@/components/chat/ReminderDialog';
 import { SCHEDULE_PRESETS, scheduleTimeFor } from '@/lib/schedule-times';
 import { computeReminderTime, toLocalInputValue } from '@/lib/reminder-times';
 

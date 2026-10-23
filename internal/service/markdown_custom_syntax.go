@@ -18,8 +18,11 @@ import (
 var (
 	// Mirrors lib/mention-syntax.ts USER_MENTION_RE_GLOBAL.
 	userMentionRE = regexp.MustCompile(`@\[([^|\]]+)\|([^\]]+)\]`)
-	// CHANNEL_MENTION_RE_GLOBAL.
-	channelMentionRE = regexp.MustCompile(`~\[([^|\]]+)\|([^\]]+)\]`)
+	// CHANNEL_MENTION_RE_GLOBAL, with the slug half held to the slug
+	// charset (slugify / limits.ValidateChannelName: lowercase ASCII
+	// letters, digits, hyphens): anything else — a typed path such as
+	// "../../auth/…" — is not a channel mention and stays literal text.
+	channelMentionRE = regexp.MustCompile(`~\[([^|\]]+)\|([a-z0-9][a-z0-9-]*)\]`)
 	// GROUP_MENTION_RE — leading non-word/non-@ guard prevents
 	// matching inside emails (`a@all.example.com`).
 	groupMentionRE = regexp.MustCompile(`(^|[^\w@])@(all|here)\b`)

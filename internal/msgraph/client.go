@@ -11,6 +11,7 @@ package msgraph
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,10 +19,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
-	"context"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/clientcredentials"
 )
 
 const (
@@ -29,8 +30,9 @@ const (
 	defaultTokenURLFormat = "https://login.microsoftonline.com/%s/oauth2/v2.0/token"
 	defaultScope          = "https://graph.microsoft.com/.default"
 
-	// tokenExpiryMargin renews the cached app token this long before Graph
-	// says it expires, so an in-flight request never rides a just-expired one.
+	// tokenExpiryMargin renews the cached app token this long before the
+	// token endpoint says it expires, so an in-flight request never rides a
+	// just-expired one.
 	tokenExpiryMargin = time.Minute
 
 	// responseLimit bounds how much of a Graph response body is read. Profile
@@ -56,15 +58,13 @@ type Config struct {
 
 // Client is an app-only Microsoft Graph client with a cached bearer token.
 type Client struct {
-	clientID     string
-	clientSecret string
-	tokenURL     string
-	baseURL      string
-	client       *http.Client
-
-	mu          sync.Mutex
-	accessToken string
-	tokenExpiry time.Time
+	creds   *clientcredentials.Config
+	baseURL string
+	client  *http.Client
+	// tokens is the client-credentials grant behind golang.org/x/oauth2's
+	// caching ReuseTokenSource: it fetches once, serves the cached token
+	// until tokenExpiryMargin before expiry, and serialises refreshes.
+	tokens oauth2.TokenSource
 }
 
 // New builds a Client, or (nil, nil) when the integration is not configured
@@ -94,12 +94,24 @@ func New(cfg Config) (*Client, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
+	creds := &clientcredentials.Config{
+		ClientID:     strings.TrimSpace(cfg.ClientID),
+		ClientSecret: strings.TrimSpace(cfg.ClientSecret),
+		TokenURL:     tokenURL,
+		Scopes:       []string{defaultScope},
+		// Entra ID's documented client-credentials request carries the
+		// credentials in the form body.
+		AuthStyle: oauth2.AuthStyleInParams,
+	}
+	// The token source outlives any one request, so it gets a background
+	// context carrying the client's http.Client (its timeout bounds each
+	// token fetch) rather than a caller's request context.
+	tokenCtx := context.WithValue(context.Background(), oauth2.HTTPClient, client)
 	return &Client{
-		clientID:     strings.TrimSpace(cfg.ClientID),
-		clientSecret: strings.TrimSpace(cfg.ClientSecret),
-		tokenURL:     tokenURL,
-		baseURL:      strings.TrimRight(baseURL, "/"),
-		client:       client,
+		creds:   creds,
+		baseURL: strings.TrimRight(baseURL, "/"),
+		client:  client,
+		tokens:  oauth2.ReuseTokenSourceWithExpiry(nil, creds.TokenSource(tokenCtx), tokenExpiryMargin),
 	}, nil
 }
 
@@ -273,56 +285,29 @@ func (c *Client) CreateOnlineMeeting(ctx context.Context, organizerKey string, r
 	return &meeting, nil
 }
 
-// token returns a valid app-only bearer token, fetching a fresh one from the
-// tenant token endpoint when the cached one is missing or near expiry. The
-// mutex single-flights concurrent refreshes.
-func (c *Client) token(ctx context.Context) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.accessToken != "" && time.Now().Before(c.tokenExpiry) {
-		return c.accessToken, nil
-	}
-
-	form := url.Values{
-		"client_id":     {c.clientID},
-		"client_secret": {c.clientSecret},
-		"scope":         {defaultScope},
-		"grant_type":    {"client_credentials"},
-	}
-	req := mustRequest(http.NewRequestWithContext(ctx, http.MethodPost, c.tokenURL, strings.NewReader(form.Encode())))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	res, err := c.client.Do(req)
+// token returns a valid app-only bearer token from the caching token source.
+// A token-endpoint rejection is reduced to its status and OAuth error code:
+// oauth2.RetrieveError's own message embeds the raw response body (trace and
+// correlation ids, tenant detail), which must not reach logs.
+func (c *Client) token() (string, error) {
+	tok, err := c.tokens.Token()
 	if err != nil {
+		if re, ok := errors.AsType[*oauth2.RetrieveError](err); ok {
+			if re.ErrorCode != "" {
+				return "", fmt.Errorf("msgraph: token request failed with status %d (code %s)", re.Response.StatusCode, re.ErrorCode)
+			}
+			return "", fmt.Errorf("msgraph: token request failed with status %d", re.Response.StatusCode)
+		}
 		return "", fmt.Errorf("msgraph: token request: %w", err)
 	}
-	defer drainClose(res.Body)
-	if res.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("msgraph: token request failed with status %d", res.StatusCode)
-	}
-
-	var tr struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int64  `json:"expires_in"`
-	}
-	if err := json.NewDecoder(io.LimitReader(res.Body, responseLimit)).Decode(&tr); err != nil {
-		return "", fmt.Errorf("msgraph: parse token response: %w", err)
-	}
-	if tr.AccessToken == "" {
-		return "", errors.New("msgraph: token response contained no access token")
-	}
-
-	ttl := max(time.Duration(tr.ExpiresIn)*time.Second-tokenExpiryMargin, 0)
-	c.accessToken = tr.AccessToken
-	c.tokenExpiry = time.Now().Add(ttl)
-	return c.accessToken, nil
+	return tok.AccessToken, nil
 }
 
 // doJSON authenticates, performs one Graph call, and decodes the JSON
 // response into dest. 404 maps to ErrNotFound; other non-2xx to a status
 // error (bodies are never echoed into errors — they can carry directory PII).
 func (c *Client) doJSON(ctx context.Context, method, path string, payload, dest any) error {
-	tok, err := c.token(ctx)
+	tok, err := c.token()
 	if err != nil {
 		return err
 	}

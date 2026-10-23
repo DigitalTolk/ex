@@ -234,7 +234,7 @@ func TestSend_ConversationActivatesAndBumpsSeq(t *testing.T) {
 	if _, err := svc.Send(context.Background(), "u1", "c1", ParentConversation, "hi", ""); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if len(act.ActivateCalls()) != 1 {
+	if len(act.ActivateLoadedCalls()) != 1 {
 		t.Error("first top-level message should activate the conversation")
 	}
 	waitForCond(t, func() bool { return seqStore.count("c1") == 1 }, "conversation seq to bump")
@@ -244,7 +244,7 @@ func TestSend_ConversationActivateError(t *testing.T) {
 	svc, _, _, conversations, _ := setupMessageService()
 	conversations.conversations["c1"] = &model.Conversation{ID: "c1", ParticipantIDs: []string{"u1", "u2"}}
 	svc.SetActivator(&ConversationActivatorMock{
-		ActivateFunc: func(context.Context, string) error { return errors.New("boom") },
+		ActivateLoadedFunc: func(context.Context, *model.Conversation) error { return errors.New("boom") },
 	})
 	// Activate failure is logged, not fatal.
 	if _, err := svc.Send(context.Background(), "u1", "c1", ParentConversation, "hi", ""); err != nil {
@@ -279,10 +279,10 @@ func TestSendWebhook_ConversationActivates(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SendWebhook: %v", err)
 	}
-	if len(act.ActivateCalls()) != 1 {
-		t.Fatalf("webhook DM should activate the conversation, got %d calls", len(act.ActivateCalls()))
+	if len(act.ActivateLoadedCalls()) != 1 {
+		t.Fatalf("webhook DM should activate the conversation, got %d calls", len(act.ActivateLoadedCalls()))
 	}
-	if got := act.ActivateCalls()[0].ConvID; got != "c1" {
+	if got := act.ActivateLoadedCalls()[0].Conv.ID; got != "c1" {
 		t.Errorf("activated convID = %q, want %q", got, "c1")
 	}
 }
@@ -300,8 +300,8 @@ func TestSendWebhook_ChannelDoesNotActivate(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SendWebhook: %v", err)
 	}
-	if len(act.ActivateCalls()) != 0 {
-		t.Errorf("channel webhook should not activate a conversation, got %d calls", len(act.ActivateCalls()))
+	if len(act.ActivateLoadedCalls()) != 0 {
+		t.Errorf("channel webhook should not activate a conversation, got %d calls", len(act.ActivateLoadedCalls()))
 	}
 }
 
@@ -310,7 +310,7 @@ func TestSendWebhook_ConversationActivateErrorIsNonFatal(t *testing.T) {
 	svc, _, _, conversations, _ := setupMessageService()
 	conversations.conversations["c1"] = &model.Conversation{ID: "c1", ParticipantIDs: []string{"u1", "u2"}}
 	svc.SetActivator(&ConversationActivatorMock{
-		ActivateFunc: func(context.Context, string) error { return errors.New("boom") },
+		ActivateLoadedFunc: func(context.Context, *model.Conversation) error { return errors.New("boom") },
 	})
 
 	if _, err := svc.SendWebhook(context.Background(), WebhookMessageInput{

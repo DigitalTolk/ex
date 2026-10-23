@@ -9,8 +9,6 @@ import {
   groupActivity,
   markActivityItems,
   markAllActivityRead,
-  parseActivityChange,
-  parseActivityNew,
   parseActivityTab,
   removeActivityItems,
   isWebhookItem,
@@ -68,16 +66,6 @@ describe('activity feed helpers', () => {
     expect(applyActivityChange(feed, { parentID: 'ch-1' })).toBeNull();
     expect(applyActivityChange(feed, { updated: ['a'] })).toBeNull();
     expect(applyActivityChange(feed, { ids: ['a'] })).toBeNull();
-  });
-
-  it('parses event payloads defensively', () => {
-    expect(parseActivityNew({ item: item('a') })?.id).toBe('a');
-    expect(parseActivityNew({ item: { id: 'a' } })).toBeNull();
-    expect(parseActivityNew({})).toBeNull();
-    expect(parseActivityNew(null)).toBeNull();
-    expect(parseActivityChange({ all: true })).toEqual({ all: true });
-    expect(parseActivityChange('nope')).toEqual({});
-    expect(parseActivityChange(null)).toEqual({});
   });
 
   // A busy conversation or thread is one row, placed where its newest item is;

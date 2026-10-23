@@ -59,6 +59,10 @@ type failingUploadSigner struct {
 	getErr error
 }
 
+func (s failingUploadSigner) PresignedSizedPutURL(ctx context.Context, key, contentType string, _ int64, expires time.Duration) (string, error) {
+	return s.PresignedPutURL(ctx, key, contentType, expires)
+}
+
 func (s failingUploadSigner) PresignedPutURL(_ context.Context, key, _ string, _ time.Duration) (string, error) {
 	if s.putErr != nil {
 		return "", s.putErr
@@ -66,7 +70,11 @@ func (s failingUploadSigner) PresignedPutURL(_ context.Context, key, _ string, _
 	return "https://upload/" + key, nil
 }
 
-func (s failingUploadSigner) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
+func (s failingUploadSigner) PresignedGetURL(ctx context.Context, key string, expires time.Duration) (string, error) {
+	return s.PresignedInlineURL(ctx, key, "", "", expires)
+}
+
+func (s failingUploadSigner) PresignedInlineURL(_ context.Context, key, _, _ string, _ time.Duration) (string, error) {
 	if s.getErr != nil {
 		return "", s.getErr
 	}

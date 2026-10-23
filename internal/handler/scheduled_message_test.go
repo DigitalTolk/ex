@@ -131,7 +131,7 @@ func TestScheduledMessageHandler_ErrorStatuses(t *testing.T) {
 		service.ErrScheduledTimeInvalid: http.StatusBadRequest,
 		service.ErrMessageTooLong:       http.StatusBadRequest,
 		service.ErrTooManyAttachments:   http.StatusBadRequest,
-		service.ErrThreadDeleted:        http.StatusBadRequest,
+		service.ErrThreadDeleted:        http.StatusConflict,
 		service.ErrForbidden:            http.StatusForbidden,
 		store.ErrNotFound:               http.StatusNotFound,
 		service.ErrScheduledBusy:        http.StatusConflict,
@@ -148,31 +148,5 @@ func TestScheduledMessageHandler_ErrorStatuses(t *testing.T) {
 				t.Errorf("%s with %v: %d, want %d", name, err, rec.Code, want)
 			}
 		}
-	}
-}
-
-type chanDraftClearer struct{ scopes chan string }
-
-func (c *chanDraftClearer) DeleteForScope(_ context.Context, userID, parentID, parentType, parentMessageID string) error {
-	c.scopes <- userID + "|" + parentID + "|" + parentType + "|" + parentMessageID
-	return nil
-}
-
-// Scheduling empties the composer's draft for that scope, like a send.
-func TestScheduledMessageHandler_CreateClearsTheDraft(t *testing.T) {
-	h := NewScheduledMessageHandler(&fakeScheduledSvc{})
-	clearer := &chanDraftClearer{scopes: make(chan string, 1)}
-	h.SetDraftClearer(clearer)
-	rec := schedDo(h.Create, schedReq(http.MethodPost, `{"parentID":"ch-1","parentType":"channel","parentMessageID":"root","body":"hi","sendAt":"2026-10-09T09:00:00Z"}`, "u-1", ""))
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("Create = %d", rec.Code)
-	}
-	select {
-	case got := <-clearer.scopes:
-		if got != "u-1|ch-1|channel|root" {
-			t.Fatalf("cleared %q", got)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("draft not cleared")
 	}
 }

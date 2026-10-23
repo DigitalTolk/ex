@@ -41,7 +41,8 @@ vi.mock('@/context/UnreadContext', () => ({
 vi.mock('@/context/PresenceContext', () => ({
   usePresence: () => ({ online: new Set<string>(), isOnline: () => false, setUserOnline: vi.fn() }),
 }));
-vi.mock('@/hooks/useChannels', () => ({
+vi.mock('@/hooks/useChannels', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useChannels')>()),
   useChannelBySlug: () => ({ data: channel, isLoading: false }),
   useChannelMembers: () => ({ data: [] }),
   useUserChannels: () => ({ data: [] }),

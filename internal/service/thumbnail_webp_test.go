@@ -147,7 +147,9 @@ func TestReencodeThumbnail_Failures(t *testing.T) {
 		{"too big", func(o *fakeAvatarObjects) {
 			o.objects["k"] = append(bytes.Clone(o.objects["k"]), make([]byte, maxThumbnailBytes)...)
 		}, nil},
-		{"corrupt", func(o *fakeAvatarObjects) { o.objects["k"] = append([]byte("RIFF\x00\x00\x00\x00WEBPVP8L"), "garbage"...) }, nil},
+		{"corrupt", func(o *fakeAvatarObjects) {
+			o.objects["k"] = append([]byte("RIFF\x00\x00\x00\x00WEBPVP8L"), "garbage"...)
+		}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

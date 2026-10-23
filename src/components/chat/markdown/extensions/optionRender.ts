@@ -19,11 +19,35 @@ export interface MentionCompletion extends Completion {
   meta?: OptionMeta;
 }
 
-// lucide Hash / Lock, inlined (static markup — safe to set via innerHTML).
-const HASH_SVG =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="9" y2="9"/><line x1="4" x2="20" y1="15" y2="15"/><line x1="10" x2="8" y1="3" y2="21"/><line x1="16" x2="14" y1="3" y2="21"/></svg>';
-const LOCK_SVG =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+// lucide Hash / Lock, as shapes. Built with createElementNS rather than set as
+// markup: the page reports any string written into an HTML sink (Trusted
+// Types, report-only), and first-party code writes none.
+type SvgShape = [tag: string, attrs: Record<string, string>];
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const SVG_ATTRS = {
+  viewBox: '0 0 24 24',
+  fill: 'none',
+  stroke: 'currentColor',
+  'stroke-width': '2',
+  'stroke-linecap': 'round',
+  'stroke-linejoin': 'round',
+};
+const HASH_SVG: SvgShape[] = [
+  ['line', { x1: '4', x2: '20', y1: '9', y2: '9' }],
+  ['line', { x1: '4', x2: '20', y1: '15', y2: '15' }],
+  ['line', { x1: '10', x2: '8', y1: '3', y2: '21' }],
+  ['line', { x1: '16', x2: '14', y1: '3', y2: '21' }],
+];
+const LOCK_SVG: SvgShape[] = [
+  ['rect', { width: '18', height: '11', x: '3', y: '11', rx: '2', ry: '2' }],
+  ['path', { d: 'M7 11V7a5 5 0 0 1 10 0v4' }],
+];
+
+function svgEl(tag: string, attrs: Record<string, string>): SVGElement {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [name, value] of Object.entries(attrs)) node.setAttribute(name, value);
+  return node;
+}
 
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -61,9 +85,11 @@ function avatarEl(m: { displayName: string; avatarURL?: string; online: boolean 
   return wrap;
 }
 
-function svgIcon(svg: string): HTMLElement {
+function svgIcon(shapes: SvgShape[]): HTMLElement {
   const s = el('span', 'cm-option-icon');
-  s.innerHTML = svg;
+  const svg = svgEl('svg', SVG_ATTRS);
+  for (const [tag, attrs] of shapes) svg.appendChild(svgEl(tag, attrs));
+  s.appendChild(svg);
   return s;
 }
 

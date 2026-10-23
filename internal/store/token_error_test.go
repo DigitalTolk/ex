@@ -103,10 +103,11 @@ func TestTokenStore_DeleteAllForUser_ExhaustsRetries(t *testing.T) {
 	if err := NewTokenStore(db).StoreRefreshToken(ctx, makeRefreshToken("hash-ex", "u-ex")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	fastRetries(t, 3)
 	uc := &unprocessedClient{DynamoAPI: db.Client, table: db.Table, remaining: 99}
 	s := NewTokenStore(&DB{Client: uc, Table: db.Table})
 	err := s.DeleteAllRefreshTokensForUser(ctx, "u-ex")
-	if err == nil || !strings.Contains(err.Error(), "unprocessed after retries") {
-		t.Fatalf("DeleteAllForUser exhausted: want 'unprocessed after retries', got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "unprocessed after 3 attempts") {
+		t.Fatalf("DeleteAllForUser exhausted: want 'unprocessed after 3 attempts', got %v", err)
 	}
 }

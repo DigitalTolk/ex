@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
 )
@@ -70,7 +71,7 @@ type AgentUploadParams struct {
 // UploadForAgent stores and verifies one file for a run.
 func (s *AttachmentService) UploadForAgent(ctx context.Context, p AgentUploadParams) (*model.Attachment, error) {
 	if p.RunID == "" || p.AgentID == "" {
-		return nil, errors.New("attachment: run and agent required")
+		return nil, apperr.Invalid("attachment: run and agent required")
 	}
 	if s.signer == nil {
 		return nil, errors.New("attachment: storage not configured")
@@ -97,7 +98,7 @@ func (s *AttachmentService) UploadForAgent(ctx context.Context, p AgentUploadPar
 		return nil, fmt.Errorf("attachment: read upload: %w", err)
 	}
 	if int64(len(data)) != p.Size {
-		return nil, fmt.Errorf("attachment: upload size mismatch: got %d want %d", len(data), p.Size)
+		return nil, apperr.Invalid("attachment: upload size mismatch: got %d want %d", len(data), p.Size)
 	}
 	sum := sha256.Sum256(data)
 	id := store.NewID()
@@ -132,7 +133,7 @@ func (s *AttachmentService) UploadForAgent(ctx context.Context, p AgentUploadPar
 	if err := s.ensureVerified(ctx, a); err != nil {
 		s.discardObject(ctx, a.S3Key)
 		if delErr := s.attachments.Delete(ctx, a.ID); delErr != nil {
-			slog.Warn("agent upload: row cleanup failed", "attachmentID", a.ID, "error", delErr)
+			slog.WarnContext(ctx, "agent upload: row cleanup failed", "attachmentID", a.ID, "error", delErr)
 		}
 		return nil, err
 	}
@@ -141,7 +142,7 @@ func (s *AttachmentService) UploadForAgent(ctx context.Context, p AgentUploadPar
 
 func (s *AttachmentService) discardObject(ctx context.Context, key string) {
 	if err := s.signer.DeleteObject(ctx, key); err != nil {
-		slog.Warn("agent upload: object cleanup failed", "key", key, "error", err)
+		slog.WarnContext(ctx, "agent upload: object cleanup failed", "key", key, "error", err)
 	}
 }
 

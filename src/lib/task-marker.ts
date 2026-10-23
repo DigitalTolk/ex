@@ -26,15 +26,17 @@ export function parseTaskMarker(body: string): TaskMarker | null {
   };
 }
 
-// Kind flair — mirrors the backend's TaskKindFlair.
-export function taskKindFlair(kind: string): { emoji: string; label: string } {
+export type TaskKind = 'feature' | 'chore' | 'bug';
+
+// Kind flair — the kinds the backend's TaskKindFlair knows; anything else
+// reads as a bug. The card pairs each kind with its own icon.
+export function taskKindFlair(kind: string): TaskKind {
   switch (kind) {
     case 'feature':
-      return { emoji: '✨', label: 'feature' };
     case 'chore':
-      return { emoji: '🧹', label: 'chore' };
+      return kind;
     default:
-      return { emoji: '🐛', label: 'bug' };
+      return 'bug';
   }
 }
 

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { clearAccessToken, setAccessToken } from '@/lib/api';
 import { useWebSocket } from '@/hooks/useWebSocket';
+import { withHandlers } from '@/test/ws-frames';
 
 const originalFetch = globalThis.fetch;
 const originalWebSocket = globalThis.WebSocket;
@@ -147,7 +148,7 @@ describe('useWebSocket ticket mint', () => {
   it('mints a fresh one-time ticket before connecting and again on reconnect', async () => {
     setAccessToken('secret-jwt');
 
-    const { unmount } = renderHook(() => useWebSocket({ enabled: true }));
+    const { unmount } = renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
     expect(MockWebSocket.instances).toHaveLength(1);
     expect(MockWebSocket.instances[0].url).toContain('ticket=minted-ticket');

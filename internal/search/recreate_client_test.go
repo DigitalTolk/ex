@@ -277,12 +277,8 @@ func TestClient_PromoteIndex_ErrorBranches(t *testing.T) {
 			t.Fatal("expected swap error")
 		}
 	})
-	t.Run("request build error", func(t *testing.T) {
-		if err := badURLClient().PromoteIndex(context.Background(), IndexUsers, "s"); err == nil {
-			t.Fatal("expected request-build error from aliasBacking")
-		}
-	})
 	t.Run("transport error", func(t *testing.T) {
+		noRetryDelay(t)
 		c := NewClient("http://127.0.0.1:1")
 		if err := c.PromoteIndex(context.Background(), IndexUsers, "s"); err == nil {
 			t.Fatal("expected transport error from aliasBacking")
@@ -307,6 +303,19 @@ func TestClient_AliasBacking_EmptyAliasMap(t *testing.T) {
 	}
 }
 
+// Deleting an index that is already gone is success, so a retried promote
+// or abort stays idempotent.
+func TestClient_DeleteIndex_404IsSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"type":"index_not_found_exception","reason":"no such index"},"status":404}`))
+	}))
+	defer srv.Close()
+	if err := NewClient(srv.URL).deleteIndex(context.Background(), IndexUsers+"-r1"); err != nil {
+		t.Fatalf("deleteIndex on 404 = %v, want nil", err)
+	}
+}
+
 func TestClient_AbortIndexRebuild(t *testing.T) {
 	var mu sync.Mutex
 	var deletes []string
@@ -328,6 +337,7 @@ func TestClient_AbortIndexRebuild(t *testing.T) {
 	// Empty staging and delete failures are silent no-ops — the live
 	// index was never touched.
 	c.AbortIndexRebuild(context.Background(), "")
+	noRetryDelay(t)
 	NewClient("http://127.0.0.1:1").AbortIndexRebuild(context.Background(), "ex_users-r9")
 	if len(deletes) != 1 {
 		t.Fatalf("deletes = %v, want no additional calls", deletes)

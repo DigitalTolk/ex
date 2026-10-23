@@ -3,6 +3,10 @@ import { render } from 'vitest-browser-react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AccountMenu } from './AccountMenu';
+import { usePresenceStore } from '@/stores/presence';
+
+// Presence is read from the store (only the signed-in user's own flag).
+const setOnline = (ids: string[]) => usePresenceStore.setState({ online: new Set(ids) });
 
 // Browser-gate coverage for AccountMenu. The jsdom AccountMenu.test.tsx exercises
 // these flows but the component is excluded from the jsdom gate, so the
@@ -15,7 +19,6 @@ const baseUser = { id: 'u-1', email: 'u@x', displayName: 'Alice Wonder', avatarU
 
 let mockSystemRole: 'admin' | 'member' | 'guest' = 'admin';
 let mockUserStatus: { emoji: string; text: string; clearAt?: string } | undefined;
-let mockOnline = new Set<string>();
 let mockUserNull = false;
 
 vi.mock('@/context/AuthContext', () => ({
@@ -23,9 +26,6 @@ vi.mock('@/context/AuthContext', () => ({
     user: mockUserNull ? null : { ...baseUser, systemRole: mockSystemRole, userStatus: mockUserStatus },
     logout,
   }),
-}));
-vi.mock('@/context/PresenceContext', () => ({
-  usePresence: () => ({ online: mockOnline, isOnline: (id: string) => mockOnline.has(id) }),
 }));
 vi.mock('@/components/settings/SettingsDialog', () => ({ SettingsDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="settings-open" /> : null) }));
 vi.mock('@/components/UserStatusDialog', () => ({ UserStatusDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="status-open" /> : null) }));
@@ -59,7 +59,7 @@ function renderMenu(ui = <AccountMenu />) {
 
 describe('AccountMenu (browser)', () => {
   it('carves the presence notch out of the account avatar (Slack-style, not a painted halo)', async () => {
-    mockOnline = new Set<string>(['u-1']);
+    setOnline(['u-1']);
     const screen = await renderMenu();
     const avatar = screen
       .getByTestId('account-menu-trigger')
@@ -75,7 +75,7 @@ describe('AccountMenu (browser)', () => {
   beforeEach(() => {
     mockSystemRole = 'admin';
     mockUserStatus = undefined;
-    mockOnline = new Set<string>();
+    setOnline([]);
     mockUserNull = false;
     logout.mockClear();
   });
@@ -87,7 +87,7 @@ describe('AccountMenu (browser)', () => {
   });
 
   it('shows the derived initials and an online dot for a signed-in, online user', async () => {
-    mockOnline = new Set(['u-1']);
+    setOnline(['u-1']);
     const screen = await renderMenu();
     await expect.element(screen.getByText('AW')).toBeVisible();
   });
@@ -175,7 +175,7 @@ describe('AccountMenu (browser)', () => {
 
   it('renders the account chip with an active user status', async () => {
     mockUserStatus = { emoji: '🎯', text: 'Focusing' };
-    mockOnline = new Set(['u-1']);
+    setOnline(['u-1']);
     const screen = await renderMenu();
     // The status key includes the emoji/text; the chip renders without error.
     await expect.element(screen.getByTestId('account-menu-trigger')).toBeVisible();

@@ -17,11 +17,13 @@ import {
 } from '@/lib/user-activity';
 import { isThreadInView } from '@/lib/thread-scope';
 import { traceNotification } from '@/lib/notification-trace';
+import { navigateInApp } from '@/lib/navigate-in-app';
+import type { NotificationPayload } from '@/lib/ws-schemas';
+import { activeParentID } from '@/stores/active-parent';
 import { startIdleDetection, stopIdleDetection } from '@/lib/idle-detector';
 import {
   isLeaderTab,
   hasOtherTabs,
-  setTabActiveParent,
   remoteTabViewing,
   remoteTabViewingThread,
   remoteUserAtDevice,
@@ -77,11 +79,6 @@ function ackDesktopDelivery(messageID: string | undefined): void {
   sendWS({ type: 'notification.ack', messageID }, { buffer: true, maxAgeMs: ackFreshnessMs });
 }
 
-// NotificationKind mirrors backend service.NotificationKind. Adding a new
-// kind here is the single client-side place where a new alert flavor is
-// recognized — keep this in lockstep with the Go side.
-export type NotificationKind = 'message' | 'mention' | 'thread_reply' | 'reminder';
-
 // ApprovalAlert is an agent run blocked on the invoker's decision. It does NOT
 // go through `dispatch`: an approval is not a message, and reusing the message
 // path was actively wrong. Its identity is the approvalID, not a messageID —
@@ -111,30 +108,10 @@ export interface ApprovalAlert {
   deepLink: string;
 }
 
-export interface NotificationPayload {
-  kind: NotificationKind;
-  title: string;
-  body: string;
-  deepLink: string;
-  parentID: string;
-  parentType: 'channel' | 'conversation';
-  messageID?: string;
-  // Set on alerts that can recur for one message (a fired reminder): replaces
-  // messageID as the dedup/ack key. Absent → keyed by messageID.
-  alertID?: string;
-  parentMessageID?: string;
-  authorID?: string;
-  // True for incoming-webhook posts (CI/deploy/alert bots). The authorID
-  // is the webhook's creator, not a real sender, so these are exempt from
-  // the own-author echo suppression below. Whether to notify at all is the
-  // backend's level-gated decision, same as any other message.
-  webhook?: boolean;
-  createdAt: string;
-  // Authoritative alerted-unread badge for the parent AFTER this alert
-  // (top-level messages only). Clients SET the sidebar row to this value —
-  // never increment locally — so duplicate/replayed events can't drift it.
-  parentUnreadNotifyCount?: number;
-}
+// The notification.new payload, as its (deliberately lenient) schema parses
+// it — see lib/ws-schemas. The backend decides WHETHER to notify; this side
+// only surfaces what arrives.
+export type { NotificationPayload };
 
 type Permission = NotificationPermission | 'unsupported';
 
@@ -158,7 +135,6 @@ interface NotificationContextValue {
   requestPermission: () => Promise<Permission>;
   dispatch: (n: NotificationPayload) => void;
   notifyApproval: (a: ApprovalAlert) => void;
-  setActiveParent: (parentID: string | null) => void;
   setCurrentUserID: (id: string | null) => void;
 }
 
@@ -187,31 +163,6 @@ function readPermission(): Permission {
   return Notification.permission;
 }
 
-// SPA navigation so a notification click doesn't trigger a full page
-// reload. Setting window.location.href reloads the document and wipes
-// the user's loaded message history, which on a deep-link landing
-// leaves them with only the around-window plus one page on each side.
-// pushState + popstate hands control to React Router without reload;
-// fallback to href for cross-origin links (which the backend never
-// produces today, but keeps the boundary safe).
-function navigateInApp(href: string) {
-  /* istanbul ignore next -- SSR guard: this browser-only app always has window */
-  if (typeof window === 'undefined') return;
-  try {
-    const url = new URL(href, window.location.origin);
-    /* istanbul ignore next -- the backend only ever emits same-origin deep links; the cross-origin full-reload arm is a defensive boundary that would navigate the test page away if forced */
-    if (url.origin !== window.location.origin) {
-      window.location.href = href;
-      return;
-    }
-    window.history.pushState(null, '', url.pathname + url.search + url.hash);
-    window.dispatchEvent(new PopStateEvent('popstate'));
-  } catch {
-    /* istanbul ignore next -- URL() with a valid base does not throw for the same-origin links the app produces; the catch is a defensive fallback */
-    window.location.href = href;
-  }
-}
-
 // playPingRespectingDnd plays the in-app custom ping, gated on the desktop
 // shell's native Focus/DnD state when the bridge exists (async IPC — the
 // ping lags the banner by a few ms, which is imperceptible). Without a
@@ -232,7 +183,6 @@ const NotificationContext = createContext<NotificationContextValue | undefined>(
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const [prefs, setPrefs] = useState<NotificationPrefs>(loadPrefs);
   const [permission, setPermission] = useState<Permission>(readPermission);
-  const activeParentRef = useRef<string | null>(null);
   const currentUserIDRef = useRef<string | null>(null);
   // Per-message dedup lives in @/lib/notification-dedup — a localStorage-backed
   // store SHARED across all of this user's browser tabs, so the same message
@@ -298,13 +248,6 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     return result;
   }, []);
 
-  const setActiveParent = useCallback((id: string | null) => {
-    activeParentRef.current = id;
-    // Share the viewing state so the LEADER tab can suppress popups for a
-    // parent the user is actively reading in this (possibly non-leader) tab.
-    setTabActiveParent(id);
-  }, []);
-
   const setCurrentUserID = useCallback((id: string | null) => {
     currentUserIDRef.current = id;
   }, []);
@@ -343,8 +286,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     }
     // Server-side recipient filtering already excludes the author, but
     // echoes via shared subscriptions can slip through. Webhook posts are
-    // exempt: their authorID is the webhook's creator, who explicitly
-    // wants the alert, so we never self-suppress them.
+    // exempt: they are authored by the `webhook` sentinel (legacy rows: by
+    // the webhook's creator, who explicitly wants the alert), so we never
+    // self-suppress them.
     if (!n.webhook && n.authorID && currentUserIDRef.current && n.authorID === currentUserIDRef.current) {
       traceNotification('own-author', key);
       return;
@@ -415,7 +359,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // an idle viewer, or any other active conversation still gets the alert.
     if (
       n.kind === 'message' &&
-      ((activeParentRef.current === n.parentID && isUserAttentive(suppressionWindowMs)) ||
+      ((activeParentID() === n.parentID && isUserAttentive(suppressionWindowMs)) ||
         // Whole-device view: the user may be actively reading this parent in
         // ANOTHER tab — surfacing a popup from this (leader) tab over their
         // head was the multi-tab "popup for the channel I'm looking at" bug.
@@ -701,10 +645,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       requestPermission,
       dispatch,
       notifyApproval,
-      setActiveParent,
       setCurrentUserID,
     }),
-    [prefs, permission, requestPermission, dispatch, notifyApproval, setActiveParent, setCurrentUserID, setSoundEnabled, setBrowserEnabled, setIdleDetectionEnabled],
+    [prefs, permission, requestPermission, dispatch, notifyApproval, setCurrentUserID, setSoundEnabled, setBrowserEnabled, setIdleDetectionEnabled],
   );
 
   return <NotificationContext.Provider value={value}>{children}</NotificationContext.Provider>;
@@ -721,7 +664,6 @@ const noopValue: NotificationContextValue = {
   requestPermission: async () => 'unsupported',
   dispatch: () => {},
   notifyApproval: () => {},
-  setActiveParent: () => {},
   setCurrentUserID: () => {},
 };
 

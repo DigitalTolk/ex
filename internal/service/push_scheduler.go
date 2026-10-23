@@ -78,7 +78,7 @@ func (s *AsynqPushScheduler) SchedulePush(ctx context.Context, recipientUserID s
 		asynq.Retention(pushTaskRetention),
 		asynq.Timeout(pushTaskTimeout),
 	}
-	if key := n.deliveryKey(); key != "" {
+	if key := n.DeliveryKey(); key != "" {
 		opts = append(opts, asynq.TaskID(mobilePushTaskID(recipientUserID, key)))
 	}
 	if delay > 0 {
@@ -117,7 +117,7 @@ func NewMobilePushTaskHandler(ack NotificationAckStore, provider MobilePushSende
 			// A malformed payload can never succeed — archive it, don't retry.
 			return fmt.Errorf("mobile push payload unmarshal: %v: %w", err, asynq.SkipRetry)
 		}
-		if key := p.Notification.deliveryKey(); ack != nil && key != "" && ack.WasNotificationAcked(ctx, p.RecipientUserID, key) {
+		if key := p.Notification.DeliveryKey(); ack != nil && key != "" && ack.WasNotificationAcked(ctx, p.RecipientUserID, key) {
 			// Desktop confirmed delivery — no push needed.
 			pushMetrics.ackSuppressed.Add(1)
 			return nil
@@ -128,7 +128,7 @@ func NewMobilePushTaskHandler(ack NotificationAckStore, provider MobilePushSende
 				// The offline/no-ack fallback produced NO alert for this
 				// recipient (no registered device / provider rejected the
 				// target). Retrying cannot fix it — log LOUDLY and archive.
-				slog.Error("mobile push undeliverable — recipient unreachable, alert not delivered",
+				slog.ErrorContext(ctx, "mobile push undeliverable — recipient unreachable, alert not delivered",
 					"userID", p.RecipientUserID,
 					"parentID", p.Notification.ParentID,
 					"messageID", p.Notification.MessageID,
@@ -140,7 +140,7 @@ func NewMobilePushTaskHandler(ack NotificationAckStore, provider MobilePushSende
 			// Transient (network / 5xx after the provider's own fast retries):
 			// return the error so asynq redelivers on the push retry curve.
 			pushMetrics.transientFailures.Add(1)
-			slog.Warn("mobile push attempt failed; task will retry",
+			slog.WarnContext(ctx, "mobile push attempt failed; task will retry",
 				"userID", p.RecipientUserID,
 				"messageID", p.Notification.MessageID,
 				"error", err,
@@ -188,6 +188,15 @@ const defaultPushWorkerConcurrency = 8
 type AsynqPushWorker struct {
 	srv     *asynq.Server
 	handler func(context.Context, *asynq.Task) error
+	// extra are the other task types this worker delivers (the notification
+	// safety net), registered with Handle before Start.
+	extra map[string]func(context.Context, *asynq.Task) error
+}
+
+// Handle registers another task type on the worker (before Start). The app
+// runs one asynq worker for every durable task it schedules.
+func (w *AsynqPushWorker) Handle(taskType string, handler func(context.Context, *asynq.Task) error) {
+	w.extra[taskType] = handler
 }
 
 func NewAsynqPushWorker(rdb redis.UniversalClient, handler func(context.Context, *asynq.Task) error, cfg AsynqPushWorkerConfig) *AsynqPushWorker {
@@ -203,13 +212,19 @@ func NewAsynqPushWorker(rdb redis.UniversalClient, handler func(context.Context,
 		DelayedTaskCheckInterval: cfg.DelayedTaskCheckInterval,
 		ShutdownTimeout:          cfg.ShutdownTimeout,
 	})
-	return &AsynqPushWorker{srv: srv, handler: handler}
+	return &AsynqPushWorker{srv: srv, handler: handler, extra: map[string]func(context.Context, *asynq.Task) error{}}
 }
 
-// Start launches the worker's processing loops (non-blocking).
+// Start launches the worker's processing loops (non-blocking). A nil push
+// handler (mobile push not configured) registers only the other task types.
 func (w *AsynqPushWorker) Start() error {
 	mux := asynq.NewServeMux()
-	mux.HandleFunc(TaskTypeMobilePush, w.handler)
+	if w.handler != nil {
+		mux.HandleFunc(TaskTypeMobilePush, w.handler)
+	}
+	for taskType, h := range w.extra {
+		mux.HandleFunc(taskType, h)
+	}
 	return w.srv.Start(mux)
 }
 

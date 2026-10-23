@@ -42,6 +42,9 @@ func (f faultClient) GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.
 func (f faultClient) PutObject(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	return nil, errFault
 }
+func (f faultClient) AbortMultipartUpload(context.Context, *s3.AbortMultipartUploadInput, ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error) {
+	return nil, errFault
+}
 
 // faultPresigner implements s3Presigner and always errors.
 type faultPresigner struct{}
@@ -78,6 +81,19 @@ func TestS3Client_PresignErrors(t *testing.T) {
 	}
 	if _, err := c.PresignedPutURL(ctx, "k", "image/png", time.Hour); err == nil {
 		t.Error("PresignedPutURL: expected presign error")
+	}
+	if _, err := c.PresignedInlineURL(ctx, "k", "image/png", "f.png", time.Hour); err == nil {
+		t.Error("PresignedInlineURL: expected presign error")
+	}
+	if _, err := c.PresignedSizedPutURL(ctx, "k", "image/png", 10, time.Hour); err == nil {
+		t.Error("PresignedSizedPutURL: expected presign error")
+	}
+}
+
+func TestS3Client_AbortMultipartUpload_Errors(t *testing.T) {
+	c := &S3Client{client: faultClient{}, bucket: "b"}
+	if err := c.AbortMultipartUpload(context.Background(), "k", "up"); !errors.Is(err, errFault) {
+		t.Fatalf("AbortMultipartUpload err = %v, want the S3 failure", err)
 	}
 }
 

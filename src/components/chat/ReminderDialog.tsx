@@ -13,7 +13,8 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { combineDateAndClock, describeDelay, formatClockTime, hourCycleOf, parseClockTime, splitDateTimeSeed, stepClockTime, type ClockTime } from '@/lib/clock-time';
 import { REMINDER_PRESETS, computeReminderTime } from '@/lib/reminder-times';
 import { formatScheduleTime } from '@/lib/schedule-times';
-import { inputValueForDate, pad } from '@/lib/datetime-input';
+import { inputValueForDate } from '@/lib/datetime-input';
+import { dayKey } from '@/lib/format';
 import { localTimeZone } from '@/lib/user-time';
 
 // A quick pick fills the calendar and time with a ready-made instant; the
@@ -69,7 +70,6 @@ const REMINDER_QUICK_PICKS: QuickPick[] = REMINDER_PRESETS.map((preset) => ({
 // The reader's clock style, from a fixed date so no clock is read.
 const HOUR_CYCLE = hourCycleOf(new Date(2024, 0, 1, 13).toLocaleTimeString(undefined, { hour: 'numeric' }));
 
-const isoDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 // The calendar's day for a `YYYY-MM-DD` field (local midnight), if any.
 const dateOf = (date: string): Date | undefined => combineDateAndClock(date, { hour: 0, minute: 0 }) ?? undefined;
 
@@ -184,13 +184,13 @@ export function ReminderDialog({
               // and tapping tomorrow left "Pick a date." on Set.
               required
               selected={dateOf(fields.date)}
-              onSelect={(day) => update({ ...fields, date: isoDate(day) })}
+              onSelect={(day) => update({ ...fields, date: dayKey(day) })}
               month={month}
               onMonthChange={setMonth}
               // A phone stacks it over the time field, as wide as the field.
               className="rounded-md border border-border max-sm:w-full"
               components={{
-                DayButton: (props) => <CalendarDayButton {...props} data-testid={`reminder-day-${isoDate(props.day.date)}`} />,
+                DayButton: (props) => <CalendarDayButton {...props} data-testid={`reminder-day-${dayKey(props.day.date)}`} />,
               }}
             />
             <div className="flex min-w-0 flex-1 flex-col gap-2 sm:h-[17.5rem]">

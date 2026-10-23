@@ -113,6 +113,9 @@ func TestParseStreamEntry(t *testing.T) {
 		{"malformed JSON", map[string]any{payloadField: "not-json"}, "", false},
 		{"empty ID", map[string]any{payloadField: `{"type":"x"}`}, "", false},
 		{"well-formed", map[string]any{payloadField: `{"id":"01OK","type":"x"}`}, "01OK", true},
+		{"pointer entry", map[string]any{idField: "01REF"}, "01REF", true},
+		{"pointer with empty id", map[string]any{idField: ""}, "", false},
+		{"pointer with non-string id", map[string]any{idField: 7}, "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -125,6 +128,11 @@ func TestParseStreamEntry(t *testing.T) {
 			}
 			if raw, isStr := tc.values[payloadField].(string); ok && isStr && string(e.Payload) != raw {
 				t.Errorf("Payload = %q, want the raw payload string %q", e.Payload, raw)
+			}
+			// Only an entry without an inline payload is resolved by reference.
+			_, inline := tc.values[payloadField]
+			if ok && e.ref == inline {
+				t.Errorf("ref = %v for an entry with inline payload = %v", e.ref, inline)
 			}
 		})
 	}

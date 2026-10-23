@@ -5,7 +5,7 @@ import { createElement, type ReactNode } from 'react';
 import {
   useUserConversations,
   useConversation,
-  useSearchUsers,
+  useUserLookup,
   useAllUsers,
   useOpenDM,
 } from './useConversations';
@@ -48,9 +48,9 @@ describe('single-object/array coercion to a non-undefined queryFn result', () =>
     expect(result.current.data).toBeNull();
   });
 
-  it('useSearchUsers coerces a non-array response to []', async () => {
+  it('useUserLookup coerces a non-array response to []', async () => {
     vi.mocked(apiFetch).mockResolvedValue(undefined);
-    const { result } = renderHook(() => useSearchUsers('al'), { wrapper: createWrapper() });
+    const { result } = renderHook(() => useUserLookup('al'), { wrapper: createWrapper() });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data).toEqual([]);
   });

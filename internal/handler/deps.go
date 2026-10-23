@@ -2,6 +2,8 @@ package handler
 
 import (
 	"io/fs"
+	"net/url"
+	"slices"
 
 	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/middleware"
@@ -14,6 +16,31 @@ type SentryFrontendConfig struct {
 	TracesSampleRate        float64
 	ReplaySessionSampleRate float64
 	ReplayErrorSampleRate   float64
+}
+
+// sentryReplayCDN serves the Session Replay bundle the SPA lazy-loads
+// (Sentry.lazyLoadIntegration) when a deployment samples replay.
+const sentryReplayCDN = "https://browser.sentry-cdn.com"
+
+// cspOptions are the CSP additions this deployment needs: the hashes of the
+// served page's inline scripts, the upload endpoint's connect-src, the HTML
+// preview route as the one thing the page may frame (when attachments are
+// served), and — only when Session Replay is actually sampled — Sentry's CDN
+// for the replay bundle plus the blob: worker it records with.
+func (d *Deps) cspOptions(scriptHashes []string) middleware.CSPOptions {
+	o := middleware.CSPOptions{ConnectSrc: d.UploadConnectSrc, ScriptSrc: slices.Clip(scriptHashes)}
+	if d.Attachment != nil {
+		o.FramePath = htmlPreviewRoutePrefix
+		if u, err := url.Parse(d.BaseURL); err == nil && u.Host != "" {
+			o.FrameHosts = []string{u.Host}
+		}
+	}
+	s := d.SentryFrontend
+	if s.DSN != "" && (s.ReplaySessionSampleRate > 0 || s.ReplayErrorSampleRate > 0) {
+		o.ScriptSrc = append(o.ScriptSrc, sentryReplayCDN)
+		o.WorkerSrc = []string{"blob:"}
+	}
+	return o
 }
 
 // Deps is the single set of dependencies the HTTP router needs to wire
@@ -81,6 +108,11 @@ type Deps struct {
 	// CORS / cross-origin policy. The first non-empty entry is treated
 	// as the canonical primary origin in the middleware.
 	AllowOrigins []string
+
+	// BaseURL is the public URL browsers open the app at. Its host joins the
+	// request's own in the page's frame-src for the HTML preview route, in
+	// case a proxy in front rewrites Host.
+	BaseURL string
 
 	// UploadConnectSrc lists extra CSP connect-src origins for the
 	// direct-to-storage browser uploads (the presigned-PUT endpoint). Only

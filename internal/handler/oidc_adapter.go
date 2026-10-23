@@ -37,9 +37,12 @@ func (a *oidcAdapter) Exchange(ctx context.Context, code, nonce string) (*servic
 		return nil, err
 	}
 	return &service.OIDCUserInfo{
-		Email:    info.Email,
-		Name:     info.Name,
-		Picture:  info.Picture,
-		ObjectID: info.ObjectID,
+		Email:         info.Email,
+		Name:          info.Name,
+		Picture:       info.Picture,
+		ObjectID:      info.ObjectID,
+		Issuer:        info.Issuer,
+		Subject:       info.Subject,
+		EmailVerified: info.EmailVerified,
 	}, nil
 }

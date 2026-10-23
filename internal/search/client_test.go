@@ -8,11 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 )
 
 func TestClient_Search_DecodesAggregationBuckets(t *testing.T) {
@@ -102,10 +97,30 @@ func TestNewClient_EmptyURL(t *testing.T) {
 	}
 }
 
+// A trailing slash on the configured URL must not leak into request paths
+// ("//ex_users/_doc/u-1" is a different route).
 func TestNewClient_TrimsTrailingSlash(t *testing.T) {
-	c := NewClient("http://example.test/")
-	if c == nil || c.baseURL != "http://example.test" {
-		t.Errorf("baseURL = %q, want %q", c.baseURL, "http://example.test")
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL + "/")
+	if err := c.IndexDoc(context.Background(), IndexUsers, "u-1", map[string]any{"id": "u-1"}); err != nil {
+		t.Fatalf("IndexDoc: %v", err)
+	}
+	if gotPath != "/"+IndexUsers+"/_doc/u-1" {
+		t.Errorf("path = %q, want %q", gotPath, "/"+IndexUsers+"/_doc/u-1")
+	}
+}
+
+// A nil client (search not configured) is a no-op everywhere, including
+// index setup at boot.
+func TestClient_EnsureIndices_NilClientIsNoop(t *testing.T) {
+	var c *Client
+	if err := c.EnsureIndices(context.Background()); err != nil {
+		t.Fatalf("nil-client EnsureIndices = %v, want nil", err)
 	}
 }
 
@@ -253,7 +268,7 @@ func TestClient_Bulk_ParsesPerItemErrors(t *testing.T) {
 
 func TestClient_Bulk_HappyPath(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"errors":false,"items":[]}`))
+		_, _ = w.Write([]byte(`{"errors":false,"items":[{"index":{"_id":"1","status":201,"result":"created"}}]}`))
 	}))
 	defer srv.Close()
 	c := NewClient(srv.URL)
@@ -266,6 +281,7 @@ func TestClient_Bulk_HappyPath(t *testing.T) {
 }
 
 func TestClient_Bulk_5xx(t *testing.T) {
+	noRetryDelay(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
@@ -473,27 +489,20 @@ func TestNewAWSClient_EmptyURLReturnsNil(t *testing.T) {
 	}
 }
 
-// awsSignedClient builds a Client whose transport is the SigV4 signer
-// pointed at srv, using static test credentials so the test is fully
+// awsSignedClient builds a SigV4-signing Client pointed at srv through the
+// real NewAWSClient path, with static test credentials so the test is fully
 // hermetic (no env-var lookup, no IMDS calls).
-func awsSignedClient(srv *httptest.Server, service string) *Client {
-	creds := credentials.NewStaticCredentialsProvider("AKIATESTACCESS", "secretkeydonotuse", "")
-	return &Client{
-		baseURL: strings.TrimRight(srv.URL, "/"),
-		http: &http.Client{
-			Timeout: 5 * time.Second,
-			Transport: &sigV4Transport{
-				inner:   http.DefaultTransport,
-				signer:  v4.NewSigner(),
-				creds:   aws.CredentialsProvider(creds),
-				region:  "us-east-1",
-				service: service,
-			},
-		},
+func awsSignedClient(t *testing.T, srv *httptest.Server, service string) *Client {
+	t.Helper()
+	fakeAWSConfig(t, staticCreds())
+	c, err := NewAWSClient(context.Background(), srv.URL, AWSSigning{Region: "us-east-1", Service: service})
+	if err != nil {
+		t.Fatalf("NewAWSClient: %v", err)
 	}
+	return c
 }
 
-func TestSigV4Transport_AddsAuthorizationAndPayloadHeaders(t *testing.T) {
+func TestSigV4_AddsAuthorizationAndPayloadHeaders(t *testing.T) {
 	var captured *http.Request
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		captured = r.Clone(context.Background())
@@ -501,7 +510,7 @@ func TestSigV4Transport_AddsAuthorizationAndPayloadHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := awsSignedClient(srv, "es")
+	c := awsSignedClient(t, srv, "es")
 	if _, err := c.Search(context.Background(), IndexUsers, map[string]any{"query": map[string]any{"match_all": map[string]any{}}}); err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -522,16 +531,17 @@ func TestSigV4Transport_AddsAuthorizationAndPayloadHeaders(t *testing.T) {
 	if captured.Header.Get("X-Amz-Date") == "" {
 		t.Error("X-Amz-Date header missing")
 	}
-	if got := captured.Header.Get("X-Amz-Content-Sha256"); got == "" {
-		t.Error("X-Amz-Content-Sha256 header missing — body must be hashed for SigV4")
+	if got := captured.Header.Get("X-Amz-Content-Sha256"); got == "" || got == emptySHA256 {
+		t.Errorf("X-Amz-Content-Sha256 = %q — the request body must be hashed for SigV4", got)
 	}
 }
 
-func TestSigV4Transport_GETUsesEmptyPayloadHash(t *testing.T) {
-	// SigV4 of GET (no body) hashes the empty string. Confirm we send
-	// that exact constant — drift here would invalidate every signed
-	// HEAD/GET call (EnsureIndices, GetDoc, IndexStats, ClusterHealth).
-	const wantEmptyHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+// SigV4 of a body-less request hashes the empty string. Drift here would
+// invalidate every signed HEAD/GET call (EnsureIndices, GetDoc, IndexStats,
+// ClusterHealth).
+const emptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+func TestSigV4_GETUsesEmptyPayloadHash(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.Header.Get("X-Amz-Content-Sha256")
@@ -540,19 +550,19 @@ func TestSigV4Transport_GETUsesEmptyPayloadHash(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := awsSignedClient(srv, "es")
+	c := awsSignedClient(t, srv, "es")
 	if _, err := c.ClusterHealth(context.Background()); err != nil {
 		t.Fatalf("ClusterHealth: %v", err)
 	}
-	if got != wantEmptyHash {
-		t.Errorf("X-Amz-Content-Sha256 = %q, want %q", got, wantEmptyHash)
+	if got != emptySHA256 {
+		t.Errorf("X-Amz-Content-Sha256 = %q, want %q", got, emptySHA256)
 	}
 }
 
-func TestSigV4Transport_BodyArrivesIntactAfterSigning(t *testing.T) {
+func TestSigV4_BodyArrivesIntactAfterSigning(t *testing.T) {
 	// Signing reads the body to compute the SHA256, then must reseat
-	// it — otherwise the downstream RoundTripper sends a request with
-	// no body and the cluster rejects with a 400.
+	// it — otherwise the request goes out with no body and the cluster
+	// rejects it with a 400.
 	var receivedBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -561,7 +571,7 @@ func TestSigV4Transport_BodyArrivesIntactAfterSigning(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := awsSignedClient(srv, "es")
+	c := awsSignedClient(t, srv, "es")
 	doc := map[string]any{"id": "u-1", "displayName": "Alice"}
 	if err := c.IndexDoc(context.Background(), IndexUsers, "u-1", doc); err != nil {
 		t.Fatalf("IndexDoc: %v", err)
@@ -575,39 +585,24 @@ func TestSigV4Transport_BodyArrivesIntactAfterSigning(t *testing.T) {
 	}
 }
 
-func TestSigV4Transport_DefaultsServiceToES(t *testing.T) {
-	c, err := NewAWSClient(context.Background(), "https://example.test", AWSSigning{Region: "us-east-1"})
-	if err != nil {
-		t.Fatalf("NewAWSClient: %v", err)
-	}
-	if c == nil {
-		t.Fatal("expected client, got nil")
-	}
-	transport, ok := c.http.Transport.(*sigV4Transport)
-	if !ok {
-		t.Fatalf("transport = %T, want *sigV4Transport", c.http.Transport)
-	}
-	if transport.service != "es" {
-		t.Errorf("default service = %q, want es", transport.service)
-	}
-	if transport.region != "us-east-1" {
-		t.Errorf("region = %q", transport.region)
-	}
-}
-
-func TestSigV4Transport_HonoursAOSSService(t *testing.T) {
-	var got string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got = r.Header.Get("Authorization")
-		_, _ = w.Write([]byte(`{}`))
-	}))
-	defer srv.Close()
-
-	c := awsSignedClient(srv, "aoss")
+func TestSigV4_DefaultsServiceToES(t *testing.T) {
+	srv, authz := headerRecorder(t)
+	c := awsSignedClient(t, srv, "")
 	if _, err := c.ClusterHealth(context.Background()); err != nil {
 		t.Fatalf("ClusterHealth: %v", err)
 	}
-	if !strings.Contains(got, "/us-east-1/aoss/aws4_request") {
-		t.Errorf("Authorization scope = %q, want aoss service in scope", got)
+	if !strings.Contains(*authz, "/us-east-1/es/aws4_request") {
+		t.Errorf("Authorization scope = %q, want the default es service", *authz)
+	}
+}
+
+func TestSigV4_HonoursAOSSService(t *testing.T) {
+	srv, authz := headerRecorder(t)
+	c := awsSignedClient(t, srv, "aoss")
+	if _, err := c.ClusterHealth(context.Background()); err != nil {
+		t.Fatalf("ClusterHealth: %v", err)
+	}
+	if !strings.Contains(*authz, "/us-east-1/aoss/aws4_request") {
+		t.Errorf("Authorization scope = %q, want aoss service in scope", *authz)
 	}
 }

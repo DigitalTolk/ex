@@ -425,7 +425,7 @@ function UserHitRow({
             {/* Custom-status emoji — self-hides when the person has no active status. */}
             <UserStatusIndicator status={userStatus} className="h-4 w-4" />
             {role && (
-              <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+              <span className="rounded bg-muted px-1.5 py-0.5 text-xs uppercase tracking-wide text-muted-foreground">
                 {role}
               </span>
             )}

@@ -8,10 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -19,10 +22,11 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-// Common errors returned by store operations.
+// Common errors returned by store operations. They are the shared kinds in
+// apperr, so callers above the store match them without importing it.
 var (
-	ErrNotFound      = errors.New("store: item not found")
-	ErrAlreadyExists = errors.New("store: item already exists")
+	ErrNotFound      = apperr.ErrNotFound
+	ErrAlreadyExists = apperr.ErrAlreadyExists
 )
 
 // DBConfig holds the configuration for the DynamoDB connection.
@@ -52,6 +56,11 @@ type DynamoAPI interface {
 	UpdateTimeToLive(ctx context.Context, params *dynamodb.UpdateTimeToLiveInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateTimeToLiveOutput, error)
 }
 
+// dynamoMaxIdleConnsPerHost sizes the client's idle connection pool. Every
+// call goes to the one regional endpoint, so the per-host limit IS the pool;
+// declared here so tests can assert it.
+const dynamoMaxIdleConnsPerHost = 64
+
 // DB is the base DynamoDB store that holds the client and table name.
 type DB struct {
 	Client DynamoAPI
@@ -62,6 +71,13 @@ type DB struct {
 func New(ctx context.Context, cfg DBConfig) (*DB, error) {
 	opts := []func(*awsconfig.LoadOptions) error{
 		awsconfig.WithRegion(cfg.Region),
+		// The SDK's own transport (TLS floor, timeouts) with the idle pool
+		// sized for bursts: its default of 10 per host made every request
+		// past 10 in flight pay a fresh TLS handshake.
+		awsconfig.WithHTTPClient(awshttp.NewBuildableClient().WithTransportOptions(func(tr *http.Transport) {
+			tr.MaxIdleConnsPerHost = dynamoMaxIdleConnsPerHost
+			tr.MaxIdleConns = max(tr.MaxIdleConns, dynamoMaxIdleConnsPerHost)
+		})),
 	}
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
@@ -119,7 +135,7 @@ func (db *DB) CheckTTL(ctx context.Context) {
 		TableName: aws.String(db.Table),
 	})
 	if err != nil {
-		slog.Warn("could not verify DynamoDB TTL; expiring rows may accumulate",
+		slog.WarnContext(ctx, "could not verify DynamoDB TTL; expiring rows may accumulate",
 			"table", db.Table, "error", err)
 		return
 	}
@@ -129,7 +145,7 @@ func (db *DB) CheckTTL(ctx context.Context) {
 		if desc != nil {
 			status = desc.TimeToLiveStatus
 		}
-		slog.Warn("DynamoDB TTL is NOT enabled on this table — runner registrations, "+
+		slog.WarnContext(ctx, "DynamoDB TTL is NOT enabled on this table — runner registrations, "+
 			"task claims, thread follows, invites and thread-scoped watchers will never expire",
 			"table", db.Table, "status", status)
 		return
@@ -139,7 +155,7 @@ func (db *DB) CheckTTL(ctx context.Context) {
 		if desc.AttributeName != nil {
 			attr = *desc.AttributeName
 		}
-		slog.Warn("DynamoDB TTL is enabled on the wrong attribute; expiring rows will never expire",
+		slog.WarnContext(ctx, "DynamoDB TTL is enabled on the wrong attribute; expiring rows will never expire",
 			"table", db.Table, "attribute", attr, "want", "ttl")
 	}
 }
@@ -151,7 +167,7 @@ func (db *DB) EnsureTable(ctx context.Context) error {
 		TableName: aws.String(db.Table),
 	})
 	if err == nil {
-		slog.Info("dynamodb table already exists", "table", db.Table)
+		slog.InfoContext(ctx, "dynamodb table already exists", "table", db.Table)
 		return nil
 	}
 
@@ -160,7 +176,7 @@ func (db *DB) EnsureTable(ctx context.Context) error {
 		return fmt.Errorf("store: describe table: %w", err)
 	}
 
-	slog.Info("creating dynamodb table", "table", db.Table)
+	slog.InfoContext(ctx, "creating dynamodb table", "table", db.Table)
 
 	_, err = db.Client.CreateTable(ctx, &dynamodb.CreateTableInput{
 		TableName: aws.String(db.Table),
@@ -232,10 +248,10 @@ func (db *DB) EnsureTable(ctx context.Context) error {
 		},
 	})
 	if err != nil {
-		slog.Warn("failed to enable TTL (may not be supported locally)", "error", err)
+		slog.WarnContext(ctx, "failed to enable TTL (may not be supported locally)", "error", err)
 	}
 
-	slog.Info("dynamodb table created", "table", db.Table)
+	slog.InfoContext(ctx, "dynamodb table created", "table", db.Table)
 	return nil
 }
 
@@ -348,6 +364,13 @@ func threadGSI1PK(threadRootID string) string  { return "THREAD#" + threadRootID
 func userStateSK(kind, targetID string) string { return "STATE#" + kind + "#" + targetID }
 func webhookPK(id string) string               { return "WEBHOOK#" + id }
 func webhookSK() string                        { return "META" }
+
+// topLevelGSI2PK indexes a parent's TOP-LEVEL messages (thread roots and
+// standalone messages, never replies) under GSI2, so a channel page reads the
+// rows it shows instead of paging past every thread reply that shares the
+// parent's MSG# range. The GSI2 sort key is the row's own MSG# key, so the
+// index orders exactly like the base table. Sparse: replies never carry it.
+func topLevelGSI2PK(parentID string) string { return "TOPMSG#" + parentID }
 
 func categoryNameSK(name string) string {
 	return "CATEGORYNAME#" + strings.ToLower(strings.TrimSpace(name))

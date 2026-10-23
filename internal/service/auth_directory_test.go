@@ -212,14 +212,16 @@ func TestOIDCCallbackStoresObjectIDWithoutDirectory(t *testing.T) {
 		}
 	})
 
-	t.Run("existing user refreshes oid from the claim", func(t *testing.T) {
+	// Behaviour change: the oid is pinned at first capture. A login whose
+	// verified oid differs is refused instead of overwriting it.
+	t.Run("existing user with a different oid is refused", func(t *testing.T) {
 		env.oidc.userInfo.ObjectID = "oid-43"
-		_, _, user, err := env.svc.HandleOIDCCallback(context.Background(), "auth-code", "state", "nonce")
-		if err != nil {
-			t.Fatalf("HandleOIDCCallback: %v", err)
+		_, _, _, err := env.svc.HandleOIDCCallback(context.Background(), "auth-code", "state", "nonce")
+		if !errors.Is(err, ErrIdentityMismatch) {
+			t.Fatalf("HandleOIDCCallback = %v, want ErrIdentityMismatch", err)
 		}
-		if user.MSObjectID != "oid-43" {
-			t.Errorf("MSObjectID = %q, want refreshed oid", user.MSObjectID)
+		if got := env.users.emailIndex["oidc@example.com"].MSObjectID; got != "oid-42" {
+			t.Errorf("stored MSObjectID = %q, want the pinned oid-42", got)
 		}
 	})
 
@@ -229,7 +231,7 @@ func TestOIDCCallbackStoresObjectIDWithoutDirectory(t *testing.T) {
 		if err != nil {
 			t.Fatalf("HandleOIDCCallback: %v", err)
 		}
-		if user.MSObjectID != "oid-43" {
+		if user.MSObjectID != "oid-42" {
 			t.Errorf("MSObjectID = %q, want previously stored oid kept", user.MSObjectID)
 		}
 	})

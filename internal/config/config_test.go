@@ -14,7 +14,7 @@ func clearEnv(t *testing.T) {
 		"PORT", "ENV", "AWS_REGION", "DYNAMODB_TABLE", "DYNAMODB_ENDPOINT",
 		"REDIS_URL", "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET",
 		"JWT_SECRET", "JWT_ACCESS_TTL", "JWT_REFRESH_TTL",
-		"SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "SMTP_FROM",
+		"SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "SMTP_FROM", "SMTP_TLS_POLICY",
 		"BASE_URL", "ONESIGNAL_APP_ID", "ONESIGNAL_REST_API_KEY",
 		"SENTRY_FRONTEND_DSN", "SENTRY_FRONTEND_TRACES_SAMPLE_RATE",
 		"SENTRY_FRONTEND_REPLAY_SESSION_SAMPLE_RATE", "SENTRY_FRONTEND_REPLAY_ERROR_SAMPLE_RATE",
@@ -494,6 +494,52 @@ func TestLoadInvalidEmailProvider(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("expected error for an unknown EMAIL_PROVIDER")
+	}
+}
+
+// SMTP STARTTLS is MANDATORY unless the deployment says otherwise: only
+// development (Mailpit, a local relay) defaults to opportunistic, and an
+// explicit SMTP_TLS_POLICY always wins.
+func TestLoadSMTPTLSPolicy(t *testing.T) {
+	cases := []struct {
+		name, env, policy, want string
+	}{
+		{"production defaults to mandatory", "production", "", "mandatory"},
+		{"unset ENV (fail-closed production) defaults to mandatory", "", "", "mandatory"},
+		{"development defaults to opportunistic", "development", "", "opportunistic"},
+		{"explicit opportunistic in production", "production", "opportunistic", "opportunistic"},
+		{"explicit none", "production", "none", "none"},
+		{"explicit mandatory in development", "development", "mandatory", "mandatory"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clearEnv(t)
+			if tc.env != "" {
+				t.Setenv("ENV", tc.env)
+			}
+			t.Setenv("JWT_SECRET", "my-prod-secret-with-at-least-32-chars")
+			if tc.policy != "" {
+				t.Setenv("SMTP_TLS_POLICY", tc.policy)
+			}
+			c, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.SMTPTLSPolicy != tc.want {
+				t.Errorf("SMTPTLSPolicy = %q, want %q", c.SMTPTLSPolicy, tc.want)
+			}
+		})
+	}
+}
+
+// A typo'd policy must abort the boot rather than quietly picking one.
+func TestLoadInvalidSMTPTLSPolicy(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("ENV", "development")
+	t.Setenv("SMTP_TLS_POLICY", "sometimes")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error for an unknown SMTP_TLS_POLICY")
 	}
 }
 

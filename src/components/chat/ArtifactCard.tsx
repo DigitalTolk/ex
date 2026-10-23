@@ -103,7 +103,7 @@ export function ArtifactCard({ marker }: { marker: ArtifactMarker }) {
           <FileText className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           <span className="min-w-0 truncate font-medium">{marker.title}</span>
         </button>
-        <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+        <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
           {marker.kind} · {formatBytes(marker.bytes)}
         </span>
         <button

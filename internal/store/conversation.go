@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"golang.org/x/sync/errgroup"
 )
 
 // ConversationStore defines operations on Conversation entities.
@@ -245,50 +247,56 @@ func (s *ConversationStoreImpl) ActivateConversation(ctx context.Context, convID
 	return nil
 }
 
+// touchConcurrency bounds the parallel row writes of one TouchConversation.
+const touchConcurrency = 16
+
 // TouchConversation updates the conversation activity timestamp on both the canonical
 // conversation row and each participant's user-side sidebar row.
+//
+// The timestamp only orders sidebars, so the rows are written as independent
+// parallel UpdateItems, not a transaction: a TransactWriteItems costs twice
+// the write units and is cancelled outright whenever two participants send at
+// once (both touch the same rows), dropping the re-sort. Without the
+// transaction's all-or-nothing each write guards itself with
+// attribute_exists: a missing conversation is ErrNotFound, and a participant
+// without a sidebar row is skipped instead of getting a phantom row that
+// holds nothing but updatedAt.
 func (s *ConversationStoreImpl) TouchConversation(ctx context.Context, convID string, participantIDs []string, at time.Time) error {
 	expr := mustExpr(expression.NewBuilder().
 		WithUpdate(expression.Set(expression.Name("updatedAt"), expression.Value(at))).
+		WithCondition(expression.Name("PK").AttributeExists()).
 		Build())
-
-	// One TransactWriteItems instead of a sequential UpdateItem per row: a
-	// group-conversation send previously cost 1+N serial round-trips (META +
-	// each participant's user-side row). The META row keeps the existence
-	// guard so a missing conversation still surfaces as ErrNotFound. Group
-	// sizes are far below the 100-item transaction cap.
-	txItems := make([]types.TransactWriteItem, 0, 1+len(participantIDs))
-	txItems = append(txItems, types.TransactWriteItem{
-		Update: &types.Update{
+	touch := func(ctx context.Context, key map[string]types.AttributeValue) error {
+		_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 			TableName:                 aws.String(s.Table),
-			Key:                       compositeKey(convPK(convID), metaSK()),
+			Key:                       key,
 			UpdateExpression:          expr.Update(),
+			ConditionExpression:       expr.Condition(),
 			ExpressionAttributeNames:  expr.Names(),
 			ExpressionAttributeValues: expr.Values(),
-			ConditionExpression:       aws.String("attribute_exists(PK)"),
-		},
-	})
-	for _, uid := range participantIDs {
-		txItems = append(txItems, types.TransactWriteItem{
-			Update: &types.Update{
-				TableName:                 aws.String(s.Table),
-				Key:                       compositeKey(userPK(uid), convSK(convID)),
-				UpdateExpression:          expr.Update(),
-				ExpressionAttributeNames:  expr.Names(),
-				ExpressionAttributeValues: expr.Values(),
-			},
 		})
+		switch {
+		case err == nil:
+			return nil
+		case isConditionCheckFailed(err):
+			return ErrNotFound
+		default:
+			return fmt.Errorf("store: touch conversation: %w", err)
+		}
 	}
 
-	if _, err := s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
-		TransactItems: txItems,
-	}); err != nil {
-		if isTransactionCancelledWithCondition(err) {
-			return ErrNotFound
-		}
-		return fmt.Errorf("store: touch conversation: %w", err)
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(touchConcurrency)
+	g.Go(func() error { return touch(gctx, compositeKey(convPK(convID), metaSK())) })
+	for _, uid := range participantIDs {
+		g.Go(func() error {
+			if err := touch(gctx, compositeKey(userPK(uid), convSK(convID))); !errors.Is(err, ErrNotFound) {
+				return err
+			}
+			return nil // no sidebar row: nothing to re-sort
+		})
 	}
-	return nil
+	return g.Wait()
 }
 
 // IncrementMessageSeq atomically bumps the conversation's MessageSeq by one and
@@ -486,36 +494,19 @@ func (s *ConversationStoreImpl) ListAllConversations(ctx context.Context) ([]*mo
 // — the pattern that made /api/v1/conversations issue a DynamoDB read per
 // row just for its MessageSeq. Missing IDs are absent from the result.
 func (s *ConversationStoreImpl) GetConversationsByIDs(ctx context.Context, ids []string) ([]*model.Conversation, error) {
-	out := make([]*model.Conversation, 0, len(ids))
-	const batchSize = 100
-	for start := 0; start < len(ids); start += batchSize {
-		end := min(start+batchSize, len(ids))
-		keys := make([]map[string]types.AttributeValue, 0, end-start)
-		for _, id := range ids[start:end] {
-			keys = append(keys, compositeKey(convPK(id), metaSK()))
-		}
-		// Consistent, for the MessageSeq behind each row's unread count (see
-		// ListUserConversations).
-		req := map[string]types.KeysAndAttributes{s.Table: {Keys: keys, ConsistentRead: aws.Bool(true)}}
-		for {
-			res, err := s.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
-			if err != nil {
-				return nil, fmt.Errorf("store: batch get conversations: %w", err)
-			}
-			for _, item := range res.Responses[s.Table] {
-				var rec conversationItem
-				if err := attributevalue.UnmarshalMap(item, &rec); err != nil {
-					return nil, fmt.Errorf("store: unmarshal conversation: %w", err)
-				}
-				conv := rec.Conversation
-				out = append(out, &conv)
-			}
-			// DynamoDB may return unprocessed keys under throttling — drain them.
-			if len(res.UnprocessedKeys) == 0 {
-				break
-			}
-			req = res.UnprocessedKeys
-		}
+	keys := make([]map[string]types.AttributeValue, len(ids))
+	for i, id := range ids {
+		keys[i] = compositeKey(convPK(id), metaSK())
+	}
+	// Consistent, for the MessageSeq behind each row's unread count (see
+	// ListUserConversations).
+	rows, err := batchGetOf[conversationItem](ctx, s.DB, keys, types.KeysAndAttributes{ConsistentRead: aws.Bool(true)}, "conversations")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.Conversation, len(rows))
+	for i := range rows {
+		out[i] = &rows[i].Conversation
 	}
 	return out, nil
 }

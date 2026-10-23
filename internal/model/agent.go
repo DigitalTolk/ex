@@ -165,9 +165,14 @@ type AgentTemplate struct {
 	Model       string `json:"model,omitempty" dynamodbav:"model,omitempty"`
 	// ExecutionMode applies to API harnesses (bedrock): "runner" (default) or
 	// "server". Empty/ignored for CLI harnesses, which are always runner-run.
-	ExecutionMode     string      `json:"executionMode,omitempty" dynamodbav:"executionMode,omitempty"`
-	Persona           string      `json:"persona" dynamodbav:"persona"`
-	SkillIDs          []string    `json:"skillIDs,omitempty" dynamodbav:"skillIDs,omitempty"`
+	ExecutionMode string   `json:"executionMode,omitempty" dynamodbav:"executionMode,omitempty"`
+	Persona       string   `json:"persona" dynamodbav:"persona"`
+	SkillIDs      []string `json:"skillIDs,omitempty" dynamodbav:"skillIDs,omitempty"`
+	// SkillSnapshots is each attached skill AS IT WAS when an admin attached
+	// it. Runs inject this copy, not the live row, so the skill's author
+	// cannot rewrite what every run of the agent follows after the review.
+	// Server-side only.
+	SkillSnapshots    []Skill     `json:"-" dynamodbav:"skillSnapshots,omitempty"`
 	Limits            AgentLimits `json:"limits" dynamodbav:"limits"`
 	MaxConcurrentRuns int         `json:"maxConcurrentRuns" dynamodbav:"maxConcurrentRuns"`
 	// FollowUpMode is the template's default for thread follow-ups when the
@@ -248,11 +253,14 @@ const DefaultFollowUpMins = 10
 // snapshotted onto the Run row so mid-run edits never change an in-flight
 // run (plan-v2 §4).
 type ResolvedAgentConfig struct {
-	Harness           string      `json:"harness"`
-	Model             string      `json:"model"`
-	ExecutionMode     string      `json:"executionMode"`
-	Persona           string      `json:"persona"`
-	SkillIDs          []string    `json:"skillIDs,omitempty"`
+	Harness       string   `json:"harness"`
+	Model         string   `json:"model"`
+	ExecutionMode string   `json:"executionMode"`
+	Persona       string   `json:"persona"`
+	SkillIDs      []string `json:"skillIDs,omitempty"`
+	// SkillSnapshots: the template's attached skills as attached (see
+	// AgentTemplate.SkillSnapshots). Server-side only.
+	SkillSnapshots    []Skill     `json:"-"`
 	Limits            AgentLimits `json:"limits"`
 	MaxConcurrentRuns int         `json:"maxConcurrentRuns"`
 	OfflinePolicy     string      `json:"offlinePolicy"`
@@ -339,6 +347,17 @@ type Run struct {
 	// runs are barred from public posts server-side.
 	WatchInstruction string `json:"watchInstruction,omitempty" dynamodbav:"watchInstruction,omitempty"`
 	ActionMode       string `json:"actionMode,omitempty" dynamodbav:"actionMode,omitempty"`
+	// UntrustedTrigger marks a run that acts on activity its invoker did not
+	// write: a watcher woken by another member's message, a catch-up over
+	// such a backlog, a periodic check-in, and any agent hand-off chained from
+	// one of those. Its write and exfiltration tools need the invoker's
+	// approval per action (Orchestrator.AuthorizeAction). Server-side only.
+	UntrustedTrigger bool `json:"-" dynamodbav:"untrustedTrigger,omitempty"`
+	// TriggerAuthorID / TriggerText carry the message that woke a watcher —
+	// rendered in the bundle as DATA, apart from the # Task (which is the
+	// standing order). Server-side only.
+	TriggerAuthorID string `json:"-" dynamodbav:"triggerAuthorID,omitempty"`
+	TriggerText     string `json:"-" dynamodbav:"triggerText,omitempty"`
 
 	// Config snapshot — what this run actually executes under.
 	Harness       string   `json:"harness" dynamodbav:"harness"`
@@ -352,6 +371,9 @@ type Run struct {
 	// agent's replies — a standing template skill on every message would be
 	// noise, an explicit pick is signal.
 	PickedSkillIDs []string `json:"pickedSkillIDs,omitempty" dynamodbav:"pickedSkillIDs,omitempty"`
+	// AttachedSkills snapshots the template's attached skills (content as an
+	// admin attached them) — the bundle injects these, never a live rewrite.
+	AttachedSkills []Skill `json:"-" dynamodbav:"attachedSkills,omitempty"`
 	// ConnectorSlugs: the /connector tokens the invoking message carried —
 	// the user's explicit pick of which external services this run may use.
 	// The runner only syncs docs + injects credentials for these.
@@ -491,6 +513,9 @@ type Approval struct {
 	DecidedBy string     `json:"decidedBy,omitempty" dynamodbav:"decidedBy,omitempty"`
 	DecidedAt *time.Time `json:"decidedAt,omitempty" dynamodbav:"decidedAt,omitempty"`
 	CreatedAt time.Time  `json:"createdAt" dynamodbav:"createdAt"`
+	// ConsumedAt marks an approved decision as SPENT: one "yes" authorizes
+	// one action, never every later one of the same kind. Server-side only.
+	ConsumedAt *time.Time `json:"-" dynamodbav:"consumedAt,omitempty"`
 }
 
 // Approval purposes. Structured "<action>:<subject>" strings, minted only by

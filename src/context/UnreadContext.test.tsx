@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { render, screen, act } from '@testing-library/react';
 import { UnreadProvider, useUnread } from './UnreadContext';
 import { addInViewThread, resetThreadScopeForTests } from '@/lib/thread-scope';
+import { setActiveParent } from '@/stores/active-parent';
 
 function TestConsumer() {
   // Active channel/conversation are refs (no re-render on change); a tick forces
@@ -14,8 +15,6 @@ function TestConsumer() {
     markThreadNotificationUnread,
     hideConversation,
     unhideConversation,
-    setActiveChannel,
-    setActiveConversation,
     isActiveChannel,
     isActiveConversation,
     setActiveThread,
@@ -32,10 +31,9 @@ function TestConsumer() {
       <button onClick={() => markThreadNotificationUnread('root-1')}>markThreadNotification</button>
       <button onClick={() => hideConversation('conv-1')}>hideConvo</button>
       <button onClick={() => unhideConversation('conv-1')}>unhideConvo</button>
-      <button onClick={() => setActiveChannel('ch-1')}>activateCh</button>
-      <button onClick={() => setActiveChannel(null)}>deactivateCh</button>
-      <button onClick={() => setActiveConversation('conv-1')}>activateConv</button>
-      <button onClick={() => setActiveConversation(null)}>deactivateConv</button>
+      <button onClick={() => setActiveParent({ kind: 'channel', id: 'ch-1' })}>activateCh</button>
+      <button onClick={() => setActiveParent({ kind: 'conversation', id: 'conv-1' })}>activateConv</button>
+      <button onClick={() => setActiveParent(null)}>deactivate</button>
       <button onClick={() => setActiveThread('root-1')}>activateThread</button>
       <button onClick={() => setActiveThread(null)}>deactivateThread</button>
       <button onClick={() => setTick((t) => t + 1)}>tick</button>
@@ -170,7 +168,9 @@ describe('UnreadContext', () => {
     expect(screen.getByTestId('hidden')).toHaveTextContent('[]');
   });
 
-  it('tracks the active channel and conversation refs', () => {
+  // The open parent is one record (stores/active-parent): opening a
+  // conversation closes the channel that was open.
+  it('reads the one active parent', () => {
     render(
       <UnreadProvider>
         <TestConsumer />
@@ -180,13 +180,16 @@ describe('UnreadContext', () => {
     expect(screen.getByTestId('is-active-conv')).toHaveTextContent('false');
 
     act(() => screen.getByText('activateCh').click());
-    act(() => screen.getByText('activateConv').click());
     act(() => screen.getByText('tick').click());
     expect(screen.getByTestId('is-active-ch')).toHaveTextContent('true');
+    expect(screen.getByTestId('is-active-conv')).toHaveTextContent('false');
+
+    act(() => screen.getByText('activateConv').click());
+    act(() => screen.getByText('tick').click());
+    expect(screen.getByTestId('is-active-ch')).toHaveTextContent('false');
     expect(screen.getByTestId('is-active-conv')).toHaveTextContent('true');
 
-    act(() => screen.getByText('deactivateCh').click());
-    act(() => screen.getByText('deactivateConv').click());
+    act(() => screen.getByText('deactivate').click());
     act(() => screen.getByText('tick').click());
     expect(screen.getByTestId('is-active-ch')).toHaveTextContent('false');
     expect(screen.getByTestId('is-active-conv')).toHaveTextContent('false');

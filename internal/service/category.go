@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
@@ -48,7 +49,7 @@ func NewCategoryService(s CategoryStore, p Publisher) *CategoryService {
 func (s *CategoryService) Create(ctx context.Context, userID, name string) (*model.UserChannelCategory, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return nil, errors.New("category: name is required")
+		return nil, apperr.Invalid("category: name is required")
 	}
 	existing, err := s.store.List(ctx, userID)
 	if err != nil {
@@ -105,7 +106,7 @@ func (s *CategoryService) Update(ctx context.Context, userID, categoryID string,
 	if name != nil {
 		trimmed := strings.TrimSpace(*name)
 		if trimmed == "" {
-			return nil, errors.New("category: name is required")
+			return nil, apperr.Invalid("category: name is required")
 		}
 		existing, err := s.store.List(ctx, userID)
 		if err != nil {

@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const setServerVersionMock = vi.hoisted(() => vi.fn());
+const reportServerVersionMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/hooks/useServerVersion', () => ({
-  setServerVersion: setServerVersionMock,
+  reportServerVersion: reportServerVersionMock,
 }));
 
 import {
@@ -45,7 +45,7 @@ describe('apiFetch', () => {
 
   beforeEach(() => {
     clearAccessToken();
-    setServerVersionMock.mockReset();
+    reportServerVersionMock.mockReset();
     globalThis.fetch = vi.fn();
   });
 
@@ -113,7 +113,7 @@ describe('apiFetch', () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse);
 
     await expect(apiFetch('/api/v1/channels/general')).rejects.toThrow(ApiError);
-    expect(setServerVersionMock).toHaveBeenCalledWith('server-build-2');
+    expect(reportServerVersionMock).toHaveBeenCalledWith('server-build-2');
   });
 
   it('captures app version headers when token refresh fails before the app shell mounts', async () => {
@@ -127,7 +127,7 @@ describe('apiFetch', () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse);
 
     await expect(refreshAccessToken()).resolves.toBeNull();
-    expect(setServerVersionMock).toHaveBeenCalledWith('server-build-3');
+    expect(reportServerVersionMock).toHaveBeenCalledWith('server-build-3');
   });
 
   it('uses structured backend error messages instead of raw JSON', async () => {

@@ -29,14 +29,17 @@ func (f fakeAuthProvider) Exchange(context.Context, string, string) (*auth.OIDCU
 // TestOIDCAdapter_Exchange_Success covers the success branch that maps an
 // auth.OIDCUserInfo onto a service.OIDCUserInfo.
 func TestOIDCAdapter_Exchange_Success(t *testing.T) {
+	verified := true
 	a := &oidcAdapter{p: fakeAuthProvider{info: &auth.OIDCUserInfo{
 		Email: "u@example.com", Name: "U Ser", Picture: "https://img/u.png", ObjectID: "oid-1",
+		Issuer: "https://idp", Subject: "sub-1", EmailVerified: &verified,
 	}}}
 	got, err := a.Exchange(context.Background(), "code", "nonce")
 	if err != nil {
 		t.Fatalf("Exchange: %v", err)
 	}
-	if got.Email != "u@example.com" || got.Name != "U Ser" || got.Picture != "https://img/u.png" || got.ObjectID != "oid-1" {
+	if got.Email != "u@example.com" || got.Name != "U Ser" || got.Picture != "https://img/u.png" || got.ObjectID != "oid-1" ||
+		got.Issuer != "https://idp" || got.Subject != "sub-1" || got.EmailVerified == nil || !*got.EmailVerified {
 		t.Fatalf("mapped info = %+v", got)
 	}
 }

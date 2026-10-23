@@ -33,44 +33,71 @@ func TestParse_Shapes(t *testing.T) {
 		// Out-of-order lists are sorted, so Next's ascending scan is correct
 		// whatever order the author typed.
 		{spec: "45,0,30 17,9 * * 5,1", minutes: []int{0, 30, 45}, hours: []int{9, 17}, dows: []int{1, 5}, domAny: true, monthsLen: 12, domsLen: 31},
+		// 7 is crontab's other Sunday, in ranges and steps too.
+		{spec: "0 8 * * 7", dows: []int{0}, domAny: true, monthsLen: 12, domsLen: 31},
+		{spec: "0 8 * * 5-7", dows: []int{0, 5, 6}, domAny: true, monthsLen: 12, domsLen: 31},
+		{spec: "0 8 * * 1-7/2", dows: []int{0, 1, 3, 5}, domAny: true, monthsLen: 12, domsLen: 31},
+		{spec: "0 8 * * 2-7/2", dows: []int{2, 4, 6}, domAny: true, monthsLen: 12, domsLen: 31},
+		{spec: "0 8 * * 7/3,1", dows: []int{0, 1}, domAny: true, monthsLen: 12, domsLen: 31},
+		// Day and month names are crontab syntax too.
+		{spec: "0 8 * jan,jul MON-FRI", dows: []int{1, 2, 3, 4, 5}, domAny: true, monthsLen: 2, domsLen: 31},
+		// An empty list element is skipped, not an error.
+		{spec: "0,, 8 * * *", minutes: []int{0}, hours: []int{8}, domAny: true, dowAny: true, monthsLen: 12, domsLen: 31},
 	} {
 		got := mustParse(t, tc.spec)
-		if tc.minutes != nil && !equal(got.minutes, tc.minutes) {
-			t.Errorf("%q minutes = %v, want %v", tc.spec, got.minutes, tc.minutes)
+		s := got.sched
+		if tc.minutes != nil && !equal(fieldValues(s.Minute), tc.minutes) {
+			t.Errorf("%q minutes = %v, want %v", tc.spec, fieldValues(s.Minute), tc.minutes)
 		}
-		if tc.hours != nil && !equal(got.hours, tc.hours) {
-			t.Errorf("%q hours = %v, want %v", tc.spec, got.hours, tc.hours)
+		if tc.hours != nil && !equal(fieldValues(s.Hour), tc.hours) {
+			t.Errorf("%q hours = %v, want %v", tc.spec, fieldValues(s.Hour), tc.hours)
 		}
-		if tc.dows != nil && !equal(got.dows, tc.dows) {
-			t.Errorf("%q dows = %v, want %v", tc.spec, got.dows, tc.dows)
+		if tc.dows != nil && !equal(fieldValues(s.Dow), tc.dows) {
+			t.Errorf("%q dows = %v, want %v", tc.spec, fieldValues(s.Dow), tc.dows)
 		}
-		if got.domAny != tc.domAny || got.dowAny != tc.dowAny {
-			t.Errorf("%q anyness = dom:%v dow:%v, want dom:%v dow:%v", tc.spec, got.domAny, got.dowAny, tc.domAny, tc.dowAny)
+		domAny, dowAny := s.Dom&starBit != 0, s.Dow&starBit != 0
+		if domAny != tc.domAny || dowAny != tc.dowAny {
+			t.Errorf("%q anyness = dom:%v dow:%v, want dom:%v dow:%v", tc.spec, domAny, dowAny, tc.domAny, tc.dowAny)
 		}
-		if len(got.months) != tc.monthsLen || len(got.doms) != tc.domsLen {
-			t.Errorf("%q months=%d doms=%d, want %d/%d", tc.spec, len(got.months), len(got.doms), tc.monthsLen, tc.domsLen)
+		if months, doms := len(fieldValues(s.Month)), len(fieldValues(s.Dom)); months != tc.monthsLen || doms != tc.domsLen {
+			t.Errorf("%q months=%d doms=%d, want %d/%d", tc.spec, months, doms, tc.monthsLen, tc.domsLen)
+		}
+	}
+}
+
+// Terms that don't reach 7 are left for the parser, which judges them.
+func TestSevenAsSunday_PassesOtherTermsThrough(t *testing.T) {
+	for _, term := range []string{"*", "*/2", "1-5", "mon-fri", "8-7", "x-7", "1-7/x", "1-7/0", "0"} {
+		if got := sevenAsSunday(term); got != term {
+			t.Errorf("sevenAsSunday(%q) = %q, want it unchanged", term, got)
 		}
 	}
 }
 
 func TestParse_Rejects(t *testing.T) {
 	for _, tc := range []struct{ spec, want string }{
-		{"", "want 5 fields"},
-		{"0 8 * *", "want 5 fields"},
-		{"0 8 * * * *", "want 5 fields"},
-		{"60 8 * * *", "minute out of range"},
-		{"0 24 * * *", "hour out of range"},
-		{"0 8 0 * *", "day of month out of range"},
-		{"0 8 32 * *", "day of month out of range"},
-		{"0 8 * 13 *", "month out of range"},
-		{"0 8 * * 8", "day of week out of range"},
-		{"5-1 8 * * *", "minute out of range"}, // inverted range
-		{"x 8 * * *", `bad value "x"`},
-		{"1-x 8 * * *", `bad range end "x"`},
-		{"*/0 8 * * *", `bad step "0"`},
-		{"*/-1 8 * * *", `bad step "-1"`},
-		{"*/x 8 * * *", `bad step "x"`},
-		{"0,, 8 * * *", `bad value ""`}, // a list with a hole
+		{"", "empty spec string"},
+		{"0 8 * *", "expected exactly 5 fields, found 4"},
+		{"0 8 * * * *", "expected exactly 5 fields, found 6"},
+		{"60 8 * * *", "end of range (60) above maximum (59)"},
+		{"0 24 * * *", "end of range (24) above maximum (23)"},
+		{"0 8 0 * *", "beginning of range (0) below minimum (1)"},
+		{"0 8 32 * *", "end of range (32) above maximum (31)"},
+		{"0 8 * 13 *", "end of range (13) above maximum (12)"},
+		{"0 8 * * 8", "end of range (8) above maximum (6)"},
+		{"5-1 8 * * *", "beginning of range (5) beyond end of range (1)"}, // inverted range
+		{"x 8 * * *", "failed to parse int from x"},
+		{"1-x 8 * * *", "failed to parse int from x"},
+		{"*/0 8 * * *", "step of range should be a positive number"},
+		{"*/-1 8 * * *", "negative number (-1) not allowed"},
+		{"*/x 8 * * *", "failed to parse int from x"},
+		// No @descriptors: five fields are the whole grammar.
+		{"@daily", "does not accept descriptors"},
+		{"@every 1h", "does not accept descriptors"},
+		// The timezone is the schedule's own setting. A bare prefix with
+		// nothing after it used to be a robfig panic.
+		{"CRON_TZ=UTC", "timezone is set separately"},
+		{"  TZ=Europe/Stockholm 0 8 * * *", "timezone is set separately"},
 	} {
 		_, err := Parse(tc.spec)
 		if err == nil {
@@ -181,6 +208,71 @@ func TestNext_AcrossDSTKeepsWallClock(t *testing.T) {
 	}
 }
 
+// firingsOn lists every firing of spec on the local calendar day of `day`.
+func firingsOn(t *testing.T, spec Spec, day time.Time, loc *time.Location) []time.Time {
+	t.Helper()
+	from := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, loc)
+	until := from.AddDate(0, 0, 1)
+	var out []time.Time
+	for at := from.Add(-time.Minute); ; {
+		next, ok := spec.Next(at, loc)
+		if !ok || !next.Before(until) {
+			return out
+		}
+		out = append(out, next)
+		at = next
+	}
+}
+
+// DST must never duplicate or drop a scheduled order. For a wall-clock time
+// inside the hour a transition shifts:
+//   - spring forward: the time doesn't exist, and the order still runs that
+//     day, at the instant time.Date normalizes it to (Stockholm 02:30 → 03:30
+//     CEST, New York 02:30 → 01:30 EST) — never skipped;
+//   - fall back: the time happens twice, and the order runs ONCE.
+func TestNext_DSTNeverDuplicatesOrDrops(t *testing.T) {
+	for _, tc := range []struct {
+		zone, springSpec, fallSpec string
+		springDay, fallDay         time.Time // the transition dates
+		springWantHour             int       // local hour the skipped 02:30 fires at
+	}{
+		// Europe: 02:00 → 03:00 on 2026-03-29, 03:00 → 02:00 on 2026-10-25.
+		{"Europe/Stockholm", "30 2 * * *", "30 2 * * *",
+			time.Date(2026, 3, 29, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC), 3},
+		// US: 02:00 → 03:00 on 2026-03-08, 02:00 → 01:00 on 2026-11-01.
+		{"America/New_York", "30 2 * * *", "30 1 * * *",
+			time.Date(2026, 3, 8, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), 1},
+	} {
+		t.Run(tc.zone, func(t *testing.T) {
+			loc, err := time.LoadLocation(tc.zone)
+			if err != nil {
+				t.Skipf("tzdata unavailable: %v", err)
+			}
+
+			t.Run("spring forward", func(t *testing.T) {
+				spring := firingsOn(t, mustParse(t, tc.springSpec), tc.springDay, loc)
+				if len(spring) != 1 {
+					t.Fatalf("spring-forward day fired %d times (%v), want once", len(spring), spring)
+				}
+				if got := spring[0]; got.Day() != tc.springDay.Day() || got.Hour() != tc.springWantHour || got.Minute() != 30 {
+					t.Fatalf("skipped 02:30 fired at %v, want %02d:30 that same day", got, tc.springWantHour)
+				}
+			})
+			t.Run("fall back", func(t *testing.T) {
+				fall := firingsOn(t, mustParse(t, tc.fallSpec), tc.fallDay, loc)
+				if len(fall) != 1 {
+					t.Fatalf("fall-back day fired %d times (%v), want once", len(fall), fall)
+				}
+				// Due agrees: once the repeated time has fired, the order is
+				// not due again on the second pass through the hour.
+				if Due(tc.fallSpec, tc.zone, fall[0], fall[0].Add(2*time.Hour)) {
+					t.Fatal("order due again on the second pass through the repeated hour")
+				}
+			})
+		})
+	}
+}
+
 func TestDue(t *testing.T) {
 	utc := time.UTC
 	last := time.Date(2026, 9, 23, 8, 0, 0, 0, utc)
@@ -233,6 +325,9 @@ func TestDescribe(t *testing.T) {
 		{"*/15 * * * *", "UTC", "*/15 * * * * UTC"},
 		{"0 9 1 * *", "UTC", "0 9 1 * * UTC"},
 		{"0 9 1 1 *", "", "0 9 1 1 *"},
+		// A weekday order limited to some months is not "every Monday".
+		{"0 9 * 1 1", "", "0 9 * 1 1"},
+		{"0 9 * * 7", "", "09:00 on Sun"},
 		{"nonsense", "UTC", "nonsense"},
 	} {
 		if got := Describe(tc.spec, tc.tz); got != tc.want {

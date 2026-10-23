@@ -4,7 +4,6 @@ import {
   initTabCoordinator,
   isLeaderTab,
   hasOtherTabs,
-  setTabActiveParent,
   remoteTabViewing,
   remoteTabViewingThread,
   remoteUserAtDevice,
@@ -14,6 +13,7 @@ import {
 } from '@/lib/tab-leader';
 import { markUserActivity, resetUserActivityForTests, setActivityBroadcast } from '@/lib/user-activity';
 import { resetThreadScopeForTests } from '@/lib/thread-scope';
+import { setActiveParent } from '@/stores/active-parent';
 
 // The coordinator runs against REAL broadcast-channel primitives in
 // 'simulate' mode: channels created with the same name inside this process
@@ -65,8 +65,8 @@ describe('uninitialized (single-tab / test) baseline', () => {
     expect(remoteTabViewing('ch-1', 60_000)).toBe(false);
     expect(remoteUserAtDevice(60_000)).toBe(false);
     // No coordinator → sharing state is a harmless no-op.
-    setTabActiveParent('ch-1');
-    setTabActiveParent(null);
+    setActiveParent({ kind: 'channel', id: 'ch-1' });
+    setActiveParent(null);
   });
 });
 
@@ -209,7 +209,7 @@ describe('initTabCoordinator', () => {
     document.hasFocus = undefined;
     try {
       initTabCoordinator({ type: 'simulate' });
-      setTabActiveParent('ch-nofocus');
+      setActiveParent({ kind: 'channel', id: 'ch-nofocus' });
       await vi.waitFor(() => {
         expect(seen.some((m) => m.kind === 'state' && m.state?.activeParent === 'ch-nofocus')).toBe(true);
       });
@@ -278,7 +278,7 @@ describe('initTabCoordinator', () => {
       });
 
       const before = seen.length;
-      setTabActiveParent('ch-42');
+      setActiveParent({ kind: 'channel', id: 'ch-42' });
       await vi.waitFor(() => {
         expect(seen.length).toBeGreaterThan(before);
       });
@@ -308,7 +308,7 @@ describe('initTabCoordinator', () => {
 
   it('ignores its own broadcasts (no self-entry in the remote map)', async () => {
     initTabCoordinator({ type: 'simulate' });
-    setTabActiveParent('ch-self');
+    setActiveParent({ kind: 'channel', id: 'ch-self' });
     await flush();
     expect(hasOtherTabs()).toBe(false);
   });
@@ -356,7 +356,7 @@ describe('torn-channel failure arms', () => {
       // coordination degrades to the staleness TTL, never a crash.
       const ch = getTabChannelForTests() as { postMessage: (m: unknown) => Promise<void> };
       const spy = vi.spyOn(ch, 'postMessage').mockRejectedValue(new Error('channel torn'));
-      setTabActiveParent('ch-torn'); // postState catch arm
+      setActiveParent({ kind: 'channel', id: 'ch-torn' }); // postState catch arm
       window.dispatchEvent(new Event('pagehide')); // bye catch arm
       await flush();
       expect(spy).toHaveBeenCalled();
@@ -408,7 +408,7 @@ describe('edge arms', () => {
       captured.push(m);
     };
     try {
-      setTabActiveParent('ch-echo'); // makes the module reveal its tabId
+      setActiveParent({ kind: 'channel', id: 'ch-echo' }); // makes the module reveal its tabId
       await vi.waitFor(() => {
         expect(captured.length).toBeGreaterThan(0);
       });

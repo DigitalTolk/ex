@@ -150,7 +150,7 @@ describe('MessageItem - read-only (archived channel)', () => {
     expect(screen.getByTestId('mobile-primary-actions').className).toContain('grid-cols-3');
     expect(screen.getByLabelText('Copy link to message')).toBeInTheDocument();
     expect(screen.getByTestId('mobile-mark-unread')).toBeInTheDocument();
-    for (const name of ['Reply in thread', 'Pin message']) {
+    for (const name of ['Reply in thread', 'Pin message', 'Add a watcher to this thread']) {
       expect(screen.queryByLabelText(name)).not.toBeInTheDocument();
     }
     expect(screen.queryByText('Delete')).not.toBeInTheDocument();

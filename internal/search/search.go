@@ -32,10 +32,14 @@ type MessageQuery struct {
 }
 
 // ChannelQuery bundles optional filters for channel search. AllowedChannelIDs
-// scopes results to channels the caller belongs to; nil means unscoped.
+// lists the private channels the caller belongs to; public channels always
+// match. Membership scoping fails CLOSED: a nil set means "no private
+// channels", exactly like an empty one. Only Unscoped (internal service
+// lookups, never a user-facing search) drops the visibility filter.
 type ChannelQuery struct {
 	Q                 string
 	AllowedChannelIDs []string
+	Unscoped          bool
 	Limit             int
 }
 
@@ -97,17 +101,17 @@ func (s *Service) Users(ctx context.Context, q string, limit int) (*SearchResult
 // even one the caller hasn't joined — opening it from search auto-joins them
 // (grantVisibleAccess). A PRIVATE channel matches only when the caller belongs
 // to it (its ID is in AllowedChannelIDs); private channels they aren't in never
-// surface. A nil AllowedChannelIDs disables membership scoping entirely and
-// matches everything incl. private (the unscoped/admin path); RBAC callers pass
-// a non-nil slice — an EMPTY slice is fine and simply yields only public
-// channels (a brand-new user with no memberships can still find public rooms).
+// surface. An empty or nil AllowedChannelIDs yields only public channels (a
+// brand-new user with no memberships can still find public rooms). Only an
+// explicit Unscoped query matches everything incl. private — a missing set
+// must never widen visibility.
 func (s *Service) Channels(ctx context.Context, opts ChannelQuery) (*SearchResult, error) {
 	q := normalizeFuzzy(strings.TrimSpace(opts.Q))
 	if q == "" {
 		return &SearchResult{Hits: []SearchHit{}}, nil
 	}
 	filters := []any{}
-	if opts.AllowedChannelIDs != nil {
+	if !opts.Unscoped {
 		// public OR a private channel the caller is a member of.
 		should := []any{
 			map[string]any{"term": map[string]any{"type": string(model.ChannelTypePublic)}},

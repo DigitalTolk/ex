@@ -265,9 +265,9 @@ describe('MessageList browser behavior', () => {
   // reader a little short of it kept the scroll offset: the newest message
   // slid under the composer, and scrolling down to it dismissed the keyboard.
   describe('when the list is resized from below (the keyboard, the composer)', () => {
-    function ResizedList({ anchorMsgId }: { anchorMsgId?: string }) {
+    function ResizedList({ anchorMsgId, count = 30 }: { anchorMsgId?: string; count?: number }) {
       const [height, setHeight] = useState(600);
-      const all = Array.from({ length: 30 }, (_, i) => msg(i));
+      const all = Array.from({ length: count }, (_, i) => msg(i));
       return (
         <>
           <button data-testid="keyboard-up" onClick={() => setHeight(300)}>up</button>
@@ -298,6 +298,13 @@ describe('MessageList browser behavior', () => {
     // (a loaded runner) can carry the list back to the end, so it is aimed
     // again until it has stayed there for a few frames.
     async function scrollUp(scroller: HTMLElement, px: number) {
+      // Virtuoso measures the rows it renders a frame after rendering them;
+      // until then they stand at the estimated height, and a scroll lands on
+      // rows that are not where it thinks they are.
+      await vi.waitFor(() => {
+        const rows = Array.from(scroller.querySelectorAll<HTMLElement>('[data-testid="virtuoso-item-list"] > [data-index]'));
+        expect(rows.filter((row) => Number(row.dataset.knownSize) !== row.offsetHeight)).toEqual([]);
+      }, { timeout: 3000 });
       scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -px, bubbles: true }));
       const deadline = performance.now() + 5000;
       for (let held = 0; held < 6; ) {
@@ -351,6 +358,19 @@ describe('MessageList browser behavior', () => {
       expect(gapOf(scrollerOf(), 'm-29')).toBe(-12);
       await resize(screen, 'up');
       expect(gapOf(scrollerOf(), 'm-29')).toBe(-12);
+    });
+
+    // A history longer than the rows kept mounted around the view (the
+    // overscan): rows far above the view are estimates, not measurements.
+    it('keeps the newest message where it was a few px short of the end of a long list', async () => {
+      const screen = await render(<ResizedList count={150} />);
+      await settleAtBottom(scrollerOf());
+      await scrollUp(scrollerOf(), 12);
+      expect(gapOf(scrollerOf(), 'm-149')).toBe(-12);
+      await resize(screen, 'up');
+      expect(gapOf(scrollerOf(), 'm-149')).toBe(-12);
+      await resize(screen, 'down');
+      expect(gapOf(scrollerOf(), 'm-149')).toBe(-12);
     });
 
     it('keeps a reader a few messages up on what was at the bottom of the view', async () => {

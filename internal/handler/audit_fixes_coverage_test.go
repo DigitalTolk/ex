@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DigitalTolk/ex/internal/agents"
 	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/store"
 )
@@ -15,8 +16,8 @@ import (
 // table (one sentinel, one status, everywhere), the standard two-factor
 // envelope, and the bounded post-idempotency map.
 
-// serviceStatus is the single mapping five handler files used to each have
-// their own version of — and disagree about.
+// writeServiceError's table is the single mapping five handler files used to
+// each have their own version of — and disagree about.
 func TestServiceStatusTable(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -28,39 +29,39 @@ func TestServiceStatusTable(t *testing.T) {
 		{"already exists", store.ErrAlreadyExists, http.StatusConflict, "already_exists"},
 		{"validation", service.ErrValidation, http.StatusBadRequest, "bad_request"},
 		{"forbidden", service.ErrForbidden, http.StatusForbidden, "forbidden"},
-		{"no run access", service.ErrNoRunAccess, http.StatusForbidden, "forbidden"},
-		{"context full", service.ErrContextFull, http.StatusConflict, "context_full"},
-		{"run closed", service.ErrRunClosed, http.StatusConflict, "run_closed"},
-		{"wrong runner", service.ErrWrongRunner, http.StatusConflict, "wrong_runner"},
-		{"approval settled", service.ErrApprovalSettled, http.StatusConflict, "settled"},
-		{"not invoker", service.ErrNotInvoker, http.StatusForbidden, "forbidden"},
-		{"artifact cap", service.ErrArtifactCap, http.StatusTooManyRequests, "artifact_cap"},
-		{"connector invalid", service.ErrConnectorInvalid, http.StatusBadRequest, "bad_request"},
-		{"token rejected", service.ErrTokenRejected, http.StatusUnauthorized, "token_rejected"},
-		{"login failed", service.ErrLoginFailed, http.StatusUnauthorized, "login_failed"},
-		{"service unreachable", service.ErrServiceUnreachable, http.StatusFailedDependency, "unreachable"},
+		{"no run access", agents.ErrNoRunAccess, http.StatusForbidden, "forbidden"},
+		{"context full", agents.ErrContextFull, http.StatusConflict, "context_full"},
+		{"run closed", agents.ErrRunClosed, http.StatusConflict, "run_closed"},
+		{"wrong runner", agents.ErrWrongRunner, http.StatusConflict, "wrong_runner"},
+		{"approval settled", agents.ErrApprovalSettled, http.StatusConflict, "settled"},
+		{"not invoker", agents.ErrNotInvoker, http.StatusForbidden, "forbidden"},
+		{"artifact cap", agents.ErrArtifactCap, http.StatusTooManyRequests, "artifact_cap"},
+		{"connector invalid", agents.ErrConnectorInvalid, http.StatusBadRequest, "bad_request"},
+		{"token rejected", agents.ErrTokenRejected, http.StatusUnauthorized, "token_rejected"},
+		{"login failed", agents.ErrLoginFailed, http.StatusUnauthorized, "login_failed"},
+		{"service unreachable", agents.ErrServiceUnreachable, http.StatusFailedDependency, "unreachable"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			status, code, _, ok := serviceStatus(c.err)
-			if !ok || status != c.status || code != c.code {
-				t.Fatalf("serviceStatus(%v) = %d/%q ok=%v, want %d/%q", c.err, status, code, ok, c.status, c.code)
+			m, ok := lookupError(c.err)
+			if !ok || m.status != c.status || m.code != c.code {
+				t.Fatalf("lookupError(%v) = %d/%q ok=%v, want %d/%q", c.err, m.status, m.code, ok, c.status, c.code)
 			}
-			// And the wrapper answers with the same thing.
+			// And the writer answers with the same thing.
 			rec := httptest.NewRecorder()
-			writeAgentError(rec, httptest.NewRequest(http.MethodPost, "/x", nil), c.err, "internal")
+			writeServiceError(rec, httptest.NewRequest(http.MethodPost, "/x", nil), c.err)
 			if rec.Code != c.status {
-				t.Fatalf("writeAgentError status = %d, want %d", rec.Code, c.status)
+				t.Fatalf("writeServiceError status = %d, want %d", rec.Code, c.status)
 			}
 		})
 	}
 
 	// Anything unmapped is a LOGGED generic 500, never a leaked chain.
-	if _, _, _, ok := serviceStatus(errors.New("some wrapped store failure")); ok {
+	if _, ok := lookupError(errors.New("some wrapped store failure")); ok {
 		t.Fatal("an unmapped error must not claim a status")
 	}
 	rec := httptest.NewRecorder()
-	writeAgentError(rec, httptest.NewRequest(http.MethodPost, "/x", nil), errors.New("dynamo: table gone"), "internal")
+	writeServiceError(rec, httptest.NewRequest(http.MethodPost, "/x", nil), errors.New("dynamo: table gone"))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("unmapped status = %d", rec.Code)
 	}
@@ -125,11 +126,10 @@ func TestPostIdempotencyClaim(t *testing.T) {
 	}
 }
 
-// writeToolError's default arm is a LOGGED generic 500. It used to be a
+// A run-tool failure's default arm is a LOGGED generic 500. It used to be a
 // blanket 400 carrying err.Error() — an internal chain handed back to the
 // caller as a "bad request", with nothing recorded server-side.
 func TestWriteToolErrorArms(t *testing.T) {
-	h := &AgentRunToolHandler{}
 	cases := []struct {
 		name   string
 		err    error
@@ -137,14 +137,14 @@ func TestWriteToolErrorArms(t *testing.T) {
 		body   string
 	}{
 		{"not found", store.ErrNotFound, http.StatusNotFound, "not_found"},
-		{"run closed", service.ErrRunClosed, http.StatusConflict, "run_closed"},
+		{"run closed", agents.ErrRunClosed, http.StatusConflict, "run_closed"},
 		{"validation", service.ErrValidation, http.StatusBadRequest, "bad_request"},
 		{"internal", errors.New("dynamo: table vanished"), http.StatusInternalServerError, "internal server error"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			h.writeToolError(rec, httptest.NewRequest(http.MethodPost, "/x", nil), c.err)
+			writeServiceError(rec, httptest.NewRequest(http.MethodPost, "/x", nil), c.err)
 			if rec.Code != c.status || !strings.Contains(rec.Body.String(), c.body) {
 				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 			}

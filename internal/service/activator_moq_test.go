@@ -5,6 +5,7 @@ package service
 
 import (
 	"context"
+	"github.com/DigitalTolk/ex/internal/model"
 	"sync"
 )
 
@@ -18,8 +19,8 @@ var _ ConversationActivator = &ConversationActivatorMock{}
 //
 //		// make and configure a mocked ConversationActivator
 //		mockedConversationActivator := &ConversationActivatorMock{
-//			ActivateFunc: func(ctx context.Context, convID string) error {
-//				panic("mock out the Activate method")
+//			ActivateLoadedFunc: func(ctx context.Context, conv *model.Conversation) error {
+//				panic("mock out the ActivateLoaded method")
 //			},
 //		}
 //
@@ -28,57 +29,57 @@ var _ ConversationActivator = &ConversationActivatorMock{}
 //
 //	}
 type ConversationActivatorMock struct {
-	// ActivateFunc mocks the Activate method.
-	ActivateFunc func(ctx context.Context, convID string) error
+	// ActivateLoadedFunc mocks the ActivateLoaded method.
+	ActivateLoadedFunc func(ctx context.Context, conv *model.Conversation) error
 
 	// calls tracks calls to the methods.
 	calls struct {
-		// Activate holds details about calls to the Activate method.
-		Activate []struct {
+		// ActivateLoaded holds details about calls to the ActivateLoaded method.
+		ActivateLoaded []struct {
 			// Ctx is the ctx argument value.
 			Ctx context.Context
-			// ConvID is the convID argument value.
-			ConvID string
+			// Conv is the conv argument value.
+			Conv *model.Conversation
 		}
 	}
-	lockActivate sync.RWMutex
+	lockActivateLoaded sync.RWMutex
 }
 
-// Activate calls ActivateFunc.
-func (mock *ConversationActivatorMock) Activate(ctx context.Context, convID string) error {
+// ActivateLoaded calls ActivateLoadedFunc.
+func (mock *ConversationActivatorMock) ActivateLoaded(ctx context.Context, conv *model.Conversation) error {
 	callInfo := struct {
-		Ctx    context.Context
-		ConvID string
+		Ctx  context.Context
+		Conv *model.Conversation
 	}{
-		Ctx:    ctx,
-		ConvID: convID,
+		Ctx:  ctx,
+		Conv: conv,
 	}
-	mock.lockActivate.Lock()
-	mock.calls.Activate = append(mock.calls.Activate, callInfo)
-	mock.lockActivate.Unlock()
-	if mock.ActivateFunc == nil {
+	mock.lockActivateLoaded.Lock()
+	mock.calls.ActivateLoaded = append(mock.calls.ActivateLoaded, callInfo)
+	mock.lockActivateLoaded.Unlock()
+	if mock.ActivateLoadedFunc == nil {
 		var (
 			errOut error
 		)
 		return errOut
 	}
-	return mock.ActivateFunc(ctx, convID)
+	return mock.ActivateLoadedFunc(ctx, conv)
 }
 
-// ActivateCalls gets all the calls that were made to Activate.
+// ActivateLoadedCalls gets all the calls that were made to ActivateLoaded.
 // Check the length with:
 //
-//	len(mockedConversationActivator.ActivateCalls())
-func (mock *ConversationActivatorMock) ActivateCalls() []struct {
-	Ctx    context.Context
-	ConvID string
+//	len(mockedConversationActivator.ActivateLoadedCalls())
+func (mock *ConversationActivatorMock) ActivateLoadedCalls() []struct {
+	Ctx  context.Context
+	Conv *model.Conversation
 } {
 	var calls []struct {
-		Ctx    context.Context
-		ConvID string
+		Ctx  context.Context
+		Conv *model.Conversation
 	}
-	mock.lockActivate.RLock()
-	calls = mock.calls.Activate
-	mock.lockActivate.RUnlock()
+	mock.lockActivateLoaded.RLock()
+	calls = mock.calls.ActivateLoaded
+	mock.lockActivateLoaded.RUnlock()
 	return calls
 }

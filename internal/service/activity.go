@@ -62,6 +62,7 @@ type ActivityService struct {
 	publisher Publisher
 	channels  ChannelSlugResolver
 	members   ParentMemberLister
+	mentions  MentionResolver
 }
 
 // NewActivityService builds an ActivityService.
@@ -77,6 +78,10 @@ func (s *ActivityService) SetChannelResolver(c ChannelSlugResolver) { s.channels
 // deletes use to find the streams holding items about the message. Without it
 // those items keep their original preview and outlive their message.
 func (s *ActivityService) SetMemberLister(m ParentMemberLister) { s.members = m }
+
+// SetMentionResolver names mentioned users and channels in item previews by
+// their current names. Optional — without it mentions read as typed.
+func (s *ActivityService) SetMentionResolver(r MentionResolver) { s.mentions = r }
 
 // RecordReaction adds a "someone reacted to your message" hint to the message
 // author's activity stream. No-op when the reactor is the author themselves, the
@@ -103,7 +108,7 @@ func (s *ActivityService) RecordReaction(ctx context.Context, msg *model.Message
 			ParentType:      parentType,
 			ParentMessageID: threadRoot,
 			ChannelSlug:     s.resolveChannelSlug(bg, parentType, parentID),
-			MessagePreview:  activityPreview(preview),
+			MessagePreview:  activityPreview(preview, lookupMentionNames(bg, s.mentions, preview)),
 			ActorID:         actorID,
 			Emoji:           emoji,
 		}
@@ -125,18 +130,20 @@ func (s *ActivityService) resolveChannelSlug(ctx context.Context, parentType, pa
 }
 
 // activityPreview builds a single-line preview for an activity/reminder row.
-// previewBody humanizes @-mentions and :emoji: shortcodes and clamps length;
-// collapsing whitespace afterwards keeps tabs / newline-runs / leading space out
-// of the row and lets a whitespace-only body collapse to "" so the client renders
-// its fallback label.
-func activityPreview(body string) string {
-	return collapseSpace(previewBody(body))
+// previewBody humanizes @-mentions (by the current names in names) and :emoji:
+// shortcodes and clamps length; collapsing whitespace afterwards keeps tabs /
+// newline-runs / leading space out of the row and lets a whitespace-only body
+// collapse to "" so the client renders its fallback label.
+func activityPreview(body string, names MentionNames) string {
+	return collapseSpace(previewBody(body, names))
 }
 
 // messagePreview is the preview text a message gets on an activity item or a
-// reminder: its body, or a webhook post's attachment summary.
-func messagePreview(msg *model.Message) string {
-	return activityPreview(notificationBody(msg))
+// reminder: its body, or a webhook post's attachment summary, with its
+// mentions named by their current names (one lookup through r, when set).
+func messagePreview(ctx context.Context, r MentionResolver, msg *model.Message) string {
+	text := notificationBody(msg)
+	return activityPreview(text, lookupMentionNames(ctx, r, text))
 }
 
 // collapseSpace trims s and collapses each whitespace run to one space.
@@ -171,7 +178,7 @@ func (s *ActivityService) addMany(ctx context.Context, adds []store.ActivityAdd)
 	nudges := make([]events.PublishItem, 0, len(adds))
 	for i, a := range adds {
 		if err := results[i].Err; err != nil {
-			slog.Warn("activity add failed", "userID", a.UserID, "type", a.Item.Type, "error", err)
+			slog.WarnContext(ctx, "activity add failed", "userID", a.UserID, "type", a.Item.Type, "error", err)
 			continue
 		}
 		// The payload is a plain struct; marshaling it cannot fail.
@@ -318,7 +325,7 @@ func (s *ActivityService) RecordChannelAdded(ctx context.Context, actorID, userI
 func (s *ActivityService) MarkParentRead(ctx context.Context, userID, parentID, threadRootID string, position time.Time) {
 	changed, err := s.store.MarkActivityParentRead(ctx, userID, store.ActivityParentKey(parentID, threadRootID), position)
 	if err != nil {
-		slog.Warn("activity parent read failed", "userID", userID, "parentID", parentID, "threadRootID", threadRootID, "error", err)
+		slog.WarnContext(ctx, "activity parent read failed", "userID", userID, "parentID", parentID, "threadRootID", threadRootID, "error", err)
 		return
 	}
 	if changed {
@@ -343,7 +350,7 @@ func (s *ActivityService) parentLeft(ctx context.Context, userID, parentID strin
 	defer cancel()
 	removed, err := s.store.RemoveActivityForParent(bg, userID, parentID)
 	if err != nil {
-		slog.Warn("activity parent cleanup failed", "userID", userID, "parentID", parentID, "error", err)
+		slog.WarnContext(ctx, "activity parent cleanup failed", "userID", userID, "parentID", parentID, "error", err)
 		return
 	}
 	if len(removed) > 0 {
@@ -365,9 +372,10 @@ func (s *ActivityService) MessagesDeleted(ctx context.Context, parentID, parentT
 // MessageEdited refreshes the preview on the items about an edited message in
 // the streams of the parent's members.
 func (s *ActivityService) MessageEdited(ctx context.Context, msg *model.Message, parentType string) {
-	msgID, parentID, preview := msg.ID, msg.ParentID, messagePreview(msg)
-	s.forMembers(ctx, parentID, parentType, func(bg context.Context, userIDs []string) (map[string][]string, error) {
-		return s.store.UpdateActivityPreview(bg, userIDs, msgID, preview)
+	// The preview (and its mention lookup) is built off the request path.
+	edited := &model.Message{ID: msg.ID, ParentID: msg.ParentID, Body: msg.Body, MessageAttachments: msg.MessageAttachments}
+	s.forMembers(ctx, edited.ParentID, parentType, func(bg context.Context, userIDs []string) (map[string][]string, error) {
+		return s.store.UpdateActivityPreview(bg, userIDs, edited.ID, messagePreview(bg, s.mentions, edited))
 	}, func(ids []string) model.ActivityChangedEvent { return model.ActivityChangedEvent{Updated: ids} })
 }
 
@@ -385,13 +393,13 @@ func (s *ActivityService) forMembers(ctx context.Context, parentID, parentType s
 		defer cancel()
 		userIDs, err := s.members.ParentMemberIDs(bg, parentID, parentType)
 		if err != nil {
-			slog.Warn("activity member lookup failed", "parentID", parentID, "error", err)
+			slog.WarnContext(ctx, "activity member lookup failed", "parentID", parentID, "error", err)
 			return
 		}
 		touched, err := apply(bg, userIDs)
 		if err != nil {
 			// Users whose change succeeded are still in touched.
-			slog.Warn("activity message sync failed", "parentID", parentID, "error", err)
+			slog.WarnContext(ctx, "activity message sync failed", "parentID", parentID, "error", err)
 		}
 		byUser := make(map[string]model.ActivityChangedEvent, len(touched))
 		for userID, ids := range touched {

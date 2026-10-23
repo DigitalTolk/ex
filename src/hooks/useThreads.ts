@@ -3,6 +3,7 @@ import { apiFetch } from '@/lib/api';
 import { slugify } from '@/lib/format';
 import { readJSON, writeJSON } from '@/lib/storage';
 import { queryKeys, parentPath } from '@/lib/query-keys';
+import { wsLiveQueryOptions } from '@/lib/query-client';
 import { markLocalUserStateWrite } from '@/hooks/useUserState';
 import { queryClient } from '@/lib/query-client';
 import { setUnreadAnchor, threadReadKey } from '@/lib/read-position';
@@ -36,7 +37,7 @@ export function useUserThreads(options?: { enabled?: boolean }) {
       return Array.isArray(res) ? res : [];
     },
     enabled: options?.enabled ?? true,
-    staleTime: 15_000,
+    ...wsLiveQueryOptions,
   });
 }
 
@@ -325,7 +326,8 @@ export function useThreadMessages(opts: {
       return Array.isArray(res) ? res : [];
     },
     enabled: ready && (opts.enabled ?? true),
-    staleTime: 15_000,
+    // Replies, edits and reactions are patched in from message.* events.
+    ...wsLiveQueryOptions,
   });
 }
 

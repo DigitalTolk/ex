@@ -52,16 +52,16 @@ describe('parseTaskMarker', () => {
 
 describe('taskKindFlair', () => {
   it('maps feature', () => {
-    expect(taskKindFlair('feature')).toEqual({ emoji: '✨', label: 'feature' });
+    expect(taskKindFlair('feature')).toBe('feature');
   });
 
   it('maps chore', () => {
-    expect(taskKindFlair('chore')).toEqual({ emoji: '🧹', label: 'chore' });
+    expect(taskKindFlair('chore')).toBe('chore');
   });
 
   it('defaults everything else to bug', () => {
-    expect(taskKindFlair('bug')).toEqual({ emoji: '🐛', label: 'bug' });
-    expect(taskKindFlair('unknown-kind')).toEqual({ emoji: '🐛', label: 'bug' });
+    expect(taskKindFlair('bug')).toBe('bug');
+    expect(taskKindFlair('unknown-kind')).toBe('bug');
   });
 });
 

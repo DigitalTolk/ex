@@ -601,7 +601,7 @@ func TestChannelHandler_MarkRead(t *testing.T) {
 		t.Fatalf("status = %d, want 204", rec.Code)
 	}
 
-	// Missing channel → 404 (GetChannel ErrNotFound surfaces via writeReadResourceError).
+	// Missing channel → 404 (GetChannel ErrNotFound surfaces via writeServiceError).
 	req = httptest.NewRequest(http.MethodPut, "/api/v1/channels/ghost/read", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.SetPathValue("id", "ghost")
@@ -1387,19 +1387,6 @@ func (f *fakeDraftClearer) DeleteForScope(_ context.Context, userID, parentID, p
 	return f.err
 }
 
-// stubClearSentDraftRetries compresses the async send-fold's retry schedule
-// for tests. The worker snapshots the config when it starts, so callers must
-// synchronize on the fake's done channel before the test (and this cleanup)
-// ends.
-func stubClearSentDraftRetries(t *testing.T, delays []time.Duration, timeout time.Duration) {
-	t.Helper()
-	prevDelays, prevTimeout := clearSentDraftRetryDelays, clearSentDraftTimeout
-	clearSentDraftRetryDelays, clearSentDraftTimeout = delays, timeout
-	t.Cleanup(func() {
-		clearSentDraftRetryDelays, clearSentDraftTimeout = prevDelays, prevTimeout
-	})
-}
-
 // waitForCall blocks until the (async) draft clear has run once.
 func (f *fakeDraftClearer) waitForCall(t *testing.T) {
 	t.Helper()
@@ -1416,7 +1403,7 @@ func TestChannelHandlerFull_SendMessage_ClearsDraftByScope(t *testing.T) {
 		ChannelID: "ch-msg", UserID: "u-sender", Role: model.ChannelRoleMember,
 	}
 	fake := &fakeDraftClearer{done: make(chan struct{}, 1)}
-	env.handler.SetDraftClearer(fake)
+	env.handler.messageSvc.SetDraftClearer(fake) // the send owns the fold
 	user := &model.User{ID: "u-sender", Email: "sender@test.com", SystemRole: model.SystemRoleMember}
 	token := makeTokenForUser(env.jwtMgr, user)
 	h := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.SendMessage))
@@ -1440,31 +1427,6 @@ func TestChannelHandlerFull_SendMessage_ClearsDraftByScope(t *testing.T) {
 	if got != (draftClearCall{"u-sender", "ch-msg", service.ParentChannel, ""}) {
 		t.Fatalf("clear call = %+v", got)
 	}
-}
-
-func TestChannelHandlerFull_SendMessage_DraftClearErrorDoesNotFailSend(t *testing.T) {
-	env := setupChannelHandlerFull(t)
-	env.memberships.memberships["ch-msg#u-sender"] = &model.ChannelMembership{
-		ChannelID: "ch-msg", UserID: "u-sender", Role: model.ChannelRoleMember,
-	}
-	stubClearSentDraftRetries(t, nil, time.Second) // fail fast, no retry waits
-	fake := &fakeDraftClearer{err: errors.New("redis down"), done: make(chan struct{}, 1)}
-	env.handler.SetDraftClearer(fake)
-	user := &model.User{ID: "u-sender", Email: "sender@test.com", SystemRole: model.SystemRoleMember}
-	token := makeTokenForUser(env.jwtMgr, user)
-	h := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.SendMessage))
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/ch-msg/messages", strings.NewReader(`{"body":"hi"}`))
-	req.SetPathValue("id", "ch-msg")
-	req.Header.Set("Authorization", "Bearer "+token)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	// A clear failure is best-effort; the message must still be created.
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want 201 (clear error must not fail send): %s", rec.Code, rec.Body.String())
-	}
-	fake.waitForCall(t)
 }
 
 func TestChannelHandlerFull_SendMessage_EmptyBody(t *testing.T) {
@@ -2182,8 +2144,9 @@ func TestChannelHandler_Join_NotPublic(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	// Self-joining a private channel is refused, not malformed: 403 (was 400).
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "can only self-join public channels") {
+		t.Errorf("status = %d, want %d; body = %s", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
 }
 
@@ -2197,8 +2160,9 @@ func TestChannelHandler_Leave_NotMember(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	// Not a member: a refusal, 403 (it used to be a 400).
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 }
 
@@ -2296,22 +2260,28 @@ func TestChannelHandlerFull_ListFiles(t *testing.T) {
 	}
 }
 
+// One ErrAlreadyExists: the store's and the service's are the same sentinel,
+// so a duplicate from either layer is a 409.
 func TestIsDuplicateError(t *testing.T) {
-	if isDuplicateError(nil) {
-		t.Error("nil should not be a duplicate error")
+	isDuplicate := func(err error) bool {
+		m, ok := lookupError(err)
+		return ok && m.status == http.StatusConflict && m.code == "already_exists"
 	}
-	if !isDuplicateError(fmt.Errorf("create channel: %w", store.ErrAlreadyExists)) {
+	if store.ErrAlreadyExists != service.ErrAlreadyExists {
+		t.Fatal("the store and service ErrAlreadyExists must be one sentinel")
+	}
+	if !isDuplicate(fmt.Errorf("create channel: %w", store.ErrAlreadyExists)) {
 		t.Error("wrapped store.ErrAlreadyExists should be a duplicate error")
 	}
-	if !isDuplicateError(fmt.Errorf("channel: %w", service.ErrAlreadyExists)) {
+	if !isDuplicate(fmt.Errorf("channel: %w", service.ErrAlreadyExists)) {
 		t.Error("wrapped service.ErrAlreadyExists should be a duplicate error")
 	}
 	// The mapping is sentinel-based, not text-based: message wording alone
 	// must not turn an arbitrary error into a 409.
-	if isDuplicateError(errors.New("channel name already exists")) {
+	if isDuplicate(errors.New("channel name already exists")) {
 		t.Error("unwrapped text mentioning 'already exists' should not be a duplicate error")
 	}
-	if isDuplicateError(errors.New("some unrelated failure")) {
+	if isDuplicate(errors.New("some unrelated failure")) {
 		t.Error("unrelated error should not be a duplicate error")
 	}
 }

@@ -9,7 +9,6 @@ import { UnreadProvider } from '@/context/UnreadContext';
 import { PresenceProvider } from '@/context/PresenceContext';
 import { NotificationProvider } from '@/context/NotificationContext';
 import { TypingProvider } from '@/context/TypingContext';
-import { resetServerVersionForTests } from '@/hooks/useServerVersion';
 import type { User } from '@/types';
 import { fireKeyboard, keyboardSettled } from '@/test/keyboard';
 import { KeyboardInsetTracker } from '@/test/KeyboardInsetTracker';
@@ -159,7 +158,6 @@ function laidOut(selector: string): HTMLElement | null {
 let restoreFetch: () => void = () => undefined;
 
 beforeEach(() => {
-  resetServerVersionForTests();
   authState.user = me();
   restoreFetch = installFetch();
 });

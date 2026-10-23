@@ -48,6 +48,7 @@ func TestOIDCCallback_DesktopAuthSessionError(t *testing.T) {
 			url: "https://provider.example.com/authorize",
 			userInfo: &service.OIDCUserInfo{
 				Email: "desk@example.com", Name: "Desk User", Picture: "https://example.com/a.png",
+				Issuer: "https://idp.example.com", Subject: "sub-desk",
 			},
 		},
 		nil,
@@ -56,7 +57,7 @@ func TestOIDCCallback_DesktopAuthSessionError(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/oidc/callback?state=ok&code=c", nil)
 	req.AddCookie(&http.Cookie{Name: "oauth_state", Value: "ok"})
-	// localhost http → shouldUseDesktopAuthCode true → hits CreateDesktopAuthSession.
+	// Every allowlisted app target → CreateDesktopAuthSession.
 	req.AddCookie(&http.Cookie{Name: "oauth_redirect", Value: "http://localhost:1234/callback"})
 	rec := httptest.NewRecorder()
 	h.OIDCCallback(rec, req)
@@ -64,7 +65,8 @@ func TestOIDCCallback_DesktopAuthSessionError(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d, want 500; body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "desktop_auth_error") {
-		t.Fatalf("expected desktop_auth_error, got %s", rec.Body.String())
+	// A 500 is the generic one: the cache failure is logged, never sent.
+	if !strings.Contains(rec.Body.String(), "internal_error") {
+		t.Fatalf("expected internal_error, got %s", rec.Body.String())
 	}
 }

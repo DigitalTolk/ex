@@ -7,11 +7,14 @@ export const queryKeys = {
   user: (userId: string) => ['user', userId] as const,
   usersBatch: (sortedIDs?: readonly string[]) =>
     sortedIDs === undefined ? (['users-batch'] as const) : (['users-batch', sortedIDs] as const),
-  searchUsers: (query: string) => ['searchUsers', query] as const,
+  searchUsers: (query?: string) =>
+    query === undefined ? (['searchUsers'] as const) : (['searchUsers', query] as const),
   allUsers: () => ['allUsers'] as const,
 
   // Workspace
   workspaceSettings: () => ['workspace-settings'] as const,
+  // The deployed server build (hooks/useServerVersion).
+  serverVersion: () => ['server-version'] as const,
   runnerTokens: () => ['runner-tokens'] as const,
   emojis: () => ['emojis'] as const,
   frequentEmojis: () => ['emojis', 'frequent'] as const,
@@ -80,6 +83,31 @@ export const queryKeys = {
   // projects() so one invalidation refreshes the list and every open detail.
   projects: () => ['projects'] as const,
   project: (key: string) => ['projects', key] as const,
+
+  // Members directory; query "" lists everyone. No argument = every query.
+  usersDirectory: (query?: string) =>
+    query === undefined ? (['users-directory'] as const) : (['users-directory', query] as const),
+
+  // Agents, their subscriptions/watchers, skills and per-user overrides.
+  // parentWatchers() without arguments matches every parent's watchers.
+  agents: () => ['agents'] as const,
+  agentSubscriptions: (slug: string) => ['agent-subs', slug] as const,
+  parentWatchers: (parent?: { type: string; id: string }) =>
+    parent === undefined
+      ? (['parent-watchers'] as const)
+      : (['parent-watchers', parent.type, parent.id] as const),
+  skills: () => ['skills'] as const,
+  agentOverrides: (slug: string) => ['agent-overrides', slug] as const,
+
+  // Coding tasks (the task card under a task marker).
+  codingTask: (id: string) => ['coding-task', id] as const,
+
+  // The run activity drawer's timeline: one run, or every run in a thread.
+  // runTimeline() without arguments matches every open timeline.
+  runTimeline: (target?: { runID: string | null; parentID: string | null; rootID: string | null }) =>
+    target === undefined
+      ? (['run-timeline'] as const)
+      : (['run-timeline', target.runID, target.parentID, target.rootID] as const),
 };
 
 // parentPath builds the slash-separated key segment that thread,

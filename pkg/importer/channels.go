@@ -139,9 +139,10 @@ type MemberSpec struct {
 
 // AddChannelMembers adds members to a channel (both the channel-side and the
 // user-side rows). Existing memberships are left untouched; no system message
-// is posted. New members start caught up on the channel's current messages.
+// is posted. New members start caught up on the channel's current messages,
+// and are alerted by the channel's next message like any other member.
 // Returns how many memberships were added.
-func (im *Importer) AddChannelMembers(ctx context.Context, channelID string, members []MemberSpec) (int, error) {
+func (im *Importer) AddChannelMembers(ctx context.Context, channelID string, members []MemberSpec) (added int, err error) {
 	ch, err := im.channels.GetChannel(ctx, channelID)
 	if err != nil {
 		return 0, fmt.Errorf("importer: get channel: %w", err)
@@ -154,7 +155,8 @@ func (im *Importer) AddChannelMembers(ctx context.Context, channelID string, mem
 	if err != nil {
 		return 0, err
 	}
-	added := 0
+	// Even a failed add may have committed: move the audience on either way.
+	defer func() { err = errors.Join(err, im.audienceChanged(ctx, ch.ID)) }()
 	for _, m := range members {
 		role := m.Role
 		if role == 0 {
@@ -181,6 +183,19 @@ func (im *Importer) AddChannelMembers(ctx context.Context, channelID string, mem
 		added++
 	}
 	return added, nil
+}
+
+// audienceChanged moves the channel's notification audience on after its
+// memberships were written, so no running ex instance alerts from a member
+// list cached before the write. No-op without Audiences.
+func (im *Importer) audienceChanged(ctx context.Context, channelID string) error {
+	if im.audiences == nil {
+		return nil
+	}
+	if err := im.audiences.ChannelAudiencesChanged(ctx, channelID); err != nil {
+		return fmt.Errorf("importer: move notification audience of channel %s: %w", channelID, err)
+	}
+	return nil
 }
 
 // displayNames resolves user IDs to display names (unknown IDs map to "").

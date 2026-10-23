@@ -1,0 +1,12 @@
+{
+  "kind": "reminder",
+  "title": "Reminder",
+  "body": "ship it",
+  "deepLink": "/conversation/01J0000000000000000000CV01?thread=01J0000000000000000000MSG3",
+  "parentID": "01J0000000000000000000CV01",
+  "parentType": "conversation",
+  "messageID": "01J0000000000000000000MSG4",
+  "alertID": "reminder:01J0000000000000000000RM01",
+  "parentMessageID": "01J0000000000000000000MSG3",
+  "createdAt": "2026-05-01T12:00:00Z"
+}

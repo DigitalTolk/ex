@@ -3,58 +3,48 @@ package search
 import (
 	"context"
 	"errors"
-	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/opensearch-project/opensearch-go/v4/opensearchtransport"
 )
 
-// badURLClient builds a client whose baseURL contains an invalid control
-// character, so every http.NewRequestWithContext fails at URL-parse time —
-// exercising the request-construction error branch of each method.
-func badURLClient() *Client {
-	return &Client{
-		baseURL: "http://bad\x7fhost",
-		http:    http.DefaultClient,
+// fakeAWSConfig swaps the SDK config loader for one that honours the
+// options the client passes (the region) and returns the given credentials,
+// so signing tests are hermetic (no env-var lookup, no IMDS calls).
+func fakeAWSConfig(t *testing.T, creds aws.CredentialsProvider) {
+	t.Helper()
+	orig := loadAWSConfig
+	t.Cleanup(func() { loadAWSConfig = orig })
+	loadAWSConfig = func(_ context.Context, optFns ...func(*awsconfig.LoadOptions) error) (aws.Config, error) {
+		var o awsconfig.LoadOptions
+		for _, fn := range optFns {
+			_ = fn(&o)
+		}
+		return aws.Config{Region: o.Region, Credentials: creds}, nil
 	}
 }
 
-func TestClient_NewRequestErrors(t *testing.T) {
-	c := badURLClient()
-	ctx := context.Background()
+func staticCreds() aws.CredentialsProvider {
+	return credentials.NewStaticCredentialsProvider("AKIATESTACCESS", "secretkeydonotuse", "")
+}
 
-	if _, err := c.indexExists(ctx, "idx"); err == nil {
-		t.Error("indexExists: expected request-build error")
-	}
-	if _, err := c.GetDoc(ctx, "idx", "id"); err == nil {
-		t.Error("GetDoc: expected request-build error")
-	}
-	if err := c.DeleteDoc(ctx, "idx", "id"); err == nil {
-		t.Error("DeleteDoc: expected request-build error")
-	}
-	if err := c.IndexDoc(ctx, "idx", "id", map[string]any{"x": 1}); err == nil {
-		t.Error("IndexDoc(do): expected request-build error")
-	}
-	if _, err := c.Search(ctx, "idx", map[string]any{}); err == nil {
-		t.Error("Search: expected request-build error")
-	}
-	if err := c.Bulk(ctx, "idx", []BulkEntry{{ID: "1", Doc: map[string]any{"x": 1}}}); err == nil {
-		t.Error("Bulk: expected request-build error")
-	}
-	if _, err := c.ClusterHealth(ctx); err == nil {
-		t.Error("ClusterHealth(do): expected request-build error")
-	}
-	if err := c.deleteIndex(ctx, "idx"); err == nil {
-		t.Error("deleteIndex: expected request-build error")
-	}
-	if _, _, err := c.IndexSchemaVersion(ctx, "idx"); err == nil {
-		t.Error("IndexSchemaVersion: expected request-build error")
-	}
+// headerRecorder is an httptest cluster that answers every request with an
+// empty JSON object and remembers the last request's Authorization header.
+func headerRecorder(t *testing.T) (*httptest.Server, *string) {
+	t.Helper()
+	var authz string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authz = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &authz
 }
 
 // NewClientFromConfig is the single constructor the server and the
@@ -64,18 +54,19 @@ func TestNewClientFromConfig(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("plain when no region", func(t *testing.T) {
-		c, err := NewClientFromConfig(ctx, ClientConfig{URL: "http://opensearch:9200/"})
+		srv, authz := headerRecorder(t)
+		c, err := NewClientFromConfig(ctx, ClientConfig{URL: srv.URL + "/"})
 		if err != nil {
 			t.Fatalf("NewClientFromConfig: %v", err)
 		}
 		if c == nil {
 			t.Fatal("expected a client for a configured URL")
 		}
-		if c.baseURL != "http://opensearch:9200" {
-			t.Errorf("baseURL = %q, want trailing slash trimmed", c.baseURL)
+		if _, err := c.ClusterHealth(ctx); err != nil {
+			t.Fatalf("ClusterHealth: %v", err)
 		}
-		if c.http.Transport != nil {
-			t.Error("plain client must not install a signing transport")
+		if *authz != "" {
+			t.Errorf("Authorization = %q; a plain client must not sign requests", *authz)
 		}
 	})
 
@@ -87,23 +78,19 @@ func TestNewClientFromConfig(t *testing.T) {
 	})
 
 	t.Run("sigv4 when region set", func(t *testing.T) {
-		orig := loadAWSConfig
-		t.Cleanup(func() { loadAWSConfig = orig })
-		loadAWSConfig = func(context.Context, ...func(*awsconfig.LoadOptions) error) (aws.Config, error) {
-			return aws.Config{Credentials: staticCreds{}}, nil
-		}
+		fakeAWSConfig(t, staticCreds())
+		srv, authz := headerRecorder(t)
 		c, err := NewClientFromConfig(ctx, ClientConfig{
-			URL: "https://es.example.test", AWSRegion: "eu-west-1", AWSService: "aoss",
+			URL: srv.URL, AWSRegion: "eu-west-1", AWSService: "aoss",
 		})
 		if err != nil {
 			t.Fatalf("NewClientFromConfig: %v", err)
 		}
-		tr, ok := c.http.Transport.(*sigV4Transport)
-		if !ok {
-			t.Fatalf("transport = %T, want *sigV4Transport", c.http.Transport)
+		if _, err := c.ClusterHealth(ctx); err != nil {
+			t.Fatalf("ClusterHealth: %v", err)
 		}
-		if tr.region != "eu-west-1" || tr.service != "aoss" {
-			t.Errorf("transport = %s/%s, want eu-west-1/aoss", tr.region, tr.service)
+		if !strings.Contains(*authz, "/eu-west-1/aoss/aws4_request") {
+			t.Errorf("Authorization = %q, want a eu-west-1/aoss SigV4 scope", *authz)
 		}
 	})
 
@@ -117,28 +104,35 @@ func TestNewClientFromConfig(t *testing.T) {
 			t.Fatal("expected config-load error")
 		}
 	})
+
+	t.Run("malformed URL is an error", func(t *testing.T) {
+		if _, err := NewClientFromConfig(ctx, ClientConfig{URL: "http://bad\x7fhost"}); err == nil {
+			t.Fatal("expected a URL parse error")
+		}
+	})
 }
 
-// failingSigner errors on SignHTTP — the real v4 signer cannot, so the
-// sign-error guard in RoundTrip is only reachable through this seam.
-type failingSigner struct{}
-
-func (failingSigner) SignHTTP(context.Context, aws.Credentials, *http.Request, string, string, string, time.Time, ...func(*v4.SignerOptions)) error {
-	return errors.New("sign boom")
-}
-
-func TestSigV4Transport_SignError(t *testing.T) {
-	tr := &sigV4Transport{
-		inner:   http.DefaultTransport,
-		signer:  failingSigner{},
-		creds:   staticCreds{},
-		region:  "us-east-1",
-		service: "es",
+// NewClient has no error return: a malformed URL disables search (nil
+// client, logged) rather than handing back a client that can't work.
+func TestNewClient_MalformedURLDisablesSearch(t *testing.T) {
+	if c := NewClient("http://bad\x7fhost"); c != nil {
+		t.Fatalf("NewClient = %v, want nil for a malformed URL", c)
 	}
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://example.test/_search", strings.NewReader(`{"q":1}`))
-	_, err := tr.RoundTrip(req)
-	if err == nil || !strings.Contains(err.Error(), "sigv4 sign") {
-		t.Fatalf("RoundTrip error = %v, want wrapped sign error", err)
+}
+
+// The transport constructor's error contract is honoured even though the
+// configuration built here cannot trip it.
+func TestNewClient_TransportBuildError(t *testing.T) {
+	orig := newTransport
+	t.Cleanup(func() { newTransport = orig })
+	newTransport = func(opensearchtransport.Config) (*opensearchtransport.Client, error) {
+		return nil, errors.New("transport boom")
+	}
+	if c := NewClient("http://example.test"); c != nil {
+		t.Fatalf("NewClient = %v, want nil when the transport can't be built", c)
+	}
+	if _, err := NewClientFromConfig(context.Background(), ClientConfig{URL: "http://example.test"}); err == nil || !strings.Contains(err.Error(), "transport boom") {
+		t.Fatalf("NewClientFromConfig error = %v, want the transport error", err)
 	}
 }
 
@@ -152,6 +146,34 @@ func TestNewAWSClient_ConfigLoadError(t *testing.T) {
 	}
 	if _, err := NewAWSClient(context.Background(), "https://example.test", AWSSigning{Region: "us-east-1"}); err == nil {
 		t.Fatal("expected config-load error")
+	}
+}
+
+// failingCreds always errors on Retrieve.
+type failingCreds struct{}
+
+func (failingCreds) Retrieve(context.Context) (aws.Credentials, error) {
+	return aws.Credentials{}, errors.New("no creds")
+}
+
+// A request that cannot be signed is never sent unsigned: it fails.
+func TestNewAWSClient_SigningFailureFailsTheRequest(t *testing.T) {
+	fakeAWSConfig(t, failingCreds{})
+	sent := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		sent = true
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c, err := NewAWSClient(context.Background(), srv.URL, AWSSigning{Region: "us-east-1"})
+	if err != nil {
+		t.Fatalf("NewAWSClient: %v", err)
+	}
+	if _, err := c.ClusterHealth(context.Background()); err == nil {
+		t.Fatal("expected a signing error")
+	}
+	if sent {
+		t.Error("an unsigned request reached the cluster")
 	}
 }
 
@@ -170,64 +192,30 @@ func TestClient_MarshalErrors(t *testing.T) {
 		t.Error("Search: expected marshal error")
 	}
 	// Bulk encodes each entry's Doc; an unmarshalable Doc fails the
-	// per-doc encode branch.
+	// per-doc encode branch before anything is sent.
 	if err := c.Bulk(ctx, "idx", []BulkEntry{{ID: "1", Doc: unmarshalable()}}); err == nil {
 		t.Error("Bulk: expected doc-encode error")
 	}
 }
 
 // Bulk with a valid request against a closed port fails at the transport
-// Do call (not at request-build or encode), covering that error branch.
+// (after its retries), not at encode — the request-level failure arm.
 func TestClient_BulkDoError(t *testing.T) {
+	noRetryDelay(t)
 	c := NewClient("http://127.0.0.1:1")
 	if err := c.Bulk(context.Background(), "idx", []BulkEntry{{ID: "1", Doc: map[string]any{"x": 1}}}); err == nil {
-		t.Error("Bulk: expected transport Do error")
+		t.Error("Bulk: expected transport error")
 	}
 }
 
-// errReadCloser fails on Read so a request body cannot be drained — used
-// to drive the hashAndResetBody read-error path inside RoundTrip.
-type errReadCloser struct{}
-
-func (errReadCloser) Read([]byte) (int, error) { return 0, errors.New("read boom") }
-func (errReadCloser) Close() error             { return nil }
-
-func TestSigV4Transport_HashBodyError(t *testing.T) {
-	tr := &sigV4Transport{
-		inner:   http.DefaultTransport,
-		signer:  v4.NewSigner(),
-		creds:   staticCreds{},
-		region:  "us-east-1",
-		service: "es",
+// The HTTP transport keeps enough idle connections per host for concurrent
+// search traffic against the one cluster endpoint.
+func TestNewHTTPTransport_Tuned(t *testing.T) {
+	tr := newHTTPTransport()
+	if tr.MaxIdleConnsPerHost != 64 || tr.MaxIdleConns < tr.MaxIdleConnsPerHost {
+		t.Fatalf("idle conns = %d per host / %d total, want 64 per host", tr.MaxIdleConnsPerHost, tr.MaxIdleConns)
 	}
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://example.test/_search", nil)
-	req.Body = errReadCloser{}
-	if _, err := tr.RoundTrip(req); err == nil {
-		t.Fatal("expected hash-body read error")
-	}
-}
-
-// hashAndResetBody with a nil body returns the constant empty hash and
-// leaves GetBody set on the request; an empty-string body reader covers
-// the non-nil read + reset + GetBody path (line setting req.GetBody).
-func TestHashAndResetBody_Reset(t *testing.T) {
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://example.test/x", strings.NewReader("payload"))
-	hash, err := hashAndResetBody(req)
-	if err != nil {
-		t.Fatalf("hashAndResetBody: %v", err)
-	}
-	if hash == emptyPayloadHash {
-		t.Error("expected a content hash for a non-empty body")
-	}
-	if req.GetBody == nil {
-		t.Fatal("expected GetBody to be reseated")
-	}
-	rc, err := req.GetBody()
-	if err != nil {
-		t.Fatalf("GetBody: %v", err)
-	}
-	b, _ := io.ReadAll(rc)
-	if string(b) != "payload" {
-		t.Errorf("reseated body = %q, want %q", b, "payload")
+	if tr.Proxy == nil || tr.DialContext == nil || tr.TLSHandshakeTimeout == 0 {
+		t.Fatalf("transport lost the DefaultTransport essentials: %+v", tr)
 	}
 }

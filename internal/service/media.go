@@ -34,37 +34,50 @@ type mediaRecord struct {
 	Filename    string `json:"filename"`
 	ContentType string `json:"contentType"`
 	Size        int64  `json:"size"`
+	// Scoped: the token alone opens nothing; a request must also carry a
+	// grant for AttachmentID (see MediaGrant), checked on every load.
+	Scoped       bool   `json:"scoped,omitempty"`
+	AttachmentID string `json:"attachmentID,omitempty"`
 }
 
 const mediaURLTTL = 30 * 24 * time.Hour
 
 func StableMediaURL(ctx context.Context, c MediaURLCache, namespace, id, s3Key, filename, contentType string, size int64) (string, error) {
-	if c == nil {
-		return "", errors.New("media cache not configured")
-	}
-	recordKey := "media:" + namespace + ":" + id
-	var rec mediaRecord
-	if err := c.Get(ctx, recordKey, &rec); err == nil && rec.Token != "" {
-		return mediaPath(rec.Token, rec.Filename), nil
-	}
-	token, err := randomMediaToken()
-	if err != nil {
-		return "", err
-	}
-	rec = mediaRecord{
-		Token:       token,
+	rec, err := stableMediaRecord(ctx, c, namespace, id, mediaRecord{
 		S3Key:       s3Key,
 		Filename:    filename,
 		ContentType: contentType,
 		Size:        size,
-	}
-	if err := c.Set(ctx, "media:token:"+token, rec, mediaURLTTL); err != nil {
+	})
+	if err != nil {
 		return "", err
 	}
-	if err := c.Set(ctx, recordKey, rec, mediaURLTTL); err != nil {
-		return "", err
+	return mediaPath(rec.Token, rec.Filename), nil
+}
+
+// stableMediaRecord returns the record behind namespace/id's stable media
+// URL, minting one (a fresh token for want) when there is none.
+func stableMediaRecord(ctx context.Context, c MediaURLCache, namespace, id string, want mediaRecord) (mediaRecord, error) {
+	if c == nil {
+		return mediaRecord{}, errors.New("media cache not configured")
 	}
-	return mediaPath(token, filename), nil
+	recordKey := "media:" + namespace + ":" + id
+	var rec mediaRecord
+	if err := c.Get(ctx, recordKey, &rec); err == nil && rec.Token != "" {
+		return rec, nil
+	}
+	token, err := randomMediaToken()
+	if err != nil {
+		return mediaRecord{}, err
+	}
+	want.Token = token
+	if err := c.Set(ctx, "media:token:"+token, want, mediaURLTTL); err != nil {
+		return mediaRecord{}, err
+	}
+	if err := c.Set(ctx, recordKey, want, mediaURLTTL); err != nil {
+		return mediaRecord{}, err
+	}
+	return want, nil
 }
 
 func mediaPath(token, filename string) string {
@@ -91,8 +104,15 @@ type MediaObject struct {
 }
 
 // OpenStableMedia opens the object behind a media token — all of it, or the
-// one byte range in byteRange (an HTTP Range value).
+// one byte range in byteRange (an HTTP Range value). A scoped token opens
+// nothing here: only AttachmentService.OpenMedia can check its grant.
 func OpenStableMedia(ctx context.Context, c MediaURLCache, objects MediaObjectStore, token, byteRange string) (*MediaObject, error) {
+	return openStableMedia(ctx, c, objects, token, byteRange, nil)
+}
+
+// openStableMedia is OpenStableMedia with authorize deciding whether a scoped
+// record may be opened (nil: never).
+func openStableMedia(ctx context.Context, c MediaURLCache, objects MediaObjectStore, token, byteRange string, authorize func(mediaRecord) error) (*MediaObject, error) {
 	if c == nil || objects == nil {
 		return nil, store.ErrNotFound
 	}
@@ -102,6 +122,14 @@ func OpenStableMedia(ctx context.Context, c MediaURLCache, objects MediaObjectSt
 			return nil, store.ErrNotFound
 		}
 		return nil, fmt.Errorf("media: token: %w", err)
+	}
+	if rec.Scoped {
+		if authorize == nil {
+			return nil, store.ErrNotFound
+		}
+		if err := authorize(rec); err != nil {
+			return nil, err
+		}
 	}
 	body, contentType, size, contentRange, lastModified, err := objects.OpenObjectRange(ctx, rec.S3Key, byteRange)
 	if err != nil {

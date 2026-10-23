@@ -23,7 +23,7 @@ func NewEmojiHandler(s *service.EmojiService) *EmojiHandler {
 func (h *EmojiHandler) List(w http.ResponseWriter, r *http.Request) {
 	emojis, err := h.emojiSvc.List(r.Context())
 	if err != nil {
-		writeInternalError(w, r, "list_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	if emojis == nil {
@@ -51,11 +51,7 @@ func (h *EmojiHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	emoji, err := h.emojiSvc.Create(r.Context(), userID, body.Name, body.ImageKey, body.GettingWorkDone)
 	if err != nil {
-		if isDuplicateError(err) {
-			writeError(w, http.StatusConflict, "conflict", err.Error())
-			return
-		}
-		writeError(w, http.StatusBadRequest, "create_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, emoji)
@@ -77,7 +73,7 @@ func (h *EmojiHandler) ListFrequent(w http.ResponseWriter, r *http.Request) {
 	}
 	emojis, err := h.emojiSvc.FrequentEmojis(r.Context(), userID, limit)
 	if err != nil {
-		writeInternalError(w, r, "list_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, emojis)
@@ -99,7 +95,7 @@ func (h *EmojiHandler) RecordFrequent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.emojiSvc.RecordEmojiUse(r.Context(), userID, body.Emoji); err != nil {
-		writeError(w, http.StatusBadRequest, "record_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -118,7 +114,7 @@ func (h *EmojiHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.emojiSvc.Delete(r.Context(), userID, name); err != nil {
-		writeError(w, http.StatusForbidden, "delete_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

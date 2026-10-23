@@ -52,11 +52,19 @@ type typingGate struct {
 	// otherwise relay them as fast as a client can send — an amplification
 	// lever. One frame per typingMinInterval is plenty for a UI indicator.
 	lastTyping time.Time
+	// lastTimeZone throttles timezone.update frames the same way: each one
+	// costs a user read (and a write when the zone changed), and the client
+	// only sends one when its zone actually changes.
+	lastTimeZone time.Time
 }
 
 // typingMinInterval is the per-connection floor between relayed typing
 // frames. A var so tests can exercise the throttle without sleeping.
 var typingMinInterval = 300 * time.Millisecond
+
+// timeZoneMinInterval is the per-connection floor between honored
+// timezone.update frames.
+const timeZoneMinInterval = 30 * time.Second
 
 type typingVerdict struct {
 	member  bool
@@ -213,8 +221,7 @@ func (h *WSHandler) Drain(timeout time.Duration) bool {
 }
 
 // Connect upgrades the HTTP connection to a WebSocket for the authenticated
-// user. Authentication is handled via the "token" query parameter by the auth
-// middleware.
+// user. Authentication is the one-time ?ticket= redeemed by UpgradeAuth.
 func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 	if userID == "" {
@@ -238,7 +245,7 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		OriginPatterns:     h.originPatterns,
 	})
 	if err != nil {
-		slog.Error("ws: accept", "error", err, "userID", userID)
+		slog.ErrorContext(r.Context(), "ws: accept", "error", err, "userID", userID)
 		return
 	}
 	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
@@ -248,7 +255,7 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	client := h.broker.RegisterClient(userID)
 	defer func() {
 		if dropped := client.DropCount(); dropped > 0 {
-			slog.Warn("ws: events dropped", "userID", userID, "dropped", dropped)
+			slog.WarnContext(r.Context(), "ws: events dropped", "userID", userID, "dropped", dropped)
 		}
 		h.broker.UnregisterClient(userID, client)
 		if h.presenceSvc != nil {
@@ -311,7 +318,7 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 
 	cr := <-chanCh
 	if cr.err != nil {
-		slog.Error("ws: list channels", "error", cr.err, "userID", userID)
+		slog.ErrorContext(r.Context(), "ws: list channels", "error", cr.err, "userID", userID)
 	} else {
 		channels = append(channels, cr.channels...)
 		presenceTopics = append(presenceTopics, cr.channels...)
@@ -319,7 +326,7 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 
 	cvr := <-convCh
 	if cvr.err != nil {
-		slog.Error("ws: list conversations", "error", cvr.err, "userID", userID)
+		slog.ErrorContext(r.Context(), "ws: list conversations", "error", cvr.err, "userID", userID)
 	} else {
 		channels = append(channels, cvr.channels...)
 		presenceTopics = append(presenceTopics, cvr.channels...)
@@ -423,6 +430,9 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case <-client.Done():
+			// The broker closed this client: shutdown, a full buffer, or the
+			// user opened more sockets than the per-user cap (oldest goes).
+			// The tab reconnects and replays from its cursor.
 			return
 		case data := <-client.Events:
 			if err := wsConnWrite(ctx, conn, data); err != nil {
@@ -485,7 +495,7 @@ func writePing(ctx context.Context, conn *websocket.Conn) error {
 func (h *WSHandler) runReplay(ctx context.Context, conn *websocket.Conn, userID, since string) bool {
 	res, err := h.replayer.Replay(ctx, userID, since)
 	if err != nil {
-		slog.Error("ws: replay", "userID", userID, "error", err)
+		slog.ErrorContext(ctx, "ws: replay", "userID", userID, "error", err)
 		// Treat any replay failure as exhausted so the client falls
 		// back to refetch instead of believing it caught up.
 		return writeControlFrame(ctx, conn, events.EventReplayExhausted, map[string]string{"since": since})
@@ -521,7 +531,8 @@ func (h *WSHandler) handleInbound(ctx context.Context, userID string, raw []byte
 	case "typing":
 		h.publishTyping(ctx, userID, msg, gate)
 	case "timezone.update":
-		if h.userSvc != nil {
+		if h.userSvc != nil && time.Since(gate.lastTimeZone) >= timeZoneMinInterval {
+			gate.lastTimeZone = time.Now()
 			_, _ = h.userSvc.PatchTimeZoneIfChanged(ctx, userID, msg.TimeZone)
 		}
 	case "notification.ack":
@@ -531,7 +542,7 @@ func (h *WSHandler) handleInbound(ctx context.Context, userID string, raw []byte
 		// its alertID when set (reminders), else its messageID.
 		if h.notifAck != nil && msg.MessageID != "" {
 			if err := h.notifAck.MarkNotificationAcked(ctx, userID, msg.MessageID); err != nil {
-				slog.Warn("notification ack record failed", "userID", userID, "messageID", msg.MessageID, "error", err)
+				slog.WarnContext(ctx, "notification ack record failed", "userID", userID, "messageID", msg.MessageID, "error", err)
 			}
 		}
 	}

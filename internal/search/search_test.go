@@ -137,6 +137,28 @@ func TestService_Channels_EmptyAllowedStillMatchesPublic(t *testing.T) {
 	}
 }
 
+// Regression: a nil allowed set is NOT a licence to search private channels.
+// Access resolution once handed back nil for a user with no memberships, and
+// the old "nil means unscoped" contract turned that into every private channel.
+// Only an explicit Unscoped query skips the visibility filter.
+func TestService_Channels_NilAllowedFailsClosedToPublic(t *testing.T) {
+	r := &stubRunner{}
+	svc := &Service{r: r}
+	if _, err := svc.Channels(context.Background(), ChannelQuery{Q: "general", Limit: 10}); err != nil {
+		t.Fatal(err)
+	}
+	filter := r.called.body.(map[string]any)["query"].(map[string]any)["bool"].(map[string]any)["filter"].([]any)
+	wantFilter := []any{map[string]any{
+		"bool": map[string]any{
+			"should":               []any{map[string]any{"term": map[string]any{"type": "public"}}},
+			"minimum_should_match": 1,
+		},
+	}}
+	if !reflect.DeepEqual(filter, wantFilter) {
+		t.Errorf("filter = %#v, want public-only should clause for a nil allowed set", filter)
+	}
+}
+
 func TestService_Channels_EmptyQueryShortCircuits(t *testing.T) {
 	r := &stubRunner{}
 	svc := &Service{r: r}
@@ -618,7 +640,7 @@ func TestService_Users_WildcardRoutesToSimpleQueryString(t *testing.T) {
 func TestService_Channels_WildcardRoutesToSimpleQueryString(t *testing.T) {
 	r := &stubRunner{}
 	svc := &Service{r: r}
-	if _, err := svc.Channels(context.Background(), ChannelQuery{Q: "gen*", Limit: 10}); err != nil {
+	if _, err := svc.Channels(context.Background(), ChannelQuery{Q: "gen*", Unscoped: true, Limit: 10}); err != nil {
 		t.Fatal(err)
 	}
 	body := r.called.body.(map[string]any)

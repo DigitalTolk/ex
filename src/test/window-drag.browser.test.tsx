@@ -13,7 +13,6 @@ import { UnreadProvider } from '@/context/UnreadContext';
 import { PresenceProvider } from '@/context/PresenceContext';
 import { NotificationProvider } from '@/context/NotificationContext';
 import { TypingProvider } from '@/context/TypingContext';
-import { resetServerVersionForTests } from '@/hooks/useServerVersion';
 import type { User } from '@/types';
 
 const authState = vi.hoisted(() => ({ user: null as User | null }));
@@ -133,7 +132,6 @@ function dragsAt(x: number, y: number): boolean {
 let restore = () => undefined as void;
 let shellCss: HTMLStyleElement | null = null;
 beforeEach(() => {
-  resetServerVersionForTests();
   authState.user = ME;
   restore = installFetch();
   shellCss = document.createElement('style');

@@ -241,7 +241,8 @@ func TestWebhookHandlerErrorPaths(t *testing.T) {
 		t.Fatalf("Update missing webhook status = %d", res.Code)
 	}
 
-	// Update store failure surfaces as a 400.
+	// Update store failure is the server's: a generic 500 (it used to be a
+	// 400 carrying the store's text).
 	updateErrStore := &handlerWebhookStore{
 		items:     map[string]*model.IncomingWebhook{"wh": {ID: "wh", Title: "CI", ChannelID: general.ID}},
 		updateErr: assertErr("update failed"),
@@ -252,8 +253,8 @@ func TestWebhookHandlerErrorPaths(t *testing.T) {
 	req = req.WithContext(middleware.ContextWithClaims(ctx, &model.TokenClaims{UserID: "admin-1", SystemRole: model.SystemRoleAdmin}))
 	res = httptest.NewRecorder()
 	hUpd.Update(res, req)
-	if res.Code != http.StatusBadRequest {
-		t.Fatalf("Update store error status = %d", res.Code)
+	if res.Code != http.StatusInternalServerError || strings.Contains(res.Body.String(), "update failed") {
+		t.Fatalf("Update store error status = %d body = %s", res.Code, res.Body.String())
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/hooks/wh", strings.NewReader(`{`))
@@ -295,7 +296,8 @@ func TestWebhookHandlerErrorPaths(t *testing.T) {
 	req = req.WithContext(middleware.ContextWithClaims(ctx, &model.TokenClaims{UserID: "admin-1", SystemRole: model.SystemRoleAdmin}))
 	res = httptest.NewRecorder()
 	h.Create(res, req)
-	if res.Code != http.StatusBadRequest {
+	// Store failures are the server's: generic 500s (they used to be 400s).
+	if res.Code != http.StatusInternalServerError {
 		t.Fatalf("Create service error status = %d", res.Code)
 	}
 
@@ -304,7 +306,7 @@ func TestWebhookHandlerErrorPaths(t *testing.T) {
 	req = req.WithContext(middleware.ContextWithClaims(ctx, &model.TokenClaims{UserID: "admin-1", SystemRole: model.SystemRoleAdmin}))
 	res = httptest.NewRecorder()
 	h.Delete(res, req)
-	if res.Code != http.StatusBadRequest {
+	if res.Code != http.StatusInternalServerError {
 		t.Fatalf("Delete service error status = %d", res.Code)
 	}
 }
@@ -547,8 +549,8 @@ func TestWebhookHandlerExecuteGenericErrorIs400(t *testing.T) {
 	h := NewWebhookHandler(service.NewIncomingWebhookService(webhooks, channels, msgSvc, nil, ""))
 
 	// An oversized body passes ingress limits (< 1 MiB) but fails message
-	// validation — neither a DM-target nor a not-found error, so it must
-	// land in the generic webhook_error 400 arm.
+	// validation: a 400 that names the rule (it used to be the opaque
+	// webhook_error).
 	payload := `{"text":"` + strings.Repeat("a", 100_001) + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/wh", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
@@ -558,8 +560,8 @@ func TestWebhookHandlerExecuteGenericErrorIs400(t *testing.T) {
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("Execute oversized status = %d, want 400", res.Code)
 	}
-	if !strings.Contains(res.Body.String(), "webhook_error") {
-		t.Fatalf("body = %s, want webhook_error code", res.Body.String())
+	if !strings.Contains(res.Body.String(), "body exceeds maximum length") {
+		t.Fatalf("body = %s, want the validation message", res.Body.String())
 	}
 }
 
@@ -577,10 +579,24 @@ func (handlerWebhookDMs) GetOrCreateDM(_ context.Context, a, b string) (*model.C
 	return &model.Conversation{ID: a + "__" + b, ParticipantIDs: []string{a, b}}, nil
 }
 
+// handlerWebhookUsers is a one-user directory: bob, found by email.
 type handlerWebhookUsers struct{}
 
-func (handlerWebhookUsers) List(context.Context, int, string) ([]*model.User, string, error) {
-	return []*model.User{{ID: "bob-1", DisplayName: "Bob", Email: "bob@example.com"}}, "", nil
+var handlerWebhookBob = &model.User{ID: "bob-1", DisplayName: "Bob", Email: "bob@example.com"}
+
+func (handlerWebhookUsers) GetByID(context.Context, string) (*model.User, error) {
+	return nil, store.ErrNotFound
+}
+
+func (handlerWebhookUsers) GetByEmail(_ context.Context, email string) (*model.User, error) {
+	if email == handlerWebhookBob.Email {
+		return handlerWebhookBob, nil
+	}
+	return nil, store.ErrNotFound
+}
+
+func (handlerWebhookUsers) Search(context.Context, string, int) ([]*model.User, error) {
+	return []*model.User{handlerWebhookBob}, nil
 }
 
 // A transient store failure must answer 503, not 400. This is an

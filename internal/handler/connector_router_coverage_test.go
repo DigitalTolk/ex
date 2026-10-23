@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/agents"
 	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
@@ -36,6 +37,7 @@ type hconnCovStore struct {
 	errPutInstall     error
 	errListInstalls   error
 	errDeleteInstall  error
+	errGetInstall     error
 }
 
 func hconnCovNewStore() *hconnCovStore {
@@ -91,6 +93,9 @@ func (s *hconnCovStore) PutInstall(_ context.Context, in *model.ConnectorInstall
 }
 
 func (s *hconnCovStore) GetInstall(_ context.Context, userID, slug string) (*model.ConnectorInstall, error) {
+	if s.errGetInstall != nil {
+		return nil, s.errGetInstall
+	}
 	if in, ok := s.installs[hconnCovKey(userID, slug)]; ok {
 		return in, nil
 	}
@@ -131,6 +136,9 @@ type hconnCovRuns struct {
 	raised   []string
 	raiseErr error
 	granted  bool
+	// legacy, when set, is the not-granted approval ApprovalGranted hands back
+	// (an agent-raised card with no purpose).
+	legacy *model.Approval
 }
 
 func (r *hconnCovRuns) GetLiveRun(_ context.Context, _ string) (*model.Run, error) {
@@ -148,7 +156,7 @@ func (r *hconnCovRuns) AttachConnector(_ context.Context, _, slug, _ string) err
 	return nil
 }
 
-func (r *hconnCovRuns) RequestApproval(_ context.Context, _ *model.Run, req service.ApprovalRequest) (*model.Approval, error) {
+func (r *hconnCovRuns) RequestApproval(_ context.Context, _ *model.Run, req agents.ApprovalRequest) (*model.Approval, error) {
 	if r.raiseErr != nil {
 		return nil, r.raiseErr
 	}
@@ -160,7 +168,7 @@ func (r *hconnCovRuns) RequestApproval(_ context.Context, _ *model.Run, req serv
 
 func (r *hconnCovRuns) ApprovalGranted(_ context.Context, _, _, _ string) (*model.Approval, bool) {
 	if r.approvalErr != nil || !r.granted {
-		return nil, false
+		return r.legacy, false
 	}
 	return r.approval, true
 }
@@ -185,7 +193,7 @@ func (p *hconnCovPresenceStore) OnlinePresenceUserIDs(context.Context) ([]string
 // --- helpers -----------------------------------------------------------------
 
 func hconnCovHandler(st *hconnCovStore, runs *hconnCovRuns) *ConnectorHandler {
-	return NewConnectorHandler(service.NewConnectorService(st), runs)
+	return NewConnectorHandler(agents.NewConnectorService(st), runs)
 }
 
 // hconnCovReq builds a request with claims injected and the {slug} path value
@@ -308,7 +316,7 @@ func TestHconnCovConnectorSync(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer ts.Close()
-		svc := service.NewConnectorService(hconnCovNewStore())
+		svc := agents.NewConnectorService(hconnCovNewStore())
 		svc.SetProvider(ts.URL, "key")
 		h := NewConnectorHandler(svc, nil)
 		rec := httptest.NewRecorder()
@@ -324,7 +332,7 @@ func TestHconnCovConnectorSync(t *testing.T) {
 			_, _ = w.Write([]byte(`{"connectors":[{"slug":"a","revision":""}]}`))
 		}))
 		defer ts.Close()
-		svc := service.NewConnectorService(hconnCovNewStore())
+		svc := agents.NewConnectorService(hconnCovNewStore())
 		svc.SetProvider(ts.URL, "key")
 		h := NewConnectorHandler(svc, nil)
 		rec := httptest.NewRecorder()
@@ -643,7 +651,7 @@ func TestHconnCovConnectorUse(t *testing.T) {
 	})
 
 	t.Run("closed run is 409", func(t *testing.T) {
-		h := hconnCovHandler(hconnCovNewStore(), &hconnCovRuns{runErr: errors.New("gone")})
+		h := hconnCovHandler(hconnCovNewStore(), &hconnCovRuns{runErr: agents.ErrRunClosed})
 		rec := httptest.NewRecorder()
 		h.UseConnector(rec, hconnCovReq(http.MethodPost, "/api/v1/agent/run/use-connector", `{"connector":"s1"}`, hconnCovRunClaims(), ""))
 		if rec.Code != http.StatusConflict {
@@ -656,6 +664,19 @@ func TestHconnCovConnectorUse(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.UseConnector(rec, hconnCovReq(http.MethodPost, "/api/v1/agent/run/use-connector", `{"connector":"s1"}`, hconnCovRunClaims(), ""))
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "denied") {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
+	// A store that cannot answer is not "the invoker has not installed it":
+	// telling the agent so made it give up on a connector that was there.
+	t.Run("policy lookup failure is a 500, not a denial", func(t *testing.T) {
+		st := hconnCovNewStore()
+		st.errGetInstall = errors.New("dynamo down")
+		h := hconnCovHandler(st, liveRun())
+		rec := httptest.NewRecorder()
+		h.UseConnector(rec, hconnCovReq(http.MethodPost, "/api/v1/agent/run/use-connector", `{"connector":"s1"}`, hconnCovRunClaims(), ""))
+		if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "denied") || strings.Contains(rec.Body.String(), "dynamo") {
 			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 		}
 	})

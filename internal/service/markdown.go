@@ -1,6 +1,7 @@
 package service
 
 import (
+	"net/url"
 	"strings"
 
 	"github.com/DigitalTolk/ex/internal/model"
@@ -234,12 +235,13 @@ func emitNode(node ast.Node, src []byte, parent *HastNode) {
 		parent.Children = append(parent.Children, el)
 	case *ast.Link:
 		dest := string(n.Destination)
-		if !isSafeURL(dest) {
-			// Disallowed scheme (javascript:, data:, vbscript: …) — drop the
-			// anchor and keep its visible text, mirroring how raw HTML and
-			// non-giphy images are handled. The frontend renders this HAST
-			// href verbatim, so neutralising it here is the authoritative XSS
-			// guard for every client (and incoming webhooks).
+		if !isSafeURL(dest) || isAppAuthLink(dest) {
+			// Disallowed scheme (javascript:, data:, vbscript: …) or a link
+			// onto the app's own /auth/ routes — drop the anchor and keep its
+			// visible text, mirroring how raw HTML and non-giphy images are
+			// handled. The frontend renders this HAST href verbatim, so
+			// neutralising it here is the authoritative guard for every
+			// client (and incoming webhooks).
 			emitChildren(n, src, parent)
 			return
 		}
@@ -368,6 +370,51 @@ func isSafeURL(raw string) bool {
 	}
 	// No ':' encountered at all → relative reference → safe.
 	return true
+}
+
+// authLinkBase is the stand-in origin a relative link is resolved against.
+// The root is the worst case: every ".." clamps there, so a reference that
+// reaches /auth/ from any page of the app also reaches it from "/".
+var authLinkBase = &url.URL{Scheme: "https", Host: "app.invalid", Path: "/"}
+
+// isAppAuthLink reports whether a link destination is a RELATIVE reference
+// that lands on the app's own /auth/ routes (desktop-login completion, the
+// OIDC callback …). One click on such a link in a message replays whatever
+// it carries — a login code, a callback — as the viewer, so it must never
+// render as an anchor. Absolute and scheme-relative URLs name their host and
+// are left to isSafeURL. Mirrors src/lib/url-safety.ts.
+//
+// The destination is read the way a browser's URL parser reads it: ASCII tab
+// and newline vanish anywhere, surrounding C0 controls and spaces are
+// trimmed, and a backslash is a slash. Dot segments and percent-encoding are
+// resolved before the case-insensitive path check. A destination Go cannot
+// parse (a stray "%zz") is treated as blocked — it renders as text, never as
+// a live link the browser might still follow.
+func isAppAuthLink(raw string) bool {
+	s := strings.Map(func(r rune) rune {
+		if r == '\t' || r == '\n' || r == '\r' {
+			return -1
+		}
+		if r == '\\' {
+			return '/'
+		}
+		return r
+	}, raw)
+	s = strings.TrimFunc(s, func(r rune) bool { return r <= 0x20 })
+	if s == "" {
+		return false
+	}
+	ref, err := url.Parse(s)
+	if err != nil {
+		return true
+	}
+	if ref.Scheme != "" || ref.Host != "" {
+		return false
+	}
+	// Resolve the DECODED path: a browser treats "%2e%2e" as "..", which
+	// url.ResolveReference (working on the escaped form) would not.
+	p := strings.ToLower(authLinkBase.ResolveReference(&url.URL{Path: ref.Path}).Path)
+	return p == "/auth" || strings.HasPrefix(p, "/auth/")
 }
 
 func textNode(value string) *HastNode {

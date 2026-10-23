@@ -25,7 +25,7 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useAuth } from '@/context/AuthContext';
-import { usePresence } from '@/context/PresenceContext';
+import { useIsOnline } from '@/stores/presence';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { isAdmin, isGuest } from '@/lib/roles';
 import { getCapacitorPlugin, isNativePlatform } from '@/lib/capacitor';
@@ -73,7 +73,6 @@ interface AccountMenuProps {
 
 export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
   const { user, logout, setAuth } = useAuth();
-  const { online } = usePresence();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -92,7 +91,9 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
     .toUpperCase()
     .slice(0, 2) ?? '??';
 
-  const userOnline = user?.id ? online.has(user.id) : false;
+  // Only the signed-in user's own flag: subscribing to the whole online
+  // set re-rendered the menu for every presence change in the workspace.
+  const userOnline = useIsOnline(user?.id);
 
   const nativePlugin = getCapacitorPlugin('ServerNavigation');
   const serverNavigation = isNativePlatform() && nativePlugin?.resetServer ? nativePlugin : null;

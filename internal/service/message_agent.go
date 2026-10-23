@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/safe"
@@ -65,9 +66,11 @@ var ErrReservedEmoji = errors.New("message: emoji reserved for agent state")
 
 // AgentDispatcher receives every persisted message so it can start runs for
 // mentioned agents. Implemented by the orchestrator; wired via
-// SetAgentDispatcher like the other optional seams.
+// SetAgentDispatcher like the other optional seams. conv is the conversation
+// the send already loaded for its access check (nil for a channel post), so
+// the dispatcher never reads it again.
 type AgentDispatcher interface {
-	OnMessage(ctx context.Context, msg *model.Message, parentType string)
+	OnMessage(ctx context.Context, msg *model.Message, parentType string, conv *model.Conversation)
 }
 
 // RunLogPurger deletes the agent-run activity logs tied to a message when it
@@ -87,14 +90,14 @@ func (s *MessageService) SetAgentDispatcher(d AgentDispatcher) { s.agentDispatch
 // dispatchAgents hands the persisted message to the dispatcher off the send
 // path, mirroring notify(): agent runs are minutes-long and must never add
 // to the sender's request latency.
-func (s *MessageService) dispatchAgents(ctx context.Context, msg *model.Message, parentType string) {
+func (s *MessageService) dispatchAgents(ctx context.Context, msg *model.Message, parentType string, conv *model.Conversation) {
 	if s.agentDispatcher == nil || msg == nil || msg.System {
 		return
 	}
 	safe.Go(func() {
 		bg, cancel := detachedContext(ctx)
 		defer cancel()
-		s.agentDispatcher.OnMessage(bg, msg, parentType)
+		s.agentDispatcher.OnMessage(bg, msg, parentType, conv)
 	})
 }
 
@@ -177,7 +180,7 @@ func (s *MessageService) RewriteAgentMessage(ctx context.Context, agentID, paren
 		return nil, fmt.Errorf("message: get for rewrite: %w", err)
 	}
 	if msg.AuthorID != agentID || msg.AgentInvokerID == "" {
-		return nil, fmt.Errorf("message: rewrite is limited to this agent's own machine messages: %w", ErrForbidden)
+		return nil, apperr.Forbidden("message: rewrite is limited to this agent's own machine messages")
 	}
 	if msg.Deleted {
 		return nil, ErrThreadDeleted
@@ -191,7 +194,7 @@ func (s *MessageService) RewriteAgentMessage(ctx context.Context, agentID, paren
 	if err := s.messages.UpdateMessage(ctx, msg); err != nil {
 		return nil, fmt.Errorf("message: rewrite: %w", err)
 	}
-	s.attachRendered(msg)
+	s.attachRendered(ctx, msg)
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, msg)
 	return msg, nil
 }

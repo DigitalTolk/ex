@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import OIDCCallbackPage from './OIDCCallbackPage';
@@ -13,7 +13,6 @@ vi.mock('react-router-dom', async () => {
   return {
     ...actual,
     useNavigate: () => mockNavigate,
-    useSearchParams: () => [new URLSearchParams()],
   };
 });
 
@@ -28,18 +27,20 @@ vi.mock('@/context/AuthContext', () => ({
   }),
 }));
 
+const mockRefresh = vi.fn();
+const mockApiFetch = vi.fn();
 vi.mock('@/lib/api', () => ({
-  setAccessToken: vi.fn(),
-  apiFetch: vi.fn().mockResolvedValue({ id: 'u-1', displayName: 'Test', email: 't@t.com', systemRole: 'member', status: 'active' }),
+  refreshAccessToken: () => mockRefresh(),
+  apiFetch: (...args: unknown[]) => mockApiFetch(...args),
 }));
 
-const originalFetch = globalThis.fetch;
+const me = { id: 'u-1', displayName: 'Test', email: 't@t.com', systemRole: 'member', status: 'active' };
 
-function renderPage() {
+function renderPage(entry = '/oidc/callback') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[entry]}>
         <OIDCCallbackPage />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -49,51 +50,39 @@ function renderPage() {
 describe('OIDCCallbackPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: false,
-      json: () => Promise.resolve({}),
-    } as Response);
+    mockRefresh.mockResolvedValue(null);
+    mockApiFetch.mockResolvedValue(me);
   });
 
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-  });
-
-  it('shows "Completing sign in..." text', () => {
+  it('shows "Completing sign in..." text', async () => {
     renderPage();
     expect(screen.getByText('Completing sign in...')).toBeInTheDocument();
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalled());
   });
 
-  it('navigates to /login when no token is found and refresh fails', async () => {
+  it('navigates to /login when there is no session cookie', async () => {
     renderPage();
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith('/login', { replace: true });
     });
+    expect(mockSetAuth).not.toHaveBeenCalled();
   });
 
-  it('navigates home when token refresh succeeds', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ accessToken: 'tok-abc' }),
-    } as Response);
-
+  it('signs in from the refresh cookie and navigates home', async () => {
+    mockRefresh.mockResolvedValue('tok-abc');
     renderPage();
-
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true });
     });
+    expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/users/me');
+    expect(mockSetAuth).toHaveBeenCalledWith('tok-abc', me);
   });
 
   it('returns to the page that sent the visitor to sign in', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ accessToken: 'tok-abc' }),
-    } as Response);
+    mockRefresh.mockResolvedValue('tok-abc');
     rememberReturnTo('/runner/connect?port=43123');
-
     renderPage();
-
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith('/runner/connect?port=43123', { replace: true });
     });
   });

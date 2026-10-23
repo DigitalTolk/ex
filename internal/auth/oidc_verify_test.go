@@ -140,6 +140,42 @@ func TestOIDCProvider_Exchange_VerifiesValidToken(t *testing.T) {
 	if info.Email != "alice@example.com" || info.Name != "Alice Example" {
 		t.Errorf("claims = %+v, want alice@example.com / Alice Example", info)
 	}
+	// The stable identity rides along: the account is bound to it, not to
+	// the mutable email. No email_verified claim → nil (Entra omits it).
+	if info.Issuer != iss.issuer || info.Subject != "user-123" || info.EmailVerified != nil {
+		t.Errorf("identity = %q/%q verified=%v, want %q/user-123/nil", info.Issuer, info.Subject, info.EmailVerified, iss.issuer)
+	}
+}
+
+func TestOIDCProvider_Exchange_EmailVerifiedClaim(t *testing.T) {
+	for name, tc := range map[string]struct {
+		claim any
+		want  bool
+	}{
+		"bool true":    {true, true},
+		"bool false":   {false, false},
+		"string true":  {"true", true},
+		"string false": {"false", false},
+	} {
+		iss := newOIDCIssuer(t)
+		p := newProvider(t, iss)
+		iss.idToken = iss.mint(t, jwt.MapClaims{"email_verified": tc.claim}, nil)
+		info, err := p.Exchange(context.Background(), "code", "the-nonce")
+		if err != nil {
+			t.Fatalf("%s: Exchange: %v", name, err)
+		}
+		if info.EmailVerified == nil || *info.EmailVerified != tc.want {
+			t.Fatalf("%s: EmailVerified = %v, want %v", name, info.EmailVerified, tc.want)
+		}
+	}
+	for name, claim := range map[string]any{"garbage string": "yes please", "number": 1} {
+		iss := newOIDCIssuer(t)
+		p := newProvider(t, iss)
+		iss.idToken = iss.mint(t, jwt.MapClaims{"email_verified": claim}, nil)
+		if _, err := p.Exchange(context.Background(), "code", "the-nonce"); err == nil || !strings.Contains(err.Error(), "email_verified") {
+			t.Fatalf("%s: err = %v, want an email_verified refusal", name, err)
+		}
+	}
 }
 
 func TestOIDCProvider_Exchange_RejectsNonceMismatch(t *testing.T) {

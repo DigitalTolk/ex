@@ -9,7 +9,7 @@ import {
   parseServerVersion,
   parseMembersChanged,
   parseThreadUpdated,
-} from './ws-schemas';
+} from '@/test/ws-frames';
 
 describe('ws-schemas — parser branches', () => {
   it('parseMessage accepts a minimum-shape payload', () => {

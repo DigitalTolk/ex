@@ -129,7 +129,8 @@ check:
 		fi; \
 		node -e "const s=require('./$$summary').total; const bad=['statements','branches','functions','lines'].filter(m=>s[m].pct<100); for (const m of ['statements','branches','functions','lines']) console.log('frontend '+m+' coverage (merged): '+s[m].pct+'%'); if (bad.length) { console.error('frontend merged coverage below 100% for: '+bad.join(', ')); process.exit(1); }" 
 
-# Regenerate the TypeScript mirror of the Go wire types (internal/model).
+# Regenerate the TypeScript mirrors of the Go wire types (internal/model) and
+# event names (internal/events).
 types:
 	go tool tygo generate
 
@@ -150,15 +151,22 @@ check-claude-md:
 	node scripts/check-claude-md-rules.mjs .gitleaks-claude-md.toml "$$report" scripts/testdata/claude-md-gate/violations.md; \
 	status=$$?; rm -f "$$report"; exit $$status
 
-# Fail when src/types/generated.ts drifts from internal/model — regenerate
-# side-effect-free (restore the committed file on mismatch so a failed check
+# Fail when a tygo mirror drifts from its Go package (generated.ts from
+# internal/model, generated-events.ts from internal/events) — regenerate
+# side-effect-free (restore the committed files on mismatch so a failed check
 # leaves the tree untouched).
+GENERATED_TYPES := src/types/generated.ts src/types/generated-events.ts
 check-types-drift:
-	@cp src/types/generated.ts /tmp/ex-generated-types-check.ts; \
+	@backup=$$(mktemp -d); \
+	for f in $(GENERATED_TYPES); do cp "$$f" "$$backup/$$(basename $$f)"; done; \
 	go tool tygo generate; \
-	if ! cmp -s src/types/generated.ts /tmp/ex-generated-types-check.ts; then \
-		mv /tmp/ex-generated-types-check.ts src/types/generated.ts; \
-		echo "src/types/generated.ts is stale — run 'make types' and commit the result" >&2; \
-		exit 1; \
-	fi; \
-	rm -f /tmp/ex-generated-types-check.ts
+	stale=0; \
+	for f in $(GENERATED_TYPES); do \
+		if ! cmp -s "$$f" "$$backup/$$(basename $$f)"; then \
+			cp "$$backup/$$(basename $$f)" "$$f"; \
+			echo "$$f is stale — run 'make types' and commit the result" >&2; \
+			stale=1; \
+		fi; \
+	done; \
+	rm -rf "$$backup"; \
+	exit $$stale

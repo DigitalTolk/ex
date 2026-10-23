@@ -6,6 +6,7 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 
 	"github.com/DigitalTolk/ex/internal/model"
@@ -154,11 +155,6 @@ func bodyFor(parentType, parentName, authorName, body string) string {
 	return authorName + ": " + body
 }
 
-// previewBody clamps a message body to a sane length for a notification
-// preview and strips newlines so the OS-level popup renders on one line.
-// Mentions in their wire form `@[userID|DisplayName]` are flattened to
-// `@DisplayName` so the popup reads "Alice mentioned: hi @Bob" rather
-// than "hi @[U-2|Bob]".
 // notificationBody is the text used for a push/notification preview. It
 // prefers the message body, but for an attachments-only message (e.g. an
 // incoming webhook posting a rich attachment with no text) it falls back
@@ -218,10 +214,76 @@ func attachmentSummary(a model.MessageAttachment) string {
 	return strings.TrimSpace(a.AuthorName)
 }
 
-func previewBody(body string) string {
+// lookupMentionNames resolves, in ONE batched call, the current name of every
+// user and channel mentioned in texts — the texts one alert shows. No
+// resolver, or no mention syntax, costs no lookup; a failed lookup returns no
+// names, so every mention reads as typed rather than the alert failing.
+func lookupMentionNames(ctx context.Context, r MentionResolver, texts ...string) MentionNames {
+	if r == nil {
+		return MentionNames{}
+	}
+	userIDs, channelIDs := textMentionIDs(texts...)
+	if len(userIDs) == 0 && len(channelIDs) == 0 {
+		return MentionNames{}
+	}
+	names, err := r.ResolveMentions(ctx, userIDs, channelIDs)
+	if err != nil {
+		slog.Warn("alert text: resolve mention names failed; showing them as typed", "error", err)
+		return MentionNames{}
+	}
+	return names
+}
+
+// textMentionIDs lists the distinct user and channel IDs mentioned in the
+// texts' wire syntax, in the order they first appear.
+func textMentionIDs(texts ...string) (userIDs, channelIDs []string) {
+	seen := map[string]bool{}
+	add := func(list *[]string, key, id string) {
+		if id != "" && !seen[key+id] {
+			seen[key+id] = true
+			*list = append(*list, id)
+		}
+	}
+	for _, text := range texts {
+		for _, m := range userMentionPattern.FindAllStringSubmatch(text, -1) {
+			add(&userIDs, "u", strings.TrimSpace(m[1]))
+		}
+		for _, m := range channelMentionRE.FindAllStringSubmatch(text, -1) {
+			add(&channelIDs, "c", m[1])
+		}
+	}
+	return userIDs, channelIDs
+}
+
+// flattenMentions turns wire-form mentions into the plain text an alert
+// shows. Only the ID is trustworthy — "@[bobID|Alice]" notifies Bob — so a
+// mention reads as its ID's current name ("@Bob", "~ops"), and as the typed
+// text only for an ID names lacks (unknown, or the lookup failed).
+func flattenMentions(body string, names MentionNames) string {
+	body = userMentionPattern.ReplaceAllStringFunc(body, func(s string) string {
+		m := userMentionPattern.FindStringSubmatch(s)
+		if name, ok := names.Users[strings.TrimSpace(m[1])]; ok {
+			return "@" + name
+		}
+		return "@" + m[2]
+	})
+	return channelMentionRE.ReplaceAllStringFunc(body, func(s string) string {
+		m := channelMentionRE.FindStringSubmatch(s)
+		if slug, ok := names.Channels[m[1]]; ok {
+			return "~" + slug
+		}
+		return "~" + m[2]
+	})
+}
+
+// previewBody clamps an alert text to a sane length for a notification
+// preview and strips newlines so the OS-level popup renders on one line.
+// Mentions in their wire form `@[userID|typed]` are flattened by
+// flattenMentions, so the popup reads "hi @Bob" rather than "hi @[U-2|Bob]".
+
+func previewBody(body string, names MentionNames) string {
 	const max = 140
-	body = userMentionPattern.ReplaceAllString(body, "@$2")
-	body = channelMentionRE.ReplaceAllString(body, "~$2")
+	body = flattenMentions(body, names)
 	body = renderEmojiShortcodes(body)
 	body = strings.ReplaceAll(body, "\n", " ")
 	// Rune-aware clamp: byte-slicing would split a multi-byte emoji glyph into

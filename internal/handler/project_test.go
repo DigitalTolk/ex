@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DigitalTolk/ex/internal/agents"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
-	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -119,7 +119,7 @@ func projectHandlerFixture() (*ProjectHandler, *hProjectStore) {
 	atts := &hProjectAtts{byID: map[string]*model.Attachment{
 		"img": {ID: "img", CreatedBy: "u-alice", ContentType: "image/png", Size: 10, URL: "/m/img"},
 	}}
-	return NewProjectHandler(service.NewProjectService(st, atts)), st
+	return NewProjectHandler(agents.NewProjectService(st, atts)), st
 }
 
 func projectReq(t *testing.T, h http.HandlerFunc, method, body string, role model.SystemRole, path map[string]string) *httptest.ResponseRecorder {
@@ -246,7 +246,7 @@ func TestAgentAttachment_DownloadProjectScreen(t *testing.T) {
 		pst := newHProjectStore()
 		pst.projects["acme"] = &model.CodingProject{Key: "acme", Name: "Acme"}
 		pst.screens["sc1"] = &model.ProjectScreen{ID: "sc1", ProjectKey: "acme", AttachmentID: "shot"}
-		fx.orch.SetProjects(service.NewProjectService(pst, &hProjectAtts{}))
+		fx.orch.SetProjects(agents.NewProjectService(pst, &hProjectAtts{}))
 		fx.addRun(&model.Run{ProjectKey: projectKey})
 		signer.objects["attachments/shot"] = []byte("png-bytes")
 		st.byID["shot"] = &model.Attachment{ID: "shot", S3Key: "attachments/shot", CreatedBy: "someone-else",

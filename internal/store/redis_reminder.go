@@ -393,7 +393,7 @@ func (s *RedisReminderStore) ClaimDueReminders(ctx context.Context, limit int) (
 			// alert — log it loudly (per the notifications "must be loud"
 			// invariant) rather than dropping it silently. The dangling per-user
 			// index entry is swept on the owner's next list.
-			slog.Warn("reminder claimed but payload unreadable; alert lost", "reminderID", ids[i])
+			slog.WarnContext(ctx, "reminder claimed but payload unreadable; alert lost", "reminderID", ids[i])
 			continue
 		}
 		pipe.ZRem(ctx, reminderUserKey(r.UserID), ids[i])
@@ -406,7 +406,7 @@ func (s *RedisReminderStore) ClaimDueReminders(ctx context.Context, limit int) (
 		// regardless. A failure leaves a payload+index entry behind, but the
 		// past-due sweep in ListPendingReminders keeps it out of the pending list.
 		if _, err := pipe.Exec(ctx); err != nil {
-			slog.Warn("reminder post-claim cleanup failed; entries swept on next list", "error", err)
+			slog.WarnContext(ctx, "reminder post-claim cleanup failed; entries swept on next list", "error", err)
 		}
 	}
 	return claimed, nil

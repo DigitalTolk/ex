@@ -1,5 +1,4 @@
-import { useState, useEffect } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { Globe, MessageSquare, MoreVertical } from 'lucide-react';
@@ -20,7 +19,9 @@ import { useBrowseChannels, useJoinChannel, useUserChannels } from '@/hooks/useC
 import { useOpenDM } from '@/hooks/useConversations';
 import { useAuth } from '@/context/AuthContext';
 import { usePresence } from '@/context/PresenceContext';
-import { apiFetch } from '@/lib/api';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { useDirectoryUsers, useSetUserRole, useSetUserStatus } from '@/hooks/useDirectoryUsers';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { getInitials } from '@/lib/format';
 import { PresenceDot } from '@/components/PresenceDot';
 import { PasswordResetDialog } from '@/components/PasswordResetDialog';
@@ -179,70 +180,34 @@ interface MembersTabProps {
 
 function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
   const [query, setQuery] = useState('');
-  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const debouncedQuery = useDebouncedValue(query, 250);
   const [error, setError] = useState('');
   // The guest whose password reset dialog is open (null = closed).
   const [resetTarget, setResetTarget] = useState<User | null>(null);
+  // The account awaiting a deactivation confirm (null = closed).
+  const [deactivateTarget, setDeactivateTarget] = useState<User | null>(null);
   const { isOnline } = usePresence();
   const { openDM, isPending: openDMPending } = useOpenDM();
-  const qc = useQueryClient();
-
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedQuery(query), 250);
-    return () => clearTimeout(t);
-  }, [query]);
-
-  const usersQueryKey = ['users-directory', debouncedQuery] as const;
-  const { data: users = [], isLoading, error: fetchError } = useQuery({
-    queryKey: usersQueryKey,
-    queryFn: () =>
-      apiFetch<User[]>(
-        debouncedQuery.length >= 2
-          ? `/api/v1/users?q=${encodeURIComponent(debouncedQuery)}`
-          : '/api/v1/users',
-      ),
-  });
-
-  // The WS user.updated bridge invalidates this query so an avatar /
-  // display-name change anywhere in the app refreshes the directory.
-  useEffect(() => {
-    const onUpdate = () => qc.invalidateQueries({ queryKey: ['users-directory'] });
-    window.addEventListener('ex:user-updated', onUpdate);
-    return () => window.removeEventListener('ex:user-updated', onUpdate);
-  }, [qc]);
+  const { data: users = [], isLoading, error: fetchError } = useDirectoryUsers(debouncedQuery);
+  const setUserRole = useSetUserRole();
+  const setUserStatus = useSetUserStatus();
 
   const visibleError = error || (fetchError instanceof Error ? fetchError.message : fetchError ? 'Failed to load users' : '');
 
-  function patchUserCache(userId: string, patch: Partial<User>) {
-    qc.setQueriesData<User[]>({ queryKey: ['users-directory'] }, (prev) =>
-      prev?.map((u) => (u.id === userId ? { ...u, ...patch } : u)),
+  function changeRole(userId: string, role: User['systemRole']) {
+    setError('');
+    setUserRole.mutate(
+      { userId, role },
+      { onError: (err) => setError(err instanceof Error ? err.message : 'Failed to change role') },
     );
   }
 
-  async function changeRole(userId: string, newRole: 'admin' | 'member' | 'guest') {
+  function setStatus(userId: string, deactivated: boolean) {
     setError('');
-    try {
-      await apiFetch(`/api/v1/users/${userId}/role`, {
-        method: 'PATCH',
-        body: JSON.stringify({ role: newRole }),
-      });
-      patchUserCache(userId, { systemRole: newRole });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to change role');
-    }
-  }
-
-  async function setStatus(userId: string, deactivated: boolean) {
-    setError('');
-    try {
-      await apiFetch(`/api/v1/users/${userId}/status`, {
-        method: 'PATCH',
-        body: JSON.stringify({ deactivated }),
-      });
-      patchUserCache(userId, { status: deactivated ? 'deactivated' : 'active' });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update status');
-    }
+    setUserStatus.mutate(
+      { userId, deactivated },
+      { onError: (err) => setError(err instanceof Error ? err.message : 'Failed to update status') },
+    );
   }
 
   function handleMessage(userId: string) {
@@ -325,7 +290,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                   <p className="font-medium truncate">{u.displayName}</p>
                   <UserStatusIndicator status={u.userStatus} />
                   {isSelf && (
-                    <span className="text-[10px] text-muted-foreground">(you)</span>
+                    <span className="text-xs text-muted-foreground">(you)</span>
                   )}
                 </div>
                 <p className="truncate text-sm text-muted-foreground">
@@ -438,22 +403,20 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                             Reset password
                           </DropdownMenuItem>
                         )}
-                        {u.authProvider === 'guest' && (
-                          u.status === 'deactivated' ? (
-                            <DropdownMenuItem
-                              onClick={() => setStatus(u.id, false)}
-                              data-testid={`reactivate-${u.id}`}
-                            >
-                              Reactivate guest
-                            </DropdownMenuItem>
-                          ) : (
-                            <DropdownMenuItem
-                              onClick={() => setStatus(u.id, true)}
-                              data-testid={`deactivate-${u.id}`}
-                            >
-                              Disable guest
-                            </DropdownMenuItem>
-                          )
+                        {u.status === 'deactivated' ? (
+                          <DropdownMenuItem
+                            onClick={() => setStatus(u.id, false)}
+                            data-testid={`reactivate-${u.id}`}
+                          >
+                            Reactivate
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem
+                            onClick={() => setDeactivateTarget(u)}
+                            data-testid={`deactivate-${u.id}`}
+                          >
+                            Deactivate
+                          </DropdownMenuItem>
                         )}
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -469,6 +432,19 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
           dialog — see PasswordResetDialog's docblock. */}
       {resetTarget && (
         <PasswordResetDialog user={resetTarget} onClose={() => setResetTarget(null)} />
+      )}
+
+      {deactivateTarget && (
+        <ConfirmDialog
+          open
+          // Mounted only while open, so any change closes it.
+          onOpenChange={() => setDeactivateTarget(null)}
+          title={`Deactivate ${deactivateTarget.displayName}?`}
+          confirmLabel="Deactivate"
+          destructive
+          onConfirm={() => setStatus(deactivateTarget.id, true)}
+          testIDPrefix="deactivate-user"
+        />
       )}
     </>
   );

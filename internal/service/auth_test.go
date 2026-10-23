@@ -36,6 +36,8 @@ func setupAuthService() *authTestEnv {
 			Email:   "oidc@example.com",
 			Name:    "OIDC User",
 			Picture: "https://example.com/avatar.png",
+			Issuer:  "https://idp.example.com",
+			Subject: "sub-oidc",
 		},
 	}
 	cache := newMockCache()
@@ -402,7 +404,7 @@ func TestDesktopAuthSession_RoundTrip(t *testing.T) {
 	env := setupAuthService()
 	ctx := context.Background()
 
-	code, err := env.svc.CreateDesktopAuthSession(ctx, "access-token", "refresh-token")
+	code, err := env.svc.CreateDesktopAuthSession(ctx, "refresh-token")
 	if err != nil {
 		t.Fatalf("CreateDesktopAuthSession: %v", err)
 	}
@@ -414,7 +416,7 @@ func TestDesktopAuthSession_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConsumeDesktopAuthSession: %v", err)
 	}
-	if session.AccessToken != "access-token" || session.RefreshToken != "refresh-token" {
+	if session.RefreshToken != "refresh-token" {
 		t.Fatalf("session = %+v, want stored tokens", session)
 	}
 	if _, ok := env.cache.values[desktopAuthCodeKey(code)]; ok {
@@ -428,7 +430,7 @@ func TestDesktopAuthSession_Errors(t *testing.T) {
 	t.Run("missing cache on create", func(t *testing.T) {
 		env := setupAuthService()
 		env.svc.cache = nil
-		if _, err := env.svc.CreateDesktopAuthSession(ctx, "access", "refresh"); err == nil {
+		if _, err := env.svc.CreateDesktopAuthSession(ctx, "refresh"); err == nil {
 			t.Fatal("expected missing cache error")
 		}
 	})
@@ -444,7 +446,7 @@ func TestDesktopAuthSession_Errors(t *testing.T) {
 	t.Run("cache set error", func(t *testing.T) {
 		env := setupAuthService()
 		env.cache.setErr = errors.New("cache unavailable")
-		if _, err := env.svc.CreateDesktopAuthSession(ctx, "access", "refresh"); err == nil {
+		if _, err := env.svc.CreateDesktopAuthSession(ctx, "refresh"); err == nil {
 			t.Fatal("expected cache set error")
 		}
 	})
@@ -465,7 +467,7 @@ func TestDesktopAuthSession_Errors(t *testing.T) {
 
 	t.Run("invalid stored session", func(t *testing.T) {
 		env := setupAuthService()
-		env.cache.values[desktopAuthCodeKey("bad-session")] = DesktopAuthSession{AccessToken: "access"}
+		env.cache.values[desktopAuthCodeKey("bad-session")] = DesktopAuthSession{}
 		if _, err := env.svc.ConsumeDesktopAuthSession(ctx, "bad-session"); err == nil {
 			t.Fatal("expected invalid session error")
 		}
@@ -698,6 +700,7 @@ func TestHashToken(t *testing.T) {
 func TestCreateInvite(t *testing.T) {
 	env := setupAuthService()
 	ctx := context.Background()
+	seedAdmin(env, "inviter-1")
 	env.memberships.memberships["ch1#inviter-1"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "inviter-1"}
 	env.memberships.memberships["ch2#inviter-1"] = &model.ChannelMembership{ChannelID: "ch2", UserID: "inviter-1"}
 
@@ -722,6 +725,7 @@ func TestCreateInvite(t *testing.T) {
 func TestCreateInvite_RejectsInvalidEmailAndUnauthorizedChannel(t *testing.T) {
 	env := setupAuthService()
 	ctx := context.Background()
+	seedAdmin(env, "inviter-1")
 	if _, err := env.svc.CreateInvite(ctx, "inviter-1", "not an email", nil); err == nil {
 		t.Fatal("expected invalid email to be rejected")
 	}

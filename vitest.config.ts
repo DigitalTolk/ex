@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { playwright } from '@vitest/browser-playwright';
 import path from 'path';
+import { htmlPreviewTestServer } from './src/test/html-preview-server.ts';
 
 // ONE vitest config for every frontend suite, via test.projects:
 //   • jsdom            — src/**/*.test.{ts,tsx}
@@ -52,6 +53,10 @@ export default defineConfig({
       'react-pdf',
       '@uppy/core',
       '@uppy/aws-s3',
+      // Date formatting (@/lib/format) — loaded by most chat specs.
+      'date-fns',
+      // Toasts (@/lib/toast) — loaded by the after-each reset in every spec.
+      'sonner',
     ],
   },
   test: {
@@ -127,6 +132,9 @@ export default defineConfig({
       },
       {
         extends: true,
+        // The Go server's HTML-preview route and page CSP, from its golden
+        // (see the file's header).
+        plugins: [htmlPreviewTestServer(path.resolve(import.meta.dirname, 'src/test/wire-fixtures/html_preview_contract.json'))],
         test: {
           name: 'browser',
           include: ['src/**/*.browser.test.{ts,tsx}'],

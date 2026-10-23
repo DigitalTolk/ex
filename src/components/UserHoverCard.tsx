@@ -1,12 +1,12 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { MessageSquare } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import { useOpenDM } from '@/hooks/useConversations';
 import { getInitials } from '@/lib/format';
 import { PopoverPortal } from '@/components/PopoverPortal';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
@@ -15,7 +15,7 @@ import { presenceNotchStyle } from '@/lib/presence';
 import { useIsOnline } from '@/stores/presence';
 import { formatStatusUntil } from '@/lib/user-status';
 import { formatLastSeen, formatTimeZoneDelta, formatTimeZoneName, isValidTimeZone } from '@/lib/user-time';
-import type { Conversation, User, UserStatus } from '@/types';
+import type { User, UserStatus } from '@/types';
 
 interface UserHoverCardProps {
   userId: string;
@@ -147,18 +147,9 @@ function UserHoverCardContent({
   onClose: () => void;
   onStatus: (status: UserStatus | undefined) => void;
 }) {
-  const navigate = useNavigate();
-  const startDM = useMutation({
-    mutationFn: () =>
-      apiFetch<Conversation>('/api/v1/conversations', {
-        method: 'POST',
-        body: JSON.stringify({ type: 'dm', participantIDs: [userId] }),
-      }),
-    onSuccess: (conv) => {
-      navigate(`/conversation/${conv.id}`);
-      onClose();
-    },
-  });
+  // The shared "message this person" path: navigates on success, toasts on
+  // failure (this card's own copy used to fail silently).
+  const { openDM, isPending: openDMPending } = useOpenDM();
 
   // Non-admin viewers receive a limited payload (status, displayName,
   // avatarURL); admins get the full record including authProvider — both
@@ -279,8 +270,8 @@ function UserHoverCardContent({
               size="sm"
               variant="outline"
               className="mt-3 w-full"
-              onClick={() => startDM.mutate()}
-              disabled={startDM.isPending}
+              onClick={() => openDM(userId, { onSuccess: onClose })}
+              disabled={openDMPending}
             >
               <MessageSquare className="mr-2 h-3.5 w-3.5" />
               Direct message

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
@@ -73,13 +74,13 @@ func (s *DraftService) Upsert(ctx context.Context, userID, parentID, parentType,
 		opt(&cfg)
 	}
 	if strings.TrimSpace(userID) == "" {
-		return nil, errors.New("draft: user required")
+		return nil, apperr.Invalid("draft: user required")
 	}
 	parentID = strings.TrimSpace(parentID)
 	parentType = strings.TrimSpace(parentType)
 	parentMessageID = strings.TrimSpace(parentMessageID)
 	if parentID == "" {
-		return nil, errors.New("draft: parent required")
+		return nil, apperr.Invalid("draft: parent required")
 	}
 	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, err
@@ -167,7 +168,7 @@ func (s *DraftService) List(ctx context.Context, userID string) ([]*model.Messag
 func (s *DraftService) Delete(ctx context.Context, userID, id, basisGen string) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return errors.New("draft: id required")
+		return apperr.Invalid("draft: id required")
 	}
 	res, err := s.drafts.Delete(ctx, userID, id, basisGen)
 	if err != nil {
@@ -202,7 +203,7 @@ func (s *DraftService) MoveConversationDrafts(ctx context.Context, userIDs []str
 	for _, userID := range userIDs {
 		drafts, err := s.drafts.List(ctx, userID)
 		if err != nil {
-			slog.Warn("draft: list for conversion failed", "userID", userID, "conversationID", conversationID, "error", err)
+			slog.WarnContext(ctx, "draft: list for conversion failed", "userID", userID, "conversationID", conversationID, "error", err)
 			continue
 		}
 		for _, d := range drafts {
@@ -215,11 +216,11 @@ func (s *DraftService) MoveConversationDrafts(ctx context.Context, userIDs []str
 			moved.Gen = store.NewID()
 			res, err := s.drafts.Upsert(ctx, &moved, "")
 			if err != nil || !res.OK {
-				slog.Warn("draft: move to channel failed", "userID", userID, "draftID", d.ID, "error", err)
+				slog.WarnContext(ctx, "draft: move to channel failed", "userID", userID, "draftID", d.ID, "error", err)
 				continue
 			}
 			if err := s.drafts.DeleteUnconditional(ctx, userID, d.ID); err != nil {
-				slog.Warn("draft: remove moved draft failed", "userID", userID, "draftID", d.ID, "error", err)
+				slog.WarnContext(ctx, "draft: remove moved draft failed", "userID", userID, "draftID", d.ID, "error", err)
 			}
 			s.publishUpdated(ctx, userID, d.ID)
 			s.publishUpdated(ctx, userID, moved.ID)
@@ -233,7 +234,7 @@ func (s *DraftService) checkAccess(ctx context.Context, userID, parentID, parent
 		_, err := s.memberships.GetMembership(ctx, parentID, userID)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
-				return errors.New("draft: not a channel member")
+				return apperr.Forbidden("draft: not a channel member")
 			}
 			return fmt.Errorf("draft: check channel membership: %w", err)
 		}
@@ -247,9 +248,9 @@ func (s *DraftService) checkAccess(ctx context.Context, userID, parentID, parent
 				return nil
 			}
 		}
-		return errors.New("draft: not a conversation participant")
+		return apperr.Forbidden("draft: not a conversation participant")
 	default:
-		return fmt.Errorf("draft: unknown parent type %q", parentType)
+		return apperr.Invalid("draft: unknown parent type %q", parentType)
 	}
 	return nil
 }
@@ -260,7 +261,7 @@ func (s *DraftService) checkThreadRoot(ctx context.Context, parentID, parentMess
 		return fmt.Errorf("draft: get thread root: %w", err)
 	}
 	if msg.Deleted {
-		return errors.New("draft: thread root deleted")
+		return fmt.Errorf("draft: thread root deleted: %w", ErrThreadDeleted)
 	}
 	return nil
 }

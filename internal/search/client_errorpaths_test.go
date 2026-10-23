@@ -2,19 +2,27 @@ package search
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"time"
 )
 
+// noRetryDelay drops the retry backoff for one test, so driving the
+// transport's retry path (connection errors, 429/5xx) costs no wall-clock
+// time. Tests in this package never run in parallel.
+func noRetryDelay(t *testing.T) {
+	t.Helper()
+	orig := retryBackoff
+	t.Cleanup(func() { retryBackoff = orig })
+	retryBackoff = func(int) time.Duration { return 0 }
+}
+
 // unreachable points the client at a closed port so every request fails
-// at the transport layer, exercising each method's request-error branch.
+// at the transport layer (after the transport's retries), exercising each
+// method's request-error branch.
 func TestClient_Unreachable_AllMethods(t *testing.T) {
+	noRetryDelay(t)
 	c := NewClient("http://127.0.0.1:1")
 	ctx := context.Background()
 
@@ -35,6 +43,9 @@ func TestClient_Unreachable_AllMethods(t *testing.T) {
 	}
 	if _, err := c.ClusterHealth(ctx); err == nil {
 		t.Error("ClusterHealth: expected error")
+	}
+	if err := c.deleteIndex(ctx, "idx"); err == nil {
+		t.Error("deleteIndex: expected error")
 	}
 }
 
@@ -79,59 +90,7 @@ func TestClient_ServerError(t *testing.T) {
 	if _, err := c.Search(ctx, "idx", map[string]any{}); err == nil {
 		t.Error("Search: expected status error")
 	}
-}
-
-// failingCreds always errors on Retrieve.
-type failingCreds struct{}
-
-func (failingCreds) Retrieve(context.Context) (aws.Credentials, error) {
-	return aws.Credentials{}, errCredsBoom
-}
-
-var errCredsBoom = errors.New("no creds")
-
-// staticCreds returns fixed credentials so signing succeeds.
-type staticCreds struct{}
-
-func (staticCreds) Retrieve(context.Context) (aws.Credentials, error) {
-	return aws.Credentials{AccessKeyID: "AK", SecretAccessKey: "SK", Source: "test"}, nil
-}
-
-func TestSigV4Transport_RoundTrip(t *testing.T) {
-	ctx := context.Background()
-
-	// Credentials retrieval failure short-circuits before the inner call.
-	failT := &sigV4Transport{
-		inner:   http.DefaultTransport,
-		signer:  v4.NewSigner(),
-		creds:   failingCreds{},
-		region:  "us-east-1",
-		service: "es",
+	if err := c.deleteIndex(ctx, "idx"); err == nil {
+		t.Error("deleteIndex: expected status error")
 	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://example.test/_search", strings.NewReader(`{"q":1}`))
-	if _, err := failT.RoundTrip(req); err == nil {
-		t.Fatal("expected credentials retrieval error")
-	}
-
-	// Happy path: body is hashed/reset, request is signed, inner transport runs.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Amz-Content-Sha256") == "" {
-			t.Error("expected signed content hash header")
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	okT := &sigV4Transport{
-		inner:   http.DefaultTransport,
-		signer:  v4.NewSigner(),
-		creds:   staticCreds{},
-		region:  "us-east-1",
-		service: "es",
-	}
-	req2, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, strings.NewReader(`{"q":1}`))
-	resp, err := okT.RoundTrip(req2)
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	_ = resp.Body.Close()
 }

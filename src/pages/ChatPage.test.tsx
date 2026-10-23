@@ -3,6 +3,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ChatPage, { CHAT_LOADING_RETRY_MS } from './ChatPage';
+import { eventCallbacks, expectInvalidPayloadReported, type CapturedWSOptions } from '@/test/ws-frames';
 
 // Mock AppLayout to just render children
 vi.mock('@/components/layout/AppLayout', () => ({
@@ -68,7 +69,7 @@ const originalMatchMedia = window.matchMedia;
 
 vi.mock('@/hooks/useWebSocket', () => ({
   useWebSocket: (opts: unknown) => {
-    mockUseWebSocket(opts);
+    mockUseWebSocket(eventCallbacks(opts as CapturedWSOptions));
   },
 }));
 
@@ -313,7 +314,7 @@ describe('ChatPage', () => {
     mockBumpConversationUnread.mockClear();
     renderChatPage();
     const opts = mockUseWebSocket.mock.calls[0][0];
-    opts.onMessageNew({});
+    expectInvalidPayloadReported('message.new', () => opts.onMessageNew({}));
     expect(mockBumpChannelUnread).not.toHaveBeenCalled();
   });
 
@@ -321,17 +322,21 @@ describe('ChatPage', () => {
     renderChatPage();
     const opts = mockUseWebSocket.mock.calls[0][0];
     expect(typeof opts.onMessageEdited).toBe('function');
-    // Should not throw
-    opts.onMessageEdited({ parentID: 'ch-1' });
-    opts.onMessageEdited({});
+    // Neither is a message: both are reported, not handled.
+    expectInvalidPayloadReported(['message.edited', 'message.edited'], () => {
+      opts.onMessageEdited({ parentID: 'ch-1' });
+      opts.onMessageEdited({});
+    });
   });
 
   it('passes onMessageDeleted callback that handles parentID', () => {
     renderChatPage();
     const opts = mockUseWebSocket.mock.calls[0][0];
     expect(typeof opts.onMessageDeleted).toBe('function');
-    opts.onMessageDeleted({ parentID: 'ch-1' });
-    opts.onMessageDeleted({});
+    expectInvalidPayloadReported(['message.deleted', 'message.deleted'], () => {
+      opts.onMessageDeleted({ parentID: 'ch-1' });
+      opts.onMessageDeleted({});
+    });
   });
 
   it('passes onMembersChanged callback to WebSocket', () => {
@@ -343,9 +348,10 @@ describe('ChatPage', () => {
   it('onMembersChanged does nothing without channelID', () => {
     renderChatPage();
     const opts = mockUseWebSocket.mock.calls[0][0];
-    // Should not throw
-    opts.onMembersChanged({});
-    opts.onMembersChanged(undefined);
+    expectInvalidPayloadReported(['members.changed', 'members.changed'], () => {
+      opts.onMembersChanged({});
+      opts.onMembersChanged(undefined);
+    });
   });
 
   it('onMembersChanged handles valid channelID', () => {
@@ -377,9 +383,10 @@ describe('ChatPage', () => {
   it('onChannelArchived does nothing without channelID', () => {
     renderChatPage();
     const opts = mockUseWebSocket.mock.calls[0][0];
-    // Should not throw
-    opts.onChannelArchived({});
-    opts.onChannelArchived(undefined);
+    expectInvalidPayloadReported(['channel.archived', 'channel.archived'], () => {
+      opts.onChannelArchived({});
+      opts.onChannelArchived(undefined);
+    });
   });
 
   it('onChannelArchived handles valid channelID', () => {
@@ -398,9 +405,10 @@ describe('ChatPage', () => {
   it('onChannelUpdated does nothing without channelID', () => {
     renderChatPage();
     const opts = mockUseWebSocket.mock.calls[0][0];
-    // Should not throw
-    opts.onChannelUpdated({});
-    opts.onChannelUpdated(undefined);
+    expectInvalidPayloadReported(['channel.updated', 'channel.updated'], () => {
+      opts.onChannelUpdated({});
+      opts.onChannelUpdated(undefined);
+    });
   });
 
   it('onChannelUpdated handles valid channelID', () => {

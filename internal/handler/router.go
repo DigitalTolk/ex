@@ -76,30 +76,42 @@ func NewRouter(d *Deps) http.Handler {
 
 	// ------------------------------------------------------------------ Auth (public)
 	// Throttle the unauthenticated, brute-forceable endpoints per client IP
-	// (no-op when d.RateLimiter is nil). Credential/invite/refresh guessing and
-	// token churn are the threats; logout and the provider-driven OIDC handshake
-	// stay unthrottled.
-	authLimit := middleware.RateLimit(d.RateLimiter, 20, time.Minute)
+	// (no-op when d.RateLimiter is nil). Credential/invite guessing is the
+	// threat; logout and the provider-driven OIDC handshake stay unthrottled.
+	// Every limiter has its own name, so no two of them share a counter.
+	credentialLimit := func(name string) func(http.Handler) http.Handler {
+		return middleware.RateLimit(d.RateLimiter, middleware.PerMinute(name, 20, 20))
+	}
+	// Refresh is per IP too, but sized for an office behind one NAT whose
+	// every client refreshes in the same minute after a deploy: refresh
+	// tokens are 256-bit and unguessable, so the limit only caps load.
+	refreshLimit := middleware.RateLimit(d.RateLimiter, middleware.PerMinute("refresh", 300, 600))
 	// Per-user flood guard on write endpoints (message sends + reactions). 120/min
 	// is generous for a human but stops a single account from flooding channels
 	// and amplifying the notification fan-out. Runs after authMW so the user is
-	// known; a nil RateLimiter makes it a no-op.
-	writeLimit := middleware.RateLimitPerUser(d.RateLimiter, 120, time.Minute)
+	// known; run-scoped tokens are keyed by their run (an agent's tool calls
+	// don't spend the invoking human's budget). A nil RateLimiter makes it a
+	// no-op.
+	writeLimit := middleware.RateLimitPerUser(d.RateLimiter, middleware.PerMinute("write", 120, 120))
 	mux.HandleFunc("GET /auth/oidc/login", authH.OIDCLogin)
 	mux.HandleFunc("GET /auth/oidc/callback", authH.OIDCCallback)
 	mux.HandleFunc("GET /auth/desktop/complete", authH.DesktopComplete)
-	mux.Handle("POST /auth/token/refresh", middleware.WrapFunc(authH.RefreshToken, authLimit))
+	mux.Handle("POST /auth/token/refresh", middleware.WrapFunc(authH.RefreshToken, refreshLimit))
 	mux.HandleFunc("POST /auth/logout", authH.Logout)
-	mux.Handle("POST /auth/invite/accept", middleware.WrapFunc(authH.AcceptInvite, authLimit))
-	mux.Handle("POST /auth/login", middleware.WrapFunc(authH.GuestLogin, authLimit))
+	mux.Handle("POST /auth/invite/accept", middleware.WrapFunc(authH.AcceptInvite, credentialLimit("invite-accept")))
+	mux.Handle("POST /auth/login", middleware.WrapFunc(authH.GuestLogin, credentialLimit("login")))
 	// Password recovery for guest accounts. Rate-limited with the other
 	// credential endpoints: both are brute-forceable (address probing and
 	// reset-token guessing respectively).
-	mux.Handle("POST /auth/password/forgot", middleware.WrapFunc(authH.ForgotPassword, authLimit))
-	mux.Handle("POST /auth/password/reset", middleware.WrapFunc(authH.ResetPassword, authLimit))
+	mux.Handle("POST /auth/password/forgot", middleware.WrapFunc(authH.ForgotPassword, credentialLimit("password-forgot")))
+	mux.Handle("POST /auth/password/reset", middleware.WrapFunc(authH.ResetPassword, credentialLimit("password-reset")))
 
 	// ------------------------------------------------------------------ Auth (protected)
-	mux.Handle("POST /auth/invite", middleware.WrapFunc(authH.CreateInvite, authMW))
+	// Invites mint guest accounts, so only system admins issue them (the
+	// service re-checks the stored role), and per admin they are throttled.
+	mux.Handle("POST /auth/invite", middleware.WrapFunc(authH.CreateInvite, authMW,
+		middleware.RequireSystemRole(model.SystemRoleAdmin),
+		middleware.RateLimitPerUser(d.RateLimiter, middleware.PerMinute("invite", 30, 30))))
 
 	// ------------------------------------------------------------------ Users
 	mux.Handle("GET /api/v1/users/me", middleware.WrapFunc(userH.GetMe, authMW))
@@ -241,13 +253,20 @@ func NewRouter(d *Deps) http.Handler {
 
 	// ------------------------------------------------------------------ Attachments
 	if attachmentH != nil {
-		mux.HandleFunc("GET /api/v1/media/{token}/{filename...}", attachmentH.Media)
+		// Streams (downloads, video): exempt from the request budget below and
+		// bounded by write progress instead of a fixed timeout.
+		mux.Handle("GET /api/v1/media/{token}/{filename...}", middleware.WrapFunc(attachmentH.Media, middleware.ProgressDeadline(streamIdleTimeout)))
+		// The same media token, as the HTML-attachment preview's own document.
+		mux.Handle("GET "+htmlPreviewRoutePrefix+"{token}/{filename...}", middleware.WrapFunc(attachmentH.HTMLPreview, middleware.ProgressDeadline(streamIdleTimeout)))
 		mux.Handle("POST /api/v1/attachments/url", middleware.WrapFunc(attachmentH.CreateUploadURL, authMW))
 		mux.Handle("POST /api/v1/attachments/{id}/upload-request", middleware.WrapFunc(attachmentH.SignUploadRequest, authMW))
 		mux.Handle("POST /api/v1/attachments/{id}/process", middleware.WrapFunc(attachmentH.ProcessUpload, authMW))
 		mux.Handle("POST /api/v1/attachments/{id}/poster", middleware.WrapFunc(attachmentH.SetPoster, authMW, writeLimit))
-		mux.Handle("GET /api/v1/attachments", middleware.WrapFunc(attachmentH.List, authMW))
-		mux.Handle("GET /api/v1/attachments/{id}", middleware.WrapFunc(attachmentH.Get, authMW))
+		// Reads can make the server fetch and thumbnail a stored object, so
+		// they are limited per user too (generously: a channel's images).
+		attachmentReadLimit := middleware.RateLimitPerUser(d.RateLimiter, middleware.PerMinute("attachment-read", 600, 600))
+		mux.Handle("GET /api/v1/attachments", middleware.WrapFunc(attachmentH.List, authMW, attachmentReadLimit))
+		mux.Handle("GET /api/v1/attachments/{id}", middleware.WrapFunc(attachmentH.Get, authMW, attachmentReadLimit))
 		mux.Handle("DELETE /api/v1/attachments/{id}", middleware.WrapFunc(attachmentH.Delete, authMW))
 	}
 
@@ -297,7 +316,7 @@ func NewRouter(d *Deps) http.Handler {
 		// Public webhook ingress: throttle per IP to blunt ID-enumeration and
 		// spam amplification (a touch higher than the auth limit since busy
 		// integrations legitimately post more often).
-		mux.Handle("POST /hooks/{id}", middleware.WrapFunc(webhookH.Execute, middleware.RateLimit(d.RateLimiter, 60, time.Minute)))
+		mux.Handle("POST /hooks/{id}", middleware.WrapFunc(webhookH.Execute, middleware.RateLimit(d.RateLimiter, middleware.PerMinute("webhook", 60, 60))))
 	}
 
 	// ------------------------------------------------------------------ Agents
@@ -338,7 +357,7 @@ func NewRouter(d *Deps) http.Handler {
 		// throttled per IP like the other credential endpoints; a code is
 		// single-use and worthless without its PKCE verifier anyway.
 		mux.Handle("POST /api/v1/runner-tokens/grants", middleware.WrapFunc(d.RunnerToken.CreateGrant, authMW, writeLimit))
-		mux.Handle("POST /api/v1/runner-tokens/exchange", middleware.WrapFunc(d.RunnerToken.Exchange, authLimit))
+		mux.Handle("POST /api/v1/runner-tokens/exchange", middleware.WrapFunc(d.RunnerToken.Exchange, credentialLimit("runner-exchange")))
 		mux.Handle("GET /api/v1/runner-tokens", middleware.WrapFunc(d.RunnerToken.List, authMW))
 		mux.Handle("DELETE /api/v1/runner-tokens/{id}", middleware.WrapFunc(d.RunnerToken.Revoke, authMW, writeLimit))
 		mux.Handle("POST /api/v1/agent/runner/renew", middleware.WrapFunc(d.RunnerToken.Renew, runnerMW))
@@ -362,7 +381,12 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("DELETE /api/v1/connectors/{slug}/install", middleware.WrapFunc(d.Connector.Uninstall, authMW, writeLimit))
 	}
 	if d.AgentRunTool != nil {
+		// A run token acts with its invoker's access: it dies with the
+		// invoker's account, like a session does.
 		runMW := middleware.AuthScope(jwtMgr, model.TokenScopeRun)
+		if userH != nil && userH.userSvc != nil {
+			runMW = middleware.AuthScopeWithUserStatus(jwtMgr, model.TokenScopeRun, userH.userSvc)
+		}
 		if d.Connector != nil {
 			// Runner pulls the invoker's installed connectors (docs + tokens)
 			// at run start — run-token scoped, so a run only sees the
@@ -376,7 +400,7 @@ func NewRouter(d *Deps) http.Handler {
 		if d.AgentRunTool.attachments != nil {
 			// Files: the invoking message's attachments down to the runner,
 			// and the agent's own files up for its posts.
-			mux.Handle("GET /api/v1/agent/run/attachments/{id}", middleware.WrapFunc(d.AgentRunTool.DownloadAttachment, runMW))
+			mux.Handle("GET /api/v1/agent/run/attachments/{id}", middleware.WrapFunc(d.AgentRunTool.DownloadAttachment, runMW, middleware.ProgressDeadline(streamIdleTimeout)))
 			mux.Handle("POST /api/v1/agent/run/attachments", middleware.WrapFunc(d.AgentRunTool.UploadAttachment, runMW, writeLimit))
 		}
 		mux.Handle("GET /api/v1/agent/run/thread", middleware.WrapFunc(d.AgentRunTool.GetThread, runMW))
@@ -450,17 +474,20 @@ func NewRouter(d *Deps) http.Handler {
 	// ------------------------------------------------------------------ WebSocket
 	// Browsers can't set an Authorization header on a WebSocket, so the
 	// upgrade authenticates with a single-use ticket minted here (authed +
-	// per-user rate limited — which transitively caps upgrade attempts per
-	// account; the old unlimited upgrades let one account open unbounded
-	// connections). The upgrade route itself gets a per-IP limit to blunt
-	// ticket-guessing, and falls through to header auth for non-browser
-	// clients.
-	mux.Handle("POST /api/v1/ws/ticket", middleware.WrapFunc(wsH.MintTicket, authMW, middleware.RateLimitPerUser(d.RateLimiter, 30, time.Minute)))
-	mux.Handle("GET /api/v1/ws", middleware.WrapFunc(wsH.Connect, wsH.UpgradeAuth(authMW), middleware.RateLimit(d.RateLimiter, 60, time.Minute)))
+	// per-user rate limited on its OWN counter — sharing the write limiter's
+	// let a burst of sends lock a user out of reconnecting, and a user
+	// without a socket gets no desktop alerts). The upgrade route itself gets
+	// a per-IP limit that runs BEFORE authentication, so failed ticket
+	// guesses count, sized for a whole office reconnecting through one NAT
+	// after a deploy. Only a ticket authenticates the upgrade.
+	mux.Handle("POST /api/v1/ws/ticket", middleware.WrapFunc(wsH.MintTicket, authMW, middleware.RateLimitPerUser(d.RateLimiter, middleware.PerMinute("ws-ticket", 30, 30))))
+	mux.Handle("GET /api/v1/ws", middleware.WrapFunc(wsH.Connect, middleware.RateLimit(d.RateLimiter, middleware.PerMinute("ws-upgrade", 300, 600)), wsH.UpgradeAuth))
 
 	// ------------------------------------------------------------------ SPA
+	var scriptHashes []string
 	if frontendFS != nil {
 		spa := newSPAHandler(frontendFS, appVersion, d.SentryFrontend)
+		scriptHashes = spa.scriptHashes
 		mux.Handle("/", spa)
 	}
 
@@ -469,19 +496,32 @@ func NewRouter(d *Deps) http.Handler {
 		base = appVersionHeader(base, appVersion)
 	}
 
-	// Apply global middleware: SecurityHeaders, CORS, RequestID, Logging, and a
-	// 30s per-request timeout (skips the WebSocket upgrade) so a hung dependency
-	// can't pin a request goroutine forever.
+	// Apply global middleware: SecurityHeaders, CORS, RequestID, Logging,
+	// response compression (not for media streams or the WebSocket), and a 30s
+	// per-request timeout (skips the WebSocket upgrade and the streaming
+	// routes) so a hung dependency can't pin a request goroutine forever.
 	handler := middleware.Wrap(base,
-		middleware.SecurityHeadersWith(d.UploadConnectSrc...),
+		middleware.SecurityHeadersWithOptions(d.cspOptions(scriptHashes)),
 		middleware.CORS(allowOrigins...),
 		middleware.RequestID,
 		middleware.Logging(!d.DisableAccessLog),
-		middleware.RequestTimeout(30*time.Second),
+		middleware.Compress(mediaRoutePrefix),
+		middleware.RequestTimeout(30*time.Second, streamingRoutePrefixes...),
 	)
 
 	return handler
 }
+
+// Streaming routes: their bodies outlast any fixed request budget, so they
+// skip RequestTimeout and carry a ProgressDeadline instead — a client that
+// stops reading for streamIdleTimeout is cut off, one that keeps reading is
+// not.
+const (
+	mediaRoutePrefix  = "/api/v1/media/"
+	streamIdleTimeout = time.Minute
+)
+
+var streamingRoutePrefixes = []string{mediaRoutePrefix, htmlPreviewRoutePrefix, "/api/v1/agent/run/attachments/"}
 
 func appVersionHeader(next http.Handler, version string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -498,6 +538,8 @@ type spaHandler struct {
 	fs         http.FileSystem
 	fileServer http.Handler
 	indexHTML  []byte
+	// scriptHashes allow indexHTML's inline scripts in the page CSP.
+	scriptHashes []string
 }
 
 func newSPAHandler(frontendFS fs.FS, version string, sentry SentryFrontendConfig) *spaHandler {
@@ -537,6 +579,9 @@ func newSPAHandler(frontendFS fs.FS, version string, sentry SentryFrontendConfig
 			} else {
 				h.indexHTML = raw
 			}
+			// From the exact bytes served: a hash of anything else would
+			// block the page's own boot scripts.
+			h.scriptHashes = inlineScriptHashes(h.indexHTML)
 		}
 	}
 	return h

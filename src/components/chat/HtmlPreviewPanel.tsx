@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useReducer, useRef, useState, type ReactNode, type SyntheticEvent } from 'react';
+import { useEffect, useReducer, useRef, useState, type ReactNode, type SyntheticEvent } from 'react';
 import { Download, FileCode, Monitor, RotateCw, ShieldAlert, Smartphone, Tablet, X, type LucideIcon } from 'lucide-react';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
+import { htmlPreviewURL } from '@/lib/html-attachment';
 import {
-  buildPreviewDocument,
   frameGuard,
   HTML_PREVIEW_PING,
   HTML_PREVIEW_SANDBOX,
@@ -36,10 +36,6 @@ const VIEWPORTS: { key: Viewport; label: string; icon: LucideIcon }[] = [
 
 const FRAME_WIDTH: Record<Viewport, string> = { desktop: '100%', tablet: '768px', phone: '390px' };
 
-// Fetch outcome for one attempt. Keyed by attempt so a retry shows the
-// loading state again without a synchronous reset inside the effect.
-type FetchResult = { attempt: number; html: string | null };
-
 // The panel lives inside a message row's React tree (it portals to <body> in
 // the DOM only), so React events from it bubble into the row: a press here
 // would arm the row's long-press action sheet, or the files panel's swipe.
@@ -52,45 +48,16 @@ function keepInPanel(e: SyntheticEvent) {
 // Lazy-loaded: the chat bundle only carries the Preview button.
 export default function HtmlPreviewPanel({ attachment, onClose }: HtmlPreviewPanelProps) {
   const { url, downloadURL, filename } = attachment;
-  const [attempt, setAttempt] = useState(0);
-  const [result, setResult] = useState<FetchResult | null>(null);
+  const src = htmlPreviewURL(url);
   const [viewport, setViewport] = useState<Viewport>('desktop');
-  // Bumped to remount the frame from the same document (Reload).
+  // Bumped to remount the frame, which loads the document again (Reload).
   const [frameKey, setFrameKey] = useState(0);
   const [guard, dispatch] = useReducer(frameGuard, initialFrameGuard);
   const [nonce] = useState(newPreviewNonce);
   const frameRef = useRef<HTMLIFrameElement>(null);
 
-  useEffect(() => {
-    let live = true;
-    const controller = new AbortController();
-    // The media endpoint answers text/html with a forced download and a
-    // `sandbox` CSP, but neither applies to fetch(): the bytes come back as text.
-    fetch(url, { signal: controller.signal, credentials: 'same-origin' })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.text();
-      })
-      .then(
-        (html) => {
-          if (live) setResult({ attempt, html });
-        },
-        () => {
-          if (live) setResult({ attempt, html: null });
-        },
-      );
-    return () => {
-      live = false;
-      controller.abort();
-    };
-  }, [url, attempt]);
-
-  const current = result?.attempt === attempt ? result : null;
-  const html = current?.html ?? null;
-  const doc = useMemo(() => (html === null ? null : buildPreviewDocument(html, nonce)), [html, nonce]);
-
-  // The beacon in our srcdoc reports with the nonce; nothing else can. Listening
-  // from mount (not from the frame's) so an early `ready` is never missed.
+  // The beacon in our document reports with the nonce; nothing else can.
+  // Listening from mount (not from the frame's) so an early `ready` is never missed.
   useEffect(() => {
     function onMessage(e: MessageEvent) {
       if (e.source !== frameRef.current?.contentWindow) return;
@@ -127,15 +94,15 @@ export default function HtmlPreviewPanel({ attachment, onClose }: HtmlPreviewPan
   }
 
   let body: ReactNode;
-  if (!current) {
-    body = <StageMessage testId="html-preview-loading">Loading…</StageMessage>;
-  } else if (doc === null) {
+  if (src === null || guard.status === 'failed') {
     body = (
       <div role="alert" className="m-auto flex flex-col items-center gap-3 p-6 text-center" data-testid="html-preview-error">
         <p className="text-sm font-medium">Couldn't load this file</p>
-        <Button variant="outline" size="sm" onClick={() => setAttempt((a) => a + 1)} data-testid="html-preview-retry">
-          Try again
-        </Button>
+        {src !== null && (
+          <Button variant="outline" size="sm" onClick={reload} data-testid="html-preview-retry">
+            Try again
+          </Button>
+        )}
       </div>
     );
   } else if (guard.status === 'closed') {
@@ -156,10 +123,12 @@ export default function HtmlPreviewPanel({ attachment, onClose }: HtmlPreviewPan
         <iframe
           key={frameKey}
           ref={frameRef}
-          // Security attributes first; both are set before the element is
-          // inserted, so the srcdoc never runs with a wider sandbox.
+          // Every attribute is set before the element is inserted (which is
+          // when it starts loading), so the document never runs with a wider
+          // sandbox and always finds its nonce in window.name.
           sandbox={HTML_PREVIEW_SANDBOX}
-          srcDoc={doc}
+          name={nonce}
+          src={src}
           title={`Preview of ${filename}`}
           referrerPolicy="no-referrer"
           data-testid="html-preview-frame"
@@ -227,7 +196,7 @@ export default function HtmlPreviewPanel({ attachment, onClose }: HtmlPreviewPan
             size="icon-sm"
             aria-label="Reload preview"
             title="Reload preview"
-            disabled={!doc}
+            disabled={src === null}
             onClick={reload}
             data-testid="html-preview-reload"
           >

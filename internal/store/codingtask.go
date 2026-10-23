@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -43,6 +44,25 @@ type taskItem struct {
 func taskPK(id string) string                   { return "TASK#" + id }
 func taskChannelGSI1PK(channelID string) string { return "TASKCHAN#" + channelID }
 func taskGSI1SK(id string) string               { return "TASK#" + id }
+
+// The channel index splits live from finished tasks by sort-key prefix:
+// a non-terminal task keeps "TASK#<id>" (exactly the pre-split key, so
+// nothing about a live row changes), a terminal one moves to
+// "TASKDONE#<id>". The dispatcher's hot path then reads only live rows with
+// begins_with "TASK#" — "TASKDONE#" does not share that prefix. Rows written
+// before the split carry "TASK#" whatever their state; the active listing
+// re-keys any terminal one it meets, so each is read at most once more.
+const (
+	taskLiveSKPrefix = "TASK#"
+	taskDoneSKPrefix = "TASKDONE#"
+)
+
+func taskChannelGSI1SK(t *model.CodingTask) string {
+	if t.State.Terminal() {
+		return taskDoneSKPrefix + t.ID
+	}
+	return taskLiveSKPrefix + t.ID
+}
 func taskThreadGSI2PK(threadRootID string) string {
 	return "TASKTHREAD#" + threadRootID
 }
@@ -52,7 +72,7 @@ func (s *TaskStore) item(t *model.CodingTask) taskItem {
 		PK:         taskPK(t.ID),
 		SK:         metaSK(),
 		GSI1PK:     taskChannelGSI1PK(t.ChannelID),
-		GSI1SK:     taskGSI1SK(t.ID),
+		GSI1SK:     taskChannelGSI1SK(t),
 		CodingTask: *t,
 	}
 	if t.ThreadRootID != "" {
@@ -114,7 +134,7 @@ func (s *TaskStore) GetTask(ctx context.Context, id string) (*model.CodingTask, 
 		// A row from before projects/repos existed. Nothing writes these fields
 		// any more, so this line is the evidence the compatibility layer is
 		// still load-bearing; silence over a retention window means it can go.
-		slog.Warn("coding task: read a legacy single-repo row", "taskID", it.ID)
+		slog.WarnContext(ctx, "coding task: read a legacy single-repo row", "taskID", it.ID)
 	}
 	return &it.CodingTask, nil
 }
@@ -141,9 +161,62 @@ func (s *TaskStore) UpdateTask(ctx context.Context, t *model.CodingTask, expectS
 	return nil
 }
 
-// ListTasksByChannel returns every task in a project channel (any state).
+// ListTasksByChannel returns every task in a project channel (any state),
+// in id (creation) order — the channel's full history, for its task list.
 func (s *TaskStore) ListTasksByChannel(ctx context.Context, channelID string) ([]*model.CodingTask, error) {
 	keyCond := expression.Key("GSI1PK").Equal(expression.Value(taskChannelGSI1PK(channelID)))
+	out, err := s.queryChannelTasks(ctx, keyCond)
+	if err != nil {
+		return nil, fmt.Errorf("store: list tasks by channel: %w", err)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// ListActiveTasksByChannel returns the channel's NON-terminal tasks, reading
+// only live rows (see taskLiveSKPrefix) — the per-message routing read and the
+// one-active-task check, neither of which has any use for finished tasks.
+func (s *TaskStore) ListActiveTasksByChannel(ctx context.Context, channelID string) ([]*model.CodingTask, error) {
+	keyCond := expression.Key("GSI1PK").Equal(expression.Value(taskChannelGSI1PK(channelID))).
+		And(expression.Key("GSI1SK").BeginsWith(taskLiveSKPrefix))
+	rows, err := s.queryChannelTasks(ctx, keyCond)
+	if err != nil {
+		return nil, fmt.Errorf("store: list active tasks by channel: %w", err)
+	}
+	out := make([]*model.CodingTask, 0, len(rows))
+	for _, t := range rows {
+		if t.State.Terminal() {
+			s.rekeyFinishedTask(ctx, t)
+			continue
+		}
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// rekeyFinishedTask moves a pre-split terminal row onto the "done" sort key
+// so the active listing stops reading it. Only GSI1SK is touched, and only if
+// it still holds the live key — a concurrent full rewrite already re-keyed
+// it. Best-effort: a failure just means the row is read (and skipped) again.
+func (s *TaskStore) rekeyFinishedTask(ctx context.Context, t *model.CodingTask) {
+	update := expression.Set(expression.Name("GSI1SK"), expression.Value(taskChannelGSI1SK(t)))
+	cond := expression.Name("GSI1SK").Equal(expression.Value(taskLiveSKPrefix + t.ID))
+	expr := mustExpr(expression.NewBuilder().WithUpdate(update).WithCondition(cond).Build())
+	if _, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(s.Table),
+		Key:                       compositeKey(taskPK(t.ID), metaSK()),
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	}); err != nil {
+		slog.DebugContext(ctx, "coding task: finished-row re-key skipped", "taskID", t.ID, "error", err)
+	}
+}
+
+// queryChannelTasks drains one GSI1 task query and decodes the rows.
+func (s *TaskStore) queryChannelTasks(ctx context.Context, keyCond expression.KeyConditionBuilder) ([]*model.CodingTask, error) {
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
 	items, err := s.queryAll(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(s.Table),
@@ -153,7 +226,7 @@ func (s *TaskStore) ListTasksByChannel(ctx context.Context, channelID string) ([
 		ExpressionAttributeValues: expr.Values(),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("store: list tasks by channel: %w", err)
+		return nil, err
 	}
 	out := make([]*model.CodingTask, 0, len(items))
 	for _, raw := range items {
@@ -165,7 +238,7 @@ func (s *TaskStore) ListTasksByChannel(ctx context.Context, channelID string) ([
 			// A row from before projects/repos existed. Nothing writes these fields
 			// any more, so this line is the evidence the compatibility layer is
 			// still load-bearing; silence over a retention window means it can go.
-			slog.Warn("coding task: read a legacy single-repo row", "taskID", it.ID)
+			slog.WarnContext(ctx, "coding task: read a legacy single-repo row", "taskID", it.ID)
 		}
 		out = append(out, &it.CodingTask)
 	}
@@ -202,7 +275,7 @@ func (s *TaskStore) GetTaskByThread(ctx context.Context, threadRootID string) (*
 		// A row from before projects/repos existed. Nothing writes these fields
 		// any more, so this line is the evidence the compatibility layer is
 		// still load-bearing; silence over a retention window means it can go.
-		slog.Warn("coding task: read a legacy single-repo row", "taskID", it.ID)
+		slog.WarnContext(ctx, "coding task: read a legacy single-repo row", "taskID", it.ID)
 	}
 	return &it.CodingTask, nil
 }

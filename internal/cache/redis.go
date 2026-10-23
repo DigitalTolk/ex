@@ -223,27 +223,6 @@ func (c *RedisCache) LockHeld(ctx context.Context, key string) (bool, error) {
 	return n > 0, nil
 }
 
-// AllowRequest implements a fixed-window rate limiter: it increments the per-key
-// counter and, on the first hit of a window, sets the window TTL. It reports
-// whether the request is within `limit` for the current window. Used by the
-// middleware.RateLimit middleware to throttle auth and webhook endpoints.
-func (c *RedisCache) AllowRequest(ctx context.Context, key string, limit int, window time.Duration) (bool, error) {
-	fullKey := "ratelimit:" + key
-	// One atomic MULTI/EXEC round trip: INCR the window counter and ensure it
-	// carries the window TTL. PEXPIRE NX sets the TTL only when the key has
-	// none — the first hit of a window, plus healing any legacy TTL-less key —
-	// so this closes the partial-failure hole (a successful INCR whose EXPIRE
-	// never ran leaving an immortal counter) without a Lua script. The NX flag
-	// needs Redis >= 7.0; the deployment floor is 7.1.
-	pipe := c.client.TxPipeline()
-	incr := pipe.Incr(ctx, fullKey)
-	pipe.Do(ctx, "pexpire", fullKey, window.Milliseconds(), "NX")
-	if _, err := pipe.Exec(ctx); err != nil {
-		return false, fmt.Errorf("rate limit increment %q: %w", key, err)
-	}
-	return incr.Val() <= int64(limit), nil
-}
-
 // presenceIndexScore is the online-index expiry score matching a marker
 // extended right now.
 func presenceIndexScore() float64 {

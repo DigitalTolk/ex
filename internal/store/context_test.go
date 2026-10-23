@@ -66,9 +66,9 @@ func TestContextStore_Put_Validation(t *testing.T) {
 	ctx := context.Background()
 	s := NewContextStore(db)
 	for _, it := range []*model.ContextItem{
-		{ParentID: "ch-1", ParentType: "channel"},              // no ID
-		{ID: "ctx-1", ParentType: "channel"},                   // no ParentID
-		{ID: "ctx-1", ParentID: "ch-1"},                        // no ParentType
+		{ParentID: "ch-1", ParentType: "channel"}, // no ID
+		{ID: "ctx-1", ParentType: "channel"},      // no ParentID
+		{ID: "ctx-1", ParentID: "ch-1"},           // no ParentType
 	} {
 		if err := s.PutContextItem(ctx, it); err == nil {
 			t.Fatalf("put %+v: want validation error, got nil", it)

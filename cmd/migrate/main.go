@@ -11,6 +11,7 @@
 //
 //	thread-delete          soft-delete replies whose thread root is already deleted
 //	thread-index           backfill the GSI1 thread index on existing replies
+//	top-level-index        backfill + switch on the GSI2 top-level message index [--workers=16]
 //	parent-index           backfill per-parent PIN#/FILE# index rows
 //	notification-keywords  seed name keywords for accounts that have none
 //	attachment-relink      re-link orphaned attachments to their message [--window=1h]
@@ -19,6 +20,7 @@
 //	search-reindex         recreate ex_users/ex_channels with the autocomplete mapping + reindex (OpenSearch)
 //	avatar-resize          shrink avatars stored before uploads were resized (S3 + Redis)
 //	thumbnail-webp         re-encode lossless WebP message thumbnails as lossy WebP (S3) [--workers=16]
+//	oidc-unbind            clear an account's pinned SSO identity so its next SSO login re-pins it --email=<address>
 //
 // Required environment variables (same as the `ex` server):
 //   - AWS_REGION
@@ -60,6 +62,7 @@ func commands() map[string]command {
 	return map[string]command{
 		"thread-delete":         {"soft-delete replies whose thread root is already deleted", runThreadDelete},
 		"thread-index":          {"backfill the GSI1 thread index on existing replies", runThreadIndex},
+		"top-level-index":       {"backfill + switch on the GSI2 top-level message index (run after the deploy) [--workers=16]", runTopLevelIndex},
 		"parent-index":          {"backfill per-parent PIN#/FILE# index rows", runParentIndex},
 		"notification-keywords": {"seed name keywords for accounts that have none", runNotificationKeywords},
 		"attachment-relink":     {"re-link orphaned attachments to their message [--window=1h]", runAttachmentRelink},
@@ -68,6 +71,7 @@ func commands() map[string]command {
 		"search-reindex":        {"recreate ex_users/ex_channels with the autocomplete mapping + reindex from DynamoDB (OpenSearch)", runSearchReindex},
 		"avatar-resize":         {"shrink avatars stored before uploads were resized (S3 + Redis)", runAvatarResize},
 		"thumbnail-webp":        {"re-encode lossless WebP message thumbnails as lossy WebP (S3) [--workers=16]", runThumbnailWebP},
+		"oidc-unbind":           {"clear an account's pinned SSO identity so its next SSO login re-pins it --email=<address>", runOIDCUnbind},
 	}
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { renderMarkdown } from '@/lib/markdown';
 import { decoratePicks, renderHastTree } from '@/lib/markdown-hast';
 import type { HastNode } from '@/types';
@@ -83,7 +83,7 @@ describe('renderMarkdown via hast tree', () => {
     expect(container.querySelector('hr')).not.toBeNull();
   });
 
-  it('hydrates a fenced code block into a highlighted CodeBlock with a copy button and line numbers', () => {
+  it('hydrates a fenced code block into a highlighted CodeBlock with a copy button and line numbers', async () => {
     const tree = root(
       el('pre', { 'data-language': 'php' },
         el('code', { className: ['language-php'] }, text("function demo() {}\n")),
@@ -96,7 +96,8 @@ describe('renderMarkdown via hast tree', () => {
     expect(container.querySelector('[data-testid="code-copy-button"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="code-line-numbers"]')).not.toBeNull();
     expect(container.querySelector('code.hljs')).not.toBeNull();
-    expect(container.querySelector('.hljs-keyword, .hljs-title, .hljs-function, .hljs-built_in')).not.toBeNull();
+    // The highlighter loads with the first highlighted block.
+    await waitFor(() => expect(container.querySelector('.hljs-keyword, .hljs-title, .hljs-function, .hljs-built_in')).not.toBeNull());
   });
 
   it('renders an unknown-language fenced block as plain text with a copy button and no gutter', () => {

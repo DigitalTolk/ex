@@ -212,7 +212,9 @@ export interface Conversation {
 export interface ChannelMembership {
   channelID: string;
   userID: string;
-  role: 'owner' | 'admin' | 'member';
+  // model.ChannelRole, numeric on the wire: 1 member, 2 admin, 3 owner (the
+  // lib/roles helpers read it).
+  role: number;
   displayName: string;
   joinedAt: string;
 }
@@ -247,6 +249,9 @@ export interface IncomingWebhook {
 }
 
 export interface UserChannel {
+  // The member and when they joined: on the wire, unused by the client.
+  userID?: string;
+  joinedAt?: string;
   channelID: string;
   channelName: string;
   channelType: 'public' | 'private';
@@ -279,6 +284,8 @@ export interface UserChannel {
 }
 
 export interface SidebarCategory {
+  // The category's owner: on the wire, unused by the client.
+  userID?: string;
   id: string;
   name: string;
   position: number;
@@ -286,6 +293,11 @@ export interface SidebarCategory {
 }
 
 export interface UserConversation {
+  // The member, whether the conversation has a first message yet, and when
+  // they joined: on the wire, unused by the client.
+  userID?: string;
+  activated?: boolean;
+  joinedAt?: string;
   conversationID: string;
   type: 'dm' | 'group';
   displayName: string;
@@ -321,11 +333,6 @@ export interface CustomEmoji {
   createdAt: string;
   // Pinned into the picker's "Getting Work Done" shelf (set at upload).
   gettingWorkDone?: boolean;
-}
-
-export interface PresenceEvent {
-  userID: string;
-  online: boolean;
 }
 
 export interface UserState {
@@ -472,4 +479,20 @@ export type WireDriftChecks = [
   AssertAssignable<Required<ScheduledMessage>, wire.ScheduledMessage>,
   AssertAssignable<Required<ActivityItem>, wire.ActivityFeedItem>,
   AssertAssignable<Required<ActivityChangedEvent>, wire.ActivityChangedEvent>,
+  AssertAssignable<Required<UserManager>, wire.UserManager>,
+  AssertAssignable<Required<NotificationSettings>, wire.NotificationSettings>,
+  AssertAssignable<Required<ChannelNotificationOverride>, wire.ChannelNotificationOverride>,
+  AssertAssignable<Required<UserStatus>, wire.UserStatus>,
+  AssertAssignable<Required<MessageAttachmentField>, wire.MessageAttachmentField>,
+  AssertAssignable<Required<Attachment>, wire.Attachment>,
+  AssertAssignable<Required<ChannelMembership>, wire.ChannelMembership>,
+  AssertAssignable<Required<WorkspaceSettings>, wire.WorkspaceSettings>,
+  AssertAssignable<Required<IncomingWebhook>, wire.IncomingWebhook>,
+  AssertAssignable<Required<UserChannel>, wire.UserChannel>,
+  AssertAssignable<Required<SidebarCategory>, wire.UserChannelCategory>,
+  AssertAssignable<Required<UserConversation>, wire.UserConversation>,
+  AssertAssignable<Required<CustomEmoji>, wire.CustomEmoji>,
+  // The items are ActivityItem, checked above (Required<> is one level deep).
+  AssertAssignable<Required<Omit<ActivityFeed, 'items'>>, Omit<wire.ActivityFeed, 'items'>>,
+  AssertAssignable<Required<Reminder>, wire.Reminder>,
 ];

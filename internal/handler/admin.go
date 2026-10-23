@@ -134,7 +134,8 @@ func (h *AdminHandler) SendTestEmail(w http.ResponseWriter, r *http.Request) {
 		// endpoint ("connection refused", "535 auth failed", "email address
 		// is not verified") — an admin cannot fix the settings without it.
 		// This is a deliberate, admin-only exception to the generic-error
-		// rule that applies to member-facing endpoints.
+		// rule that applies to member-facing endpoints — and why this is not
+		// a service error routed through writeServiceError.
 		writeError(w, http.StatusBadGateway, "email_send_failed", err.Error())
 		return
 	}
@@ -284,8 +285,8 @@ func (h *AdminHandler) StartSearchMappingRebuild(w http.ResponseWriter, r *http.
 	// rebuild goroutine survive the HTTP response; admins poll status afterwards.
 	started, err := h.mappingReb.Start(context.Background(), nowUnix)
 	if err != nil {
-		// Generic 500 — don't leak the Redis/coordination error to the client.
-		writeError(w, http.StatusInternalServerError, "rebuild_error", "could not start mapping rebuild")
+		// Generic 500 — the Redis/coordination error is logged, never sent.
+		writeServiceError(w, r, err)
 		return
 	}
 	if !started {
@@ -324,7 +325,7 @@ func (h *AdminHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := h.settings.Update(r.Context(), &ws)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "update_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, newSettingsResponse(out))

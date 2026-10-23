@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
@@ -19,6 +20,8 @@ type ConversationConverter interface {
 	GetConversation(ctx context.Context, id string) (*model.Conversation, error)
 	GetUserConversations(ctx context.Context, convID string, userIDs []string) (map[string]*model.UserConversation, error)
 	ConvertGroupToChannel(ctx context.Context, ch *model.Channel, members []store.ConvertedMember, at time.Time) error
+	// MoveMembersToChannel finishes a conversion that stopped partway.
+	MoveMembersToChannel(ctx context.Context, channelID string, members []store.ConvertedMember) error
 }
 
 // ConversationDraftMover moves what people were writing in a group message
@@ -58,18 +61,18 @@ func (s *ChannelService) ConvertGroupConversation(ctx context.Context, actorID, 
 	if conv.Type != model.ConversationTypeGroup {
 		return nil, fmt.Errorf("channel: only a group message can become a channel: %w", ErrValidation)
 	}
-	if conv.ConvertedToChannelID != "" {
-		return nil, fmt.Errorf("channel: this conversation is a channel already: %w", ErrAlreadyExists)
-	}
 	if s.users != nil {
 		if u, err := s.users.GetUser(ctx, actorID); err == nil && u.SystemRole == model.SystemRoleGuest {
-			return nil, fmt.Errorf("channel: guests cannot create channels: %w", ErrForbidden)
+			return nil, apperr.Forbidden("channel: guests cannot create channels")
 		}
+	}
+	if conv.ConvertedToChannelID != "" {
+		return s.resumeConversion(ctx, conv)
 	}
 	if err := ValidateChannelName(name); err != nil {
 		return nil, err
 	}
-	slug := slugify(name)
+	slug := Slugify(name)
 	if existing, err := s.channels.GetChannelBySlug(ctx, slug); err == nil && existing != nil {
 		return nil, fmt.Errorf("channel: a channel with this name already exists: %w", ErrAlreadyExists)
 	}
@@ -90,10 +93,32 @@ func (s *ChannelService) ConvertGroupConversation(ctx context.Context, actorID, 
 		// Unread counts carry on from the group's own counter.
 		MessageSeq: conv.MessageSeq,
 	}
-	members := make([]store.ConvertedMember, 0, len(conv.ParticipantIDs))
-	for _, uid := range conv.ParticipantIDs {
+	members := s.convertedMembers(ctx, ch, conv.ParticipantIDs, rows, now)
+	// The store moves a larger group in several transactions; a message
+	// landing between them may cache the half-moved member list, so the
+	// channel's audience moves on once the move is over (or failed partway).
+	if err := s.audienceWritten(ctx, ch.ID, s.conversions.ConvertGroupToChannel(ctx, ch, members, now)); err != nil {
+		switch {
+		case errors.Is(err, store.ErrConversationConverted):
+			return nil, fmt.Errorf("channel: this conversation is a channel already: %w", ErrAlreadyExists)
+		case errors.Is(err, store.ErrAlreadyExists):
+			return nil, fmt.Errorf("channel: a channel with this name already exists: %w", ErrAlreadyExists)
+		}
+		return nil, fmt.Errorf("channel: convert conversation: %w", err)
+	}
+
+	s.finishConversion(ctx, actorID, conv, ch)
+	return ch, nil
+}
+
+// convertedMembers builds the channel rows for these participants, carrying
+// over each one's read position, badge, favourite and category from their
+// group row. Whoever converted the group owns the channel.
+func (s *ChannelService) convertedMembers(ctx context.Context, ch *model.Channel, userIDs []string, rows map[string]*model.UserConversation, now time.Time) []store.ConvertedMember {
+	members := make([]store.ConvertedMember, 0, len(userIDs))
+	for _, uid := range userIDs {
 		role := model.ChannelRoleMember
-		if uid == actorID {
+		if uid == ch.CreatedBy {
 			role = model.ChannelRoleOwner
 		}
 		uc := &model.UserChannel{
@@ -127,16 +152,13 @@ func (s *ChannelService) ConvertGroupConversation(ctx context.Context, actorID, 
 			UserChannel: uc,
 		})
 	}
-	if err := s.conversions.ConvertGroupToChannel(ctx, ch, members, now); err != nil {
-		switch {
-		case errors.Is(err, store.ErrConversationConverted):
-			return nil, fmt.Errorf("channel: this conversation is a channel already: %w", ErrAlreadyExists)
-		case errors.Is(err, store.ErrAlreadyExists):
-			return nil, fmt.Errorf("channel: a channel with this name already exists: %w", ErrAlreadyExists)
-		}
-		return nil, fmt.Errorf("channel: convert conversation: %w", err)
-	}
+	return members
+}
 
+// finishConversion is everything after the rows moved: everyone's sockets
+// follow the channel and are told, drafts move, the system message and the
+// search index.
+func (s *ChannelService) finishConversion(ctx context.Context, converterID string, conv *model.Conversation, ch *model.Channel) {
 	recipients := make([]string, 0, len(conv.ParticipantIDs))
 	for _, uid := range conv.ParticipantIDs {
 		if s.broker != nil {
@@ -150,12 +172,43 @@ func (s *ChannelService) ConvertGroupConversation(ctx context.Context, actorID, 
 		"channelID":      ch.ID,
 		"name":           ch.Name,
 		"slug":           ch.Slug,
-		"convertedBy":    actorID,
+		"convertedBy":    converterID,
 	})
 	if s.convertedDrafts != nil {
 		s.convertedDrafts.MoveConversationDrafts(ctx, conv.ParticipantIDs, conv.ID)
 	}
-	s.postSystemMessage(ctx, ch.ID, s.resolveDisplayName(ctx, actorID)+" made this a private channel")
+	s.postSystemMessage(ctx, ch.ID, s.resolveDisplayName(ctx, converterID)+" made this a private channel")
 	s.indexChannel(ctx, ch)
+}
+
+// resumeConversion finishes a conversion whose member moves stopped partway:
+// the store moves a large group in several transactions, and once the first
+// landed the group reads as a channel, so whoever wasn't moved yet had no way
+// in. Anyone who still has a row for the group is moved now, and then what
+// the first attempt never got to runs. A finished conversion has nobody left
+// to move.
+func (s *ChannelService) resumeConversion(ctx context.Context, conv *model.Conversation) (*model.Channel, error) {
+	rows, err := s.conversions.GetUserConversations(ctx, conv.ID, conv.ParticipantIDs)
+	if err != nil {
+		return nil, fmt.Errorf("channel: read conversation members: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("channel: this conversation is a channel already: %w", ErrAlreadyExists)
+	}
+	ch, err := s.channels.GetChannel(ctx, conv.ConvertedToChannelID)
+	if err != nil {
+		return nil, fmt.Errorf("channel: get the channel the group became: %w", err)
+	}
+	pending := make([]string, 0, len(rows))
+	for _, uid := range conv.ParticipantIDs {
+		if rows[uid] != nil {
+			pending = append(pending, uid)
+		}
+	}
+	members := s.convertedMembers(ctx, ch, pending, rows, time.Now())
+	if err := s.audienceWritten(ctx, ch.ID, s.conversions.MoveMembersToChannel(ctx, ch.ID, members)); err != nil {
+		return nil, fmt.Errorf("channel: finish converting: %w", err)
+	}
+	s.finishConversion(ctx, ch.CreatedBy, conv, ch)
 	return ch, nil
 }

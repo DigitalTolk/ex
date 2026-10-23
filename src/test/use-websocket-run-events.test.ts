@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { useWebSocket } from '@/hooks/useWebSocket';
+import { withHandlers } from '@/test/ws-frames';
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
 
@@ -48,12 +49,12 @@ afterEach(() => { vi.restoreAllMocks(); });
 describe('useWebSocket agent-run events', () => {
   it('routes run.updated to onRunUpdated', async () => {
     const onRunUpdated = vi.fn();
-    renderHook(() => useWebSocket({ onRunUpdated, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onRunUpdated, enabled: true })));
     await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
     ws.simulateMessage(
-      JSON.stringify({ id: 'ru1', type: 'run.updated', data: '{"id":"r1","state":"running"}' }),
+      JSON.stringify({ id: 'ru1', type: 'run.updated', data: '{"id":"r1","agentID":"ag-1","parentID":"ch-1","state":"running"}' }),
     );
     expect(onRunUpdated).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'r1', state: 'running' }),
@@ -62,12 +63,12 @@ describe('useWebSocket agent-run events', () => {
 
   it('routes run.progress to onRunProgress', async () => {
     const onRunProgress = vi.fn();
-    renderHook(() => useWebSocket({ onRunProgress, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onRunProgress, enabled: true })));
     await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
     ws.simulateMessage(
-      JSON.stringify({ id: 'rp1', type: 'run.progress', data: '{"runID":"r1","kind":"tool"}' }),
+      JSON.stringify({ id: 'rp1', type: 'run.progress', data: '{"runID":"r1","agentID":"ag-1","parentID":"ch-1","kind":"tool"}' }),
     );
     expect(onRunProgress).toHaveBeenCalledWith(
       expect.objectContaining({ runID: 'r1', kind: 'tool' }),
@@ -76,12 +77,12 @@ describe('useWebSocket agent-run events', () => {
 
   it('routes run.approval to onRunApproval', async () => {
     const onRunApproval = vi.fn();
-    renderHook(() => useWebSocket({ onRunApproval, enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ onRunApproval, enabled: true })));
     await flushConnect();
     const ws = MockWebSocket.instances[0];
     ws.simulateOpen();
     ws.simulateMessage(
-      JSON.stringify({ id: 'ra1', type: 'run.approval', data: '{"approvalID":"ap-1"}' }),
+      JSON.stringify({ id: 'ra1', type: 'run.approval', data: '{"approvalID":"ap-1","parentID":"ch-1"}' }),
     );
     expect(onRunApproval).toHaveBeenCalledWith(expect.objectContaining({ approvalID: 'ap-1' }));
   });

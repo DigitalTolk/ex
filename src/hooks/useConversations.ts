@@ -1,8 +1,9 @@
 import { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import { wsLiveQueryOptions } from '@/lib/query-client';
 import { showToast } from '@/lib/toast';
 import type { UserConversation, Conversation, User, UserStatus } from '@/types';
 
@@ -17,6 +18,7 @@ export function useUserConversations<T = UserConversation[]>(options?: {
       const res = await apiFetch<UserConversation[]>('/api/v1/conversations');
       return Array.isArray(res) ? res : [];
     },
+    ...wsLiveQueryOptions,
     enabled: options?.enabled ?? true,
     select: options?.select,
   });
@@ -79,16 +81,21 @@ export function useCreateConversation() {
   });
 }
 
-export function useSearchUsers(query: string) {
+// One query per search term, so a slow answer for an older term can never
+// replace a newer one; the signal aborts a request nobody is waiting for any
+// more. `keepPrevious` shows the last term's results while the next loads
+// (a typeahead that blanks between keystrokes flickers).
+export function useUserLookup(query: string, options?: { keepPrevious?: boolean }) {
   return useQuery({
     queryKey: queryKeys.searchUsers(query),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const res = await apiFetch<
         { id: string; email: string; displayName: string; avatarURL?: string; userStatus?: UserStatus | null }[]
-      >(`/api/v1/users?q=${encodeURIComponent(query)}`);
+      >(`/api/v1/users?q=${encodeURIComponent(query)}`, { signal });
       return Array.isArray(res) ? res : [];
     },
     enabled: query.length >= 2,
+    placeholderData: options?.keepPrevious ? keepPreviousData : undefined,
   });
 }
 

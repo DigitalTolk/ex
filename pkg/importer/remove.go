@@ -368,10 +368,12 @@ func (im *Importer) RemoveChannel(ctx context.Context, spec RemoveChannelSpec) (
 	if err != nil {
 		return res, fmt.Errorf("importer: list members: %w", err)
 	}
-	for _, m := range members {
-		if err := im.memberships.RemoveMember(ctx, ch.ID, m.UserID); err != nil {
-			return res, fmt.Errorf("importer: remove member: %w", err)
-		}
+	uids := make([]string, len(members))
+	for i, m := range members {
+		uids[i] = m.UserID
+	}
+	if err := im.RemoveMembers(ctx, ch.ID, uids); err != nil {
+		return res, err
 	}
 	if err := im.channels.DeleteChannel(ctx, ch); err != nil {
 		return res, fmt.Errorf("importer: delete channel: %w", err)
@@ -420,8 +422,10 @@ func (im *Importer) RemoveConversation(ctx context.Context, spec RemoveConversat
 }
 
 // RemoveMembers removes users from a channel (both membership rows). Users who
-// aren't members are skipped.
-func (im *Importer) RemoveMembers(ctx context.Context, channelID string, userIDs []string) error {
+// aren't members are skipped. The channel's next message no longer alerts them.
+func (im *Importer) RemoveMembers(ctx context.Context, channelID string, userIDs []string) (err error) {
+	// Even a failed removal may have committed: move the audience on either way.
+	defer func() { err = errors.Join(err, im.audienceChanged(ctx, channelID)) }()
 	for _, uid := range dedupe(userIDs) {
 		if err := im.memberships.RemoveMember(ctx, channelID, uid); err != nil {
 			return fmt.Errorf("importer: remove member %s: %w", uid, err)

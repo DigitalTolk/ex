@@ -10,6 +10,7 @@ import (
 
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // errorsIs is a thin wrapper so the new validation tests don't have to
@@ -2096,9 +2097,11 @@ func TestMessageService_ListThreadMessages_Empty(t *testing.T) {
 		Role:      model.ChannelRoleMember,
 	}
 
+	// A root that isn't in this parent is not a thread of it: ErrNotFound,
+	// never a (possibly cross-parent) reply list.
 	thread, err := svc.ListThreadMessages(ctx, "user-1", "ch-empty", ParentChannel, "missing")
-	if err != nil {
-		t.Fatalf("ListThreadMessages: %v", err)
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("ListThreadMessages err = %v, want ErrNotFound", err)
 	}
 	if len(thread) != 0 {
 		t.Errorf("len(thread) = %d, want 0", len(thread))
@@ -2174,14 +2177,15 @@ func TestMessageService_ThreadWindowMessages(t *testing.T) {
 	}
 	messages.threadReplyErr = nil
 
-	// A thread whose root is gone still returns its replies.
+	// A root that isn't in the parent is ErrNotFound: the global reply index
+	// alone never answers a thread read.
 	delete(messages.messages, "ch-win#01-root")
 	rootless, err := svc.ThreadWindowMessages(ctx, "user-1", "ch-win", ParentChannel, "01-root", 5)
-	if err != nil {
-		t.Fatalf("rootless window: %v", err)
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("rootless window err = %v, want ErrNotFound", err)
 	}
-	if len(rootless) != 3 {
-		t.Fatalf("rootless window = %v, want the three replies", ids(rootless))
+	if len(rootless) != 0 {
+		t.Fatalf("rootless window = %v, want nothing", ids(rootless))
 	}
 }
 

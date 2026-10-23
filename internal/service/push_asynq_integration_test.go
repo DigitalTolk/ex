@@ -4,7 +4,6 @@ package service
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -22,7 +21,6 @@ import (
 // pushSignalProvider is a chan-based MobilePushSender so tests can wait on
 // delivery (or prove its absence) deterministically.
 type pushSignalProvider struct {
-	mu   sync.Mutex
 	sent chan string
 }
 

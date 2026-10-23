@@ -21,6 +21,7 @@ type UserStore interface {
 	GetUser(ctx context.Context, id string) (*model.User, error)
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
 	UpdateUser(ctx context.Context, user *model.User) error
+	PatchUser(ctx context.Context, id string, p UserPatch) error
 	ListUsers(ctx context.Context, limit int, lastKey string) ([]*model.User, string, error)
 }
 
@@ -134,34 +135,17 @@ func (s *UserStoreImpl) GetUser(ctx context.Context, id string) (*model.User, er
 // calls (100 per chunk, the DynamoDB limit) instead of N serial GetItems.
 // Missing users are simply absent from the result; order is not guaranteed.
 func (s *UserStoreImpl) GetUsersByIDs(ctx context.Context, ids []string) ([]*model.User, error) {
-	out := make([]*model.User, 0, len(ids))
-	const batchSize = 100
-	for start := 0; start < len(ids); start += batchSize {
-		end := min(start+batchSize, len(ids))
-		keys := make([]map[string]types.AttributeValue, 0, end-start)
-		for _, id := range ids[start:end] {
-			keys = append(keys, compositeKey(userPK(id), profileSK()))
-		}
-		req := map[string]types.KeysAndAttributes{s.Table: {Keys: keys}}
-		for {
-			res, err := s.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
-			if err != nil {
-				return nil, fmt.Errorf("store: batch get users: %w", err)
-			}
-			for _, raw := range res.Responses[s.Table] {
-				var ui userItem
-				if err := attributevalue.UnmarshalMap(raw, &ui); err != nil {
-					return nil, fmt.Errorf("store: unmarshal user: %w", err)
-				}
-				u := ui.User
-				out = append(out, &u)
-			}
-			unproc, ok := res.UnprocessedKeys[s.Table]
-			if !ok || len(unproc.Keys) == 0 {
-				break
-			}
-			req = map[string]types.KeysAndAttributes{s.Table: unproc}
-		}
+	keys := make([]map[string]types.AttributeValue, len(ids))
+	for i, id := range ids {
+		keys[i] = compositeKey(userPK(id), profileSK())
+	}
+	rows, err := batchGetOf[userItem](ctx, s.DB, keys, types.KeysAndAttributes{}, "users")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.User, len(rows))
+	for i := range rows {
+		out[i] = &rows[i].User
 	}
 	return out, nil
 }
@@ -276,6 +260,141 @@ func (s *UserStoreImpl) UpdateUser(ctx context.Context, user *model.User) error 
 			return ErrNotFound
 		}
 		return fmt.Errorf("store: update user: %w", err)
+	}
+	return nil
+}
+
+// ErrIdentityBound reports a PatchUser whose ExpectOIDCSubject no longer
+// matches: the account was bound to another identity in the meantime.
+var ErrIdentityBound = errors.New("store: account is bound to a different identity")
+
+// UserPatch is a field-level user update. Only the non-nil fields are
+// written — each with UpdateItem SET, or REMOVE for an emptied optional
+// attribute — so a writer can't clobber a field it never meant to touch.
+// The read-then-full-PutItem UpdateUser could: a refresh that read the user
+// a moment before an admin deactivated (or demoted) them wrote the old
+// status/role straight back.
+type UserPatch struct {
+	DisplayName  *string
+	TimeZone     *string
+	SystemRole   *model.SystemRole
+	Status       *string
+	AuthProvider *model.AuthProvider
+	// PasswordHash "" removes the stored hash.
+	PasswordHash *string
+	LastSeenAt   *time.Time
+	MSObjectID   *string
+	OIDCIssuer   *string
+	OIDCSubject  *string
+	// ExpectOIDCSubject makes the write a compare-and-swap on the bound
+	// identity: it applies only while the stored subject still equals this
+	// value ("" = not bound yet), so two logins racing to bind different
+	// identities can't both win — the loser gets ErrIdentityBound.
+	ExpectOIDCSubject *string
+	// DeactivatedBy records who deactivated the account ("" clears it).
+	DeactivatedBy *string
+	// Directory writes the directory-owned attributes (phone + manager)
+	// together.
+	Directory *UserDirectoryFields
+	// UpdatedAt is written when non-zero.
+	UpdatedAt time.Time
+}
+
+// UserDirectoryFields are the directory-synced profile attributes.
+type UserDirectoryFields struct {
+	Phone   string
+	Manager *model.UserManager
+}
+
+// PatchUser applies p to the existing user id (ErrNotFound when there is
+// none). An empty patch writes nothing.
+func (s *UserStoreImpl) PatchUser(ctx context.Context, id string, p UserPatch) error {
+	var upd expression.UpdateBuilder
+	ops := 0
+	set := func(name string, v any) {
+		upd = upd.Set(expression.Name(name), expression.Value(v))
+		ops++
+	}
+	setOrRemove := func(name, v string) {
+		if v == "" {
+			upd = upd.Remove(expression.Name(name))
+			ops++
+			return
+		}
+		set(name, v)
+	}
+	if p.DisplayName != nil {
+		set("displayName", *p.DisplayName)
+	}
+	if p.TimeZone != nil {
+		setOrRemove("timeZone", *p.TimeZone)
+	}
+	if p.SystemRole != nil {
+		set("systemRole", *p.SystemRole)
+	}
+	if p.Status != nil {
+		set("status", *p.Status)
+	}
+	if p.AuthProvider != nil {
+		setOrRemove("authProvider", string(*p.AuthProvider))
+	}
+	if p.PasswordHash != nil {
+		setOrRemove("passwordHash", *p.PasswordHash)
+	}
+	if p.LastSeenAt != nil {
+		set("lastSeenAt", *p.LastSeenAt)
+	}
+	if p.MSObjectID != nil {
+		setOrRemove("msObjectID", *p.MSObjectID)
+	}
+	if p.OIDCIssuer != nil {
+		setOrRemove("oidcIssuer", *p.OIDCIssuer)
+	}
+	if p.OIDCSubject != nil {
+		setOrRemove("oidcSubject", *p.OIDCSubject)
+	}
+	if p.DeactivatedBy != nil {
+		setOrRemove("deactivatedBy", *p.DeactivatedBy)
+	}
+	if p.Directory != nil {
+		setOrRemove("phone", p.Directory.Phone)
+		if p.Directory.Manager == nil {
+			upd = upd.Remove(expression.Name("manager"))
+		} else {
+			upd = upd.Set(expression.Name("manager"), expression.Value(p.Directory.Manager))
+		}
+	}
+	if !p.UpdatedAt.IsZero() {
+		set("updatedAt", p.UpdatedAt)
+	}
+	if ops == 0 {
+		return nil
+	}
+	cond := expression.Name("PK").AttributeExists()
+	if p.ExpectOIDCSubject != nil {
+		if *p.ExpectOIDCSubject == "" {
+			cond = cond.And(expression.Name("oidcSubject").AttributeNotExists())
+		} else {
+			cond = cond.And(expression.Name("oidcSubject").Equal(expression.Value(*p.ExpectOIDCSubject)))
+		}
+	}
+	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).WithCondition(cond).Build())
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(s.Table),
+		Key:                       compositeKey(userPK(id), profileSK()),
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			if p.ExpectOIDCSubject != nil {
+				return ErrIdentityBound
+			}
+			return ErrNotFound
+		}
+		return fmt.Errorf("store: patch user: %w", err)
 	}
 	return nil
 }
@@ -395,51 +514,36 @@ type NotificationAccount struct {
 // row at all are simply absent from the returned map (the caller defaults
 // them).
 func (s *UserStoreImpl) NotificationAccountsFor(ctx context.Context, userIDs []string) (map[string]NotificationAccount, error) {
-	out := make(map[string]NotificationAccount)
-	const batchSize = 100 // DynamoDB BatchGetItem hard limit
-	for start := 0; start < len(userIDs); start += batchSize {
-		end := min(start+batchSize, len(userIDs))
-		keys := make([]map[string]types.AttributeValue, 0, end-start)
-		for _, uid := range userIDs[start:end] {
-			keys = append(keys, compositeKey(userPK(uid), profileSK()))
+	keys := make([]map[string]types.AttributeValue, len(userIDs))
+	for i, uid := range userIDs {
+		keys[i] = compositeKey(userPK(uid), profileSK())
+	}
+	type settingsRow struct {
+		ID       string                      `dynamodbav:"id"`
+		Settings *model.NotificationSettings `dynamodbav:"notificationSettings"`
+		IsBot    bool                        `dynamodbav:"isBot"`
+		Kind     model.UserKind              `dynamodbav:"kind"`
+	}
+	rows, err := batchGetOf[settingsRow](ctx, s.DB, keys, types.KeysAndAttributes{
+		// Consistent: the notification audience cache keeps what it reads, so a
+		// settings change made a moment earlier must be seen.
+		ConsistentRead:           aws.Bool(true),
+		ProjectionExpression:     aws.String("#id, #ns, #bot, #kind"),
+		ExpressionAttributeNames: map[string]string{"#id": "id", "#ns": "notificationSettings", "#bot": "isBot", "#kind": "kind"},
+	}, "notification settings")
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]NotificationAccount, len(rows))
+	for _, row := range rows {
+		if row.ID == "" {
+			continue
 		}
-		req := map[string]types.KeysAndAttributes{
-			s.Table: {
-				Keys:                     keys,
-				ProjectionExpression:     aws.String("#id, #ns, #bot, #kind"),
-				ExpressionAttributeNames: map[string]string{"#id": "id", "#ns": "notificationSettings", "#bot": "isBot", "#kind": "kind"},
-			},
+		acct := NotificationAccount{Settings: model.DefaultNotificationSettings(), Machine: row.IsBot || row.Kind == model.UserKindAgent}
+		if row.Settings != nil {
+			acct.Settings = *row.Settings
 		}
-		for {
-			res, err := s.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
-			if err != nil {
-				return nil, fmt.Errorf("store: batch get notification settings: %w", err)
-			}
-			for _, item := range res.Responses[s.Table] {
-				var row struct {
-					ID       string                      `dynamodbav:"id"`
-					Settings *model.NotificationSettings `dynamodbav:"notificationSettings"`
-					IsBot    bool                        `dynamodbav:"isBot"`
-					Kind     model.UserKind              `dynamodbav:"kind"`
-				}
-				if err := attributevalue.UnmarshalMap(item, &row); err != nil {
-					return nil, fmt.Errorf("store: unmarshal notification settings row: %w", err)
-				}
-				if row.ID == "" {
-					continue
-				}
-				acct := NotificationAccount{Settings: model.DefaultNotificationSettings(), Machine: row.IsBot || row.Kind == model.UserKindAgent}
-				if row.Settings != nil {
-					acct.Settings = *row.Settings
-				}
-				out[row.ID] = acct
-			}
-			unproc, ok := res.UnprocessedKeys[s.Table]
-			if !ok || len(unproc.Keys) == 0 {
-				break
-			}
-			req = map[string]types.KeysAndAttributes{s.Table: unproc}
-		}
+		out[row.ID] = acct
 	}
 	return out, nil
 }

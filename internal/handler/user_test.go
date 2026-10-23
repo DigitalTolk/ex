@@ -193,8 +193,9 @@ func TestClearMyUserStatus_Errors(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("missing user status = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	// The account is gone: 404 (it used to be a 400).
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing user status = %d, want 404; body: %s", rec.Code, rec.Body.String())
 	}
 
 	rec = httptest.NewRecorder()
@@ -346,8 +347,10 @@ func TestUpdateMe_InvalidEmojiSkinTone(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	// An unknown skin tone is the caller's input: 400 naming the allowed
+	// values (it used to be a 500).
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "emoji skin tone must be") {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
 }
 
@@ -1115,8 +1118,9 @@ func TestUpdateMe_StoreError(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want %d (got body: %s)", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	// The account is gone: 404 (it used to be a 500).
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d (got body: %s)", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
 }
 
@@ -1200,8 +1204,9 @@ func TestGetMe_StoreError(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	// The account is gone: 404 (it used to be a 500).
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 

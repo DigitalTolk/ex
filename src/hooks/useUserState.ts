@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import { wsLiveQueryOptions } from '@/lib/query-client';
 import type { UserState } from '@/types';
 
 // "Ignore our own user-state echo" window, mirroring the drafts pattern:
@@ -48,7 +49,7 @@ export function useUserState(options?: { enabled?: boolean }) {
       };
     },
     enabled: options?.enabled ?? true,
-    staleTime: 15_000,
+    ...wsLiveQueryOptions,
     placeholderData: EMPTY_USER_STATE,
   });
 }

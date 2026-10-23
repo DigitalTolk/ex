@@ -26,10 +26,10 @@ type ConnectorStore struct {
 
 func NewConnectorStore(db *DB) *ConnectorStore { return &ConnectorStore{DB: db} }
 
-func connectorPK(slug string) string    { return "CONNECTOR#" + slug }
+func connectorPK(slug string) string     { return "CONNECTOR#" + slug }
 func connectorFileSK(name string) string { return "FILE#" + name }
-func allConnectorsGSI2PK() string       { return "ALL_CONNECTORS" }
-func connInstallSK(slug string) string  { return "CONNINST#" + slug }
+func allConnectorsGSI2PK() string        { return "ALL_CONNECTORS" }
+func connInstallSK(slug string) string   { return "CONNINST#" + slug }
 
 type connectorItem struct {
 	PK     string `dynamodbav:"PK"`

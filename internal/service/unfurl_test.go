@@ -6,13 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"code.dny.dev/ssrf"
 )
 
 func TestScrapePreview_OpenGraph(t *testing.T) {
@@ -141,15 +143,16 @@ func TestNewUnfurlService_ConfiguresClientAndSetters(t *testing.T) {
 	if err := svc.client.CheckRedirect(redirectReq, make([]*http.Request, unfurlMaxRedirect)); err == nil {
 		t.Fatal("expected redirect limit error")
 	}
-	privateReq := &http.Request{URL: mustParseURL(t, "http://127.0.0.1/private")}
-	if err := svc.client.CheckRedirect(privateReq, nil); err == nil {
-		t.Fatal("expected redirect URL validation error")
-	}
+	// A redirect to a private host is refused where every hop is: at dial
+	// time (see TestUnfurlClient_RefusesPrivateDestinations).
 }
 
 // fakeUnfurlCache mirrors the slim UnfurlCache interface used by
 // UnfurlService — JSON-serialises the value the way RedisCache does.
 type fakeUnfurlCache struct {
+	// mu makes the fake safe for the webhook's parallel image lookups, as
+	// Redis is.
+	mu    sync.Mutex
 	store map[string][]byte
 }
 
@@ -158,7 +161,9 @@ func newFakeUnfurlCache() *fakeUnfurlCache {
 }
 
 func (f *fakeUnfurlCache) Get(_ context.Context, key string, dest interface{}) error {
+	f.mu.Lock()
 	v, ok := f.store[key]
+	f.mu.Unlock()
 	if !ok {
 		return errors.New("cache miss")
 	}
@@ -170,7 +175,9 @@ func (f *fakeUnfurlCache) Set(_ context.Context, key string, val interface{}, _ 
 	if err != nil {
 		return err
 	}
+	f.mu.Lock()
 	f.store[key] = b
+	f.mu.Unlock()
 	return nil
 }
 
@@ -193,7 +200,7 @@ func TestUnfurlService_CachesPreview(t *testing.T) {
 }
 
 func newLoopbackUnfurlService(cache UnfurlCache) *UnfurlService {
-	// Plain http.Client without the safeDialContext guard so the test
+	// Plain http.Client without the netguard dial guard so the test
 	// can hit httptest's 127.0.0.1 server. fetchAndScrape skips
 	// validateURL too — both layers of the SSRF guard are still
 	// covered by the dedicated tests above. skipURLValidation lets
@@ -289,50 +296,45 @@ func TestUnfurlService_RejectsNonHTMLContentType(t *testing.T) {
 	}
 }
 
-// TestSafeDialContext_BlocksPrivateAndLoopback covers the dial-layer
-// SSRF guard. Production callers wire safeDialContext into the unfurl
-// http.Transport so a hostname that only resolves to private IPs (post-
-// validateURL bypass) still cannot connect.
-func TestSafeDialContext_BlocksPrivateAndLoopback(t *testing.T) {
+// TestUnfurlClient_RefusesPrivateDestinations covers the dial-layer SSRF
+// guard. The production unfurl client dials through netguard, so a request
+// (or a redirect hop, or a hostname that resolves privately) cannot connect
+// to a private address even past validateURL.
+func TestUnfurlClient_RefusesPrivateDestinations(t *testing.T) {
 	cases := []struct {
 		name string
-		addr string
+		url  string
 	}{
-		{"loopback v4 host", "127.0.0.1:80"},
-		{"loopback v6 host", "[::1]:80"},
-		{"private 10/8", "10.0.0.1:80"},
-		{"private 192.168/16", "192.168.0.1:80"},
-		{"private 172.16/12", "172.16.0.1:80"},
-		{"link-local", "169.254.169.254:80"},
+		{"loopback v4 host", "http://127.0.0.1:80/"},
+		{"loopback v6 host", "http://[::1]:80/"},
+		{"private 10/8", "http://10.0.0.1:80/"},
+		{"private 192.168/16", "http://192.168.0.1:80/"},
+		{"private 172.16/12", "http://172.16.0.1:80/"},
+		{"link-local", "http://169.254.169.254:80/"},
 	}
+	client := NewUnfurlService(nil).client
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			conn, err := safeDialContext(context.Background(), "tcp", tc.addr)
+			res, err := client.Get(tc.url)
 			if err == nil {
-				_ = conn.Close()
-				t.Fatalf("expected dial to be blocked for %q", tc.addr)
+				_ = res.Body.Close()
+				t.Fatalf("expected dial to be blocked for %q", tc.url)
 			}
-			if !strings.Contains(err.Error(), "blocked private IP") {
-				t.Errorf("unexpected error for %q: %v", tc.addr, err)
+			if !errors.Is(err, ssrf.ErrProhibitedIP) {
+				t.Errorf("unexpected error for %q: %v", tc.url, err)
 			}
 		})
 	}
 }
 
-// TestSafeDialContext_RejectsMissingPort covers the SplitHostPort
-// guard.
-func TestSafeDialContext_RejectsMissingPort(t *testing.T) {
-	if _, err := safeDialContext(context.Background(), "tcp", "127.0.0.1"); err == nil {
-		t.Error("expected SplitHostPort error for malformed addr")
-	}
-}
-
-// TestSafeDialContext_LookupFailure covers the resolver-error path: an
-// obviously-invalid host should fail before any dialing happens.
-func TestSafeDialContext_LookupFailure(t *testing.T) {
+// TestUnfurlClient_LookupFailure covers the resolver-error path: an
+// obviously-invalid host fails before any dialing happens.
+func TestUnfurlClient_LookupFailure(t *testing.T) {
 	// .invalid is reserved by RFC 2606 and guaranteed never to resolve.
-	if _, err := safeDialContext(context.Background(), "tcp", "definitely-not-a-real-host.invalid:80"); err == nil {
-		t.Error("expected lookup error for .invalid host")
+	res, err := NewUnfurlService(nil).client.Get("http://definitely-not-a-real-host.invalid/")
+	if err == nil {
+		_ = res.Body.Close()
+		t.Fatal("expected lookup error for .invalid host")
 	}
 }
 
@@ -340,15 +342,20 @@ func TestSafeDialContext_LookupFailure(t *testing.T) {
 // call so tests can assert HEAD/PUT/Presign hits and seed `existing` keys
 // to simulate the cache-hit path.
 type fakeImageStore struct {
+	// mu makes the fake safe for the webhook's parallel image lookups.
+	mu        sync.Mutex
 	existing  map[string]bool
 	puts      map[string][]byte
 	puttypes  map[string]string
 	headCalls int
 	putCalls  int
 	signCalls int
+	getCalls  int
 	failHead  bool
 	failPut   bool
 	failSign  bool
+	failGet   bool
+	failRead  bool
 }
 
 func newFakeImageStore() *fakeImageStore {
@@ -360,6 +367,8 @@ func newFakeImageStore() *fakeImageStore {
 }
 
 func (f *fakeImageStore) HeadObject(_ context.Context, key string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.headCalls++
 	if f.failHead {
 		return false, errors.New("head failed")
@@ -368,6 +377,8 @@ func (f *fakeImageStore) HeadObject(_ context.Context, key string) (bool, error)
 }
 
 func (f *fakeImageStore) PutObject(_ context.Context, key, contentType string, body []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.putCalls++
 	if f.failPut {
 		return errors.New("put failed")
@@ -379,6 +390,8 @@ func (f *fakeImageStore) PutObject(_ context.Context, key, contentType string, b
 }
 
 func (f *fakeImageStore) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.signCalls++
 	if f.failSign {
 		return "", errors.New("sign failed")
@@ -386,6 +399,15 @@ func (f *fakeImageStore) PresignedGetURL(_ context.Context, key string, _ time.D
 	return "https://s3.example/" + key + "?sig=abc", nil
 }
 func (f *fakeImageStore) GetObject(_ context.Context, key string) (io.ReadCloser, string, int64, time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.getCalls++
+	if f.failGet {
+		return nil, "", 0, time.Time{}, errors.New("get failed")
+	}
+	if f.failRead {
+		return errBody{}, "", 0, time.Time{}, nil
+	}
 	body := f.puts[key]
 	return io.NopCloser(bytes.NewReader(body)), f.puttypes[key], int64(len(body)), time.Time{}, nil
 }
@@ -706,19 +728,19 @@ func TestUnfurlService_ValidationAndScrapeFallbacks(t *testing.T) {
 	if err := validateURL(mustParseURL(t, "https:///missing-host")); err == nil {
 		t.Fatal("expected empty host validation error")
 	}
-	if isPublicIP(net.ParseIP("224.0.0.1")) {
+	if err := validateURL(mustParseURL(t, "http://224.0.0.1/")); err == nil {
 		t.Fatal("multicast IP must not be public")
 	}
 	// CGNAT (RFC 6598) and NAT64 (RFC 6052) can reach internal infra but aren't
 	// covered by net.IP's built-in predicates — they must be denied explicitly.
-	if isPublicIP(net.ParseIP("100.64.1.1")) {
+	if err := validateURL(mustParseURL(t, "http://100.64.1.1/")); err == nil {
 		t.Fatal("CGNAT IP must not be public")
 	}
-	if isPublicIP(net.ParseIP("64:ff9b::a00:1")) {
+	if err := validateURL(mustParseURL(t, "http://[64:ff9b::a00:1]/")); err == nil {
 		t.Fatal("NAT64-embedded IP must not be public")
 	}
-	if !isPublicIP(net.ParseIP("93.184.216.34")) {
-		t.Fatal("a genuine public IP must remain public")
+	if err := validateURL(mustParseURL(t, "http://93.184.216.34/")); err != nil {
+		t.Fatalf("a genuine public IP must remain public: %v", err)
 	}
 
 	linkPreview := scrapePreview(`<link rel="image_src" href="/cover.png">`, "https://example.com/post")

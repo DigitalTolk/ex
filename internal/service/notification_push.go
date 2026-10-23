@@ -64,7 +64,7 @@ func (s *NotificationService) bumpNotifyCount(ctx context.Context, parentType, p
 	}
 	n, err := bumper.IncrementNotifyCount(ctx, parentID, userID)
 	if err != nil {
-		slog.Warn("notify count bump failed", "parentID", parentID, "userID", userID, "error", err)
+		slog.WarnContext(ctx, "notify count bump failed", "parentID", parentID, "userID", userID, "error", err)
 		return 0, false
 	}
 	return n, true
@@ -86,7 +86,7 @@ func (s *NotificationService) sendMobilePush(ctx context.Context, recipientUserI
 		// skipping the push outright, we DEFER it; the worker checks for the
 		// client's ACK at delivery time and pushes only if none arrived.
 		// Presence can be wrong in EITHER direction without losing an alert.
-		if s.ackStore == nil || notif.deliveryKey() == "" {
+		if s.ackStore == nil || notif.DeliveryKey() == "" {
 			// No ack tracking (or nothing to key on) — fall back to the old
 			// presence-only behaviour: skip the push for an online user.
 			return
@@ -104,7 +104,7 @@ func (s *NotificationService) sendMobilePush(ctx context.Context, recipientUserI
 	// reminder fired during shutdown still gets its push scheduled.
 	if err := s.pushSched.SchedulePush(context.WithoutCancel(ctx), recipientUserID, notif, delay); err != nil {
 		// A failed schedule IS a potentially lost alert — loud, never silent.
-		slog.Error(
+		slog.ErrorContext(ctx,
 			"mobile push schedule failed — alert may not reach the recipient",
 			"userID", recipientUserID,
 			"parentID", notif.ParentID,

@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { useEffect } from 'react';
-import { render, screen, act, waitFor } from '@testing-library/react';
-import { ConstantBackoff, handleAll, retry } from 'cockatiel';
-import { PresenceProvider, usePresence, presenceRetry } from './PresenceContext';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
+import { PresenceProvider, presenceQueryKey, presenceRetry, refreshPresence, usePresence } from './PresenceContext';
+import { usePresenceStore } from '@/stores/presence';
 
 const apiFetchMock = vi.fn();
 vi.mock('@/lib/api', () => ({
@@ -29,202 +30,183 @@ function Consumer({ targetId = 'u-1' }: { targetId?: string }) {
   );
 }
 
+let qc: QueryClient;
+function renderProvider(children: ReactNode = <Consumer />) {
+  qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const ui = (node: ReactNode) => (
+    <QueryClientProvider client={qc}>
+      <PresenceProvider>{node}</PresenceProvider>
+    </QueryClientProvider>
+  );
+  const view = render(ui(children));
+  return { ...view, rerenderProvider: () => view.rerender(ui(children)) };
+}
+
+const online = () => [...usePresenceStore.getState().online].sort();
+const originalDelay = presenceRetry.delay;
+
 beforeEach(() => {
   apiFetchMock.mockReset();
   mockAuth = { isAuthenticated: true, user: { id: 'me' } };
-  // Zero-backoff retry so failure-path tests don't sleep out the
-  // production curve (same attempt count, no delays).
-  presenceRetry.policy = retry(handleAll, { maxAttempts: 3, backoff: new ConstantBackoff(0) });
+  // Zero delay so the failure paths don't sleep out the production curve
+  // (same attempt count).
+  presenceRetry.delay = () => 0;
+});
+afterEach(() => {
+  presenceRetry.delay = originalDelay;
 });
 
-describe('PresenceContext', () => {
-  it('seeds online from /api/v1/presence and includes self', async () => {
+describe('PresenceProvider backfill', () => {
+  it('seeds the store from /api/v1/presence and includes self', async () => {
     apiFetchMock.mockResolvedValueOnce({ online: ['u-1', 'u-2'] });
-    render(
-      <PresenceProvider>
-        <Consumer />
-      </PresenceProvider>,
-    );
-    await waitFor(() => {
-      // u-1, u-2, plus self id "me" → 3
-      expect(screen.getByTestId('size')).toHaveTextContent('3');
-    });
+    renderProvider();
+    await waitFor(() => expect(screen.getByTestId('size')).toHaveTextContent('3'));
+    expect(online()).toEqual(['me', 'u-1', 'u-2']);
     expect(screen.getByTestId('is-online')).toHaveTextContent('true');
+    expect(apiFetchMock).toHaveBeenCalledWith('/api/v1/presence');
   });
 
-  it('does not fetch when not authenticated', async () => {
+  it('waits for sign-in before fetching', async () => {
     mockAuth = { isAuthenticated: false, user: null };
-    render(
-      <PresenceProvider>
-        <Consumer />
-      </PresenceProvider>,
-    );
+    apiFetchMock.mockResolvedValue({ online: ['u-1'] });
+    const { rerenderProvider } = renderProvider();
     expect(apiFetchMock).not.toHaveBeenCalled();
     expect(screen.getByTestId('size')).toHaveTextContent('0');
+
+    mockAuth = { isAuthenticated: true, user: { id: 'me' } };
+    rerenderProvider();
+    await waitFor(() => expect(online()).toEqual(['me', 'u-1']));
+    expect(apiFetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('falls back to seeding self even if backfill rejects', async () => {
-    apiFetchMock.mockRejectedValueOnce(new Error('boom'));
-    render(
-      <PresenceProvider>
-        <Consumer />
-      </PresenceProvider>,
-    );
-    await waitFor(() => {
-      expect(screen.getByTestId('size')).toHaveTextContent('1');
-    });
-  });
-
-  it('setUserOnline(true) adds id; toggling true→true is a no-op', async () => {
-    apiFetchMock.mockResolvedValueOnce({ online: [] });
-    render(
-      <PresenceProvider>
-        <Consumer targetId="u-3" />
-      </PresenceProvider>,
-    );
-    // Wait for backfill to settle
-    await waitFor(() => expect(screen.getByTestId('size')).toHaveTextContent('1'));
-    expect(screen.getByTestId('is-online')).toHaveTextContent('false');
-
-    act(() => screen.getByText('set-online').click());
-    expect(screen.getByTestId('is-online')).toHaveTextContent('true');
-    expect(screen.getByTestId('size')).toHaveTextContent('2');
-
-    // Setting online again — should be a no-op (same Set instance per impl).
-    act(() => screen.getByText('set-online').click());
-    expect(screen.getByTestId('size')).toHaveTextContent('2');
-  });
-
-  it('setUserOnline(false) removes id; toggling false→false is a no-op', async () => {
-    apiFetchMock.mockResolvedValueOnce({ online: ['u-1'] });
-    render(
-      <PresenceProvider>
-        <Consumer />
-      </PresenceProvider>,
-    );
-    await waitFor(() => expect(screen.getByTestId('is-online')).toHaveTextContent('true'));
-
-    act(() => screen.getByText('set-offline').click());
-    expect(screen.getByTestId('is-online')).toHaveTextContent('false');
-
-    // No-op when already offline.
-    act(() => screen.getByText('set-offline').click());
-    expect(screen.getByTestId('is-online')).toHaveTextContent('false');
-  });
-
-  it('usePresence outside the provider returns no-op defaults', () => {
-    render(<Consumer />);
-    expect(screen.getByTestId('size')).toHaveTextContent('0');
-    expect(screen.getByTestId('is-online')).toHaveTextContent('false');
-    // Calling setUserOnline should not throw.
-    act(() => screen.getByText('set-online').click());
-    expect(screen.getByTestId('is-online')).toHaveTextContent('false');
-  });
-});
-
-
-describe('presence backfill retry + reconnect refresh', () => {
-  it('recovers the backfill after transient failures (retry policy)', async () => {
+  it('recovers after transient failures: three attempts in all', async () => {
     // One-shot fetch was the old behavior: a single failed boot request left
-    // every presence dot dark for the session. The policy retries it.
+    // every presence dot dark for the session.
     apiFetchMock
       .mockRejectedValueOnce(new Error('boot blip'))
       .mockRejectedValueOnce(new Error('boot blip'))
       .mockResolvedValueOnce({ online: ['u-1'] });
-    render(
-      <PresenceProvider>
-        <Consumer />
-      </PresenceProvider>,
-    );
-    await waitFor(() => expect(screen.getByTestId('is-online').textContent).toBe('true'));
+    renderProvider();
+    await waitFor(() => expect(screen.getByTestId('is-online')).toHaveTextContent('true'));
     expect(apiFetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('still seeds self when every attempt fails', async () => {
+    apiFetchMock.mockRejectedValue(new Error('down'));
+    renderProvider();
+    await waitFor(() => expect(online()).toEqual(['me']));
+    expect(apiFetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('a failure with no signed-in user id seeds nobody', async () => {
+    mockAuth = { isAuthenticated: true, user: null };
+    apiFetchMock.mockRejectedValue(new Error('down'));
+    renderProvider();
+    await waitFor(() => expect(qc.getQueryState(presenceQueryKey)?.status).toBe('error'));
+    expect(online()).toEqual([]);
+  });
+
+  it('takes a payload without an online list as nobody online, and seeds no self without an id', async () => {
+    mockAuth = { isAuthenticated: true, user: null };
+    usePresenceStore.getState().setUserOnline('stale', true);
+    apiFetchMock.mockResolvedValueOnce({});
+    renderProvider();
+    await waitFor(() => expect(qc.getQueryState(presenceQueryKey)?.status).toBe('success'));
+    expect(online()).toEqual([]);
   });
 
   it('refreshPresence refetches the authoritative set (reconnect reconciliation)', async () => {
     apiFetchMock.mockResolvedValueOnce({ online: [] });
-    let refresh: (() => void) | null = null;
-    function Grab() {
-      const { refreshPresence } = usePresence();
-      useEffect(() => {
-        refresh = refreshPresence;
-      });
-      return null;
-    }
-    render(
-      <PresenceProvider>
-        <Grab />
-        <Consumer />
-      </PresenceProvider>,
-    );
-    await waitFor(() => expect(apiFetchMock).toHaveBeenCalledTimes(1));
-    // While disconnected, u-1 came online — the ephemeral presence.changed
-    // was lost, so the reconnect refresh is what reconciles the set.
+    renderProvider();
+    await waitFor(() => expect(online()).toEqual(['me']));
+    // While disconnected, u-1 came online and u-9's event was missed too —
+    // the ephemeral presence.changed was lost, so the refresh reconciles.
+    act(() => usePresenceStore.getState().setUserOnline('u-9', true));
     apiFetchMock.mockResolvedValueOnce({ online: ['u-1'] });
-    act(() => refresh!());
-    await waitFor(() => expect(screen.getByTestId('is-online').textContent).toBe('true'));
+    act(() => refreshPresence(qc));
+    await waitFor(() => expect(online()).toEqual(['me', 'u-1']));
   });
 
-  it('a stale in-flight backfill cannot clobber a newer refresh (seq guard)', async () => {
+  it('replaces the set even when a refresh returns the same list as before', async () => {
+    apiFetchMock.mockResolvedValue({ online: ['u-1'] });
+    renderProvider();
+    await waitFor(() => expect(online()).toEqual(['me', 'u-1']));
+    // A live event since then turned out wrong (it was missed going back).
+    act(() => usePresenceStore.getState().setUserOnline('u-2', true));
+    act(() => refreshPresence(qc));
+    await waitFor(() => expect(online()).toEqual(['me', 'u-1']));
+  });
+
+  it('a slow older backfill cannot overwrite a newer refresh', async () => {
     let resolveFirst: (v: { online: string[] }) => void = () => undefined;
     apiFetchMock
-      .mockImplementationOnce(() => new Promise((r) => { resolveFirst = r; })) // slow boot fetch
-      .mockResolvedValueOnce({ online: ['u-1'] }); // fast reconnect refresh
-    let refresh: (() => void) | null = null;
-    function Grab() {
-      const { refreshPresence } = usePresence();
-      useEffect(() => {
-        refresh = refreshPresence;
-      });
-      return null;
-    }
-    render(
-      <PresenceProvider>
-        <Grab />
-        <Consumer />
-      </PresenceProvider>,
-    );
+      .mockImplementationOnce(() => new Promise((r) => { resolveFirst = r; }))
+      .mockResolvedValueOnce({ online: ['u-1'] });
+    renderProvider();
     await waitFor(() => expect(apiFetchMock).toHaveBeenCalledTimes(1));
-    act(() => refresh!()); // newer refresh wins the seq
-    await waitFor(() => expect(screen.getByTestId('is-online').textContent).toBe('true'));
-    // The slow FIRST response lands late with an empty set — it must be dropped.
-    act(() => resolveFirst({ online: [] }));
-    await new Promise((r) => setTimeout(r, 20));
-    expect(screen.getByTestId('is-online').textContent).toBe('true');
+    act(() => refreshPresence(qc));
+    await waitFor(() => expect(online()).toEqual(['me', 'u-1']));
+    // The first response lands late with an empty set: dropped.
+    await act(async () => {
+      resolveFirst({ online: [] });
+    });
+    expect(online()).toEqual(['me', 'u-1']);
   });
 
-  it('a stale in-flight failure cannot re-seed over a newer refresh (seq guard, catch arm)', async () => {
-    // Single-attempt policy so the held boot fetch's rejection IS the final
-    // failure (no retry chain to interleave with the newer refresh).
-    presenceRetry.policy = retry(handleAll, { maxAttempts: 1, backoff: new ConstantBackoff(0) });
-    let rejectBoot: (e: Error) => void = () => undefined;
+  it('a slow older failure cannot undo a newer refresh', async () => {
+    let rejectFirst: (e: Error) => void = () => undefined;
     apiFetchMock
-      .mockImplementationOnce(() => new Promise((_, rej) => { rejectBoot = rej; }))
-      .mockResolvedValueOnce({ online: ['u-1'] })
-      // Any FURTHER boot-retry attempts must also fail, or a stray retry
-      // "succeeds" with undefined and takes the success path instead of the
-      // stale-catch arm this test exists for.
-      .mockRejectedValue(new Error('still failing'));
-    let refresh: (() => void) | null = null;
-    function Grab() {
-      const { refreshPresence } = usePresence();
-      useEffect(() => {
-        refresh = refreshPresence;
-      });
-      return null;
-    }
-    render(
-      <PresenceProvider>
-        <Grab />
-        <Consumer />
-      </PresenceProvider>,
-    );
+      .mockImplementationOnce(() => new Promise((_, rej) => { rejectFirst = rej; }))
+      .mockResolvedValueOnce({ online: ['u-1'] });
+    renderProvider();
     await waitFor(() => expect(apiFetchMock).toHaveBeenCalledTimes(1));
-    act(() => refresh!());
-    await waitFor(() => expect(screen.getByTestId('is-online').textContent).toBe('true'));
-    // The abandoned boot attempt fails late — stale seq, dropped (must not
-    // re-seed the set down to just self).
-    act(() => rejectBoot(new Error('late failure')));
-    await new Promise((r) => setTimeout(r, 20));
-    expect(screen.getByTestId('is-online').textContent).toBe('true');
+    act(() => refreshPresence(qc));
+    await waitFor(() => expect(online()).toEqual(['me', 'u-1']));
+    await act(async () => {
+      rejectFirst(new Error('late failure'));
+    });
+    expect(online()).toEqual(['me', 'u-1']);
+    expect(apiFetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('a backfill that lands after the provider unmounted changes nothing', async () => {
+    let resolveFirst: (v: { online: string[] }) => void = () => undefined;
+    apiFetchMock.mockImplementationOnce(() => new Promise((r) => { resolveFirst = r; }));
+    const { unmount } = renderProvider();
+    await waitFor(() => expect(apiFetchMock).toHaveBeenCalledTimes(1));
+    unmount();
+    await act(async () => {
+      resolveFirst({ online: ['u-1'] });
+    });
+    expect(online()).toEqual([]);
+  });
+});
+
+describe('usePresence', () => {
+  it('reads and writes the shared store, with or without the provider', () => {
+    render(<Consumer targetId="u-3" />);
+    expect(screen.getByTestId('is-online')).toHaveTextContent('false');
+    act(() => screen.getByText('set-online').click());
+    expect(screen.getByTestId('is-online')).toHaveTextContent('true');
+    const set = usePresenceStore.getState().online;
+    // Repeating a transition keeps the same set (no re-render for nothing).
+    act(() => screen.getByText('set-online').click());
+    expect(usePresenceStore.getState().online).toBe(set);
+    act(() => screen.getByText('set-offline').click());
+    expect(screen.getByTestId('is-online')).toHaveTextContent('false');
+  });
+});
+
+describe('presenceRetry.delay', () => {
+  it('backs off exponentially from 0.5 s to a 5 s cap, jittered to half its value at most', () => {
+    const random = vi.spyOn(Math, 'random');
+    try {
+      random.mockReturnValue(1);
+      expect([0, 1, 2, 3, 4, 8].map((n) => originalDelay(n))).toEqual([500, 1000, 2000, 4000, 5000, 5000]);
+      random.mockReturnValue(0);
+      expect(originalDelay(0)).toBe(250);
+    } finally {
+      random.mockRestore();
+    }
   });
 });

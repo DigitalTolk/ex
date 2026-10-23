@@ -140,7 +140,7 @@ export function GroupIntro({ participants, className }: GroupIntroProps) {
           >
             <Avatar className="h-6 w-6">
               {p.avatarURL && <AvatarImage src={p.avatarURL} alt="" />}
-              <AvatarFallback className="bg-primary/10 text-[10px]">
+              <AvatarFallback className="bg-primary/10 text-xs">
                 {getInitials(p.displayName)}
               </AvatarFallback>
             </Avatar>

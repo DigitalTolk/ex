@@ -8,6 +8,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
+	"github.com/DigitalTolk/ex/internal/safe"
 )
 
 // Periodic employee-directory re-sync. Login-time enrichment only refreshes a
@@ -91,7 +92,7 @@ func (s *DirectorySyncService) Run(ctx context.Context, interval time.Duration) 
 	if interval <= 0 {
 		interval = defaultDirectorySyncInterval
 	}
-	s.Sweep(ctx, interval)
+	s.sweepIsolated(ctx, interval)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -99,9 +100,18 @@ func (s *DirectorySyncService) Run(ctx context.Context, interval time.Duration) 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.Sweep(ctx, interval)
+			s.sweepIsolated(ctx, interval)
 		}
 	}
+}
+
+// sweepIsolated runs one sweep with its panics confined to it: Run lives on a
+// detached goroutine, where an unrecovered panic takes the whole process (and
+// every WebSocket client on it) down, and a sweep that recovered only at the
+// top of Run would silently end every later sweep too.
+func (s *DirectorySyncService) sweepIsolated(ctx context.Context, interval time.Duration) {
+	defer safe.Recover()
+	s.Sweep(ctx, interval)
 }
 
 // Sweep re-syncs every OIDC user once, if this instance wins the window's
@@ -111,7 +121,7 @@ func (s *DirectorySyncService) Sweep(ctx context.Context, interval time.Duration
 	if s.locker != nil {
 		ok, err := s.locker.AcquireLock(ctx, directorySyncLockKey, s.newToken(), interval-interval/10)
 		if err != nil {
-			slog.Warn("directory sync: lock acquire failed; skipping sweep", "error", err)
+			slog.WarnContext(ctx, "directory sync: lock acquire failed; skipping sweep", "error", err)
 			return
 		}
 		if !ok {
@@ -125,7 +135,7 @@ func (s *DirectorySyncService) Sweep(ctx context.Context, interval time.Duration
 	for {
 		users, next, err := s.users.ListUsers(ctx, directorySyncPageSize, cursor)
 		if err != nil {
-			slog.Warn("directory sync: list users failed; aborting sweep", "error", err)
+			slog.WarnContext(ctx, "directory sync: list users failed; aborting sweep", "error", err)
 			return
 		}
 		for _, u := range users {
@@ -143,9 +153,9 @@ func (s *DirectorySyncService) Sweep(ctx context.Context, interval time.Duration
 			if err != nil {
 				failures++
 				consecutive++
-				slog.Warn("directory sync: user sync failed", "userID", u.ID, "error", err)
+				slog.WarnContext(ctx, "directory sync: user sync failed", "userID", u.ID, "error", err)
 				if consecutive >= directorySyncMaxConsecutiveErrors {
-					slog.Warn("directory sync: too many consecutive failures — directory looks down; aborting sweep", "failures", failures)
+					slog.WarnContext(ctx, "directory sync: too many consecutive failures — directory looks down; aborting sweep", "failures", failures)
 					return
 				}
 				continue
@@ -166,10 +176,10 @@ func (s *DirectorySyncService) Sweep(ctx context.Context, interval time.Duration
 			case s.status != nil && u.Status == "deactivated":
 				// Back in the directory → restore access.
 				if err := s.status.SetStatusFromDirectory(ctx, u.ID, false); err != nil {
-					slog.Warn("directory sync: reactivate failed", "userID", u.ID, "error", err)
+					slog.WarnContext(ctx, "directory sync: reactivate failed", "userID", u.ID, "error", err)
 				} else {
 					reactivated++
-					slog.Info("directory sync: reactivated user found in directory", "userID", u.ID)
+					slog.InfoContext(ctx, "directory sync: reactivated user found in directory", "userID", u.ID)
 				}
 			}
 		}
@@ -180,7 +190,7 @@ func (s *DirectorySyncService) Sweep(ctx context.Context, interval time.Duration
 	}
 
 	deactivated := s.applyDeactivations(ctx, missing, synced)
-	slog.Info("directory sync: sweep complete",
+	slog.InfoContext(ctx, "directory sync: sweep complete",
 		"synced", synced, "changed", changed, "failures", failures,
 		"deactivated", deactivated, "reactivated", reactivated)
 }
@@ -193,18 +203,18 @@ func (s *DirectorySyncService) applyDeactivations(ctx context.Context, missing [
 	}
 	limit := max(directorySyncMinDeactivationCap, synced/10)
 	if len(missing) > limit {
-		slog.Error("directory sync: refusing to deactivate — too many users missing from the directory at once; check MS_TENANT_ID / app registration",
+		slog.ErrorContext(ctx, "directory sync: refusing to deactivate — too many users missing from the directory at once; check MS_TENANT_ID / app registration",
 			"missing", len(missing), "limit", limit, "synced", synced)
 		return 0
 	}
 	deactivated := 0
 	for _, u := range missing {
 		if err := s.status.SetStatusFromDirectory(ctx, u.ID, true); err != nil {
-			slog.Warn("directory sync: deactivate failed", "userID", u.ID, "error", err)
+			slog.WarnContext(ctx, "directory sync: deactivate failed", "userID", u.ID, "error", err)
 			continue
 		}
 		deactivated++
-		slog.Info("directory sync: deactivated user deleted from directory", "userID", u.ID)
+		slog.InfoContext(ctx, "directory sync: deactivated user deleted from directory", "userID", u.ID)
 	}
 	return deactivated
 }

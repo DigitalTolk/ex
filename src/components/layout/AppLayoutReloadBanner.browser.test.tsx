@@ -8,7 +8,7 @@ import ChatPage from '@/pages/ChatPage';
 import LoginPage from '@/pages/LoginPage';
 import { ChannelView } from '@/components/chat/ChannelView';
 import { ResourceErrorPage } from '@/pages/ResourceErrorPage';
-import { BUILD_VERSION, resetServerVersionForTests, setServerVersion } from '@/hooks/useServerVersion';
+import { applyServerVersionEvent, BUILD_VERSION } from '@/hooks/useServerVersion';
 import { apiFetch } from '@/lib/api';
 import { UnreadProvider } from '@/context/UnreadContext';
 import { PresenceProvider } from '@/context/PresenceContext';
@@ -45,8 +45,9 @@ vi.mock('./Sidebar', () => ({
   Sidebar: () => <div>Sidebar</div>,
 }));
 
-function renderWithProviders(ui: React.ReactElement) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+const newClient = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+function renderWithProviders(ui: React.ReactElement, qc = newClient()) {
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
 }
 
@@ -79,8 +80,8 @@ function apiJSON(body: unknown, version = BUILD_VERSION): Response {
 
 describe('AppLayout reload banner browser behavior', () => {
   it('shows the reload banner above a mobile channel-unavailable error', async () => {
-    resetServerVersionForTests();
-    setServerVersion(`newer-than-${BUILD_VERSION}`);
+    const qc = newClient();
+    applyServerVersionEvent(qc, `newer-than-${BUILD_VERSION}`);
 
     const screen = await renderWithProviders(
       <MemoryRouter initialEntries={['/channel/general']}>
@@ -90,6 +91,7 @@ describe('AppLayout reload banner browser behavior', () => {
           </AppLayout>
         </div>
       </MemoryRouter>,
+      qc,
     );
 
     await expect.element(screen.getByText('Channel unavailable')).toBeVisible();
@@ -113,7 +115,6 @@ describe('AppLayout reload banner browser behavior', () => {
   });
 
   it('shows the reload banner when a failing channel API response reports a newer app version', async () => {
-    resetServerVersionForTests();
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -173,7 +174,6 @@ describe('AppLayout reload banner browser behavior', () => {
   });
 
   it('shows the reload banner on the real mobile chat route when the channel request fails with a newer app version', async () => {
-    resetServerVersionForTests();
     const newerVersion = `newer-than-${BUILD_VERSION}`;
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
@@ -238,7 +238,6 @@ describe('AppLayout reload banner browser behavior', () => {
   });
 
   it('keeps the reload banner mounted while the mobile chat ready gate is still loading', async () => {
-    resetServerVersionForTests();
     const newerVersion = `newer-than-${BUILD_VERSION}`;
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
@@ -289,7 +288,6 @@ describe('AppLayout reload banner browser behavior', () => {
   });
 
   it('shows the reload banner on the mobile auth error surface when login reports a newer app version', async () => {
-    resetServerVersionForTests();
     const newerVersion = `newer-than-${BUILD_VERSION}`;
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {

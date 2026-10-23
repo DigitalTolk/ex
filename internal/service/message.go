@@ -10,11 +10,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/store"
+	lru "github.com/hashicorp/golang-lru/v2"
+	"github.com/oklog/ulid/v2"
 )
 
 // Parent type constants used by handlers to indicate whether the parent is a
@@ -27,7 +30,9 @@ const (
 )
 
 // ConversationActivator is implemented by ConversationService and lets
-// MessageService activate a conversation on first message send.
+// MessageService activate a conversation on first message send. It takes the
+// conversation the send already loaded for its access check, so activation
+// costs no second read (and none at all once the conversation is activated).
 //
 // Test-double policy: stateful fakes (in-memory maps mimicking store
 // semantics) stay hand-written in mocks_test.go; purely mechanical stubs —
@@ -36,7 +41,7 @@ const (
 //
 //go:generate go tool moq -out activator_moq_test.go -stub . ConversationActivator
 type ConversationActivator interface {
-	Activate(ctx context.Context, convID string) error
+	ActivateLoaded(ctx context.Context, conv *model.Conversation) error
 }
 
 // UnreadSeqStore drives the per-parent unread counter shared by channels and
@@ -117,7 +122,39 @@ type MessageService struct {
 	// skillBadges names the skills a run used, stamped on its agent posts.
 	// Optional seam (SetRunSkillResolver) — nil means no badges.
 	skillBadges func(ctx context.Context, runID string) []string
+	// mentions resolves mention pills to current names when rendering.
+	// Optional seam (SetMentionResolver) — nil keeps the typed names.
+	mentions MentionResolver
+	// renderCache holds each message version's hast (see renderedHast).
+	renderCache *lru.Cache[renderKey, renderEntry]
+	// fanOuts tracks in-flight notification fan-outs so graceful shutdown
+	// can drain them (WaitForNotifyFanOut); fanOutSlots bounds how many run
+	// at once — a fan-out over the limit waits for a slot, never dropped.
+	fanOuts     *inFlight
+	fanOutSlots chan struct{}
+	// safetyNet durably re-checks every fan-out (SetNotifySafetyNet).
+	safetyNet NotifySafetyNet
+	// seedUsers reads an account so /threads can tell a post-index sign-up
+	// (nothing to backfill) from an account with history. Optional seam
+	// (SetThreadSeedUsers) — nil keeps the one-time seed scan for everyone.
+	seedUsers ThreadSeedUserReader
+	// drafts clears the author's composer draft once a send lands. Optional
+	// seam (SetDraftClearer) — nil leaves drafts to the client.
+	drafts SentDraftClearer
 }
+
+// SetDraftClearer folds the draft clear into the send: a successful Send
+// clears the author's draft for that composer server-side, so the client
+// makes no separate request.
+func (s *MessageService) SetDraftClearer(c SentDraftClearer) { s.drafts = c }
+
+// ThreadSeedUserReader is the account read the /threads seed decision needs.
+type ThreadSeedUserReader interface {
+	GetUser(ctx context.Context, id string) (*model.User, error)
+}
+
+// SetThreadSeedUsers wires the account read behind the /threads seed skip.
+func (s *MessageService) SetThreadSeedUsers(u ThreadSeedUserReader) { s.seedUsers = u }
 
 // ChannelReader is the slice of the channel store the message service needs:
 // whether a channel parent is archived, which makes it read-only.
@@ -147,7 +184,7 @@ type MessageReminderSync interface {
 
 // MessageServiceDeps declares the full dependency surface of MessageService
 // in one place, splitting hard requirements from optional capabilities. The
-// production wiring (cmd/server) constructs through this so a half-wired
+// production wiring (internal/app) constructs through this so a half-wired
 // service can't escape into the router; tests use NewMessageService with just
 // the core five and opt into extras via the Set* methods.
 type MessageServiceDeps struct {
@@ -195,7 +232,75 @@ func NewMessageServiceFromDeps(d MessageServiceDeps) *MessageService {
 		notifier:      d.Notifier,
 		indexer:       d.Indexer,
 		activity:      d.Activity,
+		renderCache:   mustLRU(lru.New[renderKey, renderEntry](renderCacheSize)),
+		fanOuts:       newInFlight(),
+		fanOutSlots:   make(chan struct{}, maxConcurrentFanOuts),
 	}
+}
+
+// inFlight counts running work and lets a caller wait for it to reach zero.
+// Unlike a sync.WaitGroup it may be incremented while someone waits — a drain
+// at shutdown races messages agents are still posting, and a WaitGroup Add
+// from zero concurrent with Wait is a misuse panic.
+type inFlight struct {
+	mu   sync.Mutex
+	n    int
+	idle *sync.Cond
+}
+
+func newInFlight() *inFlight {
+	f := &inFlight{}
+	f.idle = sync.NewCond(&f.mu)
+	return f
+}
+
+func (f *inFlight) add() {
+	f.mu.Lock()
+	f.n++
+	f.mu.Unlock()
+}
+
+func (f *inFlight) done() {
+	f.mu.Lock()
+	f.n--
+	if f.n == 0 {
+		f.idle.Broadcast()
+	}
+	f.mu.Unlock()
+}
+
+// wait blocks until nothing is in flight; work added meanwhile is waited for
+// too.
+func (f *inFlight) wait() {
+	f.mu.Lock()
+	for f.n > 0 {
+		f.idle.Wait()
+	}
+	f.mu.Unlock()
+}
+
+// maxConcurrentFanOuts bounds the notification fan-outs one process runs at
+// once. Each fans out to a whole audience with its own bounded-parallel
+// writes, so a burst of messages could otherwise multiply into thousands of
+// concurrent store calls.
+const maxConcurrentFanOuts = 32
+
+// renderCacheSize bounds the rendered-hast cache: enough for the recent
+// messages every open chat and thread re-reads, small enough to stay a few
+// MB of trees.
+const renderCacheSize = 4096
+
+// renderKey names one version of a message: its id plus its edit stamp.
+type renderKey struct {
+	id     string
+	edited int64
+}
+
+// renderEntry is a cached render together with the body it was rendered
+// from, so a hit is only ever served for exactly that body.
+type renderEntry struct {
+	body string
+	hast *HastNode
 }
 
 // NewMessageService creates a MessageService from the required core five —
@@ -216,7 +321,7 @@ func NewMessageService(
 	})
 }
 
-// SetActivator wires the conversation activator. Called from main wiring after
+// SetActivator wires the conversation activator. Called from the app wiring after
 // both services are constructed to avoid a constructor cycle.
 func (s *MessageService) SetActivator(a ConversationActivator) { s.activator = a }
 
@@ -228,13 +333,42 @@ func (s *MessageService) SetChannelReader(c ChannelReader) { s.channels = c }
 // unread isn't persisted.
 func (s *MessageService) SetConversationSeqStore(c UnreadSeqStore) { s.convSeq = c }
 
-// SetAttachmentManager wires the attachment ref manager. Called from main
+// SetAttachmentManager wires the attachment ref manager. Called from the app
 // wiring after both services are constructed to avoid a constructor cycle.
 func (s *MessageService) SetAttachmentManager(a AttachmentRefManager) { s.attachments = a }
 
-// SetNotifier wires the notification dispatcher. Optional — when nil, no
-// alerts are produced and message sends still complete normally.
+// SetNotifier wires the notification dispatcher. Production must wire it —
+// NotificationsWired fails the boot otherwise; narrow tests leave it nil, and
+// then no alerts are produced.
 func (s *MessageService) SetNotifier(n MessageNotifier) { s.notifier = n }
+
+// NotifySafetyNet durably schedules, at send time, a later check that the
+// message's fan-out completed (see NotificationService.NotifyCheckTaskHandler):
+// a deploy or crash between the commit and the in-process fan-out would
+// otherwise lose the message's popup, Activity row and push.
+type NotifySafetyNet interface {
+	ScheduleNotifyCheck(ctx context.Context, msg *model.Message, parentType string) error
+}
+
+// SetNotifySafetyNet wires the durable fan-out check.
+func (s *MessageService) SetNotifySafetyNet(n NotifySafetyNet) { s.safetyNet = n }
+
+// NotificationsWired reports whether the alert pipeline is complete — a
+// notifier, and the durable safety net behind it. Boot refuses to serve
+// without it: a message service that silently alerts nobody is an incident.
+func (s *MessageService) NotificationsWired() error {
+	if s.notifier == nil {
+		return errors.New("message service: no notifier wired — messages would alert nobody")
+	}
+	if s.safetyNet == nil {
+		return errors.New("message service: no notification safety net wired — a crash would lose alerts")
+	}
+	return nil
+}
+
+// WaitForNotifyFanOut blocks until every in-flight (or queued) notification
+// fan-out finished. Graceful shutdown calls it, bounded, before exiting.
+func (s *MessageService) WaitForNotifyFanOut() { s.fanOuts.wait() }
 
 func (s *MessageService) SetIndexer(i MessageIndexer) { s.indexer = i }
 
@@ -244,7 +378,7 @@ func (s *MessageService) SetUserStateStore(userState UserStateStore) { s.userSta
 
 // SetParentIndex wires the per-parent pinned/file index. Required
 // for ListPinned / ListFiles to return any data — those paths read
-// exclusively from the index now. Production wiring (cmd/server/main.go)
+// exclusively from the index now. Production wiring (internal/app)
 // and every test helper (setupMessageService, setupChannelHandlerFull,
 // etc.) wire a real implementation. Pre-rollout data must be backfilled
 // once with `cmd/migrate-parent-index --apply` (see README).
@@ -281,11 +415,14 @@ func (s *MessageService) SetRunSkillResolver(f func(ctx context.Context, runID s
 // attachRendered populates the Rendered field on every supplied
 // Message. Centralising this means every return path in the service
 // (Send, Edit, List…, publishEvent) gets the hast tree without
-// having to remember to call the renderer at each call site.
-func (s *MessageService) attachRendered(msgs ...*model.Message) {
+// having to remember to call the renderer at each call site. The
+// batch's mention pills are then resolved to current names in one
+// lookup (resolveMentionPills).
+func (s *MessageService) attachRendered(ctx context.Context, msgs ...*model.Message) {
 	if s.markdown == nil {
 		return
 	}
+	trees := make([]*HastNode, 0, len(msgs))
 	for _, m := range msgs {
 		if m == nil {
 			continue
@@ -296,8 +433,33 @@ func (s *MessageService) attachRendered(msgs ...*model.Message) {
 		if m.Deleted || m.Body == "" {
 			continue
 		}
-		m.Rendered = s.markdown.RenderToHast(m.Body)
+		m.Rendered = s.renderedHast(m)
+		if s.mentions != nil && hasMentions(m.Rendered) {
+			// The cached tree is shared read-only; the pills are patched
+			// with current names on this message's own copy.
+			m.Rendered = cloneHast(m.Rendered)
+		}
+		trees = append(trees, m.Rendered)
 	}
+	s.resolveMentionPills(ctx, trees)
+}
+
+// renderedHast returns m's hast, parsing the markdown at most once per
+// message version: a send renders once for the broadcast copy and the
+// response, and later list/thread/pin reads of the same version reuse it. The
+// key is (id, edit stamp) and a hit must match the body too, so a stale tree
+// is never served. The tree is shared read-only.
+func (s *MessageService) renderedHast(m *model.Message) *HastNode {
+	key := renderKey{id: m.ID}
+	if m.EditedAt != nil {
+		key.edited = m.EditedAt.UnixNano()
+	}
+	if e, ok := s.renderCache.Get(key); ok && e.body == m.Body {
+		return e.hast
+	}
+	hast := s.markdown.RenderToHast(m.Body)
+	s.renderCache.Add(key, renderEntry{body: m.Body, hast: hast})
+	return hast
 }
 
 func (s *MessageService) CheckAccess(ctx context.Context, userID, parentID, parentType string) error {
@@ -378,25 +540,49 @@ func (s *MessageService) indexMessage(ctx context.Context, m *model.Message, par
 		bg, cancel := detachedContext(ctx)
 		defer cancel()
 		if err := s.indexer.IndexMessage(bg, m, parentType); err != nil {
-			slog.Warn("search index message failed", "id", m.ID, "error", err)
+			slog.WarnContext(ctx, "search index message failed", "id", m.ID, "error", err)
 		}
 	})
 }
 
 // notify dispatches user-facing notifications off the send path. Like
 // indexMessage it runs in a detached goroutine with a cancellation-free context:
-// the recipient fan-out (member read + per-recipient prefs + mobile push) is
-// best-effort and must never add to the sender's request latency, nor can a
-// notify failure affect the already-committed message or its event publish.
+// the recipient fan-out (member read + per-recipient prefs + mobile push) must
+// never add to the sender's request latency, nor can a notify failure affect
+// the already-committed message or its event publish.
+//
+// It is not best-effort, though. The goroutine first arms the durable safety
+// net (a check ~30s out that re-runs the fan-out unless it completed), then
+// waits for a fan-out slot — queued, never dropped — and is tracked so
+// graceful shutdown drains it.
 func (s *MessageService) notify(ctx context.Context, msg *model.Message, parentType string, threadRoot *model.Message) {
 	if s.notifier == nil || msg == nil {
 		return
 	}
+	s.fanOuts.add()
 	safe.Go(func() {
+		defer s.fanOuts.done()
+		s.armNotifySafetyNet(ctx, msg, parentType)
+		s.fanOutSlots <- struct{}{}
+		defer func() { <-s.fanOutSlots }()
 		bg, cancel := detachedContext(ctx)
 		defer cancel()
 		s.notifier.NotifyForMessage(bg, msg, parentType, threadRoot)
 	})
+}
+
+// armNotifySafetyNet schedules the message's durable fan-out check. A system
+// message alerts nobody, so there is nothing to check.
+func (s *MessageService) armNotifySafetyNet(ctx context.Context, msg *model.Message, parentType string) {
+	if s.safetyNet == nil || msg.System {
+		return
+	}
+	bg, cancel := detachedContext(ctx)
+	defer cancel()
+	if err := s.safetyNet.ScheduleNotifyCheck(bg, msg, parentType); err != nil {
+		slog.ErrorContext(ctx, "notification safety net not armed — a crash before this message's fan-out completes would lose its alerts",
+			"messageID", msg.ID, "parentID", msg.ParentID, "error", err)
+	}
 }
 
 // bumpUnreadSeq advances a parent's unread counter for a new top-level message
@@ -419,7 +605,7 @@ func (s *MessageService) bumpUnreadSeq(ctx context.Context, store UnreadSeqStore
 func (s *MessageService) writeUnreadSeq(ctx context.Context, store UnreadSeqStore, parentID, authorID string) {
 	seq, err := store.IncrementMessageSeq(ctx, parentID)
 	if err != nil {
-		slog.Warn("unread seq increment failed", "parentID", parentID, "error", err)
+		slog.WarnContext(ctx, "unread seq increment failed", "parentID", parentID, "error", err)
 		return
 	}
 	// The webhook sentinel is not a member and keeps no read state — marking
@@ -429,7 +615,7 @@ func (s *MessageService) writeUnreadSeq(ctx context.Context, store UnreadSeqStor
 		return
 	}
 	if err := store.SetLastRead(ctx, parentID, authorID, seq); err != nil {
-		slog.Warn("author last-read mark failed", "parentID", parentID, "userID", authorID, "error", err)
+		slog.WarnContext(ctx, "author last-read mark failed", "parentID", parentID, "userID", authorID, "error", err)
 	}
 }
 
@@ -441,7 +627,7 @@ func (s *MessageService) deleteFromIndex(ctx context.Context, id string) {
 		bg, cancel := detachedContext(ctx)
 		defer cancel()
 		if err := s.indexer.DeleteMessage(bg, id); err != nil {
-			slog.Warn("search delete message failed", "id", id, "error", err)
+			slog.WarnContext(ctx, "search delete message failed", "id", id, "error", err)
 		}
 	})
 }
@@ -453,7 +639,24 @@ func (s *MessageService) deleteFromIndex(ctx context.Context, id string) {
 //
 // Attachments are bound by ID after the message row is persisted so dangling
 // refs are impossible.
+//
+// Send is the composer's send: once the message lands, the author's draft for
+// that composer (the thread composer for a reply) is cleared, unconditionally
+// and off the request path — sending is the authoritative event for the scope.
 func (s *MessageService) Send(ctx context.Context, userID, parentID, parentType, body, parentMessageID string, attachmentIDs ...string) (*model.Message, error) {
+	msg, err := s.send(ctx, userID, userID, parentID, parentType, body, parentMessageID, false, attachmentIDs...)
+	if err != nil {
+		return nil, err
+	}
+	clearSentDraft(ctx, s.drafts, draftScope{userID: userID, parentID: parentID, parentType: parentType, parentMessageID: parentMessageID})
+	return msg, nil
+}
+
+// SendScheduled posts a message composed earlier — a scheduled message at its
+// time. Everything a send does except the draft clear: the composer was
+// emptied when the message was scheduled, and whatever the author has drafted
+// there since is theirs to keep.
+func (s *MessageService) SendScheduled(ctx context.Context, userID, parentID, parentType, body, parentMessageID string, attachmentIDs ...string) (*model.Message, error) {
 	return s.send(ctx, userID, userID, parentID, parentType, body, parentMessageID, false, attachmentIDs...)
 }
 
@@ -513,7 +716,7 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 	}
 
 	if body == "" && len(attachmentIDs) == 0 {
-		return nil, errors.New("message: body or attachments required")
+		return nil, apperr.Invalid("message: body or attachments required")
 	}
 	if err := ValidateMessageBody(body); err != nil {
 		return nil, err
@@ -571,7 +774,7 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 
 	if err := s.bindAttachments(ctx, msg.ID, attachmentIDs); err != nil {
 		if delErr := s.messages.DeleteMessage(ctx, parentID, msg.ID); delErr != nil {
-			slog.Warn("message rollback after attachment bind failed", "msgID", msg.ID, "error", delErr)
+			slog.WarnContext(ctx, "message rollback after attachment bind failed", "msgID", msg.ID, "error", delErr)
 		}
 		return nil, err
 	}
@@ -588,7 +791,7 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 				continue
 			}
 			if err := s.parentIndex.SetFileIndex(ctx, parentID, aid, msg.ID, msg.AuthorID, msg.CreatedAt); err != nil {
-				slog.Warn("file index set failed", "msgID", msg.ID, "attachmentID", aid, "error", err)
+				slog.WarnContext(ctx, "file index set failed", "msgID", msg.ID, "attachmentID", aid, "error", err)
 			}
 		}
 	}
@@ -611,8 +814,8 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 			// Activate the conversation on first top-level message so non-creator
 			// participants see it appear in their sidebars only after activity exists.
 			if s.activator != nil {
-				if err := s.activator.Activate(ctx, parentID); err != nil {
-					slog.Warn("conversation activate failed", "convID", parentID, "error", err)
+				if err := s.activator.ActivateLoaded(ctx, conv); err != nil {
+					slog.WarnContext(ctx, "conversation activate failed", "convID", parentID, "error", err)
 				}
 			}
 		}
@@ -627,6 +830,11 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 	}
 
 	updatedThreadRoot := s.applyThreadReply(ctx, msg, parentType)
+
+	// Render once, before anything reads the message: the reply and its
+	// republished root resolve their mention pills in ONE lookup, and the
+	// broadcasts below and the response all reuse those trees.
+	s.attachRendered(ctx, msg, updatedThreadRoot)
 
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageNew, msg)
 
@@ -653,9 +861,8 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 	// @mentions an agent user starts a run. Detached like notify — model
 	// latency must never ride the send path. The dispatcher itself skips
 	// non-human authors, so an agent's own post can never trigger another run.
-	s.dispatchAgents(ctx, msg, parentType)
+	s.dispatchAgents(ctx, msg, parentType, sendConv)
 
-	s.attachRendered(msg)
 	return msg, nil
 }
 
@@ -664,7 +871,7 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 func (s *MessageService) touchConversationActivity(ctx context.Context, convID string, participantIDs []string, at time.Time) {
 	if err := s.conversations.TouchConversation(ctx, convID, participantIDs, at); err != nil {
 		// Ordering is cosmetic; the message is already stored.
-		slog.Warn("conversation activity touch failed", "convID", convID, "error", err)
+		slog.WarnContext(ctx, "conversation activity touch failed", "convID", convID, "error", err)
 		return
 	}
 	userChannels := make([]string, 0, len(participantIDs))
@@ -688,8 +895,11 @@ type WebhookMessageInput struct {
 	IconEmoji   string
 	Attachments []model.MessageAttachment
 	// ParentMessageID makes the post a thread reply. The root must be a live
-	// top-level post by the same author (see checkWebhookThreadRoot).
+	// top-level post by the same webhook (see checkWebhookThreadRoot).
 	ParentMessageID string
+	// WebhookID is the posting webhook, stamped on the message so its threads
+	// stay its own.
+	WebhookID string
 }
 
 func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput) (*model.Message, error) {
@@ -706,13 +916,13 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 		authorID = WebhookAuthorID
 	}
 	if parentID == "" {
-		return nil, errors.New("message: parent required")
+		return nil, apperr.Invalid("message: parent required")
 	}
 	if err := s.checkWritable(ctx, parentID, parentType); err != nil {
 		return nil, err
 	}
 	if in.Body == "" && len(in.Attachments) == 0 {
-		return nil, errors.New("message: body or attachments required")
+		return nil, apperr.Invalid("message: body or attachments required")
 	}
 	if err := ValidateMessageBody(in.Body); err != nil {
 		return nil, err
@@ -721,7 +931,7 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 		return nil, err
 	}
 	if in.ParentMessageID != "" {
-		if err := s.checkWebhookThreadRoot(ctx, parentID, in.ParentMessageID, authorID); err != nil {
+		if err := s.checkWebhookThreadRoot(ctx, parentID, in.ParentMessageID, authorID, in.WebhookID); err != nil {
 			return nil, err
 		}
 	}
@@ -735,6 +945,7 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 		WebhookAvatarURL:   in.AvatarURL,
 		WebhookIconEmoji:   in.IconEmoji,
 		MessageAttachments: in.Attachments,
+		WebhookID:          in.WebhookID,
 		CreatedAt:          time.Now(),
 	}
 	if msg.WebhookUsername == "" {
@@ -755,21 +966,23 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 		// updatedAt stays frozen at creation.
 		if s.conversations != nil {
 			if conv, err := s.conversations.GetConversation(ctx, parentID); err != nil {
-				slog.Warn("conversation load for webhook activity failed", "convID", parentID, "error", err)
+				slog.WarnContext(ctx, "conversation load for webhook activity failed", "convID", parentID, "error", err)
 			} else {
 				s.touchConversationActivity(ctx, parentID, conv.ParticipantIDs, msg.CreatedAt)
-			}
-		}
-		// The human send path's first-message activation: a DM from
-		// GetOrCreateDM starts un-activated and is hidden from everyone but
-		// its creator, so without this the message is delivered but invisible.
-		if s.activator != nil {
-			if err := s.activator.Activate(ctx, parentID); err != nil {
-				slog.Warn("webhook conversation activate failed", "convID", parentID, "error", err)
+				// The human send path's first-message activation: a DM from
+				// GetOrCreateDM starts un-activated and is hidden from everyone
+				// but its creator, so without this the message is delivered but
+				// invisible.
+				if s.activator != nil {
+					if err := s.activator.ActivateLoaded(ctx, conv); err != nil {
+						slog.WarnContext(ctx, "webhook conversation activate failed", "convID", parentID, "error", err)
+					}
+				}
 			}
 		}
 	}
 	updatedThreadRoot := s.applyThreadReply(ctx, msg, parentType)
+	s.attachRendered(ctx, msg, updatedThreadRoot) // once, for both broadcasts
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageNew, msg)
 	s.notify(ctx, msg, parentType, updatedThreadRoot)
 	s.indexMessage(ctx, msg, parentType)
@@ -781,9 +994,16 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 
 // checkWebhookThreadRoot gates webhook thread replies. The webhook URL is an
 // unauthenticated credential, so the root must be a live top-level post by
-// the same author (the channel webhook sentinel, or the webhook's own DM bot):
-// a webhook can continue its own threads but never write into a human one.
-func (s *MessageService) checkWebhookThreadRoot(ctx context.Context, parentID, rootID, authorID string) error {
+// this very webhook: a webhook can continue its own threads but never write
+// into a human one or another webhook's. Every channel webhook authors as the
+// shared sentinel, so for them the root's stamped WebhookID is the proof — a
+// sentinel root without one predates the stamp and proves nothing. A DM bot
+// account is already one per webhook, so its unstamped (legacy) roots pass.
+// legacyWebhookRootGrace is how long an unstamped shared-sentinel root (posted
+// before webhook ids were stamped) can still be continued by a webhook.
+const legacyWebhookRootGrace = 30 * 24 * time.Hour
+
+func (s *MessageService) checkWebhookThreadRoot(ctx context.Context, parentID, rootID, authorID, webhookID string) error {
 	root, err := s.messages.GetMessage(ctx, parentID, rootID)
 	if errors.Is(err, store.ErrNotFound) {
 		return fmt.Errorf("%w: root not found", ErrInvalidThreadRoot)
@@ -798,7 +1018,13 @@ func (s *MessageService) checkWebhookThreadRoot(ctx context.Context, parentID, r
 	if root.ParentMessageID != "" {
 		return fmt.Errorf("%w: root is itself a reply", ErrInvalidThreadRoot)
 	}
-	if root.AuthorID != authorID || root.System {
+	// Roots from before webhook ids were stamped: a DM bot is one per
+	// webhook, so its roots stay its own; a shared-sentinel root is only
+	// continued while recent, so an alert's follow-up to a thread started
+	// just before the deploy still lands (new roots are always stamped).
+	legacyBotRoot := root.WebhookID == "" && authorID != WebhookAuthorID
+	recentLegacySentinelRoot := root.WebhookID == "" && authorID == WebhookAuthorID && time.Since(root.CreatedAt) < legacyWebhookRootGrace
+	if root.AuthorID != authorID || root.System || (root.WebhookID != webhookID && !legacyBotRoot && !recentLegacySentinelRoot) {
 		return fmt.Errorf("%w: root was not posted by this webhook", ErrInvalidThreadRoot)
 	}
 	return nil
@@ -818,7 +1044,7 @@ func (s *MessageService) applyThreadReply(ctx context.Context, msg *model.Messag
 	if err != nil {
 		// The reply is saved but the root's replyCount/lastReplyAt didn't
 		// advance, so the thread shows a stale count until the next refetch.
-		slog.Warn("thread reply metadata increment failed", "rootID", msg.ParentMessageID, "replyID", msg.ID, "error", err)
+		slog.WarnContext(ctx, "thread reply metadata increment failed", "rootID", msg.ParentMessageID, "replyID", msg.ID, "error", err)
 		root = nil
 	}
 	// Write-time participation (reply author + root author) lets /threads read
@@ -864,7 +1090,7 @@ func (s *MessageService) followMentionedThreadUsers(ctx context.Context, msg *mo
 		return
 	}
 	if err := s.threadFollows.SetThreadFollowMany(ctx, follows); err != nil {
-		slog.Warn("thread mention follow batch failed", "count", len(follows), "threadRootID", msg.ParentMessageID, "error", err)
+		slog.WarnContext(ctx, "thread mention follow batch failed", "count", len(follows), "threadRootID", msg.ParentMessageID, "error", err)
 	}
 }
 
@@ -906,41 +1132,64 @@ func (s *MessageService) ThreadWindowMessages(ctx context.Context, userID, paren
 	if limit <= 0 {
 		return nil, nil
 	}
-	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
+	root, err := s.accessibleThreadRoot(ctx, userID, parentID, parentType, threadRootID)
+	if err != nil {
 		return nil, err
-	}
-	root, err := s.messages.GetMessage(ctx, parentID, threadRootID)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return nil, fmt.Errorf("message: thread window root: %w", err)
 	}
 	replies, err := s.messages.ListThreadRepliesNewest(ctx, threadRootID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("message: thread window: %w", err)
 	}
-	if root != nil && len(replies) < limit && len(replies) < root.ReplyCount {
+	replies = repliesInParent(replies, parentID)
+	if len(replies) < limit && len(replies) < root.ReplyCount {
 		return s.ListThreadMessages(ctx, userID, parentID, parentType, threadRootID)
 	}
 	out := make([]*model.Message, 0, len(replies)+1)
-	if root != nil {
-		out = append(out, root)
-	}
+	out = append(out, root)
 	out = append(out, replies...)
 	return out, nil
 }
 
-func (s *MessageService) ListThreadMessages(ctx context.Context, userID, parentID, parentType, threadRootID string) ([]*model.Message, error) {
+// accessibleThreadRoot is the gate every thread read goes through: the caller
+// must be able to read the parent named in the request AND the root must live
+// in that parent. The reply index (THREAD#<root>) is global, so checking only
+// the named parent let a member of one channel read any other parent's thread
+// by naming its root ID. A root that isn't in this parent is ErrNotFound.
+func (s *MessageService) accessibleThreadRoot(ctx context.Context, userID, parentID, parentType, threadRootID string) (*model.Message, error) {
 	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, err
 	}
-	// The root is fetched directly; only replies are indexed in GSI1.
 	root, err := s.messages.GetMessage(ctx, parentID, threadRootID)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return nil, fmt.Errorf("message: list thread root: %w", err)
+	if err != nil {
+		return nil, fmt.Errorf("message: thread root: %w", err)
+	}
+	return root, nil
+}
+
+// repliesInParent drops any indexed reply that lives outside parentID. The
+// THREAD# index is keyed by the root alone, so it is never trusted to scope a
+// read to the parent the caller was authorized for.
+func repliesInParent(replies []*model.Message, parentID string) []*model.Message {
+	out := make([]*model.Message, 0, len(replies))
+	for _, m := range replies {
+		if m.ParentID == parentID {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func (s *MessageService) ListThreadMessages(ctx context.Context, userID, parentID, parentType, threadRootID string) ([]*model.Message, error) {
+	// The root is fetched directly; only replies are indexed in GSI1.
+	root, err := s.accessibleThreadRoot(ctx, userID, parentID, parentType, threadRootID)
+	if err != nil {
+		return nil, err
 	}
 	replies, err := s.messages.ListThreadReplies(ctx, threadRootID)
 	if err != nil {
 		return nil, fmt.Errorf("message: list thread: %w", err)
 	}
+	replies = repliesInParent(replies, parentID)
 	// Fallback: if the GSI returns fewer replies than the root records, some
 	// replies aren't indexed — either the thread predates the backfill, or it's
 	// partially migrated (old replies unindexed + newer ones indexed). Scan the
@@ -949,19 +1198,17 @@ func (s *MessageService) ListThreadMessages(ctx context.Context, userID, parentI
 	// len(replies) >= ReplyCount and never trips this.) The transient case where
 	// the very latest reply lags the GSI also scans here — correct, just slower
 	// for that sub-second window; already-open clients got it over the WebSocket.
-	if root != nil && len(replies) < root.ReplyCount {
+	if len(replies) < root.ReplyCount {
 		thread, err := s.listThreadByScan(ctx, parentID, threadRootID)
 		stampParentType(thread, parentType)
 		return thread, err
 	}
 	thread := make([]*model.Message, 0, len(replies)+1)
-	if root != nil {
-		thread = append(thread, root)
-	}
+	thread = append(thread, root)
 	thread = append(thread, replies...)
 	sort.Slice(thread, func(i, j int) bool { return thread[i].ID < thread[j].ID })
 	stampParentType(thread, parentType)
-	s.attachRendered(thread...)
+	s.attachRendered(ctx, thread...)
 	return thread, nil
 }
 
@@ -980,7 +1227,7 @@ func (s *MessageService) listThreadByScan(ctx context.Context, parentID, threadR
 		}
 	}
 	sort.Slice(thread, func(i, j int) bool { return thread[i].ID < thread[j].ID })
-	s.attachRendered(thread...)
+	s.attachRendered(ctx, thread...)
 	return thread, nil
 }
 
@@ -1012,7 +1259,7 @@ func threadFollowKey(parentID, threadRootID string) string {
 // tabs and devices refresh their lists.
 func (s *MessageService) SetThreadFollow(ctx context.Context, userID, parentID, parentType, threadRootID string, following bool) error {
 	if parentType != ParentChannel && parentType != ParentConversation {
-		return errors.New("thread: invalid parent type")
+		return apperr.Invalid("thread: invalid parent type")
 	}
 	if s.threadFollows == nil {
 		return errors.New("thread: follow store unavailable")
@@ -1025,7 +1272,7 @@ func (s *MessageService) SetThreadFollow(ctx context.Context, userID, parentID, 
 		return fmt.Errorf("thread: get root: %w", err)
 	}
 	if root.ParentMessageID != "" {
-		return errors.New("thread: root must be a top-level message")
+		return apperr.Invalid("thread: root must be a top-level message")
 	}
 	if err := s.threadFollows.SetThreadFollow(ctx, &model.ThreadFollow{
 		UserID:       userID,
@@ -1039,7 +1286,7 @@ func (s *MessageService) SetThreadFollow(ctx context.Context, userID, parentID, 
 	}
 	if !following && s.userState != nil {
 		if err := s.userState.DeleteUserState(ctx, userID, model.UserStateThreadNotification, threadRootID); err != nil {
-			slog.Warn("unfollow: clear thread alert failed", "userID", userID, "threadRootID", threadRootID, "error", err)
+			slog.WarnContext(ctx, "unfollow: clear thread alert failed", "userID", userID, "threadRootID", threadRootID, "error", err)
 		}
 	}
 	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
@@ -1047,6 +1294,14 @@ func (s *MessageService) SetThreadFollow(ctx context.Context, userID, parentID, 
 	})
 	return nil
 }
+
+// threadIndexEpoch is when the write-time thread-participation index (follow
+// rows written for every replier and root author, see
+// recordThreadParticipation) was live everywhere: it shipped 2026-07-08, and
+// this cut-off leaves a margin for rollout. A thread rooted after it — or an
+// account created after it — has all its participation in follow rows; older
+// ones may not, and keep the legacy reads that rediscover it from history.
+var threadIndexEpoch = time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 
 // threadParticipationIndex is the optional write-time /threads index the
 // follow store exposes (adapter-backed by conditional puts + a per-user seed
@@ -1091,8 +1346,12 @@ func (s *MessageService) recordThreadParticipation(ctx context.Context, msg *mod
 		if uid == msg.AuthorID {
 			write = s.threadFollows.SetThreadFollow
 		}
-		if err := write(ctx, follow); err != nil {
-			slog.Warn("thread participation record failed", "userID", uid, "rootID", msg.ParentMessageID, "error", err)
+		// These rows are how later replies find this thread's participants
+		// (see threadFullyIndexed), so a transient failure is retried, and a
+		// final one is loud: this participant could miss the thread's alerts.
+		if _, err := retryAudienceLoad(ctx, func() (struct{}, error) { return struct{}{}, write(ctx, follow) }); err != nil {
+			slog.ErrorContext(ctx, "thread participation record failed — participant may miss this thread's alerts",
+				"userID", uid, "rootID", msg.ParentMessageID, "error", err)
 		}
 	}
 }
@@ -1168,7 +1427,7 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 	// Fast path: this user's participation is fully indexed — serve from the
 	// follow rows + notification pulls and batch-read only the root messages.
 	if idx, ok := s.threadFollows.(threadParticipationIndex); ok {
-		if seeded, err := idx.IsThreadIndexSeeded(ctx, userID); err == nil && seeded {
+		if seeded, err := idx.IsThreadIndexSeeded(ctx, userID); err == nil && (seeded || s.signedUpSinceThreadIndex(ctx, idx, userID)) {
 			return s.listUserThreadsFromIndex(ctx, parentTypes, follows, notificationThreads)
 		}
 	}
@@ -1287,6 +1546,47 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 	return out, nil
 }
 
+// signedUpSinceThreadIndex decides, on an unseeded first /threads visit,
+// whether userID can skip the legacy seed scan: an account ex created after
+// the write-time index existed has every thread it took part in already in
+// follow rows, so the scan (up to 25×200 messages per parent) would find
+// nothing. Such an account is marked seeded. Anything else keeps the scan.
+func (s *MessageService) signedUpSinceThreadIndex(ctx context.Context, idx threadParticipationIndex, userID string) bool {
+	if s.seedUsers == nil {
+		return false
+	}
+	u, err := s.seedUsers.GetUser(ctx, userID)
+	if err != nil || !nativeSinceThreadIndex(u) {
+		return false
+	}
+	if err := idx.MarkThreadIndexSeeded(ctx, userID); err != nil {
+		// Still served from the index; the next visit decides again.
+		slog.WarnContext(ctx, "thread index seed marker failed", "userID", userID, "error", err)
+	}
+	return true
+}
+
+// signupClockSkew bounds how far apart ex's sign-up stamps an account's ULID
+// and its CreatedAt (both taken from the same clock in one request).
+const signupClockSkew = time.Minute
+
+// nativeSinceThreadIndex reports whether u was created by ex's own sign-up
+// after threadIndexEpoch. Sign-up mints the ID as a ULID at creation, stamps
+// CreatedAt from the same moment and seeds the notification settings. The
+// history importer creates accounts differently — caller-chosen IDs, the
+// source system's creation time, no settings — and an imported account's
+// history (or an existing account's, mapped by email) may predate its follow
+// rows, so it never qualifies.
+func nativeSinceThreadIndex(u *model.User) bool {
+	id, err := ulid.ParseStrict(u.ID)
+	if err != nil || u.NotificationSettings == nil {
+		return false
+	}
+	minted := ulid.Time(id.Time())
+	skew := u.CreatedAt.Sub(minted)
+	return !minted.Before(threadIndexEpoch) && skew <= signupClockSkew && skew >= -signupClockSkew
+}
+
 // batchMessageStore is the optional batched-read capability of the message
 // store (one parent, many IDs). Asserted with a per-ID fallback.
 type batchMessageStore interface {
@@ -1403,12 +1703,12 @@ func (s *MessageService) seedThreadIndex(ctx context.Context, userID string, sum
 	}
 	if len(rows) > 0 {
 		if err := s.threadFollows.SetThreadFollowMany(ctx, rows); err != nil {
-			slog.Warn("thread index seed failed", "userID", userID, "rows", len(rows), "error", err)
+			slog.WarnContext(ctx, "thread index seed failed", "userID", userID, "rows", len(rows), "error", err)
 			return // not marked seeded — the next request retries
 		}
 	}
 	if err := idx.MarkThreadIndexSeeded(ctx, userID); err != nil {
-		slog.Warn("thread index seed marker failed", "userID", userID, "error", err)
+		slog.WarnContext(ctx, "thread index seed marker failed", "userID", userID, "error", err)
 	}
 }
 
@@ -1445,7 +1745,7 @@ func (s *MessageService) ListPinned(ctx context.Context, userID, parentID, paren
 	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, err
 	}
-	// parentIndex is mandatory — wired in cmd/server/main.go and in
+	// parentIndex is mandatory — wired in internal/app and in
 	// every test via setupMessageService. Pre-rollout legacy data
 	// must be backfilled once after deploy with
 	// `go run ./cmd/migrate-parent-index --apply` (see README).
@@ -1518,7 +1818,7 @@ func (s *MessageService) ListPinned(ctx context.Context, userID, parentID, paren
 		}
 		pinned = append(pinned, resolved[i])
 	}
-	s.attachRendered(pinned...)
+	s.attachRendered(ctx, pinned...)
 	return pinned, nil
 }
 
@@ -1655,13 +1955,33 @@ func (s *MessageService) ListAround(ctx context.Context, userID, parentID, paren
 	}
 	out = append(out, older...)
 	stampParentType(out, parentType)
-	s.attachRendered(out...)
+	s.attachRendered(ctx, out...)
 	return out, hasMoreOlder, hasMoreNewer, nil
 }
 
-// listTopLevel pages OLDER from `before` (or the live tail if empty),
-// accumulating top-level messages until we have `limit` of them.
+// topLevelMessageStore is the store's sparse index of top-level messages: a
+// page reads only the rows it returns. Optional capability — stores without
+// it (test fakes) take the filtering path below.
+type topLevelMessageStore interface {
+	ListTopLevelMessages(ctx context.Context, parentID, before string, limit int) ([]*model.Message, bool, error)
+	ListTopLevelMessagesAfter(ctx context.Context, parentID, after string, limit int) ([]*model.Message, bool, error)
+}
+
+// listTopLevel pages OLDER from `before` (or the live tail if empty). It reads
+// the top-level index when the store has one; until the index backfill has
+// run (store.ErrTopLevelIndexPending) it pages raw messages instead,
+// accumulating top-level ones until we have `limit` of them.
 func (s *MessageService) listTopLevel(ctx context.Context, parentID, before string, limit int) ([]*model.Message, bool, error) {
+	if idx, ok := s.messages.(topLevelMessageStore); ok {
+		msgs, hasMore, err := idx.ListTopLevelMessages(ctx, parentID, before, limit)
+		if err == nil {
+			s.attachRendered(ctx, msgs...)
+			return msgs, hasMore, nil
+		}
+		if !errors.Is(err, store.ErrTopLevelIndexPending) {
+			return nil, false, fmt.Errorf("message: list: %w", err)
+		}
+	}
 	collected := make([]*model.Message, 0, limit)
 	cursor := before
 	storeHasMore := true
@@ -1688,15 +2008,26 @@ func (s *MessageService) listTopLevel(ctx context.Context, parentID, before stri
 	} else if storeHasMore {
 		hasMore = true
 	}
-	s.attachRendered(collected...)
+	s.attachRendered(ctx, collected...)
 	return collected, hasMore, nil
 }
 
-// listTopLevelAfter pages NEWER from `after`. Cursor advances via the
-// newest raw ID seen so pure-reply stretches don't loop forever.
-// Accumulates oldest-first (closer-to-cursor wins on trim), then
-// reverses at the end to match List's newest-first contract.
+// listTopLevelAfter pages NEWER from `after`, from the top-level index like
+// listTopLevel. Until the backfill has run it pages raw messages: the cursor
+// advances via the newest raw ID seen so pure-reply stretches don't loop
+// forever, accumulating oldest-first (closer-to-cursor wins on trim), then
+// reversing at the end to match List's newest-first contract.
 func (s *MessageService) listTopLevelAfter(ctx context.Context, parentID, after string, limit int) ([]*model.Message, bool, error) {
+	if idx, ok := s.messages.(topLevelMessageStore); ok {
+		msgs, hasMore, err := idx.ListTopLevelMessagesAfter(ctx, parentID, after, limit)
+		if err == nil {
+			s.attachRendered(ctx, msgs...)
+			return msgs, hasMore, nil
+		}
+		if !errors.Is(err, store.ErrTopLevelIndexPending) {
+			return nil, false, fmt.Errorf("message: list after: %w", err)
+		}
+	}
 	collected := make([]*model.Message, 0, limit)
 	cursor := after
 	storeHasMore := true
@@ -1727,7 +2058,7 @@ func (s *MessageService) listTopLevelAfter(ctx context.Context, parentID, after 
 	for i, j := 0, len(collected)-1; i < j; i, j = i+1, j-1 {
 		collected[i], collected[j] = collected[j], collected[i]
 	}
-	s.attachRendered(collected...)
+	s.attachRendered(ctx, collected...)
 	return collected, hasMore, nil
 }
 
@@ -1746,7 +2077,7 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 	}
 
 	if msg.AuthorID != userID {
-		return nil, errors.New("message: only the author can edit")
+		return nil, apperr.Forbidden("message: only the author can edit")
 	}
 
 	finalAttachments := msg.AttachmentIDs
@@ -1754,7 +2085,7 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 		finalAttachments = attachmentIDs
 	}
 	if newBody == "" && len(finalAttachments) == 0 {
-		return nil, errors.New("message: body or attachments required")
+		return nil, apperr.Invalid("message: body or attachments required")
 	}
 	if err := ValidateMessageBody(newBody); err != nil {
 		return nil, err
@@ -1828,7 +2159,7 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 	if s.parentIndex != nil && (len(added) > 0 || len(removed) > 0) {
 		existing, err := s.parentIndex.ListFileIndex(ctx, parentID)
 		if err != nil {
-			slog.Warn("file index lookup on edit failed", "msgID", edited.ID, "error", err)
+			slog.WarnContext(ctx, "file index lookup on edit failed", "msgID", edited.ID, "error", err)
 			existing = nil
 		}
 		existingByAtt := make(map[string]FileIndexEntry, len(existing))
@@ -1840,7 +2171,7 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 				continue
 			}
 			if err := s.parentIndex.SetFileIndex(ctx, parentID, aid, edited.ID, edited.AuthorID, edited.CreatedAt); err != nil {
-				slog.Warn("file index set on edit failed", "msgID", edited.ID, "attachmentID", aid, "error", err)
+				slog.WarnContext(ctx, "file index set on edit failed", "msgID", edited.ID, "attachmentID", aid, "error", err)
 			}
 		}
 		for _, aid := range removed {
@@ -1849,11 +2180,12 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 				continue
 			}
 			if err := s.parentIndex.DeleteFileIndex(ctx, parentID, aid); err != nil {
-				slog.Warn("file index delete on edit failed", "msgID", edited.ID, "attachmentID", aid, "error", err)
+				slog.WarnContext(ctx, "file index delete on edit failed", "msgID", edited.ID, "attachmentID", aid, "error", err)
 			}
 		}
 	}
 
+	s.attachRendered(ctx, &edited) // once: the broadcast and the response share it
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, &edited)
 	if edited.Body != msg.Body {
 		if s.activity != nil {
@@ -1866,7 +2198,6 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 
 	s.indexMessage(ctx, &edited, parentType)
 
-	s.attachRendered(&edited)
 	return &edited, nil
 }
 
@@ -1889,10 +2220,10 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 		if parentType == ParentChannel {
 			mem, err := s.memberships.GetMembership(ctx, parentID, userID)
 			if err != nil || mem.Role < model.ChannelRoleAdmin {
-				return errors.New("message: only the author or a channel admin can delete")
+				return apperr.Forbidden("message: only the author or a channel admin can delete")
 			}
 		} else {
-			return errors.New("message: only the author can delete")
+			return apperr.Forbidden("message: only the author can delete")
 		}
 	}
 
@@ -1963,13 +2294,13 @@ func (s *MessageService) softDeleteMessage(ctx context.Context, msg *model.Messa
 	if s.parentIndex != nil {
 		if wasPinned {
 			if err := s.parentIndex.DeletePinIndex(ctx, parentID, msg.ID); err != nil {
-				slog.Warn("pin index delete on message-delete failed", "msgID", msg.ID, "error", err)
+				slog.WarnContext(ctx, "pin index delete on message-delete failed", "msgID", msg.ID, "error", err)
 			}
 		}
 		if len(originalAttachments) > 0 {
 			rows, err := s.parentIndex.ListFileIndex(ctx, parentID)
 			if err != nil {
-				slog.Warn("file index lookup on message-delete failed", "msgID", msg.ID, "error", err)
+				slog.WarnContext(ctx, "file index lookup on message-delete failed", "msgID", msg.ID, "error", err)
 			} else {
 				attached := make(map[string]struct{}, len(originalAttachments))
 				for _, aid := range originalAttachments {
@@ -1983,7 +2314,7 @@ func (s *MessageService) softDeleteMessage(ctx context.Context, msg *model.Messa
 						continue
 					}
 					if err := s.parentIndex.DeleteFileIndex(ctx, parentID, row.AttachmentID); err != nil {
-						slog.Warn("file index delete on message-delete failed", "msgID", msg.ID, "attachmentID", row.AttachmentID, "error", err)
+						slog.WarnContext(ctx, "file index delete on message-delete failed", "msgID", msg.ID, "attachmentID", row.AttachmentID, "error", err)
 					}
 				}
 			}
@@ -2008,7 +2339,7 @@ func (s *MessageService) softDeleteMessage(ctx context.Context, msg *model.Messa
 func (s *MessageService) cascadeDeleteThreadReplies(ctx context.Context, parentID, parentType, rootID string) []string {
 	msgs, err := s.scanParentMessages(ctx, parentID)
 	if err != nil {
-		slog.Warn("thread cascade scan failed", "rootID", rootID, "error", err)
+		slog.WarnContext(ctx, "thread cascade scan failed", "rootID", rootID, "error", err)
 		return nil
 	}
 	var deleted []string
@@ -2017,7 +2348,7 @@ func (s *MessageService) cascadeDeleteThreadReplies(ctx context.Context, parentI
 			continue
 		}
 		if err := s.softDeleteMessage(ctx, m, parentID, parentType); err != nil {
-			slog.Warn("thread reply cascade delete failed", "msgID", m.ID, "rootID", rootID, "error", err)
+			slog.WarnContext(ctx, "thread reply cascade delete failed", "msgID", m.ID, "rootID", rootID, "error", err)
 			continue
 		}
 		deleted = append(deleted, m.ID)
@@ -2068,7 +2399,7 @@ func (s *MessageService) toggleReaction(ctx context.Context, actorID, accessorID
 		return nil, err
 	}
 	if emoji == "" {
-		return nil, errors.New("message: emoji required")
+		return nil, apperr.Invalid("message: emoji required")
 	}
 	// Machine state reactions are backend-written only (SetMachineReaction);
 	// letting a human toggle one would fake an agent's run state (plan-v2 §3).
@@ -2118,6 +2449,7 @@ func (s *MessageService) toggleReaction(ctx context.Context, actorID, accessorID
 		return nil, fmt.Errorf("message: update: %w", err)
 	}
 
+	s.attachRendered(ctx, msg) // once: the broadcast and the response share it
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, msg)
 	s.indexMessage(ctx, msg, parentType)
 	// Only a freshly-ADDED reaction (not an un-react) is worth an activity hint;
@@ -2125,7 +2457,6 @@ func (s *MessageService) toggleReaction(ctx context.Context, actorID, accessorID
 	if added && s.activity != nil {
 		s.activity.RecordReaction(ctx, msg, parentType, userID, emoji)
 	}
-	s.attachRendered(msg)
 	return msg, nil
 }
 
@@ -2141,7 +2472,7 @@ func (s *MessageService) SetPinned(ctx context.Context, userID, parentID, parent
 		return nil, fmt.Errorf("message: get: %w", err)
 	}
 	if msg.Pinned == pinned {
-		s.attachRendered(msg)
+		s.attachRendered(ctx, msg)
 		return msg, nil
 	}
 	msg.Pinned = pinned
@@ -2162,19 +2493,19 @@ func (s *MessageService) SetPinned(ctx context.Context, userID, parentID, parent
 	if s.parentIndex != nil {
 		if pinned {
 			if err := s.parentIndex.SetPinIndex(ctx, parentID, msg.ID, userID, *msg.PinnedAt); err != nil {
-				slog.Warn("pin index set failed", "msgID", msg.ID, "error", err)
+				slog.WarnContext(ctx, "pin index set failed", "msgID", msg.ID, "error", err)
 			}
 		} else {
 			if err := s.parentIndex.DeletePinIndex(ctx, parentID, msg.ID); err != nil {
-				slog.Warn("pin index delete failed", "msgID", msg.ID, "error", err)
+				slog.WarnContext(ctx, "pin index delete failed", "msgID", msg.ID, "error", err)
 			}
 		}
 	}
 	// Re-use message.edited so existing message-list invalidation paths
 	// pick up the change without a new event handler. Pin is rare enough
 	// that a dedicated event would be over-engineered.
+	s.attachRendered(ctx, msg) // once: the broadcast and the response share it
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, msg)
-	s.attachRendered(msg)
 	return msg, nil
 }
 
@@ -2190,18 +2521,18 @@ func (s *MessageService) SetNoUnfurl(ctx context.Context, userID, parentID, pare
 		return nil, fmt.Errorf("message: get: %w", err)
 	}
 	if msg.AuthorID != userID {
-		return nil, errors.New("message: only the author can dismiss the link preview")
+		return nil, apperr.Forbidden("message: only the author can dismiss the link preview")
 	}
 	if msg.NoUnfurl == noUnfurl {
-		s.attachRendered(msg)
+		s.attachRendered(ctx, msg)
 		return msg, nil
 	}
 	msg.NoUnfurl = noUnfurl
 	if err := s.messages.UpdateMessage(ctx, msg); err != nil {
 		return nil, fmt.Errorf("message: update no-unfurl: %w", err)
 	}
+	s.attachRendered(ctx, msg) // once: the broadcast and the response share it
 	s.publishEvent(ctx, parentID, parentType, events.EventMessageEdited, msg)
-	s.attachRendered(msg)
 	return msg, nil
 }
 
@@ -2369,7 +2700,7 @@ func (s *MessageService) releaseAttachments(ctx context.Context, msgID string, i
 			defer wg.Done()
 			defer safe.Recover()
 			if err := s.attachments.RemoveRef(ctx, aid, msgID); err != nil {
-				slog.Warn("attachment remove ref failed", "attID", aid, "msgID", msgID, "error", err)
+				slog.WarnContext(ctx, "attachment remove ref failed", "attID", aid, "msgID", msgID, "error", err)
 			}
 		}(aid)
 	}
@@ -2412,8 +2743,14 @@ func (s *MessageService) publishEvent(ctx context.Context, parentID, parentType,
 		// Make sure every broadcast frame carries the rendered hast
 		// — the message-edited / message-new events ship the full
 		// model.Message and recipients shouldn't have to parse on
-		// receipt.
-		s.attachRendered(&cp)
+		// receipt. A message the caller already rendered (a send, an
+		// edit: the response carries the same tree) is reused as is —
+		// rendering the copy again was a second mention lookup per write.
+		// Rendered is only ever set by attachRendered from the current
+		// Body, so a set tree is never stale.
+		if cp.Rendered == nil {
+			s.attachRendered(ctx, &cp)
+		}
 		data = &cp
 	}
 	events.Publish(ctx, s.publisher, channel, eventType, data)

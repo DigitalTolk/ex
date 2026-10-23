@@ -165,7 +165,9 @@ func TestFinalizeConversation(t *testing.T) {
 	wantErr(t, err, errFault)
 	_, err = e.faulty(failOn("UpdateItem", 2)).FinalizeParent(ctx, later)
 	wantErr(t, err, errFault)
-	_, err = e.faulty(failOn("TransactWriteItems", 0)).FinalizeParent(ctx, later)
+	// The activity touch: independent row updates after the seq (#1) and the
+	// two read marks (#2, #3).
+	_, err = e.faulty(failOn("UpdateItem", 4)).FinalizeParent(ctx, later)
 	wantErr(t, err, errFault)
 
 	// A participant without a user-side row is skipped.

@@ -22,7 +22,7 @@ import { GENERAL_CHANNEL_SLUG } from '@/lib/roles';
 import { useKeyboardInsetTracker } from '@/hooks/useKeyboardInset';
 import { removeBootSplash } from '@/lib/boot-splash';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import { useServerVersion } from '@/hooks/useServerVersion';
+import { useServerVersionPoller } from '@/hooks/useServerVersion';
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 
 // Cold routes are code-split with React.lazy so their code (and any deps
@@ -58,9 +58,10 @@ const ResetPasswordPage = lazy(() => import('@/pages/ResetPasswordPage'));
 // Reached only from `ex-runner login`; handles its own sign-in redirect.
 const RunnerConnectPage = lazy(() => import('@/pages/RunnerConnectPage'));
 const RunnersPage = lazy(() => import('@/pages/RunnersPage'));
-const NotFoundPage = lazy(() =>
-  import('@/pages/NotFoundPage').then((m) => ({ default: m.NotFoundPage })),
-);
+// Eager like the chat views: ChannelView and ConversationView render it for
+// an unknown slug, so it is in the entry chunk either way, and a lazy()
+// wrapper only put a loading flash in front of an already-loaded page.
+import { NotFoundPage } from '@/pages/NotFoundPage';
 
 // How long the boot spinner runs before admitting the connection is slow and
 // offering the sign-in escape hatch. Auth restore retries with backoff behind
@@ -129,7 +130,7 @@ function KeyboardInsetTracker() {
 }
 
 function ServerVersionBootstrap() {
-  useServerVersion();
+  useServerVersionPoller();
   return null;
 }
 

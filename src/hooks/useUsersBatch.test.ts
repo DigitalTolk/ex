@@ -89,4 +89,35 @@ describe('useUsersBatch', () => {
     expect(sent).toEqual([['u-inv', 'u-old']]);
     expect(result.current.map.get('u-old')?.displayName).toBe('Fresh u-old');
   });
+
+  // Each grown id set is a new query; every one of them used to stay cached
+  // (holding everyone so far) until garbage-collected — a channel that
+  // gained an author per arrival kept a batch entry per arrival.
+  it('drops the smaller batches a grown set supersedes, but not one still in use', async () => {
+    vi.mocked(apiFetch).mockImplementation(async (_path, options) => {
+      const { ids } = JSON.parse(String(options?.body)) as { ids: string[] };
+      return ids.map((id) => ({ id, displayName: `User ${id}` }));
+    });
+    const batches = () =>
+      client.getQueryCache().findAll({ queryKey: queryKeys.usersBatch() }).map((q) => q.queryKey[1]);
+
+    // Another view still shows ['u-b'].
+    const other = renderHook(() => useUsersBatch(['u-b']), { wrapper });
+    await waitFor(() => expect(other.result.current.isSuccess).toBe(true));
+
+    const { result, rerender } = renderHook(({ ids }) => useUsersBatch(ids), { wrapper, initialProps: { ids: ['u-a'] } });
+    await waitFor(() => expect(result.current.map.size).toBe(1));
+    rerender({ ids: ['u-a', 'u-b'] });
+    await waitFor(() => expect(result.current.map.size).toBe(2));
+    rerender({ ids: ['u-a', 'u-b', 'u-c'] });
+    await waitFor(() => expect(result.current.map.size).toBe(3));
+
+    expect(batches()).toEqual(expect.arrayContaining([['u-b'], ['u-a', 'u-b', 'u-c']]));
+    expect(batches()).toHaveLength(2);
+    // A different set is not a subset: kept.
+    rerender({ ids: ['u-d'] });
+    await waitFor(() => expect(result.current.map.get('u-d')).toBeDefined());
+    expect(batches()).toHaveLength(3);
+    other.unmount();
+  });
 });

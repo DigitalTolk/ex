@@ -1,12 +1,10 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/service"
-	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // MarkUnread makes a channel message (and everything after it) unread again
@@ -30,14 +28,9 @@ func markMessageUnread(w http.ResponseWriter, r *http.Request, svc *service.Mess
 		return
 	}
 	res, err := svc.MarkUnread(r.Context(), userID, id, parentType, msgID)
-	switch {
-	case err == nil:
-		writeJSON(w, http.StatusOK, res)
-	case errors.Is(err, service.ErrForbidden):
-		writeError(w, http.StatusForbidden, "forbidden", "you do not have access to this message")
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", "message not found")
-	default:
-		writeInternalError(w, r, "mark_unread_error", err)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
 	}
+	writeJSON(w, http.StatusOK, res)
 }
