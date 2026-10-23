@@ -255,8 +255,9 @@ describe('EmojiPicker browser', () => {
     try {
       (screen.getByLabelText('Search emojis').element() as HTMLInputElement).focus();
       fireKeyboard('keyboardWillShow', KEYBOARD_PX);
-      await keyboardSettled();
       const keyboardTop = window.innerHeight - KEYBOARD_PX;
+      const sheet = document.querySelector('[data-testid="popover-portal"]') as HTMLElement;
+      await keyboardSettled(() => Math.round(sheet.getBoundingClientRect().bottom) === keyboardTop);
       expect(screen.getByLabelText('Search emojis').element().getBoundingClientRect().top).toBeGreaterThanOrEqual(0);
       // The sheet slides in when it opens: wait for it to come to rest
       // rather than measuring it mid-slide on a busy machine.

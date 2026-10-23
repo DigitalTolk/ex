@@ -96,8 +96,9 @@ describe('GiphyPicker browser behavior', () => {
     try {
       (screen.getByLabelText('Search GIFs').element() as HTMLInputElement).focus();
       fireKeyboard('keyboardWillShow', KEYBOARD_PX);
-      await keyboardSettled();
       const keyboardTop = window.innerHeight - KEYBOARD_PX;
+      const sheet = screen.getByTestId('popover-portal').element();
+      await keyboardSettled(() => Math.round(sheet.getBoundingClientRect().bottom) === keyboardTop);
       const search = screen.getByLabelText('Search GIFs').element().getBoundingClientRect();
       const results = screen.getByTestId('giphy-grid').element().getBoundingClientRect();
       expect(search.top).toBeGreaterThanOrEqual(0);
