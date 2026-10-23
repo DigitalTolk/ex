@@ -124,7 +124,6 @@ vi.mock('@/hooks/useMessages', () => ({
     fetchNextPage: vi.fn(),
   }),
   useSendMessage: () => ({ mutate: vi.fn(), isPending: false }),
-  useSendMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),
