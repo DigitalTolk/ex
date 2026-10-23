@@ -4,7 +4,7 @@ import type { Attachment } from '@/types';
 import { HTML_PREVIEW_MAX_BYTES } from '@/lib/html-attachment';
 
 // The Preview action on message attachment rows: offered only for HTML files
-// small enough to preview, and nothing is fetched or rendered until clicked.
+// small enough to preview, and nothing is loaded or rendered until clicked.
 
 const batchMock = vi.fn();
 vi.mock('@/hooks/useAttachments', () => ({
@@ -38,7 +38,7 @@ function show(...atts: Attachment[]) {
 let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   batchMock.mockReset();
-  fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: () => Promise.resolve('<h1>Mockup</h1>') });
+  fetchMock = vi.fn();
   vi.stubGlobal('fetch', fetchMock);
 });
 afterEach(() => {
@@ -76,9 +76,14 @@ describe('HTML attachment Preview action', () => {
     expect(screen.queryByTestId('html-preview-open')).toBeNull();
   });
 
-  it('fetches and renders nothing until clicked, then opens the preview panel', async () => {
+  it('is not offered for a URL the preview route cannot serve (a presigned object-store URL)', () => {
+    show(att('direct', { url: 'https://bucket.s3.example.com/attachments/direct?X-Amz-Signature=x' }));
+    expect(screen.queryByTestId('html-preview-open')).toBeNull();
+    expect(screen.getByTestId('message-attachment-download')).toBeInTheDocument();
+  });
+
+  it('loads and renders nothing until clicked, then opens the preview panel', async () => {
     show(att('mockup'));
-    expect(fetchMock).not.toHaveBeenCalled();
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(document.querySelector('iframe')).toBeNull();
 
@@ -86,9 +91,11 @@ describe('HTML attachment Preview action', () => {
     // The panel is a lazy chunk: the first open waits for its import.
     const dialog = await screen.findByRole('dialog', {}, { timeout: 10000 });
     expect(dialog).toHaveTextContent('mockup.html');
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/media/tok-mockup/mockup.html', expect.anything());
     const frame = await screen.findByTestId('html-preview-frame');
     expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
+    // The server's preview document for the same token, not a fetched copy.
+    expect(frame).toHaveAttribute('src', '/api/v1/html-preview/tok-mockup/mockup.html');
+    expect(fetchMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Close preview' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());

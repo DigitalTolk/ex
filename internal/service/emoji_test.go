@@ -109,8 +109,9 @@ func TestEmojiService_Create_Member(t *testing.T) {
 	if e.CreatedBy != "u1" {
 		t.Errorf("createdBy=%q want u1", e.CreatedBy)
 	}
-	if e.ImageURL != "https://fresh.example/fire.png?sig=new" {
-		t.Errorf("imageURL=%q want server-signed URL", e.ImageURL)
+	// Served from the server's own copy, not the upload key.
+	if !strings.HasPrefix(e.ImageKey, "emojis/") || e.ImageURL != "https://signed.example/"+e.ImageKey {
+		t.Errorf("imageKey=%q imageURL=%q want the server-signed URL of the kept copy", e.ImageKey, e.ImageURL)
 	}
 
 	if len(pub.published) != 1 {
@@ -271,7 +272,10 @@ func (f *fakeEmojiSigner) PresignedGetURL(_ context.Context, key string, _ time.
 	if f.err != nil {
 		return "", f.err
 	}
-	return f.urls[key], nil
+	if u, ok := f.urls[key]; ok {
+		return u, nil
+	}
+	return "https://signed.example/" + key, nil
 }
 
 func (f *fakeEmojiSigner) GetObject(_ context.Context, _ string) (io.ReadCloser, string, int64, time.Time, error) {

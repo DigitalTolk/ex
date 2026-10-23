@@ -8,6 +8,7 @@ import {
   useAgentRunsFor,
   useAgentRunsStore,
 } from '@/stores/agent-runs';
+import { deliverFrame, expectInvalidPayloadReported, wsHandlers } from '@/test/ws-frames';
 
 // Complements src/stores/agent-runs.test.ts with the timer-driven arms
 // (stale sweep, tombstone pruning) and the remaining label/merge branches.
@@ -31,17 +32,23 @@ describe('agent-runs store (timers, labels, tombstones)', () => {
     vi.useRealTimers();
   });
 
-  it('ignores malformed frames without publishing', () => {
+  it('never sees a malformed frame: the registry reports and drops it before the store', () => {
     const before = useAgentRunsStore.getState().runsByParent;
-    onRunUpdated(null);
-    onRunUpdated({});
-    onRunUpdated({ id: 'r1' }); // no parentID
-    onRunUpdated({ id: 'r1', parentID: 'chan1' }); // no agentID
-    onRunUpdated({ id: 'r1', parentID: 'chan1', agentID: 'a-gg' }); // no state
-    onRunProgress(null);
-    onRunProgress({});
-    onRunProgress({ runID: 'r1' }); // no parentID
-    onRunProgress({ runID: 'r1', parentID: 'chan1' }); // no agentID
+    const opts = { handlers: wsHandlers({ 'run.updated': onRunUpdated, 'run.progress': onRunProgress }) };
+    expectInvalidPayloadReported(
+      ['run.updated', 'run.updated', 'run.updated', 'run.updated', 'run.updated', 'run.progress', 'run.progress', 'run.progress', 'run.progress'],
+      () => {
+        deliverFrame(opts, 'run.updated', null);
+        deliverFrame(opts, 'run.updated', {});
+        deliverFrame(opts, 'run.updated', { id: 'r1' }); // no parentID
+        deliverFrame(opts, 'run.updated', { id: 'r1', parentID: 'chan1' }); // no agentID
+        deliverFrame(opts, 'run.updated', { id: 'r1', parentID: 'chan1', agentID: 'a-gg' }); // no state
+        deliverFrame(opts, 'run.progress', null);
+        deliverFrame(opts, 'run.progress', {});
+        deliverFrame(opts, 'run.progress', { runID: 'r1' }); // no parentID
+        deliverFrame(opts, 'run.progress', { runID: 'r1', parentID: 'chan1' }); // no agentID
+      },
+    );
     expect(useAgentRunsStore.getState().runsByParent).toBe(before);
   });
 

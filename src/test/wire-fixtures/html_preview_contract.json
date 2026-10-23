@@ -1,0 +1,20 @@
+{
+  "page": {
+    "csp": "default-src 'self'; script-src 'self' 'sha256-K2PdAoYQfXfTsdBXnFIH/AZmEX7BNzDYm6mi6h7F1mY='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https: wss:; frame-src example.com/api/v1/html-preview/; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+    "host": "example.com",
+    "html": "<!doctype html><html><head><meta name=\"app-version\" content=\"test\"><meta name=\"build-version\" content=\"test\"></head><body><script>addEventListener(\"securitypolicyviolation\",function(e){parent.postMessage({csp:\"violation\",directive:e.effectiveDirective,blocked:e.blockedURI},\"*\")});addEventListener(\"message\",function(e){if(e.source!==parent)parent.postMessage({csp:\"child\",data:e.data},\"*\")});parent.postMessage({csp:\"hashed\"},\"*\");</script></body></html>"
+  },
+  "preview": {
+    "failed": "<!doctype html><script>(function(){var p=parent,d=document,n=window.name;window.name=\"\";d.currentScript.remove();function s(k){p.postMessage(n+\":\"+k,\"*\")}addEventListener(\"load\",function(e){if(e.isTrusted&&e.target===d)s(\"failed\")},true);addEventListener(\"pagehide\",function(){s(\"gone\")},true);addEventListener(\"message\",function(e){if(e.source===p)s(\"alive\")},true)})()</script>",
+    "head": "<!doctype html><script>(function(){var p=parent,d=document,n=window.name;window.name=\"\";d.currentScript.remove();function s(k){p.postMessage(n+\":\"+k,\"*\")}addEventListener(\"load\",function(e){if(e.isTrusted&&e.target===d)s(\"ready\")},true);addEventListener(\"pagehide\",function(){s(\"gone\")},true);addEventListener(\"message\",function(e){if(e.source===p)s(\"alive\")},true)})()</script>",
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Disposition": "inline",
+      "Content-Security-Policy": "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",
+      "Content-Type": "text/html; charset=utf-8",
+      "Referrer-Policy": "no-referrer",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "SAMEORIGIN"
+    }
+  }
+}

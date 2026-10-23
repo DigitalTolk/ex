@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,7 +12,6 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/storage"
-	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // AttachmentHandler exposes HTTP endpoints for uploading and managing
@@ -61,7 +59,7 @@ func (h *AttachmentHandler) CreateUploadURL(w http.ResponseWriter, r *http.Reque
 		Height:      body.Height,
 	})
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "create_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{
@@ -104,16 +102,7 @@ func (h *AttachmentHandler) SignUploadRequest(w http.ResponseWriter, r *http.Req
 		PartNumber: body.PartNumber,
 	})
 	if err != nil {
-		status := http.StatusBadRequest
-		switch {
-		case errors.Is(err, service.ErrForbidden):
-			status = http.StatusForbidden
-		case errors.Is(err, store.ErrNotFound):
-			status = http.StatusNotFound
-		case errors.Is(err, service.ErrAttachmentUploaded):
-			status = http.StatusConflict
-		}
-		writeError(w, status, "sign_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"url": signed.URL, "key": signed.Key, "headers": signed.Headers})
@@ -135,13 +124,7 @@ func (h *AttachmentHandler) ProcessUpload(w http.ResponseWriter, r *http.Request
 	}
 	a, err := h.svc.ProcessUpload(r.Context(), userID, id)
 	if err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, service.ErrForbidden) {
-			status = http.StatusForbidden
-		} else if errors.Is(err, store.ErrNotFound) {
-			status = http.StatusNotFound
-		}
-		writeError(w, status, "process_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, a)
@@ -157,12 +140,8 @@ func (h *AttachmentHandler) SetPoster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a, err := h.svc.SetVideoPoster(r.Context(), userID, pathParam(r, "id"), r.Body)
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "not_found", "attachment not found")
-		return
-	}
 	if err != nil {
-		writeServiceError(w, err, http.StatusInternalServerError, "poster_error")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, a)
@@ -196,7 +175,7 @@ func (h *AttachmentHandler) List(w http.ResponseWriter, r *http.Request) {
 		// Transient failure resolving/authorizing an id — fail the batch
 		// (client keeps previously fetched data and retries) instead of
 		// returning a silently shrunken 200 the client would cache as truth.
-		writeInternalError(w, r, "list_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, atts)
@@ -227,11 +206,7 @@ func (h *AttachmentHandler) Get(w http.ResponseWriter, r *http.Request) {
 		// Missing or denied reads 404; a transient failure (the access check
 		// could not run) must not masquerade as "gone" — clients would cache
 		// the disappearance.
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "attachment not found")
-			return
-		}
-		writeInternalError(w, r, "get_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, a)
@@ -249,24 +224,23 @@ func (h *AttachmentHandler) Media(w http.ResponseWriter, r *http.Request) {
 	// A video player seeks by asking for byte ranges, and Safari won't play
 	// a video at all unless the server answers them.
 	w.Header().Set("Accept-Ranges", "bytes")
-	media, err := h.svc.OpenMedia(r.Context(), token, requestedByteRange(r))
+	// g is the grant binding a URL issued to a user (see service.MediaGrant).
+	media, err := h.svc.OpenMedia(r.Context(), token, r.URL.Query().Get("g"), requestedByteRange(r))
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "media URL expired or not found")
-			return
-		}
-		if errors.Is(err, storage.ErrRangeNotSatisfiable) {
-			writeError(w, http.StatusRequestedRangeNotSatisfiable, "invalid_range", "range not satisfiable")
-			return
-		}
-		writeError(w, http.StatusBadGateway, "media_error", err.Error())
+		// An expired link is a 404 and an unsatisfiable range a 416; anything
+		// else is logged (the path redacted — its token is the bearer
+		// credential) and answered with a generic 500.
+		writeServiceError(w, r, err)
 		return
 	}
 	defer func() { _ = media.Body.Close() }()
-	contentType := media.ContentType
-	if contentType == "" {
-		contentType = "application/octet-stream"
+	stored := media.ContentType
+	if stored == "" {
+		stored = "application/octet-stream"
 	}
+	// One parsed media type, never the stored value verbatim: a browser reads
+	// "image/png, text/html" as HTML.
+	contentType, inline := storage.ServedContentType(stored)
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", storage.BrowserObjectCacheControl)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -284,7 +258,7 @@ func (h *AttachmentHandler) Media(w http.ResponseWriter, r *http.Request) {
 	// Force a download for scriptable content types (text/html, SVG, XML, …) so a
 	// same-origin /api/v1/media/{token} URL can't be used to land stored XSS by
 	// uploading HTML and luring a victim to open it. ?download=1 always forces it.
-	if r.URL.Query().Get("download") == "1" || isInlineUnsafeContentType(contentType) {
+	if r.URL.Query().Get("download") == "1" || !inline {
 		w.Header().Set("Content-Disposition", attachmentDisposition(media.Filename))
 	}
 	if media.Size > 0 {
@@ -314,20 +288,6 @@ func requestedByteRange(r *http.Request) string {
 		return ""
 	}
 	return value
-}
-
-// isInlineUnsafeContentType reports whether a content type can carry executable
-// markup (and so must never be served inline from the same-origin media route).
-func isInlineUnsafeContentType(ct string) bool {
-	base := strings.ToLower(strings.TrimSpace(ct))
-	if i := strings.IndexByte(base, ';'); i >= 0 {
-		base = strings.TrimSpace(base[:i])
-	}
-	switch base {
-	case "text/html", "application/xhtml+xml", "image/svg+xml", "application/xml", "text/xml":
-		return true
-	}
-	return strings.HasSuffix(base, "+xml")
 }
 
 func notModifiedSince(r *http.Request, lastModified time.Time) bool {
@@ -373,7 +333,7 @@ func (h *AttachmentHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.DeleteDraft(r.Context(), userID, id); err != nil {
-		writeError(w, http.StatusForbidden, "delete_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

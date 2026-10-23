@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ActivityModeSwitch } from './ActivityModeSwitch';
 import { apiFetch } from '@/lib/api';
 import { resetSidebarModeSessionState, setSidebarMode, useSidebarModeStore } from '@/stores/sidebar-mode';
-import { flashReaction, REACTION_FLASH_MS, resetReactionFlashForTests } from '@/stores/reaction-flash';
+import { flashReaction, REACTION_FLASH_MS } from '@/stores/reaction-flash';
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
 vi.mock('@/hooks/useEmoji', () => ({ useEmojiMap: () => ({ data: {} }) }));
@@ -71,7 +71,6 @@ describe('ActivityModeSwitch', () => {
 
   it('flashes a reaction in place of the bell, then brings the bell back', async () => {
     vi.useFakeTimers();
-    resetReactionFlashForTests();
     try {
       renderAt('/channel/general', 0);
       expect(screen.queryByTestId('activity-reaction-flash')).toBeNull();
@@ -82,7 +81,6 @@ describe('ActivityModeSwitch', () => {
       });
       expect(screen.queryByTestId('activity-reaction-flash')).toBeNull();
     } finally {
-      resetReactionFlashForTests();
       vi.useRealTimers();
     }
   });

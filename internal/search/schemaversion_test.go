@@ -138,6 +138,7 @@ func TestClient_IndexSchemaVersion_DecodeError(t *testing.T) {
 }
 
 func TestClient_IndexSchemaVersion_TransportError(t *testing.T) {
+	noRetryDelay(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	url := srv.URL
 	srv.Close() // now unreachable → http.Do fails

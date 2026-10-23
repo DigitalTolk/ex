@@ -8,6 +8,7 @@ import {
   useAgentApprovalsFor,
   useAgentApprovalsStore,
 } from '@/stores/agent-approvals';
+import { deliverFrame, expectInvalidPayloadReported, wsHandlers } from '@/test/ws-frames';
 
 function approvalsFor(parentID: string) {
   return useAgentApprovalsStore.getState().approvalsByParent[parentID] ?? [];
@@ -31,11 +32,16 @@ describe('agent-approvals store', () => {
 
   it('ignores malformed frames without publishing', () => {
     const before = useAgentApprovalsStore.getState().approvalsByParent;
-    onRunApproval(null);
-    onRunApproval({});
-    onRunApproval({ approvalID: 'ap1' }); // no parentID
-    onRunApproval({ approvalID: 'ap1', parentID: 'chan1' }); // no runID
-    onRunApproval({ runID: 'r1', parentID: 'chan1', state: 'pending' }); // no approvalID
+    const opts = { handlers: wsHandlers({ 'run.approval': onRunApproval }) };
+    // Not an approval at all: the registry reports and drops these.
+    expectInvalidPayloadReported(['run.approval', 'run.approval', 'run.approval', 'run.approval'], () => {
+      deliverFrame(opts, 'run.approval', null);
+      deliverFrame(opts, 'run.approval', {});
+      deliverFrame(opts, 'run.approval', { approvalID: 'ap1' }); // no parentID
+      deliverFrame(opts, 'run.approval', { runID: 'r1', parentID: 'chan1', state: 'pending' }); // no approvalID
+    });
+    // An approval with no run can't be decided: the store skips it.
+    deliverFrame(opts, 'run.approval', { approvalID: 'ap1', parentID: 'chan1' });
     expect(useAgentApprovalsStore.getState().approvalsByParent).toBe(before);
   });
 

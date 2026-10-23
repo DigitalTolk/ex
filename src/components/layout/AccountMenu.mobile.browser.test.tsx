@@ -3,6 +3,10 @@ import { render } from 'vitest-browser-react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AccountMenu } from './AccountMenu';
+import { usePresenceStore } from '@/stores/presence';
+
+// Presence is read from the store (only the signed-in user's own flag).
+const setOnline = (ids: string[]) => usePresenceStore.setState({ online: new Set(ids) });
 
 // Browser coverage for AccountMenu's mobile-sheet path and the native
 // "Change server" action — the existing AccountMenu.browser.test.tsx pins
@@ -14,13 +18,9 @@ const logout = vi.fn().mockResolvedValue(undefined);
 const baseUser = { id: 'u-1', email: 'u@x', displayName: 'Alice Wonder', avatarURL: '' };
 const resetServer = vi.fn().mockResolvedValue(undefined);
 
-let mockOnline = new Set<string>();
 
 vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({ user: { ...baseUser, systemRole: 'admin' }, logout }),
-}));
-vi.mock('@/context/PresenceContext', () => ({
-  usePresence: () => ({ online: mockOnline, isOnline: (id: string) => mockOnline.has(id) }),
 }));
 vi.mock('@/components/settings/SettingsDialog', () => ({ SettingsDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="settings-open" /> : null) }));
 vi.mock('@/components/UserStatusDialog', () => ({ UserStatusDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="status-open" /> : null) }));
@@ -53,7 +53,7 @@ describe('AccountMenu (mobile + native)', () => {
   // synchronously so "sheet is gone" assertions are deterministic.
   let killAnims: HTMLStyleElement | null = null;
   beforeEach(() => {
-    mockOnline = new Set<string>();
+    setOnline([]);
     logout.mockClear();
     resetServer.mockClear();
     killAnims = document.createElement('style');
@@ -69,7 +69,7 @@ describe('AccountMenu (mobile + native)', () => {
     // The sheet DialogContent carries `md:hidden`, so it is display:none on
     // wide viewports; only assert on the actual mobile projects.
     if (window.innerWidth > 767) return;
-    mockOnline = new Set<string>(['u-1']);
+    setOnline(['u-1']);
     const screen = await renderMenu();
     // The mobile account button shows an online presence dot.
     const account = screen.getByTestId('account-menu-trigger').element() as HTMLElement;

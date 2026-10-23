@@ -3,7 +3,11 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -30,69 +34,134 @@ func TestPresignedCache_HitWithinTTL(t *testing.T) {
 }
 
 func TestPresignedCache_CapsRequestedHourScaleTTL(t *testing.T) {
-	c := newPresignedURLCache(20 * time.Hour)
-	if c.ttl != presignedURLCacheTTL {
-		t.Fatalf("ttl = %s, want capped %s", c.ttl, presignedURLCacheTTL)
+	if got := presignedTTL(20 * time.Hour); got != presignedURLCacheTTL {
+		t.Fatalf("ttl = %s, want capped %s", got, presignedURLCacheTTL)
+	}
+	if got := presignedTTL(time.Minute); got != time.Minute {
+		t.Fatalf("ttl = %s, want the requested 1m", got)
 	}
 }
 
 func TestPresignedCache_UsesDefaultSafetyTTLForInvalidTTL(t *testing.T) {
-	c := newPresignedURLCache(0)
-	if c.ttl != presignedURLCacheTTL {
-		t.Fatalf("ttl = %s, want safety default %s", c.ttl, presignedURLCacheTTL)
+	if got := presignedTTL(0); got != presignedURLCacheTTL {
+		t.Fatalf("ttl = %s, want safety default %s", got, presignedURLCacheTTL)
 	}
 }
 
-func TestPresignedCache_ExpiredEntryEvictedOnRead(t *testing.T) {
-	c := newPresignedURLCache(time.Nanosecond)
-	calls := 0
+// An expired entry is signed afresh. Wait for that re-sign, never for a
+// fixed time.
+func TestPresignedCache_ExpiredEntryResigned(t *testing.T) {
+	c := newSizedPresignedURLCache(16, 20*time.Millisecond)
+	var calls atomic.Int32
 	sign := func(context.Context) (string, error) {
-		calls++
-		return "url", nil
+		return fmt.Sprintf("url-%d", calls.Add(1)), nil
 	}
 	k := presignedKey{op: "get", key: "obj-1"}
-	if _, err := c.getOrSign(context.Background(), k, sign); err != nil {
+	first, err := c.getOrSign(context.Background(), k, sign)
+	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(2 * time.Millisecond)
-	if _, err := c.getOrSign(context.Background(), k, sign); err != nil {
-		t.Fatal(err)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, err := c.getOrSign(context.Background(), k, sign)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != first {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("url = %q, never re-signed after the TTL", got)
+		}
 	}
-	if calls != 2 {
-		t.Fatalf("expected expired entry to be re-signed, got calls=%d", calls)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("sign calls = %d, want 2 (one per TTL window)", got)
 	}
 }
 
-func TestPresignedCache_BoundedSize(t *testing.T) {
-	c := &presignedURLCache{ttl: time.Hour, maxSize: 3, items: map[presignedKey]presignedEntry{}}
-	for i := 0; i < 10; i++ {
-		k := presignedKey{op: "get", key: string(rune('a' + i))}
-		if _, err := c.getOrSign(context.Background(), k, func(context.Context) (string, error) {
-			return "u", nil
-		}); err != nil {
+// The cache and its invalidation index are bounded: filling past the cap
+// evicts the least recently used variant, never the one just read.
+func TestPresignedCache_BoundedLRU(t *testing.T) {
+	c := newSizedPresignedURLCache(2, time.Hour)
+	var calls atomic.Int32
+	sign := func(context.Context) (string, error) {
+		calls.Add(1)
+		return "u", nil
+	}
+	get := func(key string) {
+		t.Helper()
+		if _, err := c.getOrSign(context.Background(), presignedKey{op: "get", key: key}, sign); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if len(c.items) > 3 {
-		t.Fatalf("cache exceeded max size: %d", len(c.items))
+	get("a")
+	get("b")
+	get("a") // a is now the most recently used
+	get("c") // evicts b
+	if got := c.urls.Len(); got != 2 {
+		t.Fatalf("cache holds %d entries, want the cap of 2", got)
+	}
+	c.mu.Lock()
+	_, bIndexed := c.variants["b"]
+	indexed := len(c.variants)
+	c.mu.Unlock()
+	if bIndexed || indexed != 2 {
+		t.Fatalf("variant index = %d keys (b indexed: %v), want 2 without b", indexed, bIndexed)
+	}
+	get("a")
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("sign calls = %d, want 3 (a stayed cached)", got)
+	}
+	get("b")
+	if got := calls.Load(); got != 4 {
+		t.Fatalf("sign calls = %d, want 4 (b was evicted)", got)
 	}
 }
 
-func TestPresignedCache_EvictsExpiredFirst(t *testing.T) {
-	c := &presignedURLCache{ttl: time.Hour, maxSize: 2, items: map[presignedKey]presignedEntry{}}
-	now := time.Now()
-	c.items[presignedKey{op: "get", key: "old"}] = presignedEntry{url: "u-old", expiresAt: now.Add(-time.Minute)}
-	c.items[presignedKey{op: "get", key: "fresh"}] = presignedEntry{url: "u-fresh", expiresAt: now.Add(time.Hour)}
-	if _, err := c.getOrSign(context.Background(), presignedKey{op: "get", key: "new"}, func(context.Context) (string, error) {
-		return "u-new", nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := c.items[presignedKey{op: "get", key: "old"}]; ok {
-		t.Fatal("expected expired entry to be evicted first")
-	}
-	if _, ok := c.items[presignedKey{op: "get", key: "fresh"}]; !ok {
-		t.Fatal("expected fresh entry to be retained")
+// Concurrent misses for one variant share ONE sign instead of stampeding
+// the signer.
+func TestPresignedCache_ConcurrentMissesShareOneSign(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newSizedPresignedURLCache(16, 0)
+		var calls atomic.Int32
+		release := make(chan struct{})
+		sign := func(context.Context) (string, error) {
+			calls.Add(1)
+			<-release
+			return "u", nil
+		}
+		k := presignedKey{op: "get", key: "hot"}
+		var wg sync.WaitGroup
+		for range 10 {
+			wg.Go(func() {
+				if got, err := c.getOrSign(context.Background(), k, sign); err != nil || got != "u" {
+					t.Errorf("getOrSign = %q, %v", got, err)
+				}
+			})
+		}
+		synctest.Wait() // every caller is parked: one signing, the rest waiting on it
+		close(release)
+		wg.Wait()
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("sign calls = %d, want 1 shared sign", got)
+		}
+	})
+}
+
+// The shared sign doesn't inherit the first caller's cancellation, so that
+// caller giving up can't fail everyone waiting on it.
+func TestPresignedCache_SharedSignIgnoresCallerCancellation(t *testing.T) {
+	c := newSizedPresignedURLCache(16, time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	got, err := c.getOrSign(ctx, presignedKey{op: "get", key: "x"}, func(ctx context.Context) (string, error) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		return "u", nil
+	})
+	if err != nil || got != "u" {
+		t.Fatalf("getOrSign = %q, %v; want the URL despite the cancelled caller", got, err)
 	}
 }
 
@@ -115,23 +184,32 @@ func TestPresignedCache_SignErrorNotCached(t *testing.T) {
 	}); !errors.Is(err, want) {
 		t.Fatalf("expected sign error: got %v", err)
 	}
-	if len(c.items) != 0 {
+	if c.urls.Len() != 0 {
 		t.Fatal("error result should not be cached")
 	}
 }
 
 func TestPresignedCache_InvalidateDropsAllVariants(t *testing.T) {
 	c := newPresignedURLCache(time.Hour)
-	for _, op := range []string{"get", "download"} {
-		_, _ = c.getOrSign(context.Background(), presignedKey{op: op, key: "obj"}, func(context.Context) (string, error) {
+	for _, k := range []presignedKey{{op: "get", key: "obj"}, {op: "download", key: "obj", extra: "a.pdf"}, {op: "get", key: "other"}} {
+		_, _ = c.getOrSign(context.Background(), k, func(context.Context) (string, error) {
 			return "u", nil
 		})
 	}
-	if len(c.items) != 2 {
-		t.Fatalf("expected 2 entries, got %d", len(c.items))
+	if c.urls.Len() != 3 {
+		t.Fatalf("expected 3 entries, got %d", c.urls.Len())
 	}
 	c.invalidate("obj")
-	if len(c.items) != 0 {
-		t.Fatalf("expected all variants dropped, got %d", len(c.items))
+	if c.urls.Len() != 1 {
+		t.Fatalf("expected only the other key left, got %d entries", c.urls.Len())
+	}
+	if _, ok := c.urls.Get(presignedKey{op: "get", key: "other"}); !ok {
+		t.Fatal("invalidating obj dropped another key's URL")
+	}
+	c.mu.Lock()
+	_, objIndexed := c.variants["obj"]
+	c.mu.Unlock()
+	if objIndexed {
+		t.Fatal("invalidated key still in the variant index")
 	}
 }

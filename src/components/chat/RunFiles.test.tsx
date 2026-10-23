@@ -19,7 +19,7 @@ describe('RunFiles', () => {
         files={[
           file({ id: 'g', role: 'given', filename: 'request.png', thumbnailURL: '/t/g' }),
           file({ id: 's', role: 'fetched', source: 'project_screen', filename: 'home.png' }),
-          file({ id: 'h', role: 'fetched', source: 'message', filename: 'v1.html', contentType: 'text/html', size: 2048, downloadURL: '/d/h' }),
+          file({ id: 'h', role: 'fetched', source: 'message', filename: 'v1.html', contentType: 'text/html', size: 2048, url: '/api/v1/media/tok-h/v1.html', downloadURL: '/d/h' }),
           file({ id: 'p', role: 'posted', filename: 'v2.png', url: undefined }),
           file({ id: 'c', role: 'posted', filename: 'data.csv', contentType: 'text/csv', url: undefined }),
         ]}

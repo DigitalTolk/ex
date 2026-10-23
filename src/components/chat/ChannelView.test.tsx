@@ -95,7 +95,8 @@ vi.mock('@/context/PresenceContext', () => ({
   PresenceProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-vi.mock('@/hooks/useChannels', () => ({
+vi.mock('@/hooks/useChannels', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useChannels')>()),
   useChannelBySlug: () => channelQuery,
   useChannelMembers: () => ({ data: mockMembers }),
   useUserChannels: () => ({ data: userChannels }),
@@ -116,7 +117,7 @@ vi.mock('@/hooks/useMessages', () => ({
       fetchNextPage: vi.fn(),
     };
   },
-  useSendChannelMessage: () => ({ mutate: vi.fn(), isPending: false }),
+  useSendMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),

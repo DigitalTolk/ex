@@ -6,11 +6,12 @@ import {
   onFocusComposer,
   WINDOW_EVENTS,
 } from './window-events';
+import { renderHook } from 'vitest-browser-react';
 import {
   formatDocumentTitle,
   setDocumentNotificationCount,
   getDocumentNotificationCount,
-  subscribeDocumentNotificationCount,
+  useDocumentNotificationCount,
 } from './document-title';
 
 describe('window-events — edit message handlers', () => {
@@ -109,23 +110,29 @@ describe('document-title', () => {
     setDocumentNotificationCount(0);
   });
 
-  it('setDocumentNotificationCount notifies subscribers and floors negatives', () => {
-    const listener = vi.fn();
-    const off = subscribeDocumentNotificationCount(listener);
-    setDocumentNotificationCount(2);
-    expect(listener).toHaveBeenCalledTimes(1);
+  it('setDocumentNotificationCount re-renders readers and floors negatives', async () => {
+    let renders = 0;
+    const { result, act, unmount } = await renderHook(() => {
+      renders += 1;
+      return useDocumentNotificationCount();
+    });
+    const before = renders;
+    await act(() => setDocumentNotificationCount(2));
+    expect(result.current).toBe(2);
+    expect(renders).toBe(before + 1);
     expect(getDocumentNotificationCount()).toBe(2);
 
     // Setting the same value is a no-op.
-    setDocumentNotificationCount(2);
-    expect(listener).toHaveBeenCalledTimes(1);
+    await act(() => setDocumentNotificationCount(2));
+    expect(renders).toBe(before + 1);
 
     // Negative / non-finite inputs floor to 0.
-    setDocumentNotificationCount(-5);
+    await act(() => setDocumentNotificationCount(-5));
     expect(getDocumentNotificationCount()).toBe(0);
-    setDocumentNotificationCount(Number.NaN);
+    await act(() => setDocumentNotificationCount(Number.NaN));
     expect(getDocumentNotificationCount()).toBe(0);
+    expect(result.current).toBe(0);
 
-    off();
+    await unmount();
   });
 });

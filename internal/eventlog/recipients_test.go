@@ -4,46 +4,53 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
+
+	"github.com/hashicorp/golang-lru/v2/expirable"
 )
 
-// At the cache cap, inserting another entry sweeps the expired ones so the map
-// can't grow without bound from dormant topics.
-func TestResolver_CacheEvictsExpiredAtCap(t *testing.T) {
+// The cache is bounded even when every entry is fresh: past the cap the least
+// recently resolved topic is evicted, so dormant topics can't pile up.
+func TestResolver_CacheIsBounded(t *testing.T) {
 	m := &fakeMembers{ids: map[string][]string{}} // any topic resolves to nil, no error
 	r := NewResolver(m, nil)
 	r.SetCacheTTL(time.Minute)
-	base := time.Unix(1000, 0)
-	r.now = func() time.Time { return base }
 
-	for i := 0; i < recipientCacheMaxEntries; i++ {
+	for i := 0; i <= recipientCacheMaxEntries; i++ {
 		if _, err := r.Resolve(context.Background(), fmt.Sprintf("chan:c%d", i)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// Advance past the TTL so the cap-fill is all expired, then one more insert
-	// trips the cap and sweeps them.
-	base = base.Add(2 * time.Minute)
-	if _, err := r.Resolve(context.Background(), "chan:fresh"); err != nil {
+	if got := r.cache.Load().Len(); got != recipientCacheMaxEntries {
+		t.Fatalf("cache size = %d, want the cap %d", got, recipientCacheMaxEntries)
+	}
+	// The oldest topic was the one evicted: resolving it queries the store again.
+	before := m.calls.Load()
+	if _, err := r.Resolve(context.Background(), "chan:c0"); err != nil {
 		t.Fatal(err)
 	}
-	r.mu.Lock()
-	got := len(r.cache)
-	r.mu.Unlock()
-	if got != 1 {
-		t.Fatalf("cache size after cap-sweep = %d, want 1 (expired entries evicted)", got)
+	if m.calls.Load() != before+1 {
+		t.Fatal("the least recently resolved topic was not the one evicted")
 	}
 }
 
 type fakeMembers struct {
 	ids   map[string][]string
 	err   error
-	calls int
+	calls atomic.Int32
+	// release, when set, holds every lookup until it is closed.
+	release chan struct{}
 }
 
 func (f *fakeMembers) MemberIDs(_ context.Context, channelID string) ([]string, error) {
-	f.calls++
+	f.calls.Add(1)
+	if f.release != nil {
+		<-f.release
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -51,14 +58,11 @@ func (f *fakeMembers) MemberIDs(_ context.Context, channelID string) ([]string, 
 }
 
 // With caching enabled, repeated resolutions of the same topic within the TTL
-// are served from cache; an expired entry re-fetches; a fetch error is not
-// cached.
+// are served from cache, and a fetch error is not cached.
 func TestResolver_CacheTTL(t *testing.T) {
 	m := &fakeMembers{ids: map[string][]string{"c1": {"u1", "u2"}}}
 	r := NewResolver(m, nil)
 	r.SetCacheTTL(time.Minute)
-	offset := time.Duration(0)
-	r.now = func() time.Time { return time.Unix(1000, 0).Add(offset) }
 
 	if _, err := r.Resolve(context.Background(), "chan:c1"); err != nil {
 		t.Fatal(err)
@@ -66,40 +70,100 @@ func TestResolver_CacheTTL(t *testing.T) {
 	if _, err := r.Resolve(context.Background(), "chan:c1"); err != nil {
 		t.Fatal(err)
 	}
-	if m.calls != 1 {
-		t.Fatalf("store called %d times, want 1 (second served from cache)", m.calls)
+	if m.calls.Load() != 1 {
+		t.Fatalf("store called %d times, want 1 (second served from cache)", m.calls.Load())
 	}
 
-	// Advance past the TTL → re-fetch.
-	offset = 2 * time.Minute
-	if _, err := r.Resolve(context.Background(), "chan:c1"); err != nil {
-		t.Fatal(err)
-	}
-	if m.calls != 2 {
-		t.Fatalf("store called %d times after expiry, want 2", m.calls)
-	}
-
-	// Expire again and make the fetch fail — the error propagates and is NOT cached.
-	offset = 4 * time.Minute
+	// A failed fetch propagates and is NOT cached: the next resolve asks again.
 	m.err = errors.New("boom")
-	if _, err := r.Resolve(context.Background(), "chan:c1"); err == nil {
+	if _, err := r.Resolve(context.Background(), "chan:c2"); err == nil {
 		t.Error("expected fetch error to propagate")
+	}
+	m.err = nil
+	if _, err := r.Resolve(context.Background(), "chan:c2"); err != nil {
+		t.Fatal(err)
+	}
+	if m.calls.Load() != 3 {
+		t.Fatalf("store called %d times, want 3 (the error was not cached)", m.calls.Load())
 	}
 }
 
-// Covers the default (time.Now) clock path when caching is on but no clock is injected.
-func TestResolver_CacheDefaultClock(t *testing.T) {
+// An expired entry re-fetches. Wait for the refreshed set, never for a fixed
+// time.
+func TestResolver_CacheExpires(t *testing.T) {
+	m := &fakeMembers{ids: map[string][]string{"c1": {"u1"}}}
+	r := NewResolver(m, nil)
+	r.SetCacheTTL(20 * time.Millisecond)
+
+	if _, err := r.Resolve(context.Background(), "chan:c1"); err != nil {
+		t.Fatal(err)
+	}
+	m.ids = map[string][]string{"c1": {"u1", "u2"}}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, err := r.Resolve(context.Background(), "chan:c1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("recipients = %v, never refreshed after the TTL", got)
+		}
+	}
+	if m.calls.Load() != 2 {
+		t.Fatalf("store called %d times, want 2 (one per TTL window)", m.calls.Load())
+	}
+}
+
+// Concurrent misses for one topic share ONE store query — including its
+// failure, which is still not cached.
+func TestResolver_ConcurrentMissesShareOneLookup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		boom := errors.New("dynamo down")
+		m := &fakeMembers{err: boom, release: make(chan struct{})}
+		r := NewResolver(m, nil)
+		// A non-expiring cache: an expiring one runs a sweeper goroutine that
+		// never exits, which a synctest bubble can't hold.
+		r.cache.Store(expirable.NewLRU[string, []string](recipientCacheMaxEntries, nil, 0))
+
+		var wg sync.WaitGroup
+		for range 10 {
+			wg.Go(func() {
+				if _, err := r.Resolve(context.Background(), "chan:busy"); !errors.Is(err, boom) {
+					t.Errorf("err = %v, want the shared lookup's error", err)
+				}
+			})
+		}
+		synctest.Wait() // every caller is parked: one querying, the rest waiting on it
+		close(m.release)
+		wg.Wait()
+		if got := m.calls.Load(); got != 1 {
+			t.Fatalf("store calls = %d, want 1 shared lookup", got)
+		}
+		if _, err := r.Resolve(context.Background(), "chan:busy"); !errors.Is(err, boom) {
+			t.Fatalf("err = %v, want a fresh failing lookup", err)
+		}
+		if got := m.calls.Load(); got != 2 {
+			t.Fatalf("store calls = %d, want 2 (the failure was not cached)", got)
+		}
+	})
+}
+
+// SetCacheTTL(0) turns the cache back off: every resolve queries the store.
+func TestResolver_CacheCanBeDisabled(t *testing.T) {
 	m := &fakeMembers{ids: map[string][]string{"c1": {"u1"}}}
 	r := NewResolver(m, nil)
 	r.SetCacheTTL(time.Minute)
-	if _, err := r.Resolve(context.Background(), "chan:c1"); err != nil {
-		t.Fatal(err)
+	r.SetCacheTTL(0)
+	for range 2 {
+		if _, err := r.Resolve(context.Background(), "chan:c1"); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := r.Resolve(context.Background(), "chan:c1"); err != nil {
-		t.Fatal(err)
-	}
-	if m.calls != 1 {
-		t.Fatalf("store called %d times, want 1 with the default clock", m.calls)
+	if m.calls.Load() != 2 {
+		t.Fatalf("store called %d times, want 2 with the cache off", m.calls.Load())
 	}
 }
 

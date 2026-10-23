@@ -1114,6 +1114,19 @@ export interface RefreshToken {
    * destroyed with it, so nobody can ever present it.
    */
   supersededBy?: string;
+  /**
+   * FamilyID ties every token of one login session together across
+   * rotations. A detected replay or a logout revokes the whole family —
+   * deleting only the presented row left its rotated predecessor (or a
+   * stolen sibling) able to mint a fresh session.
+   */
+  familyID?: string;
+  /**
+   * AuthTime is when the user actually authenticated (the login), carried
+   * unchanged across rotations so a session has an absolute lifetime no
+   * matter how often it refreshes.
+   */
+  authTime?: string /* RFC3339 */;
 }
 
 //////////
@@ -2146,6 +2159,88 @@ export interface MessageAttachmentField {
 }
 
 //////////
+// source: notification.go
+
+/**
+ * NotificationKind tags a notification with its semantic class so the client
+ * can apply different sounds, copy, and grouping rules without a large
+ * payload-shape switch on the receiver. Adding a new kind here is the
+ * single place a new notification flavor is registered.
+ */
+export type NotificationKind = string;
+export const NotificationKindMessage: NotificationKind = "message";
+export const NotificationKindMention: NotificationKind = "mention";
+export const NotificationKindThreadReply: NotificationKind = "thread_reply";
+/**
+ * NotificationKindReminder is a self-set "remind me about this message"
+ * alert firing at its scheduled time. Always notifiable — the user
+ * explicitly asked to be alerted, so no gating applies.
+ */
+export const NotificationKindReminder: NotificationKind = "reminder";
+/**
+ * NotificationKindApproval fires when an agent the user invoked needs their
+ * decision (request_approval / ask_user). It blocks the run until answered,
+ * so it's always notifiable and the client renders it distinctly (it's an
+ * action the user must take, not just something to read).
+ */
+export const NotificationKindApproval: NotificationKind = "approval";
+/**
+ * NotificationKindCatchUp fires when a watcher accumulated an OFFLINE
+ * backlog on a local CLI harness and needs the creator's go-ahead to
+ * process it (their machine, their tokens). Always notifiable — it waits
+ * for a decision.
+ */
+export const NotificationKindCatchUp: NotificationKind = "catchup";
+/**
+ * Notification is the user-facing alert payload of a `notification.new`
+ * frame, delivered over the same WebSocket pipe as state events (and, as the
+ * mobile-push fallback, through the push scheduler). It is intentionally
+ * minimal — title, body, where to go on click, and a stable client-side
+ * de-dup key. It lives in model so tygo mirrors it into src/types/generated.ts.
+ */
+export interface Notification {
+  kind: NotificationKind;
+  title: string;
+  body: string;
+  deepLink: string;
+  parentID: string; // channel/conversation ID
+  parentType: string; // "channel" | "conversation"
+  messageID?: string;
+  /**
+   * AlertID identifies the alert itself when one message can legitimately
+   * alert more than once — a fired reminder is a NEW alert about a message
+   * the user may already have been notified about (or reminded of before).
+   * When set it replaces MessageID as the delivery key (client dedup,
+   * desktop ack, push idempotency); otherwise those stay keyed by MessageID.
+   */
+  alertID?: string;
+  parentMessageID?: string;
+  /**
+   * AuthorID is the message's author, for the client's own-author echo
+   * suppression. A webhook post carries the "webhook" sentinel here, never
+   * the webhook's creator.
+   */
+  authorID?: string;
+  /**
+   * Webhook marks a notification that originated from an incoming
+   * webhook (CI alerts, deploy bots, etc.). The "author" is the webhook,
+   * not a real sender, so the client exempts these from its own-author
+   * echo suppression. Whether to notify at all is decided server-side by
+   * the recipient's notification level, exactly like a regular message.
+   */
+  webhook?: boolean;
+  createdAt: string /* RFC3339 */;
+  /**
+   * ParentUnreadNotifyCount is the recipient's authoritative alerted-unread
+   * badge for the parent AFTER this notification (top-level messages only;
+   * thread replies never touch parent counters). Clients SET their sidebar
+   * badge to this value — never increment locally — so replayed or
+   * duplicated events can't drift the count.
+   */
+  parentUnreadNotifyCount?: number /* int64 */;
+}
+
+//////////
 // source: notification_settings.go
 
 /**
@@ -2392,6 +2487,14 @@ export interface User {
    */
   agentConfig?: AgentConfig;
 }
+/**
+ * Who deactivated an account (User.DeactivatedBy).
+ */
+export const DeactivatedByAdmin = "admin";
+/**
+ * Who deactivated an account (User.DeactivatedBy).
+ */
+export const DeactivatedByDirectory = "directory";
 /**
  * UserManager is a lightweight reference to a user's manager from the
  * employee directory. UserID is set when the manager is also an Ex user

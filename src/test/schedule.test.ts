@@ -2,7 +2,6 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 import {
   cronFromParts,
   describeSchedule,
-  localTimeZone,
   partsFromCron,
   suggestChannelName,
   timeZoneOptions,
@@ -86,30 +85,6 @@ describe('partsFromCron', () => {
       expect(partsFromCron(spec)).toBeNull();
     }
     expect(partsFromCron('99 9 * * *')).toBeNull();
-  });
-});
-
-describe('localTimeZone', () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  it('reports the viewer zone so "8am" means their 8am', () => {
-    vi.stubGlobal('Intl', {
-      DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Asia/Kolkata' }) }),
-    });
-    expect(localTimeZone()).toBe('Asia/Kolkata');
-  });
-
-  it('degrades to empty (server decides) when the browser cannot say', () => {
-    vi.stubGlobal('Intl', {
-      DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: undefined }) }),
-    });
-    expect(localTimeZone()).toBe('');
-    vi.stubGlobal('Intl', {
-      DateTimeFormat: () => {
-        throw new Error('no Intl');
-      },
-    });
-    expect(localTimeZone()).toBe('');
   });
 });
 

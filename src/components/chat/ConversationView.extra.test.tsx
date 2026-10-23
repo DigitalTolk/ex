@@ -86,7 +86,7 @@ vi.mock('@/hooks/useConversations', () => ({
   useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useConversation: () => ({ data: mockConversation }),
   useUserConversations: () => ({ data: [] }),
-  useSearchUsers: () => ({ data: [] }),
+  useUserLookup: () => ({ data: [] }),
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
@@ -99,7 +99,7 @@ vi.mock('@/hooks/useMessages', () => ({
     isLoading: false,
     fetchNextPage: vi.fn(),
   }),
-  useSendConversationMessage: () => ({ mutate: mockSendMutate, isPending: false }),
+  useSendMessage: () => ({ mutate: mockSendMutate, isPending: false }),
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),

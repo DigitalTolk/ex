@@ -189,8 +189,11 @@ SMTP_PASS=your-smtp-password
 EMAIL_FROM="Ex <noreply@yourcompany.com>"
 ```
 
-TLS is opportunistic: it is used whenever the relay offers STARTTLS, so a
-trusted local relay (or a dev container such as Mailpit) works unchanged.
+STARTTLS is mandatory by default: a relay that does not offer it fails the
+send instead of receiving credentials and links in plaintext. Set
+`SMTP_TLS_POLICY=opportunistic` (the default when `ENV=development`, so Mailpit
+works unchanged) for a trusted local relay without TLS, or `none` to never
+upgrade. Port 465 is implicit TLS whatever the policy.
 
 **SES** — the API, not the SMTP endpoint, so there are no SMTP credentials to
 mint or rotate:
@@ -262,7 +265,7 @@ unknown address, so neither can be used to enumerate accounts.
 | Variable             | Default                           | Description                                             |
 |----------------------|-----------------------------------|---------------------------------------------------------|
 | `PORT`               | `8080`                            | HTTP server port                                        |
-| `ENV`                | `development`                     | `development` or `production`                           |
+| `ENV`                | `production`                      | `development` or `production` (unset is production: fail closed) |
 | `BASE_URL`           | `http://localhost:8080`           | Application base URL (used to derive OIDC redirect URL) |
 | `OIDC_ISSUER`        | -                                 | OIDC provider issuer URL                                |
 | `OIDC_CLIENT_ID`     | -                                 | OIDC client ID                                          |
@@ -271,6 +274,9 @@ unknown address, so neither can be used to enumerate accounts.
 | `MS_CLIENT_ID`       | `OIDC_CLIENT_ID`                  | Graph app-registration client ID override               |
 | `MS_CLIENT_SECRET`   | `OIDC_CLIENT_SECRET`              | Graph app-registration client secret override            |
 | `MS_PROFILE_SYNC_INTERVAL` | `12h`                       | Directory re-sync cadence (phone + manager for all users; first sweep at boot = backfill) |
+| `SESSION_MAX_AGE`    | `2160h` (90 days)                 | Absolute session lifetime: refresh stops working this long after sign-in |
+| `OIDC_ALLOWED_EMAIL_DOMAINS` | -                         | Comma-separated email domains allowed to sign in via SSO (unset = any) |
+| `CONNECTOR_PROVIDER_URL` | -                             | Connector catalogue provider; must resolve to a public address outside development |
 | `JWT_SECRET`         | `dev-secret-change-me` (dev only) | JWT signing secret (`openssl rand -base64 48`)          |
 | `AWS_REGION`         | `us-east-1`                       | AWS region                                              |
 | `DYNAMODB_TABLE`     | `ex`                              | DynamoDB table name (single-table design — see below)   |
@@ -285,6 +291,7 @@ unknown address, so neither can be used to enumerate accounts.
 | `SMTP_USER`          | -                                 | SMTP username (omit for an unauthenticated relay)       |
 | `SMTP_PASS`          | -                                 | SMTP password                                           |
 | `SMTP_FROM`          | `noreply@example.com`             | Legacy sender address; `EMAIL_FROM` falls back to this  |
+| `SMTP_TLS_POLICY`    | `mandatory` (`opportunistic` in development) | STARTTLS policy: `mandatory`, `opportunistic` or `none`. Unknown value = boot failure |
 | `SENTRY_FRONTEND_DSN`| -                                 | Enables Sentry in the SPA (served as a meta tag to browsers + both native shells) |
 | `SENTRY_FRONTEND_TRACES_SAMPLE_RATE` | `0` (off)         | Sentry browser performance tracing sample rate (0..1)  |
 | `SENTRY_FRONTEND_REPLAY_SESSION_SAMPLE_RATE` | `0` (off) | Sentry session replay: sample rate for all sessions (0..1) |
@@ -323,14 +330,14 @@ make docker
 
 Attachments upload straight from the browser to the bucket; the server only signs each S3 request. Files over 16 MiB go up as S3 multipart uploads (retried part by part, resumed after a dropped connection or a re-attach of the same file); smaller files take one PUT that S3 checks against the file's SHA-256. The production bucket needs:
 
-**CORS** — the browser calls S3 directly, reads each part's `ETag`, and sends the signed checksum header:
+**CORS** — the browser calls S3 directly, reads each part's `ETag`, and sends the signed checksum and `If-None-Match` headers (uploads are write-once):
 
 ```json
 [
   {
     "AllowedOrigins": ["https://ex.example.com"],
     "AllowedMethods": ["GET", "PUT", "POST", "DELETE"],
-    "AllowedHeaders": ["content-type", "x-amz-checksum-sha256"],
+    "AllowedHeaders": ["content-type", "x-amz-checksum-sha256", "if-none-match"],
     "ExposeHeaders": ["ETag"],
     "MaxAgeSeconds": 3600
   }
@@ -418,13 +425,13 @@ A parent partition (`PK = CHAN#<id>` or `PK = CONV#<id>`) holds the parent's mes
 
 ```bash
 # Preview (default — no writes)
-go run ./cmd/migrate-parent-index --dry-run
+go run ./cmd/migrate parent-index
 
 # Apply: writes one PIN# row per pinned message and one FILE# row
 # per shared attachment (latest sharer wins). Idempotent; safe to
 # re-run after a crash. Requires the same AWS_REGION /
 # DYNAMODB_TABLE / DYNAMODB_ENDPOINT env vars as the server.
-go run ./cmd/migrate-parent-index --apply
+go run ./cmd/migrate parent-index --apply
 ```
 
 **Local dev (docker compose)** — DynamoDB Local lives inside the `dynamodb` container; point the migrator at it from the host:
@@ -436,7 +443,7 @@ AWS_ACCESS_KEY_ID=dummy \
 AWS_SECRET_ACCESS_KEY=dummy \
 DYNAMODB_TABLE=ex \
 DYNAMODB_ENDPOINT=http://localhost:8000 \
-  go run ./cmd/migrate-parent-index --dry-run
+  go run ./cmd/migrate parent-index
 
 # Same shape with --apply when you're ready to write.
 AWS_REGION=us-east-1 \
@@ -444,28 +451,39 @@ AWS_ACCESS_KEY_ID=dummy \
 AWS_SECRET_ACCESS_KEY=dummy \
 DYNAMODB_TABLE=ex \
 DYNAMODB_ENDPOINT=http://localhost:8000 \
-  go run ./cmd/migrate-parent-index --apply
+  go run ./cmd/migrate parent-index --apply
 ```
 
 The AWS credentials are mandatory but their values don't matter — DynamoDB Local accepts anything; the SDK just refuses to start without a key pair set.
 
 The script is read-mostly: it scans every parent's `MSG#` rows once and writes ~1 index row per pinned message + ~1 per shared attachment. Storage impact is bounded by `parents × (pinned_messages + unique_attachments)` — typically negligible vs. message volume.
 
-### Thread-delete backfill (`cmd/migrate-thread-delete`)
+### Thread-delete backfill (`migrate thread-delete`)
 
 Deleting a thread root now cascades: every reply is soft-deleted too, and the server rejects new replies to a deleted thread (`409`). Threads deleted **before** this shipped left their replies live — the root renders as a "(Message deleted)" tombstone while its replies are still visible. Run this one-off once after upgrading to tombstone those orphaned replies so historical data matches the new invariant.
 
 ```bash
 # Preview (default — no writes)
-go run ./cmd/migrate-thread-delete --dry-run
+go run ./cmd/migrate thread-delete
 
 # Apply: tombstones every reply whose thread root is already deleted.
 # Idempotent (already-deleted replies are skipped); safe to re-run.
 # Same AWS_REGION / DYNAMODB_TABLE / DYNAMODB_ENDPOINT env vars as the server.
-go run ./cmd/migrate-thread-delete --apply
+go run ./cmd/migrate thread-delete --apply
 ```
 
-The same DynamoDB Local env-var shape shown above for `migrate-parent-index` applies here. No events are published — these threads were closed long ago and no client is watching them.
+The same DynamoDB Local env-var shape shown above for `migrate parent-index` applies here. No events are published — these threads were closed long ago and no client is watching them.
+
+### Top-level message index (`migrate top-level-index`)
+
+Channel and DM history pages read top-level messages from a sparse index (`GSI2PK = TOPMSG#<parent>`), so a page no longer reads past thread replies. New and edited messages are indexed as they are written; older ones need a backfill, and the index switches on only after a clean `--apply` pass (until then pages use the previous path). Run it **after every instance runs the new build** (an older build writes messages without the index keys), and again after any rollback to an older build.
+
+```bash
+go run ./cmd/migrate top-level-index            # preview
+go run ./cmd/migrate top-level-index --apply    # backfill, then mark the table [--workers=16]
+```
+
+`go run ./cmd/migrate` with no arguments lists every subcommand; all of them default to a dry run.
 
 ## Architecture
 

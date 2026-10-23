@@ -1,16 +1,17 @@
-import { useState, useEffect, useMemo } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
+import { Virtuoso } from 'react-virtuoso';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { X, UserPlus, ArrowRight } from 'lucide-react';
 import { motion } from 'motion/react';
-import { apiFetch } from '@/lib/api';
-import { queryKeys } from '@/lib/query-keys';
-import { useQueryClient } from '@tanstack/react-query';
 import { UserHoverCard } from '@/components/UserHoverCard';
 import { UserAvatar } from '@/components/UserAvatar';
 import { UserPickerRow } from '@/components/UserPickerRow';
-import { usePresence } from '@/context/PresenceContext';
+import { useIsOnline } from '@/stores/presence';
+import { useUserLookup } from '@/hooks/useConversations';
+import { useAddChannelMembers, useRemoveChannelMember } from '@/hooks/useChannels';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
 import { canAddMembers, canRemoveMember, roleNumber, ChannelRole } from '@/lib/roles';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
@@ -45,57 +46,55 @@ interface SearchUser {
   userStatus?: UserStatus | null;
 }
 
+// How long typing must pause before the add-member search asks the server.
+const SEARCH_DEBOUNCE_MS = 300;
+
 function roleBadge(role: string | number) {
   const n = roleNumber(role);
-  if (n === ChannelRole.Owner) return <Badge variant="secondary" className="text-[10px] px-1 py-0">Owner</Badge>;
-  if (n === ChannelRole.Admin) return <Badge variant="secondary" className="text-[10px] px-1 py-0">Admin</Badge>;
+  if (n === ChannelRole.Owner) return <Badge variant="secondary" className="text-xs px-1 py-0">Owner</Badge>;
+  if (n === ChannelRole.Admin) return <Badge variant="secondary" className="text-xs px-1 py-0">Admin</Badge>;
   return null;
 }
 
 export function MemberList({ members, channelId, channelSlug, currentUserId, currentUserRole, userMap, onClose, readOnly }: MemberListProps) {
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<SearchUser[]>([]);
   const [pendingId, setPendingId] = useState<string | null>(null);
-  const { online } = usePresence();
   const [error, setError] = useState('');
-  const queryClient = useQueryClient();
 
   const memberIds = useMemo(() => new Set(members.map((m) => m.userID)), [members]);
 
-  useEffect(() => {
-    if (query.length < 2) {
-      // Defer the clear so we don't trigger a synchronous re-render from
-      // inside the effect body — the setTimeout(0) is the standard pattern
-      // the lint rule recommends here.
-      const t = setTimeout(() => setResults([]), 0);
-      return () => clearTimeout(t);
-    }
-    const timer = setTimeout(async () => {
-      try {
-        const users = await apiFetch<SearchUser[]>(
-          `/api/v1/users?q=${encodeURIComponent(query)}`,
-        );
-        setResults(users);
-      } catch {
-        setResults([]);
-      }
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [query]);
+  // The add-member search: debounced, and one query per term (see
+  // useUserLookup), so results always belong to what was last typed. A
+  // failed search reads as no results.
+  const searchTerm = useDebouncedValue(query, SEARCH_DEBOUNCE_MS);
+  const search = useUserLookup(searchTerm, { keepPrevious: true });
+  const searching = query.length >= 2;
+  const results: SearchUser[] = searching && searchTerm.length >= 2 ? (search.data ?? []) : [];
 
-  async function handleRemove(userId: string) {
-    if (!channelId) return;
-    setError('');
-    try {
-      await apiFetch(`/api/v1/channels/${channelId}/members/${userId}`, { method: 'DELETE' });
-      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(channelId) });
-    } catch (err) {
-      // A silently-failed removal reads as "the button does nothing" — say why.
-      setError(err instanceof Error ? err.message : 'Failed to remove member');
-    }
-  }
+  // The rail's own scroller hosts the virtualized rows.
+  const [scrollParent, setScrollParent] = useState<HTMLElement | null>(null);
+  const attachScrollParent = useCallback((node: HTMLDivElement | null) => {
+    setScrollParent(node?.closest<HTMLElement>('[data-slot="scroll-area-viewport"]') ?? null);
+  }, []);
 
-  async function handleAdd(user: SearchUser) {
+  const addMembers = useAddChannelMembers();
+  const removeMember = useRemoveChannelMember();
+  const removeMemberMutate = removeMember.mutate;
+
+  const handleRemove = useCallback(
+    (userId: string) => {
+      if (!channelId) return;
+      setError('');
+      removeMemberMutate(
+        { channelId, userId },
+        // A silently-failed removal reads as "the button does nothing" — say why.
+        { onError: (err) => setError(err instanceof Error ? err.message : 'Failed to remove member') },
+      );
+    },
+    [channelId, removeMemberMutate],
+  );
+
+  function handleAdd(user: SearchUser) {
     /* istanbul ignore next -- the picker rows are only rendered when canManage is true, which requires a defined channelId, so handleAdd is never invoked without one; this guard is defensive. */
     if (!channelId) return;
     // The whole row is the add control now — swallow double-clicks while a
@@ -103,17 +102,13 @@ export function MemberList({ members, channelId, channelSlug, currentUserId, cur
     if (pendingId) return;
     setError('');
     setPendingId(user.id);
-    try {
-      await apiFetch(`/api/v1/channels/${channelId}/members`, {
-        method: 'POST',
-        body: JSON.stringify({ userID: user.id, role: 'member' }),
-      });
-      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(channelId) });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add member');
-    } finally {
-      setPendingId(null);
-    }
+    addMembers.mutate(
+      { channelId, userIds: [user.id] },
+      {
+        onError: (err) => setError(err instanceof Error ? err.message : 'Failed to add member'),
+        onSettled: () => setPendingId(null),
+      },
+    );
   }
 
   const canManage = canAddMembers(currentUserRole) && !!channelId && !readOnly;
@@ -182,21 +177,16 @@ export function MemberList({ members, channelId, channelSlug, currentUserId, cur
                   Clicking a row adds the person; existing members show the
                   standard "Added" badge and stay inert. */}
               {results.map((u) => (
-                <UserPickerRow
+                <SearchResultRow
                   key={u.id}
-                  testID={`member-add-user-${u.id}`}
-                  displayName={u.displayName}
-                  email={u.email}
-                  avatarURL={u.avatarURL}
-                  online={online.has(u.id)}
-                  userStatus={u.userStatus}
+                  user={u}
                   added={memberIds.has(u.id)}
-                  onSelect={() => void handleAdd(u)}
+                  onSelect={() => handleAdd(u)}
                 />
               ))}
             </div>
           )}
-          {query.length >= 2 && results.length === 0 && (
+          {searching && results.length === 0 && searchTerm === query && !search.isFetching && (
             <p className="text-xs text-muted-foreground">No users found</p>
           )}
         </div>
@@ -209,52 +199,106 @@ export function MemberList({ members, channelId, channelSlug, currentUserId, cur
       >
         {/* Bottom inset: fixed to the screen bottom on mobile, so the last
             member row must clear the home indicator. */}
-        <div className="p-2 space-y-0.5 mobile:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
-          {members.map((m) => {
-            const entry = userMap?.[m.userID];
-            const avatarURL = entry?.avatarURL;
-            // Presence comes straight from the context set — the userMap no
-            // longer carries an online flag (message rows subscribe per-author
-            // via the presence store instead; see MessageItem).
-            const memberOnline = online.has(m.userID);
-            return (
-              <div key={m.userID} className="group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50">
-                <UserHoverCard
-                  userId={m.userID}
-                  displayName={m.displayName || 'Unknown'}
-                  avatarURL={avatarURL}
-                  userStatus={entry?.userStatus}
-                  online={memberOnline}
+        <div ref={attachScrollParent} className="p-2 mobile:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
+          {/* Virtualized: a large channel's rail mounted a row (hover card,
+              avatar, status) per member. Each row subscribes to its own
+              member's presence, so a presence change re-renders that row
+              only — not the whole rail. */}
+          {scrollParent && (
+            <Virtuoso
+              customScrollParent={scrollParent}
+              data={members}
+              computeItemKey={(_, m) => m.userID}
+              increaseViewportBy={400}
+              initialItemCount={Math.min(members.length, 40)}
+              itemContent={(_, m) => (
+                <MemberRow
+                  member={m}
+                  entry={userMap?.[m.userID]}
                   currentUserId={currentUserId}
-                  showInlineStatus={false}
-                >
-                  <span className="cursor-pointer">
-                    <UserAvatar
-                      displayName={m.displayName || ''}
-                      avatarURL={avatarURL}
-                      online={memberOnline}
-                    />
-                  </span>
-                </UserHoverCard>
-                <span className="flex min-w-0 flex-1 items-center gap-1" data-testid={`member-name-status-${m.userID}`}>
-                  <span className="truncate text-sm">{m.displayName || 'Unknown'}</span>
-                  <UserStatusIndicator status={entry?.userStatus} />
-                </span>
-                {roleBadge(m.role)}
-                {/* Remove X: visible at rest (muted) on desktop, emphasized on
-                    row hover — a hover-only reveal reads as "removal is gone".
-                    Hidden entirely in #general, where the backend rejects
-                    removal (everyone must stay a member). */}
-                {m.userID !== currentUserId && canRemoveMember(currentUserRole, m.role, channelSlug) && (
-                  <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0 opacity-100 md:h-6 md:w-6 md:opacity-60 md:group-hover:opacity-100" onClick={() => handleRemove(m.userID)} aria-label={`Remove ${m.displayName}`}>
-                    <X className="h-3 w-3" />
-                  </Button>
-                )}
-              </div>
-            );
-          })}
+                  removable={m.userID !== currentUserId && canRemoveMember(currentUserRole, m.role, channelSlug)}
+                  onRemove={handleRemove}
+                />
+              )}
+            />
+          )}
         </div>
       </ScrollArea>
     </motion.div>
+  );
+}
+
+// One member of the rail. Memoized, and subscribed to this member's presence
+// alone (the rows used to read the whole online set from their parent).
+const MemberRow = memo(function MemberRow({
+  member: m,
+  entry,
+  currentUserId,
+  removable,
+  onRemove,
+}: {
+  member: ChannelMembership;
+  entry?: UserMapEntry;
+  currentUserId?: string;
+  removable: boolean;
+  onRemove: (userId: string) => void;
+}) {
+  const avatarURL = entry?.avatarURL;
+  const memberOnline = useIsOnline(m.userID);
+  return (
+    // pb-0.5: the 2px rhythm between rows, inside the row so the virtual
+    // list measures it.
+    <div className="pb-0.5">
+      <div className="group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50">
+        <UserHoverCard
+          userId={m.userID}
+          displayName={m.displayName || 'Unknown'}
+          avatarURL={avatarURL}
+          userStatus={entry?.userStatus}
+          online={memberOnline}
+          currentUserId={currentUserId}
+          showInlineStatus={false}
+        >
+          <span className="cursor-pointer">
+            <UserAvatar
+              displayName={m.displayName || ''}
+              avatarURL={avatarURL}
+              online={memberOnline}
+            />
+          </span>
+        </UserHoverCard>
+        <span className="flex min-w-0 flex-1 items-center gap-1" data-testid={`member-name-status-${m.userID}`}>
+          <span className="truncate text-sm">{m.displayName || 'Unknown'}</span>
+          <UserStatusIndicator status={entry?.userStatus} />
+        </span>
+        {roleBadge(m.role)}
+        {/* Remove X: visible at rest (muted) on desktop, emphasized on
+            row hover — a hover-only reveal reads as "removal is gone".
+            Hidden entirely in #general, where the backend rejects
+            removal (everyone must stay a member). */}
+        {removable && (
+          <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0 opacity-100 md:h-6 md:w-6 md:opacity-60 md:group-hover:opacity-100" onClick={() => onRemove(m.userID)} aria-label={`Remove ${m.displayName}`}>
+            <X className="h-3 w-3" />
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+});
+
+// A person in the add-member results, with their own presence dot.
+function SearchResultRow({ user: u, added, onSelect }: { user: SearchUser; added: boolean; onSelect: () => void }) {
+  const online = useIsOnline(u.id);
+  return (
+    <UserPickerRow
+      testID={`member-add-user-${u.id}`}
+      displayName={u.displayName}
+      email={u.email}
+      avatarURL={u.avatarURL}
+      online={online}
+      userStatus={u.userStatus}
+      added={added}
+      onSelect={onSelect}
+    />
   );
 }

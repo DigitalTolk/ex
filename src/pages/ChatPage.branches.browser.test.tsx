@@ -64,6 +64,7 @@ vi.mock('@/context/UnreadContext', () => ({
 
 vi.mock('@/context/PresenceContext', () => ({
   usePresence: () => ({ online: new Set<string>(), isOnline: () => false, setUserOnline: vi.fn() }),
+  refreshPresence: vi.fn(),
   PresenceProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
@@ -139,7 +140,7 @@ vi.mock('@/lib/api', async (importOriginal) => ({
 
 const mockUseWebSocket = vi.hoisted(() => vi.fn());
 vi.mock('@/hooks/useWebSocket', () => ({
-  useWebSocket: (opts: unknown) => { mockUseWebSocket(opts); },
+  useWebSocket: (opts: unknown) => { mockUseWebSocket(eventCallbacks(opts as CapturedWSOptions)); },
 }));
 
 const navigateMock = vi.hoisted(() => vi.fn());
@@ -149,6 +150,7 @@ vi.mock('react-router-dom', async (importOriginal) => {
 });
 
 import ChatPage from './ChatPage';
+import { eventCallbacks, expectInvalidPayloadReported, type CapturedWSOptions } from '@/test/ws-frames';
 
 const originalMatchMedia = window.matchMedia;
 function setMobileViewport(matches: boolean) {
@@ -370,7 +372,7 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
 
   it('onThreadUpdated ignores a malformed payload', async () => {
     await renderChatPage();
-    lastHandlers().onThreadUpdated?.({ threadRootID: '' });
+    expectInvalidPayloadReported('thread.updated', () => lastHandlers().onThreadUpdated?.({ threadRootID: '' }));
     expect(mockUpsertUserThreadRow).not.toHaveBeenCalled();
   });
 
@@ -406,7 +408,7 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
   it('onAttachmentDeleted accepts a valid { id } payload', async () => {
     await renderChatPage();
     expect(() => lastHandlers().onAttachmentDeleted?.({ id: 'att-1' })).not.toThrow();
-    expect(() => lastHandlers().onAttachmentDeleted?.({})).not.toThrow();
+    expectInvalidPayloadReported('attachment.deleted', () => lastHandlers().onAttachmentDeleted?.({}));
   });
 
   it('onUserUpdated patches self with a non-null status object', async () => {
@@ -473,7 +475,7 @@ describe('ChatPage WS router — divergent-mock branch arms (browser)', () => {
 
   it('onServerVersion drops a payload missing the version field', async () => {
     await renderChatPage();
-    expect(() => lastHandlers().onServerVersion?.({})).not.toThrow();
+    expectInvalidPayloadReported('server.version', () => lastHandlers().onServerVersion?.({}));
     expect(() => lastHandlers().onServerVersion?.({ version: 'v9.9.9' })).not.toThrow();
   });
 

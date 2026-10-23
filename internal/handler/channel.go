@@ -1,30 +1,23 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
-	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // ChannelHandler exposes HTTP endpoints for channel operations.
 type ChannelHandler struct {
-	channelSvc   *service.ChannelService
-	messageSvc   *service.MessageService
-	draftClearer DraftClearer
+	channelSvc *service.ChannelService
+	messageSvc *service.MessageService
 }
 
 // NewChannelHandler creates a ChannelHandler.
 func NewChannelHandler(channelSvc *service.ChannelService, messageSvc *service.MessageService) *ChannelHandler {
 	return &ChannelHandler{channelSvc: channelSvc, messageSvc: messageSvc}
 }
-
-// SetDraftClearer wires the draft cleaner so a successful send clears the
-// scope's composer draft server-side (no separate client request).
-func (h *ChannelHandler) SetDraftClearer(c DraftClearer) { h.draftClearer = c }
 
 // Create creates a new channel.
 func (h *ChannelHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -53,7 +46,7 @@ func (h *ChannelHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	ch, err := h.channelSvc.Create(r.Context(), userID, body.Name, body.Type, body.Description)
 	if err != nil {
-		writeServiceError(w, err, http.StatusInternalServerError, "create_error")
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -81,70 +74,10 @@ func (h *ChannelHandler) ConvertConversation(w http.ResponseWriter, r *http.Requ
 	}
 	ch, err := h.channelSvc.ConvertGroupConversation(r.Context(), userID, r.PathValue("id"), body.Name)
 	if err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, store.ErrNotFound) {
-			status = http.StatusNotFound
-		}
-		writeServiceError(w, err, status, "convert_error")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, ch)
-}
-
-// isValidationError reports whether err is one of the named validation
-// errors from service/limits.go.
-func isValidationError(err error) bool {
-	switch {
-	case err == nil:
-		return false
-	case errors.Is(err, service.ErrMessageTooLong),
-		errors.Is(err, service.ErrTooManyAttachments),
-		errors.Is(err, service.ErrTooManyReactions),
-		errors.Is(err, service.ErrChannelNameInvalid),
-		errors.Is(err, service.ErrChannelNameTooLong),
-		errors.Is(err, service.ErrChannelDescriptionTooLong):
-		return true
-	}
-	return false
-}
-
-// isDuplicateError maps uniqueness conflicts to 409 via the sentinels —
-// the old error-string matching ("already exists"/"already taken") broke the
-// codebase's errors.Is convention and silently decayed whenever a message
-// was reworded.
-func isDuplicateError(err error) bool {
-	return errors.Is(err, store.ErrAlreadyExists) || errors.Is(err, service.ErrAlreadyExists)
-}
-
-// writeServiceError maps a service-layer error to an HTTP response for the
-// CHAT surfaces, which have a settled status contract the SPA switches on: the
-// shared sentinel table first (so a sentinel can't mean 409 here and 429 in
-// the agent API), then the duplicate/validation shapes this surface adds, then
-// the caller's own fallback status.
-func writeServiceError(w http.ResponseWriter, err error, fallbackStatus int, fallbackCode string) {
-	if isDuplicateError(err) {
-		writeError(w, http.StatusConflict, "conflict", err.Error())
-		return
-	}
-	if errors.Is(err, service.ErrThreadDeleted) {
-		writeError(w, http.StatusConflict, "thread_deleted", err.Error())
-		return
-	}
-	if isValidationError(err) {
-		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
-		return
-	}
-	// The shared sentinel table, minus ErrNotFound: on these routes the
-	// caller's fallback status is a deliberate choice (a conversation you are
-	// not a participant of answers 403 — "no such conversation" would be a
-	// different, and less accurate, story).
-	if !errors.Is(err, store.ErrNotFound) {
-		if status, code, message, ok := serviceStatus(err); ok {
-			writeError(w, status, code, message)
-			return
-		}
-	}
-	writeError(w, fallbackStatus, fallbackCode, err.Error())
 }
 
 // List returns all channels the authenticated user belongs to.
@@ -157,7 +90,7 @@ func (h *ChannelHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	channels, err := h.channelSvc.ListUserChannels(r.Context(), userID)
 	if err != nil {
-		writeInternalError(w, r, "list_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	if channels == nil {
@@ -181,7 +114,7 @@ func (h *ChannelHandler) BrowsePublic(w http.ResponseWriter, r *http.Request) {
 	if q != "" {
 		hits, err := h.channelSvc.SearchPublic(r.Context(), userID, q, limit)
 		if err != nil {
-			writeInternalError(w, r, "browse_error", err)
+			writeServiceError(w, r, err)
 			return
 		}
 		if hits != nil {
@@ -192,7 +125,7 @@ func (h *ChannelHandler) BrowsePublic(w http.ResponseWriter, r *http.Request) {
 
 	channels, _, err := h.channelSvc.BrowsePublic(r.Context(), userID, limit, cursor)
 	if err != nil {
-		writeInternalError(w, r, "browse_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	if channels == nil {
@@ -237,22 +170,11 @@ func (h *ChannelHandler) Get(w http.ResponseWriter, r *http.Request) {
 		ch, err = h.channelSvc.GetVisibleBySlug(r.Context(), userID, val)
 	}
 	if err != nil {
-		writeReadResourceError(w, r, err, "channel")
+		writeServiceError(w, r, err)
 		return
 	}
 
 	writeJSON(w, http.StatusOK, ch)
-}
-
-func writeReadResourceError(w http.ResponseWriter, r *http.Request, err error, resource string) {
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", resource+" not found")
-	case errors.Is(err, service.ErrForbidden):
-		writeError(w, http.StatusForbidden, "forbidden", "you do not have access to this "+resource)
-	default:
-		writeInternalError(w, r, "server_error", err)
-	}
 }
 
 // Update modifies a channel's name or description.
@@ -275,7 +197,7 @@ func (h *ChannelHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	ch, err := h.channelSvc.Update(r.Context(), userID, id, body.Name, body.Description)
 	if err != nil {
-		writeServiceError(w, err, http.StatusForbidden, "update_error")
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -292,7 +214,7 @@ func (h *ChannelHandler) Archive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.channelSvc.Archive(r.Context(), userID, id); err != nil {
-		writeError(w, http.StatusForbidden, "archive_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -309,22 +231,11 @@ func (h *ChannelHandler) Unarchive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.channelSvc.Unarchive(r.Context(), userID, id); err != nil {
-		writeError(w, http.StatusForbidden, "unarchive_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// writeChannelWriteError answers a rejected channel write: 409
-// channel_archived when the channel is archived (read-only), otherwise the
-// route's established status and code.
-func writeChannelWriteError(w http.ResponseWriter, err error, status int, code string) {
-	if errors.Is(err, service.ErrChannelArchived) {
-		writeError(w, http.StatusConflict, "channel_archived", err.Error())
-		return
-	}
-	writeError(w, status, code, err.Error())
 }
 
 // Join adds the authenticated user to a public channel.
@@ -337,7 +248,7 @@ func (h *ChannelHandler) Join(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.channelSvc.Join(r.Context(), userID, id); err != nil {
-		writeChannelWriteError(w, err, http.StatusBadRequest, "join_error")
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -361,7 +272,7 @@ func (h *ChannelHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.channelSvc.MarkChannelRead(r.Context(), userID, id); err != nil {
-		writeReadResourceError(w, r, err, "channel")
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -384,7 +295,7 @@ func (h *ChannelHandler) SetMute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.channelSvc.SetMute(r.Context(), userID, id, body.Muted); err != nil {
-		writeError(w, http.StatusBadRequest, "mute_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -409,7 +320,7 @@ func (h *ChannelHandler) SetNotificationPrefs(w http.ResponseWriter, r *http.Req
 	}
 
 	if err := h.channelSvc.SetNotificationPrefs(r.Context(), userID, id, override); err != nil {
-		writeError(w, http.StatusBadRequest, "notification_prefs_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -426,7 +337,7 @@ func (h *ChannelHandler) Leave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.channelSvc.Leave(r.Context(), userID, id); err != nil {
-		writeError(w, http.StatusBadRequest, "leave_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -448,7 +359,7 @@ func (h *ChannelHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 
 	members, err := h.channelSvc.ListMembers(r.Context(), userID, id)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "list_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -479,7 +390,7 @@ func (h *ChannelHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 
 	role := model.ParseChannelRole(body.Role)
 	if err := h.channelSvc.AddMember(r.Context(), userID, id, body.UserID, role); err != nil {
-		writeChannelWriteError(w, err, http.StatusForbidden, "add_member_error")
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -497,7 +408,7 @@ func (h *ChannelHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.channelSvc.RemoveMember(r.Context(), userID, id, uid); err != nil {
-		writeError(w, http.StatusForbidden, "remove_member_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -524,7 +435,7 @@ func (h *ChannelHandler) UpdateMemberRole(w http.ResponseWriter, r *http.Request
 
 	role := model.ParseChannelRole(body.Role)
 	if err := h.channelSvc.UpdateMemberRole(r.Context(), userID, id, uid, role); err != nil {
-		writeError(w, http.StatusForbidden, "role_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -573,10 +484,9 @@ func (h *ChannelHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 
 	msg, err := h.messageSvc.Send(withClientNonce(r), userID, id, service.ParentChannel, body.Body, body.ParentMessageID, body.AttachmentIDs...)
 	if err != nil {
-		writeServiceError(w, err, http.StatusForbidden, "send_error")
+		writeServiceError(w, r, err)
 		return
 	}
-	clearSentDraft(r.Context(), h.draftClearer, userID, id, service.ParentChannel, body.ParentMessageID)
 
 	writeJSON(w, http.StatusCreated, msg)
 }
@@ -593,7 +503,7 @@ func (h *ChannelHandler) GetThread(w http.ResponseWriter, r *http.Request) {
 
 	msgs, err := h.messageSvc.ListThreadMessages(r.Context(), userID, id, service.ParentChannel, msgID)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "thread_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -629,7 +539,7 @@ func (h *ChannelHandler) EditMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	msg, err := h.messageSvc.Edit(r.Context(), userID, id, service.ParentChannel, msgID, body.Body, attIDs)
 	if err != nil {
-		writeServiceError(w, err, http.StatusForbidden, "edit_error")
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -660,7 +570,7 @@ func (h *ChannelHandler) ToggleReaction(w http.ResponseWriter, r *http.Request) 
 
 	msg, err := h.messageSvc.ToggleReaction(r.Context(), userID, id, service.ParentChannel, msgID, body.Emoji)
 	if err != nil {
-		writeServiceError(w, err, http.StatusForbidden, "reaction_error")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, msg)
@@ -684,7 +594,7 @@ func (h *ChannelHandler) SetPinned(w http.ResponseWriter, r *http.Request) {
 	}
 	msg, err := h.messageSvc.SetPinned(r.Context(), userID, id, service.ParentChannel, msgID, body.Pinned)
 	if err != nil {
-		writeChannelWriteError(w, err, http.StatusForbidden, "pin_error")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, msg)
@@ -709,7 +619,7 @@ func (h *ChannelHandler) SetNoUnfurl(w http.ResponseWriter, r *http.Request) {
 	}
 	msg, err := h.messageSvc.SetNoUnfurl(r.Context(), userID, id, service.ParentChannel, msgID, body.NoUnfurl)
 	if err != nil {
-		writeChannelWriteError(w, err, http.StatusForbidden, "no_unfurl_error")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, msg)
@@ -725,7 +635,7 @@ func (h *ChannelHandler) ListPinned(w http.ResponseWriter, r *http.Request) {
 	}
 	pinned, err := h.messageSvc.ListPinned(r.Context(), userID, id, service.ParentChannel)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "list_pinned_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, pinned)
@@ -742,7 +652,7 @@ func (h *ChannelHandler) ListFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	files, err := h.messageSvc.ListFiles(r.Context(), userID, id, service.ParentChannel)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "list_files_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, files)
@@ -759,7 +669,7 @@ func (h *ChannelHandler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.messageSvc.Delete(r.Context(), userID, id, service.ParentChannel, msgID); err != nil {
-		writeChannelWriteError(w, err, http.StatusForbidden, "delete_error")
+		writeServiceError(w, r, err)
 		return
 	}
 

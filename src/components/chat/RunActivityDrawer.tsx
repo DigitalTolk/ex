@@ -23,6 +23,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { PanelResizeHandle } from '@/components/layout/PanelResizeHandle';
 import { usePanelWidth } from '@/hooks/usePanelWidth';
 import { ApiError, apiFetch } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 import { RUN_DRAWER_WIDTH } from '@/lib/panel-width';
 import { RunFiles } from './RunFiles';
 import { closeRunDrawer, useRunDrawerStore } from '@/stores/run-drawer';
@@ -81,7 +82,7 @@ function toolTitle(step: Extract<Step, { kind: 'tool' }>): ReactNode {
   const input = step.input ?? {};
   const s = (k: string): string => (typeof input[k] === 'string' ? (input[k] as string) : '');
   const chip = (text: string, mono = true) => (
-    <code className={`rounded bg-muted px-1 py-0.5 ${mono ? 'font-mono' : ''} text-[11px]`}>{text}</code>
+    <code className={`rounded bg-muted px-1 py-0.5 ${mono ? 'font-mono' : ''} text-xs`}>{text}</code>
   );
   switch (toolFamily(step.name)) {
     case 'shell': {
@@ -134,7 +135,7 @@ function DiffBlock({ oldText, newText }: { oldText: string; newText: string }) {
   const oldLines = oldText ? oldText.split('\n') : [];
   const newLines = newText ? newText.split('\n') : [];
   return (
-    <pre className="max-h-80 overflow-auto rounded-md border bg-background/70 font-mono text-[11px] leading-relaxed">
+    <pre className="max-h-80 overflow-auto rounded-md border bg-background/70 font-mono text-xs leading-relaxed">
       {oldLines.map((l, i) => (
         <div key={`o-${i}`} className="whitespace-pre-wrap break-words bg-red-500/10 px-2 text-red-700 dark:text-red-300">
           <span className="select-none opacity-60">- </span>
@@ -157,7 +158,7 @@ function ToolBody({ step }: { step: Extract<Step, { kind: 'tool' }> }) {
   const family = toolFamily(step.name);
   const result = step.result ? (
     <pre
-      className={`max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border p-2 font-mono text-[11px] leading-relaxed ${
+      className={`max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border p-2 font-mono text-xs leading-relaxed ${
         step.resultIsError ? 'border-red-500/40 bg-red-500/5 text-red-700 dark:text-red-300' : 'bg-background/70'
       }`}
     >
@@ -169,19 +170,19 @@ function ToolBody({ step }: { step: Extract<Step, { kind: 'tool' }> }) {
       return (
         <div className="space-y-1.5">
           {s('command') && (
-            <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-zinc-950 p-2 font-mono text-[11px] leading-relaxed text-zinc-100">
+            <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-zinc-950 p-2 font-mono text-xs leading-relaxed text-zinc-100">
               <span className="select-none text-emerald-400">$ </span>
               {s('command')}
             </pre>
           )}
-          {s('description') && <div className="text-[11px] text-muted-foreground">{s('description')}</div>}
+          {s('description') && <div className="text-xs text-muted-foreground">{s('description')}</div>}
           {result}
         </div>
       );
     case 'edit':
       return (
         <div className="space-y-1.5">
-          <div className="font-mono text-[11px] text-muted-foreground">{s('file_path')}</div>
+          <div className="font-mono text-xs text-muted-foreground">{s('file_path')}</div>
           <DiffBlock oldText={s('old_string')} newText={s('new_string')} />
           {step.resultIsError && result}
         </div>
@@ -189,9 +190,9 @@ function ToolBody({ step }: { step: Extract<Step, { kind: 'tool' }> }) {
     case 'write':
       return (
         <div className="space-y-1.5">
-          <div className="font-mono text-[11px] text-muted-foreground">{s('file_path') || s('notebook_path')}</div>
+          <div className="font-mono text-xs text-muted-foreground">{s('file_path') || s('notebook_path')}</div>
           {s('content') && (
-            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-emerald-500/5 p-2 font-mono text-[11px] leading-relaxed">
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-emerald-500/5 p-2 font-mono text-xs leading-relaxed">
               {s('content')}
             </pre>
           )}
@@ -202,10 +203,10 @@ function ToolBody({ step }: { step: Extract<Step, { kind: 'tool' }> }) {
       return (
         <div className="space-y-1.5">
           {step.detail && family !== 'read' && family !== 'search' && (
-            <div className="text-[11px] text-muted-foreground">{step.detail}</div>
+            <div className="text-xs text-muted-foreground">{step.detail}</div>
           )}
           {input.json ? (
-            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-background/70 p-2 font-mono text-[11px]">
+            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-background/70 p-2 font-mono text-xs">
               {String(input.json)}
             </pre>
           ) : null}
@@ -245,13 +246,13 @@ function ToolStep({ step, gapMs }: { step: Extract<Step, { kind: 'tool' }>; gapM
         <span className="min-w-0 flex-1">
           <span className="block break-words leading-snug">{toolTitle(step)}</span>
           {!open && preview && (
-            <span className={`block truncate text-[11px] ${step.resultIsError ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'}`}>
+            <span className={`block truncate text-xs ${step.resultIsError ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'}`}>
               {step.resultIsError ? 'error: ' : '↳ '}
               {preview}
             </span>
           )}
         </span>
-        <span className="shrink-0 pl-1 font-mono text-[10px] tabular-nums text-muted-foreground/70">
+        <span className="shrink-0 pl-1 font-mono text-xs tabular-nums text-muted-foreground/70">
           {step.durationMs !== undefined && step.durationMs >= 500 ? `${fmtDur(step.durationMs)} · ` : ''}
           {gapMs >= 1000 ? <span className={gapMs >= 30_000 ? 'text-amber-600 dark:text-amber-500' : ''}>+{fmtDur(gapMs)} · </span> : null}
           {fmtTime(step.at)}
@@ -309,7 +310,7 @@ export function RunActivityDrawer() {
   // the poll refreshes it every 2.5s while the run is live, and reading it is
   // pure (no Date.now() in render).
   const { data, error, isLoading, dataUpdatedAt } = useQuery({
-    queryKey: ['run-timeline', runID, thread?.parentID ?? null, thread?.rootID ?? null],
+    queryKey: queryKeys.runTimeline({ runID, parentID: thread?.parentID ?? null, rootID: thread?.rootID ?? null }),
     queryFn: () => {
       /* istanbul ignore next -- the query is disabled unless runID or thread is set */
       const rid = runID ?? '';
@@ -366,7 +367,7 @@ export function RunActivityDrawer() {
     setStopping(true);
     try {
       await apiFetch(`/api/v1/runs/${run.id}/stop`, { method: 'POST', body: JSON.stringify({}) });
-      await queryClient.invalidateQueries({ queryKey: ['run-timeline'] });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.runTimeline() });
     } catch {
       // Already terminal or transient — the poll reconciles.
     } finally {
@@ -533,7 +534,7 @@ export function RunActivityDrawer() {
                           aria-hidden="true"
                         />
                         <span className="min-w-0 flex-1 truncate font-medium">{a.title}</span>
-                        <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
                           {a.kind}
                         </span>
                         <button
@@ -555,7 +556,7 @@ export function RunActivityDrawer() {
                           )}
                         </button>
                       </summary>
-                      <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words border-t bg-muted/40 p-2.5 font-mono text-[11px] leading-relaxed">
+                      <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words border-t bg-muted/40 p-2.5 font-mono text-xs leading-relaxed">
                         {a.content ?? ''}
                       </pre>
                     </details>
@@ -578,10 +579,10 @@ export function RunActivityDrawer() {
                     ?.filter((a) => a.kind === 'api_response')
                     .map((a) => (
                       <details key={a.id} className="rounded-md border">
-                        <summary className="cursor-pointer select-none truncate px-2 py-1.5 font-mono text-[11px] hover:bg-accent/50">
+                        <summary className="cursor-pointer select-none truncate px-2 py-1.5 font-mono text-xs hover:bg-accent/50">
                           {a.title}
                         </summary>
-                        <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words border-t bg-muted/40 p-2.5 font-mono text-[11px] leading-relaxed">
+                        <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words border-t bg-muted/40 p-2.5 font-mono text-xs leading-relaxed">
                           {a.content ?? ''}
                         </pre>
                       </details>
@@ -592,7 +593,7 @@ export function RunActivityDrawer() {
 
             <div className="mb-1.5 flex items-center justify-between">
               <span className="text-xs font-semibold text-muted-foreground">Activity</span>
-              <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <input type="checkbox" className="h-3 w-3" checked={showChatter} onChange={(e) => setShowChatter(e.target.checked)} />
                 show harness turns &amp; tokens
               </label>
@@ -608,7 +609,7 @@ export function RunActivityDrawer() {
                 const prev = steps[i - 1];
                 const gapMs = prev ? Math.max(0, new Date(s.at).getTime() - new Date(prev.at).getTime()) : 0;
                 const stamp = (
-                  <span className="shrink-0 pl-1 font-mono text-[10px] tabular-nums text-muted-foreground/70">
+                  <span className="shrink-0 pl-1 font-mono text-xs tabular-nums text-muted-foreground/70">
                     {gapMs >= 1000 ? <span className={gapMs >= 30_000 ? 'text-amber-600 dark:text-amber-500' : ''}>+{fmtDur(gapMs)} · </span> : null}
                     {fmtTime(s.at)}
                   </span>
@@ -661,7 +662,7 @@ export function RunActivityDrawer() {
                     );
                   case 'chatter':
                     return (
-                      <li key={s.seq} className="flex items-start gap-2 px-2 text-[11px] leading-snug text-muted-foreground">
+                      <li key={s.seq} className="flex items-start gap-2 px-2 text-xs leading-snug text-muted-foreground">
                         <span className="min-w-0 flex-1">{s.text}</span>
                         {stamp}
                       </li>

@@ -100,6 +100,9 @@ func setupResetHandler(t *testing.T) *resetHandlerEnv {
 	)
 	authSvc.SetPasswordResetStore(resets)
 	authSvc.SetMailer(mailer, "https://ex.example.com")
+	// The self-service reset works detached from the response; run it
+	// inline so these tests can count the mail it sends.
+	authSvc.SetBackgroundRunner(func(fn func()) { fn() })
 
 	guest := &model.User{
 		ID: "u-guest", Email: "guest@example.com", DisplayName: "Guest User",
@@ -402,8 +405,10 @@ func TestResetPassword_SSOAccountRejected(t *testing.T) {
 
 	rec := postJSON(env.h.ResetPassword, "/auth/password/reset",
 		`{"token":"tok","password":"long-enough-password"}`)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
+	// 409 sso_account, as at minting: one sentinel, one status (redemption
+	// used to answer this 400 invalid_token).
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "sso_account") {
+		t.Fatalf("status = %d, want 409 sso_account; body = %s", rec.Code, rec.Body.String())
 	}
 	if env.users.users["u-sso"].PasswordHash != "" {
 		t.Fatal("a local password was written onto an SSO account")

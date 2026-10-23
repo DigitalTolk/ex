@@ -11,13 +11,13 @@ import {
 } from '@/hooks/useAgents';
 import { useConnectors } from '@/hooks/useConnectors';
 import { useCreateChannel, useUserChannels } from '@/hooks/useChannels';
-import { useCreateConversation, useSearchUsers } from '@/hooks/useConversations';
+import { useCreateConversation, useUserLookup } from '@/hooks/useConversations';
 import { useAuth } from '@/context/AuthContext';
 import { ApiError } from '@/lib/api';
 import { slugify } from '@/lib/format';
+import { localTimeZone } from '@/lib/user-time';
 import {
   cronFromParts,
-  localTimeZone,
   partsFromCron,
   suggestChannelName,
   timeZoneOptions,
@@ -470,7 +470,7 @@ function DestinationPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const { data: found, isFetching } = useSearchUsers(query);
+  const { data: found, isFetching } = useUserLookup(query);
 
   const q = query.trim().toLowerCase();
   const fixed = [
@@ -582,7 +582,7 @@ function Option({ onClick, children }: { onClick: () => void; children: React.Re
 
 function GroupLabel({ children }: { children: React.ReactNode }) {
   return (
-    <p className="px-2 pt-1.5 pb-0.5 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+    <p className="px-2 pt-1.5 pb-0.5 text-xs font-medium tracking-wider text-muted-foreground uppercase">
       {children}
     </p>
   );

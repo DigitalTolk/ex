@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"golang.org/x/net/html"
+
+	"github.com/DigitalTolk/ex/internal/netguard"
 )
 
 // UnfurlPreview is the payload returned for a successfully unfurled URL.
@@ -81,8 +83,10 @@ type UnfurlImageStore interface {
 
 // UnfurlService fetches HTML for a URL, scrapes OpenGraph / Twitter Card
 // metadata, and caches the result. The HTTP client is hardened against
-// SSRF: private/loopback/link-local hosts, redirects to private hosts,
-// and non-HTTP schemes are rejected; the response body is size-capped.
+// SSRF (netguard): every dial — the first hop, each redirect, a name that
+// resolves to a private address — must reach a public address, the proxy
+// environment is ignored, and non-HTTP schemes are rejected; the response
+// body is size-capped.
 //
 // When an UnfurlImageStore is configured, the scraped Image URL is
 // proxied through S3: the upstream image is fetched once, uploaded under
@@ -101,7 +105,7 @@ type UnfurlService struct {
 	// proxy path. Production wiring (NewUnfurlService) leaves this false
 	// so the SSRF guard runs on every upstream image URL; tests that
 	// need to point at httptest's 127.0.0.1 server flip it on. The
-	// transport's safeDialContext is already swapped out in tests via
+	// guarded client is already swapped out in tests via
 	// newLoopbackUnfurlService.
 	skipURLValidation bool
 }
@@ -127,20 +131,13 @@ const (
 func NewUnfurlService(cache UnfurlCache) *UnfurlService {
 	return &UnfurlService{
 		cache: cache,
-		client: &http.Client{
-			Timeout: unfurlTimeout,
-			Transport: &http.Transport{
-				DialContext:         safeDialContext,
-				DisableKeepAlives:   true,
-				MaxIdleConnsPerHost: 1,
-			},
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= unfurlMaxRedirect {
-					return errors.New("unfurl: too many redirects")
-				}
-				return validateURL(req.URL)
-			},
-		},
+		// Redirect targets need no URL check of their own: each hop dials
+		// through the same guard, which judges the address actually reached.
+		client: netguard.NewClient(netguard.Options{
+			Timeout:           unfurlTimeout,
+			MaxRedirects:      unfurlMaxRedirect,
+			DisableKeepAlives: true,
+		}),
 	}
 }
 
@@ -246,50 +243,90 @@ func (s *UnfurlService) fetchAndScrape(ctx context.Context, urlStr string) (*Unf
 // proxyImage rewrites preview.Image to a presigned URL on an S3 object
 // we own. Behaviour:
 //   - no image store configured → no-op (upstream URL flows through).
-//   - HEAD hit → just regenerate the presigned URL.
-//   - HEAD miss → fetch upstream (size/type/timeout-capped, SSRF-guarded),
-//     upload, then presign.
+//   - already stored (cache record or HEAD hit) → just sign the URL.
+//   - not stored → fetch upstream (size/type/timeout-capped, SSRF-guarded),
+//     upload, then sign.
 //   - Any failure (fetch error, non-image, oversize, S3 error) → clear
 //     preview.Image to "" so the frontend shows a placeholder.
 func (s *UnfurlService) proxyImage(ctx context.Context, preview *UnfurlPreview) {
 	if s == nil || s.imgStore == nil || preview == nil || preview.Image == "" {
 		return
 	}
-	imgURL := preview.Image
-	parsed, err := url.Parse(imgURL)
-	if err != nil || !parsed.IsAbs() {
+	key, _, ok := s.storeImage(ctx, preview.Image, false)
+	if !ok {
 		preview.Image = ""
 		return
+	}
+	preview.Image = s.signImageKey(ctx, key)
+}
+
+// storeImage makes sure the image at imgURL is held in S3 under its
+// unfurlImageKey and returns that key with the image's cache record; with
+// measure set, the record carries the image's dimensions when they can be
+// read. ok is false when the URL is unusable or the image could not be
+// fetched or stored.
+func (s *UnfurlService) storeImage(ctx context.Context, imgURL string, measure bool) (key string, rec imageDims, ok bool) {
+	parsed, err := url.Parse(imgURL)
+	if err != nil || !parsed.IsAbs() {
+		return "", imageDims{}, false
 	}
 	if !s.skipURLValidation {
 		if err := validateURL(parsed); err != nil {
-			preview.Image = ""
-			return
+			return "", imageDims{}, false
 		}
 	}
+	key = unfurlImageKey(imgURL)
+	// A cache record proves the object is stored, so the HEAD is skipped: a
+	// webhook post with a few images used to pay one sequential S3 round trip
+	// per image field, on every post.
+	rec, known := s.loadImageRecord(ctx, key)
+	if !known {
+		exists, err := s.imgStore.HeadObject(ctx, key)
+		if err != nil {
+			// HEAD failed for a non-404 reason (auth, network) — drop the
+			// image rather than leaking the upstream URL to clients.
+			return "", imageDims{}, false
+		}
+		if !exists {
+			body, contentType, err := s.fetchUpstreamImage(ctx, imgURL)
+			if err != nil {
+				return "", imageDims{}, false
+			}
+			if err := s.imgStore.PutObject(ctx, key, contentType, body); err != nil {
+				return "", imageDims{}, false
+			}
+			w, h := decodeImageDims(body)
+			rec = imageDims{W: w, H: h, Measured: true}
+		}
+	}
+	dirty := !known
+	if measure && !rec.measured() {
+		if measured, ok := s.measureStoredImage(ctx, key); ok {
+			rec, dirty = measured, true
+		}
+	}
+	if dirty {
+		s.saveImageRecord(ctx, key, rec)
+	}
+	return key, rec, true
+}
 
-	key := unfurlImageKey(imgURL)
-
-	exists, err := s.imgStore.HeadObject(ctx, key)
+// measureStoredImage reads a stored image back to decode its dimensions — an
+// object stored before its record (or its dimensions) was kept. ok is false
+// when the object could not be read; an undecodable one is still measured
+// (as 0×0), so it is not read again on the next post.
+func (s *UnfurlService) measureStoredImage(ctx context.Context, key string) (imageDims, bool) {
+	body, _, _, _, err := s.imgStore.GetObject(ctx, key)
 	if err != nil {
-		// HEAD failed for a non-404 reason (auth, network) — drop the
-		// image rather than leaking the upstream URL to clients.
-		preview.Image = ""
-		return
+		return imageDims{}, false
 	}
-	if !exists {
-		body, contentType, fetchErr := s.fetchUpstreamImage(ctx, imgURL)
-		if fetchErr != nil {
-			preview.Image = ""
-			return
-		}
-		if err := s.imgStore.PutObject(ctx, key, contentType, body); err != nil {
-			preview.Image = ""
-			return
-		}
+	data, err := io.ReadAll(io.LimitReader(body, unfurlImageMax+1))
+	_ = body.Close()
+	if err != nil {
+		return imageDims{}, false
 	}
-
-	preview.Image = s.signImageKey(ctx, key)
+	w, h := decodeImageDims(data)
+	return imageDims{W: w, H: h, Measured: true}, true
 }
 
 // signImageKey turns an S3 object key we own into a client-facing URL:
@@ -311,9 +348,9 @@ func (s *UnfurlService) signImageKey(ctx context.Context, key string) string {
 // ProxyImageWithSize behaves like ProxyImageURL but also reports the
 // intrinsic pixel dimensions of the cached image. Width/height are
 // decoded from the upstream bytes the first time the image is cached
-// and memoised in the cache keyed by the S3 object; on a cache hit with
-// no recorded dimensions (legacy objects) the object is read back once
-// and decoded. Returns ("", 0, 0) on any failure.
+// and memoised in the cache keyed by the S3 object; an object stored
+// without recorded dimensions (legacy objects) is read back once and
+// decoded. Returns ("", 0, 0) on any failure.
 //
 // When no image store is configured it degrades to the plain proxy and
 // reports unknown dimensions.
@@ -321,82 +358,48 @@ func (s *UnfurlService) ProxyImageWithSize(ctx context.Context, rawURL string) (
 	if s == nil || s.imgStore == nil {
 		return s.ProxyImageURL(ctx, rawURL), 0, 0
 	}
-	imgURL := strings.TrimSpace(rawURL)
-	if imgURL == "" {
+	key, rec, ok := s.storeImage(ctx, strings.TrimSpace(rawURL), true)
+	if !ok {
 		return "", 0, 0
 	}
-	parsed, err := url.Parse(imgURL)
-	if err != nil || !parsed.IsAbs() {
-		return "", 0, 0
-	}
-	if !s.skipURLValidation {
-		if err := validateURL(parsed); err != nil {
-			return "", 0, 0
-		}
-	}
-
-	key := unfurlImageKey(imgURL)
-	exists, err := s.imgStore.HeadObject(ctx, key)
-	if err != nil {
-		return "", 0, 0
-	}
-
-	var w, h int
-	if !exists {
-		body, contentType, fetchErr := s.fetchUpstreamImage(ctx, imgURL)
-		if fetchErr != nil {
-			return "", 0, 0
-		}
-		w, h = decodeImageDims(body)
-		if err := s.imgStore.PutObject(ctx, key, contentType, body); err != nil {
-			return "", 0, 0
-		}
-		s.cacheImageDims(ctx, key, w, h)
-	} else {
-		w, h = s.loadImageDims(ctx, key)
-		if w == 0 || h == 0 {
-			if body, _, _, _, err := s.imgStore.GetObject(ctx, key); err == nil {
-				data, readErr := io.ReadAll(io.LimitReader(body, unfurlImageMax+1))
-				_ = body.Close()
-				if readErr == nil {
-					w, h = decodeImageDims(data)
-					s.cacheImageDims(ctx, key, w, h)
-				}
-			}
-		}
-	}
-
 	signed := s.signImageKey(ctx, key)
 	if signed == "" {
 		return "", 0, 0
 	}
-	return signed, w, h
+	return signed, rec.W, rec.H
 }
 
-// imageDims is the cached width/height memo for a proxied image key.
+// imageDims is the cache record of a proxied image key. Its presence proves
+// the object is stored in S3; W/H are its intrinsic dimensions when known.
 type imageDims struct {
 	W int `json:"w"`
 	H int `json:"h"`
+	// Measured is set once the stored bytes were decoded for their size, so
+	// an undecodable image is not re-read on every post. Records written
+	// before the flag existed always carry non-zero dimensions.
+	Measured bool `json:"m,omitempty"`
 }
+
+func (d imageDims) measured() bool { return d.Measured || (d.W > 0 && d.H > 0) }
 
 func imageDimsKey(objectKey string) string { return "imgdim:" + objectKey }
 
-func (s *UnfurlService) cacheImageDims(ctx context.Context, key string, w, h int) {
-	if s.cache == nil || w <= 0 || h <= 0 {
+func (s *UnfurlService) saveImageRecord(ctx context.Context, key string, rec imageDims) {
+	if s.cache == nil {
 		return
 	}
-	_ = s.cache.Set(ctx, imageDimsKey(key), imageDims{W: w, H: h}, unfurlCacheTTL)
+	_ = s.cache.Set(ctx, imageDimsKey(key), rec, unfurlCacheTTL)
 }
 
-func (s *UnfurlService) loadImageDims(ctx context.Context, key string) (int, int) {
+func (s *UnfurlService) loadImageRecord(ctx context.Context, key string) (imageDims, bool) {
 	if s.cache == nil {
-		return 0, 0
+		return imageDims{}, false
 	}
 	var d imageDims
-	if err := s.cache.Get(ctx, imageDimsKey(key), &d); err == nil {
-		return d.W, d.H
+	if err := s.cache.Get(ctx, imageDimsKey(key), &d); err != nil {
+		return imageDims{}, false
 	}
-	return 0, 0
+	return d, true
 }
 
 // decodeImageDims reads the intrinsic dimensions from image bytes. The
@@ -456,7 +459,10 @@ func (s *UnfurlService) fetchUpstreamImage(ctx context.Context, imgURL string) (
 	if !strings.HasPrefix(detected, "image/") {
 		return nil, "", fmt.Errorf("unfurl: image magic mismatch %q", detected)
 	}
-	return body, contentType, nil
+	// Store what the bytes are, never the upstream's header verbatim: a list
+	// such as "image/png, text/html" passes the prefix check above, yet a
+	// browser takes the last valid entry and would render the object as HTML.
+	return body, detected, nil
 }
 
 // unfurlImageKey builds the S3 key for a given upstream image URL. The
@@ -490,9 +496,9 @@ func imageExtFromURL(imgURL string) string {
 	return ""
 }
 
-// validateURL rejects schemes other than http/https and hostnames that
-// resolve to (or already are) private/loopback/link-local IPs. Run on
-// the original URL and on every redirect target.
+// validateURL rejects schemes other than http/https and IP-literal hosts
+// outside the public address space (netguard's deny list). Hostnames are
+// judged at dial time, on the address they resolve to.
 func validateURL(u *url.URL) error {
 	if u == nil {
 		return errors.New("unfurl: nil url")
@@ -505,7 +511,7 @@ func validateURL(u *url.URL) error {
 		return errors.New("unfurl: empty host")
 	}
 	if ip := net.ParseIP(host); ip != nil {
-		if !isPublicIP(ip) {
+		if !netguard.IsPublicIP(ip) {
 			return fmt.Errorf("unfurl: host %q is private", host)
 		}
 	}
@@ -515,7 +521,7 @@ func validateURL(u *url.URL) error {
 // preflightPublicTarget resolves a URL's host once, before any request is
 // made, and rejects targets that resolve to a non-public address. This is
 // noise control, not the security boundary: the same rule is enforced again
-// by safeDialContext at dial time.
+// by the netguard client at dial time.
 func preflightPublicTarget(ctx context.Context, urlStr string) error {
 	parsed, err := url.Parse(urlStr)
 	if err != nil {
@@ -527,64 +533,13 @@ func preflightPublicTarget(ctx context.Context, urlStr string) error {
 		return fmt.Errorf("unfurl: resolve %s: %w", host, err)
 	}
 	for _, ip := range ips {
-		if !isPublicIP(ip) {
-			slog.Warn("unfurl: link target resolves to a private address; preview skipped",
+		if !netguard.IsPublicIP(ip) {
+			slog.WarnContext(ctx, "unfurl: link target resolves to a private address; preview skipped",
 				"host", host, "ip", ip.String())
 			return fmt.Errorf("unfurl: blocked private IP %s", ip)
 		}
 	}
 	return nil
-}
-
-// safeDialContext blocks connections to private addresses at the dial
-// layer — defence-in-depth in case validateURL missed a hostname that
-// only resolves to private IPs.
-func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
-	}
-	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
-	if err != nil {
-		return nil, err
-	}
-	for _, ip := range ips {
-		if !isPublicIP(ip) {
-			return nil, fmt.Errorf("unfurl: blocked private IP %s", ip)
-		}
-	}
-	d := net.Dialer{Timeout: unfurlTimeout}
-	return d.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
-}
-
-// ssrfDeniedCIDRs are ranges that net.IP's built-in predicates don't cover but
-// can still reach infrastructure: carrier-grade NAT (RFC 6598) is routable to
-// an upstream provider's internal network, and NAT64 (RFC 6052) embeds an
-// arbitrary IPv4 — including private ones — behind a synthesized IPv6 address.
-var ssrfDeniedCIDRs = func() []*net.IPNet {
-	out := make([]*net.IPNet, 0, 2)
-	for _, c := range []string{"100.64.0.0/10", "64:ff9b::/96"} {
-		if _, n, err := net.ParseCIDR(c); err == nil {
-			out = append(out, n)
-		}
-	}
-	return out
-}()
-
-func isPublicIP(ip net.IP) bool {
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
-		return false
-	}
-	if ip.IsPrivate() {
-		return false
-	}
-	for _, n := range ssrfDeniedCIDRs {
-		if n.Contains(ip) {
-			return false
-		}
-	}
-	return true
 }
 
 // scrapePreview pulls OG/Twitter/standard metadata out of an HTML

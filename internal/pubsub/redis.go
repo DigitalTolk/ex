@@ -89,21 +89,15 @@ func (ps *RedisPubSub) Publish(ctx context.Context, channel string, event *event
 	if err := ps.client.Publish(ctx, channel, data).Err(); err != nil {
 		return fmt.Errorf("redis publish: %w", err)
 	}
-	if ps.resolver != nil && ps.inbox != nil && event != nil && events.IsPersistent(event.Type) {
-		ps.fanOut.Add(1)
-		go func() {
-			defer ps.fanOut.Done()
-			defer safe.Recover()
-			ps.appendToInboxes(context.WithoutCancel(ctx), channel, event, data)
-		}()
-	}
+	ps.fanOutAsync(ctx, []string{channel}, event, data)
 	return nil
 }
 
 // PublishMany pipelines one event to many channels in a single round-trip,
 // instead of a separate PUBLISH (and round-trip) per channel — used for
-// fan-outs like presence transitions that notify every shared-context topic.
-// Persistent events still get their per-channel inbox fan-out (detached).
+// fan-outs like member-list propagation to every member's personal topic.
+// A persistent event gets ONE inbox fan-out over the union of the channels'
+// recipients (detached).
 func (ps *RedisPubSub) PublishMany(ctx context.Context, channels []string, event *events.Event) error {
 	if len(channels) == 0 {
 		return nil
@@ -121,18 +115,42 @@ func (ps *RedisPubSub) PublishMany(ctx context.Context, channels []string, event
 	// must still fan out to every recipient's inbox even if some live PUBLISH in
 	// the pipeline failed — otherwise those recipients couldn't replay it on
 	// reconnect. So run the inbox fan-out regardless of execErr, then surface it.
-	if ps.resolver != nil && ps.inbox != nil && event != nil && events.IsPersistent(event.Type) {
-		for _, ch := range channels {
-			ps.fanOut.Add(1)
-			go func(ch string) {
-				defer ps.fanOut.Done()
-				defer safe.Recover()
-				ps.appendToInboxes(context.WithoutCancel(ctx), ch, event, data)
-			}(ch)
-		}
-	}
+	ps.fanOutAsync(ctx, channels, event, data)
 	if execErr != nil {
 		return fmt.Errorf("redis publish pipeline: %w", execErr)
+	}
+	return nil
+}
+
+// multicastEnvelope is the MulticastTopic frame: one event plus the topics
+// whose subscribers it is for.
+type multicastEnvelope struct {
+	Topics []string        `json:"topics"`
+	Event  json.RawMessage `json:"event"`
+}
+
+// PublishMulticast delivers ONE event to everyone subscribed to ANY of the
+// topics, each connection receiving it once (events.MulticastPublisher).
+// PublishMany would send a copy per topic, so a connection sharing k of them
+// got k copies — a presence change reached a colleague once per shared
+// channel. Here a single frame goes to MulticastTopic, which every broker
+// instance listens on; each instance delivers the event to the union of its
+// local subscribers of the listed topics. A persistent event gets one inbox
+// fan-out over the union of the topics' recipients, run regardless of the
+// live PUBLISH outcome (as in PublishMany).
+func (ps *RedisPubSub) PublishMulticast(ctx context.Context, topics []string, event *events.Event) error {
+	if len(topics) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("marshal event: %w", err)
+	}
+	frame := mustJSON(json.Marshal(multicastEnvelope{Topics: topics, Event: data}))
+	pubErr := ps.client.Publish(ctx, MulticastTopic(), frame).Err()
+	ps.fanOutAsync(ctx, topics, event, data)
+	if pubErr != nil {
+		return fmt.Errorf("redis publish multicast: %w", pubErr)
 	}
 	return nil
 }
@@ -150,56 +168,111 @@ type inboxDropper interface {
 	Drop(ctx context.Context, userIDs []string) error
 }
 
-// inboxAppendRetryInterval / inboxAppendMaxRetries bound the fan-out retry.
-// Vars so tests can shrink the interval; the fan-out runs on a detached
-// goroutine so brief sleeps here cost the request path nothing.
+// inboxFanOutTimeout bounds one detached inbox fan-out (resolve + appends +
+// retry waits), so a wedged store cannot pin its goroutine indefinitely;
+// running out is treated like a failed append (the streams are poisoned).
+// inboxDropTimeout bounds the poison step, which runs on a fresh context so
+// it still happens when the fan-out's own deadline is what ran out.
+// inboxAppendRetryInterval / inboxAppendMaxRetries bound the retry. Vars so
+// tests can shrink them; the fan-out runs on a detached goroutine, so the
+// waits cost the request path nothing.
 var (
+	inboxFanOutTimeout       = 30 * time.Second
+	inboxDropTimeout         = 5 * time.Second
 	inboxAppendRetryInterval = 250 * time.Millisecond
 	inboxAppendMaxRetries    = 2
 )
 
-// appendToInboxes fans the serialized event out to every recipient's
-// per-user inbox stream. Recipients are resolved from the topic; for
-// global/ephemeral topics this is a no-op.
+// fanOutAsync starts the durable inbox fan-out of a persistent event published
+// to topics — when durability is wired — on a goroutine detached from the
+// request (it must outlive it) but bounded by inboxFanOutTimeout.
+func (ps *RedisPubSub) fanOutAsync(ctx context.Context, topics []string, event *events.Event, payload []byte) {
+	if ps.resolver == nil || ps.inbox == nil || event == nil || !events.IsPersistent(event.Type) {
+		return
+	}
+	ps.fanOut.Add(1)
+	go func() {
+		defer ps.fanOut.Done()
+		defer safe.Recover()
+		fanOutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), inboxFanOutTimeout)
+		defer cancel()
+		ps.appendToInboxes(fanOutCtx, topics, event, payload)
+	}()
+}
+
+// appendToInboxes writes the serialized event to every recipient's per-user
+// inbox stream ONCE: recipients are resolved from each topic and de-duplicated,
+// so an event addressed to several topics with overlapping audiences is one
+// AppendMany (one stored payload) rather than one per topic. Global/ephemeral
+// topics resolve to nobody.
 //
 // Failure policy: a pipeline error may have written SOME recipients' streams
 // and not others — a mid-stream hole the ULID replay cursor cannot detect,
 // so a reconnecting client would get `replay.done` while silently missing an
 // event. Retry the batch (appends are idempotent-enough: a duplicate entry
-// is deduped client-side by event ID), and if it still fails, DROP the
-// affected streams so every one of those clients takes the exhausted →
-// full-refetch path on reconnect. Losing buffered replay beats losing an
-// event.
-func (ps *RedisPubSub) appendToInboxes(ctx context.Context, topic string, event *events.Event, payload []byte) {
-	if ps.resolver == nil || ps.inbox == nil {
-		return
-	}
-	if event == nil || !events.IsPersistent(event.Type) {
-		return
-	}
-	recipients, err := ps.resolver.Resolve(ctx, topic)
-	if err != nil {
-		slog.Error("pubsub: resolve recipients", "topic", topic, "error", err)
-		return
-	}
+// is deduped client-side by event ID), and if it still fails — or the
+// fan-out's deadline runs out — DROP the affected streams so every one of
+// those clients takes the exhausted → full-refetch path on reconnect. Losing
+// buffered replay beats losing an event.
+func (ps *RedisPubSub) appendToInboxes(ctx context.Context, topics []string, event *events.Event, payload []byte) {
+	recipients := ps.resolveRecipients(ctx, topics)
 	if len(recipients) == 0 {
 		return
 	}
 	// One pipelined fan-out instead of a goroutine + round-trip per recipient.
-	err = ps.inbox.AppendMany(ctx, recipients, event.ID, payload)
+	err := ps.inbox.AppendMany(ctx, recipients, event.ID, payload)
 	for attempt := 0; err != nil && attempt < inboxAppendMaxRetries; attempt++ {
-		time.Sleep(inboxAppendRetryInterval)
+		if waitErr := sleepCtx(ctx, inboxAppendRetryInterval); waitErr != nil {
+			err = fmt.Errorf("%w (retry abandoned: %w)", err, waitErr)
+			break
+		}
 		err = ps.inbox.AppendMany(ctx, recipients, event.ID, payload)
 	}
 	if err == nil {
 		return
 	}
-	slog.Error("pubsub: inbox append failed after retries", "topic", topic, "type", event.Type, "count", len(recipients), "error", err)
+	slog.ErrorContext(ctx, "pubsub: inbox append failed after retries", "topics", len(topics), "type", event.Type, "count", len(recipients), "error", err)
 	if dropper, ok := ps.inbox.(inboxDropper); ok {
-		if derr := dropper.Drop(ctx, recipients); derr != nil {
-			slog.Error("pubsub: inbox poison failed — replay may silently skip an event for these recipients",
-				"topic", topic, "count", len(recipients), "error", derr)
+		dropCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), inboxDropTimeout)
+		defer cancel()
+		if derr := dropper.Drop(dropCtx, recipients); derr != nil {
+			slog.ErrorContext(ctx, "pubsub: inbox poison failed — replay may silently skip an event for these recipients",
+				"topics", len(topics), "count", len(recipients), "error", derr)
 		}
+	}
+}
+
+// resolveRecipients returns the de-duplicated union of the topics'
+// recipients, in first-seen order. A topic that fails to resolve is logged
+// and contributes nobody; the others still fan out.
+func (ps *RedisPubSub) resolveRecipients(ctx context.Context, topics []string) []string {
+	var recipients []string
+	seen := make(map[string]bool)
+	for _, topic := range topics {
+		ids, err := ps.resolver.Resolve(ctx, topic)
+		if err != nil {
+			slog.ErrorContext(ctx, "pubsub: resolve recipients", "topic", topic, "error", err)
+			continue
+		}
+		for _, id := range ids {
+			if !seen[id] {
+				seen[id] = true
+				recipients = append(recipients, id)
+			}
+		}
+	}
+	return recipients
+}
+
+// sleepCtx waits d, or returns ctx's error as soon as ctx is done.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
@@ -239,6 +312,11 @@ func PresenceEvents() string { return "global:presence" }
 // updates (user.updated events).
 func UserEvents() string { return "global:users" }
 
+// MulticastTopic returns the broker-internal Redis channel that carries
+// PublishMulticast frames. Every Broker subscribes to it for the lifetime of
+// the instance; no client is ever subscribed to it directly.
+func MulticastTopic() string { return "global:multicast" }
+
 // Client returns the underlying Redis client.
 func (ps *RedisPubSub) Client() *redis.Client {
 	return ps.client
@@ -267,14 +345,7 @@ func (ps *RedisPubSub) PublishEach(ctx context.Context, items []events.PublishIt
 	// Durability is independent of best-effort live delivery (same rationale
 	// as PublishMany): persistent events fan out to inboxes regardless.
 	for i, it := range items {
-		if ps.resolver != nil && ps.inbox != nil && it.Event != nil && events.IsPersistent(it.Event.Type) {
-			ps.fanOut.Add(1)
-			go func(ch string, evt *events.Event, data []byte) {
-				defer ps.fanOut.Done()
-				defer safe.Recover()
-				ps.appendToInboxes(context.WithoutCancel(ctx), ch, evt, data)
-			}(it.Channel, it.Event, payloads[i])
-		}
+		ps.fanOutAsync(ctx, []string{it.Channel}, it.Event, payloads[i])
 	}
 	if execErr != nil {
 		return fmt.Errorf("redis publish pipeline: %w", execErr)

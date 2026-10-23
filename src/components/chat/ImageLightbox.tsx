@@ -160,6 +160,9 @@ export function ImageLightbox({
         return;
       }
       if (total <= 1) return;
+      // A bare arrow only: with Alt/⌘/Ctrl it is someone else's chord (Alt+←
+      // is Back), and a key something else already handled is not ours.
+      if (e.altKey || e.metaKey || e.ctrlKey || e.defaultPrevented) return;
       if (e.key === 'ArrowRight') {
         e.preventDefault();
         onIndexChange((safeIndex + 1) % total);

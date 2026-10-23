@@ -1,6 +1,8 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, type MutateOptions } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import { wsLiveQueryOptions } from '@/lib/query-client';
+import { showToast } from '@/lib/toast';
 import type { UserChannel, Channel, ChannelMembership, ChannelNotificationOverride } from '@/types';
 
 // select narrows what the caller subscribes to: with structural sharing, a
@@ -13,6 +15,7 @@ export function useUserChannels<T = UserChannel[]>(options?: { enabled?: boolean
       const res = await apiFetch<UserChannel[]>('/api/v1/channels');
       return Array.isArray(res) ? res : [];
     },
+    ...wsLiveQueryOptions,
     enabled: options?.enabled ?? true,
     select: options?.select,
   });
@@ -45,6 +48,8 @@ export function useChannelMembers(channelId: string | undefined) {
       );
       return Array.isArray(res) ? res : [];
     },
+    // members.changed invalidates it (ChatPage).
+    ...wsLiveQueryOptions,
     enabled: !!channelId,
   });
 }
@@ -127,6 +132,124 @@ export function useSetChannelNotificationPrefs() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+    },
+  });
+}
+
+// A channel action from the header menu or the archived notice: archive,
+// unarchive, leave, or a description edit. A failure says so in a toast (the
+// callers are fire-and-forget menu handlers, so a thrown request used to end
+// as an unhandled rejection with nothing on screen), and run() drops a second
+// trigger while the first request is still out — a re-confirmed archive or a
+// double-tapped Leave sends one request. isMutating reads the mutation cache
+// synchronously, so even two clicks inside one frame see the first.
+function useChannelAction<TVars>(
+  action: string,
+  mutationFn: (vars: TVars) => Promise<unknown>,
+  onSuccess: () => void,
+  errorMessage: string,
+) {
+  const queryClient = useQueryClient();
+  const mutationKey = ['channel-action', action] as const;
+  const mutation = useMutation({
+    mutationKey,
+    mutationFn,
+    onSuccess,
+    onError: () => showToast(errorMessage),
+  });
+  return {
+    isPending: mutation.isPending,
+    run(vars: TVars, options?: MutateOptions<unknown, Error, TVars>) {
+      if (queryClient.isMutating({ mutationKey }) > 0) return;
+      mutation.mutate(vars, options);
+    },
+  };
+}
+
+// Archiving keeps the channel readable in place: refetch the row and the
+// open channel so the composer turns into the archived notice.
+export function useArchiveChannel() {
+  const queryClient = useQueryClient();
+  return useChannelAction(
+    'archive',
+    (channelId: string) => apiFetch<void>(`/api/v1/channels/${channelId}`, { method: 'DELETE' }),
+    () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug() });
+    },
+    "Couldn't archive the channel. Try again.",
+  );
+}
+
+export function useUnarchiveChannel() {
+  const queryClient = useQueryClient();
+  return useChannelAction(
+    'unarchive',
+    (channelId: string) => apiFetch<void>(`/api/v1/channels/${channelId}/unarchive`, { method: 'POST' }),
+    () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug() });
+    },
+    "Couldn't unarchive the channel. Try again.",
+  );
+}
+
+export function useLeaveChannel() {
+  const queryClient = useQueryClient();
+  return useChannelAction(
+    'leave',
+    (channelId: string) => apiFetch<void>(`/api/v1/channels/${channelId}/leave`, { method: 'POST' }),
+    () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+    },
+    "Couldn't leave the channel. Try again.",
+  );
+}
+
+export function useUpdateChannelDescription() {
+  const queryClient = useQueryClient();
+  return useChannelAction(
+    'description',
+    (vars: { channelId: string; description: string }) =>
+      apiFetch<void>(`/api/v1/channels/${vars.channelId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ description: vars.description }),
+      }),
+    () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug() });
+    },
+    "Couldn't save the description. Try again.",
+  );
+}
+
+// Adds people to a channel as members (the member list's picker adds one, the
+// post-send invite prompt everyone it mentioned). Callers show their own
+// inline error, so failures are not toasted here.
+export function useAddChannelMembers() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { channelId: string; userIds: string[] }) =>
+      Promise.all(
+        vars.userIds.map((userID) =>
+          apiFetch<void>(`/api/v1/channels/${encodeURIComponent(vars.channelId)}/members`, {
+            method: 'POST',
+            body: JSON.stringify({ userID, role: 'member' }),
+          }),
+        ),
+      ),
+    onSuccess: (_res, vars) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(vars.channelId) });
+    },
+  });
+}
+
+export function useRemoveChannelMember() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { channelId: string; userId: string }) =>
+      apiFetch<void>(`/api/v1/channels/${vars.channelId}/members/${vars.userId}`, { method: 'DELETE' }),
+    onSuccess: (_res, vars) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(vars.channelId) });
     },
   });
 }

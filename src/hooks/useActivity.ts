@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { ApiError, apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import { wsLiveQueryOptions } from '@/lib/query-client';
 import { showToast } from '@/lib/toast';
 import { flashReaction } from '@/stores/reaction-flash';
 import {
@@ -9,11 +10,9 @@ import {
   badgeUnread,
   markActivityItems,
   markAllActivityRead,
-  parseActivityChange,
-  parseActivityNew,
   removeActivityItems,
 } from '@/lib/activity-feed';
-import type { ActivityFeed, Reminder } from '@/types';
+import type { ActivityChangedEvent, ActivityFeed, ActivityItem, Reminder } from '@/types';
 
 const EMPTY_FEED: ActivityFeed = { items: [], unread: 0, unreadByType: {} };
 
@@ -33,7 +32,7 @@ const activityQuery = {
       unreadByType: res.unreadByType ?? {},
     };
   },
-  staleTime: 10_000,
+  ...wsLiveQueryOptions,
 };
 
 export function useActivity() {
@@ -56,7 +55,8 @@ export function useReminders() {
       const res = await apiFetch<Reminder[]>('/api/v1/reminders');
       return Array.isArray(res) ? res : [];
     },
-    staleTime: 10_000,
+    // reminders.changed (set, cancelled, fired, gone) invalidates it.
+    ...wsLiveQueryOptions,
   });
 }
 
@@ -118,19 +118,23 @@ function patchActivity(qc: QueryClient, fn: (feed: ActivityFeed) => ActivityFeed
 }
 
 // applyActivityNewEvent adds the item an activity.new event carries.
-export function applyActivityNewEvent(qc: QueryClient, data: unknown) {
-  const item = parseActivityNew(data);
+export function applyActivityNewEvent(qc: QueryClient, item: ActivityItem) {
   // A reaction is announced on the bell as a flash rather than a count.
-  if (item?.type === 'reaction' && item.emoji) flashReaction(item.emoji);
-  patchActivity(qc, (feed) => (item ? addActivityItem(feed, item) : null));
+  if (item.type === 'reaction' && item.emoji) flashReaction(item.emoji);
+  patchActivity(qc, (feed) => addActivityItem(feed, item));
 }
 
 // applyActivityChangedEvent applies the change an activity.read event carries —
 // read/unread marks and removals from any of the user's devices, or a read of
 // part of a channel, conversation or thread (which refetches).
-export function applyActivityChangedEvent(qc: QueryClient, data: unknown) {
-  const change = parseActivityChange(data);
+export function applyActivityChangedEvent(qc: QueryClient, change: ActivityChangedEvent) {
   patchActivity(qc, (feed) => applyActivityChange(feed, change));
+}
+
+// refetchActivity reloads the feed — for an activity event whose payload
+// couldn't be read, so the list still converges on the server's.
+export function refetchActivity(qc: QueryClient) {
+  void qc.invalidateQueries({ queryKey: queryKeys.activity() });
 }
 
 // applyRemindersChangedEvent reloads the pending reminders on reminders.changed:

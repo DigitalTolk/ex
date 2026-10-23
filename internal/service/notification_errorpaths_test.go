@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
 )
@@ -28,22 +29,49 @@ func TestNotification_LoadMemberSnapshot_UnknownParentType(t *testing.T) {
 func TestNotification_ResolveThreadRecipients_NilMessagesAndNoParentMsg(t *testing.T) {
 	// messages nil → nil.
 	svc := &NotificationService{}
-	if got, _ := svc.resolveThreadRecipients(context.Background(), &model.Message{ParentMessageID: "root"}, memberSnapshot{}); got != nil {
+	if got, _ := svc.resolveThreadRecipients(context.Background(), &model.Message{ParentMessageID: "root"}, memberSnapshot{}, nil); got != nil {
 		t.Fatalf("expected nil with nil messages, got %v", got)
 	}
 	// messages present but no ParentMessageID → nil.
 	svc2, _, _, _, _, _ := setupNotifier(t)
-	if got, _ := svc2.resolveThreadRecipients(context.Background(), &model.Message{}, memberSnapshot{}); got != nil {
+	if got, _ := svc2.resolveThreadRecipients(context.Background(), &model.Message{}, memberSnapshot{}, nil); got != nil {
 		t.Fatalf("expected nil with empty ParentMessageID, got %v", got)
 	}
 }
 
+// A failed reply read loses only the repliers it would have found: the root
+// author and the followers are still alerted — never nobody. (It used to
+// return no recipients at all.)
 func TestNotification_ResolveThreadRecipients_ListThreadRepliesError(t *testing.T) {
-	svc, _, _, _, _, msgs := setupNotifierWithMessages(t)
+	svc, _, _, _, _, _, msgs, follows := setupNotifierWithMessagesAndFollows(t)
 	msgs.threadReplyErr = errors.New("boom")
-	got, _ := svc.resolveThreadRecipients(context.Background(), &model.Message{ParentID: "ch1", ParentMessageID: "root1"}, memberSnapshot{})
-	if got != nil {
-		t.Fatalf("expected nil on ListThreadReplies error, got %v", got)
+	if got, _ := svc.resolveThreadRecipients(context.Background(), &model.Message{ParentID: "ch1", ParentMessageID: "root1"}, memberSnapshot{}, nil); len(got) != 0 {
+		t.Fatalf("expected no recipients with an empty audience, got %v", got)
+	}
+	if err := follows.SetThreadFollow(context.Background(), &model.ThreadFollow{UserID: "follower", ParentID: "ch1", ThreadRootID: "root1", Following: true}); err != nil {
+		t.Fatalf("SetThreadFollow: %v", err)
+	}
+	root := &model.Message{ID: "root1", ParentID: "ch1", AuthorID: "root-author"}
+	got, _ := svc.resolveThreadRecipients(context.Background(),
+		&model.Message{ParentID: "ch1", ParentMessageID: "root1", AuthorID: "sender"},
+		memberSnapshot{memberIDs: []string{"root-author", "follower"}}, root)
+	if len(got) != 2 || got[0] != "root-author" || got[1] != "follower" {
+		t.Fatalf("recipients on a failed reply read = %v, want [root-author follower]", got)
+	}
+}
+
+// A follow index that can't be read never narrows the audience: the thread's
+// replies are read instead, even for an indexed thread.
+func TestNotification_ResolveThreadRecipients_FollowIndexErrorReadsReplies(t *testing.T) {
+	svc, _, _, _, _, _, msgs, follows := setupNotifierWithMessagesAndFollows(t)
+	follows.listErr = errors.New("follow index down")
+	root := &model.Message{ID: "root1", ParentID: "ch1", AuthorID: "root-author", CreatedAt: threadIndexEpoch.Add(time.Hour)}
+	msgs.messages["ch1#r1"] = &model.Message{ID: "r1", ParentID: "ch1", ParentMessageID: "root1", AuthorID: "replier"}
+	got, _ := svc.resolveThreadRecipients(context.Background(),
+		&model.Message{ID: "r2", ParentID: "ch1", ParentMessageID: "root1", AuthorID: "sender"},
+		memberSnapshot{memberIDs: []string{"root-author", "replier"}}, root)
+	if len(got) != 2 || got[0] != "root-author" || got[1] != "replier" {
+		t.Fatalf("recipients = %v, want [root-author replier] from the reply read", got)
 	}
 }
 

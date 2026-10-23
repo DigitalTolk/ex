@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
@@ -90,6 +91,7 @@ type ReminderService struct {
 	notifier DirectNotifier
 	events   Publisher
 	owners   ReminderOwnerLookup
+	mentions MentionResolver
 	now      func() time.Time
 }
 
@@ -114,12 +116,17 @@ func (s *ReminderService) SetPublisher(p Publisher) { s.events = p }
 // reminders when they come due — no alert, no mobile push job.
 func (s *ReminderService) SetOwnerLookup(o ReminderOwnerLookup) { s.owners = o }
 
+// SetMentionResolver names mentioned users and channels in reminder previews
+// (the Activity row and the alert/push body) by their current names.
+// Optional — without it mentions read as typed.
+func (s *ReminderService) SetMentionResolver(r MentionResolver) { s.mentions = r }
+
 // CancelAllForUser stops every reminder a user has queued — on deactivation,
 // so nothing is left to come due for an account that can't sign in.
 func (s *ReminderService) CancelAllForUser(ctx context.Context, userID string) error {
 	n, err := s.store.CancelAllRemindersForUser(ctx, userID)
 	if n > 0 {
-		slog.Info("reminders cancelled for deactivated user", "userID", userID, "count", n)
+		slog.InfoContext(ctx, "reminders cancelled for deactivated user", "userID", userID, "count", n)
 	}
 	return err
 }
@@ -155,7 +162,7 @@ func (s *ReminderService) parentLeft(ctx context.Context, userID, parentID strin
 	defer cancel()
 	n, err := s.store.CancelRemindersForParent(bg, userID, parentID)
 	if err != nil {
-		slog.Warn("reminder parent cleanup failed", "userID", userID, "parentID", parentID, "error", err)
+		slog.WarnContext(ctx, "reminder parent cleanup failed", "userID", userID, "parentID", parentID, "error", err)
 		return
 	}
 	if n > 0 {
@@ -172,7 +179,7 @@ func (s *ReminderService) MessagesDeleted(ctx context.Context, parentID, _ strin
 	s.detached(ctx, func(bg context.Context) {
 		owners, err := s.store.CancelRemindersForMessages(bg, messageIDs)
 		if err != nil {
-			slog.Warn("reminder delete sync failed", "parentID", parentID, "error", err)
+			slog.WarnContext(ctx, "reminder delete sync failed", "parentID", parentID, "error", err)
 			return
 		}
 		for _, userID := range owners {
@@ -192,13 +199,13 @@ func (s *ReminderService) MessageEdited(ctx context.Context, msg *model.Message,
 		current, err := s.messages.GetMessage(bg, parentID, msgID)
 		if err != nil || current.Deleted {
 			if err != nil && !errors.Is(err, store.ErrNotFound) {
-				slog.Warn("reminder edit sync: message read failed", "messageID", msgID, "error", err)
+				slog.WarnContext(ctx, "reminder edit sync: message read failed", "messageID", msgID, "error", err)
 			}
 			return
 		}
-		owners, err := s.store.UpdateReminderPreview(bg, msgID, messagePreview(current))
+		owners, err := s.store.UpdateReminderPreview(bg, msgID, messagePreview(bg, s.mentions, current))
 		if err != nil {
-			slog.Warn("reminder edit sync failed", "messageID", msgID, "error", err)
+			slog.WarnContext(ctx, "reminder edit sync failed", "messageID", msgID, "error", err)
 			return
 		}
 		for _, userID := range owners {
@@ -220,10 +227,10 @@ func (s *ReminderService) detached(ctx context.Context, fn func(context.Context)
 // Schedule validates and persists a reminder for userID.
 func (s *ReminderService) Schedule(ctx context.Context, userID string, in ReminderInput) (*model.Reminder, error) {
 	if in.MessageID == "" || in.ParentID == "" {
-		return nil, errors.New("reminder: message and parent required")
+		return nil, apperr.Invalid("reminder: message and parent required")
 	}
 	if in.ParentType != ParentChannel && in.ParentType != ParentConversation {
-		return nil, errors.New("reminder: invalid parent type")
+		return nil, apperr.Invalid("reminder: invalid parent type")
 	}
 	now := s.now()
 	if !in.RemindAt.After(now) || in.RemindAt.After(now.Add(reminderMaxHorizon)) {
@@ -251,7 +258,7 @@ func (s *ReminderService) Schedule(ctx context.Context, userID string, in Remind
 		// reply only renders inside its thread, so the deep link needs it.
 		ParentMessageID: msg.ParentMessageID,
 		ChannelSlug:     in.ChannelSlug,
-		MessagePreview:  messagePreview(msg),
+		MessagePreview:  messagePreview(ctx, s.mentions, msg),
 		RemindAt:        in.RemindAt,
 		CreatedAt:       now,
 	}
@@ -321,7 +328,7 @@ func (s *ReminderService) ProcessDue(ctx context.Context) (int, error) {
 		for _, r := range due {
 			claimed++
 			if deactivated[r.UserID] {
-				slog.Info("reminder dropped: owner deactivated", "userID", r.UserID, "reminderID", r.ID)
+				slog.InfoContext(ctx, "reminder dropped: owner deactivated", "userID", r.UserID, "reminderID", r.ID)
 				continue
 			}
 			s.fire(ctx, r)
@@ -353,7 +360,7 @@ func (s *ReminderService) deactivatedOwners(ctx context.Context, due []*model.Re
 	}
 	users, err := s.owners.GetUsersByIDs(ctx, ids)
 	if err != nil {
-		slog.Warn("reminder owner lookup failed", "error", err)
+		slog.WarnContext(ctx, "reminder owner lookup failed", "error", err)
 		return nil
 	}
 	out := map[string]bool{}
@@ -373,7 +380,7 @@ func (s *ReminderService) fire(ctx context.Context, r *model.Reminder) {
 	// no longer open. Only a definitive denial drops it — a failed check
 	// still fires, since a lost reminder is worse than a dead link.
 	if err := s.access.CheckAccess(ctx, r.UserID, r.ParentID, r.ParentType); errors.Is(err, ErrForbidden) {
-		slog.Info("reminder dropped: owner no longer has access", "userID", r.UserID, "parentID", r.ParentID)
+		slog.InfoContext(ctx, "reminder dropped: owner no longer has access", "userID", r.UserID, "parentID", r.ParentID)
 		return
 	}
 	// The message as it is now: one deleted since drops the reminder, an
@@ -383,11 +390,11 @@ func (s *ReminderService) fire(ctx context.Context, r *model.Reminder) {
 	// reminder is worse than a stale one.
 	msg, err := s.messages.GetMessage(ctx, r.ParentID, r.MessageID)
 	if errors.Is(err, store.ErrNotFound) || (err == nil && msg.Deleted) {
-		slog.Info("reminder dropped: message deleted", "userID", r.UserID, "messageID", r.MessageID)
+		slog.InfoContext(ctx, "reminder dropped: message deleted", "userID", r.UserID, "messageID", r.MessageID)
 		return
 	}
 	if err == nil {
-		r.MessagePreview = messagePreview(msg)
+		r.MessagePreview = messagePreview(ctx, s.mentions, msg)
 	}
 	now := s.now()
 	if s.activity != nil {
@@ -424,7 +431,7 @@ func (s *ReminderService) fire(ctx context.Context, r *model.Reminder) {
 			CreatedAt: now,
 		})
 	}
-	slog.Info("reminder fired", "userID", r.UserID, "messageID", r.MessageID)
+	slog.InfoContext(ctx, "reminder fired", "userID", r.UserID, "messageID", r.MessageID)
 }
 
 // reminderDeepLink builds the in-app URL the alert/activity row links to, matching

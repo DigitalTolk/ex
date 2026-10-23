@@ -34,10 +34,18 @@ func TestPreflightPublicTarget(t *testing.T) {
 	})
 
 	t.Run("public target passes", func(t *testing.T) {
-		// TEST-NET-3 is classified public by isPublicIP, and an IP-literal
-		// host resolves without touching the network — deterministic.
-		if err := preflightPublicTarget(ctx, "https://203.0.113.5/page"); err != nil {
+		// An IP-literal host resolves without touching the network —
+		// deterministic.
+		if err := preflightPublicTarget(ctx, "https://93.184.216.34/page"); err != nil {
 			t.Fatalf("public target must pass pre-flight, got %v", err)
+		}
+	})
+
+	t.Run("documentation range is not public", func(t *testing.T) {
+		// TEST-NET-3 is an IANA special-purpose block, never a real site.
+		err := preflightPublicTarget(ctx, "https://203.0.113.5/page")
+		if err == nil || !strings.Contains(err.Error(), "blocked private IP") {
+			t.Fatalf("err = %v, want blocked private IP", err)
 		}
 	})
 

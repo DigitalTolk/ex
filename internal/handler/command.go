@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
 	"strings"
 
@@ -12,19 +11,13 @@ import (
 // CommandHandler exposes the slash-command registry: discovery for the
 // composer's "/" autocomplete and execution.
 type CommandHandler struct {
-	commands     *service.CommandService
-	draftClearer DraftClearer
+	commands *service.CommandService
 }
 
 // NewCommandHandler creates a CommandHandler.
 func NewCommandHandler(commands *service.CommandService) *CommandHandler {
 	return &CommandHandler{commands: commands}
 }
-
-// SetDraftClearer wires the draft cleaner so a successful command run clears
-// the scope's draft server-side (the composer held "/mstmeetings" as a draft
-// until it ran), matching the message-send fold.
-func (h *CommandHandler) SetDraftClearer(c DraftClearer) { h.draftClearer = c }
 
 // List returns the commands available to this workspace. An empty list is
 // valid (no integrations configured) — clients then offer no commands.
@@ -66,19 +59,9 @@ func (h *CommandHandler) Run(w http.ResponseWriter, r *http.Request) {
 		ParentID:   body.ParentID,
 		ParentType: body.ParentType,
 	})
-	var userErr *service.CommandUserError
-	switch {
-	case err == nil:
-		clearSentDraft(r.Context(), h.draftClearer, userID, body.ParentID, body.ParentType, "")
-		writeJSON(w, http.StatusOK, JSON{"message": msg})
-	case errors.Is(err, service.ErrUnknownCommand):
-		writeError(w, http.StatusNotFound, "unknown_command", "unknown command")
-	case errors.As(err, &userErr):
-		// A user-facing denial: the composer shows this message verbatim.
-		writeError(w, http.StatusForbidden, "command_denied", userErr.Message)
-	case errors.Is(err, service.ErrForbidden):
-		writeError(w, http.StatusForbidden, "forbidden", "you do not have access to this chat")
-	default:
-		writeInternalError(w, r, "command_error", err)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
 	}
+	writeJSON(w, http.StatusOK, JSON{"message": msg})
 }

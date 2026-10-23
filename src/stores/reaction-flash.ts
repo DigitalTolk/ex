@@ -1,9 +1,9 @@
-import { useSyncExternalStore } from 'react';
+import { create } from 'zustand';
 
 // A reaction to one of your messages does not count or dot the Activity
 // bell. It flashes instead: the bell becomes that emoji for a moment, then
 // returns, so you notice it without a number sitting there afterwards.
-// Module state, read by the sidebar switch and the phone tab bar.
+// Read by the sidebar switch and the phone tab bar.
 export const REACTION_FLASH_MS = 1600;
 
 export interface ReactionFlash {
@@ -12,44 +12,27 @@ export interface ReactionFlash {
   seq: number;
 }
 
-let current: ReactionFlash | null = null;
-let seq = 0;
-let timer: ReturnType<typeof setTimeout> | undefined;
-const listeners = new Set<() => void>();
-
-function notify() {
-  for (const cb of listeners) cb();
+interface ReactionFlashState {
+  flash: ReactionFlash | null;
+  seq: number;
 }
+
+const useReactionFlashStore = create<ReactionFlashState>(() => ({ flash: null, seq: 0 }));
 
 export function flashReaction(emoji: string): void {
   if (!emoji) return;
-  current = { emoji, seq: ++seq };
-  clearTimeout(timer);
-  timer = setTimeout(() => {
-    current = null;
-    timer = undefined;
-    notify();
+  const flash = { emoji, seq: useReactionFlashStore.getState().seq + 1 };
+  useReactionFlashStore.setState({ flash, seq: flash.seq });
+  // Each flash clears only itself: a later one restarts the clock.
+  setTimeout(() => {
+    if (useReactionFlashStore.getState().flash === flash) useReactionFlashStore.setState({ flash: null });
   }, REACTION_FLASH_MS);
-  notify();
-}
-
-export function subscribeReactionFlash(cb: () => void): () => void {
-  listeners.add(cb);
-  return () => {
-    listeners.delete(cb);
-  };
 }
 
 export function getReactionFlash(): ReactionFlash | null {
-  return current;
+  return useReactionFlashStore.getState().flash;
 }
 
 export function useReactionFlash(): ReactionFlash | null {
-  return useSyncExternalStore(subscribeReactionFlash, getReactionFlash);
-}
-
-export function resetReactionFlashForTests(): void {
-  clearTimeout(timer);
-  timer = undefined;
-  current = null;
+  return useReactionFlashStore((s) => s.flash);
 }

@@ -59,19 +59,25 @@ vi.mock('@/components/threads/ThreadCard', () => ({
     title,
     deepLink,
     unread,
+    expanded,
+    onExpand,
   }: {
     summary: ThreadSummary;
     title: string;
     deepLink: string;
     unread?: boolean;
+    expanded?: boolean;
+    onExpand?: () => void;
   }) => (
     <article
       data-testid="thread-card"
       data-thread-root-id={summary.threadRootID}
       data-deep-link={deepLink}
       data-unread={unread ? 'true' : 'false'}
+      data-expanded={expanded ? 'true' : 'false'}
     >
       <span data-testid="thread-card-title">{title}</span>
+      <button type="button" data-testid="thread-card-expand" onClick={onExpand}>expand</button>
     </article>
   ),
 }));
@@ -227,44 +233,16 @@ describe('ThreadsPage', () => {
     expect(ids).toEqual(['live-unread-newer', 'live-unread-older', 'read-newest', 'read-older']);
   });
 
-  it('pages thread cards in as the load-more sentinel scrolls into view', async () => {
-    const callbacks: Array<(entries: { isIntersecting: boolean }[]) => void> = [];
-    class MockIO {
-      // Mirror the real IntersectionObserver signature (callback + options)
-      // so the `{ rootMargin }` argument isn't a superfluous trailing arg.
-      constructor(
-        cb: (entries: { isIntersecting: boolean }[]) => void,
-        _options?: IntersectionObserverInit,
-      ) {
-        callbacks.push(cb);
-      }
-      observe() {}
-      disconnect() {}
-      unobserve() {}
-    }
-    const prev = globalThis.IntersectionObserver;
-    globalThis.IntersectionObserver = MockIO as unknown as typeof IntersectionObserver;
-    try {
-      const many = Array.from({ length: 30 }, (_, i) => ({
-        ...sample[0],
-        threadRootID: `root-${i}`,
-        latestActivityAt: `2026-04-26T${String(10 + (i % 12)).padStart(2, '0')}:00:00Z`,
-      }));
-      apiFetchMock.mockResolvedValueOnce(many);
-      renderPage();
-      // First page only — not all 30 cards mount up front.
-      await waitFor(() => expect(screen.getAllByTestId('thread-card')).toHaveLength(12));
-      expect(screen.getByTestId('threads-load-more')).toBeInTheDocument();
-      // A non-intersecting report (sentinel still below the viewport) must
-      // NOT grow the window.
-      act(() => callbacks[callbacks.length - 1]([{ isIntersecting: false }]));
-      expect(screen.getAllByTestId('thread-card')).toHaveLength(12);
-      // Sentinel enters the viewport → the next page mounts.
-      act(() => callbacks[callbacks.length - 1]([{ isIntersecting: true }]));
-      await waitFor(() => expect(screen.getAllByTestId('thread-card')).toHaveLength(24));
-    } finally {
-      globalThis.IntersectionObserver = prev;
-    }
+  it('keeps which threads are expanded on the page, so a card scrolled away and back stays open', async () => {
+    // The list is virtualized: a card far off screen unmounts, and its own
+    // state with it. The page owns "expanded".
+    apiFetchMock.mockResolvedValueOnce(sample);
+    renderPage();
+    const [first, second] = await screen.findAllByTestId('thread-card');
+    expect(first).toHaveAttribute('data-expanded', 'false');
+    act(() => screen.getAllByTestId('thread-card-expand')[0].click());
+    expect(screen.getAllByTestId('thread-card')[0]).toHaveAttribute('data-expanded', 'true');
+    expect(second).toHaveAttribute('data-expanded', 'false');
   });
 
   it('falls back to generic titles when a thread parent is no longer in the sidebar', async () => {

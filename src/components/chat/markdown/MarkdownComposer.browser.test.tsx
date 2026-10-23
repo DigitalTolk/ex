@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
-import { createRef } from 'react';
+import { Profiler, createRef } from 'react';
 import { userEvent } from 'vitest/browser';
 import { MarkdownComposer, type WysiwygEditorHandle } from './MarkdownComposer';
+import { usePresenceStore } from '@/stores/presence';
 
 // Browser coverage for the production composer wiring: MarkdownComposer's
 // completion-provider thunks (users/online/memberIds/channels/customEmojis/
@@ -38,9 +39,6 @@ vi.mock('@/hooks/useChannels', () => ({
   }),
 }));
 
-vi.mock('@/context/PresenceContext', () => ({
-  usePresence: () => ({ online: new Set(['u-1']) }),
-}));
 
 vi.mock('@/hooks/useEmoji', () => ({
   useEmojis: () => ({
@@ -85,6 +83,7 @@ async function mountComposer(props: Partial<React.ComponentProps<typeof Markdown
 
 describe('MarkdownComposer provider wiring (browser)', () => {
   it('feeds the live roster, presence and channel membership into the @-mention typeahead', async () => {
+    usePresenceStore.setState({ online: new Set(['u-1']) });
     const { screen } = await mountComposer({ mentionChannelId: 'c-1' });
     await userEvent.click(screen.getByLabelText('Composer'));
     await userEvent.keyboard('@a');
@@ -96,6 +95,28 @@ describe('MarkdownComposer provider wiring (browser)', () => {
     // memberIds() partitioned the list: u-1 is a member, u-2 is not.
     expect(tip.textContent).toContain('Channel members');
     expect(tip.textContent).toContain('Not in channel');
+    await screen.unmount();
+  });
+
+  it('reads presence when the @-list opens instead of re-rendering for every presence change', async () => {
+    const commits = { count: 0 };
+    const screen = await render(
+      <Profiler id="composer" onRender={() => { commits.count++; }}>
+        <MarkdownComposer ariaLabel="Composer" />
+      </Profiler>,
+    );
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    const settled = commits.count;
+    usePresenceStore.getState().setUserOnline('u-2', true);
+    usePresenceStore.getState().setUserOnline('u-elsewhere', true);
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    expect(commits.count).toBe(settled);
+
+    // …and the list it opens still shows who is online right now.
+    await userEvent.click(screen.getByLabelText('Composer'));
+    await userEvent.keyboard('@ala');
+    await vi.waitFor(() => expect(tooltip()?.textContent).toContain('Alan Border'));
+    expect(tooltip()!.querySelector('[data-presence="online"]')).not.toBeNull();
     await screen.unmount();
   });
 

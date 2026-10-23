@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
 import { NotificationPreferencesDialog } from '@/components/channels/NotificationPreferencesDialog';
 import { MessageList } from './MessageList';
-import { MessageInput, type MessageInputHandle, type MessageInputValue } from './MessageInput';
+import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
 import { MemberList } from './MemberList';
 import { ThreadPanel } from './ThreadPanel';
@@ -17,42 +17,37 @@ import { TypingIndicator } from './TypingIndicator';
 import { AgentActivityIndicator } from './AgentActivityIndicator';
 import { AgentApprovalCard } from './AgentApprovalCard';
 import { WatcherCatchUpCard } from './WatcherCatchUpCard';
-import { useChannelBySlug, useChannelMembers, useMuteChannel, useUserChannels } from '@/hooks/useChannels';
 import {
-  useChannelMessages,
-  useEditMessage,
-  useSendChannelMessage,
-} from '@/hooks/useMessages';
-import { useComposerSchedule } from '@/hooks/useScheduledMessages';
+  useArchiveChannel,
+  useChannelBySlug,
+  useChannelMembers,
+  useLeaveChannel,
+  useMuteChannel,
+  useUnarchiveChannel,
+  useUpdateChannelDescription,
+  useUserChannels,
+} from '@/hooks/useChannels';
+import { useChannelMessages } from '@/hooks/useMessages';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
-import { useNotifications } from '@/context/NotificationContext';
 import { canEditChannel, canArchiveChannel, canUnarchiveChannel, canLeaveChannel, roleNumber } from '@/lib/roles';
 import { ArchivedChannelNotice } from '@/components/chat/ArchivedChannelNotice';
 import { markThreadSeen, noteThreadReadPosition } from '@/hooks/useThreads';
-import { apiFetch } from '@/lib/api';
 import { slugify } from '@/lib/format';
-import { queryKeys } from '@/lib/query-keys';
-import { clearChannelUnreadInCache } from '@/lib/unread-cache';
 import { NonMemberInvitePrompt } from './NonMemberInvitePrompt';
 import { useNonMemberInvite } from '@/hooks/useNonMemberInvite';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
 import { useFrequentEmojis } from '@/hooks/useEmoji';
-import { collectMessageUserIDs, findLastOwnMessageId } from '@/lib/message-users';
+import { findLastOwnMessageId } from '@/lib/message-users';
+import { useMessagePageUserIDs } from '@/hooks/useMessagePageUserIDs';
 import { useSidePanels } from '@/hooks/useSidePanels';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useDeepLinkAnchor, useListAnchor, forgetDeepLinkInAddress } from '@/hooks/useDeepLinkAnchor';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import {
-  useDraftAttachmentChips,
-  useDraftForScope,
-  useSaveDraft,
-} from '@/hooks/useDrafts';
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
 import type { UserMapEntry } from './MessageList';
-import { useReadSession } from '@/hooks/useReadSession';
-import { useEditingMessage } from '@/hooks/useEditingMessage';
+import { useParentChat } from '@/hooks/useParentChat';
 
 function errorStatus(err: unknown): number | null {
   return typeof err === 'object' && err !== null && 'status' in err
@@ -66,8 +61,7 @@ export function ChannelView() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { setActiveChannel, setActiveThread } = useUnread();
-  const { setActiveParent } = useNotifications();
+  const { setActiveThread } = useUnread();
   const quickReactions = useFrequentEmojis(6);
   const inputRef = useRef<MessageInputHandle>(null);
   const isMobile = useIsMobile();
@@ -137,128 +131,30 @@ export function ChannelView() {
     hasPreviousPage,
     isFetchingPreviousPage,
   } = useChannelMessages(channel?.id ?? knownChannel?.channelID, listAnchor);
-  const sendMessage = useSendChannelMessage(channel?.id, user?.id);
-  const schedule = useComposerSchedule({ parentID: channel?.id, parentType: 'channel' });
-  const channelID = channel?.id;
-  const draftScope = useMemo(
-    () => ({ parentID: channelID, parentType: 'channel' as const }),
-    [channelID],
-  );
-  const { data: draft } = useDraftForScope(draftScope);
-  const draftAttachments = useDraftAttachmentChips(draft?.attachmentIDs);
-  const {
-    editingMessage,
-    setEditingMessage,
-    activeEditingMessage,
-    editDraftAttachments,
-    editReady,
-  } = useEditingMessage(channelID, 'channel');
-  const editMessage = useEditMessage();
   // After sending a message that @mentions people not in the channel, offer to
   // invite them in one click (see NonMemberInvitePrompt).
   const { pendingInvites, checkMentions, clearInvites } = useNonMemberInvite(channel?.id, user?.id);
-  const saveDraft = useSaveDraft();
-  const saveDraftMutate = saveDraft.mutate;
-  const handleDraftChange = useCallback(
-    (value: MessageInputValue, options?: { notify?: boolean; keepalive?: boolean }) => {
-      if (!channelID) return;
-      saveDraftMutate({
-        parentID: channelID,
-        parentType: 'channel',
-        body: value.body,
-        attachmentIDs: value.attachmentIDs,
-        // Keystroke saves persist silently; the focus-loss flush (notify)
-        // is what surfaces the draft in the sidebar.
-        silent: !options?.notify,
-        keepalive: options?.keepalive,
-      });
-    },
-    [channelID, saveDraftMutate],
-  );
-  const handleSendMessage = useCallback(
-    (value: { body: string; attachmentIDs: string[] }) => {
-      // Surface an invite prompt for any mentioned non-members (supersedes a
-      // previous prompt; empty result clears it).
-      checkMentions(value.body);
-      // Draft lifecycle (condemn at mutate, cache patch-out on success,
-      // rollback on error) is owned by useSendMessage — the send IS the
-      // draft-clearing event; nothing draft-specific to do here.
-      sendMessage.mutate(value);
-    },
-    [sendMessage, checkMentions],
-  );
-  const handleEditMessage = useCallback(
-    (value: { body: string; attachmentIDs: string[] }) => {
-      /* istanbul ignore next -- handleEditMessage is only wired as the composer's onSend while activeEditingMessage (hence editingMessage) is set, so it is never invoked with a null editingMessage. */
-      if (!editingMessage) return;
-      const currentAttachmentIDs = editingMessage.attachmentIDs ?? [];
-      const same =
-        value.body === editingMessage.body &&
-        value.attachmentIDs.length === currentAttachmentIDs.length &&
-        value.attachmentIDs.every((id, idx) => id === currentAttachmentIDs[idx]);
-      // The `!value.body.trim() && …length === 0` blank-edit arm is
-      // unreachable from the real composer here — its Save button is disabled
-      // while the body is empty and there are no attachments — so onSend never
-      // fires with a blank payload. The `same` arm is exercised by tests.
-      /* istanbul ignore next -- composer disables Save on an empty edit, so the blank-body arm cannot fire via onSend; defensive. */
-      if (same || (!value.body.trim() && value.attachmentIDs.length === 0)) {
-        setEditingMessage(null);
-        return;
-      }
-      editMessage.mutate(
-        {
-          messageId: editingMessage.id,
-          body: value.body,
-          attachmentIDs: value.attachmentIDs,
-          channelId: channelID,
-        },
-        { onSuccess: () => setEditingMessage(null) },
-      );
-    },
-    [channelID, editMessage, editingMessage, setEditingMessage],
-  );
-  // Optimistically drop the server-side unread badge for this channel so the
-  // sidebar clears instantly, then persist the read so it stays cleared on a
-  // reload (mirrors the conversation read-on-open). The helper guards the
-  // not-yet-loaded list — an inline `prev?.map` would resolve undefined on a
-  // cold deep-link and clobber the cache.
-  const markChannelRead = useCallback(
-    (openedID: string) => {
-      clearChannelUnreadInCache(queryClient, openedID);
-      void apiFetch<void>(`/api/v1/channels/${openedID}/read`, { method: 'PUT' })
-        .catch(() => undefined)
-        .finally(() => {
-          queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
-        });
-    },
-    [queryClient],
-  );
-
-  useEffect(() => {
-    if (!channel?.id) return;
-    const openedID = channel.id;
-    setActiveChannel(openedID);
-    setActiveParent(openedID);
-    return () => {
-      setActiveChannel(null);
-      setActiveParent(null);
-    };
-  }, [channel?.id, setActiveChannel, setActiveParent]);
-
-  // Opening reads the channel but keeps a "New messages" line where you left
-  // off; after that it reads only while you follow along at the bottom (see
-  // useReadSession).
-  const readSession = useReadSession('channel', channel?.id, markChannelRead);
+  // Surface an invite prompt for any mentioned non-members (supersedes a
+  // previous prompt; empty result clears it).
+  const inviteMentioned = useCallback((value: { body: string }) => checkMentions(value.body), [checkMentions]);
+  // The composer, the read session and the active parent (see useParentChat).
+  const {
+    schedule,
+    draft,
+    draftAttachments,
+    editing: { setEditingMessage, activeEditingMessage, editDraftAttachments, editReady },
+    editMessage,
+    handleDraftChange,
+    handleSendMessage,
+    handleEditMessage,
+    readSession,
+  } = useParentChat({ kind: 'channel', id: channel?.id, userID: user?.id, beforeSend: inviteMentioned });
 
   // Reset locally-opened thread when the channel changes; deliberate
   // synchronous reset. URL-driven thread state (?thread=…) doesn't need
   // resetting here — it's pulled fresh from the new URL on every render.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setThreadRootID(null), [channel?.id]);
-  // setEditingMessage is a useState setter re-exported through
-  // useEditingMessage — stable, so listing it is a behavioral no-op that
-  // satisfies exhaustive-deps (the lint can't see through the hook).
-  useEffect(() => setEditingMessage(null), [channel?.id, setEditingMessage]);
   useEffect(() => clearInvites(), [channel?.id, clearInvites]);
 
   // Local "open thread via UI button" state. The URL ?thread= param
@@ -304,14 +200,9 @@ export function ChannelView() {
     if (!stillMember) navigate('/', { replace: true });
   }, [channel?.id, user?.id, members, navigate]);
 
-  const userIDs = useMemo(() => {
-    const ids = new Set<string>();
-    members?.forEach((m) => ids.add(m.userID));
-    for (const page of data?.pages ?? []) {
-      for (const id of collectMessageUserIDs(page.items)) ids.add(id);
-    }
-    return Array.from(ids);
-  }, [members, data]);
+  // Walked per page, and only the page an event changed (useMessagePageUserIDs).
+  const memberUserIDs = useMemo(() => members?.map((m) => m.userID), [members]);
+  const userIDs = useMessagePageUserIDs(data?.pages, memberUserIDs);
 
   const { data: usersData } = useUsersBatch(userIDs);
 
@@ -341,7 +232,6 @@ export function ChannelView() {
   const canEdit = canEditChannel(currentUserRole) && !archived;
   const canArchive = canArchiveChannel(currentUserRole, user?.systemRole);
   const canUnarchive = canUnarchiveChannel(currentUserRole, user?.systemRole);
-  const [unarchiving, setUnarchiving] = useState(false);
   const canLeave = canLeaveChannel(currentUserRole, channel?.slug);
 
   const muted = !!userChannels?.find((uc) => uc.channelID === channel?.id)?.muted;
@@ -353,44 +243,34 @@ export function ChannelView() {
     muteChannel.mutate({ channelId: channel.id, muted: !muted });
   }
 
-  async function handleArchive() {
+  const archiveChannel = useArchiveChannel();
+  const unarchiveChannel = useUnarchiveChannel();
+  const leaveChannel = useLeaveChannel();
+  const updateDescription = useUpdateChannelDescription();
+
+  function handleArchive() {
     /* istanbul ignore next -- only wired to the header menu, which renders only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
     if (!channel?.id) return;
-    await apiFetch(`/api/v1/channels/${channel.id}`, { method: 'DELETE' });
     // Stay on the channel: it turns read-only in place.
-    queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug(slug) });
+    archiveChannel.run(channel.id);
   }
 
-  async function handleUnarchive() {
+  function handleUnarchive() {
     /* istanbul ignore next -- only wired to the header menu and the archived notice, which render only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
     if (!channel?.id) return;
-    setUnarchiving(true);
-    try {
-      await apiFetch(`/api/v1/channels/${channel.id}/unarchive`, { method: 'POST' });
-      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug(slug) });
-    } finally {
-      setUnarchiving(false);
-    }
+    unarchiveChannel.run(channel.id);
   }
 
-  async function handleLeave() {
+  function handleLeave() {
     /* istanbul ignore next -- only wired to the header menu, which renders only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
     if (!channel?.id) return;
-    await apiFetch(`/api/v1/channels/${channel.id}/leave`, { method: 'POST' });
-    queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
-    navigate('/');
+    leaveChannel.run(channel.id, { onSuccess: () => navigate('/') });
   }
 
-  async function handleDescriptionSave(desc: string) {
+  function handleDescriptionSave(desc: string) {
     /* istanbul ignore next -- only wired to the header menu, which renders only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
     if (!channel?.id) return;
-    await apiFetch(`/api/v1/channels/${channel.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ description: desc }),
-    });
-    queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug(slug) });
+    updateDescription.run({ channelId: channel.id, description: desc });
   }
 
   if (!slug) {
@@ -497,7 +377,7 @@ export function ChannelView() {
             />
           )}
           {archived ? (
-            <ArchivedChannelNotice onUnarchive={canUnarchive ? handleUnarchive : undefined} unarchiving={unarchiving} />
+            <ArchivedChannelNotice onUnarchive={canUnarchive ? handleUnarchive : undefined} unarchiving={unarchiveChannel.isPending} />
           ) : activeEditingMessage && !editReady ? (
             <div className="border-t p-3 text-sm text-muted-foreground">Loading message editor…</div>
           ) : (

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
@@ -32,7 +33,20 @@ type ConversationService struct {
 	broker     Broker
 	publisher  Publisher
 	activity   ActivityReadTracker
+	// channelMembers answers access to a group that became a private channel:
+	// its frozen participant list no longer says who may read it.
+	channelMembers ChannelMembershipReader
 }
+
+// ChannelMembershipReader is the channel-membership point read the
+// conversation service needs for converted groups.
+type ChannelMembershipReader interface {
+	GetMembership(ctx context.Context, channelID, userID string) (*model.ChannelMembership, error)
+}
+
+// SetChannelMemberships wires the channel-membership read that gates access
+// to converted groups. Unwired, a converted group grants nobody.
+func (s *ConversationService) SetChannelMemberships(m ChannelMembershipReader) { s.channelMembers = m }
 
 // NewConversationService creates a ConversationService with the given
 // dependencies. The cache param is retained for call-site compatibility but is
@@ -223,7 +237,7 @@ func (s *ConversationService) createGroup(ctx context.Context, creatorID string,
 		}
 	}
 	if otherCount < 1 {
-		return nil, errors.New("conversation: group requires at least 1 other participant")
+		return nil, apperr.Invalid("conversation: group requires at least 1 other participant")
 	}
 
 	// Validate participants exist and collect display names in parallel
@@ -541,10 +555,17 @@ func (s *ConversationService) Activate(ctx context.Context, convID string) error
 	if err != nil {
 		return fmt.Errorf("conversation: get for activate: %w", err)
 	}
+	return s.ActivateLoaded(ctx, conv)
+}
+
+// ActivateLoaded is Activate for a conversation the caller already read (the
+// message send's access check) — no second read, and an already-activated
+// conversation costs nothing at all.
+func (s *ConversationService) ActivateLoaded(ctx context.Context, conv *model.Conversation) error {
 	if conv.Activated {
 		return nil
 	}
-	if err := s.conversations.ActivateConversation(ctx, convID, conv.ParticipantIDs); err != nil {
+	if err := s.conversations.ActivateConversation(ctx, conv.ID, conv.ParticipantIDs); err != nil {
 		return fmt.Errorf("conversation: activate: %w", err)
 	}
 
@@ -572,12 +593,33 @@ func (s *ConversationService) IsParticipant(ctx context.Context, userID, convID 
 	if err != nil || conv == nil {
 		return false
 	}
+	return s.canRead(ctx, userID, conv) == nil
+}
+
+// canRead decides whether userID may read conv. A group that became a private
+// channel keeps its old participant list frozen on the tombstone, so its
+// access is the channel's membership — someone removed from the channel must
+// not keep reading it through the old conversation id. Denials wrap
+// ErrForbidden; a membership read that fails is returned as-is (not a verdict).
+func (s *ConversationService) canRead(ctx context.Context, userID string, conv *model.Conversation) error {
+	if conv.ConvertedToChannelID != "" {
+		if s.channelMembers == nil {
+			return fmt.Errorf("conversation: converted to a channel: %w", ErrForbidden)
+		}
+		if _, err := s.channelMembers.GetMembership(ctx, conv.ConvertedToChannelID, userID); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return fmt.Errorf("conversation: not a member of the channel it became: %w", ErrForbidden)
+			}
+			return fmt.Errorf("conversation: check converted channel membership: %w", err)
+		}
+		return nil
+	}
 	for _, id := range conv.ParticipantIDs {
 		if id == userID {
-			return true
+			return nil
 		}
 	}
-	return false
+	return fmt.Errorf("conversation: not a participant: %w", ErrForbidden)
 }
 
 // SetFavorite pins the DM/group to the user's "Favorites" sidebar
@@ -585,7 +627,7 @@ func (s *ConversationService) IsParticipant(ctx context.Context, userID, convID 
 // can't see would create an orphan user-side row.
 func (s *ConversationService) SetFavorite(ctx context.Context, userID, convID string, favorite bool) error {
 	if !s.IsParticipant(ctx, userID, convID) {
-		return errors.New("conversation: not a participant")
+		return apperr.Forbidden("conversation: not a participant")
 	}
 	if err := s.conversations.SetFavorite(ctx, convID, userID, favorite); err != nil {
 		return fmt.Errorf("conversation: set favorite: %w", err)
@@ -603,7 +645,7 @@ func (s *ConversationService) SetFavorite(ctx context.Context, userID, convID st
 // handler has checked the category is the user's.
 func (s *ConversationService) SetCategory(ctx context.Context, userID, convID, categoryID string, sidebarPosition *int) error {
 	if !s.IsParticipant(ctx, userID, convID) {
-		return errors.New("conversation: not a participant")
+		return apperr.Forbidden("conversation: not a participant")
 	}
 	if err := s.conversations.SetCategory(ctx, convID, userID, categoryID, sidebarPosition); err != nil {
 		return fmt.Errorf("conversation: set category: %w", err)
@@ -626,13 +668,10 @@ func (s *ConversationService) GetByID(ctx context.Context, userID, convID string
 	if err != nil {
 		return nil, fmt.Errorf("conversation: get: %w", err)
 	}
-
-	for _, id := range conv.ParticipantIDs {
-		if id == userID {
-			return conv, nil
-		}
+	if err := s.canRead(ctx, userID, conv); err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("conversation: not a participant: %w", ErrForbidden)
+	return conv, nil
 }
 
 // dmConversationID deterministically derives a ULID-formatted conversation ID
@@ -669,7 +708,7 @@ func (s *ConversationService) fetchParticipantNames(ctx context.Context, ids []s
 			u, err := s.users.GetUser(ctx, id)
 			if err != nil {
 				if errors.Is(err, store.ErrNotFound) {
-					results <- result{id: id, err: fmt.Errorf("conversation: participant %s not found", id)}
+					results <- result{id: id, err: apperr.Invalid("conversation: participant %s not found", id)}
 					return
 				}
 				results <- result{id: id, err: fmt.Errorf("conversation: validate participant: %w", err)}

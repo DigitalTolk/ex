@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/auth"
+	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/service"
 )
 
@@ -143,10 +144,10 @@ func TestIsULID(t *testing.T) {
 	}
 }
 
-// TestIsValidationError covers the error-classification helper that
-// decides whether a service-layer failure becomes a 400 (user fixable)
-// or a 500 (server problem). The set of recognized validation errors
-// is mirrored from internal/service/limits.go.
+// TestIsValidationError covers the classification that decides whether a
+// service-layer failure becomes a 400 (user fixable) or a 500 (server
+// problem): the limits sentinels are validation rejections, so the table
+// answers them 400.
 func TestIsValidationError(t *testing.T) {
 	cases := []struct {
 		name string
@@ -164,8 +165,9 @@ func TestIsValidationError(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isValidationError(tc.err); got != tc.want {
-				t.Errorf("isValidationError(%v) = %v, want %v", tc.err, got, tc.want)
+			m, ok := lookupError(tc.err)
+			if got := ok && m.status == http.StatusBadRequest && m.code == "bad_request"; got != tc.want {
+				t.Errorf("validation(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
 	}
@@ -234,38 +236,35 @@ func TestNewRouter_AllOptionalHandlersWired(t *testing.T) {
 	}
 }
 
-// TestWriteServiceError covers the validation-vs-fallback branching of
-// the centralized error writer.
+// TestWriteServiceError covers the validation-vs-internal branching of the
+// centralized error writer. There is no caller-chosen fallback any more: an
+// unmapped error is the server's, whatever the route.
 func TestWriteServiceError(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/x", nil)
 	t.Run("validation error becomes 400", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		writeServiceError(rec, service.ErrChannelNameInvalid, http.StatusInternalServerError, "ignored_code")
+		writeServiceError(rec, req, service.ErrChannelNameInvalid)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 		}
 	})
 
-	t.Run("non-validation error uses fallback", func(t *testing.T) {
+	t.Run("unmapped error is a generic 500", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		writeServiceError(rec, errors.New("db unavailable"), http.StatusInternalServerError, "db_error")
+		writeServiceError(rec, req, errors.New("db unavailable"))
 		if rec.Code != http.StatusInternalServerError {
 			t.Errorf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+		}
+		if strings.Contains(rec.Body.String(), "db unavailable") {
+			t.Errorf("internal text leaked: %s", rec.Body.String())
 		}
 	})
 
 	t.Run("deleted-thread reply becomes 409", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		writeServiceError(rec, service.ErrThreadDeleted, http.StatusForbidden, "send_error")
+		writeServiceError(rec, req, service.ErrThreadDeleted)
 		if rec.Code != http.StatusConflict {
 			t.Errorf("status = %d, want %d", rec.Code, http.StatusConflict)
-		}
-	})
-
-	t.Run("nil error still uses fallback", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		writeServiceError(rec, errors.New("anything"), http.StatusForbidden, "forbidden")
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
 		}
 	})
 }
@@ -338,8 +337,8 @@ func TestRouterRegistersScheduledMessageRoutes(t *testing.T) {
 // and allows everything else.
 type denyWrites struct{}
 
-func (denyWrites) AllowRequest(_ context.Context, key string, _ int, _ time.Duration) (bool, error) {
-	return !strings.HasPrefix(key, "rlu:write:"), nil
+func (denyWrites) Allow(_ context.Context, key string, _ middleware.Limit) (bool, time.Duration, error) {
+	return !strings.HasPrefix(key, "user:write:"), time.Second, nil
 }
 
 // Adding and removing channel members fans out events, system messages and

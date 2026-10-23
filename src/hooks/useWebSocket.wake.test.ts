@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { useWebSocket } from './useWebSocket';
 import { getAccessToken } from '@/lib/api';
+import { withHandlers } from '@/test/ws-frames';
 
 // Wake-probe coverage: foreground/connectivity events must reconnect a gone
 // socket immediately (skipping the backoff — even while hidden, so a
@@ -105,7 +106,7 @@ afterEach(() => {
 
 describe('useWebSocket wake probe', () => {
   it('reconnects immediately on wake when the socket is gone, skipping the pending backoff', async () => {
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
     expect(MockWebSocket.instances).toHaveLength(1);
     act(() => {
@@ -126,7 +127,7 @@ describe('useWebSocket wake probe', () => {
   });
 
   it('force-closes a half-open socket (no frames past the stale window) so onclose reconnects', async () => {
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
     act(() => {
       MockWebSocket.instances[0].simulateOpen();
@@ -139,7 +140,7 @@ describe('useWebSocket wake probe', () => {
   });
 
   it('leaves a fresh OPEN socket alone on wake', async () => {
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
     act(() => {
       MockWebSocket.instances[0].simulateOpen();
@@ -155,7 +156,7 @@ describe('useWebSocket wake probe', () => {
     // A background 'online' event used to be ignored while hidden, leaving
     // the tab dark (and its notifications dead) until it was foregrounded.
     // A GONE socket must revive delivery regardless of visibility.
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
     act(() => {
       MockWebSocket.instances[0].simulateOpen();
@@ -167,7 +168,7 @@ describe('useWebSocket wake probe', () => {
   });
 
   it('defers the half-open force-close while the document is hidden', async () => {
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
     act(() => {
       MockWebSocket.instances[0].simulateOpen();
@@ -183,7 +184,7 @@ describe('useWebSocket wake probe', () => {
   });
 
   it('lets an in-flight CONNECTING socket finish instead of racing a second connect', async () => {
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
     // Still CONNECTING (never opened).
     await wake('online');
@@ -192,7 +193,7 @@ describe('useWebSocket wake probe', () => {
   });
 
   it('coalesces overlapping wake reconnects while the ticket mint is pending', async () => {
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
     act(() => {
       MockWebSocket.instances[0].simulateOpen();
@@ -216,7 +217,7 @@ describe('useWebSocket wake probe', () => {
   });
 
   it('recovers reconnection after a network-failed wake mint instead of wedging', async () => {
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
     act(() => {
       MockWebSocket.instances[0].simulateOpen();
@@ -242,7 +243,7 @@ describe('useWebSocket wake probe', () => {
   });
 
   it('does not book a reconnect when the hook unmounts while the wake mint is failing', async () => {
-    const { unmount } = renderHook(() => useWebSocket({ enabled: true }));
+    const { unmount } = renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
     act(() => {
       MockWebSocket.instances[0].simulateOpen();
@@ -270,7 +271,7 @@ describe('useWebSocket wake probe', () => {
 
   it('connects on wake when the initial mount had no token yet', async () => {
     vi.mocked(getAccessToken).mockReturnValueOnce(null);
-    renderHook(() => useWebSocket({ enabled: true }));
+    renderHook(() => useWebSocket(withHandlers({ enabled: true })));
     await flushConnect();
     expect(MockWebSocket.instances).toHaveLength(0);
     // No socket AND no pending backoff timer — the wake is the only trigger.

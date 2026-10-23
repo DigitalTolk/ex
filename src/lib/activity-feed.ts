@@ -54,18 +54,6 @@ export function applyActivityChange(feed: ActivityFeed, change: ActivityChangedE
   return null;
 }
 
-// parseActivityNew reads the item out of an activity.new payload.
-export function parseActivityNew(data: unknown): ActivityItem | null {
-  const item = (data as { item?: Partial<ActivityItem> } | null)?.item;
-  return item && typeof item.id === 'string' && typeof item.type === 'string' ? (item as ActivityItem) : null;
-}
-
-// parseActivityChange reads an activity.read payload; anything unreadable is an
-// empty change, which the caller resolves by refetching.
-export function parseActivityChange(data: unknown): ActivityChangedEvent {
-  return data && typeof data === 'object' ? (data as ActivityChangedEvent) : {};
-}
-
 // isWebhookItem reports an item whose actor is an incoming webhook: its name
 // is whatever the webhook chose, so it renders as a bot, never as a person.
 // (Items written before the webhook flag existed carry only actorName.)

@@ -62,3 +62,27 @@ describe('user-time helpers', () => {
     expect(formatTimeZoneName()).toBeNull();
   });
 });
+describe('localTimeZone', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('reports the viewer zone so "8am" means their 8am', () => {
+    vi.stubGlobal('Intl', {
+      DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Asia/Kolkata' }) }),
+    });
+    expect(localTimeZone()).toBe('Asia/Kolkata');
+  });
+
+  it('degrades to empty (server decides) when the browser cannot say', () => {
+    vi.stubGlobal('Intl', {
+      DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: undefined }) }),
+    });
+    expect(localTimeZone()).toBe('');
+    vi.stubGlobal('Intl', {
+      DateTimeFormat: () => {
+        throw new Error('no Intl');
+      },
+    });
+    expect(localTimeZone()).toBe('');
+  });
+});
+

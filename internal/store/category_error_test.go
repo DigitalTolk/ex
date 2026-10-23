@@ -153,7 +153,7 @@ type deleteOnUpdateClient struct {
 func (c *deleteOnUpdateClient) UpdateItem(ctx context.Context, in *dynamodb.UpdateItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
 	if !c.fired {
 		c.fired = true
-		_, _ = c.DynamoAPI.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		_, _ = c.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 			TableName: aws.String(c.table),
 			Key:       compositeKey(c.pk, c.sk),
 		})

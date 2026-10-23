@@ -20,6 +20,9 @@ export interface UserPickerRowProps {
   // Appends "(you)" after the name (new-conversation picker).
   you?: boolean;
   testID?: string;
+  // Set when the row is an option of a combobox's listbox (focus stays in the
+  // field; the row is its active descendant and stays out of the Tab order).
+  optionId?: string;
   onHover?: () => void;
   onSelect: () => void;
   // Pick on mousedown so selection beats an input blur (dropdowns attached
@@ -42,6 +45,7 @@ export function UserPickerRow({
   added = false,
   you = false,
   testID,
+  optionId,
   onHover,
   onSelect,
   pickOnMouseDown = false,
@@ -49,6 +53,7 @@ export function UserPickerRow({
   return (
     <button
       type="button"
+      {...(optionId ? { id: optionId, role: 'option', tabIndex: -1 } : {})}
       data-testid={testID}
       disabled={added}
       onMouseEnter={onHover}

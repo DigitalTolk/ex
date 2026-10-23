@@ -34,11 +34,14 @@ const (
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 
+	// MinIO no longer publishes pullable images on Docker Hub (minio/minio
+	// answers "repository does not exist"); Chainguard's build of the same
+	// server is public. It runs as a non-root user, hence the data dir in /tmp.
 	req := testcontainers.ContainerRequest{
-		Image:        "minio/minio:latest",
+		Image:        "cgr.dev/chainguard/minio@sha256:d88920d6a50bd0b088223b688be3b76c63e6205dbe494437f67ba1240ea12880",
 		ExposedPorts: []string{"9000/tcp"},
 		Env:          map[string]string{"MINIO_ROOT_USER": minioUser, "MINIO_ROOT_PASSWORD": minioPass},
-		Cmd:          []string{"server", "/data"},
+		Cmd:          []string{"server", "/tmp/data"},
 		WaitingFor:   wait.ForHTTP("/minio/health/live").WithPort("9000/tcp").WithStartupTimeout(60 * time.Second),
 	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

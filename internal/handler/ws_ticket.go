@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -35,12 +34,13 @@ var wsTicketRand = rand.Read
 var wsSessionGrace = time.Minute
 
 // wsMaxSessionLifetime bounds a socket whose auth context carries no expiry
-// (header-auth paths with synthetic claims in tests). Matches the access
-// token TTL + grace so both paths re-authenticate on the same cadence.
+// (a ticket minted from claims without one, synthetic claims in tests).
+// Matches the access token TTL + grace so every socket re-authenticates on
+// the same cadence.
 var wsMaxSessionLifetime = 16 * time.Minute
 
-// SetTicketStore wires the one-time upgrade ticket store. Optional — without
-// it, MintTicket answers 503 and upgrades fall through to header auth.
+// SetTicketStore wires the one-time upgrade ticket store. Required for
+// WebSockets: without it, MintTicket answers 503 and every upgrade 401.
 func (h *WSHandler) SetTicketStore(s WSTicketStore) { h.tickets = s }
 
 // MintTicket issues a one-time WebSocket upgrade ticket for the
@@ -60,57 +60,56 @@ func (h *WSHandler) MintTicket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "unavailable", "websocket tickets not configured")
 		return
 	}
-	// Stored WITHOUT grace: Connect adds wsSessionGrace exactly once for
-	// both auth paths (ticket and header), so the two can never drift.
+	// Stored WITHOUT grace: Connect adds wsSessionGrace exactly once to
+	// whatever expiry the auth context carries, so it is never applied twice.
 	deadline := time.Now().Add(wsMaxSessionLifetime - wsSessionGrace)
 	if claims.ExpiresAt != nil {
 		deadline = claims.ExpiresAt.Time
 	}
 	buf := make([]byte, 32)
 	if _, err := wsTicketRand(buf); err != nil {
-		slog.Error("ws ticket: rand", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal", "could not mint ticket")
+		writeInternalError(w, r, "ws_ticket_rand", err)
 		return
 	}
 	ticket := hex.EncodeToString(buf)
 	if err := h.tickets.MintWSTicket(r.Context(), ticket, claims.UserID, deadline); err != nil {
-		slog.Error("ws ticket: mint", "userID", claims.UserID, "error", err)
-		writeError(w, http.StatusInternalServerError, "internal", "could not mint ticket")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"ticket": ticket})
 }
 
-// UpgradeAuth authenticates the WebSocket upgrade: a ?ticket= query is
+// UpgradeAuth authenticates the WebSocket upgrade: the ?ticket= query is
 // redeemed (single-use) and its userID + session deadline become the
-// request's auth context; without a ticket the request falls through to the
-// standard header-based auth middleware (non-browser clients, tests). The
-// access JWT itself never appears in the URL on either path.
-func (h *WSHandler) UpgradeAuth(headerAuth func(http.Handler) http.Handler) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		fallback := headerAuth(next)
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ticket := r.URL.Query().Get("ticket")
-			if ticket == "" || h.tickets == nil {
-				fallback.ServeHTTP(w, r)
-				return
-			}
-			userID, deadline, err := h.tickets.ConsumeWSTicket(r.Context(), ticket)
-			if err != nil {
-				slog.Error("ws ticket: consume", "error", err)
-				writeError(w, http.StatusUnauthorized, "unauthorized", "invalid ticket")
-				return
-			}
-			if userID == "" {
-				// Unknown, expired, or already-used ticket.
-				writeError(w, http.StatusUnauthorized, "unauthorized", "invalid ticket")
-				return
-			}
-			claims := &model.TokenClaims{
-				UserID:           userID,
-				RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(deadline)},
-			}
-			next.ServeHTTP(w, r.WithContext(middleware.ContextWithClaims(r.Context(), claims)))
-		})
-	}
+// request's auth context. A ticket is the ONLY way in — there is no
+// Authorization-header fallback: it was guarded by nothing but a per-IP rate
+// limit, so it bypassed the per-user limit on minting tickets (and thereby on
+// opening sockets), and no client uses it (the SPA — also what the desktop
+// shell hosts — always mints a ticket). The access JWT never appears in the
+// URL.
+func (h *WSHandler) UpgradeAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ticket := r.URL.Query().Get("ticket")
+		if ticket == "" || h.tickets == nil {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "websocket ticket required")
+			return
+		}
+		userID, deadline, err := h.tickets.ConsumeWSTicket(r.Context(), ticket)
+		if err != nil {
+			// The ticket store could not answer: the server's fault, not a
+			// bad ticket (an unknown one consumes as "", below).
+			writeServiceError(w, r, err)
+			return
+		}
+		if userID == "" {
+			// Unknown, expired, or already-used ticket.
+			writeError(w, http.StatusUnauthorized, "unauthorized", "invalid ticket")
+			return
+		}
+		claims := &model.TokenClaims{
+			UserID:           userID,
+			RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(deadline)},
+		}
+		next.ServeHTTP(w, r.WithContext(middleware.ContextWithClaims(r.Context(), claims)))
+	})
 }

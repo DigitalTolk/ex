@@ -15,6 +15,9 @@ type UserStore interface {
 	GetUser(ctx context.Context, id string) (*model.User, error)
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
 	UpdateUser(ctx context.Context, user *model.User) error
+	// PatchUser is the field-level update for writers that must not clobber
+	// concurrent changes to other fields (status, role, identity binding).
+	PatchUser(ctx context.Context, id string, p store.UserPatch) error
 	ListUsers(ctx context.Context, limit int, cursor string) ([]*model.User, string, error)
 	HasUsers(ctx context.Context) (bool, error)
 	// NotificationAccountsFor batch-loads account-level notification settings
@@ -176,6 +179,8 @@ type TokenStore interface {
 	// MarkRefreshTokenRotated stamps a token used-and-superseded (kept, not
 	// deleted — see AuthService.RefreshAccessToken's lost-response reuse rules).
 	MarkRefreshTokenRotated(ctx context.Context, tokenHash string, rotatedAt time.Time, supersededBy string) error
+	// DeleteRefreshTokenFamily revokes every token of one login session.
+	DeleteRefreshTokenFamily(ctx context.Context, userID, familyID string) error
 	DeleteAllRefreshTokensForUser(ctx context.Context, userID string) error
 }
 
@@ -219,4 +224,11 @@ type OIDCUserInfo struct {
 	// ObjectID is the Azure AD directory object id (`oid` claim); empty for
 	// non-AAD identity providers.
 	ObjectID string
+	// Issuer + Subject are the verified ID token's `iss` and `sub`: the
+	// identity the account is bound to (the email claim is mutable).
+	Issuer  string
+	Subject string
+	// EmailVerified is the `email_verified` claim; nil when the provider
+	// omits it (Entra ID does), which is accepted. An explicit false is not.
+	EmailVerified *bool
 }

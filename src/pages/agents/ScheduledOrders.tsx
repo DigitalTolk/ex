@@ -8,7 +8,8 @@ import {
   type AgentView,
 } from '@/hooks/useAgents';
 import { useUserChannels } from '@/hooks/useChannels';
-import { describeSchedule, localTimeZone, partsFromCron } from '@/lib/schedule';
+import { describeSchedule, partsFromCron } from '@/lib/schedule';
+import { localTimeZone } from '@/lib/user-time';
 import { showToast } from '@/lib/toast';
 import { ScheduleForm } from './ScheduleForm';
 

@@ -1,8 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import type { ReactNode } from 'react';
+import { Profiler, type ReactNode } from 'react';
 import { AccountMenu } from './AccountMenu';
+import { usePresenceStore } from '@/stores/presence';
+
+// Presence is read from the store (only the signed-in user's own flag).
+const setOnline = (ids: string[]) => usePresenceStore.setState({ online: new Set(ids) });
 
 const logout = vi.fn().mockResolvedValue(undefined);
 
@@ -16,7 +20,6 @@ const baseUser = {
 
 let mockSystemRole: 'admin' | 'member' | 'guest' = 'admin';
 let mockUserStatus: { emoji: string; text: string; clearAt?: string } | undefined;
-let mockOnline = new Set<string>();
 let mockUserNull = false;
 
 vi.mock('@/context/AuthContext', () => ({
@@ -28,9 +31,6 @@ vi.mock('@/context/AuthContext', () => ({
   }),
 }));
 
-vi.mock('@/context/PresenceContext', () => ({
-  usePresence: () => ({ online: mockOnline, isOnline: (id: string) => mockOnline.has(id) }),
-}));
 
 vi.mock('@/components/settings/SettingsDialog', () => ({
   SettingsDialog: ({ open }: { open: boolean }) =>
@@ -79,7 +79,7 @@ describe('AccountMenu', () => {
     mockSystemRole = 'admin';
     mockIsMobile = false;
     mockUserStatus = undefined;
-    mockOnline = new Set<string>();
+    setOnline([]);
     mockUserNull = false;
     logout.mockClear();
   });
@@ -95,7 +95,7 @@ describe('AccountMenu', () => {
   });
 
   it('renders the online presence dot and status emoji when the user is online with a status', () => {
-    mockOnline = new Set<string>(['u-1']);
+    setOnline(['u-1']);
     mockUserStatus = { emoji: ':rocket:', text: 'Shipping' };
     renderMenu();
     // The account trigger renders with the online presence ring and
@@ -104,9 +104,27 @@ describe('AccountMenu', () => {
     expect(screen.getByTestId('account-menu-trigger')).toBeInTheDocument();
   });
 
+  it("follows the signed-in user's own presence, and no one else's", () => {
+    mockIsMobile = true;
+    const commits = { count: 0 };
+    renderMenu(
+      <Profiler id="menu" onRender={() => { commits.count++; }}>
+        <AccountMenu />
+      </Profiler>,
+    );
+    const dot = () => screen.getByTestId('account-menu-trigger').querySelector('[data-presence]')!;
+    expect(dot().getAttribute('data-presence')).toBe('offline');
+    const settled = commits.count;
+    // The whole online set used to re-render the menu on every change.
+    act(() => usePresenceStore.getState().setUserOnline('u-someone-else', true));
+    expect(commits.count).toBe(settled);
+    act(() => usePresenceStore.getState().setUserOnline('u-1', true));
+    expect(dot().getAttribute('data-presence')).toBe('online');
+  });
+
   it('shows a FILLED online dot on the mobile account button when online', () => {
     mockIsMobile = true;
-    mockOnline = new Set<string>(['u-1']);
+    setOnline(['u-1']);
     renderMenu();
     const dot = screen.getByTestId('account-menu-trigger').querySelector('[data-presence]')!;
     expect(dot.getAttribute('data-presence')).toBe('online');
@@ -117,7 +135,7 @@ describe('AccountMenu', () => {
 
   it('shows a HOLLOW ring on the mobile account button when offline', () => {
     mockIsMobile = true;
-    mockOnline = new Set<string>();
+    setOnline([]);
     renderMenu();
     const dot = screen.getByTestId('account-menu-trigger').querySelector('[data-presence]')!;
     expect(dot.getAttribute('data-presence')).toBe('offline');
@@ -203,7 +221,7 @@ describe('AccountMenu', () => {
   describe('as the tab bar\'s You tab', () => {
     it('renders a You tab instead of the footer and opens the sheet, highlighted while open', () => {
       mockIsMobile = true;
-      mockOnline = new Set<string>(['u-1']);
+      setOnline(['u-1']);
       renderMenu(<AccountMenu variant="tab" />);
       expect(screen.queryByTestId('sidebar-account')).not.toBeInTheDocument();
       const tab = screen.getByTestId('mobile-tab-you');

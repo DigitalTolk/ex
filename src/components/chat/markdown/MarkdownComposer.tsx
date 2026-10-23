@@ -1,7 +1,7 @@
 import { forwardRef, useMemo } from 'react';
 import { useAllUsers } from '@/hooks/useConversations';
 import { useChannelMembers, useUserChannels } from '@/hooks/useChannels';
-import { usePresence } from '@/context/PresenceContext';
+import { usePresenceStore } from '@/stores/presence';
 import { useEmojis, useEmojiMap } from '@/hooks/useEmoji';
 import { useOptionalAuth } from '@/context/AuthContext';
 import { activeStatus } from '@/lib/user-status';
@@ -48,7 +48,6 @@ export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function 
 ) {
   const { data: users = [] } = useAllUsers();
   const { data: memberRows } = useChannelMembers(mentionChannelId);
-  const { online } = usePresence();
   const { data: channels = [] } = useUserChannels();
   const { data: customEmojis = [] } = useEmojis();
   const { data: emojiMap = {} } = useEmojiMap();
@@ -102,7 +101,9 @@ export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function 
           avatarURL: u.avatarURL,
           statusEmoji: activeStatus(u.userStatus)?.emoji,
         })),
-      online: () => online,
+      // Read when the @-list opens, never subscribed: a presence change
+      // anywhere used to re-render every open composer.
+      online: () => usePresenceStore.getState().online,
       memberIds: () => memberIds,
       channels: () =>
         channels.map((c) => ({ channelID: c.channelID, channelName: c.channelName, channelType: c.channelType })),
@@ -115,7 +116,6 @@ export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function 
     }),
     [
       users,
-      online,
       memberIds,
       channels,
       customEmojis,

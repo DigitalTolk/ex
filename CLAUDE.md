@@ -14,7 +14,7 @@ Ex — a Slack-like team messaging app. Go backend with embedded React frontend,
 
 **Every change must pass all checks before being reported as done.**
 **Every new feature or bug fix must include tests.**
-**Every user-visible action must emit a WebSocket event** so all connected clients update in real-time. Examples: user joins/leaves channel → `member.joined`/`member.left` event with updated member count; new DM created → `conversation.new` event to the receiver; channel archived → `channel.archived` event. The frontend must handle every event type it can receive.
+**Every user-visible action must emit a WebSocket event** so all connected clients update in real-time. Examples: user joins/leaves channel → `members.changed` event (receivers refetch the member list); new DM created → `conversation.new` event to the receiver; channel archived → `channel.archived` event. The frontend must handle every event type it can receive: each one has a schema and a handler (or an explicit `null`) in the typed registry (`src/lib/ws-events.ts`, keyed by the tygo-generated event names), so a new Go event fails `tsc -b` until it is handled.
 
 Run from the project root:
 
@@ -151,9 +151,11 @@ If you can't prove a change keeps every opted-in alert at 100% delivery (desktop
 - Service layer owns business logic and RBAC; handlers are thin HTTP adapters
 - **Password reset is GUEST-ONLY, and the check keys on `AuthProvider`, never `SystemRole`.** Only accounts with `AuthProvider == guest` hold a local bcrypt password; an OIDC user's credential lives in the identity provider, so minting *or* redeeming a reset for one is refused (an SSO user demoted to the guest *role* is still SSO-only). The guard runs at BOTH ends — at mint and again at redemption — because an account can be converted while a ticket is outstanding. Tickets are single-use (Redis `GETDEL`), stored under the token's SHA-256 rather than the token, TTL-bounded, and redeeming one revokes every refresh token for that account. The self-service `/auth/password/forgot` endpoint answers 204 for *every* input (unknown address, SSO address, malformed, store or mail outage) — it must never become an account-enumeration oracle, which is why its handler has a single error arm and a fixed message.
 - **Transactional email (`internal/email`) is optional and never load-bearing.** With no transport configured the app boots and every flow still works: invites and admin-initiated resets return their link so it can be relayed by hand, and the UI states whether the mail was actually sent. Never make a flow depend on delivery — mail is not part of the notification-reliability contract below. Two transports (`EMAIL_PROVIDER=smtp|ses`) share ONE message-construction path (`build`), so they can never drift; SES sends that rendered MIME as a raw message. **Message assembly and the SMTP conversation belong to `github.com/wneessen/go-mail`, and SES to the AWS SDK — do not hand-roll MIME, header encoding, or protocol handling here.** Delivery is proven end-to-end against a real Mailpit server (`mailpit_integration_test.go`), not just a scripted fake.
-- **`pkg/importer` (history import) never touches `internal/service`.** It writes users, channels, conversations, memberships, messages, threads, attachments and pins straight through `internal/store` / `internal/storage` / `internal/search` / `internal/cache`, so an import can never publish WebSocket events, notify, push, bump alerted-unread badges or start agent runs. Imported history is written already read (`FinalizeParent` advances `MessageSeq` and every member's `LastReadSeq` together). Callers supply deterministic IDs — message IDs are ULIDs whose time is the original creation time — so every call is idempotent. Shared derivations live in store (`DeriveDMConversationID`, `DeriveGroupConversationID`) and shared input rules in `internal/limits`, so the importer and the service layer can't drift.
+- **`pkg/importer` (history import) never touches `internal/service`.** It writes users, channels, conversations, memberships, messages, threads, attachments and pins straight through `internal/store` / `internal/storage` / `internal/search` / `internal/cache`, so an import can never publish WebSocket events, notify, push, bump alerted-unread badges or start agent runs. Imported history is written already read (`FinalizeParent` advances `MessageSeq` and every member's `LastReadSeq` together). Callers supply deterministic IDs — message IDs are ULIDs whose time is the original creation time — so every call is idempotent. Shared derivations live in store (`DeriveDMConversationID`, `DeriveGroupConversationID`) and shared input rules in `internal/limits`, so the importer and the service layer can't drift. Every membership write it makes moves the channel's notification audience generation (`internal/cache` `ChannelAudiencesChanged`, the same keys the notifier's audience cache checks), so running instances alert an imported member from the next message — any new audience writer outside the services must do the same.
 - Adapters in `internal/handler/store_adapters.go` bridge store and service interfaces
-- WebSocket (`nhooyr.io/websocket`) for real-time via Redis pub/sub fan-out across server instances
+- **Wiring lives in `internal/app`, and the boot refuses an incomplete one.** Services and handlers take most collaborators through `Set*` methods; each component lists the ones production always sets in its `Wired()` (`internal/wiring`), and `app.New` fails naming every gap instead of booting a silently degraded process (a message service with no notifier alerts nobody). A new setter production must call goes into that component's `Wired()`; collaborators wired only when their backend is configured (S3, search, Microsoft Graph, mobile push, mail) stay out of it. Keep the shutdown order in `App.shutdown`: background jobs, HTTP, WebSocket drain, notification fan-outs, durable-inbox appends.
+- **`internal/agents` builds on `internal/service`, never the reverse.** The service layer reaches the agent subsystem only through interfaces it defines (`AgentDispatcher`, `RunLogPurger`, `AutomationStopper`, `RunnerRevoker`, …), wired in `internal/app`; never import `internal/agents` from `internal/service`.
+- WebSocket (`github.com/coder/websocket`, the maintained successor of nhooyr.io/websocket) for real-time via Redis pub/sub fan-out across server instances
 - WebSocket endpoint: `POST /api/v1/ws/ticket` mints a one-time ticket, then `GET /api/v1/ws?ticket=<ticket>` connects (no JWT in the URL) — sends JSON `{"type":"...","data":"..."}`
 - Dark mode via `.dark` class on `<html>`, toggled by `prefers-color-scheme`
 - 14px practical base font size (`text-sm` = 14px at 16px root)
@@ -164,14 +166,17 @@ If you can't prove a change keeps every opted-in alert at 100% delivery (desktop
 ## Project Layout
 
 ```
-cmd/server/main.go       Entry point, DI wiring, graceful shutdown
+cmd/server/main.go       Entry point: config, logging, signals, `ex healthcheck`
 internal/
+  app/                   Process wiring (one builder per subsystem), boot-time wiring check, background workers, ordered shutdown
+  wiring/                The Wired() completeness check setter-injected components report
   config/                Env-based configuration
   model/                 Domain types
   store/                 DynamoDB repositories
   auth/                  JWT + OIDC
   middleware/            Auth, RBAC, CORS, logging
-  service/               Business logic
+  service/               Business logic (the chat core)
+  agents/                Agent subsystem: agents, run orchestrator, runner tokens, connectors, Bedrock engine, coding tasks, projects
   handler/               HTTP handlers, router, adapters
   cache/                 Redis cache
   pubsub/                Redis pub/sub + WebSocket broker

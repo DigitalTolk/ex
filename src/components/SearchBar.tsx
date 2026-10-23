@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Clock3, Search, FileSearch, X, Loader2, Users } from 'lucide-react';
 import { Link, matchPath, useLocation, useNavigate } from 'react-router-dom';
 import { useChannelBySlug, useUserChannels } from '@/hooks/useChannels';
@@ -10,7 +10,7 @@ import { MessageHitCard } from '@/components/search/MessageHitCard';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
-import { usePresence } from '@/context/PresenceContext';
+import { useIsOnline } from '@/stores/presence';
 import { Badge } from '@/components/ui/badge';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { UserPickerRow } from '@/components/UserPickerRow';
@@ -97,6 +97,10 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
+  // The field is an ARIA combobox over this listbox; focus stays in the
+  // field and the highlighted option is its active descendant.
+  const listboxId = useId();
+  const optionId = (it: Item) => `${listboxId}-${itemKey(it)}`;
 
   const location = useLocation();
   const channelMatch = matchPath('/channel/:id', location.pathname);
@@ -142,10 +146,10 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
   // (same pattern as the mention list / activity feed).
   const userHitIDs = useMemo(() => userHits.map((h) => h.id), [userHits]);
   const { map: userAvatarMap } = useUsersBatch(userHitIDs);
-  // Presence powers the online/offline dot on each people row; the batch record
-  // above carries the custom status emoji. Both are the "status icon" a person
-  // row shows here and on the full /search page.
-  const { online } = usePresence();
+  // Presence powers the online/offline dot on each people row (each row
+  // subscribes to its own user, see UserRow); the batch record above carries
+  // the custom status emoji. Both are the "status icon" a person row shows
+  // here and on the full /search page.
   // Your group messages with the people named, from the list you already
   // have: "alice bob" finds the group with both.
   const groupHits = useMemo(
@@ -312,6 +316,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
   );
   const messageHits = messagesQuery.data?.hits ?? [];
   const showRecent = sheet && !trimmed && recent.length > 0;
+  const listOpen = showDropdown && items.length > 0;
 
   return (
     <div ref={containerRef} className="relative w-full" data-testid="searchbar">
@@ -364,6 +369,11 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
             }}
             placeholder="Search for anything"
             aria-label="Search"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={listOpen}
+            aria-controls={listOpen ? listboxId : undefined}
+            aria-activedescendant={listOpen ? optionId(items[safeHighlight]) : undefined}
             // Suppress native browser autofill / password-manager / spellcheck
             // overlays — this is our own autocomplete, so a system dropdown on
             // top of it is just noise. type="text" (not "search") avoids the
@@ -379,7 +389,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
             className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none mobile:text-base"
             data-testid="searchbar-input"
           />
-          <kbd className="hidden items-center gap-0.5 rounded border border-border-strong px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground md:inline-flex">
+          <kbd className="hidden items-center gap-0.5 rounded border border-border-strong px-1.5 py-0.5 text-xs font-medium text-muted-foreground md:inline-flex">
             {SEARCH_SHORTCUT_HINT}
           </kbd>
           {q && (
@@ -396,7 +406,6 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
       </div>
       {showDropdown && (
         <div
-          role="listbox"
           data-testid="searchbar-dropdown"
           // Match the focus-expanded input width: the input row widens by -mx-2
           // on md+ while focused, and the dropdown only ever shows while focused,
@@ -409,70 +418,8 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
               : 'absolute left-0 right-0 top-full z-40 mt-1 max-h-[70dvh] overflow-y-auto rounded-md border bg-popover text-popover-foreground shadow-lg md:-mx-2 [-webkit-app-region:no-drag]'
           }
         >
-          {channelHits.length > 0 && (
-            <div role="group" aria-label="Channels">
-              <SectionHeader>Channels</SectionHeader>
-              {channelHits.map((hit) => {
-                const flatIndex = items.findIndex(
-                  (it) => it.kind === 'channel' && it.hit.id === hit.id,
-                );
-                return (
-                  <ChannelRow
-                    key={hit.id}
-                    hit={hit}
-                    joined={joinedIDs.has(hit.id)}
-                    highlighted={flatIndex === safeHighlight}
-                    onHover={() => setHighlightKey(`channel:${hit.id}`)}
-                    onSelect={() => activate(flatIndex)}
-                  />
-                );
-              })}
-            </div>
-          )}
-
-          {userHits.length > 0 && (
-            <div role="group" aria-label="People">
-              <SectionHeader>People</SectionHeader>
-              {userHits.map((hit) => {
-                const flatIndex = items.findIndex(
-                  (it) => it.kind === 'user' && it.hit.id === hit.id,
-                );
-                return (
-                  <UserRow
-                    key={hit.id}
-                    hit={hit}
-                    avatarURL={userAvatarMap.get(hit.id)?.avatarURL}
-                    online={online.has(hit.id)}
-                    userStatus={userAvatarMap.get(hit.id)?.userStatus}
-                    highlighted={flatIndex === safeHighlight}
-                    onHover={() => setHighlightKey(`user:${hit.id}`)}
-                    onSelect={() => activate(flatIndex)}
-                  />
-                );
-              })}
-            </div>
-          )}
-
-          {groupHits.length > 0 && (
-            <div role="group" aria-label="Group messages">
-              <SectionHeader>Group messages</SectionHeader>
-              {groupHits.map((conversation) => {
-                const flatIndex = items.findIndex(
-                  (it) => it.kind === 'group' && it.conversation.conversationID === conversation.conversationID,
-                );
-                return (
-                  <GroupRow
-                    key={conversation.conversationID}
-                    conversation={conversation}
-                    highlighted={flatIndex === safeHighlight}
-                    onHover={() => setHighlightKey(`group:${conversation.conversationID}`)}
-                    onSelect={() => activate(flatIndex)}
-                  />
-                );
-              })}
-            </div>
-          )}
-
+          {/* Status rows sit above the options, outside the listbox: a
+              listbox holds only options and their groups. */}
           {failedQuery && (
             <div
               role="alert"
@@ -504,6 +451,73 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
             </div>
           )}
 
+          <div role="listbox" id={listboxId} aria-label="Suggestions">
+          {channelHits.length > 0 && (
+            <div role="group" aria-label="Channels">
+              <SectionHeader>Channels</SectionHeader>
+              {channelHits.map((hit) => {
+                const flatIndex = items.findIndex(
+                  (it) => it.kind === 'channel' && it.hit.id === hit.id,
+                );
+                return (
+                  <ChannelRow
+                    key={hit.id}
+                    id={optionId(items[flatIndex])}
+                    hit={hit}
+                    joined={joinedIDs.has(hit.id)}
+                    highlighted={flatIndex === safeHighlight}
+                    onHover={() => setHighlightKey(`channel:${hit.id}`)}
+                    onSelect={() => activate(flatIndex)}
+                  />
+                );
+              })}
+            </div>
+          )}
+
+          {userHits.length > 0 && (
+            <div role="group" aria-label="People">
+              <SectionHeader>People</SectionHeader>
+              {userHits.map((hit) => {
+                const flatIndex = items.findIndex(
+                  (it) => it.kind === 'user' && it.hit.id === hit.id,
+                );
+                return (
+                  <UserRow
+                    key={hit.id}
+                    id={optionId(items[flatIndex])}
+                    hit={hit}
+                    avatarURL={userAvatarMap.get(hit.id)?.avatarURL}
+                    userStatus={userAvatarMap.get(hit.id)?.userStatus}
+                    highlighted={flatIndex === safeHighlight}
+                    onHover={() => setHighlightKey(`user:${hit.id}`)}
+                    onSelect={() => activate(flatIndex)}
+                  />
+                );
+              })}
+            </div>
+          )}
+
+          {groupHits.length > 0 && (
+            <div role="group" aria-label="Group messages">
+              <SectionHeader>Group messages</SectionHeader>
+              {groupHits.map((conversation) => {
+                const flatIndex = items.findIndex(
+                  (it) => it.kind === 'group' && it.conversation.conversationID === conversation.conversationID,
+                );
+                return (
+                  <GroupRow
+                    key={conversation.conversationID}
+                    id={optionId(items[flatIndex])}
+                    conversation={conversation}
+                    highlighted={flatIndex === safeHighlight}
+                    onHover={() => setHighlightKey(`group:${conversation.conversationID}`)}
+                    onSelect={() => activate(flatIndex)}
+                  />
+                );
+              })}
+            </div>
+          )}
+
           {/* While the sheet shows message results, they are their own section
               (below) and this group of "search for…" actions steps aside. */}
           {!showMessageResults && (
@@ -530,7 +544,10 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
                 return (
                   <button
                     key={s.kind === 'in-scope' ? `in-${s.scopeKind}` : 'all'}
+                    id={optionId(items[flatIndex])}
                     type="button"
+                    role="option"
+                    tabIndex={-1}
                     onMouseEnter={() =>
                       setHighlightKey(`message:${s.kind === 'in-scope' ? `in-${s.scopeKind}` : 'all'}`)
                     }
@@ -567,6 +584,7 @@ export function SearchBar({ variant = 'bar', onDone, leading }: SearchBarProps) 
               })}
             </div>
           )}
+          </div>
         </div>
       )}
       {showMessageResults && submitted && (
@@ -664,7 +682,7 @@ function searchPageHref(q: string, scope?: SearchScope): string {
 
 function SectionHeader({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+    <div className="px-3 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
       {children}
     </div>
   );
@@ -676,11 +694,13 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
 // channels carry no badge to keep the common case uncluttered. The hint is
 // never pink — it's a plain outline Badge per the design system.
 function GroupRow({
+  id,
   conversation,
   highlighted,
   onHover,
   onSelect,
 }: {
+  id: string;
   conversation: UserConversation;
   highlighted: boolean;
   onHover: () => void;
@@ -688,7 +708,10 @@ function GroupRow({
 }) {
   return (
     <button
+      id={id}
       type="button"
+      role="option"
+      tabIndex={-1}
       data-testid={`searchbar-group-${conversation.conversationID}`}
       onMouseEnter={onHover}
       onClick={onSelect}
@@ -704,12 +727,14 @@ function GroupRow({
 }
 
 function ChannelRow({
+  id,
   hit,
   joined,
   highlighted,
   onHover,
   onSelect,
 }: {
+  id: string;
   hit: SearchHit;
   joined: boolean;
   highlighted: boolean;
@@ -720,7 +745,10 @@ function ChannelRow({
   const isPrivate = hit._source.type === 'private';
   return (
     <button
+      id={id}
       type="button"
+      role="option"
+      tabIndex={-1}
       data-testid={`searchbar-channel-${hit.id}`}
       onMouseEnter={onHover}
       onClick={onSelect}
@@ -745,17 +773,17 @@ function ChannelRow({
 }
 
 function UserRow({
+  id,
   hit,
   avatarURL,
-  online,
   userStatus,
   highlighted,
   onHover,
   onSelect,
 }: {
+  id: string;
   hit: SearchHit;
   avatarURL?: string;
-  online: boolean;
   userStatus?: UserStatus | null;
   highlighted: boolean;
   onHover: () => void;
@@ -763,10 +791,13 @@ function UserRow({
 }) {
   const name = String(hit._source.displayName || hit.id);
   const email = String(hit._source.email ?? '');
+  // This row's user only: the bar re-rendered for every presence change.
+  const online = useIsOnline(hit.id);
   // Shared canonical people-row — the same element the add-member and
   // new-conversation pickers render, so the design can't drift.
   return (
     <UserPickerRow
+      optionId={id}
       testID={`searchbar-user-${hit.id}`}
       displayName={name}
       email={email}

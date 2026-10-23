@@ -6,15 +6,13 @@ import { useEmojiMap } from '@/hooks/useEmoji';
 import { renderMarkdown } from '@/lib/markdown';
 import { formatRelative, getInitials } from '@/lib/format';
 import { iconForAttachment, scaleToThumbnail } from '@/lib/file-helpers';
-import { isSafeUrl } from '@/lib/url-safety';
+import { externalHref, isSafeUrl } from '@/lib/url-safety';
 
-// Defense-in-depth for server-supplied preview URLs. The card href and image
-// srcs come from the unfurl response; reject any non-http(s) scheme so a
-// javascript:/data:/file: URL can never reach an <a href> or <img src>. (The
-// unfurl fetcher already restricts to http/https, so this is belt-and-braces.)
-function safeHref(url?: string): string | undefined {
-  return url && isSafeUrl(url) ? url : undefined;
-}
+// Defense-in-depth for server-supplied preview URLs. The card href (through
+// externalHref) and image srcs come from the unfurl response; reject any
+// non-http(s) scheme so a javascript:/data:/file: URL can never reach an
+// <a href> or <img src>. (The unfurl fetcher already restricts to http/https,
+// so this is belt-and-braces.)
 function safeImg(url?: string): string | undefined {
   if (!url || !isSafeUrl(url) || /^\s*mailto:/i.test(url)) return undefined;
   return url;
@@ -90,7 +88,7 @@ export function UnfurlCard({
       >
         {/* Stretched link covering the whole card → navigates to the message. */}
         <a
-          href={safeHref(preview.url)}
+          href={externalHref(preview.url)}
           target="_blank"
           rel="noopener noreferrer"
           data-testid="unfurl-message-card"
@@ -111,7 +109,7 @@ export function UnfurlCard({
           ) : (
             <span
               aria-hidden="true"
-              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-medium text-primary"
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-medium text-primary"
             >
               {getInitials(preview.authorName || '?')}
             </span>
@@ -173,7 +171,7 @@ export function UnfurlCard({
   return (
     <div className="relative mt-1.5 max-w-md" data-testid="unfurl-card">
       <a
-        href={safeHref(preview.url)}
+        href={externalHref(preview.url)}
         target="_blank"
         rel="noopener noreferrer"
         // Per the design spec the web (OpenGraph) card is bg/base with a
@@ -204,7 +202,7 @@ export function UnfurlCard({
         )}
         <div className="min-w-0 flex-1 pr-6">
           {preview.siteName && (
-            <p className="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            <p className="truncate text-xs font-medium uppercase tracking-wide text-muted-foreground">
               {preview.siteName}
             </p>
           )}

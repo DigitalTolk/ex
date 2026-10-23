@@ -164,7 +164,7 @@ export function GiphyPicker({ apiKey, onSelect, trigger, ariaLabel = 'Giphy pick
           href="https://giphy.com/"
           target="_blank"
           rel="noreferrer"
-          className="mt-2 shrink-0 self-end text-[10px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+          className="mt-2 shrink-0 self-end text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
         >
           Powered by GIPHY
         </a>

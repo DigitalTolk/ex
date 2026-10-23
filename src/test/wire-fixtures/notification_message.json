@@ -1,0 +1,12 @@
+{
+  "kind": "mention",
+  "title": "Alice in ~general",
+  "body": "@Bob the deploy is done",
+  "deepLink": "/channel/general?msg=01J0000000000000000000MSG1",
+  "parentID": "01J0000000000000000000CH01",
+  "parentType": "channel",
+  "messageID": "01J0000000000000000000MSG1",
+  "authorID": "01J0000000000000000000US01",
+  "createdAt": "2026-05-01T12:00:00Z",
+  "parentUnreadNotifyCount": 2
+}

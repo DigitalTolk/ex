@@ -2,14 +2,13 @@ package handler
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/agents"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
-	"github.com/DigitalTolk/ex/internal/service"
 )
 
 // RunnerTokenHandler serves ex-runner pairing and the Runners page:
@@ -21,7 +20,7 @@ import (
 //	POST   /api/v1/agent/runner/renew      runner    fresh expiry, same install
 //	POST   /api/v1/agent/runner/revoke     runner    `ex-runner logout`
 type RunnerTokenHandler struct {
-	svc  *service.RunnerTokenService
+	svc  *agents.RunnerTokenService
 	live liveRunnerLister
 }
 
@@ -36,7 +35,7 @@ type liveRunnerLister interface {
 func (h *RunnerTokenHandler) SetLiveRunners(l liveRunnerLister) { h.live = l }
 
 // NewRunnerTokenHandler wires the handler.
-func NewRunnerTokenHandler(svc *service.RunnerTokenService) *RunnerTokenHandler {
+func NewRunnerTokenHandler(svc *agents.RunnerTokenService) *RunnerTokenHandler {
 	return &RunnerTokenHandler{svc: svc}
 }
 
@@ -62,7 +61,7 @@ func (h *RunnerTokenHandler) CreateGrant(w http.ResponseWriter, r *http.Request)
 	}
 	code, expiresAt, err := h.svc.CreateGrant(r.Context(), middleware.UserIDFromContext(r.Context()), body.Challenge, body.Label)
 	if err != nil {
-		writeRunnerTokenError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, JSON{"code": code, "expiresAt": expiresAt})
@@ -82,7 +81,7 @@ func (h *RunnerTokenHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 	}
 	issued, err := h.svc.Exchange(r.Context(), body.Code, body.Verifier)
 	if err != nil {
-		writeRunnerTokenError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, issued)
@@ -139,7 +138,7 @@ func (h *RunnerTokenHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 	toks, err := h.svc.List(r.Context(), userID)
 	if err != nil {
-		writeInternalError(w, r, "list_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	live := h.liveByToken(r, userID)
@@ -153,7 +152,7 @@ func (h *RunnerTokenHandler) List(w http.ResponseWriter, r *http.Request) {
 // Revoke DELETE /api/v1/runner-tokens/{id}
 func (h *RunnerTokenHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.Revoke(r.Context(), middleware.UserIDFromContext(r.Context()), r.PathValue("id")); err != nil {
-		writeRunnerTokenError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -163,7 +162,7 @@ func (h *RunnerTokenHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 func (h *RunnerTokenHandler) Renew(w http.ResponseWriter, r *http.Request) {
 	issued, err := h.svc.Renew(r.Context(), middleware.ClaimsFromContext(r.Context()))
 	if err != nil {
-		writeRunnerTokenError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"token": issued.Token, "expiresAt": issued.ExpiresAt})
@@ -172,24 +171,8 @@ func (h *RunnerTokenHandler) Renew(w http.ResponseWriter, r *http.Request) {
 // RevokeSelf POST /api/v1/agent/runner/revoke
 func (h *RunnerTokenHandler) RevokeSelf(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.RevokeSelf(r.Context(), middleware.ClaimsFromContext(r.Context())); err != nil {
-		writeInternalError(w, r, "revoke_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// writeRunnerTokenError maps the pairing sentinels, then the shared table.
-func writeRunnerTokenError(w http.ResponseWriter, r *http.Request, err error) {
-	switch {
-	case errors.Is(err, service.ErrRunnerGrantInvalid):
-		writeError(w, http.StatusBadRequest, "invalid_grant", err.Error())
-	case errors.Is(err, service.ErrRunnerTokenRevoked):
-		writeError(w, http.StatusUnauthorized, "runner_disconnected", err.Error())
-	default:
-		if status, code, message, ok := serviceStatus(err); ok {
-			writeError(w, status, code, message)
-			return
-		}
-		writeInternalError(w, r, "runner_token_error", err)
-	}
 }

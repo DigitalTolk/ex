@@ -24,5 +24,5 @@ threshold:
 
 exclude:
   paths:
-    # Process entrypoint / DI wiring — exercised by the binary, not unit tests.
+    # Process entry point only — the wiring lives in internal/app (gated).
     - ^cmd/server/main\.go$

@@ -126,6 +126,10 @@ func newTestMessageLinkService() *MessageLinkService {
 		}},
 		fakeMLUsers{byID: map[string]*model.User{
 			"u-author": {ID: "u-author", DisplayName: "Günter", AvatarURL: "https://img/g.png"},
+			// Viewers are workspace members: a public channel unfurls for a
+			// member before joining (guests are covered in
+			// messagelink_guest_test.go).
+			"stranger": {ID: "stranger", SystemRole: model.SystemRoleMember},
 		}},
 		fakeMLAttachments{byID: map[string]*model.Attachment{
 			"att-1":    {ID: "att-1", ContentType: "image/png", URL: "https://img/chart.png", ThumbnailURL: "https://img/chart-thumb.png", Width: 1920, Height: 1080},

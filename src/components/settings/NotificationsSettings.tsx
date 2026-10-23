@@ -121,7 +121,7 @@ export function NotificationsSettings() {
             {settings.keywords.map((kw) => (
               <span
                 key={kw}
-                className="inline-flex items-center gap-1.5 rounded-full bg-muted py-1 pr-1.5 pl-3 text-[13px]"
+                className="inline-flex items-center gap-1.5 rounded-full bg-muted py-1 pr-1.5 pl-3 text-sm"
                 data-testid="keyword-chip"
               >
                 {kw}
@@ -148,7 +148,7 @@ export function NotificationsSettings() {
               // Don't drop a word the user typed but didn't press Enter for.
               onBlur={addKeyword}
               placeholder="+ Add keyword"
-              className="w-40 rounded-full border border-dashed border-border-strong bg-transparent px-3 py-1 text-[13px] outline-none placeholder:text-muted-foreground focus-visible:border-solid focus-visible:border-foreground/40"
+              className="w-40 rounded-full border border-dashed border-border-strong bg-transparent px-3 py-1 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-solid focus-visible:border-foreground/40"
             />
           </div>
         </SettingsRow>
@@ -252,7 +252,7 @@ function DeviceSection() {
     // and no authorID so the active-view / own-echo suppressions can't drop it.
     dispatch({
       kind: 'mention',
-      title: 'Test notification 🔔',
+      title: 'Test notification',
       body: 'If you can see this, desktop notifications are working.',
       deepLink: '',
       parentID: '__notification_test__',
@@ -322,7 +322,7 @@ function DeviceSection() {
           {(() => {
             const trace = getNotificationTrace().slice(-20).reverse();
             if (trace.length === 0) {
-              return <p className="text-[13px] text-muted-foreground">No notifications processed in this tab yet.</p>;
+              return <p className="text-sm text-muted-foreground">No notifications processed in this tab yet.</p>;
             }
             return (
               <ul className="space-y-0.5 rounded-lg border bg-sidebar px-3 py-2.5 font-mono text-xs leading-relaxed text-muted-foreground">

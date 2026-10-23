@@ -23,6 +23,7 @@ import {
   useMissedArrivals,
   useUnreadAnchor,
 } from './read-position';
+import { resetAllStores } from '@/test/store-reset';
 
 afterEach(() => {
   for (const key of ['ch-1', 'ch-2', threadReadKey('root-1')]) endReadSession(key);
@@ -132,5 +133,40 @@ describe('read-position', () => {
     expect(isUnreadSeen('ch-1')).toBe(false);
     rerender({ k: undefined });
     expect(result.current).toBe(false);
+  });
+});
+
+// The store is zustand's, so the per-test store reset covers it: what one
+// test leaves behind (any key, not just the ones a test cleans up) cannot
+// decide the next one — a held read or a stale "not at bottom" gates whether
+// an arriving message is marked read.
+describe('read-position between tests', () => {
+  it('a test leaves a whole read position behind', () => {
+    setUnreadAnchor('left-behind', { kind: 'message', messageID: 'm-9' });
+    markUnreadSeen('left-behind');
+    holdRead('left-behind');
+    setAtBottom('left-behind', false);
+    setAtLiveTail('left-behind', false);
+    noteMissedArrival('left-behind');
+    expect(isReadHeld('left-behind')).toBe(true);
+  });
+
+  it('the next test starts from nothing', () => {
+    expect(getUnreadAnchor('left-behind')).toBeUndefined();
+    expect(isUnreadSeen('left-behind')).toBe(false);
+    expect(isReadHeld('left-behind')).toBe(false);
+    expect(isAtBottom('left-behind')).toBe(true);
+    expect(isAtLiveTail('left-behind')).toBe(true);
+    const { result } = renderHook(() => useMissedArrivals('left-behind'));
+    expect(result.current).toBe(0);
+  });
+
+  it('an end still pending when the store resets does not end the session after it', () => {
+    vi.useFakeTimers();
+    scheduleEndReadSession('ch-1');
+    resetAllStores();
+    setUnreadAnchor('ch-1', { kind: 'count', count: 1 });
+    vi.runAllTimers();
+    expect(getUnreadAnchor('ch-1')).toEqual({ kind: 'count', count: 1 });
   });
 });

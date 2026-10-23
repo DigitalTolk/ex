@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
@@ -25,6 +27,33 @@ func TestNew_BuildsClientWithEndpoint(t *testing.T) {
 	}
 	if db.Client == nil || db.Table != "any-table" {
 		t.Fatalf("New returned incomplete DB: %+v", db)
+	}
+}
+
+// Every DynamoDB call goes to one regional endpoint, so the per-host idle pool
+// is the whole pool. The SDK default (10) made any burst past 10 in-flight
+// requests — a sidebar load's parallel reads, a notification fan-out — open
+// and TLS-handshake extra connections, then discard them.
+func TestNew_TunesTheHTTPConnectionPool(t *testing.T) {
+	db, err := New(context.Background(), DBConfig{Region: "us-east-1", Table: "t"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	client, ok := db.Client.(*dynamodb.Client)
+	if !ok {
+		t.Fatalf("client = %T", db.Client)
+	}
+	hc, ok := client.Options().HTTPClient.(*awshttp.BuildableClient)
+	if !ok {
+		t.Fatalf("http client = %T, want the SDK's buildable client", client.Options().HTTPClient)
+	}
+	tr := hc.GetTransport()
+	if tr.MaxIdleConnsPerHost != dynamoMaxIdleConnsPerHost || tr.MaxIdleConns < dynamoMaxIdleConnsPerHost {
+		t.Fatalf("idle pool = %d per host / %d total, want %d per host", tr.MaxIdleConnsPerHost, tr.MaxIdleConns, dynamoMaxIdleConnsPerHost)
+	}
+	// The rest of the SDK's hardened defaults stay (TLS 1.2 floor, timeouts).
+	if tr.TLSClientConfig == nil || tr.TLSClientConfig.MinVersion == 0 || tr.TLSHandshakeTimeout == 0 {
+		t.Fatalf("SDK transport defaults lost: %+v", tr)
 	}
 }
 

@@ -1,0 +1,1581 @@
+package agents
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/service"
+	"github.com/DigitalTolk/ex/internal/store"
+)
+
+// Coverage for the audit-driven fixes in the agents layer: purpose-bound
+// approvals, the deadline gate, owner-bound runner calls, the atomic spend
+// ledger, sequence validation, workspace-pin liveness and the access-checked
+// run reads.
+
+// ---------------------------------------------------------------- approvals
+
+// ApprovalGranted is what every server-side gate asks before acting on "the
+// invoker said yes". Purpose equality is the ONLY test, and a granted
+// approval is spent: a purpose-less approval (any agent-raised card) never
+// unlocks a server gate, and the same approval never unlocks two actions.
+func TestOgateCov_ApprovalGrantedArms(t *testing.T) {
+	fx := newOgateCovFX(t)
+	ctx := context.Background()
+	run := fx.run("ogc-granted", "mA", "")
+	purpose := model.ApprovalPurposeConnector("core")
+
+	if _, ok := fx.orch.ApprovalGranted(ctx, run.ID, "", purpose); ok {
+		t.Fatal("no approval id must never authorize anything")
+	}
+	if _, ok := fx.orch.ApprovalGranted(ctx, run.ID, "nope", purpose); ok {
+		t.Fatal("an unknown approval must not authorize")
+	}
+
+	put := func(a *model.Approval) string {
+		a.RunID, a.InvokerID, a.State = run.ID, "u-alice", model.ApprovalApproved
+		a.Deadline = fx.now.Add(time.Hour)
+		if a.ID == "" {
+			t.Fatal("test approval needs an id")
+		}
+		if err := fx.store.PutApproval(ctx, a); err != nil {
+			t.Fatalf("put approval: %v", err)
+		}
+		return a.ID
+	}
+
+	// Purpose present → equality decides, and nothing else matters.
+	id := put(&model.Approval{ID: "ap-purpose", Summary: "anything at all", Purpose: purpose})
+	if _, ok := fx.orch.ApprovalGranted(ctx, run.ID, id, model.ApprovalPurposeConnector("other")); ok {
+		t.Fatal("a different purpose must not authorize")
+	}
+	if _, ok := fx.orch.ApprovalGranted(ctx, run.ID, id, ""); ok {
+		t.Fatal("an empty purpose must never authorize")
+	}
+	if _, ok := fx.orch.ApprovalGranted(ctx, run.ID, id, purpose); !ok {
+		t.Fatal("matching purpose must authorize")
+	}
+	if _, ok := fx.orch.ApprovalGranted(ctx, run.ID, id, purpose); ok {
+		t.Fatal("a spent approval must not authorize a second action")
+	}
+
+	// A PENDING approval authorizes nothing.
+	pending := &model.Approval{ID: "ap-pending", RunID: run.ID, InvokerID: "u-alice",
+		State: model.ApprovalPending, Purpose: purpose, Deadline: fx.now.Add(time.Hour)}
+	if err := fx.store.PutApproval(ctx, pending); err != nil {
+		t.Fatalf("put pending: %v", err)
+	}
+	if _, ok := fx.orch.ApprovalGranted(ctx, run.ID, pending.ID, purpose); ok {
+		t.Fatal("a pending approval must not authorize")
+	}
+
+	// No purpose (an agent-raised card, whatever its summary says): never a
+	// server gate's authorization — the caller re-asks (LegacyApproval).
+	agentRaised := put(&model.Approval{ID: "ap-agent", Summary: "Use the core connector for this task"})
+	a, ok := fx.orch.ApprovalGranted(ctx, run.ID, agentRaised, purpose)
+	if ok || !LegacyApproval(a) {
+		t.Fatalf("an agent-raised approval must not authorize, and must read as legacy: %+v %v", a, ok)
+	}
+	if LegacyApproval(nil) {
+		t.Fatal("no approval is not a legacy approval")
+	}
+
+	// A failed spend (store write) authorizes nothing.
+	again := put(&model.Approval{ID: "ap-again", Purpose: purpose})
+	fx.store.consumeErr = errors.New("consume down")
+	if _, ok := fx.orch.ApprovalGranted(ctx, run.ID, again, purpose); ok {
+		t.Fatal("an approval that could not be spent must not authorize")
+	}
+	fx.store.consumeErr = nil
+}
+
+// A decision that arrives after the gate's deadline is refused: the run has
+// stopped polling (or ended), so recording it would tell the human they
+// approved something no agent will ever read.
+func TestOgateCov_DecideApprovalPastDeadline(t *testing.T) {
+	fx := newOgateCovFX(t)
+	ctx := context.Background()
+	run := fx.run("ogc-late", "mA", "")
+	a := &model.Approval{
+		ID: "ap-late", RunID: run.ID, InvokerID: "u-alice",
+		Summary: "do the thing", State: model.ApprovalPending,
+		Deadline: fx.now.Add(-time.Minute),
+	}
+	if err := fx.store.PutApproval(ctx, a); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if _, err := fx.orch.DecideApproval(ctx, "u-alice", run.ID, a.ID, Decision{Approve: true}); !errors.Is(err, ErrApprovalSettled) {
+		t.Fatalf("late decision: want ErrApprovalSettled, got %v", err)
+	}
+	// The poll it triggers marks the gate expired, so the card clears.
+	got, err := fx.store.GetApproval(ctx, run.ID, a.ID)
+	if err != nil || got.State != model.ApprovalExpired {
+		t.Fatalf("gate should be expired: %+v %v", got, err)
+	}
+
+	// A settle failure on that expiry surfaces rather than reading as settled.
+	b := &model.Approval{
+		ID: "ap-late2", RunID: run.ID, InvokerID: "u-alice",
+		Summary: "again", State: model.ApprovalPending,
+		Deadline: fx.now.Add(-time.Minute),
+	}
+	if err := fx.store.PutApproval(ctx, b); err != nil {
+		t.Fatalf("put 2: %v", err)
+	}
+	fx.store.settleErr = errors.New("ogc: settle down")
+	if _, err := fx.orch.DecideApproval(ctx, "u-alice", run.ID, b.ID, Decision{Approve: true}); !errors.Is(err, fx.store.settleErr) {
+		t.Fatalf("expiry failure should surface, got %v", err)
+	}
+	fx.store.settleErr = nil
+}
+
+// The lazy-expiry path: the settle sticks but the run is unreadable, so the
+// invoker's card cannot be refreshed — say so instead of returning quietly,
+// and never re-mark a TERMINAL run as working.
+func TestOgateCov_ApprovalStatusExpiryEdges(t *testing.T) {
+	fx := newOgateCovFX(t)
+	ctx := context.Background()
+	run := fx.run("ogc-expiry", "mA", "")
+
+	stale := func(id string) *model.Approval {
+		a := &model.Approval{ID: id, RunID: run.ID, InvokerID: "u-alice",
+			Summary: "s", State: model.ApprovalPending, Deadline: fx.now.Add(-time.Minute)}
+		if err := fx.store.PutApproval(ctx, a); err != nil {
+			t.Fatalf("put %s: %v", id, err)
+		}
+		return a
+	}
+
+	// Run read fails after the settle.
+	a := stale("ap-noread")
+	fx.store.getRunErr = errors.New("ogc: run gone")
+	got, err := fx.orch.ApprovalStatus(ctx, run.ID, a.ID)
+	if err != nil || got.State != model.ApprovalExpired {
+		t.Fatalf("expiry with unreadable run: %+v %v", got, err)
+	}
+	fx.store.getRunErr = nil
+
+	// A TERMINAL run keeps its outcome: no ⚙️ re-mark from a late poll.
+	done := *run
+	done.State = model.RunStateCompleted
+	if err := fx.store.fakeRunStore.UpdateRun(ctx, &done, model.RunStateRunning); err != nil {
+		t.Fatalf("terminalize: %v", err)
+	}
+	fx.msgs.reactions = nil
+	b := stale("ap-terminal")
+	if got, err := fx.orch.ApprovalStatus(ctx, run.ID, b.ID); err != nil || got.State != model.ApprovalExpired {
+		t.Fatalf("expiry on a terminal run: %+v %v", got, err)
+	}
+	for _, s := range fx.msgs.reactions {
+		if s == service.StateEmojiWorking {
+			t.Fatal("a terminal run must not be re-marked as working")
+		}
+	}
+}
+
+// ---------------------------------------------------------------- run reads
+
+// Artifacts and thread timelines are access-checked in the ORCHESTRATOR, so
+// every reader inherits the rule instead of each handler re-implementing it.
+func TestOgateCov_AccessCheckedReads(t *testing.T) {
+	fx := newOgateCovFX(t)
+	ctx := context.Background()
+	run := fx.run("ogc-arts", "mA", "root-a")
+	if err := fx.store.PutArtifact(ctx, &model.Artifact{ID: "art-1", RunID: run.ID, Title: "doc"}); err != nil {
+		t.Fatalf("put artifact: %v", err)
+	}
+
+	// The invoker always.
+	if _, arts, err := fx.orch.ArtifactsForCaller(ctx, "u-alice", run.ID); err != nil || len(arts) != 1 {
+		t.Fatalf("invoker read: %d %v", len(arts), err)
+	}
+	// Artifacts keep the MEMBER rule: the agent publishes them INTO the
+	// conversation, so a member of the parent reads them…
+	if _, arts, err := fx.orch.ArtifactsForCaller(ctx, "u-bob", run.ID); err != nil || len(arts) != 1 {
+		t.Fatalf("member artifact read: %d %v", len(arts), err)
+	}
+	// …while a non-member is refused.
+	fx.msgs.checkAccessErr = errors.New("ogc: not a member")
+	if _, _, err := fx.orch.ArtifactsForCaller(ctx, "u-bob", run.ID); !errors.Is(err, ErrNoRunAccess) {
+		t.Fatalf("non-member artifact read: want ErrNoRunAccess, got %v", err)
+	}
+	fx.msgs.checkAccessErr = nil
+	// LOGS are invoker-only: even a member of the parent is refused — the
+	// timeline carries the invoker's DM reads, search hits and memory.
+	if _, _, _, err := fx.orch.Timeline(ctx, "u-bob", run.ID); !errors.Is(err, ErrNoRunAccess) {
+		t.Fatalf("member timeline read must be refused: want ErrNoRunAccess, got %v", err)
+	}
+	// The thread view: a member who invoked nothing in the thread gets 403
+	// (the chips are visible, so "not yours" beats a broken-looking 404)…
+	if _, _, _, err := fx.orch.ThreadTimeline(ctx, "u-bob", run.ParentID, "root-a"); !errors.Is(err, ErrNoRunAccess) {
+		t.Fatalf("non-invoker thread read: want ErrNoRunAccess, got %v", err)
+	}
+	// …while the invoker sees exactly their own runs.
+	if runs, _, _, err := fx.orch.ThreadTimeline(ctx, "u-alice", run.ParentID, "root-a"); err != nil || len(runs) != 1 || runs[0].InvokerID != "u-alice" {
+		t.Fatalf("invoker thread read: %d %v", len(runs), err)
+	}
+	// Stopping keeps the wider member rule — it's their channel being flooded.
+	if got, err := fx.orch.RunForParentMember(ctx, "u-bob", run.ID); err != nil || got.ID != run.ID {
+		t.Fatalf("member stop access: %v", err)
+	}
+	if got, err := fx.orch.RunForParentMember(ctx, "u-alice", run.ID); err != nil || got.ID != run.ID {
+		t.Fatalf("invoker stop access: %v", err)
+	}
+	fx.msgs.checkAccessErr = errors.New("ogc: not a member")
+	if _, err := fx.orch.RunForParentMember(ctx, "u-bob", run.ID); !errors.Is(err, ErrNoRunAccess) {
+		t.Fatalf("non-member stop: want ErrNoRunAccess, got %v", err)
+	}
+	if _, err := fx.orch.RunForParentMember(ctx, "u-bob", "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown run stop: %v", err)
+	}
+	fx.msgs.checkAccessErr = nil
+
+	// Unknown run, and an artifact-listing failure.
+	if _, _, err := fx.orch.ArtifactsForCaller(ctx, "u-alice", "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown run: %v", err)
+	}
+	fx.store.listArtifactsErr = errors.New("ogc: artifacts down")
+	if _, _, err := fx.orch.ArtifactsForCaller(ctx, "u-alice", run.ID); !errors.Is(err, fx.store.listArtifactsErr) {
+		t.Fatalf("listing failure should surface: %v", err)
+	}
+	fx.store.listArtifactsErr = nil
+}
+
+// A saturated per-parent page is LOGGED, never silently truncated — the
+// drawer's display layers read a bounded page, and the one place that needs
+// completeness (StopThread) reads the ACTIVE_RUNS index instead.
+func TestOgateCov_ThreadRunsPageSaturation(t *testing.T) {
+	fx := newOgateCovFX(t)
+	ctx := context.Background()
+	for i := 0; i < threadRunPage+2; i++ {
+		fx.run("ogc-page-"+strings.Repeat("x", i%3)+string(rune('a'+i%26))+string(rune('0'+i/26)), "mS", "root-s")
+	}
+	got := fx.orch.threadRuns(ctx, "ogc-chan", "root-s")
+	if len(got) > threadRunPage {
+		t.Fatalf("bounded page returned %d runs", len(got))
+	}
+}
+
+// ------------------------------------------------------------ runner API
+
+// Events/Complete/Fail bind the run to the AUTHENTICATED owner: a
+// body-supplied runnerID is not proof of anything on its own.
+func TestOrchCov_RunnerCallsBindTheOwner(t *testing.T) {
+	fx := newOrchFixture(t)
+	ctx := context.Background()
+	run := fx.startRun(t)
+	fx.claim(t)
+
+	// Someone else's token cannot touch this run, and the run's existence is
+	// not confirmed either.
+	if _, _, err := fx.orch.ReportEvents(ctx, "u-eve", "r1", run.ID, []RunEventInput{{Seq: 1, Type: "turn"}}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("foreign owner events: want ErrNotFound, got %v", err)
+	}
+	if err := fx.orch.CompleteRun(ctx, "u-eve", "r1", run.ID, "mine now", nil); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("foreign owner complete: want ErrNotFound, got %v", err)
+	}
+	if err := fx.orch.FailRun(ctx, "u-eve", "r1", run.ID, "boom"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("foreign owner fail: want ErrNotFound, got %v", err)
+	}
+	if err := fx.orch.FailRun(ctx, "", "r1", run.ID, "boom"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("empty owner: want ErrNotFound, got %v", err)
+	}
+	// The run is untouched.
+	got, _ := fx.runs.GetRun(ctx, run.ID)
+	if got.State.Terminal() {
+		t.Fatalf("a foreign call terminated the run: %s", got.State)
+	}
+	// The real owner still works.
+	if err := fx.orch.CompleteRun(ctx, "u-alice", "r1", run.ID, "done", nil); err != nil {
+		t.Fatalf("owner complete: %v", err)
+	}
+}
+
+// Spend is counted ONCE per runner sequence, and out-of-range sequences are
+// refused at ingest instead of colliding with the reserved lifecycle seqs
+// (where AppendRunEvent reports the collision as idempotent success).
+func TestOrchCov_SpendIdempotencyAndSeqValidation(t *testing.T) {
+	fx := newOrchFixture(t)
+	ctx := context.Background()
+	run := fx.startRun(t)
+	fx.claim(t)
+
+	batch := []RunEventInput{{Seq: 1, Type: "turn"}, {Seq: 2, Type: "usage", Payload: map[string]any{"inputTokens": 10}}}
+	if _, _, err := fx.orch.ReportEvents(ctx, "u-alice", "r1", run.ID, batch); err != nil {
+		t.Fatalf("first batch: %v", err)
+	}
+	after, _ := fx.runs.GetRun(ctx, run.ID)
+	if after.Spend.Turns != 1 || after.Spend.InputTokens != 10 || after.LastRunnerSeq != 2 {
+		t.Fatalf("first batch ledger: %+v seq=%d", after.Spend, after.LastRunnerSeq)
+	}
+
+	// The SAME batch again (a retry after a lost response) adds nothing.
+	if _, _, err := fx.orch.ReportEvents(ctx, "u-alice", "r1", run.ID, batch); err != nil {
+		t.Fatalf("retried batch: %v", err)
+	}
+	retried, _ := fx.runs.GetRun(ctx, run.ID)
+	if retried.Spend.Turns != 1 || retried.Spend.InputTokens != 10 {
+		t.Fatalf("retry double-counted: %+v", retried.Spend)
+	}
+
+	// Out-of-range sequences are dropped, and count for nothing.
+	bad := []RunEventInput{
+		{Seq: 0, Type: "turn"},
+		{Seq: -3, Type: "turn"},
+		{Seq: maxRunnerSeq + 1, Type: "turn"},
+	}
+	if _, _, err := fx.orch.ReportEvents(ctx, "u-alice", "r1", run.ID, bad); err != nil {
+		t.Fatalf("bad seqs: %v", err)
+	}
+	unchanged, _ := fx.runs.GetRun(ctx, run.ID)
+	if unchanged.Spend.Turns != 1 {
+		t.Fatalf("out-of-range sequences were counted: %+v", unchanged.Spend)
+	}
+	// The reserved lifecycle rows are intact (nothing overwrote seq 1-3).
+	evts, err := fx.runs.ListRunEvents(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	for _, e := range evts {
+		if e.Seq == 1 && e.Type != "run.invoked" {
+			t.Fatalf("lifecycle seq 1 was overwritten by %q", e.Type)
+		}
+	}
+
+	// A post bump and an event batch cannot revert each other.
+	if _, err := fx.orch.RecordAgentPost(ctx, run.ID); err != nil {
+		t.Fatalf("record post: %v", err)
+	}
+	if _, _, err := fx.orch.ReportEvents(ctx, "u-alice", "r1", run.ID, []RunEventInput{{Seq: 3, Type: "turn"}}); err != nil {
+		t.Fatalf("third batch: %v", err)
+	}
+	both, _ := fx.runs.GetRun(ctx, run.ID)
+	if both.Spend.Posts != 1 || both.Spend.Turns != 2 {
+		t.Fatalf("counters clobbered each other: %+v", both.Spend)
+	}
+}
+
+// A runner event's payload is clipped so a multi-megabyte tool result can't
+// ride the timeline into a failed 400KB item write.
+func TestOrchCov_ClipPayload(t *testing.T) {
+	if got := clipPayload(nil); got != nil {
+		t.Fatalf("nil payload: %+v", got)
+	}
+	big := strings.Repeat("x", maxEventPayloadChars+500)
+	out := clipPayload(map[string]any{"a": big, "b": big, "n": 7})
+	if len([]rune(out["a"].(string))) > maxEventPayloadChars+1 {
+		t.Fatalf("first value not clipped: %d runes", len([]rune(out["a"].(string))))
+	}
+	if out["b"].(string) != "" && len(out["b"].(string)) >= len(big) {
+		t.Fatalf("budget not shared across values: %d", len(out["b"].(string)))
+	}
+	if out["n"] != 7 {
+		t.Fatalf("non-string values must pass through: %+v", out["n"])
+	}
+}
+
+// ------------------------------------------------------------------- tasks
+
+// The workspace pin's liveness is judged against the PIN'S OWNER, not the
+// claimer: checking only the claimer's runners reported every other owner's
+// live pin as dead and stole the checkout.
+func TestTaskCov_PinnedRunnerLiveness(t *testing.T) {
+	fx := newTaskFixture(t)
+	ctx := context.Background()
+
+	task := &model.CodingTask{
+		ID: "t-pin", ChannelID: "chan-general", RequesterID: "u-alice", AgentID: testDevID,
+		State: model.TaskStateInProgress, RunnerID: "r1", RunnerOwnerID: "u-alice",
+	}
+	// u-alice's r1 is live in the fixture → the pin holds against another claimer.
+	if !fx.orch.pinnedRunnerLive(ctx, task, "u-bob") {
+		t.Fatal("a live pin owned by the requester must hold")
+	}
+	// A pin on a runner nobody has registered is dead.
+	task.RunnerID = "r-ghost"
+	if fx.orch.pinnedRunnerLive(ctx, task, "u-bob") {
+		t.Fatal("an unregistered pin must read as dead")
+	}
+	// No recorded owner falls back to the requester.
+	task.RunnerID, task.RunnerOwnerID = "r1", ""
+	if !fx.orch.pinnedRunnerLive(ctx, task, "u-alice") {
+		t.Fatal("the requester fallback must find their own runner")
+	}
+	// An owner-less, requester-less task cannot be judged: hold the pin.
+	orphan := &model.CodingTask{ID: "t-orphan", RunnerID: "r1"}
+	if fx.orch.pinnedRunnerLive(ctx, orphan, "") {
+		t.Fatal("with no owner at all there is nothing to match")
+	}
+}
+
+// A mention inside a task thread only becomes a TASK run for someone entitled
+// to steer: otherwise it is an ordinary chat run, with an ordinary budget and
+// no workspace.
+func TestTaskCov_ImplicitBindRequiresSteerEntitlement(t *testing.T) {
+	fx := newTaskFixture(t)
+	ctx := context.Background()
+	dev, _ := fx.users.GetUser(ctx, testDevID)
+	bob, _ := fx.users.GetUser(ctx, "u-bob")
+	resolved, err := fx.orch.agentSvc.Resolve(ctx, dev, bob.ID)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if err := fx.tasks.CreateTask(ctx, &model.CodingTask{
+		ID: "t-steer", ChannelID: "chan-general", ThreadRootID: "card-1",
+		RequesterID: "u-alice", AgentID: testDevID, State: model.TaskStateInProgress,
+		Steering: model.TaskSteeringRequester,
+	}); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	msg := &model.Message{ID: "m-bob", ParentID: "chan-general", ParentMessageID: "card-1",
+		AuthorID: "u-bob", Body: "@dev push it"}
+
+	// Bob is not the requester and steering is requester-only.
+	run, err := fx.orch.startRun(ctx, invocation{agent: dev, invoker: bob, msg: msg, parentType: service.ParentChannel}, resolved)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if run.Mode == model.RunModeTask || run.TaskID != "" {
+		t.Fatalf("a non-steerer got a task run: mode=%s taskID=%s", run.Mode, run.TaskID)
+	}
+
+	// The requester's own mention DOES bind. Separate task + thread, because
+	// the run above already holds this agent's turn slot in card-1's thread.
+	if err := fx.tasks.CreateTask(ctx, &model.CodingTask{
+		ID: "t-steer-2", ChannelID: "chan-general", ThreadRootID: "card-2",
+		RequesterID: "u-alice", AgentID: testDevID, State: model.TaskStateInProgress,
+		Steering: model.TaskSteeringRequester,
+	}); err != nil {
+		t.Fatalf("create task 2: %v", err)
+	}
+	alice, _ := fx.users.GetUser(ctx, "u-alice")
+	aliceResolved, err := fx.orch.agentSvc.Resolve(ctx, dev, alice.ID)
+	if err != nil {
+		t.Fatalf("resolve alice: %v", err)
+	}
+	aliceMsg := &model.Message{ID: "m-alice", ParentID: "chan-general", ParentMessageID: "card-2",
+		AuthorID: "u-alice", Body: "@dev push it"}
+	bound, err := fx.orch.startRun(ctx, invocation{agent: dev, invoker: alice, msg: aliceMsg, parentType: service.ParentChannel}, aliceResolved)
+	if err != nil {
+		t.Fatalf("start bound: %v", err)
+	}
+	if bound.Mode != model.RunModeTask || bound.TaskID != "t-steer-2" {
+		t.Fatalf("the requester's mention should bind: mode=%s taskID=%s", bound.Mode, bound.TaskID)
+	}
+}
+
+// ------------------------------------------------------- linkify boundaries
+
+// The single-pass mention scan honours the same boundaries the old per-target
+// regex did: an "@" only starts a mention at the start of the body or after a
+// non-word character, and a name must not run into more word characters.
+func TestOrchCov_LinkifyBoundaries(t *testing.T) {
+	fx := newOrchFixture(t)
+	ctx := context.Background()
+	run := fx.startRun(t)
+
+	// At position 0.
+	if got := fx.orch.LinkifyMentions(ctx, run, "@Alice ping"); !strings.HasPrefix(got, "@[u-alice|Alice]") {
+		t.Fatalf("mention at the start of the body: %q", got)
+	}
+	// Name running into more word characters is NOT a mention.
+	if got := fx.orch.LinkifyMentions(ctx, run, "hi @Alice2"); strings.Contains(got, "u-alice") {
+		t.Fatalf("@Alice2 must not match Alice: %q", got)
+	}
+	// "@" preceded by a word character is not a mention start (an email).
+	if got := fx.orch.LinkifyMentions(ctx, run, "mail me at bob@Alice"); strings.Contains(got, "u-alice") {
+		t.Fatalf("an in-word @ must not start a mention: %q", got)
+	}
+	// The editor's own markup is left alone (no double-linkify).
+	already := "@[u-alice|Alice] hi"
+	if got := fx.orch.LinkifyMentions(ctx, run, already); got != already {
+		t.Fatalf("existing markup rewritten: %q", got)
+	}
+	// A bare "@" survives untouched.
+	if got := fx.orch.LinkifyMentions(ctx, run, "e@ and @"); got != "e@ and @" {
+		t.Fatalf("bare @ rewritten: %q", got)
+	}
+}
+
+// --------------------------------------------------------------- claim path
+
+// A run that goes terminal between ClaimRun and the deadline re-base is NOT
+// handed out, and its lease timer and typing ticker are never armed — that
+// combination left a goroutine publishing "the agent is typing" for a dead run.
+func TestOrchCov_ClaimDropsRunTerminalMidClaim(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+	run := fx.start(t, "m1", "")
+
+	ack := model.RunStateAcknowledged
+	fx.runs.failUpdateRun = store.ErrStaleRun
+	fx.runs.failUpdateExpect = &ack
+	as, err := fx.orch.Claim(ctx, "u-alice", "r1", []string{model.HarnessClaude}, 1, 0)
+	fx.runs.failUpdateRun, fx.runs.failUpdateExpect = nil, nil
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if len(as) != 0 {
+		t.Fatalf("a run that went terminal mid-claim was handed out: %+v", as)
+	}
+	if _, armed := fx.orch.typing.Load(run.ID); armed {
+		t.Fatal("typing ticker armed for a dropped claim")
+	}
+	if _, armed := fx.orch.timers.Load(run.ID); armed {
+		t.Fatal("lease timer armed for a dropped claim")
+	}
+}
+
+// The long-poll parks on its own ticker (one timer, reset per tick) and
+// returns empty when the wait budget lapses.
+func TestOrchCov_ClaimPollTicks(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	prev := claimPollInterval
+	claimPollInterval = time.Millisecond
+	t.Cleanup(func() { claimPollInterval = prev })
+
+	// A real clock so the deadline actually passes while the ticker fires.
+	fx.orch.now = time.Now
+	as, err := fx.orch.Claim(context.Background(), "u-nobody", "r1", []string{model.HarnessClaude}, 1, 5*time.Millisecond)
+	if err != nil || len(as) != 0 {
+		t.Fatalf("empty poll: %d %v", len(as), err)
+	}
+}
+
+// -------------------------------------------------------------- reconciler
+
+// A transient run-read failure during a heartbeat is NOT a kill order: only a
+// run that genuinely no longer exists is. One blip used to kill every run the
+// runner had in flight.
+func TestOrchCov_HeartbeatOnlyKillsMissingRuns(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+	run := fx.start(t, "m1", "")
+	fx.claim(t)
+
+	reg := &model.RunnerRegistration{RunnerID: "r1", OwnerID: "u-alice",
+		Harnesses: []model.RunnerHarness{{Name: model.HarnessClaude}}}
+
+	fx.runs.failGetRun = errors.New("orchCov: dynamo blip")
+	kill, err := fx.orch.Heartbeat(ctx, reg, []string{run.ID})
+	fx.runs.failGetRun = nil
+	if err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+	if len(kill) != 0 {
+		t.Fatalf("a transient read failure produced kill orders: %v", kill)
+	}
+
+	// A run that really is gone IS killed.
+	kill, err = fx.orch.Heartbeat(ctx, reg, []string{"run-that-never-existed"})
+	if err != nil || len(kill) != 1 {
+		t.Fatalf("missing run should be killed: %v %v", kill, err)
+	}
+}
+
+// The reconcile tick reads the subscription partition ONCE and hands it to
+// both sweeps; a listing failure skips the tick rather than sweeping with a
+// half-answer.
+func TestOrchCov_ReconcileTickListingFailure(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	prev := reconcileInterval
+	reconcileInterval = 2 * time.Millisecond
+	t.Cleanup(func() { reconcileInterval = prev })
+
+	fx.dir.failListAllSubs = errOrchCov
+	fx.dir.listAllSubsCalls = make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fx.orch.StartReconciler(ctx)
+	// The second listing only happens once the first tick has gone through
+	// the failure arm and the loop kept running.
+	<-fx.dir.listAllSubsCalls
+	<-fx.dir.listAllSubsCalls
+}
+
+// ------------------------------------------------------------ agent service
+
+// Creation is two writes; the second can fail. A template with no agent user
+// is HALF-created, so creating again finishes it — the guard used to make
+// every retry "already exists" while no mentionable agent existed.
+func TestAgentCov_CreateAgentConvergenceEdges(t *testing.T) {
+	ctx := context.Background()
+	svc, _, users := agentCovNewSvc()
+	if _, err := svc.CreateAgent(ctx, CreateAgentInput{Slug: "zz", Persona: "p"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// A user-lookup failure while deciding half-created-ness surfaces rather
+	// than being read as "not built yet".
+	users.errGet = errors.New("agentCov: users down")
+	if _, err := svc.CreateAgent(ctx, CreateAgentInput{Slug: "zz", Persona: "p"}); !errors.Is(err, users.errGet) {
+		t.Fatalf("user lookup failure should surface, got %v", err)
+	}
+	users.errGet = nil
+}
+
+// A rename that cannot read the agent user leaves the @name people see out of
+// sync with the template, so it reports instead of returning success.
+func TestAgentCov_RenameAgentUserLookupFailure(t *testing.T) {
+	ctx := context.Background()
+	svc, _, users := agentCovNewSvc()
+	if _, err := svc.CreateAgent(ctx, CreateAgentInput{Slug: "rn", Persona: "p"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	users.errGet = errors.New("agentCov: users down")
+	if _, err := svc.RenameAgent(ctx, "rn", "Renamed"); err == nil || !strings.Contains(err.Error(), "rename user lookup") {
+		t.Fatalf("want a rename-user-lookup error, got %v", err)
+	}
+	users.errGet = nil
+}
+
+// Watcher rows written before the creator index existed answer nothing on the
+// indexed query, so the first read falls back to the full listing ONCE and
+// rewrites what it finds — the index answers every later call.
+func TestAgentCov_SubscriptionCreatorIndexBackfill(t *testing.T) {
+	ctx := context.Background()
+	svc, dir, users := agentCovNewSvc()
+	users.users[AgentUserID("bf")] = &model.User{
+		ID: AgentUserID("bf"), Kind: model.UserKindAgent,
+		AgentConfig: &model.AgentConfig{TemplateSlug: "bf"},
+	}
+	if _, err := svc.CreateAgent(ctx, CreateAgentInput{Slug: "bf", Persona: "p"}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	// The fake's indexed listing is filtered, so simulate the legacy state by
+	// making it answer nothing once.
+	dir.hideCreatorIndex = true
+	sub := &model.AgentSubscription{
+		ID: "sub-legacy", AgentID: AgentUserID("bf"), CreatorID: "u-1",
+		ParentID: "ch-1", ParentType: service.ParentChannel, CreatedAt: time.Now(),
+	}
+	if err := dir.fakeAgentDir.PutAgentSubscription(ctx, sub); err != nil {
+		t.Fatalf("seed sub: %v", err)
+	}
+	// Someone else's watcher, and one of ours for a different agent: the
+	// fallback scan must skip both.
+	for _, other := range []*model.AgentSubscription{
+		{ID: "sub-theirs", AgentID: AgentUserID("bf"), CreatorID: "u-2", ParentID: "ch-1", ParentType: service.ParentChannel},
+		{ID: "sub-other-agent", AgentID: "ag-else", CreatorID: "u-1", ParentID: "ch-1", ParentType: service.ParentChannel},
+	} {
+		if err := dir.fakeAgentDir.PutAgentSubscription(ctx, other); err != nil {
+			t.Fatalf("seed other sub: %v", err)
+		}
+	}
+	got, err := svc.ListSubscriptionsFor(ctx, "u-1", "bf")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("fallback listing: %d %v", len(got), err)
+	}
+
+	// The backfill write failing is logged, not fatal.
+	dir.errs["PutAgentSubscription"] = errors.New("agentCov: write down")
+	if got, err := svc.ListSubscriptionsFor(ctx, "u-1", "bf"); err != nil || len(got) != 1 {
+		t.Fatalf("fallback with a failing backfill: %d %v", len(got), err)
+	}
+	delete(dir.errs, "PutAgentSubscription")
+
+	// A failing full listing surfaces.
+	dir.errs["ListAllSubscriptions"] = errors.New("agentCov: list down")
+	if _, err := svc.ListSubscriptionsFor(ctx, "u-1", "bf"); !errors.Is(err, dir.errs["ListAllSubscriptions"]) {
+		t.Fatalf("listing failure should surface, got %v", err)
+	}
+	delete(dir.errs, "ListAllSubscriptions")
+	dir.hideCreatorIndex = false
+}
+
+// A real store error on the task-thread lookup is LOGGED (it silently dropped
+// steering); "no task on this thread" stays quiet.
+func TestTaskCov_DispatchTaskThreadLookupError(t *testing.T) {
+	fx := newTaskFixture(t)
+	ctx := context.Background()
+	author, _ := fx.users.GetUser(ctx, "u-alice")
+
+	fx.tasks.getByThreadErr = errors.New("taskCov: dynamo down")
+	invoked := map[string]bool{}
+	fx.orch.dispatchTask(ctx, &model.Message{ID: "m1", ParentID: "chan-general",
+		ParentMessageID: "root-1", AuthorID: "u-alice", Body: "steer"}, service.ParentChannel, author, invoked)
+	fx.tasks.getByThreadErr = nil
+	if len(invoked) != 0 {
+		t.Fatalf("a store error must not dispatch: %v", invoked)
+	}
+}
+
+// A live-runner lookup failure counts the pin as LIVE: an outage must not be
+// grounds for stealing a workspace.
+func TestTaskCov_PinLivenessLookupFailureHoldsThePin(t *testing.T) {
+	fx := newTaskFixture(t)
+	ctx := context.Background()
+	fx.dir.failListRunners = errors.New("taskCov: runners down")
+	task := &model.CodingTask{ID: "t-x", RequesterID: "u-alice", RunnerID: "r1", RunnerOwnerID: "u-alice"}
+	if !fx.orch.pinnedRunnerLive(ctx, task, "u-bob") {
+		t.Fatal("an unreadable runner list must hold the pin")
+	}
+	fx.dir.failListRunners = nil
+}
+
+// ------------------------------------------------------- coding-task service
+
+// The one-active-task rule is a SCAN, so two concurrent creates both pass it.
+// The loser is decided by ULID order once the rows are durable, and it
+// retracts itself completely — the project no longer ends up with two active
+// tasks and nothing to repair it.
+func TestCtaskCov_ConcurrentCreateYieldsToTheOlderTask(t *testing.T) {
+	fx := newCtaskCovFixture(t)
+	ctx := context.Background()
+	run := fx.intakeRun(t, testDevID, "cc-race")
+	chID := ProjectChannelID("portal", "u-alice")
+	if err := fx.tasks.CreateProject(ctx, &model.CodingProject{
+		Key: "portal", Name: "Portal",
+		Repos: []model.ProjectRepo{{Path: "g/r", Role: model.RepoRoleBackend}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A rival task with a LOWER id appears between our scan and our write —
+	// modelled by seeding it directly (the scan already ran when Create reads
+	// the channel a second time).
+	fx.store.afterCreate = func() {
+		_ = fx.tasks.CreateTask(ctx, &model.CodingTask{
+			ID: "0-rival", ProjectKey: "portal", ProjectName: "Portal", Title: "Rival", Goal: "g",
+			Kind: model.TaskKindBug, State: model.TaskStateInProgress, ChannelID: chID,
+			ThreadRootID: "card-rival", RequesterID: "u-alice", AgentID: testDevID,
+			Repos: []model.TaskRepo{{Path: "g/r", Role: model.RepoRoleBackend}},
+		})
+		fx.store.afterCreate = nil
+	}
+	_, err := fx.svc.Create(ctx, run, CreateTaskInput{Project: "Portal", Title: "Mine", Goal: "g"})
+	if !errors.Is(err, ErrTaskActive) {
+		t.Fatalf("the losing racer must yield: %v", err)
+	}
+	// It left nothing behind: only the rival is active.
+	tasks, err := fx.tasks.ListTasksByChannel(ctx, chID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	active := 0
+	for _, tk := range tasks {
+		if !tk.State.Terminal() {
+			active++
+		}
+	}
+	if active != 1 {
+		t.Fatalf("want exactly the rival active, got %d of %d", active, len(tasks))
+	}
+	// And the card it had already posted says what happened.
+	retracted := false
+	for _, body := range fx.tmsgs.rewrites {
+		if strings.Contains(body, "Another task is already active") {
+			retracted = true
+		}
+	}
+	if !retracted {
+		t.Fatalf("card not retracted: %+v", fx.tmsgs.rewrites)
+	}
+}
+
+// The losing racer still yields even when its own row cannot be removed.
+func TestCtaskCov_SettleTaskRaceDeleteFailureStillYields(t *testing.T) {
+	fx := newCtaskCovFixture(t)
+	ctx := context.Background()
+	mine := fx.seedTask(model.TaskStateInProgress)
+	rival := *mine
+	rival.ID = "0-older"
+	rival.ThreadRootID = "card-older"
+	if err := fx.tasks.CreateTask(ctx, &rival); err != nil {
+		t.Fatalf("seed rival: %v", err)
+	}
+	fx.store.deleteTaskErr = errors.New("ctaskCov: delete down")
+	err := fx.svc.settleTaskRace(ctx, mine)
+	fx.store.deleteTaskErr = nil
+	if !errors.Is(err, ErrTaskActive) {
+		t.Fatalf("the loser must still yield: %v", err)
+	}
+}
+
+// A listing blip during the race settle is not a reason to fail a create that
+// already passed the pre-write scan.
+func TestCtaskCov_SettleTaskRaceListingFailureIsTolerated(t *testing.T) {
+	fx := newCtaskCovFixture(t)
+	ctx := context.Background()
+	task := fx.seedTask(model.TaskStateInProgress)
+	fx.store.listByChannelErr = errors.New("ctaskCov: list down")
+	if err := fx.svc.settleTaskRace(ctx, task); err != nil {
+		t.Fatalf("a read blip must not fail the create: %v", err)
+	}
+	fx.store.listByChannelErr = nil
+}
+
+// retractCard is a no-op without a thread root, and a rewrite failure is
+// logged rather than fatal.
+func TestCtaskCov_RetractCardArms(t *testing.T) {
+	fx := newCtaskCovFixture(t)
+	ctx := context.Background()
+	fx.svc.retractCard(ctx, &model.CodingTask{ID: "t-nocard"}, "note")
+
+	task := fx.seedTask(model.TaskStateInProgress)
+	fx.msgs2.rewriteErr = errors.New("ctaskCov: rewrite down")
+	fx.svc.retractCard(ctx, task, "note")
+	fx.msgs2.rewriteErr = nil
+}
+
+// ----------------------------------------------------------- outbound URLs
+
+// The dev relaxation is a package-level switch wired from config at boot.
+func TestConnCov_AllowPrivateConnectorTargetsSwitch(t *testing.T) {
+	prev := allowPrivateConnectorTargets
+	t.Cleanup(func() { allowPrivateConnectorTargets = prev })
+	AllowPrivateConnectorTargets(false)
+	if err := validateOutboundURL("http://127.0.0.1/x"); err == nil {
+		t.Fatal("strict mode should refuse loopback http")
+	}
+	AllowPrivateConnectorTargets(true)
+	if err := validateOutboundURL("http://127.0.0.1/x"); err != nil {
+		t.Fatalf("dev mode should allow it: %v", err)
+	}
+}
+
+// Ingest refuses an over-long slug and any endpoint the server would later
+// fetch WITH a user credential attached.
+func TestConnCov_IngestRejectsBadTargets(t *testing.T) {
+	ctx := context.Background()
+	svc := NewConnectorService(newMemConnectorStore())
+	prev := allowPrivateConnectorTargets
+	allowPrivateConnectorTargets = false
+	t.Cleanup(func() { allowPrivateConnectorTargets = prev })
+
+	base := IngestInput{
+		Slug: "svc", Title: "T", BaseURL: "https://api.example.com",
+		AuthKind: model.ConnectorAuthPaste,
+		Files:    []model.ConnectorFile{{Name: "a.yaml", Content: "x"}},
+	}
+	bad := base
+	bad.VerifyURL = "http://10.0.0.1/me"
+	if _, err := svc.Ingest(ctx, "admin", bad); !errors.Is(err, ErrConnectorInvalid) ||
+		!strings.Contains(err.Error(), "verifyURL") {
+		t.Fatalf("private verifyURL should be refused: %v", err)
+	}
+
+	backslash := base
+	backslash.Files = []model.ConnectorFile{{Name: `dir\file.yaml`, Content: "x"}}
+	if _, err := svc.Ingest(ctx, "admin", backslash); !errors.Is(err, ErrConnectorInvalid) ||
+		!strings.Contains(err.Error(), "bad file name") {
+		t.Fatalf("a backslash path should be refused: %v", err)
+	}
+
+	longName := base
+	longName.Files = []model.ConnectorFile{{Name: strings.Repeat("n", model.ConnectorFileNameMaxLen+1), Content: "x"}}
+	if _, err := svc.Ingest(ctx, "admin", longName); !errors.Is(err, ErrConnectorInvalid) {
+		t.Fatalf("an over-long file name should be refused: %v", err)
+	}
+}
+
+// The fallback catalog emitter follows the provider's rules: id is the only
+// required field, so an endpoint without one contributes no row (and no route
+// prefix) rather than a malformed line.
+func TestConnCov_CatalogSkipsEndpointsWithoutAnID(t *testing.T) {
+	ctx := context.Background()
+	prev := allowPrivateConnectorTargets
+	allowPrivateConnectorTargets = true
+	t.Cleanup(func() { allowPrivateConnectorTargets = prev })
+
+	ms := newMemConnectorStore()
+	svc := NewConnectorService(ms)
+	in := IngestInput{
+		Slug: "cat", Title: "T", BaseURL: "https://api.example.com",
+		AuthKind: model.ConnectorAuthPaste,
+		Files: []model.ConnectorFile{
+			{Name: "index.yml", Content: "services:\n  - file: svc.yaml\n    service: svc\n    endpoints: 2\n"},
+			{Name: "svc.yaml", Content: "endpoints:\n" +
+				"  - method: GET\n    path: /v1/nameless\n    summary: no id\n" +
+				"  - id: svc.list\n    method: GET\n    path: /v1/list\n    summary: List\n"},
+		},
+	}
+	c, err := svc.Ingest(ctx, "admin", in)
+	if err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	files, err := ms.GetConnectorFiles(ctx, "cat")
+	if err != nil {
+		t.Fatalf("files: %v", err)
+	}
+	var catalog string
+	for _, f := range files {
+		if f.Name == "_catalog.tsv" {
+			catalog = f.Content
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(catalog), "\n")
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], "svc.list\t") {
+		t.Fatalf("catalog = %q, want just the identified endpoint", catalog)
+	}
+	if len(c.Services) != 1 || len(c.Services[0].RoutePrefixes) != 1 || c.Services[0].RoutePrefixes[0] != "svc" {
+		t.Fatalf("route prefixes = %+v", c.Services)
+	}
+}
+
+// InstalledIndex reads the registry ONCE instead of a GetConnector per
+// install, and reports a registry failure rather than a partial index.
+func TestConnCov_InstalledIndexBatchedRegistryRead(t *testing.T) {
+	ctx := context.Background()
+	prev := allowPrivateConnectorTargets
+	allowPrivateConnectorTargets = true
+	t.Cleanup(func() { allowPrivateConnectorTargets = prev })
+
+	ms := newMemConnectorStore()
+	svc := NewConnectorService(ms)
+	if got, err := svc.InstalledIndex(ctx, "u-none"); err != nil || got != nil {
+		t.Fatalf("no installs: %+v %v", got, err)
+	}
+	seedConnector(t, svc, "svc-a", model.ConnectorAuthPaste, "", "")
+	if _, err := svc.Install(ctx, "u-1", "svc-a", InstallInput{Token: "t"}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if err := ms.PutInstall(ctx, &model.ConnectorInstall{UserID: "u-1", ConnectorSlug: "ghost", Token: "t"}); err != nil {
+		t.Fatalf("dangling install: %v", err)
+	}
+	es := newConnCovErrStore()
+	if err := es.PutInstall(ctx, &model.ConnectorInstall{UserID: "u-1", ConnectorSlug: "svc-a", Token: "t"}); err != nil {
+		t.Fatalf("seed install: %v", err)
+	}
+	es.listConnectorsErr = errors.New("connCov: registry down")
+	if _, err := NewConnectorService(es).InstalledIndex(ctx, "u-1"); !errors.Is(err, es.listConnectorsErr) {
+		t.Fatalf("a registry failure must surface: %v", err)
+	}
+
+	idx, err := svc.InstalledIndex(ctx, "u-1")
+	if err != nil || len(idx) != 1 || idx[0].Slug != "svc-a" {
+		t.Fatalf("index = %+v err=%v (dangling install must be skipped)", idx, err)
+	}
+	if idx[0].AgentUse != model.ConnectorAgentUseAsk {
+		t.Fatalf("empty policy should default to ask: %+v", idx[0])
+	}
+}
+
+// The typing ticker must stop when the agent POSTS, not when the run finally
+// goes terminal. It used to run until terminal, so a run that answered and
+// then spent its remaining turns winding down kept re-publishing "gg is
+// typing…" the whole time — and every frame bought another 6s of client-side
+// expiry after the last one, which is why the indicator outlived the reply.
+func TestOrchCov_TypingStopsWhenAgentPosts(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+	run := fx.start(t, "m1", "")
+
+	if _, err := fx.orch.Claim(ctx, "u-alice", "r1", []string{model.HarnessClaude}, 1, 0); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, armed := fx.orch.typing.Load(run.ID); !armed {
+		t.Fatal("claiming a run must arm the typing ticker")
+	}
+
+	if _, err := fx.orch.RecordAgentPost(ctx, run.ID); err != nil {
+		t.Fatalf("record post: %v", err)
+	}
+	if _, armed := fx.orch.typing.Load(run.ID); armed {
+		t.Fatal("typing ticker still armed after the agent posted")
+	}
+
+	// The run is still live — stopping the animation must not have closed it.
+	if got, err := fx.runs.GetRun(ctx, run.ID); err != nil || got.State.Terminal() {
+		t.Fatalf("post must not terminate the run: state=%v err=%v", got.State, err)
+	}
+
+	// A second post is harmless: once it has spoken, "still working" belongs
+	// to the activity chip, so the ticker stays off rather than re-arming.
+	if _, err := fx.orch.RecordAgentPost(ctx, run.ID); err != nil {
+		t.Fatalf("second post: %v", err)
+	}
+	if _, armed := fx.orch.typing.Load(run.ID); armed {
+		t.Fatal("typing ticker re-armed by a second post")
+	}
+}
+
+// A ticker armed by an instance that does NOT go on to finish the run must
+// still stop. The ticker is per-process memory; a run is not. recoverRuns
+// arms one on every instance that boots while a run is live, and the terminal
+// transition only stops the ticker where it happened — so on prd (two tasks)
+// the other instance published "… is typing" indefinitely, outliving the
+// reply by hours. The ticker now re-checks the store, so any instance heals
+// itself within one tick.
+func TestOrchCov_TypingTickerStopsWhenAnotherInstanceFinishedTheRun(t *testing.T) {
+	old := typingTickInterval
+	typingTickInterval = 5 * time.Millisecond
+	defer func() { typingTickInterval = old }()
+
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+	run := fx.start(t, "m1", "")
+	if _, err := fx.orch.Claim(ctx, "u-alice", "r1", []string{model.HarnessClaude}, 1, 0); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, armed := fx.orch.typing.Load(run.ID); !armed {
+		t.Fatal("claim must arm the typing ticker")
+	}
+
+	// Terminal in the STORE only — as if the other instance completed it.
+	// Nothing in this process is told, which is the whole problem.
+	stored, err := fx.runs.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if err := fx.runs.UpdateRun(ctx, stored, stored.State); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+	stored.State = model.RunStateCompleted
+	if err := fx.runs.UpdateRun(ctx, stored, model.RunStateAcknowledged); err != nil {
+		t.Fatalf("mark completed elsewhere: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, armed := fx.orch.typing.Load(run.ID); !armed {
+			return // healed itself
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("typing ticker still armed after the run went terminal elsewhere")
+}
+
+// A thread-turn slot left behind by an instance that never saw the run finish
+// must not wedge that (thread, agent) forever.
+//
+// The slot is per-PROCESS memory; a run's life is not. The runner's calls are
+// load balanced, so the terminal transition — and afterTerminal, which frees
+// the slot — can land on a different instance than the one that took it. That
+// instance holds no runThreadKey entry, so the slot was never released, and
+// every later message routed there returned ErrAgentBusy. The dispatcher
+// treats ErrAgentBusy as "already invoked", so the reply was not merely
+// delayed: the agent answered a couple of times and then went silent for
+// good, with nothing shown to the user.
+func TestOrchCov_ThreadSlotLeftByAnotherInstanceDoesNotWedgeTheThread(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+
+	// A finished run still holding the slot: exactly the state an instance is
+	// left in when the completion was handled elsewhere.
+	done := fx.start(t, "m1", "")
+	stored, err := fx.runs.GetRun(ctx, done.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if err := fx.runs.UpdateRun(ctx, stored, stored.State); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+	stored.State = model.RunStateCompleted
+	if err := fx.runs.UpdateRun(ctx, stored, model.RunStateQueued); err != nil {
+		t.Fatalf("finish it elsewhere: %v", err)
+	}
+	key := fx.orch.threadAgentKey(stored)
+	fx.orch.threadActive.Store(key, done.ID)
+	fx.orch.runThreadKey.Delete(done.ID) // this instance never knew about it
+
+	// The next turn in the same thread must go through.
+	next := fx.start(t, "m1", "")
+	if next == nil {
+		t.Fatal("a stale slot from another instance blocked the next turn")
+	}
+	if held, _ := fx.orch.threadActive.Load(key); held != next.ID {
+		t.Fatalf("slot holder = %v, want the new run %s", held, next.ID)
+	}
+
+	// And a slot held by a run that is genuinely LIVE still refuses — the
+	// dedup must survive; a mention storm should not stack runs.
+	live := fx.start(t, "m2", "")
+	liveKey := fx.orch.threadAgentKey(live)
+	if held, _ := fx.orch.threadActive.Load(liveKey); held != live.ID {
+		t.Fatalf("live run should hold its own slot, got %v", held)
+	}
+	if !fx.orch.threadSlotStillLive(ctx, live.ID) {
+		t.Fatal("a queued, non-terminal run must read as still holding the slot")
+	}
+}
+
+// A message sent while the agent is still working must be ANSWERED later, not
+// dropped. The in-flight run's prompt was assembled before this message
+// existed, so its reply cannot address it — yet ErrAgentBusy was treated as
+// "already invoked" and the message vanished with no reply and no notice. In a
+// DM with an agent that reads as the agent answering the first thing you said
+// and then ignoring you.
+func TestOrchCov_MessageSentWhileAgentBusyIsQueuedNotDropped(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+
+	first := fx.start(t, "m1", "")
+	key := fx.orch.threadAgentKey(first)
+	if _, held := fx.orch.threadActive.Load(key); !held {
+		t.Fatal("the live run should hold its thread slot")
+	}
+
+	// A second message from the SAME person, same thread, while that run lives.
+	second := &model.Message{
+		ID: "m2", ParentID: first.ParentID, ParentMessageID: first.MessageID,
+		AuthorID: first.InvokerID, Body: "@[" + first.AgentID + "|gg] and this too",
+	}
+	fx.orch.OnMessage(ctx, second, first.ParentType, nil)
+
+	if _, queued := fx.orch.deferredTurns.Load(key); !queued {
+		t.Fatal("a message arriving mid-turn was dropped instead of queued")
+	}
+}
+
+// threadSlotStillLive decides whether a busy verdict is real. Its guard arms
+// matter: a slot pointing at a run nobody can read must NOT keep refusing
+// turns forever — one extra turn beats a permanently mute agent.
+func TestOrchCov_ThreadSlotStillLive_Guards(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+
+	if fx.orch.threadSlotStillLive(ctx, "") {
+		t.Fatal("an empty slot value must not read as live")
+	}
+	// (Slot holders are typed run ids now — the coordinator API takes and
+	// returns strings, so "a non-string slot value" can no longer occur.)
+	if fx.orch.threadSlotStillLive(ctx, "no-such-run") {
+		t.Fatal("a run that cannot be found must not read as live")
+	}
+
+	// A store that errors is the same verdict: unreadable means "stop
+	// refusing", never "refuse forever".
+	live := fx.start(t, "m1", "")
+	fx.runs.failGetRun = errOrchCov
+	if fx.orch.threadSlotStillLive(ctx, live.ID) {
+		t.Fatal("an unreadable run must not read as live")
+	}
+	fx.runs.failGetRun = nil
+	if !fx.orch.threadSlotStillLive(ctx, live.ID) {
+		t.Fatal("a live run must read as live")
+	}
+}
+
+// ---------------------------------------------------------------- reported
+// The two symptoms as they were actually reported, end to end, rather than
+// the mechanisms underneath them.
+
+// "Agents don't reply on all the replies in a DM thread": several turns in one
+// DM thread, each completing before the next message. EVERY human reply must
+// produce a run. It replied twice and then went silent for good, because the
+// thread-turn slot leaked and ErrAgentBusy reads as "already invoked".
+func TestOrchCov_DMThreadAnswersEveryReply(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+
+	// A 1:1 DM whose only other participant is gg → every message is for gg,
+	// no @mention needed, thread replies included.
+	dm1 := &model.Conversation{
+		ID: "dm1", Type: model.ConversationTypeDM,
+		ParticipantIDs: []string{"u-alice", testGGID},
+	}
+
+	root := "m-root"
+	queuedFor := func(i int) int {
+		ids, err := fx.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 50)
+		if err != nil {
+			t.Fatalf("turn %d: list queued: %v", i, err)
+		}
+		return len(ids)
+	}
+
+	// Six exchanges: send, let the run finish, send again.
+	for i := 1; i <= 6; i++ {
+		before := queuedFor(i)
+		msg := &model.Message{
+			ID: fmt.Sprintf("m%d", i), ParentID: "dm1", ParentMessageID: root,
+			AuthorID: "u-alice", Body: fmt.Sprintf("question %d", i),
+		}
+		fx.orch.OnMessage(ctx, msg, service.ParentConversation, dm1)
+
+		after := queuedFor(i)
+		if after != before+1 {
+			t.Fatalf("turn %d: no run started for a DM thread reply (queued %d → %d)", i, before, after)
+		}
+
+		// Finish it, exactly as a runner completing the turn would.
+		ids, _ := fx.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 50)
+		run, err := fx.runs.GetRun(ctx, ids[len(ids)-1])
+		if err != nil {
+			t.Fatalf("turn %d: get run: %v", i, err)
+		}
+		if err := fx.runs.UpdateRun(ctx, run, run.State); err != nil {
+			t.Fatalf("turn %d: seed state: %v", i, err)
+		}
+		state := run.State
+		run.State = model.RunStateCompleted
+		if err := fx.runs.UpdateRun(ctx, run, state); err != nil {
+			t.Fatalf("turn %d: complete: %v", i, err)
+		}
+		fx.orch.afterTerminal(ctx, run)
+	}
+}
+
+// "A lot of people using agents shouldn't interfere with each other": three
+// people mention the same agent in the SAME thread at the same time. Each must
+// get their own run — runs execute on the invoker's machine, on their quota.
+// Keyed without the invoker, the second and third were refused as "busy" and
+// silently dropped: one person's question cancelled everyone else's.
+func TestOrchCov_ConcurrentInvokersDoNotInterfere(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+
+	people := []string{"u-alice", "u-bob", "u-carol"}
+	for _, id := range people[1:] {
+		fx.users.users[id] = &model.User{ID: id, DisplayName: id}
+		if err := fx.dir.PutRunner(ctx, &model.RunnerRegistration{
+			RunnerID: "r-" + id, OwnerID: id,
+			Harnesses:      []model.RunnerHarness{{Name: model.HarnessClaude}},
+			LeaseExpiresAt: fx.now.Add(time.Hour),
+		}); err != nil {
+			t.Fatalf("seed runner for %s: %v", id, err)
+		}
+	}
+
+	// Nobody's turn is finished before the next person asks — the contended case.
+	for i, who := range people {
+		msg := &model.Message{
+			ID: fmt.Sprintf("mm%d", i), ParentID: "chan1", ParentMessageID: "shared-root",
+			AuthorID: who, Body: "@[" + testGGID + "|gg] mine please",
+		}
+		fx.orch.OnMessage(ctx, msg, service.ParentChannel, nil)
+	}
+
+	for _, who := range people {
+		ids, err := fx.runs.fakeRunStore.ListQueuedRuns(ctx, who, 50)
+		if err != nil {
+			t.Fatalf("%s: list queued: %v", who, err)
+		}
+		if len(ids) == 0 {
+			t.Fatalf("%s got no run — another person's live turn consumed theirs", who)
+		}
+	}
+
+	// Each person's slot is their own, and holds their own run.
+	seen := map[string]string{}
+	for _, who := range people {
+		key := turnKey("chan1", "shared-root", testGGID, who)
+		held, ok := fx.orch.threadActive.Load(key)
+		if !ok {
+			t.Fatalf("%s has no thread slot of their own", who)
+		}
+		if prev, dup := seen[held.(string)]; dup {
+			t.Fatalf("%s and %s share run %v", who, prev, held)
+		}
+		seen[held.(string)] = who
+	}
+}
+
+// ------------------------------------------------------- two instances, one store
+//
+// prd runs service_count_desired = 2 behind a load balancer, so a run's calls
+// are split across instances at random. Every bug in this file's second half
+// came from that: the typing ticker, the thread-turn slot and runThreadKey are
+// per-PROCESS maps, and the instance that did not handle a run's terminal
+// transition never learned to clean up.
+//
+// Containers cannot show this — the local app shares Dex's network namespace,
+// so it cannot be scaled, and a real balancer routes at random anyway. Two
+// Orchestrators over ONE store is the same thing and deterministic: I choose
+// which instance sees which call, including the worst split.
+
+// orchCovTwoInstances is one shared store with two independent orchestrators
+// over it — a and b — each with its own in-memory maps, as two tasks have.
+type orchCovTwoInstances struct {
+	a, b  *Orchestrator
+	runs  *orchCovRunStore
+	dir   *orchCovDir
+	users *orchCovUsers
+	dm    *model.Conversation // the 1:1 DM with gg the sends load
+}
+
+func newOrchCovTwoInstances(t *testing.T) *orchCovTwoInstances {
+	t.Helper()
+	// One fixture supplies the shared store and roster; the second instance is
+	// built over the SAME dependencies, which is exactly what a second task is.
+	fx := newOrchCovFixture(t)
+	second := NewOrchestrator(fx.runs, fx.orch.agentSvc, fx.users, fx.msgs, fakePub{}, &orchCovMinter{})
+	now := *fx.now
+	second.now = func() time.Time { return now }
+	dm := &model.Conversation{
+		ID: "dm1", Type: model.ConversationTypeDM,
+		ParticipantIDs: []string{"u-alice", testGGID},
+	}
+	return &orchCovTwoInstances{a: fx.orch, b: second, runs: fx.runs, dir: fx.dir, users: fx.users, dm: dm}
+}
+
+// finishOn marks a run terminal in the store and runs the teardown on ONE
+// instance — the load balancer's choice, and the whole problem.
+func (x *orchCovTwoInstances) finishOn(t *testing.T, o *Orchestrator, runID string) {
+	t.Helper()
+	ctx := context.Background()
+	run, err := x.runs.GetRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("get run %s: %v", runID, err)
+	}
+	state := run.State
+	run.State = model.RunStateCompleted
+	if err := x.runs.UpdateRun(ctx, run, state); err != nil {
+		t.Fatalf("complete %s: %v", runID, err)
+	}
+	o.afterTerminal(ctx, run)
+}
+
+// The reported symptom, reproduced across two instances: a DM thread where
+// every turn is COMPLETED BY THE OTHER INSTANCE. The agent must still answer
+// every reply. Before the fix the first turn poisoned instance A's slot and it
+// went silent for good — "it replied a couple of times and then stopped".
+func TestOrchCov_TwoInstances_DMThreadKeepsAnsweringEveryReply(t *testing.T) {
+	x := newOrchCovTwoInstances(t)
+	ctx := context.Background()
+	const root = "dm-root"
+
+	queued := func() []string {
+		ids, err := x.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 50)
+		if err != nil {
+			t.Fatalf("list queued: %v", err)
+		}
+		return ids
+	}
+
+	for i := 1; i <= 5; i++ {
+		before := len(queued())
+		// Instance A takes the message...
+		x.a.OnMessage(ctx, &model.Message{
+			ID: fmt.Sprintf("dm-m%d", i), ParentID: "dm1", ParentMessageID: root,
+			AuthorID: "u-alice", Body: fmt.Sprintf("reply %d", i),
+		}, service.ParentConversation, x.dm)
+
+		ids := queued()
+		if len(ids) != before+1 {
+			t.Fatalf("turn %d: instance A started no run for a DM reply (queued %d → %d)",
+				i, before, len(ids))
+		}
+		// ...and instance B handles the completion. The worst split, every time.
+		x.finishOn(t, x.b, ids[len(ids)-1])
+
+		// Neither instance may still believe the agent is typing or busy.
+		if _, typing := x.a.typing.Load(ids[len(ids)-1]); typing {
+			t.Fatalf("turn %d: instance A still animating typing after B finished the run", i)
+		}
+	}
+}
+
+// The same split, for the typing indicator specifically: A claims (arming its
+// ticker), B completes. A's ticker must stop itself — it is the only thing
+// publishing "… is typing", and nothing tells it the run ended.
+func TestOrchCov_TwoInstances_TypingStopsWhenTheOtherInstanceCompletes(t *testing.T) {
+	old := typingTickInterval
+	typingTickInterval = 5 * time.Millisecond
+	defer func() { typingTickInterval = old }()
+
+	x := newOrchCovTwoInstances(t)
+	ctx := context.Background()
+
+	x.a.OnMessage(ctx, &model.Message{
+		ID: "t-m1", ParentID: "dm1", ParentMessageID: "t-root",
+		AuthorID: "u-alice", Body: "work please",
+	}, service.ParentConversation, x.dm)
+	ids, _ := x.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 50)
+	if len(ids) == 0 {
+		t.Fatal("no run queued")
+	}
+	runID := ids[len(ids)-1]
+
+	// A claims it, which is what arms a typing ticker.
+	if _, err := x.a.Claim(ctx, "u-alice", "r1", []string{model.HarnessClaude}, 1, 0); err != nil {
+		t.Fatalf("claim on A: %v", err)
+	}
+	if _, armed := x.a.typing.Load(runID); !armed {
+		t.Fatal("A should be animating typing for the run it claimed")
+	}
+
+	// B completes it. A is never told.
+	x.finishOn(t, x.b, runID)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, armed := x.a.typing.Load(runID); !armed {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal(`instance A kept publishing "… is typing" after instance B completed the run`)
+}
+
+// The handoff parked on one instance while the run it waits on is completed by
+// the OTHER one. Instance B's afterTerminal drains B's own deferral map and
+// finds nothing there, so unless A watches the run itself alice's second reply
+// is never answered — the remaining half of "agents don't reply to every reply
+// in a DM thread", and the one a single-process test cannot see.
+func TestOrchCov_TwoInstances_DeferredTurnSurvivesTheOtherInstanceFinishing(t *testing.T) {
+	old := deferredWatchInterval
+	deferredWatchInterval = 5 * time.Millisecond
+	defer func() { deferredWatchInterval = old }()
+
+	x := newOrchCovTwoInstances(t)
+	ctx := context.Background()
+	const root = "d-root"
+
+	queued := func() []string {
+		ids, err := x.runs.fakeRunStore.ListQueuedRuns(ctx, "u-alice", 50)
+		if err != nil {
+			t.Fatalf("list queued: %v", err)
+		}
+		return ids
+	}
+
+	// A takes the first reply and starts a run.
+	x.a.OnMessage(ctx, &model.Message{
+		ID: "d-m1", ParentID: "dm1", ParentMessageID: root,
+		AuthorID: "u-alice", Body: "first",
+	}, service.ParentConversation, x.dm)
+	ids := queued()
+	if len(ids) != 1 {
+		t.Fatalf("instance A started no run for the first reply (queued %d)", len(ids))
+	}
+	first := ids[0]
+
+	// A takes the next reply too, mid-turn: refused as busy, so it parks.
+	x.a.OnMessage(ctx, &model.Message{
+		ID: "d-m2", ParentID: "dm1", ParentMessageID: root,
+		AuthorID: "u-alice", Body: "second",
+	}, service.ParentConversation, x.dm)
+	if len(queued()) != 1 {
+		t.Fatal("the second reply should have been parked behind the live run, not started")
+	}
+	key := turnKey("dm1", root, testGGID, "u-alice")
+	if _, parked := x.a.deferredTurns.Load(key); !parked {
+		t.Fatal("the second reply was dropped instead of parked")
+	}
+
+	// Let the watchdog see the run still going for a few ticks first — the
+	// parked turn must not be started while the earlier one is live.
+	time.Sleep(25 * time.Millisecond)
+	if len(queued()) != 1 {
+		t.Fatal("the handoff started while the earlier turn was still running")
+	}
+
+	// B finishes the run. Nothing tells A.
+	x.finishOn(t, x.b, first)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(queued()) == 2 {
+			if _, parked := x.a.deferredTurns.Load(key); parked {
+				t.Fatal("the handoff started but was left parked, which would refuse the next one")
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("alice's second reply was lost: A parked it, B finished the run and looked for it in its own map")
+}
+
+// The watchdog gives the parked turn up when the run never releases the slot
+// anywhere it can see — holding it would refuse every later handoff for this
+// thread, since only one is parked per (thread, agent) and the first wins.
+func TestOrchCov_DeferredWatchExpires(t *testing.T) {
+	oldLimit, oldEvery := deferredWatchLimit, deferredWatchInterval
+	deferredWatchLimit, deferredWatchInterval = 5*time.Millisecond, time.Hour
+	defer func() { deferredWatchLimit, deferredWatchInterval = oldLimit, oldEvery }()
+
+	fx := newOrchCovFixture(t)
+	turn := &deferredTurn{agentID: testGGID, invokerID: "u-alice", msg: &model.Message{ID: "x-1"}}
+	fx.orch.deferredTurns.Store("k", turn)
+	fx.orch.watchDeferred(context.Background(), "k", "run-gone", turn)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, parked := fx.orch.deferredTurns.Load("k"); !parked {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("an unstartable handoff stayed parked, wedging the thread against every later one")
+}
+
+// Two things can start a parked turn — this instance's afterTerminal and this
+// watchdog — and only one may win. With the entry already taken the watchdog
+// must stand down rather than invoke a second time.
+func TestOrchCov_DeferredWatchStandsDownOnceStarted(t *testing.T) {
+	old := deferredWatchInterval
+	deferredWatchInterval = time.Millisecond
+	defer func() { deferredWatchInterval = old }()
+
+	fx := newOrchCovFixture(t)
+	turn := &deferredTurn{agentID: testGGID, invokerID: "u-alice", msg: &model.Message{ID: "y-1"}}
+	// Nothing parked: afterTerminal already took it.
+	fx.orch.watchDeferred(context.Background(), "k2", "run-any", turn)
+	time.Sleep(20 * time.Millisecond)
+	if ids, _ := fx.runs.fakeRunStore.ListQueuedRuns(context.Background(), "u-alice", 50); len(ids) != 0 {
+		t.Fatalf("the watchdog started a turn that was already handled (%d run(s))", len(ids))
+	}
+
+	// A slot held by nothing identifiable is not watchable at all.
+	fx.orch.deferredTurns.Store("k3", turn)
+	fx.orch.watchDeferred(context.Background(), "k3", 42, turn)
+	fx.orch.watchDeferred(context.Background(), "k3", "", turn)
+	time.Sleep(20 * time.Millisecond)
+	if _, parked := fx.orch.deferredTurns.Load("k3"); !parked {
+		t.Fatal("a handoff parked behind an unreadable slot should be left alone, not discarded")
+	}
+}
+
+// Many people, two instances, one thread: each person's turn must survive
+// whichever instance happens to take their message and whichever finishes it.
+func TestOrchCov_TwoInstances_ConcurrentPeopleDoNotInterfere(t *testing.T) {
+	x := newOrchCovTwoInstances(t)
+	ctx := context.Background()
+	people := []string{"u-alice", "u-bob", "u-carol", "u-dave"}
+
+	// Everyone except alice needs to exist AND have a runner of their own: an
+	// unknown author is ignored outright, and gg is a claude-CLI agent, so a
+	// run without the invoker's desktop app is refused as offline — both
+	// different failures from the one under test.
+	for _, id := range people[1:] {
+		x.users.users[id] = &model.User{ID: id, DisplayName: id}
+		if err := x.dir.PutRunner(ctx, &model.RunnerRegistration{
+			RunnerID: "r-" + id, OwnerID: id,
+			Harnesses:      []model.RunnerHarness{{Name: model.HarnessClaude}},
+			LeaseExpiresAt: time.Now().Add(time.Hour),
+		}); err != nil {
+			t.Fatalf("seed runner %s: %v", id, err)
+		}
+	}
+
+	// Alternate which instance receives each person's message, and finish each
+	// on the OTHER one — the interleaving a balancer produces.
+	instances := []*Orchestrator{x.a, x.b}
+	for i, who := range people {
+		in, out := instances[i%2], instances[(i+1)%2]
+		in.OnMessage(ctx, &model.Message{
+			ID: fmt.Sprintf("p-m%d", i), ParentID: "chan1", ParentMessageID: "p-root",
+			AuthorID: who, Body: "@[" + testGGID + "|gg] mine please",
+		}, service.ParentChannel, nil)
+
+		ids, err := x.runs.fakeRunStore.ListQueuedRuns(ctx, who, 50)
+		if err != nil {
+			t.Fatalf("%s: list queued: %v", who, err)
+		}
+		if len(ids) == 0 {
+			t.Fatalf("%s got no run — someone else's turn consumed theirs", who)
+		}
+		x.finishOn(t, out, ids[len(ids)-1])
+	}
+
+	// A second round, to catch a slot poisoned by the first.
+	for i, who := range people {
+		in := instances[i%2]
+		before, _ := x.runs.fakeRunStore.ListQueuedRuns(ctx, who, 50)
+		in.OnMessage(ctx, &model.Message{
+			ID: fmt.Sprintf("p2-m%d", i), ParentID: "chan1", ParentMessageID: "p-root",
+			AuthorID: who, Body: "@[" + testGGID + "|gg] again",
+		}, service.ParentChannel, nil)
+		after, _ := x.runs.fakeRunStore.ListQueuedRuns(ctx, who, 50)
+		if len(after) != len(before)+1 {
+			t.Fatalf("%s: second round produced no run (%d → %d) — their slot was left poisoned",
+				who, len(before), len(after))
+		}
+	}
+}

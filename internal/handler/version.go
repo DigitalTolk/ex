@@ -75,7 +75,7 @@ func NewVersionHandler(version string) *VersionHandler {
 // build-time env-var plumbing.
 //
 // Returns "dev" when the FS is unavailable or index.html can't be read.
-// The caller (typically main.go) treats both the version endpoint and
+// The caller (typically internal/app) treats both the version endpoint and
 // the SPA's served meta tag as the same string, so the only way for the
 // frontend to detect a mismatch is for the bundle to actually change.
 func AppVersion(frontendFS fs.FS) string {

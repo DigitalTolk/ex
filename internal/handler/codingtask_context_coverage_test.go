@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/agents"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
@@ -114,7 +115,7 @@ type htaskCovCtxFixture struct {
 func newHtaskCovCtxFixture() *htaskCovCtxFixture {
 	st := newHtaskCovCtxStore()
 	acc := &htaskCovAccess{}
-	return &htaskCovCtxFixture{h: NewContextHandler(service.NewContextService(st, acc)), store: st, access: acc}
+	return &htaskCovCtxFixture{h: NewContextHandler(agents.NewContextService(st, acc)), store: st, access: acc}
 }
 
 func htaskCovCtxReq(method, body, userID, parentType, parentID, itemID string) *http.Request {
@@ -160,7 +161,7 @@ func TestHtaskCovContextList(t *testing.T) {
 	fx.store.listErr = errors.New("dynamo down")
 	rec = httptest.NewRecorder()
 	fx.h.List(rec, htaskCovCtxReq(http.MethodGet, "", "u1", "channel", "chan1", ""))
-	if rec.Code != http.StatusInternalServerError || htaskCovErrCode(t, rec) != "internal" {
+	if rec.Code != http.StatusInternalServerError || htaskCovErrCode(t, rec) != "internal_error" {
 		t.Fatalf("failing list = %d %s", rec.Code, rec.Body.String())
 	}
 }
@@ -270,7 +271,7 @@ func TestHtaskCovContextDelete(t *testing.T) {
 	}
 }
 
-// --------------------------------------------------------- writeTaskError
+// ------------------------------------------- task errors through the table
 
 func TestHtaskCovWriteTaskError(t *testing.T) {
 	cases := []struct {
@@ -279,27 +280,27 @@ func TestHtaskCovWriteTaskError(t *testing.T) {
 		code   string
 	}{
 		{store.ErrNotFound, http.StatusNotFound, "not_found"},
-		{service.ErrRunClosed, http.StatusConflict, "run_closed"},
-		{service.ErrTaskActive, http.StatusConflict, "task_active"},
-		{service.ErrProjectUnknown, http.StatusConflict, "project_unknown"},
-		{service.ErrTaskTransition, http.StatusConflict, "bad_transition"},
+		{agents.ErrRunClosed, http.StatusConflict, "run_closed"},
+		{agents.ErrTaskActive, http.StatusConflict, "task_active"},
+		{agents.ErrProjectUnknown, http.StatusConflict, "project_unknown"},
+		{agents.ErrTaskTransition, http.StatusConflict, "bad_transition"},
 		{store.ErrStaleTask, http.StatusConflict, "bad_transition"},
-		{service.ErrTaskNotReady, http.StatusConflict, "not_ready"},
-		{service.ErrNotRequester, http.StatusForbidden, "forbidden"},
-		{service.ErrTaskAgent, http.StatusServiceUnavailable, "no_dev_agent"},
+		{agents.ErrTaskNotReady, http.StatusConflict, "not_ready"},
+		{agents.ErrNotRequester, http.StatusForbidden, "forbidden"},
+		{agents.ErrTaskAgent, http.StatusServiceUnavailable, "no_dev_agent"},
 		{service.ErrForbidden, http.StatusForbidden, "forbidden"},
-		{service.ErrNotTaskRun, http.StatusBadRequest, "not_task_run"},
+		{agents.ErrNotTaskRun, http.StatusBadRequest, "not_task_run"},
 		{service.ErrValidation, http.StatusBadRequest, "bad_request"},
-		{errors.New("boom"), http.StatusInternalServerError, "internal"},
+		{errors.New("boom"), http.StatusInternalServerError, "internal_error"},
 	}
 	for _, tc := range cases {
 		rec := httptest.NewRecorder()
-		writeTaskError(rec, tc.err)
+		writeServiceError(rec, httptest.NewRequest(http.MethodPost, "/x", nil), tc.err)
 		if rec.Code != tc.status {
-			t.Fatalf("writeTaskError(%v) = %d, want %d", tc.err, rec.Code, tc.status)
+			t.Fatalf("writeServiceError(%v) = %d, want %d", tc.err, rec.Code, tc.status)
 		}
 		if got := htaskCovErrCode(t, rec); got != tc.code {
-			t.Fatalf("writeTaskError(%v) code = %q, want %q", tc.err, got, tc.code)
+			t.Fatalf("writeServiceError(%v) code = %q, want %q", tc.err, got, tc.code)
 		}
 	}
 }
@@ -355,7 +356,7 @@ func TestHtaskCovMRHelpers(t *testing.T) {
 
 // -------------------------------------------------------- task-layer fakes
 
-var htaskCovDevID = service.AgentUserID(service.AgentSlugDev)
+var htaskCovDevID = agents.AgentUserID(agents.AgentSlugDev)
 
 type htaskCovRunStore struct {
 	runs   map[string]*model.Run
@@ -472,6 +473,9 @@ func (f *htaskCovRunStore) GetApproval(context.Context, string, string) (*model.
 	return nil, store.ErrNotFound
 }
 func (f *htaskCovRunStore) SettleApproval(context.Context, string, string, string, string, string, string, time.Time) error {
+	return nil
+}
+func (f *htaskCovRunStore) ConsumeApproval(context.Context, string, string, time.Time) error {
 	return nil
 }
 func (f *htaskCovRunStore) ListApprovals(context.Context, string) ([]*model.Approval, error) {
@@ -787,6 +791,17 @@ func (f *htaskCovTaskStore) ListTasksByChannel(_ context.Context, channelID stri
 	return out, nil
 }
 
+func (f *htaskCovTaskStore) ListActiveTasksByChannel(ctx context.Context, channelID string) ([]*model.CodingTask, error) {
+	all, _ := f.ListTasksByChannel(ctx, channelID)
+	var out []*model.CodingTask
+	for _, t := range all {
+		if !t.State.Terminal() {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
 func (f *htaskCovTaskStore) GetTaskByThread(_ context.Context, threadRootID string) (*model.CodingTask, error) {
 	for _, t := range f.tasks {
 		if threadRootID != "" && t.ThreadRootID == threadRootID {
@@ -844,8 +859,8 @@ func (htaskCovMinter) GenerateRunToken(string, string, string, time.Time) (strin
 
 type htaskCovFixture struct {
 	h     *CodingTaskHandler
-	svc   *service.CodingTaskService
-	orch  *service.Orchestrator
+	svc   *agents.CodingTaskService
+	orch  *agents.Orchestrator
 	tasks *htaskCovTaskStore
 	chans *htaskCovChannels
 	msgs  *htaskCovMessages
@@ -862,10 +877,10 @@ func newHtaskCovFixture(t *testing.T) *htaskCovFixture {
 		"u-bob":   {ID: "u-bob", DisplayName: "Bob"},
 		htaskCovDevID: {
 			ID: htaskCovDevID, DisplayName: "dev", Kind: model.UserKindAgent,
-			AgentConfig: &model.AgentConfig{TemplateSlug: service.AgentSlugDev},
+			AgentConfig: &model.AgentConfig{TemplateSlug: agents.AgentSlugDev},
 		},
 	}}
-	agentSvc := service.NewAgentService(dir, users)
+	agentSvc := agents.NewAgentService(dir, users)
 	if err := agentSvc.SeedDefaults(context.Background()); err != nil {
 		t.Fatalf("seed agents: %v", err)
 	}
@@ -879,11 +894,11 @@ func newHtaskCovFixture(t *testing.T) *htaskCovFixture {
 	}
 	runs := newHtaskCovRunStore()
 	msgs := &htaskCovMessages{}
-	orch := service.NewOrchestrator(runs, agentSvc, users, msgs, htaskCovPub{}, htaskCovMinter{})
+	orch := agents.NewOrchestrator(runs, agentSvc, users, msgs, htaskCovPub{}, htaskCovMinter{})
 	tasks := newHtaskCovTaskStore()
 	orch.SetTaskStore(tasks)
 	chans := newHtaskCovChannels()
-	svc := service.NewCodingTaskService(tasks, chans, msgs, users, agentSvc, orch)
+	svc := agents.NewCodingTaskService(tasks, chans, msgs, users, agentSvc, orch)
 	svc.SetBaseURL("https://ex.example")
 	return &htaskCovFixture{
 		h: NewCodingTaskHandler(svc, orch), svc: svc, orch: orch,
@@ -1181,7 +1196,7 @@ func TestHtaskCovRequestMR(t *testing.T) {
 			t.Fatalf("request-mr = %d (%s)", rec.Code, rec.Body.String())
 		}
 		out := htaskCovDecode(t, rec)
-		if out["status"] != service.MRStatusNotReady || !strings.Contains(out["message"].(string), "not ready") {
+		if out["status"] != agents.MRStatusNotReady || !strings.Contains(out["message"].(string), "not ready") {
 			t.Fatalf("not-ready response wrong: %v", out)
 		}
 	})
@@ -1196,7 +1211,7 @@ func TestHtaskCovRequestMR(t *testing.T) {
 			t.Fatalf("request-mr = %d (%s)", rec.Code, rec.Body.String())
 		}
 		out := htaskCovDecode(t, rec)
-		if out["status"] != service.MRStatusAsk {
+		if out["status"] != agents.MRStatusAsk {
 			t.Fatalf("status = %v, want ask", out["status"])
 		}
 		if sum, _ := out["summary"].(string); !strings.Contains(sum, task.ID) {
@@ -1226,7 +1241,7 @@ func TestHtaskCovRequestMR(t *testing.T) {
 			t.Fatalf("request-mr = %d (%s)", rec.Code, rec.Body.String())
 		}
 		out := htaskCovDecode(t, rec)
-		if out["status"] != service.MRStatusAsk {
+		if out["status"] != agents.MRStatusAsk {
 			t.Fatalf("status = %v, want ask", out["status"])
 		}
 		if _, ok := out["approvalID"]; ok {
@@ -1253,7 +1268,7 @@ func TestHtaskCovRequestMR(t *testing.T) {
 			t.Fatalf("request-mr = %d (%s)", rec.Code, rec.Body.String())
 		}
 		out := htaskCovDecode(t, rec)
-		if out["status"] != service.MRStatusApproved || out["mrTitle"] != "Fix crash" {
+		if out["status"] != agents.MRStatusApproved || out["mrTitle"] != "Fix crash" {
 			t.Fatalf("approved response wrong: %v", out)
 		}
 		if desc, _ := out["mrDescription"].(string); !strings.Contains(desc, "the picker throws") || !strings.Contains(desc, "CS-7") {
@@ -1277,7 +1292,7 @@ func TestHtaskCovRequestMR(t *testing.T) {
 			t.Fatalf("request-mr = %d (%s)", rec.Code, rec.Body.String())
 		}
 		out := htaskCovDecode(t, rec)
-		if out["status"] != service.MRStatusDenied || !strings.Contains(out["message"].(string), "declined") {
+		if out["status"] != agents.MRStatusDenied || !strings.Contains(out["message"].(string), "declined") {
 			t.Fatalf("denied response wrong: %v", out)
 		}
 	})
@@ -1347,7 +1362,7 @@ func TestHtaskCovListByChannel(t *testing.T) {
 func TestHtaskCovListProjects(t *testing.T) {
 	fx := newHtaskCovFixture(t)
 
-	// Store failure → 500 via writeTaskError default.
+	// Store failure → a generic 500 via writeServiceError.
 	fx.tasks.listProjectsErr = errors.New("dynamo down")
 	rec := httptest.NewRecorder()
 	fx.h.ListProjects(rec, htaskCovReq(http.MethodGet, "/api/v1/coding-projects", "", "u-alice", ""))

@@ -54,12 +54,14 @@ export const composerTheme = EditorView.theme({
     backgroundColor: 'var(--color-muted)',
     padding: '0.125rem 0.375rem',
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    fontSize: '0.85em',
+    // Never below the 12px floor (0.85em of the 14px composer is 11.9px).
+    fontSize: 'max(0.85em, 0.75rem)',
   },
   '.cm-codeblock': {
     backgroundColor: 'var(--color-muted)',
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    fontSize: '0.85em',
+    // Never below the 12px floor (0.85em of the 14px composer is 11.9px).
+    fontSize: 'max(0.85em, 0.75rem)',
   },
   '.cm-quote': {
     color: 'var(--color-muted-foreground)',
@@ -281,7 +283,7 @@ export const composerTheme = EditorView.theme({
   '.cm-mention-section': {
     padding: '0.5rem 0.75rem 0.25rem',
     fontFamily: 'var(--font-sans)',
-    fontSize: '0.6875rem',
+    fontSize: '0.75rem',
     fontWeight: '700',
     letterSpacing: '0.05em',
     textTransform: 'uppercase',

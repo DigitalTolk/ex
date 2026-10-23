@@ -136,32 +136,17 @@ func (s *IncomingWebhookStoreImpl) List(ctx context.Context) ([]*model.IncomingW
 // BatchGets. An ID whose META row is gone (crashed half-delete) is skipped —
 // the next Delete or seed prunes it.
 func (s *IncomingWebhookStoreImpl) listByDirectory(ctx context.Context, ids []string) ([]*model.IncomingWebhook, error) {
-	items := make([]*model.IncomingWebhook, 0, len(ids))
-	const batchSize = 100
-	for start := 0; start < len(ids); start += batchSize {
-		end := min(start+batchSize, len(ids))
-		keys := make([]map[string]types.AttributeValue, 0, end-start)
-		for _, id := range ids[start:end] {
-			keys = append(keys, compositeKey(webhookPK(id), webhookSK()))
-		}
-		req := map[string]types.KeysAndAttributes{s.Table: {Keys: keys, ConsistentRead: aws.Bool(true)}}
-		for {
-			res, err := s.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
-			if err != nil {
-				return nil, fmt.Errorf("store: batch get webhooks: %w", err)
-			}
-			for _, av := range res.Responses[s.Table] {
-				var item webhookItem
-				if err := attributevalue.UnmarshalMap(av, &item); err != nil {
-					return nil, fmt.Errorf("store: unmarshal webhook: %w", err)
-				}
-				items = append(items, &item.IncomingWebhook)
-			}
-			if len(res.UnprocessedKeys) == 0 {
-				break
-			}
-			req = res.UnprocessedKeys
-		}
+	keys := make([]map[string]types.AttributeValue, len(ids))
+	for i, id := range ids {
+		keys[i] = compositeKey(webhookPK(id), webhookSK())
+	}
+	rows, err := batchGetOf[webhookItem](ctx, s.DB, keys, types.KeysAndAttributes{ConsistentRead: aws.Bool(true)}, "webhooks")
+	if err != nil {
+		return nil, err
+	}
+	items := make([]*model.IncomingWebhook, len(rows))
+	for i := range rows {
+		items[i] = &rows[i].IncomingWebhook
 	}
 	return items, nil
 }
@@ -189,7 +174,7 @@ func (s *IncomingWebhookStoreImpl) seedDirectory(ctx context.Context, items []*m
 		UpdateExpression:          aws.String(update),
 		ExpressionAttributeValues: values,
 	}); err != nil {
-		slog.Warn("webhook directory seed failed", "error", err)
+		slog.WarnContext(ctx, "webhook directory seed failed", "error", err)
 	}
 }
 

@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
@@ -44,9 +47,30 @@ type WebhookDMResolver interface {
 	GetOrCreateDM(ctx context.Context, userA, userB string) (*model.Conversation, error)
 }
 
+// WebhookUserResolver resolves a DM target or an @mention to a user: by exact
+// email, by ID, or through the user search index (display names, email
+// local-parts). Implemented by UserService. There is deliberately no
+// directory walk: paging every user on an unauthenticated ingress, once per
+// unknown name, cost O(directory) reads per payload.
 type WebhookUserResolver interface {
-	List(ctx context.Context, limit int, cursor string) ([]*model.User, string, error)
+	GetByID(ctx context.Context, id string) (*model.User, error)
+	GetByEmail(ctx context.Context, email string) (*model.User, error)
+	Search(ctx context.Context, query string, limit int) ([]*model.User, error)
 }
+
+const (
+	// maxWebhookRefLookups caps how many distinct @user refs — and, separately,
+	// how many distinct ~channel refs — one payload gets looked up. A 1 MiB
+	// payload can name thousands; past the cap a ref stays the plain text the
+	// sender wrote.
+	maxWebhookRefLookups = 20
+	// webhookUserSearchLimit is how many search candidates a display-name
+	// lookup considers: the exact match ranks at the top, and every candidate
+	// costs the search a user read.
+	webhookUserSearchLimit = 10
+	// webhookImageConcurrency bounds one payload's parallel image lookups.
+	webhookImageConcurrency = 8
+)
 
 // WebhookBotProvisioner creates (or returns) the machine account a webhook
 // direct-messages from. Implemented by UserService.
@@ -103,13 +127,13 @@ func (s *IncomingWebhookService) SetPublisher(p Publisher) { s.publisher = p }
 
 func (s *IncomingWebhookService) Create(ctx context.Context, actorID string, in *model.IncomingWebhook) (*model.IncomingWebhook, error) {
 	if actorID == "" {
-		return nil, errors.New("webhook: actor required")
+		return nil, apperr.Invalid("webhook: actor required")
 	}
 	if in == nil || strings.TrimSpace(in.Title) == "" || in.ChannelID == "" {
-		return nil, errors.New("webhook: title and channel are required")
+		return nil, apperr.Invalid("webhook: title and channel are required")
 	}
 	if len([]rune(in.Description)) > 500 {
-		return nil, errors.New("webhook: description must be 500 characters or fewer")
+		return nil, apperr.Invalid("webhook: description must be 500 characters or fewer")
 	}
 	ch, err := s.channels.GetByID(ctx, in.ChannelID)
 	if err != nil {
@@ -157,13 +181,13 @@ func (s *IncomingWebhookService) List(ctx context.Context) ([]*model.IncomingWeb
 // target channel is re-resolved so name/slug stay consistent.
 func (s *IncomingWebhookService) Update(ctx context.Context, id string, in *model.IncomingWebhook) (*model.IncomingWebhook, error) {
 	if id == "" {
-		return nil, errors.New("webhook: id required")
+		return nil, apperr.Invalid("webhook: id required")
 	}
 	if in == nil || strings.TrimSpace(in.Title) == "" || in.ChannelID == "" {
-		return nil, errors.New("webhook: title and channel are required")
+		return nil, apperr.Invalid("webhook: title and channel are required")
 	}
 	if len([]rune(in.Description)) > 500 {
-		return nil, errors.New("webhook: description must be 500 characters or fewer")
+		return nil, apperr.Invalid("webhook: description must be 500 characters or fewer")
 	}
 	existing, err := s.store.Get(ctx, id)
 	if err != nil {
@@ -197,7 +221,7 @@ func (s *IncomingWebhookService) Update(ctx context.Context, id string, in *mode
 
 func (s *IncomingWebhookService) Delete(ctx context.Context, id string) error {
 	if id == "" {
-		return errors.New("webhook: id required")
+		return apperr.Invalid("webhook: id required")
 	}
 	if err := s.store.Delete(ctx, id); err != nil {
 		return err
@@ -247,6 +271,11 @@ func (s *IncomingWebhookService) ExecuteMessage(ctx context.Context, id string, 
 	if err != nil {
 		return nil, fmt.Errorf("webhook: get: %w", err)
 	}
+	// The payload limits come first: every later step — the DM target lookup,
+	// mention lookups, image fetches into S3 — costs work bounded only by them.
+	if err := validateWebhookPayload(payload); err != nil {
+		return nil, err
+	}
 	target, err := s.targetParent(ctx, wh, payload.Channel)
 	if err != nil {
 		return nil, err
@@ -258,18 +287,22 @@ func (s *IncomingWebhookService) ExecuteMessage(ctx context.Context, id string, 
 	if username == "" {
 		username = "webhook"
 	}
-	avatarURL := s.proxyImage(ctx, payload.IconURL)
+	refs := s.newRefs()
+	body := refs.translate(ctx, payload.Text)
+	attachments := make([]model.MessageAttachment, len(payload.Attachments))
+	for i, a := range payload.Attachments {
+		attachments[i] = refs.sanitizeAttachment(ctx, a)
+	}
+	iconURL := payload.IconURL
 	iconEmoji := normalizeEmojiName(payload.IconEmoji)
 	if iconEmoji != "" {
 		// icon_emoji wins over icon_url and the creation-time avatar; the
 		// emoji is rendered as the avatar client-side.
-		avatarURL = ""
-	} else if avatarURL == "" {
-		avatarURL = wh.ProfileImageURL
+		iconURL = ""
 	}
-	attachments := make([]model.MessageAttachment, 0, len(payload.Attachments))
-	for _, a := range payload.Attachments {
-		attachments = append(attachments, s.sanitizeAttachment(ctx, a))
+	avatarURL := s.proxyImages(ctx, iconURL, attachments)
+	if iconEmoji == "" && avatarURL == "" {
+		avatarURL = wh.ProfileImageURL
 	}
 	// Webhook posts are authored by the webhook bot, NOT the human who created
 	// the webhook. Attributing them to wh.CreatedBy would make the message
@@ -287,13 +320,30 @@ func (s *IncomingWebhookService) ExecuteMessage(ctx context.Context, id string, 
 		ParentID:        target.parentID,
 		ParentType:      target.parentType,
 		AuthorID:        target.authorID,
-		Body:            s.translateMattermostMarkup(ctx, payload.Text),
+		Body:            body,
 		Username:        username,
 		AvatarURL:       avatarURL,
 		IconEmoji:       iconEmoji,
 		Attachments:     attachments,
 		ParentMessageID: strings.TrimSpace(payload.RootID),
+		WebhookID:       wh.ID,
 	})
+}
+
+// errWebhookEmptyPayload rejects a payload with neither text nor attachments.
+var errWebhookEmptyPayload = apperr.Invalid("webhook: text or attachments required")
+
+// validateWebhookPayload applies SendWebhook's payload limits before anything
+// is looked up or fetched for the payload. SendWebhook checks them again on
+// the translated result.
+func validateWebhookPayload(p IncomingWebhookPayload) error {
+	if p.Text == "" && len(p.Attachments) == 0 {
+		return errWebhookEmptyPayload
+	}
+	if err := ValidateAttachmentCount(len(p.Attachments)); err != nil {
+		return err
+	}
+	return ValidateMessageBody(p.Text)
 }
 
 // normalizeEmojiName strips the optional surrounding colons and
@@ -423,63 +473,29 @@ func (s *IncomingWebhookService) targetDM(ctx context.Context, wh *model.Incomin
 	return webhookTarget{parentID: conv.ID, parentType: ParentConversation, authorID: bot.ID}, nil
 }
 
-// webhookDirectUserResolver is the optional point-read capability of the
-// user resolver (UserService has it) — an exact ID or email resolves in one
-// indexed read instead of paging the directory.
-type webhookDirectUserResolver interface {
-	GetByID(ctx context.Context, id string) (*model.User, error)
-	GetByEmail(ctx context.Context, email string) (*model.User, error)
-}
-
-// webhookUserSearcher is the optional search capability (UserService.Search
-// over the in-process users index): display-name targets resolve from the
-// index instead of a serial walk of the whole directory.
-type webhookUserSearcher interface {
-	Search(ctx context.Context, query string, limit int) ([]*model.User, error)
-}
-
-// findWebhookTargetUser resolves a @name / id / email to a user. Exact email
-// and ID targets resolve with one indexed read; display names go through the
-// user search index. The full-directory paging walk remains the LAST resort
-// (index unavailable or stale, email local-part forms the index doesn't
-// tokenize) — it is O(directory/200) serial reads, which is why it no longer
-// runs first.
+// findWebhookTargetUser resolves a @name / id / email to a user: an exact
+// email or ID with one indexed read each, a display name or email local-part
+// through the user search index. A miss after those is a miss —
+// store.ErrNotFound; a failed search is ErrWebhookUnavailable, so a DM
+// caller retries instead of being told its target does not exist.
 func (s *IncomingWebhookService) findWebhookTargetUser(ctx context.Context, targetName string) (*model.User, error) {
 	needle := strings.ToLower(strings.TrimSpace(targetName))
-	if direct, ok := s.users.(webhookDirectUserResolver); ok {
-		if strings.Contains(needle, "@") {
-			if user, err := direct.GetByEmail(ctx, needle); err == nil && user != nil {
-				return user, nil
-			}
-		}
-		// ULID target (webhook configs may carry raw user IDs). A miss is
-		// one cheap point read.
-		if user, err := direct.GetByID(ctx, targetName); err == nil && user != nil {
-			if user.ID == targetName {
-				return user, nil
-			}
-		}
-	}
-	if searcher, ok := s.users.(webhookUserSearcher); ok {
-		if candidates, err := searcher.Search(ctx, needle, 50); err == nil {
-			if user := matchWebhookUser(candidates, targetName, needle); user != nil {
-				return user, nil
-			}
-		}
-	}
-	cursor := ""
-	for page := 0; page < 100; page++ {
-		users, next, err := s.users.List(ctx, 200, cursor)
-		if err != nil {
-			return nil, fmt.Errorf("webhook: list users: %w", err)
-		}
-		if user := matchWebhookUser(users, targetName, needle); user != nil {
+	if strings.Contains(needle, "@") {
+		if user, err := s.users.GetByEmail(ctx, needle); err == nil && user != nil {
 			return user, nil
 		}
-		if next == "" {
-			break
-		}
-		cursor = next
+	}
+	// ULID target (webhook configs may carry raw user IDs). A miss is one
+	// cheap point read.
+	if user, err := s.users.GetByID(ctx, targetName); err == nil && user != nil && user.ID == targetName {
+		return user, nil
+	}
+	candidates, err := s.users.Search(ctx, needle, webhookUserSearchLimit)
+	if err != nil {
+		return nil, fmt.Errorf("%w: search users: %w", ErrWebhookUnavailable, err)
+	}
+	if user := matchWebhookUser(candidates, targetName, needle); user != nil {
+		return user, nil
 	}
 	return nil, store.ErrNotFound
 }
@@ -504,11 +520,49 @@ func matchWebhookUser(users []*model.User, targetName, needle string) *model.Use
 	return nil
 }
 
-func (s *IncomingWebhookService) sanitizeAttachment(ctx context.Context, a model.MessageAttachment) model.MessageAttachment {
-	a.Pretext = s.translateMattermostMarkup(ctx, a.Pretext)
-	a.Text = s.translateMattermostMarkup(ctx, a.Text)
+// webhookRefs resolves one payload's @user and ~channel references. Each
+// distinct ref is looked up once, and at most maxWebhookRefLookups distinct
+// refs of each kind are looked up at all — a user lookup is an ID read plus a
+// search, and a 1 MiB payload can name thousands of refs. A memoised nil is a
+// ref that resolved to nobody.
+type webhookRefs struct {
+	s        *IncomingWebhookService
+	users    map[string]*model.User
+	channels map[string]*model.Channel
+}
+
+func (s *IncomingWebhookService) newRefs() *webhookRefs {
+	return &webhookRefs{s: s, users: map[string]*model.User{}, channels: map[string]*model.Channel{}}
+}
+
+func (r *webhookRefs) user(ctx context.Context, ref string) *model.User {
+	if u, seen := r.users[ref]; seen || len(r.users) >= maxWebhookRefLookups {
+		return u
+	}
+	u, err := r.s.findWebhookTargetUser(ctx, ref)
+	if err != nil {
+		u = nil
+	}
+	r.users[ref] = u
+	return u
+}
+
+func (r *webhookRefs) channel(ctx context.Context, ref string) *model.Channel {
+	if ch, seen := r.channels[ref]; seen || len(r.channels) >= maxWebhookRefLookups {
+		return ch
+	}
+	ch := r.s.resolveChannel(ctx, ref)
+	r.channels[ref] = ch
+	return ch
+}
+
+// sanitizeAttachment translates an attachment's markup and drops unsafe
+// links. Its images are resolved separately, in parallel (proxyImages).
+func (r *webhookRefs) sanitizeAttachment(ctx context.Context, a model.MessageAttachment) model.MessageAttachment {
+	a.Pretext = r.translate(ctx, a.Pretext)
+	a.Text = r.translate(ctx, a.Text)
 	for i := range a.Fields {
-		a.Fields[i].Value = s.translateMattermostMarkup(ctx, a.Fields[i].Value)
+		a.Fields[i].Value = r.translate(ctx, a.Fields[i].Value)
 	}
 	// Clickable link fields are author-controlled and rendered as <a href> by
 	// the client — drop any non-http(s)/mailto scheme (javascript:, data:, …)
@@ -520,20 +574,41 @@ func (s *IncomingWebhookService) sanitizeAttachment(ctx context.Context, a model
 	if !isSafeURL(a.TitleLink) {
 		a.TitleLink = ""
 	}
-	a.AuthorIcon = s.proxyImage(ctx, a.AuthorIcon)
-	// image_url is the only attachment image with a variable display box,
-	// so we capture its intrinsic dimensions for the client to reserve
-	// space. The thumb (fixed 75×75) and 16×16 icons don't need them.
-	a.ImageURL, a.ImageWidth, a.ImageHeight = s.proxyImageWithSize(ctx, a.ImageURL)
-	a.ThumbURL = s.proxyImage(ctx, a.ThumbURL)
-	a.FooterIcon = s.proxyImage(ctx, a.FooterIcon)
 	if len(a.Footer) > 300 {
 		a.Footer = a.Footer[:300] + "..."
 	}
 	return a
 }
 
-func (s *IncomingWebhookService) translateMattermostMarkup(ctx context.Context, text string) string {
+// proxyImages resolves a payload's images — the icon, and each attachment's
+// author icon, image, thumbnail and footer icon — concurrently, and returns
+// the proxied icon. Each lookup writes only its own field, so the result does
+// not depend on the order the lookups finish in. Done one after another, a
+// post with two attachments waited on nine S3 round trips in a row.
+func (s *IncomingWebhookService) proxyImages(ctx context.Context, iconURL string, atts []model.MessageAttachment) string {
+	var g errgroup.Group
+	g.SetLimit(webhookImageConcurrency)
+	var icon string
+	g.Go(func() error { icon = s.proxyImage(ctx, iconURL); return nil })
+	for i := range atts {
+		a := &atts[i]
+		g.Go(func() error { a.AuthorIcon = s.proxyImage(ctx, a.AuthorIcon); return nil })
+		// image_url is the only attachment image with a variable display box,
+		// so we capture its intrinsic dimensions for the client to reserve
+		// space. The thumb (fixed 75×75) and 16×16 icons don't need them.
+		g.Go(func() error {
+			a.ImageURL, a.ImageWidth, a.ImageHeight = s.proxyImageWithSize(ctx, a.ImageURL)
+			return nil
+		})
+		g.Go(func() error { a.ThumbURL = s.proxyImage(ctx, a.ThumbURL); return nil })
+		g.Go(func() error { a.FooterIcon = s.proxyImage(ctx, a.FooterIcon); return nil })
+	}
+	// The lookups report failure by clearing their field, never by error.
+	_ = g.Wait()
+	return icon
+}
+
+func (r *webhookRefs) translate(ctx context.Context, text string) string {
 	text = strings.ReplaceAll(text, "<!channel>", "@all")
 	text = strings.ReplaceAll(text, "<!all>", "@all")
 	text = strings.ReplaceAll(text, "<!here>", "@here")
@@ -544,7 +619,7 @@ func (s *IncomingWebhookService) translateMattermostMarkup(ctx context.Context, 
 		href := parts[1]
 		label := parts[2]
 		if strings.HasPrefix(href, "#") {
-			if mention, ok := s.channelMention(ctx, strings.TrimPrefix(href, "#")); ok {
+			if mention, ok := r.channelMention(ctx, strings.TrimPrefix(href, "#")); ok {
 				return mention
 			}
 			if label != "" {
@@ -552,7 +627,7 @@ func (s *IncomingWebhookService) translateMattermostMarkup(ctx context.Context, 
 			}
 		}
 		if userRef := strings.TrimPrefix(href, "@"); userRef != href || label == "" {
-			if mention, ok := s.userMention(ctx, userRef); ok {
+			if mention, ok := r.userMention(ctx, userRef); ok {
 				return mention
 			}
 		}
@@ -563,7 +638,7 @@ func (s *IncomingWebhookService) translateMattermostMarkup(ctx context.Context, 
 	})
 	text = mattermostChannelToken.ReplaceAllStringFunc(text, func(match string) string {
 		parts := mattermostChannelToken.FindStringSubmatch(match)
-		if mention, ok := s.channelMention(ctx, parts[2]); ok {
+		if mention, ok := r.channelMention(ctx, parts[2]); ok {
 			return parts[1] + mention
 		}
 		return match
@@ -579,36 +654,34 @@ func (s *IncomingWebhookService) translateMattermostMarkup(ctx context.Context, 
 		case "here":
 			return parts[1] + "@here"
 		}
-		if mention, ok := s.userMention(ctx, parts[2]); ok {
+		if mention, ok := r.userMention(ctx, parts[2]); ok {
 			return parts[1] + mention
 		}
 		return match
 	})
 }
 
-func (s *IncomingWebhookService) channelMention(ctx context.Context, ref string) (string, bool) {
-	if s.channels == nil {
+func (r *webhookRefs) channelMention(ctx context.Context, ref string) (string, bool) {
+	if r.s.channels == nil {
 		return "", false
 	}
 	ref = strings.TrimSpace(strings.TrimPrefix(ref, "#"))
 	if ref == "" {
 		return "", false
 	}
-	if ch, err := s.channels.GetBySlug(ctx, ref); err == nil && ch != nil && !ch.Archived {
-		return "~[" + ch.ID + "|" + ch.Slug + "]", true
-	}
-	if ch, err := s.channels.GetByID(ctx, ref); err == nil && ch != nil && !ch.Archived {
-		return "~[" + ch.ID + "|" + ch.Slug + "]", true
-	}
-	return "", false
-}
-
-func (s *IncomingWebhookService) userMention(ctx context.Context, ref string) (string, bool) {
-	if s.users == nil {
+	ch := r.channel(ctx, ref)
+	if ch == nil {
 		return "", false
 	}
-	user, err := s.findWebhookTargetUser(ctx, ref)
-	if err != nil || user == nil {
+	return "~[" + ch.ID + "|" + ch.Slug + "]", true
+}
+
+func (r *webhookRefs) userMention(ctx context.Context, ref string) (string, bool) {
+	if r.s.users == nil {
+		return "", false
+	}
+	user := r.user(ctx, ref)
+	if user == nil {
 		return "", false
 	}
 	name := strings.TrimSpace(user.DisplayName)

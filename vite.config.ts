@@ -21,7 +21,6 @@ const vendorChunks: Array<[string, (id: string) => boolean]> = [
   ['editor-vendor', (id) => id.includes('/node_modules/@codemirror/') || id.includes('/node_modules/codemirror/') || id.includes('/node_modules/@lezer/')],
   ['motion-vendor', (id) => id.includes('/node_modules/motion/') || id.includes('/node_modules/framer-motion/')],
   ['emoji-vendor', (id) => id.includes('/node_modules/unicode-emoji-json/')],
-  ['giphy-vendor', (id) => id.includes('/node_modules/@giphy/')],
   ['dnd-vendor', (id) => id.includes('/node_modules/@atlaskit/pragmatic-drag-and-drop')],
   ['ui-vendor', (id) => (
     id.includes('/node_modules/@base-ui/') ||
@@ -36,8 +35,9 @@ const vendorChunks: Array<[string, (id: string) => boolean]> = [
   ['slug-vendor', (id) => id.includes('/node_modules/@sindresorhus/') || id.includes('/node_modules/escape-string-regexp/')],
 ]
 
-// pdf.js (the lazy PdfPreview) and Uppy (loaded on the first attachment
-// upload) are reachable only through dynamic imports, so they are left out of
+// pdf.js (the lazy PdfPreview), Uppy (loaded on the first attachment
+// upload), GIPHY (the first GIF), the code highlighter and the date picker
+// are reachable only through dynamic imports, so they are left out of
 // the manual groups on purpose: a group also captures the shared modules its
 // members depend on (Vite's preload helper, clsx), which made the entry import
 // — and preload — all of pdf.js. Natural code splitting keeps them in their
@@ -49,6 +49,16 @@ const lazyOnlyPackages = [
   '@uppy/core', '@uppy/aws-s3', '@transloadit/prettier-bytes',
   'preact', 'lodash', 'nanoid', 'classnames', 'mime-match', 'wildcard', 'namespace-emitter',
   'p-queue', 'p-retry', 'p-timeout', 'eventemitter3', 'is-network-error',
+  // The Sentry SDK (every @sentry/* package): lib/sentry imports it only
+  // once the server served a DSN.
+  '@sentry',
+  // GIPHY: the picker's grid and the message embed import it dynamically, so
+  // it loads with the first GIF. A manual group made the entry preload it.
+  '@giphy/js-fetch-api', '@giphy/js-util', '@giphy/js-types', '@giphy/js-analytics', '@giphy/colors', '@giphy/react-components',
+  'styled-components', 'intersection-observer', 'react-use', 'throttle-debounce', 'uuid', 'tslib',
+  // The code highlighter (lib/code-highlight-loader) and the reminder /
+  // schedule date picker (LazyReminderDialog) load on first use.
+  'lowlight', 'highlight.js', 'react-day-picker', 'date-fns', '@date-fns/tz',
 ].map((pkg) => `/node_modules/${pkg}/`)
 
 // Where the dev server proxies /api and /auth. In the containerised hot-reload
@@ -75,7 +85,16 @@ function preserveDistGitignore() {
 // churn in the chat is visible instead of guessed. Loaded as a classic
 // script ahead of the module graph, which is what the auto build expects.
 // Opt out for a session with REACT_SCAN=0.
-function reactScanDev(): Plugin {
+//
+// Pinned to one version and locked with Subresource Integrity: the dev page
+// runs whatever the CDN serves at this URL, with the developer's session in
+// reach. To bump, fetch the new version's dist/auto.global.js, check that it
+// matches the file in the npm tarball (`npm pack react-scan@<version>`), then
+// `openssl dgst -sha384 -binary auto.global.js | openssl base64 -A`.
+export const REACT_SCAN_SRC = 'https://unpkg.com/react-scan@0.5.7/dist/auto.global.js'
+export const REACT_SCAN_INTEGRITY = 'sha384-DDZCsimcjpG92OUulxf7DHi4rGS/fNIW7lC5DT8+5ftaTDiUKfzIq+pDTUbPjC86'
+
+export function reactScanDev(): Plugin {
   return {
     name: 'react-scan-dev',
     apply: 'serve',
@@ -83,7 +102,7 @@ function reactScanDev(): Plugin {
       if (process.env.REACT_SCAN === '0') return html;
       return html.replace(
         '<head>',
-        '<head>\n    <script src="https://unpkg.com/react-scan/dist/auto.global.js"></script>',
+        `<head>\n    <script src="${REACT_SCAN_SRC}" integrity="${REACT_SCAN_INTEGRITY}" crossorigin="anonymous"></script>`,
       );
     },
   };
@@ -92,10 +111,11 @@ function reactScanDev(): Plugin {
 export default defineConfig({
   plugins: [react(), tailwindcss(), preserveDistGitignore(), reactScanDev()],
   build: {
-    // Three cohesive chunks sit over the 500 kB default after the vendor
-    // split: `editor-vendor` (the full CodeMirror 6 editor, ~181 kB gzip),
-    // `index` (first-party app code, ~128 kB gzip) and the lazy PDF viewer
-    // (pdf.js, ~191 kB gzip, loaded only when a PDF is opened). None splits cleanly —
+    // Two cohesive chunks sit over the 500 kB default after the vendor
+    // split: `index` (first-party app code, ~160 kB gzip) and the lazy PDF
+    // viewer (pdf.js, ~191 kB gzip, loaded only when a PDF is opened). The
+    // CodeMirror editor (~113 kB gzip since lang-html left it) and `vendor`
+    // are under it now. None splits cleanly —
     // each is one library or loaded as a unit — and the gzip sizes are fine,
     // so lift the warning bar to keep it meaningful (it still fires if any
     // chunk balloons past this) rather than noisy.

@@ -2,159 +2,95 @@
 // orders ("0 8 * * 1-5" — 08:00 on weekdays) and computes the next firing in
 // a given timezone.
 //
-// Deliberately a SUBSET of crontab syntax: minute, hour, day-of-month, month
-// and day-of-week, each accepting "*", a number, a "a-b" range, a "*/n" or
-// "a-b/n" step, and comma-separated lists of those. No @macros, no names
-// ("MON"), no seconds field — the orchestrator ticks every 15s, so minute
-// precision is the floor, and anything richer would be syntax nobody in the
-// product can discover. Keeping the grammar small also keeps Next() bounded
-// and cheap: it runs for every schedule on every reconcile tick.
+// Parsing is github.com/robfig/cron/v3's standard five-field parser (minute,
+// hour, day-of-month, month, day-of-week; "*", numbers, names, "a-b" ranges,
+// "/n" steps and lists). This package adds the product's rules on top: no
+// @descriptors and no TZ= prefix (the timezone is a separate setting on the
+// schedule), crontab's 7-for-Sunday, an unknown timezone falling back to UTC,
+// a next-firing search that fires each wall-clock time once across DST
+// changes (see Next), and Describe for UIs. The orchestrator ticks every 15s,
+// so minute precision is the floor.
 package cron
 
 import (
 	"errors"
 	"fmt"
+	"math/bits"
 	"strconv"
 	"strings"
 	"time"
+
+	robfig "github.com/robfig/cron/v3"
 )
 
 // ErrSpec reports an unusable cron spec. Callers wrap it in their own
 // validation error so the API answers 400 rather than 500.
 var ErrSpec = errors.New("cron: invalid spec")
 
-// Spec is a parsed cron expression: the allowed values per field, sorted
-// ascending. A day fires when (dom matches OR dow matches) — with the crontab
-// quirk that when BOTH are restricted, either one matching is enough.
+// parser is robfig's standard five-field parser minus descriptors: @daily
+// and @every are syntax nobody in the product can discover, and @every has
+// no wall-clock meaning for Describe to phrase.
+var parser = robfig.NewParser(robfig.Minute | robfig.Hour | robfig.Dom | robfig.Month | robfig.Dow)
+
+// starBit is the flag robfig sets on a field written as "*" (or "?"). The
+// crontab day rule depends on it: a day fires when dom AND dow match, unless
+// both are restricted — then EITHER matching is enough.
+const starBit = 1 << 63
+
+// Spec is a parsed cron expression. The zero Spec never fires.
 type Spec struct {
-	minutes []int
-	hours   []int
-	doms    []int
-	months  []int
-	dows    []int
-	// domAny/dowAny record whether the field was "*" — the OR-vs-AND rule
-	// above needs to know "unrestricted", which the value list alone can't
-	// express (a "*" dom and a "1-31" dom allow the same days).
-	domAny bool
-	dowAny bool
+	sched *robfig.SpecSchedule
 }
-
-type fieldDef struct {
-	name     string
-	min, max int
-}
-
-var fields = []fieldDef{
-	{"minute", 0, 59},
-	{"hour", 0, 23},
-	{"day of month", 1, 31},
-	{"month", 1, 12},
-	{"day of week", 0, 7}, // 7 and 0 both mean Sunday
-}
-
-// maxLookahead bounds Next's search. A spec like "0 0 30 2 *" (February 30th)
-// never fires; without a bound the loop would run forever.
-const maxLookahead = 366 * 2
 
 // Parse reads a five-field spec. Whitespace between fields is any run of
 // spaces or tabs.
 func Parse(spec string) (Spec, error) {
-	parts := strings.Fields(strings.TrimSpace(spec))
-	if len(parts) != 5 {
-		return Spec{}, fmt.Errorf("%w: want 5 fields (minute hour day-of-month month day-of-week), got %d", ErrSpec, len(parts))
+	spec = strings.TrimSpace(spec)
+	// The timezone is the schedule's own setting. robfig would also read a
+	// TZ= / CRON_TZ= prefix, and panics slicing one that has nothing after it.
+	if strings.HasPrefix(spec, "TZ=") || strings.HasPrefix(spec, "CRON_TZ=") {
+		return Spec{}, fmt.Errorf("%w: the timezone is set separately, not as a TZ= prefix", ErrSpec)
 	}
-	var out Spec
-	lists := make([][]int, 5)
-	for i, part := range parts {
-		vals, err := parseField(part, fields[i])
-		if err != nil {
-			return Spec{}, err
-		}
-		lists[i] = vals
+	fields := strings.Fields(spec)
+	if len(fields) == 5 {
+		fields[4] = sevenAsSunday(fields[4])
 	}
-	out.minutes, out.hours, out.doms, out.months, out.dows = lists[0], lists[1], lists[2], lists[3], lists[4]
-	out.domAny = parts[2] == "*"
-	out.dowAny = parts[4] == "*"
-	// Normalize Sunday: crontab accepts 0 and 7; Go's time.Weekday only has 0.
-	for i, d := range out.dows {
-		if d == 7 {
-			out.dows[i] = 0
-		}
+	sched, err := parser.Parse(strings.Join(fields, " "))
+	if err != nil {
+		return Spec{}, fmt.Errorf("%w: %v", ErrSpec, err)
 	}
-	out.dows = dedupe(out.dows)
-	return out, nil
+	// Without the Descriptor option every schedule robfig returns is a
+	// *SpecSchedule (only @every builds anything else).
+	return Spec{sched: sched.(*robfig.SpecSchedule)}, nil
 }
 
-// parseField expands one comma-separated field into its sorted, deduped
-// values.
-// A field is never empty here (strings.Fields drops blanks) and an empty
-// LIST element ("0,,5") reaches parseTerm, which rejects it — so this has no
-// empty-string guard of its own.
-func parseField(field string, def fieldDef) ([]int, error) {
-	var out []int
-	for _, part := range strings.Split(field, ",") {
-		vals, err := parseTerm(part, def)
-		if err != nil {
-			return nil, err
+// sevenAsSunday folds crontab's alternate Sunday (7), which robfig's 0-6
+// day-of-week range rejects, into 0: a term that reaches 7 ("7", "5-7",
+// "1-7/2") is spelled out as its days with Sunday as 0. Every other term
+// passes through for the parser to judge.
+func sevenAsSunday(dow string) string {
+	terms := strings.Split(dow, ",")
+	for i, term := range terms {
+		rng, stepStr, hasStep := strings.Cut(term, "/")
+		loStr, hiStr, isRange := strings.Cut(rng, "-")
+		if !isRange {
+			hiStr = loStr // "7" and "7/n" are the single day 7
 		}
-		out = append(out, vals...)
-	}
-	return dedupe(out), nil
-}
-
-// parseTerm expands ONE term: "*", "*/n", "a", "a-b" or "a-b/n".
-func parseTerm(term string, def fieldDef) ([]int, error) {
-	step := 1
-	if base, stepStr, ok := strings.Cut(term, "/"); ok {
-		n, err := strconv.Atoi(stepStr)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("%w: bad step %q in %s field", ErrSpec, stepStr, def.name)
+		lo, errLo := strconv.Atoi(loStr)
+		step, errStep := 1, error(nil)
+		if hasStep {
+			step, errStep = strconv.Atoi(stepStr)
 		}
-		step = n
-		term = base
-	}
-	lo, hi := def.min, def.max
-	if term != "*" {
-		loStr, hiStr, isRange := strings.Cut(term, "-")
-		n, err := strconv.Atoi(loStr)
-		if err != nil {
-			return nil, fmt.Errorf("%w: bad value %q in %s field", ErrSpec, loStr, def.name)
+		if hiStr != "7" || errLo != nil || errStep != nil || step <= 0 || lo > 7 {
+			continue
 		}
-		lo, hi = n, n
-		if isRange {
-			m, err := strconv.Atoi(hiStr)
-			if err != nil {
-				return nil, fmt.Errorf("%w: bad range end %q in %s field", ErrSpec, hiStr, def.name)
-			}
-			hi = m
+		var days []string
+		for d := lo; d <= 7; d += step {
+			days = append(days, strconv.Itoa(d%7))
 		}
+		terms[i] = strings.Join(days, ",")
 	}
-	if lo < def.min || hi > def.max || lo > hi {
-		return nil, fmt.Errorf("%w: %s out of range (%d-%d)", ErrSpec, def.name, def.min, def.max)
-	}
-	var out []int
-	for v := lo; v <= hi; v += step {
-		out = append(out, v)
-	}
-	return out, nil
-}
-
-func dedupe(in []int) []int {
-	seen := make(map[int]bool, len(in))
-	out := make([]int, 0, len(in))
-	for _, v := range in {
-		if !seen[v] {
-			seen[v] = true
-			out = append(out, v)
-		}
-	}
-	// Insertion sort: fields hold at most 60 values.
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j] < out[j-1]; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
-	return out
+	return strings.Join(terms, ",")
 }
 
 // Location resolves an IANA timezone name, falling back to UTC for an empty
@@ -170,6 +106,10 @@ func Location(tz string) *time.Location {
 	return loc
 }
 
+// maxLookahead bounds Next's search. A spec like "0 0 30 2 *" (February 30th)
+// never fires; without a bound the loop would run forever.
+const maxLookahead = 366 * 2
+
 // Next returns the first firing strictly after `after`, evaluated in loc.
 // The second result is false when the spec can never fire again within the
 // lookahead window (e.g. February 30th).
@@ -178,23 +118,27 @@ func Location(tz string) *time.Location {
 // without touching their 1440 minutes, so the worst case is ~366 day checks
 // plus one day's hour/minute scan.
 //
-// DST: the local wall-clock time is what's asked for ("08:00 in Stockholm"),
-// so time.Date does the conversion. A time that doesn't exist on a
-// spring-forward day normalizes forward (08:00 → 09:00 rather than skipped);
-// an ambiguous fall-back time resolves to one of the two instants. Both are
-// once-a-year, one-hour effects on a daily schedule.
+// This is deliberately not robfig's SpecSchedule.Next, whose DST handling
+// would drop or duplicate a scheduled order. Each matching day yields each
+// wall-clock time once, through time.Date: a time that doesn't exist on a
+// spring-forward day still fires that day, at the instant time.Date
+// normalizes it to (Stockholm 02:30 → 03:30 CEST, New York 02:30 → 01:30
+// EST) rather than being skipped, and an ambiguous fall-back time resolves to
+// ONE of its two instants, so it fires once, not on each pass through the
+// repeated hour.
 func (s Spec) Next(after time.Time, loc *time.Location) (time.Time, bool) {
-	if len(s.minutes) == 0 || len(s.hours) == 0 || len(s.months) == 0 {
+	if s.sched == nil {
 		return time.Time{}, false // zero Spec (never parsed)
 	}
+	hours, minutes := fieldValues(s.sched.Hour), fieldValues(s.sched.Minute)
 	// Start from the minute AFTER `after` — a firing exactly at `after` has
 	// already happened.
 	start := after.In(loc).Truncate(time.Minute).Add(time.Minute)
 	day := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc)
 	for i := 0; i < maxLookahead; i++ {
 		if s.matchesDay(day) {
-			for _, h := range s.hours {
-				for _, m := range s.minutes {
+			for _, h := range hours {
+				for _, m := range minutes {
 					candidate := time.Date(day.Year(), day.Month(), day.Day(), h, m, 0, 0, loc)
 					if !candidate.Before(start) {
 						return candidate, true
@@ -211,30 +155,23 @@ func (s Spec) Next(after time.Time, loc *time.Location) (time.Time, bool) {
 // if both are restricted EITHER matching fires (the documented crontab
 // quirk); otherwise the restricted one decides.
 func (s Spec) matchesDay(day time.Time) bool {
-	if !contains(s.months, int(day.Month())) {
+	sc := s.sched
+	if sc.Month&(1<<uint(day.Month())) == 0 {
 		return false
 	}
-	domOK := contains(s.doms, day.Day())
-	dowOK := contains(s.dows, int(day.Weekday()))
+	domOK := sc.Dom&(1<<uint(day.Day())) != 0
+	dowOK := sc.Dow&(1<<uint(day.Weekday())) != 0
+	domAny, dowAny := sc.Dom&starBit != 0, sc.Dow&starBit != 0
 	switch {
-	case s.domAny && s.dowAny:
+	case domAny && dowAny:
 		return true
-	case s.domAny:
+	case domAny:
 		return dowOK
-	case s.dowAny:
+	case dowAny:
 		return domOK
 	default:
 		return domOK || dowOK
 	}
-}
-
-func contains(vals []int, v int) bool {
-	for _, x := range vals {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }
 
 // Due reports whether a schedule whose last firing was `last` is due at
@@ -262,18 +199,33 @@ func Describe(spec, tz string) string {
 	if tz != "" {
 		zone = " " + tz
 	}
-	if len(parsed.hours) != 1 || len(parsed.minutes) != 1 {
+	s := parsed.sched
+	hours, minutes := fieldValues(s.Hour), fieldValues(s.Minute)
+	if len(hours) != 1 || len(minutes) != 1 || len(fieldValues(s.Month)) != 12 {
 		return spec + zone
 	}
-	at := fmt.Sprintf("%02d:%02d", parsed.hours[0], parsed.minutes[0])
+	at := fmt.Sprintf("%02d:%02d", hours[0], minutes[0])
+	domAny, dowAny := s.Dom&starBit != 0, s.Dow&starBit != 0
 	switch {
-	case parsed.domAny && parsed.dowAny && len(parsed.months) == 12:
+	case domAny && dowAny:
 		return "daily at " + at + zone
-	case parsed.domAny && !parsed.dowAny:
-		return at + " on " + weekdayList(parsed.dows) + zone
+	case domAny:
+		return at + " on " + weekdayList(fieldValues(s.Dow)) + zone
 	default:
 		return spec + zone
 	}
+}
+
+// fieldValues lists the values a robfig field bitmask allows, ascending.
+func fieldValues(mask uint64) []int {
+	mask &^= starBit
+	out := make([]int, 0, bits.OnesCount64(mask))
+	for mask != 0 {
+		v := bits.TrailingZeros64(mask)
+		out = append(out, v)
+		mask &^= 1 << v
+	}
+	return out
 }
 
 var dayNames = [...]string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}

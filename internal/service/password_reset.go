@@ -34,6 +34,11 @@ const (
 	// passwordResetTokenBytes is the raw entropy behind a reset token. 32
 	// bytes (256 bits) makes guessing irrelevant next to the TTL.
 	passwordResetTokenBytes = 32
+	// passwordResetCooldown is the per-address floor between self-service
+	// reset mails, so the endpoint can't be used to flood someone's inbox.
+	passwordResetCooldown = 5 * time.Minute
+	// passwordResetWorkTimeout bounds the detached lookup + mint + send.
+	passwordResetWorkTimeout = 30 * time.Second
 )
 
 var (
@@ -119,6 +124,10 @@ func (s *AuthService) CreatePasswordResetForUser(ctx context.Context, targetUser
 // an address is registered, whether it is a guest, or whether mail went out.
 // Only the reset-store being unwired is surfaced, and that is a deployment
 // fact, not a per-account one.
+//
+// Everything per-account runs detached, after the response: a guest address
+// used to answer only once its mail had been sent — a timing oracle that told
+// guest accounts apart from everything else.
 func (s *AuthService) RequestPasswordReset(ctx context.Context, rawEmail string) error {
 	if s.resets == nil {
 		return ErrPasswordResetUnavailable
@@ -127,22 +136,58 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, rawEmail string)
 	if err != nil {
 		return nil
 	}
+	detached := context.WithoutCancel(ctx)
+	s.background(func() {
+		ctx, cancel := context.WithTimeout(detached, passwordResetWorkTimeout)
+		defer cancel()
+		s.processPasswordResetRequest(ctx, addr)
+	})
+	return nil
+}
+
+// processPasswordResetRequest is the detached half of RequestPasswordReset:
+// cooldown, lookup, guest check, mint and send. Nothing here reaches the
+// caller; failures are logged.
+func (s *AuthService) processPasswordResetRequest(ctx context.Context, addr string) {
+	if !s.passwordResetCooldownFree(ctx, addr) {
+		return
+	}
 	user, err := s.users.GetUserByEmail(ctx, addr)
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
-			slog.Error("password reset lookup failed", "error", err)
+			slog.ErrorContext(ctx, "password reset lookup failed", "error", err)
 		}
-		return nil
+		return
 	}
 	if !supportsPasswordReset(user) {
 		// An SSO account. Nothing to reset, and saying so would confirm the
 		// address exists.
-		return nil
+		return
 	}
 	if _, err := s.mintPasswordReset(ctx, user, false); err != nil {
-		slog.Error("password reset mint failed", "userID", user.ID, "error", err)
+		slog.ErrorContext(ctx, "password reset mint failed", "userID", user.ID, "error", err)
 	}
-	return nil
+}
+
+// passwordResetCooldownFree claims the address's cooldown slot: true for the
+// first request in passwordResetCooldown, false for the rest. Keyed by the
+// address's hash (no plaintext addresses in Redis) and taken for every
+// address, registered or not, so it reveals nothing either. Without a cache
+// — or when it is down — requests are not throttled: the per-IP route limit
+// still applies, and a reset must not hinge on Redis.
+func (s *AuthService) passwordResetCooldownFree(ctx context.Context, addr string) bool {
+	if s.cache == nil {
+		return true
+	}
+	key := "pwreset:cooldown:" + hashToken(addr)
+	var seen bool
+	if err := s.cache.Get(ctx, key, &seen); err == nil {
+		return false
+	}
+	if err := s.cache.Set(ctx, key, true, passwordResetCooldown); err != nil {
+		slog.WarnContext(ctx, "password reset cooldown not recorded", "error", err)
+	}
+	return true
 }
 
 // ResetPassword redeems a reset token and sets a new password. The token is
@@ -164,6 +209,10 @@ func (s *AuthService) ResetPassword(ctx context.Context, token, password string)
 		return ErrPasswordResetInvalid
 	}
 	user, err := s.users.GetUser(ctx, userID)
+	if errors.Is(err, store.ErrNotFound) {
+		// The ticket outlived its account (deleted between mint and use).
+		return ErrPasswordResetInvalid
+	}
 	if err != nil {
 		return fmt.Errorf("auth: get user for password reset: %w", err)
 	}
@@ -178,26 +227,29 @@ func (s *AuthService) ResetPassword(ctx context.Context, token, password string)
 	if err != nil {
 		return fmt.Errorf("auth: hash password: %w", err)
 	}
-	user.PasswordHash = string(hashed)
-	user.UpdatedAt = time.Now()
-	if err := s.users.UpdateUser(ctx, user); err != nil {
+	// Field-level: writing back the whole copy read above could undo a
+	// deactivation (or demotion) that landed in between.
+	hash := string(hashed)
+	if err := s.users.PatchUser(ctx, user.ID, store.UserPatch{PasswordHash: &hash, UpdatedAt: time.Now()}); err != nil {
 		return fmt.Errorf("auth: update password: %w", err)
 	}
-	// Refresh the cached copy so nothing serves the superseded hash.
-	if err := s.cache.SetUser(ctx, user); err != nil {
-		slog.Warn("password reset: cache refresh failed", "userID", user.ID, "error", err)
+	// Evict the cached copy so nothing serves the superseded hash. (Not a
+	// refresh with this copy: it may already be stale, and the auth
+	// middleware reads status and role from the cache.)
+	if err := s.cache.Delete(ctx, "user:"+user.ID); err != nil {
+		slog.WarnContext(ctx, "password reset: cache eviction failed", "userID", user.ID, "error", err)
 	}
 	// Best-effort, and loudly logged: a surviving refresh token after a
 	// password reset is a real security gap, but it must not fail a reset the
 	// user already completed.
 	if err := s.tokens.DeleteAllRefreshTokensForUser(ctx, user.ID); err != nil {
-		slog.Error("password reset: revoking existing sessions failed", "userID", user.ID, "error", err)
+		slog.ErrorContext(ctx, "password reset: revoking existing sessions failed", "userID", user.ID, "error", err)
 	}
 	// Same reasoning for paired ex-runners: whoever held the old password
 	// may have paired a machine to run agents as this account.
 	if s.runners != nil {
 		if err := s.runners.RevokeAllForUser(ctx, user.ID); err != nil {
-			slog.Error("password reset: disconnecting runners failed", "userID", user.ID, "error", err)
+			slog.ErrorContext(ctx, "password reset: disconnecting runners failed", "userID", user.ID, "error", err)
 		}
 	}
 	return nil
@@ -232,7 +284,7 @@ func (s *AuthService) deliver(ctx context.Context, msg email.Message, kind, user
 		return false
 	}
 	if err := s.mailer.Send(ctx, msg); err != nil {
-		slog.Error("transactional email failed", "kind", kind, "userID", userID, "error", err)
+		slog.ErrorContext(ctx, "transactional email failed", "kind", kind, "userID", userID, "error", err)
 		return false
 	}
 	return true
@@ -242,7 +294,7 @@ func (s *AuthService) deliver(ctx context.Context, msg email.Message, kind, user
 // acceptance and password reset.
 func validateGuestPassword(password string) error {
 	if utf8.RuneCountInString(password) < minGuestPasswordLen || len(password) > maxGuestPasswordLen {
-		return fmt.Errorf("auth: password must be at least %d characters", minGuestPasswordLen)
+		return ErrInvalidPassword
 	}
 	return nil
 }

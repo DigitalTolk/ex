@@ -30,8 +30,9 @@ describe('task marker', () => {
   });
 
   it('renders flair and labels', () => {
-    expect(taskKindFlair('feature')).toEqual({ emoji: '✨', label: 'feature' });
-    expect(taskKindFlair('weird')).toEqual({ emoji: '🐛', label: 'bug' });
+    expect(taskKindFlair('feature')).toBe('feature');
+    expect(taskKindFlair('chore')).toBe('chore');
+    expect(taskKindFlair('weird')).toBe('bug');
     expect(taskStateLabel('awaiting_user_test')).toBe('ready to test');
     expect(taskStateTerminal('done')).toBe(true);
     expect(taskStateTerminal('in_progress')).toBe(false);

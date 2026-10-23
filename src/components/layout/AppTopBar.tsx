@@ -1,7 +1,12 @@
-import { ChevronLeft, Menu } from 'lucide-react';
+import { useEffect } from 'react';
+import { ArrowLeft, ArrowRight, ChevronLeft, Menu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { TooltipIconButton } from '@/components/ui/tooltip-icon-button';
 import { SearchBar } from '@/components/SearchBar';
+import { navigationApi, useHistoryTraversal } from '@/hooks/useHistoryTraversal';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { claimHistoryKeys, historyShortcuts, historyStepFor, type HistoryStep } from '@/lib/history-shortcut';
+import { isApplePlatform } from '@/lib/platform';
 import { usePageTitleStore } from '@/stores/page-title';
 
 interface AppTopBarProps {
@@ -11,9 +16,10 @@ interface AppTopBarProps {
 
 /**
  * Slim app-wide top bar — the global SearchBar centred between two equal side
- * columns. The mobile menu button (left) opens the channels drawer; it stays
- * in the AppLayout's swipe handler hierarchy. The account menu lives at the
- * bottom of the sidebar (see AccountMenu).
+ * columns. Back and Forward sit at the left, beside the sidebar. The mobile
+ * menu button (left) opens the channels drawer; it stays in the AppLayout's
+ * swipe handler hierarchy. The account menu lives at the bottom of the
+ * sidebar (see AccountMenu).
  */
 export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarProps) {
   const isMobile = useIsMobile();
@@ -28,7 +34,7 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
       // strip is draggable-as-a-titlebar on native via Capacitor
       // (carve-outs cover the interactive children).
       // Equal 1fr side columns keep the search field centred in the
-      // viewport regardless of how wide the left (channels) control is — on EVERY tier. On the COMPACT tier
+      // viewport regardless of how wide the left controls are — on EVERY tier. On the COMPACT tier
       // (narrow desktop window) the field stays centred but its column
       // caps at 17rem instead of 36rem, and the hamburger docks against
       // the field's LEFT edge (justify-end on the left column) instead of
@@ -47,7 +53,13 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
       // mobile keyboard background must match the sidebar, not the chat.
       data-keyboard-surface="sidebar"
     >
-      <div className="flex items-center compact:justify-end" data-topbar-left="true">
+      {/* Both side columns are held at least as wide as the controls on the
+          left (--top-bar-side, index.css), so the search stays centred. */}
+      <div
+        className="flex items-center gap-1 compact:justify-end not-mobile:min-w-(--top-bar-side)"
+        data-topbar-left="true"
+      >
+        {!isMobile && <HistoryButtons />}
         {/* The hamburger shows whenever the channel sidebar isn't already
             open (mobile drawer closed, or tablet md–lg which has no
             permanent sidebar). When it should be hidden — drawer open, or
@@ -91,7 +103,85 @@ export function AppTopBar({ onOpenChannels, channelsButtonHidden }: AppTopBarPro
       )}
 
       {/* Empty right column: balances the left one so the search stays centred. */}
-      <div aria-hidden="true" />
+      <div aria-hidden="true" className="not-mobile:min-w-(--top-bar-side)" />
     </header>
+  );
+}
+
+// Disabled, an arrow only dims (no dark-mode chip: it would read as pressed).
+// rounded-lg like the sidebar toggle beside them.
+const HISTORY_BUTTON_CLASS = 'rounded-lg text-sidebar-foreground hover:bg-sidebar-accent dark:disabled:bg-transparent';
+
+const APPLE = isApplePlatform(navigator.userAgent);
+const SHORTCUTS = historyShortcuts(APPLE);
+
+// Through the Navigation API — the same history canGoBack/canGoForward
+// describe. window.history would walk the tab's joint session history, which
+// also holds the entries of frames on the page (an HTML preview's).
+function traverse(nav: Navigation, to: HistoryStep) {
+  const { committed, finished } = to === 'back' ? nav.back() : nav.forward();
+  // A traversal that is refused or overtaken rejects both; nothing to report.
+  void Promise.allSettled([committed, finished]);
+}
+
+// The tab's history, Slack-style, from these buttons or the keyboard. Hidden
+// where the browser can't say whether there is anywhere to go.
+function HistoryButtons() {
+  const { canGoBack, canGoForward } = useHistoryTraversal();
+  // One listener for the bar's lifetime, reading where history can go at the
+  // moment of the key press.
+  useEffect(() => {
+    const nav = navigationApi();
+    if (!nav) return;
+    const canStep = (to: HistoryStep) => (to === 'back' ? nav.canGoBack : nav.canGoForward);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.isComposing) return;
+      const to = historyStepFor(e, APPLE);
+      if (to === null) return;
+      // A held chord steps once: its repeats would queue step after step
+      // and, past the first page, hand the rest to the browser's own Back.
+      if (e.repeat) {
+        e.preventDefault();
+        return;
+      }
+      // Nowhere to go: the browser's own shortcut, if it has one, still runs.
+      if (!canStep(to)) return;
+      e.preventDefault();
+      traverse(nav, to);
+    };
+    document.addEventListener('keydown', onKey);
+    const release = claimHistoryKeys(canStep);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      release();
+    };
+  }, []);
+  const nav = navigationApi();
+  if (!nav) return null;
+  return (
+    <>
+      <TooltipIconButton
+        label="Back"
+        shortcut={SHORTCUTS.back}
+        disabled={!canGoBack}
+        onClick={() => traverse(nav, 'back')}
+        size="icon-sm"
+        className={HISTORY_BUTTON_CLASS}
+        testId="history-back"
+      >
+        <ArrowLeft className="size-4" />
+      </TooltipIconButton>
+      <TooltipIconButton
+        label="Forward"
+        shortcut={SHORTCUTS.forward}
+        disabled={!canGoForward}
+        onClick={() => traverse(nav, 'forward')}
+        size="icon-sm"
+        className={HISTORY_BUTTON_CLASS}
+        testId="history-forward"
+      >
+        <ArrowRight className="size-4" />
+      </TooltipIconButton>
+    </>
   );
 }

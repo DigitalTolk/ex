@@ -2,8 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'rea
 import { EditorState, EditorSelection, Compartment } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { history, historyKeymap, defaultKeymap, insertNewlineAndIndent } from '@codemirror/commands';
-import { markdown } from '@codemirror/lang-markdown';
-import { Strikethrough, Autolink } from '@lezer/markdown';
+import { composerMarkdown } from './language';
 import type { WysiwygEditorHandle, ActiveFormat } from './types';
 import { composerTheme, composerHighlight } from './theme';
 import { inlinePreview } from './extensions/inlinePreview';
@@ -12,6 +11,8 @@ import { emojiGlyphs } from './extensions/emojiGlyphs';
 import { composerAutocomplete, type CompletionProviders } from './extensions/completions';
 import { applyMark, applyBlock, getActiveFormats } from './extensions/commands';
 import { composerTooltips, visualViewportRepositioner } from './tooltipSpace';
+import { historyKeyBindings, withoutHistoryKeys } from '@/lib/history-shortcut';
+import { isApplePlatform } from '@/lib/platform';
 
 export type { WysiwygEditorHandle, ActiveFormat };
 
@@ -82,11 +83,8 @@ interface Props {
   customEmojiMap?: () => Record<string, string>;
 }
 
-// Remove SetextHeading so `foobar\n---` is a paragraph followed by a thematic
-// break (a divider), not an H2 — matching the Slack-style mental model that a
-// line of `---` is a horizontal rule. Without this, the heading highlight would
-// render the preceding line bold. Keep GFM strikethrough + autolink.
-const markdownLanguage = markdown({ extensions: [Strikethrough, Autolink, { remove: ['SetextHeading'] }] });
+// CommonMark + strikethrough + autolinks, no SetextHeading (see ./language).
+const markdownLanguage = composerMarkdown;
 
 export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function MarkdownEditor(
   {
@@ -230,7 +228,10 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
               },
             },
             ...historyKeymap,
-            ...defaultKeymap,
+            // Back and Forward's keys are theirs here too — whenever they
+            // will go somewhere; otherwise the editor keeps them.
+            ...historyKeyBindings(isApplePlatform(navigator.userAgent)),
+            ...withoutHistoryKeys(defaultKeymap, isApplePlatform(navigator.userAgent)),
           ]),
           EditorView.domEventHandlers({
             paste: (event) => {

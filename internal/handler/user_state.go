@@ -37,7 +37,7 @@ func (h *UserStateHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	state, err := h.stateSvc.List(r.Context(), userID)
 	if err != nil {
-		writeInternalError(w, r, "state_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, state)
@@ -57,11 +57,11 @@ func (h *UserStateHandler) MarkThreadSeen(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := h.msgSvc.CheckAccess(r.Context(), userID, parentID, parentType); err != nil {
-		writeReadResourceError(w, r, err, "thread")
+		writeServiceError(w, r, err)
 		return
 	}
 	if err := h.stateSvc.MarkThreadSeen(r.Context(), userID, parentID, parentType, threadRootID); err != nil {
-		writeInternalError(w, r, "state_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -91,7 +91,7 @@ func (h *UserStateHandler) setSkillHidden(w http.ResponseWriter, r *http.Request
 	}
 	if h.skills != nil && hidden {
 		if _, err := h.skills.GetVisibleSkill(r.Context(), userID, skillID); err != nil {
-			writeReadResourceError(w, r, err, "skill")
+			writeServiceError(w, r, err)
 			return
 		}
 	}
@@ -102,7 +102,7 @@ func (h *UserStateHandler) setSkillHidden(w http.ResponseWriter, r *http.Request
 		err = h.stateSvc.UnhideSkill(r.Context(), userID, skillID)
 	}
 	if err != nil {
-		writeInternalError(w, r, "state_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -128,7 +128,7 @@ func (h *UserStateHandler) setConversationHidden(w http.ResponseWriter, r *http.
 		return
 	}
 	if _, err := h.convSvc.GetByID(r.Context(), userID, convID); err != nil {
-		writeReadResourceError(w, r, err, "conversation")
+		writeServiceError(w, r, err)
 		return
 	}
 	var err error
@@ -138,7 +138,7 @@ func (h *UserStateHandler) setConversationHidden(w http.ResponseWriter, r *http.
 		err = h.stateSvc.UnhideConversation(r.Context(), userID, convID)
 	}
 	if err != nil {
-		writeInternalError(w, r, "state_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // MarkdownComposer pulls in roster/channel/emoji/auth/presence data hooks these
 // view-level tests don't stub; they don't exercise the composer, so stub it with
@@ -112,7 +112,10 @@ vi.mock('@/context/PresenceContext', () => ({
   PresenceProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-vi.mock('@/hooks/useChannels', () => ({
+// The archive/leave/description mutations stay real (they call the mocked
+// apiFetch below); only the queries are stubbed.
+vi.mock('@/hooks/useChannels', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useChannels')>()),
   useChannelBySlug: () => ({ data: mockChannel }),
   useChannelMembers: () => ({ data: mockMembers }),
   useUserChannels: () => ({ data: [] }),
@@ -131,7 +134,7 @@ vi.mock('@/hooks/useMessages', () => ({
     isLoading: false,
     fetchNextPage: vi.fn(),
   }),
-  useSendChannelMessage: () => ({ mutate: mockSendMutate, isPending: false }),
+  useSendMessage: () => ({ mutate: mockSendMutate, isPending: false }),
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),
@@ -146,6 +149,12 @@ const mockApiFetch = vi.fn();
 vi.mock('@/lib/api', () => ({
   apiFetch: (...args: unknown[]) => mockApiFetch(...args),
 }));
+
+vi.mock('@/lib/toast', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/toast')>()),
+  showToast: vi.fn(),
+}));
+import { showToast } from '@/lib/toast';
 
 // Import after mocks
 import { ChannelView } from './ChannelView';
@@ -328,5 +337,120 @@ describe('ChannelView - actions', () => {
         }),
       );
     });
+  });
+
+  // A request the server refuses (or that never reaches it) must say so
+  // instead of failing silently into an unhandled rejection.
+  function rejectFor(method: string, url: string) {
+    mockApiFetch.mockImplementation((u: string, init?: { method?: string }) =>
+      u === url && init?.method === method ? Promise.reject(new Error('boom')) : Promise.resolve({}),
+    );
+  }
+
+  // Leaves the matching request pending until release() is called.
+  function holdFor(method: string, url: string) {
+    let release: () => void = () => {};
+    mockApiFetch.mockImplementation((u: string, init?: { method?: string }) => {
+      if (u === url && init?.method === method) {
+        return new Promise<void>((resolve) => {
+          release = () => resolve();
+        });
+      }
+      return Promise.resolve({});
+    });
+    return () => release();
+  }
+
+  async function confirmArchive() {
+    const items = await screen.findAllByTestId('dropdown-item');
+    fireEvent.click(items.find((b) => b.textContent?.includes('Archive channel'))!);
+    fireEvent.click(screen.getByTestId('archive-channel-confirm'));
+  }
+
+  it('a failed archive shows an error toast', async () => {
+    rejectFor('DELETE', '/api/v1/channels/ch-1');
+    renderChannelView();
+    await confirmArchive();
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith("Couldn't archive the channel. Try again."));
+  });
+
+  it('confirming archive again while the first request is in flight sends it once', async () => {
+    const release = holdFor('DELETE', '/api/v1/channels/ch-1');
+    renderChannelView();
+    await confirmArchive();
+    await confirmArchive();
+    release();
+    await waitFor(() =>
+      expect(mockApiFetch.mock.calls.filter(([, init]) => init?.method === 'DELETE')).toHaveLength(1),
+    );
+  });
+
+  it('a failed unarchive shows an error toast and re-enables the button', async () => {
+    mockChannel.archived = true;
+    rejectFor('POST', '/api/v1/channels/ch-1/unarchive');
+    renderChannelView();
+    const unarchive = within(screen.getByTestId('channel-archived-notice')).getByRole('button', { name: /Unarchive/ });
+    fireEvent.click(unarchive);
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith("Couldn't unarchive the channel. Try again."));
+    expect(unarchive).not.toBeDisabled();
+  });
+
+  it('a second unarchive click while the first is in flight sends it once', async () => {
+    mockChannel.archived = true;
+    const release = holdFor('POST', '/api/v1/channels/ch-1/unarchive');
+    renderChannelView();
+    const unarchive = within(screen.getByTestId('channel-archived-notice')).getByRole('button', { name: /Unarchive/ });
+    fireEvent.click(unarchive);
+    fireEvent.click(unarchive);
+    release();
+    await waitFor(() => expect(unarchive).not.toBeDisabled());
+    expect(mockApiFetch.mock.calls.filter(([url]) => url === '/api/v1/channels/ch-1/unarchive')).toHaveLength(1);
+  });
+
+  describe('leave', () => {
+    beforeEach(() => {
+      mockChannel.slug = 'random';
+      mockChannel.name = 'random';
+      mockMembers = [
+        { channelID: 'ch-1', userID: 'u-1', role: 'member', displayName: 'Alice', joinedAt: '2026-01-01T00:00:00Z' },
+      ];
+    });
+    afterEach(() => {
+      mockChannel.slug = 'general';
+      mockChannel.name = 'general';
+    });
+
+    async function clickLeave() {
+      const items = await screen.findAllByTestId('dropdown-item');
+      fireEvent.click(items.find((b) => b.textContent?.includes('Leave channel'))!);
+    }
+
+    it('a failed leave shows an error toast and stays on the channel', async () => {
+      rejectFor('POST', '/api/v1/channels/ch-1/leave');
+      renderChannelView('random');
+      await clickLeave();
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith("Couldn't leave the channel. Try again."));
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
+
+    it('a second leave while the first is in flight sends it once', async () => {
+      const release = holdFor('POST', '/api/v1/channels/ch-1/leave');
+      renderChannelView('random');
+      await clickLeave();
+      await clickLeave();
+      release();
+      await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/'));
+      expect(mockApiFetch.mock.calls.filter(([url]) => url === '/api/v1/channels/ch-1/leave')).toHaveLength(1);
+    });
+  });
+
+  it('a failed description save shows an error toast', async () => {
+    rejectFor('PATCH', '/api/v1/channels/ch-1');
+    renderChannelView();
+    fireEvent.click(screen.getByTitle('Click to edit description'));
+    const input = screen.getByPlaceholderText('Add a description...');
+    fireEvent.change(input, { target: { value: 'New desc' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith("Couldn't save the description. Try again."));
   });
 });

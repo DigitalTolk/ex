@@ -6,6 +6,7 @@ import {
   resetAgentRunsSessionState,
   useAgentRunsStore,
 } from './agent-runs';
+import { deliverFrame, expectInvalidPayloadReported, wsHandlers } from '@/test/ws-frames';
 
 function runsFor(parentID: string) {
   return useAgentRunsStore.getState().runsByParent[parentID] ?? [];
@@ -49,10 +50,13 @@ describe('agent-runs store', () => {
     expect(runsFor('chan1')[0].action).toBe('reading the thread…');
   });
 
-  it('ignores malformed frames', () => {
-    onRunUpdated(null);
-    onRunUpdated({ id: 'r1' });
-    onRunProgress({ runID: 'r1' });
+  it('ignores malformed frames (the registry drops them before the store)', () => {
+    const opts = { handlers: wsHandlers({ 'run.updated': onRunUpdated, 'run.progress': onRunProgress }) };
+    expectInvalidPayloadReported(['run.updated', 'run.updated', 'run.progress'], () => {
+      deliverFrame(opts, 'run.updated', null);
+      deliverFrame(opts, 'run.updated', { id: 'r1' });
+      deliverFrame(opts, 'run.progress', { runID: 'r1' });
+    });
     expect(runsFor('chan1')).toHaveLength(0);
   });
 });

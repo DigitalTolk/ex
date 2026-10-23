@@ -108,6 +108,15 @@ describe('UnfurlCard', () => {
     expect(screen.queryByTestId('unfurl-card-image')).toBeNull();
   });
 
+  it('gives the card no href for an OS-handler scheme or a relative URL', () => {
+    for (const url of ['smb://attacker.example/share', '/auth/desktop/complete?code=X']) {
+      mockUseUnfurl.mockReturnValue({ data: makePreview({ url }), isLoading: false });
+      const view = renderCard();
+      expect(screen.getByTestId('unfurl-card').querySelector('a')?.getAttribute('href')).toBeNull();
+      view.unmount();
+    }
+  });
+
   it('renders nothing when preview has no fields', () => {
     mockUseUnfurl.mockReturnValue({
       data: { url: 'https://example.com/x' },

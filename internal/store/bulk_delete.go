@@ -6,7 +6,6 @@ import (
 
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
@@ -29,6 +28,16 @@ func (db *DB) deleteAll(ctx context.Context, keys []map[string]types.AttributeVa
 		}
 	}
 	return nil
+}
+
+// primaryKeys strips fetched rows down to their PK/SK — a DeleteRequest key
+// must carry the key attributes only.
+func primaryKeys(items []map[string]types.AttributeValue) []map[string]types.AttributeValue {
+	keys := make([]map[string]types.AttributeValue, len(items))
+	for i, item := range items {
+		keys[i] = map[string]types.AttributeValue{"PK": item["PK"], "SK": item["SK"]}
+	}
+	return keys
 }
 
 // partitionKeys returns the key of every item under pk.
@@ -124,31 +133,20 @@ func (s *UserStoreImpl) DeleteUser(ctx context.Context, u *model.User) error {
 // lastReadSeqs batch-reads lastReadSeq from user-side rows (userID → seq);
 // rows that don't exist are absent from the result.
 func (db *DB) lastReadSeqs(ctx context.Context, keys []map[string]types.AttributeValue) (map[string]int64, error) {
-	out := make(map[string]int64, len(keys))
-	const batchSize = 100 // BatchGetItem limit
-	for start := 0; start < len(keys); start += batchSize {
-		req := map[string]types.KeysAndAttributes{db.Table: {
-			Keys:                     keys[start:min(start+batchSize, len(keys))],
-			ProjectionExpression:     aws.String("#uid, #seq"),
-			ExpressionAttributeNames: map[string]string{"#uid": "userID", "#seq": "lastReadSeq"},
-		}}
-		for len(req) > 0 {
-			res, err := db.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
-			if err != nil {
-				return nil, fmt.Errorf("store: batch get read state: %w", err)
-			}
-			for _, item := range res.Responses[db.Table] {
-				var row struct {
-					UserID      string `dynamodbav:"userID"`
-					LastReadSeq int64  `dynamodbav:"lastReadSeq"`
-				}
-				if err := attributevalue.UnmarshalMap(item, &row); err != nil {
-					return nil, fmt.Errorf("store: unmarshal read state: %w", err)
-				}
-				out[row.UserID] = row.LastReadSeq
-			}
-			req = res.UnprocessedKeys
-		}
+	type readStateRow struct {
+		UserID      string `dynamodbav:"userID"`
+		LastReadSeq int64  `dynamodbav:"lastReadSeq"`
+	}
+	rows, err := batchGetOf[readStateRow](ctx, db, keys, types.KeysAndAttributes{
+		ProjectionExpression:     aws.String("#uid, #seq"),
+		ExpressionAttributeNames: map[string]string{"#uid": "userID", "#seq": "lastReadSeq"},
+	}, "read state")
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		out[row.UserID] = row.LastReadSeq
 	}
 	return out, nil
 }

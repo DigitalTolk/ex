@@ -24,18 +24,18 @@ func (s avatarPanicSigner) PresignedGetURL(context.Context, string, time.Duratio
 	return "", nil
 }
 
-func TestUserStatus(t *testing.T) {
+func TestUserAccess(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("cache hit skips store and avatars", func(t *testing.T) {
 		users := newMockUserStore()
 		cache := newMockCache()
 		svc := NewUserService(users, cache, avatarPanicSigner{t}, nil)
-		cache.users["u1"] = &model.User{ID: "u1", Status: "active", AvatarKey: "avatars/a.png"}
+		cache.users["u1"] = &model.User{ID: "u1", Status: "active", SystemRole: model.SystemRoleAdmin, AvatarKey: "avatars/a.png"}
 
-		status, err := svc.UserStatus(ctx, "u1")
-		if err != nil || status != "active" {
-			t.Fatalf("UserStatus = %q (err=%v), want active", status, err)
+		status, role, err := svc.UserAccess(ctx, "u1")
+		if err != nil || status != "active" || role != model.SystemRoleAdmin {
+			t.Fatalf("UserAccess = %q/%q (err=%v), want active/admin", status, role, err)
 		}
 	})
 
@@ -43,11 +43,11 @@ func TestUserStatus(t *testing.T) {
 		users := newMockUserStore()
 		cache := newMockCache()
 		svc := NewUserService(users, cache, avatarPanicSigner{t}, nil)
-		users.users["u2"] = &model.User{ID: "u2", Status: "deactivated"}
+		users.users["u2"] = &model.User{ID: "u2", Status: "deactivated", SystemRole: model.SystemRoleGuest}
 
-		status, err := svc.UserStatus(ctx, "u2")
-		if err != nil || status != "deactivated" {
-			t.Fatalf("UserStatus = %q (err=%v), want deactivated", status, err)
+		status, role, err := svc.UserAccess(ctx, "u2")
+		if err != nil || status != "deactivated" || role != model.SystemRoleGuest {
+			t.Fatalf("UserAccess = %q/%q (err=%v), want deactivated/guest", status, role, err)
 		}
 		if cache.users["u2"] == nil {
 			t.Fatal("miss must fill the cache so the next request is one GET")
@@ -58,8 +58,8 @@ func TestUserStatus(t *testing.T) {
 		users := newMockUserStore()
 		svc := NewUserService(users, nil, avatarPanicSigner{t}, nil)
 		users.users["u3"] = &model.User{ID: "u3", Status: "active"}
-		if status, err := svc.UserStatus(ctx, "u3"); err != nil || status != "active" {
-			t.Fatalf("UserStatus = %q (err=%v)", status, err)
+		if status, _, err := svc.UserAccess(ctx, "u3"); err != nil || status != "active" {
+			t.Fatalf("UserAccess = %q (err=%v)", status, err)
 		}
 	})
 
@@ -67,7 +67,7 @@ func TestUserStatus(t *testing.T) {
 		users := newMockUserStore()
 		users.getUserErr = errors.New("not found")
 		svc := NewUserService(users, newMockCache(), nil, nil)
-		if _, err := svc.UserStatus(ctx, "u-missing"); err == nil {
+		if _, _, err := svc.UserAccess(ctx, "u-missing"); err == nil {
 			t.Fatal("expected error for unknown user (middleware treats it as 401)")
 		}
 	})
@@ -549,8 +549,8 @@ func TestSend_ConversationLoadedOnce(t *testing.T) {
 	if _, err := svc.Send(context.Background(), "u-1", "dm-1", ParentConversation, "hello", ""); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if conversations.getCalls != 1 {
-		t.Fatalf("GetConversation calls = %d, want 1 per send", conversations.getCalls)
+	if conversations.getCalls.Load() != 1 {
+		t.Fatalf("GetConversation calls = %d, want 1 per send", conversations.getCalls.Load())
 	}
 }
 
@@ -681,7 +681,9 @@ func TestFindWebhookTargetUser_FastPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("index misses fall back to the directory walk", func(t *testing.T) {
+	// There is no directory walk to fall back to any more: a failed search is
+	// a transient failure the caller retries, never O(directory) reads.
+	t.Run("a failed search is transient, never a directory walk", func(t *testing.T) {
 		users := &directResolvingUserStub{
 			byID:      map[string]*model.User{alice.ID: alice},
 			searchErr: errors.New("index down"),
@@ -690,11 +692,11 @@ func TestFindWebhookTargetUser_FastPaths(t *testing.T) {
 		svc := NewIncomingWebhookService(&fakeWebhookStore{}, nil, nil, nil, "")
 		svc.SetUserResolver(users)
 		got, err := svc.findWebhookTargetUser(ctx, "alice")
-		if err != nil || got.ID != alice.ID {
-			t.Fatalf("fallback got %+v (err=%v)", got, err)
+		if !errors.Is(err, ErrWebhookUnavailable) || got != nil {
+			t.Fatalf("got %+v (err=%v), want ErrWebhookUnavailable", got, err)
 		}
-		if users.listCalls == 0 {
-			t.Fatal("expected the directory walk fallback to run")
+		if users.listCalls != 0 {
+			t.Fatalf("listCalls = %d, want 0", users.listCalls)
 		}
 	})
 }

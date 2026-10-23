@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"image"
@@ -242,5 +243,121 @@ func TestAttachmentUpload_MultipartIsStreamedOnce(t *testing.T) {
 	}
 	if s3.opens != 1 || a.VerifiedETag == "" {
 		t.Fatalf("expected exactly one streamed read, got %d (etag %q)", s3.opens, a.VerifiedETag)
+	}
+}
+
+// createMultipart opens a multipart upload through requests the service
+// signed, stages one part, and returns the complete request (signed while the
+// attachment was still unverified) with its body.
+func createMultipart(t *testing.T, sign func(string, url.Values, map[string]string) (string, map[string]string), part []byte) (completeURL string, completeHeaders map[string]string, body []byte, uploadID string) {
+	t.Helper()
+	createURL, h := sign(http.MethodPost, url.Values{"uploads": {""}}, nil)
+	resp, created := s3Do(t, http.MethodPost, createURL, h, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create: %d %s", resp.StatusCode, created)
+	}
+	var up struct {
+		UploadID string `xml:"UploadId"`
+	}
+	if err := xml.Unmarshal(created, &up); err != nil || up.UploadID == "" {
+		t.Fatalf("create response %s: %v", created, err)
+	}
+	partURL, ph := sign(http.MethodPut, url.Values{"partNumber": {"1"}, "uploadId": {up.UploadID}}, nil)
+	resp, out := s3Do(t, http.MethodPut, partURL, ph, part)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("part: %d %s", resp.StatusCode, out)
+	}
+	completeURL, completeHeaders = sign(http.MethodPost, url.Values{"uploadId": {up.UploadID}}, nil)
+	body = fmt.Appendf(nil, "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>%s</ETag></Part></CompleteMultipartUpload>", resp.Header.Get("ETag"))
+	return completeURL, completeHeaders, body, up.UploadID
+}
+
+func objectBytes(t *testing.T, s3 *S3Client, key string) string {
+	t.Helper()
+	body, _, _, _, err := s3.GetObject(context.Background(), key)
+	if err != nil {
+		t.Fatalf("GetObject: %v", err)
+	}
+	defer func() { _ = body.Close() }()
+	data, _ := io.ReadAll(body)
+	return string(data)
+}
+
+// End to end against real S3: an uploader stages a multipart upload and gets
+// its complete request signed, then uploads a benign file in one PUT and has
+// it verified. The complete signed earlier must not be able to replace the
+// verified bytes — the media route serves whatever the key holds.
+func TestAttachmentUpload_PresignedCompleteCannotReplaceAVerifiedObject(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// forget signs (but never sends) an abort, so the server stops
+		// tracking the staged upload and cannot abort it on verification.
+		forget bool
+	}{
+		{name: "tracked upload"},
+		{name: "upload the server no longer tracks", forget: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s3 := newMinioS3(t, "upload-replace")
+			ctx := context.Background()
+			store := newMemAttachmentStore()
+			svc := service.NewAttachmentService(store, s3, nil)
+			benign := []byte("benign notes that the server verified")
+			sum := sha256.Sum256(benign)
+			id := "att-replace"
+			if tc.forget {
+				id += "-forget"
+			}
+			a := &model.Attachment{
+				ID: id, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(benign)),
+				ContentType: "text/plain", Filename: "notes.txt", S3Key: "attachments/" + id,
+				CreatedBy: "u1", CreatedAt: time.Now(),
+			}
+			_ = store.Create(ctx, a)
+			sign := signedBy(t, svc, a)
+
+			completeURL, completeHeaders, completeBody, uploadID := createMultipart(t, sign, []byte("<html><script>evil()</script></html>"))
+			if tc.forget {
+				_, _ = sign(http.MethodDelete, url.Values{"uploadId": {uploadID}}, nil)
+			}
+			putURL, headers := sign(http.MethodPut, url.Values{}, nil)
+			if resp, body := s3Do(t, http.MethodPut, putURL, headers, benign); resp.StatusCode != http.StatusOK {
+				t.Fatalf("benign PUT: %d %s", resp.StatusCode, body)
+			}
+			if _, err := svc.ProcessUpload(ctx, "u1", a.ID); err != nil {
+				t.Fatalf("ProcessUpload: %v", err)
+			}
+
+			if resp, body := s3Do(t, http.MethodPost, completeURL, completeHeaders, completeBody); resp.StatusCode == http.StatusOK {
+				t.Fatalf("the earlier-signed complete replaced the verified object: %s", body)
+			}
+			if got := objectBytes(t, s3, a.S3Key); got != string(benign) {
+				t.Fatalf("object = %q, want the verified bytes", got)
+			}
+		})
+	}
+}
+
+// A single PUT signed for an attachment is write-once too: replaying it after
+// the first write landed is refused.
+func TestAttachmentUpload_SinglePutIsWriteOnce(t *testing.T) {
+	s3 := newMinioS3(t, "upload-write-once")
+	ctx := context.Background()
+	store := newMemAttachmentStore()
+	svc := service.NewAttachmentService(store, s3, nil)
+	payload := []byte("first and only")
+	sum := sha256.Sum256(payload)
+	a := &model.Attachment{
+		ID: "att-once", SHA256: hex.EncodeToString(sum[:]), Size: int64(len(payload)),
+		ContentType: "text/plain", Filename: "once.txt", S3Key: "attachments/att-once",
+		CreatedBy: "u1", CreatedAt: time.Now(),
+	}
+	_ = store.Create(ctx, a)
+	putURL, headers := signedBy(t, svc, a)(http.MethodPut, url.Values{}, nil)
+	if resp, body := s3Do(t, http.MethodPut, putURL, headers, payload); resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT: %d %s", resp.StatusCode, body)
+	}
+	if resp, body := s3Do(t, http.MethodPut, putURL, headers, payload); resp.StatusCode != http.StatusPreconditionFailed {
+		t.Fatalf("replayed PUT: %d %s, want 412", resp.StatusCode, body)
 	}
 }

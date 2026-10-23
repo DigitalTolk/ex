@@ -37,7 +37,7 @@ vi.mock('@/hooks/useConversations', () => ({
     ],
   }),
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
-  useSearchUsers: () => ({ data: [] }),
+  useUserLookup: () => ({ data: [] }),
 }));
 
 vi.mock('@/lib/api', () => ({

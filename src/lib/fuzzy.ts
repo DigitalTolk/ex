@@ -4,10 +4,10 @@
 // identical so client- and server-side filters agree.
 //
 // Matching strategy, in order of preference:
-//   1. Exact substring of the candidate string (cheap, common case).
-//   2. Token-prefix: any token of the candidate starts with the query
-//      (so "ali" matches "Alice Smith", "noice" matches "carla@noice.io").
-//   3. Damerau-Levenshtein ≤ 1 against any token, for queries ≥ 4 chars
+//   1. Substring of the candidate string — this also covers every token
+//      prefix ("ali" in "Alice Smith", "noice" in "carla@noice.io"), since
+//      a token is itself a substring of the candidate.
+//   2. Damerau-Levenshtein ≤ 1 against any token, for queries ≥ 4 chars
 //      — handles 1-char typos including swapped neighbouring keys.
 //
 // All comparisons run on lowercased + normalized strings.
@@ -29,14 +29,11 @@ export function normalizeFuzzy(s: string): string {
 // Damerau-Levenshtein distance (insert / delete / substitute /
 // adjacent-transposition). Distance 1 covers the most common typing
 // mistakes including swapped neighbouring keys ("Aliec" → "Alice").
+// The table handles empty and identical inputs on its own (row/column 0
+// hold the plain lengths), so no early returns are needed.
 function damerauLevenshtein(a: string, b: string): number {
-  /* istanbul ignore next -- a===b (tok===query) is unreachable from fuzzyMatch: an identical token is already a substring of the field, so the L69 includes() check returns true before the token loop calls this helper. */
-  if (a === b) return 0;
   const m = a.length;
   const n = b.length;
-  if (m === 0) return n;
-  /* istanbul ignore next -- n===0 means an empty query, but fuzzyMatch only calls this when q.length>=4, so b is never empty. */
-  if (n === 0) return m;
   const d: number[][] = [];
   for (let i = 0; i <= m; i++) {
     d[i] = new Array<number>(n + 1).fill(0);
@@ -69,18 +66,14 @@ export function fuzzyMatch(query: string, ...fields: string[]): boolean {
     if (!field) continue;
     const f = normalizeFuzzy(field.toLowerCase());
     if (f.includes(q)) return true;
-    // Token-prefix and Damerau-Levenshtein only kick in on long-enough
-    // queries — otherwise they'd accept noise like a single typo'd
-    // character matching every name.
-    if (q.length >= 2) {
-      // Split on whitespace, dot, @, underscore, hyphen — covers
-      // "first.last", "user@domain", "snake_case", and "kebab-case"
-      // so token-prefix matches the inside of structured strings.
-      for (const tok of f.split(/[\s.@_-]+/)) {
-        /* istanbul ignore next -- tok.startsWith(q) being true implies q is a substring of the field, which the L69 includes() check already matched and returned for; this token-prefix arm is only reachable for the false side. */
-        if (tok.startsWith(q)) return true;
-        if (q.length >= 4 && damerauLevenshtein(tok, q) <= 1) return true;
-      }
+    // Typo tolerance only kicks in on long-enough queries — otherwise it
+    // would accept noise like a single typo'd character matching every
+    // name. Tokens split on whitespace, dot, @, underscore and hyphen, so
+    // "first.last", "user@domain", "snake_case" and "kebab-case" are
+    // compared piece by piece.
+    if (q.length < 4) continue;
+    for (const tok of f.split(/[\s.@_-]+/)) {
+      if (damerauLevenshtein(tok, q) <= 1) return true;
     }
   }
   return false;

@@ -8,10 +8,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/opensearch-project/opensearch-go/v4/opensearchapi"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -80,7 +82,7 @@ func refreshIndex(t *testing.T, c *Client, index string) {
 	t.Helper()
 	// IndexDoc writes with refresh=false, so force a refresh to make docs
 	// searchable before asserting.
-	if err := c.do(context.Background(), http.MethodPost, "/"+index+"/_refresh", nil, nil); err != nil {
+	if _, err := c.send(context.Background(), http.MethodPost, opensearchapi.IndicesRefreshReq{Index: []string{index}}); err != nil {
 		t.Fatalf("refresh %s: %v", index, err)
 	}
 }
@@ -291,8 +293,8 @@ func TestSearch_ChannelAutocompleteAndScoping_RealEngine(t *testing.T) {
 	}
 	refreshIndex(t, c, IndexChannels)
 
-	// Unscoped (nil allowed): every non-archived channel matches, incl. private.
-	res, err := svc.Channels(ctx, ChannelQuery{Q: "eng", Limit: 10})
+	// Unscoped: every non-archived channel matches, incl. private.
+	res, err := svc.Channels(ctx, ChannelQuery{Q: "eng", Unscoped: true, Limit: 10})
 	if err != nil {
 		t.Fatalf("Channels(eng): %v", err)
 	}
@@ -321,6 +323,16 @@ func TestSearch_ChannelAutocompleteAndScoping_RealEngine(t *testing.T) {
 	}
 	if ids := hitIDs(res); !ids["ac1"] || ids["ac2"] || ids["ac4"] {
 		t.Fatalf("empty-scope Channels(eng) = %v, want only public ac1", res.Hits)
+	}
+
+	// A nil allowed set (no Unscoped) fails closed to public too — a missing
+	// membership list must never widen visibility to private channels.
+	res, err = svc.Channels(ctx, ChannelQuery{Q: "eng", Limit: 10})
+	if err != nil {
+		t.Fatalf("Channels(eng, nil scope): %v", err)
+	}
+	if ids := hitIDs(res); !ids["ac1"] || ids["ac2"] || ids["ac4"] {
+		t.Fatalf("nil-scope Channels(eng) = %v, want only public ac1", res.Hits)
 	}
 }
 
@@ -405,6 +417,25 @@ func TestSearch_EnsureIndicesIsIdempotent_RealEngine(t *testing.T) {
 	// (the indices already exist) rather than erroring.
 	if err := c.EnsureIndices(context.Background()); err != nil {
 		t.Fatalf("EnsureIndices second call should be idempotent: %v", err)
+	}
+}
+
+// A document the real engine rejects (a non-date createdAt) fails the bulk
+// with the engine's own reason, while the good document in the same batch
+// is still indexed.
+func TestSearch_BulkReportsItemError_RealEngine(t *testing.T) {
+	c := newSearchClient(t)
+	ctx := context.Background()
+	err := c.Bulk(ctx, IndexMessages, []BulkEntry{
+		{ID: "bulk-ok", Doc: map[string]any{"id": "bulk-ok", "parentId": "bulk-ch", "body": "bulkgood"}},
+		{ID: "bulk-bad", Doc: map[string]any{"id": "bulk-bad", "parentId": "bulk-ch", "createdAt": "not-a-date"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "bulk-bad: status 400: mapper_parsing_exception") {
+		t.Fatalf("Bulk error = %v, want the engine's per-item reason for bulk-bad", err)
+	}
+	doc, err := c.GetDoc(ctx, IndexMessages, "bulk-ok")
+	if err != nil || doc["body"] != "bulkgood" {
+		t.Fatalf("GetDoc(bulk-ok) = %v, %v; want the good item indexed", doc, err)
 	}
 }
 

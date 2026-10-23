@@ -42,6 +42,16 @@ export default defineConfig([
           selector: "JSXAttribute[name.name='type'][value.value='number']",
           message: 'No <input type="number">: use a text field with inputMode="numeric" (see lib/numeric-field).',
         },
+        // Type floor (CLAUDE.md): 12px (text-xs) is the smallest size, and
+        // nothing renders at 13px either.
+        {
+          selector: 'Literal[value=/text-\\[(?:[0-9]|1[013])(?:\\.[0-9]+)?px\\]/]',
+          message: 'Below the type floor: use text-xs (12px) or text-sm (14px).',
+        },
+        {
+          selector: 'TemplateElement[value.raw=/text-\\[(?:[0-9]|1[013])(?:\\.[0-9]+)?px\\]/]',
+          message: 'Below the type floor: use text-xs (12px) or text-sm (14px).',
+        },
       ],
     },
   },

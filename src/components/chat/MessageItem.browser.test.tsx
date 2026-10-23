@@ -8,6 +8,15 @@ import { dispatchEditMessage } from '@/lib/window-events';
 import type { Message } from '@/types';
 import { hoverRow } from '@/test/hover';
 
+// The toasts a row raises, as showToast was called.
+const toastListeners = vi.hoisted(() => new Set<(detail: { message: string }) => void>());
+vi.mock('@/lib/toast', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/toast')>()),
+  showToast: (message: string) => {
+    for (const listener of toastListeners) listener({ message });
+  },
+}));
+
 const useAttachmentsBatchMock = vi.hoisted(() => vi.fn(() => ({ map: new Map(), isLoading: false })));
 
 const toggleReactionMutate = vi.hoisted(() => vi.fn());
@@ -243,8 +252,8 @@ describe('MessageItem browser behavior', () => {
     if (window.innerWidth > 767) return;
     toggleReactionMutate.mockClear();
     const toasts: Array<{ message: string }> = [];
-    const onToast = (e: Event) => toasts.push((e as CustomEvent<{ message: string }>).detail);
-    window.addEventListener('app:toast', onToast);
+    const onToast = (detail: { message: string }) => toasts.push(detail);
+    toastListeners.add(onToast);
     try {
       await renderWithProviders(
         <MessageItem
@@ -274,7 +283,7 @@ describe('MessageItem browser behavior', () => {
       badge.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       expect(toggleReactionMutate).toHaveBeenCalledTimes(1);
     } finally {
-      window.removeEventListener('app:toast', onToast);
+      toastListeners.delete(onToast);
     }
   });
 

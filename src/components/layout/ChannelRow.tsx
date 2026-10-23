@@ -127,7 +127,7 @@ export const ChannelRow = memo(function ChannelRow({
             pointer-events-none keeps the row clickable. */}
         {notifyCount > 0 ? (
           <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 touch:opacity-100 mobile:right-11">
-            <Badge variant="brand" className="text-[11px]" data-testid={`channel-unread-badge-${channel.channelID}`}>
+            <Badge variant="brand" className="text-xs" data-testid={`channel-unread-badge-${channel.channelID}`}>
               {notifyCount > 99 ? '99+' : notifyCount}
             </Badge>
           </span>

@@ -1,4 +1,4 @@
-import { ReminderDialog } from '@/components/chat/ReminderDialog';
+import { LazyReminderDialog as ReminderDialog } from '@/components/chat/LazyReminderDialog';
 import { useCreateReminder } from '@/hooks/useActivity';
 import type { ActivityReminder } from '@/lib/activity-reminder';
 

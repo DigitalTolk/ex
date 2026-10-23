@@ -1,33 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import HtmlPreviewPanel from './HtmlPreviewPanel';
-import {
-  HTML_PREVIEW_CSP,
-  HTML_PREVIEW_PING,
-  MAX_MISSED_PINGS,
-  PING_INTERVAL_MS,
-  READY_GRACE_MS,
-} from '@/lib/html-preview';
+import { HTML_PREVIEW_PING, MAX_MISSED_PINGS, PING_INTERVAL_MS, READY_GRACE_MS } from '@/lib/html-preview';
 
-// jsdom does not run srcdoc documents, so these tests play the srcdoc's
+// jsdom loads no frame documents, so these tests play the served document's
 // beacon by hand (window messages from the frame's contentWindow) and fire
-// the frame's load events directly. The real thing — scripts, CSP, actual
-// navigation — is covered in HtmlPreviewPanel.browser.test.tsx.
+// the frame's load events directly. The real thing — the server's document
+// and policy, scripts, actual navigation — is covered in
+// HtmlPreviewPanel.browser.test.tsx.
 
 const ATT = {
-  url: '/api/v1/media/tok/mockup.html',
+  url: '/api/v1/media/tok/mockup.html?g=grant',
   downloadURL: '/api/v1/media/tok/mockup.html?download=1',
   filename: 'mockup.html',
 };
 
-type FetchReply = { ok: boolean; status: number; text: () => Promise<string> };
-function reply(html: string, status = 200): FetchReply {
-  return { ok: status >= 200 && status < 300, status, text: () => Promise.resolve(html) };
-}
-
 let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
-  fetchMock = vi.fn().mockResolvedValue(reply('<h1>Mockup</h1>'));
+  fetchMock = vi.fn();
   vi.stubGlobal('fetch', fetchMock);
 });
 afterEach(() => {
@@ -39,11 +29,12 @@ function frame() {
   return screen.getByTestId('html-preview-frame') as HTMLIFrameElement;
 }
 
+// The nonce rides in the frame's name; the beacon reads it from window.name.
 function nonceOf(el: HTMLIFrameElement): string {
-  return /n="([0-9a-f]{32})"/.exec(el.getAttribute('srcdoc') ?? '')![1];
+  return el.getAttribute('name')!;
 }
 
-// What the beacon inside the srcdoc posts to the parent.
+// What the beacon inside the served document posts to the parent.
 function beacon(el: HTMLIFrameElement, kind: string, data = `${nonceOf(el)}:${kind}`) {
   act(() => {
     window.dispatchEvent(new MessageEvent('message', { data, source: el.contentWindow }));
@@ -54,27 +45,29 @@ async function renderLive(onClose = vi.fn()) {
   const view = render(<HtmlPreviewPanel attachment={ATT} onClose={onClose} />);
   const el = await screen.findByTestId('html-preview-frame');
   beacon(el as HTMLIFrameElement, 'ready');
-  // jsdom fires the frame's first load itself; ready + that load → live.
+  // jsdom loads no frame src, so the element's first load is fired here;
+  // ready + that load → live.
+  fireEvent.load(el);
   await waitFor(() => expect(frame()).toHaveAttribute('data-guard', 'live'));
   return view;
 }
 
 describe('HtmlPreviewPanel', () => {
-  it('fetches the file and renders it in a scripts-only sandbox behind the strict CSP', async () => {
+  it('frames the preview route in a scripts-only sandbox, named with its nonce', async () => {
     render(<HtmlPreviewPanel attachment={ATT} onClose={vi.fn()} />);
     expect(screen.getByRole('dialog')).toHaveTextContent('mockup.html');
     expect(screen.getByText('Preview — content runs in an isolated frame')).toBeInTheDocument();
-    expect(screen.getByTestId('html-preview-loading')).toHaveTextContent('Loading…');
-    expect(screen.getByTestId('html-preview-reload')).toBeDisabled();
-    expect(fetchMock).toHaveBeenCalledWith(ATT.url, expect.objectContaining({ credentials: 'same-origin' }));
-
-    const el = (await screen.findByTestId('html-preview-frame')) as HTMLIFrameElement;
+    const el = frame();
+    // The server's own document for the same media token and grant — never
+    // the file's bytes fetched into a srcdoc.
+    expect(el).toHaveAttribute('src', '/api/v1/html-preview/tok/mockup.html?g=grant');
+    expect(el.hasAttribute('srcdoc')).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(el.getAttribute('sandbox')).toBe('allow-scripts');
-    const doc = el.getAttribute('srcdoc')!;
-    expect(doc.startsWith(`<!doctype html><meta http-equiv="Content-Security-Policy" content="${HTML_PREVIEW_CSP}">`)).toBe(true);
-    expect(doc.endsWith('<h1>Mockup</h1>')).toBe(true);
+    expect(nonceOf(el)).toMatch(/^[0-9a-f]{32}$/);
     expect(el).toHaveAttribute('title', 'Preview of mockup.html');
     expect(el).toHaveAttribute('referrerpolicy', 'no-referrer');
+    expect(screen.getByTestId('html-preview-reload')).toBeEnabled();
   });
 
   it('keeps the frame hidden until its own document reports ready', async () => {
@@ -83,6 +76,8 @@ describe('HtmlPreviewPanel', () => {
     expect(el).toHaveAttribute('data-guard', 'pending');
     expect(el).toHaveClass('invisible');
     expect(screen.getByTestId('html-preview-verifying')).toHaveTextContent('Loading…');
+    fireEvent.load(el);
+    expect(el).toHaveAttribute('data-guard', 'pending');
     beacon(el, 'ready');
     await waitFor(() => expect(el).toHaveAttribute('data-guard', 'live'));
     expect(el).not.toHaveClass('invisible');
@@ -91,19 +86,17 @@ describe('HtmlPreviewPanel', () => {
 
   it('ignores messages without the nonce or from anywhere but the frame', async () => {
     render(<HtmlPreviewPanel attachment={ATT} onClose={vi.fn()} />);
-    // Before the frame exists at all.
-    act(() => {
-      window.dispatchEvent(new MessageEvent('message', { data: 'x:ready', source: window }));
-    });
     const el = (await screen.findByTestId('html-preview-frame')) as HTMLIFrameElement;
     // Right nonce, wrong sender (e.g. another frame or the page itself).
     act(() => {
       window.dispatchEvent(new MessageEvent('message', { data: `${nonceOf(el)}:ready`, source: window }));
     });
-    // Right sender, but whatever the file's own scripts might post.
+    // Right sender, but whatever the file's own scripts might post — or a
+    // document the file navigated to, whose frame name was already wiped.
     beacon(el, 'ready', 'ready');
     beacon(el, 'ready', 'deadbeef:ready');
-    await act(async () => {});
+    beacon(el, 'failed', ':failed');
+    fireEvent.load(el);
     expect(el).toHaveAttribute('data-guard', 'pending');
   });
 
@@ -121,6 +114,7 @@ describe('HtmlPreviewPanel', () => {
     expect(again).not.toBe(first);
     // A fresh frame must prove itself again.
     expect(again).toHaveAttribute('data-guard', 'pending');
+    fireEvent.load(again);
     beacon(again as HTMLIFrameElement, 'ready');
     await waitFor(() => expect(again).toHaveAttribute('data-guard', 'live'));
   });
@@ -139,9 +133,7 @@ describe('HtmlPreviewPanel', () => {
     // but whose document never says ready.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     fireEvent.click(screen.getByTestId('html-preview-reload'));
-    // jsdom fires the new frame's load a few microtasks after insertion.
-    await act(async () => {});
-    await act(async () => {});
+    fireEvent.load(frame());
     act(() => {
       vi.advanceTimersByTime(READY_GRACE_MS - 1);
     });
@@ -184,57 +176,49 @@ describe('HtmlPreviewPanel', () => {
     expect(screen.getByTestId('html-preview-navigated')).toBeInTheDocument();
   });
 
-  it('Reload in the toolbar remounts the frame from the same document', async () => {
+  it('Reload in the toolbar remounts the frame on the same document and nonce', async () => {
     await renderLive();
     const first = frame();
     fireEvent.click(screen.getByTestId('html-preview-reload'));
     const again = frame();
     expect(again).not.toBe(first);
-    expect(again.getAttribute('srcdoc')).toBe(first.getAttribute('srcdoc'));
+    expect(again.getAttribute('src')).toBe(first.getAttribute('src'));
+    expect(nonceOf(again)).toBe(nonceOf(first));
     expect(again).toHaveAttribute('data-guard', 'pending');
-    // Same file: no second download.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    // Settle the new frame's first load.
-    await act(async () => {});
   });
 
-  it('shows an error with a retry when the file cannot be fetched', async () => {
-    fetchMock.mockRejectedValueOnce(new TypeError('network down'));
+  it('shows an error with a retry when the server has no file to show', async () => {
     render(<HtmlPreviewPanel attachment={ATT} onClose={vi.fn()} />);
-    const error = await screen.findByTestId('html-preview-error');
+    const first = (await screen.findByTestId('html-preview-frame')) as HTMLIFrameElement;
+    fireEvent.load(first);
+    beacon(first, 'failed');
+    const error = screen.getByTestId('html-preview-error');
     expect(error).toHaveTextContent("Couldn't load this file");
     expect(screen.queryByTestId('html-preview-frame')).toBeNull();
+    expect(screen.queryByTestId('html-preview-navigated')).toBeNull();
 
     fireEvent.click(screen.getByTestId('html-preview-retry'));
-    expect(screen.getByTestId('html-preview-loading')).toBeInTheDocument();
-    expect(await screen.findByTestId('html-preview-frame')).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const again = await screen.findByTestId('html-preview-frame');
+    expect(again).not.toBe(first);
+    expect(again).toHaveAttribute('data-guard', 'pending');
+    fireEvent.load(again);
+    beacon(again as HTMLIFrameElement, 'ready');
+    await waitFor(() => expect(again).toHaveAttribute('data-guard', 'live'));
   });
 
-  it('treats an error response as a failed load', async () => {
-    fetchMock.mockResolvedValueOnce(reply('expired', 404));
-    render(<HtmlPreviewPanel attachment={ATT} onClose={vi.fn()} />);
-    expect(await screen.findByTestId('html-preview-error')).toBeInTheDocument();
-  });
-
-  it('drops a fetch that settles after the panel closed', async () => {
-    let resolveOk!: (r: FetchReply) => void;
-    let rejectLate!: (e: Error) => void;
-    fetchMock
-      .mockReturnValueOnce(new Promise<FetchReply>((r) => { resolveOk = r; }))
-      .mockReturnValueOnce(new Promise<FetchReply>((_, j) => { rejectLate = j; }));
-    const first = render(<HtmlPreviewPanel attachment={ATT} onClose={vi.fn()} />);
-    const second = render(<HtmlPreviewPanel attachment={ATT} onClose={vi.fn()} />);
-    const signal = fetchMock.mock.calls[0][1].signal as AbortSignal;
-    first.unmount();
-    second.unmount();
-    expect(signal.aborted).toBe(true);
-    await act(async () => {
-      resolveOk(reply('<p>late</p>'));
-      rejectLate(new Error('late'));
-    });
+  it('has nothing to frame for a URL that is not one of our media URLs', () => {
+    render(
+      <HtmlPreviewPanel attachment={{ url: 'https://bucket.s3.example.com/attachments/a', filename: 'mockup.html' }} onClose={vi.fn()} />,
+    );
+    expect(screen.getByTestId('html-preview-error')).toHaveTextContent("Couldn't load this file");
+    expect(screen.queryByTestId('html-preview-retry')).toBeNull();
     expect(screen.queryByTestId('html-preview-frame')).toBeNull();
-    expect(screen.queryByTestId('html-preview-error')).toBeNull();
+    expect(screen.getByTestId('html-preview-reload')).toBeDisabled();
+    // The download still works.
+    expect(screen.getByRole('link', { name: 'Download mockup.html' })).toHaveAttribute(
+      'href',
+      'https://bucket.s3.example.com/attachments/a',
+    );
   });
 
   it('switches the frame between desktop, tablet and phone widths', async () => {
@@ -259,9 +243,8 @@ describe('HtmlPreviewPanel', () => {
     expect(frame()).toHaveAttribute('data-guard', 'live');
   });
 
-  it('downloads through the forced-download URL, falling back to the plain one', async () => {
+  it('downloads through the forced-download URL, falling back to the plain one', () => {
     // The download link works without the preview ever loading.
-    fetchMock.mockReturnValue(new Promise(() => {}));
     const { unmount } = render(<HtmlPreviewPanel attachment={ATT} onClose={vi.fn()} />);
     const link = screen.getByRole('link', { name: 'Download mockup.html' });
     expect(link).toHaveAttribute('href', ATT.downloadURL);
@@ -272,7 +255,6 @@ describe('HtmlPreviewPanel', () => {
   });
 
   it('closes from the toolbar and on Escape', async () => {
-    fetchMock.mockReturnValue(new Promise(() => {}));
     const onClose = vi.fn();
     render(<HtmlPreviewPanel attachment={ATT} onClose={onClose} />);
     fireEvent.click(screen.getByRole('button', { name: 'Close preview' }));
@@ -282,7 +264,6 @@ describe('HtmlPreviewPanel', () => {
   });
 
   it('keeps presses inside the panel from reaching the message row behind it', () => {
-    fetchMock.mockReturnValue(new Promise(() => {}));
     const onPointerDown = vi.fn();
     const onContextMenu = vi.fn();
     render(

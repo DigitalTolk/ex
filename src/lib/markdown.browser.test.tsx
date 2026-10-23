@@ -111,7 +111,8 @@ describe('renderMarkdown (legacy regex pipeline)', () => {
     expect(pre?.getAttribute('data-language')).toBe('go');
     const code = pre?.querySelector('code');
     expect(code?.className).toContain('hljs');
-    expect(code?.querySelector('span.hljs-keyword')).not.toBeNull(); // func
+    // The highlighter loads with the first highlighted block.
+    await expect.poll(() => code?.querySelector('span.hljs-keyword')).not.toBeNull(); // func
   });
 
   it('renders a standard emoji at the normal 1.4em size by default', async () => {
@@ -270,7 +271,7 @@ describe('renderMarkdown (legacy regex pipeline)', () => {
     await render(wrap(<>{renderMarkdown(body)}</>));
     const code = document.querySelector('pre code')!;
     expect(code.className).toContain('hljs');
-    expect(code.querySelector('span.hljs-comment')).not.toBeNull(); // comment
+    await expect.poll(() => code.querySelector('span.hljs-comment')).not.toBeNull(); // comment
     expect(code.querySelector('span.hljs-string')).not.toBeNull(); // "hi"
     expect(code.querySelector('span.hljs-keyword')).not.toBeNull(); // const
     expect(code.querySelector('span.hljs-number')).not.toBeNull(); // 42

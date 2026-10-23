@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"time"
 
@@ -42,7 +41,7 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.userSvc.GetByID(r.Context(), userID)
 	if err != nil {
-		writeInternalError(w, r, "user_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -76,12 +75,8 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, err := h.userSvc.Update(r.Context(), userID, body.DisplayName, body.AvatarKey, body.EmojiSkinTone)
-	if errors.Is(err, service.ErrValidation) {
-		writeError(w, http.StatusBadRequest, "invalid_profile", err.Error())
-		return
-	}
 	if err != nil {
-		writeInternalError(w, r, "update_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -106,7 +101,7 @@ func (h *UserHandler) SetMyNotificationSettings(w http.ResponseWriter, r *http.R
 
 	user, err := h.userSvc.SetNotificationSettings(r.Context(), userID, settings)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "notification_settings_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -141,7 +136,7 @@ func (h *UserHandler) SetMyUserStatus(w http.ResponseWriter, r *http.Request) {
 		Text:  body.Text,
 	}, clearAfter, body.TimeZone)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "status_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, user)
@@ -162,7 +157,7 @@ func (h *UserHandler) ClearMyUserStatus(w http.ResponseWriter, r *http.Request) 
 	}
 	user, err := h.userSvc.SetUserStatusMessage(r.Context(), userID, nil, nil, body.TimeZone)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "status_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, user)
@@ -178,18 +173,14 @@ func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.userSvc.GetByID(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "user not found")
-			return
-		}
-		writeInternalError(w, r, "user_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 
 	// Non-admins see the limited public projection.
 	claims := middleware.ClaimsFromContext(r.Context())
 	if claims == nil || claims.SystemRole != model.SystemRoleAdmin {
-		writeJSON(w, http.StatusOK, publicUserJSON(user))
+		writeJSON(w, http.StatusOK, publicUserJSON(r, user))
 		return
 	}
 
@@ -219,7 +210,7 @@ func (h *UserHandler) BatchGetUsers(w http.ResponseWriter, r *http.Request) {
 	users, _ := h.userSvc.GetBatch(r.Context(), body.IDs)
 
 	// Return the same limited public projection as GetUser / ListUsers.
-	writeJSON(w, http.StatusOK, publicUserList(users))
+	writeJSON(w, http.StatusOK, publicUserList(r, users))
 }
 
 // listAllMaxRounds caps the inner pagination loop served by
@@ -238,7 +229,25 @@ const listAllPageSize = 500
 // who is an admin is org-visible information — the directory renders a role
 // pill for every viewer, and omitting the field made members see empty
 // badges.
-func publicUserJSON(u *model.User) JSON {
+//
+// A GUEST caller gets no contact details at all (email, phone, manager):
+// guests are outsiders invited into a few channels, and the roster must not
+// hand them the organisation's address book. Their own record still comes
+// back whole through /users/me.
+func publicUserJSON(r *http.Request, u *model.User) JSON {
+	if callerIsGuest(r) && u.ID != middleware.UserIDFromContext(r.Context()) {
+		return JSON{
+			"id":          u.ID,
+			"displayName": u.DisplayName,
+			"email":       "",
+			"avatarURL":   u.AvatarURL,
+			"status":      u.Status,
+			"systemRole":  u.SystemRole,
+			"userStatus":  u.UserStatus,
+			"timeZone":    u.TimeZone,
+			"lastSeenAt":  u.LastSeenAt,
+		}
+	}
 	return JSON{
 		"id":          u.ID,
 		"displayName": u.DisplayName,
@@ -256,12 +265,19 @@ func publicUserJSON(u *model.User) JSON {
 	}
 }
 
-func publicUserList(users []*model.User) []JSON {
+func publicUserList(r *http.Request, users []*model.User) []JSON {
 	out := make([]JSON, 0, len(users))
 	for _, u := range users {
-		out = append(out, publicUserJSON(u))
+		out = append(out, publicUserJSON(r, u))
 	}
 	return out
+}
+
+// callerIsGuest reports whether the authenticated caller holds the guest
+// role (the stored role — the auth middleware refreshes the claim).
+func callerIsGuest(r *http.Request) bool {
+	claims := middleware.ClaimsFromContext(r.Context())
+	return claims != nil && claims.SystemRole == model.SystemRoleGuest
 }
 
 // usersForCaller returns the FULL user objects to an admin caller (the admin
@@ -273,7 +289,7 @@ func usersForCaller(r *http.Request, users []*model.User) any {
 	if claims != nil && claims.SystemRole == model.SystemRoleAdmin {
 		return users
 	}
-	return publicUserList(users)
+	return publicUserList(r, users)
 }
 
 // ListUsers returns a paginated list of users. If the "q" query parameter is
@@ -287,7 +303,7 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	if q != "" {
 		users, err := h.userSvc.Search(r.Context(), q, 20)
 		if err != nil {
-			writeInternalError(w, r, "search_error", err)
+			writeServiceError(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, usersForCaller(r, users))
@@ -299,10 +315,10 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 			return h.userSvc.List(ctx, listAllPageSize, cursor)
 		}, listAllMaxRounds)
 		if err != nil {
-			writeInternalError(w, r, "list_error", err)
+			writeServiceError(w, r, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, publicUserList(users))
+		writeJSON(w, http.StatusOK, publicUserList(r, users))
 		return
 	}
 
@@ -311,7 +327,7 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 
 	users, _, err := h.userSvc.List(r.Context(), limit, cursor)
 	if err != nil {
-		writeInternalError(w, r, "list_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -345,18 +361,16 @@ func (h *UserHandler) UpdateUserRole(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.userSvc.UpdateRole(r.Context(), middleware.UserIDFromContext(r.Context()), targetID, role)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "user not found")
-			return
-		}
-		writeInternalError(w, r, "update_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 
 	writeJSON(w, http.StatusOK, user)
 }
 
-// SetUserStatus deactivates or reactivates a guest user account. Admin-only.
+// SetUserStatus deactivates or reactivates any account — SSO accounts
+// included. Admin-only, and never the caller's own account (an admin could
+// otherwise lock themselves out).
 func (h *UserHandler) SetUserStatus(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
@@ -364,6 +378,10 @@ func (h *UserHandler) SetUserStatus(w http.ResponseWriter, r *http.Request) {
 	targetID := pathParam(r, "id")
 	if targetID == "" {
 		writeError(w, http.StatusBadRequest, "missing_id", "user ID is required")
+		return
+	}
+	if targetID == middleware.UserIDFromContext(r.Context()) {
+		writeError(w, http.StatusBadRequest, "status_error", "you cannot change your own account status")
 		return
 	}
 
@@ -377,11 +395,7 @@ func (h *UserHandler) SetUserStatus(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.userSvc.SetStatus(r.Context(), targetID, body.Deactivated)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "user not found")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "status_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -424,7 +438,7 @@ func (h *UserHandler) CreateAvatarUploadURL(w http.ResponseWriter, r *http.Reque
 	key := "avatars/" + userID + "/" + store.NewID()
 	url, err := h.s3.PresignedPutURL(r.Context(), key, body.ContentType, 10*time.Minute)
 	if err != nil {
-		writeInternalError(w, r, "presign_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 

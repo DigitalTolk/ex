@@ -26,3 +26,16 @@ describe('document title formatting', () => {
     expect(getDocumentNotificationCount()).toBe(0);
   });
 });
+
+// The count is a zustand store: the per-test reset clears what a test left.
+describe('document title between tests', () => {
+  it('a test leaves a count behind', () => {
+    setDocumentNotificationCount(9);
+    expect(formatDocumentTitle('General')).toBe('(9) General · ex');
+  });
+
+  it('the next test starts from none', () => {
+    expect(getDocumentNotificationCount()).toBe(0);
+    expect(formatDocumentTitle('General')).toBe('General · ex');
+  });
+});

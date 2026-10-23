@@ -2,6 +2,7 @@
 // and the friendly labels shown wherever a scheduled time appears. Pure date
 // math (now is passed in) so it is trivially testable.
 
+import { differenceInCalendarDays } from 'date-fns';
 import { computeReminderTime } from '@/lib/reminder-times';
 
 export interface SchedulePreset {
@@ -26,17 +27,12 @@ export function scheduleTimeFor(key: SchedulePreset['key'], now: Date): Date {
   return computeReminderTime(key, now);
 }
 
-function dayDiff(a: Date, b: Date): number {
-  const start = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  return Math.round((start(a) - start(b)) / 86_400_000);
-}
-
 // formatScheduleTime says when a scheduled message goes out, relative to now:
 // "Today at 3:30 PM", "Tomorrow at 9:00 AM", "Monday at 9:00 AM" within the
 // week, then "Oct 20 at 9:00 AM" (with the year when it isn't this year).
 export function formatScheduleTime(at: Date, now: Date): string {
   const time = at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-  const days = dayDiff(at, now);
+  const days = differenceInCalendarDays(at, now);
   if (days === 0) return `Today at ${time}`;
   if (days === 1) return `Tomorrow at ${time}`;
   if (days > 1 && days < 7) return `${at.toLocaleDateString(undefined, { weekday: 'long' })} at ${time}`;

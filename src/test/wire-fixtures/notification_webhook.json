@@ -1,0 +1,12 @@
+{
+  "kind": "message",
+  "title": "pagerduty in ~alerts",
+  "body": "disk at 95%",
+  "deepLink": "/channel/alerts?msg=01J0000000000000000000MSG2",
+  "parentID": "01J0000000000000000000CH02",
+  "parentType": "channel",
+  "messageID": "01J0000000000000000000MSG2",
+  "authorID": "webhook",
+  "webhook": true,
+  "createdAt": "2026-05-01T12:00:00Z"
+}
