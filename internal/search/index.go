@@ -107,6 +107,19 @@ const autocompleteField = `{
 				}
 			}`
 
+// reactionsMapping keeps a message's reactions (emoji → user IDs) in _source,
+// where search hits read them, without mapping a field per emoji: mapped
+// dynamically, every distinct emoji added two fields until the index hit
+// index.mapping.total_fields.limit and rejected new documents.
+const reactionsMapping = `{"type": "object", "dynamic": false}`
+
+// mappingUpdates are additive mapping changes put onto an index that already
+// exists (a new index gets its full body from indexMappings). They must be
+// valid on an index created with any earlier mapping.
+var mappingUpdates = map[string]string{
+	IndexMessages: `{"properties": {"reactions": ` + reactionsMapping + `}}`,
+}
+
 // indexMappings is the mapping JSON used at index-creation time. The
 // bodies stay deliberately minimal — `text` for natural-language fields
 // (we want the standard analyzer / tokenization), `keyword` for fields
@@ -152,7 +165,8 @@ var indexMappings = map[string]string{
 				"tags":            {"type": "keyword"},
 				"attachmentIds":   {"type": "keyword"},
 				"hasFiles":        {"type": "boolean"},
-				"createdAt":       {"type": "date"}
+				"createdAt":       {"type": "date"},
+				"reactions":       ` + reactionsMapping + `
 			}
 		}
 	}`,

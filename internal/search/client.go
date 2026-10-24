@@ -190,6 +190,11 @@ func (c *Client) EnsureIndices(ctx context.Context) error {
 			return fmt.Errorf("search: head %s: %w", name, err)
 		}
 		if exists {
+			if upd, ok := mappingUpdates[name]; ok {
+				if err := c.do(ctx, http.MethodPut, "/"+name+"/_mapping", strings.NewReader(upd), nil); err != nil {
+					return fmt.Errorf("search: update mapping %s: %w", name, err)
+				}
+			}
 			continue
 		}
 		if err := c.createIndex(ctx, name, body); err != nil {
