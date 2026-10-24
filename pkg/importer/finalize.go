@@ -45,8 +45,10 @@ const recentAuthorsCap = 3
 const finalizeConcurrency = 8
 
 // FinalizeParent brings a parent's derived state in line with imported
-// messages (thread replies are read through ex's thread index, which is
-// eventually consistent — finalize once the parent's writes are done):
+// messages. Thread roots and replies are read from the parent's partition with
+// strongly consistent reads (one pass for all touched threads), so replies
+// written just before are counted — the thread index (GSI1) can lag behind
+// a bulk write and would leave threads with too low a reply count:
 //   - each touched thread root gets its reply count, last reply time and recent
 //     reply authors recomputed from all its replies;
 //   - the root author and every reply author follow the thread (an explicit
@@ -63,13 +65,17 @@ func (im *Importer) FinalizeParent(ctx context.Context, spec FinalizeSpec) (Fina
 	if err := validParentType(spec.ParentType); err != nil {
 		return res, err
 	}
+	threads, err := im.loadThreads(ctx, spec.ParentID, spec.ThreadRootIDs)
+	if err != nil {
+		return res, err
+	}
 	// Threads are independent: finalize them concurrently, bounded.
 	var mu sync.Mutex
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(finalizeConcurrency)
 	for _, rootID := range spec.ThreadRootIDs {
 		g.Go(func() error {
-			updated, follows, err := im.finalizeThread(gctx, spec.ParentID, spec.ParentType, rootID)
+			updated, follows, err := im.finalizeThread(gctx, spec.ParentID, spec.ParentType, threads[rootID])
 			mu.Lock()
 			defer mu.Unlock()
 			if updated {
@@ -90,18 +96,49 @@ func (im *Importer) FinalizeParent(ctx context.Context, spec FinalizeSpec) (Fina
 	return res, im.finalizeConversation(ctx, spec)
 }
 
-func (im *Importer) finalizeThread(ctx context.Context, parentID, parentType, rootID string) (bool, int, error) {
-	root, err := im.messages.GetMessage(ctx, parentID, rootID)
-	if errors.Is(err, store.ErrNotFound) {
+// thread is a root and all its replies (deleted ones included, as the thread
+// index lists them), read consistently from the parent.
+type thread struct {
+	root    *model.Message
+	replies []*model.Message
+}
+
+// loadThreads reads the parent once and collects the given roots with their
+// replies. Roots absent from the parent have no entry.
+func (im *Importer) loadThreads(ctx context.Context, parentID string, rootIDs []string) (map[string]*thread, error) {
+	if len(rootIDs) == 0 {
+		return nil, nil
+	}
+	want := make(map[string]bool, len(rootIDs))
+	for _, id := range rootIDs {
+		want[id] = true
+	}
+	msgs, err := im.messages.ListParentMessagesConsistent(ctx, parentID)
+	if err != nil {
+		return nil, fmt.Errorf("importer: read threads: %w", err)
+	}
+	replies := map[string][]*model.Message{}
+	out := map[string]*thread{}
+	for _, m := range msgs {
+		switch {
+		case want[m.ID]:
+			out[m.ID] = &thread{root: m}
+		case want[m.ParentMessageID]:
+			replies[m.ParentMessageID] = append(replies[m.ParentMessageID], m)
+		}
+	}
+	for id, t := range out {
+		t.replies = replies[id]
+	}
+	return out, nil
+}
+
+func (im *Importer) finalizeThread(ctx context.Context, parentID, parentType string, t *thread) (bool, int, error) {
+	if t == nil {
 		return false, 0, nil
 	}
-	if err != nil {
-		return false, 0, fmt.Errorf("importer: get thread root: %w", err)
-	}
-	replies, err := im.messages.ListThreadReplies(ctx, rootID)
-	if err != nil {
-		return false, 0, fmt.Errorf("importer: list thread replies: %w", err)
-	}
+	root, replies := t.root, t.replies
+	rootID := root.ID
 	if len(replies) == 0 {
 		return true, 0, nil
 	}

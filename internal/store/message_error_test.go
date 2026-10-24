@@ -288,3 +288,27 @@ func TestMessageStore_IncrementReplyMetadata_UpdateItemError(t *testing.T) {
 		t.Fatalf("IncrementReplyMetadata: want errInjected, got %v", err)
 	}
 }
+
+func TestMessageStore_ListParentMessagesConsistent(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewMessageStore(db)
+	if err := s.CreateMessage(ctx, makeMessage("ch-all", "01-root", "u-a", "root")); err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	r := makeMessage("ch-all", "02-r1", "u-a", "reply")
+	r.ParentMessageID = "01-root"
+	if err := s.CreateMessage(ctx, r); err != nil {
+		t.Fatalf("create reply: %v", err)
+	}
+	if err := s.CreateMessage(ctx, makeMessage("ch-other", "03-x", "u-a", "elsewhere")); err != nil {
+		t.Fatalf("create other: %v", err)
+	}
+	got, err := s.ListParentMessagesConsistent(ctx, "ch-all")
+	if err != nil || len(got) != 2 || got[0].ID != "01-root" || got[1].ParentMessageID != "01-root" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if _, err := NewMessageStore(withFault(db, func(f *faultClient) { f.failQuery = true })).ListParentMessagesConsistent(ctx, "ch-all"); err == nil {
+		t.Fatal("want query error")
+	}
+}

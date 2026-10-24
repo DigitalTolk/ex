@@ -277,6 +277,45 @@ func (s *MessageStoreImpl) ListThreadReplies(ctx context.Context, threadRootID s
 	return replies, nil
 }
 
+// ListParentMessagesConsistent returns every message row of a parent, oldest
+// first, with strongly consistent reads of the parent's own partition. Unlike
+// the thread index (GSI1, eventually consistent), it sees messages written
+// moments ago — what bulk writers need right after their writes.
+func (s *MessageStoreImpl) ListParentMessagesConsistent(ctx context.Context, parentID string) ([]*model.Message, error) {
+	keyCond := expression.KeyAnd(
+		expression.Key("PK").Equal(expression.Value(parentPK(parentID))),
+		expression.Key("SK").BeginsWith("MSG#"),
+	)
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).Build())
+	var out []*model.Message
+	var startKey map[string]types.AttributeValue
+	for {
+		page, err := s.Client.Query(ctx, &dynamodb.QueryInput{
+			TableName:                 aws.String(s.Table),
+			KeyConditionExpression:    expr.KeyCondition(),
+			ExpressionAttributeNames:  expr.Names(),
+			ExpressionAttributeValues: expr.Values(),
+			ConsistentRead:            aws.Bool(true),
+			ExclusiveStartKey:         startKey,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("store: list parent messages: %w", err)
+		}
+		for _, av := range page.Items {
+			var mi messageItem
+			if err := attributevalue.UnmarshalMap(av, &mi); err != nil {
+				return nil, fmt.Errorf("store: unmarshal message: %w", err)
+			}
+			m := mi.Message
+			out = append(out, &m)
+		}
+		if len(page.LastEvaluatedKey) == 0 {
+			return out, nil
+		}
+		startKey = page.LastEvaluatedKey
+	}
+}
+
 // StampThreadIndex sets just the GSI1 thread keys on an existing reply row via
 // a targeted UpdateItem — used by the one-off backfill migration so it indexes
 // historical replies without rewriting (and potentially clobbering) the rest of
