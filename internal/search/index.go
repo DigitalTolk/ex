@@ -120,6 +120,25 @@ var mappingUpdates = map[string]string{
 	IndexMessages: `{"properties": {"reactions": ` + reactionsMapping + `}}`,
 }
 
+// messagesFieldLimit raises ex_messages' index.mapping.total_fields.limit
+// from OpenSearch's default of 1000. Indices created before reactions were
+// unmapped already carry ~500 per-emoji fields, which left the default with
+// no headroom for new fields.
+const messagesFieldLimit = 3000
+
+// messagesSettings is the creation-time settings block of ex_messages, so a
+// new or rebuilt index starts with the raised limit.
+var messagesSettings = fmt.Sprintf(`
+	"settings": {
+		"index": { "mapping": { "total_fields": { "limit": %d } } }
+	},`, messagesFieldLimit)
+
+// settingsUpdates are dynamic index settings put onto an index that already
+// exists, so a live index converges on what a newly created one gets.
+var settingsUpdates = map[string]string{
+	IndexMessages: fmt.Sprintf(`{"index": {"mapping": {"total_fields": {"limit": %d}}}}`, messagesFieldLimit),
+}
+
 // indexMappings is the mapping JSON used at index-creation time. The
 // bodies stay deliberately minimal — `text` for natural-language fields
 // (we want the standard analyzer / tokenization), `keyword` for fields
@@ -154,6 +173,7 @@ var indexMappings = map[string]string{
 		}
 	}`,
 	IndexMessages: `{
+		` + messagesSettings + `
 		"mappings": {
 			"properties": {
 				"id":              {"type": "keyword"},

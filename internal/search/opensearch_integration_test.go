@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -577,5 +578,68 @@ func TestSearch_ReactionsDoNotAddFields_RealEngine(t *testing.T) {
 	}
 	if r, _ := got["reactions"].(map[string]any); r[":new-emoji:"] == nil {
 		t.Fatalf("reactions missing from _source: %v", got)
+	}
+}
+
+// ex_messages must carry the raised total-fields limit however the index
+// came to be: created by EnsureIndices, rebuilt by BeginIndexRebuild, or
+// created earlier with OpenSearch's default and then passed through
+// EnsureIndices at boot.
+func TestSearch_MessagesFieldLimit_RealEngine(t *testing.T) {
+	c := newSearchClient(t)
+	ctx := context.Background()
+	limit := func(index string) string {
+		t.Helper()
+		var m map[string]struct {
+			Settings struct {
+				Index struct {
+					Mapping struct {
+						TotalFields struct {
+							Limit string `json:"limit"`
+						} `json:"total_fields"`
+					} `json:"mapping"`
+				} `json:"index"`
+			} `json:"settings"`
+		}
+		if err := c.do(ctx, http.MethodGet, "/"+index+"/_settings", nil, &m); err != nil {
+			t.Fatalf("get settings: %v", err)
+		}
+		for _, idx := range m {
+			return idx.Settings.Index.Mapping.TotalFields.Limit
+		}
+		return ""
+	}
+	want := strconv.Itoa(messagesFieldLimit)
+
+	if got := limit(IndexMessages); got != want {
+		t.Fatalf("created index limit = %q, want %s", got, want)
+	}
+
+	staging, err := c.BeginIndexRebuild(ctx, IndexMessages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := limit(staging); got != want {
+		t.Fatalf("rebuilt index limit = %q, want %s", got, want)
+	}
+	if err := c.deleteIndex(ctx, staging); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.deleteIndex(ctx, IndexMessages); err != nil {
+		t.Fatal(err)
+	}
+	legacy := strings.Replace(indexMappings[IndexMessages], messagesSettings, "", 1)
+	if err := c.createIndex(ctx, IndexMessages, legacy); err != nil {
+		t.Fatal(err)
+	}
+	if got := limit(IndexMessages); got != "" {
+		t.Fatalf("legacy index limit = %q, want the default (unset)", got)
+	}
+	if err := c.EnsureIndices(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := limit(IndexMessages); got != want {
+		t.Fatalf("existing index limit after EnsureIndices = %q, want %s", got, want)
 	}
 }

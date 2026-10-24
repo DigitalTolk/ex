@@ -179,7 +179,8 @@ func NewClientFromConfig(ctx context.Context, cfg ClientConfig) (*Client, error)
 }
 
 // EnsureIndices creates each indexed-resource mapping if missing.
-// Existing indices are left as-is; reindexing is a separate flow. Safe
+// Existing indices only get settingsUpdates and the additive
+// mappingUpdates; reindexing is a separate flow. Safe
 // to call on every server start. (A rebuilt index is a physical
 // `<name>-r<nanos>` behind an alias called `<name>` — the HEAD check
 // matches aliases too, so this never fights PromoteIndex.)
@@ -190,6 +191,11 @@ func (c *Client) EnsureIndices(ctx context.Context) error {
 			return fmt.Errorf("search: head %s: %w", name, err)
 		}
 		if exists {
+			if upd, ok := settingsUpdates[name]; ok {
+				if err := c.do(ctx, http.MethodPut, "/"+name+"/_settings", strings.NewReader(upd), nil); err != nil {
+					return fmt.Errorf("search: update settings %s: %w", name, err)
+				}
+			}
 			if upd, ok := mappingUpdates[name]; ok {
 				if err := c.do(ctx, http.MethodPut, "/"+name+"/_mapping", strings.NewReader(upd), nil); err != nil {
 					return fmt.Errorf("search: update mapping %s: %w", name, err)

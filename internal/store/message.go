@@ -160,20 +160,34 @@ func (s *MessageStoreImpl) ListMessages(ctx context.Context, parentID string, be
 		fetchLimit++
 	}
 
-	out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
-		TableName:                 aws.String(s.Table),
-		KeyConditionExpression:    expr.KeyCondition(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-		ScanIndexForward:          aws.Bool(false), // newest first
-		Limit:                     aws.Int32(fetchLimit),
-	})
-	if err != nil {
-		return nil, false, fmt.Errorf("store: list messages: %w", err)
+	// A Query page also stops at 1 MB, so large messages can end it short of
+	// fetchLimit with a LastEvaluatedKey. Keep reading until the page is full
+	// or the partition is exhausted; otherwise hasMore below reads false and
+	// callers stop paging with older messages still unread.
+	var items []map[string]types.AttributeValue
+	var startKey map[string]types.AttributeValue
+	for {
+		out, err := s.Client.Query(ctx, &dynamodb.QueryInput{
+			TableName:                 aws.String(s.Table),
+			KeyConditionExpression:    expr.KeyCondition(),
+			ExpressionAttributeNames:  expr.Names(),
+			ExpressionAttributeValues: expr.Values(),
+			ScanIndexForward:          aws.Bool(false), // newest first
+			Limit:                     aws.Int32(fetchLimit - int32(len(items))),
+			ExclusiveStartKey:         startKey,
+		})
+		if err != nil {
+			return nil, false, fmt.Errorf("store: list messages: %w", err)
+		}
+		items = append(items, out.Items...)
+		startKey = out.LastEvaluatedKey
+		if len(startKey) == 0 || int32(len(items)) >= fetchLimit {
+			break
+		}
 	}
 
-	messages := make([]*model.Message, 0, len(out.Items))
-	for _, item := range out.Items {
+	messages := make([]*model.Message, 0, len(items))
+	for _, item := range items {
 		var mi messageItem
 		if err := attributevalue.UnmarshalMap(item, &mi); err != nil {
 			return nil, false, fmt.Errorf("store: unmarshal message: %w", err)
