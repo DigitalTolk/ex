@@ -140,6 +140,10 @@ func TestCorruptRows_QueryArms(t *testing.T) {
 		_, err := NewMessageStore(faulted).ListThreadReplies(ctx, "root-x")
 		assertUnmarshalErr(t, err, "message ListThreadReplies")
 	})
+	t.Run("message ListParentMessagesConsistent", func(t *testing.T) {
+		_, err := NewMessageStore(faulted).ListParentMessagesConsistent(ctx, "ch-x")
+		assertUnmarshalErr(t, err, "message ListParentMessagesConsistent")
+	})
 	t.Run("message ListAfter", func(t *testing.T) {
 		_, _, err := NewMessageStore(faulted).ListMessagesAfter(ctx, "ch-x", "m-0", 10)
 		assertUnmarshalErr(t, err, "message ListAfter")

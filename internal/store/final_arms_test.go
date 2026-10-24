@@ -58,6 +58,14 @@ func TestQueryPaginationContinuations(t *testing.T) {
 		}
 	})
 
+	t.Run("message ListParentMessagesConsistent", func(t *testing.T) {
+		faulted := withFault(db, func(f *faultClient) { f.pageQueryOnce = true })
+		got, err := NewMessageStore(faulted).ListParentMessagesConsistent(ctx, "ch-pg")
+		if err != nil || len(got) == 0 {
+			t.Fatalf("ListParentMessagesConsistent: %v (%d)", err, len(got))
+		}
+	})
+
 	t.Run("parent index pin + file", func(t *testing.T) {
 		pi := NewParentIndexStore(db)
 		if err := pi.SetPinIndex(ctx, "ch-pg", "m-pin", "u-1", time.Now()); err != nil {

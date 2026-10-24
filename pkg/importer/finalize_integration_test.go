@@ -96,8 +96,7 @@ func TestFinalizeErrors(t *testing.T) {
 
 	_, err = e.im.FinalizeParent(ctx, FinalizeSpec{ParentID: "c1", ParentType: "nope"})
 	wantErr(t, err, ErrInvalidSpec)
-	_, err = e.faulty(failOn("GetItem", 0)).FinalizeParent(ctx, thread)
-	wantErr(t, err, errFault)
+	// The thread read (one consistent Query of the parent) fails.
 	_, err = e.faulty(failOn("Query", 0)).FinalizeParent(ctx, thread)
 	wantErr(t, err, errFault)
 	_, err = e.faulty(failOn("UpdateItem", 0)).FinalizeParent(ctx, thread)
@@ -112,7 +111,7 @@ func TestFinalizeErrors(t *testing.T) {
 	_, err = e.faulty(failOn("UpdateItem", 2)).FinalizeParent(ctx, seq)
 	wantErr(t, err, errFault)
 
-	// A root without replies (e.g. replies not indexed yet) is left as is.
+	// A root without replies is left as is.
 	lonely := MessageSpec{ID: mid(at(3), 3), AuthorID: "u1", Body: "solo", CreatedAt: at(3)}
 	_, err = e.im.PutMessages(ctx, "c1", ParentChannel, []MessageSpec{lonely})
 	mustNoErr(t, err)
@@ -221,5 +220,58 @@ func TestIndexParent(t *testing.T) {
 	}
 	if names := (attachmentResolver{e.im}).ResolveFilenames(ctx, []string{"a1"}); len(names) != 1 || names[0] != "f.txt" {
 		t.Fatalf("names = %v", names)
+	}
+}
+
+// laggingDynamo models DynamoDB right after a bulk write: the thread index
+// (GSI1) and eventually consistent reads don't show the new messages yet;
+// only strongly consistent reads of the base table do.
+type laggingDynamo struct{ store.DynamoAPI }
+
+func (l *laggingDynamo) Query(ctx context.Context, in *dynamodb.QueryInput, o ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+	if in.IndexName != nil || in.ConsistentRead == nil || !*in.ConsistentRead {
+		return &dynamodb.QueryOutput{}, nil
+	}
+	return l.DynamoAPI.Query(ctx, in, o...)
+}
+
+func (l *laggingDynamo) GetItem(ctx context.Context, in *dynamodb.GetItemInput, o ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
+	if in.ConsistentRead == nil || !*in.ConsistentRead {
+		return &dynamodb.GetItemOutput{}, nil
+	}
+	return l.DynamoAPI.GetItem(ctx, in, o...)
+}
+
+// Finalizing right after the writes must count every reply even while the
+// thread index lags (it used to read replies through GSI1 and set too low a
+// reply count, or none).
+func TestFinalizeCountsRepliesTheIndexHasNotCaughtUpWith(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	addUsers(t, e, "u1", "u2")
+	_, err := e.im.EnsureChannel(ctx, ChannelSpec{ID: "c1", Slug: "c-one", Type: "public", CreatedAt: t0})
+	mustNoErr(t, err)
+	root := MessageSpec{ID: mid(at(1), 1), AuthorID: "u1", Body: "root", CreatedAt: at(1)}
+	r1 := MessageSpec{ID: mid(at(2), 2), AuthorID: "u2", Body: "r1", CreatedAt: at(2), ParentMessageID: root.ID}
+	r2 := MessageSpec{ID: mid(at(3), 3), AuthorID: "u1", Body: "r2", CreatedAt: at(3), ParentMessageID: root.ID}
+	res, err := e.im.PutMessages(ctx, "c1", ParentChannel, []MessageSpec{root, r1, r2})
+	mustNoErr(t, err)
+
+	lagging, err := New(Deps{DB: &store.DB{Client: &laggingDynamo{DynamoAPI: e.db.Client}, Table: e.db.Table},
+		Objects: e.objects, Search: e.search, TempDir: t.TempDir()})
+	mustNoErr(t, err)
+	fr, err := lagging.FinalizeParent(ctx, FinalizeSpec{ParentID: "c1", ParentType: ParentChannel, ThreadRootIDs: res.ThreadRootIDs})
+	mustNoErr(t, err)
+	if fr.ThreadsUpdated != 1 || fr.ThreadsMissingRoot != 0 {
+		t.Fatalf("finalize = %+v", fr)
+	}
+	got, _ := store.NewMessageStore(e.db).GetMessage(ctx, "c1", root.ID)
+	if got.ReplyCount != 2 || got.LastReplyAt == nil || !got.LastReplyAt.Equal(at(3)) {
+		t.Fatalf("root metadata = %+v", got)
+	}
+	st, err := e.im.ParentStats(ctx, "c1", ParentChannel)
+	mustNoErr(t, err)
+	if st.ThreadsMismatched != 0 {
+		t.Fatalf("threads mismatched = %d", st.ThreadsMismatched)
 	}
 }
