@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1967,4 +1968,55 @@ func storeRedisClientFailingOn(t *testing.T, cmds ...string) *redis.Client {
 	client.AddHook(cmdFailHook{fail: fail})
 	t.Cleanup(func() { _ = client.Close() })
 	return client
+}
+
+// A Query page stops at 1 MB as well as at its Limit. With large messages the
+// first page came back short with a LastEvaluatedKey, ListMessages reported
+// hasMore=false, and every caller paging through a channel stopped early.
+func TestMessageStore_ListMessages_PagesPast1MB(t *testing.T) {
+	db := setupDynamoDB(t)
+	ms := NewMessageStore(db)
+	ctx := context.Background()
+
+	const total = 40
+	body := strings.Repeat("x", 60_000) // 40 × 60 KB ≈ 2.4 MB in one partition
+	for i := 0; i < total; i++ {
+		msg := &model.Message{
+			ID:        fmt.Sprintf("big-%02d", i),
+			ParentID:  "ch-big",
+			AuthorID:  "u-author",
+			Body:      body,
+			CreatedAt: time.Now().Truncate(time.Millisecond),
+		}
+		if err := ms.CreateMessage(ctx, msg); err != nil {
+			t.Fatalf("Create %d: %v", i, err)
+		}
+	}
+
+	page, hasMore, err := ms.ListMessages(ctx, "ch-big", "", 25)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(page) != 25 || !hasMore {
+		t.Fatalf("first page = %d messages, hasMore=%v; want 25, true", len(page), hasMore)
+	}
+
+	seen := map[string]bool{}
+	cursor := ""
+	for {
+		page, more, err := ms.ListMessages(ctx, "ch-big", cursor, 25)
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		for _, m := range page {
+			seen[m.ID] = true
+		}
+		if !more || len(page) == 0 {
+			break
+		}
+		cursor = page[len(page)-1].ID
+	}
+	if len(seen) != total {
+		t.Fatalf("paged through %d messages, want %d", len(seen), total)
+	}
 }
