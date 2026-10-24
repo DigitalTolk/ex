@@ -513,29 +513,48 @@ func (c *Client) Bulk(ctx context.Context, index string, entries []BulkEntry) er
 	return nil
 }
 
-// bulkRequest sends one NDJSON _bulk body and reports whether OpenSearch
-// flagged per-item errors in it.
+// bulkRetryDelays are the waits before re-sending a _bulk request that
+// OpenSearch answered with 429 (it is shedding load: write queue full or
+// memory pressure). A var so tests can skip the waits.
+var bulkRetryDelays = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 20 * time.Second}
+
+// bulkRequest sends one NDJSON _bulk body, retrying 429s with backoff, and
+// reports whether OpenSearch flagged per-item errors in it.
 func (c *Client) bulkRequest(ctx context.Context, body []byte) (bool, error) {
+	for attempt := 0; ; attempt++ {
+		hadErrs, status, err := c.bulkOnce(ctx, body)
+		if status != http.StatusTooManyRequests || attempt == len(bulkRetryDelays) {
+			return hadErrs, err
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(bulkRetryDelays[attempt]):
+		}
+	}
+}
+
+func (c *Client) bulkOnce(ctx context.Context, body []byte) (bool, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/_bulk", bytes.NewReader(body))
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	req.Header.Set("Content-Type", "application/x-ndjson")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
-		return false, c.errorFromResponse(resp)
+		return false, resp.StatusCode, c.errorFromResponse(resp)
 	}
 	var out struct {
 		Errors bool `json:"errors"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return false, fmt.Errorf("search: bulk decode: %w", err)
+		return false, resp.StatusCode, fmt.Errorf("search: bulk decode: %w", err)
 	}
-	return out.Errors, nil
+	return out.Errors, resp.StatusCode, nil
 }
 
 type SearchHit struct {

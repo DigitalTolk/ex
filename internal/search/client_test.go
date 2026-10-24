@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -380,6 +381,50 @@ func TestClient_Bulk_SplitErrors(t *testing.T) {
 		if calls != tc.wantCalls {
 			t.Errorf("%s: requests = %d, want %d", tc.name, calls, tc.wantCalls)
 		}
+	}
+}
+
+// A 429 (OpenSearch shedding load) is retried until it succeeds or the
+// retries run out; the context cancels the wait.
+func TestClient_Bulk_Retries429(t *testing.T) {
+	old := bulkRetryDelays
+	bulkRetryDelays = []time.Duration{0, 0}
+	t.Cleanup(func() { bulkRetryDelays = old })
+	entries := []BulkEntry{{ID: "a", Doc: 1}}
+	for _, tc := range []struct {
+		name      string
+		throttled int
+		wantCalls int
+		wantErr   bool
+	}{
+		{"recovers", 2, 3, false},
+		{"gives up", 5, 3, true},
+	} {
+		calls := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			calls++
+			if calls <= tc.throttled {
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+			_, _ = w.Write([]byte(`{"errors":false}`))
+		}))
+		err := NewClient(srv.URL).Bulk(context.Background(), IndexMessages, entries)
+		srv.Close()
+		if (err != nil) != tc.wantErr || calls != tc.wantCalls {
+			t.Errorf("%s: err = %v, requests = %d; want error %v, %d requests", tc.name, err, calls, tc.wantErr, tc.wantCalls)
+		}
+	}
+
+	bulkRetryDelays = []time.Duration{time.Hour}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := NewClient(srv.URL).Bulk(ctx, IndexMessages, entries); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("cancelled wait: err = %v, want deadline exceeded", err)
 	}
 }
 
