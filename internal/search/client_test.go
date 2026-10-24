@@ -3,6 +3,8 @@ package search
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -293,6 +295,136 @@ func TestClient_Bulk_5xx(t *testing.T) {
 	err := c.Bulk(context.Background(), IndexUsers, []BulkEntry{{ID: "1", Doc: 1}})
 	if err == nil {
 		t.Fatal("expected error from 502")
+	}
+}
+
+// shrinkBulk lowers maxBulkBytes for one test.
+func shrinkBulk(t *testing.T, n int) {
+	t.Helper()
+	old := maxBulkBytes
+	maxBulkBytes = n
+	t.Cleanup(func() { maxBulkBytes = old })
+}
+
+// Bulk splits its entries so no request body exceeds maxBulkBytes; every
+// entry is sent exactly once, and an entry larger than the cap goes alone.
+func TestClient_Bulk_SplitsBySize(t *testing.T) {
+	shrinkBulk(t, 300)
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(body))
+		_, _ = w.Write([]byte(`{"errors":false,"items":[]}`))
+	}))
+	defer srv.Close()
+	var entries []BulkEntry
+	for i := 0; i < 10; i++ {
+		entries = append(entries, BulkEntry{ID: fmt.Sprintf("m%d", i), Doc: map[string]any{"body": strings.Repeat("x", 50)}})
+	}
+	entries = append(entries, BulkEntry{ID: "huge", Doc: map[string]any{"body": strings.Repeat("y", 500)}})
+	c := NewClient(srv.URL)
+	if err := c.Bulk(context.Background(), IndexMessages, entries); err != nil {
+		t.Fatalf("Bulk: %v", err)
+	}
+	if len(bodies) < 3 {
+		t.Fatalf("requests = %d, want the entries split over several", len(bodies))
+	}
+	ids := map[string]int{}
+	for _, b := range bodies {
+		if len(b) > maxBulkBytes && strings.Count(b, "\n") != 2 {
+			t.Errorf("request of %d bytes over the cap carries more than one entry", len(b))
+		}
+		for _, e := range entries {
+			if strings.Contains(b, `"_id":"`+e.ID+`"`) {
+				ids[e.ID]++
+			}
+		}
+	}
+	for _, e := range entries {
+		if ids[e.ID] != 1 {
+			t.Errorf("entry %s sent %d times, want 1", e.ID, ids[e.ID])
+		}
+	}
+}
+
+// Per-item errors in one request don't stop the next; they are reported
+// once everything has been sent. A failed request stops the rest.
+func TestClient_Bulk_SplitErrors(t *testing.T) {
+	shrinkBulk(t, 100)
+	entries := []BulkEntry{
+		{ID: "a", Doc: map[string]any{"body": strings.Repeat("x", 60)}},
+		{ID: "b", Doc: map[string]any{"body": strings.Repeat("x", 60)}},
+	}
+	for _, tc := range []struct {
+		name      string
+		first     func(w http.ResponseWriter)
+		wantCalls int
+		wantErr   string
+	}{
+		{"per-item", func(w http.ResponseWriter) { _, _ = w.Write([]byte(`{"errors":true}`)) }, 2, "per-item errors"},
+		{"request", func(w http.ResponseWriter) { w.WriteHeader(http.StatusRequestEntityTooLarge) }, 1, "413"},
+	} {
+		calls := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			calls++
+			if calls == 1 {
+				tc.first(w)
+				return
+			}
+			_, _ = w.Write([]byte(`{"errors":false}`))
+		}))
+		err := NewClient(srv.URL).Bulk(context.Background(), IndexMessages, entries)
+		srv.Close()
+		if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.wantErr)
+		}
+		if calls != tc.wantCalls {
+			t.Errorf("%s: requests = %d, want %d", tc.name, calls, tc.wantCalls)
+		}
+	}
+}
+
+// A 429 (OpenSearch shedding load) is retried until it succeeds or the
+// retries run out; the context cancels the wait.
+func TestClient_Bulk_Retries429(t *testing.T) {
+	old := bulkRetryDelays
+	bulkRetryDelays = []time.Duration{0, 0}
+	t.Cleanup(func() { bulkRetryDelays = old })
+	entries := []BulkEntry{{ID: "a", Doc: 1}}
+	for _, tc := range []struct {
+		name      string
+		throttled int
+		wantCalls int
+		wantErr   bool
+	}{
+		{"recovers", 2, 3, false},
+		{"gives up", 5, 3, true},
+	} {
+		calls := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			calls++
+			if calls <= tc.throttled {
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+			_, _ = w.Write([]byte(`{"errors":false}`))
+		}))
+		err := NewClient(srv.URL).Bulk(context.Background(), IndexMessages, entries)
+		srv.Close()
+		if (err != nil) != tc.wantErr || calls != tc.wantCalls {
+			t.Errorf("%s: err = %v, requests = %d; want error %v, %d requests", tc.name, err, calls, tc.wantErr, tc.wantCalls)
+		}
+	}
+
+	bulkRetryDelays = []time.Duration{time.Hour}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := NewClient(srv.URL).Bulk(ctx, IndexMessages, entries); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("cancelled wait: err = %v, want deadline exceeded", err)
 	}
 }
 
