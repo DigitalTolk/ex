@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -506,5 +507,75 @@ func TestSearch_SchemaVersionRoundTrip_RealEngine(t *testing.T) {
 	}
 	if started {
 		t.Fatal("an up-to-date cluster must not auto-rebuild")
+	}
+}
+
+// Reactions are keyed by emoji. Mapped dynamically, each new emoji added
+// fields until the index hit its total-fields limit and rejected documents.
+// An index created before the fix (reactions mapped per emoji) must stop
+// growing once EnsureIndices has run, and hits must still carry reactions.
+func TestSearch_ReactionsDoNotAddFields_RealEngine(t *testing.T) {
+	c := newSearchClient(t)
+	ctx := context.Background()
+	fields := func() map[string]any {
+		t.Helper()
+		var m map[string]struct {
+			Mappings struct {
+				Properties map[string]struct {
+					Properties map[string]any `json:"properties"`
+				} `json:"properties"`
+			} `json:"mappings"`
+		}
+		if err := c.do(ctx, http.MethodGet, "/"+IndexMessages+"/_mapping", nil, &m); err != nil {
+			t.Fatalf("get mapping: %v", err)
+		}
+		for _, idx := range m {
+			return idx.Mappings.Properties["reactions"].Properties
+		}
+		return nil
+	}
+	doc := func(id, emoji string) map[string]any {
+		return map[string]any{"id": id, "parentId": "c1", "body": "hi", "reactions": map[string][]string{emoji: {"u1"}}}
+	}
+
+	// A fresh index never maps reaction keys.
+	if err := c.IndexDoc(ctx, IndexMessages, "fresh-1", doc("fresh-1", ":fresh-emoji:")); err != nil {
+		t.Fatal(err)
+	}
+	if f := fields(); len(f) != 0 {
+		t.Fatalf("fresh index mapped reaction keys: %v", f)
+	}
+
+	// Recreate the index the way it was created before the fix.
+	if err := c.deleteIndex(ctx, IndexMessages); err != nil {
+		t.Fatal(err)
+	}
+	legacy := strings.Replace(indexMappings[IndexMessages], `"reactions":       `+reactionsMapping, `"legacy": {"type": "keyword"}`, 1)
+	if err := c.createIndex(ctx, IndexMessages, legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.IndexDoc(ctx, IndexMessages, "old-1", doc("old-1", ":old-emoji:")); err != nil {
+		t.Fatal(err)
+	}
+	if f := fields(); f[":old-emoji:"] == nil {
+		t.Fatalf("legacy index should have mapped the emoji, got %v", f)
+	}
+
+	// After EnsureIndices, new emoji are kept in _source but add no field.
+	if err := c.EnsureIndices(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.IndexDoc(ctx, IndexMessages, "new-1", doc("new-1", ":new-emoji:")); err != nil {
+		t.Fatal(err)
+	}
+	if f := fields(); f[":new-emoji:"] != nil || f[":old-emoji:"] == nil {
+		t.Fatalf("reaction fields after update = %v", f)
+	}
+	got, err := c.GetDoc(ctx, IndexMessages, "new-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := got["reactions"].(map[string]any); r[":new-emoji:"] == nil {
+		t.Fatalf("reactions missing from _source: %v", got)
 	}
 }

@@ -136,13 +136,13 @@ func TestClient_EnsureIndices_CreatesMissing(t *testing.T) {
 }
 
 func TestClient_EnsureIndices_SkipsExisting(t *testing.T) {
-	created := 0
+	var puts []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodHead:
 			w.WriteHeader(http.StatusOK) // already exists
 		case http.MethodPut:
-			created++
+			puts = append(puts, r.URL.Path)
 		}
 	}))
 	defer srv.Close()
@@ -150,8 +150,24 @@ func TestClient_EnsureIndices_SkipsExisting(t *testing.T) {
 	if err := c.EnsureIndices(context.Background()); err != nil {
 		t.Fatalf("EnsureIndices: %v", err)
 	}
-	if created != 0 {
-		t.Errorf("expected 0 PUT (indices already exist), got %d", created)
+	// No index is created; only the additive mapping update is put.
+	if len(puts) != 1 || puts[0] != "/"+IndexMessages+"/_mapping" {
+		t.Errorf("PUTs = %v, want only the messages mapping update", puts)
+	}
+}
+
+func TestClient_EnsureIndices_MappingUpdateErrorPropagates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL)
+	if err := c.EnsureIndices(context.Background()); err == nil || !strings.Contains(err.Error(), "update mapping") {
+		t.Fatalf("want mapping update error, got %v", err)
 	}
 }
 
