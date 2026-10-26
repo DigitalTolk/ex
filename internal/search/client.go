@@ -458,51 +458,103 @@ type BulkEntry struct {
 	Doc any
 }
 
-// Bulk performs a single _bulk index operation (NDJSON body, action
-// header + doc per pair of lines). Failures inside the bulk body
-// (per-item) are reported through the returned error; the operation
-// as a whole is best-effort and partial successes are retained.
+// maxBulkBytes caps one _bulk request body. OpenSearch rejects larger
+// requests (413); the smallest AWS instance types allow 10 MiB. A var so
+// tests can force splitting.
+var maxBulkBytes = 5 << 20
+
+// Bulk indexes entries with _bulk requests (NDJSON body, action header +
+// doc per pair of lines), split so no body exceeds maxBulkBytes; a single
+// larger document still goes alone. Failures inside a bulk body (per-item)
+// are reported through the returned error after every request has been
+// sent; the operation as a whole is best-effort and partial successes are
+// retained. A failed request stops the remaining ones.
 func (c *Client) Bulk(ctx context.Context, index string, entries []BulkEntry) error {
 	if c == nil || len(entries) == 0 {
 		return nil
 	}
-	var buf bytes.Buffer
+	var buf, entry bytes.Buffer
+	itemErrs := false
+	flush := func() error {
+		if buf.Len() == 0 {
+			return nil
+		}
+		hadErrs, err := c.bulkRequest(ctx, buf.Bytes())
+		buf.Reset()
+		itemErrs = itemErrs || hadErrs
+		return err
+	}
 	for _, e := range entries {
+		entry.Reset()
 		// Per-line {"index": {...}} action header.
 		header := map[string]map[string]string{
 			"index": {"_index": index, "_id": e.ID},
 		}
 		// NDJSON action line: json.Marshal (unlike Encoder.Encode) adds no
 		// trailing newline, so append the one the bulk protocol requires.
-		buf.Write(mustJSON(json.Marshal(header)))
-		buf.WriteByte('\n')
-		if err := json.NewEncoder(&buf).Encode(e.Doc); err != nil {
+		entry.Write(mustJSON(json.Marshal(header)))
+		entry.WriteByte('\n')
+		if err := json.NewEncoder(&entry).Encode(e.Doc); err != nil {
 			return fmt.Errorf("search: bulk doc: %w", err)
 		}
+		if buf.Len()+entry.Len() > maxBulkBytes {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		buf.Write(entry.Bytes())
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/_bulk", &buf)
-	if err != nil {
+	if err := flush(); err != nil {
 		return err
+	}
+	if itemErrs {
+		return errors.New("search: bulk had per-item errors")
+	}
+	return nil
+}
+
+// bulkRetryDelays are the waits before re-sending a _bulk request that
+// OpenSearch answered with 429 (it is shedding load: write queue full or
+// memory pressure). A var so tests can skip the waits.
+var bulkRetryDelays = []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 10 * time.Second, 20 * time.Second}
+
+// bulkRequest sends one NDJSON _bulk body, retrying 429s with backoff, and
+// reports whether OpenSearch flagged per-item errors in it.
+func (c *Client) bulkRequest(ctx context.Context, body []byte) (bool, error) {
+	for attempt := 0; ; attempt++ {
+		hadErrs, status, err := c.bulkOnce(ctx, body)
+		if status != http.StatusTooManyRequests || attempt == len(bulkRetryDelays) {
+			return hadErrs, err
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(bulkRetryDelays[attempt]):
+		}
+	}
+}
+
+func (c *Client) bulkOnce(ctx context.Context, body []byte) (bool, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/_bulk", bytes.NewReader(body))
+	if err != nil {
+		return false, 0, err
 	}
 	req.Header.Set("Content-Type", "application/x-ndjson")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return false, 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
-		return c.errorFromResponse(resp)
+		return false, resp.StatusCode, c.errorFromResponse(resp)
 	}
 	var out struct {
 		Errors bool `json:"errors"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return fmt.Errorf("search: bulk decode: %w", err)
+		return false, resp.StatusCode, fmt.Errorf("search: bulk decode: %w", err)
 	}
-	if out.Errors {
-		return errors.New("search: bulk had per-item errors")
-	}
-	return nil
+	return out.Errors, resp.StatusCode, nil
 }
 
 type SearchHit struct {
