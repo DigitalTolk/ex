@@ -63,7 +63,9 @@ type ParentStats struct {
 	MessageSeq    int64
 	MembersUnread int
 	// ThreadsMismatched counts thread roots whose stored reply count differs
-	// from the number of live replies.
+	// from the number of their replies. A deleted reply stays in its thread
+	// as a placeholder and keeps counting, as it does in ex (a tombstoned
+	// root likewise keeps its count).
 	ThreadsMismatched int
 }
 
@@ -86,18 +88,20 @@ func (im *Importer) ParentStats(ctx context.Context, parentID, parentType string
 	stored := map[string]int{}  // root → stored ReplyCount
 	replies := map[string]int{} // root → live replies
 	for _, m := range msgs {
+		if m.ParentMessageID != "" {
+			replies[m.ParentMessageID]++
+		}
 		switch {
 		case m.Deleted:
 			st.Deleted++
 		case m.ParentMessageID != "":
 			st.Replies++
-			replies[m.ParentMessageID]++
 		case m.System:
 			st.System++
 		default:
 			st.TopLevel++
 		}
-		if !m.Deleted && m.ParentMessageID == "" && m.ReplyCount > 0 {
+		if m.ParentMessageID == "" && m.ReplyCount > 0 {
 			stored[m.ID] = m.ReplyCount
 		}
 	}

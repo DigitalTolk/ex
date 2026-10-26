@@ -145,6 +145,27 @@ func TestGetMessages(t *testing.T) {
 	})
 }
 
+// Deleting a reply in ex keeps it in the thread as a placeholder and leaves
+// the root's reply count alone; deleting the root keeps its count too. Neither
+// is a mismatch.
+func TestParentStats_DeletedRepliesStillCount(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	f := newFixture(t, e)
+	mustNoErr(t, e.im.TombstoneMessage(ctx, "c1", f.r1.ID))
+	st, err := e.im.ParentStats(ctx, "c1", ParentChannel)
+	mustNoErr(t, err)
+	if st.ThreadsMismatched != 0 || st.Replies != 1 || st.Deleted != 1 {
+		t.Fatalf("after deleting a reply: %+v", st)
+	}
+	mustNoErr(t, e.im.TombstoneMessage(ctx, "c1", f.root.ID))
+	st, err = e.im.ParentStats(ctx, "c1", ParentChannel)
+	mustNoErr(t, err)
+	if st.ThreadsMismatched != 0 || st.Deleted != 2 {
+		t.Fatalf("after deleting the root: %+v", st)
+	}
+}
+
 func TestParentStats(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
