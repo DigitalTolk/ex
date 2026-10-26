@@ -146,7 +146,7 @@ func TestListTopLevelMessages_CappedResponseKeepsReading(t *testing.T) {
 	if err := ms.MarkTopLevelIndexSeeded(ctx); err != nil {
 		t.Fatal(err)
 	}
-	capped := NewMessageStore(withFault(db, func(f *faultClient) { f.transformQuery = capFirstQuery(1) }))
+	capped := NewMessageStore(withFault(db, func(f *faultClient) { f.transformQuery = capFirstQuery(1, "GSI2PK", "GSI2SK") }))
 	msgs, hasMore, err := capped.ListTopLevelMessages(ctx, "ch-cap2", "", 4)
 	if err != nil || len(msgs) != 4 || !hasMore {
 		t.Fatalf("capped page = %d msgs, hasMore=%v (err %v); want 4 and hasMore", len(msgs), hasMore, err)

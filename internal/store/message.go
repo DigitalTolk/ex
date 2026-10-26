@@ -215,10 +215,8 @@ func (s *MessageStoreImpl) ListMessages(ctx context.Context, parentID string, be
 		messages = messages[1:]
 	}
 
-	// A continuation on a short page means DynamoDB's 1MB cap cut it, not the
-	// start of history (a full page has the extra row and counts as more anyway).
-	hasMore := len(messages) > limit || len(out.LastEvaluatedKey) > 0
-	if len(messages) > limit {
+	hasMore := len(messages) > limit
+	if hasMore {
 		messages = messages[:limit]
 	}
 
@@ -411,7 +409,9 @@ func (s *MessageStoreImpl) ListMessagesAfter(ctx context.Context, parentID, afte
 	if len(messages) > 0 && messages[0].ID == after {
 		messages = messages[1:]
 	}
-	hasMore := len(messages) > limit || len(out.LastEvaluatedKey) > 0 // see ListMessages
+	// A continuation on a short page means DynamoDB's 1MB cap cut it, not the
+	// newest message (a full page has the extra row and counts as more anyway).
+	hasMore := len(messages) > limit || len(out.LastEvaluatedKey) > 0
 	if len(messages) > limit {
 		messages = messages[:limit]
 	}

@@ -685,7 +685,7 @@ func TestAttachmentService_StoreThumbnails_PutErrorKeepsKeysUnset(t *testing.T) 
 	storeM.byID[a.ID] = a
 	svc := NewAttachmentService(storeM, &fakeAttachmentSigner{putErr: errors.New("put failed")}, nil)
 	released := 0
-	if err := svc.storeThumbnails(ctx, a, img, func() { released++ }); err == nil {
+	if err := svc.storeThumbnails(ctx, a, storedPixels{Image: img}, func() { released++ }); err == nil {
 		t.Fatal("expected PutObject error")
 	}
 	if a.ThumbnailS3Key != "" || a.SquareThumbnailS3Key != "" {
@@ -734,11 +734,11 @@ func TestAttachmentService_ProcessUpload_PersistErrorBranches(t *testing.T) {
 }
 
 func TestEncodeWebPThumbnail_ErrorBranches(t *testing.T) {
-	if _, err := encodeWebPThumbnail(nil, thumbnailModeMessage); err == nil {
+	if _, err := encodeWebPThumbnail(storedPixels{}, thumbnailModeMessage); err == nil {
 		t.Fatal("expected nil image error")
 	}
 	empty := image.NewRGBA(image.Rect(0, 0, 0, 0))
-	if _, err := encodeWebPThumbnail(empty, thumbnailModeMessage); err == nil {
+	if _, err := encodeWebPThumbnail(storedPixels{Image: empty}, thumbnailModeMessage); err == nil {
 		t.Fatal("expected invalid dimensions error")
 	}
 }

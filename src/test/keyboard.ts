@@ -13,9 +13,21 @@ export function fireKeyboard(name: 'keyboardWillShow' | 'keyboardWillHide', heig
 // still sliding into place. Never a fixed wait: a surface easing along with
 // the keyboard (KEYBOARD_SETTLE_MS) starts moving only when the browser next
 // renders, which a busy runner can put off, and a 400ms sleep then measured
-// it halfway.
+// it halfway. The page is read in a frame, once the browser has brought its
+// animations up to date: WebKit calls a slide over as soon as its time is up
+// but keeps showing an earlier frame until it next renders, and a runner busy
+// across the slide's end then read the box short.
 export async function keyboardSettled(arrived: () => boolean) {
-  await expect.poll(() => ({ arrived: arrived(), sliding: sliding() })).toEqual({ arrived: true, sliding: 0 });
+  await expect
+    .poll(async () => {
+      await nextFrame();
+      return { arrived: arrived(), sliding: sliding() };
+    })
+    .toEqual({ arrived: true, sliding: 0 });
+}
+
+function nextFrame() {
+  return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 }
 
 // How many transitions or finite animations are still running. Reading them

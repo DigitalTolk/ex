@@ -227,7 +227,7 @@ func TestAttachment_StoreThumbnails_SquarePutError(t *testing.T) {
 		failOn:               2, // message thumb put succeeds, square thumb put fails
 	}
 	svc := NewAttachmentService(storeM, signer, nil)
-	if err := svc.storeThumbnails(context.Background(), a, img, func() {}); err == nil {
+	if err := svc.storeThumbnails(context.Background(), a, storedPixels{Image: img}, func() {}); err == nil {
 		t.Fatal("expected square thumbnail put error")
 	}
 }

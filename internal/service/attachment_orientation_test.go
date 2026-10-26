@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"image"
 	"image/color"
 	"testing"
@@ -48,24 +49,23 @@ func TestInspectContent_PhotoTakenUpright(t *testing.T) {
 	if cfg.Width != 20 || cfg.Height != 30 {
 		t.Fatalf("size = %dx%d, want it as shown, 20x30", cfg.Width, cfg.Height)
 	}
-	// As stored, from a client that didn't turn it: still the same photo.
-	// Without decoding, the server has no orientation of its own to go by,
-	// so it keeps the size the client measured.
-	if cfg, err := inspectBytes(jpegAttachment(30, 20), "image/jpeg", photo); err != nil || cfg.Width != 30 || cfg.Height != 20 {
-		t.Fatalf("stored size = %v, %v; want accepted as claimed, 30x20", cfg, err)
+	// As stored, from a client that didn't turn it: still the same photo,
+	// kept as shown.
+	if cfg, err := inspectBytes(jpegAttachment(30, 20), "image/jpeg", photo); err != nil || cfg.Width != 20 || cfg.Height != 30 {
+		t.Fatalf("stored size = %v, %v; want accepted and kept as shown, 20x30", cfg, err)
 	}
-	// Decoded (for thumbnails), the upright pixels are the truth.
+	// Decoded (for thumbnails), the same.
 	cfg, img, release, err := inspectContent(context.Background(), jpegAttachment(30, 20), "image/jpeg", bufio.NewReader(bytes.NewReader(photo)), true)
 	release()
 	if err != nil || img == nil || cfg.Width != 20 || cfg.Height != 30 {
 		t.Fatalf("decoded size = %v, %v; want the upright 20x30", cfg, err)
 	}
 	// A partial claim (one side unknown) matches either orientation too.
-	if cfg, err := inspectBytes(jpegAttachment(20, 0), "image/jpeg", photo); err != nil || cfg.Width != 20 || cfg.Height != 30 {
-		t.Fatalf("partial upright claim = %v, %v; want 20x30", cfg, err)
+	if cfg, err := inspectBytes(jpegAttachment(30, 0), "image/jpeg", photo); err != nil || cfg.Width != 20 || cfg.Height != 30 {
+		t.Fatalf("partial stored claim = %v, %v; want 20x30", cfg, err)
 	}
-	if cfg, err := inspectBytes(jpegAttachment(0, 0), "image/jpeg", photo); err != nil || cfg.Width != 30 || cfg.Height != 20 {
-		t.Fatalf("no claim = %v, %v; want the stored 30x20", cfg, err)
+	if cfg, err := inspectBytes(jpegAttachment(0, 0), "image/jpeg", photo); err != nil || cfg.Width != 20 || cfg.Height != 30 {
+		t.Fatalf("no claim = %v, %v; want it as shown, 20x30", cfg, err)
 	}
 	// Any other size is not this photo.
 	if _, err := inspectBytes(jpegAttachment(25, 30), "image/jpeg", photo); err == nil {
@@ -76,28 +76,38 @@ func TestInspectContent_PhotoTakenUpright(t *testing.T) {
 	}
 }
 
-// The thumbnails are made from the photo turned upright.
-func TestInspectContent_DecodesThePhotoUpright(t *testing.T) {
-	photo := sidewaysPhoto(t, 6)
-	cfg, img, release, err := inspectContent(context.Background(), &model.Attachment{ContentType: "image/jpeg"}, "image/jpeg", bufio.NewReader(bytes.NewReader(photo)), true)
+// messageThumbnail is the message thumbnail of a photo as shown.
+func messageThumbnail(t *testing.T, photo []byte) image.Image {
+	t.Helper()
+	_, img, release, err := inspectContent(context.Background(), &model.Attachment{ContentType: "image/jpeg"}, "image/jpeg", bufio.NewReader(bytes.NewReader(photo)), true)
 	defer release()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if img.Bounds().Dx() != 20 || img.Bounds().Dy() != 30 || cfg.Width != 20 {
-		t.Fatalf("decoded %v (cfg %dx%d), want 20x30", img.Bounds(), cfg.Width, cfg.Height)
+	thumb, _, err := image.Decode(bytes.NewReader(mustThumb(encodeWebPThumbnail(*img, thumbnailModeMessage))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return thumb
+}
+
+// The thumbnails show the photo upright.
+func TestEncodeWebPThumbnail_ShowsThePhotoUpright(t *testing.T) {
+	thumb := messageThumbnail(t, sidewaysPhoto(t, 6))
+	if thumb.Bounds().Dx() != 20 || thumb.Bounds().Dy() != 30 {
+		t.Fatalf("thumbnail is %v, want 20x30", thumb.Bounds())
 	}
 	// Turned a quarter clockwise, the red corner is now top-right.
-	r, g, b, _ := img.At(17, 2).RGBA()
+	r, g, b, _ := thumb.At(17, 2).RGBA()
 	if r>>8 < 200 || g>>8 > 60 || b>>8 > 60 {
 		t.Fatalf("top-right pixel = %d,%d,%d, want red", r>>8, g>>8, b>>8)
 	}
 }
 
-// Every EXIF orientation decodes the way it is shown: sized upright, with the
+// Every EXIF orientation is shown the way it says: sized upright, with the
 // stored top-left corner where the turn puts it. An out-of-range value is
 // ignored (shown as stored).
-func TestInspectContent_DecodesEveryOrientationUpright(t *testing.T) {
+func TestEncodeWebPThumbnail_ShowsEveryOrientationUpright(t *testing.T) {
 	type corner int
 	const (
 		topLeft corner = iota
@@ -120,20 +130,16 @@ func TestInspectContent_DecodesEveryOrientationUpright(t *testing.T) {
 		{8, 20, 30, bottomLeft},
 		{9, 30, 20, topLeft},
 	} {
-		_, img, release, err := inspectContent(context.Background(), &model.Attachment{ContentType: "image/jpeg"}, "image/jpeg", bufio.NewReader(bytes.NewReader(sidewaysPhoto(t, tc.orientation))), true)
-		release()
-		if err != nil {
-			t.Fatalf("orientation %d: %v", tc.orientation, err)
-		}
-		if img.Bounds().Dx() != tc.w || img.Bounds().Dy() != tc.h {
-			t.Errorf("orientation %d: decoded %v, want %dx%d", tc.orientation, img.Bounds(), tc.w, tc.h)
+		thumb := messageThumbnail(t, sidewaysPhoto(t, tc.orientation))
+		if thumb.Bounds().Dx() != tc.w || thumb.Bounds().Dy() != tc.h {
+			t.Errorf("orientation %d: thumbnail is %v, want %dx%d", tc.orientation, thumb.Bounds(), tc.w, tc.h)
 			continue
 		}
 		at := map[corner]image.Point{
 			topLeft: image.Pt(2, 2), topRight: image.Pt(tc.w-3, 2),
 			bottomRight: image.Pt(tc.w-3, tc.h-3), bottomLeft: image.Pt(2, tc.h-3),
 		}[tc.red]
-		if r, g, _, _ := img.At(at.X, at.Y).RGBA(); r>>8 < 200 || g>>8 > 60 {
+		if r, g, _, _ := thumb.At(at.X, at.Y).RGBA(); r>>8 < 200 || g>>8 > 60 {
 			t.Errorf("orientation %d: the red corner is not at %v", tc.orientation, at)
 		}
 	}
@@ -151,35 +157,16 @@ func TestImageDecodeCostFor_ReservesARotationForJPEG(t *testing.T) {
 	}
 }
 
-// When a JPEG cannot be decoded upright right now, the backfill keeps the size
-// it read from the file's header rather than nothing.
-func TestUprightSize_KeepsTheStoredSizeWhenItCannotDecode(t *testing.T) {
-	stored := image.Config{Width: 30, Height: 20}
+// An editor may write its XMP segment ahead of the camera's EXIF one; the
+// orientation behind it still counts, as it does in the browser.
+func TestInspectContent_ReadsTheOrientationBehindXMP(t *testing.T) {
+	payload := append([]byte("http://ns.adobe.com/xap/1.0/\x00"), `<x:xmpmeta xmlns:x="adobe:ns:meta/"/>`...)
+	xmp := binary.BigEndian.AppendUint16([]byte{0xFF, 0xE1}, uint16(len(payload)+2))
+	xmp = append(xmp, payload...)
 	photo := sidewaysPhoto(t, 6)
-	signer := &fakeAttachmentSigner{objects: map[string][]byte{"good": photo, "garbage": []byte("not a jpeg")}}
-	svc := NewAttachmentService(newMockAttachmentStore(), signer, newMockPublisher())
-	ctx := context.Background()
-
-	if got := svc.uprightSize(ctx, "good", "jpeg", stored); got.Width != 20 || got.Height != 30 {
-		t.Fatalf("decodable photo: %dx%d, want upright 20x30", got.Width, got.Height)
-	}
-	if got := svc.uprightSize(ctx, "good", "jpeg", image.Config{Width: 1 << 15, Height: 1 << 15}); got.Width != 1<<15 {
-		t.Fatalf("over the decode budget: %v, want the stored size", got)
-	}
-	if got := svc.uprightSize(ctx, "missing", "jpeg", stored); got != stored {
-		t.Fatalf("unreadable object: %v, want the stored size", got)
-	}
-	if got := svc.uprightSize(ctx, "garbage", "jpeg", stored); got != stored {
-		t.Fatalf("undecodable object: %v, want the stored size", got)
-	}
-	if !imageDecodeBudget.TryAcquire(maxImageDecodeBytes) {
-		t.Fatal("decode budget busy")
-	}
-	defer imageDecodeBudget.Release(maxImageDecodeBytes)
-	cancelled, cancel := context.WithCancel(ctx)
-	cancel()
-	if got := svc.uprightSize(cancelled, "good", "jpeg", stored); got != stored {
-		t.Fatalf("no decode budget: %v, want the stored size", got)
+	photo = append(append(append([]byte{}, photo[:2]...), xmp...), photo[2:]...)
+	if cfg, err := inspectBytes(&model.Attachment{ContentType: "image/jpeg"}, "image/jpeg", photo); err != nil || cfg.Width != 20 || cfg.Height != 30 {
+		t.Fatalf("size = %v, %v; want it as shown, 20x30", cfg, err)
 	}
 }
 
@@ -207,5 +194,80 @@ func TestAttachmentService_BackfillsAPhotoUpright(t *testing.T) {
 	}
 	if stored := storeM.stored("photo"); stored.Width != 20 || stored.Height != 30 {
 		t.Fatalf("backfilled %dx%d, want 20x30", stored.Width, stored.Height)
+	}
+}
+
+// phonePhoto is a camera's full-size photo: w×h pixels as stored, with an
+// EXIF orientation. Its stored top-left quarter is red, the rest blue.
+func phonePhoto(t *testing.T, w, h int, orientation uint16) []byte {
+	t.Helper()
+	img := image.NewYCbCr(image.Rect(0, 0, w, h), image.YCbCrSubsampleRatio420)
+	redY, redCb, redCr := color.RGBToYCbCr(255, 0, 0)
+	blueY, blueCb, blueCr := color.RGBToYCbCr(0, 0, 255)
+	for y := range h {
+		for x := range w {
+			img.Y[img.YOffset(x, y)] = blueY
+			if x < w/2 && y < h/2 {
+				img.Y[img.YOffset(x, y)] = redY
+			}
+		}
+	}
+	for y := range h / 2 {
+		for x := range w / 2 {
+			i := y*img.CStride + x
+			img.Cb[i], img.Cr[i] = blueCb, blueCr
+			if x < w/4 && y < h/4 {
+				img.Cb[i], img.Cr[i] = redCb, redCr
+			}
+		}
+	}
+	return cameraJPEG(t, img, orientation)
+}
+
+// A phone's full-size photo, taken upright: 24 MP (an iPhone's default),
+// stored sideways. Turning all of it upright was costed as one more copy of
+// every pixel, which put it over the decode budget, so it got no thumbnails
+// and showed as a file.
+func TestProcessUpload_FullSizePhotoTakenUpright(t *testing.T) {
+	photo := phonePhoto(t, 5712, 4284, 6)
+	storeM := newMockAttachmentStore()
+	a := &model.Attachment{
+		ID: "photo", CreatedBy: "u1", S3Key: "attachments/photo", Filename: "IMG_0001.jpg", ContentType: "image/jpeg",
+		Size: int64(len(photo)), SHA256: sha256Hex(photo), Width: 4284, Height: 5712,
+	}
+	storeM.byID[a.ID] = a
+	signer := &fakeAttachmentSigner{objects: map[string][]byte{a.S3Key: photo}, objectContentType: "image/jpeg", putContentTypes: map[string]string{}}
+	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+
+	processed, err := svc.ProcessUpload(context.Background(), "u1", a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed.Width != 4284 || processed.Height != 5712 {
+		t.Fatalf("size = %dx%d, want it as shown, 4284x5712", processed.Width, processed.Height)
+	}
+	if processed.ThumbnailS3Key == "" || processed.SquareThumbnailS3Key == "" {
+		t.Fatal("no thumbnails")
+	}
+	thumb, _, err := image.Decode(bytes.NewReader(signer.objects[processed.ThumbnailS3Key]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := thumb.Bounds(); b.Dx() != 432 || b.Dy() != 576 {
+		t.Fatalf("message thumbnail is %v, want it upright, 432x576", b)
+	}
+	// Turned a quarter clockwise, the red corner is top-right.
+	if r, _, b, _ := thumb.At(432-20, 20).RGBA(); r>>8 < 200 || b>>8 > 60 {
+		t.Fatalf("message thumbnail's top-right is %d,%d, want red", r>>8, b>>8)
+	}
+	square, _, err := image.Decode(bytes.NewReader(signer.objects[processed.SquareThumbnailS3Key]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := square.Bounds(); b.Dx() != squareThumbnailSize || b.Dy() != squareThumbnailSize {
+		t.Fatalf("square thumbnail is %v", b)
+	}
+	if r, _, b, _ := square.At(squareThumbnailSize-5, 5).RGBA(); r>>8 < 200 || b>>8 > 60 {
+		t.Fatalf("square thumbnail's top-right is %d,%d, want red", r>>8, b>>8)
 	}
 }

@@ -30,6 +30,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bep/imagemeta"
 	"github.com/disintegration/imaging"
 	"github.com/gen2brain/webp"
 	"github.com/hashicorp/golang-lru/v2/expirable"
@@ -831,39 +832,14 @@ func (s *AttachmentService) scheduleDimensionsBackfill(id, s3Key string) {
 		if err != nil || len(buf) == 0 {
 			return
 		}
-		cfg, format, err := image.DecodeConfig(bytes.NewReader(buf))
+		cfg, _, err := image.DecodeConfig(bytes.NewReader(buf))
 		if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
 			return
 		}
-		cfg = s.uprightSize(ctx, s3Key, format, cfg)
-		_ = s.attachments.SetDimensions(ctx, id, cfg.Width, cfg.Height)
+		// Kept as shown: the header holds the orientation too.
+		width, height := shownSize(cfg.Width, cfg.Height, exifOrientation(buf))
+		_ = s.attachments.SetDimensions(ctx, id, width, height)
 	}()
-}
-
-// uprightSize is the size a stored image is shown at. Only a JPEG can be
-// stored turned (EXIF orientation), and only decoding it says which way, so a
-// JPEG that fits the decode budget is decoded upright; anything else — or a
-// JPEG that cannot be decoded now — keeps the stored size.
-func (s *AttachmentService) uprightSize(ctx context.Context, s3Key, format string, stored image.Config) image.Config {
-	cost := imageDecodeCostFor(format, stored.Width, stored.Height)
-	if format != "jpeg" || cost > maxImageDecodeBytes {
-		return stored
-	}
-	if err := imageDecodeBudget.Acquire(ctx, cost); err != nil {
-		return stored
-	}
-	defer imageDecodeBudget.Release(cost)
-	body, _, _, _, err := s.signer.GetObject(ctx, s3Key)
-	if err != nil {
-		return stored
-	}
-	defer func() { _ = body.Close() }()
-	img, err := imaging.Decode(body, imaging.AutoOrientation(true))
-	if err != nil {
-		return stored
-	}
-	stored.Width, stored.Height = img.Bounds().Dx(), img.Bounds().Dy()
-	return stored
 }
 
 // GetMany resolves a list of attachment IDs in parallel. Missing IDs are
@@ -1231,7 +1207,7 @@ func (s *AttachmentService) verifyObject(ctx context.Context, a *model.Attachmen
 		return "", err
 	}
 	if img != nil {
-		if err := s.storeThumbnails(ctx, a, img, release); err != nil {
+		if err := s.storeThumbnails(ctx, a, *img, release); err != nil {
 			return "", err
 		}
 	}
@@ -1258,7 +1234,7 @@ func checkObjectContentType(declared, objectContentType string) error {
 // image would not fit imageDecodeBudget, in which case it gets no thumbnails.
 // release hands the decoded image's budget back; it is always safe to call,
 // and to call more than once.
-func inspectContent(ctx context.Context, a *model.Attachment, objectContentType string, r *bufio.Reader, decode bool) (image.Config, image.Image, func(), error) {
+func inspectContent(ctx context.Context, a *model.Attachment, objectContentType string, r *bufio.Reader, decode bool) (image.Config, *storedPixels, func(), error) {
 	noop := func() {}
 	var cfg image.Config
 	if err := checkObjectContentType(a.ContentType, objectContentType); err != nil {
@@ -1284,18 +1260,19 @@ func inspectContent(ctx context.Context, a *model.Attachment, objectContentType 
 		return cfg, nil, noop, apperr.Invalid("attachment: could not detect image content type")
 	}
 	var header bytes.Buffer
-	cfg, format, err := image.DecodeConfig(io.TeeReader(io.LimitReader(r, maxImageHeaderBytes), &header))
-	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
-		return cfg, nil, noop, apperr.Invalid("attachment: invalid image")
+	stored, format, err := image.DecodeConfig(io.TeeReader(io.LimitReader(r, maxImageHeaderBytes), &header))
+	if err != nil || stored.Width <= 0 || stored.Height <= 0 {
+		return stored, nil, noop, apperr.Invalid("attachment: invalid image")
 	}
 	// A phone stores a portrait photo's pixels sideways and says so in its
 	// EXIF orientation; it is shown upright, and the browser measured it so.
-	// DecodeConfig reports the stored size, so a claim matching either
-	// orientation of it is this photo — and the claim, the size the client
-	// saw, is the one kept. Decoding below replaces it with the upright pixels'
-	// own size.
-	cfg, ok := claimedSize(a, cfg)
-	if !ok {
+	// From here on the image's size is the size it is shown at. A claim of
+	// either orientation is this photo: the browser's is the one shown, a
+	// client that measured the stored pixels sent the other.
+	orientation := exifOrientation(header.Bytes())
+	cfg = stored
+	cfg.Width, cfg.Height = shownSize(stored.Width, stored.Height, orientation)
+	if !claimFits(a, stored) {
 		return cfg, nil, noop, apperr.Invalid("attachment: image size mismatch: got %dx%d want %dx%d", cfg.Width, cfg.Height, a.Width, a.Height)
 	}
 	expectedFormat := strings.TrimPrefix(declared, "image/")
@@ -1305,7 +1282,7 @@ func inspectContent(ctx context.Context, a *model.Attachment, objectContentType 
 	if format != expectedFormat {
 		return cfg, nil, noop, apperr.Invalid("attachment: image format %q does not match declared %q", format, declared)
 	}
-	cost := imageDecodeCostFor(format, cfg.Width, cfg.Height)
+	cost := imageDecodeCost(stored.Width, stored.Height)
 	if !decode || cost > maxImageDecodeBytes {
 		return cfg, nil, noop, nil
 	}
@@ -1314,29 +1291,82 @@ func inspectContent(ctx context.Context, a *model.Attachment, objectContentType 
 	}
 	release := sync.OnceFunc(func() { imageDecodeBudget.Release(cost) })
 	// DecodeConfig consumed the header from r; replay it ahead of the rest.
-	img, err := imaging.Decode(io.MultiReader(&header, r), imaging.AutoOrientation(true))
+	img, _, err := image.Decode(io.MultiReader(&header, r))
 	if err != nil {
 		release()
 		return cfg, nil, noop, fmt.Errorf("attachment: decode image for thumbnails: %w", err)
 	}
-	b := img.Bounds()
-	return image.Config{ColorModel: cfg.ColorModel, Width: b.Dx(), Height: b.Dy()}, img, release, nil
+	return cfg, &storedPixels{Image: img, orientation: orientation}, release, nil
 }
 
-// claimedSize checks the client's claimed size (0 = not measured) against an
-// image's stored size: it fits when every measured side matches the stored
-// size, or the stored size turned a quarter. It returns the size to keep: the
-// claim, with any unmeasured side taken from the orientation it matched.
-func claimedSize(a *model.Attachment, stored image.Config) (image.Config, bool) {
-	fits := func(w, h int) bool { return (a.Width == 0 || a.Width == w) && (a.Height == 0 || a.Height == h) }
-	switch {
-	case fits(stored.Width, stored.Height):
-		return stored, true
-	case fits(stored.Height, stored.Width):
-		stored.Width, stored.Height = stored.Height, stored.Width
-		return stored, true
+// storedPixels is a decoded image as its file stores it, and the EXIF
+// orientation it is shown in (0 or 1: as stored). Only its thumbnails are
+// turned upright: turning the full-size pixels would hold a second copy of
+// every one of them, and with it a 24 MP phone photo did not fit the decode
+// budget.
+type storedPixels struct {
+	image.Image
+	orientation int
+}
+
+// exifOrientation is the EXIF orientation (1–8) in a JPEG's header, or 0 when
+// it has none (or is no JPEG). An unreadable one is none: the image is then
+// shown as stored.
+func exifOrientation(header []byte) int {
+	orientation := 0
+	_, _ = imagemeta.Decode(imagemeta.Options{
+		R:           bytes.NewReader(header),
+		ImageFormat: imagemeta.JPEG,
+		Sources:     imagemeta.EXIF,
+		// IFD0's: the other IFD describes the embedded thumbnail.
+		ShouldHandleTag: func(ti imagemeta.TagInfo) bool { return ti.Namespace == "IFD0" && ti.Tag == "Orientation" },
+		HandleTag: func(ti imagemeta.TagInfo) error {
+			if o, ok := ti.Value.(uint16); ok && o <= 8 {
+				orientation = int(o)
+			}
+			return imagemeta.ErrStopWalking
+		},
+	})
+	return orientation
+}
+
+// shownSize is the size of w×h stored pixels as shown: orientations 5–8 turn
+// them a quarter.
+func shownSize(w, h, orientation int) (int, int) {
+	if orientation >= 5 {
+		return h, w
 	}
-	return stored, false
+	return w, h
+}
+
+// upright turns a thumbnail made from stored pixels the way their EXIF
+// orientation shows them (imaging's own mapping, as in AutoOrientation).
+func upright(img *image.NRGBA, orientation int) *image.NRGBA {
+	switch orientation {
+	case 2:
+		return imaging.FlipH(img)
+	case 3:
+		return imaging.Rotate180(img)
+	case 4:
+		return imaging.FlipV(img)
+	case 5:
+		return imaging.Transpose(img)
+	case 6:
+		return imaging.Rotate270(img)
+	case 7:
+		return imaging.Transverse(img)
+	case 8:
+		return imaging.Rotate90(img)
+	}
+	return img
+}
+
+// claimFits checks the client's claimed size (0 = not measured) against an
+// image's stored size: it fits when every measured side matches the stored
+// size, or the stored size turned a quarter.
+func claimFits(a *model.Attachment, stored image.Config) bool {
+	fits := func(w, h int) bool { return (a.Width == 0 || a.Width == w) && (a.Height == 0 || a.Height == h) }
+	return fits(stored.Width, stored.Height) || fits(stored.Height, stored.Width)
 }
 
 // imageDecodeCostFor is the decode budget an image of format needs: its
@@ -1353,7 +1383,7 @@ func imageDecodeCostFor(format string, width, height int) int64 {
 // storeThumbnails encodes both thumbnails, hands the decoded image's budget
 // back, and only then uploads: the pixels are the expensive part, the encoded
 // WebPs are a few KB.
-func (s *AttachmentService) storeThumbnails(ctx context.Context, a *model.Attachment, img image.Image, release func()) error {
+func (s *AttachmentService) storeThumbnails(ctx context.Context, a *model.Attachment, img storedPixels, release func()) error {
 	thumbnailKey, squareThumbnailKey := thumbnailObjectKeys(a)
 	messageThumb := mustThumb(encodeWebPThumbnail(img, thumbnailModeMessage))
 	squareThumb := mustThumb(encodeWebPThumbnail(img, thumbnailModeSquare))
@@ -1402,8 +1432,8 @@ var lossyWebP = webp.Options{Quality: 80}
 // encode-failure panic arm; a real failure here is a programmer fault.
 var webpEncode = webp.Encode
 
-func encodeWebPThumbnail(src image.Image, mode thumbnailMode) ([]byte, error) {
-	if src == nil {
+func encodeWebPThumbnail(src storedPixels, mode thumbnailMode) ([]byte, error) {
+	if src.Image == nil {
 		return nil, errors.New("missing image")
 	}
 	if b := src.Bounds(); b.Dx() <= 0 || b.Dy() <= 0 {
@@ -1412,13 +1442,17 @@ func encodeWebPThumbnail(src image.Image, mode thumbnailMode) ([]byte, error) {
 
 	// One resizer for every picture the server makes (avatars too): imaging's
 	// Lanczos. The message thumbnail fits the box and is never enlarged; the
-	// square one is the centre crop, scaled to size.
+	// square one is the centre crop, scaled to size. Both are made from the
+	// pixels as stored, then turned upright; stored turned a quarter, the
+	// image fits the box turned a quarter.
 	var dst *image.NRGBA
 	if mode == thumbnailModeSquare {
 		dst = imaging.Fill(src, squareThumbnailSize, squareThumbnailSize, imaging.Center, imaging.Lanczos)
 	} else {
-		dst = imaging.Fit(src, messageThumbnailMaxWidth, messageThumbnailMaxHeight, imaging.Lanczos)
+		maxW, maxH := shownSize(messageThumbnailMaxWidth, messageThumbnailMaxHeight, src.orientation)
+		dst = imaging.Fit(src, maxW, maxH, imaging.Lanczos)
 	}
+	dst = upright(dst, src.orientation)
 
 	var out bytes.Buffer
 	if err := webpEncode(&out, dst, lossyWebP); err != nil {

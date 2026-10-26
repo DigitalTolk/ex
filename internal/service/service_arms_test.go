@@ -257,7 +257,7 @@ func TestEncodeWebPThumbnailPanicsOnEncoderFault(t *testing.T) {
 			t.Fatal("expected panic on encoder fault")
 		}
 	}()
-	_, _ = encodeWebPThumbnail(image.NewNRGBA(image.Rect(0, 0, 4, 4)), thumbnailModeMessage)
+	_, _ = encodeWebPThumbnail(storedPixels{Image: image.NewNRGBA(image.Rect(0, 0, 4, 4))}, thumbnailModeMessage)
 }
 
 func TestUpdateMemberRoleOwnerDemotionActorFetchFailure(t *testing.T) {
