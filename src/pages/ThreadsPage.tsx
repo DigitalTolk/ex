@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
+import { Virtuoso } from 'react-virtuoso';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -24,8 +25,8 @@ function threadKey(t: ThreadSummary): string {
   return `${t.parentID}#${t.threadRootID}`;
 }
 
-// How many thread cards to mount per page as the user scrolls.
-const THREADS_PAGE_SIZE = 12;
+// Cards mounted on the first paint, before the list has measured the view.
+const INITIAL_CARDS = 6;
 
 export default function ThreadsPage() {
   useDocumentTitle('Threads');
@@ -75,36 +76,19 @@ export default function ThreadsPage() {
     [snapshot, byKey, sortedThreads],
   );
 
-  // Render threads in pages and grow the window as the user scrolls to the
-  // bottom. Each card is a heavy snippet (a message thread + a composer), so
-  // mounting all of them at once is what made /threads slow and janky.
-  const supportsIO = typeof IntersectionObserver !== 'undefined';
-  const [visibleCount, setVisibleCount] = useState(THREADS_PAGE_SIZE);
-  const loadMoreRef = useRef<HTMLDivElement>(null);
-  const visibleThreads = supportsIO ? listedThreads.slice(0, visibleCount) : listedThreads;
-  const hasMore = supportsIO && visibleCount < listedThreads.length;
-
-  useEffect(() => {
-    if (!hasMore) return;
-    const node = loadMoreRef.current;
-    // Defensive: hasMore implies threads data arrived, which implies
-    // isLoading is false (React Query has no data while pending), so the
-    // sentinel div is always mounted — and refs attach before effects run.
-    /* istanbul ignore next -- see v8 note */
-    /* v8 ignore next -- unreachable defensive guard, see comment above */
-    if (!node) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          setVisibleCount((count) => count + THREADS_PAGE_SIZE);
-        }
-      },
-      { rootMargin: '800px' },
-    );
-    observer.observe(node);
-    return () => observer.disconnect();
-    // Re-observe after each growth so a tall viewport keeps filling.
-  }, [hasMore, visibleCount]);
+  // Virtualized over the page's own scroller: each card is a heavy snippet
+  // (a whole thread, its query, a composer), and mounting every card paged in
+  // so far is what made a long /threads slow. Only the cards near the view
+  // are mounted; one scrolled far away unmounts and comes back as it nears
+  // again (still marking its thread read once it is in view, see ThreadCard).
+  const [scrollParent, setScrollParent] = useState<HTMLElement | null>(null);
+  const attachScrollParent = useCallback((node: HTMLDivElement | null) => {
+    setScrollParent(node?.closest<HTMLElement>('[data-page-scroll="true"]') ?? null);
+  }, []);
+  // A card's own state goes with it when it unmounts, so the page keeps
+  // which threads were expanded.
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  const expand = useCallback((key: string) => setExpanded((prev) => new Set(prev).add(key)), []);
 
   const channelName = (id: string) =>
     userChannels?.find((c) => c.channelID === id)?.channelName ?? '';
@@ -132,28 +116,39 @@ export default function ThreadsPage() {
         </p>
       )}
 
-      <div className="space-y-4 mobile:space-y-0">
-        {!isLoading &&
-          visibleThreads.map((t) => {
-            const where =
-              t.parentType === 'channel'
-                ? `~${channelName(t.parentID) || 'channel'}`
-                : conversationName(t.parentID);
-            return (
-              <ThreadCard
-                key={threadKey(t)}
-                summary={t}
-                title={where}
-                deepLink={threadDeepLink(t, channelName(t.parentID))}
-                currentUserId={user?.id}
-                unread={threadUnreadIDs.has(t.threadRootID)}
-              />
-            );
-          })}
+      <div ref={attachScrollParent}>
+        {!isLoading && scrollParent && (
+          <Virtuoso
+            customScrollParent={scrollParent}
+            data={listedThreads}
+            computeItemKey={(_, t) => threadKey(t)}
+            increaseViewportBy={800}
+            initialItemCount={Math.min(listedThreads.length, INITIAL_CARDS)}
+            itemContent={(_, t) => {
+              const key = threadKey(t);
+              const where =
+                t.parentType === 'channel'
+                  ? `~${channelName(t.parentID) || 'channel'}`
+                  : conversationName(t.parentID);
+              return (
+                // The gap between cards, inside the item so the list measures
+                // it; on a phone the threads run on, a rule between them.
+                <div className="pb-4 mobile:pb-0">
+                  <ThreadCard
+                    summary={t}
+                    title={where}
+                    deepLink={threadDeepLink(t, channelName(t.parentID))}
+                    currentUserId={user?.id}
+                    unread={threadUnreadIDs.has(t.threadRootID)}
+                    expanded={expanded.has(key)}
+                    onExpand={() => expand(key)}
+                  />
+                </div>
+              );
+            }}
+          />
+        )}
       </div>
-      {!isLoading && hasMore && (
-        <div ref={loadMoreRef} data-testid="threads-load-more" className="h-1" aria-hidden />
-      )}
     </PageContainer>
   );
 }

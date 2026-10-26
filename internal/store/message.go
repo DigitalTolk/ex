@@ -26,13 +26,14 @@ type MessageStore interface {
 // MessageStoreImpl implements MessageStore backed by DynamoDB.
 type MessageStoreImpl struct {
 	*DB
+	topIndex *topLevelIndexState
 }
 
 var _ MessageStore = (*MessageStoreImpl)(nil)
 
 // NewMessageStore returns a new MessageStoreImpl.
 func NewMessageStore(db *DB) *MessageStoreImpl {
-	return &MessageStoreImpl{DB: db}
+	return &MessageStoreImpl{DB: db, topIndex: &topLevelIndexState{}}
 }
 
 // messageItem is the DynamoDB representation of a Message.
@@ -44,13 +45,20 @@ type messageItem struct {
 	// scan. Omitted on roots/standalone messages so they stay out of the index.
 	GSI1PK string `dynamodbav:"GSI1PK,omitempty"`
 	GSI1SK string `dynamodbav:"GSI1SK,omitempty"`
+	// GSI2 is the mirror image: the parent's top-level index, set only on
+	// roots/standalone messages (see topLevelGSI2PK).
+	GSI2PK string `dynamodbav:"GSI2PK,omitempty"`
+	GSI2SK string `dynamodbav:"GSI2SK,omitempty"`
 	model.Message
 }
 
 // newMessageItem builds the DynamoDB row for a message, stamping the thread
-// GSI keys on replies. Both Create and Update full-Put the whole item, so
-// centralising the key derivation here keeps the index consistent on edits and
-// soft-delete tombstones (which re-Put the row).
+// GSI keys on replies and the top-level GSI keys on everything else. Create,
+// Update and the bulk import (PutNewMessages) all full-Put the whole item, so
+// centralising the key derivation here keeps both indexes consistent on edits
+// and soft-delete tombstones (which re-Put the row); hard deletes remove the
+// row and its index entries together. ParentMessageID never changes after
+// creation, so a row never moves between the two indexes.
 func newMessageItem(parentID string, msg *model.Message) messageItem {
 	item := messageItem{
 		PK:      parentPK(parentID),
@@ -60,6 +68,9 @@ func newMessageItem(parentID string, msg *model.Message) messageItem {
 	if msg.ParentMessageID != "" {
 		item.GSI1PK = threadGSI1PK(msg.ParentMessageID)
 		item.GSI1SK = msgSK(msg.ID)
+	} else {
+		item.GSI2PK = topLevelGSI2PK(parentID)
+		item.GSI2SK = msgSK(msg.ID)
 	}
 	return item
 }
@@ -398,8 +409,10 @@ func (s *MessageStoreImpl) ListMessagesAfter(ctx context.Context, parentID, afte
 	if len(messages) > 0 && messages[0].ID == after {
 		messages = messages[1:]
 	}
-	hasMore := len(messages) > limit
-	if hasMore {
+	// A continuation on a short page means DynamoDB's 1MB cap cut it, not the
+	// newest message (a full page has the extra row and counts as more anyway).
+	hasMore := len(messages) > limit || len(out.LastEvaluatedKey) > 0
+	if len(messages) > limit {
 		messages = messages[:limit]
 	}
 	// Reverse to newest-first to match List's contract.
@@ -574,34 +587,17 @@ func (s *MessageStoreImpl) DeleteMessage(ctx context.Context, parentID, msgID st
 // BatchGetItem calls instead of a GetItem per ID (pin resolution, thread-root
 // hydration). Missing IDs are absent from the result; order not guaranteed.
 func (s *MessageStoreImpl) GetMessagesByIDs(ctx context.Context, parentID string, ids []string) ([]*model.Message, error) {
-	out := make([]*model.Message, 0, len(ids))
-	const batchSize = 100
-	for start := 0; start < len(ids); start += batchSize {
-		end := min(start+batchSize, len(ids))
-		keys := make([]map[string]types.AttributeValue, 0, end-start)
-		for _, id := range ids[start:end] {
-			keys = append(keys, compositeKey(parentPK(parentID), msgSK(id)))
-		}
-		req := map[string]types.KeysAndAttributes{s.Table: {Keys: keys}}
-		for {
-			res, err := s.Client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: req})
-			if err != nil {
-				return nil, fmt.Errorf("store: batch get messages: %w", err)
-			}
-			for _, item := range res.Responses[s.Table] {
-				var rec messageItem
-				if err := attributevalue.UnmarshalMap(item, &rec); err != nil {
-					return nil, fmt.Errorf("store: unmarshal message: %w", err)
-				}
-				msg := rec.Message
-				out = append(out, &msg)
-			}
-			// DynamoDB may return unprocessed keys under throttling — drain them.
-			if len(res.UnprocessedKeys) == 0 {
-				break
-			}
-			req = res.UnprocessedKeys
-		}
+	keys := make([]map[string]types.AttributeValue, len(ids))
+	for i, id := range ids {
+		keys[i] = compositeKey(parentPK(parentID), msgSK(id))
+	}
+	rows, err := batchGetOf[messageItem](ctx, s.DB, keys, types.KeysAndAttributes{}, "messages")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*model.Message, len(rows))
+	for i := range rows {
+		out[i] = &rows[i].Message
 	}
 	return out, nil
 }

@@ -146,7 +146,7 @@ export const ConversationRow = memo(function ConversationRow({
           <>
             <Badge
               variant="secondary"
-              className="shrink-0 h-5 min-w-5 px-1.5 bg-white/20 text-white border-0 text-[10px]"
+              className="shrink-0 h-5 min-w-5 px-1.5 bg-white/20 text-white border-0 text-xs"
               aria-label={`${participantCount} participants`}
             >
               {participantCount}
@@ -176,7 +176,7 @@ export const ConversationRow = memo(function ConversationRow({
             phone the star sits flush right and the badge just left of it. */}
         {notifyCount > 0 && (
           <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center transition-opacity group-hover/row:opacity-0 touch:opacity-100 mobile:right-11">
-            <Badge variant="brand" className="text-[11px]" data-testid={`conversation-unread-badge-${conversation.conversationID}`}>
+            <Badge variant="brand" className="text-xs" data-testid={`conversation-unread-badge-${conversation.conversationID}`}>
               {notifyCount > 99 ? '99+' : notifyCount}
             </Badge>
           </span>

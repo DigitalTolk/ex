@@ -48,6 +48,7 @@ type s3API interface {
 	HeadObject(ctx context.Context, in *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 	GetObject(ctx context.Context, in *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 	PutObject(ctx context.Context, in *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+	AbortMultipartUpload(ctx context.Context, in *s3.AbortMultipartUploadInput, optFns ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error)
 }
 
 // s3Presigner is the narrow slice of *s3.PresignClient used for browser-
@@ -158,6 +159,29 @@ func (c *S3Client) PresignedGetURL(ctx context.Context, key string, expires time
 	return req.URL, nil
 }
 
+// PresignedInlineURL is PresignedGetURL for an object whose stored Content-Type
+// the client chose: S3 answers with the one type ServedContentType makes of
+// contentType, and with Content-Disposition: attachment when that type is not
+// safe to render (HTML, SVG, XML, or anything that does not parse as a single
+// type — a browser renders "image/png, text/html" as HTML).
+func (c *S3Client) PresignedInlineURL(ctx context.Context, key, contentType, filename string, expires time.Duration) (string, error) {
+	served, inline := ServedContentType(contentType)
+	in := &s3.GetObjectInput{
+		Bucket:               aws.String(c.bucket),
+		Key:                  aws.String(key),
+		ResponseCacheControl: aws.String(BrowserObjectCacheControl),
+		ResponseContentType:  aws.String(served),
+	}
+	if !inline {
+		in.ResponseContentDisposition = aws.String(contentDispositionAttachment(filename))
+	}
+	req, err := c.presigner.PresignGetObject(ctx, in, s3.WithPresignExpires(expires))
+	if err != nil {
+		return "", fmt.Errorf("s3: presign inline get: %w", err)
+	}
+	return req.URL, nil
+}
+
 // PresignedDownloadURL generates a pre-signed GET URL whose response carries a
 // `Content-Disposition: attachment; filename=...` header. Browsers honor this
 // even for cross-origin links — the plain <a download> attribute does not —
@@ -217,6 +241,38 @@ func (c *S3Client) PresignedPutURL(ctx context.Context, key, contentType string,
 		return "", fmt.Errorf("s3: presign put: %w", err)
 	}
 	return req.URL, nil
+}
+
+// PresignedSizedPutURL is PresignedPutURL bound to an exact body size: the
+// Content-Length the browser sends is part of the signature, so S3 refuses an
+// upload of any other size for as long as the URL is valid.
+func (c *S3Client) PresignedSizedPutURL(ctx context.Context, key, contentType string, size int64, expires time.Duration) (string, error) {
+	req, err := c.presigner.PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(c.bucket),
+		Key:           aws.String(key),
+		ContentType:   aws.String(contentType),
+		ContentLength: aws.Int64(size),
+	}, s3.WithPresignExpires(expires))
+	if err != nil {
+		return "", fmt.Errorf("s3: presign sized put: %w", err)
+	}
+	return req.URL, nil
+}
+
+// AbortMultipartUpload discards an open multipart upload of key, so requests
+// signed for it can no longer complete. An upload S3 no longer knows (already
+// completed, aborted or expired) is not an error.
+func (c *S3Client) AbortMultipartUpload(ctx context.Context, key, uploadID string) error {
+	_, err := c.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+		Bucket:   aws.String(c.bucket),
+		Key:      aws.String(key),
+		UploadId: aws.String(uploadID),
+	})
+	var noSuchUpload *types.NoSuchUpload
+	if err == nil || errors.As(err, &noSuchUpload) {
+		return nil
+	}
+	return fmt.Errorf("s3: abort multipart upload: %w", err)
 }
 
 // DeleteObject removes an object from the bucket. Used when an attachment is

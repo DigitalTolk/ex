@@ -168,7 +168,7 @@ func (t *TeamsMeetingCommand) subject(ctx context.Context, req CommandRequest) s
 	if req.ParentType == ParentChannel {
 		ch, err := t.deps.Channels.GetChannel(ctx, req.ParentID)
 		if err != nil {
-			slog.Warn("teams meeting: channel lookup for subject failed; using generic subject", "error", err)
+			slog.WarnContext(ctx, "teams meeting: channel lookup for subject failed; using generic subject", "error", err)
 			return "Teams meeting"
 		}
 		return "Teams meeting · ~" + ch.Slug

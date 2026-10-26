@@ -1,54 +1,19 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, ExternalLink, GitMerge, Loader2, Ticket, Wrench } from 'lucide-react';
+import { Brush, Bug, ChevronDown, ChevronRight, ExternalLink, GitMerge, Loader2, Sparkles, Ticket, Wrench, type LucideIcon } from 'lucide-react';
 import { useState } from 'react';
-import { apiFetch } from '@/lib/api';
-import { taskKindFlair, taskStateLabel, taskStateTerminal, type TaskMarker } from '@/lib/task-marker';
+import { useCodingTask, useCodingTaskActions, type TaskRepo, type TestPlan } from '@/hooks/useCodingTask';
+import { externalHref } from '@/lib/url-safety';
+import { taskKindFlair, taskStateLabel, taskStateTerminal, type TaskKind, type TaskMarker } from '@/lib/task-marker';
 
 // TaskCard: the inline chat rendering of a coding-task card marker (see
 // lib/task-marker.ts) — the thread root of a coding task. The marker carries
 // enough to paint the card instantly (flair, title, state, project); live
 // details (repos + their MRs, the test plan, sign-off, who the requester is)
 // come from the task endpoint.
-
-interface TaskRepo {
-  path: string;
-  role: string;
-  branch: string;
-  baseBranch?: string;
-  mrURL?: string;
-  changed?: boolean;
-}
-
-interface TestPlan {
-  url?: string;
-  steps: string[];
-  counterSteps?: string[];
-  accounts?: string;
-  notes?: string;
-}
-
-interface CodingTask {
-  id: string;
-  projectKey: string;
-  projectName: string;
-  title: string;
-  goal: string;
-  kind: string;
-  state: string;
-  steering?: string;
-  channelID: string;
-  threadRootID: string;
-  requesterID: string;
-  repos: TaskRepo[];
-  ticket?: { connector: string; id: string; url?: string } | null;
-  testPlan?: TestPlan | null;
-  signedOffAt?: string | null;
-}
-
-interface TaskResponse {
-  task: CodingTask;
-  url?: string;
-}
+//
+// Anyone can type a marker into a message, so the live details are trusted
+// only for the task's own card: the message the task records as its thread
+// root (`messageId`). A copy elsewhere paints just what its text says — no
+// links, no actions on the real task.
 
 function stateTone(state: string): string {
   switch (state) {
@@ -67,16 +32,11 @@ function stateTone(state: string): string {
   }
 }
 
-function kindTone(kind: string): string {
-  switch (kind) {
-    case 'feature':
-      return 'border-violet-500/60 bg-violet-500/10 text-violet-700 dark:text-violet-300';
-    case 'chore':
-      return 'border-muted-foreground/40 bg-muted text-muted-foreground';
-    default:
-      return 'border-red-500/60 bg-red-500/10 text-red-700 dark:text-red-300';
-  }
-}
+const KIND_STYLE: Record<TaskKind, { icon: LucideIcon; tone: string }> = {
+  feature: { icon: Sparkles, tone: 'border-violet-500/60 bg-violet-500/10 text-violet-700 dark:text-violet-300' },
+  chore: { icon: Brush, tone: 'border-muted-foreground/40 bg-muted text-muted-foreground' },
+  bug: { icon: Bug, tone: 'border-red-500/60 bg-red-500/10 text-red-700 dark:text-red-300' },
+};
 
 // Descriptions longer than this fold to four lines with a "Show more".
 const GOAL_FOLD_CHARS = 420;
@@ -85,53 +45,33 @@ function repoName(path: string): string {
   return path.split('/').filter(Boolean).pop() ?? path;
 }
 
-export function TaskCard({ marker, currentUserId }: { marker: TaskMarker; currentUserId?: string }) {
-  const queryClient = useQueryClient();
+export function TaskCard({
+  marker,
+  messageId,
+  currentUserId,
+}: {
+  marker: TaskMarker;
+  messageId: string;
+  currentUserId?: string;
+}) {
   const terminal = taskStateTerminal(marker.state);
   // The test plan matters most while the requester is testing — open then,
   // folded otherwise. The description is always shown (long ones fold).
   const [planOpen, setPlanOpen] = useState(marker.state === 'awaiting_user_test');
   const [goalOpen, setGoalOpen] = useState(false);
-  const { data } = useQuery({
-    queryKey: ['coding-task', marker.id],
-    queryFn: () => apiFetch<TaskResponse>(`/api/v1/coding-tasks/${marker.id}`),
-    // The marker is rewritten on every state change (message.edited), so the
-    // card repaints anyway; the poll only freshens links/sign-off while live.
-    refetchInterval: terminal ? false : 30_000,
-    staleTime: 10_000,
-  });
-  const task = data?.task;
+  const { data } = useCodingTask(marker.id, terminal);
+  const task = data?.task?.threadRootID === messageId ? data.task : undefined;
   const isRequester = !!task && !!currentUserId && task.requesterID === currentUserId;
   const state = task?.state ?? marker.state;
-  const flair = taskKindFlair(task?.kind ?? marker.kind);
+  const kind = taskKindFlair(task?.kind ?? marker.kind);
+  const { icon: KindIcon, tone: kindTone } = KIND_STYLE[kind];
   // Tasks recorded before repos/test plans existed come back with null
   // fields — render them as empty rather than crashing the channel.
   const repos: TaskRepo[] = Array.isArray(task?.repos) ? task.repos : [];
   const plan: TestPlan | null =
     task?.testPlan && Array.isArray(task.testPlan.steps) ? task.testPlan : null;
 
-  const signOff = useMutation({
-    mutationFn: () => apiFetch<TaskResponse>(`/api/v1/coding-tasks/${marker.id}/signoff`, { method: 'POST' }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['coding-task', marker.id] }),
-  });
-  const steering = useMutation({
-    mutationFn: (mode: 'requester' | 'anyone') =>
-      apiFetch<TaskResponse>(`/api/v1/coding-tasks/${marker.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ steering: mode }),
-      }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['coding-task', marker.id] }),
-  });
-  // Manual end of a task: "done" once its MRs are open (frees the project
-  // for the next task), "abandoned" to drop the work at any other point.
-  const closeTask = useMutation({
-    mutationFn: (to: 'done' | 'abandoned') =>
-      apiFetch<TaskResponse>(`/api/v1/coding-tasks/${marker.id}/close`, {
-        method: 'POST',
-        body: JSON.stringify({ state: to }),
-      }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['coding-task', marker.id] }),
-  });
+  const { signOff, steering, closeTask } = useCodingTaskActions(marker.id);
 
   const canSignOff = isRequester && state === 'awaiting_user_test' && !task?.signedOffAt;
   const mrCount = repos.filter((r) => r.mrURL).length;
@@ -143,20 +83,20 @@ export function TaskCard({ marker, currentUserId }: { marker: TaskMarker; curren
     >
       <div className="flex flex-wrap items-center gap-2 px-3 py-2">
         <span
-          className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${kindTone(task?.kind ?? marker.kind)}`}
-          title={`Task kind: ${flair.label}`}
+          className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${kindTone}`}
+          title={`Task kind: ${kind}`}
         >
-          <span aria-hidden="true">{flair.emoji}</span>
-          {flair.label}
+          <KindIcon className="h-3 w-3" aria-hidden="true" />
+          {kind}
         </span>
         <span className="min-w-0 flex-1 truncate text-sm font-semibold">{task?.title ?? marker.title}</span>
         {task?.ticket?.id &&
-          (task.ticket.url ? (
+          (externalHref(task.ticket.url) ? (
             <a
               href={task.ticket.url}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[11px] text-foreground hover:bg-accent"
+              className="inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-xs text-foreground hover:bg-accent"
               title={`Open ${task.ticket.id} in ${task.ticket.connector || 'the ticket system'}`}
               data-testid="task-ticket"
             >
@@ -166,7 +106,7 @@ export function TaskCard({ marker, currentUserId }: { marker: TaskMarker; curren
             </a>
           ) : (
             <span
-              className="inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[11px] text-muted-foreground"
+              className="inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-xs text-muted-foreground"
               title={`Ticket ${task.ticket.id}${task.ticket.connector ? ` (${task.ticket.connector})` : ''}`}
               data-testid="task-ticket"
             >
@@ -175,7 +115,7 @@ export function TaskCard({ marker, currentUserId }: { marker: TaskMarker; curren
             </span>
           ))}
         <span
-          className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 font-mono text-[11px] ${stateTone(state)}`}
+          className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 font-mono text-xs ${stateTone(state)}`}
           data-testid="task-state"
         >
           {taskStateLabel(state)}
@@ -202,7 +142,7 @@ export function TaskCard({ marker, currentUserId }: { marker: TaskMarker; curren
       )}
 
       {/* Project + repos: one chip per repo, its MR when opened. */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t px-3 py-1.5 font-mono text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-1 text-foreground">
           <Wrench className="h-3 w-3" aria-hidden="true" />
           {task?.projectName || marker.project}
@@ -213,7 +153,7 @@ export function TaskCard({ marker, currentUserId }: { marker: TaskMarker; curren
               {repoName(r.path)}
               <span className="opacity-60"> · {r.role}</span>
             </span>
-            {r.mrURL && (
+            {externalHref(r.mrURL) && (
               <a
                 href={r.mrURL}
                 target="_blank"
@@ -227,9 +167,9 @@ export function TaskCard({ marker, currentUserId }: { marker: TaskMarker; curren
             )}
           </span>
         ))}
-        {plan?.url && (
+        {externalHref(plan?.url) && (
           <a
-            href={plan.url}
+            href={plan?.url}
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-1 text-foreground underline-offset-2 hover:underline"

@@ -131,7 +131,7 @@ type fakeScheduledSender struct {
 	accessErr error
 }
 
-func (f *fakeScheduledSender) Send(_ context.Context, userID, parentID, _, body, parentMessageID string, _ ...string) (*model.Message, error) {
+func (f *fakeScheduledSender) SendScheduled(_ context.Context, userID, parentID, _, body, parentMessageID string, _ ...string) (*model.Message, error) {
 	if f.sendErr != nil {
 		return nil, f.sendErr
 	}

@@ -126,7 +126,7 @@ func TestAgentRunTool_SchedulesRefusals(t *testing.T) {
 
 	// Store write failure.
 	fx.dir.putSubErr = errors.New("down")
-	if code, body := create(`{"instruction":"x","schedule":"0 9 * * *"}`); code != http.StatusInternalServerError || !strings.Contains(body, "could not save") {
+	if code, body := create(`{"instruction":"x","schedule":"0 9 * * *"}`); code != http.StatusInternalServerError || !strings.Contains(body, "internal server error") {
 		t.Fatalf("put failure: %d %s", code, body)
 	}
 	fx.dir.putSubErr = nil
@@ -181,7 +181,7 @@ func TestAgentRunTool_SchedulesRefusals(t *testing.T) {
 	}
 	fx.dir.deleteSubErr = nil
 	fx.dir.listTemplatesErr = errors.New("down")
-	if code, body := create(`{"instruction":"x","schedule":"0 9 * * *"}`); code != http.StatusInternalServerError || !strings.Contains(body, "resolve this agent") {
+	if code, body := create(`{"instruction":"x","schedule":"0 9 * * *"}`); code != http.StatusInternalServerError || !strings.Contains(body, "internal server error") {
 		t.Fatalf("slug failure: %d %s", code, body)
 	}
 }

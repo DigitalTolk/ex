@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { EMOJI_FREQUENCY_CHANGED_EVENT, getFrequentEmojis } from '@/lib/emoji-frequency';
@@ -23,18 +23,46 @@ export function useEmojis(enabled = true) {
   });
 }
 
+// Module-level so React Query runs it once per list change: an inline select
+// is a new function on every render, so it rebuilt the map from the whole
+// list on each render of every message row.
+function selectEmojiMap(list: CustomEmoji[]): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const e of list) map[e.name] = e.imageURL;
+  return map;
+}
+
 export function useEmojiMap(enabled = true) {
   return useQuery({
     queryKey: queryKeys.emojis(),
     queryFn: fetchEmojis,
     staleTime: 5 * 60 * 1000,
     enabled,
-    select: (list) => {
-      const map: Record<string, string> = {};
-      for (const e of list) map[e.name] = e.imageURL;
-      return map;
-    },
+    select: selectEmojiMap,
   });
+}
+
+// emoji.added carries the whole record (name + resolved imageURL), and
+// emoji.removed its name, so the catalogue is patched in place instead of
+// refetched by every client. Re-adding a name replaces it, which makes the
+// uploader's own echo harmless. The registry validates the payload
+// (lib/ws-events); one that can't be read falls back to invalidateEmojis.
+export function applyEmojiAddedEvent(qc: QueryClient, emoji: CustomEmoji) {
+  qc.setQueryData<CustomEmoji[]>(queryKeys.emojis(), (list) =>
+    list ? [...list.filter((e) => e.name !== emoji.name), emoji] : list,
+  );
+}
+
+export function applyEmojiRemovedEvent(qc: QueryClient, name: string) {
+  qc.setQueryData<CustomEmoji[]>(queryKeys.emojis(), (list) => list?.filter((e) => e.name !== name));
+  // The quick-reaction shelf may still list the deleted shortcode.
+  void qc.invalidateQueries({ queryKey: queryKeys.frequentEmojis(), exact: true });
+}
+
+// invalidateEmojis refetches the catalogue — for an emoji event whose payload
+// couldn't be read.
+export function invalidateEmojis(qc: QueryClient) {
+  void qc.invalidateQueries({ queryKey: queryKeys.emojis() });
 }
 
 // useFrequentEmojis returns the signed-in user's most-used emoji shortcodes

@@ -11,9 +11,15 @@ export function formatLastSeen(lastSeenAt?: string, online?: boolean): string | 
   });
 }
 
+// localTimeZone is the viewer's IANA zone — what "8am" means to them. A
+// browser that can't report one gives '' and the server decides (the
+// profile's zone, then UTC).
 export function localTimeZone(): string {
-  /* istanbul ignore next -- resolvedOptions().timeZone is always a non-empty IANA string in every supported runtime; the || '' fallback is defensive. */
-  return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    return '';
+  }
 }
 
 export function isValidTimeZone(timeZone?: string | null): timeZone is string {
@@ -50,10 +56,9 @@ export function timeZoneOffsetMinutes(timeZone: string, at = new Date()): number
 
 export function formatTimeZoneDelta(
   userTimeZone?: string,
-  localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone,
+  local = localTimeZone(),
 ): string | null {
   if (!userTimeZone) return null;
-  const local = localTimeZone;
   if (!local || local === userTimeZone) return null;
   const userOffset = timeZoneOffsetMinutes(userTimeZone);
   const localOffset = timeZoneOffsetMinutes(local);

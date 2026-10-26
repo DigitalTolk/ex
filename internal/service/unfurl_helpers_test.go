@@ -25,17 +25,20 @@ func TestImageExtFromURL_Variants(t *testing.T) {
 	}
 }
 
-func TestIsPublicIP(t *testing.T) {
+func TestValidateURL_IPLiteralHosts(t *testing.T) {
+	host := func(ip string) *url.URL {
+		return &url.URL{Scheme: "https", Host: net.JoinHostPort(ip, "443"), Path: "/x"}
+	}
 	pub := []string{"8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"}
 	for _, s := range pub {
-		if !isPublicIP(net.ParseIP(s)) {
-			t.Errorf("isPublicIP(%s) = false, want true", s)
+		if err := validateURL(host(s)); err != nil {
+			t.Errorf("validateURL(%s) = %v, want public", s, err)
 		}
 	}
 	priv := []string{"127.0.0.1", "10.0.0.1", "192.168.1.1", "169.254.1.1", "0.0.0.0", "224.0.0.1", "::1"}
 	for _, s := range priv {
-		if isPublicIP(net.ParseIP(s)) {
-			t.Errorf("isPublicIP(%s) = true, want false", s)
+		if err := validateURL(host(s)); err == nil {
+			t.Errorf("validateURL(%s) admitted a private address", s)
 		}
 	}
 }

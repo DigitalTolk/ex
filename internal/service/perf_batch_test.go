@@ -593,9 +593,50 @@ func TestRecordThreadParticipation(t *testing.T) {
 	if len(follows.ifAbsentKeys) != 1 || follows.ifAbsentKeys[0] != threadFollowMockKey("u-root", "ch-1", "root-1") || follows.setCalls != calls {
 		t.Fatalf("authorless writes = %v, want only the root author", follows.ifAbsentKeys)
 	}
-	// Write failures are logged, never surfaced.
+	// Write failures are retried, then logged, never surfaced.
+	orig := audienceRetryInterval
+	audienceRetryInterval = time.Millisecond
+	t.Cleanup(func() { audienceRetryInterval = orig })
 	follows.ifAbsentErr = errors.New("dynamo down")
 	svc.recordThreadParticipation(ctx, reply, ParentChannel, root)
+}
+
+// flakyParticipationStore fails the first `failures` SetThreadFollow calls —
+// a DynamoDB blip on the send path.
+type flakyParticipationStore struct {
+	*indexedThreadFollowStore
+	failures int
+	attempts int
+}
+
+func (f *flakyParticipationStore) SetThreadFollow(ctx context.Context, follow *model.ThreadFollow) error {
+	f.attempts++
+	if f.attempts <= f.failures {
+		return errors.New("throttled")
+	}
+	return f.indexedThreadFollowStore.SetThreadFollow(ctx, follow)
+}
+
+// The follow rows are what an indexed thread's later replies are routed by
+// (threadFullyIndexed), so a transient write failure is retried rather than
+// leaving the replier silently out of the thread's future alerts.
+func TestRecordThreadParticipation_RetriesTransientFailure(t *testing.T) {
+	orig := audienceRetryInterval
+	audienceRetryInterval = time.Millisecond
+	t.Cleanup(func() { audienceRetryInterval = orig })
+
+	svc, _, _, _, follows := threadIndexService()
+	flaky := &flakyParticipationStore{indexedThreadFollowStore: follows, failures: 1}
+	svc.SetThreadFollowStore(flaky)
+	reply := &model.Message{ID: "r-1", ParentID: "ch-1", ParentMessageID: "root-1", AuthorID: "u-replier"}
+	svc.recordThreadParticipation(context.Background(), reply, ParentChannel, nil)
+
+	if flaky.attempts != 2 {
+		t.Fatalf("SetThreadFollow attempts = %d, want 2 (one retry)", flaky.attempts)
+	}
+	if f := follows.follows[threadFollowMockKey("u-replier", "ch-1", "root-1")]; f == nil || !f.Following {
+		t.Fatalf("replier's follow row = %+v, want written after the retry", f)
+	}
 }
 
 func TestListUserThreads_IndexFastPath(t *testing.T) {
@@ -629,8 +670,8 @@ func TestListUserThreads_IndexFastPath(t *testing.T) {
 	if messages.batchCalls != 1 {
 		t.Fatalf("batch root reads = %d, want 1", messages.batchCalls)
 	}
-	if messages.listCalls != 0 {
-		t.Fatalf("legacy scans = %d, want 0", messages.listCalls)
+	if messages.listCalls.Load() != 0 {
+		t.Fatalf("legacy scans = %d, want 0", messages.listCalls.Load())
 	}
 
 	// A notification pull surfaces an unfollowed thread (same precedence as
@@ -699,12 +740,12 @@ func TestListUserThreads_SeedsIndexFromLegacyScan(t *testing.T) {
 	}
 
 	// Next request takes the index path (no scans).
-	messages.listCalls = 0
+	messages.listCalls.Store(0)
 	if _, err := svc.ListUserThreads(ctx, "u-1"); err != nil {
 		t.Fatalf("fast path after seed: %v", err)
 	}
-	if messages.listCalls != 0 {
-		t.Fatalf("post-seed scans = %d, want 0", messages.listCalls)
+	if messages.listCalls.Load() != 0 {
+		t.Fatalf("post-seed scans = %d, want 0", messages.listCalls.Load())
 	}
 }
 
@@ -738,7 +779,7 @@ func TestListUserThreads_SeedFailuresStayOnLegacyPath(t *testing.T) {
 	if _, err := svc.ListUserThreads(ctx, "u-1"); err != nil {
 		t.Fatalf("ListUserThreads with probe failure: %v", err)
 	}
-	if messages.listCalls == 0 {
+	if messages.listCalls.Load() == 0 {
 		t.Fatal("probe failure must fall back to the scan")
 	}
 }
@@ -851,7 +892,7 @@ func TestListUserThreads_IndexPerIDRootFallback(t *testing.T) {
 	if len(got) != 2 || got[0].ThreadRootID != "root-new" || got[1].ThreadRootID != "root-old" {
 		t.Fatalf("threads = %+v, want [root-new root-old] with root-gone skipped", got)
 	}
-	if messages.listCalls != 0 {
-		t.Fatalf("scans = %d, want 0 (index path)", messages.listCalls)
+	if messages.listCalls.Load() != 0 {
+		t.Fatalf("scans = %d, want 0 (index path)", messages.listCalls.Load())
 	}
 }

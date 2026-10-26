@@ -10,6 +10,14 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { AuthPageShell } from '@/components/layout/AuthPageShell';
 import type { User } from '@/types';
 
+// The server answers {error: {code, message}}; older paths sent a bare string.
+function serverErrorText(data: unknown, fallback: string): string {
+  const error = (data as { error?: unknown } | null)?.error;
+  if (typeof error === 'string' && error) return error;
+  const message = (error as { message?: unknown } | undefined)?.message;
+  return typeof message === 'string' && message ? message : fallback;
+}
+
 export default function LoginPage() {
   const { token: inviteToken } = useParams<{ token: string }>();
   useDocumentTitle(inviteToken ? 'Accept invite' : 'Sign in');
@@ -36,8 +44,8 @@ export default function LoginPage() {
       });
       captureServerVersion(res);
       if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: 'Login failed' }));
-        throw new Error(data.error?.message || data.error || 'Login failed');
+        const data = await res.json().catch(() => null);
+        throw new Error(serverErrorText(data, 'Login failed'));
       }
       const data = await res.json();
       setAccessToken(data.accessToken);
@@ -64,10 +72,8 @@ export default function LoginPage() {
       });
       captureServerVersion(res);
       if (!res.ok) {
-        const data = await res
-          .json()
-          .catch(() => ({ error: 'Invite acceptance failed' }));
-        throw new Error(data.error || 'Invite acceptance failed');
+        const data = await res.json().catch(() => null);
+        throw new Error(serverErrorText(data, 'Invite acceptance failed'));
       }
       const data = await res.json();
       setAccessToken(data.accessToken);

@@ -659,7 +659,9 @@ func TestUserService_SetStatus_DeactivateAndReactivateGuest(t *testing.T) {
 	}
 }
 
-func TestUserService_SetStatus_RejectsNonGuest(t *testing.T) {
+// Behaviour change: an admin can deactivate an SSO member (it used to be
+// refused, leaving the account revocable only by the directory sweep).
+func TestUserService_SetStatus_DeactivatesSSOMember(t *testing.T) {
 	users := newMockUserStore()
 	svc := NewUserService(users, nil, nil, nil)
 
@@ -670,8 +672,11 @@ func TestUserService_SetStatus_RejectsNonGuest(t *testing.T) {
 	}
 	users.users[member.ID] = member
 
-	if _, err := svc.SetStatus(context.Background(), member.ID, true); err == nil {
-		t.Fatal("expected SSO/member to be rejected")
+	if _, err := svc.SetStatus(context.Background(), member.ID, true); err != nil {
+		t.Fatalf("SSO member deactivation: %v", err)
+	}
+	if member.Status != "deactivated" {
+		t.Fatalf("status = %q, want deactivated", member.Status)
 	}
 }
 

@@ -13,7 +13,6 @@ import { UnreadProvider } from '@/context/UnreadContext';
 import { PresenceProvider } from '@/context/PresenceContext';
 import { NotificationProvider } from '@/context/NotificationContext';
 import { TypingProvider } from '@/context/TypingContext';
-import { resetServerVersionForTests } from '@/hooks/useServerVersion';
 import type { User } from '@/types';
 
 const authState = vi.hoisted(() => ({ user: null as User | null }));
@@ -133,7 +132,6 @@ function dragsAt(x: number, y: number): boolean {
 let restore = () => undefined as void;
 let shellCss: HTMLStyleElement | null = null;
 beforeEach(() => {
-  resetServerVersionForTests();
   authState.user = ME;
   restore = installFetch();
   shellCss = document.createElement('style');
@@ -172,15 +170,23 @@ describe.runIf(window.__EX_FORCE_DEVICE__ === 'desktop')('dragging the desktop w
       ['the bar left of the search field', bar.left, search.left, bar.top, bar.bottom],
       ['the bar right of the search field', search.right, bar.right, bar.top, bar.bottom],
     ] as const;
+    // The bar's own buttons (Back, Forward) are for clicking.
+    const controls = Array.from(document.querySelectorAll('[data-testid="app-shell-header"] button'))
+      .map((b) => b.getBoundingClientRect())
+      .filter((r) => r.width > 0);
+    expect(controls.length).toBeGreaterThanOrEqual(2);
+    const onControl = (x: number, y: number) =>
+      controls.some((r) => x >= r.left - 1 && x < r.right + 1 && y >= r.top - 1 && y < r.bottom + 1);
     const holes: string[] = [];
     for (const [name, left, right, top, bottom] of areas) {
       for (let x = left + 4; x < right - 4; x += 8) {
         for (let y = top + 2; y < bottom - 2; y += 6) {
-          if (!dragsAt(x, y)) holes.push(`${name} at ${Math.round(x)},${Math.round(y)}`);
+          if (!onControl(x, y) && !dragsAt(x, y)) holes.push(`${name} at ${Math.round(x)},${Math.round(y)}`);
         }
       }
     }
     expect(holes).toEqual([]);
+    for (const r of controls) expect(dragsAt(r.left + r.width / 2, r.top + r.height / 2)).toBe(false);
     // The search field itself is for typing.
     expect(dragsAt(search.left + search.width / 2, search.top + search.height / 2)).toBe(false);
   });

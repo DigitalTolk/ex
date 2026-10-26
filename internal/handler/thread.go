@@ -28,7 +28,7 @@ func (h *ThreadHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	summaries, err := h.messageSvc.ListUserThreads(r.Context(), userID)
 	if err != nil {
-		writeInternalError(w, r, "list_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	// ListUserThreads returns a make()-initialized (never nil) slice.
@@ -57,7 +57,7 @@ func (h *ThreadHandler) setFollow(w http.ResponseWriter, r *http.Request, follow
 		return
 	}
 	if err := h.messageSvc.SetThreadFollow(r.Context(), userID, parentID, parentType, threadRootID, following); err != nil {
-		writeError(w, http.StatusBadRequest, "follow_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

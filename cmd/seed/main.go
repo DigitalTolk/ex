@@ -25,9 +25,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/DigitalTolk/ex/internal/agents"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/search"
-	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -233,7 +233,7 @@ func main() {
 	// one; runs execute on whoever invokes them. Same seeding the server does
 	// at boot, done here too so a fresh DB is complete before first boot.
 	agentStore := store.NewAgentStore(db)
-	agentSvc := service.NewAgentService(agentStore, users)
+	agentSvc := agents.NewAgentService(agentStore, users)
 	if err := agentSvc.SeedDefaults(ctx); err != nil {
 		log.Fatalf("agent seed: %v", err)
 	}
@@ -256,7 +256,7 @@ func main() {
 	// Converge template LIMITS to the current platform defaults (dev DBs
 	// keep rows seeded by older code — e.g. the starvation-prone MaxTurns=3).
 	// Personas are left alone so local prompt experiments survive re-seeding.
-	for _, slug := range []string{service.AgentSlugGG, service.AgentSlugQib} {
+	for _, slug := range []string{agents.AgentSlugGG, agents.AgentSlugQib} {
 		tpl, err := agentStore.GetTemplate(ctx, slug)
 		if err != nil {
 			continue
@@ -295,7 +295,7 @@ func main() {
 func cleanupLegacyOwnedAgents(ctx context.Context, db *store.DB, owners []*model.User) {
 	removed := 0
 	for _, owner := range owners {
-		for _, slug := range []string{service.AgentSlugGG, service.AgentSlugQib} {
+		for _, slug := range []string{agents.AgentSlugGG, agents.AgentSlugQib} {
 			legacyID := store.DeriveID("agent#" + owner.ID + "#" + slug)
 			_, err := db.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 				TableName: aws.String(db.Table),

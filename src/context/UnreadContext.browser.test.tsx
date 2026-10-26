@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { UnreadProvider, useUnread, USER_STATE_CHANGED_EVENT } from './UnreadContext';
 import { useEffect, useRef } from 'react';
+import { setActiveParent } from '@/stores/active-parent';
 
 const apiFetchMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue(undefined));
 vi.mock('@/lib/api', () => ({
@@ -55,18 +56,18 @@ describe('UnreadContext (browser)', () => {
     window.removeEventListener(USER_STATE_CHANGED_EVENT, handler);
   });
 
-  it('active channel/conversation scope is ref-only — reflected by isActive*, fires no API', async () => {
+  it('active channel/conversation scope comes from the active-parent store and fires no API', async () => {
     const getState = await mountUnread();
     apiFetchMock.mockClear();
     expect(getState().isActiveChannel('ch-y')).toBe(false);
-    getState().setActiveChannel('ch-y');
+    setActiveParent({ kind: 'channel', id: 'ch-y' });
     expect(getState().isActiveChannel('ch-y')).toBe(true);
     expect(getState().isActiveConversation('conv-z')).toBe(false);
-    getState().setActiveConversation('conv-z');
+    setActiveParent({ kind: 'conversation', id: 'conv-z' });
     expect(getState().isActiveConversation('conv-z')).toBe(true);
-    // Setting null clears the ref.
-    getState().setActiveChannel(null);
-    getState().setActiveConversation(null);
+    // One active parent: the conversation replaced the channel.
+    expect(getState().isActiveChannel('ch-y')).toBe(false);
+    setActiveParent(null);
     expect(getState().isActiveChannel('ch-y')).toBe(false);
     expect(getState().isActiveConversation('conv-z')).toBe(false);
     // Active scope no longer persists anything server-side.

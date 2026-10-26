@@ -36,6 +36,10 @@ func (c *handlerConverter) ConvertGroupToChannel(_ context.Context, ch *model.Ch
 	return nil
 }
 
+func (c *handlerConverter) MoveMembersToChannel(context.Context, string, []store.ConvertedMember) error {
+	return nil
+}
+
 func TestChannelHandler_ConvertConversation(t *testing.T) {
 	env := setupChannelHandlerFull(t)
 	env.handler.channelSvc.SetConversationConverter(&handlerConverter{convs: map[string]*model.Conversation{

@@ -1,4 +1,4 @@
-import { setServerVersion } from '@/hooks/useServerVersion';
+import { reportServerVersion } from '@/hooks/useServerVersion';
 import { notifyAuthInvalid } from '@/lib/auth-events';
 
 let accessToken: string | null = null;
@@ -56,7 +56,7 @@ async function apiErrorFromResponse(res: Response): Promise<ApiError> {
 
 export function captureServerVersion(res: Response): void {
   const version = res.headers?.get(APP_VERSION_HEADER);
-  if (version) setServerVersion(version);
+  if (version) reportServerVersion(version);
 }
 
 // Bound on the refresh request. Browser fetch has NO default timeout, and the

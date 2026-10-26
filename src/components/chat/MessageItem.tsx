@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent, type PointerEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Bot, Copy, Pencil, Trash2, SmilePlus, MessageSquareReply, MoreHorizontal, Pin, PinOff, Link as LinkIcon, AlarmClock, Eye, Mail } from 'lucide-react';
+import { SmilePlus, MoreHorizontal, AlarmClock, Eye, Pin, Zap, type LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MessageInput, type MessageInputValue } from '@/components/chat/MessageInput';
 import type { DraftAttachment } from '@/components/chat/AttachmentChip';
@@ -19,17 +19,14 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { ReminderDialog } from '@/components/chat/ReminderDialog';
+import { LazyReminderDialog as ReminderDialog } from '@/components/chat/LazyReminderDialog';
 import { WatcherDialog } from '@/components/chat/WatcherDialog';
-import { useCreateReminder } from '@/hooks/useActivity';
 import { NotSentMark } from '@/components/chat/MessageSendState';
-import { useMarkUnread } from '@/hooks/useMarkUnread';
 import { useMessageRowData, useProvidedMessageRowData, type MessageRowData } from '@/hooks/useMessageRowData';
-import { REMINDER_PRESETS, computeReminderTime, toLocalInputValue, type ReminderPresetKey } from '@/lib/reminder-times';
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { UserHoverCard } from '@/components/UserHoverCard';
 import { UserAvatar } from '@/components/UserAvatar';
-import { useEditMessage, useDeleteMessage, useToggleReaction, useSetPinned } from '@/hooks/useMessages';
+import { useEditMessage, useToggleReaction } from '@/hooks/useMessages';
 import { renderMarkdown } from '@/lib/markdown';
 import { isEmojiOnlyMessage } from '@/lib/emoji-shortcodes';
 import { recordEmojiUse } from '@/lib/emoji-frequency';
@@ -38,7 +35,6 @@ import { triggerReactionHaptic } from '@/lib/haptics';
 import { blurActiveInput } from '@/lib/blur-input';
 import { showToast } from '@/lib/toast';
 import { MESSAGE_LONG_PRESS_MS, useLongPress } from '@/hooks/useLongPress';
-import { buildChannelHref, buildConversationHref } from '@/lib/message-deeplink';
 import { useTagOpen } from '@/context/TagSearchContext';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { MessageAttachments } from '@/components/chat/MessageAttachments';
@@ -48,7 +44,7 @@ import { MessageRichAttachments } from '@/components/chat/MessageRichAttachments
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { extractURLs, formatLongDateTime, formatRelative } from '@/lib/format';
 import { registerEditMessageHandler } from '@/lib/window-events';
-import { openRunDrawer, openThreadDrawer } from '@/stores/run-drawer';
+import { openRunDrawer } from '@/stores/run-drawer';
 import { ArtifactCard } from '@/components/chat/ArtifactCard';
 import { TaskCard } from '@/components/chat/TaskCard';
 import { parseArtifactMarker } from '@/lib/artifact-marker';
@@ -64,6 +60,7 @@ import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import { useIsOnline } from '@/stores/presence';
+import { useMessageActions, type MessageAction } from '@/components/chat/useMessageActions';
 import type { Message, UserStatus } from '@/types';
 
 // Module-level Set so MessageList/ThreadPanel don't need to thread a
@@ -97,7 +94,7 @@ function SheetTile({
   onClick,
   testId,
 }: {
-  icon: typeof Copy;
+  icon: LucideIcon;
   label: string;
   ariaLabel: string;
   onClick: () => void;
@@ -486,37 +483,9 @@ function MessageItemImpl({
   }, [isEditing, message.id]);
 
   const editMessage = useEditMessage();
-  const deleteMessage = useDeleteMessage();
   const toggleReaction = useToggleReaction();
-  const setPinned = useSetPinned();
-  const createReminder = useCreateReminder();
-  const markUnread = useMarkUnread();
-  const [reminderDialogOpen, setReminderDialogOpen] = useState(false);
-  const [watcherDialogOpen, setWatcherDialogOpen] = useState(false);
-  const [reminderSeed, setReminderSeed] = useState('');
   const { emojiMap, watchers: parentWatchers, pickTokens } = rowData;
   const { openTag } = useTagOpen();
-
-  // The reminder target derives from the message itself (its parentID is always
-  // set), with the channel slug carried for the deep link. Every message can take
-  // a reminder.
-  //
-  // The parent TYPE comes from the view rendering the row (channelId /
-  // conversationId), not message.parentType: that field is only present on
-  // live WebSocket frames — messages loaded from the list API don't carry
-  // it — so falling back to "channel" sent DM reminders as channel reminders,
-  // which the server rejects (403) as "no access". message.parentType stays
-  // the fallback for rows rendered outside a channel/conversation view.
-  const parentType: 'channel' | 'conversation' = channelId
-    ? 'channel'
-    : conversationId || message.parentType === 'conversation'
-      ? 'conversation'
-      : 'channel';
-  const reminderTarget = {
-    parentID: message.parentID,
-    parentType,
-    channelSlug,
-  };
 
   // Watcher badge: the viewer's own thread-scoped watchers on THIS message
   // (one query per list, see MessageRowData); match by threadRootID so only
@@ -527,112 +496,44 @@ function MessageItemImpl({
   );
   const [manageWatchersOpen, setManageWatchersOpen] = useState(false);
 
-  // "Show activity" appears in two places (the desktop menu and the mobile
-  // sheet) and both had their own copy of this predicate and its branch. One
-  // definition: a thread ROOT opens the whole thread's activity, any other
-  // message opens its own run. Run LOGS are invoker-only server-side, so a
-  // run posted for someone else gets no affordance at all (a thread root
-  // stays — the server filters it to the caller's own runs).
-  const activityTarget = useMemo<{ kind: 'thread' } | { kind: 'run'; runID: string } | null>(() => {
-    if (!message.parentMessageID && (message.replyCount ?? 0) > 0) return { kind: 'thread' };
-    if (message.agentRunID && (!message.agentInvokerID || message.agentInvokerID === currentUserId)) {
-      return { kind: 'run', runID: message.agentRunID };
-    }
-    return null;
-  }, [message.parentMessageID, message.replyCount, message.agentRunID, message.agentInvokerID, currentUserId]);
-  const openActivity = () => {
-    /* istanbul ignore if -- both entry points render only when activityTarget is set */
-    if (!activityTarget) return;
-    if (activityTarget.kind === 'thread') openThreadDrawer(message.parentID, message.id);
-    else openRunDrawer(activityTarget.runID);
-  };
-
-  // One builder so the preset (mutate) and custom-dialog (mutateAsync) paths
-  // can't drift on the payload shape.
-  const reminderInput = (when: Date) => ({
-    messageID: message.id,
-    ...reminderTarget,
-    remindAt: when.toISOString(),
+  // Everything that can be done to the message, for the desktop menu and the
+  // mobile sheet alike.
+  const { actions, reminderPresets, deleteDialog, reminderDialog, watcherDialog } = useMessageActions({
+    message,
+    channelId,
+    channelSlug,
+    conversationId,
+    currentUserId,
+    inThread,
+    isOwn,
+    canEdit,
+    canModify,
+    startEdit,
+    onReplyInThread,
   });
 
-  const scheduleReminder = (when: Date) => {
-    createReminder.mutate(reminderInput(when));
-  };
-
-  // The custom dialog awaits the result so it can confirm (close) on success and
-  // surface the error (stay open) on failure — scheduling is never silent there.
-  const scheduleReminderAsync = (when: Date) =>
-    createReminder.mutateAsync(reminderInput(when)).then(() => undefined);
-
-  const handleReminderPreset = (key: ReminderPresetKey) => {
-    scheduleReminder(computeReminderTime(key, new Date()));
-  };
-
-  const openCustomReminder = () => {
-    // Compute the seed here (an event handler) so the clock read stays out of
-    // render, then mount the dialog fresh with it. Defaults to the "in 1 hour"
-    // preset so the field reuses the same tested time math as the quick-picks.
-    setReminderSeed(toLocalInputValue(computeReminderTime('in1h', new Date())));
-    setReminderDialogOpen(true);
-  };
-
-  // Mobile closes the action sheet as it opens the reminder popup.
-  const handleMobileRemindCustom = () => {
-    openCustomReminder();
-    closeMobileActions();
-  };
-
-  function buildMessageLink(): string {
-    /* istanbul ignore next -- SSR guard: this is a browser-only app, so window is always defined; the empty-origin arm is unreachable. */
-    const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    const slug = channelSlug ?? channelId;
-    if (slug) return `${origin}${buildChannelHref(slug, message.id, message.parentMessageID)}`;
-    if (conversationId) return `${origin}${buildConversationHref(conversationId, message.id, message.parentMessageID)}`;
-    return `${origin}/#msg-${message.id}`;
+  // Touch long-press opens the mobile action sheet via the SHARED
+  // useLongPress gesture (MESSAGE_LONG_PRESS_MS hold; touch/pen only; scroll drift past the
+  // small threshold or release cancels; the haptic fires inside the hook).
+  // This used to be a hand-rolled copy of the same pattern — keep the one
+  // implementation in the hook.
+  // An optimistic row (still sending, or failed) has no actions yet: it isn't
+  // a real message until the server confirms it.
+  const pendingState = message.pendingState;
+  const mobileActionsAvailable = !isEditing && !message.deleted && !message.system && !pendingState;
+  function openMobileActions() {
+    // Opening the action bar should dismiss the keyboard if the composer had
+    // focus, so the sheet isn't fighting the keyboard.
+    blurActiveInput();
+    setMobileActionsSuppressed(false);
+    setMobileActionsOpen(true);
+    notifyMessageHovered(message.id);
   }
-
-  async function copyToClipboard(value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-    } catch {
-      // Fallback for environments without async clipboard (jsdom, older browsers).
-      const ta = document.createElement('textarea');
-      ta.value = value;
-      document.body.appendChild(ta);
-      ta.select();
-      try { document.execCommand('copy'); } catch { /* swallow */ }
-      ta.remove();
-    }
-  }
-
-  async function handleCopyLink() {
-    await copyToClipboard(buildMessageLink());
-  }
-
-  async function handleCopyText() {
-    // Copy the raw markdown body (mention tokens like `@[id|name]` intact) so
-    // pasting it back into the composer re-creates the mention pills / renders
-    // mentions on send — and so it round-trips as the same markdown.
-    await copyToClipboard(message.body);
-  }
-
-  function handleTogglePin() {
-    setPinned.mutate({
-      messageId: message.id,
-      pinned: !message.pinned,
-      channelId,
-      conversationId,
-    });
-  }
-
-  // "Mark as unread" rewinds the chat to this message (a thread reply: the
-  // thread). Not offered on a thread's root inside the thread view, where it
-  // would rewind the whole channel instead of the thread being read.
-  const canMarkUnread = !(inThread && !message.parentMessageID);
-  function handleMarkUnread() {
-    markUnread.mutate({ parentID: message.parentID, parentType, messageID: message.id });
-  }
-
+  const longPress = useLongPress({
+    enabled: mobileActionsAvailable,
+    delayMs: MESSAGE_LONG_PRESS_MS,
+    onLongPress: openMobileActions,
+  });
   function closeMobileActions() {
     longPress.cancel();
     setMobileActionsOpen(false);
@@ -654,25 +555,10 @@ function MessageItemImpl({
     mobileActionsSheetRef.current = node;
   }, []);
 
-  function handleMobileReply() {
+  // A sheet action puts the sheet away first, then runs.
+  function runFromSheet(action: MessageAction) {
     closeMobileActions();
-    onReplyInThread?.(message.id);
-  }
-
-  function handleMobileTogglePin() {
-    closeMobileActions();
-    handleTogglePin();
-  }
-
-  function handleMobileMarkUnread() {
-    closeMobileActions();
-    handleMarkUnread();
-  }
-
-  function handleMobileEdit() {
-    closeMobileActions();
-    // The sheet also opens on wide touch screens, where editing is inline.
-    startEdit();
+    action.run();
   }
 
   const editAttachmentIDs = isEditing ? (message.attachmentIDs ?? []) : [];
@@ -742,57 +628,10 @@ function MessageItemImpl({
     );
   }
 
-  function handleMobileDelete() {
-    closeMobileActions();
-    setDeleteConfirmOpen(true);
-  }
-
-  function handleMobileCopyLink() {
-    closeMobileActions();
-    void handleCopyLink();
-  }
-
-  function handleMobileCopyText() {
-    closeMobileActions();
-    void handleCopyText();
-  }
-
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  function confirmDelete() {
-    deleteMessage.mutate({
-      messageId: message.id,
-      parentMessageID: message.parentMessageID,
-      channelId,
-      conversationId,
-    });
-  }
-
   function handleReact(emoji: string) {
     toggleReaction.mutate({ messageId: message.id, emoji, channelId, conversationId });
   }
 
-  // Touch long-press opens the mobile action sheet via the SHARED
-  // useLongPress gesture (MESSAGE_LONG_PRESS_MS hold; touch/pen only; scroll drift past the
-  // small threshold or release cancels; the haptic fires inside the hook).
-  // This used to be a hand-rolled copy of the same pattern — keep the one
-  // implementation in the hook.
-  // An optimistic row (still sending, or failed) has no actions yet: it isn't
-  // a real message until the server confirms it.
-  const pendingState = message.pendingState;
-  const mobileActionsAvailable = !isEditing && !message.deleted && !message.system && !pendingState;
-  function openMobileActions() {
-    // Opening the action bar should dismiss the keyboard if the composer had
-    // focus, so the sheet isn't fighting the keyboard.
-    blurActiveInput();
-    setMobileActionsSuppressed(false);
-    setMobileActionsOpen(true);
-    notifyMessageHovered(message.id);
-  }
-  const longPress = useLongPress({
-    enabled: mobileActionsAvailable,
-    delayMs: MESSAGE_LONG_PRESS_MS,
-    onLongPress: openMobileActions,
-  });
   useTransientOverlayCleanup(mobileActionsOpen, { rootRef: mobileActionsRef, lockScroll: true });
 
   // The unfurl scan walks the whole body; memoize so it only runs when the
@@ -927,91 +766,51 @@ function MessageItemImpl({
           data-testid="mobile-primary-actions"
           {...sheetSection(1)}
         >
-          {!inThread && canModify && (
+          {actions.reply && (
             <Button
               type="button"
               className="h-20 min-w-0 flex-1 flex-col gap-1.5 rounded-2xl px-1 text-xs font-medium transition-transform active:scale-95 mobile:h-20 mobile:px-1 mobile:text-xs"
-              onClick={handleMobileReply}
-              aria-label="Reply in thread"
+              onClick={() => runFromSheet(actions.reply!)}
+              aria-label={actions.reply.ariaLabel}
             >
               <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15">
-                <MessageSquareReply className="h-4 w-4" />
+                <actions.reply.icon className="h-4 w-4" />
               </span>
-              Reply
+              {actions.reply.label}
             </Button>
           )}
-          <SheetTile icon={Copy} label="Copy text" ariaLabel="Copy message text" onClick={handleMobileCopyText} />
           {/* No "copied" swap on mobile — the sheet closes on tap, so the
-              label change would never be visible. */}
-          <SheetTile icon={LinkIcon} label="Copy link" ariaLabel="Copy link to message" onClick={handleMobileCopyLink} />
-          <SheetTile
-            icon={AlarmClock}
-            label="Remind me"
-            ariaLabel="Remind me about this message"
-            onClick={handleMobileRemindCustom}
-            testId="mobile-remind"
-          />
+              label change would never be visible. The reminder tile goes
+              straight to the custom time; the quick times are the desktop
+              submenu's. */}
+          {[actions.copyText, actions.copyLink, actions.remind].map((action) => (
+            <SheetTile
+              key={action.label}
+              icon={action.icon}
+              label={action.label}
+              ariaLabel={action.ariaLabel!}
+              onClick={() => runFromSheet(action)}
+              testId={action === actions.remind ? 'mobile-remind' : undefined}
+            />
+          ))}
         </motion.div>
         {/* Everything else as a short list. */}
         <motion.div className="flex flex-col divide-y divide-border/60 rounded-2xl bg-muted" {...sheetSection(2)}>
-          {activityTarget && (
-            <button
-              type="button"
-              className="flex items-center gap-3 px-4 py-3 text-left text-sm"
-              onClick={() => {
-                setMobileActionsOpen(false);
-                openActivity();
-              }}
-              aria-label="Show agent activity"
-            >
-              <Bot className="h-4 w-4" />
-              Show activity
-            </button>
-          )}
-          {canModify && (
-            <button
-              type="button"
-              className="flex items-center gap-3 px-4 py-3 text-left text-sm"
-              onClick={handleMobileTogglePin}
-              aria-label={message.pinned ? 'Unpin message' : 'Pin message'}
-            >
-              {message.pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
-              {message.pinned ? 'Unpin' : 'Pin'}
-            </button>
-          )}
-          {canMarkUnread && (
-            <button
-              type="button"
-              className="flex items-center gap-3 px-4 py-3 text-left text-sm"
-              onClick={handleMobileMarkUnread}
-              data-testid="mobile-mark-unread"
-              aria-label="Mark as unread"
-            >
-              <Mail className="h-4 w-4" />
-              Mark as unread
-            </button>
-          )}
-          {isOwn && canModify && (
-            <>
-              {canEdit && (
+          {[actions.activity, actions.pin, actions.markUnread, actions.watch, actions.edit, actions.delete].map(
+            (action) =>
+              action && (
                 <button
+                  key={action.label}
                   type="button"
-                  className="flex items-center gap-3 px-4 py-3 text-left text-sm"
-                  onClick={handleMobileEdit}
+                  className={action.destructive ? 'flex items-center gap-3 px-4 py-3 text-left text-sm text-destructive' : 'flex items-center gap-3 px-4 py-3 text-left text-sm'}
+                  onClick={() => runFromSheet(action)}
+                  aria-label={action.ariaLabel}
+                  data-testid={action.testId ? `mobile-${action.testId}` : undefined}
                 >
-                  <Pencil className="h-4 w-4" />
-                  Edit
+                  <action.icon className="h-4 w-4" />
+                  {action.label}
                 </button>
-              )}
-              <button
-                type="button"
-                className="flex items-center gap-3 px-4 py-3 text-left text-sm text-destructive"
-                onClick={handleMobileDelete}
-              >
-                <Trash2 className="h-4 w-4" />
-                Delete
-              </button>
-            </>
+              ),
           )}
         </motion.div>
         </div>
@@ -1131,7 +930,7 @@ function MessageItemImpl({
           </UserHoverCard>
           {message.webhookUsername && (
             <span
-              className="rounded bg-muted px-1 text-[10px] font-semibold uppercase leading-4 tracking-wide text-muted-foreground"
+              className="rounded bg-muted px-1 text-xs font-semibold uppercase leading-4 tracking-wide text-muted-foreground"
               aria-label="Bot"
             >
               BOT
@@ -1156,7 +955,7 @@ function MessageItemImpl({
                   ? 'Show agent activity'
                   : undefined
               }
-              className={`shrink-0 rounded bg-muted px-1 text-[10px] font-medium leading-4 text-muted-foreground ${
+              className={`shrink-0 rounded bg-muted px-1 text-xs font-medium leading-4 text-muted-foreground ${
                 message.agentRunID && message.agentInvokerID === currentUserId
                   ? 'cursor-pointer hover:bg-accent hover:text-foreground'
                   : ''
@@ -1171,11 +970,12 @@ function MessageItemImpl({
             // run's activity log, which is invoker-only).
             <span
               key={`skill-${skill}`}
-              className="shrink-0 rounded bg-muted px-1 text-[10px] font-medium leading-4 text-muted-foreground"
+              className="inline-flex shrink-0 items-center gap-0.5 rounded bg-muted px-1 text-xs font-medium leading-4 text-muted-foreground"
               title="Skill used in this run"
               aria-label={`Used skill ${skill}`}
             >
-              ⚡ {skill}
+              <Zap className="h-3 w-3" aria-hidden="true" />
+              {skill}
             </span>
           ))}
           <Tooltip>
@@ -1444,7 +1244,7 @@ function MessageItemImpl({
             }
           />
           )}
-          {!inThread && canModify && (
+          {actions.reply && (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1452,14 +1252,14 @@ function MessageItemImpl({
                     size="icon"
                     variant="ghost"
                     className="h-7 w-7"
-                    aria-label="Reply in thread"
-                    onClick={() => onReplyInThread?.(message.id)}
+                    aria-label={actions.reply.ariaLabel}
+                    onClick={actions.reply.run}
                   />
                 }
               >
-                <MessageSquareReply className="h-3.5 w-3.5" />
+                <actions.reply.icon className="h-3.5 w-3.5" />
               </TooltipTrigger>
-              <TooltipContent>Reply in thread</TooltipContent>
+              <TooltipContent>{actions.reply.ariaLabel}</TooltipContent>
             </Tooltip>
           )}
           {/* modal={false} so other rows still receive mouseEnter while
@@ -1481,94 +1281,28 @@ function MessageItemImpl({
               <TooltipContent>More actions</TooltipContent>
             </Tooltip>
             <DropdownMenuContent align="end" className="w-44">
-              {activityTarget && (
-                <DropdownMenuItem
-                  onClick={openActivity}
-                  aria-label="Show agent activity"
-                >
-                  <Bot className="mr-2 h-4 w-4" />
-                  Show activity
-                </DropdownMenuItem>
-              )}
               {/* Static labels: the menu closes on click, so a "… copied"
                   swap would never be seen on desktop. */}
-              <DropdownMenuItem
-                onClick={handleCopyLink}
-                aria-label="Copy link to message"
-              >
-                <LinkIcon className="mr-2 h-4 w-4" />
-                Copy link
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={handleCopyText}
-                aria-label="Copy message text"
-              >
-                <Copy className="mr-2 h-4 w-4" />
-                Copy text
-              </DropdownMenuItem>
-              {canModify && (
-              <DropdownMenuItem
-                onClick={handleTogglePin}
-                aria-label={message.pinned ? 'Unpin message' : 'Pin message'}
-              >
-                {message.pinned ? (
-                  <>
-                    <PinOff className="mr-2 h-4 w-4" /> Unpin
-                  </>
-                ) : (
-                  <>
-                    <Pin className="mr-2 h-4 w-4" /> Pin
-                  </>
-                )}
-              </DropdownMenuItem>
-              )}
-              {canMarkUnread && (
-                <DropdownMenuItem onClick={handleMarkUnread} data-testid="mark-unread" aria-label="Mark as unread">
-                  <Mail className="mr-2 h-4 w-4" /> Mark as unread
-                </DropdownMenuItem>
+              {[actions.activity, actions.copyLink, actions.copyText, actions.pin, actions.markUnread].map(
+                (action) => action && <MenuAction key={action.label} action={action} />,
               )}
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger data-testid="remind-me-trigger">
                   <AlarmClock className="mr-2 h-4 w-4" /> Remind me
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent>
-                  {REMINDER_PRESETS.map((preset) => (
-                    <DropdownMenuItem
-                      key={preset.key}
-                      onClick={() => handleReminderPreset(preset.key)}
-                      data-testid={`remind-${preset.key}`}
-                    >
+                  {reminderPresets.map((preset) => (
+                    <DropdownMenuItem key={preset.key} onClick={preset.run} data-testid={`remind-${preset.key}`}>
                       {preset.label}
                     </DropdownMenuItem>
                   ))}
-                  <DropdownMenuItem onClick={openCustomReminder} data-testid="remind-custom">
+                  <DropdownMenuItem onClick={actions.remind.run} data-testid="remind-custom">
                     Custom…
                   </DropdownMenuItem>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
-              {canModify && (
-              <DropdownMenuItem
-                onClick={() => setWatcherDialogOpen(true)}
-                data-testid="watch-thread"
-                aria-label="Add a watcher to this thread"
-              >
-                <Eye className="mr-2 h-4 w-4" /> Watch thread…
-              </DropdownMenuItem>
-              )}
-              {isOwn && canModify && (
-                <>
-                  {canEdit && (
-                    <DropdownMenuItem onClick={startEdit}>
-                      <Pencil className="mr-2 h-4 w-4" /> Edit
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuItem
-                    variant="destructive"
-                    onClick={() => setDeleteConfirmOpen(true)}
-                  >
-                    <Trash2 className="mr-2 h-4 w-4" /> Delete
-                  </DropdownMenuItem>
-                </>
+              {[actions.watch, actions.edit, actions.delete].map(
+                (action) => action && <MenuAction key={action.label} action={action} />,
               )}
             </DropdownMenuContent>
           </DropdownMenu>
@@ -1578,30 +1312,30 @@ function MessageItemImpl({
       {mobileActionsOverlay ? createPortal(mobileActionsOverlay, document.body) : null}
       {/* Mounted on demand like the reminder/watcher dialogs: a dialog per
           row was a measurable share of scrolling cost. */}
-      {deleteConfirmOpen && (
+      {deleteDialog.open && (
       <ConfirmDialog
         open
-        onOpenChange={setDeleteConfirmOpen}
+        onOpenChange={deleteDialog.setOpen}
         title="Delete message?"
         description="This message will be removed for everyone. Attachments stop being shared too. This can't be undone."
         confirmLabel="Delete"
         destructive
-        onConfirm={confirmDelete}
+        onConfirm={deleteDialog.confirm}
         testIDPrefix="message-delete-confirm"
       />
       )}
-      {reminderDialogOpen && (
+      {reminderDialog.open && (
         <ReminderDialog
           open
-          onOpenChange={setReminderDialogOpen}
-          initialValue={reminderSeed}
-          onConfirm={scheduleReminderAsync}
+          onOpenChange={reminderDialog.setOpen}
+          initialValue={reminderDialog.seed}
+          onConfirm={reminderDialog.schedule}
         />
       )}
-      {watcherDialogOpen && (
+      {watcherDialog.open && (
         <WatcherDialog
           open
-          onOpenChange={setWatcherDialogOpen}
+          onOpenChange={watcherDialog.setOpen}
           parentID={message.parentID}
           parentType={message.parentType === 'conversation' ? 'conversation' : 'channel'}
           threadRootID={message.parentMessageID || message.id}
@@ -1621,6 +1355,20 @@ function MessageItemImpl({
         />
       )}
     </div>
+  );
+}
+
+// A desktop "More actions" item from a message action descriptor.
+function MenuAction({ action }: { action: MessageAction }) {
+  return (
+    <DropdownMenuItem
+      onClick={action.run}
+      aria-label={action.ariaLabel}
+      data-testid={action.testId}
+      variant={action.destructive ? 'destructive' : undefined}
+    >
+      <action.icon className="mr-2 h-4 w-4" /> {action.label}
+    </DropdownMenuItem>
   );
 }
 
@@ -1676,17 +1424,21 @@ const MessageBody = memo(function MessageBody({
   openTag,
   trailing,
 }: MessageBodyProps) {
+  // Marker syntax is plain text anyone can type, so a card renders only for
+  // a post an agent run made (agentRunID is stamped by the server, never
+  // taken from the client); anything else stays the markdown it is.
   // Artifact marker messages render as a compact expand/download card
-  // instead of markdown — the marker is machine syntax, not prose.
+  // instead of markdown — the marker is machine syntax, not prose — and only
+  // when the run that posted it is the run the artifact belongs to.
   const artifactMarker = parseArtifactMarker(message.body);
-  if (artifactMarker) {
+  if (artifactMarker && message.agentRunID === artifactMarker.runID) {
     return <ArtifactCard marker={artifactMarker} />;
   }
   // Coding-task card markers (the root of a task thread) render as a live
   // task card: flair, state, links, and the requester's sign-off.
   const taskMarker = parseTaskMarker(message.body);
-  if (taskMarker) {
-    return <TaskCard marker={taskMarker} currentUserId={currentUserId} />;
+  if (taskMarker && message.agentRunID) {
+    return <TaskCard marker={taskMarker} messageId={message.id} currentUserId={currentUserId} />;
   }
   return (
     <>

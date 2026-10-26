@@ -10,9 +10,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
+	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -51,15 +53,38 @@ type UserService struct {
 	urlCache      *presignedURLCache
 	mediaCache    MediaURLCache
 	reminders     ReminderCanceller
+	automations   AutomationStopper
 	avatarObjects AvatarObjects
 	// avatarDecoding bounds the memory an avatar decode may take.
 	avatarDecoding avatarDecoding
+	// audience is told when account notification settings change, so every
+	// instance's notification audience cache reloads the user.
+	audience AudienceInvalidator
 }
+
+// SetAudienceInvalidator wires the notification audience cache's
+// invalidation into account notification-settings writes.
+func (s *UserService) SetAudienceInvalidator(a AudienceInvalidator) { s.audience = a }
 
 // ReminderCanceller stops a deactivated user's queued reminders. Implemented by
 // ReminderService.
 type ReminderCanceller interface {
 	CancelAllForUser(ctx context.Context, userID string) error
+}
+
+// AutomationStopper stops everything an account's agents do on its behalf —
+// standing watch/schedule orders and live runs. Implemented by the
+// Orchestrator (StopUserAutomations).
+type AutomationStopper interface {
+	StopUserAutomations(ctx context.Context, userID string) error
+}
+
+// RunnerRevoker disconnects every ex-runner a user has paired. Account
+// deactivation and password reset call it next to wiping refresh tokens: a
+// runner is a machine credential of the same account. Implemented by the
+// agents package's RunnerTokenService.
+type RunnerRevoker interface {
+	RevokeAllForUser(ctx context.Context, userID string) error
 }
 
 // NewUserService creates a UserService with the given dependencies.
@@ -100,13 +125,18 @@ func (s *UserService) SetAvatarObjects(o AvatarObjects) { s.avatarObjects = o }
 // that can no longer sign in leaves no reminders queued to fire.
 func (s *UserService) SetReminderCanceller(r ReminderCanceller) { s.reminders = r }
 
+// SetAutomationStopper wires agent-automation shutdown into deactivation, so
+// a deactivated account's watchers, schedules and runs stop with it.
+func (s *UserService) SetAutomationStopper(a AutomationStopper) { s.automations = a }
+
 func (s *UserService) indexUser(ctx context.Context, u *model.User) {
-	indexUser(ctx, s.indexer, u)
+	IndexUser(ctx, s.indexer, u)
 }
 
-// indexUser is the nil-safe hook used by both UserService (profile
-// edits) and AuthService (signup / invite acceptance).
-func indexUser(ctx context.Context, idx UserIndexer, u *model.User) {
+// IndexUser is the nil-safe hook used by UserService (profile edits),
+// AuthService (signup / invite acceptance) and the agents package (shared
+// agent users).
+func IndexUser(ctx context.Context, idx UserIndexer, u *model.User) {
 	if idx == nil || u == nil {
 		return
 	}
@@ -115,7 +145,7 @@ func indexUser(ctx context.Context, idx UserIndexer, u *model.User) {
 		return
 	}
 	if err := idx.IndexUser(ctx, u); err != nil {
-		slog.Warn("search index user failed", "id", u.ID, "error", err)
+		slog.WarnContext(ctx, "search index user failed", "id", u.ID, "error", err)
 	}
 }
 
@@ -282,10 +312,10 @@ func normalizeKeywords(in []string) []string {
 // user's own connected clients so every tab/device stays in sync.
 func (s *UserService) SetNotificationSettings(ctx context.Context, userID string, settings model.NotificationSettings) (*model.User, error) {
 	if !settings.DesktopLevel.Valid() {
-		return nil, errors.New("user: invalid desktop notification level")
+		return nil, apperr.Invalid("user: invalid desktop notification level")
 	}
 	if !settings.MobileLevel.Valid() {
-		return nil, errors.New("user: invalid mobile notification level")
+		return nil, apperr.Invalid("user: invalid mobile notification level")
 	}
 	settings.Keywords = normalizeKeywords(settings.Keywords)
 
@@ -300,7 +330,12 @@ func (s *UserService) SetNotificationSettings(ctx context.Context, userID string
 	user.NotificationSettings = &cp
 	user.UpdatedAt = time.Now()
 
-	if err := s.users.UpdateUser(ctx, user); err != nil {
+	err = s.users.UpdateUser(ctx, user)
+	// Even a failed write may have committed: move the audience on either way.
+	if s.audience != nil {
+		s.audience.UserAudienceChanged(ctx, userID)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("user: update notification settings: %w", err)
 	}
 	if s.cache != nil {
@@ -340,27 +375,28 @@ func (s *UserService) GetByID(ctx context.Context, id string) (*model.User, erro
 	return user, nil
 }
 
-// UserStatus returns just the account status — the auth middleware's
-// deactivation check runs on EVERY authenticated request and discards
-// everything but Status, so this path deliberately skips the avatar-URL
-// resolution GetByID performs (1-3 extra Redis round trips per request for a
-// presigned URL nobody read). Cache-first with a store fill on miss, same as
-// GetByID, so steady state is one Redis GET per request.
-func (s *UserService) UserStatus(ctx context.Context, id string) (string, error) {
+// UserAccess returns just the account status and the STORED system role —
+// the auth middleware's deactivation and role check runs on EVERY
+// authenticated request and discards everything else, so this path
+// deliberately skips the avatar-URL resolution GetByID performs (1-3 extra
+// Redis round trips per request for a presigned URL nobody read).
+// Cache-first with a store fill on miss, same as GetByID, so steady state is
+// one Redis GET per request; every role/status writer evicts the cached copy.
+func (s *UserService) UserAccess(ctx context.Context, id string) (string, model.SystemRole, error) {
 	if s.cache != nil {
 		if user, err := s.cache.GetUser(ctx, id); err == nil {
-			return user.Status, nil
+			return user.Status, user.SystemRole, nil
 		}
 	}
 	user, err := s.users.GetUser(ctx, id)
 	if err != nil {
-		return "", fmt.Errorf("user: get status: %w", err)
+		return "", "", fmt.Errorf("user: get access: %w", err)
 	}
 	normalizeUserProfile(user)
 	if s.cache != nil {
 		_ = s.cache.SetUser(ctx, user)
 	}
-	return user.Status, nil
+	return user.Status, user.SystemRole, nil
 }
 
 // GetByEmail returns a user by email address.
@@ -391,23 +427,23 @@ func (s *UserService) Update(ctx context.Context, userID string, displayName, av
 		// Allowing local edits would silently revert on the next sign-in and
 		// confuse the user.
 		if user.AuthProvider == model.AuthProviderOIDC {
-			return nil, errors.New("user: display name is managed by SSO provider and cannot be edited here")
+			return nil, apperr.Forbidden("user: display name is managed by SSO provider and cannot be edited here")
 		}
 		name := strings.TrimSpace(*displayName)
 		if name == "" || utf8.RuneCountInString(name) > MaxUserDisplayNameLen {
-			return nil, fmt.Errorf("user: display name must be 1-%d characters", MaxUserDisplayNameLen)
+			return nil, apperr.Invalid("user: display name must be 1-%d characters", MaxUserDisplayNameLen)
 		}
 		user.DisplayName = name
 	}
 	if avatarKey != nil && *avatarKey != "" && !strings.HasPrefix(*avatarKey, "avatars/"+userID+"/") {
-		return nil, errors.New("user: avatar key is not owned by this user")
+		return nil, apperr.Forbidden("user: avatar key is not owned by this user")
 	}
 	if emojiSkinTone != nil {
 		switch *emojiSkinTone {
 		case "", "light", "medium_light", "medium", "medium_dark", "dark":
 			user.EmojiSkinTone = *emojiSkinTone
 		default:
-			return nil, errors.New("user: emoji skin tone must be empty, light, medium_light, medium, medium_dark, or dark")
+			return nil, apperr.Invalid("user: emoji skin tone must be empty, light, medium_light, medium, medium_dark, or dark")
 		}
 	}
 	// The avatar goes last: storing it removes the upload, so every other
@@ -469,21 +505,21 @@ func (s *UserService) SetUserStatusMessage(ctx context.Context, userID string, s
 		status.Emoji = strings.TrimSpace(status.Emoji)
 		status.Text = strings.TrimSpace(status.Text)
 		if status.Emoji == "" {
-			return nil, errors.New("user: status emoji is required")
+			return nil, apperr.Invalid("user: status emoji is required")
 		}
 		if status.Text == "" {
-			return nil, errors.New("user: status text is required")
+			return nil, apperr.Invalid("user: status text is required")
 		}
 		if len([]rune(status.Text)) > 32 {
-			return nil, errors.New("user: status text must be 32 characters or fewer")
+			return nil, apperr.Invalid("user: status text must be 32 characters or fewer")
 		}
 		status.ClearAt = nil
 		if clearAfter != nil {
 			if *clearAfter <= 0 {
-				return nil, errors.New("user: status clear duration must be positive")
+				return nil, apperr.Invalid("user: status clear duration must be positive")
 			}
 			if *clearAfter > maxUserStatusClearAfter {
-				return nil, errors.New("user: status clear duration is too far in the future")
+				return nil, apperr.Invalid("user: status clear duration is too far in the future")
 			}
 			clearAt := time.Now().Add(*clearAfter)
 			status.ClearAt = &clearAt
@@ -604,13 +640,17 @@ func (s *UserService) RunExpiredStatusSweeper(ctx context.Context, interval time
 		interval = time.Minute
 	}
 	run := func() {
+		// Each sweep is panic-isolated: the sweeper runs detached for the
+		// life of the process, so an unrecovered panic here would take the
+		// instance — and every WebSocket on it — down. The next tick retries.
+		defer safe.Recover()
 		cleared, err := s.ClearExpiredStatuses(ctx, time.Now(), limit)
 		if err != nil {
-			slog.Warn("user status sweeper failed", "error", err)
+			slog.WarnContext(ctx, "user status sweeper failed", "error", err)
 			return
 		}
 		if cleared > 0 {
-			slog.Info("user status sweeper cleared expired statuses", "count", cleared)
+			slog.InfoContext(ctx, "user status sweeper cleared expired statuses", "count", cleared)
 		}
 	}
 
@@ -642,11 +682,12 @@ func (s *UserService) PatchTimeZoneIfChanged(ctx context.Context, userID, timeZo
 	if user.TimeZone == timeZone {
 		return user, nil
 	}
-	user.TimeZone = timeZone
-	user.UpdatedAt = time.Now()
-	if err := s.users.UpdateUser(ctx, user); err != nil {
+	now := time.Now()
+	if err := s.users.PatchUser(ctx, userID, store.UserPatch{TimeZone: &timeZone, UpdatedAt: now}); err != nil {
 		return nil, fmt.Errorf("user: update time zone: %w", err)
 	}
+	user.TimeZone = timeZone
+	user.UpdatedAt = now
 	if s.cache != nil {
 		_ = s.cache.Delete(ctx, "user:"+userID)
 	}
@@ -810,13 +851,14 @@ func (s *UserService) UpdateRole(ctx context.Context, _, targetID string, role m
 	}
 	backfillAuthProvider(user)
 	if user.AuthProvider == model.AuthProviderGuest && role != model.SystemRoleGuest {
-		return nil, errors.New("user: guests cannot be promoted; member and admin roles are SSO-only")
+		return nil, apperr.Invalid("user: guests cannot be promoted; member and admin roles are SSO-only")
 	}
-	user.SystemRole = role
-	user.UpdatedAt = time.Now()
-	if err := s.users.UpdateUser(ctx, user); err != nil {
+	now := time.Now()
+	if err := s.users.PatchUser(ctx, targetID, store.UserPatch{SystemRole: &role, UpdatedAt: now}); err != nil {
 		return nil, fmt.Errorf("user: update role: %w", err)
 	}
+	user.SystemRole = role
+	user.UpdatedAt = now
 	if s.cache != nil {
 		_ = s.cache.Delete(ctx, "user:"+targetID)
 	}
@@ -825,10 +867,11 @@ func (s *UserService) UpdateRole(ctx context.Context, _, targetID string, role m
 	return user, nil
 }
 
-// SetStatus marks a user active or deactivated. Only guest accounts can be
-// deactivated this way — SSO-managed users are governed by the upstream IdP.
-// The handler enforces actor admin rights; this performs the mutation and
-// emits a user.updated event so connected clients refresh.
+// SetStatus marks any account active or deactivated on an admin's behalf —
+// SSO accounts included: the IdP can stop new logins, but only this ends the
+// sessions and automations the account already has. The handler enforces
+// actor admin rights (and refuses self-deactivation); this performs the
+// mutation and emits a user.updated event so connected clients refresh.
 func (s *UserService) SetStatus(ctx context.Context, targetID string, deactivated bool) (*model.User, error) {
 	user, err := s.users.GetUser(ctx, targetID)
 	if err != nil {
@@ -838,18 +881,15 @@ func (s *UserService) SetStatus(ctx context.Context, targetID string, deactivate
 		return nil, fmt.Errorf("user: get: %w", err)
 	}
 	backfillAuthProvider(user)
-	if user.AuthProvider != model.AuthProviderGuest {
-		return nil, errors.New("user: only guest accounts can be deactivated")
-	}
-	return s.applyStatus(ctx, user, deactivated)
+	return s.applyStatus(ctx, user, deactivated, model.DeactivatedByAdmin)
 }
 
 // SetStatusFromDirectory flips an SSO-managed account's status on behalf of
 // the employee directory (the periodic MS Graph sweep): an account deleted
 // upstream is deactivated — ending its live sessions, since SSO removal alone
-// doesn't invalidate refresh tokens — and reactivated if it reappears. Manual
-// admin toggling of SSO users stays forbidden (SetStatus's guest-only guard);
-// the directory is the only authority for these accounts.
+// doesn't invalidate refresh tokens — and reactivated if it reappears. The
+// directory only ever undoes its OWN deactivation: an account an admin
+// deactivated stays deactivated however present it is upstream.
 func (s *UserService) SetStatusFromDirectory(ctx context.Context, targetID string, deactivated bool) error {
 	user, err := s.users.GetUser(ctx, targetID)
 	if err != nil {
@@ -857,7 +897,7 @@ func (s *UserService) SetStatusFromDirectory(ctx context.Context, targetID strin
 	}
 	backfillAuthProvider(user)
 	if user.AuthProvider != model.AuthProviderOIDC {
-		return errors.New("user: directory status only applies to SSO accounts")
+		return apperr.Invalid("user: directory status only applies to SSO accounts")
 	}
 	wantStatus := "active"
 	if deactivated {
@@ -866,29 +906,39 @@ func (s *UserService) SetStatusFromDirectory(ctx context.Context, targetID strin
 	if user.Status == wantStatus {
 		return nil
 	}
-	_, err = s.applyStatus(ctx, user, deactivated)
+	if !deactivated && user.DeactivatedBy == model.DeactivatedByAdmin {
+		return nil
+	}
+	_, err = s.applyStatus(ctx, user, deactivated, model.DeactivatedByDirectory)
 	return err
 }
 
 // applyStatus persists an active/deactivated flip and runs every side effect
-// deactivation demands: cache eviction, refresh-token wipe + force-logout
-// (a deactivated account must not keep a working session), and the
-// user.updated broadcast.
-func (s *UserService) applyStatus(ctx context.Context, user *model.User, deactivated bool) (*model.User, error) {
+// deactivation demands: cache eviction, refresh-token and runner revocation
+// plus force-logout (a deactivated account must not keep a working session),
+// reminder and agent-automation shutdown, and the user.updated broadcast.
+//
+// The status write is field-level, so it can't be undone by a concurrent
+// writer's stale copy. A failed revocation (or automation shutdown) fails
+// the call after every other step ran: the admin sees the error and
+// retries, rather than believing an account is locked out while a
+// credential survives.
+func (s *UserService) applyStatus(ctx context.Context, user *model.User, deactivated bool, by string) (*model.User, error) {
+	status, deactivatedBy := "active", ""
 	if deactivated {
-		user.Status = "deactivated"
-	} else {
-		user.Status = "active"
+		status, deactivatedBy = "deactivated", by
 	}
-	user.UpdatedAt = time.Now()
-	if err := s.users.UpdateUser(ctx, user); err != nil {
+	now := time.Now()
+	if err := s.users.PatchUser(ctx, user.ID, store.UserPatch{Status: &status, DeactivatedBy: &deactivatedBy, UpdatedAt: now}); err != nil {
 		return nil, fmt.Errorf("user: update status: %w", err)
 	}
+	user.Status, user.DeactivatedBy, user.UpdatedAt = status, deactivatedBy, now
 	if s.cache != nil {
 		_ = s.cache.Delete(ctx, "user:"+user.ID)
 	}
 	s.resolveAvatar(ctx, user)
 
+	var failed []error
 	// Deactivation must end any active session. Wipe every refresh token so
 	// the user can't silently re-acquire an access token, and broadcast a
 	// targeted force-logout to the user's personal channel so any open tab
@@ -896,12 +946,18 @@ func (s *UserService) applyStatus(ctx context.Context, user *model.User, deactiv
 	// expire.
 	if deactivated {
 		if s.tokens != nil {
-			_ = s.tokens.DeleteAllRefreshTokensForUser(ctx, user.ID)
+			if err := s.tokens.DeleteAllRefreshTokensForUser(ctx, user.ID); err != nil {
+				slog.ErrorContext(ctx, "deactivation: revoking refresh tokens failed", "userID", user.ID, "error", err)
+				failed = append(failed, fmt.Errorf("revoke sessions: %w", err))
+			}
 		}
 		// Its runners too: a deactivated account's agents must stop running
 		// on whatever machines were paired to it.
 		if s.runners != nil {
-			_ = s.runners.RevokeAllForUser(ctx, user.ID)
+			if err := s.runners.RevokeAllForUser(ctx, user.ID); err != nil {
+				slog.ErrorContext(ctx, "deactivation: revoking runner tokens failed", "userID", user.ID, "error", err)
+				failed = append(failed, fmt.Errorf("revoke runners: %w", err))
+			}
 		}
 		events.Publish(ctx, s.publisher, pubsub.UserChannel(user.ID), events.EventForceLogout, map[string]any{
 			"userID": user.ID,
@@ -912,7 +968,15 @@ func (s *UserService) applyStatus(ctx context.Context, user *model.User, deactiv
 		// the due-time owner check still drops them.
 		if s.reminders != nil {
 			if err := s.reminders.CancelAllForUser(ctx, user.ID); err != nil {
-				slog.Warn("deactivation: reminder cleanup failed", "userID", user.ID, "error", err)
+				slog.WarnContext(ctx, "deactivation: reminder cleanup failed", "userID", user.ID, "error", err)
+			}
+		}
+		// Standing orders and live runs act with the account's permissions:
+		// they stop with it.
+		if s.automations != nil {
+			if err := s.automations.StopUserAutomations(ctx, user.ID); err != nil {
+				slog.ErrorContext(ctx, "deactivation: stopping agent automations failed", "userID", user.ID, "error", err)
+				failed = append(failed, fmt.Errorf("stop automations: %w", err))
 			}
 		}
 	}
@@ -924,6 +988,9 @@ func (s *UserService) applyStatus(ctx context.Context, user *model.User, deactiv
 
 	s.indexUser(ctx, user)
 
+	if len(failed) > 0 {
+		return nil, fmt.Errorf("user: deactivated, but cleanup failed: %w", errors.Join(failed...))
+	}
 	return user, nil
 }
 

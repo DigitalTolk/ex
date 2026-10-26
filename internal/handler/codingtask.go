@@ -3,62 +3,25 @@ package handler
 import (
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 
+	"github.com/DigitalTolk/ex/internal/agents"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
-	"github.com/DigitalTolk/ex/internal/service"
-	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // CodingTaskHandler serves the coding-task layer (plan-coding-agent.md):
 // run-scoped tools the dev agent (and its runner) call, plus the human
 // surface behind the task card — read, sign off, steering.
 type CodingTaskHandler struct {
-	tasks *service.CodingTaskService
-	orch  *service.Orchestrator
+	tasks *agents.CodingTaskService
+	orch  *agents.Orchestrator
 }
 
 // NewCodingTaskHandler wires the handler.
-func NewCodingTaskHandler(tasks *service.CodingTaskService, orch *service.Orchestrator) *CodingTaskHandler {
+func NewCodingTaskHandler(tasks *agents.CodingTaskService, orch *agents.Orchestrator) *CodingTaskHandler {
 	return &CodingTaskHandler{tasks: tasks, orch: orch}
-}
-
-// writeTaskError maps task-layer errors onto HTTP. Tool callers (the MCP
-// server) key off the code: 409s are "stop / different step", 400s are
-// "fix your input", 403s are "not yours to do".
-func writeTaskError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", "task not found")
-	case errors.Is(err, service.ErrRunClosed):
-		writeError(w, http.StatusConflict, "run_closed", "run reached a terminal state")
-	case errors.Is(err, service.ErrTaskActive):
-		writeError(w, http.StatusConflict, "task_active", err.Error())
-	case errors.Is(err, service.ErrProjectUnknown):
-		writeError(w, http.StatusConflict, "project_unknown", err.Error())
-	case errors.Is(err, service.ErrTaskTransition), errors.Is(err, store.ErrStaleTask):
-		writeError(w, http.StatusConflict, "bad_transition", err.Error())
-	case errors.Is(err, service.ErrTaskNotReady):
-		writeError(w, http.StatusConflict, "not_ready", err.Error())
-	case errors.Is(err, service.ErrNotRequester):
-		writeError(w, http.StatusForbidden, "forbidden", "only the requester can do that")
-	case errors.Is(err, service.ErrTaskAgent):
-		writeError(w, http.StatusServiceUnavailable, "no_dev_agent", "the dev coding agent is not available in this workspace")
-	case errors.Is(err, service.ErrForbidden):
-		writeError(w, http.StatusForbidden, "forbidden", "no access to this task")
-	case errors.Is(err, service.ErrNotTaskRun):
-		writeError(w, http.StatusBadRequest, "not_task_run", "this run is not bound to a coding task")
-	case errors.Is(err, service.ErrValidation):
-		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-	default:
-		// The client gets a generic 500; the REAL error must not vanish —
-		// this branch once ate a create failure with nothing in the logs.
-		slog.Error("coding task operation failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal", "task operation failed")
-	}
 }
 
 type repoBody struct {
@@ -90,7 +53,7 @@ func (h *CodingTaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
 	if err != nil {
-		writeTaskError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	var body createTaskBody
@@ -98,7 +61,7 @@ func (h *CodingTaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
-	in := service.CreateTaskInput{
+	in := agents.CreateTaskInput{
 		Project:    body.Project,
 		Title:      body.Title,
 		Goal:       body.Goal,
@@ -106,7 +69,7 @@ func (h *CodingTaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 		BaseBranch: body.BaseBranch,
 	}
 	for _, rb := range body.Repos {
-		in.Repos = append(in.Repos, service.RepoInput{Path: rb.Path, Role: rb.Role, BaseBranch: rb.BaseBranch})
+		in.Repos = append(in.Repos, agents.RepoInput{Path: rb.Path, Role: rb.Role, BaseBranch: rb.BaseBranch})
 	}
 	if body.Ticket != nil && strings.TrimSpace(body.Ticket.ID) != "" {
 		in.Ticket = &model.TaskTicket{
@@ -115,9 +78,21 @@ func (h *CodingTaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 			URL:       strings.TrimSpace(body.Ticket.URL),
 		}
 	}
+	// A coding task runs on the requester's machine — it clones repos and
+	// executes code there — so a run acting on someone else's words opens one
+	// only with the requester's approval of exactly this task.
+	repoPaths := make([]string, 0, len(in.Repos))
+	for _, rp := range in.Repos {
+		repoPaths = append(repoPaths, rp.Path)
+	}
+	if !gateAction(w, r, h.orch, run, "create_coding_task",
+		"open a coding task on your machine: "+clipLine(in.Project)+" — "+clipLine(in.Title)+" (repos: "+clipLine(strings.Join(repoPaths, ", "))+")",
+		map[string]any{"project": in.Project, "title": in.Title, "goal": in.Goal, "kind": in.Kind, "baseBranch": in.BaseBranch, "repos": repoPaths, "ticket": body.Ticket}) {
+		return
+	}
 	res, err := h.tasks.Create(r.Context(), run, in)
 	if err != nil {
-		writeTaskError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	t := res.Task
@@ -173,7 +148,7 @@ func (h *CodingTaskHandler) Report(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
 	if err != nil {
-		writeTaskError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	var body reportTaskBody
@@ -181,15 +156,15 @@ func (h *CodingTaskHandler) Report(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
-	up := service.TaskUpdate{State: model.TaskState(strings.TrimSpace(body.State)), Note: body.Note}
+	up := agents.TaskUpdate{State: model.TaskState(strings.TrimSpace(body.State)), Note: body.Note}
 	for _, rb := range body.Repos {
-		up.Repos = append(up.Repos, service.RepoUpdate{
+		up.Repos = append(up.Repos, agents.RepoUpdate{
 			Path: rb.Path, Branch: rb.Branch, BaseBranch: rb.BaseBranch, WorkspaceDir: rb.WorkspaceDir, MRURL: rb.MRURL, Changed: rb.Changed,
 		})
 	}
 	t, err := h.tasks.Report(r.Context(), run, up)
 	if err != nil {
-		writeTaskError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"state": t.State, "text": "task is now " + string(t.State)})
@@ -210,7 +185,7 @@ func (h *CodingTaskHandler) TestPlan(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
 	if err != nil {
-		writeTaskError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	var body testPlanBody
@@ -222,7 +197,7 @@ func (h *CodingTaskHandler) TestPlan(w http.ResponseWriter, r *http.Request) {
 		URL: body.URL, Steps: body.Steps, CounterSteps: body.CounterSteps, Accounts: body.Accounts, Notes: body.Notes,
 	})
 	if err != nil {
-		writeTaskError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{
@@ -240,7 +215,7 @@ func (h *CodingTaskHandler) RequestMR(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
 	if err != nil {
-		writeTaskError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	var body struct {
@@ -254,20 +229,20 @@ func (h *CodingTaskHandler) RequestMR(w http.ResponseWriter, r *http.Request) {
 	}
 	status, t, gate, err := h.tasks.RequestMR(r.Context(), run, strings.TrimSpace(body.ApprovalID))
 	if err != nil {
-		writeTaskError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	out := JSON{"status": status, "taskID": t.ID, "project": t.ProjectName, "repos": t.Repos}
 	switch status {
-	case service.MRStatusApproved:
+	case agents.MRStatusApproved:
 		out["mrTitle"] = t.Title
 		out["mrDescription"] = mrDescription(t, h.tasks.TaskURL(t))
 		out["mrBodyFallback"] = mrBodyFallback(t)
 		out["mrFooter"] = mrFooter(t, h.tasks.TaskURL(t))
 		out["labels"] = []string{"ex:dev"}
 		out["message"] = "approved — push each changed repo's branch and open its merge request, then report mr_created with the MR URLs"
-	case service.MRStatusAsk:
-		out["summary"] = service.MRApprovalSummary(t)
+	case agents.MRStatusAsk:
+		out["summary"] = agents.MRApprovalSummary(t)
 		out["message"] = "the requester has not signed off yet — wait for the given approvalID to be decided and call again with it"
 		if gate != nil {
 			// The server already raised the card: the runner waits on THIS
@@ -279,7 +254,7 @@ func (h *CodingTaskHandler) RequestMR(w http.ResponseWriter, r *http.Request) {
 		} else {
 			out["message"] = "the requester has not signed off yet — raise the approval with the given summary and call again with its approvalID"
 		}
-	case service.MRStatusNotReady:
+	case agents.MRStatusNotReady:
 		out["message"] = "not ready: publish a test plan and let the requester verify before asking for an MR"
 	default:
 		out["message"] = "the requester declined the merge request — do NOT push; ask what should change"
@@ -334,7 +309,7 @@ func (h *CodingTaskHandler) Get(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
 	t, err := h.tasks.GetVisible(r.Context(), callerID, r.PathValue("id"))
 	if err != nil {
-		writeTaskError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	// Rows from before repos existed carry a nil slice — serialize [] so
@@ -351,7 +326,7 @@ func (h *CodingTaskHandler) ListByChannel(w http.ResponseWriter, r *http.Request
 	callerID := middleware.UserIDFromContext(r.Context())
 	tasks, err := h.tasks.ListByChannel(r.Context(), callerID, r.PathValue("id"))
 	if err != nil {
-		writeTaskError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	if tasks == nil {
@@ -363,9 +338,14 @@ func (h *CodingTaskHandler) ListByChannel(w http.ResponseWriter, r *http.Request
 // ListProjects lists the known coding projects (products → repos).
 // GET /api/v1/coding-projects
 func (h *CodingTaskHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
+	// Same caller rule as /projects: workspace members only, never guests.
+	if claims := middleware.ClaimsFromContext(r.Context()); claims == nil || claims.UserID == "" || claims.SystemRole == model.SystemRoleGuest {
+		writeError(w, http.StatusForbidden, "forbidden", "coding projects are for workspace members")
+		return
+	}
 	projects, err := h.tasks.ListProjects(r.Context())
 	if err != nil {
-		writeTaskError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	if projects == nil {
@@ -381,7 +361,7 @@ func (h *CodingTaskHandler) SignOff(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
 	t, err := h.tasks.SignOff(r.Context(), callerID, r.PathValue("id"))
 	if err != nil {
-		writeTaskError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"task": t})
@@ -400,7 +380,7 @@ func (h *CodingTaskHandler) SetSteering(w http.ResponseWriter, r *http.Request) 
 	}
 	t, err := h.tasks.SetSteering(r.Context(), callerID, r.PathValue("id"), body.Steering)
 	if err != nil {
-		writeTaskError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"task": t})
@@ -420,7 +400,7 @@ func (h *CodingTaskHandler) Close(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := h.tasks.Close(r.Context(), callerID, r.PathValue("id"), body.State)
 	if err != nil {
-		writeTaskError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"task": t})

@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -17,6 +18,13 @@ type OIDCUserInfo struct {
 	// identity providers that don't emit it; when present it keys Microsoft
 	// Graph lookups without assuming email == userPrincipalName.
 	ObjectID string
+	// Issuer + Subject (`iss` + `sub`) identify the user at the provider —
+	// unlike the email claim, they don't change when an address does.
+	Issuer  string
+	Subject string
+	// EmailVerified is the `email_verified` claim, nil when the provider
+	// omits it (Entra ID does).
+	EmailVerified *bool
 }
 
 // OIDCProvider wraps an OpenID Connect provider for authentication.
@@ -80,19 +88,47 @@ func (p *OIDCProvider) Exchange(ctx context.Context, code, nonce string) (*OIDCU
 	}
 
 	var claims struct {
-		Email    string `json:"email"`
-		Name     string `json:"name"`
-		Picture  string `json:"picture"`
-		ObjectID string `json:"oid"`
+		Email         string `json:"email"`
+		Name          string `json:"name"`
+		Picture       string `json:"picture"`
+		ObjectID      string `json:"oid"`
+		EmailVerified any    `json:"email_verified"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
 		return nil, fmt.Errorf("parse id_token claims: %w", err)
 	}
+	verified, err := emailVerifiedClaim(claims.EmailVerified)
+	if err != nil {
+		return nil, err
+	}
 
 	return &OIDCUserInfo{
-		Email:    claims.Email,
-		Name:     claims.Name,
-		Picture:  claims.Picture,
-		ObjectID: claims.ObjectID,
+		Email:         claims.Email,
+		Name:          claims.Name,
+		Picture:       claims.Picture,
+		ObjectID:      claims.ObjectID,
+		Issuer:        idToken.Issuer,
+		Subject:       idToken.Subject,
+		EmailVerified: verified,
 	}, nil
+}
+
+// emailVerifiedClaim reads `email_verified`, which providers send as a JSON
+// boolean or (some of them) as the string "true"/"false". Absent is nil; a
+// value that is neither is refused rather than guessed at.
+func emailVerifiedClaim(v any) (*bool, error) {
+	switch x := v.(type) {
+	case nil:
+		return nil, nil
+	case bool:
+		return &x, nil
+	case string:
+		b, err := strconv.ParseBool(x)
+		if err != nil {
+			return nil, fmt.Errorf("id_token email_verified %q is not a boolean", x)
+		}
+		return &b, nil
+	default:
+		return nil, fmt.Errorf("id_token email_verified has unexpected type %T", v)
+	}
 }

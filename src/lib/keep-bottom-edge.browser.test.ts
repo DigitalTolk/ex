@@ -93,6 +93,24 @@ describe('keepBottomEdge', () => {
     expect(Math.round(fromEnd())).toBe(40);
   });
 
+  // A virtualized list measures its rows in a ResizeObserver and lays out
+  // again from there, the view's new height included: the browser pulls the
+  // view back inside the content then, and an observer of the view itself
+  // (shallower than the rows) hears of the new size only on the next frame —
+  // after that scroll event, which is not the reader scrolling.
+  it('puts a reader a little way up back where they were when the scroll comes before the resize is observed', async () => {
+    const { scroller, fromEnd, grow } = setup();
+    scroller.scrollTop -= 12;
+    await frame();
+    const rows = new ResizeObserver(() => {
+      rows.disconnect();
+      grow(300);
+    });
+    rows.observe(scroller.firstElementChild!);
+    for (let i = 0; i < 4; i += 1) await frame();
+    expect(Math.round(fromEnd())).toBe(12);
+  });
+
   it('keeps the bottom edge when the view shrinks', async () => {
     const { scroller, fromEnd, grow } = setup();
     scroller.scrollTop -= 100;

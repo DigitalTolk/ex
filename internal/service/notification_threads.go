@@ -60,25 +60,43 @@ func (s *NotificationService) markThreadNotification(ctx context.Context, userID
 		return
 	}
 	if err := s.userState.MarkThreadNotificationUnread(ctx, userID, msg.ParentID, parentType, msg.ParentMessageID); err != nil {
-		slog.Warn("thread notification state failed", "threadRootID", msg.ParentMessageID, "userID", userID, "error", err)
+		slog.WarnContext(ctx, "thread notification state failed", "threadRootID", msg.ParentMessageID, "userID", userID, "error", err)
 	}
+}
+
+// threadFullyIndexed reports whether every participant of the thread rooted
+// at root has a follow row: true for a thread rooted after the write-time
+// participation index existed (recordThreadParticipation writes a row for
+// every replier; the importer's FinalizeParent does the same for imported
+// threads). An unknown root is treated as legacy.
+func threadFullyIndexed(root *model.Message) bool {
+	return root != nil && !root.CreatedAt.Before(threadIndexEpoch)
 }
 
 // resolveThreadRecipients returns the user IDs that should receive a
 // thread-reply notification: the thread root's author plus everyone
-// who has already replied in this thread. The current message's author
-// is excluded; duplicates are removed. It also returns who unfollowed the
-// thread: nothing implicit (a DM, follow-all, their own earlier replies)
-// puts them back.
-func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *model.Message, snap memberSnapshot) ([]string, map[string]bool) {
+// who has already replied in this thread or follows it. The current
+// message's author is excluded; duplicates are removed. It also returns who
+// unfollowed the thread: nothing implicit (a DM, follow-all, their own
+// earlier replies) puts them back.
+//
+// root is the thread root the caller already holds (nil when it could not be
+// read). For a fully indexed thread the follow rows ARE the participant set,
+// so the reply is answered from one follow-index query instead of re-reading
+// every reply of the thread (O(replies) per reply, O(replies²) per thread).
+// A legacy thread — or a follow index that couldn't be read — still reads the
+// replies: an unindexed replier must never silently stop being alerted.
+func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *model.Message, snap memberSnapshot, root *model.Message) ([]string, map[string]bool) {
 	unfollowed := make(map[string]bool)
 	if s.messages == nil || msg.ParentMessageID == "" {
 		return nil, unfollowed
 	}
 	explicitFollowers := make([]string, 0)
+	followsRead := false
 	if s.follows != nil {
 		follows, err := s.follows.ListThreadFollows(ctx, msg.ParentID, msg.ParentMessageID)
 		if err == nil {
+			followsRead = true
 			for _, f := range follows {
 				if f.Following {
 					explicitFollowers = append(explicitFollowers, f.UserID)
@@ -86,14 +104,22 @@ func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *
 					unfollowed[f.UserID] = true
 				}
 			}
+		} else {
+			slog.WarnContext(ctx, "thread follow index read failed; reading the thread's replies instead",
+				"threadRootID", msg.ParentMessageID, "error", err)
 		}
 	}
-	// Fetch the thread's replies via the GSI1 thread index (one Query, exactly
-	// this thread) rather than scanning up to 1000 of the parent's recent
-	// messages, and resolve the root author with a direct GetMessage.
-	replies, err := s.messages.ListThreadReplies(ctx, msg.ParentMessageID)
-	if err != nil {
-		return nil, unfollowed
+	var replies []*model.Message
+	if !followsRead || !threadFullyIndexed(root) {
+		// Legacy path: the thread's replies via the GSI1 thread index (one
+		// paged Query, exactly this thread). A failed read still alerts the
+		// root author and the followers below — never nobody.
+		if r, err := s.messages.ListThreadReplies(ctx, msg.ParentMessageID); err == nil {
+			replies = r
+		} else {
+			slog.WarnContext(ctx, "thread replies read failed; alerting root author and followers only",
+				"threadRootID", msg.ParentMessageID, "error", err)
+		}
 	}
 	repliers := make([]string, 0)
 	seen := make(map[string]bool)
@@ -102,8 +128,7 @@ func (s *NotificationService) resolveThreadRecipients(ctx context.Context, msg *
 		currentMembers[uid] = true
 	}
 	var rootAuthor string
-	if root, err := s.messages.GetMessage(ctx, msg.ParentID, msg.ParentMessageID); err == nil && root != nil &&
-		root.AuthorID != "" && root.AuthorID != msg.AuthorID && !unfollowed[root.AuthorID] && currentMembers[root.AuthorID] {
+	if root != nil && root.AuthorID != "" && root.AuthorID != msg.AuthorID && !unfollowed[root.AuthorID] && currentMembers[root.AuthorID] {
 		rootAuthor = root.AuthorID
 		seen[root.AuthorID] = true
 	}

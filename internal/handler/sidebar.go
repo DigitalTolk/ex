@@ -1,12 +1,10 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/service"
-	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // SidebarHandler exposes the per-user sidebar customisation endpoints:
@@ -61,7 +59,7 @@ func (h *SidebarHandler) Move(w http.ResponseWriter, r *http.Request) {
 		AfterID:    body.AfterID,
 	})
 	if err != nil {
-		writeSidebarMoveError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"updates": updates})
@@ -90,29 +88,10 @@ func (h *SidebarHandler) MoveCategory(w http.ResponseWriter, r *http.Request) {
 	}
 	cats, err := h.categorySvc.Move(r.Context(), userID, id, body.AfterID)
 	if err != nil {
-		writeSidebarMoveError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"categories": cats})
-}
-
-func writeSidebarMoveError(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, service.ErrSidebarConflict) {
-		// Stale layout: nothing was written. The client refetches and the
-		// user drops again against the truth.
-		writeError(w, http.StatusConflict, "sidebar_conflict", err.Error())
-		return
-	}
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "not_found", "sidebar item not found")
-		return
-	}
-	if errors.Is(err, service.ErrSidebarInvalid) {
-		// Validation failures from the service are user-actionable.
-		writeError(w, http.StatusBadRequest, "invalid_move", err.Error())
-		return
-	}
-	writeInternalError(w, r, "sidebar_move_error", err)
 }
 
 // SetFavorite toggles the favorite flag on a channel for the calling user.
@@ -131,7 +110,7 @@ func (h *SidebarHandler) SetFavorite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.channelSvc.SetFavorite(r.Context(), userID, channelID, body.Favorite); err != nil {
-		writeError(w, http.StatusForbidden, "favorite_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -147,7 +126,7 @@ func (h *SidebarHandler) validateUserCategory(w http.ResponseWriter, r *http.Req
 	}
 	cats, err := h.categorySvc.List(r.Context(), userID)
 	if err != nil {
-		writeInternalError(w, r, "list_error", err)
+		writeServiceError(w, r, err)
 		return false
 	}
 	for _, c := range cats {
@@ -180,7 +159,7 @@ func (h *SidebarHandler) SetCategory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.channelSvc.SetCategory(r.Context(), userID, channelID, body.CategoryID, body.SidebarPosition); err != nil {
-		writeError(w, http.StatusForbidden, "category_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -191,7 +170,7 @@ func (h *SidebarHandler) ListCategories(w http.ResponseWriter, r *http.Request) 
 	userID := middleware.UserIDFromContext(r.Context())
 	cats, err := h.categorySvc.List(r.Context(), userID)
 	if err != nil {
-		writeInternalError(w, r, "list_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, cats)
@@ -209,11 +188,7 @@ func (h *SidebarHandler) CreateCategory(w http.ResponseWriter, r *http.Request) 
 	}
 	cat, err := h.categorySvc.Create(r.Context(), userID, body.Name)
 	if err != nil {
-		if errors.Is(err, service.ErrCategoryNameTaken) {
-			writeError(w, http.StatusConflict, "duplicate_category", err.Error())
-			return
-		}
-		writeError(w, http.StatusBadRequest, "create_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, cat)
@@ -238,15 +213,7 @@ func (h *SidebarHandler) UpdateCategory(w http.ResponseWriter, r *http.Request) 
 	}
 	cat, err := h.categorySvc.Update(r.Context(), userID, id, body.Name, body.Position)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "category not found")
-			return
-		}
-		if errors.Is(err, service.ErrCategoryNameTaken) {
-			writeError(w, http.StatusConflict, "duplicate_category", err.Error())
-			return
-		}
-		writeError(w, http.StatusBadRequest, "update_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, cat)
@@ -261,7 +228,7 @@ func (h *SidebarHandler) DeleteCategory(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := h.categorySvc.Delete(r.Context(), userID, id); err != nil {
-		writeInternalError(w, r, "delete_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -288,7 +255,7 @@ func (h *SidebarHandler) SetConversationFavorite(w http.ResponseWriter, r *http.
 		return
 	}
 	if err := h.convSvc.SetFavorite(r.Context(), userID, convID, body.Favorite); err != nil {
-		writeError(w, http.StatusForbidden, "favorite_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -320,7 +287,7 @@ func (h *SidebarHandler) SetConversationCategory(w http.ResponseWriter, r *http.
 		return
 	}
 	if err := h.convSvc.SetCategory(r.Context(), userID, convID, body.CategoryID, body.SidebarPosition); err != nil {
-		writeError(w, http.StatusForbidden, "category_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

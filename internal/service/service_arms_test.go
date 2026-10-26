@@ -5,7 +5,6 @@ import (
 	"errors"
 	"image"
 	"io"
-	"net"
 	"strings"
 	"testing"
 	"time"
@@ -197,28 +196,11 @@ func TestRefreshSuccessorLookupArms(t *testing.T) {
 	})
 }
 
-func TestUnfurlLoadImageDimsCacheMiss(t *testing.T) {
+func TestUnfurlLoadImageRecordCacheMiss(t *testing.T) {
 	svc := NewUnfurlService(newMockCache())
-	w, h := svc.loadImageDims(context.Background(), "missing-key")
-	if w != 0 || h != 0 {
-		t.Fatalf("dims = %dx%d, want 0x0 on cache miss", w, h)
-	}
-}
-
-func TestSafeDialContextDialsPublicIPs(t *testing.T) {
-	// TEST-NET-3 (203.0.113.0/24) is classified public but never routed —
-	// the dial line executes and fails fast under the context deadline.
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	conn, err := safeDialContext(ctx, "tcp", net.JoinHostPort("203.0.113.1", "80"))
-	if conn != nil {
-		_ = conn.Close()
-	}
-	if err == nil {
-		t.Fatal("expected the blackhole dial to fail")
-	}
-	if strings.Contains(err.Error(), "blocked private IP") {
-		t.Fatalf("TEST-NET must pass the private filter, got %v", err)
+	rec, found := svc.loadImageRecord(context.Background(), "missing-key")
+	if found || rec.W != 0 || rec.H != 0 {
+		t.Fatalf("record = %+v found=%v, want none on cache miss", rec, found)
 	}
 }
 
@@ -247,6 +229,14 @@ func TestMustHelpersPanic(t *testing.T) {
 		}()
 		mustEncode(errors.New("boom"))
 	})
+	t.Run("mustLRU", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("mustLRU must panic on error")
+			}
+		}()
+		mustLRU[any](nil, errors.New("boom"))
+	})
 	t.Run("passthrough", func(t *testing.T) {
 		mustEncode(nil)
 		if got := string(mustThumb([]byte("t"), nil)); got != "t" {
@@ -267,7 +257,7 @@ func TestEncodeWebPThumbnailPanicsOnEncoderFault(t *testing.T) {
 			t.Fatal("expected panic on encoder fault")
 		}
 	}()
-	_, _ = encodeWebPThumbnail(image.NewNRGBA(image.Rect(0, 0, 4, 4)), thumbnailModeMessage)
+	_, _ = encodeWebPThumbnail(storedPixels{Image: image.NewNRGBA(image.Rect(0, 0, 4, 4))}, thumbnailModeMessage)
 }
 
 func TestUpdateMemberRoleOwnerDemotionActorFetchFailure(t *testing.T) {
@@ -326,14 +316,16 @@ func TestPublishThreadUpdateNilPublisherIsNoop(t *testing.T) {
 
 func TestResolveThreadRecipientsSkipsTheMessageItself(t *testing.T) {
 	svc, _, _, _, _, _, msgs, _ := setupNotifierWithMessagesAndFollows(t)
-	msgs.messages["ch1#root1"] = &model.Message{ID: "root1", ParentID: "ch1", AuthorID: "u-root", Body: "root", CreatedAt: time.Now()}
+	// A legacy (pre-index) root, so the thread's replies are read.
+	root := &model.Message{ID: "root1", ParentID: "ch1", AuthorID: "u-root", Body: "root", CreatedAt: threadIndexEpoch.Add(-time.Hour)}
+	msgs.messages["ch1#root1"] = root
 	// The reply being notified is already visible in the thread window — its
 	// own author entry must not feed back into the recipient set.
 	msgs.messages["ch1#r1"] = &model.Message{ID: "r1", ParentID: "ch1", ParentMessageID: "root1", AuthorID: "u-author", Body: "reply", CreatedAt: time.Now()}
 
 	got, _ := svc.resolveThreadRecipients(context.Background(),
 		&model.Message{ID: "r1", ParentID: "ch1", ParentMessageID: "root1", AuthorID: "u-author"},
-		memberSnapshot{memberIDs: []string{"u-root", "u-author"}})
+		memberSnapshot{memberIDs: []string{"u-root", "u-author"}}, root)
 	if len(got) != 1 || got[0] != "u-root" {
 		t.Fatalf("recipients = %v, want only the root author", got)
 	}
@@ -342,7 +334,7 @@ func TestResolveThreadRecipientsSkipsTheMessageItself(t *testing.T) {
 func TestWebhookUserMentionLookupFailure(t *testing.T) {
 	svc := NewIncomingWebhookService(&fakeWebhookStore{}, fakeWebhookChannels{}, nil, fakeWebhookImageProxy{}, "https://chat.example")
 	svc.SetUserResolver(fakeWebhookUsers{err: errors.New("directory down")})
-	if got, ok := svc.userMention(context.Background(), "nobody"); ok || got != "" {
+	if got, ok := svc.newRefs().userMention(context.Background(), "nobody"); ok || got != "" {
 		t.Fatalf("userMention = %q,%v — want miss on resolver failure", got, ok)
 	}
 }

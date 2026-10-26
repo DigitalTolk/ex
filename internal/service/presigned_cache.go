@@ -4,6 +4,9 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/hashicorp/golang-lru/v2/expirable"
+	"golang.org/x/sync/singleflight"
 )
 
 // presignedURLCacheTTL is intentionally short. Presigned URLs can include
@@ -26,18 +29,24 @@ const presignedURLCacheTTL = 5 * time.Minute
 // the URL is keyed by the S3 object key (and presigned URLs are scoped
 // to a single object), cache reuse across users is correct: every user
 // who can see a given object would have been issued an equivalent URL.
+//
+// Concurrent misses for one variant share a single sign, and variants are
+// indexed by S3 key so invalidate touches only that key's entries.
 type presignedURLCache struct {
-	ttl     time.Duration
-	maxSize int
-	mu      sync.Mutex
-	items   map[presignedKey]presignedEntry
+	urls  *expirable.LRU[presignedKey, string]
+	signs singleflight.Group
+
+	// mu guards variants: S3 key → its cached variants. Lock order is the
+	// LRU's lock, then mu (the LRU calls forget holding its own), so nothing
+	// here calls into urls while holding mu.
+	mu       sync.Mutex
+	variants map[string]map[presignedKey]struct{}
 }
 
 // presignedCacheMaxSize bounds the in-memory cache so a long-running
-// process doesn't accumulate dead entries — with a 20h TTL and no
-// eviction every distinct S3 key seen in 20h would otherwise sit in
-// memory permanently. Sized for a typical workspace's avatar +
-// attachment + emoji set; the eldest entry is evicted FIFO when full.
+// process doesn't accumulate dead entries. Sized for a typical workspace's
+// avatar + attachment + emoji set; the least recently used entry is evicted
+// when full, and expired entries are swept in the background.
 const presignedCacheMaxSize = 10000
 
 type presignedKey struct {
@@ -49,67 +58,78 @@ type presignedKey struct {
 	extra string
 }
 
-type presignedEntry struct {
-	url       string
-	expiresAt time.Time
+// flightKey is k as a singleflight key; NUL never appears in an S3 key, an op
+// or a filename header value, so distinct variants never share a flight.
+func (k presignedKey) flightKey() string {
+	return k.op + "\x00" + k.key + "\x00" + k.extra
 }
 
 func newPresignedURLCache(ttl time.Duration) *presignedURLCache {
+	return newSizedPresignedURLCache(presignedCacheMaxSize, presignedTTL(ttl))
+}
+
+// presignedTTL clamps a requested entry lifetime to presignedURLCacheTTL,
+// which is also the default for a non-positive request.
+func presignedTTL(ttl time.Duration) time.Duration {
 	if ttl <= 0 || ttl > presignedURLCacheTTL {
-		ttl = presignedURLCacheTTL
+		return presignedURLCacheTTL
 	}
-	return &presignedURLCache{ttl: ttl, maxSize: presignedCacheMaxSize, items: map[presignedKey]presignedEntry{}}
+	return ttl
+}
+
+// newSizedPresignedURLCache builds a cache of at most size entries living
+// ttl each (0: no expiry — tests only).
+func newSizedPresignedURLCache(size int, ttl time.Duration) *presignedURLCache {
+	c := &presignedURLCache{variants: map[string]map[presignedKey]struct{}{}}
+	c.urls = expirable.NewLRU(size, c.forget, ttl)
+	return c
 }
 
 // getOrSign returns a cached URL for k or calls sign and stores its
 // result. ttl on the entry is short enough that the underlying presigned
 // URL is still valid when handed out; sign is responsible for asking
 // the signer for a long-lived URL.
+//
+// Concurrent misses for k wait on one sign. It runs detached from the first
+// caller's cancellation so that caller giving up can't fail the others;
+// presigning is local work bounded by the SDK's own credential timeouts.
 func (c *presignedURLCache) getOrSign(ctx context.Context, k presignedKey, sign func(context.Context) (string, error)) (string, error) {
 	if c == nil {
 		return sign(ctx)
 	}
-	now := time.Now()
-	c.mu.Lock()
-	if e, ok := c.items[k]; ok {
-		if e.expiresAt.After(now) {
-			c.mu.Unlock()
-			return e.url, nil
-		}
-		// Expired — drop in place so map size reflects live entries.
-		delete(c.items, k)
+	if url, ok := c.urls.Get(k); ok {
+		return url, nil
 	}
-	c.mu.Unlock()
-	// Sign outside the lock so concurrent misses for different keys
-	// don't serialize on the network call.
-	url, err := sign(ctx)
+	url, err, _ := c.signs.Do(k.flightKey(), func() (any, error) {
+		url, err := sign(context.WithoutCancel(ctx))
+		if err != nil {
+			return "", err
+		}
+		c.urls.Add(k, url)
+		c.mu.Lock()
+		set := c.variants[k.key]
+		if set == nil {
+			set = map[presignedKey]struct{}{}
+			c.variants[k.key] = set
+		}
+		set[k] = struct{}{}
+		c.mu.Unlock()
+		return url, nil
+	})
 	if err != nil {
 		return "", err
 	}
-	c.mu.Lock()
-	if c.maxSize > 0 && len(c.items) >= c.maxSize {
-		c.evictOneLocked(now)
-	}
-	c.items[k] = presignedEntry{url: url, expiresAt: now.Add(c.ttl)}
-	c.mu.Unlock()
-	return url, nil
+	return url.(string), nil
 }
 
-// evictOneLocked drops one entry to make room for a new write. Prefers
-// any expired entry (a single linear pass through the map); if none is
-// expired it drops an arbitrary entry — Go map iteration order is
-// randomised so this is a fair-ish eviction without per-entry LRU
-// bookkeeping. Caller holds c.mu.
-func (c *presignedURLCache) evictOneLocked(now time.Time) {
-	for k, e := range c.items {
-		if !e.expiresAt.After(now) {
-			delete(c.items, k)
-			return
-		}
-	}
-	for k := range c.items {
-		delete(c.items, k)
-		return
+// forget drops an evicted or removed entry from the variant index. The LRU
+// calls it holding its own lock.
+func (c *presignedURLCache) forget(k presignedKey, _ string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.variants[k.key], k)
+	if len(c.variants[k.key]) == 0 {
+		delete(c.variants, k.key)
 	}
 }
 
@@ -121,10 +141,10 @@ func (c *presignedURLCache) invalidate(key string) {
 		return
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	for k := range c.items {
-		if k.key == key {
-			delete(c.items, k)
-		}
+	set := c.variants[key]
+	delete(c.variants, key)
+	c.mu.Unlock()
+	for k := range set {
+		c.urls.Remove(k)
 	}
 }

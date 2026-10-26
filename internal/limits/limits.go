@@ -3,9 +3,10 @@
 package limits
 
 import (
-	"errors"
 	"regexp"
 	"unicode/utf8"
+
+	"github.com/DigitalTolk/ex/internal/apperr"
 )
 
 // Hard ceilings the API enforces. Mirrored on the frontend in
@@ -45,26 +46,26 @@ var channelNamePattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // ErrMessageTooLong is returned by Send/Edit when the body exceeds
 // MaxMessageBodyChars in codepoints.
-var ErrMessageTooLong = errors.New("message: body exceeds maximum length")
+var ErrMessageTooLong = apperr.Invalid("message: body exceeds maximum length")
 
 // ErrTooManyAttachments is returned by Send/Edit when more attachment
 // IDs are supplied than the cap allows.
-var ErrTooManyAttachments = errors.New("message: too many attachments")
+var ErrTooManyAttachments = apperr.Invalid("message: too many attachments")
 
 // ErrTooManyReactions is returned by ToggleReaction when adding the
 // emoji would push the distinct-reactions count past the cap.
-var ErrTooManyReactions = errors.New("message: too many distinct reactions")
+var ErrTooManyReactions = apperr.Invalid("message: too many distinct reactions")
 
 // ErrChannelNameInvalid is returned when a channel name doesn't fit the
 // slug pattern (lowercase letters, digits, hyphen — no special chars,
 // no leading/trailing/repeated hyphens).
-var ErrChannelNameInvalid = errors.New("channel: name must be lowercase letters, digits, and hyphens")
+var ErrChannelNameInvalid = apperr.Invalid("channel: name must be lowercase letters, digits, and hyphens")
 
 // ErrChannelNameTooLong is returned when the name is over MaxChannelNameLen.
-var ErrChannelNameTooLong = errors.New("channel: name too long")
+var ErrChannelNameTooLong = apperr.Invalid("channel: name too long")
 
 // ErrChannelDescriptionTooLong guards the description field.
-var ErrChannelDescriptionTooLong = errors.New("channel: description too long")
+var ErrChannelDescriptionTooLong = apperr.Invalid("channel: description too long")
 
 // ValidateMessageBody enforces the codepoint cap. Empty bodies are
 // allowed here — Send checks separately that body OR attachments exist.

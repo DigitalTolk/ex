@@ -146,6 +146,81 @@ func TestPublishManyCapabilityErrorSwallowed(t *testing.T) {
 	}
 }
 
+// multicastCapturePublisher adds the MulticastPublisher capability on top of
+// the pipelined one, so a fall-through to PublishMany is visible.
+type multicastCapturePublisher struct {
+	manyCapturePublisher
+	multicastTopics [][]string
+	multicastErr    error
+}
+
+func (p *multicastCapturePublisher) PublishMulticast(_ context.Context, topics []string, e *Event) error {
+	p.multicastTopics = append(p.multicastTopics, topics)
+	p.mu.Lock()
+	p.last = e
+	p.mu.Unlock()
+	return p.multicastErr
+}
+
+func TestPublishMulticast(t *testing.T) {
+	topics := []string{"chan:a", "conv:b"}
+
+	t.Run("nil publisher and empty topics are no-ops", func(t *testing.T) {
+		PublishMulticast(context.Background(), nil, topics, EventPresenceChanged, nil)
+		p := &multicastCapturePublisher{}
+		PublishMulticast(context.Background(), p, nil, EventPresenceChanged, nil)
+		if len(p.multicastTopics) != 0 || p.manyCalls.Load() != 0 || p.calls.Load() != 0 {
+			t.Fatal("no topics must publish nothing")
+		}
+	})
+
+	t.Run("marshal error publishes nothing", func(t *testing.T) {
+		p := &multicastCapturePublisher{}
+		PublishMulticast(context.Background(), p, topics, "test", make(chan int))
+		if len(p.multicastTopics) != 0 {
+			t.Fatalf("multicasts = %v, want none", p.multicastTopics)
+		}
+	})
+
+	t.Run("capability path sends ONE multicast and nothing per topic", func(t *testing.T) {
+		p := &multicastCapturePublisher{}
+		PublishMulticast(context.Background(), p, topics, EventPresenceChanged, map[string]any{"online": true})
+		if len(p.multicastTopics) != 1 || len(p.multicastTopics[0]) != 2 {
+			t.Fatalf("multicasts = %v, want one over both topics", p.multicastTopics)
+		}
+		if p.manyCalls.Load() != 0 || p.calls.Load() != 0 {
+			t.Fatal("a multicast must not also go out per topic")
+		}
+		if p.last.Type != EventPresenceChanged {
+			t.Fatalf("event type = %q", p.last.Type)
+		}
+	})
+
+	t.Run("capability error is logged, not propagated", func(t *testing.T) {
+		p := &multicastCapturePublisher{multicastErr: errors.New("redis down")}
+		PublishMulticast(context.Background(), p, topics, EventPresenceChanged, nil) // must not panic
+		if len(p.multicastTopics) != 1 {
+			t.Fatalf("multicasts = %d, want 1", len(p.multicastTopics))
+		}
+	})
+
+	t.Run("falls back to PublishMany without the capability", func(t *testing.T) {
+		p := &manyCapturePublisher{}
+		PublishMulticast(context.Background(), p, topics, EventPresenceChanged, nil)
+		if p.manyCalls.Load() != 1 || p.manyChannels != 2 {
+			t.Fatalf("PublishMany calls = %d over %d channels, want 1 over 2", p.manyCalls.Load(), p.manyChannels)
+		}
+	})
+
+	t.Run("falls back to a publish per topic on a plain publisher", func(t *testing.T) {
+		p := &capturePublisher{}
+		PublishMulticast(context.Background(), p, topics, EventPresenceChanged, nil)
+		if got := p.calls.Load(); got != 2 {
+			t.Fatalf("per-topic publishes = %d, want 2", got)
+		}
+	})
+}
+
 // plainRecorder only has Publish — handing it to PublishEach forces the
 // sequential fallback loop.
 type plainRecorder struct {

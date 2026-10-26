@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import DirectoriesPage from './DirectoriesPage';
+import { applyUserUpdatedEvent } from '@/lib/user-cache';
 import type { Channel, User, UserChannel } from '@/types';
 
 const mockBrowseChannels = vi.fn();
@@ -150,6 +151,8 @@ describe('DirectoriesPage', () => {
 
     await user.click(await screen.findByLabelText('Manage Guesty'));
     await user.click(await screen.findByTestId('deactivate-u-g'));
+    // Deactivation asks first.
+    await user.click(await screen.findByTestId('deactivate-user-confirm'));
     await waitFor(() => expect(patched).toContain(JSON.stringify({ deactivated: true })));
   });
 
@@ -194,6 +197,8 @@ describe('DirectoriesPage', () => {
 
     await user.click(await screen.findByLabelText('Manage Guesty'));
     await user.click(await screen.findByTestId('deactivate-u-g'));
+    // Deactivation asks first.
+    await user.click(await screen.findByTestId('deactivate-user-confirm'));
     expect(await screen.findByText('Failed to update status')).toBeInTheDocument();
   });
 
@@ -214,6 +219,8 @@ describe('DirectoriesPage', () => {
 
     await user.click(await screen.findByLabelText('Manage Guesty'));
     await user.click(await screen.findByTestId('deactivate-u-g'));
+    // Deactivation asks first.
+    await user.click(await screen.findByTestId('deactivate-user-confirm'));
     // err instanceof Error → the real message surfaces, not the fallback.
     expect(await screen.findByText('Status API exploded')).toBeInTheDocument();
   });
@@ -405,26 +412,30 @@ describe('DirectoriesPage', () => {
     await waitFor(() => expect(window.location.pathname).toBe('/channel/general'));
   });
 
-  it('refreshes the member directory when the user.updated bridge event fires', async () => {
+  it('follows a user.updated rename live, patched into its list without a refetch', async () => {
     mockBrowseChannels.mockReturnValue({ data: [], isLoading: false });
     mockUserChannels.mockReturnValue({ data: [] });
-    let displayName = 'Bob';
     mockApiFetch.mockImplementation(() =>
       Promise.resolve([
-        { id: 'u-2', email: 'b@b.c', displayName, systemRole: 'member', status: 'active' },
+        { id: 'u-2', email: 'b@b.c', displayName: 'Bob', systemRole: 'member', status: 'active' },
       ]),
     );
     window.history.pushState({}, '', '/directory/users');
-    renderWithProviders(<DirectoriesPage />);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <BrowserRouter><DirectoriesPage /></BrowserRouter>
+      </QueryClientProvider>,
+    );
     expect(await screen.findByText('Bob')).toBeInTheDocument();
+    const fetches = mockApiFetch.mock.calls.length;
 
-    // The WS user.updated bridge dispatches ex:user-updated; the directory
-    // must invalidate and refetch so the rename shows up without a reload.
-    displayName = 'Bobby';
+    // ChatPage's user.updated handler patches every cached user list.
     act(() => {
-      window.dispatchEvent(new CustomEvent('ex:user-updated'));
+      applyUserUpdatedEvent(qc, { id: 'u-2', displayName: 'Bobby' }, 'user-1');
     });
     expect(await screen.findByText('Bobby')).toBeInTheDocument();
+    expect(mockApiFetch.mock.calls.length).toBe(fetches);
   });
 
   it('shows "Join" button for channels not yet joined', () => {

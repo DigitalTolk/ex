@@ -12,6 +12,12 @@ vi.mock('@/lib/api', () => ({
   apiFetch: (...args: unknown[]) => apiFetchMock(...args),
 }));
 
+const showToastMock = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/toast', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/toast')>()),
+  showToast: (...args: unknown[]) => showToastMock(...args),
+}));
+
 beforeEach(() => {
   apiFetchMock.mockReset();
   apiFetchMock.mockResolvedValue({
@@ -272,5 +278,30 @@ describe('UserHoverCard browser', () => {
         expect.objectContaining({ method: 'POST' }),
       );
     });
+  });
+
+  it('a DM that fails to open says so instead of doing nothing', async () => {
+    apiFetchMock.mockReset();
+    showToastMock.mockReset();
+    apiFetchMock
+      .mockResolvedValueOnce({ id: 'u-1', displayName: 'Alice', status: 'active' })
+      .mockRejectedValueOnce(new Error('offline'));
+    await render(
+      <Wrap>
+        <UserHoverCard userId="u-1" displayName="Alice" currentUserId="u-me">
+          <span data-testid="dm-fail-trigger">Alice</span>
+        </UserHoverCard>
+      </Wrap>,
+    );
+    (document.querySelector('[data-testid="dm-fail-trigger"]') as HTMLElement).click();
+    const dmBtn = await vi.waitFor(() => {
+      const btn = Array.from(document.querySelectorAll('button')).find((b) => b.textContent?.includes('Direct message'));
+      expect(btn).toBeDefined();
+      return btn as HTMLButtonElement;
+    });
+    dmBtn.click();
+    await vi.waitFor(() =>
+      expect(showToastMock).toHaveBeenCalledWith('Could not open the conversation — please try again.'),
+    );
   });
 });

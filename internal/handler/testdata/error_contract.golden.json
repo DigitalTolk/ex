@@ -1,0 +1,924 @@
+[
+  {
+    "case": "draft save/delete on stale state",
+    "status": 409,
+    "body": {
+      "current": {
+        "id": "d-1",
+        "userID": "",
+        "parentID": "",
+        "parentType": "",
+        "body": "stored",
+        "updatedAt": "0001-01-01T00:00:00Z",
+        "createdAt": "0001-01-01T00:00:00Z",
+        "gen": "g-2"
+      },
+      "error": {
+        "code": "draft_conflict",
+        "message": "draft changed since it was read"
+      }
+    }
+  },
+  {
+    "case": "draft conflict on an empty scope",
+    "status": 409,
+    "body": {
+      "current": null,
+      "error": {
+        "code": "draft_conflict",
+        "message": "draft changed since it was read"
+      }
+    }
+  },
+  {
+    "case": "sidebar move on a stale layout",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "sidebar_conflict",
+        "message": "sidebar: move: sidebar: layout changed since it was read"
+      }
+    }
+  },
+  {
+    "case": "connector install needs a 2FA code",
+    "status": 409,
+    "body": {
+      "accessCode": "AC-42",
+      "error": {
+        "code": "two_factor_required",
+        "message": "a two-factor code is required"
+      }
+    }
+  },
+  {
+    "case": "command denial shown verbatim",
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "command_denied",
+        "message": "guests can't start Teams meetings"
+      }
+    }
+  },
+  {
+    "case": "channel/conversation read: missing",
+    "status": 404,
+    "body": {
+      "error": {
+        "code": "not_found",
+        "message": "not found"
+      }
+    }
+  },
+  {
+    "case": "channel/conversation read: no access",
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "forbidden",
+        "message": "no access"
+      }
+    }
+  },
+  {
+    "case": "channel/conversation read: store outage",
+    "status": 500,
+    "body": {
+      "error": {
+        "code": "internal_error",
+        "message": "internal server error"
+      }
+    }
+  },
+  {
+    "case": "run read: not the invoker",
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "forbidden",
+        "message": "no access to this run"
+      }
+    }
+  },
+  {
+    "case": "approval decide: already settled",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "settled",
+        "message": "approval already settled"
+      }
+    }
+  },
+  {
+    "case": "approval decide: gone",
+    "status": 404,
+    "body": {
+      "error": {
+        "code": "not_found",
+        "message": "not found"
+      }
+    }
+  },
+  {
+    "case": "reminder cancel: already fired",
+    "status": 404,
+    "body": {
+      "error": {
+        "code": "not_found",
+        "message": "not found"
+      }
+    }
+  },
+  {
+    "case": "attachment delete: still referenced",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "conflict",
+        "message": "attachment: still referenced by sent messages"
+      }
+    }
+  },
+  {
+    "case": "channel create: name taken",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "already_exists",
+        "message": "channel: a channel with this name already exists: already exists"
+      }
+    }
+  },
+  {
+    "case": "convert: already a channel",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "already_exists",
+        "message": "channel: this conversation is a channel already: already exists"
+      }
+    }
+  },
+  {
+    "case": "refresh: dead session",
+    "status": 401,
+    "body": {
+      "error": {
+        "code": "session_invalid",
+        "message": "session expired, sign in again"
+      }
+    }
+  },
+  {
+    "case": "refresh: deactivated account",
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "sign_in_refused",
+        "message": "this account is deactivated"
+      }
+    }
+  },
+  {
+    "case": "refresh: store outage",
+    "status": 500,
+    "body": {
+      "error": {
+        "code": "internal_error",
+        "message": "internal server error"
+      }
+    }
+  },
+  {
+    "case": "category create: name required",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "bad_request",
+        "message": "category: name is required"
+      }
+    }
+  },
+  {
+    "case": "category create: duplicate",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "duplicate_category",
+        "message": "category name already exists"
+      }
+    }
+  },
+  {
+    "case": "archived channel write",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "channel_archived",
+        "message": "this channel is archived and read-only"
+      }
+    }
+  },
+  {
+    "case": "reply into a deleted thread",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "thread_deleted",
+        "message": "this thread has been deleted"
+      }
+    }
+  },
+  {
+    "case": "message too long",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "bad_request",
+        "message": "message: body exceeds maximum length"
+      }
+    }
+  },
+  {
+    "case": "channel name rule",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "bad_request",
+        "message": "channel: name must be lowercase letters, digits, and hyphens"
+      }
+    }
+  },
+  {
+    "case": "forbidden with a reason",
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "forbidden",
+        "message": "channel: cannot archive the general channel"
+      }
+    }
+  },
+  {
+    "case": "scheduled message being sent",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "being_sent",
+        "message": "this message is being sent right now"
+      }
+    }
+  },
+  {
+    "case": "reminder time in the past",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "invalid_time",
+        "message": "reminder: remind time must be in the future"
+      }
+    }
+  },
+  {
+    "case": "agent tool rejection keeps its hint",
+    "status": 404,
+    "body": {
+      "error": {
+        "code": "not_found",
+        "message": "pin rejected: not found — the message must be in this run's own channel or DM"
+      }
+    }
+  },
+  {
+    "case": "agent tool rejection hides internals",
+    "status": 500,
+    "body": {
+      "error": {
+        "code": "internal_error",
+        "message": "internal server error"
+      }
+    }
+  },
+  {
+    "case": "row: channel: channel is archived",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "channel_archived",
+        "message": "this channel is archived and read-only"
+      }
+    }
+  },
+  {
+    "case": "row: message: thread has been deleted",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "thread_deleted",
+        "message": "this thread has been deleted"
+      }
+    }
+  },
+  {
+    "case": "row: message: invalid thread root",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "invalid_root",
+        "message": "root_id must reference a top-level message posted by this webhook in the target channel"
+      }
+    }
+  },
+  {
+    "case": "row: webhook: direct-message target rejected",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "unsupported_channel",
+        "message": "webhook cannot post to that direct-message target"
+      }
+    }
+  },
+  {
+    "case": "row: webhook: delivery temporarily unavailable",
+    "status": 503,
+    "body": {
+      "error": {
+        "code": "unavailable",
+        "message": "webhook delivery temporarily unavailable, retry shortly"
+      }
+    }
+  },
+  {
+    "case": "row: message: emoji reserved for agent state",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "reserved_emoji",
+        "message": "that emoji is reserved for run states"
+      }
+    }
+  },
+  {
+    "case": "row: scheduled message: already being sent",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "being_sent",
+        "message": "this message is being sent right now"
+      }
+    }
+  },
+  {
+    "case": "row: sidebar: layout changed since it was read",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "sidebar_conflict",
+        "message": "sidebar: layout changed since it was read"
+      }
+    }
+  },
+  {
+    "case": "row: invalid sidebar move",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "invalid_move",
+        "message": "invalid sidebar move"
+      }
+    }
+  },
+  {
+    "case": "row: category name already exists",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "duplicate_category",
+        "message": "category name already exists"
+      }
+    }
+  },
+  {
+    "case": "row: reminder: remind time must be in the future",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "invalid_time",
+        "message": "reminder: remind time must be in the future"
+      }
+    }
+  },
+  {
+    "case": "row: command: unknown command",
+    "status": 404,
+    "body": {
+      "error": {
+        "code": "unknown_command",
+        "message": "unknown command"
+      }
+    }
+  },
+  {
+    "case": "row: attachment: already uploaded",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "already_uploaded",
+        "message": "attachment: already uploaded"
+      }
+    }
+  },
+  {
+    "case": "row: s3: range not satisfiable",
+    "status": 416,
+    "body": {
+      "error": {
+        "code": "invalid_range",
+        "message": "range not satisfiable"
+      }
+    }
+  },
+  {
+    "case": "row: orchestrator: no access to this run",
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "forbidden",
+        "message": "no access to this run"
+      }
+    }
+  },
+  {
+    "case": "row: shared context is full for this channel",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "context_full",
+        "message": "shared context is full for this channel"
+      }
+    }
+  },
+  {
+    "case": "row: orchestrator: run is terminal",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "run_closed",
+        "message": "run reached a terminal state"
+      }
+    }
+  },
+  {
+    "case": "row: orchestrator: run leased elsewhere",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "wrong_runner",
+        "message": "run is leased to another runner"
+      }
+    }
+  },
+  {
+    "case": "row: orchestrator: approval already settled",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "settled",
+        "message": "approval already settled"
+      }
+    }
+  },
+  {
+    "case": "row: orchestrator: approval unavailable",
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "approval_unavailable",
+        "message": "orchestrator: approval unavailable"
+      }
+    }
+  },
+  {
+    "case": "row: orchestrator: only the invoker decides approvals",
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "forbidden",
+        "message": "only the invoker decides this"
+      }
+    }
+  },
+  {
+    "case": "row: orchestrator: invoker has no live runner",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "not_ready",
+        "message": "the agent can't start right now — try again shortly"
+      }
+    }
+  },
+  {
+    "case": "row: orchestrator: agent already active in this thread",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "not_ready",
+        "message": "the agent can't start right now — try again shortly"
+      }
+    }
+  },
+  {
+    "case": "row: orchestrator: per-run artifact cap reached",
+    "status": 429,
+    "body": {
+      "error": {
+        "code": "artifact_cap",
+        "message": "per-run artifact cap reached"
+      }
+    }
+  },
+  {
+    "case": "row: orchestrator: per-run upload cap reached",
+    "status": 429,
+    "body": {
+      "error": {
+        "code": "upload_cap",
+        "message": "per-run upload cap reached"
+      }
+    }
+  },
+  {
+    "case": "row: attachment: file type not allowed for agent uploads",
+    "status": 415,
+    "body": {
+      "error": {
+        "code": "unsupported_type",
+        "message": "attachment: file type not allowed for agent uploads"
+      }
+    }
+  },
+  {
+    "case": "row: attachment: file exceeds the agent upload limit",
+    "status": 413,
+    "body": {
+      "error": {
+        "code": "too_large",
+        "message": "attachment: file exceeds the agent upload limit"
+      }
+    }
+  },
+  {
+    "case": "row: connector invalid: no connector provider configured",
+    "status": 503,
+    "body": {
+      "error": {
+        "code": "no_provider",
+        "message": "no connector provider configured"
+      }
+    }
+  },
+  {
+    "case": "row: connector invalid",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "bad_request",
+        "message": "connector invalid"
+      }
+    }
+  },
+  {
+    "case": "row: token rejected by the service",
+    "status": 401,
+    "body": {
+      "error": {
+        "code": "token_rejected",
+        "message": "the service rejected that credential"
+      }
+    }
+  },
+  {
+    "case": "row: login failed",
+    "status": 401,
+    "body": {
+      "error": {
+        "code": "login_failed",
+        "message": "login failed"
+      }
+    }
+  },
+  {
+    "case": "row: service unreachable",
+    "status": 424,
+    "body": {
+      "error": {
+        "code": "unreachable",
+        "message": "service unreachable"
+      }
+    }
+  },
+  {
+    "case": "row: runner: this sign-in link is invalid or has expired",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "invalid_grant",
+        "message": "runner: this sign-in link is invalid or has expired"
+      }
+    }
+  },
+  {
+    "case": "row: runner: this runner was disconnected",
+    "status": 401,
+    "body": {
+      "error": {
+        "code": "runner_disconnected",
+        "message": "runner: this runner was disconnected"
+      }
+    }
+  },
+  {
+    "case": "row: task: this project already has an active task",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "task_active",
+        "message": "task: this project already has an active task"
+      }
+    }
+  },
+  {
+    "case": "row: task: unknown project — its repositories are needed",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "project_unknown",
+        "message": "task: unknown project — its repositories are needed"
+      }
+    }
+  },
+  {
+    "case": "row: task: illegal state transition",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "bad_transition",
+        "message": "task: illegal state transition"
+      }
+    }
+  },
+  {
+    "case": "row: store: task state changed concurrently",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "bad_transition",
+        "message": "the task changed meanwhile — read it again"
+      }
+    }
+  },
+  {
+    "case": "row: task: not ready for that step",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "not_ready",
+        "message": "task: not ready for that step"
+      }
+    }
+  },
+  {
+    "case": "row: task: only the requester may do that",
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "forbidden",
+        "message": "only the requester can do that"
+      }
+    }
+  },
+  {
+    "case": "row: task: the coding agent is not available",
+    "status": 503,
+    "body": {
+      "error": {
+        "code": "no_dev_agent",
+        "message": "the dev coding agent is not available in this workspace"
+      }
+    }
+  },
+  {
+    "case": "row: task: this run is not bound to a coding task",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "not_task_run",
+        "message": "this run is not bound to a coding task"
+      }
+    }
+  },
+  {
+    "case": "row: auth: invalid credentials",
+    "status": 401,
+    "body": {
+      "error": {
+        "code": "invalid_credentials",
+        "message": "invalid email or password"
+      }
+    }
+  },
+  {
+    "case": "row: auth: session is no longer valid",
+    "status": 401,
+    "body": {
+      "error": {
+        "code": "session_invalid",
+        "message": "session expired, sign in again"
+      }
+    }
+  },
+  {
+    "case": "row: auth: this account is deactivated",
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "sign_in_refused",
+        "message": "this account is deactivated"
+      }
+    }
+  },
+  {
+    "case": "row: auth: this sign-in does not match the account's identity",
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "sign_in_refused",
+        "message": "this sign-in does not match the account's identity"
+      }
+    }
+  },
+  {
+    "case": "row: auth: the identity provider has not verified this email address",
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "sign_in_refused",
+        "message": "the identity provider has not verified this email address"
+      }
+    }
+  },
+  {
+    "case": "row: auth: this email domain may not sign in",
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "sign_in_refused",
+        "message": "this email domain may not sign in"
+      }
+    }
+  },
+  {
+    "case": "row: auth: desktop auth code expired or invalid",
+    "status": 401,
+    "body": {
+      "error": {
+        "code": "desktop_auth_error",
+        "message": "this sign-in link is invalid or has expired"
+      }
+    }
+  },
+  {
+    "case": "row: auth: only admins can invite: forbidden",
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "forbidden",
+        "message": "only admins can invite"
+      }
+    }
+  },
+  {
+    "case": "row: auth: this invite is invalid or has expired",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "invite_error",
+        "message": "this invite is invalid or has expired"
+      }
+    }
+  },
+  {
+    "case": "row: auth: an account with this email already exists",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "invite_error",
+        "message": "an account with this email already exists"
+      }
+    }
+  },
+  {
+    "case": "row: auth: display name must be 1-80 characters",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "invite_error",
+        "message": "display name must be 1-80 characters"
+      }
+    }
+  },
+  {
+    "case": "row: auth: password must be at least 8 characters",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "invalid_password",
+        "message": "password must be at least 8 characters"
+      }
+    }
+  },
+  {
+    "case": "row: auth: this password reset link is invalid or has expired",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "invalid_token",
+        "message": "auth: this password reset link is invalid or has expired"
+      }
+    }
+  },
+  {
+    "case": "row: auth: password reset is only available for guest accounts; SSO users sign in through the identity provider",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "sso_account",
+        "message": "auth: password reset is only available for guest accounts; SSO users sign in through the identity provider"
+      }
+    }
+  },
+  {
+    "case": "row: auth: password reset is not available",
+    "status": 503,
+    "body": {
+      "error": {
+        "code": "reset_unavailable",
+        "message": "auth: password reset is not available"
+      }
+    }
+  },
+  {
+    "case": "row: not found",
+    "status": 404,
+    "body": {
+      "error": {
+        "code": "not_found",
+        "message": "not found"
+      }
+    }
+  },
+  {
+    "case": "row: already exists",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "already_exists",
+        "message": "already exists"
+      }
+    }
+  },
+  {
+    "case": "row: conflict",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "conflict",
+        "message": "conflict"
+      }
+    }
+  },
+  {
+    "case": "row: invalid input",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "bad_request",
+        "message": "invalid input"
+      }
+    }
+  },
+  {
+    "case": "row: forbidden",
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "forbidden",
+        "message": "no access"
+      }
+    }
+  }
+]

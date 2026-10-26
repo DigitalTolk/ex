@@ -1,74 +1,25 @@
-import { useState, useRef, useCallback, useImperativeHandle, useMemo, forwardRef, type ReactNode } from 'react';
-import {
-  Send,
-  Paperclip,
-  Bold,
-  Italic,
-  Strikethrough,
-  Code,
-  Quote,
-  List,
-  ListOrdered,
-  Link as LinkIcon,
-  Smile,
-  X,
-  Save,
-  Loader2,
-  Clock,
-} from 'lucide-react';
-import { Link } from 'react-router-dom';
-import { ScheduleSendMenu } from '@/components/chat/ScheduleSendMenu';
+import { useRef, useCallback, useImperativeHandle, forwardRef, type ReactNode } from 'react';
+import { Send, Loader2 } from 'lucide-react';
 import { useEventCallback } from '@/hooks/useEventCallback';
-import { useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { EmojiPicker } from '@/components/EmojiPicker';
-import { GiphyPicker, type PickedGIF } from '@/components/GiphyPicker';
-import { useWorkspaceSettings } from '@/hooks/useSettings';
-import { useCommands, useRunCommand } from '@/hooks/useCommands';
 import { AttachmentChip, type DraftAttachment } from '@/components/chat/AttachmentChip';
-import { uploadAttachment, useDeleteDraftAttachment } from '@/hooks/useAttachments';
-import { isImageAttachment } from '@/lib/file-helpers';
-import { MarkdownComposer, type WysiwygEditorHandle, type ActiveFormat } from '@/components/chat/markdown/MarkdownComposer';
-import { sendWS } from '@/lib/ws-sender';
-import {
-  MAX_ATTACHMENTS_PER_MESSAGE,
-  MAX_MESSAGE_BODY_CHARS,
-  countCodepoints,
-} from '@/lib/limits';
-import { normalizeEmojiInBody } from '@/lib/emoji-shortcodes';
-import { isHttpUrl } from '@/lib/utils';
-import { dispatchEditMessage, onFocusComposer } from '@/lib/window-events';
+import { MarkdownComposer, type WysiwygEditorHandle } from '@/components/chat/markdown/MarkdownComposer';
+import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_MESSAGE_BODY_CHARS } from '@/lib/limits';
+import { dispatchEditMessage } from '@/lib/window-events';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useAutoFocusTextInput, useSubmitOnEnter } from '@/hooks/useHardwareKeyboard';
-import { ApiError } from '@/lib/api';
-
-const TYPING_PING_INTERVAL_MS = 3000;
-
-// commandDenialMessage extracts a server-authored, user-facing denial from a
-// failed slash-command run (the backend marks those with a structured error
-// message, e.g. "guests can't start Teams meetings"). Anything else — network
-// failures, generic 500s — returns null and the caller shows the retry text.
-function commandDenialMessage(err: unknown): string | null {
-  if (!(err instanceof ApiError)) return null;
-  const payload = err.payload as { error?: { message?: unknown } } | undefined;
-  const message = payload?.error?.message;
-  return typeof message === 'string' && message !== '' ? message : null;
-}
-
-// How long a composer must have been hidden before, on waking, it drops its
-// "the user edited this" claim and defers to the server's draft state. Long
-// enough that a quick alt-tab never clobbers live typing; short enough that a
-// laptop reopened after a meeting shows the truth, not a stale buffer.
-const WAKE_DEFERS_TO_SERVER_MS = 60_000;
+import { ComposerToolbar } from './ComposerToolbar';
+import { ComposerLinkDialog } from './ComposerLinkDialog';
+import { useCancelOnOutsidePointer } from './useCancelOnOutsidePointer';
+import { useComposerDraft } from './useComposerDraft';
+import { useComposerExpansion } from './useComposerExpansion';
+import { useComposerFocus } from './useComposerFocus';
+import { useComposerSubmit } from './useComposerSubmit';
+import { useComposerToolbarState } from './useComposerToolbarState';
+import { useComposerUploads } from './useComposerUploads';
+import { useLinkDialog } from './useLinkDialog';
+import { useSlashCommands } from './useSlashCommands';
+import { useTypingPing } from './useTypingPing';
 
 export interface MessageInputValue {
   body: string;
@@ -163,178 +114,81 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   hideCodeButton,
   aboveInput,
 }, ref) {
-  const [body, setBody] = useState(initialBody);
-  const [drafts, setDrafts] = useState<DraftAttachment[]>(initialDrafts);
-  const [isUploading, setIsUploading] = useState(false);
-  const [editorFocused, setEditorFocused] = useState(false);
-  const [toolbarPickerOpen, setToolbarPickerOpen] = useState(false);
-  const [uploadError, setUploadError] = useState('');
   const editorRef = useRef<WysiwygEditorHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const lastTypingPingRef = useRef(0);
-  const deleteDraft = useDeleteDraftAttachment();
-  const mountedDraftChangeRef = useRef(false);
-  const locallyEditedDraftRef = useRef(false);
-  const applyingServerDraftRef = useRef(false);
-  const focusKeyMountedRef = useRef(false);
-  const latestDraftValueRef = useRef<MessageInputValue>({
-    body: initialBody,
-    attachmentIDs: initialDrafts.map((d) => d.id),
-  });
-  const hasInitialDraftValueRef = useRef(false);
-  const scopedDraftChangeRef = useRef(onDraftChange);
-  const activeDraftFocusKeyRef = useRef(focusKey);
-  // Toolbar pressed-state tracking. Driven by Lexical's
-  // registerUpdateListener so a toolbar click flips the pressed state
-  // immediately — selectionchange only fires when the caret moves and
-  // would lag behind format toggles by one keystroke.
-  const [active, setActive] = useState<Set<ActiveFormat>>(new Set());
-  useEffect(() => {
-    // The editor publishes a fresh Set on every keystroke; keep the previous
-    // one while the formats are the same, so the memoized toolbar holds.
-    return editorRef.current?.subscribeActiveFormats?.((next) =>
-      setActive((prev) => (sameFormats(prev, next) ? prev : next)),
-    );
-  }, []);
-  const { data: settings } = useWorkspaceSettings();
+  const { activeFormats, giphyAPIKey, giphyEnabled } = useComposerToolbarState(editorRef);
   const isMobile = useIsMobile();
   const submitOnEnter = useSubmitOnEnter();
   const autoFocusTextInput = useAutoFocusTextInput();
-  // Slash commands run only from a main chat composer: an edit box rewrites an
-  // existing message and a thread reply box targets a thread — neither is a
-  // place to start a meeting from.
-  const commandTarget = useMemo(
-    () =>
-      variant === 'composer' && submitLabel === undefined && onCancel === undefined &&
-      typingThreadRootID === undefined && typingParentID && typingParentType
-        ? { parentID: typingParentID, parentType: typingParentType }
-        : undefined,
-    [variant, submitLabel, onCancel, typingThreadRootID, typingParentID, typingParentType],
-  );
-  const { data: commands = [] } = useCommands(commandTarget !== undefined);
-  const { mutate: runCommand } = useRunCommand();
-  const [commandError, setCommandError] = useState('');
-  // Name of the slash command currently executing server-side. Commands like
-  // /mstmeetings take a few seconds (a Graph round-trip) before their result
-  // message lands over the WebSocket — this drives a "Running /x…" status so
-  // the composer never looks like it swallowed the command.
-  const [pendingCommand, setPendingCommand] = useState('');
-  const slashCommandsProvider = useCallback(() => commands, [commands]);
-  /* istanbul ignore next -- the `?? ''` fallback only applies when settings.giphyAPIKey is undefined, but the settings object always carries the field; defensive. */
-  const giphyAPIKey = settings?.giphyAPIKey?.trim() ?? '';
-  /* istanbul ignore next -- the `?? false` fallback only applies when settings.giphyEnabled is undefined, but the settings object always carries the flag; defensive. */
-  const giphyEnabled = (settings?.giphyEnabled ?? false) && giphyAPIKey !== '';
   const isEditingMode = submitLabel !== undefined || onCancel !== undefined;
-
-  const hasInitialDraftValue = initialBody !== '' || initialDrafts.length > 0;
   const suppressAutoFocus = !autoFocusTextInput && variant === 'composer';
-  const hasComposerContent = body.trim() !== '' || drafts.length > 0;
-  const compactMobileComposer =
-    variant === 'composer' && !editorFocused && !hasComposerContent;
-  const showToolbar =
-    variant !== 'composer' ||
-    !isMobile ||
-    editorFocused ||
-    toolbarPickerOpen ||
-    isEditingMode ||
-    hasComposerContent;
-  const showToolbarSend = showToolbar && !isEditingMode && (!isMobile || variant === 'composer');
-  // Phone: the toolbar's reveal box is always there so it can grow open, but
-  // the toolbar itself (a dozen buttons and pickers) is not built until the
-  // first focus. An idle composer then costs nothing to re-render; after
-  // that first open it stays mounted so closing and reopening still slide.
-  // (Adjusted during render, the way React derives state from a prop
-  // change: it only ever flips to true, once.)
-  const [toolbarEverShown, setToolbarEverShown] = useState(false);
-  if (showToolbar && !toolbarEverShown) setToolbarEverShown(true);
 
-  useEffect(() => {
-    // No client timestamp rides along anymore: the server orders saves vs
-    // sends by generation tokens, so a delayed flush can never out-rank a
-    // later clear no matter what clock it carries.
-    latestDraftValueRef.current = { body, attachmentIDs: drafts.map((d) => d.id) };
-  }, [body, drafts]);
-
-  useEffect(() => {
-    if (!cancelOnOutsidePointer || !isMobile || !isEditingMode || !onCancel) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      const root = rootRef.current;
-      /* istanbul ignore next -- the pointerdown listener is only attached while the composer is mounted, so rootRef.current is always present; defensive. */
-      if (!root) return;
-      if (event.target instanceof Node && root.contains(event.target)) return;
-      onCancel();
-    };
-    document.addEventListener('pointerdown', handlePointerDown);
-    return () => document.removeEventListener('pointerdown', handlePointerDown);
-  }, [cancelOnOutsidePointer, isMobile, isEditingMode, onCancel]);
-
-  useEffect(() => {
-    hasInitialDraftValueRef.current = hasInitialDraftValue;
-  }, [hasInitialDraftValue]);
-
-  useEffect(() => {
-    if (focusKey !== undefined && activeDraftFocusKeyRef.current !== focusKey) return;
-    scopedDraftChangeRef.current = onDraftChange;
-  }, [focusKey, onDraftChange]);
-
-  const flushDraft = useCallback((options?: { keepalive?: boolean }) => {
-    if (variant !== 'composer') return;
-    const value = latestDraftValueRef.current;
-    const shouldFlush =
-      value.body !== '' ||
-      value.attachmentIDs.length > 0 ||
-      hasInitialDraftValueRef.current ||
-      mountedDraftChangeRef.current;
-    if (!shouldFlush) return;
-    // A flush means the composer lost focus / is going away — this is the
-    // moment the draft should surface in the sidebar, so notify.
-    scopedDraftChangeRef.current?.(value, { notify: true, keepalive: options?.keepalive });
-  }, [variant]);
-
-  // Link dialog state. Opening the dialog calls editor.beginLinkEdit
-  // which captures the current selection (Lexical loses selection when
-  // focus moves to the modal), so the eventual commit can apply the
-  // link to the right text.
-  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
-  const [linkUrl, setLinkUrl] = useState('');
-  const [linkText, setLinkText] = useState('');
-  const openLinkDialog = useCallback(() => {
-    /* istanbul ignore next -- editorRef is wired to the mounted WysiwygEditor before the toolbar's Link button can be clicked, so beginLinkEdit is always defined; the `?? { selectedText: '' }` fallback is defensive. */
-    const { selectedText } = editorRef.current?.beginLinkEdit?.() ?? { selectedText: '' };
-    setLinkText(selectedText);
-    setLinkUrl('');
-    setLinkDialogOpen(true);
-  }, []);
-  const submitLinkDialog = useCallback(() => {
-    const url = linkUrl.trim();
-    // isHttpUrl is the same gate PasteLinkPlugin uses — blocks
-    // javascript:/data:/vbscript: schemes regardless of what the
-    // browser's <input type="url"> accepts.
-    if (!isHttpUrl(url)) return;
-    const text = linkText.trim() || url;
-    editorRef.current?.commitLinkEdit?.(url, text);
-    setLinkDialogOpen(false);
-    queueMicrotask(() => editorRef.current?.focus());
-  }, [linkUrl, linkText]);
-
-  // Throttled typing emit. Other clients show "<user> is typing" for 5s
-  // after the most recent ping; we re-ping every 3s while the user is
-  // still composing. We deliberately don't ping on every keystroke —
-  // that would flood the WebSocket on long messages.
-  const emitTyping = useCallback(() => {
-    if (!typingParentID || !typingParentType) return;
-    const now = Date.now();
-    if (now - lastTypingPingRef.current < TYPING_PING_INTERVAL_MS) return;
-    lastTypingPingRef.current = now;
-    const frame: Record<string, string> = {
-      type: 'typing',
-      parentID: typingParentID,
-      parentType: typingParentType,
-    };
-    if (typingThreadRootID) frame.parentMessageID = typingThreadRootID;
-    sendWS(frame);
-  }, [typingParentID, typingParentType, typingThreadRootID]);
+  const { body, drafts, setDrafts, handleEditorChange, markLocallyEdited, clearDraft } = useComposerDraft({
+    editorRef,
+    variant,
+    focusKey,
+    initialBody,
+    initialDrafts,
+    onDraftChange,
+    suppressAutoFocus,
+  });
+  const { isUploading, uploadError, uploadFiles, handleFileUpload, removeDraft } = useComposerUploads({
+    drafts,
+    setDrafts,
+    markLocallyEdited,
+  });
+  const {
+    editorFocused,
+    setEditorFocused,
+    compactMobileComposer,
+    showToolbar,
+    showToolbarSend,
+    toolbarEverShown,
+    collapseMobileComposer,
+    handleToolbarPickerOpenChange,
+  } = useComposerExpansion({
+    editorRef,
+    isMobile,
+    variant,
+    isEditingMode,
+    hasContent: body.trim() !== '' || drafts.length > 0,
+  });
+  useComposerFocus({
+    editorRef,
+    variant,
+    editorFocused,
+    focusKey,
+    suppressAutoFocus,
+    typingParentID,
+    typingThreadRootID,
+  });
+  useCancelOnOutsidePointer(rootRef, !!cancelOnOutsidePointer && isMobile && isEditingMode, onCancel);
+  const { slashCommands, commandError, pendingCommand, submitCommand } = useSlashCommands({
+    variant,
+    submitLabel,
+    onCancel,
+    typingParentID,
+    typingParentType,
+    typingThreadRootID,
+  });
+  const emitTyping = useTypingPing(typingParentID, typingParentType, typingThreadRootID);
+  const linkDialog = useLinkDialog(editorRef);
+  const { canSend, bodyCodepoints, bodyOverLimit, attachmentsOverLimit, handleSend, handleSchedule } = useComposerSubmit({
+    editorRef,
+    body,
+    drafts,
+    disabled,
+    isUploading,
+    variant,
+    isMobile,
+    submitLabel,
+    onSend,
+    onSchedule,
+    submitCommand,
+    clearDraft,
+    collapseMobileComposer,
+  });
 
   // ArrowUp in an empty composer asks the surrounding list to put the
   // user's most recent loaded message into edit mode (Slack/iMessage
@@ -346,441 +200,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     return true;
   }, [lastOwnMessageId, initialBody]);
 
-  // Codepoint cap mirrors the backend rule: the user pastes "🚀🚀🚀…",
-  // each emoji is one user-visible char, and we count it as one — not
-  // as four bytes or two UTF-16 units.
-  const bodyCodepoints = countCodepoints(body);
-  const bodyOverLimit = bodyCodepoints > MAX_MESSAGE_BODY_CHARS;
-  const attachmentsOverLimit = drafts.length > MAX_ATTACHMENTS_PER_MESSAGE;
-
-  const sendable = useCallback(
-    (text: string) =>
-      (text.trim() !== '' || drafts.length > 0) &&
-      !disabled &&
-      !isUploading &&
-      countCodepoints(text) <= MAX_MESSAGE_BODY_CHARS &&
-      !attachmentsOverLimit,
-    [drafts.length, disabled, isUploading, attachmentsOverLimit],
-  );
-  const canSend = sendable(body);
-  // What the editor holds now, for sending. `body` is the last render's copy:
-  // the re-render a keystroke schedules can still be pending when Enter or a
-  // tap on Send arrives (a busy browser handles input first), and sending it
-  // dropped the last characters typed — or made a Save see a changed edit as
-  // unchanged and close without saving it.
-  const currentBody = useCallback(() => editorRef.current?.getMarkdown() ?? body, [body]);
-
-  const collapseMobileComposer = useCallback(() => {
-    setToolbarPickerOpen(false);
-    setEditorFocused(false);
-    const blurComposer = () => {
-      editorRef.current?.blur();
-      const active = document.activeElement;
-      /* istanbul ignore next -- document.activeElement is the focused contenteditable (an HTMLElement) or <body>; the non-HTMLElement false arm is not reachable from a test. */
-      if (active instanceof HTMLElement) active.blur();
-    };
-    blurComposer();
-    requestAnimationFrame(blurComposer);
-  }, []);
-
-  // clearAfterSubmit empties the composer once its message has gone (sent or
-  // scheduled) — the chips' files now belong to that message, so they are
-  // released locally, never deleted.
-  const clearAfterSubmit = useCallback(() => {
-    drafts.forEach((d) => d.localURL && URL.revokeObjectURL(d.localURL));
-    // The local-edit claim blocks the mirror from rehydrating the just-sent
-    // server draft props while the send's cache patch catches up.
-    locallyEditedDraftRef.current = true;
-    setBody('');
-    setDrafts([]);
-    editorRef.current?.setMarkdown('');
-    if (isMobile || submitLabel) {
-      collapseMobileComposer();
-      return;
-    }
-    queueMicrotask(() => editorRef.current?.focus());
-  }, [drafts, isMobile, submitLabel, collapseMobileComposer]);
-
-  const handleSend = useCallback(() => {
-    const text = currentBody();
-    if (!sendable(text)) return;
-    const trimmed = text.trim();
-    // A message that is exactly a registered slash command (no attachments)
-    // executes instead of posting; anything else — including unknown
-    // "/words" — sends as a normal message.
-    const commandName = (() => {
-      if (!commandTarget || drafts.length > 0) return null;
-      const name = /^\/([\w-]+)$/.exec(trimmed)?.[1]?.toLowerCase();
-      return name && commands.some((c) => c.name === name) ? name : null;
-    })();
-    // While a command is in flight, swallow a re-submitted command (double
-    // Enter must not start two meetings) — the status line is already up.
-    // Normal messages still send.
-    if (commandName && pendingCommand) return;
-    setCommandError('');
-    if (commandName) {
-      setPendingCommand(commandName);
-      runCommand(
-        { command: commandName, parentType: commandTarget!.parentType, parentID: commandTarget!.parentID },
-        {
-          onSettled: () => setPendingCommand(''),
-          onError: (err) =>
-            setCommandError(
-              commandDenialMessage(err) ?? `Couldn't run /${commandName} — please try again.`,
-            ),
-        },
-      );
-    } else {
-      onSend({ body: normalizeEmojiInBody(trimmed), attachmentIDs: drafts.map((d) => d.id) });
-    }
-    if (variant === 'inline') return; // parent unmounts the inline edit
-    clearAfterSubmit();
-  }, [sendable, currentBody, drafts, onSend, variant, commandTarget, commands, runCommand, pendingCommand, clearAfterSubmit]);
-
-  // handleSchedule sends the composed message later. The composer clears only
-  // once it's scheduled, so a failure keeps the text.
-  const handleSchedule = useCallback(async (sendAt: Date) => {
-    const text = currentBody();
-    /* istanbul ignore next -- the schedule menu only renders with onSchedule and is disabled while !canSend; defensive */
-    if (!sendable(text) || !onSchedule) return;
-    await onSchedule({ body: normalizeEmojiInBody(text.trim()), attachmentIDs: drafts.map((d) => d.id) }, sendAt);
-    clearAfterSubmit();
-  }, [sendable, currentBody, onSchedule, drafts, clearAfterSubmit]);
-
-
-  useEffect(() => {
-    if (variant !== 'composer') return;
-    if (focusKey === undefined) return;
-    if (focusKeyMountedRef.current) {
-      flushDraft();
-    } else {
-      focusKeyMountedRef.current = true;
-    }
-    scopedDraftChangeRef.current = onDraftChange;
-    activeDraftFocusKeyRef.current = focusKey;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setBody(initialBody);
-    applyingServerDraftRef.current = true;
-    editorRef.current?.setMarkdown(initialBody);
-    queueMicrotask(() => {
-      applyingServerDraftRef.current = false;
-      if (!suppressAutoFocus && (initialBody || initialDrafts.length > 0)) {
-        editorRef.current?.focusEnd?.();
-      }
-    });
-    setDrafts(initialDrafts);
-    locallyEditedDraftRef.current = false;
-    mountedDraftChangeRef.current = false;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusKey, flushDraft]);
-
-  // Mirror the scope's server draft into the buffer whenever they disagree
-  // and the user isn't editing — the server owns draft state; the composer
-  // merely displays it until the user takes over (typing sets the local-edit
-  // claim, which a scope switch or a long sleep resets). Crucially this
-  // INCLUDES emptiness: a draft cleared or sent on another device empties
-  // this composer too, instead of leaving a zombie buffer that re-offers
-  // long-deleted content and re-saves it on its next flush.
-  useEffect(() => {
-    if (variant !== 'composer') return;
-    if (locallyEditedDraftRef.current) return;
-    // Already in sync (the common case: our own flush round-tripped through
-    // the cache) — leave the editor alone; rewriting content moves the caret.
-    if (
-      initialBody === body &&
-      initialDrafts.length === drafts.length &&
-      initialDrafts.every((d, i) => d.id === drafts[i].id)
-    ) {
-      return;
-    }
-    // Focus only for the classic late-hydration case (a draft arriving into
-    // an EMPTY composer right after opening the scope) — a background
-    // refresh replacing existing content must never steal focus.
-    const bufferWasEmpty = body === '' && drafts.length === 0;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setBody(initialBody);
-    applyingServerDraftRef.current = true;
-    editorRef.current?.setMarkdown(initialBody);
-    queueMicrotask(() => {
-      applyingServerDraftRef.current = false;
-      if (!suppressAutoFocus && focusKey !== undefined && bufferWasEmpty && (initialBody !== '' || initialDrafts.length > 0)) {
-        editorRef.current?.focusEnd?.();
-      }
-    });
-    setDrafts(initialDrafts);
-    mountedDraftChangeRef.current = false;
-  }, [initialBody, initialDrafts, body, drafts, focusKey, variant, suppressAutoFocus]);
-
-  useEffect(() => {
-    if (!scopedDraftChangeRef.current || variant !== 'composer') return;
-    if (!mountedDraftChangeRef.current) {
-      mountedDraftChangeRef.current = true;
-      return;
-    }
-    const timeout = window.setTimeout(() => {
-      scopedDraftChangeRef.current?.(latestDraftValueRef.current);
-    }, 600);
-    return () => window.clearTimeout(timeout);
-  }, [body, drafts, focusKey, variant]);
-
-  useEffect(() => {
-    return () => {
-      flushDraft();
-      drafts.forEach((d) => d.localURL && URL.revokeObjectURL(d.localURL));
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flushDraft]);
-
-  // Track focus state in a ref so visibility-change snapshot logic
-  // survives effect re-runs without re-binding listeners.
-  const editorFocusedRef = useRef(false);
-  useEffect(() => {
-    editorFocusedRef.current = editorFocused;
-  }, [editorFocused]);
-  const wasFocusedOnHideRef = useRef(false);
-  const hiddenAtRef = useRef(0);
-
-  useEffect(() => {
-    if (variant !== 'composer') return;
-    // Snapshot whether the editor was focused at hide-time. iOS keeps
-    // the on-screen keyboard up across app switches, but the
-    // contenteditable loses focus, so the composer no longer scrolls
-    // into view. On visibilitychange→visible, restore focus so the
-    // viewport snaps back to the input under the live keyboard.
-    const handleVisibility = () => {
-      if (document.visibilityState === 'hidden') {
-        wasFocusedOnHideRef.current = editorFocusedRef.current;
-        hiddenAtRef.current = Date.now();
-        flushDraft();
-        return;
-      }
-      // Anything else is a wake — browsers only report hidden/visible here.
-      // A composer waking from a LONG sleep (suspended tab, pocketed phone)
-      // defers to the server: whatever it was showing may have been edited,
-      // sent, or cleared elsewhere days ago, so its "the user edited this"
-      // claim has expired — let the mirror effect re-apply the server truth
-      // (its content was already flushed at hide-time). Short blurs
-      // (alt-tab) keep the claim so live typing is never clobbered by a
-      // stale refetch racing the hide-flush.
-      if (hiddenAtRef.current !== 0 && Date.now() - hiddenAtRef.current >= WAKE_DEFERS_TO_SERVER_MS) {
-        locallyEditedDraftRef.current = false;
-      }
-      hiddenAtRef.current = 0;
-      if (wasFocusedOnHideRef.current) {
-        wasFocusedOnHideRef.current = false;
-        queueMicrotask(() => editorRef.current?.focus());
-      }
-    };
-    const handleWindowBlur = () => flushDraft();
-    // The page is being torn down: the flush must ride a keepalive fetch or
-    // it dies with the tab.
-    const handlePageHide = () => flushDraft({ keepalive: true });
-    window.addEventListener('blur', handleWindowBlur);
-    window.addEventListener('pagehide', handlePageHide);
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => {
-      window.removeEventListener('blur', handleWindowBlur);
-      window.removeEventListener('pagehide', handlePageHide);
-      document.removeEventListener('visibilitychange', handleVisibility);
-    };
-  }, [flushDraft, variant]);
-
-  useEffect(() => {
-    if (focusKey === undefined) return;
-    if (suppressAutoFocus) return;
-    queueMicrotask(() => {
-      editorRef.current?.focus();
-    });
-  }, [focusKey, suppressAutoFocus]);
-
-  // Refocus when an inline edit elsewhere finishes (cancel or submit).
-  // Only composers that emit typing (i.e., the main / thread composer,
-  // not the inline-edit MessageInput inside MessageItem) participate.
-  // The thread-vs-main scope is disambiguated by typingThreadRootID:
-  // a non-thread edit's event matches composers without a thread root,
-  // and vice versa.
-  useEffect(() => {
-    if (!typingParentID) return;
-    const inThreadComposer = !!typingThreadRootID;
-    return onFocusComposer((detail) => {
-      if (detail.parentID !== typingParentID) return;
-      if (detail.inThread !== inThreadComposer) return;
-      queueMicrotask(() => editorRef.current?.focus());
-    });
-  }, [typingParentID, typingThreadRootID]);
-
-  function insertEmojiShortcode(emoji: string) {
-    editorRef.current?.insertText(emoji + ' ');
-    // Refocus synchronously, inside the pick tap's gesture, so iOS reopens
-    // the keyboard. A deferred focus (rAF/microtask) loses the user-gesture
-    // context and the keyboard stays closed.
-    editorRef.current?.focus();
-  }
-
-  function insertGiphyGIF(gif: PickedGIF) {
-    // Store only GIPHY's stable content ID plus dimensions for layout.
-    // Media URLs are resolved directly from GIPHY at render time so
-    // saved messages don't cache returned media URLs.
-    /* istanbul ignore next -- insertGiphyGIF is only invoked by the GiphyPicker's onSelect; exercising the width/height ternary arms requires the full GIPHY-fetch picker integration (covered in GiphyPicker.browser.test), not reachable from MessageInput's own tests. */
-    const dims = gif.width && gif.height ? ` =${gif.width}x${gif.height}` : '';
-    editorRef.current?.insertText(`![GIPHY](giphy:${gif.id}${dims}) `);
-    // Synchronous refocus (inside the pick gesture) reopens the iOS keyboard.
-    editorRef.current?.focus();
-  }
-
-  function handleToolbarPickerOpenChange(open: boolean) {
-    setToolbarPickerOpen(open);
-    /* istanbul ignore next -- the desktop early-return is only reached by opening the toolbar EmojiPicker on desktop, which synchronously trips an unrelated React setState-in-render warning in EmojiPicker that the console-gate rejects; the mobile path (the meaningful blur/refocus logic) is covered. */
-    if (!isMobile) return;
-    if (open) {
-      editorRef.current?.blur();
-      return;
-    }
-    // Synchronous refocus, like the insert paths above: a deferred focus
-    // (rAF/microtask) loses the dismiss tap's user-gesture context and the
-    // iOS keyboard stays closed.
-    editorRef.current?.focus();
-  }
-
-  async function uploadFiles(allFiles: File[]) {
-    if (allFiles.length === 0) return;
-    // Trim to the per-message cap before uploading. Surface a friendly
-    // warning if the user tried to attach more — better UX than letting
-    // the upload finish and then 400-ing on send.
-    const remaining = Math.max(0, MAX_ATTACHMENTS_PER_MESSAGE - drafts.length);
-    const files = allFiles.slice(0, remaining);
-    if (allFiles.length > remaining) {
-      setUploadError(
-        `Up to ${MAX_ATTACHMENTS_PER_MESSAGE} attachments per message. Skipped ${
-          allFiles.length - remaining
-        }.`,
-      );
-    } else {
-      setUploadError('');
-    }
-    if (files.length === 0) return;
-    setIsUploading(true);
-    locallyEditedDraftRef.current = true;
-
-    // Render a chip for every selected file *before* any network I/O so
-    // the user sees N progress bars immediately instead of one-at-a-time
-    // as each file's SHA / presign call resolves. We track the chip by a
-    // local placeholder id, then swap to the server id when init returns.
-    const tempIDs = files.map((_, i) => `pending-${Date.now()}-${i}-${Math.random().toString(36).slice(2)}`);
-    setDrafts((prev) => [
-      ...prev,
-      ...files.map((file, i) => ({
-        id: tempIDs[i],
-        filename: file.name,
-        contentType: file.type || 'application/octet-stream',
-        size: file.size,
-        localURL: isImageAttachment(file.type, file.name) ? URL.createObjectURL(file) : undefined,
-        progress: 0,
-      })),
-    ]);
-
-    // Concurrency-capped pool. Promise.all would dispatch all uploads at
-    // once; cap at 4 so we stay polite to the upload endpoint and don't
-    // saturate upstream bandwidth on bulk drops. Per-file failures are
-    // captured (allSettled-style) so one bad file doesn't abort siblings.
-    const POOL = 4;
-    const errors: string[] = [];
-    let cursor = 0;
-    const runOne = async (idx: number) => {
-      const file = files[idx];
-      const tempID = tempIDs[idx];
-      // currentID flips from the temp id to the server-issued id once
-      // init resolves. Progress callbacks use this so they can find the
-      // chip whether or not the swap has happened yet.
-      let currentID = tempID;
-      try {
-        await uploadAttachment(file, {
-          onInit: (init) => {
-            // Swap the temp id for the real one. If the server already
-            // had the bytes (alreadyExists), progress jumps to 1.
-            currentID = init.id;
-            setDrafts((prev) =>
-              prev.map((d) => {
-                if (d.id !== tempID) return d;
-                /* istanbul ignore next -- the optimistic chip always seeds progress: 0, so `d.progress` is defined here; the `?? 0` fallback is defensive. */
-                const existingProgress = d.progress ?? 0;
-                return {
-                  ...d,
-                  id: init.id,
-                  filename: init.filename,
-                  contentType: init.contentType,
-                  size: init.size,
-                  progress: init.alreadyExists ? 1 : existingProgress,
-                };
-              }),
-            );
-          },
-          onProgress: (fraction) => {
-            // Match by the live id — temp before init, server-issued after.
-            setDrafts((prev) =>
-              prev.map((d) => (d.id === currentID ? { ...d, progress: fraction } : d)),
-            );
-          },
-        });
-      } catch (err) {
-        errors.push(err instanceof Error ? err.message : 'Upload failed');
-        // Drop the failed chip — keep siblings intact. Match by the
-        // current id, which may be the temp id (init never resolved)
-        // or the server id (init succeeded but the PUT failed).
-        setDrafts((prev) => {
-          const target = prev.find((d) => d.id === currentID);
-          if (target?.localURL) URL.revokeObjectURL(target.localURL);
-          return prev.filter((d) => d.id !== currentID);
-        });
-      }
-    };
-    const worker = async () => {
-      while (true) {
-        const i = cursor++;
-        if (i >= files.length) return;
-        await runOne(i);
-      }
-    };
-    try {
-      await Promise.all(Array.from({ length: Math.min(POOL, files.length) }, worker));
-      if (errors.length > 0) {
-        setUploadError(errors.length === 1 ? errors[0] : `${errors.length} uploads failed: ${errors[0]}`);
-      }
-    } finally {
-      setIsUploading(false);
-    }
-  }
-
-  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    /* istanbul ignore next -- a file <input> change always carries a FileList (possibly empty), never null, so the `?? []` fallback is defensive. */
-    const files = Array.from(e.target.files ?? []);
-    e.target.value = '';
-    await uploadFiles(files);
-  }
-
   useImperativeHandle(ref, () => ({ uploadFiles }));
-
-  async function removeDraft(id: string) {
-    const target = drafts.find((d) => d.id === id);
-    if (target?.localURL) URL.revokeObjectURL(target.localURL);
-    locallyEditedDraftRef.current = true;
-    setDrafts((d) => d.filter((x) => x.id !== id));
-    try {
-      await deleteDraft.mutateAsync(id);
-    } catch (err) {
-      // 409 Conflict is the only "expected" failure: the SHA is still
-      // referenced by another message that deduped against this
-      // attachment. The chip is gone from the local draft anyway, so
-      // the user-visible outcome is correct — swallow it.
-      // Anything else (network failure, 5xx, 401) is a real problem
-      // the user should see, not silently lose. Surface it via the
-      // same upload-error rail that handles failed uploads.
-      if (err instanceof ApiError && err.status === 409) return;
-      /* istanbul ignore next -- deleteDraft.mutateAsync rejects with Error instances (ApiError/Error); a non-Error rejection is not reachable, so the 'Failed to remove attachment' fallback is defensive. */
-      const message = err instanceof Error ? err.message : 'Failed to remove attachment';
-      setUploadError(message);
-    }
-  }
 
   // Stable identities for what the toolbar, editor and pickers are handed.
   // Several read state that changes on every keystroke (the text, the draft
@@ -790,268 +210,35 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   const sendNow = useEventCallback(handleSend);
   const scheduleNow = useEventCallback(handleSchedule);
   const pickerOpenChange = useEventCallback(handleToolbarPickerOpenChange);
-  const insertEmoji = useEventCallback(insertEmojiShortcode);
-  const insertGif = useEventCallback(insertGiphyGIF);
   const pasteFiles = useEventCallback(uploadFiles);
+  const attach = useCallback(() => fileInputRef.current?.click(), []);
   const editorChange = useEventCallback((md: string) => {
-    if (!applyingServerDraftRef.current && md !== body) {
-      locallyEditedDraftRef.current = true;
-    }
-    latestDraftValueRef.current = {
-      body: md,
-      attachmentIDs: drafts.map((d) => d.id),
-    };
-    setBody(md);
+    handleEditorChange(md);
     emitTyping();
   });
 
-  // Phone: the toolbar is not built until the composer is first focused
-  // (toolbarEverShown); elsewhere it shows with showToolbar.
-  const toolbarWanted = variant === 'composer' && isMobile ? toolbarEverShown : showToolbar;
-  // Memoized: it re-renders only when what it shows changes (formats, whether
-  // there is something to send, uploading), never per keystroke.
-  const toolbar = useMemo(() => {
-    if (!toolbarWanted) return null;
-    // No divider between the message field and the formatting buttons — the
-    // spec composer has the toolbar sit flush under the input, not separated
-    // by an hr/border.
-    return (
-    <div
-      className="flex items-center gap-0.5 overflow-x-auto px-2 py-1 [scrollbar-width:none]"
-      role="toolbar"
-      aria-label="Formatting"
-      data-toolbar-placement="bottom"
-      onMouseDown={(event) => {
-        /* istanbul ignore next -- the handler is bound to the toolbar element, so a mousedown that reaches it always has a target contained by currentTarget; the false arm is defensive. */
-        if (event.currentTarget.contains(event.target as Node)) event.preventDefault();
-      }}
-      onPointerDown={(event) => {
-        /* istanbul ignore next -- as above, a pointerdown reaching the toolbar handler always has a contained target; the false arm is defensive. */
-        if (event.currentTarget.contains(event.target as Node)) event.preventDefault();
-      }}
-    >
-      <ToolbarBtn label="Bold (Ctrl+B)" active={active.has('bold')} onClick={() => editorRef.current?.applyMark('bold')}><Bold className="h-3.5 w-3.5" /></ToolbarBtn>
-      <ToolbarBtn label="Italic (Ctrl+I)" active={active.has('italic')} onClick={() => editorRef.current?.applyMark('italic')}><Italic className="h-3.5 w-3.5" /></ToolbarBtn>
-      <ToolbarBtn label="Strikethrough" active={active.has('strike')} onClick={() => editorRef.current?.applyMark('strike')}><Strikethrough className="h-3.5 w-3.5" /></ToolbarBtn>
-      {!isEditingMode && !hideCodeButton && (
-        <ToolbarBtn label="Code (Ctrl+E)" active={active.has('code')} onClick={() => editorRef.current?.applyMark('code')}><Code className="h-3.5 w-3.5" /></ToolbarBtn>
-      )}
-      {!isMobile && (
-        <>
-          <ToolbarBtn label="Quote" active={active.has('quote')} onClick={() => editorRef.current?.applyBlock('quote')}><Quote className="h-3.5 w-3.5" /></ToolbarBtn>
-          <ToolbarBtn label="List" active={active.has('ul')} onClick={() => editorRef.current?.applyBlock('ul')}><List className="h-3.5 w-3.5" /></ToolbarBtn>
-          <ToolbarBtn label="Numbered list" active={active.has('ol')} onClick={() => editorRef.current?.applyBlock('ol')}><ListOrdered className="h-3.5 w-3.5" /></ToolbarBtn>
-        </>
-      )}
-      {/* DELIBERATELY desktop-only (like Quote/lists above): the mobile
-          toolbar has very little width and Link was judged the least
-          important formatting control there (Mobile fixes (7), #95). Do not
-          re-add it on mobile — [text](url) remains typeable. */}
-      {!isMobile && (
-        <ToolbarBtn label="Link" onClick={openLinkDialog}><LinkIcon className="h-3.5 w-3.5" /></ToolbarBtn>
-      )}
-      <span className="mx-1 h-4 w-px bg-border" aria-hidden />
-      <EmojiPicker
-        onSelect={insertEmoji}
-        mode="shortcode"
-        onOpenChange={pickerOpenChange}
-        trigger={
-          <ToolbarBtn label="Emoji"><Smile className="h-3.5 w-3.5" /></ToolbarBtn>
-        }
-      />
-      {giphyEnabled && (
-        <GiphyPicker
-          apiKey={giphyAPIKey}
-          onSelect={insertGif}
-          onOpenChange={pickerOpenChange}
-          trigger={
-            // The word, not a picture: no icon reads as "GIF" at this size.
-            // Sized as an icon, not as text: as tall as the icons beside it
-            // (a 12px line in a 1px border), below the 12px text floor on
-            // purpose, and no heavier than their strokes.
-            <ToolbarBtn label="GIF">
-              <span
-                className="rounded-sm border border-current px-0.5 text-[10px] font-medium leading-3"
-                aria-hidden="true"
-                data-testid="composer-gif-label"
-              >
-                GIF
-              </span>
-            </ToolbarBtn>
-          }
-        />
-      )}
-      <button
-        type="button"
-        onClick={() => fileInputRef.current?.click()}
-        disabled={isUploading}
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 mobile:h-9 mobile:w-9"
-        aria-label="Attach file"
-      >
-        <Paperclip className="h-3.5 w-3.5" />
-      </button>
-      {showToolbarSend && (
-        <>
-          <span className="ml-auto" aria-hidden />
-          {scheduledCount > 0 && (
-            // Quiet way back to what's queued here; never moves the layout.
-            <Link
-              to="/drafts?tab=scheduled"
-              className="mr-2 flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-              data-testid="composer-scheduled-link"
-            >
-              <Clock className="h-3.5 w-3.5" aria-hidden />
-              {scheduledCount} scheduled
-            </Link>
-          )}
-          {onSchedule && isMobile ? (
-            // Phone: one round Send — tap sends, press and hold for the
-            // schedule options (no ⌄ beside it).
-            // (No picker-open hook: that drops the keyboard for full-screen
-            // pickers, and this one keeps it up.)
-            <ScheduleSendMenu
-              disabled={!canSend}
-              onSchedule={scheduleNow}
-              hold={{ onSend: sendNow, label: 'Send message', children: <Send className="h-4 w-4" /> }}
-              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-opacity disabled:pointer-events-none dark:bg-brand dark:text-brand-foreground ${
-                canSend ? '' : 'opacity-40'
-              }`}
-            />
-          ) : onSchedule ? (
-            // One button, split: Send, and ⌄ to send later instead — a single
-            // shape and colour with a thin inset divider.
-            <div
-              // Nothing to send: the same colours, faded — never a lighter tint.
-              className={`flex h-7 shrink-0 items-stretch overflow-hidden rounded-md bg-foreground text-background transition-opacity dark:bg-brand dark:text-brand-foreground mobile:h-9 mobile:rounded-full ${
-                canSend ? '' : 'opacity-40'
-              }`}
-              data-testid="split-send"
-            >
-              {/* A plain button: the wrapper alone colours the control (the
-                  Button component would add its own fill to this half). */}
-              <button
-                type="button"
-                onClick={sendNow}
-                disabled={!canSend}
-                className="flex h-full w-7 items-center justify-center hover:bg-background/15 disabled:pointer-events-none mobile:w-9"
-                aria-label="Send message"
-              >
-                <Send className="h-4 w-4" />
-              </button>
-              <span aria-hidden className="my-1.5 w-px bg-current opacity-30" />
-              <ScheduleSendMenu
-                disabled={!canSend}
-                onSchedule={scheduleNow}
-                onOpenChange={pickerOpenChange}
-                className="flex h-full w-5 items-center justify-center hover:bg-background/15 disabled:pointer-events-none mobile:w-7"
-              />
-            </div>
-          ) : (
-            <Button
-              onClick={sendNow}
-              disabled={!canSend}
-              size="icon"
-              className="h-7 w-7 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover dark:disabled:bg-brand-disabled dark:disabled:text-brand-foreground mobile:h-9 mobile:w-9 mobile:rounded-full"
-              aria-label="Send message"
-            >
-              <Send className="h-4 w-4" />
-            </Button>
-          )}
-        </>
-      )}
-      {isEditingMode && (
-        <>
-          <span className="ml-auto" aria-hidden />
-          <span className="mx-1 h-4 w-px bg-border" aria-hidden />
-          {onCancel && (
-            <Button
-              onClick={onCancel}
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 rounded-md mobile:h-9 mobile:w-9"
-              aria-label="Cancel"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          )}
-          <Button
-            onClick={sendNow}
-            disabled={!canSend}
-            size="icon"
-            className="h-7 w-7 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover mobile:h-9 mobile:w-9 mobile:rounded-full"
-            aria-label={submitLabel ?? 'Send message'}
-          >
-            <Save className="h-4 w-4" />
-          </Button>
-        </>
-      )}
-    </div>
-    );
-  }, [
-    toolbarWanted, active, isEditingMode, hideCodeButton, isMobile, openLinkDialog, insertEmoji,
-    pickerOpenChange, giphyEnabled, giphyAPIKey, insertGif, isUploading, showToolbarSend, scheduledCount,
-    onSchedule, canSend, scheduleNow, sendNow, onCancel, submitLabel,
-  ]);
-
-  // The link dialog re-renders only with its own fields, not per keystroke.
-  const linkDialog = useMemo(() => (
-        <Dialog open={linkDialogOpen} onOpenChange={setLinkDialogOpen}>
-          {/* Mobile: Cancel/Insert live in the top-right header — the URL field
-              autofocuses, so a bottom footer sat behind the keyboard. */}
-          <DialogContent
-            aria-label="Insert link"
-            mobileCloseLabel="Cancel"
-            mobileAction={
-              isMobile
-                ? { label: 'Insert', onClick: submitLinkDialog, disabled: !isHttpUrl(linkUrl.trim()) }
-                : undefined
-            }
-          >
-            <DialogHeader>
-              <DialogTitle>Insert link</DialogTitle>
-            </DialogHeader>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                submitLinkDialog();
-              }}
-              className="flex flex-col gap-3"
-            >
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="link-text">Text</Label>
-                <Input
-                  id="link-text"
-                  value={linkText}
-                  onChange={(e) => setLinkText(e.target.value)}
-                  placeholder="Link text"
-                />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="link-url">URL</Label>
-                <Input
-                  id="link-url"
-                  value={linkUrl}
-                  onChange={(e) => setLinkUrl(e.target.value)}
-                  placeholder="https://example.com"
-                  autoFocus
-                  required
-                  type="url"
-                />
-              </div>
-              {!isMobile && (
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setLinkDialogOpen(false)}>
-                    Cancel
-                  </Button>
-                  <Button type="submit" disabled={!isHttpUrl(linkUrl.trim())}>
-                    Insert
-                  </Button>
-                </DialogFooter>
-              )}
-            </form>
-          </DialogContent>
-        </Dialog>
-  ), [linkDialogOpen, isMobile, submitLinkDialog, linkUrl, linkText]);
+  const toolbar = (
+    <ComposerToolbar
+      editorRef={editorRef}
+      activeFormats={activeFormats}
+      isMobile={isMobile}
+      isEditingMode={isEditingMode}
+      hideCodeButton={hideCodeButton}
+      giphyEnabled={giphyEnabled}
+      giphyAPIKey={giphyAPIKey}
+      isUploading={isUploading}
+      showSend={showToolbarSend}
+      scheduledCount={scheduledCount}
+      canSend={canSend}
+      submitLabel={submitLabel}
+      onOpenLinkDialog={linkDialog.openDialog}
+      onPickerOpenChange={pickerOpenChange}
+      onAttach={attach}
+      onSend={sendNow}
+      onSchedule={onSchedule ? scheduleNow : undefined}
+      onCancel={onCancel}
+    />
+  );
 
   return (
     <div
@@ -1178,7 +365,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             // @-mention typeahead. Only a channel composer has a channel
             // roster; DMs (and the typing-less edit box) pass nothing.
             mentionChannelId={typingParentType === 'channel' ? typingParentID : undefined}
-            slashCommands={commandTarget ? slashCommandsProvider : undefined}
+            slashCommands={slashCommands}
             className="flex-1"
             editorClassName={
               compactMobileComposer
@@ -1219,10 +406,10 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               inert={showToolbar ? undefined : true}
               data-testid="composer-toolbar-reveal"
             >
-              <div className="min-h-0 overflow-hidden">{toolbar}</div>
+              <div className="min-h-0 overflow-hidden">{toolbarEverShown && toolbar}</div>
             </div>
           ) : (
-            toolbar
+            showToolbar && toolbar
           )}
         </div>
       </div>
@@ -1234,40 +421,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
         onChange={handleFileUpload}
         aria-label="File input"
       />
-      {linkDialog}
+      <ComposerLinkDialog dialog={linkDialog} isMobile={isMobile} />
     </div>
   );
 });
-
-function sameFormats(a: Set<ActiveFormat>, b: Set<ActiveFormat>): boolean {
-  if (a.size !== b.size) return false;
-  for (const f of a) if (!b.has(f)) return false;
-  return true;
-}
-
-function ToolbarBtn({
-  label,
-  onClick,
-  children,
-  active,
-}: {
-  label: string;
-  onClick?: () => void;
-  children: React.ReactNode;
-  active?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={label}
-      aria-label={label}
-      aria-pressed={active ? 'true' : undefined}
-      className={`flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted mobile:h-9 mobile:w-9 mobile:shrink-0 ${
-        active ? 'bg-muted text-foreground' : 'text-muted-foreground'
-      }`}
-    >
-      {children}
-    </button>
-  );
-}

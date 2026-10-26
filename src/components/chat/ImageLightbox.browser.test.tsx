@@ -429,6 +429,25 @@ describe('ImageLightbox browser behavior', () => {
     expect(onIndexChange).toHaveBeenLastCalledWith(1);
   });
 
+  it('leaves modified arrows (Alt+← is Back) and handled ones alone', async () => {
+    const onIndexChange = vi.fn();
+    await render(lightbox({ images: twoImages, index: 0, onIndexChange }));
+    for (const mod of ['altKey', 'metaKey', 'ctrlKey'] as const) {
+      for (const key of ['ArrowLeft', 'ArrowRight']) {
+        const e = new KeyboardEvent('keydown', { key, [mod]: true, bubbles: true, cancelable: true });
+        document.dispatchEvent(e);
+        expect(e.defaultPrevented).toBe(false);
+      }
+    }
+    const handled = new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true });
+    handled.preventDefault();
+    document.dispatchEvent(handled);
+    expect(onIndexChange).not.toHaveBeenCalled();
+    // A bare arrow still turns the page.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    expect(onIndexChange).toHaveBeenLastCalledWith(1);
+  });
+
   it('navigates via the previous/next chevron buttons', async () => {
     const onIndexChange = vi.fn();
     const screen = await render(lightbox({ images: twoImages, index: 0, onIndexChange }));

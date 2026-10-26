@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
@@ -44,6 +45,26 @@ type ChannelService struct {
 	conversions ConversationConverter
 	// convertedDrafts moves a converted group's drafts to its channel.
 	convertedDrafts ConversationDraftMover
+	// audience is told about every membership/mute/preference write so the
+	// notification audience cache on every instance reloads the channel.
+	audience AudienceInvalidator
+}
+
+// SetAudienceInvalidator wires the notification audience cache's invalidation
+// into every channel-audience write. Optional — unwired, nothing is cached
+// against these writes to begin with.
+func (s *ChannelService) SetAudienceInvalidator(a AudienceInvalidator) { s.audience = a }
+
+// audienceWritten runs after a membership, role, mute or per-channel
+// preference write on channelID (err is that write's result, passed through):
+// it moves the channel's audience generation on, synchronously, so no
+// instance alerts from a member list that predates the write. It runs even
+// for a failed write, which may still have committed.
+func (s *ChannelService) audienceWritten(ctx context.Context, channelID string, err error) error {
+	if s.audience != nil {
+		s.audience.ChannelAudienceChanged(ctx, channelID)
+	}
+	return err
 }
 
 // ChannelActivityRecorder keeps the Activity tab in step with channel
@@ -106,7 +127,7 @@ func (s *ChannelService) indexChannel(ctx context.Context, ch *model.Channel) {
 		return
 	}
 	if err := s.indexer.IndexChannel(ctx, ch); err != nil {
-		slog.Warn("search index channel failed", "id", ch.ID, "error", err)
+		slog.WarnContext(ctx, "search index channel failed", "id", ch.ID, "error", err)
 	}
 }
 
@@ -177,7 +198,7 @@ func (s *ChannelService) addMemberWithEvents(ctx context.Context, ch *model.Chan
 		// pre-join history as unread.
 		LastReadSeq: ch.MessageSeq,
 	}
-	if err := s.memberships.AddMember(ctx, membership, uc); err != nil {
+	if err := s.audienceWritten(ctx, membership.ChannelID, s.memberships.AddMember(ctx, membership, uc)); err != nil {
 		return fmt.Errorf("channel: add member: %w", err)
 	}
 
@@ -236,7 +257,7 @@ func (s *ChannelService) createChannel(ctx context.Context, userID, id, name str
 	if s.users != nil {
 		if u, err := s.users.GetUser(ctx, userID); err == nil && u != nil {
 			if u.SystemRole == model.SystemRoleGuest {
-				return nil, errors.New("channel: guests cannot create channels")
+				return nil, apperr.Forbidden("channel: guests cannot create channels")
 			}
 		}
 	}
@@ -254,7 +275,7 @@ func (s *ChannelService) createChannel(ctx context.Context, userID, id, name str
 	// TransactWriteItems with a slug-lock item, which surfaces
 	// ErrAlreadyExists if a concurrent create wins. We map both to
 	// the same user-facing message.
-	slug := slugify(name)
+	slug := Slugify(name)
 	if existing, err := s.channels.GetChannelBySlug(ctx, slug); err == nil && existing != nil {
 		return nil, fmt.Errorf("channel: a channel with this name already exists: %w", ErrAlreadyExists)
 	}
@@ -293,7 +314,7 @@ func (s *ChannelService) createChannel(ctx context.Context, userID, id, name str
 		Role:        model.ChannelRoleOwner,
 		JoinedAt:    now,
 	}
-	if err := s.memberships.AddMember(ctx, membership, uc); err != nil {
+	if err := s.audienceWritten(ctx, membership.ChannelID, s.memberships.AddMember(ctx, membership, uc)); err != nil {
 		return nil, fmt.Errorf("channel: add owner: %w", err)
 	}
 
@@ -390,7 +411,7 @@ func (s *ChannelService) Update(ctx context.Context, actorID, channelID string, 
 // channel cannot be archived.
 func (s *ChannelService) Archive(ctx context.Context, actorID, channelID string) error {
 	if channelID == generalChannelID {
-		return errors.New("channel: cannot archive the general channel")
+		return apperr.Forbidden("channel: cannot archive the general channel")
 	}
 	return s.setArchived(ctx, actorID, channelID, true, events.EventChannelArchived)
 }
@@ -427,7 +448,7 @@ func (s *ChannelService) setArchived(ctx context.Context, actorID, channelID str
 	if err != nil {
 		// The flag is already stored; open views still hear it on the channel
 		// topic, and every sidebar re-reads it on its next refetch.
-		slog.Warn("channel archive: list members failed", "channelID", channelID, "error", err)
+		slog.WarnContext(ctx, "channel archive: list members failed", "channelID", channelID, "error", err)
 	}
 	for _, m := range members {
 		topics = append(topics, pubsub.UserChannel(m.UserID))
@@ -445,7 +466,7 @@ func (s *ChannelService) Join(ctx context.Context, userID, channelID string) err
 		return fmt.Errorf("channel: get: %w", err)
 	}
 	if ch.Type != model.ChannelTypePublic {
-		return errors.New("channel: can only self-join public channels")
+		return apperr.Forbidden("channel: can only self-join public channels")
 	}
 	if ch.Archived {
 		return ErrChannelArchived
@@ -453,7 +474,7 @@ func (s *ChannelService) Join(ctx context.Context, userID, channelID string) err
 	if s.users != nil {
 		if u, err := s.users.GetUser(ctx, userID); err == nil && u != nil {
 			if u.SystemRole == model.SystemRoleGuest && channelID != generalChannelID {
-				return errors.New("channel: guests can only join channels they are invited to")
+				return apperr.Forbidden("channel: guests can only join channels they are invited to")
 			}
 		}
 	}
@@ -465,14 +486,14 @@ func (s *ChannelService) Join(ctx context.Context, userID, channelID string) err
 // member must remain a participant.
 func (s *ChannelService) Leave(ctx context.Context, userID, channelID string) error {
 	if channelID == generalChannelID {
-		return errors.New("channel: cannot leave the general channel")
+		return apperr.Forbidden("channel: cannot leave the general channel")
 	}
-	mem, err := s.memberships.GetMembership(ctx, channelID, userID)
+	mem, err := s.callerMembership(ctx, channelID, userID)
 	if err != nil {
-		return fmt.Errorf("channel: get membership: %w", err)
+		return err
 	}
 	if mem.Role == model.ChannelRoleOwner {
-		return errors.New("channel: owner cannot leave the channel")
+		return apperr.Forbidden("channel: owner cannot leave the channel")
 	}
 
 	displayName := mem.DisplayName
@@ -480,7 +501,7 @@ func (s *ChannelService) Leave(ctx context.Context, userID, channelID string) er
 		displayName = s.resolveDisplayName(ctx, userID)
 	}
 
-	if err := s.memberships.RemoveMember(ctx, channelID, userID); err != nil {
+	if err := s.audienceWritten(ctx, channelID, s.memberships.RemoveMember(ctx, channelID, userID)); err != nil {
 		return fmt.Errorf("channel: leave: %w", err)
 	}
 
@@ -508,10 +529,10 @@ func (s *ChannelService) Leave(ctx context.Context, userID, channelID string) er
 // but does not unsubscribe the user from real-time event delivery — they
 // still see new messages, just without the alert.
 func (s *ChannelService) SetMute(ctx context.Context, userID, channelID string, muted bool) error {
-	if _, err := s.memberships.GetMembership(ctx, channelID, userID); err != nil {
-		return fmt.Errorf("channel: get membership: %w", err)
+	if _, err := s.callerMembership(ctx, channelID, userID); err != nil {
+		return err
 	}
-	if err := s.memberships.SetMute(ctx, channelID, userID, muted); err != nil {
+	if err := s.audienceWritten(ctx, channelID, s.memberships.SetMute(ctx, channelID, userID, muted)); err != nil {
 		return fmt.Errorf("channel: set mute: %w", err)
 	}
 	// Notify only the user themselves — mute is not other-people's business.
@@ -531,15 +552,15 @@ func (s *ChannelService) SetMute(ctx context.Context, userID, channelID string, 
 // own clients are notified (via userchannel.updated) to keep tabs in sync.
 func (s *ChannelService) SetNotificationPrefs(ctx context.Context, userID, channelID string, override model.ChannelNotificationOverride) error {
 	if override.DesktopLevel != nil && !override.DesktopLevel.Valid() {
-		return errors.New("channel: invalid desktop notification level")
+		return apperr.Invalid("channel: invalid desktop notification level")
 	}
 	if override.MobileLevel != nil && !override.MobileLevel.Valid() {
-		return errors.New("channel: invalid mobile notification level")
+		return apperr.Invalid("channel: invalid mobile notification level")
 	}
-	if _, err := s.memberships.GetMembership(ctx, channelID, userID); err != nil {
-		return fmt.Errorf("channel: get membership: %w", err)
+	if _, err := s.callerMembership(ctx, channelID, userID); err != nil {
+		return err
 	}
-	if err := s.memberships.SetNotifPrefs(ctx, channelID, userID, override); err != nil {
+	if err := s.audienceWritten(ctx, channelID, s.memberships.SetNotifPrefs(ctx, channelID, userID, override)); err != nil {
 		return fmt.Errorf("channel: set notification prefs: %w", err)
 	}
 	events.Publish(ctx, s.publisher, pubsub.UserChannel(userID), events.EventUserChannelUpdated, map[string]any{
@@ -554,8 +575,8 @@ func (s *ChannelService) SetNotificationPrefs(ctx context.Context, userID, chann
 // The user must already be a member — pinning a channel you can't see
 // would create an orphan row in the user-side index.
 func (s *ChannelService) SetFavorite(ctx context.Context, userID, channelID string, favorite bool) error {
-	if _, err := s.memberships.GetMembership(ctx, channelID, userID); err != nil {
-		return fmt.Errorf("channel: get membership: %w", err)
+	if _, err := s.callerMembership(ctx, channelID, userID); err != nil {
+		return err
 	}
 	if err := s.memberships.SetFavorite(ctx, channelID, userID, favorite); err != nil {
 		return fmt.Errorf("channel: set favorite: %w", err)
@@ -574,8 +595,8 @@ func (s *ChannelService) SetFavorite(ctx context.Context, userID, channelID stri
 // belongs to this user is the caller's responsibility — handlers do
 // that check before invoking.
 func (s *ChannelService) SetCategory(ctx context.Context, userID, channelID, categoryID string, sidebarPosition *int) error {
-	if _, err := s.memberships.GetMembership(ctx, channelID, userID); err != nil {
-		return fmt.Errorf("channel: get membership: %w", err)
+	if _, err := s.callerMembership(ctx, channelID, userID); err != nil {
+		return err
 	}
 	if err := s.memberships.SetCategory(ctx, channelID, userID, categoryID, sidebarPosition); err != nil {
 		return fmt.Errorf("channel: set category: %w", err)
@@ -602,10 +623,16 @@ func (s *ChannelService) AddMember(ctx context.Context, actorID, channelID, user
 		return err
 	}
 	// Only admins may grant an elevated role; a plain member's invite always
-	// lands the newcomer as a regular member, never admin/owner.
+	// lands the newcomer as a regular member, never admin/owner. Owner is
+	// granted only by an owner or a system admin — the same rule
+	// UpdateMemberRole enforces — so an admin's owner grant lands as admin.
 	if role > model.ChannelRoleMember {
 		if err := s.checkPermission(ctx, actorID, channelID, model.ChannelRoleAdmin); err != nil {
 			role = model.ChannelRoleMember
+		} else if role > model.ChannelRoleAdmin {
+			if err := s.checkPermission(ctx, actorID, channelID, model.ChannelRoleOwner); err != nil {
+				role = model.ChannelRoleAdmin
+			}
 		}
 	}
 
@@ -637,7 +664,7 @@ func (s *ChannelService) AddMember(ctx context.Context, actorID, channelID, user
 		// pre-join backlog as unread.
 		LastReadSeq: ch.MessageSeq,
 	}
-	if err := s.memberships.AddMember(ctx, membership, uc); err != nil {
+	if err := s.audienceWritten(ctx, membership.ChannelID, s.memberships.AddMember(ctx, membership, uc)); err != nil {
 		return fmt.Errorf("channel: add member: %w", err)
 	}
 
@@ -666,7 +693,7 @@ func (s *ChannelService) AddMember(ctx context.Context, actorID, channelID, user
 // active user.
 func (s *ChannelService) RemoveMember(ctx context.Context, actorID, channelID, targetID string) error {
 	if channelID == generalChannelID {
-		return errors.New("channel: cannot remove members from the general channel")
+		return apperr.Forbidden("channel: cannot remove members from the general channel")
 	}
 	if err := s.checkPermission(ctx, actorID, channelID, model.ChannelRoleAdmin); err != nil {
 		return err
@@ -679,7 +706,7 @@ func (s *ChannelService) RemoveMember(ctx context.Context, actorID, channelID, t
 
 	if target.Role == model.ChannelRoleOwner {
 		if !s.isSystemAdmin(ctx, actorID) {
-			return errors.New("channel: only system admins can remove channel owners")
+			return apperr.Forbidden("channel: only system admins can remove channel owners")
 		}
 	}
 
@@ -688,7 +715,7 @@ func (s *ChannelService) RemoveMember(ctx context.Context, actorID, channelID, t
 		displayName = s.resolveDisplayName(ctx, targetID)
 	}
 
-	if err := s.memberships.RemoveMember(ctx, channelID, targetID); err != nil {
+	if err := s.audienceWritten(ctx, channelID, s.memberships.RemoveMember(ctx, channelID, targetID)); err != nil {
 		return fmt.Errorf("channel: remove member: %w", err)
 	}
 
@@ -723,7 +750,7 @@ func (s *ChannelService) UpdateMemberRole(ctx context.Context, actorID, channelI
 			return fmt.Errorf("channel: get actor membership: %w", err)
 		}
 		if actor != nil && actor.Role != model.ChannelRoleOwner && !s.isSystemAdmin(ctx, actorID) {
-			return errors.New("channel: only owners can promote to owner")
+			return apperr.Forbidden("channel: only owners can promote to owner")
 		}
 	}
 
@@ -742,12 +769,12 @@ func (s *ChannelService) UpdateMemberRole(ctx context.Context, actorID, channelI
 				return fmt.Errorf("channel: get actor membership: %w", err)
 			}
 			if actor == nil || actor.Role != model.ChannelRoleOwner {
-				return errors.New("channel: only an owner can change another owner's role")
+				return apperr.Forbidden("channel: only an owner can change another owner's role")
 			}
 		}
 	}
 
-	if err := s.memberships.UpdateMemberRole(ctx, channelID, targetID, newRole); err != nil {
+	if err := s.audienceWritten(ctx, channelID, s.memberships.UpdateMemberRole(ctx, channelID, targetID, newRole)); err != nil {
 		return fmt.Errorf("channel: update role: %w", err)
 	}
 	return nil
@@ -1038,6 +1065,20 @@ func (s *ChannelService) IsMember(ctx context.Context, userID, channelID string)
 	return err == nil
 }
 
+// callerMembership reads the caller's own membership for a per-member
+// setting (mute, favorite, …) or leaving: none is a refusal — the caller is
+// not a member — while a store failure stays internal.
+func (s *ChannelService) callerMembership(ctx context.Context, channelID, userID string) (*model.ChannelMembership, error) {
+	mem, err := s.memberships.GetMembership(ctx, channelID, userID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, apperr.Forbidden("channel: not a member")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("channel: get membership: %w", err)
+	}
+	return mem, nil
+}
+
 // checkPermission verifies that the actor has at least minRole in the channel,
 // or is a system admin (which bypasses channel-level checks).
 func (s *ChannelService) checkPermission(ctx context.Context, actorID, channelID string, minRole model.ChannelRole) error {
@@ -1049,7 +1090,7 @@ func (s *ChannelService) checkPermission(ctx context.Context, actorID, channelID
 			if s.isSystemAdmin(ctx, actorID) {
 				return nil
 			}
-			return errors.New("channel: not a member")
+			return apperr.Forbidden("channel: not a member")
 		}
 		return fmt.Errorf("channel: check permission: %w", err)
 	}
@@ -1058,7 +1099,7 @@ func (s *ChannelService) checkPermission(ctx context.Context, actorID, channelID
 		if s.isSystemAdmin(ctx, actorID) {
 			return nil
 		}
-		return fmt.Errorf("channel: insufficient permissions (need %s, have %s)", minRole, mem.Role)
+		return apperr.Forbidden("channel: insufficient permissions (need %s, have %s)", minRole, mem.Role)
 	}
 	return nil
 }
@@ -1123,8 +1164,8 @@ func (s *ChannelService) isSystemAdmin(ctx context.Context, userID string) bool 
 	return err == nil && u != nil && u.SystemRole == model.SystemRoleAdmin
 }
 
-// slugify converts a name into a URL-friendly slug.
-func slugify(name string) string {
+// Slugify converts a name into a URL-friendly slug.
+func Slugify(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
 	var b strings.Builder
 	prev := false

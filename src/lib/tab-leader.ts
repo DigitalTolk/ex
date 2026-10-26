@@ -22,6 +22,7 @@
 import { BroadcastChannel, createLeaderElection, type LeaderElector } from 'broadcast-channel';
 import { isHardAway, setActivityBroadcast, setAttentionBroadcast } from '@/lib/user-activity';
 import { setThreadScopeBroadcast, threadScopeSnapshot } from '@/lib/thread-scope';
+import { activeParentID, useActiveParentStore } from '@/stores/active-parent';
 
 interface TabState {
   visible: boolean;
@@ -62,7 +63,6 @@ export const nonLeaderHoldMs = 1500;
 let channel: BroadcastChannel<TabMessage> | null = null;
 let elector: LeaderElector | null = null;
 let leader = false;
-let localActiveParent: string | null = null;
 let lastActivityBroadcastAt = 0;
 const tabId = Math.random().toString(36).slice(2) + Date.now().toString(36);
 const remote = new Map<string, TabState & { at: number }>();
@@ -74,7 +74,8 @@ function postState(): void {
     focused: typeof document.hasFocus === 'function' ? document.hasFocus() : false,
     hardAway: isHardAway(),
     lastActivityAt: lastActivityBroadcastAt,
-    activeParent: localActiveParent,
+    // The open parent is owned by stores/active-parent; this only shares it.
+    activeParent: activeParentID(),
     activeThreads: threadScopeSnapshot(),
   };
   try {
@@ -88,6 +89,11 @@ function postState(): void {
 function onVisibilityChange(): void {
   postState();
 }
+
+// Opening or leaving a parent broadcasts at once, so the leader can suppress
+// popups for a parent the user is actively reading in ANY tab. (Before the
+// coordinator starts there is nobody to tell: postState is a no-op.)
+useActiveParentStore.subscribe(() => postState());
 
 // initTabCoordinator wires the channel, the election, and the state
 // broadcasting. Idempotent. `options` passes straight through to
@@ -165,14 +171,6 @@ export function hasOtherTabs(): boolean {
     remote.delete(id);
   }
   return false;
-}
-
-// setTabActiveParent records which conversation/channel this tab is viewing
-// and shares it, so the leader can suppress popups for a parent the user is
-// actively reading in ANY tab.
-export function setTabActiveParent(parentID: string | null): void {
-  localActiveParent = parentID;
-  postState();
 }
 
 // The remote checks mirror the local two-tier split (SPEC §2, revised
@@ -271,7 +269,6 @@ export async function resetTabCoordinatorForTests(): Promise<void> {
     channel = null;
   }
   leader = false;
-  localActiveParent = null;
   lastActivityBroadcastAt = 0;
   remote.clear();
 }

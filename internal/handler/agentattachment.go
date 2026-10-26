@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
-	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // Run-scoped attachment endpoints: how a runner gets the bytes of a file a
@@ -45,23 +45,23 @@ func (h *AgentRunToolHandler) DownloadAttachment(w http.ResponseWriter, r *http.
 	source := "message"
 	// A run about a project may also read that project's reference
 	// screenshots — they live on the Projects page, not in any message.
-	if errors.Is(err, store.ErrNotFound) && h.orch.RunMayReadScreen(r.Context(), run, id) {
+	if errors.Is(err, apperr.ErrNotFound) && h.orch.RunMayReadScreen(r.Context(), run, id) {
 		body, a, err = h.attachments.OpenByID(r.Context(), id)
 		source = "project_screen"
 	}
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "attachment not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "internal", "attachment read failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	defer func() { _ = body.Close() }()
 	// The drawer's "files it took in" list: what the agent actually read.
-	h.orch.RecordWorkspaceAction(r.Context(), run, "file_fetched", map[string]any{
-		"attachmentID": a.ID, "filename": a.Filename, "size": a.Size, "source": source,
-	})
+	// The message it was read through rides along: the drawer re-checks the
+	// invoker's access through it before listing the file.
+	fetched := map[string]any{"attachmentID": a.ID, "filename": a.Filename, "size": a.Size, "source": source}
+	if source == "message" {
+		fetched["messageID"] = messageID
+	}
+	h.orch.RecordWorkspaceAction(r.Context(), run, "file_fetched", fetched)
 	w.Header().Set("Content-Type", a.ContentType)
 	w.Header().Set("Content-Length", strconv.FormatInt(a.Size, 10))
 	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(a.Filename))
@@ -99,11 +99,7 @@ func (h *AgentRunToolHandler) UploadAttachment(w http.ResponseWriter, r *http.Re
 	}
 	remaining, err := h.orch.RecordAgentUpload(r.Context(), claims.RunID)
 	if err != nil {
-		if errors.Is(err, service.ErrUploadCap) {
-			writeError(w, http.StatusTooManyRequests, "upload_cap", "per-run upload cap reached")
-			return
-		}
-		h.writeToolError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	a, err := h.attachments.UploadForAgent(r.Context(), service.AgentUploadParams{
@@ -114,14 +110,7 @@ func (h *AgentRunToolHandler) UploadAttachment(w http.ResponseWriter, r *http.Re
 		Body:     http.MaxBytesReader(w, r.Body, model.UploadMaxBytes+1),
 	})
 	if err != nil {
-		switch {
-		case errors.Is(err, service.ErrUnsupportedUploadType):
-			writeError(w, http.StatusUnsupportedMediaType, "unsupported_type", err.Error())
-		case errors.Is(err, service.ErrUploadTooLarge):
-			writeError(w, http.StatusRequestEntityTooLarge, "too_large", err.Error())
-		default:
-			writeError(w, http.StatusBadRequest, "bad_request", "upload rejected: "+err.Error())
-		}
+		writeServiceError(w, r, err)
 		return
 	}
 	h.orch.RecordWorkspaceAction(r.Context(), run, "file_uploaded", map[string]any{
@@ -157,7 +146,7 @@ func (h *AgentRunToolHandler) runPostAttachments(w http.ResponseWriter, r *http.
 		}
 		seen[id] = true
 		if _, err := h.attachments.ForRunPost(r.Context(), id, claims.RunID, claims.ActorID); err != nil {
-			writeError(w, http.StatusForbidden, "forbidden", "attachment rejected: only files this run uploaded can be attached")
+			writeServiceError(w, r, toolRejection("attachment rejected", err, "only files this run uploaded can be attached"))
 			return nil, false
 		}
 		out = append(out, id)

@@ -3,6 +3,8 @@ import { render } from 'vitest-browser-react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ChatPage from './ChatPage';
+import { useTypingStore } from '@/stores/typing';
+import { eventCallbacks, expectInvalidPayloadReported, type CapturedWSOptions } from '@/test/ws-frames';
 
 // Browser-coverage counterpart of ChatPage.test.tsx. The jsdom version
 // covers every callback branch but contributes only to the jsdom
@@ -76,8 +78,8 @@ vi.mock('@/context/PresenceContext', () => ({
     online: new Set<string>(),
     isOnline: () => false,
     setUserOnline: vi.fn(),
-    refreshPresence: vi.fn(),
   }),
+  refreshPresence: vi.fn(),
   PresenceProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
@@ -103,15 +105,7 @@ vi.mock('@/context/NotificationContext', () => ({
   }),
 }));
 
-const mockRecordTyping = vi.fn();
-const mockClearTyping = vi.fn();
-vi.mock('@/context/TypingContext', () => ({
-  useTyping: () => ({
-    recordTyping: mockRecordTyping,
-    clearTyping: mockClearTyping,
-    setSelfUserID: vi.fn(),
-  }),
-}));
+
 
 // Capture the options ChatPage passes to useWebSocket so each test
 // can invoke a specific callback directly. The hook itself is a
@@ -120,7 +114,7 @@ vi.mock('@/context/TypingContext', () => ({
 const mockUseWebSocket = vi.fn();
 vi.mock('@/hooks/useWebSocket', () => ({
   useWebSocket: (opts: unknown) => {
-    mockUseWebSocket(opts);
+    mockUseWebSocket(eventCallbacks(opts as CapturedWSOptions));
   },
 }));
 
@@ -199,8 +193,6 @@ describe('ChatPage WS router (browser)', () => {
     mockSetConversationNotifyCount.mockClear();
     mockUnhideConversation.mockClear();
     mockDispatchNotification.mockClear();
-    mockRecordTyping.mockClear();
-    mockClearTyping.mockClear();
     setMobileViewport(false);
     globalThis.fetch = vi.fn().mockResolvedValue(responseJSON([]));
   });
@@ -271,7 +263,7 @@ describe('ChatPage WS router (browser)', () => {
 
   it('onMessageNew ignores invalid payloads', async () => {
     await renderChatPage();
-    lastHandlers().onMessageNew?.({});
+    expectInvalidPayloadReported('message.new', () => lastHandlers().onMessageNew?.({}));
     expect(mockBumpChannelUnread).not.toHaveBeenCalled();
   });
 
@@ -307,19 +299,19 @@ describe('ChatPage WS router (browser)', () => {
 
   it('onMessageEdited tolerates missing channelID', async () => {
     await renderChatPage();
-    expect(() => lastHandlers().onMessageEdited?.({})).not.toThrow();
-    expect(() => lastHandlers().onMessageEdited?.({ parentID: 'ch-99', id: 'm-1', body: 'edited' })).not.toThrow();
+    expectInvalidPayloadReported('message.edited', () => lastHandlers().onMessageEdited?.({}));
+    expectInvalidPayloadReported('message.edited', () => lastHandlers().onMessageEdited?.({ parentID: 'ch-99', id: 'm-1', body: 'edited' }));
   });
 
   it('onMessageDeleted tolerates valid + missing payloads', async () => {
     await renderChatPage();
-    expect(() => lastHandlers().onMessageDeleted?.({})).not.toThrow();
+    expectInvalidPayloadReported('message.deleted', () => lastHandlers().onMessageDeleted?.({}));
     expect(() => lastHandlers().onMessageDeleted?.({ parentID: 'ch-99', id: 'm-1' })).not.toThrow();
   });
 
   it('onMembersChanged tolerates valid + missing channelID', async () => {
     await renderChatPage();
-    expect(() => lastHandlers().onMembersChanged?.({})).not.toThrow();
+    expectInvalidPayloadReported('members.changed', () => lastHandlers().onMembersChanged?.({}));
     expect(() => lastHandlers().onMembersChanged?.({ channelID: 'ch-99' })).not.toThrow();
   });
 
@@ -331,13 +323,13 @@ describe('ChatPage WS router (browser)', () => {
 
   it('onChannelArchived tolerates valid + missing channelID', async () => {
     await renderChatPage();
-    expect(() => lastHandlers().onChannelArchived?.({})).not.toThrow();
+    expectInvalidPayloadReported('channel.archived', () => lastHandlers().onChannelArchived?.({}));
     expect(() => lastHandlers().onChannelArchived?.({ channelID: 'ch-99' })).not.toThrow();
   });
 
   it('onChannelUpdated tolerates valid + missing channelID', async () => {
     await renderChatPage();
-    expect(() => lastHandlers().onChannelUpdated?.({})).not.toThrow();
+    expectInvalidPayloadReported('channel.updated', () => lastHandlers().onChannelUpdated?.({}));
     expect(() => lastHandlers().onChannelUpdated?.({ channelID: 'ch-99' })).not.toThrow();
   });
 
@@ -346,12 +338,12 @@ describe('ChatPage WS router (browser)', () => {
     expect(() => lastHandlers().onChannelNew?.()).not.toThrow();
     expect(() => lastHandlers().onChannelNew?.({ channel: { channelID: 'ch-99' } })).not.toThrow();
     expect(() => lastHandlers().onChannelRemoved?.({ channelID: 'ch-99' })).not.toThrow();
-    expect(() => lastHandlers().onChannelRemoved?.({})).not.toThrow();
+    expectInvalidPayloadReported('channel.removed', () => lastHandlers().onChannelRemoved?.({}));
   });
 
   it('onConversationConverted takes the group off the list, and ignores a bad payload', async () => {
     const { qc } = await renderChatPage();
-    lastHandlers().onConversationConverted?.({});
+    expectInvalidPayloadReported('conversation.converted', () => lastHandlers().onConversationConverted?.({}));
     expect(qc.getQueryData(['userConversations'])).toEqual([{ conversationID: 'conv-1' }]);
     lastHandlers().onConversationConverted?.({ conversationID: 'conv-1', channelID: 'conv-1', slug: 'ops' });
     expect(qc.getQueryData(['userConversations'])).toEqual([]);
@@ -360,12 +352,12 @@ describe('ChatPage WS router (browser)', () => {
   it('onPresenceChanged never throws', async () => {
     await renderChatPage();
     expect(() => lastHandlers().onPresenceChanged?.({ userID: 'u-1', online: true })).not.toThrow();
-    expect(() => lastHandlers().onPresenceChanged?.({})).not.toThrow();
+    expectInvalidPayloadReported('presence.changed', () => lastHandlers().onPresenceChanged?.({}));
   });
 
   it('onEmojiAdded / onEmojiRemoved never throw', async () => {
     await renderChatPage();
-    expect(() => lastHandlers().onEmojiAdded?.({ name: 'partyparrot' })).not.toThrow();
+    expectInvalidPayloadReported('emoji.added', () => lastHandlers().onEmojiAdded?.({ name: 'partyparrot' }));
     expect(() => lastHandlers().onEmojiRemoved?.({ name: 'partyparrot' })).not.toThrow();
   });
 
@@ -380,7 +372,7 @@ describe('ChatPage WS router (browser)', () => {
   it('onActivityNew refetches the durable activity stream', async () => {
     const { qc } = await renderChatPage();
     const spy = vi.spyOn(qc, 'invalidateQueries');
-    lastHandlers().onActivityNew?.();
+    expectInvalidPayloadReported('activity.new', () => lastHandlers().onActivityNew?.());
     const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
     expect(keys).toContainEqual(['activity']);
   });
@@ -399,7 +391,7 @@ describe('ChatPage WS router (browser)', () => {
     it('an unparseable payload falls back to the blanket refresh (safe floor)', async () => {
       const { qc } = await renderChatPage();
       const spy = vi.spyOn(qc, 'invalidateQueries');
-      lastHandlers().onUserChannelUpdated?.('not an object');
+      expectInvalidPayloadReported('userchannel.updated', () => lastHandlers().onUserChannelUpdated?.('not an object'));
       const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
       expect(keys).toContainEqual(['userChannels']);
       expect(keys).toContainEqual(['userConversations']);
@@ -565,7 +557,7 @@ describe('ChatPage WS router (browser)', () => {
 
   it('onAttachmentDeleted / onChannelMuted never throw', async () => {
     await renderChatPage();
-    expect(() => lastHandlers().onAttachmentDeleted?.({ attachmentID: 'a-1' })).not.toThrow();
+    expectInvalidPayloadReported('attachment.deleted', () => lastHandlers().onAttachmentDeleted?.({ attachmentID: 'a-1' }));
     expect(() => lastHandlers().onChannelMuted?.({ channelID: 'ch-99', muted: true })).not.toThrow();
   });
 
@@ -633,7 +625,7 @@ describe('ChatPage WS router (browser)', () => {
   it('onNotification silently drops a malformed payload', async () => {
     await renderChatPage();
     // No `kind` → ChatPage's guard rejects it before dispatch.
-    lastHandlers().onNotification?.({});
+    expectInvalidPayloadReported('notification.new', () => lastHandlers().onNotification?.({}));
     expect(mockDispatchNotification).not.toHaveBeenCalled();
   });
 
@@ -650,13 +642,15 @@ describe('ChatPage WS router (browser)', () => {
       parentType: 'channel',
       userID: 'u-2',
     });
-    expect(mockRecordTyping).toHaveBeenCalled();
+    // ChatPage writes typing straight to the store.
+    expect(useTypingStore.getState().typingByParent['ch-99']).toEqual(['u-2']);
   });
 
   it('onTyping ignores malformed payloads', async () => {
     await renderChatPage();
-    lastHandlers().onTyping?.({});
-    expect(mockRecordTyping).not.toHaveBeenCalled();
+    const before = useTypingStore.getState().typingByParent;
+    expectInvalidPayloadReported('typing', () => lastHandlers().onTyping?.({}));
+    expect(useTypingStore.getState().typingByParent).toBe(before);
   });
 
   it('onServerVersion / onPing never throw', async () => {
@@ -713,7 +707,7 @@ describe('ChatPage WS router (browser)', () => {
     // A different user id skips the self-patch branch.
     lastHandlers().onUserUpdated?.({ id: 'u-other' });
     // Malformed payload is ignored.
-    lastHandlers().onUserUpdated?.({});
+    expectInvalidPayloadReported('user.updated', () => lastHandlers().onUserUpdated?.({}));
   });
 
   it('onNotificationSettingsUpdated patches self settings and ignores an empty payload', async () => {
@@ -722,7 +716,7 @@ describe('ChatPage WS router (browser)', () => {
       lastHandlers().onNotificationSettingsUpdated?.({
         settings: { desktopLevel: 'all', mobileLevel: 'default', threadReplies: true, ignoreGroupMentions: false, followAllThreads: false, keywords: [] },
       });
-      lastHandlers().onNotificationSettingsUpdated?.({});
+      expectInvalidPayloadReported('notification.settings_updated', () => lastHandlers().onNotificationSettingsUpdated?.({}));
     }).not.toThrow();
   });
 

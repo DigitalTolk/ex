@@ -2,29 +2,31 @@ package handler
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
+	"github.com/DigitalTolk/ex/internal/agents"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
-	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // timelineAccessChecker verifies parent membership (the message-service
 // check). Once it also widened timeline reads to channel members; run LOGS
-// are invoker-only now (orchestrator checkRunAccess), so its one remaining
-// job is gating watch-subscription creation by channel access.
+// are invoker-only now (orchestrator checkRunAccess), so it gates
+// watch-subscription creation by channel access, and — through
+// MessageAttachmentIDs — which files the drawer may hand out signed URLs for
+// (the run's invoker must be able to read each one).
 type timelineAccessChecker interface {
 	CheckAccess(ctx context.Context, userID, parentID, parentType string) error
+	MessageAttachmentIDs(ctx context.Context, userID, parentID, parentType, messageID string) (map[string]bool, error)
 }
 
 // AgentHandler serves the SPA-facing agent surface: the shared agents with
 // the caller's own preferences, and run timelines. Runner pairing lives on
 // RunnerTokenHandler.
 type AgentHandler struct {
-	agents *service.AgentService
-	orch   *service.Orchestrator
+	agents *agents.AgentService
+	orch   *agents.Orchestrator
 	users  *service.UserService
 	access timelineAccessChecker
 	// files resolves the drawer's file list (inputs, fetched, posted) to
@@ -41,7 +43,7 @@ type runFileLoader interface {
 func (h *AgentHandler) SetRunFiles(l runFileLoader) { h.files = l }
 
 // NewAgentHandler wires the handler.
-func NewAgentHandler(agents *service.AgentService, orch *service.Orchestrator, users *service.UserService) *AgentHandler {
+func NewAgentHandler(agents *agents.AgentService, orch *agents.Orchestrator, users *service.UserService) *AgentHandler {
 	return &AgentHandler{agents: agents, orch: orch, users: users}
 }
 
@@ -95,7 +97,7 @@ func (h *AgentHandler) view(r *http.Request, agent *model.User, callerID string)
 	if model.HarnessIsAPI(resolved.Harness) && resolved.ExecutionMode == model.ExecutionServer {
 		status = model.AgentStatusActive
 	} else if runners, err := h.agents.LiveRunners(r.Context(), callerID); err == nil && len(runners) > 0 {
-		if service.RunnerHasHarness(runners, resolved.Harness) {
+		if agents.RunnerHasHarness(runners, resolved.Harness) {
 			status = model.AgentStatusActive
 		} else {
 			status = model.AgentStatusNeedsSetup
@@ -135,7 +137,7 @@ func (h *AgentHandler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
-	tpl, err := h.agents.CreateAgent(r.Context(), service.CreateAgentInput{
+	tpl, err := h.agents.CreateAgent(r.Context(), agents.CreateAgentInput{
 		Slug:          body.Slug,
 		DisplayName:   body.DisplayName,
 		Harness:       body.Harness,
@@ -144,11 +146,7 @@ func (h *AgentHandler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		Persona:       body.Persona,
 	})
 	if err != nil {
-		if errors.Is(err, service.ErrValidation) {
-			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "internal", "failed to create agent")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, JSON{"agent": tpl})
@@ -180,41 +178,30 @@ func (h *AgentHandler) RenameAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "model/executionMode require harness")
 		return
 	}
-	fail := func(err error, what string) {
-		if errors.Is(err, service.ErrValidation) {
-			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-			return
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "unknown agent")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "internal", "failed to "+what)
-	}
 	var tpl *model.AgentTemplate
 	var err error
 	if body.DisplayName != "" {
 		if tpl, err = h.agents.RenameAgent(r.Context(), r.PathValue("slug"), body.DisplayName); err != nil {
-			fail(err, "rename agent")
+			writeServiceError(w, r, err)
 			return
 		}
 	}
 	if body.SkillIDs != nil {
 		callerID := middleware.UserIDFromContext(r.Context())
 		if tpl, err = h.agents.SetAgentSkills(r.Context(), callerID, r.PathValue("slug"), *body.SkillIDs); err != nil {
-			fail(err, "set agent skills")
+			writeServiceError(w, r, err)
 			return
 		}
 	}
 	if body.Harness != "" {
 		if tpl, err = h.agents.SetAgentEngine(r.Context(), r.PathValue("slug"), body.Harness, body.Model, body.ExecutionMode); err != nil {
-			fail(err, "set agent engine")
+			writeServiceError(w, r, err)
 			return
 		}
 	}
 	if body.Persona != "" {
 		if tpl, err = h.agents.SetAgentPersona(r.Context(), r.PathValue("slug"), body.Persona); err != nil {
-			fail(err, "set agent prompt")
+			writeServiceError(w, r, err)
 			return
 		}
 	}
@@ -225,14 +212,14 @@ func (h *AgentHandler) List(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
 	agents, err := h.agents.ListAgents(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "failed to list agents")
+		writeServiceError(w, r, err)
 		return
 	}
 	out := make([]agentView, 0, len(agents))
 	for _, a := range agents {
 		v, err := h.view(r, a, callerID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal", "failed to resolve agent")
+			writeServiceError(w, r, err)
 			return
 		}
 		out = append(out, v)
@@ -245,7 +232,7 @@ func (h *AgentHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *AgentHandler) UpdatePrefs(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
 	slug := r.PathValue("slug")
-	var patch service.AgentPrefsPatch
+	var patch agents.AgentPrefsPatch
 	if err := readAgentJSON(r, &patch, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
@@ -253,17 +240,17 @@ func (h *AgentHandler) UpdatePrefs(w http.ResponseWriter, r *http.Request) {
 	if _, err := h.agents.UpdatePrefs(r.Context(), callerID, slug, patch); err != nil {
 		// The shared table, not a blanket 400 carrying err.Error(): a store
 		// failure here answered "bad request" with an internal chain in it.
-		writeAgentError(w, r, err, "internal")
+		writeServiceError(w, r, err)
 		return
 	}
 	agent, err := h.agents.GetAgentBySlug(r.Context(), slug)
 	if err != nil {
-		writeInternalError(w, r, "internal", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	v, err := h.view(r, agent, callerID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "failed to resolve agent")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
@@ -277,7 +264,7 @@ func (h *AgentHandler) Timeline(w http.ResponseWriter, r *http.Request) {
 	// member of the run's parent), so every reader of a timeline gets it.
 	run, evts, evtsDropped, err := h.orch.Timeline(r.Context(), callerID, r.PathValue("id"))
 	if err != nil {
-		writeRunAccessError(w, r, err, "failed to load run")
+		writeServiceError(w, r, err)
 		return
 	}
 	// Display names for the drawer header (agent + invoker are the only
@@ -291,7 +278,7 @@ func (h *AgentHandler) Timeline(w http.ResponseWriter, r *http.Request) {
 	// Artifacts ride along (small, inline-capped) — the drawer is their viewer.
 	artifacts, err := h.orch.Artifacts(r.Context(), run.ID)
 	if err != nil {
-		writeInternalError(w, r, "internal", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	// Whole-conversation totals: a chained debate is many runs, and a fresh
@@ -319,7 +306,7 @@ func (h *AgentHandler) ThreadTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 	runs, evts, evtsDropped, err := h.orch.ThreadTimeline(r.Context(), callerID, parentID, rootID)
 	if err != nil {
-		writeRunAccessError(w, r, err, "failed to load thread activity")
+		writeServiceError(w, r, err)
 		return
 	}
 	if len(runs) == 0 {
@@ -369,7 +356,7 @@ func (h *AgentHandler) ThreadTimeline(w http.ResponseWriter, r *http.Request) {
 		"eventsOmitted": evtsDropped,
 		// Totalled from the runs already in hand — this used to re-run the same
 		// hundred-run listing just to add one line.
-		"threadSpend": service.SpendOf(runs),
+		"threadSpend": agents.SpendOf(runs),
 	})
 }
 
@@ -381,12 +368,12 @@ func (h *AgentHandler) StopRun(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
 	run, err := h.orch.RunForParentMember(r.Context(), callerID, r.PathValue("id"))
 	if err != nil {
-		writeRunAccessError(w, r, err, "failed to load run")
+		writeServiceError(w, r, err)
 		return
 	}
 	stopped, err := h.orch.StopThread(r.Context(), callerID, run.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "stop failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"stopped": stopped})
@@ -400,7 +387,7 @@ func (h *AgentHandler) GetArtifact(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
 	_, artifacts, err := h.orch.ArtifactsForCaller(r.Context(), callerID, r.PathValue("id"))
 	if err != nil {
-		writeRunAccessError(w, r, err, "failed to load artifacts")
+		writeServiceError(w, r, err)
 		return
 	}
 	for _, a := range artifacts {
@@ -430,18 +417,9 @@ func (h *AgentHandler) DecideApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a, err := h.orch.DecideApproval(r.Context(), callerID, r.PathValue("id"), r.PathValue("approvalID"),
-		service.Decision{Approve: body.Approve, Choice: body.Choice, Text: body.Text})
+		agents.Decision{Approve: body.Approve, Choice: body.Choice, Text: body.Text})
 	if err != nil {
-		switch {
-		case errors.Is(err, store.ErrNotFound):
-			writeError(w, http.StatusNotFound, "not_found", "approval not found")
-		case errors.Is(err, service.ErrNotInvoker):
-			writeError(w, http.StatusForbidden, "forbidden", "only the invoker can decide")
-		case errors.Is(err, service.ErrApprovalSettled):
-			writeError(w, http.StatusConflict, "settled", "approval already settled")
-		default:
-			writeError(w, http.StatusInternalServerError, "internal", "decision failed")
-		}
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"state": a.State, "choice": a.Choice})
@@ -475,7 +453,7 @@ func (h *AgentHandler) ListSubscriptions(w http.ResponseWriter, r *http.Request)
 	callerID := middleware.UserIDFromContext(r.Context())
 	subs, err := h.agents.ListSubscriptionsFor(r.Context(), callerID, r.PathValue("slug"))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "subscription list failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"subscriptions": subs})
@@ -488,7 +466,7 @@ func (h *AgentHandler) ListParentWatchers(w http.ResponseWriter, r *http.Request
 	callerID := middleware.UserIDFromContext(r.Context())
 	subs, err := h.agents.ListWatchersInParent(r.Context(), callerID, r.PathValue("id"))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "watcher list failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"watchers": subs})
@@ -523,7 +501,7 @@ func (h *AgentHandler) CreateSubscription(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
-	sub, err := h.agents.CreateSubscription(r.Context(), callerID, r.PathValue("slug"), body.ParentID, body.ParentType, body.Keywords, body.HeartbeatMins, service.WatchInput{
+	sub, err := h.agents.CreateSubscription(r.Context(), callerID, r.PathValue("slug"), body.ParentID, body.ParentType, body.Keywords, body.HeartbeatMins, agents.WatchInput{
 		ThreadRootID:   body.ThreadRootID,
 		Instruction:    body.Instruction,
 		ActionMode:     body.ActionMode,
@@ -533,15 +511,7 @@ func (h *AgentHandler) CreateSubscription(w http.ResponseWriter, r *http.Request
 		SkillIDs:       body.SkillIDs,
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "unknown agent")
-			return
-		}
-		if errors.Is(err, service.ErrValidation) {
-			writeError(w, http.StatusBadRequest, "invalid", err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "internal", "subscription create failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, JSON{"subscription": sub})
@@ -552,16 +522,11 @@ func (h *AgentHandler) CreateSubscription(w http.ResponseWriter, r *http.Request
 func (h *AgentHandler) DeleteSubscription(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
 	err := h.agents.DeleteSubscription(r.Context(), callerID, r.PathValue("parentID"), r.PathValue("id"))
-	switch {
-	case err == nil:
-		writeJSON(w, http.StatusOK, JSON{"ok": true})
-	case errors.Is(err, service.ErrForbidden):
-		writeError(w, http.StatusForbidden, "forbidden", "not your subscription")
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", "subscription not found")
-	default:
-		writeError(w, http.StatusInternalServerError, "internal", "subscription delete failed")
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
 	}
+	writeJSON(w, http.StatusOK, JSON{"ok": true})
 }
 
 // UpdateSubscription edits a watcher's instruction / action mode (creator-only).
@@ -580,7 +545,7 @@ func (h *AgentHandler) UpdateSubscription(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
-	sub, err := h.agents.UpdateSubscription(r.Context(), callerID, r.PathValue("parentID"), r.PathValue("id"), service.WatchInput{
+	sub, err := h.agents.UpdateSubscription(r.Context(), callerID, r.PathValue("parentID"), r.PathValue("id"), agents.WatchInput{
 		Instruction:    body.Instruction,
 		ActionMode:     body.ActionMode,
 		Schedule:       body.Schedule,
@@ -588,18 +553,11 @@ func (h *AgentHandler) UpdateSubscription(w http.ResponseWriter, r *http.Request
 		ConnectorSlugs: body.ConnectorSlugs,
 		SkillIDs:       body.SkillIDs,
 	})
-	switch {
-	case err == nil:
-		writeJSON(w, http.StatusOK, JSON{"subscription": sub})
-	case errors.Is(err, service.ErrForbidden):
-		writeError(w, http.StatusForbidden, "forbidden", "not your subscription")
-	case errors.Is(err, service.ErrValidation):
-		writeError(w, http.StatusBadRequest, "invalid", err.Error())
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", "subscription not found")
-	default:
-		writeError(w, http.StatusInternalServerError, "internal", "subscription update failed")
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
 	}
+	writeJSON(w, http.StatusOK, JSON{"subscription": sub})
 }
 
 // DecideCatchUp answers a watcher's catch-up ask: process the offline backlog
@@ -615,18 +573,11 @@ func (h *AgentHandler) DecideCatchUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := h.orch.DecideCatchUp(r.Context(), callerID, r.PathValue("parentID"), r.PathValue("id"), body.Process)
-	switch {
-	case err == nil:
-		writeJSON(w, http.StatusOK, JSON{"ok": true})
-	case errors.Is(err, service.ErrNotInvoker):
-		writeError(w, http.StatusForbidden, "forbidden", "not your watcher")
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", "watcher not found")
-	case errors.Is(err, service.ErrAgentOffline), errors.Is(err, service.ErrAgentBusy):
-		writeError(w, http.StatusConflict, "not_ready", "can't start the catch-up right now — try again shortly")
-	default:
-		writeError(w, http.StatusInternalServerError, "internal", "catch-up decide failed")
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
 	}
+	writeJSON(w, http.StatusOK, JSON{"ok": true})
 }
 
 // ---------------------------------------------------------------- skills
@@ -645,7 +596,7 @@ func (h *AgentHandler) ListSkills(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
 	skills, err := h.agents.ListSkills(r.Context(), callerID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "skill list failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"skills": skills})
@@ -660,13 +611,11 @@ func (h *AgentHandler) CreateSkill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
-	sk, err := h.agents.CreateSkill(r.Context(), callerID, body.Name, body.Description, body.Instructions, body.Visibility)
+	// Publishing workspace-wide is an admin act; a member's skill is created
+	// private (theirs) unless they are one.
+	sk, err := h.agents.CreateSkill(r.Context(), callerID, callerIsAdmin(r), body.Name, body.Description, body.Instructions, body.Visibility)
 	if err != nil {
-		if errors.Is(err, service.ErrValidation) {
-			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "internal", "skill create failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, JSON{"skill": sk})
@@ -684,14 +633,14 @@ func callerIsAdmin(r *http.Request) bool {
 // PATCH /api/v1/skills/{id}
 func (h *AgentHandler) UpdateSkill(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
-	var patch service.SkillPatch
+	var patch agents.SkillPatch
 	if err := readAgentJSON(r, &patch, maxAgentBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
 	sk, err := h.agents.UpdateSkill(r.Context(), callerID, callerIsAdmin(r), r.PathValue("id"), patch)
 	if err != nil {
-		h.writeSkillError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"skill": sk})
@@ -702,7 +651,7 @@ func (h *AgentHandler) UpdateSkill(w http.ResponseWriter, r *http.Request) {
 func (h *AgentHandler) DeleteSkill(w http.ResponseWriter, r *http.Request) {
 	callerID := middleware.UserIDFromContext(r.Context())
 	if err := h.agents.DeleteSkill(r.Context(), callerID, callerIsAdmin(r), r.PathValue("id")); err != nil {
-		h.writeSkillError(w, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"ok": true})
@@ -714,7 +663,7 @@ func (h *AgentHandler) DeleteSkill(w http.ResponseWriter, r *http.Request) {
 func (h *AgentHandler) CountOverrides(w http.ResponseWriter, r *http.Request) {
 	n, err := h.agents.CountAgentOverrides(r.Context(), r.PathValue("slug"))
 	if err != nil {
-		h.writeOverrideError(w, err, "count overrides")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"count": n})
@@ -731,32 +680,8 @@ func (h *AgentHandler) CountOverrides(w http.ResponseWriter, r *http.Request) {
 func (h *AgentHandler) ResetOverrides(w http.ResponseWriter, r *http.Request) {
 	n, err := h.agents.ResetAgentOverrides(r.Context(), r.PathValue("slug"))
 	if err != nil {
-		h.writeOverrideError(w, err, "reset overrides")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"cleared": n})
-}
-
-func (h *AgentHandler) writeOverrideError(w http.ResponseWriter, err error, what string) {
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", "unknown agent")
-	case errors.Is(err, service.ErrValidation):
-		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-	default:
-		writeError(w, http.StatusInternalServerError, "internal", "failed to "+what)
-	}
-}
-
-func (h *AgentHandler) writeSkillError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", "skill not found")
-	case errors.Is(err, service.ErrForbidden):
-		writeError(w, http.StatusForbidden, "forbidden", "not the skill author")
-	case errors.Is(err, service.ErrValidation):
-		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-	default:
-		writeError(w, http.StatusInternalServerError, "internal", "skill operation failed")
-	}
 }

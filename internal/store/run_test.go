@@ -416,9 +416,10 @@ func TestRunStore_DeleteRunEventsUnprocessed(t *testing.T) {
 	}
 
 	seed("run-unp2")
+	fastRetries(t, 3)
 	never := &unprocessedClient{DynamoAPI: db.Client, table: db.Table, remaining: 99}
 	err := NewRunStore(&DB{Client: never, Table: db.Table}).DeleteRunEvents(ctx, "run-unp2")
-	if err == nil || !strings.Contains(err.Error(), "unprocessed after retries") {
+	if err == nil || !strings.Contains(err.Error(), "unprocessed after 3 attempts") {
 		t.Fatalf("exhausted retries must fail loudly, got %v", err)
 	}
 }

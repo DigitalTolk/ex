@@ -63,11 +63,12 @@ describe('type interfaces compile and can be used at runtime', () => {
     const m: ChannelMembership = {
       channelID: 'ch-1',
       userID: 'u-1',
-      role: 'member',
+      // Numeric on the wire (model.ChannelRole): 1 member, 2 admin, 3 owner.
+      role: 1,
       displayName: 'Alice',
       joinedAt: '2025-01-01T00:00:00Z',
     };
-    expect(m.role).toBe('member');
+    expect(m.role).toBe(1);
   });
 
   it('UserChannel shape is valid', () => {

@@ -1,5 +1,6 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 
 // One shared workspace agent as served by GET /api/v1/agents. The agent
 // itself belongs to no one; `prefs` are the CALLER's own settings for it
@@ -124,8 +125,6 @@ export const WATCH_ACTION_MODES = [
 ] as const;
 export type WatchActionMode = (typeof WATCH_ACTION_MODES)[number]['value'];
 
-const AGENTS_KEY = ['agents'] as const;
-const subsKey = (slug: string) => ['agent-subs', slug] as const;
 
 // useCreateWatcher attaches a watcher to a channel/DM or (with threadRootID) a
 // single thread: a standing order + action mode for the chosen agent.
@@ -148,8 +147,8 @@ export function useCreateWatcher() {
       });
     },
     onSuccess: (_data, vars) => {
-      void queryClient.invalidateQueries({ queryKey: subsKey(vars.slug) });
-      void queryClient.invalidateQueries({ queryKey: ['parent-watchers'] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.agentSubscriptions(vars.slug) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.parentWatchers() });
     },
   });
 }
@@ -157,7 +156,7 @@ export function useCreateWatcher() {
 // Watched channels: the caller's subscriptions for one agent.
 export function useAgentSubscriptions(slug: string) {
   return useQuery({
-    queryKey: subsKey(slug),
+    queryKey: queryKeys.agentSubscriptions(slug),
     queryFn: async () => {
       const res = await apiFetch<{ subscriptions: AgentSubscription[] }>(
         `/api/v1/agents/${slug}/subscriptions`,
@@ -175,7 +174,7 @@ export function useAllAgentSchedules(agents: AgentView[] | undefined) {
   const list = agents ?? [];
   const results = useQueries({
     queries: list.map((a) => ({
-      queryKey: subsKey(a.slug),
+      queryKey: queryKeys.agentSubscriptions(a.slug),
       queryFn: async () => {
         const res = await apiFetch<{ subscriptions: AgentSubscription[] }>(
           `/api/v1/agents/${a.slug}/subscriptions`,
@@ -218,7 +217,7 @@ export function useCreateAgentSubscription(slug: string) {
         method: 'POST',
         body: JSON.stringify(body),
       }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: subsKey(slug) }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.agentSubscriptions(slug) }),
   });
 }
 
@@ -244,19 +243,16 @@ export function useUpdateAgentSchedule(slug: string) {
         body: JSON.stringify(patch),
       });
     },
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: subsKey(slug) }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.agentSubscriptions(slug) }),
   });
 }
-
-const watchersKey = (parentType: string, parentID: string) =>
-  ['parent-watchers', parentType, parentID] as const;
 
 // useParentWatchers returns the viewer's OWN watchers in a channel/DM, across
 // all agents — so the message list can badge watched threads. Cheap enough to
 // keep fresh; watcher create/delete invalidate it.
 export function useParentWatchers(parentType: 'channel' | 'conversation', parentID: string | undefined) {
   return useQuery({
-    queryKey: watchersKey(parentType, parentID ?? ''),
+    queryKey: queryKeys.parentWatchers({ type: parentType, id: parentID ?? '' }),
     enabled: !!parentID,
     // Periodic refetch so a catch-up ask (set server-side while this view is
     // open) surfaces without a reload.
@@ -281,7 +277,7 @@ export function useDecideCatchUp() {
         method: 'POST',
         body: JSON.stringify({ process: vars.process }),
       }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['parent-watchers'] }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.parentWatchers() }),
   });
 }
 
@@ -304,8 +300,8 @@ export function useUpdateWatcher() {
       });
     },
     onSuccess: (_data, vars) => {
-      void queryClient.invalidateQueries({ queryKey: subsKey(vars.slug) });
-      void queryClient.invalidateQueries({ queryKey: ['parent-watchers'] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.agentSubscriptions(vars.slug) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.parentWatchers() });
     },
   });
 }
@@ -320,8 +316,8 @@ export function useRemoveWatcher() {
         method: 'DELETE',
       }),
     onSuccess: (_data, vars) => {
-      void queryClient.invalidateQueries({ queryKey: subsKey(vars.slug) });
-      void queryClient.invalidateQueries({ queryKey: ['parent-watchers'] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.agentSubscriptions(vars.slug) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.parentWatchers() });
     },
   });
 }
@@ -332,15 +328,15 @@ export function useDeleteAgentSubscription(slug: string) {
     mutationFn: async ({ parentID, id }: { parentID: string; id: string }) =>
       apiFetch(`/api/v1/agents/${slug}/subscriptions/${parentID}/${id}`, { method: 'DELETE' }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: subsKey(slug) });
-      void queryClient.invalidateQueries({ queryKey: ['parent-watchers'] });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.agentSubscriptions(slug) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.parentWatchers() });
     },
   });
 }
 
 export function useAgents() {
   return useQuery({
-    queryKey: AGENTS_KEY,
+    queryKey: queryKeys.agents(),
     queryFn: async () => {
       const res = await apiFetch<{ agents: AgentView[] }>('/api/v1/agents');
       // ?? [] — react-query treats undefined data as an error (and generic
@@ -380,11 +376,10 @@ export function isSkillPublished(skill: Skill): boolean {
   return skill.visibility !== 'private';
 }
 
-const SKILLS_KEY = ['skills'] as const;
 
 export function useSkills() {
   return useQuery({
-    queryKey: SKILLS_KEY,
+    queryKey: queryKeys.skills(),
     queryFn: async () => {
       const res = await apiFetch<{ skills: Skill[] }>('/api/v1/skills');
       return res.skills ?? [];
@@ -401,7 +396,7 @@ export function useCreateSkill() {
       instructions: string;
       visibility?: SkillVisibility;
     }) => apiFetch<{ skill: Skill }>('/api/v1/skills', { method: 'POST', body: JSON.stringify(body) }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: SKILLS_KEY }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.skills() }),
   });
 }
 
@@ -419,7 +414,7 @@ export function useUpdateSkill() {
         method: 'PATCH',
         body: JSON.stringify(patch),
       }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: SKILLS_KEY }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.skills() }),
   });
 }
 
@@ -427,7 +422,7 @@ export function useDeleteSkill() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => apiFetch(`/api/v1/skills/${id}`, { method: 'DELETE' }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: SKILLS_KEY }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.skills() }),
   });
 }
 
@@ -443,7 +438,7 @@ export function useCreateAgent() {
       executionMode: string;
       persona: string;
     }) => apiFetch('/api/v1/agents', { method: 'POST', body: JSON.stringify(body) }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: AGENTS_KEY }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.agents() }),
   });
 }
 
@@ -456,7 +451,7 @@ export function useUpdateAgentPrefs() {
         body: JSON.stringify(patch),
       }),
     onSuccess: (updated) => {
-      queryClient.setQueryData<AgentView[]>(AGENTS_KEY, (prev) =>
+      queryClient.setQueryData<AgentView[]>(queryKeys.agents(), (prev) =>
         prev?.map((a) => (a.slug === updated.slug ? updated : a)),
       );
     },
@@ -495,18 +490,16 @@ export function useUpdateAgentTemplate() {
     }) => apiFetch(`/api/v1/agents/${slug}`, { method: 'PATCH', body: JSON.stringify(patch) }),
     // The response carries the template, not the caller's AgentView, so refetch
     // rather than patching the cache with the wrong shape.
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: AGENTS_KEY }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.agents() }),
   });
 }
-
-const OVERRIDES_KEY = (slug: string) => ['agent-overrides', slug] as const;
 
 // useAgentOverrides counts the people whose own settings shadow the template.
 // It is a roster walk server-side, so it runs only while an admin actually has
 // the panel open.
 export function useAgentOverrides(slug: string, enabled: boolean) {
   return useQuery({
-    queryKey: OVERRIDES_KEY(slug),
+    queryKey: queryKeys.agentOverrides(slug),
     queryFn: async () => {
       const res = await apiFetch<{ count: number }>(`/api/v1/agents/${slug}/overrides`);
       return res.count;
@@ -530,8 +523,8 @@ export function useResetAgentOverrides() {
       return res.cleared;
     },
     onSuccess: (_cleared, slug) => {
-      void queryClient.invalidateQueries({ queryKey: OVERRIDES_KEY(slug) });
-      void queryClient.invalidateQueries({ queryKey: AGENTS_KEY });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.agentOverrides(slug) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.agents() });
     },
   });
 }

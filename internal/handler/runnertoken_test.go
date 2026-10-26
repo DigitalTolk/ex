@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/agents"
 	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/model"
-	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -130,6 +130,14 @@ func (u *hrtUsers) GetByID(_ context.Context, id string) (*model.User, error) {
 	return nil, store.ErrNotFound
 }
 
+func (u *hrtUsers) UserAccess(ctx context.Context, id string) (string, model.SystemRole, error) {
+	user, err := u.GetByID(ctx, id)
+	if err != nil {
+		return "", "", err
+	}
+	return user.Status, user.SystemRole, nil
+}
+
 type hrtEnv struct {
 	router http.Handler
 	h      *RunnerTokenHandler
@@ -148,7 +156,7 @@ func newHRTEnv() *hrtEnv {
 		"u-bob":   {ID: "u-bob", DisplayName: "Bob", Status: "active"},
 		"a-gg":    {ID: "a-gg", DisplayName: "gg", Kind: model.UserKindAgent, Status: "active"},
 	}}
-	svc := service.NewRunnerTokenService(st, users, jwtMgr)
+	svc := agents.NewRunnerTokenService(st, users, jwtMgr)
 	rth := NewRunnerTokenHandler(svc)
 	router := NewRouter(&Deps{
 		Auth:         &AuthHandler{},
@@ -300,7 +308,16 @@ func TestHRT_GrantAndExchangeRefusals(t *testing.T) {
 func TestHRT_RenewOfDeactivatedOwnerIsDisconnected(t *testing.T) {
 	env := newHRTEnv()
 	token, _ := env.pair(t, "u-alice", "mac")
+	// A deactivated owner's runner is refused by the runner middleware on
+	// EVERY request now (renew included), before any handler runs.
 	env.users.users["u-alice"].Status = "deactivated"
+	hrtWant(t, env.do(http.MethodPost, "/api/v1/agent/runner/renew", token, "{}"), http.StatusUnauthorized)
+	hrtWant(t, env.do(http.MethodPost, "/api/v1/agent/runner/revoke", token, "{}"), http.StatusUnauthorized)
+
+	// An owner who may not hold a runner at all (an agent account) still gets
+	// the renewal's own "disconnected" answer.
+	env.users.users["u-alice"].Status = "active"
+	env.users.users["u-alice"].Kind = model.UserKindAgent
 	rec := env.do(http.MethodPost, "/api/v1/agent/runner/renew", token, "{}")
 	hrtWant(t, rec, http.StatusUnauthorized)
 	if code := hrtErrCode(t, rec); code != "runner_disconnected" {
@@ -337,7 +354,7 @@ func TestHRT_CheckerFailsClosedWhenUnwired(t *testing.T) {
 	if (&RunnerTokenHandler{}).Checker() != nil {
 		t.Fatal("handler without a service must yield no checker")
 	}
-	if NewRunnerTokenHandler(service.NewRunnerTokenService(newHRTStore(), &hrtUsers{}, nil)).Checker() == nil {
+	if NewRunnerTokenHandler(agents.NewRunnerTokenService(newHRTStore(), &hrtUsers{}, nil)).Checker() == nil {
 		t.Fatal("wired handler must yield its service as the checker")
 	}
 }

@@ -38,7 +38,7 @@ function renderInlineCode(text: string): ReactNode[] {
     i % 2 === 1 ? (
       <code
         key={`c-${i}-${part}`}
-        className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]"
+        className="rounded bg-muted px-1 py-0.5 font-mono text-xs"
       >
         {part}
       </code>
@@ -193,7 +193,7 @@ export function AgentApprovalCard({ parentID, userMap }: Props) {
                       : " is waiting for your approval"}
                 </span>
               </span>
-              <span className="ml-auto flex items-center gap-1 text-[10px] uppercase tracking-wide text-amber-600/80 dark:text-amber-400/80">
+              <span className="ml-auto flex items-center gap-1 text-xs uppercase tracking-wide text-amber-600/80 dark:text-amber-400/80">
                 {isChoice ? (
                   <ListChecks className="h-3 w-3" aria-hidden="true" />
                 ) : (
@@ -214,7 +214,7 @@ export function AgentApprovalCard({ parentID, userMap }: Props) {
                 <p
                   role="alert"
                   data-testid="approval-send-failed"
-                  className="mb-2 rounded-md border border-red-500/40 bg-red-500/10 px-2.5 py-1.5 text-[11px] text-red-600 dark:text-red-400"
+                  className="mb-2 rounded-md border border-red-500/40 bg-red-500/10 px-2.5 py-1.5 text-xs text-red-600 dark:text-red-400"
                 >
                   Couldn&apos;t send your decision — check your connection and
                   try again. The agent is still waiting.
@@ -242,7 +242,7 @@ export function AgentApprovalCard({ parentID, userMap }: Props) {
                           }
                           className="flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-xs transition-colors hover:border-primary/50 hover:bg-accent disabled:opacity-50"
                         >
-                          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted font-mono text-[10px] text-muted-foreground">
+                          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted font-mono text-xs text-muted-foreground">
                             {i + 1}
                           </span>
                           <span className="min-w-0 break-words font-medium">
@@ -257,7 +257,7 @@ export function AgentApprovalCard({ parentID, userMap }: Props) {
                           onClick={() =>
                             void decide(a.approvalID, a.runID, false)
                           }
-                          className="rounded-md px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+                          className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
                         >
                           Dismiss — let it decide
                         </button>
@@ -334,7 +334,7 @@ export function AgentApprovalCard({ parentID, userMap }: Props) {
                             onClick={() => void alwaysAllow(a)}
                             data-testid="approval-always-allow"
                             title={`Stop asking when ${agentLabel} wants to ${AUTO_ALLOW_CLASSES.find((c) => c.id === a.kind)?.label.toLowerCase() ?? a.kind} — saved in your agent settings; approves every pending ${a.kind} request too`}
-                            className="ml-auto inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+                            className="ml-auto inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
                           >
                             <ShieldCheck
                               className="h-3.5 w-3.5"
@@ -353,7 +353,7 @@ export function AgentApprovalCard({ parentID, userMap }: Props) {
                             onClick={() => void alwaysAllowConnector(a)}
                             data-testid="approval-always-allow-connector"
                             title={`Stop asking when an agent wants to use ${connectorOf(a)} for you — sets that connector's agent use to "always" on your Connectors page; approves every pending request for it too`}
-                            className="ml-auto inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+                            className="ml-auto inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
                           >
                             <ShieldCheck
                               className="h-3.5 w-3.5"
@@ -397,7 +397,7 @@ function ReplyProposal({
   const [text, setText] = useState(/* istanbul ignore next -- ReplyProposal mounts only when replyText is truthy */ approval.replyText ?? "");
   return (
     <div className="space-y-2">
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-xs text-muted-foreground">
         Edit if you like, then send — or cancel and reply yourself.
       </p>
       <textarea

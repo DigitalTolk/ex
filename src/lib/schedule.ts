@@ -12,18 +12,6 @@ export type Cadence = 'daily' | 'weekdays' | 'weekly';
 
 export const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
 
-// localTimeZone is the viewer's IANA zone — what "8am" means to them. Sent on
-// create so a schedule is anchored to their zone rather than the server's.
-// A browser that can't report one falls back to the server's default (the
-// creator's profile timezone, then UTC).
-export function localTimeZone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-  } catch {
-    return '';
-  }
-}
-
 // timeZoneOptions is what the form's zone picker offers: every IANA zone the
 // browser knows, plus UTC and the given zones (the viewer's own, an edited
 // order's), which the list can omit — V8 leaves out "UTC" and reports some

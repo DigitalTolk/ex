@@ -106,7 +106,8 @@ vi.mock('@/context/PresenceContext', () => ({
   PresenceProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-vi.mock('@/hooks/useChannels', () => ({
+vi.mock('@/hooks/useChannels', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useChannels')>()),
   useChannelBySlug: () => ({ data: mockChannel }),
   useChannelMembers: () => ({ data: currentMembers }),
   // Applies `select` like the real hook (ChannelView selects its own row).
@@ -128,7 +129,7 @@ vi.mock('@/hooks/useMessages', () => ({
     isLoading: false,
     fetchNextPage: vi.fn(),
   }),
-  useSendChannelMessage: () => ({ mutate: vi.fn(), isPending: false }),
+  useSendMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),

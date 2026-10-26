@@ -179,6 +179,41 @@ describe('LoginPage flows - success paths', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Invalid invite');
   });
 
+  // The server answers {error: {code, message}}; the message is what reads.
+  it('shows the server message of a failed invite acceptance', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      json: () => Promise.resolve({ error: { code: 'bad_request', message: 'This invitation has expired' } }),
+    } as Response);
+
+    const user = userEvent.setup();
+    renderInvite();
+
+    await user.type(screen.getByLabelText('Display Name'), 'X');
+    await user.type(screen.getByLabelText('Password'), 'longpassword');
+    await user.click(screen.getByText('Create Account'));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('This invitation has expired');
+    expect(alert).not.toHaveTextContent('[object Object]');
+  });
+
+  it.each([
+    ['an empty error', { error: '' }],
+    ['an error without a message', { error: { code: 'bad_request' } }],
+  ])('falls back to its own text for %s', async (_label, body) => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, json: () => Promise.resolve(body) } as Response);
+
+    const user = userEvent.setup();
+    renderInvite();
+
+    await user.type(screen.getByLabelText('Display Name'), 'X');
+    await user.type(screen.getByLabelText('Password'), 'longpassword');
+    await user.click(screen.getByText('Create Account'));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Invite acceptance failed');
+  });
+
   it('shows fallback error when invite acceptance JSON parse fails', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,

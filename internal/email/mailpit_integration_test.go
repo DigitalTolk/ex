@@ -91,8 +91,10 @@ func newMailpitSender(t *testing.T, from string) *SMTPSender {
 	}
 	// No credentials and no TLS: Mailpit accepts plain SMTP by default, which
 	// is exactly the "trusted local relay" deployment the opportunistic TLS
-	// policy exists to support.
-	sender, err := NewSMTPSender(mailpitSMTPHost, mailpitSMTPPort, "", "", from)
+	// policy exists to support — so the suite opts into it explicitly. The
+	// production default (mandatory) refuses this relay; see
+	// TestMailpit_MandatoryTLSRefusesPlaintextRelay.
+	sender, err := NewSMTPSender(mailpitSMTPHost, mailpitSMTPPort, "", "", from, TLSOpportunistic)
 	if err != nil {
 		t.Fatalf("NewSMTPSender: %v", err)
 	}
@@ -315,5 +317,32 @@ func TestMailpit_AdminTestMessage(t *testing.T) {
 		if !strings.Contains(msg.HTML, want) {
 			t.Errorf("HTML body mangled %q:\n%s", want, msg.HTML)
 		}
+	}
+}
+
+// Against a REAL relay that offers no STARTTLS (Mailpit without a
+// certificate), the production-default MANDATORY policy refuses to talk in
+// the clear: Send fails and nothing lands in the mailbox.
+func TestMailpit_MandatoryTLSRefusesPlaintextRelay(t *testing.T) {
+	if !mailpitReady {
+		t.Skip("skipping: Docker / Mailpit not available")
+	}
+	resetMailpit(t)
+	sender, err := NewSMTPSender(mailpitSMTPHost, mailpitSMTPPort, "", "", "noreply@ex.example.com", TLSMandatory)
+	if err != nil {
+		t.Fatalf("NewSMTPSender: %v", err)
+	}
+
+	if err := sender.Send(context.Background(), TestMessage("admin@example.com", "smtp")); err == nil {
+		t.Fatal("Send succeeded over plaintext despite the mandatory TLS policy")
+	}
+	var list struct {
+		Messages []struct {
+			ID string `json:"ID"`
+		} `json:"messages"`
+	}
+	getJSON(t, mailpitAPI+"/api/v1/messages", &list)
+	if len(list.Messages) != 0 {
+		t.Errorf("%d message(s) were delivered in the clear", len(list.Messages))
 	}
 }

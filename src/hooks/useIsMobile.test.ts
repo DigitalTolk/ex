@@ -78,4 +78,55 @@ describe('useIsMobile', () => {
 
     expect(result.current).toBe(false);
   });
+
+  it('shares one media query and one change listener across every mounted row', () => {
+    // Every message row asks; a channel mounts dozens of them. Each used to
+    // build its own MediaQueryList and listener.
+    const media = installMatchMedia(false);
+    const hooks = Array.from({ length: 25 }, () => renderHook(() => useIsMobile()));
+
+    expect(window.matchMedia).toHaveBeenCalledTimes(1);
+    expect(media.addEventListener).toHaveBeenCalledTimes(1);
+
+    // One change still reaches every row.
+    act(() => media.emit(true));
+    for (const hook of hooks) expect(hook.result.current).toBe(true);
+
+    // The listener stays while any row is mounted and goes with the last one.
+    for (const hook of hooks.slice(1)) hook.unmount();
+    expect(media.removeEventListener).not.toHaveBeenCalled();
+    hooks[0].unmount();
+    expect(media.removeEventListener).toHaveBeenCalledTimes(1);
+  });
+
+  it('follows a replaced matchMedia (a new viewport emulation)', () => {
+    const before = installMatchMedia(false);
+    const first = renderHook(() => useIsMobile());
+    expect(first.result.current).toBe(false);
+
+    // Replaced while a row is still mounted: the shared listener moves over.
+    const after = installMatchMedia(false);
+    const second = renderHook(() => useIsMobile());
+    expect(before.removeEventListener).toHaveBeenCalledTimes(1);
+    expect(after.addEventListener).toHaveBeenCalledTimes(1);
+    act(() => after.emit(true));
+    expect(second.result.current).toBe(true);
+    first.unmount();
+    second.unmount();
+    expect(after.removeEventListener).toHaveBeenCalledTimes(1);
+  });
+
+  it('is false on a desktop device even at phone width', () => {
+    const media = installMatchMedia(true);
+    const original = window.__EX_FORCE_DEVICE__;
+    window.__EX_FORCE_DEVICE__ = 'desktop';
+    try {
+      const { result } = renderHook(() => useIsMobile());
+      expect(result.current).toBe(false);
+      act(() => media.emit(true));
+      expect(result.current).toBe(false);
+    } finally {
+      window.__EX_FORCE_DEVICE__ = original;
+    }
+  });
 });

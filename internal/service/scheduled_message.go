@@ -40,9 +40,10 @@ var ErrScheduledTimeInvalid = fmt.Errorf("%w: send time must be in the future", 
 var ErrScheduledBusy = errors.New("scheduled message: already being sent")
 
 // ScheduledMessageSender posts a scheduled message as its author through the
-// normal send path (access, validation, notifications).
+// normal send path (access, validation, notifications) — without touching the
+// composer's draft (MessageService.SendScheduled).
 type ScheduledMessageSender interface {
-	Send(ctx context.Context, userID, parentID, parentType, body, parentMessageID string, attachmentIDs ...string) (*model.Message, error)
+	SendScheduled(ctx context.Context, userID, parentID, parentType, body, parentMessageID string, attachmentIDs ...string) (*model.Message, error)
 	// CheckWriteAccess: the author may post there now (member, and the
 	// channel is not archived).
 	CheckWriteAccess(ctx context.Context, userID, parentID, parentType string) error
@@ -77,8 +78,14 @@ type ScheduledMessageService struct {
 	sender      ScheduledMessageSender
 	attachments DraftAttachmentReleaser
 	publisher   Publisher
+	drafts      SentDraftClearer
 	now         func() time.Time
 }
+
+// SetDraftClearer folds the draft clear into scheduling: a scheduled message
+// empties its composer's draft exactly like a send. Optional — nil leaves
+// drafts to the client.
+func (s *ScheduledMessageService) SetDraftClearer(c SentDraftClearer) { s.drafts = c }
 
 // NewScheduledMessageService builds a ScheduledMessageService. attachments
 // and publisher may be nil.
@@ -117,6 +124,7 @@ func (s *ScheduledMessageService) Schedule(ctx context.Context, userID string, i
 	if err := s.store.PutScheduledMessage(ctx, m); err != nil {
 		return nil, err
 	}
+	clearSentDraft(ctx, s.drafts, draftScope{userID: userID, parentID: in.ParentID, parentType: in.ParentType, parentMessageID: in.ParentMessageID})
 	s.changed(ctx, userID)
 	return m, nil
 }
@@ -178,7 +186,7 @@ func (s *ScheduledMessageService) Delete(ctx context.Context, userID, id string)
 			// Best-effort: an attachment some sent message also uses is
 			// refused, which is exactly right.
 			if err := s.attachments.DeleteDraft(ctx, userID, aid); err != nil {
-				slog.Debug("scheduled message: attachment kept", "attachmentID", aid, "error", err)
+				slog.DebugContext(ctx, "scheduled message: attachment kept", "attachmentID", aid, "error", err)
 			}
 		}
 	}
@@ -243,7 +251,7 @@ func (s *ScheduledMessageService) ProcessDue(ctx context.Context) (int, error) {
 		for _, d := range due {
 			claimed, err := s.store.ClaimScheduledMessage(ctx, d.UserID, d.ID, d.DueKey, now.Add(scheduledLease))
 			if err != nil {
-				slog.Warn("scheduled message: claim failed", "id", d.ID, "error", err)
+				slog.WarnContext(ctx, "scheduled message: claim failed", "id", d.ID, "error", err)
 				continue
 			}
 			if !claimed {
@@ -265,24 +273,24 @@ func (s *ScheduledMessageService) ProcessDue(ctx context.Context) (int, error) {
 // failed with the reason; anything else is retried when the claim lapses,
 // until scheduledGiveUpAfter.
 func (s *ScheduledMessageService) deliver(ctx context.Context, m *model.ScheduledMessage) (*model.Message, error) {
-	msg, err := s.sender.Send(ctx, m.UserID, m.ParentID, m.ParentType, m.Body, m.ParentMessageID, m.AttachmentIDs...)
+	msg, err := s.sender.SendScheduled(ctx, m.UserID, m.ParentID, m.ParentType, m.Body, m.ParentMessageID, m.AttachmentIDs...)
 	if err == nil {
 		if derr := s.store.DeleteScheduledMessage(ctx, m.UserID, m.ID); derr != nil {
-			slog.Error("scheduled message: sent but not removed", "id", m.ID, "error", derr)
+			slog.ErrorContext(ctx, "scheduled message: sent but not removed", "id", m.ID, "error", derr)
 		}
 		s.changed(ctx, m.UserID)
 		return msg, nil
 	}
 	reason, final := scheduledFailReason(err)
 	if !final && s.now().Sub(m.SendAt) < scheduledGiveUpAfter {
-		slog.Warn("scheduled message: delivery failed, will retry", "id", m.ID, "error", err)
+		slog.WarnContext(ctx, "scheduled message: delivery failed, will retry", "id", m.ID, "error", err)
 		return nil, err
 	}
 	m.State = model.ScheduledMessageFailed
 	m.FailReason = reason
 	m.UpdatedAt = s.now()
 	if perr := s.store.PutScheduledMessage(ctx, m); perr != nil {
-		slog.Error("scheduled message: failed delivery not recorded", "id", m.ID, "error", perr)
+		slog.ErrorContext(ctx, "scheduled message: failed delivery not recorded", "id", m.ID, "error", perr)
 	}
 	s.changed(ctx, m.UserID)
 	return nil, err

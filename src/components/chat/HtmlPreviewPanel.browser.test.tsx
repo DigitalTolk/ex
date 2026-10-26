@@ -3,11 +3,12 @@ import { render } from 'vitest-browser-react';
 import HtmlPreviewPanel from './HtmlPreviewPanel';
 import { MAX_MISSED_PINGS, PING_INTERVAL_MS, READY_GRACE_MS } from '@/lib/html-preview';
 
-// The preview's security claims, checked in real engines (Chromium + WebKit):
-// the file's scripts run, but in an opaque origin with no network, and a
-// frame that navigates anywhere is taken down — including the navigation
-// that happens before the srcdoc's own load, which a plain load counter
-// cannot see.
+// The preview's security claims, checked in real engines (Chromium + WebKit)
+// against what the Go server serves (src/test/html-preview-server.ts plays
+// its preview route from the server's golden): the file's scripts run, but
+// in an opaque origin with no network, and a frame that navigates anywhere
+// is taken down — including the navigation that happens before the
+// document's own load, which a plain load counter cannot see.
 
 const mounted: Array<{ unmount: () => Promise<void> }> = [];
 const listeners: Array<(e: MessageEvent) => void> = [];
@@ -18,14 +19,20 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function mount(html: string) {
-  vi.spyOn(window, 'fetch').mockResolvedValue(new Response(html, { status: 200, headers: { 'Content-Type': 'text/html' } }));
-  const screen = await render(
-    <HtmlPreviewPanel attachment={{ url: '/api/v1/media/tok/mockup.html', filename: 'mockup.html' }} onClose={() => {}} />,
-  );
+// The test server serves a token of `f.<base64url file>` as that file.
+function fileToken(html: string): string {
+  let bin = '';
+  for (const b of new TextEncoder().encode(html)) bin += String.fromCharCode(b);
+  return `f.${btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+}
+
+async function mountURL(url: string) {
+  const screen = await render(<HtmlPreviewPanel attachment={{ url, filename: 'mockup.html' }} onClose={() => {}} />);
   mounted.push(screen);
   return screen;
 }
+
+const mount = (html: string) => mountURL(`/api/v1/media/${fileToken(html)}/mockup.html`);
 
 // What the mockup's own scripts post to the page (the panel ignores these).
 function mockupMessages() {
@@ -38,7 +45,9 @@ function mockupMessages() {
 
 const frame = () => document.querySelector<HTMLIFrameElement>('[data-testid="html-preview-frame"]');
 const notice = () => document.querySelector('[data-testid="html-preview-navigated"]');
-// A same-server URL the frame can actually navigate to.
+// A same-server URL the frame can actually navigate to: this test page has
+// no CSP, so the guard alone must catch it (in the app, frame-src refuses it
+// first — see src/test/page-csp.browser.test.ts).
 const outside = (tag: string) => `${window.location.origin}/favicon.ico?${tag}`;
 const SETTLE = { timeout: 5000 };
 const CLOSE = { timeout: READY_GRACE_MS + PING_INTERVAL_MS * (MAX_MISSED_PINGS + 4) };
@@ -68,6 +77,51 @@ describe('HtmlPreviewPanel in a real browser', () => {
     // empty one. Either way the page's cookie is out of reach.
     expect(['SecurityError', '']).toContain(mockup.cookie);
     document.cookie = 'ex_preview_probe=; path=/; max-age=0';
+  });
+
+  it('keeps the guard nonce out of reach of the mockup', async () => {
+    const messages = mockupMessages();
+    await mount(`<p>Mockup</p><script>
+      parent.postMessage({ probe: { name: window.name, scripts: document.scripts.length } }, '*');
+    </script>`);
+    await expect.poll(() => frame()?.dataset.guard, SETTLE).toBe('live');
+    await expect.poll(() => messages.find((m) => (m as { probe?: unknown }).probe)).toBeTruthy();
+    const { probe } = messages.find((m) => (m as { probe?: unknown }).probe) as { probe: { name: string; scripts: number } };
+    // The frame was named with the nonce; the beacon took it and wiped the
+    // name, then removed itself, before the file's first script ran.
+    expect(frame()!.name).toMatch(/^[0-9a-f]{32}$/);
+    expect(probe).toEqual({ name: '', scripts: 1 });
+  });
+
+  it('shows the error state when the server has no file to show, and retries', async () => {
+    // Every frame the panel inserts, so the retry's own frame is seen even
+    // if it fails before a poll would catch it.
+    const frames = new Set<HTMLIFrameElement>();
+    const observer = new MutationObserver((records) => {
+      for (const r of records) {
+        for (const n of r.addedNodes) {
+          if (!(n instanceof Element)) continue;
+          // The first frame arrives inside the dialog's whole subtree.
+          if (n instanceof HTMLIFrameElement) frames.add(n);
+          n.querySelectorAll('iframe').forEach((f) => frames.add(f));
+        }
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    const error = () => document.querySelector('[data-testid="html-preview-error"]');
+    try {
+      const screen = await mountURL('/api/v1/media/expired/mockup.html');
+      await expect.poll(error, SETTLE).not.toBeNull();
+      expect(frame()).toBeNull();
+      expect(notice()).toBeNull();
+      const before = frames.size;
+      await screen.getByTestId('html-preview-retry').click();
+      await expect.poll(() => frames.size, SETTLE).toBe(before + 1);
+      await expect.poll(error, SETTLE).not.toBeNull();
+      expect(notice()).toBeNull();
+    } finally {
+      observer.disconnect();
+    }
   });
 
   it('blocks network requests and outside images from the mockup', async () => {

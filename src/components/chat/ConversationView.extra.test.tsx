@@ -90,7 +90,7 @@ vi.mock('@/hooks/useConversations', () => ({
     const rows = [] as never[];
     return { data: opts?.select && rows ? opts.select(rows) : rows };
   },
-  useSearchUsers: () => ({ data: [] }),
+  useUserLookup: () => ({ data: [] }),
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
@@ -103,7 +103,7 @@ vi.mock('@/hooks/useMessages', () => ({
     isLoading: false,
     fetchNextPage: vi.fn(),
   }),
-  useSendConversationMessage: () => ({ mutate: mockSendMutate, isPending: false }),
+  useSendMessage: () => ({ mutate: mockSendMutate, isPending: false }),
   useEditMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteMessage: () => ({ mutate: vi.fn(), isPending: false }),
   useToggleReaction: () => ({ mutate: vi.fn(), isPending: false }),

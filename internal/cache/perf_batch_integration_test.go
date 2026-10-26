@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -132,7 +133,7 @@ func TestCacheMustJSONPanicsOnImpossibleFailure(t *testing.T) {
 			t.Fatal("expected panic from an unmarshalable value")
 		}
 	}()
-	_ = mustJSON(json.Marshal(make(chan int)))
+	_ = mustJSON(json.Marshal(math.Inf(1)))
 }
 
 func TestArePresenceOnline_RealRedis(t *testing.T) {

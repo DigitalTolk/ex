@@ -107,6 +107,13 @@ describe('ProjectDetailPage', () => {
     expect(await screen.findByTestId('list-route')).toBeInTheDocument();
   });
 
+  it('does not link an app URL that is not plain http(s)', async () => {
+    current = detail({ appURL: 'smb://attacker.example/share', description: 'Bookings' });
+    renderPage();
+    expect(await screen.findByText('Bookings')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Open app/ })).not.toBeInTheDocument();
+  });
+
   it('toasts a failed delete', async () => {
     renderPage();
     fireEvent.click(await screen.findByTestId('project-delete'));

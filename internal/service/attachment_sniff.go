@@ -1,13 +1,13 @@
 package service
 
 import (
-	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/gabriel-vasile/mimetype"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/model"
 )
 
@@ -69,5 +69,5 @@ func (k *claimedKind) check(filename string, head []byte) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("attachment: %s is not %s", filename, k.name)
+	return apperr.Invalid("attachment: %s is not %s", filename, k.name)
 }

@@ -54,6 +54,7 @@ func TestCreateInvite_SendsEmail(t *testing.T) {
 // its link still returned for the inviter to copy.
 func TestCreateInvite_NoMailerStillCreatesInvite(t *testing.T) {
 	env := setupAuthService()
+	seedAdmin(env, "u-inviter")
 
 	inv, err := env.svc.CreateInvite(context.Background(), "u-inviter", "guest@example.com", nil)
 	if err != nil {
@@ -74,27 +75,28 @@ func TestCreateInvite_MailFailureIsNotFatal(t *testing.T) {
 	}
 }
 
-// An unresolvable inviter yields a nameless invitation rather than blocking it.
-func TestCreateInvite_UnknownInviterSendsGenericEmail(t *testing.T) {
+// Invites are admin-only, so an inviter whose role can't be confirmed —
+// unknown, or the lookup failed — is refused and nothing is mailed.
+// (Behaviour change: this used to send a nameless invitation.)
+func TestCreateInvite_UnknownInviterIsRefused(t *testing.T) {
 	env, mailer := setupInviteMail(t)
 
-	if _, err := env.svc.CreateInvite(context.Background(), "ghost", "guest@example.com", nil); err != nil {
-		t.Fatalf("CreateInvite = %v", err)
+	if _, err := env.svc.CreateInvite(context.Background(), "ghost", "guest@example.com", nil); err == nil {
+		t.Fatal("an unknown inviter must be refused")
 	}
-	msg := mailer.last()
-	if !strings.Contains(msg.Text, "You have been invited") {
-		t.Errorf("expected the generic invitation wording: %q", msg.Text)
+	if len(mailer.sent) != 0 {
+		t.Fatalf("emails sent = %d, want 0", len(mailer.sent))
 	}
 }
 
-func TestCreateInvite_InviterLookupFailureSendsGenericEmail(t *testing.T) {
+func TestCreateInvite_InviterLookupFailureIsRefused(t *testing.T) {
 	env, mailer := setupInviteMail(t)
 	env.users.getUserErr = errors.New("dynamo down")
 
-	if _, err := env.svc.CreateInvite(context.Background(), "u-inviter", "guest@example.com", nil); err != nil {
-		t.Fatalf("CreateInvite = %v", err)
+	if _, err := env.svc.CreateInvite(context.Background(), "u-inviter", "guest@example.com", nil); err == nil {
+		t.Fatal("an inviter whose role can't be read must be refused")
 	}
-	if len(mailer.sent) != 1 {
-		t.Fatalf("emails sent = %d, want 1 even when the inviter lookup fails", len(mailer.sent))
+	if len(mailer.sent) != 0 {
+		t.Fatalf("emails sent = %d, want 0", len(mailer.sent))
 	}
 }

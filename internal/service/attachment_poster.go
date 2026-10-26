@@ -84,9 +84,9 @@ func (s *AttachmentService) SetVideoPoster(ctx context.Context, userID, attachme
 			return nil, err
 		}
 	}
-	if err := s.storeThumbnails(ctx, a, img, release); err != nil {
+	if err := s.storeThumbnails(ctx, a, storedPixels{Image: img}, release); err != nil {
 		return nil, err
 	}
-	s.resolveAttachmentURLs(ctx, a)
+	s.resolveAttachmentURLs(ctx, a, nil)
 	return a, nil
 }

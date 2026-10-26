@@ -85,6 +85,31 @@ func (s *RunStore) SettleApproval(ctx context.Context, runID, approvalID, state,
 	return nil
 }
 
+// ConsumeApproval spends an APPROVED decision on exactly one action: it is
+// marked consumed only if it is approved and not consumed yet, so two
+// concurrent actions racing for one "yes" resolve to one winner
+// (ErrStaleApproval for the loser).
+func (s *RunStore) ConsumeApproval(ctx context.Context, runID, approvalID string, at time.Time) error {
+	update := expression.Set(expression.Name("consumedAt"), expression.Value(at.UTC().Format(time.RFC3339Nano)))
+	cond := expression.Name("state").Equal(expression.Value(model.ApprovalApproved)).
+		And(expression.AttributeNotExists(expression.Name("consumedAt")))
+	expr := mustExpr(expression.NewBuilder().WithUpdate(update).WithCondition(cond).Build())
+	if _, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(s.Table),
+		Key:                       compositeKey(runPK(runID), approvalSK(approvalID)),
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	}); err != nil {
+		if isConditionCheckFailed(err) {
+			return ErrStaleApproval
+		}
+		return fmt.Errorf("store: consume approval: %w", err)
+	}
+	return nil
+}
+
 // ListApprovals returns a run's approvals in creation (ULID) order.
 func (s *RunStore) ListApprovals(ctx context.Context, runID string) ([]*model.Approval, error) {
 	keyCond := expression.Key("PK").Equal(expression.Value(runPK(runID))).

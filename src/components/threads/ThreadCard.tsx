@@ -44,6 +44,11 @@ interface ThreadCardProps {
   deepLink: string;
   currentUserId?: string;
   unread?: boolean;
+  // Whether the collapsed middle of a long thread is shown. The Threads page
+  // owns it (its list is virtualized, and a card's own state goes when it
+  // scrolls far away); a card on its own keeps it itself.
+  expanded?: boolean;
+  onExpand?: () => void;
 }
 
 function markSummaryThreadSeen(summary: ThreadSummary) {
@@ -64,7 +69,7 @@ const TAIL_LENGTH = 2;
 // reply composer. Each card fetches its own thread messages; React
 // Query's keyed cache means clicking into the channel/conversation view
 // doesn't re-fetch.
-export function ThreadCard({ summary, title, deepLink, currentUserId, unread = false }: ThreadCardProps) {
+export function ThreadCard({ summary, title, deepLink, currentUserId, unread = false, expanded: expandedProp, onExpand }: ThreadCardProps) {
   const channelId = summary.parentType === 'channel' ? summary.parentID : undefined;
   const conversationId = summary.parentType === 'conversation' ? summary.parentID : undefined;
 
@@ -108,7 +113,8 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
   // the top and the last TAIL_LENGTH replies at the bottom, hiding the
   // ones in between behind a toggle. Threads under FULL_RENDER_CAP are
   // shown in full.
-  const [expanded, setExpanded] = useState(false);
+  const [localExpanded, setLocalExpanded] = useState(false);
+  const expanded = expandedProp ?? localExpanded;
   const isLong = totalCount > FULL_RENDER_CAP;
   const tail = isLong ? replies.slice(-TAIL_LENGTH) : replies;
   const hiddenCount = isLong ? replies.length - TAIL_LENGTH : 0;
@@ -327,7 +333,7 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
           {!isLoading && isLong && !expanded && (
             <button
               type="button"
-              onClick={() => setExpanded(true)}
+              onClick={() => (onExpand ? onExpand() : setLocalExpanded(true))}
               data-testid="thread-card-expand"
               className="my-1 ml-15 block text-xs font-medium text-link mobile:ml-13 transition-colors hover:text-link/80"
             >

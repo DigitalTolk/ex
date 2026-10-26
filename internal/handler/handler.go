@@ -11,8 +11,6 @@ import (
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
-	"github.com/DigitalTolk/ex/internal/service"
-	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // JSON is a convenience type for building JSON response objects.
@@ -38,14 +36,16 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 
 // writeInternalError writes a GENERIC 500 to the client (so wrapped S3/Dynamo/
 // OIDC internals never leak), while logging the real error server-side keyed by
-// the request ID for diagnosis. Use it for any 5xx whose error is an internal
-// chain rather than a user-actionable message.
+// the request ID for diagnosis. writeServiceError ends here for any error the
+// table does not map; call it directly only for a failure that is not a
+// service's (encoding a response, signing a token in the handler). The path is
+// logged redacted: a webhook's or media link's secret rides in it.
 func writeInternalError(w http.ResponseWriter, r *http.Request, code string, err error) {
-	slog.Error("request failed",
+	slog.ErrorContext(r.Context(), "request failed",
 		"code", code,
 		"requestID", middleware.RequestIDFromContext(r.Context()),
 		"method", r.Method,
-		"path", r.URL.Path,
+		"path", middleware.RedactPath(r.URL.Path),
 		"error", err)
 	writeError(w, http.StatusInternalServerError, code, "internal server error")
 }
@@ -96,73 +96,6 @@ func readAgentJSON(r *http.Request, dest interface{}, limit int64) error {
 	return nil
 }
 
-// serviceStatus is the ONE mapping from a service sentinel to its HTTP status
-// and error code.
-//
-// Five handler files each grew their own ladder, and they disagreed: the same
-// ErrContextFull answered 429 in the runner API and 409 in the SPA API,
-// ErrLoginFailed answered 401 in one place and 502 in another (its two
-// meanings are now two sentinels), and
-// ErrConnectorInvalid meant both 400 and 503. A client cannot be written
-// against that. Codes are stable strings the SPA already switches on.
-func serviceStatus(err error) (status int, code, message string, ok bool) {
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return http.StatusNotFound, "not_found", "not found", true
-	case errors.Is(err, store.ErrAlreadyExists):
-		return http.StatusConflict, "already_exists", "already exists", true
-	case errors.Is(err, service.ErrValidation):
-		return http.StatusBadRequest, "bad_request", err.Error(), true
-	case errors.Is(err, service.ErrForbidden):
-		return http.StatusForbidden, "forbidden", "no access", true
-	case errors.Is(err, service.ErrChannelArchived):
-		return http.StatusConflict, "channel_archived", "this channel is archived and read-only", true
-	case errors.Is(err, service.ErrNoRunAccess):
-		return http.StatusForbidden, "forbidden", "no access to this run", true
-	case errors.Is(err, service.ErrContextFull):
-		// 409, not 429: the channel's shared context is FULL, which retrying
-		// will not fix — nothing here is rate-limited.
-		return http.StatusConflict, "context_full", "shared context is full for this channel", true
-	case errors.Is(err, service.ErrRunClosed):
-		return http.StatusConflict, "run_closed", "run reached a terminal state", true
-	case errors.Is(err, service.ErrWrongRunner):
-		return http.StatusConflict, "wrong_runner", "run is leased to another runner", true
-	case errors.Is(err, service.ErrApprovalSettled):
-		return http.StatusConflict, "settled", "approval already settled", true
-	case errors.Is(err, service.ErrNotInvoker):
-		return http.StatusForbidden, "forbidden", "only the invoker decides this", true
-	case errors.Is(err, service.ErrArtifactCap):
-		return http.StatusTooManyRequests, "artifact_cap", "per-run artifact cap reached", true
-	case errors.Is(err, service.ErrConnectorInvalid):
-		return http.StatusBadRequest, "bad_request", err.Error(), true
-	case errors.Is(err, service.ErrTokenRejected):
-		return http.StatusUnauthorized, "token_rejected", "the service rejected that credential", true
-	case errors.Is(err, service.ErrLoginFailed):
-		// The external service rejected the CALLER's credentials.
-		return http.StatusUnauthorized, "login_failed", err.Error(), true
-	case errors.Is(err, service.ErrServiceUnreachable):
-		// We could not reach it at all — nothing is wrong with the caller.
-		// 424 (Failed Dependency), NOT 502: Cloudflare replaces origin
-		// 502/504 bodies with its own error page, so the explanation below
-		// never reached the browser ("digitaltolk.net | 502: Bad gateway",
-		// stg incident 2026-09-23). 424 passes through with the body intact.
-		return http.StatusFailedDependency, "unreachable", err.Error(), true
-	}
-	return 0, "", "", false
-}
-
-// writeAgentError answers with the shared mapping, or a logged generic 500 for
-// anything unmapped — the agent/connector/context and activity-item surfaces,
-// which have no legacy status contract to preserve. fallbackCode names the
-// operation in the server log.
-func writeAgentError(w http.ResponseWriter, r *http.Request, err error, fallbackCode string) {
-	if status, code, message, ok := serviceStatus(err); ok {
-		writeError(w, status, code, message)
-		return
-	}
-	writeInternalError(w, r, fallbackCode, err)
-}
-
 // writeError2FA is the two-factor challenge response: a 409 carrying the
 // access code the client must echo back with the code. It keeps the SAME
 // envelope as every other error (error.code / error.message) plus the code —
@@ -176,20 +109,6 @@ func writeError2FA(w http.ResponseWriter, accessCode string) {
 		},
 		"accessCode": accessCode,
 	})
-}
-
-// writeRunAccessError maps the orchestrator's run-read outcomes to one status
-// set, so "not found", "not yours" and "broken" can't drift apart across the
-// handlers that read runs.
-func writeRunAccessError(w http.ResponseWriter, r *http.Request, err error, code string) {
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", "run not found")
-	case errors.Is(err, service.ErrNoRunAccess):
-		writeError(w, http.StatusForbidden, "forbidden", "no access to this run")
-	default:
-		writeInternalError(w, r, code, err)
-	}
 }
 
 // pathParam extracts a named path parameter using Go 1.22+ routing.
@@ -208,6 +127,10 @@ func queryParam(r *http.Request, name, fallback string) string {
 
 // requireAdmin writes a 403 to w and returns false unless the request is
 // authenticated as a system admin. Use at the top of admin-only handlers.
+// The role it reads is the STORED one: the auth middleware
+// (AuthWithUserStatus) replaces the access token's role claim with the
+// user store's on every request, so a demotion takes effect immediately
+// instead of when the 15-minute token expires.
 func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if claims == nil || claims.SystemRole != model.SystemRoleAdmin {

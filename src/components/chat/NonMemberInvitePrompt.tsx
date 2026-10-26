@@ -1,9 +1,7 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
-import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
-import { apiFetch } from '@/lib/api';
-import { queryKeys } from '@/lib/query-keys';
+import { useAddChannelMembers } from '@/hooks/useChannels';
 import type { MentionedUser } from '@/lib/non-member-mentions';
 
 interface NonMemberInvitePromptProps {
@@ -20,32 +18,24 @@ interface NonMemberInvitePromptProps {
 // in the channel: add one or several of them in one click, without opening the
 // member list. Any channel member can invite (enforced server-side).
 export function NonMemberInvitePrompt({ channelId, channelName, users, onDismiss }: NonMemberInvitePromptProps) {
-  const queryClient = useQueryClient();
-  const [adding, setAdding] = useState(false);
+  const addMembers = useAddChannelMembers();
+  // Stays disabled once added: the prompt is on its way out (onDismiss).
+  const adding = addMembers.isPending || addMembers.isSuccess;
   const [error, setError] = useState('');
 
   // Nothing to offer (no channel, or no mentioned non-members) → render nothing.
   // Keeping the guard here lets callers mount the prompt unconditionally.
   if (!channelId || users.length === 0) return null;
 
-  const addAll = async () => {
-    setAdding(true);
+  const addAll = () => {
     setError('');
-    try {
-      await Promise.all(
-        users.map((u) =>
-          apiFetch(`/api/v1/channels/${encodeURIComponent(channelId)}/members`, {
-            method: 'POST',
-            body: JSON.stringify({ userID: u.id, role: 'member' }),
-          }),
-        ),
-      );
-      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(channelId) });
-      onDismiss();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to add to the channel');
-      setAdding(false);
-    }
+    addMembers.mutate(
+      { channelId, userIds: users.map((u) => u.id) },
+      {
+        onSuccess: onDismiss,
+        onError: (e) => setError(e instanceof Error ? e.message : 'Failed to add to the channel'),
+      },
+    );
   };
 
   const names = users.map((u) => u.displayName).join(', ');

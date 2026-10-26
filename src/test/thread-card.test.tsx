@@ -277,6 +277,43 @@ describe('ThreadCard', () => {
     expect(label.className).toContain('shrink-0');
   });
 
+  it('lets the Threads page own whether a long thread is expanded', async () => {
+    // The page's list is virtualized: a card scrolled far away unmounts, so
+    // the page keeps the expanded state and hands it back on remount.
+    const messages = [
+      makeMessage('msg-root', 'root'),
+      ...Array.from({ length: 12 }, (_, i) => makeMessage(`r${i}`, `reply-${i}`)),
+    ];
+    apiFetchMock.mockImplementation((url: string) =>
+      Promise.resolve(url.includes('/messages/msg-root/thread') ? messages : []),
+    );
+    const onExpand = vi.fn();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const card = (expanded: boolean) => (
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <ThreadCard
+            summary={makeSummary({ replyCount: 12 })}
+            title="~general"
+            deepLink="/channel/general?thread=msg-root#msg-msg-root"
+            currentUserId="u-me"
+            expanded={expanded}
+            onExpand={onExpand}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+    const view = render(card(false));
+    fireEvent.click(await screen.findByTestId('thread-card-expand'));
+    expect(onExpand).toHaveBeenCalledTimes(1);
+    // Still collapsed until the page says otherwise…
+    expect(screen.getAllByTestId('thread-card-msg')).toHaveLength(3);
+    // …and expanded the moment it does (a remounted card included).
+    view.unmount();
+    render(card(true));
+    await waitFor(() => expect(screen.getAllByTestId('thread-card-msg')).toHaveLength(13));
+  });
+
   it('collapses long threads to root + last 2 replies + a "Show N more replies" toggle', async () => {
     // 1 root + 12 replies = 13 messages, over the 10-cap. Replies = 12,
     // tail = 2, hidden = 10.

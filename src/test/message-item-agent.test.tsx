@@ -206,6 +206,16 @@ describe('MessageItem agent affordances', () => {
     expect(screen.getByTestId('watcher-dialog')).toBeInTheDocument();
   });
 
+  // The same actions on a phone as with a mouse: the sheet offers it too.
+  it('opens the add-watcher dialog from the mobile action sheet', () => {
+    const { container } = renderItem(makeMessage());
+    longPress(container.querySelector('#msg-msg-1') as Element);
+    const sheet = screen.getByTestId('mobile-message-actions');
+    fireEvent.click(within(sheet).getByLabelText('Add a watcher to this thread'));
+    expect(screen.queryByTestId('mobile-message-actions')).toBeNull();
+    expect(screen.getByTestId('watcher-dialog')).toBeInTheDocument();
+  });
+
   it('routes a replyless agent root through the run drawer on desktop and mobile', () => {
     const first = renderItem(makeMessage({ agentRunID: 'run-8' }));
     fireEvent.click(screen.getByLabelText('Show agent activity'));
@@ -276,7 +286,10 @@ describe('MessageItem agent affordances', () => {
       makeMessage({ agentInvokerID: 'u-9', agentRunID: 'run-7', agentSkills: ['Weekly Report', 'Audit'] }),
       { userMap },
     );
-    expect(screen.getByLabelText('Used skill Weekly Report')).toHaveTextContent('⚡ Weekly Report');
+    // An icon, not an emoji (no emojis in the UI).
+    const badge = screen.getByLabelText('Used skill Weekly Report');
+    expect(badge.textContent).toBe('Weekly Report');
+    expect(badge.querySelector('svg.lucide-zap')).not.toBeNull();
     expect(screen.getByLabelText('Used skill Audit')).toBeInTheDocument();
   });
 
@@ -290,12 +303,30 @@ describe('MessageItem agent affordances', () => {
   });
 
   it('renders artifact markers as artifact cards and task markers as task cards', () => {
-    renderItem(makeMessage({ body: '[artifact:RUN1:ART1|Design doc|markdown|2048]' }));
+    // Cards are for agent-run posts: the server stamps agentRunID.
+    renderItem(makeMessage({ agentRunID: 'RUN1', body: '[artifact:RUN1:ART1|Design doc|markdown|2048]' }));
     expect(screen.getByTestId('artifact-card')).toBeInTheDocument();
     expect(screen.getByText('Design doc')).toBeInTheDocument();
 
-    renderItem(makeMessage({ id: 'msg-2', body: '[task:TSK1|Fix login|created|bug|ex]' }));
+    renderItem(makeMessage({ id: 'msg-2', agentRunID: 'RUN2', body: '[task:TSK1|Fix login|created|bug|ex]' }));
     expect(screen.getByTestId('task-card')).toBeInTheDocument();
     expect(screen.getByText('Fix login')).toBeInTheDocument();
+  });
+
+  it('leaves markers a person typed as plain text — no live card, no sign-off', () => {
+    renderItem(makeMessage({ id: 'msg-3', body: '[task:TSK1|Fix login|awaiting_user_test|bug|ex]' }));
+    renderItem(makeMessage({ id: 'msg-4', body: '[artifact:RUN1:ART1|Design doc|markdown|2048]' }));
+    expect(screen.queryByTestId('task-card')).toBeNull();
+    expect(screen.queryByTestId('artifact-card')).toBeNull();
+    // (":RUN1:" renders through the emoji-shortcode element, so match the text
+    // across elements.)
+    expect(document.body).toHaveTextContent('[task:TSK1|Fix login|awaiting_user_test|bug|ex]');
+    expect(document.body).toHaveTextContent('[artifact:RUN1:ART1|Design doc|markdown|2048]');
+  });
+
+  it('shows no artifact card for an artifact of another run', () => {
+    renderItem(makeMessage({ id: 'msg-5', agentRunID: 'RUN9', body: '[artifact:RUN1:ART1|Design doc|markdown|2048]' }));
+    expect(screen.queryByTestId('artifact-card')).toBeNull();
+    expect(document.body).toHaveTextContent('[artifact:RUN1:ART1|Design doc|markdown|2048]');
   });
 });

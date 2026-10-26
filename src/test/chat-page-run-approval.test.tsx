@@ -11,6 +11,7 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import ChatPage from '@/pages/ChatPage';
 import { resetAgentApprovalsSessionState } from '@/stores/agent-approvals';
 import { resetAgentRunsSessionState, useAgentRunsStore } from '@/stores/agent-runs';
+import { eventCallbacks, expectInvalidPayloadReported, type CapturedWSOptions } from '@/test/ws-frames';
 
 let capturedOptions: Record<string, ((data: unknown) => void) | boolean | undefined> = {};
 
@@ -26,7 +27,7 @@ const authUserMock = vi.hoisted(() => ({
 
 vi.mock('@/hooks/useWebSocket', () => ({
   useWebSocket: (opts: Record<string, ((data: unknown) => void) | boolean | undefined>) => {
-    capturedOptions = opts;
+    capturedOptions = eventCallbacks(opts as unknown as CapturedWSOptions) as typeof capturedOptions;
   },
 }));
 
@@ -104,7 +105,7 @@ vi.mock('@/hooks/useConversations', () => ({
     return { data: opts?.select && rows ? opts.select(rows) : rows };
   },
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
-  useSearchUsers: () => ({ data: [] }),
+  useUserLookup: () => ({ data: [] }),
 }));
 
 vi.mock('@/lib/api', () => ({
@@ -183,12 +184,13 @@ describe('ChatPage onRunApproval — blocking-gate desktop alert', () => {
 
   it('ignores frames that are not a fresh pending gate', () => {
     renderAt('/');
-    // Not an object at all.
-    fireApproval(null);
-    // No approvalID.
-    fireApproval({ runID: 'run-1', parentID: 'dm-9', state: 'pending' });
-    // No parentID.
-    fireApproval({ approvalID: 'ap-1', runID: 'run-1', state: 'pending' });
+    // Malformed frames are reported, never handled: not an object at all, no
+    // approvalID, no parentID.
+    expectInvalidPayloadReported(['run.approval', 'run.approval', 'run.approval'], () => {
+      fireApproval(null);
+      fireApproval({ runID: 'run-1', parentID: 'dm-9', state: 'pending' });
+      fireApproval({ approvalID: 'ap-1', runID: 'run-1', state: 'pending' });
+    });
     // Settle frame — clears the card, never alerts.
     fireApproval(approval({ state: 'approved' }));
     // Missing state.
@@ -301,10 +303,12 @@ describe('ChatPage onRunApproval — blocking-gate desktop alert', () => {
     const onRunProgress = capturedOptions.onRunProgress as (d: unknown) => void;
     expect(typeof onRunUpdated).toBe('function');
     expect(typeof onRunProgress).toBe('function');
-    // Junk frames are tolerated (the store guards its own parsing)...
-    act(() => {
-      onRunUpdated(null);
-      onRunProgress(null);
+    // Junk frames are reported and dropped before they reach the store...
+    expectInvalidPayloadReported(['run.updated', 'run.progress'], () => {
+      act(() => {
+        onRunUpdated(null);
+        onRunProgress(null);
+      });
     });
     // ...and a live run lands in the per-parent activity bucket. run.updated
     // frames carry the run id as `id`; progress beats carry it as `runID`.

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render } from '@testing-library/react';
+import { fireEvent, render, waitFor } from '@testing-library/react';
 import { renderMarkdown } from '@/lib/markdown';
 
 describe('renderMarkdown', () => {
@@ -83,11 +83,12 @@ describe('renderMarkdown', () => {
     }
   });
 
-  it('syntax-highlights a language-hinted code block via lowlight (hljs spans)', () => {
+  it('syntax-highlights a language-hinted code block via lowlight (hljs spans)', async () => {
     const { container } = render(<>{renderMarkdown("```php\n<?php\n// comment\nfunction demo() {\n  $value = 'ok';\n  return 123;\n}\n```")}</>);
     const code = container.querySelector('code')!;
     expect(code.className).toContain('hljs');
-    expect(code.querySelector('span.hljs-comment')).not.toBeNull();
+    // The highlighter loads with the first highlighted block.
+    await waitFor(() => expect(code.querySelector('span.hljs-comment')).not.toBeNull());
     expect(code.querySelector('span.hljs-keyword')).not.toBeNull(); // function / return
     expect(code.querySelector('span.hljs-string')).not.toBeNull(); // 'ok'
     expect(code.querySelector('span.hljs-number')).not.toBeNull(); // 123

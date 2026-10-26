@@ -41,13 +41,13 @@ races) — they belong under test.
 If a branch is only unreachable because a collaborator is hard-coded, introduce
 a seam and override it in a test:
 
-- **Seam variable** — `var randRead = rand.Read` (internal/auth, internal/service),
+- **Seam variable** — `var randRead = rand.Read` (internal/auth, internal/service, internal/agents),
   `var webpEncode = nativewebp.Encode` (internal/service). The test swaps the
   var, asserts the error/panic behavior, and restores it with `defer`.
 - **Narrow interface** — retype a struct field from a concrete SDK type to a
-  package-private interface with exactly the method the code calls (e.g. the
-  SigV4 `SignHTTP` seam in internal/search), so a failing fake can be injected
-  while production construction stays unchanged.
+  package-private interface with exactly the methods the code calls (e.g. the
+  `redisSubscriber` seam in internal/pubsub's broker), so a failing or blocking
+  fake can be injected while production construction stays unchanged.
 - **Extract a pure helper** — when a guard protects against inputs the client
   library can't produce but the *type* allows (e.g. a non-string value in a
   Redis stream reply), extract the parsing into a package-level function and
@@ -68,7 +68,7 @@ safety — it is untestable noise that hides real gaps.
 For error arms that are impossible *and must stay fatal if the impossible ever
 happens* (marshal of a fixed scalar struct, `expression.Build()` of a static
 expression, encode of a freshly allocated image), wrap the call in a `must*`
-helper that panics (`internal/store/must.go`, `internal/service/must.go`,
+helper that panics (`internal/store/must.go`, `internal/service/must.go`, `internal/agents/must.go`,
 `internal/handler/must.go`, `internal/search/must.go`) and unit-test the panic
 arm of the helper directly. `template.Must` is the precedent.
 
@@ -77,7 +77,8 @@ arm of the helper directly. `template.Must` is the precedent.
 Gate: [`github.com/vladopajic/go-test-coverage`](https://github.com/vladopajic/go-test-coverage),
 configured in `.testcoverage.yml` (threshold **100**), run from the `Makefile`
 and CI over `go test -tags=integration -coverprofile=coverage.out ./internal/... ./pkg/...`.
-Only `cmd/server/main.go` (process entrypoint / DI wiring) is excluded.
+Only `cmd/server/main.go` (the process entry point) is excluded; the wiring itself
+lives in `internal/app` and is gated like every other package.
 
 There are **zero `// coverage-ignore` annotations** in the tree, and new ones
 are not accepted: if you believe a statement is unreachable, that belief is

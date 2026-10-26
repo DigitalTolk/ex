@@ -161,7 +161,7 @@ func (s *UserService) storeUploadedAvatar(ctx context.Context, userID, uploadKey
 	}
 	defer func() {
 		if err := s.avatarObjects.DeleteObject(ctx, uploadKey); err != nil {
-			slog.Warn("user: remove avatar upload", "key", uploadKey, "error", err)
+			slog.WarnContext(ctx, "user: remove avatar upload", "key", uploadKey, "error", err)
 		}
 	}()
 	data, err := s.readAvatar(ctx, uploadKey)

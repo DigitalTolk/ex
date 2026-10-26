@@ -1,8 +1,9 @@
-import { useEffect } from 'react';
+import { Profiler, useEffect } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { SearchBar } from './SearchBar';
+import { usePresenceStore } from '@/stores/presence';
 
 const useChannelBySlugMock = vi.hoisted(() => vi.fn(() => ({ data: undefined as unknown })));
 const useUserChannelsMock = vi.hoisted(() => vi.fn(() => ({ data: [] as { channelID: string }[] })));
@@ -40,12 +41,6 @@ vi.mock('@/hooks/useSearch', () => ({
 vi.mock('@/hooks/useUsersBatch', () => ({
   useUsersBatch: (...args: unknown[]) => useUsersBatchMock(...(args as [])),
 }));
-// Presence powers the online/offline dot on people rows. A shared mutable set
-// lets a test flip a user online.
-const onlineSet = vi.hoisted(() => new Set<string>());
-vi.mock('@/context/PresenceContext', () => ({
-  usePresence: () => ({ online: onlineSet }),
-}));
 // UserStatusIndicator resolves custom emojis through React Query; the bar test
 // renders no QueryClient, so stub the map (unicode emojis render directly).
 vi.mock('@/hooks/useEmoji', () => ({
@@ -81,7 +76,6 @@ beforeEach(() => {
   useSearchUsersMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
   useSearchChannelsMock.mockReturnValue({ data: { hits: [] }, isLoading: false });
   useUsersBatchMock.mockReturnValue({ map: new Map(), isLoading: false });
-  onlineSet.clear();
   openDMMock.mockClear();
   openDMMock.mockImplementation((_userID, opts) => opts?.onSuccess?.());
   lastLocation = { pathname: '/', search: '' };
@@ -255,6 +249,66 @@ describe('SearchBar', () => {
     });
   });
 
+  // The field is an ARIA combobox: it says whether its list is open, which
+  // element the list is, and which option the keyboard is on — focus stays
+  // in the field, so the active option is announced through it.
+  it('exposes combobox semantics, following the keyboard highlight', () => {
+    useSearchChannelsMock.mockReturnValue({
+      data: { hits: [{ id: 'ch-1', score: 1, _source: { name: 'general', slug: 'general', type: 'public' } }] },
+      isLoading: false,
+    });
+    useSearchUsersMock.mockReturnValue({
+      data: { hits: [{ id: 'u-1', score: 1, _source: { displayName: 'Alice', email: 'alice@x.io' } }] },
+      isLoading: false,
+    });
+    renderBar();
+    const input = screen.getByRole('combobox', { name: 'Search' });
+    expect(input).toHaveAttribute('aria-expanded', 'false');
+    expect(input).toHaveAttribute('aria-autocomplete', 'list');
+    expect(input).not.toHaveAttribute('aria-activedescendant');
+
+    fireEvent.change(input, { target: { value: 'al' } });
+    expect(input).toHaveAttribute('aria-expanded', 'true');
+    const listbox = screen.getByRole('listbox');
+    expect(input).toHaveAttribute('aria-controls', listbox.id);
+    const options = screen.getAllByRole('option');
+    expect(options.map((o) => o.dataset.testid)).toEqual([
+      'searchbar-channel-ch-1',
+      'searchbar-user-u-1',
+      'searchbar-show-results',
+    ]);
+    // Options are reached through the field, not with Tab.
+    for (const option of options) expect(option).toHaveAttribute('tabindex', '-1');
+    expect(new Set(options.map((o) => o.id)).size).toBe(options.length);
+    expect(input).toHaveAttribute('aria-activedescendant', screen.getByTestId('searchbar-show-results').id);
+    expect(screen.getByRole('option', { selected: true })).toBe(screen.getByTestId('searchbar-show-results'));
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(input).toHaveAttribute('aria-activedescendant', screen.getByTestId('searchbar-channel-ch-1').id);
+    expect(screen.getByRole('option', { selected: true })).toBe(screen.getByTestId('searchbar-channel-ch-1'));
+    expect(within(listbox).getByRole('group', { name: 'Channels' })).toContainElement(screen.getByTestId('searchbar-channel-ch-1'));
+
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(input).toHaveAttribute('aria-expanded', 'false');
+    expect(input).not.toHaveAttribute('aria-controls');
+    expect(input).not.toHaveAttribute('aria-activedescendant');
+  });
+
+  it('keeps the failure notice out of the list of options', () => {
+    useSearchUsersMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error('internal server error'),
+      refetch: vi.fn(),
+    } as never);
+    renderBar();
+    fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'hello' } });
+    expect(screen.getByTestId('searchbar-failed')).toBeInTheDocument();
+    expect(screen.getByRole('listbox')).not.toContainElement(screen.getByTestId('searchbar-failed'));
+    expect(screen.getByTestId('searchbar-dropdown')).toContainElement(screen.getByTestId('searchbar-failed'));
+  });
+
   describe('unified sections', () => {
     it('renders Channels and People sections for a query with results', () => {
       useSearchChannelsMock.mockReturnValue({
@@ -310,7 +364,7 @@ describe('SearchBar', () => {
         ]),
         isLoading: false,
       });
-      onlineSet.add('u-1');
+      usePresenceStore.getState().setUserOnline('u-1', true);
       renderBar();
       fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'al' } });
       const row = screen.getByTestId('searchbar-user-u-1');
@@ -318,6 +372,33 @@ describe('SearchBar', () => {
       expect(row.querySelector('[data-presence="online"]')).not.toBeNull();
       // Custom-status emoji is aria-labelled by the status text.
       expect(screen.getByLabelText(/On vacation/)).toBeInTheDocument();
+    });
+
+    it('a people row follows its own user, and the bar does not re-render for anyone else', () => {
+      useSearchUsersMock.mockReturnValue({
+        data: { hits: [{ id: 'u-1', score: 1, _source: { displayName: 'Alice' } }] },
+        isLoading: false,
+      });
+      const commits = { count: 0 };
+      render(
+        <MemoryRouter>
+          <Profiler id="bar" onRender={() => { commits.count++; }}>
+            <SearchBar />
+          </Profiler>
+        </MemoryRouter>,
+      );
+      fireEvent.change(screen.getByTestId('searchbar-input'), { target: { value: 'al' } });
+      const row = screen.getByTestId('searchbar-user-u-1');
+      expect(row.querySelector('[data-presence="offline"]')).not.toBeNull();
+      const settled = commits.count;
+
+      // Someone not in the results comes online: nothing here renders.
+      act(() => usePresenceStore.getState().setUserOnline('u-elsewhere', true));
+      expect(commits.count).toBe(settled);
+
+      // The listed person does: their row's dot follows.
+      act(() => usePresenceStore.getState().setUserOnline('u-1', true));
+      expect(screen.getByTestId('searchbar-user-u-1').querySelector('[data-presence="online"]')).not.toBeNull();
     });
 
     it('renders a people row with no status icon and an offline dot when the person has no status', () => {

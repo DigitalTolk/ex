@@ -50,4 +50,13 @@ type RefreshToken struct {
 	// is itself unused — a lost response means the successor's raw value was
 	// destroyed with it, so nobody can ever present it.
 	SupersededBy string `json:"supersededBy,omitempty" dynamodbav:"supersededBy,omitempty"`
+	// FamilyID ties every token of one login session together across
+	// rotations. A detected replay or a logout revokes the whole family —
+	// deleting only the presented row left its rotated predecessor (or a
+	// stolen sibling) able to mint a fresh session.
+	FamilyID string `json:"familyID,omitempty" dynamodbav:"familyID,omitempty"`
+	// AuthTime is when the user actually authenticated (the login), carried
+	// unchanged across rotations so a session has an absolute lifetime no
+	// matter how often it refreshes.
+	AuthTime *time.Time `json:"authTime,omitempty" dynamodbav:"authTime,omitempty"`
 }

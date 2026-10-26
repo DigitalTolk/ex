@@ -1,6 +1,14 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { renderMarkdown } from '@/lib/markdown';
 import { MessageRichAttachments } from './MessageRichAttachments';
+
+// Wrapped, not replaced: every test still renders real markdown, and the
+// re-render test can count how often a field is parsed.
+vi.mock('@/lib/markdown', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/markdown')>();
+  return { ...actual, renderMarkdown: vi.fn(actual.renderMarkdown) };
+});
 
 describe('MessageRichAttachments', () => {
   it('renders nothing without attachments', () => {
@@ -63,6 +71,20 @@ describe('MessageRichAttachments', () => {
     expect(onContentHeightChange).toHaveBeenCalledTimes(4);
   });
 
+  it('links author and title only to absolute http(s) URLs', () => {
+    render(
+      <MessageRichAttachments
+        attachments={[
+          { author_name: 'Share bot', author_link: 'smb://attacker.example/share', title: 'Diag', title_link: 'ms-msdt:/id PCWDiagnostic' },
+          { author_name: 'Relative bot', author_link: '/auth/desktop/complete?code=X', title: 'Mail', title_link: 'mailto:x@example.com' },
+        ]}
+      />,
+    );
+    for (const text of ['Share bot', 'Diag', 'Relative bot', 'Mail']) {
+      expect(screen.getByText(text).closest('a')).toBeNull();
+    }
+  });
+
   it('strips unsafe-scheme links and image srcs', () => {
     render(
       <MessageRichAttachments
@@ -87,5 +109,38 @@ describe('MessageRichAttachments', () => {
     expect(screen.getByText('Evil title').closest('a')).toBeNull();
     // No <img> survives the unsafe scheme filter.
     expect(document.querySelectorAll('img')).toHaveLength(0);
+  });
+
+  it('does not re-parse unchanged markdown fields when the message row re-renders', () => {
+    // A message row re-renders for hover, reactions, presence and edits of
+    // other fields; the webhook card's markdown is unchanged by all of them.
+    const attachment = {
+      pretext: 'Deploy *started*',
+      text: '**Body**',
+      fields: [{ title: 'Env', value: '`prod`', short: true }],
+    };
+    const onContentHeightChange = () => undefined;
+    const parse = vi.mocked(renderMarkdown);
+    const { rerender } = render(
+      <MessageRichAttachments attachments={[attachment]} onContentHeightChange={onContentHeightChange} />,
+    );
+    expect(parse).toHaveBeenCalledTimes(3);
+    parse.mockClear();
+
+    // The same content in a fresh array/object (the WS patch path rebuilds
+    // the message object) parses nothing again.
+    rerender(
+      <MessageRichAttachments attachments={[{ ...attachment, fields: [...attachment.fields] }]} onContentHeightChange={onContentHeightChange} />,
+    );
+    expect(parse).not.toHaveBeenCalled();
+    expect(screen.getByText('Body').tagName).toBe('STRONG');
+
+    // Changing one field re-parses only that field.
+    rerender(
+      <MessageRichAttachments attachments={[{ ...attachment, text: '**Edited**' }]} onContentHeightChange={onContentHeightChange} />,
+    );
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(parse).toHaveBeenCalledWith('**Edited**');
+    expect(screen.getByText('Edited').tagName).toBe('STRONG');
   });
 });

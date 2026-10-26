@@ -313,11 +313,11 @@ func TestActivityService_ResolveChannelSlug(t *testing.T) {
 
 func TestActivityPreview(t *testing.T) {
 	// Collapses whitespace runs / tabs / leading-trailing.
-	if got := activityPreview("  hello\t\tthere  "); got != "hello there" {
+	if got := activityPreview("  hello\t\tthere  ", MentionNames{}); got != "hello there" {
 		t.Fatalf("collapse = %q", got)
 	}
 	// Whitespace-only body collapses to "" so the client shows its fallback.
-	if got := activityPreview(" \n\t "); got != "" {
+	if got := activityPreview(" \n\t ", MentionNames{}); got != "" {
 		t.Fatalf("whitespace-only = %q, want empty", got)
 	}
 }

@@ -1,7 +1,7 @@
 import { forwardRef, memo, useCallback, useMemo } from 'react';
 import { useAllUsers } from '@/hooks/useConversations';
 import { useChannelMembers, useUserChannels } from '@/hooks/useChannels';
-import { usePresence } from '@/context/PresenceContext';
+import { usePresenceStore } from '@/stores/presence';
 import { useEmojis, useEmojiMap } from '@/hooks/useEmoji';
 import { useOptionalAuth } from '@/context/AuthContext';
 import { activeStatus } from '@/lib/user-status';
@@ -58,7 +58,6 @@ export const MarkdownComposer = memo(forwardRef<WysiwygEditorHandle, Props>(func
 ) {
   const { data: users = [] } = useAllUsers();
   const { data: memberRows } = useChannelMembers(mentionChannelId);
-  const { online } = usePresence();
   // Only what the ~channel typeahead shows: an unread change on any channel
   // rewrites the full rows, which re-rendered the composer for every message
   // arriving anywhere.
@@ -115,7 +114,9 @@ export const MarkdownComposer = memo(forwardRef<WysiwygEditorHandle, Props>(func
           avatarURL: u.avatarURL,
           statusEmoji: activeStatus(u.userStatus)?.emoji,
         })),
-      online: () => online,
+      // Read when the @-list opens, never subscribed: a presence change
+      // anywhere used to re-render every open composer.
+      online: () => usePresenceStore.getState().online,
       memberIds: () => memberIds,
       channels: () => channels,
       customEmojis: () => customEmojis,
@@ -127,7 +128,6 @@ export const MarkdownComposer = memo(forwardRef<WysiwygEditorHandle, Props>(func
     }),
     [
       users,
-      online,
       memberIds,
       channels,
       customEmojis,

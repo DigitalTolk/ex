@@ -57,6 +57,33 @@ function renderWithProviders(ui: React.ReactElement) {
 describe('MemberList browser behaviour', () => {
   afterEach(() => cleanup());
 
+  it('mounts only the rows near the view of a large channel, and scrolls to the rest', async () => {
+    // Every row is a hover card, an avatar and a status; a big channel
+    // mounted all of them at once.
+    const members = Array.from({ length: 400 }, (_, i) =>
+      makeMember({ userID: `u-${i}`, displayName: `Member ${String(i).padStart(3, '0')}` }),
+    );
+    const screen = await renderWithProviders(
+      <div style={{ height: 600, display: 'flex' }}>
+        <MemberList members={members} channelId="ch-1" currentUserId="u-0" currentUserRole={1} />
+      </div>,
+    );
+    await expect.element(screen.getByText('Member 000')).toBeVisible();
+    const rows = () => document.querySelectorAll('[data-testid^="member-name-status-"]').length;
+    await expect.poll(rows).toBeLessThan(120);
+    expect(rows()).toBeGreaterThan(10);
+
+    const viewport = document.querySelector('[data-testid="member-list-scroll-area"] [data-slot="scroll-area-viewport"]') as HTMLElement;
+    // Rows measure as they mount, which moves the end: aim again until it is there.
+    await expect
+      .poll(() => {
+        viewport.scrollTop = viewport.scrollHeight;
+        return document.querySelector('[data-testid="member-name-status-u-399"]');
+      })
+      .not.toBeNull();
+    expect(rows()).toBeLessThan(120);
+  });
+
   it('renders the member roster with avatars + display names', async () => {
     const screen = await renderWithProviders(
       <MemberList

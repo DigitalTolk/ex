@@ -40,8 +40,7 @@ vi.mock('@/components/UpdateBanner', () => ({ UpdateBanner: () => null }));
 vi.mock('@/hooks/useServerVersion', () => ({
   BUILD_DISPLAY_VERSION: 'browser-test',
   BUILD_VERSION: 'browser-test',
-  setServerVersion: vi.fn(),
-  resetServerVersionForTests: vi.fn(),
+  reportServerVersion: vi.fn(),
   useServerVersion: () => ({ outdated: false }),
 }));
 
@@ -233,6 +232,33 @@ describe('compact tier at a real 700px desktop viewport', () => {
     // Structurally clear of the traffic-light cluster (~80px) with no
     // electron-mac class applied at all.
     expect(toggleRect.left).toBeGreaterThanOrEqual(88);
+    // Back and Forward come before it, clear of the cluster too.
+    const back = (document.querySelector('[data-testid="history-back"]') as HTMLElement).getBoundingClientRect();
+    const forward = (document.querySelector('[data-testid="history-forward"]') as HTMLElement).getBoundingClientRect();
+    expect(back.right).toBeLessThanOrEqual(forward.left);
+    expect(forward.right).toBeLessThanOrEqual(toggleRect.left);
+    expect(back.left).toBeGreaterThanOrEqual(88);
+  });
+
+  // Half of a small screen: the side columns are at their narrowest, and
+  // the left one also pads past the traffic lights.
+  it('keeps the search centred in a narrow macOS window', async () => {
+    if (!isDesktopProject) return;
+    document.documentElement.classList.add('electron-mac');
+    await page.viewport(560, 800);
+    await expect.poll(() => window.innerWidth, { timeout: 5_000 }).toBe(560);
+    await renderLayout();
+    const search = document.querySelector('input[aria-label="Search"]') as HTMLElement;
+    await expect
+      .poll(() => {
+        const r = search.getBoundingClientRect();
+        return Math.abs((r.left + r.right) / 2 - window.innerWidth / 2);
+      }, { timeout: 5_000 })
+      .toBeLessThanOrEqual(1);
+    const back = (document.querySelector('[data-testid="history-back"]') as HTMLElement).getBoundingClientRect();
+    const toggle = (document.querySelector('[aria-label="Open channels"]') as HTMLElement).getBoundingClientRect();
+    expect(back.left).toBeGreaterThanOrEqual(88);
+    expect(search.getBoundingClientRect().left).toBeGreaterThan(toggle.right);
   });
 
   it('insets the top-bar left column past macOS traffic lights while the search stays centred', async () => {

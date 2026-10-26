@@ -94,8 +94,8 @@ func TestChannelHandler_Unarchive(t *testing.T) {
 	}
 
 	denied := serveAs(env, "u-mem", env.handler.Unarchive, http.MethodPost, "/api/v1/channels/ch-ro/unarchive", ``, map[string]string{"id": "ch-ro"})
-	if denied.Code != http.StatusForbidden || errorCode(t, denied) != "unarchive_error" {
-		t.Fatalf("member unarchive: status %d body %s, want 403 unarchive_error", denied.Code, denied.Body.String())
+	if denied.Code != http.StatusForbidden || errorCode(t, denied) != "forbidden" {
+		t.Fatalf("member unarchive: status %d body %s, want 403 forbidden", denied.Code, denied.Body.String())
 	}
 
 	ok := serveAs(env, "u-owner", env.handler.Unarchive, http.MethodPost, "/api/v1/channels/ch-ro/unarchive", ``, map[string]string{"id": "ch-ro"})

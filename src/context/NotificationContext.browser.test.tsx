@@ -9,8 +9,18 @@ import {
 import * as storageModule from '@/lib/storage';
 import { recordNotification, resetNotificationDedup } from '@/lib/notification-dedup';
 import { markUserActivity } from '@/lib/user-activity';
+import { setActiveParent } from '@/stores/active-parent';
 
 const sendWSMock = vi.hoisted(() => vi.fn());
+// Every toast the provider raises, as showToast was called (message, variant
+// and options in one record).
+const toastListeners = vi.hoisted(() => new Set<(detail: Record<string, unknown>) => void>());
+vi.mock('@/lib/toast', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/toast')>()),
+  showToast: (message: string, variant = 'error', opts?: Record<string, unknown>) => {
+    for (const listener of toastListeners) listener({ message, variant, ...opts });
+  },
+}));
 vi.mock('@/lib/ws-sender', () => ({
   sendWS: (...args: unknown[]) => sendWSMock(...args),
   setWSSender: vi.fn(),
@@ -43,7 +53,6 @@ vi.mock('@/lib/tab-leader', () => ({
   remoteTabViewing: () => tabLeaderMock.viewing,
   remoteTabViewingThread: () => tabLeaderMock.viewingThread,
   remoteUserAtDevice: () => tabLeaderMock.atDevice,
-  setTabActiveParent: vi.fn(),
   initTabCoordinator: vi.fn(),
   nonLeaderHoldMs: 40,
 }));
@@ -228,7 +237,7 @@ describe('NotificationContext browser', () => {
         <Capture />
       </NotificationProvider>,
     );
-    captured!.setActiveParent('conv-1');
+    setActiveParent({ kind: 'conversation', id: 'conv-1' });
     captured!.dispatch(
       basePayload({ kind: 'message', parentType: 'conversation', parentID: 'conv-1', authorID: 'u-other' }),
     );
@@ -242,7 +251,7 @@ describe('NotificationContext browser', () => {
       await vi.waitFor(() => expect(captured).not.toBeNull());
       // Window loses focus → app no longer active even though still visible.
       window.dispatchEvent(new Event('blur'));
-      captured!.setActiveParent('conv-1');
+      setActiveParent({ kind: 'conversation', id: 'conv-1' });
       captured!.dispatch(
         basePayload({ kind: 'message', parentType: 'conversation', parentID: 'conv-1', authorID: 'u-other' }),
       );
@@ -295,7 +304,7 @@ describe('NotificationContext browser', () => {
       await vi.waitFor(() => expect(captured).not.toBeNull());
       sendWSMock.mockClear();
       markUserActivity(Date.now() - 25 * 60_000);
-      captured!.setActiveParent('conv-idle');
+      setActiveParent({ kind: 'conversation', id: 'conv-idle' });
       captured!.dispatch(
         basePayload({ kind: 'message', parentType: 'conversation', parentID: 'conv-idle', authorID: 'u-other', messageID: 'm-conv-idle' }),
       );
@@ -642,10 +651,10 @@ describe('NotificationContext browser', () => {
     const restore = removeNotificationAPI();
     type Detail = { message: string; title?: string; kind?: string; group?: string; onActivate?: () => void };
     const toasts: Detail[] = [];
-    const onToast = (e: Event) => {
-      toasts.push((e as CustomEvent<Detail>).detail);
+    const onToast = (detail: Record<string, unknown>) => {
+      toasts.push(detail as Detail);
     };
-    window.addEventListener('app:toast', onToast);
+    toastListeners.add(onToast);
     try {
       await render(<NotificationProvider><Capture /></NotificationProvider>);
       await vi.waitFor(() => expect(captured).not.toBeNull());
@@ -673,7 +682,7 @@ describe('NotificationContext browser', () => {
       await vi.waitFor(() => expect(window.location.pathname).toBe('/channel/general'));
       window.history.replaceState(null, '', before);
     } finally {
-      window.removeEventListener('app:toast', onToast);
+      toastListeners.delete(onToast);
       restore();
     }
   });
@@ -681,10 +690,10 @@ describe('NotificationContext browser', () => {
   it('webview toast falls back to the title as body and skips navigation without a deepLink', async () => {
     const restore = removeNotificationAPI();
     const toasts: Array<{ message: string; title?: string; onActivate?: () => void }> = [];
-    const onToast = (e: Event) => {
-      toasts.push((e as CustomEvent<{ message: string; title?: string; onActivate?: () => void }>).detail);
+    const onToast = (detail: Record<string, unknown>) => {
+      toasts.push(detail as { message: string; title?: string; onActivate?: () => void });
     };
-    window.addEventListener('app:toast', onToast);
+    toastListeners.add(onToast);
     try {
       await render(<NotificationProvider><Capture /></NotificationProvider>);
       await vi.waitFor(() => expect(captured).not.toBeNull());
@@ -698,7 +707,7 @@ describe('NotificationContext browser', () => {
       await new Promise((r) => setTimeout(r, 30));
       expect(window.location.pathname).toBe(before);
     } finally {
-      window.removeEventListener('app:toast', onToast);
+      toastListeners.delete(onToast);
       restore();
     }
   });
@@ -718,7 +727,6 @@ describe('NotificationContext browser', () => {
     api!.setBrowserEnabled(true);
     api!.setIdleDetectionEnabled(true);
     api!.dispatch(basePayload());
-    api!.setActiveParent('x');
     api!.setCurrentUserID('y');
     const r = await api!.requestPermission();
     expect(r).toBe('unsupported');

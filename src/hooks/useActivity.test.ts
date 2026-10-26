@@ -6,6 +6,7 @@ import {
   applyActivityChangedEvent,
   applyActivityNewEvent,
   applyRemindersChangedEvent,
+  refetchActivity,
   useActivity,
   useReminders,
   useCreateReminder,
@@ -16,8 +17,8 @@ import {
   useSetActivityItemsRead,
 } from './useActivity';
 import { queryKeys } from '@/lib/query-keys';
-import { getReactionFlash, resetReactionFlashForTests } from '@/stores/reaction-flash';
-import type { ActivityFeed } from '@/types';
+import { getReactionFlash } from '@/stores/reaction-flash';
+import type { ActivityFeed, ActivityItem } from '@/types';
 import { badgeUnread } from '@/lib/activity-feed';
 
 vi.mock('@/lib/api', async (orig) => ({ ...(await orig<object>()), apiFetch: vi.fn() }));
@@ -265,12 +266,20 @@ describe('activity events', () => {
     unread: 1,
     unreadByType: { mention: 1 },
   });
+  const activityItem = (over: Partial<ActivityItem> & Pick<ActivityItem, 'id' | 'type'>): ActivityItem => ({
+    createdAt: '2026-10-08T10:00:00Z',
+    messageID: `m-${over.id}`,
+    parentID: 'ch-1',
+    parentType: 'channel',
+    read: false,
+    ...over,
+  });
 
   it('activity.new adds the carried item to the cached feed without refetching', () => {
     const client = makeClient();
     client.setQueryData(queryKeys.activity(), seeded());
     const invalidate = vi.spyOn(client, 'invalidateQueries');
-    applyActivityNewEvent(client, { item: { id: 'b', type: 'dm', read: false } });
+    applyActivityNewEvent(client, activityItem({ id: 'b', type: 'dm' }));
     const feed = client.getQueryData<ActivityFeed>(queryKeys.activity());
     expect(feed?.items.map((i) => i.id)).toEqual(['b', 'a']);
     expect(feed?.unread).toBe(2);
@@ -278,35 +287,35 @@ describe('activity events', () => {
   });
 
   it('activity.new with a reaction flashes the bell and adds the item without counting it', () => {
-    resetReactionFlashForTests();
     const client = makeClient();
     client.setQueryData(queryKeys.activity(), seeded());
-    applyActivityNewEvent(client, { item: { id: 'r', type: 'reaction', emoji: ':tada:', read: false } });
+    applyActivityNewEvent(client, activityItem({ id: 'r', type: 'reaction', emoji: ':tada:' }));
     expect(getReactionFlash()?.emoji).toBe(':tada:');
     const feed = client.getQueryData<ActivityFeed>(queryKeys.activity());
     expect(feed?.items.map((i) => i.id)).toEqual(['r', 'a']);
     expect(feed?.unread).toBe(2);
     // The badge leaves the reaction out.
     expect(badgeUnread(feed!)).toBe(1);
-    // A reaction event without an emoji is added quietly.
-    resetReactionFlashForTests();
-    applyActivityNewEvent(client, { item: { id: 'r2', type: 'reaction', read: false } });
-    expect(getReactionFlash()).toBeNull();
-    resetReactionFlashForTests();
+    // A reaction event without an emoji is added quietly: no new flash.
+    const shown = getReactionFlash();
+    applyActivityNewEvent(client, activityItem({ id: 'r2', type: 'reaction' }));
+    expect(getReactionFlash()).toBe(shown);
   });
 
-  it('activity.new refetches when there is no item, no cache, or a fetch in flight', () => {
+  it('activity.new refetches when there is no cache or a fetch in flight', () => {
     const client = makeClient();
     const invalidate = vi.spyOn(client, 'invalidateQueries');
-    applyActivityNewEvent(client, { item: { id: 'b', type: 'dm' } });
+    applyActivityNewEvent(client, activityItem({ id: 'b', type: 'dm' }));
     expect(invalidate).toHaveBeenCalledTimes(1);
 
     client.setQueryData(queryKeys.activity(), seeded());
-    applyActivityNewEvent(client, {});
+    // An activity event whose payload can't be read (the registry's fallback).
+    refetchActivity(client);
     expect(invalidate).toHaveBeenCalledTimes(2);
+    expect(invalidate).toHaveBeenLastCalledWith({ queryKey: queryKeys.activity() });
 
     vi.spyOn(client, 'isFetching').mockReturnValue(1);
-    applyActivityNewEvent(client, { item: { id: 'b', type: 'dm' } });
+    applyActivityNewEvent(client, activityItem({ id: 'b', type: 'dm' }));
     expect(invalidate).toHaveBeenCalledTimes(3);
     expect(client.getQueryData<ActivityFeed>(queryKeys.activity())?.items).toHaveLength(1);
   });
@@ -321,7 +330,7 @@ describe('activity events', () => {
     expect(client.getQueryData<ActivityFeed>(queryKeys.activity())?.items).toEqual([]);
     expect(invalidate).not.toHaveBeenCalled();
     applyActivityChangedEvent(client, { parentID: 'dm-1' });
-    applyActivityChangedEvent(client, null);
+    applyActivityChangedEvent(client, {});
     expect(invalidate).toHaveBeenCalledTimes(2);
   });
 

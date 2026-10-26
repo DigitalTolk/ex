@@ -6,6 +6,7 @@ import { SidePanel } from '@/components/chat/SidePanel';
 import { AppearanceSettings } from '@/components/settings/AppearanceSettings';
 import {
   PANEL_WIDTHS_RESET_EVENT,
+  RUN_DRAWER_WIDTH,
   SIDEBAR_WIDTH,
   SIDE_PANEL_WIDTH,
 } from '@/lib/panel-width';
@@ -49,8 +50,7 @@ vi.mock('@/components/UpdateBanner', () => ({ UpdateBanner: () => null }));
 vi.mock('@/hooks/useServerVersion', () => ({
   BUILD_DISPLAY_VERSION: 'browser-test',
   BUILD_VERSION: 'browser-test',
-  setServerVersion: vi.fn(),
-  resetServerVersionForTests: vi.fn(),
+  reportServerVersion: vi.fn(),
   useServerVersion: () => ({ outdated: false }),
 }));
 
@@ -187,6 +187,20 @@ describe('appearance settings reset', () => {
 
     expect(localStorage.getItem(SIDEBAR_WIDTH.key)).toBeNull();
     expect(localStorage.getItem(SIDE_PANEL_WIDTH.key)).toBeNull();
+    await expect.element(btn).toBeDisabled();
+  });
+
+  it('is enabled when only the run drawer was resized, and clears it', async () => {
+    if (window.innerWidth < 768) return; // the reset row is desktop chrome
+    localStorage.setItem(RUN_DRAWER_WIDTH.key, '700');
+
+    const result = await render(<AppearanceSettings />);
+    active = result;
+    const btn = result.getByTestId('reset-panel-widths');
+    await expect.element(btn).toBeEnabled();
+    await btn.click();
+
+    expect(localStorage.getItem(RUN_DRAWER_WIDTH.key)).toBeNull();
     await expect.element(btn).toBeDisabled();
   });
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -66,6 +67,7 @@ func (p *stubPresence) IsOnline(userID string) bool { return p.online[userID] }
 // the NotificationService uses) and doubles as a provider-side
 // MobilePushSender for the task-handler tests.
 type recordingMobilePush struct {
+	mu    sync.Mutex // pushes are scheduled bounded-parallel
 	calls []mobilePushCall
 	err   error
 }
@@ -77,11 +79,15 @@ type mobilePushCall struct {
 }
 
 func (p *recordingMobilePush) Send(_ context.Context, userID string, notif Notification) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.calls = append(p.calls, mobilePushCall{userID: userID, notif: notif})
 	return p.err
 }
 
 func (p *recordingMobilePush) SchedulePush(_ context.Context, userID string, notif Notification, delay time.Duration) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.calls = append(p.calls, mobilePushCall{userID: userID, notif: notif, delay: delay})
 	return p.err
 }
@@ -1181,11 +1187,11 @@ func TestNotificationService_NotifyForMessage_ThreadReplyKind(t *testing.T) {
 }
 
 func TestNotificationService_PreviewBody_ClampsAndStripsNewlines(t *testing.T) {
-	if got := previewBody("hello\nworld"); got != "hello world" {
+	if got := previewBody("hello\nworld", MentionNames{}); got != "hello world" {
 		t.Errorf("previewBody newlines = %q, want %q", got, "hello world")
 	}
 	long := strings.Repeat("x", 200)
-	got := previewBody(long)
+	got := previewBody(long, MentionNames{})
 	if len([]rune(got)) > 140 {
 		t.Errorf("previewBody clamp: rune len = %d, want <= 140", len([]rune(got)))
 	}
@@ -1212,7 +1218,7 @@ func TestPreviewBody_FlattensMentionsAndRendersEmoji(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := previewBody(tc.in); got != tc.want {
+			if got := previewBody(tc.in, MentionNames{}); got != tc.want {
 				t.Errorf("previewBody(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
@@ -1335,7 +1341,7 @@ func TestNotifyForMessage_ThreadReply_DeepLinkOpensThread(t *testing.T) {
 // user would see "Alice mentioned: hi @[U-2|Bob]" — completely opaque.
 func TestNotificationService_PreviewBody_ResolvesUserMentions(t *testing.T) {
 	in := "hi @[U-2|Bob], can you take a look? cc @[U-3|Carol Q.]"
-	out := previewBody(in)
+	out := previewBody(in, MentionNames{})
 	if strings.Contains(out, "@[") {
 		t.Errorf("previewBody did not flatten user mentions: %q", out)
 	}
@@ -1351,10 +1357,10 @@ func TestNotificationService_PreviewBody_ResolvesUserMentions(t *testing.T) {
 // flow through unchanged. Lock that down so a future regex tweak can't
 // accidentally munge them.
 func TestNotificationService_PreviewBody_LeavesGroupMentionsAlone(t *testing.T) {
-	if got := previewBody("attention @all please"); got != "attention @all please" {
+	if got := previewBody("attention @all please", MentionNames{}); got != "attention @all please" {
 		t.Errorf("@all changed: %q", got)
 	}
-	if got := previewBody("@here check this"); got != "@here check this" {
+	if got := previewBody("@here check this", MentionNames{}); got != "@here check this" {
 		t.Errorf("@here changed: %q", got)
 	}
 }

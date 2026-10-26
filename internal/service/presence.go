@@ -244,19 +244,9 @@ func (s *PresenceService) publish(ctx context.Context, userID string, online boo
 			topics = s.audience(ctx, userID)
 		}
 	}
-	if len(topics) == 0 {
-		return
-	}
-	// Pipeline the fan-out into one round-trip when the publisher supports it
-	// (a presence transition for a user in N channels otherwise did N serial
-	// PUBLISHes on every connect/disconnect). Fall back to a per-topic loop.
-	if bp, ok := s.publisher.(events.ManyPublisher); ok {
-		if evt, err := events.NewEvent(events.EventPresenceChanged, data); err == nil {
-			_ = bp.PublishMany(ctx, topics, evt)
-			return
-		}
-	}
-	for _, topic := range topics {
-		events.Publish(ctx, s.publisher, topic, events.EventPresenceChanged, data)
-	}
+	// ONE multicast over every audience topic: someone sharing k channels/DMs
+	// with the subject used to receive k copies (one per topic). The broker
+	// delivers a multicast once per connection, on every instance. Publishers
+	// without the capability fall back to a copy per topic.
+	events.PublishMulticast(ctx, s.publisher, topics, events.EventPresenceChanged, data)
 }

@@ -26,6 +26,7 @@ type mockUserStore struct {
 	createErr   error
 	listErr     error
 	getUserErr  error
+	getEmailErr error
 	hasUsersVal bool
 }
 
@@ -57,6 +58,9 @@ func (m *mockUserStore) GetUser(_ context.Context, id string) (*model.User, erro
 }
 
 func (m *mockUserStore) GetUserByEmail(_ context.Context, email string) (*model.User, error) {
+	if m.getEmailErr != nil {
+		return nil, m.getEmailErr
+	}
 	u, ok := m.emailIndex[email]
 	if !ok {
 		return nil, store.ErrNotFound
@@ -67,6 +71,64 @@ func (m *mockUserStore) GetUserByEmail(_ context.Context, email string) (*model.
 func (m *mockUserStore) UpdateUser(_ context.Context, u *model.User) error {
 	m.users[u.ID] = u
 	m.emailIndex[u.Email] = u
+	return nil
+}
+
+func (m *mockUserStore) PatchUser(_ context.Context, id string, p store.UserPatch) error {
+	u, ok := m.users[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	return applyUserPatchForTest(u, p)
+}
+
+// applyUserPatchForTest mirrors store.UserStoreImpl.PatchUser on an in-memory
+// user: nil fields are untouched, ExpectOIDCSubject is a compare-and-swap.
+func applyUserPatchForTest(u *model.User, p store.UserPatch) error {
+	if p.ExpectOIDCSubject != nil && u.OIDCSubject != *p.ExpectOIDCSubject {
+		return store.ErrIdentityBound
+	}
+	if p.DisplayName != nil {
+		u.DisplayName = *p.DisplayName
+	}
+	if p.TimeZone != nil {
+		u.TimeZone = *p.TimeZone
+	}
+	if p.SystemRole != nil {
+		u.SystemRole = *p.SystemRole
+	}
+	if p.Status != nil {
+		u.Status = *p.Status
+	}
+	if p.AuthProvider != nil {
+		u.AuthProvider = *p.AuthProvider
+	}
+	if p.PasswordHash != nil {
+		u.PasswordHash = *p.PasswordHash
+	}
+	if p.LastSeenAt != nil {
+		t := *p.LastSeenAt
+		u.LastSeenAt = &t
+	}
+	if p.MSObjectID != nil {
+		u.MSObjectID = *p.MSObjectID
+	}
+	if p.OIDCIssuer != nil {
+		u.OIDCIssuer = *p.OIDCIssuer
+	}
+	if p.OIDCSubject != nil {
+		u.OIDCSubject = *p.OIDCSubject
+	}
+	if p.DeactivatedBy != nil {
+		u.DeactivatedBy = *p.DeactivatedBy
+	}
+	if p.Directory != nil {
+		u.Phone = p.Directory.Phone
+		u.Manager = p.Directory.Manager
+	}
+	if !p.UpdatedAt.IsZero() {
+		u.UpdatedAt = p.UpdatedAt
+	}
 	return nil
 }
 
@@ -133,6 +195,15 @@ func (m *mockTokenStore) MarkRefreshTokenRotated(_ context.Context, hash string,
 
 func (m *mockTokenStore) DeleteRefreshToken(_ context.Context, hash string) error {
 	delete(m.tokens, hash)
+	return nil
+}
+
+func (m *mockTokenStore) DeleteRefreshTokenFamily(_ context.Context, userID, familyID string) error {
+	for h, rt := range m.tokens {
+		if rt.UserID == userID && rt.FamilyID == familyID {
+			delete(m.tokens, h)
+		}
+	}
 	return nil
 }
 
@@ -343,6 +414,8 @@ func setupAuthHandlerWithOIDCSuccess(t *testing.T) (*AuthHandler, *mockUserStore
 				Email:   "callback@example.com",
 				Name:    "Callback User",
 				Picture: "https://example.com/avatar.png",
+				Issuer:  "https://idp.example.com",
+				Subject: "sub-callback",
 			},
 		},
 		newMockCache(),
@@ -638,16 +711,18 @@ func TestCreateInviteHandler_Unauthenticated(t *testing.T) {
 	}
 }
 
+// Invites are admin-only (behaviour change: any member used to invite).
 func TestCreateInviteHandler_Authenticated(t *testing.T) {
-	h, _, _ := setupAuthHandler(t)
+	h, users, _ := setupAuthHandler(t)
 	jwtMgr := auth.NewJWTManager("test-handler-secret", 15*time.Minute, 720*time.Hour)
 
 	user := &model.User{
 		ID:          "inviter-1",
 		Email:       "inviter@example.com",
 		DisplayName: "Inviter",
-		SystemRole:  model.SystemRoleMember,
+		SystemRole:  model.SystemRoleAdmin,
 	}
+	users.users[user.ID] = user
 	token := makeTokenForUser(jwtMgr, user)
 
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.CreateInvite))
@@ -682,20 +757,22 @@ func TestCreateInviteHandler_BadJSON(t *testing.T) {
 }
 
 func TestCreateInviteHandler_ServiceError(t *testing.T) {
-	h, _, _ := setupAuthHandler(t)
+	h, users, _ := setupAuthHandler(t)
 	jwtMgr := auth.NewJWTManager("test-handler-secret", 15*time.Minute, 720*time.Hour)
-	user := &model.User{ID: "inviter-se", Email: "se@example.com", SystemRole: model.SystemRoleMember}
+	user := &model.User{ID: "inviter-se", Email: "se@example.com", SystemRole: model.SystemRoleAdmin}
+	users.users[user.ID] = user
 	token := makeTokenForUser(jwtMgr, user)
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.CreateInvite))
 	// A malformed (but non-empty) email passes the handler guard and is
-	// rejected by the service → 500 invite_error.
+	// rejected by the service: the caller's input, so a 400 that says so (it
+	// used to be a 500 — the invite dialog showed "internal server error").
 	req := httptest.NewRequest(http.MethodPost, "/auth/invite", strings.NewReader(`{"email":"not-an-email"}`))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status=%d, want 500; body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid email address") {
+		t.Fatalf("status=%d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -963,45 +1040,10 @@ func TestIsAllowedOIDCRedirect(t *testing.T) {
 	}
 }
 
-// TestShouldUseDesktopAuthCode pins the desktop-auth-code branch: only
-// http://localhost and ex://mobile produce one-shot codes that callers
-// must POST to /auth/oidc/desktop/complete. Anything else falls into the
-// default cookie-and-redirect flow.
-func TestShouldUseDesktopAuthCode(t *testing.T) {
-	cases := []struct {
-		name string
-		raw  string
-		want bool
-	}{
-		{"nil parsed → false", "", false},
-		{"http localhost → true", "http://localhost:5173/cb", true},
-		{"https localhost → false (uses cookie path)", "https://localhost:5173/cb", false},
-		{"tauri localhost → false", "tauri://localhost/cb", false},
-		{"ex mobile → true", "ex://mobile/cb", true},
-		{"ex app (desktop deep-link) → false", "ex://app/cb", false},
-		{"unknown scheme → false", "https://evil.example/cb", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var parsed *url.URL
-			if tc.raw != "" {
-				p, err := url.Parse(tc.raw)
-				if err != nil {
-					t.Fatalf("url.Parse: %v", err)
-				}
-				parsed = p
-			}
-			if got := shouldUseDesktopAuthCode(parsed); got != tc.want {
-				t.Errorf("shouldUseDesktopAuthCode(%q) = %v, want %v", tc.raw, got, tc.want)
-			}
-		})
-	}
-}
-
 // TestRedirectWithQuery covers the helper that drops any caller-controlled
 // duplicate query keys and re-encodes the URL exactly once. The encoding
-// is what makes oidcCallbackRedirect tolerate raw URLs that already have
-// trailing parameters from the auth provider.
+// is what makes the desktop_code redirect tolerate app targets that already
+// carry query parameters.
 func TestRedirectWithQuery(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -1039,10 +1081,9 @@ func TestRedirectWithQuery(t *testing.T) {
 }
 
 // TestOIDCCallback_HonorsRedirectCookie covers the success-path branch
-// that consumes an oauth_redirect cookie and redirects to the
-// allowlisted target with the freshly-issued access token. Together
-// with the existing failure-mode tests, this exercises the full
-// OIDCCallback handler.
+// that consumes an oauth_redirect cookie and redirects to the allowlisted
+// target with a one-time desktop_code. Behaviour change: tauri:// used to
+// receive the access token in its URL; every app target now gets a code.
 func TestOIDCCallback_HonorsRedirectCookie(t *testing.T) {
 	h, _, _ := setupAuthHandlerWithOIDCSuccess(t)
 
@@ -1057,8 +1098,8 @@ func TestOIDCCallback_HonorsRedirectCookie(t *testing.T) {
 		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusFound, rec.Body.String())
 	}
 	loc := rec.Header().Get("Location")
-	if !strings.HasPrefix(loc, "tauri://localhost/cb?token=") {
-		t.Errorf("Location = %q, expected tauri://localhost/cb?token=...", loc)
+	if !strings.HasPrefix(loc, "tauri://localhost/cb?desktop_code=") || strings.Contains(loc, "token=") {
+		t.Errorf("Location = %q, expected tauri://localhost/cb?desktop_code=... and no token", loc)
 	}
 
 	// The redirect cookie should be cleared (MaxAge<0).
@@ -1130,7 +1171,7 @@ func assertNoRefreshCookie(t *testing.T, rec *httptest.ResponseRecorder) {
 
 func TestDesktopCompleteSetsRefreshCookieAndRedirects(t *testing.T) {
 	h, _, _ := setupAuthHandlerWithOIDCSuccess(t)
-	code, err := h.authSvc.CreateDesktopAuthSession(context.Background(), "access-1", "refresh-1")
+	code, err := h.authSvc.CreateDesktopAuthSession(context.Background(), "refresh-1")
 	if err != nil {
 		t.Fatalf("CreateDesktopAuthSession: %v", err)
 	}
@@ -1143,8 +1184,10 @@ func TestDesktopCompleteSetsRefreshCookieAndRedirects(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusFound, rec.Body.String())
 	}
-	if loc := rec.Header().Get("Location"); loc != "/oidc/callback?token=access-1" {
-		t.Errorf("Location = %q, want /oidc/callback?token=access-1", loc)
+	// Behaviour change: the bare SPA route — the app signs in by refreshing
+	// from the cookie set here, never from a token in the URL.
+	if loc := rec.Header().Get("Location"); loc != "/oidc/callback" {
+		t.Errorf("Location = %q, want /oidc/callback", loc)
 	}
 
 	var found bool
@@ -1185,9 +1228,9 @@ func TestOIDCCallback_DefaultRedirect(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusFound)
 	}
-	loc := rec.Header().Get("Location")
-	if !strings.HasPrefix(loc, "/oidc/callback?token=") {
-		t.Errorf("Location = %q, expected /oidc/callback?token=...", loc)
+	// Behaviour change: no token in the URL (see auth_security_test.go).
+	if loc := rec.Header().Get("Location"); loc != "/oidc/callback" {
+		t.Errorf("Location = %q, expected /oidc/callback", loc)
 	}
 }
 

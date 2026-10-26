@@ -2,11 +2,11 @@ package service
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
@@ -73,7 +73,7 @@ func (s *SettingsService) Effective(ctx context.Context) *model.WorkspaceSetting
 // to defaults (the Effective() reader fills them back in).
 func (s *SettingsService) Update(ctx context.Context, ws *model.WorkspaceSettings) (*model.WorkspaceSettings, error) {
 	if ws == nil {
-		return nil, errors.New("settings: nil input")
+		return nil, apperr.Invalid("settings: nil input")
 	}
 	// Normalize the extension list: trim, lowercase, strip leading dots.
 	cleaned := make([]string, 0, len(ws.AllowedExtensions))

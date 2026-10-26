@@ -112,6 +112,11 @@ func setupPasswordReset(t *testing.T) *resetTestEnv {
 	env.users.users[sso.ID] = sso
 	env.users.emailIndex[sso.Email] = sso
 
+	// Self-service requests do their per-account work detached; run it
+	// inline here so these tests can assert its effects directly (the
+	// asynchrony itself is pinned in password_reset_async_test.go).
+	syncBackground(env)
+
 	return &resetTestEnv{authTestEnv: env, resets: resets, mailer: mailer}
 }
 
@@ -392,8 +397,10 @@ func TestResetPassword_EndToEnd(t *testing.T) {
 	if len(env.tokens.tokens) != 0 {
 		t.Error("existing refresh tokens survived a password reset")
 	}
-	if _, cached := env.cache.users["u-guest"]; !cached {
-		t.Error("the cached user was not refreshed with the new hash")
+	// Behaviour change: the cached copy is evicted rather than overwritten
+	// (an overwrite with the reset's copy could cache a stale status).
+	if _, cached := env.cache.users["u-guest"]; cached {
+		t.Error("the cached user (with the superseded hash) was not evicted")
 	}
 
 	// Single-use: the same link cannot be redeemed twice.
@@ -456,8 +463,21 @@ func TestResetPassword_Errors(t *testing.T) {
 	t.Run("account vanished between mint and redemption", func(t *testing.T) {
 		env := setupPasswordReset(t)
 		env.resets.tickets[hashToken("tok")] = "ghost-user"
-		if err := env.svc.ResetPassword(context.Background(), "tok", "long-enough-password"); err == nil {
-			t.Fatal("expected the missing account to surface")
+		// The ticket outlived its account: it is simply no longer valid — the
+		// service says so itself, so no layer above has to translate a
+		// not-found into "invalid link".
+		if err := env.svc.ResetPassword(context.Background(), "tok", "long-enough-password"); !errors.Is(err, ErrPasswordResetInvalid) {
+			t.Fatalf("err = %v, want ErrPasswordResetInvalid", err)
+		}
+	})
+
+	t.Run("user store read failure", func(t *testing.T) {
+		env := setupPasswordReset(t)
+		env.resets.tickets[hashToken("tok")] = "u-guest"
+		env.users.getUserErr = errors.New("dynamo down")
+		err := env.svc.ResetPassword(context.Background(), "tok", "long-enough-password")
+		if err == nil || errors.Is(err, ErrPasswordResetInvalid) {
+			t.Fatalf("err = %v, want the store failure (not an invalid link)", err)
 		}
 	})
 
@@ -499,7 +519,7 @@ func TestResetPassword_Errors(t *testing.T) {
 func TestResetPassword_DegradedDependenciesStillSucceed(t *testing.T) {
 	env := setupPasswordReset(t)
 	env.resets.tickets[hashToken("tok")] = "u-guest"
-	env.cache.setErr = errors.New("redis down")
+	env.cache.deleteErr = errors.New("redis down")
 	env.tokens.deleteErr = errors.New("dynamo down")
 
 	if err := env.svc.ResetPassword(context.Background(), "tok", "long-enough-password"); err != nil {

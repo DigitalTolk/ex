@@ -32,6 +32,7 @@ func newTokenServer(t *testing.T, expiresIn int64) (*httptest.Server, *atomic.In
 				t.Errorf("token form %s = %q, want %q", key, got, want)
 			}
 		}
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "tok-1", "expires_in": expiresIn})
 	}))
 	t.Cleanup(srv.Close)
@@ -81,14 +82,17 @@ func TestNewDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if want := "https://login.microsoftonline.com/my%20tenant/oauth2/v2.0/token"; c.tokenURL != want {
-		t.Errorf("tokenURL = %q, want %q", c.tokenURL, want)
+	if want := "https://login.microsoftonline.com/my%20tenant/oauth2/v2.0/token"; c.creds.TokenURL != want {
+		t.Errorf("TokenURL = %q, want %q", c.creds.TokenURL, want)
 	}
 	if c.baseURL != defaultBaseURL {
 		t.Errorf("baseURL = %q, want default", c.baseURL)
 	}
-	if c.clientID != "c" || c.clientSecret != "s" {
-		t.Errorf("credentials not trimmed: %q %q", c.clientID, c.clientSecret)
+	if c.creds.ClientID != "c" || c.creds.ClientSecret != "s" {
+		t.Errorf("credentials not trimmed: %q %q", c.creds.ClientID, c.creds.ClientSecret)
+	}
+	if len(c.creds.Scopes) != 1 || c.creds.Scopes[0] != defaultScope {
+		t.Errorf("Scopes = %v, want [%s]", c.creds.Scopes, defaultScope)
 	}
 	if c.client == nil || c.client.Timeout != 10*time.Second {
 		t.Errorf("default HTTP client not applied: %+v", c.client)
@@ -157,24 +161,79 @@ func TestTokenErrors(t *testing.T) {
 	})
 	t.Run("bad JSON", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte("{not json"))
 		}))
 		defer srv.Close()
 		c := newClient(t, srv.URL, "http://unused.invalid")
-		if _, err := c.GetUserProfile(context.Background(), "a"); err == nil || !strings.Contains(err.Error(), "parse token response") {
-			t.Fatalf("err = %v, want parse error", err)
+		_, err := c.GetUserProfile(context.Background(), "a")
+		if err == nil || !strings.Contains(err.Error(), "msgraph: token request") || !strings.Contains(err.Error(), "json") {
+			t.Fatalf("err = %v, want a token-response parse error", err)
 		}
 	})
 	t.Run("empty access token", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{"expires_in": 3600})
 		}))
 		defer srv.Close()
 		c := newClient(t, srv.URL, "http://unused.invalid")
-		if _, err := c.GetUserProfile(context.Background(), "a"); err == nil || !strings.Contains(err.Error(), "no access token") {
-			t.Fatalf("err = %v, want no-access-token error", err)
+		if _, err := c.GetUserProfile(context.Background(), "a"); err == nil || !strings.Contains(err.Error(), "missing access_token") {
+			t.Fatalf("err = %v, want a missing-access-token error", err)
 		}
 	})
+	t.Run("OAuth error code surfaced, description withheld", func(t *testing.T) {
+		// Entra ID answers a bad secret with a 401 and an OAuth error body.
+		// The machine-readable code tells ops what broke; the free-text
+		// description (trace and correlation ids, tenant detail) never
+		// reaches an error string or a log line.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":             "invalid_client",
+				"error_description": "AADSTS7000215: Invalid client secret provided. Trace ID: secret-detail",
+			})
+		}))
+		defer srv.Close()
+		c := newClient(t, srv.URL, "http://unused.invalid")
+		_, err := c.GetUserProfile(context.Background(), "a")
+		if err == nil || !strings.Contains(err.Error(), "status 401") || !strings.Contains(err.Error(), "invalid_client") {
+			t.Fatalf("err = %v, want status 401 with the invalid_client code", err)
+		}
+		if strings.Contains(err.Error(), "secret-detail") || strings.Contains(err.Error(), "AADSTS") {
+			t.Errorf("err = %v leaks the error description", err)
+		}
+	})
+}
+
+// Some token endpoints (the v1 Entra ID endpoint, AD FS) send expires_in as
+// a JSON string. The token must still be accepted and cached.
+func TestTokenStringExpiresInIsCached(t *testing.T) {
+	var tokenCalls atomic.Int64
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		tokenCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"tok-1","token_type":"Bearer","expires_in":"3599"}`))
+	}))
+	defer tokenSrv.Close()
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer tok-1" {
+			t.Errorf("Authorization = %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "u1"})
+	}))
+	defer graphSrv.Close()
+
+	c := newClient(t, tokenSrv.URL, graphSrv.URL)
+	for range 2 {
+		if _, err := c.GetUserProfile(context.Background(), "alice@example.com"); err != nil {
+			t.Fatalf("GetUserProfile: %v", err)
+		}
+	}
+	if got := tokenCalls.Load(); got != 1 {
+		t.Errorf("token fetched %d times, want 1 (cached)", got)
+	}
 }
 
 func TestGetUserProfile(t *testing.T) {
@@ -302,9 +361,9 @@ func TestCreateOnlineMeeting(t *testing.T) {
 	c := newClient(t, tokenSrv.URL, graphSrv.URL)
 	start := time.Date(2026, 7, 12, 18, 0, 0, 0, time.UTC)
 	meeting, err := c.CreateOnlineMeeting(context.Background(), "org-1", OnlineMeetingRequest{
-		Subject:      "Teams meeting · ~general",
-		StartAt:      start,
-		EndAt:        start.Add(time.Hour),
+		Subject: "Teams meeting · ~general",
+		StartAt: start,
+		EndAt:   start.Add(time.Hour),
 		Attendees: []MeetingAttendee{
 			{UPN: "bob@example.com", ObjectID: "oid-bob"},
 			{UPN: "  "},

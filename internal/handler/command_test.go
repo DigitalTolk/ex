@@ -169,11 +169,11 @@ func TestCommandRunSuccess(t *testing.T) {
 	cmd := &testCommand{name: "mstmeetings", msg: &model.Message{ID: "msg-1", Body: "join link"}}
 	svc := service.NewCommandService()
 	svc.Register(cmd)
-	h := NewCommandHandler(svc)
 	// A successful run clears the scope's server draft (the composer held
 	// "/mstmeetings" as a draft until it ran) — same fold as message send.
 	clearer := &fakeDraftClearer{done: make(chan struct{}, 1)}
-	h.SetDraftClearer(clearer)
+	svc.SetDraftClearer(clearer)
+	h := NewCommandHandler(svc)
 
 	rec := httptest.NewRecorder()
 	// A leading slash (as typed in the composer) is accepted and trimmed.

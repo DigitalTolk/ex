@@ -5,6 +5,7 @@ import { PageContainer } from '@/components/layout/PageContainer';
 import { ScreensTab } from '@/components/projects/ScreensTab';
 import { ThemeCard, UiLibraryCard } from '@/components/projects/DesignSystemCards';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { externalHref } from '@/lib/url-safety';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -102,7 +103,7 @@ function HeaderActions({ detail }: { detail: ProjectDetail }) {
   const [confirming, setConfirming] = useState(false);
   return (
     <div className="flex items-center gap-1">
-      {project.appURL && (
+      {externalHref(project.appURL) && (
         <a
           href={project.appURL}
           target="_blank"

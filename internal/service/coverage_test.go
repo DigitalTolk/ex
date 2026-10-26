@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -905,20 +906,26 @@ func TestRefreshAccessToken_GenerateAccessTokenError(t *testing.T) {
 // auth.go: Logout error paths
 // ============================================================================
 
-func TestLogout_DeleteError(t *testing.T) {
+// Logout looks the token up to find its session; a failed lookup is an
+// error (the handler still clears the cookie).
+func TestLogout_LookupError(t *testing.T) {
 	env := setupAuthService()
-	env.tokens.deleteErr = errors.New("del boom")
+	env.tokens.getErr = errors.New("get boom")
 	if err := env.svc.Logout(context.Background(), "raw"); err == nil {
-		t.Fatal("expected error from delete")
+		t.Fatal("expected error from the token lookup")
 	}
 }
 
-// Logout with delete returning ErrNotFound is treated as success.
-func TestLogout_DeleteNotFoundIsOK(t *testing.T) {
+// A failed revocation is logged at ERROR and does not fail the logout — the
+// cookie is cleared regardless, and the error is the operator's to see.
+func TestLogout_RevocationFailureIsLogged(t *testing.T) {
 	env := setupAuthService()
-	env.tokens.deleteErr = store.ErrNotFound
+	hash := hashToken("raw")
+	env.tokens.tokens[hash] = &model.RefreshToken{TokenHash: hash, UserID: "u-1", FamilyID: "fam-1", ExpiresAt: time.Now().Add(time.Hour)}
+	env.tokens.deleteErr = errors.New("del boom")
+	env.tokens.familyErr = errors.New("family boom")
 	if err := env.svc.Logout(context.Background(), "raw"); err != nil {
-		t.Fatalf("Logout returning ErrNotFound: expected nil error, got %v", err)
+		t.Fatalf("Logout = %v, want nil", err)
 	}
 }
 
@@ -930,6 +937,7 @@ func TestCreateInvite_StoreError(t *testing.T) {
 	env := setupAuthService()
 	env.invites.createErr = errors.New("store boom")
 	env.memberships.memberships["a#inviter"] = &model.ChannelMembership{ChannelID: "a", UserID: "inviter"}
+	seedAdmin(env, "inviter")
 
 	if _, err := env.svc.CreateInvite(context.Background(), "inviter", "x@example.com", []string{"a"}); err == nil {
 		t.Fatal("expected error")
@@ -1559,9 +1567,10 @@ func TestMessageService_ListThreadMessages_ListError(t *testing.T) {
 		UserID:    "user-1",
 		Role:      model.ChannelRoleMember,
 	}
+	messages.messages["ch1#root"] = &model.Message{ID: "root", ParentID: "ch1", AuthorID: "user-1", Body: "root"}
 	messages.threadReplyErr = errors.New("thread boom")
-	if _, err := svc.ListThreadMessages(context.Background(), "user-1", "ch1", ParentChannel, "root"); err == nil {
-		t.Fatal("expected error")
+	if _, err := svc.ListThreadMessages(context.Background(), "user-1", "ch1", ParentChannel, "root"); err == nil || !strings.Contains(err.Error(), "thread boom") {
+		t.Fatalf("err = %v, want the reply-listing failure", err)
 	}
 }
 

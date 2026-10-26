@@ -2,10 +2,9 @@ import { useEffect, useRef } from 'react';
 import { ExponentialBackoff } from 'cockatiel';
 import { apiFetch, getAccessToken } from '@/lib/api';
 import { EventType, EPHEMERAL_EVENT_TYPES } from '@/lib/event-types';
+import { dispatchWSEvent, type WSEventHandlers, type WSInvalidPayloadFallbacks } from '@/lib/ws-events';
 import { setWSSender, clearWSPending } from '@/lib/ws-sender';
 import { useLatestRef } from '@/hooks/useLatestRef';
-
-type WSCallback = (data: unknown) => void;
 
 // Reconnect backoff (cockatiel): exponential with DECORRELATED JITTER, capped
 // at 30s, unbounded attempts. The old fixed ladder (1s×3, 2s×3, …) had zero
@@ -31,44 +30,11 @@ const staleFrameMs = 45_000;
 const dedupCapacity = 512;
 
 interface UseWebSocketOptions {
-  onMessageNew?: WSCallback;
-  onMessageEdited?: WSCallback;
-  onMessageDeleted?: WSCallback;
-  onMembersChanged?: WSCallback;
-  onConversationNew?: WSCallback;
-  onConversationConverted?: WSCallback;
-  onChannelArchived?: WSCallback;
-  onChannelUnarchived?: WSCallback;
-  onChannelUpdated?: WSCallback;
-  onChannelNew?: WSCallback;
-  onChannelRemoved?: WSCallback;
-  onPresenceChanged?: WSCallback;
-  onEmojiAdded?: WSCallback;
-  onEmojiRemoved?: WSCallback;
-  onUserUpdated?: WSCallback;
-  onUserChannelUpdated?: WSCallback;
-  onSidebarUpdated?: WSCallback;
-  onAttachmentDeleted?: WSCallback;
-  onChannelMuted?: WSCallback;
-  onNotification?: WSCallback;
-  onNotificationSettingsUpdated?: WSCallback;
-  onDraftUpdated?: WSCallback;
-  onWebhookChanged?: WSCallback;
-  onProjectChanged?: WSCallback;
-  onSettingsUpdated?: WSCallback;
-  onRunnersChanged?: WSCallback;
-  onActivityNew?: WSCallback;
-  onScheduledMessagesChanged?: WSCallback;
-  onRemindersChanged?: WSCallback;
-  onActivityRead?: WSCallback;
-  onThreadUpdated?: WSCallback;
-  onForceLogout?: WSCallback;
-  onServerVersion?: WSCallback;
-  onPing?: WSCallback;
-  onTyping?: WSCallback;
-  onRunUpdated?: WSCallback;
-  onRunProgress?: WSCallback;
-  onRunApproval?: WSCallback;
+  // The app's handler per event (lib/ws-events): each frame's payload is
+  // validated against its event's schema before its handler sees it.
+  handlers: WSEventHandlers;
+  // Run instead of a handler when that event's payload fails validation.
+  invalidPayloadFallbacks?: WSInvalidPayloadFallbacks;
   // Fires when the socket re-opens after a previous failure. The
   // initial connection does NOT trigger this — only true reconnects.
   // With auto-refetch disabled on infinite message queries, this is
@@ -203,133 +169,22 @@ export function useWebSocket(options: UseWebSocketOptions) {
         }
         try {
           const payload = typeof msg.data === 'string' ? JSON.parse(msg.data) : msg.data ?? msg;
-          switch (msg.type) {
-            case EventType.MessageNew:
-              callbacksRef.current.onMessageNew?.(payload);
-              break;
-            case EventType.MessageEdited:
-              callbacksRef.current.onMessageEdited?.(payload);
-              break;
-            case EventType.MessageDeleted:
-              callbacksRef.current.onMessageDeleted?.(payload);
-              break;
-            case EventType.MembersChanged:
-              callbacksRef.current.onMembersChanged?.(payload);
-              break;
-            case EventType.ConversationNew:
-              callbacksRef.current.onConversationNew?.(payload);
-              break;
-            case EventType.ConversationConverted:
-              callbacksRef.current.onConversationConverted?.(payload);
-              break;
-            case EventType.ChannelArchived:
-              callbacksRef.current.onChannelArchived?.(payload);
-              break;
-            case EventType.ChannelUnarchived:
-              callbacksRef.current.onChannelUnarchived?.(payload);
-              break;
-            case EventType.ChannelUpdated:
-              callbacksRef.current.onChannelUpdated?.(payload);
-              break;
-            case EventType.ChannelNew:
-              callbacksRef.current.onChannelNew?.(payload);
-              break;
-            case EventType.ChannelRemoved:
-              callbacksRef.current.onChannelRemoved?.(payload);
-              break;
-            case EventType.PresenceChanged:
-              callbacksRef.current.onPresenceChanged?.(payload);
-              break;
-            case EventType.EmojiAdded:
-              callbacksRef.current.onEmojiAdded?.(payload);
-              break;
-            case EventType.EmojiRemoved:
-              callbacksRef.current.onEmojiRemoved?.(payload);
-              break;
-            case EventType.UserUpdated:
-              callbacksRef.current.onUserUpdated?.(payload);
-              break;
-            case EventType.UserChannelUpdated:
-              callbacksRef.current.onUserChannelUpdated?.(payload);
-              break;
-            case EventType.SidebarUpdated:
-              callbacksRef.current.onSidebarUpdated?.(payload);
-              break;
-            case EventType.AttachmentDeleted:
-              callbacksRef.current.onAttachmentDeleted?.(payload);
-              break;
-            case EventType.ChannelMuted:
-              callbacksRef.current.onChannelMuted?.(payload);
-              break;
-            case EventType.NotificationNew:
-              callbacksRef.current.onNotification?.(payload);
-              break;
-            case EventType.NotificationSettingsUpdated:
-              callbacksRef.current.onNotificationSettingsUpdated?.(payload);
-              break;
-            case EventType.DraftUpdated:
-              callbacksRef.current.onDraftUpdated?.(payload);
-              break;
-            case EventType.WebhookChanged:
-              callbacksRef.current.onWebhookChanged?.(payload);
-              break;
-            case EventType.ProjectChanged:
-              callbacksRef.current.onProjectChanged?.(payload);
-              break;
-            case EventType.SettingsUpdated:
-              callbacksRef.current.onSettingsUpdated?.(payload);
-              break;
-            case EventType.RunnersChanged:
-              callbacksRef.current.onRunnersChanged?.(payload);
-              break;
-            case EventType.ScheduledMessagesChanged:
-              callbacksRef.current.onScheduledMessagesChanged?.(payload);
-              break;
-            case EventType.RemindersChanged:
-              callbacksRef.current.onRemindersChanged?.(payload);
-              break;
-            case EventType.ActivityNew:
-              callbacksRef.current.onActivityNew?.(payload);
-              break;
-            case EventType.ActivityRead:
-              callbacksRef.current.onActivityRead?.(payload);
-              break;
-            case EventType.ThreadUpdated:
-              callbacksRef.current.onThreadUpdated?.(payload);
-              break;
-            case EventType.ForceLogout:
-              callbacksRef.current.onForceLogout?.(payload);
-              break;
-            case EventType.ServerVersion:
-              callbacksRef.current.onServerVersion?.(payload);
-              break;
-            case EventType.Ping:
-              callbacksRef.current.onPing?.(payload);
-              break;
-            case EventType.ReplayExhausted:
-              // Server couldn't satisfy our cursor — the inbox has
-              // been trimmed past it. Drop the cursor so the next
-              // reconnect doesn't keep asking for a hopeless window,
-              // and let the caller refetch whatever might be stale.
-              lastEventIdRef.current = '';
-              callbacksRef.current.onReplayExhausted?.();
-              break;
-            case EventType.ReplayDone:
-              // Marker frame, no-op — the replay entries that
-              // preceded it advanced the cursor already.
-              break;
-            case 'typing':
-              callbacksRef.current.onTyping?.(payload);
-              break;
-            case EventType.RunUpdated:
-              callbacksRef.current.onRunUpdated?.(payload);
-              break;
-            case EventType.RunProgress:
-              callbacksRef.current.onRunProgress?.(payload);
-              break;
-            case EventType.RunApproval:
-              callbacksRef.current.onRunApproval?.(payload);
-              break;
+          if (msg.type === EventType.ReplayExhausted) {
+            // Server couldn't satisfy our cursor — the inbox has been trimmed
+            // past it. Drop the cursor so the next reconnect doesn't keep
+            // asking for a hopeless window, and let the caller refetch
+            // whatever might be stale.
+            lastEventIdRef.current = '';
+            callbacksRef.current.onReplayExhausted?.();
+          } else if (typeof msg.type === 'string') {
+            // replay.done is a marker frame the registry ignores — the replay
+            // entries that preceded it advanced the cursor already.
+            dispatchWSEvent(
+              msg.type,
+              payload,
+              callbacksRef.current.handlers,
+              callbacksRef.current.invalidPayloadFallbacks,
+            );
           }
         } catch (err) {
           // The handler threw — do NOT record the id as seen or advance the

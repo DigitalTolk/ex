@@ -8,13 +8,6 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 )
 
-func TestEmoji_ResolveCreateImageURL_NoSigner(t *testing.T) {
-	svc, _, _, _ := setupEmojiSvc() // no signer/mediaCache wired
-	if _, err := svc.resolveCreateImageURL(context.Background(), "smile", "key"); err == nil {
-		t.Fatal("expected signer-not-configured error")
-	}
-}
-
 func TestEmoji_Delete_GetUserError(t *testing.T) {
 	svc, _, users, _ := setupEmojiSvc()
 	users.getUserErr = errors.New("boom")

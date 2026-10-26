@@ -46,7 +46,8 @@ describe('ActivityReminderDialog', () => {
     const reminder = newActivityReminder(groupActivity([item])[0]);
     expect(reminder.seed).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
     const onClose = renderDialog(reminder, vi.fn(), 'general');
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    // The dialog's module loads on its first open.
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('reminder-quick-in1h'));
     fireEvent.click(screen.getByTestId('reminder-confirm'));
     await waitFor(() =>
@@ -62,7 +63,7 @@ describe('ActivityReminderDialog', () => {
 
   it('treats a DM as a conversation, and closes on cancel', async () => {
     const onClose = renderDialog(newActivityReminder(groupActivity([{ ...item, parentType: 'conversation', parentID: 'cv-1' }])[0]));
-    fireEvent.click(screen.getByTestId('reminder-quick-in1h'));
+    fireEvent.click(await screen.findByTestId('reminder-quick-in1h'));
     fireEvent.click(screen.getByTestId('reminder-confirm'));
     await waitFor(() => expect(apiFetch).toHaveBeenCalled());
     const body = JSON.parse(vi.mocked(apiFetch).mock.calls[0][1]!.body as string);

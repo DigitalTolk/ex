@@ -29,7 +29,8 @@ export async function resetAppStateForTests(): Promise<void> {
     callReset(() => import('@/lib/thread-scope'), 'resetThreadScopeForTests'),
     callReset(() => import('@/lib/notification-trace'), 'resetNotificationTraceForTests'),
     callReset(() => import('@/lib/input-modality'), 'resetInputModalityForTests'),
+    // sonner replays every live toast to a newly mounted Toaster.
+    callReset(() => import('@/lib/toast'), 'clearToasts'),
     callReset(() => import('@/hooks/useMobileBackClose'), 'resetMobileBackCloseForTests'),
-    callReset(() => import('@/stores/reaction-flash'), 'resetReactionFlashForTests'),
   ]);
 }

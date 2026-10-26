@@ -9,7 +9,6 @@ import { UnreadProvider } from '@/context/UnreadContext';
 import { PresenceProvider } from '@/context/PresenceContext';
 import { NotificationProvider } from '@/context/NotificationContext';
 import { TypingProvider } from '@/context/TypingContext';
-import { resetServerVersionForTests } from '@/hooks/useServerVersion';
 import type { User } from '@/types';
 import { fireKeyboard, keyboardSettled } from '@/test/keyboard';
 import { KeyboardInsetTracker } from '@/test/KeyboardInsetTracker';
@@ -159,7 +158,6 @@ function laidOut(selector: string): HTMLElement | null {
 let restoreFetch: () => void = () => undefined;
 
 beforeEach(() => {
-  resetServerVersionForTests();
   authState.user = me();
   restoreFetch = installFetch();
 });
@@ -193,21 +191,21 @@ describe.skipIf(window.__EX_FORCE_DEVICE__ === 'desktop')('the phone chat with t
   async function raiseKeyboard() {
     laidOut('[data-message-composer] [contenteditable="true"]')!.focus();
     fireKeyboard('keyboardWillShow', KEYBOARD_PX);
-    // The composer's toolbar opens over 200ms.
-    await keyboardSettled();
+    // Sitting on the keyboard, its toolbar open (it opens over 200ms).
+    const onKeyboard = () =>
+      (laidOut('[data-composer-focused="true"]')?.getBoundingClientRect().bottom ?? Infinity) <=
+      window.innerHeight - KEYBOARD_PX + 1;
+    await keyboardSettled(onKeyboard);
     await frames(3);
-    const composer = laidOut('[data-composer-focused="true"]')!.getBoundingClientRect();
-    // Sitting on the keyboard.
-    expect(composer.bottom).toBeLessThanOrEqual(window.innerHeight - KEYBOARD_PX + 1);
+    expect(onKeyboard()).toBe(true);
   }
 
   async function lowerKeyboard() {
     (document.activeElement as HTMLElement).blur();
     fireKeyboard('keyboardWillHide');
     // The composer's toolbar closes over 200ms.
-    await keyboardSettled();
+    await keyboardSettled(() => laidOut('[data-composer-focused="false"]') !== null);
     await frames(3);
-    expect(laidOut('[data-composer-focused="false"]')).not.toBeNull();
   }
 
   it('keeps the newest message right above the composer', async () => {
@@ -254,7 +252,7 @@ describe.skipIf(window.__EX_FORCE_DEVICE__ === 'desktop')('the phone chat with t
     await userEvent.keyboard('A new message');
     laidOut('[data-testid="schedule-send-hold"]')!.click();
     fireKeyboard('keyboardWillHide');
-    await keyboardSettled();
+    await keyboardSettled(() => laidOut('[data-composer-focused="false"]') !== null);
     await frames(3);
     const sent = Array.from(document.querySelectorAll<HTMLElement>('[data-message-id]')).find((el) =>
       el.textContent?.includes('A new message'),

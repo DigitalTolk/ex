@@ -2,19 +2,24 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ResetPasswordPage from './ResetPasswordPage';
 
 const originalFetch = globalThis.fetch;
 
 function renderPage(route: string) {
+  // UpdateBanner keeps the server version in React Query.
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MemoryRouter initialEntries={[route]}>
-      <Routes>
-        <Route path="/forgot-password" element={<ResetPasswordPage />} />
-        <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
-        <Route path="/login" element={<div>Sign in page</div>} />
-      </Routes>
-    </MemoryRouter>,
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[route]}>
+        <Routes>
+          <Route path="/forgot-password" element={<ResetPasswordPage />} />
+          <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
+          <Route path="/login" element={<div>Sign in page</div>} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -136,7 +141,8 @@ describe('ResetPasswordPage', () => {
       await user.click(screen.getByRole('button', { name: /set new password/i }));
 
       expect(await screen.findByRole('alert')).toHaveTextContent(/do not match/i);
-      expect(fetchMock).not.toHaveBeenCalled();
+      // The banner's version check is the only request.
+      expect(fetchMock.mock.calls.map(([url]) => url).filter((url) => url !== '/api/v1/version')).toEqual([]);
     });
 
     it('surfaces an expired or already-used link', async () => {

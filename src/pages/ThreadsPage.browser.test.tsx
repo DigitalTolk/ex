@@ -132,3 +132,38 @@ describe('Threads page layout', () => {
     }
   });
 });
+
+describe('Threads page with many threads', () => {
+  // Each card is a whole thread (messages, reactions, a composer) with its
+  // own query; the page used to keep every card it had paged in mounted.
+  it('mounts only the cards near the view, and the rest as they scroll in', async () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({ ...threads[0], threadRootID: `t-many-${i}` }));
+    threads.push(...many);
+    try {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      await render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/threads']}>
+            <div style={{ height: 700, display: 'flex', flexDirection: 'column' }}>
+              <ThreadsPage />
+            </div>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      await vi.waitFor(() => expect(cards().length).toBeGreaterThan(0), { timeout: 5000 });
+      await expect.poll(() => cards().length).toBeLessThan(30);
+
+      const scroller = document.querySelector('[data-page-scroll="true"]') as HTMLElement;
+      const last = threads[threads.length - 1].threadRootID;
+      await expect
+        .poll(() => {
+          scroller.scrollTop = scroller.scrollHeight;
+          return document.querySelector(`[data-thread-root-id="${last}"]`);
+        })
+        .not.toBeNull();
+      expect(cards().length).toBeLessThan(30);
+    } finally {
+      threads.splice(2);
+    }
+  });
+});

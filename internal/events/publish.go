@@ -38,11 +38,11 @@ func Publish(ctx context.Context, p Publisher, channel, eventType string, data a
 	}
 	evt, err := NewEvent(eventType, data)
 	if err != nil {
-		slog.Error("events: marshal", "type", eventType, "error", err)
+		slog.ErrorContext(ctx, "events: marshal", "type", eventType, "error", err)
 		return
 	}
 	if err := p.Publish(ctx, channel, evt); err != nil {
-		slog.Error("events: publish", "channel", channel, "type", eventType, "error", err)
+		slog.ErrorContext(ctx, "events: publish", "channel", channel, "type", eventType, "error", err)
 	}
 }
 
@@ -58,12 +58,19 @@ func PublishMany(ctx context.Context, p Publisher, channels []string, eventType 
 	}
 	evt, err := NewEvent(eventType, data)
 	if err != nil {
-		slog.Error("events: marshal", "type", eventType, "error", err)
+		slog.ErrorContext(ctx, "events: marshal", "type", eventType, "error", err)
 		return
 	}
+	publishManyEvent(ctx, p, channels, evt)
+}
+
+// publishManyEvent sends an already-built event to every channel: one
+// pipelined round trip through a ManyPublisher, a concurrent per-channel
+// Publish otherwise.
+func publishManyEvent(ctx context.Context, p Publisher, channels []string, evt *Event) {
 	if mp, ok := p.(ManyPublisher); ok {
 		if err := mp.PublishMany(ctx, channels, evt); err != nil {
-			slog.Error("events: publish many", "channels", len(channels), "type", eventType, "error", err)
+			slog.ErrorContext(ctx, "events: publish many", "channels", len(channels), "type", evt.Type, "error", err)
 		}
 		return
 	}
@@ -74,11 +81,43 @@ func PublishMany(ctx context.Context, p Publisher, channels []string, eventType 
 			defer wg.Done()
 			defer safe.Recover()
 			if err := p.Publish(ctx, ch, evt); err != nil {
-				slog.Error("events: publish", "channel", ch, "type", eventType, "error", err)
+				slog.ErrorContext(ctx, "events: publish", "channel", ch, "type", evt.Type, "error", err)
 			}
 		}(ch)
 	}
 	wg.Wait()
+}
+
+// MulticastPublisher is an optional capability: deliver ONE event to everyone
+// subscribed to ANY of several topics, each connection receiving it once.
+// PublishMany sends a copy per topic instead, so a connection subscribed to k
+// of the topics receives k copies. RedisPubSub implements it.
+type MulticastPublisher interface {
+	PublishMulticast(ctx context.Context, topics []string, event *Event) error
+}
+
+// PublishMulticast delivers one event to the union of the topics' audiences —
+// once per connection, cluster-wide — when the publisher supports it, and
+// falls back to PublishMany (a copy per topic, which clients dedupe by event
+// ID) when it does not. Used for fan-outs whose audiences overlap heavily,
+// like a presence change sent to every channel and DM the subject is in.
+// Errors are logged, never propagated.
+func PublishMulticast(ctx context.Context, p Publisher, topics []string, eventType string, data any) {
+	if p == nil || len(topics) == 0 {
+		return
+	}
+	evt, err := NewEvent(eventType, data)
+	if err != nil {
+		slog.ErrorContext(ctx, "events: marshal", "type", eventType, "error", err)
+		return
+	}
+	if mp, ok := p.(MulticastPublisher); ok {
+		if err := mp.PublishMulticast(ctx, topics, evt); err != nil {
+			slog.ErrorContext(ctx, "events: publish multicast", "topics", len(topics), "type", eventType, "error", err)
+		}
+		return
+	}
+	publishManyEvent(ctx, p, topics, evt)
 }
 
 // PublishItem pairs a channel with its (recipient-specific) event for a
@@ -106,13 +145,13 @@ func PublishEach(ctx context.Context, p Publisher, items []PublishItem) {
 	}
 	if ep, ok := p.(EachPublisher); ok {
 		if err := ep.PublishEach(ctx, items); err != nil {
-			slog.Error("events: publish each", "count", len(items), "error", err)
+			slog.ErrorContext(ctx, "events: publish each", "count", len(items), "error", err)
 		}
 		return
 	}
 	for _, it := range items {
 		if err := p.Publish(ctx, it.Channel, it.Event); err != nil {
-			slog.Error("events: publish", "channel", it.Channel, "type", it.Event.Type, "error", err)
+			slog.ErrorContext(ctx, "events: publish", "channel", it.Channel, "type", it.Event.Type, "error", err)
 		}
 	}
 }

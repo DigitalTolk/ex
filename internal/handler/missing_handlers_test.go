@@ -262,8 +262,10 @@ func TestAdminHandler_UpdateSettings_StoreError(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d (body: %s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	// A store failure is the server's: a generic 500 (it used to be a 400
+	// carrying the store's text).
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d (body: %s)", rec.Code, http.StatusInternalServerError, rec.Body.String())
 	}
 }
 
@@ -380,6 +382,9 @@ func (f *fakeSigner) StatObject(ctx context.Context, key string) (int64, string,
 
 func (f *fakeSigner) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
 	return "https://signed.test/get/" + key, nil
+}
+func (f *fakeSigner) PresignedInlineURL(_ context.Context, key, contentType, _ string, _ time.Duration) (string, error) {
+	return "https://signed.test/get/" + key + "?type=" + url.QueryEscape(contentType), nil
 }
 func (f *fakeSigner) PresignedDownloadURL(_ context.Context, key, filename string, _ time.Duration) (string, error) {
 	return "https://signed.test/get/" + key + "?dl=" + filename, nil
@@ -990,29 +995,6 @@ func TestAttachmentHandler_Media_OK(t *testing.T) {
 	}
 }
 
-func TestIsInlineUnsafeContentType(t *testing.T) {
-	cases := map[string]bool{
-		"text/html":                true,
-		"text/html; charset=utf-8": true, // parameters stripped
-		"application/xhtml+xml":    true,
-		"image/svg+xml":            true,
-		"application/xml":          true,
-		"text/xml":                 true,
-		"application/foo+xml":      true, // any +xml is scriptable
-		"image/png":                false,
-		"image/jpeg":               false,
-		"video/mp4":                false,
-		"application/pdf":          false,
-		"text/plain":               false,
-		"":                         false,
-	}
-	for ct, want := range cases {
-		if got := isInlineUnsafeContentType(ct); got != want {
-			t.Errorf("isInlineUnsafeContentType(%q) = %v, want %v", ct, got, want)
-		}
-	}
-}
-
 // mediaToken stores an attachment whose object is body and returns its media
 // token.
 func mediaToken(t *testing.T, body string) (*AttachmentHandler, string) {
@@ -1127,6 +1109,8 @@ func TestAttachmentHandler_Media_NotFound(t *testing.T) {
 	}
 }
 
+// A storage failure behind a media link is the server's: a generic 500 (it
+// was a 502 before every handler shared one mapping).
 func TestAttachmentHandler_Media_BadGateway(t *testing.T) {
 	st := newFakeAttachmentStore()
 	svc := service.NewAttachmentService(st, &fakeSigner{}, nil)
@@ -1138,8 +1122,8 @@ func TestAttachmentHandler_Media_BadGateway(t *testing.T) {
 	req.SetPathValue("token", "some-token")
 	rec := httptest.NewRecorder()
 	h.Media(rec, req)
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusBadGateway, rec.Body.String())
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
 	}
 }
 
@@ -1284,8 +1268,9 @@ func TestChannelHandler_SetMute_NotMember(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	// Not a member: a refusal, 403 (it used to be a 400).
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "not a member") {
+		t.Errorf("status = %d, want %d; body = %s", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
 }
 
@@ -1551,8 +1536,10 @@ func TestConversationHandler_SetPinned_Forbidden(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	// The conversation does not exist: 404 (these answered 403 when every
+	// chat error fell back to the route's status).
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 
@@ -1599,8 +1586,10 @@ func TestConversationHandler_ListPinned_Forbidden(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	// The conversation does not exist: 404 (these answered 403 when every
+	// chat error fell back to the route's status).
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 
@@ -1849,8 +1838,9 @@ func TestThreadHandler_Follow_ServiceError(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("follow service-error status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	// No access to the parent: 403 (it used to be a 400).
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("follow service-error status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -2062,8 +2052,10 @@ func TestConversationHandler_ListMessages_Forbidden(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	// The conversation does not exist: 404 (these answered 403 when every
+	// chat error fell back to the route's status).
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 
@@ -2079,8 +2071,10 @@ func TestConversationHandler_SendMessage_Forbidden(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	// The conversation does not exist: 404 (these answered 403 when every
+	// chat error fell back to the route's status).
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 
@@ -2097,8 +2091,10 @@ func TestConversationHandler_EditMessage_Forbidden(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	// The conversation does not exist: 404 (these answered 403 when every
+	// chat error fell back to the route's status).
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 
@@ -2115,8 +2111,10 @@ func TestConversationHandler_ToggleReaction_Forbidden(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	// The conversation does not exist: 404 (these answered 403 when every
+	// chat error fell back to the route's status).
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 
@@ -2342,8 +2340,10 @@ func TestUserHandler_SetUserStatus_NonGuest(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d (body: %s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	// Behaviour change: an admin can deactivate an SSO member (it used to be
+	// a 400, leaving the account revocable only by the directory sweep).
+	if rec.Code != http.StatusOK || target.Status != "deactivated" {
+		t.Errorf("status = %d, account %q, want 200 and deactivated (body: %s)", rec.Code, target.Status, rec.Body.String())
 	}
 }
 

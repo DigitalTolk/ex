@@ -35,8 +35,6 @@ const (
 	EventMessageNew      = "message.new"
 	EventMessageEdited   = "message.edited"
 	EventMessageDeleted  = "message.deleted"
-	EventMemberJoined    = "member.joined"
-	EventMemberLeft      = "member.left"
 	EventChannelUpdated  = "channel.updated"
 	EventConversationNew = "conversation.new"
 	// EventConversationConverted: a group message became a private channel
@@ -46,16 +44,19 @@ const (
 	EventChannelArchived       = "channel.archived"
 	EventChannelUnarchived     = "channel.unarchived"
 	EventChannelRemoved        = "channel.removed" // user was removed from a channel — sent to that user's personal channel
-	EventMembersChanged        = "members.changed"
-	EventEmojiAdded            = "emoji.added"
-	EventEmojiRemoved          = "emoji.removed"
-	EventPresenceChanged       = "presence.changed"
-	EventUserUpdated           = "user.updated"
-	EventAttachmentDeleted     = "attachment.deleted"
-	EventChannelMuted          = "channel.muted"
-	EventUserChannelUpdated    = "userchannel.updated" // per-user user-side state changed (favorite/category/notification prefs)
-	EventSidebarUpdated        = "sidebar.updated"     // server-side sidebar reorder committed — other devices refetch their lists
-	EventNotificationNew       = "notification.new"
+	// EventMembersChanged is the one membership event: a join, leave, add or
+	// removal (the "X joined/left" line itself arrives as a system
+	// message.new). Receivers refetch the member list and their channels.
+	EventMembersChanged     = "members.changed"
+	EventEmojiAdded         = "emoji.added"
+	EventEmojiRemoved       = "emoji.removed"
+	EventPresenceChanged    = "presence.changed"
+	EventUserUpdated        = "user.updated"
+	EventAttachmentDeleted  = "attachment.deleted"
+	EventChannelMuted       = "channel.muted"
+	EventUserChannelUpdated = "userchannel.updated" // per-user user-side state changed (favorite/category/notification prefs)
+	EventSidebarUpdated     = "sidebar.updated"     // server-side sidebar reorder committed — other devices refetch their lists
+	EventNotificationNew    = "notification.new"
 	// EventNotificationSettingsUpdated is sent to a user's own clients when
 	// their account-level notification settings (levels, keywords, etc.)
 	// change, so every open tab/device stays in sync.

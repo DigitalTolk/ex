@@ -20,6 +20,7 @@ import {
 } from '@/hooks/useConnectors';
 import { connectorInitials, connectorTint, credentialNoun, summarizeError, tokenHelp } from '@/lib/connector-ui';
 import { showToast } from '@/lib/toast';
+import { externalHref } from '@/lib/url-safety';
 import { NativeSelect } from '@/components/ui/native-select';
 
 // ConnectorsPage: external services agents can call on the user's behalf.
@@ -335,6 +336,7 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
   const credential = credentialNoun(c);
   // Where to go and make one, when we can point at the exact page.
   const help = tokenHelp(c);
+  const helpURL = externalHref(help?.url);
   const anonymous = c.authKind === 'none';
   const canSSO = c.authKind === 'sso_window' && !!window.__EX_CONNECTOR_SSO__ && !!c.startURL;
   const [mode, setMode] = useState<'login' | 'paste'>(canLogin ? 'login' : 'paste');
@@ -475,9 +477,9 @@ function ConnectForm({ connector: c, onDone }: { connector: Connector; onDone: (
             {help && (
               <p className="mt-1 text-sm text-muted-foreground" data-testid={`conn-token-help-${c.slug}`}>
                 {help.text}
-                {help.text && help.url ? ' ' : null}
-                {help.url && (
-                  <a href={help.url} target="_blank" rel="noreferrer" className="text-link hover:underline">
+                {help.text && helpURL ? ' ' : null}
+                {helpURL && (
+                  <a href={helpURL} target="_blank" rel="noreferrer" className="text-link hover:underline">
                     Open the token page
                   </a>
                 )}

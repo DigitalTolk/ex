@@ -38,63 +38,30 @@ type threadFollowItem struct {
 	model.ThreadFollow
 }
 
-// dynamoBatchWriteLimit is the per-request cap enforced by DynamoDB's
-// BatchWriteItem (25 ops). Callers chunk larger inputs themselves.
-const dynamoBatchWriteLimit = 25
-
-// SetThreadFollowMany writes a slice of follows in a single BatchWriteItem call
-// (chunked to the 25-op DynamoDB limit). Used when a single message
-// touches multiple users at once — e.g. a thread reply that mentions
-// several teammates — so we hit DDB once instead of N times.
+// SetThreadFollowMany writes a slice of follows with BatchWriteItem through
+// putAll (chunked to the 25-op DynamoDB limit, UnprocessedItems drained on the
+// shared backed-off, capped schedule — a request's ctx deadline bounds the
+// wait on the send path). Used when a single message touches multiple users
+// at once — e.g. a thread reply that mentions several teammates — so we hit
+// DDB once instead of N times.
 //
 // BatchWriteItem doesn't return an error on per-item conflicts the
 // way TransactWriteItems would, but follow records are idempotent
 // PutItems anyway: re-writing an existing record with the same body
 // is a no-op for the user-visible state.
 func (s *ThreadFollowStoreImpl) SetThreadFollowMany(ctx context.Context, follows []*model.ThreadFollow) error {
-	if len(follows) == 0 {
-		return nil
-	}
-	requests := make([]types.WriteRequest, 0, len(follows))
-	for _, f := range follows {
-		item := threadFollowItem{
+	items := make([]map[string]types.AttributeValue, len(follows))
+	for i, f := range follows {
+		items[i] = mustAttrs(attributevalue.MarshalMap(threadFollowItem{
 			PK:           userPK(f.UserID),
 			SK:           threadFollowSK(f.ParentID, f.ThreadRootID),
 			GSI1PK:       threadFollowGSI1PK(f.ParentID, f.ThreadRootID),
 			GSI1SK:       userPK(f.UserID),
 			ThreadFollow: *f,
-		}
-		av := mustAttrs(attributevalue.MarshalMap(item))
-		requests = append(requests, types.WriteRequest{PutRequest: &types.PutRequest{Item: av}})
+		}))
 	}
-	for i := 0; i < len(requests); i += dynamoBatchWriteLimit {
-		end := i + dynamoBatchWriteLimit
-		if end > len(requests) {
-			end = len(requests)
-		}
-		chunk := requests[i:end]
-		// DynamoDB may return UnprocessedItems on partial throttling;
-		// retry the unprocessed slice up to a small bound before
-		// surfacing an error. The retry budget is intentionally
-		// shallow — this path is best-effort for a UX nicety
-		// (auto-follow on mention) and shouldn't stall a message send
-		// indefinitely on a hot partition.
-		input := &dynamodb.BatchWriteItemInput{
-			RequestItems: map[string][]types.WriteRequest{s.Table: chunk},
-		}
-		for attempt := 0; attempt < 3; attempt++ {
-			out, err := s.Client.BatchWriteItem(ctx, input)
-			if err != nil {
-				return fmt.Errorf("store: batch set thread follows: %w", err)
-			}
-			if len(out.UnprocessedItems[s.Table]) == 0 {
-				break
-			}
-			input.RequestItems = out.UnprocessedItems
-			if attempt == 2 {
-				return fmt.Errorf("store: batch set thread follows: %d unprocessed after retries", len(out.UnprocessedItems[s.Table]))
-			}
-		}
+	if err := s.putAll(ctx, items); err != nil {
+		return fmt.Errorf("store: batch set thread follows: %w", err)
 	}
 	return nil
 }

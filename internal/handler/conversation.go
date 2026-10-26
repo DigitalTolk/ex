@@ -10,19 +10,14 @@ import (
 
 // ConversationHandler exposes HTTP endpoints for conversation operations.
 type ConversationHandler struct {
-	convSvc      *service.ConversationService
-	messageSvc   *service.MessageService
-	draftClearer DraftClearer
+	convSvc    *service.ConversationService
+	messageSvc *service.MessageService
 }
 
 // NewConversationHandler creates a ConversationHandler.
 func NewConversationHandler(convSvc *service.ConversationService, messageSvc *service.MessageService) *ConversationHandler {
 	return &ConversationHandler{convSvc: convSvc, messageSvc: messageSvc}
 }
-
-// SetDraftClearer wires the draft cleaner so a successful send clears the
-// scope's composer draft server-side (no separate client request).
-func (h *ConversationHandler) SetDraftClearer(c DraftClearer) { h.draftClearer = c }
 
 // Create starts a new direct message or group conversation.
 func (h *ConversationHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +64,7 @@ func (h *ConversationHandler) Create(w http.ResponseWriter, r *http.Request) {
 		if selfOnly || len(others) == 0 {
 			conv, err := h.convSvc.GetOrCreateDM(r.Context(), userID, userID)
 			if err != nil {
-				writeError(w, http.StatusBadRequest, "dm_error", err.Error())
+				writeServiceError(w, r, err)
 				return
 			}
 			writeJSON(w, http.StatusCreated, conv)
@@ -81,7 +76,7 @@ func (h *ConversationHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 		conv, err := h.convSvc.GetOrCreateDM(r.Context(), userID, others[0])
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "dm_error", err.Error())
+			writeServiceError(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, conv)
@@ -91,7 +86,7 @@ func (h *ConversationHandler) Create(w http.ResponseWriter, r *http.Request) {
 		if selfOnly || len(others) == 0 {
 			conv, err := h.convSvc.GetOrCreateDM(r.Context(), userID, userID)
 			if err != nil {
-				writeError(w, http.StatusBadRequest, "dm_error", err.Error())
+				writeServiceError(w, r, err)
 				return
 			}
 			writeJSON(w, http.StatusCreated, conv)
@@ -100,7 +95,7 @@ func (h *ConversationHandler) Create(w http.ResponseWriter, r *http.Request) {
 		if len(others) == 1 {
 			conv, err := h.convSvc.GetOrCreateDM(r.Context(), userID, others[0])
 			if err != nil {
-				writeError(w, http.StatusBadRequest, "dm_error", err.Error())
+				writeServiceError(w, r, err)
 				return
 			}
 			writeJSON(w, http.StatusCreated, conv)
@@ -112,7 +107,7 @@ func (h *ConversationHandler) Create(w http.ResponseWriter, r *http.Request) {
 		// duplicate group.
 		conv, err := h.convSvc.GetOrCreateGroup(r.Context(), userID, others, body.Name)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "group_error", err.Error())
+			writeServiceError(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, conv)
@@ -132,7 +127,7 @@ func (h *ConversationHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	convs, err := h.convSvc.ListUserConversations(r.Context(), userID)
 	if err != nil {
-		writeInternalError(w, r, "list_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -151,11 +146,11 @@ func (h *ConversationHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := h.convSvc.GetByID(r.Context(), userID, id); err != nil {
-		writeReadResourceError(w, r, err, "conversation")
+		writeServiceError(w, r, err)
 		return
 	}
 	if err := h.convSvc.MarkConversationRead(r.Context(), userID, id); err != nil {
-		writeInternalError(w, r, "read_error", err)
+		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -172,7 +167,7 @@ func (h *ConversationHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	conv, err := h.convSvc.GetByID(r.Context(), userID, id)
 	if err != nil {
-		writeReadResourceError(w, r, err, "conversation")
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -220,10 +215,9 @@ func (h *ConversationHandler) SendMessage(w http.ResponseWriter, r *http.Request
 
 	msg, err := h.messageSvc.Send(withClientNonce(r), userID, id, service.ParentConversation, body.Body, body.ParentMessageID, body.AttachmentIDs...)
 	if err != nil {
-		writeServiceError(w, err, http.StatusForbidden, "send_error")
+		writeServiceError(w, r, err)
 		return
 	}
-	clearSentDraft(r.Context(), h.draftClearer, userID, id, service.ParentConversation, body.ParentMessageID)
 
 	writeJSON(w, http.StatusCreated, msg)
 }
@@ -240,7 +234,7 @@ func (h *ConversationHandler) GetThread(w http.ResponseWriter, r *http.Request) 
 
 	msgs, err := h.messageSvc.ListThreadMessages(r.Context(), userID, id, service.ParentConversation, msgID)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "thread_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -276,7 +270,7 @@ func (h *ConversationHandler) EditMessage(w http.ResponseWriter, r *http.Request
 	}
 	msg, err := h.messageSvc.Edit(r.Context(), userID, id, service.ParentConversation, msgID, body.Body, attIDs)
 	if err != nil {
-		writeServiceError(w, err, http.StatusForbidden, "edit_error")
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -307,7 +301,7 @@ func (h *ConversationHandler) ToggleReaction(w http.ResponseWriter, r *http.Requ
 
 	msg, err := h.messageSvc.ToggleReaction(r.Context(), userID, id, service.ParentConversation, msgID, body.Emoji)
 	if err != nil {
-		writeServiceError(w, err, http.StatusForbidden, "reaction_error")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, msg)
@@ -331,7 +325,7 @@ func (h *ConversationHandler) SetPinned(w http.ResponseWriter, r *http.Request) 
 	}
 	msg, err := h.messageSvc.SetPinned(r.Context(), userID, id, service.ParentConversation, msgID, body.Pinned)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "pin_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, msg)
@@ -356,7 +350,7 @@ func (h *ConversationHandler) SetNoUnfurl(w http.ResponseWriter, r *http.Request
 	}
 	msg, err := h.messageSvc.SetNoUnfurl(r.Context(), userID, id, service.ParentConversation, msgID, body.NoUnfurl)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "no_unfurl_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, msg)
@@ -372,7 +366,7 @@ func (h *ConversationHandler) ListPinned(w http.ResponseWriter, r *http.Request)
 	}
 	pinned, err := h.messageSvc.ListPinned(r.Context(), userID, id, service.ParentConversation)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "list_pinned_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, pinned)
@@ -389,7 +383,7 @@ func (h *ConversationHandler) ListFiles(w http.ResponseWriter, r *http.Request) 
 	}
 	files, err := h.messageSvc.ListFiles(r.Context(), userID, id, service.ParentConversation)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "list_files_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, files)
@@ -406,7 +400,7 @@ func (h *ConversationHandler) DeleteMessage(w http.ResponseWriter, r *http.Reque
 	}
 
 	if err := h.messageSvc.Delete(r.Context(), userID, id, service.ParentConversation, msgID); err != nil {
-		writeError(w, http.StatusForbidden, "delete_error", err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 

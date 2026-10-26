@@ -125,6 +125,62 @@ const defaultProps = {
   pages: [],
 };
 
+describe('MessageList thread summaries', () => {
+  // The root message keeps its identity when a reply lands in the loaded
+  // history; the root's summary (who replied) still has to follow.
+  it('updates a root\'s reply avatars when a reply lands beside it', () => {
+    const root = makeMessage({ id: 'root', replyCount: 1, createdAt: '2026-04-24T10:00:00Z' });
+    const reply = (id: string, authorID: string, minute: number) =>
+      makeMessage({ id, authorID, parentMessageID: 'root', createdAt: `2026-04-24T10:${minute}:00Z` });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrap = (pages: { items: Message[] }[]) => (
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>
+          <MessageList {...defaultProps} pages={pages} />
+        </BrowserRouter>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(wrap([{ items: [reply('r-1', 'user-2', 10), root] }]));
+    expect(screen.getByTestId('thread-action-avatar-user-2')).toBeInTheDocument();
+    expect(screen.queryByTestId('thread-action-avatar-user-1')).toBeNull();
+    rerender(wrap([{ items: [reply('r-2', 'user-1', 20), reply('r-1', 'user-2', 10), root] }]));
+    expect(screen.getByTestId('thread-action-avatar-user-1')).toBeInTheDocument();
+  });
+});
+
+describe('MessageList overscan', () => {
+  // Rows kept mounted beyond the viewport. 2000px each way kept ~160 rows
+  // (avatars, unfurls, code blocks) alive on every list; a phone gets less
+  // than a desktop window, which has the larger screen to fill on a fling.
+  function phoneWidth() {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: query === '(max-width: 767px)',
+        media: query,
+        onchange: null,
+        addListener: () => undefined,
+        removeListener: () => undefined,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+        dispatchEvent: () => false,
+      }),
+    });
+  }
+
+  it('keeps a screen and a bit of rows mounted around a desktop viewport', () => {
+    renderWithProviders(<MessageList {...defaultProps} pages={[{ items: [makeMessage()] }]} />);
+    expect(captured.increaseViewportBy).toEqual({ top: 1200, bottom: 1200 });
+  });
+
+  it('keeps fewer rows mounted on a phone', () => {
+    phoneWidth();
+    renderWithProviders(<MessageList {...defaultProps} pages={[{ items: [makeMessage()] }]} />);
+    expect(captured.increaseViewportBy).toEqual({ top: 1000, bottom: 1000 });
+  });
+});
+
 describe('MessageList', () => {
   it('shows the empty state when there are no messages', () => {
     renderWithProviders(<MessageList {...defaultProps} pages={[{ items: [] }]} />);
@@ -366,6 +422,25 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     expect(anchorCalls).toEqual([{ index: 4, align: 'center' }]);
   });
 
+  it('deep-link: waits for a linked message that is not loaded yet, then scrolls to it once', async () => {
+    const early = makeMessage({ id: 'msg-early', createdAt: '2026-04-24T10:00:00Z' });
+    const late = makeMessage({ id: 'msg-late', createdAt: '2026-04-24T10:30:00Z' });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrap = (node: React.ReactElement) => (
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>{node}</BrowserRouter>
+      </QueryClientProvider>
+    );
+    const props = { ...defaultProps, hasNextPage: false, fetchNextPage: vi.fn(), anchorMsgId: 'msg-late' };
+    const { rerender } = render(wrap(<MessageList {...props} pages={[{ items: [early] }]} />));
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    expect(captured.scrollToIndexCalls.filter((c) => c.align === 'center')).toEqual([]);
+    // Chrono [early, late] → rows [divider(0), early(1), late(2)].
+    rerender(wrap(<MessageList {...props} pages={[{ items: [late, early] }]} />));
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    expect(captured.scrollToIndexCalls.filter((c) => c.align === 'center')).toEqual([{ index: 2, align: 'center' }]);
+  });
+
   it('deep-link forward pagination: followOutput=false while hasPreviousPage=true (prevents spam-scroll on append)', async () => {
     const captured = await renderAndCaptureVirtuoso(
       <MessageList
@@ -513,10 +588,11 @@ describe('MessageList Virtuoso wiring (regression contract)', () => {
     expect(captured.alignToBottom).toBe(true);
     expect(captured.defaultItemHeight).toBe(30);
     expect(captured.atBottomThreshold).toBe(4);
-    // Wide overscan keeps ~2 screens of rows mounted off-viewport so
+    // Overscan keeps about a screen and a bit of rows mounted off-viewport so
     // fast scrolling doesn't tear down and remount avatars / Giphy
-    // embeds / unfurl cards on every off-screen → on-screen transition.
-    expect(captured.increaseViewportBy).toEqual({ top: 2000, bottom: 2000 });
+    // embeds / unfurl cards on every off-screen → on-screen transition
+    // (per tier: see 'MessageList overscan').
+    expect(captured.increaseViewportBy).toEqual({ top: 1200, bottom: 1200 });
     expect(captured.computeItemKey?.(0, { key: 'stable-key' })).toBe('stable-key');
   });
 

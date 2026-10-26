@@ -8,7 +8,6 @@ import { UnreadProvider } from '@/context/UnreadContext';
 import { PresenceProvider } from '@/context/PresenceContext';
 import { NotificationProvider } from '@/context/NotificationContext';
 import { TypingProvider } from '@/context/TypingContext';
-import { resetServerVersionForTests } from '@/hooks/useServerVersion';
 import { dispatchEditMessage } from '@/lib/window-events';
 import { TagSearchProvider } from '@/context/TagSearchContext';
 
@@ -303,7 +302,6 @@ function renderWithActiveTag(initialPath: string) {
 }
 
 beforeEach(() => {
-  resetServerVersionForTests();
 });
 
 let teardown: (() => void) | null = null;

@@ -9,7 +9,6 @@ import { PresenceProvider } from '@/context/PresenceContext';
 import { NotificationProvider } from '@/context/NotificationContext';
 import { TypingProvider } from '@/context/TypingContext';
 import { TagSearchProvider } from '@/context/TagSearchContext';
-import { resetServerVersionForTests } from '@/hooks/useServerVersion';
 import { dispatchEditMessage } from '@/lib/window-events';
 import type { User } from '@/types';
 import { hoverRow } from '@/test/hover';
@@ -356,7 +355,6 @@ function fileDragEvent(type: string, files: File[]) {
 }
 
 beforeEach(() => {
-  resetServerVersionForTests();
   authState.user = meUser();
 });
 

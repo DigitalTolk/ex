@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { searchShortcutLabel } from './platform';
 import { normalizeHighlightLanguage, highlightToHast } from './code-highlight';
-import { showToast, TOAST_EVENT, type ToastDetail } from './toast';
+import { render } from 'vitest-browser-react';
+import { showToast } from './toast';
+import { Toaster } from '@/components/Toaster';
 import { recordEmojiUse, getFrequentEmojis, EMOJI_FREQUENCY_CHANGED_EVENT } from './emoji-frequency';
 import { apiFetch } from '@/lib/api';
 
@@ -43,16 +45,14 @@ describe('code-highlight.highlightToHast', () => {
 });
 
 describe('toast.showToast', () => {
-  it('defaults to the error variant (the main callers are failure paths)', () => {
-    const heard: ToastDetail[] = [];
-    const onToast = (e: Event) => heard.push((e as CustomEvent<ToastDetail>).detail);
-    window.addEventListener(TOAST_EVENT, onToast);
-    try {
-      showToast('boom');
-      expect(heard).toEqual([{ message: 'boom', variant: 'error' }]);
-    } finally {
-      window.removeEventListener(TOAST_EVENT, onToast);
-    }
+  it('defaults to the error variant (the main callers are failure paths)', async () => {
+    await render(<Toaster />);
+    showToast('boom');
+    const toast = () => document.querySelector('[data-testid="toast"]');
+    await expect.poll(() => toast()?.getAttribute('data-variant')).toBe('error');
+    expect(toast()).toHaveTextContent('boom');
+    // A plain toast, not a notification banner.
+    expect(toast()).not.toHaveAttribute('data-kind');
   });
 });
 

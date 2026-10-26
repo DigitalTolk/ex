@@ -17,13 +17,26 @@ import (
 // A group message becoming a private channel.
 
 type fakeConverter struct {
-	convs      map[string]*model.Conversation
-	rows       map[string]*model.UserConversation
+	convs map[string]*model.Conversation
+	rows  map[string]*model.UserConversation
+	// rowsByConv, when it has an entry, answers for that conversation
+	// instead of rows.
+	rowsByConv map[string]map[string]*model.UserConversation
 	getErr     error
 	rowsErr    error
 	convertErr error
+	moveErr    error
 	converted  *model.Channel
 	members    []store.ConvertedMember
+	moved      []store.ConvertedMember
+}
+
+func (f *fakeConverter) MoveMembersToChannel(_ context.Context, _ string, members []store.ConvertedMember) error {
+	if f.moveErr != nil {
+		return f.moveErr
+	}
+	f.moved = append(f.moved, members...)
+	return nil
 }
 
 func (f *fakeConverter) GetConversation(_ context.Context, id string) (*model.Conversation, error) {
@@ -37,7 +50,10 @@ func (f *fakeConverter) GetConversation(_ context.Context, id string) (*model.Co
 	return c, nil
 }
 
-func (f *fakeConverter) GetUserConversations(_ context.Context, _ string, _ []string) (map[string]*model.UserConversation, error) {
+func (f *fakeConverter) GetUserConversations(_ context.Context, convID string, _ []string) (map[string]*model.UserConversation, error) {
+	if rows, ok := f.rowsByConv[convID]; ok {
+		return rows, f.rowsErr
+	}
 	return f.rows, f.rowsErr
 }
 
@@ -65,6 +81,8 @@ func convertSetup(t *testing.T) (*ChannelService, *fakeConverter, *mockChannelSt
 			"u-a": {UserID: "u-a", LastReadSeq: 9, LastReadMsgID: "m-9", Favorite: true, SidebarPosition: 3},
 			"u-b": {UserID: "u-b", LastReadSeq: 4, UnreadNotifyCount: 2, CategoryID: "cat-1", SidebarPosition: 5},
 		},
+		// A finished conversion moved everyone: nobody has a group row left.
+		rowsByConv: map[string]map[string]*model.UserConversation{"g-done": {}},
 	}
 	svc.SetConversationConverter(conv, nil)
 	return svc, conv, channels, users, broker, pub
@@ -305,5 +323,79 @@ func TestGetOrCreateGroup_AfterTheGroupBecameAChannel(t *testing.T) {
 	convs.getErr = errors.New("dynamo down")
 	if _, err := svc.GetOrCreateGroup(ctx, "u-a", []string{"u-b", "u-c"}, ""); err == nil {
 		t.Fatal("a failed lookup created a group")
+	}
+}
+
+// The store moves a large group in several transactions. When a later one
+// failed, the conversation already reads as a channel and the people not yet
+// moved have no way in, so converting again finishes the move — and what the
+// first attempt never got to: sockets, the event, drafts, the system message.
+func TestConvertGroupConversation_FinishesAPartialConversion(t *testing.T) {
+	svc, conv, channels, _, broker, pub := convertSetup(t)
+	ctx := context.Background()
+	mover := &fakeDraftMover{}
+	svc.SetConversationConverter(conv, mover)
+	conv.convs["g-half"] = &model.Conversation{ID: "g-half", Type: model.ConversationTypeGroup, ParticipantIDs: []string{"u-a", "u-b", "u-c"}, ConvertedToChannelID: "g-half"}
+	conv.rowsByConv["g-half"] = map[string]*model.UserConversation{"u-c": {UserID: "u-c", LastReadSeq: 7, Favorite: true}}
+	channels.channels["g-half"] = &model.Channel{ID: "g-half", Name: "ops", Slug: "ops", Type: model.ChannelTypePrivate, CreatedBy: "u-a"}
+
+	ch, err := svc.ConvertGroupConversation(ctx, "u-c", "g-half", "another name")
+	if err != nil {
+		t.Fatalf("finishing: %v", err)
+	}
+	if ch.ID != "g-half" || ch.Name != "ops" {
+		t.Fatalf("channel = %+v, want the one the group became", ch)
+	}
+	if len(conv.moved) != 1 || conv.moved[0].Member.UserID != "u-c" || conv.moved[0].Member.Role != model.ChannelRoleMember {
+		t.Fatalf("moved = %+v, want only Carol, as a member", conv.moved)
+	}
+	if uc := conv.moved[0].UserChannel; uc.LastReadSeq != 7 || !uc.Favorite || uc.ChannelName != "ops" {
+		t.Fatalf("Carol's row = %+v, want her read position and favourite kept", uc)
+	}
+	told, systemMessage := 0, ""
+	for _, p := range pub.published {
+		switch p.event.Type {
+		case events.EventConversationConverted:
+			told++
+		case events.EventMessageNew:
+			var msg model.Message
+			_ = json.Unmarshal(p.event.Data, &msg)
+			systemMessage = msg.Body
+		}
+	}
+	if told != 3 || systemMessage != "Alice made this a private channel" {
+		t.Fatalf("told %d, system message %q", told, systemMessage)
+	}
+	if !strings.Contains(strings.Join(broker.subscriptions["u-c"], ","), pubsub.ChannelName("g-half")) {
+		t.Fatalf("Carol's sockets don't follow the channel: %v", broker.subscriptions["u-c"])
+	}
+	if mover.conversationID != "g-half" {
+		t.Fatal("drafts were not moved")
+	}
+}
+
+func TestConvertGroupConversation_FinishingFailures(t *testing.T) {
+	svc, conv, channels, _, _, pub := convertSetup(t)
+	ctx := context.Background()
+	conv.convs["g-half"] = &model.Conversation{ID: "g-half", Type: model.ConversationTypeGroup, ParticipantIDs: []string{"u-a", "u-c"}, ConvertedToChannelID: "g-half"}
+	conv.rowsByConv["g-half"] = map[string]*model.UserConversation{"u-c": {UserID: "u-c"}}
+
+	// The channel it became can't be read.
+	if _, err := svc.ConvertGroupConversation(ctx, "u-c", "g-half", "ops"); err == nil {
+		t.Fatal("finished without the channel")
+	}
+	channels.channels["g-half"] = &model.Channel{ID: "g-half", Name: "ops", Slug: "ops", CreatedBy: "u-a"}
+	conv.moveErr = errors.New("dynamo down")
+	if _, err := svc.ConvertGroupConversation(ctx, "u-c", "g-half", "ops"); err == nil {
+		t.Fatal("a failed move was reported as done")
+	}
+	conv.moveErr, conv.rowsErr = nil, errors.New("dynamo down")
+	if _, err := svc.ConvertGroupConversation(ctx, "u-c", "g-half", "ops"); err == nil {
+		t.Fatal("finished without knowing who was left")
+	}
+	for _, p := range pub.published {
+		if p.event.Type == events.EventConversationConverted {
+			t.Fatal("people were told about a conversion that did not finish")
+		}
 	}
 }

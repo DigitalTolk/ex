@@ -87,6 +87,12 @@ const ALLOWED_TAGS = new Set([
   'ex-trailing',
 ]);
 
+// The node types the server emits. hast-util-to-jsx-runtime renders more
+// than these — mdxJsxFlowElement / mdxJsxTextElement turn their `name` into
+// an element of that name, bypassing the tag allowlist entirely — so any
+// other type is dropped, children and all.
+const RENDERABLE_TYPES = new Set(['root', 'element', 'text']);
+
 // normaliseTree defensively patches a tree before handing it to
 // hast-util-to-jsx-runtime. The hydrator reads `node.children.length`
 // unconditionally on element/root nodes — a tree with `children`
@@ -94,9 +100,11 @@ const ALLOWED_TAGS = new Set([
 // `omitempty` on empty arrays) crashes the hydrator and brings down
 // the whole message render via React's error boundary. We patch in
 // `children: []` for any element/root that arrives without one, and
-// enforce the tag allowlist (see ALLOWED_TAGS).
+// enforce the node-type and tag allowlists (RENDERABLE_TYPES,
+// ALLOWED_TAGS).
 function normaliseTree(node: HastNode): HastNode {
   if (node.type === 'text') return node;
+  if (!RENDERABLE_TYPES.has(node.type)) return { type: 'root', children: [] };
   const kids = (node.children ?? []).flatMap(normaliseChild);
   return {
     ...node,
@@ -104,11 +112,13 @@ function normaliseTree(node: HastNode): HastNode {
   };
 }
 
-// normaliseChild unwraps disallowed elements: their (normalised) children
-// take their place in the parent, the element wrapper is discarded.
+// normaliseChild unwraps disallowed elements (an unknown tag, or none at
+// all): their (normalised) children take their place in the parent, the
+// element wrapper is discarded. A node of any other type is dropped.
 function normaliseChild(node: HastNode): HastNode[] {
   if (node.type === 'text') return [node];
-  if (node.type === 'element' && node.tagName && !ALLOWED_TAGS.has(node.tagName)) {
+  if (!RENDERABLE_TYPES.has(node.type)) return [];
+  if (node.type === 'element' && !ALLOWED_TAGS.has(node.tagName ?? '')) {
     return (node.children ?? []).flatMap(normaliseChild);
   }
   return [normaliseTree(node)];
@@ -330,7 +340,8 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
     const slug = props['data-slug'] ?? '';
     return (
       <a
-        href={`/channel/${slug}`}
+        // The slug is data: encoded, it can only ever name one path segment.
+        href={`/channel/${encodeURIComponent(slug)}`}
         data-testid="channel-mention-pill"
         data-channel-id={channelId}
         className={`${MENTION_PILL_BASE}${MENTION_PILL_OTHER}`}

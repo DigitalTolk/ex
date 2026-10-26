@@ -46,13 +46,15 @@ func createConvReq(t *testing.T, env *convHandlerEnv, userID, body string) *http
 }
 
 // TestConversationHandler_Create_SelfDMError drives the DM-type self-DM
-// GetOrCreateDM error arm: a non-NotFound store error surfaces as 400 dm_error.
+// GetOrCreateDM error arm: a non-NotFound store error surfaces as a generic 500.
 func TestConversationHandler_Create_SelfDMError(t *testing.T) {
 	env := setupConversationHandlerFull(t)
 	env.convs.getErr = errors.New("dynamo down")
 	rec := createConvReq(t, env, "u-sdm", `{"type":"dm","participantIDs":["u-sdm"]}`)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d, want 400; body=%s", rec.Code, rec.Body.String())
+	// A store outage is the server's: a generic 500, never the store's text
+	// (it used to answer 400 carrying it).
+	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "dynamo") {
+		t.Fatalf("status=%d, want a generic 500; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -62,8 +64,10 @@ func TestConversationHandler_Create_GroupSelfDMError(t *testing.T) {
 	env := setupConversationHandlerFull(t)
 	env.convs.getErr = errors.New("dynamo down")
 	rec := createConvReq(t, env, "u-gsdm", `{"type":"group","participantIDs":["u-gsdm"]}`)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d, want 400; body=%s", rec.Code, rec.Body.String())
+	// A store outage is the server's: a generic 500, never the store's text
+	// (it used to answer 400 carrying it).
+	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "dynamo") {
+		t.Fatalf("status=%d, want a generic 500; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -73,7 +77,9 @@ func TestConversationHandler_Create_GroupSingleOtherDMError(t *testing.T) {
 	env := setupConversationHandlerFull(t)
 	env.convs.getErr = errors.New("dynamo down")
 	rec := createConvReq(t, env, "u-gso", `{"type":"group","participantIDs":["u-other"]}`)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d, want 400; body=%s", rec.Code, rec.Body.String())
+	// A store outage is the server's: a generic 500, never the store's text
+	// (it used to answer 400 carrying it).
+	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "dynamo") {
+		t.Fatalf("status=%d, want a generic 500; body=%s", rec.Code, rec.Body.String())
 	}
 }

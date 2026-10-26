@@ -18,8 +18,6 @@ import {
   useSetNoUnfurl,
   useChannelMessages,
   useConversationMessages,
-  useSendChannelMessage,
-  useSendConversationMessage,
   type MessageWindow,
   type MessagePageParam,
 } from './useMessages';
@@ -619,17 +617,17 @@ describe('useMessages — infinite query hooks', () => {
 });
 
 describe('useMessages — legacy send aliases', () => {
-  it('useSendChannelMessage posts to the channel messages endpoint', async () => {
+  it('useSendMessage posts a channel message to the channel messages endpoint', async () => {
     apiFetchMock.mockResolvedValue(msg({ id: 'new' }));
-    const { screen } = await renderMutation(() => useSendChannelMessage('ch-9'), { body: 'hey' });
+    const { screen } = await renderMutation(() => useSendMessage({ channelId: 'ch-9' }), { body: 'hey' });
     (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
     await new Promise((r) => setTimeout(r, 200));
     expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/channels/ch-9/messages');
   });
 
-  it('useSendConversationMessage posts to the conversation messages endpoint', async () => {
+  it('useSendMessage posts a conversation message to the conversation messages endpoint', async () => {
     apiFetchMock.mockResolvedValue(msg({ id: 'new', parentID: 'cv-9', parentType: 'conversation' }));
-    const { screen } = await renderMutation(() => useSendConversationMessage('cv-9'), { body: 'hey' });
+    const { screen } = await renderMutation(() => useSendMessage({ conversationId: 'cv-9' }), { body: 'hey' });
     (screen.getByTestId('trigger').element() as HTMLButtonElement).click();
     await new Promise((r) => setTimeout(r, 200));
     expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/conversations/cv-9/messages');

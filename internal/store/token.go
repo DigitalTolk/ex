@@ -19,6 +19,7 @@ type TokenStore interface {
 	GetRefreshToken(ctx context.Context, hash string) (*model.RefreshToken, error)
 	MarkRefreshTokenRotated(ctx context.Context, hash string, rotatedAt time.Time, supersededBy string) error
 	DeleteRefreshToken(ctx context.Context, hash string) error
+	DeleteRefreshTokenFamily(ctx context.Context, userID, familyID string) error
 	DeleteAllRefreshTokensForUser(ctx context.Context, userID string) error
 }
 
@@ -137,6 +138,37 @@ func (s *TokenStoreImpl) DeleteRefreshToken(ctx context.Context, hash string) er
 	return nil
 }
 
+// DeleteRefreshTokenFamily deletes every token of one login session (see
+// model.RefreshToken.FamilyID) from the user's token partition. Family
+// members are written with the per-user GSI attributes, so the Query sees all
+// of them; a legacy family root (a pre-family token, whose family ID is its
+// own hash) is the caller's to delete by hash.
+func (s *TokenStoreImpl) DeleteRefreshTokenFamily(ctx context.Context, userID, familyID string) error {
+	keyCond := expression.Key("GSI1PK").Equal(expression.Value(userTokenGSI1PK(userID)))
+	filt := expression.Name("familyID").Equal(expression.Value(familyID))
+	proj := expression.NamesList(expression.Name("PK"), expression.Name("SK"))
+	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).WithFilter(filt).WithProjection(proj).Build())
+	paginator := dynamodb.NewQueryPaginator(s.Client, &dynamodb.QueryInput{
+		TableName:                 aws.String(s.Table),
+		IndexName:                 aws.String("GSI1"),
+		KeyConditionExpression:    expr.KeyCondition(),
+		FilterExpression:          expr.Filter(),
+		ProjectionExpression:      expr.Projection(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return fmt.Errorf("store: query refresh token family: %w", err)
+		}
+		if err := s.batchDeleteTokenKeys(ctx, page.Items); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *TokenStoreImpl) DeleteAllRefreshTokensForUser(ctx context.Context, userID string) error {
 	// Fast path: the user's tokens live in one GSI partition — a Query bounded
 	// by the user's own session count instead of a Scan of the entire table.
@@ -224,43 +256,16 @@ func (s *TokenStoreImpl) deleteAllForUserByScan(ctx context.Context, userID stri
 	return nil
 }
 
-// batchDeleteTokenKeys deletes the given PK/SK projections in 25-item
-// BatchWriteItem chunks, draining UnprocessedItems with a bounded retry:
+// batchDeleteTokenKeys deletes the given PK/SK projections through deleteAll
+// (25-item chunks, UnprocessedItems drained on the shared backed-off schedule):
 // under throttling a hot partition returns deletes that were silently NOT
 // applied. This is the account-deactivation revocation path for refresh AND
 // runner tokens, so a dropped delete leaves a live credential the
 // deactivated user can keep using — failing to drain here is a security gap,
 // not a UX nicety.
 func (s *TokenStoreImpl) batchDeleteTokenKeys(ctx context.Context, items []map[string]types.AttributeValue) error {
-	for i := 0; i < len(items); i += 25 {
-		end := min(i+25, len(items))
-		batch := make([]types.WriteRequest, 0, end-i)
-		for _, item := range items[i:end] {
-			batch = append(batch, types.WriteRequest{
-				DeleteRequest: &types.DeleteRequest{
-					Key: map[string]types.AttributeValue{
-						"PK": item["PK"],
-						"SK": item["SK"],
-					},
-				},
-			})
-		}
-		input := &dynamodb.BatchWriteItemInput{
-			RequestItems: map[string][]types.WriteRequest{s.Table: batch},
-		}
-		for attempt := 0; attempt < 3; attempt++ {
-			out, err := s.Client.BatchWriteItem(ctx, input)
-			if err != nil {
-				return fmt.Errorf("store: batch delete tokens: %w", err)
-			}
-			if len(out.UnprocessedItems[s.Table]) == 0 {
-				break
-			}
-			if attempt == 2 {
-				return fmt.Errorf("store: batch delete tokens: %d unprocessed after retries", len(out.UnprocessedItems[s.Table]))
-			}
-			input.RequestItems = out.UnprocessedItems
-		}
+	if err := s.deleteAll(ctx, primaryKeys(items)); err != nil {
+		return fmt.Errorf("store: batch delete tokens: %w", err)
 	}
 	return nil
 }

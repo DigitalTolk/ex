@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/agents"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
-	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // maxClaimWait caps the claim long-poll well below the global 30s request
@@ -25,12 +25,12 @@ const maxClaimBatch = 8
 // AgentRunnerHandler serves the desktop runner's API. Every route sits
 // behind AuthScope(runner): claims.UserID is the runner's OWNER.
 type AgentRunnerHandler struct {
-	agents *service.AgentService
-	orch   *service.Orchestrator
+	agents *agents.AgentService
+	orch   *agents.Orchestrator
 }
 
 // NewAgentRunnerHandler wires the handler.
-func NewAgentRunnerHandler(agents *service.AgentService, orch *service.Orchestrator) *AgentRunnerHandler {
+func NewAgentRunnerHandler(agents *agents.AgentService, orch *agents.Orchestrator) *AgentRunnerHandler {
 	return &AgentRunnerHandler{agents: agents, orch: orch}
 }
 
@@ -71,12 +71,12 @@ func (h *AgentRunnerHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.orch.RegisterRunner(r.Context(), body.registration(r)); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "registration failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	agents, err := h.agents.ListAgents(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "agent list failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	views := make([]JSON, 0, len(agents))
@@ -120,7 +120,7 @@ func (h *AgentRunnerHandler) Claim(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, r.Context().Err()) {
 			return // client went away mid-poll
 		}
-		writeError(w, http.StatusInternalServerError, "internal", "claim failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	if len(assignments) == 0 {
@@ -131,8 +131,8 @@ func (h *AgentRunnerHandler) Claim(w http.ResponseWriter, r *http.Request) {
 }
 
 type runnerEventsBody struct {
-	RunnerID string                  `json:"runnerID"`
-	Events   []service.RunEventInput `json:"events"`
+	RunnerID string                 `json:"runnerID"`
+	Events   []agents.RunEventInput `json:"events"`
 }
 
 // Events ingests a runner batch for one run. The response tells the runner
@@ -150,7 +150,7 @@ func (h *AgentRunnerHandler) Events(w http.ResponseWriter, r *http.Request) {
 	// user before touching it.
 	abort, reason, err := h.orch.ReportEvents(r.Context(), ownerID, body.RunnerID, r.PathValue("id"), body.Events)
 	if err != nil && !abort {
-		h.writeRunError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"abort": abort, "reason": reason})
@@ -174,7 +174,7 @@ func (h *AgentRunnerHandler) Complete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.orch.CompleteRun(r.Context(), ownerID, body.RunnerID, r.PathValue("id"), body.FinalText, body.Usage, body.AttachmentIDs...); err != nil {
-		h.writeRunError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"ok": true})
@@ -199,7 +199,7 @@ func (h *AgentRunnerHandler) Fail(w http.ResponseWriter, r *http.Request) {
 		reason = "runner_error"
 	}
 	if err := h.orch.FailRun(r.Context(), ownerID, body.RunnerID, r.PathValue("id"), reason); err != nil {
-		h.writeRunError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"ok": true})
@@ -221,28 +221,13 @@ func (h *AgentRunnerHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	kill, err := h.orch.Heartbeat(r.Context(), body.registration(r), body.ActiveRunIDs)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "heartbeat failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	if kill == nil {
 		kill = []string{} // nil marshals as JSON null, which breaks iteration client-side
 	}
 	writeJSON(w, http.StatusOK, JSON{"kill": kill})
-}
-
-func (h *AgentRunnerHandler) writeRunError(w http.ResponseWriter, r *http.Request, err error) {
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", "run not found")
-	case errors.Is(err, service.ErrRunClosed):
-		writeError(w, http.StatusConflict, "run_closed", "run reached a terminal state")
-	case errors.Is(err, service.ErrWrongRunner):
-		writeError(w, http.StatusConflict, "wrong_runner", "run is leased to another runner")
-	default:
-		// The real error is a wrapped store/pubsub chain: log it against the
-		// request id rather than dropping it on the floor.
-		writeInternalError(w, r, "internal", err)
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -252,10 +237,10 @@ func (h *AgentRunnerHandler) writeRunError(w http.ResponseWriter, r *http.Reques
 
 // AgentRunToolHandler serves MCP tool calls for live runs.
 type AgentRunToolHandler struct {
-	orch     *service.Orchestrator
+	orch     *agents.Orchestrator
 	messages *service.MessageService
-	ctxSvc   *service.ContextService
-	agents   *service.AgentService
+	ctxSvc   *agents.ContextService
+	agents   *agents.AgentService
 	// workspace carries the Ex-wide tool dependencies (channels, DMs,
 	// search); nil until SetWorkspace — the router only registers the
 	// workspace routes when set.
@@ -320,7 +305,7 @@ func (h *AgentRunToolHandler) forgetPost(key string) {
 func (h *AgentRunToolHandler) SetBaseURL(u string) { h.baseURL = strings.TrimRight(u, "/") }
 
 // NewAgentRunToolHandler wires the handler.
-func NewAgentRunToolHandler(orch *service.Orchestrator, messages *service.MessageService, ctxSvc *service.ContextService, agents *service.AgentService) *AgentRunToolHandler {
+func NewAgentRunToolHandler(orch *agents.Orchestrator, messages *service.MessageService, ctxSvc *agents.ContextService, agents *agents.AgentService) *AgentRunToolHandler {
 	return &AgentRunToolHandler{orch: orch, messages: messages, ctxSvc: ctxSvc, agents: agents, posts: make(map[string]string)}
 }
 
@@ -347,9 +332,6 @@ func (h *AgentRunToolHandler) PostMessage(w http.ResponseWriter, r *http.Request
 			"this watcher is "+run.ActionMode+"-only and can't post publicly — use notify_owner to message your creator")
 		return
 	}
-	if !h.replyApprovalOK(w, r.Context(), run) {
-		return
-	}
 	if run.Spend.Posts >= run.Limits.MaxPosts {
 		writeError(w, http.StatusTooManyRequests, "post_cap", "per-run post cap reached")
 		return
@@ -369,6 +351,13 @@ func (h *AgentRunToolHandler) PostMessage(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
+	// Last, so a deduped retry or a capped post never spends an approval.
+	if !h.replyApprovalOK(w, r, run) {
+		if idemKey != "" {
+			h.forgetPost(idemKey)
+		}
+		return
+	}
 	threadRoot := run.ThreadRootID
 	if threadRoot == "" {
 		threadRoot = run.MessageID
@@ -381,7 +370,7 @@ func (h *AgentRunToolHandler) PostMessage(w http.ResponseWriter, r *http.Request
 		if idemKey != "" {
 			h.forgetPost(idemKey) // the post never happened; let a retry through
 		}
-		writeError(w, http.StatusForbidden, "forbidden", "post rejected: "+err.Error())
+		writeServiceError(w, r, toolRejection("post rejected", err, ""))
 		return
 	}
 	if idemKey != "" {
@@ -440,14 +429,18 @@ func (h *AgentRunToolHandler) WriteContext(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
-	item, err := h.ctxSvc.Write(r.Context(), service.ContextWrite{
+	if !gateAction(w, r, h.orch, run, "write_shared_context", "add to this chat's shared context (read by every later run here): “"+clipLine(body.Body)+"”",
+		map[string]any{"body": body.Body, "pinned": body.Pinned}) {
+		return
+	}
+	item, err := h.ctxSvc.Write(r.Context(), agents.ContextWrite{
 		// Authored by the AGENT, attributed to (and access-checked as) its invoker.
 		AuthorID: claims.ActorID, InvokerID: claims.UserID, AccessorID: claims.UserID,
 		ParentID: run.ParentID, ParentType: run.ParentType,
 		Body: body.Body, Pinned: body.Pinned,
 	})
 	if err != nil {
-		writeAgentError(w, r, err, "internal")
+		writeServiceError(w, r, err)
 		return
 	}
 	h.orch.RecordContextWrite(r.Context(), run, item.ID, item.Pinned)
@@ -478,15 +471,11 @@ func (h *AgentRunToolHandler) RequestApproval(w http.ResponseWriter, r *http.Req
 	}
 	// No Purpose: an approval the AGENT raised can never authorize a
 	// server-side gate (see Orchestrator.ApprovalGranted).
-	a, err := h.orch.RequestApproval(r.Context(), run, service.ApprovalRequest{
+	a, err := h.orch.RequestApproval(r.Context(), run, agents.ApprovalRequest{
 		Summary: body.Summary, Risk: body.Risk, Options: body.Options, Kind: body.ToolKind,
 	})
 	if err != nil {
-		if errors.Is(err, service.ErrValidation) {
-			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "internal", "approval request failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"approvalID": a.ID, "deadline": a.Deadline})
@@ -498,7 +487,7 @@ func (h *AgentRunToolHandler) GetApproval(w http.ResponseWriter, r *http.Request
 	claims := middleware.ClaimsFromContext(r.Context())
 	a, err := h.orch.ApprovalStatus(r.Context(), claims.RunID, r.PathValue("id"))
 	if err != nil {
-		h.writeToolError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"state": a.State, "decidedBy": a.DecidedBy, "choice": a.Choice, "note": a.Note, "deadline": a.Deadline})
@@ -522,9 +511,13 @@ func (h *AgentRunToolHandler) PublishArtifact(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
+	if !gateAction(w, r, h.orch, run, "publish_artifact", "publish the document “"+clipLine(body.Title)+"” into this conversation",
+		map[string]any{"kind": body.Kind, "title": body.Title, "content": body.Content}) {
+		return
+	}
 	a, err := h.orch.PublishArtifact(r.Context(), run, body.Kind, body.Title, body.Content)
 	if err != nil {
-		writeAgentError(w, r, err, "internal")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"artifactID": a.ID})
@@ -536,14 +529,14 @@ func (h *AgentRunToolHandler) PublishArtifact(w http.ResponseWriter, r *http.Req
 func (h *AgentRunToolHandler) ListSkills(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())
 	if _, err := h.orch.GetLiveRun(r.Context(), claims.RunID); err != nil {
-		h.writeToolError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	// claims.UserID is the invoking human even on a run token — scope the list
 	// to skills they may use (published, or their own private ones).
 	skills, err := h.agents.ListSkillIndex(r.Context(), claims.UserID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal", "skill list failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	out := make([]JSON, 0, len(skills))
@@ -565,7 +558,7 @@ func (h *AgentRunToolHandler) InvokeSkill(w http.ResponseWriter, r *http.Request
 	// invoke a private skill it wasn't offered.
 	sk, err := h.agents.GetVisibleSkill(r.Context(), run.InvokerID, r.PathValue("id"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "unknown skill")
+		writeServiceError(w, r, toolRejection("unknown skill", err, ""))
 		return
 	}
 	h.orch.RecordSkillInvoked(r.Context(), run, sk)
@@ -589,12 +582,14 @@ func (h *AgentRunToolHandler) UpdateMemory(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid body")
 		return
 	}
+	// Memory rides every FUTURE run with this invoker — the persistence an
+	// injected instruction would want most.
+	if !gateAction(w, r, h.orch, run, "update_memory", "rewrite its memory of working with you to: “"+clipLine(body.Content)+"”",
+		map[string]any{"content": body.Content}) {
+		return
+	}
 	if err := h.agents.UpdateMemory(r.Context(), claims.UserID, claims.ActorID, body.Content); err != nil {
-		if errors.Is(err, service.ErrValidation) {
-			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "internal", "memory update failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	h.orch.RecordMemoryUpdate(r.Context(), run, len(body.Content))
@@ -620,11 +615,7 @@ func (h *AgentRunToolHandler) ClaimTask(w http.ResponseWriter, r *http.Request) 
 	}
 	mine, lines, err := h.orch.ClaimTask(r.Context(), run, body.Label)
 	if err != nil {
-		if errors.Is(err, service.ErrValidation) {
-			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "internal", "claim failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"mine": mine, "claims": lines})
@@ -644,10 +635,51 @@ func (h *AgentRunToolHandler) SetState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.orch.SetRunState(r.Context(), claims.RunID, body.State); err != nil {
-		h.writeToolError(w, r, err)
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"ok": true})
+}
+
+// gateAction is the server-side tool gate for runs that act on words their
+// invoker did not write (Run.UntrustedTrigger: a watcher woken by another
+// member, a catch-up, a check-in, or a hand-off chained from one). Their
+// write and exfiltration tools need the invoker's approval of the EXACT
+// action — the prompt saying "treat it as data" is advice to the model, this
+// is the enforcement. The first call raises a server-worded card and answers
+// approval_required (with its id); the same call after a "yes" goes through
+// once; a "no" stays no. Trusted runs pass straight through. Writes the
+// refusal itself and reports whether the caller may proceed.
+func gateAction(w http.ResponseWriter, r *http.Request, orch *agents.Orchestrator, run *model.Run, action, summary string, args map[string]any) bool {
+	gate, err := orch.AuthorizeAction(r.Context(), run, action, summary, args)
+	switch {
+	case err != nil:
+		// Includes approval_unavailable: the run is too close to its deadline
+		// to wait for a human (service.ErrApprovalUnavailable).
+		writeServiceError(w, r, err)
+	case gate.Granted:
+		return true
+	case gate.Denied:
+		writeError(w, http.StatusForbidden, "approval_denied", "your invoker refused this "+action+" — do not retry it; carry on without it")
+	default:
+		writeJSON(w, http.StatusForbidden, JSON{
+			"error": JSON{"code": "approval_required", "message": "this run acts on a message your invoker did not write, so " +
+				action + " needs their approval — a card is waiting for them. Once they decide, call this tool again with exactly " +
+				"the same arguments (approved: it goes through once; denied: it stays refused), or carry on without it."},
+			"approvalID": gate.Pending.ID,
+		})
+	}
+	return false
+}
+
+// clipLine renders agent-supplied text for an approval card: one line, at
+// most 160 runes — enough for the invoker to recognize what they approve.
+func clipLine(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if rs := []rune(s); len(rs) > 160 {
+		return string(rs[:160]) + "…"
+	}
+	return s
 }
 
 // liveRun resolves the run behind a run-scoped token and writes the error
@@ -660,26 +692,10 @@ func (h *AgentRunToolHandler) liveRun(w http.ResponseWriter, r *http.Request) (*
 	claims := middleware.ClaimsFromContext(r.Context())
 	run, err := h.orch.GetLiveRun(r.Context(), claims.RunID)
 	if err != nil {
-		h.writeToolError(w, r, err)
+		writeServiceError(w, r, err)
 		return nil, nil
 	}
 	return run, claims
-}
-
-func (h *AgentRunToolHandler) writeToolError(w http.ResponseWriter, r *http.Request, err error) {
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", "run not found")
-	case errors.Is(err, service.ErrRunClosed):
-		writeError(w, http.StatusConflict, "run_closed", "run reached a terminal state")
-	case errors.Is(err, service.ErrValidation):
-		// The only 4xx whose message is genuinely for the caller.
-		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-	default:
-		// This used to be a blanket 400 carrying err.Error() — an internal
-		// chain returned to the caller as a "bad request", with nothing logged.
-		writeInternalError(w, r, "internal", err)
-	}
 }
 
 // ProposeReply drafts an editable reply the invoker can approve, edit, or
@@ -702,11 +718,7 @@ func (h *AgentRunToolHandler) ProposeReply(w http.ResponseWriter, r *http.Reques
 	}
 	a, err := h.orch.ProposeReply(r.Context(), run, body.Text, body.ThreadRoot, body.ReplyTo)
 	if err != nil {
-		if errors.Is(err, service.ErrValidation) {
-			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "internal", "propose reply failed")
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, JSON{"text": "Drafted the reply — your creator can approve, edit, or cancel it. (approvalID=" + a.ID + ")"})
@@ -767,7 +779,7 @@ func (h *AgentRunToolHandler) LinkMessage(w http.ResponseWriter, r *http.Request
 	// The invoker must be able to see the parent — never mint a link into a
 	// place the run's owner can't access.
 	if err := h.messages.CheckAccess(r.Context(), claims.UserID, parentID, parentType); err != nil {
-		writeError(w, http.StatusForbidden, "forbidden", "you can't link a message in that channel")
+		writeServiceError(w, r, toolRejection("you can't link a message in that channel", err, ""))
 		return
 	}
 	if h.baseURL == "" {

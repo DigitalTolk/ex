@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DigitalTolk/ex/internal/auth"
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/service"
@@ -156,8 +157,9 @@ func TestMintTicket_ErrorArms(t *testing.T) {
 	})
 }
 
-// The upgrade auth: a valid ticket authenticates (and is consumed), a bad or
-// errored ticket answers 401, and no ticket falls through to header auth.
+// The upgrade auth: a valid ticket authenticates (and is consumed), and a
+// missing, bad or errored ticket answers 401 — whatever else the request
+// carries.
 func TestUpgradeAuth(t *testing.T) {
 	sawUser := ""
 	sawExp := time.Time{}
@@ -167,15 +169,6 @@ func TestUpgradeAuth(t *testing.T) {
 			sawExp = c.ExpiresAt.Time
 		}
 	})
-	headerAuth := func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("Authorization") == "Bearer good" {
-				next.ServeHTTP(w, r.WithContext(claimsCtx("u-header", time.Time{})))
-				return
-			}
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-		})
-	}
 
 	t.Run("valid ticket authenticates and is single-use", func(t *testing.T) {
 		h := &WSHandler{}
@@ -184,7 +177,7 @@ func TestUpgradeAuth(t *testing.T) {
 		deadline := time.Now().Add(5 * time.Minute).Truncate(time.Second)
 		_ = store.MintWSTicket(context.Background(), "tick", "u-9", deadline)
 
-		handler := h.UpgradeAuth(headerAuth)(next)
+		handler := h.UpgradeAuth(next)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/ws?ticket=tick", nil))
 		if rec.Code != http.StatusOK || sawUser != "u-9" {
@@ -204,7 +197,7 @@ func TestUpgradeAuth(t *testing.T) {
 	t.Run("unknown ticket answers 401", func(t *testing.T) {
 		h := &WSHandler{}
 		h.SetTicketStore(newFakeTicketStore())
-		handler := h.UpgradeAuth(headerAuth)(next)
+		handler := h.UpgradeAuth(next)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/ws?ticket=nope", nil))
 		if rec.Code != http.StatusUnauthorized {
@@ -212,37 +205,46 @@ func TestUpgradeAuth(t *testing.T) {
 		}
 	})
 
-	t.Run("store error answers 401 (never authenticates on doubt)", func(t *testing.T) {
+	t.Run("store error answers 500 (never authenticates on doubt)", func(t *testing.T) {
 		h := &WSHandler{}
 		h.SetTicketStore(&fakeTicketStore{consumeErr: errors.New("redis down")})
-		handler := h.UpgradeAuth(headerAuth)(next)
+		handler := h.UpgradeAuth(next)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/ws?ticket=any", nil))
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("status = %d, want 401", rec.Code)
+		// The store could not answer: the server's fault, not a bad ticket.
+		if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "redis") {
+			t.Fatalf("status = %d, want a generic 500; body = %s", rec.Code, rec.Body.String())
 		}
 	})
 
-	t.Run("no ticket falls through to header auth", func(t *testing.T) {
+	// The upgrade used to fall back to Authorization-header auth, which only
+	// a 60/min per-IP limit guarded — bypassing the per-user ticket mint limit.
+	// No client uses it (the SPA, and the desktop shell that hosts it, always
+	// mint a ticket), so a ticket is now the only way in.
+	t.Run("an Authorization header without a ticket is refused", func(t *testing.T) {
 		h := &WSHandler{}
 		h.SetTicketStore(newFakeTicketStore())
-		handler := h.UpgradeAuth(headerAuth)(next)
+		sawUser = ""
+		handler := h.UpgradeAuth(next)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/ws", nil)
 		req.Header.Set("Authorization", "Bearer good")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK || sawUser != "u-header" {
-			t.Fatalf("code=%d user=%q, want 200/u-header", rec.Code, sawUser)
+		if rec.Code != http.StatusUnauthorized || sawUser != "" {
+			t.Fatalf("code=%d user=%q, want 401 and no authenticated user", rec.Code, sawUser)
 		}
 	})
 
-	t.Run("no store falls through to header auth even with a ticket", func(t *testing.T) {
+	t.Run("no store refuses every upgrade", func(t *testing.T) {
 		h := &WSHandler{}
-		handler := h.UpgradeAuth(headerAuth)(next)
+		sawUser = ""
+		handler := h.UpgradeAuth(next)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ws?ticket=any", nil)
+		req.Header.Set("Authorization", "Bearer good")
 		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/ws?ticket=any", nil))
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("status = %d, want 401 from header auth", rec.Code)
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized || sawUser != "" {
+			t.Fatalf("code=%d user=%q, want 401 and no authenticated user", rec.Code, sawUser)
 		}
 	})
 }
@@ -250,6 +252,27 @@ func TestUpgradeAuth(t *testing.T) {
 // The ticket URL never carries a JWT: what appears in the query is a 64-char
 // random hex string with no claims inside — this is the structural fix for
 // access tokens leaking into LB/proxy logs and browser history.
+// Through the real route: a perfectly valid access token in the
+// Authorization header does not open a socket — only a minted ticket does,
+// so every socket is subject to the per-user ticket mint limit.
+func TestRouter_WSUpgradeRequiresTicket(t *testing.T) {
+	jwtMgr := auth.NewJWTManager("test-secret", 15*time.Minute, 24*time.Hour)
+	ws := &WSHandler{}
+	ws.SetTicketStore(newFakeTicketStore())
+	router := NewRouter(&Deps{
+		Auth: &AuthHandler{}, User: &UserHandler{}, Channel: &ChannelHandler{},
+		Conversation: &ConversationHandler{}, WS: ws,
+		JWT: jwtMgr, AppVersion: "test", AllowOrigins: []string{"*"},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ws", nil)
+	req.Header.Set("Authorization", "Bearer "+makeTokenForUser(jwtMgr, &model.User{ID: "u-1", SystemRole: model.SystemRoleMember}))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("header-authenticated upgrade status = %d, want 401", rec.Code)
+	}
+}
+
 func TestUpgradeAuth_TicketIsOpaque(t *testing.T) {
 	h := &WSHandler{}
 	store := newFakeTicketStore()

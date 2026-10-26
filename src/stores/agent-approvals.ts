@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { RunApprovalPayload } from '@/lib/ws-schemas';
 
 // Pending agent-approval requests, per parent — fed by run.approval events.
 // A request appears when its state is "pending" and disappears the moment
@@ -89,27 +90,10 @@ function sweep(): void {
   if (changed) publish();
 }
 
-// onRunApproval ingests a run.approval frame (request or settle).
-export function onRunApproval(data: unknown): void {
-  const p = data as {
-    approvalID?: string;
-    runID?: string;
-    agentID?: string;
-    invokerID?: string;
-    parentID?: string;
-    parentType?: string;
-    messageID?: string;
-    summary?: string;
-    risk?: string;
-    kind?: string;
-  purpose?: string;
-    options?: string[];
-    replyText?: string;
-    replyToMessageID?: string;
-    state?: string;
-    deadline?: string;
-  } | null;
-  if (!p?.approvalID || !p.parentID || !p.runID) return;
+// onRunApproval ingests a run.approval frame (request or settle), as its
+// schema parses it (lib/ws-schemas).
+export function onRunApproval(p: RunApprovalPayload): void {
+  if (!p.runID) return;
   if (p.state !== 'pending') {
     if (entries.delete(p.approvalID)) publish();
     return;
@@ -125,7 +109,7 @@ export function onRunApproval(data: unknown): void {
     risk: p.risk,
     kind: typeof p.kind === 'string' && p.kind ? p.kind : undefined,
     purpose: typeof p.purpose === 'string' && p.purpose ? p.purpose : undefined,
-    options: Array.isArray(p.options) ? p.options : undefined,
+    options: p.options ?? undefined,
     replyText: typeof p.replyText === 'string' && p.replyText ? p.replyText : undefined,
     replyToMessageID: p.replyToMessageID,
     deadline: p.deadline,

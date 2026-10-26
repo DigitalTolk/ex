@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,7 +23,11 @@ import (
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
+// mockAttachmentStore is mutex-guarded and hands out copies, like the
+// DynamoDB store does: the dimension backfill writes from its own goroutine
+// while the read path inspects what it was handed.
 type mockAttachmentStore struct {
+	mu     sync.Mutex
 	byID   map[string]*model.Attachment
 	byHash map[string]*model.Attachment
 	// refs[attID] is the set of message IDs referencing the attachment.
@@ -44,7 +49,25 @@ func newMockAttachmentStore() *mockAttachmentStore {
 	}
 }
 
+// stored returns a copy of the stored row, safe to read while background
+// work writes (the zero value when absent).
+func (m *mockAttachmentStore) stored(id string) model.Attachment {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if a, ok := m.byID[id]; ok {
+		return *a
+	}
+	return model.Attachment{}
+}
+
+func copyAttachment(a *model.Attachment) *model.Attachment {
+	cp := *a
+	return &cp
+}
+
 func (m *mockAttachmentStore) Create(_ context.Context, a *model.Attachment) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.createErr != nil {
 		return m.createErr
 	}
@@ -56,21 +79,27 @@ func (m *mockAttachmentStore) Create(_ context.Context, a *model.Attachment) err
 	return nil
 }
 func (m *mockAttachmentStore) GetByID(_ context.Context, id string) (*model.Attachment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if a, ok := m.byID[id]; ok {
-		return a, nil
+		return copyAttachment(a), nil
 	}
 	return nil, store.ErrNotFound
 }
 func (m *mockAttachmentStore) GetByHash(_ context.Context, sha256 string) (*model.Attachment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.getHashErr != nil {
 		return nil, m.getHashErr
 	}
 	if a, ok := m.byHash[sha256]; ok {
-		return a, nil
+		return copyAttachment(a), nil
 	}
 	return nil, store.ErrNotFound
 }
 func (m *mockAttachmentStore) AddRef(_ context.Context, attachmentID, messageID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if _, ok := m.byID[attachmentID]; !ok {
 		return errors.New("not found")
 	}
@@ -83,6 +112,8 @@ func (m *mockAttachmentStore) AddRef(_ context.Context, attachmentID, messageID 
 	return nil
 }
 func (m *mockAttachmentStore) RemoveRef(_ context.Context, attachmentID, messageID string) (*model.Attachment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	a, ok := m.byID[attachmentID]
 	if !ok {
 		return nil, errors.New("not found")
@@ -91,9 +122,11 @@ func (m *mockAttachmentStore) RemoveRef(_ context.Context, attachmentID, message
 		delete(m.refs[attachmentID], messageID)
 	}
 	a.MessageIDs = keys(m.refs[attachmentID])
-	return a, nil
+	return copyAttachment(a), nil
 }
 func (m *mockAttachmentStore) Delete(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.deleteErr != nil {
 		return m.deleteErr
 	}
@@ -105,6 +138,8 @@ func (m *mockAttachmentStore) Delete(_ context.Context, id string) error {
 	return nil
 }
 func (m *mockAttachmentStore) SetDimensions(_ context.Context, id string, width, height int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.setDimErr != nil {
 		return m.setDimErr
 	}
@@ -125,6 +160,8 @@ func (m *mockAttachmentStore) SetVerifiedETag(_ context.Context, id, etag string
 }
 
 func (m *mockAttachmentStore) setUploadState(id string, set func(*model.Attachment)) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.setUploadStateErr != nil {
 		return m.setUploadStateErr
 	}
@@ -137,6 +174,8 @@ func (m *mockAttachmentStore) setUploadState(id string, set func(*model.Attachme
 }
 
 func (m *mockAttachmentStore) SetThumbnailKeys(_ context.Context, id, thumbnailKey, squareThumbnailKey string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.setThumbErr != nil {
 		return m.setThumbErr
 	}
@@ -177,6 +216,9 @@ var (
 )
 
 type fakeAttachmentSigner struct {
+	// mu guards everything below: GetMany and the dimension backfill call
+	// in from their own goroutines.
+	mu      sync.Mutex
 	deleted []string
 	delErr  error
 	putErr  error
@@ -239,14 +281,20 @@ func (c *fakeMediaCache) Set(_ context.Context, key string, val interface{}, _ t
 }
 
 func (s *fakeAttachmentSigner) PresignedGetURL(_ context.Context, key string, _ time.Duration) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.presignCalls++
 	return fmt.Sprintf("https://signed.test/%s?sig=%d", key, s.presignCalls), nil
 }
 func (s *fakeAttachmentSigner) PresignedDownloadURL(_ context.Context, key, filename string, _ time.Duration) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.presignDownloadCalls++
 	return fmt.Sprintf("https://signed.test/%s?download=%s&sig=%d", key, filename, s.presignDownloadCalls), nil
 }
 func (s *fakeAttachmentSigner) PresignedPutURL(_ context.Context, key string, contentType string, _ time.Duration) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.putErr != nil {
 		return "", s.putErr
 	}
@@ -256,10 +304,14 @@ func (s *fakeAttachmentSigner) PresignedPutURL(_ context.Context, key string, co
 	return "https://upload.test/" + key, nil
 }
 func (s *fakeAttachmentSigner) DeleteObject(_ context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.deleted = append(s.deleted, key)
 	return s.delErr
 }
 func (s *fakeAttachmentSigner) PutObject(_ context.Context, key, contentType string, body []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.putErr != nil {
 		return s.putErr
 	}
@@ -273,6 +325,8 @@ func (s *fakeAttachmentSigner) PutObject(_ context.Context, key, contentType str
 	return nil
 }
 func (s *fakeAttachmentSigner) GetObjectRange(_ context.Context, key string, _ int64) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.rangeReads++
 	if s.rangeErr != nil {
 		return nil, s.rangeErr
@@ -287,6 +341,8 @@ func (s *fakeAttachmentSigner) GetObjectRange(_ context.Context, key string, _ i
 	return body, nil
 }
 func (s *fakeAttachmentSigner) PresignRequest(_ context.Context, method, key string, query url.Values, headers map[string]string, _ time.Duration) (string, map[string]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.presignErr != nil {
 		return "", nil, s.presignErr
 	}
@@ -301,15 +357,21 @@ func fakeETag(body []byte) string {
 }
 
 func (s *fakeAttachmentSigner) OpenObject(ctx context.Context, key string) (io.ReadCloser, string, int64, string, error) {
+	s.mu.Lock()
 	s.opens++
+	s.mu.Unlock()
 	body, ct, size, _, err := s.GetObject(ctx, key)
 	if err != nil {
 		return nil, "", 0, "", err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return body, ct, size, fakeETag(s.objects[key]), nil
 }
 
 func (s *fakeAttachmentSigner) StatObject(_ context.Context, key string) (int64, string, string, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.stats++
 	body, ok := s.objects[key]
 	if !ok {
@@ -323,6 +385,8 @@ func (s *fakeAttachmentSigner) StatObject(_ context.Context, key string) (int64,
 }
 
 func (s *fakeAttachmentSigner) GetObject(_ context.Context, key string) (io.ReadCloser, string, int64, time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.objects == nil {
 		return nil, "", 0, time.Time{}, fmt.Errorf("no object %s", key)
 	}
@@ -493,7 +557,9 @@ func TestAttachmentService_ProcessUpload_GeneratesMissingThumbnailsForDedupedExi
 	}
 }
 
-func TestAttachmentService_GetForUser_GeneratesMissingLegacyThumbnailsBeforeResolvingURLs(t *testing.T) {
+// A legacy image missing thumbnails gets them off the read path: the read
+// that finds them missing schedules the work, and a later read resolves them.
+func TestAttachmentService_GetForUser_GeneratesMissingLegacyThumbnailsInTheBackground(t *testing.T) {
 	storeM := newMockAttachmentStore()
 	object := makePNG(32, 24)
 	legacy := &model.Attachment{
@@ -514,9 +580,17 @@ func TestAttachmentService_GetForUser_GeneratesMissingLegacyThumbnailsBeforeReso
 		objects:         map[string][]byte{legacy.S3Key: object},
 		putContentTypes: map[string]string{},
 	}
-	svc := NewAttachmentService(storeM, signer, newMockPublisher())
+	svc := NewAttachmentService(&syncAttachmentStore{mockAttachmentStore: storeM}, signer, newMockPublisher())
 	svc.SetAccessChecker(fakeAttachmentAccessChecker{})
+	done := make(chan error, 1)
+	svc.afterThumbnailBackfill = func(_ string, err error) { done <- err }
 
+	if _, err := svc.GetForUser(context.Background(), "u2", legacy.ID, "ch1", ParentChannel, "msg-1"); err != nil {
+		t.Fatalf("GetForUser: %v", err)
+	}
+	if err := waitBackfill(t, done); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
 	resolved, err := svc.GetForUser(context.Background(), "u2", legacy.ID, "ch1", ParentChannel, "msg-1")
 	if err != nil {
 		t.Fatalf("GetForUser: %v", err)
@@ -611,7 +685,7 @@ func TestAttachmentService_StoreThumbnails_PutErrorKeepsKeysUnset(t *testing.T) 
 	storeM.byID[a.ID] = a
 	svc := NewAttachmentService(storeM, &fakeAttachmentSigner{putErr: errors.New("put failed")}, nil)
 	released := 0
-	if err := svc.storeThumbnails(ctx, a, img, func() { released++ }); err == nil {
+	if err := svc.storeThumbnails(ctx, a, storedPixels{Image: img}, func() { released++ }); err == nil {
 		t.Fatal("expected PutObject error")
 	}
 	if a.ThumbnailS3Key != "" || a.SquareThumbnailS3Key != "" {
@@ -660,11 +734,11 @@ func TestAttachmentService_ProcessUpload_PersistErrorBranches(t *testing.T) {
 }
 
 func TestEncodeWebPThumbnail_ErrorBranches(t *testing.T) {
-	if _, err := encodeWebPThumbnail(nil, thumbnailModeMessage); err == nil {
+	if _, err := encodeWebPThumbnail(storedPixels{}, thumbnailModeMessage); err == nil {
 		t.Fatal("expected nil image error")
 	}
 	empty := image.NewRGBA(image.Rect(0, 0, 0, 0))
-	if _, err := encodeWebPThumbnail(empty, thumbnailModeMessage); err == nil {
+	if _, err := encodeWebPThumbnail(storedPixels{Image: empty}, thumbnailModeMessage); err == nil {
 		t.Fatal("expected invalid dimensions error")
 	}
 }
@@ -749,13 +823,13 @@ func TestAttachmentService_Get_BackfillsDimensionsForLegacyImage(t *testing.T) {
 	// one store write, so this resolves in a few ms.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		stored := storeM.byID["legacy"]
+		stored := storeM.stored("legacy")
 		if stored.Width != 0 && stored.Height != 0 {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	stored := storeM.byID["legacy"]
+	stored := storeM.stored("legacy")
 	if stored.Width != 640 || stored.Height != 480 {
 		t.Errorf("backfilled dimensions = %dx%d, want 640x480", stored.Width, stored.Height)
 	}
@@ -1387,7 +1461,7 @@ func TestAttachmentService_OpenMedia_StreamsCachedToken(t *testing.T) {
 	parts := strings.Split(got.URL, "/")
 	token := parts[len(parts)-2]
 
-	media, err := svc.OpenMedia(context.Background(), token, "")
+	media, err := svc.OpenMedia(context.Background(), token, "", "")
 	if err != nil {
 		t.Fatalf("OpenMedia: %v", err)
 	}
@@ -1399,7 +1473,7 @@ func TestAttachmentService_OpenMedia_StreamsCachedToken(t *testing.T) {
 	if media.ContentType != "image/png" || media.Filename != "cat.png" || media.Size != 3 {
 		t.Fatalf("media metadata mismatch: %+v", media)
 	}
-	if _, err := svc.OpenMedia(context.Background(), "missing", ""); !errors.Is(err, store.ErrNotFound) {
+	if _, err := svc.OpenMedia(context.Background(), "missing", "", ""); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("missing token err = %v, want ErrNotFound", err)
 	}
 }

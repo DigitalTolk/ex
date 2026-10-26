@@ -287,7 +287,7 @@ describe('RunActivityDrawer', () => {
       users: usersFx,
       files: [
         { id: 'f-1', role: 'fetched', source: 'project_screen', runID: 'run-1', filename: 'home.png', contentType: 'image/png', size: 10, url: '/m/1' },
-        { id: 'f-2', role: 'posted', runID: 'run-1', filename: 'v1.html', contentType: 'text/html', size: 20, url: '/m/2' },
+        { id: 'f-2', role: 'posted', runID: 'run-1', filename: 'v1.html', contentType: 'text/html', size: 20, url: '/api/v1/media/tok-2/v1.html' },
       ],
     });
     act(() => openRunDrawer('run-1'));

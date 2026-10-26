@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { MobileTabBar } from './MobileTabBar';
 import { resetSidebarModeSessionState, useSidebarModeStore } from '@/stores/sidebar-mode';
-import { flashReaction, REACTION_FLASH_MS, resetReactionFlashForTests } from '@/stores/reaction-flash';
+import { flashReaction, REACTION_FLASH_MS } from '@/stores/reaction-flash';
 
 const unread = vi.hoisted(() => ({ value: 0 }));
 vi.mock('@/hooks/useActivity', () => ({ useActivityUnread: () => unread.value }));
@@ -34,7 +34,6 @@ beforeEach(() => {
 describe('MobileTabBar', () => {
   it('flashes a reaction on the Activity tab in place of the bell', () => {
     vi.useFakeTimers();
-    resetReactionFlashForTests();
     try {
       renderBar();
       act(() => flashReaction(':eyes:'));
@@ -45,7 +44,6 @@ describe('MobileTabBar', () => {
       });
       expect(screen.queryByTestId('activity-reaction-flash')).toBeNull();
     } finally {
-      resetReactionFlashForTests();
       vi.useRealTimers();
     }
   });

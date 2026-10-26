@@ -31,7 +31,10 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio
+    # MinIO no longer publishes pullable images (minio/minio answers
+    # "repository does not exist"); Chainguard's build of the same server is
+    # public. Pinned by digest; Dependabot doesn't watch compose files.
+    image: cgr.dev/chainguard/minio@sha256:d88920d6a50bd0b088223b688be3b76c63e6205dbe494437f67ba1240ea12880
     # Remapped off the default 9000/9001 so this stack can run beside
     # other local MinIO stacks. The browser hits MinIO directly via
     # presigned URLs, so S3_PUBLIC_ENDPOINT below must match the host
@@ -48,7 +51,8 @@ services:
     volumes:
       - minio-data:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      # The image has no mc/curl/wget; bash asks the liveness endpoint itself.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /minio/health/live HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && read -r status <&3 && [[ $$status == *' 200 '* ]]"]
       interval: 5s
       timeout: 3s
       retries: 5
