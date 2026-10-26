@@ -1,5 +1,8 @@
 .PHONY: dev dev-up dev-down dev-logs dev-watch dev-watch-down dev-watch-logs build frontend run seed docker clean deps check check-dist-placeholder types check-types-drift check-claude-md
 
+# Plain `make` builds: CodeQL's Go autobuilder runs it, and `dev` never exits.
+.DEFAULT_GOAL := build
+
 # The hot-reload stack layers docker-compose.dev.yml over the base file, so
 # every dev-watch target must pass both -f flags (compose has no way to make
 # an override implicit for a non-default filename).
