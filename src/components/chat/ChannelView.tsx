@@ -18,6 +18,9 @@ import { AgentActivityIndicator } from './AgentActivityIndicator';
 import { AgentApprovalCard } from './AgentApprovalCard';
 import { WatcherCatchUpCard } from './WatcherCatchUpCard';
 import { useChannelBySlug, useChannelMembers, useMuteChannel, useUserChannels } from '@/hooks/useChannels';
+import { useEventCallback } from '@/hooks/useEventCallback';
+import { useEqualValue } from '@/hooks/useEqualValue';
+import { sameUserMap } from '@/lib/user-map-equal';
 import {
   useChannelMessages,
   useEditMessage,
@@ -51,6 +54,7 @@ import {
 import { useTagState } from '@/context/TagSearchContext';
 import { TagSearchPanel } from '@/components/TagSearchPanel';
 import type { UserMapEntry } from './MessageList';
+import type { UserChannel } from '@/types';
 import { useReadSession } from '@/hooks/useReadSession';
 import { useEditingMessage } from '@/hooks/useEditingMessage';
 
@@ -90,11 +94,14 @@ export function ChannelView() {
   // The sidebar already knows the channels you're in by name, so while the
   // channel itself is looked up its messages start loading too, and its name
   // can stand in the header.
-  const { data: userChannels } = useUserChannels();
-  const knownChannel = useMemo(
-    () => userChannels?.find((c) => slug === slugify(c.channelName) || slug === c.channelID),
-    [userChannels, slug],
+  // Only this channel's sidebar row, not the whole list: any channel's unread
+  // change rewrites the list, and subscribing to all of it re-rendered the
+  // open chat (header, composer, dialogs) for messages arriving elsewhere.
+  const selectKnownChannel = useCallback(
+    (rows: UserChannel[]) => rows.find((c) => slug === slugify(c.channelName) || slug === c.channelID),
+    [slug],
   );
+  const { data: knownChannel } = useUserChannels({ select: selectKnownChannel });
   const { data: members } = useChannelMembers(channel?.id);
   useDocumentTitle(channel ? `~${channel.name}` : null);
   const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(channel?.id);
@@ -139,7 +146,11 @@ export function ChannelView() {
   } = useChannelMessages(channel?.id ?? knownChannel?.channelID, listAnchor);
   const sendMessage = useSendChannelMessage(channel?.id, user?.id);
   const schedule = useComposerSchedule({ parentID: channel?.id, parentType: 'channel' });
-  const channelID = channel?.id;
+  // The sidebar already knows this channel's id, so the composer's key and
+  // draft scope are final from the first render. Keyed on the lookup alone,
+  // the composer mounted as "loading" and was torn down and rebuilt (editor
+  // and all) the moment the channel arrived — on every channel open.
+  const channelID = channel?.id ?? knownChannel?.channelID;
   const draftScope = useMemo(
     () => ({ parentID: channelID, parentType: 'channel' as const }),
     [channelID],
@@ -320,7 +331,7 @@ export function ChannelView() {
     [data, user?.id],
   );
 
-  const userMap = useMemo(() => {
+  const builtUserMap = useMemo(() => {
     const m: Record<string, UserMapEntry> = {};
     if (members) {
       for (const mem of members) {
@@ -334,6 +345,9 @@ export function ChannelView() {
     }
     return m;
   }, [members, usersData]);
+  // Rebuilt with the same entries (a refetch of members or users) it keeps
+  // its identity: every message row reads it, and a new map re-rendered them all.
+  const userMap = useEqualValue(builtUserMap, sameUserMap);
 
   const currentUserRole = members?.find(m => m.userID === user?.id)?.role;
   // An archived channel is read-only: no editing, posting or new members.
@@ -344,7 +358,11 @@ export function ChannelView() {
   const [unarchiving, setUnarchiving] = useState(false);
   const canLeave = canLeaveChannel(currentUserRole, channel?.slug);
 
-  const muted = !!userChannels?.find((uc) => uc.channelID === channel?.id)?.muted;
+  const selectMuted = useCallback(
+    (rows: UserChannel[]) => !!rows.find((uc) => uc.channelID === channelID)?.muted,
+    [channelID],
+  );
+  const { data: muted = false } = useUserChannels({ select: selectMuted });
   const muteChannel = useMuteChannel();
   const [notifPrefsOpen, setNotifPrefsOpen] = useState(false);
   function handleToggleMute() {
@@ -393,6 +411,24 @@ export function ChannelView() {
     queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug(slug) });
   }
 
+  // Stable identities for the (memoized) header, so it re-renders only when
+  // what it shows changes.
+  const toggleMembers = useEventCallback(() => (showMembers ? closeMembers() : openMembers()));
+  const onDescriptionSave = useEventCallback(handleDescriptionSave);
+  const onArchive = useEventCallback(handleArchive);
+  const onUnarchive = useEventCallback(handleUnarchive);
+  const onLeave = useEventCallback(handleLeave);
+  const onToggleMute = useEventCallback(handleToggleMute);
+  const openNotifPrefs = useCallback(() => setNotifPrefsOpen(true), []);
+  const onPinnedClick = useEventCallback(togglePinned);
+  const onFilesClick = useEventCallback(toggleFiles);
+  const knownName = knownChannel?.channelName;
+  const knownType = knownChannel?.channelType;
+  const loadingChannel = useMemo(
+    () => (channelLoading ? { name: knownName, type: knownType } : undefined),
+    [channelLoading, knownName, knownType],
+  );
+
   if (!slug) {
     return (
       <div className="flex flex-1 items-center justify-center text-muted-foreground">
@@ -433,24 +469,24 @@ export function ChannelView() {
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <Header
           channel={channel}
-          loadingChannel={channelLoading ? { name: knownChannel?.channelName, type: knownChannel?.channelType } : undefined}
+          loadingChannel={loadingChannel}
           memberCount={members?.length}
-          onMembersClick={() => (showMembers ? closeMembers() : openMembers())}
+          onMembersClick={toggleMembers}
           channelId={channel?.id}
           canEdit={canEdit}
-          onDescriptionSave={handleDescriptionSave}
+          onDescriptionSave={onDescriptionSave}
           canArchive={canArchive}
-          onArchive={handleArchive}
+          onArchive={onArchive}
           canUnarchive={canUnarchive}
-          onUnarchive={handleUnarchive}
+          onUnarchive={onUnarchive}
           canLeave={canLeave}
-          onLeave={handleLeave}
+          onLeave={onLeave}
           muted={muted}
-          onToggleMute={handleToggleMute}
-          onNotificationPrefsClick={() => setNotifPrefsOpen(true)}
-          onPinnedClick={togglePinned}
+          onToggleMute={onToggleMute}
+          onNotificationPrefsClick={openNotifPrefs}
+          onPinnedClick={onPinnedClick}
           pinnedActive={showPinned}
-          onFilesClick={toggleFiles}
+          onFilesClick={onFilesClick}
           filesActive={showFiles}
         />
         <MessageDropZone onFiles={(files) => void inputRef.current?.uploadFiles(files)} disabled={archived}>
@@ -502,7 +538,7 @@ export function ChannelView() {
             <div className="border-t p-3 text-sm text-muted-foreground">Loading message editor…</div>
           ) : (
             <MessageInput
-              key={activeEditingMessage ? `edit-${activeEditingMessage.id}` : `channel-${channel?.id ?? 'loading'}`}
+              key={activeEditingMessage ? `edit-${activeEditingMessage.id}` : `channel-${channelID ?? 'loading'}`}
               ref={inputRef}
               onSend={activeEditingMessage ? handleEditMessage : handleSendMessage}
               onSchedule={schedule.onSchedule}
@@ -510,7 +546,7 @@ export function ChannelView() {
               onCancel={activeEditingMessage ? () => setEditingMessage(null) : undefined}
               disabled={!!activeEditingMessage && editMessage.isPending}
               placeholder={activeEditingMessage ? 'Edit message...' : `Write to ~${channel?.name ?? knownChannel?.channelName ?? '...'}`}
-              focusKey={activeEditingMessage ? `edit-${activeEditingMessage.id}` : channel?.id}
+              focusKey={activeEditingMessage ? `edit-${activeEditingMessage.id}` : channelID}
               initialBody={activeEditingMessage?.body ?? draft?.body ?? ''}
               initialDrafts={activeEditingMessage ? editDraftAttachments : draftAttachments}
               onDraftChange={activeEditingMessage ? undefined : handleDraftChange}

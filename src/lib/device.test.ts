@@ -78,7 +78,27 @@ describe('layout tiers', () => {
 describe('applyLayoutTierClasses / startLayoutTierTracking', () => {
   const root = document.documentElement;
   beforeEach(() => {
-    root.classList.remove('tier-mobile', 'tier-compact', 'tier-full', 'device-touch', 'electron-mac');
+    root.classList.remove('tier-mobile', 'tier-compact', 'tier-full', 'device-touch', 'electron-mac', 'native-shell');
+  });
+
+  it('stamps native-shell only inside the phone app, never in a browser or the desktop app', () => {
+    applyLayoutTierClasses();
+    expect(root.classList.contains('native-shell')).toBe(false);
+
+    window.__EX_DESKTOP__ = true;
+    applyLayoutTierClasses();
+    expect(root.classList.contains('native-shell')).toBe(false);
+    delete window.__EX_DESKTOP__;
+
+    window.Capacitor = { isNativePlatform: () => true };
+    try {
+      applyLayoutTierClasses();
+      expect(root.classList.contains('native-shell')).toBe(true);
+    } finally {
+      delete window.Capacitor;
+      applyLayoutTierClasses();
+      expect(root.classList.contains('native-shell')).toBe(false);
+    }
   });
 
   it('stamps exactly one tier class plus the device class', () => {

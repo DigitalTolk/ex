@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
-import { useMobileBackClose, resetMobileBackCloseForTests } from '@/hooks/useMobileBackClose';
+import { useMobileBackClose, resetMobileBackCloseForTests, hasOpenBackOverlay } from '@/hooks/useMobileBackClose';
 
 let mockIsMobile = true;
 vi.mock('@/hooks/useIsMobile', () => ({ useIsMobile: () => mockIsMobile }));
@@ -33,6 +33,28 @@ describe('useMobileBackClose', () => {
 
   afterEach(() => {
     backSpy.mockRestore();
+  });
+
+  it('reports whether an overlay Back should close is open right now', () => {
+    expect(hasOpenBackOverlay()).toBe(false);
+    const { rerender, unmount } = renderHook(({ open }) => useMobileBackClose(open, vi.fn()), {
+      initialProps: { open: true },
+    });
+    expect(hasOpenBackOverlay()).toBe(true);
+    rerender({ open: false });
+    expect(hasOpenBackOverlay()).toBe(false);
+    rerender({ open: true });
+    unmount();
+    expect(hasOpenBackOverlay()).toBe(false);
+  });
+
+  it('keeps the app root (the channel list) out of what the app\'s Back closes, while a browser Back still closes it', () => {
+    const onClose = vi.fn();
+    const { unmount } = renderHook(() => useMobileBackClose(true, onClose, { appRoot: true }));
+    expect(hasOpenBackOverlay()).toBe(false);
+    popTo(null);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    unmount();
   });
 
   it('does not arm when closed, on desktop, or without a close handler', () => {

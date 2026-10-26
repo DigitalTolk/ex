@@ -327,3 +327,27 @@ describe('MessageInput toolbar buttons', () => {
     expect(screen.queryByText('file2.txt')).toBeNull();
   });
 });
+
+describe('MessageInput toolbar pressed state', () => {
+  it('follows the caret from one format to another, and holds while it stays inside one', () => {
+    const { container } = renderWithClient(<MessageInput onSend={vi.fn()} />);
+    const editor = container.querySelector('.cm-content') as HTMLElement;
+    const v = editorView(editor);
+    act(() => v.dispatch({ changes: { from: 0, insert: '**ab** *cd*' } }));
+    const bold = () => container.querySelector('[aria-label="Bold (Ctrl+B)"]')!;
+    const italic = () => container.querySelector('[aria-label="Italic (Ctrl+I)"]')!;
+
+    act(() => v.dispatch({ selection: { anchor: 3 } }));
+    expect(bold()).toHaveAttribute('aria-pressed', 'true');
+    // Still inside the bold run: same formats, the toolbar holds.
+    act(() => v.dispatch({ selection: { anchor: 4 } }));
+    expect(bold()).toHaveAttribute('aria-pressed', 'true');
+    expect(italic()).not.toHaveAttribute('aria-pressed');
+
+    // Into the italic run: one format swapped for another.
+    act(() => v.dispatch({ selection: { anchor: 9 } }));
+    expect(italic()).toHaveAttribute('aria-pressed', 'true');
+    expect(bold()).not.toHaveAttribute('aria-pressed');
+  });
+});
+

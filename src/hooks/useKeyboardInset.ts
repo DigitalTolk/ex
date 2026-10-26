@@ -1,4 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react';
+import { isIOSApp } from '@/lib/capacitor';
 import { deviceKind } from '@/lib/device';
 import { keyboardOverlap, readKeyboardHeight } from '@/lib/keyboard';
 // How many px of the bottom of the screen the on-screen keyboard covers.
@@ -39,18 +40,22 @@ export const KEYBOARD_SETTLE_MS = 250;
 // after the keyboard has reported in). Later pans are the caret's.
 const LATE_PAN_MS = 1000;
 
+type KeyboardChange = 'shown' | 'resized' | null;
+
 // apply records what the keyboard covers and sizes the app root to what's
-// left above it (`visible`, px). It returns whether the keyboard came up.
-function apply(covered: number, visible: number): boolean {
+// left above it (`visible`, px). It reports whether the keyboard came up, or
+// changed height while it was already up (a strip above it came or went).
+function apply(covered: number, visible: number): KeyboardChange {
   const root = document.documentElement;
   const next = Math.max(0, Math.round(covered));
   if (next > 0) root.style.setProperty('--ex-app-height', `${Math.round(visible)}px`);
   else root.style.removeProperty('--ex-app-height');
-  if (next === inset) return false;
+  if (next === inset) return null;
   const wasUp = inset > 0;
   inset = next;
   for (const l of listeners) l();
-  return !wasUp && inset > 0;
+  if (inset === 0) return null;
+  return wasUp ? 'resized' : 'shown';
 }
 
 function subscribe(cb: () => void) {
@@ -106,8 +111,18 @@ export function useKeyboardInsetTracker(): void {
           ? Math.max(0, layout - vv.height)
           : 0;
       const covered = Math.max(native, browser);
-      if (apply(covered, layout - covered)) {
+      const change = apply(covered, layout - covered);
+      if (change === 'shown') {
         keyboardPanUntil = performance.now() + LATE_PAN_MS;
+        settle();
+      } else if (change === 'resized' && window.scrollY !== 0 && isIOSApp()) {
+        // In the iOS app a strip above the keyboard (predictions, the edit
+        // menu's actions, the emoji keyboard) changes its height while it is
+        // up, and WKWebView pans the page as it does: the header slid off the
+        // top and the composer floated off the keyboard, long after the
+        // show-time pan window had closed. Undo that pan in the same frame
+        // the root is resized — exactly as on show. Only a pan that came
+        // WITH the resize: typing's own pans stay left alone.
         settle();
       }
     };

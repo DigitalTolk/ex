@@ -19,6 +19,15 @@ let overlaySequence = 0;
 // reset before the per-hook listeners run.)
 let pendingConsumes = 0;
 const consumedPops = new WeakSet<Event>();
+// Overlays whose sentinel is armed right now (open on a phone).
+const armedOverlays = new Set<number>();
+
+// hasOpenBackOverlay: is an overlay open that Back should close? The phone
+// app's hardware Back asks this first (AppLayout's __exMobileBack), so it pops
+// history only to close a live overlay — never onto a stale same-URL entry.
+export function hasOpenBackOverlay(): boolean {
+  return armedOverlays.size > 0;
+}
 
 /* v8 ignore next -- browser-only app: window always exists; the guard is for module import under SSR-style tooling */
 /* istanbul ignore next -- browser-only app: window always exists; the guard is for module import under SSR-style tooling */
@@ -35,6 +44,7 @@ if (typeof window !== 'undefined') {
 // (whose traversal a jsdom spy swallowed) can't leak into the next.
 export function resetMobileBackCloseForTests(): void {
   pendingConsumes = 0;
+  armedOverlays.clear();
 }
 
 function pushSentinel(id: number): void {
@@ -61,7 +71,14 @@ function pushSentinel(id: number): void {
  * unless a real navigation already replaced the top entry, in which case
  * history is left alone.
  */
-export function useMobileBackClose(open: boolean, onClose: (() => void) | undefined) {
+// `appRoot`: this overlay is the phone app's root screen (the channel list
+// drawer). A browser's Back still closes it, but the app's own Back
+// (hasOpenBackOverlay) leaves it alone — from there Back leaves the app.
+export function useMobileBackClose(
+  open: boolean,
+  onClose: (() => void) | undefined,
+  { appRoot = false }: { appRoot?: boolean } = {},
+) {
   const isMobile = useIsMobile();
   const onCloseRef = useLatestRef(onClose);
   useEffect(() => {
@@ -69,6 +86,7 @@ export function useMobileBackClose(open: boolean, onClose: (() => void) | undefi
     overlaySequence += 1;
     const id = overlaySequence;
     pushSentinel(id);
+    if (!appRoot) armedOverlays.add(id);
     const onPop = (e: PopStateEvent) => {
       const state = window.history.state as Record<string, unknown> | null;
       const marker = state?.[OVERLAY_MARKER];
@@ -88,6 +106,7 @@ export function useMobileBackClose(open: boolean, onClose: (() => void) | undefi
     };
     window.addEventListener('popstate', onPop);
     return () => {
+      armedOverlays.delete(id);
       window.removeEventListener('popstate', onPop);
       const state = window.history.state as Record<string, unknown> | null;
       if (state?.[OVERLAY_MARKER] === id) {
@@ -95,5 +114,5 @@ export function useMobileBackClose(open: boolean, onClose: (() => void) | undefi
         window.history.back();
       }
     };
-  }, [open, isMobile, onCloseRef]);
+  }, [open, isMobile, onCloseRef, appRoot]);
 }

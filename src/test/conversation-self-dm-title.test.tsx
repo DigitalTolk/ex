@@ -59,7 +59,11 @@ vi.mock('@/context/NotificationContext', () => ({
 
 vi.mock('@/hooks/useConversations', () => ({
   useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
-  useUserConversations: () => ({ data: [] }),
+  // Applies `select` like the real hook (ConversationView selects its row's name).
+  useUserConversations: (opts?: { select?: (rows: never[]) => unknown }) => {
+    const rows = [] as never[];
+    return { data: opts?.select && rows ? opts.select(rows) : rows };
+  },
   useConversation: () => ({
     data: {
       id: 'c-self',

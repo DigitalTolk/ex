@@ -103,7 +103,11 @@ vi.mock('@/context/PresenceContext', () => ({
 vi.mock('@/hooks/useChannels', () => ({
   useChannelBySlug: () => ({ data: mockChannel }),
   useChannelMembers: () => ({ data: mockMembers }),
-  useUserChannels: () => ({ data: [] }),
+  // Applies `select` like the real hook (ChannelView selects its own row).
+  useUserChannels: (opts?: { select?: (rows: never[]) => unknown }) => {
+    const rows = [] as never[];
+    return { data: opts?.select && rows ? opts.select(rows) : rows };
+  },
   useBrowseChannels: () => ({ data: [] }),
   useCreateChannel: () => ({ mutate: vi.fn(), isPending: false }),
   useJoinChannel: () => ({ mutate: vi.fn(), isPending: false }),

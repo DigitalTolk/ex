@@ -1,11 +1,11 @@
-import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AppLayout } from './AppLayout';
 import { resetSidebarModeSessionState, setSidebarMode } from '@/stores/sidebar-mode';
 import { requestOpenChannels } from '@/lib/mobile-nav';
-import { resetMobileBackCloseForTests } from '@/hooks/useMobileBackClose';
+import { resetMobileBackCloseForTests, useMobileBackClose } from '@/hooks/useMobileBackClose';
 
 vi.mock('./Sidebar', () => ({
   Sidebar: ({ onClose }: { onClose: () => void }) => (
@@ -231,5 +231,64 @@ describe('AppLayout on desktop', () => {
     renderAt('/channel/general');
     expect(screen.queryByTestId('mobile-tab-bar')).not.toBeInTheDocument();
     expect(topBarWrapper()).not.toHaveClass('hidden');
+  });
+});
+
+// A sheet that arms the Back-close sentinel while open, like the real ones.
+function BackSheet({ onClose }: { onClose: () => void }) {
+  useMobileBackClose(true, onClose);
+  return <div data-testid="back-sheet" />;
+}
+
+describe('AppLayout: the phone app\'s Back', () => {
+  beforeEach(() => {
+    resetMobileBackCloseForTests();
+    window.Capacitor = { isNativePlatform: () => true, getPlatform: () => 'android' };
+  });
+  afterEach(() => {
+    delete window.Capacitor;
+  });
+
+  it('shows the channel list from a chat, then hands the app to the background', () => {
+    renderAt('/channel/general');
+    expect(main()).toHaveAttribute('data-mobile-channels-open', 'false');
+    let result: string | undefined;
+    act(() => {
+      result = window.__exMobileBack?.();
+    });
+    expect(result).toBe('handled');
+    expect(main()).toHaveAttribute('data-mobile-channels-open', 'true');
+    expect(window.__exMobileBack?.()).toBe('background');
+  });
+
+  it('closes an open sheet first', () => {
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/channel/general']}>
+          <AppLayout>
+            <BackSheet onClose={vi.fn()} />
+          </AppLayout>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(window.__exMobileBack?.()).toBe('handled');
+    expect(back).toHaveBeenCalledTimes(1);
+    // The list stays where it was: Back only closed the sheet.
+    expect(main()).toHaveAttribute('data-mobile-channels-open', 'false');
+    back.mockRestore();
+  });
+
+  it('leaves Back to the shell on a wider layout, and is not there outside the app', () => {
+    setMobileMatch(false);
+    const { unmount } = renderAt('/channel/general');
+    expect(window.__exMobileBack?.()).toBeUndefined();
+    unmount();
+    expect(window.__exMobileBack).toBeUndefined();
+
+    delete window.Capacitor;
+    renderAt('/channel/general');
+    expect(window.__exMobileBack).toBeUndefined();
   });
 });
