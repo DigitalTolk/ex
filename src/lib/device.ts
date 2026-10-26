@@ -164,6 +164,9 @@ export function applyLayoutTierClasses(): LayoutTier {
   // at things: a trackpad on an iPad takes it off and the hover UI returns.
   root.classList.toggle('device-touch', deviceKind() === 'touch' && !hasPointerDevice());
   root.classList.toggle('electron-mac', isElectronMac());
+  // `native-shell` marks the iOS/Android app (never a browser or the desktop
+  // app), for CSS that only makes sense inside its WebView.
+  root.classList.toggle('native-shell', isNativePlatform());
   return tier;
 }
 

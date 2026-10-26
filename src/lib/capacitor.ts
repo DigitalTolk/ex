@@ -16,6 +16,11 @@ export function isNativePlatform(): boolean {
   return cachedIsNative;
 }
 
+// The iOS app (Capacitor shell), never mobile Safari or the Android app.
+export function isIOSApp(): boolean {
+  return window.Capacitor?.getPlatform?.() === 'ios' && isNativePlatform();
+}
+
 export function getCapacitorPlugin<K extends keyof CapacitorPlugins>(
   name: K,
 ): CapacitorPlugins[K] | undefined {

@@ -258,11 +258,15 @@ describe('EmojiPicker browser', () => {
       await keyboardSettled();
       const keyboardTop = window.innerHeight - KEYBOARD_PX;
       expect(screen.getByLabelText('Search emojis').element().getBoundingClientRect().top).toBeGreaterThanOrEqual(0);
-      const grid = document.querySelector('[data-swipe-scroll="true"]') as HTMLElement;
-      const box = grid.getBoundingClientRect();
-      expect(box.bottom).toBeLessThanOrEqual(keyboardTop + 1);
-      // A useful stretch of emoji, not a sliver.
-      expect(box.height).toBeGreaterThan(150);
+      // The sheet slides in when it opens: wait for it to come to rest
+      // rather than measuring it mid-slide on a busy machine.
+      await vi.waitFor(() => {
+        const grid = document.querySelector('[data-swipe-scroll="true"]') as HTMLElement;
+        const box = grid.getBoundingClientRect();
+        expect(box.bottom).toBeLessThanOrEqual(keyboardTop + 1);
+        // A useful stretch of emoji, not a sliver.
+        expect(box.height).toBeGreaterThan(150);
+      });
     } finally {
       fireKeyboard('keyboardWillHide');
     }

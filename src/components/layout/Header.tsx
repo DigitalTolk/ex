@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { memo, useLayoutEffect, useRef, useState } from 'react';
 import { Users, ChevronDown, ChevronLeft, LogOut, Archive, ArchiveRestore, Pencil, Bell, BellOff, Pin, Paperclip, SlidersHorizontal, Lock } from 'lucide-react';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { UserAvatar } from '@/components/UserAvatar';
@@ -64,7 +64,9 @@ interface HeaderProps {
   onConvertToChannel?: () => void;
 }
 
-export function Header({
+// Memoized: the chat views re-render often (queries resolving, typing) and
+// hand it stable callbacks, so it re-renders only when what it shows changes.
+export const Header = memo(function Header({
   channel,
   loadingChannel,
   memberCount,
@@ -549,4 +551,4 @@ export function Header({
       />
     </div>
   );
-}
+});

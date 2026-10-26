@@ -4,6 +4,9 @@
 //
 // Single shared AudioContext, lazily created on first user gesture (most
 // browsers reject AudioContext.resume() unless triggered by user input).
+// The phone app creates it ahead of time instead (see scheduleAudioPrewarm).
+
+import { isNativePlatform } from './capacitor';
 
 // Which alert the tone represents. Approvals BLOCK an agent run until the user
 // answers, so they get their own shape — recognisable without looking at the
@@ -129,6 +132,21 @@ function installUnlockListeners(): void {
 }
 
 installUnlockListeners();
+
+// Creating the AudioContext is the expensive part (~120ms on the main thread
+// in a WebView), and it used to land inside the first tap after launch —
+// usually the tap that opens a chat. Only resume() needs a user gesture, so
+// the phone app builds the (suspended) context once launch has settled, and
+// that first tap merely resumes it. Sound behaves exactly as before: nothing
+// plays until a gesture has resumed the context.
+export const AUDIO_PREWARM_DELAY_MS = 2000;
+
+export function scheduleAudioPrewarm(delayMs = AUDIO_PREWARM_DELAY_MS): void {
+  if (!isNativePlatform()) return;
+  window.setTimeout(ensureContext, delayMs);
+}
+
+scheduleAudioPrewarm();
 
 function play(kind: AlertTone): void {
   installUnlockListeners();

@@ -73,8 +73,12 @@ declare global {
     // Magic Keyboard) is attached. Absent everywhere else — lib/device.ts then
     // falls back to watching for real mouse input.
     __EX_POINTER_DEVICE__?: boolean;
+    // Set by AppLayout in the phone app only: the Android shell calls it on
+    // the hardware/gesture Back before walking WebView history.
+    __exMobileBack?: () => 'handled' | 'background' | undefined;
     Capacitor?: {
       isNativePlatform?: () => boolean;
+      getPlatform?: () => string;
       Plugins?: {
         ServerNavigation?: {
           resetServer?: () => Promise<void>;

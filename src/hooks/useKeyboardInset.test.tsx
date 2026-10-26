@@ -171,6 +171,78 @@ describe('useKeyboardInset', () => {
     expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
+  // iOS 26+ raises and drops strips above the keyboard (predictions, the edit
+  // menu's actions, the emoji keyboard) while it is up, and WKWebView pans
+  // the page with each one. Long past the show-time pan window, so only this
+  // path brings the header back and the composer back onto the keyboard.
+  describe('a keyboard height change while the keyboard is up', () => {
+    function changeHeightWithPan(capacitor: Window['Capacitor']) {
+      const vv = Object.assign(new EventTarget(), { height: 500, scale: 1 });
+      Object.defineProperty(window, 'visualViewport', { configurable: true, value: vv });
+      vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(800);
+      window.Capacitor = capacitor;
+      try {
+        const { unmount } = render(<Probe />);
+        act(() => {
+          vv.dispatchEvent(new Event('resize'));
+          vi.advanceTimersByTime(2000); // well past the show-time pan window
+        });
+        scrollTo.mockClear();
+        // The predictions strip comes up, and WebKit pans the page with it.
+        scrollY = 44;
+        vv.height = 456;
+        act(() => {
+          vv.dispatchEvent(new Event('resize'));
+        });
+        expect(appHeight()).toBe('456px');
+        unmount();
+      } finally {
+        delete window.Capacitor;
+        Object.defineProperty(window, 'visualViewport', { configurable: true, value: undefined });
+      }
+    }
+
+    it('undoes the pan that came with it in the iOS app', () => {
+      changeHeightWithPan({ isNativePlatform: () => true, getPlatform: () => 'ios' });
+      expect(scrollTo).toHaveBeenCalledTimes(1);
+      expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'instant' });
+    });
+
+    it('leaves the page alone in a mobile browser and in the Android app', () => {
+      changeHeightWithPan(undefined);
+      changeHeightWithPan({ isNativePlatform: () => true });
+      changeHeightWithPan({ isNativePlatform: () => true, getPlatform: () => 'android' });
+      // A page claiming iOS without the native bridge is a browser.
+      changeHeightWithPan({ isNativePlatform: () => false, getPlatform: () => 'ios' });
+      expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    it('leaves a resize without a pan alone in the iOS app', () => {
+      window.Capacitor = { isNativePlatform: () => true, getPlatform: () => 'ios' };
+      const vv = Object.assign(new EventTarget(), { height: 500, scale: 1 });
+      Object.defineProperty(window, 'visualViewport', { configurable: true, value: vv });
+      vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(800);
+      try {
+        const { unmount } = render(<Probe />);
+        act(() => {
+          vv.dispatchEvent(new Event('resize'));
+          vi.advanceTimersByTime(2000);
+        });
+        scrollTo.mockClear();
+        vv.height = 456;
+        act(() => {
+          vv.dispatchEvent(new Event('resize'));
+        });
+        expect(appHeight()).toBe('456px');
+        expect(scrollTo).not.toHaveBeenCalled();
+        unmount();
+      } finally {
+        delete window.Capacitor;
+        Object.defineProperty(window, 'visualViewport', { configurable: true, value: undefined });
+      }
+    });
+  });
+
   // Sized from the very viewport the keyboard is measured against: a root
   // even a few px taller than what's visible puts the caret under the
   // keyboard, and iOS pans for it on every keystroke.

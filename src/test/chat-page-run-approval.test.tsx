@@ -87,14 +87,22 @@ vi.mock('@/context/NotificationContext', () => ({
 }));
 
 vi.mock('@/hooks/useChannels', () => ({
-  useUserChannels: () => ({ data: [] }),
+  // Applies `select` like the real hook (ChannelView selects its own row).
+  useUserChannels: (opts?: { select?: (rows: never[]) => unknown }) => {
+    const rows = [] as never[];
+    return { data: opts?.select && rows ? opts.select(rows) : rows };
+  },
   useChannelBySlug: () => ({ data: undefined }),
   useCreateChannel: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock('@/hooks/useConversations', () => ({
   useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
-  useUserConversations: () => ({ data: [] }),
+  // Applies `select` like the real hook (ConversationView selects its row's name).
+  useUserConversations: (opts?: { select?: (rows: never[]) => unknown }) => {
+    const rows = [] as never[];
+    return { data: opts?.select && rows ? opts.select(rows) : rows };
+  },
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
   useSearchUsers: () => ({ data: [] }),
 }));

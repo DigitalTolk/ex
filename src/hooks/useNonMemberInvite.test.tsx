@@ -6,7 +6,11 @@ let mockUserChannels: { channelID: string; channelName: string }[] | undefined;
 
 vi.mock('@/hooks/useChannels', () => ({
   useChannelMembers: () => ({ data: mockMembers }),
-  useUserChannels: () => ({ data: mockUserChannels }),
+  // Applies `select` like the real hook.
+  useUserChannels: (opts?: { select?: (rows: never[]) => unknown }) => {
+    const rows = mockUserChannels as never[];
+    return { data: opts?.select && rows ? opts.select(rows) : rows };
+  },
 }));
 
 import { useNonMemberInvite } from './useNonMemberInvite';

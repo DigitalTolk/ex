@@ -47,7 +47,10 @@ import { firstName } from '@/lib/format';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { clearConversationUnreadInCache } from '@/lib/unread-cache';
-import type { Conversation } from '@/types';
+import type { Conversation, UserConversation } from '@/types';
+import { useEventCallback } from '@/hooks/useEventCallback';
+import { useEqualValue } from '@/hooks/useEqualValue';
+import { sameUserMap } from '@/lib/user-map-equal';
 import type { UserMapEntry } from './MessageList';
 import { useReadSession } from '@/hooks/useReadSession';
 import { useEditingMessage } from '@/hooks/useEditingMessage';
@@ -98,8 +101,13 @@ export function ConversationView() {
   const { setActiveParent } = useNotifications();
   const { data: conversation, error: conversationError, isLoading: conversationLoading } = useConversation(id);
   // The sidebar's name for this chat, shown while the conversation loads.
-  const { data: userConversations } = useUserConversations();
-  const knownName = userConversations?.find((c) => c.conversationID === id)?.displayName;
+  // Only that name, not the whole list: any chat's unread change rewrites the
+  // list, and subscribing to all of it re-rendered this open chat.
+  const selectKnownName = useCallback(
+    (rows: UserConversation[]) => rows.find((c) => c.conversationID === id)?.displayName,
+    [id],
+  );
+  const { data: knownName } = useUserConversations({ select: selectKnownName });
   const { mainAnchor, threadAnchor, threadParam, navKey } = useDeepLinkAnchor(id);
   // A link-opened window can be swapped for the newest messages (keeping any
   // open thread) — see the MessageList pill.
@@ -302,7 +310,7 @@ export function ConversationView() {
     [data, user?.id],
   );
 
-  const userMap = useMemo(() => {
+  const builtUserMap = useMemo(() => {
     const m: Record<string, UserMapEntry> = {};
     if (user) m[user.id] = { displayName: user.displayName, avatarURL: user.avatarURL, userStatus: user.userStatus };
     if (usersData) {
@@ -312,6 +320,8 @@ export function ConversationView() {
     }
     return m;
   }, [user, usersData]);
+  // Rebuilt with the same entries it keeps its identity (see ChannelView).
+  const userMap = useEqualValue(builtUserMap, sameUserMap);
 
   // Per-user presence for the DM partner (header dot + intro card). The
   // hook must run unconditionally, so the partner ID is derived here and
@@ -327,6 +337,13 @@ export function ConversationView() {
     [conversation, user?.id, userMap],
   );
   useDocumentTitle(derivedTitle);
+
+  // Stable identities for the (memoized) header.
+  const isGroup = conversation?.type === 'group';
+  const toggleMembers = useEventCallback(() => (showMembers ? closeMembers() : openMembers()));
+  const onPinnedClick = useEventCallback(togglePinned);
+  const onFilesClick = useEventCallback(toggleFiles);
+  const openConvert = useCallback(() => setConvertOpen(true), []);
 
   if (!id) {
     return (
@@ -435,15 +452,15 @@ export function ConversationView() {
           userId={conversation?.type === 'dm' ? dmOtherUserID : undefined}
           currentUserId={user?.id}
           memberCount={conversation?.type === 'group' ? conversation?.participantIDs?.length : undefined}
-          onMembersClick={conversation?.type === 'group' ? () => (showMembers ? closeMembers() : openMembers()) : undefined}
-          onPinnedClick={togglePinned}
+          onMembersClick={isGroup ? toggleMembers : undefined}
+          onPinnedClick={onPinnedClick}
           pinnedActive={showPinned}
-          onFilesClick={toggleFiles}
+          onFilesClick={onFilesClick}
           filesActive={showFiles}
           // Anyone in a group may make it a private channel; guests can't
           // create channels.
           onConvertToChannel={
-            conversation?.type === 'group' && user?.systemRole !== 'guest' ? () => setConvertOpen(true) : undefined
+            isGroup && user?.systemRole !== 'guest' ? openConvert : undefined
           }
         />
         {conversation?.type === 'group' && (

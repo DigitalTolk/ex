@@ -98,7 +98,11 @@ vi.mock('@/context/PresenceContext', () => ({
 vi.mock('@/hooks/useChannels', () => ({
   useChannelBySlug: () => channelQuery,
   useChannelMembers: () => ({ data: mockMembers }),
-  useUserChannels: () => ({ data: userChannels }),
+  // Applies `select` like the real hook (ChannelView selects its own row).
+  useUserChannels: (opts?: { select?: (rows: never[]) => unknown }) => {
+    const rows = userChannels as never[];
+    return { data: opts?.select && rows ? opts.select(rows) : rows };
+  },
   useBrowseChannels: () => ({ data: [] }),
   useCreateChannel: () => ({ mutate: vi.fn(), isPending: false }),
   useJoinChannel: () => ({ mutate: vi.fn(), isPending: false }),
@@ -173,6 +177,32 @@ describe('ChannelView', () => {
     expect(within(title).getByLabelText('Private channel')).toBeInTheDocument();
     expect(messagesFor).toHaveBeenLastCalledWith('ch-1', undefined);
     await waitFor(() => expect(screen.getByText('Write to ~General')).toBeInTheDocument());
+  });
+
+  it('keeps the same composer while the channel lookup lands, when the sidebar already knows it', () => {
+    channelQuery = { isLoading: true };
+    userChannels = [{ channelID: 'ch-1', channelName: 'General', channelType: 'public' }];
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // A fresh element each time, so the re-render actually runs.
+    const tree = () => (
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/channel/general']}>
+          <Routes>
+            <Route path="/channel/:id" element={<ChannelView />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(tree());
+    const composer = screen.getByTestId('composer-stub');
+
+    channelQuery = { data: mockChannel, isLoading: false };
+    rerender(tree());
+    // The lookup has landed: the placeholder now names the loaded channel.
+    expect(screen.getByPlaceholderText('Write to ~general')).toBeInTheDocument();
+
+    // Not torn down and rebuilt (the editor with it) when the lookup lands.
+    expect(screen.getByTestId('composer-stub')).toBe(composer);
   });
 
   it('knows a channel linked by id; one it does not know waits for the lookup', async () => {

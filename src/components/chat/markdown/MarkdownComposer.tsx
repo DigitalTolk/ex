@@ -1,4 +1,4 @@
-import { forwardRef, useMemo } from 'react';
+import { forwardRef, memo, useCallback, useMemo } from 'react';
 import { useAllUsers } from '@/hooks/useConversations';
 import { useChannelMembers, useUserChannels } from '@/hooks/useChannels';
 import { usePresence } from '@/context/PresenceContext';
@@ -13,6 +13,7 @@ import { useConnectors } from '@/hooks/useConnectors';
 import { useSkills } from '@/hooks/useAgents';
 import { useProjects } from '@/hooks/useProjects';
 import { skillPickToken } from '@/lib/picks';
+import type { UserChannel } from '@/types';
 
 export type { WysiwygEditorHandle, ActiveFormat };
 
@@ -42,16 +43,28 @@ interface Props {
 // roster / channel / custom-emoji / skin-tone data from the app's hooks and
 // feeds it to the CodeMirror MarkdownEditor's autocomplete. The editor itself
 // keeps the document as raw markdown — see MarkdownEditor for the architecture.
-export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function MarkdownComposer(
+const NO_EMOJI_MAP: Record<string, string> = {};
+
+type MentionChannel = Pick<UserChannel, 'channelID' | 'channelName' | 'channelType'>;
+const NO_CHANNELS: MentionChannel[] = [];
+const selectMentionChannels = (rows: UserChannel[]): MentionChannel[] =>
+  rows.map((c) => ({ channelID: c.channelID, channelName: c.channelName, channelType: c.channelType }));
+
+// Memoized: the composer around it re-renders on every keystroke, and its
+// props are stable, so the editor and its autocomplete data stay put.
+export const MarkdownComposer = memo(forwardRef<WysiwygEditorHandle, Props>(function MarkdownComposer(
   { mentionChannelId, slashCommands, ...editorProps },
   ref,
 ) {
   const { data: users = [] } = useAllUsers();
   const { data: memberRows } = useChannelMembers(mentionChannelId);
   const { online } = usePresence();
-  const { data: channels = [] } = useUserChannels();
+  // Only what the ~channel typeahead shows: an unread change on any channel
+  // rewrites the full rows, which re-rendered the composer for every message
+  // arriving anywhere.
+  const { data: channels = NO_CHANNELS } = useUserChannels({ select: selectMentionChannels });
   const { data: customEmojis = [] } = useEmojis();
-  const { data: emojiMap = {} } = useEmojiMap();
+  const { data: emojiMap = NO_EMOJI_MAP } = useEmojiMap();
   const auth = useOptionalAuth();
   const skinTone: EmojiSkinTone = auth?.user?.emojiSkinTone ?? '';
   // "/" typeahead offers the user's INSTALLED connectors — picking one puts
@@ -104,8 +117,7 @@ export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function 
         })),
       online: () => online,
       memberIds: () => memberIds,
-      channels: () =>
-        channels.map((c) => ({ channelID: c.channelID, channelName: c.channelName, channelType: c.channelType })),
+      channels: () => channels,
       customEmojis: () => customEmojis,
       skinTone: () => skinTone,
       commands: slashCommands,
@@ -127,12 +139,14 @@ export const MarkdownComposer = forwardRef<WysiwygEditorHandle, Props>(function 
     ],
   );
 
+  const customEmojiMap = useCallback(() => emojiMap, [emojiMap]);
+
   return (
     <MarkdownEditor
       ref={ref}
       {...editorProps}
       completionProviders={completionProviders}
-      customEmojiMap={() => emojiMap}
+      customEmojiMap={customEmojiMap}
     />
   );
-});
+}));

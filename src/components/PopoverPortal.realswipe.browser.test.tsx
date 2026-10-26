@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { render, cleanup } from 'vitest-browser-react';
 import { PopoverPortal } from './PopoverPortal';
 import { swipe } from '@/test/gestures';
@@ -124,5 +124,47 @@ describe('PopoverPortal mobile sheet — real swipe-to-dismiss', () => {
     await swipe(scroller, { dy: 200, steps: 8, stepMs: 18 });
 
     await vi.waitFor(() => expect(onDismiss).toHaveBeenCalled(), DISMISS_WAIT);
+  });
+});
+
+// A host that stays mounted while its sheet opens and closes, as a user card
+// does in every message row. The sheet's slide-in used to be armed when the
+// host MOUNTED (closed), so it was spent before the first open, and a sheet
+// swiped away stayed parked off-screen: reopening it showed only the dimmed
+// backdrop. Every closed row popover also ran its own spring on chat open.
+function ToggleHarness() {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button ref={triggerRef} data-testid="popover-trigger" type="button" onClick={() => setOpen(true)}>
+        Open
+      </button>
+      <PopoverPortal open={open} triggerRef={triggerRef} onDismiss={() => setOpen(false)} mobileSheet ariaLabel="Demo sheet">
+        <div data-testid="popover-content">Hello sheet</div>
+      </PopoverPortal>
+    </div>
+  );
+}
+
+const restsOnScreen = () => {
+  const rect = sheet()!.getBoundingClientRect();
+  expect(rect.top).toBeLessThan(window.innerHeight);
+  expect(Math.abs(rect.bottom - window.innerHeight)).toBeLessThan(2);
+};
+
+describe('PopoverPortal mobile sheet — reopening from a host that stays mounted', () => {
+  it('comes back on screen after it was swiped away', async () => {
+    if (window.innerWidth > 767) return;
+    await render(<ToggleHarness />);
+    const trigger = document.querySelector('[data-testid="popover-trigger"]') as HTMLButtonElement;
+
+    trigger.click();
+    await vi.waitFor(() => restsOnScreen(), DISMISS_WAIT);
+    await swipe(sheet()!, { dy: 200, steps: 8, stepMs: 18 });
+    await vi.waitFor(() => expect(sheet()).toBeNull(), DISMISS_WAIT);
+
+    trigger.click();
+    await vi.waitFor(() => restsOnScreen(), DISMISS_WAIT);
   });
 });

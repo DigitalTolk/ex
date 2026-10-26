@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { useChannelMembers, useUserChannels } from '@/hooks/useChannels';
 import { slugify } from '@/lib/format';
 import { nonMemberMentions, type MentionedUser } from '@/lib/non-member-mentions';
+import type { UserChannel } from '@/types';
 
 // useNonMemberInvite drives the author-facing "add the people you just
 // @mentioned to this channel" prompt (see NonMemberInvitePrompt). It is shared
@@ -13,7 +14,6 @@ import { nonMemberMentions, type MentionedUser } from '@/lib/non-member-mentions
 // to, so callers pass `undefined` for channelId and nothing is ever surfaced.
 export function useNonMemberInvite(channelId: string | undefined, selfId?: string) {
   const { data: members } = useChannelMembers(channelId);
-  const { data: userChannels } = useUserChannels();
   const [pendingInvites, setPendingInvites] = useState<MentionedUser[]>([]);
 
   const memberIdSet = useMemo(
@@ -23,11 +23,16 @@ export function useNonMemberInvite(channelId: string | undefined, selfId?: strin
 
   // The prompt prefixes the channel with "~", so it needs the slug. Derive it
   // from the user's channel list rather than threading a slug prop through
-  // every composer.
-  const channelSlug = useMemo(() => {
-    const name = userChannels?.find((c) => c.channelID === channelId)?.channelName;
-    return name ? slugify(name) : '';
-  }, [userChannels, channelId]);
+  // every composer — selecting only the slug, so another channel's unread
+  // change does not re-render the composer that hosts this hook.
+  const selectSlug = useCallback(
+    (rows: UserChannel[]) => {
+      const name = rows.find((c) => c.channelID === channelId)?.channelName;
+      return name ? slugify(name) : '';
+    },
+    [channelId],
+  );
+  const { data: channelSlug = '' } = useUserChannels({ select: selectSlug });
 
   // Call after a successful send: surfaces an invite bar for any mentioned
   // non-members (supersedes a previous prompt; an empty result clears it).

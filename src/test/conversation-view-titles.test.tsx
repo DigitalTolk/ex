@@ -92,7 +92,11 @@ vi.mock('@/context/PresenceContext', () => ({
 vi.mock('@/hooks/useConversations', () => ({
   useOpenDM: () => ({ openDM: vi.fn(), isPending: false }),
   useConversation: () => ({ data: conversationLoading ? undefined : mockConversation, isLoading: conversationLoading }),
-  useUserConversations: () => ({ data: userConversations }),
+  // Applies `select` like the real hook (ConversationView selects its row's name).
+  useUserConversations: (opts?: { select?: (rows: never[]) => unknown }) => {
+    const rows = userConversations as never[];
+    return { data: opts?.select && rows ? opts.select(rows) : rows };
+  },
   useSearchUsers: () => ({ data: [] }),
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
 }));

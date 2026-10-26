@@ -1,6 +1,9 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type WheelEvent } from 'react';
 import { matchPath, useLocation } from 'react-router-dom';
-import { takeOpenChannelsRequest, useOpenChannelsRequest } from '@/lib/mobile-nav';
+import { requestOpenChannels, takeOpenChannelsRequest, useOpenChannelsRequest } from '@/lib/mobile-nav';
+import { isNativePlatform } from '@/lib/capacitor';
+import { hasOpenBackOverlay } from '@/hooks/useMobileBackClose';
+import { useLatestRef } from '@/hooks/useLatestRef';
 import { Sidebar } from './Sidebar';
 import { PanelResizeHandle } from './PanelResizeHandle';
 import { usePanelWidth } from '@/hooks/usePanelWidth';
@@ -150,7 +153,8 @@ export function AppLayout({ children }: AppLayoutProps) {
   // Android/browser Back closes a manually-opened drawer instead of leaving
   // the page (on the home route the drawer IS the page, and it opens via
   // isHome — not manualChannelsOpen — so this never arms there).
-  useMobileBackClose(manualChannelsOpen, closeChannels);
+  // In the phone app the list is the root screen: its Back leaves the app.
+  useMobileBackClose(manualChannelsOpen, closeChannels, { appRoot: true });
 
   // Phone: the conversation lies over the channel list. mainSlide is how far
   // it is slid aside: 0 covers the list, the viewport's width reveals it. A
@@ -225,6 +229,31 @@ export function AppLayout({ children }: AppLayoutProps) {
     mainRef.current = node;
   }, []);
   const mobileShellActive = isMobile && (mobileChannelsOpen || channelSwiping);
+
+  // The phone app's Back (Android's button or edge gesture), asked before the
+  // shell walks WebView history — a browser-style walk went chat to previous
+  // chat, and stalled on same-URL overlay entries. Back closes an open
+  // overlay; in a chat it shows the channel list (as the header back button
+  // and the swipe do); on the list it hands the app to the background.
+  // Elsewhere (a wider layout) the shell keeps walking history.
+  const backStateRef = useLatestRef({ isMobile, mobileChannelsOpen });
+  useEffect(() => {
+    if (!isNativePlatform()) return;
+    window.__exMobileBack = () => {
+      if (hasOpenBackOverlay()) {
+        window.history.back();
+        return 'handled';
+      }
+      const { isMobile: phone, mobileChannelsOpen: listShown } = backStateRef.current;
+      if (!phone) return undefined;
+      if (listShown) return 'background';
+      requestOpenChannels();
+      return 'handled';
+    };
+    return () => {
+      delete window.__exMobileBack;
+    };
+  }, [backStateRef]);
   /* v8 ignore start -- synthetic wheel support differs between jsdom and browsers; browser tests cover visibility around this surface. */
   /* istanbul ignore next -- synthetic wheel support differs between jsdom and browsers; browser tests cover visibility around this surface. */
   const forwardHeaderWheel = useCallback((event: WheelEvent<HTMLElement>) => {

@@ -60,13 +60,18 @@ export function PopoverPortal({
   // pins the popover to the top-left corner), and a thumb is nowhere near it.
   // With a mouse/trackpad the anchored popover is the better fit again.
   const renderSheet = mobileSheet && (isMobile || (deviceKind() === 'touch' && !pointerDevice));
+  // `open`, not the default: hosts keep this portal mounted while closed (a
+  // user card in every message row), so the sheet's slide-in must arm on each
+  // open. Armed at mount it was spent before the first open, a swiped-away
+  // sheet reopened parked off-screen, and every closed row popover ran its
+  // own spring whenever a chat opened.
   const { dismissing, motionProps } = useSwipeDismiss('down', () => {
     // The drag handlers are only attached in sheet mode, so this callback
     // only fires when renderSheet is true; the false arm and the
     // onDismiss?.-undefined arm are defensive.
     /* istanbul ignore next -- swipe-dismiss only fires in sheet mode with a provided onDismiss */
     if (renderSheet) onDismiss?.();
-  });
+  }, open && renderSheet);
   // Motion drag (style + handlers) is only applied in mobile-sheet mode.
   const { style: sheetDragStyle, ...sheetDragHandlers } = (renderSheet ? motionProps : {}) as {
     style?: Record<string, unknown>;

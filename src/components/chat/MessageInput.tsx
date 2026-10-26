@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { ScheduleSendMenu } from '@/components/chat/ScheduleSendMenu';
+import { useEventCallback } from '@/hooks/useEventCallback';
 import { useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import {
@@ -190,7 +191,11 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
   // would lag behind format toggles by one keystroke.
   const [active, setActive] = useState<Set<ActiveFormat>>(new Set());
   useEffect(() => {
-    return editorRef.current?.subscribeActiveFormats?.(setActive);
+    // The editor publishes a fresh Set on every keystroke; keep the previous
+    // one while the formats are the same, so the memoized toolbar holds.
+    return editorRef.current?.subscribeActiveFormats?.((next) =>
+      setActive((prev) => (sameFormats(prev, next) ? prev : next)),
+    );
   }, []);
   const { data: settings } = useWorkspaceSettings();
   const isMobile = useIsMobile();
@@ -777,7 +782,36 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     }
   }
 
-  const renderToolbar = (placement: 'top' | 'bottom') => {
+  // Stable identities for what the toolbar, editor and pickers are handed.
+  // Several read state that changes on every keystroke (the text, the draft
+  // chips), which made them new functions per keystroke and re-rendered the
+  // whole toolbar — format buttons, emoji and GIF pickers, the send/schedule
+  // menu — on every character typed.
+  const sendNow = useEventCallback(handleSend);
+  const scheduleNow = useEventCallback(handleSchedule);
+  const pickerOpenChange = useEventCallback(handleToolbarPickerOpenChange);
+  const insertEmoji = useEventCallback(insertEmojiShortcode);
+  const insertGif = useEventCallback(insertGiphyGIF);
+  const pasteFiles = useEventCallback(uploadFiles);
+  const editorChange = useEventCallback((md: string) => {
+    if (!applyingServerDraftRef.current && md !== body) {
+      locallyEditedDraftRef.current = true;
+    }
+    latestDraftValueRef.current = {
+      body: md,
+      attachmentIDs: drafts.map((d) => d.id),
+    };
+    setBody(md);
+    emitTyping();
+  });
+
+  // Phone: the toolbar is not built until the composer is first focused
+  // (toolbarEverShown); elsewhere it shows with showToolbar.
+  const toolbarWanted = variant === 'composer' && isMobile ? toolbarEverShown : showToolbar;
+  // Memoized: it re-renders only when what it shows changes (formats, whether
+  // there is something to send, uploading), never per keystroke.
+  const toolbar = useMemo(() => {
+    if (!toolbarWanted) return null;
     // No divider between the message field and the formatting buttons — the
     // spec composer has the toolbar sit flush under the input, not separated
     // by an hr/border.
@@ -786,7 +820,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       className="flex items-center gap-0.5 overflow-x-auto px-2 py-1 [scrollbar-width:none]"
       role="toolbar"
       aria-label="Formatting"
-      data-toolbar-placement={placement}
+      data-toolbar-placement="bottom"
       onMouseDown={(event) => {
         /* istanbul ignore next -- the handler is bound to the toolbar element, so a mousedown that reaches it always has a target contained by currentTarget; the false arm is defensive. */
         if (event.currentTarget.contains(event.target as Node)) event.preventDefault();
@@ -818,9 +852,9 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       )}
       <span className="mx-1 h-4 w-px bg-border" aria-hidden />
       <EmojiPicker
-        onSelect={insertEmojiShortcode}
+        onSelect={insertEmoji}
         mode="shortcode"
-        onOpenChange={handleToolbarPickerOpenChange}
+        onOpenChange={pickerOpenChange}
         trigger={
           <ToolbarBtn label="Emoji"><Smile className="h-3.5 w-3.5" /></ToolbarBtn>
         }
@@ -828,8 +862,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       {giphyEnabled && (
         <GiphyPicker
           apiKey={giphyAPIKey}
-          onSelect={insertGiphyGIF}
-          onOpenChange={handleToolbarPickerOpenChange}
+          onSelect={insertGif}
+          onOpenChange={pickerOpenChange}
           trigger={
             // The word, not a picture: no icon reads as "GIF" at this size.
             // Sized as an icon, not as text: as tall as the icons beside it
@@ -877,8 +911,8 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             // pickers, and this one keeps it up.)
             <ScheduleSendMenu
               disabled={!canSend}
-              onSchedule={handleSchedule}
-              hold={{ onSend: handleSend, label: 'Send message', children: <Send className="h-4 w-4" /> }}
+              onSchedule={scheduleNow}
+              hold={{ onSend: sendNow, label: 'Send message', children: <Send className="h-4 w-4" /> }}
               className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-opacity disabled:pointer-events-none dark:bg-brand dark:text-brand-foreground ${
                 canSend ? '' : 'opacity-40'
               }`}
@@ -897,7 +931,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
                   Button component would add its own fill to this half). */}
               <button
                 type="button"
-                onClick={handleSend}
+                onClick={sendNow}
                 disabled={!canSend}
                 className="flex h-full w-7 items-center justify-center hover:bg-background/15 disabled:pointer-events-none mobile:w-9"
                 aria-label="Send message"
@@ -907,14 +941,14 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               <span aria-hidden className="my-1.5 w-px bg-current opacity-30" />
               <ScheduleSendMenu
                 disabled={!canSend}
-                onSchedule={handleSchedule}
-                onOpenChange={handleToolbarPickerOpenChange}
+                onSchedule={scheduleNow}
+                onOpenChange={pickerOpenChange}
                 className="flex h-full w-5 items-center justify-center hover:bg-background/15 disabled:pointer-events-none mobile:w-7"
               />
             </div>
           ) : (
             <Button
-              onClick={handleSend}
+              onClick={sendNow}
               disabled={!canSend}
               size="icon"
               className="h-7 w-7 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover dark:disabled:bg-brand-disabled dark:disabled:text-brand-foreground mobile:h-9 mobile:w-9 mobile:rounded-full"
@@ -941,7 +975,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             </Button>
           )}
           <Button
-            onClick={handleSend}
+            onClick={sendNow}
             disabled={!canSend}
             size="icon"
             className="h-7 w-7 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover mobile:h-9 mobile:w-9 mobile:rounded-full"
@@ -953,7 +987,71 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
       )}
     </div>
     );
-  };
+  }, [
+    toolbarWanted, active, isEditingMode, hideCodeButton, isMobile, openLinkDialog, insertEmoji,
+    pickerOpenChange, giphyEnabled, giphyAPIKey, insertGif, isUploading, showToolbarSend, scheduledCount,
+    onSchedule, canSend, scheduleNow, sendNow, onCancel, submitLabel,
+  ]);
+
+  // The link dialog re-renders only with its own fields, not per keystroke.
+  const linkDialog = useMemo(() => (
+        <Dialog open={linkDialogOpen} onOpenChange={setLinkDialogOpen}>
+          {/* Mobile: Cancel/Insert live in the top-right header — the URL field
+              autofocuses, so a bottom footer sat behind the keyboard. */}
+          <DialogContent
+            aria-label="Insert link"
+            mobileCloseLabel="Cancel"
+            mobileAction={
+              isMobile
+                ? { label: 'Insert', onClick: submitLinkDialog, disabled: !isHttpUrl(linkUrl.trim()) }
+                : undefined
+            }
+          >
+            <DialogHeader>
+              <DialogTitle>Insert link</DialogTitle>
+            </DialogHeader>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                submitLinkDialog();
+              }}
+              className="flex flex-col gap-3"
+            >
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="link-text">Text</Label>
+                <Input
+                  id="link-text"
+                  value={linkText}
+                  onChange={(e) => setLinkText(e.target.value)}
+                  placeholder="Link text"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="link-url">URL</Label>
+                <Input
+                  id="link-url"
+                  value={linkUrl}
+                  onChange={(e) => setLinkUrl(e.target.value)}
+                  placeholder="https://example.com"
+                  autoFocus
+                  required
+                  type="url"
+                />
+              </div>
+              {!isMobile && (
+                <DialogFooter>
+                  <Button type="button" variant="outline" onClick={() => setLinkDialogOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button type="submit" disabled={!isHttpUrl(linkUrl.trim())}>
+                    Insert
+                  </Button>
+                </DialogFooter>
+              )}
+            </form>
+          </DialogContent>
+        </Dialog>
+  ), [linkDialogOpen, isMobile, submitLinkDialog, linkUrl, linkText]);
 
   return (
     <div
@@ -1068,21 +1166,11 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
           <MarkdownComposer
             ref={editorRef}
             initialBody={initialBody}
-            onChange={(md) => {
-              if (!applyingServerDraftRef.current && md !== body) {
-                locallyEditedDraftRef.current = true;
-              }
-              latestDraftValueRef.current = {
-                body: md,
-                attachmentIDs: drafts.map((d) => d.id),
-              };
-              setBody(md);
-              emitTyping();
-            }}
-            onSubmit={handleSend}
+            onChange={editorChange}
+            onSubmit={sendNow}
             onCancel={onCancel}
             submitOnEnter={submitOnEnter}
-            onPasteFiles={uploadFiles}
+            onPasteFiles={pasteFiles}
             onArrowUpEmpty={requestEditLast}
             placeholder={isUploading ? 'Uploading…' : placeholder}
             ariaLabel="Message input"
@@ -1109,7 +1197,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             return (
             <div className="flex shrink-0 self-end items-center gap-1">
               <Button
-                onClick={handleSend}
+                onClick={sendNow}
                 disabled={!canSend}
                 size="icon"
                 className={`h-8 w-8 rounded-md bg-foreground text-background hover:bg-foreground/85 dark:bg-brand dark:text-brand-foreground dark:hover:bg-brand-hover mobile:rounded-full ${sendSize}`}
@@ -1131,10 +1219,10 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
               inert={showToolbar ? undefined : true}
               data-testid="composer-toolbar-reveal"
             >
-              <div className="min-h-0 overflow-hidden">{toolbarEverShown && renderToolbar('bottom')}</div>
+              <div className="min-h-0 overflow-hidden">{toolbar}</div>
             </div>
           ) : (
-            showToolbar && renderToolbar('bottom')
+            toolbar
           )}
         </div>
       </div>
@@ -1146,65 +1234,16 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
         onChange={handleFileUpload}
         aria-label="File input"
       />
-      <Dialog open={linkDialogOpen} onOpenChange={setLinkDialogOpen}>
-        {/* Mobile: Cancel/Insert live in the top-right header — the URL field
-            autofocuses, so a bottom footer sat behind the keyboard. */}
-        <DialogContent
-          aria-label="Insert link"
-          mobileCloseLabel="Cancel"
-          mobileAction={
-            isMobile
-              ? { label: 'Insert', onClick: submitLinkDialog, disabled: !isHttpUrl(linkUrl.trim()) }
-              : undefined
-          }
-        >
-          <DialogHeader>
-            <DialogTitle>Insert link</DialogTitle>
-          </DialogHeader>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              submitLinkDialog();
-            }}
-            className="flex flex-col gap-3"
-          >
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="link-text">Text</Label>
-              <Input
-                id="link-text"
-                value={linkText}
-                onChange={(e) => setLinkText(e.target.value)}
-                placeholder="Link text"
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="link-url">URL</Label>
-              <Input
-                id="link-url"
-                value={linkUrl}
-                onChange={(e) => setLinkUrl(e.target.value)}
-                placeholder="https://example.com"
-                autoFocus
-                required
-                type="url"
-              />
-            </div>
-            {!isMobile && (
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setLinkDialogOpen(false)}>
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={!isHttpUrl(linkUrl.trim())}>
-                  Insert
-                </Button>
-              </DialogFooter>
-            )}
-          </form>
-        </DialogContent>
-      </Dialog>
+      {linkDialog}
     </div>
   );
 });
+
+function sameFormats(a: Set<ActiveFormat>, b: Set<ActiveFormat>): boolean {
+  if (a.size !== b.size) return false;
+  for (const f of a) if (!b.has(f)) return false;
+  return true;
+}
 
 function ToolbarBtn({
   label,

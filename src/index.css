@@ -560,6 +560,18 @@ body > :not(#root) {
     user-select: text;
   }
 
+  /* Inside the phone app only — never a browser or the desktop app: the
+     WebView paints a highlight box over every tapped control and offers a
+     long-press callout on links, and people read both as text getting
+     selected. Fields keep the callout, which is where paste lives. */
+  .native-shell {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+  }
+  .native-shell :is(input, textarea, [contenteditable]:not([contenteditable="false"])) {
+    -webkit-touch-callout: default;
+  }
+
   html:not(.dark) [data-app-chrome="true"] .text-white,
   html:not(.dark) [data-app-chrome="true"] .text-gray-200,
   html:not(.dark) [data-app-chrome="true"] .text-gray-300 {
