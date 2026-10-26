@@ -141,12 +141,13 @@ func (e *ServerEngine) execute(runID string) {
 	}
 
 	files, filesNote := e.loadAttachments(ctx, run, asg.Attachments)
+	turns := bedrock.TurnBudget(run.Limits.TurnsFor(run.Mode))
 	finalText, usage, loopErr := bedrock.Run(runCtx, e.client, bedrock.Config{
 		ModelID:     asg.Model,
-		System:      serverSystemRules(asg, toolsDesc),
+		System:      serverSystemRules(asg, toolsDesc, turns),
 		Prompt:      asg.Prompt + "\n\n" + asg.ContextBundle + filesNote,
 		Attachments: files,
-		MaxIters:    run.Limits.TurnsFor(run.Mode),
+		MaxIters:    turns,
 		Tools:       tools,
 		OnEvent: func(kind string, payload map[string]any) {
 			switch kind {
@@ -178,8 +179,15 @@ func (e *ServerEngine) execute(runID string) {
 		// Aborted by the orchestrator (limit/deadline/stop) — the run is
 		// already terminal; anything else here would double-close it.
 	default:
-		slog.WarnContext(ctx, "server engine: loop failed", "runID", run.ID, "error", loopErr)
-		if err := e.orch.FailRun(ctx, run.OwnerID, serverRunnerID, run.ID, "bedrock_error"); err != nil && !errors.Is(err, ErrRunClosed) {
+		reason := "bedrock_error"
+		if errors.Is(loopErr, bedrock.ErrTurnBudget) {
+			// The model kept calling tools through its final turn. Bedrock
+			// worked fine — reporting this as bedrock_error sent people
+			// hunting for an AWS outage that never happened.
+			reason = "turn_limit"
+		}
+		slog.WarnContext(ctx, "server engine: loop failed", "runID", run.ID, "reason", reason, "error", loopErr)
+		if err := e.orch.FailRun(ctx, run.OwnerID, serverRunnerID, run.ID, reason); err != nil && !errors.Is(err, ErrRunClosed) {
 			slog.WarnContext(ctx, "server engine: fail-run failed", "runID", run.ID, "error", err)
 		}
 	}
@@ -1106,7 +1114,7 @@ func (e *ServerEngine) connectorCall(ctx context.Context, lookup func(string) (R
 // systemRules: same trust boundary, but the tool surface is connectors-only
 // and the final message IS the deliverable (there is no post_message here —
 // the orchestrator posts the final text into the thread on completion).
-func serverSystemRules(a *Assignment, toolsDesc string) string {
+func serverSystemRules(a *Assignment, toolsDesc string, turns int) string {
 	var b strings.Builder
 	if a.Persona != "" {
 		b.WriteString(a.Persona)
@@ -1136,6 +1144,21 @@ Working:
   feature, changing repository files — is NEVER done from this run: hand off with
   create_coding_task (project = the PRODUCT name) and end your turn.
 `)
+	fmt.Fprintf(&b, `
+Budget: %d turns for this run — every round of tool calls spends one. Work like it:
+- Plan before the first call: what does the answer need, and where does each piece live?
+  Put independent lookups in ONE turn — calls made together run in parallel.
+- Never guess identifiers (field or column names, ids, routes). Read the schema, metadata
+  or docs once and choose from what is actually there. A truncated result means ask for a
+  narrower slice, not fetch it again.
+- Two failed attempts along the same line → change approach. No third variant of a guess.
+- An ambiguous term in the task (which "region", which period, which metric): check the
+  thread and shared context first. Still unclear → take the most sensible reading and
+  state it in your answer, or ask_user when a wrong guess would waste the whole run.
+- Before answering, check the result actually answers what was asked (right filters,
+  right period, numbers that add up). Running low → deliver what you have: what you found,
+  what is missing, and the exact next step. A clear partial answer beats running out.
+`, turns)
 	if a.WatchInstruction != "" {
 		// A watcher judges whether the activity that woke it matches, and opts
 		// out with SKIP. A SCHEDULED order has no triggering activity to judge

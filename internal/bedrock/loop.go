@@ -67,11 +67,54 @@ const (
 	// toolResultCap bounds one tool result so a huge API response can't blow
 	// the context window in a single turn.
 	toolResultCap = 24_000
+	// wrapUpTurns is how many turns before the ceiling the model is told to
+	// stop exploring and converge. A model that is never told its budget
+	// spends all of it searching and dies with nothing to show (field report:
+	// 32 turns guessing column names, then a bare failure).
+	wrapUpTurns = 4
+	// checkpointMinIters: smaller budgets get no halfway checkpoint — it would
+	// land a turn or two before the wrap-up nudge and say nothing new.
+	checkpointMinIters = 12
 )
 
 // ErrNoProgress reports a model turn that claimed tool_use but carried no
 // tool-use blocks — retrying would loop forever on the same reply.
 var ErrNoProgress = errors.New("bedrock: model stopped without progress")
+
+// ErrTurnBudget reports a run that used its last turn on tool calls instead of
+// an answer, despite being told it was the last. Distinct from a Bedrock
+// failure: the API worked, the model never converged.
+var ErrTurnBudget = errors.New("bedrock: turn budget spent without a final answer")
+
+// TurnBudget is the number of Converse round-trips Run will actually allow
+// for a configured limit — the hard ceiling applies whatever was asked for.
+// Callers use it to tell the model its real budget.
+func TurnBudget(maxIters int) int {
+	if maxIters <= 0 || maxIters > itersCeiling {
+		return itersCeiling
+	}
+	return maxIters
+}
+
+// budgetNote is the steer appended to a tool-result message: how many turns
+// remain once that message is answered (remaining counts the next request).
+// Empty when there is nothing worth saying.
+func budgetNote(maxIters, remaining int) string {
+	switch {
+	case remaining == 1:
+		return "[Ex: this is your FINAL turn — tool calls will not run any more. Reply now with your " +
+			"answer from what you have gathered. If it is incomplete, say what you found, what is " +
+			"missing, and the exact next step.]"
+	case remaining <= wrapUpTurns:
+		return fmt.Sprintf("[Ex: %d turns left, including this one. Stop exploring: fetch only what the "+
+			"answer still needs, then reply. A clear partial answer beats running out.]", remaining)
+	case maxIters >= checkpointMinIters && remaining == maxIters-maxIters/2:
+		return fmt.Sprintf("[Ex: checkpoint — %d of %d turns used. If recent calls have not converged, "+
+			"change approach: read the schema or docs instead of guessing names, or answer with "+
+			"what you have and state what is unresolved.]", maxIters/2, maxIters)
+	}
+	return ""
+}
 
 // Run drives the Converse loop until the model answers without requesting a
 // tool, an iteration ceiling trips, or ctx dies. The final assistant text is
@@ -81,10 +124,7 @@ func Run(ctx context.Context, client Client, cfg Config) (string, Usage, error) 
 	if cfg.ModelID == "" {
 		return "", Usage{}, errors.New("bedrock: model id required")
 	}
-	maxIters := cfg.MaxIters
-	if maxIters <= 0 || maxIters > itersCeiling {
-		maxIters = itersCeiling
-	}
+	maxIters := TurnBudget(cfg.MaxIters)
 	maxTokens := cfg.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = defaultMaxTokens
@@ -126,7 +166,9 @@ func Run(ctx context.Context, client Client, cfg Config) (string, Usage, error) 
 		system = append(system, &types.SystemContentBlockMemberCachePoint{Value: types.CachePointBlock{Type: types.CachePointTypeDefault}})
 	}
 
-	for iter := 0; iter < maxIters; iter++ {
+	// No loop bound: every iteration returns or continues, and the last one
+	// (iter == maxIters-1) always returns — on an answer or on ErrTurnBudget.
+	for iter := 0; ; iter++ {
 		out, err := client.Converse(ctx, &bedrockruntime.ConverseInput{
 			ModelId:         aws.String(cfg.ModelID),
 			System:          system,
@@ -182,6 +224,11 @@ func Run(ctx context.Context, client Client, cfg Config) (string, Usage, error) 
 		if len(toolUses) == 0 {
 			return lastText, usage, ErrNoProgress
 		}
+		if iter == maxIters-1 {
+			// The final turn was announced as tools-off; running these would
+			// only produce results nobody reads.
+			return lastText, usage, fmt.Errorf("%w (%d round-trips)", ErrTurnBudget, maxIters)
+		}
 
 		// Execute every requested tool CONCURRENTLY — the model batches
 		// independent calls on purpose, so a turn's wall clock should be its
@@ -221,7 +268,12 @@ func Run(ctx context.Context, client Client, cfg Config) (string, Usage, error) 
 		for i, tu := range toolUses {
 			text := outcomes[i].text
 			if len(text) > toolResultCap {
-				text = text[:toolResultCap] + "\n…[truncated]"
+				// Say how much was cut and what to do about it: a model that
+				// only sees "[truncated]" re-fetches the same thing or starts
+				// guessing at what was in the missing part.
+				text = fmt.Sprintf("%s\n…[truncated: showing %d of %d chars. What you need may be in the cut part — "+
+					"request a narrower slice (filters, specific ids or fields) instead of re-fetching this.]",
+					text[:toolResultCap], toolResultCap, len(text))
 			}
 			status := types.ToolResultStatusSuccess
 			if outcomes[i].isErr {
@@ -236,9 +288,11 @@ func Run(ctx context.Context, client Client, cfg Config) (string, Usage, error) 
 				},
 			})
 		}
+		if note := budgetNote(maxIters, maxIters-iter-1); note != "" {
+			results = append(results, &types.ContentBlockMemberText{Value: note})
+		}
 		msgs = append(msgs, types.Message{Role: types.ConversationRoleUser, Content: results})
 	}
-	return lastText, usage, fmt.Errorf("bedrock: %d tool round-trips without a final answer", maxIters)
 }
 
 // callTool dispatches one tool use, turning unknown names and panics into
