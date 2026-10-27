@@ -636,12 +636,12 @@ func (s *ChannelService) AddMember(ctx context.Context, actorID, channelID, user
 		}
 	}
 
+	// An archived channel still takes new members: it is read-only for its
+	// content, but people (e.g. admins, who cannot join on their own) must be
+	// able to get at its history. postSystemMessage leaves its history alone.
 	ch, err := s.channels.GetChannel(ctx, channelID)
 	if err != nil {
 		return fmt.Errorf("channel: get: %w", err)
-	}
-	if ch.Archived {
-		return ErrChannelArchived
 	}
 
 	now := time.Now()

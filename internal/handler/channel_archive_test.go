@@ -69,7 +69,6 @@ func TestChannelHandler_ArchivedChannelWritesAre409(t *testing.T) {
 		{"delete", h.DeleteMessage, http.MethodDelete, ``, map[string]string{"id": "ch-ro", "msgId": msgID}},
 		{"pin", h.SetPinned, http.MethodPut, `{"pinned":true}`, map[string]string{"id": "ch-ro", "msgId": msgID}},
 		{"no-unfurl", h.SetNoUnfurl, http.MethodPut, `{"noUnfurl":true}`, map[string]string{"id": "ch-ro", "msgId": msgID}},
-		{"add-member", h.AddMember, http.MethodPost, `{"userID":"u-new","role":"member"}`, map[string]string{"id": "ch-ro"}},
 	}
 	for _, c := range cases {
 		rec := serveAs(env, "u-owner", c.fn, c.method, "/api/v1/channels/ch-ro", c.body, c.path)
@@ -81,6 +80,20 @@ func TestChannelHandler_ArchivedChannelWritesAre409(t *testing.T) {
 	rec := serveAs(env, "u-new", h.Join, http.MethodPost, "/api/v1/channels/ch-ro/join", ``, map[string]string{"id": "ch-ro"})
 	if rec.Code != http.StatusConflict || errorCode(t, rec) != "channel_archived" {
 		t.Errorf("join: status %d body %s, want 409 channel_archived", rec.Code, rec.Body.String())
+	}
+}
+
+// A member can still add people to an archived channel: that is how someone
+// who cannot join on their own (e.g. an admin) gets at its history.
+func TestChannelHandler_ArchivedChannelAddMember(t *testing.T) {
+	env, _ := archivedHandlerEnv(t)
+	rec := serveAs(env, "u-mem", env.handler.AddMember, http.MethodPost, "/api/v1/channels/ch-ro/members",
+		`{"userID":"u-new","role":"member"}`, map[string]string{"id": "ch-ro"})
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("add member: status %d body %s, want 204", rec.Code, rec.Body.String())
+	}
+	if _, ok := env.memberships.memberships["ch-ro#u-new"]; !ok {
+		t.Fatal("membership not written")
 	}
 }
 

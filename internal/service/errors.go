@@ -36,9 +36,10 @@ var ErrThreadDeleted = errors.New("message: thread has been deleted")
 var ErrInvalidThreadRoot = errors.New("message: invalid thread root")
 
 // ErrChannelArchived is returned for a write (post, reply, edit, delete,
-// reaction, pin, rename, new member, webhook post) into an archived channel.
+// reaction, pin, rename, self-join, webhook post) into an archived channel.
 // An archived channel keeps its members and history but is read-only until an
-// owner unarchives it. Handlers map it to 409 Conflict.
+// owner unarchives it; members can still add people to it. Handlers map it to
+// 409 Conflict.
 var ErrChannelArchived = errors.New("channel: channel is archived")
 
 // ErrConversationConverted: the group message is a private channel now (the
