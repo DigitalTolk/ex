@@ -63,6 +63,15 @@ func TestEnsureChannel(t *testing.T) {
 	_, err = e.faulty(failOn("Scan", 0)).Channels(ctx)
 	wantErr(t, err, errFault)
 
+	c2, err := e.im.Channel(ctx, "c2")
+	mustNoErr(t, err)
+	if c2 != (Channel{ID: "c2", Slug: "old", Name: "old", Type: "private", Archived: true}) {
+		t.Fatalf("Channel(c2) = %+v", c2)
+	}
+	if _, err := e.im.Channel(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Channel(nope): want ErrNotFound, got %v", err)
+	}
+
 	for _, bad := range []ChannelSpec{
 		{Slug: "x", Type: "public"},
 		{ID: "b", Slug: "Bad Slug", Type: "public"},
