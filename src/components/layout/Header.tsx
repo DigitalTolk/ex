@@ -50,6 +50,9 @@ interface HeaderProps {
   onDescriptionSave?: (desc: string) => void;
   // Opens the rename dialog; absent where the channel can't be renamed.
   onRename?: () => void;
+  // Makes a public channel private (after a confirm); absent where that
+  // isn't offered.
+  onMakePrivate?: () => void;
   canArchive?: boolean;
   onArchive?: () => void;
   // An archived channel offers Unarchive in place of Archive.
@@ -87,6 +90,7 @@ export const Header = memo(function Header({
   canEdit,
   onDescriptionSave,
   onRename,
+  onMakePrivate,
   canArchive,
   onArchive,
   canUnarchive,
@@ -107,6 +111,7 @@ export const Header = memo(function Header({
   const [isEditingDesc, setIsEditingDesc] = useState(false);
   const [descDraft, setDescDraft] = useState('');
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
+  const [privateConfirmOpen, setPrivateConfirmOpen] = useState(false);
   const [mobileChannelMenuOpen, setMobileChannelMenuOpen] = useState(false);
   const headerShellRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
@@ -161,6 +166,11 @@ export const Header = memo(function Header({
   function renameChannel() {
     setMobileChannelMenuOpen(false);
     onRename?.();
+  }
+
+  function confirmMakePrivate() {
+    setPrivateConfirmOpen(true);
+    setMobileChannelMenuOpen(false);
   }
 
   function cancelDescriptionEdit() {
@@ -243,6 +253,11 @@ export const Header = memo(function Header({
                 {onRename && (
                   <DropdownMenuItem onClick={renameChannel}>
                     <PenLine className="mr-2 h-4 w-4" /> Rename channel
+                  </DropdownMenuItem>
+                )}
+                {onMakePrivate && (
+                  <DropdownMenuItem onClick={confirmMakePrivate}>
+                    <Lock className="mr-2 h-4 w-4" /> Make private
                   </DropdownMenuItem>
                 )}
                 {onToggleMute && (
@@ -528,6 +543,15 @@ export const Header = memo(function Header({
               <PenLine className="mr-2 h-4 w-4" /> Rename channel
             </button>
           )}
+          {onMakePrivate && (
+            <button
+              type="button"
+              className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-muted"
+              onClick={confirmMakePrivate}
+            >
+              <Lock className="mr-2 h-4 w-4" /> Make private
+            </button>
+          )}
           {onToggleMute && (
             <button
               type="button"
@@ -590,6 +614,15 @@ export const Header = memo(function Header({
         destructive
         onConfirm={() => onArchive?.()}
         testIDPrefix="archive-channel"
+      />
+      <ConfirmDialog
+        open={privateConfirmOpen}
+        onOpenChange={setPrivateConfirmOpen}
+        title={`Make ~${displayTitle} private?`}
+        description="Only its members will see it. This can't be undone."
+        confirmLabel="Make private"
+        onConfirm={() => onMakePrivate?.()}
+        testIDPrefix="private-channel"
       />
     </div>
   );

@@ -92,6 +92,9 @@ func (s *dataChannelStore) PatchChannel(_ context.Context, id string, p store.Ch
 	if p.Archived != nil {
 		ch.Archived = *p.Archived
 	}
+	if p.MakePrivate {
+		ch.Type = model.ChannelTypePrivate
+	}
 	ch.UpdatedAt = p.UpdatedAt
 	return nil
 }
@@ -2402,5 +2405,33 @@ func TestChannelHandler_BrowsePublicListsEveryChannel(t *testing.T) {
 	}
 	if len(got) != listAllPageSize+20 {
 		t.Fatalf("channels = %d, want all %d", len(got), listAllPageSize+20)
+	}
+}
+
+func TestChannelHandlerFull_MakePrivate(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.channels.channels["ch-p"] = &model.Channel{ID: "ch-p", Name: "plans", Slug: "plans", Type: model.ChannelTypePublic}
+	env.memberships.memberships["ch-p#u-own"] = &model.ChannelMembership{ChannelID: "ch-p", UserID: "u-own", Role: model.ChannelRoleOwner}
+	env.memberships.memberships["ch-p#u-mem"] = &model.ChannelMembership{ChannelID: "ch-p", UserID: "u-mem", Role: model.ChannelRoleMember}
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.MakePrivate))
+	post := func(userID string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/ch-p/private", nil)
+		req.SetPathValue("id", "ch-p")
+		req.Header.Set("Authorization", "Bearer "+makeTokenForUser(env.jwtMgr, &model.User{ID: userID, Email: userID + "@x.se", SystemRole: model.SystemRoleMember}))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := post("u-mem"); rec.Code != http.StatusForbidden {
+		t.Errorf("a plain member = %d, want 403", rec.Code)
+	}
+	rec := post("u-own")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the owner = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	var ch model.Channel
+	if err := json.NewDecoder(rec.Body).Decode(&ch); err != nil || ch.Type != model.ChannelTypePrivate {
+		t.Errorf("response = %+v (%v), want the private channel", ch, err)
 	}
 }

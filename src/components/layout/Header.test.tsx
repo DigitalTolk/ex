@@ -305,6 +305,20 @@ describe('Header', () => {
     expect(document.getElementById('mobile-channel-menu')).toBeNull();
   });
 
+  it('asks before making a channel private from the phone menu', async () => {
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    const onMakePrivate = vi.fn();
+    renderHeaderWithProviders(<Header channel={makeChannel()} onMakePrivate={onMakePrivate} />);
+    await user.click(screen.getByText('general').closest('button')!);
+    const menu = within(document.getElementById('mobile-channel-menu')!);
+    await user.click(menu.getByText('Make private'));
+    expect(document.getElementById('mobile-channel-menu')).toBeNull();
+    expect(onMakePrivate).not.toHaveBeenCalled();
+    await user.click(await screen.findByTestId('private-channel-confirm'));
+    expect(onMakePrivate).toHaveBeenCalledTimes(1);
+  });
+
   // A group message's title opens a menu to make it a private channel.
   it('offers to make a group a private channel from its title', async () => {
     const user = userEvent.setup();

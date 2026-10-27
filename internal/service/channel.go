@@ -506,6 +506,46 @@ func (s *ChannelService) syncMemberChannelNames(ctx context.Context, channelID, 
 	})
 }
 
+// MakePrivate turns a public channel private: its members keep it, nobody
+// else can find, join or read it any more — it leaves the directory, the
+// channel browser and channel search. One way, as in Slack. The owner or a
+// system admin may do it; #general stays public, and an archived channel is
+// read-only. An already private channel is left as it is.
+func (s *ChannelService) MakePrivate(ctx context.Context, actorID, channelID string) (*model.Channel, error) {
+	if channelID == generalChannelID {
+		return nil, apperr.Forbidden("channel: the general channel stays public")
+	}
+	if err := s.checkPermission(ctx, actorID, channelID, model.ChannelRoleOwner); err != nil {
+		return nil, err
+	}
+	ch, err := s.channels.GetChannel(ctx, channelID)
+	if err != nil {
+		return nil, fmt.Errorf("channel: get: %w", err)
+	}
+	if ch.Archived {
+		return nil, ErrChannelArchived
+	}
+	if ch.Type == model.ChannelTypePrivate {
+		return ch, nil
+	}
+	now := time.Now()
+	if err := s.channels.PatchChannel(ctx, channelID, store.ChannelPatch{MakePrivate: true, UpdatedAt: now}); err != nil {
+		return nil, fmt.Errorf("channel: make private: %w", err)
+	}
+	ch.Type, ch.UpdatedAt = model.ChannelTypePrivate, now
+
+	events.Publish(ctx, s.publisher, pubsub.ChannelName(channelID), events.EventChannelUpdated, map[string]any{
+		"channelID":   channelID,
+		"name":        ch.Name,
+		"slug":        ch.Slug,
+		"description": ch.Description,
+		"type":        ch.Type,
+	})
+	s.indexChannel(ctx, ch)
+	s.postSystemMessage(ctx, channelID, s.resolveDisplayName(ctx, actorID)+" made the channel private")
+	return ch, nil
+}
+
 // Archive makes a channel read-only. Members keep their memberships and can
 // still read its history, search it and leave it, but nobody can post, react,
 // edit, rename it or add members until it is unarchived. Directory, browse and
@@ -987,7 +1027,7 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 					continue // channel row missing: drop like the fan-out did
 				}
 				uc.Archived = ch.Archived
-				uc.ChannelName = ch.Name
+				uc.ChannelName, uc.ChannelType = ch.Name, ch.Type
 				// Exact unread: messages added since this user last read.
 				// O(1) from the seq pair; survives reload and reconnect.
 				if n := ch.MessageSeq - uc.LastReadSeq; n > 0 {
@@ -1015,7 +1055,7 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 			}
 			keep[i] = true
 			uc.Archived = ch.Archived
-			uc.ChannelName = ch.Name
+			uc.ChannelName, uc.ChannelType = ch.Name, ch.Type
 			// Exact unread: messages added since this user last read. O(1) from
 			// the seq pair — no per-channel count query. Survives reload and
 			// reconnect because both numbers are persisted.

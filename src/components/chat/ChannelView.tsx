@@ -29,6 +29,7 @@ import {
   useMuteChannel,
   useUnarchiveChannel,
   useUpdateChannelDescription,
+  useMakeChannelPrivate,
   useUserChannels,
 } from '@/hooks/useChannels';
 import { useChannelMessages } from '@/hooks/useMessages';
@@ -256,6 +257,8 @@ export function ChannelView() {
   const canRename = canEdit && channel?.slug !== GENERAL_CHANNEL_SLUG;
   const [renameFor, setRenameFor] = useState<string | undefined>();
   const openRename = useEventCallback(() => setRenameFor(channelID));
+  // Who may archive a public channel may make it private — all but #general.
+  const canMakePrivate = canArchive && !archived && channel?.type === 'public' && channel.slug !== GENERAL_CHANNEL_SLUG;
 
   const selectMuted = useCallback(
     (rows: UserChannel[]) => !!rows.find((uc) => uc.channelID === channelID)?.muted,
@@ -274,6 +277,7 @@ export function ChannelView() {
   const unarchiveChannel = useUnarchiveChannel();
   const leaveChannel = useLeaveChannel();
   const updateDescription = useUpdateChannelDescription();
+  const makePrivate = useMakeChannelPrivate();
 
   function handleArchive() {
     /* istanbul ignore next -- only wired to the header menu, which renders only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
@@ -294,6 +298,12 @@ export function ChannelView() {
     leaveChannel.run(channel.id, { onSuccess: () => navigate('/') });
   }
 
+  function handleMakePrivate() {
+    /* istanbul ignore next -- only wired to the header menu, which renders only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
+    if (!channel?.id) return;
+    makePrivate.run(channel.id);
+  }
+
   function handleDescriptionSave(desc: string) {
     /* istanbul ignore next -- only wired to the header menu, which renders only when `channel` is loaded, so the `channel == null` optional-chain arm is unreachable; defensive. */
     if (!channel?.id) return;
@@ -304,6 +314,7 @@ export function ChannelView() {
   // what it shows changes.
   const toggleMembers = useEventCallback(() => (showMembers ? closeMembers() : openMembers()));
   const onDescriptionSave = useEventCallback(handleDescriptionSave);
+  const onMakePrivate = useEventCallback(handleMakePrivate);
   const onArchive = useEventCallback(handleArchive);
   const onUnarchive = useEventCallback(handleUnarchive);
   const onLeave = useEventCallback(handleLeave);
@@ -370,6 +381,7 @@ export function ChannelView() {
           canEdit={canEdit}
           onDescriptionSave={onDescriptionSave}
           onRename={canRename ? openRename : undefined}
+          onMakePrivate={canMakePrivate ? onMakePrivate : undefined}
           canArchive={canArchive}
           onArchive={onArchive}
           canUnarchive={canUnarchive}

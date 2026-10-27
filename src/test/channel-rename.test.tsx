@@ -106,12 +106,17 @@ vi.mock('@/components/ui/dropdown-menu', async (importOriginal) => ({
 // Taken names, as the server's availability check answers them.
 const taken = new Set(['sales']);
 let patchError: unknown = null;
+let privateError: unknown = null;
 let checkFails = false;
 const mockApiFetch = vi.fn((url: string, init?: { method?: string; body?: string }) => {
   const check = /^\/api\/v1\/channel-names\/([^?]+)\?channel=ch-m$/.exec(url);
   if (check) {
     if (checkFails) return Promise.reject(new Error('offline'));
     return Promise.resolve({ available: !taken.has(decodeURIComponent(check[1]!)) });
+  }
+  if (url === '/api/v1/channels/ch-m/private' && init?.method === 'POST') {
+    if (privateError) return Promise.reject(privateError);
+    return Promise.resolve({ ...marketing, type: 'private' });
   }
   if (url === '/api/v1/channels/ch-m' && init?.method === 'PATCH') {
     if (patchError) return Promise.reject(patchError);
@@ -120,6 +125,11 @@ const mockApiFetch = vi.fn((url: string, init?: { method?: string; body?: string
   }
   return Promise.resolve(undefined);
 });
+const mockToast = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/toast', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/toast')>()),
+  showToast: (...args: unknown[]) => mockToast(...args),
+}));
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   apiFetch: (url: string, init?: { method?: string; body?: string }) => mockApiFetch(url, init),
@@ -271,6 +281,60 @@ describe('a link made before a rename', () => {
       expect(screen.getByTestId('where')).toHaveTextContent('/channel/ch-m');
     } finally {
       delete bySlug['ch-m'];
+    }
+  });
+});
+
+describe('making a public channel private', () => {
+  beforeEach(() => {
+    mockApiFetch.mockClear();
+    mockToast.mockClear();
+    role = 'owner';
+    privateError = null;
+  });
+
+  it('asks first, then makes it private', async () => {
+    renderAt('/channel/marketing');
+    fireEvent.click(screen.getByRole('button', { name: /Make private/ }));
+    expect(await screen.findByText('Make ~marketing private?')).toBeInTheDocument();
+    expect(mockApiFetch).not.toHaveBeenCalledWith('/api/v1/channels/ch-m/private', expect.anything());
+
+    fireEvent.click(screen.getByTestId('private-channel-confirm'));
+    await waitFor(() => expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-m/private', { method: 'POST' }));
+    expect(mockToast).not.toHaveBeenCalled();
+  });
+
+  it('says so when it fails', async () => {
+    privateError = new Error('offline');
+    renderAt('/channel/marketing');
+    fireEvent.click(screen.getByRole('button', { name: /Make private/ }));
+    fireEvent.click(await screen.findByTestId('private-channel-confirm'));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith("Couldn't make the channel private. Try again."));
+  });
+
+  it('is offered only for a public channel other than #general, to its owner', () => {
+    const offered = () => screen.queryByRole('button', { name: /Make private/ });
+    const { unmount } = renderAt('/channel/general');
+    expect(offered()).not.toBeInTheDocument();
+    unmount();
+
+    role = 'admin';
+    const second = renderAt('/channel/marketing');
+    expect(offered()).not.toBeInTheDocument();
+    second.unmount();
+
+    role = 'owner';
+    bySlug['secret'] = { ...marketing, id: 'ch-x', slug: 'secret', name: 'secret', type: 'private' };
+    bySlug['old'] = { ...marketing, id: 'ch-o', slug: 'old', name: 'old', archived: true };
+    try {
+      const third = renderAt('/channel/secret');
+      expect(offered()).not.toBeInTheDocument();
+      third.unmount();
+      renderAt('/channel/old');
+      expect(offered()).not.toBeInTheDocument();
+    } finally {
+      delete bySlug['secret'];
+      delete bySlug['old'];
     }
   });
 });

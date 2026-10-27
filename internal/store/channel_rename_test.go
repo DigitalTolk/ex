@@ -224,3 +224,38 @@ func TestChannelStore_ListPublicChannelsPages(t *testing.T) {
 		t.Errorf("archived or private channel listed: %v", seen)
 	}
 }
+
+// Making a channel private takes it out of the public listing.
+func TestChannelStore_PatchChannelMakePrivate(t *testing.T) {
+	db := setupDynamoDB(t)
+	s := NewChannelStore(db)
+	ctx := context.Background()
+	ch := makeChannel("ch-to-priv", "to-priv", "to-priv", model.ChannelTypePublic)
+	if err := s.CreateChannel(ctx, ch); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	listed := func() bool {
+		page, _, err := s.ListPublicChannels(ctx, 100, "")
+		if err != nil {
+			t.Fatalf("ListPublicChannels: %v", err)
+		}
+		for _, c := range page {
+			if c.ID == ch.ID {
+				return true
+			}
+		}
+		return false
+	}
+	if !listed() {
+		t.Fatal("the public channel should be listed before")
+	}
+	if err := s.PatchChannel(ctx, ch.ID, ChannelPatch{MakePrivate: true, UpdatedAt: time.Now()}); err != nil {
+		t.Fatalf("PatchChannel: %v", err)
+	}
+	if listed() {
+		t.Error("a private channel must leave the public listing")
+	}
+	if got, err := s.GetChannelBySlug(ctx, "to-priv"); err != nil || got.Type != model.ChannelTypePrivate {
+		t.Errorf("by slug = (%+v, %v), want it private and still found", got, err)
+	}
+}

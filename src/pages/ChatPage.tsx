@@ -384,9 +384,12 @@ export default function ChatPage() {
         navigate('/', { replace: true });
       }
     },
+    // A rename, a new description or a public channel made private: the
+    // directory and channel browser list it differently too.
     [EventType.ChannelUpdated]: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug() });
       queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.browseChannels() });
     },
     [EventType.ChannelNew]: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.browseChannels() });

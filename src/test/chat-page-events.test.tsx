@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import ChatPage from '@/pages/ChatPage';
 import { apiFetch } from '@/lib/api';
+import { queryKeys } from '@/lib/query-keys';
 import { forceAwayUntilInput, resetUserActivityForTests } from '@/lib/user-activity';
 import { usePresenceStore } from '@/stores/presence';
 import { endReadSession, getUnreadAnchor, holdRead, isReadHeld, setAtBottom, setAtLiveTail, threadReadKey, useMissedArrivals } from '@/lib/read-position';
@@ -853,9 +854,15 @@ describe('ChatPage WebSocket handlers', () => {
     expectInvalidPayloadReported('channel.removed', () => (capturedOptions.onChannelRemoved as (d: unknown) => void)({}));
   });
 
-  it('onChannelUpdated invalidates channel-by-slug + user channels', () => {
-    renderAt('/');
+  it('onChannelUpdated invalidates channel-by-slug, user channels and the channel listings', () => {
+    const { qc } = renderAt('/');
+    const spy = vi.spyOn(qc, 'invalidateQueries');
     expect(() => (capturedOptions.onChannelUpdated as (d: unknown) => void)({ channelID: 'ch-1' })).not.toThrow();
+    // A channel made private leaves the directory and the channel browser.
+    const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(calls).toContainEqual(queryKeys.channelBySlug());
+    expect(calls).toContainEqual(queryKeys.userChannels());
+    expect(calls).toContainEqual(queryKeys.browseChannels());
     expectInvalidPayloadReported('channel.updated', () => (capturedOptions.onChannelUpdated as (d: unknown) => void)({}));
   });
 

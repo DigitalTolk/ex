@@ -695,6 +695,9 @@ func (m *mockChannelStore) PatchChannel(_ context.Context, id string, p store.Ch
 	if p.Archived != nil {
 		ch.Archived = *p.Archived
 	}
+	if p.MakePrivate {
+		ch.Type = model.ChannelTypePrivate
+	}
 	ch.UpdatedAt = p.UpdatedAt
 	return nil
 }

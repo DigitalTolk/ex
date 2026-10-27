@@ -225,6 +225,16 @@ func (h *ChannelHandler) NameAvailable(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"available": available})
 }
 
+// MakePrivate turns a public channel private.
+func (h *ChannelHandler) MakePrivate(w http.ResponseWriter, r *http.Request) {
+	ch, err := h.channelSvc.MakePrivate(r.Context(), middleware.UserIDFromContext(r.Context()), pathParam(r, "id"))
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ch)
+}
+
 // Archive marks a channel as archived.
 func (h *ChannelHandler) Archive(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())

@@ -233,6 +233,9 @@ type ChannelPatch struct {
 	// Description "" removes it.
 	Description *string
 	Archived    *bool
+	// MakePrivate turns a public channel private, taking it out of the
+	// public listing (GSI2) the directory and channel browser read.
+	MakePrivate bool
 	UpdatedAt   time.Time
 }
 
@@ -248,6 +251,11 @@ func (s *ChannelStoreImpl) PatchChannel(ctx context.Context, id string, p Channe
 	}
 	if p.Archived != nil {
 		upd = upd.Set(expression.Name("archived"), expression.Value(*p.Archived))
+	}
+	if p.MakePrivate {
+		upd = upd.Set(expression.Name("type"), expression.Value(model.ChannelTypePrivate)).
+			Remove(expression.Name("GSI2PK")).
+			Remove(expression.Name("GSI2SK"))
 	}
 	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).Build())
 	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
