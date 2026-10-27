@@ -67,6 +67,18 @@ describe('MessageHitCard', () => {
     expect(link.getAttribute('href')).toMatch(/\/channel\/engineering/);
   });
 
+  // A fence like "```locals {" (text after the language) used to send the
+  // fallback parser into an endless loop; listing such a message crashed the
+  // whole window, and the desktop app reloaded the search into it again.
+  it('renders a hit whose code fence has text after the language', async () => {
+    const body = 'which domains?\n\n```locals {\n  allowed = ["a.example"]\n}\n```';
+    wrap(<MessageHitCard hit={buildHit({ body })} />);
+    expect(await screen.findByText('which domains?')).toBeInTheDocument();
+    const code = screen.getByTestId('message-hit-card').querySelector('pre');
+    expect(code).not.toBeNull();
+    expect(code!.textContent).toContain('allowed = ["a.example"]');
+  });
+
   it('shows "replied in" when threadRoot is set', async () => {
     wrap(
       <MessageHitCard

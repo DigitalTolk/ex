@@ -262,14 +262,14 @@ describe('DirectoriesPage', () => {
     expect(screen.getByText('No channels available')).toBeInTheDocument();
   });
 
-  it('renders page title and description', () => {
+  it('renders the page title with no subtitle', () => {
     mockBrowseChannels.mockReturnValue({ data: [], isLoading: false });
     mockUserChannels.mockReturnValue({ data: [] });
 
     renderWithProviders(<DirectoriesPage />);
 
     expect(screen.getByText('Directory')).toBeInTheDocument();
-    expect(screen.getByText(/browse channels and members/i)).toBeInTheDocument();
+    expect(screen.queryByText(/browse channels and members/i)).toBeNull();
   });
 
   it('renders channel and member tabs', () => {
@@ -295,7 +295,9 @@ describe('DirectoriesPage', () => {
     expect(window.location.pathname).toBe('/directory/channels');
   });
 
-  it('uses a two-column member grid on mobile and the dense desktop grid at larger sizes', async () => {
+  // The browser test (DirectoriesPage.layout.browser.test.tsx) checks the
+  // columns actually fill the width.
+  it('uses a two-column member grid on mobile and as many filling columns as fit at larger sizes', async () => {
     mockBrowseChannels.mockReturnValue({ data: [], isLoading: false });
     mockUserChannels.mockReturnValue({ data: [] });
     mockApiFetch.mockResolvedValue([
@@ -308,7 +310,7 @@ describe('DirectoriesPage', () => {
 
     const grid = await screen.findByTestId('members-grid');
     expect(grid).toHaveClass('grid-cols-2', 'gap-3');
-    expect(grid.className).toContain('md:grid-cols-[repeat(auto-fill,minmax(16rem,calc((100%_-_3rem)/5)))]');
+    expect(grid.className).toContain('md:grid-cols-[repeat(auto-fill,minmax(16rem,1fr))]');
   });
 
   it('renders member avatars and falls back to initials when an avatar or name is missing', async () => {
@@ -432,6 +434,8 @@ describe('DirectoriesPage', () => {
     expect(within(gone).getByTestId('directory-user-avatar').innerHTML).toContain('grayscale');
     expect(within(cards[0]!).getByTestId('directory-user-avatar').innerHTML).not.toContain('grayscale');
     expect(cards[0]).not.toHaveAttribute('data-inactive');
+    // Listed, but not counted: the summary is about people you can reach.
+    expect(screen.getByTestId('members-summary')).toHaveTextContent('2 members · 0 online');
   });
 
   it('moves an account to the end the moment it is deactivated', async () => {

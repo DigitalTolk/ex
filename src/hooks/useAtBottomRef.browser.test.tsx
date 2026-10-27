@@ -16,7 +16,7 @@ function NullRefProbe() {
   return <div data-testid="null-probe" data-at-bottom={String(atBottom.current)} />;
 }
 
-function AttachedProbe() {
+function AttachedProbe({ height = 100 }: { height?: number }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottom = useAtBottomRef(scrollRef);
   return (
@@ -24,7 +24,7 @@ function AttachedProbe() {
       <div
         ref={scrollRef}
         data-testid="scroller"
-        style={{ height: 100, overflowY: 'auto' }}
+        style={{ height, overflowY: 'auto' }}
       >
         <div style={{ height: 1000 }}>tall content</div>
       </div>
@@ -61,6 +61,57 @@ describe('useAtBottomRef (browser)', () => {
     scroller.scrollTop = scroller.scrollHeight;
     scroller.dispatchEvent(new Event('scroll'));
     await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    read.click();
+    expect(read.dataset.value).toBe('true');
+  });
+
+  // The browser moves the view itself: scroll anchoring nudges it down when
+  // content grows below (the event arrives before the ResizeObserver that
+  // follows the growth), and a viewport growing from below (the composer
+  // collapsing after a send) pulls it up while it stays at the bottom.
+  // Neither is the reader leaving.
+  it('keeps following through scrolls the reader did not make', async () => {
+    const screen = await render(<AttachedProbe />);
+    const scroller = screen.getByTestId('scroller').element() as HTMLDivElement;
+    const read = screen.getByTestId('read').element() as HTMLButtonElement;
+    const atBottom = () => {
+      read.click();
+      return read.dataset.value;
+    };
+    const scrollTo = async (top: number) => {
+      scroller.scrollTop = top;
+      scroller.dispatchEvent(new Event('scroll'));
+      await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    };
+
+    await scrollTo(scroller.scrollHeight);
+    expect(atBottom()).toBe('true');
+    // Content grew by 300px below; anchoring moved the view down by 60.
+    (scroller.firstElementChild as HTMLElement).style.height = '1300px';
+    await scrollTo(scroller.scrollTop + 60);
+    expect(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight).toBeGreaterThan(120);
+    expect(atBottom()).toBe('true');
+
+    // A real scroll up, away from the bottom, lets go…
+    await scrollTo(scroller.scrollTop - 200);
+    expect(atBottom()).toBe('false');
+    // …and a scroll down that stops short of the bottom does not rejoin.
+    await scrollTo(scroller.scrollTop + 50);
+    expect(atBottom()).toBe('false');
+  });
+
+  it('stays at the bottom when the viewport grows from below', async () => {
+    const screen = await render(<AttachedProbe height={100} />);
+    const scroller = screen.getByTestId('scroller').element() as HTMLDivElement;
+    const read = screen.getByTestId('read').element() as HTMLButtonElement;
+    scroller.scrollTop = scroller.scrollHeight;
+    scroller.dispatchEvent(new Event('scroll'));
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    const before = scroller.scrollTop;
+    await screen.rerender(<AttachedProbe height={400} />);
+    scroller.dispatchEvent(new Event('scroll'));
+    await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    expect(scroller.scrollTop).toBeLessThan(before);
     read.click();
     expect(read.dataset.value).toBe('true');
   });
