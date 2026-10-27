@@ -110,8 +110,10 @@ export function formatLongDate(input: DateInput): string {
 
 // formatLongDateTime renders a timestamp like "Mar 26th at 18:33:01" — used
 // in tooltips and any place a precise but human-readable timestamp is needed.
-export function formatLongDateTime(input: DateInput): string {
-  return format(input, "MMM do 'at' HH:mm:ss");
+// Outside the current year it carries the year, "Mar 26th, 2017 at 18:33:01",
+// so an old (e.g. imported) message never reads as this year's.
+export function formatLongDateTime(input: DateInput, now: Date = new Date()): string {
+  return format(input, isSameYear(input, now) ? "MMM do 'at' HH:mm:ss" : "MMM do, yyyy 'at' HH:mm:ss");
 }
 
 // The unit a relative time is worded in is picked on the ROUNDED amount, so
