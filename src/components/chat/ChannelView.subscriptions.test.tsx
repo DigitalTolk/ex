@@ -105,6 +105,7 @@ vi.mock('@/hooks/useChannels', async (orig) => ({
   useMuteChannel: () => ({ mutate: vi.fn(), isPending: false }),
   useArchiveChannel: () => ({ mutate: vi.fn(), isPending: false }),
   useUnarchiveChannel: () => ({ mutate: vi.fn(), isPending: false }),
+  useMakeChannelPrivate: () => ({ run: vi.fn(), isPending: false }),
   useLeaveChannel: () => ({ mutate: vi.fn(), isPending: false }),
   useUpdateChannelDescription: () => ({ mutate: vi.fn(), isPending: false }),
 }));

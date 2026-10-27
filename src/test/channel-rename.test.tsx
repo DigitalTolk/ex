@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@/components/chat/markdown/MarkdownComposer', () => ({
   MarkdownComposer: (props: { ariaLabel?: string }) => <textarea aria-label={props.ariaLabel ?? 'Message input'} />,
 }));
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -248,8 +248,9 @@ describe('renaming a channel', () => {
   it('closes on Cancel without renaming', async () => {
     renderAt('/channel/marketing');
     await openRename();
-    // The footer's Cancel (the phone header carries its own).
-    fireEvent.click(screen.getAllByRole('button', { name: 'Cancel' }).at(-1)!);
+    // The footer's Cancel, in the form (the phone top bar carries its own).
+    const form = screen.getByRole('textbox', { name: 'Name' }).closest('form')!;
+    fireEvent.click(within(form).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Name' })).not.toBeInTheDocument());
     expect(mockApiFetch).not.toHaveBeenCalledWith('/api/v1/channels/ch-m', expect.anything());
   });
