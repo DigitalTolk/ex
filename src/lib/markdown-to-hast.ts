@@ -20,7 +20,15 @@ import { USER_MENTION_RE, GROUP_MENTION_RE, CHANNEL_MENTION_RE } from './mention
 // `/path#anchor` don't render as a hashtag pill. The body regex
 // mirrors `internal/search/indexer.go` hashtagPattern.
 const HASHTAG_RE = /(^|[^\w/])#([\p{L}\p{N}_-]{2,64})/u;
-const FENCE_RE = /^```(\S+)?\s*$/;
+// A fence opens with ``` and an info string that holds no backtick — the
+// language is its first word ("```hcl {" is hcl), as on the server
+// (CommonMark) — and only a bare ``` closes it.
+const OPEN_FENCE_RE = /^```([^`]*)$/;
+const CLOSE_FENCE_RE = /^```\s*$/;
+const HEADING_RE = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
+const HR_RE = /^\s*(?:---|\*\*\*|___)\s*$/;
+const UL_ITEM_RE = /^[-*] /;
+const OL_ITEM_RE = /^\d+[.)]\s+/;
 const IMAGE_RE = /!\[([^\]]*)\]\(([^)\s]+?)(?:\s+=(\d+)x(\d+))?\)/;
 const LINK_RE = /\[([^\]]+)\]\(([^)\s]+)\)/;
 const BOLD_RE = /\*\*([^*]+)\*\*/;
@@ -221,6 +229,22 @@ function tableCell(tag: 'th' | 'td', content: string, align: string | undefined)
   return el(tag, { 'data-align': align ?? 'left' }, parseInline(content));
 }
 
+// startsBlock: line i opens a block other than a paragraph — the same tests
+// the block parsers below make, so a paragraph ends exactly where one of them
+// takes over.
+function startsBlock(lines: string[], i: number): boolean {
+  const line = lines[i];
+  return (
+    HEADING_RE.test(line) ||
+    HR_RE.test(line) ||
+    OPEN_FENCE_RE.test(line) ||
+    line.startsWith('> ') ||
+    UL_ITEM_RE.test(line) ||
+    OL_ITEM_RE.test(line) ||
+    isTableStart(lines, i)
+  );
+}
+
 // markdownToHast parses a message body into the server-shaped hast tree.
 export function markdownToHast(body: string): HastNode {
   const lines = body.split('\n');
@@ -231,7 +255,7 @@ export function markdownToHast(body: string): HastNode {
     const line = lines[i];
 
     // ATX heading: #, ##, …, ######
-    const hMatch = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    const hMatch = HEADING_RE.exec(line);
     if (hMatch) {
       blocks.push(el(`h${hMatch[1].length}`, undefined, parseInline(hMatch[2])));
       i++;
@@ -239,7 +263,7 @@ export function markdownToHast(body: string): HastNode {
     }
 
     // horizontal rule
-    if (/^\s*(?:---|\*\*\*|___)\s*$/.test(line)) {
+    if (HR_RE.test(line)) {
       blocks.push(el('hr'));
       i++;
       continue;
@@ -247,17 +271,17 @@ export function markdownToHast(body: string): HastNode {
 
     // fenced code block — raw text child; the hydrator's CodeBlock adds
     // highlighting/gutter/copy, exactly like the server-tree path.
-    const fenceMatch = FENCE_RE.exec(line);
+    const fenceMatch = OPEN_FENCE_RE.exec(line);
     if (fenceMatch) {
       const buf: string[] = [];
       let j = i + 1;
-      while (j < lines.length && !FENCE_RE.test(lines[j])) {
+      while (j < lines.length && !CLOSE_FENCE_RE.test(lines[j])) {
         buf.push(lines[j]);
         j++;
       }
       // The server always stamps data-language (empty string for a bare
       // fence) — CodeBlock maps unknown/empty to the "plain" label.
-      const lang = fenceMatch[1]?.toLowerCase() ?? '';
+      const lang = fenceMatch[1].trim().split(/\s+/)[0].toLowerCase();
       blocks.push(
         el('pre', { 'data-language': lang }, [
           el('code', undefined, [text(buf.join('\n'))]),
@@ -280,9 +304,9 @@ export function markdownToHast(body: string): HastNode {
     }
 
     // unordered list
-    if (/^[-*] /.test(line)) {
+    if (UL_ITEM_RE.test(line)) {
       const items: HastNode[] = [];
-      while (i < lines.length && /^[-*] /.test(lines[i])) {
+      while (i < lines.length && UL_ITEM_RE.test(lines[i])) {
         items.push(el('li', undefined, parseInline(lines[i].slice(2))));
         i++;
       }
@@ -291,10 +315,10 @@ export function markdownToHast(body: string): HastNode {
     }
 
     // ordered list: "1. item", "2) item", etc.
-    if (/^\d+[.)]\s+/.test(line)) {
+    if (OL_ITEM_RE.test(line)) {
       const items: HastNode[] = [];
-      while (i < lines.length && /^\d+[.)]\s+/.test(lines[i])) {
-        items.push(el('li', undefined, parseInline(lines[i].replace(/^\d+[.)]\s+/, ''))));
+      while (i < lines.length && OL_ITEM_RE.test(lines[i])) {
+        items.push(el('li', undefined, parseInline(lines[i].replace(OL_ITEM_RE, ''))));
         i++;
       }
       blocks.push(el('ol', undefined, items));
@@ -332,19 +356,15 @@ export function markdownToHast(body: string): HastNode {
       continue;
     }
 
-    // paragraph: collect consecutive non-special lines.
-    const buf: string[] = [];
-    while (
-      i < lines.length &&
-      lines[i].trim() !== '' &&
-      !lines[i].startsWith('```') &&
-      !lines[i].startsWith('> ') &&
-      !/^[-*] /.test(lines[i]) &&
-      !/^\d+[.)]\s+/.test(lines[i]) &&
-      !/^#{1,6}\s+/.test(lines[i]) &&
-      !/^\s*(?:---|\*\*\*|___)\s*$/.test(lines[i]) &&
-      !isTableStart(lines, i)
-    ) {
+    // paragraph: no block above took this line, so it starts one, which runs
+    // on until a line that does. Its first line is taken unconditionally —
+    // that is what keeps the parse moving. A line that only looked like a
+    // block start ("```locals {" before the info-string rule, "# " with no
+    // title) used to end the paragraph before it took anything; the loop
+    // then pushed empty paragraphs until the tab ran out of memory.
+    const buf: string[] = [line];
+    i++;
+    while (i < lines.length && lines[i].trim() !== '' && !startsBlock(lines, i)) {
       buf.push(lines[i]);
       i++;
     }

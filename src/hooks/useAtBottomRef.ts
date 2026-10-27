@@ -5,9 +5,16 @@ import { useEffect, useRef, type RefObject } from 'react';
 const AT_BOTTOM_THRESHOLD_PX = 120;
 
 // useAtBottomRef returns a ref whose `.current` is true while the user
-// is within ~120px of the bottom of the given scroll container. The
-// value is updated on every scroll event so callers can read it
-// synchronously when deciding whether to follow new content down.
+// follows the bottom of the given scroll container, so callers can read
+// it synchronously when deciding whether to follow new content down.
+//
+// Only the reader leaves the bottom: an upward scroll that ends more than
+// the slack away. Not every scroll event is theirs — when content grows at
+// the bottom the browser's scroll anchoring moves the view down a little,
+// and that event arrives before the ResizeObserver that would follow the
+// growth; read as a position it said "not at bottom" and the newest reply
+// (an image that had just loaded) was left below the fold. Coming back
+// within the slack, by any scroll, rejoins the bottom.
 //
 // Initialized to `true` so the very first commit (before the user has
 // had a chance to scroll) treats the user as "at bottom" — matching
@@ -19,11 +26,15 @@ export function useAtBottomRef(
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    const distance = () => el.scrollHeight - el.scrollTop - el.clientHeight;
+    atBottomRef.current = distance() < AT_BOTTOM_THRESHOLD_PX;
+    let lastTop = el.scrollTop;
     const update = () => {
-      atBottomRef.current =
-        el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_THRESHOLD_PX;
+      const top = el.scrollTop;
+      if (distance() < AT_BOTTOM_THRESHOLD_PX) atBottomRef.current = true;
+      else if (top < lastTop) atBottomRef.current = false;
+      lastTop = top;
     };
-    update();
     el.addEventListener('scroll', update, { passive: true });
     return () => el.removeEventListener('scroll', update);
   }, [scrollRef]);

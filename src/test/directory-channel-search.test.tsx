@@ -18,6 +18,12 @@ vi.mock('@/hooks/useChannels', () => ({
       { id: 'ch-1', name: 'general', slug: 'general', type: 'public', description: 'everyone' },
       { id: 'ch-2', name: 'design', slug: 'design', type: 'public', description: 'pixels' },
       { id: 'ch-3', name: 'random', slug: 'random', type: 'public', description: 'off-topic' },
+      // Newest first, as the server lists them: incident rooms ahead of the
+      // channel called incident.
+      { id: 'ch-4', name: 'inc-1042', slug: 'inc-1042', type: 'public', description: 'Incident: payments down' },
+      { id: 'ch-5', name: 'incidents-2025', slug: 'incidents-2025', type: 'public', description: '' },
+      { id: 'ch-6', name: 'inc-1041', slug: 'inc-1041', type: 'public', description: 'Incident: login errors' },
+      { id: 'ch-7', name: 'incident', slug: 'incident', type: 'public', description: 'Major incidents' },
     ],
     isLoading: false,
   }),
@@ -81,6 +87,13 @@ describe('DirectoriesPage — channel search', () => {
     fireEvent.change(screen.getByLabelText('Search channels'), { target: { value: 'topic' } });
     expect(screen.getByText('random')).toBeInTheDocument();
     expect(screen.queryByText('general')).toBeNull();
+  });
+
+  it('lists the channel of that very name first, then names that start with it, then description matches', () => {
+    renderPage();
+    fireEvent.change(screen.getByLabelText('Search channels'), { target: { value: 'incident' } });
+    const names = screen.getAllByText(/^inc/).map((el) => el.textContent);
+    expect(names).toEqual(['incident', 'incidents-2025', 'inc-1042', 'inc-1041']);
   });
 
   it('shows no-match copy when nothing matches', () => {

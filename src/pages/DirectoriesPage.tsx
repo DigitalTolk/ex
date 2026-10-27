@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
-import { fuzzyMatch } from '@/lib/fuzzy';
+import { matchRank } from '@/lib/fuzzy';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -49,7 +49,7 @@ export default function DirectoriesPage() {
   const isAdmin = user?.systemRole === 'admin';
 
   return (
-    <PageContainer title="Directory" description="Browse channels and members in your workspace">
+    <PageContainer title="Directory">
       <div role="tablist" aria-label="Directory sections" className="flex gap-1 border-b">
         <button
           role="tab"
@@ -91,9 +91,14 @@ function ChannelsTab() {
 
   const joinedIds = new Set(userChannels?.map((c) => c.channelID) ?? []);
 
+  // Best matches first (the channel of that name before ones whose
+  // description mentions it); equal matches keep their order.
   const visible = (allChannels ?? [])
     .filter((ch) => ch.type === 'public')
-    .filter((ch) => fuzzyMatch(query, ch.name, ch.description ?? ''));
+    .map((ch) => ({ ch, rank: matchRank(query, ch.name, ch.description ?? '') }))
+    .filter(({ rank }) => rank >= 0)
+    .sort((a, b) => a.rank - b.rank)
+    .map(({ ch }) => ch);
 
   function handleJoin(channelId: string, channelSlug: string) {
     // Routes are keyed by slug (ChannelView resolves the slug back to a
@@ -215,12 +220,15 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
     openDM(userId);
   }
 
-  const onlineCount = users.reduce((n, u) => (isOnline(u.id) ? n + 1 : n), 0);
+  // The summary counts the people you can reach: deactivated accounts are
+  // listed (last) but not counted.
+  const activeUsers = users.filter((u) => !isDeactivated(u));
+  const onlineCount = activeUsers.reduce((n, u) => (isOnline(u.id) ? n + 1 : n), 0);
   // Deactivated accounts sit at the end, so the people you can reach come
   // first — re-sorted live as a user.updated flips someone's status.
   const listed = deactivatedLast(users);
-  const memberGridClassName =
-    'grid grid-cols-2 gap-3 md:grid-cols-[repeat(auto-fill,minmax(16rem,calc((100%_-_3rem)/5)))] md:justify-start';
+  // As many 16rem-or-wider columns as fit, stretched to fill the row exactly.
+  const memberGridClassName = 'grid grid-cols-2 gap-3 md:grid-cols-[repeat(auto-fill,minmax(16rem,1fr))]';
 
   return (
     <>
@@ -252,7 +260,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
 
       {!isLoading && users.length > 0 && (
         <p className="mb-3 text-xs text-muted-foreground" data-testid="members-summary">
-          {users.length} member{users.length !== 1 ? 's' : ''} · {onlineCount} online
+          {activeUsers.length} member{activeUsers.length !== 1 ? 's' : ''} · {onlineCount} online
         </p>
       )}
 
@@ -270,7 +278,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
               key={u.id}
               data-testid="directory-user-card"
               data-inactive={inactive || undefined}
-              className="group items-start overflow-hidden rounded-lg border bg-card transition-colors hover:bg-muted/40"
+              className="group flex flex-col overflow-hidden rounded-lg border bg-card transition-colors hover:bg-muted/40"
             >
               <div className="relative aspect-square w-full bg-muted" data-testid="directory-user-avatar">
                 <Avatar
@@ -291,7 +299,9 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                   {capitalize(u.systemRole)}
                 </Badge>
               </div>
-              <div className="space-y-2 p-3">
+              {/* The actions sit at the bottom (mt-auto), level across a row
+                  of cards however much each one has to show. */}
+              <div className="flex flex-1 flex-col gap-2 p-3">
                 <div className="flex min-w-0 items-center gap-1.5">
                   <p className="font-medium truncate">{u.displayName}</p>
                   <UserStatusIndicator status={u.userStatus} />
@@ -307,8 +317,8 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                     {u.email}
                   </a>
                 </p>
-                <div className="flex flex-wrap items-center gap-1">
-                  {inactive && (
+                {inactive && (
+                  <div className="flex flex-wrap items-center gap-1">
                     <Badge
                       variant="destructive"
                       data-testid={`status-pill-${u.id}`}
@@ -316,8 +326,8 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                     >
                       Inactive
                     </Badge>
-                  )}
-                </div>
+                  </div>
+                )}
                 <dl className="space-y-2 text-xs text-muted-foreground md:space-y-1">
                   {u.phone && (
                     <div className="md:flex md:justify-between md:gap-2" data-testid="directory-meta-phone">
@@ -359,7 +369,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                     </div>
                   )}
                 </dl>
-                <div className="flex items-center justify-between gap-2" data-testid="directory-card-actions">
+                <div className="mt-auto flex items-center justify-between gap-2" data-testid="directory-card-actions">
                   <Button
                     size="sm"
                     variant="outline"

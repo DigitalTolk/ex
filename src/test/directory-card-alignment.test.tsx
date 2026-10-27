@@ -45,7 +45,9 @@ import DirectoriesPage from '@/pages/DirectoriesPage';
 beforeEach(() => vi.clearAllMocks());
 
 describe('DirectoriesPage — card alignment', () => {
-  it('the user card is items-start so cards align top regardless of action count', async () => {
+  // The geometry itself (actions level across a row of cards) is checked in
+  // a real layout by DirectoriesPage.layout.browser.test.tsx.
+  it('the user card is a column with its actions pinned to the bottom', async () => {
     mockApiFetch.mockResolvedValue([
       { id: 'u-1', email: 'a@x.com', displayName: 'Alice', systemRole: 'member', status: 'active' },
     ]);
@@ -61,12 +63,11 @@ describe('DirectoriesPage — card alignment', () => {
     await waitFor(() => screen.getByText('Alice'));
 
     const card = screen.getAllByTestId('directory-user-card')[0];
-    // Pin the alignment class so a regression that re-introduces
-    // items-center (which made the Message button float) fails the test.
-    expect(card.className).toContain('items-start');
-    // Sanity: the actions container exists and the Message button is its
-    // first interactive child (so it ends up at the top of the column).
+    expect(card).toHaveClass('flex', 'flex-col');
+    // The actions container takes the leftover height's top margin, so the
+    // Message button sits at the card's bottom however little is above it.
     const actions = screen.getAllByTestId('directory-card-actions')[0];
+    expect(actions).toHaveClass('mt-auto');
     const buttons = actions.querySelectorAll('button, a');
     expect(buttons.length).toBeGreaterThan(0);
     expect(buttons[0].textContent || '').toMatch(/Message/);

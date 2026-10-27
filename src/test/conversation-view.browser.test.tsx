@@ -116,6 +116,8 @@ interface FetchPlan {
   messagesByConv?: Record<string, unknown[]>;
   pinned?: unknown[];
   files?: unknown[];
+  // Replies served for a thread root id (GET …/messages/:id/thread).
+  threadReplies?: Record<string, unknown[]>;
   attachments?: Record<string, unknown>;
   // When true the attachment-batch GET never resolves — pins the
   // "Loading message editor…" placeholder while edit attachments resolve.
@@ -201,7 +203,7 @@ function installFetchStub(plan: FetchPlan = {}): () => void {
 
     // Conversation endpoints — most specific first.
     const threadMatch = url.match(/\/api\/v1\/conversations\/([^/?]+)\/messages\/([^/?]+)\/thread/);
-    if (threadMatch) return apiJSON([]);
+    if (threadMatch) return apiJSON(plan.threadReplies?.[decodeURIComponent(threadMatch[2])] ?? []);
     const singleMsg = url.match(/\/api\/v1\/conversations\/([^/?]+)\/messages\/([^/?]+)$/);
     if (singleMsg && method === 'PATCH') {
       let body = '';
@@ -232,16 +234,17 @@ function installFetchStub(plan: FetchPlan = {}): () => void {
     if (filesMatch) return apiJSON(plan.files ?? []);
     const msgMatch = url.match(/\/api\/v1\/conversations\/([^/?]+)\/messages(\?|$)/);
     if (msgMatch && method === 'POST') {
-      let sentBody = '';
-      try { sentBody = (JSON.parse(String(init?.body ?? '{}')) as { body?: string }).body ?? ''; } catch { /* ignore */ }
+      let sent: { body?: string; attachmentIDs?: string[]; parentMessageID?: string } = {};
+      try { sent = JSON.parse(String(init?.body ?? '{}')) as typeof sent; } catch { /* ignore */ }
       return apiJSON({
         id: 'm-sent-1',
         parentID: decodeURIComponent(msgMatch[1]),
         parentType: 'conversation',
         authorID: ME_ID,
-        body: sentBody,
+        body: sent.body ?? '',
         createdAt: '2026-05-01T12:00:00Z',
-        attachmentIDs: [],
+        attachmentIDs: sent.attachmentIDs ?? [],
+        parentMessageID: sent.parentMessageID || undefined,
       });
     }
     if (msgMatch) {
@@ -353,6 +356,42 @@ function fileDragEvent(type: string, files: File[]) {
   });
   return event;
 }
+
+// An uploaded image the attachment endpoints serve back, with a real
+// (decodable) thumbnail so its row grows the way a real one does.
+function uploadedImage(): Record<string, unknown> {
+  const thumb = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480"><rect width="640" height="480" fill="#888"/></svg>')}`;
+  return {
+    id: 'att-up-1',
+    filename: 'drop.png',
+    contentType: 'image/png',
+    size: 1000,
+    url: thumb,
+    thumbnailURL: thumb,
+    squareThumbnailURL: thumb,
+    width: 640,
+    height: 480,
+    createdBy: ME_ID,
+    createdAt: '2026-05-01T12:00:00Z',
+  };
+}
+
+// Drops an image on `target`, sends it once the upload is ready, and waits
+// for the sent message's thumbnail to finish loading inside `scroller`.
+async function sendDroppedImage(screen: ReturnType<typeof render>, target: HTMLElement, scroller: HTMLElement) {
+  const file = new File([new Uint8Array(200)], 'drop.png', { type: 'image/png' });
+  target.dispatchEvent(fileDragEvent('dragenter', [file]));
+  target.dispatchEvent(fileDragEvent('drop', [file]));
+  const send = screen.getByRole('button', { name: 'Send message' }).last();
+  await expect.element(send).toBeEnabled();
+  await send.click();
+  await vi.waitFor(() => {
+    const image = scroller.querySelector('[data-message-id="m-sent-1"] [data-testid="message-image-thumb"] img') as HTMLImageElement | null;
+    expect(image?.complete && image.naturalWidth > 0).toBe(true);
+  });
+}
+
+const distanceFromBottom = (scroller: HTMLElement) => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
 
 beforeEach(() => {
   authState.user = meUser();
@@ -580,6 +619,51 @@ describe('conversation route (full route, real browser)', () => {
     await vi.waitFor(() => {
       expect(document.body.textContent ?? '').toContain('urgent');
     }, { timeout: 15000 });
+  });
+
+  it('keeps a message sent with an image in view at the bottom', async () => {
+    const messages = Array.from({ length: 40 }, (_, i) =>
+      aliceMessage(DM_ID, {
+        id: `m-${String(i).padStart(3, '0')}`,
+        body: `line ${i}`,
+        createdAt: new Date(Date.UTC(2026, 4, 1, 9, i)).toISOString(),
+      }),
+    ).reverse();
+    teardown = installFetchStub({ messagesByConv: { [DM_ID]: messages }, attachments: { 'att-up-1': uploadedImage() } });
+    const screen = await renderRoute(`/conversation/${DM_ID}`);
+    await expect.element(screen.getByText('line 39')).toBeVisible();
+    const scroller = document.querySelector('[data-testid="virtuoso-scroller"]') as HTMLElement;
+
+    await sendDroppedImage(screen, screen.getByText('line 39').element() as HTMLElement, scroller);
+    await expect.poll(() => distanceFromBottom(scroller)).toBeLessThan(4);
+  });
+
+  // A reply with an image grows once its thumbnail loads. The browser's
+  // scroll anchoring nudges the view as it grows, and that scroll arrived
+  // before the growth was followed — read as the reader scrolling away, it
+  // left the image below the fold (seen at phone width).
+  it('keeps a thread reply sent with an image in view at the bottom', async () => {
+    const root = aliceMessage(DM_ID, { id: 'm-root', body: 'thread root', replyCount: 30 });
+    teardown = installFetchStub({
+      messagesByConv: { [DM_ID]: [root] },
+      threadReplies: {
+        'm-root': Array.from({ length: 30 }, (_, i) =>
+          aliceMessage(DM_ID, {
+            id: `r-${String(i).padStart(3, '0')}`,
+            parentMessageID: 'm-root',
+            body: `reply ${i}`,
+            createdAt: new Date(Date.UTC(2026, 4, 1, 11, i + 1)).toISOString(),
+          }),
+        ),
+      },
+      attachments: { 'att-up-1': uploadedImage() },
+    });
+    const screen = await renderRoute(`/conversation/${DM_ID}?thread=m-root`);
+    await expect.element(screen.getByText('reply 29')).toBeVisible();
+    const scroller = (screen.getByText('reply 29').element() as HTMLElement).closest('.overflow-y-auto') as HTMLElement;
+
+    await sendDroppedImage(screen, screen.getByText('reply 29').element() as HTMLElement, scroller);
+    await expect.poll(() => distanceFromBottom(scroller)).toBeLessThan(4);
   });
 
   it('routes dropped files into the composer upload pipeline', async () => {

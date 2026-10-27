@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeFuzzy, fuzzyMatch } from './fuzzy';
+import { normalizeFuzzy, fuzzyMatch, matchRank } from './fuzzy';
 
 describe('normalizeFuzzy', () => {
   it('collapses runs of 3+ identical characters', () => {
@@ -68,3 +68,21 @@ describe('fuzzyMatch', () => {
     expect(fuzzyMatch('alice', 'Alice', '')).toBe(true);
   });
 });
+
+describe('matchRank', () => {
+  it('ranks the name itself, then prefixes, substrings, typos and other fields', () => {
+    expect(matchRank('incident', 'incident')).toBe(0);
+    expect(matchRank('Incident ', 'INCIDENT')).toBe(0);
+    expect(matchRank('incident', 'incidents-2025')).toBe(1);
+    expect(matchRank('incident', 'major-incident')).toBe(2);
+    expect(matchRank('incident', 'incidnet')).toBe(3);
+    expect(matchRank('incident', 'inc-1042', 'Incident: payments down')).toBe(4);
+    expect(matchRank('incident', 'random', 'off-topic')).toBe(-1);
+  });
+
+  it('ranks everything alike for an empty query', () => {
+    expect(matchRank('', 'anything')).toBe(0);
+    expect(matchRank('  ', 'anything', 'else')).toBe(0);
+  });
+});
+

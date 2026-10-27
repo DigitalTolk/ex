@@ -78,3 +78,20 @@ export function fuzzyMatch(query: string, ...fields: string[]): boolean {
   }
   return false;
 }
+
+// matchRank orders what a query matches, best first: the name itself (0),
+// a name starting with it (1), a name containing it (2), a name a typo away
+// (3), then a match only in the other fields (4); -1 when nothing matches.
+// "incident" puts ~incident before ~inc-1234 whose description mentions an
+// incident. An empty query ranks everything 0, keeping the list's order.
+export function matchRank(query: string, name: string, ...others: string[]): number {
+  const q = normalizeFuzzy(query.trim().toLowerCase());
+  if (q === '') return 0;
+  const n = normalizeFuzzy(name.toLowerCase());
+  if (n === q) return 0;
+  if (n.startsWith(q)) return 1;
+  if (n.includes(q)) return 2;
+  if (fuzzyMatch(query, name)) return 3;
+  return fuzzyMatch(query, ...others) ? 4 : -1;
+}
+
