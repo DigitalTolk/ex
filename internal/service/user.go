@@ -936,6 +936,11 @@ func (s *UserService) applyStatus(ctx context.Context, user *model.User, deactiv
 	if s.cache != nil {
 		_ = s.cache.Delete(ctx, "user:"+user.ID)
 	}
+	// Every instance's notification audience reloads the account, so the
+	// next message alerts (or stops alerting) it straight away.
+	if s.audience != nil {
+		s.audience.UserAudienceChanged(ctx, user.ID)
+	}
 	s.resolveAvatar(ctx, user)
 
 	var failed []error

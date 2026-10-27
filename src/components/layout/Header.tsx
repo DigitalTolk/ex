@@ -1,5 +1,5 @@
 import { memo, useLayoutEffect, useRef, useState } from 'react';
-import { Users, ChevronDown, ChevronLeft, LogOut, Archive, ArchiveRestore, Pencil, Bell, BellOff, Pin, Paperclip, SlidersHorizontal, Lock } from 'lucide-react';
+import { Users, ChevronDown, ChevronLeft, LogOut, Archive, ArchiveRestore, Pencil, PenLine, Bell, BellOff, Pin, Paperclip, SlidersHorizontal, Lock } from 'lucide-react';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
@@ -40,12 +40,16 @@ interface HeaderProps {
   // group conversations where no single avatar represents the room.
   showAvatar?: boolean;
   userStatus?: UserStatus;
+  // A DM with a deactivated account: marked as inactive by the title.
+  inactive?: boolean;
   userId?: string;
   currentUserId?: string;
   onMembersClick?: () => void;
   channelId?: string;
   canEdit?: boolean;
   onDescriptionSave?: (desc: string) => void;
+  // Opens the rename dialog; absent where the channel can't be renamed.
+  onRename?: () => void;
   canArchive?: boolean;
   onArchive?: () => void;
   // An archived channel offers Unarchive in place of Archive.
@@ -76,11 +80,13 @@ export const Header = memo(function Header({
   avatarOnline,
   showAvatar,
   userStatus,
+  inactive,
   userId,
   currentUserId,
   onMembersClick,
   canEdit,
   onDescriptionSave,
+  onRename,
   canArchive,
   onArchive,
   canUnarchive,
@@ -152,6 +158,11 @@ export const Header = memo(function Header({
     setIsEditingDesc(false);
   }
 
+  function renameChannel() {
+    setMobileChannelMenuOpen(false);
+    onRename?.();
+  }
+
   function cancelDescriptionEdit() {
     setIsEditingDesc(false);
   }
@@ -205,8 +216,12 @@ export const Header = memo(function Header({
         {channel ? (
           <div className="flex min-w-0 flex-1 items-center gap-2" data-testid="channel-title-stack">
             <DropdownMenu modal={false}>
+              {/* shrink-0: the description beside it takes what the name
+                  leaves. Both shrinking, flexbox squeezed them in proportion
+                  to their length, and a long description left "in…" of the
+                  name. max-w-full still truncates a name too long alone. */}
               <DropdownMenuTrigger
-                className="-ml-1 flex min-w-0 max-w-full items-center gap-1 rounded-md px-1 hover:bg-muted/50"
+                className="-ml-1 flex min-w-0 max-w-full shrink-0 items-center gap-1 rounded-md px-1 hover:bg-muted/50"
                 onClick={() => {
                   if (isMobile) setMobileChannelMenuOpen((open) => !open);
                 }}
@@ -223,6 +238,11 @@ export const Header = memo(function Header({
                     onClick={editDescription}
                   >
                     <Pencil className="mr-2 h-4 w-4" /> Edit description
+                  </DropdownMenuItem>
+                )}
+                {onRename && (
+                  <DropdownMenuItem onClick={renameChannel}>
+                    <PenLine className="mr-2 h-4 w-4" /> Rename channel
                   </DropdownMenuItem>
                 )}
                 {onToggleMute && (
@@ -306,6 +326,9 @@ export const Header = memo(function Header({
           <div className="flex min-w-0 items-center gap-2">
             {userId ? (
               <div className="min-w-0">
+                {/* max-w-full: an inline box is never narrower than what's
+                    in it, so a long name ran past the header instead of
+                    truncating. */}
                 <UserHoverCard
                   userId={userId}
                   displayName={displayTitle}
@@ -313,6 +336,7 @@ export const Header = memo(function Header({
                   userStatus={userStatus}
                   online={avatarOnline}
                   currentUserId={currentUserId}
+                  triggerClassName="inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1 align-middle"
                 >
                   <span className="inline-flex min-w-0 items-center gap-2">
                     {showAvatar && (
@@ -325,6 +349,11 @@ export const Header = memo(function Header({
                       />
                     )}
                     <h1 className="min-w-0 truncate text-lg font-semibold">{displayTitle}</h1>
+                    {inactive && (
+                      <Badge variant="destructive" data-testid="header-status-inactive">
+                        Inactive
+                      </Badge>
+                    )}
                   </span>
                 </UserHoverCard>
                 {subtitle && (
@@ -350,8 +379,12 @@ export const Header = memo(function Header({
                   <div className="flex min-w-0 items-center gap-1.5">
                     {onConvertToChannel ? (
                       <DropdownMenu modal={false}>
+                        {/* No max-w-full: in this content-sized row, 100% is
+                            the trigger's own width less its -ml-1, which cut
+                            the last letters off every group title. min-w-0
+                            still lets it shrink when the title doesn't fit. */}
                         <DropdownMenuTrigger
-                          className="-ml-1 flex min-w-0 max-w-full items-center gap-1 rounded-md px-1 hover:bg-muted/50"
+                          className="-ml-1 flex min-w-0 items-center gap-1 rounded-md px-1 hover:bg-muted/50"
                           onClick={() => {
                             if (isMobile) setMobileChannelMenuOpen((open) => !open);
                           }}
@@ -484,6 +517,15 @@ export const Header = memo(function Header({
               onClick={editDescription}
             >
               <Pencil className="mr-2 h-4 w-4" /> Edit description
+            </button>
+          )}
+          {onRename && (
+            <button
+              type="button"
+              className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-muted"
+              onClick={renameChannel}
+            >
+              <PenLine className="mr-2 h-4 w-4" /> Rename channel
             </button>
           )}
           {onToggleMute && (

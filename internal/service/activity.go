@@ -63,6 +63,9 @@ type ActivityService struct {
 	channels  ChannelSlugResolver
 	members   ParentMemberLister
 	mentions  MentionResolver
+	// deactivated skips reaction hints for a deactivated author: nobody
+	// reads that stream any more.
+	deactivated DeactivatedAccounts
 }
 
 // NewActivityService builds an ActivityService.
@@ -83,12 +86,17 @@ func (s *ActivityService) SetMemberLister(m ParentMemberLister) { s.members = m 
 // their current names. Optional — without it mentions read as typed.
 func (s *ActivityService) SetMentionResolver(r MentionResolver) { s.mentions = r }
 
+// SetDeactivatedAccounts wires the check that keeps reaction hints out of a
+// deactivated author's stream. Optional — without it every author gets them.
+func (s *ActivityService) SetDeactivatedAccounts(d DeactivatedAccounts) { s.deactivated = d }
+
 // RecordReaction adds a "someone reacted to your message" hint to the message
 // author's activity stream. No-op when the reactor is the author themselves, the
 // message was posted by a webhook or an agent (a machine has no stream to read),
-// or there is no author. Best-effort: failures are logged, never propagated to
-// the reaction write that triggered them. Slug resolution + preview building run
-// on a detached goroutine, off the reaction request path.
+// the author's account is deactivated, or there is no author. Best-effort:
+// failures are logged, never propagated to the reaction write that triggered
+// them. The account check, slug resolution and preview building run on a
+// detached goroutine, off the reaction request path.
 func (s *ActivityService) RecordReaction(ctx context.Context, msg *model.Message, parentType, actorID, emoji string) {
 	if msg == nil || msg.AuthorID == "" || msg.AuthorID == actorID || msg.WebhookUsername != "" || msg.AgentRunID != "" || s.store == nil {
 		return
@@ -99,6 +107,9 @@ func (s *ActivityService) RecordReaction(ctx context.Context, msg *model.Message
 	safe.Go(func() {
 		bg, cancel := detachedContext(ctx)
 		defer cancel()
+		if s.authorDeactivated(bg, author) {
+			return
+		}
 		item := &model.ActivityItem{
 			ID:              store.NewID(),
 			Type:            model.ActivityReaction,
@@ -114,6 +125,16 @@ func (s *ActivityService) RecordReaction(ctx context.Context, msg *model.Message
 		}
 		s.addMany(bg, []store.ActivityAdd{{UserID: author, Item: item}})
 	})
+}
+
+// authorDeactivated reports whether the author's account is deactivated. A
+// failed check reads as active: a stray hint beats a missing one.
+func (s *ActivityService) authorDeactivated(ctx context.Context, authorID string) bool {
+	if s.deactivated == nil {
+		return false
+	}
+	off, err := s.deactivated.DeactivatedAmong(ctx, []string{authorID})
+	return err == nil && off[authorID]
 }
 
 // resolveChannelSlug returns the channel's slug for a channel-parent reaction, or

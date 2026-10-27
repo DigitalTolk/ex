@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -80,8 +81,31 @@ func (s *dataChannelStore) GetChannelBySlug(_ context.Context, slug string) (*mo
 	}
 	return nil, store.ErrNotFound
 }
-func (s *dataChannelStore) UpdateChannel(_ context.Context, ch *model.Channel) error {
-	s.channels[ch.ID] = ch
+func (s *dataChannelStore) PatchChannel(_ context.Context, id string, p store.ChannelPatch) error {
+	ch, ok := s.channels[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	if p.Description != nil {
+		ch.Description = *p.Description
+	}
+	if p.Archived != nil {
+		ch.Archived = *p.Archived
+	}
+	ch.UpdatedAt = p.UpdatedAt
+	return nil
+}
+func (s *dataChannelStore) RenameChannel(_ context.Context, id, oldSlug, name, slug string, at time.Time) error {
+	ch, ok := s.channels[id]
+	if !ok || ch.Slug != oldSlug {
+		return store.ErrNotFound
+	}
+	for _, other := range s.channels {
+		if other.ID != id && other.Slug == slug {
+			return store.ErrAlreadyExists
+		}
+	}
+	ch.Name, ch.Slug, ch.UpdatedAt = name, slug, at
 	return nil
 }
 func (s *dataChannelStore) ListPublicChannels(_ context.Context, _ int, _ string) ([]*model.Channel, string, error) {
@@ -2283,5 +2307,100 @@ func TestIsDuplicateError(t *testing.T) {
 	}
 	if isDuplicate(errors.New("some unrelated failure")) {
 		t.Error("unrelated error should not be a duplicate error")
+	}
+}
+
+// The create and rename dialogs ask whether a name is free while it's typed.
+func TestChannelHandlerFull_NameAvailable(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.channels.channels["ch-s"] = &model.Channel{ID: "ch-s", Name: "sales", Slug: "sales"}
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.NameAvailable))
+	ask := func(user *model.User, name, channel string) (int, string) {
+		url := "/api/v1/channel-names/" + name
+		if channel != "" {
+			url += "?channel=" + channel
+		}
+		req := httptest.NewRequest(http.MethodGet, url, nil)
+		req.SetPathValue("name", name)
+		req.Header.Set("Authorization", "Bearer "+makeTokenForUser(env.jwtMgr, user))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code, strings.TrimSpace(rec.Body.String())
+	}
+	member := &model.User{ID: "u-m", Email: "m@x.se", SystemRole: model.SystemRoleMember}
+
+	for _, c := range []struct {
+		name, channel string
+		want          string
+	}{
+		{"growth", "", `{"available":true}`},
+		{"sales", "", `{"available":false}`},
+		{"sales", "ch-s", `{"available":true}`},
+	} {
+		if code, body := ask(member, c.name, c.channel); code != http.StatusOK || body != c.want {
+			t.Errorf("%s (channel %q) = %d %s, want 200 %s", c.name, c.channel, code, body, c.want)
+		}
+	}
+	if code, _ := ask(member, "Not%20A%20Slug", ""); code != http.StatusBadRequest {
+		t.Errorf("an invalid name = %d, want 400", code)
+	}
+	guest := &model.User{ID: "u-g", Email: "g@x.se", SystemRole: model.SystemRoleGuest}
+	if code, _ := ask(guest, "sales", ""); code != http.StatusForbidden {
+		t.Errorf("a guest = %d, want 403", code)
+	}
+}
+
+// pagingChannelStore pages public channels like the real store: limit rows
+// per call, a cursor to the next page.
+type pagingChannelStore struct {
+	*dataChannelStore
+	order []string
+}
+
+func (p *pagingChannelStore) ListPublicChannels(_ context.Context, limit int, cursor string) ([]*model.Channel, string, error) {
+	start := 0
+	if cursor != "" {
+		start, _ = strconv.Atoi(cursor)
+	}
+	end := min(start+limit, len(p.order))
+	page := make([]*model.Channel, 0, end-start)
+	for _, id := range p.order[start:end] {
+		page = append(page, p.channels[id])
+	}
+	next := ""
+	if end < len(p.order) {
+		next = strconv.Itoa(end)
+	}
+	return page, next, nil
+}
+
+// The directory lists every public channel. It used to get one page of 50,
+// newest first, with the next cursor dropped — imported channels, which keep
+// their original (older) dates, were never listed though search found them.
+func TestChannelHandler_BrowsePublicListsEveryChannel(t *testing.T) {
+	channels := &pagingChannelStore{dataChannelStore: newDataChannelStore()}
+	for i := range listAllPageSize + 20 {
+		ch := &model.Channel{ID: fmt.Sprintf("ch-%04d", i), Name: fmt.Sprintf("c%d", i), Slug: fmt.Sprintf("c%d", i), Type: model.ChannelTypePublic}
+		channels.channels[ch.ID] = ch
+		channels.order = append(channels.order, ch.ID)
+	}
+	channelSvc := service.NewChannelService(channels, newDataMembershipStore(), nil, newDataMessageStore(), &mockCache{}, &mockBrokerForHandler{}, nil)
+	h := NewChannelHandler(channelSvc, nil)
+	jwtMgr := auth.NewJWTManager("test-browse-all", 15*time.Minute, 720*time.Hour)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.BrowsePublic))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/browse", nil)
+	req.Header.Set("Authorization", "Bearer "+makeTokenForUser(jwtMgr, &model.User{ID: "u-1", Email: "u@x.se", SystemRole: model.SystemRoleMember}))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var got []model.Channel
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got) != listAllPageSize+20 {
+		t.Fatalf("channels = %d, want all %d", len(got), listAllPageSize+20)
 	}
 }

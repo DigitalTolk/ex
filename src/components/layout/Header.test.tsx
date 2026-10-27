@@ -293,6 +293,18 @@ describe('Header', () => {
     expect(onNotificationPrefsClick).toHaveBeenCalledTimes(1);
   });
 
+  it('offers renaming from the channel menu on a phone', async () => {
+    setMobileMatch(true);
+    const user = userEvent.setup();
+    const onRename = vi.fn();
+    renderHeaderWithProviders(<Header channel={makeChannel()} canEdit onRename={onRename} />);
+    await user.click(screen.getByText('general').closest('button')!);
+    const menu = within(document.getElementById('mobile-channel-menu')!);
+    await user.click(menu.getByText('Rename channel'));
+    expect(onRename).toHaveBeenCalledTimes(1);
+    expect(document.getElementById('mobile-channel-menu')).toBeNull();
+  });
+
   // A group message's title opens a menu to make it a private channel.
   it('offers to make a group a private channel from its title', async () => {
     const user = userEvent.setup();

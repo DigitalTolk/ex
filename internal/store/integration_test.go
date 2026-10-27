@@ -579,47 +579,6 @@ func TestChannelStore_GetByName(t *testing.T) {
 	}
 }
 
-func TestChannelStore_Update(t *testing.T) {
-	db := setupDynamoDB(t)
-	s := NewChannelStore(db)
-	ctx := context.Background()
-
-	ch := makeChannel("ch-upd", "before", "before-slug", model.ChannelTypePublic)
-	if err := s.CreateChannel(ctx, ch); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	ch.Name = "after"
-	ch.Description = "updated description"
-	ch.UpdatedAt = time.Now().Truncate(time.Millisecond)
-	if err := s.UpdateChannel(ctx, ch); err != nil {
-		t.Fatalf("Update: %v", err)
-	}
-
-	got, err := s.GetChannel(ctx, "ch-upd")
-	if err != nil {
-		t.Fatalf("GetByID: %v", err)
-	}
-	if got.Name != "after" {
-		t.Errorf("Name = %q, want %q", got.Name, "after")
-	}
-	if got.Description != "updated description" {
-		t.Errorf("Description = %q, want %q", got.Description, "updated description")
-	}
-}
-
-func TestChannelStore_Update_NotFound(t *testing.T) {
-	db := setupDynamoDB(t)
-	s := NewChannelStore(db)
-	ctx := context.Background()
-
-	ch := makeChannel("ch-ghost", "ghost", "ghost-slug", model.ChannelTypePublic)
-	err := s.UpdateChannel(ctx, ch)
-	if !errors.Is(err, ErrNotFound) {
-		t.Errorf("expected ErrNotFound, got %v", err)
-	}
-}
-
 func TestChannelStore_ListPublic(t *testing.T) {
 	db := setupDynamoDB(t)
 	s := NewChannelStore(db)

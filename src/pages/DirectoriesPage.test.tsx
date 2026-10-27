@@ -1,5 +1,5 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
@@ -410,6 +410,52 @@ describe('DirectoriesPage', () => {
 
     // Routes are keyed by slug — Open must land on /channel/<slug>.
     await waitFor(() => expect(window.location.pathname).toBe('/channel/general'));
+  });
+
+  it('lists deactivated accounts last, marked inactive with a greyed avatar', async () => {
+    mockBrowseChannels.mockReturnValue({ data: [], isLoading: false });
+    mockUserChannels.mockReturnValue({ data: [] });
+    mockApiFetch.mockResolvedValue([
+      { id: 'u-gone', email: 'g@b.c', displayName: 'Gone', systemRole: 'member', status: 'deactivated' },
+      { id: 'u-2', email: 'b@b.c', displayName: 'Bob', systemRole: 'member', status: 'active' },
+      { id: 'u-3', email: 'c@b.c', displayName: 'Cara', systemRole: 'member', status: 'active' },
+    ]);
+    window.history.pushState({}, '', '/directory/users');
+    renderWithProviders(<DirectoriesPage />);
+    await screen.findByTestId('members-grid');
+
+    const cards = await screen.findAllByTestId('directory-user-card');
+    expect(cards.map((c) => c.querySelector('p.font-medium')?.textContent)).toEqual(['Bob', 'Cara', 'Gone']);
+    const gone = cards[2]!;
+    expect(gone).toHaveAttribute('data-inactive', 'true');
+    expect(within(gone).getByTestId('status-pill-u-gone')).toHaveTextContent('Inactive');
+    expect(within(gone).getByTestId('directory-user-avatar').innerHTML).toContain('grayscale');
+    expect(within(cards[0]!).getByTestId('directory-user-avatar').innerHTML).not.toContain('grayscale');
+    expect(cards[0]).not.toHaveAttribute('data-inactive');
+  });
+
+  it('moves an account to the end the moment it is deactivated', async () => {
+    mockBrowseChannels.mockReturnValue({ data: [], isLoading: false });
+    mockUserChannels.mockReturnValue({ data: [] });
+    mockApiFetch.mockResolvedValue([
+      { id: 'u-2', email: 'b@b.c', displayName: 'Bob', systemRole: 'member', status: 'active' },
+      { id: 'u-3', email: 'c@b.c', displayName: 'Cara', systemRole: 'member', status: 'active' },
+    ]);
+    window.history.pushState({}, '', '/directory/users');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <BrowserRouter><DirectoriesPage /></BrowserRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText('Bob')).toBeInTheDocument();
+
+    act(() => {
+      applyUserUpdatedEvent(qc, { id: 'u-2', status: 'deactivated' }, 'user-1');
+    });
+    expect(await screen.findByTestId('status-pill-u-2')).toHaveTextContent('Inactive');
+    const names = screen.getAllByTestId('directory-user-card').map((c) => c.querySelector('p.font-medium')?.textContent);
+    expect(names).toEqual(['Cara', 'Bob']);
   });
 
   it('follows a user.updated rename live, patched into its list without a refetch', async () => {

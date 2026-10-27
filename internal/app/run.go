@@ -70,8 +70,11 @@ func (a *App) startBackground() {
 	}
 	// Directory re-sync (phone + manager from MS Graph): first sweep at boot
 	// doubles as the workspace backfill.
+	// Account standing (disabled or deleted in Entra → deactivated) on a
+	// much shorter interval.
 	if c.directorySync != nil {
 		go a.track(func() { c.directorySync.Run(ctx, a.cfg.MSProfileSyncInterval) })()
+		go a.track(func() { c.directorySync.RunStatus(ctx, a.cfg.MSStatusSyncInterval) })()
 	}
 	// Fire due reminders into their owners' activity streams + alerts.
 	// Claiming is atomic in Redis, so running this on every instance never

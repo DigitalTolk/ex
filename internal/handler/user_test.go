@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1304,4 +1305,62 @@ func TestCreateAvatarUploadURL_InvalidJSON(t *testing.T) {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 	_ = context.Background() // imports
+}
+
+// pagingUserStore pages ListUsers like the real store: limit rows per call,
+// a cursor to the next page.
+type pagingUserStore struct {
+	*mockUserStore
+	order []string
+}
+
+func (p *pagingUserStore) ListUsers(_ context.Context, limit int, cursor string) ([]*model.User, string, error) {
+	start := 0
+	if cursor != "" {
+		start, _ = strconv.Atoi(cursor)
+	}
+	end := min(start+limit, len(p.order))
+	page := make([]*model.User, 0, end-start)
+	for _, id := range p.order[start:end] {
+		page = append(page, p.users[id])
+	}
+	next := ""
+	if end < len(p.order) {
+		next = strconv.Itoa(end)
+	}
+	return page, next, nil
+}
+
+// The directory lists every account. It used to get one page of 50 with the
+// next cursor dropped: past the first 50 accounts nobody was listed — the
+// deactivated ones sorted after them included.
+func TestListUsers_DirectoryGetsTheWholeRoster(t *testing.T) {
+	users := &pagingUserStore{mockUserStore: newMockUserStore()}
+	for i := range listAllPageSize + 20 {
+		u := &model.User{ID: fmt.Sprintf("u-%04d", i), Email: fmt.Sprintf("u%d@x.se", i), AuthProvider: model.AuthProviderOIDC, Status: "active"}
+		users.users[u.ID] = u
+		users.order = append(users.order, u.ID)
+	}
+	h := NewUserHandler(service.NewUserService(users, &mockCache{}, nil, nil), nil)
+	jwtMgr := auth.NewJWTManager("test-directory-roster", 15*time.Minute, 720*time.Hour)
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.ListUsers))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	req.Header.Set("Authorization", "Bearer "+makeTokenForUser(jwtMgr, &model.User{ID: "admin", Email: "admin@x.se", SystemRole: model.SystemRoleAdmin}))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var rows []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(rows) != listAllPageSize+20 {
+		t.Fatalf("rows = %d, want all %d accounts", len(rows), listAllPageSize+20)
+	}
+	// Still the admin's full record: the directory menu needs authProvider.
+	if rows[0]["authProvider"] != "oidc" {
+		t.Errorf("admin row = %v, want the full record", rows[0])
+	}
 }

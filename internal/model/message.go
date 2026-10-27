@@ -34,6 +34,12 @@ type Message struct {
 	// Body / AttachmentIDs / Reactions are cleared and the client
 	// renders a "(Message deleted)" placeholder.
 	Deleted bool `json:"deleted,omitempty" dynamodbav:"deleted,omitempty"`
+	// DeletedAt and DeletedBy record the soft delete; DeletedContent keeps
+	// what the message said. None of it is ever served (json:"-"): to
+	// everyone but someone reading the table, a deleted message is gone.
+	DeletedAt      *time.Time      `json:"-" dynamodbav:"deletedAt,omitempty"`
+	DeletedBy      string          `json:"-" dynamodbav:"deletedBy,omitempty"`
+	DeletedContent *DeletedContent `json:"-" dynamodbav:"deletedContent,omitempty"`
 	// NoUnfurl suppresses the link-preview card the client would
 	// otherwise render below the body. Set when the author dismisses
 	// the unfurl — the suppression is global (every viewer sees it
@@ -80,15 +86,20 @@ type Message struct {
 	ClientNonce string `json:"clientNonce,omitempty" dynamodbav:"-"`
 }
 
-// Tombstone clears a message's content in place for a soft delete: it flags
-// Deleted and wipes the body, attachments, reactions, and pin state. The row
-// itself is kept so replies can still resolve their thread root. This is the
-// single source of truth for the soft-delete field contract — the service
-// soft-delete path and the offline migrations both call it.
+// Tombstone soft-deletes a message in place: it flags Deleted, moves the
+// body, attachments and webhook attachments into DeletedContent, and clears
+// what readers see — those, the reactions and the pin state. The row itself
+// is kept so replies can still resolve their thread root. This is the single
+// source of truth for the soft-delete field contract — the service
+// soft-delete path, the importer and the offline migrations all call it.
 func (m *Message) Tombstone() {
+	if !m.Deleted && (m.Body != "" || len(m.AttachmentIDs) > 0 || len(m.MessageAttachments) > 0) {
+		m.DeletedContent = &DeletedContent{Body: m.Body, AttachmentIDs: m.AttachmentIDs, MessageAttachments: m.MessageAttachments}
+	}
 	m.Deleted = true
 	m.Body = ""
 	m.AttachmentIDs = nil
+	m.MessageAttachments = nil
 	m.Reactions = nil
 	m.Pinned = false
 	m.PinnedAt = nil

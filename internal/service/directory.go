@@ -36,6 +36,7 @@ type GraphDirectory interface {
 	GetUserProfile(ctx context.Context, key string) (*msgraph.UserProfile, error)
 	ResolveUserByEmail(ctx context.Context, email string) (*msgraph.UserProfile, error)
 	GetUserManager(ctx context.Context, key string) (*msgraph.UserProfile, error)
+	ListUserAccounts(ctx context.Context) ([]msgraph.UserAccount, error)
 }
 
 // MSDirectoryService reads phone + manager from Microsoft Graph and resolves
@@ -86,6 +87,21 @@ func (s *MSDirectoryService) LookupProfile(ctx context.Context, email, objectID 
 	}
 	dp.Manager = s.managerRef(ctx, manager)
 	return dp, nil
+}
+
+// ListAccounts reports every directory account's standing, keyed by AAD
+// object id: true while it can sign in, false once it is disabled. An
+// account deleted upstream is absent.
+func (s *MSDirectoryService) ListAccounts(ctx context.Context) (map[string]bool, error) {
+	accounts, err := s.graph.ListUserAccounts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("directory: list accounts: %w", err)
+	}
+	enabled := make(map[string]bool, len(accounts))
+	for _, a := range accounts {
+		enabled[a.ID] = a.Enabled()
+	}
+	return enabled, nil
 }
 
 // managerRef converts a Graph profile into the stored manager reference,

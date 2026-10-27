@@ -14,6 +14,7 @@ import { useCancelOnOutsidePointer } from './useCancelOnOutsidePointer';
 import { useComposerDraft } from './useComposerDraft';
 import { useComposerExpansion } from './useComposerExpansion';
 import { useComposerFocus } from './useComposerFocus';
+import { useComposerInView } from './useComposerInView';
 import { useComposerSubmit } from './useComposerSubmit';
 import { useComposerToolbarState } from './useComposerToolbarState';
 import { useComposerUploads } from './useComposerUploads';
@@ -164,6 +165,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
     typingThreadRootID,
   });
   useCancelOnOutsidePointer(rootRef, !!cancelOnOutsidePointer && isMobile && isEditingMode, onCancel);
+  useComposerInView(rootRef, editorFocused);
   const { slashCommands, commandError, pendingCommand, submitCommand } = useSlashCommands({
     variant,
     submitLabel,

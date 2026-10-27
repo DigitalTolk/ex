@@ -3,8 +3,8 @@ import {
   slugify,
   getInitials,
   extractURLs,
-  firstName,
-  firstNamesOnly,
+  shortName,
+  shortNamesOnly,
   formatBytes,
   bytesToMib,
   mibToBytes,
@@ -18,7 +18,7 @@ import {
 // These are pure-string utilities — running them in the browser test
 // runner ensures Intl / Date behaviour matches what users actually see.
 
-describe('format — slugify / getInitials / firstName', () => {
+describe('format — slugify / getInitials / shortName', () => {
   it('slugify lowercases, strips non-alnum, trims hyphens', () => {
     expect(slugify('General Chat!')).toBe('general-chat');
     expect(slugify('  weird---input!!!')).toBe('weird-input');
@@ -31,16 +31,16 @@ describe('format — slugify / getInitials / firstName', () => {
     expect(getInitials('alice von smith')).toBe('AV');
   });
 
-  it('firstName trims leading whitespace and returns the first token', () => {
-    expect(firstName('Alice Smith')).toBe('Alice');
-    expect(firstName('   alice   smith ')).toBe('alice');
-    expect(firstName('')).toBe('');
+  it('shortName trims leading whitespace and returns the first token', () => {
+    expect(shortName('Alice Smith')).toBe('Alice');
+    expect(shortName('   alice   smith ')).toBe('alice');
+    expect(shortName('')).toBe('');
   });
 
-  it('firstNamesOnly collapses each comma-separated full name', () => {
-    expect(firstNamesOnly('Alice Smith, Bob Jones')).toBe('Alice, Bob');
-    expect(firstNamesOnly('Project Team')).toBe('Project Team');
-    expect(firstNamesOnly(undefined)).toBe('');
+  it('shortNamesOnly collapses each comma-separated full name', () => {
+    expect(shortNamesOnly('Alice Smith, Bob Jones')).toBe('Alice, Bob');
+    expect(shortNamesOnly('Project Team')).toBe('Project Team');
+    expect(shortNamesOnly(undefined)).toBe('');
   });
 });
 

@@ -16,6 +16,11 @@ func TestNotificationKeywordsFromName(t *testing.T) {
 		{"single word", "Cher", []string{"Cher"}},
 		{"first + full", "John Smith", []string{"John", "John Smith"}},
 		{"trims surrounding space", "  Alice Wong  ", []string{"Alice", "Alice Wong"}},
+		// "Muhammad" opens a great many names: as a keyword it would alert
+		// for every Muhammad in the workspace.
+		{"keeps what follows a Muhammad prefix", "Muhammad Ali Khan", []string{"Ali Khan", "Muhammad Ali Khan"}},
+		{"skips an abbreviated prefix", "Md. Rahim", []string{"Rahim", "Md. Rahim"}},
+		{"a prefix alone seeds nothing", "Muhammad", nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

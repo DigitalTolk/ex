@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"log/slog"
+	"slices"
+	"strings"
 
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
@@ -12,11 +14,14 @@ import (
 const nkPageSize = 100
 
 // runNotificationKeywords backfills the per-user notification keyword list for
-// accounts created before name keywords were seeded at sign-up.
+// accounts created before name keywords were seeded at sign-up, and swaps an
+// auto-seeded name prefix ("Muhammad" from "Muhammad Ali Khan") for the name
+// the person goes by ("Ali Khan"): the prefix alerted them for every Muhammad.
 //
 // Idempotent and resumable: a user that already has a keyword (seeded or
-// hand-edited) is skipped, so a re-run only touches still-empty accounts and
-// never clobbers customizations.
+// hand-edited) keeps it, apart from that one seeded prefix, so a re-run only
+// touches still-empty or still-prefixed accounts and never clobbers
+// customizations.
 func runNotificationKeywords(ctx context.Context, db *store.DB, args []string) int {
 	dryRun, verbose, mode := migrateFlags("notification-keywords", args, nil)
 
@@ -65,10 +70,14 @@ func runNotificationKeywords(ctx context.Context, db *store.DB, args []string) i
 	return 0
 }
 
-// nkSeededSettings decides whether a user needs name keywords seeded and
-// returns the settings to persist. (nil, false) means "leave this user alone":
-// no display name, or already has at least one keyword.
+// nkSeededSettings decides whether a user needs name keywords seeded (or a
+// seeded name prefix replaced) and returns the settings to persist. (nil,
+// false) means "leave this user alone": no display name, or keywords that
+// need nothing.
 func nkSeededSettings(u *model.User) (*model.NotificationSettings, bool) {
+	if u.NotificationSettings != nil && len(u.NotificationSettings.Keywords) > 0 {
+		return nkWithoutSeededPrefix(u)
+	}
 	kw := model.NotificationKeywordsFromName(u.DisplayName)
 	if len(kw) == 0 {
 		return nil, false
@@ -77,10 +86,31 @@ func nkSeededSettings(u *model.User) (*model.NotificationSettings, bool) {
 		ns := model.DefaultNotificationSettingsForNewUser(u.DisplayName)
 		return &ns, true
 	}
-	if len(u.NotificationSettings.Keywords) > 0 {
-		return nil, false
-	}
 	ns := *u.NotificationSettings
 	ns.Keywords = kw
+	return &ns, true
+}
+
+// nkWithoutSeededPrefix replaces the keyword sign-up seeded from the first
+// word of the display name when that word is a name prefix: "Muhammad" in
+// ["Muhammad", "Muhammad Ali Khan"] becomes "Ali Khan" (model.ShortName),
+// unless that is listed already. Every other keyword stays as it is.
+func nkWithoutSeededPrefix(u *model.User) (*model.NotificationSettings, bool) {
+	words := strings.Fields(u.DisplayName)
+	if len(words) == 0 || !model.IsNamePrefix(words[0]) {
+		return nil, false
+	}
+	kw := u.NotificationSettings.Keywords
+	i := slices.IndexFunc(kw, func(k string) bool { return strings.EqualFold(k, words[0]) })
+	if i < 0 {
+		return nil, false
+	}
+	out := slices.Delete(slices.Clone(kw), i, i+1)
+	first := model.ShortName(u.DisplayName)
+	if !model.IsNamePrefix(first) && !slices.ContainsFunc(out, func(k string) bool { return strings.EqualFold(k, first) }) {
+		out = slices.Insert(out, i, first)
+	}
+	ns := *u.NotificationSettings
+	ns.Keywords = out
 	return &ns, true
 }

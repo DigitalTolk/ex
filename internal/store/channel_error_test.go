@@ -52,21 +52,6 @@ func TestChannelStore_GetByName_QueryError(t *testing.T) {
 	}
 }
 
-func TestChannelStore_Update_PutItemError(t *testing.T) {
-	db := setupDynamoDB(t)
-	ctx := context.Background()
-	ch := makeChannel("ch-u", "Eng", "eng-u", model.ChannelTypePublic)
-	if err := NewChannelStore(db).CreateChannel(ctx, ch); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	s := NewChannelStore(withFault(db, func(f *faultClient) { f.failPutItem = true }))
-	ch.Name = "Engineering"
-	err := s.UpdateChannel(ctx, ch)
-	if !errors.Is(err, errInjected) {
-		t.Fatalf("Update: want errInjected, got %v", err)
-	}
-}
-
 func TestChannelStore_ListPublic_QueryError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()

@@ -5,6 +5,7 @@ import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { wsLiveQueryOptions } from '@/lib/query-client';
 import { showToast } from '@/lib/toast';
+import { withoutDeactivated } from '@/lib/deactivated';
 import type { UserConversation, Conversation, User, UserStatus } from '@/types';
 
 // select narrows what the caller subscribes to (see useUserChannels).
@@ -85,19 +86,23 @@ export function useCreateConversation() {
 // replace a newer one; the signal aborts a request nobody is waiting for any
 // more. `keepPrevious` shows the last term's results while the next loads
 // (a typeahead that blanks between keystrokes flickers).
+// Every caller picks people to add, message or post to, so deactivated
+// accounts are left out (through `select`: the cached rows stay whole, and a
+// live deactivation drops the account from an open picker).
 export function useUserLookup(query: string, options?: { keepPrevious?: boolean }) {
   return useQuery({
     queryKey: queryKeys.searchUsers(query),
     queryFn: async ({ signal }) => {
-      const res = await apiFetch<
-        { id: string; email: string; displayName: string; avatarURL?: string; userStatus?: UserStatus | null }[]
-      >(`/api/v1/users?q=${encodeURIComponent(query)}`, { signal });
+      const res = await apiFetch<LookupUser[]>(`/api/v1/users?q=${encodeURIComponent(query)}`, { signal });
       return Array.isArray(res) ? res : [];
     },
+    select: withoutDeactivated<LookupUser>,
     enabled: query.length >= 2,
     placeholderData: options?.keepPrevious ? keepPreviousData : undefined,
   });
 }
+
+type LookupUser = { id: string; email: string; displayName: string; avatarURL?: string; userStatus?: UserStatus | null; status?: string };
 
 // useAllUsers loads the entire roster into the React Query cache so
 // the mention popup can filter client-side without a per-keystroke

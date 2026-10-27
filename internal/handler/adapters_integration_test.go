@@ -276,9 +276,9 @@ func TestChannelStore_ServiceSurface(t *testing.T) {
 		t.Errorf("ID = %q, want %q", gotSlug.ID, "ch-adapt-1")
 	}
 
-	ch.Description = "updated"
-	if err := adapter.UpdateChannel(ctx, ch); err != nil {
-		t.Fatalf("UpdateChannel: %v", err)
+	desc := "updated"
+	if err := adapter.PatchChannel(ctx, ch.ID, store.ChannelPatch{Description: &desc, UpdatedAt: time.Now()}); err != nil {
+		t.Fatalf("PatchChannel: %v", err)
 	}
 
 	channels, _, err := adapter.ListPublicChannels(ctx, 10, "")

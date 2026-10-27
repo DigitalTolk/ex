@@ -62,12 +62,19 @@ func DefaultNotificationSettings() NotificationSettings {
 // display name: first name + full name, deduped (case-insensitively), blanks
 // dropped. "John Smith" → ["John", "John Smith"]; a single-word name yields one
 // entry. So @-name mentions and plain name references notify out of the box.
+// A name opening with a name prefix seeds what follows it instead of a first
+// name (ShortName): "Muhammad Ali Khan" → ["Ali Khan", "Muhammad Ali Khan"],
+// and a name that is only a prefix seeds nothing — every mention of any
+// Muhammad would alert them.
 func NotificationKeywordsFromName(displayName string) []string {
 	full := strings.TrimSpace(displayName)
 	if full == "" {
 		return nil
 	}
-	first := strings.Fields(full)[0]
+	first := ShortName(full)
+	if IsNamePrefix(first) {
+		return nil
+	}
 	out := []string{first}
 	if !strings.EqualFold(full, first) {
 		out = append(out, full)

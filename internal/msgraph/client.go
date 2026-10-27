@@ -198,6 +198,50 @@ func (c *Client) ResolveUserByEmail(ctx context.Context, email string) (*UserPro
 	return c.GetUserProfile(ctx, email)
 }
 
+// UserAccount is one directory account's sign-in standing.
+type UserAccount struct {
+	ID string `json:"id"`
+	// AccountEnabled is false for an account disabled in Entra (it can no
+	// longer sign in). Graph returns it only when selected; nil means it
+	// wasn't reported, which never counts as disabled.
+	AccountEnabled *bool `json:"accountEnabled"`
+}
+
+// Enabled reports whether the account can sign in. An unreported flag
+// counts as enabled: missing data is never grounds to lock someone out.
+func (a UserAccount) Enabled() bool {
+	return a.AccountEnabled == nil || *a.AccountEnabled
+}
+
+// ListUserAccounts returns every user account in the tenant with its enabled
+// flag, following Graph's paging to the end: one call per 999 accounts, so a
+// whole-tenant check stays cheap enough to run every few minutes. A page
+// link pointing anywhere but this client's Graph base URL is refused rather
+// than sent the bearer token.
+func (c *Client) ListUserAccounts(ctx context.Context) ([]UserAccount, error) {
+	var accounts []UserAccount
+	path := "/users?$select=id,accountEnabled&$top=999"
+	for path != "" {
+		var page struct {
+			Value    []UserAccount `json:"value"`
+			NextLink string        `json:"@odata.nextLink"`
+		}
+		if err := c.doJSON(ctx, http.MethodGet, path, nil, &page); err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, page.Value...)
+		path = ""
+		if page.NextLink != "" {
+			rest, ok := strings.CutPrefix(page.NextLink, c.baseURL+"/")
+			if !ok {
+				return nil, errors.New("msgraph: next page link is outside the Graph base URL")
+			}
+			path = "/" + rest
+		}
+	}
+	return accounts, nil
+}
+
 // GetUserManager fetches a user's manager from the directory hierarchy.
 // ErrNotFound when the user has no manager assigned (or doesn't exist).
 func (c *Client) GetUserManager(ctx context.Context, key string) (*UserProfile, error) {

@@ -52,6 +52,16 @@ export function applyUserUpdatedEvent(qc: QueryClient, evt: UserUpdatedPayload, 
     qc.setQueriesData<User[]>({ queryKey: key }, (rows) => patchRows<User>(rows, id, patch));
   }
 
+  // A deactivated account leaves every member list at once (the server
+  // lists only active members); a reactivated one is back with the next read.
+  if (patch.status === 'deactivated') {
+    qc.setQueriesData<ChannelMembership[]>({ queryKey: queryKeys.channelMembers() }, (rows) =>
+      Array.isArray(rows) && rows.some((m) => m.userID === id) ? rows.filter((m) => m.userID !== id) : rows,
+    );
+  } else if (patch.status !== undefined) {
+    void qc.invalidateQueries({ queryKey: queryKeys.channelMembers() });
+  }
+
   if (patch.displayName !== undefined) {
     const displayName = patch.displayName;
     qc.setQueriesData<ChannelMembership[]>({ queryKey: queryKeys.channelMembers() }, (rows) =>

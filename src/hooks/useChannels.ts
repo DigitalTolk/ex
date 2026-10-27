@@ -222,6 +222,23 @@ export function useUpdateChannelDescription() {
   );
 }
 
+// Renames a channel. Its slug — the URL key — follows the name; the server
+// answers 409 when another channel holds it.
+export function useRenameChannel() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { channelId: string; name: string }) =>
+      apiFetch<Channel>(`/api/v1/channels/${vars.channelId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: vars.name }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+    },
+  });
+}
+
 // Adds people to a channel as members (the member list's picker adds one, the
 // post-send invite prompt everyone it mentioned). Callers show their own
 // inline error, so failures are not toasted here.

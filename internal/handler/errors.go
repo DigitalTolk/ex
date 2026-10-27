@@ -37,6 +37,7 @@ type errorMapping struct {
 var errorMappings = []errorMapping{
 	// ---- chat
 	{service.ErrChannelArchived, http.StatusConflict, "channel_archived", "this channel is archived and read-only"},
+	{service.ErrMemberDeactivated, http.StatusConflict, "member_deactivated", "that account is deactivated"},
 	{service.ErrThreadDeleted, http.StatusConflict, "thread_deleted", "this thread has been deleted"},
 	{service.ErrInvalidThreadRoot, http.StatusBadRequest, "invalid_root", "root_id must reference a top-level message posted by this webhook in the target channel"},
 	{service.ErrWebhookDMRejected, http.StatusBadRequest, "unsupported_channel", "webhook cannot post to that direct-message target"},

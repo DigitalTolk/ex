@@ -319,6 +319,17 @@ func TestLiveIndexer_IndexMessage_SkipsNoIndexMessages(t *testing.T) {
 	}
 }
 
+func TestLiveIndexer_IndexMessage_SkipsDeletedMessages(t *testing.T) {
+	w := &recordingWriter{}
+	idx := &LiveIndexer{w: w}
+	if err := idx.IndexMessage(context.Background(), &model.Message{ID: "m", Deleted: true}, "channel"); err != nil {
+		t.Fatalf("deleted message must be skipped silently: %v", err)
+	}
+	if len(w.indexed) != 0 {
+		t.Errorf("deleted message must not produce IndexDoc calls, got %d", len(w.indexed))
+	}
+}
+
 func TestNewIndexer_NilClientReturnsNoop(t *testing.T) {
 	idx := NewIndexer(nil)
 	if _, ok := idx.(NoopIndexer); !ok {

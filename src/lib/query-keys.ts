@@ -27,6 +27,7 @@ export const queryKeys = {
   channel: (channelId: string) => ['channel', channelId] as const,
   channelBySlug: (slug?: string) =>
     slug === undefined ? (['channelBySlug'] as const) : (['channelBySlug', slug] as const),
+  channelNameAvailable: (name: string, channelId: string) => ['channelNameAvailable', name, channelId] as const,
   channelMembers: (channelId?: string) =>
     channelId === undefined ? (['channelMembers'] as const) : (['channelMembers', channelId] as const),
 

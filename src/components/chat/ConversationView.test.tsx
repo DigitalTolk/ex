@@ -158,6 +158,41 @@ describe('ConversationView', () => {
     expect(screen.getByText(/no messages yet/i)).toBeInTheDocument();
   });
 
+  it('marks a DM with a deactivated account as inactive in the header', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockImplementation((url: string) =>
+      Promise.resolve(
+        url === '/api/v1/users/batch'
+          ? [{ id: 'u-2', displayName: 'Bob', status: 'deactivated' }]
+          : { id: 'u-2', displayName: 'Bob' },
+      ),
+    );
+    try {
+      renderConversationView();
+      expect(await screen.findByTestId('header-status-inactive')).toHaveTextContent('Inactive');
+    } finally {
+      vi.mocked(apiFetch).mockResolvedValue({ id: 'u-2', displayName: 'Bob' });
+    }
+  });
+
+  it('shows no inactive mark for a DM with an active account', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockImplementation((url: string) =>
+      Promise.resolve(
+        url === '/api/v1/users/batch'
+          ? [{ id: 'u-2', displayName: 'Bob', status: 'active' }]
+          : { id: 'u-2', displayName: 'Bob' },
+      ),
+    );
+    try {
+      renderConversationView();
+      await waitFor(() => expect(vi.mocked(apiFetch)).toHaveBeenCalledWith('/api/v1/users/batch', expect.anything()));
+      expect(screen.queryByTestId('header-status-inactive')).not.toBeInTheDocument();
+    } finally {
+      vi.mocked(apiFetch).mockResolvedValue({ id: 'u-2', displayName: 'Bob' });
+    }
+  });
+
   it('does not render member toggle for DM conversations', () => {
     renderConversationView();
     expect(screen.queryByLabelText('Toggle member list')).not.toBeInTheDocument();

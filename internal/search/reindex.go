@@ -411,7 +411,7 @@ func (r *Reindexer) bulkMessages(ctx context.Context, msgs []*model.Message, par
 func messageEntries(ctx context.Context, msgs []*model.Message, parentType string, atts AttachmentResolver, files map[string]*fileBucket) []BulkEntry {
 	entries := make([]BulkEntry, 0, len(msgs))
 	for _, m := range msgs {
-		if m == nil || m.System || m.NoIndex {
+		if m == nil || m.System || m.NoIndex || m.Deleted {
 			continue
 		}
 		entries = append(entries, BulkEntry{ID: m.ID, Doc: messageDoc(m, parentType)})

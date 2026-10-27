@@ -114,6 +114,7 @@ func (a *App) buildChat(ctx context.Context) error {
 	c.messages.SetMentionResolver(c.mentions)
 	// Post-index sign-ups skip the one-time /threads seed scan.
 	c.messages.SetThreadSeedUsers(in.users)
+	c.messages.SetDeactivatedAccounts(in.users)
 
 	c.userState = service.NewUserStateService(in.userState, in.pubsub)
 
@@ -185,9 +186,10 @@ func (a *App) buildChat(ctx context.Context) error {
 		// elected, so a cluster sweeps once per window; started with the
 		// other background jobs.
 		c.directorySync = service.NewDirectorySyncService(directory, in.users, in.cache, in.pubsub, in.cache, store.NewID)
-		// Offboarding: an account deleted in Entra is deactivated (sessions
-		// ended) on the next sweep, and reactivated if it reappears.
-		c.directorySync.SetStatusSetter(c.users)
+		// Offboarding: an account disabled or deleted in Entra is
+		// deactivated (sessions ended) by the next status sweep, minutes
+		// later, and reactivated once it can sign in again.
+		c.directorySync.SetStatusSync(directory, c.users)
 		c.commands.Register(service.NewTeamsMeetingCommand(service.TeamsMeetingDeps{
 			Meetings:      graph,
 			Sender:        c.messages,
@@ -229,6 +231,7 @@ func (a *App) buildChat(ctx context.Context) error {
 	// Alert text — popups, pushes, Activity rows, reminders — names each
 	// mention by its ID's current name, as the rendered message does.
 	c.activity.SetMentionResolver(c.mentions)
+	c.activity.SetDeactivatedAccounts(in.users)
 	c.reminders.SetMentionResolver(c.mentions)
 	// Scheduled messages: composed now, posted at their time through the
 	// normal send path (notifications included).

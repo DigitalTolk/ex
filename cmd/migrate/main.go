@@ -13,7 +13,8 @@
 //	thread-index           backfill the GSI1 thread index on existing replies
 //	top-level-index        backfill + switch on the GSI2 top-level message index [--workers=16]
 //	parent-index           backfill per-parent PIN#/FILE# index rows
-//	notification-keywords  seed name keywords for accounts that have none
+//	notification-keywords  seed name keywords for accounts that have none, and
+//	                       swap a seeded "Muhammad" prefix for the name after it
 //	attachment-relink      re-link orphaned attachments to their message [--window=1h]
 //	draft-cleanup          delete orphaned DynamoDB DRAFT# rows (drafts now live in Redis)
 //	evt-ttl                set the idle TTL on legacy durable inbox streams (Redis)
@@ -64,7 +65,7 @@ func commands() map[string]command {
 		"thread-index":          {"backfill the GSI1 thread index on existing replies", runThreadIndex},
 		"top-level-index":       {"backfill + switch on the GSI2 top-level message index (run after the deploy) [--workers=16]", runTopLevelIndex},
 		"parent-index":          {"backfill per-parent PIN#/FILE# index rows", runParentIndex},
-		"notification-keywords": {"seed name keywords for accounts that have none", runNotificationKeywords},
+		"notification-keywords": {"seed name keywords for accounts that have none, and swap a seeded \"Muhammad\" prefix for the name after it", runNotificationKeywords},
 		"attachment-relink":     {"re-link orphaned attachments to their message [--window=1h]", runAttachmentRelink},
 		"draft-cleanup":         {"delete orphaned DynamoDB DRAFT# rows (drafts now live in Redis)", runDraftCleanup},
 		"evt-ttl":               {"set the idle TTL on legacy durable inbox streams (Redis)", runEvtTTL},

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -106,13 +107,16 @@ func TestSetStatusFromDirectoryGetError(t *testing.T) {
 	}
 }
 
-// --- DirectorySyncService offboarding ----------------------------------------
+// --- DirectorySyncService status sweep ---------------------------------------
 
-// funcDirectoryLookup routes lookups per call for mixed-population sweeps.
-type funcDirectoryLookup func(ctx context.Context, email, objectID string) (*DirectoryProfile, error)
+// fakeAccountLister is a programmable DirectoryAccountLister.
+type fakeAccountLister struct {
+	accounts map[string]bool
+	err      error
+}
 
-func (f funcDirectoryLookup) LookupProfile(ctx context.Context, email, objectID string) (*DirectoryProfile, error) {
-	return f(ctx, email, objectID)
+func (f *fakeAccountLister) ListAccounts(context.Context) (map[string]bool, error) {
+	return f.accounts, f.err
 }
 
 type fakeStatusSetter struct {
@@ -131,37 +135,52 @@ func (f *fakeStatusSetter) SetStatusFromDirectory(_ context.Context, targetID st
 	return nil
 }
 
-func offboardSweepEnv(lookup DirectoryLookup, users ...*model.User) (*DirectorySyncService, *fakeStatusSetter) {
+func statusSweepEnv(accounts map[string]bool, users ...*model.User) (*DirectorySyncService, *fakeStatusSetter, *fakeAccountLister, *pagedUserStore) {
 	store := &pagedUserStore{mockUserStore: newMockUserStore(), pages: [][]*model.User{users}}
 	for _, u := range users {
 		store.users[u.ID] = u
 	}
 	setter := &fakeStatusSetter{}
-	svc := NewDirectorySyncService(lookup, store, newMockCache(), newMockPublisher(), nil, func() string { return "t" })
-	svc.SetStatusSetter(setter)
-	return svc, setter
+	lister := &fakeAccountLister{accounts: accounts}
+	svc := NewDirectorySyncService(&stubDirectoryLookup{}, store, newMockCache(), newMockPublisher(), nil, func() string { return "t" })
+	svc.SetStatusSync(lister, setter)
+	return svc, setter, lister, store
 }
 
-// presentExcept answers "in the directory" for every user except the given ids.
-func presentExcept(gone ...string) funcDirectoryLookup {
-	return func(_ context.Context, _, objectID string) (*DirectoryProfile, error) {
-		for _, g := range gone {
-			if objectID == g {
-				return nil, nil
-			}
-		}
-		return &DirectoryProfile{ObjectID: objectID, Phone: ""}, nil
+func ssoUser(id, oid, status string) *model.User {
+	u := oidcUser(id, id+"@x.se", "")
+	u.MSObjectID, u.Status = oid, status
+	return u
+}
+
+// An account disabled in Entra can't sign in, but the directory still lists
+// it: the profile lookup answers 200, so the old 404-only check never
+// deactivated it, and it stayed an active colleague in Ex.
+func TestDirectoryStatusDeactivatesUserDisabledUpstream(t *testing.T) {
+	svc, setter, _, _ := statusSweepEnv(
+		map[string]bool{"oid-on": true, "oid-off": false},
+		ssoUser("u-on", "oid-on", "active"),
+		ssoUser("u-off", "oid-off", "active"),
+	)
+
+	svc.SweepStatus(context.Background(), time.Hour)
+
+	if deactivated, ok := setter.calls["u-off"]; !ok || !deactivated {
+		t.Errorf("calls = %v, want u-off deactivated", setter.calls)
+	}
+	if _, ok := setter.calls["u-on"]; ok {
+		t.Error("u-on must not be touched")
 	}
 }
 
-func TestDirectorySyncDeactivatesUserDeletedUpstream(t *testing.T) {
-	alive := oidcUser("u-alive", "a@x.se", "")
-	alive.MSObjectID = "oid-alive"
-	gone := oidcUser("u-gone", "b@x.se", "")
-	gone.MSObjectID = "oid-gone"
-	svc, setter := offboardSweepEnv(presentExcept("oid-gone"), alive, gone)
+func TestDirectoryStatusDeactivatesUserDeletedUpstream(t *testing.T) {
+	svc, setter, _, _ := statusSweepEnv(
+		map[string]bool{"oid-alive": true},
+		ssoUser("u-alive", "oid-alive", "active"),
+		ssoUser("u-gone", "oid-gone", "active"),
+	)
 
-	svc.Sweep(context.Background(), time.Hour)
+	svc.SweepStatus(context.Background(), time.Hour)
 
 	if deactivated, ok := setter.calls["u-gone"]; !ok || !deactivated {
 		t.Errorf("calls = %v, want u-gone deactivated", setter.calls)
@@ -171,66 +190,203 @@ func TestDirectorySyncDeactivatesUserDeletedUpstream(t *testing.T) {
 	}
 }
 
-func TestDirectorySyncNeverDeactivatesOnEmailKeyedMiss(t *testing.T) {
-	// No stored object id → the 404 may just mean email != UPN; locking the
-	// user out on that evidence is forbidden.
-	noOid := oidcUser("u-nooid", "c@x.se", "")
-	svc, setter := offboardSweepEnv(
-		funcDirectoryLookup(func(context.Context, string, string) (*DirectoryProfile, error) { return nil, nil }),
-		noOid,
+func TestDirectoryStatusJudgesOnlyAccountsWithAnObjectID(t *testing.T) {
+	// No stored object id: the account can't be matched to the directory
+	// with certainty (email may != UPN), so it is never locked out. Guests,
+	// bots and already deactivated accounts are left alone too.
+	guest := &model.User{ID: "u-guest", AuthProvider: model.AuthProviderGuest, Status: "active", MSObjectID: "oid-guest"}
+	bot := &model.User{ID: "u-bot", IsBot: true, AuthProvider: model.AuthProviderOIDC, Status: "active", MSObjectID: "oid-bot"}
+	svc, setter, _, _ := statusSweepEnv(
+		map[string]bool{"oid-someone": true},
+		ssoUser("u-nooid", "", "active"),
+		ssoUser("u-already", "oid-already", "deactivated"),
+		guest, bot,
 	)
-	svc.Sweep(context.Background(), time.Hour)
+	svc.SweepStatus(context.Background(), time.Hour)
 	if len(setter.calls) != 0 {
-		t.Errorf("calls = %v, want none for an email-keyed miss", setter.calls)
+		t.Errorf("calls = %v, want none", setter.calls)
 	}
 }
 
-func TestDirectorySyncReactivatesUserBackInDirectory(t *testing.T) {
-	back := oidcUser("u-back", "d@x.se", "")
-	back.MSObjectID = "oid-back"
-	back.Status = "deactivated"
-	svc, setter := offboardSweepEnv(presentExcept(), back)
+func TestDirectoryStatusReactivatesUserWhoCanSignInAgain(t *testing.T) {
+	back := ssoUser("u-back", "oid-back", "deactivated")
+	back.DeactivatedBy = model.DeactivatedByDirectory
+	svc, setter, _, _ := statusSweepEnv(map[string]bool{"oid-back": true}, back)
 
-	svc.Sweep(context.Background(), time.Hour)
+	svc.SweepStatus(context.Background(), time.Hour)
 
 	if deactivated, ok := setter.calls["u-back"]; !ok || deactivated {
 		t.Errorf("calls = %v, want u-back reactivated", setter.calls)
 	}
 }
 
-func TestDirectorySyncReactivateErrorContinues(t *testing.T) {
-	back := oidcUser("u-back", "d@x.se", "")
-	back.MSObjectID = "oid-back"
-	back.Status = "deactivated"
-	svc, setter := offboardSweepEnv(presentExcept(), back)
-	setter.err = errors.New("store down")
-	svc.Sweep(context.Background(), time.Hour) // must not panic/abort
+func TestDirectoryStatusLeavesAdminDeactivationAlone(t *testing.T) {
+	held := ssoUser("u-held", "oid-held", "deactivated")
+	held.DeactivatedBy = model.DeactivatedByAdmin
+	svc, setter, _, _ := statusSweepEnv(map[string]bool{"oid-held": true}, held)
+
+	svc.SweepStatus(context.Background(), time.Hour)
+
+	if len(setter.calls) != 0 {
+		t.Errorf("calls = %v, want none: the directory never undoes an admin's deactivation", setter.calls)
+	}
 }
 
-func TestDirectorySyncDeactivationCircuitBreaker(t *testing.T) {
-	// Everyone 404s by object id — the misconfiguration signature. With
-	// 8 scanned users the cap is max(3, 0) = 3, so 8 candidates must trip
+func TestDirectoryStatusReactivateErrorContinues(t *testing.T) {
+	back := ssoUser("u-back", "oid-back", "deactivated")
+	svc, setter, _, _ := statusSweepEnv(map[string]bool{"oid-back": true, "oid-off": false}, back, ssoUser("u-off", "oid-off", "active"))
+	setter.err = errors.New("store down")
+	svc.SweepStatus(context.Background(), time.Hour) // logged, the sweep goes on
+}
+
+func TestDirectoryStatusDeactivationCircuitBreaker(t *testing.T) {
+	// Every account disabled at once — the misconfiguration signature. With
+	// 8 checked users the cap is max(3, 0) = 3, so 8 candidates must trip
 	// the breaker and deactivate NOBODY.
+	accounts := map[string]bool{"oid-unrelated": true}
 	users := make([]*model.User, 0, 8)
 	for i := range 8 {
-		u := oidcUser(fmt.Sprintf("u%d", i), fmt.Sprintf("u%d@x.se", i), "")
-		u.MSObjectID = fmt.Sprintf("oid-%d", i)
-		users = append(users, u)
+		oid := fmt.Sprintf("oid-%d", i)
+		accounts[oid] = false
+		users = append(users, ssoUser(fmt.Sprintf("u%d", i), oid, "active"))
 	}
-	svc, setter := offboardSweepEnv(
-		funcDirectoryLookup(func(context.Context, string, string) (*DirectoryProfile, error) { return nil, nil }),
-		users...,
-	)
-	svc.Sweep(context.Background(), time.Hour)
+	svc, setter, _, _ := statusSweepEnv(accounts, users...)
+	svc.SweepStatus(context.Background(), time.Hour)
 	if len(setter.calls) != 0 {
 		t.Errorf("calls = %v, want none — breaker must stop a mass deactivation", setter.calls)
 	}
 }
 
-func TestDirectorySyncDeactivateErrorContinues(t *testing.T) {
-	gone := oidcUser("u-gone", "b@x.se", "")
-	gone.MSObjectID = "oid-gone"
-	svc, setter := offboardSweepEnv(presentExcept("oid-gone"), gone)
+func TestDirectoryStatusDeactivateErrorContinues(t *testing.T) {
+	svc, setter, _, _ := statusSweepEnv(map[string]bool{"oid-off": false}, ssoUser("u-off", "oid-off", "active"))
 	setter.err = errors.New("store down")
-	svc.Sweep(context.Background(), time.Hour) // logged, not fatal
+	svc.SweepStatus(context.Background(), time.Hour) // logged, not fatal
+}
+
+func TestDirectoryStatusSkipsSweepWithoutAListing(t *testing.T) {
+	t.Run("listing error", func(t *testing.T) {
+		svc, setter, lister, _ := statusSweepEnv(nil, ssoUser("u1", "oid-1", "active"))
+		lister.err = errors.New("graph down")
+		svc.SweepStatus(context.Background(), time.Hour)
+		if len(setter.calls) != 0 {
+			t.Errorf("calls = %v, want none when the directory can't be read", setter.calls)
+		}
+	})
+	t.Run("empty listing", func(t *testing.T) {
+		// Nobody listed reads as "everyone left" — never grounds to act.
+		svc, setter, _, _ := statusSweepEnv(map[string]bool{}, ssoUser("u1", "oid-1", "active"))
+		svc.SweepStatus(context.Background(), time.Hour)
+		if len(setter.calls) != 0 {
+			t.Errorf("calls = %v, want none for an empty listing", setter.calls)
+		}
+	})
+	t.Run("user listing error", func(t *testing.T) {
+		svc, setter, _, users := statusSweepEnv(map[string]bool{"oid-off": false}, ssoUser("u-off", "oid-off", "active"))
+		users.listErr = errors.New("dynamo down")
+		svc.SweepStatus(context.Background(), time.Hour)
+		if len(setter.calls) != 0 {
+			t.Errorf("calls = %v, want none", setter.calls)
+		}
+	})
+}
+
+func TestDirectoryStatusPagesThroughUsers(t *testing.T) {
+	store := &pagedUserStore{mockUserStore: newMockUserStore(), pages: [][]*model.User{
+		{ssoUser("u1", "oid-1", "active")},
+		{ssoUser("u2", "oid-2", "active")},
+	}}
+	setter := &fakeStatusSetter{}
+	svc := NewDirectorySyncService(&stubDirectoryLookup{}, store, newMockCache(), newMockPublisher(), nil, func() string { return "t" })
+	svc.SetStatusSync(&fakeAccountLister{accounts: map[string]bool{"oid-1": true, "oid-2": false}}, setter)
+
+	svc.SweepStatus(context.Background(), time.Hour)
+
+	if deactivated, ok := setter.calls["u2"]; !ok || !deactivated || len(setter.calls) != 1 {
+		t.Errorf("calls = %v, want only u2 (second page) deactivated", setter.calls)
+	}
+}
+
+func TestDirectoryStatusElection(t *testing.T) {
+	t.Run("loser skips the sweep", func(t *testing.T) {
+		svc, setter, _, _ := statusSweepEnv(map[string]bool{"oid-off": false}, ssoUser("u-off", "oid-off", "active"))
+		locker := &fakeSyncLocker{acquired: false}
+		svc.locker = locker
+		svc.SweepStatus(context.Background(), time.Hour)
+		if len(setter.calls) != 0 {
+			t.Errorf("calls = %v, want none (lock lost)", setter.calls)
+		}
+		if locker.gotTTL >= time.Hour {
+			t.Errorf("lock TTL %v must stay under the interval", locker.gotTTL)
+		}
+	})
+	t.Run("lock error skips the sweep", func(t *testing.T) {
+		svc, setter, _, _ := statusSweepEnv(map[string]bool{"oid-off": false}, ssoUser("u-off", "oid-off", "active"))
+		svc.locker = &fakeSyncLocker{err: errors.New("redis down")}
+		svc.SweepStatus(context.Background(), time.Hour)
+		if len(setter.calls) != 0 {
+			t.Errorf("calls = %v, want none", setter.calls)
+		}
+	})
+	t.Run("winner sweeps", func(t *testing.T) {
+		svc, setter, _, _ := statusSweepEnv(map[string]bool{"oid-off": false}, ssoUser("u-off", "oid-off", "active"))
+		svc.locker = &fakeSyncLocker{acquired: true}
+		svc.SweepStatus(context.Background(), time.Hour)
+		if !setter.calls["u-off"] {
+			t.Errorf("calls = %v, want u-off deactivated", setter.calls)
+		}
+	})
+}
+
+func TestDirectoryStatusRunLoop(t *testing.T) {
+	// interval <= 0 falls back to the default; the immediate boot sweep
+	// still runs before the first (never-reached) tick.
+	svc, _, _, _ := statusSweepEnv(map[string]bool{"oid-1": true}, ssoUser("u1", "oid-1", "active"))
+	var lockCount atomic.Int64
+	svc.locker = &lockCounter{n: &lockCount}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		svc.RunStatus(ctx, 0)
+		close(done)
+	}()
+	waitFor(t, func() bool { return lockCount.Load() >= 1 })
+	cancel()
+	<-done
+
+	// A tiny positive interval drives the ticker arm, and a panicking sweep
+	// is confined to itself: the loop keeps checking.
+	var attempts atomic.Int64
+	svc.locker = &panickyLocker{n: &attempts}
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	done2 := make(chan struct{})
+	go func() {
+		svc.RunStatus(ctx2, 5*time.Millisecond)
+		close(done2)
+	}()
+	waitFor(t, func() bool { return attempts.Load() >= 2 }) // panicked boot sweep, then a tick
+	cancel2()
+	<-done2
+}
+
+// The profile sweep writes from the copy its page read returned. Writing
+// that whole copy back would undo a status change made in the meantime —
+// the status sweep, running alongside, deactivating this very account.
+func TestDirectorySyncProfileWriteKeepsAConcurrentDeactivation(t *testing.T) {
+	stale := oidcUser("u1", "a@x.se", "")
+	store := &pagedUserStore{mockUserStore: newMockUserStore(), pages: [][]*model.User{{stale}}}
+	current := *stale
+	current.Status, current.DeactivatedBy = "deactivated", model.DeactivatedByDirectory
+	store.users["u1"] = &current
+	dir := &stubDirectoryLookup{profile: &DirectoryProfile{ObjectID: "oid-1", Phone: "+46 70 111 22 33"}}
+	svc := NewDirectorySyncService(dir, store, newMockCache(), newMockPublisher(), nil, func() string { return "t" })
+
+	svc.Sweep(context.Background(), time.Hour)
+
+	got := store.users["u1"]
+	if got.Status != "deactivated" || got.DeactivatedBy != model.DeactivatedByDirectory {
+		t.Errorf("status = %q (by %q), want the deactivation kept", got.Status, got.DeactivatedBy)
+	}
+	if got.Phone != "+46 70 111 22 33" || got.MSObjectID != "oid-1" {
+		t.Errorf("profile not synced: %+v", got)
+	}
 }

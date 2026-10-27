@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { Navigate, useLocation, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
 import { NotificationPreferencesDialog } from '@/components/channels/NotificationPreferencesDialog';
+import { RenameChannelDialog } from '@/components/channels/RenameChannelDialog';
 import { MessageList } from './MessageList';
 import { MessageInput, type MessageInputHandle } from './MessageInput';
 import { MessageDropZone } from './MessageDropZone';
@@ -33,7 +34,7 @@ import {
 import { useChannelMessages } from '@/hooks/useMessages';
 import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
-import { canEditChannel, canArchiveChannel, canUnarchiveChannel, canLeaveChannel, roleNumber } from '@/lib/roles';
+import { canEditChannel, canArchiveChannel, canUnarchiveChannel, canLeaveChannel, roleNumber, GENERAL_CHANNEL_SLUG } from '@/lib/roles';
 import { ArchivedChannelNotice } from '@/components/chat/ArchivedChannelNotice';
 import { markThreadSeen, noteThreadReadPosition } from '@/hooks/useThreads';
 import { slugify } from '@/lib/format';
@@ -62,6 +63,7 @@ function errorStatus(err: unknown): number | null {
 export function ChannelView() {
   const { id: slug } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
+  const location = useLocation();
   const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -248,6 +250,12 @@ export function ChannelView() {
   const canArchive = canArchiveChannel(currentUserRole, user?.systemRole);
   const canUnarchive = canUnarchiveChannel(currentUserRole, user?.systemRole);
   const canLeave = canLeaveChannel(currentUserRole, channel?.slug);
+  // Whoever may edit the description may rename it — all but #general. The
+  // dialog belongs to the channel it was opened for, so moving to another
+  // channel never carries it along.
+  const canRename = canEdit && channel?.slug !== GENERAL_CHANNEL_SLUG;
+  const [renameFor, setRenameFor] = useState<string | undefined>();
+  const openRename = useEventCallback(() => setRenameFor(channelID));
 
   const selectMuted = useCallback(
     (rows: UserChannel[]) => !!rows.find((uc) => uc.channelID === channelID)?.muted,
@@ -328,6 +336,11 @@ export function ChannelView() {
   if (channelError || (!channelLoading && !channel)) {
     return <ResourceErrorPage resource="channel" status={500} />;
   }
+  // A link made before the channel was renamed: the server found it under
+  // its old name, and the address moves to the current one.
+  if (channel && slug !== channel.slug && slug !== channel.id) {
+    return <Navigate replace to={`/channel/${channel.slug}${location.search}${location.hash}`} />;
+  }
 
   // Past the guards above, `channel` is loaded (any error/absent state has
   // already returned). The `: undefined` arm is therefore unreachable here;
@@ -356,6 +369,7 @@ export function ChannelView() {
           channelId={channel?.id}
           canEdit={canEdit}
           onDescriptionSave={onDescriptionSave}
+          onRename={canRename ? openRename : undefined}
           canArchive={canArchive}
           onArchive={onArchive}
           canUnarchive={canUnarchive}
@@ -495,6 +509,10 @@ export function ChannelView() {
         />
       ) : null}
       {notifPrefsDialog}
+      {/* Mounted only while open, so any change closes it. */}
+      {channel && renameFor === channel.id && (
+        <RenameChannelDialog channel={channel} onOpenChange={() => setRenameFor(undefined)} />
+      )}
     </div>
   );
 }

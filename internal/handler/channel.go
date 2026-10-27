@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/paginate"
 	"github.com/DigitalTolk/ex/internal/service"
 )
 
@@ -107,12 +109,10 @@ func (h *ChannelHandler) List(w http.ResponseWriter, r *http.Request) {
 // paginated DDB scan so the directory's client-side filter still works.
 func (h *ChannelHandler) BrowsePublic(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
-	limit := queryInt(r, "limit", 50)
-	cursor := queryParam(r, "cursor", "")
 	q := queryParam(r, "q", "")
 
 	if q != "" {
-		hits, err := h.channelSvc.SearchPublic(r.Context(), userID, q, limit)
+		hits, err := h.channelSvc.SearchPublic(r.Context(), userID, q, queryInt(r, "limit", 50))
 		if err != nil {
 			writeServiceError(w, r, err)
 			return
@@ -123,15 +123,18 @@ func (h *ChannelHandler) BrowsePublic(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	channels, _, err := h.channelSvc.BrowsePublic(r.Context(), userID, limit, cursor)
+	// Every public channel, paged through internally: the directory, the
+	// channel browser and the webhook channel picker filter the whole list.
+	// This used to return one page of 50, newest first, and drop the next
+	// cursor — so older channels (an import keeps their original dates)
+	// were never listed, though search found them.
+	channels, err := paginate.All(r.Context(), func(ctx context.Context, cursor string) ([]*model.Channel, string, error) {
+		return h.channelSvc.BrowsePublic(ctx, userID, listAllPageSize, cursor)
+	}, listAllMaxRounds)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
 	}
-	if channels == nil {
-		channels = []*model.Channel{}
-	}
-
 	writeJSON(w, http.StatusOK, channels)
 }
 
@@ -202,6 +205,24 @@ func (h *ChannelHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, ch)
+}
+
+// NameAvailable answers whether a channel may be called {name}: the create
+// and rename dialogs ask while the name is typed, so a taken name shows
+// before submitting. ?channel= is the channel being renamed — its own name
+// counts as available to it. Guests can't create channels, so they get no
+// answer about which names exist.
+func (h *ChannelHandler) NameAvailable(w http.ResponseWriter, r *http.Request) {
+	if callerIsGuest(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "guests cannot create channels")
+		return
+	}
+	available, err := h.channelSvc.NameAvailable(r.Context(), pathParam(r, "name"), queryParam(r, "channel", ""))
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"available": available})
 }
 
 // Archive marks a channel as archived.

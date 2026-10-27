@@ -33,7 +33,7 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useDeepLinkAnchor, useListAnchor, forgetDeepLinkInAddress } from '@/hooks/useDeepLinkAnchor';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useIsOnline } from '@/stores/presence';
-import { firstName } from '@/lib/format';
+import { shortName } from '@/lib/format';
 import type { Conversation, UserConversation } from '@/types';
 import { useEventCallback } from '@/hooks/useEventCallback';
 import { useEqualValue } from '@/hooks/useEqualValue';
@@ -41,6 +41,7 @@ import { sameUserMap } from '@/lib/user-map-equal';
 import type { UserMapEntry } from './MessageList';
 import { useParentChat } from '@/hooks/useParentChat';
 import { ChannelRole } from '@/lib/roles';
+import { isDeactivated } from '@/lib/deactivated';
 
 function errorStatus(err: unknown): number | null {
   return typeof err === 'object' && err !== null && 'status' in err
@@ -71,7 +72,7 @@ function deriveConversationTitle(
     // First names only — a comma-joined list of full names doesn't
     // scale past two or three members. Custom group names (set via
     // conv.name) bypass this branch entirely and stay unchanged.
-    if (others.length > 0) return others.map(firstName).join(', ');
+    if (others.length > 0) return others.map(shortName).join(', ');
   }
   return conv.name || 'Direct Message';
 }
@@ -267,6 +268,7 @@ export function ConversationView() {
   let dmOtherUserAvatar: string | undefined;
   let dmOtherUserStatus = user?.userStatus;
   let dmOtherUserOnline: boolean | undefined;
+  let dmOtherUserInactive = false;
   if (conversation?.type === 'dm') {
     const otherID = conversation.participantIDs?.find((pid) => pid !== user?.id);
     if (otherID) {
@@ -274,6 +276,7 @@ export function ConversationView() {
       dmOtherUserAvatar = userMap[otherID]?.avatarURL;
       dmOtherUserStatus = userMap[otherID]?.userStatus;
       dmOtherUserOnline = partnerOnline;
+      dmOtherUserInactive = !!usersData?.some((u) => u.id === otherID && isDeactivated(u));
     } else if (user) {
       dmOtherUserID = user.id;
       dmOtherUserAvatar = user.avatarURL;
@@ -340,6 +343,7 @@ export function ConversationView() {
           avatarURL={conversation?.type === 'dm' ? dmOtherUserAvatar : undefined}
           avatarOnline={conversation?.type === 'dm' ? dmOtherUserOnline : undefined}
           userStatus={conversation?.type === 'dm' ? dmOtherUserStatus : undefined}
+          inactive={dmOtherUserInactive}
           userId={conversation?.type === 'dm' ? dmOtherUserID : undefined}
           currentUserId={user?.id}
           memberCount={conversation?.type === 'group' ? conversation?.participantIDs?.length : undefined}

@@ -197,6 +197,16 @@ func (s *dataUserStoreForConv) NotificationAccountsFor(_ context.Context, userID
 	return out, nil
 }
 
+func (s *dataUserStoreForConv) DeactivatedAmong(_ context.Context, userIDs []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	for _, uid := range userIDs {
+		if u, ok := s.users[uid]; ok && u.Status == "deactivated" {
+			out[uid] = true
+		}
+	}
+	return out, nil
+}
+
 type convHandlerEnv struct {
 	handler     *ConversationHandler
 	convs       *dataConversationStore
