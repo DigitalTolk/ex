@@ -84,22 +84,34 @@ func TestChannelService_Archive_Idempotent(t *testing.T) {
 	}
 }
 
-// An archived channel is read-only: no rename, no new members, no joins.
+// An archived channel is read-only: no rename and no self-joins.
 func TestChannelService_ArchivedChannelRejectsWrites(t *testing.T) {
 	ctx := context.Background()
-	svc, _, memberships, _ := archivedChannelFixture(true)
+	svc, _, _, _ := archivedChannelFixture(true)
 	name := "renamed"
 	if _, err := svc.Update(ctx, "owner", "ch-a", &name, nil); !errors.Is(err, ErrChannelArchived) {
 		t.Fatalf("Update: %v, want ErrChannelArchived", err)
 	}
-	if err := svc.AddMember(ctx, "owner", "ch-a", "user-1", model.ChannelRoleMember); !errors.Is(err, ErrChannelArchived) {
-		t.Fatalf("AddMember: %v, want ErrChannelArchived", err)
-	}
-	if _, ok := memberships.memberships["ch-a#user-1"]; ok {
-		t.Fatal("AddMember wrote a membership into an archived channel")
-	}
 	if err := svc.Join(ctx, "user-1", "ch-a"); !errors.Is(err, ErrChannelArchived) {
 		t.Fatalf("Join: %v, want ErrChannelArchived", err)
+	}
+}
+
+// Members can still add people to an archived channel (admins cannot join it
+// on their own), and the add leaves its frozen history alone.
+func TestChannelService_AddMemberToArchivedChannel(t *testing.T) {
+	svc, _, memberships, publisher := archivedChannelFixture(true)
+	if err := svc.AddMember(context.Background(), "owner", "ch-a", "user-1", model.ChannelRoleMember); err != nil {
+		t.Fatalf("AddMember: %v", err)
+	}
+	if _, ok := memberships.memberships["ch-a#user-1"]; !ok {
+		t.Fatal("membership not written")
+	}
+	if len(publishedTo(publisher, events.EventMessageNew)) != 0 {
+		t.Fatal("add posted a system message into an archived channel")
+	}
+	if len(publishedTo(publisher, events.EventMembersChanged)) == 0 {
+		t.Fatal("members-changed event missing")
 	}
 }
 

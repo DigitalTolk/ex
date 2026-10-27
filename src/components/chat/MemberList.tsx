@@ -34,8 +34,6 @@ interface MemberListProps {
   currentUserRole?: number;
   userMap?: Record<string, UserMapEntry>;
   onClose?: () => void;
-  /** Archived channel: nobody can be added (removing and leaving still work). */
-  readOnly?: boolean;
 }
 
 interface SearchUser {
@@ -56,7 +54,7 @@ function roleBadge(role: string | number) {
   return null;
 }
 
-export function MemberList({ members, channelId, channelSlug, currentUserId, currentUserRole, userMap, onClose, readOnly }: MemberListProps) {
+export function MemberList({ members, channelId, channelSlug, currentUserId, currentUserRole, userMap, onClose }: MemberListProps) {
   const [query, setQuery] = useState('');
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -111,7 +109,7 @@ export function MemberList({ members, channelId, channelSlug, currentUserId, cur
     );
   }
 
-  const canManage = canAddMembers(currentUserRole) && !!channelId && !readOnly;
+  const canManage = canAddMembers(currentUserRole) && !!channelId;
   const { dismissing, settled, motionProps } = useSwipeDismiss('right', () => onClose?.());
   // Mounted-while-open panel: Back on mobile closes it instead of navigating
   // (no-op when the caller renders it without a close handler).

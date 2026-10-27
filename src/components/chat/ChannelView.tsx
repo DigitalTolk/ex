@@ -242,7 +242,8 @@ export function ChannelView() {
   const userMap = useEqualValue(builtUserMap, sameUserMap);
 
   const currentUserRole = members?.find(m => m.userID === user?.id)?.role;
-  // An archived channel is read-only: no editing, posting or new members.
+  // An archived channel is read-only: no editing or posting (members can still
+  // add people, so they can read its history).
   const archived = !!channel?.archived;
   const canEdit = canEditChannel(currentUserRole) && !archived;
   const canArchive = canArchiveChannel(currentUserRole, user?.systemRole);
@@ -491,7 +492,6 @@ export function ChannelView() {
           currentUserRole={roleNumber(currentUserRole)}
           userMap={userMap}
           onClose={closeMembers}
-          readOnly={archived}
         />
       ) : null}
       {notifPrefsDialog}
