@@ -25,7 +25,7 @@ COPY src/ ./src/
 RUN npm run build
 
 # Stage 2: Build Go binary
-FROM golang:1.26-trixie@sha256:909771fef53e3dcb0950255f0c9a8b4728c3b841e61509c7b29b098de7ee02d4 AS backend
+FROM golang:1.27-trixie@sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4 AS backend
 ARG GIT_TAG=""
 ARG GIT_SHA=""
 WORKDIR /app
@@ -57,7 +57,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # libc here. `-tags=nodynamic` keeps github.com/gen2brain/webp on its built-in
 # codec — without it the library links libc to look for a system libwebp, and
 # the binary would not start (internal/service/webp_static_build_test.go).
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:d62067879de890a1def9da0e7766b7d20810a5e5555cef8506b752437d7a3e88
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99
 # Install to /usr/local/bin (the conventional FHS home for a locally-built
 # binary) rather than dropping it at the filesystem root. distroless sets a
 # standard PATH that includes /usr/local/bin, and Docker's exec form resolves
