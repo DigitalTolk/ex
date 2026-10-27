@@ -34,6 +34,17 @@ func (im *Importer) Channels(ctx context.Context) ([]Channel, error) {
 	return out, nil
 }
 
+// Channel reads one ex channel by ID. Unlike Channels it is a single read,
+// cheap enough to check a few channels (e.g. whether one is archived) at any
+// point of an import.
+func (im *Importer) Channel(ctx context.Context, id string) (Channel, error) {
+	c, err := im.channels.GetChannel(ctx, id)
+	if err != nil {
+		return Channel{}, fmt.Errorf("importer: get channel %s: %w", id, err)
+	}
+	return Channel{ID: c.ID, Slug: c.Slug, Name: c.Name, Type: string(c.Type), Archived: c.Archived}, nil
+}
+
 // ChannelSpec describes a channel to create.
 type ChannelSpec struct {
 	ID          string

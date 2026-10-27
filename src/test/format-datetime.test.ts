@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { calendarDaysAgo, formatLongDate, formatLongDateTime, formatDayHeading, formatRelative, shortName, shortNamesOnly, isNamePrefix, extractURLs, dayKey } from '@/lib/format';
 
+// A fixed "now" so the year logic doesn't depend on when the suite runs.
+const NOW_2026 = new Date(2026, 5, 1);
+
 // Ordinals come from the date formatter; pin the English suffix rules on
 // every surface that prints one.
 describe('ordinal day suffixes', () => {
@@ -30,24 +33,30 @@ describe('ordinal day suffixes', () => {
     expect(formatLongDate(new Date(2016, 7, 3))).toBe('August 3rd, 2016');
     expect(formatLongDate(new Date(2016, 7, 12))).toBe('August 12th, 2016');
     expect(formatLongDate(new Date(2016, 7, 22))).toBe('August 22nd, 2016');
-    expect(formatLongDateTime(new Date(2026, 4, 11, 8, 0, 0))).toBe('May 11th at 08:00:00');
+    expect(formatLongDateTime(new Date(2026, 4, 11, 8, 0, 0), NOW_2026)).toBe('May 11th at 08:00:00');
   });
 });
 
 describe('formatLongDateTime', () => {
   it('renders "Mar 26th at 18:33:01" for the example date', () => {
     const d = new Date(2026, 2, 26, 18, 33, 1);
-    expect(formatLongDateTime(d)).toBe('Mar 26th at 18:33:01');
+    expect(formatLongDateTime(d, NOW_2026)).toBe('Mar 26th at 18:33:01');
   });
 
   it('zero-pads single-digit hours/minutes/seconds', () => {
     const d = new Date(2026, 0, 1, 9, 5, 7);
-    expect(formatLongDateTime(d)).toBe('Jan 1st at 09:05:07');
+    expect(formatLongDateTime(d, NOW_2026)).toBe('Jan 1st at 09:05:07');
   });
 
   it('accepts ISO strings as well as Date instances', () => {
     const d = new Date(2026, 4, 22, 14, 0, 0);
     expect(formatLongDateTime(d.toISOString())).toBe(formatLongDateTime(d));
+  });
+
+  it('adds the year outside the current year', () => {
+    const d = new Date(2017, 6, 17, 10, 4, 2);
+    expect(formatLongDateTime(d, NOW_2026)).toBe('Jul 17th, 2017 at 10:04:02');
+    expect(formatLongDateTime(new Date(2027, 0, 2, 8, 0, 0), NOW_2026)).toBe('Jan 2nd, 2027 at 08:00:00');
   });
 });
 

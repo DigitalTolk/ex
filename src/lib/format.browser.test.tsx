@@ -83,7 +83,7 @@ describe('format — date helpers accept string / number inputs', () => {
   it('formatLongDate and formatLongDateTime accept a numeric timestamp', () => {
     const ts = new Date(2026, 7, 3, 18, 33, 1).getTime();
     expect(formatLongDate(ts)).toMatch(/August 3rd, 2026/);
-    expect(formatLongDateTime(ts)).toBe('Aug 3rd at 18:33:01');
+    expect(formatLongDateTime(ts, new Date(2026, 0, 1))).toBe('Aug 3rd at 18:33:01');
   });
 });
 
@@ -119,7 +119,7 @@ describe('format — ordinal and dates', () => {
   });
 
   it('formatLongDateTime renders "Mon Nth at HH:MM:SS"', () => {
-    const out = formatLongDateTime(new Date(2026, 2, 26, 18, 33, 1));
+    const out = formatLongDateTime(new Date(2026, 2, 26, 18, 33, 1), new Date(2026, 0, 1));
     expect(out).toBe('Mar 26th at 18:33:01');
   });
 
