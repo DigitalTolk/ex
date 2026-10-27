@@ -57,6 +57,7 @@ func baseConfig(t *testing.T) *config.Config {
 		EmailFrom:             "noreply@example.com",
 		BaseURL:               "http://localhost:8080",
 		MSProfileSyncInterval: 12 * time.Hour,
+		MSStatusSyncInterval:  5 * time.Minute,
 		TrustedProxyCount:     1,
 		OpenSearchAWSService:  "es",
 	}

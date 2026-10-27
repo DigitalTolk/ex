@@ -292,12 +292,14 @@ func usersForCaller(r *http.Request, users []*model.User) any {
 	return publicUserList(r, users)
 }
 
-// ListUsers returns a paginated list of users. If the "q" query parameter is
-// provided, it searches users by display name or email prefix instead.
-// `?all=true` returns the whole roster by paginating internally — used by the
-// mention popup which caches the list client-side, so it's ALWAYS the limited
-// public projection. The directory (default + `?q=`) paths give the full record
-// to admins and the public projection to everyone else (see usersForCaller).
+// ListUsers returns the whole roster, paged through internally. If the "q"
+// query parameter is provided, it searches users by display name or email
+// prefix instead. `?all=true` is the mention popup's copy, which it caches
+// client-side, so it's ALWAYS the limited public projection. The directory
+// (default + `?q=`) paths give the full record to admins and the public
+// projection to everyone else (see usersForCaller). The default path used to
+// return one page of 50 and drop the next cursor, so the directory never
+// listed anyone past the first 50 accounts.
 func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	q := queryParam(r, "q", "")
 	if q != "" {
@@ -310,27 +312,17 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if queryParam(r, "all", "") == "true" {
-		users, err := paginate.All(r.Context(), func(ctx context.Context, cursor string) ([]*model.User, string, error) {
-			return h.userSvc.List(ctx, listAllPageSize, cursor)
-		}, listAllMaxRounds)
-		if err != nil {
-			writeServiceError(w, r, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, publicUserList(r, users))
-		return
-	}
-
-	limit := queryInt(r, "limit", 50)
-	cursor := queryParam(r, "cursor", "")
-
-	users, _, err := h.userSvc.List(r.Context(), limit, cursor)
+	users, err := paginate.All(r.Context(), func(ctx context.Context, cursor string) ([]*model.User, string, error) {
+		return h.userSvc.List(ctx, listAllPageSize, cursor)
+	}, listAllMaxRounds)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
 	}
-
+	if queryParam(r, "all", "") == "true" {
+		writeJSON(w, http.StatusOK, publicUserList(r, users))
+		return
+	}
 	writeJSON(w, http.StatusOK, usersForCaller(r, users))
 }
 

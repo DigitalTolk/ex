@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { firstName, formatRelative, formatLongDate } from './format';
+import { shortName, formatRelative, formatLongDate } from './format';
 
-// Browser-gate coverage for the relative-time + firstName branches that the
+// Browser-gate coverage for the relative-time + shortName branches that the
 // jsdom format test exercises (excluded from the jsdom gate).
 
 describe('format helpers (browser)', () => {
-  it('firstName returns an empty string for blank input', () => {
-    expect(firstName('   ')).toBe('');
+  it('shortName returns an empty string for blank input', () => {
+    expect(shortName('   ')).toBe('');
   });
 
-  it('firstName returns the leading token', () => {
-    expect(firstName('Alice Wonderland')).toBe('Alice');
+  it('shortName returns the leading token', () => {
+    expect(shortName('Alice Wonderland')).toBe('Alice');
   });
 
   it('formatRelative renders minutes / days / years with singular + plural', () => {

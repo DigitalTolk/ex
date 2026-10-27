@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -141,7 +142,20 @@ type MessageService struct {
 	// drafts clears the author's composer draft once a send lands. Optional
 	// seam (SetDraftClearer) — nil leaves drafts to the client.
 	drafts SentDraftClearer
+	// deactivated tells which mentioned accounts are deactivated, so a
+	// mention doesn't make them follow the thread. Optional seam
+	// (SetDeactivatedAccounts) — nil follows everyone mentioned.
+	deactivated DeactivatedAccounts
 }
+
+// DeactivatedAccounts reports which of userIDs are deactivated accounts
+// (the user store).
+type DeactivatedAccounts interface {
+	DeactivatedAmong(ctx context.Context, userIDs []string) (map[string]bool, error)
+}
+
+// SetDeactivatedAccounts wires the deactivated-account check.
+func (s *MessageService) SetDeactivatedAccounts(d DeactivatedAccounts) { s.deactivated = d }
 
 // SetDraftClearer folds the draft clear into the send: a successful Send
 // clears the author's draft for that composer server-side, so the client
@@ -1086,12 +1100,33 @@ func (s *MessageService) followMentionedThreadUsers(ctx context.Context, msg *mo
 			UpdatedAt:    now,
 		})
 	}
+	follows = s.withoutDeactivated(ctx, follows)
 	if len(follows) == 0 {
 		return
 	}
 	if err := s.threadFollows.SetThreadFollowMany(ctx, follows); err != nil {
 		slog.WarnContext(ctx, "thread mention follow batch failed", "count", len(follows), "threadRootID", msg.ParentMessageID, "error", err)
 	}
+}
+
+// withoutDeactivated drops the follows of deactivated accounts: mentioning
+// one alerts nobody, so it mustn't leave a follow row behind either. A failed
+// check keeps every follow — a missing one would cost an active colleague the
+// thread's alerts.
+func (s *MessageService) withoutDeactivated(ctx context.Context, follows []*model.ThreadFollow) []*model.ThreadFollow {
+	if len(follows) == 0 || s.deactivated == nil {
+		return follows
+	}
+	ids := make([]string, len(follows))
+	for i, f := range follows {
+		ids[i] = f.UserID
+	}
+	deactivated, err := s.deactivated.DeactivatedAmong(ctx, ids)
+	if err != nil {
+		slog.WarnContext(ctx, "thread mention follow: account status read failed; following everyone mentioned", "error", err)
+		return follows
+	}
+	return slices.DeleteFunc(follows, func(f *model.ThreadFollow) bool { return deactivated[f.UserID] })
 }
 
 // ResolveThreadRoot maps any message id to the root of its thread: a reply
@@ -2227,7 +2262,7 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 		}
 	}
 
-	if err := s.softDeleteMessage(ctx, msg, parentID, parentType); err != nil {
+	if err := s.softDeleteMessage(ctx, msg, userID, parentID, parentType); err != nil {
 		return err
 	}
 
@@ -2240,7 +2275,7 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 	// closed the thread to new replies.
 	deleted := []string{msgID}
 	if msg.ParentMessageID == "" {
-		deleted = append(deleted, s.cascadeDeleteThreadReplies(ctx, parentID, parentType, msgID)...)
+		deleted = append(deleted, s.cascadeDeleteThreadReplies(ctx, userID, parentID, parentType, msgID)...)
 	}
 	if s.activity != nil {
 		s.activity.MessagesDeleted(ctx, parentID, parentType, deleted)
@@ -2270,21 +2305,26 @@ func (s *MessageService) purgeRunLogs(ctx context.Context, parentID, msgID strin
 	})
 }
 
-// softDeleteMessage tombstones a single message: clears its body /
-// attachments / reactions / pin state, persists the Deleted=true row (so
-// replies referencing it can still resolve their root), releases attachment
-// refs, tears down the PIN# / FILE# index rows it owned, publishes the
+// softDeleteMessage tombstones a single message: moves its body /
+// attachments out of view (model.Message.Tombstone keeps them in the row),
+// clears reactions / pin state, persists the Deleted=true row with who
+// deleted it and when (so replies referencing it can still resolve their
+// root), tears down the PIN# / FILE# index rows it owned, publishes the
 // deleted event, and drops it from the search index. Shared by Delete (the
 // target) and its thread-reply cascade.
-func (s *MessageService) softDeleteMessage(ctx context.Context, msg *model.Message, parentID, parentType string) error {
+//
+// Nothing is destroyed: the attachments keep this message's reference, so
+// their files stay in storage — and since the tombstone no longer lists
+// them, no reader is granted them through it.
+func (s *MessageService) softDeleteMessage(ctx context.Context, msg *model.Message, actorID, parentID, parentType string) error {
 	originalAttachments := msg.AttachmentIDs
 	wasPinned := msg.Pinned
 	msg.Tombstone()
+	now := time.Now()
+	msg.DeletedAt, msg.DeletedBy = &now, actorID
 	if err := s.messages.UpdateMessage(ctx, msg); err != nil {
 		return fmt.Errorf("message: soft-delete: %w", err)
 	}
-
-	s.releaseAttachments(ctx, msg.ID, originalAttachments)
 
 	// Tear down the index rows that pointed at this message.
 	// - Pin index: drop unconditionally if the message was pinned.
@@ -2336,7 +2376,7 @@ func (s *MessageService) softDeleteMessage(ctx context.Context, msg *model.Messa
 // reply gets the same tombstone treatment + deleted event as a
 // directly-deleted message, so connected clients patch the thread in real
 // time. Best-effort per reply.
-func (s *MessageService) cascadeDeleteThreadReplies(ctx context.Context, parentID, parentType, rootID string) []string {
+func (s *MessageService) cascadeDeleteThreadReplies(ctx context.Context, actorID, parentID, parentType, rootID string) []string {
 	msgs, err := s.scanParentMessages(ctx, parentID)
 	if err != nil {
 		slog.WarnContext(ctx, "thread cascade scan failed", "rootID", rootID, "error", err)
@@ -2347,7 +2387,7 @@ func (s *MessageService) cascadeDeleteThreadReplies(ctx context.Context, parentI
 		if m.ParentMessageID != rootID || m.Deleted {
 			continue
 		}
-		if err := s.softDeleteMessage(ctx, m, parentID, parentType); err != nil {
+		if err := s.softDeleteMessage(ctx, m, actorID, parentID, parentType); err != nil {
 			slog.WarnContext(ctx, "thread reply cascade delete failed", "msgID", m.ID, "rootID", rootID, "error", err)
 			continue
 		}

@@ -14,6 +14,7 @@ import { useSkills } from '@/hooks/useAgents';
 import { useProjects } from '@/hooks/useProjects';
 import { skillPickToken } from '@/lib/picks';
 import type { UserChannel } from '@/types';
+import { withoutDeactivated } from '@/lib/deactivated';
 
 export type { WysiwygEditorHandle, ActiveFormat };
 
@@ -106,8 +107,9 @@ export const MarkdownComposer = memo(forwardRef<WysiwygEditorHandle, Props>(func
 
   const completionProviders = useMemo<CompletionProviders>(
     () => ({
+      // Nobody can mention a deactivated account.
       users: () =>
-        users.map((u) => ({
+        withoutDeactivated(users).map((u) => ({
           id: u.id,
           displayName: u.displayName,
           email: u.email,

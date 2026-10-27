@@ -621,8 +621,11 @@ func TestStores_NonexistentTable_ReturnsWrappedError(t *testing.T) {
 	if _, err := cs.GetByName(ctx, "x"); err == nil {
 		t.Error("ChannelStore.GetByName: expected error")
 	}
-	if err := cs.UpdateChannel(ctx, ch); err == nil {
-		t.Error("ChannelStore.Update: expected error")
+	if err := cs.PatchChannel(ctx, ch.ID, ChannelPatch{UpdatedAt: time.Now()}); err == nil {
+		t.Error("ChannelStore.PatchChannel: expected error")
+	}
+	if err := cs.RenameChannel(ctx, ch.ID, "x", "y", "y", time.Now()); err == nil {
+		t.Error("ChannelStore.RenameChannel: expected error")
 	}
 	if _, _, err := cs.ListPublicChannels(ctx, 10, ""); err == nil {
 		t.Error("ChannelStore.ListPublic: expected error")

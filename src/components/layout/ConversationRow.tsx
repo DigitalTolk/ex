@@ -9,7 +9,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { firstNamesOnly } from '@/lib/format';
+import { shortNamesOnly } from '@/lib/format';
 import {
   useCategories,
   useFavoriteConversation,
@@ -151,7 +151,7 @@ export const ConversationRow = memo(function ConversationRow({
             >
               {participantCount}
             </Badge>
-            <span className="truncate">{firstNamesOnly(conversation.displayName)}</span>
+            <span className="truncate">{shortNamesOnly(conversation.displayName)}</span>
           </>
         ) : (
           <>

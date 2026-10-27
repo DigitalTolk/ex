@@ -1593,11 +1593,14 @@ func TestMessageService_Send_RegistersAttachmentRefs(t *testing.T) {
 	}
 }
 
-// TestMessageService_Delete_DerefsAttachments verifies that deleting a
-// message releases its attachment refs and GCs single-ref uploads.
-func TestMessageService_Delete_DerefsAttachments(t *testing.T) {
+// TestMessageService_Delete_KeepsAttachments: deleting a message is a soft
+// delete, files included. The attachment keeps its row, its reference and its
+// stored objects — and nobody can open it through the deleted message any
+// more, its uploader included.
+func TestMessageService_Delete_KeepsAttachments(t *testing.T) {
 	channelMembers := newMockMembershipStore()
 	channelMembers.memberships["c1#u1"] = &model.ChannelMembership{ChannelID: "c1", UserID: "u1", Role: model.ChannelRoleMember}
+	channelMembers.memberships["c1#u2"] = &model.ChannelMembership{ChannelID: "c1", UserID: "u2", Role: model.ChannelRoleMember}
 	messages := newMockMessageStore()
 	atts := newMockAttachmentStore()
 	object := makePNG(1, 1)
@@ -1606,6 +1609,7 @@ func TestMessageService_Delete_DerefsAttachments(t *testing.T) {
 
 	svc := NewMessageService(messages, channelMembers, newMockConversationStore(), pub, newMockBroker())
 	attSvc := NewAttachmentService(atts, signer, pub)
+	attSvc.SetAccessChecker(svc)
 	svc.SetAttachmentManager(attSvc)
 
 	res, _ := attSvc.CreateUploadURL(context.Background(), CreateUploadParams{UserID: "u1", Filename: "p.png", ContentType: "image/png", SHA256: sha256Hex(object), Size: int64(len(object))})
@@ -1615,15 +1619,30 @@ func TestMessageService_Delete_DerefsAttachments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
+	if _, err := attSvc.GetForUser(context.Background(), "u2", att.ID, "c1", ParentChannel, msg.ID); err != nil {
+		t.Fatalf("a member reads the attachment of a live message: %v", err)
+	}
 
 	if err := svc.Delete(context.Background(), "u1", "c1", ParentChannel, msg.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, exists := atts.byID[att.ID]; exists {
-		t.Error("attachment should be GC'd after sole-ref message deleted")
+	if _, exists := atts.byID[att.ID]; !exists {
+		t.Error("the attachment row must be kept")
 	}
-	if len(signer.deleted) != 3 {
-		t.Errorf("S3 object not deleted, got %v", signer.deleted)
+	if !atts.refs[att.ID][msg.ID] {
+		t.Errorf("the deleted message must keep its reference, refs=%v", atts.refs[att.ID])
+	}
+	if len(signer.deleted) != 0 {
+		t.Errorf("stored objects deleted: %v", signer.deleted)
+	}
+	stored := messages.messages["c1#"+msg.ID]
+	if stored.DeletedContent == nil || len(stored.DeletedContent.AttachmentIDs) != 1 || stored.DeletedContent.AttachmentIDs[0] != att.ID {
+		t.Errorf("DeletedContent = %+v, want the attachment kept with the message", stored.DeletedContent)
+	}
+	for _, uid := range []string{"u1", "u2"} {
+		if _, err := attSvc.GetForUser(context.Background(), uid, att.ID, "c1", ParentChannel, msg.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("%s reads a deleted message's attachment: err = %v, want not found", uid, err)
+		}
 	}
 }
 

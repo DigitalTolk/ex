@@ -182,7 +182,7 @@ func (t *TeamsMeetingCommand) subject(ctx context.Context, req CommandRequest) s
 // as fallback. Best-effort by design: the join link lands in the chat for
 // everyone regardless, so a member the batch can't resolve (or with neither
 // email nor object id) is skipped, not fatal. The invoker is excluded —
-// they're the organizer.
+// they're the organizer — and so is every deactivated account.
 func (t *TeamsMeetingCommand) attendees(ctx context.Context, memberIDs []string, invokerID string) []msgraph.MeetingAttendee {
 	others := make([]string, 0, len(memberIDs))
 	for _, id := range memberIDs {
@@ -195,7 +195,8 @@ func (t *TeamsMeetingCommand) attendees(ctx context.Context, memberIDs []string,
 	users, _ := t.deps.Users.GetBatch(ctx, others)
 	out := make([]msgraph.MeetingAttendee, 0, len(users))
 	for _, u := range users {
-		if u.Email == "" && u.MSObjectID == "" {
+		// A deactivated account can't join: it isn't invited either.
+		if u.Status == "deactivated" || (u.Email == "" && u.MSObjectID == "") {
 			continue
 		}
 		out = append(out, msgraph.MeetingAttendee{UPN: u.Email, ObjectID: u.MSObjectID})

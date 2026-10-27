@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { calendarDaysAgo, formatLongDate, formatLongDateTime, formatDayHeading, formatRelative, firstNamesOnly, extractURLs, dayKey } from '@/lib/format';
+import { calendarDaysAgo, formatLongDate, formatLongDateTime, formatDayHeading, formatRelative, shortName, shortNamesOnly, isNamePrefix, extractURLs, dayKey } from '@/lib/format';
 
 // A fixed "now" so the year logic doesn't depend on when the suite runs.
 const NOW_2026 = new Date(2026, 5, 1);
@@ -152,30 +152,34 @@ describe('dayKey', () => {
   });
 });
 
-describe('firstNamesOnly', () => {
+describe('shortNamesOnly', () => {
   it('collapses each comma-separated entry to its first word', () => {
-    expect(firstNamesOnly('Alice Smith, Bob Jones, Charlie Brown')).toBe('Alice, Bob, Charlie');
+    expect(shortNamesOnly('Alice Smith, Bob Jones, Charlie Brown')).toBe('Alice, Bob, Charlie');
   });
 
   it('passes through single-word entries unchanged', () => {
-    expect(firstNamesOnly('Alice, Bob')).toBe('Alice, Bob');
+    expect(shortNamesOnly('Alice, Bob')).toBe('Alice, Bob');
   });
 
   it('trims whitespace around commas', () => {
-    expect(firstNamesOnly('Alice Smith ,  Bob Jones')).toBe('Alice, Bob');
+    expect(shortNamesOnly('Alice Smith ,  Bob Jones')).toBe('Alice, Bob');
   });
 
   it('returns empty string for empty input', () => {
-    expect(firstNamesOnly('')).toBe('');
-    expect(firstNamesOnly(undefined)).toBe('');
+    expect(shortNamesOnly('')).toBe('');
+    expect(shortNamesOnly(undefined)).toBe('');
   });
 
   it('drops blank entries entirely', () => {
-    expect(firstNamesOnly('Alice, , Bob Jones')).toBe('Alice, Bob');
+    expect(shortNamesOnly('Alice, , Bob Jones')).toBe('Alice, Bob');
   });
 
   it('leaves a single-token custom label alone (no comma → not a name list)', () => {
-    expect(firstNamesOnly('Project Team')).toBe('Project Team');
+    expect(shortNamesOnly('Project Team')).toBe('Project Team');
+  });
+
+  it('keeps what follows a Muhammad prefix, so a group of them reads apart', () => {
+    expect(shortNamesOnly('Muhammad Ali Khan, Muhammad Ali Raza, Sara Ahmed')).toBe('Ali Khan, Ali Raza, Sara');
   });
 });
 
@@ -233,5 +237,37 @@ describe('unparseable timestamps', () => {
   it('group together, apart from every real day', () => {
     expect(dayKey(bad)).toBe(dayKey('not a date'));
     expect(dayKey(bad)).not.toBe(dayKey(new Date(2026, 9, 7)));
+  });
+});
+
+describe('shortName', () => {
+  it('is the first word of an ordinary name', () => {
+    expect(shortName('Alice Smith')).toBe('Alice');
+    expect(shortName('  Cher ')).toBe('Cher');
+    expect(shortName('')).toBe('');
+    expect(shortName('Ali Muhammad')).toBe('Ali');
+  });
+
+  it('keeps everything after leading name prefixes, in any of their spellings', () => {
+    expect(shortName('Muhammad Ali Khan')).toBe('Ali Khan');
+    expect(shortName('MOHAMMED Bilal')).toBe('Bilal');
+    expect(shortName('Md. Rahim Uddin')).toBe('Rahim Uddin');
+    expect(shortName('Muhammad Mohd Faraz')).toBe('Faraz');
+  });
+
+  it('keeps the first word of a name that is nothing but prefixes', () => {
+    expect(shortName('Muhammad')).toBe('Muhammad');
+    expect(shortName('Muhammad Mohammed')).toBe('Muhammad');
+  });
+});
+
+describe('isNamePrefix', () => {
+  it('knows the spellings and abbreviations of Muhammad', () => {
+    for (const w of ['Muhammad', 'muhammed', 'Mohammad', 'Mohammed', 'Mohamed', 'Mohamad', 'Muhamad', 'Mohd.', 'Md', 'md.']) {
+      expect(isNamePrefix(w)).toBe(true);
+    }
+    for (const w of ['Ali', 'Mo', 'Mohammadi', '']) {
+      expect(isNamePrefix(w)).toBe(false);
+    }
   });
 });

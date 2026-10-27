@@ -26,6 +26,7 @@ import { getInitials } from '@/lib/format';
 import { PresenceDot } from '@/components/PresenceDot';
 import { PasswordResetDialog } from '@/components/PasswordResetDialog';
 import { presenceNotchStyle } from '@/lib/presence';
+import { deactivatedLast, isDeactivated } from '@/lib/deactivated';
 import { formatLastSeen, formatTimeZoneDelta, formatTimeZoneName, isValidTimeZone } from '@/lib/user-time';
 import type { User } from '@/types';
 import { SearchInput } from '@/components/ui/search-input';
@@ -215,6 +216,9 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
   }
 
   const onlineCount = users.reduce((n, u) => (isOnline(u.id) ? n + 1 : n), 0);
+  // Deactivated accounts sit at the end, so the people you can reach come
+  // first — re-sorted live as a user.updated flips someone's status.
+  const listed = deactivatedLast(users);
   const memberGridClassName =
     'grid grid-cols-2 gap-3 md:grid-cols-[repeat(auto-fill,minmax(16rem,calc((100%_-_3rem)/5)))] md:justify-start';
 
@@ -253,7 +257,8 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
       )}
 
       <div className={memberGridClassName} data-testid="members-grid">
-        {!isLoading && users.map((u) => {
+        {!isLoading && listed.map((u) => {
+          const inactive = isDeactivated(u);
           const online = isOnline(u.id);
           const isSelf = u.id === currentUserId;
           const effectiveTimeZone = isValidTimeZone(u.timeZone) ? u.timeZone : undefined;
@@ -264,11 +269,12 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
             <div
               key={u.id}
               data-testid="directory-user-card"
+              data-inactive={inactive || undefined}
               className="group items-start overflow-hidden rounded-lg border bg-card transition-colors hover:bg-muted/40"
             >
               <div className="relative aspect-square w-full bg-muted" data-testid="directory-user-avatar">
                 <Avatar
-                  className="h-full w-full rounded-none after:rounded-none"
+                  className={`h-full w-full rounded-none after:rounded-none ${inactive ? 'opacity-60 grayscale' : ''}`}
                   style={presenceNotchStyle(12, 8)}
                 >
                   {u.avatarURL && <AvatarImage src={u.avatarURL} alt="" className="rounded-none" />}
@@ -302,7 +308,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                   </a>
                 </p>
                 <div className="flex flex-wrap items-center gap-1">
-                  {u.status === 'deactivated' && (
+                  {inactive && (
                     <Badge
                       variant="destructive"
                       data-testid={`status-pill-${u.id}`}
@@ -403,7 +409,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                             Reset password
                           </DropdownMenuItem>
                         )}
-                        {u.status === 'deactivated' ? (
+                        {inactive ? (
                           <DropdownMenuItem
                             onClick={() => setStatus(u.id, false)}
                             data-testid={`reactivate-${u.id}`}

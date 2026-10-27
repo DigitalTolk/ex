@@ -505,6 +505,9 @@ type NotificationAccount struct {
 	Settings model.NotificationSettings
 	// Machine marks a bot or agent account: nobody reads its activity stream.
 	Machine bool
+	// Deactivated marks an account that can no longer sign in: it is
+	// alerted for nothing, so nothing is written for it either.
+	Deactivated bool
 }
 
 // NotificationAccountsFor batch-reads the account-level notification settings
@@ -523,13 +526,14 @@ func (s *UserStoreImpl) NotificationAccountsFor(ctx context.Context, userIDs []s
 		Settings *model.NotificationSettings `dynamodbav:"notificationSettings"`
 		IsBot    bool                        `dynamodbav:"isBot"`
 		Kind     model.UserKind              `dynamodbav:"kind"`
+		Status   string                      `dynamodbav:"status"`
 	}
 	rows, err := batchGetOf[settingsRow](ctx, s.DB, keys, types.KeysAndAttributes{
 		// Consistent: the notification audience cache keeps what it reads, so a
 		// settings change made a moment earlier must be seen.
 		ConsistentRead:           aws.Bool(true),
-		ProjectionExpression:     aws.String("#id, #ns, #bot, #kind"),
-		ExpressionAttributeNames: map[string]string{"#id": "id", "#ns": "notificationSettings", "#bot": "isBot", "#kind": "kind"},
+		ProjectionExpression:     aws.String("#id, #ns, #bot, #kind, #st"),
+		ExpressionAttributeNames: map[string]string{"#id": "id", "#ns": "notificationSettings", "#bot": "isBot", "#kind": "kind", "#st": "status"},
 	}, "notification settings")
 	if err != nil {
 		return nil, err
@@ -539,11 +543,43 @@ func (s *UserStoreImpl) NotificationAccountsFor(ctx context.Context, userIDs []s
 		if row.ID == "" {
 			continue
 		}
-		acct := NotificationAccount{Settings: model.DefaultNotificationSettings(), Machine: row.IsBot || row.Kind == model.UserKindAgent}
+		acct := NotificationAccount{
+			Settings:    model.DefaultNotificationSettings(),
+			Machine:     row.IsBot || row.Kind == model.UserKindAgent,
+			Deactivated: row.Status == "deactivated",
+		}
 		if row.Settings != nil {
 			acct.Settings = *row.Settings
 		}
 		out[row.ID] = acct
+	}
+	return out, nil
+}
+
+// DeactivatedAmong reports which of userIDs belong to deactivated accounts:
+// one chunked BatchGetItem of 100, projecting only id and status. IDs with
+// no profile row are simply absent.
+func (s *UserStoreImpl) DeactivatedAmong(ctx context.Context, userIDs []string) (map[string]bool, error) {
+	keys := make([]map[string]types.AttributeValue, len(userIDs))
+	for i, uid := range userIDs {
+		keys[i] = compositeKey(userPK(uid), profileSK())
+	}
+	type statusRow struct {
+		ID     string `dynamodbav:"id"`
+		Status string `dynamodbav:"status"`
+	}
+	rows, err := batchGetOf[statusRow](ctx, s.DB, keys, types.KeysAndAttributes{
+		ProjectionExpression:     aws.String("#id, #st"),
+		ExpressionAttributeNames: map[string]string{"#id": "id", "#st": "status"},
+	}, "user status")
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, row := range rows {
+		if row.Status == "deactivated" {
+			out[row.ID] = true
+		}
 	}
 	return out, nil
 }

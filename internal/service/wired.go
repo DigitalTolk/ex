@@ -66,6 +66,7 @@ func (s *MessageService) Wired() error {
 		wiring.Dep{Name: "run log purger", Set: s.runLogPurger != nil},
 		wiring.Dep{Name: "run skill resolver", Set: s.skillBadges != nil},
 		wiring.Dep{Name: "thread seed users", Set: s.seedUsers != nil},
+		wiring.Dep{Name: "deactivated accounts", Set: s.deactivated != nil},
 		wiring.Dep{Name: "attachment manager", Set: s.attachments != nil},
 		wiring.Dep{Name: "draft clearer", Set: s.drafts != nil},
 		wiring.Dep{Name: "activity recorder", Set: s.activity != nil},
@@ -147,6 +148,7 @@ func (s *CommandService) Wired() error {
 
 func (s *DirectorySyncService) Wired() error {
 	return wiring.Check("directory sync",
+		wiring.Dep{Name: "account lister", Set: s.accounts != nil},
 		wiring.Dep{Name: "status setter", Set: s.status != nil},
 	)
 }
@@ -156,6 +158,7 @@ func (s *ActivityService) Wired() error {
 		wiring.Dep{Name: "channel resolver", Set: s.channels != nil},
 		wiring.Dep{Name: "member lister", Set: s.members != nil},
 		wiring.Dep{Name: "mention resolver", Set: s.mentions != nil},
+		wiring.Dep{Name: "deactivated accounts", Set: s.deactivated != nil},
 	)
 }
 

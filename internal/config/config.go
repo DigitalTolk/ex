@@ -62,6 +62,11 @@ type Config struct {
 	// when their owner doesn't re-login (MS_PROFILE_SYNC_INTERVAL, default
 	// 12h). The first sweep runs at boot and doubles as the backfill.
 	MSProfileSyncInterval time.Duration `env:"MS_PROFILE_SYNC_INTERVAL" envDefault:"12h"`
+	// MSStatusSyncInterval paces the account-standing check: an account
+	// disabled or deleted in Entra is deactivated in Ex within one interval
+	// (MS_STATUS_SYNC_INTERVAL, default 5m). One tenant-wide Graph listing
+	// per interval, whatever the number of users.
+	MSStatusSyncInterval time.Duration `env:"MS_STATUS_SYNC_INTERVAL" envDefault:"5m"`
 
 	// JWT
 	JWTSecret     string        `env:"JWT_SECRET"`
@@ -243,6 +248,9 @@ func Load() (*Config, error) {
 	}
 	if c.MSProfileSyncInterval <= 0 {
 		return nil, fmt.Errorf("invalid MS_PROFILE_SYNC_INTERVAL %s: must be a positive duration", c.MSProfileSyncInterval)
+	}
+	if c.MSStatusSyncInterval <= 0 {
+		return nil, fmt.Errorf("invalid MS_STATUS_SYNC_INTERVAL %s: must be a positive duration", c.MSStatusSyncInterval)
 	}
 
 	// EMAIL_FROM is the transport-neutral sender; it falls back to SMTP_FROM

@@ -181,6 +181,22 @@ export function useArchiveChannel() {
   );
 }
 
+// Making a channel private moves it out of the directory and the channel
+// browser: those lists are refetched with the row and the open channel.
+export function useMakeChannelPrivate() {
+  const queryClient = useQueryClient();
+  return useChannelAction(
+    'private',
+    (channelId: string) => apiFetch<Channel>(`/api/v1/channels/${channelId}/private`, { method: 'POST' }),
+    () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.browseChannels() });
+    },
+    "Couldn't make the channel private. Try again.",
+  );
+}
+
 export function useUnarchiveChannel() {
   const queryClient = useQueryClient();
   return useChannelAction(
@@ -220,6 +236,23 @@ export function useUpdateChannelDescription() {
     },
     "Couldn't save the description. Try again.",
   );
+}
+
+// Renames a channel. Its slug — the URL key — follows the name; the server
+// answers 409 when another channel holds it.
+export function useRenameChannel() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { channelId: string; name: string }) =>
+      apiFetch<Channel>(`/api/v1/channels/${vars.channelId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: vars.name }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelBySlug() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
+    },
+  });
 }
 
 // Adds people to a channel as members (the member list's picker adds one, the

@@ -41,33 +41,37 @@ export function NonMemberInvitePrompt({ channelId, channelName, users, onDismiss
   const names = users.map((u) => u.displayName).join(', ');
   const multiple = users.length > 1;
   return (
-    <div
-      role="status"
-      data-testid="non-member-invite"
-      className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t bg-muted/30 px-3 py-2 text-sm"
-    >
-      <p className="min-w-0 text-muted-foreground">
-        <span className="font-medium text-foreground">{names}</span>{' '}
-        {multiple ? "aren't" : "isn't"} in ~{channelName} yet.
-      </p>
-      {error && (
-        <span className="text-destructive" role="alert">
-          {error}
-        </span>
-      )}
-      <div className="ml-auto flex shrink-0 items-center gap-1.5">
-        <Button size="sm" onClick={addAll} disabled={adding}>
-          {adding ? 'Adding…' : multiple ? `Add all (${users.length})` : 'Add to channel'}
-        </Button>
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          onClick={onDismiss}
-          disabled={adding}
-          aria-label="Dismiss invite suggestion"
-        >
-          <X className="h-4 w-4" />
-        </Button>
+    // The chat's centred column with the composer's gutter, so the card lines
+    // up with the composer box below it instead of spanning the whole view.
+    <div className="mx-auto w-full max-w-4xl px-3 pt-3 mobile:px-2 mobile:pt-1.5">
+      <div
+        role="status"
+        data-testid="non-member-invite"
+        className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border bg-muted/30 px-3 py-2 text-sm"
+      >
+        <p className="min-w-0 text-muted-foreground">
+          <span className="font-medium text-foreground">{names}</span>{' '}
+          {multiple ? "aren't" : "isn't"} in ~{channelName} yet.
+        </p>
+        {error && (
+          <span className="text-destructive" role="alert">
+            {error}
+          </span>
+        )}
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <Button size="sm" onClick={addAll} disabled={adding}>
+            {adding ? 'Adding…' : multiple ? `Add all (${users.length})` : 'Add to channel'}
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={onDismiss}
+            disabled={adding}
+            aria-label="Dismiss invite suggestion"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
     </div>
   );

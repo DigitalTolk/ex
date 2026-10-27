@@ -19,7 +19,7 @@ func clearEnv(t *testing.T) {
 		"SENTRY_FRONTEND_DSN", "SENTRY_FRONTEND_TRACES_SAMPLE_RATE",
 		"SENTRY_FRONTEND_REPLAY_SESSION_SAMPLE_RATE", "SENTRY_FRONTEND_REPLAY_ERROR_SAMPLE_RATE",
 		"ACCESS_LOG_ENABLED",
-		"MS_TENANT_ID", "MS_CLIENT_ID", "MS_CLIENT_SECRET", "MS_PROFILE_SYNC_INTERVAL",
+		"MS_TENANT_ID", "MS_CLIENT_ID", "MS_CLIENT_SECRET", "MS_PROFILE_SYNC_INTERVAL", "MS_STATUS_SYNC_INTERVAL",
 		"EMAIL_PROVIDER", "EMAIL_FROM", "SES_CONFIGURATION_SET",
 	}
 
@@ -480,6 +480,42 @@ func TestLoadMSProfileSyncInterval(t *testing.T) {
 			t.Setenv("MS_PROFILE_SYNC_INTERVAL", bad)
 			if _, err := Load(); err == nil {
 				t.Fatalf("Load with MS_PROFILE_SYNC_INTERVAL=%q should fail", bad)
+			}
+		})
+	}
+}
+
+func TestLoadMSStatusSyncInterval(t *testing.T) {
+	t.Run("default 5m", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.MSStatusSyncInterval != 5*time.Minute {
+			t.Errorf("MSStatusSyncInterval = %v, want 5m", cfg.MSStatusSyncInterval)
+		}
+	})
+	t.Run("custom", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("MS_STATUS_SYNC_INTERVAL", "30s")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.MSStatusSyncInterval != 30*time.Second {
+			t.Errorf("MSStatusSyncInterval = %v, want 30s", cfg.MSStatusSyncInterval)
+		}
+	})
+	for _, bad := range []string{"abc", "-1m", "0"} {
+		t.Run("rejects "+bad, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("ENV", "development")
+			t.Setenv("MS_STATUS_SYNC_INTERVAL", bad)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load with MS_STATUS_SYNC_INTERVAL=%q should fail", bad)
 			}
 		})
 	}

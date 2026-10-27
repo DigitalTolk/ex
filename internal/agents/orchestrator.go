@@ -1448,16 +1448,17 @@ func (o *Orchestrator) LinkifyMentions(ctx context.Context, run *model.Run, body
 	// names ride along when unambiguous.
 	participants := o.threadParticipants(ctx, run)
 	firstNames := map[string][]*model.User{}
+	// The first name is the one a person goes by: "Ali Khan" for Muhammad
+	// Ali Khan (model.ShortName).
 	for _, u := range participants {
 		add(u.DisplayName, u)
-		if first, _, ok := strings.Cut(u.DisplayName, " "); ok {
+		if first := model.ShortName(u.DisplayName); !strings.EqualFold(first, strings.TrimSpace(u.DisplayName)) && !model.IsNamePrefix(first) {
 			firstNames[strings.ToLower(first)] = append(firstNames[strings.ToLower(first)], u)
 		}
 	}
 	for _, us := range firstNames {
 		if len(us) == 1 {
-			first, _, _ := strings.Cut(us[0].DisplayName, " ")
-			add(first, us[0])
+			add(model.ShortName(us[0].DisplayName), us[0])
 		}
 	}
 	// Longest name first, so multi-word display names match before their

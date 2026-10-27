@@ -142,10 +142,13 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("POST /api/v1/channels", middleware.WrapFunc(channelH.Create, authMW))
 	mux.Handle("GET /api/v1/channels", middleware.WrapFunc(channelH.List, authMW))
 	mux.Handle("GET /api/v1/channels/browse", middleware.WrapFunc(channelH.BrowsePublic, authMW))
+	// Outside /channels/{id}: a literal there would shadow a channel of that name.
+	mux.Handle("GET /api/v1/channel-names/{name}", middleware.WrapFunc(channelH.NameAvailable, authMW))
 	mux.Handle("GET /api/v1/channels/{id}", middleware.WrapFunc(channelH.Get, authMW))
 	mux.Handle("PATCH /api/v1/channels/{id}", middleware.WrapFunc(channelH.Update, authMW))
 	mux.Handle("DELETE /api/v1/channels/{id}", middleware.WrapFunc(channelH.Archive, authMW))
 	mux.Handle("POST /api/v1/channels/{id}/unarchive", middleware.WrapFunc(channelH.Unarchive, authMW))
+	mux.Handle("POST /api/v1/channels/{id}/private", middleware.WrapFunc(channelH.MakePrivate, authMW))
 
 	mux.Handle("POST /api/v1/channels/{id}/join", middleware.WrapFunc(channelH.Join, authMW))
 	mux.Handle("POST /api/v1/channels/{id}/leave", middleware.WrapFunc(channelH.Leave, authMW))

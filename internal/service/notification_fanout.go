@@ -93,13 +93,7 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 			logAudienceLoadFailed(msg, parentType, err)
 			return memberSnapshot{}
 		}
-		ids := make([]string, 0, len(aud.memberIDs))
-		for _, uid := range aud.memberIDs {
-			if uid == excludeID {
-				continue
-			}
-			ids = append(ids, uid)
-		}
+		ids := recipientIDs(aud.memberIDs, excludeID, aud.accounts)
 		muted := make(map[string]bool, len(ids))
 		for uid, uc := range aud.overrides {
 			if uc != nil && uc.Muted {
@@ -116,17 +110,36 @@ func (s *NotificationService) loadMemberSnapshot(ctx context.Context, msg *model
 			logAudienceLoadFailed(msg, parentType, err)
 			return memberSnapshot{}
 		}
-		ids := make([]string, 0, len(c.ParticipantIDs))
+		others := make([]string, 0, len(c.ParticipantIDs))
 		for _, p := range c.ParticipantIDs {
-			if p == excludeID {
-				continue
+			if p != excludeID {
+				others = append(others, p)
 			}
-			ids = append(ids, p)
 		}
-		prefs, machine := resolvePrefs(ids, s.accountsFor(ctx, ids), nil)
+		accounts := s.accountsFor(ctx, others)
+		ids := recipientIDs(others, excludeID, accounts)
+		prefs, machine := resolvePrefs(ids, accounts, nil)
 		return memberSnapshot{memberIDs: ids, muted: map[string]bool{}, prefs: prefs, machine: machine, deepLink: "/conversation/" + msg.ParentID, loaded: true}
 	}
 	return memberSnapshot{}
+}
+
+// recipientIDs is the audience minus the author and every deactivated
+// account. Every alert, Activity row, badge, thread marker and push of the
+// fan-out is decided over this list, so a deactivated colleague gets none of
+// them — an @all included — and no record is written for them. Only an
+// account row that says "deactivated" excludes anyone: an account the read
+// didn't return stays in, since a missed alert is the failure the
+// notification contract forbids.
+func recipientIDs(candidates []string, authorID string, accounts map[string]store.NotificationAccount) []string {
+	ids := make([]string, 0, len(candidates))
+	for _, uid := range candidates {
+		if uid == authorID || accounts[uid].Deactivated {
+			continue
+		}
+		ids = append(ids, uid)
+	}
+	return ids
 }
 
 // resolvePrefs folds each member's per-channel override (if any) onto their

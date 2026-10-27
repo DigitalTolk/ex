@@ -136,9 +136,11 @@ func TestTeamsMeetingChannelHappyPath(t *testing.T) {
 	env.addChannelMember("chan-1", "alice")
 	env.addChannelMember("chan-1", "bob")
 	env.addChannelMember("chan-1", "carol")
+	env.addChannelMember("chan-1", "dave")
 	env.users.users["alice"] = &model.User{ID: "alice", Email: "alice@example.com", MSObjectID: "oid-alice"}
 	env.users.users["bob"] = &model.User{ID: "bob", Email: "bob@example.com", MSObjectID: "oid-bob"}
-	env.users.users["carol"] = &model.User{ID: "carol"} // no email, no oid → skipped
+	env.users.users["carol"] = &model.User{ID: "carol"}                                                                         // no email, no oid → skipped
+	env.users.users["dave"] = &model.User{ID: "dave", Email: "dave@example.com", MSObjectID: "oid-dave", Status: "deactivated"} // can't join → skipped
 
 	msg, err := env.cmd.Run(context.Background(), CommandRequest{UserID: "alice", ParentID: "chan-1", ParentType: ParentChannel})
 	if err != nil {
@@ -156,7 +158,7 @@ func TestTeamsMeetingChannelHappyPath(t *testing.T) {
 	}
 	wantAttendees := []msgraph.MeetingAttendee{{UPN: "bob@example.com", ObjectID: "oid-bob"}}
 	if got := env.meetings.gotReq.Attendees; !slices.Equal(got, wantAttendees) {
-		t.Errorf("attendees = %v, want bob only with his AAD object id (invoker excluded, unresolvable skipped)", got)
+		t.Errorf("attendees = %v, want bob only with his AAD object id (invoker excluded, unresolvable and deactivated skipped)", got)
 	}
 	if d := env.meetings.gotReq.EndAt.Sub(env.meetings.gotReq.StartAt); d != teamsMeetingDuration {
 		t.Errorf("meeting duration = %v, want %v", d, teamsMeetingDuration)

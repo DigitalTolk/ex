@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useUsersBatch } from '@/hooks/useUsersBatch';
@@ -7,6 +8,10 @@ import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { formatLongDateTime, getInitials } from '@/lib/format';
 import { renderMarkdown } from '@/lib/markdown';
 import type { SearchHit } from '@/hooks/useSearch';
+
+// One empty map for every render until the custom emoji load, so the parsed
+// body below isn't thrown away on each one.
+const NO_EMOJI_MAP = {};
 
 export interface MessageHitCardProps {
   hit: SearchHit;
@@ -27,11 +32,13 @@ export function MessageHitCard({ hit, onAuthorClick }: MessageHitCardProps) {
 
   const { map: authorMap } = useUsersBatch(authorId ? [authorId] : []);
   const author = authorMap.get(authorId);
-  /* istanbul ignore next -- useEmojiMap always resolves to an object (its queryFn coerces to {}), so the destructure default {} is defensive and the data-undefined arm is unreachable. */
-  const { data: emojiMap = {} } = useEmojiMap();
+  const { data: emojiMap = NO_EMOJI_MAP } = useEmojiMap();
   const parent = useMessageParent(parentId, hit.id, threadRoot);
 
   const name = author?.displayName ?? 'Unknown';
+  // Parsed once per body: while a search is in flight the previous results
+  // stay on screen and re-render on every keystroke.
+  const rendered = useMemo(() => renderMarkdown(body, { emojiMap }), [body, emojiMap]);
 
   const inner = (
     <article
@@ -73,7 +80,7 @@ export function MessageHitCard({ hit, onAuthorClick }: MessageHitCardProps) {
           )}
         </div>
         <div className="mt-1 text-sm prose-message">
-          {renderMarkdown(body, { emojiMap })}
+          {rendered}
         </div>
         {reactionEntries.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1">

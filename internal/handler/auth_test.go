@@ -161,6 +161,16 @@ func (m *mockUserStore) NotificationAccountsFor(_ context.Context, userIDs []str
 	return out, nil
 }
 
+func (m *mockUserStore) DeactivatedAmong(_ context.Context, userIDs []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	for _, uid := range userIDs {
+		if u, ok := m.users[uid]; ok && u.Status == "deactivated" {
+			out[uid] = true
+		}
+	}
+	return out, nil
+}
+
 type mockTokenStore struct {
 	tokens map[string]*model.RefreshToken
 }
@@ -281,9 +291,14 @@ func (m *mockChannelStore) GetChannel(_ context.Context, _ string) (*model.Chann
 	return nil, nil
 }
 func (m *mockChannelStore) GetChannelBySlug(_ context.Context, _ string) (*model.Channel, error) {
-	return nil, nil
+	return nil, store.ErrNotFound
 }
-func (m *mockChannelStore) UpdateChannel(_ context.Context, _ *model.Channel) error { return nil }
+func (m *mockChannelStore) PatchChannel(_ context.Context, _ string, _ store.ChannelPatch) error {
+	return nil
+}
+func (m *mockChannelStore) RenameChannel(_ context.Context, _, _, _, _ string, _ time.Time) error {
+	return nil
+}
 func (m *mockChannelStore) ListPublicChannels(_ context.Context, _ int, _ string) ([]*model.Channel, string, error) {
 	return nil, "", nil
 }

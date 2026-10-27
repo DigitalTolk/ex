@@ -569,3 +569,77 @@ func TestResolveUserByEmail(t *testing.T) {
 		}
 	})
 }
+
+func TestListUserAccounts(t *testing.T) {
+	tokenSrv, _ := newTokenServer(t, 3600)
+	var graphURL string
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/users" {
+			t.Errorf("path = %q, want /users", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("$select"); got != "id,accountEnabled" {
+			t.Errorf("$select = %q, want id,accountEnabled", got)
+		}
+		if r.URL.Query().Get("$skiptoken") == "" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"value": []map[string]any{
+					{"id": "oid-on", "accountEnabled": true},
+					{"id": "oid-off", "accountEnabled": false},
+				},
+				"@odata.nextLink": graphURL + "/users?$select=id,accountEnabled&$top=999&$skiptoken=p2",
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"value": []map[string]any{{"id": "oid-unreported"}}})
+	}))
+	defer graphSrv.Close()
+	graphURL = graphSrv.URL
+
+	c := newClient(t, tokenSrv.URL, graphSrv.URL)
+	accounts, err := c.ListUserAccounts(context.Background())
+	if err != nil {
+		t.Fatalf("ListUserAccounts: %v", err)
+	}
+	got := map[string]bool{}
+	for _, a := range accounts {
+		got[a.ID] = a.Enabled()
+	}
+	want := map[string]bool{"oid-on": true, "oid-off": false, "oid-unreported": true}
+	if len(got) != len(want) {
+		t.Fatalf("accounts = %v, want %v (both pages)", got, want)
+	}
+	for id, enabled := range want {
+		if got[id] != enabled {
+			t.Errorf("%s enabled = %v, want %v", id, got[id], enabled)
+		}
+	}
+}
+
+func TestListUserAccountsRefusesForeignNextLink(t *testing.T) {
+	tokenSrv, _ := newTokenServer(t, 3600)
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"value":           []map[string]any{{"id": "oid-1", "accountEnabled": true}},
+			"@odata.nextLink": "https://elsewhere.example.com/users?$skiptoken=p2",
+		})
+	}))
+	defer graphSrv.Close()
+
+	c := newClient(t, tokenSrv.URL, graphSrv.URL)
+	if _, err := c.ListUserAccounts(context.Background()); err == nil || !strings.Contains(err.Error(), "outside the Graph base URL") {
+		t.Fatalf("err = %v, want the foreign page link refused", err)
+	}
+}
+
+func TestListUserAccountsError(t *testing.T) {
+	tokenSrv, _ := newTokenServer(t, 3600)
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer graphSrv.Close()
+
+	c := newClient(t, tokenSrv.URL, graphSrv.URL)
+	if _, err := c.ListUserAccounts(context.Background()); err == nil || !strings.Contains(err.Error(), "status 403") {
+		t.Fatalf("err = %v, want the 403 propagated", err)
+	}
+}

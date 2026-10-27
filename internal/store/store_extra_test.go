@@ -1097,6 +1097,7 @@ func TestUserStore_NotificationAccountsFor(t *testing.T) {
 		{ID: "u-ns-b", Email: "ns-b@x.com", DisplayName: "B"},
 		{ID: "u-ns-bot", Email: "ns-bot@x.com", DisplayName: "alerts", IsBot: true},
 		{ID: "u-ns-agent", Email: "ns-agent@x.com", DisplayName: "gg", Kind: model.UserKindAgent},
+		{ID: "u-ns-gone", Email: "ns-gone@x.com", DisplayName: "Gone", Status: "deactivated"},
 	} {
 		u.CreatedAt = time.Now()
 		if err := us.CreateUser(ctx, u); err != nil {
@@ -1104,7 +1105,7 @@ func TestUserStore_NotificationAccountsFor(t *testing.T) {
 		}
 	}
 
-	got, err := us.NotificationAccountsFor(ctx, []string{"u-ns-a", "u-ns-b", "u-ns-bot", "u-ns-agent", "u-ns-absent"})
+	got, err := us.NotificationAccountsFor(ctx, []string{"u-ns-a", "u-ns-b", "u-ns-bot", "u-ns-agent", "u-ns-gone", "u-ns-absent"})
 	if err != nil {
 		t.Fatalf("NotificationAccountsFor: %v", err)
 	}
@@ -1119,6 +1120,9 @@ func TestUserStore_NotificationAccountsFor(t *testing.T) {
 	}
 	if _, ok := got["u-ns-absent"]; ok {
 		t.Error("absent user should not appear in the map")
+	}
+	if !got["u-ns-gone"].Deactivated || got["u-ns-a"].Deactivated {
+		t.Errorf("only the deactivated account must be flagged: gone=%+v a=%+v", got["u-ns-gone"], got["u-ns-a"])
 	}
 
 	// Error path: a failing BatchGetItem surfaces the error.
@@ -1264,6 +1268,18 @@ func TestMembershipStore_SetUserChannelFavorite(t *testing.T) {
 	chans, _ = ms.ListUserChannels(ctx, "u-fav")
 	if chans[0].Favorite {
 		t.Error("expected Favorite=false after unpin")
+	}
+
+	// A rename rewrites the name copied onto the member's row.
+	if err := ms.SetUserChannelName(ctx, "ch-fav", "u-fav", "renamed"); err != nil {
+		t.Fatalf("SetUserChannelName: %v", err)
+	}
+	chans, _ = ms.ListUserChannels(ctx, "u-fav")
+	if chans[0].ChannelName != "renamed" {
+		t.Errorf("ChannelName = %q, want renamed", chans[0].ChannelName)
+	}
+	if err := ms.SetUserChannelName(ctx, "ch-fav", "u-nobody", "renamed"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetUserChannelName for a non-member = %v, want ErrNotFound", err)
 	}
 }
 
@@ -1862,5 +1878,33 @@ func TestParentIndexStore_ErrorsOnNonexistentTable(t *testing.T) {
 	}
 	if rows, err := live.ListFileIndex(ctx, "ch-empty"); err != nil || len(rows) != 0 {
 		t.Errorf("ListFileIndex empty parent: rows=%+v err=%v", rows, err)
+	}
+}
+
+func TestUserStore_DeactivatedAmong(t *testing.T) {
+	db := setupDynamoDB(t)
+	us := NewUserStore(db)
+	ctx := context.Background()
+	for _, u := range []*model.User{
+		{ID: "u-da-on", Email: "da-on@x.com", DisplayName: "On", Status: "active"},
+		{ID: "u-da-off", Email: "da-off@x.com", DisplayName: "Off", Status: "deactivated"},
+	} {
+		u.CreatedAt = time.Now()
+		if err := us.CreateUser(ctx, u); err != nil {
+			t.Fatalf("create %s: %v", u.ID, err)
+		}
+	}
+
+	got, err := us.DeactivatedAmong(ctx, []string{"u-da-on", "u-da-off", "u-da-absent"})
+	if err != nil {
+		t.Fatalf("DeactivatedAmong: %v", err)
+	}
+	if len(got) != 1 || !got["u-da-off"] {
+		t.Errorf("deactivated = %v, want only u-da-off", got)
+	}
+
+	fs := NewUserStore(withFault(db, func(f *faultClient) { f.failBatchGetItem = true }))
+	if _, err := fs.DeactivatedAmong(ctx, []string{"u-da-on"}); !errors.Is(err, errInjected) {
+		t.Fatalf("DeactivatedAmong fault: want errInjected, got %v", err)
 	}
 }

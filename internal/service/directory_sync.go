@@ -9,6 +9,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/safe"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // Periodic employee-directory re-sync. Login-time enrichment only refreshes a
@@ -17,19 +18,27 @@ import (
 // everyone else. This sweep re-reads the directory for every OIDC user on an
 // interval; the first sweep runs at boot, which doubles as the initial
 // backfill for a workspace that enabled the integration after users existed.
+//
+// Account standing has a sweep of its own, on a much shorter interval: an
+// account disabled or deleted in Entra can no longer sign in, but its Ex
+// sessions live on (refresh tokens last weeks) and everyone else still sees
+// it as an active colleague until Ex deactivates it too. One tenant-wide
+// listing per window answers that for every account at once.
 
 const (
-	defaultDirectorySyncInterval = 12 * time.Hour
-	directorySyncLockKey         = "msdirsync:lock"
-	directorySyncPageSize        = 200
+	defaultDirectorySyncInterval   = 12 * time.Hour
+	defaultDirectoryStatusInterval = 5 * time.Minute
+	directorySyncLockKey           = "msdirsync:lock"
+	directoryStatusLockKey         = "msdirstatus:lock"
+	directorySyncPageSize          = 200
 	// directorySyncMaxConsecutiveErrors aborts a sweep when the directory
 	// looks down (every lookup failing) instead of hammering it N-users times.
 	directorySyncMaxConsecutiveErrors = 5
 	// directorySyncMinDeactivationCap floors the per-sweep deactivation
 	// circuit breaker: a sweep may deactivate at most max(this, 10% of the
-	// users it scanned). A tenant/app-registration misconfiguration makes
-	// EVERY oid lookup 404 — without the cap that would read as "the whole
-	// company was offboarded" and lock everyone out.
+	// users it checked). A tenant/app-registration misconfiguration makes
+	// EVERY account look gone — without the cap that would read as "the
+	// whole company was offboarded" and lock everyone out.
 	directorySyncMinDeactivationCap = 3
 )
 
@@ -38,6 +47,13 @@ const (
 // the same interval sync the directory exactly once per window.
 type DirectorySyncLocker interface {
 	AcquireLock(ctx context.Context, key, token string, ttl time.Duration) (bool, error)
+}
+
+// DirectoryAccountLister reports every directory account's standing, keyed
+// by AAD object id: true while it can sign in, false once disabled; an
+// account deleted upstream is absent (MSDirectoryService.ListAccounts).
+type DirectoryAccountLister interface {
+	ListAccounts(ctx context.Context) (map[string]bool, error)
 }
 
 // DirectoryStatusSetter flips an SSO account active/deactivated on the
@@ -57,14 +73,18 @@ type DirectorySyncService struct {
 	publisher Publisher
 	locker    DirectorySyncLocker
 	newToken  func() string
-	// status, when set, mirrors directory existence onto account status:
-	// deleted upstream → deactivate (only when the miss is authoritative,
-	// i.e. keyed by the stored AAD object id); reappears → reactivate.
-	status DirectoryStatusSetter
+	// accounts and status drive the status sweep: an account disabled or
+	// deleted upstream is deactivated, and reactivated once it can sign in
+	// again.
+	accounts DirectoryAccountLister
+	status   DirectoryStatusSetter
 }
 
-// SetStatusSetter enables offboarding detection (optional).
-func (s *DirectorySyncService) SetStatusSetter(st DirectoryStatusSetter) { s.status = st }
+// SetStatusSync wires offboarding: where account standing comes from and
+// what applies it.
+func (s *DirectorySyncService) SetStatusSync(accounts DirectoryAccountLister, st DirectoryStatusSetter) {
+	s.accounts, s.status = accounts, st
+}
 
 // NewDirectorySyncService builds the sweep service. locker may be nil (tests);
 // production wires the Redis cache so clustered instances elect one runner.
@@ -105,6 +125,25 @@ func (s *DirectorySyncService) Run(ctx context.Context, interval time.Duration) 
 	}
 }
 
+// RunStatus checks account standing immediately and then once per interval
+// until the context is cancelled.
+func (s *DirectorySyncService) RunStatus(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = defaultDirectoryStatusInterval
+	}
+	s.statusSweepIsolated(ctx, interval)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.statusSweepIsolated(ctx, interval)
+		}
+	}
+}
+
 // sweepIsolated runs one sweep with its panics confined to it: Run lives on a
 // detached goroutine, where an unrecovered panic takes the whole process (and
 // every WebSocket client on it) down, and a sweep that recovered only at the
@@ -114,23 +153,34 @@ func (s *DirectorySyncService) sweepIsolated(ctx context.Context, interval time.
 	s.Sweep(ctx, interval)
 }
 
-// Sweep re-syncs every OIDC user once, if this instance wins the window's
-// election. The lock TTL is slightly under the interval so the next window's
-// winner can always acquire it.
+func (s *DirectorySyncService) statusSweepIsolated(ctx context.Context, interval time.Duration) {
+	defer safe.Recover()
+	s.SweepStatus(ctx, interval)
+}
+
+// elected reports whether this instance owns the window for key. The lock
+// TTL is slightly under the interval so the next window's winner can always
+// acquire it.
+func (s *DirectorySyncService) elected(ctx context.Context, key string, interval time.Duration) bool {
+	if s.locker == nil {
+		return true
+	}
+	ok, err := s.locker.AcquireLock(ctx, key, s.newToken(), interval-interval/10)
+	if err != nil {
+		slog.WarnContext(ctx, "directory sync: lock acquire failed; skipping sweep", "lock", key, "error", err)
+		return false
+	}
+	return ok // false: another instance owns this window
+}
+
+// Sweep re-syncs every OIDC user's profile once, if this instance wins the
+// window's election.
 func (s *DirectorySyncService) Sweep(ctx context.Context, interval time.Duration) {
-	if s.locker != nil {
-		ok, err := s.locker.AcquireLock(ctx, directorySyncLockKey, s.newToken(), interval-interval/10)
-		if err != nil {
-			slog.WarnContext(ctx, "directory sync: lock acquire failed; skipping sweep", "error", err)
-			return
-		}
-		if !ok {
-			return // another instance owns this window
-		}
+	if !s.elected(ctx, directorySyncLockKey, interval) {
+		return
 	}
 
-	var synced, changed, failures, consecutive, reactivated int
-	var missing []*model.User
+	var synced, changed, failures, consecutive int
 	cursor := ""
 	for {
 		users, next, err := s.users.ListUsers(ctx, directorySyncPageSize, cursor)
@@ -149,7 +199,7 @@ func (s *DirectorySyncService) Sweep(ctx context.Context, interval time.Duration
 				continue // guests aren't in the directory
 			}
 			synced++
-			didChange, inDirectory, err := s.syncUser(ctx, u)
+			didChange, err := s.syncUser(ctx, u)
 			if err != nil {
 				failures++
 				consecutive++
@@ -164,23 +214,71 @@ func (s *DirectorySyncService) Sweep(ctx context.Context, interval time.Duration
 			if didChange {
 				changed++
 			}
+		}
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+
+	slog.InfoContext(ctx, "directory sync: sweep complete",
+		"synced", synced, "changed", changed, "failures", failures)
+}
+
+// SweepStatus mirrors every SSO account's directory standing onto its Ex
+// status, if this instance wins the window's election: disabled or deleted
+// upstream → deactivated (sessions ended, behind the circuit breaker); able
+// to sign in again → reactivated, unless an admin deactivated it.
+//
+// Only accounts with a stored AAD object id are judged: matching by email
+// can't tell a departed colleague from one whose mail != userPrincipalName.
+// The profile sweep backfills the object id from the next lookup.
+func (s *DirectorySyncService) SweepStatus(ctx context.Context, interval time.Duration) {
+	if !s.elected(ctx, directoryStatusLockKey, interval) {
+		return
+	}
+	accounts, err := s.accounts.ListAccounts(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "directory status: listing directory accounts failed; skipping sweep", "error", err)
+		return
+	}
+	if len(accounts) == 0 {
+		// A real tenant always has accounts: an empty listing is a
+		// misconfiguration, never "everyone left".
+		slog.ErrorContext(ctx, "directory status: the directory listed no accounts; skipping sweep — check MS_TENANT_ID / app registration")
+		return
+	}
+
+	var checked, reactivated int
+	var offboarded []*model.User
+	cursor := ""
+	for {
+		users, next, err := s.users.ListUsers(ctx, directorySyncPageSize, cursor)
+		if err != nil {
+			slog.WarnContext(ctx, "directory status: list users failed; aborting sweep", "error", err)
+			return
+		}
+		for _, u := range users {
+			if u.IsBot || u.AuthProvider != model.AuthProviderOIDC || u.MSObjectID == "" {
+				continue
+			}
+			checked++
+			enabled, listed := accounts[u.MSObjectID]
 			switch {
-			case !inDirectory:
-				// Offboarding candidate — but only an AAD-object-id keyed
-				// lookup is authoritative: an email-keyed 404 can just mean
-				// email != userPrincipalName, never grounds to lock someone
-				// out. Deactivations apply after the sweep, behind the cap.
-				if s.status != nil && u.MSObjectID != "" && u.Status == "active" {
-					missing = append(missing, u)
+			case listed && enabled:
+				if u.Status != "deactivated" || u.DeactivatedBy == model.DeactivatedByAdmin {
+					continue
 				}
-			case s.status != nil && u.Status == "deactivated":
-				// Back in the directory → restore access.
 				if err := s.status.SetStatusFromDirectory(ctx, u.ID, false); err != nil {
-					slog.WarnContext(ctx, "directory sync: reactivate failed", "userID", u.ID, "error", err)
-				} else {
-					reactivated++
-					slog.InfoContext(ctx, "directory sync: reactivated user found in directory", "userID", u.ID)
+					slog.WarnContext(ctx, "directory status: reactivate failed", "userID", u.ID, "error", err)
+					continue
 				}
+				reactivated++
+				slog.InfoContext(ctx, "directory status: reactivated user who can sign in again", "userID", u.ID)
+			case u.Status == "active":
+				// Disabled (listed, not enabled) or deleted (not listed).
+				// Applied after the sweep, behind the cap.
+				offboarded = append(offboarded, u)
 			}
 		}
 		if next == "" {
@@ -189,62 +287,71 @@ func (s *DirectorySyncService) Sweep(ctx context.Context, interval time.Duration
 		cursor = next
 	}
 
-	deactivated := s.applyDeactivations(ctx, missing, synced)
-	slog.InfoContext(ctx, "directory sync: sweep complete",
-		"synced", synced, "changed", changed, "failures", failures,
-		"deactivated", deactivated, "reactivated", reactivated)
+	deactivated := s.applyDeactivations(ctx, offboarded, checked)
+	if deactivated > 0 || reactivated > 0 {
+		slog.InfoContext(ctx, "directory status: sweep complete",
+			"checked", checked, "deactivated", deactivated, "reactivated", reactivated)
+	}
 }
 
-// applyDeactivations offboards users whose directory accounts are gone,
-// unless the count trips the circuit breaker (suspected misconfiguration).
-func (s *DirectorySyncService) applyDeactivations(ctx context.Context, missing []*model.User, synced int) int {
-	if len(missing) == 0 {
+// applyDeactivations offboards users whose directory accounts are disabled
+// or gone, unless the count trips the circuit breaker (suspected
+// misconfiguration).
+func (s *DirectorySyncService) applyDeactivations(ctx context.Context, offboarded []*model.User, checked int) int {
+	if len(offboarded) == 0 {
 		return 0
 	}
-	limit := max(directorySyncMinDeactivationCap, synced/10)
-	if len(missing) > limit {
-		slog.ErrorContext(ctx, "directory sync: refusing to deactivate — too many users missing from the directory at once; check MS_TENANT_ID / app registration",
-			"missing", len(missing), "limit", limit, "synced", synced)
+	limit := max(directorySyncMinDeactivationCap, checked/10)
+	if len(offboarded) > limit {
+		slog.ErrorContext(ctx, "directory status: refusing to deactivate — too many accounts disabled or missing in the directory at once; check MS_TENANT_ID / app registration",
+			"offboarded", len(offboarded), "limit", limit, "checked", checked)
 		return 0
 	}
 	deactivated := 0
-	for _, u := range missing {
+	for _, u := range offboarded {
 		if err := s.status.SetStatusFromDirectory(ctx, u.ID, true); err != nil {
-			slog.WarnContext(ctx, "directory sync: deactivate failed", "userID", u.ID, "error", err)
+			slog.WarnContext(ctx, "directory status: deactivate failed", "userID", u.ID, "error", err)
 			continue
 		}
 		deactivated++
-		slog.InfoContext(ctx, "directory sync: deactivated user deleted from directory", "userID", u.ID)
+		slog.InfoContext(ctx, "directory status: deactivated user disabled or deleted in the directory", "userID", u.ID)
 	}
 	return deactivated
 }
 
 // syncUser refreshes one user from the directory, persisting and broadcasting
 // only when something actually changed. A user missing from the directory
-// (inDirectory=false) keeps previously synced data (same fail-open rule as
-// the login path); the sweep decides whether the miss means offboarding.
-func (s *DirectorySyncService) syncUser(ctx context.Context, user *model.User) (changed, inDirectory bool, err error) {
+// keeps previously synced data (same fail-open rule as the login path); the
+// status sweep decides whether the miss means offboarding.
+func (s *DirectorySyncService) syncUser(ctx context.Context, user *model.User) (changed bool, err error) {
 	dp, err := s.directory.LookupProfile(ctx, user.Email, user.MSObjectID)
 	if err != nil {
-		return false, false, err
+		return false, err
 	}
 	if dp == nil {
-		return false, false, nil
+		return false, nil
 	}
 	if user.Phone == dp.Phone && user.Manager.Equal(dp.Manager) &&
 		(dp.ObjectID == "" || user.MSObjectID == dp.ObjectID) {
-		return false, true, nil
+		return false, nil
 	}
 	applyDirectoryProfile(user, dp)
 	user.UpdatedAt = time.Now()
-	if err := s.users.UpdateUser(ctx, user); err != nil {
-		return false, true, err
+	// Field-level: the copy came from the sweep's page read, and writing all
+	// of it back would undo a status change made since (the status sweep
+	// deactivating this very account, say).
+	if err := s.users.PatchUser(ctx, user.ID, store.UserPatch{
+		Directory:  &store.UserDirectoryFields{Phone: user.Phone, Manager: user.Manager},
+		MSObjectID: &user.MSObjectID,
+		UpdatedAt:  user.UpdatedAt,
+	}); err != nil {
+		return false, err
 	}
 	if s.cache != nil {
 		_ = s.cache.Delete(ctx, "user:"+user.ID)
 	}
 	publishUserDirectoryUpdated(ctx, s.publisher, user)
-	return true, true, nil
+	return true, nil
 }
 
 // publishUserDirectoryUpdated broadcasts the profile fields a directory sync

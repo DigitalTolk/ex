@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -219,20 +220,26 @@ func (s *ChannelService) addMemberWithEvents(ctx context.Context, ch *model.Chan
 
 // resolveDisplayName looks up a user's display name, falling back to "Unknown".
 func (s *ChannelService) resolveDisplayName(ctx context.Context, userID string) string {
-	name, _ := s.resolveMember(ctx, userID)
-	return name
+	return s.resolveMember(ctx, userID).displayName
 }
 
-// resolveMember looks up a user's display name (falling back to "Unknown") and
-// whether the account is a bot or agent.
-func (s *ChannelService) resolveMember(ctx context.Context, userID string) (displayName string, machine bool) {
+// memberAccount is what adding a member needs to know about the account.
+type memberAccount struct {
+	displayName string
+	machine     bool // a bot or agent
+	deactivated bool
+}
+
+// resolveMember looks up a user's display name (falling back to "Unknown"),
+// whether the account is a bot or agent, and whether it is deactivated.
+func (s *ChannelService) resolveMember(ctx context.Context, userID string) memberAccount {
 	if s.users != nil {
 		u, err := s.users.GetUser(ctx, userID)
 		if err == nil {
-			return u.DisplayName, u.IsBot || u.IsAgent()
+			return memberAccount{displayName: u.DisplayName, machine: u.IsBot || u.IsAgent(), deactivated: u.Status == "deactivated"}
 		}
 	}
-	return "Unknown", false
+	return memberAccount{displayName: "Unknown"}
 }
 
 // Create creates a new channel and adds the creator as the owner. Guests
@@ -276,7 +283,7 @@ func (s *ChannelService) createChannel(ctx context.Context, userID, id, name str
 	// ErrAlreadyExists if a concurrent create wins. We map both to
 	// the same user-facing message.
 	slug := Slugify(name)
-	if existing, err := s.channels.GetChannelBySlug(ctx, slug); err == nil && existing != nil {
+	if taken, err := s.slugTaken(ctx, slug, ""); err == nil && taken {
 		return nil, fmt.Errorf("channel: a channel with this name already exists: %w", ErrAlreadyExists)
 	}
 	now := time.Now()
@@ -359,7 +366,10 @@ func (s *ChannelService) GetVisibleByID(ctx context.Context, actorID, id string)
 }
 
 // Update modifies optional channel fields. The actor must be an owner, admin,
-// or system admin.
+// or system admin. A new name renames the channel: its slug — the URL key —
+// follows the name, and must be free (ErrAlreadyExists otherwise). Both
+// fields are validated before either is written, and each write touches only
+// its own fields.
 func (s *ChannelService) Update(ctx context.Context, actorID, channelID string, name, description *string) (*model.Channel, error) {
 	if err := s.checkPermission(ctx, actorID, channelID, model.ChannelRoleAdmin); err != nil {
 		return nil, err
@@ -373,32 +383,166 @@ func (s *ChannelService) Update(ctx context.Context, actorID, channelID string, 
 		return nil, ErrChannelArchived
 	}
 
-	if name != nil {
+	renaming := name != nil && *name != ch.Name
+	if renaming {
+		if channelID == generalChannelID {
+			return nil, apperr.Forbidden("channel: the general channel cannot be renamed")
+		}
 		if err := ValidateChannelName(*name); err != nil {
 			return nil, err
 		}
-		ch.Name = *name
 	}
 	if description != nil {
 		if err := ValidateChannelDescription(*description); err != nil {
 			return nil, err
 		}
-		ch.Description = *description
 	}
-	ch.UpdatedAt = time.Now()
 
-	if err := s.channels.UpdateChannel(ctx, ch); err != nil {
-		return nil, fmt.Errorf("channel: update: %w", err)
+	now := time.Now()
+	oldName := ch.Name
+	if renaming {
+		if err := s.rename(ctx, ch, *name, now); err != nil {
+			return nil, err
+		}
+	}
+	if description != nil {
+		if err := s.channels.PatchChannel(ctx, channelID, store.ChannelPatch{Description: description, UpdatedAt: now}); err != nil {
+			return nil, fmt.Errorf("channel: update: %w", err)
+		}
+		ch.Description, ch.UpdatedAt = *description, now
 	}
 
 	events.Publish(ctx, s.publisher, pubsub.ChannelName(channelID), events.EventChannelUpdated, map[string]any{
 		"channelID":   channelID,
 		"name":        ch.Name,
+		"slug":        ch.Slug,
 		"description": ch.Description,
 	})
-
 	s.indexChannel(ctx, ch)
+	if renaming {
+		s.postSystemMessage(ctx, channelID, s.resolveDisplayName(ctx, actorID)+" renamed the channel from ~"+oldName+" to ~"+ch.Name)
+	}
 
+	return ch, nil
+}
+
+// rename moves ch to name and its slug, refusing a slug another channel
+// holds. The pre-check answers the common case; the store's transaction on
+// the slug lock is what makes a race safe. The old slug stays an alias, so
+// links made before the rename still open the channel.
+func (s *ChannelService) rename(ctx context.Context, ch *model.Channel, name string, at time.Time) error {
+	slug := Slugify(name)
+	taken, err := s.slugTaken(ctx, slug, ch.ID)
+	if err != nil {
+		return err
+	}
+	if taken {
+		return fmt.Errorf("channel: a channel with this name already exists: %w", ErrAlreadyExists)
+	}
+	if err := s.channels.RenameChannel(ctx, ch.ID, ch.Slug, name, slug, at); err != nil {
+		if errors.Is(err, store.ErrAlreadyExists) {
+			return fmt.Errorf("channel: a channel with this name already exists: %w", ErrAlreadyExists)
+		}
+		return fmt.Errorf("channel: rename: %w", err)
+	}
+	ch.Name, ch.Slug, ch.UpdatedAt = name, slug, at
+	s.syncMemberChannelNames(ctx, ch.ID, name)
+	return nil
+}
+
+// slugTaken reports whether another channel than exceptID is called slug. A
+// renamed channel's old slug (an alias) is free to take.
+func (s *ChannelService) slugTaken(ctx context.Context, slug, exceptID string) (bool, error) {
+	existing, err := s.channels.GetChannelBySlug(ctx, slug)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("channel: check name: %w", err)
+	}
+	return existing.Slug == slug && existing.ID != exceptID, nil
+}
+
+// NameAvailable reports whether a channel may be called name: a valid name no
+// other channel holds. exceptChannelID is the channel being renamed — its own
+// name counts as available to it.
+func (s *ChannelService) NameAvailable(ctx context.Context, name, exceptChannelID string) (bool, error) {
+	if err := ValidateChannelName(name); err != nil {
+		return false, err
+	}
+	taken, err := s.slugTaken(ctx, Slugify(name), exceptChannelID)
+	return !taken, err
+}
+
+// memberChannelNameSetter is the optional capability that rewrites the
+// channel name copied onto a member's sidebar row (the DynamoDB membership
+// store has it).
+type memberChannelNameSetter interface {
+	SetUserChannelName(ctx context.Context, channelID, userID, name string) error
+}
+
+// syncMemberChannelNames rewrites the name copied onto every member's sidebar
+// row, off the request path. The sidebar list shows the channel's own name
+// either way (ListUserChannels stamps it); the copies are what its ordering
+// sorts by.
+func (s *ChannelService) syncMemberChannelNames(ctx context.Context, channelID, name string) {
+	setter, ok := s.memberships.(memberChannelNameSetter)
+	if !ok {
+		return
+	}
+	safe.Go(func() {
+		bg, cancel := detachedContext(ctx)
+		defer cancel()
+		members, err := s.memberships.ListMembers(bg, channelID)
+		if err != nil {
+			slog.WarnContext(bg, "channel rename: list members failed; sidebar rows keep the old name until the next rename", "channelID", channelID, "error", err)
+			return
+		}
+		for _, m := range members {
+			if err := setter.SetUserChannelName(bg, channelID, m.UserID, name); err != nil && !errors.Is(err, store.ErrNotFound) {
+				slog.WarnContext(bg, "channel rename: sidebar row name update failed", "channelID", channelID, "userID", m.UserID, "error", err)
+			}
+		}
+	})
+}
+
+// MakePrivate turns a public channel private: its members keep it, nobody
+// else can find, join or read it any more — it leaves the directory, the
+// channel browser and channel search. One way, as in Slack. The owner or a
+// system admin may do it; #general stays public, and an archived channel is
+// read-only. An already private channel is left as it is.
+func (s *ChannelService) MakePrivate(ctx context.Context, actorID, channelID string) (*model.Channel, error) {
+	if channelID == generalChannelID {
+		return nil, apperr.Forbidden("channel: the general channel stays public")
+	}
+	if err := s.checkPermission(ctx, actorID, channelID, model.ChannelRoleOwner); err != nil {
+		return nil, err
+	}
+	ch, err := s.channels.GetChannel(ctx, channelID)
+	if err != nil {
+		return nil, fmt.Errorf("channel: get: %w", err)
+	}
+	if ch.Archived {
+		return nil, ErrChannelArchived
+	}
+	if ch.Type == model.ChannelTypePrivate {
+		return ch, nil
+	}
+	now := time.Now()
+	if err := s.channels.PatchChannel(ctx, channelID, store.ChannelPatch{MakePrivate: true, UpdatedAt: now}); err != nil {
+		return nil, fmt.Errorf("channel: make private: %w", err)
+	}
+	ch.Type, ch.UpdatedAt = model.ChannelTypePrivate, now
+
+	events.Publish(ctx, s.publisher, pubsub.ChannelName(channelID), events.EventChannelUpdated, map[string]any{
+		"channelID":   channelID,
+		"name":        ch.Name,
+		"slug":        ch.Slug,
+		"description": ch.Description,
+		"type":        ch.Type,
+	})
+	s.indexChannel(ctx, ch)
+	s.postSystemMessage(ctx, channelID, s.resolveDisplayName(ctx, actorID)+" made the channel private")
 	return ch, nil
 }
 
@@ -437,7 +581,7 @@ func (s *ChannelService) setArchived(ctx context.Context, actorID, channelID str
 	}
 	ch.Archived = archived
 	ch.UpdatedAt = time.Now()
-	if err := s.channels.UpdateChannel(ctx, ch); err != nil {
+	if err := s.channels.PatchChannel(ctx, channelID, store.ChannelPatch{Archived: &archived, UpdatedAt: ch.UpdatedAt}); err != nil {
 		return fmt.Errorf("channel: set archived: %w", err)
 	}
 	s.indexChannel(ctx, ch)
@@ -644,8 +788,12 @@ func (s *ChannelService) AddMember(ctx context.Context, actorID, channelID, user
 		return fmt.Errorf("channel: get: %w", err)
 	}
 
+	account := s.resolveMember(ctx, userID)
+	if account.deactivated {
+		return ErrMemberDeactivated
+	}
 	now := time.Now()
-	displayName, machine := s.resolveMember(ctx, userID)
+	displayName, machine := account.displayName, account.machine
 	membership := &model.ChannelMembership{
 		ChannelID:   channelID,
 		UserID:      userID,
@@ -780,7 +928,10 @@ func (s *ChannelService) UpdateMemberRole(ctx context.Context, actorID, channelI
 	return nil
 }
 
-// ListMembers returns all memberships for a channel the actor can access.
+// ListMembers returns the memberships of a channel the actor can access,
+// leaving out deactivated accounts: they keep their membership underneath (a
+// reactivated account is back in its channels) but no longer count as
+// members. A failed status read lists everyone rather than nobody.
 func (s *ChannelService) ListMembers(ctx context.Context, actorID, channelID string) ([]*model.ChannelMembership, error) {
 	if err := s.checkPermission(ctx, actorID, channelID, model.ChannelRoleMember); err != nil {
 		return nil, err
@@ -789,7 +940,19 @@ func (s *ChannelService) ListMembers(ctx context.Context, actorID, channelID str
 	if err != nil {
 		return nil, fmt.Errorf("channel: list members: %w", err)
 	}
-	return members, nil
+	if s.users == nil {
+		return members, nil
+	}
+	ids := make([]string, len(members))
+	for i, m := range members {
+		ids[i] = m.UserID
+	}
+	deactivated, err := s.users.DeactivatedAmong(ctx, ids)
+	if err != nil {
+		slog.WarnContext(ctx, "channel: member status read failed; listing every member", "channelID", channelID, "error", err)
+		return members, nil
+	}
+	return slices.DeleteFunc(members, func(m *model.ChannelMembership) bool { return deactivated[m.UserID] }), nil
 }
 
 // clampNotifyCount bounds the alerted-unread badge by the plain unread count
@@ -864,6 +1027,7 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 					continue // channel row missing: drop like the fan-out did
 				}
 				uc.Archived = ch.Archived
+				uc.ChannelName, uc.ChannelType = ch.Name, ch.Type
 				// Exact unread: messages added since this user last read.
 				// O(1) from the seq pair; survives reload and reconnect.
 				if n := ch.MessageSeq - uc.LastReadSeq; n > 0 {
@@ -891,6 +1055,7 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 			}
 			keep[i] = true
 			uc.Archived = ch.Archived
+			uc.ChannelName, uc.ChannelType = ch.Name, ch.Type
 			// Exact unread: messages added since this user last read. O(1) from
 			// the seq pair — no per-channel count query. Survives reload and
 			// reconnect because both numbers are persisted.

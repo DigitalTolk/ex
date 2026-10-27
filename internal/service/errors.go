@@ -42,6 +42,10 @@ var ErrInvalidThreadRoot = errors.New("message: invalid thread root")
 // 409 Conflict.
 var ErrChannelArchived = errors.New("channel: channel is archived")
 
+// ErrMemberDeactivated is returned for adding a deactivated account to a
+// channel. Handlers map it to 409 Conflict.
+var ErrMemberDeactivated = errors.New("channel: that account is deactivated")
+
 // ErrConversationConverted: the group message is a private channel now (the
 // same ID). It is used as that channel; the conversation itself is no more.
 var ErrConversationConverted = fmt.Errorf("message: this conversation is a channel now: %w", ErrForbidden)

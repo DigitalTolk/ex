@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-react';
+import { page } from 'vitest/browser';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { UserHoverCard } from './UserHoverCard';
@@ -119,9 +120,7 @@ describe('UserHoverCard browser', () => {
     );
     // Open the card (the wrapping span's onClick toggles it).
     (document.querySelector('[data-testid="rich-trigger"]') as HTMLElement).click();
-    await vi.waitFor(() => {
-      expect(document.body.textContent).toContain('alice@example.com');
-    });
+    await expect.element(page.getByText('alice@example.com')).toBeVisible();
     // The valid timezone surfaces its city name (Tokyo).
     expect(document.body.textContent).toMatch(/Tokyo/);
   });
@@ -144,9 +143,7 @@ describe('UserHoverCard browser', () => {
       </Wrap>,
     );
     (document.querySelector('[data-testid="directory-trigger"]') as HTMLElement).click();
-    await vi.waitFor(() => {
-      expect(document.body.textContent).toContain('+46 70 123 45 67');
-    });
+    await expect.element(page.getByText('+46 70 123 45 67')).toBeVisible();
     const tel = document.querySelector('a[href="tel:+46 70 123 45 67"]');
     expect(tel).not.toBeNull();
     expect(document.body.textContent).toContain('Manager');
@@ -173,9 +170,7 @@ describe('UserHoverCard browser', () => {
       </Wrap>,
     );
     (document.querySelector('[data-testid="order-trigger"]') as HTMLElement).click();
-    await vi.waitFor(() => {
-      expect(document.body.textContent).toContain('Boss Person');
-    });
+    await expect.element(page.getByText('Boss Person')).toBeVisible();
     const labels = Array.from(document.querySelectorAll('dl dt')).map((d) => d.textContent);
     expect(labels).toEqual(['Email', 'Phone', 'Manager', 'Local time', 'Timezone', 'Last seen']);
   });
@@ -196,9 +191,7 @@ describe('UserHoverCard browser', () => {
       </Wrap>,
     );
     (document.querySelector('[data-testid="nodir-trigger"]') as HTMLElement).click();
-    await vi.waitFor(() => {
-      expect(document.body.textContent).toContain('alice@example.com');
-    });
+    await expect.element(page.getByText('alice@example.com')).toBeVisible();
     expect(document.body.textContent).not.toContain('Phone');
     expect(document.body.textContent).not.toContain('Manager');
   });
@@ -219,13 +212,9 @@ describe('UserHoverCard browser', () => {
       </Wrap>,
     );
     (document.querySelector('[data-testid="dismiss-trigger"]') as HTMLElement).click();
-    await vi.waitFor(() => {
-      expect(document.body.textContent).toContain('alice@example.com');
-    });
+    await expect.element(page.getByText('alice@example.com')).toBeVisible();
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await vi.waitFor(() => {
-      expect(document.body.textContent).not.toContain('alice@example.com');
-    });
+    await expect.element(page.getByText('alice@example.com')).not.toBeInTheDocument();
   });
 
   it('shows an Inactive badge when the fetched user is deactivated', async () => {
@@ -243,9 +232,7 @@ describe('UserHoverCard browser', () => {
       </Wrap>,
     );
     (document.querySelector('[data-testid="inactive-trigger"]') as HTMLElement).click();
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-testid="hover-status-inactive"]')).not.toBeNull();
-    });
+    await expect.element(page.getByTestId('hover-status-inactive')).toHaveTextContent('Inactive');
   });
 
   it('starts a DM via the "Direct message" button when viewing someone else', async () => {
@@ -263,21 +250,13 @@ describe('UserHoverCard browser', () => {
     );
     (document.querySelector('[data-testid="dm-trigger"]') as HTMLElement).click();
     // The card is open (not self) → the Direct message button renders.
-    await vi.waitFor(() => {
-      expect(document.querySelector('button')).not.toBeNull();
-    });
-    const dmBtn = Array.from(document.querySelectorAll('button')).find((b) =>
-      b.textContent?.includes('Direct message'),
-    ) as HTMLButtonElement;
-    expect(dmBtn).toBeDefined();
-    dmBtn.click();
+    const dmBtn = page.getByRole('button', { name: /Direct message/ });
+    await expect.element(dmBtn).toBeVisible();
+    (dmBtn.element() as HTMLButtonElement).click();
     // startDM.mutate → POST /conversations → onSuccess navigates.
-    await vi.waitFor(() => {
-      expect(apiFetchMock).toHaveBeenCalledWith(
-        '/api/v1/conversations',
-        expect.objectContaining({ method: 'POST' }),
-      );
-    });
+    await expect
+      .poll(() => apiFetchMock.mock.calls.some(([url, opts]) => url === '/api/v1/conversations' && (opts as { method?: string })?.method === 'POST'))
+      .toBe(true);
   });
 
   it('a DM that fails to open says so instead of doing nothing', async () => {
@@ -294,14 +273,11 @@ describe('UserHoverCard browser', () => {
       </Wrap>,
     );
     (document.querySelector('[data-testid="dm-fail-trigger"]') as HTMLElement).click();
-    const dmBtn = await vi.waitFor(() => {
-      const btn = Array.from(document.querySelectorAll('button')).find((b) => b.textContent?.includes('Direct message'));
-      expect(btn).toBeDefined();
-      return btn as HTMLButtonElement;
-    });
-    dmBtn.click();
-    await vi.waitFor(() =>
-      expect(showToastMock).toHaveBeenCalledWith('Could not open the conversation — please try again.'),
-    );
+    const dmBtn = page.getByRole('button', { name: /Direct message/ });
+    await expect.element(dmBtn).toBeVisible();
+    (dmBtn.element() as HTMLButtonElement).click();
+    await expect
+      .poll(() => showToastMock.mock.calls.some(([msg]) => msg === 'Could not open the conversation — please try again.'))
+      .toBe(true);
   });
 });

@@ -312,6 +312,16 @@
     }
   },
   {
+    "case": "row: channel: that account is deactivated",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "member_deactivated",
+        "message": "that account is deactivated"
+      }
+    }
+  },
+  {
     "case": "row: message: thread has been deleted",
     "status": 409,
     "body": {

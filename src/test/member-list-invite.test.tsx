@@ -107,4 +107,27 @@ describe('MemberList - inline invite', () => {
     // The existing admin's row carries the added checkmark.
     expect(screen.getByTestId('member-add-user-admin-1-added')).toHaveAccessibleName('Already added');
   });
+
+  // The picker never offers a deactivated account: it can't be added.
+  it('leaves deactivated accounts out of the add-member search', async () => {
+    mockApiFetch.mockImplementation((path: string) =>
+      Promise.resolve(
+        path.startsWith('/api/v1/users?q=')
+          ? [
+              { id: 'u-2', displayName: 'Bob', email: 'bob@x.com', status: 'active' },
+              { id: 'u-gone', displayName: 'Bob Gone', email: 'gone@x.com', status: 'deactivated' },
+            ]
+          : undefined,
+      ),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(
+      <MemberList members={[adminMember]} channelId="ch-1" currentUserId="admin-1" currentUserRole={2} />,
+    );
+
+    await user.type(screen.getByLabelText('Add member'), 'Bob');
+
+    expect(await screen.findByTestId('member-add-user-u-2')).toBeInTheDocument();
+    expect(screen.queryByTestId('member-add-user-u-gone')).not.toBeInTheDocument();
+  });
 });

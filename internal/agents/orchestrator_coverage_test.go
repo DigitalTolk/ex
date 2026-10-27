@@ -952,6 +952,26 @@ func TestOrchCov_LinkifyParticipantEdgeCases(t *testing.T) {
 	}
 }
 
+// A participant goes by the name after a "Muhammad" prefix: "@Ali Khan"
+// names Muhammad Ali Khan, while "@Muhammad" alone names nobody in particular.
+func TestOrchCov_LinkifyFirstNameSkipsNamePrefix(t *testing.T) {
+	fx := newOrchCovFixture(t)
+	ctx := context.Background()
+	fx.users.users["u-ali"] = &model.User{ID: "u-ali", DisplayName: "Muhammad Ali Khan"}
+	fx.users.users["u-mm"] = &model.User{ID: "u-mm", DisplayName: "Muhammad Mohammed"}
+	fx.msgs.thread = []*model.Message{
+		{ID: "t1", AuthorID: "u-ali", Body: "hi", CreatedAt: *fx.now},
+		{ID: "t2", AuthorID: "u-mm", Body: "hello", CreatedAt: *fx.now},
+	}
+	run := fx.start(t, "m1", "root1")
+	if got := fx.orch.LinkifyMentions(ctx, run, "thanks @Ali Khan!"); !strings.Contains(got, "@[u-ali|Muhammad Ali Khan]") {
+		t.Fatalf("the name after the prefix not linkified: %q", got)
+	}
+	if got := fx.orch.LinkifyMentions(ctx, run, "thanks @Muhammad!"); got != "thanks @Muhammad!" {
+		t.Fatalf("the bare prefix must name nobody: %q", got)
+	}
+}
+
 func TestOrchCov_ThreadParticipantsTopLevelWindowAndLookupFailure(t *testing.T) {
 	fx := newOrchCovFixture(t)
 	ctx := context.Background()

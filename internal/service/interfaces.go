@@ -25,6 +25,8 @@ type UserStore interface {
 	// per-recipient without an N+1 fan-out. Missing users default to
 	// DefaultNotificationSettings.
 	NotificationAccountsFor(ctx context.Context, userIDs []string) (map[string]store.NotificationAccount, error)
+	// DeactivatedAmong reports which of userIDs are deactivated accounts.
+	DeactivatedAmong(ctx context.Context, userIDs []string) (map[string]bool, error)
 }
 
 // ChannelStore defines persistence operations for channels.
@@ -32,7 +34,10 @@ type ChannelStore interface {
 	CreateChannel(ctx context.Context, ch *model.Channel) error
 	GetChannel(ctx context.Context, id string) (*model.Channel, error)
 	GetChannelBySlug(ctx context.Context, slug string) (*model.Channel, error)
-	UpdateChannel(ctx context.Context, ch *model.Channel) error
+	// PatchChannel and RenameChannel are field-level: a whole-channel write
+	// would roll back the MessageSeq a message bumped meanwhile.
+	PatchChannel(ctx context.Context, id string, p store.ChannelPatch) error
+	RenameChannel(ctx context.Context, id, oldSlug, name, slug string, at time.Time) error
 	ListPublicChannels(ctx context.Context, limit int, cursor string) ([]*model.Channel, string, error)
 }
 

@@ -38,6 +38,8 @@ type mockUserStore struct {
 	updateErr   error
 	listErr     error
 	notifErr    error
+	// deactivatedErr fails DeactivatedAmong.
+	deactivatedErr error
 }
 
 func newMockUserStore() *mockUserStore {
@@ -176,11 +178,24 @@ func (m *mockUserStore) NotificationAccountsFor(_ context.Context, userIDs []str
 		if !ok {
 			continue
 		}
-		acct := store.NotificationAccount{Settings: model.DefaultNotificationSettings(), Machine: u.IsBot || u.IsAgent()}
+		acct := store.NotificationAccount{Settings: model.DefaultNotificationSettings(), Machine: u.IsBot || u.IsAgent(), Deactivated: u.Status == "deactivated"}
 		if u.NotificationSettings != nil {
 			acct.Settings = *u.NotificationSettings
 		}
 		out[uid] = acct
+	}
+	return out, nil
+}
+
+func (m *mockUserStore) DeactivatedAmong(_ context.Context, userIDs []string) (map[string]bool, error) {
+	if m.deactivatedErr != nil {
+		return nil, m.deactivatedErr
+	}
+	out := map[string]bool{}
+	for _, uid := range userIDs {
+		if u, ok := m.users[uid]; ok && u.Status == "deactivated" {
+			out[uid] = true
+		}
 	}
 	return out, nil
 }
@@ -666,11 +681,43 @@ func (m *mockChannelStore) GetChannelBySlug(_ context.Context, slug string) (*mo
 	return nil, store.ErrNotFound
 }
 
-func (m *mockChannelStore) UpdateChannel(_ context.Context, ch *model.Channel) error {
+func (m *mockChannelStore) PatchChannel(_ context.Context, id string, p store.ChannelPatch) error {
 	if m.updateErr != nil {
 		return m.updateErr
 	}
-	m.channels[ch.ID] = ch
+	ch, ok := m.channels[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	if p.Description != nil {
+		ch.Description = *p.Description
+	}
+	if p.Archived != nil {
+		ch.Archived = *p.Archived
+	}
+	if p.MakePrivate {
+		ch.Type = model.ChannelTypePrivate
+	}
+	ch.UpdatedAt = p.UpdatedAt
+	return nil
+}
+
+// RenameChannel mirrors the store's rename: the slug the caller read must
+// still be the channel's, and no other channel may hold the new one.
+func (m *mockChannelStore) RenameChannel(_ context.Context, id, oldSlug, name, slug string, at time.Time) error {
+	if m.updateErr != nil {
+		return m.updateErr
+	}
+	ch, ok := m.channels[id]
+	if !ok || ch.Slug != oldSlug {
+		return store.ErrNotFound
+	}
+	for _, other := range m.channels {
+		if other.ID != id && other.Slug == slug {
+			return store.ErrAlreadyExists
+		}
+	}
+	ch.Name, ch.Slug, ch.UpdatedAt = name, slug, at
 	return nil
 }
 

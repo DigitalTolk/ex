@@ -14,6 +14,7 @@ func TestIndexParentMessages(t *testing.T) {
 		{ID: "m2", ParentID: "p", ParentMessageID: "m1", Body: "reply", AttachmentIDs: []string{"a1"}},
 		{ID: "s", ParentID: "p", System: true, Body: "joined"},
 		{ID: "n", ParentID: "p", NoIndex: true},
+		{ID: "d", ParentID: "p", Deleted: true},
 	}
 	res := &stubAttachmentResolver{byID: map[string]*model.Attachment{"a1": {ID: "a1", Filename: "f.txt"}}}
 	w := &fakeBulk{}

@@ -399,6 +399,12 @@ func (s *MembershipStoreImpl) IncrementNotifyCount(ctx context.Context, channelI
 	return row.UnreadNotifyCount, nil
 }
 
+// SetUserChannelName rewrites the channel name copied onto a member's
+// user-side row, after the channel was renamed.
+func (s *MembershipStoreImpl) SetUserChannelName(ctx context.Context, channelID, userID, name string) error {
+	return s.setUserChannelAttribute(ctx, channelID, userID, "channelName", name)
+}
+
 // SetFavorite flips the favorite flag on the user-side
 // UserChannel — used to pin a channel to the "Favorites" sidebar section.
 func (s *MembershipStoreImpl) SetFavorite(ctx context.Context, channelID, userID string, favorite bool) error {

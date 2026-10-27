@@ -17,6 +17,8 @@ type stubGraph struct {
 	managerErr  error
 	profileKeys []string
 	managerKeys []string
+	accounts    []msgraph.UserAccount
+	accountsErr error
 }
 
 func (s *stubGraph) GetUserProfile(_ context.Context, key string) (*msgraph.UserProfile, error) {
@@ -32,6 +34,31 @@ func (s *stubGraph) ResolveUserByEmail(_ context.Context, email string) (*msgrap
 func (s *stubGraph) GetUserManager(_ context.Context, key string) (*msgraph.UserProfile, error) {
 	s.managerKeys = append(s.managerKeys, key)
 	return s.manager, s.managerErr
+}
+
+func (s *stubGraph) ListUserAccounts(context.Context) ([]msgraph.UserAccount, error) {
+	return s.accounts, s.accountsErr
+}
+
+func TestListAccountsMapsObjectIDToEnabled(t *testing.T) {
+	off := false
+	graph := &stubGraph{accounts: []msgraph.UserAccount{{ID: "oid-on"}, {ID: "oid-off", AccountEnabled: &off}}}
+	svc := NewMSDirectoryService(graph, newMockUserStore())
+
+	got, err := svc.ListAccounts(context.Background())
+	if err != nil {
+		t.Fatalf("ListAccounts: %v", err)
+	}
+	if len(got) != 2 || !got["oid-on"] || got["oid-off"] {
+		t.Errorf("accounts = %v, want oid-on enabled and oid-off disabled", got)
+	}
+}
+
+func TestListAccountsError(t *testing.T) {
+	svc := NewMSDirectoryService(&stubGraph{accountsErr: errors.New("graph down")}, newMockUserStore())
+	if _, err := svc.ListAccounts(context.Background()); err == nil {
+		t.Fatal("expected the Graph error")
+	}
 }
 
 func TestLookupProfileKeysByObjectIDThenEmail(t *testing.T) {

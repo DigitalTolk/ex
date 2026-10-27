@@ -52,26 +52,41 @@ export function extractURLs(body: string): string[] {
   return urls;
 }
 
-// firstName returns the first whitespace-separated token of a display
-// name ("Alice Smith" → "Alice"). Used by the group-label collapse in
-// both ConversationRow (string input) and ConversationView (array of
-// names) so the reduction lives in one place.
-export function firstName(name: string): string {
-  /* istanbul ignore next -- String.split always returns at least one element (even ''.split(/\s+/) → ['']), so [0] is never undefined; the ?? '' arm is defensive. */
-  return name.trim().split(/\s+/)[0] ?? '';
+// Leading name words people are not called by: "Muhammad" (in its common
+// spellings and abbreviations) opens a great many Pakistani names, and
+// "Muhammad Ali Khan" goes by Ali Khan. Keep in step with namePrefixes in
+// internal/model/name.go.
+const NAME_PREFIXES = new Set(['muhammad', 'muhammed', 'mohammad', 'mohammed', 'mohamed', 'mohamad', 'muhamad', 'mohd', 'md']);
+
+export function isNamePrefix(word: string): boolean {
+  return NAME_PREFIXES.has(word.toLowerCase().replace(/\.$/, ''));
 }
 
-// firstNamesOnly takes a comma-joined list of full names and returns the
-// same list with each entry collapsed to its first word. Used in group
+// shortName returns the name a person goes by: the first word of their
+// display name ("Alice Smith" → "Alice"), or — for a name opening with a
+// name prefix — everything after it ("Muhammad Ali Khan" → "Ali Khan"), since
+// so many go by Ali that the next word alone would still name a crowd. A name
+// that is nothing but prefixes keeps its first word. Used by the group-label
+// collapse in both ConversationRow (string input) and ConversationView (array
+// of names) so the reduction lives in one place.
+export function shortName(name: string): string {
+  const words = name.trim().split(/\s+/);
+  const rest = words.findIndex((w) => !isNamePrefix(w));
+  if (rest <= 0) return words.slice(0, 1).join('');
+  return words.slice(rest).join(' ');
+}
+
+// shortNamesOnly takes a comma-joined list of full names and returns the
+// same list with each entry collapsed to its short name. Used in group
 // conversation labels — "Alice Smith, Bob Jones" → "Alice, Bob" — so the
 // sidebar / header doesn't overflow on groups with several members.
 //
 // Single-token labels (no comma) are returned unchanged so custom group
 // names like "Project Team" don't get clipped to "Project".
-export function firstNamesOnly(label: string | undefined): string {
+export function shortNamesOnly(label: string | undefined): string {
   if (!label) return '';
   if (!label.includes(',')) return label;
-  return label.split(',').map(firstName).filter(Boolean).join(', ');
+  return label.split(',').map(shortName).filter(Boolean).join(', ');
 }
 
 export const KIB = 1024;
