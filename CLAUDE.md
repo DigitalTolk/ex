@@ -262,7 +262,8 @@ The `--color-primary` **token** is the **neutral** accent colour and stays neutr
 
 ### Typography
 
-- **Family — body / UI:** `Figtree` (loaded via Google Fonts), falling back to the system UI stack. Exposed as `var(--font-sans)`. Use `font-sans` (the default) — no need to specify it.
+- **Never use an external font.** Every font ships with the app: an `@fontsource/*` package imported at the top of `index.css` (Tailwind inlines its `@font-face` rules, Vite serves the files from `/assets/`), or a system font. No font CDN — no `@import` or `<link>` of another site's stylesheet, no `@font-face` URL on another origin. The CSP's `style-src`/`font-src 'self'` refuses them anyway. WebKit applies none of a stylesheet while an `@import` in it is still loading, so a slow font host once left the whole app unstyled and held up its first paint.
+- **Family — body / UI:** `Figtree` (bundled from `@fontsource/figtree`), falling back to the system UI stack. Exposed as `var(--font-sans)`. Use `font-sans` (the default) — no need to specify it.
 - **Family — display headlines:** `Futura` (ships with macOS/iOS), falling back to `Figtree` and the system stack. Exposed as `var(--font-display)`. Use sparingly, only on display headlines (>=24px). Apply via `style={{ fontFamily: 'var(--font-display)' }}`.
 - **Family — monospace:** browser default (`ui-monospace, SFMono-Regular, Menlo, monospace`). Use `font-mono` Tailwind utility.
 - **Base size:** 16px root, 14px body (`text-sm`). Most chrome and chat content reads at 14px.
