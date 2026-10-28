@@ -1,19 +1,20 @@
 import { memo, useCallback, useMemo, useState } from 'react';
 import { Virtuoso } from 'react-virtuoso';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { X, UserPlus, ArrowRight } from 'lucide-react';
+import { X, UserPlus, ArrowRight, MoreHorizontal } from 'lucide-react';
 import { motion } from 'motion/react';
 import { UserHoverCard } from '@/components/UserHoverCard';
 import { UserAvatar } from '@/components/UserAvatar';
 import { UserPickerRow } from '@/components/UserPickerRow';
 import { useIsOnline } from '@/stores/presence';
 import { useUserLookup } from '@/hooks/useConversations';
-import { useAddChannelMembers, useRemoveChannelMember } from '@/hooks/useChannels';
+import { useAddChannelMembers, useRemoveChannelMember, useSetChannelMemberRole } from '@/hooks/useChannels';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
-import { canAddMembers, canRemoveMember, roleNumber, ChannelRole } from '@/lib/roles';
+import { assignableRoles, canAddMembers, canRemoveMember, roleNumber, ChannelRole, type ChannelRoleStr } from '@/lib/roles';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
 import { useEscapeClose } from '@/hooks/useEscapeClose';
@@ -32,6 +33,7 @@ interface MemberListProps {
   channelSlug?: string;
   currentUserId?: string;
   currentUserRole?: number;
+  currentUserSystemRole?: string;
   userMap?: Record<string, UserMapEntry>;
   onClose?: () => void;
 }
@@ -47,6 +49,12 @@ interface SearchUser {
 // How long typing must pause before the add-member search asks the server.
 const SEARCH_DEBOUNCE_MS = 300;
 
+const ROLE_ACTION_LABEL: Record<ChannelRoleStr, string> = {
+  owner: 'Make owner',
+  admin: 'Make admin',
+  member: 'Make member',
+};
+
 function roleBadge(role: string | number) {
   const n = roleNumber(role);
   if (n === ChannelRole.Owner) return <Badge variant="secondary" className="text-xs px-1 py-0">Owner</Badge>;
@@ -54,7 +62,7 @@ function roleBadge(role: string | number) {
   return null;
 }
 
-export function MemberList({ members, channelId, channelSlug, currentUserId, currentUserRole, userMap, onClose }: MemberListProps) {
+export function MemberList({ members, channelId, channelSlug, currentUserId, currentUserRole, currentUserSystemRole, userMap, onClose }: MemberListProps) {
   const [query, setQuery] = useState('');
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -78,6 +86,7 @@ export function MemberList({ members, channelId, channelSlug, currentUserId, cur
   const addMembers = useAddChannelMembers();
   const removeMember = useRemoveChannelMember();
   const removeMemberMutate = removeMember.mutate;
+  const setMemberRoleMutate = useSetChannelMemberRole().mutate;
 
   const handleRemove = useCallback(
     (userId: string) => {
@@ -90,6 +99,21 @@ export function MemberList({ members, channelId, channelSlug, currentUserId, cur
       );
     },
     [channelId, removeMemberMutate],
+  );
+
+  // No channel, no role menu.
+  const handleSetRole = useMemo(
+    () =>
+      channelId
+        ? (userId: string, role: ChannelRoleStr) => {
+            setError('');
+            setMemberRoleMutate(
+              { channelId, userId, role },
+              { onError: (err) => setError(err instanceof Error ? err.message : 'Failed to change role') },
+            );
+          }
+        : undefined,
+    [channelId, setMemberRoleMutate],
   );
 
   function handleAdd(user: SearchUser) {
@@ -216,6 +240,9 @@ export function MemberList({ members, channelId, channelSlug, currentUserId, cur
                   currentUserId={currentUserId}
                   removable={m.userID !== currentUserId && canRemoveMember(currentUserRole, m.role, channelSlug)}
                   onRemove={handleRemove}
+                  actorRole={currentUserRole}
+                  actorSystemRole={currentUserSystemRole}
+                  onSetRole={handleSetRole}
                 />
               )}
             />
@@ -234,14 +261,21 @@ const MemberRow = memo(function MemberRow({
   currentUserId,
   removable,
   onRemove,
+  actorRole,
+  actorSystemRole,
+  onSetRole,
 }: {
   member: ChannelMembership;
   entry?: UserMapEntry;
   currentUserId?: string;
   removable: boolean;
   onRemove: (userId: string) => void;
+  actorRole?: number;
+  actorSystemRole?: string;
+  onSetRole?: (userId: string, role: ChannelRoleStr) => void;
 }) {
   const avatarURL = entry?.avatarURL;
+  const roles = assignableRoles(actorRole, m.role, actorSystemRole);
   const memberOnline = useIsOnline(m.userID);
   return (
     // pb-0.5: the 2px rhythm between rows, inside the row so the virtual
@@ -270,6 +304,27 @@ const MemberRow = memo(function MemberRow({
           <UserStatusIndicator status={entry?.userStatus} />
         </span>
         {roleBadge(m.role)}
+        {onSetRole && roles.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              className={buttonVariants({
+                variant: 'ghost',
+                size: 'icon',
+                className: 'h-9 w-9 shrink-0 opacity-100 md:h-6 md:w-6 md:opacity-60 md:group-hover:opacity-100',
+              })}
+              aria-label={`Change role for ${m.displayName}`}
+            >
+              <MoreHorizontal className="h-3.5 w-3.5" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-40">
+              {roles.map((r) => (
+                <DropdownMenuItem key={r} onClick={() => onSetRole(m.userID, r)}>
+                  {ROLE_ACTION_LABEL[r]}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
         {/* Remove X: visible at rest (muted) on desktop, emphasized on
             row hover — a hover-only reveal reads as "removal is gone".
             Hidden entirely in #general, where the backend rejects

@@ -2405,6 +2405,12 @@ func (d *dataParentIndexStore) DeleteFileIndex(_ context.Context, parentID, atta
 	}
 	return nil
 }
+func (d *dataParentIndexStore) SetFileIndexName(_ context.Context, parentID, attachmentID, filename string) error {
+	if r := d.files[parentID][attachmentID]; r != nil {
+		r.Filename = filename
+	}
+	return nil
+}
 func (d *dataParentIndexStore) ListFileIndex(_ context.Context, parentID string) ([]*store.FileIndexRow, error) {
 	if d.listFileErr != nil {
 		return nil, d.listFileErr

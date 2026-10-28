@@ -637,6 +637,12 @@ type fakeAttachmentRefMgr struct {
 	owners   map[string]string
 	refs     map[string][]string
 	ownerErr error
+	// atts backs LoadMany (loadErr fails it; loads records each call);
+	// readied records ReadyForReader's grants.
+	atts    map[string]*model.Attachment
+	loadErr error
+	loads   [][]string
+	readied []MediaGrant
 }
 
 func (f *fakeAttachmentRefMgr) ValidateForUse(_ context.Context, _ string) error {
@@ -655,6 +661,26 @@ func (f *fakeAttachmentRefMgr) AddRef(_ context.Context, attachmentID, _ string)
 func (f *fakeAttachmentRefMgr) RemoveRef(_ context.Context, attachmentID, _ string) error {
 	f.removed = append(f.removed, attachmentID)
 	return f.removeErr
+}
+
+func (f *fakeAttachmentRefMgr) LoadMany(_ context.Context, ids []string) (map[string]*model.Attachment, error) {
+	f.loads = append(f.loads, ids)
+	if f.loadErr != nil {
+		return nil, f.loadErr
+	}
+	out := make(map[string]*model.Attachment, len(ids))
+	for _, id := range ids {
+		if a, ok := f.atts[id]; ok {
+			cp := *a
+			out[id] = &cp
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeAttachmentRefMgr) ReadyForReader(_ context.Context, a *model.Attachment, grant MediaGrant) {
+	f.readied = append(f.readied, grant)
+	a.URL = "https://media/" + a.ID + "?m=" + grant.MessageID
 }
 
 func TestMessageService_releaseAttachments_SkipsEmptyAndSwallowsError(t *testing.T) {
@@ -1415,14 +1441,14 @@ func TestMessageService_ListPinned_NotMemberRejected(t *testing.T) {
 	}
 }
 
-// The general happy path is covered by TestMessageService_ListFiles_UsesIndex;
+// The general happy path is covered in message_files_test.go;
 // attachment dedup happens at the FILE# index write side
 // (SetFileIndex upserts per (parentID, attachmentID) — the latest
 // sharer wins by row identity, not by scan-time filtering).
 
 func TestMessageService_ListFiles_NotMemberRejected(t *testing.T) {
 	svc, _, _, _, _ := setupMessageService()
-	if _, err := svc.ListFiles(context.Background(), "stranger", "ch1", ParentChannel); err == nil {
+	if _, err := svc.ListFiles(context.Background(), "stranger", "ch1", ParentChannel, FileQuery{}); err == nil {
 		t.Fatal("expected ListFiles to reject non-members")
 	}
 }
@@ -2595,32 +2621,6 @@ func TestMessageService_Send_PopulatesFileIndex(t *testing.T) {
 	}
 }
 
-// ListFiles via the index returns rows in reverse-chronological
-// order (newest share first) without scanning messages.
-func TestMessageService_ListFiles_UsesIndex(t *testing.T) {
-	svc, _, memberships, _, _ := setupMessageService()
-	idx := newMockParentIndex()
-	svc.SetParentIndex(idx)
-	ctx := context.Background()
-	memberships.memberships["ch-files-list#u-bob"] = &model.ChannelMembership{ChannelID: "ch-files-list", UserID: "u-bob", Role: model.ChannelRoleMember}
-
-	older := time.Now().Add(-1 * time.Hour)
-	newer := time.Now()
-	_ = idx.SetFileIndex(ctx, "ch-files-list", "att-old", "m-old", "u-bob", older)
-	_ = idx.SetFileIndex(ctx, "ch-files-list", "att-new", "m-new", "u-bob", newer)
-
-	files, err := svc.ListFiles(ctx, "u-bob", "ch-files-list", ParentChannel)
-	if err != nil {
-		t.Fatalf("ListFiles: %v", err)
-	}
-	if len(files) != 2 {
-		t.Fatalf("got %d files, want 2", len(files))
-	}
-	if files[0].AttachmentID != "att-new" {
-		t.Errorf("expected newest first, got %q", files[0].AttachmentID)
-	}
-}
-
 // Deleting a message that owned a FILE# row must clear the row so
 // ListFiles doesn't surface a tombstone reference. If a different
 // message has since claimed the row (re-share), that row must
@@ -2816,7 +2816,7 @@ func TestMessageService_IndexFailuresDoNotBlockOperations(t *testing.T) {
 		svc.SetParentIndex(erroringParentIndex{})
 		ctx := context.Background()
 		memberships.memberships["ch-list-f#u-alice"] = &model.ChannelMembership{ChannelID: "ch-list-f", UserID: "u-alice", Role: model.ChannelRoleMember}
-		if _, err := svc.ListFiles(ctx, "u-alice", "ch-list-f", ParentChannel); err == nil {
+		if _, err := svc.ListFiles(ctx, "u-alice", "ch-list-f", ParentChannel, FileQuery{}); err == nil {
 			t.Error("expected ListFiles to surface index list error")
 		}
 	})

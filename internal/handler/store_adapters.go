@@ -63,6 +63,7 @@ type parentIndexBacking interface {
 	SetFileIndex(ctx context.Context, parentID, attachmentID, msgID, authorID string, createdAt time.Time) error
 	DeleteFileIndex(ctx context.Context, parentID, attachmentID string) error
 	ListFileIndex(ctx context.Context, parentID string) ([]*store.FileIndexRow, error)
+	SetFileIndexName(ctx context.Context, parentID, attachmentID, filename string) error
 }
 
 func NewParentIndexAdapter(s *store.ParentIndexStoreImpl) *ParentIndexAdapter {
@@ -121,7 +122,12 @@ func (a *ParentIndexAdapter) ListFileIndex(ctx context.Context, parentID string)
 			MessageID:    r.MessageID,
 			AuthorID:     r.AuthorID,
 			CreatedAt:    r.CreatedAt,
+			Filename:     r.Filename,
 		})
 	}
 	return out, nil
+}
+
+func (a *ParentIndexAdapter) SetFileIndexName(ctx context.Context, parentID, attachmentID, filename string) error {
+	return a.s.SetFileIndexName(ctx, parentID, attachmentID, filename)
 }

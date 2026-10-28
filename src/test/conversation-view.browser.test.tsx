@@ -115,7 +115,7 @@ interface FetchPlan {
   // Message tail page per conversation id (defaults to []).
   messagesByConv?: Record<string, unknown[]>;
   pinned?: unknown[];
-  files?: unknown[];
+  files?: { attachmentID: string; messageID: string; authorID: string; createdAt: string }[];
   // Replies served for a thread root id (GET …/messages/:id/thread).
   threadReplies?: Record<string, unknown[]>;
   attachments?: Record<string, unknown>;
@@ -230,8 +230,15 @@ function installFetchStub(plan: FetchPlan = {}): () => void {
     }
     const pinnedMatch = url.match(/\/api\/v1\/conversations\/([^/?]+)\/pinned$/);
     if (pinnedMatch) return apiJSON(plan.pinned ?? []);
-    const filesMatch = url.match(/\/api\/v1\/conversations\/([^/?]+)\/files$/);
-    if (filesMatch) return apiJSON(plan.files ?? []);
+    // The files page joins each index row with its attachment, as the server
+    // does (a row whose attachment is gone is left out).
+    const filesMatch = url.match(/\/api\/v1\/conversations\/([^/?]+)\/files(\?|$)/);
+    if (filesMatch) {
+      const files = (plan.files ?? [])
+        .map((f) => ({ ...f, attachment: plan.attachments?.[f.attachmentID] }))
+        .filter((f) => f.attachment);
+      return apiJSON({ files });
+    }
     const msgMatch = url.match(/\/api\/v1\/conversations\/([^/?]+)\/messages(\?|$)/);
     if (msgMatch && method === 'POST') {
       let sent: { body?: string; attachmentIDs?: string[]; parentMessageID?: string } = {};
@@ -529,7 +536,7 @@ describe('conversation route (full route, real browser)', () => {
     }, { timeout: 15000 });
   });
 
-  it('populates the FILES panel from /conversations/:id/files + attachment metadata', async () => {
+  it('populates the FILES panel from /conversations/:id/files', async () => {
     teardown = installFetchStub({
       files: [
         { attachmentID: ATTACHMENT_ID, messageID: 'm-1', authorID: ALICE_ID, createdAt: '2026-05-01T11:00:00Z' },

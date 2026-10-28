@@ -538,6 +538,43 @@ func (s *AttachmentService) LoadForPreview(ctx context.Context, ids []string) []
 	return out
 }
 
+// LoadMany reads attachments in one batched read (per-ID fallback), keyed by
+// ID and without read-side enrichment. Missing IDs are left out; a failed
+// read fails the call, so a caller never mistakes it for "no such files".
+func (s *AttachmentService) LoadMany(ctx context.Context, ids []string) (map[string]*model.Attachment, error) {
+	out := make(map[string]*model.Attachment, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	if bs, ok := s.attachments.(batchAttachmentStore); ok {
+		atts, err := bs.GetAttachmentsByIDs(ctx, ids)
+		if err != nil {
+			return nil, fmt.Errorf("attachment: batch get: %w", err)
+		}
+		for _, a := range atts {
+			out[a.ID] = a
+		}
+		return out, nil
+	}
+	for _, id := range ids {
+		a, err := s.attachments.GetByID(ctx, id)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+		case err != nil:
+			return nil, fmt.Errorf("attachment: get: %w", err)
+		default:
+			out[id] = a
+		}
+	}
+	return out, nil
+}
+
+// ReadyForReader applies the read-side enrichment to an attachment the caller
+// has already authorized grant's user to read from grant's message.
+func (s *AttachmentService) ReadyForReader(ctx context.Context, a *model.Attachment, grant MediaGrant) {
+	s.finishRead(ctx, a, &grant)
+}
+
 func (s *AttachmentService) GetForUser(ctx context.Context, userID, id, parentID, parentType, messageID string) (*model.Attachment, error) {
 	a, err := s.attachments.GetByID(ctx, id)
 	if err != nil {

@@ -1866,6 +1866,19 @@ describe('Sidebar', () => {
     expect(screen.queryByLabelText('Create channel')).not.toBeInTheDocument();
   });
 
+  it('opens every section when the remembered collapsed list is unreadable', () => {
+    for (const stored of ['not json', '{"__channels__":true}']) {
+      localStorage.setItem('sidebar.collapsedSections', stored);
+      const { unmount } = renderSidebar();
+      expect(screen.getByTestId('sidebar-group-toggle-__channels__')).toHaveAttribute('aria-expanded', 'true');
+      unmount();
+    }
+    // Entries that are not section keys are skipped; the rest still apply.
+    localStorage.setItem('sidebar.collapsedSections', '[3,"__channels__",null]');
+    renderSidebar();
+    expect(screen.getByTestId('sidebar-group-toggle-__channels__')).toHaveAttribute('aria-expanded', 'false');
+  });
+
   it('collapses a channel section but keeps unread channels visible', async () => {
     mockChannels = mockChannels.map((c) => (c.channelID === 'ch-1' ? { ...c, unread: true } : c));
     renderSidebar();

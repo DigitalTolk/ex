@@ -214,6 +214,7 @@ type convHandlerEnv struct {
 	members     *dataMembershipStore
 	messages    *dataMessageStore
 	parentIndex *dataParentIndexStore
+	attachments *fakeAttachmentStore
 	jwtMgr      *auth.JWTManager
 }
 
@@ -231,6 +232,8 @@ func setupConversationHandlerFull(t *testing.T) *convHandlerEnv {
 	convSvc := service.NewConversationService(convs, users, cache, broker, nil)
 	messageSvc := service.NewMessageService(messages, members, convs, nil, broker)
 	messageSvc.SetParentIndex(newParentIndexAdapterFromBacking(parentIndex))
+	attachments := newFakeAttachmentStore()
+	messageSvc.SetAttachmentManager(service.NewAttachmentService(attachments, nil, nil))
 	jwtMgr := auth.NewJWTManager("test-conv-full-secret", 15*time.Minute, 720*time.Hour)
 
 	h := NewConversationHandler(convSvc, messageSvc)
@@ -241,6 +244,7 @@ func setupConversationHandlerFull(t *testing.T) *convHandlerEnv {
 		members:     members,
 		messages:    messages,
 		parentIndex: parentIndex,
+		attachments: attachments,
 		jwtMgr:      jwtMgr,
 	}
 }
@@ -1284,6 +1288,7 @@ func TestConvHandlerFull_ListFiles(t *testing.T) {
 		ID: "m-1", ParentID: "conv-files", AuthorID: "u-files",
 		AttachmentIDs: []string{"a-1"}, CreatedAt: now,
 	}
+	env.attachments.byID["a-1"] = &model.Attachment{ID: "a-1", Filename: "contract.pdf"}
 	// Mirror the production write: Send populates the FILE# index.
 	// ListFiles reads exclusively from there.
 	_ = env.parentIndex.SetFileIndex(context.Background(), "conv-files", "a-1", "m-1", "u-files", now)
@@ -1298,8 +1303,12 @@ func TestConvHandlerFull_ListFiles(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"a-1"`) {
-		t.Errorf("body missing attachment id; got %s", rec.Body.String())
+	var page service.FilePage
+	if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(page.Files) != 1 || page.Files[0].AttachmentID != "a-1" || page.Files[0].Attachment.Filename != "contract.pdf" {
+		t.Fatalf("page = %+v", page)
 	}
 }
 

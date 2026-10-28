@@ -69,6 +69,10 @@ type FileIndexRow struct {
 	MessageID    string    `dynamodbav:"message_id"`
 	AuthorID     string    `dynamodbav:"author_id"`
 	CreatedAt    time.Time `dynamodbav:"created_at"`
+	// Filename is a copy of the attachment's name so the Files panel can
+	// filter without reading every attachment. Rows are written without it;
+	// the first search in the parent fills it in (SetFileIndexName).
+	Filename string `dynamodbav:"filename,omitempty"`
 }
 
 type ParentIndexStore interface {
@@ -79,6 +83,7 @@ type ParentIndexStore interface {
 	SetFileIndex(ctx context.Context, parentID, attachmentID, msgID, authorID string, createdAt time.Time) error
 	DeleteFileIndex(ctx context.Context, parentID, attachmentID string) error
 	ListFileIndex(ctx context.Context, parentID string) ([]*FileIndexRow, error)
+	SetFileIndexName(ctx context.Context, parentID, attachmentID, filename string) error
 }
 
 type ParentIndexStoreImpl struct {
@@ -231,6 +236,28 @@ func (s *ParentIndexStoreImpl) DeleteFileIndex(ctx context.Context, parentID, at
 		Key:       compositeKey(parentPK(parentID), fileSK(attachmentID)),
 	}); err != nil {
 		return fmt.Errorf("store: delete file index: %w", err)
+	}
+	return nil
+}
+
+// SetFileIndexName records the attachment's name on its existing index row.
+// Only the name is written, so a re-share landing meanwhile keeps its
+// message; a row deleted meanwhile stays deleted.
+func (s *ParentIndexStoreImpl) SetFileIndexName(ctx context.Context, parentID, attachmentID, filename string) error {
+	update := expression.Set(expression.Name("filename"), expression.Value(filename))
+	cond := expression.AttributeExists(expression.Name("PK"))
+	expr := mustExpr(expression.NewBuilder().WithUpdate(update).WithCondition(cond).Build())
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(s.Table),
+		Key:                       compositeKey(parentPK(parentID), fileSK(attachmentID)),
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	var gone *types.ConditionalCheckFailedException
+	if err != nil && !errors.As(err, &gone) {
+		return fmt.Errorf("store: set file index name: %w", err)
 	}
 	return nil
 }

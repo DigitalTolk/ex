@@ -69,6 +69,10 @@ type AttachmentRefManager interface {
 	AttachmentOwner(ctx context.Context, attachmentID string) (createdBy string, messageIDs []string, err error)
 	AddRef(ctx context.Context, attachmentID, messageID string) error
 	RemoveRef(ctx context.Context, attachmentID, messageID string) error
+	// LoadMany and ReadyForReader serve the Files panel (ListFiles): one
+	// batched read, then thumbnails and media URLs for the reader.
+	LoadMany(ctx context.Context, ids []string) (map[string]*model.Attachment, error)
+	ReadyForReader(ctx context.Context, a *model.Attachment, grant MediaGrant)
 }
 
 // MessageNotifier is the slice of NotificationService MessageService cares
@@ -1855,51 +1859,6 @@ func (s *MessageService) ListPinned(ctx context.Context, userID, parentID, paren
 	}
 	s.attachRendered(ctx, pinned...)
 	return pinned, nil
-}
-
-// FileEntry is the per-attachment record returned by ListFiles. It
-// captures who shared the file and when, plus the routing info the
-// client needs to deep-link back into the originating message.
-type FileEntry struct {
-	AttachmentID string    `json:"attachmentID"`
-	MessageID    string    `json:"messageID"`
-	AuthorID     string    `json:"authorID"`
-	CreatedAt    time.Time `json:"createdAt"`
-}
-
-// ListFiles returns every attachment shared in the parent in
-// reverse-chronological order (newest first). The frontend hydrates the
-// Attachment records via the existing batch endpoint.
-//
-// Re-shares of the same physical file collapse to one row keyed on the
-// AttachmentID — the AttachmentService dedupes uploads by SHA-256, so
-// the same content always resolves to the same ID, and the user only
-// sees the latest message that referenced it.
-//
-// Reads exclusively from the FILE# index. Pre-rollout data is invisible
-// here until the operator runs `cmd/migrate-parent-index --apply`.
-func (s *MessageService) ListFiles(ctx context.Context, userID, parentID, parentType string) ([]*FileEntry, error) {
-	if err := s.checkAccess(ctx, userID, parentID, parentType); err != nil {
-		return nil, err
-	}
-	// parentIndex is mandatory (see ListPinned).
-	rows, err := s.parentIndex.ListFileIndex(ctx, parentID)
-	if err != nil {
-		return nil, fmt.Errorf("message: list file index: %w", err)
-	}
-	files := make([]*FileEntry, 0, len(rows))
-	for _, row := range rows {
-		files = append(files, &FileEntry{
-			AttachmentID: row.AttachmentID,
-			MessageID:    row.MessageID,
-			AuthorID:     row.AuthorID,
-			CreatedAt:    row.CreatedAt,
-		})
-	}
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].CreatedAt.After(files[j].CreatedAt)
-	})
-	return files, nil
 }
 
 // maxListRounds caps the inner store-fetch loop so a channel that is

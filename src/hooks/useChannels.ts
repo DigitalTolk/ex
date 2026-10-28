@@ -3,6 +3,7 @@ import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { wsLiveQueryOptions } from '@/lib/query-client';
 import { showToast } from '@/lib/toast';
+import type { ChannelRoleStr } from '@/lib/roles';
 import type { UserChannel, Channel, ChannelMembership, ChannelNotificationOverride } from '@/types';
 
 // select narrows what the caller subscribes to: with structural sharing, a
@@ -270,6 +271,22 @@ export function useAddChannelMembers() {
           }),
         ),
       ),
+    onSuccess: (_res, vars) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(vars.channelId) });
+    },
+  });
+}
+
+// Gives a member another channel role. The members.changed event updates
+// every other client; this one refetches right away.
+export function useSetChannelMemberRole() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { channelId: string; userId: string; role: ChannelRoleStr }) =>
+      apiFetch<void>(`/api/v1/channels/${vars.channelId}/members/${vars.userId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ role: vars.role }),
+      }),
     onSuccess: (_res, vars) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(vars.channelId) });
     },

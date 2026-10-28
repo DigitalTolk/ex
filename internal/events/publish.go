@@ -26,6 +26,8 @@ const (
 	MemberActionLeft    = "left"
 	MemberActionAdded   = "added"
 	MemberActionRemoved = "removed"
+	// MemberActionRoleChanged: the member stays, with a new channel role.
+	MemberActionRoleChanged = "role_changed"
 )
 
 // Publish marshals data into an Event and publishes it to a single channel.

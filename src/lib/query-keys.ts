@@ -60,7 +60,8 @@ export const queryKeys = {
 
   // Pinned / files (parentPath is "channels/<id>" or "conversations/<id>")
   pinned: (parentPath: string) => ['pinned', parentPath] as const,
-  files: (parentPath: string) => ['files', parentPath] as const,
+  // One cache per name filter; ['files', parentPath] covers them all.
+  files: (parentPath: string, query: string) => ['files', parentPath, query] as const,
 
   // Attachments
   attachment: (id: string) => ['attachment', id] as const,

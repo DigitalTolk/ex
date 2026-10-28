@@ -35,9 +35,10 @@ const bySlug: Record<string, Channel> = {
 };
 
 let role: ChannelMembership['role'] = 'owner';
+let systemRole = 'member';
 
 vi.mock('@/context/AuthContext', () => ({
-  useAuth: () => ({ user: { id: 'u-1', displayName: 'Alice', email: 'a@a.com', systemRole: 'member', status: 'active' } }),
+  useAuth: () => ({ user: { id: 'u-1', displayName: 'Alice', email: 'a@a.com', systemRole, status: 'active' } }),
 }));
 const unreadValue = {
   unreadChannels: new Set(),
@@ -161,6 +162,10 @@ function renderAt(path: string) {
   );
 }
 
+beforeEach(() => {
+  systemRole = 'member';
+});
+
 async function openRename() {
   fireEvent.click(screen.getByRole('button', { name: /Rename channel/ }));
   return screen.findByRole('textbox', { name: 'Name' });
@@ -264,6 +269,22 @@ describe('renaming a channel', () => {
     role = 'member';
     renderAt('/channel/marketing');
     expect(screen.queryByRole('button', { name: /Rename channel/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Edit description/ })).not.toBeInTheDocument();
+  });
+
+  it('lets a system admin who was invited as a plain member rename it and edit its description', async () => {
+    role = 'member';
+    systemRole = 'admin';
+    const user = userEvent.setup();
+    renderAt('/channel/marketing');
+    expect(screen.getByRole('button', { name: /Edit description/ })).toBeInTheDocument();
+
+    const field = await openRename();
+    await user.clear(field);
+    await user.type(field, 'growth');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/channel/growth'));
+    expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/channels/ch-m', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ name: 'growth' }) }));
   });
 });
 

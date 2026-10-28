@@ -28,9 +28,10 @@ export function isOwner(role: ChannelRoleLike): boolean {
   return roleNumber(role) === ChannelRole.Owner;
 }
 
-// Members can edit channel description if admin or owner.
-export function canEditChannel(role: ChannelRoleLike): boolean {
-  return roleNumber(role) >= ChannelRole.Admin;
+// Admins and owners edit a channel's name and description; so do system
+// admins (the server grants them every channel action).
+export function canEditChannel(role: ChannelRoleLike, systemRole?: string): boolean {
+  return roleNumber(role) >= ChannelRole.Admin || systemRole === SystemRole.Admin;
 }
 
 // Owners archive and unarchive a channel; so can system admins (the server
@@ -101,4 +102,24 @@ export function canRemoveMember(
 ): boolean {
   if (channelSlug === GENERAL_CHANNEL_SLUG) return false;
   return canManageMembers(actorRole) && !isOwner(targetRole);
+}
+
+const ROLES_BY_RANK: readonly ChannelRoleStr[] = ['owner', 'admin', 'member'];
+
+// The roles an actor may give a member who holds targetRole, mirroring
+// ChannelService.UpdateMemberRole: admins move people between member and
+// admin; making someone an owner, or changing an owner, takes an owner or a
+// system admin.
+export function assignableRoles(
+  actorRole: ChannelRoleLike,
+  targetRole: ChannelRoleLike,
+  systemRole?: string,
+): ChannelRoleStr[] {
+  const sysAdmin = systemRole === SystemRole.Admin;
+  const actor = roleNumber(actorRole);
+  if (!sysAdmin && actor < ChannelRole.Admin) return [];
+  const ownerAuthority = sysAdmin || actor === ChannelRole.Owner;
+  const target = roleNumber(targetRole);
+  if (target === ChannelRole.Owner && !ownerAuthority) return [];
+  return ROLES_BY_RANK.filter((r) => roleNumber(r) !== target && (r !== 'owner' || ownerAuthority));
 }

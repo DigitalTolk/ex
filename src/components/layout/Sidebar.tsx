@@ -65,14 +65,13 @@ export function Sidebar({ onClose }: SidebarProps) {
   const { user } = useAuth();
   const { hideConversation } = useUnread();
   const view = useSidebarViewPreferences();
-  const { unreadSection, unreadOnly } = view;
+  const { unreadSection, unreadOnly, collapsedSections } = view;
   const { ready, sections: sidebarSections, archivedChannels, visibleConversations, categories } = useSidebarSections(view);
   const dmUserMap = useDMPartners(visibleConversations, user?.id);
   const { isDraggingCategory, dropIndicator, suppressedNavigationID, clearSuppressedNavigation } = useSidebarDrag(
     sidebarSections,
     categories,
   );
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   // The Archived section starts folded: archived channels are history, not
   // where work happens.
   const [archivedOpen, setArchivedOpen] = useState(false);
@@ -87,11 +86,7 @@ export function Sidebar({ onClose }: SidebarProps) {
   // null = closed; otherwise the section being deleted.
   const [categoryToDelete, setCategoryToDelete] = useState<{ id: string; title: string } | null>(null);
 
-  function toggleGroupCollapsed(sectionKey: string) {
-    setCollapsedGroups((prev) => ({ ...prev, [sectionKey]: !prev[sectionKey] }));
-  }
-
-  const spacedSections = spacedSectionKeys(sidebarSections, collapsedGroups, unreadOnly);
+  const spacedSections = spacedSectionKeys(sidebarSections, collapsedSections, unreadOnly);
 
   return (
     <div className="flex h-full w-full min-w-0 flex-col text-gray-300 touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]">
@@ -170,7 +165,7 @@ export function Sidebar({ onClose }: SidebarProps) {
               // aren't reordered from here.
               const rowDragDisabled = dragDisabled || isUnreadSection;
               const canDropChannel = isFavorites || isUserCategory || isChannelsDefault;
-              const collapsed = !!collapsedGroups[section.key];
+              const collapsed = !!collapsedSections[section.key];
               // An open section stands apart: a wide gap above its heading
               // and above the next heading. Collapsed headings in a row pack
               // tight, like a menu.
@@ -226,11 +221,11 @@ export function Sidebar({ onClose }: SidebarProps) {
                     <div
                       role="button"
                       tabIndex={0}
-                      onClick={() => toggleGroupCollapsed(section.key)}
+                      onClick={() => view.toggleSectionCollapsed(section.key)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
                           event.preventDefault();
-                          toggleGroupCollapsed(section.key);
+                          view.toggleSectionCollapsed(section.key);
                         }
                       }}
                       aria-expanded={!collapsed}

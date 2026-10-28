@@ -118,6 +118,8 @@ type ParentPinFileIndexStore interface {
 	SetFileIndex(ctx context.Context, parentID, attachmentID, msgID, authorID string, createdAt time.Time) error
 	DeleteFileIndex(ctx context.Context, parentID, attachmentID string) error
 	ListFileIndex(ctx context.Context, parentID string) ([]FileIndexEntry, error)
+	// SetFileIndexName records the attachment's name on its existing row.
+	SetFileIndexName(ctx context.Context, parentID, attachmentID, filename string) error
 }
 
 // PinIndexEntry mirrors store.PinIndexRow at the service-interface
@@ -135,6 +137,8 @@ type FileIndexEntry struct {
 	MessageID    string
 	AuthorID     string
 	CreatedAt    time.Time
+	// Filename is empty until a search in the parent has filled it in.
+	Filename string
 }
 
 // ThreadFollowStore defines per-user follow/unfollow overrides for threads.

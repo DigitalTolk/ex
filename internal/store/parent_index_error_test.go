@@ -79,3 +79,41 @@ func TestParentIndexStore_ListFileIndex_QueryError(t *testing.T) {
 		t.Fatalf("ListFileIndex: want errInjected, got %v", err)
 	}
 }
+
+func TestParentIndexStore_SetFileIndexName(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewParentIndexStore(db)
+	at := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	if err := s.SetFileIndex(ctx, "ch-fn", "att-1", "m-1", "u-a", at); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetFileIndexName(ctx, "ch-fn", "att-1", "Report.pdf"); err != nil {
+		t.Fatal(err)
+	}
+	// A row that is not there (deleted meanwhile) is not brought back.
+	if err := s.SetFileIndexName(ctx, "ch-fn", "att-gone", "Old.pdf"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ListFileIndex(ctx, "ch-fn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	got := rows[0]
+	if got.Filename != "Report.pdf" || got.MessageID != "m-1" || got.AuthorID != "u-a" || !got.CreatedAt.Equal(at) {
+		t.Fatalf("row = %+v", got)
+	}
+}
+
+func TestParentIndexStore_SetFileIndexName_UpdateItemError(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	s := NewParentIndexStore(withFault(db, func(f *faultClient) { f.failUpdateItem = true }))
+	err := s.SetFileIndexName(ctx, "ch-fn", "att-1", "Report.pdf")
+	if !errors.Is(err, errInjected) {
+		t.Fatalf("SetFileIndexName: want errInjected, got %v", err)
+	}
+}
