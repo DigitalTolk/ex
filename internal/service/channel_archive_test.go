@@ -265,10 +265,10 @@ func TestIncomingWebhookService_ArchivedChannel(t *testing.T) {
 	if err := svc.Execute(ctx, "wh", IncomingWebhookPayload{Text: "hello"}); !errors.Is(err, ErrChannelArchived) {
 		t.Fatalf("Execute into archived channel: %v, want ErrChannelArchived", err)
 	}
-	if _, err := svc.Create(ctx, "admin", &model.IncomingWebhook{Title: "t", ChannelID: archived.ID}); !errors.Is(err, ErrChannelArchived) {
+	if _, err := svc.Create(ctx, asAdmin("admin"), &model.IncomingWebhook{Title: "t", ChannelID: archived.ID}); !errors.Is(err, ErrChannelArchived) {
 		t.Fatalf("Create on archived channel: %v, want ErrChannelArchived", err)
 	}
-	if _, err := svc.Update(ctx, "wl", &model.IncomingWebhook{Title: "t", ChannelID: archived.ID}); !errors.Is(err, ErrChannelArchived) {
+	if _, err := svc.Update(ctx, asAdmin("admin"), "wl", &model.IncomingWebhook{Title: "t", ChannelID: archived.ID}); !errors.Is(err, ErrChannelArchived) {
 		t.Fatalf("Update onto archived channel: %v, want ErrChannelArchived", err)
 	}
 }

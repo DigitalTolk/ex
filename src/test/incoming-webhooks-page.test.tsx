@@ -45,10 +45,36 @@ beforeEach(() => {
 });
 
 describe('IncomingWebhooksPage', () => {
-  it('shows access-denied for non-admins', () => {
-    mockSystemRole = 'member';
+  it('is not available to guests', () => {
+    mockSystemRole = 'guest';
     renderPage();
-    expect(screen.getByText(/admin access required/i)).toBeInTheDocument();
+    expect(screen.getByText('Not available to guests.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Create webhook/i })).not.toBeInTheDocument();
+    expect(mockApiFetch).not.toHaveBeenCalled();
+  });
+
+  it('lets a member create a webhook and lists what the server returns for them', async () => {
+    mockSystemRole = 'member';
+    const mine = { id: 'wh-mine', title: 'My CI', channelID: 'ch-1', channelSlug: 'general', lockToChannel: true, createdBy: 'u-1', url: 'https://chat.example/hooks/wh-mine' };
+    let listed: unknown[] = [];
+    mockApiFetch.mockImplementation((path: string, init?: { method?: string; body?: string }) => {
+      if (path === '/api/v1/channels') {
+        return Promise.resolve([{ channelID: 'ch-1', channelName: 'general', channelType: 'public', role: 1 }]);
+      }
+      if (path === '/api/v1/admin/webhooks' && init?.method === 'POST') {
+        listed = [mine];
+        return Promise.resolve(mine);
+      }
+      if (path === '/api/v1/admin/webhooks') return Promise.resolve(listed);
+      return Promise.resolve([]);
+    });
+    renderPage();
+
+    fireEvent.change(await screen.findByLabelText(/^Title$/i), { target: { value: 'My CI' } });
+    fireEvent.click(screen.getByRole('button', { name: /Create webhook/i }));
+
+    expect(await screen.findByText('My CI')).toBeInTheDocument();
+    expect(screen.getByText('https://chat.example/hooks/wh-mine')).toBeInTheDocument();
   });
 
   it('renders the page heading for admins', async () => {
