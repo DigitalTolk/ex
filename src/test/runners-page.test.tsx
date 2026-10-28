@@ -53,7 +53,13 @@ const mac: RunnerInstall = {
     { name: 'codex', authed: false },
   ],
 };
-const linux: RunnerInstall = { id: 'rt2', label: 'build-box', createdAt: '2026-10-01T00:00:00Z', expiresAt: '2026-11-01T00:00:00Z' };
+const linux: RunnerInstall = {
+  id: 'rt2',
+  label: 'build-box',
+  createdAt: '2026-10-01T00:00:00Z',
+  expiresAt: '2026-11-01T00:00:00Z',
+  deviceKey: 'software',
+};
 // Online, but reporting little: no OS or version, a CLI without a version,
 // and one with no CLIs at all.
 const sparse: RunnerInstall = {
@@ -71,7 +77,14 @@ let runners: RunnerInstall[] = [mac, linux, sparse, bare];
 
 beforeEach(() => {
   settings = { maxUploadBytes: 0, allowedExtensions: [], runnersInApp: true };
-  runners = [mac, linux, sparse, bare];
+  // Last used three minutes ago — relative to the test's own clock.
+  const threeMinAgo = new Date(Date.now() - 3 * 60_000).toISOString();
+  runners = [
+    { ...mac, lastUsedAt: threeMinAgo, lastIP: '203.0.113.5', deviceKey: 'hardware' },
+    { ...linux, lastUsedAt: threeMinAgo },
+    sparse,
+    { ...bare, deviceKey: '' },
+  ];
   mockUser.current = { id: 'u-alice', systemRole: 'member' };
   mockApiFetch.mockReset();
   mockApiFetch.mockImplementation((path: string, init?: RequestInit) => {
@@ -151,17 +164,29 @@ describe('RunnersPage', () => {
     renderPage();
     const macRow = await screen.findByTestId('runner-row-rt1');
     expect(within(macRow).getByTestId('runner-status-rt1')).toHaveTextContent('Online');
-    expect(macRow).toHaveTextContent('macOS · ex-runner 0.0.3 · Connected');
+    expect(within(macRow).getByTestId('runner-meta-rt1')).toHaveTextContent(
+      /^macOS · ex-runner 0\.0\.3 · Last used 3 minutes ago from 203\.0\.113\.5 · Connected \S+/,
+    );
+    // What each connection is locked to, behind a small glyph's tooltip.
+    expect(within(macRow).getByTestId('runner-lock-rt1')).toHaveTextContent("Locked to this computer's secure chip");
+    expect(within(macRow).getByRole('button', { name: "About this connection's lock" })).toBeInTheDocument();
     expect(within(macRow).getByTestId('runner-harness-claude')).toHaveTextContent(/^Claude Code 2\.1\.223$/);
     expect(within(macRow).getByTestId('runner-harness-codex')).toHaveTextContent('Codex · not signed in');
     const linuxRow = screen.getByTestId('runner-row-rt2');
     expect(within(linuxRow).getByTestId('runner-status-rt2')).toHaveTextContent('Offline');
     expect(within(linuxRow).queryByTestId('runner-harness-claude')).toBeNull();
+    expect(within(linuxRow).getByTestId('runner-meta-rt2')).toHaveTextContent(/^Last used 3 minutes ago · Connected/);
+    expect(within(linuxRow).getByTestId('runner-lock-rt2')).toHaveTextContent('Locked to a key on this computer');
     const sparseRow = screen.getByTestId('runner-row-rt3');
     expect(within(sparseRow).getByTestId('runner-harness-claude')).toHaveTextContent(/^Claude Code$/);
     expect(sparseRow).toHaveTextContent('Connected');
-    expect(sparseRow).not.toHaveTextContent('ex-runner');
+    expect(sparseRow).not.toHaveTextContent(/ex-runner \d/);
     expect(within(screen.getByTestId('runner-row-rt4')).queryByTestId('runner-harness-claude')).toBeNull();
+    // Not used yet, and nothing to lock it with: an older ex-runner.
+    expect(within(sparseRow).getByTestId('runner-meta-rt3')).not.toHaveTextContent('Last used');
+    for (const id of ['rt3', 'rt4']) {
+      expect(screen.getByTestId(`runner-lock-${id}`)).toHaveTextContent('Update ex-runner and run ex-runner login again to lock this connection to the computer');
+    }
 
     expect(screen.queryByTestId('this-computer-card')).toBeNull();
     expect(screen.getByRole('heading', { name: 'Connect a computer' })).toBeInTheDocument();

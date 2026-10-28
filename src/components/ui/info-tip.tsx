@@ -1,12 +1,13 @@
 import type { ReactNode } from 'react';
-import { Info } from 'lucide-react';
+import { Info, type LucideIcon } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 // InfoTip: a small (i) beside a label whose explanation shows on hover or
 // focus, so settings stay to one line each. The text is also in the DOM as
 // screen-reader-only copy, so it is never hidden from assistive tech (or
-// from tests) behind a hover.
-export function InfoTip({ label, children }: { label: string; children: ReactNode }) {
+// from tests) behind a hover. `icon` swaps the (i) for a glyph that is itself
+// the information (a lock on a locked connection, say).
+export function InfoTip({ label, children, icon: Icon = Info }: { label: string; children: ReactNode; icon?: LucideIcon }) {
   return (
     <>
       <Tooltip>
@@ -19,7 +20,7 @@ export function InfoTip({ label, children }: { label: string; children: ReactNod
             />
           }
         >
-          <Info className="h-3.5 w-3.5" aria-hidden="true" />
+          <Icon className="h-3.5 w-3.5" aria-hidden="true" />
         </TooltipTrigger>
         <TooltipContent className="max-w-72">{children}</TooltipContent>
       </Tooltip>

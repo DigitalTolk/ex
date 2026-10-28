@@ -2308,6 +2308,17 @@ export interface RunnerToken {
   label: string;
   createdAt: string /* RFC3339 */;
   expiresAt: string /* RFC3339 */;
+  /**
+   * LastUsedAt and LastIP say when and from where the install last made a
+   * request — refreshed at most every few minutes, or when the IP changes.
+   */
+  lastUsedAt?: string /* RFC3339 */;
+  lastIP?: string;
+  /**
+   * DeviceKeyHardware reports that the private key lives in the computer's
+   * secure chip rather than in a file.
+   */
+  deviceKeyHardware?: boolean;
 }
 /**
  * RunnerGrant is the short-lived, single-use approval a signed-in user gives

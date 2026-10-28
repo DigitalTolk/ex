@@ -80,6 +80,11 @@ var errorMappings = []errorMapping{
 	{agents.ErrServiceUnreachable, http.StatusFailedDependency, "unreachable", ""},
 	{agents.ErrRunnerGrantInvalid, http.StatusBadRequest, "invalid_grant", ""},
 	{agents.ErrRunnerTokenRevoked, http.StatusUnauthorized, "runner_disconnected", ""},
+	// The runner asks its user to fix the computer's clock and retries;
+	// nothing was revoked.
+	{agents.ErrRunnerClockSkew, http.StatusUnauthorized, "runner_clock_skew", ""},
+	{agents.ErrRunnerUpgradeRequired, http.StatusUnauthorized, "runner_upgrade_required", ""},
+	{agents.ErrInvalidDeviceKey, http.StatusBadRequest, "invalid_device_key", ""},
 
 	// ---- coding tasks (the MCP tool callers key off these codes: 409s are
 	// "stop / different step", 400s "fix your input", 403s "not yours")

@@ -1,11 +1,31 @@
 import { useState } from 'react';
-import { CircleAlert, CircleCheck, Laptop } from 'lucide-react';
+import { CircleAlert, CircleCheck, Laptop, LockKeyhole, LockKeyholeOpen, ShieldCheck } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { InfoTip } from '@/components/ui/info-tip';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useRevokeRunnerToken, type RunnerHarness, type RunnerInstall } from '@/hooks/useRunnerTokens';
+import { formatRelative } from '@/lib/format';
 import { harnessLabel, harnessVersion, osLabel } from '@/lib/runner-labels';
+
+// What a connection is locked to, as a glyph whose tooltip says so.
+const DEVICE_LOCKS = {
+  hardware: { Icon: ShieldCheck, text: "Locked to this computer's secure chip" },
+  software: { Icon: LockKeyhole, text: 'Locked to a key on this computer' },
+  none: { Icon: LockKeyholeOpen, text: 'Update ex-runner and run ex-runner login again to lock this connection to the computer' },
+} as const;
+
+function DeviceLock({ runner }: { runner: RunnerInstall }) {
+  const lock = DEVICE_LOCKS[runner.deviceKey || 'none'];
+  return (
+    <span className="inline-flex align-middle" data-testid={`runner-lock-${runner.id}`}>
+      <InfoTip label="this connection's lock" icon={lock.Icon}>
+        {lock.text}
+      </InfoTip>
+    </span>
+  );
+}
 
 function HarnessChip({ harness }: { harness: RunnerHarness }) {
   const name = harnessLabel(harness.name);
@@ -33,6 +53,7 @@ function RunnerRow({
   const meta = [
     runner.online && runner.os ? osLabel(runner.os) : null,
     runner.online && runner.version ? `ex-runner ${runner.version}` : null,
+    runner.lastUsedAt ? `Last used ${formatRelative(runner.lastUsedAt)}${runner.lastIP ? ` from ${runner.lastIP}` : ''}` : null,
     `Connected ${new Date(runner.createdAt).toLocaleDateString()}`,
   ].filter(Boolean);
   return (
@@ -50,7 +71,9 @@ function RunnerRow({
           </span>
           {isThisComputer && <Badge variant="secondary">This computer</Badge>}
         </div>
-        <p className="text-xs text-muted-foreground">{meta.join(' · ')}</p>
+        <p className="text-xs text-muted-foreground" data-testid={`runner-meta-${runner.id}`}>
+          {meta.join(' · ')} <DeviceLock runner={runner} />
+        </p>
         {runner.online && (runner.harnesses?.length ?? 0) > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {runner.harnesses!.map((h) => (
