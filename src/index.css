@@ -1,10 +1,14 @@
 /* Figtree is the primary UI face; Futura is reserved for display
- * headlines. Futura ships with macOS/iOS; the Google web-font
- * fallback for other platforms is loaded from the stylesheet to
- * keep the design consistent. PostCSS requires every @import to
- * precede all other statements (incl. @custom-variant), so this
- * stays at the very top of the file. */
-@import url("https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&display=swap");
+ * headlines. Futura ships with macOS/iOS; Figtree is bundled from
+ * @fontsource (the @font-face rules are inlined, the font files are
+ * served by the app). Never @import a stylesheet from another site:
+ * WebKit applies none of this sheet until such an import answers.
+ * PostCSS requires every @import to precede all other statements
+ * (incl. @custom-variant), so these stay at the very top. */
+@import "@fontsource/figtree/400.css";
+@import "@fontsource/figtree/500.css";
+@import "@fontsource/figtree/600.css";
+@import "@fontsource/figtree/700.css";
 @import "tailwindcss";
 @import "tw-animate-css";
 

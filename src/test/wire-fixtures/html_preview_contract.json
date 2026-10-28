@@ -1,6 +1,6 @@
 {
   "page": {
-    "csp": "default-src 'self'; script-src 'self' 'sha256-K2PdAoYQfXfTsdBXnFIH/AZmEX7BNzDYm6mi6h7F1mY='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https: wss:; frame-src example.com/api/v1/html-preview/; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+    "csp": "default-src 'self'; script-src 'self' 'sha256-K2PdAoYQfXfTsdBXnFIH/AZmEX7BNzDYm6mi6h7F1mY='; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https: wss:; frame-src example.com/api/v1/html-preview/; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
     "host": "example.com",
     "html": "<!doctype html><html><head><meta name=\"app-version\" content=\"test\"><meta name=\"build-version\" content=\"test\"></head><body><script>addEventListener(\"securitypolicyviolation\",function(e){parent.postMessage({csp:\"violation\",directive:e.effectiveDirective,blocked:e.blockedURI},\"*\")});addEventListener(\"message\",function(e){if(e.source!==parent)parent.postMessage({csp:\"child\",data:e.data},\"*\")});parent.postMessage({csp:\"hashed\"},\"*\");</script></body></html>"
   },

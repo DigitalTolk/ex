@@ -365,8 +365,8 @@ func RequestID(next http.Handler) http.Handler {
 // page may frame (the preview); see frameSources.
 const securityHeaderCSP = "default-src 'self'; " +
 	"script-src 'self'; " +
-	"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-	"font-src 'self' https://fonts.gstatic.com; " +
+	"style-src 'self' 'unsafe-inline'; " +
+	"font-src 'self'; " +
 	"img-src 'self' https: data: blob:; " +
 	"media-src 'self' https: blob:; " +
 	"connect-src 'self' https: wss:; " +
