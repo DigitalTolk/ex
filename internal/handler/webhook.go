@@ -26,11 +26,18 @@ type webhookResponse struct {
 	URL string `json:"url,omitempty"`
 }
 
-func (h *WebhookHandler) List(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
+// webhookActor is the caller, with the stored role the auth middleware put
+// in the claims. The service decides what they may see and change.
+func webhookActor(r *http.Request) service.WebhookActor {
+	claims := middleware.ClaimsFromContext(r.Context())
+	if claims == nil {
+		return service.WebhookActor{}
 	}
-	items, err := h.svc.List(r.Context())
+	return service.WebhookActor{ID: claims.UserID, Role: claims.SystemRole}
+}
+
+func (h *WebhookHandler) List(w http.ResponseWriter, r *http.Request) {
+	items, err := h.svc.List(r.Context(), webhookActor(r))
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
@@ -43,15 +50,12 @@ func (h *WebhookHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *WebhookHandler) Create(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
-	}
 	var body model.IncomingWebhook
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
-	wh, err := h.svc.Create(r.Context(), middleware.UserIDFromContext(r.Context()), &body)
+	wh, err := h.svc.Create(r.Context(), webhookActor(r), &body)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
@@ -60,15 +64,12 @@ func (h *WebhookHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *WebhookHandler) Update(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
-	}
 	var body model.IncomingWebhook
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
-	wh, err := h.svc.Update(r.Context(), pathParam(r, "id"), &body)
+	wh, err := h.svc.Update(r.Context(), webhookActor(r), pathParam(r, "id"), &body)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
@@ -77,11 +78,7 @@ func (h *WebhookHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *WebhookHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
-	}
-	id := pathParam(r, "id")
-	if err := h.svc.Delete(r.Context(), id); err != nil {
+	if err := h.svc.Delete(r.Context(), webhookActor(r), pathParam(r, "id")); err != nil {
 		writeServiceError(w, r, err)
 		return
 	}
