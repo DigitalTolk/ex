@@ -93,6 +93,27 @@ func (s *hrtStore) SetRunnerTokenExpiry(_ context.Context, id string, exp time.T
 	return nil
 }
 
+func (s *hrtStore) TouchRunnerToken(_ context.Context, id string, at time.Time, ip string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tokens[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	t.LastUsedAt, t.LastIP = at, ip
+	return nil
+}
+
+func (s *hrtStore) RevokeRunnerToken(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tokens[id]; !ok {
+		return store.ErrNotFound
+	}
+	delete(s.tokens, id)
+	return nil
+}
+
 func (s *hrtStore) ListRunnerTokens(_ context.Context, uid string) ([]*model.RunnerToken, error) {
 	if s.failing("ListRunnerTokens") {
 		return nil, errHRT
@@ -140,6 +161,7 @@ func (u *hrtUsers) UserAccess(ctx context.Context, id string) (string, model.Sys
 
 type hrtEnv struct {
 	router http.Handler
+	svc    *agents.RunnerTokenService
 	h      *RunnerTokenHandler
 	store  *hrtStore
 	users  *hrtUsers
@@ -169,7 +191,7 @@ func newHRTEnv() *hrtEnv {
 		AppVersion:   "hrt",
 		AllowOrigins: []string{"*"},
 	})
-	return &hrtEnv{router: router, h: rth, store: st, users: users, jwt: jwtMgr}
+	return &hrtEnv{router: router, svc: svc, h: rth, store: st, users: users, jwt: jwtMgr}
 }
 
 func (e *hrtEnv) session(t *testing.T, uid string) string {

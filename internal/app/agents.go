@@ -42,6 +42,7 @@ func (a *App) buildAgents(context.Context) error {
 	// reset disconnect an account's runners with its sessions.
 	ag.runnerTokens = agents.NewRunnerTokenService(in.tokens, c.users, in.jwt)
 	ag.runnerTokens.SetPublisher(in.pubsub)
+	ag.runnerTokens.SetRequireDeviceKey(cfg.RunnerRequireDeviceKey)
 	c.users.SetRunnerRevoker(ag.runnerTokens)
 	c.auth.SetRunnerRevoker(ag.runnerTokens)
 

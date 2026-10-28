@@ -39,12 +39,29 @@ func NewRunnerTokenHandler(svc *agents.RunnerTokenService) *RunnerTokenHandler {
 	return &RunnerTokenHandler{svc: svc}
 }
 
-// Checker exposes the service as the runner middleware's revocation check.
+// Checker exposes the service as the runner middleware's per-request check.
 func (h *RunnerTokenHandler) Checker() middleware.RunnerTokenChecker {
 	if h == nil || h.svc == nil {
 		return nil
 	}
-	return h.svc
+	return runnerChecker{svc: h.svc}
+}
+
+// runnerChecker adapts the service to the middleware: the service's refusals
+// become the statuses and codes the error table gives them everywhere else
+// (runner_disconnected, runner_clock_skew, runner_upgrade_required); anything
+// unmapped is a failed check (503).
+type runnerChecker struct{ svc *agents.RunnerTokenService }
+
+func (c runnerChecker) CheckRunner(ctx context.Context, claims *model.TokenClaims, req middleware.RunnerRequest) error {
+	err := c.svc.AuthorizeRunner(ctx, claims, agents.RunnerRequest(req))
+	if err == nil {
+		return nil
+	}
+	if m, ok := lookupError(err); ok {
+		return &middleware.RunnerRefusal{Status: m.status, Code: m.code, Message: m.text(err)}
+	}
+	return err
 }
 
 type runnerGrantBody struct {
@@ -70,6 +87,9 @@ func (h *RunnerTokenHandler) CreateGrant(w http.ResponseWriter, r *http.Request)
 type runnerExchangeBody struct {
 	Code     string `json:"code"`
 	Verifier string `json:"verifier"`
+	// DeviceKey is the public half of the key the runner made at sign-in;
+	// absent from runners that predate device keys.
+	DeviceKey *agents.RunnerDeviceKey `json:"deviceKey"`
 }
 
 // Exchange POST /api/v1/runner-tokens/exchange
@@ -79,7 +99,7 @@ func (h *RunnerTokenHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
 		return
 	}
-	issued, err := h.svc.Exchange(r.Context(), body.Code, body.Verifier)
+	issued, err := h.svc.Exchange(r.Context(), body.Code, body.Verifier, body.DeviceKey)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
@@ -87,14 +107,20 @@ func (h *RunnerTokenHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, issued)
 }
 
-// runnerTokenView is the Runners page shape — never the token itself. The
-// live fields come from the newest runner process signed in with this
+// runnerTokenView is the Runners page shape — never the token or its key.
+// The live fields come from the newest runner process signed in with this
 // install; they are empty while it is offline.
 type runnerTokenView struct {
-	ID        string                `json:"id"`
-	Label     string                `json:"label"`
-	CreatedAt time.Time             `json:"createdAt"`
-	ExpiresAt time.Time             `json:"expiresAt"`
+	ID         string     `json:"id"`
+	Label      string     `json:"label"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	ExpiresAt  time.Time  `json:"expiresAt"`
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+	LastIP     string     `json:"lastIP,omitempty"`
+	// DeviceKey says what the install is locked to: "hardware" (the
+	// computer's secure chip), "software" (a key file), "" (nothing yet — an
+	// ex-runner that predates device keys).
+	DeviceKey string                `json:"deviceKey"`
 	Online    bool                  `json:"online"`
 	OS        string                `json:"os,omitempty"`
 	Version   string                `json:"version,omitempty"`
@@ -102,7 +128,18 @@ type runnerTokenView struct {
 }
 
 func viewRunnerToken(t *model.RunnerToken, live *model.RunnerRegistration) runnerTokenView {
-	v := runnerTokenView{ID: t.ID, Label: t.Label, CreatedAt: t.CreatedAt, ExpiresAt: t.ExpiresAt}
+	v := runnerTokenView{ID: t.ID, Label: t.Label, CreatedAt: t.CreatedAt, ExpiresAt: t.ExpiresAt, LastIP: t.LastIP}
+	if !t.LastUsedAt.IsZero() {
+		at := t.LastUsedAt
+		v.LastUsedAt = &at
+	}
+	switch {
+	case t.DeviceKey == "":
+	case t.DeviceKeyHardware:
+		v.DeviceKey = "hardware"
+	default:
+		v.DeviceKey = "software"
+	}
 	if live != nil {
 		v.Online, v.OS, v.Version, v.Harnesses = true, live.OS, live.Version, live.Harnesses
 	}

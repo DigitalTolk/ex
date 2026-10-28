@@ -8,6 +8,7 @@ import "github.com/DigitalTolk/ex/internal/wiring"
 func (s *RunnerTokenService) Wired() error {
 	return wiring.Check("runner token service",
 		wiring.Dep{Name: "publisher", Set: s.pub != nil},
+		wiring.Dep{Name: "owner notifier", Set: s.notifier != nil},
 	)
 }
 

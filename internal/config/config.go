@@ -162,6 +162,12 @@ type Config struct {
 	// value either trusts a spoofable hop or rate-limits the wrong IP.
 	TrustedProxyCount int `env:"TRUSTED_PROXY_COUNT" envDefault:"1"`
 
+	// RunnerRequireDeviceKey refuses ex-runner installs that have no
+	// device-bound key — runners too old to make one — with
+	// runner_upgrade_required, so they must update and sign in again
+	// (RUNNER_REQUIRE_DEVICE_KEY, default false).
+	RunnerRequireDeviceKey bool `env:"RUNNER_REQUIRE_DEVICE_KEY"`
+
 	// OneSignal mobile push. REST API key is server-only and must never be
 	// exposed through frontend config.
 	OneSignalAppID      string `env:"ONESIGNAL_APP_ID"`

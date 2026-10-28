@@ -14,6 +14,7 @@ func TestAgentWiredReportsMissingDependencies(t *testing.T) {
 		missing   string
 	}{
 		{"runner token service", &RunnerTokenService{}, "publisher"},
+		{"runner token service", &RunnerTokenService{}, "owner notifier"},
 		{"agent service", &AgentService{}, "DM resolver"},
 		{"orchestrator", &Orchestrator{}, "approval notifier"},
 		{"project service", &ProjectService{}, "publisher"},

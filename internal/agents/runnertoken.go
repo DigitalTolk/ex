@@ -38,9 +38,10 @@ import (
 
 const (
 	// RunnerTokenTTL is how long a runner token lives without renewal. The
-	// runner renews itself in its last week, so only a machine left off for
-	// a month needs `ex-runner login` again.
-	RunnerTokenTTL = 30 * 24 * time.Hour
+	// runner renews itself in its last few days, so only a machine left off
+	// for a week needs `ex-runner login` again — and a copied token dies
+	// within a week even if nobody notices.
+	RunnerTokenTTL = 7 * 24 * time.Hour
 	// runnerGrantTTL bounds the browser-to-CLI handoff: seconds in practice.
 	runnerGrantTTL = 5 * time.Minute
 	// runnerGrantCodeBytes is the entropy behind a one-time code.
@@ -73,8 +74,10 @@ type RunnerTokenStore interface {
 	PutRunnerToken(ctx context.Context, t *model.RunnerToken) error
 	GetRunnerToken(ctx context.Context, id string) (*model.RunnerToken, error)
 	SetRunnerTokenExpiry(ctx context.Context, id string, expiresAt time.Time) error
+	TouchRunnerToken(ctx context.Context, id string, at time.Time, ip string) error
 	ListRunnerTokens(ctx context.Context, userID string) ([]*model.RunnerToken, error)
 	DeleteRunnerToken(ctx context.Context, id string) error
+	RevokeRunnerToken(ctx context.Context, id string) error
 	DeleteAllRunnerTokensForUser(ctx context.Context, userID string) error
 }
 
@@ -101,12 +104,16 @@ type IssuedRunnerToken struct {
 // RunnerTokenService owns pairing, renewal and revocation of ex-runner
 // installs.
 type RunnerTokenService struct {
-	store RunnerTokenStore
-	users runnerTokenUsers
-	jwt   runnerTokenMinter
-	pub   service.Publisher
-	now   func() time.Time
-	newID func() string
+	store    RunnerTokenStore
+	users    runnerTokenUsers
+	jwt      runnerTokenMinter
+	pub      service.Publisher
+	notifier runnerOwnerNotifier
+	// requireDeviceKey refuses installs without a device key (runners too old
+	// to make one) on every runner route.
+	requireDeviceKey bool
+	now              func() time.Time
+	newID            func() string
 }
 
 // SetPublisher lets the service tell a user's clients that their runners
@@ -186,10 +193,18 @@ func (s *RunnerTokenService) CreateGrant(ctx context.Context, userID, challenge,
 
 // Exchange redeems a one-time code plus its PKCE verifier for a runner
 // token. The grant is consumed BEFORE any check, so a wrong verifier burns
-// the code — no retries against one code.
-func (s *RunnerTokenService) Exchange(ctx context.Context, code, verifier string) (*IssuedRunnerToken, error) {
+// the code — no retries against one code. A runner that made a device key
+// sends its public half (nil from older runners); the token is then bound to
+// that key from its first request on.
+func (s *RunnerTokenService) Exchange(ctx context.Context, code, verifier string, key *RunnerDeviceKey) (*IssuedRunnerToken, error) {
 	if code == "" || !pkceVerifierPattern.MatchString(verifier) {
 		return nil, ErrRunnerGrantInvalid
+	}
+	// A malformed key is refused before the grant is touched, so a runner
+	// bug does not burn the user's sign-in.
+	deviceKey, err := parseDeviceKey(key)
+	if err != nil {
+		return nil, err
 	}
 	grant, err := s.store.TakeRunnerGrant(ctx, hashRunnerCode(code))
 	if errors.Is(err, store.ErrNotFound) {
@@ -215,11 +230,13 @@ func (s *RunnerTokenService) Exchange(ctx context.Context, code, verifier string
 		return nil, ErrRunnerGrantInvalid
 	}
 	rec := &model.RunnerToken{
-		ID:        s.newID(),
-		UserID:    user.ID,
-		Label:     grant.Label,
-		CreatedAt: now,
-		ExpiresAt: now.Add(RunnerTokenTTL),
+		ID:                s.newID(),
+		UserID:            user.ID,
+		Label:             grant.Label,
+		CreatedAt:         now,
+		ExpiresAt:         now.Add(RunnerTokenTTL),
+		DeviceKey:         deviceKey,
+		DeviceKeyHardware: deviceKey != "" && key.Hardware,
 	}
 	token, err := s.jwt.GenerateRunnerToken(user, rec.ID, rec.ExpiresAt)
 	if err != nil {
@@ -249,22 +266,6 @@ func (s *RunnerTokenService) activeRecord(ctx context.Context, claims *model.Tok
 		return nil, nil
 	}
 	return rec, nil
-}
-
-// RunnerTokenActive is the runner middleware's revocation check: the install
-// still exists AND its owner is still an active account. Deactivation also
-// revokes every install, but that sweep can fail or lag; the runner acts with
-// the owner's access, so a deactivated owner is refused here on every request.
-func (s *RunnerTokenService) RunnerTokenActive(ctx context.Context, claims *model.TokenClaims) (bool, error) {
-	rec, err := s.activeRecord(ctx, claims)
-	if rec == nil || err != nil {
-		return false, err
-	}
-	status, _, err := s.users.UserAccess(ctx, rec.UserID)
-	if err != nil {
-		return false, fmt.Errorf("runner token: owner status: %w", err)
-	}
-	return status != "deactivated", nil
 }
 
 // Renew extends a live install's token by another RunnerTokenTTL. The jti
