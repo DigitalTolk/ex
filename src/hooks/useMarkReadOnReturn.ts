@@ -1,7 +1,7 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 // The other half of the attention-gated read model (see ChatPage's
-// message.new handler): while a parent's route is open but the user is NOT
+// message.new handler): while a parent's route (or a thread) is open but the user is NOT
 // looking (window blurred / tab hidden), arriving messages bump the unread
 // badge instead of being auto-marked read. This hook completes the loop:
 // the moment the user demonstrably RETURNS to the page — the window regains
@@ -15,13 +15,19 @@ import { useEffect } from 'react';
 // (popup while away, mobile fallback if truly gone) — read-marking never
 // races the delivery contract.
 export function useMarkReadOnReturn(id: string | undefined, markRead: (id: string) => void): void {
+  // The latest callback, so one that reads render state (a thread's newest
+  // reply) never acts on what it saw when the listener was attached.
+  const markReadRef = useRef(markRead);
+  useEffect(() => {
+    markReadRef.current = markRead;
+  });
   useEffect(() => {
     if (!id) return;
     const openedID = id;
     function onReturn(): void {
       if (document.visibilityState !== 'visible') return;
       if (typeof document.hasFocus === 'function' && !document.hasFocus()) return;
-      markRead(openedID);
+      markReadRef.current(openedID);
     }
     window.addEventListener('focus', onReturn);
     document.addEventListener('visibilitychange', onReturn);
@@ -29,8 +35,5 @@ export function useMarkReadOnReturn(id: string | undefined, markRead: (id: strin
       window.removeEventListener('focus', onReturn);
       document.removeEventListener('visibilitychange', onReturn);
     };
-    // markRead is provided inline by the views; re-subscribing when the
-    // parent id changes is the meaningful boundary.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 }

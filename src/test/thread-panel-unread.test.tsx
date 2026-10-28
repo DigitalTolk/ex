@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -50,19 +50,22 @@ vi.mock('@/hooks/useThreads', () => ({
 
 import { ThreadPanel } from '@/components/chat/ThreadPanel';
 import { endReadSession, holdRead, isUnreadSeen, keepReadSession, setUnreadAnchor, threadReadKey } from '@/lib/read-position';
+import { forceAwayUntilInput, resetUserActivityForTests } from '@/lib/user-activity';
 
 // The thread's "New messages" line and "Mark as unread" hold.
 function renderPanel() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const tree = () => (
     <QueryClientProvider client={qc}>
       <BrowserRouter>
         <TooltipProvider>
           <ThreadPanel channelId="ch-1" threadRootID="root-1" onClose={vi.fn()} userMap={{}} currentUserId="me" />
         </TooltipProvider>
       </BrowserRouter>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  const view = render(tree());
+  return Object.assign(view, { refresh: () => view.rerender(tree()) });
 }
 
 const key = threadReadKey('root-1');
@@ -161,5 +164,53 @@ describe('ThreadPanel unread', () => {
     renderPanel();
     expect(screen.queryByTestId('unread-divider')).toBeNull();
     expect(markThreadSeenMock).toHaveBeenCalled();
+  });
+
+  describe('a reply while the user is away', () => {
+    const reply = { id: 'r-3', authorID: 'u-2', body: 'third reply', createdAt: at(4), parentMessageID: 'root-1' };
+    const target = { parentID: 'ch-1', parentType: 'channel' };
+    const comeBack = () =>
+      act(() => {
+        window.dispatchEvent(new Event('focus'));
+      });
+    afterEach(() => {
+      resetUserActivityForTests();
+      vi.restoreAllMocks();
+    });
+
+    it('stays unread while the window is in the background, and is read when the user comes back', () => {
+      const view = renderPanel();
+      expect(markThreadSeenMock).toHaveBeenCalledWith('root-1', at(3), target);
+      markThreadSeenMock.mockReset();
+      forceAwayUntilInput();
+      threadDataState.current = [...threadDataState.current, reply];
+      view.refresh();
+      expect(markThreadSeenMock).not.toHaveBeenCalled();
+      vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+      comeBack();
+      expect(markThreadSeenMock).toHaveBeenCalledWith('root-1', at(4), target);
+    });
+
+    it('is still read at once while the user is looking', () => {
+      const view = renderPanel();
+      markThreadSeenMock.mockReset();
+      threadDataState.current = [...threadDataState.current, reply];
+      view.refresh();
+      expect(markThreadSeenMock).toHaveBeenCalledWith('root-1', at(4), target);
+    });
+
+    it('coming back reads nothing while the thread is held unread or has nothing loaded', () => {
+      vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+      holdRead(key);
+      const held = renderPanel();
+      comeBack();
+      expect(markThreadSeenMock).not.toHaveBeenCalled();
+      held.unmount();
+      endReadSession(key);
+      threadDataState.current = [];
+      renderPanel();
+      comeBack();
+      expect(markThreadSeenMock).not.toHaveBeenCalled();
+    });
   });
 });

@@ -29,6 +29,19 @@ describe('useMarkReadOnReturn', () => {
     expect(markRead).toHaveBeenCalledTimes(1);
   });
 
+  it('calls the latest callback, not the one it was mounted with', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const first = vi.fn();
+    const latest = vi.fn();
+    const { rerender } = renderHook(({ cb }) => useMarkReadOnReturn('c-1', cb), { initialProps: { cb: first } });
+    rerender({ cb: latest });
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(first).not.toHaveBeenCalled();
+    expect(latest).toHaveBeenCalledWith('c-1');
+  });
+
   it('does NOT fire while the window is unfocused', () => {
     vi.spyOn(document, 'hasFocus').mockReturnValue(false);
     const markRead = vi.fn();
