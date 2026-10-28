@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -125,9 +126,51 @@ func (s *IncomingWebhookService) SetMembershipResolver(m WebhookMembershipResolv
 
 func (s *IncomingWebhookService) SetPublisher(p Publisher) { s.publisher = p }
 
-func (s *IncomingWebhookService) Create(ctx context.Context, actorID string, in *model.IncomingWebhook) (*model.IncomingWebhook, error) {
-	if actorID == "" {
-		return nil, apperr.Invalid("webhook: actor required")
+// WebhookActor is the person managing webhooks, with their stored system role
+// (the auth middleware refreshes the role claim from the user store on every
+// request). Anyone but a guest manages their own webhooks; a system admin
+// manages everyone's.
+type WebhookActor struct {
+	ID   string
+	Role model.SystemRole
+}
+
+func (a WebhookActor) check() error {
+	if a.ID == "" {
+		return apperr.Invalid("webhook: actor required")
+	}
+	if a.Role == model.SystemRoleGuest {
+		return apperr.Forbidden("webhook: guests cannot manage webhooks")
+	}
+	return nil
+}
+
+// owned loads a webhook the actor may change. Someone else's webhook reads as
+// missing rather than forbidden: its ID is its secret URL.
+func (s *IncomingWebhookService) owned(ctx context.Context, actor WebhookActor, id string) (*model.IncomingWebhook, error) {
+	wh, err := s.store.Get(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("webhook: get: %w", err)
+	}
+	if actor.Role != model.SystemRoleAdmin && wh.CreatedBy != actor.ID {
+		return nil, fmt.Errorf("webhook: get: %w", store.ErrNotFound)
+	}
+	return wh, nil
+}
+
+// ensureTargetAllowed refuses a private channel the webhook's creator is not
+// in: every post re-checks that (ensureCreatorCanPost), so such a webhook
+// could never deliver.
+func (s *IncomingWebhookService) ensureTargetAllowed(ctx context.Context, wh *model.IncomingWebhook, ch *model.Channel) error {
+	if s.ensureCreatorCanPost(ctx, wh, ch) != nil {
+		return apperr.Forbidden("webhook: a private channel needs the webhook's creator as a member")
+	}
+	return nil
+}
+
+func (s *IncomingWebhookService) Create(ctx context.Context, actor WebhookActor, in *model.IncomingWebhook) (*model.IncomingWebhook, error) {
+	if err := actor.check(); err != nil {
+		return nil, err
 	}
 	if in == nil || strings.TrimSpace(in.Title) == "" || in.ChannelID == "" {
 		return nil, apperr.Invalid("webhook: title and channel are required")
@@ -158,12 +201,15 @@ func (s *IncomingWebhookService) Create(ctx context.Context, actorID string, in 
 		LockToChannel:   in.LockToChannel,
 		Username:        strings.TrimSpace(in.Username),
 		ProfileImageURL: profileURL,
-		CreatedBy:       actorID,
+		CreatedBy:       actor.ID,
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
 	if wh.Username == "" {
 		wh.Username = "webhook"
+	}
+	if err := s.ensureTargetAllowed(ctx, wh, ch); err != nil {
+		return nil, err
 	}
 	if err := s.store.Create(ctx, wh); err != nil {
 		return nil, fmt.Errorf("webhook: create: %w", err)
@@ -172,14 +218,26 @@ func (s *IncomingWebhookService) Create(ctx context.Context, actorID string, in 
 	return wh, nil
 }
 
-func (s *IncomingWebhookService) List(ctx context.Context) ([]*model.IncomingWebhook, error) {
-	return s.store.List(ctx)
+// List returns every webhook to a system admin and the actor's own to anyone
+// else.
+func (s *IncomingWebhookService) List(ctx context.Context, actor WebhookActor) ([]*model.IncomingWebhook, error) {
+	if err := actor.check(); err != nil {
+		return nil, err
+	}
+	all, err := s.store.List(ctx)
+	if err != nil || actor.Role == model.SystemRoleAdmin {
+		return all, err
+	}
+	return slices.DeleteFunc(all, func(wh *model.IncomingWebhook) bool { return wh.CreatedBy != actor.ID }), nil
 }
 
 // Update edits an existing webhook's configurable fields. The ID, secret
 // (the ID is the secret), creator, and creation time are preserved; the
 // target channel is re-resolved so name/slug stay consistent.
-func (s *IncomingWebhookService) Update(ctx context.Context, id string, in *model.IncomingWebhook) (*model.IncomingWebhook, error) {
+func (s *IncomingWebhookService) Update(ctx context.Context, actor WebhookActor, id string, in *model.IncomingWebhook) (*model.IncomingWebhook, error) {
+	if err := actor.check(); err != nil {
+		return nil, err
+	}
 	if id == "" {
 		return nil, apperr.Invalid("webhook: id required")
 	}
@@ -189,9 +247,9 @@ func (s *IncomingWebhookService) Update(ctx context.Context, id string, in *mode
 	if len([]rune(in.Description)) > 500 {
 		return nil, apperr.Invalid("webhook: description must be 500 characters or fewer")
 	}
-	existing, err := s.store.Get(ctx, id)
+	existing, err := s.owned(ctx, actor, id)
 	if err != nil {
-		return nil, fmt.Errorf("webhook: get: %w", err)
+		return nil, err
 	}
 	ch, err := s.channels.GetByID(ctx, in.ChannelID)
 	if err != nil {
@@ -199,6 +257,9 @@ func (s *IncomingWebhookService) Update(ctx context.Context, id string, in *mode
 	}
 	if ch.Archived {
 		return nil, fmt.Errorf("webhook: %w", ErrChannelArchived)
+	}
+	if err := s.ensureTargetAllowed(ctx, existing, ch); err != nil {
+		return nil, err
 	}
 	existing.Title = strings.TrimSpace(in.Title)
 	existing.Description = strings.TrimSpace(in.Description)
@@ -219,9 +280,15 @@ func (s *IncomingWebhookService) Update(ctx context.Context, id string, in *mode
 	return existing, nil
 }
 
-func (s *IncomingWebhookService) Delete(ctx context.Context, id string) error {
+func (s *IncomingWebhookService) Delete(ctx context.Context, actor WebhookActor, id string) error {
+	if err := actor.check(); err != nil {
+		return err
+	}
 	if id == "" {
 		return apperr.Invalid("webhook: id required")
+	}
+	if _, err := s.owned(ctx, actor, id); err != nil {
+		return err
 	}
 	if err := s.store.Delete(ctx, id); err != nil {
 		return err
@@ -231,9 +298,9 @@ func (s *IncomingWebhookService) Delete(ctx context.Context, id string) error {
 }
 
 // publishChanged broadcasts a data-less nudge on the global channel so
-// connected admin clients refetch the webhook list. The payload carries
-// no webhook details — the list endpoint is admin-gated, so non-admin
-// clients learn nothing from the event itself.
+// connected clients refetch their webhook list. The payload carries no
+// webhook details — the list endpoint answers each caller with only the
+// webhooks they may see, so nobody learns anything from the event itself.
 func (s *IncomingWebhookService) publishChanged(ctx context.Context) {
 	if s.publisher == nil {
 		return

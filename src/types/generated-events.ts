@@ -126,7 +126,7 @@ export const EventReplayExhausted = "replay.exhausted"; // cursor too old / unkn
 /**
  * Event type constants used across the application.
  */
-export const EventWebhookChanged = "webhook.changed"; // admin incoming-webhook list changed (created/deleted); data-less nudge to refetch
+export const EventWebhookChanged = "webhook.changed"; // incoming-webhook list changed (created/updated/deleted); data-less nudge to refetch
 /**
  * Event type constants used across the application.
  */

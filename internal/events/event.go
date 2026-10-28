@@ -68,7 +68,7 @@ const (
 	EventPing                        = "ping"
 	EventReplayDone                  = "replay.done"      // server → client marker frame after a reconnect replay completes
 	EventReplayExhausted             = "replay.exhausted" // cursor too old / unknown; client must do a full refetch
-	EventWebhookChanged              = "webhook.changed"  // admin incoming-webhook list changed (created/deleted); data-less nudge to refetch
+	EventWebhookChanged              = "webhook.changed"  // incoming-webhook list changed (created/updated/deleted); data-less nudge to refetch
 	EventProjectChanged              = "project.changed"  // a project or its design references changed; data-less nudge to refetch
 	// EventSettingsUpdated tells every client the workspace settings changed
 	// (an admin saved them); data-less nudge to refetch them.

@@ -172,10 +172,6 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
       overSheet: true,
             testID: 'user-menu-emojis',
           } satisfies MenuAction,
-        ]
-      : []),
-    ...(isAdmin(user?.systemRole)
-      ? [
           {
             key: 'webhooks',
             icon: <Webhook className="h-4 w-4" />,
@@ -183,6 +179,10 @@ export function AccountMenu({ variant = 'footer' }: AccountMenuProps) {
             onSelect: () => navigate('/webhooks'),
             testID: 'user-menu-webhooks',
           } satisfies MenuAction,
+        ]
+      : []),
+    ...(isAdmin(user?.systemRole)
+      ? [
           {
             key: 'admin',
             icon: <ShieldCheck className="h-4 w-4" />,

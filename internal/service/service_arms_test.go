@@ -33,7 +33,7 @@ func TestWebhookCreateEntropyFailureSurfaces(t *testing.T) {
 	svc := NewIncomingWebhookService(&fakeWebhookStore{}, fakeWebhookChannels{
 		byID: map[string]*model.Channel{ch.ID: ch},
 	}, nil, fakeWebhookImageProxy{}, "https://chat.example")
-	if _, err := svc.Create(context.Background(), "admin-1", &model.IncomingWebhook{Title: "CI", ChannelID: ch.ID}); err == nil {
+	if _, err := svc.Create(context.Background(), asAdmin("admin-1"), &model.IncomingWebhook{Title: "CI", ChannelID: ch.ID}); err == nil {
 		t.Fatal("expected Create to surface the id-generation failure")
 	}
 }
@@ -46,7 +46,7 @@ func TestWebhookTargetChannelGetError(t *testing.T) {
 	svc := NewIncomingWebhookService(webhooks, fakeWebhookChannels{
 		byID: map[string]*model.Channel{ch.ID: ch},
 	}, msgSvc, fakeWebhookImageProxy{}, "https://chat.example")
-	wh, err := svc.Create(context.Background(), "admin-1", &model.IncomingWebhook{Title: "CI", ChannelID: ch.ID, LockToChannel: true})
+	wh, err := svc.Create(context.Background(), asAdmin("admin-1"), &model.IncomingWebhook{Title: "CI", ChannelID: ch.ID, LockToChannel: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestWebhookTargetDMEmptyName(t *testing.T) {
 	}, msgSvc, fakeWebhookImageProxy{}, "https://chat.example")
 	svc.SetDMResolver(&fakeWebhookDMResolver{})
 	svc.SetUserResolver(fakeWebhookUsers{})
-	wh, err := svc.Create(context.Background(), "admin-1", &model.IncomingWebhook{Title: "CI", ChannelID: ch.ID, CreatedBy: "admin-1"})
+	wh, err := svc.Create(context.Background(), asAdmin("admin-1"), &model.IncomingWebhook{Title: "CI", ChannelID: ch.ID, CreatedBy: "admin-1"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

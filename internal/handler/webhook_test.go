@@ -189,11 +189,19 @@ func TestWebhookHandlerErrorPaths(t *testing.T) {
 	msgSvc := service.NewMessageService(messages, nil, nil, nil, nil)
 	h := NewWebhookHandler(service.NewIncomingWebhookService(webhooks, channels, msgSvc, nil, ""))
 
+	// No signed-in caller is a bad request; a guest is refused.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/webhooks", nil)
 	res := httptest.NewRecorder()
 	h.List(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("List without a caller status = %d", res.Code)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/webhooks", nil)
+	req = req.WithContext(middleware.ContextWithClaims(ctx, &model.TokenClaims{UserID: "guest-1", SystemRole: model.SystemRoleGuest}))
+	res = httptest.NewRecorder()
+	h.List(res, req)
 	if res.Code != http.StatusForbidden {
-		t.Fatalf("List without admin status = %d", res.Code)
+		t.Fatalf("List as a guest status = %d", res.Code)
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/admin/webhooks", strings.NewReader(`{`))
@@ -212,13 +220,14 @@ func TestWebhookHandlerErrorPaths(t *testing.T) {
 		t.Fatalf("Delete missing id status = %d", res.Code)
 	}
 
-	// Update requires admin.
-	req = httptest.NewRequest(http.MethodPatch, "/api/v1/admin/webhooks/wh", strings.NewReader(`{}`))
+	// Update refuses a guest.
+	req = httptest.NewRequest(http.MethodPatch, "/api/v1/admin/webhooks/wh", strings.NewReader(`{"title":"x","channelID":"ch-general"}`))
 	req.SetPathValue("id", "wh")
+	req = req.WithContext(middleware.ContextWithClaims(ctx, &model.TokenClaims{UserID: "guest-1", SystemRole: model.SystemRoleGuest}))
 	res = httptest.NewRecorder()
 	h.Update(res, req)
 	if res.Code != http.StatusForbidden {
-		t.Fatalf("Update without admin status = %d", res.Code)
+		t.Fatalf("Update as a guest status = %d", res.Code)
 	}
 
 	// Update rejects invalid JSON.
@@ -281,7 +290,10 @@ func TestWebhookHandlerErrorPaths(t *testing.T) {
 		t.Fatalf("Execute DM override status = %d", res.Code)
 	}
 
-	errorStore := &handlerWebhookStore{listErr: assertErr("list failed"), createErr: assertErr("create failed"), deleteErr: assertErr("delete failed")}
+	errorStore := &handlerWebhookStore{
+		items:   map[string]*model.IncomingWebhook{"wh": {ID: "wh", Title: "CI", ChannelID: general.ID}},
+		listErr: assertErr("list failed"), createErr: assertErr("create failed"), deleteErr: assertErr("delete failed"),
+	}
 	h = NewWebhookHandler(service.NewIncomingWebhookService(errorStore, channels, msgSvc, nil, ""))
 
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/webhooks", nil)
@@ -318,23 +330,90 @@ type errBody struct{}
 func (errBody) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
 func (errBody) Close() error             { return nil }
 
-func TestWebhookHandler_CreateAndDeleteRequireAdmin(t *testing.T) {
-	msgSvc := service.NewMessageService(&handlerWebhookMessageStore{messages: map[string]*model.Message{}}, nil, nil, nil, nil)
-	h := NewWebhookHandler(service.NewIncomingWebhookService(&handlerWebhookStore{}, handlerWebhookChannels{}, msgSvc, nil, ""))
+func webhookRequest(method, path, body string, claims *model.TokenClaims) *http.Request {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	if id, ok := strings.CutPrefix(path, "/api/v1/admin/webhooks/"); ok {
+		req.SetPathValue("id", id)
+	}
+	return req.WithContext(middleware.ContextWithClaims(context.Background(), claims))
+}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/webhooks", strings.NewReader(`{}`))
-	res := httptest.NewRecorder()
-	h.Create(res, req)
-	if res.Code != http.StatusForbidden {
-		t.Fatalf("Create without admin status = %d", res.Code)
+// Anyone but a guest manages webhooks: their own only, while an admin sees
+// and changes everyone's.
+func TestWebhookHandler_MembersManageTheirOwnWebhooks(t *testing.T) {
+	general := &model.Channel{ID: "ch-general", Name: "General", Slug: "general"}
+	webhooks := &handlerWebhookStore{items: map[string]*model.IncomingWebhook{
+		"wh-bob": {ID: "wh-bob", Title: "Bob CI", ChannelID: general.ID, CreatedBy: "bob"},
+	}}
+	msgSvc := service.NewMessageService(&handlerWebhookMessageStore{messages: map[string]*model.Message{}}, nil, nil, nil, nil)
+	h := NewWebhookHandler(service.NewIncomingWebhookService(webhooks, handlerWebhookChannels{
+		byID: map[string]*model.Channel{general.ID: general},
+	}, msgSvc, nil, "https://chat.example"))
+	alice := &model.TokenClaims{UserID: "alice", SystemRole: model.SystemRoleMember}
+	admin := &model.TokenClaims{UserID: "root", SystemRole: model.SystemRoleAdmin}
+	listAs := func(claims *model.TokenClaims) []webhookResponse {
+		t.Helper()
+		res := httptest.NewRecorder()
+		h.List(res, webhookRequest(http.MethodGet, "/api/v1/admin/webhooks", "", claims))
+		if res.Code != http.StatusOK {
+			t.Fatalf("List status = %d", res.Code)
+		}
+		var out []webhookResponse
+		if err := json.Unmarshal(res.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
 	}
 
-	req = httptest.NewRequest(http.MethodDelete, "/api/v1/admin/webhooks/wh", nil)
-	req.SetPathValue("id", "wh")
+	res := httptest.NewRecorder()
+	h.Create(res, webhookRequest(http.MethodPost, "/api/v1/admin/webhooks", `{"title":"Alice CI","channelID":"ch-general"}`, alice))
+	if res.Code != http.StatusCreated {
+		t.Fatalf("member Create status = %d body=%s", res.Code, res.Body.String())
+	}
+	var created webhookResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	if mine := listAs(alice); len(mine) != 1 || mine[0].ID != created.ID || mine[0].URL == "" {
+		t.Fatalf("alice lists %#v, want only her own, with its URL", mine)
+	}
+	if all := listAs(admin); len(all) != 2 {
+		t.Fatalf("admin lists %d webhooks, want 2", len(all))
+	}
+
 	res = httptest.NewRecorder()
-	h.Delete(res, req)
+	h.Update(res, webhookRequest(http.MethodPatch, "/api/v1/admin/webhooks/wh-bob", `{"title":"Mine","channelID":"ch-general"}`, alice))
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("Update another's webhook status = %d", res.Code)
+	}
+	res = httptest.NewRecorder()
+	h.Delete(res, webhookRequest(http.MethodDelete, "/api/v1/admin/webhooks/wh-bob", "", alice))
+	if res.Code != http.StatusNotFound || webhooks.items["wh-bob"] == nil {
+		t.Fatalf("Delete another's webhook status = %d", res.Code)
+	}
+
+	res = httptest.NewRecorder()
+	h.Delete(res, webhookRequest(http.MethodDelete, "/api/v1/admin/webhooks/"+created.ID, "", alice))
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("Delete own webhook status = %d", res.Code)
+	}
+	res = httptest.NewRecorder()
+	h.Delete(res, webhookRequest(http.MethodDelete, "/api/v1/admin/webhooks/wh-bob", "", admin))
+	if res.Code != http.StatusNoContent || len(webhooks.items) != 0 {
+		t.Fatalf("admin Delete status = %d, left %d", res.Code, len(webhooks.items))
+	}
+
+	guest := &model.TokenClaims{UserID: "guest-1", SystemRole: model.SystemRoleGuest}
+	res = httptest.NewRecorder()
+	h.Create(res, webhookRequest(http.MethodPost, "/api/v1/admin/webhooks", `{"title":"x","channelID":"ch-general"}`, guest))
 	if res.Code != http.StatusForbidden {
-		t.Fatalf("Delete without admin status = %d", res.Code)
+		t.Fatalf("guest Create status = %d", res.Code)
+	}
+	res = httptest.NewRecorder()
+	h.Delete(res, webhookRequest(http.MethodDelete, "/api/v1/admin/webhooks/x", "", guest))
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("guest Delete status = %d", res.Code)
 	}
 }
 

@@ -312,10 +312,12 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/admin/search/rebuild-mapping", middleware.WrapFunc(adminH.StartSearchMappingRebuild, authMW))
 	}
 	if webhookH != nil {
+		// Despite the path, not admin-only: anyone but a guest manages their
+		// own webhooks, an admin everyone's (the service decides).
 		mux.Handle("GET /api/v1/admin/webhooks", middleware.WrapFunc(webhookH.List, authMW))
-		mux.Handle("POST /api/v1/admin/webhooks", middleware.WrapFunc(webhookH.Create, authMW))
-		mux.Handle("PATCH /api/v1/admin/webhooks/{id}", middleware.WrapFunc(webhookH.Update, authMW))
-		mux.Handle("DELETE /api/v1/admin/webhooks/{id}", middleware.WrapFunc(webhookH.Delete, authMW))
+		mux.Handle("POST /api/v1/admin/webhooks", middleware.WrapFunc(webhookH.Create, authMW, writeLimit))
+		mux.Handle("PATCH /api/v1/admin/webhooks/{id}", middleware.WrapFunc(webhookH.Update, authMW, writeLimit))
+		mux.Handle("DELETE /api/v1/admin/webhooks/{id}", middleware.WrapFunc(webhookH.Delete, authMW, writeLimit))
 		// Public webhook ingress: throttle per IP to blunt ID-enumeration and
 		// spam amplification (a touch higher than the auth limit since busy
 		// integrations legitimately post more often).

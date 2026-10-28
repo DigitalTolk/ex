@@ -167,7 +167,7 @@ func TestIncomingWebhookService_CreateAndExecuteMattermostPayload(t *testing.T) 
 		bySlug: map[string]*model.Channel{ch.Slug: ch, override.Slug: override},
 	}, msgSvc, fakeWebhookImageProxy{}, "https://chat.example")
 
-	wh, err := svc.Create(ctx, "admin-1", &model.IncomingWebhook{
+	wh, err := svc.Create(ctx, asAdmin("admin-1"), &model.IncomingWebhook{
 		Title: "CI", ChannelID: ch.ID, Username: "ci", ProfileImageURL: "https://example.com/icon.png",
 	})
 	if err != nil {
@@ -239,7 +239,7 @@ func TestIncomingWebhookService_CreateAcceptsBracketTitle(t *testing.T) {
 
 	// "[]" is a valid (non-blank) title — creation must succeed, not fail
 	// silently, and the title must be preserved verbatim.
-	created, err := svc.Create(ctx, "admin", &model.IncomingWebhook{Title: "[]", ChannelID: ch.ID})
+	created, err := svc.Create(ctx, asAdmin("admin"), &model.IncomingWebhook{Title: "[]", ChannelID: ch.ID})
 	if err != nil {
 		t.Fatalf("Create with bracket title: %v", err)
 	}
@@ -264,27 +264,27 @@ func TestIncomingWebhookService_ValidationListDeleteAndOverrides(t *testing.T) {
 	if got := svc.URL(nil); got != "" {
 		t.Fatalf("URL(nil) = %q", got)
 	}
-	if err := svc.Delete(ctx, ""); err == nil {
+	if err := svc.Delete(ctx, asAdmin("admin"), ""); err == nil {
 		t.Fatal("Delete empty id succeeded")
 	}
-	if _, err := svc.Create(ctx, "", &model.IncomingWebhook{Title: "CI", ChannelID: ch.ID}); err == nil {
+	if _, err := svc.Create(ctx, WebhookActor{}, &model.IncomingWebhook{Title: "CI", ChannelID: ch.ID}); err == nil {
 		t.Fatal("Create without actor succeeded")
 	}
-	if _, err := svc.Create(ctx, "admin", nil); err == nil {
+	if _, err := svc.Create(ctx, asAdmin("admin"), nil); err == nil {
 		t.Fatal("Create with nil input succeeded")
 	}
-	if _, err := svc.Create(ctx, "admin", &model.IncomingWebhook{Title: "CI", ChannelID: ch.ID, Description: strings.Repeat("x", 501)}); err == nil {
+	if _, err := svc.Create(ctx, asAdmin("admin"), &model.IncomingWebhook{Title: "CI", ChannelID: ch.ID, Description: strings.Repeat("x", 501)}); err == nil {
 		t.Fatal("Create with long description succeeded")
 	}
-	if _, err := svc.Create(ctx, "admin", &model.IncomingWebhook{Title: "CI", ChannelID: "missing"}); err == nil {
+	if _, err := svc.Create(ctx, asAdmin("admin"), &model.IncomingWebhook{Title: "CI", ChannelID: "missing"}); err == nil {
 		t.Fatal("Create with missing channel succeeded")
 	}
 	if _, err := NewIncomingWebhookService(&fakeWebhookStore{createErr: assertWebhookErr("create failed")}, fakeWebhookChannels{
 		byID: map[string]*model.Channel{ch.ID: ch},
-	}, msgSvc, nil, "").Create(ctx, "admin", &model.IncomingWebhook{Title: "CI", ChannelID: ch.ID}); err == nil {
+	}, msgSvc, nil, "").Create(ctx, asAdmin("admin"), &model.IncomingWebhook{Title: "CI", ChannelID: ch.ID}); err == nil {
 		t.Fatal("Create with store error succeeded")
 	}
-	created, err := svc.Create(ctx, "admin", &model.IncomingWebhook{Title: "  Default Name  ", ChannelID: ch.ID})
+	created, err := svc.Create(ctx, asAdmin("admin"), &model.IncomingWebhook{Title: "  Default Name  ", ChannelID: ch.ID})
 	if err != nil {
 		t.Fatalf("Create default username: %v", err)
 	}
@@ -292,17 +292,20 @@ func TestIncomingWebhookService_ValidationListDeleteAndOverrides(t *testing.T) {
 		t.Fatalf("created defaults = %#v", created)
 	}
 
-	items, err := svc.List(ctx)
+	items, err := svc.List(ctx, asAdmin("admin"))
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if len(items) != 2 {
 		t.Fatalf("List = %#v", items)
 	}
-	if err := svc.Delete(ctx, created.ID); err != nil {
+	if err := svc.Delete(ctx, asAdmin("admin"), created.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if err := NewIncomingWebhookService(&fakeWebhookStore{deleteErr: assertWebhookErr("delete failed")}, nil, msgSvc, nil, "").Delete(ctx, "wh"); err == nil {
+	if err := NewIncomingWebhookService(&fakeWebhookStore{
+		deleteErr: assertWebhookErr("delete failed"),
+		items:     map[string]*model.IncomingWebhook{"wh": {ID: "wh"}},
+	}, nil, msgSvc, nil, "").Delete(ctx, asAdmin("admin"), "wh"); err == nil || !strings.Contains(err.Error(), "delete failed") {
 		t.Fatal("Delete with store error succeeded")
 	}
 
@@ -627,11 +630,11 @@ func TestIncomingWebhookService_PublishesChangedEvents(t *testing.T) {
 	}, msgSvc, nil, "")
 	svc.SetPublisher(pub)
 
-	created, err := svc.Create(ctx, "admin", &model.IncomingWebhook{Title: "CI", ChannelID: ch.ID})
+	created, err := svc.Create(ctx, asAdmin("admin"), &model.IncomingWebhook{Title: "CI", ChannelID: ch.ID})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := svc.Delete(ctx, created.ID); err != nil {
+	if err := svc.Delete(ctx, asAdmin("admin"), created.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	pub.mu.Lock()
@@ -698,24 +701,24 @@ func TestIncomingWebhookService_Update(t *testing.T) {
 	svc.SetPublisher(pub)
 
 	// Validation failures.
-	if _, err := svc.Update(ctx, "", &model.IncomingWebhook{Title: "x", ChannelID: ch.ID}); err == nil {
+	if _, err := svc.Update(ctx, asAdmin("admin"), "", &model.IncomingWebhook{Title: "x", ChannelID: ch.ID}); err == nil {
 		t.Fatal("Update empty id succeeded")
 	}
-	if _, err := svc.Update(ctx, "wh", &model.IncomingWebhook{Title: "  ", ChannelID: ch.ID}); err == nil {
+	if _, err := svc.Update(ctx, asAdmin("admin"), "wh", &model.IncomingWebhook{Title: "  ", ChannelID: ch.ID}); err == nil {
 		t.Fatal("Update blank title succeeded")
 	}
-	if _, err := svc.Update(ctx, "wh", &model.IncomingWebhook{Title: "x", ChannelID: ch.ID, Description: strings.Repeat("d", 501)}); err == nil {
+	if _, err := svc.Update(ctx, asAdmin("admin"), "wh", &model.IncomingWebhook{Title: "x", ChannelID: ch.ID, Description: strings.Repeat("d", 501)}); err == nil {
 		t.Fatal("Update long description succeeded")
 	}
-	if _, err := svc.Update(ctx, "missing", &model.IncomingWebhook{Title: "x", ChannelID: ch.ID}); err == nil {
+	if _, err := svc.Update(ctx, asAdmin("admin"), "missing", &model.IncomingWebhook{Title: "x", ChannelID: ch.ID}); err == nil {
 		t.Fatal("Update missing webhook succeeded")
 	}
-	if _, err := svc.Update(ctx, "wh", &model.IncomingWebhook{Title: "x", ChannelID: "nope"}); err == nil {
+	if _, err := svc.Update(ctx, asAdmin("admin"), "wh", &model.IncomingWebhook{Title: "x", ChannelID: "nope"}); err == nil {
 		t.Fatal("Update missing channel succeeded")
 	}
 
 	// Successful update re-points the channel and preserves identity.
-	updated, err := svc.Update(ctx, "wh", &model.IncomingWebhook{
+	updated, err := svc.Update(ctx, asAdmin("admin"), "wh", &model.IncomingWebhook{
 		Title: "New Title", ChannelID: other.ID, LockToChannel: true, Username: "", ProfileImageURL: "https://example.com/i.png",
 	})
 	if err != nil {
@@ -743,7 +746,7 @@ func TestIncomingWebhookService_Update(t *testing.T) {
 
 	// Store error surfaces.
 	store0.updateErr = assertWebhookErr("update failed")
-	if _, err := svc.Update(ctx, "wh", &model.IncomingWebhook{Title: "x", ChannelID: ch.ID}); err == nil {
+	if _, err := svc.Update(ctx, asAdmin("admin"), "wh", &model.IncomingWebhook{Title: "x", ChannelID: ch.ID}); err == nil {
 		t.Fatal("Update store error succeeded")
 	}
 }

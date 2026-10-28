@@ -171,17 +171,18 @@ describe('AccountMenu', () => {
     renderMenu();
     fireEvent.click(screen.getByTestId('account-menu-trigger'));
     expect(screen.queryByTestId('user-menu-admin')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('user-menu-webhooks')).not.toBeInTheDocument();
     expect(screen.queryByTestId('user-menu-invite')).not.toBeInTheDocument();
-    // Non-admin members can still manage emojis.
+    // Non-admin members still manage emojis and their own webhooks.
     expect(screen.getByTestId('user-menu-emojis')).toBeInTheDocument();
+    expect(screen.getByTestId('user-menu-webhooks')).toBeInTheDocument();
   });
 
-  it('hides Custom emojis for guests', () => {
+  it('hides Custom emojis and Incoming webhooks for guests', () => {
     mockSystemRole = 'guest';
     renderMenu();
     fireEvent.click(screen.getByTestId('account-menu-trigger'));
     expect(screen.queryByTestId('user-menu-emojis')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('user-menu-webhooks')).not.toBeInTheDocument();
   });
 
   it('opens Settings from the menu', () => {
