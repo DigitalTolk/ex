@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/search"
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
@@ -136,4 +137,82 @@ func TestInvalidateUsers(t *testing.T) {
 	wantErr(t, e.im.InvalidateUsers(ctx, []string{"u1"}), errFault)
 	noCache, _ := New(Deps{DB: e.db})
 	mustNoErr(t, noCache.InvalidateUsers(ctx, []string{"u1"}))
+}
+
+// recIndexer records per-user index calls.
+type recIndexer struct {
+	search.NoopIndexer
+	indexed, deleted []string
+	deleteErr        error
+}
+
+func (r *recIndexer) IndexUser(_ context.Context, u *model.User) error {
+	r.indexed = append(r.indexed, u.ID)
+	return nil
+}
+
+func (r *recIndexer) DeleteUser(_ context.Context, id string) error {
+	r.deleted = append(r.deleted, id)
+	return r.deleteErr
+}
+
+func TestUpsertBotUser(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	idx := &recIndexer{}
+	im, _ := New(Deps{DB: e.db, Indexer: idx, Cache: e.cache})
+	us := store.NewUserStore(e.db)
+
+	// A new bot: machine account, undeliverable address, no sign-in, not in search.
+	created, err := im.UpsertUser(ctx, UserSpec{ID: "B1", Email: "jira@example.com", DisplayName: "Jira", Bot: true, CreatedAt: t0})
+	if err != nil || !created {
+		t.Fatalf("create: %v %v", created, err)
+	}
+	b, err := us.GetUser(ctx, "B1")
+	mustNoErr(t, err)
+	if !b.IsBot || b.Email != "b1@"+botEmailDomain || b.AuthProvider != "" || b.DisplayName != "Jira" {
+		t.Fatalf("bot = %+v", b)
+	}
+	if len(idx.indexed) != 0 || len(idx.deleted) != 1 {
+		t.Fatalf("indexed %v, deleted %v", idx.indexed, idx.deleted)
+	}
+
+	// A person an earlier import created becomes a bot.
+	_, err = im.UpsertUser(ctx, UserSpec{ID: "u1", Email: "remind@example.com", CreatedAt: t0})
+	mustNoErr(t, err)
+	created, err = im.UpsertUser(ctx, UserSpec{ID: "u1", Bot: true})
+	if err != nil || created {
+		t.Fatalf("flip: %v %v", created, err)
+	}
+	u, err := us.GetUser(ctx, "u1")
+	mustNoErr(t, err)
+	if !u.IsBot || u.AuthProvider != "" || u.Email != "remind@example.com" {
+		t.Fatalf("flipped = %+v", u)
+	}
+	if e.cache.deleted[len(e.cache.deleted)-1] != "u1" || idx.deleted[len(idx.deleted)-1] != "u1" {
+		t.Fatalf("cache %v, search %v", e.cache.deleted, idx.deleted)
+	}
+	// Already a bot: nothing to change.
+	_, err = im.UpsertUser(ctx, UserSpec{ID: "u1", Bot: true})
+	mustNoErr(t, err)
+}
+
+func TestUpsertBotUserErrors(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	_, err := e.im.UpsertUser(ctx, UserSpec{ID: "u1", Email: "a@example.com", CreatedAt: t0})
+	mustNoErr(t, err)
+
+	// The update fails.
+	_, err = e.faulty(failOn("PutItem", 1)).UpsertUser(ctx, UserSpec{ID: "u1", Bot: true})
+	wantErr(t, err, errFault)
+	// The cache can't be invalidated.
+	e.cache.err = errFault
+	_, err = e.im.UpsertUser(ctx, UserSpec{ID: "u1", Bot: true})
+	wantErr(t, err, errFault)
+	e.cache.err = nil
+	// Search removal fails.
+	idx, _ := New(Deps{DB: e.db, Indexer: &recIndexer{deleteErr: errFault}})
+	_, err = idx.UpsertUser(ctx, UserSpec{ID: "B2", Bot: true})
+	wantErr(t, err, errFault)
 }
