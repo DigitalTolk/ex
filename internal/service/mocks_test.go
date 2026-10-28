@@ -1292,9 +1292,13 @@ func (m *mockThreadFollowStore) ListThreadFollows(_ context.Context, parentID, t
 // --- Mock ParentPinFileIndexStore ---
 
 type mockParentIndex struct {
+	// mu guards files: ListFiles remembers file names on a detached goroutine.
+	mu            sync.Mutex
 	pins          map[string]map[string]PinIndexEntry  // parentID -> msgID -> entry
 	files         map[string]map[string]FileIndexEntry // parentID -> attachmentID -> entry
 	deleteFileErr error
+	setNameErr    error
+	namesSet      int
 }
 
 func newMockParentIndex() *mockParentIndex {
@@ -1329,6 +1333,8 @@ func (m *mockParentIndex) ListPinIndex(_ context.Context, parentID string) ([]Pi
 }
 
 func (m *mockParentIndex) SetFileIndex(_ context.Context, parentID, attachmentID, msgID, authorID string, createdAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.files[parentID] == nil {
 		m.files[parentID] = make(map[string]FileIndexEntry)
 	}
@@ -1339,6 +1345,8 @@ func (m *mockParentIndex) SetFileIndex(_ context.Context, parentID, attachmentID
 }
 
 func (m *mockParentIndex) DeleteFileIndex(_ context.Context, parentID, attachmentID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.deleteFileErr != nil {
 		return m.deleteFileErr
 	}
@@ -1349,12 +1357,36 @@ func (m *mockParentIndex) DeleteFileIndex(_ context.Context, parentID, attachmen
 }
 
 func (m *mockParentIndex) ListFileIndex(_ context.Context, parentID string) ([]FileIndexEntry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	rows := m.files[parentID]
 	out := make([]FileIndexEntry, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// SetFileIndexName counts every call, failed ones included, so a test can
+// wait for the detached writes to finish.
+func (m *mockParentIndex) SetFileIndexName(_ context.Context, parentID, attachmentID, filename string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.namesSet++
+	if m.setNameErr != nil {
+		return m.setNameErr
+	}
+	if r, ok := m.files[parentID][attachmentID]; ok {
+		r.Filename = filename
+		m.files[parentID][attachmentID] = r
+	}
+	return nil
+}
+
+func (m *mockParentIndex) fileNamesSet() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.namesSet
 }
 
 // erroringParentIndex returns errors from every write and list,
@@ -1381,4 +1413,7 @@ func (erroringParentIndex) DeleteFileIndex(_ context.Context, _, _ string) error
 }
 func (erroringParentIndex) ListFileIndex(_ context.Context, _ string) ([]FileIndexEntry, error) {
 	return nil, errors.New("file index unavailable")
+}
+func (erroringParentIndex) SetFileIndexName(_ context.Context, _, _, _ string) error {
+	return errors.New("file index unavailable")
 }

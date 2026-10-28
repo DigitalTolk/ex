@@ -191,9 +191,13 @@ function installFetchStub(plan: FetchPlan): () => void {
     if (url.endsWith(`/api/v1/channels/${CHANNEL_ID}/pinned`)) {
       return apiJSON(plan.pinned);
     }
-    // Files list
-    if (url.endsWith(`/api/v1/channels/${CHANNEL_ID}/files`)) {
-      return apiJSON(plan.files);
+    // Files page: each index row joined with its attachment, as the server
+    // does (a row whose attachment is gone is left out).
+    if (url.split('?')[0].endsWith(`/api/v1/channels/${CHANNEL_ID}/files`)) {
+      const files = plan.files
+        .map((f) => ({ ...f, attachment: plan.attachments[f.attachmentID] }))
+        .filter((f) => f.attachment);
+      return apiJSON({ files });
     }
     // Batch attachment metadata (useAttachmentsBatch → GET /attachments?ids=…)
     if (url.includes('/api/v1/attachments?') && method === 'GET') {
@@ -312,7 +316,7 @@ afterEach(() => {
 });
 
 describe('channel → header toggles → files + pinned panels (full route)', () => {
-  it('populates the FILES side panel from /channels/:id/files + /attachments/:id', async () => {
+  it('populates the FILES side panel from /channels/:id/files', async () => {
     teardown = installFetchStub({
       files: [
         { attachmentID: ATTACHMENT_ID, messageID: 'm-1', authorID: ALICE_ID, createdAt: '2026-05-01T11:00:00Z' },

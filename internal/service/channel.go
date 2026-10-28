@@ -886,7 +886,10 @@ func (s *ChannelService) RemoveMember(ctx context.Context, actorID, channelID, t
 	return nil
 }
 
-// UpdateMemberRole changes a member's role within a channel.
+// UpdateMemberRole changes a member's role within a channel. Channel admins
+// move members between member and admin; only an owner or a system admin
+// makes someone an owner or changes an owner's role, so a system admin can
+// hand a channel to a new owner.
 func (s *ChannelService) UpdateMemberRole(ctx context.Context, actorID, channelID, targetID string, newRole model.ChannelRole) error {
 	if err := s.checkPermission(ctx, actorID, channelID, model.ChannelRoleAdmin); err != nil {
 		return err
@@ -925,6 +928,15 @@ func (s *ChannelService) UpdateMemberRole(ctx context.Context, actorID, channelI
 	if err := s.audienceWritten(ctx, channelID, s.memberships.UpdateMemberRole(ctx, channelID, targetID, newRole)); err != nil {
 		return fmt.Errorf("channel: update role: %w", err)
 	}
+
+	// Every member's list shows the new badge, and the member themselves
+	// gains or loses what the role allows (rename, archive, …).
+	events.Publish(ctx, s.publisher, pubsub.ChannelName(channelID), events.EventMembersChanged, map[string]any{
+		"channelID": channelID,
+		"userID":    targetID,
+		"role":      newRole.String(),
+		"action":    events.MemberActionRoleChanged,
+	})
 	return nil
 }
 

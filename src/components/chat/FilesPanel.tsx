@@ -1,24 +1,37 @@
-import { createElement, useMemo } from 'react';
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { createElement, useEffect, useMemo, useRef, useState } from 'react';
+import { keepPreviousData, useInfiniteQuery } from '@tanstack/react-query';
 import { Download } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { queryKeys, parentPath } from '@/lib/query-keys';
 import { useAttachmentLightbox } from '@/hooks/useAttachmentLightbox';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { useLiveInView } from '@/hooks/useInView';
 import { iconForAttachment, isImageContentType } from '@/lib/file-helpers';
 import { formatBytes, formatRelative } from '@/lib/format';
 import { canPreviewHtml } from '@/lib/html-attachment';
+import { SearchInput } from '@/components/ui/search-input';
 import { HtmlPreviewButton } from './HtmlPreviewButton';
 import { SidePanel } from './SidePanel';
-import { attachmentURLForFile } from './files-panel-url';
 import type { Attachment } from '@/types';
 import type { UserMapEntry } from './MessageList';
 
+// One file shared here, with the attachment ready to show (the server reads
+// the page's attachments in one go — the panel used to fetch them one request
+// at a time, which stalled on a busy channel).
 interface FileEntry {
   attachmentID: string;
   messageID: string;
   authorID: string;
   createdAt: string;
+  attachment: Attachment;
 }
+
+interface FilePage {
+  files: FileEntry[];
+  nextCursor?: string;
+}
+
+const SEARCH_DEBOUNCE_MS = 250;
 
 // The same attachment can appear in multiple messages, so the React key
 // and the index map must be keyed on (attachmentID, messageID), not the
@@ -43,86 +56,94 @@ export function FilesPanel({
   postedIn,
 }: FilesPanelProps) {
   const path = parentPath({ channelId, conversationId });
+  const [query, setQuery] = useState('');
+  const term = useDebouncedValue(query.trim(), SEARCH_DEBOUNCE_MS);
 
-  const { data: entries, isLoading } = useQuery({
-    queryKey: queryKeys.files(path),
-    queryFn: () => apiFetch<FileEntry[]>(`/api/v1/${path}/files`),
+  const { data, isPending, isError, isPlaceholderData, hasNextPage, isFetchingNextPage, fetchNextPage } = useInfiniteQuery({
+    queryKey: queryKeys.files(path, term),
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams();
+      if (term) params.set('q', term);
+      if (pageParam) params.set('cursor', pageParam);
+      const qs = params.toString();
+      return apiFetch<FilePage>(`/api/v1/${path}/files${qs ? `?${qs}` : ''}`);
+    },
+    initialPageParam: '',
+    getNextPageParam: (last) => last.nextCursor || undefined,
     enabled: !!(channelId || conversationId),
+    // The last results stay up while the next search loads.
+    placeholderData: keepPreviousData,
     // Files change when someone uploads — those propagate via the
     // message.new event. A 5-minute cache avoids re-fetching on every
     // panel toggle without compromising freshness in practice.
     staleTime: 5 * 60_000,
   });
+  const entries = useMemo(() => data?.pages.flatMap((p) => p.files) ?? [], [data]);
 
-  const parentID = channelId ?? conversationId;
-  const parentType = channelId ? 'channel' : conversationId ? 'conversation' : undefined;
-  // entries only load when channelId||conversationId is set (the query above is
-  // `enabled` on that), so by the time we map them parentType/parentID are
-  // always defined; the ?? '' fallbacks are defensive and unreachable.
-  /* istanbul ignore next -- parentType/parentID are always defined whenever entries exist; the ?? '' fallbacks are dead. */
-  const keyParentType = parentType ?? '';
-  /* istanbul ignore next -- parentType/parentID are always defined whenever entries exist; the ?? '' fallbacks are dead. */
-  const keyParentID = parentID ?? '';
-  const attachmentQueries = useQueries({
-    queries: (entries ?? []).map((entry) => ({
-      queryKey: queryKeys.attachment(
-        `${entry.attachmentID}:${keyParentType}:${keyParentID}:${entry.messageID}`,
-      ),
-      queryFn: () => apiFetch<Attachment>(attachmentURLForFile(entry, parentID, parentType)),
-      enabled: !!parentID && !!parentType && !!entry.attachmentID && !!entry.messageID,
-      staleTime: 5 * 60 * 1000,
-    })),
-  });
-  const attMap = useMemo(() => {
-    const map = new Map<string, Attachment>();
-    for (const query of attachmentQueries) {
-      if (query.data) map.set(query.data.id, query.data);
-    }
-    return map;
-  }, [attachmentQueries]);
+  // The next page loads once the end of the list scrolls into view (and
+  // again while it stays in view, until the list fills the panel).
+  const endRef = useRef<HTMLDivElement>(null);
+  const atEnd = useLiveInView(endRef);
+  useEffect(() => {
+    if (atEnd && hasNextPage && !isFetchingNextPage) void fetchNextPage();
+  }, [atEnd, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   // Author + timestamp differ per row (same channel, many uploaders),
   // so each slide carries its own header metadata.
   const sources = useMemo(
     () =>
-      (entries ?? []).map((e) => {
-        const a = attMap.get(e.attachmentID);
+      entries.map((e) => {
         const author = userMap[e.authorID];
         return {
           key: rowKey(e),
-          slide:
-            a?.url
-              ? {
-                  attachment: a,
-                  authorName: author?.displayName ?? 'Unknown',
-                  authorAvatarURL: author?.avatarURL,
-                  postedAt: e.createdAt,
-                }
-              : null,
+          slide: e.attachment.url
+            ? {
+                attachment: e.attachment,
+                authorName: author?.displayName ?? 'Unknown',
+                authorAvatarURL: author?.avatarURL,
+                postedAt: e.createdAt,
+              }
+            : null,
         };
       }),
-    [entries, attMap, userMap],
+    [entries, userMap],
   );
   const { isOpenable, open, lightbox } = useAttachmentLightbox({ sources, postedIn });
 
+  const settled = !isPending && !isError && !isPlaceholderData;
   return (
     <SidePanel
       title="Files"
       ariaLabel="Files in this conversation"
       closeLabel="Close files panel"
       onClose={onClose}
+      toolbar={
+        <SearchInput
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search files"
+          aria-label="Search files"
+          className="h-9"
+          data-testid="files-search"
+        />
+      }
     >
-      {isLoading && (
+      {isPending && (
         <p className="p-2 text-xs text-muted-foreground">Loading files…</p>
       )}
-      {!isLoading && (entries?.length ?? 0) === 0 && (
+      {isError && (
+        <p role="alert" data-testid="files-error" className="p-2 text-xs text-destructive">
+          Couldn&apos;t load files.
+        </p>
+      )}
+      {settled && entries.length === 0 && (
         <p data-testid="files-empty" className="p-2 text-xs text-muted-foreground">
-          No files have been shared here yet.
+          {term ? 'No matching files.' : 'No files have been shared here yet.'}
         </p>
       )}
       <ul className="divide-y" data-testid="files-list">
-          {(entries ?? []).map((e) => {
-            const a = attMap.get(e.attachmentID);
+          {entries.map((e) => {
+            const a = e.attachment;
             const authorName = userMap[e.authorID]?.displayName ?? 'Unknown';
             const k = rowKey(e);
             const canOpen = isOpenable(k);
@@ -136,7 +157,7 @@ export function FilesPanel({
                   type="button"
                   disabled={!canOpen}
                   onClick={() => open(k)}
-                  aria-label={a ? `Open ${a.filename}` : 'Open file'}
+                  aria-label={`Open ${a.filename}`}
                   data-testid="files-row-open"
                   // min-w-0: the truncate-inside-flex chain only works if
                   // every flex-item ancestor allows shrinking past
@@ -148,7 +169,7 @@ export function FilesPanel({
                   // browsers (notably Safari) leave behind after a tap.
                   className="flex flex-1 min-w-0 items-center gap-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {a?.squareThumbnailURL && isImageContentType(a.contentType) ? (
+                  {a.squareThumbnailURL && isImageContentType(a.contentType) ? (
                     <img
                       src={a.squareThumbnailURL}
                       alt=""
@@ -161,7 +182,7 @@ export function FilesPanel({
                       data-testid="files-row-icon"
                       className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border bg-muted text-muted-foreground"
                     >
-                      {createElement(iconForAttachment(a?.contentType ?? '', a?.filename), {
+                      {createElement(iconForAttachment(a.contentType, a.filename), {
                         className: 'h-6 w-6',
                         'aria-hidden': true,
                       })}
@@ -169,22 +190,21 @@ export function FilesPanel({
                   )}
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">
-                      {a?.filename ?? '…'}
+                      {a.filename}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      {authorName} · {formatRelative(e.createdAt)}
-                      {a ? ` · ${formatBytes(a.size)}` : ''}
+                      {authorName} · {formatRelative(e.createdAt)} · {formatBytes(a.size)}
                     </p>
                   </div>
                 </button>
-                {a && canPreviewHtml(a) && (
+                {canPreviewHtml(a) && (
                   <HtmlPreviewButton
                     attachment={a}
                     className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground mobile:p-2.5"
                     iconClassName="h-4 w-4"
                   />
                 )}
-                {a?.url && (
+                {a.url && (
                   <a
                     href={a.downloadURL ?? a.url}
                     download={a.filename}
@@ -199,6 +219,10 @@ export function FilesPanel({
             );
           })}
       </ul>
+      <div ref={endRef} aria-hidden="true" data-testid="files-end" />
+      {isFetchingNextPage && (
+        <p className="p-2 text-xs text-muted-foreground">Loading more…</p>
+      )}
       {lightbox}
     </SidePanel>
   );

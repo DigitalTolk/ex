@@ -465,6 +465,12 @@ func (h *ChannelHandler) UpdateMemberRole(w http.ResponseWriter, r *http.Request
 	}
 
 	role := model.ParseChannelRole(body.Role)
+	// ParseChannelRole reads anything unknown as member: a typo must not
+	// demote someone.
+	if role.String() != body.Role {
+		writeError(w, http.StatusBadRequest, "invalid_role", "role must be owner, admin or member")
+		return
+	}
 	if err := h.channelSvc.UpdateMemberRole(r.Context(), userID, id, uid, role); err != nil {
 		writeServiceError(w, r, err)
 		return
@@ -672,8 +678,8 @@ func (h *ChannelHandler) ListPinned(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, pinned)
 }
 
-// ListFiles returns every attachment ever shared in the channel,
-// newest first.
+// ListFiles returns one page of the files shared in the channel, newest
+// first (see fileQuery for the parameters).
 func (h *ChannelHandler) ListFiles(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 	id := pathParam(r, "id")
@@ -681,12 +687,22 @@ func (h *ChannelHandler) ListFiles(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_id", "channel ID is required")
 		return
 	}
-	files, err := h.messageSvc.ListFiles(r.Context(), userID, id, service.ParentChannel)
+	files, err := h.messageSvc.ListFiles(r.Context(), userID, id, service.ParentChannel, fileQuery(r))
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, files)
+}
+
+// fileQuery reads a files page request: q filters by file name, cursor
+// continues after an earlier page, limit caps the page.
+func fileQuery(r *http.Request) service.FileQuery {
+	return service.FileQuery{
+		Query:  queryParam(r, "q", ""),
+		Cursor: queryParam(r, "cursor", ""),
+		Limit:  queryInt(r, "limit", 0),
+	}
 }
 
 // DeleteMessage removes a message from a channel.

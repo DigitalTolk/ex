@@ -248,7 +248,7 @@ export function ChannelView() {
   // An archived channel is read-only: no editing or posting (members can still
   // add people, so they can read its history).
   const archived = !!channel?.archived;
-  const canEdit = canEditChannel(currentUserRole) && !archived;
+  const canEdit = canEditChannel(currentUserRole, user?.systemRole) && !archived;
   const canArchive = canArchiveChannel(currentUserRole, user?.systemRole);
   const canUnarchive = canUnarchiveChannel(currentUserRole, user?.systemRole);
   const canLeave = canLeaveChannel(currentUserRole, channel?.slug);
@@ -516,6 +516,7 @@ export function ChannelView() {
           channelSlug={channel?.slug}
           currentUserId={user?.id}
           currentUserRole={roleNumber(currentUserRole)}
+          currentUserSystemRole={user?.systemRole}
           userMap={userMap}
           onClose={closeMembers}
         />

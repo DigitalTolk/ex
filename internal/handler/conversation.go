@@ -372,8 +372,8 @@ func (h *ConversationHandler) ListPinned(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, pinned)
 }
 
-// ListFiles returns every attachment ever shared in the conversation,
-// newest first.
+// ListFiles returns one page of the files shared in the conversation, newest
+// first (see fileQuery for the parameters).
 func (h *ConversationHandler) ListFiles(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 	id := pathParam(r, "id")
@@ -381,7 +381,7 @@ func (h *ConversationHandler) ListFiles(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "missing_id", "conversation ID is required")
 		return
 	}
-	files, err := h.messageSvc.ListFiles(r.Context(), userID, id, service.ParentConversation)
+	files, err := h.messageSvc.ListFiles(r.Context(), userID, id, service.ParentConversation, fileQuery(r))
 	if err != nil {
 		writeServiceError(w, r, err)
 		return

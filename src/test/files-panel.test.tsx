@@ -9,8 +9,11 @@ vi.mock('@/lib/api', () => ({
 
 import { FilesPanel } from '@/components/chat/FilesPanel';
 
-function attachmentPath(id: string, messageID = 'm-1') {
-  return `/api/v1/attachments/${id}?parentID=ch-1&parentType=channel&messageID=${messageID}`;
+// The /files answer: one page whose rows carry their attachments.
+function serveFiles(...files: Record<string, unknown>[]) {
+  apiFetchMock.mockImplementation((path: string) =>
+    Promise.resolve(path.split('?')[0].endsWith('/files') ? { files } : null),
+  );
 }
 
 function renderPanel(
@@ -40,40 +43,34 @@ describe('FilesPanel', () => {
   });
 
   it('renders an empty state when no files have been shared', async () => {
-    apiFetchMock.mockImplementation((path: string) => {
-      if (path.endsWith('/files')) return Promise.resolve([]);
-      return Promise.resolve([]);
-    });
+    serveFiles();
     renderPanel();
     await waitFor(() => expect(screen.getByTestId('files-empty')).toBeInTheDocument());
   });
 
   it('renders one row per file with author + filename', async () => {
-    apiFetchMock.mockImplementation((path: string) => {
-      if (path.endsWith('/files')) {
-        return Promise.resolve([
-          { attachmentID: 'a-1', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z' },
-        ]);
-      }
-      if (path === attachmentPath('a-1')) return Promise.resolve({
-        id: 'a-1',
-        sha256: 'h',
-        size: 1024,
-        contentType: 'image/png',
-        filename: 'shot.png',
-        url: 'https://x/shot.png',
-        createdBy: 'u-1',
-        createdAt: '2026-04-26T10:00:00Z',
-      });
-      return Promise.resolve([]);
-    });
+    serveFiles(
+      {
+        attachmentID: 'a-1', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z',
+        attachment: {
+          id: 'a-1',
+          sha256: 'h',
+          size: 1024,
+          contentType: 'image/png',
+          filename: 'shot.png',
+          url: 'https://x/shot.png',
+          createdBy: 'u-1',
+          createdAt: '2026-04-26T10:00:00Z',
+        },
+      },
+    );
     renderPanel();
     await waitFor(() => expect(screen.getByText('shot.png')).toBeInTheDocument());
     expect(screen.getByText(/Alice/)).toBeInTheDocument();
   });
 
   it('hits the right path for conversations', async () => {
-    apiFetchMock.mockImplementation(() => Promise.resolve([]));
+    serveFiles();
     renderPanel({ channelId: undefined, conversationId: 'conv-9' });
     await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
     expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/conversations/conv-9/files');
@@ -84,24 +81,21 @@ describe('FilesPanel', () => {
     // visually inconsistent with the icon used in message attachment
     // rows. The sidebar should now use the same iconForAttachment
     // glyph so the two surfaces look unified.
-    apiFetchMock.mockImplementation((path: string) => {
-      if (path.endsWith('/files')) {
-        return Promise.resolve([
-          { attachmentID: 'a-pdf', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z' },
-        ]);
-      }
-      if (path === attachmentPath('a-pdf')) return Promise.resolve({
-        id: 'a-pdf',
-        sha256: 'h',
-        size: 1024,
-        contentType: 'application/pdf',
-        filename: 'report.pdf',
-        url: 'https://x/report.pdf',
-        createdBy: 'u-1',
-        createdAt: '2026-04-26T10:00:00Z',
-      });
-      return Promise.resolve([]);
-    });
+    serveFiles(
+      {
+        attachmentID: 'a-pdf', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z',
+        attachment: {
+          id: 'a-pdf',
+          sha256: 'h',
+          size: 1024,
+          contentType: 'application/pdf',
+          filename: 'report.pdf',
+          url: 'https://x/report.pdf',
+          createdBy: 'u-1',
+          createdAt: '2026-04-26T10:00:00Z',
+        },
+      },
+    );
     renderPanel({ channelId: 'ch-1' });
     await waitFor(() => expect(screen.getByText('report.pdf')).toBeInTheDocument());
 
@@ -116,25 +110,22 @@ describe('FilesPanel', () => {
   });
 
   it('renders an <img> thumbnail for image rows in the sidebar', async () => {
-    apiFetchMock.mockImplementation((path: string) => {
-      if (path.endsWith('/files')) {
-        return Promise.resolve([
-          { attachmentID: 'a-img', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z' },
-        ]);
-      }
-      if (path === attachmentPath('a-img')) return Promise.resolve({
-        id: 'a-img',
-        sha256: 'h',
-        size: 1024,
-        contentType: 'image/png',
-        filename: 'pic.png',
-        url: 'https://x/pic.png',
-        squareThumbnailURL: 'https://x/pic-square.webp',
-        createdBy: 'u-1',
-        createdAt: '2026-04-26T10:00:00Z',
-      });
-      return Promise.resolve([]);
-    });
+    serveFiles(
+      {
+        attachmentID: 'a-img', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z',
+        attachment: {
+          id: 'a-img',
+          sha256: 'h',
+          size: 1024,
+          contentType: 'image/png',
+          filename: 'pic.png',
+          url: 'https://x/pic.png',
+          squareThumbnailURL: 'https://x/pic-square.webp',
+          createdBy: 'u-1',
+          createdAt: '2026-04-26T10:00:00Z',
+        },
+      },
+    );
     renderPanel({ channelId: 'ch-1' });
     await waitFor(() => expect(screen.getByText('pic.png')).toBeInTheDocument());
     expect(screen.getByTestId('files-row-thumb')).toHaveAttribute('src', 'https://x/pic-square.webp');
@@ -142,48 +133,42 @@ describe('FilesPanel', () => {
   });
 
   it('row is items-center so the download icon vertically centers next to the thumbnail', async () => {
-    apiFetchMock.mockImplementation((path: string) => {
-      if (path.endsWith('/files')) {
-        return Promise.resolve([
-          { attachmentID: 'a-c', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z' },
-        ]);
-      }
-      if (path === attachmentPath('a-c')) return Promise.resolve({
-        id: 'a-c',
-        sha256: 'h',
-        size: 1024,
-        contentType: 'application/pdf',
-        filename: 'doc.pdf',
-        url: 'https://x/doc.pdf',
-        createdBy: 'u-1',
-        createdAt: '2026-04-26T10:00:00Z',
-      });
-      return Promise.resolve([]);
-    });
+    serveFiles(
+      {
+        attachmentID: 'a-c', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z',
+        attachment: {
+          id: 'a-c',
+          sha256: 'h',
+          size: 1024,
+          contentType: 'application/pdf',
+          filename: 'doc.pdf',
+          url: 'https://x/doc.pdf',
+          createdBy: 'u-1',
+          createdAt: '2026-04-26T10:00:00Z',
+        },
+      },
+    );
     renderPanel({ channelId: 'ch-1' });
     await waitFor(() => expect(screen.getByText('doc.pdf')).toBeInTheDocument());
     expect(screen.getByTestId('files-row').className).toContain('items-center');
   });
 
   it('open button suppresses the click-focus outline but keeps a keyboard ring', async () => {
-    apiFetchMock.mockImplementation((path: string) => {
-      if (path.endsWith('/files')) {
-        return Promise.resolve([
-          { attachmentID: 'a-f', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z' },
-        ]);
-      }
-      if (path === attachmentPath('a-f')) return Promise.resolve({
-        id: 'a-f',
-        sha256: 'h',
-        size: 1024,
-        contentType: 'application/pdf',
-        filename: 'doc.pdf',
-        url: 'https://x/doc.pdf',
-        createdBy: 'u-1',
-        createdAt: '2026-04-26T10:00:00Z',
-      });
-      return Promise.resolve([]);
-    });
+    serveFiles(
+      {
+        attachmentID: 'a-f', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z',
+        attachment: {
+          id: 'a-f',
+          sha256: 'h',
+          size: 1024,
+          contentType: 'application/pdf',
+          filename: 'doc.pdf',
+          url: 'https://x/doc.pdf',
+          createdBy: 'u-1',
+          createdAt: '2026-04-26T10:00:00Z',
+        },
+      },
+    );
     renderPanel({ channelId: 'ch-1' });
     await waitFor(() => expect(screen.getByText('doc.pdf')).toBeInTheDocument());
     const cls = screen.getByTestId('files-row-open').className;
@@ -201,25 +186,22 @@ describe('FilesPanel', () => {
     // intact on the button, the download link stays shrink-0, and the
     // link is still in the DOM with the right href.
     const longName = 'a'.repeat(200) + '.pdf';
-    apiFetchMock.mockImplementation((path: string) => {
-      if (path.endsWith('/files')) {
-        return Promise.resolve([
-          { attachmentID: 'a-long', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z' },
-        ]);
-      }
-      if (path === attachmentPath('a-long')) return Promise.resolve({
-        id: 'a-long',
-        sha256: 'h',
-        size: 1024,
-        contentType: 'application/pdf',
-        filename: longName,
-        url: 'https://x/long.pdf',
-        downloadURL: 'https://x/long.pdf?response-content-disposition=attachment',
-        createdBy: 'u-1',
-        createdAt: '2026-04-26T10:00:00Z',
-      });
-      return Promise.resolve([]);
-    });
+    serveFiles(
+      {
+        attachmentID: 'a-long', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z',
+        attachment: {
+          id: 'a-long',
+          sha256: 'h',
+          size: 1024,
+          contentType: 'application/pdf',
+          filename: longName,
+          url: 'https://x/long.pdf',
+          downloadURL: 'https://x/long.pdf?response-content-disposition=attachment',
+          createdBy: 'u-1',
+          createdAt: '2026-04-26T10:00:00Z',
+        },
+      },
+    );
     renderPanel({ channelId: 'ch-1' });
     await waitFor(() => expect(screen.getByText(longName)).toBeInTheDocument());
 
@@ -238,42 +220,41 @@ describe('FilesPanel', () => {
   });
 
   it('clicking a row opens the lightbox; download icon hits the forced-download URL', async () => {
-    apiFetchMock.mockImplementation((path: string) => {
-      if (path.endsWith('/files')) {
-        return Promise.resolve([
-          { attachmentID: 'a-1', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z' },
-          { attachmentID: 'a-2', messageID: 'm-2', authorID: 'u-1', createdAt: '2026-04-26T11:00:00Z' },
-        ]);
-      }
-      if (path === attachmentPath('a-1')) return Promise.resolve({
-        id: 'a-1',
-        sha256: 'h1',
-        size: 1024,
-        contentType: 'image/png',
-        filename: 'one.png',
-        url: 'https://x/one.png',
-        downloadURL: 'https://x/one.png?response-content-disposition=attachment',
-        createdBy: 'u-1',
-        createdAt: '2026-04-26T10:00:00Z',
-      });
-      if (path === attachmentPath('a-2', 'm-2')) return Promise.resolve({
-        id: 'a-2',
-        sha256: 'h2',
-        size: 2048,
-        contentType: 'image/png',
-        filename: 'two.png',
-        url: 'https://x/two.png',
-        downloadURL: 'https://x/two.png?response-content-disposition=attachment',
-        createdBy: 'u-1',
-        createdAt: '2026-04-26T11:00:00Z',
-      });
-      return Promise.resolve([]);
-    });
+    serveFiles(
+      {
+        attachmentID: 'a-1', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-04-26T10:00:00Z',
+        attachment: {
+          id: 'a-1',
+          sha256: 'h1',
+          size: 1024,
+          contentType: 'image/png',
+          filename: 'one.png',
+          url: 'https://x/one.png',
+          downloadURL: 'https://x/one.png?response-content-disposition=attachment',
+          createdBy: 'u-1',
+          createdAt: '2026-04-26T10:00:00Z',
+        },
+      },
+      {
+        attachmentID: 'a-2', messageID: 'm-2', authorID: 'u-1', createdAt: '2026-04-26T11:00:00Z',
+        attachment: {
+          id: 'a-2',
+          sha256: 'h2',
+          size: 2048,
+          contentType: 'image/png',
+          filename: 'two.png',
+          url: 'https://x/two.png',
+          downloadURL: 'https://x/two.png?response-content-disposition=attachment',
+          createdBy: 'u-1',
+          createdAt: '2026-04-26T11:00:00Z',
+        },
+      },
+    );
     renderPanel({ channelId: 'ch-1', postedIn: '~general' });
     await waitFor(() => expect(screen.getByText('one.png')).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText('two.png')).toBeInTheDocument());
-    expect(apiFetchMock).toHaveBeenCalledWith(attachmentPath('a-1'));
-    expect(apiFetchMock).toHaveBeenCalledWith(attachmentPath('a-2', 'm-2'));
+    // One list request, no request per file.
+    expect(apiFetchMock).toHaveBeenCalledTimes(1);
 
     // Each row's download icon must point at the forced-download URL,
     // not the inline preview URL — otherwise <a download> is ignored

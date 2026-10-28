@@ -15,13 +15,15 @@ interface SidePanelProps {
   ariaLabel: string;
   closeLabel: string;
   onClose: () => void;
+  // Stays above the scrolling content (a search field, say).
+  toolbar?: ReactNode;
   children: ReactNode;
 }
 
 // Common shell for the right-rail panels (pinned, files, members, etc.).
 // Centralises the title bar + close button + scroll body so each panel
 // stays focused on its own content.
-export function SidePanel({ title, ariaLabel, closeLabel, onClose, children }: SidePanelProps) {
+export function SidePanel({ title, ariaLabel, closeLabel, onClose, toolbar, children }: SidePanelProps) {
   const { dismissing, settled, motionProps } = useSwipeDismiss('right', onClose);
   // Mounted-while-open panel: Back on mobile closes it instead of navigating.
   useMobileBackClose(true, onClose);
@@ -57,6 +59,7 @@ export function SidePanel({ title, ariaLabel, closeLabel, onClose, children }: S
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>
+      {toolbar && <div className="border-b p-2">{toolbar}</div>}
       {/* Bottom inset: on mobile the panel is fixed to the screen bottom, so
           the last row must clear the home indicator. */}
       <div className="flex-1 overflow-y-auto p-2 mobile:pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">{children}</div>

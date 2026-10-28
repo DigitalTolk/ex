@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -350,6 +351,7 @@ type channelHandlerEnv struct {
 	memberships *dataMembershipStore
 	messages    *dataMessageStore
 	parentIndex *dataParentIndexStore
+	attachments *fakeAttachmentStore
 	jwtMgr      *auth.JWTManager
 }
 
@@ -367,6 +369,8 @@ func setupChannelHandlerFull(t *testing.T) *channelHandlerEnv {
 	messageSvc := service.NewMessageService(messages, memberships, nil, nil, broker)
 	// Production main always wires a parent index, so do the same here.
 	messageSvc.SetParentIndex(newParentIndexAdapterFromBacking(parentIndex))
+	attachments := newFakeAttachmentStore()
+	messageSvc.SetAttachmentManager(service.NewAttachmentService(attachments, nil, nil))
 	jwtMgr := auth.NewJWTManager("test-channel-handler-secret", 15*time.Minute, 720*time.Hour)
 
 	h := NewChannelHandler(channelSvc, messageSvc)
@@ -376,6 +380,7 @@ func setupChannelHandlerFull(t *testing.T) *channelHandlerEnv {
 		memberships: memberships,
 		messages:    messages,
 		parentIndex: parentIndex,
+		attachments: attachments,
 		jwtMgr:      jwtMgr,
 	}
 }
@@ -1983,6 +1988,31 @@ func TestChannelHandlerFull_UpdateMemberRole_InvalidJSON(t *testing.T) {
 	}
 }
 
+// An unknown role is refused: read as "member", it quietly demoted an admin
+// or owner.
+func TestChannelHandlerFull_UpdateMemberRole_UnknownRoleIsRefused(t *testing.T) {
+	env := setupChannelHandlerFull(t)
+	env.memberships.memberships["ch-umr#u-owner"] = &model.ChannelMembership{ChannelID: "ch-umr", UserID: "u-owner", Role: model.ChannelRoleOwner}
+	env.memberships.memberships["ch-umr#u-target"] = &model.ChannelMembership{ChannelID: "ch-umr", UserID: "u-target", Role: model.ChannelRoleAdmin}
+	token := makeTokenForUser(env.jwtMgr, &model.User{ID: "u-owner", Email: "umr-owner@test.com", SystemRole: model.SystemRoleMember})
+	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.UpdateMemberRole))
+
+	for _, role := range []string{"Owner", "superuser", ""} {
+		req := httptest.NewRequest(http.MethodPatch, "/api/v1/channels/ch-umr/members/u-target", strings.NewReader(`{"role":"`+role+`"}`))
+		req.SetPathValue("id", "ch-umr")
+		req.SetPathValue("uid", "u-target")
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("role %q: status = %d, want 400", role, rec.Code)
+		}
+	}
+	if got := env.memberships.memberships["ch-umr#u-target"].Role; got != model.ChannelRoleAdmin {
+		t.Fatalf("target role = %s, want admin untouched", got)
+	}
+}
+
 func TestChannelHandlerFull_SendMessage_InvalidJSON(t *testing.T) {
 	env := setupChannelHandlerFull(t)
 
@@ -2257,6 +2287,9 @@ func TestChannelHandlerFull_ListFiles(t *testing.T) {
 		ID: "m-2", ParentID: "ch-files", AuthorID: "u-files",
 		AttachmentIDs: []string{"a-3"}, CreatedAt: now,
 	}
+	env.attachments.byID["a-1"] = &model.Attachment{ID: "a-1", Filename: "budget.xlsx"}
+	env.attachments.byID["a-2"] = &model.Attachment{ID: "a-2", Filename: "photo.png"}
+	env.attachments.byID["a-3"] = &model.Attachment{ID: "a-3", Filename: "Budget 2027.xlsx"}
 	// In production, Send() writes one FILE# row per attachment. The
 	// handler reads exclusively from the index now, so this test seeds
 	// the same rows the runtime would have written.
@@ -2266,24 +2299,45 @@ func TestChannelHandlerFull_ListFiles(t *testing.T) {
 	_ = env.parentIndex.SetFileIndex(ctx, "ch-files", "a-3", "m-2", "u-files", now)
 
 	handler := middleware.Auth(env.jwtMgr)(http.HandlerFunc(env.handler.ListFiles))
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/ch-files/files", nil)
-	req.SetPathValue("id", "ch-files")
-	req.Header.Set("Authorization", "Bearer "+token)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	list := func(query string) (int, service.FilePage, string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/channels/ch-files/files"+query, nil)
+		req.SetPathValue("id", "ch-files")
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		var page service.FilePage
+		if rec.Code == http.StatusOK {
+			if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+		}
+		return rec.Code, page, rec.Body.String()
+	}
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	code, page, body := list("")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", code, body)
 	}
-	var got []service.FileEntry
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode: %v", err)
+	if len(page.Files) != 3 || page.Files[0].AttachmentID != "a-3" || page.NextCursor != "" {
+		t.Fatalf("page = %+v", page)
 	}
-	if len(got) != 3 {
-		t.Errorf("expected 3 files, got %d", len(got))
+	if page.Files[0].Attachment == nil || page.Files[0].Attachment.Filename != "Budget 2027.xlsx" {
+		t.Fatalf("the entry carries its attachment; got %+v", page.Files[0].Attachment)
 	}
-	if got[0].AttachmentID != "a-3" {
-		t.Errorf("expected newest first; got %q", got[0].AttachmentID)
+
+	// q filters by name; limit and cursor page through what matches.
+	code, page, body = list("?q=budget&limit=1")
+	if code != http.StatusOK || len(page.Files) != 1 || page.Files[0].AttachmentID != "a-3" || page.NextCursor == "" {
+		t.Fatalf("first match page = %d %+v %s", code, page, body)
+	}
+	code, page, body = list("?q=budget&limit=1&cursor=" + url.QueryEscape(page.NextCursor))
+	if code != http.StatusOK || len(page.Files) != 1 || page.Files[0].AttachmentID != "a-1" || page.NextCursor != "" {
+		t.Fatalf("second match page = %d %+v %s", code, page, body)
+	}
+
+	if code, _, body = list("?cursor=nonsense"); code != http.StatusBadRequest {
+		t.Fatalf("bad cursor = %d %s, want 400", code, body)
 	}
 }
 

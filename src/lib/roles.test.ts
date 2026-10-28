@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   ChannelRole,
+  assignableRoles,
   roleNumber,
   isOwner,
   canEditChannel,
@@ -41,10 +42,27 @@ describe('channel role predicates', () => {
     expect(isOwner('owner')).toBe(true);
     expect(isOwner('admin')).toBe(false);
   });
-  it('canEditChannel: admin or owner', () => {
+  it('canEditChannel: admin, owner or a system admin', () => {
     expect(canEditChannel('admin')).toBe(true);
     expect(canEditChannel('owner')).toBe(true);
     expect(canEditChannel('member')).toBe(false);
+    expect(canEditChannel('member', 'admin')).toBe(true);
+    expect(canEditChannel('member', 'member')).toBe(false);
+  });
+  it('assignableRoles mirrors the server: owners and system admins hand out ownership', () => {
+    // A system admin may give anyone any other role, even as a plain member.
+    expect(assignableRoles('member', 'member', 'admin')).toEqual(['owner', 'admin']);
+    expect(assignableRoles('member', 'owner', 'admin')).toEqual(['admin', 'member']);
+    // An owner likewise, a co-owner included.
+    expect(assignableRoles('owner', 'admin')).toEqual(['owner', 'member']);
+    expect(assignableRoles('owner', 'owner', 'member')).toEqual(['admin', 'member']);
+    // An admin moves people between member and admin, and leaves owners be.
+    expect(assignableRoles('admin', 'member')).toEqual(['admin']);
+    expect(assignableRoles('admin', 'admin')).toEqual(['member']);
+    expect(assignableRoles('admin', 'owner')).toEqual([]);
+    // A plain member changes nobody.
+    expect(assignableRoles('member', 'member')).toEqual([]);
+    expect(assignableRoles(undefined, 'member', 'member')).toEqual([]);
   });
   it('canArchiveChannel / canUnarchiveChannel: owner or system admin', () => {
     expect(canArchiveChannel('owner')).toBe(true);

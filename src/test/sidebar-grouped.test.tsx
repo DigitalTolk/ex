@@ -255,6 +255,25 @@ describe('Sidebar grouped rendering', () => {
     expect(within(work).getByText('work-room')).toBeInTheDocument();
   });
 
+  it('remembers collapsed sections when the sidebar opens again', () => {
+    const first = renderSidebar();
+    fireEvent.click(screen.getByTestId('sidebar-group-toggle-cat-work'));
+    fireEvent.click(screen.getByTestId('sidebar-group-toggle-__channels__'));
+    first.unmount();
+
+    renderSidebar();
+    expect(screen.getByTestId('sidebar-group-toggle-cat-work')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByTestId('sidebar-group-toggle-__channels__')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('work-room')).not.toBeInTheDocument();
+    expect(screen.queryByText('random')).not.toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-group-toggle-__favorites__')).toHaveAttribute('aria-expanded', 'true');
+
+    // Opening one again is remembered too.
+    fireEvent.click(screen.getByTestId('sidebar-group-toggle-__channels__'));
+    expect(screen.getByText('random')).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem('sidebar.collapsedSections')!)).toEqual(['cat-work']);
+  });
+
   it('reveals an inline create input when "+ category" header button is clicked', () => {
     renderSidebar();
     expect(screen.queryByTestId('sidebar-new-category-input')).not.toBeInTheDocument();

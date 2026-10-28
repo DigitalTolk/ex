@@ -1,15 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react'; // waitFor used below in flow tests
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { FilesPanel } from './FilesPanel';
-import { attachmentURLForFile } from './files-panel-url';
 
 // Unit-test coverage for the files side panel. Catches the bug class
-// where the panel mounts but never lists files (or lists rows that
-// never resolve their attachment metadata) — both shapes were missing
+// where the panel mounts but never lists files — that shape was missing
 // from the browser smoke test and let "files panel is blank" slip
-// through.
+// through. (jsdom has no IntersectionObserver, so every page loads.)
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api', () => ({
@@ -39,12 +37,6 @@ vi.mock('@/hooks/useAttachmentLightbox', () => ({
   }),
 }));
 
-interface FileEntry {
-  attachmentID: string;
-  messageID: string;
-  authorID: string;
-  createdAt: string;
-}
 interface Attachment {
   id: string;
   filename: string;
@@ -54,21 +46,32 @@ interface Attachment {
   downloadURL?: string;
   squareThumbnailURL?: string;
 }
+interface FileEntry {
+  attachmentID: string;
+  messageID: string;
+  authorID: string;
+  createdAt: string;
+  attachment: Attachment;
+}
+interface FilePage {
+  files: FileEntry[];
+  nextCursor?: string;
+}
 
-function setupAPI(opts: { files?: FileEntry[]; attachments?: Record<string, Attachment>; filesError?: boolean }) {
+function entry(attachment: Attachment, over: Partial<FileEntry> = {}): FileEntry {
+  return { attachmentID: attachment.id, messageID: 'm-1', authorID: 'u-1', createdAt: '2026-05-01T12:00:00Z', attachment, ...over };
+}
+
+// pages maps a request's query string ('' for the first page, 'q=spec',
+// 'cursor=c2', …) to its answer; anything else is an empty page.
+function setupAPI(opts: { pages?: Record<string, FilePage | Promise<FilePage>>; files?: FileEntry[]; error?: boolean } = {}) {
   apiFetchMock.mockReset();
   apiFetchMock.mockImplementation((url: string) => {
-    if (typeof url !== 'string') return Promise.resolve(null);
-    if (url.endsWith('/files')) {
-      if (opts.filesError) return Promise.reject(new Error('boom'));
-      return Promise.resolve(opts.files ?? []);
-    }
-    const m = url.match(/\/attachments\/([^?]+)/);
-    if (m) {
-      const att = opts.attachments?.[m[1]];
-      return att ? Promise.resolve(att) : Promise.reject(new Error('not found'));
-    }
-    return Promise.resolve(null);
+    const [path, qs = ''] = url.split('?');
+    if (!path.endsWith('/files')) return Promise.reject(new Error(`unexpected ${url}`));
+    if (opts.error) return Promise.reject(new Error('boom'));
+    if (opts.files && qs === '') return Promise.resolve({ files: opts.files });
+    return Promise.resolve(opts.pages?.[qs] ?? { files: [] });
   });
 }
 
@@ -93,130 +96,85 @@ beforeEach(() => {
   apiFetchMock.mockReset();
 });
 
-describe('attachmentURLForFile — every-context-permutation', () => {
-  const entry = { attachmentID: 'a-1', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-01-01T00:00:00Z' };
-
-  it('appends parentID + parentType + messageID when all are set', () => {
-    expect(attachmentURLForFile(entry, 'ch-1', 'channel')).toBe(
-      '/api/v1/attachments/a-1?parentID=ch-1&parentType=channel&messageID=m-1',
-    );
-  });
-
-  it('drops the parentID param when undefined, keeps the others', () => {
-    expect(attachmentURLForFile(entry, undefined, 'channel')).toBe(
-      '/api/v1/attachments/a-1?parentType=channel&messageID=m-1',
-    );
-  });
-
-  it('drops the parentType param when undefined', () => {
-    expect(attachmentURLForFile(entry, 'ch-1', undefined)).toBe(
-      '/api/v1/attachments/a-1?parentID=ch-1&messageID=m-1',
-    );
-  });
-
-  it('drops the messageID param when the entry has no messageID', () => {
-    expect(attachmentURLForFile({ ...entry, messageID: '' }, 'ch-1', 'channel')).toBe(
-      '/api/v1/attachments/a-1?parentID=ch-1&parentType=channel',
-    );
-  });
-
-  it('returns the path with no query string when nothing is present', () => {
-    expect(attachmentURLForFile({ ...entry, messageID: '' }, undefined, undefined)).toBe(
-      '/api/v1/attachments/a-1',
-    );
-  });
-});
+const spec: Attachment = { id: 'a-1', filename: 'spec.pdf', contentType: 'application/pdf', size: 12345, url: 'https://cdn/spec.pdf' };
 
 describe('FilesPanel', () => {
-  it('renders the panel header and close button', async () => {
-    setupAPI({ files: [] });
+  it('renders the panel header, close button and search field', async () => {
+    setupAPI();
     renderPanel();
     expect(await screen.findByText('Files')).toBeTruthy();
     expect(document.querySelector('button[aria-label*="lose"]')).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Search files' })).toBeTruthy();
   });
 
   it('shows the empty-state copy when no files are shared', async () => {
-    setupAPI({ files: [] });
+    setupAPI();
     renderPanel();
-    expect(await screen.findByTestId('files-empty')).toBeTruthy();
+    expect((await screen.findByTestId('files-empty')).textContent).toBe('No files have been shared here yet.');
   });
 
-  it('does not call /files when neither channelId nor conversationId is set', async () => {
-    setupAPI({});
+  it('does not call /files when neither channelId nor conversationId is set', () => {
+    setupAPI();
     renderPanel({ channelId: undefined, conversationId: undefined });
-    await new Promise((r) => setTimeout(r, 50));
     expect(apiFetchMock).not.toHaveBeenCalled();
   });
 
   it('calls /api/v1/channels/<id>/files for a channel scope', async () => {
-    setupAPI({ files: [] });
+    setupAPI();
     renderPanel({ channelId: 'ch-42' });
     await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
     expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/channels/ch-42/files');
   });
 
   it('calls /api/v1/conversations/<id>/files for a conversation scope', async () => {
-    setupAPI({ files: [] });
+    setupAPI();
     renderPanel({ channelId: undefined, conversationId: 'cv-7' });
     await waitFor(() => expect(apiFetchMock).toHaveBeenCalled());
     expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/conversations/cv-7/files');
   });
 
-  it('renders one row per FileEntry with filename + author + size', async () => {
-    setupAPI({
-      files: [{ attachmentID: 'a-1', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-05-01T12:00:00Z' }],
-      attachments: { 'a-1': { id: 'a-1', filename: 'spec.pdf', contentType: 'application/pdf', size: 12345, url: 'https://cdn/spec.pdf' } },
-    });
+  it('renders one row per file with filename + author + size, from the one list request', async () => {
+    setupAPI({ files: [entry(spec)] });
     renderPanel();
     expect(await screen.findByText('spec.pdf')).toBeTruthy();
     expect(screen.getByText(/Alice/)).toBeTruthy();
     expect(screen.getByText(/KB/)).toBeTruthy();
     expect(document.querySelectorAll('[data-testid="files-row"]').length).toBe(1);
+    // No request per file.
+    expect(apiFetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('renders a thumbnail when the attachment is an image with a squareThumbnailURL', async () => {
     setupAPI({
-      files: [{ attachmentID: 'img-1', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-05-01T12:00:00Z' }],
-      attachments: {
-        'img-1': {
-          id: 'img-1', filename: 'cat.png', contentType: 'image/png', size: 5000,
-          url: 'https://cdn/cat.png', squareThumbnailURL: 'https://cdn/cat-thumb.png',
-        },
-      },
+      files: [entry({
+        id: 'img-1', filename: 'cat.png', contentType: 'image/png', size: 5000,
+        url: 'https://cdn/cat.png', squareThumbnailURL: 'https://cdn/cat-thumb.png',
+      })],
     });
     renderPanel();
     const thumb = await screen.findByTestId('files-row-thumb') as HTMLImageElement;
     expect(thumb.src).toContain('cat-thumb.png');
   });
 
-  it('falls back to the file-type icon for non-image attachments', async () => {
-    setupAPI({
-      files: [{ attachmentID: 'pdf-1', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-05-01T12:00:00Z' }],
-      attachments: { 'pdf-1': { id: 'pdf-1', filename: 'spec.pdf', contentType: 'application/pdf', size: 1, url: 'https://cdn/spec.pdf' } },
-    });
+  it('falls back to the file-type icon for non-image attachments, even with a thumbnail', async () => {
+    setupAPI({ files: [entry({ ...spec, squareThumbnailURL: 'https://cdn/page-1.png' })] });
     renderPanel();
     await waitFor(() => expect(document.querySelector('[data-testid="files-row-icon"]')).toBeTruthy());
     expect(document.querySelector('[data-testid="files-row-thumb"]')).toBeFalsy();
   });
 
   it('substitutes "Unknown" for an unknown authorID', async () => {
-    setupAPI({
-      files: [{ attachmentID: 'a-1', messageID: 'm-1', authorID: 'u-MIA', createdAt: '2026-05-01T12:00:00Z' }],
-      attachments: { 'a-1': { id: 'a-1', filename: 'mystery.txt', contentType: 'text/plain', size: 1, url: 'https://cdn/x.txt' } },
-    });
+    setupAPI({ files: [entry({ id: 'a-1', filename: 'mystery.txt', contentType: 'text/plain', size: 1, url: 'https://cdn/x.txt' }, { authorID: 'u-MIA' })] });
     renderPanel({ userMap: {} });
     expect(await screen.findByText(/Unknown/)).toBeTruthy();
   });
 
   it('renders the download link using attachment.downloadURL when present', async () => {
     setupAPI({
-      files: [{ attachmentID: 'a-1', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-05-01T12:00:00Z' }],
-      attachments: {
-        'a-1': {
-          id: 'a-1', filename: 'plan.txt', contentType: 'text/plain', size: 1,
-          url: 'https://cdn/signed-view', downloadURL: 'https://cdn/signed-download',
-        },
-      },
+      files: [entry({
+        id: 'a-1', filename: 'plan.txt', contentType: 'text/plain', size: 1,
+        url: 'https://cdn/signed-view', downloadURL: 'https://cdn/signed-download',
+      })],
     });
     renderPanel();
     const link = (await screen.findByTestId('files-row-download')) as HTMLAnchorElement;
@@ -224,61 +182,85 @@ describe('FilesPanel', () => {
     expect(link.getAttribute('download')).toBe('plan.txt');
   });
 
+  it('downloads from the view URL when there is no separate download URL', async () => {
+    setupAPI({ files: [entry(spec)] });
+    renderPanel();
+    const link = (await screen.findByTestId('files-row-download')) as HTMLAnchorElement;
+    expect(link.href).toBe('https://cdn/spec.pdf');
+  });
+
   it('offers Preview beside Download for an HTML file, and only for it', async () => {
     setupAPI({
       files: [
-        { attachmentID: 'a-1', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-05-01T12:00:00Z' },
-        { attachmentID: 'a-2', messageID: 'm-2', authorID: 'u-1', createdAt: '2026-05-01T12:00:00Z' },
+        entry({ id: 'a-1', filename: 'mockup.html', contentType: 'text/html', size: 2048, url: '/api/v1/media/t1/mockup.html' }),
+        entry({ id: 'a-2', filename: 'plan.txt', contentType: 'text/plain', size: 1, url: 'https://cdn/plan.txt' }, { messageID: 'm-2' }),
       ],
-      attachments: {
-        'a-1': { id: 'a-1', filename: 'mockup.html', contentType: 'text/html', size: 2048, url: '/api/v1/media/t1/mockup.html' },
-        'a-2': { id: 'a-2', filename: 'plan.txt', contentType: 'text/plain', size: 1, url: 'https://cdn/plan.txt' },
-      },
     });
     renderPanel();
     const preview = await screen.findByRole('button', { name: 'Preview mockup.html' });
     expect(preview.nextElementSibling).toHaveAttribute('data-testid', 'files-row-download');
-    await waitFor(() => expect(screen.getAllByTestId('files-row-download')).toHaveLength(2));
+    expect(screen.getAllByTestId('files-row-download')).toHaveLength(2);
     expect(screen.getAllByTestId('html-preview-open')).toHaveLength(1);
   });
 
-  it('does not render the download link until the attachment metadata resolves', async () => {
-    setupAPI({
-      files: [{ attachmentID: 'missing', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-05-01T12:00:00Z' }],
-    });
-    renderPanel();
-    await waitFor(() => expect(document.querySelector('[data-testid="files-row"]')).toBeTruthy());
-    expect(document.querySelector('[data-testid="files-row-download"]')).toBeFalsy();
-  });
-
-  it('disables the open button until the attachment metadata has resolved', async () => {
-    setupAPI({
-      files: [{ attachmentID: 'pending', messageID: 'm-1', authorID: 'u-1', createdAt: '2026-05-01T12:00:00Z' }],
-      attachments: {},
-    });
+  it('cannot open or download a file it has no URL for', async () => {
+    setupAPI({ files: [entry({ id: 'a-1', filename: 'stuck.bin', contentType: 'application/octet-stream', size: 1 })] });
     renderPanel();
     const btn = (await screen.findByTestId('files-row-open')) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
+    expect(document.querySelector('[data-testid="files-row-download"]')).toBeFalsy();
   });
 
-  it('keeps rendering even when the /files endpoint errors out', async () => {
-    setupAPI({ filesError: true });
+  it('says the files could not be loaded, and keeps the panel usable, when /files fails', async () => {
+    setupAPI({ error: true });
     renderPanel();
+    expect((await screen.findByTestId('files-error')).textContent).toBe("Couldn't load files.");
     // The panel chrome (title, close button) must stay visible so the
     // user can dismiss the side panel after a transient failure.
-    expect(await screen.findByText('Files')).toBeTruthy();
+    expect(screen.getByText('Files')).toBeTruthy();
+    expect(screen.queryByTestId('files-empty')).toBeNull();
   });
 
-  it('passes parentID/parentType/messageID to the attachment fetch so signed-URL auth keeps working', async () => {
+  it('filters by name on the server as the user types', async () => {
     setupAPI({
-      files: [{ attachmentID: 'a-9', messageID: 'm-9', authorID: 'u-1', createdAt: '2026-05-01T12:00:00Z' }],
-      attachments: { 'a-9': { id: 'a-9', filename: 'x.txt', contentType: 'text/plain', size: 1, url: 'https://cdn/x.txt' } },
+      files: [entry(spec), entry({ id: 'a-2', filename: 'cat.png', contentType: 'image/png', size: 1 }, { messageID: 'm-2' })],
+      pages: { 'q=spec': { files: [entry(spec)] } },
     });
-    renderPanel({ channelId: 'ch-9' });
-    await waitFor(() => expect(apiFetchMock.mock.calls.length).toBeGreaterThan(1));
-    const attCall = apiFetchMock.mock.calls.find((c) => String(c[0]).includes('/attachments/a-9'))?.[0] as string;
-    expect(attCall).toContain('parentID=ch-9');
-    expect(attCall).toContain('parentType=channel');
-    expect(attCall).toContain('messageID=m-9');
+    renderPanel();
+    expect(await screen.findByText('cat.png')).toBeTruthy();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search files' }), { target: { value: '  spec ' } });
+    await waitFor(() => expect(screen.queryByText('cat.png')).toBeNull());
+    expect(screen.getByText('spec.pdf')).toBeTruthy();
+    expect(apiFetchMock.mock.calls.map((c) => c[0])).toContain('/api/v1/channels/ch-1/files?q=spec');
+  });
+
+  it('says when nothing matches the search', async () => {
+    setupAPI({ files: [entry(spec)] });
+    renderPanel();
+    await screen.findByText('spec.pdf');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search files' }), { target: { value: 'nothing' } });
+    expect((await screen.findByTestId('files-empty')).textContent).toBe('No matching files.');
+  });
+
+  it('loads the next page with the cursor the last page returned', async () => {
+    let finishSecond!: (page: FilePage) => void;
+    const second = new Promise<FilePage>((resolve) => { finishSecond = resolve; });
+    setupAPI({
+      pages: {
+        '': { files: [entry(spec)], nextCursor: 'c2' },
+        'cursor=c2': second,
+      },
+    });
+    renderPanel();
+    expect(await screen.findByText('spec.pdf')).toBeTruthy();
+    expect(await screen.findByText('Loading more…')).toBeTruthy();
+    finishSecond({ files: [entry({ id: 'a-2', filename: 'older.txt', contentType: 'text/plain', size: 1, url: 'https://cdn/o.txt' }, { messageID: 'm-2' })] });
+    expect(await screen.findByText('older.txt')).toBeTruthy();
+    expect(screen.queryByText('Loading more…')).toBeNull();
+    expect(screen.getAllByTestId('files-row')).toHaveLength(2);
+    expect(apiFetchMock.mock.calls.map((c) => c[0])).toEqual([
+      '/api/v1/channels/ch-1/files',
+      '/api/v1/channels/ch-1/files?cursor=c2',
+    ]);
   });
 });
