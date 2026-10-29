@@ -15,9 +15,13 @@ export interface SidebarSection {
 }
 
 export type ConversationSidebarSort = 'recent' | 'az';
+// 'az' is the user's own order (drag-and-drop), then A-Z; 'recent' puts the
+// channel with the latest top-level message first.
+export type ChannelSidebarSort = 'recent' | 'az';
 
 export interface SidebarGroupOptions {
   conversationSort?: ConversationSidebarSort;
+  channelSort?: ChannelSidebarSort;
   // Pull every unread channel/DM into an "Unread" section at the top
   // (Mattermost's "group unread separately"), out of its usual section.
   unreadSection?: boolean;
@@ -30,6 +34,11 @@ export interface SidebarGroupOptions {
   // if it was unread when opened, until the user leaves it.
   stickyUnreadID?: string;
 }
+
+// One collator for every name comparison. localeCompare with options builds a
+// new collator on each call, which made regrouping ~1000 channels (it runs on
+// every arriving message) cost ~11ms; a shared one orders identically.
+const byName = new Intl.Collator(undefined, { sensitivity: 'base' }).compare;
 
 const UNREAD_KEY = '__unread__';
 const FAVORITES_KEY = '__favorites__';
@@ -47,6 +56,9 @@ export const SidebarSectionKeys = {
 //   - Favorites: every favorited channel + DM mixed.
 //   - User-defined categories (in position order): channels and DMs
 //     assigned to that category, mixed.
+//
+// channelSort orders the channels in categories and in "Channels";
+// Favorites always keeps the user's own order.
 //   - "Channels": uncategorised, unfavorited channels.
 //   - "Direct Messages": uncategorised, unfavorited DMs/groups.
 //
@@ -65,7 +77,13 @@ export function groupSidebarItems(
   const sections: SidebarSection[] = [];
   const channels = allChannels.filter((c) => !c.archived);
   const conversationSort = options.conversationSort ?? 'recent';
-  const sortedChannels = [...channels].sort(compareChannels);
+  const channelSort = options.channelSort ?? 'az';
+  // Parsed once per channel, not once per comparison.
+  const activity =
+    channelSort === 'recent'
+      ? new Map(channels.map((c) => [c.channelID, Date.parse(c.lastMessageAt ?? '') || 0]))
+      : undefined;
+  const sortedChannels = [...channels].sort((a, b) => compareChannels(a, b, activity));
   const sortedConversations = [...conversations].sort((a, b) =>
     compareConversations(a, b, conversationSort),
   );
@@ -114,7 +132,7 @@ export function groupSidebarItems(
 export function archivedSidebarChannels(channels: UserChannel[]): UserChannel[] {
   return channels
     .filter((c) => c.archived)
-    .sort((a, b) => a.channelName.localeCompare(b.channelName, undefined, { sensitivity: 'base' }));
+    .sort((a, b) => byName(a.channelName, b.channelName));
 }
 
 // applyUnreadView layers the unread options over the grouped sections. The
@@ -161,7 +179,7 @@ export function sidebarItemID(item: SidebarItem): string {
 function compareSidebarItems(a: SidebarItem, b: SidebarItem): number {
   const pos = compareSparsePosition(itemPosition(a), itemPosition(b));
   if (pos !== 0) return pos;
-  return itemLabel(a).localeCompare(itemLabel(b), undefined, { sensitivity: 'base' });
+  return byName(itemLabel(a), itemLabel(b));
 }
 
 function itemPosition(item: SidebarItem): number | undefined {
@@ -176,10 +194,18 @@ function itemLabel(item: SidebarItem): string {
     : item.conversation.displayName;
 }
 
-function compareChannels(a: UserChannel, b: UserChannel): number {
-  const pos = compareSparsePosition(a.sidebarPosition, b.sidebarPosition);
-  if (pos !== 0) return pos;
-  return a.channelName.localeCompare(b.channelName, undefined, { sensitivity: 'base' });
+// compareChannels orders by recency when given each channel's last-message
+// time (0 = never posted in, so after every active one), else by the user's
+// own positions; A-Z breaks ties either way.
+function compareChannels(a: UserChannel, b: UserChannel, activity?: Map<string, number>): number {
+  if (activity) {
+    const recency = activity.get(b.channelID)! - activity.get(a.channelID)!;
+    if (recency !== 0) return recency;
+  } else {
+    const pos = compareSparsePosition(a.sidebarPosition, b.sidebarPosition);
+    if (pos !== 0) return pos;
+  }
+  return byName(a.channelName, b.channelName);
 }
 
 function compareConversations(
@@ -188,7 +214,7 @@ function compareConversations(
   sort: ConversationSidebarSort,
 ): number {
   if (sort === 'az') {
-    return a.displayName.localeCompare(b.displayName, undefined, { sensitivity: 'base' });
+    return byName(a.displayName, b.displayName);
   }
   const aTime = Date.parse(a.updatedAt ?? '');
   const bTime = Date.parse(b.updatedAt ?? '');

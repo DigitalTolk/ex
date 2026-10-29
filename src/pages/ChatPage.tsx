@@ -55,6 +55,7 @@ import {
   cachedUnreadCount,
   clearChannelUnreadInCache,
   clearConversationUnreadInCache,
+  touchChannelActivityInCache,
   touchConversationActivityInCache,
   setChannelNotifyCountInCache,
   setConversationNotifyCountInCache,
@@ -276,6 +277,11 @@ export default function ChatPage() {
         // source) — no session delta to reconcile.
         if (parentKind === 'channel') bumpChannelUnread(queryClient, parentID);
         else if (parentKind === 'conversation') bumpConversationUnread(queryClient, parentID);
+      }
+      // A top-level post (anyone's, yours included) is the channel's latest
+      // activity — the same rule the server stamps lastMessageAt by.
+      if (parentKind === 'channel' && !parentMessageID && !msg.system) {
+        touchChannelActivityInCache(queryClient, parentID, msg.createdAt);
       }
       if (parentKind === 'conversation') {
         if (isOwnAuthor || !isActiveConversation(parentID)) {

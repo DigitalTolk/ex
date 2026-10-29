@@ -1,12 +1,13 @@
 import { useCallback, useState } from 'react';
 import { readString, writeString } from '@/lib/storage';
-import type { ConversationSidebarSort } from '@/lib/sidebar-groups';
+import type { ChannelSidebarSort, ConversationSidebarSort } from '@/lib/sidebar-groups';
 
-// Per-device sidebar view preferences: the DM sort, the two unread views
+// Per-device sidebar view preferences: the DM and channel sorts, the two unread views
 // (both default off) and which sections are folded. Storage goes through @/lib/storage, so a blocked
 // localStorage (private mode, disabled site data) only means the choice is
 // not remembered — the sidebar still renders and the toggles still apply.
 const CONVERSATION_SORT_STORAGE_KEY = 'sidebar.conversationSort';
+const CHANNEL_SORT_STORAGE_KEY = 'sidebar.channelSort';
 const UNREAD_SECTION_STORAGE_KEY = 'sidebar.unreadSection';
 const UNREAD_ONLY_STORAGE_KEY = 'sidebar.unreadOnly';
 const COLLAPSED_SECTIONS_STORAGE_KEY = 'sidebar.collapsedSections';
@@ -25,6 +26,8 @@ function usePersisted<T>(key: string, parse: (raw: string | null) => T, serializ
 
 const parseSort = (raw: string | null): ConversationSidebarSort => (raw === 'az' ? 'az' : 'recent');
 const serializeSort = (sort: ConversationSidebarSort) => sort;
+// Channels default to the user's own order, then A-Z.
+const parseChannelSort = (raw: string | null): ChannelSidebarSort => (raw === 'recent' ? 'recent' : 'az');
 const parseFlag = (raw: string | null) => raw === '1';
 const serializeFlag = (on: boolean) => (on ? '1' : '0');
 
@@ -45,6 +48,7 @@ const serializeCollapsed = (collapsed: Record<string, boolean>) =>
 
 export function useSidebarViewPreferences() {
   const [conversationSort, setConversationSort] = usePersisted(CONVERSATION_SORT_STORAGE_KEY, parseSort, serializeSort);
+  const [channelSort, setChannelSort] = usePersisted(CHANNEL_SORT_STORAGE_KEY, parseChannelSort, serializeSort);
   const [unreadSection, setUnreadSection] = usePersisted(UNREAD_SECTION_STORAGE_KEY, parseFlag, serializeFlag);
   const [unreadOnly, setUnreadOnly] = usePersisted(UNREAD_ONLY_STORAGE_KEY, parseFlag, serializeFlag);
   const [collapsedSections, setCollapsedSections] = usePersisted(
@@ -57,6 +61,8 @@ export function useSidebarViewPreferences() {
   return {
     conversationSort,
     setConversationSort,
+    channelSort,
+    setChannelSort,
     unreadSection,
     setUnreadSection,
     unreadOnly,

@@ -1860,6 +1860,93 @@ describe('Sidebar', () => {
     );
   });
 
+  it('sorts channels by recent activity from the Channels menu and remembers it', async () => {
+    mockChannels = [
+      { ...baseMockChannels[0], lastMessageAt: '2026-10-28T09:00:00Z' },
+      { ...baseMockChannels[1], lastMessageAt: '2026-10-29T09:00:00Z' },
+      { ...baseMockChannels[2] },
+    ];
+    const order = () => screen.getAllByTestId(/^channel-row-ch-/).map((row) => row.dataset.testid);
+    const user = userEvent.setup();
+    renderSidebar();
+    // Default: A-Z (general, My Cool Channel!, secret).
+    expect(order()).toEqual(['channel-row-ch-1', 'channel-row-ch-3', 'channel-row-ch-2']);
+
+    await user.click(screen.getByTestId('sidebar-channel-sort-menu'));
+    expect(within(await screen.findByTestId('sidebar-channel-sort-az')).getByTestId('sidebar-sort-selected')).toBeInTheDocument();
+    await user.click(screen.getByTestId('sidebar-channel-sort-recent'));
+
+    expect(localStorage.getItem('sidebar.channelSort')).toBe('recent');
+    // Latest message first; the channel nobody has posted in goes last.
+    expect(order()).toEqual(['channel-row-ch-2', 'channel-row-ch-1', 'channel-row-ch-3']);
+    await user.click(screen.getByTestId('sidebar-channel-sort-menu'));
+    expect(within(await screen.findByTestId('sidebar-channel-sort-recent')).getByTestId('sidebar-sort-selected')).toBeInTheDocument();
+    expect(within(screen.getByTestId('sidebar-channel-sort-az')).queryByTestId('sidebar-sort-selected')).toBeNull();
+
+    await user.click(screen.getByTestId('sidebar-channel-sort-az'));
+    expect(localStorage.getItem('sidebar.channelSort')).toBe('az');
+    expect(order()).toEqual(['channel-row-ch-1', 'channel-row-ch-3', 'channel-row-ch-2']);
+  });
+
+  it('offers guests the channel sort without the create button', () => {
+    mockUser.systemRole = 'guest';
+    renderSidebar();
+    expect(screen.getByTestId('sidebar-channel-sort-menu')).toHaveClass('opacity-0', 'mobile:hidden');
+    expect(screen.queryByTestId('sidebar-create-channel')).not.toBeInTheDocument();
+  });
+
+  it('switches channels to the hand-picked order when one is dragged within its section', async () => {
+    localStorage.setItem('sidebar.channelSort', 'recent');
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-3'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-3'), { dataTransfer });
+    fireEvent.drop(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
+
+    await waitFor(() => {
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-3', section: 'channels' });
+    });
+    expect(localStorage.getItem('sidebar.channelSort')).toBe('az');
+  });
+
+  it('keeps the recent-activity sort when a channel moves to Favorites or another category', async () => {
+    localStorage.setItem('sidebar.channelSort', 'recent');
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [{ id: 'cat-eng', name: 'Engineering', position: 0 }];
+      return undefined;
+    });
+    mockChannels = [
+      { ...baseMockChannels[0], favorite: true },
+      { ...baseMockChannels[1], favorite: true },
+      { ...baseMockChannels[2] },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    // Reordering Favorites (always hand-ordered).
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-2'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
+    fireEvent.drop(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
+    await waitFor(() => {
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-2', section: 'favorites' });
+    });
+
+    // Moving a channel into a category.
+    await screen.findByText('Engineering');
+    const header = screen.getByTestId('sidebar-group-header-cat-eng');
+    mockRect(header, { top: -20, bottom: 0 });
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-3'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-3'), { dataTransfer });
+    fireDragOver(header, dataTransfer, 19);
+    fireDrop(header, dataTransfer, 19);
+    await waitFor(() => {
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-3', section: 'category', categoryID: 'cat-eng' });
+    });
+
+    expect(localStorage.getItem('sidebar.channelSort')).toBe('recent');
+  });
+
   it('keeps the create-channel affordance hidden for guests', () => {
     mockUser.systemRole = 'guest';
     renderSidebar();

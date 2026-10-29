@@ -11,6 +11,7 @@ import {
   groupSidebarItems,
   isSidebarItemUnread,
   SidebarSectionKeys,
+  type ChannelSidebarSort,
   type ConversationSidebarSort,
   type SidebarItem,
   type SidebarSection,
@@ -23,10 +24,12 @@ const NO_CATEGORIES: SidebarCategory[] = [];
 // (see groupSidebarItems) under the user's view preferences.
 export function useSidebarSections({
   conversationSort,
+  channelSort,
   unreadSection,
   unreadOnly,
 }: {
   conversationSort: ConversationSidebarSort;
+  channelSort: ChannelSidebarSort;
   unreadSection: boolean;
   unreadOnly: boolean;
 }) {
@@ -67,12 +70,13 @@ export function useSidebarSections({
     () =>
       groupSidebarItems(channels ?? [], visibleConversations, categories, {
         conversationSort,
+        channelSort,
         unreadSection,
         unreadOnly,
         activeID: activeItemID,
         stickyUnreadID: stickyUnread.unread ? stickyUnread.id : undefined,
       }),
-    [channels, visibleConversations, categories, conversationSort, unreadSection, unreadOnly, activeItemID, stickyUnread],
+    [channels, visibleConversations, categories, conversationSort, channelSort, unreadSection, unreadOnly, activeItemID, stickyUnread],
   );
 
   const archivedChannels = useMemo(() => archivedSidebarChannels(channels ?? []), [channels]);

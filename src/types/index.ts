@@ -271,6 +271,9 @@ export interface UserChannel {
   // Read-only: the channel is archived. Listed in the sidebar's Archived
   // section, history readable, nobody can post.
   archived?: boolean;
+  // When the channel's last top-level message was posted (absent until one
+  // is): the sidebar's "Recent activity" sort.
+  lastMessageAt?: string;
   muted?: boolean;
   favorite?: boolean;
   categoryID?: string;

@@ -76,6 +76,53 @@ describe('groupSidebarItems', () => {
   });
 });
 
+describe('groupSidebarItems: channel sort', () => {
+  function chan(over: Partial<UserChannel>): UserChannel {
+    return { channelID: 'ch', channelName: 'ch', channelType: 'public', role: 1, ...over } as UserChannel;
+  }
+  const channels = [
+    chan({ channelID: 'alpha', channelName: 'alpha', sidebarPosition: 2000, lastMessageAt: '2026-10-29T12:00:00Z' }),
+    chan({ channelID: 'bravo', channelName: 'bravo', sidebarPosition: 1000, lastMessageAt: '2026-10-29T09:00:00Z' }),
+    chan({ channelID: 'quiet-b', channelName: 'Quiet-b' }),
+    chan({ channelID: 'quiet-a', channelName: 'quiet-a' }),
+    chan({ channelID: 'charlie', channelName: 'charlie', lastMessageAt: '2026-10-15T09:00:00Z', categoryID: 'work' }),
+    chan({ channelID: 'delta', channelName: 'delta', lastMessageAt: '2026-10-20T09:00:00Z', categoryID: 'work' }),
+    chan({ channelID: 'fav-old', channelName: 'fav-old', favorite: true, sidebarPosition: 1000, lastMessageAt: '2026-01-01T00:00:00Z' }),
+    chan({ channelID: 'fav-new', channelName: 'fav-new', favorite: true, sidebarPosition: 2000, lastMessageAt: '2026-10-29T10:00:00Z' }),
+  ];
+  const ids = (sections: ReturnType<typeof groupSidebarItems>, key: string) =>
+    sections.find((s) => s.key === key)!.items.map(sidebarItemID);
+
+  it("defaults to the user's own order, then A-Z", () => {
+    const sections = groupSidebarItems(channels, [], [cat({ id: 'work' })]);
+    expect(ids(sections, SidebarSectionKeys.Channels)).toEqual(['bravo', 'alpha', 'quiet-a', 'quiet-b']);
+    expect(ids(sections, 'work')).toEqual(['charlie', 'delta']);
+  });
+
+  it('puts the latest top-level message first, channels never posted in last (A-Z)', () => {
+    const sections = groupSidebarItems(channels, [], [cat({ id: 'work' })], { channelSort: 'recent' });
+    expect(ids(sections, SidebarSectionKeys.Channels)).toEqual(['alpha', 'bravo', 'quiet-a', 'quiet-b']);
+    expect(ids(sections, 'work')).toEqual(['delta', 'charlie']);
+    // Favorites keeps the hand-picked order whatever the channel sort.
+    expect(ids(sections, SidebarSectionKeys.Favorites)).toEqual(['fav-old', 'fav-new']);
+  });
+
+  it('ignores hand-placed positions while sorting by recent activity', () => {
+    const placed = [
+      chan({ channelID: 'top-by-hand', channelName: 'a', sidebarPosition: 1000, lastMessageAt: '2026-10-01T00:00:00Z' }),
+      chan({ channelID: 'busy', channelName: 'b', sidebarPosition: 9000, lastMessageAt: '2026-10-29T00:00:00Z' }),
+    ];
+    expect(ids(groupSidebarItems(placed, [], [], { channelSort: 'recent' }), SidebarSectionKeys.Channels)).toEqual([
+      'busy',
+      'top-by-hand',
+    ]);
+    expect(ids(groupSidebarItems(placed, [], [], { channelSort: 'az' }), SidebarSectionKeys.Channels)).toEqual([
+      'top-by-hand',
+      'busy',
+    ]);
+  });
+});
+
 describe('groupSidebarItems: unread view', () => {
   const ch = (over: Partial<UserChannel>): UserChannel =>
     ({ channelID: 'c', channelName: 'c', channelType: 'public', role: 1, ...over }) as UserChannel;

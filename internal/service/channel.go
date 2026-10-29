@@ -1040,6 +1040,7 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 				}
 				uc.Archived = ch.Archived
 				uc.ChannelName, uc.ChannelType = ch.Name, ch.Type
+				uc.LastMessageAt = ch.LastMessageAt
 				// Exact unread: messages added since this user last read.
 				// O(1) from the seq pair; survives reload and reconnect.
 				if n := ch.MessageSeq - uc.LastReadSeq; n > 0 {
@@ -1068,6 +1069,7 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 			keep[i] = true
 			uc.Archived = ch.Archived
 			uc.ChannelName, uc.ChannelType = ch.Name, ch.Type
+			uc.LastMessageAt = ch.LastMessageAt
 			// Exact unread: messages added since this user last read. O(1) from
 			// the seq pair — no per-channel count query. Survives reload and
 			// reconnect because both numbers are persisted.

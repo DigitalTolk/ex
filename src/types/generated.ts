@@ -1157,6 +1157,13 @@ export interface Channel {
    * every member is "caught up" and only new messages count — no backfill.
    */
   messageSeq?: number /* int64 */;
+  /**
+   * LastMessageAt is when the last top-level human message was posted —
+   * stamped by the same write that bumps MessageSeq. The sidebar's "Recent
+   * activity" sort orders channels by it. Unset on a channel nobody has
+   * posted in since it was introduced; those sort after the active ones.
+   */
+  lastMessageAt?: string /* RFC3339 */;
 }
 
 //////////
@@ -1922,6 +1929,12 @@ export interface UserChannel {
    * read time by ListUserChannels; the sidebar groups archived channels.
    */
   archived?: boolean;
+  /**
+   * LastMessageAt mirrors the channel's last top-level message time,
+   * stamped at read time by ListUserChannels for the sidebar's "Recent
+   * activity" sort.
+   */
+  lastMessageAt?: string /* RFC3339 */;
   /**
    * UnreadNotifyCount counts unread messages that actually ALERTED this
    * user per their notification rules (mentions, keywords, "all messages"

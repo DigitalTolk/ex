@@ -19,6 +19,7 @@ import {
   MoreVertical,
   Trash2,
   ArrowDownAZ,
+  Check,
   Clock3,
 } from 'lucide-react';
 import {
@@ -61,6 +62,12 @@ function SidebarSectionsSkeleton() {
   );
 }
 
+// SortCheck marks the sort a section is using in its sort menu.
+function SortCheck({ active }: { active: boolean }) {
+  if (!active) return null;
+  return <Check className="ml-auto h-4 w-4" aria-label="Selected" data-testid="sidebar-sort-selected" />;
+}
+
 export function Sidebar({ onClose }: SidebarProps) {
   const { user } = useAuth();
   const { hideConversation } = useUnread();
@@ -71,6 +78,8 @@ export function Sidebar({ onClose }: SidebarProps) {
   const { isDraggingCategory, dropIndicator, suppressedNavigationID, clearSuppressedNavigation } = useSidebarDrag(
     sidebarSections,
     categories,
+    // A hand-placed channel only shows in the user's own order.
+    () => view.setChannelSort('az'),
   );
   // The Archived section starts folded: archived channels are history, not
   // where work happens.
@@ -239,16 +248,48 @@ export function Sidebar({ onClose }: SidebarProps) {
                     </div>
                     {/* Hover-revealed actions per section type; always shown
                         (and finger-sized) on touch devices, which have no hover. */}
-                    {isChannelsDefault && !isGuest(user?.systemRole) && (
-                      <button
-                        onClick={() => setCreateChannelOpen(true)}
-                        aria-label="Create channel"
-                        title="Create channel"
-                        data-testid="sidebar-create-channel"
-                        className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:h-10 mobile:w-10"
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                      </button>
+                    {isChannelsDefault && (
+                      <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+                        {!isGuest(user?.systemRole) && (
+                          <button
+                            onClick={() => setCreateChannelOpen(true)}
+                            aria-label="Create channel"
+                            title="Create channel"
+                            data-testid="sidebar-create-channel"
+                            className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:h-10 mobile:w-10"
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                        {/* Desktop hover-only, like the DM sort menu below. */}
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            aria-label="Sort channels"
+                            data-testid="sidebar-channel-sort-menu"
+                            className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:hidden"
+                          >
+                            <MoreVertical className="h-3.5 w-3.5" />
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-52">
+                            <DropdownMenuItem
+                              onClick={() => view.setChannelSort('recent')}
+                              data-testid="sidebar-channel-sort-recent"
+                            >
+                              <Clock3 className="mr-2 h-4 w-4" />
+                              Recent activity
+                              <SortCheck active={view.channelSort === 'recent'} />
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => view.setChannelSort('az')}
+                              data-testid="sidebar-channel-sort-az"
+                            >
+                              <ArrowDownAZ className="mr-2 h-4 w-4" />
+                              A-Z
+                              <SortCheck active={view.channelSort === 'az'} />
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
                     )}
                     {isDMsDefault && (
                       <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
@@ -287,10 +328,12 @@ export function Sidebar({ onClose }: SidebarProps) {
                             <DropdownMenuItem onClick={() => view.setConversationSort('recent')}>
                               <Clock3 className="mr-2 h-4 w-4" />
                               Recent activity
+                              <SortCheck active={view.conversationSort === 'recent'} />
                             </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => view.setConversationSort('az')}>
                               <ArrowDownAZ className="mr-2 h-4 w-4" />
                               A-Z
+                              <SortCheck active={view.conversationSort === 'az'} />
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
