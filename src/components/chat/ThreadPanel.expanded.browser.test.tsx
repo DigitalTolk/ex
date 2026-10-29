@@ -36,10 +36,10 @@ vi.mock('@/hooks/useAttachments', () => ({
 let threadMessagesState: { data: unknown; isLoading: boolean } = { data: undefined, isLoading: false };
 const followThreadMutate = vi.fn();
 const unfollowThreadMutate = vi.fn();
-let userThreadsData: Array<{ parentID: string; parentType: 'channel' | 'conversation'; threadRootID: string }> = [];
+let followedThreads: Array<{ parentID: string; parentType: 'channel' | 'conversation'; threadRootID: string }> = [];
 
 vi.mock('@/hooks/useThreads', () => ({
-  useUserThreads: () => ({ data: userThreadsData }),
+  useThreadFollowing: (target: { threadRootID: string }) => ({ data: followedThreads.some((t) => t.threadRootID === target.threadRootID) }),
   useThreadMeta: () => undefined,
   useThreadMessages: () => threadMessagesState,
   useFollowThread: () => ({ mutate: followThreadMutate, isPending: false }),
@@ -157,9 +157,9 @@ describe('ThreadPanel expanded browser', () => {
     expect(document.querySelector('h2, [role="heading"]')).not.toBeNull();
   });
 
-  it('renders the follow/unfollow button reflecting userThreads state', async () => {
+  it('renders the follow/unfollow button from the thread\'s follow state', async () => {
     threadMessagesState = { data: [rootMsg(), reply('01J00R', 'r')], isLoading: false };
-    userThreadsData = [];
+    followedThreads = [];
     await mount();
     // When not following, the Bell icon button (Follow) renders.
     const followBtn = Array.from(document.querySelectorAll('button')).find(
@@ -170,7 +170,7 @@ describe('ThreadPanel expanded browser', () => {
 
   it('renders unfollow state when already following', async () => {
     threadMessagesState = { data: [rootMsg(), reply('01J00R', 'r')], isLoading: false };
-    userThreadsData = [{ parentID: 'ch-1', parentType: 'channel', threadRootID: '01J0000000000000000000ROOT' }];
+    followedThreads = [{ parentID: 'ch-1', parentType: 'channel', threadRootID: '01J0000000000000000000ROOT' }];
     await mount();
     // Either label works — Unfollow / Stop notifying / Following.
     const btn = Array.from(document.querySelectorAll('button')).find(
@@ -188,7 +188,7 @@ describe('ThreadPanel expanded browser', () => {
       ],
       isLoading: false,
     };
-    userThreadsData = [];
+    followedThreads = [];
     const screen = await mount({ channelId: undefined, conversationId: 'conv-1' });
     await expect.element(screen.getByText('thread root question')).toBeVisible();
     await expect.element(screen.getByText('a reply')).toBeVisible();
@@ -203,7 +203,7 @@ describe('ThreadPanel expanded browser', () => {
       ],
       isLoading: false,
     };
-    userThreadsData = [];
+    followedThreads = [];
     const screen = await mount({ anchorMsgId: '01J00R-anchor', anchorRevision: 'r1' });
     await expect.element(screen.getByText('anchored reply')).toBeVisible();
   });

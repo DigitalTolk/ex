@@ -356,6 +356,17 @@ func threadFollowGSI1PK(parentID, threadRootID string) string {
 	return "THREADFOLLOW#" + parentID + "#" + threadRootID
 }
 
+// threadActivityGSI2PK lists a user's followed threads in GSI2, ordered by
+// threadActivitySK: read backwards, latest reply first (the /threads page).
+func threadActivityGSI2PK(userID string) string { return "THREADACT#" + userID }
+
+// threadActivityTimeLayout is fixed-width, so the keys sort by time.
+const threadActivityTimeLayout = "2006-01-02T15:04:05.000000000Z"
+
+func threadActivitySK(at time.Time, parentID, threadRootID string) string {
+	return at.UTC().Format(threadActivityTimeLayout) + "#" + parentID + "#" + threadRootID
+}
+
 // threadGSI1PK indexes a thread's replies under GSI1 so the whole thread can be
 // fetched with one Query instead of scanning the parent's message partition.
 // threadRootID is a globally-unique message ULID, so it alone identifies the

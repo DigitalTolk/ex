@@ -442,12 +442,12 @@ describe('ChatPage WS router (browser)', () => {
       expect(keys).toEqual([['userState']]);
     });
 
-    it('a thread followed or unfollowed elsewhere refetches the thread list and its alerts', async () => {
+    it('a thread followed or unfollowed elsewhere refetches its Follow button and its alerts', async () => {
       const { qc } = await renderChatPage();
       const spy = vi.spyOn(qc, 'invalidateQueries');
       lastHandlers().onUserChannelUpdated?.({ threads: true });
       const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
-      expect(keys).toEqual([['userThreads'], ['userState']]);
+      expect(keys).toEqual([['threadFollow'], ['userState']]);
     });
 
     it('the echo of THIS tab\'s own user-state write does not refetch at all', async () => {

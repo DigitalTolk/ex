@@ -2418,6 +2418,18 @@ export interface ThreadFollow {
   threadRootID: string;
   following: boolean;
   updatedAt: string /* RFC3339 */;
+  /**
+   * LastActivityAt is the thread's latest reply (its root's time while it
+   * has none): where a followed thread sorts in the user's /threads list.
+   */
+  lastActivityAt?: string /* RFC3339 */;
+}
+/**
+ * ThreadRef names one thread: its parent and its root message.
+ */
+export interface ThreadRef {
+  parentID: string;
+  threadRootID: string;
 }
 
 //////////

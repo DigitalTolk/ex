@@ -60,7 +60,7 @@ vi.mock('@/hooks/useMessages', () => ({
 
 let threadMessagesState: { data: unknown; isLoading: boolean } = { data: undefined, isLoading: false };
 vi.mock('@/hooks/useThreads', () => ({
-  useUserThreads: () => ({ data: [] }),
+  useThreadFollowing: () => ({ data: false }),
   useThreadMessages: () => threadMessagesState,
   useFollowThread: () => ({ mutate: vi.fn(), isPending: false }),
   useUnfollowThread: () => ({ mutate: vi.fn(), isPending: false }),

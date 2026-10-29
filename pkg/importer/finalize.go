@@ -152,7 +152,7 @@ func (im *Importer) finalizeThread(ctx context.Context, parentID, parentType str
 		if uid == "" || uid == SystemAuthorID || uid == WebhookAuthorID {
 			continue
 		}
-		f := &model.ThreadFollow{UserID: uid, ParentID: parentID, ParentType: parentType, ThreadRootID: rootID, Following: true, UpdatedAt: now}
+		f := &model.ThreadFollow{UserID: uid, ParentID: parentID, ParentType: parentType, ThreadRootID: rootID, Following: true, UpdatedAt: now, LastActivityAt: &replies[0].CreatedAt}
 		if err := im.follows.SetThreadFollowIfAbsent(ctx, f); err != nil {
 			return false, follows, fmt.Errorf("importer: thread follow: %w", err)
 		}

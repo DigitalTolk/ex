@@ -197,6 +197,7 @@ func NewRouter(d *Deps) http.Handler {
 	// ------------------------------------------------------------------ Threads (cross-parent)
 	if threadH != nil {
 		mux.Handle("GET /api/v1/threads", middleware.WrapFunc(threadH.List, authMW))
+		mux.Handle("GET /api/v1/threads/{parentType}/{parentID}/{threadRootID}/follow", middleware.WrapFunc(threadH.FollowState, authMW))
 		mux.Handle("PUT /api/v1/threads/{parentType}/{parentID}/{threadRootID}/follow", middleware.WrapFunc(threadH.Follow, authMW))
 		mux.Handle("DELETE /api/v1/threads/{parentType}/{parentID}/{threadRootID}/follow", middleware.WrapFunc(threadH.Unfollow, authMW))
 	}

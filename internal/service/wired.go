@@ -37,6 +37,7 @@ func (s *ChannelService) Wired() error {
 		wiring.Dep{Name: "conversation converter", Set: s.conversions != nil && s.convertedDrafts != nil},
 		wiring.Dep{Name: "activity recorder", Set: s.activity != nil},
 		wiring.Dep{Name: "reminder sync", Set: s.reminders != nil},
+		wiring.Dep{Name: "thread state sync", Set: s.threadState != nil},
 	)
 }
 

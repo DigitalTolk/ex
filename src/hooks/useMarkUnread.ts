@@ -56,8 +56,6 @@ export function applyMarkUnread(qc: QueryClient, res: MarkUnreadResult): void {
           }
         : prev,
     );
-    // A thread the user never posted in joins their Threads list now.
-    void qc.invalidateQueries({ queryKey: queryKeys.userThreads() });
     return;
   }
   holdRead(res.parentID);

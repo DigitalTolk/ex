@@ -168,6 +168,16 @@ function renderAt(path: string, qcSeed?: (qc: QueryClient) => void) {
   };
 }
 
+// listedThreads seeds the Threads page's list for one visit.
+function threadPagesData(threads: Array<Record<string, unknown>>) {
+  return { pages: [{ threads }], pageParams: [''] };
+}
+
+function listedThreadRows(qc: QueryClient): Array<{ threadRootID: string; replyCount: number }> {
+  const data = qc.getQueryData<{ pages: { threads: { threadRootID: string; replyCount: number }[] }[] }>(['threadPages', 'v1']);
+  return (data?.pages ?? []).flatMap((p) => p.threads);
+}
+
 describe('ChatPage WebSocket handlers', () => {
   beforeEach(() => {
     // The attention model is a module singleton — a hard-away latched by one
@@ -400,7 +410,7 @@ describe('ChatPage WebSocket handlers', () => {
     expect(bumpChannelUnread).not.toHaveBeenCalled();
   });
 
-  it('onMessageNew with parentMessageID invalidates the thread scope but NOT userThreads (which is patched from the root edit instead)', () => {
+  it('onMessageNew with parentMessageID invalidates the thread scope but no threads list (cards are patched from the root edit instead)', () => {
     const { qc } = renderAt('/');
     const spy = vi.spyOn(qc, 'invalidateQueries');
     (capturedOptions.onMessageNew as (d: unknown) => void)(msg({
@@ -409,9 +419,9 @@ describe('ChatPage WebSocket handlers', () => {
     }));
     const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
     expect(calls).toContainEqual(['thread', 'channels/ch-1', 'msg-root']);
-    // No userThreads refetch — an eventually-consistent re-read would race the
-    // just-written state; /threads is patched from the root's message.edited.
-    expect(calls).not.toContainEqual(['userThreads']);
+    // No threads list refetch: a Threads card is patched from the root's
+    // message.edited.
+    expect(calls).not.toContainEqual(['threadPages']);
   });
 
   it('onMessageNew appends a reply into an open thread cache instead of invalidating it', () => {
@@ -433,26 +443,19 @@ describe('ChatPage WebSocket handlers', () => {
     ]);
   });
 
-  it('onThreadUpdated patches a thread the viewer did not author into /threads (participant-scoped)', () => {
+  it('onThreadUpdated patches the listed card of a thread the viewer did not author, and adds none', () => {
+    const listedRow = { parentID: 'ch-1', parentType: 'channel', threadRootID: 'root-x', rootAuthorID: 'someone-else', rootBody: 'not mine', rootCreatedAt: '2026-05-01T09:00:00Z', replyCount: 1, latestActivityAt: '2026-05-01T09:30:00Z' };
     const { qc } = renderAt('/', (client) => {
-      client.setQueryData(['userThreads'], []);
+      client.setQueryData(['threadPages', 'v1'], threadPagesData([listedRow]));
     });
     const spy = vi.spyOn(qc, 'invalidateQueries');
-    (capturedOptions.onThreadUpdated as (d: unknown) => void)({
-      parentID: 'ch-1',
-      parentType: 'channel',
-      threadRootID: 'root-x',
-      rootAuthorID: 'someone-else',
-      rootBody: 'not mine',
-      rootCreatedAt: '2026-05-01T09:00:00Z',
-      replyCount: 4,
-      latestActivityAt: '2026-05-01T10:00:00Z',
-    });
-    const threads = qc.getQueryData(['userThreads']) as Array<{ threadRootID: string; replyCount: number }>;
-    // Added even though the viewer isn't the author — receipt is the participation proof.
-    expect(threads?.[0]).toMatchObject({ threadRootID: 'root-x', replyCount: 4 });
-    // Patched from the event payload — no ListUserThreads refetch.
-    expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).not.toContainEqual(['userThreads']);
+    (capturedOptions.onThreadUpdated as (d: unknown) => void)({ ...listedRow, replyCount: 4, latestActivityAt: '2026-05-01T10:00:00Z' });
+    (capturedOptions.onThreadUpdated as (d: unknown) => void)({ ...listedRow, threadRootID: 'root-new' });
+    const threads = listedThreadRows(qc);
+    expect(threads).toHaveLength(1);
+    expect(threads[0]).toMatchObject({ threadRootID: 'root-x', replyCount: 4 });
+    // Patched from the event payload — no refetch.
+    expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).not.toContainEqual(['threadPages']);
   });
 
   it('onThreadUpdated ignores a malformed payload', () => {
@@ -460,7 +463,7 @@ describe('ChatPage WebSocket handlers', () => {
     expectInvalidPayloadReported('thread.updated', () =>
       (capturedOptions.onThreadUpdated as (d: unknown) => void)({ threadRootID: '' }),
     );
-    expect(qc.getQueryData(['userThreads'])).toBeUndefined();
+    expect(qc.getQueryData(['threadPages', 'v1'])).toBeUndefined();
   });
 
   // The root's echo reaches the whole channel, so it updates a thread already
@@ -468,9 +471,9 @@ describe('ChatPage WebSocket handlers', () => {
   // new row comes with thread.updated, sent to followers only).
   it('onMessageEdited for a thread root patches its listed row live (no refetch), and adds none', () => {
     const { qc } = renderAt('/', (client) => {
-      client.setQueryData(['userThreads'], [
+      client.setQueryData(['threadPages', 'v1'], threadPagesData([
         { parentID: 'ch-1', parentType: 'channel', threadRootID: 'msg-root', rootAuthorID: 'u-other', rootBody: 'hi', rootCreatedAt: '2026-05-01T09:00:00Z', replyCount: 1, latestActivityAt: '2026-05-01T09:30:00Z' },
-      ]);
+      ]));
     });
     const spy = vi.spyOn(qc, 'invalidateQueries');
     (capturedOptions.onMessageEdited as (d: unknown) => void)(
@@ -479,19 +482,15 @@ describe('ChatPage WebSocket handlers', () => {
     (capturedOptions.onMessageEdited as (d: unknown) => void)(
       msg({ id: 'msg-mine', authorID: 'u-me', parentType: 'channel', replyCount: 1, lastReplyAt: '2026-05-01T10:00:00Z' }),
     );
-    const threads = qc.getQueryData(['userThreads']) as Array<{ threadRootID: string; replyCount: number }>;
+    const threads = listedThreadRows(qc);
     expect(threads).toHaveLength(1);
     expect(threads[0]).toMatchObject({ threadRootID: 'msg-root', replyCount: 2 });
     // Patched, not refetched.
-    expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).not.toContainEqual(['userThreads']);
+    expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).not.toContainEqual(['threadPages']);
   });
 
-  it('onNotification does NOT refetch /threads when the thread is already patched into the cache', () => {
-    const { qc } = renderAt('/', (client) => {
-      client.setQueryData(['userThreads'], [
-        { parentID: 'ch-1', parentType: 'channel', threadRootID: 'msg-root', rootAuthorID: 'u-me', rootBody: 'hi', rootCreatedAt: '2026-05-01T09:00:00Z', replyCount: 1, latestActivityAt: '2026-05-01T10:00:00Z' },
-      ]);
-    });
+  it('onNotification for a thread reply refetches no threads list', () => {
+    const { qc } = renderAt('/');
     const spy = vi.spyOn(qc, 'invalidateQueries');
     (capturedOptions.onNotification as (d: unknown) => void)({
       kind: 'thread_reply',
@@ -500,7 +499,7 @@ describe('ChatPage WebSocket handlers', () => {
       parentMessageID: 'msg-root',
       createdAt: '2026-05-01T10:00:01Z',
     });
-    expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).not.toContainEqual(['userThreads']);
+    expect(spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey)).not.toContainEqual(['threadPages']);
   });
 
   it('onMessageNew marks the active thread seen instead of leaving it unread', () => {
@@ -612,7 +611,6 @@ describe('ChatPage WebSocket handlers', () => {
 
     const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
     expect(markThreadNotificationUnread).toHaveBeenCalledWith('msg-root');
-    expect(calls).toContainEqual(['userThreads']);
     expect(calls).toContainEqual(['userState']);
     expect(dispatchNotification).toHaveBeenCalled();
   });
@@ -663,7 +661,7 @@ describe('ChatPage WebSocket handlers', () => {
     expect(apiFetch).toHaveBeenCalledWith('/api/v1/user-state/threads/channels/ch-1/msg-root/seen', { method: 'PUT' });
   });
 
-  it('onMessageDeleted on a thread reply invalidates that thread + userThreads', () => {
+  it('onMessageDeleted on a thread reply invalidates that thread', () => {
     // Regression: the backend now ships parentMessageID in the deleted
     // payload, and the client routes it to the thread query. Without
     // this, deleting a reply leaves the sidebar / /threads page stale.
@@ -693,7 +691,6 @@ describe('ChatPage WebSocket handlers', () => {
     expect(calls).not.toContainEqual(['channelMessages', 'ch-1']);
     expect(calls).toContainEqual(['thread', 'channels/ch-1', 'msg-root']);
     expect(calls).toContainEqual(['thread', 'conversations/ch-1', 'msg-root']);
-    expect(calls).toContainEqual(['userThreads']);
     const list = qc.getQueryData<{ pages: { items: { id: string; body: string; deleted?: boolean }[] }[] }>([
       'channelMessages', 'ch-1', null,
     ]);
@@ -710,7 +707,6 @@ describe('ChatPage WebSocket handlers', () => {
     (capturedOptions.onMessageDeleted as (d: unknown) => void)(msg({ id: 'msg-root' }));
     const calls = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
     expect(calls).toContainEqual(['thread', 'channels/ch-1', 'msg-root']);
-    expect(calls).toContainEqual(['userThreads']);
   });
 
   it('onMessageEdited patches the cached message in the open channel', () => {
@@ -744,7 +740,6 @@ describe('ChatPage WebSocket handlers', () => {
     for (const key of [
       ['userChannels'],
       ['userConversations'],
-      ['userThreads'],
       ['userState'],
       ['drafts'],
       ['scheduledMessages'],
@@ -1416,7 +1411,7 @@ describe('ChatPage WebSocket handlers', () => {
     };
     const { qc } = renderAt('/threads', (seed) => {
       seed.setQueryData(threadKey, [otherRoot, otherReply]);
-      seed.setQueryData(['userThreads'], [
+      seed.setQueryData(['threadPages', 'v1'], threadPagesData([
         {
           parentID: 'ch-1',
           parentType: 'channel',
@@ -1427,7 +1422,7 @@ describe('ChatPage WebSocket handlers', () => {
           replyCount: 1,
           latestActivityAt: '2026-07-06T09:05:00Z',
         },
-      ]);
+      ]));
     });
 
     act(() => {

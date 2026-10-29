@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -214,4 +215,45 @@ func TestUserStateService_SkillDiscoveryPrefs(t *testing.T) {
 	if set, err := svc.HiddenSkillSet(ctx, ""); err != nil || len(set) != 0 {
 		t.Fatalf("empty user set = %#v err=%v", set, err)
 	}
+}
+
+// Leaving a channel drops the unread markers of its threads (they can't be
+// opened there any more, and would keep the sidebar's Threads dot lit) — and
+// only those.
+func TestUserStateService_ParentLeft_DropsThatChannelsThreadMarkers(t *testing.T) {
+	store := newMockUserStateStore()
+	publisher := newMockPublisher()
+	svc := NewUserStateService(store, publisher)
+	ctx := context.Background()
+	at := time.Now()
+	for _, row := range []*model.UserStateItem{
+		{UserID: "u-1", Kind: model.UserStateThreadNotification, TargetID: "left-root", ParentID: "ch-left", ThreadRootID: "left-root", UpdatedAt: at},
+		{UserID: "u-1", Kind: model.UserStateThreadNotification, TargetID: "kept-root", ParentID: "ch-kept", ThreadRootID: "kept-root", UpdatedAt: at},
+		{UserID: "u-1", Kind: model.UserStateThreadSeen, TargetID: "seen-root", ParentID: "ch-left", ThreadRootID: "seen-root", UpdatedAt: at},
+	} {
+		store.rows[store.key(row.UserID, row.Kind, row.TargetID)] = row
+	}
+
+	svc.ParentLeft(ctx, []string{"u-1"}, "ch-left")
+
+	rows, _ := store.ListUserState(ctx, "u-1")
+	left := map[string]bool{}
+	for _, r := range rows {
+		left[r.TargetID] = true
+	}
+	if left["left-root"] || !left["kept-root"] || !left["seen-root"] {
+		t.Fatalf("rows left = %v, want only the left channel's marker gone", left)
+	}
+	if len(publisher.published) != 1 {
+		t.Fatalf("published = %d, want the user's clients told once", len(publisher.published))
+	}
+
+	// Failures are logged and skipped; no store, nothing to do.
+	store.rows[store.key("u-1", model.UserStateThreadNotification, "left-root")] = &model.UserStateItem{UserID: "u-1", Kind: model.UserStateThreadNotification, TargetID: "left-root", ParentID: "ch-left"}
+	store.deleteErr = errors.New("dynamo down")
+	svc.ParentLeft(ctx, []string{"u-1"}, "ch-left")
+	store.deleteErr = nil
+	store.listErr = errors.New("dynamo down")
+	svc.ParentLeft(ctx, []string{"u-1"}, "ch-left")
+	NewUserStateService(nil, publisher).ParentLeft(ctx, []string{"u-1"}, "ch-left")
 }

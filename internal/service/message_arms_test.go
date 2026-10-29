@@ -88,9 +88,7 @@ func TestFollowMentionedThreadUsersDedupsMentions(t *testing.T) {
 	}
 }
 
-func TestListUserThreadsGuardArms(t *testing.T) {
-	ctx := context.Background()
-
+func TestScanUserThreadsGuardArms(t *testing.T) {
 	t.Run("non-thread user-state items and foreign-parent keys are skipped", func(t *testing.T) {
 		svc, messages, memberships, _, _ := setupMessageService()
 		seedMembership(memberships, "ch1", "user-1")
@@ -104,9 +102,9 @@ func TestListUserThreadsGuardArms(t *testing.T) {
 		svc.SetThreadFollowStore(follows)
 		messages.messages["ch1#root-1"] = &model.Message{ID: "root-1", ParentID: "ch1", AuthorID: "user-1", Body: "root", ReplyCount: 1}
 
-		got, err := svc.ListUserThreads(ctx, "user-1")
+		got, err := scanThreads(svc, "user-1")
 		if err != nil {
-			t.Fatalf("ListUserThreads: %v", err)
+			t.Fatalf("scan: %v", err)
 		}
 		if len(got) != 1 || got[0].ThreadRootID != "root-1" {
 			t.Fatalf("threads = %v, want only ch1/root-1", got)
@@ -119,9 +117,9 @@ func TestListUserThreadsGuardArms(t *testing.T) {
 		follows := newMockThreadFollowStore()
 		follows.follows[threadFollowMockKey("user-1", "ch1", "gone-root")] = &model.ThreadFollow{UserID: "user-1", ParentID: "ch1", ThreadRootID: "gone-root", Following: true}
 		svc.SetThreadFollowStore(follows)
-		got, err := svc.ListUserThreads(ctx, "user-1")
+		got, err := scanThreads(svc, "user-1")
 		if err != nil {
-			t.Fatalf("ListUserThreads: %v", err)
+			t.Fatalf("scan: %v", err)
 		}
 		if len(got) != 0 {
 			t.Fatalf("threads = %v, want none (root not in window)", got)
@@ -132,9 +130,9 @@ func TestListUserThreadsGuardArms(t *testing.T) {
 		svc, messages, memberships, _, _ := setupMessageService()
 		seedMembership(memberships, "ch1", "user-1")
 		messages.listErr = errors.New("list boom")
-		got, err := svc.ListUserThreads(ctx, "user-1")
+		got, err := scanThreads(svc, "user-1")
 		if err != nil {
-			t.Fatalf("ListUserThreads: %v", err)
+			t.Fatalf("scan: %v", err)
 		}
 		if len(got) != 0 {
 			t.Fatalf("threads = %v, want none", got)

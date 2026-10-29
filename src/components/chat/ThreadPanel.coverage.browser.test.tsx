@@ -120,9 +120,9 @@ vi.mock('@/hooks/useMessages', () => ({
 let threadMessagesState: { data: unknown; isLoading: boolean } = { data: undefined, isLoading: false };
 const followThreadMutate = vi.fn();
 const unfollowThreadMutate = vi.fn();
-let userThreadsData: Array<{ parentID: string; parentType: 'channel' | 'conversation'; threadRootID: string }> = [];
+let followedThreads: Array<{ parentID: string; parentType: 'channel' | 'conversation'; threadRootID: string }> = [];
 vi.mock('@/hooks/useThreads', () => ({
-  useUserThreads: () => ({ data: userThreadsData }),
+  useThreadFollowing: (target: { threadRootID: string }) => ({ data: followedThreads.some((t) => t.threadRootID === target.threadRootID) }),
   useThreadMessages: () => threadMessagesState,
   useFollowThread: () => ({ mutate: followThreadMutate, isPending: false }),
   useUnfollowThread: () => ({ mutate: unfollowThreadMutate, isPending: false }),
@@ -217,7 +217,7 @@ beforeEach(() => {
   isMobileValue = false;
   editAttachmentsState = { map: new Map(), isLoading: false };
   threadMessagesState = { data: [rootMsg(), reply('R1', 'a reply')], isLoading: false };
-  userThreadsData = [];
+  followedThreads = [];
   draftState = { data: undefined };
   editMessageMutate.mockReset();
   sendMutate.mockReset();
@@ -228,7 +228,7 @@ beforeEach(() => {
 
 describe('ThreadPanel coverage — follow / unfollow', () => {
   it('follows a thread when not currently following', async () => {
-    userThreadsData = [];
+    followedThreads = [];
     const screen = await mount();
     await screen.getByRole('button', { name: 'Follow thread' }).click();
     expect(followThreadMutate).toHaveBeenCalledWith({ parentID: 'ch-1', parentType: 'channel', threadRootID: 'ROOT' });
@@ -236,7 +236,7 @@ describe('ThreadPanel coverage — follow / unfollow', () => {
   });
 
   it('unfollows a thread when already following', async () => {
-    userThreadsData = [{ parentID: 'ch-1', parentType: 'channel', threadRootID: 'ROOT' }];
+    followedThreads = [{ parentID: 'ch-1', parentType: 'channel', threadRootID: 'ROOT' }];
     const screen = await mount();
     await screen.getByRole('button', { name: 'Unfollow thread' }).click();
     expect(unfollowThreadMutate).toHaveBeenCalledWith({ parentID: 'ch-1', parentType: 'channel', threadRootID: 'ROOT' });

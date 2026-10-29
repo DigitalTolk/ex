@@ -32,8 +32,14 @@ describe('queryKeys factory', () => {
   it('list-style keys (userChannels etc.) take no args', () => {
     expect(queryKeys.userChannels()).toEqual(['userChannels']);
     expect(queryKeys.userConversations()).toEqual(['userConversations']);
-    expect(queryKeys.userThreads()).toEqual(['userThreads']);
     expect(queryKeys.emojis()).toEqual(['emojis']);
+  });
+
+  it('thread list keys: one list per visit, one follow state per thread', () => {
+    expect(queryKeys.threadPages('visit-1')).toEqual(['threadPages', 'visit-1']);
+    expect(queryKeys.threadPagesAll()).toEqual(['threadPages']);
+    expect(queryKeys.threadFollow('ch-1', 'root-1')).toEqual(['threadFollow', 'ch-1', 'root-1']);
+    expect(queryKeys.threadFollowAll()).toEqual(['threadFollow']);
   });
 
   it('browseChannels falls back to no-arg form for global invalidation', () => {

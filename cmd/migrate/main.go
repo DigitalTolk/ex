@@ -22,6 +22,7 @@
 //	avatar-resize          shrink avatars stored before uploads were resized (S3 + Redis)
 //	thumbnail-webp         re-encode lossless WebP message thumbnails as lossy WebP (S3) [--workers=16]
 //	oidc-unbind            clear an account's pinned SSO identity so its next SSO login re-pins it --email=<address>
+//	thread-activity        order existing followed threads by latest reply for the paged /threads list
 //
 // Required environment variables (same as the `ex` server):
 //   - AWS_REGION
@@ -73,6 +74,7 @@ func commands() map[string]command {
 		"avatar-resize":         {"shrink avatars stored before uploads were resized (S3 + Redis)", runAvatarResize},
 		"thumbnail-webp":        {"re-encode lossless WebP message thumbnails as lossy WebP (S3) [--workers=16]", runThumbnailWebP},
 		"oidc-unbind":           {"clear an account's pinned SSO identity so its next SSO login re-pins it --email=<address>", runOIDCUnbind},
+		"thread-activity":       {"order existing followed threads by latest reply for the paged /threads list", runThreadActivity},
 	}
 }
 

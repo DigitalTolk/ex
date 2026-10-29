@@ -2,24 +2,17 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
-  useUserThreads,
+  useThreadFollowing,
   useFollowThread,
   useUnfollowThread,
   useThreadMessages,
   markThreadSeen,
-  hasUnreadActivity,
-  unreadThreadIDs,
-  sortThreadsByUnreadThenActivity,
   threadDeepLink,
   resetSeenCache,
   getSeenMap,
-  upsertUserThreadFromRoot,
-  upsertUserThreadRow,
-  userThreadInCache,
   type ThreadSummary,
 } from './useThreads';
 import { queryKeys } from '@/lib/query-keys';
-import type { Message } from '@/types';
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api', () => ({
@@ -76,11 +69,18 @@ const threadSummary = (overrides: Partial<ThreadSummary> = {}): ThreadSummary =>
 });
 
 describe('useThreads — queries and mutations', () => {
-  it('useUserThreads coerces a non-array response to []', async () => {
+  it('useThreadFollowing asks the follow path, and reads anything but true as not following', async () => {
     apiFetchMock.mockResolvedValue(null);
-    const screen = await renderHook(() => useUserThreads());
-    await new Promise((r) => setTimeout(r, 100));
-    expect(screen.getByTestId('probe').element().getAttribute('data-data')).toBe('[]');
+    const screen = await renderHook(() => useThreadFollowing({ parentID: 'ch-1', parentType: 'channel', threadRootID: 't-1' }));
+    await expect.poll(() => screen.getByTestId('probe').element().getAttribute('data-data')).toBe('false');
+    expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/threads/channels/ch-1/t-1/follow');
+  });
+
+  it('useThreadFollowing waits for a thread to ask about', async () => {
+    await renderHook(() => useThreadFollowing({ parentID: '', parentType: 'channel', threadRootID: 't-1' }));
+    await renderHook(() => useThreadFollowing({ parentID: 'ch-1', parentType: 'channel', threadRootID: 't-1' }, false));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(apiFetchMock).not.toHaveBeenCalled();
   });
 
   it('useThreadMessages is gated on having both parent and threadRootID', async () => {
@@ -118,6 +118,8 @@ describe('useThreads — queries and mutations', () => {
     await new Promise((r) => setTimeout(r, 200));
     expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/threads/channels/ch%201/t%201/follow');
     expect((apiFetchMock.mock.calls[0][1] as { method: string }).method).toBe('PUT');
+    // The thread's Follow button flips without asking again.
+    expect(qc.getQueryData(queryKeys.threadFollow('ch 1', 't 1'))).toBe(true);
   });
 
   it('useUnfollowThread DELETEs the same follow path', async () => {
@@ -135,10 +137,41 @@ describe('useThreads — queries and mutations', () => {
     await new Promise((r) => setTimeout(r, 200));
     expect(apiFetchMock.mock.calls[0][0]).toBe('/api/v1/threads/conversations/cv-1/t-1/follow');
     expect((apiFetchMock.mock.calls[0][1] as { method: string }).method).toBe('DELETE');
+    expect(qc.getQueryData(queryKeys.threadFollow('cv-1', 't-1'))).toBe(false);
+  });
+
+  // Following a listed thread marks its card; unfollowing takes the card off
+  // the Threads page at once — on every visit's list it is in.
+  it('a follow change updates the listed card, and an unfollow removes it', async () => {
+    apiFetchMock.mockResolvedValue(undefined);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const pages = { pages: [{ threads: [threadSummary({ threadRootID: 't-1', following: false }), threadSummary({ threadRootID: 't-2' })] }], pageParams: [''] };
+    qc.setQueryData(queryKeys.threadPages('v1'), pages);
+    const target = { parentID: 'ch-1', parentType: 'channel', threadRootID: 't-1' } as const;
+    function Buttons() {
+      const follow = useFollowThread();
+      const unfollow = useUnfollowThread();
+      return (
+        <>
+          <button data-testid="follow" onClick={() => follow.mutate(target)} />
+          <button data-testid="unfollow" onClick={() => unfollow.mutate(target)} />
+        </>
+      );
+    }
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <Buttons />
+      </QueryClientProvider>,
+    );
+    const listed = () => (qc.getQueryData(queryKeys.threadPages('v1')) as typeof pages).pages[0].threads;
+    (screen.getByTestId('follow').element() as HTMLButtonElement).click();
+    await expect.poll(() => listed()[0].following).toBe(true);
+    (screen.getByTestId('unfollow').element() as HTMLButtonElement).click();
+    await expect.poll(() => listed().map((t) => t.threadRootID)).toEqual(['t-2']);
   });
 });
 
-describe('useThreads — seen-state and sorting helpers', () => {
+describe('useThreads — seen-state and link helpers', () => {
   it('markThreadSeen persists the seen timestamp and triggers a CustomEvent', async () => {
     const handler = vi.fn();
     window.addEventListener('ex:threads-seen-changed', handler);
@@ -156,44 +189,6 @@ describe('useThreads — seen-state and sorting helpers', () => {
     markThreadSeen('t-1', '2026-04-04T12:00:00Z', { parentID: 'ch-1', parentType: 'channel' });
     expect(apiFetchMock).toHaveBeenCalled();
     expect(apiFetchMock.mock.calls[0][0]).toContain('/user-state/threads/channels/ch-1/t-1/seen');
-  });
-
-  it('hasUnreadActivity is true when no seen entry exists', () => {
-    expect(hasUnreadActivity(threadSummary(), {})).toBe(true);
-  });
-
-  it('hasUnreadActivity compares latestActivityAt to seenAt timestamps', () => {
-    const t = threadSummary({ latestActivityAt: '2026-01-10T00:00:00Z' });
-    expect(hasUnreadActivity(t, { 't-1': '2026-01-09T00:00:00Z' })).toBe(true);
-    expect(hasUnreadActivity(t, { 't-1': '2026-01-11T00:00:00Z' })).toBe(false);
-  });
-
-  it('unreadThreadIDs returns only listed threads that are actually unread', () => {
-    const threads = [
-      threadSummary({ threadRootID: 't-1', latestActivityAt: '2026-01-10T00:00:00Z' }),
-      threadSummary({ threadRootID: 't-2', latestActivityAt: '2026-01-08T00:00:00Z' }),
-    ];
-    const ids = unreadThreadIDs(
-      threads,
-      ['t-1', 't-3'], // server-side notifications (t-3 not listed → dropped)
-      new Set(['t-2']),
-      { 't-1': '2026-01-11T00:00:00Z' /* read */, 't-2': '2026-01-01T00:00:00Z' /* unread */ },
-    );
-    expect(ids.has('t-1')).toBe(false);
-    expect(ids.has('t-2')).toBe(true);
-    expect(ids.has('t-3')).toBe(false);
-  });
-
-  it('sortThreadsByUnreadThenActivity puts unread threads first, then by activity desc', () => {
-    const threads = [
-      threadSummary({ threadRootID: 'old-read', latestActivityAt: '2026-01-01T00:00:00Z' }),
-      threadSummary({ threadRootID: 'new-unread', latestActivityAt: '2026-01-05T00:00:00Z' }),
-      threadSummary({ threadRootID: 'newer-read', latestActivityAt: '2026-01-10T00:00:00Z' }),
-    ];
-    const sorted = sortThreadsByUnreadThenActivity(threads, new Set(['new-unread']));
-    expect(sorted[0].threadRootID).toBe('new-unread');
-    expect(sorted[1].threadRootID).toBe('newer-read');
-    expect(sorted[2].threadRootID).toBe('old-read');
   });
 
   it('threadDeepLink builds /channel/<slug>?thread=...#msg-... for a channel thread', () => {
@@ -258,166 +253,5 @@ describe('useThreads — seen-state and sorting helpers', () => {
     markThreadSeen('t-rej', '2026-04-04T12:00:00Z', { parentID: 'ch-1', parentType: 'channel' });
     await new Promise((r) => setTimeout(r, 50));
     expect(getSeenMap()['t-rej']).toBe('2026-04-04T12:00:00Z');
-  });
-
-  it('unreadThreadIDs skips threads with no recorded seen entry', () => {
-    const threads = [
-      threadSummary({ threadRootID: 't-seen', latestActivityAt: '2026-01-10T00:00:00Z' }),
-      threadSummary({ threadRootID: 't-noseen', latestActivityAt: '2026-01-10T00:00:00Z' }),
-    ];
-    const ids = unreadThreadIDs(
-      threads,
-      [], // no server notifications
-      new Set(),
-      { 't-seen': '2026-01-01T00:00:00Z' /* unread */ }, // t-noseen has no entry → skipped
-    );
-    expect(ids.has('t-seen')).toBe(true);
-    expect(ids.has('t-noseen')).toBe(false);
-  });
-
-  it('sortThreadsByUnreadThenActivity orders two unread threads by activity and tolerates bad dates', () => {
-    const threads = [
-      threadSummary({ threadRootID: 'a', latestActivityAt: '2026-01-02T00:00:00Z' }),
-      threadSummary({ threadRootID: 'b', latestActivityAt: 'not-a-real-date' }),
-      threadSummary({ threadRootID: 'c', latestActivityAt: '2026-01-09T00:00:00Z' }),
-    ];
-    // All three unread → aUnread === bUnread, so they sort purely by activity;
-    // the invalid date coerces to 0 and sinks to the bottom.
-    const sorted = sortThreadsByUnreadThenActivity(threads, new Set(['a', 'b', 'c']));
-    expect(sorted[0].threadRootID).toBe('c');
-    expect(sorted[2].threadRootID).toBe('b');
-  });
-
-  it('hasUnreadActivity falls back to the persisted seen-map when no map is passed', () => {
-    // Default `seen = loadSeen()` parameter (line 109). Persist a seen
-    // entry, then call without the seen arg so the default fires.
-    markThreadSeen('t-default-seen', '2026-01-11T00:00:00Z');
-    const t = threadSummary({ threadRootID: 't-default-seen', latestActivityAt: '2026-01-10T00:00:00Z' });
-    expect(hasUnreadActivity(t)).toBe(false);
-  });
-
-  it('unreadThreadIDs returns an empty set when called with no arguments (default params)', () => {
-    // Exercises the default params on lines 116-119.
-    expect(unreadThreadIDs().size).toBe(0);
-  });
-
-  it('sortThreadsByUnreadThenActivity returns [] when called with no arguments (default params)', () => {
-    // Exercises the default params on lines 146-147.
-    expect(sortThreadsByUnreadThenActivity()).toEqual([]);
-  });
-});
-
-function rootMsg(overrides: Partial<Message> = {}): Message {
-  return {
-    id: 'root-1',
-    parentID: 'ch-1',
-    parentType: 'channel',
-    authorID: 'me',
-    body: 'root body',
-    createdAt: '2026-05-01T09:00:00Z',
-    replyCount: 1,
-    lastReplyAt: '2026-05-01T10:00:00Z',
-    ...overrides,
-  };
-}
-
-describe('upsertUserThreadFromRoot / userThreadInCache', () => {
-  const row = (overrides: Partial<ThreadSummary> = {}): ThreadSummary => ({
-    parentID: 'ch-1', parentType: 'channel', threadRootID: 'root-1', rootAuthorID: 'me', rootBody: 'r1',
-    rootCreatedAt: '2026-05-01T08:00:00Z', replyCount: 1, latestActivityAt: '2026-05-01T08:30:00Z', ...overrides,
-  });
-
-  // The root's echo reaches everyone in the channel, so it can't say who
-  // follows the thread — the author of the root may have unfollowed it. New
-  // rows come from thread.updated, which goes to followers only.
-  it('never adds a thread, not even my own', () => {
-    const qc = new QueryClient();
-    expect(userThreadInCache(qc, 'root-1')).toBe(false);
-    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), []);
-    upsertUserThreadFromRoot(qc, rootMsg());
-    upsertUserThreadFromRoot(qc, rootMsg({ authorID: 'other' }));
-    expect(qc.getQueryData(queryKeys.userThreads())).toEqual([]);
-    expect(userThreadInCache(qc, 'root-1')).toBe(false);
-  });
-
-  it('updates an existing thread and re-sorts newest-first', () => {
-    const qc = new QueryClient();
-    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), [
-      row({ rootAuthorID: 'other' }),
-      row({ threadRootID: 'root-2', rootAuthorID: 'other', rootBody: 'r2', replyCount: 2, latestActivityAt: '2026-05-01T09:30:00Z' }),
-    ]);
-    upsertUserThreadFromRoot(qc, rootMsg({ id: 'root-1', authorID: 'other', replyCount: 2, lastReplyAt: '2026-05-01T11:00:00Z' }));
-    const list = qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads());
-    expect(list?.map((t) => t.threadRootID)).toEqual(['root-1', 'root-2']); // root-1 now newest
-    expect(list?.[0]).toMatchObject({ replyCount: 2, rootBody: 'root body', latestActivityAt: '2026-05-01T11:00:00Z' });
-    expect(userThreadInCache(qc, 'root-1')).toBe(true);
-  });
-
-  it('keeps whether I follow the thread', () => {
-    const qc = new QueryClient();
-    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), [row({ following: false })]);
-    upsertUserThreadFromRoot(qc, rootMsg({ replyCount: 2 }));
-    expect(qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads())?.[0]).toMatchObject({ replyCount: 2, following: false });
-  });
-
-  it('leaves an unloaded list for the fetch', () => {
-    const qc = new QueryClient();
-    upsertUserThreadFromRoot(qc, rootMsg());
-    expect(qc.getQueryData(queryKeys.userThreads())).toBeUndefined();
-  });
-
-  it('is a no-op for a non-root (has parentMessageID) or a root with no replies', () => {
-    const qc = new QueryClient();
-    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), [row()]);
-    upsertUserThreadFromRoot(qc, rootMsg({ parentMessageID: 'root-x', replyCount: 5 }));
-    upsertUserThreadFromRoot(qc, rootMsg({ replyCount: 0 }));
-    expect(qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads())?.[0].replyCount).toBe(1);
-  });
-
-  it('carries the conversation parentType and falls back to createdAt when lastReplyAt is absent', () => {
-    const qc = new QueryClient();
-    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), [row({ parentType: 'conversation', parentID: 'cv-1' })]);
-    upsertUserThreadFromRoot(qc, rootMsg({ parentType: 'conversation', parentID: 'cv-1', lastReplyAt: undefined }));
-    const list = qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads());
-    expect(list?.[0]).toMatchObject({
-      parentType: 'conversation',
-      parentID: 'cv-1',
-      // no lastReplyAt → latestActivityAt falls back to createdAt
-      latestActivityAt: '2026-05-01T09:00:00Z',
-    });
-  });
-
-  it('userThreadInCache is false on an empty cache', () => {
-    expect(userThreadInCache(new QueryClient(), 'root-1')).toBe(false);
-  });
-});
-
-describe('upsertUserThreadRow', () => {
-  it('inserts a new row unconditionally (participant-scoped — no author gate)', () => {
-    const qc = new QueryClient();
-    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), []);
-    // A thread the viewer did NOT author and isn't tracking yet — this is
-    // exactly what the author-gated upsertUserThreadFromRoot skips.
-    upsertUserThreadRow(qc, threadSummary({ threadRootID: 't-9', rootAuthorID: 'someone-else' }));
-    const list = qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads());
-    expect(list?.map((t) => t.threadRootID)).toEqual(['t-9']);
-  });
-
-  it('updates an existing row in place and re-sorts newest activity first', () => {
-    const qc = new QueryClient();
-    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), [
-      threadSummary({ threadRootID: 't-1', replyCount: 1, latestActivityAt: '2026-05-01T10:00:00Z' }),
-      threadSummary({ threadRootID: 't-2', latestActivityAt: '2026-05-01T09:00:00Z' }),
-    ]);
-    upsertUserThreadRow(qc, threadSummary({ threadRootID: 't-1', replyCount: 5, latestActivityAt: '2026-05-01T08:00:00Z' }));
-    const list = qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads());
-    // t-1 updated to replyCount 5 and, now the oldest, sorts below t-2.
-    expect(list?.map((t) => [t.threadRootID, t.replyCount])).toEqual([['t-2', 1], ['t-1', 5]]);
-  });
-
-  it('is a no-op when the payload has no threadRootID', () => {
-    const qc = new QueryClient();
-    upsertUserThreadRow(qc, threadSummary({ threadRootID: '' }));
-    expect(qc.getQueryData(queryKeys.userThreads())).toBeUndefined();
   });
 });

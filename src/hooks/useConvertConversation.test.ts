@@ -22,7 +22,7 @@ describe('followConvertedConversation', () => {
     });
     expect(qc.getQueryData(queryKeys.userConversations())).toEqual([{ conversationID: 'dm-1' }]);
     const keys = invalidate.mock.calls.map(([filters]) => filters?.queryKey);
-    expect(keys).toEqual([queryKeys.userConversations(), queryKeys.userChannels(), queryKeys.userThreads()]);
+    expect(keys).toEqual([queryKeys.userConversations(), queryKeys.userChannels(), queryKeys.threadPagesAll()]);
     expect(navigate).toHaveBeenCalledWith('/channel/ops?thread=r-1#msg-m-1', { replace: true });
   });
 

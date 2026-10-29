@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { QueryClient } from '@tanstack/react-query';
-import { mergeSeenMaps, unreadThreadIDs, upsertUserThreadRow, type ThreadSummary } from './useThreads';
+import { QueryClient, type InfiniteData } from '@tanstack/react-query';
+import { mergeSeenMaps, patchListedThread, patchListedThreadFromRoot, unreadThreadIDs, type ThreadPage, type ThreadSummary } from './useThreads';
 import { queryKeys } from '@/lib/query-keys';
+import type { Message } from '@/types';
 
 const summary = (overrides: Partial<ThreadSummary> = {}): ThreadSummary => ({
   parentID: 'ch-1',
@@ -15,30 +16,51 @@ const summary = (overrides: Partial<ThreadSummary> = {}): ThreadSummary => ({
   ...overrides,
 });
 
-describe('upsertUserThreadRow (jsdom)', () => {
-  it('inserts a new row and updates an existing one, sorting newest activity first', () => {
+function pagesData(...pages: ThreadSummary[][]): InfiniteData<ThreadPage> {
+  return { pages: pages.map((threads) => ({ threads })), pageParams: pages.map((_, i) => (i ? `c${i}` : '')) };
+}
+
+function listed(qc: QueryClient, visit = 'v1'): Array<[string, number, boolean | undefined]> {
+  const data = qc.getQueryData<InfiniteData<ThreadPage>>(queryKeys.threadPages(visit));
+  return (data?.pages ?? []).flatMap((p) => p.threads.map((t) => [t.threadRootID, t.replyCount, t.following] as [string, number, boolean | undefined]));
+}
+
+describe('listed threads are patched in place', () => {
+  it('a thread.updated rewrites the listed row, keeps its unread flag, and adds or moves nothing', () => {
     const qc = new QueryClient();
-    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), []);
-    upsertUserThreadRow(qc, summary({ threadRootID: 't-1', latestActivityAt: '2026-01-01T00:00:00Z' }));
-    upsertUserThreadRow(qc, summary({ threadRootID: 't-2', latestActivityAt: '2026-01-03T00:00:00Z' }));
-    upsertUserThreadRow(qc, summary({ threadRootID: 't-1', replyCount: 9, latestActivityAt: '2026-01-04T00:00:00Z' }));
-    const list = qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads());
-    expect(list?.map((t) => [t.threadRootID, t.replyCount])).toEqual([['t-1', 9], ['t-2', 1]]);
+    qc.setQueryData(queryKeys.threadPages('v1'), pagesData([summary({ threadRootID: 't-1', unread: true })], [summary({ threadRootID: 't-2' })]));
+    patchListedThread(qc, summary({ threadRootID: 't-2', replyCount: 9, latestActivityAt: '2026-01-09T00:00:00Z' }));
+    patchListedThread(qc, summary({ threadRootID: 't-new' }));
+    expect(listed(qc)).toEqual([['t-1', 1, undefined], ['t-2', 9, undefined]]);
+    patchListedThread(qc, summary({ threadRootID: 't-1', replyCount: 4 }));
+    const first = qc.getQueryData<InfiniteData<ThreadPage>>(queryKeys.threadPages('v1'))?.pages[0].threads[0];
+    expect(first?.unread).toBe(true);
+    expect(first?.replyCount).toBe(4);
   });
 
-  // A one-row list made from a single event would pass for the whole list
-  // until it went stale, so /threads opened on it would miss every other
-  // thread. With nothing loaded the next fetch reads the server's.
-  it('leaves an unloaded list for the fetch', () => {
+  it('a root edit updates the listed row from the root, and leaves replies and unlisted roots alone', () => {
     const qc = new QueryClient();
-    upsertUserThreadRow(qc, summary({ threadRootID: 't-1' }));
-    expect(qc.getQueryData(queryKeys.userThreads())).toBeUndefined();
+    qc.setQueryData(queryKeys.threadPages('v1'), pagesData([summary({ threadRootID: 't-1' })]));
+    const root = { id: 't-1', parentID: 'ch-1', authorID: 'u-2', body: 'edited', createdAt: '2026-01-01T00:00:00Z', replyCount: 3, lastReplyAt: '2026-01-05T00:00:00Z' } as Message;
+    patchListedThreadFromRoot(qc, root);
+    patchListedThreadFromRoot(qc, { ...root, id: 'r-1', parentMessageID: 't-1', body: 'a reply' });
+    let row = qc.getQueryData<InfiniteData<ThreadPage>>(queryKeys.threadPages('v1'))?.pages[0].threads[0];
+    expect(row).toMatchObject({ rootBody: 'edited', rootAuthorID: 'u-2', replyCount: 3, latestActivityAt: '2026-01-05T00:00:00Z' });
+    // A root without the reply fields keeps what the row had.
+    patchListedThreadFromRoot(qc, { ...root, replyCount: undefined, lastReplyAt: undefined, body: 'again' });
+    row = qc.getQueryData<InfiniteData<ThreadPage>>(queryKeys.threadPages('v1'))?.pages[0].threads[0];
+    expect(row).toMatchObject({ rootBody: 'again', replyCount: 3, latestActivityAt: '2026-01-05T00:00:00Z' });
+    // No list loaded: nothing to patch, nothing made up.
+    const empty = new QueryClient();
+    patchListedThreadFromRoot(empty, root);
+    expect(empty.getQueryData(queryKeys.threadPages('v1'))).toBeUndefined();
   });
+});
 
-  it('is a no-op when threadRootID is empty', () => {
-    const qc = new QueryClient();
-    upsertUserThreadRow(qc, summary({ threadRootID: '' }));
-    expect(qc.getQueryData(queryKeys.userThreads())).toBeUndefined();
+describe('unreadThreadIDs', () => {
+  it('is the server markers plus the alerts that arrived since', () => {
+    expect([...unreadThreadIDs(['t-1'], new Set(['t-2', 't-1']))].sort()).toEqual(['t-1', 't-2']);
+    expect(unreadThreadIDs().size).toBe(0);
   });
 });
 
@@ -75,20 +97,6 @@ describe('mergeSeenMaps', () => {
     expect(mergeSeenMaps({ a: 'not-a-date' }, { a: '2026-01-01T00:00:00Z' })['a']).toBe('2026-01-01T00:00:00Z');
   });
 
-  it('clears the unread badge end-to-end once the server watermark covers the reply', () => {
-    // Full GAP-2 shape through unreadThreadIDs: server notification row still
-    // listed, reply at T2, mobile read at T3 — the merged seen map must
-    // reconcile the thread OUT of the unread set.
-    const threads = [summary({ threadRootID: 't-1', latestActivityAt: '2026-07-14T12:00:02Z' })];
-    const merged = mergeSeenMaps(
-      { 't-1': '2026-07-14T12:00:03Z' },
-      { 't-1': '2026-07-14T12:00:01Z' },
-    );
-    expect(unreadThreadIDs(threads, ['t-1'], new Set(), merged).has('t-1')).toBe(false);
-    // Sanity: with the OLD spread semantics the stale local entry keeps it unread.
-    const stale = { 't-1': '2026-07-14T12:00:01Z' };
-    expect(unreadThreadIDs(threads, ['t-1'], new Set(), stale).has('t-1')).toBe(true);
-  });
 });
 
 describe('markThreadSeen user-state echo window', () => {
@@ -171,16 +179,23 @@ describe('mark as unread: seen-map rules', () => {
     expect(threadHasUnseen(qc, 't-1', '2026-01-03T00:00:00Z')).toBe(false);
   });
 
-  it('a real view (one that persists) drops the cached mark, which the server drops too', async () => {
+  it('seeing a thread drops its cached unread marker and mark, which the server drops too', async () => {
     const { markThreadSeen } = await import('./useThreads');
     const { queryClient } = await import('@/lib/query-client');
     const apiModule = await import('@/lib/api');
     const spy = vi.spyOn(apiModule, 'apiFetch').mockResolvedValue(undefined);
-    const base = { threadNotifications: [], threadSeen: {}, hiddenConversations: [], hiddenSkills: [] };
-    queryClient.setQueryData(queryKeys.userState(), { ...base, threadMarkedUnread: { 't-1': 'x', 't-2': 'y' } });
+    const base = { threadSeen: {}, hiddenConversations: [], hiddenSkills: [] };
+    queryClient.setQueryData(queryKeys.userState(), { ...base, threadNotifications: ['t-1', 't-5'], threadMarkedUnread: { 't-1': 'x', 't-2': 'y' } });
     markThreadSeen('t-1', '2026-01-09T00:00:00Z', { parentID: 'ch-1', parentType: 'channel' });
-    expect(queryClient.getQueryData<{ threadMarkedUnread: Record<string, string> }>(queryKeys.userState())?.threadMarkedUnread).toEqual({ 't-2': 'y' });
-    // No mark for this thread: the cached state is left as is.
+    let state = queryClient.getQueryData<{ threadMarkedUnread: Record<string, string>; threadNotifications: string[] }>(queryKeys.userState());
+    expect(state?.threadMarkedUnread).toEqual({ 't-2': 'y' });
+    expect(state?.threadNotifications).toEqual(['t-5']);
+    // Without a PUT (the user's own reply, which the server reads for them)
+    // the marker goes all the same.
+    markThreadSeen('t-5', '2026-01-09T00:00:00Z');
+    state = queryClient.getQueryData(queryKeys.userState());
+    expect(state?.threadNotifications).toEqual([]);
+    // Nothing marked for this thread: the cached state is left as is.
     const before = queryClient.getQueryData(queryKeys.userState());
     markThreadSeen('t-3', '2026-01-09T00:00:00Z', { parentID: 'ch-1', parentType: 'channel' });
     expect(queryClient.getQueryData(queryKeys.userState())).toBe(before);

@@ -43,8 +43,8 @@ func TestListUserThreads_NewAccountSkipsSeedScan(t *testing.T) {
 	u := signupUser(threadIndexEpoch.Add(30 * 24 * time.Hour))
 	svc, messages, follows := seedSkipService(t, u)
 
-	if _, err := svc.ListUserThreads(context.Background(), u.ID); err != nil {
-		t.Fatalf("ListUserThreads: %v", err)
+	if _, err := svc.ListThreadsPage(context.Background(), u.ID, "", 0); err != nil {
+		t.Fatalf("ListThreadsPage: %v", err)
 	}
 	if messages.listCalls.Load() != 0 {
 		t.Fatalf("legacy scan pages = %d, want 0 for a post-index account", messages.listCalls.Load())
@@ -55,7 +55,7 @@ func TestListUserThreads_NewAccountSkipsSeedScan(t *testing.T) {
 }
 
 // Everything that cannot prove "signed up in ex after the index" keeps the
-// one-time scan: pre-index accounts, and imported accounts — the importer
+// one-time background scan: pre-index accounts, and imported accounts — the importer
 // creates them with caller-chosen IDs, the source system's creation time, and
 // no notification settings.
 func TestListUserThreads_SeedScanStillRunsForOldOrImportedAccounts(t *testing.T) {
@@ -75,9 +75,11 @@ func TestListUserThreads_SeedScanStillRunsForOldOrImportedAccounts(t *testing.T)
 	} {
 		t.Run(name, func(t *testing.T) {
 			svc, messages, _ := seedSkipService(t, u)
-			if _, err := svc.ListUserThreads(context.Background(), u.ID); err != nil {
-				t.Fatalf("ListUserThreads: %v", err)
+			seeds := seedFinished(svc)
+			if _, err := svc.ListThreadsPage(context.Background(), u.ID, "", 0); err != nil {
+				t.Fatalf("ListThreadsPage: %v", err)
 			}
+			waitThreadSeed(t, seeds)
 			if messages.listCalls.Load() == 0 {
 				t.Fatal("seed scan skipped for an account that may have unindexed history")
 			}
@@ -91,19 +93,21 @@ func TestListUserThreads_SeedSkipDegradesToScan(t *testing.T) {
 	u := signupUser(threadIndexEpoch.Add(30 * 24 * time.Hour))
 
 	svc, messages, _ := seedSkipService(t, u)
+	seeds := seedFinished(svc)
 	users := newMockUserStore() // the account is missing here
 	svc.SetThreadSeedUsers(users)
-	if _, err := svc.ListUserThreads(context.Background(), u.ID); err != nil {
-		t.Fatalf("ListUserThreads: %v", err)
+	if _, err := svc.ListThreadsPage(context.Background(), u.ID, "", 0); err != nil {
+		t.Fatalf("ListThreadsPage: %v", err)
 	}
+	waitThreadSeed(t, seeds)
 	if messages.listCalls.Load() == 0 {
 		t.Fatal("seed scan skipped although the account could not be read")
 	}
 
 	svc2, messages2, follows2 := seedSkipService(t, u)
 	follows2.markErr = errors.New("dynamo down")
-	if _, err := svc2.ListUserThreads(context.Background(), u.ID); err != nil {
-		t.Fatalf("ListUserThreads: %v", err)
+	if _, err := svc2.ListThreadsPage(context.Background(), u.ID, "", 0); err != nil {
+		t.Fatalf("ListThreadsPage: %v", err)
 	}
 	if messages2.listCalls.Load() != 0 {
 		t.Fatalf("legacy scan pages = %d, want 0 even when the marker write fails", messages2.listCalls.Load())

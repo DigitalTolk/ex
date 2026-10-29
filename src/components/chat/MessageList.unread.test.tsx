@@ -483,11 +483,6 @@ describe('MessageList row memo and thread meta', () => {
 describe('MessageList thread reply bars', () => {
   it('marks the bar of a thread with unread replies', () => {
     const qc = new QueryClient();
-    const thread = (id: string) => ({
-      parentID: 'ch-1', parentType: 'channel', threadRootID: id, rootAuthorID: 'u-2', rootBody: '',
-      rootCreatedAt: '2026-10-07T09:00:00Z', replyCount: 2, latestActivityAt: '2026-10-07T10:00:00Z',
-    });
-    qc.setQueryData(queryKeys.userThreads(), [thread('m-05'), thread('m-06')]);
     qc.setQueryData(queryKeys.userState(), { threadNotifications: ['m-05'] });
     const items = pageOf(1, 10).items.map((m) =>
       m.id === 'm-05' || m.id === 'm-06' ? { ...m, replyCount: 2, recentReplyAuthorIDs: ['u-2'] } : m,

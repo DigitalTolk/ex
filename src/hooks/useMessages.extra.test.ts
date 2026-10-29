@@ -97,7 +97,7 @@ describe('useSendMessage (channel)', () => {
     // Tagged with its send's nonce, as the server would echo it.
     expect(queryClient.getQueryData(['thread', 'channels/ch-1', 'root'])).toEqual([root, { ...reply, clientNonce: expect.any(String) }]);
     const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
-    expect(keys).not.toContainEqual(['userThreads']);
+    expect(keys).not.toContainEqual(['threadPages']);
     expect(keys).not.toContainEqual(['thread', 'channels/ch-1', 'root']);
   });
 
@@ -128,15 +128,12 @@ describe('useSendMessage (channel)', () => {
     expect(queryClient.getQueryData(['thread', 'channels/ch-1', 'root'])).toBeUndefined();
   });
 
-  it('first reply to a thread MISSING from the cached /threads list refetches it (thread.updated may never fire)', async () => {
-    // The live `thread.updated` patch is gated on the server's reply-metadata
-    // bump succeeding. A sender whose reply just created their participation
-    // cannot depend on it: with a cached list lacking this thread's row, the
-    // send must invalidate userThreads so the row appears regardless.
+  // The Threads page keeps the list it loaded for its visit; a reply patches
+  // the thread's card from events and never refetches a list.
+  it('a reply refetches no threads list', async () => {
     const reply = { id: 'r-1', parentID: 'ch-1', parentMessageID: 'root', authorID: 'u-1', body: 'r', createdAt: '' };
     vi.mocked(apiFetch).mockResolvedValue(reply);
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    queryClient.setQueryData(['userThreads'], [{ threadRootID: 'other-thread' }]);
     const spy = vi.spyOn(queryClient, 'invalidateQueries');
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(QueryClientProvider, { client: queryClient }, children);
@@ -146,27 +143,10 @@ describe('useSendMessage (channel)', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
-    expect(keys).toContainEqual(['userThreads']);
+    expect(keys).not.toContainEqual(['threadPages']);
   });
 
-  it('a reply to a thread ALREADY in the cached /threads list does not refetch (the event patch owns it)', async () => {
-    const reply = { id: 'r-1', parentID: 'ch-1', parentMessageID: 'root', authorID: 'u-1', body: 'r', createdAt: '' };
-    vi.mocked(apiFetch).mockResolvedValue(reply);
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    queryClient.setQueryData(['userThreads'], [{ threadRootID: 'root' }]);
-    const spy = vi.spyOn(queryClient, 'invalidateQueries');
-    const wrapper = ({ children }: { children: ReactNode }) =>
-      createElement(QueryClientProvider, { client: queryClient }, children);
-
-    const { result } = renderHook(() => useSendMessage({ channelId: 'ch-1' }), { wrapper });
-    result.current.mutate({ body: 'r', attachmentIDs: [], parentMessageID: 'root' });
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-    const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
-    expect(keys).not.toContainEqual(['userThreads']);
-  });
-
-  it('non-thread send does NOT invalidate userThreads (avoids needless /threads refetches)', async () => {
+  it('non-thread send refetches no threads list either', async () => {
     const msg = { id: 'msg-x', parentID: 'ch-1', authorID: 'u-1', body: 'hi', createdAt: '' };
     vi.mocked(apiFetch).mockResolvedValue(msg);
 
@@ -180,7 +160,7 @@ describe('useSendMessage (channel)', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
-    expect(keys).not.toContainEqual(['userThreads']);
+    expect(keys).not.toContainEqual(['threadPages']);
   });
 
   it('arms the drafts-echo ignore window at MUTATE time, before the POST resolves', async () => {

@@ -4,7 +4,7 @@ import { Link, MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/query-keys';
 import ThreadsPage from '@/pages/ThreadsPage';
-import { markThreadSeen, resetSeenCache, sortThreadsByUnreadThenActivity, unreadThreadIDs, type ThreadSummary } from '@/hooks/useThreads';
+import { markThreadSeen, patchListedThread, resetSeenCache, type ThreadPage, type ThreadSummary } from '@/hooks/useThreads';
 
 const apiFetchMock = vi.fn();
 const unreadThreadNotifications = new Set<string>();
@@ -31,6 +31,7 @@ vi.mock('@/context/AuthContext', () => ({
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({ unreadThreadNotifications }),
+  useOptionalUnread: () => ({ unreadThreadNotifications }),
 }));
 
 const defaultUserState = {
@@ -46,7 +47,6 @@ vi.mock('@/hooks/useUserState', () => ({
   markLocalUserStateWrite: vi.fn(),
   shouldRefetchUserStateForRemoteUpdate: vi.fn(() => true),
   resetUserStateSessionState: vi.fn(),
-  useUserState: () => ({ data: mockUserStateData }),
 }));
 
 // Stub ThreadCard so this test focuses on the page-level orchestration:
@@ -105,20 +105,42 @@ const sample: ThreadSummary[] = [
   },
 ];
 
-function renderPage() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+// servePages answers the list requests from `pages`, one per request in
+// order, each pointing at the next.
+function servePages(...pages: ThreadSummary[][]) {
+  apiFetchMock.mockImplementation((url: string) => {
+    const match = /^\/api\/v1\/threads(?:\?cursor=r%3A(\d+))?$/.exec(url);
+    const i = match?.[1] ? Number(match[1]) : 0;
+    const page: ThreadPage = { threads: pages[i] ?? [], nextCursor: i + 1 < pages.length ? `r:${i + 1}` : undefined };
+    return Promise.resolve(page);
+  });
+}
+
+function renderPage(qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+  if (mockUserStateData) qc.setQueryData(queryKeys.userState(), mockUserStateData);
+  render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={['/threads']}>
         <Routes>
-          <Route path="/threads" element={<ThreadsPage />} />
+          <Route
+            path="/threads"
+            element={
+              <>
+                <Link to="/threads" data-testid="threads-nav">Threads</Link>
+                <ThreadsPage />
+              </>
+            }
+          />
           <Route path="/channel/:id" element={<div data-testid="channel-page" />} />
           <Route path="/conversation/:id" element={<div data-testid="conv-page" />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return qc;
 }
+
+const order = () => screen.getAllByTestId('thread-card').map((el) => el.getAttribute('data-thread-root-id'));
 
 describe('ThreadsPage', () => {
   beforeEach(() => {
@@ -130,7 +152,7 @@ describe('ThreadsPage', () => {
   });
 
   it('renders one ThreadCard per summary with the channel/conversation label as title', async () => {
-    apiFetchMock.mockResolvedValueOnce(sample);
+    servePages(sample);
     renderPage();
     await waitFor(() => {
       expect(screen.getAllByTestId('thread-card')).toHaveLength(2);
@@ -138,66 +160,42 @@ describe('ThreadsPage', () => {
     const titles = screen.getAllByTestId('thread-card-title').map((el) => el.textContent);
     expect(titles).toContain('~general');
     expect(titles).toContain('Bob');
+    expect(apiFetchMock).toHaveBeenCalledWith('/api/v1/threads');
   });
 
-  it('freezes the list per visit: a live change waits until Threads is opened again', async () => {
-    apiFetchMock.mockResolvedValueOnce(sample);
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter initialEntries={['/threads']}>
-          <Routes>
-            <Route
-              path="/threads"
-              element={
-                <>
-                  <Link to="/threads" data-testid="threads-nav">Threads</Link>
-                  <ThreadsPage />
-                </>
-              }
-            />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
-    await waitFor(() => expect(screen.getAllByTestId('thread-card')).toHaveLength(2));
-    const order = () => screen.getAllByTestId('thread-card').map((el) => el.getAttribute('data-thread-root-id'));
-    expect(order()).toEqual(['msg-root-1', 'msg-root-2']);
+  // The server lists the unread threads first; with none, that first page is
+  // empty and the page goes straight on to the rest.
+  it('goes on past an empty first page, and lists a thread once across pages', async () => {
+    servePages([], [sample[1]], [sample[1], sample[0]]);
+    renderPage();
+    await waitFor(() => expect(order()).toEqual(['msg-root-2', 'msg-root-1']));
+    expect(apiFetchMock).toHaveBeenCalledWith('/api/v1/threads?cursor=r%3A1');
+    // A thread on two pages (read between them) shows once.
+    expect(apiFetchMock).toHaveBeenCalledWith('/api/v1/threads?cursor=r%3A2');
+  });
 
-    // A reply lands in the older thread and a new thread becomes ours: the
-    // cache moves on, the page does not.
-    act(() => {
-      qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), [
-        { ...sample[1], replyCount: 2, latestActivityAt: '2026-04-27T09:00:00Z' },
-        sample[0],
-        { ...sample[0], threadRootID: 'msg-root-3', latestActivityAt: '2026-04-27T10:00:00Z' },
-      ]);
-    });
-    // React Query notifies observers on a tick: let it, then check nothing moved.
+  it('freezes the list per visit: a live change patches in place, and Threads opened again starts over', async () => {
+    servePages(sample);
+    const qc = renderPage();
+    await waitFor(() => expect(order()).toEqual(['msg-root-1', 'msg-root-2']));
+
+    // A reply lands in the older thread: its card updates, nothing moves.
+    act(() => patchListedThread(qc, { ...sample[1], replyCount: 2, latestActivityAt: '2026-04-27T09:00:00Z' }));
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(order()).toEqual(['msg-root-1', 'msg-root-2']);
 
-    // A thread you unfollow does leave at once: there is nothing to keep.
-    act(() => {
-      qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), [
-        sample[0],
-        { ...sample[0], threadRootID: 'msg-root-3', latestActivityAt: '2026-04-27T10:00:00Z' },
-      ]);
-    });
-    await waitFor(() => expect(order()).toEqual(['msg-root-1']));
-
     // Opening Threads again (the sidebar link, even while here) reloads it.
+    servePages([{ ...sample[0], threadRootID: 'msg-root-3' }, ...sample]);
     act(() => {
       screen.getByTestId('threads-nav').click();
     });
-    await waitFor(() => expect(screen.getAllByTestId('thread-card')).toHaveLength(2));
-    expect(order()).toContain('msg-root-3');
+    await waitFor(() => expect(order()).toEqual(['msg-root-3', 'msg-root-1', 'msg-root-2']));
   });
 
   it('builds correct deep-links for channel vs conversation threads', async () => {
-    apiFetchMock.mockResolvedValueOnce(sample);
+    servePages(sample);
     renderPage();
     const cards = await screen.findAllByTestId('thread-card');
     const links = cards.map((c) => c.getAttribute('data-deep-link'));
@@ -205,38 +203,18 @@ describe('ThreadsPage', () => {
     expect(links).toContain('/conversation/conv-1?thread=msg-root-2#msg-msg-root-2');
   });
 
-  it('passes unread state to ThreadCard from persisted thread notifications', async () => {
-    apiFetchMock.mockResolvedValueOnce(sample);
+  it('marks a card unread from its thread\'s unread marker, or an alert that just arrived', async () => {
+    unreadThreadNotifications.add('msg-root-2');
+    servePages([...sample, { ...sample[0], threadRootID: 'msg-root-3' }]);
     renderPage();
     const cards = await screen.findAllByTestId('thread-card');
-    expect(cards[0]).toHaveAttribute('data-thread-root-id', 'msg-root-1');
-    expect(cards[0]).toHaveAttribute('data-unread', 'true');
-    expect(cards[1]).toHaveAttribute('data-thread-root-id', 'msg-root-2');
-    expect(cards[1]).toHaveAttribute('data-unread', 'false');
-  });
-
-  it('shows unread threads first, then read threads, each by most recent activity', async () => {
-    unreadThreadNotifications.add('live-unread-older');
-    unreadThreadNotifications.add('live-unread-newer');
-    apiFetchMock.mockResolvedValueOnce([
-      { ...sample[0], threadRootID: 'read-newest', latestActivityAt: '2026-04-26T13:00:00Z' },
-      { ...sample[0], threadRootID: 'live-unread-older', latestActivityAt: '2026-04-26T10:00:00Z' },
-      { ...sample[0], threadRootID: 'read-older', latestActivityAt: '2026-04-26T09:00:00Z' },
-      { ...sample[0], threadRootID: 'live-unread-newer', latestActivityAt: '2026-04-26T12:00:00Z' },
-    ]);
-    renderPage();
-
-    const ids = (await screen.findAllByTestId('thread-card')).map((card) =>
-      card.getAttribute('data-thread-root-id'),
-    );
-
-    expect(ids).toEqual(['live-unread-newer', 'live-unread-older', 'read-newest', 'read-older']);
+    expect(cards.map((c) => c.getAttribute('data-unread'))).toEqual(['true', 'true', 'false']);
   });
 
   it('keeps which threads are expanded on the page, so a card scrolled away and back stays open', async () => {
     // The list is virtualized: a card far off screen unmounts, and its own
     // state with it. The page owns "expanded".
-    apiFetchMock.mockResolvedValueOnce(sample);
+    servePages(sample);
     renderPage();
     const [first, second] = await screen.findAllByTestId('thread-card');
     expect(first).toHaveAttribute('data-expanded', 'false');
@@ -246,7 +224,7 @@ describe('ThreadsPage', () => {
   });
 
   it('falls back to generic titles when a thread parent is no longer in the sidebar', async () => {
-    apiFetchMock.mockResolvedValueOnce([
+    servePages([
       { ...sample[0], parentID: 'ch-gone', threadRootID: 'msg-root-3' },
       { ...sample[1], parentID: 'conv-gone', threadRootID: 'msg-root-4' },
     ]);
@@ -256,12 +234,9 @@ describe('ThreadsPage', () => {
     expect(titles).toContain('Conversation');
   });
 
-  it('renders with no unread threads while the user-state query is still loading', async () => {
-    // useUserState().data is undefined until the server responds — the page
-    // must fall back to empty persisted notification/seen maps rather than
-    // crash or mark anything unread.
+  it('renders with no unread threads while the user state is still loading', async () => {
     mockUserStateData = undefined;
-    apiFetchMock.mockResolvedValueOnce(sample);
+    servePages(sample);
     renderPage();
     const cards = await screen.findAllByTestId('thread-card');
     expect(cards).toHaveLength(2);
@@ -271,23 +246,23 @@ describe('ThreadsPage', () => {
   });
 
   it('clears a thread unread state live when the thread is marked seen', async () => {
-    apiFetchMock.mockResolvedValueOnce(sample);
-    renderPage();
+    const { queryClient } = await import('@/lib/query-client');
+    servePages(sample);
+    renderPage(queryClient);
     const cards = await screen.findAllByTestId('thread-card');
-    // Persisted notification for msg-root-1 marks it unread…
     expect(cards[0]).toHaveAttribute('data-unread', 'true');
-    // …until the seen event fires (e.g. the thread panel was opened in
-    // another surface) — the page listens and re-reads the seen map.
+    // Seeing the thread elsewhere (the thread panel) drops its marker.
     act(() => {
       markThreadSeen('msg-root-1', '2026-04-26T12:00:00Z');
     });
     await waitFor(() => {
       expect(screen.getAllByTestId('thread-card')[0]).toHaveAttribute('data-unread', 'false');
     });
+    queryClient.clear();
   });
 
   it('shows an empty state when no threads exist', async () => {
-    apiFetchMock.mockResolvedValueOnce([]);
+    servePages([]);
     renderPage();
     await waitFor(() => {
       expect(screen.getByTestId('threads-empty')).toBeInTheDocument();
@@ -300,6 +275,12 @@ describe('ThreadsPage', () => {
     apiFetchMock.mockReturnValueOnce(new Promise(() => undefined));
     renderPage();
     expect(screen.getByTestId('threads-loading')).toBeInTheDocument();
+  });
+
+  it('reads a malformed page as empty', async () => {
+    apiFetchMock.mockResolvedValueOnce(undefined);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('threads-empty')).toBeInTheDocument());
   });
 
   it('does not force the threads page scroll position on mount', async () => {
@@ -315,7 +296,7 @@ describe('ThreadsPage', () => {
       },
     });
     try {
-      apiFetchMock.mockResolvedValueOnce(sample);
+      servePages(sample);
       renderPage();
       expect(scrollAssignments).toEqual([]);
     } finally {
@@ -325,40 +306,5 @@ describe('ThreadsPage', () => {
         delete (HTMLElement.prototype as { scrollTop?: number }).scrollTop;
       }
     }
-  });
-
-  it('derives unread thread IDs from notifications and seen activity', () => {
-    const ids = unreadThreadIDs(
-      [
-        { ...sample[0], threadRootID: 'newer-than-seen', latestActivityAt: '2026-04-26T11:00:00Z' },
-        { ...sample[0], threadRootID: 'already-seen', latestActivityAt: '2026-04-26T11:00:00Z' },
-        { ...sample[0], threadRootID: 'never-seen', latestActivityAt: '2026-04-26T11:00:00Z' },
-        { ...sample[0], threadRootID: 'live-unread', latestActivityAt: '2026-04-26T11:00:00Z' },
-      ],
-      ['already-seen'],
-      new Set(['live-unread', 'orphan-live']),
-      {
-        'newer-than-seen': '2026-04-26T10:59:00Z',
-        'already-seen': '2026-04-26T11:01:00Z',
-      },
-    );
-
-    expect(ids.has('newer-than-seen')).toBe(true);
-    expect(ids.has('already-seen')).toBe(false);
-    expect(ids.has('never-seen')).toBe(false);
-    expect(ids.has('live-unread')).toBe(true);
-    expect(ids.has('orphan-live')).toBe(false);
-  });
-
-  it('sorts thread summaries without mutating the source list', () => {
-    const threads = [
-      { ...sample[0], threadRootID: 'read-new', latestActivityAt: '2026-04-26T13:00:00Z' },
-      { ...sample[0], threadRootID: 'unread-old', latestActivityAt: '2026-04-26T10:00:00Z' },
-      { ...sample[0], threadRootID: 'unread-new', latestActivityAt: '2026-04-26T12:00:00Z' },
-    ];
-
-    expect(sortThreadsByUnreadThenActivity(threads, new Set(['unread-old', 'unread-new'])).map((t) => t.threadRootID))
-      .toEqual(['unread-new', 'unread-old', 'read-new']);
-    expect(threads.map((t) => t.threadRootID)).toEqual(['read-new', 'unread-old', 'unread-new']);
   });
 });

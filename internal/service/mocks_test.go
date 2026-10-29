@@ -1218,6 +1218,10 @@ type mockThreadFollowStore struct {
 	setManyErr      error
 	setErr          error
 	listErr         error // ListThreadFollows failure
+	getManyErr      error // GetUserThreadFollows failure
+	activityErr     error // ListFollowedThreadsByActivity failure
+	touchErr        error // TouchThreadActivity failure
+	activityReads   int
 }
 
 func newMockThreadFollowStore() *mockThreadFollowStore {
@@ -1287,6 +1291,63 @@ func (m *mockThreadFollowStore) ListThreadFollows(_ context.Context, parentID, t
 		out = append(out, &cp)
 	}
 	return out, nil
+}
+
+func (m *mockThreadFollowStore) GetUserThreadFollows(_ context.Context, userID string, threads []model.ThreadRef) ([]*model.ThreadFollow, error) {
+	if m.getManyErr != nil {
+		return nil, m.getManyErr
+	}
+	out := make([]*model.ThreadFollow, 0, len(threads))
+	for _, t := range threads {
+		if f, ok := m.follows[threadFollowMockKey(userID, t.ParentID, t.ThreadRootID)]; ok {
+			cp := *f
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+// mockActivityKey is the store's GSI2 sort key: fixed-width time, then the
+// thread, so keys order by latest reply.
+func mockActivityKey(f *model.ThreadFollow) string {
+	return f.LastActivityAt.UTC().Format("2006-01-02T15:04:05.000000000Z") + "#" + f.ParentID + "#" + f.ThreadRootID
+}
+
+// ListFollowedThreadsByActivity mirrors the GSI2 read: followed rows with a
+// latest-reply time, latest first, after the cursor (the last row's key).
+func (m *mockThreadFollowStore) ListFollowedThreadsByActivity(_ context.Context, userID, cursor string, limit int) ([]*model.ThreadFollow, string, error) {
+	m.activityReads++
+	if m.activityErr != nil {
+		return nil, "", m.activityErr
+	}
+	var rows []*model.ThreadFollow
+	for _, f := range m.follows {
+		if f.UserID == userID && f.Following && f.LastActivityAt != nil && (cursor == "" || mockActivityKey(f) < cursor) {
+			cp := *f
+			rows = append(rows, &cp)
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool { return mockActivityKey(rows[i]) > mockActivityKey(rows[j]) })
+	if len(rows) <= limit {
+		return rows, "", nil
+	}
+	return rows[:limit], mockActivityKey(rows[limit-1]), nil
+}
+
+// TouchThreadActivity mirrors the store's conditional update: only a followed
+// row whose latest reply is older moves.
+func (m *mockThreadFollowStore) TouchThreadActivity(_ context.Context, userIDs []string, parentID, threadRootID string, at time.Time) error {
+	if m.touchErr != nil {
+		return m.touchErr
+	}
+	for _, uid := range userIDs {
+		f, ok := m.follows[threadFollowMockKey(uid, parentID, threadRootID)]
+		if ok && f.Following && (f.LastActivityAt == nil || f.LastActivityAt.Before(at)) {
+			t := at
+			f.LastActivityAt = &t
+		}
+	}
+	return nil
 }
 
 // --- Mock ParentPinFileIndexStore ---

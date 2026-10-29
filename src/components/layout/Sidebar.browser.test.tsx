@@ -144,20 +144,11 @@ vi.mock('@/hooks/useConversations', () => ({
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
-let mockThreads: Array<{
-  parentID: string;
-  parentType: 'channel' | 'conversation';
-  threadRootID: string;
-  lastReplyAt: string;
-}> = [];
 vi.mock('@/hooks/useThreads', () => ({
   THREAD_SEEN_CHANGED_EVENT: 'ex:thread-seen-changed',
   getSeenMap: () => ({}),
   mergeSeenMaps: (server: Record<string, string> | undefined, local: Record<string, string>) => ({ ...(server ?? {}), ...local }),
-  unreadThreadIDs: (threads: typeof mockThreads) => new Set(threads.map((t) => t.threadRootID)),
-  unreadThreadParents: (threads: typeof mockThreads = [], ids: Set<string>) =>
-    new Set(threads.filter((t) => ids.has(t.threadRootID)).map((t) => t.parentID)),
-  useUserThreads: () => ({ data: mockThreads }),
+  unreadThreadIDs: (notifications: string[] = [], live: Set<string> = new Set()) => new Set([...notifications, ...live]),
 }));
 
 let mockUserState: {
@@ -367,13 +358,10 @@ beforeEach(() => {
   mockConversations = makeConversations();
   mockConversationsState = { data: mockConversations, isError: false };
   mockCategories = makeCategories();
-  mockThreads = [
-    { parentID: 'ch-general', parentType: 'channel', threadRootID: 'msg-thread-root', lastReplyAt: '2026-05-11T11:00:00Z' },
-  ];
   mockUserState = {
     hiddenConversations: ['conv-hidden'],
     channelNotifications: ['ch-favorite'],
-    threadNotifications: [],
+    threadNotifications: ['msg-thread-root'],
     threadSeen: {},
   };
   mockDrafts = [
@@ -575,7 +563,7 @@ describe('Sidebar browser render — rich fixtures', () => {
   });
 
   it('renders threads link unbolded when there are no unread threads', async () => {
-    mockThreads = [];
+    mockUserState = { ...mockUserState!, threadNotifications: [] };
     await render(<Frame />);
     const threadsLink = document.querySelector('a[href="/threads"] span') as HTMLElement;
     expect(threadsLink.className).not.toContain('font-bold');
@@ -851,9 +839,6 @@ describe('Sidebar browser render — rich fixtures', () => {
     // the NUMBER box is reserved for alerting messages.
     mockChannels = makeChannels().map((c) => (c.channelID === 'ch-general' ? { ...c, unread: true } : c));
     mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
-    // The rich fixture carries unread threads, which would earn the dot on
-    // their own; this case is about plain messages.
-    mockThreads = [];
     await render(<Frame />);
     expect(document.querySelector('[data-testid="channel-unread-badge-ch-general"]')).toBeNull();
     // Plain unread only emboldens the name; the dot is for thread replies.
@@ -919,7 +904,6 @@ describe('Sidebar browser render — rich fixtures', () => {
     mockConversationsState = { data: [], isError: false };
     mockCategories = [];
     mockDrafts = [];
-    mockThreads = [];
     await render(<Frame />);
     // Nav links survive an empty workspace.
     expect(document.body.textContent).toContain('Directory');
@@ -928,11 +912,8 @@ describe('Sidebar browser render — rich fixtures', () => {
   });
 
   it('Threads link stays unbolded when there are no thread updates', async () => {
-    // mockThreads = [] returns 0 from the unreadThreadIDs helper
-    // mocked at the top of the file (it maps threads.length → set
-    // size), so the hasThreadUpdates branch is false and the link
-    // renders without the unread-bold style.
-    mockThreads = [];
+    // No unread markers and no live alerts: the link renders without the
+    // unread-bold style.
     mockUserState = {
       hiddenConversations: [],
       channelNotifications: [],
@@ -1056,9 +1037,6 @@ describe('Sidebar browser render — rich fixtures', () => {
       unreadThreadNotifications: new Set(['thr-1']),
       hiddenConversations: new Set(),
     };
-    mockThreads = [
-      { parentID: 'ch-general', parentType: 'channel', threadRootID: 'thr-1', lastReplyAt: '2026-05-11T10:00:00Z' },
-    ];
     await render(<Frame />);
     const threadsLink = document.querySelector('a[href="/threads"] span') as HTMLElement;
     expect(threadsLink.className).toContain('font-bold');
@@ -1120,7 +1098,6 @@ describe('Sidebar browser render — rich fixtures', () => {
     mockConversations = [];
     mockConversationsState = { data: [], isError: false };
     mockDrafts = [];
-    mockThreads = [];
     mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
     await render(<Frame />);
     expect(document.body.textContent).not.toContain('Work');
@@ -1129,10 +1106,6 @@ describe('Sidebar browser render — rich fixtures', () => {
   });
 
   it('renders thread row with mixed unread/seen permutations without crashing', async () => {
-    mockThreads = [
-      { parentID: 'ch-general', parentType: 'channel', threadRootID: 't1', lastReplyAt: '2026-05-11T10:00:00Z' },
-      { parentID: 'conv-dm', parentType: 'conversation', threadRootID: 't2', lastReplyAt: '2026-05-09T10:00:00Z' },
-    ];
     mockUserState = {
       hiddenConversations: [],
       channelNotifications: [],
@@ -1164,12 +1137,7 @@ describe('Sidebar browser render — rich fixtures', () => {
   });
 
   it('marks Threads bold, with no count, when threads have unread replies', async () => {
-    mockThreads = Array.from({ length: 120 }, (_, i) => ({
-      parentID: 'ch-general',
-      parentType: 'channel' as const,
-      threadRootID: `msg-${i}`,
-      lastReplyAt: '2026-05-11T11:00:00Z',
-    }));
+    mockUserState = { ...mockUserState!, threadNotifications: Array.from({ length: 120 }, (_, i) => `msg-${i}`) };
     await render(<Frame />);
     const label = document.querySelector('[data-testid="threads-nav-label"]') as HTMLElement;
     expect(label.className).toContain('font-bold');
@@ -1266,9 +1234,8 @@ describe('Sidebar browser render — rich fixtures', () => {
   });
 
   it('renders from a fully cold cache where every list hook is undefined', async () => {
-    // Drives the `?? []` fallbacks for channels, threads, drafts and categories.
+    // Drives the `?? []` fallbacks for channels, drafts and categories.
     mockChannels = undefined as unknown as UserChannel[];
-    mockThreads = undefined as unknown as typeof mockThreads;
     mockDrafts = undefined as unknown as typeof mockDrafts;
     mockCategories = undefined as unknown as SidebarCategory[];
     mockConversationsState = { data: [], isError: false };

@@ -133,7 +133,7 @@ vi.mock('@/hooks/useMessages', () => ({
 vi.mock('@/hooks/useThreads', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useThreads')>()),
   useThreadMessages: () => ({ data: [], isLoading: false }),
-  useUserThreads: () => ({ data: [] }),
+  useThreadFollowing: () => ({ data: false }),
   useFollowThread: () => ({ mutate: vi.fn(), isPending: false }),
   useUnfollowThread: () => ({ mutate: vi.fn(), isPending: false }),
   markThreadSeen: vi.fn(),

@@ -41,7 +41,7 @@ vi.mock('@/hooks/useAttachments', () => ({
 }));
 
 vi.mock('@/hooks/useThreads', () => ({
-  useUserThreads: () => ({ data: [] }),
+  useThreadFollowing: () => ({ data: false }),
   useThreadMeta: () => undefined,
   markThreadSeen: vi.fn(),
   noteThreadReadPosition: vi.fn(),

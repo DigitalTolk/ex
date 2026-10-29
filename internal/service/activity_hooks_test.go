@@ -98,13 +98,14 @@ func TestChannelService_MarkChannelRead_ReadsActivity(t *testing.T) {
 }
 
 // Losing access to a channel, whether the user left or was removed, drops its
-// items and cancels their reminders there — the reminders even with no
-// activity recorder wired.
+// items, cancels their reminders there and drops its threads' unread markers
+// — each even with the others not wired.
 func TestChannelService_LeaveAndRemove_DropActivityAndReminders(t *testing.T) {
 	svc, _, memberships, _, _ := setupChannelService()
-	rec, rem := &activityHooks{}, &activityHooks{}
+	rec, rem, threads := &activityHooks{}, &activityHooks{}, &activityHooks{}
 	svc.SetActivityRecorder(rec)
 	svc.SetReminderSync(rem)
+	svc.SetThreadStateSync(threads)
 	ctx := context.Background()
 	memberships.memberships["ch9#user-1"] = &model.ChannelMembership{ChannelID: "ch9", UserID: "user-1", Role: model.ChannelRoleMember}
 	memberships.memberships["ch9#admin-1"] = &model.ChannelMembership{ChannelID: "ch9", UserID: "admin-1", Role: model.ChannelRoleAdmin}
@@ -117,7 +118,7 @@ func TestChannelService_LeaveAndRemove_DropActivityAndReminders(t *testing.T) {
 		t.Fatalf("RemoveMember: %v", err)
 	}
 	want := []parentLeft{{"user-1", "ch9"}, {"target", "ch9"}}
-	for name, got := range map[string][]parentLeft{"activity": rec.left, "reminders": rem.left} {
+	for name, got := range map[string][]parentLeft{"activity": rec.left, "reminders": rem.left, "thread markers": threads.left} {
 		if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 			t.Fatalf("%s left = %+v, want %+v", name, got, want)
 		}

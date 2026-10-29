@@ -179,11 +179,12 @@ func TestActivityFor_UnfollowedDMThread(t *testing.T) {
 	}
 }
 
-func TestListUserThreads_SaysWhichThreadsAreFollowed(t *testing.T) {
+func TestListThreadsPage_SaysWhichThreadsAreFollowed(t *testing.T) {
 	svc, messages, memberships, conversations, follows := threadIndexService()
 	ctx := context.Background()
 	follows.seeded = true
-	memberships.userChannels = []*model.UserChannel{{UserID: "u-1", ChannelID: "ch-1"}}
+	seedMembership(memberships, "ch-1", "u-1")
+	conversations.conversations["dm-1"] = &model.Conversation{ID: "dm-1", Type: model.ConversationTypeDM, ParticipantIDs: []string{"u-1", "u-2"}}
 	conversations.userConvs["u-1"] = []*model.UserConversation{{UserID: "u-1", ConversationID: "dm-1"}}
 	at := time.Now().Truncate(time.Second)
 	for _, m := range []*model.Message{
@@ -194,26 +195,38 @@ func TestListUserThreads_SaysWhichThreadsAreFollowed(t *testing.T) {
 	} {
 		messages.messages[m.ParentID+"#"+m.ID] = m
 	}
-	follows.follows[threadFollowMockKey("u-1", "ch-1", "followed")] = &model.ThreadFollow{UserID: "u-1", ParentID: "ch-1", ThreadRootID: "followed", Following: true}
-	follows.follows[threadFollowMockKey("u-1", "dm-1", "dm-out")] = &model.ThreadFollow{UserID: "u-1", ParentID: "dm-1", ThreadRootID: "dm-out", Following: false}
+	follows.follows[threadFollowMockKey("u-1", "ch-1", "followed")] = &model.ThreadFollow{UserID: "u-1", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: "followed", Following: true, LastActivityAt: &at}
+	follows.follows[threadFollowMockKey("u-1", "dm-1", "dm-out")] = &model.ThreadFollow{UserID: "u-1", ParentID: "dm-1", ParentType: ParentConversation, ThreadRootID: "dm-out", Following: false}
 	state := newMockUserStateStore()
 	for parent, roots := range map[string][]string{"ch-1": {"pulled"}, "dm-1": {"dm", "dm-out"}} {
+		parentType := ParentChannel
+		if parent == "dm-1" {
+			parentType = ParentConversation
+		}
 		for _, root := range roots {
 			state.rows[state.key("u-1", model.UserStateThreadNotification, root)] = &model.UserStateItem{
-				UserID: "u-1", Kind: model.UserStateThreadNotification, ParentID: parent, ThreadRootID: root,
+				UserID: "u-1", Kind: model.UserStateThreadNotification, ParentID: parent, ParentType: parentType, ThreadRootID: root, TargetID: root, UpdatedAt: at,
 			}
 		}
 	}
 	svc.SetUserStateStore(state)
 
-	got, err := svc.ListUserThreads(ctx, "u-1")
-	if err != nil {
-		t.Fatal(err)
-	}
 	following := map[string]bool{}
-	for _, s := range got {
-		following[s.ThreadRootID] = s.Following
+	for cursor := ""; ; {
+		page, err := svc.ListThreadsPage(ctx, "u-1", cursor, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range page.Threads {
+			following[s.ThreadRootID] = s.Following
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
 	}
+	// An alert pulls a thread in without following it; a DM's threads are
+	// followed unless unfollowed.
 	want := map[string]bool{"followed": true, "pulled": false, "dm": true, "dm-out": false}
 	if len(following) != len(want) {
 		t.Fatalf("threads = %v, want %v", following, want)
@@ -227,15 +240,23 @@ func TestListUserThreads_SaysWhichThreadsAreFollowed(t *testing.T) {
 	// The legacy scan (before the index is seeded) agrees, and seeds only the
 	// threads followed: an alert alone never becomes a standing follow.
 	follows.seeded = false
-	got, err = svc.ListUserThreads(ctx, "u-1")
-	if err != nil {
-		t.Fatal(err)
+	parents := []threadParent{{id: "ch-1", typ: ParentChannel}, {id: "dm-1", typ: ParentConversation}}
+	overrides := map[string]bool{"ch-1#followed": true, "dm-1#dm-out": false}
+	pulled := map[string]bool{"ch-1#pulled": true, "dm-1#dm": true, "dm-1#dm-out": true}
+	scanned, complete := svc.scanUserThreads(ctx, "u-1", parents, overrides, pulled)
+	if !complete {
+		t.Fatal("scan incomplete")
 	}
-	for _, s := range got {
+	for _, s := range scanned {
 		if s.Following != want[s.ThreadRootID] {
 			t.Errorf("legacy %s following = %v, want %v", s.ThreadRootID, s.Following, want[s.ThreadRootID])
 		}
 	}
+	seeds := seedFinished(svc)
+	if _, err := svc.ListThreadsPage(ctx, "u-1", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	waitThreadSeed(t, seeds)
 	if f, ok := follows.follows[threadFollowMockKey("u-1", "ch-1", "pulled")]; ok {
 		t.Errorf("seeded a follow for a thread an alert pulled in: %+v", f)
 	}

@@ -3,8 +3,7 @@ import { render, screen, fireEvent, within, act } from '@testing-library/react';
 import { BrowserRouter, MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { User, UserChannel, UserConversation, SidebarCategory } from '@/types';
-import type { ThreadSummary } from '@/hooks/useThreads';
-import { markThreadSeen, resetSeenCache } from '@/hooks/useThreads';
+import { resetSeenCache } from '@/hooks/useThreads';
 
 // --- mocks ---------------------------------------------------------------
 
@@ -29,7 +28,6 @@ const mockCategories: SidebarCategory[] = [
 ];
 
 const mockConversations: UserConversation[] = [];
-let mockThreads: ThreadSummary[] = [];
 let mockUserState: { threadNotifications?: string[]; threadSeen?: Record<string, string>; hiddenConversations?: string[] } = {};
 let mockUnreadThreadNotifications = new Set<string>();
 
@@ -83,14 +81,6 @@ vi.mock('@/hooks/useConversations', () => ({
   useUserLookup: () => ({ data: [] }),
   useCreateConversation: () => ({ mutate: vi.fn(), isPending: false }),
 }));
-
-vi.mock('@/hooks/useThreads', async () => {
-  const actual = await vi.importActual<typeof import('@/hooks/useThreads')>('@/hooks/useThreads');
-  return {
-    ...actual,
-    useUserThreads: () => ({ data: mockThreads }),
-  };
-});
 
 vi.mock('@/hooks/useUserState', () => ({
   markLocalUserStateWrite: vi.fn(),
@@ -179,7 +169,6 @@ describe('Sidebar grouped rendering', () => {
   beforeEach(() => {
     createCategoryMutate.mockReset();
     deleteCategoryMutate.mockReset();
-    mockThreads = [];
     mockUserState = {};
     mockUnreadThreadNotifications = new Set();
     localStorage.clear();
@@ -375,56 +364,25 @@ describe('Sidebar grouped rendering', () => {
     expect(threads?.className).not.toMatch(/\bmb-2\b/);
   });
 
-  it('does not highlight Threads just because a listed thread has no seen baseline', () => {
-    mockThreads = [{
-      parentID: 'ch-fav',
-      parentType: 'channel',
-      threadRootID: 'root-1',
-      rootAuthorID: 'u-2',
-      rootBody: 'status',
-      rootCreatedAt: '2026-05-04T10:00:00.000Z',
-      replyCount: 1,
-      latestActivityAt: '2026-05-04T10:05:00.000Z',
-    }];
-
+  it('does not highlight Threads without an unread thread', () => {
     renderSidebar();
-
     expect(screen.getByText('Threads')).not.toHaveClass('font-bold');
   });
 
-  it('clears the Threads highlight when a persisted notification is seen locally', () => {
-    mockThreads = [{
-      parentID: 'ch-fav',
-      parentType: 'channel',
-      threadRootID: 'root-1',
-      rootAuthorID: 'u-2',
-      rootBody: 'status',
-      rootCreatedAt: '2026-05-04T10:00:00.000Z',
-      replyCount: 1,
-      latestActivityAt: '2026-05-04T10:05:00.000Z',
-    }];
-    mockUserState = {
-      threadNotifications: ['root-1'],
-      threadSeen: {},
-    };
-
-    renderSidebar();
+  // One lookup: the unread markers in the user state.
+  it('highlights Threads while a thread has an unread marker, and clears once it goes', () => {
+    mockUserState = { threadNotifications: ['root-1'], threadSeen: {} };
+    const view = renderSidebar();
     expect(screen.getByText('Threads')).toHaveClass('font-bold');
 
-    act(() => markThreadSeen('root-1', '2026-05-04T10:05:00.000Z'));
-
-    expect(screen.getByText('Threads')).not.toHaveClass('font-bold');
-  });
-
-  it('does not highlight Threads for a stale notification whose thread is not listed', () => {
-    mockThreads = [];
-    mockUserState = {
-      threadNotifications: ['root-orphan'],
-      threadSeen: {},
-    };
-
-    renderSidebar();
-
+    mockUserState = { threadNotifications: [], threadSeen: {} };
+    view.rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <BrowserRouter>
+          <Sidebar onClose={vi.fn()} />
+        </BrowserRouter>
+      </QueryClientProvider>,
+    );
     expect(screen.getByText('Threads')).not.toHaveClass('font-bold');
   });
 

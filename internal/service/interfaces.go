@@ -149,8 +149,16 @@ type ThreadFollowStore interface {
 	// reply that mentions N people costs one round-trip instead of N.
 	SetThreadFollowMany(ctx context.Context, follows []*model.ThreadFollow) error
 	GetThreadFollow(ctx context.Context, userID, parentID, threadRootID string) (*model.ThreadFollow, error)
+	// GetUserThreadFollows reads userID's rows for the given threads; threads
+	// without one are left out.
+	GetUserThreadFollows(ctx context.Context, userID string, threads []model.ThreadRef) ([]*model.ThreadFollow, error)
 	ListUserThreadFollows(ctx context.Context, userID string) ([]*model.ThreadFollow, error)
+	// ListFollowedThreadsByActivity pages userID's followed threads, latest
+	// reply first; next is empty at the end.
+	ListFollowedThreadsByActivity(ctx context.Context, userID, cursor string, limit int) ([]*model.ThreadFollow, string, error)
 	ListThreadFollows(ctx context.Context, parentID, threadRootID string) ([]*model.ThreadFollow, error)
+	// TouchThreadActivity records a reply at `at` on the followers' rows.
+	TouchThreadActivity(ctx context.Context, userIDs []string, parentID, threadRootID string, at time.Time) error
 }
 
 type UserStateStore interface {
