@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeFuzzy, fuzzyMatch, matchRank } from './fuzzy';
+import { normalizeFuzzy, fuzzyMatch, matchRank, rankedMatches } from './fuzzy';
 
 describe('normalizeFuzzy', () => {
   it('collapses runs of 3+ identical characters', () => {
@@ -86,3 +86,29 @@ describe('matchRank', () => {
   });
 });
 
+describe('rankedMatches', () => {
+  const channels = [
+    { name: 'inc-1042', topic: 'Incident: payments down' },
+    { name: 'random', topic: 'off-topic' },
+    { name: 'incidents-2025', topic: '' },
+    { name: 'incident', topic: '' },
+    { name: 'incidents-2024', topic: '' },
+  ];
+
+  it('keeps the matches, best first, equal matches in their order', () => {
+    expect(rankedMatches(channels, 'incident', (c) => [c.name, c.topic]).map((c) => c.name)).toEqual([
+      'incident',
+      'incidents-2025',
+      'incidents-2024',
+      'inc-1042',
+    ]);
+  });
+
+  it('matches only the fields it is given', () => {
+    expect(rankedMatches(channels, 'incident', (c) => [c.name]).map((c) => c.name)).toEqual([
+      'incident',
+      'incidents-2025',
+      'incidents-2024',
+    ]);
+  });
+});

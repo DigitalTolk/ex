@@ -63,10 +63,8 @@ export function PragmaticCategoryHeader({
   }, [dropData]);
 
   useEffect(() => {
-    const element = elementRef.current;
-    /* v8 ignore next -- elementRef is always attached after mount; defensive null guard */
-    /* istanbul ignore next -- elementRef is always attached after mount; defensive null guard */
-    if (!element) return undefined;
+    // React attaches the ref when it commits, before any effect runs.
+    const element = elementRef.current!;
     sidebarDndDebug('category-header register', {
       id,
       draggable,
@@ -159,8 +157,9 @@ export function PragmaticSection({
   }, [data]);
 
   useEffect(() => {
-    const element = elementRef.current;
-    if (!element || disabled) return undefined;
+    if (disabled) return undefined;
+    // React attaches the ref when it commits, before any effect runs.
+    const element = elementRef.current!;
     return dropTargetForElements({
       element,
       // Sticky so the pointer entering an adjacent push-aside gap keeps a live
@@ -194,10 +193,8 @@ export function PragmaticCategoryDropHitbox({
   }, [data]);
 
   useEffect(() => {
-    const element = elementRef.current;
-    /* v8 ignore next -- elementRef is always attached after mount; defensive null guard */
-    /* istanbul ignore next -- elementRef is always attached after mount; defensive null guard */
-    if (!element) return undefined;
+    // React attaches the ref when it commits, before any effect runs.
+    const element = elementRef.current!;
     return dropTargetForElements({
       element,
       // Sticky (see PragmaticChannelRow): keeps this boundary as the target when
@@ -236,10 +233,8 @@ export function PragmaticChannelRow({
   const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
-    const element = elementRef.current;
-    /* v8 ignore next -- elementRef is always attached after mount; the !element arm is defensive */
-    /* istanbul ignore next -- elementRef is always attached after mount; the !element arm is defensive */
-    if (!element) return undefined;
+    // React attaches the ref when it commits, before any effect runs.
+    const element = elementRef.current!;
     return combine(
       makeDraggable({
         element,
@@ -305,10 +300,8 @@ export function PragmaticConversationRow({
   const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
-    const element = elementRef.current;
-    /* v8 ignore next -- elementRef is always attached after mount; the !element arm is defensive */
-    /* istanbul ignore next -- elementRef is always attached after mount; the !element arm is defensive */
-    if (!element) return undefined;
+    // React attaches the ref when it commits, before any effect runs.
+    const element = elementRef.current!;
     return combine(
       makeDraggable({
         element,

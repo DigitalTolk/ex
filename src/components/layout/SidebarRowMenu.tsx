@@ -10,7 +10,8 @@ const TRIGGER_CLASS =
 // SidebarRowMenu is a sidebar row's kebab menu. The menu mounts the first time
 // it opens and the trigger is a plain button until then: a menu per row held
 // about 58 KB, and an account in a few thousand channels ran a phone out of
-// memory on start.
+// memory on start. The plain button opens on the mouse press, as the menu's
+// own trigger does; a key press opens it with a click.
 export function SidebarRowMenu({
   open,
   onOpenChange,
@@ -37,6 +38,9 @@ export function SidebarRowMenu({
         aria-expanded={false}
         data-testid={testID}
         className={TRIGGER_CLASS}
+        onMouseDown={(event) => {
+          if (event.button === 0) onOpenChange(true);
+        }}
         onClick={() => onOpenChange(true)}
       >
         {icon}

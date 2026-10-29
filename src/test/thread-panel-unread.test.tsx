@@ -39,6 +39,7 @@ const threadDataState: { current: { id: string; authorID: string; body: string; 
 };
 const markThreadSeenMock = vi.hoisted(() => vi.fn());
 const noteThreadReadPositionMock = vi.hoisted(() => vi.fn());
+const threadHasUnseenMock = vi.hoisted(() => vi.fn());
 vi.mock('@/hooks/useThreads', () => ({
   useThreadMessages: () => ({ data: threadDataState.current, isLoading: false }),
   useUserThreads: () => ({ data: [] }),
@@ -46,11 +47,12 @@ vi.mock('@/hooks/useThreads', () => ({
   useUnfollowThread: () => ({ mutate: vi.fn(), isPending: false }),
   markThreadSeen: markThreadSeenMock,
   noteThreadReadPosition: noteThreadReadPositionMock,
+  threadHasUnseen: threadHasUnseenMock,
 }));
 
 import { ThreadPanel } from '@/components/chat/ThreadPanel';
-import { endReadSession, holdRead, isUnreadSeen, keepReadSession, setUnreadAnchor, threadReadKey } from '@/lib/read-position';
-import { forceAwayUntilInput, resetUserActivityForTests } from '@/lib/user-activity';
+import { endReadSession, holdRead, isAtBottom, isUnreadSeen, keepReadSession, setUnreadAnchor, threadReadKey } from '@/lib/read-position';
+import { forceAwayUntilInput, markUserActivity, resetUserActivityForTests } from '@/lib/user-activity';
 
 // The thread's "New messages" line and "Mark as unread" hold.
 function renderPanel() {
@@ -77,6 +79,8 @@ describe('ThreadPanel unread', () => {
     apiFetchMock.mockResolvedValue([]);
     markThreadSeenMock.mockReset();
     noteThreadReadPositionMock.mockReset();
+    threadHasUnseenMock.mockReset();
+    threadHasUnseenMock.mockReturnValue(true);
     // The previous test's unmount scheduled an end for this thread's visit.
     keepReadSession(key);
     endReadSession(key);
@@ -196,6 +200,58 @@ describe('ThreadPanel unread', () => {
       markThreadSeenMock.mockReset();
       threadDataState.current = [...threadDataState.current, reply];
       view.refresh();
+      expect(markThreadSeenMock).toHaveBeenCalledWith('root-1', at(4), target);
+    });
+
+    // As in a channel: what arrives below the fold stays unread until the
+    // user scrolls back down to it.
+    it('stays unread while scrolled up — coming back included — and is read once scrolled back down', () => {
+      vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+      const view = renderPanel();
+      const list = screen.getByLabelText('Thread').querySelector('.overflow-y-auto') as HTMLElement;
+      Object.defineProperty(list, 'scrollHeight', { configurable: true, value: 1000 });
+      Object.defineProperty(list, 'clientHeight', { configurable: true, value: 400 });
+      const scrollTo = (top: number) =>
+        act(() => {
+          list.scrollTop = top;
+          list.dispatchEvent(new Event('scroll'));
+        });
+      scrollTo(600);
+      scrollTo(100);
+      expect(isAtBottom(key)).toBe(false);
+      markThreadSeenMock.mockReset();
+
+      threadDataState.current = [...threadDataState.current, reply];
+      view.refresh();
+      comeBack();
+      expect(markThreadSeenMock).not.toHaveBeenCalled();
+
+      scrollTo(600);
+      expect(isAtBottom(key)).toBe(true);
+      expect(markThreadSeenMock).toHaveBeenCalledTimes(1);
+      expect(markThreadSeenMock).toHaveBeenCalledWith('root-1', at(4), target);
+    });
+
+    it('coming back sends nothing when nothing new arrived', () => {
+      vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+      renderPanel();
+      markThreadSeenMock.mockReset();
+      threadHasUnseenMock.mockReturnValue(false);
+      comeBack();
+      expect(markThreadSeenMock).not.toHaveBeenCalled();
+      expect(threadHasUnseenMock).toHaveBeenCalledWith(expect.anything(), 'root-1', at(3));
+    });
+
+    // The window never lost focus: the user was idle in front of it.
+    it('is read at the first input after an idle spell', () => {
+      vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+      const view = renderPanel();
+      markThreadSeenMock.mockReset();
+      forceAwayUntilInput();
+      threadDataState.current = [...threadDataState.current, reply];
+      view.refresh();
+      expect(markThreadSeenMock).not.toHaveBeenCalled();
+      act(() => markUserActivity());
       expect(markThreadSeenMock).toHaveBeenCalledWith('root-1', at(4), target);
     });
 

@@ -56,6 +56,18 @@ let activityBroadcast: ((at: number) => void) | null = null;
 // snapshot immediately instead of waiting for the next input stamp.
 let attentionBroadcast: (() => void) | null = null;
 
+// Listeners for the first real input after an idle spell (no input for the
+// suppression window, or a sleep): the user is back at a window that may have
+// kept its focus all along, so no focus event says so (useMarkReadOnReturn).
+const returnListeners = new Set<() => void>();
+
+export function onReturnFromIdle(listener: () => void): () => void {
+  returnListeners.add(listener);
+  return () => {
+    returnListeners.delete(listener);
+  };
+}
+
 export function setActivityBroadcast(cb: ((at: number) => void) | null): void {
   activityBroadcast = cb;
 }
@@ -68,9 +80,11 @@ export function setAttentionBroadcast(cb: (() => void) | null): void {
 // presence bridge (OS-level input the page can't see) and tests. Real input
 // evidence, so it also clears the wake latch (R3).
 export function markUserActivity(at: number = Date.now()): void {
+  const returning = awayUntilInput || at - lastActivityAt > suppressionWindowMs;
   lastActivityAt = at;
   awayUntilInput = false;
   activityBroadcast?.(at);
+  if (returning) for (const listener of returnListeners) listener();
 }
 
 function stamp(): void {

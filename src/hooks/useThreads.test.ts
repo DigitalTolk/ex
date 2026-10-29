@@ -140,6 +140,37 @@ describe('mark as unread: seen-map rules', () => {
     endReadSession(threadReadKey('t-old'));
   });
 
+  // A reply arriving unseen in the open thread moves the line to it: the
+  // first reply after how far the user has seen, not where the line was when
+  // the thread opened.
+  it('noteThreadReadPosition can move a line already drawn', async () => {
+    const { noteThreadReadPosition, resetSeenCache } = await import('./useThreads');
+    const { endReadSession, getUnreadAnchor, setUnreadAnchor, threadReadKey } = await import('@/lib/read-position');
+    localStorage.clear();
+    resetSeenCache();
+    const qc = new QueryClient();
+    qc.setQueryData(queryKeys.userState(), { threadNotifications: [], threadSeen: { 't-1': '2026-01-02T00:00:00Z' }, hiddenConversations: [], hiddenSkills: [] });
+    setUnreadAnchor(threadReadKey('t-1'), { kind: 'after', at: '2026-01-01T00:00:00Z' });
+    noteThreadReadPosition(qc, 't-1');
+    expect(getUnreadAnchor(threadReadKey('t-1'))).toEqual({ kind: 'after', at: '2026-01-01T00:00:00Z' });
+    noteThreadReadPosition(qc, 't-1', { replace: true });
+    expect(getUnreadAnchor(threadReadKey('t-1'))).toEqual({ kind: 'after', at: '2026-01-02T00:00:00Z' });
+    endReadSession(threadReadKey('t-1'));
+  });
+
+  it('threadHasUnseen compares a reply with how far the thread is seen, here or on another device', async () => {
+    const { markThreadSeen, resetSeenCache, threadHasUnseen } = await import('./useThreads');
+    localStorage.clear();
+    resetSeenCache();
+    const qc = new QueryClient();
+    expect(threadHasUnseen(qc, 't-1', '2026-01-02T00:00:00Z')).toBe(true);
+    qc.setQueryData(queryKeys.userState(), { threadNotifications: [], threadSeen: { 't-1': '2026-01-02T00:00:00Z' }, hiddenConversations: [], hiddenSkills: [] });
+    expect(threadHasUnseen(qc, 't-1', '2026-01-02T00:00:00Z')).toBe(false);
+    expect(threadHasUnseen(qc, 't-1', '2026-01-03T00:00:00Z')).toBe(true);
+    markThreadSeen('t-1', '2026-01-03T00:00:00Z');
+    expect(threadHasUnseen(qc, 't-1', '2026-01-03T00:00:00Z')).toBe(false);
+  });
+
   it('a real view (one that persists) drops the cached mark, which the server drops too', async () => {
     const { markThreadSeen } = await import('./useThreads');
     const { queryClient } = await import('@/lib/query-client');

@@ -1,5 +1,5 @@
 import { Fragment, memo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   PragmaticCategoryDropHitbox,
   PragmaticCategoryHeader,
@@ -74,9 +74,13 @@ export function Sidebar({ onClose }: SidebarProps) {
     categories,
   );
   const navigate = useNavigate();
+  const location = useLocation();
   // Stable, like every callback the rows get: the rows are memoized, so a
   // channel switch re-renders only the two rows whose active state changed.
-  const navigateTo = useEventCallback((to: string) => navigate(to));
+  // Opening the page already open replaces its history entry, as a link does.
+  const navigateTo = useEventCallback((to: string) =>
+    navigate(to, { replace: to === location.pathname + location.search + location.hash }),
+  );
   const close = useEventCallback(onClose);
   // Drag-to-reorder needs a mouse or trackpad. Without one — a phone, or an
   // iPad on its own — a hold on a row opens its menu (useRowLongPressMenu) and

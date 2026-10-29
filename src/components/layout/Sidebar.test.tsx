@@ -397,6 +397,29 @@ describe('Sidebar', () => {
     expect(dragRegistrations(container)).toBe(0);
   });
 
+  // As a link does: tapping the open chat again (say, to close the drawer)
+  // must not leave Back a dead step.
+  it('opening the chat already open adds no history entry', () => {
+    window.history.pushState({}, '', '/channel/general');
+    renderSidebar();
+    const entries = window.history.length;
+
+    fireEvent.click(within(screen.getByTestId('channel-row-ch-1')).getByRole('link'));
+    expect(window.history.length).toBe(entries);
+    expect(window.location.pathname).toBe('/channel/general');
+
+    fireEvent.click(within(screen.getByTestId('channel-row-ch-2')).getByRole('link'));
+    expect(window.history.length).toBe(entries + 1);
+    expect(window.location.pathname).toBe('/channel/secret');
+  });
+
+  it.each(['/channel/general/', '/channel/ch-1/', '/conversation/conv-1/'])('marks the open chat at %s', (path) => {
+    window.history.pushState({}, '', path);
+    renderSidebar();
+    const row = screen.getByTestId(path.startsWith('/channel') ? 'channel-row-ch-1' : 'conversation-row-conv-1');
+    expect(within(row).getByRole('link')).toHaveAttribute('aria-current', 'page');
+  });
+
   // Archived channels are history; their members find them through search.
   it('never lists an archived channel, not even one that is favorited, unread or open', () => {
     mockChannels = [

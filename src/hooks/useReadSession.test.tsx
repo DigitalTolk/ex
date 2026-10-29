@@ -6,6 +6,7 @@ import { useReadSession } from './useReadSession';
 import { queryKeys } from '@/lib/query-keys';
 import { endReadSession, getUnreadAnchor, holdRead, isAtBottom, isReadHeld, noteMissedArrival, setAtBottom, setUnreadAnchor, useMissedArrivals } from '@/lib/read-position';
 import type { UserChannel, UserConversation } from '@/types';
+import { markUserActivity, resetUserActivityForTests, suppressionWindowMs } from '@/lib/user-activity';
 
 function makeQC(unreadCount?: number) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -98,6 +99,50 @@ describe('useReadSession', () => {
     holdRead('ch-1');
     focus();
     expect(markRead).toHaveBeenCalledTimes(1);
+  });
+
+  // Back at a window that stayed in front: the first input after an idle
+  // spell. The list is current then (the socket stayed up), so a chat it shows
+  // read needs no request, nor the channel-list refetch that follows one.
+  it('the first input after an idle spell reads what the list shows unread — unless scrolled up or held', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const qc = makeQC(0);
+    const { markRead } = render(qc, 'ch-1');
+    markRead.mockClear();
+    const inputAfterIdle = () => {
+      markUserActivity(Date.now() - suppressionWindowMs - 1_000);
+      act(() => markUserActivity());
+    };
+    try {
+      inputAfterIdle();
+      expect(markRead).not.toHaveBeenCalled();
+      qc.setQueryData<UserChannel[]>(queryKeys.userChannels(), (rows) => rows!.map((c) => ({ ...c, unreadCount: 2 })));
+      setAtBottom('ch-1', false);
+      inputAfterIdle();
+      setAtBottom('ch-1', true);
+      holdRead('ch-1');
+      inputAfterIdle();
+      expect(markRead).not.toHaveBeenCalled();
+      endReadSession('ch-1');
+      inputAfterIdle();
+      expect(markRead).toHaveBeenCalledTimes(1);
+      expect(markRead).toHaveBeenCalledWith('ch-1');
+    } finally {
+      resetUserActivityForTests();
+    }
+  });
+
+  it('input after an idle spell before the chat\'s row is loaded reads nothing', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const { markRead } = render(new QueryClient(), 'ch-1');
+    markRead.mockClear();
+    try {
+      markUserActivity(Date.now() - suppressionWindowMs - 1_000);
+      act(() => markUserActivity());
+      expect(markRead).not.toHaveBeenCalled();
+    } finally {
+      resetUserActivityForTests();
+    }
   });
 
   it('reaching the bottom reads what arrived meanwhile, unless held or nothing is unread', () => {

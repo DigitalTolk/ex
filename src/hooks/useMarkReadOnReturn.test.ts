@@ -2,10 +2,18 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { act } from 'react';
 import { useMarkReadOnReturn } from './useMarkReadOnReturn';
+import { markUserActivity, resetUserActivityForTests, suppressionWindowMs } from '@/lib/user-activity';
 
 afterEach(() => {
   vi.restoreAllMocks();
+  resetUserActivityForTests();
 });
+
+// The user's first input after an idle spell.
+function inputAfterIdle() {
+  markUserActivity(Date.now() - suppressionWindowMs - 1_000);
+  act(() => markUserActivity());
+}
 
 describe('useMarkReadOnReturn', () => {
   it('fires on window focus while the document is visible and focused', () => {
@@ -16,7 +24,7 @@ describe('useMarkReadOnReturn', () => {
       window.dispatchEvent(new Event('focus'));
     });
     expect(markRead).toHaveBeenCalledTimes(1);
-    expect(markRead).toHaveBeenCalledWith('c-1');
+    expect(markRead).toHaveBeenCalledWith('c-1', 'window');
   });
 
   it('fires on visibilitychange to visible while focused', () => {
@@ -39,7 +47,28 @@ describe('useMarkReadOnReturn', () => {
       window.dispatchEvent(new Event('focus'));
     });
     expect(first).not.toHaveBeenCalled();
-    expect(latest).toHaveBeenCalledWith('c-1');
+    expect(latest).toHaveBeenCalledWith('c-1', 'window');
+  });
+
+  // A window that stayed in front while the user was idle gets no focus
+  // event when they come back to it.
+  it('fires on the first input after an idle spell', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const markRead = vi.fn();
+    renderHook(() => useMarkReadOnReturn('c-1', markRead));
+    act(() => markUserActivity());
+    expect(markRead).not.toHaveBeenCalled();
+    inputAfterIdle();
+    expect(markRead).toHaveBeenCalledTimes(1);
+    expect(markRead).toHaveBeenCalledWith('c-1', 'input');
+  });
+
+  it('does NOT fire on input after an idle spell in another window', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    const markRead = vi.fn();
+    renderHook(() => useMarkReadOnReturn('c-1', markRead));
+    inputAfterIdle();
+    expect(markRead).not.toHaveBeenCalled();
   });
 
   it('does NOT fire while the window is unfocused', () => {
@@ -82,11 +111,12 @@ describe('useMarkReadOnReturn', () => {
       window.dispatchEvent(new Event('focus'));
     });
     expect(markRead).toHaveBeenCalledTimes(1);
-    expect(markRead).toHaveBeenCalledWith('c-2');
+    expect(markRead).toHaveBeenCalledWith('c-2', 'window');
     unmount();
     act(() => {
       window.dispatchEvent(new Event('focus'));
     });
+    inputAfterIdle();
     expect(markRead).toHaveBeenCalledTimes(1);
   });
 });

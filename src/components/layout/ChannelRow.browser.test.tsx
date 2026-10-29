@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, onTestFinished } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { MemoryRouter } from 'react-router-dom';
 import { ChannelRow } from './ChannelRow';
@@ -326,4 +326,33 @@ describe('ChannelRow browser behaviour', () => {
     expect(b.right).toBeLessThanOrEqual(s.left);
   });
 
+});
+
+// Until it first opens, the row menu's trigger is a plain button standing in
+// for the menu's own (SidebarRowMenu). It opens on the press like the real
+// one, and the release that follows, landing on the real one, must not close
+// it. A mouse device: on a touch one the kebab takes no taps.
+describe('the row menu under a mouse', () => {
+  function onMouseDevice() {
+    const root = document.documentElement;
+    const touch = ['device-touch', 'tier-mobile'].filter((name) => root.classList.contains(name));
+    root.classList.remove(...touch);
+    onTestFinished(() => root.classList.add(...touch));
+  }
+  const trigger = () => document.querySelector('[data-testid="row-menu-ch-1"]') as HTMLElement;
+
+  it('opens on the press', async () => {
+    onMouseDevice();
+    await renderRow();
+    trigger().dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+    await expect.poll(() => document.querySelector('[role="menuitem"]')).not.toBeNull();
+  });
+
+  it('stays open once the button is released', async () => {
+    onMouseDevice();
+    const screen = await renderRow();
+    await screen.getByTestId('row-menu-ch-1').click();
+    await expect.poll(() => document.querySelector('[role="menuitem"]')).not.toBeNull();
+    expect(trigger()).toHaveAttribute('aria-expanded', 'true');
+  });
 });

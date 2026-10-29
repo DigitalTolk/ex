@@ -61,10 +61,16 @@ export function useReadSession(
     return () => scheduleEndReadSession(parentID);
   }, [parentID]);
 
-  // Back to the window: read what arrived while away — unless scrolled up
-  // or held unread.
-  useMarkReadOnReturn(parentID, (id) => {
-    if (!isReadHeld(id) && isAtBottom(id)) markRead(id);
+  // Back to the window, or back at it after an idle spell: read what arrived
+  // meanwhile — unless scrolled up or held unread. A window coming forward
+  // reads without asking the list: after a sleep the list can be stale while
+  // the socket reconnects, and the server knows what arrived. Input after an
+  // idle spell, which comes far more often, reads only a chat the list shows
+  // unread, so moving the mouse after a pause doesn't refetch the whole list.
+  useMarkReadOnReturn(parentID, (id, how) => {
+    if (isReadHeld(id) || !isAtBottom(id)) return;
+    if (how === 'input' && !((cachedUnreadCount(queryClient, parentType, id) ?? 0) > 0)) return;
+    markRead(id);
   });
 
   const onAtBottomChange = useCallback(

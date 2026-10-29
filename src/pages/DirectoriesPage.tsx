@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
-import { matchRank } from '@/lib/fuzzy';
+import { rankedMatches } from '@/lib/fuzzy';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -94,21 +94,15 @@ function ChannelsTab() {
 
   // Best matches first (the channel of that name before ones whose
   // description mentions it); equal matches keep their order.
-  const visible = (allChannels ?? [])
-    .filter((ch) => ch.type === 'public')
-    .map((ch) => ({ ch, rank: matchRank(query, ch.name, ch.description ?? '') }))
-    .filter(({ rank }) => rank >= 0)
-    .sort((a, b) => a.rank - b.rank)
-    .map(({ ch }) => ch);
+  const visible = rankedMatches(
+    (allChannels ?? []).filter((ch) => ch.type === 'public'),
+    query,
+    (ch) => [ch.name, ch.description ?? ''],
+  );
   // The sidebar doesn't list archived channels: a search also finds the
   // archived ones you are in, always below every live result.
   const archived = query.trim()
-    ? (userChannels ?? [])
-        .filter((uc) => uc.archived)
-        .map((uc) => ({ uc, rank: matchRank(query, uc.channelName) }))
-        .filter(({ rank }) => rank >= 0)
-        .sort((a, b) => a.rank - b.rank)
-        .map(({ uc }) => uc)
+    ? rankedMatches((userChannels ?? []).filter((uc) => uc.archived), query, (uc) => [uc.channelName])
     : [];
 
   function handleJoin(channelId: string, channelSlug: string) {

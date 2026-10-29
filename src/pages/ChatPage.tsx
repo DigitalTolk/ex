@@ -65,7 +65,7 @@ import { useUserConversations } from '@/hooks/useConversations';
 import { shouldRefetchSidebarForRemoteUpdate, useCategories } from '@/hooks/useSidebar';
 import { shouldRefetchUserStateForRemoteUpdate, useUserState } from '@/hooks/useUserState';
 import { followConvertedConversation } from '@/hooks/useConvertConversation';
-import { markThreadSeen, upsertUserThreadFromRoot, upsertUserThreadRow, userThreadInCache, useUserThreads } from '@/hooks/useThreads';
+import { markThreadSeen, noteThreadReadPosition, upsertUserThreadFromRoot, upsertUserThreadRow, userThreadInCache, useUserThreads } from '@/hooks/useThreads';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 // How long the phone's chat waits for its first lists before offering Retry.
@@ -292,14 +292,13 @@ export default function ChatPage() {
         const threadKey = threadReadKey(parentMessageID);
         // Posting reads the thread for you, ending a "Mark as unread" hold.
         if (isOwnAuthor) releaseRead(threadKey);
-        // Others' replies read the open thread only while the user is looking
-        // (as for the open channel above); otherwise the panel reads it when
-        // they come back to the window.
-        if (
-          isActiveThread(parentMessageID) &&
-          !isReadHeld(threadKey) &&
-          (isOwnAuthor || isUserAttentive(suppressionWindowMs))
-        ) {
+        // Others' replies read the open thread only while the user follows
+        // along — looking, and at the newest reply — as in the open channel
+        // above. Otherwise the thread's line moves above the first reply they
+        // haven't seen, and the panel reads them once they come back to the
+        // window or scroll down to them.
+        const openThread = isActiveThread(parentMessageID) && !isReadHeld(threadKey);
+        if (openThread && (isOwnAuthor || (isUserAttentive(suppressionWindowMs) && isAtBottom(threadKey)))) {
           // Reading OTHERS' replies persists the seen watermark. Your own
           // reply is marked seen server-side by the backend ("posting
           // reads the thread for you"), so skip the redundant PUT and only
@@ -314,6 +313,8 @@ export default function ChatPage() {
                   parentType: msg.parentType === 'conversation' ? 'conversation' : 'channel',
                 },
           );
+        } else if (openThread) {
+          noteThreadReadPosition(queryClient, parentMessageID, { replace: true });
         }
         // Append the reply straight into the open thread's cache so the
         // ThreadPanel / ThreadCard updates live. Only fall back to an
@@ -571,11 +572,13 @@ export default function ChatPage() {
     [EventType.NotificationNew]: (n) => {
       if (n.parentMessageID) {
         // A thread marked unread stays unread even while open, and an open
-        // thread the user isn't looking at stays unread until they come back.
+        // thread the user isn't following (not looking, or scrolled up) stays
+        // unread until they come back to it.
         if (
           isActiveThread(n.parentMessageID) &&
           !isReadHeld(threadReadKey(n.parentMessageID)) &&
-          isUserAttentive(suppressionWindowMs)
+          isUserAttentive(suppressionWindowMs) &&
+          isAtBottom(threadReadKey(n.parentMessageID))
         ) {
           markThreadSeen(n.parentMessageID, n.createdAt, {
             parentID: n.parentID,

@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThreadCard } from '@/components/threads/ThreadCard';
 import { resetSeenCache, threadDeepLink, type ThreadSummary } from '@/hooks/useThreads';
 import { isThreadInView, resetThreadScopeForTests } from '@/lib/thread-scope';
-import { forceAwayUntilInput, resetUserActivityForTests } from '@/lib/user-activity';
+import { forceAwayUntilInput, markUserActivity, resetUserActivityForTests, suppressionWindowMs } from '@/lib/user-activity';
 import type { Message } from '@/types';
 
 const apiFetchMock = vi.fn();
@@ -732,6 +732,42 @@ describe('ThreadCard — viewport gating', () => {
       act(() => {
         window.dispatchEvent(new Event('focus'));
       });
+      expect(apiFetchMock).toHaveBeenCalledWith(...seenPut);
+    } finally {
+      resetUserActivityForTests();
+      vi.restoreAllMocks();
+    }
+  });
+
+  // Reading /threads for a while without touching anything: a reply lands on
+  // a card in view, unread. The window never lost focus, so the user's first
+  // input is their return.
+  it('reads an unread thread in view at the first input after an idle spell', async () => {
+    const summary = makeSummary({ latestActivityAt: '2099-01-01T00:00:00.000Z' });
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    markUserActivity(Date.now() - suppressionWindowMs - 1_000);
+    try {
+      render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <MemoryRouter>
+            <ThreadCard
+              summary={summary}
+              title="~general"
+              deepLink="/channel/general?thread=msg-root#msg-msg-root"
+              currentUserId="u-me"
+              unread
+            />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      await Promise.resolve();
+      act(() => {
+        FakeObserver.instances[0].fire(true);
+      });
+      await screen.findByTestId('thread-card-msg');
+      const seenPut = ['/api/v1/user-state/threads/channels/ch-1/msg-root/seen', expect.objectContaining({ method: 'PUT' })];
+      expect(apiFetchMock).not.toHaveBeenCalledWith(...seenPut);
+      act(() => markUserActivity());
       expect(apiFetchMock).toHaveBeenCalledWith(...seenPut);
     } finally {
       resetUserActivityForTests();

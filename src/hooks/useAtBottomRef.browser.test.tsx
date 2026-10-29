@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { useRef } from 'react';
+import { useRef, type RefObject } from 'react';
 import { render } from 'vitest-browser-react';
 import { useAtBottomRef } from './useAtBottomRef';
 
@@ -38,7 +38,45 @@ function AttachedProbe({ height = 100 }: { height?: number }) {
   );
 }
 
+function ReportingProbe({ reports, exposeRef }: { reports: boolean[]; exposeRef: (ref: RefObject<boolean>) => void }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const atBottom = useAtBottomRef(scrollRef, (value) => reports.push(value));
+  exposeRef(atBottom);
+  return (
+    <div ref={scrollRef} data-testid="scroller" style={{ height: 100, overflowY: 'auto' }}>
+      <div style={{ height: 1000 }}>tall content</div>
+    </div>
+  );
+}
+
 describe('useAtBottomRef (browser)', () => {
+  // The thread panel files where its reader is (lib/read-position) from these
+  // reports. It also sets the ref itself while following new replies down;
+  // that must not swallow the report of the reader coming back down.
+  it('reports each change once, even after the caller set the ref itself', async () => {
+    const reports: boolean[] = [];
+    let atBottom: RefObject<boolean> | undefined;
+    const screen = await render(<ReportingProbe reports={reports} exposeRef={(ref) => (atBottom = ref)} />);
+    const scroller = screen.getByTestId('scroller').element() as HTMLDivElement;
+    const scrollTo = async (top: number) => {
+      scroller.scrollTop = top;
+      scroller.dispatchEvent(new Event('scroll'));
+      await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    };
+
+    // It mounts at the top, far from the bottom.
+    expect(reports).toEqual([false]);
+    await scrollTo(0);
+    expect(reports).toEqual([false]);
+    await scrollTo(scroller.scrollHeight);
+    expect(reports).toEqual([false, true]);
+    await scrollTo(scroller.scrollTop - 300);
+    expect(reports).toEqual([false, true, false]);
+    atBottom!.current = true;
+    await scrollTo(scroller.scrollHeight);
+    expect(reports).toEqual([false, true, false, true]);
+  });
+
   it('bails out of the effect when the scroll ref is never attached', async () => {
     const screen = await render(<NullRefProbe />);
     // Initialized to true; the unattached ref means no listener was wired.

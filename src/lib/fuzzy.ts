@@ -95,3 +95,12 @@ export function matchRank(query: string, name: string, ...others: string[]): num
   return fuzzyMatch(query, ...others) ? 4 : -1;
 }
 
+// rankedMatches keeps the items the query matches, best first (matchRank on
+// the fields the item gives, its name first); equal matches keep their order.
+export function rankedMatches<T>(items: readonly T[], query: string, fields: (item: T) => [string, ...string[]]): T[] {
+  return items
+    .map((item) => ({ item, rank: matchRank(query, ...fields(item)) }))
+    .filter(({ rank }) => rank >= 0)
+    .sort((a, b) => a.rank - b.rank)
+    .map(({ item }) => item);
+}

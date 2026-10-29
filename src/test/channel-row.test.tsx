@@ -101,6 +101,14 @@ describe('ChannelRow', () => {
     expect(screen.getByText('Move to Channels')).toBeInTheDocument();
   });
 
+  it('opens the row menu on a primary-button press, not on another button', () => {
+    renderRow(makeChannel({ channelID: 'ch-1' }));
+    fireEvent.mouseDown(screen.getByTestId('row-menu-ch-1'), { button: 2 });
+    expect(menuRoots).not.toHaveBeenCalled();
+    fireEvent.mouseDown(screen.getByTestId('row-menu-ch-1'), { button: 0 });
+    expect(screen.getByText('Move to Channels')).toBeInTheDocument();
+  });
+
   it('renders the channel name', () => {
     renderRow(makeChannel({ channelName: 'general' }));
     expect(screen.getByText('general')).toBeInTheDocument();

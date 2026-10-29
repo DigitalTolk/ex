@@ -59,7 +59,9 @@ export function useSidebarSections({
   // The chat being viewed. With the unread view on it stays visible even
   // though opening it reads it, and — if it was unread when opened — stays in
   // the Unread section until the user leaves, so rows don't jump mid-read.
-  const activeItemID = channelsByPath.get(pathname)?.channelID ?? /^\/conversation\/([^/]+)/.exec(pathname)?.[1];
+  // The route also opens a chat at its address with a trailing slash.
+  const activeItemID =
+    channelsByPath.get(pathname.replace(/\/+$/, ''))?.channelID ?? /^\/conversation\/([^/]+)/.exec(pathname)?.[1];
   const activeItemUnread = useMemo(() => {
     const ch = channels?.find((c) => c.channelID === activeItemID);
     if (ch) return isSidebarItemUnread({ kind: 'channel', channel: ch });

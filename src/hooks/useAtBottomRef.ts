@@ -19,20 +19,36 @@ const AT_BOTTOM_THRESHOLD_PX = 120;
 // Initialized to `true` so the very first commit (before the user has
 // had a chance to scroll) treats the user as "at bottom" — matching
 // the typical chat UX where new arrivals follow you on first paint.
+//
+// `onChange` hears each change. Callers set the ref themselves too (when they
+// follow new content down), so a change is judged against the last one
+// reported, not against the ref.
 export function useAtBottomRef(
   scrollRef: RefObject<HTMLElement | null>,
+  onChange?: (atBottom: boolean) => void,
 ): RefObject<boolean> {
   const atBottomRef = useRef(true);
+  const onChangeRef = useRef(onChange);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  });
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const distance = () => el.scrollHeight - el.scrollTop - el.clientHeight;
-    atBottomRef.current = distance() < AT_BOTTOM_THRESHOLD_PX;
+    let reported = true;
+    const set = (atBottom: boolean) => {
+      atBottomRef.current = atBottom;
+      if (atBottom === reported) return;
+      reported = atBottom;
+      onChangeRef.current?.(atBottom);
+    };
+    set(distance() < AT_BOTTOM_THRESHOLD_PX);
     let lastTop = el.scrollTop;
     const update = () => {
       const top = el.scrollTop;
-      if (distance() < AT_BOTTOM_THRESHOLD_PX) atBottomRef.current = true;
-      else if (top < lastTop) atBottomRef.current = false;
+      if (distance() < AT_BOTTOM_THRESHOLD_PX) set(true);
+      else if (top < lastTop) set(false);
       lastTop = top;
     };
     el.addEventListener('scroll', update, { passive: true });

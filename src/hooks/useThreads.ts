@@ -242,9 +242,17 @@ export function threadSeenAt(state: UserState | undefined, threadRootID: string)
 // the first reply after how far the user had read — just before something
 // marks the thread seen on open. The first note of a visit wins, so every
 // open path can call it; with no reply after that point there's no line.
-export function noteThreadReadPosition(qc: QueryClient, threadRootID: string): void {
+// `replace` moves a line already drawn: a reply that arrived in the open
+// thread unseen.
+export function noteThreadReadPosition(qc: QueryClient, threadRootID: string, opts: { replace?: boolean } = {}): void {
   const seenAt = threadSeenAt(qc.getQueryData<UserState>(queryKeys.userState()), threadRootID);
-  if (seenAt) setUnreadAnchor(threadReadKey(threadRootID), { kind: 'after', at: seenAt });
+  if (seenAt) setUnreadAnchor(threadReadKey(threadRootID), { kind: 'after', at: seenAt }, opts);
+}
+
+// threadHasUnseen: a reply at `latestAt` is newer than how far the user has
+// seen the thread, here or on another device.
+export function threadHasUnseen(qc: QueryClient, threadRootID: string, latestAt: string): boolean {
+  return seenTime(threadSeenAt(qc.getQueryData<UserState>(queryKeys.userState()), threadRootID)) < seenTime(latestAt);
 }
 
 // hasUnreadActivity returns true when latestActivityAt is newer than the
