@@ -10,6 +10,7 @@ import { ThreadTypingIndicator } from './TypingIndicator';
 import { Button } from '@/components/ui/button';
 import { Bell, BellOff, ArrowRight } from 'lucide-react';
 import { useAtBottomRef } from '@/hooks/useAtBottomRef';
+import { useMarkReadOnReturn } from '@/hooks/useMarkReadOnReturn';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import { usePanelWidth } from '@/hooks/usePanelWidth';
@@ -27,6 +28,7 @@ import { isReadHeld, keepReadSession, markUnreadSeen, scheduleEndReadSession, th
 import { attachScrollHoverPause } from '@/lib/scroll-hover-pause';
 import { keepBottomEdge } from '@/lib/keep-bottom-edge';
 import { isFollowedThread } from '@/lib/thread-follow';
+import { isUserAttentive, suppressionWindowMs } from '@/lib/user-activity';
 import { resolveUnreadDivider } from '@/lib/unread-divider';
 import { UnreadDivider } from './UnreadMarkers';
 import { MessageRowDataProvider } from './MessageRowDataProvider';
@@ -161,10 +163,21 @@ export function ThreadPanel({
     [threadAnchor, data, threadRootID, parentType, currentUserId],
   );
 
+  // Opening the thread reads it. A reply arriving later reads it only while
+  // the user is looking — the same test that decides whether its alert pops
+  // up — so a backgrounded window keeps the reply unread (and the app icon's
+  // count up) until they come back, instead of flashing the count for a second.
+  const seenOnOpenRef = useRef<string | null>(null);
   useEffect(() => {
     if (!parentID || !latestMessageAt || isReadHeld(threadKey)) return;
+    if (seenOnOpenRef.current === threadRootID && !isUserAttentive(suppressionWindowMs)) return;
+    seenOnOpenRef.current = threadRootID;
     markThreadSeen(threadRootID, latestMessageAt, { parentID, parentType });
   }, [parentID, parentType, threadRootID, threadKey, latestMessageAt]);
+  useMarkReadOnReturn(threadRootID, (rootID) => {
+    if (!parentID || !latestMessageAt || isReadHeld(threadReadKey(rootID))) return;
+    markThreadSeen(rootID, latestMessageAt, { parentID, parentType });
+  });
   const draftScope = useMemo(
     () => ({ parentID, parentType, parentMessageID: threadRootID }),
     [parentID, parentType, threadRootID],

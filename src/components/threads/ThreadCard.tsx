@@ -16,6 +16,7 @@ import { useComposerSchedule } from '@/hooks/useScheduledMessages';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import type { Message } from '@/types';
 import { useInView, useLiveInView } from '@/hooks/useInView';
+import { useMarkReadOnReturn } from '@/hooks/useMarkReadOnReturn';
 import {
   useDraftAttachmentChips,
   useDraftForScope,
@@ -24,6 +25,7 @@ import {
 import { collectMessageUserIDs } from '@/lib/message-users';
 import { addInViewThread, removeInViewThread } from '@/lib/thread-scope';
 import { isFollowedThread } from '@/lib/thread-follow';
+import { isUserAttentive, suppressionWindowMs } from '@/lib/user-activity';
 import {
   markThreadSeen,
   useFollowThread,
@@ -79,10 +81,13 @@ export function ThreadCard({ summary, title, deepLink, currentUserId, unread = f
   const { ref, inView } = useInView<HTMLElement>();
   const inputRef = useRef<MessageInputHandle>(null);
 
+  // On screen reads the thread — while the user is looking. A reply landing
+  // in a backgrounded window stays unread until they come back to it.
   useEffect(() => {
-    if (!inView || !unread) return;
+    if (!inView || !unread || !isUserAttentive(suppressionWindowMs)) return;
     markSummaryThreadSeen(summary);
   }, [inView, summary, unread]);
+  useMarkReadOnReturn(inView && unread ? summary.threadRootID : undefined, () => markSummaryThreadSeen(summary));
 
   // While this card is CURRENTLY in the viewport the user is reading the
   // thread (SPEC D-3) — register it so a live reply neither pops a

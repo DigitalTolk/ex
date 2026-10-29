@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThreadCard } from '@/components/threads/ThreadCard';
 import { resetSeenCache, threadDeepLink, type ThreadSummary } from '@/hooks/useThreads';
 import { isThreadInView, resetThreadScopeForTests } from '@/lib/thread-scope';
+import { forceAwayUntilInput, resetUserActivityForTests } from '@/lib/user-activity';
 import type { Message } from '@/types';
 
 const apiFetchMock = vi.fn();
@@ -701,6 +702,41 @@ describe('ThreadCard — viewport gating', () => {
       '/api/v1/user-state/threads/channels/ch-1/msg-root/seen',
       expect.objectContaining({ method: 'PUT' }),
     );
+  });
+
+  it('keeps an unread thread unread while the window is in the background, and reads it when the user comes back', async () => {
+    const summary = makeSummary({ latestActivityAt: '2099-01-01T00:00:00.000Z' });
+    forceAwayUntilInput();
+    try {
+      render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <MemoryRouter>
+            <ThreadCard
+              summary={summary}
+              title="~general"
+              deepLink="/channel/general?thread=msg-root#msg-msg-root"
+              currentUserId="u-me"
+              unread
+            />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      await Promise.resolve();
+      act(() => {
+        FakeObserver.instances[0].fire(true);
+      });
+      await screen.findByTestId('thread-card-msg');
+      const seenPut = ['/api/v1/user-state/threads/channels/ch-1/msg-root/seen', expect.objectContaining({ method: 'PUT' })];
+      expect(apiFetchMock).not.toHaveBeenCalledWith(...seenPut);
+      vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+      act(() => {
+        window.dispatchEvent(new Event('focus'));
+      });
+      expect(apiFetchMock).toHaveBeenCalledWith(...seenPut);
+    } finally {
+      resetUserActivityForTests();
+      vi.restoreAllMocks();
+    }
   });
 
   it('does not mark a read thread again when the card enters the viewport', async () => {

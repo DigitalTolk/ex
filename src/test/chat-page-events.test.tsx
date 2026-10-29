@@ -6,6 +6,7 @@ import ChatPage from '@/pages/ChatPage';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { forceAwayUntilInput, resetUserActivityForTests } from '@/lib/user-activity';
+import { THREAD_SEEN_CHANGED_EVENT } from '@/hooks/useThreads';
 import { usePresenceStore } from '@/stores/presence';
 import { endReadSession, getUnreadAnchor, holdRead, isReadHeld, setAtBottom, setAtLiveTail, threadReadKey, useMissedArrivals } from '@/lib/read-position';
 import { eventCallbacks, expectInvalidPayloadReported, type CapturedWSOptions } from '@/test/ws-frames';
@@ -291,6 +292,37 @@ describe('ChatPage WebSocket handlers', () => {
     expect(vi.mocked(apiFetch)).not.toHaveBeenCalledWith('/api/v1/conversations/conv-1/read', { method: 'PUT' });
     expect(clearConversationUnreadInCache).not.toHaveBeenCalled();
     expect(bumpConversationUnread).toHaveBeenCalledWith(expect.anything(), 'conv-1');
+  });
+
+  // Lola's flashing app-icon count: a reply into the thread open in a
+  // backgrounded window popped an alert (not looking) and was read at once
+  // (thread open), so the count went up and straight back down. Not looking ⇒
+  // the reply stays unread; the panel reads it when the user comes back.
+  it('onMessageNew for the ACTIVE thread while NOT attentive leaves it unread; your own reply still reads it', () => {
+    isActiveThread.mockReturnValue(true);
+    forceAwayUntilInput();
+    renderAt('/', (qc) => {
+      qc.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
+    });
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+    act(() => handler(msg({ id: 'reply-1', authorID: 'u-other', parentMessageID: 'msg-root' })));
+    expect(apiFetch).not.toHaveBeenCalledWith('/api/v1/user-state/threads/channels/ch-1/msg-root/seen', { method: 'PUT' });
+    const seen = vi.fn();
+    window.addEventListener(THREAD_SEEN_CHANGED_EVENT, seen);
+    act(() => handler(msg({ id: 'reply-2', authorID: 'u-me', parentMessageID: 'msg-root' })));
+    window.removeEventListener(THREAD_SEEN_CHANGED_EVENT, seen);
+    expect(seen).toHaveBeenCalled();
+  });
+
+  it('onNotification for the ACTIVE thread while NOT attentive marks it unread instead of seen', () => {
+    isActiveThread.mockReturnValue(true);
+    forceAwayUntilInput();
+    renderAt('/');
+    act(() => (capturedOptions.onNotification as (d: unknown) => void)({
+      kind: 'thread_reply', parentID: 'ch-1', parentType: 'channel', parentMessageID: 'msg-root', createdAt: '2026-05-01T10:00:01Z',
+    }));
+    expect(markThreadNotificationUnread).toHaveBeenCalledWith('msg-root');
+    expect(apiFetch).not.toHaveBeenCalledWith('/api/v1/user-state/threads/channels/ch-1/msg-root/seen', { method: 'PUT' });
   });
 
   it('onMessageNew does NOT mark the channel unread for a thread reply', () => {

@@ -292,7 +292,14 @@ export default function ChatPage() {
         const threadKey = threadReadKey(parentMessageID);
         // Posting reads the thread for you, ending a "Mark as unread" hold.
         if (isOwnAuthor) releaseRead(threadKey);
-        if (isActiveThread(parentMessageID) && !isReadHeld(threadKey)) {
+        // Others' replies read the open thread only while the user is looking
+        // (as for the open channel above); otherwise the panel reads it when
+        // they come back to the window.
+        if (
+          isActiveThread(parentMessageID) &&
+          !isReadHeld(threadKey) &&
+          (isOwnAuthor || isUserAttentive(suppressionWindowMs))
+        ) {
           // Reading OTHERS' replies persists the seen watermark. Your own
           // reply is marked seen server-side by the backend ("posting
           // reads the thread for you"), so skip the redundant PUT and only
@@ -563,8 +570,13 @@ export default function ChatPage() {
     [EventType.NotificationSettingsUpdated]: ({ settings }) => patchUser({ notificationSettings: settings }),
     [EventType.NotificationNew]: (n) => {
       if (n.parentMessageID) {
-        // A thread marked unread stays unread even while open.
-        if (isActiveThread(n.parentMessageID) && !isReadHeld(threadReadKey(n.parentMessageID))) {
+        // A thread marked unread stays unread even while open, and an open
+        // thread the user isn't looking at stays unread until they come back.
+        if (
+          isActiveThread(n.parentMessageID) &&
+          !isReadHeld(threadReadKey(n.parentMessageID)) &&
+          isUserAttentive(suppressionWindowMs)
+        ) {
           markThreadSeen(n.parentMessageID, n.createdAt, {
             parentID: n.parentID,
             parentType: n.parentType,
