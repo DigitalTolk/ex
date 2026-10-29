@@ -13,6 +13,7 @@ import { applyMark, applyBlock, getActiveFormats } from './extensions/commands';
 import { composerTooltips, visualViewportRepositioner } from './tooltipSpace';
 import { historyKeyBindings, withoutHistoryKeys } from '@/lib/history-shortcut';
 import { isApplePlatform } from '@/lib/platform';
+import { formatShortcuts, type FormatAction, type FormatShortcut } from '@/lib/format-shortcuts';
 
 export type { WysiwygEditorHandle, ActiveFormat };
 
@@ -73,6 +74,8 @@ interface Props {
   onPasteFiles?: (files: File[]) => void;
   submitOnEnter?: boolean;
   onArrowUpEmpty?: () => boolean;
+  // The link shortcut (⌘⇧U / Ctrl Shift U): opens the composer's link dialog.
+  onLinkShortcut?: () => void;
   mentionChannelId?: string;
   // Live data sources for @-mention / ~-channel / :emoji: autocomplete. Read
   // through a ref so the editor is still built once; absent → the sources
@@ -81,6 +84,29 @@ interface Props {
   // Live name→URL lookup for custom (workspace) emoji, so `:custom:` shortcodes
   // render as their image in the composer (matching the message renderer).
   customEmojiMap?: () => Record<string, string>;
+}
+
+// formatKeyBindings maps each formatting shortcut to its toolbar action; the
+// link one asks the composer for its dialog.
+function formatKeyBindings(shortcuts: Record<FormatAction, FormatShortcut>, openLink: () => boolean) {
+  const mark = (m: 'bold' | 'italic' | 'strike' | 'code') => (v: EditorView) => {
+    applyMark(v, m);
+    return true;
+  };
+  const block = (b: 'quote' | 'ul' | 'ol') => (v: EditorView) => {
+    applyBlock(v, b);
+    return true;
+  };
+  return [
+    { key: shortcuts.bold.key, run: mark('bold') },
+    { key: shortcuts.italic.key, run: mark('italic') },
+    { key: shortcuts.strike.key, run: mark('strike') },
+    { key: shortcuts.code.key, run: mark('code') },
+    { key: shortcuts.quote.key, run: block('quote') },
+    { key: shortcuts.ul.key, run: block('ul') },
+    { key: shortcuts.ol.key, run: block('ol') },
+    { key: shortcuts.link.key, run: openLink },
+  ];
 }
 
 // CommonMark + strikethrough + autolinks, no SetextHeading (see ./language).
@@ -100,6 +126,7 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
     onPasteFiles,
     submitOnEnter = true,
     onArrowUpEmpty,
+    onLinkShortcut,
     completionProviders,
     customEmojiMap,
   },
@@ -113,8 +140,8 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
   const overlayRef = useRef<HTMLDivElement>(null);
   // Latest callbacks, read through refs so the editor is built exactly once and
   // never torn down on a parent re-render (which would drop focus/selection).
-  const cbRef = useRef({ onChange, onSubmit, onCancel, onFocusChange, onPasteFiles, submitOnEnter, onArrowUpEmpty, completionProviders, customEmojiMap });
-  cbRef.current = { onChange, onSubmit, onCancel, onFocusChange, onPasteFiles, submitOnEnter, onArrowUpEmpty, completionProviders, customEmojiMap };
+  const cbRef = useRef({ onChange, onSubmit, onCancel, onFocusChange, onPasteFiles, submitOnEnter, onArrowUpEmpty, onLinkShortcut, completionProviders, customEmojiMap });
+  cbRef.current = { onChange, onSubmit, onCancel, onFocusChange, onPasteFiles, submitOnEnter, onArrowUpEmpty, onLinkShortcut, completionProviders, customEmojiMap };
   const formatSubsRef = useRef(new Set<(active: Set<ActiveFormat>) => void>());
   const linkSelRef = useRef<{ from: number; to: number }>({ from: 0, to: 0 });
   // Compartment so the (dynamic) editorClassName can be reconfigured on the
@@ -227,6 +254,13 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
                 return true;
               },
             },
+            // Slack's formatting keys, ahead of the defaults (⌘I would
+            // otherwise select the enclosing syntax node).
+            ...formatKeyBindings(formatShortcuts(isApplePlatform(navigator.userAgent)), () => {
+              if (!cbRef.current.onLinkShortcut) return false;
+              cbRef.current.onLinkShortcut();
+              return true;
+            }),
             ...historyKeymap,
             // Back and Forward's keys are theirs here too — whenever they
             // will go somewhere; otherwise the editor keeps them.

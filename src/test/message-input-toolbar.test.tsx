@@ -144,7 +144,7 @@ describe('MessageInput toolbar buttons', () => {
     // Link is deliberately desktop-only too — scarce mobile toolbar width
     // (Mobile fixes (7), #95). Guard against review sweeps re-adding it.
     expect(screen.queryByLabelText('Link')).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Bold (Ctrl+B)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Bold')).toBeInTheDocument();
   });
 
   it('keeps the focused mobile toolbar alive while tapping formatting buttons', async () => {
@@ -153,7 +153,7 @@ describe('MessageInput toolbar buttons', () => {
     const editor = await screen.findByLabelText('Message input');
     fireEvent.focus(editor);
 
-    const bold = screen.getByLabelText('Bold (Ctrl+B)');
+    const bold = screen.getByLabelText('Bold');
     const mouseDown = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
     bold.dispatchEvent(mouseDown);
 
@@ -173,10 +173,10 @@ describe('MessageInput toolbar buttons', () => {
     // a specific theme-class marker.
     // CM6 wraps the selection in the corresponding markdown delimiters.
     const cases: Array<{ label: string; wrapped: string }> = [
-      { label: 'Bold (Ctrl+B)', wrapped: '**hello**' },
-      { label: 'Italic (Ctrl+I)', wrapped: '*hello*' },
+      { label: 'Bold', wrapped: '**hello**' },
+      { label: 'Italic', wrapped: '*hello*' },
       { label: 'Strikethrough', wrapped: '~~hello~~' },
-      { label: 'Code (Ctrl+E)', wrapped: '`hello`' },
+      { label: 'Code', wrapped: '`hello`' },
     ];
     for (const c of cases) {
       const { unmount } = renderWithClient(<MessageInput onSend={vi.fn()} initialBody="hello" />);
@@ -334,8 +334,8 @@ describe('MessageInput toolbar pressed state', () => {
     const editor = container.querySelector('.cm-content') as HTMLElement;
     const v = editorView(editor);
     act(() => v.dispatch({ changes: { from: 0, insert: '**ab** *cd*' } }));
-    const bold = () => container.querySelector('[aria-label="Bold (Ctrl+B)"]')!;
-    const italic = () => container.querySelector('[aria-label="Italic (Ctrl+I)"]')!;
+    const bold = () => container.querySelector('[aria-label="Bold"]')!;
+    const italic = () => container.querySelector('[aria-label="Italic"]')!;
 
     act(() => v.dispatch({ selection: { anchor: 3 } }));
     expect(bold()).toHaveAttribute('aria-pressed', 'true');

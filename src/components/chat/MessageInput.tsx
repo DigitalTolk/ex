@@ -361,6 +361,7 @@ export const MessageInput = forwardRef<MessageInputHandle, MessageInputProps>(fu
             submitOnEnter={submitOnEnter}
             onPasteFiles={pasteFiles}
             onArrowUpEmpty={requestEditLast}
+            onLinkShortcut={linkDialog.openDialog}
             placeholder={isUploading ? 'Uploading…' : placeholder}
             ariaLabel="Message input"
             // Enables member / special / not-in-channel grouping in the

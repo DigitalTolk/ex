@@ -114,8 +114,11 @@ describe('ImageLightbox edge branches', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(Number(image.dataset.zoom)).toBe(1);
 
-    // ctrl + wheel-up zooms in.
-    stage.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, ctrlKey: true, bubbles: true, cancelable: true }));
+    // ctrl + wheel-up zooms in — the image, not the whole app: the browser's
+    // own zoom is cancelled (a passive listener can't, and React's are).
+    const zoomIn = new WheelEvent('wheel', { deltaY: -100, ctrlKey: true, bubbles: true, cancelable: true });
+    stage.dispatchEvent(zoomIn);
+    expect(zoomIn.defaultPrevented).toBe(true);
     await vi.waitFor(() => expect(Number(image.dataset.zoom)).toBeGreaterThan(1));
 
     // ctrl + wheel-down zooms back out (deltaY > 0 arm).

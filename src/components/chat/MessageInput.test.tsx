@@ -295,7 +295,7 @@ describe('MessageInput', () => {
 
     const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
     expect(toolbar).toBeInTheDocument();
-    expect(within(toolbar).getByLabelText('Bold (Ctrl+B)')).toBeInTheDocument();
+    expect(within(toolbar).getByLabelText('Bold')).toBeInTheDocument();
     expect(within(toolbar).getByLabelText('Emoji')).toBeInTheDocument();
     expect(within(toolbar).getByLabelText('Send message')).toBeInTheDocument();
     expect(screen.getByLabelText('Draft attachments')).toBeInTheDocument();
@@ -384,8 +384,8 @@ describe('MessageInput', () => {
     expect(document.activeElement).not.toBe(editor);
     const toolbar = screen.getByRole('toolbar', { name: 'Formatting' });
     expect(toolbar).toBeInTheDocument();
-    expect(screen.getByLabelText('Bold (Ctrl+B)')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Code (Ctrl+E)')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Bold')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Code')).not.toBeInTheDocument();
     expect(toolbar).toContainElement(screen.getByLabelText('Cancel'));
     const save = screen.getByLabelText('Save');
     expect(toolbar).toContainElement(save);
@@ -885,7 +885,7 @@ describe('MessageInput', () => {
     render(<MessageInput onSend={vi.fn()} initialBody="hello" hideCodeButton />);
 
     expect(await screen.findByRole('toolbar', { name: 'Formatting' })).toBeInTheDocument();
-    expect(screen.queryByLabelText('Code (Ctrl+E)')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Code')).not.toBeInTheDocument();
   });
 
   it('refocuses on ex:focus-composer when parent + scope match (main composer)', async () => {

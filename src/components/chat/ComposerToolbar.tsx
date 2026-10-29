@@ -17,6 +17,9 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { ScheduleSendMenu } from '@/components/chat/ScheduleSendMenu';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { formatShortcuts, type FormatShortcut } from '@/lib/format-shortcuts';
+import { isApplePlatform } from '@/lib/platform';
 import { Button } from '@/components/ui/button';
 import { EmojiPicker } from '@/components/EmojiPicker';
 import { GiphyPicker, type PickedGIF } from '@/components/GiphyPicker';
@@ -106,17 +109,17 @@ export const ComposerToolbar = memo(function ComposerToolbar({
         if (event.currentTarget.contains(event.target as Node)) event.preventDefault();
       }}
     >
-      <ToolbarBtn label="Bold (Ctrl+B)" active={active.has('bold')} onClick={() => editorRef.current?.applyMark('bold')}><Bold className="h-3.5 w-3.5" /></ToolbarBtn>
-      <ToolbarBtn label="Italic (Ctrl+I)" active={active.has('italic')} onClick={() => editorRef.current?.applyMark('italic')}><Italic className="h-3.5 w-3.5" /></ToolbarBtn>
-      <ToolbarBtn label="Strikethrough" active={active.has('strike')} onClick={() => editorRef.current?.applyMark('strike')}><Strikethrough className="h-3.5 w-3.5" /></ToolbarBtn>
+      <ToolbarBtn label="Bold" shortcut={FORMAT_SHORTCUTS.bold} active={active.has('bold')} onClick={() => editorRef.current?.applyMark('bold')}><Bold className="h-3.5 w-3.5" /></ToolbarBtn>
+      <ToolbarBtn label="Italic" shortcut={FORMAT_SHORTCUTS.italic} active={active.has('italic')} onClick={() => editorRef.current?.applyMark('italic')}><Italic className="h-3.5 w-3.5" /></ToolbarBtn>
+      <ToolbarBtn label="Strikethrough" shortcut={FORMAT_SHORTCUTS.strike} active={active.has('strike')} onClick={() => editorRef.current?.applyMark('strike')}><Strikethrough className="h-3.5 w-3.5" /></ToolbarBtn>
       {!isEditingMode && !hideCodeButton && (
-        <ToolbarBtn label="Code (Ctrl+E)" active={active.has('code')} onClick={() => editorRef.current?.applyMark('code')}><Code className="h-3.5 w-3.5" /></ToolbarBtn>
+        <ToolbarBtn label="Code" shortcut={FORMAT_SHORTCUTS.code} active={active.has('code')} onClick={() => editorRef.current?.applyMark('code')}><Code className="h-3.5 w-3.5" /></ToolbarBtn>
       )}
       {!isMobile && (
         <>
-          <ToolbarBtn label="Quote" active={active.has('quote')} onClick={() => editorRef.current?.applyBlock('quote')}><Quote className="h-3.5 w-3.5" /></ToolbarBtn>
-          <ToolbarBtn label="List" active={active.has('ul')} onClick={() => editorRef.current?.applyBlock('ul')}><List className="h-3.5 w-3.5" /></ToolbarBtn>
-          <ToolbarBtn label="Numbered list" active={active.has('ol')} onClick={() => editorRef.current?.applyBlock('ol')}><ListOrdered className="h-3.5 w-3.5" /></ToolbarBtn>
+          <ToolbarBtn label="Quote" shortcut={FORMAT_SHORTCUTS.quote} active={active.has('quote')} onClick={() => editorRef.current?.applyBlock('quote')}><Quote className="h-3.5 w-3.5" /></ToolbarBtn>
+          <ToolbarBtn label="List" shortcut={FORMAT_SHORTCUTS.ul} active={active.has('ul')} onClick={() => editorRef.current?.applyBlock('ul')}><List className="h-3.5 w-3.5" /></ToolbarBtn>
+          <ToolbarBtn label="Numbered list" shortcut={FORMAT_SHORTCUTS.ol} active={active.has('ol')} onClick={() => editorRef.current?.applyBlock('ol')}><ListOrdered className="h-3.5 w-3.5" /></ToolbarBtn>
         </>
       )}
       {/* DELIBERATELY desktop-only (like Quote/lists above): the mobile
@@ -124,7 +127,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
           important formatting control there (Mobile fixes (7), #95). Do not
           re-add it on mobile — [text](url) remains typeable. */}
       {!isMobile && (
-        <ToolbarBtn label="Link" onClick={onOpenLinkDialog}><LinkIcon className="h-3.5 w-3.5" /></ToolbarBtn>
+        <ToolbarBtn label="Link" shortcut={FORMAT_SHORTCUTS.link} onClick={onOpenLinkDialog}><LinkIcon className="h-3.5 w-3.5" /></ToolbarBtn>
       )}
       <span className="mx-1 h-4 w-px bg-border" aria-hidden />
       <EmojiPicker
@@ -266,29 +269,55 @@ export const ComposerToolbar = memo(function ComposerToolbar({
   );
 });
 
+// The formatting buttons' keys (the editor binds the same ones).
+const FORMAT_SHORTCUTS = formatShortcuts(isApplePlatform(navigator.userAgent));
+
 function ToolbarBtn({
   label,
+  shortcut,
   onClick,
   children,
   active,
 }: {
   label: string;
+  // A formatting button's key, shown with its name on hover.
+  shortcut?: FormatShortcut;
   onClick?: () => void;
   children: ReactNode;
   active?: boolean;
 }) {
+  const className = `flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted mobile:h-9 mobile:w-9 mobile:shrink-0 ${
+    active ? 'bg-muted text-foreground' : 'text-muted-foreground'
+  }`;
+  if (!shortcut) {
+    // The pickers' triggers (Emoji, GIF) are cloned by their popovers, so
+    // they keep the plain title.
+    return (
+      <button type="button" onClick={onClick} title={label} aria-label={label} aria-pressed={active ? 'true' : undefined} className={className}>
+        {children}
+      </button>
+    );
+  }
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={label}
-      aria-label={label}
-      aria-pressed={active ? 'true' : undefined}
-      className={`flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted mobile:h-9 mobile:w-9 mobile:shrink-0 ${
-        active ? 'bg-muted text-foreground' : 'text-muted-foreground'
-      }`}
-    >
-      {children}
-    </button>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            onClick={onClick}
+            aria-label={label}
+            aria-keyshortcuts={shortcut.aria}
+            aria-pressed={active ? 'true' : undefined}
+            className={className}
+          />
+        }
+      >
+        {children}
+      </TooltipTrigger>
+      <TooltipContent>
+        {label}
+        <kbd className="font-sans text-muted-foreground">{shortcut.label}</kbd>
+      </TooltipContent>
+    </Tooltip>
   );
 }

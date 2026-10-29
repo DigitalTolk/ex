@@ -324,10 +324,10 @@ describe('MessageInput coverage flows (browser)', () => {
     // nothing, bold wraps an empty `****`, and no StrongEmphasis node forms.
     const view = EditorView.findFromDOM(editor.element() as HTMLElement)!;
     view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
-    const bold = screen.getByLabelText('Bold (Ctrl+B)');
+    const bold = screen.getByLabelText('Bold');
     await bold.click();
     await vi.waitFor(() => {
-      expect(document.querySelector('[aria-label="Bold (Ctrl+B)"]')?.getAttribute('aria-pressed')).toBe('true');
+      expect(document.querySelector('[aria-label="Bold"]')?.getAttribute('aria-pressed')).toBe('true');
     }, { timeout: 4000 });
     await settle();
   });
@@ -391,11 +391,11 @@ describe('MessageInput coverage flows (browser)', () => {
     // Select all, then wrap with each inline mark in turn. applyMark keeps the
     // inner text selected, so each subsequent mark nests inside the previous.
     view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
-    await screen.getByLabelText('Italic (Ctrl+I)').click();
+    await screen.getByLabelText('Italic').click();
     await vi.waitFor(() => expect(view.state.doc.toString()).toContain('*fmt me*'));
     await screen.getByLabelText('Strikethrough').click();
     await vi.waitFor(() => expect(view.state.doc.toString()).toContain('~~fmt me~~'));
-    await screen.getByLabelText('Code (Ctrl+E)').click();
+    await screen.getByLabelText('Code').click();
     await vi.waitFor(() => expect(view.state.doc.toString()).toContain('`fmt me`'));
     await settle();
   });
