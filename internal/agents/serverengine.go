@@ -62,6 +62,9 @@ type ServerEngine struct {
 	// runAPIBase is this process's own HTTP listener (loopback) — non-empty
 	// enables the bridged workspace tools, which speak the run-tool API.
 	runAPIBase string
+	// runAPIHTTP is the bridged tools' client (runAPIClient), not the
+	// connector one: the connector guard refuses loopback.
+	runAPIHTTP *http.Client
 	// afterRun is a test seam observing run completion (nil in production).
 	afterRun func(runID string)
 }
@@ -79,7 +82,22 @@ func NewServerEngine(orch *Orchestrator, connectors *ConnectorService, client be
 		connectors: connectors,
 		client:     client,
 		http:       connectorHTTPClient(connectorHTTPTimeout),
+		runAPIHTTP: runAPIClient(connectorHTTPTimeout),
 		sem:        make(chan struct{}, serverEngineMaxConcurrent),
+	}
+}
+
+// runAPIClient is the bridged tools' client. It only ever calls this
+// process's own listener — runAPIBase, set from the server's config at boot,
+// never from a user, a connector or the provider — so it must not go through
+// the connector guard, which refuses loopback: sharing that client broke every
+// bridged tool in production. It still follows no redirect, so the run token
+// reaches only that listener, and ignores the proxy environment.
+func runAPIClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:       timeout,
+		Transport:     &http.Transport{Proxy: nil},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
 
@@ -199,7 +217,7 @@ func (e *ServerEngine) buildTools(ctx context.Context, run *model.Run, runToken 
 		// are the real handlers' — identical to a desktop runner's calls. A
 		// tool the handler holds for the invoker's approval waits on that card
 		// here and is re-issued once if they say yes.
-		tools = append(tools, bridgeTools(&runAPI{base: e.runAPIBase, token: runToken, http: e.http,
+		tools = append(tools, bridgeTools(&runAPI{base: e.runAPIBase, token: runToken, http: e.runAPIHTTP,
 			await: func(ctx context.Context, approvalID string) bool {
 				cur, failMsg := e.awaitDecision(ctx, run, approvalID, "approve the action", progress)
 				return failMsg == "" && cur.State == model.ApprovalApproved
