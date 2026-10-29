@@ -260,10 +260,16 @@ export function ThreadPanel({
   // (NOT scroller.lastElementChild, which can be a fixed-height
   // sentinel and would never report real content shifts).
   const innerRef = useRef<HTMLDivElement>(null);
-  const wasAtBottomRef = useAtBottomRef(scrollRef, (atBottom) => {
-    setAtBottom(threadKey, atBottom);
-    if (atBottom) readNewReplies();
-  });
+  // The panel stays mounted when another thread opens in it; threadKey starts
+  // the reports over for the new thread.
+  const wasAtBottomRef = useAtBottomRef(
+    scrollRef,
+    (atBottom) => {
+      setAtBottom(threadKey, atBottom);
+      if (atBottom) readNewReplies();
+    },
+    threadKey,
+  );
   useEffect(() => {
     const el = scrollRef.current;
     /* istanbul ignore next -- the scroller renders with the panel, so it is set by the time effects run; defensive. */

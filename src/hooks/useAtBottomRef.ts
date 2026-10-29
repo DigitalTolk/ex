@@ -22,10 +22,13 @@ const AT_BOTTOM_THRESHOLD_PX = 120;
 //
 // `onChange` hears each change. Callers set the ref themselves too (when they
 // follow new content down), so a change is judged against the last one
-// reported, not against the ref.
+// reported, not against the ref. A new `resetKey` starts the reports over:
+// a panel that stays mounted while it switches threads reports the new
+// thread's position, not a change from the old one's.
 export function useAtBottomRef(
   scrollRef: RefObject<HTMLElement | null>,
   onChange?: (atBottom: boolean) => void,
+  resetKey?: string,
 ): RefObject<boolean> {
   const atBottomRef = useRef(true);
   const onChangeRef = useRef(onChange);
@@ -53,6 +56,6 @@ export function useAtBottomRef(
     };
     el.addEventListener('scroll', update, { passive: true });
     return () => el.removeEventListener('scroll', update);
-  }, [scrollRef]);
+  }, [scrollRef, resetKey]);
   return atBottomRef;
 }

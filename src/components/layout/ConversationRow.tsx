@@ -106,11 +106,10 @@ export const ConversationRow = memo(function ConversationRow({
     setCategory.mutate({ conversationID: conversation.conversationID, categoryID });
   }
 
-  // Off screen it skips layout and paint, like ChannelRow.
   return (
     <div
       ref={dragRef}
-      className={`group/row relative flex items-center [content-visibility:auto] [contain-intrinsic-size:auto_2rem] mobile:[contain-intrinsic-size:auto_3rem] ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
+      className={`group/row relative flex items-center ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
       data-testid={`conversation-row-${conversation.conversationID}`}
       style={dragStyle}
       {...rowHandlers}

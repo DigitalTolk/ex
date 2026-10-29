@@ -71,15 +71,10 @@ export const ChannelRow = memo(function ChannelRow({
     setCategory.mutate({ channelID: channel.channelID, categoryID });
   }
 
-  // A row off screen skips layout and paint until it scrolls near: an
-  // imported account lists thousands. Until it has rendered once it holds a
-  // row's height (2rem, 3rem on a phone); after that the browser remembers its
-  // real one. It also clips what it paints to its box, which is why the link's
-  // focus ring sits inside (SidebarRowLink).
   return (
     <div
       ref={dragRef}
-      className={`group/row relative flex items-center [content-visibility:auto] [contain-intrinsic-size:auto_2rem] mobile:[contain-intrinsic-size:auto_3rem] ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
+      className={`group/row relative flex items-center ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
       data-testid={`channel-row-${channel.channelID}`}
       style={dragStyle}
       {...rowHandlers}

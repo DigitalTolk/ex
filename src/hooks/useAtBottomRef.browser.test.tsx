@@ -38,9 +38,17 @@ function AttachedProbe({ height = 100 }: { height?: number }) {
   );
 }
 
-function ReportingProbe({ reports, exposeRef }: { reports: boolean[]; exposeRef: (ref: RefObject<boolean>) => void }) {
+function ReportingProbe({
+  reports,
+  exposeRef,
+  resetKey,
+}: {
+  reports: boolean[];
+  exposeRef: (ref: RefObject<boolean>) => void;
+  resetKey?: string;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const atBottom = useAtBottomRef(scrollRef, (value) => reports.push(value));
+  const atBottom = useAtBottomRef(scrollRef, (value) => reports.push(value), resetKey);
   exposeRef(atBottom);
   return (
     <div ref={scrollRef} data-testid="scroller" style={{ height: 100, overflowY: 'auto' }}>
@@ -75,6 +83,20 @@ describe('useAtBottomRef (browser)', () => {
     atBottom!.current = true;
     await scrollTo(scroller.scrollHeight);
     expect(reports).toEqual([false, true, false, true]);
+  });
+
+  // The thread panel stays mounted when another thread opens in it. The new
+  // thread's position is reported even when it matches the old one's last
+  // report: the reader scrolled up in thread A must not leave thread B
+  // filed as "at the bottom".
+  it('reports again from scratch when the reset key changes', async () => {
+    const reports: boolean[] = [];
+    const screen = await render(<ReportingProbe reports={reports} exposeRef={() => {}} resetKey="thread-a" />);
+    expect(reports).toEqual([false]);
+    await screen.rerender(<ReportingProbe reports={reports} exposeRef={() => {}} resetKey="thread-b" />);
+    expect(reports).toEqual([false, false]);
+    await screen.rerender(<ReportingProbe reports={reports} exposeRef={() => {}} resetKey="thread-b" />);
+    expect(reports).toEqual([false, false]);
   });
 
   it('bails out of the effect when the scroll ref is never attached', async () => {

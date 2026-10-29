@@ -1,4 +1,4 @@
-import { Fragment, memo, useState } from 'react';
+import { Fragment, memo, useState, type CSSProperties, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   PragmaticCategoryDropHitbox,
@@ -328,7 +328,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                     )}
                   </PragmaticCategoryHeader>
                   <div className="mt-1 space-y-1">
-                    {visibleItems.map((item, index) => {
+                    {inRowBlocks(visibleItems.map((item, index) => {
                       if (item.kind === 'channel') {
                         const channelDropIndex = slots[index];
                         // Open the push-aside gap just above this row when the
@@ -388,7 +388,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                           />
                         </Fragment>
                       );
-                    })}
+                    }))}
                     {/* Tail gap: drop resolves past the last row (area 'end'). */}
                     {channelGap != null && channelGap.area === 'end' && <SidebarDropGap sectionKey={section.key} />}
                   </div>
@@ -527,3 +527,35 @@ const SidebarConversationItem = memo(function SidebarConversationItem({
     </PragmaticConversationRow>
   );
 });
+
+// A long section renders its rows in blocks, and a block off screen skips
+// layout and paint until it scrolls near: an imported account lists thousands
+// of rows. Blocks, not rows: the browser checks every such box on every frame
+// to see whether it came near, and on a phone checking a few thousand rows cost
+// more while scrolling than the layout they skipped. Until a block has rendered
+// once it holds its rows' height (2rem rows, 3rem on a phone, 0.25rem apart);
+// after that the browser remembers its real one. Each block is a `space-y-1`
+// list of its own, so the rows keep their spacing and stay direct children for
+// the drag collapse. It clips what it paints to its box, which is why the
+// row link's focus ring sits inside (SidebarRowLink). A section that fits in
+// one block renders its rows as they are.
+const ROW_BLOCK = 40;
+
+function inRowBlocks(rows: ReactNode[]): ReactNode {
+  if (rows.length <= ROW_BLOCK) return rows;
+  const blocks: ReactNode[] = [];
+  for (let start = 0; start < rows.length; start += ROW_BLOCK) {
+    const block = rows.slice(start, start + ROW_BLOCK);
+    blocks.push(
+      <div
+        key={start}
+        className="space-y-1 [content-visibility:auto] [contain-intrinsic-size:auto_calc(var(--rows)*2.25rem-0.25rem)] mobile:[contain-intrinsic-size:auto_calc(var(--rows)*3.25rem-0.25rem)]"
+        style={{ '--rows': block.length } as CSSProperties}
+        data-testid="sidebar-row-block"
+      >
+        {block}
+      </div>,
+    );
+  }
+  return blocks;
+}

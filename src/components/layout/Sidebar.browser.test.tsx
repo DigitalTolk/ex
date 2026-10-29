@@ -1368,33 +1368,49 @@ describe('Sidebar browser render — rich fixtures', () => {
   });
 });
 
-// An imported account lists thousands of rows. One off screen skips layout
-// and paint (content-visibility) until it scrolls near.
+// An imported account lists thousands of rows. A long section renders them in
+// blocks, and a block off screen skips layout and paint (content-visibility)
+// until it scrolls near.
 describe('Sidebar rows off screen', () => {
   const row = (index: number) => document.querySelector(`[data-testid="channel-row-ch-many-${index}"]`) as HTMLElement;
   const drawn = (index: number) => row(index).querySelector('a')!.checkVisibility({ contentVisibilityAuto: true });
-
-  it('skips a row far out of view, at a row\'s height, and draws it once scrolled to', async () => {
-    mockCategories = [];
-    mockChannels = Array.from({ length: 200 }, (_, index) => ({
+  const blocks = () => [...document.querySelectorAll('[data-testid="sidebar-row-block"]')] as HTMLElement[];
+  const manyChannels = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
       channelID: `ch-many-${index}`,
       channelName: `many-${String(index).padStart(3, '0')}`,
       channelType: 'public' as const,
       role: 1,
     }));
+
+  it('skips a block far out of view, at its rows\' height, and draws it once scrolled to', async () => {
+    mockCategories = [];
+    mockChannels = manyChannels(200);
     await render(<Frame />);
 
+    // 200 rows: five blocks of 40, the rows still in sidebar order.
+    await expect.poll(() => blocks().length).toBe(5);
+    expect(blocks().map((block) => block.querySelectorAll('[data-testid^="channel-row-"]').length)).toEqual([40, 40, 40, 40, 40]);
+    expect(blocks()[4].lastElementChild).toBe(row(199));
     await expect.poll(() => drawn(0)).toBe(true);
     await expect.poll(() => drawn(199)).toBe(false);
-    // The direct messages sit below them all.
-    const dms = document.querySelectorAll('[data-testid^="conversation-row-"]');
-    expect(dms.length).toBeGreaterThan(0);
-    expect(dms[dms.length - 1].querySelector('a')!.checkVisibility({ contentVisibilityAuto: true })).toBe(false);
-    // Holding a drawn row's height, the list doesn't jump as rows come in.
-    expect(row(199).getBoundingClientRect().height).toBe(row(0).getBoundingClientRect().height);
+    // Holding its rows' height (and their gaps), the list doesn't jump as
+    // blocks come in: the skipped last block is as tall as the drawn first.
+    expect(blocks()[4].getBoundingClientRect().height).toBe(blocks()[0].getBoundingClientRect().height);
 
     row(199).scrollIntoView();
     await expect.poll(() => drawn(199)).toBe(true);
+  });
+
+  it('renders a section that fits in one block as plain rows', async () => {
+    mockCategories = [];
+    mockChannels = manyChannels(40);
+    await render(<Frame />);
+
+    await expect.poll(() => drawn(39)).toBe(true);
+    expect(blocks()).toHaveLength(0);
+    // The rows space themselves out as before: direct children of the list.
+    expect(row(0).parentElement!.className).toContain('space-y-1');
   });
 
   it('draws the focus ring inside the row, which clips what it paints', async () => {
