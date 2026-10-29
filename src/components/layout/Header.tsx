@@ -1,5 +1,5 @@
 import { memo, useLayoutEffect, useRef, useState } from 'react';
-import { Users, ChevronDown, ChevronLeft, LogOut, Archive, ArchiveRestore, Pencil, PenLine, Bell, BellOff, Pin, Paperclip, SlidersHorizontal, Lock } from 'lucide-react';
+import { Users, ChevronDown, ChevronLeft, LogOut, Archive, ArchiveRestore, Pencil, TextCursorInput, Bell, BellOff, Pin, Paperclip, SlidersHorizontal, Lock } from 'lucide-react';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
@@ -252,7 +252,7 @@ export const Header = memo(function Header({
                 )}
                 {onRename && (
                   <DropdownMenuItem onClick={renameChannel}>
-                    <PenLine className="mr-2 h-4 w-4" /> Rename channel
+                    <TextCursorInput className="mr-2 h-4 w-4" /> Rename channel
                   </DropdownMenuItem>
                 )}
                 {onMakePrivate && (
@@ -540,7 +540,7 @@ export const Header = memo(function Header({
               className="flex h-12 w-full items-center rounded-md px-3 text-left hover:bg-muted"
               onClick={renameChannel}
             >
-              <PenLine className="mr-2 h-4 w-4" /> Rename channel
+              <TextCursorInput className="mr-2 h-4 w-4" /> Rename channel
             </button>
           )}
           {onMakePrivate && (

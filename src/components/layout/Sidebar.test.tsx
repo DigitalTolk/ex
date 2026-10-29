@@ -37,6 +37,20 @@ vi.mock('@/hooks/useRowLongPressMenu', async (importOriginal) => {
   };
 });
 
+// The drag wrapper around each channel row, counted the same way: it
+// re-rendered for every row on every channel switch.
+const dragWrapperRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock('./sidebar-dnd', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./sidebar-dnd')>();
+  return {
+    ...actual,
+    PragmaticChannelRow: (props: Parameters<typeof actual.PragmaticChannelRow>[0]) => {
+      dragWrapperRenders.count += 1;
+      return actual.PragmaticChannelRow(props);
+    },
+  };
+});
+
 vi.mock('@/lib/api', () => ({
   // Answer the server-owned move endpoints with their (empty) response
   // shapes whenever a test's mockImplementation doesn't — the hooks read
@@ -351,68 +365,49 @@ describe('Sidebar', () => {
   it('re-enables drag-to-reorder on a touch screen once a trackpad is attached', async () => {
     window.__EX_FORCE_DEVICE__ = 'touch';
     window.__EX_POINTER_DEVICE__ = true;
-    renderSidebar();
+    const wrappersBefore = dragWrapperRenders.count;
+    const { container } = renderSidebar();
 
     const channelRow = screen.getByTestId('channel-row-ch-1') as HTMLElement;
     expect(channelRow).toHaveClass('cursor-grab');
     await waitFor(() => {
       expect(channelRow.ondragstart).not.toBeNull();
     });
+    expect(dragWrapperRenders.count).toBeGreaterThan(wrappersBefore);
+    expect(dragRegistrations(container)).toBeGreaterThan(0);
   });
 
-  it('lists archived channels in a folded Archived section at the bottom, outside the other sections', async () => {
+  // The mocked adapter marks a drag source with ondragstart and a drop target
+  // with ondragover.
+  function dragRegistrations(container: HTMLElement) {
+    return [...container.querySelectorAll<HTMLElement>('*')].filter((el) => el.ondragstart || el.ondragover).length;
+  }
+
+  // A hold on a row opens its menu there, so the drag code is left out.
+  it.each([
+    ['a phone', () => setMobileMatch(true)],
+    ['an iPad without a trackpad', () => { window.__EX_FORCE_DEVICE__ = 'touch'; }],
+  ])('mounts no drag code on %s: no row wrappers, no drop targets', (_device, setDevice) => {
+    setDevice();
+    const wrappersBefore = dragWrapperRenders.count;
+    const { container } = renderSidebar();
+
+    expect(screen.getByTestId('channel-row-ch-1')).toBeInTheDocument();
+    expect(dragWrapperRenders.count).toBe(wrappersBefore);
+    expect(dragRegistrations(container)).toBe(0);
+  });
+
+  // Archived channels are history; their members find them through search.
+  it('never lists an archived channel, not even one that is favorited, unread or open', () => {
     mockChannels = [
       ...baseMockChannels,
       { channelID: 'ch-old', channelName: 'old-project', channelType: 'public', role: 1, archived: true, favorite: true, unread: true, unreadNotifyCount: 3 },
     ];
-    renderSidebar();
-
-    const group = screen.getByTestId('sidebar-group-archived');
-    const toggle = screen.getByTestId('sidebar-group-toggle-archived');
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    // Folded: the row is hidden, and it is in no other section (not even
-    // Favorites, although favorited).
-    expect(screen.queryByTestId('channel-row-ch-old')).toBeNull();
-
-    fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    const row = within(group).getByTestId('channel-row-ch-old');
-    expect(row).toBeInTheDocument();
-    // Never shows unread state.
-    expect(within(group).queryByText('3')).toBeNull();
-
-    fireEvent.keyDown(toggle, { key: 'Enter' });
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    fireEvent.keyDown(toggle, { key: ' ' });
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.keyDown(toggle, { key: 'a' });
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
-  });
-
-  it('keeps the archived channel being viewed visible while the section is folded', () => {
-    mockChannels = [
-      ...baseMockChannels,
-      { channelID: 'ch-old', channelName: 'old-project', channelType: 'public', role: 1, archived: true },
-    ];
     window.history.pushState({}, '', '/channel/old-project');
     renderSidebar();
-    expect(screen.getByTestId('sidebar-group-toggle-archived')).toHaveAttribute('aria-expanded', 'false');
-    expect(within(screen.getByTestId('sidebar-group-archived')).getByTestId('channel-row-ch-old')).toBeInTheDocument();
-  });
-
-  it('hides the Archived section in the unread-only view and when nothing is archived', () => {
-    renderSidebar();
-    expect(screen.queryByTestId('sidebar-group-archived')).toBeNull();
-  });
-
-  it('hides the Archived section while showing unread only', () => {
-    mockChannels = [
-      ...baseMockChannels,
-      { channelID: 'ch-old', channelName: 'old-project', channelType: 'public', role: 1, archived: true },
-    ];
-    localStorage.setItem('sidebar.unreadOnly', '1');
-    renderSidebar();
-    expect(screen.queryByTestId('sidebar-group-archived')).toBeNull();
+    expect(screen.getByTestId('channel-row-ch-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('channel-row-ch-old')).toBeNull();
+    expect(screen.queryByText('Archived')).toBeNull();
   });
 
   it('renders channel list', () => {
@@ -1246,24 +1241,35 @@ describe('Sidebar', () => {
     expect(mockApiFetch).not.toHaveBeenCalledWith('/api/v1/sidebar/move', expect.anything());
   });
 
-  // Opening a chat re-renders the list (it marks the open row); the rows
-  // themselves re-render only when their own data changes. Re-rendering every
-  // row on each navigation was a large part of what opening a chat cost on a
-  // phone, right while the list slid away.
-  it('opening a chat does not re-render the rows', async () => {
+  // A channel switch re-renders the list, but of the rows only the two whose
+  // open state changed. Every row (with its drag wrapper and link) used to
+  // re-render on each switch, about a second on a phone for an imported
+  // account in thousands of channels.
+  it('a channel switch re-renders only the rows it changes', async () => {
     renderSidebar();
-    const row = await screen.findByTestId('channel-row-ch-2');
+    const first = await screen.findByTestId('channel-row-ch-2');
+    const second = screen.getByTestId('channel-row-ch-1');
     const rows = document.querySelectorAll('[data-testid^="channel-row-"], [data-testid^="conversation-row-"]').length;
     expect(rows).toBeGreaterThan(3);
     // Let the rows' own queries (the category list) settle first.
     await act(async () => {
       await new Promise((r) => setTimeout(r, 20));
     });
-    const before = rowRenders.count;
-    fireEvent.click(within(row).getAllByRole('link')[0]);
-    await waitFor(() => expect(window.location.pathname).not.toBe('/'));
-    await waitFor(() => expect(row.querySelector('a[aria-current="page"]')).not.toBeNull());
-    expect(rowRenders.count - before).toBe(0);
+
+    let rowsBefore = rowRenders.count;
+    let wrappersBefore = dragWrapperRenders.count;
+    fireEvent.click(within(first).getAllByRole('link')[0]);
+    await waitFor(() => expect(first.querySelector('a[aria-current="page"]')).not.toBeNull());
+    expect(dragWrapperRenders.count - wrappersBefore).toBe(1);
+    expect(rowRenders.count - rowsBefore).toBe(1);
+
+    rowsBefore = rowRenders.count;
+    wrappersBefore = dragWrapperRenders.count;
+    fireEvent.click(within(second).getAllByRole('link')[0]);
+    await waitFor(() => expect(second.querySelector('a[aria-current="page"]')).not.toBeNull());
+    expect(first.querySelector('a[aria-current="page"]')).toBeNull();
+    expect(dragWrapperRenders.count - wrappersBefore).toBe(2);
+    expect(rowRenders.count - rowsBefore).toBe(2);
   });
 
   it('ignores a favorited conversation dragged over a channel row outside Favorites', async () => {

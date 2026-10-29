@@ -125,9 +125,10 @@ describe('Sidebar - extra actions', () => {
 
   it('hides a conversation via the kebab "Close conversation" item', () => {
     // The dedicated X button was folded into the row's kebab menu so DM
-    // rows match channel-row geometry. The dropdown mock above renders
-    // every menu item inline, so we can find it by text without opening.
+    // rows match channel-row geometry. The dropdown mock above renders the
+    // items inline once the row's menu is open.
     renderSidebar();
+    fireEvent.click(screen.getByTestId('conv-row-menu-conv-1'));
     const items = screen.getAllByTestId('dropdown-item');
     const closeItem = items.find((b) => b.textContent === 'Close conversation');
     expect(closeItem).toBeTruthy();

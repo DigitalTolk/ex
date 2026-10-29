@@ -222,13 +222,11 @@ export function PragmaticChannelRow({
   sectionKey,
   index,
   channel,
-  disabled,
   children,
 }: {
   sectionKey: string;
   index: number;
   channel: UserChannel;
-  disabled?: boolean;
   children: (args: {
     dragRef?: (node: HTMLElement | null) => void;
     dragStyle?: CSSProperties;
@@ -239,7 +237,9 @@ export function PragmaticChannelRow({
 
   useEffect(() => {
     const element = elementRef.current;
-    if (!element || disabled) return undefined;
+    /* v8 ignore next -- elementRef is always attached after mount; the !element arm is defensive */
+    /* istanbul ignore next -- elementRef is always attached after mount; the !element arm is defensive */
+    if (!element) return undefined;
     return combine(
       makeDraggable({
         element,
@@ -270,7 +270,7 @@ export function PragmaticChannelRow({
           ),
       }),
     );
-  }, [channel, disabled, index, sectionKey]);
+  }, [channel, index, sectionKey]);
 
   const setElementRef = useCallback((node: HTMLElement | null) => {
     elementRef.current = node;
@@ -291,13 +291,11 @@ export function PragmaticConversationRow({
   sectionKey,
   index,
   conversation,
-  disabled,
   children,
 }: {
   sectionKey: string;
   index: number;
   conversation: UserConversation;
-  disabled?: boolean;
   children: (args: {
     dragRef?: (node: HTMLElement | null) => void;
     dragStyle?: CSSProperties;
@@ -310,7 +308,7 @@ export function PragmaticConversationRow({
     const element = elementRef.current;
     /* v8 ignore next -- elementRef is always attached after mount; the !element arm is defensive */
     /* istanbul ignore next -- elementRef is always attached after mount; the !element arm is defensive */
-    if (!element || disabled) return undefined;
+    if (!element) return undefined;
     return combine(
       makeDraggable({
         element,
@@ -341,7 +339,7 @@ export function PragmaticConversationRow({
           ),
       }),
     );
-  }, [conversation, disabled, index, sectionKey]);
+  }, [conversation, index, sectionKey]);
 
   const setElementRef = useCallback((node: HTMLElement | null) => {
     elementRef.current = node;

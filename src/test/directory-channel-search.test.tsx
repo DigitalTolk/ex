@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter, useLocation } from 'react-router-dom';
 
 vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -12,6 +12,7 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
   ),
 }));
 
+let userChannels: Array<Record<string, unknown>> | undefined = [];
 vi.mock('@/hooks/useChannels', () => ({
   useBrowseChannels: () => ({
     data: [
@@ -27,7 +28,7 @@ vi.mock('@/hooks/useChannels', () => ({
     ],
     isLoading: false,
   }),
-  useUserChannels: () => ({ data: [] }),
+  useUserChannels: () => ({ data: userChannels }),
   useJoinChannel: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
@@ -52,19 +53,27 @@ vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }));
 
 import DirectoriesPage from '@/pages/DirectoriesPage';
 
+function Location() {
+  return <p data-testid="location">{useLocation().pathname}</p>;
+}
+
 function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
       <BrowserRouter>
         <DirectoriesPage />
+        <Location />
       </BrowserRouter>
     </QueryClientProvider>,
   );
 }
 
 describe('DirectoriesPage — channel search', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    userChannels = [];
+  });
 
   it('renders all public channels by default', () => {
     renderPage();
@@ -100,5 +109,44 @@ describe('DirectoriesPage — channel search', () => {
     renderPage();
     fireEvent.change(screen.getByLabelText('Search channels'), { target: { value: 'zzz' } });
     expect(screen.getByText('No matching channels')).toBeInTheDocument();
+  });
+
+  // The sidebar doesn't list archived channels; their members find them here.
+  it('lists your archived channels that match only while searching, after every live result', () => {
+    userChannels = [
+      { channelID: 'ch-7', channelName: 'incident', channelType: 'public' },
+      { channelID: 'ch-old', channelName: 'incident-2019', channelType: 'public', archived: true },
+      { channelID: 'ch-old-ops', channelName: 'Ops Incidents', channelType: 'private', archived: true },
+      { channelID: 'ch-other', channelName: 'marketing', channelType: 'public', archived: true },
+    ];
+    renderPage();
+    expect(screen.queryByText('incident-2019')).toBeNull();
+    expect(screen.queryByText('Archived')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Search channels'), { target: { value: 'incident' } });
+    const names = screen.getAllByText(/inc/i, { selector: 'p.font-medium' }).map((el) => el.textContent);
+    expect(names).toEqual(['incident', 'incidents-2025', 'inc-1042', 'inc-1041', 'incident-2019', 'Ops Incidents']);
+    expect(screen.queryByText('marketing')).toBeNull();
+    expect(screen.getAllByText('Archived')).toHaveLength(2);
+
+    const archived = screen.getByTestId('directory-archived-ch-old-ops');
+    fireEvent.click(within(archived).getByRole('button', { name: 'Open' }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/channel/ops-incidents');
+  });
+
+  it('shows an archived match alone when no live channel matches', () => {
+    userChannels = [{ channelID: 'ch-old', channelName: 'legacy-billing', channelType: 'public', archived: true }];
+    renderPage();
+    fireEvent.change(screen.getByLabelText('Search channels'), { target: { value: 'legacy' } });
+    expect(screen.getByText('legacy-billing')).toBeInTheDocument();
+    expect(screen.queryByText('No matching channels')).toBeNull();
+  });
+
+  it('searches the live channels while your own are still loading', () => {
+    userChannels = undefined;
+    renderPage();
+    fireEvent.change(screen.getByLabelText('Search channels'), { target: { value: 'des' } });
+    expect(screen.getByText('design')).toBeInTheDocument();
+    expect(screen.queryByText('Archived')).toBeNull();
   });
 });

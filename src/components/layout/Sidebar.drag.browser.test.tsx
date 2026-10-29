@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -426,6 +426,12 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
   });
 
   it('registers EVERY drop target as sticky so the push-aside gap can never orphan the drop', async () => {
+    // A touch-only device registers none: drag needs a mouse or trackpad.
+    const device = window.__EX_FORCE_DEVICE__;
+    window.__EX_FORCE_DEVICE__ = 'desktop';
+    onTestFinished(() => {
+      window.__EX_FORCE_DEVICE__ = device;
+    });
     await render(<Frame />);
     // Rows, the section tail, category headers and boundary hitboxes all register
     // drop targets. Each MUST be sticky: when the pointer slides off a row onto

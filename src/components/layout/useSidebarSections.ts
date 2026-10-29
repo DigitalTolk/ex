@@ -7,15 +7,15 @@ import { useCategories } from '@/hooks/useSidebar';
 import { useUserState } from '@/hooks/useUserState';
 import { slugify } from '@/lib/format';
 import {
-  archivedSidebarChannels,
   groupSidebarItems,
   isSidebarItemUnread,
+  sidebarItemID,
   SidebarSectionKeys,
   type ConversationSidebarSort,
   type SidebarItem,
   type SidebarSection,
 } from '@/lib/sidebar-groups';
-import type { SidebarCategory } from '@/types';
+import type { SidebarCategory, UserChannel } from '@/types';
 
 const NO_CATEGORIES: SidebarCategory[] = [];
 
@@ -46,14 +46,20 @@ export function useSidebarSections({
     [conversations, hiddenConversations, userState?.hiddenConversations],
   );
 
+  // Slugs once per channel list, not per channel on every navigation.
+  const channelsByPath = useMemo(() => {
+    const byPath = new Map<string, UserChannel>();
+    for (const c of channels ?? []) {
+      byPath.set(`/channel/${slugify(c.channelName)}`, c);
+      byPath.set(`/channel/${c.channelID}`, c);
+    }
+    return byPath;
+  }, [channels]);
+
   // The chat being viewed. With the unread view on it stays visible even
   // though opening it reads it, and — if it was unread when opened — stays in
   // the Unread section until the user leaves, so rows don't jump mid-read.
-  const activeItemID = useMemo(() => {
-    const ch = channels?.find((c) => pathname === `/channel/${slugify(c.channelName)}` || pathname === `/channel/${c.channelID}`);
-    if (ch) return ch.channelID;
-    return /^\/conversation\/([^/]+)/.exec(pathname)?.[1];
-  }, [pathname, channels]);
+  const activeItemID = channelsByPath.get(pathname)?.channelID ?? /^\/conversation\/([^/]+)/.exec(pathname)?.[1];
   const activeItemUnread = useMemo(() => {
     const ch = channels?.find((c) => c.channelID === activeItemID);
     if (ch) return isSidebarItemUnread({ kind: 'channel', channel: ch });
@@ -75,14 +81,12 @@ export function useSidebarSections({
     [channels, visibleConversations, categories, conversationSort, unreadSection, unreadOnly, activeItemID, stickyUnread],
   );
 
-  const archivedChannels = useMemo(() => archivedSidebarChannels(channels ?? []), [channels]);
-
   return {
     // The sections render once the DMs are in (or failed to load); until then
     // the sidebar shows a skeleton.
     ready: conversations !== undefined || conversationsQuery.isError,
     sections,
-    archivedChannels,
+    activeItemID,
     visibleConversations,
     categories,
   };
@@ -116,19 +120,14 @@ export function spacedSectionKeys(
 // foldedSectionItems is what a collapsed section still shows:
 //   - items with new activity (unless muted) so the user doesn't miss
 //     messages hidden behind a folded category;
-//   - the channel/conversation the user is currently viewing, so navigating
-//     away from it (or scrolling up) doesn't make the row vanish out from
-//     under them. Once they switch focus elsewhere, the row hides again on
-//     the next render.
-export function foldedSectionItems(items: SidebarItem[], pathname: string): SidebarItem[] {
+//   - the channel/conversation the user is currently viewing (activeID), so
+//     navigating away from it (or scrolling up) doesn't make the row vanish
+//     out from under them. Once they switch focus elsewhere, the row hides
+//     again on the next render.
+export function foldedSectionItems(items: SidebarItem[], activeID: string | undefined): SidebarItem[] {
   return items.filter((item) => {
-    if (item.kind === 'channel') {
-      const ch = item.channel;
-      const isActive = pathname === `/channel/${slugify(ch.channelName)}`;
-      return isActive || (!ch.muted && !!ch.unread);
-    }
-    const conv = item.conversation;
-    const isActive = pathname === `/conversation/${conv.conversationID}`;
-    return isActive || !!conv.unread;
+    if (sidebarItemID(item) === activeID) return true;
+    if (item.kind === 'channel') return !item.channel.muted && !!item.channel.unread;
+    return !!item.conversation.unread;
   });
 }

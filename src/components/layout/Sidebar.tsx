@@ -1,5 +1,5 @@
-import { Fragment, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Fragment, memo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   PragmaticCategoryDropHitbox,
   PragmaticCategoryHeader,
@@ -9,7 +9,7 @@ import {
   SidebarDropGap,
 } from './sidebar-dnd';
 import { CATEGORY_DROP_END } from './sidebar-dnd-core';
-import { dropCount } from './sidebar-drop-resolution';
+import { dropCount, dropSlots } from './sidebar-drop-resolution';
 import { useSidebarDrag } from './useSidebarDrag';
 import { foldedSectionItems, isSectionHidden, spacedSectionKeys, useSidebarSections } from './useSidebarSections';
 import { dmPartnerID, useDMPartners } from './useDMPartners';
@@ -33,14 +33,15 @@ import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { deviceKind } from '@/lib/device';
 import { usePointerDevice } from '@/hooks/usePointerDevice';
+import { useEventCallback } from '@/hooks/useEventCallback';
 import { useSidebarViewPreferences } from '@/hooks/useSidebarViewPreferences';
 import { SidebarSectionKeys } from '@/lib/sidebar-groups';
+import type { UserChannel, UserConversation, UserStatus } from '@/types';
 import { SidebarUnreadControls } from '@/components/layout/SidebarUnreadControls';
 import { ChannelRow } from './ChannelRow';
 import { ConversationRow } from './ConversationRow';
 import { SidebarPageLinks } from './SidebarPageLinks';
 import { DeleteCategoryDialog, SidebarAddCategory } from './SidebarCategoryControls';
-import { SidebarArchivedSection } from './SidebarArchivedSection';
 import { CreateChannelDialog } from '@/components/channels/CreateChannelDialog';
 
 interface SidebarProps {
@@ -66,20 +67,21 @@ export function Sidebar({ onClose }: SidebarProps) {
   const { hideConversation } = useUnread();
   const view = useSidebarViewPreferences();
   const { unreadSection, unreadOnly, collapsedSections } = view;
-  const { ready, sections: sidebarSections, archivedChannels, visibleConversations, categories } = useSidebarSections(view);
+  const { ready, sections: sidebarSections, activeItemID, visibleConversations, categories } = useSidebarSections(view);
   const dmUserMap = useDMPartners(visibleConversations, user?.id);
   const { isDraggingCategory, dropIndicator, suppressedNavigationID, clearSuppressedNavigation } = useSidebarDrag(
     sidebarSections,
     categories,
   );
-  // The Archived section starts folded: archived channels are history, not
-  // where work happens.
-  const [archivedOpen, setArchivedOpen] = useState(false);
   const navigate = useNavigate();
-  const { pathname } = useLocation();
+  // Stable, like every callback the rows get: the rows are memoized, so a
+  // channel switch re-renders only the two rows whose active state changed.
+  const navigateTo = useEventCallback((to: string) => navigate(to));
+  const close = useEventCallback(onClose);
   // Drag-to-reorder needs a mouse or trackpad. Without one — a phone, or an
   // iPad on its own — a hold on a row opens its menu (useRowLongPressMenu) and
-  // iPadOS would start a native drag lift from that same hold.
+  // iPadOS would start a native drag lift from that same hold. There the
+  // sidebar mounts no drag code at all: no row wrappers, no drop targets.
   const pointerDevice = usePointerDevice();
   const dragDisabled = deviceKind() === 'touch' && !pointerDevice;
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
@@ -164,13 +166,16 @@ export function Sidebar({ onClose }: SidebarProps) {
               // Rows in the Unread section belong to other sections, so they
               // aren't reordered from here.
               const rowDragDisabled = dragDisabled || isUnreadSection;
-              const canDropChannel = isFavorites || isUserCategory || isChannelsDefault;
+              // Favorites, the categories and Channels take dropped rows and
+              // mark the slots of the category order.
+              const acceptsDrops = !dragDisabled && (isFavorites || isUserCategory || isChannelsDefault);
               const collapsed = !!collapsedSections[section.key];
               // An open section stands apart: a wide gap above its heading
               // and above the next heading. Collapsed headings in a row pack
               // tight, like a menu.
               const spaced = spacedSections.has(section.key);
-              const visibleItems = collapsed ? foldedSectionItems(section.items, pathname) : section.items;
+              const visibleItems = collapsed ? foldedSectionItems(section.items, activeItemID) : section.items;
+              const slots = dropSlots(section.key, visibleItems);
 
               // The live channel/DM drop target that falls in THIS section (null
               // otherwise) — drives the push-aside gap below.
@@ -192,9 +197,9 @@ export function Sidebar({ onClose }: SidebarProps) {
                   data-testid={`sidebar-group-${section.key}`}
                 >
                   {categoryGap && <SidebarDropGap sectionKey={section.key} testId={`sidebar-drop-gap-cat-${section.key}`} />}
-                  {(isFavorites || isUserCategory || isChannelsDefault) && (
+                  {acceptsDrops && (
                     <PragmaticCategoryDropHitbox
-                      active={!dragDisabled && isDraggingCategory}
+                      active={isDraggingCategory}
                       data={{
                         type: 'section-header-target',
                         sectionKey: section.key,
@@ -207,7 +212,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                     id={section.key}
                     draggable={isUserCategory && !dragDisabled}
                     dropData={
-                      !dragDisabled && (isFavorites || isUserCategory || isChannelsDefault)
+                      acceptsDrops
                         ? {
                             type: 'section-header-target',
                             sectionKey: section.key,
@@ -321,11 +326,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                   <div className="mt-1 space-y-1">
                     {visibleItems.map((item, index) => {
                       if (item.kind === 'channel') {
-                        const channelDropIndex = section.key === SidebarSectionKeys.Favorites
-                          ? index
-                          : visibleItems
-                              .slice(0, index)
-                              .filter((candidate) => candidate.kind === 'channel').length;
+                        const channelDropIndex = slots[index];
                         // Open the push-aside gap just above this row when the
                         // live drop target resolves to its slot (not the tail).
                         const showGap =
@@ -337,35 +338,24 @@ export function Sidebar({ onClose }: SidebarProps) {
                           // pick-up (margin included).
                           <Fragment key={`ch-${item.channel.channelID}`}>
                             {showGap && <SidebarDropGap sectionKey={section.key} />}
-                            <PragmaticChannelRow
+                            <SidebarChannelItem
                               sectionKey={section.key}
                               index={channelDropIndex}
                               channel={item.channel}
-                              disabled={rowDragDisabled}
-                            >
-                              {(dragProps) => (
-                                <ChannelRow
-                                  channel={item.channel}
-                                  hasUnread={!!item.channel.unread}
-                                  notifyCount={Number(item.channel.unreadNotifyCount ?? 0)}
-                                  onClose={onClose}
-                                  draggable={!rowDragDisabled}
-                                  suppressNavigation={suppressedNavigationID === item.channel.channelID}
-                                  onSuppressNavigationConsumed={clearSuppressedNavigation}
-                                  {...dragProps}
-                                />
-                              )}
-                            </PragmaticChannelRow>
+                              dragDisabled={rowDragDisabled}
+                              active={item.channel.channelID === activeItemID}
+                              suppressNavigation={suppressedNavigationID === item.channel.channelID}
+                              onSuppressNavigationConsumed={clearSuppressedNavigation}
+                              onNavigate={navigateTo}
+                              onClose={close}
+                            />
                           </Fragment>
                         );
                       }
                       const conv = item.conversation;
-                      const conversationDropIndex = section.key === SidebarSectionKeys.Favorites ? index : -1;
+                      const conversationDropIndex = slots[index];
                       const otherID = conv.type !== 'group' ? dmPartnerID(conv, user?.id) : undefined;
-                      const dmAvatarURL = otherID ? dmUserMap.get(otherID)?.avatarURL : undefined;
-                      const dmUserStatus = otherID ? dmUserMap.get(otherID)?.userStatus : undefined;
-                      const resolvedDMAvatarURL = conv.avatarURL ?? dmAvatarURL;
-                      const resolvedDMUserStatus = conv.userStatus ?? dmUserStatus;
+                      const partner = otherID ? dmUserMap.get(otherID) : undefined;
                       // Favorited DMs are channel-drop targets too; open the gap
                       // above one when the live target resolves to its slot.
                       const showConvGap =
@@ -376,42 +366,22 @@ export function Sidebar({ onClose }: SidebarProps) {
                         // DM's slot collapses fully on pick-up.
                         <Fragment key={`conv-${conv.conversationID}`}>
                           {showConvGap && <SidebarDropGap sectionKey={section.key} />}
-                          {section.key === SidebarSectionKeys.Favorites ? (
-                            <PragmaticConversationRow
-                              sectionKey={section.key}
-                              index={conversationDropIndex}
-                              conversation={conv}
-                              disabled={dragDisabled}
-                            >
-                              {(dragProps) => (
-                                <ConversationRow
-                                  conversation={conv}
-                                  hasUnread={!!conv.unread}
-                                  notifyCount={Number(conv.unreadNotifyCount ?? 0)}
-                                  dmAvatarURL={resolvedDMAvatarURL}
-                                  dmUserStatus={resolvedDMUserStatus}
-                                  dmUserID={otherID}
-                                  onClose={onClose}
-                                  onHide={hideConversation}
-                                  draggable={!dragDisabled}
-                                  suppressNavigation={suppressedNavigationID === conv.conversationID}
-                                  onSuppressNavigationConsumed={clearSuppressedNavigation}
-                                  {...dragProps}
-                                />
-                              )}
-                            </PragmaticConversationRow>
-                          ) : (
-                            <ConversationRow
-                              conversation={conv}
-                              hasUnread={!!conv.unread}
-                              notifyCount={Number(conv.unreadNotifyCount ?? 0)}
-                              dmAvatarURL={resolvedDMAvatarURL}
-                              dmUserStatus={resolvedDMUserStatus}
-                              dmUserID={otherID}
-                              onClose={onClose}
-                              onHide={hideConversation}
-                            />
-                          )}
+                          <SidebarConversationItem
+                            sectionKey={section.key}
+                            index={conversationDropIndex}
+                            conversation={conv}
+                            // Only Favorites reorders conversations.
+                            dragDisabled={!isFavorites || dragDisabled}
+                            active={conv.conversationID === activeItemID}
+                            dmAvatarURL={conv.avatarURL ?? partner?.avatarURL}
+                            dmUserStatus={conv.userStatus ?? partner?.userStatus}
+                            dmUserID={otherID}
+                            suppressNavigation={suppressedNavigationID === conv.conversationID}
+                            onSuppressNavigationConsumed={clearSuppressedNavigation}
+                            onNavigate={navigateTo}
+                            onClose={close}
+                            onHide={hideConversation}
+                          />
                         </Fragment>
                       );
                     })}
@@ -420,9 +390,9 @@ export function Sidebar({ onClose }: SidebarProps) {
                   </div>
                   <PragmaticSection
                     data={{ type: 'channel-target', sectionKey: section.key, index: dropCount(section.key, visibleItems), area: 'end' }}
-                    disabled={!canDropChannel}
+                    disabled={!acceptsDrops}
                     className="min-h-2 pb-2"
-                    testID={canDropChannel ? `sidebar-section-tail-drop-${section.key}` : undefined}
+                    testID={acceptsDrops ? `sidebar-section-tail-drop-${section.key}` : undefined}
                   >
                     {/* Land-in-place: no drop line. The row itself re-sorts to
                         its released slot via the optimistic reorder cache. */}
@@ -430,14 +400,6 @@ export function Sidebar({ onClose }: SidebarProps) {
                 </div>
               );
             })}
-            {archivedChannels.length > 0 && !unreadOnly && (
-              <SidebarArchivedSection
-                channels={archivedChannels}
-                open={archivedOpen}
-                onToggle={() => setArchivedOpen((open) => !open)}
-                onClose={onClose}
-              />
-            )}
           </nav>
           ) : (
             <SidebarSectionsSkeleton />
@@ -454,3 +416,110 @@ export function Sidebar({ onClose }: SidebarProps) {
     </div>
   );
 }
+
+// One sidebar row, wrapped for drag unless it can't be dragged. Memoized with
+// only plain or stable props, so a channel switch re-renders just the rows it
+// changes.
+const SidebarChannelItem = memo(function SidebarChannelItem({
+  sectionKey,
+  index,
+  channel,
+  dragDisabled,
+  active,
+  suppressNavigation,
+  onSuppressNavigationConsumed,
+  onNavigate,
+  onClose,
+}: {
+  sectionKey: string;
+  index: number;
+  channel: UserChannel;
+  dragDisabled: boolean;
+  active: boolean;
+  suppressNavigation: boolean;
+  onSuppressNavigationConsumed: () => void;
+  onNavigate: (to: string) => void;
+  onClose: () => void;
+}) {
+  const row = {
+    channel,
+    hasUnread: !!channel.unread,
+    notifyCount: Number(channel.unreadNotifyCount ?? 0),
+    active,
+    onNavigate,
+    onClose,
+  };
+  if (dragDisabled) return <ChannelRow {...row} />;
+  return (
+    <PragmaticChannelRow sectionKey={sectionKey} index={index} channel={channel}>
+      {(dragProps) => (
+        <ChannelRow
+          {...row}
+          draggable
+          suppressNavigation={suppressNavigation}
+          onSuppressNavigationConsumed={onSuppressNavigationConsumed}
+          {...dragProps}
+        />
+      )}
+    </PragmaticChannelRow>
+  );
+});
+
+// The conversation counterpart of SidebarChannelItem. Only a favorited
+// conversation is a drag source.
+const SidebarConversationItem = memo(function SidebarConversationItem({
+  sectionKey,
+  index,
+  conversation,
+  dragDisabled,
+  active,
+  dmAvatarURL,
+  dmUserStatus,
+  dmUserID,
+  suppressNavigation,
+  onSuppressNavigationConsumed,
+  onNavigate,
+  onClose,
+  onHide,
+}: {
+  sectionKey: string;
+  index: number;
+  conversation: UserConversation;
+  dragDisabled: boolean;
+  active: boolean;
+  dmAvatarURL?: string;
+  dmUserStatus?: UserStatus;
+  dmUserID?: string;
+  suppressNavigation: boolean;
+  onSuppressNavigationConsumed: () => void;
+  onNavigate: (to: string) => void;
+  onClose: () => void;
+  onHide: (conversationID: string) => void;
+}) {
+  const row = {
+    conversation,
+    hasUnread: !!conversation.unread,
+    notifyCount: Number(conversation.unreadNotifyCount ?? 0),
+    active,
+    dmAvatarURL,
+    dmUserStatus,
+    dmUserID,
+    onNavigate,
+    onClose,
+    onHide,
+  };
+  if (dragDisabled) return <ConversationRow {...row} />;
+  return (
+    <PragmaticConversationRow sectionKey={sectionKey} index={index} conversation={conversation}>
+      {(dragProps) => (
+        <ConversationRow
+          {...row}
+          draggable
+          suppressNavigation={suppressNavigation}
+          onSuppressNavigationConsumed={onSuppressNavigationConsumed}
+          {...dragProps}
+        />
+      )}
+    </PragmaticConversationRow>
+  );
+});

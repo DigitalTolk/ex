@@ -28,6 +28,16 @@ export function dropCount(sectionKey: string, items: SidebarItem[]): number {
   return sectionKey === SidebarSectionKeys.Favorites ? items.length : channelCount(items);
 }
 
+// dropSlots is each row's drop slot (its index in the sidebar-dnd drop data):
+// in Favorites every row is a slot, elsewhere a channel's slot counts the
+// channels above it and a conversation has none (-1). One pass, so a section
+// of thousands of rows costs no more than its length.
+export function dropSlots(sectionKey: string, items: SidebarItem[]): number[] {
+  if (sectionKey === SidebarSectionKeys.Favorites) return items.map((_, index) => index);
+  let channels = 0;
+  return items.map((item) => (item.kind === 'channel' ? channels++ : -1));
+}
+
 function canAcceptChannelDrop(sectionKey: string): boolean {
   return sectionKey !== SidebarSectionKeys.DirectMessages;
 }

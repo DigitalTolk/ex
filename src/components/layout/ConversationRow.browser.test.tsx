@@ -52,7 +52,7 @@ function renderRow(conversation: UserConversation = dm, overrides: Partial<Param
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
-        <ConversationRow
+        <ConversationRow onNavigate={vi.fn()}
           conversation={conversation}
           hasUnread={false}
           onClose={() => {}}
@@ -309,16 +309,16 @@ describe('ConversationRow browser behaviour', () => {
     expect(b.right).toBeLessThanOrEqual(s.left);
   });
 
-  it('marks the row active when the current route matches the conversation', async () => {
+  it('marks the active row (the sidebar decides which one is)', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await render(
       <QueryClientProvider client={qc}>
         <MemoryRouter initialEntries={['/conversation/cv-1']}>
-          <ConversationRow conversation={dm} hasUnread={false} onClose={() => {}} onHide={() => {}} />
+          <ConversationRow onNavigate={vi.fn()} conversation={dm} hasUnread={false} active onClose={() => {}} onHide={() => {}} />
         </MemoryRouter>
       </QueryClientProvider>,
     );
-    // The active NavLink carries the highlight styling.
+    // The active row's link carries the highlight styling.
     const link = document.querySelector('a[href="/conversation/cv-1"]') as HTMLElement;
     expect(link.className).toMatch(/bg-white\/15|font-semibold/);
   });

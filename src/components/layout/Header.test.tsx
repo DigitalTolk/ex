@@ -305,6 +305,19 @@ describe('Header', () => {
     expect(document.getElementById('mobile-channel-menu')).toBeNull();
   });
 
+  // A pencil and a pen read as the same icon; renaming shows a text field.
+  it.each([
+    { phone: false, item: (name: string) => screen.findByRole('menuitem', { name }) },
+    { phone: true, item: (name: string) => within(document.getElementById('mobile-channel-menu')!).findByRole('button', { name }) },
+  ])('tells renaming and editing the description apart by icon (phone: $phone)', async ({ phone, item }) => {
+    setMobileMatch(phone);
+    const user = userEvent.setup();
+    renderHeaderWithProviders(<Header channel={makeChannel()} canEdit onDescriptionSave={vi.fn()} onRename={vi.fn()} />);
+    await user.click(screen.getByText('general').closest('button')!);
+    expect((await item('Edit description')).querySelector('svg.lucide-pencil')).not.toBeNull();
+    expect((await item('Rename channel')).querySelector('svg.lucide-text-cursor-input')).not.toBeNull();
+  });
+
   it('asks before making a channel private from the phone menu', async () => {
     setMobileMatch(true);
     const user = userEvent.setup();
