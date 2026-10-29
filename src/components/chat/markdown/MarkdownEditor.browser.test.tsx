@@ -591,18 +591,36 @@ describe('MarkdownEditor — formatting shortcuts', () => {
     await expect.poll(() => ref.current!.getMarkdown()).toBe(want);
   });
 
+  // Linux input methods (GTK, IBus) take Ctrl+Shift+U for typing a Unicode
+  // character by its code, so CI's Linux browsers never pass that chord on to
+  // the page. The editor gets it as macOS and Windows deliver it.
+  function linkChord(): KeyboardEvent {
+    const apple = isApplePlatform(navigator.userAgent);
+    const event = new KeyboardEvent('keydown', {
+      key: 'U',
+      code: 'KeyU',
+      shiftKey: true,
+      metaKey: apple,
+      ctrlKey: !apple,
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(event, 'keyCode', { value: 85 });
+    return event;
+  }
+
   it('the link shortcut opens the composer\'s link dialog', async () => {
     const onLinkShortcut = vi.fn();
-    const { screen } = await mount({ initialBody: 'word', onLinkShortcut });
-    await userEvent.click(screen.getByLabelText('Message input'));
-    await press('u', true);
-    await expect.poll(() => onLinkShortcut).toHaveBeenCalledOnce();
+    const { ref } = await mount({ initialBody: 'word', onLinkShortcut });
+    const chord = linkChord();
+    ref.current!.getElement()!.querySelector('.cm-content')!.dispatchEvent(chord);
+    expect(onLinkShortcut).toHaveBeenCalledOnce();
+    expect(chord.defaultPrevented).toBe(true);
   });
 
   it('without a link dialog the link shortcut leaves the text alone', async () => {
-    const { ref, screen } = await mount({ initialBody: 'word' });
-    await userEvent.click(screen.getByLabelText('Message input'));
-    await press('u', true);
+    const { ref } = await mount({ initialBody: 'word' });
+    ref.current!.getElement()!.querySelector('.cm-content')!.dispatchEvent(linkChord());
     expect(ref.current!.getMarkdown()).toBe('word');
   });
 });
