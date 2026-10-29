@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
-import { matchRank } from '@/lib/fuzzy';
+import { rankedMatches } from '@/lib/fuzzy';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,7 +22,8 @@ import { usePresence } from '@/context/PresenceContext';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useDirectoryUsers, useSetUserRole, useSetUserStatus } from '@/hooks/useDirectoryUsers';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { getInitials } from '@/lib/format';
+import { getInitials, slugify } from '@/lib/format';
+import { ChannelIcon } from '@/components/ChannelIcon';
 import { PresenceDot } from '@/components/PresenceDot';
 import { PasswordResetDialog } from '@/components/PasswordResetDialog';
 import { presenceNotchStyle } from '@/lib/presence';
@@ -93,12 +94,16 @@ function ChannelsTab() {
 
   // Best matches first (the channel of that name before ones whose
   // description mentions it); equal matches keep their order.
-  const visible = (allChannels ?? [])
-    .filter((ch) => ch.type === 'public')
-    .map((ch) => ({ ch, rank: matchRank(query, ch.name, ch.description ?? '') }))
-    .filter(({ rank }) => rank >= 0)
-    .sort((a, b) => a.rank - b.rank)
-    .map(({ ch }) => ch);
+  const visible = rankedMatches(
+    (allChannels ?? []).filter((ch) => ch.type === 'public'),
+    query,
+    (ch) => [ch.name, ch.description ?? ''],
+  );
+  // The sidebar doesn't list archived channels: a search also finds the
+  // archived ones you are in, always below every live result.
+  const archived = query.trim()
+    ? rankedMatches((userChannels ?? []).filter((uc) => uc.archived), query, (uc) => [uc.channelName])
+    : [];
 
   function handleJoin(channelId: string, channelSlug: string) {
     // Routes are keyed by slug (ChannelView resolves the slug back to a
@@ -129,7 +134,7 @@ function ChannelsTab() {
         </div>
       )}
 
-      {!isLoading && visible.length === 0 && (
+      {!isLoading && visible.length === 0 && archived.length === 0 && (
         <p className="py-12 text-center text-muted-foreground">
           {query.trim() ? 'No matching channels' : 'No channels available'}
         </p>
@@ -174,6 +179,24 @@ function ChannelsTab() {
               </div>
             );
           })}
+        {!isLoading && archived.map((uc) => (
+          <div
+            key={uc.channelID}
+            data-testid={`directory-archived-${uc.channelID}`}
+            className="flex items-center gap-3 rounded-lg border p-3 hover:bg-muted/50"
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+              <ChannelIcon type={uc.channelType} className="h-5 w-5 text-muted-foreground" ariaLabel="" />
+            </div>
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <p className="truncate font-medium text-muted-foreground">{uc.channelName}</p>
+              <Badge variant="outline" className="shrink-0">Archived</Badge>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => navigate(`/channel/${slugify(uc.channelName)}`)}>
+              Open
+            </Button>
+          </div>
+        ))}
       </div>
     </>
   );

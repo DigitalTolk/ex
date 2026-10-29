@@ -20,7 +20,7 @@ function renderRow(props: Partial<React.ComponentProps<typeof ChannelRow>> = {})
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={['/channel/start']}>
-        <ChannelRow channel={channel} hasUnread={false} onClose={vi.fn()} {...props} />
+        <ChannelRow onNavigate={vi.fn()} channel={channel} hasUnread={false} onClose={vi.fn()} {...props} />
       </MemoryRouter>
     </QueryClientProvider>,
   );

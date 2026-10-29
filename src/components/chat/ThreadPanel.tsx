@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Bell, BellOff, ArrowRight } from 'lucide-react';
 import { useAtBottomRef } from '@/hooks/useAtBottomRef';
 import { useMarkReadOnReturn } from '@/hooks/useMarkReadOnReturn';
+import { useEventCallback } from '@/hooks/useEventCallback';
 import { motion } from 'motion/react';
 import { useSwipeDismiss } from '@/hooks/useSwipeDismiss';
 import { usePanelWidth } from '@/hooks/usePanelWidth';
@@ -23,8 +24,8 @@ import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { useComposerSchedule } from '@/hooks/useScheduledMessages';
-import { markThreadSeen, noteThreadReadPosition, useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
-import { isReadHeld, keepReadSession, markUnreadSeen, scheduleEndReadSession, threadReadKey, useUnreadAnchor, useUnreadSeen } from '@/lib/read-position';
+import { markThreadSeen, noteThreadReadPosition, threadHasUnseen, useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
+import { isAtBottom, isReadHeld, keepReadSession, markUnreadSeen, scheduleEndReadSession, setAtBottom, threadReadKey, useUnreadAnchor, useUnreadSeen } from '@/lib/read-position';
 import { attachScrollHoverPause } from '@/lib/scroll-hover-pause';
 import { keepBottomEdge } from '@/lib/keep-bottom-edge';
 import { isFollowedThread } from '@/lib/thread-follow';
@@ -165,19 +166,26 @@ export function ThreadPanel({
 
   // Opening the thread reads it. A reply arriving later reads it only while
   // the user is looking — the same test that decides whether its alert pops
-  // up — so a backgrounded window keeps the reply unread (and the app icon's
-  // count up) until they come back, instead of flashing the count for a second.
+  // up — and is at the newest reply, as in a channel. A backgrounded window
+  // keeps the reply unread (and the app icon's count up) until they come
+  // back, instead of flashing the count for a second; a reader scrolled up
+  // keeps it unread until they scroll back down.
   const seenOnOpenRef = useRef<string | null>(null);
   useEffect(() => {
     if (!parentID || !latestMessageAt || isReadHeld(threadKey)) return;
-    if (seenOnOpenRef.current === threadRootID && !isUserAttentive(suppressionWindowMs)) return;
+    const following = isUserAttentive(suppressionWindowMs) && isAtBottom(threadKey);
+    if (seenOnOpenRef.current === threadRootID && !following) return;
     seenOnOpenRef.current = threadRootID;
     markThreadSeen(threadRootID, latestMessageAt, { parentID, parentType });
   }, [parentID, parentType, threadRootID, threadKey, latestMessageAt]);
-  useMarkReadOnReturn(threadRootID, (rootID) => {
-    if (!parentID || !latestMessageAt || isReadHeld(threadReadKey(rootID))) return;
-    markThreadSeen(rootID, latestMessageAt, { parentID, parentType });
+  // Back at the window, or back down at the newest reply: read what arrived
+  // meanwhile, if anything did.
+  const readNewReplies = useEventCallback(() => {
+    if (!parentID || !latestMessageAt || isReadHeld(threadKey) || !isAtBottom(threadKey)) return;
+    if (!threadHasUnseen(queryClient, threadRootID, latestMessageAt)) return;
+    markThreadSeen(threadRootID, latestMessageAt, { parentID, parentType });
   });
+  useMarkReadOnReturn(threadRootID, readNewReplies);
   const draftScope = useMemo(
     () => ({ parentID, parentType, parentMessageID: threadRootID }),
     [parentID, parentType, threadRootID],
@@ -252,7 +260,16 @@ export function ThreadPanel({
   // (NOT scroller.lastElementChild, which can be a fixed-height
   // sentinel and would never report real content shifts).
   const innerRef = useRef<HTMLDivElement>(null);
-  const wasAtBottomRef = useAtBottomRef(scrollRef);
+  // The panel stays mounted when another thread opens in it; threadKey starts
+  // the reports over for the new thread.
+  const wasAtBottomRef = useAtBottomRef(
+    scrollRef,
+    (atBottom) => {
+      setAtBottom(threadKey, atBottom);
+      if (atBottom) readNewReplies();
+    },
+    threadKey,
+  );
   useEffect(() => {
     const el = scrollRef.current;
     /* istanbul ignore next -- the scroller renders with the panel, so it is set by the time effects run; defensive. */

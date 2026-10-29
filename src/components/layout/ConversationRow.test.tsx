@@ -32,7 +32,7 @@ function dm(over: Partial<UserConversation> = {}): UserConversation {
 function renderRow(props: Partial<Parameters<typeof ConversationRow>[0]> = {}) {
   return render(
     <BrowserRouter>
-      <ConversationRow
+      <ConversationRow onNavigate={vi.fn()}
         conversation={dm()}
         hasUnread={false}
         onClose={vi.fn()}

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, onTestFinished } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { MemoryRouter } from 'react-router-dom';
 import { ChannelRow } from './ChannelRow';
@@ -37,7 +37,7 @@ const baseChannel: UserChannel = {
 function renderRow(channel: UserChannel = baseChannel, hasUnread = false) {
   return render(
     <MemoryRouter>
-      <ChannelRow channel={channel} hasUnread={hasUnread} onClose={() => {}} />
+      <ChannelRow onNavigate={vi.fn()} channel={channel} hasUnread={hasUnread} onClose={() => {}} />
     </MemoryRouter>,
   );
 }
@@ -108,7 +108,7 @@ describe('ChannelRow browser behaviour', () => {
   it('renders a numeric alerted badge, capping at 99+', async () => {
     const screen = await render(
       <MemoryRouter>
-        <ChannelRow channel={baseChannel} hasUnread notifyCount={150} onClose={() => {}} />
+        <ChannelRow onNavigate={vi.fn()} channel={baseChannel} hasUnread notifyCount={150} onClose={() => {}} />
       </MemoryRouter>,
     );
     await expect.element(screen.getByTestId('channel-unread-badge-ch-1')).toHaveTextContent('99+');
@@ -117,7 +117,7 @@ describe('ChannelRow browser behaviour', () => {
   it('renders the exact alerted count when it is under 100', async () => {
     const screen = await render(
       <MemoryRouter>
-        <ChannelRow channel={baseChannel} hasUnread notifyCount={7} onClose={() => {}} />
+        <ChannelRow onNavigate={vi.fn()} channel={baseChannel} hasUnread notifyCount={7} onClose={() => {}} />
       </MemoryRouter>,
     );
     await expect.element(screen.getByTestId('channel-unread-badge-ch-1')).toHaveTextContent('7');
@@ -128,7 +128,7 @@ describe('ChannelRow browser behaviour', () => {
     const onConsumed = vi.fn();
     await render(
       <MemoryRouter>
-        <ChannelRow channel={baseChannel} hasUnread={false} onClose={onClose} suppressNavigation onSuppressNavigationConsumed={onConsumed} />
+        <ChannelRow onNavigate={vi.fn()} channel={baseChannel} hasUnread={false} onClose={onClose} suppressNavigation onSuppressNavigationConsumed={onConsumed} />
       </MemoryRouter>,
     );
     (document.querySelector('a[href="/channel/general"]') as HTMLAnchorElement).click();
@@ -139,7 +139,7 @@ describe('ChannelRow browser behaviour', () => {
   it('plain unread only emboldens the name: no dot, no badge', async () => {
     const screen = await render(
       <MemoryRouter>
-        <ChannelRow channel={baseChannel} hasUnread notifyCount={0} onClose={() => {}} />
+        <ChannelRow onNavigate={vi.fn()} channel={baseChannel} hasUnread notifyCount={0} onClose={() => {}} />
       </MemoryRouter>,
     );
     await expect.element(screen.getByTestId('channel-row-ch-1')).toBeVisible();
@@ -151,7 +151,7 @@ describe('ChannelRow browser behaviour', () => {
   it('a muted channel with quiet unread keeps the bell: no dot, no badge', async () => {
     const screen = await render(
       <MemoryRouter>
-        <ChannelRow channel={{ ...baseChannel, muted: true }} hasUnread notifyCount={0} onClose={() => {}} />
+        <ChannelRow onNavigate={vi.fn()} channel={{ ...baseChannel, muted: true }} hasUnread notifyCount={0} onClose={() => {}} />
       </MemoryRouter>,
     );
     await expect.element(screen.getByLabelText('Muted')).toBeVisible();
@@ -162,7 +162,7 @@ describe('ChannelRow browser behaviour', () => {
   it('shows the numeric badge in a muted channel when a mention alerted', async () => {
     const screen = await render(
       <MemoryRouter>
-        <ChannelRow channel={{ ...baseChannel, muted: true }} hasUnread notifyCount={2} onClose={() => {}} />
+        <ChannelRow onNavigate={vi.fn()} channel={{ ...baseChannel, muted: true }} hasUnread notifyCount={2} onClose={() => {}} />
       </MemoryRouter>,
     );
     // A mention overrides mute server-side; the alert stays loud here too.
@@ -174,7 +174,7 @@ describe('ChannelRow browser behaviour', () => {
     categoriesData.data = [{ id: 'cat-1', name: 'Work' }];
     const screen = await render(
       <MemoryRouter>
-        <ChannelRow channel={{ ...baseChannel, favorite: true }} hasUnread={false} onClose={() => {}} />
+        <ChannelRow onNavigate={vi.fn()} channel={{ ...baseChannel, favorite: true }} hasUnread={false} onClose={() => {}} />
       </MemoryRouter>,
     );
     await openChannelMenu(screen);
@@ -190,7 +190,7 @@ describe('ChannelRow browser behaviour', () => {
     categoriesData.data = [{ id: 'cat-1', name: 'Work' }];
     const screen = await render(
       <MemoryRouter>
-        <ChannelRow channel={{ ...baseChannel, categoryID: 'cat-1' }} hasUnread={false} onClose={() => {}} />
+        <ChannelRow onNavigate={vi.fn()} channel={{ ...baseChannel, categoryID: 'cat-1' }} hasUnread={false} onClose={() => {}} />
       </MemoryRouter>,
     );
     await openChannelMenu(screen);
@@ -204,7 +204,7 @@ describe('ChannelRow browser behaviour', () => {
     const dragRef = vi.fn();
     const screen = await render(
       <MemoryRouter>
-        <ChannelRow channel={baseChannel} hasUnread={false} onClose={() => {}} draggable dragRef={dragRef} />
+        <ChannelRow onNavigate={vi.fn()} channel={baseChannel} hasUnread={false} onClose={() => {}} draggable dragRef={dragRef} />
       </MemoryRouter>,
     );
     const row = screen.getByTestId('channel-row-ch-1').element() as HTMLElement;
@@ -216,17 +216,17 @@ describe('ChannelRow browser behaviour', () => {
     const onClose = vi.fn();
     await render(
       <MemoryRouter>
-        <ChannelRow channel={baseChannel} hasUnread={false} onClose={onClose} />
+        <ChannelRow onNavigate={vi.fn()} channel={baseChannel} hasUnread={false} onClose={onClose} />
       </MemoryRouter>,
     );
     (document.querySelector('a[href="/channel/general"]') as HTMLAnchorElement).click();
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('marks the row active when the current route matches the channel slug', async () => {
+  it('marks the active row (the sidebar decides which one is)', async () => {
     await render(
       <MemoryRouter initialEntries={['/channel/general']}>
-        <ChannelRow channel={baseChannel} hasUnread={false} onClose={() => {}} />
+        <ChannelRow onNavigate={vi.fn()} channel={baseChannel} hasUnread={false} active onClose={() => {}} />
       </MemoryRouter>,
     );
     const link = document.querySelector('a[href="/channel/general"]') as HTMLElement;
@@ -272,7 +272,7 @@ describe('ChannelRow browser behaviour', () => {
     const onClose = vi.fn();
     await render(
       <MemoryRouter>
-        <ChannelRow channel={baseChannel} hasUnread={false} onClose={onClose} />
+        <ChannelRow onNavigate={vi.fn()} channel={baseChannel} hasUnread={false} onClose={onClose} />
       </MemoryRouter>,
     );
     const row = document.querySelector('[data-testid="channel-row-ch-1"]') as HTMLElement;
@@ -291,7 +291,7 @@ describe('ChannelRow browser behaviour', () => {
     const onClose = vi.fn();
     const screen = await render(
       <MemoryRouter>
-        <ChannelRow channel={baseChannel} hasUnread={false} onClose={onClose} />
+        <ChannelRow onNavigate={vi.fn()} channel={baseChannel} hasUnread={false} onClose={onClose} />
       </MemoryRouter>,
     );
     const row = document.querySelector('[data-testid="channel-row-ch-1"]') as HTMLElement;
@@ -311,7 +311,7 @@ describe('ChannelRow browser behaviour', () => {
     // Widest badge ("99+") so the geometry check covers the worst case.
     await render(
       <MemoryRouter>
-        <ChannelRow channel={baseChannel} hasUnread notifyCount={150} onClose={() => {}} />
+        <ChannelRow onNavigate={vi.fn()} channel={baseChannel} hasUnread notifyCount={150} onClose={() => {}} />
       </MemoryRouter>,
     );
     const badge = document.querySelector('[data-testid="channel-unread-badge-ch-1"]') as HTMLElement;
@@ -326,4 +326,33 @@ describe('ChannelRow browser behaviour', () => {
     expect(b.right).toBeLessThanOrEqual(s.left);
   });
 
+});
+
+// Until it first opens, the row menu's trigger is a plain button standing in
+// for the menu's own (SidebarRowMenu). It opens on the press like the real
+// one, and the release that follows, landing on the real one, must not close
+// it. A mouse device: on a touch one the kebab takes no taps.
+describe('the row menu under a mouse', () => {
+  function onMouseDevice() {
+    const root = document.documentElement;
+    const touch = ['device-touch', 'tier-mobile'].filter((name) => root.classList.contains(name));
+    root.classList.remove(...touch);
+    onTestFinished(() => root.classList.add(...touch));
+  }
+  const trigger = () => document.querySelector('[data-testid="row-menu-ch-1"]') as HTMLElement;
+
+  it('opens on the press', async () => {
+    onMouseDevice();
+    await renderRow();
+    trigger().dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+    await expect.poll(() => document.querySelector('[role="menuitem"]')).not.toBeNull();
+  });
+
+  it('stays open once the button is released', async () => {
+    onMouseDevice();
+    const screen = await renderRow();
+    await screen.getByTestId('row-menu-ch-1').click();
+    await expect.poll(() => document.querySelector('[role="menuitem"]')).not.toBeNull();
+    expect(trigger()).toHaveAttribute('aria-expanded', 'true');
+  });
 });

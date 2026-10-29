@@ -8,6 +8,7 @@ import {
   isUserAttentive,
   isWindowFocused,
   markUserActivity,
+  onReturnFromIdle,
   resetUserActivityForTests,
   setActivityBroadcast,
   setAttentionBroadcast,
@@ -142,6 +143,35 @@ describe('user-activity (attention model)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // A window that kept its focus through an idle spell gets no focus event
+  // when the user comes back to it; their first input is the return.
+  it('tells listeners about the first input after an idle spell, not about input that keeps coming', () => {
+    const back = vi.fn();
+    const stop = onReturnFromIdle(back);
+    document.dispatchEvent(new Event('keydown', { bubbles: true }));
+    expect(back).not.toHaveBeenCalled();
+
+    markUserActivity(Date.now() - suppressionWindowMs - 1_000);
+    document.dispatchEvent(new Event('pointermove', { bubbles: true }));
+    expect(back).toHaveBeenCalledTimes(1);
+    document.dispatchEvent(new Event('pointermove', { bubbles: true }));
+    expect(back).toHaveBeenCalledTimes(1);
+
+    stop();
+    markUserActivity(Date.now() - suppressionWindowMs - 1_000);
+    document.dispatchEvent(new Event('keydown', { bubbles: true }));
+    expect(back).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts waking from sleep as an idle spell', () => {
+    const back = vi.fn();
+    const stop = onReturnFromIdle(back);
+    forceAwayUntilInput();
+    document.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(back).toHaveBeenCalledTimes(1);
+    stop();
   });
 
   it('broadcasts activity stamps and attention flips to the registered seams', () => {

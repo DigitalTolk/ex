@@ -406,9 +406,11 @@ describe('Sidebar browser render — rich fixtures', () => {
     await expect.element(screen.getByText('announcements')).toBeVisible();
     // Hidden conversation does NOT render even though it's in conversations[].
     expect(document.body.textContent).not.toContain('Hidden DM');
-    // Drag-and-drop hitbox renders for favorites/user-category/channels (3 of them).
+    // Drag-and-drop hitbox renders for favorites/user-category/channels (3 of
+    // them), on a device that drags: a touch-only one mounts no drag code.
     const hitboxes = document.querySelectorAll('[data-testid^="sidebar-category-boundary-drop-"]');
-    expect(hitboxes.length).toBeGreaterThanOrEqual(3);
+    if (window.__EX_FORCE_DEVICE__ === 'touch') expect(hitboxes).toHaveLength(0);
+    else expect(hitboxes.length).toBeGreaterThanOrEqual(3);
     // Threads link is bold (unread thread present).
     const threadsLink = document.querySelector('a[href="/threads"] span') as HTMLElement;
     expect(threadsLink?.className).toContain('font-bold');
@@ -528,6 +530,8 @@ describe('Sidebar browser render — rich fixtures', () => {
       await expect.element(favorited).toBeVisible();
       const urgent = screen.getByText('urgent');
       await expect.element(urgent).toBeVisible();
+      // A row is drawn, and so hit-tested, from its first frame on.
+      await expect.poll(() => favorited.element().checkVisibility({ contentVisibilityAuto: true })).toBe(true);
       expectPaintedAtCenter(favorited.element());
     }
   });
@@ -1361,5 +1365,64 @@ describe('Sidebar browser render — rich fixtures', () => {
       expect(t.getAttribute('aria-expanded')).toBe('false');
     });
     expect(document.body.textContent).toContain('srvunread');
+  });
+});
+
+// An imported account lists thousands of rows. A long section renders them in
+// blocks, and a block off screen skips layout and paint (content-visibility)
+// until it scrolls near.
+describe('Sidebar rows off screen', () => {
+  const row = (index: number) => document.querySelector(`[data-testid="channel-row-ch-many-${index}"]`) as HTMLElement;
+  const drawn = (index: number) => row(index).querySelector('a')!.checkVisibility({ contentVisibilityAuto: true });
+  const blocks = () => [...document.querySelectorAll('[data-testid="sidebar-row-block"]')] as HTMLElement[];
+  const manyChannels = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      channelID: `ch-many-${index}`,
+      channelName: `many-${String(index).padStart(3, '0')}`,
+      channelType: 'public' as const,
+      role: 1,
+    }));
+
+  it('skips a block far out of view, at its rows\' height, and draws it once scrolled to', async () => {
+    mockCategories = [];
+    mockChannels = manyChannels(200);
+    await render(<Frame />);
+
+    // 200 rows: five blocks of 40, the rows still in sidebar order.
+    await expect.poll(() => blocks().length).toBe(5);
+    expect(blocks().map((block) => block.querySelectorAll('[data-testid^="channel-row-"]').length)).toEqual([40, 40, 40, 40, 40]);
+    expect(blocks()[4].lastElementChild).toBe(row(199));
+    await expect.poll(() => drawn(0)).toBe(true);
+    await expect.poll(() => drawn(199)).toBe(false);
+    // Holding its rows' height (and their gaps), the list doesn't jump as
+    // blocks come in: the skipped last block is as tall as the drawn first.
+    expect(blocks()[4].getBoundingClientRect().height).toBe(blocks()[0].getBoundingClientRect().height);
+
+    row(199).scrollIntoView();
+    await expect.poll(() => drawn(199)).toBe(true);
+  });
+
+  it('renders a section that fits in one block as plain rows', async () => {
+    mockCategories = [];
+    mockChannels = manyChannels(40);
+    await render(<Frame />);
+
+    await expect.poll(() => drawn(39)).toBe(true);
+    expect(blocks()).toHaveLength(0);
+    // The rows space themselves out as before: direct children of the list.
+    expect(row(0).parentElement!.className).toContain('space-y-1');
+  });
+
+  it('draws the focus ring inside the row, which clips what it paints', async () => {
+    await render(<Frame />);
+    const link = document.querySelector('[data-testid="channel-row-ch-general"] a') as HTMLAnchorElement;
+    // As keyboard focus would. WebKit's Tab skips links, like Safari's default.
+    link.focus({ focusVisible: true });
+
+    expect(document.activeElement).toBe(link);
+    expect(link.matches(':focus-visible')).toBe(true);
+    const style = getComputedStyle(link);
+    expect(style.outlineStyle).toBe('solid');
+    expect(parseFloat(style.outlineOffset) + parseFloat(style.outlineWidth)).toBeLessThanOrEqual(0);
   });
 });

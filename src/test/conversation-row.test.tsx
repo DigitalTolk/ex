@@ -16,8 +16,12 @@ vi.mock('@/hooks/useEmoji', () => ({
   useEmojiMap: () => ({ data: {} }),
 }));
 
+const menuRoots = vi.fn();
 vi.mock('@/components/ui/dropdown-menu', () => ({
-  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => {
+    menuRoots();
+    return <div>{children}</div>;
+  },
   DropdownMenuTrigger: (props: {
     children: React.ReactNode;
     'data-testid'?: string;
@@ -44,7 +48,7 @@ function renderRow(conv: UserConversation, props: Partial<ComponentProps<typeof 
   return render(
     <QueryClientProvider client={qc}>
       <BrowserRouter>
-        <ConversationRow
+        <ConversationRow onNavigate={vi.fn()}
           conversation={conv}
           hasUnread={false}
           onClose={vi.fn()}
@@ -65,6 +69,7 @@ const sampleConv: UserConversation = {
 
 describe('ConversationRow', () => {
   beforeEach(() => {
+    menuRoots.mockReset();
     apiFetchMock.mockReset();
     // useCategories needs an array; everything else can be {} (default).
     apiFetchMock.mockImplementation((url: string) => {
@@ -73,6 +78,16 @@ describe('ConversationRow', () => {
       }
       return Promise.resolve({});
     });
+  });
+
+  // See channel-row.test: no menu per row until one is opened.
+  it('mounts no menu until the row menu is opened', () => {
+    renderRow(sampleConv);
+    expect(menuRoots).not.toHaveBeenCalled();
+    expect(screen.queryByText('Close conversation')).toBeNull();
+    fireEvent.click(screen.getByTestId(`conv-row-menu-${sampleConv.conversationID}`));
+    expect(menuRoots).toHaveBeenCalled();
+    expect(screen.getByText('Close conversation')).toBeInTheDocument();
   });
 
   it('renders the conversation displayName', () => {
@@ -101,7 +116,7 @@ describe('ConversationRow', () => {
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
         <BrowserRouter>
-          <ConversationRow
+          <ConversationRow onNavigate={vi.fn()}
             conversation={sampleConv}
             hasUnread={false}
             dmUserStatus={{ emoji: ':house:', text: 'Working from home' }}
@@ -120,7 +135,7 @@ describe('ConversationRow', () => {
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
         <BrowserRouter>
-          <ConversationRow
+          <ConversationRow onNavigate={vi.fn()}
             conversation={sampleConv}
             hasUnread={false}
             dmUserID="u-partner"
@@ -184,6 +199,7 @@ describe('ConversationRow', () => {
     // kebab; the X with aria-label="Close conversation" must be gone.
     renderRow(sampleConv);
     expect(screen.queryByLabelText('Close conversation')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId(`conv-row-menu-${sampleConv.conversationID}`));
     expect(screen.getByTestId(`conv-close-${sampleConv.conversationID}`)).toBeInTheDocument();
   });
 
@@ -193,7 +209,7 @@ describe('ConversationRow', () => {
     render(
       <QueryClientProvider client={qc}>
         <BrowserRouter>
-          <ConversationRow
+          <ConversationRow onNavigate={vi.fn()}
             conversation={sampleConv}
             hasUnread={false}
             onClose={vi.fn()}
@@ -202,6 +218,7 @@ describe('ConversationRow', () => {
         </BrowserRouter>
       </QueryClientProvider>,
     );
+    fireEvent.click(screen.getByTestId(`conv-row-menu-${sampleConv.conversationID}`));
     fireEvent.click(screen.getByTestId(`conv-close-${sampleConv.conversationID}`));
     expect(onHide).toHaveBeenCalledWith(sampleConv.conversationID);
   });
@@ -227,6 +244,7 @@ describe('ConversationRow', () => {
   it('moves the conversation into one of your categories from its menu', async () => {
     withCategories();
     renderRow(sampleConv);
+    fireEvent.click(screen.getByTestId(`conv-row-menu-${sampleConv.conversationID}`));
     // Already in Direct Messages.
     expect(screen.getByText('Move to Direct Messages')).toBeDisabled();
     fireEvent.click(await screen.findByText('Move to Team'));
@@ -236,6 +254,7 @@ describe('ConversationRow', () => {
   it('moves it back to Direct Messages, and not to the category it is in', async () => {
     withCategories();
     renderRow({ ...sampleConv, categoryID: 'cat-1' });
+    fireEvent.click(screen.getByTestId(`conv-row-menu-${sampleConv.conversationID}`));
     expect(await screen.findByText('Move to Team')).toBeDisabled();
     expect(screen.getByText('Move to Clients')).toBeEnabled();
     fireEvent.click(screen.getByText('Move to Direct Messages'));
@@ -245,6 +264,7 @@ describe('ConversationRow', () => {
   it('moving a favorite into a category takes it out of Favorites', async () => {
     withCategories();
     renderRow({ ...sampleConv, favorite: true });
+    fireEvent.click(screen.getByTestId(`conv-row-menu-${sampleConv.conversationID}`));
     fireEvent.click(await screen.findByText('Move to Team'));
     await waitFor(() => {
       expect(apiFetchMock).toHaveBeenCalledWith(
@@ -272,6 +292,8 @@ describe('ConversationRow', () => {
     // Creating categories lives in the sidebar header; the per-row menu
     // only moves between existing buckets.
     renderRow(sampleConv);
+    fireEvent.click(screen.getByTestId(`conv-row-menu-${sampleConv.conversationID}`));
+    expect(screen.getByText('Close conversation')).toBeInTheDocument();
     expect(screen.queryByText(/New category/)).not.toBeInTheDocument();
   });
 
@@ -328,10 +350,27 @@ describe('ConversationRow', () => {
   });
 
   it('marks the active row with an accent bar', () => {
-    window.history.pushState({}, '', '/conversation/c-1');
-    renderRow(sampleConv);
+    renderRow(sampleConv, { active: true });
     const link = screen.getByText('Bob').closest('a')!;
     expect(link.className).toContain('before:bg-sidebar-foreground');
-    window.history.pushState({}, '', '/');
+    expect(link).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('opens the conversation on a plain click', () => {
+    const onNavigate = vi.fn();
+    renderRow(sampleConv, { onNavigate });
+    expect(fireEvent.click(screen.getByText('Bob').closest('a')!)).toBe(false);
+    expect(onNavigate).toHaveBeenCalledWith('/conversation/c-1');
+  });
+
+  // See channel-row.test: rows never read the router's location.
+  it('renders without a router: a row never reads the location', () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ConversationRow conversation={sampleConv} hasUnread={false} onNavigate={vi.fn()} onClose={vi.fn()} onHide={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText('Bob').closest('a')).toHaveAttribute('href', '/conversation/c-1');
   });
 });

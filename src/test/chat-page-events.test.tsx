@@ -6,9 +6,9 @@ import ChatPage from '@/pages/ChatPage';
 import { apiFetch } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
 import { forceAwayUntilInput, resetUserActivityForTests } from '@/lib/user-activity';
-import { THREAD_SEEN_CHANGED_EVENT } from '@/hooks/useThreads';
+import { resetSeenCache, THREAD_SEEN_CHANGED_EVENT } from '@/hooks/useThreads';
 import { usePresenceStore } from '@/stores/presence';
-import { endReadSession, getUnreadAnchor, holdRead, isReadHeld, setAtBottom, setAtLiveTail, threadReadKey, useMissedArrivals } from '@/lib/read-position';
+import { endReadSession, getUnreadAnchor, holdRead, isReadHeld, setAtBottom, setAtLiveTail, setUnreadAnchor, threadReadKey, useMissedArrivals } from '@/lib/read-position';
 import { eventCallbacks, expectInvalidPayloadReported, type CapturedWSOptions } from '@/test/ws-frames';
 
 let capturedOptions: Record<string, ((data: unknown) => void) | boolean | undefined> = {};
@@ -1546,6 +1546,66 @@ describe('ChatPage WebSocket handlers', () => {
       expect(apiFetch).not.toHaveBeenCalledWith('/api/v1/user-state/threads/channels/ch-1/msg-root/seen', { method: 'PUT' });
       arrive({ id: 'reply-2', parentMessageID: 'msg-root', authorID: 'u-me' });
       expect(isReadHeld(threadReadKey('msg-root'))).toBe(false);
+    });
+
+    // As in an open channel: a reply the user can't be seeing (scrolled up,
+    // or not looking) stays unread, and the thread's line moves above the
+    // first reply they haven't seen.
+    describe('a reply in the open thread the user is not following', () => {
+      const seenPut = ['/api/v1/user-state/threads/channels/ch-1/msg-root/seen', { method: 'PUT' }] as const;
+      const seedSeen = (qc: QueryClient) => {
+        seed(0)(qc);
+        qc.setQueryData(queryKeys.userState(), {
+          threadNotifications: [], threadSeen: { 'msg-root': '2026-04-30T09:00:00Z' }, hiddenConversations: [], hiddenSkills: [],
+        });
+      };
+      beforeEach(() => {
+        resetSeenCache();
+        isActiveThread.mockReturnValue(true);
+      });
+
+      it('scrolled up: stays unread, and the line goes above the first reply not seen', () => {
+        setAtBottom(threadReadKey('msg-root'), false);
+        renderAt('/', seedSeen);
+        arrive({ id: 'reply-1', parentMessageID: 'msg-root' });
+        arrive({ id: 'reply-2', parentMessageID: 'msg-root', createdAt: '2026-04-30T10:00:05Z' });
+        expect(apiFetch).not.toHaveBeenCalledWith(...seenPut);
+        expect(getUnreadAnchor(threadReadKey('msg-root'))).toEqual({ kind: 'after', at: '2026-04-30T09:00:00Z' });
+      });
+
+      it('not looking: the line moves from where the thread opened', () => {
+        setUnreadAnchor(threadReadKey('msg-root'), { kind: 'after', at: '2026-04-30T08:00:00Z' });
+        forceAwayUntilInput();
+        renderAt('/', seedSeen);
+        arrive({ id: 'reply-1', parentMessageID: 'msg-root' });
+        expect(apiFetch).not.toHaveBeenCalledWith(...seenPut);
+        expect(getUnreadAnchor(threadReadKey('msg-root'))).toEqual({ kind: 'after', at: '2026-04-30T09:00:00Z' });
+      });
+
+      it('held unread: the line stays on the reply marked unread', () => {
+        holdRead(threadReadKey('msg-root'));
+        setUnreadAnchor(threadReadKey('msg-root'), { kind: 'message', messageID: 'reply-0' });
+        renderAt('/', seedSeen);
+        arrive({ id: 'reply-1', parentMessageID: 'msg-root' });
+        expect(getUnreadAnchor(threadReadKey('msg-root'))).toEqual({ kind: 'message', messageID: 'reply-0' });
+      });
+
+      it('following along: read at once, the line left alone', () => {
+        renderAt('/', seedSeen);
+        arrive({ id: 'reply-1', parentMessageID: 'msg-root' });
+        expect(apiFetch).toHaveBeenCalledWith(...seenPut);
+        expect(getUnreadAnchor(threadReadKey('msg-root'))).toBeUndefined();
+      });
+
+      it('a reply alert while scrolled up keeps it unread', () => {
+        setAtBottom(threadReadKey('msg-root'), false);
+        renderAt('/', seedSeen);
+        act(() => (capturedOptions.onNotification as (d: unknown) => void)({
+          kind: 'thread_reply', parentID: 'ch-1', parentType: 'channel', parentMessageID: 'msg-root', createdAt: '2026-05-01T10:00:01Z',
+        }));
+        expect(markThreadNotificationUnread).toHaveBeenCalledWith('msg-root');
+        expect(apiFetch).not.toHaveBeenCalledWith(...seenPut);
+      });
     });
 
     it('a reply alert for a thread held unread keeps it unread', () => {

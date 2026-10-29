@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { UserChannel, UserConversation, SidebarCategory } from '@/types';
-import { archivedSidebarChannels, groupSidebarItems, isSidebarItemUnread, sidebarItemID, SidebarSectionKeys, type SidebarItem } from './sidebar-groups';
+import { groupSidebarItems, isSidebarItemUnread, sidebarItemID, SidebarSectionKeys, type SidebarItem } from './sidebar-groups';
 
 function conv(over: Partial<UserConversation>): UserConversation {
   return {
@@ -149,14 +149,5 @@ describe('archived channels', () => {
     );
     const ids = sections.flatMap((s) => s.items.map(sidebarItemID));
     expect(ids).toEqual(['live']);
-  });
-
-  it('archivedSidebarChannels returns only archived channels, A-Z', () => {
-    const out = archivedSidebarChannels([
-      ch({ channelID: 'b', channelName: 'Beta', archived: true }),
-      ch({ channelID: 'live', channelName: 'live' }),
-      ch({ channelID: 'a', channelName: 'alpha', archived: true }),
-    ]);
-    expect(out.map((c) => c.channelID)).toEqual(['a', 'b']);
   });
 });

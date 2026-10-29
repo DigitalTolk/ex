@@ -104,7 +104,7 @@ The recipient's situation decides everything. "At the device" = real input withi
 | Recipient's situation when the message lands | Desktop | Unread trace (badge / bold row / title count) | Read state | Phone |
 | --- | --- | --- | --- | --- |
 | Looking at that channel/DM/thread | Nothing surfaces (they're watching it happen) | None | Read immediately | Silent |
-| App open on that parent, but NOT looking (window blurred/hidden, or idle) | Popup + sound | **Appears and STAYS** until they actually return (read on window re-focus) | NOT read — an open route is not a reading user | Silent if at the device, buzzes otherwise |
+| App open on that parent, but NOT looking (window blurred/hidden, or idle) | Popup + sound | **Appears and STAYS** until they actually return (read on window re-focus, or on their first input after an idle spell) | NOT read — an open route is not a reading user | Silent if at the device, buzzes otherwise |
 | Elsewhere in the app, at the device | Popup + sound | Appears | Unread until they open it | Silent |
 | At the machine but in another program | Popup over that program + sound | Appears | Unread until they return | Silent (input recency / shell OS-input keeps the desktop's claim alive) |
 | Away from the machine (10+ min no input, or locked/suspended/slept) | Banner may sit there (harmless) | Appears | Unread | **Buzzes ~30 s after the message** |
@@ -112,7 +112,7 @@ The recipient's situation decides everything. "At the device" = real input withi
 
 Non-negotiable consequences, each of which has been a real shipped bug:
 - **An alert must never vanish without a trace.** A transient OS banner plus an auto-cleared badge = "I was never notified" (the ghost-DM bug: the open-but-unwatched DM auto-marked itself read).
-- **Read-marking requires attention, never mere route-openness.** The gate lives in ChatPage's `message.new` handler (`isUserAttentive(suppressionWindowMs)`); the return-half lives in `useMarkReadOnReturn` (views re-read on window focus). Do not "simplify" either away.
+- **Read-marking requires attention, never mere route-openness.** The gate lives in ChatPage's `message.new` handler (`isUserAttentive(suppressionWindowMs)`); the return-half lives in `useMarkReadOnReturn` (views re-read on window focus, or on the first input after an idle spell in a window that kept its focus). Do not "simplify" either away.
 - **Which window has focus is irrelevant to the phone decision.** Focus separates "looking at ex" from "looking at something else" — never "at the desk" from "gone".
 - **Duplicates beat silence, in every trade-off.**
 - **One number.** The tab title — and so a desktop or phone app's icon — shows the Activity bell's count (`NotificationCountTitleBridge` → `useActivityUnread`). That holds only because every alert has an Activity row: the fan-out lists an alert that is no mention, keyword, DM or thread reply (a channel at "All messages") as a `channel_message` item, read by opening its channel. Never add an alert path that leaves no Activity row.

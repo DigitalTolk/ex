@@ -57,6 +57,7 @@ vi.mock('@/hooks/useThreads', () => ({
   useUnfollowThread: () => ({ mutate: vi.fn(), isPending: false }),
   markThreadSeen: vi.fn(),
   noteThreadReadPosition: vi.fn(),
+  threadHasUnseen: () => true,
 }));
 vi.mock('@/hooks/useDrafts', () => ({
   useDraftForScope: () => ({ data: undefined }),

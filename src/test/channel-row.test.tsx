@@ -23,8 +23,12 @@ vi.mock('@/hooks/useSidebar', () => ({
 }));
 
 // Render dropdown contents inline so we can interact with menu items.
+const menuRoots = vi.fn();
 vi.mock('@/components/ui/dropdown-menu', () => ({
-  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => {
+    menuRoots();
+    return <div>{children}</div>;
+  },
   DropdownMenuTrigger: ({ children, ...props }: { children: React.ReactNode; [k: string]: unknown }) => (
     <button {...props}>{children}</button>
   ),
@@ -67,7 +71,7 @@ function renderRow(channel: UserChannel, hasUnread = false, props: Partial<Compo
     ...render(
       <QueryClientProvider client={qc}>
         <BrowserRouter>
-          <ChannelRow channel={channel} hasUnread={hasUnread} onClose={onClose} {...props} />
+          <ChannelRow onNavigate={vi.fn()} channel={channel} hasUnread={hasUnread} onClose={onClose} {...props} />
         </BrowserRouter>
       </QueryClientProvider>,
     ),
@@ -81,8 +85,28 @@ describe('ChannelRow', () => {
   beforeEach(() => {
     favoriteMutate.mockReset();
     setCategoryMutate.mockReset();
+    menuRoots.mockReset();
     categoriesData = [];
     window.history.pushState({}, '', '/');
+  });
+
+  // A menu per row held ~58 KB; accounts with thousands of channels ran a
+  // phone out of memory. The menu mounts the first time it opens.
+  it('mounts no menu until the row menu is opened', () => {
+    renderRow(makeChannel({ channelID: 'ch-1' }));
+    expect(menuRoots).not.toHaveBeenCalled();
+    expect(screen.queryByText('Move to Channels')).toBeNull();
+    fireEvent.click(screen.getByTestId('row-menu-ch-1'));
+    expect(menuRoots).toHaveBeenCalled();
+    expect(screen.getByText('Move to Channels')).toBeInTheDocument();
+  });
+
+  it('opens the row menu on a primary-button press, not on another button', () => {
+    renderRow(makeChannel({ channelID: 'ch-1' }));
+    fireEvent.mouseDown(screen.getByTestId('row-menu-ch-1'), { button: 2 });
+    expect(menuRoots).not.toHaveBeenCalled();
+    fireEvent.mouseDown(screen.getByTestId('row-menu-ch-1'), { button: 0 });
+    expect(screen.getByText('Move to Channels')).toBeInTheDocument();
   });
 
   it('renders the channel name', () => {
@@ -131,14 +155,17 @@ describe('ChannelRow', () => {
   });
 
   it('does not navigate when the parent suppresses the dragged channel click', () => {
+    const onNavigate = vi.fn();
     const { onClose } = renderRow(makeChannel({ channelID: 'ch-1', channelName: 'general' }), false, {
       suppressNavigation: true,
+      onNavigate,
     });
     const link = screen.getByText('general').closest('a')!;
 
     fireEvent.click(link);
 
     expect(onClose).not.toHaveBeenCalled();
+    expect(onNavigate).not.toHaveBeenCalled();
     expect(window.location.pathname).not.toBe('/channel/general');
   });
 
@@ -152,6 +179,7 @@ describe('ChannelRow', () => {
     // matches the section title so the action reads as "put it back where
     // an unassigned channel naturally belongs".
     renderRow(makeChannel({ channelID: 'ch-1', categoryID: 'cat-A' }));
+    fireEvent.click(screen.getByTestId('row-menu-ch-1'));
     const items = screen.getAllByTestId('dropdown-item');
     const moveBack = items.find((b) => b.textContent === 'Move to Channels');
     fireEvent.click(moveBack!);
@@ -160,6 +188,7 @@ describe('ChannelRow', () => {
 
   it('"Move to Channels" from Favorites clears favorite and moves to the default channel section', () => {
     renderRow(makeChannel({ channelID: 'ch-1', favorite: true, categoryID: '' }));
+    fireEvent.click(screen.getByTestId('row-menu-ch-1'));
     const items = screen.getAllByTestId('dropdown-item');
     const moveBack = items.find((b) => b.textContent === 'Move to Channels');
     fireEvent.click(moveBack!);
@@ -171,6 +200,7 @@ describe('ChannelRow', () => {
     // No-op moves are pointless — disable the entry so the user knows
     // they're already there, rather than firing a redundant API call.
     renderRow(makeChannel({ channelID: 'ch-1' }));
+    fireEvent.click(screen.getByTestId('row-menu-ch-1'));
     const items = screen.getAllByTestId('dropdown-item');
     const moveBack = items.find((b) => b.textContent === 'Move to Channels') as HTMLButtonElement;
     expect(moveBack.disabled).toBe(true);
@@ -178,6 +208,7 @@ describe('ChannelRow', () => {
 
   it('keeps "Move to Channels" enabled for a favorited channel already carrying the default category', () => {
     renderRow(makeChannel({ channelID: 'ch-1', favorite: true, categoryID: '' }));
+    fireEvent.click(screen.getByTestId('row-menu-ch-1'));
     const items = screen.getAllByTestId('dropdown-item');
     const moveBack = items.find((b) => b.textContent === 'Move to Channels') as HTMLButtonElement;
     expect(moveBack.disabled).toBe(false);
@@ -187,6 +218,7 @@ describe('ChannelRow', () => {
     // Creating a new category lives in the sidebar header now; the row
     // menu only moves between existing buckets.
     renderRow(makeChannel({ channelID: 'ch-1' }));
+    fireEvent.click(screen.getByTestId('row-menu-ch-1'));
     const items = screen.getAllByTestId('dropdown-item');
     expect(items.find((b) => b.textContent?.includes('New category'))).toBeUndefined();
   });
@@ -197,6 +229,7 @@ describe('ChannelRow', () => {
       { id: 'cat-B', name: 'Beta', position: 1 },
     ];
     renderRow(makeChannel({ channelID: 'ch-1' }));
+    fireEvent.click(screen.getByTestId('row-menu-ch-1'));
     const items = screen.getAllByTestId('dropdown-item');
     const moveToBeta = items.find((b) => b.textContent === 'Move to Beta');
     fireEvent.click(moveToBeta!);
@@ -206,6 +239,7 @@ describe('ChannelRow', () => {
   it('"Move to <category>" from Favorites clears favorite so the channel leaves Favorites', () => {
     categoriesData = [{ id: 'cat-B', name: 'Beta', position: 1 }];
     renderRow(makeChannel({ channelID: 'ch-1', favorite: true }));
+    fireEvent.click(screen.getByTestId('row-menu-ch-1'));
     const items = screen.getAllByTestId('dropdown-item');
     const moveToBeta = items.find((b) => b.textContent === 'Move to Beta');
     fireEvent.click(moveToBeta!);
@@ -216,6 +250,7 @@ describe('ChannelRow', () => {
   it('disables the "Move to <category>" entry for the current category', () => {
     categoriesData = [{ id: 'cat-A', name: 'Alpha', position: 0 }];
     renderRow(makeChannel({ channelID: 'ch-1', categoryID: 'cat-A' }));
+    fireEvent.click(screen.getByTestId('row-menu-ch-1'));
     const items = screen.getAllByTestId('dropdown-item');
     const moveToAlpha = items.find((b) => b.textContent === 'Move to Alpha') as HTMLButtonElement;
     expect(moveToAlpha).toBeTruthy();
@@ -281,10 +316,43 @@ describe('ChannelRow', () => {
   });
 
   it('marks the active row with an accent bar', () => {
-    window.history.pushState({}, '', '/channel/general');
-    renderRow(makeChannel({ channelID: 'ch-1', channelName: 'general' }));
+    renderRow(makeChannel({ channelID: 'ch-1', channelName: 'general' }), false, { active: true });
     const link = screen.getByText('general').closest('a')!;
     expect(link.className).toContain('before:bg-sidebar-foreground');
+    expect(link).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('opens the channel on a plain click and closes the drawer', () => {
+    const onNavigate = vi.fn();
+    const { onClose } = renderRow(makeChannel({ channelID: 'ch-1', channelName: 'general' }), false, { onNavigate });
+    const link = screen.getByText('general').closest('a')!;
+    expect(link).toHaveAttribute('href', '/channel/general');
+    expect(link).not.toHaveAttribute('aria-current');
+    expect(fireEvent.click(link)).toBe(false);
+    expect(onNavigate).toHaveBeenCalledWith('/channel/general');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a modified click to the browser, which opens a new tab', () => {
+    const onNavigate = vi.fn();
+    renderRow(makeChannel({ channelID: 'ch-1', channelName: 'general' }), false, { onNavigate });
+    const link = screen.getByText('general').closest('a')!;
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }]) {
+      expect(fireEvent.click(link, modifier)).toBe(true);
+    }
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  // A row reading the router's location re-renders on every navigation; with
+  // thousands of rows that was most of a channel switch.
+  it('renders without a router: a row never reads the location', () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ChannelRow channel={makeChannel({ channelName: 'general' })} hasUnread={false} onNavigate={vi.fn()} onClose={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText('general').closest('a')).toHaveAttribute('href', '/channel/general');
   });
 
 });

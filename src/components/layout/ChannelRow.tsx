@@ -1,16 +1,12 @@
-import { NavLink } from 'react-router-dom';
-import { Star, BellOff, MoreVertical } from 'lucide-react';
+import { Star, BellOff } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { ChannelIcon } from '@/components/ChannelIcon';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { slugify } from '@/lib/format';
 import { useFavoriteChannel, useSetCategory, useCategories } from '@/hooks/useSidebar';
 import { useRowLongPressMenu } from '@/hooks/useRowLongPressMenu';
+import { SidebarRowMenu } from './SidebarRowMenu';
+import { SidebarRowLink } from './SidebarRowLink';
 import type { UserChannel, SidebarCategory } from '@/types';
 import { memo, type CSSProperties } from 'react';
 
@@ -22,6 +18,9 @@ interface Props {
   // "all messages" level — the server's notification decision). Only this
   // drives the numeric badge; plain unread shows the availability dot.
   notifyCount?: number;
+  // The sidebar decides which row is open (see SidebarRowLink).
+  active?: boolean;
+  onNavigate: (to: string) => void;
   onClose: () => void;
   draggable?: boolean;
   dragRef?: (node: HTMLElement | null) => void;
@@ -38,6 +37,8 @@ export const ChannelRow = memo(function ChannelRow({
   channel,
   hasUnread,
   notifyCount = 0,
+  active = false,
+  onNavigate,
   onClose,
   draggable,
   dragRef,
@@ -78,34 +79,15 @@ export const ChannelRow = memo(function ChannelRow({
       style={dragStyle}
       {...rowHandlers}
     >
-      <NavLink
+      <SidebarRowLink
         to={`/channel/${slugify(channel.channelName)}`}
-        onClick={(event) => {
-          // A touch long-press that opened the menu also fires a click on
-          // release; swallow it so the row doesn't navigate.
-          if (suppressNavClick()) {
-            event.preventDefault();
-            event.stopPropagation();
-            return;
-          }
-          if (suppressNavigation) {
-            event.preventDefault();
-            event.stopPropagation();
-            onSuppressNavigationConsumed?.();
-            return;
-          }
-          onClose();
-        }}
-        draggable={false}
-        className={({ isActive }) =>
-          `relative flex flex-1 min-w-0 items-center gap-2 rounded-md py-1.5 pl-2 pr-12 text-sm transition-colors touch:pr-16 mobile:h-12 mobile:py-0 mobile:pl-3 mobile:pr-20 mobile:text-base ${
-            isActive
-              ? 'bg-sidebar-accent text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
-              : hasUnread
-                ? 'font-bold text-white hover:bg-white/10'
-                : 'text-gray-300 hover:bg-white/10 hover:text-white'
-          }`
-        }
+        active={active}
+        hasUnread={hasUnread}
+        onNavigate={onNavigate}
+        onClose={onClose}
+        suppressNavClick={suppressNavClick}
+        suppressNavigation={suppressNavigation}
+        onSuppressNavigationConsumed={onSuppressNavigationConsumed}
       >
         <span className="flex h-5 w-5 shrink-0 items-center justify-center">
           <ChannelIcon type={channel.channelType} className="h-4 w-4" ariaLabel="" />
@@ -118,7 +100,7 @@ export const ChannelRow = memo(function ChannelRow({
             NUMBER counts messages that actually ALERTED this user (mentions,
             keywords; it shows even in a muted channel, a mention overrides
             mute server-side); a dot means replies in a thread the user is in;
-            plain new messages only embolden the name (see the NavLink
+            plain new messages only embolden the name (see SidebarRowLink
             classes); a muted channel with nothing louder shows the bell. It
             fades out on desktop hover so the row actions (star/kebab) take
             the space, and stays visible on touch. On a phone the star sits
@@ -137,7 +119,7 @@ export const ChannelRow = memo(function ChannelRow({
             aria-label="Muted"
           />
         ) : null}
-      </NavLink>
+      </SidebarRowLink>
       {/* Star — visible on hover. A favorite keeps a filled star, but in the
           same quiet grey as the muted bell, so the Starred section is not a
           column of colour; it lifts a little as the row is hovered. Always
@@ -154,35 +136,29 @@ export const ChannelRow = memo(function ChannelRow({
       >
         <Star className="h-3.5 w-3.5" fill={isFav ? 'currentColor' : 'none'} />
       </button>
-      {/* Kebab — move to category. Desktop: revealed on row hover. Mobile: the
-          trigger is NOT a tap target (a long-press on the row opens it) but stays
-          mounted + hidden so Radix can anchor the menu to it. */}
-      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-        <DropdownMenuTrigger
-          aria-label={`Manage ${channel.channelName} sidebar placement`}
-          data-testid={`row-menu-${channel.channelID}`}
-          className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-gray-400 opacity-0 hover:bg-white/20 hover:text-white group-hover/row:opacity-100 touch:pointer-events-none touch:opacity-0"
+      {/* Kebab — move to category. */}
+      <SidebarRowMenu
+        open={menuOpen}
+        onOpenChange={setMenuOpen}
+        label={`Manage ${channel.channelName} sidebar placement`}
+        testID={`row-menu-${channel.channelID}`}
+      >
+        <DropdownMenuItem
+          onClick={() => moveToCategory('')}
+          disabled={!channel.categoryID && !isFav}
         >
-          <MoreVertical className="h-3.5 w-3.5" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
+          Move to Channels
+        </DropdownMenuItem>
+        {(categories ?? []).map((c: SidebarCategory) => (
           <DropdownMenuItem
-            onClick={() => moveToCategory('')}
-            disabled={!channel.categoryID && !isFav}
+            key={c.id}
+            onClick={() => moveToCategory(c.id)}
+            disabled={channel.categoryID === c.id}
           >
-            Move to Channels
+            Move to {c.name}
           </DropdownMenuItem>
-          {(categories ?? []).map((c: SidebarCategory) => (
-            <DropdownMenuItem
-              key={c.id}
-              onClick={() => moveToCategory(c.id)}
-              disabled={channel.categoryID === c.id}
-            >
-              Move to {c.name}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
+        ))}
+      </SidebarRowMenu>
     </div>
   );
 });

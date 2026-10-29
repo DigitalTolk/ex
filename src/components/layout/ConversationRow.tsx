@@ -1,14 +1,8 @@
-import { NavLink } from 'react-router-dom';
-import { Star, MoreVertical } from 'lucide-react';
+import { Star } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { UserAvatar } from '@/components/UserAvatar';
 import { UserStatusIndicator } from '@/components/UserStatusIndicator';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { shortNamesOnly } from '@/lib/format';
 import {
   useCategories,
@@ -16,6 +10,8 @@ import {
   useSetConversationCategory,
 } from '@/hooks/useSidebar';
 import { useRowLongPressMenu } from '@/hooks/useRowLongPressMenu';
+import { SidebarRowMenu } from './SidebarRowMenu';
+import { SidebarRowLink } from './SidebarRowLink';
 import { useIsOnline } from '@/stores/presence';
 import type { SidebarCategory, UserConversation, UserStatus } from '@/types';
 import { memo, type CSSProperties } from 'react';
@@ -35,6 +31,9 @@ interface Props {
   // the affected row, not the whole sidebar. Unset for group rows: groups
   // render no availability dot.
   dmUserID?: string;
+  // The sidebar decides which row is open (see SidebarRowLink).
+  active?: boolean;
+  onNavigate: (to: string) => void;
   onClose: () => void;
   onHide: (convID: string) => void;
   draggable?: boolean;
@@ -56,6 +55,8 @@ export const ConversationRow = memo(function ConversationRow({
   dmAvatarURL,
   dmUserStatus,
   dmUserID,
+  active = false,
+  onNavigate,
   onClose,
   onHide,
   draggable,
@@ -113,34 +114,15 @@ export const ConversationRow = memo(function ConversationRow({
       style={dragStyle}
       {...rowHandlers}
     >
-      <NavLink
+      <SidebarRowLink
         to={`/conversation/${conversation.conversationID}`}
-        onClick={(event) => {
-          // A touch long-press that opened the menu also fires a click on
-          // release; swallow it so the row doesn't navigate.
-          if (suppressNavClick()) {
-            event.preventDefault();
-            event.stopPropagation();
-            return;
-          }
-          if (suppressNavigation) {
-            event.preventDefault();
-            event.stopPropagation();
-            onSuppressNavigationConsumed?.();
-            return;
-          }
-          onClose();
-        }}
-        draggable={false}
-        className={({ isActive }) =>
-          `relative flex flex-1 min-w-0 items-center gap-2 rounded-md py-1.5 pl-2 pr-12 text-sm transition-colors touch:pr-16 mobile:h-12 mobile:py-0 mobile:pl-3 mobile:pr-20 mobile:text-base ${
-            isActive
-              ? 'bg-sidebar-accent text-white font-semibold before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-sidebar-foreground before:content-[""]'
-              : hasUnread
-                ? 'font-bold text-white hover:bg-white/10'
-                : 'text-gray-300 hover:bg-white/10 hover:text-white'
-          }`
-        }
+        active={active}
+        hasUnread={hasUnread}
+        onNavigate={onNavigate}
+        onClose={onClose}
+        suppressNavClick={suppressNavClick}
+        suppressNavigation={suppressNavigation}
+        onSuppressNavigationConsumed={onSuppressNavigationConsumed}
       >
         {isGroup ? (
           <>
@@ -181,7 +163,7 @@ export const ConversationRow = memo(function ConversationRow({
             </Badge>
           </span>
         )}
-      </NavLink>
+      </SidebarRowLink>
       {/* Star — visible on hover; a favorite keeps a quiet grey filled star
           that lifts on row hover (see ChannelRow). Positioned to match
           ChannelRow's right-7 / right-1 layout. */}
@@ -197,41 +179,35 @@ export const ConversationRow = memo(function ConversationRow({
       >
         <Star className="h-3.5 w-3.5" fill={isFav ? 'currentColor' : 'none'} />
       </button>
-      {/* Kebab — move to a category, or close. Desktop: revealed on row
-          hover. Mobile: the trigger is NOT a tap target (a long-press on the row
-          opens it) but stays mounted + hidden so Radix can anchor the menu. */}
-      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-        <DropdownMenuTrigger
-          aria-label={`Manage ${conversation.displayName} sidebar placement`}
-          data-testid={`conv-row-menu-${conversation.conversationID}`}
-          className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-gray-400 opacity-0 hover:bg-white/20 hover:text-white group-hover/row:opacity-100 touch:pointer-events-none touch:opacity-0"
+      {/* Kebab — move to a category, or close. */}
+      <SidebarRowMenu
+        open={menuOpen}
+        onOpenChange={setMenuOpen}
+        label={`Manage ${conversation.displayName} sidebar placement`}
+        testID={`conv-row-menu-${conversation.conversationID}`}
+      >
+        <DropdownMenuItem
+          onClick={() => moveToCategory('')}
+          disabled={!conversation.categoryID && !isFav}
         >
-          <MoreVertical className="h-3.5 w-3.5" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
+          Move to Direct Messages
+        </DropdownMenuItem>
+        {(categories ?? []).map((c: SidebarCategory) => (
           <DropdownMenuItem
-            onClick={() => moveToCategory('')}
-            disabled={!conversation.categoryID && !isFav}
+            key={c.id}
+            onClick={() => moveToCategory(c.id)}
+            disabled={conversation.categoryID === c.id && !isFav}
           >
-            Move to Direct Messages
+            Move to {c.name}
           </DropdownMenuItem>
-          {(categories ?? []).map((c: SidebarCategory) => (
-            <DropdownMenuItem
-              key={c.id}
-              onClick={() => moveToCategory(c.id)}
-              disabled={conversation.categoryID === c.id && !isFav}
-            >
-              Move to {c.name}
-            </DropdownMenuItem>
-          ))}
-          <DropdownMenuItem
-            onClick={() => onHide(conversation.conversationID)}
-            data-testid={`conv-close-${conversation.conversationID}`}
-          >
-            Close conversation
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+        ))}
+        <DropdownMenuItem
+          onClick={() => onHide(conversation.conversationID)}
+          data-testid={`conv-close-${conversation.conversationID}`}
+        >
+          Close conversation
+        </DropdownMenuItem>
+      </SidebarRowMenu>
     </div>
   );
 });

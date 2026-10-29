@@ -63,10 +63,8 @@ export function PragmaticCategoryHeader({
   }, [dropData]);
 
   useEffect(() => {
-    const element = elementRef.current;
-    /* v8 ignore next -- elementRef is always attached after mount; defensive null guard */
-    /* istanbul ignore next -- elementRef is always attached after mount; defensive null guard */
-    if (!element) return undefined;
+    // React attaches the ref when it commits, before any effect runs.
+    const element = elementRef.current!;
     sidebarDndDebug('category-header register', {
       id,
       draggable,
@@ -159,8 +157,9 @@ export function PragmaticSection({
   }, [data]);
 
   useEffect(() => {
-    const element = elementRef.current;
-    if (!element || disabled) return undefined;
+    if (disabled) return undefined;
+    // React attaches the ref when it commits, before any effect runs.
+    const element = elementRef.current!;
     return dropTargetForElements({
       element,
       // Sticky so the pointer entering an adjacent push-aside gap keeps a live
@@ -194,10 +193,8 @@ export function PragmaticCategoryDropHitbox({
   }, [data]);
 
   useEffect(() => {
-    const element = elementRef.current;
-    /* v8 ignore next -- elementRef is always attached after mount; defensive null guard */
-    /* istanbul ignore next -- elementRef is always attached after mount; defensive null guard */
-    if (!element) return undefined;
+    // React attaches the ref when it commits, before any effect runs.
+    const element = elementRef.current!;
     return dropTargetForElements({
       element,
       // Sticky (see PragmaticChannelRow): keeps this boundary as the target when
@@ -222,13 +219,11 @@ export function PragmaticChannelRow({
   sectionKey,
   index,
   channel,
-  disabled,
   children,
 }: {
   sectionKey: string;
   index: number;
   channel: UserChannel;
-  disabled?: boolean;
   children: (args: {
     dragRef?: (node: HTMLElement | null) => void;
     dragStyle?: CSSProperties;
@@ -238,8 +233,8 @@ export function PragmaticChannelRow({
   const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
-    const element = elementRef.current;
-    if (!element || disabled) return undefined;
+    // React attaches the ref when it commits, before any effect runs.
+    const element = elementRef.current!;
     return combine(
       makeDraggable({
         element,
@@ -270,7 +265,7 @@ export function PragmaticChannelRow({
           ),
       }),
     );
-  }, [channel, disabled, index, sectionKey]);
+  }, [channel, index, sectionKey]);
 
   const setElementRef = useCallback((node: HTMLElement | null) => {
     elementRef.current = node;
@@ -291,13 +286,11 @@ export function PragmaticConversationRow({
   sectionKey,
   index,
   conversation,
-  disabled,
   children,
 }: {
   sectionKey: string;
   index: number;
   conversation: UserConversation;
-  disabled?: boolean;
   children: (args: {
     dragRef?: (node: HTMLElement | null) => void;
     dragStyle?: CSSProperties;
@@ -307,10 +300,8 @@ export function PragmaticConversationRow({
   const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
-    const element = elementRef.current;
-    /* v8 ignore next -- elementRef is always attached after mount; the !element arm is defensive */
-    /* istanbul ignore next -- elementRef is always attached after mount; the !element arm is defensive */
-    if (!element || disabled) return undefined;
+    // React attaches the ref when it commits, before any effect runs.
+    const element = elementRef.current!;
     return combine(
       makeDraggable({
         element,
@@ -341,7 +332,7 @@ export function PragmaticConversationRow({
           ),
       }),
     );
-  }, [conversation, disabled, index, sectionKey]);
+  }, [conversation, index, sectionKey]);
 
   const setElementRef = useCallback((node: HTMLElement | null) => {
     elementRef.current = node;

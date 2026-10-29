@@ -1204,9 +1204,10 @@ func (s *ChannelService) BrowsePublic(ctx context.Context, userID string, limit 
 	return channels, nextCursor, nil
 }
 
-// guestBrowse fetches the channel records for every channel the guest
-// belongs to, in a stable order. No cursor — guests never have enough
-// channels to need pagination.
+// guestBrowse fetches the channel records for every live public channel the
+// guest belongs to, in a stable order: archived ones are left out, as
+// ListPublicChannels leaves them out for everyone else. No cursor — guests
+// never have enough channels to need pagination.
 func (s *ChannelService) guestBrowse(ctx context.Context, userID string) ([]*model.Channel, string, error) {
 	mine, err := s.memberships.ListUserChannels(ctx, userID)
 	if err != nil {
@@ -1222,7 +1223,7 @@ func (s *ChannelService) guestBrowse(ctx context.Context, userID string) ([]*mod
 	out := make([]*model.Channel, 0, len(mine))
 	for _, uc := range mine {
 		ch := byID[uc.ChannelID]
-		if ch == nil || ch.Type != model.ChannelTypePublic {
+		if ch == nil || ch.Type != model.ChannelTypePublic || ch.Archived {
 			continue
 		}
 		out = append(out, ch)
