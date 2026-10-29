@@ -1,7 +1,11 @@
 package agents
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -101,5 +105,52 @@ func TestValidateOutboundURL_RefusesSpecialPurposeRanges(t *testing.T) {
 	}
 	if err := validateOutboundURL("https://93.184.216.34/x"); err != nil {
 		t.Errorf("public literal refused: %v", err)
+	}
+}
+
+// Being under a connector domain opens private networks only: a connector host
+// that resolves to loopback (or the metadata endpoint) stays refused.
+func TestOutboundClients_ConnectorDomainNeverOpensLoopback(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	defer srv.Close()
+	prevDev, prevDomains := allowPrivateConnectorTargets, connectorDomains
+	t.Cleanup(func() { allowPrivateConnectorTargets, connectorDomains = prevDev, prevDomains })
+	allowPrivateConnectorTargets = false
+	AllowConnectorDomains([]string{"localhost"})
+	port := srv.URL[strings.LastIndex(srv.URL, ":")+1:]
+	for name, client := range outboundClients() {
+		if _, err := client.Get("http://localhost:" + port); !errors.Is(err, ssrf.ErrProhibitedIP) {
+			t.Errorf("%s: connector-domain host on loopback: err = %v, want ErrProhibitedIP", name, err)
+		}
+	}
+	if hits.Load() != 0 {
+		t.Fatal("loopback was reached")
+	}
+}
+
+func TestConfigureConnectorDomains_LogsWhatItIgnoresAndNeverFails(t *testing.T) {
+	prev := connectorDomains
+	t.Cleanup(func() { connectorDomains = prev })
+	var buf bytes.Buffer
+	prevLog := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prevLog) })
+
+	ConfigureConnectorDomains(context.Background(), "digitaltolk.net, *.DigitalTolk.com,com,10.0.0.0/8")
+	if got := fmt.Sprint(connectorDomains); got != "[digitaltolk.net digitaltolk.com]" {
+		t.Fatalf("connectorDomains = %s", got)
+	}
+	out := buf.String()
+	for _, want := range []string{"entry=com", "entry=10.0.0.0/8", "level=ERROR", "domains=digitaltolk.net,digitaltolk.com"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log lacks %q:\n%s", want, out)
+		}
+	}
+
+	buf.Reset()
+	ConfigureConnectorDomains(context.Background(), "")
+	if connectorDomains != nil || buf.Len() != 0 {
+		t.Fatalf("unset setting: domains=%v log=%q, want none and silence", connectorDomains, buf.String())
 	}
 }

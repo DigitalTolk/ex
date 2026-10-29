@@ -126,6 +126,13 @@ type Config struct {
 	// (stg-ex → stg provider, prd-ex → prod provider) — never hardcoded.
 	ConnectorProviderURL string `env:"CONNECTOR_PROVIDER_URL"`
 	ConnectorProviderKey string `env:"CONNECTOR_PROVIDER_API_KEY"`
+	// ConnectorPrivateDomains lists the domains whose hosts connector calls
+	// may reach on a private 10.x address ("digitaltolk.net" covers the domain
+	// and every subdomain): the internal services connectors
+	// live on. Plain text on purpose — it can never stop the server starting;
+	// an unusable entry is logged at boot and ignored (see
+	// netguard.ParseDomains).
+	ConnectorPrivateDomains string `env:"CONNECTOR_PRIVATE_DOMAINS"`
 
 	// BedrockRegion enables server-side execution of bedrock-harness agents:
 	// the backend runs the Converse loop against AWS Bedrock in this region

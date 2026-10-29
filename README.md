@@ -277,7 +277,8 @@ unknown address, so neither can be used to enumerate accounts.
 | `MS_STATUS_SYNC_INTERVAL` | `5m`                        | Account-standing check (disabled or deleted in Entra → deactivated; first check at boot) |
 | `SESSION_MAX_AGE`    | `2160h` (90 days)                 | Absolute session lifetime: refresh stops working this long after sign-in |
 | `OIDC_ALLOWED_EMAIL_DOMAINS` | -                         | Comma-separated email domains allowed to sign in via SSO (unset = any) |
-| `CONNECTOR_PROVIDER_URL` | -                             | Connector catalogue provider; must resolve to a public address outside development |
+| `CONNECTOR_PROVIDER_URL` | -                             | Connector catalogue provider; must resolve to a public address (or be under `CONNECTOR_PRIVATE_DOMAINS`) outside development |
+| `CONNECTOR_PRIVATE_DOMAINS` | -                          | Domains whose hosts (the domain and every subdomain) connector calls may reach on a private `10.x` address, e.g. `digitaltolk.net` (unset = none). Other private ranges, loopback and the cloud metadata address stay blocked. Unusable entries are logged at startup and ignored; it never stops the server |
 | `JWT_SECRET`         | `dev-secret-change-me` (dev only) | JWT signing secret (`openssl rand -base64 48`)          |
 | `AWS_REGION`         | `us-east-1`                       | AWS region                                              |
 | `DYNAMODB_TABLE`     | `ex`                              | DynamoDB table name (single-table design — see below)   |
