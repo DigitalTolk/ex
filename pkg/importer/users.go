@@ -59,7 +59,15 @@ type UserSpec struct {
 	DisplayName string
 	Deactivated bool
 	CreatedAt   time.Time
+	// Bot makes a machine account, like the ones ex creates for incoming
+	// webhooks: nobody signs in as it, and it is left out of search, the
+	// people directory and directory sync. Email is ignored: a bot gets an
+	// undeliverable ID@bots.ex.invalid address.
+	Bot bool
 }
+
+// botEmailDomain matches the bot accounts ex creates (internal/service/botuser.go).
+const botEmailDomain = "bots.ex.invalid"
 
 // EmailTakenError reports that the email already belongs to another ex user.
 // Existing users are never modified; map the source user to ExistingID instead.
@@ -72,22 +80,30 @@ func (e *EmailTakenError) Error() string {
 	return fmt.Sprintf("importer: email %s already belongs to user %s", e.Email, e.ExistingID)
 }
 
-// UpsertUser creates a single-sign-on member account (no password) when no user
-// with spec.ID exists yet. An existing user with that ID is left untouched;
-// an existing user with the same email but another ID yields *EmailTakenError.
-// The display name is trimmed and capped like the sign-in flow does. The user
-// is (re)indexed for search either way.
+// UpsertUser creates a single-sign-on member account (no password), or a bot
+// account for spec.Bot, when no user with spec.ID exists yet. An existing user
+// with that ID is left untouched, except that spec.Bot turns it into a bot
+// account; an existing user with the same email but another ID yields
+// *EmailTakenError. The display name is trimmed and capped like the sign-in
+// flow does. A person is (re)indexed for search either way, a bot is removed
+// from it.
 func (im *Importer) UpsertUser(ctx context.Context, spec UserSpec) (bool, error) {
 	return im.upsertUser(ctx, spec, false)
 }
 
 func (im *Importer) upsertUser(ctx context.Context, spec UserSpec, retried bool) (bool, error) {
 	email := strings.ToLower(strings.TrimSpace(spec.Email))
+	if spec.Bot && spec.ID != "" {
+		email = strings.ToLower(spec.ID) + "@" + botEmailDomain
+	}
 	if spec.ID == "" || email == "" {
 		return false, errors.New("importer: user ID and email are required")
 	}
 	existing, err := im.users.GetUser(ctx, spec.ID)
 	if err == nil {
+		if spec.Bot && !existing.IsBot {
+			return false, im.makeBot(ctx, existing)
+		}
 		return false, im.indexUser(ctx, existing)
 	}
 	if !errors.Is(err, store.ErrNotFound) {
@@ -114,6 +130,9 @@ func (im *Importer) upsertUser(ctx context.Context, spec UserSpec, retried bool)
 		CreatedAt:    spec.CreatedAt,
 		UpdatedAt:    spec.CreatedAt,
 	}
+	if spec.Bot {
+		u.AuthProvider, u.IsBot = "", true
+	}
 	if err := im.users.CreateUser(ctx, u); err != nil {
 		// A concurrent writer won the race for this ID or email: look again
 		// once so it is reported the same way the checks above would.
@@ -125,7 +144,27 @@ func (im *Importer) upsertUser(ctx context.Context, spec UserSpec, retried bool)
 	return true, im.indexUser(ctx, u)
 }
 
+// makeBot turns an existing account into a bot account (an earlier import
+// created it as a person) and takes it out of search.
+func (im *Importer) makeBot(ctx context.Context, u *model.User) error {
+	u.IsBot, u.AuthProvider, u.UpdatedAt = true, "", time.Now()
+	if err := im.users.UpdateUser(ctx, u); err != nil {
+		return fmt.Errorf("importer: make bot: %w", err)
+	}
+	if err := im.InvalidateUsers(ctx, []string{u.ID}); err != nil {
+		return err
+	}
+	return im.indexUser(ctx, u)
+}
+
+// indexUser indexes a person for search and removes a bot from it.
 func (im *Importer) indexUser(ctx context.Context, u *model.User) error {
+	if u.IsBot {
+		if err := im.indexer.DeleteUser(ctx, u.ID); err != nil {
+			return fmt.Errorf("importer: remove bot from search: %w", err)
+		}
+		return nil
+	}
 	if err := im.indexer.IndexUser(ctx, u); err != nil {
 		return fmt.Errorf("importer: index user: %w", err)
 	}

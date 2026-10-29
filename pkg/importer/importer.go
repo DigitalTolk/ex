@@ -1,6 +1,7 @@
 // Package importer writes conversation history from another chat system —
 // users, channels, direct and group conversations, memberships, messages,
-// threads, reactions, pins and file attachments — straight into ex's store.
+// threads, reactions, pins, file attachments and custom emoji — straight into
+// ex's store.
 //
 // Contract: the importer is built only on the storage layers (internal/store,
 // internal/storage, internal/search, internal/cache), never on internal/service.
@@ -113,6 +114,7 @@ type Importer struct {
 	attachments   *store.AttachmentStoreImpl
 	parentIndex   *store.ParentIndexStoreImpl
 	follows       *store.ThreadFollowStoreImpl
+	emojis        *store.EmojiStoreImpl
 
 	objects   ObjectStore
 	search    SearchIndex
@@ -144,6 +146,7 @@ func New(d Deps) (*Importer, error) {
 		attachments:   store.NewAttachmentStore(d.DB),
 		parentIndex:   store.NewParentIndexStore(d.DB),
 		follows:       store.NewThreadFollowStore(d.DB),
+		emojis:        store.NewEmojiStore(d.DB),
 		objects:       d.Objects,
 		search:        d.Search,
 		indexer:       indexer,
