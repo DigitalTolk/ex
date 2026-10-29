@@ -34,7 +34,7 @@ type agentSystem struct {
 // testable.
 var loadBedrockConfig = awsconfig.LoadDefaultConfig
 
-func (a *App) buildAgents(context.Context) error {
+func (a *App) buildAgents(ctx context.Context) error {
 	cfg, in, c, ag := a.cfg, &a.infra, &a.chat, &a.agents
 
 	// ex-runner installs: pairing, renewal, the Runners page, and the
@@ -82,6 +82,9 @@ func (a *App) buildAgents(context.Context) error {
 	// (SSRF); a dev workspace may point a connector at a service on the same
 	// machine.
 	agents.AllowPrivateConnectorTargets(cfg.IsDev())
+	// Hosts under the deployment's own domains (CliffHub, Sourcebot,
+	// Metabase) may be reached on a private 10.x address; no other host may.
+	agents.ConfigureConnectorDomains(ctx, cfg.ConnectorPrivateDomains)
 	ag.orch.SetConnectorRegistry(ag.connectors)
 	ag.engine = newServerEngine(cfg, ag.orch, ag.connectors)
 	if ag.engine != nil {

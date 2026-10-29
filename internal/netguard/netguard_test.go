@@ -1,10 +1,13 @@
 package netguard
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -81,6 +84,145 @@ func TestNewClient_AllowPrivateIsConsultedPerDial(t *testing.T) {
 	_ = res.Body.Close()
 	if res.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d", res.StatusCode)
+	}
+}
+
+func TestParseDomains(t *testing.T) {
+	cases := []struct {
+		raw, domains, ignored string
+	}{
+		{"", "[]", "[]"},
+		{"   ", "[]", "[]"},
+		{"digitaltolk.net,digitaltolk.com", "[digitaltolk.net digitaltolk.com]", "[]"},
+		// How people actually type lists: spaces, semicolons, new lines, a
+		// trailing comma, upper case, wildcards and trailing dots.
+		{"DigitalTolk.net, *.digitaltolk.com ;.internal.example.org.,\n", "[digitaltolk.net digitaltolk.com internal.example.org]", "[]"},
+		{"a-1.example.net", "[a-1.example.net]", "[]"},
+		// Unusable entries are left out — never fatal, never opened.
+		{"digitaltolk.net,com,10.0.0.1,exa_mple.com,-bad.com,bad-.com,a..com,::1", "[digitaltolk.net]",
+			"[com 10.0.0.1 exa_mple.com -bad.com bad-.com a..com ::1]"},
+	}
+	for _, c := range cases {
+		domains, ignored := ParseDomains(c.raw)
+		if got := fmt.Sprint(domains); got != c.domains {
+			t.Errorf("ParseDomains(%q) domains = %s, want %s", c.raw, got, c.domains)
+		}
+		if got := fmt.Sprint(ignored); got != c.ignored {
+			t.Errorf("ParseDomains(%q) ignored = %s, want %s", c.raw, got, c.ignored)
+		}
+	}
+}
+
+func TestInDomains(t *testing.T) {
+	domains := []string{"digitaltolk.net", "digitaltolk.com"}
+	for host, want := range map[string]bool{
+		"digitaltolk.net":             true,
+		"cliffhub.digitaltolk.net":    true,
+		"a.b.digitaltolk.com":         true,
+		"CliffHub.DigitalTolk.NET.":   true,
+		"evildigitaltolk.net":         false,
+		"digitaltolk.net.example.com": false,
+		"digitaltolk.org":             false,
+		"10.20.1.5":                   false,
+		"":                            false,
+	} {
+		if got := InDomains(host, domains); got != want {
+			t.Errorf("InDomains(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
+
+// withLoopbackAsInternal lets an httptest server (on 127.0.0.1) stand in for
+// an internal service on a private address.
+func withLoopbackAsInternal(t *testing.T) {
+	t.Helper()
+	prev := privateRanges
+	privateRanges = append(append([]netip.Prefix{}, prev...), netip.MustParsePrefix("127.0.0.0/8"))
+	t.Cleanup(func() { privateRanges = prev })
+}
+
+func TestNewClient_InternalDomainsReachPrivateAddresses(t *testing.T) {
+	withLoopbackAsInternal(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	internalURL := "http://localhost:" + u.Port()
+	client := NewClient(Options{
+		Timeout:           5 * time.Second,
+		DisableKeepAlives: true,
+		InternalDomains:   func() []string { return []string{"localhost"} },
+	})
+
+	res, err := client.Get(internalURL)
+	if err != nil {
+		t.Fatalf("internal host refused: %v", err)
+	}
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+	// The same address under another name — here the bare IP — is not an
+	// internal host.
+	if _, err := client.Get(srv.URL); !errors.Is(err, ssrf.ErrProhibitedIP) {
+		t.Fatalf("private address of a non-internal host: err = %v, want ErrProhibitedIP", err)
+	}
+	// Without the domain list, nothing private is reachable.
+	if _, err := NewClient(Options{Timeout: 5 * time.Second}).Get(internalURL); !errors.Is(err, ssrf.ErrProhibitedIP) {
+		t.Fatalf("no internal domains: err = %v, want ErrProhibitedIP", err)
+	}
+}
+
+func TestNewClient_InternalHostCannotRedirectToAnotherPrivateHost(t *testing.T) {
+	withLoopbackAsInternal(t)
+	var hits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	defer target.Close()
+	internal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound) // 127.0.0.1: not an internal host
+	}))
+	defer internal.Close()
+	u, _ := url.Parse(internal.URL)
+	client := NewClient(Options{Timeout: 5 * time.Second, InternalDomains: func() []string { return []string{"localhost"} }})
+	if _, err := client.Get("http://localhost:" + u.Port()); !errors.Is(err, ssrf.ErrProhibitedIP) {
+		t.Fatalf("redirect hop to a non-internal private host: err = %v, want ErrProhibitedIP", err)
+	}
+	if hits.Load() != 0 {
+		t.Fatal("the redirect target was reached")
+	}
+}
+
+// Loopback is not a private network: even an internal host that resolves to
+// it (or to the metadata endpoint) stays refused.
+func TestNewClient_InternalHostNeverReachesLoopback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	client := NewClient(Options{Timeout: 5 * time.Second, InternalDomains: func() []string { return []string{"localhost"} }})
+	if _, err := client.Get("http://localhost:" + u.Port()); !errors.Is(err, ssrf.ErrProhibitedIP) {
+		t.Fatalf("internal host on loopback: err = %v, want ErrProhibitedIP", err)
+	}
+}
+
+func TestInternalControl(t *testing.T) {
+	ctl := internalControl(nil)
+	if err := ctl("tcp4", "10.20.1.5:443", nil); err != nil {
+		t.Errorf("private address refused: %v", err)
+	}
+	for _, addr := range []string{
+		"169.254.169.254:80", "127.0.0.1:80", "not-an-address",
+		// Private, but not where the connectors live: still refused.
+		"172.16.0.1:443", "192.168.1.1:443", "100.64.0.1:443", "[fd00::1]:443",
+	} {
+		if err := ctl("tcp4", addr, nil); err == nil {
+			t.Errorf("internal control admitted %s", addr)
+		}
+	}
+}
+
+func TestTransport_AddressWithoutPortUsesThePublicGuard(t *testing.T) {
+	tr := newTransport(Options{InternalDomains: func() []string { return []string{"localhost"} }})
+	if _, err := tr.DialContext(context.Background(), "tcp", "localhost"); err == nil {
+		t.Fatal("an address without a port was dialed")
 	}
 }
 

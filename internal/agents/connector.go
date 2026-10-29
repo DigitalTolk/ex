@@ -84,6 +84,33 @@ var allowPrivateConnectorTargets = false
 // connector endpoints. Wired from config at boot; development only.
 func AllowPrivateConnectorTargets(v bool) { allowPrivateConnectorTargets = v }
 
+// connectorDomains are the domains whose hosts connectors may reach on a
+// private 10.x address in production — the internal services (CliffHub,
+// Sourcebot, Metabase, …) that sit on the same private network as the server.
+// Every other host stays public-only. Set once at boot from
+// CONNECTOR_PRIVATE_DOMAINS.
+var connectorDomains []string
+
+// AllowConnectorDomains sets the domains whose hosts connectors may reach on a
+// private 10.x address.
+func AllowConnectorDomains(domains []string) { connectorDomains = domains }
+
+// ConfigureConnectorDomains reads CONNECTOR_PRIVATE_DOMAINS at boot. It never
+// fails: an entry it can't use is logged as an error and left out, so the
+// connectors behind it stay blocked until the setting is fixed.
+func ConfigureConnectorDomains(ctx context.Context, raw string) {
+	domains, ignored := netguard.ParseDomains(raw)
+	for _, entry := range ignored {
+		slog.ErrorContext(ctx, "connector domains: ignoring an entry that is not a domain — connectors there stay blocked",
+			"entry", entry, "setting", "CONNECTOR_PRIVATE_DOMAINS")
+	}
+	if len(domains) > 0 {
+		slog.InfoContext(ctx, "connector domains: connectors may reach private 10.x addresses of hosts under these domains",
+			"domains", strings.Join(domains, ","))
+	}
+	AllowConnectorDomains(domains)
+}
+
 // validateOutboundURL gates every admin/provider-supplied URL the server will
 // later fetch WITH A USER'S CREDENTIAL attached (verify, token grant, base).
 // Without it, "https://…" was never actually required and neither was a
@@ -120,12 +147,14 @@ func validateOutboundURL(raw string) error {
 // connectorHTTPClient is the client for every request that carries a user's
 // connector credential (or the provider key) to an admin- or provider-supplied
 // URL: private destinations are refused at dial time unless the workspace
-// allows them (development), the proxy environment is ignored, and a redirect
-// never carries the credential to another host.
+// allows them (development) or the host is under a connector domain, the
+// proxy environment is ignored, and a redirect never carries the credential to
+// another host.
 func connectorHTTPClient(timeout time.Duration) *http.Client {
 	return netguard.NewClient(netguard.Options{
-		Timeout:      timeout,
-		AllowPrivate: func() bool { return allowPrivateConnectorTargets },
+		Timeout:         timeout,
+		AllowPrivate:    func() bool { return allowPrivateConnectorTargets },
+		InternalDomains: func() []string { return connectorDomains },
 	})
 }
 

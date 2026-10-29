@@ -21,6 +21,7 @@ func clearEnv(t *testing.T) {
 		"ACCESS_LOG_ENABLED",
 		"MS_TENANT_ID", "MS_CLIENT_ID", "MS_CLIENT_SECRET", "MS_PROFILE_SYNC_INTERVAL", "MS_STATUS_SYNC_INTERVAL",
 		"EMAIL_PROVIDER", "EMAIL_FROM", "SES_CONFIGURATION_SET",
+		"CONNECTOR_PRIVATE_DOMAINS",
 	}
 
 	saved := make(map[string]string)
@@ -200,6 +201,23 @@ func TestLoadTrustedProxyCount(t *testing.T) {
 				t.Fatalf("Load with TRUSTED_PROXY_COUNT=%q should fail", bad)
 			}
 		})
+	}
+}
+
+// CONNECTOR_PRIVATE_DOMAINS is plain text: whatever it holds, the server
+// starts (unusable entries are dropped and logged at boot, in agents).
+func TestLoadConnectorPrivateDomainsNeverFailsBoot(t *testing.T) {
+	for _, v := range []string{"digitaltolk.net, digitaltolk.com", "digitaltolk.net,", "not a domain!", "10.0.0.0/8", " "} {
+		clearEnv(t)
+		t.Setenv("ENV", "development")
+		t.Setenv("CONNECTOR_PRIVATE_DOMAINS", v)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load with CONNECTOR_PRIVATE_DOMAINS=%q failed: %v", v, err)
+		}
+		if cfg.ConnectorPrivateDomains != v {
+			t.Errorf("ConnectorPrivateDomains = %q, want %q", cfg.ConnectorPrivateDomains, v)
+		}
 	}
 }
 
