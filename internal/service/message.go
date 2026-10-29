@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/apperr"
@@ -143,6 +144,13 @@ type MessageService struct {
 	// (nothing to backfill) from an account with history. Optional seam
 	// (SetThreadSeedUsers) — nil keeps the one-time seed scan for everyone.
 	seedUsers ThreadSeedUserReader
+	// threadSeeds tracks the background seed scans (scheduleThreadSeed);
+	// afterThreadSeed observes each finished one (tests only).
+	threadSeeds     threadSeedRuns
+	afterThreadSeed func(userID string)
+	// afterThreadMarkersDropped observes each finished dropThreadMarkers
+	// (tests only).
+	afterThreadMarkersDropped func(userID string)
 	// drafts clears the author's composer draft once a send lands. Optional
 	// seam (SetDraftClearer) — nil leaves drafts to the client.
 	drafts SentDraftClearer
@@ -1068,7 +1076,32 @@ func (s *MessageService) applyThreadReply(ctx context.Context, msg *model.Messag
 	// Write-time participation (reply author + root author) lets /threads read
 	// the index instead of scanning message history.
 	s.recordThreadParticipation(ctx, msg, parentType, root)
+	s.touchThreadActivity(ctx, msg)
 	return root
+}
+
+// touchThreadActivity moves the thread to the top of the /threads list of
+// everyone following it. A failure is logged, not returned: the reply is
+// saved, and a missed move only leaves a thread lower in a list until its
+// next reply.
+func (s *MessageService) touchThreadActivity(ctx context.Context, msg *model.Message) {
+	if s.threadFollows == nil {
+		return
+	}
+	follows, err := s.threadFollows.ListThreadFollows(ctx, msg.ParentID, msg.ParentMessageID)
+	if err != nil {
+		slog.WarnContext(ctx, "thread activity: list followers failed", "threadRootID", msg.ParentMessageID, "error", err)
+		return
+	}
+	ids := make([]string, 0, len(follows))
+	for _, f := range follows {
+		if f.Following {
+			ids = append(ids, f.UserID)
+		}
+	}
+	if err := s.threadFollows.TouchThreadActivity(ctx, ids, msg.ParentID, msg.ParentMessageID, msg.CreatedAt); err != nil {
+		slog.WarnContext(ctx, "thread activity: touch failed", "threadRootID", msg.ParentMessageID, "error", err)
+	}
 }
 
 func (s *MessageService) followMentionedThreadUsers(ctx context.Context, msg *model.Message, parentType string) {
@@ -1096,12 +1129,13 @@ func (s *MessageService) followMentionedThreadUsers(ctx context.Context, msg *mo
 		}
 		seen[mention.UserID] = struct{}{}
 		follows = append(follows, &model.ThreadFollow{
-			UserID:       mention.UserID,
-			ParentID:     msg.ParentID,
-			ParentType:   parentType,
-			ThreadRootID: msg.ParentMessageID,
-			Following:    true,
-			UpdatedAt:    now,
+			UserID:         mention.UserID,
+			ParentID:       msg.ParentID,
+			ParentType:     parentType,
+			ThreadRootID:   msg.ParentMessageID,
+			Following:      true,
+			UpdatedAt:      now,
+			LastActivityAt: &msg.CreatedAt,
 		})
 	}
 	follows = s.withoutDeactivated(ctx, follows)
@@ -1285,6 +1319,8 @@ type ThreadSummary struct {
 	// False for a thread listed only because an alert pulled it in (a
 	// keyword, an @here) for someone who doesn't follow it.
 	Following bool `json:"following"`
+	// Unread: the thread has replies the user hasn't seen (its unread marker).
+	Unread bool `json:"unread,omitempty"`
 }
 
 func threadFollowKey(parentID, threadRootID string) string {
@@ -1313,13 +1349,18 @@ func (s *MessageService) SetThreadFollow(ctx context.Context, userID, parentID, 
 	if root.ParentMessageID != "" {
 		return apperr.Invalid("thread: root must be a top-level message")
 	}
+	latest := root.CreatedAt
+	if root.LastReplyAt != nil {
+		latest = *root.LastReplyAt
+	}
 	if err := s.threadFollows.SetThreadFollow(ctx, &model.ThreadFollow{
-		UserID:       userID,
-		ParentID:     parentID,
-		ParentType:   parentType,
-		ThreadRootID: threadRootID,
-		Following:    following,
-		UpdatedAt:    time.Now(),
+		UserID:         userID,
+		ParentID:       parentID,
+		ParentType:     parentType,
+		ThreadRootID:   threadRootID,
+		Following:      following,
+		UpdatedAt:      time.Now(),
+		LastActivityAt: &latest,
 	}); err != nil {
 		return err
 	}
@@ -1374,12 +1415,13 @@ func (s *MessageService) recordThreadParticipation(ctx context.Context, msg *mod
 			continue
 		}
 		follow := &model.ThreadFollow{
-			UserID:       uid,
-			ParentID:     msg.ParentID,
-			ParentType:   parentType,
-			ThreadRootID: msg.ParentMessageID,
-			Following:    true,
-			UpdatedAt:    now,
+			UserID:         uid,
+			ParentID:       msg.ParentID,
+			ParentType:     parentType,
+			ThreadRootID:   msg.ParentMessageID,
+			Following:      true,
+			UpdatedAt:      now,
+			LastActivityAt: &msg.CreatedAt,
 		}
 		write := idx.SetThreadFollowIfAbsent
 		if uid == msg.AuthorID {
@@ -1395,87 +1437,60 @@ func (s *MessageService) recordThreadParticipation(ctx context.Context, msg *mod
 	}
 }
 
-// ListUserThreads returns thread summaries for every thread the given user has
-// participated in (authored the root or any reply). Sorted by latest activity,
-// newest first.
-//
-// Fast path: participation lives in follow rows maintained at WRITE time
-// (replies, mentions, explicit follows), so the list is a handful of user-
-// partition queries plus one batched root read per parent — instead of the
-// legacy path below, which re-scans recent messages of EVERY channel and
-// conversation the user belongs to (the 70+ DynamoDB queries per request
-// Datadog flagged). The legacy scan still runs ONCE per user to seed the
-// index with pre-index history, then marks the user seeded.
-func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]*ThreadSummary, error) {
-	type parentRef struct {
-		id  string
-		typ string
+// threadSeedInputs gathers what the seed scan works from: every channel and
+// conversation the user is in, their explicit follow choices, and the threads
+// alerts pulled in.
+func (s *MessageService) threadSeedInputs(ctx context.Context, userID string) (parents []threadParent, followOverrides, notificationThreads map[string]bool, err error) {
+	channels, err := s.memberships.ListUserChannels(ctx, userID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("threads: list channels: %w", err)
 	}
-	parents := make([]parentRef, 0, 32)
-	parentTypes := make(map[string]string, 32)
+	for _, c := range channels {
+		parents = append(parents, threadParent{id: c.ChannelID, typ: ParentChannel})
+	}
+	convs, err := s.conversations.ListUserConversations(ctx, userID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("threads: list conversations: %w", err)
+	}
+	for _, c := range convs {
+		parents = append(parents, threadParent{id: c.ConversationID, typ: ParentConversation})
+	}
+	follows, err := s.threadFollows.ListUserThreadFollows(ctx, userID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("threads: list follows: %w", err)
+	}
+	followOverrides = make(map[string]bool, len(follows))
+	for _, f := range follows {
+		followOverrides[threadFollowKey(f.ParentID, f.ThreadRootID)] = f.Following
+	}
+	markers, err := s.unreadThreadMarkers(ctx, userID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	notificationThreads = make(map[string]bool, len(markers))
+	for _, m := range markers {
+		notificationThreads[threadFollowKey(m.parentID, m.rootID)] = true
+	}
+	return parents, followOverrides, notificationThreads, nil
+}
 
-	if s.memberships != nil {
-		channels, err := s.memberships.ListUserChannels(ctx, userID)
-		if err != nil {
-			return nil, fmt.Errorf("threads: list channels: %w", err)
-		}
-		for _, c := range channels {
-			parents = append(parents, parentRef{id: c.ChannelID, typ: ParentChannel})
-			parentTypes[c.ChannelID] = ParentChannel
-		}
-	}
-	if s.conversations != nil {
-		convs, err := s.conversations.ListUserConversations(ctx, userID)
-		if err != nil {
-			return nil, fmt.Errorf("threads: list conversations: %w", err)
-		}
-		for _, c := range convs {
-			parents = append(parents, parentRef{id: c.ConversationID, typ: ParentConversation})
-			parentTypes[c.ConversationID] = ParentConversation
-		}
-	}
+// threadParent is a channel or conversation the user belongs to.
+type threadParent struct {
+	id  string
+	typ string
+}
 
-	out := make([]*ThreadSummary, 0)
-	seen := make(map[string]bool)
-	var follows []*model.ThreadFollow
-	followOverrides := make(map[string]bool)
-	notificationThreads := make(map[string]bool)
-	if s.threadFollows != nil {
-		fs, err := s.threadFollows.ListUserThreadFollows(ctx, userID)
-		if err != nil {
-			return nil, fmt.Errorf("threads: list follows: %w", err)
-		}
-		follows = fs
-		for _, f := range follows {
-			followOverrides[threadFollowKey(f.ParentID, f.ThreadRootID)] = f.Following
-		}
-	}
-	if s.userState != nil {
-		items, err := s.userState.ListUserState(ctx, userID)
-		if err != nil {
-			return nil, fmt.Errorf("threads: list user state: %w", err)
-		}
-		for _, item := range items {
-			if item.Kind != model.UserStateThreadNotification || item.ParentID == "" || item.ThreadRootID == "" {
-				continue
-			}
-			notificationThreads[threadFollowKey(item.ParentID, item.ThreadRootID)] = true
-		}
-	}
-
-	// Fast path: this user's participation is fully indexed — serve from the
-	// follow rows + notification pulls and batch-read only the root messages.
-	if idx, ok := s.threadFollows.(threadParticipationIndex); ok {
-		if seeded, err := idx.IsThreadIndexSeeded(ctx, userID); err == nil && (seeded || s.signedUpSinceThreadIndex(ctx, idx, userID)) {
-			return s.listUserThreadsFromIndex(ctx, parentTypes, follows, notificationThreads)
-		}
-	}
-
+// scanUserThreads derives the user's threads from recent message history:
+// roots they authored that have replies, threads they replied in, adjusted by
+// explicit follows and alert pulls. complete is false when any parent could
+// not be read, so the result must not be persisted as the user's full set.
+func (s *MessageService) scanUserThreads(ctx context.Context, userID string, parents []threadParent, followOverrides, notificationThreads map[string]bool) (out []*ThreadSummary, complete bool) {
 	// Fetch each parent's messages concurrently (bounded to 8 in flight) — the
 	// per-parent scans are the dominant, independent I/O cost. The in-memory
 	// aggregation below stays serial (it mutates shared maps), so only the scans
 	// are parallelized.
 	parentMsgs := make([][]*model.Message, len(parents))
+	var failed atomic.Bool
 	{
 		sem := make(chan struct{}, 8)
 		var wg sync.WaitGroup
@@ -1486,14 +1501,19 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 				defer wg.Done()
 				defer safe.Recover()
 				defer func() { <-sem }()
-				if msgs, err := s.scanParentMessages(ctx, id); err == nil {
-					parentMsgs[i] = msgs
+				msgs, err := s.scanParentMessages(ctx, id)
+				if err != nil {
+					failed.Store(true)
+					return
 				}
+				parentMsgs[i] = msgs
 			}(i, p.id)
 		}
 		wg.Wait()
 	}
 
+	out = make([]*ThreadSummary, 0)
+	seen := make(map[string]bool)
 	for i, p := range parents {
 		msgs := parentMsgs[i]
 		if msgs == nil {
@@ -1579,10 +1599,89 @@ func (s *MessageService) ListUserThreads(ctx context.Context, userID string) ([]
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].LatestActivityAt.After(out[j].LatestActivityAt)
 	})
-	// One-time backfill: persist the scan-derived participation so every
-	// subsequent /threads request takes the index path above.
-	s.seedThreadIndex(ctx, userID, out, followOverrides)
-	return out, nil
+	return out, !failed.Load()
+}
+
+// The background seed scans: at most maxThreadSeeds at once per process, so a
+// wave of first visits after an import can't flood DynamoDB, each bounded by
+// threadSeedTimeout.
+const (
+	maxThreadSeeds    = 2
+	threadSeedTimeout = 10 * time.Minute
+)
+
+// threadSeedRuns tracks the running seed scans: one per user at a time.
+type threadSeedRuns struct {
+	mu      sync.Mutex
+	running map[string]bool
+}
+
+func (r *threadSeedRuns) start(userID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.running[userID] || len(r.running) >= maxThreadSeeds {
+		return false
+	}
+	if r.running == nil {
+		r.running = make(map[string]bool)
+	}
+	r.running[userID] = true
+	return true
+}
+
+func (r *threadSeedRuns) finish(userID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.running, userID)
+}
+
+// maybeSeedThreadIndex starts the one-time scan that brings an account's
+// pre-index thread participation into its follow rows, if it hasn't run. A
+// failed seed probe schedules nothing; the next visit asks again.
+func (s *MessageService) maybeSeedThreadIndex(ctx context.Context, userID string) {
+	idx, ok := s.threadFollows.(threadParticipationIndex)
+	if !ok {
+		return
+	}
+	if seeded, err := idx.IsThreadIndexSeeded(ctx, userID); err != nil || seeded || s.signedUpSinceThreadIndex(ctx, idx, userID) {
+		return
+	}
+	s.scheduleThreadSeed(ctx, idx, userID)
+}
+
+// scheduleThreadSeed runs the legacy scan for userID in the background — it
+// reads up to 25×200 messages in every channel and DM, which for an imported
+// account in hundreds of them outlasted the client's wait — and persists what
+// it finds (seedThreadIndex). Only after every parent was read: a scan cut
+// short by throttling would otherwise mark the user seeded without the
+// threads of the parents it missed, for good. Busy (this user's seed already
+// running, or no slot free) means a later visit tries again.
+func (s *MessageService) scheduleThreadSeed(ctx context.Context, idx threadParticipationIndex, userID string) {
+	if !s.threadSeeds.start(userID) {
+		return
+	}
+	safe.Go(func() {
+		defer func() {
+			s.threadSeeds.finish(userID)
+			if s.afterThreadSeed != nil {
+				s.afterThreadSeed(userID)
+			}
+		}()
+		// Not the request's context: the request has been answered.
+		bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), threadSeedTimeout)
+		defer cancel()
+		parents, followOverrides, notificationThreads, err := s.threadSeedInputs(bg, userID)
+		if err != nil {
+			slog.WarnContext(bg, "thread index seed postponed", "userID", userID, "error", err)
+			return
+		}
+		summaries, complete := s.scanUserThreads(bg, userID, parents, followOverrides, notificationThreads)
+		if !complete {
+			slog.WarnContext(bg, "thread index seed postponed: a parent could not be scanned", "userID", userID)
+			return
+		}
+		s.seedThreadIndex(bg, idx, userID, summaries, followOverrides)
+	})
 }
 
 // signedUpSinceThreadIndex decides, on an unseeded first /threads visit,
@@ -1632,95 +1731,35 @@ type batchMessageStore interface {
 	GetMessagesByIDs(ctx context.Context, parentID string, ids []string) ([]*model.Message, error)
 }
 
-// listUserThreadsFromIndex builds summaries from the write-time participation
-// index: follows (explicit and implicit) plus notification-pulled threads,
-// scoped to parents the user can still access, with the root messages batch-
-// read per parent. The root row carries everything a summary needs
-// (ReplyCount, LastReplyAt) because IncrementReplyMetadata maintains it.
-func (s *MessageService) listUserThreadsFromIndex(ctx context.Context, parentTypes map[string]string, follows []*model.ThreadFollow, notificationThreads map[string]bool) ([]*ThreadSummary, error) {
-	// parentID → thread root ID → whether the user follows it.
-	roots := make(map[string]map[string]bool)
-	add := func(parentID, rootID string, following bool) {
-		if parentTypes[parentID] == "" || rootID == "" {
-			return
-		}
-		if roots[parentID] == nil {
-			roots[parentID] = make(map[string]bool)
-		}
-		roots[parentID][rootID] = roots[parentID][rootID] || following
-	}
-	unfollowed := make(map[string]bool)
-	for _, f := range follows {
-		if f.Following {
-			add(f.ParentID, f.ThreadRootID, true)
-		} else {
-			unfollowed[threadFollowKey(f.ParentID, f.ThreadRootID)] = true
-		}
-	}
-	// Notification pulls surface a thread even when unfollowed — same
-	// precedence as the legacy scan. A DM participant follows its threads
-	// unless they unfollowed; anyone else is pulled in without following.
-	for key := range notificationThreads {
-		if parentID, rootID, ok := strings.Cut(key, "#"); ok {
-			add(parentID, rootID, parentTypes[parentID] == ParentConversation && !unfollowed[key])
-		}
-	}
+// threadRootReaders bounds how many parents' root reads (and membership
+// checks) one /threads page runs at once.
+const threadRootReaders = 8
 
-	out := make([]*ThreadSummary, 0)
-	for parentID, set := range roots {
-		ids := make([]string, 0, len(set))
-		for id := range set {
-			ids = append(ids, id)
+// threadRoots reads the given roots of one parent, skipping any that are gone.
+func (s *MessageService) threadRoots(ctx context.Context, parentID string, ids []string) ([]*model.Message, error) {
+	if bs, ok := s.messages.(batchMessageStore); ok {
+		msgs, err := bs.GetMessagesByIDs(ctx, parentID, ids)
+		if err != nil {
+			return nil, fmt.Errorf("threads: batch roots: %w", err)
 		}
-		var msgs []*model.Message
-		if bs, ok := s.messages.(batchMessageStore); ok {
-			m, err := bs.GetMessagesByIDs(ctx, parentID, ids)
-			if err != nil {
-				return nil, fmt.Errorf("threads: batch roots: %w", err)
-			}
-			msgs = m
-		} else {
-			for _, id := range ids {
-				if m, err := s.messages.GetMessage(ctx, parentID, id); err == nil {
-					msgs = append(msgs, m)
-				}
-			}
-		}
-		for _, root := range msgs {
-			latest := root.CreatedAt
-			if root.LastReplyAt != nil && root.LastReplyAt.After(latest) {
-				latest = *root.LastReplyAt
-			}
-			out = append(out, &ThreadSummary{
-				ParentID:         parentID,
-				ParentType:       parentTypes[parentID],
-				ThreadRootID:     root.ID,
-				RootAuthorID:     root.AuthorID,
-				RootBody:         root.Body,
-				RootCreatedAt:    root.CreatedAt,
-				ReplyCount:       root.ReplyCount,
-				LatestActivityAt: latest,
-				Following:        set[root.ID],
-			})
+		return msgs, nil
+	}
+	var msgs []*model.Message
+	for _, id := range ids {
+		if m, err := s.messages.GetMessage(ctx, parentID, id); err == nil {
+			msgs = append(msgs, m)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].LatestActivityAt.After(out[j].LatestActivityAt)
-	})
-	return out, nil
+	return msgs, nil
 }
 
 // seedThreadIndex backfills the write-time index from the scan-derived
 // summaries ONCE per user, then marks them seeded so subsequent /threads
 // requests skip the scan. Rows are filtered against explicit follow records
 // (a deliberate unfollow survives the backfill), which makes the remainder
-// safe for a blind batched write. Best-effort: a failed seed just means the
-// next request scans (and retries) again.
-func (s *MessageService) seedThreadIndex(ctx context.Context, userID string, summaries []*ThreadSummary, followOverrides map[string]bool) {
-	idx, ok := s.threadFollows.(threadParticipationIndex)
-	if !ok {
-		return
-	}
+// safe for a blind batched write. Best-effort: a failed seed just means a
+// later visit scans (and retries) again.
+func (s *MessageService) seedThreadIndex(ctx context.Context, idx threadParticipationIndex, userID string, summaries []*ThreadSummary, followOverrides map[string]bool) {
 	now := time.Now()
 	rows := make([]*model.ThreadFollow, 0, len(summaries))
 	for _, sum := range summaries {
@@ -1732,12 +1771,13 @@ func (s *MessageService) seedThreadIndex(ctx context.Context, userID string, sum
 			continue
 		}
 		rows = append(rows, &model.ThreadFollow{
-			UserID:       userID,
-			ParentID:     sum.ParentID,
-			ParentType:   sum.ParentType,
-			ThreadRootID: sum.ThreadRootID,
-			Following:    true,
-			UpdatedAt:    now,
+			UserID:         userID,
+			ParentID:       sum.ParentID,
+			ParentType:     sum.ParentType,
+			ThreadRootID:   sum.ThreadRootID,
+			Following:      true,
+			UpdatedAt:      now,
+			LastActivityAt: &sum.LatestActivityAt,
 		})
 	}
 	if len(rows) > 0 {

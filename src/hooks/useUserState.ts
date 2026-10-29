@@ -87,7 +87,6 @@ export function useMarkThreadSeen() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.userState() });
-      qc.invalidateQueries({ queryKey: queryKeys.userThreads() });
     },
   });
 }

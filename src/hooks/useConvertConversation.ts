@@ -13,7 +13,7 @@ export function forgetConvertedConversation(qc: QueryClient, conversationID: str
   qc.invalidateQueries({ queryKey: queryKeys.userConversations() });
   qc.invalidateQueries({ queryKey: queryKeys.userChannels() });
   // Its threads are the channel's now.
-  qc.invalidateQueries({ queryKey: queryKeys.userThreads() });
+  qc.invalidateQueries({ queryKey: queryKeys.threadPagesAll() });
 }
 
 // followConvertedConversation handles someone making a group message a

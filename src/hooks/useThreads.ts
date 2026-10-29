@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 import { slugify } from '@/lib/format';
 import { readJSON, writeJSON } from '@/lib/storage';
@@ -21,6 +21,13 @@ export interface ThreadSummary {
   // False: listed because an alert pulled it in (a keyword, an @here), not
   // followed.
   following?: boolean;
+  // Listed among the unread threads (they come first).
+  unread?: boolean;
+}
+
+export interface ThreadPage {
+  threads: ThreadSummary[];
+  nextCursor?: string;
 }
 
 interface ThreadFollowTarget {
@@ -29,77 +36,67 @@ interface ThreadFollowTarget {
   threadRootID: string;
 }
 
-export function useUserThreads(options?: { enabled?: boolean }) {
-  return useQuery<ThreadSummary[]>({
-    queryKey: queryKeys.userThreads(),
-    queryFn: async () => {
-      const res = await apiFetch<ThreadSummary[]>('/api/v1/threads');
-      return Array.isArray(res) ? res : [];
+// useThreadPages loads the Threads page a page at a time: the unread threads
+// first, then the rest, latest reply first. Each visit (`visit`, the router's
+// location key) is its own list, fetched fresh from the first page; nothing
+// refetches it while it shows, so its order never changes under the reader.
+export function useThreadPages(visit: string) {
+  return useInfiniteQuery({
+    queryKey: queryKeys.threadPages(visit),
+    queryFn: async ({ pageParam }): Promise<ThreadPage> => {
+      const query = pageParam ? `?cursor=${encodeURIComponent(pageParam)}` : '';
+      const res = await apiFetch<ThreadPage>(`/api/v1/threads${query}`);
+      return { threads: Array.isArray(res?.threads) ? res.threads : [], nextCursor: res?.nextCursor || undefined };
     },
-    enabled: options?.enabled ?? true,
-    ...wsLiveQueryOptions,
+    initialPageParam: '',
+    getNextPageParam: (last) => last.nextCursor,
+    staleTime: Infinity,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
   });
 }
 
-// userThreadInCache reports whether a thread root is already present in the
-// /threads list cache — used to gate the refetch fallback so a race-prone
-// re-read can't clobber a freshly-patched row.
-export function userThreadInCache(qc: QueryClient, threadRootID: string): boolean {
-  return (qc.getQueryData<ThreadSummary[]>(queryKeys.userThreads()) ?? []).some(
-    (t) => t.threadRootID === threadRootID,
-  );
-}
-
-// upsertUserThreadFromRoot patches the /threads list directly from a thread
-// root's `message.edited` payload (published alongside every reply), so a
-// thread already listed updates live without the race-prone ListUserThreads
-// refetch that read stale (eventually-consistent) DynamoDB state. It never ADDS
-// a thread: this event reaches everyone in the channel, followers or not (the
-// root's author included, who may have unfollowed it). New rows come from the
-// participant-scoped thread.updated (upsertUserThreadRow). No-op for non-roots
-// or roots with no replies.
-export function upsertUserThreadFromRoot(qc: QueryClient, root: Message): void {
-  const replyCount = root.replyCount ?? 0;
-  if (root.parentMessageID || replyCount < 1) return;
-  qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), (list) => {
-    // No list loaded (never fetched, or dropped while nothing showed it): a
-    // one-row list would pass for the whole one, so leave it to the fetch.
-    if (!list) return list;
-    const idx = list.findIndex((t) => t.threadRootID === root.id);
-    if (idx < 0) return list;
-    const summary: ThreadSummary = {
-      ...list[idx],
-      parentID: root.parentID,
-      parentType: root.parentType === 'conversation' ? 'conversation' : 'channel',
-      threadRootID: root.id,
-      rootAuthorID: root.authorID,
-      rootBody: root.body,
-      rootCreatedAt: root.createdAt,
-      replyCount,
-      latestActivityAt: root.lastReplyAt ?? root.createdAt,
+// updateListedThreads rewrites the listed rows of a thread on every loaded
+// Threads page, in place: a thread is never added or moved.
+function updateListedThreads(
+  qc: QueryClient,
+  threadRootID: string,
+  update: (row: ThreadSummary) => ThreadSummary | null,
+): void {
+  qc.setQueriesData<InfiniteData<ThreadPage>>({ queryKey: queryKeys.threadPagesAll() }, (data) => {
+    if (!data?.pages.some((p) => p.threads.some((t) => t.threadRootID === threadRootID))) return data;
+    return {
+      ...data,
+      pages: data.pages.map((p) => ({
+        ...p,
+        threads: p.threads.flatMap((t) => {
+          if (t.threadRootID !== threadRootID) return [t];
+          const next = update(t);
+          return next ? [next] : [];
+        }),
+      })),
     };
-    const next = [...list.slice(0, idx), summary, ...list.slice(idx + 1)];
-    // Newest activity first, matching the server ordering.
-    return next.sort((a, b) => b.latestActivityAt.localeCompare(a.latestActivityAt));
   });
 }
 
-// upsertUserThreadRow patches the /threads list from a `thread.updated` event.
-// Unlike upsertUserThreadFromRoot (fed by the channel-topic message.edited, which
-// reaches non-participants, so it must guess at participation) this is driven by
-// a participant-scoped event: the server only sends thread.updated to users who
-// belong in the thread, so receipt IS the participation proof and we add the row
-// unconditionally. This is what closes the gap where a reply to a thread you
-// didn't author used to wait on an eventually-consistent ListUserThreads refetch.
-export function upsertUserThreadRow(qc: QueryClient, summary: ThreadSummary): void {
-  if (!summary.threadRootID) return;
-  qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), (list) => {
-    // As above: patch a loaded list, never stand in for one.
-    if (!list) return list;
-    const idx = list.findIndex((t) => t.threadRootID === summary.threadRootID);
-    const next = idx >= 0 ? [...list.slice(0, idx), summary, ...list.slice(idx + 1)] : [summary, ...list];
-    return next.sort((a, b) => b.latestActivityAt.localeCompare(a.latestActivityAt));
-  });
+// patchListedThreadFromRoot updates a listed thread from its root's
+// `message.edited` payload (published alongside every reply): its reply count,
+// latest reply and text.
+export function patchListedThreadFromRoot(qc: QueryClient, root: Message): void {
+  if (root.parentMessageID) return;
+  updateListedThreads(qc, root.id, (row) => ({
+    ...row,
+    rootAuthorID: root.authorID,
+    rootBody: root.body,
+    rootCreatedAt: root.createdAt,
+    replyCount: root.replyCount ?? row.replyCount,
+    latestActivityAt: root.lastReplyAt ?? row.latestActivityAt,
+  }));
+}
+
+// patchListedThread updates a listed thread from a `thread.updated` event.
+export function patchListedThread(qc: QueryClient, summary: ThreadSummary): void {
+  updateListedThreads(qc, summary.threadRootID, (row) => ({ ...summary, unread: row.unread }));
 }
 
 function threadFollowPath(target: ThreadFollowTarget): string {
@@ -107,12 +104,30 @@ function threadFollowPath(target: ThreadFollowTarget): string {
   return `/api/v1/threads/${parentType}/${encodeURIComponent(target.parentID)}/${encodeURIComponent(target.threadRootID)}/follow`;
 }
 
+// useThreadFollowing asks whether the user follows one thread — the thread
+// panel's Follow button, fetched when the panel opens.
+export function useThreadFollowing(target: ThreadFollowTarget, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.threadFollow(target.parentID, target.threadRootID),
+    queryFn: async () => (await apiFetch<{ following?: boolean }>(threadFollowPath(target)))?.following === true,
+    enabled: enabled && !!target.parentID && !!target.threadRootID,
+    staleTime: Infinity,
+  });
+}
+
+// After a follow change: the thread's Follow button, and its card on the
+// Threads page — an unfollowed thread leaves the list at once.
+function followChanged(qc: QueryClient, target: ThreadFollowTarget, following: boolean): void {
+  qc.setQueryData(queryKeys.threadFollow(target.parentID, target.threadRootID), following);
+  updateListedThreads(qc, target.threadRootID, (row) => (following ? { ...row, following } : null));
+}
+
 export function useFollowThread() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (target: ThreadFollowTarget) =>
       apiFetch<void>(threadFollowPath(target), { method: 'PUT' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.userThreads() }),
+    onSuccess: (_, target) => followChanged(qc, target, true),
   });
 }
 
@@ -121,16 +136,15 @@ export function useUnfollowThread() {
   return useMutation({
     mutationFn: (target: ThreadFollowTarget) =>
       apiFetch<void>(threadFollowPath(target), { method: 'DELETE' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.userThreads() }),
+    onSuccess: (_, target) => followChanged(qc, target, false),
   });
 }
 
 const SEEN_KEY = 'ex.threads.seen.v1';
 export const THREAD_SEEN_CHANGED_EVENT = 'ex:threads-seen-changed';
 
-// Cached parse of the seen-map. /threads can mount 50+ ThreadCards in
-// one render, each calling hasUnreadActivity → loadSeen — without the
-// cache that's 50 JSON.parse calls on a map that grows unbounded with
+// Cached parse of the seen-map. Every thread view reads it (threadSeenAt) —
+// without the cache that's a JSON.parse per read of a map that grows with
 // every viewed thread. Invalidated whenever saveSeen runs.
 let seenCache: Record<string, string> | null = null;
 
@@ -173,19 +187,20 @@ export function markThreadSeen(
   const map = { ...loadSeen() };
   map[threadRootID] = at;
   saveSeen(capSeenMap(map));
+  // Seeing the thread reads it, and ends a "Mark as unread": the server drops
+  // both with the PUT below (or with the reply the user just posted), so drop
+  // them from the cached state too — the unread marker is what the Threads
+  // dot and the bold Threads cards show.
+  queryClient.setQueryData<UserState>(queryKeys.userState(), (prev) => {
+    if (!prev || (!prev.threadMarkedUnread?.[threadRootID] && !prev.threadNotifications?.includes(threadRootID))) return prev;
+    const marks = { ...prev.threadMarkedUnread };
+    delete marks[threadRootID];
+    return { ...prev, threadMarkedUnread: marks, threadNotifications: prev.threadNotifications.filter((id) => id !== threadRootID) };
+  });
   if (target) {
     // The PUT's userchannel.updated {userState:true} echo must not refetch
     // /user-state in this tab (see useUserState's echo window).
     markLocalUserStateWrite();
-    // Seeing the thread ends a "Mark as unread" — the server drops the mark
-    // with this PUT, so drop it from the cached state too (the echo that
-    // would have refetched it is skipped above).
-    queryClient.setQueryData<UserState>(queryKeys.userState(), (prev) => {
-      if (!prev?.threadMarkedUnread?.[threadRootID]) return prev;
-      const marks = { ...prev.threadMarkedUnread };
-      delete marks[threadRootID];
-      return { ...prev, threadMarkedUnread: marks };
-    });
     const parentType = target.parentType === 'channel' ? 'channels' : 'conversations';
     void apiFetch<void>(
       `/api/v1/user-state/threads/${parentType}/${encodeURIComponent(target.parentID)}/${encodeURIComponent(threadRootID)}/seen`,
@@ -255,54 +270,12 @@ export function threadHasUnseen(qc: QueryClient, threadRootID: string, latestAt:
   return seenTime(threadSeenAt(qc.getQueryData<UserState>(queryKeys.userState()), threadRootID)) < seenTime(latestAt);
 }
 
-// hasUnreadActivity returns true when latestActivityAt is newer than the
-// recorded seen timestamp (or no seen entry exists yet).
-export function hasUnreadActivity(t: ThreadSummary, seen: Record<string, string> = loadSeen()): boolean {
-  const seenAt = seen[t.threadRootID];
-  if (!seenAt) return true;
-  return new Date(t.latestActivityAt).getTime() > new Date(seenAt).getTime();
-}
-
-export function unreadThreadIDs(
-  threads: ThreadSummary[] = [],
-  threadNotifications: string[] = [],
-  liveThreadNotifications: Set<string> = new Set(),
-  seenMap: Record<string, string> = {},
-): Set<string> {
-  const listedThreadIDs = new Set(threads.map((thread) => thread.threadRootID));
-  const ids = new Set(
-    [...threadNotifications, ...liveThreadNotifications].filter((threadRootID) =>
-      listedThreadIDs.has(threadRootID),
-    ),
-  );
-  for (const thread of threads) {
-    if (!seenMap[thread.threadRootID]) {
-      continue;
-    }
-    if (hasUnreadActivity(thread, seenMap)) {
-      ids.add(thread.threadRootID);
-    } else {
-      ids.delete(thread.threadRootID);
-    }
-  }
-  return ids;
-}
-
-function activityTime(thread: ThreadSummary): number {
-  const time = new Date(thread.latestActivityAt).getTime();
-  return Number.isFinite(time) ? time : 0;
-}
-
-export function sortThreadsByUnreadThenActivity(
-  threads: ThreadSummary[] = [],
-  unreadIDs: Set<string> = new Set(),
-): ThreadSummary[] {
-  return [...threads].sort((a, b) => {
-    const aUnread = unreadIDs.has(a.threadRootID);
-    const bUnread = unreadIDs.has(b.threadRootID);
-    if (aUnread !== bUnread) return aUnread ? -1 : 1;
-    return activityTime(b) - activityTime(a);
-  });
+// unreadThreadIDs is the set of threads with replies the user hasn't seen:
+// the server's unread markers (the user state the app loads at start), plus
+// alerts that arrived since. Seeing a thread drops its marker at once
+// (markThreadSeen); the server drops it too.
+export function unreadThreadIDs(threadNotifications: string[] = [], live: Set<string> = new Set()): Set<string> {
+  return new Set([...threadNotifications, ...live]);
 }
 
 export function getSeenMap(): Record<string, string> {

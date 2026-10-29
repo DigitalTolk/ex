@@ -46,8 +46,12 @@ export const queryKeys = {
     ['conversationMessages', conversationId, anchor] as const,
   conversationMessagesAll: (conversationId: string) => ['conversationMessages', conversationId] as const,
 
-  // Threads
-  userThreads: () => ['userThreads'] as const,
+  // Threads: the Threads page's pages, one list per visit, and whether the
+  // user follows one thread.
+  threadPages: (visit: string) => ['threadPages', visit] as const,
+  threadPagesAll: () => ['threadPages'] as const,
+  threadFollow: (parentID: string, threadRootID: string) => ['threadFollow', parentID, threadRootID] as const,
+  threadFollowAll: () => ['threadFollow'] as const,
   thread: (parentPath: string, threadRootID: string) => ['thread', parentPath, threadRootID] as const,
 
   // Drafts

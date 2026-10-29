@@ -232,6 +232,25 @@ describe('ChatPage', () => {
     await waitFor(() => expect(screen.queryByTestId('mobile-chat-loading')).not.toBeInTheDocument());
   });
 
+  // Regression: an account with imported history follows thousands of
+  // threads, and its threads list took seconds to arrive, holding every chat
+  // the phone opened on "Connecting…". A chat doesn't need that list.
+  it('does not hold the phone chat for the threads list', async () => {
+    setMobileViewport(true);
+    globalThis.fetch = vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === '/api/v1/threads') return new Promise<Response>(() => undefined);
+      if (path === '/api/v1/user-state') {
+        return Promise.resolve(responseJSON({ channelNotifications: [], threadNotifications: [], threadSeen: {}, hiddenConversations: [] }));
+      }
+      return Promise.resolve(responseJSON([]));
+    });
+
+    renderChatPage();
+
+    await waitFor(() => expect(screen.queryByTestId('mobile-chat-loading')).not.toBeInTheDocument());
+  });
+
   it('does not keep mobile users stuck on the loading page when a startup query fails', async () => {
     setMobileViewport(true);
     globalThis.fetch = vi.fn((input: RequestInfo | URL) => {

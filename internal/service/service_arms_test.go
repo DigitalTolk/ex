@@ -76,16 +76,16 @@ func TestWebhookTargetDMEmptyName(t *testing.T) {
 	}
 }
 
-func TestListUserThreadsDedupsDuplicateParents(t *testing.T) {
+func TestScanUserThreadsDedupsDuplicateParents(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	// The same channel appearing twice in the membership list (a dual-write
 	// artifact) must not produce duplicate thread rows.
 	seedMembership(memberships, "ch1", "user-1")
 	seedMembership(memberships, "ch1", "user-1")
 	messages.messages["ch1#root-1"] = &model.Message{ID: "root-1", ParentID: "ch1", AuthorID: "user-1", Body: "root", ReplyCount: 1}
-	got, err := svc.ListUserThreads(context.Background(), "user-1")
+	got, err := scanThreads(svc, "user-1")
 	if err != nil {
-		t.Fatalf("ListUserThreads: %v", err)
+		t.Fatalf("scan: %v", err)
 	}
 	if len(got) != 1 {
 		t.Fatalf("threads = %d, want 1 (duplicate parent deduped)", len(got))

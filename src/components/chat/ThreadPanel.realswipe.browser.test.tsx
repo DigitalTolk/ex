@@ -45,7 +45,7 @@ vi.mock('@/hooks/useMessages', () => ({
   useSendMessage: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 vi.mock('@/hooks/useThreads', () => ({
-  useUserThreads: () => ({ data: [] }),
+  useThreadFollowing: () => ({ data: false }),
   useThreadMessages: () => ({
     data: [
       { id: 'ROOT', parentID: 'ch-1', parentType: 'channel', authorID: 'u-1', body: 'root', createdAt: '2026-05-01T10:00:00Z' },

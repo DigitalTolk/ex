@@ -44,7 +44,7 @@ vi.mock('@/hooks/useAttachments', () => ({
 let threadMessagesState: { data: unknown; isLoading: boolean } = { data: undefined, isLoading: false };
 const markThreadSeenMock = vi.hoisted(() => vi.fn());
 vi.mock('@/hooks/useThreads', () => ({
-  useUserThreads: () => ({ data: [] }),
+  useThreadFollowing: () => ({ data: false }),
   useThreadMeta: () => undefined,
   useThreadMessages: () => threadMessagesState,
   useFollowThread: () => ({ mutate: vi.fn(), isPending: false }),

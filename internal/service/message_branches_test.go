@@ -196,34 +196,34 @@ func TestMessage_SetNoUnfurl_UpdateError(t *testing.T) {
 	}
 }
 
-func TestMessage_ListUserThreads_ChannelsError(t *testing.T) {
+func TestMessage_ThreadSeedInputs_ChannelsError(t *testing.T) {
 	svc, _, memberships, _, _ := setupMessageService()
 	memberships.listChannelsErr = errors.New("boom")
-	if _, err := svc.ListUserThreads(context.Background(), "u1"); err == nil {
+	if _, err := scanThreads(svc, "u1"); err == nil {
 		t.Fatal("expected list-channels error")
 	}
 }
 
-func TestMessage_ListUserThreads_ConversationsError(t *testing.T) {
+func TestMessage_ThreadSeedInputs_ConversationsError(t *testing.T) {
 	svc, _, _, conversations, _ := setupMessageService()
 	conversations.listErr = errors.New("boom")
-	if _, err := svc.ListUserThreads(context.Background(), "u1"); err == nil {
+	if _, err := scanThreads(svc, "u1"); err == nil {
 		t.Fatal("expected list-conversations error")
 	}
 }
 
-func TestMessage_ListUserThreads_FollowsError(t *testing.T) {
+func TestMessage_ThreadSeedInputs_FollowsError(t *testing.T) {
 	svc, _, _, _, _ := setupMessageService()
 	svc.SetThreadFollowStore(&errThreadFollowStore{mockThreadFollowStore: newMockThreadFollowStore()})
-	if _, err := svc.ListUserThreads(context.Background(), "u1"); err == nil {
+	if _, err := scanThreads(svc, "u1"); err == nil {
 		t.Fatal("expected list-follows error")
 	}
 }
 
-func TestMessage_ListUserThreads_UserStateError(t *testing.T) {
+func TestMessage_ThreadSeedInputs_UserStateError(t *testing.T) {
 	svc, _, _, _, _ := setupMessageService()
 	svc.SetUserStateStore(&errUserStateStore{})
-	if _, err := svc.ListUserThreads(context.Background(), "u1"); err == nil {
+	if _, err := scanThreads(svc, "u1"); err == nil {
 		t.Fatal("expected list-user-state error")
 	}
 }

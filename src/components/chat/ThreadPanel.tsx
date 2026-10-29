@@ -24,11 +24,10 @@ import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { useComposerSchedule } from '@/hooks/useScheduledMessages';
-import { markThreadSeen, noteThreadReadPosition, threadHasUnseen, useFollowThread, useThreadMessages, useUnfollowThread, useUserThreads } from '@/hooks/useThreads';
+import { markThreadSeen, noteThreadReadPosition, threadHasUnseen, useFollowThread, useThreadFollowing, useThreadMessages, useUnfollowThread } from '@/hooks/useThreads';
 import { isAtBottom, isReadHeld, keepReadSession, markUnreadSeen, scheduleEndReadSession, setAtBottom, threadReadKey, useUnreadAnchor, useUnreadSeen } from '@/lib/read-position';
 import { attachScrollHoverPause } from '@/lib/scroll-hover-pause';
 import { keepBottomEdge } from '@/lib/keep-bottom-edge';
-import { isFollowedThread } from '@/lib/thread-follow';
 import { isUserAttentive, suppressionWindowMs } from '@/lib/user-activity';
 import { resolveUnreadDivider } from '@/lib/unread-divider';
 import { UnreadDivider } from './UnreadMarkers';
@@ -190,10 +189,8 @@ export function ThreadPanel({
     () => ({ parentID, parentType, parentMessageID: threadRootID }),
     [parentID, parentType, threadRootID],
   );
-  const { data: userThreads } = useUserThreads();
-  const isFollowing = isFollowedThread(
-    userThreads?.find((t) => t.parentID === parentID && t.parentType === parentType && t.threadRootID === threadRootID),
-  );
+  // One lookup of this thread's follow state, when the panel opens.
+  const { data: isFollowing = false } = useThreadFollowing({ parentID: parentID ?? '', parentType, threadRootID });
   const followThread = useFollowThread();
   const unfollowThread = useUnfollowThread();
   const { data: draft } = useDraftForScope(draftScope);

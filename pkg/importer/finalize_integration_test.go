@@ -70,6 +70,17 @@ func TestFinalizeChannel(t *testing.T) {
 	if len(follows) != 3 {
 		t.Fatalf("follows = %+v", follows)
 	}
+	// Each participant's /threads list files the thread under its latest reply.
+	for _, f := range follows {
+		if f.LastActivityAt == nil || !f.LastActivityAt.Equal(at(5)) {
+			t.Fatalf("follow %+v, want its latest reply at %v", f, at(5))
+		}
+	}
+	listed, _, err := store.NewThreadFollowStore(e.db).ListFollowedThreadsByActivity(ctx, "u3", "", 10)
+	mustNoErr(t, err)
+	if len(listed) != 1 || listed[0].ThreadRootID != root.ID {
+		t.Fatalf("u3's threads = %+v, want the imported thread", listed)
+	}
 	// Imported history is read; pre-existing unread is unchanged.
 	if u1, u2 := channelUnread(t, e, "c1", "u1"), channelUnread(t, e, "c1", "u2"); u1 != 0 || u2 != 2 {
 		t.Fatalf("unread u1=%d u2=%d", u1, u2)

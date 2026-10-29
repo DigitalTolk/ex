@@ -65,7 +65,7 @@ import { useUserConversations } from '@/hooks/useConversations';
 import { shouldRefetchSidebarForRemoteUpdate, useCategories } from '@/hooks/useSidebar';
 import { shouldRefetchUserStateForRemoteUpdate, useUserState } from '@/hooks/useUserState';
 import { followConvertedConversation } from '@/hooks/useConvertConversation';
-import { markThreadSeen, noteThreadReadPosition, upsertUserThreadFromRoot, upsertUserThreadRow, userThreadInCache, useUserThreads } from '@/hooks/useThreads';
+import { markThreadSeen, noteThreadReadPosition, patchListedThread, patchListedThreadFromRoot } from '@/hooks/useThreads';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 // How long the phone's chat waits for its first lists before offering Retry.
@@ -104,6 +104,8 @@ function queryReady(query: { isSuccess: boolean; isError: boolean; isPlaceholder
   return query.isError || (query.isSuccess && !query.isPlaceholderData);
 }
 
+// The threads list is not among the lists it waits for: it holds every thread
+// the user follows, thousands for imported history, and no chat needs it.
 function MobileChatReadyGate({ children }: { children: ReactNode }) {
   const isMobile = useIsMobile();
   const queryClient = useQueryClient();
@@ -112,9 +114,8 @@ function MobileChatReadyGate({ children }: { children: ReactNode }) {
   const categories = useCategories({ enabled: isMobile });
   const drafts = useDrafts({ enabled: isMobile });
   const userState = useUserState({ enabled: isMobile });
-  const threads = useUserThreads({ enabled: isMobile });
 
-  if (isMobile && ![channels, conversations, categories, drafts, userState, threads].every(queryReady)) {
+  if (isMobile && ![channels, conversations, categories, drafts, userState].every(queryReady)) {
     // Send whatever is still out again. A reset drops the stuck request and
     // starts over (a refetch would only re-join a first load in flight).
     const retry = () => {
@@ -172,7 +173,6 @@ export default function ChatPage() {
   const refreshAfterGap = () => {
     queryClient.invalidateQueries({ queryKey: queryKeys.userChannels() });
     queryClient.invalidateQueries({ queryKey: queryKeys.userConversations() });
-    queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
     queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
     queryClient.invalidateQueries({ queryKey: queryKeys.drafts() });
     queryClient.invalidateQueries({ queryKey: queryKeys.scheduledMessages() });
@@ -325,12 +325,8 @@ export default function ChatPage() {
         if (!appendReplyToThreadCache(queryClient, parentID, parentMessageID, msg)) {
           invalidateThreadBothScopes(queryClient, parentID, parentMessageID, msg.parentType);
         }
-        // NOTE: /threads is patched from the root's message.edited event
-        // (upsertUserThreadFromRoot in the message.edited handler), NOT
-        // invalidated here — an invalidate would refetch ListUserThreads, whose
-        // eventually-consistent DynamoDB read can race the just-written thread
-        // state and clobber the patch. The notification handler refetches only
-        // for threads we can't patch (non-member participants).
+        // NOTE: a listed Threads card is patched from the root's
+        // message.edited event (patchListedThreadFromRoot), never refetched.
       } else {
         appendMessageToCache(queryClient, parentID, msg);
       }
@@ -344,9 +340,8 @@ export default function ChatPage() {
       // update the main message list gets above.
       patchMessageInThreadCache(queryClient, parentID, parentMessageID || id, msg);
       // A thread root's replyCount/lastReplyAt bump (published alongside every
-      // reply) patches the /threads list directly — this is what keeps /threads
-      // live without a refetch, avoiding the read-after-write race.
-      upsertUserThreadFromRoot(queryClient, msg);
+      // reply) patches its Threads card in place.
+      patchListedThreadFromRoot(queryClient, msg);
       // Link-preview cards pointing at this message (in other channels)
       // are now stale — refetch them so the edited body/attachments show.
       invalidateUnfurlsForMessage(queryClient, id);
@@ -356,9 +351,6 @@ export default function ChatPage() {
       markMessageDeletedInCache(queryClient, parentID, id, parentMessageID, msg);
       invalidateThreadBothScopes(queryClient, parentID, parentMessageID || id, msg.parentType);
       invalidateUnfurlsForMessage(queryClient, id);
-      // /threads page reads body + replyCount via the userThreads list;
-      // a deletion can change either, so refresh the list too.
-      queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
     },
     [EventType.MembersChanged]: ({ channelID }) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(channelID) });
@@ -442,12 +434,9 @@ export default function ChatPage() {
     // so every device's badge follows instead of lingering until the next
     // activity.new (SPEC GAP-3 / I-4).
     [EventType.ActivityRead]: (change) => applyActivityChangedEvent(queryClient, change),
-    // Participant-scoped reply metadata: the server only sends this to users
-    // who belong in the thread, so patch the /threads row directly from the
-    // payload — no participation guess, no eventually-consistent refetch. This
-    // covers threads the viewer didn't author (which the message.edited-driven
-    // upsertUserThreadFromRoot deliberately skips) and the sender's own tabs.
-    [EventType.ThreadUpdated]: (summary) => upsertUserThreadRow(queryClient, summary),
+    // Participant-scoped reply metadata: patches the thread's Threads card in
+    // place, for threads in channels the viewer gets no message events from.
+    [EventType.ThreadUpdated]: (summary) => patchListedThread(queryClient, summary),
     [EventType.UserUpdated]: (updated) => {
       const currentUser = user;
       if (currentUser && updated.id === currentUser.id) {
@@ -482,9 +471,9 @@ export default function ChatPage() {
         return;
       }
       if (evt.threads) {
-        // A thread was followed or unfollowed elsewhere: its list and its
-        // unread alert changed.
-        queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
+        // A thread was followed or unfollowed elsewhere: its Follow button
+        // and its unread alert changed.
+        queryClient.invalidateQueries({ queryKey: queryKeys.threadFollowAll() });
         queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
         return;
       }
@@ -586,14 +575,6 @@ export default function ChatPage() {
           });
         } else {
           markThreadNotificationUnread(n.parentMessageID);
-        }
-        // Only refetch /threads when we couldn't patch the row from the root's
-        // message.edited event (e.g. a thread participant who isn't a channel
-        // member, so never receives the channel-topic events). When the row is
-        // already present, refetching would just re-run the race-prone read and
-        // risk clobbering the patched row.
-        if (!userThreadInCache(queryClient, n.parentMessageID)) {
-          queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
         }
         queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
       }

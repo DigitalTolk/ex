@@ -43,6 +43,7 @@ type ChannelService struct {
 	searcher    ChannelSearcher
 	activity    ChannelActivityRecorder
 	reminders   ChannelReminderSync
+	threadState ChannelThreadStateSync
 	conversions ConversationConverter
 	// convertedDrafts moves a converted group's drafts to its channel.
 	convertedDrafts ConversationDraftMover
@@ -85,6 +86,13 @@ type ChannelReminderSync interface {
 	ParentLeft(ctx context.Context, userIDs []string, parentID string)
 }
 
+// ChannelThreadStateSync is told when users can no longer read a channel, so
+// the unread markers of its threads (which light the sidebar's Threads dot)
+// go with it. Implemented by UserStateService.
+type ChannelThreadStateSync interface {
+	ParentLeft(ctx context.Context, userIDs []string, parentID string)
+}
+
 // NewChannelService creates a ChannelService with the given dependencies.
 // messages may be nil; when it is, system messages are not persisted.
 func NewChannelService(channels ChannelStore, memberships MembershipStore, users UserStore, messages MessageStore, cache Cache, broker Broker, publisher Publisher) *ChannelService {
@@ -110,6 +118,10 @@ func (s *ChannelService) SetActivityRecorder(a ChannelActivityRecorder) { s.acti
 // SetReminderSync wires reminder cleanup into losing access to a channel.
 func (s *ChannelService) SetReminderSync(r ChannelReminderSync) { s.reminders = r }
 
+// SetThreadStateSync wires unread-thread marker cleanup into losing access to
+// a channel.
+func (s *ChannelService) SetThreadStateSync(t ChannelThreadStateSync) { s.threadState = t }
+
 // accessLost tells the activity stream and the reminders that these users can
 // no longer read channelID — they left or were removed — so neither keeps
 // showing its messages. Archiving is not a loss of access: members keep
@@ -120,6 +132,9 @@ func (s *ChannelService) accessLost(ctx context.Context, userIDs []string, chann
 	}
 	if s.reminders != nil {
 		s.reminders.ParentLeft(ctx, userIDs, channelID)
+	}
+	if s.threadState != nil {
+		s.threadState.ParentLeft(ctx, userIDs, channelID)
 	}
 }
 

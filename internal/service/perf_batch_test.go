@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -124,11 +125,16 @@ func (m *batchMockChannelStore) GetChannelsByIDs(_ context.Context, ids []string
 type batchMockMessageStore struct {
 	*mockMessageStore
 	batchErr   error
+	batchMu    sync.Mutex
 	batchCalls int
+	batchSizes []int
 }
 
 func (m *batchMockMessageStore) GetMessagesByIDs(_ context.Context, parentID string, ids []string) ([]*model.Message, error) {
+	m.batchMu.Lock()
 	m.batchCalls++
+	m.batchSizes = append(m.batchSizes, len(ids))
+	m.batchMu.Unlock()
 	if m.batchErr != nil {
 		return nil, m.batchErr
 	}
@@ -639,34 +645,36 @@ func TestRecordThreadParticipation_RetriesTransientFailure(t *testing.T) {
 	}
 }
 
-func TestListUserThreads_IndexFastPath(t *testing.T) {
+func TestListThreadsPage_FollowedThreads(t *testing.T) {
 	svc, messages, memberships, _, follows := threadIndexService()
 	ctx := context.Background()
 	follows.seeded = true
 
-	memberships.userChannels = []*model.UserChannel{{UserID: "u-1", ChannelID: "ch-1"}}
+	seedMembership(memberships, "ch-1", "u-1")
 	lastReply := time.Now().Truncate(time.Second)
 	rootAt := lastReply.Add(-time.Hour)
 	messages.messages["ch-1#root-a"] = &model.Message{ID: "root-a", ParentID: "ch-1", AuthorID: "u-2", Body: "root a", CreatedAt: rootAt, ReplyCount: 3, LastReplyAt: &lastReply}
 	messages.messages["ch-1#root-b"] = &model.Message{ID: "root-b", ParentID: "ch-1", AuthorID: "u-1", Body: "root b", CreatedAt: rootAt.Add(time.Minute), ReplyCount: 1}
+	messages.messages["ch-left#root-x"] = &model.Message{ID: "root-x", ParentID: "ch-left", AuthorID: "u-2", CreatedAt: rootAt, ReplyCount: 1}
 
-	// Participation via the index: one followed, one unfollowed, one in a
-	// channel the user LEFT (not a member → scoped out), one notification-pulled.
-	follows.follows[threadFollowMockKey("u-1", "ch-1", "root-a")] = &model.ThreadFollow{UserID: "u-1", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: "root-a", Following: true}
+	// One followed, one unfollowed, one in a channel the user LEFT (not a
+	// member → left out).
+	follows.follows[threadFollowMockKey("u-1", "ch-1", "root-a")] = &model.ThreadFollow{UserID: "u-1", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: "root-a", Following: true, LastActivityAt: &lastReply}
 	follows.follows[threadFollowMockKey("u-1", "ch-1", "root-b")] = &model.ThreadFollow{UserID: "u-1", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: "root-b", Following: false}
-	follows.follows[threadFollowMockKey("u-1", "ch-left", "root-x")] = &model.ThreadFollow{UserID: "u-1", ParentID: "ch-left", ParentType: ParentChannel, ThreadRootID: "root-x", Following: true}
+	follows.follows[threadFollowMockKey("u-1", "ch-left", "root-x")] = &model.ThreadFollow{UserID: "u-1", ParentID: "ch-left", ParentType: ParentChannel, ThreadRootID: "root-x", Following: true, LastActivityAt: &rootAt}
 
-	got, err := svc.ListUserThreads(ctx, "u-1")
+	page, err := svc.ListThreadsPage(ctx, "u-1", threadCursorFollowed, 0)
 	if err != nil {
-		t.Fatalf("ListUserThreads: %v", err)
+		t.Fatalf("ListThreadsPage: %v", err)
 	}
-	if len(got) != 1 || got[0].ThreadRootID != "root-a" {
-		t.Fatalf("threads = %+v, want only root-a", got)
+	got := page.Threads
+	if len(got) != 1 || got[0].ThreadRootID != "root-a" || page.NextCursor != "" {
+		t.Fatalf("page = %+v, want only root-a and no more", page)
 	}
-	if got[0].ReplyCount != 3 || !got[0].LatestActivityAt.Equal(lastReply) || got[0].RootBody != "root a" {
+	if got[0].ReplyCount != 3 || !got[0].LatestActivityAt.Equal(lastReply) || got[0].RootBody != "root a" || !got[0].Following || got[0].Unread {
 		t.Fatalf("summary = %+v", got[0])
 	}
-	// The fast path reads roots via ONE batch per parent, no message scans.
+	// The roots are read in one batch per parent; nothing scans history.
 	if messages.batchCalls != 1 {
 		t.Fatalf("batch root reads = %d, want 1", messages.batchCalls)
 	}
@@ -674,44 +682,39 @@ func TestListUserThreads_IndexFastPath(t *testing.T) {
 		t.Fatalf("legacy scans = %d, want 0", messages.listCalls.Load())
 	}
 
-	// A notification pull surfaces an unfollowed thread (same precedence as
-	// the legacy scan) and LastReplyAt-less roots order by CreatedAt.
-	svc2, messages2, memberships2, _, follows2 := threadIndexService()
-	follows2.seeded = true
-	memberships2.userChannels = []*model.UserChannel{{UserID: "u-1", ChannelID: "ch-1"}}
-	messages2.messages["ch-1#root-b"] = &model.Message{ID: "root-b", ParentID: "ch-1", AuthorID: "u-1", Body: "root b", CreatedAt: rootAt, ReplyCount: 1}
-	follows2.follows[threadFollowMockKey("u-1", "ch-1", "root-b")] = &model.ThreadFollow{UserID: "u-1", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: "root-b", Following: false}
-	userState := newMockUserStateStore()
-	userState.rows[userState.key("u-1", model.UserStateThreadNotification, "root-b")] = &model.UserStateItem{UserID: "u-1", Kind: model.UserStateThreadNotification, ParentID: "ch-1", ThreadRootID: "root-b"}
-	svc2.SetUserStateStore(userState)
-	got2, err := svc2.ListUserThreads(ctx, "u-1")
-	if err != nil || len(got2) != 1 || got2[0].ThreadRootID != "root-b" {
-		t.Fatalf("notification pull = %+v (err=%v), want root-b", got2, err)
-	}
-	if !got2[0].LatestActivityAt.Equal(rootAt) {
-		t.Fatalf("latest = %v, want root CreatedAt fallback", got2[0].LatestActivityAt)
-	}
-
 	// A root the batch can't find (deleted thread) is skipped.
-	follows.follows[threadFollowMockKey("u-1", "ch-1", "root-gone")] = &model.ThreadFollow{UserID: "u-1", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: "root-gone", Following: true}
-	got3, err := svc.ListUserThreads(ctx, "u-1")
-	if err != nil || len(got3) != 1 {
-		t.Fatalf("missing root = %+v (err=%v)", got3, err)
+	follows.follows[threadFollowMockKey("u-1", "ch-1", "root-gone")] = &model.ThreadFollow{UserID: "u-1", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: "root-gone", Following: true, LastActivityAt: &rootAt}
+	if page, err := svc.ListThreadsPage(ctx, "u-1", threadCursorFollowed, 0); err != nil || len(page.Threads) != 1 {
+		t.Fatalf("missing root = %+v (err=%v)", page, err)
 	}
 
-	// Batch root read failure surfaces (the caller retries).
+	// A batch root read failure surfaces (the caller retries).
 	messages.batchErr = errors.New("dynamo down")
-	if _, err := svc.ListUserThreads(ctx, "u-1"); err == nil {
+	if _, err := svc.ListThreadsPage(ctx, "u-1", threadCursorFollowed, 0); err == nil {
 		t.Fatal("expected batch error")
+	}
+	messages.batchErr = nil
+	// So does a failed read of the follow order, and a membership check
+	// that could not run.
+	follows.activityErr = errors.New("dynamo down")
+	if _, err := svc.ListThreadsPage(ctx, "u-1", threadCursorFollowed, 0); err == nil {
+		t.Fatal("expected follow order error")
+	}
+	follows.activityErr = nil
+	memberships.getErr = errors.New("dynamo down")
+	if _, err := svc.ListThreadsPage(ctx, "u-1", threadCursorFollowed, 0); err == nil {
+		t.Fatal("expected membership error")
 	}
 }
 
 func TestListUserThreads_SeedsIndexFromLegacyScan(t *testing.T) {
 	svc, messages, memberships, _, follows := threadIndexService()
+	seeds := seedFinished(svc)
 	ctx := context.Background()
-	// Not seeded yet → the legacy scan runs and its result backfills rows.
+	// Not seeded yet → the first page starts the legacy scan in the
+	// background, and its result backfills rows.
 
-	memberships.userChannels = []*model.UserChannel{{UserID: "u-1", ChannelID: "ch-1"}}
+	seedMembership(memberships, "ch-1", "u-1")
 	rootAt := time.Now().Add(-time.Hour)
 	messages.messages["ch-1#root-a"] = &model.Message{ID: "root-a", ParentID: "ch-1", AuthorID: "u-2", Body: "root", CreatedAt: rootAt, ReplyCount: 1}
 	messages.messages["ch-1#r-1"] = &model.Message{ID: "r-1", ParentID: "ch-1", ParentMessageID: "root-a", AuthorID: "u-1", CreatedAt: rootAt.Add(time.Minute)}
@@ -720,48 +723,55 @@ func TestListUserThreads_SeedsIndexFromLegacyScan(t *testing.T) {
 	messages.messages["ch-1#r-2"] = &model.Message{ID: "r-2", ParentID: "ch-1", ParentMessageID: "root-out", AuthorID: "u-1", CreatedAt: rootAt.Add(time.Minute)}
 	follows.follows[threadFollowMockKey("u-1", "ch-1", "root-out")] = &model.ThreadFollow{UserID: "u-1", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: "root-out", Following: false}
 
-	got, err := svc.ListUserThreads(ctx, "u-1")
-	if err != nil {
-		t.Fatalf("ListUserThreads: %v", err)
+	if _, err := svc.ListThreadsPage(ctx, "u-1", "", 0); err != nil {
+		t.Fatalf("ListThreadsPage: %v", err)
 	}
-	if len(got) != 1 || got[0].ThreadRootID != "root-a" {
-		t.Fatalf("legacy threads = %+v", got)
-	}
-	// The derived participation was persisted and the user marked seeded —
-	// WITHOUT resurrecting the explicit unfollow.
+	waitThreadSeed(t, seeds)
+	// The derived participation was persisted, sorted by its latest reply,
+	// and the user marked seeded — WITHOUT resurrecting the explicit unfollow.
 	if !follows.seeded {
 		t.Fatal("seed marker not set")
 	}
-	if f := follows.follows[threadFollowMockKey("u-1", "ch-1", "root-a")]; f == nil || !f.Following {
-		t.Fatalf("participation not seeded: %+v", f)
+	f := follows.follows[threadFollowMockKey("u-1", "ch-1", "root-a")]
+	if f == nil || !f.Following || f.LastActivityAt == nil || !f.LastActivityAt.Equal(rootAt.Add(time.Minute)) {
+		t.Fatalf("participation not seeded with its latest reply: %+v", f)
 	}
 	if follows.follows[threadFollowMockKey("u-1", "ch-1", "root-out")].Following {
 		t.Fatal("seed clobbered an explicit unfollow")
 	}
 
-	// Next request takes the index path (no scans).
+	// From now on the thread lists from the follow rows, with no scans.
 	messages.listCalls.Store(0)
-	if _, err := svc.ListUserThreads(ctx, "u-1"); err != nil {
-		t.Fatalf("fast path after seed: %v", err)
+	page, err := svc.ListThreadsPage(ctx, "u-1", threadCursorFollowed, 0)
+	if err != nil {
+		t.Fatalf("followed page after seed: %v", err)
+	}
+	if len(page.Threads) != 1 || page.Threads[0].ThreadRootID != "root-a" {
+		t.Fatalf("threads after seed = %+v, want root-a", page.Threads)
+	}
+	if _, err := svc.ListThreadsPage(ctx, "u-1", "", 0); err != nil {
+		t.Fatalf("first page after seed: %v", err)
 	}
 	if messages.listCalls.Load() != 0 {
 		t.Fatalf("post-seed scans = %d, want 0", messages.listCalls.Load())
 	}
 }
 
-func TestListUserThreads_SeedFailuresStayOnLegacyPath(t *testing.T) {
+func TestListUserThreads_SeedFailuresRetryLater(t *testing.T) {
 	svc, messages, memberships, _, follows := threadIndexService()
+	seeds := seedFinished(svc)
 	ctx := context.Background()
-	memberships.userChannels = []*model.UserChannel{{UserID: "u-1", ChannelID: "ch-1"}}
+	seedMembership(memberships, "ch-1", "u-1")
 	rootAt := time.Now().Add(-time.Hour)
 	messages.messages["ch-1#root-a"] = &model.Message{ID: "root-a", ParentID: "ch-1", AuthorID: "u-2", CreatedAt: rootAt, ReplyCount: 1}
 	messages.messages["ch-1#r-1"] = &model.Message{ID: "r-1", ParentID: "ch-1", ParentMessageID: "root-a", AuthorID: "u-1", CreatedAt: rootAt.Add(time.Minute)}
 
-	// Seed write failure → NOT marked seeded; the next request scans again.
+	// Seed write failure → NOT marked seeded; a later visit scans again.
 	follows.setManyErr = errors.New("dynamo down")
-	if _, err := svc.ListUserThreads(ctx, "u-1"); err != nil {
-		t.Fatalf("ListUserThreads: %v", err)
+	if _, err := svc.ListThreadsPage(ctx, "u-1", "", 0); err != nil {
+		t.Fatalf("ListThreadsPage: %v", err)
 	}
+	waitThreadSeed(t, seeds)
 	if follows.seeded {
 		t.Fatal("failed seed must not mark the user seeded")
 	}
@@ -769,18 +779,35 @@ func TestListUserThreads_SeedFailuresStayOnLegacyPath(t *testing.T) {
 
 	// Marker write failure is logged; the seed itself persisted.
 	follows.markErr = errors.New("dynamo down")
-	if _, err := svc.ListUserThreads(ctx, "u-1"); err != nil {
-		t.Fatalf("ListUserThreads: %v", err)
+	if _, err := svc.ListThreadsPage(ctx, "u-1", "", 0); err != nil {
+		t.Fatalf("ListThreadsPage: %v", err)
 	}
+	waitThreadSeed(t, seeds)
 	follows.markErr = nil
-
-	// IsSeeded probe failure → conservative legacy path.
-	follows.seededErr = errors.New("dynamo down")
-	if _, err := svc.ListUserThreads(ctx, "u-1"); err != nil {
-		t.Fatalf("ListUserThreads with probe failure: %v", err)
+	if follows.follows[threadFollowMockKey("u-1", "ch-1", "root-a")] == nil {
+		t.Fatal("seed rows not persisted")
 	}
-	if messages.listCalls.Load() == 0 {
-		t.Fatal("probe failure must fall back to the scan")
+
+	// IsSeeded probe failure → nothing is scanned; whether a seed is due is
+	// asked again on the next visit.
+	messages.listCalls.Store(0)
+	follows.seededErr = errors.New("dynamo down")
+	if _, err := svc.ListThreadsPage(ctx, "u-1", "", 0); err != nil {
+		t.Fatalf("ListThreadsPage with probe failure: %v", err)
+	}
+	if messages.listCalls.Load() != 0 {
+		t.Fatalf("scans after a probe failure = %d, want 0", messages.listCalls.Load())
+	}
+
+	// The seed's own inputs failing to load postpones it too.
+	follows.seededErr = nil
+	memberships.listChannelsErr = errors.New("dynamo down")
+	if _, err := svc.ListThreadsPage(ctx, "u-1", "", 0); err != nil {
+		t.Fatalf("ListThreadsPage: %v", err)
+	}
+	waitThreadSeed(t, seeds)
+	if follows.seeded {
+		t.Fatal("a seed without its inputs must not mark the user seeded")
 	}
 }
 
@@ -863,9 +890,9 @@ func TestStableMediaURLs_MintFailureSkipsItem(t *testing.T) {
 	}
 }
 
-func TestListUserThreads_IndexPerIDRootFallback(t *testing.T) {
-	// A seeded index with a NON-batching message store resolves roots one by
-	// one — same skip-missing semantics, and >1 summary exercises the sort.
+func TestListThreadsPage_PerIDRootFallback(t *testing.T) {
+	// A NON-batching message store resolves roots one by one — same
+	// skip-missing semantics — and the page keeps the follow order.
 	messages := newMockMessageStore()
 	memberships := newMockMembershipStore()
 	svc := NewMessageService(messages, memberships, newMockConversationStore(), newMockPublisher(), newMockBroker())
@@ -874,25 +901,26 @@ func TestListUserThreads_IndexPerIDRootFallback(t *testing.T) {
 	svc.SetThreadFollowStore(follows)
 	ctx := context.Background()
 
-	memberships.userChannels = []*model.UserChannel{{UserID: "u-1", ChannelID: "ch-1"}}
+	seedMembership(memberships, "ch-1", "u-1")
 	older := time.Now().Add(-2 * time.Hour)
 	newer := time.Now().Add(-time.Hour)
 	messages.messages["ch-1#root-old"] = &model.Message{ID: "root-old", ParentID: "ch-1", AuthorID: "u-2", Body: "old", CreatedAt: older, ReplyCount: 1}
 	messages.messages["ch-1#root-new"] = &model.Message{ID: "root-new", ParentID: "ch-1", AuthorID: "u-2", Body: "new", CreatedAt: newer, ReplyCount: 1}
-	for _, root := range []string{"root-old", "root-new", "root-gone"} {
+	for root, at := range map[string]time.Time{"root-old": older, "root-new": newer, "root-gone": newer.Add(time.Minute)} {
 		follows.follows[threadFollowMockKey("u-1", "ch-1", root)] = &model.ThreadFollow{
-			UserID: "u-1", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: root, Following: true,
+			UserID: "u-1", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: root, Following: true, LastActivityAt: &at,
 		}
 	}
 
-	got, err := svc.ListUserThreads(ctx, "u-1")
+	page, err := svc.ListThreadsPage(ctx, "u-1", threadCursorFollowed, 0)
 	if err != nil {
-		t.Fatalf("ListUserThreads: %v", err)
+		t.Fatalf("ListThreadsPage: %v", err)
 	}
+	got := page.Threads
 	if len(got) != 2 || got[0].ThreadRootID != "root-new" || got[1].ThreadRootID != "root-old" {
 		t.Fatalf("threads = %+v, want [root-new root-old] with root-gone skipped", got)
 	}
 	if messages.listCalls.Load() != 0 {
-		t.Fatalf("scans = %d, want 0 (index path)", messages.listCalls.Load())
+		t.Fatalf("scans = %d, want 0", messages.listCalls.Load())
 	}
 }

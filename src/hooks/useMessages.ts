@@ -581,7 +581,7 @@ export function useSendMessage(scope: SendMessageScope) {
       // Sender sees their post immediately. Top-level posts append to the
       // main list; thread replies append to the thread cache so the reply
       // shows instantly instead of waiting for the server round-trip (the
-      // message.new echo + a userThreads refetch reconcile the rest).
+      // message.new echo reconciles the rest).
       if (parentID && !input.parentMessageID) {
         const present = appendMessageToCache(queryClient, parentID, data);
         if (!present) {
@@ -599,24 +599,6 @@ export function useSendMessage(scope: SendMessageScope) {
           queryKeys.thread(path, input.parentMessageID),
           (old) => (old ? withSent(old, data, 'end') : old),
         );
-        // The /threads list is normally patched live by the participant-scoped
-        // `thread.updated` event, built from the authoritative root. That
-        // event is gated on the reply-metadata bump succeeding server-side,
-        // so a sender whose reply just CREATED their participation (a cached
-        // list WITHOUT this thread's row) must not depend on it: refetch once
-        // so the new row appears even if the event never fires. When the row
-        // is already listed we deliberately skip the refetch — an eventually-
-        // consistent ListUserThreads response could clobber the fresher event
-        // patch (the race that removed the old blanket invalidate), and on a
-        // failed metadata bump the server has no newer count to show anyway.
-        // No cached list at all → nothing stale to heal (the first /threads
-        // visit fetches fresh).
-        const cachedThreads = queryClient.getQueryData<{ threadRootID: string }[]>(
-          queryKeys.userThreads(),
-        );
-        if (cachedThreads && !cachedThreads.some((t) => t.threadRootID === input.parentMessageID)) {
-          queryClient.invalidateQueries({ queryKey: queryKeys.userThreads() });
-        }
       }
     },
   });

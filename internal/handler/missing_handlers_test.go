@@ -1629,25 +1629,20 @@ func (s *dataMembershipStoreWithUserChans) ListUserChannels(_ context.Context, u
 
 func TestThreadHandler_List_OK(t *testing.T) {
 	memberships := newDataMembershipStore()
-	wrapper := &dataMembershipStoreWithUserChans{
-		dataMembershipStore: memberships,
-		userChans: map[string][]*model.UserChannel{
-			"u-thread": {{UserID: "u-thread", ChannelID: "ch-thread", ChannelName: "thread-chan"}},
-		},
-	}
+	memberships.memberships["ch-thread#u-thread"] = &model.ChannelMembership{ChannelID: "ch-thread", UserID: "u-thread"}
+	at := time.Now()
 	messages := newDataMessageStore()
 	messages.messages["ch-thread#root"] = &model.Message{
 		ID: "root", ParentID: "ch-thread", AuthorID: "u-thread", Body: "root msg",
-		ReplyCount: 1, CreatedAt: time.Now(),
+		ReplyCount: 1, CreatedAt: at,
 	}
-	messages.messages["ch-thread#reply"] = &model.Message{
-		ID: "reply", ParentID: "ch-thread", AuthorID: "u-thread", Body: "reply",
-		ParentMessageID: "root", CreatedAt: time.Now(),
+	follows := newDataThreadFollowStore()
+	follows.rows[dataThreadFollowKey("u-thread", "ch-thread", "root")] = &model.ThreadFollow{
+		UserID: "u-thread", ParentID: "ch-thread", ParentType: "channel", ThreadRootID: "root", Following: true, LastActivityAt: &at,
 	}
 
-	broker := &mockBrokerForHandler{}
-	convs := newDataConversationStore()
-	messageSvc := service.NewMessageService(messages, wrapper, convs, nil, broker)
+	messageSvc := service.NewMessageService(messages, memberships, newDataConversationStore(), nil, &mockBrokerForHandler{})
+	messageSvc.SetThreadFollowStore(follows)
 	jwtMgr := auth.NewJWTManager("thread-secret", 15*time.Minute, 720*time.Hour)
 	h := NewThreadHandler(messageSvc)
 
@@ -1655,24 +1650,53 @@ func TestThreadHandler_List_OK(t *testing.T) {
 	token := makeTokenForUser(jwtMgr, user)
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.List))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/threads", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusOK, rec.Body.String())
+	list := func(query string) service.ThreadPage {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/threads"+query, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		var page service.ThreadPage
+		if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return page
 	}
-	var got []*service.ThreadSummary
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode: %v", err)
+	// The first page holds the unread threads (none), then points on.
+	first := list("")
+	if len(first.Threads) != 0 || first.NextCursor == "" {
+		t.Fatalf("first page = %+v, want no unread threads and a next cursor", first)
 	}
-	if len(got) == 0 {
-		t.Error("expected at least one thread summary")
+	second := list("?limit=5&cursor=" + first.NextCursor)
+	if len(second.Threads) != 1 || second.Threads[0].ThreadRootID != "root" || second.NextCursor != "" {
+		t.Fatalf("second page = %+v, want the followed thread and no more", second)
+	}
+}
+
+func TestThreadHandler_List_BadQuery(t *testing.T) {
+	messageSvc := service.NewMessageService(newDataMessageStore(), newDataMembershipStore(), newDataConversationStore(), nil, &mockBrokerForHandler{})
+	messageSvc.SetThreadFollowStore(newDataThreadFollowStore())
+	jwtMgr := auth.NewJWTManager("thread-bad-secret", 15*time.Minute, 720*time.Hour)
+	h := NewThreadHandler(messageSvc)
+	token := makeTokenForUser(jwtMgr, &model.User{ID: "u-bad", Email: "b@x.com", SystemRole: model.SystemRoleMember})
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.List))
+	for _, query := range []string{"?limit=abc", "?limit=0", "?cursor=bogus"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/threads"+query, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want %d", query, rec.Code, http.StatusBadRequest)
+		}
 	}
 }
 
 type dataThreadFollowStore struct {
-	rows map[string]*model.ThreadFollow
+	rows        map[string]*model.ThreadFollow
+	activityErr error
 }
 
 func newDataThreadFollowStore() *dataThreadFollowStore {
@@ -1727,6 +1751,36 @@ func (s *dataThreadFollowStore) ListThreadFollows(_ context.Context, parentID, t
 		}
 	}
 	return out, nil
+}
+
+func (s *dataThreadFollowStore) GetUserThreadFollows(_ context.Context, userID string, threads []model.ThreadRef) ([]*model.ThreadFollow, error) {
+	out := make([]*model.ThreadFollow, 0)
+	for _, t := range threads {
+		if f, ok := s.rows[dataThreadFollowKey(userID, t.ParentID, t.ThreadRootID)]; ok {
+			cp := *f
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+// ListFollowedThreadsByActivity returns every followed row in one page.
+func (s *dataThreadFollowStore) ListFollowedThreadsByActivity(_ context.Context, userID, _ string, _ int) ([]*model.ThreadFollow, string, error) {
+	if s.activityErr != nil {
+		return nil, "", s.activityErr
+	}
+	out := make([]*model.ThreadFollow, 0)
+	for _, f := range s.rows {
+		if f.UserID == userID && f.Following && f.LastActivityAt != nil {
+			cp := *f
+			out = append(out, &cp)
+		}
+	}
+	return out, "", nil
+}
+
+func (s *dataThreadFollowStore) TouchThreadActivity(context.Context, []string, string, string, time.Time) error {
+	return nil
 }
 
 func TestThreadHandler_FollowAndUnfollow(t *testing.T) {
@@ -1864,21 +1918,11 @@ func TestNormalizeThreadParentType(t *testing.T) {
 	}
 }
 
-// erroringMembershipStore returns an error from ListUserChannels.
-type erroringMembershipStore struct {
-	*dataMembershipStore
-}
-
-func (s *erroringMembershipStore) ListUserChannels(_ context.Context, _ string) ([]*model.UserChannel, error) {
-	return nil, errors.New("boom")
-}
-
 func TestThreadHandler_List_StoreError(t *testing.T) {
-	memberships := &erroringMembershipStore{dataMembershipStore: newDataMembershipStore()}
-	messages := newDataMessageStore()
-	broker := &mockBrokerForHandler{}
-	convs := newDataConversationStore()
-	messageSvc := service.NewMessageService(messages, memberships, convs, nil, broker)
+	follows := newDataThreadFollowStore()
+	follows.activityErr = errors.New("dynamo down")
+	messageSvc := service.NewMessageService(newDataMessageStore(), newDataMembershipStore(), newDataConversationStore(), nil, &mockBrokerForHandler{})
+	messageSvc.SetThreadFollowStore(follows)
 	jwtMgr := auth.NewJWTManager("thread-err-secret", 15*time.Minute, 720*time.Hour)
 	h := NewThreadHandler(messageSvc)
 
@@ -1886,7 +1930,7 @@ func TestThreadHandler_List_StoreError(t *testing.T) {
 	token := makeTokenForUser(jwtMgr, user)
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.List))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/threads", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/threads?cursor=r:", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -1895,13 +1939,53 @@ func TestThreadHandler_List_StoreError(t *testing.T) {
 	}
 }
 
-func TestThreadHandler_List_EmptyForUserWithoutChannels(t *testing.T) {
-	// Empty membership store -> nothing returned.
+func TestThreadHandler_FollowState(t *testing.T) {
 	memberships := newDataMembershipStore()
-	messages := newDataMessageStore()
-	broker := &mockBrokerForHandler{}
-	convs := newDataConversationStore()
-	messageSvc := service.NewMessageService(messages, memberships, convs, nil, broker)
+	memberships.memberships["ch-thread#u-thread"] = &model.ChannelMembership{ChannelID: "ch-thread", UserID: "u-thread"}
+	follows := newDataThreadFollowStore()
+	follows.rows[dataThreadFollowKey("u-thread", "ch-thread", "root")] = &model.ThreadFollow{
+		UserID: "u-thread", ParentID: "ch-thread", ParentType: "channel", ThreadRootID: "root", Following: true,
+	}
+	messageSvc := service.NewMessageService(newDataMessageStore(), memberships, newDataConversationStore(), nil, &mockBrokerForHandler{})
+	messageSvc.SetThreadFollowStore(follows)
+	jwtMgr := auth.NewJWTManager("thread-state-secret", 15*time.Minute, 720*time.Hour)
+	h := NewThreadHandler(messageSvc)
+
+	rec := httptest.NewRecorder()
+	h.FollowState(rec, httptest.NewRequest(http.MethodGet, "/api/v1/threads/channels/ch-thread/root/follow", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+
+	token := makeTokenForUser(jwtMgr, &model.User{ID: "u-thread", Email: "th@x.com", SystemRole: model.SystemRoleMember})
+	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.FollowState))
+	get := func(parentType, parentID string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/threads/x/y/root/follow", nil)
+		req.SetPathValue("parentType", parentType)
+		req.SetPathValue("parentID", parentID)
+		req.SetPathValue("threadRootID", "root")
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+	rec = get("channels", "ch-thread")
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"following":true}` {
+		t.Fatalf("follow state = %d %s, want 200 following", rec.Code, rec.Body.String())
+	}
+	if rec = get("bogus", "ch-thread"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad target status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	// Not a member: refused.
+	if rec = get("channels", "ch-other"); rec.Code < 400 {
+		t.Fatalf("non-member status = %d, want a refusal", rec.Code)
+	}
+}
+
+func TestThreadHandler_List_EmptyForUserWithoutChannels(t *testing.T) {
+	// No markers and no follows: an empty page, not null.
+	messageSvc := service.NewMessageService(newDataMessageStore(), newDataMembershipStore(), newDataConversationStore(), nil, &mockBrokerForHandler{})
+	messageSvc.SetThreadFollowStore(newDataThreadFollowStore())
 	jwtMgr := auth.NewJWTManager("thread-empty-secret", 15*time.Minute, 720*time.Hour)
 	h := NewThreadHandler(messageSvc)
 
@@ -1909,20 +1993,15 @@ func TestThreadHandler_List_EmptyForUserWithoutChannels(t *testing.T) {
 	token := makeTokenForUser(jwtMgr, user)
 	handler := middleware.Auth(jwtMgr)(http.HandlerFunc(h.List))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/threads", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/threads?cursor=r:", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
-	// Should be an empty array, not null.
-	var got []*service.ThreadSummary
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(got) != 0 {
-		t.Errorf("expected 0 threads, got %d", len(got))
+	if body := strings.TrimSpace(rec.Body.String()); body != `{"threads":[]}` {
+		t.Errorf("body = %s, want an empty page", body)
 	}
 }
 

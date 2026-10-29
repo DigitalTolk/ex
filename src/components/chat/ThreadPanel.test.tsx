@@ -319,23 +319,11 @@ describe('ThreadPanel', () => {
   });
 
   // An alert can list a thread in /threads that you don't follow.
-  it('shows Follow for a thread listed in /threads but not followed', async () => {
+  // The panel asks for this one thread's follow state when it opens — never
+  // for the whole threads list.
+  it('shows Follow for a thread not followed, and follows it', async () => {
     mockApiFetch.mockImplementation((url: string) => {
-      if (url === '/api/v1/threads') {
-        return Promise.resolve([
-          {
-            parentID: 'ch-1',
-            parentType: 'channel',
-            threadRootID: 'm-1',
-            rootAuthorID: 'u-2',
-            rootBody: 'root',
-            rootCreatedAt: '2026-04-24T10:00:00Z',
-            replyCount: 1,
-            latestActivityAt: '2026-04-24T10:30:00Z',
-            following: false,
-          },
-        ]);
-      }
+      if (url === '/api/v1/threads/channels/ch-1/m-1/follow') return Promise.resolve({ following: false });
       if (url.includes('/messages/m-1/thread')) return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
@@ -348,27 +336,18 @@ describe('ThreadPanel', () => {
         currentUserId="u-1"
       />,
     );
-    await waitFor(() => expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/threads'));
-    expect(await screen.findByLabelText('Follow thread')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Unfollow thread')).toBeNull();
+    fireEvent.click(await screen.findByLabelText('Follow thread'));
+    await waitFor(() => {
+      expect(mockApiFetch).toHaveBeenCalledWith('/api/v1/threads/channels/ch-1/m-1/follow', expect.objectContaining({ method: 'PUT' }));
+    });
+    // The button follows at once, from the answer.
+    expect(await screen.findByLabelText('Unfollow thread')).toBeInTheDocument();
+    expect(mockApiFetch).not.toHaveBeenCalledWith('/api/v1/threads');
   });
 
-  it('shows Unfollow when the thread is already in /threads and calls the unfollow endpoint', async () => {
+  it('shows Unfollow for a followed thread and calls the unfollow endpoint', async () => {
     mockApiFetch.mockImplementation((url: string) => {
-      if (url === '/api/v1/threads') {
-        return Promise.resolve([
-          {
-            parentID: 'ch-1',
-            parentType: 'channel',
-            threadRootID: 'm-1',
-            rootAuthorID: 'u-2',
-            rootBody: 'root',
-            rootCreatedAt: '2026-04-24T10:00:00Z',
-            replyCount: 1,
-            latestActivityAt: '2026-04-24T10:30:00Z',
-          },
-        ]);
-      }
+      if (url === '/api/v1/threads/channels/ch-1/m-1/follow') return Promise.resolve({ following: true });
       if (url.includes('/messages/m-1/thread')) return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
@@ -390,6 +369,7 @@ describe('ThreadPanel', () => {
         expect.objectContaining({ method: 'DELETE' }),
       );
     });
+    expect(await screen.findByLabelText('Follow thread')).toBeInTheDocument();
   });
 
   it('forwards parentMessageID to useSendMessage when the user sends a reply', async () => {

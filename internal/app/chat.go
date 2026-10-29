@@ -223,11 +223,12 @@ func (a *App) buildChat(ctx context.Context) error {
 	c.conversations.SetActivityTracker(c.activity) // reading a conversation reads its items
 	c.userState.SetActivityTracker(c.activity)     // seeing a thread reads its items
 	c.reminders = service.NewReminderService(store.NewRedisReminderStore(in.cache.Client()), in.messages, c.messages)
-	c.reminders.SetPublisher(in.pubsub)       // reminders.changed: every device keeps its pending list current
-	c.channels.SetReminderSync(c.reminders)   // losing a channel takes its pending reminders
-	c.messages.SetReminderSync(c.reminders)   // deleting/editing a message reaches its reminders
-	c.reminders.SetOwnerLookup(in.users)      // a deactivated owner's reminders are dropped when due, never sent
-	c.users.SetReminderCanceller(c.reminders) // deactivating an account stops all its reminders at once
+	c.reminders.SetPublisher(in.pubsub)        // reminders.changed: every device keeps its pending list current
+	c.channels.SetReminderSync(c.reminders)    // losing a channel takes its pending reminders
+	c.channels.SetThreadStateSync(c.userState) // ...and its threads' unread markers
+	c.messages.SetReminderSync(c.reminders)    // deleting/editing a message reaches its reminders
+	c.reminders.SetOwnerLookup(in.users)       // a deactivated owner's reminders are dropped when due, never sent
+	c.users.SetReminderCanceller(c.reminders)  // deactivating an account stops all its reminders at once
 	// Alert text — popups, pushes, Activity rows, reminders — names each
 	// mention by its ID's current name, as the rendered message does.
 	c.activity.SetMentionResolver(c.mentions)

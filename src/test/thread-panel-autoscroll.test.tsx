@@ -38,7 +38,7 @@ const threadDataState: { current: { id: string; authorID: string; body: string }
 };
 vi.mock('@/hooks/useThreads', () => ({
   useThreadMessages: () => ({ data: threadDataState.current, isLoading: false }),
-  useUserThreads: () => ({ data: [] }),
+  useThreadFollowing: () => ({ data: false }),
   useFollowThread: () => ({ mutate: vi.fn(), isPending: false }),
   useUnfollowThread: () => ({ mutate: vi.fn(), isPending: false }),
   markThreadSeen: vi.fn(),

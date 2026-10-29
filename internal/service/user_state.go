@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -93,6 +94,30 @@ func (s *UserStateService) MarkThreadSeen(ctx context.Context, userID, parentID,
 		s.activity.MarkParentRead(ctx, userID, parentID, threadRootID, now)
 	}
 	return s.delete(ctx, userID, model.UserStateThreadNotification, threadRootID)
+}
+
+// ParentLeft deletes the unread-thread markers userIDs hold in a channel they
+// can no longer read: the threads can't be opened there any more, so a marker
+// left behind would keep the sidebar's Threads dot lit.
+func (s *UserStateService) ParentLeft(ctx context.Context, userIDs []string, parentID string) {
+	if s.store == nil {
+		return
+	}
+	for _, userID := range userIDs {
+		items, err := s.store.ListUserState(ctx, userID)
+		if err != nil {
+			slog.WarnContext(ctx, "user state: list for parent left failed", "userID", userID, "parentID", parentID, "error", err)
+			continue
+		}
+		for _, item := range items {
+			if item.Kind != model.UserStateThreadNotification || item.ParentID != parentID {
+				continue
+			}
+			if err := s.delete(ctx, userID, item.Kind, item.TargetID); err != nil {
+				slog.WarnContext(ctx, "user state: drop thread marker failed", "userID", userID, "threadRootID", item.TargetID, "error", err)
+			}
+		}
+	}
 }
 
 func (s *UserStateService) HideConversation(ctx context.Context, userID, convID string) error {

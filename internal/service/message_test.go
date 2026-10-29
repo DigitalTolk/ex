@@ -1131,9 +1131,8 @@ func TestMessageService_Send_ConversationMention_NoSystemMessage(t *testing.T) {
 	}
 }
 
-func TestMessageService_ListUserThreads(t *testing.T) {
+func TestMessageService_ScanUserThreads(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
-	ctx := context.Background()
 
 	// User is a member of one channel; populate userChannels override on the
 	// membership mock so ListUserChannels returns it.
@@ -1172,9 +1171,9 @@ func TestMessageService_ListUserThreads(t *testing.T) {
 		messages.messages["ch-1#"+m.ID] = m
 	}
 
-	got, err := svc.ListUserThreads(ctx, "u-me")
+	got, err := scanThreads(svc, "u-me")
 	if err != nil {
-		t.Fatalf("ListUserThreads: %v", err)
+		t.Fatalf("scan: %v", err)
 	}
 	if len(got) != 2 {
 		t.Fatalf("expected 2 thread summaries (root + replied-to), got %d", len(got))
@@ -1190,7 +1189,7 @@ func TestMessageService_ListUserThreads(t *testing.T) {
 	}
 }
 
-func TestMessageService_ListUserThreads_UsesFollowOverrides(t *testing.T) {
+func TestMessageService_ScanUserThreads_UsesFollowOverrides(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	follows := newMockThreadFollowStore()
 	svc.SetThreadFollowStore(follows)
@@ -1221,9 +1220,9 @@ func TestMessageService_ListUserThreads_UsesFollowOverrides(t *testing.T) {
 		t.Fatalf("unfollow m-participated: %v", err)
 	}
 
-	got, err := svc.ListUserThreads(ctx, "u-me")
+	got, err := scanThreads(svc, "u-me")
 	if err != nil {
-		t.Fatalf("ListUserThreads: %v", err)
+		t.Fatalf("scan: %v", err)
 	}
 	if len(got) != 1 {
 		t.Fatalf("expected only explicit follow after unfollow override, got %d: %+v", len(got), got)
@@ -1233,7 +1232,7 @@ func TestMessageService_ListUserThreads_UsesFollowOverrides(t *testing.T) {
 	}
 }
 
-func TestMessageService_ListUserThreads_IncludesUnreadThreadNotification(t *testing.T) {
+func TestMessageService_ScanUserThreads_IncludesUnreadThreadNotification(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	stateStore := newMockUserStateStore()
 	svc.SetUserStateStore(stateStore)
@@ -1259,16 +1258,16 @@ func TestMessageService_ListUserThreads_IncludesUnreadThreadNotification(t *test
 		t.Fatalf("SetUserState: %v", err)
 	}
 
-	got, err := svc.ListUserThreads(ctx, "u-me")
+	got, err := scanThreads(svc, "u-me")
 	if err != nil {
-		t.Fatalf("ListUserThreads: %v", err)
+		t.Fatalf("scan: %v", err)
 	}
 	if len(got) != 1 || got[0].ThreadRootID != "m-notified" {
 		t.Fatalf("ListUserThreads = %+v, want unread notified thread", got)
 	}
 }
 
-func TestMessageService_ListUserThreads_NotificationTemporarilyOverridesUnfollow(t *testing.T) {
+func TestMessageService_ScanUserThreads_NotificationTemporarilyOverridesUnfollow(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	follows := newMockThreadFollowStore()
 	stateStore := newMockUserStateStore()
@@ -1301,7 +1300,7 @@ func TestMessageService_ListUserThreads_NotificationTemporarilyOverridesUnfollow
 		t.Fatalf("SetUserState: %v", err)
 	}
 
-	got, err := svc.ListUserThreads(ctx, "u-me")
+	got, err := scanThreads(svc, "u-me")
 	if err != nil {
 		t.Fatalf("ListUserThreads with notification: %v", err)
 	}
@@ -1312,7 +1311,7 @@ func TestMessageService_ListUserThreads_NotificationTemporarilyOverridesUnfollow
 	if err := stateStore.DeleteUserState(ctx, "u-me", model.UserStateThreadNotification, "m-unfollowed"); err != nil {
 		t.Fatalf("DeleteUserState: %v", err)
 	}
-	got, err = svc.ListUserThreads(ctx, "u-me")
+	got, err = scanThreads(svc, "u-me")
 	if err != nil {
 		t.Fatalf("ListUserThreads after read: %v", err)
 	}
@@ -1357,7 +1356,7 @@ func TestMessageService_SetThreadFollow_Success(t *testing.T) {
 	}
 }
 
-func TestMessageService_SetThreadFollow_ConversationAndListUserThreads(t *testing.T) {
+func TestMessageService_SetThreadFollow_ConversationThreadIsListed(t *testing.T) {
 	svc, messages, _, conversations, _ := setupMessageService()
 	follows := newMockThreadFollowStore()
 	svc.SetThreadFollowStore(follows)
@@ -1377,12 +1376,18 @@ func TestMessageService_SetThreadFollow_ConversationAndListUserThreads(t *testin
 	if err := svc.SetThreadFollow(ctx, "u-me", "conv-1", ParentConversation, "m-root", true); err != nil {
 		t.Fatalf("SetThreadFollow conversation: %v", err)
 	}
-	got, err := svc.ListUserThreads(ctx, "u-me")
+	page, err := svc.ListThreadsPage(ctx, "u-me", threadCursorFollowed, 0)
 	if err != nil {
-		t.Fatalf("ListUserThreads: %v", err)
+		t.Fatalf("ListThreadsPage: %v", err)
 	}
-	if len(got) != 1 || got[0].ParentType != ParentConversation || got[0].ThreadRootID != "m-root" {
-		t.Fatalf("ListUserThreads = %+v, want followed conversation thread", got)
+	got := page.Threads
+	if len(got) != 1 || got[0].ParentType != ParentConversation || got[0].ThreadRootID != "m-root" || !got[0].Following {
+		t.Fatalf("threads = %+v, want the followed conversation thread", got)
+	}
+	// Following sorts it by its latest reply: the root's time, as it has none
+	// recorded.
+	if f := follows.follows[threadFollowMockKey("u-me", "conv-1", "m-root")]; f.LastActivityAt == nil || !f.LastActivityAt.Equal(now.Add(-time.Hour)) {
+		t.Fatalf("follow row = %+v, want the root's time as its latest activity", f)
 	}
 }
 

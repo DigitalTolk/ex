@@ -3,25 +3,13 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { useUnreadThreadIDs } from './useUnreadThreads';
-import { markThreadSeen, type ThreadSummary } from './useThreads';
+import { markThreadSeen } from './useThreads';
 import { UnreadProvider, useUnread } from '@/context/UnreadContext';
 import { queryKeys } from '@/lib/query-keys';
 import type { UserState } from '@/types';
 
-const thread = (id: string, at = '2026-10-07T10:00:00Z'): ThreadSummary => ({
-  parentID: 'ch-1',
-  parentType: 'channel',
-  threadRootID: id,
-  rootAuthorID: 'u-1',
-  rootBody: 'hi',
-  rootCreatedAt: '2026-10-07T09:00:00Z',
-  replyCount: 2,
-  latestActivityAt: at,
-});
-
 function client() {
   const qc = new QueryClient();
-  qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), [thread('t-1'), thread('t-2'), thread('t-3')]);
   qc.setQueryData<Partial<UserState>>(queryKeys.userState(), { threadNotifications: ['t-1'] });
   return qc;
 }
@@ -29,7 +17,7 @@ function client() {
 afterEach(() => localStorage.clear());
 
 describe('useUnreadThreadIDs', () => {
-  it('reads the unread threads from the loaded caches and follows their changes, without fetching', async () => {
+  it('reads the unread threads from the loaded user state and follows its changes, without fetching', async () => {
     const qc = client();
     const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
     const { result } = renderHook(() => useUnreadThreadIDs(), { wrapper });
@@ -38,10 +26,19 @@ describe('useUnreadThreadIDs', () => {
       qc.setQueryData<Partial<UserState>>(queryKeys.userState(), { threadNotifications: ['t-1', 't-2'] });
     });
     await waitFor(() => expect([...result.current].sort()).toEqual(['t-1', 't-2']));
-    // Reading a thread here (the seen map) takes it out at once.
+    expect(qc.getQueryCache().find({ queryKey: queryKeys.userState() })?.getObserversCount()).toBe(0);
+  });
+
+  // Seeing a thread takes it out at once: the app's own query client is the
+  // one markThreadSeen updates.
+  it('drops a thread the moment it is seen', async () => {
+    const { queryClient } = await import('@/lib/query-client');
+    queryClient.setQueryData<Partial<UserState>>(queryKeys.userState(), { threadNotifications: ['t-1', 't-2'] });
+    const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    const { result } = renderHook(() => useUnreadThreadIDs(), { wrapper });
     act(() => markThreadSeen('t-1', '2026-10-07T11:00:00Z'));
-    expect([...result.current]).toEqual(['t-2']);
-    expect(qc.getQueryCache().find({ queryKey: queryKeys.userThreads() })?.getObserversCount()).toBe(0);
+    await waitFor(() => expect([...result.current]).toEqual(['t-2']));
+    queryClient.removeQueries({ queryKey: queryKeys.userState() });
   });
 
   it('works before anything is loaded', () => {
@@ -54,7 +51,6 @@ describe('useUnreadThreadIDs', () => {
 
   it('includes a reply that just arrived live', () => {
     const qc = new QueryClient();
-    qc.setQueryData<ThreadSummary[]>(queryKeys.userThreads(), [thread('t-4'), thread('t-5')]);
     qc.setQueryData<Partial<UserState>>(queryKeys.userState(), { threadNotifications: ['t-4'] });
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={qc}>

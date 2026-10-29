@@ -485,6 +485,15 @@ go run ./cmd/migrate top-level-index            # preview
 go run ./cmd/migrate top-level-index --apply    # backfill, then mark the table [--workers=16]
 ```
 
+### Followed threads by latest reply (`migrate thread-activity`)
+
+The Threads page lists a user's followed threads latest reply first, a page at a time, from their follow rows (`GSI2PK = THREADACT#<user>`). New follows and every reply keep that order; follow rows written before need their thread's latest reply stamped once. Run it after every instance runs the new build; until it has run, those older threads are missing from the read part of the list (unread ones still show).
+
+```bash
+go run ./cmd/migrate thread-activity            # preview
+go run ./cmd/migrate thread-activity --apply
+```
+
 `go run ./cmd/migrate` with no arguments lists every subcommand; all of them default to a dry run.
 
 ## Architecture

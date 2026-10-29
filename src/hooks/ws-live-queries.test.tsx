@@ -9,7 +9,7 @@ import { useUserConversations } from './useConversations';
 import { useCategories } from './useSidebar';
 import { useDrafts } from './useDrafts';
 import { useUserState } from './useUserState';
-import { useThreadMessages, useUserThreads } from './useThreads';
+import { useThreadFollowing, useThreadMessages, useThreadPages } from './useThreads';
 import { useActivity, useReminders } from './useActivity';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
@@ -28,7 +28,8 @@ const liveQueries: Array<[name: string, key: readonly unknown[], hook: () => unk
   ['sidebarCategories', queryKeys.sidebarCategories(), () => useCategories()],
   ['drafts', queryKeys.drafts(), () => useDrafts()],
   ['userState', queryKeys.userState(), () => useUserState()],
-  ['userThreads', queryKeys.userThreads(), () => useUserThreads()],
+  ['threadPages', queryKeys.threadPages('visit-1'), () => useThreadPages('visit-1')],
+  ['threadFollow', queryKeys.threadFollow('ch-1', 'root-1'), () => useThreadFollowing({ parentID: 'ch-1', parentType: 'channel', threadRootID: 'root-1' })],
   ['thread', queryKeys.thread('channels/ch-1', 'root-1'), () => useThreadMessages({ channelId: 'ch-1', threadRootID: 'root-1' })],
   ['activity', queryKeys.activity(), () => useActivity()],
   ['reminders', queryKeys.reminders(), () => useReminders()],

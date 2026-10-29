@@ -3,21 +3,11 @@ import { useLocation } from 'react-router-dom';
 import { Virtuoso } from 'react-virtuoso';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { Skeleton } from '@/components/ui/skeleton';
-import {
-  getSeenMap,
-  mergeSeenMaps,
-  sortThreadsByUnreadThenActivity,
-  THREAD_SEEN_CHANGED_EVENT,
-  threadDeepLink,
-  unreadThreadIDs,
-  useUserThreads,
-  type ThreadSummary,
-} from '@/hooks/useThreads';
+import { threadDeepLink, useThreadPages, type ThreadSummary } from '@/hooks/useThreads';
+import { useUnreadThreadIDs } from '@/hooks/useUnreadThreads';
 import { useUserChannels } from '@/hooks/useChannels';
 import { useUserConversations } from '@/hooks/useConversations';
 import { useAuth } from '@/context/AuthContext';
-import { useUnread } from '@/context/UnreadContext';
-import { useUserState } from '@/hooks/useUserState';
 import { ThreadCard } from '@/components/threads/ThreadCard';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 
@@ -30,51 +20,42 @@ const INITIAL_CARDS = 6;
 
 export default function ThreadsPage() {
   useDocumentTitle('Threads');
-  const { data: threads = [], isLoading } = useUserThreads();
   const { data: userChannels } = useUserChannels();
   const { data: userConvs } = useUserConversations();
-  const { data: userState } = useUserState();
-  const { unreadThreadNotifications } = useUnread();
+  const threadUnreadIDs = useUnreadThreadIDs();
   const { user } = useAuth();
-  const [localSeenMap, setLocalSeenMap] = useState(() => getSeenMap());
 
-  useEffect(() => {
-    const handleSeenChange = () => setLocalSeenMap(getSeenMap());
-    window.addEventListener(THREAD_SEEN_CHANGED_EVENT, handleSeenChange);
-    return () => window.removeEventListener(THREAD_SEEN_CHANGED_EVENT, handleSeenChange);
-  }, []);
-
-  const threadUnreadIDs = useMemo(
-    () =>
-      unreadThreadIDs(
-        threads,
-        userState?.threadNotifications ?? [],
-        unreadThreadNotifications,
-        mergeSeenMaps(userState?.threadSeen, localSeenMap, userState?.threadMarkedUnread),
-      ),
-    [localSeenMap, threads, unreadThreadNotifications, userState],
-  );
-  const sortedThreads = useMemo(
-    () => sortThreadsByUnreadThenActivity(threads, threadUnreadIDs),
-    [threadUnreadIDs, threads],
-  );
-
-  // The order and membership of the list are frozen per visit. A reply that
-  // lands while you read must not reorder the page under you, and a thread
-  // that becomes yours waits its turn; the bell and the bold Threads entry
-  // still say something arrived. Opening Threads again, the sidebar link
-  // included, takes a fresh snapshot: each navigation gets a new location
-  // key. The cards themselves stay live.
+  // The list comes a page at a time — the unread threads first, then the
+  // rest, latest reply first — and more loads as the reader reaches its end.
+  // Each visit is its own list: a reply that lands while you read must not
+  // reorder the page under you, and a thread that becomes yours waits for the
+  // next visit; the bell and the bold Threads entry still say something
+  // arrived. Opening Threads again, the sidebar link included, starts over:
+  // each navigation gets a new location key. The cards themselves stay live.
   const { key: visitKey } = useLocation();
-  const [snapshot, setSnapshot] = useState<{ visitKey: string; keys: string[] } | null>(null);
-  if (!isLoading && snapshot?.visitKey !== visitKey) {
-    setSnapshot({ visitKey, keys: sortedThreads.map(threadKey) });
-  }
-  const byKey = useMemo(() => new Map(threads.map((t) => [threadKey(t), t])), [threads]);
-  const listedThreads = useMemo(
-    () => (snapshot ? snapshot.keys.map((k) => byKey.get(k)).filter((t): t is ThreadSummary => !!t) : sortedThreads),
-    [snapshot, byKey, sortedThreads],
-  );
+  const { data, isLoading, hasNextPage, isFetchingNextPage, fetchNextPage } = useThreadPages(visitKey);
+  const listedThreads = useMemo(() => {
+    // A thread read since its page loaded can come again among the rest.
+    const seen = new Set<string>();
+    return (data?.pages ?? []).flatMap((page) =>
+      page.threads.filter((t) => {
+        const key = threadKey(t);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }),
+    );
+  }, [data]);
+  const loadMore = useCallback(() => {
+    if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  // A page can come back empty yet point further on (none unread, or only
+  // threads it couldn't show): nothing new reaches the end of the list then,
+  // so ask for the next one here.
+  const lastPageEmpty = data?.pages.at(-1)?.threads.length === 0;
+  useEffect(() => {
+    if (lastPageEmpty) loadMore();
+  }, [lastPageEmpty, loadMore]);
 
   // Virtualized over the page's own scroller: each card is a heavy snippet
   // (a whole thread, its query, a composer), and mounting every card paged in
@@ -107,7 +88,7 @@ export default function ThreadsPage() {
         </div>
       )}
 
-      {!isLoading && listedThreads.length === 0 && (
+      {!isLoading && listedThreads.length === 0 && !hasNextPage && (
         <p
           className="py-12 text-center text-muted-foreground"
           data-testid="threads-empty"
@@ -124,6 +105,8 @@ export default function ThreadsPage() {
             computeItemKey={(_, t) => threadKey(t)}
             increaseViewportBy={800}
             initialItemCount={Math.min(listedThreads.length, INITIAL_CARDS)}
+            endReached={loadMore}
+            components={{ Footer: isFetchingNextPage ? ThreadsLoadingMore : undefined }}
             itemContent={(_, t) => {
               const key = threadKey(t);
               const where =
@@ -150,5 +133,13 @@ export default function ThreadsPage() {
         )}
       </div>
     </PageContainer>
+  );
+}
+
+function ThreadsLoadingMore() {
+  return (
+    <div className="pb-4 mobile:px-4" data-testid="threads-loading-more">
+      <Skeleton className="h-40 w-full" />
+    </div>
   );
 }
