@@ -116,6 +116,124 @@ export interface Message {
   // Client-only: an optimistic row for a message still being sent, or one
   // that failed to send (shown "Not sent" with Retry / Delete).
   pendingState?: 'sending' | 'failed';
+  // An app's layout (Block Kit); body stays its plain-text fallback.
+  blocks?: Block[];
+  // State of the message's built-in actions: who acknowledged, who voted.
+  actionTallies?: ActionTally[];
+  // Changes made to an app's message so far.
+  version?: number;
+  // Posted by its app with the app's token: its app buttons reach the app.
+  appButtons?: boolean;
+}
+
+// ---- Blocks (an app's message layout; the server normalizes every one:
+// unknown kinds dropped, IDs assigned, "mrkdwn" stored as "markdown").
+
+export interface BlockText {
+  type: 'plain_text' | 'markdown';
+  text: string;
+}
+
+export interface ConfirmDialog {
+  title: BlockText;
+  text: BlockText;
+  confirm: BlockText;
+  deny: BlockText;
+}
+
+export interface ButtonElement {
+  type: 'button';
+  text: BlockText;
+  action_id: string;
+  value?: string;
+  style?: 'primary' | 'danger';
+  url?: string;
+  confirm?: ConfirmDialog;
+  // Who may see and click it; absent means everyone who sees the message.
+  allowed_users?: string[];
+  ex_action?: 'ack' | 'vote';
+}
+
+// A context row's text: on the wire its text is a plain string.
+export interface TextElement {
+  type: 'plain_text' | 'markdown';
+  text: string;
+}
+
+export type Block =
+  | { type: 'header'; block_id: string; text: BlockText }
+  | { type: 'section'; block_id: string; text?: BlockText; fields?: BlockText[]; accessory?: ButtonElement }
+  | { type: 'actions'; block_id: string; elements: ButtonElement[] }
+  | { type: 'context'; block_id: string; elements: TextElement[] }
+  | { type: 'divider'; block_id: string };
+
+// ---- Forms (an app's view: a dialog the app opens for the person who
+// clicked). Its blocks are message blocks plus input fields.
+
+export interface SelectOption {
+  text: BlockText;
+  value: string;
+}
+
+export type InputElement =
+  | {
+      type: 'plain_text_input';
+      action_id: string;
+      placeholder?: BlockText;
+      multiline?: boolean;
+      initial_value?: string;
+      min_length?: number;
+      max_length?: number;
+    }
+  | { type: 'datepicker'; action_id: string; placeholder?: BlockText; initial_date?: string }
+  | { type: 'static_select'; action_id: string; placeholder?: BlockText; options: SelectOption[]; initial_option?: SelectOption };
+
+export interface InputBlock {
+  type: 'input';
+  block_id: string;
+  label: BlockText;
+  hint?: BlockText;
+  optional?: boolean;
+  element: InputElement;
+}
+
+export type ViewBlock = Block | InputBlock;
+
+export interface AppView {
+  id: string;
+  type: 'modal';
+  callback_id?: string;
+  title: BlockText;
+  submit?: BlockText;
+  close?: BlockText;
+  blocks: ViewBlock[];
+  private_metadata?: string;
+  external_id?: string;
+  hash: string;
+}
+
+// view.opened / view.updated: a form for this person, from an app. Only the
+// tab whose click it answers (clickID) shows it.
+export interface AppViewEvent {
+  view: AppView;
+  app: { name: string; avatarURL?: string; iconEmoji?: string };
+  clickID?: string;
+}
+
+// What a submission came to (POST /api/v1/views/{id}/submit).
+export interface ViewSubmitResult {
+  action: 'close' | 'errors' | 'update' | 'keep';
+  errors?: Record<string, string>;
+  view?: AppView;
+  notice?: string;
+  failed?: boolean;
+}
+
+export interface ActionTally {
+  blockID: string;
+  actionID: string;
+  userIDs: string[];
+  at: string;
 }
 
 // HastNode mirrors the server-side hast tree shape. Three node
@@ -149,6 +267,8 @@ export interface MessageAttachment {
   thumb_url?: string;
   footer?: string;
   footer_icon?: string;
+  // Blocks inside the card keep its coloured bar.
+  blocks?: Block[];
 }
 
 export interface MessageAttachmentField {
@@ -246,6 +366,38 @@ export interface IncomingWebhook {
   createdAt: string;
   updatedAt: string;
   url?: string;
+  // Interactivity: where the app receives clicks, and what has been issued
+  // (the values are shown once, when issued, and never again).
+  interactivityURL?: string;
+  emailSharing?: boolean;
+  adminPaused?: boolean;
+  hasBotToken?: boolean;
+  hasSigningSecret?: boolean;
+}
+
+export interface InteractionEntry {
+  at: string;
+  kind: 'click' | 'response_url' | 'test';
+  userID?: string;
+  actionID?: string;
+  result: 'ok' | 'failed' | 'timeout';
+  status?: number;
+  latencyMs: number;
+  error?: string;
+}
+
+export interface InteractionStatus {
+  webhook: IncomingWebhook;
+  pausedForSeconds?: number;
+  interactions: InteractionEntry[];
+}
+
+export interface InteractionTestResult {
+  ok: boolean;
+  status?: number;
+  latencyMs: number;
+  error?: string;
+  reply?: string;
 }
 
 export interface UserChannel {

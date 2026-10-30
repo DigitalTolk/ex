@@ -283,3 +283,35 @@ describe('activity, emoji, settings and agent-run payloads', () => {
     expect(parseRunApproval({ parentID: 'ch-1' })).toBeNull();
   });
 });
+
+describe('view.opened / view.updated', () => {
+  const parseView = payloadParser('view.opened');
+  const parseViewUpdate = payloadParser('view.updated');
+  const valid = {
+    view: { id: 'V1', type: 'modal', title: { type: 'plain_text', text: 'Reschedule' }, blocks: [{ type: 'divider', block_id: 'd' }], hash: 'h1', callback_id: 'resched' },
+    app: { name: 'MeetingMind', iconEmoji: 'calendar' },
+    clickID: 'abc',
+  };
+
+  it('accepts a form for this person, keeping every field the dialog may draw', () => {
+    expect(parseView(valid)).toEqual(valid);
+    const noClick = { view: valid.view, app: valid.app };
+    expect(parseViewUpdate(noClick)).toEqual(noClick);
+  });
+
+  it('drops a form the dialog could not key on', () => {
+    expect(parseView({ ...valid, view: { ...valid.view, id: '' } })).toBeNull();
+    expect(parseView({ ...valid, view: { ...valid.view, hash: undefined } })).toBeNull();
+    expect(parseView({ ...valid, view: { ...valid.view, blocks: 'none' } })).toBeNull();
+    expect(parseView({ ...valid, app: {} })).toBeNull();
+    expect(parseView({ ...valid, clickID: 7 })).toBeNull();
+  });
+});
+
+describe('interaction.notice', () => {
+  const parseNotice = payloadParser('interaction.notice');
+  it("accepts an app's note, and drops an empty one", () => {
+    expect(parseNotice({ text: 'Saved' })).toEqual({ text: 'Saved' });
+    expect(parseNotice({ text: '' })).toBeNull();
+  });
+});

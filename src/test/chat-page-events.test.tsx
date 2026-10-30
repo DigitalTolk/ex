@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, act, renderHook } from '@testing-library/react';
+import { render, act, renderHook, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import ChatPage from '@/pages/ChatPage';
@@ -9,6 +9,11 @@ import { forceAwayUntilInput, resetUserActivityForTests } from '@/lib/user-activ
 import { resetSeenCache, THREAD_SEEN_CHANGED_EVENT } from '@/hooks/useThreads';
 import { usePresenceStore } from '@/stores/presence';
 import { endReadSession, getUnreadAnchor, holdRead, isReadHeld, setAtBottom, setAtLiveTail, setUnreadAnchor, threadReadKey, useMissedArrivals } from '@/lib/read-position';
+import { newClickID } from '@/lib/app-clicks';
+import { Toaster } from '@/components/Toaster';
+// The form is a lazy chunk; loaded here, with the file, so no test's wait
+// includes its first import (slow under coverage and a loaded machine).
+import '@/components/apps/AppViewDialog';
 import { eventCallbacks, expectInvalidPayloadReported, type CapturedWSOptions } from '@/test/ws-frames';
 
 let capturedOptions: Record<string, ((data: unknown) => void) | boolean | undefined> = {};
@@ -1624,5 +1629,41 @@ describe('ChatPage WebSocket handlers', () => {
       expect(clearConversationUnreadInCache).not.toHaveBeenCalled();
     });
   });
-});
 
+  describe('app forms', () => {
+    const form = (over: Record<string, unknown> = {}) => ({
+      view: {
+        id: 'V1',
+        type: 'modal',
+        title: { type: 'plain_text', text: 'Reschedule A3' },
+        blocks: [{ type: 'input', block_id: 'reason', label: { type: 'plain_text', text: 'Reason' }, element: { type: 'plain_text_input', action_id: 'value' } }],
+        hash: 'h1',
+        ...over,
+      },
+      app: { name: 'MeetingMind' },
+    });
+
+    it("opens an app's form only in the tab whose click it answers, and follows the app's changes to it", async () => {
+      renderAt('/');
+      const opened = capturedOptions.onViewOpened as (d: unknown) => void;
+      const updated = capturedOptions.onViewUpdated as (d: unknown) => void;
+      // Another tab's (or device's) click: this tab shows nothing.
+      act(() => opened({ ...form(), clickID: 'another-tab' }));
+      expect(screen.queryByTestId('app-view-dialog')).toBeNull();
+
+      act(() => opened({ ...form(), clickID: newClickID() }));
+      expect(await screen.findByRole('heading', { name: 'Reschedule A3' })).toBeInTheDocument();
+      expect(screen.getByLabelText('Reason')).toBeInTheDocument();
+
+      act(() => updated(form({ title: { type: 'plain_text', text: 'Reschedule A3 (2 left)' }, hash: 'h2' })));
+      expect(await screen.findByRole('heading', { name: 'Reschedule A3 (2 left)' })).toBeInTheDocument();
+    });
+
+    it("shows an app's note to the person whose click it answered", async () => {
+      render(<Toaster />);
+      renderAt('/');
+      act(() => (capturedOptions.onInteractionNotice as (d: unknown) => void)({ text: 'Saved for Fri 23 Oct' }));
+      expect(await screen.findByText('Saved for Fri 23 Oct')).toBeInTheDocument();
+    });
+  });
+});

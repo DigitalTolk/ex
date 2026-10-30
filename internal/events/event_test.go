@@ -84,6 +84,7 @@ func TestIsPersistent(t *testing.T) {
 		{EventMembersChanged, true},
 		// notification.new is ephemeral: a toast must not replay on reconnect.
 		{EventNotificationNew, false},
+		{EventInteractionNotice, false},
 		{EventDraftUpdated, true},
 		{EventTyping, false},
 		{EventPing, false},

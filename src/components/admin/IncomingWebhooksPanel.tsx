@@ -15,6 +15,7 @@ import {
 } from '@/hooks/useWebhooks';
 import type { IncomingWebhook } from '@/types';
 import { NativeSelect } from '@/components/ui/native-select';
+import { InteractivitySettings } from './InteractivitySettings';
 
 const EMPTY_FORM = {
   title: '',
@@ -195,6 +196,7 @@ export function IncomingWebhooksPanel() {
                 <CopyButton value={wh.url} label={`Copy ${wh.title} URL`} />
               </div>
             )}
+            <InteractivitySettings webhook={wh} />
           </div>
         ))}
       </div>

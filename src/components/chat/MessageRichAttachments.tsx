@@ -2,6 +2,7 @@ import { memo } from 'react';
 import type { MessageAttachment } from '@/types';
 import { renderMarkdown } from '@/lib/markdown';
 import { externalHref, isSafeUrl } from '@/lib/url-safety';
+import { BlockList } from '@/components/chat/blocks/MessageBlocks';
 
 // Image src must be a real fetchable URL — http(s) only. isSafeUrl also admits
 // mailto (fine for links, not images), so narrow it here. The backend already
@@ -61,6 +62,9 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
               ))}
             </div>
           ) : null}
+          {/* Blocks inside a card keep its coloured bar; their buttons answer
+              through the message's block scope (MessageItem). */}
+          {att.blocks?.length ? <BlockList blocks={att.blocks} className="mt-2" /> : null}
           {safeImg(att.image_url) && (
             <img
               src={safeImg(att.image_url)}

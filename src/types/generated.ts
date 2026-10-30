@@ -1130,6 +1130,192 @@ export interface RefreshToken {
 }
 
 //////////
+// source: blocks.go
+
+/**
+ * Block kinds a message can carry (Slack's Block Kit, the subset ex draws).
+ * The service layer drops any other kind when it normalizes a payload.
+ */
+export const BlockSection = "section";
+/**
+ * Block kinds a message can carry (Slack's Block Kit, the subset ex draws).
+ * The service layer drops any other kind when it normalizes a payload.
+ */
+export const BlockActions = "actions";
+/**
+ * Block kinds a message can carry (Slack's Block Kit, the subset ex draws).
+ * The service layer drops any other kind when it normalizes a payload.
+ */
+export const BlockContext = "context";
+/**
+ * Block kinds a message can carry (Slack's Block Kit, the subset ex draws).
+ * The service layer drops any other kind when it normalizes a payload.
+ */
+export const BlockDivider = "divider";
+/**
+ * Block kinds a message can carry (Slack's Block Kit, the subset ex draws).
+ * The service layer drops any other kind when it normalizes a payload.
+ */
+export const BlockHeader = "header";
+/**
+ * BlockInput is a form field: a label, an optional hint, and one input
+ * element. Forms (views) only; a message drops it.
+ */
+export const BlockInput = "input";
+/**
+ * Text kinds. "mrkdwn" is accepted from Slack-shaped payloads and stored as
+ * "markdown": both mean ex markdown (**bold**), not Slack's *bold*.
+ */
+export const TextPlain = "plain_text";
+/**
+ * Text kinds. "mrkdwn" is accepted from Slack-shaped payloads and stored as
+ * "markdown": both mean ex markdown (**bold**), not Slack's *bold*.
+ */
+export const TextMarkdown = "markdown";
+/**
+ * Text kinds. "mrkdwn" is accepted from Slack-shaped payloads and stored as
+ * "markdown": both mean ex markdown (**bold**), not Slack's *bold*.
+ */
+export const TextMrkdwn = "mrkdwn";
+/**
+ * ElementButton is the one interactive element of phase 1.
+ */
+export const ElementButton = "button";
+/**
+ * Input elements: a form field's one element.
+ */
+export const ElementPlainTextInput = "plain_text_input";
+/**
+ * Input elements: a form field's one element.
+ */
+export const ElementDatepicker = "datepicker";
+/**
+ * Input elements: a form field's one element.
+ */
+export const ElementStaticSelect = "static_select";
+/**
+ * SelectOption is one choice of a static_select.
+ */
+export interface SelectOption {
+  text: TextObject;
+  value: string;
+}
+/**
+ * Button styles.
+ */
+export const ButtonPrimary = "primary";
+/**
+ * Button styles.
+ */
+export const ButtonDanger = "danger";
+/**
+ * ExActionAck records who acknowledged first; the button gives way to
+ * "Acknowledged by …".
+ */
+export const ExActionAck = "ack";
+/**
+ * ExActionVote toggles the clicker's vote and shows the count.
+ */
+export const ExActionVote = "vote";
+/**
+ * TextObject is a piece of text in a block: plain, or ex markdown.
+ */
+export interface TextObject {
+  type: string;
+  text: string;
+}
+/**
+ * ConfirmDialog asks before a button's click is sent. All four texts are
+ * plain text.
+ */
+export interface ConfirmDialog {
+  title: TextObject;
+  text: TextObject;
+  confirm: TextObject;
+  deny: TextObject;
+}
+/**
+ * BlockElement is a button (in an actions row or a section's accessory) or a
+ * text element (in a context row). On the wire a text element carries its
+ * text as a plain string — {"type":"markdown","text":"…"} — while a button's
+ * label is a TextObject; Content holds a text element's string.
+ */
+export interface BlockElement {
+  type: string;
+  /**
+   * Text is a button's label; on the wire a text element's text (Content)
+   * takes its place as a plain string.
+   */
+  text?: TextObject | string;
+  action_id?: string;
+  value?: string;
+  style?: string;
+  url?: string;
+  confirm?: ConfirmDialog;
+  /**
+   * AllowedUsers are the ex user IDs that may see and click the button
+   * (resolved from the emails or IDs the app gave). Empty: everyone who can
+   * see the message.
+   */
+  allowed_users?: string[];
+  /**
+   * ExAction makes the button a built-in action (ExActionAck, ExActionVote).
+   */
+  ex_action?: string;
+  /**
+   * Input elements (forms only): placeholder for all three; Multiline,
+   * InitialValue and Min/MaxLength for text; InitialDate (YYYY-MM-DD) for
+   * a date; Options and InitialOption for a select.
+   */
+  placeholder?: TextObject;
+  multiline?: boolean;
+  initial_value?: string;
+  min_length?: number /* int */;
+  max_length?: number /* int */;
+  initial_date?: string;
+  options?: SelectOption[];
+  initial_option?: SelectOption;
+}
+/**
+ * Block is one piece of a message's layout.
+ *   - section: Text and/or Fields, and an optional Accessory button.
+ *   - actions: a row of buttons (Elements).
+ *   - context: small text (Elements are text elements).
+ *   - divider: a rule.
+ *   - header: Text, plain.
+ *   - input (forms only): Label, an optional Hint, Optional, and one
+ *     input Element.
+ */
+export interface Block {
+  type: string;
+  block_id?: string;
+  text?: TextObject;
+  fields?: TextObject[];
+  accessory?: BlockElement;
+  elements?: BlockElement[];
+  label?: TextObject;
+  hint?: TextObject;
+  optional?: boolean;
+  element?: BlockElement;
+}
+/**
+ * Blocks is a message's (or an attachment's) layout. DynamoDB stores it as
+ * one JSON string: a nested list of maps of every block and element would
+ * cost far more item size and marshal time, and nothing queries into it.
+ */
+export type Blocks = Block[];
+/**
+ * ActionTally is the state of one built-in action on a message: who
+ * acknowledged (the first clicker) or who voted, and when it last changed.
+ */
+export interface ActionTally {
+  blockID: string;
+  actionID: string;
+  userIDs: string[];
+  at: string /* RFC3339 */;
+}
+
+//////////
 // source: channel.go
 
 export type ChannelType = string;
@@ -1867,6 +2053,68 @@ export interface CustomEmoji {
 }
 
 //////////
+// source: interaction.go
+
+/**
+ * ResponseURLRecord is what a response_url stands for: one interaction's
+ * message, its app and its clicker. Kept only for the URL's short life.
+ */
+export interface ResponseURLRecord {
+  webhookID: string;
+  parentID: string;
+  parentType: string;
+  messageID: string;
+  userID: string;
+}
+/**
+ * Interaction kinds and results, as the webhooks panel's history lists them.
+ */
+export const InteractionClick = "click";
+/**
+ * Interaction kinds and results, as the webhooks panel's history lists them.
+ */
+export const InteractionResponseURL = "response_url";
+/**
+ * Interaction kinds and results, as the webhooks panel's history lists them.
+ */
+export const InteractionTest = "test";
+/**
+ * InteractionSubmission is a form submitted to the app; InteractionAPI
+ * is a call the app made to ex (ActionID names the method).
+ */
+export const InteractionSubmission = "view_submission";
+/**
+ * Interaction kinds and results, as the webhooks panel's history lists them.
+ */
+export const InteractionAPI = "api";
+/**
+ * Interaction kinds and results, as the webhooks panel's history lists them.
+ */
+export const InteractionOK = "ok";
+/**
+ * Interaction kinds and results, as the webhooks panel's history lists them.
+ */
+export const InteractionFailed = "failed";
+/**
+ * Interaction kinds and results, as the webhooks panel's history lists them.
+ */
+export const InteractionTimeout = "timeout";
+/**
+ * InteractionEntry is one line of an app's interaction history: a click or a
+ * form sent to it, a use of a response_url, a call it made, or a test.
+ */
+export interface InteractionEntry {
+  at: string /* RFC3339 */;
+  kind: string;
+  userID?: string;
+  actionID?: string;
+  result: string;
+  status?: number /* int */;
+  latencyMs: number /* int64 */;
+  error?: string;
+}
+
+//////////
 // source: invite.go
 
 export interface Invite {
@@ -2127,6 +2375,29 @@ export interface Message {
    * arrives first. Never persisted.
    */
   clientNonce?: string;
+  /**
+   * Blocks lay out an app's message (Block Kit); Body stays its plain-text
+   * fallback for notifications, search and clients that can't draw them.
+   */
+  blocks?: Blocks;
+  /**
+   * ActionTallies hold the state of the message's built-in actions: who
+   * acknowledged, who voted.
+   */
+  actionTallies?: ActionTally[];
+  /**
+   * Version counts the changes made to an app's message (its blocks, its
+   * tallies). A change is written only over the version it was made on, so
+   * two at once can't undo each other.
+   */
+  version?: number /* int */;
+  /**
+   * AppButtons: the message was posted (or last replaced) by its app with
+   * the app's bot token, so its app buttons send their clicks to the app.
+   * A message posted with the webhook URL alone — which anyone holding a
+   * leaked URL could do — never reaches the app.
+   */
+  appButtons?: boolean;
 }
 export interface MessageAttachment {
   fallback?: string;
@@ -2151,6 +2422,10 @@ export interface MessageAttachment {
   thumb_url?: string;
   footer?: string;
   footer_icon?: string;
+  /**
+   * Blocks inside a card keep the card's coloured bar.
+   */
+  blocks?: Blocks;
 }
 export interface MessageAttachmentField {
   title?: string;
@@ -2583,6 +2858,64 @@ export interface MarkUnreadResult {
 }
 
 //////////
+// source: view.go
+
+/**
+ * ViewModal is the one kind of view: a form in a dialog.
+ */
+export const ViewModal = "modal";
+/**
+ * View is a form an app opens for one person (Slack's modal): a title,
+ * submit and close labels, and blocks — a message's blocks plus input
+ * fields. This is the shape the app sends and the person's client draws;
+ * what ex keeps beside it is StoredView.
+ */
+export interface View {
+  id: string;
+  type: string;
+  callback_id?: string;
+  title: TextObject;
+  submit?: TextObject;
+  close?: TextObject;
+  blocks: Blocks;
+  private_metadata?: string;
+  external_id?: string;
+  /**
+   * Hash changes with every update; an app's views.update naming an old
+   * hash is refused, so two updates can't silently overwrite each other.
+   */
+  hash: string;
+}
+/**
+ * StoredView is an open form as ex keeps it (in Redis, while it is open):
+ * the view, whose it is, and which app and click it came from. Submissions
+ * are checked against it, never against what the browser sends back.
+ */
+export interface StoredView {
+  view: View;
+  webhookID: string;
+  userID: string;
+  clickID?: string;
+  iconEmoji?: string;
+  openedAt: string /* RFC3339 */;
+}
+/**
+ * TriggerRecord is what a trigger_id stands for: one person's click (or
+ * form submission) on one app, allowing that app to open one form for them
+ * within seconds. ClickID names the browser tab that clicked.
+ */
+export interface TriggerRecord {
+  webhookID: string;
+  userID: string;
+  clickID?: string;
+  /**
+   * IconEmoji is the icon the clicked message showed, so the form wears
+   * the same face.
+   */
+  iconEmoji?: string;
+}
+
+//////////
 // source: webhook.go
 
 export interface IncomingWebhook {
@@ -2598,4 +2931,26 @@ export interface IncomingWebhook {
   createdBy: string;
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
+  /**
+   * Interactivity: an app that gets the clicks on its messages' buttons.
+   * InteractivityURL is where ex sends them; empty means the webhook only
+   * posts.
+   */
+  interactivityURL?: string;
+  /**
+   * EmailSharing adds the clicker's email to what the app receives. Only a
+   * workspace admin turns it on.
+   */
+  emailSharing?: boolean;
+  /**
+   * AdminPaused stops the app's buttons everywhere until an admin resumes
+   * them.
+   */
+  adminPaused?: boolean;
+  /**
+   * HasBotToken and HasSigningSecret tell the webhooks panel what has been
+   * issued, without the values.
+   */
+  hasBotToken?: boolean;
+  hasSigningSecret?: boolean;
 }

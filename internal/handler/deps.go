@@ -75,8 +75,10 @@ type Deps struct {
 	Sidebar    *SidebarHandler
 	Search     *SearchHandler
 	Webhook    *WebhookHandler
-	Activity   *ActivityHandler
-	Command    *CommandHandler
+	// Interaction serves app interactivity (setup, response URLs).
+	Interaction *InteractionHandler
+	Activity    *ActivityHandler
+	Command     *CommandHandler
 	// Scheduled messages: compose now, deliver at a chosen time.
 	ScheduledMessage *ScheduledMessageHandler
 	// Agent orchestration (plan-v2): SPA surface, ex-runner API, and the

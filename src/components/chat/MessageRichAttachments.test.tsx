@@ -144,3 +144,22 @@ describe('MessageRichAttachments', () => {
     expect(screen.getByText('Edited').tagName).toBe('STRONG');
   });
 });
+
+describe('MessageRichAttachments with blocks', () => {
+  it('draws a card’s blocks inside its coloured bar', () => {
+    render(
+      <MessageRichAttachments
+        attachments={[
+          {
+            color: '#D97706',
+            text: 'card',
+            blocks: [{ type: 'section', block_id: 'b1', text: { type: 'markdown', text: '**A3** due Fri' } }],
+          },
+        ]}
+      />,
+    );
+    const cardEl = screen.getByTestId('message-rich-attachment');
+    expect(cardEl).toContainElement(screen.getByTestId('message-blocks'));
+    expect(screen.getByText('A3').tagName).toBe('STRONG');
+  });
+});

@@ -169,6 +169,7 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("DELETE /api/v1/channels/{id}/messages/{msgId}", middleware.WrapFunc(channelH.DeleteMessage, authMW))
 	mux.Handle("GET /api/v1/channels/{id}/messages/{msgId}/thread", middleware.WrapFunc(channelH.GetThread, authMW))
 	mux.Handle("POST /api/v1/channels/{id}/messages/{msgId}/reactions", middleware.WrapFunc(channelH.ToggleReaction, authMW, writeLimit))
+	mux.Handle("POST /api/v1/channels/{id}/messages/{msgId}/actions", middleware.WrapFunc(channelH.Act, authMW, writeLimit))
 	mux.Handle("PUT /api/v1/channels/{id}/messages/{msgId}/pinned", middleware.WrapFunc(channelH.SetPinned, authMW))
 	mux.Handle("PUT /api/v1/channels/{id}/messages/{msgId}/no-unfurl", middleware.WrapFunc(channelH.SetNoUnfurl, authMW))
 	mux.Handle("PUT /api/v1/channels/{id}/messages/{msgId}/unread", middleware.WrapFunc(channelH.MarkUnread, authMW))
@@ -188,6 +189,7 @@ func NewRouter(d *Deps) http.Handler {
 	mux.Handle("DELETE /api/v1/conversations/{id}/messages/{msgId}", middleware.WrapFunc(convH.DeleteMessage, authMW))
 	mux.Handle("GET /api/v1/conversations/{id}/messages/{msgId}/thread", middleware.WrapFunc(convH.GetThread, authMW))
 	mux.Handle("POST /api/v1/conversations/{id}/messages/{msgId}/reactions", middleware.WrapFunc(convH.ToggleReaction, authMW, writeLimit))
+	mux.Handle("POST /api/v1/conversations/{id}/messages/{msgId}/actions", middleware.WrapFunc(convH.Act, authMW, writeLimit))
 	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/pinned", middleware.WrapFunc(convH.SetPinned, authMW))
 	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/no-unfurl", middleware.WrapFunc(convH.SetNoUnfurl, authMW))
 	mux.Handle("PUT /api/v1/conversations/{id}/messages/{msgId}/unread", middleware.WrapFunc(convH.MarkUnread, authMW))
@@ -317,12 +319,36 @@ func NewRouter(d *Deps) http.Handler {
 		// own webhooks, an admin everyone's (the service decides).
 		mux.Handle("GET /api/v1/admin/webhooks", middleware.WrapFunc(webhookH.List, authMW))
 		mux.Handle("POST /api/v1/admin/webhooks", middleware.WrapFunc(webhookH.Create, authMW, writeLimit))
+		mux.Handle("POST /api/v1/admin/webhooks/preview", middleware.WrapFunc(webhookH.Preview, authMW, writeLimit))
 		mux.Handle("PATCH /api/v1/admin/webhooks/{id}", middleware.WrapFunc(webhookH.Update, authMW, writeLimit))
 		mux.Handle("DELETE /api/v1/admin/webhooks/{id}", middleware.WrapFunc(webhookH.Delete, authMW, writeLimit))
 		// Public webhook ingress: throttle per IP to blunt ID-enumeration and
 		// spam amplification (a touch higher than the auth limit since busy
 		// integrations legitimately post more often).
 		mux.Handle("POST /hooks/{id}", middleware.WrapFunc(webhookH.Execute, middleware.RateLimit(d.RateLimiter, middleware.PerMinute("webhook", 60, 60))))
+	}
+	if ixH := d.Interaction; ixH != nil {
+		// App interactivity, set up by whoever manages the webhook.
+		mux.Handle("GET /api/v1/admin/webhooks/{id}/interactivity", middleware.WrapFunc(ixH.Status, authMW))
+		mux.Handle("PUT /api/v1/admin/webhooks/{id}/interactivity/request-url", middleware.WrapFunc(ixH.SetRequestURL, authMW, writeLimit))
+		mux.Handle("POST /api/v1/admin/webhooks/{id}/interactivity/bot-token", middleware.WrapFunc(ixH.RotateBotToken, authMW, writeLimit))
+		mux.Handle("POST /api/v1/admin/webhooks/{id}/interactivity/signing-secret", middleware.WrapFunc(ixH.RotateSigningSecret, authMW, writeLimit))
+		mux.Handle("PUT /api/v1/admin/webhooks/{id}/interactivity/email-sharing", middleware.WrapFunc(ixH.SetEmailSharing, authMW, writeLimit))
+		mux.Handle("PUT /api/v1/admin/webhooks/{id}/interactivity/paused", middleware.WrapFunc(ixH.SetPaused, authMW, writeLimit))
+		mux.Handle("POST /api/v1/admin/webhooks/{id}/interactivity/test", middleware.WrapFunc(ixH.SendTest, authMW, writeLimit))
+		// Apps' answers to clicks: no session, the URL's token is the
+		// credential; throttled per IP like the webhook ingress.
+		mux.Handle("POST /api/v1/apps/respond/{token}", middleware.WrapFunc(ixH.Respond, middleware.RateLimit(d.RateLimiter, middleware.PerMinute("respond", 60, 60))))
+		// Apps' calls: no session, the bot token is the credential, and each
+		// app has its own budget (InteractionService.AuthenticateApp).
+		// A per-IP limit in front keeps unauthenticated calls cheap.
+		appIP := middleware.RateLimit(d.RateLimiter, middleware.PerMinute("appapi-ip", 600, 120))
+		mux.Handle("POST /api/v1/apps/views.open", middleware.WrapFunc(ixH.ViewsOpen, appIP))
+		mux.Handle("POST /api/v1/apps/views.update", middleware.WrapFunc(ixH.ViewsUpdate, appIP))
+		mux.Handle("POST /api/v1/apps/messages.update", middleware.WrapFunc(ixH.MessagesUpdate, appIP))
+		// A person's forms.
+		mux.Handle("POST /api/v1/views/{id}/submit", middleware.WrapFunc(ixH.SubmitView, authMW, writeLimit))
+		mux.Handle("POST /api/v1/views/{id}/close", middleware.WrapFunc(ixH.CloseView, authMW, writeLimit))
 	}
 
 	// ------------------------------------------------------------------ Agents

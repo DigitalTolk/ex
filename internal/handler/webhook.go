@@ -63,6 +63,23 @@ func (h *WebhookHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, webhookResponse{IncomingWebhook: wh, URL: h.svc.URL(wh)})
 }
 
+// Preview answers with the message a payload would post (see
+// IncomingWebhookService.PreviewMessage), for the webhooks panel's live
+// preview. The body is a webhook payload.
+func (h *WebhookHandler) Preview(w http.ResponseWriter, r *http.Request) {
+	payload, err := readWebhookPayload(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_payload", err.Error())
+		return
+	}
+	msg, err := h.svc.PreviewMessage(r.Context(), webhookActor(r), payload)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, msg)
+}
+
 func (h *WebhookHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var body model.IncomingWebhook
 	if err := readJSON(r, &body); err != nil {
@@ -92,6 +109,7 @@ func (h *WebhookHandler) Execute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_payload", err.Error())
 		return
 	}
+	payload.BotToken = bearerToken(r)
 	msg, err := h.svc.ExecuteMessage(r.Context(), id, payload)
 	if err != nil {
 		// This is an UNAUTHENTICATED ingress: internal error text never goes
@@ -106,7 +124,7 @@ func (h *WebhookHandler) Execute(w http.ResponseWriter, r *http.Request) {
 	// JSON gets the message id, which it can send back as root_id to reply in
 	// this message's thread.
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "application/json") {
-		writeJSON(w, http.StatusOK, map[string]string{"id": msg.ID})
+		writeJSON(w, http.StatusOK, map[string]string{"id": msg.ID, "channel_id": msg.ParentID})
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -157,4 +175,13 @@ func readWebhookPayload(r *http.Request) (service.IncomingWebhookPayload, error)
 func readBodyString(r *http.Request) (string, error) {
 	body, err := io.ReadAll(r.Body)
 	return string(body), err
+}
+
+// bearerToken is the token of an "Authorization: Bearer <token>" header.
+func bearerToken(r *http.Request) string {
+	scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
+		return ""
+	}
+	return strings.TrimSpace(token)
 }

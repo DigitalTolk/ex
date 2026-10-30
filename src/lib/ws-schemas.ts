@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Message, NotificationSettings, UserStatus } from '@/types';
+import type { AppViewEvent, Message, NotificationSettings, UserStatus } from '@/types';
 import type * as wire from '@/types/generated';
 
 // Zod schemas for WebSocket payloads, one per event (the registry that maps
@@ -133,6 +133,18 @@ export const attachmentDeletedSchema = z.object({ id });
 
 // Go map payload.
 export const serverVersionSchema = z.object({ version: id });
+
+// interaction.notice: an app's note to the person whose click it answered
+// (through a response_url), shown to them alone.
+export const interactionNoticeSchema = z.looseObject({ text: z.string().min(1) });
+// An app's form for this person: the server normalized the view, so only
+// what the dialog keys on is checked here.
+const appViewEventObject = z.looseObject({
+  view: z.looseObject({ id: z.string().min(1), title: z.looseObject({ text: z.string() }), blocks: z.array(z.unknown()), hash: z.string() }),
+  app: z.looseObject({ name: z.string() }),
+  clickID: z.string().optional(),
+});
+export const appViewEventSchema = appViewEventObject as unknown as z.ZodType<AppViewEvent>;
 
 // emoji.added carries the model.CustomEmoji.
 export const customEmojiSchema = z.looseObject({

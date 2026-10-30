@@ -372,6 +372,126 @@
     }
   },
   {
+    "case": "row: invalid blocks",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "invalid_blocks",
+        "message": "invalid blocks"
+      }
+    }
+  },
+  {
+    "case": "row: card changed",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "card_changed",
+        "message": "card changed"
+      }
+    }
+  },
+  {
+    "case": "row: app not set up for buttons",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "app_not_set_up",
+        "message": "app not set up for buttons"
+      }
+    }
+  },
+  {
+    "case": "row: app unavailable",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "app_unavailable",
+        "message": "app unavailable"
+      }
+    }
+  },
+  {
+    "case": "row: too many clicks",
+    "status": 429,
+    "body": {
+      "error": {
+        "code": "too_many_clicks",
+        "message": "too many clicks"
+      }
+    }
+  },
+  {
+    "case": "row: app busy",
+    "status": 429,
+    "body": {
+      "error": {
+        "code": "app_busy",
+        "message": "app busy"
+      }
+    }
+  },
+  {
+    "case": "row: bot token required",
+    "status": 401,
+    "body": {
+      "error": {
+        "code": "token_required",
+        "message": "bot token required"
+      }
+    }
+  },
+  {
+    "case": "row: invalid bot token",
+    "status": 401,
+    "body": {
+      "error": {
+        "code": "invalid_token",
+        "message": "invalid bot token"
+      }
+    }
+  },
+  {
+    "case": "row: version conflict",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "version_conflict",
+        "message": "version conflict"
+      }
+    }
+  },
+  {
+    "case": "row: response url expired",
+    "status": 410,
+    "body": {
+      "error": {
+        "code": "expired_url",
+        "message": "response url expired"
+      }
+    }
+  },
+  {
+    "case": "row: response url used up",
+    "status": 410,
+    "body": {
+      "error": {
+        "code": "used_up",
+        "message": "response url used up"
+      }
+    }
+  },
+  {
+    "case": "row: view not found",
+    "status": 404,
+    "body": {
+      "error": {
+        "code": "view_not_found",
+        "message": "view not found"
+      }
+    }
+  },
+  {
     "case": "row: scheduled message: already being sent",
     "status": 409,
     "body": {

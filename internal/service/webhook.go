@@ -95,6 +95,12 @@ type IncomingWebhookPayload struct {
 	// RootID posts the message as a reply in the thread of an earlier post
 	// by this webhook (the id ExecuteMessage returned for it).
 	RootID string `json:"root_id"`
+	// Blocks lay the message out (Block Kit); Text stays its fallback.
+	Blocks model.Blocks `json:"blocks"`
+	// BotToken is the app's bearer token from the request's Authorization
+	// header (never from the body): without it, buttons that call the app
+	// are refused.
+	BotToken string `json:"-"`
 }
 
 type IncomingWebhookService struct {
@@ -225,8 +231,14 @@ func (s *IncomingWebhookService) List(ctx context.Context, actor WebhookActor) (
 		return nil, err
 	}
 	all, err := s.store.List(ctx)
-	if err != nil || actor.Role == model.SystemRoleAdmin {
-		return all, err
+	if err != nil {
+		return nil, err
+	}
+	for _, wh := range all {
+		wh.Present()
+	}
+	if actor.Role == model.SystemRoleAdmin {
+		return all, nil
 	}
 	return slices.DeleteFunc(all, func(wh *model.IncomingWebhook) bool { return wh.CreatedBy != actor.ID }), nil
 }
@@ -277,7 +289,7 @@ func (s *IncomingWebhookService) Update(ctx context.Context, actor WebhookActor,
 		return nil, fmt.Errorf("webhook: update: %w", err)
 	}
 	s.publishChanged(ctx)
-	return existing, nil
+	return existing.Present(), nil
 }
 
 func (s *IncomingWebhookService) Delete(ctx context.Context, actor WebhookActor, id string) error {
@@ -354,11 +366,22 @@ func (s *IncomingWebhookService) ExecuteMessage(ctx context.Context, id string, 
 	if username == "" {
 		username = "webhook"
 	}
-	refs := s.newRefs()
-	body := refs.translate(ctx, payload.Text)
-	attachments := make([]model.MessageAttachment, len(payload.Attachments))
-	for i, a := range payload.Attachments {
-		attachments[i] = refs.sanitizeAttachment(ctx, a)
+	body, attachments, blocks, err := s.content(ctx, payload)
+	if err != nil {
+		return nil, err
+	}
+	// Buttons that call the app need the app's bot token: the webhook URL
+	// alone, which can leak, must not be enough to post a button that makes
+	// the real app act for whoever clicks it.
+	verified := false
+	if payload.BotToken != "" {
+		if !botTokenMatches(wh, payload.BotToken, time.Now()) {
+			return nil, apperr.Reject(ErrInvalidBotToken, "that bot token isn't this webhook's")
+		}
+		verified = true
+	}
+	if !verified && hasAppButtons(blocks, attachments) {
+		return nil, apperr.Reject(ErrBotTokenRequired, "buttons that call an app need the app's bot token (Authorization: Bearer)")
 	}
 	iconURL := payload.IconURL
 	iconEmoji := normalizeEmojiName(payload.IconEmoji)
@@ -394,17 +417,136 @@ func (s *IncomingWebhookService) ExecuteMessage(ctx context.Context, id string, 
 		Attachments:     attachments,
 		ParentMessageID: strings.TrimSpace(payload.RootID),
 		WebhookID:       wh.ID,
+		Blocks:          blocks,
+		AppButtons:      verified,
 	})
 }
 
-// errWebhookEmptyPayload rejects a payload with neither text nor attachments.
-var errWebhookEmptyPayload = apperr.Invalid("webhook: text or attachments required")
+// appContent is content for an app's answer to a click: checked like a post,
+// and its cards' images fetched into ex like a post's.
+func (s *IncomingWebhookService) appContent(ctx context.Context, payload IncomingWebhookPayload) (string, []model.MessageAttachment, model.Blocks, error) {
+	if err := validateWebhookPayload(payload); err != nil {
+		return "", nil, nil, err
+	}
+	body, attachments, blocks, err := s.content(ctx, payload)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	s.proxyImages(ctx, "", attachments)
+	return body, attachments, blocks, nil
+}
+
+// hasAppButtons reports whether blocks — a message's or its cards' — hold a
+// button that calls the app: one that is neither a link nor a built-in.
+func hasAppButtons(blocks model.Blocks, attachments []model.MessageAttachment) bool {
+	calls := func(bs model.Blocks) bool {
+		for _, b := range bs {
+			if b.Accessory != nil && b.Accessory.URL == "" && b.Accessory.ExAction == "" {
+				return true
+			}
+			for _, e := range b.Elements {
+				if e.Type == model.ElementButton && e.URL == "" && e.ExAction == "" {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if calls(blocks) {
+		return true
+	}
+	for _, a := range attachments {
+		if calls(a.Blocks) {
+			return true
+		}
+	}
+	return false
+}
+
+// PreviewMessage shows the actor what a payload would post — its text,
+// blocks and cards, normalized and checked exactly as Execute does — without
+// posting it. Images stay the payload's own URLs: nothing is fetched or
+// stored for a preview.
+func (s *IncomingWebhookService) PreviewMessage(ctx context.Context, actor WebhookActor, payload IncomingWebhookPayload) (*model.Message, error) {
+	if err := actor.check(); err != nil {
+		return nil, err
+	}
+	if err := validateWebhookPayload(payload); err != nil {
+		return nil, err
+	}
+	body, attachments, blocks, err := s.content(ctx, payload)
+	if err != nil {
+		return nil, err
+	}
+	username := strings.TrimSpace(payload.Username)
+	if username == "" {
+		username = "webhook"
+	}
+	return &model.Message{
+		ID:                 "preview",
+		AuthorID:           WebhookAuthorID,
+		Body:               body,
+		Blocks:             blocks,
+		MessageAttachments: attachments,
+		WebhookUsername:    username,
+		WebhookIconEmoji:   normalizeEmojiName(payload.IconEmoji),
+		CreatedAt:          time.Now(),
+	}, nil
+}
+
+// content turns a payload into what a message stores: its text with
+// mentions rewritten, its cards sanitized, its blocks normalized, and — when
+// it has no text — a fallback text drawn from the blocks.
+func (s *IncomingWebhookService) content(ctx context.Context, payload IncomingWebhookPayload) (string, []model.MessageAttachment, model.Blocks, error) {
+	refs := s.newRefs()
+	body := refs.translate(ctx, payload.Text)
+	attachments := make([]model.MessageAttachment, len(payload.Attachments))
+	for i, a := range payload.Attachments {
+		attachments[i] = refs.sanitizeAttachment(ctx, a)
+	}
+	blocks, err := s.blockNormalizer(ctx, refs).normalizeMessage(ctx, payload.Blocks, attachments)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if strings.TrimSpace(body) == "" {
+		body = blocksFallbackText(blocks, attachments)
+	}
+	return body, attachments, blocks, nil
+}
+
+// blockNormalizer normalizes one payload's blocks: their markdown is
+// rewritten like the payload's text, and allowed_users resolve by user ID
+// or exact email — never the search index, which a list of 50 names would
+// turn into 50 searches on an unauthenticated ingress.
+func (s *IncomingWebhookService) blockNormalizer(ctx context.Context, refs *webhookRefs) *blockNormalizer {
+	return newBlockNormalizer(
+		func(text string) string { return refs.translate(ctx, text) },
+		func(ctx context.Context, ref string) string {
+			if s.users == nil || ref == "" {
+				return ""
+			}
+			if u, err := s.users.GetByID(ctx, ref); err == nil && u != nil {
+				return u.ID
+			}
+			if strings.Contains(ref, "@") {
+				if u, err := s.users.GetByEmail(ctx, ref); err == nil && u != nil {
+					return u.ID
+				}
+			}
+			return ""
+		},
+	)
+}
+
+// errWebhookEmptyPayload rejects a payload with no text, attachments or
+// blocks.
+var errWebhookEmptyPayload = apperr.Invalid("webhook: text, attachments or blocks required")
 
 // validateWebhookPayload applies SendWebhook's payload limits before anything
 // is looked up or fetched for the payload. SendWebhook checks them again on
 // the translated result.
 func validateWebhookPayload(p IncomingWebhookPayload) error {
-	if p.Text == "" && len(p.Attachments) == 0 {
+	if p.Text == "" && len(p.Attachments) == 0 && len(p.Blocks) == 0 {
 		return errWebhookEmptyPayload
 	}
 	if err := ValidateAttachmentCount(len(p.Attachments)); err != nil {

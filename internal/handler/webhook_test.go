@@ -554,6 +554,16 @@ func (s *handlerWebhookMessageStore) UpdateMessage(_ context.Context, msg *model
 	return nil
 }
 
+func (s *handlerWebhookMessageStore) UpdateMessageIfVersion(_ context.Context, msg *model.Message, prevVersion int) error {
+	cur, ok := s.messages[msg.ParentID+"#"+msg.ID]
+	if !ok || cur.Version != prevVersion {
+		return store.ErrVersionConflict
+	}
+	cp := *msg
+	s.messages[msg.ParentID+"#"+msg.ID] = &cp
+	return nil
+}
+
 func (s *handlerWebhookMessageStore) DeleteMessage(_ context.Context, parentID, msgID string) error {
 	delete(s.messages, parentID+"#"+msgID)
 	return nil
@@ -746,10 +756,16 @@ func TestWebhookHandlerExecute_JSONResponseReturnsIDForThreading(t *testing.T) {
 		t.Fatalf("root status = %d body=%s", res.Code, res.Body.String())
 	}
 	var root struct {
-		ID string `json:"id"`
+		ID        string `json:"id"`
+		ChannelID string `json:"channel_id"`
 	}
 	if err := json.Unmarshal(res.Body.Bytes(), &root); err != nil || root.ID == "" {
 		t.Fatalf("root response = %q (err %v), want JSON with id", res.Body.String(), err)
+	}
+	// The channel is named too: an app needs both to update the post later
+	// (messages.update).
+	if root.ChannelID != "ch-general" {
+		t.Fatalf("root response channel_id = %q, want ch-general", root.ChannelID)
 	}
 
 	res = executeWebhook(h, `{"text":"still failing","root_id":"`+root.ID+`"}`, "application/json")

@@ -122,6 +122,9 @@ type MessageService struct {
 	// runLogPurger deletes agent-run activity logs when their chat is deleted.
 	// Optional seam (SetRunLogPurger) — nil leaves run logs untouched.
 	runLogPurger RunLogPurger
+	// apps receives clicks on app buttons (InteractionService); nil: no app
+	// gets clicks.
+	apps AppClicker
 	// channels reports whether a channel parent is archived (read-only).
 	// Optional seam (SetChannelReader) — nil skips the archived check.
 	channels ChannelReader
@@ -926,6 +929,11 @@ type WebhookMessageInput struct {
 	// WebhookID is the posting webhook, stamped on the message so its threads
 	// stay its own.
 	WebhookID string
+	// Blocks lay the message out; already normalized (blockNormalizer).
+	Blocks model.Blocks
+	// AppButtons: posted by the app with its bot token, so its app buttons
+	// reach it.
+	AppButtons bool
 }
 
 func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput) (*model.Message, error) {
@@ -947,8 +955,8 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 	if err := s.checkWritable(ctx, parentID, parentType); err != nil {
 		return nil, err
 	}
-	if in.Body == "" && len(in.Attachments) == 0 {
-		return nil, apperr.Invalid("message: body or attachments required")
+	if in.Body == "" && len(in.Attachments) == 0 && len(in.Blocks) == 0 {
+		return nil, apperr.Invalid("message: body, attachments or blocks required")
 	}
 	if err := ValidateMessageBody(in.Body); err != nil {
 		return nil, err
@@ -972,6 +980,8 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 		WebhookIconEmoji:   in.IconEmoji,
 		MessageAttachments: in.Attachments,
 		WebhookID:          in.WebhookID,
+		Blocks:             in.Blocks,
+		AppButtons:         in.AppButtons,
 		CreatedAt:          time.Now(),
 	}
 	if msg.WebhookUsername == "" {
@@ -2261,6 +2271,15 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 		}
 	}
 
+	return s.deleteLoaded(ctx, msg, userID, parentID, parentType)
+}
+
+// deleteLoaded deletes a message whose deletion was already allowed: it
+// tombstones it, closes its thread, and sweeps what pointed at it. actorID
+// is recorded as who deleted it (a user, or "app:<webhook>").
+func (s *MessageService) deleteLoaded(ctx context.Context, msg *model.Message, actorID, parentID, parentType string) error {
+	msgID := msg.ID
+	userID := actorID
 	if err := s.softDeleteMessage(ctx, msg, userID, parentID, parentType); err != nil {
 		return err
 	}

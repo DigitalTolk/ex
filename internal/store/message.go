@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
@@ -475,6 +477,37 @@ func (s *MessageStoreImpl) UpdateMessage(ctx context.Context, msg *model.Message
 			return ErrNotFound
 		}
 		return fmt.Errorf("store: update message: %w", err)
+	}
+	return nil
+}
+
+// ErrVersionConflict: the message changed since it was read — its Version is
+// no longer the one the change was made on. The caller re-reads and retries.
+var ErrVersionConflict = errors.New("store: message version changed")
+
+// UpdateMessageIfVersion writes msg only if the stored message still has
+// Version prevVersion (a missing version reads as 0), so two changes made at
+// once can't undo each other. msg carries its new version. A message changed
+// meanwhile, or gone, is ErrVersionConflict.
+func (s *MessageStoreImpl) UpdateMessageIfVersion(ctx context.Context, msg *model.Message, prevVersion int) error {
+	item := newMessageItem(msg.ParentID, msg)
+	av := mustAttrs(attributevalue.MarshalMap(item))
+	cond := "attribute_exists(PK) AND attribute_exists(SK) AND #v = :v"
+	if prevVersion == 0 {
+		cond = "attribute_exists(PK) AND attribute_exists(SK) AND (attribute_not_exists(#v) OR #v = :v)"
+	}
+	_, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:                 aws.String(s.Table),
+		Item:                      av,
+		ConditionExpression:       aws.String(cond),
+		ExpressionAttributeNames:  map[string]string{"#v": "version"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{":v": &types.AttributeValueMemberN{Value: strconv.Itoa(prevVersion)}},
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return ErrVersionConflict
+		}
+		return fmt.Errorf("store: update message if version: %w", err)
 	}
 	return nil
 }

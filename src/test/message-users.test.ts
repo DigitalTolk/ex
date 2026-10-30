@@ -198,3 +198,22 @@ describe('isOwnMessage', () => {
     expect(isOwnMessage(msg({ authorID: 'u-me' }), undefined)).toBe(false);
   });
 });
+
+describe('collectMessageUserIDs: built-in actions', () => {
+  it('includes whoever acknowledged or voted, so their names can show', () => {
+    const ids = collectMessageUserIDs([
+      {
+        id: 'm1',
+        parentID: 'ch',
+        authorID: 'webhook',
+        body: '',
+        createdAt: '2026-10-30T10:00:00Z',
+        actionTallies: [
+          { blockID: 'b1', actionID: 'ack', userIDs: ['u-alice'], at: '2026-10-30T10:00:00Z' },
+          { blockID: 'b1', actionID: 'vote', userIDs: ['u-bob', 'u-alice'], at: '2026-10-30T10:00:00Z' },
+        ],
+      },
+    ]);
+    expect(ids.sort()).toEqual(['u-alice', 'u-bob', 'webhook']);
+  });
+});

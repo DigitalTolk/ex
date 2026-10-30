@@ -178,6 +178,9 @@ func (handlerMessageStore) GetMessage(_ context.Context, parentID, msgID string)
 	return nil, store.ErrNotFound
 }
 func (handlerMessageStore) UpdateMessage(context.Context, *model.Message) error { return nil }
+func (handlerMessageStore) UpdateMessageIfVersion(context.Context, *model.Message, int) error {
+	return nil
+}
 func (handlerMessageStore) DeleteMessage(context.Context, string, string) error { return nil }
 func (handlerMessageStore) ListMessages(context.Context, string, string, int) ([]*model.Message, bool, error) {
 	return nil, false, nil

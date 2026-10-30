@@ -82,6 +82,9 @@ type MessageStore interface {
 	CreateMessage(ctx context.Context, msg *model.Message) error
 	GetMessage(ctx context.Context, parentID, msgID string) (*model.Message, error)
 	UpdateMessage(ctx context.Context, msg *model.Message) error
+	// UpdateMessageIfVersion writes msg only over the stored Version
+	// prevVersion; otherwise store.ErrVersionConflict.
+	UpdateMessageIfVersion(ctx context.Context, msg *model.Message, prevVersion int) error
 	DeleteMessage(ctx context.Context, parentID, msgID string) error
 	ListMessages(ctx context.Context, parentID string, before string, limit int) ([]*model.Message, bool, error)
 	// ListThreadReplies returns every reply to a thread root via the GSI1
