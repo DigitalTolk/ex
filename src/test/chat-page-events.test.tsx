@@ -243,6 +243,26 @@ describe('ChatPage WebSocket handlers', () => {
     expect(unhideConversation).not.toHaveBeenCalled();
   });
 
+  it('onMessageNew moves a channel up the "Recent activity" sort for top-level posts only', () => {
+    const { qc } = renderAt('/', (seed) => {
+      seed.setQueryData(['userChannels'], [{ channelID: 'ch-1', channelName: 'general' }]);
+      seed.setQueryData(['userConversations'], [{ conversationID: 'dm-1', type: 'dm', displayName: 'Amy' }]);
+    });
+    const handler = capturedOptions.onMessageNew as (d: unknown) => void;
+    const lastMessageAt = () =>
+      qc.getQueryData<Array<{ lastMessageAt?: string }>>(['userChannels'])![0].lastMessageAt;
+
+    // A thread reply, a system line and a DM are not the channel's activity.
+    handler(msg({ id: 'reply', parentMessageID: 'root', createdAt: '2026-10-29T09:00:00Z' }));
+    handler(msg({ id: 'joined', system: true, createdAt: '2026-10-29T09:01:00Z' }));
+    handler(msg({ id: 'dm', parentID: 'dm-1', parentType: 'conversation', createdAt: '2026-10-29T09:02:00Z' }));
+    expect(lastMessageAt()).toBeUndefined();
+
+    // Your own post counts as much as anyone's.
+    handler(msg({ id: 'mine', authorID: 'u-me', createdAt: '2026-10-29T09:03:00Z' }));
+    expect(lastMessageAt()).toBe('2026-10-29T09:03:00Z');
+  });
+
   it('onMessageNew marks unread for a webhook message authored by the current user', () => {
     // A webhook carries its creator's userID as authorID, but the bot posted
     // it — so the creator must still get the unread badge (matching the desktop

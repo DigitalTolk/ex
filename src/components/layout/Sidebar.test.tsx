@@ -266,6 +266,28 @@ function renderSidebar(onClose = vi.fn()) {
   );
 }
 
+// serveSidebarSorts answers /user-state with these saved section sorts, on
+// top of whatever the test's apiFetch mock already answers.
+function serveSidebarSorts(sorts: Record<string, 'recent' | 'az'>) {
+  const inner = mockApiFetch.getMockImplementation();
+  mockApiFetch.mockImplementation(async (url: string, ...rest: unknown[]) => {
+    if (url === '/api/v1/user-state') {
+      return { threadNotifications: [], threadSeen: {}, hiddenConversations: [], hiddenSkills: [], sidebarSorts: sorts };
+    }
+    return inner?.(url, ...rest);
+  });
+}
+
+// savedSorts lists the section sorts the sidebar saved, in order.
+function savedSorts(): Array<[string, string]> {
+  return mockApiFetch.mock.calls
+    .filter(([url]) => String(url).startsWith('/api/v1/user-state/sidebar-sorts/'))
+    .map(([url, init]) => [
+      decodeURIComponent(String(url).split('/').pop()!),
+      JSON.parse((init as { body: string }).body).sort,
+    ]);
+}
+
 // Phone width is a touch device; the wide layout is a mouse device unless a
 // test pins touch itself (iPad). Drag-to-reorder follows the device, not width.
 function setMobileMatch(matches: boolean) {
@@ -484,23 +506,24 @@ describe('Sidebar', () => {
     expect(screen.getByLabelText('New direct message')).toBeInTheDocument();
   });
 
-  it('initializes the DM sort from the stored az preference', () => {
+  it("keeps this device's old DM sort until one is saved for the user", async () => {
     localStorage.setItem('sidebar.conversationSort', 'az');
+    const user = userEvent.setup();
     renderSidebar();
-    // The az-preference branch of the lazy initializer runs without error.
-    expect(screen.getByText('Direct Messages')).toBeInTheDocument();
+    await user.click(screen.getByLabelText('Sort direct messages'));
+    expect(within(await screen.findByTestId('sidebar-dm-sort-az')).getByTestId('sidebar-sort-selected')).toBeInTheDocument();
   });
 
-  it('persists the DM sort preference when changed via the sort menu', async () => {
+  it('saves the DM sort for the user when changed via the sort menu', async () => {
     const user = userEvent.setup();
     renderSidebar();
     await user.click(screen.getByLabelText('Sort direct messages'));
     await user.click(await screen.findByText('A-Z'));
-    expect(localStorage.getItem('sidebar.conversationSort')).toBe('az');
+    expect(savedSorts()).toEqual([['__dms__', 'az']]);
 
     await user.click(screen.getByLabelText('Sort direct messages'));
     await user.click(await screen.findByText('Recent activity'));
-    expect(localStorage.getItem('sidebar.conversationSort')).toBe('recent');
+    expect(savedSorts()).toEqual([['__dms__', 'az'], ['__dms__', 'recent']]);
   });
 
   it('shows unread indicator for channels', () => {
@@ -1882,17 +1905,216 @@ describe('Sidebar', () => {
     await user.click(screen.getByTestId('sidebar-dm-sort-menu'));
     await user.click(await screen.findByText('A-Z'));
 
-    expect(localStorage.getItem('sidebar.conversationSort')).toBe('az');
+    expect(savedSorts()).toEqual([['__dms__', 'az']]);
     const labels = screen.getAllByRole('link').map((link) => link.textContent ?? '');
     expect(labels.findIndex((text) => text.includes('Amy'))).toBeLessThan(
       labels.findIndex((text) => text.includes('Zoe')),
     );
   });
 
+  it('sorts channels by recent activity from the Channels menu and remembers it', async () => {
+    mockChannels = [
+      { ...baseMockChannels[0], lastMessageAt: '2026-10-28T09:00:00Z' },
+      { ...baseMockChannels[1], lastMessageAt: '2026-10-29T09:00:00Z' },
+      { ...baseMockChannels[2] },
+    ];
+    const order = () => screen.getAllByTestId(/^channel-row-ch-/).map((row) => row.dataset.testid);
+    const user = userEvent.setup();
+    renderSidebar();
+    // Default: A-Z (general, My Cool Channel!, secret).
+    expect(order()).toEqual(['channel-row-ch-1', 'channel-row-ch-3', 'channel-row-ch-2']);
+
+    await user.click(screen.getByTestId('sidebar-channel-sort-menu'));
+    expect(within(await screen.findByTestId('sidebar-channel-sort-az')).getByTestId('sidebar-sort-selected')).toBeInTheDocument();
+    await user.click(screen.getByTestId('sidebar-channel-sort-recent'));
+
+    expect(savedSorts()).toEqual([['__channels__', 'recent']]);
+    // Latest message first; the channel nobody has posted in goes last.
+    expect(order()).toEqual(['channel-row-ch-2', 'channel-row-ch-1', 'channel-row-ch-3']);
+    await user.click(screen.getByTestId('sidebar-channel-sort-menu'));
+    expect(within(await screen.findByTestId('sidebar-channel-sort-recent')).getByTestId('sidebar-sort-selected')).toBeInTheDocument();
+    expect(within(screen.getByTestId('sidebar-channel-sort-az')).queryByTestId('sidebar-sort-selected')).toBeNull();
+
+    await user.click(screen.getByTestId('sidebar-channel-sort-az'));
+    expect(savedSorts()).toEqual([['__channels__', 'recent'], ['__channels__', 'az']]);
+    expect(order()).toEqual(['channel-row-ch-1', 'channel-row-ch-3', 'channel-row-ch-2']);
+  });
+
+  it('offers guests the channel sort without the create button', () => {
+    mockUser.systemRole = 'guest';
+    renderSidebar();
+    expect(screen.getByTestId('sidebar-channel-sort-menu')).toHaveClass('opacity-0', 'mobile:hidden');
+    expect(screen.queryByTestId('sidebar-create-channel')).not.toBeInTheDocument();
+  });
+
+  it('switches channels to the hand-picked order when one is dragged within its section', async () => {
+    serveSidebarSorts({ __channels__: 'recent' });
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+    // Recent activity: the channels nobody has posted in, A-Z.
+    await waitFor(() => expect(screen.getAllByTestId(/^channel-row-ch-/)[0].dataset.testid).toBe('channel-row-ch-1'));
+
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-3'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-3'), { dataTransfer });
+    fireEvent.drop(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
+
+    await waitFor(() => {
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-3', section: 'channels' });
+    });
+    expect(savedSorts()).toEqual([['__channels__', 'az']]);
+  });
+
+  it("keeps a section's recent-activity sort when rows are reordered elsewhere or move out", async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [{ id: 'cat-eng', name: 'Engineering', position: 0 }];
+      return undefined;
+    });
+    serveSidebarSorts({ __channels__: 'recent' });
+    mockChannels = [
+      { ...baseMockChannels[0], favorite: true },
+      { ...baseMockChannels[1], favorite: true },
+      { ...baseMockChannels[2] },
+    ];
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    renderSidebar();
+
+    // Reordering Favorites (already in the user's order).
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-2'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
+    fireEvent.drop(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
+    await waitFor(() => {
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-2', section: 'favorites' });
+    });
+
+    // Moving a channel into a category.
+    await screen.findByText('Engineering');
+    const header = screen.getByTestId('sidebar-group-header-cat-eng');
+    mockRect(header, { top: -20, bottom: 0 });
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-3'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-3'), { dataTransfer });
+    fireDragOver(header, dataTransfer, 19);
+    fireDrop(header, dataTransfer, 19);
+    await waitFor(() => {
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-3', section: 'category', categoryID: 'cat-eng' });
+    });
+
+    // Favorites was already in the user's order; Channels keeps its sort.
+    expect(savedSorts()).toEqual([]);
+  });
+
+  it("sorts a category by recent activity from the category's menu", async () => {
+    mockApiFetch.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/sidebar/categories') return [{ id: 'cat-eng', name: 'Engineering', position: 0 }];
+      return undefined;
+    });
+    mockChannels = [
+      { ...baseMockChannels[0], categoryID: 'cat-eng', lastMessageAt: '2026-10-28T09:00:00Z' },
+      { ...baseMockChannels[1], categoryID: 'cat-eng', lastMessageAt: '2026-10-29T09:00:00Z' },
+      { ...baseMockChannels[2] },
+    ];
+    const inCategory = () =>
+      within(screen.getByTestId('sidebar-group-cat-eng'))
+        .getAllByTestId(/^channel-row-ch-/)
+        .map((row) => row.dataset.testid);
+    const user = userEvent.setup();
+    renderSidebar();
+    await screen.findByText('Engineering');
+    expect(inCategory()).toEqual(['channel-row-ch-1', 'channel-row-ch-2']);
+
+    await user.click(screen.getByTestId('sidebar-category-menu-cat-eng'));
+    expect(
+      within(await screen.findByTestId('sidebar-category-sort-cat-eng-az')).getByTestId('sidebar-sort-selected'),
+    ).toBeInTheDocument();
+    await user.click(screen.getByTestId('sidebar-category-sort-cat-eng-recent'));
+
+    expect(savedSorts()).toEqual([['cat-eng', 'recent']]);
+    expect(inCategory()).toEqual(['channel-row-ch-2', 'channel-row-ch-1']);
+    // Choosing the sort a section already has changes nothing.
+    await user.click(screen.getByTestId('sidebar-category-menu-cat-eng'));
+    await user.click(await screen.findByTestId('sidebar-category-sort-cat-eng-recent'));
+    expect(savedSorts()).toEqual([['cat-eng', 'recent']]);
+  });
+
+  it('sorts Favorites by recent activity, until a favorite is dragged into place', async () => {
+    mockChannels = [
+      { ...baseMockChannels[0], favorite: true, lastMessageAt: '2026-10-28T09:00:00Z' },
+      { ...baseMockChannels[1], favorite: true, lastMessageAt: '2026-10-29T09:00:00Z' },
+      { ...baseMockChannels[2] },
+    ];
+    const favorites = () =>
+      within(screen.getByTestId('sidebar-group-__favorites__'))
+        .getAllByTestId(/^channel-row-ch-/)
+        .map((row) => row.dataset.testid);
+    const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn(), getData: vi.fn() };
+    const user = userEvent.setup();
+    renderSidebar();
+    expect(screen.getByTestId('sidebar-favorites-sort-menu')).toHaveClass('opacity-0', 'mobile:hidden');
+    expect(favorites()).toEqual(['channel-row-ch-1', 'channel-row-ch-2']);
+
+    await user.click(screen.getByTestId('sidebar-favorites-sort-menu'));
+    await user.click(await screen.findByTestId('sidebar-favorites-sort-recent'));
+    expect(savedSorts()).toEqual([['__favorites__', 'recent']]);
+    expect(favorites()).toEqual(['channel-row-ch-2', 'channel-row-ch-1']);
+
+    fireEvent.pointerDown(screen.getByTestId('channel-row-ch-1'));
+    fireEvent.dragStart(screen.getByTestId('channel-row-ch-1'), { dataTransfer });
+    fireEvent.drop(screen.getByTestId('channel-row-ch-2'), { dataTransfer });
+    await waitFor(() => {
+      expect(lastMoveBody()).toMatchObject({ itemID: 'ch-1', section: 'favorites' });
+    });
+    expect(savedSorts()).toEqual([['__favorites__', 'recent'], ['__favorites__', 'az']]);
+  });
+
+  it('sorts direct messages from the same kind of menu', async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    await user.click(screen.getByTestId('sidebar-dm-sort-menu'));
+    expect(
+      within(await screen.findByTestId('sidebar-dm-sort-recent')).getByTestId('sidebar-sort-selected'),
+    ).toBeInTheDocument();
+    await user.click(screen.getByTestId('sidebar-dm-sort-az'));
+    expect(savedSorts()).toEqual([['__dms__', 'az']]);
+  });
+
   it('keeps the create-channel affordance hidden for guests', () => {
     mockUser.systemRole = 'guest';
     renderSidebar();
     expect(screen.queryByLabelText('Create channel')).not.toBeInTheDocument();
+  });
+
+  it('opens with the sorts saved for the user, on any device', async () => {
+    mockChannels = [
+      { ...baseMockChannels[0], lastMessageAt: '2026-10-28T09:00:00Z' },
+      { ...baseMockChannels[1], lastMessageAt: '2026-10-29T09:00:00Z' },
+      { ...baseMockChannels[2] },
+    ];
+    serveSidebarSorts({ __channels__: 'recent', __dms__: 'az' });
+    renderSidebar();
+    await waitFor(() =>
+      expect(screen.getAllByTestId(/^channel-row-ch-/).map((row) => row.dataset.testid)).toEqual([
+        'channel-row-ch-2',
+        'channel-row-ch-1',
+        'channel-row-ch-3',
+      ]),
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('sidebar-dm-sort-menu'));
+    expect(within(await screen.findByTestId('sidebar-dm-sort-az')).getByTestId('sidebar-sort-selected')).toBeInTheDocument();
+  });
+
+  it('refetches the saved sorts when saving one fails', async () => {
+    const inner = mockApiFetch.getMockImplementation();
+    mockApiFetch.mockImplementation(async (url: string, ...rest: unknown[]) => {
+      if (String(url).startsWith('/api/v1/user-state/sidebar-sorts/')) throw new Error('offline');
+      return inner?.(url, ...rest);
+    });
+    const user = userEvent.setup();
+    renderSidebar();
+    await user.click(screen.getByTestId('sidebar-channel-sort-menu'));
+    const userStateFetches = () => mockApiFetch.mock.calls.filter(([url]) => url === '/api/v1/user-state').length;
+    const before = userStateFetches();
+    await user.click(await screen.findByTestId('sidebar-channel-sort-recent'));
+    await waitFor(() => expect(userStateFetches()).toBeGreaterThan(before));
   });
 
   it('opens every section when the remembered collapsed list is unreadable', () => {
@@ -1979,6 +2201,28 @@ describe('Sidebar unread view', () => {
     await toggle(user, 'sidebar-unread-section-toggle');
     expect(unreadGroup()).toBeNull();
     expect(localStorage.getItem('sidebar.unreadSection')).toBe('0');
+  });
+
+  it('sorts the Unread section by recent activity from its menu', async () => {
+    localStorage.setItem('sidebar.unreadSection', '1');
+    mockChannels = [
+      { ...baseMockChannels[0], unread: true, lastMessageAt: '2026-10-28T09:00:00Z' },
+      { ...baseMockChannels[1], unread: true, lastMessageAt: '2026-10-29T09:00:00Z' },
+      { ...baseMockChannels[2] },
+    ];
+    const unreadOrder = () => within(unreadGroup()!).getAllByTestId(/^channel-row-ch-/).map((row) => row.dataset.testid);
+    const user = userEvent.setup();
+    renderSidebar();
+    expect(unreadOrder()).toEqual(['channel-row-ch-1', 'channel-row-ch-2']);
+
+    await user.click(screen.getByTestId('sidebar-unread-sort-menu'));
+    const own = await screen.findByTestId('sidebar-unread-sort-az');
+    expect(own).toHaveTextContent('A-Z');
+    expect(within(own).getByTestId('sidebar-sort-selected')).toBeInTheDocument();
+    await user.click(screen.getByTestId('sidebar-unread-sort-recent'));
+
+    expect(savedSorts()).toEqual([['__unread__', 'recent']]);
+    expect(unreadOrder()).toEqual(['channel-row-ch-2', 'channel-row-ch-1']);
   });
 
   it('hides an empty Unread section', () => {

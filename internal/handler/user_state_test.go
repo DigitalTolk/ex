@@ -440,3 +440,81 @@ func TestUserStateHandler_SkillHiddenErrors(t *testing.T) {
 		t.Fatalf("store failure status = %d", rec.Code)
 	}
 }
+
+// categoryListerStub satisfies the handler's categoryLister seam.
+type categoryListerStub struct {
+	cats []*model.UserChannelCategory
+	err  error
+}
+
+func (s categoryListerStub) List(context.Context, string) ([]*model.UserChannelCategory, error) {
+	return s.cats, s.err
+}
+
+func TestUserStateHandler_SetSidebarSort(t *testing.T) {
+	stateSvc := service.NewUserStateService(newMockUserStateStoreForHandler(), nil)
+	handler := NewUserStateHandler(stateSvc, nil, nil)
+	handler.SetCategoryLister(categoryListerStub{cats: []*model.UserChannelCategory{{ID: "cat-1"}}})
+	put := func(section, body string) int {
+		req := userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/sidebar-sorts/"+section, bytes.NewBufferString(body), "u-1")
+		req.SetPathValue("section", section)
+		rec := httptest.NewRecorder()
+		handler.SetSidebarSort(rec, req)
+		return rec.Code
+	}
+
+	// A built-in section and one of the caller's categories are remembered.
+	if code := put("__channels__", `{"sort":"recent"}`); code != http.StatusNoContent {
+		t.Fatalf("built-in section status = %d", code)
+	}
+	if code := put("cat-1", `{"sort":"az"}`); code != http.StatusNoContent {
+		t.Fatalf("own category status = %d", code)
+	}
+	state, err := stateSvc.List(context.Background(), "u-1")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	want := map[string]model.SidebarSort{"__channels__": model.SidebarSortRecent, "cat-1": model.SidebarSortAZ}
+	if len(state.SidebarSorts) != 2 || state.SidebarSorts["__channels__"] != want["__channels__"] || state.SidebarSorts["cat-1"] != want["cat-1"] {
+		t.Fatalf("sidebar sorts = %#v", state.SidebarSorts)
+	}
+	// Changing a section's sort replaces its row.
+	if code := put("__channels__", `{"sort":"az"}`); code != http.StatusNoContent {
+		t.Fatalf("change status = %d", code)
+	}
+	if state, _ := stateSvc.List(context.Background(), "u-1"); state.SidebarSorts["__channels__"] != model.SidebarSortAZ {
+		t.Fatalf("changed sort = %#v", state.SidebarSorts)
+	}
+
+	// Only the two sorts, in a readable body.
+	for _, body := range []string{`{"sort":"newest"}`, `{}`, `not json`} {
+		if code := put("__channels__", body); code != http.StatusBadRequest {
+			t.Fatalf("body %q status = %d", body, code)
+		}
+	}
+	// Somebody else's (or a deleted) category is not a section of yours.
+	if code := put("cat-other", `{"sort":"recent"}`); code != http.StatusNotFound {
+		t.Fatalf("unknown section status = %d", code)
+	}
+	// A failing category lookup surfaces as 500.
+	handler.SetCategoryLister(categoryListerStub{err: errors.New("dynamo down")})
+	if code := put("cat-1", `{"sort":"recent"}`); code != http.StatusInternalServerError {
+		t.Fatalf("lookup failure status = %d", code)
+	}
+
+	// Unauthenticated.
+	rec := httptest.NewRecorder()
+	handler.SetSidebarSort(rec, httptest.NewRequest(http.MethodPut, "/api/v1/user-state/sidebar-sorts/__channels__", bytes.NewBufferString(`{"sort":"az"}`)))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth status = %d", rec.Code)
+	}
+	// A store failure surfaces as 500.
+	broken := NewUserStateHandler(service.NewUserStateService(failingUserStateStore{}, nil), nil, nil)
+	req := userStateAuthedRequest(http.MethodPut, "/api/v1/user-state/sidebar-sorts/__dms__", bytes.NewBufferString(`{"sort":"az"}`), "u-1")
+	req.SetPathValue("section", "__dms__")
+	rec = httptest.NewRecorder()
+	broken.SetSidebarSort(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("store failure status = %d", rec.Code)
+	}
+}

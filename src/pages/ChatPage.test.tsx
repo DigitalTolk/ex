@@ -23,6 +23,7 @@ vi.mock('@/lib/unread-cache', () => ({
   bumpChannelUnread: mockBumpChannelUnread,
   bumpConversationUnread: mockBumpConversationUnread,
   clearConversationUnreadInCache: vi.fn(),
+  touchChannelActivityInCache: vi.fn(),
   cachedUnreadCount: vi.fn(() => 0),
 }));
 

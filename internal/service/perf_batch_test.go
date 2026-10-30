@@ -527,6 +527,39 @@ func TestChannelListUserChannels_BatchedMetaRead(t *testing.T) {
 	}
 }
 
+// Each row carries its channel's last top-level message time — the sidebar's
+// "Recent activity" sort — on the batched read and the per-channel fallback.
+func TestChannelListUserChannels_StampsLastMessageAt(t *testing.T) {
+	channels := &batchMockChannelStore{mockChannelStore: newMockChannelStore()}
+	memberships := newMockMembershipStore()
+	svc := NewChannelService(channels, memberships, nil, nil, nil, nil, nil)
+
+	at := time.Date(2026, 10, 29, 9, 30, 0, 0, time.UTC)
+	channels.channels["ch-busy"] = &model.Channel{ID: "ch-busy", LastMessageAt: &at}
+	channels.channels["ch-quiet"] = &model.Channel{ID: "ch-quiet"}
+	memberships.userChannels = []*model.UserChannel{
+		{UserID: "u-1", ChannelID: "ch-busy"},
+		{UserID: "u-1", ChannelID: "ch-quiet"},
+	}
+
+	for _, path := range []struct {
+		name string
+		err  error
+	}{{"batched", nil}, {"fallback", errors.New("dynamo down")}} {
+		channels.batchErr = path.err
+		got, err := svc.ListUserChannels(context.Background(), "u-1")
+		if err != nil || len(got) != 2 {
+			t.Fatalf("%s: rows = %v, err = %v", path.name, got, err)
+		}
+		if got[0].LastMessageAt == nil || !got[0].LastMessageAt.Equal(at) {
+			t.Errorf("%s: ch-busy lastMessageAt = %v, want %v", path.name, got[0].LastMessageAt, at)
+		}
+		if got[1].LastMessageAt != nil {
+			t.Errorf("%s: ch-quiet lastMessageAt = %v, want unset", path.name, got[1].LastMessageAt)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Thread-participation index
 // ---------------------------------------------------------------------------

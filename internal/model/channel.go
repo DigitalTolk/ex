@@ -57,4 +57,9 @@ type Channel struct {
 	// without per-member writes or count queries. Starts at 0, so on rollout
 	// every member is "caught up" and only new messages count — no backfill.
 	MessageSeq int64 `json:"messageSeq,omitempty" dynamodbav:"messageSeq,omitempty"`
+	// LastMessageAt is when the last top-level human message was posted —
+	// stamped by the same write that bumps MessageSeq. The sidebar's "Recent
+	// activity" sort orders channels by it. Unset on a channel nobody has
+	// posted in since it was introduced; those sort after the active ones.
+	LastMessageAt *time.Time `json:"lastMessageAt,omitempty" dynamodbav:"lastMessageAt,omitempty"`
 }

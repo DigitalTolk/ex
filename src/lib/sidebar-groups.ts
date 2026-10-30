@@ -15,9 +15,18 @@ export interface SidebarSection {
 }
 
 export type ConversationSidebarSort = 'recent' | 'az';
+// How a section orders its rows. 'az' is the user's own order (drag-and-drop),
+// then A-Z; 'recent' puts the chat with the latest top-level message first,
+// channels and DMs mixed.
+export type SectionSort = 'recent' | 'az';
 
 export interface SidebarGroupOptions {
+  // The Direct Messages section's order.
   conversationSort?: ConversationSidebarSort;
+  // Every other section's order, by section key (a category's ID, or
+  // Favorites / Channels / Unread); a section not listed is 'az'. Unread has
+  // no order of the user's own, so its 'az' is A-Z alone.
+  sectionSorts?: Record<string, SectionSort>;
   // Pull every unread channel/DM into an "Unread" section at the top
   // (Mattermost's "group unread separately"), out of its usual section.
   unreadSection?: boolean;
@@ -30,6 +39,11 @@ export interface SidebarGroupOptions {
   // if it was unread when opened, until the user leaves it.
   stickyUnreadID?: string;
 }
+
+// One collator for every name comparison. localeCompare with options builds a
+// new collator on each call, which made regrouping ~1000 channels (it runs on
+// every arriving message) cost ~11ms; a shared one orders identically.
+const byName = new Intl.Collator(undefined, { sensitivity: 'base' }).compare;
 
 const UNREAD_KEY = '__unread__';
 const FAVORITES_KEY = '__favorites__';
@@ -50,6 +64,11 @@ export const SidebarSectionKeys = {
 //   - "Channels": uncategorised, unfavorited channels.
 //   - "Direct Messages": uncategorised, unfavorited DMs/groups.
 //
+// Each section but Direct Messages sorts on its own (sectionSorts): in the
+// user's order — Favorites mixes channels and DMs by position, a category
+// lists its channels by position, then its DMs A-Z — or by recent activity.
+// Direct Messages follows conversationSort.
+//
 // A favorited item appears ONLY in Favorites — never duplicated under
 // its category. Stale categoryIDs (deleted category) fall through to
 // the appropriate default section, which the delete flow relies on.
@@ -65,16 +84,26 @@ export function groupSidebarItems(
   const sections: SidebarSection[] = [];
   const channels = allChannels.filter((c) => !c.archived);
   const conversationSort = options.conversationSort ?? 'recent';
+  const sortOf = (key: string): SectionSort => options.sectionSorts?.[key] ?? 'az';
   const sortedChannels = [...channels].sort(compareChannels);
   const sortedConversations = [...conversations].sort((a, b) =>
     compareConversations(a, b, conversationSort),
   );
+  const conversationsAZ = [...conversations].sort((a, b) => byName(a.displayName, b.displayName));
+  // A section on 'recent' reorders the rows it was handed, newest first.
+  let activity: Map<string, number> | undefined;
+  const ordered = (key: string, items: SidebarItem[]): SidebarItem[] => {
+    if (sortOf(key) !== 'recent') return items;
+    activity ??= activityByID(channels, conversations);
+    const at = activity;
+    return items.sort((a, b) => at.get(sidebarItemID(b))! - at.get(sidebarItemID(a))! || byName(itemLabel(a), itemLabel(b)));
+  };
 
   const favItems: SidebarItem[] = [
     ...sortedChannels.filter((c) => c.favorite).map((c): SidebarItem => ({ kind: 'channel', channel: c })),
     ...sortedConversations.filter((c) => c.favorite).map((c): SidebarItem => ({ kind: 'conversation', conversation: c })),
   ].sort(compareSidebarItems);
-  sections.push({ key: FAVORITES_KEY, title: 'Favorites', items: favItems });
+  sections.push({ key: FAVORITES_KEY, title: 'Favorites', items: ordered(FAVORITES_KEY, favItems) });
 
   const sortedCats = [...categories].sort((a, b) => {
     if (a.position !== b.position) return a.position - b.position;
@@ -86,11 +115,11 @@ export function groupSidebarItems(
       ...sortedChannels
         .filter((c) => !c.favorite && c.categoryID === cat.id)
         .map((c): SidebarItem => ({ kind: 'channel', channel: c })),
-      ...sortedConversations
+      ...conversationsAZ
         .filter((c) => !c.favorite && c.categoryID === cat.id)
         .map((c): SidebarItem => ({ kind: 'conversation', conversation: c })),
     ];
-    sections.push({ key: cat.id, title: cat.name, category: cat, items });
+    sections.push({ key: cat.id, title: cat.name, category: cat, items: ordered(cat.id, items) });
   }
 
   // Default Channels: unfavorited and either uncategorised or pointing at
@@ -98,19 +127,25 @@ export function groupSidebarItems(
   const channelsDefault = sortedChannels
     .filter((c) => !c.favorite && (!c.categoryID || !knownCategoryIDs.has(c.categoryID)))
     .map((c): SidebarItem => ({ kind: 'channel', channel: c }));
-  sections.push({ key: CHANNELS_DEFAULT_KEY, title: 'Channels', items: channelsDefault });
+  sections.push({ key: CHANNELS_DEFAULT_KEY, title: 'Channels', items: ordered(CHANNELS_DEFAULT_KEY, channelsDefault) });
 
   const dmsDefault = sortedConversations
     .filter((c) => !c.favorite && (!c.categoryID || !knownCategoryIDs.has(c.categoryID)))
     .map((c): SidebarItem => ({ kind: 'conversation', conversation: c }));
   sections.push({ key: DMS_DEFAULT_KEY, title: 'Direct Messages', items: dmsDefault });
 
-  return applyUnreadView(sections, options);
+  return applyUnreadView(sections, options, (items) =>
+    sortOf(UNREAD_KEY) === 'recent' ? ordered(UNREAD_KEY, items) : items.sort((a, b) => byName(itemLabel(a), itemLabel(b))),
+  );
 }
 
 // applyUnreadView layers the unread options over the grouped sections. The
-// Unread section keeps sidebar order (favorites, categories, channels, DMs).
-function applyUnreadView(sections: SidebarSection[], options: SidebarGroupOptions): SidebarSection[] {
+// Unread section gathers its rows from the others; orderUnread sorts them.
+function applyUnreadView(
+  sections: SidebarSection[],
+  options: SidebarGroupOptions,
+  orderUnread: (items: SidebarItem[]) => SidebarItem[],
+): SidebarSection[] {
   const { unreadSection, unreadOnly, activeID, stickyUnreadID } = options;
   if (!unreadSection && !unreadOnly) return sections;
   const inUnread = (item: SidebarItem) => {
@@ -121,7 +156,7 @@ function applyUnreadView(sections: SidebarSection[], options: SidebarGroupOption
   if (unreadSection) {
     const unread = out.flatMap((section) => section.items.filter(inUnread));
     out = [
-      { key: UNREAD_KEY, title: 'Unread', items: unread },
+      { key: UNREAD_KEY, title: 'Unread', items: orderUnread(unread) },
       ...out.map((section) => ({ ...section, items: section.items.filter((item) => !inUnread(item)) })),
     ];
   }
@@ -152,7 +187,7 @@ export function sidebarItemID(item: SidebarItem): string {
 function compareSidebarItems(a: SidebarItem, b: SidebarItem): number {
   const pos = compareSparsePosition(itemPosition(a), itemPosition(b));
   if (pos !== 0) return pos;
-  return itemLabel(a).localeCompare(itemLabel(b), undefined, { sensitivity: 'base' });
+  return byName(itemLabel(a), itemLabel(b));
 }
 
 function itemPosition(item: SidebarItem): number | undefined {
@@ -167,10 +202,21 @@ function itemLabel(item: SidebarItem): string {
     : item.conversation.displayName;
 }
 
+// activityByID is each chat's latest top-level message time, parsed once per
+// chat rather than once per comparison: a channel's lastMessageAt, a DM's
+// updatedAt. 0 = never posted in, so after every active one.
+function activityByID(channels: UserChannel[], conversations: UserConversation[]): Map<string, number> {
+  const at = new Map<string, number>();
+  for (const c of channels) at.set(c.channelID, Date.parse(c.lastMessageAt ?? '') || 0);
+  for (const c of conversations) at.set(c.conversationID, Date.parse(c.updatedAt ?? '') || 0);
+  return at;
+}
+
+// compareChannels orders by the user's own positions, then A-Z.
 function compareChannels(a: UserChannel, b: UserChannel): number {
   const pos = compareSparsePosition(a.sidebarPosition, b.sidebarPosition);
   if (pos !== 0) return pos;
-  return a.channelName.localeCompare(b.channelName, undefined, { sensitivity: 'base' });
+  return byName(a.channelName, b.channelName);
 }
 
 function compareConversations(
@@ -179,7 +225,7 @@ function compareConversations(
   sort: ConversationSidebarSort,
 ): number {
   if (sort === 'az') {
-    return a.displayName.localeCompare(b.displayName, undefined, { sensitivity: 'base' });
+    return byName(a.displayName, b.displayName);
   }
   const aTime = Date.parse(a.updatedAt ?? '');
   const bTime = Date.parse(b.updatedAt ?? '');

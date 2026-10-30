@@ -156,6 +156,7 @@ let mockUserState: {
   channelNotifications: string[];
   threadNotifications: string[];
   threadSeen: Record<string, string>;
+  sidebarSorts?: Record<string, 'recent' | 'az'>;
 } | undefined = {
   hiddenConversations: [],
   channelNotifications: [],
@@ -698,7 +699,11 @@ describe('Sidebar browser render — rich fixtures', () => {
       expect(project).toBeGreaterThanOrEqual(0);
       expect(bob).toBeLessThan(project);
     });
-    expect(localStorage.getItem('sidebar.conversationSort')).toBe('az');
+    // Saved for the user, so every device opens it that way.
+    expect(apiFetchMock).toHaveBeenCalledWith('/api/v1/user-state/sidebar-sorts/__dms__', {
+      method: 'PUT',
+      body: JSON.stringify({ sort: 'az' }),
+    });
   });
 
   it('flips back to recent activity via the sort menu', async () => {
@@ -714,7 +719,10 @@ describe('Sidebar browser render — rich fixtures', () => {
     const recent = items.find((el) => el.textContent?.includes('Recent activity'));
     recent?.click();
     await vi.waitFor(() => {
-      expect(localStorage.getItem('sidebar.conversationSort')).toBe('recent');
+      expect(apiFetchMock).toHaveBeenCalledWith('/api/v1/user-state/sidebar-sorts/__dms__', {
+        method: 'PUT',
+        body: JSON.stringify({ sort: 'recent' }),
+      });
     });
   });
 
@@ -1339,12 +1347,15 @@ describe('Sidebar browser render — rich fixtures', () => {
 // blocks, and a block off screen skips layout and paint (content-visibility)
 // until it scrolls near.
 describe('Sidebar rows off screen', () => {
-  const row = (index: number) => document.querySelector(`[data-testid="channel-row-ch-many-${index}"]`) as HTMLElement;
+  const row = (index: number) => document.querySelector(`[data-testid="channel-row-ch-cut-${index}"]`) as HTMLElement;
   const drawn = (index: number) => row(index).querySelector('a')!.checkVisibility({ contentVisibilityAuto: true });
   const blocks = () => [...document.querySelectorAll('[data-testid="sidebar-row-block"]')] as HTMLElement[];
+  const rowsIn = (block: HTMLElement) => block.querySelectorAll('[data-testid^="channel-row-"]').length;
+  // The block starts these IDs pick (startsRowBlock) fall at rows 46, 51 and
+  // 161, 187: one run of 110 rows in between, cut at 80.
   const manyChannels = (count: number) =>
     Array.from({ length: count }, (_, index) => ({
-      channelID: `ch-many-${index}`,
+      channelID: `ch-cut-${index}`,
       channelName: `many-${String(index).padStart(3, '0')}`,
       channelType: 'public' as const,
       role: 1,
@@ -1355,18 +1366,42 @@ describe('Sidebar rows off screen', () => {
     mockChannels = manyChannels(200);
     await render(<Frame />);
 
-    // 200 rows: five blocks of 40, the rows still in sidebar order.
-    await expect.poll(() => blocks().length).toBe(5);
-    expect(blocks().map((block) => block.querySelectorAll('[data-testid^="channel-row-"]').length)).toEqual([40, 40, 40, 40, 40]);
-    expect(blocks()[4].lastElementChild).toBe(row(199));
+    await expect.poll(() => blocks().length).toBe(6);
+    expect(blocks().map(rowsIn)).toEqual([46, 5, 80, 30, 26, 13]);
+    expect(blocks()[0].firstElementChild).toBe(row(0));
+    expect(blocks()[5].lastElementChild).toBe(row(199));
     await expect.poll(() => drawn(0)).toBe(true);
     await expect.poll(() => drawn(199)).toBe(false);
-    // Holding its rows' height (and their gaps), the list doesn't jump as
-    // blocks come in: the skipped last block is as tall as the drawn first.
-    expect(blocks()[4].getBoundingClientRect().height).toBe(blocks()[0].getBoundingClientRect().height);
+    // Holding its rows' height (and the gaps between them), the list doesn't
+    // jump as blocks come in.
+    const rowHeight = row(0).getBoundingClientRect().height;
+    expect(blocks()[5].getBoundingClientRect().height).toBeCloseTo(13 * rowHeight + 12 * 4, 0);
 
     row(199).scrollIntoView();
     await expect.poll(() => drawn(199)).toBe(true);
+  });
+
+  it('keeps every other row in place when one jumps to the top', async () => {
+    mockCategories = [];
+    mockUserState = { ...mockUserState!, sidebarSorts: { __channels__: 'recent' } };
+    const dated = (latest: number) =>
+      manyChannels(200).map((channel, index) => ({
+        ...channel,
+        lastMessageAt: new Date(Date.UTC(2026, 9, 1, 0, index === latest ? 999 : 200 - index)).toISOString(),
+      }));
+    mockChannels = dated(-1);
+    const screen = await render(<Frame />);
+    await expect.poll(() => blocks().length).toBeGreaterThan(1);
+    const before = new Map([...document.querySelectorAll('[data-testid^="channel-row-ch-cut-"]')].map((el) => [el.getAttribute('data-testid'), el]));
+
+    // A message in the row at the bottom moves it to the top of "Recent".
+    mockChannels = dated(199);
+    await screen.rerender(<Frame />);
+    await expect.poll(() => blocks()[0].firstElementChild).toBe(row(199));
+
+    // Every other row is the same element: none was remounted on the way.
+    const remounted = [...before].filter(([id, el]) => id !== 'channel-row-ch-cut-199' && document.querySelector(`[data-testid="${id}"]`) !== el);
+    expect(remounted).toEqual([]);
   });
 
   it('renders a section that fits in one block as plain rows', async () => {

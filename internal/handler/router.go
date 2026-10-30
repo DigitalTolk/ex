@@ -136,6 +136,7 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("DELETE /api/v1/user-state/conversations/{id}/hidden", middleware.WrapFunc(userStateH.UnhideConversation, authMW))
 		mux.Handle("PUT /api/v1/user-state/skills/{id}/hidden", middleware.WrapFunc(userStateH.HideSkill, authMW))
 		mux.Handle("DELETE /api/v1/user-state/skills/{id}/hidden", middleware.WrapFunc(userStateH.UnhideSkill, authMW))
+		mux.Handle("PUT /api/v1/user-state/sidebar-sorts/{section}", middleware.WrapFunc(userStateH.SetSidebarSort, authMW))
 	}
 
 	// ------------------------------------------------------------------ Channels

@@ -13,7 +13,25 @@ const (
 	// a workspace full of skills stays legible. An explicit /skill pick still
 	// attaches a hidden skill: hiding is about discovery, not permission.
 	UserStateHiddenSkill UserStateKind = "hidden_skill"
+	// UserStateSidebarSort is how one sidebar section orders its rows for this
+	// user, on every device: TargetID is the section's key (a built-in
+	// section's, or a category's ID), Sort the order.
+	UserStateSidebarSort UserStateKind = "sidebar_sort"
 )
+
+// SidebarSort is a sidebar section's order: by recent activity, or the
+// user's own order then A-Z ("az"; Unread, which has no order of the user's
+// own, is plain A-Z).
+type SidebarSort string
+
+const (
+	SidebarSortRecent SidebarSort = "recent"
+	SidebarSortAZ     SidebarSort = "az"
+)
+
+// The built-in sidebar sections a sort can be set for; every other section
+// is one of the user's categories.
+var SidebarBuiltInSections = []string{"__unread__", "__favorites__", "__channels__", "__dms__"}
 
 type UserStateItem struct {
 	UserID       string        `json:"userID" dynamodbav:"userID"`
@@ -26,8 +44,10 @@ type UserStateItem struct {
 	// Rewound marks a thread_seen row a mark-unread wrote: SeenAt was set back
 	// to just before a reply on purpose. An ordinary "seen" write replaces the
 	// row without it.
-	Rewound   bool      `json:"rewound,omitempty" dynamodbav:"rewound,omitempty"`
-	UpdatedAt time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
+	Rewound bool `json:"rewound,omitempty" dynamodbav:"rewound,omitempty"`
+	// Sort is a sidebar_sort row's order.
+	Sort      SidebarSort `json:"sort,omitempty" dynamodbav:"sort,omitempty"`
+	UpdatedAt time.Time   `json:"updatedAt" dynamodbav:"updatedAt"`
 }
 
 type UserState struct {
@@ -41,6 +61,9 @@ type UserState struct {
 	ThreadMarkedUnread  map[string]string `json:"threadMarkedUnread"`
 	HiddenConversations []string          `json:"hiddenConversations"`
 	HiddenSkills        []string          `json:"hiddenSkills"`
+	// SidebarSorts maps a sidebar section's key to the order the user chose
+	// for it; a section not listed keeps its default.
+	SidebarSorts map[string]SidebarSort `json:"sidebarSorts"`
 }
 
 // MarkUnreadResult is the outcome of marking a message unread. A top-level

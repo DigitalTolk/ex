@@ -33,6 +33,7 @@ func (s *UserStateService) List(ctx context.Context, userID string) (*model.User
 		ThreadMarkedUnread:  map[string]string{},
 		HiddenConversations: []string{},
 		HiddenSkills:        []string{},
+		SidebarSorts:        map[string]model.SidebarSort{},
 	}
 	if s.store == nil || userID == "" {
 		return state, nil
@@ -56,6 +57,8 @@ func (s *UserStateService) List(ctx context.Context, userID string) (*model.User
 			state.HiddenConversations = append(state.HiddenConversations, item.TargetID)
 		case model.UserStateHiddenSkill:
 			state.HiddenSkills = append(state.HiddenSkills, item.TargetID)
+		case model.UserStateSidebarSort:
+			state.SidebarSorts[item.TargetID] = item.Sort
 		}
 	}
 	sort.Strings(state.ThreadNotifications)
@@ -146,6 +149,18 @@ func (s *UserStateService) HideSkill(ctx context.Context, userID, skillID string
 
 func (s *UserStateService) UnhideSkill(ctx context.Context, userID, skillID string) error {
 	return s.delete(ctx, userID, model.UserStateHiddenSkill, skillID)
+}
+
+// SetSidebarSort remembers how one sidebar section orders its rows for this
+// user, so every device opens it that way.
+func (s *UserStateService) SetSidebarSort(ctx context.Context, userID, section string, sort model.SidebarSort) error {
+	return s.set(ctx, &model.UserStateItem{
+		UserID:    userID,
+		Kind:      model.UserStateSidebarSort,
+		TargetID:  section,
+		Sort:      sort,
+		UpdatedAt: time.Now(),
+	})
 }
 
 // HiddenSkillSet is the orchestrator's view: the set of skill ids userID has

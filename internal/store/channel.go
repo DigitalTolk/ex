@@ -374,16 +374,24 @@ func (s *ChannelStoreImpl) CurrentMessageSeq(ctx context.Context, channelID stri
 
 // IncrementMessageSeq atomically bumps the channel's MessageSeq by one and
 // returns the new value. ADD on a missing attribute treats it as 0, so the
-// first message returns 1 — no initialization needed.
+// first message returns 1 — no initialization needed. The same write stamps
+// lastMessageAt, which the sidebar's "Recent activity" sort reads — to the
+// second, which is all a sort needs and keeps every channel row in the
+// sidebar list short.
 func (s *ChannelStoreImpl) IncrementMessageSeq(ctx context.Context, channelID string) (int64, error) {
-	return s.AddMessageSeq(ctx, channelID, 1)
+	upd := expression.Add(expression.Name("messageSeq"), expression.Value(1)).
+		Set(expression.Name("lastMessageAt"), expression.Value(time.Now().UTC().Truncate(time.Second)))
+	return s.updateMessageSeq(ctx, channelID, upd)
 }
 
 // AddMessageSeq atomically adds n to the channel's MessageSeq and returns the
-// new value — IncrementMessageSeq for one message, or a bulk import of n
-// top-level messages at once.
+// new value — a bulk import of n top-level messages (or their removal) at
+// once. It leaves lastMessageAt alone: imported history is not new activity.
 func (s *ChannelStoreImpl) AddMessageSeq(ctx context.Context, channelID string, n int64) (int64, error) {
-	upd := expression.Add(expression.Name("messageSeq"), expression.Value(n))
+	return s.updateMessageSeq(ctx, channelID, expression.Add(expression.Name("messageSeq"), expression.Value(n)))
+}
+
+func (s *ChannelStoreImpl) updateMessageSeq(ctx context.Context, channelID string, upd expression.UpdateBuilder) (int64, error) {
 	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).Build())
 
 	out, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{

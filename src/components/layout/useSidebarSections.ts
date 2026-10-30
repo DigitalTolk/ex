@@ -11,6 +11,7 @@ import {
   isSidebarItemUnread,
   sidebarItemID,
   SidebarSectionKeys,
+  type SectionSort,
   type ConversationSidebarSort,
   type SidebarItem,
   type SidebarSection,
@@ -23,10 +24,12 @@ const NO_CATEGORIES: SidebarCategory[] = [];
 // (see groupSidebarItems) under the user's view preferences.
 export function useSidebarSections({
   conversationSort,
+  sectionSorts,
   unreadSection,
   unreadOnly,
 }: {
   conversationSort: ConversationSidebarSort;
+  sectionSorts: Record<string, SectionSort>;
   unreadSection: boolean;
   unreadOnly: boolean;
 }) {
@@ -75,12 +78,13 @@ export function useSidebarSections({
     () =>
       groupSidebarItems(channels ?? [], visibleConversations, categories, {
         conversationSort,
+        sectionSorts,
         unreadSection,
         unreadOnly,
         activeID: activeItemID,
         stickyUnreadID: stickyUnread.unread ? stickyUnread.id : undefined,
       }),
-    [channels, visibleConversations, categories, conversationSort, unreadSection, unreadOnly, activeItemID, stickyUnread],
+    [channels, visibleConversations, categories, conversationSort, sectionSorts, unreadSection, unreadOnly, activeItemID, stickyUnread],
   );
 
   return {
