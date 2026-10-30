@@ -572,6 +572,38 @@ describe('ImageLightbox browser behavior', () => {
     }
   });
 
+  // Zoomable like an image: the toolbar's buttons and Ctrl/⌘ + wheel (or a
+  // pinch); the pages re-render, so the zoom stops at 3×.
+  it('zooms a PDF with the toolbar buttons up to 3×, and with Ctrl/⌘ + wheel', async () => {
+    const url = pdfObjectURL(buildPdf({ pages: 2 }));
+    try {
+      await render(lightbox({ images: [{ url, filename: 'spec.pdf', contentType: 'application/pdf', size: 4096 }] }));
+      await expect.poll(() => document.querySelector('[data-testid="image-lightbox-pdf"] .react-pdf__Page canvas'), { timeout: 15000 }).not.toBeNull();
+      const zoom = () => Number(document.querySelector<HTMLElement>('[data-testid="pdf-preview"]')!.dataset.zoom);
+      const zoomIn = document.querySelector<HTMLButtonElement>('[data-testid="image-lightbox-zoom-in"]')!;
+      const zoomOut = document.querySelector<HTMLButtonElement>('[data-testid="image-lightbox-zoom-out"]')!;
+      expect(zoomOut.disabled).toBe(true);
+      // One click at a time, each seen through, as a person clicks.
+      const click = async (button: HTMLButtonElement, want: (z: number) => boolean) => {
+        button.click();
+        await expect.poll(() => want(zoom())).toBe(true);
+      };
+      await click(zoomIn, (z) => Math.abs(z - 1.8) < 0.01);
+      await click(zoomIn, (z) => Math.abs(z - 2.6) < 0.01);
+      await click(zoomIn, (z) => z === 3);
+      await click(zoomOut, (z) => z < 3);
+      await click(zoomOut, (z) => z < 2);
+      await click(zoomOut, (z) => z === 1);
+
+      const pages = document.querySelector<HTMLElement>('[data-testid="pdf-preview-pages"]')!;
+      const rect = pages.getBoundingClientRect();
+      pages.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, ctrlKey: true, clientX: rect.left + 50, clientY: rect.top + 50, bubbles: true, cancelable: true }));
+      await expect.poll(zoom).toBeGreaterThan(1);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  });
+
   it('falls back to the download card when a PDF cannot be loaded', async () => {
     // react-pdf reports the load failure through its dev-only warning().
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});

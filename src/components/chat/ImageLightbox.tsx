@@ -7,6 +7,7 @@ import { iconForAttachment, isImageContentType, isPdfAttachment, isVideoAttachme
 import { VideoPreview } from './VideoPreview';
 import { useTransientOverlayCleanup } from '@/hooks/useTransientOverlayCleanup';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useZoomWheel } from '@/hooks/useZoomWheel';
 import { useMobileBackClose } from '@/hooks/useMobileBackClose';
 import {
   type GestureState,
@@ -24,6 +25,9 @@ import {
 
 // pdf.js is heavy; load the viewer only when a PDF is actually opened.
 const PdfPreview = lazy(() => import('./PdfPreview'));
+
+// A PDF page re-renders at its zoomed size, so it stops sooner than an image.
+const PDF_MAX_ZOOM = 3;
 
 export interface LightboxImage {
   url: string;
@@ -68,6 +72,7 @@ export function ImageLightbox({
   const safeIndex = total === 0 ? 0 : ((index % total) + total) % total;
   const current = images[safeIndex];
   const isImage = current ? isImageContentType(current.contentType) : false;
+  const isPdf = !!current && !isImage && isPdfAttachment(current.contentType, current.filename);
   const lightboxRef = useRef<HTMLDivElement>(null);
   const imageKey = current ? `${current.url}\u0000${safeIndex}` : '';
   const [zoomState, setZoomState] = useState({ key: '', value: 1 });
@@ -90,9 +95,16 @@ export function ImageLightbox({
   const zoom = zoomState.key === imageKey ? zoomState.value : 1;
   const pan = panState.key === imageKey && zoom > 1 ? panState : { key: imageKey, x: 0, y: 0 };
   useTransientOverlayCleanup(open, { rootRef: lightboxRef, lockScroll: true });
+  // Ctrl/⌘ + wheel (or a trackpad pinch) zooms the image, not the app.
+  const imageWheelRef = useZoomWheel((e) =>
+    setCurrentZoom((value) => {
+      const next = e.deltaY < 0 ? value + 0.25 : value - 0.25;
+      return Math.min(4, Math.max(1, Math.round(next * 100) / 100));
+    }),
+  );
 
   function setCurrentZoom(update: (value: number) => number) {
-    const next = Math.min(6, Math.max(1, update(zoom)));
+    const next = Math.min(isPdf ? PDF_MAX_ZOOM : 6, Math.max(1, update(zoom)));
     setZoomState({ key: imageKey, value: next });
     if (next <= 1) {
       setPanState({ key: imageKey, x: 0, y: 0 });
@@ -183,7 +195,6 @@ export function ImageLightbox({
   if (!open || typeof document === 'undefined' || !current) return null;
 
   const iconType = iconForAttachment(current.contentType, current.filename);
-  const isPdf = !isImage && isPdfAttachment(current.contentType, current.filename);
   const isVideo = !isImage && !isPdf && isVideoAttachment(current.contentType, current.filename);
   const swipeStageStyle = swipeDrag.x !== 0 || swipeDrag.y !== 0
     ? { transform: `translate3d(${Math.round(swipeDrag.x)}px, ${Math.round(swipeDrag.y)}px, 0)`, transition: 'none' }
@@ -410,8 +421,8 @@ export function ImageLightbox({
             {total > 1 ? ` · ${safeIndex + 1} / ${total}` : ''}
           </p>
         </div>
-        {isImage && (
-          <div className="flex items-center gap-1" role="group" aria-label="Image zoom controls">
+        {(isImage || isPdf) && (
+          <div className="flex items-center gap-1" role="group" aria-label="Zoom controls">
             <button
               type="button"
               onClick={(e) => {
@@ -498,14 +509,7 @@ export function ImageLightbox({
           style={{ zIndex: 110, ...swipeStageStyle }}
           data-testid="image-lightbox-zoom-stage"
           onClick={(e) => e.stopPropagation()}
-          onWheel={(e) => {
-            if (!e.ctrlKey && !e.metaKey) return;
-            e.preventDefault();
-            setCurrentZoom((value) => {
-              const next = e.deltaY < 0 ? value + 0.25 : value - 0.25;
-              return Math.min(4, Math.max(1, Math.round(next * 100) / 100));
-            });
-          }}
+          ref={imageWheelRef}
           onPointerDown={handleLightboxPointerDown}
           onPointerMove={handleLightboxPointerMove}
           onPointerUp={handleLightboxPointerUp}
@@ -546,7 +550,14 @@ export function ImageLightbox({
           >
             <Suspense fallback={<p className="text-center text-sm text-white/70">Loading…</p>}>
               {/* key: a different PDF is a fresh document, not a re-render. */}
-              <PdfPreview key={current.url} url={current.url} fallback={fileCard} />
+              <PdfPreview
+                key={current.url}
+                url={current.url}
+                fallback={fileCard}
+                zoom={zoom}
+                maxZoom={PDF_MAX_ZOOM}
+                onZoomChange={(value) => setZoomState({ key: imageKey, value })}
+              />
             </Suspense>
           </div>
         ) : isVideo ? (

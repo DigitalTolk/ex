@@ -174,7 +174,7 @@ describe('MessageInput focusKey', () => {
     const attach = screen.getByLabelText('Attach file');
 
     expect(toolbar).not.toHaveClass('overflow-x-auto', 'mobile:touch-pan-x');
-    expect(screen.getByLabelText('Bold (Ctrl+B)')).toHaveClass('mobile:h-9', 'mobile:w-9');
+    expect(screen.getByLabelText('Bold')).toHaveClass('mobile:h-9', 'mobile:w-9');
     expect(screen.getAllByLabelText('Attach file')).toHaveLength(1);
     expect(attach).toHaveClass('text-muted-foreground', 'hover:text-foreground', 'mobile:h-9', 'mobile:w-9', 'shrink-0');
     expect(screen.queryByLabelText('Quote')).not.toBeInTheDocument();

@@ -72,7 +72,7 @@ describe('MessageItem inline edit', () => {
     const editor = screen.getByLabelText('Message input');
     expect(editor.textContent ?? '').toContain('hello');
     expect(editor.textContent ?? '').toContain('world');
-    expect(screen.getByLabelText('Bold (Ctrl+B)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Bold')).toBeInTheDocument();
     expect(screen.getByLabelText('Save')).toBeInTheDocument();
     expect(screen.getByLabelText('Cancel')).toBeInTheDocument();
   });

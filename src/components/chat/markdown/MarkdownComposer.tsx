@@ -31,6 +31,8 @@ interface Props {
   onPasteFiles?: (files: File[]) => void;
   submitOnEnter?: boolean;
   onArrowUpEmpty?: () => boolean;
+  // The link shortcut opens the composer's link dialog.
+  onLinkShortcut?: () => void;
   // Channel the composer targets (when it's a channel). Enables the @-mention
   // member / special / not-in-channel partitioning. Omitted for DMs and edits.
   mentionChannelId?: string;

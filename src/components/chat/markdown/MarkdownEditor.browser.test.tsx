@@ -9,6 +9,7 @@ import { composerTooltipSpace } from './tooltipSpace';
 import type { WysiwygEditorHandle } from './types';
 import type { CompletionProviders } from './extensions/completions';
 import { userEvent } from 'vitest/browser';
+import { isApplePlatform } from '@/lib/platform';
 
 async function mount(props: Partial<React.ComponentProps<typeof MarkdownEditor>> = {}) {
   const ref = createRef<WysiwygEditorHandle>();
@@ -564,5 +565,62 @@ describe('composerTooltipSpace — mobile typeahead opens above the keyboard', (
     } finally {
       Object.defineProperty(window, 'visualViewport', { value: original, configurable: true });
     }
+  });
+});
+
+// Slack's formatting keys, with ⌘ on Apple platforms and Ctrl elsewhere — the
+// modifier CodeMirror's "Mod" resolves to in this browser.
+describe('MarkdownEditor — formatting shortcuts', () => {
+  const mod = isApplePlatform(navigator.userAgent) ? 'Meta' : 'Control';
+  const press = (key: string, shift: boolean) =>
+    userEvent.keyboard(shift ? `{${mod}>}{Shift>}${key}{/Shift}{/${mod}}` : `{${mod}>}${key}{/${mod}}`);
+
+  it.each([
+    ['b', false, '**word**'],
+    ['i', false, '*word*'],
+    ['x', true, '~~word~~'],
+    ['c', true, '`word`'],
+    ['9', true, '> word'],
+    ['8', true, '- word'],
+    ['7', true, '1. word'],
+  ])('Mod%s%s formats the selection', async (key, shift, want) => {
+    const { ref, screen } = await mount({ initialBody: 'word' });
+    await userEvent.click(screen.getByLabelText('Message input'));
+    await userEvent.keyboard(`{${mod}>}a{/${mod}}`);
+    await press(key, shift);
+    await expect.poll(() => ref.current!.getMarkdown()).toBe(want);
+  });
+
+  // Linux input methods (GTK, IBus) take Ctrl+Shift+U for typing a Unicode
+  // character by its code, so CI's Linux browsers never pass that chord on to
+  // the page. The editor gets it as macOS and Windows deliver it.
+  function linkChord(): KeyboardEvent {
+    const apple = isApplePlatform(navigator.userAgent);
+    const event = new KeyboardEvent('keydown', {
+      key: 'U',
+      code: 'KeyU',
+      shiftKey: true,
+      metaKey: apple,
+      ctrlKey: !apple,
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(event, 'keyCode', { value: 85 });
+    return event;
+  }
+
+  it('the link shortcut opens the composer\'s link dialog', async () => {
+    const onLinkShortcut = vi.fn();
+    const { ref } = await mount({ initialBody: 'word', onLinkShortcut });
+    const chord = linkChord();
+    ref.current!.getElement()!.querySelector('.cm-content')!.dispatchEvent(chord);
+    expect(onLinkShortcut).toHaveBeenCalledOnce();
+    expect(chord.defaultPrevented).toBe(true);
+  });
+
+  it('without a link dialog the link shortcut leaves the text alone', async () => {
+    const { ref } = await mount({ initialBody: 'word' });
+    ref.current!.getElement()!.querySelector('.cm-content')!.dispatchEvent(linkChord());
+    expect(ref.current!.getMarkdown()).toBe('word');
   });
 });
