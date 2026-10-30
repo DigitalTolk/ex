@@ -183,4 +183,28 @@ describe('Threads page with many threads', () => {
       threadPages = [threads];
     }
   });
+
+  // A few unread threads fit on the screen, so nothing is scrolled: the rest
+  // of the followed threads must still load after them.
+  it('loads the threads after a short first page without any scrolling', async () => {
+    const rest = Array.from({ length: 5 }, (_, i) => ({ ...threads[0], threadRootID: `t-rest-${i}` }));
+    threadPages = [threads, rest];
+    listRequests.length = 0;
+    try {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      await render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/threads']}>
+            <div style={{ height: 700, display: 'flex', flexDirection: 'column' }}>
+              <ThreadsPage />
+            </div>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      await expect.poll(() => cards().length).toBe(7);
+      expect(listRequests).toEqual(['/api/v1/threads', '/api/v1/threads?cursor=r%3A1']);
+    } finally {
+      threadPages = [threads];
+    }
+  });
 });
