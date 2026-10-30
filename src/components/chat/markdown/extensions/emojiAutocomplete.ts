@@ -28,8 +28,8 @@ import type { MentionCompletion } from './optionRender';
 const MAX_EMOJI_RESULTS = 50;
 
 // The popup opens on a `:` that starts a word — not the one in a time like
-// 10:30 — once two characters follow it: `:p` stays as typed and is sent as
-// 😛 (normalizeEmojiInBody), `:po` opens it.
+// 10:30 — once two characters follow it: `:p` is left to become 😛 on the
+// space after it (./emoticons), `:po` opens it.
 const EMOJI_QUERY_RE = /(?:^|[^a-z0-9]):[\w+-]{2,}/i;
 
 export type EmojiHit =
