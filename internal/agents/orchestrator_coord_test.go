@@ -171,9 +171,12 @@ func (p *countingPub) count() int {
 // Both instances tick for one run (one claimed it, one recovered it at
 // boot); only the holder of the run's typing lease publishes.
 func TestRedisTurns_OneInstanceTypesPerRun(t *testing.T) {
-	old := typingTickInterval
-	typingTickInterval = 5 * time.Millisecond
-	defer func() { typingTickInterval = old }()
+	oldTick, oldLease := typingTickInterval, typingLeaseTicks
+	// Fast ticks, and a lease no scheduler pause outlasts: at the default two
+	// ticks (10ms here) a busy machine let the holder's lease lapse, and the
+	// other instance rightly took over (see the next test).
+	typingTickInterval, typingLeaseTicks = 5*time.Millisecond, 12000
+	defer func() { typingTickInterval, typingLeaseTicks = oldTick, oldLease }()
 	x, _ := redisPair(t)
 	pa, pb := &countingPub{}, &countingPub{}
 	x.a.pub, x.b.pub = pa, pb
@@ -187,6 +190,25 @@ func TestRedisTurns_OneInstanceTypesPerRun(t *testing.T) {
 	if pa.count() > 0 && pb.count() > 0 {
 		t.Fatalf("both instances published typing frames (a=%d b=%d)", pa.count(), pb.count())
 	}
+}
+
+// When the instance holding the typing lease stops ticking, another takes
+// over once the lease runs out.
+func TestRedisTurns_TypingTakenOverWhenTheHolderStops(t *testing.T) {
+	old := typingTickInterval
+	typingTickInterval = 5 * time.Millisecond
+	defer func() { typingTickInterval = old }()
+	x, _ := redisPair(t)
+	pa, pb := &countingPub{}, &countingPub{}
+	x.a.pub, x.b.pub = pa, pb
+	run := &model.Run{ID: "typing-handover", AgentID: testGGID, ParentID: "dm1", ParentType: service.ParentConversation, State: model.RunStateRunning}
+	x.runs.runs[run.ID] = run
+	x.a.startTypingTicker(run)
+	waitFor(t, func() bool { return pa.count() > 0 })
+	x.b.startTypingTicker(run)
+	defer x.b.stopTypingTicker(run.ID)
+	x.a.stopTypingTicker(run.ID)
+	waitFor(t, func() bool { return pb.count() > 0 })
 }
 
 // The human brake on a thread reaches hand-offs parked by ANY instance.
