@@ -10,6 +10,7 @@ import type { WysiwygEditorHandle } from './types';
 import type { CompletionProviders } from './extensions/completions';
 import { userEvent } from 'vitest/browser';
 import { isApplePlatform } from '@/lib/platform';
+import type { CustomEmoji } from '@/types';
 
 async function mount(props: Partial<React.ComponentProps<typeof MarkdownEditor>> = {}) {
   const ref = createRef<WysiwygEditorHandle>();
@@ -360,6 +361,26 @@ describe('MarkdownEditor handle + keymap branches', () => {
     trigger(view, '/');
     await vi.waitFor(() => expect(completionStatus(view.state)).not.toBe('pending'));
     expect(currentCompletions(view.state)).toHaveLength(0);
+  });
+
+  // An emoticon becomes the standard emoji as the space after it is typed —
+  // not a custom emoji that happens to match its letter.
+  it('turns :P into 😛 on the space after it, with custom emoji around', async () => {
+    const completionProviders: CompletionProviders = {
+      users: () => [],
+      online: () => new Set(),
+      memberIds: () => null,
+      channels: () => [],
+      customEmojis: () => [{ name: 'party_parrot', imageURL: 'https://cdn.test/parrot.gif' } as CustomEmoji],
+      skinTone: () => '',
+    };
+    const { ref, screen } = await mount({
+      completionProviders,
+      customEmojiMap: () => ({ party_parrot: 'https://cdn.test/parrot.gif' }),
+    });
+    await userEvent.click(screen.getByLabelText('Message input'));
+    await userEvent.keyboard('hi :P there');
+    await vi.waitFor(() => expect(ref.current!.getMarkdown()).toBe('hi 😛 there'));
   });
 
   it('renders the autocomplete popup in <body> and above the app top layer (no clip/transform ancestor can hide it)', async () => {

@@ -147,6 +147,13 @@ const ASCII_EMOJI_TO_SHORTCODE = new Map<string, string>([
   ['<3', ':heart:'],
 ]);
 
+// emoticonEmoji is the standard emoji an ASCII emoticon stands for (`:P` is
+// 😛), or undefined for anything else.
+export function emoticonEmoji(token: string): string | undefined {
+  const shortcode = ASCII_EMOJI_TO_SHORTCODE.get(token);
+  return shortcode === undefined ? undefined : shortcodeToUnicode(shortcode);
+}
+
 export function shortcodeWithSkinTone(name: string, unicode: string, tone: EmojiSkinTone | undefined): string {
   if (!tone || !supportsEmojiSkinTone(unicode)) return `:${name}:`;
   const suffix = SKIN_TONE_BY_VALUE.get(tone)?.suffix;
