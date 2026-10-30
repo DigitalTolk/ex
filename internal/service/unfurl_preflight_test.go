@@ -77,7 +77,7 @@ func TestUnfurlPreflightSkippedOnCacheHit(t *testing.T) {
 	svc := NewUnfurlService(cache)
 	svc.client = &http.Client{Transport: panickyTransport{}, Timeout: time.Second}
 	cached := &UnfurlPreview{URL: "https://localhost/cached", Title: "Cached"}
-	if err := cache.Set(context.Background(), "unfurl:https://localhost/cached", cached, time.Hour); err != nil {
+	if err := cache.Set(context.Background(), unfurlCacheKeyPrefix+"https://localhost/cached", cached, time.Hour); err != nil {
 		t.Fatalf("seed cache: %v", err)
 	}
 	got, err := svc.fetchAndScrape(context.Background(), "https://localhost/cached")

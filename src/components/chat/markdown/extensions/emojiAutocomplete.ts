@@ -19,10 +19,18 @@ import type { MentionCompletion } from './optionRender';
 // `:shortcode:` autocomplete for the composer. Selecting an option inserts the
 // canonical `:name:` text (with the user's skin-tone suffix for the standard
 // set) — the same shortcode form the renderer and the Go validator understand —
-// so the document stays portable markdown. Ranking mirrors the old Lexical
-// EmojiShortcutsPlugin: custom emoji first, then exact/prefix/substring/fuzzy.
+// so the document stays portable markdown. Standard and custom emoji rank
+// together: exact, prefix, substring, then fuzzy matches, the standard emoji
+// first among equals — `:eyes` is 👀 before any custom emoji that merely
+// resembles it.
 
-const MAX_EMOJI_RESULTS = 8;
+// The popup scrolls; this only bounds the work of a broad query.
+const MAX_EMOJI_RESULTS = 50;
+
+// The popup opens on a `:` that starts a word — not the one in a time like
+// 10:30 — once two characters follow it: `:p` stays as typed and is sent as
+// 😛 (normalizeEmojiInBody), `:po` opens it.
+const EMOJI_QUERY_RE = /(?:^|[^a-z0-9]):[\w+-]{2,}/i;
 
 export type EmojiHit =
   | { kind: 'standard'; name: string; unicode: string }
@@ -42,20 +50,35 @@ function emojiRank(q: string, emoji: { name: string; keywords?: string[] }): num
   return Number.POSITIVE_INFINITY;
 }
 
+interface RankedHit {
+  hit: EmojiHit;
+  rank: number;
+  // 0 for a standard emoji, 1 for a custom one: standard first among equals.
+  custom: number;
+  index: number;
+}
+
 export function rankEmoji(query: string, customEmojis: CustomEmoji[]): EmojiHit[] {
   const q = normalizeEmojiQuery(query);
-  const custom: EmojiHit[] = customEmojis
-    .filter((e) => fuzzyMatch(q, e.name))
+  const ranked: RankedHit[] = [
+    ...COMMON_EMOJI_SHORTCODES.map((emoji, index) => ({
+      hit: { kind: 'standard' as const, name: emoji.name, unicode: emoji.unicode },
+      rank: emojiRank(q, emoji),
+      custom: 0,
+      index,
+    })),
+    ...customEmojis.map((emoji, index) => ({
+      hit: { kind: 'custom' as const, name: emoji.name, imageURL: emoji.imageURL },
+      rank: emojiRank(q, emoji),
+      custom: 1,
+      index,
+    })),
+  ];
+  return ranked
+    .filter((r) => Number.isFinite(r.rank))
+    .sort((a, b) => a.rank - b.rank || a.custom - b.custom || a.hit.name.length - b.hit.name.length || a.index - b.index)
     .slice(0, MAX_EMOJI_RESULTS)
-    .map((e) => ({ kind: 'custom', name: e.name, imageURL: e.imageURL }));
-  const remaining = MAX_EMOJI_RESULTS - custom.length;
-  const standard: EmojiHit[] = COMMON_EMOJI_SHORTCODES
-    .map((emoji, index) => ({ emoji, rank: emojiRank(q, emoji), index }))
-    .filter((hit) => Number.isFinite(hit.rank))
-    .sort((a, b) => a.rank - b.rank || a.emoji.name.length - b.emoji.name.length || a.index - b.index)
-    .slice(0, Math.max(0, remaining))
-    .map(({ emoji }) => ({ kind: 'standard', name: emoji.name, unicode: emoji.unicode }));
-  return [...custom, ...standard];
+    .map((r) => r.hit);
 }
 
 export interface EmojiProviders {
@@ -109,13 +132,14 @@ function hitToCompletion(hit: EmojiHit, skinTone: EmojiSkinTone): MentionComplet
 
 export function emojiSource(providers: EmojiProviders): CompletionSource {
   return (context: CompletionContext): CompletionResult | null => {
-    // Require at least one character after the colon (no popup on a bare `:`),
-    // allowing the `_`, `+`, `-` that appear in shortcode names (`:+1:`).
-    const before = context.matchBefore(/:[\w+-]+/);
+    // The query allows the `_`, `+`, `-` that appear in shortcode names
+    // (`:+1:`); the match may start with the character before the colon.
+    const before = context.matchBefore(EMOJI_QUERY_RE);
     if (!before) return null;
-    const query = before.text.slice(1);
+    const colon = before.text.lastIndexOf(':');
+    const query = before.text.slice(colon + 1);
     const skinTone = providers.skinTone();
     const options = rankEmoji(query, providers.customEmojis()).map((h) => hitToCompletion(h, skinTone));
-    return { from: before.from, to: before.to, options, filter: false };
+    return { from: before.from + colon, to: before.to, options, filter: false };
   };
 }

@@ -207,4 +207,65 @@ describe('Threads page with many threads', () => {
       threadPages = [threads];
     }
   });
+
+  // One unread thread, then older ones a few at a time: pages keep coming
+  // until the screen is full, and no further until the reader scrolls.
+  it('fills the screen after a single unread thread, then waits for a scroll', async () => {
+    const older = Array.from({ length: 100 }, (_, i) => ({ ...threads[0], threadRootID: `t-old-${i}` }));
+    threadPages = [[threads[0]], ...Array.from({ length: 50 }, (_, i) => older.slice(i * 2, i * 2 + 2))];
+    listRequests.length = 0;
+    try {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      await render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/threads']}>
+            <div style={{ height: 700, display: 'flex', flexDirection: 'column' }}>
+              <ThreadsPage />
+            </div>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      const scroller = document.querySelector('[data-page-scroll="true"]') as HTMLElement;
+      const lastListed = () => threadPages[listRequests.length - 1].at(-1)?.threadRootID;
+      // At rest: the list runs past the screen and the read-ahead, nothing is
+      // loading, and its last card is too far down to be mounted.
+      await expect
+        .poll(
+          () =>
+            scroller.scrollHeight > scroller.clientHeight + 800 &&
+            document.querySelector('[data-testid="threads-loading-more"]') === null &&
+            document.querySelector(`[data-thread-root-id="${lastListed()}"]`) === null,
+        )
+        .toBe(true);
+      expect(listRequests.length).toBeGreaterThan(2);
+      expect(listRequests.length).toBeLessThan(threadPages.length);
+    } finally {
+      threadPages = [threads];
+    }
+  });
+
+  // A thread read during the visit loses its unread marker and comes again
+  // among the rest; a page holding only such threads adds nothing to the
+  // list, and the next one must still load.
+  it('loads on past a page that only repeats threads already listed', async () => {
+    const rest = Array.from({ length: 5 }, (_, i) => ({ ...threads[0], threadRootID: `t-rest-${i}` }));
+    threadPages = [threads, threads, rest];
+    listRequests.length = 0;
+    try {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      await render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/threads']}>
+            <div style={{ height: 700, display: 'flex', flexDirection: 'column' }}>
+              <ThreadsPage />
+            </div>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      await expect.poll(() => cards().length).toBe(7);
+      expect(listRequests).toEqual(['/api/v1/threads', '/api/v1/threads?cursor=r%3A1', '/api/v1/threads?cursor=r%3A2']);
+    } finally {
+      threadPages = [threads];
+    }
+  });
 });
