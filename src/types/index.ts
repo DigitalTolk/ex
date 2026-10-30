@@ -271,6 +271,9 @@ export interface UserChannel {
   // Read-only: the channel is archived. Listed in the sidebar's Archived
   // section, history readable, nobody can post.
   archived?: boolean;
+  // When the channel's last top-level message was posted (absent until one
+  // is): the sidebar's "Recent activity" sort.
+  lastMessageAt?: string;
   muted?: boolean;
   favorite?: boolean;
   categoryID?: string;
@@ -346,6 +349,9 @@ export interface UserState {
   // Skills this user removed from their agents' discovery index — explicit
   // /skill picks still work.
   hiddenSkills: string[];
+  // How each sidebar section is sorted (by section key), on every device; a
+  // section not listed keeps its default. Absent from older servers.
+  sidebarSorts?: Record<string, 'recent' | 'az'>;
 }
 
 // Outcome of "Mark as unread": a top-level message rewinds the chat so

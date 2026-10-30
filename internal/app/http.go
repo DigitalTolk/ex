@@ -54,6 +54,7 @@ func (a *App) buildHTTP(context.Context) error {
 	// ------------------------------------------------------------- Chat
 	h.userState = handler.NewUserStateHandler(c.userState, c.messages, c.conversations)
 	h.userState.SetSkillLookup(ag.svc)
+	h.userState.SetCategoryLister(c.categories)
 	h.ws = handler.NewWSHandler(in.broker, c.channels, c.conversations, c.presence)
 	h.ws.SetNotificationAckRecorder(in.cache)
 	// One-time upgrade tickets: the browser can't send an Authorization

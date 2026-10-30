@@ -115,6 +115,7 @@ vi.mock('@/lib/api', () => ({
 
 // Render dropdown menu items inline so kebab menus inside ChannelRow are reachable.
 vi.mock('@/components/ui/dropdown-menu', () => ({
+  DropdownMenuSeparator: () => <hr />,
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DropdownMenuTrigger: ({ children, ...props }: { children: React.ReactNode; [k: string]: unknown }) => (
     <button {...props}>{children}</button>

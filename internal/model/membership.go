@@ -34,6 +34,10 @@ type UserChannel struct {
 	// Archived mirrors the channel's archived (read-only) flag, stamped at
 	// read time by ListUserChannels; the sidebar groups archived channels.
 	Archived bool `json:"archived,omitempty" dynamodbav:"-"`
+	// LastMessageAt mirrors the channel's last top-level message time,
+	// stamped at read time by ListUserChannels for the sidebar's "Recent
+	// activity" sort.
+	LastMessageAt *time.Time `json:"lastMessageAt,omitempty" dynamodbav:"-"`
 	// UnreadNotifyCount counts unread messages that actually ALERTED this
 	// user per their notification rules (mentions, keywords, "all messages"
 	// level; mute suppresses) — the sidebar's numeric badge. Plain unread

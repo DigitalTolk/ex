@@ -257,3 +257,30 @@ func TestUserStateService_ParentLeft_DropsThatChannelsThreadMarkers(t *testing.T
 	svc.ParentLeft(ctx, []string{"u-1"}, "ch-left")
 	NewUserStateService(nil, publisher).ParentLeft(ctx, []string{"u-1"}, "ch-left")
 }
+
+func TestUserStateService_SidebarSorts(t *testing.T) {
+	ctx := context.Background()
+	svc := NewUserStateService(newMockUserStateStore(), newMockPublisher())
+
+	if err := svc.SetSidebarSort(ctx, "u-1", "__channels__", model.SidebarSortRecent); err != nil {
+		t.Fatalf("SetSidebarSort: %v", err)
+	}
+	if err := svc.SetSidebarSort(ctx, "u-1", "cat-1", model.SidebarSortAZ); err != nil {
+		t.Fatalf("SetSidebarSort cat-1: %v", err)
+	}
+	// Choosing again replaces the section's row.
+	if err := svc.SetSidebarSort(ctx, "u-1", "__channels__", model.SidebarSortAZ); err != nil {
+		t.Fatalf("SetSidebarSort again: %v", err)
+	}
+	state, err := svc.List(ctx, "u-1")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(state.SidebarSorts) != 2 || state.SidebarSorts["__channels__"] != model.SidebarSortAZ || state.SidebarSorts["cat-1"] != model.SidebarSortAZ {
+		t.Fatalf("sidebar sorts = %#v", state.SidebarSorts)
+	}
+	// Another user's sorts are their own.
+	if other, _ := svc.List(ctx, "u-2"); len(other.SidebarSorts) != 0 {
+		t.Fatalf("u-2 sidebar sorts = %#v", other.SidebarSorts)
+	}
+}

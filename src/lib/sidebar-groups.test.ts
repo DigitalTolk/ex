@@ -76,6 +76,77 @@ describe('groupSidebarItems', () => {
   });
 });
 
+describe('groupSidebarItems: section sort', () => {
+  function chan(over: Partial<UserChannel>): UserChannel {
+    return { channelID: 'ch', channelName: 'ch', channelType: 'public', role: 1, ...over } as UserChannel;
+  }
+  const channels = [
+    chan({ channelID: 'alpha', channelName: 'alpha', sidebarPosition: 2000, lastMessageAt: '2026-10-29T12:00:00Z' }),
+    chan({ channelID: 'bravo', channelName: 'bravo', sidebarPosition: 1000, lastMessageAt: '2026-10-29T09:00:00Z' }),
+    chan({ channelID: 'quiet-b', channelName: 'Quiet-b' }),
+    chan({ channelID: 'quiet-a', channelName: 'quiet-a' }),
+    chan({ channelID: 'charlie', channelName: 'charlie', lastMessageAt: '2026-10-15T09:00:00Z', categoryID: 'work' }),
+    chan({ channelID: 'delta', channelName: 'delta', lastMessageAt: '2026-10-20T09:00:00Z', categoryID: 'work' }),
+    chan({ channelID: 'fav-old', channelName: 'fav-old', favorite: true, sidebarPosition: 1000, lastMessageAt: '2026-01-01T00:00:00Z' }),
+    chan({ channelID: 'fav-new', channelName: 'fav-new', favorite: true, sidebarPosition: 2000, lastMessageAt: '2026-10-29T10:00:00Z' }),
+  ];
+  const ids = (sections: ReturnType<typeof groupSidebarItems>, key: string) =>
+    sections.find((s) => s.key === key)!.items.map(sidebarItemID);
+
+  it("defaults to the user's own order, then A-Z", () => {
+    const sections = groupSidebarItems(channels, [], [cat({ id: 'work' })]);
+    expect(ids(sections, SidebarSectionKeys.Channels)).toEqual(['bravo', 'alpha', 'quiet-a', 'quiet-b']);
+    expect(ids(sections, 'work')).toEqual(['charlie', 'delta']);
+    expect(ids(sections, SidebarSectionKeys.Favorites)).toEqual(['fav-old', 'fav-new']);
+  });
+
+  it('puts the latest top-level message first, chats never posted in last (A-Z)', () => {
+    const sections = groupSidebarItems(channels, [], [cat({ id: 'work' })], {
+      sectionSorts: { [SidebarSectionKeys.Channels]: 'recent' },
+    });
+    expect(ids(sections, SidebarSectionKeys.Channels)).toEqual(['alpha', 'bravo', 'quiet-a', 'quiet-b']);
+    // Each section sorts on its own: the others keep the user's order.
+    expect(ids(sections, 'work')).toEqual(['charlie', 'delta']);
+    expect(ids(sections, SidebarSectionKeys.Favorites)).toEqual(['fav-old', 'fav-new']);
+  });
+
+  it('sorts a category and Favorites by recent activity too', () => {
+    const sections = groupSidebarItems(channels, [], [cat({ id: 'work' })], {
+      sectionSorts: { work: 'recent', [SidebarSectionKeys.Favorites]: 'recent' },
+    });
+    expect(ids(sections, 'work')).toEqual(['delta', 'charlie']);
+    expect(ids(sections, SidebarSectionKeys.Favorites)).toEqual(['fav-new', 'fav-old']);
+    expect(ids(sections, SidebarSectionKeys.Channels)).toEqual(['bravo', 'alpha', 'quiet-a', 'quiet-b']);
+  });
+
+  it("mixes a category's channels and DMs by recent activity", () => {
+    const filed = [
+      chan({ channelID: 'ch-old', channelName: 'old', categoryID: 'team', lastMessageAt: '2026-10-01T00:00:00Z' }),
+      chan({ channelID: 'ch-new', channelName: 'new', categoryID: 'team', lastMessageAt: '2026-10-29T00:00:00Z' }),
+    ];
+    const dms = [
+      conv({ conversationID: 'dm-zed', displayName: 'Zed', categoryID: 'team', updatedAt: '2026-10-15T00:00:00Z' }),
+      conv({ conversationID: 'dm-amy', displayName: 'Amy', categoryID: 'team', updatedAt: '2026-09-01T00:00:00Z' }),
+    ];
+    const recent = groupSidebarItems(filed, dms, [cat({ id: 'team' })], { sectionSorts: { team: 'recent' } });
+    expect(ids(recent, 'team')).toEqual(['ch-new', 'dm-zed', 'ch-old', 'dm-amy']);
+    // In the user's order: the channels by position (then A-Z), then the DMs
+    // A-Z, whatever order the Direct Messages section uses.
+    const own = groupSidebarItems(filed, dms, [cat({ id: 'team' })], { conversationSort: 'recent' });
+    expect(ids(own, 'team')).toEqual(['ch-new', 'ch-old', 'dm-amy', 'dm-zed']);
+  });
+
+  it('ignores hand-placed positions while sorting by recent activity', () => {
+    const placed = [
+      chan({ channelID: 'top-by-hand', channelName: 'a', sidebarPosition: 1000, lastMessageAt: '2026-10-01T00:00:00Z' }),
+      chan({ channelID: 'busy', channelName: 'b', sidebarPosition: 9000, lastMessageAt: '2026-10-29T00:00:00Z' }),
+    ];
+    const recent = { sectionSorts: { [SidebarSectionKeys.Channels]: 'recent' as const } };
+    expect(ids(groupSidebarItems(placed, [], [], recent), SidebarSectionKeys.Channels)).toEqual(['busy', 'top-by-hand']);
+    expect(ids(groupSidebarItems(placed, [], []), SidebarSectionKeys.Channels)).toEqual(['top-by-hand', 'busy']);
+  });
+});
+
 describe('groupSidebarItems: unread view', () => {
   const ch = (over: Partial<UserChannel>): UserChannel =>
     ({ channelID: 'c', channelName: 'c', channelType: 'public', role: 1, ...over }) as UserChannel;
@@ -96,13 +167,27 @@ describe('groupSidebarItems: unread view', () => {
     expect(groupSidebarItems(channels, convs, []).map((s) => s.key)).not.toContain(SidebarSectionKeys.Unread);
   });
 
-  it('pulls unread chats into an Unread section at the top, in sidebar order', () => {
+  it('pulls unread chats into an Unread section at the top, A-Z with channels and DMs mixed', () => {
     const sections = groupSidebarItems(channels, convs, [], { unreadSection: true });
     expect(sections[0].key).toBe(SidebarSectionKeys.Unread);
-    // muted without an alert stays put; a muted mention counts.
-    expect(ids(sections[0])).toEqual(['ch-fav', 'ch-mention', 'ch-unread', 'dm-alert']);
+    // muted without an alert stays put; a muted mention counts. A favorite
+    // doesn't go first: Unread has no order of the user's own.
+    expect(ids(sections[0])).toEqual(['dm-alert', 'ch-fav', 'ch-mention', 'ch-unread']);
     const channelsSection = sections.find((s) => s.key === SidebarSectionKeys.Channels)!;
     expect(ids(channelsSection)).toEqual(['ch-muted', 'ch-read']);
+  });
+
+  it('sorts the Unread section by recent activity when asked, channels and DMs mixed', () => {
+    const dated = channels.map((c) =>
+      c.channelID === 'ch-unread' ? { ...c, lastMessageAt: '2026-10-29T12:00:00Z' } : c.channelID === 'ch-fav' ? { ...c, lastMessageAt: '2026-10-01T00:00:00Z' } : c,
+    );
+    const dms = convs.map((c) => (c.conversationID === 'dm-alert' ? { ...c, updatedAt: '2026-10-20T00:00:00Z' } : c));
+    const sections = groupSidebarItems(dated, dms, [], {
+      unreadSection: true,
+      sectionSorts: { [SidebarSectionKeys.Unread]: 'recent' },
+    });
+    // Newest first; ch-mention was never posted in, so it goes last.
+    expect(ids(sections[0])).toEqual(['ch-unread', 'dm-alert', 'ch-fav', 'ch-mention']);
   });
 
   it('keeps the chat being viewed in Unread until the user leaves it', () => {

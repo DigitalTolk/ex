@@ -59,6 +59,36 @@ func TestChannelStore_AddMessageSeqAndLastRead(t *testing.T) {
 	}
 }
 
+// A posted message stamps the channel's lastMessageAt (the sidebar's "Recent
+// activity" sort); a bulk import adds to the counter without touching it.
+func TestChannelStore_IncrementMessageSeqStampsLastMessageAt(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	cs := NewChannelStore(db)
+	ch := makeChannel("ch-recent", "recent", "recent", model.ChannelTypePublic)
+	if err := cs.CreateChannel(ctx, ch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cs.AddMessageSeq(ctx, ch.ID, 3); err != nil {
+		t.Fatal(err)
+	}
+	got, err := cs.GetChannel(ctx, ch.ID)
+	if err != nil || got.LastMessageAt != nil {
+		t.Fatalf("after import: lastMessageAt = %v, %v; want unset", got.LastMessageAt, err)
+	}
+	before := time.Now().Add(-time.Second)
+	if _, err := cs.IncrementMessageSeq(ctx, ch.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err = cs.GetChannel(ctx, ch.ID)
+	if err != nil || got.LastMessageAt == nil || got.LastMessageAt.Before(before) || got.MessageSeq != 4 {
+		t.Fatalf("after post: channel = %+v, %v; want lastMessageAt stamped and seq 4", got, err)
+	}
+	if got.LastMessageAt.Nanosecond() != 0 {
+		t.Fatalf("lastMessageAt = %v; want whole seconds", got.LastMessageAt)
+	}
+}
+
 func TestConversationStore_AddMessageSeqAndLastRead(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"slices"
 
 	"github.com/DigitalTolk/ex/internal/middleware"
 	"github.com/DigitalTolk/ex/internal/model"
@@ -15,7 +16,18 @@ type UserStateHandler struct {
 	convSvc  *service.ConversationService
 	// skills validates hide/unhide targets; nil skips validation (tests).
 	skills skillLookup
+	// categories validates a sidebar sort's section; nil skips validation.
+	categories categoryLister
 }
+
+// categoryLister is CategoryService narrowed to the one call a sidebar sort
+// needs: the user's own categories.
+type categoryLister interface {
+	List(ctx context.Context, userID string) ([]*model.UserChannelCategory, error)
+}
+
+// SetCategoryLister wires section validation for SetSidebarSort.
+func (h *UserStateHandler) SetCategoryLister(c categoryLister) { h.categories = c }
 
 // skillLookup is AgentService narrowed to the one check hiding needs.
 type skillLookup interface {
@@ -61,6 +73,40 @@ func (h *UserStateHandler) MarkThreadSeen(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := h.stateSvc.MarkThreadSeen(r.Context(), userID, parentID, parentType, threadRootID); err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// SetSidebarSort remembers how one sidebar section orders its rows: a
+// built-in section's key, or the ID of one of the caller's own categories.
+func (h *UserStateHandler) SetSidebarSort(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	section := pathParam(r, "section")
+	var body struct {
+		Sort model.SidebarSort `json:"sort"`
+	}
+	if err := readJSON(r, &body); err != nil || (body.Sort != model.SidebarSortRecent && body.Sort != model.SidebarSortAZ) {
+		writeError(w, http.StatusBadRequest, "bad_request", `sort must be "recent" or "az"`)
+		return
+	}
+	if !slices.Contains(model.SidebarBuiltInSections, section) && h.categories != nil {
+		cats, err := h.categories.List(r.Context(), userID)
+		if err != nil {
+			writeServiceError(w, r, err)
+			return
+		}
+		if !slices.ContainsFunc(cats, func(c *model.UserChannelCategory) bool { return c.ID == section }) {
+			writeError(w, http.StatusNotFound, "not_found", "no such sidebar section")
+			return
+		}
+	}
+	if err := h.stateSvc.SetSidebarSort(r.Context(), userID, section, body.Sort); err != nil {
 		writeServiceError(w, r, err)
 		return
 	}
