@@ -205,6 +205,34 @@ func TestServerEngine_LoopFailureFailsRun(t *testing.T) {
 	}
 }
 
+// A model that keeps calling tools through its final turn ran out of steps;
+// Bedrock itself was fine, so the run must not be reported as bedrock_error.
+// The model is told its real budget up front.
+func TestServerEngine_TurnBudgetFailsAsTurnLimit(t *testing.T) {
+	fx := newOrchFixture(t)
+	run := fx.startRun(t)
+	fx.runs.mu.Lock()
+	fx.runs.runs[run.ID].Limits.MaxTurns = 2
+	fx.runs.runs[run.ID].Limits.MaxTaskTurns = 2
+	fx.runs.mu.Unlock()
+
+	fb := &fakeBedrock{outs: []*bedrockruntime.ConverseOutput{
+		bedrockToolCall("get_thread", map[string]any{}),
+		bedrockToolCall("get_thread", map[string]any{}),
+	}}
+	e := NewServerEngine(fx.orch, nil, fb)
+	dispatchAndWait(t, e, run.ID)
+
+	got, _ := fx.runs.GetRun(context.Background(), run.ID)
+	if got.State != model.RunStateFailed || got.FailReason != "turn_limit" {
+		t.Fatalf("expected turn_limit failure, got %s/%q", got.State, got.FailReason)
+	}
+	sys := fb.calls[0].System[0].(*types.SystemContentBlockMemberText).Value
+	if !strings.Contains(sys, "Budget: 2 turns for this run") {
+		t.Fatalf("system rules must state the real turn budget: %q", sys)
+	}
+}
+
 func TestServerEngine_ClaimRefusesTaskMode(t *testing.T) {
 	fx := newOrchFixture(t)
 	run := fx.startRun(t)
@@ -617,13 +645,22 @@ func TestServerEngine_ConnectorCallSeamsAndBody(t *testing.T) {
 	}
 }
 
+func TestServerSystemRules_TurnBudget(t *testing.T) {
+	s := serverSystemRules(&Assignment{AgentName: "qib", InvokerName: "Alice"}, "", 32)
+	for _, want := range []string{"Budget: 32 turns", "Never guess identifiers", "change approach", "partial answer"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("rules missing %q", want)
+		}
+	}
+}
+
 func TestServerSystemRules_WatchInstruction(t *testing.T) {
-	s := serverSystemRules(&Assignment{AgentName: "qib", InvokerName: "Alice", Persona: "p", WatchInstruction: "watch deploys"}, "")
+	s := serverSystemRules(&Assignment{AgentName: "qib", InvokerName: "Alice", Persona: "p", WatchInstruction: "watch deploys"}, "", 16)
 	if !strings.Contains(s, "Standing order") || !strings.Contains(s, "watch deploys") || !strings.Contains(s, "SKIP") {
 		t.Fatalf("watch rules missing: %q", s)
 	}
 	// A scheduled order has no trigger to judge: it must deliver, never SKIP.
-	s = serverSystemRules(&Assignment{AgentName: "qib", InvokerName: "Alice", Persona: "p", WatchInstruction: "post revenue", Mode: model.RunModeScheduled}, "")
+	s = serverSystemRules(&Assignment{AgentName: "qib", InvokerName: "Alice", Persona: "p", WatchInstruction: "post revenue", Mode: model.RunModeScheduled}, "", 16)
 	if !strings.Contains(s, "Standing order (scheduled)") || !strings.Contains(s, "post revenue") || strings.Contains(s, "reply exactly SKIP") {
 		t.Fatalf("scheduled rules wrong: %q", s)
 	}

@@ -3987,6 +3987,9 @@ func failNotice(reason string) string {
 		return "❌ stopped: couldn't start the agent process" + suffix + "."
 	case "no_runner":
 		return "❌ stopped: no agent runner is online for your account, so there was nothing to run this on."
+	case "turn_limit":
+		return "❌ stopped: ran out of steps before reaching an answer. Ask again with more to go on " +
+			"(which data, field or period to use), or split the question up."
 	}
 	if head == "" {
 		return "❌ stopped before finishing, for an unrecorded reason. Ask again and I'll retry."
