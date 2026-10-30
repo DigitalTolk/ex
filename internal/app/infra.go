@@ -28,6 +28,9 @@ type infra struct {
 	inbox  *eventlog.Stream
 	jwt    *auth.JWTManager
 	oidc   service.OIDCProvider
+	// sso is the provider behind oidc (nil without SSO); SharePoint sharing
+	// renews users' Microsoft tokens through its OAuth2 client.
+	sso *auth.OIDCProvider
 	// s3 is nil when object storage is unavailable (uploads disabled).
 	s3 *storage.S3Client
 
@@ -107,8 +110,11 @@ func (a *App) buildInfra(ctx context.Context) error {
 
 	// ------------------------------------------------------------- Auth
 	in.jwt = auth.NewJWTManager(cfg.JWTSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
-	if in.oidc, err = newOIDC(ctx, cfg); err != nil {
+	if in.sso, err = newOIDC(ctx, cfg); err != nil {
 		return err
+	}
+	if in.sso != nil {
+		in.oidc = handler.NewOIDCAdapter(in.sso)
 	}
 
 	// ------------------------------------------------------------- S3
@@ -155,16 +161,17 @@ func backfillTokenIndex(tokens tokenIndexer) {
 
 // newOIDC connects the SSO provider when OIDC_ISSUER is set (nil otherwise:
 // guest login only). A configured issuer that cannot be discovered fails the
-// boot.
-func newOIDC(ctx context.Context, cfg *config.Config) (service.OIDCProvider, error) {
+// boot. With SharePoint sharing on, sign-in also asks for the delegated
+// Microsoft permissions sharing runs with.
+func newOIDC(ctx context.Context, cfg *config.Config) (*auth.OIDCProvider, error) {
 	if cfg.OIDCIssuer == "" {
 		return nil, nil
 	}
-	p, err := auth.NewOIDCProvider(ctx, cfg.OIDCIssuer, cfg.OIDCClientID, cfg.OIDCClientSecret, cfg.OIDCRedirectURL())
+	p, err := auth.NewOIDCProvider(ctx, cfg.OIDCIssuer, cfg.OIDCClientID, cfg.OIDCClientSecret, cfg.OIDCRedirectURL(), cfg.SharePointScopes()...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init OIDC provider: %w", err)
 	}
-	return handler.NewOIDCAdapter(p), nil
+	return p, nil
 }
 
 // newObjectStorage connects S3 when ANY S3 setting is in play: a custom

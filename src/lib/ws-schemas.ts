@@ -245,6 +245,16 @@ export const activityChangedSchema = z.looseObject({
   threadRootID: z.string().optional(),
 });
 
+// --- SharePoint links (model.SharePointChangedEvent) -------------------------
+
+// sharepoint.changed: links in a parent changed state; an empty list means
+// every link there.
+export const sharePointChangedSchema = z.object({
+  parentID: id,
+  parentType: z.enum(['channel', 'conversation']),
+  urls: z.array(z.string()),
+});
+
 // --- agent runs (model.Run / model.Approval) --------------------------------
 
 // run.updated carries the run (the full model.Run to the invoker, a channel
@@ -351,4 +361,5 @@ export type WSWireChecks = [
   Expect<FitsWire<typeof runApprovalSchema, RunApprovalWire>>,
   Expect<FitsWire<typeof conversationConvertedSchema, { conversationID: string; channelID: wire.Channel['id']; slug: wire.Channel['slug'] }>>,
   Expect<FitsWire<typeof notificationSettingsUpdatedSchema, { settings: wire.NotificationSettings }>>,
+  Expect<FitsWire<typeof sharePointChangedSchema, wire.SharePointChangedEvent>>,
 ];

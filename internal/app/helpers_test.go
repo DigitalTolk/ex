@@ -300,3 +300,15 @@ func TestMustRedisOptions(t *testing.T) {
 	}
 	mustRedisOptions(nil, errors.New("parse"))
 }
+
+func TestMustBuildPanicsOnAnImpossibleFailure(t *testing.T) {
+	if got := mustBuild(7, nil); got != 7 {
+		t.Fatalf("mustBuild = %d", got)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("want a panic")
+		}
+	}()
+	mustBuild(0, errors.New("validated config failed"))
+}

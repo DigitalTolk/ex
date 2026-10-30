@@ -24,11 +24,11 @@ const sentryReplayCDN = "https://browser.sentry-cdn.com"
 
 // cspOptions are the CSP additions this deployment needs: the hashes of the
 // served page's inline scripts, the upload endpoint's connect-src, the HTML
-// preview route as the one thing the page may frame (when attachments are
-// served), and — only when Session Replay is actually sampled — Sentry's CDN
+// preview route (when attachments are served) and the SharePoint hosts as
+// the things the page may frame, and — only when Session Replay is actually sampled — Sentry's CDN
 // for the replay bundle plus the blob: worker it records with.
 func (d *Deps) cspOptions(scriptHashes []string) middleware.CSPOptions {
-	o := middleware.CSPOptions{ConnectSrc: d.UploadConnectSrc, ScriptSrc: slices.Clip(scriptHashes)}
+	o := middleware.CSPOptions{ConnectSrc: d.UploadConnectSrc, ScriptSrc: slices.Clip(scriptHashes), FrameSrc: d.FrameSrc}
 	if d.Attachment != nil {
 		o.FramePath = htmlPreviewRoutePrefix
 		if u, err := url.Parse(d.BaseURL); err == nil && u.Host != "" {
@@ -77,6 +77,9 @@ type Deps struct {
 	Webhook    *WebhookHandler
 	Activity   *ActivityHandler
 	Command    *CommandHandler
+	// SharePoint serves posted SharePoint links; nil unless SharePoint
+	// sharing is configured.
+	SharePoint *SharePointHandler
 	// Scheduled messages: compose now, deliver at a chosen time.
 	ScheduledMessage *ScheduledMessageHandler
 	// Agent orchestration (plan-v2): SPA surface, ex-runner API, and the
@@ -119,6 +122,11 @@ type Deps struct {
 	// needed when that endpoint is plain http (local MinIO) — production
 	// https stores are covered by the base policy.
 	UploadConnectSrc []string
+
+	// FrameSrc lists the https origins the page may frame: the SharePoint
+	// hosts a shared file's preview loads from. Empty unless SharePoint
+	// sharing is on.
+	FrameSrc []string
 
 	// DisableAccessLog silences per-request logging except 5xx responses
 	// (ACCESS_LOG_ENABLED=false). Zero value keeps full access logging.

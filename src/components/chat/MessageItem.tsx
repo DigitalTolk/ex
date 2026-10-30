@@ -27,7 +27,7 @@ import { EmojiPicker } from '@/components/EmojiPicker';
 import { UserHoverCard } from '@/components/UserHoverCard';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useEditMessage, useToggleReaction } from '@/hooks/useMessages';
-import { renderMarkdown } from '@/lib/markdown';
+import { renderMarkdown, type RenderOpts } from '@/lib/markdown';
 import { isEmojiOnlyMessage } from '@/lib/emoji-shortcodes';
 import { recordEmojiUse } from '@/lib/emoji-frequency';
 import { padQuickReactions } from '@/lib/quick-reactions';
@@ -40,6 +40,9 @@ import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { MessageAttachments } from '@/components/chat/MessageAttachments';
 import { ThreadActionBar } from '@/components/chat/ThreadActionBar';
 import { UnfurlCard } from '@/components/chat/UnfurlCard';
+import { SharePointAnchor, SharePointCard } from '@/components/chat/SharePointCard';
+import { useSharePointHosts } from '@/hooks/useSharePoint';
+import { isSharePointURL, sharePointURLs } from '@/lib/sharepoint';
 import { MessageRichAttachments } from '@/components/chat/MessageRichAttachments';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { extractURLs, formatLongDateTime, formatRelative } from '@/lib/format';
@@ -637,6 +640,27 @@ function MessageItemImpl({
   // The unfurl scan walks the whole body; memoize so it only runs when the
   // body changes, not on unrelated re-renders.
   const bodyURLs = useMemo(() => extractURLs(message.body), [message.body]);
+  // SharePoint links show as their files (one card each) instead of a link
+  // preview, and open for editing — only once the message has a parent to
+  // ask about them in.
+  const sharePointHosts = useSharePointHosts();
+  const hasParent = !!(channelId || conversationId);
+  const sharePointLinks = useMemo(
+    () => (hasParent ? sharePointURLs(message.body, sharePointHosts) : []),
+    [hasParent, message.body, sharePointHosts],
+  );
+  const sharePointParent = useMemo(() => ({ channelId, conversationId }), [channelId, conversationId]);
+  // The lightbox header's "where": its files and SharePoint cards.
+  const postedIn = channelSlug ? `~${channelSlug}` : conversationId ? 'Direct message' : undefined;
+  const renderLink = useCallback(
+    (href: string, children: ReactNode) =>
+      hasParent && isSharePointURL(href, sharePointHosts) ? (
+        <SharePointAnchor href={href} parent={{ channelId, conversationId }} className="text-link transition-colors hover:text-link/80">
+          {children}
+        </SharePointAnchor>
+      ) : undefined,
+    [hasParent, sharePointHosts, channelId, conversationId],
+  );
 
   // Recomputed only when the reactions map changes, not on every re-render
   // (presence/hover ticks would otherwise re-filter on each paint).
@@ -1072,6 +1096,7 @@ function MessageItemImpl({
                 currentUserId={currentUserId}
                 onContentHeightChange={onContentHeightChange}
                 openTag={openTag}
+                renderLink={renderLink}
                 // Grouped rows have no header (that's where the header rows
                 // show "(edited)"), so the marker rides the end of the text's
                 // last line instead, Slack-style.
@@ -1084,14 +1109,29 @@ function MessageItemImpl({
                 }
               />
             </div>
+            {sharePointLinks.map((url) => (
+              <SharePointCard
+                key={url}
+                url={url}
+                parent={sharePointParent}
+                currentUserId={currentUserId}
+                nameOf={(id) => userMap?.get(id)?.displayName ?? 'Unknown'}
+                authorName={displayAuthorName}
+                authorAvatarURL={displayAuthorAvatarURL}
+                postedIn={postedIn}
+                postedAt={message.createdAt}
+                onContentHeightChange={onContentHeightChange}
+              />
+            ))}
             {(() => {
               if (message.noUnfurl) return null;
-              // First URL in the body (skipping code) gets a preview
-              // card. Capped at one to keep messages compact.
-              const urls = bodyURLs;
-              return urls[0] ? (
+              // First URL in the body (skipping code) that isn't a SharePoint
+              // file gets a preview card. Capped at one to keep messages
+              // compact.
+              const url = bodyURLs.find((u) => !isSharePointURL(u, sharePointHosts));
+              return url ? (
                 <UnfurlCard
-                  url={urls[0]}
+                  url={url}
                   messageId={message.id}
                   channelId={channelId}
                   conversationId={conversationId}
@@ -1108,13 +1148,7 @@ function MessageItemImpl({
 	                messageID={message.id}
 	                authorName={displayAuthorName}
                 authorAvatarURL={displayAuthorAvatarURL}
-                postedIn={
-                  channelSlug
-                    ? `~${channelSlug}`
-                    : conversationId
-                      ? 'Direct message'
-                      : undefined
-                }
+                postedIn={postedIn}
                 postedAt={message.createdAt}
                 onContentHeightChange={onContentHeightChange}
               />
@@ -1413,6 +1447,7 @@ interface MessageBodyProps {
   openTag: (tag: string) => void;
   // Rendered at the end of the body's last line (see RenderOpts.trailing).
   trailing?: ReactNode;
+  renderLink?: RenderOpts['renderLink'];
 }
 
 const MessageBody = memo(function MessageBody({
@@ -1423,6 +1458,7 @@ const MessageBody = memo(function MessageBody({
   onContentHeightChange,
   openTag,
   trailing,
+  renderLink,
 }: MessageBodyProps) {
   // Marker syntax is plain text anyone can type, so a card renders only for
   // a post an agent run made (agentRunID is stamped by the server, never
@@ -1451,6 +1487,7 @@ const MessageBody = memo(function MessageBody({
         onMediaLoad: onContentHeightChange,
         onTagClick: openTag,
         trailing,
+        renderLink,
         renderUserMention: (userId, displayName, _isSelf, pill) => (
           <UserHoverCard
             key={`mention-${userId}-${message.id}`}

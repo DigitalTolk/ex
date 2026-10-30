@@ -47,6 +47,7 @@ func NewRouter(d *Deps) http.Handler {
 	webhookH := d.Webhook
 	activityH := d.Activity
 	commandH := d.Command
+	sharePointH := d.SharePoint
 	jwtMgr := d.JWT
 	frontendFS := d.FrontendFS
 	appVersion := d.AppVersion
@@ -217,6 +218,12 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("DELETE /api/v1/scheduled-messages/{id}", middleware.WrapFunc(sm.Delete, authMW))
 		mux.Handle("POST /api/v1/scheduled-messages/{id}/send", middleware.WrapFunc(sm.SendNow, authMW, writeLimit))
 	}
+	if sharePointH != nil {
+		mux.Handle("GET /api/v1/sharepoint/link", middleware.WrapFunc(sharePointH.Link, authMW))
+		mux.Handle("POST /api/v1/sharepoint/link/retry", middleware.WrapFunc(sharePointH.Retry, authMW, writeLimit))
+		mux.Handle("GET /api/v1/sharepoint/preview", middleware.WrapFunc(sharePointH.Preview, authMW))
+	}
+
 	if activityH != nil {
 		mux.Handle("GET /api/v1/activity", middleware.WrapFunc(activityH.Feed, authMW))
 		mux.Handle("PUT /api/v1/activity/read", middleware.WrapFunc(activityH.MarkRead, authMW))

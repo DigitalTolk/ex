@@ -47,6 +47,7 @@ export const EventType = {
   RunUpdated: wire.EventRunUpdated,
   RunProgress: wire.EventRunProgress,
   RunApproval: wire.EventRunApproval,
+  SharePointChanged: wire.EventSharePointChanged,
 } as const;
 
 export type EventTypeName = (typeof EventType)[keyof typeof EventType];

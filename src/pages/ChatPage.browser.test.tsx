@@ -369,6 +369,29 @@ describe('ChatPage WS router (browser)', () => {
     expect(keys).toContainEqual(['incoming-webhooks']);
   });
 
+  it('onSharePointChanged refetches the changed link cards and the Files panel', async () => {
+    const { qc } = await renderChatPage();
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    lastHandlers().onSharePointChanged?.({ parentID: 'ch-99', parentType: 'channel', urls: ['https://contoso.sharepoint.com/x'] });
+    const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] }).queryKey);
+    expect(keys).toContainEqual(['sharepoint', 'channels/ch-99', 'https://contoso.sharepoint.com/x']);
+    expect(keys).toContainEqual(['files', 'channels/ch-99']);
+    expectInvalidPayloadReported('sharepoint.changed', () => lastHandlers().onSharePointChanged?.({ parentID: 'ch-99' }));
+  });
+
+  it('an upload or a deleted message refetches the Files panel', async () => {
+    const { qc } = await renderChatPage();
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    const filesRefetches = () =>
+      spy.mock.calls.filter((c) => JSON.stringify((c[0] as { queryKey?: unknown[] }).queryKey) === '["files","channels/ch-99"]').length;
+    lastHandlers().onMessageNew?.(msg({ id: 'plain' }));
+    expect(filesRefetches()).toBe(0);
+    lastHandlers().onMessageNew?.(msg({ id: 'upload', attachmentIDs: ['att-1'] }));
+    expect(filesRefetches()).toBe(1);
+    lastHandlers().onMessageDeleted?.({ id: 'upload', parentID: 'ch-99', parentType: 'channel', deleted: true });
+    expect(filesRefetches()).toBe(2);
+  });
+
   it('onActivityNew refetches the durable activity stream', async () => {
     const { qc } = await renderChatPage();
     const spy = vi.spyOn(qc, 'invalidateQueries');

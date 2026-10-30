@@ -212,6 +212,13 @@ export const EventScheduledMessagesChanged = "scheduled_messages.changed";
  */
 export const EventRemindersChanged = "reminders.changed";
 /**
+ * EventSharePointChanged tells a channel's or conversation's members that
+ * SharePoint links posted there changed state (shared, failed, a member
+ * given or denied access), so their link cards and Files panel refetch.
+ * data is model.SharePointChangedEvent. Sent to the parent's topic.
+ */
+export const EventSharePointChanged = "sharepoint.changed";
+/**
  * Event represents a real-time event with a type and JSON payload, delivered
  * to clients over WebSocket.
  * ID is a ULID stamped at publish time. It is the canonical identity the

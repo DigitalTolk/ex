@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"reflect"
@@ -67,6 +68,18 @@ type Config struct {
 	// (MS_STATUS_SYNC_INTERVAL, default 5m). One tenant-wide Graph listing
 	// per interval, whatever the number of users.
 	MSStatusSyncInterval time.Duration `env:"MS_STATUS_SYNC_INTERVAL" envDefault:"5m"`
+	// MSTokenKey turns on SharePoint link sharing: a SharePoint link posted
+	// in a channel or conversation is shared with its members as the person
+	// who posted it. It is the base64 of 32 random bytes that seal each
+	// user's Microsoft token (MS_TOKEN_KEY). It needs the Microsoft 365
+	// integration and SSO, and the SSO app's delegated Files.ReadWrite.All
+	// and offline_access permissions with admin consent: sign-in asks for
+	// them as soon as this is set.
+	MSTokenKey string `env:"MS_TOKEN_KEY"`
+	// MSSharePointHosts limits sharing to links on these hosts
+	// (MS_SHAREPOINT_HOSTS, comma separated); empty takes any
+	// *.sharepoint.com host.
+	MSSharePointHosts []string `env:"MS_SHAREPOINT_HOSTS"`
 
 	// JWT
 	JWTSecret     string        `env:"JWT_SECRET"`
@@ -259,6 +272,9 @@ func Load() (*Config, error) {
 	if c.MSStatusSyncInterval <= 0 {
 		return nil, fmt.Errorf("invalid MS_STATUS_SYNC_INTERVAL %s: must be a positive duration", c.MSStatusSyncInterval)
 	}
+	if err := c.loadSharePoint(); err != nil {
+		return nil, err
+	}
 
 	// EMAIL_FROM is the transport-neutral sender; it falls back to SMTP_FROM
 	// so a config written before SES support keeps working unchanged.
@@ -314,6 +330,56 @@ func envError(err error) error {
 // configured.
 func (c *Config) MSGraphEnabled() bool {
 	return c.MSTenantID != ""
+}
+
+// loadSharePoint checks the SharePoint settings, failing closed: a key set
+// without what sharing needs must abort boot, not run with sharing off.
+func (c *Config) loadSharePoint() error {
+	hosts := c.MSSharePointHosts
+	c.MSSharePointHosts = nil
+	for _, h := range hosts {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			c.MSSharePointHosts = append(c.MSSharePointHosts, h)
+		}
+	}
+	if c.MSTokenKey == "" {
+		return nil
+	}
+	if !c.MSGraphEnabled() || c.OIDCIssuer == "" {
+		return errors.New("MS_TOKEN_KEY is set but SharePoint sharing also needs MS_TENANT_ID and OIDC_ISSUER")
+	}
+	if len(c.SharePointTokenKey()) != 32 {
+		return errors.New("invalid MS_TOKEN_KEY: must be the base64 of 32 random bytes (openssl rand -base64 32)")
+	}
+	return nil
+}
+
+// SharePointEnabled reports whether SharePoint link sharing is configured.
+func (c *Config) SharePointEnabled() bool { return c.MSTokenKey != "" }
+
+// SharePointTokenKey is the key that seals users' Microsoft tokens: MS_TOKEN_KEY
+// decoded (Load has checked it decodes to 32 bytes).
+func (c *Config) SharePointTokenKey() []byte {
+	key, _ := base64.StdEncoding.DecodeString(strings.TrimSpace(c.MSTokenKey))
+	return key
+}
+
+// SharePointHosts are the hosts whose links are shared: MS_SHAREPOINT_HOSTS,
+// or every *.sharepoint.com host.
+func (c *Config) SharePointHosts() []string {
+	if len(c.MSSharePointHosts) > 0 {
+		return c.MSSharePointHosts
+	}
+	return []string{"*.sharepoint.com"}
+}
+
+// SharePointScopes are the delegated permissions sign-in asks for when
+// SharePoint sharing is on: a refresh token, and sharing files as the user.
+func (c *Config) SharePointScopes() []string {
+	if !c.SharePointEnabled() {
+		return nil
+	}
+	return []string{"offline_access", "https://graph.microsoft.com/Files.ReadWrite.All"}
 }
 
 func (c *Config) IsDev() bool {

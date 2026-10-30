@@ -74,6 +74,16 @@ func (a *App) buildHTTP(context.Context) error {
 		admin.SetSearch(s.client, s.reindexer)
 		admin.SetMappingRebuilder(s.mappingRebuilder)
 	}
+	var sharePoint *handler.SharePointHandler
+	var frameSrc []string
+	if sp := a.notify.sharePoint; sp != nil {
+		sharePoint = handler.NewSharePointHandler(sp)
+		admin.SetSharePointHosts(sp.Hosts())
+		// A shared file's preview frames its SharePoint host.
+		for _, h := range sp.Hosts() {
+			frameSrc = append(frameSrc, "https://"+h)
+		}
+	}
 	h.sidebar = handler.NewSidebarHandler(c.channels, c.conversations, c.categories)
 	h.sidebar.SetSidebarService(c.sidebar)
 
@@ -119,6 +129,7 @@ func (a *App) buildHTTP(context.Context) error {
 		Webhook:      handler.NewWebhookHandler(c.webhooks),
 		Activity:     handler.NewActivityHandler(c.activity, c.reminders),
 		Command:      handler.NewCommandHandler(c.commands),
+		SharePoint:   sharePoint,
 		Agent:        h.agent,
 		AgentRunner:  handler.NewAgentRunnerHandler(ag.svc, ag.orch),
 		RunnerToken:  h.runnerToken,
@@ -143,6 +154,7 @@ func (a *App) buildHTTP(context.Context) error {
 		// endpoint; a plain-http endpoint (local MinIO) must be CSP
 		// allow-listed or every upload dies with "Failed to fetch".
 		UploadConnectSrc: uploadConnectSrcOrigins(cfg.S3PublicEndpoint, cfg.S3Endpoint),
+		FrameSrc:         frameSrc,
 		RateLimiter:      middleware.NewRedisRateLimiter(in.cache.Client()),
 		// ACCESS_LOG_ENABLED=false → only 5xx requests reach the log.
 		DisableAccessLog: !cfg.AccessLogEnabled,

@@ -140,6 +140,9 @@ type MessageService struct {
 	fanOutSlots chan struct{}
 	// safetyNet durably re-checks every fan-out (SetNotifySafetyNet).
 	safetyNet NotifySafetyNet
+	// sharePoint shares posted SharePoint links (SetSharePoint); nil unless
+	// SharePoint sharing is configured.
+	sharePoint MessageSharePoint
 	// seedUsers reads an account so /threads can tell a post-index sign-up
 	// (nothing to backfill) from an account with history. Optional seam
 	// (SetThreadSeedUsers) — nil keeps the one-time seed scan for everyone.
@@ -378,6 +381,19 @@ type NotifySafetyNet interface {
 
 // SetNotifySafetyNet wires the durable fan-out check.
 func (s *MessageService) SetNotifySafetyNet(n NotifySafetyNet) { s.safetyNet = n }
+
+// MessageSharePoint shares the SharePoint links messages carry and lists the
+// files they shared (SharePointService).
+type MessageSharePoint interface {
+	MessageSent(ctx context.Context, msg *model.Message, parentType string)
+	MessageEdited(ctx context.Context, before, after *model.Message, parentType string)
+	MessagesDeleted(ctx context.Context, parentID, parentType string, ids []string)
+	Files(ctx context.Context, parentID string) ([]SharePointFileEntry, error)
+}
+
+// SetSharePoint wires SharePoint link sharing. Optional: only when it is
+// configured.
+func (s *MessageService) SetSharePoint(sp MessageSharePoint) { s.sharePoint = sp }
 
 // NotificationsWired reports whether the alert pipeline is complete — a
 // notifier, and the durable safety net behind it. Boot refuses to serve
@@ -872,6 +888,10 @@ func (s *MessageService) sendRun(ctx context.Context, authorID, accessorID, pare
 	s.notify(ctx, msg, parentType, updatedThreadRoot)
 
 	s.indexMessage(ctx, msg, parentType)
+
+	if s.sharePoint != nil {
+		s.sharePoint.MessageSent(ctx, msg, parentType)
+	}
 
 	// Thread reply: republish the authoritative parent so subscribers see
 	// the new replyCount / avatar stack without a re-fetch. The metadata
@@ -2228,6 +2248,9 @@ func (s *MessageService) Edit(ctx context.Context, userID, parentID, parentType,
 		if s.reminders != nil {
 			s.reminders.MessageEdited(ctx, &edited, parentType)
 		}
+		if s.sharePoint != nil {
+			s.sharePoint.MessageEdited(ctx, msg, &edited, parentType)
+		}
 	}
 
 	s.indexMessage(ctx, &edited, parentType)
@@ -2281,6 +2304,9 @@ func (s *MessageService) Delete(ctx context.Context, userID, parentID, parentTyp
 	}
 	if s.reminders != nil {
 		s.reminders.MessagesDeleted(ctx, parentID, parentType, deleted)
+	}
+	if s.sharePoint != nil {
+		s.sharePoint.MessagesDeleted(ctx, parentID, parentType, deleted)
 	}
 
 	// Sweep the agent-run activity logs for this chat: the runs it invoked and

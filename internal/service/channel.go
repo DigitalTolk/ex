@@ -44,6 +44,7 @@ type ChannelService struct {
 	activity    ChannelActivityRecorder
 	reminders   ChannelReminderSync
 	threadState ChannelThreadStateSync
+	sharePoint  ChannelSharePointSync
 	conversions ConversationConverter
 	// convertedDrafts moves a converted group's drafts to its channel.
 	convertedDrafts ConversationDraftMover
@@ -93,6 +94,13 @@ type ChannelThreadStateSync interface {
 	ParentLeft(ctx context.Context, userIDs []string, parentID string)
 }
 
+// ChannelSharePointSync keeps the access to SharePoint files shared in a
+// channel in step with its members (SharePointService).
+type ChannelSharePointSync interface {
+	MemberJoined(ctx context.Context, channelID, userID string)
+	ParentLeft(ctx context.Context, userIDs []string, parentID string)
+}
+
 // NewChannelService creates a ChannelService with the given dependencies.
 // messages may be nil; when it is, system messages are not persisted.
 func NewChannelService(channels ChannelStore, memberships MembershipStore, users UserStore, messages MessageStore, cache Cache, broker Broker, publisher Publisher) *ChannelService {
@@ -122,6 +130,10 @@ func (s *ChannelService) SetReminderSync(r ChannelReminderSync) { s.reminders = 
 // a channel.
 func (s *ChannelService) SetThreadStateSync(t ChannelThreadStateSync) { s.threadState = t }
 
+// SetSharePointSync wires SharePoint access into joining and leaving a
+// channel. Optional: only when SharePoint sharing is configured.
+func (s *ChannelService) SetSharePointSync(sp ChannelSharePointSync) { s.sharePoint = sp }
+
 // accessLost tells the activity stream and the reminders that these users can
 // no longer read channelID — they left or were removed — so neither keeps
 // showing its messages. Archiving is not a loss of access: members keep
@@ -135,6 +147,16 @@ func (s *ChannelService) accessLost(ctx context.Context, userIDs []string, chann
 	}
 	if s.threadState != nil {
 		s.threadState.ParentLeft(ctx, userIDs, channelID)
+	}
+	if s.sharePoint != nil {
+		s.sharePoint.ParentLeft(ctx, userIDs, channelID)
+	}
+}
+
+// accessGained gives a new member access to what the channel shared.
+func (s *ChannelService) accessGained(ctx context.Context, userID, channelID string) {
+	if s.sharePoint != nil {
+		s.sharePoint.MemberJoined(ctx, channelID, userID)
 	}
 }
 
@@ -229,6 +251,7 @@ func (s *ChannelService) addMemberWithEvents(ctx context.Context, ch *model.Chan
 		"action":      events.MemberActionJoined,
 	})
 
+	s.accessGained(ctx, userID, ch.ID)
 	s.postSystemMessage(ctx, ch.ID, displayName+" joined the channel")
 	return nil
 }
@@ -842,6 +865,7 @@ func (s *ChannelService) AddMember(ctx context.Context, actorID, channelID, user
 		"action":      events.MemberActionAdded,
 	})
 
+	s.accessGained(ctx, userID, channelID)
 	s.postSystemMessage(ctx, channelID, displayName+" was added to the channel")
 	// A bot or agent has nobody to read its activity stream.
 	if s.activity != nil && !machine {
