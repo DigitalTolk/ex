@@ -66,6 +66,7 @@ export const queryKeys = {
   pinned: (parentPath: string) => ['pinned', parentPath] as const,
   // One cache per name filter; ['files', parentPath] covers them all.
   files: (parentPath: string, query: string) => ['files', parentPath, query] as const,
+  filesIn: (parentPath: string) => ['files', parentPath] as const,
 
   // Attachments
   attachment: (id: string) => ['attachment', id] as const,
@@ -82,6 +83,10 @@ export const queryKeys = {
 
   // Admin / unfurl
   unfurl: (url: string) => ['unfurl', url] as const,
+  // A posted SharePoint link's card, per parent ("channels/<id>").
+  sharePointLink: (parentPath: string, url: string) => ['sharepoint', parentPath, url] as const,
+  sharePointLinks: (parentPath: string) => ['sharepoint', parentPath] as const,
+  sharePointPreview: (parentPath: string, fileID: string) => ['sharepoint-preview', parentPath, fileID] as const,
   adminSearchStatus: () => ['admin-search-status'] as const,
   adminEmailStatus: () => ['admin-email-status'] as const,
   incomingWebhooks: () => ['incoming-webhooks'] as const,

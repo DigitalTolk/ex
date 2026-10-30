@@ -41,3 +41,13 @@ func mustJSONBody(b []byte, err error) []byte {
 	}
 	return b
 }
+
+// mustAEAD unwraps AES-GCM construction for a key whose length the caller
+// checked: a 32-byte key is always a valid AES-256 key, and GCM accepts every
+// AES block.
+func mustAEAD[T any](c T, err error) T {
+	if err != nil {
+		panic(fmt.Sprintf("service: AES-GCM construction for a checked key failed: %v", err))
+	}
+	return c
+}

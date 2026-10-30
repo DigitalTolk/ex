@@ -19,6 +19,8 @@ import {
   refetchActivity,
 } from '@/hooks/useActivity';
 import { applyEmojiAddedEvent, applyEmojiRemovedEvent, invalidateEmojis } from '@/hooks/useEmoji';
+import { applySharePointChangedEvent } from '@/hooks/useSharePoint';
+import { invalidateParentFiles } from '@/lib/files-cache';
 import { EventType } from '@/lib/event-types';
 import type { WSEventHandlers } from '@/lib/ws-events';
 import { sendWS } from '@/lib/ws-sender';
@@ -218,6 +220,8 @@ export default function ChatPage() {
       // up to 6s for the expiry to tick. Pass parentMessageID so a
       // thread reply clears the thread bucket (not the main one).
       clearTyping(parentID, authorID, parentMessageID ?? '');
+      // An upload lists in the Files panel at once.
+      if (msg.attachmentIDs?.length) invalidateParentFiles(queryClient, parentID, msg.parentType);
       const userChannels = queryClient.getQueryData<{ channelID: string }[]>(queryKeys.userChannels()) ?? [];
       const userConversations = queryClient.getQueryData<{ conversationID: string }[]>(queryKeys.userConversations()) ?? [];
       const parentKind = resolveParentKind(
@@ -351,6 +355,8 @@ export default function ChatPage() {
       markMessageDeletedInCache(queryClient, parentID, id, parentMessageID, msg);
       invalidateThreadBothScopes(queryClient, parentID, parentMessageID || id, msg.parentType);
       invalidateUnfurlsForMessage(queryClient, id);
+      // Its files leave the Files panel.
+      invalidateParentFiles(queryClient, parentID, msg.parentType);
     },
     [EventType.MembersChanged]: ({ channelID }) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.channelMembers(channelID) });
@@ -425,6 +431,9 @@ export default function ChatPage() {
     // A reminder was set or cancelled (here or on another device), fired, or
     // went with its message or channel — refetch the pending list.
     [EventType.RemindersChanged]: () => applyRemindersChangedEvent(queryClient),
+    // A posted SharePoint link was shared, failed, or a member was given or
+    // denied access — its card and the Files panel refetch.
+    [EventType.SharePointChanged]: (change) => applySharePointChangedEvent(queryClient, change),
     [EventType.ScheduledMessagesChanged]: () => {
       // Scheduled, edited, sent or failed on another tab/device (or by the
       // server at send time) — refetch the Scheduled list.

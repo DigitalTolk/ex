@@ -169,6 +169,30 @@ Restart and check the boot log for `Microsoft 365 integration enabled`.
 - **Profiles**: log out and back in (the sync runs at SSO login, so existing sessions pick up data on their next login), then open your profile hover card — phone and manager should appear.
 - **Meetings**: type `/mstmeetings` in any channel or DM and send — the join link should post into the chat. If it errors, check the server log: a Graph 403 there means the access policy (step 2) hasn't propagated or wasn't granted to that user.
 
+### SharePoint links (optional)
+
+With `MS_TOKEN_KEY` set, a SharePoint or OneDrive link posted in a channel (except ~general), a DM, a group DM or a private channel is shared with everyone there who can open it:
+
+- **Shared as the poster, never as the app.** Sharing runs with the poster's own Microsoft token (delegated Graph), so Microsoft 365 refuses anything they couldn't share themselves and records them as the sharer. App-only rights would let anyone paste a link to a file they may not share and have Ex share it with a whole channel.
+- **Edit access, no email.** Each member gets a direct `write` permission on the file (`POST /drives/{d}/items/{i}/invite`, `sendInvitation: false`). Members who already hold a permission of their own are left alone. Guests, accounts without a directory object id, bots, agents and deactivated accounts are skipped; the poster sees who was left out.
+- **Kept in step.** Someone who joins the channel later is given access (as the original poster); someone who leaves or is removed loses the access Ex gave them, and only that. When the last message carrying a link is edited or deleted, the access it gave is taken back. A permission Ex did not create is never removed. When the poster's token can't do its part (their Microsoft sign-in lapsed, or was revoked), Ex remembers what was left undone and finishes it at their next sign-in. A poster who never signs in again (they left the organisation) leaves that access in place: this is a convenience, not an access control, and the file's owner and the tenant's sharing policies stay in charge.
+- **Shown as it is, edited in Office.** The link shows as a file card under its message, and the file lists in the conversation's Files panel. Opening either shows the file in the lightbox as it is, in Office for the web's viewer (Graph's `driveItem: preview`), with **Edit** (Office for the web's editor, `Doc.aspx?…&action=edit`) and **Download** (SharePoint's `download.aspx`) beside it. The preview address is fetched with the viewer's own token and carries their access, so it shows only what they may open; without a sign-in of theirs (a guest, or before they sign in again) the lightbox offers the download instead. The page may frame only the SharePoint hosts (`MS_SHAREPOINT_HOSTS`): they are added to the CSP's `frame-src`. A folder, the link in the text, or a Cmd/Ctrl-click opens it in SharePoint.
+- **Never in the way.** Sending never waits: background jobs on the durable task queue (their own queue and two workers, so they never hold up mobile pushes) do the sharing, one channel at a time, with retries. The poster's card says how it went — "Sign in again", "You can't share this file", "File not found", "Microsoft 365 unavailable" — with a Retry button.
+
+Setup:
+
+1. In the app registration (the one in `OIDC_CLIENT_ID`): **API permissions** > **Add a permission** > **Microsoft Graph** > **Delegated permissions**: `Files.ReadWrite.All` and `offline_access`. Click **Grant admin consent for \<tenant\>**. **Do this before step 2:** as soon as `MS_TOKEN_KEY` is set, sign-in asks for these permissions, and without admin consent users who may not consent themselves can't sign in.
+2. Set the key that seals each user's stored Microsoft token (AES-256-GCM; the refresh token never leaves the server):
+
+   ```bash
+   MS_TOKEN_KEY=$(openssl rand -base64 32)   # enables SharePoint sharing; needs MS_TENANT_ID and OIDC_ISSUER
+   MS_SHAREPOINT_HOSTS=contoso.sharepoint.com,contoso-my.sharepoint.com   # optional; unset = any *.sharepoint.com host
+   ```
+
+3. Sign out and back in: the token is stored at sign-in, so a session started before the key was set has none, and its links say "Sign in again" (posted links can then be retried from their card).
+
+Keep `MS_TOKEN_KEY` stable: a new key makes every stored token unreadable until each user signs in again. Links posted before the feature was on, and links in ~general, are not shared.
+
 ## Transactional Email
 
 Two flows send mail: **guest invitations** and **password resets**. Message
@@ -275,6 +299,8 @@ unknown address, so neither can be used to enumerate accounts.
 | `MS_CLIENT_SECRET`   | `OIDC_CLIENT_SECRET`              | Graph app-registration client secret override            |
 | `MS_PROFILE_SYNC_INTERVAL` | `12h`                       | Directory re-sync cadence (phone + manager for all users; first sweep at boot = backfill) |
 | `MS_STATUS_SYNC_INTERVAL` | `5m`                        | Account-standing check (disabled or deleted in Entra → deactivated; first check at boot) |
+| `MS_TOKEN_KEY`       | -                                 | Base64 of 32 random bytes sealing users' Microsoft tokens — enables SharePoint link sharing (needs `MS_TENANT_ID`, `OIDC_ISSUER` and admin-consented delegated `Files.ReadWrite.All` + `offline_access`) |
+| `MS_SHAREPOINT_HOSTS` | any `*.sharepoint.com`           | Comma-separated hosts whose links are shared |
 | `SESSION_MAX_AGE`    | `2160h` (90 days)                 | Absolute session lifetime: refresh stops working this long after sign-in |
 | `OIDC_ALLOWED_EMAIL_DOMAINS` | -                         | Comma-separated email domains allowed to sign in via SSO (unset = any) |
 | `CONNECTOR_PROVIDER_URL` | -                             | Connector catalogue provider; must resolve to a public address (or be under `CONNECTOR_PRIVATE_DOMAINS`) outside development |

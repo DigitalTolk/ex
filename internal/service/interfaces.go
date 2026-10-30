@@ -7,6 +7,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/store"
+	"golang.org/x/oauth2"
 )
 
 // UserStore defines persistence operations for users.
@@ -139,6 +140,9 @@ type FileIndexEntry struct {
 	CreatedAt    time.Time
 	// Filename is empty until a search in the parent has filled it in.
 	Filename string
+	// SharePoint is set on the rows ListFiles adds for SharePoint files
+	// (AttachmentID is then "sp:" and the file's id).
+	SharePoint *model.SharePointFile
 }
 
 // ThreadFollowStore defines per-user follow/unfollow overrides for threads.
@@ -248,4 +252,7 @@ type OIDCUserInfo struct {
 	// EmailVerified is the `email_verified` claim; nil when the provider
 	// omits it (Entra ID does), which is accepted. An explicit false is not.
 	EmailVerified *bool
+	// Token is the provider's token response; with SharePoint sharing on it
+	// carries the user's delegated Microsoft Graph tokens.
+	Token *oauth2.Token
 }

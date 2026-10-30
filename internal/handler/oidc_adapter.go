@@ -44,5 +44,6 @@ func (a *oidcAdapter) Exchange(ctx context.Context, code, nonce string) (*servic
 		Issuer:        info.Issuer,
 		Subject:       info.Subject,
 		EmailVerified: info.EmailVerified,
+		Token:         info.Token,
 	}, nil
 }

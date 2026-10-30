@@ -3,28 +3,32 @@ import { keepPreviousData, useInfiniteQuery } from '@tanstack/react-query';
 import { Download } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { queryKeys, parentPath } from '@/lib/query-keys';
-import { useAttachmentLightbox } from '@/hooks/useAttachmentLightbox';
+import { useAttachmentLightbox, type LightboxSlide } from '@/hooks/useAttachmentLightbox';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useLiveInView } from '@/hooks/useInView';
 import { iconForAttachment, isImageContentType } from '@/lib/file-helpers';
 import { formatBytes, formatRelative } from '@/lib/format';
 import { canPreviewHtml } from '@/lib/html-attachment';
+import { sharePointOpenURL } from '@/lib/sharepoint';
+import { externalHref } from '@/lib/url-safety';
 import { SearchInput } from '@/components/ui/search-input';
+import { FileTypeIcon } from './FileTypeIcon';
 import { HtmlPreviewButton } from './HtmlPreviewButton';
 import { SidePanel } from './SidePanel';
 import type { Attachment } from '@/types';
+import type { SharePointFile } from '@/types/generated';
 import type { UserMapEntry } from './MessageList';
 
-// One file shared here, with the attachment ready to show (the server reads
-// the page's attachments in one go — the panel used to fetch them one request
-// at a time, which stalled on a busy channel).
-interface FileEntry {
+// One file shared here: an attachment ready to show (the server reads the
+// page's attachments in one go — the panel used to fetch them one request at a
+// time, which stalled on a busy channel), or the SharePoint file a posted link
+// shared.
+type FileEntry = {
   attachmentID: string;
   messageID: string;
   authorID: string;
   createdAt: string;
-  attachment: Attachment;
-}
+} & ({ attachment: Attachment; sharePoint?: undefined } | { attachment?: undefined; sharePoint: SharePointFile });
 
 interface FilePage {
   files: FileEntry[];
@@ -55,7 +59,8 @@ export function FilesPanel({
   userMap,
   postedIn,
 }: FilesPanelProps) {
-  const path = parentPath({ channelId, conversationId });
+  const parent = useMemo(() => ({ channelId, conversationId }), [channelId, conversationId]);
+  const path = parentPath(parent);
   const [query, setQuery] = useState('');
   const term = useDebouncedValue(query.trim(), SEARCH_DEBOUNCE_MS);
 
@@ -73,9 +78,9 @@ export function FilesPanel({
     enabled: !!(channelId || conversationId),
     // The last results stay up while the next search loads.
     placeholderData: keepPreviousData,
-    // Files change when someone uploads — those propagate via the
-    // message.new event. A 5-minute cache avoids re-fetching on every
-    // panel toggle without compromising freshness in practice.
+    // New files arrive with message.new (an upload) and sharepoint.changed
+    // (a shared link), which refetch the list; the cache spares a fetch on
+    // every panel toggle.
     staleTime: 5 * 60_000,
   });
   const entries = useMemo(() => data?.pages.flatMap((p) => p.files) ?? [], [data]);
@@ -89,24 +94,22 @@ export function FilesPanel({
   }, [atEnd, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   // Author + timestamp differ per row (same channel, many uploaders),
-  // so each slide carries its own header metadata.
+  // so each slide carries its own header metadata. SharePoint files are
+  // slides too (a folder opens in SharePoint instead).
   const sources = useMemo(
     () =>
       entries.map((e) => {
         const author = userMap[e.authorID];
-        return {
-          key: rowKey(e),
-          slide: e.attachment.url
-            ? {
-                attachment: e.attachment,
-                authorName: author?.displayName ?? 'Unknown',
-                authorAvatarURL: author?.avatarURL,
-                postedAt: e.createdAt,
-              }
-            : null,
-        };
+        const header = { authorName: author?.displayName ?? 'Unknown', authorAvatarURL: author?.avatarURL, postedAt: e.createdAt };
+        let slide: LightboxSlide | null = null;
+        if (e.sharePoint) {
+          if (!e.sharePoint.folder) slide = { ...header, sharePoint: { file: e.sharePoint, parent } };
+        } else if (e.attachment.url) {
+          slide = { ...header, attachment: e.attachment };
+        }
+        return { key: rowKey(e), slide };
       }),
-    [entries, userMap],
+    [entries, userMap, parent],
   );
   const { isOpenable, open, lightbox } = useAttachmentLightbox({ sources, postedIn });
 
@@ -143,9 +146,20 @@ export function FilesPanel({
       )}
       <ul className="divide-y" data-testid="files-list">
           {entries.map((e) => {
-            const a = e.attachment;
             const authorName = userMap[e.authorID]?.displayName ?? 'Unknown';
             const k = rowKey(e);
+            if (e.sharePoint) {
+              return (
+                <SharePointFileRow
+                  key={k}
+                  file={e.sharePoint}
+                  authorName={authorName}
+                  createdAt={e.createdAt}
+                  onOpen={isOpenable(k) ? () => open(k) : undefined}
+                />
+              );
+            }
+            const a = e.attachment;
             const canOpen = isOpenable(k);
             return (
               <li
@@ -225,5 +239,57 @@ export function FilesPanel({
       )}
       {lightbox}
     </SidePanel>
+  );
+}
+
+interface SharePointFileRowProps {
+  file: SharePointFile;
+  authorName: string;
+  createdAt: string;
+  // Opens the file in the lightbox; a folder has none and opens in
+  // SharePoint.
+  onOpen?: () => void;
+}
+
+// A SharePoint file a posted link shared.
+function SharePointFileRow({ file, authorName, createdAt, onOpen }: SharePointFileRowProps) {
+  const className =
+    'flex flex-1 min-w-0 items-center gap-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50';
+  const body = (
+    <>
+      <FileTypeIcon
+        name={file.name}
+        mimeType={file.mimeType}
+        folder={file.folder}
+        className="h-12 w-12 rounded-md"
+        iconClassName="h-6 w-6"
+      />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">{file.name}</p>
+        <p className="text-xs text-muted-foreground">
+          {authorName} · {formatRelative(createdAt)} · SharePoint
+        </p>
+      </div>
+    </>
+  );
+  return (
+    <li data-testid="files-row" className="flex items-center gap-3 px-2 py-2">
+      {onOpen ? (
+        <button type="button" onClick={onOpen} aria-label={`Open ${file.name}`} data-testid="files-row-open" className={className}>
+          {body}
+        </button>
+      ) : (
+        <a
+          href={externalHref(sharePointOpenURL(file, file.webURL))}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`Open ${file.name}`}
+          data-testid="files-row-open"
+          className={className}
+        >
+          {body}
+        </a>
+      )}
+    </li>
   );
 }

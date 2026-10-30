@@ -230,6 +230,9 @@ export interface WorkspaceSettings {
   // The Runners tab in the AI hub (set up, start and disconnect ex-runner
   // from the app). Off until an admin turns it on.
   runnersInApp?: boolean;
+  // Hosts whose links are shared SharePoint files ("*.example.com" matches
+  // every subdomain); absent when SharePoint sharing is off.
+  sharePointHosts?: string[];
 }
 
 export interface IncomingWebhook {

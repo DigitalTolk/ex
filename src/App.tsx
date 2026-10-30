@@ -9,6 +9,7 @@ import { PresenceProvider } from '@/context/PresenceContext';
 import { NotificationProvider } from '@/context/NotificationContext';
 import { TypingProvider } from '@/context/TypingContext';
 import { ThemeProvider } from '@/context/ThemeContext';
+import { SharePointHostsProvider } from '@/components/SharePointHostsProvider';
 import { NotificationCountTitleBridge } from '@/components/NotificationCountTitleBridge';
 import { Toaster } from '@/components/Toaster';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -215,41 +216,43 @@ export default function App() {
                 <NotificationProvider>
                   <TypingProvider>
                     <TooltipProvider>
-                      <ServerVersionBootstrap />
-                      <KeyboardInsetTracker />
-                      <NotificationCountTitleBridge />
-                      <Toaster />
-                      {/* Sized to the space above the on-screen keyboard (the
-                          whole viewport when it's down) so the top of the app
-                          stays on screen — see useKeyboardInset. */}
-                      <div
-                        className="flex flex-col bg-sidebar pt-safe-top"
-                        style={{ height: 'var(--ex-app-height, 100dvh)' }}
-                        data-app-root="true"
-                      >
-                        <div className="min-h-0 flex-1 bg-background">
-                          <RoutedErrorBoundary>
-                            {/* Fallback for lazy route chunks. Inside the
-                                error boundary so a failed chunk fetch (stale
-                                deploy) latches a recoverable error screen
-                                instead of a blank page. */}
-                            <Suspense
-                              fallback={
-                                <div
-                                  className="flex h-full items-center justify-center"
-                                  role="status"
-                                  aria-label="Loading page"
-                                  data-testid="route-loading"
-                                >
-                                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden="true" />
-                                </div>
-                              }
-                            >
-                              <AppRoutes />
-                            </Suspense>
-                          </RoutedErrorBoundary>
+                      <SharePointHostsProvider>
+                        <ServerVersionBootstrap />
+                        <KeyboardInsetTracker />
+                        <NotificationCountTitleBridge />
+                        <Toaster />
+                        {/* Sized to the space above the on-screen keyboard (the
+                            whole viewport when it's down) so the top of the app
+                            stays on screen — see useKeyboardInset. */}
+                        <div
+                          className="flex flex-col bg-sidebar pt-safe-top"
+                          style={{ height: 'var(--ex-app-height, 100dvh)' }}
+                          data-app-root="true"
+                        >
+                          <div className="min-h-0 flex-1 bg-background">
+                            <RoutedErrorBoundary>
+                              {/* Fallback for lazy route chunks. Inside the
+                                  error boundary so a failed chunk fetch (stale
+                                  deploy) latches a recoverable error screen
+                                  instead of a blank page. */}
+                              <Suspense
+                                fallback={
+                                  <div
+                                    className="flex h-full items-center justify-center"
+                                    role="status"
+                                    aria-label="Loading page"
+                                    data-testid="route-loading"
+                                  >
+                                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden="true" />
+                                  </div>
+                                }
+                              >
+                                <AppRoutes />
+                              </Suspense>
+                            </RoutedErrorBoundary>
+                          </div>
                         </div>
-                      </div>
+                      </SharePointHostsProvider>
                     </TooltipProvider>
                   </TypingProvider>
                 </NotificationProvider>

@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -122,6 +123,7 @@ func fullConfig(t *testing.T) *config.Config {
 	})
 	cfg.ConnectorProviderURL, cfg.ConnectorProviderKey = provider.URL, "key"
 	cfg.MSTenantID, cfg.MSClientID, cfg.MSClientSecret = "tenant", "ex", "secret"
+	cfg.MSTokenKey = base64.StdEncoding.EncodeToString(make([]byte, 32))
 	withGraphAt(t, graphStub(t))
 	cfg.OpenSearchURL = searchStub(t).URL
 	return cfg
@@ -167,7 +169,8 @@ func get(t *testing.T, url string) *http.Response {
 // then notification fan-outs, then durable-inbox appends — in that order.
 func TestBootWithEveryIntegrationServesAndShutsDownInOrder(t *testing.T) {
 	a := boot(t, fullConfig(t))
-	if a.chat.directorySync == nil || a.agents.engine == nil || a.search.mappingRebuilder == nil || a.infra.s3 == nil || a.chat.mailer == nil {
+	if a.chat.directorySync == nil || a.agents.engine == nil || a.search.mappingRebuilder == nil || a.infra.s3 == nil || a.chat.mailer == nil ||
+		a.notify.sharePoint == nil {
 		t.Fatal("full config: an optional integration did not come up")
 	}
 
@@ -205,9 +208,10 @@ func TestBootWithEveryIntegrationServesAndShutsDownInOrder(t *testing.T) {
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("shutdown order = %v, want %v", order, want)
 	}
-	// broker, task Redis, task queue and the started worker were released.
-	if closers != 4 || a.closers != nil {
-		t.Fatalf("closers = %d (left %v), want 4 run", closers, a.closers)
+	// broker, task Redis, task queue and the started workers (pushes,
+	// SharePoint) were released.
+	if closers != 5 || a.closers != nil {
+		t.Fatalf("closers = %d (left %v), want 5 run", closers, a.closers)
 	}
 }
 
@@ -330,8 +334,15 @@ func TestBootSurvivesATaskWorkerThatWontStart(t *testing.T) {
 	orig := startTaskWorker
 	t.Cleanup(func() { startTaskWorker = orig })
 	startTaskWorker = func(*service.AsynqPushWorker) error { return errors.New("already running") }
-	a := boot(t, baseConfig(t))
-	if len(a.closers) != 3 {
+	// SharePoint sharing on: its worker won't start either.
+	cfg := baseConfig(t)
+	idp := oidcDiscovery(t)
+	cfg.OIDCIssuer, cfg.OIDCClientID, cfg.OIDCClientSecret = idp.URL, "ex", "secret"
+	cfg.MSTenantID, cfg.MSClientID, cfg.MSClientSecret = "tenant", "ex", "secret"
+	cfg.MSTokenKey = base64.StdEncoding.EncodeToString(make([]byte, 32))
+	withGraphAt(t, graphStub(t))
+	a := boot(t, cfg)
+	if len(a.closers) != 3 || a.notify.sharePoint == nil {
 		t.Fatalf("closers = %d, want broker, task Redis and queue only", len(a.closers))
 	}
 	a.close()

@@ -262,20 +262,19 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
   strong: ({ children }) => <strong>{children}</strong>,
   em: ({ children }) => <em>{children}</em>,
   s: ({ children }) => <s>{children}</s>,
-  a: ({ children, href }: { children?: ReactNode; href?: string }) =>
-    isSafeUrl(href) ? (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="text-link transition-colors hover:text-link/80"
-    >
-      {children}
-    </a>
-    ) : (
-      // Unsafe scheme (javascript:, data: …) — render the text only, no anchor.
-      <span>{children}</span>
-  ),
+  // A safe link opens in a new tab, or renders the caller's way when it asks
+  // (renderLink: a SharePoint link opens for editing). An unsafe scheme
+  // (javascript:, data: …) renders the text only, no anchor.
+  a: function Anchor({ children, href }: { children?: ReactNode; href?: string }) {
+    const custom = useRenderOpts()?.renderLink?.(href as string, children);
+    if (!isSafeUrl(href)) return <span>{children}</span>;
+    if (custom !== undefined) return custom;
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" className="text-link transition-colors hover:text-link/80">
+        {children}
+      </a>
+    );
+  },
   // A fenced code block: route the raw text + language to CodeBlock, which
   // adds syntax highlighting, a line-number gutter, and a copy button. The
   // backend leaves the code text untouched (custom-syntax extraction skips
@@ -452,6 +451,7 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
   'ex-bare-url': ((props: CustomTagProps) => {
     const href = props['data-href'] ?? '';
     const visible = href.startsWith('https://') ? href.slice('https://'.length) : href;
+    const custom = useRenderOpts()?.renderLink?.(href, visible);
     // Guard the scheme here too — same defense-in-depth as the `a` component
     // above. The server only emits this tag for matched http(s) bare URLs, but
     // the client must not depend on the server staying correct: an unsafe
@@ -459,6 +459,7 @@ const HAST_COMPONENTS_MAP: Record<string, AnyComponent> = {
     if (!isSafeUrl(href)) {
       return <span>{visible}</span>;
     }
+    if (custom !== undefined) return custom;
     return (
       <a
         href={href}

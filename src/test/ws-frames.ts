@@ -112,6 +112,7 @@ export const CALLBACK_EVENTS = {
   onRunUpdated: 'run.updated',
   onRunProgress: 'run.progress',
   onRunApproval: 'run.approval',
+  onSharePointChanged: 'sharepoint.changed',
 } as const satisfies Record<string, AppEventType>;
 
 export type CallbackName = keyof typeof CALLBACK_EVENTS;
