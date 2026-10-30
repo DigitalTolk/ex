@@ -291,9 +291,9 @@ function ToolbarBtn({
   }`;
   if (!shortcut) {
     // The pickers' triggers (Emoji, GIF) are cloned by their popovers, so
-    // they keep the plain title.
+    // they keep the plain title; they are never pressed.
     return (
-      <button type="button" onClick={onClick} title={label} aria-label={label} aria-pressed={active ? 'true' : undefined} className={className}>
+      <button type="button" onClick={onClick} title={label} aria-label={label} className={className}>
         {children}
       </button>
     );
