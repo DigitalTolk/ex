@@ -168,4 +168,19 @@ describe('useSidebarViewPreferences: section sorts', () => {
     act(() => qc.setQueryData(queryKeys.userState(), older));
     await waitFor(() => expect(result.current.sectionSorts).toEqual({}));
   });
+
+  it('saves into the device copy when the user state is gone by the time the save lands', async () => {
+    let land: () => void = () => {};
+    mockApiFetch.mockImplementation((url: string) =>
+      url === '/api/v1/user-state' ? Promise.resolve(state({})) : new Promise<void>((resolve) => (land = resolve)),
+    );
+    const { qc, result } = setup();
+    await waitFor(() => expect(qc.getQueryState(queryKeys.userState())?.status).toBe('success'));
+
+    act(() => result.current.setSectionSort('__channels__', 'recent'));
+    // Signed out meanwhile: the cached user state is dropped.
+    qc.removeQueries({ queryKey: queryKeys.userState() });
+    await act(async () => land());
+    expect(JSON.parse(localStorage.getItem('sidebar.sectionSorts')!)).toEqual({ __channels__: 'recent' });
+  });
 });

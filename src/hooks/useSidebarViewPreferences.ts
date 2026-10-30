@@ -136,12 +136,15 @@ export function useSidebarViewPreferences() {
     }).then(
       () => {
         if (!isLatest()) return;
-        if (loaded) {
-          // Loaded, so the user state is in the cache.
-          qc.setQueryData<UserState>(queryKeys.userState(), (old) => ({
-            ...old!,
-            sidebarSorts: { ...old!.sidebarSorts, [key]: sort },
-          }));
+        // Into the user state this tab holds, if it holds one by now (it may
+        // still be loading, or be gone after a sign-out); else into the
+        // device copy alone.
+        const held = qc.getQueryData<UserState>(queryKeys.userState());
+        if (held) {
+          qc.setQueryData<UserState>(queryKeys.userState(), {
+            ...held,
+            sidebarSorts: { ...held.sidebarSorts, [key]: sort },
+          });
         } else {
           setDeviceSorts({ ...deviceSorts, [key]: sort });
         }
