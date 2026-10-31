@@ -52,7 +52,6 @@ vi.mock('@/context/UnreadContext', () => ({
     unreadChannels: new Set<string>(),
     unreadChannelNotifications: new Set(),
     unreadConversations: new Set<string>(),
-    unreadThreadNotifications: new Set<string>(),
     hiddenConversations: new Set<string>(),
     hideConversation: vi.fn(),
     unhideConversation: vi.fn(),
@@ -61,7 +60,6 @@ vi.mock('@/context/UnreadContext', () => ({
     markConversationUnread: vi.fn(),
     clearChannelUnread: vi.fn(),
     clearConversationUnread: vi.fn(),
-    markThreadNotificationUnread: vi.fn(),
   }),
 }));
 

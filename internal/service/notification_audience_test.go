@@ -183,8 +183,10 @@ func TestAudienceCache_ChangesReload(t *testing.T) {
 	}
 }
 
-// An entry ages out after audienceEntryTTL even without a bump — the backstop
-// for writes from outside the app (importer, migrations).
+// An entry ages out after five minutes even without a bump — the backstop
+// for writes from outside the app (importer, migrations) and lost bumps. An
+// unchanged channel is otherwise not re-read: every reload is a consistent
+// read of all its members, their overrides and account settings.
 func TestAudienceCache_EntryTTLBackstop(t *testing.T) {
 	f := newAudienceFixture(t, "u1")
 	clock := time.Now()
@@ -193,10 +195,12 @@ func TestAudienceCache_EntryTTLBackstop(t *testing.T) {
 	// An out-of-band writer adds u2 without bumping anything.
 	seedAllLevel(f.users.mockUserStore, "u2")
 	f.members.memberships["ch1#u2"] = &model.ChannelMembership{ChannelID: "ch1", UserID: "u2"}
-	if got := f.post(t, "m2"); got["u2"] {
+	lists := f.members.listMembersCalls.Load()
+	clock = clock.Add(4*time.Minute + 59*time.Second)
+	if got := f.post(t, "m2"); got["u2"] || f.members.listMembersCalls.Load() != lists {
 		t.Fatalf("an unbumped entry should still be served before its TTL, got %v", got)
 	}
-	clock = clock.Add(audienceEntryTTL)
+	clock = clock.Add(time.Second)
 	if got := f.post(t, "m3"); !got["u2"] {
 		t.Fatalf("after the TTL alerted %v, want u2 included", got)
 	}

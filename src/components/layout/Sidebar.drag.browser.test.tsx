@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -105,7 +105,6 @@ vi.mock('@/context/UnreadContext', () => ({
     unreadChannels: new Set<string>(),
     unreadChannelNotifications: new Set(),
     unreadConversations: new Set<string>(),
-    unreadThreadNotifications: new Set<string>(),
     hiddenConversations: new Set<string>(),
     hideConversation: vi.fn(),
     unhideConversation: vi.fn(),
@@ -114,7 +113,6 @@ vi.mock('@/context/UnreadContext', () => ({
     markConversationUnread: vi.fn(),
     clearChannelUnread: vi.fn(),
     clearConversationUnread: vi.fn(),
-    markThreadNotificationUnread: vi.fn(),
   }),
 }));
 
@@ -332,6 +330,18 @@ afterEach(() => {
 });
 
 describe('Sidebar drag-and-drop monitor callbacks', () => {
+  // Drag needs a mouse or trackpad: a touch-only device mounts no drag code
+  // (and a phone lists its rows virtually), so these run as a desktop at any
+  // width.
+  let device: typeof window.__EX_FORCE_DEVICE__;
+  beforeEach(() => {
+    device = window.__EX_FORCE_DEVICE__;
+    window.__EX_FORCE_DEVICE__ = 'desktop';
+  });
+  afterEach(() => {
+    window.__EX_FORCE_DEVICE__ = device;
+  });
+
   it('starts and ends a drag without throwing — drop indicator clears', async () => {
     await render(<Frame />);
     expect(monitorCallbacks.onDragStart).toBeDefined();
@@ -424,12 +434,6 @@ describe('Sidebar drag-and-drop monitor callbacks', () => {
   });
 
   it('registers EVERY drop target as sticky so the push-aside gap can never orphan the drop', async () => {
-    // A touch-only device registers none: drag needs a mouse or trackpad.
-    const device = window.__EX_FORCE_DEVICE__;
-    window.__EX_FORCE_DEVICE__ = 'desktop';
-    onTestFinished(() => {
-      window.__EX_FORCE_DEVICE__ = device;
-    });
     await render(<Frame />);
     // Rows, the section tail, category headers and boundary hitboxes all register
     // drop targets. Each MUST be sticky: when the pointer slides off a row onto

@@ -25,159 +25,33 @@ func tokenFor(userID, hash string) *model.RefreshToken {
 	}
 }
 
-// stripTokenGSI simulates a legacy token row (written before the per-user
-// partition existed) by removing its GSI attributes.
-func stripTokenGSI(t *testing.T, db *DB, hash string) {
-	t.Helper()
-	_, err := db.Client.UpdateItem(context.Background(), &dynamodb.UpdateItemInput{
-		TableName:        &db.Table,
-		Key:              compositeKey(rtokenPK(hash), metaSK()),
-		UpdateExpression: strPtr("REMOVE GSI1PK, GSI1SK"),
-	})
-	if err != nil {
-		t.Fatalf("strip GSI attrs: %v", err)
-	}
-}
-
 func strPtr(s string) *string { return &s }
 
-func TestTokenStore_UserTokenIndexLifecycle(t *testing.T) {
+// Revoking a user's tokens reads their own GSI1 partition: every one of
+// their tokens goes, nobody else's does.
+func TestTokenStore_DeleteAllForUserReadsTheirPartition(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewTokenStore(db)
-
-	// Legacy rows: created then stripped of their index attributes.
-	for _, h := range []string{"legacy-1", "legacy-2"} {
-		if err := s.StoreRefreshToken(ctx, tokenFor("u-legacy", h)); err != nil {
-			t.Fatalf("Create %s: %v", h, err)
+	for _, tok := range []*model.RefreshToken{tokenFor("u-a", "a-1"), tokenFor("u-a", "a-2"), tokenFor("u-other", "other-1")} {
+		if err := s.StoreRefreshToken(ctx, tok); err != nil {
+			t.Fatalf("Create %s: %v", tok.TokenHash, err)
 		}
-		stripTokenGSI(t, db, h)
 	}
-	// A modern row for another user (indexed at create time).
-	if err := s.StoreRefreshToken(ctx, tokenFor("u-other", "modern-1")); err != nil {
-		t.Fatalf("Create modern: %v", err)
+	if err := s.DeleteAllRefreshTokensForUser(ctx, "u-a"); err != nil {
+		t.Fatalf("DeleteAllForUser: %v", err)
 	}
-
-	// Unseeded: DeleteAllForUser stays on the Scan path and still revokes
-	// the legacy (unindexed) rows — revocation is never incomplete.
-	if err := s.DeleteAllRefreshTokensForUser(ctx, "u-legacy"); err != nil {
-		t.Fatalf("DeleteAllForUser (scan path): %v", err)
+	for _, h := range []string{"a-1", "a-2"} {
+		if _, err := s.GetRefreshToken(ctx, h); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("%s after revoke = %v, want gone", h, err)
+		}
 	}
-	if _, err := s.GetRefreshToken(ctx, "legacy-1"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("legacy-1 after scan revoke = %v, want gone", err)
-	}
-	if _, err := s.GetRefreshToken(ctx, "modern-1"); err != nil {
+	if _, err := s.GetRefreshToken(ctx, "other-1"); err != nil {
 		t.Fatalf("other user's token must survive: %v", err)
 	}
-
-	// Backfill: indexes remaining legacy rows and writes the seeded marker.
-	if err := s.StoreRefreshToken(ctx, tokenFor("u-legacy2", "legacy-3")); err != nil {
-		t.Fatalf("Create legacy-3: %v", err)
+	if err := NewTokenStore(withFault(db, func(f *faultClient) { f.failQuery = true })).DeleteAllRefreshTokensForUser(ctx, "u-other"); !errors.Is(err, errInjected) {
+		t.Fatalf("index query fault = %v, want errInjected", err)
 	}
-	stripTokenGSI(t, db, "legacy-3")
-	if err := s.EnsureUserTokenIndex(ctx); err != nil {
-		t.Fatalf("EnsureUserTokenIndex: %v", err)
-	}
-	seeded, err := s.isTokenIndexSeeded(ctx)
-	if err != nil || !seeded {
-		t.Fatalf("seeded = %v (err=%v), want true", seeded, err)
-	}
-	// Idempotent second run is a no-op.
-	if err := s.EnsureUserTokenIndex(ctx); err != nil {
-		t.Fatalf("EnsureUserTokenIndex rerun: %v", err)
-	}
-
-	// Seeded: DeleteAllForUser takes the GSI Query path and finds the
-	// backfilled legacy row.
-	if err := s.DeleteAllRefreshTokensForUser(ctx, "u-legacy2"); err != nil {
-		t.Fatalf("DeleteAllForUser (index path): %v", err)
-	}
-	if _, err := s.GetRefreshToken(ctx, "legacy-3"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("legacy-3 after index revoke = %v, want gone", err)
-	}
-	if _, err := s.GetRefreshToken(ctx, "modern-1"); err != nil {
-		t.Fatalf("other user's token must survive the index path too: %v", err)
-	}
-	if err := s.DeleteAllRefreshTokensForUser(ctx, "u-other"); err != nil {
-		t.Fatalf("DeleteAllForUser modern: %v", err)
-	}
-	if _, err := s.GetRefreshToken(ctx, "modern-1"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("modern-1 after revoke = %v, want gone", err)
-	}
-}
-
-func TestTokenStore_IndexPathFaults(t *testing.T) {
-	db := setupDynamoDB(t)
-	ctx := context.Background()
-
-	// Marker probe failure surfaces (revocation must not silently pick a path).
-	s := NewTokenStore(withFault(db, func(f *faultClient) { f.failGetItem = true }))
-	if err := s.DeleteAllRefreshTokensForUser(ctx, "u-x"); !errors.Is(err, errInjected) {
-		t.Fatalf("marker probe fault = %v, want errInjected", err)
-	}
-	if err := s.EnsureUserTokenIndex(ctx); !errInjectedIs(err) {
-		t.Fatalf("EnsureUserTokenIndex probe fault = %v, want errInjected", err)
-	}
-
-	// Backfill scan / update / marker-write failures surface.
-	if err := NewTokenStore(withFault(db, func(f *faultClient) { f.failScan = true })).EnsureUserTokenIndex(ctx); !errInjectedIs(err) {
-		t.Fatalf("backfill scan fault = %v", err)
-	}
-	seedLegacy := func(hash string) {
-		if err := NewTokenStore(db).StoreRefreshToken(ctx, tokenFor("u-f", hash)); err != nil {
-			t.Fatalf("Create: %v", err)
-		}
-		stripTokenGSI(t, db, hash)
-	}
-	seedLegacy("fault-1")
-	if err := NewTokenStore(withFault(db, func(f *faultClient) { f.failUpdateItem = true })).EnsureUserTokenIndex(ctx); !errInjectedIs(err) {
-		t.Fatalf("backfill update fault = %v", err)
-	}
-	if err := NewTokenStore(withFault(db, func(f *faultClient) { f.failPutItem = true })).EnsureUserTokenIndex(ctx); !errInjectedIs(err) {
-		t.Fatalf("marker put fault = %v", err)
-	}
-
-	// Seed for real, then fail the Query path.
-	if err := NewTokenStore(db).EnsureUserTokenIndex(ctx); err != nil {
-		t.Fatalf("EnsureUserTokenIndex: %v", err)
-	}
-	if err := NewTokenStore(withFault(db, func(f *faultClient) { f.failQuery = true })).DeleteAllRefreshTokensForUser(ctx, "u-f"); !errInjectedIs(err) {
-		t.Fatalf("index query fault = %v", err)
-	}
-	// Corrupt row in the backfill scan hits the unmarshal arm — needs a fresh
-	// unseeded table, covered in TestTokenStore_BackfillCorruptRow.
-}
-
-func errInjectedIs(err error) bool { return errors.Is(err, errInjected) }
-
-func TestTokenStore_BackfillSkipsUserlessRow(t *testing.T) {
-	db := setupDynamoDB(t)
-	ctx := context.Background()
-	s := NewTokenStore(db)
-	// A garbage RTOKEN row with no userID is unrevocable — the backfill skips
-	// it (it expires via TTL) instead of failing the whole run.
-	if err := s.StoreRefreshToken(ctx, tokenFor("", "userless-1")); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	stripTokenGSI(t, db, "userless-1")
-	if err := s.EnsureUserTokenIndex(ctx); err != nil {
-		t.Fatalf("EnsureUserTokenIndex: %v", err)
-	}
-	if seeded, err := s.isTokenIndexSeeded(ctx); err != nil || !seeded {
-		t.Fatalf("seeded = %v (err=%v)", seeded, err)
-	}
-}
-
-func TestTokenStore_BackfillCorruptRow(t *testing.T) {
-	db := setupDynamoDB(t)
-	ctx := context.Background()
-	if err := NewTokenStore(db).StoreRefreshToken(ctx, tokenFor("u-c", "corrupt-src")); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	stripTokenGSI(t, db, "corrupt-src")
-	s := NewTokenStore(withFault(db, func(f *faultClient) { f.transformScan = corruptScan }))
-	err := s.EnsureUserTokenIndex(ctx)
-	assertUnmarshalErr(t, err, "token backfill")
 }
 
 // --- webhook directory --------------------------------------------------
@@ -187,42 +61,32 @@ func webhookRow(id string) *model.IncomingWebhook {
 	return &model.IncomingWebhook{ID: id, Title: id, ChannelID: "ch-1", CreatedBy: "admin", CreatedAt: now, UpdatedAt: now}
 }
 
-func TestWebhookDirectory_SelfSeedsAndServesList(t *testing.T) {
+// The admin list reads the directory row, which every create and delete
+// keeps current; before the first webhook there is no row and no webhooks.
+func TestWebhookDirectory_ServesList(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewIncomingWebhookStore(db)
 
-	// Simulate a legacy webhook: create, then delete its directory row so
-	// only the META row remains (as if written before the directory existed).
-	if err := s.Create(ctx, webhookRow("wh-legacy")); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if _, err := db.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: &db.Table, Key: compositeKey(webhookDirPK, metaSK()),
-	}); err != nil {
-		t.Fatalf("drop directory: %v", err)
-	}
-
-	// First List: no (seeded) directory → legacy scan, which then seeds.
 	got, err := s.List(ctx)
-	if err != nil || len(got) != 1 || got[0].ID != "wh-legacy" {
-		t.Fatalf("List (scan+seed) = %+v (err=%v)", got, err)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("List before any webhook = %+v (err=%v), want empty", got, err)
 	}
-
-	// Second List: served from the directory; creates/deletes keep it fresh.
-	if err := s.Create(ctx, webhookRow("wh-new")); err != nil {
-		t.Fatalf("Create wh-new: %v", err)
+	for _, id := range []string{"wh-a", "wh-b"} {
+		if err := s.Create(ctx, webhookRow(id)); err != nil {
+			t.Fatalf("Create %s: %v", id, err)
+		}
 	}
 	got, err = s.List(ctx)
 	if err != nil || len(got) != 2 {
-		t.Fatalf("List (directory) = %+v (err=%v), want 2", got, err)
+		t.Fatalf("List = %+v (err=%v), want 2", got, err)
 	}
-	if err := s.Delete(ctx, "wh-legacy"); err != nil {
+	if err := s.Delete(ctx, "wh-a"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	got, err = s.List(ctx)
-	if err != nil || len(got) != 1 || got[0].ID != "wh-new" {
-		t.Fatalf("List after delete = %+v (err=%v), want only wh-new", got, err)
+	if err != nil || len(got) != 1 || got[0].ID != "wh-b" {
+		t.Fatalf("List after delete = %+v (err=%v), want only wh-b", got, err)
 	}
 }
 
@@ -232,9 +96,6 @@ func TestWebhookDirectory_SkipsHalfDeletedID(t *testing.T) {
 	s := NewIncomingWebhookStore(db)
 	if err := s.Create(ctx, webhookRow("wh-a")); err != nil {
 		t.Fatalf("Create: %v", err)
-	}
-	if _, err := s.List(ctx); err != nil { // seed the directory
-		t.Fatalf("List: %v", err)
 	}
 	// Remove the META row out-of-band: the directory now holds a dangling ID.
 	if _, err := db.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
@@ -254,9 +115,6 @@ func TestWebhookDirectory_Faults(t *testing.T) {
 	if err := NewIncomingWebhookStore(db).Create(ctx, webhookRow("wh-f")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := NewIncomingWebhookStore(db).List(ctx); err != nil { // seed
-		t.Fatalf("List: %v", err)
-	}
 	// Directory GetItem failure surfaces.
 	if _, err := NewIncomingWebhookStore(withFault(db, func(f *faultClient) { f.failGetItem = true })).List(ctx); !errors.Is(err, errInjected) {
 		t.Fatalf("dir get fault = %v", err)
@@ -273,34 +131,15 @@ func TestWebhookDirectory_Faults(t *testing.T) {
 	if _, err := db.Client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: &db.Table,
 		Item: map[string]types.AttributeValue{
-			"PK":     &types.AttributeValueMemberS{Value: webhookDirPK},
-			"SK":     &types.AttributeValueMemberS{Value: metaSK()},
-			"seeded": &types.AttributeValueMemberS{Value: "not-a-bool"},
+			"PK":  &types.AttributeValueMemberS{Value: webhookDirPK},
+			"SK":  &types.AttributeValueMemberS{Value: metaSK()},
+			"ids": &types.AttributeValueMemberBOOL{Value: true},
 		},
 	}); err != nil {
 		t.Fatalf("corrupt directory: %v", err)
 	}
 	_, err = NewIncomingWebhookStore(db).List(ctx)
 	assertUnmarshalErr(t, err, "webhook directory row")
-}
-
-func TestWebhookDirectory_SeedFailureIsBestEffort(t *testing.T) {
-	db := setupDynamoDB(t)
-	ctx := context.Background()
-	if err := NewIncomingWebhookStore(db).Create(ctx, webhookRow("wh-s")); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if _, err := db.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: &db.Table, Key: compositeKey(webhookDirPK, metaSK()),
-	}); err != nil {
-		t.Fatalf("drop directory: %v", err)
-	}
-	// Scan works, the seed's UpdateItem fails → the List still answers.
-	s := NewIncomingWebhookStore(withFault(db, func(f *faultClient) { f.failUpdateItem = true }))
-	got, err := s.List(ctx)
-	if err != nil || len(got) != 1 {
-		t.Fatalf("List with failing seed = %+v (err=%v), want the scan result", got, err)
-	}
 }
 
 // --- conditional status clear ---------------------------------------------
@@ -361,9 +200,6 @@ func TestTokenStore_IndexPathBatchDeleteFault(t *testing.T) {
 	s := NewTokenStore(db)
 	if err := s.StoreRefreshToken(ctx, tokenFor("u-bd", "bd-1")); err != nil {
 		t.Fatalf("Create: %v", err)
-	}
-	if err := s.EnsureUserTokenIndex(ctx); err != nil {
-		t.Fatalf("EnsureUserTokenIndex: %v", err)
 	}
 	faulted := NewTokenStore(withFault(db, func(f *faultClient) { f.failBatchWriteItem = true }))
 	if err := faulted.DeleteAllRefreshTokensForUser(ctx, "u-bd"); !errors.Is(err, errInjected) {

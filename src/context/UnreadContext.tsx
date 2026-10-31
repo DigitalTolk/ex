@@ -1,20 +1,15 @@
-import { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useMemo, useState, useCallback, useRef, type ReactNode } from 'react';
 import { readJSON, writeJSON } from '@/lib/storage';
 import { apiFetch } from '@/lib/api';
-import { THREAD_SEEN_CHANGED_EVENT } from '@/hooks/useThreads';
 import { isThreadInView, setPanelThread } from '@/lib/thread-scope';
 import { isActiveParent } from '@/stores/active-parent';
 
+// No unread counts live here. Channel/DM unread comes straight from the
+// userChannels / userConversations list cache (server seq-derived), patched
+// live via @/lib/unread-cache; unread threads are the server's markers in the
+// user state (useUnreadThreadIDs).
 interface UnreadState {
-  // Thread-unread is the only unread state that still lives in the client: thread
-  // replies don't bump the parent's seq, so there's no server-computed count to
-  // read — this Set tracks live thread-reply notifications until the thread is
-  // seen. Channel/DM unread counts come straight from the userChannels /
-  // userConversations list cache (server seq-derived), patched live via
-  // @/lib/unread-cache — NOT from this context.
-  unreadThreadNotifications: Set<string>;
   hiddenConversations: Set<string>;
-  markThreadNotificationUnread: (threadRootId: string) => void;
   hideConversation: (id: string) => void;
   unhideConversation: (id: string) => void;
   // Active scope: marking unread is suppressed when the user is currently
@@ -50,16 +45,10 @@ function persistHiddenConversations(set: Set<string>) {
 }
 
 export function UnreadProvider({ children }: { children: ReactNode }) {
-  const [unreadThreadNotifications, setUnreadThreadNotifications] = useState<Set<string>>(new Set());
   const [hiddenConversations, setHiddenConversations] = useState<Set<string>>(loadHiddenConversations);
   // A ref (not state) so updates from onMessageNew callbacks see the latest
   // active thread without re-creating the WS handlers on every navigation.
   const activeThreadRef = useRef<string | null>(null);
-
-  const markThreadNotificationUnread = useCallback((id: string) => {
-    setUnreadThreadNotifications(prev => new Set(prev).add(id));
-    notifyUserStateChanged();
-  }, []);
 
   const hideConversation = useCallback((id: string) => {
     setHiddenConversations(prev => {
@@ -92,17 +81,6 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
     // Share the open panel's thread with @/lib/thread-scope so notification
     // suppression (this tab + siblings via tab-leader) knows it's being read.
     setPanelThread(id);
-    // Opening a thread clears any pending live notification for it, so the
-    // Threads nav doesn't stay highlighted from a reply that arrived just
-    // before it was opened.
-    if (id) {
-      setUnreadThreadNotifications(prev => {
-        if (!prev.has(id)) return prev;
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-    }
   }, []);
   // Active = the open ThreadPanel OR a /threads card currently in the
   // viewport (thread-scope) — reading a thread inline on /threads must
@@ -112,30 +90,13 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  useEffect(() => {
-    const handleThreadSeen = (event: Event) => {
-      const threadRootID = (event as CustomEvent<{ threadRootID?: string }>).detail?.threadRootID;
-      if (!threadRootID) return;
-      setUnreadThreadNotifications(prev => {
-        if (!prev.has(threadRootID)) return prev;
-        const next = new Set(prev);
-        next.delete(threadRootID);
-        return next;
-      });
-    };
-    window.addEventListener(THREAD_SEEN_CHANGED_EVENT, handleThreadSeen);
-    return () => window.removeEventListener(THREAD_SEEN_CHANGED_EVENT, handleThreadSeen);
-  }, []);
-
   // The callbacks are all stable (useCallback), so memoizing here means the
-  // context value's identity only changes when unread/hidden state actually
+  // context value's identity only changes when the hidden state actually
   // changes — not on every unrelated re-render — sparing all sidebar/nav
   // consumers a re-render per parent tick.
   const value = useMemo(
     () => ({
-      unreadThreadNotifications,
       hiddenConversations,
-      markThreadNotificationUnread,
       hideConversation,
       unhideConversation,
       isActiveChannel,
@@ -144,9 +105,7 @@ export function UnreadProvider({ children }: { children: ReactNode }) {
       isActiveThread,
     }),
     [
-      unreadThreadNotifications,
       hiddenConversations,
-      markThreadNotificationUnread,
       hideConversation,
       unhideConversation,
       isActiveChannel,
@@ -163,10 +122,4 @@ export function useUnread() {
   const ctx = useContext(UnreadContext);
   if (!ctx) throw new Error('useUnread must be used within UnreadProvider');
   return ctx;
-}
-
-// useOptionalUnread is useUnread for components that also render outside the
-// provider (e.g. the message list in isolation): undefined there.
-export function useOptionalUnread(): UnreadState | undefined {
-  return useContext(UnreadContext);
 }

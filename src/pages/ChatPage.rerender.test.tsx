@@ -41,7 +41,6 @@ vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
     isActiveChannel: () => false,
     isActiveConversation: () => false,
-    markThreadNotificationUnread: vi.fn(),
     isActiveThread: () => false,
     unhideConversation: vi.fn(),
   }),

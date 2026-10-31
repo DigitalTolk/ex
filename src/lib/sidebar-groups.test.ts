@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { UserChannel, UserConversation, SidebarCategory } from '@/types';
 import { groupSidebarItems, isSidebarItemUnread, sidebarItemID, SidebarSectionKeys, type SidebarItem } from './sidebar-groups';
 
@@ -61,6 +61,27 @@ describe('groupSidebarItems', () => {
     const dms = sections.find((s) => s.key === SidebarSectionKeys.DirectMessages)!;
     const ids = dms.items.map((i) => (i.kind === 'conversation' ? i.conversation.conversationID : ''));
     expect(ids).toEqual(['has-time', 'no-time']);
+  });
+
+  // The sidebar regroups on every chat opened and every message anywhere.
+  // localeCompare with options sets up its comparison afresh on every call
+  // in Safari: 4000 imported channels without a position took ~50ms a
+  // regroup on a Mac, against ~3ms for one shared collator.
+  it('orders names case-insensitively without a localeCompare per comparison', () => {
+    const localeCompare = vi.spyOn(String.prototype, 'localeCompare');
+    const channel = (channelID: string, channelName: string) => ({ channelID, channelName }) as UserChannel;
+    const sections = groupSidebarItems(
+      [channel('b', 'beta'), channel('a', 'Alpha'), channel('c', 'alpha2')],
+      [conv({ conversationID: 'y', displayName: 'yankee' }), conv({ conversationID: 'x', displayName: 'X-ray' })],
+      [],
+      { conversationSort: 'az' },
+    );
+    const names = (key: string) =>
+      sections.find((s) => s.key === key)!.items.map((i) => (i.kind === 'channel' ? i.channel.channelName : i.conversation.displayName));
+    expect(names(SidebarSectionKeys.Channels)).toEqual(['Alpha', 'alpha2', 'beta']);
+    expect(names(SidebarSectionKeys.DirectMessages)).toEqual(['X-ray', 'yankee']);
+    expect(localeCompare).not.toHaveBeenCalled();
+    localeCompare.mockRestore();
   });
 
   it('sorts az by display name', () => {

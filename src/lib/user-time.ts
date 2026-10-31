@@ -1,14 +1,35 @@
 import { partsInTimeZone } from '@/lib/datetime-input';
 
+// The formatters here are built once and reused (per zone where they take
+// one): the members directory formats every member's last-seen time, local
+// time and zone on each render, and a formatter built per call made a
+// 500-member page take most of a second on a phone — and as long again per
+// keystroke in its search.
+const lastSeenFormat = new Intl.DateTimeFormat(undefined, {
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+});
+
 export function formatLastSeen(lastSeenAt?: string, online?: boolean): string | null {
   if (online) return 'now';
   if (!lastSeenAt) return null;
-  return new Date(lastSeenAt).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  const at = new Date(lastSeenAt);
+  return Number.isNaN(at.getTime()) ? null : lastSeenFormat.format(at);
+}
+
+const clockFormats = new Map<string, Intl.DateTimeFormat>();
+
+// formatLocalTime is the time it is in a (valid) zone, as a clock reads in
+// the viewer's locale: "3:04 PM".
+export function formatLocalTime(timeZone: string, at = new Date()): string {
+  let format = clockFormats.get(timeZone);
+  if (!format) {
+    format = new Intl.DateTimeFormat(undefined, { timeZone, hour: 'numeric', minute: '2-digit' });
+    clockFormats.set(timeZone, format);
+  }
+  return format.format(at);
 }
 
 // localTimeZone is the viewer's IANA zone — what "8am" means to them. A
@@ -22,14 +43,21 @@ export function localTimeZone(): string {
   }
 }
 
+const zoneValidity = new Map<string, boolean>();
+
 export function isValidTimeZone(timeZone?: string | null): timeZone is string {
   if (!timeZone) return false;
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone }).format(new Date(0));
-    return true;
-  } catch {
-    return false;
+  let valid = zoneValidity.get(timeZone);
+  if (valid === undefined) {
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone }).format(new Date(0));
+      valid = true;
+    } catch {
+      valid = false;
+    }
+    zoneValidity.set(timeZone, valid);
   }
+  return valid;
 }
 
 export function formatTimeZoneName(timeZone?: string): string | null {

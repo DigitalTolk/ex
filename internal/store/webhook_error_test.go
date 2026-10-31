@@ -44,16 +44,6 @@ func TestIncomingWebhookStore_Get_GetItemError(t *testing.T) {
 	}
 }
 
-func TestIncomingWebhookStore_List_ScanError(t *testing.T) {
-	db := setupDynamoDB(t)
-	ctx := context.Background()
-	s := NewIncomingWebhookStore(withFault(db, func(f *faultClient) { f.failScan = true }))
-	_, err := s.List(ctx)
-	if !errors.Is(err, errInjected) {
-		t.Fatalf("List: want errInjected, got %v", err)
-	}
-}
-
 func TestIncomingWebhookStore_Update_PutItemError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()

@@ -83,3 +83,32 @@ func TestNotifyForMessage_LegacyThreadKeepsFullRead(t *testing.T) {
 		}
 	}
 }
+
+// A thread rooted before the index existed whose participants were backfilled
+// (the thread-participants migration, or the importer, flags the root) is
+// served from its follow rows like any newer thread: a reply in an imported
+// thread no longer re-reads the whole thread.
+func TestNotifyForMessage_BackfilledLegacyThreadUsesFollowIndex(t *testing.T) {
+	rootCreated := threadIndexEpoch.Add(-24 * time.Hour)
+	svc, pub, msgs, root, reply := seedIndexedThread(t, rootCreated, []string{"root-author", "replier-a", "replier-b", "follower", "sender"})
+	root.ParticipantsIndexed = true
+
+	svc.NotifyForMessage(context.Background(), reply, ParentChannel, root)
+
+	if n := msgs.threadReplyCalls.Load(); n != 0 {
+		t.Fatalf("ListThreadReplies calls = %d, want 0 for a backfilled thread", n)
+	}
+	got := alertedUsers(pub)
+	for _, uid := range []string{"root-author", "replier-a", "replier-b", "follower"} {
+		if !got[uid] {
+			t.Errorf("participant %q got no thread-reply alert (got %v)", uid, got)
+		}
+	}
+}
+
+// The migration backfills exactly the threads the reply path treats as legacy.
+func TestThreadIndexEpoch(t *testing.T) {
+	if !ThreadIndexEpoch().Equal(threadIndexEpoch) {
+		t.Fatalf("ThreadIndexEpoch() = %v, want %v", ThreadIndexEpoch(), threadIndexEpoch)
+	}
+}

@@ -67,10 +67,11 @@ func (s *NotificationService) markThreadNotification(ctx context.Context, userID
 // threadFullyIndexed reports whether every participant of the thread rooted
 // at root has a follow row: true for a thread rooted after the write-time
 // participation index existed (recordThreadParticipation writes a row for
-// every replier; the importer's FinalizeParent does the same for imported
-// threads). An unknown root is treated as legacy.
+// every replier), and for an older root flagged ParticipantsIndexed (the
+// thread-participants migration or the importer's FinalizeParent wrote its
+// rows). An unflagged older root or an unknown one is treated as legacy.
 func threadFullyIndexed(root *model.Message) bool {
-	return root != nil && !root.CreatedAt.Before(threadIndexEpoch)
+	return root != nil && (root.ParticipantsIndexed || !root.CreatedAt.Before(threadIndexEpoch))
 }
 
 // resolveThreadRecipients returns the user IDs that should receive a

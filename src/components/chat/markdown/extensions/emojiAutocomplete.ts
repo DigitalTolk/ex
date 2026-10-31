@@ -28,9 +28,11 @@ import type { MentionCompletion } from './optionRender';
 const MAX_EMOJI_RESULTS = 50;
 
 // The popup opens on a `:` that starts a word — not the one in a time like
-// 10:30 — once two characters follow it: `:p` is left to become 😛 on the
-// space after it (./emoticons), `:po` opens it.
+// 10:30 — once two characters follow it: `:p` is left to show as 😛 once the
+// space after it is typed (./emojiGlyphs), `:po` opens it. Once open it stays open down
+// to one character, so backspacing a typo doesn't close it.
 const EMOJI_QUERY_RE = /(?:^|[^a-z0-9]):[\w+-]{2,}/i;
+const OPEN_EMOJI_QUERY_RE = /(?:^|[^a-z0-9]):[\w+-]+/i;
 
 export type EmojiHit =
   | { kind: 'standard'; name: string; unicode: string }
@@ -131,15 +133,24 @@ function hitToCompletion(hit: EmojiHit, skinTone: EmojiSkinTone): MentionComplet
 }
 
 export function emojiSource(providers: EmojiProviders): CompletionSource {
-  return (context: CompletionContext): CompletionResult | null => {
+  const complete = (context: CompletionContext, query: RegExp): CompletionResult | null => {
     // The query allows the `_`, `+`, `-` that appear in shortcode names
     // (`:+1:`); the match may start with the character before the colon.
-    const before = context.matchBefore(EMOJI_QUERY_RE);
+    const before = context.matchBefore(query);
     if (!before) return null;
     const colon = before.text.lastIndexOf(':');
-    const query = before.text.slice(colon + 1);
     const skinTone = providers.skinTone();
-    const options = rankEmoji(query, providers.customEmojis()).map((h) => hitToCompletion(h, skinTone));
-    return { from: before.from + colon, to: before.to, options, filter: false };
+    const options = rankEmoji(before.text.slice(colon + 1), providers.customEmojis()).map((h) =>
+      hitToCompletion(h, skinTone),
+    );
+    return {
+      from: before.from + colon,
+      to: before.to,
+      options,
+      filter: false,
+      // CodeMirror asks an open result to update itself as the query changes.
+      update: (_result, _from, _to, next) => complete(next, OPEN_EMOJI_QUERY_RE),
+    };
   };
+  return (context) => complete(context, EMOJI_QUERY_RE);
 }

@@ -151,9 +151,6 @@ func (m *batchMockMessageStore) GetMessagesByIDs(_ context.Context, parentID str
 // indexedThreadFollowStore adds the write-time /threads index capability.
 type indexedThreadFollowStore struct {
 	*mockThreadFollowStore
-	seeded       bool
-	seededErr    error
-	markErr      error
 	ifAbsentErr  error
 	ifAbsentKeys []string
 }
@@ -169,21 +166,6 @@ func (m *indexedThreadFollowStore) SetThreadFollowIfAbsent(_ context.Context, f 
 	}
 	cp := *f
 	m.follows[key] = &cp
-	return nil
-}
-
-func (m *indexedThreadFollowStore) IsThreadIndexSeeded(_ context.Context, _ string) (bool, error) {
-	if m.seededErr != nil {
-		return false, m.seededErr
-	}
-	return m.seeded, nil
-}
-
-func (m *indexedThreadFollowStore) MarkThreadIndexSeeded(_ context.Context, _ string) error {
-	if m.markErr != nil {
-		return m.markErr
-	}
-	m.seeded = true
 	return nil
 }
 
@@ -648,7 +630,6 @@ func TestRecordThreadParticipation_RetriesTransientFailure(t *testing.T) {
 func TestListThreadsPage_FollowedThreads(t *testing.T) {
 	svc, messages, memberships, _, follows := threadIndexService()
 	ctx := context.Background()
-	follows.seeded = true
 
 	seedMembership(memberships, "ch-1", "u-1")
 	lastReply := time.Now().Truncate(time.Second)
@@ -704,110 +685,6 @@ func TestListThreadsPage_FollowedThreads(t *testing.T) {
 	memberships.getErr = errors.New("dynamo down")
 	if _, err := svc.ListThreadsPage(ctx, "u-1", threadCursorFollowed, 0); err == nil {
 		t.Fatal("expected membership error")
-	}
-}
-
-func TestListUserThreads_SeedsIndexFromLegacyScan(t *testing.T) {
-	svc, messages, memberships, _, follows := threadIndexService()
-	seeds := seedFinished(svc)
-	ctx := context.Background()
-	// Not seeded yet → the first page starts the legacy scan in the
-	// background, and its result backfills rows.
-
-	seedMembership(memberships, "ch-1", "u-1")
-	rootAt := time.Now().Add(-time.Hour)
-	messages.messages["ch-1#root-a"] = &model.Message{ID: "root-a", ParentID: "ch-1", AuthorID: "u-2", Body: "root", CreatedAt: rootAt, ReplyCount: 1}
-	messages.messages["ch-1#r-1"] = &model.Message{ID: "r-1", ParentID: "ch-1", ParentMessageID: "root-a", AuthorID: "u-1", CreatedAt: rootAt.Add(time.Minute)}
-	// An explicitly unfollowed thread the scan would otherwise re-derive:
-	messages.messages["ch-1#root-out"] = &model.Message{ID: "root-out", ParentID: "ch-1", AuthorID: "u-2", CreatedAt: rootAt, ReplyCount: 1}
-	messages.messages["ch-1#r-2"] = &model.Message{ID: "r-2", ParentID: "ch-1", ParentMessageID: "root-out", AuthorID: "u-1", CreatedAt: rootAt.Add(time.Minute)}
-	follows.follows[threadFollowMockKey("u-1", "ch-1", "root-out")] = &model.ThreadFollow{UserID: "u-1", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: "root-out", Following: false}
-
-	if _, err := svc.ListThreadsPage(ctx, "u-1", "", 0); err != nil {
-		t.Fatalf("ListThreadsPage: %v", err)
-	}
-	waitThreadSeed(t, seeds)
-	// The derived participation was persisted, sorted by its latest reply,
-	// and the user marked seeded — WITHOUT resurrecting the explicit unfollow.
-	if !follows.seeded {
-		t.Fatal("seed marker not set")
-	}
-	f := follows.follows[threadFollowMockKey("u-1", "ch-1", "root-a")]
-	if f == nil || !f.Following || f.LastActivityAt == nil || !f.LastActivityAt.Equal(rootAt.Add(time.Minute)) {
-		t.Fatalf("participation not seeded with its latest reply: %+v", f)
-	}
-	if follows.follows[threadFollowMockKey("u-1", "ch-1", "root-out")].Following {
-		t.Fatal("seed clobbered an explicit unfollow")
-	}
-
-	// From now on the thread lists from the follow rows, with no scans.
-	messages.listCalls.Store(0)
-	page, err := svc.ListThreadsPage(ctx, "u-1", threadCursorFollowed, 0)
-	if err != nil {
-		t.Fatalf("followed page after seed: %v", err)
-	}
-	if len(page.Threads) != 1 || page.Threads[0].ThreadRootID != "root-a" {
-		t.Fatalf("threads after seed = %+v, want root-a", page.Threads)
-	}
-	if _, err := svc.ListThreadsPage(ctx, "u-1", "", 0); err != nil {
-		t.Fatalf("first page after seed: %v", err)
-	}
-	if messages.listCalls.Load() != 0 {
-		t.Fatalf("post-seed scans = %d, want 0", messages.listCalls.Load())
-	}
-}
-
-func TestListUserThreads_SeedFailuresRetryLater(t *testing.T) {
-	svc, messages, memberships, _, follows := threadIndexService()
-	seeds := seedFinished(svc)
-	ctx := context.Background()
-	seedMembership(memberships, "ch-1", "u-1")
-	rootAt := time.Now().Add(-time.Hour)
-	messages.messages["ch-1#root-a"] = &model.Message{ID: "root-a", ParentID: "ch-1", AuthorID: "u-2", CreatedAt: rootAt, ReplyCount: 1}
-	messages.messages["ch-1#r-1"] = &model.Message{ID: "r-1", ParentID: "ch-1", ParentMessageID: "root-a", AuthorID: "u-1", CreatedAt: rootAt.Add(time.Minute)}
-
-	// Seed write failure → NOT marked seeded; a later visit scans again.
-	follows.setManyErr = errors.New("dynamo down")
-	if _, err := svc.ListThreadsPage(ctx, "u-1", "", 0); err != nil {
-		t.Fatalf("ListThreadsPage: %v", err)
-	}
-	waitThreadSeed(t, seeds)
-	if follows.seeded {
-		t.Fatal("failed seed must not mark the user seeded")
-	}
-	follows.setManyErr = nil
-
-	// Marker write failure is logged; the seed itself persisted.
-	follows.markErr = errors.New("dynamo down")
-	if _, err := svc.ListThreadsPage(ctx, "u-1", "", 0); err != nil {
-		t.Fatalf("ListThreadsPage: %v", err)
-	}
-	waitThreadSeed(t, seeds)
-	follows.markErr = nil
-	if follows.follows[threadFollowMockKey("u-1", "ch-1", "root-a")] == nil {
-		t.Fatal("seed rows not persisted")
-	}
-
-	// IsSeeded probe failure → nothing is scanned; whether a seed is due is
-	// asked again on the next visit.
-	messages.listCalls.Store(0)
-	follows.seededErr = errors.New("dynamo down")
-	if _, err := svc.ListThreadsPage(ctx, "u-1", "", 0); err != nil {
-		t.Fatalf("ListThreadsPage with probe failure: %v", err)
-	}
-	if messages.listCalls.Load() != 0 {
-		t.Fatalf("scans after a probe failure = %d, want 0", messages.listCalls.Load())
-	}
-
-	// The seed's own inputs failing to load postpones it too.
-	follows.seededErr = nil
-	memberships.listChannelsErr = errors.New("dynamo down")
-	if _, err := svc.ListThreadsPage(ctx, "u-1", "", 0); err != nil {
-		t.Fatalf("ListThreadsPage: %v", err)
-	}
-	waitThreadSeed(t, seeds)
-	if follows.seeded {
-		t.Fatal("a seed without its inputs must not mark the user seeded")
 	}
 }
 
@@ -897,7 +774,7 @@ func TestListThreadsPage_PerIDRootFallback(t *testing.T) {
 	memberships := newMockMembershipStore()
 	svc := NewMessageService(messages, memberships, newMockConversationStore(), newMockPublisher(), newMockBroker())
 	svc.SetParentIndex(newMockParentIndex())
-	follows := &indexedThreadFollowStore{mockThreadFollowStore: newMockThreadFollowStore(), seeded: true}
+	follows := &indexedThreadFollowStore{mockThreadFollowStore: newMockThreadFollowStore()}
 	svc.SetThreadFollowStore(follows)
 	ctx := context.Background()
 
@@ -922,5 +799,49 @@ func TestListThreadsPage_PerIDRootFallback(t *testing.T) {
 	}
 	if messages.listCalls.Load() != 0 {
 		t.Fatalf("scans = %d, want 0", messages.listCalls.Load())
+	}
+}
+
+// consistentBatchChannelStore also offers the consistent batched read.
+type consistentBatchChannelStore struct {
+	*batchMockChannelStore
+	consistentCalls int
+}
+
+func (m *consistentBatchChannelStore) GetChannelsByIDsConsistent(_ context.Context, ids []string) ([]*model.Channel, error) {
+	m.consistentCalls++
+	out := make([]*model.Channel, 0, len(ids))
+	for _, id := range ids {
+		if c, ok := m.channels[id]; ok {
+			cp := *c
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+// The sidebar reads the channel rows consistently — their MessageSeq is the
+// unread count, and a stale one would clamp an alert's badge away. Search
+// hits only need names, and take the read that costs half.
+func TestChannelService_OnlyTheSidebarReadsChannelsConsistently(t *testing.T) {
+	channels := &consistentBatchChannelStore{batchMockChannelStore: &batchMockChannelStore{mockChannelStore: newMockChannelStore()}}
+	memberships := newMockMembershipStore()
+	svc := NewChannelService(channels, memberships, nil, nil, nil, nil, nil)
+	channels.channels["ch-1"] = &model.Channel{ID: "ch-1", Name: "one", Type: model.ChannelTypePublic, MessageSeq: 3}
+	memberships.userChannels = []*model.UserChannel{{UserID: "u-1", ChannelID: "ch-1", LastReadSeq: 1}}
+
+	got, err := svc.ListUserChannels(context.Background(), "u-1")
+	if err != nil || len(got) != 1 || got[0].UnreadCount != 2 {
+		t.Fatalf("sidebar = %+v (err %v), want ch-1 with 2 unread", got, err)
+	}
+	if channels.consistentCalls != 1 || channels.batchCalls != 0 {
+		t.Fatalf("sidebar reads: consistent %d, plain %d; want 1 and 0", channels.consistentCalls, channels.batchCalls)
+	}
+
+	if byID := svc.channelsByID(context.Background(), []string{"ch-1"}); byID["ch-1"] == nil {
+		t.Fatalf("search resolve = %v, want ch-1", byID)
+	}
+	if channels.consistentCalls != 1 || channels.batchCalls != 1 {
+		t.Fatalf("search reads: consistent %d, plain %d; want the plain read", channels.consistentCalls, channels.batchCalls)
 	}
 }

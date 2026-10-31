@@ -39,8 +39,7 @@ vi.mock('@/hooks/useUserState', async (importOriginal) => ({
 }));
 vi.mock('@/context/AuthContext', () => ({ useAuth: () => ({ user: { id: 'u-me' } }) }));
 vi.mock('@/context/UnreadContext', () => ({
-  useUnread: () => ({ unreadThreadNotifications: new Set<string>() }),
-  useOptionalUnread: () => ({ unreadThreadNotifications: new Set<string>() }),
+  useUnread: () => ({}),
 }));
 vi.mock('@/context/PresenceContext', () => ({
   usePresence: () => ({ isOnline: () => false, online: new Set<string>(), setUserOnline: () => undefined }),

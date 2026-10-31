@@ -65,6 +65,11 @@ func TestFinalizeChannel(t *testing.T) {
 		len(got.RecentReplyAuthorIDs) != 3 || got.RecentReplyAuthorIDs[0] != "u2" || got.RecentReplyAuthorIDs[1] != "u3" {
 		t.Fatalf("root metadata = %+v", got)
 	}
+	// Every participant has a follow row now: the root says so, and its
+	// replies find their audience in the follow rows.
+	if !got.ParticipantsIndexed {
+		t.Fatal("the finalized root is not flagged ParticipantsIndexed")
+	}
 	follows, err := store.NewThreadFollowStore(e.db).ListThreadFollows(ctx, "c1", root.ID)
 	mustNoErr(t, err)
 	if len(follows) != 3 {
@@ -113,6 +118,9 @@ func TestFinalizeErrors(t *testing.T) {
 	_, err = e.faulty(failOn("UpdateItem", 0)).FinalizeParent(ctx, thread)
 	wantErr(t, err, errFault)
 	_, err = e.faulty(failOn("PutItem", 0)).FinalizeParent(ctx, thread)
+	wantErr(t, err, errFault)
+	// The root's ParticipantsIndexed flag write (after its follow rows).
+	_, err = e.faulty(failOn("UpdateItem", 2)).FinalizeParent(ctx, thread)
 	wantErr(t, err, errFault)
 
 	_, err = e.faulty(failOn("Query", 0)).FinalizeParent(ctx, seq)

@@ -16,6 +16,20 @@ vi.mock('@/hooks/useChannels', () => ({
   useJoinChannel: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+// Every member card formats its last-seen time as it renders: counting the
+// calls counts the card renders.
+const cardRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock('@/lib/user-time', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/user-time')>();
+  return {
+    ...actual,
+    formatLastSeen: (...args: Parameters<typeof actual.formatLastSeen>) => {
+      cardRenders.count++;
+      return actual.formatLastSeen(...args);
+    },
+  };
+});
+
 const mockOpenDM = vi.fn();
 vi.mock('@/hooks/useConversations', () => ({
   useOpenDM: () => ({ openDM: mockOpenDM, isPending: false }),
@@ -192,6 +206,26 @@ describe('DirectoriesPage - members tab', () => {
       expect(screen.getByText('Alice')).toBeInTheDocument();
     });
     expect(screen.queryByLabelText('Manage Alice')).not.toBeInTheDocument();
+  });
+
+  // The grid takes the search once typing pauses: re-rendering every member
+  // card on each keystroke made typing in the search lag on a phone.
+  it('leaves the member cards alone while a search is being typed', async () => {
+    mockApiFetch.mockResolvedValue([
+      { id: 'u-1', email: 'alice@x.com', displayName: 'Alice', systemRole: 'member', status: 'active' },
+      { id: 'u-2', email: 'bob@x.com', displayName: 'Bob', systemRole: 'member', status: 'active' },
+    ]);
+    renderWithProviders();
+    fireEvent.click(screen.getByRole('tab', { name: 'Members' }));
+    await screen.findByText('Alice');
+
+    const search = screen.getByLabelText('Search members');
+    const rendered = cardRenders.count;
+    fireEvent.change(search, { target: { value: 'a' } });
+    fireEvent.change(search, { target: { value: 'al' } });
+    fireEvent.change(search, { target: { value: 'ali' } });
+    expect(search).toHaveValue('ali');
+    expect(cardRenders.count).toBe(rendered);
   });
 
   it('searches users when query is typed', async () => {

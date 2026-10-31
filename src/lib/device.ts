@@ -158,8 +158,9 @@ export function applyLayoutTierClasses(): LayoutTier {
   const root = document.documentElement;
   const tier = currentLayoutTier();
   phoneTier = tier === 'mobile';
-  for (const cls of Object.values(TIER_CLASSES)) root.classList.remove(cls);
-  root.classList.add(TIER_CLASSES[tier]);
+  // Each class only set to what it should be: this runs on every resize, and
+  // removing and re-adding the same class restyled the whole page each time.
+  for (const [name, cls] of Object.entries(TIER_CLASSES)) root.classList.toggle(cls, name === tier);
   // `device-touch` (the `touch:` variant) means touch is the ONLY way to point
   // at things: a trackpad on an iPad takes it off and the hover UI returns.
   root.classList.toggle('device-touch', deviceKind() === 'touch' && !hasPointerDevice());

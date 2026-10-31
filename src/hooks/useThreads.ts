@@ -270,14 +270,6 @@ export function threadHasUnseen(qc: QueryClient, threadRootID: string, latestAt:
   return seenTime(threadSeenAt(qc.getQueryData<UserState>(queryKeys.userState()), threadRootID)) < seenTime(latestAt);
 }
 
-// unreadThreadIDs is the set of threads with replies the user hasn't seen:
-// the server's unread markers (the user state the app loads at start), plus
-// alerts that arrived since. Seeing a thread drops its marker at once
-// (markThreadSeen); the server drops it too.
-export function unreadThreadIDs(threadNotifications: string[] = [], live: Set<string> = new Set()): Set<string> {
-  return new Set([...threadNotifications, ...live]);
-}
-
 export function getSeenMap(): Record<string, string> {
   return loadSeen();
 }

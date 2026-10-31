@@ -30,7 +30,6 @@ vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u-1', displayName: 'Alice', email: 'a@a.com', systemRole: 'member', status: 'active' } }),
 }));
 vi.mock('@/context/UnreadContext', () => ({
-  useOptionalUnread: () => undefined,
   useUnread: () => ({
     setActiveChannel: vi.fn(),
     setActiveThread: vi.fn(),

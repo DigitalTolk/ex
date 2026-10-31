@@ -363,9 +363,11 @@ describe('MarkdownEditor handle + keymap branches', () => {
     expect(currentCompletions(view.state)).toHaveLength(0);
   });
 
-  // An emoticon becomes the standard emoji as the space after it is typed —
-  // not a custom emoji that happens to match its letter.
-  it('turns :P into 😛 on the space after it, with custom emoji around', async () => {
+  // An emoticon shows as the standard emoji once the space after it is typed
+  // — never a custom emoji that happens to match its letter — and turns back
+  // into its text when backspaced to. The text is what's kept: sending turns
+  // it into the emoji (normalizeEmojiInBody).
+  it('shows :P as 😛 after the space, and as text again when backspaced to', async () => {
     const completionProviders: CompletionProviders = {
       users: () => [],
       online: () => new Set(),
@@ -378,9 +380,45 @@ describe('MarkdownEditor handle + keymap branches', () => {
       completionProviders,
       customEmojiMap: () => ({ party_parrot: 'https://cdn.test/parrot.gif' }),
     });
+    const input = screen.getByLabelText('Message input').element() as HTMLElement;
+    const glyph = () => input.querySelector('.cm-emoji-glyph');
+    await userEvent.click(input);
+    await userEvent.keyboard('hi :P ');
+    await expect.poll(() => glyph()?.textContent).toBe('😛');
+    expect(input.querySelector('img.cm-emoji-img')).toBeNull();
+    expect(ref.current!.getMarkdown()).toBe('hi :P ');
+
+    await userEvent.keyboard('{Backspace}');
+    await expect.poll(glyph).toBeNull();
+    expect(input.textContent).toBe('hi :P');
+    await userEvent.keyboard('{Backspace}');
+    expect(ref.current!.getMarkdown()).toBe('hi :');
+  });
+
+  // Two characters open the emoji popup; once open, backspacing a typo keeps
+  // it open down to one, and it closes on the bare colon.
+  it('keeps the emoji popup open while backspacing', async () => {
+    const completionProviders: CompletionProviders = {
+      users: () => [],
+      online: () => new Set(),
+      memberIds: () => null,
+      channels: () => [],
+      customEmojis: () => [],
+      skinTone: () => '',
+    };
+    const { ref, screen } = await mount({ completionProviders });
+    const view = viewOf(ref);
+    const settled = () => ({ doc: view.state.doc.toString(), status: completionStatus(view.state) });
     await userEvent.click(screen.getByLabelText('Message input'));
-    await userEvent.keyboard('hi :P there');
-    await vi.waitFor(() => expect(ref.current!.getMarkdown()).toBe('hi 😛 there'));
+    await userEvent.keyboard('hi :smi');
+    await expect.poll(settled).toEqual({ doc: 'hi :smi', status: 'active' });
+    await userEvent.keyboard('{Backspace}{Backspace}');
+    await expect.poll(settled).toEqual({ doc: 'hi :s', status: 'active' });
+    expect(currentCompletions(view.state)[0]?.label).toMatch(/^:s/);
+    expect(document.querySelector('.cm-tooltip-autocomplete')).not.toBeNull();
+    await userEvent.keyboard('{Backspace}');
+    await expect.poll(settled).toEqual({ doc: 'hi :', status: null });
+    expect(document.querySelector('.cm-tooltip-autocomplete')).toBeNull();
   });
 
   it('renders the autocomplete popup in <body> and above the app top layer (no clip/transform ancestor can hide it)', async () => {

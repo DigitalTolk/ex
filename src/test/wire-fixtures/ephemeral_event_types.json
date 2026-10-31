@@ -13,6 +13,7 @@
   "run.progress",
   "scheduled_messages.changed",
   "server.version",
+  "session.renewed",
   "thread.updated",
   "typing"
 ]
