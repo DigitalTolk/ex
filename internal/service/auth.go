@@ -342,6 +342,8 @@ func (s *AuthService) createOIDCUser(ctx context.Context, email string, info *OI
 		}
 		return nil, fmt.Errorf("auth: create user: %w", err)
 	}
+	// The new account joins the shared roster at once.
+	forgetCachedUser(ctx, s.cache, user.ID)
 	s.indexUser(ctx, user)
 	return user, nil
 }
@@ -418,11 +420,9 @@ func (s *AuthService) refreshOIDCUser(ctx context.Context, user *model.User, inf
 		user.Phone, user.Manager = dirProfile.Phone, dirProfile.Manager
 	}
 	user.AuthProvider = model.AuthProviderOIDC
-	if s.cache != nil {
-		// Drop the cached profile so the refreshed fields are visible
-		// immediately (UserService reads cache-first).
-		_ = s.cache.Delete(ctx, "user:"+user.ID)
-	}
+	// Drop the cached profile and roster so the refreshed fields are visible
+	// immediately (UserService reads cache-first).
+	forgetCachedUser(ctx, s.cache, user.ID)
 	s.indexUser(ctx, user)
 	if directoryChanged {
 		// Broadcast the change so peers with this profile open (hover
@@ -790,6 +790,7 @@ func (s *AuthService) AcceptInvite(ctx context.Context, token, displayName, pass
 		}
 		return "", "", nil, fmt.Errorf("auth: create guest user: %w", err)
 	}
+	forgetCachedUser(ctx, s.cache, user.ID)
 	s.indexUser(ctx, user)
 
 	// Add the guest to the channels listed on the invite. AutoJoinChannel

@@ -38,6 +38,7 @@ func (s *ChannelService) Wired() error {
 		wiring.Dep{Name: "activity recorder", Set: s.activity != nil},
 		wiring.Dep{Name: "reminder sync", Set: s.reminders != nil},
 		wiring.Dep{Name: "thread state sync", Set: s.threadState != nil},
+		wiring.Dep{Name: "deactivated accounts", Set: s.deactivated != nil},
 	)
 }
 
@@ -66,7 +67,6 @@ func (s *MessageService) Wired() error {
 		wiring.Dep{Name: "agent dispatcher", Set: s.agentDispatcher != nil},
 		wiring.Dep{Name: "run log purger", Set: s.runLogPurger != nil},
 		wiring.Dep{Name: "run skill resolver", Set: s.skillBadges != nil},
-		wiring.Dep{Name: "thread seed users", Set: s.seedUsers != nil},
 		wiring.Dep{Name: "deactivated accounts", Set: s.deactivated != nil},
 		wiring.Dep{Name: "attachment manager", Set: s.attachments != nil},
 		wiring.Dep{Name: "draft clearer", Set: s.drafts != nil},
@@ -101,6 +101,7 @@ func (s *EmojiService) Wired() error {
 	return wiring.Check("emoji service",
 		wiring.Dep{Name: "media URL cache", Set: s.mediaCache != nil},
 		wiring.Dep{Name: "frequency store", Set: s.frequency != nil},
+		wiring.Dep{Name: "catalog cache", Set: s.catalog != nil},
 	)
 }
 

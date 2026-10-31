@@ -10,9 +10,7 @@ function TestConsumer() {
   // a re-render so the rendered flags reflect the latest ref value.
   const [, setTick] = useState(0);
   const {
-    unreadThreadNotifications,
     hiddenConversations,
-    markThreadNotificationUnread,
     hideConversation,
     unhideConversation,
     isActiveChannel,
@@ -23,12 +21,10 @@ function TestConsumer() {
 
   return (
     <div>
-      <span data-testid="thread-notifications">{JSON.stringify([...unreadThreadNotifications])}</span>
       <span data-testid="hidden">{JSON.stringify([...hiddenConversations])}</span>
       <span data-testid="is-active-ch">{String(isActiveChannel('ch-1'))}</span>
       <span data-testid="is-active-conv">{String(isActiveConversation('conv-1'))}</span>
       <span data-testid="is-active-thread">{String(isActiveThread('root-1'))}</span>
-      <button onClick={() => markThreadNotificationUnread('root-1')}>markThreadNotification</button>
       <button onClick={() => hideConversation('conv-1')}>hideConvo</button>
       <button onClick={() => unhideConversation('conv-1')}>unhideConvo</button>
       <button onClick={() => setActiveParent({ kind: 'channel', id: 'ch-1' })}>activateCh</button>
@@ -57,54 +53,19 @@ describe('UnreadContext', () => {
     spy.mockRestore();
   });
 
-  it('markThreadNotificationUnread is cleared when that thread is marked seen', () => {
+  it('setActiveThread marks the thread active, and null clears it', () => {
     render(
       <UnreadProvider>
         <TestConsumer />
       </UnreadProvider>,
     );
-
-    act(() => {
-      screen.getByText('markThreadNotification').click();
-    });
-    expect(screen.getByTestId('thread-notifications')).toHaveTextContent('["root-1"]');
-
-    act(() => {
-      window.dispatchEvent(new CustomEvent('ex:threads-seen-changed', { detail: { threadRootID: 'root-1' } }));
-    });
-    expect(screen.getByTestId('thread-notifications')).toHaveTextContent('[]');
-  });
-
-  it('thread-seen event without a rootID is a no-op', () => {
-    render(
-      <UnreadProvider>
-        <TestConsumer />
-      </UnreadProvider>,
-    );
-    act(() => screen.getByText('markThreadNotification').click());
-    act(() => {
-      window.dispatchEvent(new CustomEvent('ex:threads-seen-changed', { detail: {} }));
-    });
-    // No rootID → set unchanged.
-    expect(screen.getByTestId('thread-notifications')).toHaveTextContent('["root-1"]');
-  });
-
-  it('setActiveThread clears a pending thread notification, and null is a no-op', () => {
-    render(
-      <UnreadProvider>
-        <TestConsumer />
-      </UnreadProvider>,
-    );
-    act(() => screen.getByText('markThreadNotification').click());
     expect(screen.getByTestId('is-active-thread')).toHaveTextContent('false');
 
+    // The active thread is a ref: the tick re-renders the probe to show it.
     act(() => screen.getByText('activateThread').click());
+    act(() => screen.getByText('tick').click());
     expect(screen.getByTestId('is-active-thread')).toHaveTextContent('true');
-    expect(screen.getByTestId('thread-notifications')).toHaveTextContent('[]');
 
-    // Activating again (already absent) keeps the set, and null clears the ref.
-    act(() => screen.getByText('activateThread').click());
-    expect(screen.getByTestId('thread-notifications')).toHaveTextContent('[]');
     act(() => screen.getByText('deactivateThread').click());
     act(() => screen.getByText('tick').click());
     expect(screen.getByTestId('is-active-thread')).toHaveTextContent('false');

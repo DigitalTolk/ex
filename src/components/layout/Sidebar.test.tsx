@@ -231,7 +231,6 @@ const mockHideConversation = vi.fn((id: string) => {
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
-    unreadThreadNotifications: new Set(),
     hiddenConversations: mockHiddenConversations,
     hideConversation: mockHideConversation,
   }),

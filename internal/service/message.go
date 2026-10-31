@@ -7,9 +7,7 @@ import (
 	"log/slog"
 	"slices"
 	"sort"
-	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/apperr"
@@ -19,7 +17,6 @@ import (
 	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/store"
 	lru "github.com/hashicorp/golang-lru/v2"
-	"github.com/oklog/ulid/v2"
 )
 
 // Parent type constants used by handlers to indicate whether the parent is a
@@ -27,8 +24,6 @@ import (
 const (
 	ParentChannel      = "channel"
 	ParentConversation = "conversation"
-	threadScanPageSize = 200
-	maxThreadScanPages = 25
 )
 
 // ConversationActivator is implemented by ConversationService and lets
@@ -140,14 +135,6 @@ type MessageService struct {
 	fanOutSlots chan struct{}
 	// safetyNet durably re-checks every fan-out (SetNotifySafetyNet).
 	safetyNet NotifySafetyNet
-	// seedUsers reads an account so /threads can tell a post-index sign-up
-	// (nothing to backfill) from an account with history. Optional seam
-	// (SetThreadSeedUsers) — nil keeps the one-time seed scan for everyone.
-	seedUsers ThreadSeedUserReader
-	// threadSeeds tracks the background seed scans (scheduleThreadSeed);
-	// afterThreadSeed observes each finished one (tests only).
-	threadSeeds     threadSeedRuns
-	afterThreadSeed func(userID string)
 	// afterThreadMarkersDropped observes each finished dropThreadMarkers
 	// (tests only).
 	afterThreadMarkersDropped func(userID string)
@@ -173,14 +160,6 @@ func (s *MessageService) SetDeactivatedAccounts(d DeactivatedAccounts) { s.deact
 // clears the author's draft for that composer server-side, so the client
 // makes no separate request.
 func (s *MessageService) SetDraftClearer(c SentDraftClearer) { s.drafts = c }
-
-// ThreadSeedUserReader is the account read the /threads seed decision needs.
-type ThreadSeedUserReader interface {
-	GetUser(ctx context.Context, id string) (*model.User, error)
-}
-
-// SetThreadSeedUsers wires the account read behind the /threads seed skip.
-func (s *MessageService) SetThreadSeedUsers(u ThreadSeedUserReader) { s.seedUsers = u }
 
 // ChannelReader is the slice of the channel store the message service needs:
 // whether a channel parent is archived, which makes it read-only.
@@ -1187,20 +1166,10 @@ func (s *MessageService) ResolveThreadRoot(ctx context.Context, userID, parentID
 	return m.ID, nil
 }
 
-// ListThreadMessages returns the root message followed by all reply messages
-// for a thread, in chronological order (oldest first). ULIDs sort by timestamp,
-// so we sort by ID ascending — the underlying ListMessages returns descending.
 // ThreadWindowMessages returns at most `limit` of a thread's newest messages
 // (root included), for the agent context bundle. Unlike ListThreadMessages it
 // never drains the whole thread — the window is fixed, and a coding-task
 // thread is not.
-//
-// The GSI-lag fallback needs care here: a FULL page means the thread is at
-// least `limit` long and the window is legitimately complete, so only a SHORT
-// page that also falls short of the root's ReplyCount indicates an
-// un-backfilled thread and defers to the complete path. (Comparing against
-// ReplyCount alone would fall back on every thread longer than the window —
-// exactly the case this read exists for.)
 func (s *MessageService) ThreadWindowMessages(ctx context.Context, userID, parentID, parentType, threadRootID string, limit int) ([]*model.Message, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -1214,9 +1183,6 @@ func (s *MessageService) ThreadWindowMessages(ctx context.Context, userID, paren
 		return nil, fmt.Errorf("message: thread window: %w", err)
 	}
 	replies = repliesInParent(replies, parentID)
-	if len(replies) < limit && len(replies) < root.ReplyCount {
-		return s.ListThreadMessages(ctx, userID, parentID, parentType, threadRootID)
-	}
 	out := make([]*model.Message, 0, len(replies)+1)
 	out = append(out, root)
 	out = append(out, replies...)
@@ -1252,6 +1218,10 @@ func repliesInParent(replies []*model.Message, parentID string) []*model.Message
 	return out
 }
 
+// ListThreadMessages returns the root message followed by all reply messages
+// for a thread, in chronological order (oldest first), from the thread's reply
+// index alone: every reply is indexed as it is written (and older ones were
+// backfilled), so the parent's history is never read for it.
 func (s *MessageService) ListThreadMessages(ctx context.Context, userID, parentID, parentType, threadRootID string) ([]*model.Message, error) {
 	// The root is fetched directly; only replies are indexed in GSI1.
 	root, err := s.accessibleThreadRoot(ctx, userID, parentID, parentType, threadRootID)
@@ -1263,43 +1233,11 @@ func (s *MessageService) ListThreadMessages(ctx context.Context, userID, parentI
 		return nil, fmt.Errorf("message: list thread: %w", err)
 	}
 	replies = repliesInParent(replies, parentID)
-	// Fallback: if the GSI returns fewer replies than the root records, some
-	// replies aren't indexed — either the thread predates the backfill, or it's
-	// partially migrated (old replies unindexed + newer ones indexed). Scan the
-	// parent so historical threads stay complete until the migration runs.
-	// (Tombstoned replies keep their index key, so a fully-indexed thread has
-	// len(replies) >= ReplyCount and never trips this.) The transient case where
-	// the very latest reply lags the GSI also scans here — correct, just slower
-	// for that sub-second window; already-open clients got it over the WebSocket.
-	if len(replies) < root.ReplyCount {
-		thread, err := s.listThreadByScan(ctx, parentID, threadRootID)
-		stampParentType(thread, parentType)
-		return thread, err
-	}
 	thread := make([]*model.Message, 0, len(replies)+1)
 	thread = append(thread, root)
 	thread = append(thread, replies...)
 	sort.Slice(thread, func(i, j int) bool { return thread[i].ID < thread[j].ID })
 	stampParentType(thread, parentType)
-	s.attachRendered(ctx, thread...)
-	return thread, nil
-}
-
-// listThreadByScan is the pre-GSI fallback: scan the parent partition and
-// filter for the thread root + its replies. Retained for threads whose replies
-// haven't been backfilled into the GSI yet.
-func (s *MessageService) listThreadByScan(ctx context.Context, parentID, threadRootID string) ([]*model.Message, error) {
-	msgs, err := s.scanParentMessages(ctx, parentID)
-	if err != nil {
-		return nil, fmt.Errorf("message: list thread: %w", err)
-	}
-	thread := make([]*model.Message, 0)
-	for _, m := range msgs {
-		if m.ID == threadRootID || m.ParentMessageID == threadRootID {
-			thread = append(thread, m)
-		}
-	}
-	sort.Slice(thread, func(i, j int) bool { return thread[i].ID < thread[j].ID })
 	s.attachRendered(ctx, thread...)
 	return thread, nil
 }
@@ -1378,18 +1316,22 @@ func (s *MessageService) SetThreadFollow(ctx context.Context, userID, parentID, 
 // threadIndexEpoch is when the write-time thread-participation index (follow
 // rows written for every replier and root author, see
 // recordThreadParticipation) was live everywhere: it shipped 2026-07-08, and
-// this cut-off leaves a margin for rollout. A thread rooted after it — or an
-// account created after it — has all its participation in follow rows; older
-// ones may not, and keep the legacy reads that rediscover it from history.
+// this cut-off leaves a margin for rollout. A thread rooted after it has all
+// its participation in follow rows. An older one does once its root is
+// flagged ParticipantsIndexed (`migrate thread-participants`, or the importer
+// for imported threads); until then its replies keep the legacy read that
+// rediscovers participants from the thread's replies.
 var threadIndexEpoch = time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 
+// ThreadIndexEpoch is threadIndexEpoch, for the thread-participants migration:
+// the threads it backfills are the ones rooted before it.
+func ThreadIndexEpoch() time.Time { return threadIndexEpoch }
+
 // threadParticipationIndex is the optional write-time /threads index the
-// follow store exposes (adapter-backed by conditional puts + a per-user seed
-// marker). Asserted so plain test stores keep the legacy scan behavior.
+// follow store exposes (a conditional put). Asserted, so plain test stores
+// record nothing.
 type threadParticipationIndex interface {
 	SetThreadFollowIfAbsent(ctx context.Context, follow *model.ThreadFollow) error
-	IsThreadIndexSeeded(ctx context.Context, userID string) (bool, error)
-	MarkThreadIndexSeeded(ctx context.Context, userID string) error
 }
 
 // recordThreadParticipation keeps the /threads index warm at write time: a
@@ -1397,8 +1339,7 @@ type threadParticipationIndex interface {
 // their /threads lists no longer need to rediscover that by scanning message
 // history. Replying follows the thread again, past an earlier unfollow; the
 // root author's row is conditional — someone else's reply never clobbers a
-// deliberate unfollow. Best-effort: a failed write is logged and the lazy
-// seed path remains the safety net for pre-index history.
+// deliberate unfollow. Best-effort: a failed write is logged.
 func (s *MessageService) recordThreadParticipation(ctx context.Context, msg *model.Message, parentType string, root *model.Message) {
 	idx, ok := s.threadFollows.(threadParticipationIndex)
 	if !ok || msg == nil || msg.ParentMessageID == "" {
@@ -1437,294 +1378,6 @@ func (s *MessageService) recordThreadParticipation(ctx context.Context, msg *mod
 	}
 }
 
-// threadSeedInputs gathers what the seed scan works from: every channel and
-// conversation the user is in, their explicit follow choices, and the threads
-// alerts pulled in.
-func (s *MessageService) threadSeedInputs(ctx context.Context, userID string) (parents []threadParent, followOverrides, notificationThreads map[string]bool, err error) {
-	channels, err := s.memberships.ListUserChannels(ctx, userID)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("threads: list channels: %w", err)
-	}
-	for _, c := range channels {
-		parents = append(parents, threadParent{id: c.ChannelID, typ: ParentChannel})
-	}
-	convs, err := s.conversations.ListUserConversations(ctx, userID)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("threads: list conversations: %w", err)
-	}
-	for _, c := range convs {
-		parents = append(parents, threadParent{id: c.ConversationID, typ: ParentConversation})
-	}
-	follows, err := s.threadFollows.ListUserThreadFollows(ctx, userID)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("threads: list follows: %w", err)
-	}
-	followOverrides = make(map[string]bool, len(follows))
-	for _, f := range follows {
-		followOverrides[threadFollowKey(f.ParentID, f.ThreadRootID)] = f.Following
-	}
-	markers, err := s.unreadThreadMarkers(ctx, userID)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	notificationThreads = make(map[string]bool, len(markers))
-	for _, m := range markers {
-		notificationThreads[threadFollowKey(m.parentID, m.rootID)] = true
-	}
-	return parents, followOverrides, notificationThreads, nil
-}
-
-// threadParent is a channel or conversation the user belongs to.
-type threadParent struct {
-	id  string
-	typ string
-}
-
-// scanUserThreads derives the user's threads from recent message history:
-// roots they authored that have replies, threads they replied in, adjusted by
-// explicit follows and alert pulls. complete is false when any parent could
-// not be read, so the result must not be persisted as the user's full set.
-func (s *MessageService) scanUserThreads(ctx context.Context, userID string, parents []threadParent, followOverrides, notificationThreads map[string]bool) (out []*ThreadSummary, complete bool) {
-	// Fetch each parent's messages concurrently (bounded to 8 in flight) — the
-	// per-parent scans are the dominant, independent I/O cost. The in-memory
-	// aggregation below stays serial (it mutates shared maps), so only the scans
-	// are parallelized.
-	parentMsgs := make([][]*model.Message, len(parents))
-	var failed atomic.Bool
-	{
-		sem := make(chan struct{}, 8)
-		var wg sync.WaitGroup
-		for i, p := range parents {
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(i int, id string) {
-				defer wg.Done()
-				defer safe.Recover()
-				defer func() { <-sem }()
-				msgs, err := s.scanParentMessages(ctx, id)
-				if err != nil {
-					failed.Store(true)
-					return
-				}
-				parentMsgs[i] = msgs
-			}(i, p.id)
-		}
-		wg.Wait()
-	}
-
-	out = make([]*ThreadSummary, 0)
-	seen := make(map[string]bool)
-	for i, p := range parents {
-		msgs := parentMsgs[i]
-		if msgs == nil {
-			continue
-		}
-		// Index messages by ID so we can resolve thread roots without a second fetch.
-		byID := make(map[string]*model.Message, len(msgs))
-		for _, m := range msgs {
-			byID[m.ID] = m
-		}
-		// Collect thread roots the user participates in for this parent.
-		participated := make(map[string]bool)
-		for _, m := range msgs {
-			if m.AuthorID != userID {
-				continue
-			}
-			if m.ParentMessageID != "" {
-				participated[m.ParentMessageID] = true
-			} else if m.ReplyCount > 0 {
-				participated[m.ID] = true
-			}
-		}
-		for key, following := range followOverrides {
-			if !strings.HasPrefix(key, p.id+"#") {
-				continue
-			}
-			rootID := strings.TrimPrefix(key, p.id+"#")
-			if following {
-				participated[rootID] = true
-			} else if !notificationThreads[key] {
-				delete(participated, rootID)
-			}
-		}
-		// Participation follows a thread; so does being in a DM, short of
-		// an explicit unfollow. An alert alone lists it without following.
-		following := make(map[string]bool, len(participated))
-		for rootID := range participated {
-			following[rootID] = true
-		}
-		for key := range notificationThreads {
-			if !strings.HasPrefix(key, p.id+"#") {
-				continue
-			}
-			rootID := strings.TrimPrefix(key, p.id+"#")
-			participated[rootID] = true
-			if f, explicit := followOverrides[key]; explicit {
-				following[rootID] = f
-			} else if p.typ == ParentConversation {
-				following[rootID] = true
-			}
-		}
-		// Build summaries.
-		for rootID := range participated {
-			key := p.id + "#" + rootID
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			root := byID[rootID]
-			if root == nil {
-				continue
-			}
-			latest := root.CreatedAt
-			for _, m := range msgs {
-				if m.ParentMessageID == rootID && m.CreatedAt.After(latest) {
-					latest = m.CreatedAt
-				}
-			}
-			out = append(out, &ThreadSummary{
-				ParentID:         p.id,
-				ParentType:       p.typ,
-				ThreadRootID:     rootID,
-				RootAuthorID:     root.AuthorID,
-				RootBody:         root.Body,
-				RootCreatedAt:    root.CreatedAt,
-				ReplyCount:       root.ReplyCount,
-				LatestActivityAt: latest,
-				Following:        following[rootID],
-			})
-		}
-	}
-
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].LatestActivityAt.After(out[j].LatestActivityAt)
-	})
-	return out, !failed.Load()
-}
-
-// The background seed scans: at most maxThreadSeeds at once per process, so a
-// wave of first visits after an import can't flood DynamoDB, each bounded by
-// threadSeedTimeout.
-const (
-	maxThreadSeeds    = 2
-	threadSeedTimeout = 10 * time.Minute
-)
-
-// threadSeedRuns tracks the running seed scans: one per user at a time.
-type threadSeedRuns struct {
-	mu      sync.Mutex
-	running map[string]bool
-}
-
-func (r *threadSeedRuns) start(userID string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.running[userID] || len(r.running) >= maxThreadSeeds {
-		return false
-	}
-	if r.running == nil {
-		r.running = make(map[string]bool)
-	}
-	r.running[userID] = true
-	return true
-}
-
-func (r *threadSeedRuns) finish(userID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.running, userID)
-}
-
-// maybeSeedThreadIndex starts the one-time scan that brings an account's
-// pre-index thread participation into its follow rows, if it hasn't run. A
-// failed seed probe schedules nothing; the next visit asks again.
-func (s *MessageService) maybeSeedThreadIndex(ctx context.Context, userID string) {
-	idx, ok := s.threadFollows.(threadParticipationIndex)
-	if !ok {
-		return
-	}
-	if seeded, err := idx.IsThreadIndexSeeded(ctx, userID); err != nil || seeded || s.signedUpSinceThreadIndex(ctx, idx, userID) {
-		return
-	}
-	s.scheduleThreadSeed(ctx, idx, userID)
-}
-
-// scheduleThreadSeed runs the legacy scan for userID in the background — it
-// reads up to 25×200 messages in every channel and DM, which for an imported
-// account in hundreds of them outlasted the client's wait — and persists what
-// it finds (seedThreadIndex). Only after every parent was read: a scan cut
-// short by throttling would otherwise mark the user seeded without the
-// threads of the parents it missed, for good. Busy (this user's seed already
-// running, or no slot free) means a later visit tries again.
-func (s *MessageService) scheduleThreadSeed(ctx context.Context, idx threadParticipationIndex, userID string) {
-	if !s.threadSeeds.start(userID) {
-		return
-	}
-	safe.Go(func() {
-		defer func() {
-			s.threadSeeds.finish(userID)
-			if s.afterThreadSeed != nil {
-				s.afterThreadSeed(userID)
-			}
-		}()
-		// Not the request's context: the request has been answered.
-		bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), threadSeedTimeout)
-		defer cancel()
-		parents, followOverrides, notificationThreads, err := s.threadSeedInputs(bg, userID)
-		if err != nil {
-			slog.WarnContext(bg, "thread index seed postponed", "userID", userID, "error", err)
-			return
-		}
-		summaries, complete := s.scanUserThreads(bg, userID, parents, followOverrides, notificationThreads)
-		if !complete {
-			slog.WarnContext(bg, "thread index seed postponed: a parent could not be scanned", "userID", userID)
-			return
-		}
-		s.seedThreadIndex(bg, idx, userID, summaries, followOverrides)
-	})
-}
-
-// signedUpSinceThreadIndex decides, on an unseeded first /threads visit,
-// whether userID can skip the legacy seed scan: an account ex created after
-// the write-time index existed has every thread it took part in already in
-// follow rows, so the scan (up to 25×200 messages per parent) would find
-// nothing. Such an account is marked seeded. Anything else keeps the scan.
-func (s *MessageService) signedUpSinceThreadIndex(ctx context.Context, idx threadParticipationIndex, userID string) bool {
-	if s.seedUsers == nil {
-		return false
-	}
-	u, err := s.seedUsers.GetUser(ctx, userID)
-	if err != nil || !nativeSinceThreadIndex(u) {
-		return false
-	}
-	if err := idx.MarkThreadIndexSeeded(ctx, userID); err != nil {
-		// Still served from the index; the next visit decides again.
-		slog.WarnContext(ctx, "thread index seed marker failed", "userID", userID, "error", err)
-	}
-	return true
-}
-
-// signupClockSkew bounds how far apart ex's sign-up stamps an account's ULID
-// and its CreatedAt (both taken from the same clock in one request).
-const signupClockSkew = time.Minute
-
-// nativeSinceThreadIndex reports whether u was created by ex's own sign-up
-// after threadIndexEpoch. Sign-up mints the ID as a ULID at creation, stamps
-// CreatedAt from the same moment and seeds the notification settings. The
-// history importer creates accounts differently — caller-chosen IDs, the
-// source system's creation time, no settings — and an imported account's
-// history (or an existing account's, mapped by email) may predate its follow
-// rows, so it never qualifies.
-func nativeSinceThreadIndex(u *model.User) bool {
-	id, err := ulid.ParseStrict(u.ID)
-	if err != nil || u.NotificationSettings == nil {
-		return false
-	}
-	minted := ulid.Time(id.Time())
-	skew := u.CreatedAt.Sub(minted)
-	return !minted.Before(threadIndexEpoch) && skew <= signupClockSkew && skew >= -signupClockSkew
-}
-
 // batchMessageStore is the optional batched-read capability of the message
 // store (one parent, many IDs). Asserted with a per-ID fallback.
 type batchMessageStore interface {
@@ -1751,64 +1404,6 @@ func (s *MessageService) threadRoots(ctx context.Context, parentID string, ids [
 		}
 	}
 	return msgs, nil
-}
-
-// seedThreadIndex backfills the write-time index from the scan-derived
-// summaries ONCE per user, then marks them seeded so subsequent /threads
-// requests skip the scan. Rows are filtered against explicit follow records
-// (a deliberate unfollow survives the backfill), which makes the remainder
-// safe for a blind batched write. Best-effort: a failed seed just means a
-// later visit scans (and retries) again.
-func (s *MessageService) seedThreadIndex(ctx context.Context, idx threadParticipationIndex, userID string, summaries []*ThreadSummary, followOverrides map[string]bool) {
-	now := time.Now()
-	rows := make([]*model.ThreadFollow, 0, len(summaries))
-	for _, sum := range summaries {
-		if _, has := followOverrides[threadFollowKey(sum.ParentID, sum.ThreadRootID)]; has {
-			continue
-		}
-		// Listed by an alert alone: not a follow to make permanent.
-		if !sum.Following {
-			continue
-		}
-		rows = append(rows, &model.ThreadFollow{
-			UserID:         userID,
-			ParentID:       sum.ParentID,
-			ParentType:     sum.ParentType,
-			ThreadRootID:   sum.ThreadRootID,
-			Following:      true,
-			UpdatedAt:      now,
-			LastActivityAt: &sum.LatestActivityAt,
-		})
-	}
-	if len(rows) > 0 {
-		if err := s.threadFollows.SetThreadFollowMany(ctx, rows); err != nil {
-			slog.WarnContext(ctx, "thread index seed failed", "userID", userID, "rows", len(rows), "error", err)
-			return // not marked seeded — the next request retries
-		}
-	}
-	if err := idx.MarkThreadIndexSeeded(ctx, userID); err != nil {
-		slog.WarnContext(ctx, "thread index seed marker failed", "userID", userID, "error", err)
-	}
-}
-
-func (s *MessageService) scanParentMessages(ctx context.Context, parentID string) ([]*model.Message, error) {
-	out := make([]*model.Message, 0, threadScanPageSize)
-	cursor := ""
-	for page := 0; page < maxThreadScanPages; page++ {
-		msgs, hasMore, err := s.messages.ListMessages(ctx, parentID, cursor, threadScanPageSize)
-		if err != nil {
-			return nil, err
-		}
-		if len(msgs) == 0 {
-			return out, nil
-		}
-		out = append(out, msgs...)
-		if !hasMore {
-			return out, nil
-		}
-		cursor = msgs[len(msgs)-1].ID
-	}
-	return out, nil
 }
 
 // ListPinned returns all currently-pinned messages for a parent in
@@ -1993,107 +1588,26 @@ func (s *MessageService) ListAround(ctx context.Context, userID, parentID, paren
 	return out, hasMoreOlder, hasMoreNewer, nil
 }
 
-// topLevelMessageStore is the store's sparse index of top-level messages: a
-// page reads only the rows it returns. Optional capability — stores without
-// it (test fakes) take the filtering path below.
-type topLevelMessageStore interface {
-	ListTopLevelMessages(ctx context.Context, parentID, before string, limit int) ([]*model.Message, bool, error)
-	ListTopLevelMessagesAfter(ctx context.Context, parentID, after string, limit int) ([]*model.Message, bool, error)
-}
-
-// listTopLevel pages OLDER from `before` (or the live tail if empty). It reads
-// the top-level index when the store has one; until the index backfill has
-// run (store.ErrTopLevelIndexPending) it pages raw messages instead,
-// accumulating top-level ones until we have `limit` of them.
+// listTopLevel pages OLDER from `before` (or the live tail if empty) through
+// the store's sparse index of top-level messages: a page reads only the rows
+// it returns.
 func (s *MessageService) listTopLevel(ctx context.Context, parentID, before string, limit int) ([]*model.Message, bool, error) {
-	if idx, ok := s.messages.(topLevelMessageStore); ok {
-		msgs, hasMore, err := idx.ListTopLevelMessages(ctx, parentID, before, limit)
-		if err == nil {
-			s.attachRendered(ctx, msgs...)
-			return msgs, hasMore, nil
-		}
-		if !errors.Is(err, store.ErrTopLevelIndexPending) {
-			return nil, false, fmt.Errorf("message: list: %w", err)
-		}
+	msgs, hasMore, err := s.messages.ListTopLevelMessages(ctx, parentID, before, limit)
+	if err != nil {
+		return nil, false, fmt.Errorf("message: list: %w", err)
 	}
-	collected := make([]*model.Message, 0, limit)
-	cursor := before
-	storeHasMore := true
-	for round := 0; round < maxListRounds && storeHasMore && len(collected) <= limit; round++ {
-		raw, hasMore, err := s.messages.ListMessages(ctx, parentID, cursor, limit)
-		if err != nil {
-			return nil, false, fmt.Errorf("message: list: %w", err)
-		}
-		storeHasMore = hasMore
-		if len(raw) == 0 {
-			break
-		}
-		for _, m := range raw {
-			if m.ParentMessageID == "" {
-				collected = append(collected, m)
-			}
-		}
-		cursor = raw[len(raw)-1].ID
-	}
-	hasMore := false
-	if len(collected) > limit {
-		collected = collected[:limit]
-		hasMore = true
-	} else if storeHasMore {
-		hasMore = true
-	}
-	s.attachRendered(ctx, collected...)
-	return collected, hasMore, nil
+	s.attachRendered(ctx, msgs...)
+	return msgs, hasMore, nil
 }
 
-// listTopLevelAfter pages NEWER from `after`, from the top-level index like
-// listTopLevel. Until the backfill has run it pages raw messages: the cursor
-// advances via the newest raw ID seen so pure-reply stretches don't loop
-// forever, accumulating oldest-first (closer-to-cursor wins on trim), then
-// reversing at the end to match List's newest-first contract.
+// listTopLevelAfter pages NEWER from `after`, from the same index.
 func (s *MessageService) listTopLevelAfter(ctx context.Context, parentID, after string, limit int) ([]*model.Message, bool, error) {
-	if idx, ok := s.messages.(topLevelMessageStore); ok {
-		msgs, hasMore, err := idx.ListTopLevelMessagesAfter(ctx, parentID, after, limit)
-		if err == nil {
-			s.attachRendered(ctx, msgs...)
-			return msgs, hasMore, nil
-		}
-		if !errors.Is(err, store.ErrTopLevelIndexPending) {
-			return nil, false, fmt.Errorf("message: list after: %w", err)
-		}
+	msgs, hasMore, err := s.messages.ListTopLevelMessagesAfter(ctx, parentID, after, limit)
+	if err != nil {
+		return nil, false, fmt.Errorf("message: list after: %w", err)
 	}
-	collected := make([]*model.Message, 0, limit)
-	cursor := after
-	storeHasMore := true
-	for round := 0; round < maxListRounds && storeHasMore && len(collected) <= limit; round++ {
-		raw, hasMore, err := s.messages.ListMessagesAfter(ctx, parentID, cursor, limit)
-		if err != nil {
-			return nil, false, fmt.Errorf("message: list after: %w", err)
-		}
-		storeHasMore = hasMore
-		if len(raw) == 0 {
-			break
-		}
-		for i := len(raw) - 1; i >= 0; i-- {
-			m := raw[i]
-			if m.ParentMessageID == "" {
-				collected = append(collected, m)
-			}
-		}
-		cursor = raw[0].ID
-	}
-	hasMore := false
-	if len(collected) > limit {
-		collected = collected[:limit]
-		hasMore = true
-	} else if storeHasMore {
-		hasMore = true
-	}
-	for i, j := 0, len(collected)-1; i < j; i, j = i+1, j-1 {
-		collected[i], collected[j] = collected[j], collected[i]
-	}
-	s.attachRendered(ctx, collected...)
-	return collected, hasMore, nil
+	s.attachRendered(ctx, msgs...)
+	return msgs, hasMore, nil
 }
 
 // Edit updates the body and (optionally) the attachment list of an existing
@@ -2376,14 +1890,14 @@ func (s *MessageService) softDeleteMessage(ctx context.Context, msg *model.Messa
 // directly-deleted message, so connected clients patch the thread in real
 // time. Best-effort per reply.
 func (s *MessageService) cascadeDeleteThreadReplies(ctx context.Context, actorID, parentID, parentType, rootID string) []string {
-	msgs, err := s.scanParentMessages(ctx, parentID)
+	replies, err := s.messages.ListThreadReplies(ctx, rootID)
 	if err != nil {
-		slog.WarnContext(ctx, "thread cascade scan failed", "rootID", rootID, "error", err)
+		slog.WarnContext(ctx, "thread cascade read failed", "rootID", rootID, "error", err)
 		return nil
 	}
 	var deleted []string
-	for _, m := range msgs {
-		if m.ParentMessageID != rootID || m.Deleted {
+	for _, m := range repliesInParent(replies, parentID) {
+		if m.Deleted {
 			continue
 		}
 		if err := s.softDeleteMessage(ctx, m, actorID, parentID, parentType); err != nil {

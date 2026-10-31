@@ -121,13 +121,20 @@ export const Header = memo(function Header({
     /* istanbul ignore next -- headerShellRef is always attached and document always exists in this browser-only app; defensive guards */
     if (!node || typeof document === 'undefined') return;
     const measuredNode = node;
+    const main = measuredNode.closest<HTMLElement>('[data-app-main="true"]');
+    // Published on main, where the panels are, and only when it changes: a
+    // custom property inherits into everything below the element it is set
+    // on, so each write to the document root restyled the whole page (the
+    // sidebar's rows included) as a conversation opened or closed.
+    const host = main ?? document.documentElement;
 
     function updateMobilePanelTop() {
       const bottom = measuredNode.getBoundingClientRect().bottom;
-      const containingBlockTop =
-        measuredNode.closest<HTMLElement>('[data-app-main="true"]')?.getBoundingClientRect().top ?? 0;
-      const panelTop = Math.max(0, bottom - containingBlockTop);
-      document.documentElement.style.setProperty('--mobile-right-panel-top', `${Number(panelTop.toFixed(2))}px`);
+      const containingBlockTop = main?.getBoundingClientRect().top ?? 0;
+      const panelTop = `${Number(Math.max(0, bottom - containingBlockTop).toFixed(2))}px`;
+      if (host.style.getPropertyValue('--mobile-right-panel-top') !== panelTop) {
+        host.style.setProperty('--mobile-right-panel-top', panelTop);
+      }
     }
 
     updateMobilePanelTop();
@@ -148,7 +155,7 @@ export const Header = memo(function Header({
       window.removeEventListener('resize', updateMobilePanelTop);
       window.visualViewport?.removeEventListener('resize', updateMobilePanelTop);
       window.visualViewport?.removeEventListener('scroll', updateMobilePanelTop);
-      document.documentElement.style.removeProperty('--mobile-right-panel-top');
+      host.style.removeProperty('--mobile-right-panel-top');
     };
   }, []);
 

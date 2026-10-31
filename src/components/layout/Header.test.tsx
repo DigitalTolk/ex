@@ -149,9 +149,20 @@ describe('Header', () => {
 
     act(() => window.dispatchEvent(new Event('resize')));
 
-    expect(document.documentElement.style.getPropertyValue('--mobile-right-panel-top')).toBe('118px');
-    unmount();
+    // On main, where the panels are: set on the document root it restyled
+    // every element of the page, the whole sidebar included.
+    expect(main.style.getPropertyValue('--mobile-right-panel-top')).toBe('118px');
     expect(document.documentElement.style.getPropertyValue('--mobile-right-panel-top')).toBe('');
+    unmount();
+    expect(main.style.getPropertyValue('--mobile-right-panel-top')).toBe('');
+  });
+
+  it('leaves the published panel top alone when the header has not moved', () => {
+    render(<Header channel={makeChannel({ name: 'general' })} />);
+    const write = vi.spyOn(document.documentElement.style, 'setProperty');
+    act(() => window.dispatchEvent(new Event('resize')));
+    act(() => window.dispatchEvent(new Event('resize')));
+    expect(write).not.toHaveBeenCalled();
   });
 
   it('shows hash icon for public channels', () => {

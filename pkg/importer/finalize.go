@@ -52,7 +52,8 @@ const finalizeConcurrency = 8
 //   - each touched thread root gets its reply count, last reply time and recent
 //     reply authors recomputed from all its replies;
 //   - the root author and every reply author follow the thread (an explicit
-//     unfollow is never overwritten);
+//     unfollow is never overwritten), and the root is flagged
+//     ParticipantsIndexed;
 //   - the parent's unread counter and every member's read watermark advance by
 //     NewTopLevel together, so imported history is read and existing unread
 //     counts don't change;
@@ -157,6 +158,11 @@ func (im *Importer) finalizeThread(ctx context.Context, parentID, parentType str
 			return false, follows, fmt.Errorf("importer: thread follow: %w", err)
 		}
 		follows++
+	}
+	// Only once every participant has a row: the reply path then finds this
+	// thread's audience in the follow rows instead of re-reading its replies.
+	if err := im.messages.MarkThreadParticipantsIndexed(ctx, parentID, rootID); err != nil {
+		return false, follows, fmt.Errorf("importer: flag thread participants: %w", err)
 	}
 	return true, follows, nil
 }

@@ -124,6 +124,12 @@ export const EventReplayDone = "replay.done"; // server → client marker frame 
  */
 export const EventReplayExhausted = "replay.exhausted"; // cursor too old / unknown; client must do a full refetch
 /**
+ * EventSessionRenewed confirms a session.renew frame: the socket's deadline
+ * moved out, and expiresIn (milliseconds) is how long it now lives. Sent
+ * only to that socket.
+ */
+export const EventSessionRenewed = "session.renewed";
+/**
  * Event type constants used across the application.
  */
 export const EventWebhookChanged = "webhook.changed"; // incoming-webhook list changed (created/updated/deleted); data-less nudge to refetch

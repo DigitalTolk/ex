@@ -732,36 +732,6 @@ func TestMessageService_followMentionedThreadUsers_NoOpGuards(t *testing.T) {
 	}
 }
 
-func TestMessageService_scanParentMessages_Branches(t *testing.T) {
-	ctx := context.Background()
-
-	// Error path.
-	svc, messages, _, _, _ := setupMessageService()
-	messages.listErr = errors.New("boom")
-	if _, err := svc.scanParentMessages(ctx, "ch1"); err == nil {
-		t.Fatal("expected list error")
-	}
-
-	// Empty parent → returns an empty slice, no error.
-	svc2, _, _, _, _ := setupMessageService()
-	got, err := svc2.scanParentMessages(ctx, "empty-parent")
-	if err != nil || len(got) != 0 {
-		t.Fatalf("empty scan = %v, %v; want empty slice", got, err)
-	}
-
-	// hasMore=true forever → the scan caps at maxThreadScanPages and returns.
-	svc3, messages3, _, _, _ := setupMessageService()
-	messages3.listHasMore = true
-	messages3.messages["ch1#m1"] = &model.Message{ID: "m1", ParentID: "ch1"}
-	out, err := svc3.scanParentMessages(ctx, "ch1")
-	if err != nil {
-		t.Fatalf("paginated scan: %v", err)
-	}
-	if len(out) == 0 {
-		t.Fatal("expected accumulated messages from capped scan")
-	}
-}
-
 func TestMessageService_postSystemMessage_CreateErrorSwallowed(t *testing.T) {
 	svc, messages, _, _, _ := setupMessageService()
 	messages.createErr = errors.New("boom")
@@ -1131,195 +1101,6 @@ func TestMessageService_Send_ConversationMention_NoSystemMessage(t *testing.T) {
 	}
 }
 
-func TestMessageService_ScanUserThreads(t *testing.T) {
-	svc, messages, memberships, _, _ := setupMessageService()
-
-	// User is a member of one channel; populate userChannels override on the
-	// membership mock so ListUserChannels returns it.
-	memberships.userChannels = []*model.UserChannel{
-		{UserID: "u-me", ChannelID: "ch-1"},
-	}
-
-	now := time.Now()
-	root := &model.Message{
-		ID: "m-root", ParentID: "ch-1", AuthorID: "u-me",
-		Body: "starting a thread", CreatedAt: now.Add(-time.Hour), ReplyCount: 1,
-	}
-	reply1 := &model.Message{
-		ID: "m-reply1", ParentID: "ch-1", AuthorID: "u-other",
-		Body: "first reply", CreatedAt: now.Add(-30 * time.Minute), ParentMessageID: "m-root",
-	}
-	noisyOtherThreadRoot := &model.Message{
-		ID: "m-other-root", ParentID: "ch-1", AuthorID: "u-other",
-		Body: "other thread", CreatedAt: now.Add(-2 * time.Hour), ReplyCount: 2,
-	}
-	// User replied to the other thread → still counts as participation.
-	userReply := &model.Message{
-		ID: "m-user-reply", ParentID: "ch-1", AuthorID: "u-me",
-		Body: "I jumped in", CreatedAt: now.Add(-15 * time.Minute), ParentMessageID: "m-other-root",
-	}
-	otherReply := &model.Message{
-		ID: "m-other-reply", ParentID: "ch-1", AuthorID: "u-other",
-		Body: "later", CreatedAt: now.Add(-10 * time.Minute), ParentMessageID: "m-other-root",
-	}
-	// A thread the user has nothing to do with.
-	stranger := &model.Message{
-		ID: "m-stranger", ParentID: "ch-1", AuthorID: "u-other",
-		Body: "stranger", CreatedAt: now.Add(-5 * time.Minute), ReplyCount: 1,
-	}
-	for _, m := range []*model.Message{root, reply1, noisyOtherThreadRoot, userReply, otherReply, stranger} {
-		messages.messages["ch-1#"+m.ID] = m
-	}
-
-	got, err := scanThreads(svc, "u-me")
-	if err != nil {
-		t.Fatalf("scan: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("expected 2 thread summaries (root + replied-to), got %d", len(got))
-	}
-	roots := map[string]bool{got[0].ThreadRootID: true, got[1].ThreadRootID: true}
-	if !roots["m-root"] || !roots["m-other-root"] {
-		t.Errorf("expected both thread roots; got %+v", roots)
-	}
-	// Sorted by latest activity desc — m-other-root has otherReply at -10min;
-	// m-root has reply1 at -30min — so m-other-root should be first.
-	if got[0].ThreadRootID != "m-other-root" {
-		t.Errorf("expected m-other-root first by latest activity; got %q", got[0].ThreadRootID)
-	}
-}
-
-func TestMessageService_ScanUserThreads_UsesFollowOverrides(t *testing.T) {
-	svc, messages, memberships, _, _ := setupMessageService()
-	follows := newMockThreadFollowStore()
-	svc.SetThreadFollowStore(follows)
-	ctx := context.Background()
-
-	memberships.userChannels = []*model.UserChannel{{UserID: "u-me", ChannelID: "ch-1"}}
-	now := time.Now()
-	messages.messages["ch-1#m-participated"] = &model.Message{
-		ID: "m-participated", ParentID: "ch-1", AuthorID: "u-me", Body: "mine", CreatedAt: now.Add(-time.Hour), ReplyCount: 1,
-	}
-	messages.messages["ch-1#m-participated-r"] = &model.Message{
-		ID: "m-participated-r", ParentID: "ch-1", AuthorID: "u-other", Body: "reply", CreatedAt: now.Add(-50 * time.Minute), ParentMessageID: "m-participated",
-	}
-	messages.messages["ch-1#m-followed"] = &model.Message{
-		ID: "m-followed", ParentID: "ch-1", AuthorID: "u-other", Body: "follow me", CreatedAt: now.Add(-40 * time.Minute), ReplyCount: 1,
-	}
-	messages.messages["ch-1#m-followed-r"] = &model.Message{
-		ID: "m-followed-r", ParentID: "ch-1", AuthorID: "u-someone", Body: "reply", CreatedAt: now.Add(-30 * time.Minute), ParentMessageID: "m-followed",
-	}
-	if err := follows.SetThreadFollow(ctx, &model.ThreadFollow{
-		UserID: "u-me", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: "m-followed", Following: true,
-	}); err != nil {
-		t.Fatalf("follow m-followed: %v", err)
-	}
-	if err := follows.SetThreadFollow(ctx, &model.ThreadFollow{
-		UserID: "u-me", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: "m-participated", Following: false,
-	}); err != nil {
-		t.Fatalf("unfollow m-participated: %v", err)
-	}
-
-	got, err := scanThreads(svc, "u-me")
-	if err != nil {
-		t.Fatalf("scan: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("expected only explicit follow after unfollow override, got %d: %+v", len(got), got)
-	}
-	if got[0].ThreadRootID != "m-followed" {
-		t.Fatalf("ThreadRootID = %q, want m-followed", got[0].ThreadRootID)
-	}
-}
-
-func TestMessageService_ScanUserThreads_IncludesUnreadThreadNotification(t *testing.T) {
-	svc, messages, memberships, _, _ := setupMessageService()
-	stateStore := newMockUserStateStore()
-	svc.SetUserStateStore(stateStore)
-	ctx := context.Background()
-
-	memberships.userChannels = []*model.UserChannel{{UserID: "u-me", ChannelID: "ch-1"}}
-	now := time.Now()
-	messages.messages["ch-1#m-notified"] = &model.Message{
-		ID: "m-notified", ParentID: "ch-1", AuthorID: "u-other", Body: "root", CreatedAt: now.Add(-time.Hour), ReplyCount: 1,
-	}
-	messages.messages["ch-1#m-notified-r"] = &model.Message{
-		ID: "m-notified-r", ParentID: "ch-1", AuthorID: "u-author", Body: "@all", CreatedAt: now.Add(-30 * time.Minute), ParentMessageID: "m-notified",
-	}
-	if err := stateStore.SetUserState(ctx, &model.UserStateItem{
-		UserID:       "u-me",
-		Kind:         model.UserStateThreadNotification,
-		TargetID:     "m-notified",
-		ParentID:     "ch-1",
-		ParentType:   ParentChannel,
-		ThreadRootID: "m-notified",
-		UpdatedAt:    now,
-	}); err != nil {
-		t.Fatalf("SetUserState: %v", err)
-	}
-
-	got, err := scanThreads(svc, "u-me")
-	if err != nil {
-		t.Fatalf("scan: %v", err)
-	}
-	if len(got) != 1 || got[0].ThreadRootID != "m-notified" {
-		t.Fatalf("ListUserThreads = %+v, want unread notified thread", got)
-	}
-}
-
-func TestMessageService_ScanUserThreads_NotificationTemporarilyOverridesUnfollow(t *testing.T) {
-	svc, messages, memberships, _, _ := setupMessageService()
-	follows := newMockThreadFollowStore()
-	stateStore := newMockUserStateStore()
-	svc.SetThreadFollowStore(follows)
-	svc.SetUserStateStore(stateStore)
-	ctx := context.Background()
-
-	memberships.userChannels = []*model.UserChannel{{UserID: "u-me", ChannelID: "ch-1"}}
-	now := time.Now()
-	messages.messages["ch-1#m-unfollowed"] = &model.Message{
-		ID: "m-unfollowed", ParentID: "ch-1", AuthorID: "u-me", Body: "root", CreatedAt: now.Add(-time.Hour), ReplyCount: 1,
-	}
-	messages.messages["ch-1#m-unfollowed-r"] = &model.Message{
-		ID: "m-unfollowed-r", ParentID: "ch-1", AuthorID: "u-other", Body: "@here", CreatedAt: now.Add(-30 * time.Minute), ParentMessageID: "m-unfollowed",
-	}
-	if err := follows.SetThreadFollow(ctx, &model.ThreadFollow{
-		UserID: "u-me", ParentID: "ch-1", ParentType: ParentChannel, ThreadRootID: "m-unfollowed", Following: false,
-	}); err != nil {
-		t.Fatalf("SetThreadFollow: %v", err)
-	}
-	if err := stateStore.SetUserState(ctx, &model.UserStateItem{
-		UserID:       "u-me",
-		Kind:         model.UserStateThreadNotification,
-		TargetID:     "m-unfollowed",
-		ParentID:     "ch-1",
-		ParentType:   ParentChannel,
-		ThreadRootID: "m-unfollowed",
-		UpdatedAt:    now,
-	}); err != nil {
-		t.Fatalf("SetUserState: %v", err)
-	}
-
-	got, err := scanThreads(svc, "u-me")
-	if err != nil {
-		t.Fatalf("ListUserThreads with notification: %v", err)
-	}
-	if len(got) != 1 || got[0].ThreadRootID != "m-unfollowed" {
-		t.Fatalf("ListUserThreads with notification = %+v, want temporarily visible unread thread", got)
-	}
-
-	if err := stateStore.DeleteUserState(ctx, "u-me", model.UserStateThreadNotification, "m-unfollowed"); err != nil {
-		t.Fatalf("DeleteUserState: %v", err)
-	}
-	got, err = scanThreads(svc, "u-me")
-	if err != nil {
-		t.Fatalf("ListUserThreads after read: %v", err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("ListUserThreads after read = %+v, want unfollowed thread hidden again", got)
-	}
-}
-
 func TestMessageService_SetThreadFollow_RejectsReplyAsRoot(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	svc.SetThreadFollowStore(newMockThreadFollowStore())
@@ -1653,6 +1434,13 @@ func TestMessageService_Delete_CascadesThreadReplies(t *testing.T) {
 	messages.messages["ch1#other"] = &model.Message{
 		ID: "other", ParentID: "ch1", AuthorID: "user-1", Body: "unrelated",
 	}
+	// A reply its author already deleted is left as it is: no second
+	// tombstone, no second event.
+	messages.messages["ch1#gone"] = &model.Message{
+		ID: "gone", ParentID: "ch1", AuthorID: "user-2", ParentMessageID: "root", Deleted: true,
+	}
+	// The replies come from the thread's index, never the channel's history.
+	messages.listErr = errors.New("history read")
 
 	if err := svc.Delete(ctx, "user-1", "ch1", ParentChannel, "root"); err != nil {
 		t.Fatalf("Delete root: %v", err)
@@ -1679,7 +1467,7 @@ func TestMessageService_Delete_CascadesThreadReplies(t *testing.T) {
 		}
 	}
 	if deletedEvents != 3 {
-		t.Errorf("message.deleted events = %d, want 3 (root + 2 replies)", deletedEvents)
+		t.Errorf("message.deleted events = %d, want 3 (root + 2 live replies)", deletedEvents)
 	}
 }
 
@@ -1733,7 +1521,7 @@ func TestMessageService_Delete_CascadeReplyUpdateError_Swallowed(t *testing.T) {
 
 // If the cascade scan fails after the root is tombstoned, the root delete
 // still succeeds — the scan error is best-effort and logged.
-func TestMessageService_Delete_CascadeScanError_Swallowed(t *testing.T) {
+func TestMessageService_Delete_CascadeReadError_Swallowed(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	ctx := context.Background()
 
@@ -1741,15 +1529,15 @@ func TestMessageService_Delete_CascadeScanError_Swallowed(t *testing.T) {
 		ChannelID: "ch1", UserID: "user-1", Role: model.ChannelRoleMember,
 	}
 	messages.messages["ch1#root"] = &model.Message{ID: "root", ParentID: "ch1", AuthorID: "user-1", Body: "root"}
-	// GetMessage + UpdateMessage (root delete) still work; only the
-	// reply-scan via ListMessages fails.
-	messages.listErr = errors.New("boom")
+	// GetMessage + UpdateMessage (root delete) still work; only reading the
+	// thread's replies fails.
+	messages.threadReplyErr = errors.New("boom")
 
 	if err := svc.Delete(ctx, "user-1", "ch1", ParentChannel, "root"); err != nil {
-		t.Fatalf("Delete root should swallow cascade scan error: %v", err)
+		t.Fatalf("Delete root should swallow cascade read error: %v", err)
 	}
 	if !messages.messages["ch1#root"].Deleted {
-		t.Error("root should be tombstoned despite cascade scan failure")
+		t.Error("root should be tombstoned despite cascade read failure")
 	}
 }
 
@@ -2071,16 +1859,17 @@ func TestMessageService_ListThreadMessages(t *testing.T) {
 	}
 }
 
-// An un-backfilled thread (GSI returns nothing but the root records replies)
-// falls back to the parent scan so historical threads stay complete.
-func TestMessageService_ListThreadMessages_FallbackScan(t *testing.T) {
+// A thread is read from its reply index alone, whatever its root's reply
+// count says: an imported root counting more replies than were indexed sent
+// every open of the thread through up to 5,000 of the channel's messages.
+func TestMessageService_ListThreadMessages_ReadsOnlyTheIndex(t *testing.T) {
 	svc, messages, memberships, _, _ := setupMessageService()
 	ctx := context.Background()
 	memberships.memberships["ch-fb#user-1"] = &model.ChannelMembership{
 		ChannelID: "ch-fb", UserID: "user-1", Role: model.ChannelRoleMember,
 	}
 	messages.messages["ch-fb#01-root"] = &model.Message{
-		ID: "01-root", ParentID: "ch-fb", AuthorID: "user-1", Body: "root", ReplyCount: 2,
+		ID: "01-root", ParentID: "ch-fb", AuthorID: "user-1", Body: "root", ReplyCount: 5,
 	}
 	messages.messages["ch-fb#02-r1"] = &model.Message{
 		ID: "02-r1", ParentID: "ch-fb", AuthorID: "user-1", Body: "r1", ParentMessageID: "01-root",
@@ -2088,21 +1877,15 @@ func TestMessageService_ListThreadMessages_FallbackScan(t *testing.T) {
 	messages.messages["ch-fb#03-r2"] = &model.Message{
 		ID: "03-r2", ParentID: "ch-fb", AuthorID: "user-1", Body: "r2", ParentMessageID: "01-root",
 	}
-	// Index empty (pre-migration) → service must scan to find the replies.
-	messages.noThreadIndex = true
+	// Reading the channel's history would fail.
+	messages.listErr = errors.New("history read")
 
 	thread, err := svc.ListThreadMessages(ctx, "user-1", "ch-fb", ParentChannel, "01-root")
 	if err != nil {
 		t.Fatalf("ListThreadMessages: %v", err)
 	}
-	if len(thread) != 3 {
-		t.Fatalf("len(thread) = %d, want 3 via scan fallback", len(thread))
-	}
-
-	// And the fallback scan propagates its errors.
-	messages.listErr = errors.New("scan boom")
-	if _, err := svc.ListThreadMessages(ctx, "user-1", "ch-fb", ParentChannel, "01-root"); err == nil {
-		t.Fatal("expected scan-fallback error")
+	if got := ids(thread); len(got) != 3 || got[0] != "01-root" || got[1] != "02-r1" || got[2] != "03-r2" {
+		t.Fatalf("thread = %v, want the root and its two indexed replies", got)
 	}
 }
 
@@ -2183,18 +1966,19 @@ func TestMessageService_ThreadWindowMessages(t *testing.T) {
 		t.Fatalf("window = %+v, want root + the newest two replies", ids(got))
 	}
 
-	// A SHORT page that also falls short of the root's ReplyCount means the
-	// thread is un-backfilled, and the complete path answers instead. (A full
-	// page is legitimately just the window, as asserted above.)
+	// A short page is the whole thread, even below the root's reply count:
+	// nothing is read again.
 	messages.noThreadIndex = true
-	full, err := svc.ThreadWindowMessages(ctx, "user-1", "ch-win", ParentChannel, "01-root", 2)
+	messages.listErr = errors.New("history read")
+	short, err := svc.ThreadWindowMessages(ctx, "user-1", "ch-win", ParentChannel, "01-root", 2)
 	if err != nil {
-		t.Fatalf("window fallback: %v", err)
+		t.Fatalf("short window: %v", err)
 	}
-	if len(full) != 4 {
-		t.Fatalf("fallback should return the whole thread, got %v", ids(full))
+	if len(short) != 1 || short[0].ID != "01-root" {
+		t.Fatalf("short window = %v, want the root alone", ids(short))
 	}
 	messages.noThreadIndex = false
+	messages.listErr = nil
 
 	// Store failures surface, both for the root and for the replies.
 	messages.getErr = errors.New("get boom")

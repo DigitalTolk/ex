@@ -325,6 +325,9 @@ func (m *mockCache) Get(_ context.Context, key string, dest interface{}) error {
 }
 
 func (m *mockCache) Set(_ context.Context, key string, val interface{}, _ time.Duration) error {
+	if m.values == nil {
+		m.values = make(map[string]interface{})
+	}
 	m.values[key] = val
 	return nil
 }

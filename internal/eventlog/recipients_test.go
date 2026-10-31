@@ -126,7 +126,7 @@ func TestResolver_ConcurrentMissesShareOneLookup(t *testing.T) {
 		r := NewResolver(m, nil)
 		// A non-expiring cache: an expiring one runs a sweeper goroutine that
 		// never exits, which a synctest bubble can't hold.
-		r.cache.Store(expirable.NewLRU[string, []string](recipientCacheMaxEntries, nil, 0))
+		r.cache.Store(expirable.NewLRU[string, recipients](recipientCacheMaxEntries, nil, 0))
 
 		var wg sync.WaitGroup
 		for range 10 {
@@ -168,11 +168,13 @@ func TestResolver_CacheCanBeDisabled(t *testing.T) {
 }
 
 type fakeParticipants struct {
-	ids map[string][]string
-	err error
+	ids   map[string][]string
+	err   error
+	calls atomic.Int32
 }
 
 func (f *fakeParticipants) ParticipantIDs(_ context.Context, convID string) ([]string, error) {
+	f.calls.Add(1)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -271,5 +273,66 @@ func TestResolver_NilSafe(t *testing.T) {
 	got, err := r.Resolve(context.Background(), "chan:c1")
 	if err != nil || len(got) != 0 {
 		t.Errorf("nil Resolver got=%v err=%v, want empty+nil", got, err)
+	}
+}
+
+type fakeGenerations struct {
+	gen map[string]string
+	err error
+}
+
+func (f *fakeGenerations) ChannelGeneration(_ context.Context, channelID string) (string, error) {
+	return f.gen[channelID], f.err
+}
+
+// With channel generations wired, a channel's recipients are read again only
+// when a membership write moved its generation: one Redis read per event
+// instead of a member query per TTL window. A generation that can't be read
+// fetches without caching; conversation topics keep the TTL alone.
+func TestResolver_ChannelEntriesFollowTheGeneration(t *testing.T) {
+	m := &fakeMembers{ids: map[string][]string{"c1": {"u1"}}}
+	p := &fakeParticipants{ids: map[string][]string{"d1": {"u1", "u2"}}}
+	g := &fakeGenerations{gen: map[string]string{"c1": "7"}}
+	r := NewResolver(m, p)
+	r.SetCacheTTL(time.Hour)
+	r.SetChannelGenerations(g)
+	ctx := context.Background()
+	resolve := func(topic string, want int) {
+		t.Helper()
+		if got, err := r.Resolve(ctx, topic); err != nil || len(got) != want {
+			t.Fatalf("Resolve(%s) = %v (err %v), want %d recipients", topic, got, err, want)
+		}
+	}
+
+	for range 3 {
+		resolve("chan:c1", 1)
+	}
+	if m.calls.Load() != 1 {
+		t.Fatalf("members read %d times, want 1 while the generation holds", m.calls.Load())
+	}
+
+	m.ids["c1"] = []string{"u1", "u2"}
+	g.gen["c1"] = "8"
+	resolve("chan:c1", 2)
+	if m.calls.Load() != 2 {
+		t.Fatalf("members read %d times, want a re-read after the generation moved", m.calls.Load())
+	}
+
+	g.err = errors.New("redis down")
+	resolve("chan:c1", 2)
+	resolve("chan:c1", 2)
+	if m.calls.Load() != 4 {
+		t.Fatalf("members read %d times, want a read per event while the generation is unreadable", m.calls.Load())
+	}
+	g.err = nil
+	resolve("chan:c1", 2)
+	if m.calls.Load() != 4 {
+		t.Fatalf("members read %d times, want the generation-8 entry reused", m.calls.Load())
+	}
+
+	resolve("conv:d1", 2)
+	resolve("conv:d1", 2)
+	if p.calls.Load() != 1 {
+		t.Fatalf("participants read %d times, want 1 within the TTL", p.calls.Load())
 	}
 }

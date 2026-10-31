@@ -38,7 +38,7 @@ func TestRunExpiredStatusSweeperSurvivesAPanickingSweep(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		svc.RunExpiredStatusSweeper(ctx, time.Millisecond, 0)
+		svc.RunExpiredStatusSweeper(ctx, time.Millisecond)
 	}()
 	if n := <-st.calls; n != 1 {
 		t.Fatalf("first sweep = call %d", n)

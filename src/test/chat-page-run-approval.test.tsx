@@ -43,12 +43,9 @@ vi.mock('@/context/AuthContext', () => ({
   }),
 }));
 
-const markThreadNotificationUnread = vi.fn();
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
-    markThreadNotificationUnread,
     unhideConversation: vi.fn(),
-    unreadThreadNotifications: new Set(),
     hiddenConversations: new Set(),
     hideConversation: vi.fn(),
     setActiveChannel: vi.fn(),

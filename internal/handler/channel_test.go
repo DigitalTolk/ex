@@ -302,6 +302,15 @@ func (s *dataMessageStore) ListThreadReplies(_ context.Context, threadRootID str
 	return result, nil
 }
 
+// The top-level index pages through the same rows (no thread replies here).
+func (s *dataMessageStore) ListTopLevelMessages(ctx context.Context, parentID, before string, limit int) ([]*model.Message, bool, error) {
+	return s.ListMessages(ctx, parentID, before, limit)
+}
+
+func (s *dataMessageStore) ListTopLevelMessagesAfter(ctx context.Context, parentID, after string, limit int) ([]*model.Message, bool, error) {
+	return s.ListMessagesAfter(ctx, parentID, after, limit)
+}
+
 func (s *dataMessageStore) ListMessagesAfter(ctx context.Context, parentID, _ string, limit int) ([]*model.Message, bool, error) {
 	return s.ListMessages(ctx, parentID, "", limit)
 }

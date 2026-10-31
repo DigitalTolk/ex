@@ -701,6 +701,12 @@ func (s *hrunnerCovMsgStore) ListThreadReplies(context.Context, string) ([]*mode
 func (s *hrunnerCovMsgStore) ListMessagesAfter(context.Context, string, string, int) ([]*model.Message, bool, error) {
 	return nil, false, nil
 }
+func (s *hrunnerCovMsgStore) ListTopLevelMessages(context.Context, string, string, int) ([]*model.Message, bool, error) {
+	return nil, false, nil
+}
+func (s *hrunnerCovMsgStore) ListTopLevelMessagesAfter(context.Context, string, string, int) ([]*model.Message, bool, error) {
+	return nil, false, nil
+}
 func (s *hrunnerCovMsgStore) ListMessagesAround(context.Context, string, string, int, int) ([]*model.Message, bool, bool, error) {
 	return nil, false, false, nil
 }

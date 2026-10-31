@@ -6,26 +6,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { MessageItem } from './MessageItem';
 import type { Message } from '@/types';
 import { hoverRow } from '@/test/hover';
-
-// The picker's calendar opens on the seed's month; tomorrow is always on it
-// (as an outside day at a month's end), so pick that and check the day.
-function tomorrow(): Date {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  return d;
-}
-function isoDay(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-async function pickTomorrow() {
-  const day = await vi.waitFor(() => {
-    const el = document.querySelector(`[data-testid="reminder-day-${isoDay(tomorrow())}"]`) as HTMLButtonElement | null;
-    expect(el).not.toBeNull();
-    return el!;
-  });
-  await userEvent.click(day);
-}
-
+import { pickTomorrow, tomorrow } from '@/test/reminder-picker';
 
 // Unlike MessageItem.reminder.browser.test (which mocks useActivity to spy on
 // mutate), this drives the REAL useCreateReminder hook and only stubs apiFetch,

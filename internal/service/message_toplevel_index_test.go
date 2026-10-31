@@ -9,9 +9,8 @@ import (
 	"github.com/DigitalTolk/ex/internal/store"
 )
 
-// The production store has the index in both directions; losing either
-// method would silently drop every page back to the raw-message scan.
-var _ topLevelMessageStore = (*store.MessageStoreImpl)(nil)
+// The production store pages history from the top-level index.
+var _ MessageStore = (*store.MessageStoreImpl)(nil)
 
 // indexedMessageStore adds the store's top-level index to the mock.
 type indexedMessageStore struct {
@@ -78,21 +77,6 @@ func TestMessageService_List_ReadsTheTopLevelIndex(t *testing.T) {
 	}
 }
 
-// Until the backfill marks the table, the index misses older messages, so
-// the page falls back to filtering ListMessages.
-func TestMessageService_List_FallsBackWhileTheIndexIsPending(t *testing.T) {
-	svc, idx := indexedMessageService(t)
-	idx.err = store.ErrTopLevelIndexPending
-
-	msgs, _, err := svc.List(context.Background(), "user-1", "ch1", ParentChannel, "", 50)
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if idx.listCalls.Load() == 0 || len(msgs) != 1 || msgs[0].ID != "scan-only" {
-		t.Fatalf("fallback page = %+v (ListMessages calls %d)", msgs, idx.listCalls.Load())
-	}
-}
-
 // An index read failure surfaces — it is not papered over with a second,
 // more expensive read against the same failing table.
 func TestMessageService_List_IndexErrorSurfaces(t *testing.T) {
@@ -154,20 +138,10 @@ func TestMessageService_ListAround_ReadsTheTopLevelIndexBothWays(t *testing.T) {
 	}
 }
 
-// Until the backfill marks the table the forward page also filters raw
-// messages; an index failure surfaces rather than retrying the long way.
-func TestMessageService_ListAfter_PendingFallbackAndErrors(t *testing.T) {
+// An index failure on the forward page surfaces rather than retrying the
+// long way.
+func TestMessageService_ListAfter_IndexErrorSurfaces(t *testing.T) {
 	svc, idx := indexedMessageService(t)
-	idx.err = store.ErrTopLevelIndexPending
-	msgs, _, err := svc.ListAfter(context.Background(), "user-1", "ch1", ParentChannel, "cursor", 50)
-	if err != nil {
-		t.Fatalf("ListAfter: %v", err)
-	}
-	if idx.listCalls.Load() == 0 || len(msgs) != 1 || msgs[0].ID != "scan-only" {
-		t.Fatalf("fallback page = %+v (raw reads %d)", msgs, idx.listCalls.Load())
-	}
-
-	svc, idx = indexedMessageService(t)
 	idx.err = errors.New("index down")
 	if _, _, err := svc.ListAfter(context.Background(), "user-1", "ch1", ParentChannel, "cursor", 50); err == nil || !errors.Is(err, idx.err) {
 		t.Fatalf("err = %v, want the index error", err)

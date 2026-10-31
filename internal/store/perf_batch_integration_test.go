@@ -235,43 +235,6 @@ func TestThreadFollowStore_SetIfAbsent(t *testing.T) {
 	}
 }
 
-func TestThreadFollowStore_SeedMarker(t *testing.T) {
-	db := setupDynamoDB(t)
-	ctx := context.Background()
-	s := NewThreadFollowStore(db)
-
-	seeded, err := s.IsThreadIndexSeeded(ctx, "u-seed")
-	if err != nil || seeded {
-		t.Fatalf("IsThreadIndexSeeded before mark = %v (err=%v), want false", seeded, err)
-	}
-	if err := s.MarkThreadIndexSeeded(ctx, "u-seed"); err != nil {
-		t.Fatalf("MarkThreadIndexSeeded: %v", err)
-	}
-	seeded, err = s.IsThreadIndexSeeded(ctx, "u-seed")
-	if err != nil || !seeded {
-		t.Fatalf("IsThreadIndexSeeded after mark = %v (err=%v), want true", seeded, err)
-	}
-
-	// The marker row lives OUTSIDE the THREAD# SK prefix — a seeded user's
-	// follow listing must never surface it as a phantom follow.
-	if err := s.SetThreadFollow(ctx, makeThreadFollow("u-seed", "ch-seed", "root-1")); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	follows, err := s.ListUserThreadFollows(ctx, "u-seed")
-	if err != nil || len(follows) != 1 || follows[0].ThreadRootID != "root-1" {
-		t.Fatalf("ListUser with marker present = %+v (err=%v), want only the real follow", follows, err)
-	}
-
-	getErrStore := NewThreadFollowStore(withFault(db, func(f *faultClient) { f.failGetItem = true }))
-	if _, err := getErrStore.IsThreadIndexSeeded(ctx, "u-seed"); !errors.Is(err, errInjected) {
-		t.Fatalf("IsThreadIndexSeeded fault: want errInjected, got %v", err)
-	}
-	putErrStore := NewThreadFollowStore(withFault(db, func(f *faultClient) { f.failPutItem = true }))
-	if err := putErrStore.MarkThreadIndexSeeded(ctx, "u-seed"); !errors.Is(err, errInjected) {
-		t.Fatalf("MarkThreadIndexSeeded fault: want errInjected, got %v", err)
-	}
-}
-
 func TestAttachmentStore_GetAttachmentsByIDs(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
@@ -312,5 +275,42 @@ func TestAttachmentStore_GetAttachmentsByIDs(t *testing.T) {
 	got, err = drained.GetAttachmentsByIDs(ctx, []string{a1.ID})
 	if err != nil || len(got) != 1 || got[0].ID != a1.ID {
 		t.Fatalf("unprocessed drain = %v (err=%v), want the seeded attachment", got, err)
+	}
+}
+
+// batchConsistencyRecorder notes the ConsistentRead flag of every BatchGetItem.
+type batchConsistencyRecorder struct {
+	DynamoAPI
+	consistent []bool
+}
+
+func (c *batchConsistencyRecorder) BatchGetItem(ctx context.Context, in *dynamodb.BatchGetItemInput, o ...func(*dynamodb.Options)) (*dynamodb.BatchGetItemOutput, error) {
+	for _, ka := range in.RequestItems {
+		c.consistent = append(c.consistent, ka.ConsistentRead != nil && *ka.ConsistentRead)
+	}
+	return c.DynamoAPI.BatchGetItem(ctx, in, o...)
+}
+
+// Only the sidebar needs the channel rows consistently (their MessageSeq is
+// the unread count); search hits and mention names take the eventually
+// consistent read, which costs half.
+func TestChannelStore_GetChannelsByIDsConsistency(t *testing.T) {
+	db := setupDynamoDB(t)
+	ctx := context.Background()
+	ch := makeChannel("ch-cons", "cons", "cons", model.ChannelTypePublic)
+	if err := NewChannelStore(db).CreateChannel(ctx, ch); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	rec := &batchConsistencyRecorder{DynamoAPI: db.Client}
+	s := NewChannelStore(&DB{Client: rec, Table: db.Table})
+
+	if got, err := s.GetChannelsByIDs(ctx, []string{ch.ID}); err != nil || len(got) != 1 {
+		t.Fatalf("GetChannelsByIDs = %v (err %v)", got, err)
+	}
+	if got, err := s.GetChannelsByIDsConsistent(ctx, []string{ch.ID}); err != nil || len(got) != 1 || got[0].Slug != "cons" {
+		t.Fatalf("GetChannelsByIDsConsistent = %v (err %v)", got, err)
+	}
+	if len(rec.consistent) != 2 || rec.consistent[0] || !rec.consistent[1] {
+		t.Fatalf("consistent reads = %v, want [false true]", rec.consistent)
 	}
 }

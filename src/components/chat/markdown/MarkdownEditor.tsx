@@ -3,7 +3,6 @@ import { EditorState, EditorSelection, Compartment } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { history, historyKeymap, defaultKeymap, insertNewlineAndIndent } from '@codemirror/commands';
 import { composerMarkdown } from './language';
-import { emoticonsToEmoji } from './extensions/emoticons';
 import type { WysiwygEditorHandle, ActiveFormat } from './types';
 import { composerTheme, composerHighlight } from './theme';
 import { inlinePreview } from './extensions/inlinePreview';
@@ -176,7 +175,6 @@ export const MarkdownEditor = forwardRef<WysiwygEditorHandle, Props>(function Ma
             ];
           }),
           emojiGlyphs((name) => (cbRef.current.customEmojiMap?.() ?? {})[name]),
-          emoticonsToEmoji,
           composerAutocomplete({
             users: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).users(),
             online: () => (cbRef.current.completionProviders ?? EMPTY_PROVIDERS).online(),

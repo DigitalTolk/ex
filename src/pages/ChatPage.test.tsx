@@ -12,7 +12,6 @@ vi.mock('@/components/layout/AppLayout', () => ({
   ),
 }));
 
-const mockMarkThreadNotificationUnread = vi.fn();
 const mockUnhideConversation = vi.fn();
 
 const { bumpChannelUnread: mockBumpChannelUnread, bumpConversationUnread: mockBumpConversationUnread } = vi.hoisted(() => ({
@@ -28,9 +27,7 @@ vi.mock('@/lib/unread-cache', () => ({
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
-    unreadThreadNotifications: new Set(),
     hiddenConversations: new Set(),
-    markThreadNotificationUnread: mockMarkThreadNotificationUnread,
     hideConversation: vi.fn(),
     unhideConversation: mockUnhideConversation,
     setActiveChannel: vi.fn(),
