@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { ExponentialBackoff } from 'cockatiel';
-import { apiFetch, getAccessToken } from '@/lib/api';
+import { apiFetch, getAccessToken, refreshAccessToken } from '@/lib/api';
+import { notifyAuthInvalid } from '@/lib/auth-events';
 import { EventType, EPHEMERAL_EVENT_TYPES } from '@/lib/event-types';
-import { dispatchWSEvent, type WSEventHandlers, type WSInvalidPayloadFallbacks } from '@/lib/ws-events';
+import { dispatchWSEvent, wsEventSchemas, type WSEventHandlers, type WSInvalidPayloadFallbacks } from '@/lib/ws-events';
 import { setWSSender, clearWSPending } from '@/lib/ws-sender';
 import { useLatestRef } from '@/hooks/useLatestRef';
 
@@ -20,6 +21,18 @@ const reconnectBackoffFactory = new ExponentialBackoff({ initialDelay: 1000, max
 // OS kills background TCP without a close event, so onclose (the only other
 // reconnect trigger) never fires.
 const staleFrameMs = 45_000;
+
+// How long before the socket's deadline the session is renewed over it. The
+// server keeps a socket a minute past its token's expiry; two minutes ahead
+// leaves room for a background tab's throttled timer.
+const sessionRenewLeadMs = 2 * 60_000;
+
+// Ticket answer: the one-time ticket, and how long the socket it opens will
+// live (absent from a server that predates session renewal).
+interface WSTicket {
+  ticket: string;
+  expiresIn?: number;
+}
 
 // Dedup window for replay-vs-live races. On a reconnect the server
 // replays missed events from the durable inbox; any event that also
@@ -53,6 +66,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null);
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const renewTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Current position on the jittered backoff curve; null = start over.
   const backoffRef = useRef<ReturnType<typeof reconnectBackoffFactory.next> | null>(null);
   // Cursor for replay-on-reconnect. Updated on every event that
@@ -103,10 +117,45 @@ export function useWebSocket(options: UseWebSocketOptions) {
       }, backoffRef.current.duration);
     }
 
+    // Session renewal: a socket lives as long as the token its ticket was
+    // minted with (plus the server's grace). Shortly before that, mint a fresh
+    // ticket — after a forced token refresh, so its deadline is a new token's
+    // — and send it over the socket: the server moves the deadline out and
+    // confirms with session.renewed, which books the next renewal. A failure
+    // books nothing: the server closes the socket at its old deadline and the
+    // reconnect path (fresh ticket, replay, onReconnect refetch) takes over,
+    // as it did on every token lifetime before.
+    function scheduleRenew(ws: WebSocket, expiresIn: number) {
+      clearTimeout(renewTimerRef.current);
+      renewTimerRef.current = setTimeout(
+        () => void renewSession(ws),
+        Math.max(expiresIn - sessionRenewLeadMs, expiresIn / 2),
+      );
+    }
+
+    async function renewSession(ws: WebSocket) {
+      let ticket: string | undefined;
+      try {
+        if (!(await refreshAccessToken())) {
+          // The server rejected the session outright — the verdict a
+          // reconnect would reach at the deadline, so log out now.
+          notifyAuthInvalid();
+          return;
+        }
+        ticket = (await apiFetch<WSTicket>('/api/v1/ws/ticket', { method: 'POST' }))?.ticket;
+      } catch {
+        return;
+      }
+      if (!ticket || wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'session.renew', ticket }));
+    }
+
     async function connect() {
       if (connectInFlight) return;
       connectInFlight = true;
       let ticket: string | null;
+      let expiresIn: number | undefined;
+      let mintedAt = 0;
       // The finally is the ONLY release of connectInFlight — every early
       // return and the mint await funnel through it. Everything after this
       // block is synchronous, so releasing the flag before the socket is
@@ -120,8 +169,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
         // the old flow silently stalled here with a dead socket and no
         // logout until an unrelated request happened to 401.
         try {
-          const res = await apiFetch<{ ticket: string }>('/api/v1/ws/ticket', { method: 'POST' });
+          const res = await apiFetch<WSTicket>('/api/v1/ws/ticket', { method: 'POST' });
           ticket = res?.ticket ?? null;
+          expiresIn = res?.expiresIn;
+          mintedAt = Date.now();
         } catch {
           // Network-level failure (offline, server restarting) — retry on
           // the backoff. If this was a terminal auth rejection, apiFetch
@@ -151,6 +202,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
         // indicator and similar ephemera) without prop-drilling.
         setWSSender((frame) => ws.send(frame));
         if (reconnected) callbacksRef.current.onReconnect?.();
+        if (typeof expiresIn === 'number') scheduleRenew(ws, expiresIn - (Date.now() - mintedAt));
       };
 
       ws.onmessage = (event) => {
@@ -169,7 +221,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
         }
         try {
           const payload = typeof msg.data === 'string' ? JSON.parse(msg.data) : msg.data ?? msg;
-          if (msg.type === EventType.ReplayExhausted) {
+          if (msg.type === EventType.SessionRenewed) {
+            const renewed = wsEventSchemas[EventType.SessionRenewed].safeParse(payload);
+            if (renewed.success) scheduleRenew(ws, renewed.data.expiresIn);
+          } else if (msg.type === EventType.ReplayExhausted) {
             // Server couldn't satisfy our cursor — the inbox has been trimmed
             // past it. Drop the cursor so the next reconnect doesn't keep
             // asking for a hopeless window, and let the caller refetch
@@ -209,6 +264,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
       };
 
       ws.onclose = () => {
+        clearTimeout(renewTimerRef.current);
         wsRef.current = null;
         setWSSender(null);
         if (disposed || !enabledRef.current) return;
@@ -265,6 +321,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
       disposed = true;
       for (const [target, event] of wakeTargets) target.removeEventListener(event, wakeProbe);
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+      clearTimeout(renewTimerRef.current);
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;

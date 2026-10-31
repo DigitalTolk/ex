@@ -95,6 +95,12 @@ type MessageStore interface {
 	// cursor, oldest-first within the page but with the same
 	// newest-first ordering as ListMessages overall.
 	ListMessagesAfter(ctx context.Context, parentID, after string, limit int) ([]*model.Message, bool, error)
+	// ListTopLevelMessages and ListTopLevelMessagesAfter page a parent's
+	// top-level messages (no thread replies) from the sparse top-level index,
+	// newest first: strictly older than `before` (or the live tail), or the
+	// ones nearest after `after`. hasMore reports more beyond the page.
+	ListTopLevelMessages(ctx context.Context, parentID, before string, limit int) ([]*model.Message, bool, error)
+	ListTopLevelMessagesAfter(ctx context.Context, parentID, after string, limit int) ([]*model.Message, bool, error)
 	// ListMessagesAround returns a window centered on msgID: up to
 	// `before` older + the target + up to `after` newer, newest-first.
 	ListMessagesAround(ctx context.Context, parentID, msgID string, before, after int) ([]*model.Message, bool, bool, error)

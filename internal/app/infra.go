@@ -12,7 +12,6 @@ import (
 	"github.com/DigitalTolk/ex/internal/eventlog"
 	"github.com/DigitalTolk/ex/internal/handler"
 	"github.com/DigitalTolk/ex/internal/pubsub"
-	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/service"
 	"github.com/DigitalTolk/ex/internal/storage"
 	"github.com/DigitalTolk/ex/internal/store"
@@ -97,11 +96,6 @@ func (a *App) buildInfra(ctx context.Context) error {
 	in.userState = store.NewUserStateStore(db)
 	in.invites = store.NewInviteStore(db)
 	in.tokens = store.NewTokenStore(db)
-	// One-time background backfill of the per-user token partition (GSI1):
-	// once the seeded marker lands, account deactivation revokes tokens with
-	// a Query instead of a full-table Scan. Idempotent and concurrency-safe,
-	// so every instance may attempt it; failures just retry on next boot.
-	safe.Go(a.track(func() { backfillTokenIndex(in.tokens) }))
 	in.emojis = store.NewEmojiStore(db)
 	in.attachments = store.NewAttachmentStore(db)
 
@@ -125,32 +119,19 @@ func (a *App) buildInfra(ctx context.Context) error {
 		handler.NewMembershipMemberLister(in.memberships.ListMembers),
 		handler.NewConversationParticipantLister(in.conversations.GetConversation),
 	)
-	// Cache topic→recipient lists for a few seconds so the durable-inbox
-	// fan-out doesn't re-query DynamoDB membership on every persistent event.
-	// Bounded staleness; live delivery (broker subscription) stays correct on
-	// join/leave.
-	recipients.SetCacheTTL(10 * time.Second)
+	// Cache topic→recipient lists so the durable-inbox fan-out doesn't
+	// re-query DynamoDB membership on every persistent event. A channel's list
+	// is reused while its audience generation (moved by every membership
+	// write) holds; the TTL is the backstop, and bounds conversation lists.
+	// Live delivery (broker subscription) stays correct on join/leave.
+	recipients.SetCacheTTL(10 * time.Minute)
+	recipients.SetChannelGenerations(channelGenerations{service.NewRedisAudienceGenerations(in.cache.Client())})
 	in.pubsub.SetDurability(recipients, in.inbox)
 
 	// ------------------------------------------------------------- Broker
 	in.broker = pubsub.NewBroker(in.pubsub)
 	a.onClose(func() { _ = in.broker.Close() })
 	return nil
-}
-
-// tokenIndexer is the token store's one-time per-user index backfill.
-type tokenIndexer interface {
-	EnsureUserTokenIndex(ctx context.Context) error
-}
-
-// backfillTokenIndex runs the per-user token index backfill, bounded; a
-// failure only leaves deactivation on its scan path until the next boot.
-func backfillTokenIndex(tokens tokenIndexer) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	if err := tokens.EnsureUserTokenIndex(ctx); err != nil {
-		slog.Warn("token index backfill failed (deactivation falls back to the scan path)", "error", err)
-	}
 }
 
 // newOIDC connects the SSO provider when OIDC_ISSUER is set (nil otherwise:

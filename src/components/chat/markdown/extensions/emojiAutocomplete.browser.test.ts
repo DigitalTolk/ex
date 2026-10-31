@@ -125,6 +125,14 @@ describe('emojiSource', () => {
     expect(res.options.length).toBeGreaterThan(0);
   });
 
+  it('once open, follows the query down to one character', () => {
+    const res = emojiSource(providers)(ctxFor('hi :smi')) as CompletionResult;
+    const next = res.update!(res, 3, 5, ctxFor('hi :s')) as CompletionResult;
+    expect(next.from).toBe(3);
+    expect(next.options[0].label).toMatch(/^:s/);
+    expect(res.update!(res, 3, 4, ctxFor('hi :'))).toBeNull();
+  });
+
   it('does not open on the colon of a time or inside a word', () => {
     expect(emojiSource(providers)(ctxFor('meet at 10:30'))).toBeNull();
     expect(emojiSource(providers)(ctxFor('note:smile'))).toBeNull();

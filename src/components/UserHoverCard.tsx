@@ -14,7 +14,7 @@ import { PresenceDot } from '@/components/PresenceDot';
 import { presenceNotchStyle } from '@/lib/presence';
 import { useIsOnline } from '@/stores/presence';
 import { formatStatusUntil } from '@/lib/user-status';
-import { formatLastSeen, formatTimeZoneDelta, formatTimeZoneName, isValidTimeZone } from '@/lib/user-time';
+import { formatLastSeen, formatLocalTime, formatTimeZoneDelta, formatTimeZoneName, isValidTimeZone } from '@/lib/user-time';
 import type { User, UserStatus } from '@/types';
 
 interface UserHoverCardProps {
@@ -245,7 +245,7 @@ function UserHoverCardContent({
               <div className="flex justify-between gap-3">
                 <dt className="text-muted-foreground">Local time</dt>
                 <dd className="text-right">
-                  {new Date().toLocaleTimeString(undefined, { timeZone: effectiveTimeZone, hour: 'numeric', minute: '2-digit' })}
+                  {formatLocalTime(effectiveTimeZone)}
                   {timeZoneDelta && <span className="ml-1 text-muted-foreground">({timeZoneDelta})</span>}
                 </dd>
               </div>

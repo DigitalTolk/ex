@@ -103,14 +103,16 @@ func channelAudienceKey(channelID string) string { return cache.ChannelAudienceK
 func userAudienceKey(userID string) string       { return cache.UserAudienceKey(userID) }
 
 // Cache bounds. audienceEntryTTL is the backstop for an audience write whose
-// bump was lost (Redis unreachable right after it) or that bypasses every
-// bumping writer (a hand-run migration): the generation check covers the
-// services and the history importer, and nothing else can keep an entry stale
-// for longer than this.
+// bump was lost (Redis unreachable right after it, retried and logged at
+// ERROR) or that bypasses every bumping writer (a hand-run migration): the
+// generation check covers the services and the history importer, and nothing
+// else can keep an entry stale for longer than this. Each expiry re-reads the
+// channel's members, overrides and account settings consistently, so it is
+// not shorter than it needs to be.
 const (
 	audienceChannelCacheSize = 2048
 	audienceUserCacheSize    = 50_000
-	audienceEntryTTL         = 2 * time.Minute
+	audienceEntryTTL         = 5 * time.Minute
 )
 
 type channelAudienceEntry struct {

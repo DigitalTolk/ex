@@ -50,12 +50,6 @@ type refreshTokenItem struct {
 // userTokenGSI1PK is the per-user token partition on GSI1.
 func userTokenGSI1PK(userID string) string { return "USERTOKEN#" + userID }
 
-// tokenIndexSeededPK marks that every live legacy token row has been
-// backfilled with GSI attributes (EnsureUserTokenIndex ran to completion), so
-// DeleteAllForUser can trust the GSI Query alone. Absent → the legacy Scan
-// fallback keeps revocation complete.
-const tokenIndexSeededPK = "TOKENIDXSEEDED"
-
 func (s *TokenStoreImpl) StoreRefreshToken(ctx context.Context, token *model.RefreshToken) error {
 	item := refreshTokenItem{
 		PK:           rtokenPK(token.TokenHash),
@@ -169,36 +163,9 @@ func (s *TokenStoreImpl) DeleteRefreshTokenFamily(ctx context.Context, userID, f
 	return nil
 }
 
+// DeleteAllRefreshTokensForUser revokes every refresh token the user holds,
+// from their own partition of GSI1: a Query bounded by their session count.
 func (s *TokenStoreImpl) DeleteAllRefreshTokensForUser(ctx context.Context, userID string) error {
-	// Fast path: the user's tokens live in one GSI partition — a Query bounded
-	// by the user's own session count instead of a Scan of the entire table.
-	// The GSI is trustworthy alone only once the legacy backfill has run
-	// (rows written before the index existed have no GSI attributes and are
-	// invisible to the Query); before that the Scan below keeps revocation
-	// COMPLETE — this is account deactivation, a missed row is a live
-	// credential.
-	seeded, err := s.isTokenIndexSeeded(ctx)
-	if err != nil {
-		return err
-	}
-	if seeded {
-		return s.deleteAllForUserByIndex(ctx, userID)
-	}
-	return s.deleteAllForUserByScan(ctx, userID)
-}
-
-func (s *TokenStoreImpl) isTokenIndexSeeded(ctx context.Context) (bool, error) {
-	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(s.Table),
-		Key:       compositeKey(tokenIndexSeededPK, metaSK()),
-	})
-	if err != nil {
-		return false, fmt.Errorf("store: get token index marker: %w", err)
-	}
-	return out.Item != nil, nil
-}
-
-func (s *TokenStoreImpl) deleteAllForUserByIndex(ctx context.Context, userID string) error {
 	keyCond := expression.Key("GSI1PK").Equal(expression.Value(userTokenGSI1PK(userID)))
 	proj := expression.NamesList(expression.Name("PK"), expression.Name("SK"))
 	expr := mustExpr(expression.NewBuilder().WithKeyCondition(keyCond).WithProjection(proj).Build())
@@ -222,40 +189,6 @@ func (s *TokenStoreImpl) deleteAllForUserByIndex(ctx context.Context, userID str
 	return nil
 }
 
-func (s *TokenStoreImpl) deleteAllForUserByScan(ctx context.Context, userID string) error {
-	// Legacy path: scan for all RTOKEN# items belonging to this user, then
-	// batch delete. Retired per deployment once EnsureUserTokenIndex marks the
-	// GSI backfill complete.
-	filt := expression.Name("PK").BeginsWith("RTOKEN#").
-		And(expression.Name("userID").Equal(expression.Value(userID)))
-
-	proj := expression.NamesList(expression.Name("PK"), expression.Name("SK"))
-
-	expr := mustExpr(expression.NewBuilder().WithFilter(filt).WithProjection(proj).Build())
-
-	input := &dynamodb.ScanInput{
-		TableName:                 aws.String(s.Table),
-		FilterExpression:          expr.Filter(),
-		ProjectionExpression:      expr.Projection(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-	}
-
-	paginator := dynamodb.NewScanPaginator(s.Client, input)
-
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
-		if err != nil {
-			return fmt.Errorf("store: scan refresh tokens: %w", err)
-		}
-		if err := s.batchDeleteTokenKeys(ctx, page.Items); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 // batchDeleteTokenKeys deletes the given PK/SK projections through deleteAll
 // (25-item chunks, UnprocessedItems drained on the shared backed-off schedule):
 // under throttling a hot partition returns deletes that were silently NOT
@@ -266,69 +199,6 @@ func (s *TokenStoreImpl) deleteAllForUserByScan(ctx context.Context, userID stri
 func (s *TokenStoreImpl) batchDeleteTokenKeys(ctx context.Context, items []map[string]types.AttributeValue) error {
 	if err := s.deleteAll(ctx, primaryKeys(items)); err != nil {
 		return fmt.Errorf("store: batch delete tokens: %w", err)
-	}
-	return nil
-}
-
-// EnsureUserTokenIndex backfills GSI attributes onto legacy refresh-token
-// rows (written before the per-user token partition existed) and writes the
-// seeded marker so DeleteAllForUser switches from the full-table Scan to the
-// per-user Query. Idempotent and concurrency-safe: re-running rewrites the
-// same attributes, so every instance may call it at startup. A no-op once the
-// marker exists.
-func (s *TokenStoreImpl) EnsureUserTokenIndex(ctx context.Context) error {
-	seeded, err := s.isTokenIndexSeeded(ctx)
-	if err != nil || seeded {
-		return err
-	}
-	filt := expression.Name("PK").BeginsWith("RTOKEN#").
-		And(expression.Name("GSI1PK").AttributeNotExists())
-	proj := expression.NamesList(expression.Name("PK"), expression.Name("SK"), expression.Name("userID"))
-	expr := mustExpr(expression.NewBuilder().WithFilter(filt).WithProjection(proj).Build())
-	paginator := dynamodb.NewScanPaginator(s.Client, &dynamodb.ScanInput{
-		TableName:                 aws.String(s.Table),
-		FilterExpression:          expr.Filter(),
-		ProjectionExpression:      expr.Projection(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-	})
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
-		if err != nil {
-			return fmt.Errorf("store: scan legacy refresh tokens: %w", err)
-		}
-		for _, item := range page.Items {
-			var row struct {
-				PK     string `dynamodbav:"PK"`
-				SK     string `dynamodbav:"SK"`
-				UserID string `dynamodbav:"userID"`
-			}
-			if err := attributevalue.UnmarshalMap(item, &row); err != nil {
-				return fmt.Errorf("store: unmarshal legacy refresh token: %w", err)
-			}
-			if row.UserID == "" {
-				continue // unrevocable garbage row; expires via TTL
-			}
-			update := expression.Set(expression.Name("GSI1PK"), expression.Value(userTokenGSI1PK(row.UserID))).
-				Set(expression.Name("GSI1SK"), expression.Value(row.PK))
-			uexpr := mustExpr(expression.NewBuilder().WithUpdate(update).Build())
-			if _, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-				TableName:                 aws.String(s.Table),
-				Key:                       compositeKey(row.PK, row.SK),
-				UpdateExpression:          uexpr.Update(),
-				ExpressionAttributeNames:  uexpr.Names(),
-				ExpressionAttributeValues: uexpr.Values(),
-			}); err != nil {
-				return fmt.Errorf("store: backfill refresh token index: %w", err)
-			}
-		}
-	}
-	marker := map[string]types.AttributeValue{
-		"PK": &types.AttributeValueMemberS{Value: tokenIndexSeededPK},
-		"SK": &types.AttributeValueMemberS{Value: metaSK()},
-	}
-	if _, err := s.Client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(s.Table), Item: marker}); err != nil {
-		return fmt.Errorf("store: mark token index seeded: %w", err)
 	}
 	return nil
 }

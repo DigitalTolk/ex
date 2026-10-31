@@ -594,6 +594,14 @@ func (s *handlerWebhookMessageStore) ListThreadReplies(_ context.Context, thread
 	return out, nil
 }
 
+func (s *handlerWebhookMessageStore) ListTopLevelMessages(context.Context, string, string, int) ([]*model.Message, bool, error) {
+	return nil, false, nil
+}
+
+func (s *handlerWebhookMessageStore) ListTopLevelMessagesAfter(context.Context, string, string, int) ([]*model.Message, bool, error) {
+	return nil, false, nil
+}
+
 func (s *handlerWebhookMessageStore) ListMessagesAfter(ctx context.Context, parentID, _ string, limit int) ([]*model.Message, bool, error) {
 	return s.ListMessages(ctx, parentID, "", limit)
 }

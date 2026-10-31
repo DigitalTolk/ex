@@ -101,6 +101,17 @@ describe('applyLayoutTierClasses / startLayoutTierTracking', () => {
     }
   });
 
+  // It runs on every window resize (the keyboard resizes some phone
+  // WebViews), and a class change on <html> restyles the whole page.
+  it('leaves <html> untouched when the tier has not changed', () => {
+    applyLayoutTierClasses();
+    const observer = new MutationObserver(() => undefined);
+    observer.observe(root, { attributes: true });
+    applyLayoutTierClasses();
+    expect(observer.takeRecords()).toHaveLength(0);
+    observer.disconnect();
+  });
+
   it('stamps exactly one tier class plus the device class', () => {
     const tier = applyLayoutTierClasses();
     expect(tier).toBe('full');

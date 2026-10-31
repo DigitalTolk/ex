@@ -27,7 +27,7 @@ vi.mock('@/components/chat/markdown/MarkdownComposer', () => ({
     </div>
   ),
 }));
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ChannelView } from './ChannelView';
@@ -67,7 +67,6 @@ vi.mock('@/context/AuthContext', () => ({
 }));
 
 vi.mock('@/context/UnreadContext', () => ({
-  useOptionalUnread: () => undefined,
   useUnread: () => ({
     unreadChannels: new Set(),
     unreadChannelNotifications: new Set(),
@@ -226,6 +225,7 @@ describe('ChannelView', () => {
       { channelID: 'ch-other', channelName: 'other', unread: true, unreadCount: 2 },
       { channelID: 'ch-1', channelName: 'general', unread: true, unreadCount: 4 },
     ]);
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
     render(
       <QueryClientProvider client={qc}>
         <MemoryRouter initialEntries={['/channel/general']}>
@@ -244,6 +244,13 @@ describe('ChannelView', () => {
     expect(untouched).toMatchObject({ unread: true, unreadCount: 2 });
     // Persisted server-side.
     expect(vi.mocked(apiFetch)).toHaveBeenCalledWith('/api/v1/channels/ch-1/read', { method: 'PUT' });
+    // Opening costs that one write: the row already shows the server's zero,
+    // so the whole channel list is not fetched again.
+    const putIndex = vi.mocked(apiFetch).mock.calls.findIndex(([url]) => url === '/api/v1/channels/ch-1/read');
+    await act(async () => {
+      await vi.mocked(apiFetch).mock.results[putIndex].value;
+    });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['userChannels'] });
   });
 
   it('renders channel name in header', () => {

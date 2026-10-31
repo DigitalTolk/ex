@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { EditorState, EditorSelection } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
+import { composerMarkdown } from '../language';
 import { shortcodeToUnicode } from '@/lib/emoji-shortcodes';
 import { emojiGlyphs } from './emojiGlyphs';
 
@@ -12,6 +13,14 @@ function makeView(doc: string, custom: Record<string, string> = {}): EditorView 
   return new EditorView({
     parent: host,
     state: EditorState.create({ doc, extensions: [emojiGlyphs((name) => custom[name])] }),
+  });
+}
+function makeComposer(doc: string, caret: number): EditorView {
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  return new EditorView({
+    parent: host,
+    state: EditorState.create({ doc, selection: { anchor: caret }, extensions: [composerMarkdown, emojiGlyphs(() => undefined)] }),
   });
 }
 function glyphs(view: EditorView): HTMLElement[] {
@@ -84,6 +93,31 @@ describe('emojiGlyphs', () => {
     const view = makeView('');
     view.dispatch({ changes: { from: 0, insert: 'x :smile:' }, selection: EditorSelection.cursor(0) });
     expect(glyphs(view)).toHaveLength(1);
+    view.destroy();
+  });
+
+  it.each([
+    ['hi :P there', '😛'],
+    ['ok :) ', '🙂'],
+    ['ok ;-) ', '😉'],
+    ['so <3', '❤️'],
+  ])('shows the emoticon in %j as its emoji while the caret is elsewhere', (doc, emoji) => {
+    const view = makeComposer(doc, 0);
+    expect(glyphs(view).map((g) => g.textContent)).toEqual([emoji]);
+    expect(view.state.doc.toString()).toBe(doc);
+    view.destroy();
+  });
+
+  it('shows the emoticon as its text while the caret is at it', () => {
+    const view = makeComposer('hi :P there', 5);
+    expect(glyphs(view)).toHaveLength(0);
+    expect(view.contentDOM.textContent).toBe('hi :P there');
+    view.destroy();
+  });
+
+  it.each(['note:P there', 'a :Po there', 'see `a :P b` here'])('leaves %j as text', (doc) => {
+    const view = makeComposer(doc, doc.length);
+    expect(glyphs(view)).toHaveLength(0);
     view.destroy();
   });
 });

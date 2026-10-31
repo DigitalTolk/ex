@@ -84,7 +84,7 @@ vi.mock('@/context/TypingContext', () => ({
 }));
 
 vi.mock('@/context/UnreadContext', () => ({
-  useUnread: () => ({ markThreadNotificationUnread: vi.fn() }),
+  useUnread: () => ({}),
 }));
 
 function rootMsg(over: Partial<Message> = {}): Message {

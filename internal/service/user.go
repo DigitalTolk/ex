@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/paginate"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/safe"
 	"github.com/DigitalTolk/ex/internal/store"
@@ -153,7 +155,6 @@ func IndexUser(ctx context.Context, idx UserIndexer, u *model.User) {
 // caches user data via React Query, so this can be short.
 const avatarURLTTL = 24 * time.Hour
 
-const expiredStatusSweepBatchSize = 200
 const maxUserStatusClearAfter = 366 * 24 * time.Hour
 
 // resolveAvatar populates user.AvatarURL from user.AvatarKey using the signer.
@@ -338,9 +339,7 @@ func (s *UserService) SetNotificationSettings(ctx context.Context, userID string
 	if err != nil {
 		return nil, fmt.Errorf("user: update notification settings: %w", err)
 	}
-	if s.cache != nil {
-		_ = s.cache.Delete(ctx, "user:"+userID)
-	}
+	s.forgetUser(ctx, userID)
 	s.resolveAvatar(ctx, user)
 
 	// Notification settings are private to the user — fan out only to their own
@@ -471,9 +470,7 @@ func (s *UserService) saveProfile(ctx context.Context, user *model.User) (*model
 		return nil, fmt.Errorf("user: update: %w", err)
 	}
 
-	if s.cache != nil {
-		_ = s.cache.Delete(ctx, "user:"+user.ID)
-	}
+	s.forgetUser(ctx, user.ID)
 	s.resolveAvatar(ctx, user)
 
 	// Broadcast a global user.updated event so connected clients refresh stale
@@ -533,9 +530,7 @@ func (s *UserService) SetUserStatusMessage(ctx context.Context, userID string, s
 	if err := s.users.UpdateUser(ctx, user); err != nil {
 		return nil, fmt.Errorf("user: update status message: %w", err)
 	}
-	if s.cache != nil {
-		_ = s.cache.Delete(ctx, "user:"+userID)
-	}
+	s.forgetUser(ctx, userID)
 	s.resolveAvatar(ctx, user)
 	events.Publish(ctx, s.publisher, pubsub.UserEvents(), events.EventUserUpdated, map[string]any{
 		"id":         user.ID,
@@ -548,47 +543,36 @@ func (s *UserService) SetUserStatusMessage(ctx context.Context, userID string, s
 
 // ClearExpiredStatuses clears persisted statuses whose ClearAt has passed and
 // publishes user.updated so every connected client removes the status without
-// waiting for that user profile to be read again.
-func (s *UserService) ClearExpiredStatuses(ctx context.Context, now time.Time, limit int) (int, error) {
-	if limit <= 0 {
-		limit = expiredStatusSweepBatchSize
+// waiting for that user profile to be read again. It reads the shared roster:
+// every instance sweeps each minute, and the clear itself is conditional on
+// the ClearAt it saw, so a copy up to a minute old is safe.
+func (s *UserService) ClearExpiredStatuses(ctx context.Context, now time.Time) (int, error) {
+	users, err := s.roster(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("user: list users for expired statuses: %w", err)
 	}
-
 	cleared := 0
-	cursor := ""
-	for {
-		users, nextCursor, err := s.users.ListUsers(ctx, limit, cursor)
+	for _, listedUser := range users {
+		if listedUser.UserStatus == nil || listedUser.UserStatus.ClearAt == nil || listedUser.UserStatus.ClearAt.After(now) {
+			continue
+		}
+		user, ok, err := s.clearExpiredStatus(ctx, listedUser, now)
 		if err != nil {
-			return cleared, fmt.Errorf("user: list users for expired statuses: %w", err)
+			return cleared, err
 		}
-		for _, listedUser := range users {
-			if listedUser == nil || listedUser.UserStatus == nil || listedUser.UserStatus.ClearAt == nil || listedUser.UserStatus.ClearAt.After(now) {
-				continue
-			}
-
-			user, ok, err := s.clearExpiredStatus(ctx, listedUser, now)
-			if err != nil {
-				return cleared, err
-			}
-			if !ok {
-				continue
-			}
-			if s.cache != nil {
-				_ = s.cache.Delete(ctx, "user:"+user.ID)
-			}
-			events.Publish(ctx, s.publisher, pubsub.UserEvents(), events.EventUserUpdated, map[string]any{
-				"id":         user.ID,
-				"userStatus": nil,
-				"timeZone":   user.TimeZone,
-			})
-			s.indexUser(ctx, user)
-			cleared++
+		if !ok {
+			continue
 		}
-		if nextCursor == "" {
-			return cleared, nil
-		}
-		cursor = nextCursor
+		s.forgetUser(ctx, user.ID)
+		events.Publish(ctx, s.publisher, pubsub.UserEvents(), events.EventUserUpdated, map[string]any{
+			"id":         user.ID,
+			"userStatus": nil,
+			"timeZone":   user.TimeZone,
+		})
+		s.indexUser(ctx, user)
+		cleared++
 	}
+	return cleared, nil
 }
 
 // conditionalStatusClearer is the optional atomic form of the status clear
@@ -635,7 +619,7 @@ func (s *UserService) clearExpiredStatus(ctx context.Context, listedUser *model.
 // persisted user profiles. Because the expiration timestamp lives in the user
 // record, restarting the server only delays the next sweep; it does not lose
 // scheduled clears.
-func (s *UserService) RunExpiredStatusSweeper(ctx context.Context, interval time.Duration, limit int) {
+func (s *UserService) RunExpiredStatusSweeper(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		interval = time.Minute
 	}
@@ -644,7 +628,7 @@ func (s *UserService) RunExpiredStatusSweeper(ctx context.Context, interval time
 		// life of the process, so an unrecovered panic here would take the
 		// instance — and every WebSocket on it — down. The next tick retries.
 		defer safe.Recover()
-		cleared, err := s.ClearExpiredStatuses(ctx, time.Now(), limit)
+		cleared, err := s.ClearExpiredStatuses(ctx, time.Now())
 		if err != nil {
 			slog.WarnContext(ctx, "user status sweeper failed", "error", err)
 			return
@@ -688,9 +672,7 @@ func (s *UserService) PatchTimeZoneIfChanged(ctx context.Context, userID, timeZo
 	}
 	user.TimeZone = timeZone
 	user.UpdatedAt = now
-	if s.cache != nil {
-		_ = s.cache.Delete(ctx, "user:"+userID)
-	}
+	s.forgetUser(ctx, userID)
 	events.Publish(ctx, s.publisher, pubsub.UserEvents(), events.EventUserUpdated, map[string]any{
 		"id":       user.ID,
 		"timeZone": user.TimeZone,
@@ -859,9 +841,7 @@ func (s *UserService) UpdateRole(ctx context.Context, _, targetID string, role m
 	}
 	user.SystemRole = role
 	user.UpdatedAt = now
-	if s.cache != nil {
-		_ = s.cache.Delete(ctx, "user:"+targetID)
-	}
+	s.forgetUser(ctx, targetID)
 	s.resolveAvatar(ctx, user)
 	s.indexUser(ctx, user)
 	return user, nil
@@ -933,9 +913,7 @@ func (s *UserService) applyStatus(ctx context.Context, user *model.User, deactiv
 		return nil, fmt.Errorf("user: update status: %w", err)
 	}
 	user.Status, user.DeactivatedBy, user.UpdatedAt = status, deactivatedBy, now
-	if s.cache != nil {
-		_ = s.cache.Delete(ctx, "user:"+user.ID)
-	}
+	s.forgetUser(ctx, user.ID)
 	// Every instance's notification audience reloads the account, so the
 	// next message alerts (or stops alerting) it straight away.
 	if s.audience != nil {
@@ -999,19 +977,121 @@ func (s *UserService) applyStatus(ctx context.Context, user *model.User, deactiv
 	return user, nil
 }
 
-// List returns a paginated list of users.
-func (s *UserService) List(ctx context.Context, limit int, cursor string) ([]*model.User, string, error) {
-	users, nextCursor, err := s.users.ListUsers(ctx, limit, cursor)
+// rosterCacheKey holds every account (bots excluded) for rosterCacheTTL,
+// shared by all instances: the @-mention roster each client loads, the
+// directory and the status sweep read it instead of the whole user partition.
+// Every service write that changes a listed field drops it (forgetCachedUser:
+// profile and role edits, statuses, deactivation, sign-in profile refreshes,
+// new accounts, the directory sync); only writes outside the services (the
+// history importer, agent accounts) wait out the TTL.
+const (
+	rosterCacheKey = "users:roster"
+	rosterCacheTTL = 15 * time.Minute
+	rosterPageSize = 500
+	// rosterMaxPages bounds the read: 200 pages of 500 is far past any
+	// realistic team, short enough to fail fast if paging goes wrong.
+	rosterMaxPages = 200
+)
+
+// rosterEntry is one cached account. model.User hides AvatarKey from JSON,
+// and avatars are signed from it on every read, so it is stored beside it.
+type rosterEntry struct {
+	User      model.User `json:"user"`
+	AvatarKey string     `json:"avatarKey,omitempty"`
+}
+
+// ListAll returns every account except bots, with signed avatar URLs.
+func (s *UserService) ListAll(ctx context.Context) ([]*model.User, error) {
+	users, err := s.roster(ctx)
 	if err != nil {
-		return nil, "", fmt.Errorf("user: list: %w", err)
-	}
-	// Filtered after paging, not in the store: a store-side filter would return
-	// short pages. Bots are a handful of rows.
-	users = slices.DeleteFunc(users, func(u *model.User) bool { return u != nil && u.IsBot })
-	for _, u := range users {
-		normalizeUserProfile(u)
+		return nil, err
 	}
 	// Batched: the old per-user resolveAvatar cost a serial Redis GET each.
 	s.resolveAvatars(ctx, users)
-	return users, nextCursor, nil
+	return users, nil
+}
+
+// roster reads the shared roster copy, or the user partition (filling the
+// copy) when there is none.
+func (s *UserService) roster(ctx context.Context) ([]*model.User, error) {
+	var entries []rosterEntry
+	if s.cache != nil && s.cache.Get(ctx, rosterCacheKey, &entries) == nil {
+		users := make([]*model.User, len(entries))
+		for i := range entries {
+			users[i] = &entries[i].User
+			users[i].AvatarKey = entries[i].AvatarKey
+		}
+		return users, nil
+	}
+	users, err := paginate.All(ctx, func(ctx context.Context, cursor string) ([]*model.User, string, error) {
+		return s.users.ListUsers(ctx, rosterPageSize, cursor)
+	}, rosterMaxPages)
+	if err != nil {
+		return nil, fmt.Errorf("user: list: %w", err)
+	}
+	// Filtered after paging, not in the store: a store-side filter would return
+	// short pages. Bots are a handful of rows.
+	users = slices.DeleteFunc(users, func(u *model.User) bool { return u == nil || u.IsBot })
+	entries = make([]rosterEntry, len(users))
+	for i, u := range users {
+		normalizeUserProfile(u)
+		entries[i] = rosterEntry{User: *u, AvatarKey: u.AvatarKey}
+	}
+	if s.cache != nil {
+		_ = s.cache.Set(ctx, rosterCacheKey, entries, rosterCacheTTL)
+	}
+	return users, nil
+}
+
+// forgetUser drops a changed account's cached profile and the roster copy.
+func (s *UserService) forgetUser(ctx context.Context, userID string) {
+	forgetCachedUser(ctx, s.cache, userID)
+}
+
+// DeactivatedAmong reports which of userIDs are deactivated, from the shared
+// roster: a large channel's member list no longer reads every member's row.
+// Deactivation drops the roster (applyStatus), so it shows at once. IDs the
+// roster doesn't list (bots, unknown IDs) are read from the store.
+func (s *UserService) DeactivatedAmong(ctx context.Context, userIDs []string) (map[string]bool, error) {
+	out := make(map[string]bool)
+	if len(userIDs) == 0 {
+		return out, nil
+	}
+	users, err := s.roster(ctx)
+	if err != nil {
+		return nil, err
+	}
+	status := make(map[string]string, len(users))
+	for _, u := range users {
+		status[u.ID] = u.Status
+	}
+	var unlisted []string
+	for _, id := range userIDs {
+		st, listed := status[id]
+		switch {
+		case !listed:
+			unlisted = append(unlisted, id)
+		case st == "deactivated":
+			out[id] = true
+		}
+	}
+	if len(unlisted) == 0 {
+		return out, nil
+	}
+	rest, err := s.users.DeactivatedAmong(ctx, unlisted)
+	if err != nil {
+		return nil, fmt.Errorf("user: deactivated among: %w", err)
+	}
+	maps.Copy(out, rest)
+	return out, nil
+}
+
+// forgetCachedUser drops a changed account's cached profile and the shared
+// roster copy. A nil cache is a no-op.
+func forgetCachedUser(ctx context.Context, c Cache, userID string) {
+	if c == nil {
+		return
+	}
+	_ = c.Delete(ctx, "user:"+userID)
+	_ = c.Delete(ctx, rosterCacheKey)
 }

@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Virtuoso } from 'react-virtuoso';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { Globe, MessageSquare, MoreVertical } from 'lucide-react';
 import { PageContainer } from '@/components/layout/PageContainer';
@@ -28,11 +29,18 @@ import { PresenceDot } from '@/components/PresenceDot';
 import { PasswordResetDialog } from '@/components/PasswordResetDialog';
 import { presenceNotchStyle } from '@/lib/presence';
 import { deactivatedLast, isDeactivated } from '@/lib/deactivated';
-import { formatLastSeen, formatTimeZoneDelta, formatTimeZoneName, isValidTimeZone } from '@/lib/user-time';
-import type { User } from '@/types';
+import { formatLastSeen, formatLocalTime, formatTimeZoneDelta, formatTimeZoneName, isValidTimeZone, localTimeZone } from '@/lib/user-time';
+import type { Channel, User, UserChannel } from '@/types';
 import { SearchInput } from '@/components/ui/search-input';
 
 type Tab = 'channels' | 'members';
+
+// A directory row: a public channel, or one of the user's archived channels
+// (listed under every live result while searching).
+type DirectoryRow = { archived: false; channel: Channel } | { archived: true; channel: UserChannel };
+
+// Rows rendered before the list has measured the page: more than fit on it.
+const INITIAL_DIRECTORY_ROWS = 30;
 
 function capitalize(s: string): string {
   if (!s) return '';
@@ -116,6 +124,71 @@ function ChannelsTab() {
     });
   }
 
+  const [scrollParent, setScrollParent] = useState<HTMLElement | null>(null);
+  const attachScrollParent = useCallback((node: HTMLDivElement | null) => {
+    setScrollParent(node?.closest<HTMLElement>('[data-page-scroll="true"]') ?? null);
+  }, []);
+  const rows: DirectoryRow[] = [
+    ...visible.map((channel) => ({ archived: false as const, channel })),
+    ...archived.map((channel) => ({ archived: true as const, channel })),
+  ];
+
+  function channelRow(channel: Channel) {
+    const alreadyJoined = joinedIds.has(channel.id);
+    return (
+      <div className="flex items-center gap-3 rounded-lg border p-3 hover:bg-muted/50">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+          <Globe className="h-5 w-5 text-muted-foreground" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="font-medium truncate">{channel.name}</p>
+          {channel.description && (
+            <p className="text-sm text-muted-foreground truncate">
+              {channel.description}
+            </p>
+          )}
+        </div>
+        {alreadyJoined ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => navigate(`/channel/${channel.slug}`)}
+          >
+            Open
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            onClick={() => handleJoin(channel.id, channel.slug)}
+            disabled={joinChannel.isPending}
+          >
+            Join
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  function archivedRow(uc: UserChannel) {
+    return (
+      <div
+        data-testid={`directory-archived-${uc.channelID}`}
+        className="flex items-center gap-3 rounded-lg border p-3 hover:bg-muted/50"
+      >
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+          <ChannelIcon type={uc.channelType} className="h-5 w-5 text-muted-foreground" ariaLabel="" />
+        </div>
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <p className="truncate font-medium text-muted-foreground">{uc.channelName}</p>
+          <Badge variant="outline" className="shrink-0">Archived</Badge>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => navigate(`/channel/${slugify(uc.channelName)}`)}>
+          Open
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <>
       <SearchInput
@@ -140,65 +213,45 @@ function ChannelsTab() {
         </p>
       )}
 
-      <div className="space-y-1">
-        {!isLoading && visible.map((channel) => {
-            const alreadyJoined = joinedIds.has(channel.id);
-            return (
-              <div
-                key={channel.id}
-                className="flex items-center gap-3 rounded-lg border p-3 hover:bg-muted/50"
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
-                  <Globe className="h-5 w-5 text-muted-foreground" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium truncate">{channel.name}</p>
-                  {channel.description && (
-                    <p className="text-sm text-muted-foreground truncate">
-                      {channel.description}
-                    </p>
-                  )}
-                </div>
-                {alreadyJoined ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => navigate(`/channel/${channel.slug}`)}
-                  >
-                    Open
-                  </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    onClick={() => handleJoin(channel.id, channel.slug)}
-                    disabled={joinChannel.isPending}
-                  >
-                    Join
-                  </Button>
-                )}
+      {/* Virtualized over the page's own scroller: a workspace can have
+          thousands of public channels, and a row for each held up opening
+          the directory and every keystroke in its search. */}
+      <div ref={attachScrollParent}>
+        {!isLoading && scrollParent && (
+          <Virtuoso
+            customScrollParent={scrollParent}
+            data={rows}
+            computeItemKey={(_, row) => (row.archived ? `archived-${row.channel.channelID}` : row.channel.id)}
+            increaseViewportBy={600}
+            initialItemCount={Math.min(rows.length, INITIAL_DIRECTORY_ROWS)}
+            itemContent={(index, row) => (
+              // The gap between rows, inside the item so the list measures it.
+              <div className={index === 0 ? undefined : 'pt-1'}>
+                {row.archived ? archivedRow(row.channel) : channelRow(row.channel)}
               </div>
-            );
-          })}
-        {!isLoading && archived.map((uc) => (
-          <div
-            key={uc.channelID}
-            data-testid={`directory-archived-${uc.channelID}`}
-            className="flex items-center gap-3 rounded-lg border p-3 hover:bg-muted/50"
-          >
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
-              <ChannelIcon type={uc.channelType} className="h-5 w-5 text-muted-foreground" ariaLabel="" />
-            </div>
-            <div className="flex min-w-0 flex-1 items-center gap-2">
-              <p className="truncate font-medium text-muted-foreground">{uc.channelName}</p>
-              <Badge variant="outline" className="shrink-0">Archived</Badge>
-            </div>
-            <Button variant="outline" size="sm" onClick={() => navigate(`/channel/${slugify(uc.channelName)}`)}>
-              Open
-            </Button>
-          </div>
-        ))}
+            )}
+          />
+        )}
       </div>
     </>
+  );
+}
+
+// The members search box keeps what is typed to itself and hands on the
+// search once typing pauses: re-rendering every member card per keystroke made
+// typing lag on a phone.
+function MemberSearch({ onSearch }: { onSearch: (query: string) => void }) {
+  const [query, setQuery] = useState('');
+  const debouncedQuery = useDebouncedValue(query, 250);
+  useEffect(() => onSearch(debouncedQuery), [debouncedQuery, onSearch]);
+  return (
+    <SearchInput
+      containerClassName="mb-4"
+      value={query}
+      onChange={(e) => setQuery(e.target.value)}
+      placeholder="Search members..."
+      aria-label="Search members"
+    />
   );
 }
 
@@ -208,8 +261,9 @@ interface MembersTabProps {
 }
 
 function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
-  const [query, setQuery] = useState('');
-  const debouncedQuery = useDebouncedValue(query, 250);
+  // What is typed stays in the search box (MemberSearch); the grid takes the
+  // search once typing pauses.
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [error, setError] = useState('');
   // The guest whose password reset dialog is open (null = closed).
   const [resetTarget, setResetTarget] = useState<User | null>(null);
@@ -250,18 +304,14 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
   // Deactivated accounts sit at the end, so the people you can reach come
   // first — re-sorted live as a user.updated flips someone's status.
   const listed = deactivatedLast(users);
+  // The viewer's own zone, once for every card's "hours ahead".
+  const viewerTimeZone = localTimeZone();
   // As many 16rem-or-wider columns as fit, stretched to fill the row exactly.
   const memberGridClassName = 'grid grid-cols-2 gap-3 md:grid-cols-[repeat(auto-fill,minmax(16rem,1fr))]';
 
   return (
     <>
-      <SearchInput
-        containerClassName="mb-4"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search members..."
-        aria-label="Search members"
-      />
+      <MemberSearch onSearch={setDebouncedQuery} />
 
       {visibleError && (
         <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive mb-4" role="alert">
@@ -293,7 +343,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
           const online = isOnline(u.id);
           const isSelf = u.id === currentUserId;
           const effectiveTimeZone = isValidTimeZone(u.timeZone) ? u.timeZone : undefined;
-          const timeZoneDelta = formatTimeZoneDelta(effectiveTimeZone);
+          const timeZoneDelta = formatTimeZoneDelta(effectiveTimeZone, viewerTimeZone);
           const timeZoneName = formatTimeZoneName(effectiveTimeZone);
           const lastSeen = formatLastSeen(u.lastSeenAt, online);
           return (
@@ -374,7 +424,7 @@ function MembersTab({ isAdmin, currentUserId }: MembersTabProps) {
                     <div className="md:flex md:justify-between md:gap-2" data-testid="directory-meta-local-time">
                       <dt className="font-medium text-muted-foreground md:font-normal">Local time</dt>
                       <dd className="mt-0.5 text-foreground md:mt-0 md:text-right md:text-muted-foreground">
-                        {new Date().toLocaleTimeString(undefined, { timeZone: effectiveTimeZone, hour: 'numeric', minute: '2-digit' })}
+                        {formatLocalTime(effectiveTimeZone)}
                         {timeZoneDelta && <span className="ml-1">({timeZoneDelta})</span>}
                       </dd>
                     </div>

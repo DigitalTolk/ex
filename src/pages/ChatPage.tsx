@@ -133,7 +133,6 @@ export default function ChatPage() {
   const {
     isActiveChannel,
     isActiveConversation,
-    markThreadNotificationUnread,
     isActiveThread: isActiveThreadScope,
     unhideConversation,
   } = useUnread();
@@ -569,14 +568,19 @@ export default function ChatPage() {
           isUserAttentive(suppressionWindowMs) &&
           isAtBottom(threadReadKey(n.parentMessageID))
         ) {
+          // Read here: the marker leaves this tab's user state at once and
+          // the server's with the PUT. No reload alongside — one answered
+          // before the server applied the read would bring the marker back,
+          // and the server's change echo is ignored as this tab's own.
           markThreadSeen(n.parentMessageID, n.createdAt, {
             parentID: n.parentID,
             parentType: n.parentType,
           });
         } else {
-          markThreadNotificationUnread(n.parentMessageID);
+          // Unread by the server's marker, written before this was sent: the
+          // reloaded user state brings it.
+          queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
         }
-        queryClient.invalidateQueries({ queryKey: queryKeys.userState() });
       }
       // A top-level channel/DM notification.new is the ALERT (popup/sound,
       // handled by NotificationContext) AND it carries the recipient's

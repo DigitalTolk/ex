@@ -26,14 +26,13 @@ type MessageStore interface {
 // MessageStoreImpl implements MessageStore backed by DynamoDB.
 type MessageStoreImpl struct {
 	*DB
-	topIndex *topLevelIndexState
 }
 
 var _ MessageStore = (*MessageStoreImpl)(nil)
 
 // NewMessageStore returns a new MessageStoreImpl.
 func NewMessageStore(db *DB) *MessageStoreImpl {
-	return &MessageStoreImpl{DB: db, topIndex: &topLevelIndexState{}}
+	return &MessageStoreImpl{DB: db}
 }
 
 // messageItem is the DynamoDB representation of a Message.
@@ -568,6 +567,29 @@ func (s *MessageStoreImpl) SetReplyMetadata(ctx context.Context, parentID, msgID
 			return ErrNotFound
 		}
 		return fmt.Errorf("store: set reply metadata: %w", err)
+	}
+	return nil
+}
+
+// MarkThreadParticipantsIndexed flags a thread root ParticipantsIndexed: every
+// participant of its thread has a follow row. ErrNotFound when the root is
+// gone.
+func (s *MessageStoreImpl) MarkThreadParticipantsIndexed(ctx context.Context, parentID, rootID string) error {
+	upd := expression.Set(expression.Name("participantsIndexed"), expression.Value(true))
+	expr := mustExpr(expression.NewBuilder().WithUpdate(upd).WithCondition(expression.Name("PK").AttributeExists()).Build())
+	_, err := s.Client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(s.Table),
+		Key:                       compositeKey(parentPK(parentID), msgSK(rootID)),
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		if isConditionCheckFailed(err) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("store: flag thread participants indexed: %w", err)
 	}
 	return nil
 }

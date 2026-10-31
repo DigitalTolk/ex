@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { QueryClient, type InfiniteData } from '@tanstack/react-query';
-import { mergeSeenMaps, patchListedThread, patchListedThreadFromRoot, unreadThreadIDs, type ThreadPage, type ThreadSummary } from './useThreads';
+import { mergeSeenMaps, patchListedThread, patchListedThreadFromRoot, type ThreadPage, type ThreadSummary } from './useThreads';
 import { queryKeys } from '@/lib/query-keys';
 import type { Message } from '@/types';
 
@@ -54,13 +54,6 @@ describe('listed threads are patched in place', () => {
     const empty = new QueryClient();
     patchListedThreadFromRoot(empty, root);
     expect(empty.getQueryData(queryKeys.threadPages('v1'))).toBeUndefined();
-  });
-});
-
-describe('unreadThreadIDs', () => {
-  it('is the server markers plus the alerts that arrived since', () => {
-    expect([...unreadThreadIDs(['t-1'], new Set(['t-2', 't-1']))].sort()).toEqual(['t-1', 't-2']);
-    expect(unreadThreadIDs().size).toBe(0);
   });
 });
 
