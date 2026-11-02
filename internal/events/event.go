@@ -68,8 +68,12 @@ const (
 	EventPing                        = "ping"
 	EventReplayDone                  = "replay.done"      // server → client marker frame after a reconnect replay completes
 	EventReplayExhausted             = "replay.exhausted" // cursor too old / unknown; client must do a full refetch
-	EventWebhookChanged              = "webhook.changed"  // incoming-webhook list changed (created/updated/deleted); data-less nudge to refetch
-	EventProjectChanged              = "project.changed"  // a project or its design references changed; data-less nudge to refetch
+	// EventSessionRenewed confirms a session.renew frame: the socket's deadline
+	// moved out, and expiresIn (milliseconds) is how long it now lives. Sent
+	// only to that socket.
+	EventSessionRenewed = "session.renewed"
+	EventWebhookChanged = "webhook.changed" // incoming-webhook list changed (created/updated/deleted); data-less nudge to refetch
+	EventProjectChanged = "project.changed" // a project or its design references changed; data-less nudge to refetch
 	// EventSettingsUpdated tells every client the workspace settings changed
 	// (an admin saved them); data-less nudge to refetch them.
 	EventSettingsUpdated = "settings.updated"
@@ -157,6 +161,9 @@ var ephemeralTypes = map[string]struct{}{
 	EventForceLogout:     {},
 	EventReplayDone:      {},
 	EventReplayExhausted: {},
+	// session.renewed answers one socket's renew frame; a replay would carry a
+	// lifetime that no longer applies.
+	EventSessionRenewed:  {},
 	EventNotificationNew: {},
 	// An app's note to a clicker belongs to the moment of the click.
 	EventInteractionNotice: {},

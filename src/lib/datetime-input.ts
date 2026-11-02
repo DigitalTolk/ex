@@ -7,10 +7,15 @@ export function pad(n: number): string {
   return String(n).padStart(2, '0');
 }
 
-// partsInTimeZone breaks a Date into calendar fields (incl. seconds) as observed
-// in the given IANA time zone.
-export function partsInTimeZone(date: Date, timeZone: string) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
+// One formatter per named zone, built on first use: the members directory
+// reads every member's offset on each render. The runtime's own zone ('') is
+// built per call, so it follows the device when that changes zone.
+const partsFormats = new Map<string, Intl.DateTimeFormat>();
+
+function partsFormat(timeZone: string): Intl.DateTimeFormat {
+  const cached = partsFormats.get(timeZone);
+  if (cached) return cached;
+  const format = new Intl.DateTimeFormat('en-CA', {
     // An empty string is an invalid IANA zone and throws RangeError; coerce it
     // to undefined so Intl falls back to the runtime's own zone instead.
     timeZone: timeZone || undefined,
@@ -21,7 +26,15 @@ export function partsInTimeZone(date: Date, timeZone: string) {
     minute: '2-digit',
     second: '2-digit',
     hourCycle: 'h23',
-  }).formatToParts(date);
+  });
+  if (timeZone) partsFormats.set(timeZone, format);
+  return format;
+}
+
+// partsInTimeZone breaks a Date into calendar fields (incl. seconds) as observed
+// in the given IANA time zone.
+export function partsInTimeZone(date: Date, timeZone: string) {
+  const parts = partsFormat(timeZone).formatToParts(date);
   /* v8 ignore next -- the requested part always exists for a valid date/timezone; the ?? 0 fallback is defensive */
   /* istanbul ignore next -- the requested part always exists for a valid date/timezone; the ?? 0 fallback is defensive */
   const value = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);

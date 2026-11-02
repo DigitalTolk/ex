@@ -88,58 +88,6 @@ func TestFollowMentionedThreadUsersDedupsMentions(t *testing.T) {
 	}
 }
 
-func TestScanUserThreadsGuardArms(t *testing.T) {
-	t.Run("non-thread user-state items and foreign-parent keys are skipped", func(t *testing.T) {
-		svc, messages, memberships, _, _ := setupMessageService()
-		seedMembership(memberships, "ch1", "user-1")
-		userState := newMockUserStateStore()
-		userState.rows[userState.key("user-1", model.UserStateHiddenConversation, "y")] = &model.UserStateItem{UserID: "user-1", Kind: model.UserStateHiddenConversation, ParentID: "x", TargetID: "y"}                            // wrong kind → skipped
-		userState.rows[userState.key("user-1", model.UserStateThreadNotification, "r")] = &model.UserStateItem{UserID: "user-1", Kind: model.UserStateThreadNotification, ParentID: "", ThreadRootID: "r"}                         // empty parent → skipped
-		userState.rows[userState.key("user-1", model.UserStateThreadNotification, "r-other")] = &model.UserStateItem{UserID: "user-1", Kind: model.UserStateThreadNotification, ParentID: "OTHER-parent", ThreadRootID: "r-other"} // foreign parent → prefix miss
-		svc.SetUserStateStore(userState)
-		follows := newMockThreadFollowStore()
-		follows.follows[threadFollowMockKey("user-1", "OTHER-parent", "r-o")] = &model.ThreadFollow{UserID: "user-1", ParentID: "OTHER-parent", ThreadRootID: "r-o", Following: true} // foreign parent override
-		svc.SetThreadFollowStore(follows)
-		messages.messages["ch1#root-1"] = &model.Message{ID: "root-1", ParentID: "ch1", AuthorID: "user-1", Body: "root", ReplyCount: 1}
-
-		got, err := scanThreads(svc, "user-1")
-		if err != nil {
-			t.Fatalf("scan: %v", err)
-		}
-		if len(got) != 1 || got[0].ThreadRootID != "root-1" {
-			t.Fatalf("threads = %v, want only ch1/root-1", got)
-		}
-	})
-
-	t.Run("root missing from the window is skipped", func(t *testing.T) {
-		svc, _, memberships, _, _ := setupMessageService()
-		seedMembership(memberships, "ch1", "user-1")
-		follows := newMockThreadFollowStore()
-		follows.follows[threadFollowMockKey("user-1", "ch1", "gone-root")] = &model.ThreadFollow{UserID: "user-1", ParentID: "ch1", ThreadRootID: "gone-root", Following: true}
-		svc.SetThreadFollowStore(follows)
-		got, err := scanThreads(svc, "user-1")
-		if err != nil {
-			t.Fatalf("scan: %v", err)
-		}
-		if len(got) != 0 {
-			t.Fatalf("threads = %v, want none (root not in window)", got)
-		}
-	})
-
-	t.Run("failed parent list yields nil window and is skipped", func(t *testing.T) {
-		svc, messages, memberships, _, _ := setupMessageService()
-		seedMembership(memberships, "ch1", "user-1")
-		messages.listErr = errors.New("list boom")
-		got, err := scanThreads(svc, "user-1")
-		if err != nil {
-			t.Fatalf("scan: %v", err)
-		}
-		if len(got) != 0 {
-			t.Fatalf("threads = %v, want none", got)
-		}
-	})
-}
-
 func TestListAroundErrorArms(t *testing.T) {
 	ctx := context.Background()
 

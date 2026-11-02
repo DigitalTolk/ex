@@ -53,7 +53,6 @@ vi.mock('@/context/AuthContext', () => ({
 }));
 
 vi.mock('@/context/UnreadContext', () => ({
-  useOptionalUnread: () => undefined,
   useUnread: () => ({
     clearChannelUnread: vi.fn(),
     setActiveChannel: vi.fn(),

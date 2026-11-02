@@ -132,6 +132,10 @@ export const userChannelUpdatedSchema = z.looseObject({
 export const attachmentDeletedSchema = z.object({ id });
 
 // Go map payload.
+// session.renewed: the socket's deadline moved out; expiresIn (ms) is how long
+// it now lives.
+export const sessionRenewedSchema = z.object({ expiresIn: z.number() });
+
 export const serverVersionSchema = z.object({ version: id });
 
 // interaction.notice: an app's note to the person whose click it answered

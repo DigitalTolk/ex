@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   formatLastSeen,
+  formatLocalTime,
   formatTimeZoneName,
   formatTimeZoneDelta,
   isValidTimeZone,
@@ -18,6 +19,31 @@ describe('user-time helpers', () => {
 
   it('formats offline last-seen timestamps', () => {
     expect(formatLastSeen('2026-05-03T10:00:00.000Z', false)).toEqual(expect.any(String));
+    expect(formatLastSeen('not a time', false)).toBeNull();
+  });
+
+  it('formats the time it is in a zone', () => {
+    expect(formatLocalTime('UTC', new Date('2026-01-01T15:04:00Z'))).toMatch(/(3:04|15:04)/);
+    expect(formatLocalTime('Asia/Tokyo', new Date('2026-01-01T15:04:00Z'))).toMatch(/(12:04|0?0:04)/);
+  });
+
+  // The members directory formats every member's last-seen time, local time
+  // and zone on each render: building a formatter per call made a 500-member
+  // page take most of a second on a phone, and as long again per keystroke in
+  // its search.
+  it('reuses one formatter per zone', () => {
+    const formatMember = () => {
+      isValidTimeZone('Asia/Tokyo');
+      formatTimeZoneName('Asia/Tokyo');
+      formatLocalTime('Asia/Tokyo');
+      formatTimeZoneDelta('Asia/Tokyo', 'Europe/Stockholm');
+      formatLastSeen('2026-05-03T10:00:00.000Z', false);
+    };
+    formatMember();
+    const built = vi.spyOn(Intl, 'DateTimeFormat');
+    formatMember();
+    expect(built).not.toHaveBeenCalled();
+    built.mockRestore();
   });
 
   it('computes timezone offsets and handles invalid timezone names', () => {

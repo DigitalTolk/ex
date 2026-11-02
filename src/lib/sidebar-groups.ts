@@ -149,10 +149,16 @@ export function sidebarItemID(item: SidebarItem): string {
   return item.kind === 'channel' ? item.channel.channelID : item.conversation.conversationID;
 }
 
+// Names order case-insensitively. One collator for all of them:
+// localeCompare with options sets one up afresh on every call in Safari, and
+// sorting an imported account's thousands of channels took ~50ms a regroup —
+// on every chat opened and every message anywhere.
+const nameOrder = new Intl.Collator(undefined, { sensitivity: 'base' });
+
 function compareSidebarItems(a: SidebarItem, b: SidebarItem): number {
   const pos = compareSparsePosition(itemPosition(a), itemPosition(b));
   if (pos !== 0) return pos;
-  return itemLabel(a).localeCompare(itemLabel(b), undefined, { sensitivity: 'base' });
+  return nameOrder.compare(itemLabel(a), itemLabel(b));
 }
 
 function itemPosition(item: SidebarItem): number | undefined {
@@ -170,7 +176,7 @@ function itemLabel(item: SidebarItem): string {
 function compareChannels(a: UserChannel, b: UserChannel): number {
   const pos = compareSparsePosition(a.sidebarPosition, b.sidebarPosition);
   if (pos !== 0) return pos;
-  return a.channelName.localeCompare(b.channelName, undefined, { sensitivity: 'base' });
+  return nameOrder.compare(a.channelName, b.channelName);
 }
 
 function compareConversations(
@@ -179,7 +185,7 @@ function compareConversations(
   sort: ConversationSidebarSort,
 ): number {
   if (sort === 'az') {
-    return a.displayName.localeCompare(b.displayName, undefined, { sensitivity: 'base' });
+    return nameOrder.compare(a.displayName, b.displayName);
   }
   const aTime = Date.parse(a.updatedAt ?? '');
   const bTime = Date.parse(b.updatedAt ?? '');

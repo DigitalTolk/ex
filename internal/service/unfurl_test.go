@@ -187,7 +187,7 @@ func TestUnfurlService_CachesPreview(t *testing.T) {
 	cache := newFakeUnfurlCache()
 	preview := UnfurlPreview{URL: "https://example.com/x", Title: "Cached"}
 	b, _ := json.Marshal(preview)
-	cache.store["unfurl:https://example.com/x"] = b
+	cache.store[unfurlCacheKeyPrefix+"https://example.com/x"] = b
 
 	svc := NewUnfurlService(cache)
 	got, err := svc.Unfurl(context.Background(), "https://example.com/x")
@@ -434,7 +434,9 @@ func TestUnfurlService_NamesItselfToSites(t *testing.T) {
 	if _, err := svc.fetchAndScrape(context.Background(), pageSrv.URL); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
-	want := "ex-chat/1 (+https://github.com/DigitalTolk/ex)"
+	// A self-declared bot, as Mattermost's fetcher is (Mattermost-Bot/1.1):
+	// Instagram answers other fetchers from a server with a sign-in page.
+	want := "ex-bot/1 (+https://github.com/DigitalTolk/ex)"
 	if len(agents) != 2 || agents[0] != want || agents[1] != want {
 		t.Fatalf("user agents = %q, want the page and the image fetched as %q", agents, want)
 	}

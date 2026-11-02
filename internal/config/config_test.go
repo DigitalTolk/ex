@@ -504,15 +504,15 @@ func TestLoadMSProfileSyncInterval(t *testing.T) {
 }
 
 func TestLoadMSStatusSyncInterval(t *testing.T) {
-	t.Run("default 5m", func(t *testing.T) {
+	t.Run("default 1h", func(t *testing.T) {
 		clearEnv(t)
 		t.Setenv("ENV", "development")
 		cfg, err := Load()
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
-		if cfg.MSStatusSyncInterval != 5*time.Minute {
-			t.Errorf("MSStatusSyncInterval = %v, want 5m", cfg.MSStatusSyncInterval)
+		if cfg.MSStatusSyncInterval != time.Hour {
+			t.Errorf("MSStatusSyncInterval = %v, want 1h", cfg.MSStatusSyncInterval)
 		}
 	})
 	t.Run("custom", func(t *testing.T) {

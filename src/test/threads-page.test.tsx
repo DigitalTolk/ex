@@ -7,7 +7,6 @@ import ThreadsPage from '@/pages/ThreadsPage';
 import { markThreadSeen, patchListedThread, resetSeenCache, type ThreadPage, type ThreadSummary } from '@/hooks/useThreads';
 
 const apiFetchMock = vi.fn();
-const unreadThreadNotifications = new Set<string>();
 vi.mock('@/lib/api', () => ({
   apiFetch: (...args: unknown[]) => apiFetchMock(...args),
 }));
@@ -27,11 +26,6 @@ vi.mock('@/hooks/useConversations', () => ({
 
 vi.mock('@/context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u-me', displayName: 'Me' } }),
-}));
-
-vi.mock('@/context/UnreadContext', () => ({
-  useUnread: () => ({ unreadThreadNotifications }),
-  useOptionalUnread: () => ({ unreadThreadNotifications }),
 }));
 
 const defaultUserState = {
@@ -145,7 +139,6 @@ const order = () => screen.getAllByTestId('thread-card').map((el) => el.getAttri
 describe('ThreadsPage', () => {
   beforeEach(() => {
     apiFetchMock.mockReset();
-    unreadThreadNotifications.clear();
     localStorage.clear();
     resetSeenCache();
     mockUserStateData = defaultUserState;
@@ -203,12 +196,11 @@ describe('ThreadsPage', () => {
     expect(links).toContain('/conversation/conv-1?thread=msg-root-2#msg-msg-root-2');
   });
 
-  it('marks a card unread from its thread\'s unread marker, or an alert that just arrived', async () => {
-    unreadThreadNotifications.add('msg-root-2');
+  it('marks a card unread from its thread\'s unread marker alone', async () => {
     servePages([...sample, { ...sample[0], threadRootID: 'msg-root-3' }]);
     renderPage();
     const cards = await screen.findAllByTestId('thread-card');
-    expect(cards.map((c) => c.getAttribute('data-unread'))).toEqual(['true', 'true', 'false']);
+    expect(cards.map((c) => c.getAttribute('data-unread'))).toEqual(['true', 'false', 'false']);
   });
 
   it('keeps which threads are expanded on the page, so a card scrolled away and back stays open', async () => {

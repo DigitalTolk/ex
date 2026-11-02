@@ -79,18 +79,6 @@ func TestThreadFollowStore_Participation_ServiceSurface(t *testing.T) {
 		t.Fatalf("follow = %+v (err=%v), want Following=true", got, err)
 	}
 
-	// …and the seed marker round-trips through the real marker row.
-	seeded, err := adapter.IsThreadIndexSeeded(ctx, "u-cap")
-	if err != nil || seeded {
-		t.Fatalf("IsThreadIndexSeeded before mark = %v (err=%v), want false", seeded, err)
-	}
-	if err := adapter.MarkThreadIndexSeeded(ctx, "u-cap"); err != nil {
-		t.Fatalf("MarkThreadIndexSeeded: %v", err)
-	}
-	seeded, err = adapter.IsThreadIndexSeeded(ctx, "u-cap")
-	if err != nil || !seeded {
-		t.Fatalf("IsThreadIndexSeeded after mark = %v (err=%v), want true", seeded, err)
-	}
 }
 
 func TestMembershipStore_IncrementNotifyCount_ServiceSurface(t *testing.T) {

@@ -4,6 +4,7 @@ import {
   EMOJI_SKIN_TONES,
   applyEmojiSkinTone,
   isKnownEmoji,
+  emoticonEmoji,
   normalizeEmojiInBody,
   shortcodeToUnicode,
   shortcodeWithSkinTone,
@@ -188,5 +189,13 @@ describe('isKnownEmoji', () => {
     expect(isKnownEmoji('rotating_light')).toBe(false);
     expect(isKnownEmoji('partyparrot', { partyparrot: '/emoji/partyparrot.gif' })).toBe(true);
     expect(isKnownEmoji('partyparrot', {})).toBe(false);
+  });
+});
+
+describe('emoticonEmoji', () => {
+  it('gives the standard emoji an emoticon stands for, and nothing for other text', () => {
+    expect(emoticonEmoji(':P')).toBe('😛');
+    expect(emoticonEmoji('<3')).toBe('❤️');
+    expect(emoticonEmoji(':Po')).toBeUndefined();
   });
 });

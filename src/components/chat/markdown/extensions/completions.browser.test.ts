@@ -79,6 +79,33 @@ describe('composerAutocomplete', () => {
     view.destroy();
   });
 
+  // Custom emoji that merely resemble the query don't push the standard one
+  // out: 👀 comes first, and the rest scroll below it.
+  it('lists the standard emoji first for :eyes, with more matches than fit scrolling', async () => {
+    const lookalikes = [
+      ...['keys', 'yes', 'dyes', 'byes', 'eye'],
+      ...Array.from({ length: 20 }, (_, i) => `eyes_${i}`),
+    ].map((name) => ({ name, imageURL: `https://x.test/${name}.png` }));
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = new EditorView({
+      parent: host,
+      state: EditorState.create({
+        doc: ':eyes',
+        selection: { anchor: 5 },
+        extensions: [composerAutocomplete({ ...providers, customEmojis: () => lookalikes })],
+      }),
+    });
+    startCompletion(view);
+    await vi.waitFor(() => {
+      expect(currentCompletions(view.state)[0]?.label).toBe(':eyes:');
+    });
+    expect(currentCompletions(view.state).length).toBeGreaterThan(20);
+    const list = view.dom.querySelector('.cm-tooltip-autocomplete > ul') as HTMLElement;
+    expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
+    view.destroy();
+  });
+
   it('offers :emoji: completions in a live editor', async () => {
     const view = mount(':smile');
     startCompletion(view);

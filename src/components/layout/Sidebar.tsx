@@ -1,5 +1,6 @@
-import { Fragment, memo, useState, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, memo, useCallback, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { Virtuoso } from 'react-virtuoso';
 import {
   PragmaticCategoryDropHitbox,
   PragmaticCategoryHeader,
@@ -33,9 +34,10 @@ import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { deviceKind } from '@/lib/device';
 import { usePointerDevice } from '@/hooks/usePointerDevice';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { useEventCallback } from '@/hooks/useEventCallback';
 import { useSidebarViewPreferences } from '@/hooks/useSidebarViewPreferences';
-import { SidebarSectionKeys } from '@/lib/sidebar-groups';
+import { SidebarSectionKeys, type SidebarItem, type SidebarSection } from '@/lib/sidebar-groups';
 import type { UserChannel, UserConversation, UserStatus } from '@/types';
 import { SidebarUnreadControls } from '@/components/layout/SidebarUnreadControls';
 import { ChannelRow } from './ChannelRow';
@@ -94,6 +96,190 @@ export function Sidebar({ onClose }: SidebarProps) {
 
   const spacedSections = spacedSectionKeys(sidebarSections, collapsedSections, unreadOnly);
 
+  // A phone mounts only the rows near the screen. Its list stays on the page
+  // under every conversation and turns inert as one opens over it, and the
+  // browser restyles every row of the list each time: with an imported
+  // account's thousands of rows, a second of jank on every open and close.
+  // Drag is what needs every row mounted, and a phone has none (above).
+  const isMobile = useIsMobile();
+  const virtualRows = dragDisabled && isMobile;
+  const [scrollParent, setScrollParent] = useState<HTMLElement | null>(null);
+  const attachScrollParent = useCallback((node: HTMLElement | null) => {
+    setScrollParent(node?.closest<HTMLElement>('[data-slot="scroll-area-viewport"]') ?? null);
+  }, []);
+  const entries = useMemo(
+    () => (virtualRows ? virtualEntries(sidebarSections, collapsedSections, unreadOnly, activeItemID) : []),
+    [virtualRows, sidebarSections, collapsedSections, unreadOnly, activeItemID],
+  );
+
+  // A section's heading: its fold toggle and, by kind, the create, new DM or
+  // category actions.
+  const sectionHeader = (section: SidebarSection) => {
+    const { isFavorites, isChannelsDefault, isDMsDefault, isUserCategory } = sectionRoles(section.key);
+    const acceptsDrops = !dragDisabled && (isFavorites || isUserCategory || isChannelsDefault);
+    const collapsed = !!collapsedSections[section.key];
+    return (
+      <PragmaticCategoryHeader
+        id={section.key}
+        draggable={isUserCategory && !dragDisabled}
+        dropData={
+          acceptsDrops
+            ? {
+                type: 'section-header-target',
+                sectionKey: section.key,
+                categoryID: isChannelsDefault ? CATEGORY_DROP_END : section.key,
+              }
+            : undefined
+        }
+        className="group/sec relative flex items-center"
+        testID={`sidebar-group-header-${section.key}`}
+      >
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => view.toggleSectionCollapsed(section.key)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              view.toggleSectionCollapsed(section.key);
+            }
+          }}
+          aria-expanded={!collapsed}
+          data-testid={`sidebar-group-toggle-${section.key}`}
+          className="flex flex-1 items-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-gray-400 hover:bg-white/5 mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base"
+        >
+          <ChevronDown
+            className={`h-3 w-3 transition-transform ${collapsed ? '-rotate-90' : ''}`}
+          />
+          <span className="truncate">{section.title}</span>
+        </div>
+        {/* Hover-revealed actions per section type; always shown
+            (and finger-sized) on touch devices, which have no hover. */}
+        {isChannelsDefault && !isGuest(user?.systemRole) && (
+          <button
+            onClick={() => setCreateChannelOpen(true)}
+            aria-label="Create channel"
+            title="Create channel"
+            data-testid="sidebar-create-channel"
+            className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:h-10 mobile:w-10"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {isDMsDefault && (
+          <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+            {/* New DM "+": always a real tap target on mobile;
+                desktop keeps the hover-reveal. Close the mobile
+                drawer like every other sidebar navigation — leaving
+                it latched open kept the new page translated
+                off-screen (and its autofocused input then dragged
+                the overflow-hidden shell into a garbled state). */}
+            <button
+              onClick={() => {
+                navigate('/conversations/new');
+                onClose();
+              }}
+              aria-label="New direct message"
+              title="New direct message"
+              data-testid="sidebar-new-dm"
+              className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:h-10 mobile:w-10"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+            {/* Sort menu stays desktop hover-only (hidden on mobile);
+                the header shows only the "+" on touch. mobile:hidden
+                (not just opacity/pointer-events) so it also leaves
+                the flex layout — an invisible 20px slot here pushed
+                the "+" left, out of line with the Channels "+". */}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                aria-label="Sort direct messages"
+                data-testid="sidebar-dm-sort-menu"
+                className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:hidden"
+              >
+                <MoreVertical className="h-3.5 w-3.5" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuItem onClick={() => view.setConversationSort('recent')}>
+                  <Clock3 className="mr-2 h-4 w-4" />
+                  Recent activity
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => view.setConversationSort('az')}>
+                  <ArrowDownAZ className="mr-2 h-4 w-4" />
+                  A-Z
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )}
+        {isUserCategory && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              aria-label={`Manage ${section.title} category`}
+              data-testid={`sidebar-category-menu-${section.key}`}
+              className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:h-10 mobile:w-10"
+            >
+              <MoreVertical className="h-3.5 w-3.5" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem
+                onClick={() => setCategoryToDelete({ id: section.key, title: section.title })}
+                data-testid={`sidebar-category-delete-${section.key}`}
+                className="text-destructive"
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete category
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </PragmaticCategoryHeader>
+    );
+  };
+
+  // One row of a section; `slot` is its place in the section's drop order.
+  const sectionRow = (section: SidebarSection, item: SidebarItem, slot: number) => {
+    const { isUnreadSection, isFavorites } = sectionRoles(section.key);
+    if (item.kind === 'channel') {
+      return (
+        <SidebarChannelItem
+          sectionKey={section.key}
+          index={slot}
+          channel={item.channel}
+          // Rows in the Unread section belong to other sections, so they
+          // aren't reordered from here.
+          dragDisabled={dragDisabled || isUnreadSection}
+          active={item.channel.channelID === activeItemID}
+          suppressNavigation={suppressedNavigationID === item.channel.channelID}
+          onSuppressNavigationConsumed={clearSuppressedNavigation}
+          onNavigate={navigateTo}
+          onClose={close}
+        />
+      );
+    }
+    const conv = item.conversation;
+    const otherID = conv.type !== 'group' ? dmPartnerID(conv, user?.id) : undefined;
+    const partner = otherID ? dmUserMap.get(otherID) : undefined;
+    return (
+      <SidebarConversationItem
+        sectionKey={section.key}
+        index={slot}
+        conversation={conv}
+        // Only Favorites reorders conversations.
+        dragDisabled={!isFavorites || dragDisabled}
+        active={conv.conversationID === activeItemID}
+        dmAvatarURL={conv.avatarURL ?? partner?.avatarURL}
+        dmUserStatus={conv.userStatus ?? partner?.userStatus}
+        dmUserID={otherID}
+        suppressNavigation={suppressedNavigationID === conv.conversationID}
+        onSuppressNavigationConsumed={clearSuppressedNavigation}
+        onNavigate={navigateTo}
+        onClose={close}
+        onHide={hideConversation}
+      />
+    );
+  };
+
   return (
     <div className="flex h-full w-full min-w-0 flex-col text-gray-300 touch:select-none touch:touch-pan-y touch:[-webkit-touch-callout:none] touch:[-webkit-user-select:none]">
       <ScrollArea
@@ -138,7 +324,11 @@ export function Sidebar({ onClose }: SidebarProps) {
               /conversations/new). User-defined categories contain channels;
               DMs/groups can only appear here when favorited. */}
           {ready ? (
-          <nav aria-label="Channels and direct messages" data-testid="sidebar-primary-sections">
+          <nav
+            ref={virtualRows ? attachScrollParent : undefined}
+            aria-label="Channels and direct messages"
+            data-testid="sidebar-primary-sections"
+          >
             {unreadOnly && (
               <div
                 data-testid="sidebar-unread-only-strip"
@@ -160,16 +350,34 @@ export function Sidebar({ onClose }: SidebarProps) {
                 You're all caught up.
               </p>
             )}
-            {sidebarSections.map((section) => {
-              const isUnreadSection = section.key === SidebarSectionKeys.Unread;
-              const isFavorites = section.key === SidebarSectionKeys.Favorites;
-              const isChannelsDefault = section.key === SidebarSectionKeys.Channels;
-              const isDMsDefault = section.key === SidebarSectionKeys.DirectMessages;
-              const isUserCategory = !isUnreadSection && !isFavorites && !isChannelsDefault && !isDMsDefault;
+            {virtualRows
+              ? scrollParent && entries.length > 0 && (
+                  // The gap above the first heading is a margin, as on the
+                  // full list, so it meets the space above it the same way.
+                  <div className={firstSpaced(entries) ? 'mt-3' : 'mt-2'}>
+                    <Virtuoso
+                      customScrollParent={scrollParent}
+                      data={entries}
+                      computeItemKey={(_, entry) => entry.key}
+                      increaseViewportBy={600}
+                      initialItemCount={Math.min(entries.length, INITIAL_VIRTUAL_ENTRIES)}
+                      // The other gaps live inside the items, so the list
+                      // measures them: above a heading, above each row, and
+                      // under a section.
+                      itemContent={(index, entry) => {
+                        if (entry.kind === 'header') {
+                          const gap = index === 0 ? undefined : entry.spaced ? 'pt-3' : 'pt-2';
+                          return <div className={gap}>{sectionHeader(entry.section)}</div>;
+                        }
+                        if (entry.kind === 'end') return <div className={entry.empty ? 'h-3' : 'h-2'} />;
+                        return <div className="pt-1">{sectionRow(entry.section, entry.item, entry.slot)}</div>;
+                      }}
+                    />
+                  </div>
+                )
+              : sidebarSections.map((section) => {
+              const { isFavorites, isChannelsDefault, isUserCategory } = sectionRoles(section.key);
               if (isSectionHidden(section, unreadOnly)) return null;
-              // Rows in the Unread section belong to other sections, so they
-              // aren't reordered from here.
-              const rowDragDisabled = dragDisabled || isUnreadSection;
               // Favorites, the categories and Channels take dropped rows and
               // mark the slots of the category order.
               const acceptsDrops = !dragDisabled && (isFavorites || isUserCategory || isChannelsDefault);
@@ -212,180 +420,21 @@ export function Sidebar({ onClose }: SidebarProps) {
                       testID={`sidebar-category-boundary-drop-${section.key}`}
                     />
                   )}
-                  <PragmaticCategoryHeader
-                    id={section.key}
-                    draggable={isUserCategory && !dragDisabled}
-                    dropData={
-                      acceptsDrops
-                        ? {
-                            type: 'section-header-target',
-                            sectionKey: section.key,
-                            categoryID: isChannelsDefault ? CATEGORY_DROP_END : section.key,
-                          }
-                        : undefined
-                    }
-                    className="group/sec relative flex items-center"
-                    testID={`sidebar-group-header-${section.key}`}
-                  >
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => view.toggleSectionCollapsed(section.key)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault();
-                          view.toggleSectionCollapsed(section.key);
-                        }
-                      }}
-                      aria-expanded={!collapsed}
-                      data-testid={`sidebar-group-toggle-${section.key}`}
-                      className="flex flex-1 items-center gap-1 rounded-md px-2 py-1 text-sm font-medium text-gray-400 hover:bg-white/5 mobile:h-12 mobile:px-3 mobile:py-0 mobile:text-base"
-                    >
-                      <ChevronDown
-                        className={`h-3 w-3 transition-transform ${collapsed ? '-rotate-90' : ''}`}
-                      />
-                      <span className="truncate">{section.title}</span>
-                    </div>
-                    {/* Hover-revealed actions per section type; always shown
-                        (and finger-sized) on touch devices, which have no hover. */}
-                    {isChannelsDefault && !isGuest(user?.systemRole) && (
-                      <button
-                        onClick={() => setCreateChannelOpen(true)}
-                        aria-label="Create channel"
-                        title="Create channel"
-                        data-testid="sidebar-create-channel"
-                        className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:h-10 mobile:w-10"
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                    {isDMsDefault && (
-                      <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
-                        {/* New DM "+": always a real tap target on mobile;
-                            desktop keeps the hover-reveal. Close the mobile
-                            drawer like every other sidebar navigation — leaving
-                            it latched open kept the new page translated
-                            off-screen (and its autofocused input then dragged
-                            the overflow-hidden shell into a garbled state). */}
-                        <button
-                          onClick={() => {
-                            navigate('/conversations/new');
-                            onClose();
-                          }}
-                          aria-label="New direct message"
-                          title="New direct message"
-                          data-testid="sidebar-new-dm"
-                          className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:h-10 mobile:w-10"
-                        >
-                          <Plus className="h-3.5 w-3.5" />
-                        </button>
-                        {/* Sort menu stays desktop hover-only (hidden on mobile);
-                            the header shows only the "+" on touch. mobile:hidden
-                            (not just opacity/pointer-events) so it also leaves
-                            the flex layout — an invisible 20px slot here pushed
-                            the "+" left, out of line with the Channels "+". */}
-                        <DropdownMenu>
-                          <DropdownMenuTrigger
-                            aria-label="Sort direct messages"
-                            data-testid="sidebar-dm-sort-menu"
-                            className="h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:hidden"
-                          >
-                            <MoreVertical className="h-3.5 w-3.5" />
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-52">
-                            <DropdownMenuItem onClick={() => view.setConversationSort('recent')}>
-                              <Clock3 className="mr-2 h-4 w-4" />
-                              Recent activity
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => view.setConversationSort('az')}>
-                              <ArrowDownAZ className="mr-2 h-4 w-4" />
-                              A-Z
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                    )}
-                    {isUserCategory && (
-                      <DropdownMenu>
-                        <DropdownMenuTrigger
-                          aria-label={`Manage ${section.title} category`}
-                          data-testid={`sidebar-category-menu-${section.key}`}
-                          className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-gray-400 opacity-0 group-hover/sec:opacity-100 hover:bg-white/20 hover:text-white touch:h-7 touch:w-7 touch:opacity-100 mobile:h-10 mobile:w-10"
-                        >
-                          <MoreVertical className="h-3.5 w-3.5" />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-44">
-                          <DropdownMenuItem
-                            onClick={() => setCategoryToDelete({ id: section.key, title: section.title })}
-                            data-testid={`sidebar-category-delete-${section.key}`}
-                            className="text-destructive"
-                          >
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            Delete category
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    )}
-                  </PragmaticCategoryHeader>
+                  {sectionHeader(section)}
                   <div className="mt-1 space-y-1">
                     {inRowBlocks(visibleItems.map((item, index) => {
-                      if (item.kind === 'channel') {
-                        const channelDropIndex = slots[index];
-                        // Open the push-aside gap just above this row when the
-                        // live drop target resolves to its slot (not the tail).
-                        const showGap =
-                          channelGap != null && channelGap.area !== 'end' && channelGap.index === channelDropIndex;
-                        return (
-                          // No wrapper div: the ChannelRow's own element is the
-                          // direct `space-y-1` child (and already `relative`), so
-                          // SIDEBAR_DRAGGING_COLLAPSE can fully remove its slot on
-                          // pick-up (margin included).
-                          <Fragment key={`ch-${item.channel.channelID}`}>
-                            {showGap && <SidebarDropGap sectionKey={section.key} />}
-                            <SidebarChannelItem
-                              sectionKey={section.key}
-                              index={channelDropIndex}
-                              channel={item.channel}
-                              dragDisabled={rowDragDisabled}
-                              active={item.channel.channelID === activeItemID}
-                              suppressNavigation={suppressedNavigationID === item.channel.channelID}
-                              onSuppressNavigationConsumed={clearSuppressedNavigation}
-                              onNavigate={navigateTo}
-                              onClose={close}
-                            />
-                          </Fragment>
-                        );
-                      }
-                      const conv = item.conversation;
-                      const conversationDropIndex = slots[index];
-                      const otherID = conv.type !== 'group' ? dmPartnerID(conv, user?.id) : undefined;
-                      const partner = otherID ? dmUserMap.get(otherID) : undefined;
-                      // Favorited DMs are channel-drop targets too; open the gap
-                      // above one when the live target resolves to its slot.
-                      const showConvGap =
-                        channelGap != null && channelGap.area !== 'end' && channelGap.index === conversationDropIndex;
+                      const slot = slots[index];
+                      // Open the push-aside gap just above this row when the
+                      // live drop target resolves to its slot (not the tail).
+                      const showGap = channelGap != null && channelGap.area !== 'end' && channelGap.index === slot;
                       return (
-                        // No wrapper div (see the channel branch): the row's own
-                        // element is the direct `space-y-1` child so a favorited
-                        // DM's slot collapses fully on pick-up.
-                        <Fragment key={`conv-${conv.conversationID}`}>
-                          {showConvGap && <SidebarDropGap sectionKey={section.key} />}
-                          <SidebarConversationItem
-                            sectionKey={section.key}
-                            index={conversationDropIndex}
-                            conversation={conv}
-                            // Only Favorites reorders conversations.
-                            dragDisabled={!isFavorites || dragDisabled}
-                            active={conv.conversationID === activeItemID}
-                            dmAvatarURL={conv.avatarURL ?? partner?.avatarURL}
-                            dmUserStatus={conv.userStatus ?? partner?.userStatus}
-                            dmUserID={otherID}
-                            suppressNavigation={suppressedNavigationID === conv.conversationID}
-                            onSuppressNavigationConsumed={clearSuppressedNavigation}
-                            onNavigate={navigateTo}
-                            onClose={close}
-                            onHide={hideConversation}
-                          />
+                        // No wrapper div: the row's own element is the direct
+                        // `space-y-1` child (and already `relative`), so
+                        // SIDEBAR_DRAGGING_COLLAPSE can fully remove its slot on
+                        // pick-up (margin included).
+                        <Fragment key={rowKey(item)}>
+                          {showGap && <SidebarDropGap sectionKey={section.key} />}
+                          {sectionRow(section, item, slot)}
                         </Fragment>
                       );
                     }))}
@@ -558,4 +607,60 @@ function inRowBlocks(rows: ReactNode[]): ReactNode {
     );
   }
   return blocks;
+}
+
+// What a section is: the Unread view, Favorites, the default Channels and
+// Direct Messages sections, or one of the user's categories.
+function sectionRoles(key: string) {
+  const isUnreadSection = key === SidebarSectionKeys.Unread;
+  const isFavorites = key === SidebarSectionKeys.Favorites;
+  const isChannelsDefault = key === SidebarSectionKeys.Channels;
+  const isDMsDefault = key === SidebarSectionKeys.DirectMessages;
+  const isUserCategory = !isUnreadSection && !isFavorites && !isChannelsDefault && !isDMsDefault;
+  return { isUnreadSection, isFavorites, isChannelsDefault, isDMsDefault, isUserCategory };
+}
+
+function rowKey(item: SidebarItem): string {
+  return item.kind === 'channel' ? `ch-${item.channel.channelID}` : `conv-${item.conversation.conversationID}`;
+}
+
+// The phone's virtual list renders this many entries before it has measured
+// the screen: more than fit on it.
+const INITIAL_VIRTUAL_ENTRIES = 30;
+
+type VirtualEntry =
+  | { kind: 'header'; key: string; section: SidebarSection; spaced: boolean }
+  | { kind: 'row'; key: string; section: SidebarSection; item: SidebarItem; slot: number }
+  // The space under a section; under one with no rows showing it also takes
+  // the gap the empty row list leaves in the full sidebar.
+  | { kind: 'end'; key: string; empty: boolean };
+
+// virtualEntries lays the sections out as the phone's one list: each heading,
+// the rows it shows, and the space under it. A channel in the Unread section
+// is listed in its own section too, so a row's key names its section.
+function virtualEntries(
+  sections: SidebarSection[],
+  collapsed: Record<string, boolean>,
+  unreadOnly: boolean,
+  activeID: string | undefined,
+): VirtualEntry[] {
+  const spaced = spacedSectionKeys(sections, collapsed, unreadOnly);
+  const entries: VirtualEntry[] = [];
+  for (const section of sections) {
+    if (isSectionHidden(section, unreadOnly)) continue;
+    entries.push({ kind: 'header', key: `head-${section.key}`, section, spaced: spaced.has(section.key) });
+    const items = collapsed[section.key] ? foldedSectionItems(section.items, activeID) : section.items;
+    const slots = dropSlots(section.key, items);
+    items.forEach((item, index) => {
+      entries.push({ kind: 'row', key: `${section.key}:${rowKey(item)}`, section, item, slot: slots[index] });
+    });
+    entries.push({ kind: 'end', key: `end-${section.key}`, empty: items.length === 0 });
+  }
+  return entries;
+}
+
+// Whether the list's first heading takes the wide gap above it.
+function firstSpaced(entries: VirtualEntry[]): boolean {
+  const first = entries[0];
+  return first.kind === 'header' && first.spaced;
 }

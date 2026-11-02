@@ -64,9 +64,9 @@ type Config struct {
 	MSProfileSyncInterval time.Duration `env:"MS_PROFILE_SYNC_INTERVAL" envDefault:"12h"`
 	// MSStatusSyncInterval paces the account-standing check: an account
 	// disabled or deleted in Entra is deactivated in Ex within one interval
-	// (MS_STATUS_SYNC_INTERVAL, default 5m). One tenant-wide Graph listing
-	// per interval, whatever the number of users.
-	MSStatusSyncInterval time.Duration `env:"MS_STATUS_SYNC_INTERVAL" envDefault:"5m"`
+	// (MS_STATUS_SYNC_INTERVAL, default 1h). One tenant-wide Graph listing
+	// and one read of every account per interval.
+	MSStatusSyncInterval time.Duration `env:"MS_STATUS_SYNC_INTERVAL" envDefault:"1h"`
 
 	// JWT
 	JWTSecret     string        `env:"JWT_SECRET"`

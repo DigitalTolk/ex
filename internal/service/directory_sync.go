@@ -347,9 +347,7 @@ func (s *DirectorySyncService) syncUser(ctx context.Context, user *model.User) (
 	}); err != nil {
 		return false, err
 	}
-	if s.cache != nil {
-		_ = s.cache.Delete(ctx, "user:"+user.ID)
-	}
+	forgetCachedUser(ctx, s.cache, user.ID)
 	publishUserDirectoryUpdated(ctx, s.publisher, user)
 	return true, nil
 }

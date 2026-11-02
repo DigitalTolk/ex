@@ -7,7 +7,6 @@ import (
 	"errors"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
 )
@@ -19,9 +18,6 @@ func TestListTopLevelMessagesAfter_ReadsOnlyTheRowsItReturns(t *testing.T) {
 	ctx := context.Background()
 	ms := NewMessageStore(db)
 	top := seedThreadedParent(t, ms, "ch-fwd", 10, 5)
-	if err := ms.MarkTopLevelIndexSeeded(ctx); err != nil {
-		t.Fatal(err)
-	}
 	// A hard delete leaves the index with its row.
 	if err := ms.DeleteMessage(ctx, "ch-fwd", top[5]); err != nil {
 		t.Fatal(err)
@@ -90,9 +86,6 @@ func TestListTopLevelMessagesAfter_CappedResponseKeepsReading(t *testing.T) {
 	ctx := context.Background()
 	ms := NewMessageStore(db)
 	top := seedThreadedParent(t, ms, "ch-fwdcap", 6, 1)
-	if err := ms.MarkTopLevelIndexSeeded(ctx); err != nil {
-		t.Fatal(err)
-	}
 	capped := NewMessageStore(withFault(db, func(f *faultClient) { f.transformQuery = capFirstQuery(1, "GSI2PK", "GSI2SK") }))
 	msgs, hasMore, err := capped.ListTopLevelMessagesAfter(ctx, "ch-fwdcap", top[0], 3)
 	if err != nil || len(msgs) != 3 || !hasMore {
@@ -103,23 +96,12 @@ func TestListTopLevelMessagesAfter_CappedResponseKeepsReading(t *testing.T) {
 	}
 }
 
-func TestListTopLevelMessagesAfter_ErrorsAndPending(t *testing.T) {
+func TestListTopLevelMessagesAfter_Errors(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
-	recheckTopLevelMarker(t, time.Hour)
 	top := seedThreadedParent(t, NewMessageStore(db), "ch-fwderr", 2, 0)
 
-	if _, _, err := NewMessageStore(db).ListTopLevelMessagesAfter(ctx, "ch-fwderr", top[0], 10); !errors.Is(err, ErrTopLevelIndexPending) {
-		t.Fatalf("before the backfill: err = %v, want ErrTopLevelIndexPending", err)
-	}
-	if err := NewMessageStore(db).MarkTopLevelIndexSeeded(ctx); err != nil {
-		t.Fatal(err)
-	}
-	_, _, err := NewMessageStore(withFault(db, func(f *faultClient) { f.failGetItem = true })).ListTopLevelMessagesAfter(ctx, "ch-fwderr", top[0], 10)
-	if !errors.Is(err, errInjected) {
-		t.Fatalf("marker read: want errInjected, got %v", err)
-	}
-	_, _, err = NewMessageStore(withFault(db, func(f *faultClient) { f.failQuery = true })).ListTopLevelMessagesAfter(ctx, "ch-fwderr", top[0], 10)
+	_, _, err := NewMessageStore(withFault(db, func(f *faultClient) { f.failQuery = true })).ListTopLevelMessagesAfter(ctx, "ch-fwderr", top[0], 10)
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("query: want errInjected, got %v", err)
 	}

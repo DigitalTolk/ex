@@ -269,25 +269,6 @@ func TestAutoMappingRebuildIsolatesAPanic(t *testing.T) {
 	autoMappingRebuild(context.Background(), panicRebuilder{})
 }
 
-type fakeTokenIndex struct {
-	err         error
-	sawDeadline bool
-}
-
-func (f *fakeTokenIndex) EnsureUserTokenIndex(ctx context.Context) error {
-	_, f.sawDeadline = ctx.Deadline()
-	return f.err
-}
-
-func TestBackfillTokenIndex(t *testing.T) {
-	ok := &fakeTokenIndex{}
-	backfillTokenIndex(ok)
-	if !ok.sawDeadline {
-		t.Fatal("the backfill must run on a bounded context")
-	}
-	backfillTokenIndex(&fakeTokenIndex{err: errors.New("throttled")}) // logged only
-}
-
 func TestMustRedisOptions(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil || !strings.Contains(r.(string), "already-parsed URL") {

@@ -285,6 +285,55 @@ func TestMarkdownRenderer_BareURLToken(t *testing.T) {
 	}
 }
 
+// An email address links as the composer shows it: a mailto link, shown as
+// the address, without a sentence's closing period.
+func TestMarkdownRenderer_EmailAddressLinks(t *testing.T) {
+	r := NewMarkdownRenderer()
+	out := r.RenderToHast("mail first.last+ex@mail.example.com.")
+	link := findFirstByTag(out, "ex-bare-url")
+	if link == nil || link.Properties["data-href"] != "mailto:first.last+ex@mail.example.com" ||
+		link.Properties["data-value"] != "first.last+ex@mail.example.com" {
+		t.Fatalf("email = %+v", link)
+	}
+	var text strings.Builder
+	for _, c := range out.Children[0].Children {
+		if c == link {
+			text.WriteString("<link>")
+		}
+		text.WriteString(c.Value)
+	}
+	if text.String() != "mail <link>." {
+		t.Errorf("paragraph text = %q, want the text around the address kept", text.String())
+	}
+}
+
+func TestMarkdownRenderer_EmailAddressEdges(t *testing.T) {
+	r := NewMarkdownRenderer()
+	for _, tc := range []struct {
+		body string
+		href string
+	}{
+		{"user@example.com", "mailto:user@example.com"},
+		{"<user@example.com>", "mailto:user@example.com"},
+		{"(user@example.com)", "mailto:user@example.com"},
+		{"to:user@example.com", "mailto:user@example.com"},
+		{"https://user@example.com/x", "https://user@example.com/x"},
+		{"user@localhost", ""},
+		{"user@example.com_", ""},
+		{"user@example.co-", ""},
+		{"`user@example.com`", ""},
+	} {
+		link := findFirstByTag(r.RenderToHast(tc.body), "ex-bare-url")
+		got := ""
+		if link != nil {
+			got, _ = link.Properties["data-href"].(string)
+		}
+		if got != tc.href {
+			t.Errorf("%q: href = %q, want %q", tc.body, got, tc.href)
+		}
+	}
+}
+
 // SharePoint share links carry `/:x:/`, `/:w:/` … path segments. The emoji
 // pass used to run before the bare-URL pass and turned `:x:` into an ❌
 // glyph, splitting the link in two — a colon token inside a URL is part of

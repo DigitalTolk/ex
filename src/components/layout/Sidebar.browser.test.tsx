@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { BrowserRouter, MemoryRouter, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -87,7 +87,6 @@ let mockUnread: {
   unreadChannels: Set<string>;
   unreadChannelNotifications: Set<string>;
   unreadConversations: Set<string>;
-  unreadThreadNotifications: Set<string>;
   hiddenConversations: Set<string>;
   channelUnreadCounts?: Map<string, number>;
   conversationUnreadCounts?: Map<string, number>;
@@ -95,7 +94,6 @@ let mockUnread: {
   unreadChannels: new Set(),
   unreadChannelNotifications: new Set(),
   unreadConversations: new Set(),
-  unreadThreadNotifications: new Set(),
   hiddenConversations: new Set(),
 };
 const hideConversationMock = vi.fn();
@@ -109,7 +107,6 @@ vi.mock('@/context/UnreadContext', () => ({
     markConversationUnread: vi.fn(),
     clearChannelUnread: vi.fn(),
     clearConversationUnread: vi.fn(),
-    markThreadNotificationUnread: vi.fn(),
   }),
 }));
 
@@ -350,7 +347,6 @@ beforeEach(() => {
     unreadChannels: new Set(['ch-unread']),
     unreadChannelNotifications: new Set(),
     unreadConversations: new Set(),
-    unreadThreadNotifications: new Set(),
     hiddenConversations: new Set(),
   };
   mockOnline = new Set(['u-bob']);
@@ -887,7 +883,6 @@ describe('Sidebar browser render — rich fixtures', () => {
       unreadChannels: new Set(),
       unreadChannelNotifications: new Set(),
       unreadConversations: new Set(),
-      unreadThreadNotifications: new Set(),
       hiddenConversations: new Set(),
       channelUnreadCounts: new Map(),
       conversationUnreadCounts: new Map([['conv-dm', 4]]),
@@ -1022,21 +1017,14 @@ describe('Sidebar browser render — rich fixtures', () => {
       unreadChannels: new Set(),
       unreadChannelNotifications: new Set(),
       unreadConversations: new Set(mockConversations.map((c) => c.conversationID)),
-      unreadThreadNotifications: new Set(),
       hiddenConversations: new Set(),
     };
     await render(<Frame />);
     expect(document.body.textContent).toContain('Bob Jones');
   });
 
-  it('renders thread-notifications driving the Threads link bold', async () => {
-    mockUnread = {
-      unreadChannels: new Set(),
-      unreadChannelNotifications: new Set(),
-      unreadConversations: new Set(),
-      unreadThreadNotifications: new Set(['thr-1']),
-      hiddenConversations: new Set(),
-    };
+  it('renders the Threads link bold from the server\'s unread thread markers', async () => {
+    mockUserState = { ...mockUserState!, threadNotifications: ['thr-1'] };
     await render(<Frame />);
     const threadsLink = document.querySelector('a[href="/threads"] span') as HTMLElement;
     expect(threadsLink.className).toContain('font-bold');
@@ -1272,19 +1260,6 @@ describe('Sidebar browser render — rich fixtures', () => {
     expect(document.body.textContent).toContain('Dana');
   });
 
-  it('renders sections even when the unread-thread-notification set is undefined', async () => {
-    mockUnread = {
-      unreadChannels: new Set(),
-      unreadChannelNotifications: new Set(),
-      unreadConversations: new Set(),
-      // Force the `unreadThreadNotifications ?? new Set()` fallback.
-      unreadThreadNotifications: undefined as unknown as Set<string>,
-      hiddenConversations: new Set(),
-    };
-    await render(<Frame />);
-    expect(document.querySelector('[data-testid="sidebar-primary-sections"]')).not.toBeNull();
-  });
-
   it('keeps an unread channel visible in a collapsed section when user state is cold', async () => {
     // A collapsed Channels section with a server-unread channel but undefined
     // userState → the collapsed-channel filter keeps it visible via ch.unread.
@@ -1320,7 +1295,6 @@ describe('Sidebar browser render — rich fixtures', () => {
       unreadChannels: new Set(),
       unreadChannelNotifications: new Set(),
       unreadConversations: new Set(),
-      unreadThreadNotifications: new Set(),
       hiddenConversations: new Set(),
     };
     mockUserState = { hiddenConversations: [], channelNotifications: [], threadNotifications: [], threadSeen: {} };
@@ -1337,8 +1311,18 @@ describe('Sidebar browser render — rich fixtures', () => {
 
 // An imported account lists thousands of rows. A long section renders them in
 // blocks, and a block off screen skips layout and paint (content-visibility)
-// until it scrolls near.
+// until it scrolls near. That is the sidebar with drag; a phone lists its rows
+// virtually instead (below), so these run as a desktop at any width.
 describe('Sidebar rows off screen', () => {
+  let device: typeof window.__EX_FORCE_DEVICE__;
+  beforeEach(() => {
+    device = window.__EX_FORCE_DEVICE__;
+    window.__EX_FORCE_DEVICE__ = 'desktop';
+  });
+  afterEach(() => {
+    window.__EX_FORCE_DEVICE__ = device;
+  });
+
   const row = (index: number) => document.querySelector(`[data-testid="channel-row-ch-many-${index}"]`) as HTMLElement;
   const drawn = (index: number) => row(index).querySelector('a')!.checkVisibility({ contentVisibilityAuto: true });
   const blocks = () => [...document.querySelectorAll('[data-testid="sidebar-row-block"]')] as HTMLElement[];
@@ -1391,5 +1375,89 @@ describe('Sidebar rows off screen', () => {
     const style = getComputedStyle(link);
     expect(style.outlineStyle).toBe('solid');
     expect(parseFloat(style.outlineOffset) + parseFloat(style.outlineWidth)).toBeLessThanOrEqual(0);
+  });
+});
+
+// A phone mounts only the rows near the screen. Its list stays on the page
+// under every conversation, and the browser restyled every row of it as one
+// opened over it: with thousands of rows, a second of jank on each open.
+describe.runIf(window.innerWidth < 768)('Sidebar on a phone', () => {
+  const testID = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+  const box = (id: string) => testID(id)!.getBoundingClientRect();
+
+  it('mounts only the rows near the screen, and the others as they scroll in', async () => {
+    mockCategories = [];
+    mockChannels = Array.from({ length: 300 }, (_, index) => ({
+      channelID: `ch-many-${index}`,
+      channelName: `many-${String(index).padStart(3, '0')}`,
+      channelType: 'public' as const,
+      role: 1,
+    }));
+    await render(<Frame />);
+
+    await expect.poll(() => testID('channel-row-ch-many-0')).not.toBeNull();
+    expect(document.querySelectorAll('[data-testid^="channel-row-"]').length).toBeLessThan(60);
+    expect(testID('channel-row-ch-many-299')).toBeNull();
+    expect(testID('sidebar-row-block')).toBeNull();
+
+    const scroller = document.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
+    await expect
+      .poll(() => {
+        scroller.scrollTop = scroller.scrollHeight;
+        return testID('channel-row-ch-many-299');
+      })
+      .not.toBeNull();
+    expect(testID('channel-row-ch-many-0')).toBeNull();
+  });
+
+  // The gaps of the full list: under a heading and between rows, under an
+  // open section, between folded headings, and above an open one.
+  it('spaces its sections as the full list does', async () => {
+    localStorage.setItem('sidebar.collapsedSections', JSON.stringify(['cat-ops', 'cat-misc']));
+    mockCategories = [
+      ...makeCategories(),
+      { id: 'cat-ops', name: 'Ops', position: 2000, createdAt: '2026-04-01T10:00:00Z' },
+      { id: 'cat-misc', name: 'Misc', position: 3000, createdAt: '2026-04-01T10:00:00Z' },
+    ];
+    mockChannels = [
+      ...makeChannels(),
+      { channelID: 'ch-ops', channelName: 'ops', channelType: 'public', role: 1, categoryID: 'cat-ops' },
+      { channelID: 'ch-misc', channelName: 'misc', channelType: 'public', role: 1, categoryID: 'cat-misc' },
+    ];
+    await render(<Frame />);
+    await expect.poll(() => testID('conversation-row-conv-group')).not.toBeNull();
+    expect(testID('channel-row-ch-ops')).toBeNull();
+
+    const gap = (above: string, below: string) => Math.round(box(below).top - box(above).bottom);
+    expect(Math.round(box('sidebar-group-header-cat-work').height)).toBe(48);
+    expect(gap('sidebar-group-header-cat-work', 'channel-row-ch-categorized')).toBe(4);
+    expect(gap('channel-row-ch-general', 'channel-row-ch-private')).toBe(4);
+    expect(gap('channel-row-ch-categorized', 'sidebar-group-header-cat-ops')).toBe(20);
+    expect(gap('sidebar-group-header-cat-ops', 'sidebar-group-header-cat-misc')).toBe(20);
+    expect(gap('sidebar-group-header-cat-misc', 'sidebar-group-header-__channels__')).toBe(24);
+  });
+
+  it('lists only the sections with unread rows in the unread view', async () => {
+    localStorage.setItem('sidebar.unreadOnly', '1');
+    mockChannels = makeChannels().map((channel) =>
+      channel.channelID === 'ch-unread' ? { ...channel, unread: true } : channel,
+    );
+    await render(<Frame />);
+
+    await expect.poll(() => testID('channel-row-ch-unread')).not.toBeNull();
+    expect(testID('sidebar-group-header-__channels__')).not.toBeNull();
+    expect(testID('sidebar-group-header-cat-work')).toBeNull();
+    expect(testID('channel-row-ch-general')).toBeNull();
+  });
+
+  it('keeps the gap above the first heading, wider while its section is open', async () => {
+    await render(<Frame />);
+    await expect.poll(() => testID('sidebar-group-header-__favorites__')).not.toBeNull();
+    const controls = testID('sidebar-primary-sections')!.previousElementSibling!;
+    const gap = () => Math.round(box('sidebar-group-header-__favorites__').top - controls.getBoundingClientRect().bottom);
+    expect(gap()).toBe(12);
+
+    testID('sidebar-group-toggle-__favorites__')!.click();
+    await expect.poll(gap).toBe(8);
   });
 });

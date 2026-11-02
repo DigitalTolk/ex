@@ -112,7 +112,7 @@ export function useParentChat({ kind, id, userID, beforeSend }: UseParentChatOpt
   // off; after that it reads only while you follow along at the bottom (see
   // useReadSession).
   const markRead = useCallback(
-    (openedID: string) => void markParentRead(queryClient, { kind, id: openedID }, { refreshList: true }),
+    (openedID: string) => void markParentRead(queryClient, { kind, id: openedID }),
     [kind, queryClient],
   );
   const readSession = useReadSession(kind, id, markRead);

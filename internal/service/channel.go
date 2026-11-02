@@ -35,6 +35,7 @@ type ChannelService struct {
 	channels    ChannelStore
 	memberships MembershipStore
 	users       UserStore
+	deactivated DeactivatedAccounts
 	messages    MessageStore
 	cache       Cache
 	broker      Broker
@@ -56,6 +57,10 @@ type ChannelService struct {
 // into every channel-audience write. Optional — unwired, nothing is cached
 // against these writes to begin with.
 func (s *ChannelService) SetAudienceInvalidator(a AudienceInvalidator) { s.audience = a }
+
+// SetDeactivatedAccounts wires the check that keeps deactivated accounts out
+// of member lists (the user service answers it from the shared roster).
+func (s *ChannelService) SetDeactivatedAccounts(d DeactivatedAccounts) { s.deactivated = d }
 
 // audienceWritten runs after a membership, role, mute or per-channel
 // preference write on channelID (err is that write's result, passed through):
@@ -967,14 +972,14 @@ func (s *ChannelService) ListMembers(ctx context.Context, actorID, channelID str
 	if err != nil {
 		return nil, fmt.Errorf("channel: list members: %w", err)
 	}
-	if s.users == nil {
+	if s.deactivated == nil {
 		return members, nil
 	}
 	ids := make([]string, len(members))
 	for i, m := range members {
 		ids[i] = m.UserID
 	}
-	deactivated, err := s.users.DeactivatedAmong(ctx, ids)
+	deactivated, err := s.deactivated.DeactivatedAmong(ctx, ids)
 	if err != nil {
 		slog.WarnContext(ctx, "channel: member status read failed; listing every member", "channelID", channelID, "error", err)
 		return members, nil
@@ -998,6 +1003,13 @@ func clampNotifyCount(notify *int64, unread int) {
 // fallback so plain test stores keep working.
 type batchChannelStore interface {
 	GetChannelsByIDs(ctx context.Context, ids []string) ([]*model.Channel, error)
+}
+
+// consistentChannelBatch is the consistent form of the batched META read
+// (the DynamoDB impl has it), for the sidebar: each row's MessageSeq is its
+// unread count. Everything else takes the cheaper GetChannelsByIDs.
+type consistentChannelBatch interface {
+	GetChannelsByIDsConsistent(ctx context.Context, ids []string) ([]*model.Channel, error)
 }
 
 // ListUserChannelIDs returns just the channel IDs of the user's memberships:
@@ -1042,7 +1054,11 @@ func (s *ChannelService) ListUserChannels(ctx context.Context, userID string) ([
 		for i, uc := range channels {
 			ids[i] = uc.ChannelID
 		}
-		if fetched, err := bs.GetChannelsByIDs(ctx, ids); err == nil {
+		read := bs.GetChannelsByIDs
+		if cs, ok := s.channels.(consistentChannelBatch); ok {
+			read = cs.GetChannelsByIDsConsistent
+		}
+		if fetched, err := read(ctx, ids); err == nil {
 			byID := make(map[string]*model.Channel, len(fetched))
 			for _, ch := range fetched {
 				byID[ch.ID] = ch

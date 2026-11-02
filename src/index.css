@@ -283,6 +283,32 @@ body > :not(#root) {
   initial-value: #ffffff;
 }
 
+/* Base UI's scroll area sets these on its viewport at every scroll event,
+ * and leaves them inherited on Safari, for designs that read them in what
+ * scrolls. Nothing here reads them, and inherited, each change restyled
+ * everything inside the scroll area: on Safari, the full sidebar scrolled at
+ * about 10 frames a second. */
+@property --scroll-area-overflow-x-start {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-area-overflow-x-end {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-area-overflow-y-start {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-area-overflow-y-end {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
 :root {
   --safe-top: env(safe-area-inset-top);
   --safe-bottom: env(safe-area-inset-bottom);

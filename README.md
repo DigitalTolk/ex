@@ -118,7 +118,7 @@ Any provider that supports OpenID Connect Discovery (`.well-known/openid-configu
 When the workspace signs in through Microsoft Entra ID, setting `MS_TENANT_ID` enables a tighter Microsoft 365 integration — with **no per-user account linking**, because the app authenticates against Microsoft Graph app-only (client credentials) using the same app registration the workspace already signs in through:
 
 - **Profile enrichment** — each SSO login syncs the user's phone number and manager from the directory onto their Ex profile (hover card + directory page), broadcast live via `user.updated`. Values come from Entra ID's `mobilePhone`/`businessPhones` fields and the manager assignment, so they only appear for users whose directory profiles have them filled in. The OIDC email claim is the source of truth for identity; directory lookups resolve it against the `mail` attribute first with UPN as fallback, so tenants where logins differ from mailbox addresses (UPN `first.last@…` vs mail `first@…`) work throughout. A periodic re-sync (every `MS_PROFILE_SYNC_INTERVAL`, default 12h; Redis-lock elected so a cluster sweeps once) refreshes every user without waiting for their next login — the first sweep runs at boot and backfills existing users.
-- **Offboarding sync** — a separate, faster sweep (every `MS_STATUS_SYNC_INTERVAL`, default 5m; one tenant-wide `GET /users?$select=id,accountEnabled` listing per sweep, Redis-lock elected) mirrors directory standing onto account status: an SSO user disabled or deleted in Entra is deactivated (refresh tokens wiped, live sessions force-logged-out — SSO removal alone doesn't end an existing session) and automatically reactivated once the directory account can sign in again (never an account an admin deactivated). A deactivated account stays the author of its messages and keeps its channel memberships underneath, but is listed last and marked inactive in the directory, hover card and DM header, left out of channel member lists, @-mention suggestions and people pickers, can't be added to a channel, and gets nothing from the notification fan-out (no alert, Activity row, badge or push — `@all` included). Safety rails: only accounts with a stored AAD object id are judged (an email can't tell a departed colleague from mail ≠ UPN), an empty listing is never acted on, and a circuit breaker refuses to deactivate more than max(3, 10% of users) in one sweep — a tenant/app-registration misconfiguration makes every account look gone and must not read as company-wide offboarding.
+- **Offboarding sync** — a separate, faster sweep (every `MS_STATUS_SYNC_INTERVAL`, default 1h; one tenant-wide `GET /users?$select=id,accountEnabled` listing per sweep, Redis-lock elected) mirrors directory standing onto account status: an SSO user disabled or deleted in Entra is deactivated (refresh tokens wiped, live sessions force-logged-out — SSO removal alone doesn't end an existing session) and automatically reactivated once the directory account can sign in again (never an account an admin deactivated). A deactivated account stays the author of its messages and keeps its channel memberships underneath, but is listed last and marked inactive in the directory, hover card and DM header, left out of channel member lists, @-mention suggestions and people pickers, can't be added to a channel, and gets nothing from the notification fan-out (no alert, Activity row, badge or push — `@all` included). Safety rails: only accounts with a stored AAD object id are judged (an email can't tell a departed colleague from mail ≠ UPN), an empty listing is never acted on, and a circuit breaker refuses to deactivate more than max(3, 10% of users) in one sweep — a tenant/app-registration misconfiguration makes every account look gone and must not read as company-wide offboarding.
 - **`/mstmeetings` slash command** — creates a Microsoft Teams online meeting organized by the invoking user and posts the join link into the chat. Everyone in the current chat (channel, group or DM) is placed on the meeting roster (by AAD object id, granting direct join/lobby-bypass), but Teams does **not** ring or send calendar invites for ad-hoc online meetings: the chat message *is* the invitation. In channels it leads with `@all`, so every member is alerted through the normal notification pipeline — desktop popup, and the deferred mobile push when they're away or offline — subject to their own mute/group-mention preferences. Teams-native ringing would require a registered calling bot (`Calls.InitiateGroupCall.All` + an Azure Bot resource with a public callback endpoint) and is deliberately not included. Join-link messages are excluded from search indexing (stale meeting URLs are noise, not content).
 
 Without `MS_TENANT_ID`, everything below is disabled and the app behaves exactly as before.
@@ -274,7 +274,7 @@ unknown address, so neither can be used to enumerate accounts.
 | `MS_CLIENT_ID`       | `OIDC_CLIENT_ID`                  | Graph app-registration client ID override               |
 | `MS_CLIENT_SECRET`   | `OIDC_CLIENT_SECRET`              | Graph app-registration client secret override            |
 | `MS_PROFILE_SYNC_INTERVAL` | `12h`                       | Directory re-sync cadence (phone + manager for all users; first sweep at boot = backfill) |
-| `MS_STATUS_SYNC_INTERVAL` | `5m`                        | Account-standing check (disabled or deleted in Entra → deactivated; first check at boot) |
+| `MS_STATUS_SYNC_INTERVAL` | `1h`                        | Account-standing check (disabled or deleted in Entra → deactivated; first check at boot) |
 | `SESSION_MAX_AGE`    | `2160h` (90 days)                 | Absolute session lifetime: refresh stops working this long after sign-in |
 | `OIDC_ALLOWED_EMAIL_DOMAINS` | -                         | Comma-separated email domains allowed to sign in via SSO (unset = any) |
 | `CONNECTOR_PROVIDER_URL` | -                             | Connector catalogue provider; must resolve to a public address (or be under `CONNECTOR_PRIVATE_DOMAINS`) outside development |
@@ -476,15 +476,6 @@ go run ./cmd/migrate thread-delete --apply
 
 The same DynamoDB Local env-var shape shown above for `migrate parent-index` applies here. No events are published — these threads were closed long ago and no client is watching them.
 
-### Top-level message index (`migrate top-level-index`)
-
-Channel and DM history pages read top-level messages from a sparse index (`GSI2PK = TOPMSG#<parent>`), so a page no longer reads past thread replies. New and edited messages are indexed as they are written; older ones need a backfill, and the index switches on only after a clean `--apply` pass (until then pages use the previous path). Run it **after every instance runs the new build** (an older build writes messages without the index keys), and again after any rollback to an older build.
-
-```bash
-go run ./cmd/migrate top-level-index            # preview
-go run ./cmd/migrate top-level-index --apply    # backfill, then mark the table [--workers=16]
-```
-
 ### Followed threads by latest reply (`migrate thread-activity`)
 
 The Threads page lists a user's followed threads latest reply first, a page at a time, from their follow rows (`GSI2PK = THREADACT#<user>`). New follows and every reply keep that order; follow rows written before need their thread's latest reply stamped once. Run it after every instance runs the new build; until it has run, those older threads are missing from the read part of the list (unread ones still show).
@@ -492,6 +483,15 @@ The Threads page lists a user's followed threads latest reply first, a page at a
 ```bash
 go run ./cmd/migrate thread-activity            # preview
 go run ./cmd/migrate thread-activity --apply
+```
+
+### Participants of older threads (`migrate thread-participants`)
+
+A thread is on its participants' Threads pages through their follow rows, and every reply writes them for its author and the root author. Threads rooted before that (before 2026-08-01) can miss rows for people who took part back then. This backfill scans the thread index once, gives the root author and every reply author of each such thread a follow row where they have none (a deliberate unfollow stays), dated by the thread's latest reply, and then flags the root. Replies to a flagged root find their audience in the follow rows instead of re-reading the whole thread. Threads written by the history importer are flagged as they are imported. Run it after every instance runs the new build; it is idempotent and can be re-run after a failure.
+
+```bash
+go run ./cmd/migrate thread-participants                       # preview
+go run ./cmd/migrate thread-participants --apply [--workers=4]
 ```
 
 `go run ./cmd/migrate` with no arguments lists every subcommand; all of them default to a dry run.

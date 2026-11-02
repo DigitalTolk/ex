@@ -20,6 +20,7 @@ import {
   serverVersionSchema,
   interactionNoticeSchema,
   appViewEventSchema,
+  sessionRenewedSchema,
   threadUpdatedSchema,
   typingSchema,
   userChannelUpdatedSchema,
@@ -66,6 +67,7 @@ export const wsEventSchemas = {
   [EventType.Ping]: nudge,
   [EventType.ReplayDone]: nudge,
   [EventType.ReplayExhausted]: nudge,
+  [EventType.SessionRenewed]: sessionRenewedSchema,
   [EventType.WebhookChanged]: nudge,
   [EventType.ProjectChanged]: nudge,
   [EventType.SettingsUpdated]: nudge,
@@ -82,9 +84,14 @@ export const wsEventSchemas = {
 
 export type WSEventPayloads = { [K in EventTypeName]: z.output<(typeof wsEventSchemas)[K]> };
 
-// Frames the socket layer consumes itself (replay bookkeeping in
+// Frames the socket layer consumes itself (replay and session bookkeeping in
 // useWebSocket); the app never handles them.
-type TransportEventType = typeof EventType.ReplayDone | typeof EventType.ReplayExhausted;
+const transportEventTypes: ReadonlySet<string> = new Set([
+  EventType.ReplayDone,
+  EventType.ReplayExhausted,
+  EventType.SessionRenewed,
+]);
+type TransportEventType = typeof EventType.ReplayDone | typeof EventType.ReplayExhausted | typeof EventType.SessionRenewed;
 export type AppEventType = Exclude<EventTypeName, TransportEventType>;
 
 // The app's handler for every event, keyed like the registry. Exhaustive on
@@ -97,7 +104,7 @@ export type WSEventHandlers = { [K in AppEventType]: ((payload: WSEventPayloads[
 export type WSInvalidPayloadFallbacks = Partial<Record<AppEventType, () => void>>;
 
 function isAppEventType(type: string): type is AppEventType {
-  return Object.hasOwn(wsEventSchemas, type) && type !== EventType.ReplayDone && type !== EventType.ReplayExhausted;
+  return Object.hasOwn(wsEventSchemas, type) && !transportEventTypes.has(type);
 }
 
 // A payload our own server sent that its schema rejects is a contract bug that

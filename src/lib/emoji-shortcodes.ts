@@ -153,6 +153,13 @@ const ASCII_EMOJI_TO_SHORTCODE = new Map<string, string>([
   ['<3', ':heart:'],
 ]);
 
+// emoticonEmoji is the standard emoji an ASCII emoticon stands for (`:P` is
+// 😛), or undefined for anything else.
+export function emoticonEmoji(token: string): string | undefined {
+  const shortcode = ASCII_EMOJI_TO_SHORTCODE.get(token);
+  return shortcode === undefined ? undefined : shortcodeToUnicode(shortcode);
+}
+
 export function shortcodeWithSkinTone(name: string, unicode: string, tone: EmojiSkinTone | undefined): string {
   if (!tone || !supportsEmojiSkinTone(unicode)) return `:${name}:`;
   const suffix = SKIN_TONE_BY_VALUE.get(tone)?.suffix;
@@ -177,6 +184,17 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// An emoticon counts only on its own, between whitespace or the line's ends:
+// `:P` but not `note:P` or `:Po`.
+const EMOTICON_SOURCE = `(?<!\\S)(${[...ASCII_EMOJI_TO_SHORTCODE.keys()]
+  .sort((a, b) => b.length - a.length)
+  .map(escapeRegex)
+  .join('|')})(?!\\S)`;
+
+// EMOTICON_RE_GLOBAL finds the emoticons that sending turns into emoji, so the
+// composer can show them as their emoji (emojiGlyphs) before they're sent.
+export const EMOTICON_RE_GLOBAL = new RegExp(EMOTICON_SOURCE, 'g');
+
 // Single-pass replace for known unicode emoji. The alternation is generated
 // from the full dataset so picker, typeahead, rendering, and native emoji
 // normalization share the same canonical shortcode names.
@@ -185,11 +203,7 @@ const NORMALIZE_EMOJI_RE = (() => {
     .sort((a, b) => b.length - a.length)
     .map(escapeRegex)
     .join('|');
-  const asciiAlternation = [...ASCII_EMOJI_TO_SHORTCODE.keys()]
-    .sort((a, b) => b.length - a.length)
-    .map(escapeRegex)
-    .join('|');
-  return new RegExp(`(${unicodeAlternation})|(?<!\\S)(${asciiAlternation})(?!\\S)`, 'g');
+  return new RegExp(`(${unicodeAlternation})|${EMOTICON_SOURCE}`, 'g');
 })();
 
 // normalizeEmojiInBody replaces every known unicode emoji in the body

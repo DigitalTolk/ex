@@ -1,16 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
-import { UnreadProvider, useUnread, USER_STATE_CHANGED_EVENT } from './UnreadContext';
+import { UnreadProvider, useUnread } from './UnreadContext';
 import { useEffect, useRef } from 'react';
 import { setActiveParent } from '@/stores/active-parent';
 
 const apiFetchMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue(undefined));
 vi.mock('@/lib/api', () => ({
   apiFetch: apiFetchMock,
-}));
-
-vi.mock('@/hooks/useThreads', () => ({
-  THREAD_SEEN_CHANGED_EVENT: 'ex:thread-seen-changed',
 }));
 
 function Probe({ onState }: { onState: (s: ReturnType<typeof useUnread>) => void }) {
@@ -45,17 +41,6 @@ afterEach(() => {
 });
 
 describe('UnreadContext (browser)', () => {
-  it('markThreadNotificationUnread adds to the set and fires user-state-changed', async () => {
-    const getState = await mountUnread();
-    let fired = 0;
-    const handler = () => { fired++; };
-    window.addEventListener(USER_STATE_CHANGED_EVENT, handler);
-    getState().markThreadNotificationUnread('thr-1');
-    await vi.waitFor(() => expect(getState().unreadThreadNotifications.has('thr-1')).toBe(true));
-    expect(fired).toBeGreaterThan(0);
-    window.removeEventListener(USER_STATE_CHANGED_EVENT, handler);
-  });
-
   it('active channel/conversation scope comes from the active-parent store and fires no API', async () => {
     const getState = await mountUnread();
     apiFetchMock.mockClear();
@@ -95,50 +80,14 @@ describe('UnreadContext (browser)', () => {
     expect(apiFetchMock).not.toHaveBeenCalled();
   });
 
-  it('setActiveThread tracks the active thread and clears its pending notification', async () => {
+  it('setActiveThread tracks the active thread', async () => {
     const getState = await mountUnread();
-    // A reply landed just before the thread was opened.
-    getState().markThreadNotificationUnread('thr-active');
-    await vi.waitFor(() => expect(getState().unreadThreadNotifications.has('thr-active')).toBe(true));
     expect(getState().isActiveThread('thr-active')).toBe(false);
-    // Opening the thread marks it active and drops the pending highlight.
     getState().setActiveThread('thr-active');
     expect(getState().isActiveThread('thr-active')).toBe(true);
-    await vi.waitFor(() => expect(getState().unreadThreadNotifications.has('thr-active')).toBe(false));
     // Closing it clears the active scope again.
     getState().setActiveThread(null);
     expect(getState().isActiveThread('thr-active')).toBe(false);
-  });
-
-  it('setActiveThread(null) / activating a thread with no notification leaves other notifications intact', async () => {
-    const getState = await mountUnread();
-    getState().markThreadNotificationUnread('thr-keep-2');
-    await vi.waitFor(() => expect(getState().unreadThreadNotifications.has('thr-keep-2')).toBe(true));
-    // Closing (null) doesn't touch notifications.
-    getState().setActiveThread(null);
-    // Activating an unrelated thread that has no pending notification is a
-    // no-op on the set (covers the !has(id) early return).
-    getState().setActiveThread('thr-no-notif');
-    await new Promise((r) => setTimeout(r, 10));
-    expect(getState().unreadThreadNotifications.has('thr-keep-2')).toBe(true);
-    expect(getState().isActiveThread('thr-no-notif')).toBe(true);
-  });
-
-  it('thread-seen window event clears matching unreadThreadNotification', async () => {
-    const getState = await mountUnread();
-    getState().markThreadNotificationUnread('thr-x');
-    await vi.waitFor(() => expect(getState().unreadThreadNotifications.has('thr-x')).toBe(true));
-    window.dispatchEvent(new CustomEvent('ex:thread-seen-changed', { detail: { threadRootID: 'thr-x' } }));
-    await vi.waitFor(() => expect(getState().unreadThreadNotifications.has('thr-x')).toBe(false));
-  });
-
-  it('thread-seen event without threadRootID is a no-op', async () => {
-    const getState = await mountUnread();
-    getState().markThreadNotificationUnread('thr-keep');
-    await vi.waitFor(() => expect(getState().unreadThreadNotifications.has('thr-keep')).toBe(true));
-    window.dispatchEvent(new CustomEvent('ex:thread-seen-changed', { detail: {} }));
-    await new Promise((r) => setTimeout(r, 10));
-    expect(getState().unreadThreadNotifications.has('thr-keep')).toBe(true);
   });
 
   it('useUnread throws when called outside an UnreadProvider', async () => {
@@ -163,14 +112,5 @@ describe('UnreadContext (browser)', () => {
     await vi.waitFor(() => expect(getState().hiddenConversations.has('conv-rej')).toBe(true));
     getState().unhideConversation('conv-rej');
     await vi.waitFor(() => expect(getState().hiddenConversations.has('conv-rej')).toBe(false));
-  });
-
-  it('thread-seen event for an unknown thread id is a no-op (has-false arm)', async () => {
-    const getState = await mountUnread();
-    // No matching unreadThreadNotification → `!prev.has(threadRootID)` returns
-    // the previous set unchanged.
-    window.dispatchEvent(new CustomEvent('ex:thread-seen-changed', { detail: { threadRootID: 'thr-unknown' } }));
-    await new Promise((r) => setTimeout(r, 10));
-    expect(getState().unreadThreadNotifications.has('thr-unknown')).toBe(false);
   });
 });

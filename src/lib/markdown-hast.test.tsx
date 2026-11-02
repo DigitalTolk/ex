@@ -10,6 +10,24 @@ vi.mock('@/components/GiphyEmbed', () => ({
 }));
 
 describe('renderHastTree', () => {
+  it('renders an email address as a mailto link showing the address', () => {
+    const tree: HastNode = {
+      type: 'root',
+      children: [
+        {
+          type: 'element',
+          tagName: 'ex-bare-url',
+          properties: { 'data-href': 'mailto:user@example.com', 'data-value': 'user@example.com' },
+          children: [],
+        },
+      ],
+    };
+    const { container } = render(<>{renderHastTree(tree)}</>);
+    const link = container.querySelector('a');
+    expect(link).toHaveAttribute('href', 'mailto:user@example.com');
+    expect(link).toHaveTextContent(/^user@example\.com$/);
+  });
+
   it('patches in an empty child list for an element node missing children', () => {
     // The <p> element arrives with no `children` key — normaliseTree must
     // default it to [] rather than crashing the hydrator.

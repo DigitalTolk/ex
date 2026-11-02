@@ -52,7 +52,7 @@ func (a *App) buildAgents(ctx context.Context) error {
 	// Agent prefs are partitioned by user, so the admin panel's "how many
 	// people have their own settings" and its reset both walk the roster.
 	ag.svc.SetUserLister(in.users)
-	ag.orch = agents.NewOrchestrator(store.NewRunStore(in.db), ag.svc, in.users, c.messages, in.pubsub, in.jwt)
+	ag.orch = agents.NewOrchestrator(store.NewRunStore(in.db), ag.svc, cachedUserReader{c.users}, c.messages, in.pubsub, in.jwt)
 	c.users.SetAutomationStopper(ag.orch) // deactivating an account stops its agents
 	c.messages.SetAgentDispatcher(ag.orch)
 	// Deleting a chat sweeps its agent-run activity logs (a thread root sweeps

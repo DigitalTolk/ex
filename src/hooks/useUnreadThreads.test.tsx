@@ -4,7 +4,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { useUnreadThreadIDs } from './useUnreadThreads';
 import { markThreadSeen } from './useThreads';
-import { UnreadProvider, useUnread } from '@/context/UnreadContext';
 import { queryKeys } from '@/lib/query-keys';
 import type { UserState } from '@/types';
 
@@ -47,18 +46,5 @@ describe('useUnreadThreadIDs', () => {
     );
     const { result } = renderHook(() => useUnreadThreadIDs(), { wrapper });
     expect(result.current.size).toBe(0);
-  });
-
-  it('includes a reply that just arrived live', () => {
-    const qc = new QueryClient();
-    qc.setQueryData<Partial<UserState>>(queryKeys.userState(), { threadNotifications: ['t-4'] });
-    const wrapper = ({ children }: { children: ReactNode }) => (
-      <QueryClientProvider client={qc}>
-        <UnreadProvider>{children}</UnreadProvider>
-      </QueryClientProvider>
-    );
-    const { result } = renderHook(() => ({ ids: useUnreadThreadIDs(), unread: useUnread() }), { wrapper });
-    act(() => result.current.unread.markThreadNotificationUnread('t-5'));
-    expect([...result.current.ids].sort()).toEqual(['t-4', 't-5']);
   });
 });

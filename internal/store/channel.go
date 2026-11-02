@@ -510,17 +510,26 @@ func (s *ChannelStoreImpl) ListAllChannels(ctx context.Context) ([]*model.Channe
 }
 
 // GetChannelsByIDs fetches many channel META rows in chunked BatchGetItem
-// calls (100 per chunk) instead of one GetItem per channel — the pattern that
-// made the sidebar list (and every WebSocket connect, which reloads it) cost
-// a DynamoDB read per membership. Missing IDs are absent from the result.
+// calls (100 per chunk) instead of one GetItem per channel. Eventually
+// consistent: callers that only need names and types (search hits, mention
+// rendering) pay half. Missing IDs are absent from the result.
 func (s *ChannelStoreImpl) GetChannelsByIDs(ctx context.Context, ids []string) ([]*model.Channel, error) {
+	return s.getChannelsByIDs(ctx, ids, false)
+}
+
+// GetChannelsByIDsConsistent is GetChannelsByIDs read consistently, for the
+// sidebar: each row's MessageSeq is its unread count, and a stale one would
+// clamp an alert's badge away (see ConversationStoreImpl.ListUserConversations).
+func (s *ChannelStoreImpl) GetChannelsByIDsConsistent(ctx context.Context, ids []string) ([]*model.Channel, error) {
+	return s.getChannelsByIDs(ctx, ids, true)
+}
+
+func (s *ChannelStoreImpl) getChannelsByIDs(ctx context.Context, ids []string, consistent bool) ([]*model.Channel, error) {
 	keys := make([]map[string]types.AttributeValue, len(ids))
 	for i, id := range ids {
 		keys[i] = compositeKey(channelPK(id), metaSK())
 	}
-	// Consistent, for the MessageSeq behind each row's unread count (see
-	// ConversationStoreImpl.ListUserConversations).
-	rows, err := batchGetOf[channelItem](ctx, s.DB, keys, types.KeysAndAttributes{ConsistentRead: aws.Bool(true)}, "channels")
+	rows, err := batchGetOf[channelItem](ctx, s.DB, keys, types.KeysAndAttributes{ConsistentRead: aws.Bool(consistent)}, "channels")
 	if err != nil {
 		return nil, err
 	}

@@ -490,7 +490,7 @@ func TestUserService_List(t *testing.T) {
 	users := newMockUserStore()
 	svc := NewUserService(users, nil, nil, nil)
 
-	_, _, err := svc.List(context.Background(), 50, "")
+	_, err := svc.ListAll(context.Background())
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1050,7 +1050,7 @@ func TestUserService_ClearExpiredStatuses_ClearsAndBroadcasts(t *testing.T) {
 	}
 	cache.users["user:u-expired"] = users.users["u-expired"]
 
-	cleared, err := svc.ClearExpiredStatuses(context.Background(), now, 0)
+	cleared, err := svc.ClearExpiredStatuses(context.Background(), now)
 	if err != nil {
 		t.Fatalf("ClearExpiredStatuses: %v", err)
 	}
@@ -1098,7 +1098,7 @@ func TestUserService_ClearExpiredStatuses_Errors(t *testing.T) {
 		users := newMockUserStore()
 		users.listErr = errors.New("list failed")
 		svc := NewUserService(users, nil, nil, nil)
-		if _, err := svc.ClearExpiredStatuses(context.Background(), now, 100); err == nil {
+		if _, err := svc.ClearExpiredStatuses(context.Background(), now); err == nil {
 			t.Fatal("expected list error")
 		}
 	})
@@ -1108,7 +1108,7 @@ func TestUserService_ClearExpiredStatuses_Errors(t *testing.T) {
 		users.users["u-expired"] = &model.User{ID: "u-expired", Email: "expired@example.com", UserStatus: &model.UserStatus{Emoji: ":calendar:", Text: "On Vacation", ClearAt: &expiredAt}}
 		users.getUserErr = errors.New("get failed")
 		svc := NewUserService(users, nil, nil, nil)
-		if _, err := svc.ClearExpiredStatuses(context.Background(), now, 100); err == nil {
+		if _, err := svc.ClearExpiredStatuses(context.Background(), now); err == nil {
 			t.Fatal("expected get error")
 		}
 	})
@@ -1118,7 +1118,7 @@ func TestUserService_ClearExpiredStatuses_Errors(t *testing.T) {
 		users.users["u-expired"] = &model.User{ID: "u-expired", Email: "expired@example.com", UserStatus: &model.UserStatus{Emoji: ":calendar:", Text: "On Vacation", ClearAt: &expiredAt}}
 		users.updateErr = errors.New("update failed")
 		svc := NewUserService(users, nil, nil, nil)
-		if _, err := svc.ClearExpiredStatuses(context.Background(), now, 100); err == nil {
+		if _, err := svc.ClearExpiredStatuses(context.Background(), now); err == nil {
 			t.Fatal("expected update error")
 		}
 	})
@@ -1136,7 +1136,7 @@ func TestUserService_RunExpiredStatusSweeper_RunsOnceOnStartupAndStops(t *testin
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	svc.RunExpiredStatusSweeper(ctx, 0, 0)
+	svc.RunExpiredStatusSweeper(ctx, 0)
 
 	if users.users["u-expired"].UserStatus != nil {
 		t.Fatalf("UserStatus = %+v, want nil after startup sweep", users.users["u-expired"].UserStatus)
@@ -1264,7 +1264,7 @@ func TestUserService_RunExpiredStatusSweeper_DefaultIntervalAndError(t *testing.
 	// interval<=0 falls back to the default, and the loop returns on ctx.Done.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	svc.RunExpiredStatusSweeper(ctx, 0, 10)
+	svc.RunExpiredStatusSweeper(ctx, 0)
 }
 
 func TestUserService_RunExpiredStatusSweeper_ClearsAndTicks(t *testing.T) {
@@ -1277,7 +1277,7 @@ func TestUserService_RunExpiredStatusSweeper_ClearsAndTicks(t *testing.T) {
 	// the first run clears the expired status (cleared>0 info branch).
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
 	defer cancel()
-	svc.RunExpiredStatusSweeper(ctx, 5*time.Millisecond, 10)
+	svc.RunExpiredStatusSweeper(ctx, 5*time.Millisecond)
 
 	if users.users["u1"].UserStatus != nil {
 		t.Fatal("expected expired status to be cleared")
@@ -1296,7 +1296,7 @@ func TestUserService_BotsAreHiddenFromPeopleSurfaces(t *testing.T) {
 	svc.SetIndexer(idx)
 	ctx := context.Background()
 
-	listed, _, err := svc.List(ctx, 50, "")
+	listed, err := svc.ListAll(ctx)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}

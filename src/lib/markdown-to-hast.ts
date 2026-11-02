@@ -36,6 +36,9 @@ const STRIKE_RE = /~~([^~]+)~~/;
 const ITALIC_RE = /\*([^*\n]+)\*/;
 const INLINE_CODE_RE = /`([^`\n]+)`/;
 const BARE_URL_RE = /https?:\/\/[^\s<>"]+/;
+// An email address, by the rule the composer highlights it with (the GFM
+// autolink of @lezer/markdown), as on the server.
+const EMAIL_RE = /(^|[^\w])([\w.+-]{1,100}@[\w-]+(?:\.[\w.-]+)+)/;
 
 function el(tagName: string, properties?: Record<string, unknown>, children: HastNode[] = []): HastNode {
   return { type: 'element', tagName, properties, children } as HastNode;
@@ -134,8 +137,22 @@ const INLINE_KINDS: InlineKind[] = [
   ]),
   kind(EMOJI_SHORTCODE_RE, (m) => [el('ex-emoji-shortcode', { 'data-name': m[1], 'data-value': m[0] })]),
 
-  // bare URL — last so explicit links are already claimed.
+  // bare URL — late so explicit links are already claimed.
   kind(BARE_URL_RE, (m) => [el('ex-bare-url', { 'data-href': m[0], 'data-value': m[0] })]),
+
+  // email address — after bare URLs, which may carry one. A sentence's
+  // closing period isn't part of it; one ending in "_" or "-" is no address.
+  leadKind(EMAIL_RE, (m) => {
+    const match = m[2];
+    const last = match.at(-1);
+    if (last === '_' || last === '-') return [text(m[1]), text(match)];
+    const addr = last === '.' ? match.slice(0, -1) : match;
+    return [
+      text(m[1]),
+      el('ex-bare-url', { 'data-href': `mailto:${addr}`, 'data-value': addr }),
+      text(match.slice(addr.length)),
+    ];
+  }),
 ];
 
 // parseInline turns a run of text into inline nodes, always taking the

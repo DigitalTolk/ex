@@ -36,6 +36,7 @@ type inboundMessage struct {
 	ParentMessageID string `json:"parentMessageID"` // optional — set when typing inside a thread reply
 	TimeZone        string `json:"timeZone"`        // optional — "timezone.update" heartbeat frame
 	MessageID       string `json:"messageID"`       // optional — set on a "notification.ack" frame
+	Ticket          string `json:"ticket"`          // optional — a fresh upgrade ticket on a "session.renew" frame
 }
 
 // typingGate caches per-connection membership verdicts for typing frames.
@@ -56,6 +57,9 @@ type typingGate struct {
 	// costs a user read (and a write when the zone changed), and the client
 	// only sends one when its zone actually changes.
 	lastTimeZone time.Time
+	// session is the connection's renewable deadline (nil outside Connect:
+	// a renew frame then extends nothing).
+	session *wsSession
 }
 
 // typingMinInterval is the per-connection floor between relayed typing
@@ -365,12 +369,19 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	// was lost. At the deadline the loop exits, the connection closes, and a
 	// healthy client transparently reconnects with a freshly-authenticated
 	// ticket/token — re-validating the session at least every token lifetime.
+	// A session.renew frame with a freshly minted ticket moves the deadline
+	// out (see renewSession), so a healthy client keeps this socket.
 	sessionDeadline := time.Now().Add(wsMaxSessionLifetime)
 	if claims := middleware.ClaimsFromContext(r.Context()); claims != nil && claims.ExpiresAt != nil {
 		sessionDeadline = claims.ExpiresAt.Add(wsSessionGrace)
 	}
-	ctx, cancel := context.WithDeadline(r.Context(), sessionDeadline)
+	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	session := newWSSession(sessionDeadline, cancel, func(expiresIn time.Duration) {
+		evt := mustEvent(events.NewEvent(events.EventSessionRenewed, map[string]int64{"expiresIn": expiresIn.Milliseconds()}))
+		_ = wsConnWrite(ctx, conn, mustJSON(json.Marshal(evt)))
+	})
+	defer session.stop()
 
 	// Always emit a version frame on connect. A missing version (CI
 	// build forgot to set ldflags, etc.) defaults to "dev" so the
@@ -409,6 +420,7 @@ func (h *WSHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		defer safe.Recover()
 		gate := newTypingGate()
+		gate.session = session
 		for {
 			_, data, err := conn.Read(ctx)
 			if err != nil {
@@ -520,8 +532,9 @@ func writeControlFrame(ctx context.Context, conn *websocket.Conn, eventType stri
 	return conn.Write(ctx, websocket.MessageText, data) == nil
 }
 
-// handleInbound dispatches a single client → server frame. Currently
-// only the "typing" event is recognised; everything else is ignored.
+// handleInbound dispatches a single client → server frame: typing,
+// timezone.update, session.renew and notification.ack. Anything else is
+// ignored.
 func (h *WSHandler) handleInbound(ctx context.Context, userID string, raw []byte, gate *typingGate) {
 	var msg inboundMessage
 	if err := json.Unmarshal(raw, &msg); err != nil {
@@ -535,6 +548,8 @@ func (h *WSHandler) handleInbound(ctx context.Context, userID string, raw []byte
 			gate.lastTimeZone = time.Now()
 			_, _ = h.userSvc.PatchTimeZoneIfChanged(ctx, userID, msg.TimeZone)
 		}
+	case "session.renew":
+		h.renewSession(ctx, userID, msg.Ticket, gate.session)
 	case "notification.ack":
 		// The client confirms it received (and surfaced) the desktop
 		// notification, so the deferred mobile-push fallback can stand down.

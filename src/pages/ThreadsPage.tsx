@@ -105,7 +105,13 @@ export default function ThreadsPage() {
             computeItemKey={(_, t) => threadKey(t)}
             increaseViewportBy={800}
             initialItemCount={Math.min(listedThreads.length, INITIAL_CARDS)}
-            endReached={loadMore}
+            // The next page loads once the last card renders: on screen, or
+            // within the 800px the list renders ahead. Not endReached: that
+            // only fires on a scroll, so a list that already fit the screen
+            // (a few unread threads) never went on to the rest.
+            itemsRendered={(items) => {
+              if (items.at(-1)?.index === listedThreads.length - 1) loadMore();
+            }}
             components={{ Footer: isFetchingNextPage ? ThreadsLoadingMore : undefined }}
             itemContent={(_, t) => {
               const key = threadKey(t);

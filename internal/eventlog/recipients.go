@@ -16,6 +16,13 @@ type MemberLister interface {
 	MemberIDs(ctx context.Context, channelID string) ([]string, error)
 }
 
+// ChannelGenerations reads a channel's audience generation: the shared value
+// every membership write moves (internal/cache's ChannelAudienceKey), from the
+// services and the history importer alike.
+type ChannelGenerations interface {
+	ChannelGeneration(ctx context.Context, channelID string) (string, error)
+}
+
 // ParticipantLister is the subset of ConversationStore needed to
 // resolve conversation-topic recipients.
 type ParticipantLister interface {
@@ -32,17 +39,26 @@ type Resolver struct {
 	members      MemberLister
 	participants ParticipantLister
 
-	// Optional short-TTL cache of topic → recipient IDs. The inbox fan-out
-	// otherwise re-queries DynamoDB membership on EVERY persistent event
-	// (message.new, every reaction/edit, member changes). Off by default
-	// (nil); enabled in production via SetCacheTTL. Bounded staleness means a
-	// just-joined member's inbox recipiency is fresh within ttl — and live
+	// Optional cache of topic → recipient IDs. The inbox fan-out otherwise
+	// re-queries DynamoDB membership on EVERY persistent event (message.new,
+	// every reaction/edit, member changes). Off by default (nil); enabled in
+	// production via SetCacheTTL. With channel generations wired, a channel
+	// entry is reused only while its generation is unchanged, and the TTL is
+	// just the backstop; otherwise the TTL alone bounds staleness. Live
 	// delivery (the broker subscription) is already correct on join, so this
-	// only affects reconnect replay during the brief window.
-	cache atomic.Pointer[expirable.LRU[string, []string]]
+	// only affects reconnect replay.
+	cache atomic.Pointer[expirable.LRU[string, recipients]]
+	gens  ChannelGenerations
 	// lookups collapses concurrent misses for one topic into one store query,
 	// so a burst of events on a busy channel can't stampede DynamoDB.
 	lookups singleflight.Group
+}
+
+// recipients is one cached topic: its recipient IDs and the generation they
+// were read under ("" for topics without one).
+type recipients struct {
+	ids []string
+	gen string
 }
 
 // recipientCacheMaxEntries bounds the cache: the least recently resolved
@@ -57,28 +73,49 @@ func (r *Resolver) SetCacheTTL(ttl time.Duration) {
 		r.cache.Store(nil)
 		return
 	}
-	r.cache.Store(expirable.NewLRU[string, []string](recipientCacheMaxEntries, nil, ttl))
+	r.cache.Store(expirable.NewLRU[string, recipients](recipientCacheMaxEntries, nil, ttl))
+}
+
+// SetChannelGenerations makes cached channel recipients follow the channel's
+// audience generation.
+func (r *Resolver) SetChannelGenerations(g ChannelGenerations) { r.gens = g }
+
+// generation reads topic's current generation: "" for a topic without one.
+// ok is false when it could not be read; the topic is then fetched and not
+// cached.
+func (r *Resolver) generation(ctx context.Context, topic string) (string, bool) {
+	channelID, isChannel := strings.CutPrefix(topic, "chan:")
+	if r.gens == nil || !isChannel {
+		return "", true
+	}
+	gen, err := r.gens.ChannelGeneration(ctx, channelID)
+	return gen, err == nil
 }
 
 // cachedResolve returns a cached recipient list for topic when caching is on
-// and the entry is fresh; otherwise it calls fetch, caches the result, and
-// returns it. With the cache on, concurrent misses for a topic share one
-// fetch (run with the first caller's context — the publisher's fan-out
-// context, which is already detached from any request and bounded).
-func (r *Resolver) cachedResolve(topic string, fetch func() ([]string, error)) ([]string, error) {
+// and the entry is fresh and of the current generation; otherwise it calls
+// fetch, caches the result, and returns it. The generation is read before the
+// fetch, so a change racing it moves the generation past the stored entry.
+// With the cache on, concurrent misses for a topic share one fetch (run with
+// the first caller's context — the publisher's fan-out context, which is
+// already detached from any request and bounded).
+func (r *Resolver) cachedResolve(ctx context.Context, topic string, fetch func() ([]string, error)) ([]string, error) {
 	cache := r.cache.Load()
 	if cache == nil {
 		return fetch()
 	}
-	if ids, ok := cache.Get(topic); ok {
-		return ids, nil
+	gen, ok := r.generation(ctx, topic)
+	if e, hit := cache.Get(topic); hit && ok && e.gen == gen {
+		return e.ids, nil
 	}
-	ids, err, _ := r.lookups.Do(topic, func() (any, error) {
+	ids, err, _ := r.lookups.Do(topic+"\x00"+gen, func() (any, error) {
 		ids, err := fetch()
 		if err != nil {
 			return nil, err
 		}
-		cache.Add(topic, ids)
+		if ok {
+			cache.Add(topic, recipients{ids: ids, gen: gen})
+		}
 		return ids, nil
 	})
 	if err != nil {
@@ -108,14 +145,14 @@ func (r *Resolver) Resolve(ctx context.Context, topic string) ([]string, error) 
 		if r.members == nil {
 			return nil, nil
 		}
-		return r.cachedResolve(topic, func() ([]string, error) {
+		return r.cachedResolve(ctx, topic, func() ([]string, error) {
 			return r.members.MemberIDs(ctx, strings.TrimPrefix(topic, "chan:"))
 		})
 	case strings.HasPrefix(topic, "conv:"):
 		if r.participants == nil {
 			return nil, nil
 		}
-		return r.cachedResolve(topic, func() ([]string, error) {
+		return r.cachedResolve(ctx, topic, func() ([]string, error) {
 			return r.participants.ParticipantIDs(ctx, strings.TrimPrefix(topic, "conv:"))
 		})
 	case strings.HasPrefix(topic, "user:"):

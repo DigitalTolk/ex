@@ -2968,6 +2968,11 @@ func (o *Orchestrator) disarmLeaseTimer(runID string) {
 // so the animation never blinks between refreshes. A var so tests can shrink.
 var typingTickInterval = 3 * time.Second
 
+// typingLeaseTicks is how many ticks a run's typing lease outlives its
+// holder's last renewal before another instance takes over. A var so a test
+// that shrinks the tick can keep the lease past any scheduler pause.
+var typingLeaseTicks = 2
+
 // startTypingTicker keeps the agent's typing indicator alive for as long as
 // the run is in flight — regardless of how bursty the harness's actual
 // progress events are (a model can think for 30s without emitting anything).

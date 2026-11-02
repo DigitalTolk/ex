@@ -82,6 +82,24 @@ type EmojiService struct {
 	urlCache   *presignedURLCache
 	mediaCache MediaURLCache
 	frequency  EmojiFrequencyStore
+	catalog    Cache
+}
+
+// emojiCatalogKey holds the custom emoji catalog for emojiCatalogTTL, shared
+// by all instances: every client loads it, and reloads it on each emoji
+// change. Create and Delete drop it; emojis the history importer writes show
+// within the TTL.
+const (
+	emojiCatalogKey = "emojis:catalog"
+	emojiCatalogTTL = 15 * time.Minute
+)
+
+// emojiCatalogEntry is one cached emoji. model.CustomEmoji hides ImageKey
+// from JSON, and image URLs are signed from it on every read, so it is stored
+// beside it.
+type emojiCatalogEntry struct {
+	Emoji    model.CustomEmoji `json:"emoji"`
+	ImageKey string            `json:"imageKey,omitempty"`
 }
 
 // MaxFrequentEmoji caps how many frequently-used shortcodes the service will
@@ -114,6 +132,42 @@ func (s *EmojiService) SetMediaURLCache(c MediaURLCache) { s.mediaCache = c }
 // SetFrequencyStore wires the per-user emoji-usage tracker. Optional — when
 // unset, RecordEmojiUse is a no-op and FrequentEmojis returns an empty list.
 func (s *EmojiService) SetFrequencyStore(f EmojiFrequencyStore) { s.frequency = f }
+
+// SetCatalogCache wires the shared catalog copy (emojiCatalogKey).
+func (s *EmojiService) SetCatalogCache(c Cache) { s.catalog = c }
+
+// readCatalog returns the catalog from the shared copy, or from the store
+// (filling the copy) when there is none.
+func (s *EmojiService) readCatalog(ctx context.Context) ([]*model.CustomEmoji, error) {
+	var entries []emojiCatalogEntry
+	if s.catalog != nil && s.catalog.Get(ctx, emojiCatalogKey, &entries) == nil {
+		list := make([]*model.CustomEmoji, len(entries))
+		for i := range entries {
+			list[i] = &entries[i].Emoji
+			list[i].ImageKey = entries[i].ImageKey
+		}
+		return list, nil
+	}
+	list, err := s.emojis.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("emoji: list: %w", err)
+	}
+	if s.catalog != nil {
+		entries = make([]emojiCatalogEntry, len(list))
+		for i, e := range list {
+			entries[i] = emojiCatalogEntry{Emoji: *e, ImageKey: e.ImageKey}
+		}
+		_ = s.catalog.Set(ctx, emojiCatalogKey, entries, emojiCatalogTTL)
+	}
+	return list, nil
+}
+
+// dropCatalog makes the next List read the changed catalog.
+func (s *EmojiService) dropCatalog(ctx context.Context) {
+	if s.catalog != nil {
+		_ = s.catalog.Delete(ctx, emojiCatalogKey)
+	}
+}
 
 // RecordEmojiUse increments the usage count of a picked emoji shortcode for
 // the given user. Best-effort: a nil store makes it a no-op.
@@ -217,6 +271,7 @@ func (s *EmojiService) Create(ctx context.Context, userID, name, imageKey string
 		}
 		return nil, fmt.Errorf("emoji: create: %w", err)
 	}
+	s.dropCatalog(ctx)
 
 	events.Publish(ctx, s.publisher, pubsub.GlobalEmojiEvents(), events.EventEmojiAdded, e)
 	return e, nil
@@ -339,9 +394,9 @@ func (s *EmojiService) resolveCreateImageURL(ctx context.Context, name, imageKey
 // (created before the field existed) keep their stored URL — they'll
 // need a one-time re-upload to self-heal.
 func (s *EmojiService) List(ctx context.Context) ([]*model.CustomEmoji, error) {
-	list, err := s.emojis.List(ctx)
+	list, err := s.readCatalog(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("emoji: list: %w", err)
+		return nil, err
 	}
 	if s.signer != nil {
 		for _, e := range list {
@@ -386,6 +441,7 @@ func (s *EmojiService) Delete(ctx context.Context, userID, name string) error {
 	if err := s.emojis.Delete(ctx, name); err != nil {
 		return fmt.Errorf("emoji: delete: %w", err)
 	}
+	s.dropCatalog(ctx)
 	if existing.ImageKey != "" {
 		s.urlCache.invalidate(existing.ImageKey)
 	}

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { queryKeys } from '@/lib/query-keys';
 import ChatPage from './ChatPage';
 import { useTypingStore } from '@/stores/typing';
 import { eventCallbacks, expectInvalidPayloadReported, type CapturedWSOptions } from '@/test/ws-frames';
@@ -23,7 +24,6 @@ vi.mock('@/components/layout/AppLayout', () => ({
   ),
 }));
 
-const mockMarkThreadNotificationUnread = vi.fn();
 const mockUnhideConversation = vi.fn();
 
 const {
@@ -58,9 +58,7 @@ vi.mock('@/lib/unread-cache', () => ({
 
 vi.mock('@/context/UnreadContext', () => ({
   useUnread: () => ({
-    unreadThreadNotifications: new Set(),
     hiddenConversations: new Set(),
-    markThreadNotificationUnread: mockMarkThreadNotificationUnread,
     hideConversation: vi.fn(),
     unhideConversation: mockUnhideConversation,
     setActiveChannel: vi.fn(),
@@ -721,15 +719,19 @@ describe('ChatPage WS router (browser)', () => {
   });
 
   it('onNotification routes thread vs channel-mention notifications', async () => {
-    await renderChatPage('/?thread=root-1');
+    const { qc } = await renderChatPage('/?thread=root-1');
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    const urls = () => vi.mocked(globalThis.fetch).mock.calls.map(([url]) => String(url));
     // Active-thread notification → markThreadSeen.
     lastHandlers().onNotification?.({ kind: 'mention', parentMessageID: 'root-1', parentID: 'ch-99', parentType: 'channel', createdAt: '2026-05-01T00:00:00Z' });
-    // Inactive-thread notification → markThreadNotificationUnread.
+    // Inactive-thread notification → left unread by the server's marker, which
+    // the reloaded user state brings.
     lastHandlers().onNotification?.({ kind: 'thread_reply', parentMessageID: 'root-9', parentID: 'ch-99', parentType: 'channel', createdAt: '2026-05-01T00:00:00Z' });
     // Top-level channel mention → alert only; the badge rides message.new, so the
     // notification handler must NOT touch the unread cache.
     lastHandlers().onNotification?.({ kind: 'mention', parentID: 'ch-99', parentType: 'channel', createdAt: '2026-05-01T00:00:00Z' });
-    expect(mockMarkThreadNotificationUnread).toHaveBeenCalledWith('root-9');
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.userState() });
+    expect(urls().some((url) => url.includes('/root-9/seen'))).toBe(false);
     expect(mockBumpChannelUnread).not.toHaveBeenCalled();
     expect(mockDispatchNotification).toHaveBeenCalled();
   });
