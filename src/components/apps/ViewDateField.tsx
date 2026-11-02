@@ -14,12 +14,15 @@ interface ViewDateFieldProps {
   clearable: boolean;
   invalid: boolean;
   describedBy?: string;
+  size?: 'default' | 'sm';
+  disabled?: boolean;
+  label?: string;
 }
 
 // A form's date field: shaped like every other field (FIELD_CLASS), it opens
 // ex's calendar under it. Picking a day closes it; an optional field can be
 // cleared.
-export function ViewDateField({ id, value, onChange, placeholder, clearable, invalid, describedBy }: ViewDateFieldProps) {
+export function ViewDateField({ id, value, onChange, placeholder, clearable, invalid, describedBy, size = 'default', disabled, label }: ViewDateFieldProps) {
   const [open, setOpen] = useState(false);
   const selected = parseDay(value);
   return (
@@ -27,7 +30,15 @@ export function ViewDateField({ id, value, onChange, placeholder, clearable, inv
       <Popover.Root open={open} onOpenChange={setOpen}>
         <Popover.Trigger
           id={id}
-          className={cn(FIELD_CLASS, 'flex cursor-pointer items-center gap-2 text-left', clearable && value && 'pr-9', !value && 'text-muted-foreground')}
+          disabled={disabled}
+          aria-label={label}
+          className={cn(
+            FIELD_CLASS,
+            'flex cursor-pointer items-center gap-2 text-left',
+            size === 'sm' && 'h-7 w-auto mobile:h-9',
+            clearable && value && 'pr-9',
+            !value && 'text-muted-foreground',
+          )}
           aria-invalid={invalid || undefined}
           aria-describedby={describedBy}
           data-testid={`${id}-trigger`}

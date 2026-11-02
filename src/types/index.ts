@@ -160,12 +160,44 @@ export interface TextElement {
   text: string;
 }
 
+// A small picture: a section's accessory or a context row's. The server
+// proxies it; the size is set by where it sits.
+export interface ImageElement {
+  type: 'image';
+  image_url: string;
+  alt_text: string;
+}
+
+// The elements that pick a value. In a message (actions row or accessory)
+// and in a form, using one goes to the app; the server checks every value
+// against the stored element.
+export type PickerElement =
+  | { type: 'static_select'; action_id: string; placeholder?: BlockText; options: SelectOption[]; initial_option?: SelectOption; confirm?: ConfirmDialog }
+  | {
+      type: 'multi_static_select';
+      action_id: string;
+      placeholder?: BlockText;
+      options: SelectOption[];
+      initial_options?: SelectOption[];
+      max_selected_items?: number;
+      confirm?: ConfirmDialog;
+    }
+  | { type: 'overflow'; action_id: string; options: SelectOption[]; confirm?: ConfirmDialog }
+  | { type: 'datepicker'; action_id: string; placeholder?: BlockText; initial_date?: string; confirm?: ConfirmDialog }
+  | { type: 'timepicker'; action_id: string; placeholder?: BlockText; initial_time?: string; confirm?: ConfirmDialog }
+  | { type: 'checkboxes'; action_id: string; options: SelectOption[]; initial_options?: SelectOption[]; confirm?: ConfirmDialog }
+  | { type: 'radio_buttons'; action_id: string; options: SelectOption[]; initial_option?: SelectOption; confirm?: ConfirmDialog }
+  | { type: 'users_select'; action_id: string; placeholder?: BlockText; initial_user?: string; confirm?: ConfirmDialog };
+
+export type RowElement = ButtonElement | PickerElement;
+
 export type Block =
   | { type: 'header'; block_id: string; text: BlockText }
-  | { type: 'section'; block_id: string; text?: BlockText; fields?: BlockText[]; accessory?: ButtonElement }
-  | { type: 'actions'; block_id: string; elements: ButtonElement[] }
-  | { type: 'context'; block_id: string; elements: TextElement[] }
-  | { type: 'divider'; block_id: string };
+  | { type: 'section'; block_id: string; text?: BlockText; fields?: BlockText[]; accessory?: RowElement | ImageElement }
+  | { type: 'actions'; block_id: string; elements: RowElement[] }
+  | { type: 'context'; block_id: string; elements: (TextElement | ImageElement)[] }
+  | { type: 'divider'; block_id: string }
+  | { type: 'image'; block_id: string; image_url: string; alt_text: string; text?: BlockText; image_width?: number; image_height?: number };
 
 // ---- Forms (an app's view: a dialog the app opens for the person who
 // clicked). Its blocks are message blocks plus input fields.
@@ -173,6 +205,10 @@ export type Block =
 export interface SelectOption {
   text: BlockText;
   value: string;
+  // A second line (checkboxes, radio buttons).
+  description?: BlockText;
+  // An overflow option that opens a link instead.
+  url?: string;
 }
 
 export type InputElement =
@@ -185,8 +221,18 @@ export type InputElement =
       min_length?: number;
       max_length?: number;
     }
-  | { type: 'datepicker'; action_id: string; placeholder?: BlockText; initial_date?: string }
-  | { type: 'static_select'; action_id: string; placeholder?: BlockText; options: SelectOption[]; initial_option?: SelectOption };
+  | {
+      type: 'number_input';
+      action_id: string;
+      placeholder?: BlockText;
+      initial_value?: string;
+      is_decimal_allowed?: boolean;
+      min_value?: string;
+      max_value?: string;
+    }
+  | { type: 'email_text_input' | 'url_text_input'; action_id: string; placeholder?: BlockText; initial_value?: string }
+  | { type: 'multi_users_select'; action_id: string; placeholder?: BlockText; initial_users?: string[]; max_selected_items?: number }
+  | Exclude<PickerElement, { type: 'overflow' }>;
 
 export interface InputBlock {
   type: 'input';
@@ -194,6 +240,8 @@ export interface InputBlock {
   label: BlockText;
   hint?: BlockText;
   optional?: boolean;
+  // Changes go to the app as they happen, so it can reshape the form.
+  dispatch_action?: boolean;
   element: InputElement;
 }
 
@@ -209,6 +257,10 @@ export interface AppView {
   blocks: ViewBlock[];
   private_metadata?: string;
   external_id?: string;
+  notify_on_close?: boolean;
+  // A pushed form's place in its stack: the form under it, and the first.
+  previous_view_id?: string;
+  root_view_id?: string;
   hash: string;
 }
 
@@ -222,9 +274,11 @@ export interface AppViewEvent {
 
 // What a submission came to (POST /api/v1/views/{id}/submit).
 export interface ViewSubmitResult {
-  action: 'close' | 'errors' | 'update' | 'keep';
+  action: 'close' | 'errors' | 'update' | 'push' | 'keep';
   errors?: Record<string, string>;
   view?: AppView;
+  // A close that closes the whole stack.
+  cleared?: boolean;
   notice?: string;
   failed?: boolean;
 }
@@ -366,7 +420,11 @@ export interface IncomingWebhook {
   createdAt: string;
   updatedAt: string;
   url?: string;
-  // Interactivity: where the app receives clicks, and what has been issued
+  // 'rich': an app's webhook (blocks, buttons, forms, a bot token). Absent:
+  // a classic webhook, which posts text and cards as webhooks always have.
+  // Chosen at creation; never changes.
+  kind?: string;
+  // Interactivity (rich webhooks only): where the app receives clicks, and what has been issued
   // (the values are shown once, when issued, and never again).
   interactivityURL?: string;
   emailSharing?: boolean;
@@ -377,7 +435,7 @@ export interface IncomingWebhook {
 
 export interface InteractionEntry {
   at: string;
-  kind: 'click' | 'response_url' | 'test';
+  kind: 'click' | 'response_url' | 'test' | 'view_submission' | 'view_closed' | 'api';
   userID?: string;
   actionID?: string;
   result: 'ok' | 'failed' | 'timeout';

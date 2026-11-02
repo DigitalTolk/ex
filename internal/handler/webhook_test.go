@@ -115,8 +115,13 @@ func TestWebhookHandlerAdminCRUDAndExecute(t *testing.T) {
 		"attachments":[{"title":"Result","text":"passed","image_url":"https://cdn.example/result.png"}],
 		"type":"ignored",
 		"props":{"ignored":true},
-		"priority":{"priority":"important"}
+		"priority":{"priority":"important"},
+		"blocks":[{"type":"actions","elements":[{"type":"button","action_id":"go","text":{"type":"plain_text","text":"Go"}}]}]
 	}`))
+	// A classic webhook (the default) posts as it always did: blocks — even a
+	// button that would call an app — and a sender's own Authorization header
+	// are ignored, never a reason to refuse the post.
+	executeReq.Header.Set("Authorization", "Bearer some-other-services-token")
 	executeReq.SetPathValue("id", created.ID)
 	executeRes := httptest.NewRecorder()
 	h.Execute(executeRes, executeReq)
@@ -138,6 +143,9 @@ func TestWebhookHandlerAdminCRUDAndExecute(t *testing.T) {
 		}
 		if len(msg.MessageAttachments) != 1 || msg.MessageAttachments[0].ImageURL != "proxied:https://cdn.example/result.png" {
 			t.Fatalf("message attachments = %#v", msg.MessageAttachments)
+		}
+		if len(msg.Blocks) != 0 || msg.AppButtons {
+			t.Fatalf("classic webhook kept blocks %#v / appButtons %v", msg.Blocks, msg.AppButtons)
 		}
 	}
 

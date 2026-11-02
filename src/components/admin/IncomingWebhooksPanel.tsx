@@ -24,6 +24,7 @@ const EMPTY_FORM = {
   lockToChannel: true,
   username: '',
   profileImageURL: '',
+  kind: '',
 };
 
 export function IncomingWebhooksPanel() {
@@ -77,6 +78,7 @@ export function IncomingWebhooksPanel() {
       lockToChannel: wh.lockToChannel,
       username: wh.username ?? '',
       profileImageURL: wh.profileImageURL ?? '',
+      kind: wh.kind ?? '',
     });
   }
 
@@ -92,7 +94,7 @@ export function IncomingWebhooksPanel() {
     if (editingID) {
       update.mutate({ id: editingID, input }, { onSuccess: resetForm });
     } else {
-      create.mutate(input, { onSuccess: resetForm });
+      create.mutate(form.kind ? { ...input, kind: form.kind } : input, { onSuccess: resetForm });
     }
   }
 
@@ -111,6 +113,20 @@ export function IncomingWebhooksPanel() {
                 {ch.name}
               </option>
             ))}
+          </NativeSelect>
+        </div>
+        <div className="space-y-2 md:col-span-2">
+          <Label htmlFor="webhook-kind">Type</Label>
+          {/* Fixed at creation: an existing webhook's senders keep posting
+              exactly what they always did. */}
+          <NativeSelect
+            id="webhook-kind"
+            value={form.kind}
+            onChange={(e) => set('kind', e.target.value)}
+            disabled={!!editingID}
+          >
+            <option value="">Classic — text and cards</option>
+            <option value="rich">Rich — an app's blocks, buttons and forms</option>
           </NativeSelect>
         </div>
         <div className="space-y-2 md:col-span-2">
@@ -161,7 +177,12 @@ export function IncomingWebhooksPanel() {
           <div key={wh.id} className="space-y-2 rounded-md border p-3">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="truncate text-sm font-medium">{wh.title}</p>
+                <p className="flex min-w-0 items-center gap-2 text-sm font-medium">
+                  <span className="truncate">{wh.title}</span>
+                  {wh.kind === 'rich' && (
+                    <span className="shrink-0 rounded bg-muted px-1.5 text-xs font-medium leading-5 text-muted-foreground">Rich</span>
+                  )}
+                </p>
                 <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-muted-foreground">
                   <span>~{wh.channelSlug || wh.channelName || wh.channelID}</span>
                   <span aria-hidden>·</span>
@@ -196,7 +217,7 @@ export function IncomingWebhooksPanel() {
                 <CopyButton value={wh.url} label={`Copy ${wh.title} URL`} />
               </div>
             )}
-            <InteractivitySettings webhook={wh} />
+            {wh.kind === 'rich' && <InteractivitySettings webhook={wh} />}
           </div>
         ))}
       </div>

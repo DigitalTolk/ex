@@ -1163,6 +1163,11 @@ export const BlockHeader = "header";
  */
 export const BlockInput = "input";
 /**
+ * BlockImage is a picture with alt text and an optional title, drawn
+ * through ex's image proxy.
+ */
+export const BlockImage = "image";
+/**
  * Text kinds. "mrkdwn" is accepted from Slack-shaped payloads and stored as
  * "markdown": both mean ex markdown (**bold**), not Slack's *bold*.
  */
@@ -1178,27 +1183,99 @@ export const TextMarkdown = "markdown";
  */
 export const TextMrkdwn = "mrkdwn";
 /**
- * ElementButton is the one interactive element of phase 1.
+ * ElementButton is a button: a link, a built-in action, or a call to the app.
  */
 export const ElementButton = "button";
 /**
- * Input elements: a form field's one element.
+ * ElementImage is a small picture: a section's accessory or a context row's.
+ */
+export const ElementImage = "image";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
  */
 export const ElementPlainTextInput = "plain_text_input";
 /**
- * Input elements: a form field's one element.
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementNumberInput = "number_input";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementEmailInput = "email_text_input";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementURLInput = "url_text_input";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
  */
 export const ElementDatepicker = "datepicker";
 /**
- * Input elements: a form field's one element.
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementTimepicker = "timepicker";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
  */
 export const ElementStaticSelect = "static_select";
 /**
- * SelectOption is one choice of a static_select.
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementMultiStaticSelect = "multi_static_select";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementUsersSelect = "users_select";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementMultiUsersSelect = "multi_users_select";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementCheckboxes = "checkboxes";
+/**
+ * Elements that take a value. Each one can sit in a form field; the ones
+ * IsMessageInteractive names can also sit in a message's actions row or a
+ * section's accessory, where using them calls the app.
+ */
+export const ElementRadioButtons = "radio_buttons";
+/**
+ * ElementOverflow is a ⋯ menu of up to five options (messages only).
+ */
+export const ElementOverflow = "overflow";
+/**
+ * SelectOption is one choice of a select, overflow menu, checkbox or radio
+ * group. Description is a second line (checkboxes and radios); URL makes an
+ * overflow option open a link (http or https only).
  */
 export interface SelectOption {
   text: TextObject;
   value: string;
+  description?: TextObject;
+  url?: string;
 }
 /**
  * Button styles.
@@ -1275,6 +1352,28 @@ export interface BlockElement {
   initial_date?: string;
   options?: SelectOption[];
   initial_option?: SelectOption;
+  /**
+   * More value elements: InitialOptions (multi-select, checkboxes),
+   * InitialTime (HH:MM), InitialUser(s) (ex user IDs), MaxSelectedItems
+   * (multi-selects), and a number field's IsDecimalAllowed and Min/Max
+   * (decimal strings, as Slack has them).
+   */
+  initial_options?: SelectOption[];
+  initial_time?: string;
+  initial_user?: string;
+  initial_users?: string[];
+  max_selected_items?: number /* int */;
+  is_decimal_allowed?: boolean;
+  min_value?: string;
+  max_value?: string;
+  /**
+   * An image element: its proxied URL, alt text and (once ex has fetched
+   * it) intrinsic size.
+   */
+  image_url?: string;
+  alt_text?: string;
+  image_width?: number /* int */;
+  image_height?: number /* int */;
 }
 /**
  * Block is one piece of a message's layout.
@@ -1284,7 +1383,9 @@ export interface BlockElement {
  *   - divider: a rule.
  *   - header: Text, plain.
  *   - input (forms only): Label, an optional Hint, Optional, and one
- *     input Element.
+ *     input Element; DispatchAction sends each change to the app.
+ *   - image: ImageURL, AltText, an optional plain Title (Text), and the
+ *     intrinsic size ex measured.
  */
 export interface Block {
   type: string;
@@ -1297,6 +1398,18 @@ export interface Block {
   hint?: TextObject;
   optional?: boolean;
   element?: BlockElement;
+  /**
+   * DispatchAction (input only) sends the field's changes to the app as
+   * they happen, so it can reshape the form.
+   */
+  dispatch_action?: boolean;
+  /**
+   * Image block.
+   */
+  image_url?: string;
+  alt_text?: string;
+  image_width?: number /* int */;
+  image_height?: number /* int */;
 }
 /**
  * Blocks is a message's (or an attachment's) layout. DynamoDB stores it as
@@ -2087,6 +2200,11 @@ export const InteractionSubmission = "view_submission";
  * Interaction kinds and results, as the webhooks panel's history lists them.
  */
 export const InteractionAPI = "api";
+/**
+ * InteractionClosed is a form closed without submitting, told to the
+ * app because the form asked (notify_on_close).
+ */
+export const InteractionClosed = "view_closed";
 /**
  * Interaction kinds and results, as the webhooks panel's history lists them.
  */
@@ -2881,6 +2999,17 @@ export interface View {
   private_metadata?: string;
   external_id?: string;
   /**
+   * NotifyOnClose has ex tell the app (view_closed) when the person
+   * closes the form without submitting it.
+   */
+  notify_on_close?: boolean;
+  /**
+   * PreviousViewID / RootViewID place a pushed form in its stack: the
+   * form under it, and the first form. Set by ex.
+   */
+  previous_view_id?: string;
+  root_view_id?: string;
+  /**
    * Hash changes with every update; an app's views.update naming an old
    * hash is refused, so two updates can't silently overwrite each other.
    */
@@ -2897,6 +3026,11 @@ export interface StoredView {
   userID: string;
   clickID?: string;
   iconEmoji?: string;
+  /**
+   * Depth is the form's place in its stack: 0 for the first, 1 for one
+   * pushed on it, and so on.
+   */
+  depth?: number /* int */;
   openedAt: string /* RFC3339 */;
 }
 /**
@@ -2913,6 +3047,11 @@ export interface TriggerRecord {
    * the same face.
    */
   iconEmoji?: string;
+  /**
+   * ViewID is the form the interaction came from, when it did: only a
+   * trigger from a form can push another form on top of it.
+   */
+  viewID?: string;
 }
 
 //////////
@@ -2932,7 +3071,17 @@ export interface IncomingWebhook {
   createdAt: string /* RFC3339 */;
   updatedAt: string /* RFC3339 */;
   /**
-   * Interactivity: an app that gets the clicks on its messages' buttons.
+   * Kind is chosen when the webhook is created and never changes. A classic
+   * webhook ("") posts text and Slack-style cards exactly as webhooks always
+   * have: blocks and an Authorization header in its payloads are ignored. A
+   * rich webhook (WebhookKindRich) is an app's: blocks, buttons, forms, a
+   * bot token and interactivity. Keeping the two apart means no existing
+   * sender's posts change shape — or start being refused — because rich
+   * messages exist.
+   */
+  kind?: string;
+  /**
+   * Interactivity (rich webhooks only): an app that gets the clicks on its messages' buttons.
    * InteractivityURL is where ex sends them; empty means the webhook only
    * posts.
    */
@@ -2954,3 +3103,7 @@ export interface IncomingWebhook {
   hasBotToken?: boolean;
   hasSigningSecret?: boolean;
 }
+/**
+ * WebhookKindRich marks a rich webhook (see IncomingWebhook.Kind).
+ */
+export const WebhookKindRich = "rich";

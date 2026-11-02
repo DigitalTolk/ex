@@ -28,7 +28,7 @@ const actionAttempts = 4
 
 // AppClicker sends a click on an app button to the app (InteractionService).
 type AppClicker interface {
-	Click(ctx context.Context, msg *model.Message, parentType string, button model.BlockElement, blockID, userID string) (*AppClickResult, error)
+	Click(ctx context.Context, msg *model.Message, parentType string, element model.BlockElement, blockID, userID string, value RawValue) (*AppClickResult, error)
 }
 
 // SetAppClicker wires the service that sends app buttons' clicks.
@@ -43,8 +43,8 @@ type ActResult struct {
 	Failed bool `json:"failed,omitempty"`
 }
 
-// ButtonAt finds the button named (blockID, actionID) among the message's
-// blocks and its cards' blocks.
+// ButtonAt finds the element named (blockID, actionID) — a button, or a
+// picker the app gave the message — among its blocks and its cards'.
 func ButtonAt(m *model.Message, blockID, actionID string) (model.BlockElement, bool) {
 	find := func(blocks model.Blocks) (model.BlockElement, bool) {
 		for _, b := range blocks {
@@ -55,7 +55,7 @@ func ButtonAt(m *model.Message, blockID, actionID string) (model.BlockElement, b
 				return *b.Accessory, true
 			}
 			for _, e := range b.Elements {
-				if e.Type == model.ElementButton && e.ActionID == actionID {
+				if (e.Type == model.ElementButton || model.IsMessageInteractive(e.Type)) && e.ActionID == actionID {
 					return e, true
 				}
 			}
@@ -86,6 +86,13 @@ func MayClick(e model.BlockElement, userID string) bool {
 // are applied here; the result is broadcast like any change to the message,
 // but marks it neither edited nor unread.
 func (s *MessageService) Act(ctx context.Context, userID, parentID, parentType, msgID, blockID, actionID string) (*ActResult, error) {
+	return s.ActWithValue(ctx, userID, parentID, parentType, msgID, blockID, actionID, nil)
+}
+
+// ActWithValue is Act for an element that takes a value — a select, a
+// picker, checkboxes: value is what the person picked, which the app gets
+// only once it is checked against the stored element.
+func (s *MessageService) ActWithValue(ctx context.Context, userID, parentID, parentType, msgID, blockID, actionID string, value RawValue) (*ActResult, error) {
 	if err := s.checkWriteAccess(ctx, userID, parentID, parentType); err != nil {
 		return nil, err
 	}
@@ -108,10 +115,12 @@ func (s *MessageService) Act(ctx context.Context, userID, parentID, parentType, 
 			return nil, apperr.Forbidden("this button isn't for you")
 		}
 		switch {
+		case button.Type == model.ElementImage:
+			return nil, apperr.Invalid("an image isn't something to click")
 		case button.URL != "":
 			return nil, apperr.Invalid("a link button opens its link")
 		case button.ExAction == "":
-			return s.clickApp(ctx, msg, parentType, button, blockID, userID)
+			return s.clickApp(ctx, msg, parentType, button, blockID, userID, value)
 		}
 		prev := msg.Version
 		if !applyBuiltInAction(msg, blockID, actionID, button.ExAction, userID, time.Now()) {
@@ -137,11 +146,11 @@ func (s *MessageService) Act(ctx context.Context, userID, parentID, parentType, 
 
 // clickApp hands a click on an app button to the app. The answer is the
 // message as the app left it, or as it was when the app changed nothing.
-func (s *MessageService) clickApp(ctx context.Context, msg *model.Message, parentType string, button model.BlockElement, blockID, userID string) (*ActResult, error) {
+func (s *MessageService) clickApp(ctx context.Context, msg *model.Message, parentType string, button model.BlockElement, blockID, userID string, value RawValue) (*ActResult, error) {
 	if s.apps == nil {
 		return nil, apperr.Reject(ErrAppNotSetUp, "this app isn't set up for buttons")
 	}
-	res, err := s.apps.Click(ctx, msg, parentType, button, blockID, userID)
+	res, err := s.apps.Click(ctx, msg, parentType, button, blockID, userID, value)
 	if err != nil {
 		return nil, err
 	}

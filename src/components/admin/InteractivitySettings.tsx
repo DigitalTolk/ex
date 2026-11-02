@@ -291,7 +291,14 @@ function TestInteraction({ webhookID, ready }: { webhookID: string; ready: boole
 
 const whenFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-const kindLabel: Record<InteractionEntry['kind'], string> = { click: 'Click', response_url: 'Response URL', test: 'Test' };
+const kindLabel: Record<InteractionEntry['kind'], string> = {
+  click: 'Click',
+  response_url: 'Response URL',
+  test: 'Test',
+  view_submission: 'Form sent',
+  view_closed: 'Form closed',
+  api: 'API call',
+};
 
 function History({ entries }: { entries: InteractionEntry[] }) {
   if (entries.length === 0) {

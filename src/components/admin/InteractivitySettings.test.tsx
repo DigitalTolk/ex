@@ -318,13 +318,16 @@ describe('InteractivitySettings', () => {
             { at: '2026-10-30T10:00:00Z', kind: 'click', actionID: 'approve', result: 'ok', status: 200, latencyMs: 12 },
             { at: '2026-10-30T09:00:00Z', kind: 'response_url', result: 'failed', latencyMs: 0, error: 'used up' },
             { at: '2026-10-30T08:00:00Z', kind: 'test', actionID: 'test', result: 'timeout', latencyMs: 3000 },
+            { at: '2026-10-30T07:00:00Z', kind: 'view_submission', actionID: 'booking', result: 'ok', status: 200, latencyMs: 40 },
+            { at: '2026-10-30T06:00:00Z', kind: 'view_closed', result: 'ok', status: 200, latencyMs: 8 },
+            { at: '2026-10-30T05:00:00Z', kind: 'api', actionID: 'views.open', result: 'failed', latencyMs: 2, error: 'trigger expired' },
           ],
         },
       ),
     );
     renderSettings();
     open();
-    fireEvent.click(await screen.findByText('Recent interactions (3)'));
+    fireEvent.click(await screen.findByText('Recent interactions (6)'));
     const rows = screen.getAllByTestId('interaction-row');
     expect(rows[0]).toHaveTextContent('Click · approve');
     expect(rows[0]).toHaveTextContent('OK');
@@ -335,5 +338,11 @@ describe('InteractivitySettings', () => {
     expect(rows[2]).not.toHaveTextContent('· test');
     expect(rows[2]).toHaveTextContent('Timed out');
     expect(rows[2]).toHaveTextContent('3000');
+    // A form's submission and dismissal, and the app's own calls to ex.
+    expect(rows[3]).toHaveTextContent('Form sent · booking');
+    expect(rows[4]).toHaveTextContent('Form closed');
+    expect(rows[4]).not.toHaveTextContent('·');
+    expect(rows[5]).toHaveTextContent('API call · views.open');
+    expect(rows[5]).toHaveTextContent('Failedtrigger expired');
   });
 });

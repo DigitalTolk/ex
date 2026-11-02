@@ -10,6 +10,7 @@ import './AppViewDialog';
 
 const mockApiFetch = vi.hoisted(() => vi.fn(() => Promise.resolve([])));
 vi.mock('@/lib/api', () => ({ apiFetch: () => mockApiFetch() }));
+vi.mock('@/context/AuthContext', () => ({ useAuth: () => ({ user: { id: 'u-alice' } }) }));
 
 const view = { id: 'V1', type: 'modal' as const, title: { type: 'plain_text' as const, text: 'Reschedule A3' }, blocks: [], hash: 'h1' };
 

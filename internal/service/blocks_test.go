@@ -47,19 +47,19 @@ func wantInvalid(t *testing.T, err error, fragment string) {
 
 func TestNormalizeBlocks_KeepsWhatExDrawsAndNamesIt(t *testing.T) {
 	out, err := normalizeOne(t, model.Blocks{
-		{Type: "image"}, // not drawn by ex: skipped
+		{Type: "video"}, // not drawn by ex: skipped
 		{Type: model.BlockHeader, Text: md("Review **now**")},
 		{Type: model.BlockSection, BlockID: "b2", Text: md("hi <!here>"), Fields: []model.TextObject{{Type: "weird", Text: "f"}},
 			Accessory: &model.BlockElement{Type: model.ElementButton, Text: md("Go"), URL: "https://ex.test/x"}},
-		{Type: model.BlockSection, Text: plain("no button"), Accessory: &model.BlockElement{Type: "datepicker"}},
+		{Type: model.BlockSection, Text: plain("no button"), Accessory: &model.BlockElement{Type: "workflow_button"}},
 		{Type: model.BlockActions, Elements: []model.BlockElement{
-			{Type: "static_select"}, // skipped
+			{Type: "conversations_select"}, // not drawn by ex: skipped
 			{Type: model.ElementButton, ActionID: "a1", Text: plain("given a1"), Style: model.ButtonDanger},
 			{Type: model.ElementButton, Text: plain("named a2"), ExAction: model.ExActionVote},
 			{Type: model.ElementButton, Text: plain("ack"), ExAction: model.ExActionAck, Style: model.ButtonPrimary,
 				Confirm: &model.ConfirmDialog{Text: model.TextObject{Text: "Really?"}}},
 		}},
-		{Type: model.BlockActions, Elements: []model.BlockElement{{Type: "overflow"}}}, // empty after skipping: dropped
+		{Type: model.BlockActions, Elements: []model.BlockElement{{Type: "channels_select"}}}, // empty after skipping: dropped
 		{Type: model.BlockContext, Elements: []model.BlockElement{{Type: model.ElementButton}, {Type: model.TextMarkdown, Content: " "}, {Type: model.TextMrkdwn, Content: "_by_ <!here>"}}},
 		{Type: model.BlockContext, Elements: []model.BlockElement{{Type: model.TextPlain, Content: ""}}}, // empty: dropped
 		{Type: model.BlockDivider},
@@ -84,7 +84,7 @@ func TestNormalizeBlocks_KeepsWhatExDrawsAndNamesIt(t *testing.T) {
 		t.Fatalf("accessory: %#v", acc)
 	}
 	if out[2].Accessory != nil {
-		t.Fatalf("a non-button accessory must be dropped: %#v", out[2].Accessory)
+		t.Fatalf("an accessory ex doesn't draw must be dropped: %#v", out[2].Accessory)
 	}
 	row := out[3].Elements
 	if len(row) != 3 || row[0].ActionID != "a1" || row[1].ActionID != "a2" || row[2].ActionID != "a3" {
@@ -102,7 +102,7 @@ func TestNormalizeBlocks_KeepsWhatExDrawsAndNamesIt(t *testing.T) {
 }
 
 func TestNormalizeBlocks_NothingDrawnIsNoBlocks(t *testing.T) {
-	out, err := normalizeOne(t, model.Blocks{{Type: "image"}})
+	out, err := normalizeOne(t, model.Blocks{{Type: "video"}})
 	if err != nil || out != nil {
 		t.Fatalf("got %#v %v", out, err)
 	}
@@ -194,7 +194,7 @@ func TestNormalizeBlocks_Refusals(t *testing.T) {
 		{"field too long", model.Blocks{{Type: model.BlockSection, Fields: []model.TextObject{{Text: long(maxFieldChars + 1)}}}}, "blocks[0].fields[0]"},
 		{"empty section", model.Blocks{section(" ")}, "a section needs text or fields"},
 		{"bad accessory", model.Blocks{{Type: model.BlockSection, Text: plain("t"), Accessory: &model.BlockElement{Type: model.ElementButton}}}, "accessory.elements[0]: a button needs a label"},
-		{"too many buttons", model.Blocks{row(buttons...)}, "at most 25 buttons"},
+		{"too many buttons", model.Blocks{row(buttons...)}, "a row can hold at most 25 elements"},
 		{"action ID twice", model.Blocks{row(btn("x", "a"), btn("x", "b"))}, `action_id "x" is used twice`},
 		{"label too long", model.Blocks{withBtn(func(b *model.BlockElement) { b.Text = plain(long(maxButtonLabelChars + 1)) })}, "longer than 75"},
 		{"action ID too long", model.Blocks{withBtn(func(b *model.BlockElement) { b.ActionID = long(maxBlockIDChars + 1) })}, "action_id is longer than 255"},
@@ -211,7 +211,7 @@ func TestNormalizeBlocks_Refusals(t *testing.T) {
 		})}, "longer than 300"},
 		{"too many allowed users", model.Blocks{withBtn(func(b *model.BlockElement) { b.AllowedUsers = tooMany })}, "at most 50 people"},
 		{"allowed users naming nobody", model.Blocks{withBtn(func(b *model.BlockElement) { b.AllowedUsers = []string{"who@else.test"} })}, "names no ex user"},
-		{"too many contexts", model.Blocks{{Type: model.BlockContext, Elements: texts}}, "at most 10 texts"},
+		{"too many contexts", model.Blocks{{Type: model.BlockContext, Elements: texts}}, "a context row can hold at most 10 elements"},
 		{"context too long", model.Blocks{{Type: model.BlockContext, Elements: []model.BlockElement{{Type: model.TextPlain, Content: long(maxContextChars + 1)}}}}, "blocks[0].elements[0]"},
 	}
 	for _, c := range cases {

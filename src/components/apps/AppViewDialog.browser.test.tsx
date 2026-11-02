@@ -14,6 +14,7 @@ const mockApiFetch = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api', () => ({ apiFetch: (...args: unknown[]) => mockApiFetch(...args) }));
 const mockToast = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/toast', () => ({ showToast: (...args: unknown[]) => mockToast(...args) }));
+vi.mock('@/context/AuthContext', () => ({ useAuth: () => ({ user: { id: 'u-alice' } }) }));
 
 const text = (t: string) => ({ type: 'plain_text' as const, text: t });
 const view: AppView = {
@@ -98,7 +99,22 @@ describe('an app form in a real browser', () => {
 
     answers.push({ action: 'close', notice: 'Moved to Fri 20 Nov' });
     await userEvent.click(submitButton()!);
-    await vi.waitFor(() => expect(useAppViewStore.getState().current).toBeNull());
+    // Sent: the form says so, with the app's note and what went — then Done
+    // (the footer's, or the top bar's on a phone) closes it.
+    await vi.waitFor(() => expect(el('app-view-sent')).not.toBeNull());
+    const status = Array.from(el('app-view-sent')!.querySelectorAll('[role="status"] p')).map((p) => p.textContent);
+    expect(status).toEqual(['Sent to MeetingMind', 'Moved to Fri 20 Nov']);
+    const shownAnswers = Array.from(el('app-view-sent')!.querySelectorAll('dt')).map((dt) => [dt.textContent, dt.nextElementSibling?.textContent]);
+    expect(shownAnswers).toEqual([
+      ['Reason', 'Out sick'],
+      ['New date', new Date(2026, 10, 20).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })],
+      ['Room', 'Room B'],
+    ]);
+    expect(mockToast).not.toHaveBeenCalled();
+    const done = onPhone() ? document.querySelector<HTMLButtonElement>('[data-slot="dialog-mobile-action"]') : el<HTMLButtonElement>('app-view-done');
+    expect(done).toHaveTextContent('Done');
+    await userEvent.click(done!);
+    await vi.waitFor(() => expect(useAppViewStore.getState().stack).toEqual([]));
     await vi.waitFor(() => expect(el('app-view-dialog')).toBeNull());
 
     const sent = mockApiFetch.mock.calls.filter(([path]) => path === '/api/v1/views/V1/submit').map(([, init]) => JSON.parse(init.body).values);
@@ -106,6 +122,5 @@ describe('an app form in a real browser', () => {
       { reason: { value: 'Out sick' }, when: { day: '2026-11-19' }, room: { room: 'b' } },
       { reason: { value: 'Out sick' }, when: { day: '2026-11-20' }, room: { room: 'b' } },
     ]);
-    expect(mockToast).toHaveBeenCalledWith('Moved to Fri 20 Nov', 'success');
   });
 });

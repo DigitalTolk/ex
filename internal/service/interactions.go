@@ -41,6 +41,9 @@ var (
 	ErrBotTokenRequired = errors.New("bot token required")
 	// ErrInvalidBotToken: the bot token sent isn't this app's.
 	ErrInvalidBotToken = errors.New("invalid bot token")
+	// ErrNotRichWebhook: interactivity (buttons, forms, a bot token) is a
+	// rich webhook's; a classic webhook only posts.
+	ErrNotRichWebhook = errors.New("not a rich webhook")
 	// ErrAppVersionConflict: the app's change was made on a version of the
 	// message that is no longer current (if_version).
 	ErrAppVersionConflict = errors.New("version conflict")
@@ -84,6 +87,8 @@ type AppInteractionState interface {
 	GetView(ctx context.Context, id string) (*model.StoredView, error)
 	ViewIDByExternalID(ctx context.Context, webhookID, externalID string) (string, error)
 	DeleteView(ctx context.Context, v *model.StoredView) error
+	// TakeView deletes v and reports whether this call was the one that did.
+	TakeView(ctx context.Context, v *model.StoredView) (bool, error)
 	DropViewExternalID(ctx context.Context, webhookID, externalID, viewID string) error
 	ClaimIdempotencyKey(ctx context.Context, scope, key string, ttl time.Duration) ([]byte, bool, error)
 	FinishIdempotencyKey(ctx context.Context, scope, key string, answer []byte, ttl time.Duration) error
@@ -146,6 +151,9 @@ type InteractionService struct {
 	now             func() time.Time
 	// timeout is how long a click waits for the app (appClickTimeout).
 	timeout time.Duration
+	// async runs what nobody waits for (view_closed): a goroutine, or
+	// inline in tests.
+	async func(func())
 
 	mu       sync.Mutex
 	inFlight map[string]int
@@ -177,6 +185,7 @@ func NewInteractionService(messages *MessageService, webhooks *IncomingWebhookSe
 		},
 		now:      time.Now,
 		timeout:  appClickTimeout,
+		async:    func(f func()) { go f() },
 		inFlight: map[string]int{},
 	}
 	// The same guard as connectors' calls: every dial is checked (so DNS
@@ -202,7 +211,7 @@ func appName(wh *model.IncomingWebhook) string {
 // Click sends userID's click on an app button to the app and applies its
 // answer. A slow or failing app costs the clicker a notice, never an error:
 // nothing else changes.
-func (s *InteractionService) Click(ctx context.Context, msg *model.Message, parentType string, button model.BlockElement, blockID, userID string) (*AppClickResult, error) {
+func (s *InteractionService) Click(ctx context.Context, msg *model.Message, parentType string, button model.BlockElement, blockID, userID string, value RawValue) (*AppClickResult, error) {
 	if !msg.AppButtons {
 		return nil, apperr.Reject(ErrAppNotSetUp, "this app isn't set up for buttons")
 	}
@@ -216,12 +225,17 @@ func (s *InteractionService) Click(ctx context.Context, msg *model.Message, pare
 	if ok, err := s.limiter.AllowClick(ctx, "click:"+wh.ID+":"+userID); err == nil && !ok {
 		return nil, apperr.Reject(ErrClickRateLimited, "too many clicks, try again shortly")
 	}
+	// Checked once the click is within budget: a pick can cost lookups.
+	action, err := s.actionFor(ctx, button, blockID, value, s.pickableUser(ctx))
+	if err != nil {
+		return nil, err
+	}
 	if !s.acquire(wh.ID) {
 		return nil, apperr.Reject(ErrAppBusy, "%s is busy, try again shortly", appName(wh))
 	}
 	defer s.release(wh.ID)
 
-	payload := s.clickPayload(ctx, wh, msg, parentType, button, blockID, userID)
+	payload := s.clickPayload(ctx, wh, msg, parentType, action, userID)
 	reply, status, latency, sendErr := s.send(ctx, wh, payload)
 	entry := model.InteractionEntry{At: s.now(), Kind: model.InteractionClick, UserID: userID, ActionID: button.ActionID, Status: status, LatencyMs: latency.Milliseconds()}
 	if sendErr != nil || status < 200 || status > 299 {
@@ -345,8 +359,9 @@ type interactionChannel struct {
 
 type interactionContainer struct {
 	Type      string `json:"type"`
-	MessageID string `json:"message_id"`
-	ChannelID string `json:"channel_id"`
+	MessageID string `json:"message_id,omitempty"`
+	ChannelID string `json:"channel_id,omitempty"`
+	ViewID    string `json:"view_id,omitempty"`
 }
 
 type interactionMessage struct {
@@ -357,13 +372,47 @@ type interactionMessage struct {
 	Attachments []model.MessageAttachment `json:"attachments,omitempty"`
 }
 
+// interactionAction is the element used and what was picked, in Slack's
+// shape: a button's stored value, or a picker's selection — checked against
+// the stored element (actionFor).
 type interactionAction struct {
-	Type     string            `json:"type"`
-	ActionID string            `json:"action_id"`
-	BlockID  string            `json:"block_id"`
-	Value    string            `json:"value,omitempty"`
-	Text     *model.TextObject `json:"text,omitempty"`
-	ActionAt time.Time         `json:"action_at"`
+	Type            string               `json:"type"`
+	ActionID        string               `json:"action_id"`
+	BlockID         string               `json:"block_id"`
+	Value           string               `json:"value,omitempty"`
+	Text            *model.TextObject    `json:"text,omitempty"`
+	SelectedOption  *model.SelectOption  `json:"selected_option,omitempty"`
+	SelectedOptions []model.SelectOption `json:"selected_options,omitempty"`
+	SelectedDate    *string              `json:"selected_date,omitempty"`
+	SelectedTime    *string              `json:"selected_time,omitempty"`
+	SelectedUser    *string              `json:"selected_user,omitempty"`
+	SelectedUsers   []string             `json:"selected_users,omitempty"`
+	ActionAt        time.Time            `json:"action_at"`
+}
+
+// actionFor is the action an element's use sends the app. A button sends
+// its stored value; a picker sends what was picked, refused unless it is a
+// value the stored element can hold. A single choice can't be empty; a list
+// (checkboxes, multi-selects) can — everything unticked.
+func (s *InteractionService) actionFor(ctx context.Context, el model.BlockElement, blockID string, raw RawValue, users userCheck) (interactionAction, error) {
+	a := interactionAction{Type: el.Type, ActionID: el.ActionID, BlockID: blockID, ActionAt: s.now().UTC()}
+	if el.Type == model.ElementButton {
+		a.Value, a.Text = el.Value, el.Text
+		return a, nil
+	}
+	v, empty, problem := readValue(el, raw, users)
+	if problem == "" && empty && !model.IsMultiValue(el.Type) {
+		problem = emptyProblem(el.Type)
+	}
+	if problem != "" {
+		return interactionAction{}, apperr.Invalid("%s", problem)
+	}
+	if v.Value != nil {
+		a.Value = *v.Value
+	}
+	a.SelectedOption, a.SelectedOptions, a.SelectedDate, a.SelectedTime, a.SelectedUser, a.SelectedUsers =
+		v.SelectedOption, v.SelectedOptions, v.SelectedDate, v.SelectedTime, v.SelectedUser, v.SelectedUsers
+	return a, nil
 }
 
 type blockActionsPayload struct {
@@ -371,9 +420,10 @@ type blockActionsPayload struct {
 	InteractionID string               `json:"interaction_id"`
 	Test          bool                 `json:"test,omitempty"`
 	User          interactionUser      `json:"user"`
-	Channel       interactionChannel   `json:"channel"`
+	Channel       *interactionChannel  `json:"channel,omitempty"`
 	Container     interactionContainer `json:"container"`
-	Message       interactionMessage   `json:"message"`
+	Message       *interactionMessage  `json:"message,omitempty"`
+	View          *submittedView       `json:"view,omitempty"`
 	Actions       []interactionAction  `json:"actions"`
 	ResponseURL   string               `json:"response_url,omitempty"`
 	TriggerID     string               `json:"trigger_id,omitempty"`
@@ -382,17 +432,15 @@ type blockActionsPayload struct {
 // clickPayload is the block_actions request for a click. Everything in it
 // comes from ex's own records: the button and its value from the stored
 // message, the clicker from the session.
-func (s *InteractionService) clickPayload(ctx context.Context, wh *model.IncomingWebhook, msg *model.Message, parentType string, button model.BlockElement, blockID, userID string) blockActionsPayload {
+func (s *InteractionService) clickPayload(ctx context.Context, wh *model.IncomingWebhook, msg *model.Message, parentType string, action interactionAction, userID string) blockActionsPayload {
 	p := blockActionsPayload{
 		Type:          "block_actions",
 		InteractionID: "i_" + store.NewID(),
 		User:          s.clicker(ctx, wh, userID),
-		Channel:       interactionChannel{ID: msg.ParentID, Name: s.parentName(ctx, msg.ParentID, parentType)},
+		Channel:       &interactionChannel{ID: msg.ParentID, Name: s.parentName(ctx, msg.ParentID, parentType)},
 		Container:     interactionContainer{Type: "message", MessageID: msg.ID, ChannelID: msg.ParentID},
-		Message:       interactionMessage{ID: msg.ID, Version: msg.Version, Text: msg.Body, Blocks: msg.Blocks, Attachments: msg.MessageAttachments},
-		Actions: []interactionAction{{
-			Type: model.ElementButton, ActionID: button.ActionID, BlockID: blockID, Value: button.Value, Text: button.Text, ActionAt: s.now().UTC(),
-		}},
+		Message:       &interactionMessage{ID: msg.ID, Version: msg.Version, Text: msg.Body, Blocks: msg.Blocks, Attachments: msg.MessageAttachments},
+		Actions:       []interactionAction{action},
 	}
 	p.ResponseURL = s.mintResponseURL(ctx, model.ResponseURLRecord{WebhookID: wh.ID, ParentID: msg.ParentID, ParentType: parentType, MessageID: msg.ID, UserID: userID})
 	p.TriggerID = s.mintTrigger(ctx, model.TriggerRecord{WebhookID: wh.ID, UserID: userID, ClickID: clickIDFrom(ctx), IconEmoji: msg.WebhookIconEmoji})
@@ -663,7 +711,14 @@ func (s *InteractionService) manage(ctx context.Context, actor WebhookActor, id 
 	if err := actor.check(); err != nil {
 		return nil, err
 	}
-	return s.webhooks.owned(ctx, actor, id)
+	wh, err := s.webhooks.owned(ctx, actor, id)
+	if err != nil {
+		return nil, err
+	}
+	if !wh.IsRich() {
+		return nil, apperr.Reject(ErrNotRichWebhook, "buttons, forms and bot tokens are for rich webhooks; create a rich webhook for an app")
+	}
+	return wh, nil
 }
 
 func (s *InteractionService) save(ctx context.Context, wh *model.IncomingWebhook) (*model.IncomingWebhook, error) {
@@ -820,9 +875,9 @@ func (s *InteractionService) SendTest(ctx context.Context, actor WebhookActor, i
 		InteractionID: "i_" + store.NewID(),
 		Test:          true,
 		User:          s.clicker(ctx, wh, actor.ID),
-		Channel:       interactionChannel{ID: wh.ChannelID, Name: wh.ChannelName},
+		Channel:       &interactionChannel{ID: wh.ChannelID, Name: wh.ChannelName},
 		Container:     interactionContainer{Type: "message", MessageID: "test", ChannelID: wh.ChannelID},
-		Message:       interactionMessage{ID: "test", Text: "Test interaction from ex"},
+		Message:       &interactionMessage{ID: "test", Text: "Test interaction from ex"},
 		Actions:       []interactionAction{{Type: model.ElementButton, ActionID: "test", BlockID: "test", Value: "test", ActionAt: s.now().UTC()}},
 	}
 	reply, status, latency, sendErr := s.send(ctx, wh, payload)

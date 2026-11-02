@@ -19,6 +19,9 @@ const (
 	// BlockInput is a form field: a label, an optional hint, and one input
 	// element. Forms (views) only; a message drops it.
 	BlockInput = "input"
+	// BlockImage is a picture with alt text and an optional title, drawn
+	// through ex's image proxy.
+	BlockImage = "image"
 )
 
 // Text kinds. "mrkdwn" is accepted from Slack-shaped payloads and stored as
@@ -29,25 +32,67 @@ const (
 	TextMrkdwn   = "mrkdwn"
 )
 
-// ElementButton is the one interactive element of phase 1.
+// ElementButton is a button: a link, a built-in action, or a call to the app.
 const ElementButton = "button"
 
-// Input elements: a form field's one element.
+// ElementImage is a small picture: a section's accessory or a context row's.
+const ElementImage = "image"
+
+// Elements that take a value. Each one can sit in a form field; the ones
+// IsMessageInteractive names can also sit in a message's actions row or a
+// section's accessory, where using them calls the app.
 const (
-	ElementPlainTextInput = "plain_text_input"
-	ElementDatepicker     = "datepicker"
-	ElementStaticSelect   = "static_select"
+	ElementPlainTextInput    = "plain_text_input"
+	ElementNumberInput       = "number_input"
+	ElementEmailInput        = "email_text_input"
+	ElementURLInput          = "url_text_input"
+	ElementDatepicker        = "datepicker"
+	ElementTimepicker        = "timepicker"
+	ElementStaticSelect      = "static_select"
+	ElementMultiStaticSelect = "multi_static_select"
+	ElementUsersSelect       = "users_select"
+	ElementMultiUsersSelect  = "multi_users_select"
+	ElementCheckboxes        = "checkboxes"
+	ElementRadioButtons      = "radio_buttons"
+	// ElementOverflow is a ⋯ menu of up to five options (messages only).
+	ElementOverflow = "overflow"
 )
 
-// IsInputType reports whether t names an input element.
+// IsInputType reports whether t names an element a form field can hold.
 func IsInputType(t string) bool {
-	return t == ElementPlainTextInput || t == ElementDatepicker || t == ElementStaticSelect
+	switch t {
+	case ElementPlainTextInput, ElementNumberInput, ElementEmailInput, ElementURLInput,
+		ElementDatepicker, ElementTimepicker, ElementStaticSelect, ElementMultiStaticSelect,
+		ElementUsersSelect, ElementMultiUsersSelect, ElementCheckboxes, ElementRadioButtons:
+		return true
+	}
+	return false
 }
 
-// SelectOption is one choice of a static_select.
+// IsMessageInteractive reports whether t names an element a message can
+// carry besides buttons: a pick that goes to the app.
+func IsMessageInteractive(t string) bool {
+	switch t {
+	case ElementStaticSelect, ElementMultiStaticSelect, ElementUsersSelect, ElementOverflow,
+		ElementDatepicker, ElementTimepicker, ElementCheckboxes, ElementRadioButtons:
+		return true
+	}
+	return false
+}
+
+// IsMultiValue reports whether t's value is a list.
+func IsMultiValue(t string) bool {
+	return t == ElementMultiStaticSelect || t == ElementMultiUsersSelect || t == ElementCheckboxes
+}
+
+// SelectOption is one choice of a select, overflow menu, checkbox or radio
+// group. Description is a second line (checkboxes and radios); URL makes an
+// overflow option open a link (http or https only).
 type SelectOption struct {
-	Text  TextObject `json:"text"`
-	Value string     `json:"value"`
+	Text        TextObject  `json:"text"`
+	Value       string      `json:"value"`
+	Description *TextObject `json:"description,omitempty"`
+	URL         string      `json:"url,omitempty"`
 }
 
 // Button styles.
@@ -111,6 +156,24 @@ type BlockElement struct {
 	InitialDate   string         `json:"initial_date,omitempty"`
 	Options       []SelectOption `json:"options,omitempty"`
 	InitialOption *SelectOption  `json:"initial_option,omitempty"`
+	// More value elements: InitialOptions (multi-select, checkboxes),
+	// InitialTime (HH:MM), InitialUser(s) (ex user IDs), MaxSelectedItems
+	// (multi-selects), and a number field's IsDecimalAllowed and Min/Max
+	// (decimal strings, as Slack has them).
+	InitialOptions   []SelectOption `json:"initial_options,omitempty"`
+	InitialTime      string         `json:"initial_time,omitempty"`
+	InitialUser      string         `json:"initial_user,omitempty"`
+	InitialUsers     []string       `json:"initial_users,omitempty"`
+	MaxSelectedItems int            `json:"max_selected_items,omitempty"`
+	IsDecimalAllowed bool           `json:"is_decimal_allowed,omitempty"`
+	MinValue         string         `json:"min_value,omitempty"`
+	MaxValue         string         `json:"max_value,omitempty"`
+	// An image element: its proxied URL, alt text and (once ex has fetched
+	// it) intrinsic size.
+	ImageURL    string `json:"image_url,omitempty"`
+	AltText     string `json:"alt_text,omitempty"`
+	ImageWidth  int    `json:"image_width,omitempty"`
+	ImageHeight int    `json:"image_height,omitempty"`
 	// Content is a text element's text.
 	Content string `json:"-"`
 }
@@ -142,6 +205,19 @@ type blockElementJSON struct {
 	InitialDate   string         `json:"initial_date,omitempty"`
 	Options       []SelectOption `json:"options,omitempty"`
 	InitialOption *SelectOption  `json:"initial_option,omitempty"`
+
+	InitialOptions   []SelectOption `json:"initial_options,omitempty"`
+	InitialTime      string         `json:"initial_time,omitempty"`
+	InitialUser      string         `json:"initial_user,omitempty"`
+	InitialUsers     []string       `json:"initial_users,omitempty"`
+	MaxSelectedItems int            `json:"max_selected_items,omitempty"`
+	IsDecimalAllowed bool           `json:"is_decimal_allowed,omitempty"`
+	MinValue         string         `json:"min_value,omitempty"`
+	MaxValue         string         `json:"max_value,omitempty"`
+	ImageURL         string         `json:"image_url,omitempty"`
+	AltText          string         `json:"alt_text,omitempty"`
+	ImageWidth       int            `json:"image_width,omitempty"`
+	ImageHeight      int            `json:"image_height,omitempty"`
 }
 
 // elementJSON is e's wire shape, but for its text.
@@ -152,6 +228,10 @@ func (e BlockElement) elementJSON() blockElementJSON {
 		Placeholder: e.Placeholder, Multiline: e.Multiline, InitialValue: e.InitialValue,
 		MinLength: e.MinLength, MaxLength: e.MaxLength, InitialDate: e.InitialDate,
 		Options: e.Options, InitialOption: e.InitialOption,
+		InitialOptions: e.InitialOptions, InitialTime: e.InitialTime, InitialUser: e.InitialUser,
+		InitialUsers: e.InitialUsers, MaxSelectedItems: e.MaxSelectedItems, IsDecimalAllowed: e.IsDecimalAllowed,
+		MinValue: e.MinValue, MaxValue: e.MaxValue, ImageURL: e.ImageURL, AltText: e.AltText,
+		ImageWidth: e.ImageWidth, ImageHeight: e.ImageHeight,
 	}
 }
 
@@ -183,6 +263,10 @@ func (e *BlockElement) UnmarshalJSON(data []byte) error {
 		Placeholder: j.Placeholder, Multiline: j.Multiline, InitialValue: j.InitialValue,
 		MinLength: j.MinLength, MaxLength: j.MaxLength, InitialDate: j.InitialDate,
 		Options: j.Options, InitialOption: j.InitialOption,
+		InitialOptions: j.InitialOptions, InitialTime: j.InitialTime, InitialUser: j.InitialUser,
+		InitialUsers: j.InitialUsers, MaxSelectedItems: j.MaxSelectedItems, IsDecimalAllowed: j.IsDecimalAllowed,
+		MinValue: j.MinValue, MaxValue: j.MaxValue, ImageURL: j.ImageURL, AltText: j.AltText,
+		ImageWidth: j.ImageWidth, ImageHeight: j.ImageHeight,
 	}
 	if len(in.Text) == 0 || string(in.Text) == "null" {
 		return nil
@@ -201,7 +285,9 @@ func (e *BlockElement) UnmarshalJSON(data []byte) error {
 //   - divider: a rule.
 //   - header: Text, plain.
 //   - input (forms only): Label, an optional Hint, Optional, and one
-//     input Element.
+//     input Element; DispatchAction sends each change to the app.
+//   - image: ImageURL, AltText, an optional plain Title (Text), and the
+//     intrinsic size ex measured.
 type Block struct {
 	Type      string         `json:"type"`
 	BlockID   string         `json:"block_id,omitempty"`
@@ -213,6 +299,14 @@ type Block struct {
 	Hint      *TextObject    `json:"hint,omitempty"`
 	Optional  bool           `json:"optional,omitempty"`
 	Element   *BlockElement  `json:"element,omitempty"`
+	// DispatchAction (input only) sends the field's changes to the app as
+	// they happen, so it can reshape the form.
+	DispatchAction bool `json:"dispatch_action,omitempty"`
+	// Image block.
+	ImageURL    string `json:"image_url,omitempty"`
+	AltText     string `json:"alt_text,omitempty"`
+	ImageWidth  int    `json:"image_width,omitempty"`
+	ImageHeight int    `json:"image_height,omitempty"`
 }
 
 // Blocks is a message's (or an attachment's) layout. DynamoDB stores it as

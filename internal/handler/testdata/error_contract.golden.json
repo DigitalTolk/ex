@@ -382,6 +382,16 @@
     }
   },
   {
+    "case": "row: invalid view",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "invalid_view",
+        "message": "invalid view"
+      }
+    }
+  },
+  {
     "case": "row: card changed",
     "status": 409,
     "body": {
@@ -448,6 +458,16 @@
       "error": {
         "code": "invalid_token",
         "message": "invalid bot token"
+      }
+    }
+  },
+  {
+    "case": "row: not a rich webhook",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "not_rich_webhook",
+        "message": "not a rich webhook"
       }
     }
   },

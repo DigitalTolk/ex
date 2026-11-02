@@ -42,6 +42,25 @@ func (h *InteractionHandler) ViewsOpen(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ViewsPush stacks a form on the one the person is in. Body:
+// {"trigger_id" (from that form), "view"}.
+func (h *InteractionHandler) ViewsPush(w http.ResponseWriter, r *http.Request) {
+	h.appCall(w, r, "views.push", func(ctx context.Context, wh *model.IncomingWebhook, body []byte) (any, error) {
+		var in struct {
+			TriggerID string     `json:"trigger_id"`
+			View      model.View `json:"view"`
+		}
+		if err := json.Unmarshal(body, &in); err != nil {
+			return nil, apperr.Invalid("the body isn't a views.push request: %v", err)
+		}
+		view, err := h.svc.PushView(ctx, wh, in.TriggerID, in.View)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true, "view": view}, nil
+	})
+}
+
 // ViewsUpdate changes an open form. Body: {"view_id" or "external_id",
 // optional "hash", "view"}.
 func (h *InteractionHandler) ViewsUpdate(w http.ResponseWriter, r *http.Request) {
@@ -166,6 +185,7 @@ func appError(err error) (int, string) {
 		{service.ErrAppVersionConflict, http.StatusConflict, "version_conflict"},
 		{service.ErrAppUnavailable, http.StatusConflict, "app_unavailable"},
 		{service.ErrIdempotencyInProgress, http.StatusConflict, "idempotency_in_progress"},
+		{service.ErrPushNotAllowed, http.StatusBadRequest, "push_not_allowed"},
 		{apperr.ErrNotFound, http.StatusNotFound, "message_not_found"},
 		{apperr.ErrValidation, http.StatusBadRequest, "invalid_arguments"},
 	} {
@@ -179,13 +199,14 @@ func appError(err error) (int, string) {
 // ---- the person's side of a form
 
 // SubmitView sends a person's form to its app. Body: {"values":
-// {block_id: {action_id: "<raw value>"}}} — text as typed, a date as
-// YYYY-MM-DD, a select's option value.
+// {block_id: {action_id: <raw value>}}} — text as typed, a date as
+// YYYY-MM-DD, a time as HH:MM, an option's value or a user ID; a list of
+// them for multi-selects and checkboxes.
 func (h *InteractionHandler) SubmitView(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Values map[string]map[string]string `json:"values"`
+		Values map[string]map[string]service.RawValue `json:"values"`
 	}
-	if err := readJSON(r, &body); err != nil {
+	if err := readJSONLimit(r, &body, maxFormBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
@@ -197,14 +218,73 @@ func (h *InteractionHandler) SubmitView(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, res)
 }
 
-// CloseView forgets a form its person closed.
+// CloseView forgets a form its person closed. Body (optional): {"all":
+// true} closes its whole stack; "values" is what was entered, for an app
+// that asked to hear about closing.
 func (h *InteractionHandler) CloseView(w http.ResponseWriter, r *http.Request) {
-	if err := h.svc.CloseView(r.Context(), middleware.UserIDFromContext(r.Context()), pathParam(r, "id")); err != nil {
+	var body struct {
+		All    bool                                   `json:"all"`
+		Values map[string]map[string]service.RawValue `json:"values"`
+	}
+	if r.ContentLength != 0 {
+		if err := readJSONLimit(r, &body, maxFormBodyBytes); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+			return
+		}
+	}
+	if err := h.svc.CloseView(r.Context(), middleware.UserIDFromContext(r.Context()), pathParam(r, "id"), body.All, body.Values); err != nil {
 		writeServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// ViewAction sends a change in a person's form to its app. Body:
+// {"blockID", "actionID", "value" (string or list), "values" (the form as
+// it stands, like a submission's)}.
+func (h *InteractionHandler) ViewAction(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		BlockID  string                                 `json:"blockID"`
+		ActionID string                                 `json:"actionID"`
+		Value    service.RawValue                       `json:"value"`
+		Values   map[string]map[string]service.RawValue `json:"values"`
+	}
+	if err := readJSONLimit(r, &body, maxFormBodyBytes); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if body.BlockID == "" || body.ActionID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_body", "blockID and actionID are required")
+		return
+	}
+	res, err := h.svc.ViewAction(r.Context(), middleware.UserIDFromContext(r.Context()), pathParam(r, "id"), body.BlockID, body.ActionID, body.Value, body.Values)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// PreviewView answers with a form as ex would draw it, for the webhooks
+// panel's builder. Body: a view.
+func (h *InteractionHandler) PreviewView(w http.ResponseWriter, r *http.Request) {
+	var view model.View
+	r.Body = http.MaxBytesReader(nil, r.Body, maxWebhookBodyBytes)
+	if err := readJSON(r, &view); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	out, err := h.svc.PreviewView(r.Context(), webhookActor(r), view)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// maxFormBodyBytes bounds what a browser sends for a form or a pick: a full
+// form of the largest fields (100 × 3,000 characters) fits within it.
+const maxFormBodyBytes = 512 << 10
 
 // clickIDPattern is a browser tab's click ID: short and plain, since it is
 // echoed back in live events.

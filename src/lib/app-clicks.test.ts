@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isOwnClick, newClickID } from './app-clicks';
+import { clickOrigin, isOwnClick, newClickID } from './app-clicks';
 
 describe('app clicks', () => {
   it('names each click from this tab with a fresh random ID it then recognizes', () => {
@@ -24,5 +24,18 @@ describe('app clicks', () => {
     newClickID();
     expect(isOwnClick(first)).toBe(false);
     expect(later.every(isOwnClick)).toBe(true);
+  });
+
+  it('remembers the card a click came from, while it remembers the click', () => {
+    const fromCard = newClickID({ messageID: 'm1' });
+    const fromNowhere = newClickID();
+    expect(clickOrigin(fromCard)).toEqual({ messageID: 'm1' });
+    expect(clickOrigin(fromNowhere)).toBeUndefined();
+    expect(clickOrigin(undefined)).toBeUndefined();
+    expect(clickOrigin('')).toBeUndefined();
+    // Past the cap the card goes with the click.
+    Array.from({ length: 200 }, () => newClickID({ messageID: 'm2' }));
+    expect(isOwnClick(fromCard)).toBe(false);
+    expect(clickOrigin(fromCard)).toBeUndefined();
   });
 });

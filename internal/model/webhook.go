@@ -15,8 +15,16 @@ type IncomingWebhook struct {
 	CreatedBy       string    `json:"createdBy" dynamodbav:"createdBy"`
 	CreatedAt       time.Time `json:"createdAt" dynamodbav:"createdAt"`
 	UpdatedAt       time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
+	// Kind is chosen when the webhook is created and never changes. A classic
+	// webhook ("") posts text and Slack-style cards exactly as webhooks always
+	// have: blocks and an Authorization header in its payloads are ignored. A
+	// rich webhook (WebhookKindRich) is an app's: blocks, buttons, forms, a
+	// bot token and interactivity. Keeping the two apart means no existing
+	// sender's posts change shape — or start being refused — because rich
+	// messages exist.
+	Kind string `json:"kind,omitempty" dynamodbav:"kind,omitempty"`
 
-	// Interactivity: an app that gets the clicks on its messages' buttons.
+	// Interactivity (rich webhooks only): an app that gets the clicks on its messages' buttons.
 	// InteractivityURL is where ex sends them; empty means the webhook only
 	// posts.
 	InteractivityURL string `json:"interactivityURL,omitempty" dynamodbav:"interactivityURL,omitempty"`
@@ -42,6 +50,12 @@ type IncomingWebhook struct {
 	HasBotToken      bool `json:"hasBotToken,omitempty" dynamodbav:"-"`
 	HasSigningSecret bool `json:"hasSigningSecret,omitempty" dynamodbav:"-"`
 }
+
+// WebhookKindRich marks a rich webhook (see IncomingWebhook.Kind).
+const WebhookKindRich = "rich"
+
+// IsRich reports whether the webhook is a rich (app) webhook.
+func (w *IncomingWebhook) IsRich() bool { return w.Kind == WebhookKindRich }
 
 // Present fills the fields the webhooks panel shows instead of the secrets.
 func (w *IncomingWebhook) Present() *IncomingWebhook {

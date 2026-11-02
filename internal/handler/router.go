@@ -345,10 +345,13 @@ func NewRouter(d *Deps) http.Handler {
 		appIP := middleware.RateLimit(d.RateLimiter, middleware.PerMinute("appapi-ip", 600, 120))
 		mux.Handle("POST /api/v1/apps/views.open", middleware.WrapFunc(ixH.ViewsOpen, appIP))
 		mux.Handle("POST /api/v1/apps/views.update", middleware.WrapFunc(ixH.ViewsUpdate, appIP))
+		mux.Handle("POST /api/v1/apps/views.push", middleware.WrapFunc(ixH.ViewsPush, appIP))
 		mux.Handle("POST /api/v1/apps/messages.update", middleware.WrapFunc(ixH.MessagesUpdate, appIP))
 		// A person's forms.
 		mux.Handle("POST /api/v1/views/{id}/submit", middleware.WrapFunc(ixH.SubmitView, authMW, writeLimit))
 		mux.Handle("POST /api/v1/views/{id}/close", middleware.WrapFunc(ixH.CloseView, authMW, writeLimit))
+		mux.Handle("POST /api/v1/views/{id}/actions", middleware.WrapFunc(ixH.ViewAction, authMW, writeLimit))
+		mux.Handle("POST /api/v1/admin/webhooks/preview-view", middleware.WrapFunc(ixH.PreviewView, authMW, writeLimit))
 	}
 
 	// ------------------------------------------------------------------ Agents

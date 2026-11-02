@@ -105,6 +105,19 @@ func (c *RedisCache) DeleteView(ctx context.Context, v *model.StoredView) error 
 	return c.DropViewExternalID(ctx, v.WebhookID, v.View.ExternalID, v.View.ID)
 }
 
+// TakeView deletes an open form and reports whether this call deleted it —
+// of several closing it at once, exactly one does.
+func (c *RedisCache) TakeView(ctx context.Context, v *model.StoredView) (bool, error) {
+	n, err := c.client.Del(ctx, viewKeyPrefix+v.View.ID).Result()
+	if err != nil {
+		return false, fmt.Errorf("cache: take view: %w", err)
+	}
+	if err := c.DropViewExternalID(ctx, v.WebhookID, v.View.ExternalID, v.View.ID); err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
 // DropViewExternalID forgets an app's external_id for a form, unless it has
 // moved on to another form meanwhile. No external_id: nothing to do.
 func (c *RedisCache) DropViewExternalID(ctx context.Context, webhookID, externalID, viewID string) error {

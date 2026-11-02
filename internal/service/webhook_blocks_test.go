@@ -14,7 +14,7 @@ func blocksWebhookFixture(users WebhookUserResolver) (*IncomingWebhookService, *
 	messages := newMockMessageStore()
 	msgSvc := NewMessageService(messages, nil, nil, newMockPublisher(), nil)
 	svc := NewIncomingWebhookService(&fakeWebhookStore{items: map[string]*model.IncomingWebhook{
-		"wh": {ID: "wh", ChannelID: ch.ID, Username: "MeetingMind"},
+		"wh": {ID: "wh", ChannelID: ch.ID, Username: "MeetingMind", Kind: model.WebhookKindRich},
 	}}, fakeWebhookChannels{byID: map[string]*model.Channel{ch.ID: ch}, bySlug: map[string]*model.Channel{ch.Slug: ch}},
 		msgSvc, fakeWebhookImageProxy{}, "")
 	if users != nil {
@@ -76,6 +76,7 @@ func TestIncomingWebhook_BlockRefusalsStopThePost(t *testing.T) {
 	svc, messages := blocksWebhookFixture(nil)
 	// Without a user directory, allowed_users can name nobody.
 	b := btn("x", "X")
+	b.ExAction = model.ExActionVote
 	b.AllowedUsers = []string{"u-1"}
 	_, err := svc.ExecuteMessage(ctx, "wh", IncomingWebhookPayload{Text: "t", Blocks: model.Blocks{{Type: model.BlockActions, Elements: []model.BlockElement{b}}}})
 	wantInvalid(t, err, "names no ex user")

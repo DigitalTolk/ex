@@ -21,6 +21,9 @@ const (
 	// is a call the app made to ex (ActionID names the method).
 	InteractionSubmission = "view_submission"
 	InteractionAPI        = "api"
+	// InteractionClosed is a form closed without submitting, told to the
+	// app because the form asked (notify_on_close).
+	InteractionClosed = "view_closed"
 
 	InteractionOK      = "ok"
 	InteractionFailed  = "failed"

@@ -1,0 +1,160 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/DigitalTolk/ex/internal/apperr"
+	"github.com/DigitalTolk/ex/internal/model"
+)
+
+// A classic webhook — every webhook made before rich ones existed — must post
+// exactly what it always posted. Rich messages (blocks, app buttons, bot
+// tokens, email mentions) belong to rich webhooks alone.
+
+func classicWebhookFixture(users WebhookUserResolver) (*IncomingWebhookService, *mockMessageStore, *fakeWebhookStore) {
+	ch := &model.Channel{ID: "ch-1", Name: "General", Slug: "general", Type: model.ChannelTypePublic}
+	messages := newMockMessageStore()
+	msgSvc := NewMessageService(messages, nil, nil, newMockPublisher(), nil)
+	hooks := &fakeWebhookStore{items: map[string]*model.IncomingWebhook{
+		"wh": {ID: "wh", ChannelID: ch.ID, Username: "alerts", BotTokenHash: hashBotToken("tok")},
+	}}
+	svc := NewIncomingWebhookService(hooks,
+		fakeWebhookChannels{byID: map[string]*model.Channel{ch.ID: ch}, bySlug: map[string]*model.Channel{ch.Slug: ch}},
+		msgSvc, fakeWebhookImageProxy{}, "")
+	if users != nil {
+		svc.SetUserResolver(users)
+	}
+	return svc, messages, hooks
+}
+
+// Slack-style senders often send blocks next to their text — buttons too.
+// A classic webhook posts the text and cards and ignores the blocks: it never
+// refuses the post for a button that would call an app.
+func TestClassicWebhook_IgnoresBlocksInsteadOfRefusingThePost(t *testing.T) {
+	svc, messages, _ := classicWebhookFixture(nil)
+	approve := btn("approve", "Approve") // calls an app: a rich webhook would need a bot token
+	msg, err := svc.ExecuteMessage(context.Background(), "wh", IncomingWebhookPayload{
+		Text:   "Deploy finished",
+		Blocks: model.Blocks{{Type: model.BlockActions, Elements: []model.BlockElement{approve}}},
+		Attachments: []model.MessageAttachment{{
+			Title:  "build #42",
+			Blocks: model.Blocks{{Type: model.BlockActions, Elements: []model.BlockElement{approve}}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("classic post with blocks was refused: %v", err)
+	}
+	stored := onlyStoredMessage(t, messages)
+	for _, m := range []*model.Message{msg, stored} {
+		if m.Body != "Deploy finished" || len(m.Blocks) != 0 || m.AppButtons {
+			t.Fatalf("classic message = body %q, %d blocks, appButtons %v; want the text alone", m.Body, len(m.Blocks), m.AppButtons)
+		}
+		if len(m.MessageAttachments) != 1 || m.MessageAttachments[0].Title != "build #42" || len(m.MessageAttachments[0].Blocks) != 0 {
+			t.Fatalf("classic card = %+v; want the card without its blocks", m.MessageAttachments)
+		}
+	}
+}
+
+// An Authorization header means nothing to a classic webhook: a sender that
+// happens to send one (its own token for some other service) still posts.
+func TestClassicWebhook_IgnoresAnyBotToken(t *testing.T) {
+	svc, messages, _ := classicWebhookFixture(nil)
+	for _, token := range []string{"tok", "someone-elses-token"} {
+		if _, err := svc.ExecuteMessage(context.Background(), "wh", IncomingWebhookPayload{Text: "hi", BotToken: token}); err != nil {
+			t.Fatalf("classic post with token %q refused: %v", token, err)
+		}
+	}
+	for _, m := range messages.messages {
+		if m.AppButtons {
+			t.Fatal("a classic webhook's post must never reach an app")
+		}
+	}
+}
+
+// Blocks alone are not content for a classic webhook — the same refusal as
+// before rich webhooks existed.
+func TestClassicWebhook_BlocksAloneAreAnEmptyPayload(t *testing.T) {
+	svc, _, _ := classicWebhookFixture(nil)
+	_, err := svc.ExecuteMessage(context.Background(), "wh", IncomingWebhookPayload{
+		Blocks: model.Blocks{{Type: model.BlockSection, Text: md("only blocks")}},
+	})
+	if !errors.Is(err, apperr.ErrValidation) || !strings.Contains(err.Error(), "text or attachments required") {
+		t.Fatalf("err = %v, want the classic empty-payload refusal", err)
+	}
+}
+
+// Mentions by email are a rich webhook's; a classic webhook's text reads as it
+// always did.
+func TestClassicWebhook_HasNoEmailMentions(t *testing.T) {
+	users := fakeWebhookUsers{users: []*model.User{{ID: "u-2", Email: "manisha@ex.test"}}, err: errors.New("no name search")}
+	text := "ping @manisha@ex.test"
+
+	classic, messages, _ := classicWebhookFixture(users)
+	if _, err := classic.ExecuteMessage(context.Background(), "wh", IncomingWebhookPayload{Text: text}); err != nil {
+		t.Fatalf("classic post: %v", err)
+	}
+	if got := onlyStoredMessage(t, messages).Body; got != text {
+		t.Fatalf("classic body = %q, want it as typed", got)
+	}
+
+	rich, richMessages := blocksWebhookFixture(users)
+	if _, err := rich.ExecuteMessage(context.Background(), "wh", IncomingWebhookPayload{Text: text}); err != nil {
+		t.Fatalf("rich post: %v", err)
+	}
+	if got := onlyStoredMessage(t, richMessages).Body; got != "ping @[u-2|manisha@ex.test]" {
+		t.Fatalf("rich body = %q, want the email mention", got)
+	}
+}
+
+func TestWebhookCreate_KindIsClassicOrRich(t *testing.T) {
+	ctx := context.Background()
+	ch := &model.Channel{ID: "ch-1", Name: "General", Slug: "general", Type: model.ChannelTypePublic}
+	msgSvc := NewMessageService(newMockMessageStore(), nil, nil, newMockPublisher(), nil)
+	svc := NewIncomingWebhookService(&fakeWebhookStore{},
+		fakeWebhookChannels{byID: map[string]*model.Channel{ch.ID: ch}, bySlug: map[string]*model.Channel{ch.Slug: ch}},
+		msgSvc, fakeWebhookImageProxy{}, "")
+
+	classic, err := svc.Create(ctx, asAdmin("admin-1"), &model.IncomingWebhook{Title: "CI", ChannelID: ch.ID})
+	if err != nil || classic.IsRich() {
+		t.Fatalf("default create = %+v, %v; want a classic webhook", classic, err)
+	}
+	rich, err := svc.Create(ctx, asAdmin("admin-1"), &model.IncomingWebhook{Title: "App", ChannelID: ch.ID, Kind: model.WebhookKindRich})
+	if err != nil || !rich.IsRich() {
+		t.Fatalf("rich create = %+v, %v; want a rich webhook", rich, err)
+	}
+	if _, err := svc.Create(ctx, asAdmin("admin-1"), &model.IncomingWebhook{Title: "X", ChannelID: ch.ID, Kind: "fancy"}); !errors.Is(err, apperr.ErrValidation) {
+		t.Fatalf("unknown kind: err = %v, want invalid", err)
+	}
+	// The kind never changes: an edit can't turn a webhook into the other.
+	edited, err := svc.Update(ctx, asAdmin("admin-1"), rich.ID, &model.IncomingWebhook{Title: "App 2", ChannelID: ch.ID})
+	if err != nil || !edited.IsRich() {
+		t.Fatalf("edited rich webhook = %+v, %v; want it still rich", edited, err)
+	}
+	edited, err = svc.Update(ctx, asAdmin("admin-1"), classic.ID, &model.IncomingWebhook{Title: "CI 2", ChannelID: ch.ID, Kind: model.WebhookKindRich})
+	if err != nil || edited.IsRich() {
+		t.Fatalf("edited classic webhook = %+v, %v; want it still classic", edited, err)
+	}
+}
+
+// A classic webhook has no interactivity to set up, and even a token left on
+// one (from before kinds) never authenticates as an app.
+func TestClassicWebhook_HasNoInteractivity(t *testing.T) {
+	f := newIxFixture(t)
+	f.wh.Kind = ""
+	actor := asAdmin("u-1")
+	if _, err := f.svc.Status(context.Background(), actor, "wh"); !errors.Is(err, ErrNotRichWebhook) {
+		t.Fatalf("status on classic: err = %v, want ErrNotRichWebhook", err)
+	}
+	if _, _, err := f.svc.RotateBotToken(context.Background(), actor, "wh", false); !errors.Is(err, ErrNotRichWebhook) {
+		t.Fatalf("bot token on classic: err = %v, want ErrNotRichWebhook", err)
+	}
+	f.wh.BotTokenHash, f.wh.SecretVersion = hashBotToken("leftover"), 1
+	f.wh.UpdatedAt = time.Now()
+	if _, err := f.svc.AuthenticateApp(context.Background(), "leftover"); !errors.Is(err, ErrInvalidAuth) {
+		t.Fatalf("classic token authenticated as an app: err = %v", err)
+	}
+}

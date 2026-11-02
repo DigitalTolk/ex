@@ -57,6 +57,7 @@ type blockNormalizer struct {
 	user func(ctx context.Context, ref string) string
 
 	blocks   int
+	images   int
 	ids      map[string]bool
 	nextID   int
 	resolved map[string]string
@@ -130,7 +131,7 @@ func (n *blockNormalizer) reserveIDs(in model.Blocks) {
 
 func (n *blockNormalizer) block(ctx context.Context, at string, b model.Block) (model.Block, bool, error) {
 	switch b.Type {
-	case model.BlockSection, model.BlockActions, model.BlockContext, model.BlockDivider, model.BlockHeader:
+	case model.BlockSection, model.BlockActions, model.BlockContext, model.BlockDivider, model.BlockHeader, model.BlockImage:
 	default:
 		// Unknown kinds are skipped: the rest of the message still shows.
 		return model.Block{}, false, nil
@@ -148,6 +149,10 @@ func (n *blockNormalizer) block(ctx context.Context, at string, b model.Block) (
 		out.Text = &t
 	case model.BlockSection:
 		if err := n.section(ctx, at, b, &out); err != nil {
+			return model.Block{}, false, err
+		}
+	case model.BlockImage:
+		if err := n.imageBlock(at, b, &out); err != nil {
 			return model.Block{}, false, err
 		}
 	case model.BlockActions:
@@ -220,19 +225,30 @@ func (n *blockNormalizer) section(ctx context.Context, at string, b model.Block,
 	if out.Text == nil && len(out.Fields) == 0 {
 		return invalidBlocks("%s: a section needs text or fields", at)
 	}
-	if b.Accessory != nil && b.Accessory.Type == model.ElementButton {
-		buttons, err := n.buttons(ctx, at+".accessory", []model.BlockElement{*b.Accessory})
+	if b.Accessory == nil {
+		return nil
+	}
+	switch {
+	case b.Accessory.Type == model.ElementImage:
+		img, err := n.imageElement(at+".accessory", *b.Accessory)
 		if err != nil {
 			return err
 		}
-		out.Accessory = &buttons[0]
+		out.Accessory = &img
+	case b.Accessory.Type == model.ElementButton || model.IsMessageInteractive(b.Accessory.Type):
+		els, err := n.buttons(ctx, at+".accessory", []model.BlockElement{*b.Accessory})
+		if err != nil {
+			return err
+		}
+		out.Accessory = &els[0]
 	}
 	return nil
 }
 
-// buttons checks a row of elements; anything but a button is skipped. A
-// button without an action_id is named a1, a2, … — never a name another
-// button of the row was given.
+// buttons checks a row of elements: buttons and the elements that pick a
+// value (selects, an overflow menu, pickers, checkboxes, radio buttons);
+// anything else is skipped. An element without an action_id is named a1,
+// a2, … — never a name another element of the row was given.
 func (n *blockNormalizer) buttons(ctx context.Context, at string, in []model.BlockElement) ([]model.BlockElement, error) {
 	var out []model.BlockElement
 	given := map[string]bool{}
@@ -242,11 +258,11 @@ func (n *blockNormalizer) buttons(ctx context.Context, at string, in []model.Blo
 	used := map[string]bool{}
 	next := 0
 	for i, e := range in {
-		if e.Type != model.ElementButton {
+		if e.Type != model.ElementButton && !model.IsMessageInteractive(e.Type) {
 			continue
 		}
 		if len(out) == maxActionsElements {
-			return nil, invalidBlocks("%s: a row can hold at most %d buttons", at, maxActionsElements)
+			return nil, invalidBlocks("%s: a row can hold at most %d elements", at, maxActionsElements)
 		}
 		for e.ActionID == "" {
 			next++
@@ -257,7 +273,14 @@ func (n *blockNormalizer) buttons(ctx context.Context, at string, in []model.Blo
 		if used[e.ActionID] {
 			return nil, invalidBlocks("%s: action_id %q is used twice in one block", at, e.ActionID)
 		}
-		b, err := n.button(ctx, fmt.Sprintf("%s.elements[%d]", at, i), e)
+		eat := fmt.Sprintf("%s.elements[%d]", at, i)
+		var b model.BlockElement
+		var err error
+		if e.Type == model.ElementButton {
+			b, err = n.button(ctx, eat, e)
+		} else {
+			b, err = n.valueElement(ctx, eat, e, placeMessage)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -368,15 +391,24 @@ func (n *blockNormalizer) allowedUsers(ctx context.Context, at string, refs []st
 	return ids, nil
 }
 
-// contextTexts keeps a context row's text elements.
+// contextTexts keeps a context row's text and image elements.
 func (n *blockNormalizer) contextTexts(at string, in []model.BlockElement) ([]model.BlockElement, error) {
 	var out []model.BlockElement
 	for i, e := range in {
-		if !e.IsText() || strings.TrimSpace(e.Content) == "" {
+		isImage := e.Type == model.ElementImage
+		if !isImage && (!e.IsText() || strings.TrimSpace(e.Content) == "") {
 			continue
 		}
 		if len(out) == maxContextElements {
-			return nil, invalidBlocks("%s: a context row can hold at most %d texts", at, maxContextElements)
+			return nil, invalidBlocks("%s: a context row can hold at most %d elements", at, maxContextElements)
+		}
+		if isImage {
+			img, err := n.imageElement(fmt.Sprintf("%s.elements[%d]", at, i), e)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, img)
+			continue
 		}
 		t, err := n.text(fmt.Sprintf("%s.elements[%d]", at, i), model.TextObject{Type: e.Type, Text: e.Content}, maxContextChars, false)
 		if err != nil {

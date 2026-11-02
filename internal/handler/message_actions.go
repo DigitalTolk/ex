@@ -32,8 +32,11 @@ func act(w http.ResponseWriter, r *http.Request, messages *service.MessageServic
 		// ClickID names the browser tab, so a form the app opens in
 		// answer appears there alone. Optional.
 		ClickID string `json:"clickID"`
+		// Value is what was picked in a select or picker: a string, or a
+		// list for multi-selects and checkboxes. Buttons send none.
+		Value service.RawValue `json:"value"`
 	}
-	if err := readJSON(r, &body); err != nil {
+	if err := readJSONLimit(r, &body, maxFormBodyBytes); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
@@ -49,7 +52,7 @@ func act(w http.ResponseWriter, r *http.Request, messages *service.MessageServic
 		}
 		ctx = service.WithClickID(ctx, body.ClickID)
 	}
-	msg, err := messages.Act(ctx, middleware.UserIDFromContext(ctx), parentID, parentType, msgID, body.BlockID, body.ActionID)
+	msg, err := messages.ActWithValue(ctx, middleware.UserIDFromContext(ctx), parentID, parentType, msgID, body.BlockID, body.ActionID, body.Value)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return

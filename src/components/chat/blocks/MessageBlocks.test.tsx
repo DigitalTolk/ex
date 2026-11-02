@@ -1,7 +1,12 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActionTally, Block, ButtonElement, Message } from '@/types';
-import { isOwnClick } from '@/lib/app-clicks';
+import { clickOrigin, isOwnClick } from '@/lib/app-clicks';
+import { noteReceipt, useActionReceipts } from '@/stores/action-receipts';
+// The details dialog is a lazy chunk; loaded with the file so no wait
+// includes its first import.
+import '@/components/apps/SentDetailsDialog';
 import { BlockList, MessageBlockScope } from './MessageBlocks';
 
 const mockApiFetch = vi.hoisted(() => vi.fn());
@@ -45,10 +50,13 @@ function renderScope(message: Message, opts: { interactive?: boolean; currentUse
     userMap: users,
     ...opts,
   };
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const ui = (m: Message) => (
-    <MessageBlockScope message={m} {...props}>
-      {(current) => <BlockList blocks={current.blocks} />}
-    </MessageBlockScope>
+    <QueryClientProvider client={qc}>
+      <MessageBlockScope message={m} {...props}>
+        {(current) => <BlockList blocks={current.blocks} />}
+      </MessageBlockScope>
+    </QueryClientProvider>
   );
   const view = render(ui(message));
   return { ...view, rerenderWith: (m: Message) => view.rerender(ui(m)) };
@@ -99,6 +107,76 @@ describe('BlockList', () => {
     expect(link).toHaveAttribute('target', '_blank');
   });
 
+  it('draws a picture block at its measured size, capped, before it loads', () => {
+    render(
+      <BlockList
+        blocks={[
+          { type: 'image', block_id: 'wide', image_url: 'https://ex.test/wide.png', alt_text: 'A chart', text: label('Weekly load'), image_width: 1600, image_height: 900 },
+          { type: 'image', block_id: 'small', image_url: 'https://ex.test/small.png', alt_text: 'An icon', image_width: 120, image_height: 80 },
+        ]}
+      />,
+    );
+    const [wide, small] = screen.getAllByTestId('block-image');
+    expect(within(wide).getByText('Weekly load').tagName).toBe('FIGCAPTION');
+    const wideImg = within(wide).getByRole('img', { name: 'A chart' });
+    expect(wideImg).toHaveAttribute('width', '400');
+    expect(wideImg).toHaveAttribute('height', '225');
+    expect(wideImg.style.aspectRatio).toBe('1600 / 900');
+    expect(wideImg).toHaveClass('object-contain');
+    // Clicking opens the full picture in a new tab.
+    const open = within(wide).getByRole('link', { name: 'Open image: A chart' });
+    expect(open).toHaveAttribute('href', 'https://ex.test/wide.png');
+    expect(open).toHaveAttribute('target', '_blank');
+
+    expect(small.querySelector('figcaption')).toBeNull();
+    const smallImg = within(small).getByRole('img', { name: 'An icon' });
+    expect(smallImg).toHaveAttribute('width', '120');
+    expect(smallImg).toHaveAttribute('height', '80');
+  });
+
+  it('draws a picture of unknown size in a fixed 16:9 frame', () => {
+    render(
+      <BlockList
+        blocks={[
+          { type: 'image', block_id: 'a', image_url: 'https://ex.test/a.png', alt_text: 'No size' },
+          { type: 'image', block_id: 'b', image_url: 'https://ex.test/b.png', alt_text: 'Half a size', image_width: 300 },
+        ]}
+      />,
+    );
+    for (const name of ['No size', 'Half a size']) {
+      const img = screen.getByRole('img', { name });
+      expect(img).toHaveAttribute('width', '400');
+      expect(img).toHaveAttribute('height', '225');
+      expect(img.style.aspectRatio).toBe('16 / 9');
+      expect(img).toHaveClass('object-cover');
+    }
+  });
+
+  it('draws small pictures beside a section and in a context line at a fixed size', () => {
+    render(
+      <BlockList
+        blocks={[
+          { type: 'section', block_id: 's', text: label('Bob submitted an expense'), accessory: { type: 'image', image_url: 'https://ex.test/r.png', alt_text: 'Receipt' } },
+          { type: 'context', block_id: 'c', elements: [{ type: 'image', image_url: 'https://ex.test/i.png', alt_text: 'Bot' }, { type: 'plain_text', text: 'via bot' }] },
+        ]}
+      />,
+    );
+    const receipt = screen.getByRole('img', { name: 'Receipt' });
+    expect(receipt).toHaveClass('size-14');
+    expect(receipt).toHaveAttribute('title', 'Receipt');
+    expect(within(screen.getByTestId('block-context')).getByRole('img', { name: 'Bot' })).toHaveClass('size-5');
+    expect(screen.getByText('via bot')).toBeInTheDocument();
+  });
+
+  it("draws a picker as a section's accessory", () => {
+    render(
+      <BlockList
+        blocks={[{ type: 'section', block_id: 's', text: label('Pick a room'), accessory: { type: 'static_select', action_id: 'room', options: [{ text: label('Room A'), value: 'a' }] } }]}
+      />,
+    );
+    expect(within(screen.getByTestId('block-section')).getByTestId('preview-s-room')).toBeDisabled();
+  });
+
   it('shows buttons outside a scope (a preview) but never sends a click', () => {
     render(<BlockList blocks={card().blocks} />);
     const ack = screen.getByTestId('block-button-ack');
@@ -135,6 +213,8 @@ describe('MessageBlockScope', () => {
     expect(sent).toMatchObject({ blockID: 'row', actionID: 'ack' });
     expect(sent.clickID).toMatch(/^[0-9a-f]{24}$/);
     expect(isOwnClick(sent.clickID as string)).toBe(true);
+    // The click remembers its card, so a form it opens can follow it.
+    expect(clickOrigin(sent.clickID as string)).toEqual({ messageID: 'm1' });
     expect(screen.getByTestId('block-acked-ack')).toHaveTextContent(/Acknowledged by Alice ·/);
     // The check is the app's one green accent, the presence token.
     expect(screen.getByTestId('block-acked-ack').querySelector('svg')).toHaveClass('text-online');
@@ -284,5 +364,122 @@ describe('MessageBlockScope', () => {
   it('draws without a live scope when the message has no parent here', () => {
     renderScope(card(), { parentType: undefined, parentID: undefined });
     expect(screen.getByTestId('block-button-ack')).toBeDisabled();
+  });
+});
+
+describe('the line under a card', () => {
+  const appCard = (over: Partial<Message> = {}) =>
+    card({ appButtons: true, ...over }, [{ type: 'actions', block_id: 'row', elements: [button('approve', { text: label('Approve') })] }]);
+  const receipt = () => screen.findByTestId('action-receipt');
+  const TIME = /\d{1,2}:\d{2}/;
+
+  it("says what the person clicked, when, and what the app answered — and keeps saying it when the card changes", async () => {
+    mockApiFetch.mockResolvedValue(answer(appCard({ version: 1 }), 'Approved, Bob is told'));
+    const view = renderScope(appCard());
+    expect(screen.queryByTestId('action-receipt')).toBeNull();
+    fireEvent.click(screen.getByTestId('block-button-approve'));
+    const line = await receipt();
+    expect(line).toHaveTextContent(/^You clicked “Approve” · \d{1,2}:\d{2}.* — Approved, Bob is told$/);
+    expect(line).toHaveAttribute('role', 'status');
+    expect(line.className).toContain('text-muted-foreground');
+    expect(line.querySelector('svg')).toHaveClass('text-online');
+    expect(within(line).getByText(/Approved, Bob is told/)).toHaveClass('text-foreground');
+    expect(within(line).queryByTestId('action-receipt-details')).toBeNull();
+    // The app replaces the card (the button is gone): the line stays.
+    view.rerenderWith(card({ version: 2, appButtons: true }, [{ type: 'section', block_id: 's', text: label('Approved by Alice') }]));
+    expect(screen.getByText('Approved by Alice')).toBeInTheDocument();
+    expect(screen.getByTestId('action-receipt')).toHaveTextContent('You clicked “Approve”');
+  });
+
+  it('says what was clicked when the app answered with no note', async () => {
+    mockApiFetch.mockResolvedValue(answer(appCard({ version: 1 })));
+    renderScope(appCard());
+    fireEvent.click(screen.getByTestId('block-button-approve'));
+    const line = await receipt();
+    expect(line.textContent).toMatch(/^You clicked “Approve” · \d{1,2}:\d{2}( [AP]M)?$/);
+  });
+
+  it("shows in red when the app didn't take the click, with its reason", async () => {
+    mockApiFetch.mockResolvedValue({ message: appCard(), notice: "MeetingMind didn't respond. Try again.", failed: true });
+    renderScope(appCard());
+    fireEvent.click(screen.getByTestId('block-button-approve'));
+    const line = await receipt();
+    expect(line).toHaveTextContent(/^You clicked “Approve” — didn't go through · .* — MeetingMind didn't respond\. Try again\.$/);
+    expect(line.className).toContain('text-destructive');
+    expect(within(line).getByText(/MeetingMind didn't respond/)).not.toHaveClass('text-foreground');
+  });
+
+  it("shows in red when the click didn't reach ex, with why", async () => {
+    mockApiFetch.mockRejectedValueOnce(new Error('this card changed, try again'));
+    renderScope(appCard());
+    fireEvent.click(screen.getByTestId('block-button-approve'));
+    expect(await receipt()).toHaveTextContent("You clicked “Approve” — didn't go through");
+    expect(screen.getByTestId('action-receipt')).toHaveTextContent(/— this card changed, try again$/);
+
+    mockApiFetch.mockRejectedValueOnce('offline');
+    fireEvent.click(screen.getByTestId('block-button-approve'));
+    await waitFor(() => expect(screen.getByTestId('action-receipt')).toHaveTextContent(/— That didn't work\. Try again\.$/));
+    expect(screen.getByTestId('action-receipt').className).toContain('text-destructive');
+  });
+
+  it('leaves no line for acknowledge and vote: the card itself shows them', async () => {
+    mockApiFetch.mockResolvedValue(answer(card({ version: 1, actionTallies: [{ blockID: 'row', actionID: 'ack', userIDs: ['u-alice'], at: new Date().toISOString() }] })));
+    renderScope(card());
+    fireEvent.click(screen.getByTestId('block-button-vote'));
+    fireEvent.click(screen.getByTestId('block-button-ack'));
+    await screen.findByTestId('block-acked-ack');
+    await waitFor(() => expect(mockApiFetch).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId('action-receipt')).toBeNull();
+    expect(useActionReceipts.getState().byMessage).toEqual({});
+  });
+
+  it("doesn't let a click's late answer overwrite what the click led to", async () => {
+    let release: (v: unknown) => void = () => {};
+    mockApiFetch.mockImplementation(() => new Promise((resolve) => (release = resolve)));
+    renderScope(appCard());
+    fireEvent.click(screen.getByTestId('block-button-approve'));
+    await waitFor(() => expect(mockApiFetch).toHaveBeenCalled());
+    // Meanwhile the click opened a form, and the line said so.
+    act(() => noteReceipt('m1', { text: 'You opened “Approve the expense”' }));
+    await act(async () => release(answer(appCard({ version: 1 }), 'Opening the form')));
+    expect(screen.getByTestId('action-receipt')).toHaveTextContent(/^You opened “Approve the expense” · /);
+    expect(screen.getByTestId('action-receipt')).not.toHaveTextContent('Opening the form');
+  });
+
+  it('shows again what was sent in a form opened from the card', async () => {
+    renderScope(appCard());
+    act(() =>
+      noteReceipt('m1', {
+        text: 'You sent “Expense details”',
+        notice: 'Thanks, filed',
+        details: { app: 'Expenses', title: 'Expense details', notice: 'Thanks, filed', answers: [{ label: 'Amount', text: '€184.50' }] },
+      }),
+    );
+    const line = await receipt();
+    expect(line).toHaveTextContent(/^You sent “Expense details” · .* — Thanks, filed · View details$/);
+    fireEvent.click(within(line).getByTestId('action-receipt-details'));
+    const dialog = await screen.findByTestId('sent-details-dialog');
+    expect(within(dialog).getByRole('heading', { name: 'Expense details' })).toBeInTheDocument();
+    expect(within(dialog).getByText(TIME)).toHaveTextContent(/^Expenses · sent \d{1,2}:\d{2}/);
+    expect(within(dialog).getByText('Sent to Expenses')).toBeInTheDocument();
+    expect(within(dialog).getByText('€184.50')).toBeInTheDocument();
+    expect(within(dialog).getByText('Amount').tagName).toBe('DT');
+
+    // Escape closes it, and it opens again.
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('sent-details-dialog')).toBeNull());
+    fireEvent.click(screen.getByTestId('action-receipt-details'));
+    // The footer's Close.
+    const footerClose = (await screen.findByTestId('sent-details-dialog')).querySelector<HTMLButtonElement>('[data-slot="dialog-footer"] button')!;
+    expect(footerClose).toHaveTextContent('Close');
+    fireEvent.click(footerClose);
+    await waitFor(() => expect(screen.queryByTestId('sent-details-dialog')).toBeNull());
+
+    // A newer line without details (another click) takes the dialog away.
+    fireEvent.click(screen.getByTestId('action-receipt-details'));
+    await screen.findByTestId('sent-details-dialog');
+    act(() => noteReceipt('m1', { text: 'You clicked “Approve”' }));
+    await waitFor(() => expect(screen.queryByTestId('sent-details-dialog')).toBeNull());
+    expect(screen.queryByTestId('action-receipt-details')).toBeNull();
   });
 });

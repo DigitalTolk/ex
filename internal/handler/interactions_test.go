@@ -85,6 +85,14 @@ func (m *memIxState) DeleteView(_ context.Context, v *model.StoredView) error {
 	return nil
 }
 
+func (m *memIxState) TakeView(_ context.Context, v *model.StoredView) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.views[v.View.ID]
+	delete(m.views, v.View.ID)
+	return ok, nil
+}
+
 func (m *memIxState) DropViewExternalID(context.Context, string, string, string) error { return nil }
 
 func (m *memIxState) ClaimIdempotencyKey(_ context.Context, scope, key string, _ time.Duration) ([]byte, bool, error) {
@@ -171,7 +179,7 @@ func newIxHandlerEnvWith(t *testing.T, limiter service.ClickLimiter) *ixHandlerE
 		"ch-1#m1": {ID: "m1", ParentID: "ch-1", AuthorID: service.WebhookAuthorID, Body: "card", WebhookID: "wh", AppButtons: true},
 	}}
 	hooks := &handlerWebhookStore{items: map[string]*model.IncomingWebhook{
-		"wh": {ID: "wh", Title: "MeetingMind", ChannelID: "ch-1", CreatedBy: "u-1", SecretVersion: 1},
+		"wh": {ID: "wh", Title: "MeetingMind", ChannelID: "ch-1", CreatedBy: "u-1", SecretVersion: 1, Kind: model.WebhookKindRich},
 	}}
 	msgSvc := service.NewMessageService(messages, nil, nil, nil, nil)
 	webhooks := service.NewIncomingWebhookService(hooks, channels, msgSvc, handlerWebhookImageProxy{}, "")
@@ -281,7 +289,7 @@ func (e *ixHandlerEnv) mintFor(t *testing.T) string {
 		{Type: model.ElementButton, ActionID: "go", Text: &model.TextObject{Type: model.TextPlain, Text: "Go"}},
 	}}}
 	button, _ := service.ButtonAt(e.messages.messages["ch-1#m1"], "b1", "go")
-	if _, err := e.svc.Click(context.Background(), e.messages.messages["ch-1#m1"], service.ParentChannel, button, "b1", "u-1"); err != nil || url == "" {
+	if _, err := e.svc.Click(context.Background(), e.messages.messages["ch-1#m1"], service.ParentChannel, button, "b1", "u-1", nil); err != nil || url == "" {
 		t.Fatalf("click for a response url: %v %q", err, url)
 	}
 	return url[strings.LastIndex(url, "/")+1:]

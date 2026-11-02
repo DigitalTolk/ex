@@ -5,14 +5,16 @@ import { useAppViewStore } from '@/stores/app-view';
 // see a form never pay for it.
 const AppViewDialog = lazy(() => import('./AppViewDialog'));
 
-// AppViewHost shows the app form open in this tab, if any. Mounted once at
-// the chat root; a new form (another view ID) starts fresh.
+// AppViewHost shows the app form on top of this tab's stack, if any. Mounted
+// once at the chat root; each form (view ID) starts fresh, from its draft
+// when going Back to it.
 export function AppViewHost() {
-  const current = useAppViewStore((s) => s.current);
+  const current = useAppViewStore((s) => s.stack.at(-1));
+  const depth = useAppViewStore((s) => s.stack.length);
   if (!current) return null;
   return (
     <Suspense fallback={null}>
-      <AppViewDialog key={current.view.id} event={current} />
+      <AppViewDialog key={current.view.id} event={current} depth={depth} />
     </Suspense>
   );
 }

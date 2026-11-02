@@ -44,6 +44,8 @@ var errorMappings = []errorMapping{
 	{service.ErrWebhookUnavailable, http.StatusServiceUnavailable, "unavailable", "webhook delivery temporarily unavailable, retry shortly"},
 	{service.ErrReservedEmoji, http.StatusBadRequest, "reserved_emoji", "that emoji is reserved for run states"},
 	{service.ErrInvalidBlocks, http.StatusBadRequest, "invalid_blocks", ""},
+	// A form the webhooks panel previews that views.open would refuse.
+	{service.ErrInvalidView, http.StatusBadRequest, "invalid_view", ""},
 	{service.ErrCardChanged, http.StatusConflict, "card_changed", ""},
 	{service.ErrAppNotSetUp, http.StatusConflict, "app_not_set_up", ""},
 	{service.ErrAppUnavailable, http.StatusConflict, "app_unavailable", ""},
@@ -51,6 +53,7 @@ var errorMappings = []errorMapping{
 	{service.ErrAppBusy, http.StatusTooManyRequests, "app_busy", ""},
 	{service.ErrBotTokenRequired, http.StatusUnauthorized, "token_required", ""},
 	{service.ErrInvalidBotToken, http.StatusUnauthorized, "invalid_token", ""},
+	{service.ErrNotRichWebhook, http.StatusConflict, "not_rich_webhook", ""},
 	{service.ErrAppVersionConflict, http.StatusConflict, "version_conflict", ""},
 	{service.ErrResponseURLExpired, http.StatusGone, "expired_url", ""},
 	{service.ErrResponseURLUsedUp, http.StatusGone, "used_up", ""},

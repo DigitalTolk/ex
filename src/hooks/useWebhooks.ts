@@ -10,6 +10,8 @@ export interface CreateIncomingWebhookInput {
   lockToChannel: boolean;
   username?: string;
   profileImageURL?: string;
+  // 'rich' on create only; the kind never changes afterwards.
+  kind?: string;
 }
 
 export function useIncomingWebhooks() {

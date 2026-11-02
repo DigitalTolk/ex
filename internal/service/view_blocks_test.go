@@ -22,7 +22,7 @@ func TestView_KeepsWhatEachFieldUses(t *testing.T) {
 		Submit: md("Send"),
 		Close:  plain("  "), // blank: the default label
 		Blocks: model.Blocks{
-			{Type: "image"}, // not drawn: skipped
+			{Type: "video"}, // not drawn: skipped
 			{Type: model.BlockSection, Text: md("hi <!here>"), Accessory: &link},
 			{Type: model.BlockActions, Elements: []model.BlockElement{link}},
 			{Type: model.BlockContext, Elements: []model.BlockElement{{Type: model.TextPlain, Content: "small print"}}},
@@ -121,7 +121,7 @@ func TestView_RefusesFormsThatBreakARule(t *testing.T) {
 		{"submit too long", func(v *model.View) { v.Submit = plain(long(maxViewButtonChars + 1)) }, "view.submit: text is longer than 24"},
 		{"close too long", func(v *model.View) { v.Close = plain(long(maxViewButtonChars + 1)) }, "view.close: text is longer than 24"},
 		{"too many blocks", func(v *model.View) { v.Blocks = many(maxViewBlocks+1, model.Block{Type: model.BlockDivider}) }, "at most 100 blocks"},
-		{"no blocks it can draw", func(v *model.View) { v.Blocks = model.Blocks{{Type: "image"}} }, "at least one block"},
+		{"no blocks it can draw", func(v *model.View) { v.Blocks = model.Blocks{{Type: "video"}} }, "at least one block"},
 		{"fields but no submit", func(v *model.View) { v.Submit = plain(" ") }, "needs a submit label"},
 		{"too large", func(v *model.View) {
 			v.Blocks = many(50, model.Block{Type: model.BlockSection, Text: plain(long(maxSectionChars))})
@@ -130,22 +130,27 @@ func TestView_RefusesFormsThatBreakARule(t *testing.T) {
 		{"an option whose value is blank", func(v *model.View) {
 			v.Blocks = model.Blocks{{Type: model.BlockInput, Label: plain("Pick"), Element: &model.BlockElement{Type: model.ElementStaticSelect, Options: []model.SelectOption{opt("Space", "  ")}}}}
 		}, "an option needs text and a value"},
-		{"a button that calls the app", func(v *model.View) {
-			v.Blocks = model.Blocks{{Type: model.BlockActions, Elements: []model.BlockElement{btn("go", "Go")}}}
-		}, "view.blocks[0]: a button in a form can only open a link"},
-		{"an accessory that calls the app", func(v *model.View) {
-			b := btn("go", "Go")
+		{"a bad button in an actions row", func(v *model.View) {
+			v.Blocks = model.Blocks{{Type: model.BlockActions, Elements: []model.BlockElement{btn("go", " ")}}}
+		}, "view.blocks[0].elements[0]: a button needs a label"},
+		{"a bad picker as an accessory", func(v *model.View) {
+			b := model.BlockElement{Type: model.ElementStaticSelect, ActionID: "pick"}
 			v.Blocks = model.Blocks{{Type: model.BlockSection, Text: plain("s"), Accessory: &b}}
-		}, "can only open a link"},
-		{"a built-in action", func(v *model.View) {
-			v.Blocks = model.Blocks{{Type: model.BlockActions, Elements: []model.BlockElement{ackButton}}}
-		}, "can only open a link"},
+		}, "view.blocks[0].accessory.elements[0]: needs between 1 and 100 options"},
+		{"a bad built-in action", func(v *model.View) {
+			loud := ackButton
+			loud.Style = "loud"
+			v.Blocks = model.Blocks{{Type: model.BlockActions, Elements: []model.BlockElement{loud}}}
+		}, "style must be primary or danger"},
+		{"an overflow menu as a field", func(v *model.View) {
+			v.Blocks = model.Blocks{field(model.BlockElement{Type: model.ElementOverflow})}
+		}, "a field needs an input element"},
 		{"a field without a label", func(v *model.View) { v.Blocks[1].Label = nil }, "view.blocks[1]: a field needs a label"},
 		{"a blank label", func(v *model.View) { v.Blocks[1].Label = plain(" ") }, "a field needs a label"},
 		{"a label too long", func(v *model.View) { v.Blocks[1].Label = plain(long(maxLabelChars + 1)) }, "view.blocks[1].label: text is longer than 2000"},
 		{"a hint too long", func(v *model.View) { v.Blocks[1].Hint = plain(long(maxLabelChars + 1)) }, "view.blocks[1].hint: text is longer than 2000"},
-		{"a field without an element", func(v *model.View) { v.Blocks[1].Element = nil }, "needs a plain_text_input, datepicker or static_select"},
-		{"a field holding a button", func(v *model.View) { v.Blocks = model.Blocks{field(btn("go", "Go"))} }, "needs a plain_text_input, datepicker or static_select"},
+		{"a field without an element", func(v *model.View) { v.Blocks[1].Element = nil }, "view.blocks[1]: a field needs an input element"},
+		{"a field holding a button", func(v *model.View) { v.Blocks = model.Blocks{field(btn("go", "Go"))} }, "a field needs an input element"},
 		{"an action_id too long", func(v *model.View) {
 			v.Blocks = model.Blocks{text(func(e *model.BlockElement) { e.ActionID = long(maxBlockIDChars + 1) })}
 		}, "action_id is longer than 255"},
@@ -172,8 +177,8 @@ func TestView_RefusesFormsThatBreakARule(t *testing.T) {
 		{"a bad initial date", func(v *model.View) {
 			v.Blocks = model.Blocks{field(model.BlockElement{Type: model.ElementDatepicker, InitialDate: "23/10/2026"})}
 		}, "initial_date must be YYYY-MM-DD"},
-		{"a select without options", func(v *model.View) { v.Blocks = model.Blocks{sel()} }, "a select needs between 1 and 100 options"},
-		{"a select with too many options", func(v *model.View) { v.Blocks = model.Blocks{sel(manyOpts...)} }, "a select needs between 1 and 100 options"},
+		{"a select without options", func(v *model.View) { v.Blocks = model.Blocks{sel()} }, "view.blocks[0].element: needs between 1 and 100 options"},
+		{"a select with too many options", func(v *model.View) { v.Blocks = model.Blocks{sel(manyOpts...)} }, "view.blocks[0].element: needs between 1 and 100 options"},
 		{"an option without text", func(v *model.View) { v.Blocks = model.Blocks{sel(opt(" ", "a"))} }, "options[0]: an option needs text and a value"},
 		{"an option without a value", func(v *model.View) { v.Blocks = model.Blocks{sel(opt("A", ""))} }, "an option needs text and a value"},
 		{"an option value too long", func(v *model.View) { v.Blocks = model.Blocks{sel(opt("A", long(maxOptionValueChars+1)))} }, "value is longer than 150"},
@@ -207,14 +212,14 @@ func TestReadSubmission_ChecksEachFieldAgainstTheStoredForm(t *testing.T) {
 	// A field limited only by what a field holds.
 	form.Blocks = append(form.Blocks, model.Block{Type: model.BlockInput, BlockID: "essay", Optional: true, Label: plain("Essay"),
 		Element: &model.BlockElement{Type: model.ElementPlainTextInput, ActionID: "value"}})
-	with := func(block, action, value string) map[string]map[string]string {
+	with := func(block, action, value string) map[string]map[string]RawValue {
 		raw := standupAnswers()
-		raw[block] = map[string]string{action: value}
+		raw[block] = map[string]RawValue{action: {value}}
 		return raw
 	}
 	for _, tc := range []struct {
 		name  string
-		raw   map[string]map[string]string
+		raw   map[string]map[string]RawValue
 		block string
 		want  string
 	}{
@@ -228,7 +233,7 @@ func TestReadSubmission_ChecksEachFieldAgainstTheStoredForm(t *testing.T) {
 		{"an option the form doesn't offer", with("mood", "pick", "ecstatic"), "mood", "Please choose one of the options."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			values, problems := readSubmission(form, tc.raw)
+			values, problems := readSubmission(form, tc.raw, noUsers, false)
 			if values != nil || len(problems) != 1 || problems[tc.block] != tc.want {
 				t.Fatalf("problems = %v (values %v), want %s: %q", problems, values, tc.block, tc.want)
 			}
@@ -239,11 +244,11 @@ func TestReadSubmission_ChecksEachFieldAgainstTheStoredForm(t *testing.T) {
 	form.Blocks[3].Optional = false
 	raw := standupAnswers()
 	delete(raw, "mood")
-	if _, problems := readSubmission(form, raw); problems["mood"] != "Please choose one." {
+	if _, problems := readSubmission(form, raw, noUsers, false); problems["mood"] != "Please choose one." {
 		t.Fatalf("required select: %v", problems)
 	}
 
-	values, problems := readSubmission(form, standupAnswers())
+	values, problems := readSubmission(form, standupAnswers(), noUsers, false)
 	if problems != nil {
 		t.Fatalf("valid: %v", problems)
 	}

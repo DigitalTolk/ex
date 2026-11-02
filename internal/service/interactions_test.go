@@ -48,6 +48,12 @@ type fakeIxState struct {
 	deleteViewErr error
 	dropErr       error // DropViewExternalID
 	getViewErr    error // GetView only
+	takeViewErr   error // TakeView only
+	takes         int   // TakeView calls
+	// getViewErrID fails GetView for that one form only (a form under the
+	// one closed); onGetView runs, unlocked, after each GetView has read.
+	getViewErrID string
+	onGetView    func()
 }
 
 type fakeURL struct {
@@ -101,9 +107,20 @@ func (f *fakeIxState) SaveView(_ context.Context, v *model.StoredView, _ time.Du
 	return nil
 }
 
-func (f *fakeIxState) GetView(_ context.Context, id string) (*model.StoredView, error) {
+func (f *fakeIxState) GetView(ctx context.Context, id string) (*model.StoredView, error) {
+	v, err := f.getView(ctx, id)
+	if f.onGetView != nil {
+		f.onGetView()
+	}
+	return v, err
+}
+
+func (f *fakeIxState) getView(_ context.Context, id string) (*model.StoredView, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.getViewErrID != "" && id == f.getViewErrID {
+		return nil, errors.New("redis down")
+	}
 	if f.getViewErr != nil {
 		return nil, f.getViewErr
 	}
@@ -136,6 +153,24 @@ func (f *fakeIxState) DeleteView(_ context.Context, v *model.StoredView) error {
 	delete(f.views, v.View.ID)
 	f.dropExternal(v.WebhookID, v.View.ExternalID, v.View.ID)
 	return nil
+}
+
+// TakeView deletes v and reports whether this call deleted it, as the Redis
+// DEL does: of several takers of one view, exactly one gets true.
+func (f *fakeIxState) TakeView(_ context.Context, v *model.StoredView) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.takes++
+	if f.viewErr != nil {
+		return false, f.viewErr
+	}
+	if f.takeViewErr != nil {
+		return false, f.takeViewErr
+	}
+	_, had := f.views[v.View.ID]
+	delete(f.views, v.View.ID)
+	f.dropExternal(v.WebhookID, v.View.ExternalID, v.View.ID)
+	return had, nil
 }
 
 // dropExternal forgets an external_id while it still names viewID, as the
@@ -356,7 +391,7 @@ func newIxFixture(t *testing.T) *ixFixture {
 	ix := NewInteractionService(svc, webhooks, state, limiter, pub, InteractionConfig{SigningKey: []byte("server-key"), BaseURL: "https://chat.ex.test/", AllowPrivate: true})
 	ix.timeout = 300 * time.Millisecond
 	f := &ixFixture{svc: ix, msgs: svc, messages: messages, hooks: hooks, state: state, limiter: limiter, pub: pub}
-	f.wh = &model.IncomingWebhook{ID: "wh", Title: "MeetingMind", Username: "MeetingMind", ChannelID: "ch1", CreatedBy: "u-1", SecretVersion: 1}
+	f.wh = &model.IncomingWebhook{ID: "wh", Title: "MeetingMind", Username: "MeetingMind", ChannelID: "ch1", CreatedBy: "u-1", SecretVersion: 1, Kind: model.WebhookKindRich}
 	f.app = &fakeApp{t: t, secrets: []string{ix.signer.Secret("wh", 1)}}
 	f.server = httptest.NewServer(f.app)
 	t.Cleanup(f.server.Close)
@@ -1090,7 +1125,7 @@ func TestIncomingWebhook_BotTokenGuardsAppButtons(t *testing.T) {
 }
 
 func TestIncomingWebhook_ListSurfacesStoreErrorsAndPresents(t *testing.T) {
-	store := &fakeWebhookStore{items: map[string]*model.IncomingWebhook{"wh": {ID: "wh", CreatedBy: "u-1", BotTokenHash: "h", SecretVersion: 2}}}
+	store := &fakeWebhookStore{items: map[string]*model.IncomingWebhook{"wh": {ID: "wh", CreatedBy: "u-1", BotTokenHash: "h", SecretVersion: 2, Kind: model.WebhookKindRich}}}
 	svc := NewIncomingWebhookService(store, fakeWebhookChannels{}, nil, nil, "")
 	list, err := svc.List(context.Background(), member("u-1"))
 	if err != nil || len(list) != 1 || !list[0].HasBotToken || !list[0].HasSigningSecret {

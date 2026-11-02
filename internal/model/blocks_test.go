@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/json"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -219,15 +220,181 @@ func TestBlocksDynamoDB_InputFieldsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestIsInputType(t *testing.T) {
-	for _, typ := range []string{ElementPlainTextInput, ElementDatepicker, ElementStaticSelect} {
+func TestElementKinds(t *testing.T) {
+	// A form field holds any value element; overflow menus, buttons, images
+	// and text never.
+	inputs := []string{ElementPlainTextInput, ElementNumberInput, ElementEmailInput, ElementURLInput,
+		ElementDatepicker, ElementTimepicker, ElementStaticSelect, ElementMultiStaticSelect,
+		ElementUsersSelect, ElementMultiUsersSelect, ElementCheckboxes, ElementRadioButtons}
+	for _, typ := range inputs {
 		if !IsInputType(typ) {
 			t.Errorf("%s is an input", typ)
 		}
 	}
-	for _, typ := range []string{ElementButton, TextPlain, TextMarkdown, "multi_static_select", ""} {
+	for _, typ := range []string{ElementButton, ElementOverflow, ElementImage, TextPlain, TextMarkdown, "conversations_select", ""} {
 		if IsInputType(typ) {
 			t.Errorf("%q is not an input", typ)
 		}
+	}
+
+	// What a message can carry besides buttons: picks that go to the app.
+	// Free text, and the many-people picker, stay in forms.
+	for _, typ := range []string{ElementStaticSelect, ElementMultiStaticSelect, ElementUsersSelect, ElementOverflow,
+		ElementDatepicker, ElementTimepicker, ElementCheckboxes, ElementRadioButtons} {
+		if !IsMessageInteractive(typ) {
+			t.Errorf("%s belongs in a message", typ)
+		}
+	}
+	for _, typ := range []string{ElementButton, ElementPlainTextInput, ElementNumberInput, ElementEmailInput,
+		ElementURLInput, ElementMultiUsersSelect, ElementImage, ""} {
+		if IsMessageInteractive(typ) {
+			t.Errorf("%q isn't a message pick", typ)
+		}
+	}
+
+	// Lists: the multi-selects and checkboxes, nothing else.
+	multi := map[string]bool{ElementMultiStaticSelect: true, ElementMultiUsersSelect: true, ElementCheckboxes: true}
+	for _, typ := range append(inputs, ElementOverflow, ElementButton) {
+		if IsMultiValue(typ) != multi[typ] {
+			t.Errorf("IsMultiValue(%s) = %v", typ, !multi[typ])
+		}
+	}
+}
+
+// fillAll sets every field of v (a struct) to something non-zero, so a
+// round trip that drops any field shows.
+func fillAll(t *testing.T, v reflect.Value, seed *int) {
+	t.Helper()
+	for i := 0; i < v.NumField(); i++ {
+		fillValue(t, v.Type().Field(i).Name, v.Field(i), seed)
+	}
+}
+
+func fillValue(t *testing.T, name string, f reflect.Value, seed *int) {
+	t.Helper()
+	*seed++
+	switch f.Kind() {
+	case reflect.String:
+		f.SetString(name + "-" + strconv.Itoa(*seed))
+	case reflect.Bool:
+		f.SetBool(true)
+	case reflect.Int:
+		f.SetInt(int64(*seed))
+	case reflect.Pointer:
+		f.Set(reflect.New(f.Type().Elem()))
+		fillValue(t, name, f.Elem(), seed)
+	case reflect.Struct:
+		fillAll(t, f, seed)
+	case reflect.Slice:
+		f.Set(reflect.MakeSlice(f.Type(), 2, 2))
+		for i := 0; i < 2; i++ {
+			fillValue(t, name, f.Index(i), seed)
+		}
+	default:
+		t.Fatalf("fillValue: %s is a %s", name, f.Kind())
+	}
+}
+
+// Every field an element has survives its custom JSON — the wire shape
+// lists each one by hand, so a field added to one side only would vanish.
+func TestBlockElementJSON_EveryFieldRoundTrips(t *testing.T) {
+	var want BlockElement
+	seed := 0
+	fillAll(t, reflect.ValueOf(&want).Elem(), &seed)
+	want.Type = ElementMultiStaticSelect
+	want.Content = "" // a text element's text; this one isn't text
+
+	raw, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back BlockElement
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(back, want) {
+		t.Fatalf("round trip lost a field:\n got %#v\nwant %#v", back, want)
+	}
+	s := string(raw)
+	for _, key := range []string{`"initial_options":[`, `"initial_time":`, `"initial_user":`, `"initial_users":[`,
+		`"max_selected_items":`, `"is_decimal_allowed":true`, `"min_value":`, `"max_value":`,
+		`"image_url":`, `"alt_text":`, `"image_width":`, `"image_height":`, `"description":{`, `"url":"URL-`} {
+		if !strings.Contains(s, key) {
+			t.Errorf("wire form lacks %s: %s", key, s)
+		}
+	}
+}
+
+// richView is a stacked form with the newer kinds of field: a time, a
+// number, checkboxes with descriptions, a people picker that tells the app
+// as it changes, and a picture.
+func richView() View {
+	early := SelectOption{Text: TextObject{Type: TextPlain, Text: "Early"}, Value: "early", Description: &TextObject{Type: TextPlain, Text: "Before 9"}}
+	return View{
+		ID: "V2", Type: ViewModal, CallbackID: "shift", Hash: "h2", Title: TextObject{Type: TextPlain, Text: "Shift"},
+		NotifyOnClose: true, PreviousViewID: "V1", RootViewID: "V0",
+		Blocks: Blocks{
+			{Type: BlockImage, BlockID: "pic", ImageURL: "https://chat.test/img/p", AltText: "Rota", ImageWidth: 640, ImageHeight: 480,
+				Text: &TextObject{Type: TextPlain, Text: "This week"}},
+			{Type: BlockInput, BlockID: "at", Label: &TextObject{Type: TextPlain, Text: "Start"},
+				Element: &BlockElement{Type: ElementTimepicker, ActionID: "time", InitialTime: "08:30"}},
+			{Type: BlockInput, BlockID: "hours", Label: &TextObject{Type: TextPlain, Text: "Hours"},
+				Element: &BlockElement{Type: ElementNumberInput, ActionID: "n", IsDecimalAllowed: true, MinValue: "0.5", MaxValue: "12"}},
+			{Type: BlockInput, BlockID: "slots", Label: &TextObject{Type: TextPlain, Text: "Slots"},
+				Element: &BlockElement{Type: ElementCheckboxes, ActionID: "c", Options: []SelectOption{early, {Text: TextObject{Type: TextPlain, Text: "Late"}, Value: "late"}}, InitialOptions: []SelectOption{early}}},
+			{Type: BlockInput, BlockID: "who", Label: &TextObject{Type: TextPlain, Text: "Cover"}, DispatchAction: true,
+				Element: &BlockElement{Type: ElementMultiUsersSelect, ActionID: "users", InitialUsers: []string{"u1", "u2"}, MaxSelectedItems: 3}},
+			{Type: BlockActions, BlockID: "more", Elements: []BlockElement{
+				{Type: ElementOverflow, ActionID: "menu", Options: []SelectOption{{Text: TextObject{Type: TextPlain, Text: "Docs"}, Value: "docs", URL: "https://example.com/docs"}}},
+				{Type: ElementUsersSelect, ActionID: "lead", InitialUser: "u3"},
+				{Type: ElementImage, ImageURL: "https://chat.test/img/i", AltText: "icon", ImageWidth: 16, ImageHeight: 16},
+			}},
+		},
+	}
+}
+
+func TestViewJSON_NewerFieldsRoundTrip(t *testing.T) {
+	want := richView()
+	raw, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(raw)
+	for _, wire := range []string{
+		`"notify_on_close":true`, `"previous_view_id":"V1"`, `"root_view_id":"V0"`, `"dispatch_action":true`,
+		`"type":"image","block_id":"pic"`, `"image_url":"https://chat.test/img/p","alt_text":"Rota","image_width":640,"image_height":480`,
+		`"initial_time":"08:30"`, `"is_decimal_allowed":true,"min_value":"0.5","max_value":"12"`,
+		`"description":{"type":"plain_text","text":"Before 9"}`, `"url":"https://example.com/docs"`,
+		`"initial_users":["u1","u2"],"max_selected_items":3`, `"initial_user":"u3"`,
+	} {
+		if !strings.Contains(s, wire) {
+			t.Errorf("wire form lacks %s: %s", wire, s)
+		}
+	}
+	var back View
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(back, want) {
+		t.Fatalf("round trip:\n got %#v\nwant %#v", back, want)
+	}
+	// A form ex hasn't stacked or asked to hear about says nothing of it.
+	plain, _ := json.Marshal(sampleView())
+	for _, absent := range []string{"notify_on_close", "previous_view_id", "root_view_id", "dispatch_action", "image_"} {
+		if strings.Contains(string(plain), absent) {
+			t.Errorf("a plain form carries %s: %s", absent, plain)
+		}
+	}
+}
+
+func TestBlocksDynamoDB_NewerFieldsRoundTrip(t *testing.T) {
+	want := richView().Blocks
+	av, err := want.MarshalDynamoDBAttributeValue()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back Blocks
+	if err := back.UnmarshalDynamoDBAttributeValue(av); err != nil || !reflect.DeepEqual(back, want) {
+		t.Fatalf("round trip: %v\n got %#v\nwant %#v", err, back, want)
 	}
 }

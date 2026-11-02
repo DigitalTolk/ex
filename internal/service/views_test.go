@@ -36,8 +36,8 @@ func standupForm() model.View {
 
 // standupAnswers is a complete, valid submission of standupForm, as the
 // browser sends it: each field's raw value under its block and action.
-func standupAnswers() map[string]map[string]string {
-	return map[string]map[string]string{"did": {"text": "Shipped forms"}, "due": {"value": "2026-10-23"}, "mood": {"pick": "good"}}
+func standupAnswers() map[string]map[string]RawValue {
+	return map[string]map[string]RawValue{"did": {"text": {"Shipped forms"}}, "due": {"value": {"2026-10-23"}}, "mood": {"pick": {"good"}}}
 }
 
 // triggerFrom clicks MeetingMind's card as userID from browser tab "tab-1"
@@ -144,7 +144,7 @@ func TestOpenView_ATriggerIsGoodOnceAndOnlyForTheAppClicked(t *testing.T) {
 	if _, err := f.svc.OpenView(ctx, f.wh, trigger, standupForm()); !errors.Is(err, ErrTriggerExpired) {
 		t.Fatalf("second use: %v", err)
 	}
-	other := &model.IncomingWebhook{ID: "wh2", Title: "Other"}
+	other := &model.IncomingWebhook{ID: "wh2", Title: "Other", Kind: model.WebhookKindRich}
 	f.hooks.items["wh2"] = other
 	if _, err := f.svc.OpenView(ctx, other, f.triggerFrom(t, "u-1"), standupForm()); !errors.Is(err, ErrTriggerExpired) {
 		t.Fatalf("another app's trigger: %v", err)
@@ -277,7 +277,7 @@ func TestUpdateView_Refusals(t *testing.T) {
 	ctx := context.Background()
 	v := f.openForm(t, "u-1")
 
-	other := &model.IncomingWebhook{ID: "wh2", Title: "Other"}
+	other := &model.IncomingWebhook{ID: "wh2", Title: "Other", Kind: model.WebhookKindRich}
 	if _, err := f.svc.UpdateView(ctx, other, v.ID, "", "", standupForm()); !errors.Is(err, ErrViewNotFound) {
 		t.Fatalf("another app's form: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestSubmitView_AValidFormReachesTheAppSignedInSlacksShape(t *testing.T) {
 	f.messages.messages["ch1#m1"].WebhookIconEmoji = "calendar"
 	v := f.openForm(t, "u-1")
 	answers := standupAnswers()
-	answers["ghost"] = map[string]string{"x": "not a field"} // ignored: not in the stored form
+	answers["ghost"] = map[string]RawValue{"x": {"not a field"}} // ignored: not in the stored form
 
 	res, err := f.svc.SubmitView(ctx, "u-1", v.ID, answers)
 	if err != nil || res.Action != ViewClose || res.Failed || res.Notice != "" {
@@ -397,8 +397,8 @@ func TestSubmitView_FieldsThatNeedFixingComeBackWithoutCallingTheApp(t *testing.
 	f := newIxFixture(t)
 	v := f.openForm(t, "u-1")
 	clicks := len(f.app.bodies)
-	res, err := f.svc.SubmitView(context.Background(), "u-1", v.ID, map[string]map[string]string{
-		"did": {"text": "  "}, "due": {"value": "Friday"}, "mood": {"pick": "ecstatic"},
+	res, err := f.svc.SubmitView(context.Background(), "u-1", v.ID, map[string]map[string]RawValue{
+		"did": {"text": {"  "}}, "due": {"value": {"Friday"}}, "mood": {"pick": {"ecstatic"}},
 	})
 	if err != nil || res.Action != ViewErrors {
 		t.Fatalf("submit: %+v %v", res, err)
@@ -476,28 +476,60 @@ func TestSubmitView_EachAnswerOfTheApp(t *testing.T) {
 			if e := f.state.lastEntry("wh"); e.Result != model.InteractionOK || !strings.Contains(e.Error, tc.entryErr) || (tc.entryErr == "" && e.Error != "") {
 				t.Fatalf("history = %+v", e)
 			}
+			if tc.stays {
+				// Kept as it was — findable by its external_id — and it can
+				// be submitted again.
+				if sv := f.state.views[v.ID]; sv.View.Hash != v.Hash || f.state.externals["wh:standup-u1"] != v.ID {
+					t.Fatalf("kept form = %+v, externals %v", sv, f.state.externals)
+				}
+				f.app.answer(http.StatusOK, "", 0)
+				if res, err := f.svc.SubmitView(context.Background(), "u-1", v.ID, standupAnswers()); err != nil || res.Action != ViewClose {
+					t.Fatalf("submitting again: %+v %v", res, err)
+				}
+			}
 		})
 	}
 }
 
-func TestSubmitView_UpdateAndPushSwapInTheNextForm(t *testing.T) {
-	for _, action := range []string{"update", "push"} {
-		t.Run(action, func(t *testing.T) {
-			f := newIxFixture(t)
-			v := f.openForm(t, "u-1")
-			f.app.reply = `{"response_action":"` + action + `","notice":"Step 2","view":{"type":"modal","title":{"type":"plain_text","text":"Thanks"},` +
-				`"blocks":[{"type":"section","text":{"type":"mrkdwn","text":"All **done**"}}]}}`
-			res, err := f.svc.SubmitView(context.Background(), "u-1", v.ID, standupAnswers())
-			if err != nil || res.Action != ViewUpdate || res.Notice != "Step 2" || res.Failed {
-				t.Fatalf("result = %+v, err %v", res, err)
-			}
-			if res.View.ID != v.ID || res.View.Hash == v.Hash || res.View.Title.Text != "Thanks" || res.View.ExternalID != "standup-u1" || res.View.Submit != nil {
-				t.Fatalf("next form = %+v", res.View)
-			}
-			if sv := f.state.views[v.ID]; sv == nil || sv.View.Hash != res.View.Hash || sv.UserID != "u-1" {
-				t.Fatalf("stored = %+v", sv)
-			}
-		})
+const thanksForm = `{"type":"modal","title":{"type":"plain_text","text":"Thanks"},"blocks":[{"type":"section","text":{"type":"mrkdwn","text":"All **done**"}}]}`
+
+func TestSubmitView_UpdateSwapsInTheNextForm(t *testing.T) {
+	f := newIxFixture(t)
+	v := f.openForm(t, "u-1")
+	f.app.reply = `{"response_action":"update","notice":"Step 2","view":` + thanksForm + `}`
+	res, err := f.svc.SubmitView(context.Background(), "u-1", v.ID, standupAnswers())
+	if err != nil || res.Action != ViewUpdate || res.Notice != "Step 2" || res.Failed {
+		t.Fatalf("result = %+v, err %v", res, err)
+	}
+	if res.View.ID != v.ID || res.View.Hash == v.Hash || res.View.Title.Text != "Thanks" || res.View.ExternalID != "standup-u1" || res.View.Submit != nil {
+		t.Fatalf("next form = %+v", res.View)
+	}
+	if sv := f.state.views[v.ID]; sv == nil || sv.View.Hash != res.View.Hash || sv.UserID != "u-1" {
+		t.Fatalf("stored = %+v", sv)
+	}
+}
+
+func TestSubmitView_PushStacksTheNextFormOnTop(t *testing.T) {
+	f := newIxFixture(t)
+	v := f.openForm(t, "u-1")
+	f.app.reply = `{"response_action":"push","notice":"Step 2","view":` + thanksForm + `}`
+	res, err := f.svc.SubmitView(context.Background(), "u-1", v.ID, standupAnswers())
+	if err != nil || res.Action != ViewPush || res.Notice != "Step 2" || res.Failed {
+		t.Fatalf("result = %+v, err %v", res, err)
+	}
+	// A new form, on top of the one submitted, which stays open under it.
+	if res.View.ID == v.ID || res.View.Title.Text != "Thanks" || res.View.PreviousViewID != v.ID || res.View.RootViewID != v.ID || res.View.ExternalID != "" {
+		t.Fatalf("pushed form = %+v", res.View)
+	}
+	if sv := f.state.views[res.View.ID]; sv == nil || sv.Depth != 1 || sv.UserID != "u-1" || sv.ClickID != "tab-1" {
+		t.Fatalf("stored = %+v", sv)
+	}
+	if under := f.state.views[v.ID]; under == nil || under.View.Hash != v.Hash {
+		t.Fatalf("the form under it = %+v", under)
+	}
+	// The tab gets the pushed form in the submission's answer, not as an event.
+	if opened, _ := f.viewEvents(t, events.EventViewOpened); len(opened) != 1 {
+		t.Fatalf("view.opened events = %d, want only the first form's", len(opened))
 	}
 }
 
@@ -596,29 +628,29 @@ func TestCloseView_OnlyThePersonsOwnAndClosingTwiceIsFine(t *testing.T) {
 	ctx := context.Background()
 	v := f.openForm(t, "u-1")
 
-	if err := f.svc.CloseView(ctx, "u-2", v.ID); err != nil {
+	if err := f.svc.CloseView(ctx, "u-2", v.ID, false, nil); err != nil {
 		t.Fatalf("someone else's form reads as closed: %v", err)
 	}
 	if _, open := f.state.views[v.ID]; !open {
 		t.Fatal("someone else closed the form")
 	}
-	f.state.deleteViewErr = errors.New("redis down")
-	if err := f.svc.CloseView(ctx, "u-1", v.ID); err == nil {
+	f.state.takeViewErr = errors.New("redis down")
+	if err := f.svc.CloseView(ctx, "u-1", v.ID, false, nil); err == nil {
 		t.Fatal("delete failure")
 	}
-	f.state.deleteViewErr = nil
+	f.state.takeViewErr = nil
 	f.state.viewErr = errors.New("redis down")
-	if err := f.svc.CloseView(ctx, "u-1", v.ID); err == nil || errors.Is(err, ErrViewNotFound) {
+	if err := f.svc.CloseView(ctx, "u-1", v.ID, false, nil); err == nil || errors.Is(err, ErrViewNotFound) {
 		t.Fatalf("read failure: %v", err)
 	}
 	f.state.viewErr = nil
-	if err := f.svc.CloseView(ctx, "u-1", v.ID); err != nil {
+	if err := f.svc.CloseView(ctx, "u-1", v.ID, false, nil); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 	if _, open := f.state.views[v.ID]; open || f.state.externals["wh:standup-u1"] != "" {
 		t.Fatalf("form still stored: %v %v", f.state.views, f.state.externals)
 	}
-	if err := f.svc.CloseView(ctx, "u-1", v.ID); err != nil {
+	if err := f.svc.CloseView(ctx, "u-1", v.ID, false, nil); err != nil {
 		t.Fatalf("closing again: %v", err)
 	}
 	if _, err := f.svc.SubmitView(ctx, "u-1", v.ID, standupAnswers()); !errors.Is(err, ErrViewNotFound) {
@@ -706,7 +738,7 @@ func TestOpenView_AnExternalIDNamesOneOpenForm(t *testing.T) {
 	}
 	// Once the first form closes, its external_id is free again — and
 	// closing it never touches an external_id another form holds.
-	if err := f.svc.CloseView(ctx, "u-1", first.ID); err != nil {
+	if err := f.svc.CloseView(ctx, "u-1", first.ID, false, nil); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 	renamed, err := f.svc.UpdateView(ctx, f.wh, second.ID, "", "", standupForm())
@@ -821,7 +853,7 @@ func TestAuthenticateApp_ByBotTokenWithinTheAppsBudget(t *testing.T) {
 	prev, prevHash := newBotToken()
 	until := now.Add(time.Hour)
 	f.wh.BotTokenHash, f.wh.PrevBotTokenHash, f.wh.PrevBotTokenUntil = hash, prevHash, &until
-	f.hooks.items["wh2"] = &model.IncomingWebhook{ID: "wh2", Title: "No token"}
+	f.hooks.items["wh2"] = &model.IncomingWebhook{ID: "wh2", Title: "No token", Kind: model.WebhookKindRich}
 
 	for name, tok := range map[string]string{"current": token, "previous, during the overlap": prev} {
 		if wh, err := f.svc.AuthenticateApp(ctx, tok); err != nil || wh.ID != "wh" {
@@ -873,7 +905,7 @@ func TestIdempotent_ARetryGetsTheFirstAnswer(t *testing.T) {
 	if out, _ := f.svc.Idempotent(ctx, f.wh, "views.update", "k1", run); string(out) != `{"call":2}` {
 		t.Fatalf("another method: %s", out)
 	}
-	other := &model.IncomingWebhook{ID: "wh2"}
+	other := &model.IncomingWebhook{ID: "wh2", Kind: model.WebhookKindRich}
 	if out, _ := f.svc.Idempotent(ctx, other, "views.open", "k1", run); string(out) != `{"call":3}` {
 		t.Fatalf("another app: %s", out)
 	}
