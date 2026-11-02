@@ -686,6 +686,34 @@ describe('ThreadPanel', () => {
       });
     });
 
+    // Regression: a notification lands on the first unread reply. The
+    // "New messages" line (drawn once the thread's read state answers) makes
+    // that reply start a new group, and the re-render's className wiped the
+    // ring applied before it.
+    it('keeps the ring on an anchor that is the first unread reply, the line drawn after the replies load', async () => {
+      const multiReplies: Message[] = [
+        { id: 'r-a', parentID: 'ch-1', parentMessageID: 'm-1', authorID: 'u-2', body: 'first reply', createdAt: '2026-04-24T10:30:00Z' },
+        { id: 'r-b', parentID: 'ch-1', parentMessageID: 'm-1', authorID: 'u-2', body: 'target reply', createdAt: '2026-04-24T10:31:00Z' },
+      ];
+      let answerReadState: (v: unknown) => void = () => {};
+      mockApiFetch.mockImplementation((url: string) => {
+        if (url === '/api/v1/user-state/threads/m-1') return new Promise((resolve) => { answerReadState = resolve; });
+        if (url.endsWith('/messages/m-1/thread')) return multiReplies;
+        return undefined;
+      });
+      await withScrollIntoViewSpy(async () => {
+        renderWithProviders(
+          <ThreadPanel channelId="ch-1" threadRootID="m-1" onClose={vi.fn()} userMap={userMap} currentUserId="u-1" anchorMsgId="r-b" />,
+        );
+        await screen.findByText('target reply');
+        await act(async () => answerReadState({ seenAt: '2026-04-24T10:30:30Z' }));
+        const line = await screen.findByTestId('unread-divider');
+        const target = document.getElementById('msg-r-b');
+        expect(line.nextElementSibling?.textContent).toContain('target reply');
+        expect(target?.classList.contains('ring-1')).toBe(true);
+      });
+    });
+
     it('does NOT snap to the bottom (newest reply) when anchorMsgId is set', async () => {
       const multiReplies: Message[] = [
         { id: 'r-a', parentID: 'ch-1', parentMessageID: 'm-1', authorID: 'u-2', body: 'first', createdAt: '2026-04-24T10:30:00Z' },

@@ -37,78 +37,52 @@ func seedIndexedThread(t *testing.T, rootCreated time.Time, follows []string) (*
 }
 
 // Regression: every thread reply re-read the WHOLE thread (all reply pages)
-// to work out who participates, and re-read the root NotifyForMessage was
-// handed — O(replies) per reply, O(replies²) per thread. A thread rooted after
-// the write-time participation index existed is served from its follow rows
-// (every replier wrote one) with the root passed in: no reply read, no root
-// read — and the same participants are alerted.
-func TestNotifyForMessage_IndexedThreadUsesFollowIndex(t *testing.T) {
-	rootCreated := threadIndexEpoch.Add(24 * time.Hour)
-	svc, pub, msgs, root, reply := seedIndexedThread(t, rootCreated, []string{"root-author", "replier-a", "replier-b", "follower", "sender"})
+// to work out who participates. Every thread's participants have follow rows
+// — written at reply time, and backfilled for older and imported threads — so
+// a reply is answered from them however old the thread is: no reply read, and
+// no root read (it is passed in). The same participants are alerted.
+func TestNotifyForMessage_ThreadUsesFollowIndex(t *testing.T) {
+	for _, rootCreated := range []time.Time{time.Date(2026, 7, 1, 9, 0, 0, 0, time.UTC), time.Now().Add(-time.Hour)} {
+		svc, pub, msgs, root, reply := seedIndexedThread(t, rootCreated, []string{"root-author", "replier-a", "replier-b", "follower", "sender"})
 
-	svc.NotifyForMessage(context.Background(), reply, ParentChannel, root)
+		svc.NotifyForMessage(context.Background(), reply, ParentChannel, root)
 
-	if n := msgs.threadReplyCalls.Load(); n != 0 {
-		t.Fatalf("ListThreadReplies calls = %d, want 0 for an indexed thread", n)
-	}
-	if n := msgs.getMessageCalls.Load(); n != 0 {
-		t.Fatalf("GetMessage calls = %d, want 0 (the root is passed in)", n)
-	}
-	got := alertedUsers(pub)
-	for _, uid := range []string{"root-author", "replier-a", "replier-b", "follower"} {
-		if !got[uid] {
-			t.Errorf("participant %q got no thread-reply alert (got %v)", uid, got)
+		if n := msgs.threadReplyCalls.Load(); n != 0 {
+			t.Fatalf("root from %s: ListThreadReplies calls = %d, want 0", rootCreated, n)
 		}
-	}
-	if got["sender"] {
-		t.Error("the reply author alerted themselves")
+		if n := msgs.getMessageCalls.Load(); n != 0 {
+			t.Fatalf("root from %s: GetMessage calls = %d, want 0 (the root is passed in)", rootCreated, n)
+		}
+		got := alertedUsers(pub)
+		for _, uid := range []string{"root-author", "replier-a", "replier-b", "follower"} {
+			if !got[uid] {
+				t.Errorf("root from %s: participant %q got no thread-reply alert (got %v)", rootCreated, uid, got)
+			}
+		}
+		if got["sender"] {
+			t.Error("the reply author alerted themselves")
+		}
 	}
 }
 
-// A thread rooted before the index existed may have repliers with no follow
-// row, so it keeps the full read: replier-b (no row) is still alerted.
-func TestNotifyForMessage_LegacyThreadKeepsFullRead(t *testing.T) {
-	rootCreated := threadIndexEpoch.Add(-24 * time.Hour)
-	svc, pub, msgs, root, reply := seedIndexedThread(t, rootCreated, []string{"follower"})
+// A root that couldn't be read still has the thread's replies read: nobody
+// who replied may silently miss the alert.
+func TestResolveThreadRecipients_UnreadableRootReadsReplies(t *testing.T) {
+	svc, _, msgs, _, reply := seedIndexedThread(t, time.Now().Add(-time.Hour), []string{"follower"})
 
-	svc.NotifyForMessage(context.Background(), reply, ParentChannel, root)
+	got, _ := svc.resolveThreadRecipients(context.Background(), reply,
+		memberSnapshot{memberIDs: []string{"sender", "root-author", "replier-a", "replier-b", "follower"}}, nil)
 
 	if n := msgs.threadReplyCalls.Load(); n != 1 {
-		t.Fatalf("ListThreadReplies calls = %d, want 1 for a legacy thread", n)
+		t.Fatalf("ListThreadReplies calls = %d, want 1", n)
 	}
-	got := alertedUsers(pub)
-	for _, uid := range []string{"root-author", "replier-a", "replier-b", "follower"} {
-		if !got[uid] {
-			t.Errorf("participant %q got no thread-reply alert (got %v)", uid, got)
+	want := map[string]bool{"replier-a": true, "replier-b": true, "follower": true}
+	if len(got) != len(want) {
+		t.Fatalf("recipients = %v, want %v", got, want)
+	}
+	for _, uid := range got {
+		if !want[uid] {
+			t.Fatalf("recipients = %v, want %v", got, want)
 		}
-	}
-}
-
-// A thread rooted before the index existed whose participants were backfilled
-// (the thread-participants migration, or the importer, flags the root) is
-// served from its follow rows like any newer thread: a reply in an imported
-// thread no longer re-reads the whole thread.
-func TestNotifyForMessage_BackfilledLegacyThreadUsesFollowIndex(t *testing.T) {
-	rootCreated := threadIndexEpoch.Add(-24 * time.Hour)
-	svc, pub, msgs, root, reply := seedIndexedThread(t, rootCreated, []string{"root-author", "replier-a", "replier-b", "follower", "sender"})
-	root.ParticipantsIndexed = true
-
-	svc.NotifyForMessage(context.Background(), reply, ParentChannel, root)
-
-	if n := msgs.threadReplyCalls.Load(); n != 0 {
-		t.Fatalf("ListThreadReplies calls = %d, want 0 for a backfilled thread", n)
-	}
-	got := alertedUsers(pub)
-	for _, uid := range []string{"root-author", "replier-a", "replier-b", "follower"} {
-		if !got[uid] {
-			t.Errorf("participant %q got no thread-reply alert (got %v)", uid, got)
-		}
-	}
-}
-
-// The migration backfills exactly the threads the reply path treats as legacy.
-func TestThreadIndexEpoch(t *testing.T) {
-	if !ThreadIndexEpoch().Equal(threadIndexEpoch) {
-		t.Fatalf("ThreadIndexEpoch() = %v, want %v", ThreadIndexEpoch(), threadIndexEpoch)
 	}
 }

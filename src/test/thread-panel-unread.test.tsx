@@ -40,9 +40,13 @@ const threadDataState: { current: { id: string; authorID: string; body: string; 
 const markThreadSeenMock = vi.hoisted(() => vi.fn());
 const noteThreadReadPositionMock = vi.hoisted(() => vi.fn());
 const threadHasUnseenMock = vi.hoisted(() => vi.fn());
+// How far the user had read when the thread opened, once the server says
+// (useThreadSeenAtOpen).
+const seenAtOpen = vi.hoisted(() => ({ current: { known: true, seenAt: undefined as string | undefined } }));
 vi.mock('@/hooks/useThreads', () => ({
   useThreadMessages: () => ({ data: threadDataState.current, isLoading: false }),
   useThreadFollowing: () => ({ data: false }),
+  useThreadSeenAtOpen: () => seenAtOpen.current,
   useFollowThread: () => ({ mutate: vi.fn(), isPending: false }),
   useUnfollowThread: () => ({ mutate: vi.fn(), isPending: false }),
   markThreadSeen: markThreadSeenMock,
@@ -81,6 +85,7 @@ describe('ThreadPanel unread', () => {
     noteThreadReadPositionMock.mockReset();
     threadHasUnseenMock.mockReset();
     threadHasUnseenMock.mockReturnValue(true);
+    seenAtOpen.current = { known: true, seenAt: at(2) };
     // The previous test's unmount scheduled an end for this thread's visit.
     keepReadSession(key);
     endReadSession(key);
@@ -92,12 +97,45 @@ describe('ThreadPanel unread', () => {
   });
 
   it('notes where you had read before marking the thread seen, and draws the line at the first newer reply', () => {
-    noteThreadReadPositionMock.mockImplementation(() => setUnreadAnchor(key, { kind: 'after', at: at(2) }));
+    noteThreadReadPositionMock.mockImplementation((root: string, seenAt: string) => setUnreadAnchor(threadReadKey(root), { kind: 'after', at: seenAt }));
     renderPanel();
-    expect(noteThreadReadPositionMock).toHaveBeenCalledWith(expect.anything(), 'root-1');
+    expect(noteThreadReadPositionMock).toHaveBeenCalledWith('root-1', at(2));
     expect(markThreadSeenMock).toHaveBeenCalledWith('root-1', at(3), { parentID: 'ch-1', parentType: 'channel' });
+    expect(noteThreadReadPositionMock.mock.invocationCallOrder[0]).toBeLessThan(markThreadSeenMock.mock.invocationCallOrder[0]);
     const line = screen.getByTestId('unread-divider');
     expect(line.nextElementSibling?.textContent).toContain('second reply');
+  });
+
+  // Marking the thread seen before the server said how far the user had read
+  // would hand the server's answer the new seen time: no line.
+  it("neither notes the line nor marks the thread seen until the server says how far you had read", () => {
+    seenAtOpen.current = { known: false, seenAt: undefined };
+    const view = renderPanel();
+    expect(noteThreadReadPositionMock).not.toHaveBeenCalled();
+    expect(markThreadSeenMock).not.toHaveBeenCalled();
+    // Coming back reads nothing yet either.
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(markThreadSeenMock).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+
+    seenAtOpen.current = { known: true, seenAt: at(2) };
+    view.refresh();
+    expect(noteThreadReadPositionMock).toHaveBeenCalledWith('root-1', at(2));
+    expect(markThreadSeenMock).toHaveBeenCalledWith('root-1', at(3), { parentID: 'ch-1', parentType: 'channel' });
+    expect(noteThreadReadPositionMock.mock.invocationCallOrder[0]).toBeLessThan(markThreadSeenMock.mock.invocationCallOrder[0]);
+  });
+
+  // Noted once per opening: a later answer (a read elsewhere) doesn't move
+  // the line.
+  it('notes the line once per opening', () => {
+    const view = renderPanel();
+    seenAtOpen.current = { known: true, seenAt: at(3) };
+    view.refresh();
+    expect(noteThreadReadPositionMock).toHaveBeenCalledTimes(1);
+    expect(noteThreadReadPositionMock).toHaveBeenCalledWith('root-1', at(2));
   });
 
   it('once the line has been seen it retires in place: same box, invisible, and the thread remembers', () => {

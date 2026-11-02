@@ -197,7 +197,8 @@ func (c *cappedAfterStore) ListMessagesAfter(_ context.Context, parentID, after 
 }
 
 // A thread reply rewinds the thread's seen time to just before it (keeping
-// the real write time, so List reports the rewind) and flags the thread.
+// the real write time, so the thread's read state reports the rewind) and
+// flags the thread.
 func TestMarkUnread_ThreadReplyRewindsThreadSeen(t *testing.T) {
 	f := newUnreadFixture(t)
 	root := f.add("ch-1", 1, nil)
@@ -218,9 +219,9 @@ func TestMarkUnread_ThreadReplyRewindsThreadSeen(t *testing.T) {
 	if seen == nil || flag == nil || !seen.SeenAt.Equal(*res.SeenAt) || seen.ParentID != "ch-1" || flag.ParentType != ParentChannel {
 		t.Fatalf("user state = seen %+v, flag %+v", seen, flag)
 	}
-	state, err := NewUserStateService(f.state, nil).List(context.Background(), "u-1")
-	if err != nil || state.ThreadMarkedUnread[root.ID] == "" || state.ThreadSeen[root.ID] == "" {
-		t.Fatalf("List = %+v, %v; want the thread seen + marked unread", state, err)
+	read, err := NewUserStateService(f.state, nil).ThreadRead(context.Background(), "u-1", root.ID)
+	if err != nil || read.MarkedUnreadAt == nil || read.SeenAt == nil || !read.SeenAt.Equal(*res.SeenAt) {
+		t.Fatalf("ThreadRead = %+v, %v; want the rewound seen time + marked unread", read, err)
 	}
 	if _, data := f.lastEvent(t); data["userState"] != true {
 		t.Fatalf("event %v, want {userState: true}", data)
@@ -281,20 +282,62 @@ func TestMarkUnread_Errors(t *testing.T) {
 	}
 }
 
-// List reports a thread as marked unread only for a rewound seen row — an
-// ordinary "seen" carries no flag.
-func TestUserStateService_ListReportsMarkedUnreadOnlyForRewinds(t *testing.T) {
+// A thread's read state reports it marked unread only for a rewound seen
+// row — an ordinary "seen" carries no flag — and a thread never opened has
+// an empty state.
+func TestUserStateService_ThreadRead(t *testing.T) {
+	ctx := context.Background()
 	st := newMockUserStateStore()
 	at := time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC)
 	earlier := at.Add(-time.Hour)
-	_ = st.SetUserState(context.Background(), &model.UserStateItem{UserID: "u-1", Kind: model.UserStateThreadSeen, TargetID: "seen", SeenAt: &at, UpdatedAt: at})
-	_ = st.SetUserState(context.Background(), &model.UserStateItem{UserID: "u-1", Kind: model.UserStateThreadSeen, TargetID: "rewound", SeenAt: &earlier, Rewound: true, UpdatedAt: at})
+	_ = st.SetUserState(ctx, &model.UserStateItem{UserID: "u-1", Kind: model.UserStateThreadSeen, TargetID: "seen", SeenAt: &at, UpdatedAt: at})
+	_ = st.SetUserState(ctx, &model.UserStateItem{UserID: "u-1", Kind: model.UserStateThreadSeen, TargetID: "rewound", SeenAt: &earlier, Rewound: true, UpdatedAt: at})
+	svc := NewUserStateService(st, nil)
 
-	state, err := NewUserStateService(st, nil).List(context.Background(), "u-1")
+	if got, err := svc.ThreadRead(ctx, "u-1", "seen"); err != nil || got.SeenAt == nil || !got.SeenAt.Equal(at) || got.MarkedUnreadAt != nil {
+		t.Fatalf("seen thread = %+v (err %v), want its seen time and no mark", got, err)
+	}
+	if got, err := svc.ThreadRead(ctx, "u-1", "rewound"); err != nil || !got.SeenAt.Equal(earlier) || got.MarkedUnreadAt == nil || !got.MarkedUnreadAt.Equal(at) {
+		t.Fatalf("rewound thread = %+v (err %v), want the rewound time marked at %s", got, err, at)
+	}
+	if got, err := svc.ThreadRead(ctx, "u-1", "never"); err != nil || got.SeenAt != nil || got.MarkedUnreadAt != nil {
+		t.Fatalf("unopened thread = %+v (err %v), want an empty state", got, err)
+	}
+	if got, err := NewUserStateService(nil, nil).ThreadRead(ctx, "u-1", "seen"); err != nil || got.SeenAt != nil {
+		t.Fatalf("no store = %+v (err %v), want an empty state", got, err)
+	}
+	st.listErr = errors.New("dynamo down")
+	if _, err := svc.ThreadRead(ctx, "u-1", "seen"); !errors.Is(err, st.listErr) {
+		t.Fatalf("read error = %v, want it surfaced", err)
+	}
+}
+
+// The always-loaded state reads its three small kinds and never the seen
+// rows, however many threads the user has opened.
+func TestUserStateService_ListNeverReadsSeenRows(t *testing.T) {
+	ctx := context.Background()
+	st := newMockUserStateStore()
+	now := time.Now()
+	for _, item := range []*model.UserStateItem{
+		{Kind: model.UserStateThreadNotification, TargetID: "root-b"},
+		{Kind: model.UserStateThreadNotification, TargetID: "root-a"},
+		{Kind: model.UserStateHiddenConversation, TargetID: "conv-1"},
+		{Kind: model.UserStateHiddenSkill, TargetID: "skill-1"},
+		{Kind: model.UserStateThreadSeen, TargetID: "root-a", SeenAt: &now},
+	} {
+		item.UserID, item.UpdatedAt = "u-1", now
+		_ = st.SetUserState(ctx, item)
+	}
+	state, err := NewUserStateService(st, nil).List(ctx, "u-1")
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if _, ok := state.ThreadMarkedUnread["seen"]; ok || state.ThreadMarkedUnread["rewound"] != at.Format(time.RFC3339Nano) {
-		t.Fatalf("ThreadMarkedUnread = %v, want only the rewound thread", state.ThreadMarkedUnread)
+	if len(state.ThreadNotifications) != 2 || state.ThreadNotifications[0] != "root-a" || len(state.HiddenConversations) != 1 || len(state.HiddenSkills) != 1 {
+		t.Fatalf("state = %+v", state)
+	}
+	for _, kind := range st.listedKinds {
+		if kind == model.UserStateThreadSeen {
+			t.Fatalf("listed kinds = %v, want no seen rows", st.listedKinds)
+		}
 	}
 }

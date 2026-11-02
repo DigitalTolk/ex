@@ -44,7 +44,40 @@ function TooltipProvider({
 // listens for pointerenter, whose type says what is pointing. A finger's tap
 // also makes the browser replay mouseenter, so arming from that would
 // replay a mouse hover on the real trigger and open the tooltip on a tap.
-type Handoff = { kind: "pointer"; pointerType: string } | { kind: "focus" }
+type Handoff = { kind: "pointer"; pointerType: string; watch: PointerWatch } | { kind: "focus" }
+
+// The pointer, followed from the moment a hover arms the primitive until the
+// browser places it again itself. The browser saw it enter only the inert
+// element, which the primitive's trigger replaced: when the pointer moves on
+// before the browser re-checks what is under it (its next frame), it never
+// reports the pointer leaving the new trigger — the replayed hover opened the
+// tooltip and nothing ever closed it, until a click. So the first pointer
+// event after arming says where the pointer really is. (The replay itself
+// sends other event types.)
+const WATCHED_POINTER_EVENTS = ["pointermove", "mouseover", "mouseout"] as const
+interface PointerWatch {
+  last: MouseEvent | null
+  next: ((event: MouseEvent) => void) | null
+  stop: () => void
+}
+function watchPointer(): PointerWatch {
+  const watch: PointerWatch = {
+    last: null,
+    next: null,
+    stop: () => {
+      for (const type of WATCHED_POINTER_EVENTS) document.removeEventListener(type, record, true)
+    },
+  }
+  function record(event: Event) {
+    const e = event as MouseEvent
+    // A mouseout only says something when the pointer left the window.
+    if (e.type === "mouseout" && e.relatedTarget !== null) return
+    watch.last = e
+    watch.next?.(e)
+  }
+  for (const type of WATCHED_POINTER_EVENTS) document.addEventListener(type, record, true)
+  return watch
+}
 interface LazyTooltipContext {
   armed: boolean
   // Mount the primitive, remembering how the contact happened so the real
@@ -121,6 +154,19 @@ function TooltipTrigger({ render, className, children, ...props }: TooltipPrimit
         el.focus()
         return
       }
+      const { watch } = handoff
+      const elsewhere = (e: MouseEvent) => e.type === "mouseout" || !el.contains(e.target as Node)
+      // Placed since arming: gone already, so nothing to open; or on the new
+      // trigger, which the browser then reports leaving itself.
+      if (watch.last) {
+        watch.stop()
+        if (elsewhere(watch.last)) return
+      } else {
+        watch.next = (e) => {
+          watch.stop()
+          if (elsewhere(e)) el.dispatchEvent(new MouseEvent("mouseleave", { clientX: e.clientX, clientY: e.clientY }))
+        }
+      }
       el.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: handoff.pointerType }))
       el.dispatchEvent(new MouseEvent("mouseenter"))
       el.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }))
@@ -149,7 +195,7 @@ function TooltipTrigger({ render, className, children, ...props }: TooltipPrimit
           // Tooltips are for hovering pointers only (the primitive ignores
           // touch, long-press shows the same information): a touch never
           // mounts the primitive.
-          if (isHoverPointer(event.pointerType)) lazy.arm({ kind: "pointer", pointerType: event.pointerType })
+          if (isHoverPointer(event.pointerType)) lazy.arm({ kind: "pointer", pointerType: event.pointerType, watch: watchPointer() })
         },
         onFocus: (event: FocusEvent) => {
           ;(own.onFocus as ((e: FocusEvent) => void) | undefined)?.(event)

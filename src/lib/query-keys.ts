@@ -52,6 +52,8 @@ export const queryKeys = {
   threadPagesAll: () => ['threadPages'] as const,
   threadFollow: (parentID: string, threadRootID: string) => ['threadFollow', parentID, threadRootID] as const,
   threadFollowAll: () => ['threadFollow'] as const,
+  threadRead: (threadRootID: string) => ['threadRead', threadRootID] as const,
+  threadReadAll: () => ['threadRead'] as const,
   thread: (parentPath: string, threadRootID: string) => ['thread', parentPath, threadRootID] as const,
 
   // Drafts

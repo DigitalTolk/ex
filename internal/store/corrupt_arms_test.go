@@ -94,6 +94,10 @@ func TestCorruptRows_GetItemArms(t *testing.T) {
 		_, err := NewThreadFollowStore(faulted).GetThreadFollow(ctx, "u-x", "ch-x", "m-x")
 		assertUnmarshalErr(t, err, "thread follow Get")
 	})
+	t.Run("user state Get", func(t *testing.T) {
+		_, err := NewUserStateStore(faulted).GetUserState(ctx, "u-x", model.UserStateThreadSeen, "m-x")
+		assertUnmarshalErr(t, err, "user state Get")
+	})
 	t.Run("token GetByHash", func(t *testing.T) {
 		_, err := NewTokenStore(faulted).GetRefreshToken(ctx, "hash-x")
 		assertUnmarshalErr(t, err, "token GetByHash")
@@ -188,7 +192,7 @@ func TestCorruptRows_QueryArms(t *testing.T) {
 		assertUnmarshalErr(t, err, "parent index ListFileIndex")
 	})
 	t.Run("user state List", func(t *testing.T) {
-		_, err := NewUserStateStore(faulted).ListUserState(ctx, "u-x")
+		_, err := NewUserStateStore(faulted).ListUserState(ctx, "u-x", model.UserStateThreadNotification)
 		assertUnmarshalErr(t, err, "user state List")
 	})
 	t.Run("attachment GetByHash", func(t *testing.T) {

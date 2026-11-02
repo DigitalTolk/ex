@@ -53,6 +53,80 @@ describe('Tooltip primitive defaults', () => {
     expect((document.querySelector('[data-testid="lazy-trigger"]') as HTMLElement).hasAttribute('id')).toBe(true);
   });
 
+  // Regression: the browser saw the pointer enter only the inert element,
+  // which the primitive's trigger replaced. A pointer that moved on before
+  // the browser's next frame re-checked what was under it — a quick pass
+  // over a status or a reaction — was never reported leaving the new
+  // trigger, and the tooltip stayed open until a click. Below, the page gets
+  // what the browser sends then: the hover, then the pointer elsewhere, and
+  // no leave.
+  describe('a hover that moves straight on', () => {
+    async function renderPass() {
+      const screen = await render(
+        <TooltipProvider delay={0}>
+          <div data-testid="away" style={{ position: 'fixed', left: 0, top: 0, width: 40, height: 40 }} />
+          <Tooltip>
+            <TooltipTrigger render={<span data-testid="pass-trigger" style={{ position: 'fixed', right: 20, bottom: 20 }} />}>pass over me</TooltipTrigger>
+            <TooltipContent>Pass body</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>,
+      );
+      const trigger = () => document.querySelector('[data-testid="pass-trigger"]') as HTMLElement;
+      const away = document.querySelector('[data-testid="away"]') as HTMLElement;
+      const hoverTrigger = () => trigger().dispatchEvent(new PointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }));
+      const pointerAway = () => away.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' }));
+      return { screen, trigger, hoverTrigger, pointerAway };
+    }
+    const content = () => document.querySelector('[data-slot="tooltip-content"]');
+
+    it('closes the tooltip it opened once the pointer turns up elsewhere', async () => {
+      const { screen, hoverTrigger, pointerAway } = await renderPass();
+      hoverTrigger();
+      await expect.element(screen.getByText('Pass body').first()).toBeVisible();
+      pointerAway();
+      await expect.poll(content).toBeNull();
+    });
+
+    it('opens nothing when the pointer was gone before the hover reached the new trigger', async () => {
+      const { trigger, hoverTrigger, pointerAway } = await renderPass();
+      // Both before the replay (a microtask after this block).
+      hoverTrigger();
+      pointerAway();
+      expect(trigger().hasAttribute('id')).toBe(true);
+      await new Promise((r) => setTimeout(r, 150));
+      expect(content()).toBeNull();
+    });
+
+    it('leaves the closing to the browser once it has the pointer on the new trigger, or when it left the window', async () => {
+      const { screen, trigger, hoverTrigger } = await renderPass();
+      hoverTrigger();
+      // The browser re-checked and found the pointer on the trigger: it
+      // reports the leave itself from here.
+      trigger().dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await expect.element(screen.getByText('Pass body').first()).toBeVisible();
+      // A move between two elements says nothing; leaving the window does.
+      document.body.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
+      await expect.element(screen.getByText('Pass body').first()).toBeVisible();
+      trigger().dispatchEvent(new MouseEvent('mouseleave'));
+      await expect.poll(content).toBeNull();
+    });
+
+    it('closes when the pointer leaves the window straight from the hover', async () => {
+      const { screen, hoverTrigger } = await renderPass();
+      hoverTrigger();
+      await expect.element(screen.getByText('Pass body').first()).toBeVisible();
+      document.body.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: null }));
+      await expect.poll(content).toBeNull();
+    });
+
+    it('opens as before when the pointer moved within the new trigger before the replay', async () => {
+      const { screen, trigger, hoverTrigger } = await renderPass();
+      hoverTrigger();
+      trigger().dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' }));
+      await expect.element(screen.getByText('Pass body').first()).toBeVisible();
+    });
+  });
+
   it('mounts on keyboard focus and keeps focus on the real trigger', async () => {
     const onFocus = vi.fn();
     const screen = await render(

@@ -128,6 +128,7 @@ vi.mock('@/hooks/useThreads', () => ({
   useUnfollowThread: () => ({ mutate: unfollowThreadMutate, isPending: false }),
   markThreadSeen: vi.fn(),
   noteThreadReadPosition: vi.fn(),
+  useThreadSeenAtOpen: () => ({ known: true, seenAt: undefined }),
   threadHasUnseen: () => true,
 }));
 
@@ -147,11 +148,11 @@ vi.mock('./TypingIndicator', () => ({
 }));
 
 vi.mock('./MessageItem', () => ({
-  MessageItem: ({ message, onEditMessage }: { message: Message; onEditMessage?: (m: Message) => void }) => (
+  MessageItem: ({ message, onEditMessage, highlighted }: { message: Message; onEditMessage?: (m: Message) => void; highlighted?: boolean }) => (
     // The real MessageItem renders id="msg-<id>" — the ThreadPanel anchor
     // effect resolves the scroll target via getElementById, so the double
-    // must reproduce that id.
-    <div id={`msg-${message.id}`} data-message-id={message.id} style={{ height: 64 }}>
+    // must reproduce that id — and draws the deep-link ring when highlighted.
+    <div id={`msg-${message.id}`} data-message-id={message.id} className={highlighted ? 'ring-1 ring-inset ring-amber-400/50 rounded-md' : undefined} style={{ height: 64 }}>
       <span>{message.body}</span>
       {onEditMessage ? (
         <button data-testid={`edit-${message.id}`} onClick={() => onEditMessage(message)}>
@@ -494,8 +495,7 @@ describe('ThreadPanel coverage — deep-link anchor', () => {
     };
     const screen = await mount({ anchorMsgId: 'R-anchor', anchorRevision: 'rev-1' });
     await expect.element(screen.getByText('anchored reply')).toBeVisible();
-    // The cosmetic highlight effect adds the ring classes to the anchored
-    // element (lines 295-299).
+    // The anchored reply is drawn highlighted.
     await vi.waitFor(() => {
       const el = document.getElementById('msg-R-anchor');
       expect(el?.classList.contains('ring-1')).toBe(true);

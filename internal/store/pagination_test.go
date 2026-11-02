@@ -82,7 +82,7 @@ func TestUserStateStore_List_PaginatesAllPages(t *testing.T) {
 	}
 	s := NewUserStateStore(withFault(db, func(f *faultClient) { f.pageQueryOnce = true }))
 
-	items, err := s.ListUserState(ctx, "u-pgs")
+	items, err := s.ListUserState(ctx, "u-pgs", model.UserStateThreadNotification)
 	if err != nil || len(items) != 1 {
 		t.Fatalf("UserState.List paged = %v, %v; want 1 item", len(items), err)
 	}

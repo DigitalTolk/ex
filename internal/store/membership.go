@@ -126,9 +126,22 @@ func (s *MembershipStoreImpl) RemoveMember(ctx context.Context, channelID, userI
 }
 
 func (s *MembershipStoreImpl) GetMembership(ctx context.Context, channelID, userID string) (*model.ChannelMembership, error) {
+	return s.getMembership(ctx, channelID, userID, false)
+}
+
+// GetMembershipConsistent is GetMembership read consistently, for filling the
+// shared member copy: an eventually consistent read right after a removal
+// could still return the row, and the copy would then keep the removed member
+// in until the channel's next change.
+func (s *MembershipStoreImpl) GetMembershipConsistent(ctx context.Context, channelID, userID string) (*model.ChannelMembership, error) {
+	return s.getMembership(ctx, channelID, userID, true)
+}
+
+func (s *MembershipStoreImpl) getMembership(ctx context.Context, channelID, userID string, consistent bool) (*model.ChannelMembership, error) {
 	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(s.Table),
-		Key:       compositeKey(channelPK(channelID), memberSK(userID)),
+		TableName:      aws.String(s.Table),
+		Key:            compositeKey(channelPK(channelID), memberSK(userID)),
+		ConsistentRead: aws.Bool(consistent),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: get channel membership: %w", err)

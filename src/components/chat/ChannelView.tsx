@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Navigate, useLocation, useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
 import { Header } from '@/components/layout/Header';
 import { NotificationPreferencesDialog } from '@/components/channels/NotificationPreferencesDialog';
 import { RenameChannelDialog } from '@/components/channels/RenameChannelDialog';
@@ -37,7 +36,6 @@ import { useAuth } from '@/context/AuthContext';
 import { useUnread } from '@/context/UnreadContext';
 import { canEditChannel, canArchiveChannel, canUnarchiveChannel, canLeaveChannel, roleNumber, GENERAL_CHANNEL_SLUG } from '@/lib/roles';
 import { ArchivedChannelNotice } from '@/components/chat/ArchivedChannelNotice';
-import { markThreadSeen, noteThreadReadPosition } from '@/hooks/useThreads';
 import { slugify } from '@/lib/format';
 import { NonMemberInvitePrompt } from './NonMemberInvitePrompt';
 import { useNonMemberInvite } from '@/hooks/useNonMemberInvite';
@@ -67,7 +65,6 @@ export function ChannelView() {
   const location = useLocation();
   const { user } = useAuth();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const { setActiveThread } = useUnread();
   const quickReactions = useFrequentEmojis(6);
   const inputRef = useRef<MessageInputHandle>(null);
@@ -163,7 +160,15 @@ export function ChannelView() {
     handleSendMessage,
     handleEditMessage,
     readSession,
-  } = useParentChat({ kind: 'channel', id: channelID, userID: user?.id, beforeSend: inviteMentioned });
+    jumpToLatest,
+  } = useParentChat({
+    kind: 'channel',
+    id: channelID,
+    userID: user?.id,
+    beforeSend: inviteMentioned,
+    showingOlder: hasPreviousPage,
+    showLatest,
+  });
 
   // Reset locally-opened thread when the channel changes; deliberate
   // synchronous reset. URL-driven thread state (?thread=…) doesn't need
@@ -180,14 +185,6 @@ export function ChannelView() {
   // the URL-driven one — unless the user has dismissed it.
   const urlThreadActive = !!threadParam && threadParam !== dismissedThreadParam;
   const effectiveThreadRootID = threadRootID ?? (urlThreadActive ? threadParam : null) ?? null;
-
-  // Mark URL-driven threads as seen exactly once per change — noting first
-  // where the user had read up to, for the thread's "New messages" line.
-  useEffect(() => {
-    if (!threadParam || !channel?.id) return;
-    noteThreadReadPosition(queryClient, threadParam);
-    markThreadSeen(threadParam, new Date().toISOString(), { parentID: channel.id, parentType: 'channel' });
-  }, [threadParam, channel?.id, queryClient]);
 
   // Opening a thread (via URL navigation, e.g. clicking a pinned
   // thread reply) must dismiss any other side panel — the local
@@ -419,10 +416,7 @@ export function ChannelView() {
             anchorRevision={navKey}
             onAtBottomChange={readSession.onAtBottomChange}
             onMarkAllRead={readSession.markAllRead}
-            onJumpToLatest={() => {
-              readSession.prepareJumpToLatest();
-              showLatest();
-            }}
+            onJumpToLatest={jumpToLatest}
             intro={
               channel ? (
                 <ChannelIntro
