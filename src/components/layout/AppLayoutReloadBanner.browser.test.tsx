@@ -195,7 +195,7 @@ describe('AppLayout reload banner browser behavior', () => {
       if (url.includes('/api/v1/drafts')) return apiJSON([], newerVersion);
       if (url.includes('/api/v1/user-state')) {
         return apiJSON(
-          { channelNotifications: [], threadNotifications: [], threadSeen: {}, hiddenConversations: [] },
+          { channelNotifications: [], threadNotifications: [], hiddenConversations: [] },
           newerVersion,
         );
       }

@@ -186,7 +186,6 @@ vi.mock('@/hooks/useUserState', () => ({
       hiddenConversations: [],
       channelNotifications: [],
       threadNotifications: [],
-      threadSeen: {},
     },
   }),
 }));

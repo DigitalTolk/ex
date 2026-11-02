@@ -77,7 +77,7 @@ function installFetch(): () => void {
     if (url.includes('/api/v1/sidebar/categories')) return json([]);
     if (url.includes('/api/v1/drafts')) return method === 'GET' ? json([]) : new Response(null, { status: 204 });
     if (url.includes('/api/v1/user-state')) {
-      return json({ channelNotifications: [], threadNotifications: [], threadSeen: {}, hiddenConversations: [] });
+      return json({ channelNotifications: [], threadNotifications: [], hiddenConversations: [] });
     }
     if (url.includes('/api/v1/threads')) return json([]);
     if (url.includes('/api/v1/emojis')) return json([]);

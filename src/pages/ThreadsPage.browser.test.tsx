@@ -35,7 +35,7 @@ vi.mock('@/hooks/useConversations', async (importOriginal) => ({
 }));
 vi.mock('@/hooks/useUserState', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useUserState')>()),
-  useUserState: () => ({ data: { threadNotifications: [], threadSeen: {}, threadMarkedUnread: {} } }),
+  useUserState: () => ({ data: { threadNotifications: [] } }),
 }));
 vi.mock('@/context/AuthContext', () => ({ useAuth: () => ({ user: { id: 'u-me' } }) }));
 vi.mock('@/context/UnreadContext', () => ({
