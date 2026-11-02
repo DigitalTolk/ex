@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1329,4 +1330,123 @@ func TestOrchestrator_StandingOrdersStopWhenCreatorLeaves(t *testing.T) {
 			t.Fatalf("backlog should be dropped, got %+v", subs[0])
 		}
 	})
+}
+
+// A watch run's state reactions name the watcher's creator so the message can
+// say whose watcher brought the agent; a mentioned agent's run names nobody.
+func TestSetState_AttributesWatchRunsToTheWatcherCreator(t *testing.T) {
+	fx := newOrchFixture(t)
+	ctx := context.Background()
+	watch := &model.Run{ID: "r-watch", AgentID: testGGID, InvokerID: "u-alice", Mode: model.RunModeWatch,
+		ParentID: "chan1", ParentType: service.ParentChannel, MessageID: "m1"}
+	direct := &model.Run{ID: "r-direct", AgentID: testGGID, InvokerID: "u-bob", Mode: model.RunModeDirect,
+		ParentID: "chan1", ParentType: service.ParentChannel, MessageID: "m2"}
+
+	fx.orch.setState(ctx, watch, service.StateEmojiRead)
+	fx.orch.setState(ctx, direct, service.StateEmojiRead)
+
+	fx.msgs.mu.Lock()
+	defer fx.msgs.mu.Unlock()
+	if want := []string{"u-alice", ""}; !slices.Equal(fx.msgs.watchedFor, want) {
+		t.Fatalf("watchedFor = %q, want %q", fx.msgs.watchedFor, want)
+	}
+}
+
+// Nobody in the conversation asked a watcher for anything, so its run leaves
+// only 👀 on their message: no ⚙️/⛔/✅/❌ trail. A mentioned agent's run keeps
+// the full trail.
+func TestSetState_WatchRunsOnlyLeaveTheSeenReaction(t *testing.T) {
+	fx := newOrchFixture(t)
+	ctx := context.Background()
+	watch := &model.Run{ID: "r-watch", AgentID: testGGID, InvokerID: "u-alice", Mode: model.RunModeWatch,
+		ParentID: "chan1", ParentType: service.ParentChannel, MessageID: "m1"}
+	direct := &model.Run{ID: "r-direct", AgentID: testGGID, InvokerID: "u-bob", Mode: model.RunModeDirect,
+		ParentID: "chan1", ParentType: service.ParentChannel, MessageID: "m2"}
+	trail := []string{service.StateEmojiRead, service.StateEmojiWorking, service.StateEmojiBlocked,
+		service.StateEmojiDone, service.StateEmojiFailed}
+
+	for _, emoji := range trail {
+		fx.orch.setState(ctx, watch, emoji)
+	}
+	fx.msgs.mu.Lock()
+	gotWatch := slices.Clone(fx.msgs.reactions)
+	fx.msgs.reactions = nil
+	fx.msgs.mu.Unlock()
+	if want := []string{service.StateEmojiRead}; !slices.Equal(gotWatch, want) {
+		t.Fatalf("watch run reactions = %q, want only %q", gotWatch, want)
+	}
+
+	for _, emoji := range trail {
+		fx.orch.setState(ctx, direct, emoji)
+	}
+	fx.msgs.mu.Lock()
+	defer fx.msgs.mu.Unlock()
+	if !slices.Equal(fx.msgs.reactions, trail) {
+		t.Fatalf("direct run reactions = %q, want the full trail %q", fx.msgs.reactions, trail)
+	}
+}
+
+// A watcher run that fails — even one allowed to post publicly — tells its
+// creator in their DM with the agent, saying which watcher it was, and leaves
+// the watched channel alone. So does one stopped by a limit.
+func TestWatchRunNoticesGoToTheCreatorsDM(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stop func(fx *orchFixture, run *model.Run) error
+		want string
+	}{
+		{"failure", func(fx *orchFixture, run *model.Run) error {
+			return fx.orch.FailRun(context.Background(), "u-alice", "r1", run.ID, "runner_lost")
+		}, "Your watcher in ~[chan1|channel] couldn't finish: ❌ stopped: lost contact with the agent runner"},
+		{"limit", func(fx *orchFixture, run *model.Run) error {
+			return fx.orch.finishLimit(context.Background(), run, run.State, "turn_limit")
+		}, "Your watcher in ~[chan1|channel] couldn't finish: ⛔ stopped: hit its"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newOrchFixture(t)
+			dm := &fakeOwnerDM{convID: "dm-alice-gg"}
+			fx.orch.SetOwnerDMResolver(dm)
+			run := fx.startRun(t)
+			run.Mode = model.RunModeWatch
+			run.ActionMode = model.WatchActionAutonomous
+			if err := fx.runs.UpdateRun(context.Background(), run, run.State); err != nil {
+				t.Fatalf("update: %v", err)
+			}
+			fx.msgs.mu.Lock()
+			before := len(fx.msgs.posts)
+			fx.msgs.mu.Unlock()
+
+			if err := tc.stop(fx, run); err != nil {
+				t.Fatalf("stop: %v", err)
+			}
+
+			fx.msgs.mu.Lock()
+			defer fx.msgs.mu.Unlock()
+			posts, dests := fx.msgs.posts[before:], fx.msgs.postDest[before:]
+			if len(posts) != 1 || dests[0] != service.ParentConversation+"|dm-alice-gg" {
+				t.Fatalf("notice went to %q (%q), want only the creator's DM", dests, posts)
+			}
+			if !strings.HasPrefix(posts[0], tc.want) {
+				t.Fatalf("notice = %q, want prefix %q", posts[0], tc.want)
+			}
+			if dm.gotA != "u-alice" || dm.gotB != testGGID {
+				t.Fatalf("DM opened between %q and %q, want the creator and the agent", dm.gotA, dm.gotB)
+			}
+		})
+	}
+}
+
+func TestWatcherNoticePrefix(t *testing.T) {
+	for _, tc := range []struct {
+		run  model.Run
+		want string
+	}{
+		{model.Run{Mode: model.RunModeDirect, ParentID: "c1", ParentType: service.ParentChannel}, ""},
+		{model.Run{Mode: model.RunModeWatch, ParentID: "c1", ParentType: service.ParentChannel}, "Your watcher in ~[c1|channel] couldn't finish: "},
+		{model.Run{Mode: model.RunModeWatch, ParentID: "dm1", ParentType: service.ParentConversation}, "Your watcher couldn't finish: "},
+	} {
+		if got := watcherNoticePrefix(&tc.run); got != tc.want {
+			t.Errorf("watcherNoticePrefix(%s in %s) = %q, want %q", tc.run.Mode, tc.run.ParentType, got, tc.want)
+		}
+	}
 }

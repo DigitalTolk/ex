@@ -2625,7 +2625,7 @@ func TestMessageService_MachineReactionTransientStates(t *testing.T) {
 
 	set := func(state string) {
 		t.Helper()
-		if err := svc.SetMachineReaction(ctx, "agent-1", "ch1", ParentChannel, msg.ID, state); err != nil {
+		if err := svc.SetMachineReaction(ctx, "agent-1", "", "ch1", ParentChannel, msg.ID, state); err != nil {
 			t.Fatalf("set %q: %v", state, err)
 		}
 	}

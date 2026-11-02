@@ -2121,6 +2121,14 @@ export interface Message {
    */
   agentSkills?: string[];
   /**
+   * AgentWatchers maps an agent user id to the person whose WATCHER brought
+   * that agent to this message (a channel subscription, not a mention). The
+   * agent's run-state reactions look the same either way, so the reaction
+   * tooltip reads this to say "gg (watcher set up by Alice)" — otherwise
+   * people see an untagged agent react and nobody can tell who asked.
+   */
+  agentWatchers?: { [key: string]: string};
+  /**
    * ClientNonce echoes the sender's client-generated tag (X-Client-Nonce) on
    * the send response and the message.new broadcast, so the sender's client
    * can swap its optimistic "sending" row for the real message whichever

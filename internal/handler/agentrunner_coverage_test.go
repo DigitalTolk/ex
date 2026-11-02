@@ -606,7 +606,7 @@ func (f *hrunnerCovOrchMsgs) SendAsAgentRun(_ context.Context, agentID, _, paren
 	}, nil
 }
 
-func (f *hrunnerCovOrchMsgs) SetMachineReaction(context.Context, string, string, string, string, string) error {
+func (f *hrunnerCovOrchMsgs) SetMachineReaction(context.Context, string, string, string, string, string, string) error {
 	return nil
 }
 

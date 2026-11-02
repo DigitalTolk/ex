@@ -17,6 +17,7 @@ func TestMessage_Tombstone(t *testing.T) {
 		Body:               "secret",
 		AttachmentIDs:      []string{"a1", "a2"},
 		Reactions:          map[string][]string{"👍": {"u1"}},
+		AgentWatchers:      map[string]string{"agent-1": "u2"},
 		Pinned:             true,
 		PinnedAt:           &now,
 		PinnedBy:           "u2",
@@ -36,6 +37,10 @@ func TestMessage_Tombstone(t *testing.T) {
 	}
 	if m.Reactions != nil {
 		t.Errorf("Reactions = %v, want nil", m.Reactions)
+	}
+	// The watcher attribution explains reactions that are gone now.
+	if m.AgentWatchers != nil {
+		t.Errorf("AgentWatchers = %v, want nil", m.AgentWatchers)
 	}
 	if m.Pinned || m.PinnedAt != nil || m.PinnedBy != "" {
 		t.Errorf("pin state not cleared: pinned=%v at=%v by=%q", m.Pinned, m.PinnedAt, m.PinnedBy)

@@ -656,7 +656,7 @@ func (f *htaskCovMessages) CheckAccess(context.Context, string, string, string) 
 	return f.accessErr
 }
 
-func (f *htaskCovMessages) SetMachineReaction(context.Context, string, string, string, string, string) error {
+func (f *htaskCovMessages) SetMachineReaction(context.Context, string, string, string, string, string, string) error {
 	return nil
 }
 
