@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/events"
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 type UserStateService struct {
@@ -26,41 +28,56 @@ func NewUserStateService(store UserStateStore, publisher Publisher) *UserStateSe
 // activity items. Optional.
 func (s *UserStateService) SetActivityTracker(t ActivityReadTracker) { s.activity = t }
 
+// List returns userID's always-loaded state: unread-thread markers and hidden
+// conversations and skills, one small query per kind. Thread seen rows are
+// read one thread at a time (ThreadRead).
 func (s *UserStateService) List(ctx context.Context, userID string) (*model.UserState, error) {
 	state := &model.UserState{
 		ThreadNotifications: []string{},
-		ThreadSeen:          map[string]string{},
-		ThreadMarkedUnread:  map[string]string{},
 		HiddenConversations: []string{},
 		HiddenSkills:        []string{},
 	}
 	if s.store == nil || userID == "" {
 		return state, nil
 	}
-	items, err := s.store.ListUserState(ctx, userID)
-	if err != nil {
-		return nil, fmt.Errorf("user state: list: %w", err)
-	}
-	for _, item := range items {
-		switch item.Kind {
-		case model.UserStateThreadNotification:
-			state.ThreadNotifications = append(state.ThreadNotifications, item.TargetID)
-		case model.UserStateThreadSeen:
-			if item.SeenAt != nil {
-				state.ThreadSeen[item.TargetID] = item.SeenAt.Format(time.RFC3339Nano)
-				if item.Rewound {
-					state.ThreadMarkedUnread[item.TargetID] = item.UpdatedAt.Format(time.RFC3339Nano)
-				}
-			}
-		case model.UserStateHiddenConversation:
-			state.HiddenConversations = append(state.HiddenConversations, item.TargetID)
-		case model.UserStateHiddenSkill:
-			state.HiddenSkills = append(state.HiddenSkills, item.TargetID)
+	for _, part := range []struct {
+		kind model.UserStateKind
+		into *[]string
+	}{
+		{model.UserStateThreadNotification, &state.ThreadNotifications},
+		{model.UserStateHiddenConversation, &state.HiddenConversations},
+		{model.UserStateHiddenSkill, &state.HiddenSkills},
+	} {
+		items, err := s.store.ListUserState(ctx, userID, part.kind)
+		if err != nil {
+			return nil, fmt.Errorf("user state: list: %w", err)
 		}
+		for _, item := range items {
+			*part.into = append(*part.into, item.TargetID)
+		}
+		sort.Strings(*part.into)
 	}
-	sort.Strings(state.ThreadNotifications)
-	sort.Strings(state.HiddenConversations)
-	sort.Strings(state.HiddenSkills)
+	return state, nil
+}
+
+// ThreadRead returns how far userID has read one thread. A thread they never
+// opened has an empty state.
+func (s *UserStateService) ThreadRead(ctx context.Context, userID, threadRootID string) (*model.ThreadReadState, error) {
+	state := &model.ThreadReadState{}
+	if s.store == nil || userID == "" {
+		return state, nil
+	}
+	item, err := s.store.GetUserState(ctx, userID, model.UserStateThreadSeen, threadRootID)
+	if errors.Is(err, store.ErrNotFound) {
+		return state, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("user state: thread read: %w", err)
+	}
+	state.SeenAt = item.SeenAt
+	if item.Rewound {
+		state.MarkedUnreadAt = &item.UpdatedAt
+	}
 	return state, nil
 }
 
@@ -104,13 +121,13 @@ func (s *UserStateService) ParentLeft(ctx context.Context, userIDs []string, par
 		return
 	}
 	for _, userID := range userIDs {
-		items, err := s.store.ListUserState(ctx, userID)
+		items, err := s.store.ListUserState(ctx, userID, model.UserStateThreadNotification)
 		if err != nil {
 			slog.WarnContext(ctx, "user state: list for parent left failed", "userID", userID, "parentID", parentID, "error", err)
 			continue
 		}
 		for _, item := range items {
-			if item.Kind != model.UserStateThreadNotification || item.ParentID != parentID {
+			if item.ParentID != parentID {
 				continue
 			}
 			if err := s.delete(ctx, userID, item.Kind, item.TargetID); err != nil {
@@ -155,14 +172,12 @@ func (s *UserStateService) HiddenSkillSet(ctx context.Context, userID string) (m
 	if s.store == nil || userID == "" {
 		return out, nil
 	}
-	items, err := s.store.ListUserState(ctx, userID)
+	items, err := s.store.ListUserState(ctx, userID, model.UserStateHiddenSkill)
 	if err != nil {
 		return nil, fmt.Errorf("user state: list: %w", err)
 	}
 	for _, item := range items {
-		if item.Kind == model.UserStateHiddenSkill {
-			out[item.TargetID] = true
-		}
+		out[item.TargetID] = true
 	}
 	return out, nil
 }

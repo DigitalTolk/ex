@@ -24,7 +24,7 @@ import { useFrequentEmojis } from '@/hooks/useEmoji';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useEditMessage, useSendMessage, type SendMessageInput } from '@/hooks/useMessages';
 import { useComposerSchedule } from '@/hooks/useScheduledMessages';
-import { markThreadSeen, noteThreadReadPosition, threadHasUnseen, useFollowThread, useThreadFollowing, useThreadMessages, useUnfollowThread } from '@/hooks/useThreads';
+import { markThreadSeen, noteThreadReadPosition, threadHasUnseen, useFollowThread, useThreadFollowing, useThreadMessages, useThreadSeenAtOpen, useUnfollowThread } from '@/hooks/useThreads';
 import { isAtBottom, isReadHeld, keepReadSession, markUnreadSeen, scheduleEndReadSession, setAtBottom, threadReadKey, useUnreadAnchor, useUnreadSeen } from '@/lib/read-position';
 import { attachScrollHoverPause } from '@/lib/scroll-hover-pause';
 import { keepBottomEdge } from '@/lib/keep-bottom-edge';
@@ -44,7 +44,6 @@ import type { UserMapEntry } from './MessageList';
 import type { Message } from '@/types';
 import { RIGHT_PANEL_COVER_CLASS } from './right-panel';
 
-const ANCHOR_HIGHLIGHT_CLASSES = ['ring-1', 'ring-amber-400/50', 'rounded-md'];
 const ANCHOR_HIGHLIGHT_MS = 2200;
 
 interface ThreadPanelProps {
@@ -141,14 +140,22 @@ export function ThreadPanel({
     data && data.length > 0 ? data[data.length - 1].createdAt : undefined;
 
   // The "New messages" line (lib/read-position): before the opened thread is
-  // marked seen, note how far the user had read; the first reply after that
-  // gets the line. "Mark as unread" on a reply moves it there and holds the
-  // thread unread until the panel closes.
+  // marked seen, note how far the user had read — the server's read time,
+  // asked as the panel opens, and this device's from before anything marked
+  // it seen; the first reply after that gets the line. Until the server
+  // answers, the thread isn't marked seen. "Mark as unread" on a reply moves
+  // the line there and holds the thread unread until the panel closes.
   const queryClient = useQueryClient();
   const threadKey = threadReadKey(threadRootID);
+  const { known: readStateKnown, seenAt: seenAtOpen } = useThreadSeenAtOpen(threadRootID);
+  // Noted once per opening: a later refetch of the read state (a read on
+  // another device) never draws or moves the line.
+  const notedRef = useRef<string | null>(null);
   useEffect(() => {
-    noteThreadReadPosition(queryClient, threadRootID);
-  }, [threadRootID, queryClient]);
+    if (!readStateKnown || notedRef.current === threadRootID) return;
+    notedRef.current = threadRootID;
+    noteThreadReadPosition(threadRootID, seenAtOpen);
+  }, [threadRootID, readStateKnown, seenAtOpen]);
   useEffect(() => {
     keepReadSession(threadKey);
     return () => scheduleEndReadSession(threadKey);
@@ -171,16 +178,16 @@ export function ThreadPanel({
   // keeps it unread until they scroll back down.
   const seenOnOpenRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!parentID || !latestMessageAt || isReadHeld(threadKey)) return;
+    if (!parentID || !latestMessageAt || !readStateKnown || isReadHeld(threadKey)) return;
     const following = isUserAttentive(suppressionWindowMs) && isAtBottom(threadKey);
     if (seenOnOpenRef.current === threadRootID && !following) return;
     seenOnOpenRef.current = threadRootID;
     markThreadSeen(threadRootID, latestMessageAt, { parentID, parentType });
-  }, [parentID, parentType, threadRootID, threadKey, latestMessageAt]);
+  }, [parentID, parentType, threadRootID, threadKey, latestMessageAt, readStateKnown]);
   // Back at the window, or back down at the newest reply: read what arrived
   // meanwhile, if anything did.
   const readNewReplies = useEventCallback(() => {
-    if (!parentID || !latestMessageAt || isReadHeld(threadKey) || !isAtBottom(threadKey)) return;
+    if (!parentID || !latestMessageAt || !readStateKnown || isReadHeld(threadKey) || !isAtBottom(threadKey)) return;
     if (!threadHasUnseen(queryClient, threadRootID, latestMessageAt)) return;
     markThreadSeen(threadRootID, latestMessageAt, { parentID, parentType });
   });
@@ -422,21 +429,21 @@ export function ThreadPanel({
     return stopFollowing;
   }, [anchorMsgId, anchorRevision, data?.length, wasAtBottomRef]);
 
-  // Cosmetic highlight ring on the in-thread anchor.
+  // Cosmetic highlight ring on the in-thread anchor, React-driven as in the
+  // channel list (useMessageListAnchor): a MessageItem prop, so no re-render
+  // can wipe it — the "New messages" line, drawn once the read state
+  // answers, makes the anchor below it a new group start. It shows until the
+  // flash for this anchor (reply + revision) has run out, counted from when
+  // the replies loaded.
   const repliesHaveLoaded = (data?.length ?? 0) > 0;
+  const anchorKey = anchorMsgId ? `${anchorMsgId}@${anchorRevision ?? ''}` : null;
+  const [flashedKey, setFlashedKey] = useState<string | null>(null);
+  const highlightedId = anchorKey !== null && flashedKey !== anchorKey ? anchorMsgId : undefined;
   useEffect(() => {
-    if (!anchorMsgId || !repliesHaveLoaded) return;
-    const el = document.getElementById(`msg-${anchorMsgId}`);
-    if (!el) return;
-    el.classList.add(...ANCHOR_HIGHLIGHT_CLASSES);
-    const t = window.setTimeout(() => {
-      el.classList.remove(...ANCHOR_HIGHLIGHT_CLASSES);
-    }, ANCHOR_HIGHLIGHT_MS);
-    return () => {
-      window.clearTimeout(t);
-      el.classList.remove(...ANCHOR_HIGHLIGHT_CLASSES);
-    };
-  }, [anchorMsgId, anchorRevision, repliesHaveLoaded]);
+    if (anchorKey === null || !repliesHaveLoaded) return;
+    const t = window.setTimeout(() => setFlashedKey(anchorKey), ANCHOR_HIGHLIGHT_MS);
+    return () => window.clearTimeout(t);
+  }, [anchorKey, repliesHaveLoaded]);
   useEffect(
     () => () => {
       if (stickyROrRef.current) {
@@ -609,6 +616,7 @@ export function ThreadPanel({
                   )}
                   <MessageItem
                     message={msg}
+                    highlighted={msg.id === highlightedId}
                     firstInGroup={firstUnread || !isGroupedWithPrevious(index > 0 ? data[index - 1] : null, msg)}
                     authorName={u?.displayName ?? 'Unknown'}
                     authorAvatarURL={u?.avatarURL}

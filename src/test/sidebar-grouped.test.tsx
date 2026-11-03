@@ -28,7 +28,7 @@ const mockCategories: SidebarCategory[] = [
 ];
 
 const mockConversations: UserConversation[] = [];
-let mockUserState: { threadNotifications?: string[]; threadSeen?: Record<string, string>; hiddenConversations?: string[] } = {};
+let mockUserState: { threadNotifications?: string[]; hiddenConversations?: string[] } = {};
 
 const createCategoryMutate = vi.fn();
 const deleteCategoryMutate = vi.fn();
@@ -368,11 +368,11 @@ describe('Sidebar grouped rendering', () => {
 
   // One lookup: the unread markers in the user state.
   it('highlights Threads while a thread has an unread marker, and clears once it goes', () => {
-    mockUserState = { threadNotifications: ['root-1'], threadSeen: {} };
+    mockUserState = { threadNotifications: ['root-1'] };
     const view = renderSidebar();
     expect(screen.getByText('Threads')).toHaveClass('font-bold');
 
-    mockUserState = { threadNotifications: [], threadSeen: {} };
+    mockUserState = { threadNotifications: [] };
     view.rerender(
       <QueryClientProvider client={new QueryClient()}>
         <BrowserRouter>

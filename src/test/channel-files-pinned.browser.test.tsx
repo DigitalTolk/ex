@@ -120,7 +120,7 @@ function installFetchStub(plan: FetchPlan): () => void {
     if (url.includes('/api/v1/sidebar/categories')) return apiJSON([]);
     if (url.includes('/api/v1/drafts')) return apiJSON(plan.drafts ?? []);
     if (url.includes('/api/v1/user-state')) {
-      return apiJSON({ channelNotifications: [], threadNotifications: [], threadSeen: {}, hiddenConversations: [] });
+      return apiJSON({ channelNotifications: [], threadNotifications: [], hiddenConversations: [] });
     }
     if (url.includes('/api/v1/threads')) return apiJSON([]);
     if (url.includes('/api/v1/emojis')) return apiJSON([]);
@@ -775,7 +775,7 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
       if (url.includes('/api/v1/users/me')) return apiJSON({ id: ME_ID, email: 'me@example.test', displayName: 'Me', systemRole: 'member', status: 'active' });
       if (url === '/api/v1/channels' || url.endsWith('/api/v1/channels')) return apiJSON([]);
       if (url.includes('/api/v1/conversations') || url.includes('/api/v1/sidebar/categories') || url.includes('/api/v1/drafts') || url.includes('/api/v1/threads') || url.includes('/api/v1/emojis')) return apiJSON([]);
-      if (url.includes('/api/v1/user-state')) return apiJSON({ channelNotifications: [], threadNotifications: [], threadSeen: {}, hiddenConversations: [] });
+      if (url.includes('/api/v1/user-state')) return apiJSON({ channelNotifications: [], threadNotifications: [], hiddenConversations: [] });
       if (url.includes('/api/v1/admin/settings')) return apiJSON({ maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false });
       // The channel lookup 404s → ChannelView renders the NotFound page.
       if (url.endsWith('/api/v1/channels/ghost')) return new Response(JSON.stringify({ error: 'not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
@@ -796,7 +796,7 @@ describe('channel → header toggles → files + pinned panels (full route)', ()
       if (url.includes('/api/v1/users/me')) return apiJSON({ id: ME_ID, email: 'me@example.test', displayName: 'Me', systemRole: 'member', status: 'active' });
       if (url === '/api/v1/channels' || url.endsWith('/api/v1/channels')) return apiJSON([]);
       if (url.includes('/api/v1/conversations') || url.includes('/api/v1/sidebar/categories') || url.includes('/api/v1/drafts') || url.includes('/api/v1/threads') || url.includes('/api/v1/emojis')) return apiJSON([]);
-      if (url.includes('/api/v1/user-state')) return apiJSON({ channelNotifications: [], threadNotifications: [], threadSeen: {}, hiddenConversations: [] });
+      if (url.includes('/api/v1/user-state')) return apiJSON({ channelNotifications: [], threadNotifications: [], hiddenConversations: [] });
       if (url.includes('/api/v1/admin/settings')) return apiJSON({ maxUploadBytes: 0, allowedExtensions: [], giphyEnabled: false });
       if (url.endsWith('/api/v1/channels/secret')) return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403, headers: { 'Content-Type': 'application/json' } });
       return apiJSON([]);

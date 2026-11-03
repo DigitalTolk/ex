@@ -131,6 +131,7 @@ func NewRouter(d *Deps) http.Handler {
 
 	if userStateH != nil {
 		mux.Handle("GET /api/v1/user-state", middleware.WrapFunc(userStateH.Get, authMW))
+		mux.Handle("GET /api/v1/user-state/threads/{threadRootID}", middleware.WrapFunc(userStateH.ThreadRead, authMW))
 		mux.Handle("PUT /api/v1/user-state/threads/{parentType}/{parentID}/{threadRootID}/seen", middleware.WrapFunc(userStateH.MarkThreadSeen, authMW))
 		mux.Handle("PUT /api/v1/user-state/conversations/{id}/hidden", middleware.WrapFunc(userStateH.HideConversation, authMW))
 		mux.Handle("DELETE /api/v1/user-state/conversations/{id}/hidden", middleware.WrapFunc(userStateH.UnhideConversation, authMW))

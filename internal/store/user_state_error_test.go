@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 )
 
 func makeUserState(userID string, kind model.UserStateKind, targetID string) *model.UserStateItem {
@@ -46,30 +49,28 @@ func TestUserStateStore_List_QueryError(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewUserStateStore(withFault(db, func(f *faultClient) { f.failQuery = true }))
-	_, err := s.ListUserState(ctx, "u-us")
+	_, err := s.ListUserState(ctx, "u-us", model.UserStateThreadNotification)
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("List: want errInjected, got %v", err)
 	}
 }
 
-// List backfills Kind from the SK when a stored row has an empty kind attribute
-// (legacy rows written before kind was persisted). We seed such a row directly
-// via Set with an empty Kind so the SK-derived fallback runs.
-func TestUserStateStore_List_KindBackfilledFromSK(t *testing.T) {
+// A row stored without its kind attribute still reports the kind it was
+// listed or read under.
+func TestUserStateStore_KindFromTheQuery(t *testing.T) {
 	db := setupDynamoDB(t)
 	ctx := context.Background()
 	s := NewUserStateStore(db)
-	// Set with empty Kind: SK is built from the empty kind + targetID, but the
-	// stored "kind" attribute is empty, so List's fallback recomputes it.
-	row := makeUserState("u-usk", "", "tgt-1")
-	if err := s.SetUserState(ctx, row); err != nil {
+	row := userStateItem{PK: userPK("u-usk"), SK: userStateSK(string(model.UserStateHiddenSkill), "sk-1"), UserStateItem: model.UserStateItem{UserID: "u-usk", TargetID: "sk-1"}}
+	if _, err := db.Client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(db.Table), Item: mustAttrs(attributevalue.MarshalMap(row))}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	items, err := s.ListUserState(ctx, "u-usk")
-	if err != nil {
-		t.Fatalf("List: %v", err)
+	items, err := s.ListUserState(ctx, "u-usk", model.UserStateHiddenSkill)
+	if err != nil || len(items) != 1 || items[0].Kind != model.UserStateHiddenSkill {
+		t.Fatalf("List = %+v (err %v), want the row as a hidden skill", items, err)
 	}
-	if len(items) != 1 {
-		t.Fatalf("List: want 1 item, got %d", len(items))
+	got, err := s.GetUserState(ctx, "u-usk", model.UserStateHiddenSkill, "sk-1")
+	if err != nil || got.Kind != model.UserStateHiddenSkill {
+		t.Fatalf("Get = %+v (err %v), want the row as a hidden skill", got, err)
 	}
 }

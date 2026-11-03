@@ -21,13 +21,12 @@ describe('useUserState', () => {
     vi.mocked(apiFetch).mockReset();
   });
 
-  it('normalizes missing arrays and maps from the API', async () => {
+  it('normalizes missing arrays from the API', async () => {
     vi.mocked(apiFetch).mockResolvedValueOnce({ threadNotifications: ['root-1'] });
     const { result } = renderHook(() => useUserState(), { wrapper });
 
     await waitFor(() => expect(result.current.data?.threadNotifications).toEqual(['root-1']));
-    expect(result.current.data?.threadSeen).toEqual({});
-    expect(result.current.data?.hiddenConversations).toEqual([]);
+    expect(result.current.data).toEqual({ threadNotifications: ['root-1'], hiddenConversations: [], hiddenSkills: [] });
   });
 
   it('marks channel and conversation threads seen', async () => {

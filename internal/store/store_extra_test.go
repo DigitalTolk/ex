@@ -1549,22 +1549,30 @@ func TestUserStateStore_SetListDelete(t *testing.T) {
 		t.Fatalf("Set thread seen: %v", err)
 	}
 
-	rows, err := s.ListUserState(ctx, "u-1")
+	// Each kind lists alone: the seen rows never come with the markers.
+	rows, err := s.ListUserState(ctx, "u-1", model.UserStateThreadNotification)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(rows) != 2 {
-		t.Fatalf("List count = %d, want 2", len(rows))
+	if len(rows) != 1 || rows[0].Kind != model.UserStateThreadNotification || rows[0].TargetID != "ch-1" {
+		t.Fatalf("notification rows = %+v, want the one marker", rows)
+	}
+	if rows, err = s.ListUserState(ctx, "u-1", model.UserStateThreadSeen); err != nil || len(rows) != 1 || rows[0].Kind != model.UserStateThreadSeen {
+		t.Fatalf("seen rows = %+v (err %v), want the one seen row", rows, err)
 	}
 	if err := s.DeleteUserState(ctx, "u-1", model.UserStateThreadNotification, "ch-1"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	rows, err = s.ListUserState(ctx, "u-1")
-	if err != nil {
-		t.Fatalf("List after delete: %v", err)
+	rows, err = s.ListUserState(ctx, "u-1", model.UserStateThreadNotification)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("rows after delete = %+v (err %v)", rows, err)
 	}
-	if len(rows) != 1 || rows[0].Kind != model.UserStateThreadSeen || rows[0].Rewound {
-		t.Fatalf("rows after delete = %+v", rows)
+	got, err := s.GetUserState(ctx, "u-1", model.UserStateThreadSeen, "root-1")
+	if err != nil || got.Kind != model.UserStateThreadSeen || got.Rewound || !got.SeenAt.Equal(seenAt) {
+		t.Fatalf("Get seen = %+v (err %v)", got, err)
+	}
+	if _, err := s.GetUserState(ctx, "u-1", model.UserStateThreadSeen, "root-2"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get missing err = %v, want ErrNotFound", err)
 	}
 	// A mark-unread's rewound seen row keeps its flag through the table; an
 	// ordinary seen write over it clears the flag again.
@@ -1573,20 +1581,14 @@ func TestUserStateStore_SetListDelete(t *testing.T) {
 	if err := s.SetUserState(ctx, rewound); err != nil {
 		t.Fatalf("Set rewound: %v", err)
 	}
-	if rows, err = s.ListUserState(ctx, "u-1"); err != nil || len(rows) != 1 || !rows[0].Rewound || !rows[0].SeenAt.Equal(rewoundAt) {
-		t.Fatalf("rewound row = %+v, %v", rows, err)
+	if got, err = s.GetUserState(ctx, "u-1", model.UserStateThreadSeen, "root-1"); err != nil || !got.Rewound || !got.SeenAt.Equal(rewoundAt) {
+		t.Fatalf("rewound row = %+v, %v", got, err)
 	}
 	if err := s.SetUserState(ctx, &model.UserStateItem{UserID: "u-1", Kind: model.UserStateThreadSeen, TargetID: "root-1", SeenAt: &seenAt, UpdatedAt: seenAt}); err != nil {
 		t.Fatalf("Set seen again: %v", err)
 	}
-	if rows, err = s.ListUserState(ctx, "u-1"); err != nil || len(rows) != 1 || rows[0].Rewound {
-		t.Fatalf("re-seen row = %+v, %v", rows, err)
-	}
-	if got := userStateKindFromSK("STATE#thread_seen#root-1"); got != model.UserStateThreadSeen {
-		t.Fatalf("userStateKindFromSK = %q", got)
-	}
-	if got := userStateKindFromSK("bad"); got != "" {
-		t.Fatalf("userStateKindFromSK bad = %q", got)
+	if got, err = s.GetUserState(ctx, "u-1", model.UserStateThreadSeen, "root-1"); err != nil || got.Rewound {
+		t.Fatalf("re-seen row = %+v, %v", got, err)
 	}
 }
 
@@ -1599,8 +1601,11 @@ func TestUserStateStore_NonexistentTableErrors(t *testing.T) {
 	if err := s.DeleteUserState(ctx, "u", model.UserStateHiddenConversation, "conv"); err == nil {
 		t.Fatal("expected Delete error")
 	}
-	if _, err := s.ListUserState(ctx, "u"); err == nil {
+	if _, err := s.ListUserState(ctx, "u", model.UserStateHiddenConversation); err == nil {
 		t.Fatal("expected List error")
+	}
+	if _, err := s.GetUserState(ctx, "u", model.UserStateThreadSeen, "root"); err == nil {
+		t.Fatal("expected Get error")
 	}
 }
 

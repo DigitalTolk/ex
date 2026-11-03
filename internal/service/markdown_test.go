@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -673,6 +674,38 @@ func TestMarkdownRenderer_MultipleBlankLinesPreserveEachGap(t *testing.T) {
 	}
 	if got, _ := out.Children[3].Properties["data-blank"].(string); got == "true" {
 		t.Errorf("last paragraph should not be blank")
+	}
+}
+
+func TestMarkdownRenderer_BlankLinesStayWhereTyped(t *testing.T) {
+	r := NewMarkdownRenderer()
+	// A block right under the line before it has no gap of its own: the
+	// blank lines typed further down belong further down. They used to be
+	// handed out in order to whichever blocks came first, so the gap under a
+	// list showed above it.
+	cases := []struct {
+		body string
+		want []string
+	}{
+		{"Shoutout to:\n- a\n- b\n\n\n\nThanks", []string{"p", "ul", "blank", "blank", "blank", "p"}},
+		{"# Title\nText\n\nMore", []string{"h1", "p", "blank", "p"}},
+		{"a\n\n> quote\n---\n\n\nb", []string{"p", "blank", "blockquote", "hr", "blank", "blank", "p"}},
+		// Raw HTML renders nothing, and so leaves no gap of its own.
+		{"a\n\n<div>\n\nb", []string{"p", "blank", "p"}},
+	}
+	for _, c := range cases {
+		out := r.RenderToHast(c.body)
+		got := make([]string, 0, len(out.Children))
+		for _, child := range out.Children {
+			if blank, _ := child.Properties["data-blank"].(string); blank == "true" {
+				got = append(got, "blank")
+			} else {
+				got = append(got, child.TagName)
+			}
+		}
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%q: got %v, want %v", c.body, got, c.want)
+		}
 	}
 }
 

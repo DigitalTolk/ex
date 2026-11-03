@@ -337,15 +337,18 @@ export interface CustomEmoji {
 
 export interface UserState {
   threadNotifications: string[];
-  threadSeen: Record<string, string>;
-  // Threads the user marked unread → when (their threadSeen entry was rewound
-  // to just before a reply). A local seen time from before the mark yields
-  // to the rewound one. Absent from older servers.
-  threadMarkedUnread?: Record<string, string>;
   hiddenConversations: string[];
   // Skills this user removed from their agents' discovery index — explicit
   // /skill picks still work.
   hiddenSkills: string[];
+}
+
+// How far the user has read one thread, asked when it opens. markedUnreadAt:
+// they marked a reply unread (seenAt was rewound to just before it), so a
+// newer seen time this device kept from before the mark yields to it.
+export interface ThreadReadState {
+  seenAt?: string;
+  markedUnreadAt?: string;
 }
 
 // Outcome of "Mark as unread": a top-level message rewinds the chat so
@@ -476,6 +479,7 @@ export type WireDriftChecks = [
   AssertAssignable<Required<MessageDraft>, wire.MessageDraft>,
   AssertAssignable<Required<MarkUnreadResult>, wire.MarkUnreadResult>,
   AssertAssignable<Required<UserState>, wire.UserState>,
+  AssertAssignable<Required<ThreadReadState>, wire.ThreadReadState>,
   AssertAssignable<Required<ScheduledMessage>, wire.ScheduledMessage>,
   AssertAssignable<Required<ActivityItem>, wire.ActivityFeedItem>,
   AssertAssignable<Required<ActivityChangedEvent>, wire.ActivityChangedEvent>,

@@ -43,6 +43,22 @@ func (h *UserStateHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, state)
 }
 
+// ThreadRead returns how far the caller has read one thread — asked when the
+// thread opens. It is the caller's own row, so it needs no access check.
+func (h *UserStateHandler) ThreadRead(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromContext(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	state, err := h.stateSvc.ThreadRead(r.Context(), userID, pathParam(r, "threadRootID"))
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, state)
+}
+
 func (h *UserStateHandler) MarkThreadSeen(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 	parentID := pathParam(r, "parentID")

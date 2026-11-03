@@ -232,6 +232,26 @@ func TestClient_Bulk_CancelledContext(t *testing.T) {
 	}
 }
 
+// Regression: opensearch-go starts the indexer's workers before it counts
+// them, so a worker handed a context that was already done could stop before
+// it was counted, and the WaitGroup panicked, killing the process. Only a
+// race, hence the repeats; each one gave it another chance.
+func TestClient_Bulk_CancelledContextNeverPanics(t *testing.T) {
+	b := &bulkCluster{respond: func(_ int, ids []string) string {
+		return bulkResponse(ids, func(string) int { return http.StatusCreated })
+	}}
+	srv := httptest.NewServer(b.handler(t))
+	defer srv.Close()
+	c := NewClient(srv.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for range 2000 {
+		if err := c.Bulk(ctx, IndexUsers, entriesFor("u1")); !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context.Canceled", err)
+		}
+	}
+}
+
 // Regression: a request the cluster answers with 429 (or 502/503/504) is
 // retried by the transport instead of failing the search outright.
 func TestClient_RetriesThrottledRequest(t *testing.T) {

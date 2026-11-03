@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
+	"github.com/DigitalTolk/ex/internal/cache"
 	"github.com/DigitalTolk/ex/internal/config"
 	"github.com/DigitalTolk/ex/internal/email"
 	"github.com/DigitalTolk/ex/internal/handler"
@@ -50,6 +52,12 @@ type chat struct {
 // local server through it.
 var newGraphClient = msgraph.New
 
+// memberCopyTTL bounds a channel's shared member copy (service.CachedMemberships)
+// for a generation move that was lost: the copy is otherwise valid until the
+// channel's next membership change. The same window as the notification
+// audience's backstop.
+const memberCopyTTL = 5 * time.Minute
+
 func (a *App) buildChat(ctx context.Context) error {
 	cfg, in, c := a.cfg, &a.infra, &a.chat
 	broker := handler.NewBrokerAdapter(in.broker)
@@ -79,7 +87,11 @@ func (a *App) buildChat(ctx context.Context) error {
 	}
 
 	// ------------------------------------------------------------- Channels + conversations
-	c.channels = service.NewChannelService(in.channels, in.memberships, in.users, in.messages, in.cache, broker, in.pubsub)
+	// Member lists and membership checks — the access check behind nearly
+	// every request — read a shared copy that stays valid while the channel's
+	// audience generation holds (every membership write moves it).
+	members := service.NewCachedMemberships(in.memberships, cache.NewMemberLists(in.cache.Client(), memberCopyTTL))
+	c.channels = service.NewChannelService(in.channels, members, in.users, in.messages, in.cache, broker, in.pubsub)
 	c.channels.SetDeactivatedAccounts(c.users)
 	c.auth.SetChannelJoiner(c.channels)
 	c.conversations = service.NewConversationService(in.conversations, in.users, in.cache, broker, in.pubsub)
@@ -87,12 +99,12 @@ func (a *App) buildChat(ctx context.Context) error {
 	c.conversations.SetUserProfileResolver(c.users)
 	// A group that became a private channel is read through that channel's
 	// membership, never its frozen participant list.
-	c.conversations.SetChannelMemberships(in.memberships)
+	c.conversations.SetChannelMemberships(members)
 
 	// ------------------------------------------------------------- Messages
 	c.messages = service.NewMessageServiceFromDeps(service.MessageServiceDeps{
 		Messages:      in.messages,
-		Memberships:   in.memberships,
+		Memberships:   members,
 		Conversations: in.conversations,
 		Publisher:     in.pubsub,
 		Broker:        broker,
@@ -161,7 +173,7 @@ func (a *App) buildChat(ctx context.Context) error {
 	c.webhooks.SetDMResolver(c.conversations)
 	c.webhooks.SetUserResolver(c.users)
 	c.webhooks.SetBotProvisioner(c.users)
-	c.webhooks.SetMembershipResolver(in.memberships)
+	c.webhooks.SetMembershipResolver(members)
 	c.webhooks.SetPublisher(in.pubsub)
 
 	// ------------------------------------------------------------- Microsoft 365 (Graph)
@@ -194,7 +206,7 @@ func (a *App) buildChat(ctx context.Context) error {
 			Meetings:      graph,
 			Sender:        c.messages,
 			Users:         c.users,
-			Memberships:   in.memberships,
+			Memberships:   members,
 			Conversations: in.conversations,
 			Channels:      in.channels,
 		}))
@@ -202,7 +214,7 @@ func (a *App) buildChat(ctx context.Context) error {
 	}
 
 	// ------------------------------------------------------------- Drafts
-	c.drafts = service.NewDraftService(store.NewRedisDraftStore(in.cache.Client()), in.messages, in.memberships, in.conversations, in.pubsub)
+	c.drafts = service.NewDraftService(store.NewRedisDraftStore(in.cache.Client()), in.messages, members, in.conversations, in.pubsub)
 	// A group message becoming a private channel, its drafts going along.
 	c.channels.SetConversationConverter(in.conversations, c.drafts)
 	// Fold draft-clear into every composer send: a successful message send or
@@ -248,7 +260,7 @@ func (a *App) buildChat(ctx context.Context) error {
 	// Links to other messages in this workspace unfurl as rich, access-gated
 	// message-preview cards (Slack/Mattermost style) instead of being scraped.
 	c.messageLinks = service.NewMessageLinkService(
-		cfg.BaseURL, in.channels, in.memberships, in.conversations, in.messages, c.users, c.attachments,
+		cfg.BaseURL, in.channels, members, in.conversations, in.messages, c.users, c.attachments,
 	)
 	return nil
 }

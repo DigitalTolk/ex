@@ -21,6 +21,11 @@ interface UseParentChatOptions {
   userID: string | undefined;
   // Runs before a new message is sent (the channel's non-member invite check).
   beforeSend?: (value: ComposedMessage) => void;
+  // The list shows an older stretch a link opened, not the newest messages
+  // (its newer pages aren't loaded); showLatest swaps it for them
+  // (useListAnchor).
+  showingOlder: boolean;
+  showLatest: () => void;
 }
 
 // useParentChat is what an open channel or conversation shares: it registers
@@ -28,7 +33,7 @@ interface UseParentChatOptions {
 // notification suppression and the tab election), runs its read session
 // (useReadSession, reading through markParentRead), and wires the composer:
 // send, edit, draft and schedule.
-export function useParentChat({ kind, id, userID, beforeSend }: UseParentChatOptions) {
+export function useParentChat({ kind, id, userID, beforeSend, showingOlder, showLatest }: UseParentChatOptions) {
   const queryClient = useQueryClient();
   const sendMessage = useSendMessage(
     kind === 'channel' ? { channelId: id, authorID: userID } : { conversationId: id, authorID: userID },
@@ -59,16 +64,36 @@ export function useParentChat({ kind, id, userID, beforeSend }: UseParentChatOpt
     [id, kind, saveDraftMutate],
   );
 
+  // Opening reads the chat but keeps a "New messages" line where you left
+  // off; after that it reads only while you follow along at the bottom (see
+  // useReadSession).
+  const markRead = useCallback(
+    (openedID: string) => void markParentRead(queryClient, { kind, id: openedID }),
+    [kind, queryClient],
+  );
+  const readSession = useReadSession(kind, id, markRead);
+  const { prepareJumpToLatest } = readSession;
+
+  // From an older stretch a link opened to the newest messages ("Jump to
+  // latest"), the line marking any the reader hasn't seen.
+  const jumpToLatest = useCallback(() => {
+    prepareJumpToLatest();
+    showLatest();
+  }, [prepareJumpToLatest, showLatest]);
+
   const sendMutate = sendMessage.mutate;
   const handleSendMessage = useCallback(
     (value: ComposedMessage) => {
       beforeSend?.(value);
+      // A new message lands among the newest: sent from an older stretch, the
+      // list goes there with it, as the reader expects to see it land.
+      if (showingOlder) jumpToLatest();
       // Draft lifecycle (condemn at mutate, cache patch-out on success,
       // rollback on error) is owned by useSendMessage — the send IS the
       // draft-clearing event; nothing draft-specific to do here.
       sendMutate(value);
     },
-    [beforeSend, sendMutate],
+    [beforeSend, showingOlder, jumpToLatest, sendMutate],
   );
 
   const editMutate = editMessage.mutate;
@@ -108,15 +133,6 @@ export function useParentChat({ kind, id, userID, beforeSend }: UseParentChatOpt
     return () => clearActiveParent(parent);
   }, [id, kind]);
 
-  // Opening reads the chat but keeps a "New messages" line where you left
-  // off; after that it reads only while you follow along at the bottom (see
-  // useReadSession).
-  const markRead = useCallback(
-    (openedID: string) => void markParentRead(queryClient, { kind, id: openedID }),
-    [kind, queryClient],
-  );
-  const readSession = useReadSession(kind, id, markRead);
-
   // A different chat starts with no open edit.
   useEffect(() => setEditingMessage(null), [id, setEditingMessage]);
 
@@ -131,5 +147,6 @@ export function useParentChat({ kind, id, userID, beforeSend }: UseParentChatOpt
     handleSendMessage,
     handleEditMessage,
     readSession,
+    jumpToLatest,
   };
 }

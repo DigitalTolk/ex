@@ -485,15 +485,6 @@ go run ./cmd/migrate thread-activity            # preview
 go run ./cmd/migrate thread-activity --apply
 ```
 
-### Participants of older threads (`migrate thread-participants`)
-
-A thread is on its participants' Threads pages through their follow rows, and every reply writes them for its author and the root author. Threads rooted before that (before 2026-08-01) can miss rows for people who took part back then. This backfill scans the thread index once, gives the root author and every reply author of each such thread a follow row where they have none (a deliberate unfollow stays), dated by the thread's latest reply, and then flags the root. Replies to a flagged root find their audience in the follow rows instead of re-reading the whole thread. Threads written by the history importer are flagged as they are imported. Run it after every instance runs the new build; it is idempotent and can be re-run after a failure.
-
-```bash
-go run ./cmd/migrate thread-participants                       # preview
-go run ./cmd/migrate thread-participants --apply [--workers=4]
-```
-
 `go run ./cmd/migrate` with no arguments lists every subcommand; all of them default to a dry run.
 
 ## Architecture
