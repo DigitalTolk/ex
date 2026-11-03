@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -18,6 +19,7 @@ import (
 	"github.com/DigitalTolk/ex/internal/model"
 	"github.com/DigitalTolk/ex/internal/pubsub"
 	"github.com/DigitalTolk/ex/internal/store"
+	classicshape "github.com/DigitalTolk/ex/internal/webhookcompat"
 )
 
 var (
@@ -112,6 +114,93 @@ type IncomingWebhookPayload struct {
 	// the message is the template with its {{placeholders}} replaced.
 	Template string         `json:"template"`
 	Data     map[string]any `json:"data"`
+
+	// rich holds, unread, what only a rich webhook reads (see UnmarshalJSON).
+	rich richPayloadJSON
+}
+
+// richPayloadJSON is a payload's rich-only parts as they arrived: kept raw,
+// so reading a classic webhook's post never touches them.
+type richPayloadJSON struct {
+	blocks           json.RawMessage
+	attachmentBlocks []json.RawMessage
+	template         json.RawMessage
+	data             json.RawMessage
+}
+
+// webhookAttachmentJSON reads an attachment's own fields; its blocks stay raw.
+type webhookAttachmentJSON struct {
+	model.MessageAttachment
+	Blocks json.RawMessage `json:"blocks"`
+}
+
+// UnmarshalJSON reads a payload exactly as classic webhooks always have —
+// text, channel, username, icons, attachments, root_id — and keeps the
+// rich-only fields (blocks, attachments' blocks, template, data) raw. A
+// classic webhook therefore accepts every payload it accepted before rich
+// webhooks existed, whatever those fields hold: a stray "template": 5, or a
+// Slack block ex doesn't model, used to be ignored and still is. Only a rich
+// webhook reads them (readRich), and only its post can fail on them.
+func (p *IncomingWebhookPayload) UnmarshalJSON(data []byte) error {
+	// Accepted or refused, and with which words, exactly as before rich
+	// webhooks: main's payload shape decides (a frozen copy of it). Its
+	// fields are a subset of the ones below with the same types, so whatever
+	// it accepts the decode below accepts too.
+	if err := json.Unmarshal(data, new(classicshape.IncomingWebhookPayload)); err != nil {
+		return err
+	}
+	type plain IncomingWebhookPayload // no methods: no recursion
+	var in struct {
+		plain
+		Attachments []webhookAttachmentJSON `json:"attachments"`
+		Blocks      json.RawMessage         `json:"blocks"`
+		Template    json.RawMessage         `json:"template"`
+		Data        json.RawMessage         `json:"data"`
+	}
+	// Can't fail once the classic shape decoded: the same fields with the
+	// same types, and everything else kept raw.
+	_ = json.Unmarshal(data, &in)
+	*p = IncomingWebhookPayload(in.plain)
+	p.rich = richPayloadJSON{blocks: in.Blocks, template: in.Template, data: in.Data}
+	if in.Attachments != nil {
+		p.Attachments = make([]model.MessageAttachment, len(in.Attachments))
+		p.rich.attachmentBlocks = make([]json.RawMessage, len(in.Attachments))
+		for i, a := range in.Attachments {
+			p.Attachments[i] = a.MessageAttachment
+			p.rich.attachmentBlocks[i] = a.Blocks
+		}
+	}
+	return nil
+}
+
+// readRich reads the rich-only fields UnmarshalJSON kept raw. A payload built
+// in code (not decoded) has none, and keeps the values it was given.
+func (p *IncomingWebhookPayload) readRich() error {
+	read := func(raw json.RawMessage, into any, field string) error {
+		if len(raw) == 0 {
+			return nil
+		}
+		if err := json.Unmarshal(raw, into); err != nil {
+			return apperr.Reject(ErrInvalidPayload, "webhook: %s: %s", field, err.Error())
+		}
+		return nil
+	}
+	if err := read(p.rich.blocks, &p.Blocks, "blocks"); err != nil {
+		return err
+	}
+	for i, raw := range p.rich.attachmentBlocks {
+		if err := read(raw, &p.Attachments[i].Blocks, fmt.Sprintf("attachments[%d].blocks", i)); err != nil {
+			return err
+		}
+	}
+	if err := read(p.rich.template, &p.Template, "template"); err != nil {
+		return err
+	}
+	if err := read(p.rich.data, &p.Data, "data"); err != nil {
+		return err
+	}
+	p.rich = richPayloadJSON{}
+	return nil
 }
 
 type IncomingWebhookService struct {
@@ -349,6 +438,10 @@ func (s *IncomingWebhookService) URL(wh *model.IncomingWebhook) string {
 // never for the unauthenticated caller.
 var ErrWebhookDMRejected = errors.New("webhook: direct-message target rejected")
 
+// ErrInvalidPayload: a rich webhook's blocks, template or data don't have
+// the shape ex reads (a classic webhook never reads them).
+var ErrInvalidPayload = errors.New("invalid payload")
+
 // ErrWebhookUnavailable marks an infrastructure failure rather than a bad
 // request. The handler maps it to 503 so the caller retries.
 var ErrWebhookUnavailable = errors.New("webhook: delivery temporarily unavailable")
@@ -361,12 +454,30 @@ func (s *IncomingWebhookService) Execute(ctx context.Context, id string, payload
 // ExecuteMessage delivers a webhook payload and returns the stored message,
 // so callers can thread follow-ups under it via RootID.
 func (s *IncomingWebhookService) ExecuteMessage(ctx context.Context, id string, payload IncomingWebhookPayload) (*model.Message, error) {
+	msg, _, err := s.ExecuteKind(ctx, id, payload)
+	return msg, err
+}
+
+// ExecuteKind is ExecuteMessage that also says whether the webhook is rich,
+// so the HTTP answer can stay exactly what a classic webhook always answered.
+func (s *IncomingWebhookService) ExecuteKind(ctx context.Context, id string, payload IncomingWebhookPayload) (*model.Message, bool, error) {
 	wh, err := s.store.Get(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("webhook: get: %w", err)
+		return nil, false, fmt.Errorf("webhook: get: %w", err)
 	}
 	rich := wh.IsRich()
-	if !rich {
+	msg, err := s.execute(ctx, wh, rich, payload)
+	return msg, rich, err
+}
+
+func (s *IncomingWebhookService) execute(ctx context.Context, wh *model.IncomingWebhook, rich bool, payload IncomingWebhookPayload) (*model.Message, error) {
+	var err error
+	if rich {
+		// Only a rich webhook reads the rich-only fields at all.
+		if err := payload.readRich(); err != nil {
+			return nil, err
+		}
+	} else {
 		// A classic webhook posts what it always posted: blocks (top-level or
 		// in cards) and an Authorization header are ignored, never refused —
 		// Slack-style senders often include blocks next to their text.
@@ -508,6 +619,9 @@ func hasAppButtons(blocks model.Blocks, attachments []model.MessageAttachment) b
 // stored for a preview.
 func (s *IncomingWebhookService) PreviewMessage(ctx context.Context, actor WebhookActor, payload IncomingWebhookPayload) (*model.Message, error) {
 	if err := actor.check(); err != nil {
+		return nil, err
+	}
+	if err := payload.readRich(); err != nil {
 		return nil, err
 	}
 	if err := validateWebhookPayload(payload); err != nil {

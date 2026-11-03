@@ -935,7 +935,8 @@ func (s *MessageService) SendWebhook(ctx context.Context, in WebhookMessageInput
 		return nil, err
 	}
 	if in.Body == "" && len(in.Attachments) == 0 && len(in.Blocks) == 0 {
-		return nil, apperr.Invalid("message: body, attachments or blocks required")
+		// main's wording, kept: a classic webhook's post can end here.
+		return nil, apperr.Invalid("message: body or attachments required")
 	}
 	if err := ValidateMessageBody(in.Body); err != nil {
 		return nil, err

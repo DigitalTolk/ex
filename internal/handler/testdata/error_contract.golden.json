@@ -472,6 +472,16 @@
     }
   },
   {
+    "case": "row: invalid payload",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "invalid_payload",
+        "message": "invalid payload"
+      }
+    }
+  },
+  {
     "case": "row: version conflict",
     "status": 409,
     "body": {

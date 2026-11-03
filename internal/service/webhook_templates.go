@@ -146,7 +146,11 @@ func fillTemplate(wh *model.IncomingWebhook, in IncomingWebhookPayload) (Incomin
 		return in, apperr.Invalid("webhook: template %q filled is over 1 MB", in.Template)
 	}
 	var out IncomingWebhookPayload
-	if err := json.Unmarshal(raw, &out); err != nil {
+	err = json.Unmarshal(raw, &out)
+	if err == nil {
+		err = out.readRich()
+	}
+	if err != nil {
 		return in, apperr.Invalid("webhook: template %q filled isn't a valid message: %s", in.Template, err.Error())
 	}
 	if in.Channel != "" {

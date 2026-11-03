@@ -138,7 +138,7 @@ func (h *WebhookHandler) Execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	payload.BotToken = bearerToken(r)
-	msg, err := h.svc.ExecuteMessage(r.Context(), id, payload)
+	msg, rich, err := h.svc.ExecuteKind(r.Context(), id, payload)
 	if err != nil {
 		// This is an UNAUTHENTICATED ingress: internal error text never goes
 		// to the caller — the table answers with fixed or user-facing texts
@@ -152,7 +152,13 @@ func (h *WebhookHandler) Execute(w http.ResponseWriter, r *http.Request) {
 	// JSON gets the message id, which it can send back as root_id to reply in
 	// this message's thread.
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "application/json") {
-		writeJSON(w, http.StatusOK, map[string]string{"id": msg.ID, "channel_id": msg.ParentID})
+		// A classic webhook answers exactly as it always has; channel_id is
+		// a rich webhook's addition.
+		if rich {
+			writeJSON(w, http.StatusOK, map[string]string{"id": msg.ID, "channel_id": msg.ParentID})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"id": msg.ID})
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")

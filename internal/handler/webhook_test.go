@@ -739,13 +739,17 @@ func TestWebhookHandlerExecute_TransientFailureIsRetryable(t *testing.T) {
 }
 
 func newHandlerWebhookThreadFixture() (*WebhookHandler, *handlerWebhookMessageStore) {
+	return newHandlerWebhookThreadFixtureKind("")
+}
+
+func newHandlerWebhookThreadFixtureKind(kind string) (*WebhookHandler, *handlerWebhookMessageStore) {
 	general := &model.Channel{ID: "ch-general", Name: "General", Slug: "general"}
 	channels := handlerWebhookChannels{
 		byID:   map[string]*model.Channel{general.ID: general},
 		bySlug: map[string]*model.Channel{general.Slug: general},
 	}
 	webhooks := &handlerWebhookStore{items: map[string]*model.IncomingWebhook{
-		"wh": {ID: "wh", Title: "Alerts", ChannelID: general.ID, ChannelName: general.Name, ChannelSlug: general.Slug, Username: "event-radar"},
+		"wh": {ID: "wh", Title: "Alerts", ChannelID: general.ID, ChannelName: general.Name, ChannelSlug: general.Slug, Username: "event-radar", Kind: kind},
 	}}
 	messages := &handlerWebhookMessageStore{messages: map[string]*model.Message{}}
 	msgSvc := service.NewMessageService(messages, nil, nil, nil, nil)
@@ -771,20 +775,16 @@ func TestWebhookHandlerExecute_JSONResponseReturnsIDForThreading(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("root status = %d body=%s", res.Code, res.Body.String())
 	}
-	var root struct {
-		ID        string `json:"id"`
-		ChannelID string `json:"channel_id"`
-	}
-	if err := json.Unmarshal(res.Body.Bytes(), &root); err != nil || root.ID == "" {
+	var root map[string]string
+	if err := json.Unmarshal(res.Body.Bytes(), &root); err != nil || root["id"] == "" {
 		t.Fatalf("root response = %q (err %v), want JSON with id", res.Body.String(), err)
 	}
-	// The channel is named too: an app needs both to update the post later
-	// (messages.update).
-	if root.ChannelID != "ch-general" {
-		t.Fatalf("root response channel_id = %q, want ch-general", root.ChannelID)
+	// A classic webhook answers exactly as it always has: the id alone.
+	if len(root) != 1 {
+		t.Fatalf("classic response = %v, want only the id", root)
 	}
 
-	res = executeWebhook(h, `{"text":"still failing","root_id":"`+root.ID+`"}`, "application/json")
+	res = executeWebhook(h, `{"text":"still failing","root_id":"`+root["id"]+`"}`, "application/json")
 	if res.Code != http.StatusOK {
 		t.Fatalf("reply status = %d body=%s", res.Code, res.Body.String())
 	}
@@ -795,10 +795,10 @@ func TestWebhookHandlerExecute_JSONResponseReturnsIDForThreading(t *testing.T) {
 		t.Fatalf("reply response = %q (err %v), want JSON with id", res.Body.String(), err)
 	}
 	stored := messages.messages["ch-general#"+reply.ID]
-	if stored == nil || stored.ParentMessageID != root.ID {
-		t.Fatalf("stored reply = %#v, want parentMessageID %s", stored, root.ID)
+	if stored == nil || stored.ParentMessageID != root["id"] {
+		t.Fatalf("stored reply = %#v, want parentMessageID %s", stored, root["id"])
 	}
-	if messages.messages["ch-general#"+root.ID].ReplyCount != 1 {
+	if messages.messages["ch-general#"+root["id"]].ReplyCount != 1 {
 		t.Fatal("root reply count was not incremented")
 	}
 }
@@ -876,5 +876,29 @@ func TestWebhookHandlerTemplates(t *testing.T) {
 	}
 	if res := call(http.MethodDelete, "rich", "deploy", ""); res.Code != http.StatusNotFound {
 		t.Fatalf("delete missing = %d, want 404", res.Code)
+	}
+}
+
+// A rich webhook's JSON answer also names the channel: an app needs both to
+// update the post later (messages.update).
+func TestWebhookHandlerExecute_RichJSONResponseNamesTheChannel(t *testing.T) {
+	h, _ := newHandlerWebhookThreadFixtureKind(model.WebhookKindRich)
+	res := executeWebhook(h, `{"text":"service api is failing"}`, "application/json")
+	var got map[string]string
+	if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil || got["id"] == "" || got["channel_id"] != "ch-general" {
+		t.Fatalf("rich response = %d %s, want id and channel_id", res.Code, res.Body.String())
+	}
+}
+
+// A preview body that isn't JSON at all is refused before anything else.
+func TestWebhookHandler_PreviewRefusesBrokenJSON(t *testing.T) {
+	h, _ := newHandlerWebhookThreadFixtureKind(model.WebhookKindRich)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/webhooks/preview", strings.NewReader(`{`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(middleware.ContextWithClaims(req.Context(), &model.TokenClaims{UserID: "u-1", SystemRole: model.SystemRoleMember}))
+	res := httptest.NewRecorder()
+	h.Preview(res, req)
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), `"invalid_payload"`) {
+		t.Fatalf("broken preview = %d %s", res.Code, res.Body.String())
 	}
 }

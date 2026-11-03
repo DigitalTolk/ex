@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -157,4 +158,48 @@ func TestClassicWebhook_HasNoInteractivity(t *testing.T) {
 	if _, err := f.svc.AuthenticateApp(context.Background(), "leftover"); !errors.Is(err, ErrInvalidAuth) {
 		t.Fatalf("classic token authenticated as an app: err = %v", err)
 	}
+}
+
+// A rich webhook reads the fields a classic one never touches, and refuses
+// them — as an invalid payload — when they don't have the shape ex reads.
+func TestRichWebhook_ReadsRichOnlyFieldsAndRefusesBadOnes(t *testing.T) {
+	decode := func(t *testing.T, body string) IncomingWebhookPayload {
+		t.Helper()
+		var p IncomingWebhookPayload
+		if err := json.Unmarshal([]byte(body), &p); err != nil {
+			t.Fatalf("decode %s: %v", body, err)
+		}
+		return p
+	}
+	for _, tc := range []struct{ name, body, want string }{
+		{"blocks", `{"text":"x","blocks":"nope"}`, "webhook: blocks:"},
+		{"card blocks", `{"text":"x","attachments":[{"title":"t","blocks":"nope"}]}`, "attachments[0].blocks"},
+		{"template", `{"text":"x","template":5}`, "webhook: template:"},
+		{"data", `{"text":"x","template":"t","data":"nope"}`, "webhook: data:"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _ := blocksWebhookFixture(nil)
+			_, err := svc.ExecuteMessage(context.Background(), "wh", decode(t, tc.body))
+			if !errors.Is(err, ErrInvalidPayload) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want an invalid payload naming %q", err, tc.want)
+			}
+		})
+	}
+	t.Run("well-formed fields are read", func(t *testing.T) {
+		svc, messages := blocksWebhookFixture(nil)
+		p := decode(t, `{"text":"x","blocks":[{"type":"divider"}],"attachments":[{"title":"t","blocks":[{"type":"divider"}]},{"title":"no blocks"}]}`)
+		if _, err := svc.ExecuteMessage(context.Background(), "wh", p); err != nil {
+			t.Fatalf("post: %v", err)
+		}
+		m := onlyStoredMessage(t, messages)
+		if len(m.Blocks) != 1 || len(m.MessageAttachments[0].Blocks) != 1 || len(m.MessageAttachments[1].Blocks) != 0 {
+			t.Fatalf("message = %+v", m)
+		}
+	})
+	t.Run("a payload built in code keeps its values", func(t *testing.T) {
+		p := IncomingWebhookPayload{Template: "t", Data: map[string]any{"a": "b"}}
+		if err := p.readRich(); err != nil || p.Template != "t" || p.Data["a"] != "b" {
+			t.Fatalf("readRich = %v, %+v", err, p)
+		}
+	})
 }

@@ -1,0 +1,460 @@
+[
+  {
+    "name": "plain text",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"Build #1432 passed on main\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "markdown and links",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"**Deploy** done: [build 1](https://ci.test/builds/1) and [notes](https://ci.test/notes)\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "mentions",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"cc @[u-alice|Alice], @[u-bob|Bob], @[u-alice|Alice], @nobody and @all @here @all\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "mention by email",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"cc @[u-alice|Alice]@example.com and @ghost@example.com\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "channels",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"see ~[ch-builds|builds] and ~[ch-builds|builds] and ~elsewhere\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "identity",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"hi\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"CI bot\",\"webhookAvatarURL\":\"proxied:https://cdn.test/bot.png\"}"
+    ]
+  },
+  {
+    "name": "icon emoji with colons",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"hi\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\",\"webhookIconEmoji\":\"tada\"}"
+    ]
+  },
+  {
+    "name": "icon emoji bare",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"hi\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\",\"webhookIconEmoji\":\"rocket\"}"
+    ]
+  },
+  {
+    "name": "icon emoji and url",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"hi\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\",\"webhookIconEmoji\":\"rocket\"}"
+    ]
+  },
+  {
+    "name": "attachment",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"report\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\",\"messageAttachments\":[{\"color\":\"#36a64f\",\"pretext\":\"for @[u-alice|Alice]\",\"text\":\"All good\",\"author_name\":\"ci\",\"title\":\"Build\",\"title_link\":\"https://ci.test/1\",\"fields\":[{\"title\":\"Branch\",\"value\":\"main\",\"short\":true}],\"image_url\":\"proxied:https://cdn.test/chart.png\",\"thumb_url\":\"proxied:https://cdn.test/t.png\",\"footer\":\"CI\"}]}"
+    ]
+  },
+  {
+    "name": "attachment only",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\",\"messageAttachments\":[{\"text\":\"body\",\"title\":\"No text, just a card\"}]}"
+    ]
+  },
+  {
+    "name": "attachment long footer",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"x\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\",\"messageAttachments\":[{\"footer\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff...\"}]}"
+    ]
+  },
+  {
+    "name": "attachment with blocks",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"card\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\",\"messageAttachments\":[{\"title\":\"t\"}]}"
+    ]
+  },
+  {
+    "name": "attachment with odd blocks",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"card\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\",\"messageAttachments\":[{\"title\":\"t\"}]}"
+    ]
+  },
+  {
+    "name": "slack blocks",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"fallback\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "slack rich_text blocks",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"fallback\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "blocks of the wrong type",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"fallback\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "blocks as an object",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"fallback\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "blocks only",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"bad_request\",\"message\":\"webhook: text or attachments required\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "stray template and data",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"hello\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "stray template object",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"hello\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "mattermost extras",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"hello\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "empty payload",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"bad_request\",\"message\":\"webhook: text or attachments required\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "empty text",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"bad_request\",\"message\":\"webhook: text or attachments required\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "whitespace text",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"   \",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "text too long",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"bad_request\",\"message\":\"message: body exceeds maximum length\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "too many attachments",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"bad_request\",\"message\":\"message: too many attachments\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "invalid json",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"invalid_payload\",\"message\":\"unexpected end of JSON input\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "not an object",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"invalid_payload\",\"message\":\"json: cannot unmarshal array into Go value of type service.IncomingWebhookPayload\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "text of the wrong type",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"invalid_payload\",\"message\":\"json: cannot unmarshal number into Go struct field IncomingWebhookPayload.text of type string\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "unknown root",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"invalid_root\",\"message\":\"root_id must reference a top-level message posted by this webhook in the target channel\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "channel override",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-builds\",\"authorID\":\"webhook\",\"body\":\"elsewhere\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "channel override by slug",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-builds\",\"authorID\":\"webhook\",\"body\":\"elsewhere\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "unknown channel",
+    "status": 404,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"not_found\",\"message\":\"not found\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "direct message",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"unsupported_channel\",\"message\":\"webhook cannot post to that direct-message target\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "form payload",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"from a form\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"form bot\"}"
+    ]
+  },
+  {
+    "name": "form payload with blocks",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"form\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "form fields",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-builds\",\"authorID\":\"webhook\",\"body\":\"plain form\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"bot\",\"webhookAvatarURL\":\"proxied:https://cdn.test/i.png\"}"
+    ]
+  },
+  {
+    "name": "raw payload= body",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"raw\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "attachment title of the wrong type",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"invalid_payload\",\"message\":\"json: cannot unmarshal number into Go struct field IncomingWebhookPayload.attachments.0.title of type string\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "attachment fields of the wrong type",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"invalid_payload\",\"message\":\"json: cannot unmarshal string into Go struct field IncomingWebhookPayload.attachments.0.fields of type []model.MessageAttachmentField\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "attachment field short of the wrong type",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"invalid_payload\",\"message\":\"json: cannot unmarshal string into Go struct field IncomingWebhookPayload.attachments.0.fields.0.short of type bool\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "attachments of the wrong type",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"invalid_payload\",\"message\":\"json: cannot unmarshal object into Go struct field IncomingWebhookPayload.attachments of type []model.MessageAttachment\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "icon emoji of the wrong type",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"invalid_payload\",\"message\":\"json: cannot unmarshal number into Go struct field IncomingWebhookPayload.icon_emoji of type string\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "channel of the wrong type",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"invalid_payload\",\"message\":\"json: cannot unmarshal array into Go struct field IncomingWebhookPayload.channel of type string\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "root id of the wrong type",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"invalid_payload\",\"message\":\"json: cannot unmarshal number into Go struct field IncomingWebhookPayload.root_id of type string\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "trailing garbage",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"invalid_payload\",\"message\":\"invalid character 'j' after top-level value\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "body over a megabyte",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"invalid_payload\",\"message\":\"http: request body too large\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "unicode and emoji text",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"Résumé ✅ — naïve 🎉 @all\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "html in text",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"scriptalert(1)/script \\u0026 bbold/b\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "locked webhook overrides channel",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"stay\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"alerts\"}"
+    ]
+  },
+  {
+    "name": "locked webhook direct message",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"unsupported_channel\",\"message\":\"webhook cannot post to that direct-message target\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "foreign bearer token",
+    "status": 200,
+    "type": "text/plain; charset=utf-8",
+    "answer": "ok",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"with someone else's token\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "json answer",
+    "status": 200,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"id\":\"\u003cID\u003e\"}\n",
+    "messages": [
+      "{\"id\":\"\u003cID\u003e\",\"parentID\":\"ch-general\",\"authorID\":\"webhook\",\"body\":\"answer as json\",\"createdAt\":\"\u003cTIME\u003e\",\"webhookUsername\":\"ci\"}"
+    ]
+  },
+  {
+    "name": "json answer to an error",
+    "status": 400,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"bad_request\",\"message\":\"webhook: text or attachments required\"}}\n",
+    "messages": []
+  },
+  {
+    "name": "unknown webhook",
+    "status": 404,
+    "type": "application/json; charset=utf-8",
+    "answer": "{\"error\":{\"code\":\"not_found\",\"message\":\"not found\"}}\n",
+    "messages": []
+  }
+]

@@ -54,6 +54,7 @@ var errorMappings = []errorMapping{
 	{service.ErrBotTokenRequired, http.StatusUnauthorized, "token_required", ""},
 	{service.ErrInvalidBotToken, http.StatusUnauthorized, "invalid_token", ""},
 	{service.ErrNotRichWebhook, http.StatusConflict, "not_rich_webhook", ""},
+	{service.ErrInvalidPayload, http.StatusBadRequest, "invalid_payload", ""},
 	{service.ErrAppVersionConflict, http.StatusConflict, "version_conflict", ""},
 	{service.ErrResponseURLExpired, http.StatusGone, "expired_url", ""},
 	{service.ErrResponseURLUsedUp, http.StatusGone, "used_up", ""},
