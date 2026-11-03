@@ -51,18 +51,26 @@ export function useInView<T extends HTMLElement>({ rootMargin = '200px' }: UseIn
 // for a card merely scrolled past. No rootMargin: only genuine visibility
 // counts. Falls back to true when IntersectionObserver is unavailable
 // (jsdom), matching useInView's no-virtualization baseline.
-export function useLiveInView<T extends HTMLElement>(ref: RefObject<T | null>): boolean {
-  const [live, setLive] = useState(typeof IntersectionObserver === 'undefined');
+//
+// measuredFor names the layout an answer belongs to (a list's length, say).
+// When it changes, the hook observes afresh and reports false until the
+// browser answers for the new layout — never the old answer, which can be a
+// frame stale: an end-of-list marker in view while the list was empty is out
+// of view once the rows render, and trusting the old "in view" in between
+// loaded the next page at once.
+export function useLiveInView<T extends HTMLElement>(ref: RefObject<T | null>, measuredFor?: unknown): boolean {
+  const unobservable = typeof IntersectionObserver === 'undefined';
+  const [answer, setAnswer] = useState<{ for: unknown; live: boolean }>({ for: measuredFor, live: false });
   useEffect(() => {
     const node = ref.current;
     if (!node || typeof IntersectionObserver === 'undefined') return;
     const observer = new IntersectionObserver((entries) => {
       for (const entry of entries) {
-        setLive(entry.isIntersecting);
+        setAnswer({ for: measuredFor, live: entry.isIntersecting });
       }
     });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [ref]);
-  return live;
+  }, [ref, measuredFor]);
+  return unobservable || (answer.for === measuredFor && answer.live);
 }

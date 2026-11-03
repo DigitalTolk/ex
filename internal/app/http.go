@@ -117,6 +117,7 @@ func (a *App) buildHTTP(context.Context) error {
 		// autocomplete stays off DynamoDB for warm IDs.
 		Search:       handler.NewSearchHandler(s.searcher, s.access, c.users, c.channels),
 		Webhook:      handler.NewWebhookHandler(c.webhooks),
+		Interaction:  handler.NewInteractionHandler(c.interactions),
 		Activity:     handler.NewActivityHandler(c.activity, c.reminders),
 		Command:      handler.NewCommandHandler(c.commands),
 		Agent:        h.agent,

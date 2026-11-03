@@ -218,6 +218,24 @@ export const EventScheduledMessagesChanged = "scheduled_messages.changed";
  */
 export const EventRemindersChanged = "reminders.changed";
 /**
+ * EventInteractionNotice shows one person a note an app left in answer
+ * to their click ("A1 isn't assigned to you"), sent through a
+ * response_url. Sent on the clicker's own topic; ephemeral: a stale
+ * note replayed after a reconnect would only confuse.
+ */
+export const EventInteractionNotice = "interaction.notice";
+/**
+ * EventViewOpened / EventViewUpdated open an app's form for one person,
+ * or change it while open; the event names the tab that clicked, which
+ * alone shows it. Sent on that person's topic; ephemeral: a form belongs
+ * to the moment of the click.
+ */
+export const EventViewOpened = "view.opened";
+/**
+ * Event type constants used across the application.
+ */
+export const EventViewUpdated = "view.updated";
+/**
  * Event represents a real-time event with a type and JSON payload, delivered
  * to clients over WebSocket.
  * ID is a ULID stamped at publish time. It is the canonical identity the

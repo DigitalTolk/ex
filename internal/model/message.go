@@ -90,6 +90,21 @@ type Message struct {
 	// can swap its optimistic "sending" row for the real message whichever
 	// arrives first. Never persisted.
 	ClientNonce string `json:"clientNonce,omitempty" dynamodbav:"-"`
+	// Blocks lay out an app's message (Block Kit); Body stays its plain-text
+	// fallback for notifications, search and clients that can't draw them.
+	Blocks Blocks `json:"blocks,omitempty" dynamodbav:"blocks,omitempty"`
+	// ActionTallies hold the state of the message's built-in actions: who
+	// acknowledged, who voted.
+	ActionTallies []ActionTally `json:"actionTallies,omitempty" dynamodbav:"actionTallies,omitempty"`
+	// Version counts the changes made to an app's message (its blocks, its
+	// tallies). A change is written only over the version it was made on, so
+	// two at once can't undo each other.
+	Version int `json:"version,omitempty" dynamodbav:"version,omitempty"`
+	// AppButtons: the message was posted (or last replaced) by its app with
+	// the app's bot token, so its app buttons send their clicks to the app.
+	// A message posted with the webhook URL alone — which anyone holding a
+	// leaked URL could do — never reaches the app.
+	AppButtons bool `json:"appButtons,omitempty" dynamodbav:"appButtons,omitempty"`
 }
 
 // Tombstone soft-deletes a message in place: it flags Deleted, moves the
@@ -99,13 +114,15 @@ type Message struct {
 // source of truth for the soft-delete field contract — the service
 // soft-delete path, the importer and the offline migrations all call it.
 func (m *Message) Tombstone() {
-	if !m.Deleted && (m.Body != "" || len(m.AttachmentIDs) > 0 || len(m.MessageAttachments) > 0) {
-		m.DeletedContent = &DeletedContent{Body: m.Body, AttachmentIDs: m.AttachmentIDs, MessageAttachments: m.MessageAttachments}
+	if !m.Deleted && (m.Body != "" || len(m.AttachmentIDs) > 0 || len(m.MessageAttachments) > 0 || len(m.Blocks) > 0) {
+		m.DeletedContent = &DeletedContent{Body: m.Body, AttachmentIDs: m.AttachmentIDs, MessageAttachments: m.MessageAttachments, Blocks: m.Blocks}
 	}
 	m.Deleted = true
 	m.Body = ""
 	m.AttachmentIDs = nil
 	m.MessageAttachments = nil
+	m.Blocks = nil
+	m.ActionTallies = nil
 	m.Reactions = nil
 	m.Pinned = false
 	m.PinnedAt = nil
@@ -133,6 +150,11 @@ type MessageAttachment struct {
 	ThumbURL    string `json:"thumb_url,omitempty" dynamodbav:"thumbURL,omitempty"`
 	Footer      string `json:"footer,omitempty" dynamodbav:"footer,omitempty"`
 	FooterIcon  string `json:"footer_icon,omitempty" dynamodbav:"footerIcon,omitempty"`
+	// Icon (rich webhooks only) is an emoji name shown before the title,
+	// Notion-style.
+	Icon string `json:"icon,omitempty" dynamodbav:"icon,omitempty"`
+	// Blocks inside a card sit on the card's tint.
+	Blocks Blocks `json:"blocks,omitempty" dynamodbav:"blocks,omitempty"`
 }
 
 type MessageAttachmentField struct {

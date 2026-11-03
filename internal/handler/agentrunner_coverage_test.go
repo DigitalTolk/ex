@@ -677,6 +677,9 @@ func (s *hrunnerCovMsgStore) GetMessage(_ context.Context, parentID, msgID strin
 }
 
 func (s *hrunnerCovMsgStore) UpdateMessage(context.Context, *model.Message) error { return nil }
+func (s *hrunnerCovMsgStore) UpdateMessageIfVersion(context.Context, *model.Message, int) error {
+	return nil
+}
 func (s *hrunnerCovMsgStore) DeleteMessage(context.Context, string, string) error { return nil }
 func (s *hrunnerCovMsgStore) ListMessages(context.Context, string, string, int) ([]*model.Message, bool, error) {
 	return nil, false, nil
