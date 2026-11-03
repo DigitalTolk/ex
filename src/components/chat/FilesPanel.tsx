@@ -81,9 +81,11 @@ export function FilesPanel({
   const entries = useMemo(() => data?.pages.flatMap((p) => p.files) ?? [], [data]);
 
   // The next page loads once the end of the list scrolls into view (and
-  // again while it stays in view, until the list fills the panel).
+  // again while it stays in view, until the list fills the panel). Whether
+  // it's in view is asked again whenever the list grows, so an answer from
+  // before the rows rendered never fetches a page nobody scrolled to.
   const endRef = useRef<HTMLDivElement>(null);
-  const atEnd = useLiveInView(endRef);
+  const atEnd = useLiveInView(endRef, entries.length);
   useEffect(() => {
     if (atEnd && hasNextPage && !isFetchingNextPage) void fetchNextPage();
   }, [atEnd, hasNextPage, isFetchingNextPage, fetchNextPage]);
