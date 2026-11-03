@@ -85,6 +85,15 @@ describe('MessageItem with blocks', () => {
     expect(screen.getByTestId('block-button-ack')).not.toBeDisabled();
   });
 
+  // A row rendered without its channel or conversation (none of the app's
+  // lists do this today) still draws the card, but nothing on it can act:
+  // there is nowhere to send a click.
+  it('draws the blocks but nothing live when the message has no parent', () => {
+    renderItem(appCard(), { channelId: undefined });
+    expect(screen.getByTestId('message-blocks')).toHaveTextContent('api 1.42 is live');
+    expect(screen.getByTestId('block-button-ack')).toBeDisabled();
+  });
+
   it('draws a message without blocks exactly as before', () => {
     renderItem(appCard({ blocks: undefined, body: 'plain text' }));
     expect(screen.queryByTestId('message-blocks')).toBeNull();
