@@ -176,16 +176,21 @@ describe('MessageRichAttachments with blocks', () => {
         attachments={[
           { icon: '🚀', title: 'api deployed', pretext: 'Release 2.14', text: 'All checks passed.', fields: [{ title: 'Version', value: 'v2.14.0', short: true }], footer: 'deploy-bot' },
           { icon: 'not_a_known_emoji', text: 'No title' },
+          { icon: '🚨', text: 'Deploy failed' },
         ]}
       />,
     );
-    const [card, bare] = screen.getAllByTestId('message-rich-attachment');
-    expect(card.firstElementChild).toHaveTextContent('🚀api deployed');
+    const [card, bare, untitled] = screen.getAllByTestId('message-rich-attachment');
+    // Without a title, the icon leads the first line instead of a header.
+    expect(untitled).toHaveClass('flex');
+    expect(untitled.firstElementChild).toHaveTextContent('🚨');
+    expect(untitled.lastElementChild).toHaveTextContent('Deploy failed');
+    expect(card.firstElementChild!.firstElementChild).toHaveTextContent('🚀api deployed');
     expect(card).not.toHaveTextContent('Release 2.14');
     expect(screen.getByText('Release 2.14').closest('[data-testid="message-rich-attachment"]')).toBeNull();
     expect(screen.getByText('Version').tagName).toBe('DT');
     expect(screen.getByText('deploy-bot')).toHaveClass('border-t');
-    // An icon ex can't draw leaves an empty header, never ":name:".
+    // An icon ex can't draw is left out, never ":name:".
     expect(bare).not.toHaveTextContent(':not_a_known_emoji:');
   });
 });

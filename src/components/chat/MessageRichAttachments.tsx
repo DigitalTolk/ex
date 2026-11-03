@@ -37,65 +37,70 @@ export function MessageRichAttachments({ attachments, onContentHeightChange }: {
             // Notion-style: a colour tints the whole card; none is the theme's
             // plain card. Secondary text is the foreground, faded, so it keeps
             // its contrast on every tint.
-            className={cn('relative overflow-hidden rounded-lg border px-4 py-3', cardClass(att.color))}
+            className={cn('relative overflow-hidden rounded-lg border px-4 py-3', !att.title && att.icon && 'flex gap-2.5', cardClass(att.color))}
           >
-            {safeImg(att.thumb_url) && (
-              <img
-                src={safeImg(att.thumb_url)}
-                alt=""
-                className="float-right ml-3 h-[75px] w-[75px] rounded-md object-cover"
-                onLoad={onContentHeightChange}
-              />
-            )}
-            {att.author_name && (
-              <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-foreground/70">
-                {safeImg(att.author_icon) && <img src={safeImg(att.author_icon)} alt="" className="h-4 w-4 rounded-sm" onLoad={onContentHeightChange} />}
-                {externalHref(att.author_link) ? <a href={att.author_link} target="_blank" rel="noreferrer" className={LINK}>{att.author_name}</a> : att.author_name}
-              </div>
-            )}
-            {(att.title || att.icon) && (
-              <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
-                {att.icon && <BlockIcon icon={att.icon} size="lg" className="shrink-0" />}
-                {externalHref(att.title_link) ? <a href={att.title_link} target="_blank" rel="noreferrer" className={LINK}>{att.title}</a> : att.title}
-              </div>
-            )}
-            {att.text && <MarkdownField className="text-sm prose-message" text={att.text} />}
-            {att.fields?.length ? (
-              <dl className="mt-3 grid grid-cols-1 gap-x-4 gap-y-2.5 sm:grid-cols-2">
-                {att.fields.map((field, fieldIndex) => (
-                  <div key={fieldIndex} className={field.short ? 'min-w-0' : 'min-w-0 sm:col-span-2'}>
-                    {field.title && <dt className="text-xs font-medium text-foreground/70">{field.title}</dt>}
-                    {field.value && (
-                      <dd>
-                        <MarkdownField className="text-sm prose-message" text={field.value} />
-                      </dd>
-                    )}
-                  </div>
-                ))}
-              </dl>
-            ) : null}
-            {/* Blocks inside a card sit on its tint; their buttons answer
-                through the message's block scope (MessageItem). */}
-            {att.blocks?.length ? <BlockList blocks={att.blocks} className="mt-3" /> : null}
-            {safeImg(att.image_url) && (
-              <img
-                src={safeImg(att.image_url)}
-                alt=""
-                width={att.image_width || undefined}
-                height={att.image_height || undefined}
-                // Responsive: never exceed the container width (so it reflows in
-                // the narrow thread sidebar) while keeping aspect ratio and the
-                // Mattermost 300px height cap. width/height attrs reserve space.
-                className="mt-3 h-auto max-h-[300px] w-auto max-w-full rounded-md object-contain"
-                onLoad={onContentHeightChange}
-              />
-            )}
-            {(att.footer || att.footer_icon) && (
-              <div className="clear-both mt-3 flex items-center gap-1.5 border-t border-foreground/10 pt-2 text-xs text-foreground/70">
-                {safeImg(att.footer_icon) && <img src={safeImg(att.footer_icon)} alt="" className="h-4 w-4 rounded-sm" onLoad={onContentHeightChange} />}
-                {att.footer}
-              </div>
-            )}
+            {/* No title: the icon leads the card, beside its content, as in a callout. */}
+            {!att.title && att.icon && <BlockIcon icon={att.icon} size="lg" className="shrink-0" />}
+            {/* The first part sits at the card's top edge, whatever it is. */}
+            <div className="min-w-0 flex-1 [&>*:first-child]:mt-0">
+              {safeImg(att.thumb_url) && (
+                <img
+                  src={safeImg(att.thumb_url)}
+                  alt=""
+                  className="float-right ml-3 h-[75px] w-[75px] rounded-md object-cover"
+                  onLoad={onContentHeightChange}
+                />
+              )}
+              {att.author_name && (
+                <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-foreground/70">
+                  {safeImg(att.author_icon) && <img src={safeImg(att.author_icon)} alt="" className="h-4 w-4 rounded-sm" onLoad={onContentHeightChange} />}
+                  {externalHref(att.author_link) ? <a href={att.author_link} target="_blank" rel="noreferrer" className={LINK}>{att.author_name}</a> : att.author_name}
+                </div>
+              )}
+              {att.title && (
+                <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
+                  {att.icon && <BlockIcon icon={att.icon} size="lg" className="shrink-0" />}
+                  {externalHref(att.title_link) ? <a href={att.title_link} target="_blank" rel="noreferrer" className={LINK}>{att.title}</a> : att.title}
+                </div>
+              )}
+              {att.text && <MarkdownField className="text-sm prose-message" text={att.text} />}
+              {att.fields?.length ? (
+                <dl className="mt-3 grid grid-cols-1 gap-x-4 gap-y-2.5 sm:grid-cols-2">
+                  {att.fields.map((field, fieldIndex) => (
+                    <div key={fieldIndex} className={field.short ? 'min-w-0' : 'min-w-0 sm:col-span-2'}>
+                      {field.title && <dt className="text-xs font-medium text-foreground/70">{field.title}</dt>}
+                      {field.value && (
+                        <dd>
+                          <MarkdownField className="text-sm prose-message" text={field.value} />
+                        </dd>
+                      )}
+                    </div>
+                  ))}
+                </dl>
+              ) : null}
+              {/* Blocks inside a card sit on its tint; their buttons answer
+                  through the message's block scope (MessageItem). */}
+              {att.blocks?.length ? <BlockList blocks={att.blocks} className="mt-3" /> : null}
+              {safeImg(att.image_url) && (
+                <img
+                  src={safeImg(att.image_url)}
+                  alt=""
+                  width={att.image_width || undefined}
+                  height={att.image_height || undefined}
+                  // Responsive: never exceed the container width (so it reflows in
+                  // the narrow thread sidebar) while keeping aspect ratio and the
+                  // Mattermost 300px height cap. width/height attrs reserve space.
+                  className="mt-3 h-auto max-h-[300px] w-auto max-w-full rounded-md object-contain"
+                  onLoad={onContentHeightChange}
+                />
+              )}
+              {(att.footer || att.footer_icon) && (
+                <div className="clear-both mt-3 flex items-center gap-1.5 border-t border-foreground/10 pt-2 text-xs text-foreground/70">
+                  {safeImg(att.footer_icon) && <img src={safeImg(att.footer_icon)} alt="" className="h-4 w-4 rounded-sm" onLoad={onContentHeightChange} />}
+                  {att.footer}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       ))}
