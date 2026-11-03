@@ -159,9 +159,16 @@ func compatCorpus() []compatCase {
 var (
 	compatULID = regexp.MustCompile(`\b[0-9A-HJKMNP-TV-Z]{26}\b`)
 	compatTime = regexp.MustCompile(`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)`)
+	// How encoding/json names a mistyped field changed between Go releases
+	// ("MessageAttachment.attachments.title" in 1.26,
+	// "IncomingWebhookPayload.attachments.0.title" in 1.27), and CI and
+	// production don't run the same one. The field itself is compared; the
+	// path Go spells to it is not.
+	compatJSONField = regexp.MustCompile(`Go struct field [\w.]*?\.?(\w+) of type`)
 )
 
 func compatNormalize(s string) string {
+	s = compatJSONField.ReplaceAllString(s, "Go struct field $1 of type")
 	return compatTime.ReplaceAllString(compatULID.ReplaceAllString(s, "<ID>"), "<TIME>")
 }
 
@@ -241,6 +248,7 @@ func TestClassicWebhooksBehaveAsBefore(t *testing.T) {
 	}
 	for i, got := range results {
 		w := want[i]
+		w.Answer = compatNormalize(w.Answer)
 		if got.Name != w.Name || got.Status != w.Status || got.Type != w.Type || got.Answer != w.Answer || strings.Join(got.Messages, "\n") != strings.Join(w.Messages, "\n") {
 			gotJSON, _ := json.MarshalIndent(got, "", "  ")
 			wantJSON, _ := json.MarshalIndent(w, "", "  ")

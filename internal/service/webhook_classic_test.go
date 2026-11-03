@@ -10,6 +10,7 @@ import (
 
 	"github.com/DigitalTolk/ex/internal/apperr"
 	"github.com/DigitalTolk/ex/internal/model"
+	"github.com/DigitalTolk/ex/internal/store"
 )
 
 // A classic webhook — every webhook made before rich ones existed — must post
@@ -246,5 +247,57 @@ func TestRichWebhook_CardIcons(t *testing.T) {
 		if !errors.Is(err, ErrInvalidBlocks) || !strings.Contains(err.Error(), "attachments[1].icon") {
 			t.Errorf("icon %q: err = %v, want it refused naming attachments[1].icon", icon, err)
 		}
+	}
+}
+
+// Each kind posts at its own URL — classic /hooks/{id}, rich /hooks/v2/{id}
+// — and is refused at the other's, so the classic URL only ever runs the
+// classic path.
+func TestWebhookURLs_EachKindExecutesOnlyAtItsOwn(t *testing.T) {
+	ctx := context.Background()
+	classic, classicMessages, _ := classicWebhookFixture(nil)
+	rich, richMessages := blocksWebhookFixture(nil)
+	payload := IncomingWebhookPayload{Text: "deployed"}
+
+	if _, err := classic.ExecuteClassic(ctx, "wh", payload); err != nil {
+		t.Fatalf("classic at its URL: %v", err)
+	}
+	if _, err := rich.ExecuteRich(ctx, "wh", payload); err != nil {
+		t.Fatalf("rich at its URL: %v", err)
+	}
+	if _, err := rich.ExecuteClassic(ctx, "wh", payload); !errors.Is(err, ErrWrongWebhookURL) || !strings.Contains(err.Error(), "/hooks/v2/") {
+		t.Fatalf("rich at the classic URL: err = %v", err)
+	}
+	if _, err := classic.ExecuteRich(ctx, "wh", payload); !errors.Is(err, ErrWrongWebhookURL) || !strings.Contains(err.Error(), "classic webhook") {
+		t.Fatalf("classic at the rich URL: err = %v", err)
+	}
+	if _, err := classic.ExecuteRich(ctx, "missing", payload); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown webhook: err = %v", err)
+	}
+	if n, m := len(classicMessages.messages), len(richMessages.messages); n != 1 || m != 1 {
+		t.Fatalf("posted %d classic and %d rich messages, want one each", n, m)
+	}
+}
+
+func TestWebhookURL_RichHasItsOwn(t *testing.T) {
+	svc := NewIncomingWebhookService(&fakeWebhookStore{}, fakeWebhookChannels{}, nil, nil, "https://chat.example")
+	if got := svc.URL(&model.IncomingWebhook{ID: "c"}); got != "https://chat.example/hooks/c" {
+		t.Fatalf("classic URL = %q", got)
+	}
+	if got := svc.URL(&model.IncomingWebhook{ID: "r", Kind: model.WebhookKindRich}); got != "https://chat.example/hooks/v2/r" {
+		t.Fatalf("rich URL = %q", got)
+	}
+}
+
+// A preview reads the payload as a rich webhook does, so a malformed rich
+// field is refused there too.
+func TestPreviewMessage_RefusesMalformedRichFields(t *testing.T) {
+	svc, _ := blocksWebhookFixture(nil)
+	var p IncomingWebhookPayload
+	if err := json.Unmarshal([]byte(`{"text":"x","blocks":"nope"}`), &p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.PreviewMessage(context.Background(), WebhookActor{ID: "u-1", Role: model.SystemRoleMember}, p); !errors.Is(err, ErrInvalidPayload) {
+		t.Fatalf("err = %v, want an invalid payload", err)
 	}
 }

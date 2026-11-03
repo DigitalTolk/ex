@@ -27,3 +27,11 @@ func TestIncomingWebhook_TemplatesRoundTripThroughDynamo(t *testing.T) {
 		t.Fatal("found a template that isn't there")
 	}
 }
+
+// Only a webhook created rich is rich: every webhook stored before kinds
+// existed has none, and stays classic.
+func TestIncomingWebhook_IsRich(t *testing.T) {
+	if (&IncomingWebhook{}).IsRich() || !(&IncomingWebhook{Kind: WebhookKindRich}).IsRich() {
+		t.Fatal("IsRich must hold for rich webhooks only")
+	}
+}
