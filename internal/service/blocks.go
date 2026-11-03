@@ -111,6 +111,9 @@ func (n *blockNormalizer) normalizeMessage(ctx context.Context, blocks model.Blo
 		return nil, err
 	}
 	for i := range attachments {
+		if attachments[i].Icon, err = emojiIcon(fmt.Sprintf("attachments[%d].icon", i), attachments[i].Icon); err != nil {
+			return nil, err
+		}
 		if attachments[i].Blocks, err = n.normalize(ctx, fmt.Sprintf("attachments[%d].blocks", i), attachments[i].Blocks); err != nil {
 			return nil, err
 		}

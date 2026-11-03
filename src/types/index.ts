@@ -382,7 +382,9 @@ export interface MessageAttachment {
   thumb_url?: string;
   footer?: string;
   footer_icon?: string;
-  // Blocks inside the card keep its coloured bar.
+  // Rich webhooks: an emoji name shown before the title, Notion-style.
+  icon?: string;
+  // Blocks inside the card sit on its tint.
   blocks?: Block[];
 }
 

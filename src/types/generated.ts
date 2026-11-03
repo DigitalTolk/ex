@@ -2773,7 +2773,12 @@ export interface MessageAttachment {
   footer?: string;
   footer_icon?: string;
   /**
-   * Blocks inside a card keep the card's coloured bar.
+   * Icon (rich webhooks only) is an emoji name shown before the title,
+   * Notion-style.
+   */
+  icon?: string;
+  /**
+   * Blocks inside a card sit on the card's tint.
    */
   blocks?: Blocks;
 }

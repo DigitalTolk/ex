@@ -297,7 +297,7 @@ func TestLayoutBlocks_Refusals(t *testing.T) {
 		blocks model.Blocks
 		want   string
 	}{
-		{"callout icon", model.Blocks{{Type: model.BlockCallout, Icon: "<b>", Content: []model.RichNode{text("x")}}}, "an icon is an emoji name"},
+		{"callout icon", model.Blocks{{Type: model.BlockCallout, Icon: "<b>", Content: []model.RichNode{text("x")}}}, "an icon is an emoji like"},
 		{"callout colour", model.Blocks{{Type: model.BlockCallout, Color: "pink", Content: []model.RichNode{text("x")}}}, "colour must be one of"},
 		{"callout content", model.Blocks{{Type: model.BlockCallout, Content: []model.RichNode{{Type: model.RichHeading, Level: 9, Spans: []model.RichSpan{txt("x")}}}}}, "level is 1, 2 or 3"},
 		{"toggle summary missing", model.Blocks{{Type: model.BlockToggle, Blocks: children(1)}}, "needs a summary"},

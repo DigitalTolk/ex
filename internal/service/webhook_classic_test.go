@@ -203,3 +203,48 @@ func TestRichWebhook_ReadsRichOnlyFieldsAndRefusesBadOnes(t *testing.T) {
 		}
 	})
 }
+
+// A card's icon is a rich webhook's: a classic one posts the card without it,
+// exactly as before icons existed.
+func TestClassicWebhook_IgnoresCardIcons(t *testing.T) {
+	svc, messages, _ := classicWebhookFixture(nil)
+	if _, err := svc.ExecuteMessage(context.Background(), "wh", IncomingWebhookPayload{
+		Attachments: []model.MessageAttachment{{Title: "build #42", Icon: "<b>"}},
+	}); err != nil {
+		t.Fatalf("classic post with a card icon was refused: %v", err)
+	}
+	if a := onlyStoredMessage(t, messages).MessageAttachments[0]; a.Title != "build #42" || a.Icon != "" {
+		t.Fatalf("classic card = %+v; want it without its icon", a)
+	}
+}
+
+// A rich card's icon is an emoji or an emoji's name; anything else is
+// refused, naming the card.
+func TestRichWebhook_CardIcons(t *testing.T) {
+	for icon, want := range map[string]string{
+		"🚀":                  "🚀",
+		" 👩🏽‍💻 ":             "👩🏽‍💻",
+		"🇸🇪":                 "🇸🇪",
+		":Police_Car_Light:": "police_car_light",
+		"":                   "",
+	} {
+		svc, messages := blocksWebhookFixture(nil)
+		if _, err := svc.ExecuteMessage(context.Background(), "wh", IncomingWebhookPayload{
+			Attachments: []model.MessageAttachment{{Title: "t", Icon: icon}},
+		}); err != nil {
+			t.Fatalf("icon %q: %v", icon, err)
+		}
+		if got := onlyStoredMessage(t, messages).MessageAttachments[0].Icon; got != want {
+			t.Errorf("icon %q stored as %q, want %q", icon, got, want)
+		}
+	}
+	for _, icon := range []string{"^", "not an emoji", "🚀 go", "\u202e🚀", "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀"} {
+		svc, _ := blocksWebhookFixture(nil)
+		_, err := svc.ExecuteMessage(context.Background(), "wh", IncomingWebhookPayload{
+			Attachments: []model.MessageAttachment{{Title: "t"}, {Title: "t", Icon: icon}},
+		})
+		if !errors.Is(err, ErrInvalidBlocks) || !strings.Contains(err.Error(), "attachments[1].icon") {
+			t.Errorf("icon %q: err = %v, want it refused naming attachments[1].icon", icon, err)
+		}
+	}
+}

@@ -150,7 +150,10 @@ type MessageAttachment struct {
 	ThumbURL    string `json:"thumb_url,omitempty" dynamodbav:"thumbURL,omitempty"`
 	Footer      string `json:"footer,omitempty" dynamodbav:"footer,omitempty"`
 	FooterIcon  string `json:"footer_icon,omitempty" dynamodbav:"footerIcon,omitempty"`
-	// Blocks inside a card keep the card's coloured bar.
+	// Icon (rich webhooks only) is an emoji name shown before the title,
+	// Notion-style.
+	Icon string `json:"icon,omitempty" dynamodbav:"icon,omitempty"`
+	// Blocks inside a card sit on the card's tint.
 	Blocks Blocks `json:"blocks,omitempty" dynamodbav:"blocks,omitempty"`
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/DigitalTolk/ex/internal/model"
@@ -275,6 +276,41 @@ func richDate(at string, in model.RichSpan, budget *richBudget) (model.RichSpan,
 }
 
 // richColor checks a colour name against the palette; empty means def.
+// emojiIcon is a callout's or a card's icon: an emoji name, with or without
+// its colons, or the emoji itself.
+func emojiIcon(at, raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || isEmojiGlyph(raw) {
+		return raw, nil
+	}
+	icon := strings.Trim(strings.ToLower(raw), ":")
+	if !emojiNamePattern.MatchString(icon) {
+		return "", invalidBlocks("%s: an icon is an emoji like 🚀 or its name like rocket", at)
+	}
+	return icon, nil
+}
+
+// isEmojiGlyph reports whether s is one emoji, sequences included (skin
+// tones, ZWJ families, flags): symbols and the joiners between them only, so
+// no text or control character rides along.
+func isEmojiGlyph(s string) bool {
+	if utf8.RuneCountInString(s) > 10 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r < 0x80:
+			// ASCII's own symbols (^, `) are no emoji.
+			return false
+		case unicode.Is(unicode.So, r), unicode.Is(unicode.Sk, r):
+		case r == 0x200D, r == 0xFE0F, r == 0x20E3, r >= 0xE0020 && r <= 0xE007F:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func richColor(at, c, def string) (string, error) {
 	if c == "" {
 		return def, nil
@@ -364,12 +400,8 @@ func (n *blockNormalizer) callout(at string, b model.Block, out *model.Block) (b
 	if err != nil || len(content) == 0 {
 		return false, err
 	}
-	if b.Icon != "" {
-		icon := strings.Trim(strings.ToLower(strings.TrimSpace(b.Icon)), ":")
-		if !emojiNamePattern.MatchString(icon) {
-			return false, invalidBlocks("%s.icon: an icon is an emoji name like light_bulb or warning", at)
-		}
-		out.Icon = icon
+	if out.Icon, err = emojiIcon(at+".icon", b.Icon); err != nil {
+		return false, err
 	}
 	if out.Color, err = richColor(at+".color", b.Color, "gray"); err != nil {
 		return false, err

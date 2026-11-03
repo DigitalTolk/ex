@@ -729,7 +729,7 @@ var errWebhookEmptyPayload = apperr.Invalid("webhook: text, attachments or block
 var errClassicWebhookEmptyPayload = apperr.Invalid("webhook: text or attachments required")
 
 // classicPayload is what a classic webhook reads of a payload: no blocks —
-// top-level or in cards — and no bot token.
+// top-level or in cards — no card icons, and no bot token.
 func classicPayload(p IncomingWebhookPayload) IncomingWebhookPayload {
 	p.Blocks = nil
 	p.BotToken = ""
@@ -737,7 +737,7 @@ func classicPayload(p IncomingWebhookPayload) IncomingWebhookPayload {
 	if len(p.Attachments) > 0 {
 		atts := make([]model.MessageAttachment, len(p.Attachments))
 		for i, a := range p.Attachments {
-			a.Blocks = nil
+			a.Blocks, a.Icon = nil, ""
 			atts[i] = a
 		}
 		p.Attachments = atts

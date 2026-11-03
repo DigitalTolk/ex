@@ -2,10 +2,12 @@ import { memo, type ReactNode } from 'react';
 import { CodeBlock } from '@/components/chat/CodeBlock';
 import { EmojiGlyph } from '@/components/EmojiGlyph';
 import { formatDate } from '@/lib/block-text';
+import { TINT } from '@/lib/card-tint';
 import { MENTION_PILL_BASE, MENTION_PILL_HIGHLIGHT, MENTION_PILL_OTHER } from '@/lib/markdown-hast';
 import { externalHref, isSafeUrl } from '@/lib/url-safety';
 import { cn } from '@/lib/utils';
 import type { Block, RichColor, RichItem, RichNode, RichSpan } from '@/types';
+import { BlockIcon } from './BlockIcon';
 import { useBlockScope } from './blockScope';
 
 // RichText draws an app's rich_text block: paragraphs, headings, lists,
@@ -27,17 +29,6 @@ const TEXT_COLOR: Record<RichColor, string> = {
   blue: 'text-rt-blue',
   purple: 'text-rt-purple',
   red: 'text-rt-red',
-};
-
-const TINT: Record<RichColor, string> = {
-  gray: 'bg-rt-gray-bg',
-  brown: 'bg-rt-brown-bg',
-  orange: 'bg-rt-orange-bg',
-  yellow: 'bg-rt-yellow-bg',
-  green: 'bg-rt-green-bg',
-  blue: 'bg-rt-blue-bg',
-  purple: 'bg-rt-purple-bg',
-  red: 'bg-rt-red-bg',
 };
 
 const HEADING: Record<1 | 2 | 3, string> = {
@@ -195,7 +186,7 @@ const ALIGN = { left: 'text-left', center: 'text-center', right: 'text-right tab
 export function Callout({ block }: { block: Extract<Block, { type: 'callout' }> }) {
   return (
     <div data-testid="block-callout" className={cn('flex min-w-0 gap-2.5 rounded-lg px-3 py-2.5', TINT[block.color])}>
-      {block.icon && <EmojiGlyph emoji={`:${block.icon}:`} size="md" className="mt-0.5 shrink-0" />}
+      {block.icon && <BlockIcon icon={block.icon} size="md" className="mt-0.5 shrink-0" />}
       <RichText content={block.content} />
     </div>
   );
