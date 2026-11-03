@@ -3,6 +3,8 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
@@ -22,7 +24,176 @@ const (
 	// BlockImage is a picture with alt text and an optional title, drawn
 	// through ex's image proxy.
 	BlockImage = "image"
+	// BlockRichText is formatted text built from parts rather than markdown:
+	// paragraphs, headings, lists, quotes and code (Content), with styled
+	// pieces — bold, colours, links, mentions, dates, pills — in each.
+	BlockRichText = "rich_text"
+	// BlockCallout is rich text in a tinted box with an emoji: a note, a
+	// warning, a tip.
+	BlockCallout = "callout"
+	// BlockToggle is a summary line people click to show the blocks under it
+	// (logs, details) — kept out of the way until wanted.
+	BlockToggle = "toggle"
+	// BlockTable is rows and columns of rich text: status matrices, rotas.
+	BlockTable = "table"
+	// BlockColumns lays 2 or 3 column blocks side by side (stacked when
+	// narrow); BlockColumn is one of them, holding its own blocks.
+	BlockColumns = "columns"
+	BlockColumn  = "column"
+	// BlockChart is a bar, line or donut chart ex draws from the app's
+	// numbers — no image, nothing fetched.
+	BlockChart = "chart"
 )
+
+// Chart kinds.
+const (
+	ChartBar   = "bar"
+	ChartLine  = "line"
+	ChartDonut = "donut"
+)
+
+// ChartSeries is one named series of a chart: a value per label.
+type ChartSeries struct {
+	Name   string    `json:"name,omitempty"`
+	Values []float64 `json:"values"`
+}
+
+// IsColumnChild reports whether a block of kind t may sit in a column: the
+// toggle's text-only kinds plus headers, callouts and charts — no buttons,
+// pickers, images or further nesting.
+func IsColumnChild(t string) bool {
+	switch t {
+	case BlockHeader, BlockCallout, BlockChart:
+		return true
+	}
+	return IsToggleChild(t)
+}
+
+// IsToggleChild reports whether a block of kind t may sit inside a toggle:
+// text only — no buttons, pickers or images, so what a click reaches and
+// which images ex fetches stay in the message's top level.
+func IsToggleChild(t string) bool {
+	switch t {
+	case BlockRichText, BlockTable, BlockDivider, BlockSection, BlockContext:
+		return true
+	}
+	return false
+}
+
+// Table column alignments.
+const (
+	AlignLeft   = "left"
+	AlignCenter = "center"
+	AlignRight  = "right"
+)
+
+// TableColumn is a table's column: its plain header (may be empty) and how
+// its cells align.
+type TableColumn struct {
+	Header string `json:"header,omitempty"`
+	Align  string `json:"align,omitempty"`
+}
+
+// TableCell is one cell: rich text pieces. On the way in, Text is a plain
+// shorthand for a single text piece; ex stores Spans.
+type TableCell struct {
+	Text  string     `json:"text,omitempty"`
+	Spans []RichSpan `json:"spans,omitempty"`
+}
+
+// Rich text nodes: the paragraph-level parts of a rich_text block.
+const (
+	RichParagraph = "paragraph"
+	RichHeading   = "heading"
+	RichList      = "list"
+	RichQuote     = "quote"
+	RichCode      = "code"
+)
+
+// Rich text spans: the inline pieces of a paragraph, heading, quote or list
+// item. A span with no type is text.
+const (
+	RichSpanText    = "text"
+	RichSpanUser    = "user"
+	RichSpanChannel = "channel"
+	RichSpanEmoji   = "emoji"
+	RichSpanDate    = "date"
+	RichSpanPill    = "pill"
+)
+
+// List styles.
+const (
+	RichListBullet  = "bullet"
+	RichListOrdered = "ordered"
+)
+
+// RichColors are the colours a span's text, highlight or a pill may take —
+// names, never CSS, so an app can't style ex beyond the palette. The client
+// maps each to a theme token for light and dark. (No pink: that is ex's
+// brand accent, kept for unread and calls to action.)
+var RichColors = []string{"gray", "brown", "orange", "yellow", "green", "blue", "purple", "red"}
+
+// IsRichColor reports whether c names a palette colour.
+func IsRichColor(c string) bool {
+	for _, k := range RichColors {
+		if k == c {
+			return true
+		}
+	}
+	return false
+}
+
+// RichNode is one paragraph-level part of a rich_text block:
+//   - paragraph, quote: Spans.
+//   - heading: Spans and a Level, 1 to 3.
+//   - list: Items (each may hold Items of its own) and a Style, bullet or
+//     ordered.
+//   - code: Text, and an optional Language for highlighting.
+type RichNode struct {
+	Type     string     `json:"type"`
+	Level    int        `json:"level,omitempty"`
+	Style    string     `json:"style,omitempty"`
+	Spans    []RichSpan `json:"spans,omitempty"`
+	Items    []RichItem `json:"items,omitempty"`
+	Language string     `json:"language,omitempty"`
+	Text     string     `json:"text,omitempty"`
+}
+
+// RichItem is one list item: its text, and the items nested under it.
+type RichItem struct {
+	Spans []RichSpan `json:"spans,omitempty"`
+	Items []RichItem `json:"items,omitempty"`
+}
+
+// RichSpan is an inline piece of rich text.
+//   - text: Text, styled by Bold … Code, Color and Highlight; Link makes it a
+//     link (http, https or mailto).
+//   - user, channel: a mention. The app names it (User: an ID or an email;
+//     Channel: a name or an ID); ex stores the ID it resolved to, with Name
+//     (the person's display name, the channel's slug) for drawing.
+//   - emoji: Name, like "rocket".
+//   - date: Timestamp (Unix seconds) shown in each reader's own time zone
+//     through Format's {date_short}, {date}, {date_long} and {time}, with
+//     Fallback for places that can't.
+//   - pill: Text in a small coloured label (Color).
+type RichSpan struct {
+	Type      string `json:"type,omitempty"`
+	Text      string `json:"text,omitempty"`
+	Bold      bool   `json:"bold,omitempty"`
+	Italic    bool   `json:"italic,omitempty"`
+	Strike    bool   `json:"strike,omitempty"`
+	Underline bool   `json:"underline,omitempty"`
+	Code      bool   `json:"code,omitempty"`
+	Color     string `json:"color,omitempty"`
+	Highlight string `json:"highlight,omitempty"`
+	Link      string `json:"link,omitempty"`
+	User      string `json:"user,omitempty"`
+	Channel   string `json:"channel,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Timestamp int64  `json:"timestamp,omitempty"`
+	Format    string `json:"format,omitempty"`
+	Fallback  string `json:"fallback,omitempty"`
+}
 
 // Text kinds. "mrkdwn" is accepted from Slack-shaped payloads and stored as
 // "markdown": both mean ex markdown (**bold**), not Slack's *bold*.
@@ -288,6 +459,15 @@ func (e *BlockElement) UnmarshalJSON(data []byte) error {
 //     input Element; DispatchAction sends each change to the app.
 //   - image: ImageURL, AltText, an optional plain Title (Text), and the
 //     intrinsic size ex measured.
+//   - rich_text: Content, its paragraph-level parts.
+//   - callout: Content in a box tinted Color, with an Icon (an emoji name).
+//   - toggle: Summary (rich text pieces) over child Blocks (text-only kinds,
+//     see IsToggleChild), shown when opened; Open starts it open.
+//   - table: Columns and Rows of cells.
+//   - columns: child column Blocks; column: a Width (1 to 3, a share of the
+//     row) and its own Blocks (see IsColumnChild).
+//   - chart: a Kind (bar, line, donut), an optional plain title (Text),
+//     Labels, Series (a value per label) and a Unit for its numbers.
 type Block struct {
 	Type      string         `json:"type"`
 	BlockID   string         `json:"block_id,omitempty"`
@@ -307,6 +487,24 @@ type Block struct {
 	AltText     string `json:"alt_text,omitempty"`
 	ImageWidth  int    `json:"image_width,omitempty"`
 	ImageHeight int    `json:"image_height,omitempty"`
+	// Rich text, callout.
+	Content []RichNode `json:"content,omitempty"`
+	Icon    string     `json:"icon,omitempty"`
+	Color   string     `json:"color,omitempty"`
+	// Toggle.
+	Summary []RichSpan `json:"summary,omitempty"`
+	Blocks  Blocks     `json:"blocks,omitempty"`
+	Open    bool       `json:"open,omitempty"`
+	// Table.
+	Columns []TableColumn `json:"columns,omitempty"`
+	Rows    [][]TableCell `json:"rows,omitempty"`
+	// Column.
+	Width int `json:"width,omitempty"`
+	// Chart.
+	Kind   string        `json:"kind,omitempty"`
+	Labels []string      `json:"labels,omitempty"`
+	Series []ChartSeries `json:"series,omitempty"`
+	Unit   string        `json:"unit,omitempty"`
 }
 
 // Blocks is a message's (or an attachment's) layout. DynamoDB stores it as
@@ -351,11 +549,12 @@ type ActionTally struct {
 }
 
 // BlockTexts lists the readable text of a message's blocks and its cards'
-// blocks — headers, sections, fields and context, in order. Search indexes
-// it, and a message with blocks but no text stands on it.
+// blocks — headers, sections, fields, context and rich text, in order.
+// Search indexes it, and a message with blocks but no text stands on it.
 func BlockTexts(blocks Blocks, attachments []MessageAttachment) []string {
 	var out []string
-	collect := func(bs Blocks) {
+	var collect func(bs Blocks)
+	collect = func(bs Blocks) {
 		for _, b := range bs {
 			if b.Text != nil {
 				out = append(out, b.Text.Text)
@@ -368,6 +567,25 @@ func BlockTexts(blocks Blocks, attachments []MessageAttachment) []string {
 					out = append(out, e.Content)
 				}
 			}
+			if len(b.Content) > 0 {
+				out = append(out, RichTextPlain(b.Content))
+			}
+			if len(b.Summary) > 0 {
+				out = append(out, RichSpansPlain(b.Summary))
+			}
+			collect(b.Blocks)
+			for _, s := range b.Series {
+				if s.Name != "" {
+					out = append(out, s.Name)
+				}
+			}
+			for _, row := range b.Rows {
+				cells := make([]string, len(row))
+				for i, c := range row {
+					cells[i] = RichSpansPlain(c.Spans)
+				}
+				out = append(out, strings.Join(cells, " · "))
+			}
 		}
 	}
 	collect(blocks)
@@ -375,4 +593,68 @@ func BlockTexts(blocks Blocks, attachments []MessageAttachment) []string {
 		collect(a.Blocks)
 	}
 	return out
+}
+
+// RichTextPlain is rich text as plain lines: list items bulleted or
+// numbered, mentions in ex's mention syntax (so a message that stands on
+// this text still mentions them), dates as their fallback, emoji by name.
+func RichTextPlain(nodes []RichNode) string {
+	var b strings.Builder
+	line := func(prefix string, spans []RichSpan) {
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(prefix)
+		b.WriteString(RichSpansPlain(spans))
+	}
+	var items func(depth int, ordered bool, list []RichItem)
+	items = func(depth int, ordered bool, list []RichItem) {
+		for i, it := range list {
+			marker := "• "
+			if ordered {
+				marker = strconv.Itoa(i+1) + ". "
+			}
+			line(strings.Repeat("  ", depth)+marker, it.Spans)
+			items(depth+1, ordered, it.Items)
+		}
+	}
+	for _, n := range nodes {
+		switch n.Type {
+		case RichList:
+			items(0, n.Style == RichListOrdered, n.Items)
+		case RichCode:
+			if b.Len() > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(n.Text)
+		case RichQuote:
+			line("> ", n.Spans)
+		default:
+			line("", n.Spans)
+		}
+	}
+	return b.String()
+}
+
+func RichSpansPlain(spans []RichSpan) string {
+	var b strings.Builder
+	for _, s := range spans {
+		b.WriteString(richSpanPlain(s))
+	}
+	return b.String()
+}
+
+func richSpanPlain(s RichSpan) string {
+	switch s.Type {
+	case RichSpanUser:
+		return "@[" + s.User + "|" + s.Name + "]"
+	case RichSpanChannel:
+		return "~[" + s.Channel + "|" + s.Name + "]"
+	case RichSpanEmoji:
+		return ":" + s.Name + ":"
+	case RichSpanDate:
+		return s.Fallback
+	default:
+		return s.Text
+	}
 }

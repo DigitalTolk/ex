@@ -108,6 +108,10 @@ type IncomingWebhookPayload struct {
 	// header (never from the body): without it, buttons that call the app
 	// are refused.
 	BotToken string `json:"-"`
+	// Template names a layout saved on the (rich) webhook, filled from Data:
+	// the message is the template with its {{placeholders}} replaced.
+	Template string         `json:"template"`
+	Data     map[string]any `json:"data"`
 }
 
 type IncomingWebhookService struct {
@@ -371,6 +375,11 @@ func (s *IncomingWebhookService) ExecuteMessage(ctx context.Context, id string, 
 			return nil, errClassicWebhookEmptyPayload
 		}
 	}
+	if payload.Template != "" {
+		if payload, err = fillTemplate(wh, payload); err != nil {
+			return nil, err
+		}
+	}
 	// The payload limits come first: every later step — the DM target lookup,
 	// mention lookups, image fetches into S3 — costs work bounded only by them.
 	if err := validateWebhookPayload(payload); err != nil {
@@ -587,6 +596,7 @@ var errClassicWebhookEmptyPayload = apperr.Invalid("webhook: text or attachments
 func classicPayload(p IncomingWebhookPayload) IncomingWebhookPayload {
 	p.Blocks = nil
 	p.BotToken = ""
+	p.Template, p.Data = "", nil
 	if len(p.Attachments) > 0 {
 		atts := make([]model.MessageAttachment, len(p.Attachments))
 		for i, a := range p.Attachments {

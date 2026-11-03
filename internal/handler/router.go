@@ -322,6 +322,8 @@ func NewRouter(d *Deps) http.Handler {
 		mux.Handle("POST /api/v1/admin/webhooks/preview", middleware.WrapFunc(webhookH.Preview, authMW, writeLimit))
 		mux.Handle("PATCH /api/v1/admin/webhooks/{id}", middleware.WrapFunc(webhookH.Update, authMW, writeLimit))
 		mux.Handle("DELETE /api/v1/admin/webhooks/{id}", middleware.WrapFunc(webhookH.Delete, authMW, writeLimit))
+		mux.Handle("PUT /api/v1/admin/webhooks/{id}/templates/{key}", middleware.WrapFunc(webhookH.SaveTemplate, authMW, writeLimit))
+		mux.Handle("DELETE /api/v1/admin/webhooks/{id}/templates/{key}", middleware.WrapFunc(webhookH.DeleteTemplate, authMW, writeLimit))
 		// Public webhook ingress: throttle per IP to blunt ID-enumeration and
 		// spam amplification (a touch higher than the auth limit since busy
 		// integrations legitimately post more often).

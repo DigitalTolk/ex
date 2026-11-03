@@ -1168,6 +1168,201 @@ export const BlockInput = "input";
  */
 export const BlockImage = "image";
 /**
+ * BlockRichText is formatted text built from parts rather than markdown:
+ * paragraphs, headings, lists, quotes and code (Content), with styled
+ * pieces — bold, colours, links, mentions, dates, pills — in each.
+ */
+export const BlockRichText = "rich_text";
+/**
+ * BlockCallout is rich text in a tinted box with an emoji: a note, a
+ * warning, a tip.
+ */
+export const BlockCallout = "callout";
+/**
+ * BlockToggle is a summary line people click to show the blocks under it
+ * (logs, details) — kept out of the way until wanted.
+ */
+export const BlockToggle = "toggle";
+/**
+ * BlockTable is rows and columns of rich text: status matrices, rotas.
+ */
+export const BlockTable = "table";
+/**
+ * BlockColumns lays 2 or 3 column blocks side by side (stacked when
+ * narrow); BlockColumn is one of them, holding its own blocks.
+ */
+export const BlockColumns = "columns";
+/**
+ * Block kinds a message can carry (Slack's Block Kit, the subset ex draws).
+ * The service layer drops any other kind when it normalizes a payload.
+ */
+export const BlockColumn = "column";
+/**
+ * BlockChart is a bar, line or donut chart ex draws from the app's
+ * numbers — no image, nothing fetched.
+ */
+export const BlockChart = "chart";
+/**
+ * Chart kinds.
+ */
+export const ChartBar = "bar";
+/**
+ * Chart kinds.
+ */
+export const ChartLine = "line";
+/**
+ * Chart kinds.
+ */
+export const ChartDonut = "donut";
+/**
+ * ChartSeries is one named series of a chart: a value per label.
+ */
+export interface ChartSeries {
+  name?: string;
+  values: number /* float64 */[];
+}
+/**
+ * Table column alignments.
+ */
+export const AlignLeft = "left";
+/**
+ * Table column alignments.
+ */
+export const AlignCenter = "center";
+/**
+ * Table column alignments.
+ */
+export const AlignRight = "right";
+/**
+ * TableColumn is a table's column: its plain header (may be empty) and how
+ * its cells align.
+ */
+export interface TableColumn {
+  header?: string;
+  align?: string;
+}
+/**
+ * TableCell is one cell: rich text pieces. On the way in, Text is a plain
+ * shorthand for a single text piece; ex stores Spans.
+ */
+export interface TableCell {
+  text?: string;
+  spans?: RichSpan[];
+}
+/**
+ * Rich text nodes: the paragraph-level parts of a rich_text block.
+ */
+export const RichParagraph = "paragraph";
+/**
+ * Rich text nodes: the paragraph-level parts of a rich_text block.
+ */
+export const RichHeading = "heading";
+/**
+ * Rich text nodes: the paragraph-level parts of a rich_text block.
+ */
+export const RichList = "list";
+/**
+ * Rich text nodes: the paragraph-level parts of a rich_text block.
+ */
+export const RichQuote = "quote";
+/**
+ * Rich text nodes: the paragraph-level parts of a rich_text block.
+ */
+export const RichCode = "code";
+/**
+ * Rich text spans: the inline pieces of a paragraph, heading, quote or list
+ * item. A span with no type is text.
+ */
+export const RichSpanText = "text";
+/**
+ * Rich text spans: the inline pieces of a paragraph, heading, quote or list
+ * item. A span with no type is text.
+ */
+export const RichSpanUser = "user";
+/**
+ * Rich text spans: the inline pieces of a paragraph, heading, quote or list
+ * item. A span with no type is text.
+ */
+export const RichSpanChannel = "channel";
+/**
+ * Rich text spans: the inline pieces of a paragraph, heading, quote or list
+ * item. A span with no type is text.
+ */
+export const RichSpanEmoji = "emoji";
+/**
+ * Rich text spans: the inline pieces of a paragraph, heading, quote or list
+ * item. A span with no type is text.
+ */
+export const RichSpanDate = "date";
+/**
+ * Rich text spans: the inline pieces of a paragraph, heading, quote or list
+ * item. A span with no type is text.
+ */
+export const RichSpanPill = "pill";
+/**
+ * List styles.
+ */
+export const RichListBullet = "bullet";
+/**
+ * List styles.
+ */
+export const RichListOrdered = "ordered";
+/**
+ * RichNode is one paragraph-level part of a rich_text block:
+ *   - paragraph, quote: Spans.
+ *   - heading: Spans and a Level, 1 to 3.
+ *   - list: Items (each may hold Items of its own) and a Style, bullet or
+ *     ordered.
+ *   - code: Text, and an optional Language for highlighting.
+ */
+export interface RichNode {
+  type: string;
+  level?: number /* int */;
+  style?: string;
+  spans?: RichSpan[];
+  items?: RichItem[];
+  language?: string;
+  text?: string;
+}
+/**
+ * RichItem is one list item: its text, and the items nested under it.
+ */
+export interface RichItem {
+  spans?: RichSpan[];
+  items?: RichItem[];
+}
+/**
+ * RichSpan is an inline piece of rich text.
+ *   - text: Text, styled by Bold … Code, Color and Highlight; Link makes it a
+ *     link (http, https or mailto).
+ *   - user, channel: a mention. The app names it (User: an ID or an email;
+ *     Channel: a name or an ID); ex stores the ID it resolved to, with Name
+ *     (the person's display name, the channel's slug) for drawing.
+ *   - emoji: Name, like "rocket".
+ *   - date: Timestamp (Unix seconds) shown in each reader's own time zone
+ *     through Format's {date_short}, {date}, {date_long} and {time}, with
+ *     Fallback for places that can't.
+ *   - pill: Text in a small coloured label (Color).
+ */
+export interface RichSpan {
+  type?: string;
+  text?: string;
+  bold?: boolean;
+  italic?: boolean;
+  strike?: boolean;
+  underline?: boolean;
+  code?: boolean;
+  color?: string;
+  highlight?: string;
+  link?: string;
+  user?: string;
+  channel?: string;
+  name?: string;
+  timestamp?: number /* int64 */;
+  format?: string;
+  fallback?: string;
+}
+/**
  * Text kinds. "mrkdwn" is accepted from Slack-shaped payloads and stored as
  * "markdown": both mean ex markdown (**bold**), not Slack's *bold*.
  */
@@ -1386,6 +1581,15 @@ export interface BlockElement {
  *     input Element; DispatchAction sends each change to the app.
  *   - image: ImageURL, AltText, an optional plain Title (Text), and the
  *     intrinsic size ex measured.
+ *   - rich_text: Content, its paragraph-level parts.
+ *   - callout: Content in a box tinted Color, with an Icon (an emoji name).
+ *   - toggle: Summary (rich text pieces) over child Blocks (text-only kinds,
+ *     see IsToggleChild), shown when opened; Open starts it open.
+ *   - table: Columns and Rows of cells.
+ *   - columns: child column Blocks; column: a Width (1 to 3, a share of the
+ *     row) and its own Blocks (see IsColumnChild).
+ *   - chart: a Kind (bar, line, donut), an optional plain title (Text),
+ *     Labels, Series (a value per label) and a Unit for its numbers.
  */
 export interface Block {
   type: string;
@@ -1410,6 +1614,34 @@ export interface Block {
   alt_text?: string;
   image_width?: number /* int */;
   image_height?: number /* int */;
+  /**
+   * Rich text, callout.
+   */
+  content?: RichNode[];
+  icon?: string;
+  color?: string;
+  /**
+   * Toggle.
+   */
+  summary?: RichSpan[];
+  blocks?: Blocks;
+  open?: boolean;
+  /**
+   * Table.
+   */
+  columns?: TableColumn[];
+  rows?: TableCell[][];
+  /**
+   * Column.
+   */
+  width?: number /* int */;
+  /**
+   * Chart.
+   */
+  kind?: string;
+  labels?: string[];
+  series?: ChartSeries[];
+  unit?: string;
 }
 /**
  * Blocks is a message's (or an attachment's) layout. DynamoDB stores it as
@@ -3102,6 +3334,21 @@ export interface IncomingWebhook {
    */
   hasBotToken?: boolean;
   hasSigningSecret?: boolean;
+  /**
+   * Templates are message layouts saved on a rich webhook: the app posts
+   * {"template": key, "data": {...}} and ex fills the layout's
+   * {{placeholders}}, so a layout changes without the app changing.
+   */
+  templates?: MessageTemplate[];
+}
+/**
+ * MessageTemplate is one saved layout: a webhook payload whose string values
+ * may hold {{placeholders}}.
+ */
+export interface MessageTemplate {
+  key: string;
+  payload: any /* json.RawMessage */;
+  updatedAt: string /* RFC3339 */;
 }
 /**
  * WebhookKindRich marks a rich webhook (see IncomingWebhook.Kind).

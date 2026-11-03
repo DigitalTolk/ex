@@ -126,12 +126,14 @@ func (n *blockNormalizer) reserveIDs(in model.Blocks) {
 		if b.BlockID != "" {
 			n.ids["app:"+b.BlockID] = true
 		}
+		n.reserveIDs(b.Blocks)
 	}
 }
 
 func (n *blockNormalizer) block(ctx context.Context, at string, b model.Block) (model.Block, bool, error) {
 	switch b.Type {
-	case model.BlockSection, model.BlockActions, model.BlockContext, model.BlockDivider, model.BlockHeader, model.BlockImage:
+	case model.BlockSection, model.BlockActions, model.BlockContext, model.BlockDivider, model.BlockHeader, model.BlockImage,
+		model.BlockRichText, model.BlockCallout, model.BlockToggle, model.BlockTable, model.BlockColumns, model.BlockChart:
 	default:
 		// Unknown kinds are skipped: the rest of the message still shows.
 		return model.Block{}, false, nil
@@ -164,6 +166,20 @@ func (n *blockNormalizer) block(ctx context.Context, at string, b model.Block) (
 			return model.Block{}, false, nil
 		}
 		out.Elements = buttons
+	case model.BlockRichText:
+		content, err := n.richText(at, b.Content)
+		if err != nil {
+			return model.Block{}, false, err
+		}
+		if len(content) == 0 {
+			return model.Block{}, false, nil
+		}
+		out.Content = content
+	case model.BlockCallout, model.BlockToggle, model.BlockTable, model.BlockColumns, model.BlockChart:
+		keep, err := n.layoutBlock(ctx, at, b, &out)
+		if err != nil || !keep {
+			return model.Block{}, false, err
+		}
 	case model.BlockContext:
 		texts, err := n.contextTexts(at, b.Elements)
 		if err != nil {

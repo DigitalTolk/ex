@@ -16,6 +16,7 @@ import {
 import type { IncomingWebhook } from '@/types';
 import { NativeSelect } from '@/components/ui/native-select';
 import { InteractivitySettings } from './InteractivitySettings';
+import { TemplatesSettings } from './TemplatesSettings';
 
 const EMPTY_FORM = {
   title: '',
@@ -217,7 +218,12 @@ export function IncomingWebhooksPanel() {
                 <CopyButton value={wh.url} label={`Copy ${wh.title} URL`} />
               </div>
             )}
-            {wh.kind === 'rich' && <InteractivitySettings webhook={wh} />}
+            {wh.kind === 'rich' && (
+              <>
+                <InteractivitySettings webhook={wh} />
+                <TemplatesSettings webhook={wh} />
+              </>
+            )}
           </div>
         ))}
       </div>

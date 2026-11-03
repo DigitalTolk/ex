@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type IncomingWebhook struct {
 	ID              string    `json:"id" dynamodbav:"id"`
@@ -49,6 +52,28 @@ type IncomingWebhook struct {
 	// issued, without the values.
 	HasBotToken      bool `json:"hasBotToken,omitempty" dynamodbav:"-"`
 	HasSigningSecret bool `json:"hasSigningSecret,omitempty" dynamodbav:"-"`
+	// Templates are message layouts saved on a rich webhook: the app posts
+	// {"template": key, "data": {...}} and ex fills the layout's
+	// {{placeholders}}, so a layout changes without the app changing.
+	Templates []MessageTemplate `json:"templates,omitempty" dynamodbav:"templates,omitempty"`
+}
+
+// MessageTemplate is one saved layout: a webhook payload whose string values
+// may hold {{placeholders}}.
+type MessageTemplate struct {
+	Key       string          `json:"key" dynamodbav:"key"`
+	Payload   json.RawMessage `json:"payload" dynamodbav:"payload"`
+	UpdatedAt time.Time       `json:"updatedAt" dynamodbav:"updatedAt"`
+}
+
+// Template is the saved template named key, nil when there is none.
+func (w *IncomingWebhook) Template(key string) *MessageTemplate {
+	for i := range w.Templates {
+		if w.Templates[i].Key == key {
+			return &w.Templates[i]
+		}
+	}
+	return nil
 }
 
 // WebhookKindRich marks a rich webhook (see IncomingWebhook.Kind).

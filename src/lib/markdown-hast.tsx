@@ -40,11 +40,11 @@ export function reactNodeText(node: ReactNode): string {
   return '';
 }
 
-const MENTION_PILL_BASE =
+export const MENTION_PILL_BASE =
   'inline align-baseline rounded px-1 font-medium leading-[inherit] no-underline';
-const MENTION_PILL_OTHER =
+export const MENTION_PILL_OTHER =
   ' bg-primary/10 text-primary hover:bg-primary/20 hover:text-primary hover:no-underline';
-const MENTION_PILL_HIGHLIGHT =
+export const MENTION_PILL_HIGHLIGHT =
   ' bg-amber-200 text-amber-900 dark:bg-amber-500/30 dark:text-amber-100';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

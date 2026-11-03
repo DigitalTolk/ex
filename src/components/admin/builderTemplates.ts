@@ -145,6 +145,137 @@ export const MESSAGE_TEMPLATES: BuilderTemplate[] = [
       ],
     },
   },
+  {
+    key: 'notes',
+    label: 'Release notes',
+    payload: {
+      text: 'Release 1.43 is live',
+      blocks: [
+        {
+          type: 'rich_text',
+          content: [
+            { type: 'heading', level: 2, spans: [{ text: 'Release 1.43' }, { text: ' ' }, { type: 'pill', text: 'Live', color: 'green' }] },
+            {
+              type: 'paragraph',
+              spans: [
+                { text: 'Checkout is ' },
+                { text: '20% faster', bold: true, color: 'green' },
+                { text: ', and order history loads in one go. Thanks ' },
+                { type: 'user', user: 'alice@example.com' },
+                { text: '!' },
+              ],
+            },
+            {
+              type: 'list',
+              style: 'bullet',
+              items: [
+                { spans: [{ text: 'New: ', bold: true }, { text: 'saved carts sync across devices' }] },
+                { spans: [{ text: 'Fixed: ', bold: true }, { text: 'totals rounding on refunds' }] },
+                { spans: [{ text: 'Removed: ', bold: true }, { text: 'the old checkout', strike: true }] },
+              ],
+            },
+            { type: 'quote', spans: [{ text: 'Rollback: run ' }, { text: 'make rollback V=1.42', code: true }] },
+            { type: 'code', language: 'bash', text: 'curl -s https://status.example.com/api | jq .checkout' },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    key: 'status',
+    label: 'Incident status',
+    payload: {
+      text: 'Checkout errors: mitigated',
+      blocks: [
+        { type: 'header', text: txt('Checkout errors · INC-2291') },
+        {
+          type: 'callout',
+          icon: 'warning',
+          color: 'orange',
+          content: [{ type: 'paragraph', spans: [{ text: 'Mitigated', bold: true }, { text: '. Error rate is back under 1%; we are watching it for an hour.' }] }],
+        },
+        {
+          type: 'table',
+          columns: [{ header: 'Service' }, { header: 'Status', align: 'center' }, { header: 'Error rate', align: 'right' }],
+          rows: [
+            [{ text: 'checkout-api' }, { spans: [{ type: 'pill', text: 'Recovering', color: 'orange' }] }, { text: '0.8%' }],
+            [{ text: 'payments' }, { spans: [{ type: 'pill', text: 'Healthy', color: 'green' }] }, { text: '0.1%' }],
+            [{ text: 'web' }, { spans: [{ type: 'pill', text: 'Healthy', color: 'green' }] }, { text: '0.2%' }],
+          ],
+        },
+        {
+          type: 'toggle',
+          summary: [{ text: 'Timeline', bold: true }, { text: ' · 4 updates' }],
+          blocks: [
+            {
+              type: 'rich_text',
+              content: [
+                {
+                  type: 'list',
+                  items: [
+                    { spans: [{ text: '09:41 ', code: true }, { text: 'Alert: checkout 5xx above 5%' }] },
+                    { spans: [{ text: '09:48 ', code: true }, { text: 'Rolled back web v2.15.1' }] },
+                    { spans: [{ text: '10:02 ', code: true }, { text: 'Error rate under 1%' }] },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    key: 'dashboard',
+    label: 'Dashboard',
+    payload: {
+      text: 'Weekly metrics: 1,284 signups, €84.2k revenue',
+      blocks: [
+        { type: 'header', text: txt('Weekly metrics · week 44') },
+        {
+          type: 'columns',
+          blocks: [
+            {
+              type: 'column',
+              blocks: [
+                {
+                  type: 'callout',
+                  content: [
+                    { type: 'paragraph', spans: [{ text: 'Signups', color: 'gray' }] },
+                    { type: 'heading', level: 1, spans: [{ text: '1,284' }] },
+                    { type: 'paragraph', spans: [{ type: 'pill', text: '↑ 12%', color: 'green' }] },
+                  ],
+                },
+              ],
+            },
+            {
+              type: 'column',
+              blocks: [
+                {
+                  type: 'callout',
+                  content: [
+                    { type: 'paragraph', spans: [{ text: 'Revenue', color: 'gray' }] },
+                    { type: 'heading', level: 1, spans: [{ text: '€84.2k' }] },
+                    { type: 'paragraph', spans: [{ type: 'pill', text: '↑ 6%', color: 'green' }] },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          type: 'chart',
+          kind: 'bar',
+          text: txt('Signups by day'),
+          labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+          series: [
+            { name: 'Web', values: [180, 210, 195, 240, 230] },
+            { name: 'Mobile', values: [60, 72, 70, 88, 81] },
+          ],
+        },
+      ],
+    },
+  },
 ];
 
 export const FORM_TEMPLATES: BuilderTemplate[] = [

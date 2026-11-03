@@ -152,3 +152,30 @@ func TestMessageService_SendWebhookTakesBlocksAlone(t *testing.T) {
 		t.Fatalf("blocks only: %#v %v", msg, err)
 	}
 }
+
+// A rich webhook posts rich text: mentions by email resolve with the same
+// lookups as the message's markdown, and with no text of its own the
+// message stands on the rich text (so search finds it and Alice is
+// mentioned).
+func TestIncomingWebhook_PostsRichText(t *testing.T) {
+	svc, messages := blocksWebhookFixture(fakeWebhookUsers{users: []*model.User{virpal()}})
+	_, err := svc.ExecuteMessage(context.Background(), "wh", IncomingWebhookPayload{
+		Blocks: model.Blocks{{Type: model.BlockRichText, Content: []model.RichNode{
+			{Type: model.RichParagraph, Spans: []model.RichSpan{
+				{Text: "Deploy "}, {Text: "failed", Bold: true, Color: "red"}, {Text: " — over to "},
+				{Type: model.RichSpanUser, User: "virpal@ex.test"},
+			}},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	m := onlyStoredMessage(t, messages)
+	spans := m.Blocks[0].Content[0].Spans
+	if spans[3].Type != model.RichSpanUser || spans[3].User != "u-1" || spans[3].Name != "Virpal" {
+		t.Fatalf("mention = %+v, want Virpal resolved by email", spans[3])
+	}
+	if m.Body != "Deploy failed — over to @[u-1|Virpal]" {
+		t.Fatalf("body = %q, want the rich text as the fallback", m.Body)
+	}
+}

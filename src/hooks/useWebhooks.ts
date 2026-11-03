@@ -71,3 +71,28 @@ export function useDeleteIncomingWebhook() {
     onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.incomingWebhooks() }),
   });
 }
+
+// Templates on a rich webhook. Both answer with the webhook, so the list
+// refetches to show the change.
+export function useSaveMessageTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ webhookID, key, payload }: { webhookID: string; key: string; payload: unknown }) =>
+      apiFetch<IncomingWebhook>(`/api/v1/admin/webhooks/${encodeURIComponent(webhookID)}/templates/${encodeURIComponent(key)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ payload }),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.incomingWebhooks() }),
+  });
+}
+
+export function useDeleteMessageTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ webhookID, key }: { webhookID: string; key: string }) =>
+      apiFetch<IncomingWebhook>(`/api/v1/admin/webhooks/${encodeURIComponent(webhookID)}/templates/${encodeURIComponent(key)}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.incomingWebhooks() }),
+  });
+}

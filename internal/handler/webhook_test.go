@@ -835,3 +835,46 @@ func TestWebhookHandlerExecute_RootErrors(t *testing.T) {
 		}
 	}
 }
+
+// Templates are saved and removed over the admin API; the webhook comes back
+// with them, and the service's refusals keep their status codes.
+func TestWebhookHandlerTemplates(t *testing.T) {
+	ctx := middleware.ContextWithClaims(context.Background(), &model.TokenClaims{UserID: "admin-1", SystemRole: model.SystemRoleAdmin})
+	general := &model.Channel{ID: "ch-general", Name: "General", Slug: "general"}
+	webhooks := &handlerWebhookStore{items: map[string]*model.IncomingWebhook{
+		"rich":    {ID: "rich", ChannelID: general.ID, CreatedBy: "admin-1", Kind: model.WebhookKindRich},
+		"classic": {ID: "classic", ChannelID: general.ID, CreatedBy: "admin-1"},
+	}}
+	msgSvc := service.NewMessageService(&handlerWebhookMessageStore{messages: map[string]*model.Message{}}, nil, nil, nil, nil)
+	svc := service.NewIncomingWebhookService(webhooks, handlerWebhookChannels{byID: map[string]*model.Channel{general.ID: general}}, msgSvc, handlerWebhookImageProxy{}, "https://chat.example")
+	h := NewWebhookHandler(svc)
+	call := func(method, id, key, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "/api/v1/admin/webhooks/"+id+"/templates/"+key, strings.NewReader(body)).WithContext(ctx)
+		req.SetPathValue("id", id)
+		req.SetPathValue("key", key)
+		res := httptest.NewRecorder()
+		if method == http.MethodPut {
+			h.SaveTemplate(res, req)
+		} else {
+			h.DeleteTemplate(res, req)
+		}
+		return res
+	}
+
+	res := call(http.MethodPut, "rich", "deploy", `{"payload": {"text": "Deployed {{version}}"}}`)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"key":"deploy"`) || !strings.Contains(res.Body.String(), `"url":"https://chat.example/hooks/rich"`) {
+		t.Fatalf("save = %d %s", res.Code, res.Body.String())
+	}
+	if res := call(http.MethodPut, "rich", "deploy", `{`); res.Code != http.StatusBadRequest {
+		t.Fatalf("bad body = %d", res.Code)
+	}
+	if res := call(http.MethodPut, "classic", "deploy", `{"payload": {"text": "x"}}`); res.Code != http.StatusConflict {
+		t.Fatalf("classic = %d %s, want 409 not_rich_webhook", res.Code, res.Body.String())
+	}
+	if res := call(http.MethodDelete, "rich", "deploy", ""); res.Code != http.StatusOK || strings.Contains(res.Body.String(), `"key":"deploy"`) {
+		t.Fatalf("delete = %d %s", res.Code, res.Body.String())
+	}
+	if res := call(http.MethodDelete, "rich", "deploy", ""); res.Code != http.StatusNotFound {
+		t.Fatalf("delete missing = %d, want 404", res.Code)
+	}
+}

@@ -80,6 +80,34 @@ func (h *WebhookHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, msg)
 }
 
+// SaveTemplate adds or replaces a rich webhook's template.
+// Body: {"payload": {…a webhook payload with {{placeholders}}…}}.
+func (h *WebhookHandler) SaveTemplate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	wh, err := h.svc.SaveTemplate(r.Context(), webhookActor(r), pathParam(r, "id"), pathParam(r, "key"), body.Payload)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, webhookResponse{IncomingWebhook: wh, URL: h.svc.URL(wh)})
+}
+
+// DeleteTemplate removes a rich webhook's template.
+func (h *WebhookHandler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
+	wh, err := h.svc.DeleteTemplate(r.Context(), webhookActor(r), pathParam(r, "id"), pathParam(r, "key"))
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, webhookResponse{IncomingWebhook: wh, URL: h.svc.URL(wh)})
+}
+
 func (h *WebhookHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var body model.IncomingWebhook
 	if err := readJSON(r, &body); err != nil {

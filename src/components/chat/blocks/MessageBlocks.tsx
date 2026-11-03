@@ -1,5 +1,5 @@
-import { lazy, memo, Suspense, useCallback, useMemo, useState, type ReactNode } from 'react';
-import { CircleAlert, CircleCheck, ExternalLink, Loader2 } from 'lucide-react';
+import { lazy, memo, Suspense, useCallback, useId, useMemo, useState, type ReactNode } from 'react';
+import { ChevronRight, CircleAlert, CircleCheck, ExternalLink, Loader2 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { renderMarkdown } from '@/lib/markdown';
 import { expandDateTokens, formatTallyTime } from '@/lib/block-text';
@@ -13,6 +13,8 @@ import type { Block, BlockText, ButtonElement, ImageElement, Message, RowElement
 import { BlockScope, useBlockScope, type ActValue, type BlockScopeValue } from './blockScope';
 import { BlockPicker } from './BlockPickers';
 import { noteReceipt, useActionReceipts } from '@/stores/action-receipts';
+import { Callout, RichText, Spans, TableBlock } from './RichText';
+import { Chart } from './Chart';
 
 type NameLookup = NonNullable<BlockScopeValue['userMap']>;
 
@@ -216,7 +218,73 @@ function BlockView({ block }: { block: Block }) {
       return <hr className="border-border" />;
     case 'image':
       return <ImageBlock block={block} />;
+    case 'rich_text':
+      return <RichText content={block.content} />;
+    case 'callout':
+      return <Callout block={block} />;
+    case 'table':
+      return <TableBlock block={block} />;
+    case 'toggle':
+      return <ToggleBlock block={block} />;
+    case 'chart':
+      return <Chart block={block} />;
+    case 'columns':
+      return <ColumnsBlock block={block} />;
+    case 'column':
+      // Only ever inside columns, which draws its own.
+      return null;
   }
+}
+
+// ColumnsBlock lays its columns side by side in their width shares — when
+// the message has room for them. A container query, not the screen: in a
+// narrow thread panel or on a phone the columns stack.
+function ColumnsBlock({ block }: { block: Extract<Block, { type: 'columns' }> }) {
+  const columns = block.blocks.filter((c): c is Extract<Block, { type: 'column' }> => c.type === 'column');
+  const shares = columns.map((c) => `${c.width ?? 1}fr`).join(' ');
+  return (
+    <div className="@container min-w-0" data-testid="block-columns">
+      <div className="grid grid-cols-1 gap-3 @lg:grid-cols-[var(--ex-columns)]" style={{ ['--ex-columns' as string]: shares }}>
+        {columns.map((column) => (
+          <div key={column.block_id} className="min-w-0" data-testid="block-column">
+            <BlockList blocks={column.blocks} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ToggleBlock shows its summary and, once opened, the blocks under it. A
+// closed toggle renders nothing beneath it, so long logs cost nothing until
+// someone asks; the row grows when the reader opens it, not on its own.
+function ToggleBlock({ block }: { block: Extract<Block, { type: 'toggle' }> }) {
+  const [open, setOpen] = useState(!!block.open);
+  const bodyID = useId();
+  return (
+    <div data-testid="block-toggle" className="min-w-0">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={bodyID}
+        onClick={() => setOpen((v) => !v)}
+        className="flex max-w-full items-start gap-1 rounded-md py-0.5 pr-1.5 text-left text-sm hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <ChevronRight
+          aria-hidden="true"
+          className={cn('mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none', open && 'rotate-90')}
+        />
+        <span className="min-w-0 break-words">
+          <Spans spans={block.summary} inert />
+        </span>
+      </button>
+      {open && (
+        <div id={bodyID} className="mt-1.5 ml-2 border-l border-border pl-3.5">
+          <BlockList blocks={block.blocks} />
+        </div>
+      )}
+    </div>
+  );
 }
 
 // RowItem is one element of an actions row or a section's accessory: a

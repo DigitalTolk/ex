@@ -398,3 +398,117 @@ func TestBlocksDynamoDB_NewerFieldsRoundTrip(t *testing.T) {
 		t.Fatalf("round trip: %v\n got %#v\nwant %#v", err, back, want)
 	}
 }
+
+// Rich text reads as plain lines for search and notifications: lists keep
+// their markers and nesting, mentions keep ex's mention syntax (so a message
+// that stands on this text still mentions them), dates their fallback.
+func TestRichTextPlain(t *testing.T) {
+	nodes := []RichNode{
+		{Type: RichHeading, Level: 1, Spans: []RichSpan{{Type: RichSpanText, Text: "Release 1.43"}}},
+		{Type: RichParagraph, Spans: []RichSpan{
+			{Type: RichSpanText, Text: "Ship it "},
+			{Type: RichSpanUser, User: "u-alice", Name: "Alice"},
+			{Type: RichSpanText, Text: " in "},
+			{Type: RichSpanChannel, Channel: "c-builds", Name: "builds"},
+			{Type: RichSpanText, Text: " "},
+			{Type: RichSpanEmoji, Name: "rocket"},
+			{Type: RichSpanText, Text: " by "},
+			{Type: RichSpanDate, Timestamp: 1, Fallback: "Friday"},
+			{Type: RichSpanText, Text: " "},
+			{Type: RichSpanPill, Text: "Passed", Color: "green"},
+		}},
+		{Type: RichQuote, Spans: []RichSpan{{Type: RichSpanText, Text: "No Friday deploys"}}},
+		{Type: RichList, Style: RichListBullet, Items: []RichItem{
+			{Spans: []RichSpan{{Type: RichSpanText, Text: "Build"}}, Items: []RichItem{{Spans: []RichSpan{{Type: RichSpanText, Text: "Lint"}}}}},
+		}},
+		{Type: RichList, Style: RichListOrdered, Items: []RichItem{
+			{Spans: []RichSpan{{Type: RichSpanText, Text: "One"}}}, {Spans: []RichSpan{{Type: RichSpanText, Text: "Two"}}},
+		}},
+		{Type: RichCode, Language: "go", Text: "go test ./..."},
+	}
+	want := "Release 1.43\nShip it @[u-alice|Alice] in ~[c-builds|builds] :rocket: by Friday Passed\n> No Friday deploys\n• Build\n  • Lint\n1. One\n2. Two\ngo test ./..."
+	if got := RichTextPlain(nodes); got != want {
+		t.Fatalf("RichTextPlain:\n got %q\nwant %q", got, want)
+	}
+	if got := RichTextPlain([]RichNode{{Type: RichCode, Text: "only code"}}); got != "only code" {
+		t.Fatalf("code alone = %q", got)
+	}
+	texts := BlockTexts(Blocks{{Type: BlockRichText, Content: nodes[:1]}}, nil)
+	if len(texts) != 1 || texts[0] != "Release 1.43" {
+		t.Fatalf("BlockTexts = %q, want the rich text", texts)
+	}
+}
+
+func TestIsRichColor(t *testing.T) {
+	for _, c := range RichColors {
+		if !IsRichColor(c) {
+			t.Errorf("%s should be a palette colour", c)
+		}
+	}
+	for _, c := range []string{"", "pink", "#ff0000", "Red"} {
+		if IsRichColor(c) {
+			t.Errorf("%q should not be a palette colour", c)
+		}
+	}
+}
+
+// Callouts, toggles (summary and children) and tables are readable text for
+// search and notifications too; a table reads a row per line.
+func TestBlockTexts_LayoutBlocks(t *testing.T) {
+	text := func(s string) []RichSpan { return []RichSpan{{Type: RichSpanText, Text: s}} }
+	got := BlockTexts(Blocks{
+		{Type: BlockCallout, Content: []RichNode{{Type: RichParagraph, Spans: text("Freeze starts Friday")}}},
+		{Type: BlockToggle, Summary: text("Show logs"), Blocks: Blocks{
+			{Type: BlockRichText, Content: []RichNode{{Type: RichCode, Text: "panic: nil map"}}},
+		}},
+		{Type: BlockTable, Rows: [][]TableCell{
+			{{Spans: text("api")}, {Spans: []RichSpan{{Type: RichSpanPill, Text: "Live"}}}},
+			{{Spans: text("web")}, {}},
+		}},
+	}, nil)
+	want := []string{"Freeze starts Friday", "Show logs", "panic: nil map", "api · Live", "web · "}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("BlockTexts = %q, want %q", got, want)
+	}
+}
+
+func TestIsToggleChild(t *testing.T) {
+	for _, k := range []string{BlockRichText, BlockTable, BlockDivider, BlockSection, BlockContext} {
+		if !IsToggleChild(k) {
+			t.Errorf("%s should fit in a toggle", k)
+		}
+	}
+	for _, k := range []string{BlockActions, BlockImage, BlockToggle, BlockCallout, BlockHeader, BlockInput} {
+		if IsToggleChild(k) {
+			t.Errorf("%s should not fit in a toggle", k)
+		}
+	}
+}
+
+// A chart reads as its title and series names; columns read through to the
+// blocks inside them.
+func TestBlockTexts_ColumnsAndCharts(t *testing.T) {
+	got := BlockTexts(Blocks{
+		{Type: BlockColumns, Blocks: Blocks{
+			{Type: BlockColumn, Blocks: Blocks{{Type: BlockHeader, Text: &TextObject{Type: TextPlain, Text: "Revenue"}}}},
+			{Type: BlockColumn, Blocks: Blocks{{Type: BlockChart, Kind: ChartLine, Text: &TextObject{Type: TextPlain, Text: "Signups"},
+				Series: []ChartSeries{{Name: "web", Values: []float64{1}}, {Values: []float64{2}}}}}},
+		}},
+	}, nil)
+	if want := []string{"Revenue", "Signups", "web"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("BlockTexts = %q, want %q", got, want)
+	}
+}
+
+func TestIsColumnChild(t *testing.T) {
+	for _, k := range []string{BlockHeader, BlockCallout, BlockChart, BlockRichText, BlockTable, BlockDivider, BlockSection, BlockContext} {
+		if !IsColumnChild(k) {
+			t.Errorf("%s should fit in a column", k)
+		}
+	}
+	for _, k := range []string{BlockActions, BlockImage, BlockToggle, BlockColumns, BlockColumn, BlockInput} {
+		if IsColumnChild(k) {
+			t.Errorf("%s should not fit in a column", k)
+		}
+	}
+}

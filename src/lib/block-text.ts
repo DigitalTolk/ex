@@ -35,17 +35,23 @@ function formatPart(kind: keyof typeof formats, at: Date): string {
 
 export function expandDateTokens(text: string): string {
   if (!text.includes('<!date^')) return text;
-  return text.replace(DATE_TOKEN, (token, seconds: string, format: string, fallback?: string) => {
-    const at = new Date(Number(seconds) * 1000);
-    let readable = true;
-    const out = format.replace(/\{([a-z_]+)\}/g, (_part, kind: string) => {
-      if (kind in formats) return formatPart(kind as keyof typeof formats, at);
-      readable = false;
-      return '';
-    });
-    if (readable) return out;
-    return fallback ?? token;
+  return text.replace(DATE_TOKEN, (token, seconds: string, format: string, fallback?: string) =>
+    formatDate(Number(seconds), format) ?? fallback ?? token,
+  );
+}
+
+// formatDate draws a moment through a format of {time}, {date_short}, {date}
+// and {date_long}, in the reader's time zone; undefined when the format holds
+// a part this client can't draw (the caller then shows its fallback).
+export function formatDate(seconds: number, format: string): string | undefined {
+  const at = new Date(seconds * 1000);
+  let readable = true;
+  const out = format.replace(/\{([a-z_]+)\}/g, (_part, kind: string) => {
+    if (kind in formats) return formatPart(kind as keyof typeof formats, at);
+    readable = false;
+    return '';
   });
+  return readable ? out : undefined;
 }
 
 // formatTallyTime is when a built-in action happened, short: the time alone

@@ -197,7 +197,68 @@ export type Block =
   | { type: 'actions'; block_id: string; elements: RowElement[] }
   | { type: 'context'; block_id: string; elements: (TextElement | ImageElement)[] }
   | { type: 'divider'; block_id: string }
-  | { type: 'image'; block_id: string; image_url: string; alt_text: string; text?: BlockText; image_width?: number; image_height?: number };
+  | { type: 'image'; block_id: string; image_url: string; alt_text: string; text?: BlockText; image_width?: number; image_height?: number }
+  | { type: 'rich_text'; block_id: string; content: RichNode[] }
+  | { type: 'callout'; block_id: string; icon?: string; color: RichColor; content: RichNode[] }
+  // A toggle's children are text-only kinds (rich_text, table, divider,
+  // section, context); the server refuses anything else.
+  | { type: 'toggle'; block_id: string; summary: RichSpan[]; blocks: Block[]; open?: boolean }
+  | { type: 'table'; block_id: string; columns: TableColumn[]; rows: TableCell[][] }
+  // 2 or 3 columns side by side; each holds text-only kinds, headers,
+  // callouts and charts (the server refuses anything else).
+  | { type: 'columns'; block_id: string; blocks: Block[] }
+  | { type: 'column'; block_id: string; width?: number; blocks?: Block[] }
+  | { type: 'chart'; block_id: string; kind: 'bar' | 'line' | 'donut'; text?: BlockText; labels: string[]; series: ChartSeries[]; unit?: string };
+
+export interface ChartSeries {
+  name?: string;
+  values: number[];
+}
+
+export interface TableColumn {
+  header?: string;
+  align: 'left' | 'center' | 'right';
+}
+
+export interface TableCell {
+  spans?: RichSpan[];
+}
+
+// ---- Rich text (an app's rich_text block): paragraph-level parts holding
+// inline pieces. The server has checked every piece; colours are palette
+// names (theme tokens), never CSS.
+
+export type RichColor = 'gray' | 'brown' | 'orange' | 'yellow' | 'green' | 'blue' | 'purple' | 'red';
+
+export type RichSpan =
+  | {
+      type: 'text';
+      text: string;
+      bold?: boolean;
+      italic?: boolean;
+      strike?: boolean;
+      underline?: boolean;
+      code?: boolean;
+      color?: RichColor;
+      highlight?: RichColor;
+      link?: string;
+    }
+  | { type: 'user'; user: string; name: string }
+  | { type: 'channel'; channel: string; name: string }
+  | { type: 'emoji'; name: string }
+  | { type: 'date'; timestamp: number; format: string; fallback?: string }
+  | { type: 'pill'; text: string; color: RichColor };
+
+export interface RichItem {
+  spans?: RichSpan[];
+  items?: RichItem[];
+}
+
+export type RichNode =
+  | { type: 'paragraph' | 'quote'; spans: RichSpan[] }
+  | { type: 'heading'; level: 1 | 2 | 3; spans: RichSpan[] }
+  | { type: 'list'; style: 'bullet' | 'ordered'; items: RichItem[] }
+  | { type: 'code'; text: string; language?: string };
 
 // ---- Forms (an app's view: a dialog the app opens for the person who
 // clicked). Its blocks are message blocks plus input fields.
@@ -431,6 +492,14 @@ export interface IncomingWebhook {
   adminPaused?: boolean;
   hasBotToken?: boolean;
   hasSigningSecret?: boolean;
+  // Saved layouts (rich webhooks): the app posts {"template": key, "data"}.
+  templates?: MessageTemplate[];
+}
+
+export interface MessageTemplate {
+  key: string;
+  payload: Record<string, unknown>;
+  updatedAt: string;
 }
 
 export interface InteractionEntry {
